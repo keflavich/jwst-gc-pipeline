@@ -41,8 +41,12 @@ NFRAMES = int(sys.argv[3]) if len(sys.argv) > 3 else 4
 OUTDIR = (sys.argv[4] if len(sys.argv) > 4
           else '/orange/adamginsburg/jwst/m92/wingcal_deep_stacks')
 
+# ``jw*`` rather than the older ``jw0*``:  # noqa: jw0-literal
+# MAST pads the proposal to five digits, so a 5-digit program's frames are
+# ``jw10678...`` and the old glob enumerates none of them (issue #414).  m92 is
+# proposal 1979, so both spellings select the same frames here.
 FRAME_GLOB = (f'/orange/adamginsburg/jwst/{FIELD}/{FILT.upper()}/'
-              f'pipeline/jw0*_{DET}_destreak_o001_crf.fits')
+              f'pipeline/jw*_{DET}_destreak_o001_crf.fits')
 PSF_FN = (f'/orange/adamginsburg/jwst/{FIELD}/psfs/'
           f'nircam_{DET}_{FILT}_fovp101_samp2_npsf16.fits')
 

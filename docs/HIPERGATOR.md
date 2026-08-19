@@ -96,11 +96,34 @@ sbatch --array=0-3 --export=ALL --job-name=brick2221-o001-reduce \
 `SKIP=1` (the config's `skip_step1and2`, `-s` on the driver) reuses the
 `*_cal.fits` on disk. `SKIP=0` re-fits the ramps from `*_uncal`, downloading them
 from MAST first — much slower, and needed only when the detector-level products
-are wrong or missing.
+are wrong or missing. `SKIP=0` re-fits every exposure it is asked for, whatever
+is already on disk: products newer than their `_uncal` can still be wrong (a
+CRDS repin, a `jwst` version bump, a Detector1 parameter change), and forcing
+past exactly that is what `SKIP=0` is for.
+
+A NIRCam run loops the modules (`nrca,nrcb,merged`) inside one interpreter, and
+each exposure gets stage 1+2 once per run: the `nrca`/`nrcb` passes take their
+own module's exposures, and the `merged` pass processes only what the earlier
+passes in that same run did not (#417 — it used to ramp-fit everything three
+times). The driver keeps that list of already-calibrated exposures in the
+running interpreter, so it covers the module passes of one run and nothing
+else. Set `STAGE12_RESUME=1` to additionally skip exposures
+whose `_cal`/`_ramp` on disk are newer than their `_uncal`, which resumes a
+killed `SKIP=0` job without redoing what it finished. Leave it unset for a
+forcing re-reduce. The resume check compares mtimes, so a `_cal.fits` truncated
+by the kill that stopped the job reads as current and is kept — delete the
+products of the exposure the job died on before resuming, or leave the flag
+unset.
 
 Image3 resamples a filter's exposures together, so per-filter is the finest
 fan-out any script offers. The NIRCam driver does take `-m nrca` / `-m nrcb`
-separately, if you want to halve a task by hand.
+separately, if you want to halve a task by hand — each of those runs writes only
+its own module's `_cal` files, so run both before anything reads the other
+module. A later `-m merged` run produces every `_cal`, re-fitting the module you
+already did: that already-calibrated list is per-process, and only
+`STAGE12_RESUME=1` limits the run to the exposures still missing (measured on brick F212N, 192 exposures with
+96 already done: `-m merged` with `SKIP=0` in a fresh process gives 192
+Detector1 calls, 96 with `STAGE12_RESUME=1`).
 
 ## Stage 2 — catalog
 

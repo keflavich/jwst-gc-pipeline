@@ -11,6 +11,7 @@ import regions
 import numpy as np
 from pathlib import Path
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
@@ -199,9 +200,12 @@ class CappedSourceGrouper:
 # restructure).  Imported here so existing references keep working unchanged.
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
-    MIRI_FILTERS, _instrument_from_filter, _inst_token, _instrument_override,
+    MIRI_FILTERS, MULTIOBS_PROPOSALS,
+    observation_field_token,
+    _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
+from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -1019,14 +1023,24 @@ def obs_token(proposal_id, field):
     that REUSE the same ``(visit, vgroup, exp)`` tuples, so the obs-less per-frame
     catalog-table name ``{filter}_{module}_visit001_vgroup02201_exp00001_...`` is
     identical across obs that share a filter and silently overwrites (= data loss;
-    F200W: o023/o046/o049/o050; F277W: all 5).  Insert ``_o{field}`` for prop 2211
-    so each obs writes a distinct catalog table.  The per-frame residual/model
-    products under ``{filter}/pipeline/`` already carry ``-o{field}`` and are
-    unaffected.  Other proposals are single-obs-per-basepath and get the empty
-    token, so their filenames and existing products are unchanged.
+    F200W: o023/o046/o049/o050; F277W: all 5).  Proposal 10678 (the GC Treasury
+    program) is the same shape at 139 tiles: every obs images F212N+F480M under
+    the one gc-treasury tree with per-obs restarted numbering, so the second tile
+    would overwrite the first (issue #416).  Insert ``_o{field}`` for these
+    proposals (``naming.MULTIOBS_PROPOSALS``) so each obs writes a distinct
+    catalog table.  The per-frame residual/model products under
+    ``{filter}/pipeline/`` already carry ``-o{field}`` and are unaffected.
+    Other proposals are single-obs-per-basepath and get the empty token, so
+    their filenames and existing products are unchanged.
+
+    ``field`` goes through ``naming.observation_field_token``, which normalises
+    ``'1'`` to the ``'001'`` spelling every reader of the token expects and
+    refuses a field that does not name an observation -- a program registered
+    with the wildcard obsid and run without ``--field`` stops here rather than
+    writing a literal ``_o*`` into every catalog name it produces.
     """
-    if str(proposal_id) == '2211' and field not in (None, ''):
-        return f'_o{field}'
+    if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
+        return f'_o{observation_field_token(field)}'
     # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
     # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names
     # collide and the second run overwrites the first.  Tag by proposal id.
@@ -2097,9 +2111,12 @@ def save_photutils_results(result, ww, filename,
         result.meta['BKGMETH'] = 'bkg2d_sampled' if background_map is not None else 'none'
 
     iter_ = _iteration_token(iteration_label)
-    # Per-observation disambiguator (prop 2211/gc2211 only; empty elsewhere).
-    # gc2211's 5 obs reuse the same visit/vgroup/exp tuples, so without _o{field}
-    # the catalog tables collide across obs and silently overwrite.  MUST match
+    # Per-observation disambiguator (naming.MULTIOBS_PROPOSALS -- 2211/gc2211
+    # and 10678/gc-treasury -- plus ngc6334's per-proposal `_j`; empty
+    # elsewhere).  Both multi-obs proposals restart the visit/vgroup/exp tuples
+    # per observation, so without _o{field} the catalog tables collide across
+    # obs and silently overwrite (gc2211's 5 pointings; 10678's 139 tiles, where
+    # the collision is certain at tile 2).  MUST match
     # _predict_tblfilename and the merge_catalogs.py glob.  See obs_token().
     obs_ = _obs_token_from_options(options)
     # {module} only, no detector token -- that is what merge_catalogs.py globs
@@ -2551,7 +2568,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     for module_pattern in module_patterns:
         for chunk_pat in ('', '_chunk*of*'):
             residual_glob = (
-                f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
+                f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
                 f'{module_pattern}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
                 f'{iter_}{chunk_pat}_daophot_{residual_kind}_residual.fits'
             )
@@ -2634,7 +2651,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     residual_files = sorted(set(combined_residuals))
 
     product_name = (
-        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}'
+        f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}'
         f'{desat_}{bgsub_}{epsf_}{blur_}{group_}{iter_}_daophot_{residual_kind}_residual'
     )
     asn = asn_from_list.asn_from_list(
@@ -2844,7 +2861,7 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
                                  filtername):
     """Path to an ASDF holding the reduction-mosaic (image3 i2d) GWCS, or None.
 
-    When a reduction mosaic ``jw0{prop}-o{field}_t001_{inst}_{filt}_i2d.fits``
+    When a reduction mosaic ``jw{prop:05d}-o{field}_t001_{inst}_{filt}_i2d.fits``
     exists, the cataloging ``_data_i2d`` should be resampled onto its EXACT grid
     so the 'data' image matches the canonical reduction mosaic pixel-for-pixel
     (byte-identical: same crf + same output WCS -> max|diff|=0).
@@ -2853,7 +2870,7 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
     """
     mosaic = os.path.join(
         pipeline_dir,
-        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{filtername.lower()}_i2d.fits')
+        f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{filtername.lower()}_i2d.fits')
     if not os.path.exists(mosaic):
         # This pipeline names its reduction mosaic with the custom
         # 'clear-{filt}-merged' token (PipelineRerunNIRCAM-*), not the STScI
@@ -2861,7 +2878,7 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
         # reduction grid instead of a tight crop-to-data bbox.
         alt = os.path.join(
             pipeline_dir,
-            f'jw0{proposal_id}-o{field}_t001_{inst_token}_clear-{filtername.lower()}-merged_i2d.fits')
+            f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_clear-{filtername.lower()}-merged_i2d.fits')
         if os.path.exists(alt):
             mosaic = alt
         else:
@@ -2984,7 +3001,7 @@ def mosaic_cutout_input_data(cut_bp, filtername, proposal_id, field, module,
               f"(label={label!r}, input_files={input_files is not None}) "
               f"in {pipeline_dir}", flush=True)
         return None
-    product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}_data')
     # Full-frame runs (input_files passed): if a reduction mosaic exists, land the
     # data_i2d on its EXACT grid so the cataloging 'data' image == the canonical
@@ -3012,7 +3029,7 @@ def mosaic_cutout_satstar_flags(cut_bp, filtername, proposal_id, field, module,
     from reproject import reproject_interp
     pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
     inst_token = _inst_token(filtername)
-    ref = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    ref = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
            f'{filtername.lower()}-{module}_data_i2d.fits')
     flagfiles = sorted(glob.glob(f'{pipeline_dir}/*_cutout_{label}_satstar_flags.fits'))
     if not (os.path.exists(ref) and flagfiles):
@@ -3033,7 +3050,7 @@ def mosaic_cutout_satstar_flags(cut_bp, filtername, proposal_id, field, module,
     out.header['FLAGBIT1'] = (1, 'partly saturated (nonlinear)')
     out.header['FLAGBIT2'] = (2, 'totally saturated (unrecoverable NaN)')
     out.header['FLAGBIT4'] = (4, 'included in saturated-star fit')
-    out_fn = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    out_fn = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
               f'{filtername.lower()}-{module}_satstar_flags_i2d.fits')
     out.writeto(out_fn, overwrite=True)
     print(f"Wrote satstar flags i2d {out_fn}", flush=True)
@@ -3057,10 +3074,10 @@ def _build_cutout_model_i2d(cut_bp, filtername, proposal_id, field, module,
     group = '_group' if options.group else ''
     iter_ = _iteration_token(iteration_label)
     pdir = f'{cut_bp}/{filtername}/pipeline'
-    stem = (f'{pdir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    stem = (f'{pdir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
             f'{filtername.lower()}-{module}{desat}{bgsub}{epsf}{blur}{group}{iter_}'
             f'_daophot_iterative')
-    data_i2d = (f'{pdir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    data_i2d = (f'{pdir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                 f'{filtername.lower()}-{module}_data_i2d.fits')
     for resid_i2d in (f'{stem}_mergedcat_residual_i2d.fits',
                       f'{stem}_residual_i2d.fits'):
@@ -3415,7 +3432,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
         for kind in kinds:
-            stem = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_'
+            stem = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_'
                     f'{pupil}-{filtername.lower()}-{frame_detector}{visitid_}{vgroupid_}'
                     f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
                     f'_daophot_{kind}')
@@ -3629,7 +3646,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # crop-to-data when the data_i2d is absent.
     _data_i2d = os.path.join(
         pipeline_dir,
-        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+        f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
         f'{filtername.lower()}-{module}_data_i2d.fits')
     _shared_wcs = _i2d_grid_output_wcs(
         _data_i2d,
@@ -3641,7 +3658,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     for kind in kinds:
         if not written[kind]:
             continue
-        product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+        product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                         f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
                         f'{epsf_tok}{blur_tok}{group_tok}{iter_tok}'
                         f'_daophot_{kind}_mergedcat_residual')
@@ -3797,7 +3814,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
         (visitid_, vgroupid_, exposure_, desat, bgsub,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, 'iter2')
-        stem = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_'
+        stem = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_'
                 f'{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}'
                 f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
                 f'_daophot_iterative')
@@ -3842,7 +3859,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     blur_tok = '_blur' if options.blur else ''
     epsf_tok = '_epsf' if options.epsf else ''
     group_tok = '_group' if options.group else ''
-    product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
                     f'{epsf_tok}{blur_tok}{group_tok}_iter2_daophot_iterative_qfilt_residual')
     i2d = _resample_to_i2d(written, pipeline_dir, product_name, crop_to_data=True)
@@ -4327,9 +4344,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     default=None,
                     help="Explicit field (e.g. '023' for proposal 2211 obs 023). "
                     "Required when a target maps to multiple fields under one "
-                    "proposal (e.g. gc2211 has fields 023/028/046/049/050); "
+                    "proposal (e.g. gc2211 has fields 023/028/046/049/050), "
+                    "and when the target claims every observation of its "
+                    "proposal with the fields.yaml wildcard (gc-treasury); "
                     "otherwise the field is derived from --target via "
-                    "reg_to_field_mapping.", metavar="field")
+                    "fields.field_token_for_run.", metavar="field")
     parser.add_option("--group", dest="group",
                       default=False,
                       action='store_true')
@@ -4684,16 +4703,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     # mapping is per-instrument.
     instrument = ('miri' if 'mirimage' in [str(m).lower() for m in modules]
                   else 'nircam')
-    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, instrument)
-    reg_to_field_mapping = {v: k for k, v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
     # one entry, so prefer the explicit --field value when it's available.
+    # `field_token_for_run` supplies the rest, and refuses to hand back the
+    # registry's '*' wildcard: `field` is interpolated into ~40 product-name
+    # f-strings as `-o{field}`, so a wildcard-owning proposal (10678) would
+    # WRITE `-o*` into every mosaic, catalog and smoothed-background filename.
     if getattr(options, 'field', None):
         field = str(options.field)
     else:
-        field = (field_registry.default_field_token(target, proposal_id, instrument)
-                 or reg_to_field_mapping[target])
+        field = field_registry.field_token_for_run(target, proposal_id, instrument)
 
     # Module restrictions per proposal/field/filter for single-module datasets
     # Sickle is NRCB-only (SUB640 subarray) but detectors differ by wavelength:
@@ -5039,28 +5059,24 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                 # tree doesn't contain it.
                 if (_cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None
                         and options.daophot):
-                    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
                     _cut_bp = _cutout_out_basepath(basepath, options)
                     os.makedirs(os.path.join(_cut_bp, 'catalogs'), exist_ok=True)
-                    _merge_methods = [('dao', '_basic')]
-                    if not options.basic_only:
-                        _merge_methods.append(('daoiterative', '_iterative'))
-                    for _mname, _msuffix in _merge_methods:
-                        try:
-                            _merge_catalogs.merge_individual_frames(
-                                module=module, filtername=filtername.lower(),
-                                progid=proposal_id, method=_mname, suffix=_msuffix,
-                                target=target, basepath=_cut_bp,
-                                iteration_label=options.iteration_label or None,
-                                bgsub=options.bgsub, desat=options.desaturated,
-                                epsf=options.epsf, blur=options.blur,
-                                resbgsub=getattr(options, 'use_iter3_residual_bg', False),
-                                fwhm_basepath=basepath)
-                            print(f"cutout: wrote merged {_mname} catalog under "
-                                  f"{_cut_bp}/catalogs/", flush=True)
-                        except Exception as ex:
-                            print(f"cutout: merge_individual_frames({_mname}) "
-                                  f"failed: {ex}", flush=True)
+                    # The merge methods, the per-method handler and the
+                    # observation this merge covers all live in
+                    # `observation_merge.merge_cutout_catalogs`, which tests
+                    # call directly -- this branch is a thousand lines inside
+                    # main() and nothing drove it, so a dropped `field` was
+                    # pinned only by reading the source.
+                    #
+                    # `field` is the RESOLVED value (the registry default when
+                    # --field was omitted), not `options.field`: with --field
+                    # omitted the raw option is None, and a field-less merge on
+                    # a per-obs-merged proposal (10678) is refused.
+                    merge_cutout_catalogs(
+                        proposal_id=proposal_id, field=field, target=target,
+                        module=module, filtername=filtername,
+                        basepath=_cut_bp, fwhm_basepath=basepath,
+                        options=options)
             else:
                 # Mosaic-mode photometry deprecated 2026-05-25 (see main()
                 # deprecation guard).  Unreachable in normal CLI use, but
@@ -5107,7 +5123,7 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
     # downstream (merge globs by vgroup* not obs; data_i2d / residual i2d
     # ResampleStep auto-unions the frame WCSs) is already obs-agnostic, so the
     # only obs-locked step is this glob.  The leading filename token encodes the
-    # real obs number (jw0{proposal}{obs}{visit}); the ``o{obs}_crf`` suffix
+    # real obs number (jw{proposal:05d}{obs}{visit}); the ``o{obs}_crf`` suffix
     # token does too, so derive a per-obs suffix by substituting the obs digits.
     subfields = field.split('-') if '-' in str(field) else [field]
     fglob = []
@@ -5118,7 +5134,7 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
         else:
             sf_suffix = each_suffix
         for gm in glob_modules:
-            glstr = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}{sf}{visitid}*{gm}*{sf_suffix}.fits'
+            glstr = f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}{sf}{visitid}*{gm}*{sf_suffix}.fits'
             glstr_list.append(glstr)
             fglob.extend(glob.glob(glstr))
     if len(fglob) == 0:

@@ -38,11 +38,15 @@ from astropy.modeling.fitting import LevMarLSQFitter
 
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
+    MULTIOBS_PROPOSALS, merged_catalog_obs_token, vetted_obs_tokens,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
+from jwst_gc_pipeline.photometry.observation_merge import (
+    merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
 from jwst_gc_pipeline.atomic_io import write_table_atomic
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.psf_fitting import (
@@ -1821,7 +1825,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # gate is MIRI-only inside get_saturated_stars, so this is a no-op there.
     _seed_gate_image = _seed_gate_wcs = None
     if module == 'mirimage':
-        _di2d_path = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-'
+        _di2d_path = (f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}-'
                       f'o{field}_t001_{_L._inst_token(filtername)}_{pupil}-'
                       f'{filtername.lower()}-{module}_data_i2d.fits')
         if os.path.exists(_di2d_path):
@@ -2065,7 +2069,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
         iteration_label=iteration_label)
 
     residual = _residual_for_bkg
-    stub = (f'{bp}/{ctx.filtername}/pipeline/jw0{ctx.proposal_id}-o{ctx.field}_t001_'
+    stub = (f'{bp}/{ctx.filtername}/pipeline/{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
             f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
@@ -2172,7 +2176,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     _prom_ww_i2d = None
     if _is_miri or _nircam_prom_any:
         try:
-            _i2dp = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}'
+            _i2dp = (f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}-o{field}'
                      f'_t001_{_L._inst_token(filtername)}_{pupil}-'
                      f'{filtername.lower()}-{module}_data_i2d.fits')
             if os.path.exists(_i2dp):
@@ -2469,12 +2473,18 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     for module in modules:
         for fi, filt in enumerate(filternames):
             # ngc6334's two proposals tag the per-proposal merged catalog AFTER
-            # the module (matching merge_individual_frames' _j{proposal} output);
-            # every other target keeps its token at the END (unchanged).
+            # the module (matching merge_individual_frames' _j{proposal} output),
+            # as do the per-obs-MERGED proposals (10678: _o{field}, see
+            # naming.merged_catalog_obs_token -- their vetted names carry NO end
+            # token, _vtok='' below); every other target keeps its token at the
+            # END (unchanged).
             _jtok = (f'_j{getattr(options, "proposal_id", None)}'
                      if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
-            _endsuf = '' if _jtok else _obssuf
-            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}_indivexp_merged'
+            _modtok = merged_catalog_obs_token(
+                getattr(options, 'proposal_id', None),
+                getattr(options, 'field', None))
+            _endsuf = '' if (_jtok or _modtok) else _obssuf
+            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_modtok}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 continue
@@ -2722,10 +2732,14 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
                            getattr(options, 'field', None))
     nfilt_indep = np.zeros(len(t), dtype='i4')
     # ngc6334 proposals tag the per-proposal merged catalog after the
-    # module (see merge_individual_frames); others keep the end token.
+    # module (see merge_individual_frames), as do the per-obs-merged proposals
+    # (10678 _o{field}; their vetted names carry NO end token); others keep
+    # the end token.
     _jtok = (f'_j{getattr(options, "proposal_id", None)}'
              if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
-    _endsuf = '' if _jtok else _obssuf
+    _modtok = merged_catalog_obs_token(getattr(options, 'proposal_id', None),
+                                       getattr(options, 'field', None))
+    _endsuf = '' if (_jtok or _modtok) else _obssuf
     _modules = (getattr(options, 'modules', '') or 'merged').split(',')
     # Per-filter independence is OR-ed across modules and counted ONCE per
     # filter.  (The previous module-outer loop added ``indep`` to
@@ -2737,7 +2751,7 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
         col = f'independently_detected_{f}'
         indep = np.zeros(len(t), dtype=bool)
         for module in _modules:
-            p = (f'{cut_bp}/catalogs/{f}_{module}{_jtok}_indivexp_merged'
+            p = (f'{cut_bp}/catalogs/{f}_{module}{_jtok}{_modtok}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 continue
@@ -3177,7 +3191,7 @@ def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
         '_resbgsub' if label in ('m5', 'm6', 'm7') else '')
     group_ = '_group' if options.group else ''
     inst = _L._inst_token(filt)
-    return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_{inst}_'
+    return (f'{cut_bp}/{filt}/pipeline/{jw_prefix(proposal_id)}-o{field}_t001_{inst}_'
             f'{pupil}-{filt.lower()}-{module}{desat}{bgsub}{group_}_{label}_'
             f'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits')
 
@@ -3197,7 +3211,16 @@ def _satstar_reconciled_path(cut_bp, module, filt):
     """On-disk persistence for m12's cross-frame-reconciled out-of-FOV satstar
     fluxes (``satstar_overrides``) + drops (``satstar_drops``).  In a monolithic
     run these live only in memory and are forwarded to m3..m7; persisting them
-    lets a per-frame m3..m7 fan-out worker (a fresh process) reconstruct them."""
+    lets a per-frame m3..m7 fan-out worker (a fresh process) reconstruct them.
+
+    TODO(#416): NOT obs-scoped.  Every observation under one basepath writes
+    this one name, so two tiles of a per-obs-merged program running together
+    overwrite each other's sidecar and a fresh m3..m7 worker reconstructs
+    whichever tile wrote last -- another tile's out-of-FOV satstar flux
+    overrides applied to this tile's stars.  Left shared with the rest of the
+    per-run scratch pending the #416 layout decision (Option A gives each tile
+    its own tree and the question disappears).
+    """
     return (f'{cut_bp}/catalogs/{filt.lower()}_{module}_'
             f'satstar_reconciled_m12.fits')
 
@@ -3574,6 +3597,14 @@ def _resolved_obsid(options):
     caller keeps everything: the pre-existing behaviour, loud rather than
     wrong.  Where exactly one is listed there is nothing to guess and it is
     returned.
+
+    A field registered with the ``'*'`` wildcard (10678) has no obsid list to
+    validate against, so ``--field`` is accepted on SHAPE
+    (``fields.is_obsid``) and a run without ``--field`` resolves to None.  The
+    wildcard itself is never returned: it is a registry token, not an
+    observation number, and downstream it becomes the substring ``_o*_``,
+    which matches no ``crf`` (the stage-3 per-exposure product cataloging
+    reads, ``..._o037_crf.fits``) on disk.
     """
     from jwst_gc_pipeline import fields as _freg
     target = getattr(options, 'target', None)
@@ -3595,6 +3626,23 @@ def _resolved_obsid(options):
             return str(field)          # unregistered target: nothing to check against
         allowed = ({str(o) for o in obs.obsids.get(instrument, ())}
                    | {str(j) for j in obs.joint_obsids.get(instrument, ())})
+        if _freg.WILDCARD_OBSID in allowed:
+            # This field claims EVERY observation of the proposal (10678, the
+            # GC Treasury: all 139 of its observations belong to gc-treasury,
+            # so fields.yaml declares the ownership and not the list).  There
+            # is no membership list to check `--field` against, only its SHAPE.
+            # Testing membership anyway rejects every real obsid --
+            # `'042' not in {'*'}` -- and hands the checkpoint None on every
+            # run, which is the "keep them all" path: one tile's per-frame
+            # catalogs standing in for another tile's.
+            if _freg.is_obsid(field):
+                return str(field)
+            print(f"astrom checkpoint: --field {field!r} is not shaped like an "
+                  f"obsid of {target}/{proposal} {instrument} (which claims "
+                  f"every observation of the proposal); NOT using it to "
+                  f"identify this run's per-frame catalogs (keeping them all).",
+                  flush=True)
+            return None
         if allowed and str(field) not in allowed:
             print(f"astrom checkpoint: --field {field!r} is not an obsid of "
                   f"{target}/{proposal} {instrument} ({sorted(allowed)}); "
@@ -3607,7 +3655,15 @@ def _resolved_obsid(options):
     joint = obs.joint_obsids.get(instrument, ())
     if joint:
         return str(joint[0]) if len(joint) == 1 else None
-    seen = obs.obsids.get(instrument, ())
+    # A wildcard is not an observation number.  Returning it would send the
+    # literal '*' downstream, where `_drop_foreign_obs_duplicates` builds
+    # `want = {'_o*_'}` and tests it as a plain substring against the
+    # stage-3 per-exposure `..._o037_crf.fits` basenames -- matching none of
+    # them and dropping every catalog, which is
+    # the sgrb2/sickle joint-token failure (F770W 60 -> 0) reached by another
+    # door.  Unknown means None: keep everything.
+    seen = tuple(o for o in obs.obsids.get(instrument, ())
+                 if o != _freg.WILDCARD_OBSID)
     return str(seen[0]) if len(seen) == 1 else None
 
 
@@ -3675,12 +3731,23 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
       could be any of them, so keep only the basenames carrying this run's
       token.  gc2211 F200W is this case: the untokened copies are a different
       observation's exposures.
-    - **exactly one observation images it** -- every catalog in the directory is
-      this run's whatever its name, so keep both spellings and drop an untokened
-      file only where the same exposure is also present under a tokened name.
-      ngc6334 F090W is this case, and its nrca detectors exist ONLY under the
-      pre-token name; discarding them would build a consensus from nrcb alone
-      and PASS, which is worse than the duplicate it avoids.
+    - **exactly one observation images it** -- an UNTOKENED catalog in the
+      directory is this run's whatever its name, so keep both spellings and drop
+      an untokened file only where the same exposure is also present under a
+      tokened name.  ngc6334 F090W is this case, and its nrca detectors exist
+      ONLY under the pre-token name; discarding them would build a consensus
+      from nrcb alone and PASS, which is worse than the duplicate it avoids.
+      A catalog that SPELLS a different observation is still dropped here: the
+      registry's count is what this branch cannot trust (0 for an unregistered
+      field, and 1 for a wildcard obsid list wherever ``fields.py`` still reads
+      ``('*',)`` as one observation -- both of which program 10678's
+      gc-treasury returns while 139 tiles share one tree), and stripping the
+      token to compare identities would collapse tile 001's and tile 002's
+      copies of the same ``(visit, vgroup, exp)`` onto one key and keep tile
+      001's.  Only applied when this run writes a token of its own.  The
+      shared branch above drops a differing token too, so a registry that
+      counts the wildcard as several (``fields.WILDCARD_OBSERVATION_COUNT``)
+      reaches the same outcome by the other route.
 
     This narrows the checkpoint's input to one observation, which is what the
     visit consensus is defined over.  A field deliberately pooling two
@@ -3691,11 +3758,17 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     token = str(obs_token or '').lstrip('_')
     n_obs = filter_observation_count(target, filt)
     # n_obs == 0 means the registry could not answer (unregistered field, or no
-    # target threaded).  Treat that as NOT shared: keeping both spellings risks
-    # a DuplicateExposureError, which is loud and recoverable, while dropping
-    # them risks a consensus quietly built from half the detectors.
+    # target threaded).  Treat that as NOT shared: keeping both UNTOKENED
+    # spellings risks a DuplicateExposureError, which is loud and recoverable,
+    # while dropping them risks a consensus quietly built from half the
+    # detectors.  A name that SPELLS a foreign observation is dropped either
+    # way -- both branches do it, which is what keeps 10678's 139 tiles apart
+    # whatever the registry answers (0 unregistered, 1 where a wildcard obsid
+    # list reads as one observation, several where it reads as
+    # `fields.WILDCARD_OBSERVATION_COUNT`).
     shared = n_obs > 1
     drop = []
+    foreign_token = []
     want = None
     if shared:
         # More than one observation of this field images this filter, so a
@@ -3835,9 +3908,44 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                 base = base.replace('_' + m.group(1), '', 1)
             return re.sub(r'_chunk\d+of\d+', '', base)
 
+        # A name that SPELLS a different observation is foreign whatever the
+        # registry's count says -- and the count is exactly what cannot be
+        # trusted here.  `filter_observation_count` returns 0 for an
+        # unregistered field, and 1 for a field whose obsids are a wildcard
+        # wherever `('*',)` still reads as one observation, so program 10678's
+        # gc-treasury lands in THIS branch with 139 tiles in one tree.  The
+        # identity above strips the token, so tile 001's and tile 002's
+        # `_o001`/`_o002` copies of `visit001_vgroup10678001_exp00001` collapse
+        # onto one identity and `sorted(group)[0]` keeps o001 -- tile 002's m2
+        # visit consensus built from tile 001's exposures, at the CORRECTING
+        # stage: m2 rewrites the per-proposal table of per-frame astrometric
+        # offsets, renames the mosaics those offsets were measured on to
+        # `*_im0_badastrom.fits` so nothing downstream reads them, and stops
+        # the run for regeneration.  So the tile is "corrected" by the
+        # inter-tile separation.
+        #
+        # Drop the differing tokens FIRST, and only when this run writes a
+        # token of its own: with `token == ''` there is nothing to compare
+        # against, and a tokened file may well be this run's own output from a
+        # code version that stamped one.  Untokened files are still kept --
+        # an untokened name leaves the observation open, and the branch's
+        # fail-safe exists for exactly that (ngc6334 F090W nrca exists ONLY
+        # under the pre-token name).
+        if token:
+            for fn in fns:
+                m = _OBS_TOKEN_RE.search(os.path.basename(fn))
+                if m and m.group(1) != token:
+                    foreign_token.append(fn)
+        if foreign_token:
+            drop.extend(foreign_token)
+            foreign_set = set(foreign_token)
+            fns_local = [fn for fn in fns if fn not in foreign_set]
+        else:
+            fns_local = fns
+
         tokened = {}
         untokened = {}
-        for fn in fns:
+        for fn in fns_local:
             base = os.path.basename(fn)
             m = _OBS_TOKEN_RE.search(base)
             (tokened if m else untokened).setdefault(_identity(base), []).append(fn)
@@ -3868,17 +3976,28 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # this is the same courtesy on the path that actually removes data.
         demanded = (f"; this run demanded {sorted(want)}"
                     if shared and want else "")
-        why = ("this run is "
-               f"{('_' + token) if token else '<untokened>'}, and the "
-               "obs-blind glob matches every observation in the directory"
-               if shared else
-               f"{filt} is imaged by ONE observation of {target}, so these are "
-               "the same exposures under their pre-token name")
-        noun = "foreign-observation" if shared else "duplicate"
+        if shared:
+            why = ("this run is "
+                   f"{('_' + token) if token else '<untokened>'}, and the "
+                   "obs-blind glob matches every observation in the directory")
+            noun = "foreign-observation"
+        elif foreign_token:
+            # The registry says ONE observation images this filter and the
+            # names on disk say otherwise; the names win.  Say which count was
+            # disbelieved, because a wrong `--field` reaches this same line.
+            why = (f"the registry counts {n_obs} observation(s) of {target} "
+                   f"imaging {filt}; these names spell an observation other "
+                   f"than this run's (_{token})")
+            noun = ("foreign-observation" if len(drop) == len(foreign_token)
+                    else "foreign-observation/duplicate")
+        else:
+            why = (f"{filt} is imaged by ONE observation of {target}, so these "
+                   "are the same exposures under their pre-token name")
+            noun = "duplicate"
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: excluded "
               f"{len(drop)} of {len(fns)} {noun} per-frame catalog(s) "
               f"({foreign}){demanded} -- {why}", flush=True)
-        if shared and len(drop) == len(fns):
+        if (shared or foreign_token) and len(drop) == len(fns):
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: that is "
                   f"EVERY catalog.  A frozen-stage gate with no inputs is a "
                   f"silently disabled gate, not a pass -- check that "
@@ -3888,9 +4007,42 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     return [fn for fn in fns if fn not in drop]
 
 
+def _is_whole_consensus_shift(c):
+    """Is this the tie of the whole visit consensus to the reference catalog?
+
+    Keyed on the ``source`` string the checkpoint writes
+    (``astrometry_checkpoint.REFERENCE_TIE_SOURCE_SUFFIX``), not on
+    ``exposure is None``: a correction assembled without those keys at all
+    would read as None too, so a fixture or a future caller that omits them
+    would silently become un-floorable.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        REFERENCE_TIE_SOURCE_SUFFIX)
+    # `in`, not `endswith`: w51's live table carries three rows reading
+    # 'm2 consensus->reference (cross-band tied-F210M, contrast>2900)'.  No code
+    # at this head writes that parenthetical, so an endswith test fails OPEN on
+    # it -- silently reinstating the floor over an absolute frame tie.
+    return REFERENCE_TIE_SOURCE_SUFFIX in str(c.get('source', ''))
+
+
 def _floor_actionable_corrections(corrections, floor_mas, label):
     """Corrections whose on-sky magnitude ``hypot(dra_onsky_mas, ddec_onsky_mas)``
-    is at least ``floor_mas``.
+    is at least ``floor_mas`` -- plus the consensus-to-reference tie regardless.
+
+    The floor exists for ONE class of residual: a per-detector distortion term
+    (instrument aperture model, velocity aberration) that the module-locked
+    offsets table has no way to express, so applying its detector mean is what
+    the previous cycle already did and the loop never converges.  That argument
+    is about the SHAPE of the residual, not its size.
+
+    It does not reach the tie of the whole visit consensus to the reference
+    catalog: that is one rigid shift of every exposure together, which the table
+    expresses exactly.  Flooring it would let an absolute frame error up to
+    ``floor_mas`` through with nothing downstream to catch it -- a common-mode
+    shift moves every band equally, so the m7 cross-band gate sees agreement,
+    and the ~100 mas gross gate is two orders of magnitude away.  So the
+    reference tie is always actionable, and only per-exposure residuals are
+    floored.
 
     Reads the magnitude LOUDLY: a ``c.get(key, 0.0)`` default would read
     magnitude 0 for any correction missing ``dra_onsky_mas`` / ``ddec_onsky_mas``,
@@ -3916,7 +4068,8 @@ def _floor_actionable_corrections(corrections, floor_mas, label):
             f"ASTROM_M2_CORRECTION_FLOOR_MAS filter cannot tell them from "
             f"sub-floor and would apply nothing. First offender: {bad[0]}")
     return [c for c in corrections
-            if np.hypot(c['dra_onsky_mas'], c['ddec_onsky_mas']) >= floor_mas]
+            if _is_whole_consensus_shift(c)
+            or np.hypot(c['dra_onsky_mas'], c['ddec_onsky_mas']) >= floor_mas]
 
 
 def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
@@ -3984,7 +4137,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # `_perframe_token` is what the per-frame catalogs on disk actually SPELL,
     # and the foreign-observation filter can only match a token that was written.
     # `crowdsource_catalogs_long.obs_token` is that writer, and it returns '' for
-    # every proposal except 2211/7213/6778.  Filtering on the consensus token
+    # every proposal except 2211/10678 (naming.MULTIOBS_PROPOSALS) and
+    # 7213/6778 (ngc6334's `_j`).  Filtering on the consensus token
     # instead asks for `_o001` in a directory where the writer never emitted a
     # token, which matches nothing and empties the checkpoint's input: measured
     # on the real trees, wd1 F200W 96 -> 0, wd2 F200W 32 -> 0, cloudef F162M
@@ -4019,7 +4173,15 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         # The merged product for THIS stage is the discriminator -- if the merge
         # produced output but no per-frame catalog matched, the inputs are wrong;
         # if there is no merge either, the stage simply did not run here.
-        merged = glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}_"
+        # ngc6334 (_j{proposal}) and the per-obs-merged proposals (10678,
+        # _o{field}) tag the merged name after the module -- spell THIS run's
+        # token, so another observation's merge cannot stand in for our own.
+        _mergetok = (f'_j{getattr(options, "proposal_id", None)}'
+                     if str(getattr(options, 'proposal_id', None)) in ('7213', '6778')
+                     else merged_catalog_obs_token(
+                         getattr(options, 'proposal_id', None),
+                         getattr(options, 'field', None)))
+        merged = glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}{_mergetok}_"
                             f"indivexp_merged*_{merge_label}_dao_basic.fits")
         msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: NO per-frame "
                f"catalogs matched ({base}_{merge_label}_daophot_basic.fits) -- "
@@ -4114,12 +4276,30 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                + "\n".join(f"  {f}" for f in _failures[:8])
                + ("\n  ..." if len(_failures) > 8 else "")
                + f"\n  record: {record.get('record_path')}")
+        # The SECOND enforcement point.  `run_visit_checkpoint` already decided
+        # whether a frozen-stage failure stops here or at the release
+        # (ASTROM_CHECKPOINT_ENFORCE, #442) -- and then this re-raised on the
+        # same `failures` list regardless, so the deferral had no effect on the
+        # chain: sickle m3 and cloudef m3 both printed "the release gate refuses
+        # this field" and then died anyway (2026-08-19).  Honour the same
+        # policy here, for the same stages.
+        #
+        # A CORRECTING stage still raises: m2's stop is what sends the field
+        # back for regeneration, and nothing downstream can do that for it.
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+            AstrometryCheckpointFailedError, CHECKPOINT_ENFORCE_ENV,
+            ENFORCE_AT_RELEASE, ENFORCE_AT_STAGE, frozen_failure_is_deferred)
         if warn_only:
             print(msg + "  (ASTROM_CHECKPOINT_WARN_ONLY=1 -- continuing)",
                   flush=True)
+        elif frozen_failure_is_deferred(merge_label):
+            print(msg + f"\n  {CHECKPOINT_ENFORCE_ENV}={ENFORCE_AT_RELEASE} "
+                        f"(the default): recorded with passed=false, the chain "
+                        f"CONTINUES, and the release gate refuses this field "
+                        f"(scripts/release/check_astrometry_checkpoints.py).  "
+                        f"Set {CHECKPOINT_ENFORCE_ENV}={ENFORCE_AT_STAGE} to "
+                        f"stop here instead.", flush=True)
         else:
-            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-                AstrometryCheckpointFailedError)
             raise AstrometryCheckpointFailedError(msg)
     elif record.get('passed') is False and _blocking:
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: NOT A PASS "
@@ -4136,12 +4316,19 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                f"the record reports passed=False with no failures and no "
                f"blocking items, so it cannot say what was checked.\n"
                f"  record: {record.get('record_path')}")
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+            AstrometryCheckpointFailedError, CHECKPOINT_ENFORCE_ENV,
+            ENFORCE_AT_RELEASE, frozen_failure_is_deferred)
         if warn_only:
             print(msg + "  (ASTROM_CHECKPOINT_WARN_ONLY=1 -- continuing)",
                   flush=True)
+        elif frozen_failure_is_deferred(merge_label):
+            # Same policy as above: a record that cannot say what happened is
+            # still a passed=false record, and the release gate reads it.
+            print(msg + f"\n  {CHECKPOINT_ENFORCE_ENV}={ENFORCE_AT_RELEASE} "
+                        f"(the default): the chain CONTINUES and the release "
+                        f"gate refuses this field.", flush=True)
         else:
-            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-                AstrometryCheckpointFailedError)
             raise AstrometryCheckpointFailedError(msg)
 
     corrections = record.get('corrections') or []
@@ -4460,6 +4647,35 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
     return todo, resumed_ok, resumed_nooverlap
 
 
+def merged_catalog_path(cut_bp, label, module, filt, proposal_id, field,
+                        desat=False, bgsub=False, resbgsub=False, blur=False):
+    """The per-filter merged catalog name for one phase, as the merge WRITES it.
+
+    The manual pipeline reads its own merge back at every phase (the m3..m6
+    seeds, the vetting step, the frozen-stage discriminator), so this spelling
+    and ``merge_individual_frames``' output name are one contract.  Two tokens
+    can sit in the module slot:
+
+    * ``_j{proposal}`` -- ngc6334 shares one target directory between proposals
+      7213 and 6778 with shared filters (F200W/F470N), so the merge writes
+      per-proposal merged catalogs;
+    * ``_o{field}`` -- ``naming.merged_catalog_obs_token``, the per-obs-merged
+      proposals (10678/gc-treasury), whose 139 tiles share one tree.
+
+    Every other target gets both empty and the unchanged untokened name.  At
+    module level (rather than inside ``run_manual_pipeline``) so a test can call
+    it: these tokens decide which file each phase reads, and a reader spelling a
+    name the writer never wrote finds nothing.
+    """
+    _jtok = f'_j{proposal_id}' if str(proposal_id) in ('7213', '6778') else ''
+    _otok = merged_catalog_obs_token(proposal_id, field)
+    _desat = '_unsatstar' if desat else ''
+    _bgsub = ('_bgsub' if bgsub else '') + ('_resbgsub' if resbgsub else '')
+    _blur = '_blur' if blur else ''
+    return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_otok}'
+            f'_indivexp_merged{_desat}{_bgsub}{_blur}_{label}_dao_basic.fits')
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -4525,21 +4741,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
               f"structure-noise prune to struct_x=1.0 struct_y=2.0 "
               f"(override with --manual-struct-noise-x/-y).", flush=True)
 
+    # 10678/gc-treasury: 139 tiles share this tree, so the per-filter MERGED
+    # catalogs are per-observation.  The spelling (both module-slot tokens)
+    # lives in the module-level ``merged_catalog_path`` so a test can call it.
     def _merged_path(label, module, filt, resbgsub):
-        desat = '_unsatstar' if options.desaturated else ''
-        bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
-        blur_ = '_blur' if options.blur else ''
-        # ngc6334 shares its target dir between proposals 7213+6778 with shared
-        # filters (F200W/F470N), so merge_individual_frames writes PER-PROPOSAL
-        # merged catalogs tagged ``_j{proposal}`` (see merge_catalogs.py).  Match
-        # that token here so the manual pipeline reads back the file it wrote;
-        # every other target uses the empty token (unchanged).
-        _jtok = f'_j{proposal_id}' if str(proposal_id) in ('7213', '6778') else ''
-        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}_indivexp_merged'
-                f'{desat}{bgsub}{blur_}_{label}_dao_basic.fits')
+        return merged_catalog_path(cut_bp, label, module, filt,
+                                   proposal_id, field,
+                                   desat=options.desaturated,
+                                   bgsub=options.bgsub, resbgsub=resbgsub,
+                                   blur=options.blur)
 
     def _data_i2d_path(module, filt):
-        return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_'
+        return (f'{cut_bp}/{filt}/pipeline/{jw_prefix(proposal_id)}-o{field}_t001_'
                 f'{_L._inst_token(filt)}_{pupil}-{filt.lower()}-{module}_data_i2d.fits')
 
     frame_cache = {}
@@ -4867,24 +5080,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             for filt in filternames:
                 prev_seed = None
                 resbg_path = None
-                # Vetted catalog is PER-OBS tokened (_o{field}) -- each obs vetted
-                # vs its own data_i2d, then combined into the un-tokened all-obs
-                # catalog (see the vet + combine block below).  Enabled for:
-                #   - MIRI multi-obs targets (cloudef obs2+5), and
-                #   - gc2211 (prop 2211): 5 NIRCam pointings share ONE basepath and
-                #     reuse visit/vgroup/exp tuples; without per-obs vetting the
-                #     all-obs merge would pool every obs and a single vetting pass
-                #     would carry sources outside each obs's footprint.  Pairs with
-                #     the _o{field} per-frame catalog token + the _o* all-obs merge
-                #     glob in merge_catalogs (see obs_token()).
-                # Single-obs NIRCam targets keep _vtok='' (unchanged behavior).
-                _miri_field = (module == 'mirimage'
-                               or _L._instrument_from_filter(filt) == 'MIRI')
-                _multiobs = str(proposal_id) == '2211'
-                _vtok = f'_o{field}' if (_miri_field or _multiobs) else ''
-                # gc2211: the COMBINED (post-vet) catalog is also per-obs (no cross-
-                # obs vstack).  MIRI: combined stays un-tokened (all-obs).
-                _combsuf = f'_o{field}' if _multiobs else ''
+                # End-slot observation tokens on the vetted (_vtok) and
+                # combined (_combsuf) catalog names: MIRI multi-obs targets and
+                # gc2211 vet per observation, the per-obs-MERGED proposals
+                # (10678) inherit the module-slot token instead, and everything
+                # else gets ''.  The rule lives in naming.vetted_obs_tokens so a
+                # test can call it; its docstring carries each case.
+                _vtok, _combsuf = vetted_obs_tokens(proposal_id, field,
+                                                    filtername=filt,
+                                                    module=module)
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
                 #   iter3(m3): raw i2d                        fit RAW frames
@@ -5278,9 +5482,21 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         print(f"manual [m12]: persisting reconciled satstars failed "
                               f"for {filt}/{module}: {_pex}", flush=True)
 
-                # merge per-frame catalogs (BASIC only)
-                _merge_catalogs.merge_individual_frames(
-                    module=module, filtername=filt.lower(), progid=proposal_id,
+                # merge per-frame catalogs (BASIC only).
+                #
+                # Which observation the merged catalog covers is decided in
+                # observation_merge.merge_frames_for_observation, which passes
+                # progid=proposal_id and the field
+                # naming.merge_field_for_proposal allows: THIS observation for a
+                # per-obs-merged proposal (10678; glob + output both carry
+                # _o{field}), None for every other, which keeps gc2211's all-obs
+                # pooling (_o* glob, untokened output) and the single-obs
+                # targets' untokened names unchanged.  Tests call that helper
+                # with a recording merge; this call site is 3000 lines inside
+                # run_manual_pipeline and no test drives it.
+                merge_frames_for_observation(
+                    proposal_id, field,
+                    module=module, filtername=filt.lower(),
                     method='dao', suffix='_basic', target=target, basepath=cut_bp,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,
@@ -5452,7 +5668,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 if _vtok:
                     _combine_per_obs_vetted(
                         vetted_path, merged_path, combined_vetted_path,
-                        this_obs_only=('-' in str(field) or _multiobs),
+                        this_obs_only=('-' in str(field)
+                                       or str(proposal_id) in MULTIOBS_PROPOSALS),
                         label=f'manual [{phase}]')
 
                 # build vetted mergedcat residual i2d, smooth -> bg for next phase
@@ -5554,6 +5771,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 ref_filter=ref_filter.lower(),
                 filternames_override=[f.lower() for f in filternames],
                 field=field,
+                progid=proposal_id,
                 vetted=True)
             _xbsuf = _L.obs_token(proposal_id, field)
             _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'

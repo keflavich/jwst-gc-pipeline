@@ -447,9 +447,25 @@ def _scan_view(field, view, band_paths, verbose, images_only):
     """
     bands = sorted(band_paths)
     if len(bands) < 2:
-        return dict(view=view, bands=bands, PASS=None,
-                    error=f"need >=2 bands for cross-band, have {len(bands)}",
-                    report={})
+        # A single-band view has no cross-band truth and never will: how many
+        # filters an observation used is a fact about the program.  A verdict of
+        # "could not verify, therefore blocked" here would block a field for
+        # having been observed the way it was observed.  Reported, not blocking;
+        # the per-pair inter-frame overlap gate, the m2-m7 checkpoint ladder and
+        # the absolute-frame refcat check are unaffected and still run.
+        #
+        # NOT the arches/quintuplet case, despite the resemblance: those fields
+        # have TWO bands, so this branch is never taken for them.  Their bands
+        # are one SW and one LW, and `_channel` refuses to cross-match across
+        # that boundary, which leaves each band the sole member of its channel
+        # and reaches the `if not graded` exemption further down instead.  Two-
+        # filter programs are the NORM -- JWST 10678, the Treasury program, is
+        # two filters throughout -- and that is the branch which keeps them from
+        # being blocked for it.
+        return dict(view=view, bands=bands, PASS=True, report={},
+                    unchecked=[], n_graded=0,
+                    unavailable=[f"{bands[0] if bands else '(none)'}: only band "
+                                 f"in view {view}, nothing to cross-band against"])
     dets = {}
     for b in bands:
         s, f = detect(band_paths[b])
@@ -458,7 +474,8 @@ def _scan_view(field, view, band_paths, verbose, images_only):
             print(f"  detect {field} [{view}] {b}: {0 if s is None else len(s)}",
                   flush=True)
 
-    report, any_fail, unchecked = {}, False, []
+    report, any_fail, unchecked, unavailable = {}, False, [], []
+    n_graded = 0
     for b in bands:
         d, fl = dets[b]
         if d is None:
@@ -469,8 +486,13 @@ def _scan_view(field, view, band_paths, verbose, images_only):
             unchecked.append(f"{b}: no detections in view {view} (mosaic empty, "
                              f"truncated, or unreadable)")
             continue
-        others = [dets[o][0] for o in bands
-                  if o != b and dets[o][0] is not None and _channel(o) == _channel(b)]
+        # Whether a same-channel partner EXISTS AT ALL for this band, taken from
+        # the band names rather than from `others`.  The two differ in exactly
+        # the case that matters below: a sibling whose mosaic would not open
+        # leaves `others` empty but `siblings` non-empty, and that is a real
+        # defect which must keep blocking.
+        siblings = [o for o in bands if o != b and _channel(o) == _channel(b)]
+        others = [dets[o][0] for o in siblings if dets[o][0] is not None]
         checks = {}
         if others:
             tru = SkyCoord(np.concatenate([s.ra.deg for s in others]) * u.deg,
@@ -494,16 +516,36 @@ def _scan_view(field, view, band_paths, verbose, images_only):
             unchecked.append(f"{b}: {k} could not be evaluated in view {view} "
                              f"({c['error']})")
         graded = {k: c for k, c in checks.items() if k not in errored}
-        # Only when NOTHING graded is the band unchecked.  Appending on an empty
-        # `others` regardless would block six fields (arches, quintuplet, sgra,
-        # gc2211, m4, ngc6397) that have one band per channel as a property of
-        # their observing programs -- no re-reduction can ever give them a second
-        # SW or LW band, and their own-catalog check runs and passes.  A gate a
-        # correct field cannot pass teaches people to reach for the override.
+        # Nothing graded.  Two very different reasons, and only one of them is a
+        # defect:
+        #
+        #   NO SAME-CHANNEL PARTNER EXISTS.  The cross-band check compares a band
+        #   against the pooled detections of the field's OTHER bands in the same
+        #   channel (SW-vs-LW is excluded on purpose -- see `_channel`).  A field
+        #   observed in one SW and one LW filter therefore has no partner for
+        #   either band, and no re-reduction can produce one: it is a property of
+        #   the observing program.  arches and quintuplet (F212N + F323N) are
+        #   exactly that, and with `--images-only` removing the own-catalog leg as
+        #   well, every band came back ungated and the field verdict was None,
+        #   which BLOCKS.  A gate that a correct field cannot pass under any
+        #   circumstances is not a gate -- it is a standing instruction to reach
+        #   for --allow-registration-fail, which is the one habit this script
+        #   exists to prevent.  So it is recorded as UNAVAILABLE and does not
+        #   block.  What still gates these fields is unchanged and is not weaker
+        #   for it: `check_interframe_overlap.py` (reference-free, per pair, PER
+        #   TILE, swept -- the blocking gate of checklist item 0), the m2/m3-m7
+        #   astrometry checkpoint ladder upstream, and the absolute-frame check
+        #   against the field's Gaia-tied refcat.
+        #
+        #   A PARTNER EXISTS BUT PRODUCED NOTHING.  Its mosaic would not open, or
+        #   the match found too few pairs.  That is a defect in this release, it
+        #   is fixable, and it keeps blocking exactly as before.
         if not graded:
-            unchecked.append(f"{b}: no check available in view {view} "
-                             f"(sole {_channel(b)} band"
-                             f"{', no own-catalog' if images_only else ''})")
+            reason = (f"{b}: no check available in view {view} "
+                      f"(sole {_channel(b)} band"
+                      f"{', no own-catalog' if images_only else ''})")
+            (unavailable if not siblings else unchecked).append(reason)
+        n_graded += len(graded)
         bad = any((not c.get("PASS", True)) for c in graded.values())
         report[b] = checks
         any_fail = any_fail or bad
@@ -516,7 +558,16 @@ def _scan_view(field, view, band_paths, verbose, images_only):
             print(f"  {field} [{view}] {b}: {'FAIL' if bad else 'ok'}  {tags}",
                   flush=True)
     return dict(view=view, bands=bands, PASS=bool(not any_fail), report=report,
-                unchecked=unchecked)
+                unchecked=unchecked, unavailable=unavailable,
+                # How many checks were actually GRADED. `PASS: True` with
+                # `n_graded: 0` is a pass on no evidence -- nothing was wrong
+                # because nothing was measured -- and a caller could not tell
+                # that from a pass backed by own-catalog and cross-band checks.
+                # It is the `--images-only` verdict for a one-SW-one-LW field:
+                # cross-band is impossible by construction and own-catalog is
+                # switched off, so every band lands in `unavailable`. Still not
+                # blocking (that is the point of this PR), but distinguishable.
+                n_graded=n_graded)
 
 
 def scan_field(field, verbose=True, images_only=False, observations=None):
@@ -633,9 +684,16 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
                     views[f"module-{fam}"] = paths
 
     if not views:
-        return dict(field=field, bands=sorted(inv), PASS=None,
-                    geometry=geom["mode"],
-                    error="no view with >=2 bands to cross-match")
+        # Same reasoning as the single-band view above, one level up: a field
+        # whose mosaics never form a 2-band view has no cross-band truth
+        # available anywhere, which is a property of the program rather than of
+        # this release.  A field with NO mosaics at all is a different thing and
+        # is still blocked -- that is caught by the `if not inv` return above.
+        return dict(field=field, bands=sorted(inv), PASS=True,
+                    geometry=geom["mode"], views={}, unresolved=[],
+                    unavailable=[f"no view with >=2 bands to cross-match "
+                                 f"(bands present: {sorted(inv)})"],
+                    n_graded=0, evidence="none", report={})
 
     results = {name: _scan_view(field, name, paths, verbose, images_only)
                for name, paths in sorted(views.items())}
@@ -645,8 +703,10 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
     unresolved = [f"view {n}: {r['error']}" for n, r in results.items()
                   if r.get("PASS") is None]
     unresolved += ungated
+    unavailable = []
     for r in results.values():
         unresolved += r.get("unchecked", [])
+        unavailable += r.get("unavailable", [])
 
     if any_fail:
         passed = False
@@ -657,10 +717,32 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
     if verbose and unresolved:
         for u in unresolved:
             print(f"  {field} UNGATED: {u}", flush=True)
+    # Reported, never blocking -- see `_scan_view`.  Printed under a different
+    # word from UNGATED on purpose: UNGATED names something that should have
+    # been checked and was not, and reading the two as one line is how a real
+    # defect would get waved through as "oh, that field always says that".
+    if verbose and unavailable:
+        for u in unavailable:
+            print(f"  {field} NO-PARTNER (not blocking): {u}", flush=True)
+    n_graded = sum(r.get("n_graded", 0) for r in results.values())
+    # A pass and the evidence behind it are two different facts. `PASS: True`
+    # with nothing graded says "no check found a problem" only in the sense that
+    # no check ran -- the `--images-only` verdict for a one-SW-one-LW field,
+    # where cross-band cannot exist and own-catalog is switched off. It stays a
+    # pass (a gate a correct field can never satisfy teaches people to reach for
+    # the override), and `evidence` lets a caller, a log reader or a later gate
+    # tell it apart from a pass backed by graded checks.
+    evidence = "graded" if n_graded else "none"
+    if verbose and passed and not n_graded:
+        print(f"  {field} PASS ON NO EVIDENCE: no check was graded "
+              f"({len(unavailable)} unavailable). Registration for this field "
+              f"rests on the inter-frame overlap gate and the astrometry "
+              f"checkpoints, not on this one.", flush=True)
     return dict(field=field, bands=sorted(inv), geometry=geom["mode"],
                 module_families=geom["families"],
                 overlap_evidence=geom.get("evidence", {}),
                 views=results, PASS=passed, unresolved=unresolved,
+                unavailable=unavailable, n_graded=n_graded, evidence=evidence,
                 # flattened single-view report, for callers that read `report`
                 report=(results.get("merged") or
                         list(results.values())[0]).get("report", {}))
@@ -693,7 +775,16 @@ def main(argv=None):
         print(json.dumps({"field": res.get("field"), "PASS": res.get("PASS"),
                           "geometry": res.get("geometry"),
                           "error": res.get("error"),
-                          "unresolved": res.get("unresolved")}, default=str))
+                          "unresolved": res.get("unresolved"),
+                          # bands with no same-channel partner to cross-check
+                          # against; reported so the summary line never implies
+                          # a check ran that could not have
+                          "unavailable": res.get("unavailable"),
+                          # "graded"/"none": whether the PASS above rests on
+                          # checks that actually ran. A pass on no evidence is
+                          # still a pass, and is not the same thing.
+                          "evidence": res.get("evidence"),
+                          "n_graded": res.get("n_graded")}, default=str))
         # PASS is tri-state and only True is a pass.  `None` (could not verify:
         # no mosaics, <2 bands, a band with no merged mosaic in an overlapping-
         # module field) used to return 0 and let staging proceed -- a gate that

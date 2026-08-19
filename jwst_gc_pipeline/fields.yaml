@@ -124,6 +124,53 @@ fields:
           miri: '*'
         filters: [f162m, f210m, f360m, f480m, f770w, f2100w]
 
+  gc-treasury:
+    # The GC Treasury (program 10678): 139 observations, 001..139, the same
+    # set for NIRCAM/IMAGE and MIRI/IMAGE, over ~1668 planned exposure-level
+    # MAST rows (data-qa mast_monitor.py:79-83), tiling the inner Galactic
+    # Centre as GC_<n> targets, every visit NIRCam F212N+F480M prime with MIRI
+    # F770W parallel.  Nothing has executed: MAST gives t_min NaN on all 1668
+    # rows, and the published STScI weekly schedules for the weeks of
+    # 2026-08-03, -08-10 and -08-17 list no 10678 visit (checked 2026-08-17).
+    # The name must stay exactly 'gc-treasury': the JWST-GC/data-qa
+    # repository's mast_monitor.TREASURY_FIELD routes every 10678 observation
+    # to it, and the triggered reduce looks the field up under that name
+    # (#413).
+    # root is blue: /orange is 97% full hosting the download staging (804T of
+    # 834T, df 2026-08-18), /blue has 17T free (#421).
+    root: blue
+    observations:
+      '10678':
+        # Consulted for every observation without an exact reference_catalog
+        # key -- for this program, all of them.  The file is owed by the refcat
+        # provisioning issue (#415) and does not exist yet.
+        default_reference_catalog: catalogs/gaia_virac2_refcat_epoch2026.65.fits
+        nvisits: 1
+        # The alignment SOURCE is alignment_config.py's 10678 entry
+        # (TABLE_CONSENSUS), which names Offsets_JWST_Brick10678_consensus.csv
+        # on its own; this token only supplies `refname` on the fallback path
+        # and the frame the realignment gate -- the pre-reduction check that a
+        # field's reference catalog is in the frame its offsets were measured
+        # in -- checks a refcat against.  Kept
+        # for the same reason arches/quintuplet/sgrc keep theirs -- the tie IS
+        # to VIRAC2 and a silent 'NONE' frame stamp is worse than a redundant
+        # one.
+        reference_frame: VIRAC2
+        # '*' claims every observation of the proposal for that instrument.
+        # 10678's 139 observation numbers are published today, and this field
+        # owns all of them -- the wildcard records that ownership, which
+        # survives a replan that renumbers or adds observations, in place of a
+        # 139-entry list that would need regenerating each time.  Enumerate
+        # instead for any proposal whose observations are split between
+        # fields: the wildcard takes an obsid outside the plan as this field's
+        # rather than raising.  Note this is a SCALAR: it is the only scalar
+        # the loader accepts, and any other raises (a bare '001' would load as
+        # ('0', '0', '1')).
+        obsids:
+          nircam: '*'
+          miri: '*'
+        filters: [f212n, f480m, f770w]
+
   gc2211:
     root: orange
     observations:

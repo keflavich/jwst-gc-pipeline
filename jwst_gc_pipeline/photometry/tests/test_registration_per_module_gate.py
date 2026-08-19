@@ -403,3 +403,162 @@ def test_single_module_one_merged_band_is_dropped_not_blocking(tmp_path, monkeyp
     assert res["PASS"] is True, res
     assert not res["unresolved"], res["unresolved"]
     assert res["views"]["module-b"]["PASS"] is True
+
+
+# ---------------------------------------------------------------------------
+# a band with no same-channel partner: unavailable, not unresolved
+#
+# The cross-band check pools a band against the field's OTHER bands IN THE SAME
+# CHANNEL (`_channel`; SW-vs-LW is excluded deliberately, it yields chance
+# pairs).  A field observed in one SW and one LW filter therefore has no partner
+# for either band and never can -- it is a property of the observing program,
+# not of this release.  With `--images-only` also removing the own-catalog leg,
+# arches and quintuplet (F212N + F323N) came back with every band ungated and a
+# field verdict of None, which BLOCKS.  A gate a correct field cannot pass under
+# any circumstances is a standing instruction to reach for
+# --allow-registration-fail, which is the habit this script exists to prevent.
+# ---------------------------------------------------------------------------
+
+def _two_channel_field(tmp_path, field="quintuplet", prop="02045", obs="003",
+                       filters=("F212N", "F323N")):
+    for filt in filters:
+        p = _pipeline(tmp_path, field, filt)
+        _mosaic_file(p / _name(prop, obs, filt.lower(), "nrca"), 266.0, -28.0)
+        _mosaic_file(p / _name(prop, obs, filt.lower(), "nrcb"), 266.1, -28.0)
+
+
+def test_sole_band_in_its_channel_does_not_block(tmp_path, monkeypatch):
+    """quintuplet/arches: F212N is the only SW band, F323N the only LW band."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path)
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["PASS"] is True, res
+    assert not res["unresolved"], res["unresolved"]
+    # ...and it is still SAID, on every view, so the summary never implies a
+    # check ran that could not have
+    assert len(res["unavailable"]) == 4, res["unavailable"]
+    assert all("sole" in u for u in res["unavailable"])
+
+
+def test_sole_band_still_fails_when_a_check_fails(tmp_path, monkeypatch):
+    """Not blocking on 'no partner' must not stop a band that IS checked and
+    fails from failing.  Here the own-catalog leg runs (images_only=False) and
+    returns FAIL."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path)
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    _stub_checks(monkeypatch, passing=False)
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: SkyCoord(
+        np.linspace(266.0, 266.01, 20) * u.deg,
+        np.linspace(-28.0, -27.99, 20) * u.deg))
+    res = rf.scan_field("quintuplet", verbose=False, images_only=False)
+    assert res["PASS"] is False, res
+
+
+def test_partner_that_exists_but_yields_nothing_still_blocks(tmp_path,
+                                                             monkeypatch):
+    """The exemption is for "no partner CAN exist", never for "the partner did
+    not work".  A same-channel sibling whose mosaic will not open is a defect in
+    this release and is fixable, so it must keep blocking -- otherwise the
+    exemption would swallow the unreadable-mosaic case it sits next to."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    # two SW bands, so F212N HAS a partner...
+    _two_channel_field(tmp_path, filters=("F212N", "F187N"))
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+
+    def _detect(path, thr=30.0):
+        if "f187n" in pathlib.Path(path).name:
+            return None, None          # ...whose mosaic yields no detections
+        n = 20
+        return (SkyCoord(np.linspace(266.0, 266.01, n) * u.deg,
+                         np.linspace(-28.0, -27.99, n) * u.deg), np.ones(n))
+
+    monkeypatch.setattr(rf, "detect", _detect)
+    monkeypatch.setattr(rf, "per_cell",
+                        lambda *a, **k: dict(label="x", PASS=True, n_fail=0))
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: None)
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["PASS"] is None, res
+    assert res["unresolved"], res
+    assert not res["unavailable"], res["unavailable"]
+
+
+def test_two_bands_per_channel_needs_no_exemption(tmp_path, monkeypatch):
+    """m92-shaped: 2 SW + 2 LW.  Every band has a partner, so nothing is
+    exempted and the pass is a fully-checked one."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path, field="m92", prop="01334", obs="001",
+                       filters=("F090W", "F150W", "F277W", "F444W"))
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("m92", verbose=False, images_only=True)
+    assert res["PASS"] is True, res
+    assert not res["unavailable"], res["unavailable"]
+    assert not res["unresolved"], res["unresolved"]
+
+
+def test_a_pass_records_whether_anything_was_actually_graded(tmp_path,
+                                                             monkeypatch):
+    """`PASS: True` on an empty report and `PASS: True` on graded checks are
+    different facts, and a caller could not tell them apart from the return
+    value.  The one-SW-one-LW field under `--images-only` is the first: no
+    cross-band partner can exist and the own-catalog leg is switched off, so
+    every band lands in `unavailable` and nothing is measured.  It stays a pass
+    -- a gate a correct field can never satisfy is a standing instruction to
+    reach for the override -- but it says so."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path)
+    _stub_checks(monkeypatch, passing=True)
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["PASS"] is True and res["n_graded"] == 0
+    assert res["evidence"] == "none", res
+
+    # ...and the same field on the full path, where own-catalog supplies the
+    # evidence, is a pass of the other kind.
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: SkyCoord(
+        np.linspace(266.0, 266.01, 20) * u.deg,
+        np.linspace(-28.0, -27.99, 20) * u.deg))
+    res = rf.scan_field("quintuplet", verbose=False, images_only=False)
+    assert res["PASS"] is True and res["n_graded"] > 0
+    assert res["evidence"] == "graded", res
+
+
+def test_the_no_view_shortcut_reports_no_evidence_too(tmp_path, monkeypatch):
+    """The other PASS-with-nothing-graded exit -- a field whose mosaics never
+    form a 2-band view -- must not read as a checked pass either."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path, filters=("F212N",))
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["PASS"] is True
+    assert res["evidence"] == "none" and res["n_graded"] == 0, res
+
+
+def test_a_check_that_errored_is_not_counted_as_graded(tmp_path, monkeypatch):
+    """`n_graded` counts checks that produced a VERDICT. A check that returned
+    `dict(error=...)` -- too few pairs, missing detections -- is the silent-pass
+    hole this script exists to close, so counting it as evidence would put the
+    hole back one level up: the field would report evidence for a pass that
+    nothing graded."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path, filters=("F212N", "F187N"))
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+
+    def _detect(path, thr=30.0):
+        n = 20
+        return (SkyCoord(np.linspace(266.0, 266.01, n) * u.deg,
+                         np.linspace(-28.0, -27.99, n) * u.deg), np.ones(n))
+
+    monkeypatch.setattr(rf, "detect", _detect)
+    monkeypatch.setattr(rf, "per_cell",
+                        lambda *a, **k: dict(label="x", error="too few pairs"))
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: None)
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["n_graded"] == 0 and res["evidence"] == "none", res
+    assert res["unresolved"], res          # errored checks still block

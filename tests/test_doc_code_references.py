@@ -454,7 +454,12 @@ def test_alignment_config_table_matches_code():
                           '### How a locked-table row is selected')
     documented = set()
     for cells in rows:
-        if not re.fullmatch(r'\d{4}', _plain(cells[0])):
+        # 4 or 5 digits: proposal ids were all 4-digit until 10678 (the GC
+        # Treasury).  A `\d{4}`-only filter silently DISCARDED the 10678 row
+        # as a legend row, so documenting it would not have made this test
+        # pass -- and the failure message would have kept saying the row was
+        # missing while it sat in the table.
+        if not re.fullmatch(r'\d{4,5}', _plain(cells[0])):
             continue  # header or legend row
         assert len(cells) >= 5, f'field-table row has {len(cells)} cells: {cells}'
         obs = ','.join(sorted(re.findall(r'\d{3}', cells[1]))) or _plain(cells[1]).lower()

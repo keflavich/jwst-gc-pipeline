@@ -37,6 +37,26 @@ def test_seed_round_trip_convention(tmp_path):
     assert abs(float(t["ddec (arcsec)"][0]) + 0.002) < 1e-12
 
 
+def test_five_digit_proposal_visit_token(tmp_path):
+    """Issue #414's hard failure, pinned on the WRITTEN token.
+
+    The visit token is ``jw`` + proposal(5) + observation(3) + visit(3) -- the
+    11 digits its validator ``VISIT_TOKEN_RE = ^jw\\d{11}$`` counts.  (The
+    ``field`` argument below IS the observation number; m2 spells it
+    ``field``.)  Spelled the old way, proposal 10678
+    yields ``jw010678`` + 6 digits = 14 characters, which ``assert_visit_token``
+    refuses -- the m2 checkpoint cannot seed a correction for the GC Treasury
+    program at all.  ``test_seed_round_trip_convention`` above covers only the
+    4-digit case, where the old and new spellings agree.
+    """
+    p = seed_offsets_table_from_consensus(
+        str(tmp_path), "10678", "012",
+        [_corr("1", 2, "nrcb2", 7.78, -2.0)], stage="m2")
+    t = Table.read(p)
+    assert t["Visit"][0] == "jw10678012001"
+    assert len(t["Visit"][0]) == 13
+
+
 def test_single_row_does_not_leak_to_other_exposures():
     """THE regression: one off-tolerance exposure (exp 2) in visit/filter; the
     within-tolerance exposures (1, 3, 4) have no row and must get (0, 0)."""

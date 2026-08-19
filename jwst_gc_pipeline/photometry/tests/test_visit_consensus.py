@@ -765,9 +765,11 @@ def test_restriction_is_off_at_a_correcting_stage(tmp_path):
 def test_missing_m2_consensus_falls_back_open_not_closed(tmp_path, capsys):
     """A missing baseline is not evidence the solution moved."""
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        _m2_consensus_stars)
-    stars, path = _m2_consensus_stars(str(tmp_path), str(tmp_path), "F212N", "")
+        _m2_consensus_catalog)
+    stars, mag, path, n_visits = _m2_consensus_catalog(
+        str(tmp_path), str(tmp_path), "F212N", "")
     assert stars is None                       # falls back, does not raise
+    assert mag is None
 
 
 def test_restrict_radius_is_tight_enough_to_be_same_star():
@@ -949,7 +951,7 @@ def _record_for(tmp_path, m2_stars, tables, filtername="F212N"):
     import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
 
     # NB the checkpoint supplies `restrict_to` itself, from
-    # `_m2_consensus_stars` -- which the caller monkeypatches.  Passing it in
+    # `_m2_consensus_catalog` -- which the caller monkeypatches.  Passing it in
     # `consensus_kwargs` too is a TypeError, and going through the real path is
     # the point: it is the wiring that had no test.
     return run_visit_checkpoint(
@@ -976,8 +978,8 @@ def test_the_record_says_applied_only_when_every_exposure_restricted(tmp_path, m
     # change the restriction exists to absorb
     full = build_visit_consensus(tables, context="m2")["coords"]
     m2 = full[:len(full) // 2]
-    monkeypatch.setattr(ac, "_m2_consensus_stars",
-                        lambda *a, **k: (m2, "/x/m2.fits"))
+    monkeypatch.setattr(ac, "_m2_consensus_catalog",
+                        lambda *a, **k: (m2, None, "/x/m2.fits", 1))
     rec = _record_for(tmp_path, m2, tables)
     cons = rec["visits"][0]["consensus"]
     assert cons["same_star_gate"] == "applied", cons
@@ -1021,8 +1023,8 @@ def test_one_refusal_does_not_cascade_but_does_not_pollute_either(tmp_path, monk
                     reference_tree=reference_tree)
 
     monkeypatch.setattr(vc, "_restrict_to_same_stars", _one_refusal)
-    monkeypatch.setattr(ac, "_m2_consensus_stars",
-                        lambda *a, **k: (m2, "/x/m2.fits"))
+    monkeypatch.setattr(ac, "_m2_consensus_catalog",
+                        lambda *a, **k: (m2, None, "/x/m2.fits", 1))
     rec = _record_for(tmp_path, m2, tables)
     cons = rec["visits"][0]["consensus"]
 
@@ -1054,8 +1056,8 @@ def test_the_record_carries_the_star_list_footprint_coverage(tmp_path, monkeypat
     ra, dec = _field(n=400)
     tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
     m2 = build_visit_consensus(tables, context="m2")["coords"]
-    monkeypatch.setattr(ac, "_m2_consensus_stars",
-                        lambda *a, **k: (m2, "/x/m2.fits"))
+    monkeypatch.setattr(ac, "_m2_consensus_catalog",
+                        lambda *a, **k: (m2, None, "/x/m2.fits", 1))
     cons = _record_for(tmp_path, m2, tables)["visits"][0]["consensus"]
     assert cons["restrict_list_coverage"] is not None, cons
     assert cons["restrict_list_coverage"] > 0.9, cons["restrict_list_coverage"]
@@ -1067,7 +1069,8 @@ def test_the_record_says_unavailable_when_there_is_no_star_list(tmp_path, monkey
     import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
     ra, dec = _field(n=400)
     tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
-    monkeypatch.setattr(ac, "_m2_consensus_stars", lambda *a, **k: (None, None))
+    monkeypatch.setattr(ac, "_m2_consensus_catalog",
+                        lambda *a, **k: (None, None, None, None))
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         run_visit_checkpoint)
     rec = run_visit_checkpoint(tables, "m6", filtername="F212N",
@@ -1092,9 +1095,9 @@ def test_a_correcting_stage_does_not_restrict(tmp_path, monkeypatch):
 
     def _spy(*a, **k):
         called["n"] += 1
-        return full[:len(full) // 2], "/x/m2.fits"
+        return full[:len(full) // 2], None, "/x/m2.fits", 1
 
-    monkeypatch.setattr(ac, "_m2_consensus_stars", _spy)
+    monkeypatch.setattr(ac, "_m2_consensus_catalog", _spy)
     rec = run_visit_checkpoint(tables, "m2", filtername="F212N",
                                basepath=str(tmp_path),
                                record_dir=str(tmp_path), context="test")

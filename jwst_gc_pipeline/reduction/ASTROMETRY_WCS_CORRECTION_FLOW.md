@@ -287,6 +287,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F210M | w51 (outside the VVV footprint); was F200W, which 6151 does not observe |
 | 2045 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F212N | arches |
 | 2045 | 003 | VIRAC2 | `TABLE_LOCKED` | F212N | quintuplet |
+| 10678 | all | VIRAC2 | `TABLE_CONSENSUS` | F212N | gc-treasury; registered before any 10678 data is delivered, all 139 obsids claimed by the `fields.yaml` wildcard, `Offsets_JWST_Brick10678_consensus.csv` created by the m2 checkpoint on the first reduce |
 | 5365 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrb2 |
 | 1939 | 001 | VIRAC2 | `TABLE_LOCKED` | F212N | sgra; unregistered until 2026-08-06, so every mosaic sits ~14.8″ off |
 | 2211 | all | VIRAC2 | `TABLE_LOCKED` | F200W | gc2211 |

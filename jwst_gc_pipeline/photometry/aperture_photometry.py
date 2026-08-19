@@ -35,6 +35,8 @@ from astropy.stats import sigma_clipped_stats
 
 from photutils.aperture import CircularAperture, CircularAnnulus, ApertureStats
 
+from jwst_gc_pipeline.mast_names import jw_prefix
+
 ABMAG_OFFSET = 8.90
 
 # Curve-of-growth radii (arcsec).  Spans the PSF core (~0.05-0.1") out past the
@@ -129,7 +131,7 @@ def find_i2d_mosaics(filtername, target, basepath):
     if inst == 'nircam' and proj is not None and target in project_obsnum \
             and proj in project_obsnum[target]:
         obs = project_obsnum[target][proj]
-        pats.append(f'{pipe}/jw0{proj}-o{obs}_t001_nircam_clear-{filt_l}-merged_i2d.fits')
+        pats.append(f'{pipe}/{jw_prefix(proj)}-o{obs}_t001_nircam_clear-{filt_l}-merged_i2d.fits')
     # generic fallbacks (covers MIRI, non-registry targets, plain naming)
     pats += [
         f'{pipe}/jw*-o*_t001_{inst}_clear-{filt_l}-merged_i2d.fits',

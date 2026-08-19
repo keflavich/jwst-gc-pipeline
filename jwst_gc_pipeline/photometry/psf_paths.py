@@ -39,11 +39,50 @@ def central_merged_psf_grid_path(jwst_root, instrument, module, filtername,
     return os.path.join(central_psf_dir(jwst_root), name)
 
 
+def legacy_merged_psf_grid_name(filtername, proposal_id, field,
+                                oversample=1, blur=False):
+    """Filename (no directory) that a merged gridded-PSF is written under.
+
+    Single-sourced because two readers build this name from different
+    directories: ``legacy_merged_psf_grid_path`` below, from
+    ``{jwst_root}/{target}``, and ``reduction.saturated_star_finding.get_psf``,
+    from the ``psfs`` directory it is handed directly.
+
+    The ``_oversample{N}`` token is not optional.  All 237 merged grids on disk
+    carry it (three oversamplings each, half of them additionally ``_blur``) --
+    it is how the writer, the deprecated ``reduction.make_merged_psf``, named
+    them.  A reader that omits it matches nothing, which is silent: the caller
+    falls back to a detector-specific grid without reporting that it looked.
+    """
+    return (f'{filtername.upper()}_{proposal_id}_{field}_merged_PSFgrid'
+            f'_oversample{oversample}{_blur_token(blur)}.fits')
+
+
+def legacy_merged_psf_grid_name_from_header(header, filtername, oversample=1,
+                                            blur=False):
+    """``legacy_merged_psf_grid_name`` keyed off a frame header.
+
+    The reader in ``reduction.saturated_star_finding.get_psf`` has a header,
+    not a registry entry, so it has to recover the proposal from ``PROGRAM``.
+    ``PROGRAM`` is MAST's five-character zero-padded form (``'02221'``,
+    ``'10678'``); the writer, ``reduction.make_merged_psf``, names the grid
+    with the UNPADDED registry proposal (``'2221'``, ``'10678'``).  Stripping
+    the pad is what makes the two agree.  The four-character PROGRAM slice
+    this replaces agreed only for a 4-digit proposal: on 10678 it asked for
+    ``F212N_0678_...``, which nothing writes, and the caller fell through to a
+    detector-specific grid without reporting that it looked (issue #414).
+    """
+    from ..mast_names import proposal_id_from_program
+    return legacy_merged_psf_grid_name(
+        filtername, proposal_id_from_program(header['PROGRAM']),
+        str(header['OBSERVTN']).strip(), oversample=oversample, blur=blur)
+
+
 def legacy_merged_psf_grid_path(jwst_root, target, filtername, proposal_id,
                                 field, oversample=1, blur=False):
     """The historical per-(proposal, field) merged gridded-PSF path."""
-    name = (f'{filtername.upper()}_{proposal_id}_{field}_merged_PSFgrid'
-            f'_oversample{oversample}{_blur_token(blur)}.fits')
+    name = legacy_merged_psf_grid_name(filtername, proposal_id, field,
+                                       oversample, blur)
     return os.path.join(jwst_root, target, 'psfs', name)
 
 

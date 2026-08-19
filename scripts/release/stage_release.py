@@ -49,6 +49,8 @@ from pathlib import Path
 # so two gate test files silently stopped protecting anything.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_freshness            # noqa: E402  (needs the path above)
+import exposure_bundle              # noqa: E402  (same reason)
+import astrometry_provenance        # noqa: E402  (same reason)
 
 # --- Globus collection constants ---------------------------------------------
 GLOBUS_COLLECTION_ID = "d9873d5e-0fbd-4980-aedf-4ca56f65a045"
@@ -499,16 +501,58 @@ def discover_images(field_cfg):
 
 
 CAT_BASE = "basic_merged_indivexp_photometry_tables_merged"
+# The oksep quality-cut suffix carries the target's OWN proposal token(s):
+# merge_catalogs._qualcuts_oksep_suffix() builds it from the field's registered
+# proposals, so wd1 and w51 write their own program numbers and only the fields
+# that really are program 2221 (brick, cloudc) write that one.  Matching a
+# single program's token here silently skipped every other field's
+# quality-filtered table: the loops below `continue` on a non-match, so wd1's
+# and w51's tables sat on disk and never reached a release.
+QUALCUTS_RE = r"_qualcuts_oksep[0-9A-Za-z-]+"
+
+
+def field_qualcuts_suffix(field):
+    """The quality-cut suffix this field's own catalogs should carry, or None.
+
+    Imported lazily: stage_release runs as a script from scripts/release, and
+    a missing/!importable pipeline package must not stop a release from being
+    staged -- the caller falls back to alphabetical order.
+    """
+    try:
+        from jwst_gc_pipeline.photometry.merge_catalogs import (
+            _qualcuts_oksep_suffix)
+    except ImportError:
+        return None
+    return _qualcuts_oksep_suffix(field)
+
+
+def _qualcuts_sort_key(field):
+    """Order a catalog directory so the LAST quality-cut table wins on merit.
+
+    The loops below assign ``entry["qualcuts"] = path``, so with an unsorted
+    glob the winner was whatever the directory listing happened to yield last.
+    Eleven fields carry a mislabelled ``_qualcuts_oksep2221`` table written  # noqa: qualcuts-token
+    before the suffix was per-field, and w51 holds that one NEXT TO its correct
+    ``_qualcuts_oksep6151`` at the same iteration -- so which table reached  # noqa: qualcuts-token
+    the release was decided by inode order.  Sorting puts the field's own token
+    last, and is otherwise alphabetical so a rerun stages the same file twice.
+    """
+    own = field_qualcuts_suffix(field)
+
+    def key(path):
+        return (own is not None and own in path.name, path.name)
+
+    return key
 # combined (all-pointings) merged table; the (?!_o\d) guard keeps per-pointing
 # "..._m7_o023.fits" variants OUT of the combined match.
 COMBINED_RE = re.compile(
     rf"^{re.escape(CAT_BASE)}_(?P<iter>(?:resbgsub_)?m\d+)"
-    rf"(?P<qc>_qualcuts_oksep2221)?\.(?P<ext>fits|ecsv)$"
+    rf"(?P<qc>{QUALCUTS_RE})?\.(?P<ext>fits|ecsv)$"
 )
 # per-pointing merged table: "..._m7_o023.fits", "..._m7_o023_qualcuts...fits"
 PERPOINT_RE = re.compile(
     rf"^{re.escape(CAT_BASE)}_(?P<iter>(?:resbgsub_)?m\d+)_(?P<obs>o\d+)"
-    rf"(?P<qc>_qualcuts_oksep2221)?\.(?P<ext>fits|ecsv)$"
+    rf"(?P<qc>{QUALCUTS_RE})?\.(?P<ext>fits|ecsv)$"
 )
 # per-filter vetted, optionally per-pointing (excludes *_vetted_carta.fits)
 VETTED_RE = re.compile(
@@ -545,7 +589,7 @@ def discover_catalogs(field_cfg, field):
 
     # combined (all-pointings) merged table -- highest iteration
     combined = {}  # rank -> {iter, full_fits, full_ecsv, qualcuts}
-    for path in cat_dir.glob(f"{CAT_BASE}_*"):
+    for path in sorted(cat_dir.glob(f"{CAT_BASE}_*"), key=_qualcuts_sort_key(field)):
         m = COMBINED_RE.match(path.name)
         if m is None:
             continue
@@ -561,7 +605,8 @@ def discover_catalogs(field_cfg, field):
     # per-pointing merged tables (multi-pointing fields) -- highest iter per obs
     if observations:
         per_obs = {}  # obs -> {rank -> entry}
-        for path in cat_dir.glob(f"{CAT_BASE}_*"):
+        for path in sorted(cat_dir.glob(f"{CAT_BASE}_*"),
+                           key=_qualcuts_sort_key(field)):
             m = PERPOINT_RE.match(path.name)
             if m is None or m.group("obs") not in observations:
                 continue
@@ -682,7 +727,41 @@ FRAME_TOL_MAS = 15.0
 FRAME_REFCAT = {
     # field: the Gaia-tied refcat the reduction was (re)anchored to. Extend as confirmed.
     "brick": "/orange/adamginsburg/jwst/brick/catalogs/gaia_virac2_refcat_epoch2022.70.fits",
+    # arches: same construction as brick's (GaiaDR3 3656 + VIRAC2 174193, identical
+    # columns).  Confirmed by measuring the staged mosaics against it with the swept
+    # offset-histogram estimator: F212N nrca/nrcb 9.5/8.4 mas, F323N nrca/nrcb
+    # 10.6/9.3 mas, every one un-swept at 3" with window_edge_fraction 0.00.
+    #
+    # This one matters for the OVERLAP gate rather than the frame gate: arches ships
+    # no catalogs, so `check_catalog_on_frame` has nothing to test, but arches is
+    # module-split with `geometry: disjoint` -- precisely the thin/sparse inter-module
+    # overlap where the reference-free frame-vs-frame histogram is unreliable and the
+    # same-star residual map vs VIRAC2 is the authoritative arbiter.  Staging it
+    # printed "no Gaia refcat mapped for 'arches' in FRAME_REFCAT" while the refcat
+    # sat on disk beside the ones already in use.
+    "arches": "/orange/adamginsburg/jwst/arches/catalogs/gaia_virac2_refcat_epoch2023.64.fits",
+    # quintuplet: arches's twin -- same program (2045), same module-split
+    # `geometry: disjoint`, same two filters, same refcat construction (177791
+    # rows).  Measured the same way, on the mosaics `build_manifest` selects:
+    # F212N nrca/nrcb 6.4/6.3 mas, F323N nrca/nrcb 6.6/7.3 mas; contrast
+    # 157-266, none swept at 3", window_edge_fraction 0.002.  A tighter tie than
+    # arches's own (8.5-10.4 mas), so mapping arches while leaving its twin
+    # unmapped would have been an accident of which field was looked at first.
+    "quintuplet": "/orange/adamginsburg/jwst/quintuplet/catalogs/"
+                  "gaia_virac2_refcat_epoch2024.62.fits",
 }
+
+# NOT mapped, deliberately, though a `gaia_virac2_refcat_*.fits` exists for each:
+#
+# * gc2211 -- its pointings are DISJOINT and o028 lies outside the field-wide
+#   refcat's footprint (measuring against it reads `ref_in_fov=0` and no tie at any
+#   window; it has its own `..._o028.fits`).  A single field-level entry would hand
+#   the arbiter a reference that cannot see one of the pointings, which is worse
+#   than no arbiter: the gate would fail-closed on good data.  Mapping gc2211 needs
+#   per-observation refcats, which this dict cannot express.
+# * cloudef -- its o002 mosaics are ~185 mas off this refcat in all four bands
+#   (o005 F480M is 5.4 mas), so the field is not tied to it yet.  Mapping it now
+#   would assert a frame the data does not sit on.
 
 # ---------------------------------------------------------------------------
 # The star list the OVERLAP gate uses to arbitrate a pair it cannot measure
@@ -717,13 +796,34 @@ def overlap_arbiter_refcat(field):
     return None
 
 
-def _frame_bulk_offset(sc, ref):
+
+def _frame_bulk_offset(sc, ref, detect_sc=None):
     """The catalog's bulk offset vs the reference, by the SANCTIONED method
     (CLAUDE.md): histogram-stack + SWEEP to DETECT the tie (density-immune,
     catches a gross >window shift like brick-1182 v001 ~700 mas), then refine
     the PRECISE bulk same-star via ``local_residual_map`` (a single giant cell)
     -- which itself REFUSES unless the verified global tie is already small, so
     pairs are unambiguous.  This is NOT an ad-hoc dense NN-median.
+
+    ``detect_sc`` supplies a DIFFERENT source list for the detection step only;
+    the refinement, and therefore the gated number, still comes from ``sc``.
+    The two steps want opposite populations and the caller cannot serve both
+    with one list:
+
+    * detection needs the sources the reference actually contains.  The GC
+      refcat is Gaia+VIRAC2, i.e. BRIGHT stars, and in a NIRCam short-wavelength
+      band most of those are saturated -- 3775 of brick F182M's 6322 matched
+      pairs.  Drop them and the histogram loses the majority of its TRUE pairs
+      while keeping every wrong one, so the peak walks off onto a spurious lag:
+      F182M read (+288, -466) mas at contrast 16 without them and (-4.9, +3.9)
+      mas at contrast 25 with them.  Same catalog, same reference, 1.4% of the
+      rows removed.
+    * refinement wants clean centroids.  A saturated star's centroid carries a
+      flux-dependent bias with nothing to do with the frame (worst in the narrow
+      Pa-alpha F187N, where it read a false 68 mas OFF-FRAME).
+
+    Detecting with the bright stars and refining without them gives both: brick
+    F182M then reads 1.10 mas over 4474 unsaturated same-star pairs.
 
     Returns ``(off_mas_or_None, source)``.  ``source`` is ``"same-star"`` for a
     refined fine tie, ``"histogram"`` when the tie is large/unverifiable (the
@@ -737,7 +837,8 @@ def _frame_bulk_offset(sc, ref):
     import astropy.units as u
     from jwst_gc_pipeline.photometry.astrometry_offsets import (
         measure_offset, local_residual_map, GlobalTieNotVerifiedError)
-    r = measure_offset(sc, ref, maxsep=3.0 * u.arcsec, sweep=True)
+    r = measure_offset(sc if detect_sc is None else detect_sc, ref,
+                       maxsep=3.0 * u.arcsec, sweep=True)
     if r is None:
         return None, "no-tie"
     off, source = r["off"], "histogram"
@@ -818,11 +919,18 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     frame (crowdsource/VVV/2MASS) and must not ship. Returns list of ((filter,obs), off_mas)
     failures, or [] if no refcat is mapped for the field (can't enforce -> caller warns).
 
-    Saturated / replaced-saturated sources are EXCLUDED from the measurement: their
-    centroids carry a strong flux-dependent bias (worst in the narrow Pa-alpha F187N,
-    where the brightest quartile pulls the raw bulk by tens of mas) that has nothing to
-    do with the frame.  Including them made F187N read 68 mas (a false OFF-FRAME) while
-    the clean same-star tie is ~1 mas.  An astrometric frame check uses good centroids."""
+    Saturated / replaced-saturated sources are EXCLUDED from the REFINEMENT, which is
+    the number this gates on: their centroids carry a strong flux-dependent bias (worst
+    in the narrow Pa-alpha F187N, where the brightest quartile pulls the raw bulk by
+    tens of mas) that has nothing to do with the frame.  Including them made F187N read
+    68 mas (a false OFF-FRAME) while the clean same-star tie is ~1 mas.
+
+    They are KEPT for the DETECTION step, because the reference is a bright-star catalog
+    and in a short-wavelength NIRCam band most of the stars it shares with the release
+    are saturated.  Excluding them from detection too made brick F182M read 547 mas --
+    a false OFF-FRAME that refused the whole field's catalogs -- while the same rows
+    tie at 1.10 mas once the peak is found with the bright stars present.  See
+    ``_frame_bulk_offset``."""
     refpath = FRAME_REFCAT.get(field)
     if not refpath or not os.path.exists(refpath):
         return None
@@ -848,7 +956,10 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
                 sat |= np.asarray(t[satcol], dtype=bool)
         sc_all = SkyCoord(t[col])[finite]
         sc = SkyCoord(t[col])[finite & ~sat]
-        off, source = _frame_bulk_offset(sc, ref)
+        # Detect with every source (the bright ones carry the true pairs), refine
+        # on the unsaturated ones (clean centroids).  `detect_sc=sc_all` is a
+        # no-op when nothing is flagged.
+        off, source = _frame_bulk_offset(sc, ref, detect_sc=sc_all)
         ok = off is not None and off <= tol_mas
         # Report the saturated-INCLUDED offset alongside the (gating) clean one --
         # print only, never gates.  Saturated-star centroids carry a strong
@@ -1119,17 +1230,39 @@ def assign_dest(item, field):
         if obs:
             return Path("images") / obs / item["filter"] / src_name
         return Path("images") / item["filter"] / src_name
+    if item["category"] == exposure_bundle.EXPOSURE_CATEGORY:
+        # Mirrors the images/ layout exactly, so "the frames behind
+        # images/<obs>/<FILT>" is `exposures/<obs>/<FILT>` with no lookup --
+        # which is also what makes one Globus folder link per group a usable
+        # bulk download.
+        parts = [Path("exposures")]
+        if item.get("instrument") == "MIRI":
+            parts.append(Path("MIRI"))
+        if item.get("observation"):
+            parts.append(Path(item["observation"]))
+        parts.append(Path(item["filter"] or "unknown"))
+        return Path(*parts) / src_name
     # catalogs stay flat; per-pointing filenames already carry the _oNNN tag
     return Path("catalogs") / src_name
 
 
-def build_manifest(field, version, images_only=False, missing=None):
+def build_manifest(field, version, images_only=False, missing=None,
+                   exposures=True, exposure_problems=None):
     """Deliverable dicts for a field.
 
     ``missing`` -- pass a list to collect one description per explicitly-listed
     (``nircam`` / ``miri``) src that is not on disk.  The caller is expected to
     refuse to stage when it comes back non-empty; the auto-discovered products
     are not affected (nothing lists them, so nothing can go absent from a list).
+
+    ``exposures`` -- also offer the detector-frame frames each science mosaic was
+    drizzled from (``exposure_bundle``).  These are provenance-derived from the
+    mosaics' own associations, so they are added AFTER the mosaic set is final
+    and they can never change which mosaics ship.  ``exposure_problems``
+    collects one line per mosaic whose input list could not be established;
+    unlike ``missing`` this is a report, not a refusal -- a mosaic is a
+    deliverable, its input list is a convenience, and withholding a certified
+    mosaic because its association went missing would be the wrong trade.
     """
     field_cfg = FIELDS[field]
     items = []
@@ -1147,14 +1280,34 @@ def build_manifest(field, version, images_only=False, missing=None):
         # science mosaics only: drop the catalog-derived residual/model i2d, which encode
         # the (uncertified) catalog fit, and any catalog products.
         items = [it for it in items if it.get("kind") == "science"]
+    if exposures:
+        # After `images_only` has already settled which mosaics ship, so the
+        # frames offered are the frames behind the mosaics on the page and
+        # nothing else. Detector frames are not catalog-derived, so an
+        # image-only release keeps them.
+        items += exposure_bundle.discover_exposures(
+            [it for it in items
+             if it.get("category") == "image" and it.get("kind") == "science"],
+            search_root=field_cfg["data_dir"], problems=exposure_problems)
+    # The pointing-correction table: kilobytes, COPIED and checksummed like a
+    # mosaic. The frames are symlinks whose headers a re-reduction rewrites, so
+    # this table -- not the FITS -- is what makes this version's astrometry
+    # reconstructible afterwards.
+    table = astrometry_provenance.stage_item(field, field_cfg, version)
+    if table is not None:
+        items.append(table)
     for item in items:
         src = Path(item["src"])
-        item["dest"] = str(assign_dest(item, field))
+        # `stage_item` already knows where the table goes; everything else is
+        # placed by category.
+        item.setdefault("dest", str(assign_dest(item, field)))
         item["size_bytes"] = src.stat().st_size if src.is_file() else None
         # per-file version: defaults to the field release version so every file carries
         # an explicit version on the download page. A file bumped independently (e.g. a
         # re-tied mosaic staged into an otherwise-older release) can override this.
         item.setdefault("version", version)
+    # needs every `dest` assigned, so it runs after the loop above
+    exposure_bundle.link_parents(items)
     return items
 
 
@@ -1268,19 +1421,46 @@ def human_size(num_bytes):
 
 
 def print_manifest(items):
+    """One line per deliverable; exposures GROUPED.
+
+    A field ships tens of mosaics and catalogs and can ship several thousand
+    detector-frame exposures (wd1: 696).  Printing those one per line buries the
+    deliverable list the operator is actually reading before a stage, so they
+    are summarized per (observation, filter) instead, with the product suffix
+    shown -- which is the part worth eyeballing, since it says whether a band
+    fell back off `_crf` onto `_cal`.
+    """
+    deliverables = [it for it in items
+                    if it["category"] != exposure_bundle.EXPOSURE_CATEGORY]
+    exposures = [it for it in items
+                 if it["category"] == exposure_bundle.EXPOSURE_CATEGORY]
     print(f"\n{'CATEGORY':<9} {'KIND':<26} {'FILT':<6} {'ITER':<14} {'SIZE':>8}  SRC")
     print("-" * 110)
-    for it in items:
+    for it in deliverables:
         print(f"{it['category']:<9} {it['kind']:<26} "
               f"{(it['filter'] or ''):<6} {(it['iteration'] or ''):<14} "
               f"{human_size(it['size_bytes']):>8}  {it['src']}")
-    total = sum(it["size_bytes"] or 0 for it in items)
+    total = sum(it["size_bytes"] or 0 for it in deliverables)
     print("-" * 110)
-    print(f"{len(items)} files, total {human_size(total)}\n")
+    print(f"{len(deliverables)} files, total {human_size(total)}")
+    if exposures:
+        summary = exposure_bundle.summarize(exposures)
+        exp_total = sum(it["size_bytes"] or 0 for it in exposures)
+        print(f"\nDETECTOR-FRAME EXPOSURES (linked, not frozen): "
+              f"{len(exposures)} frames, total {human_size(exp_total)}")
+        for (obs, filt) in sorted(summary):
+            count, size = summary[(obs, filt)]
+            print(f"  {(obs or '-'):<8} {filt:<7} {count:>5} frames  "
+                  f"{human_size(size):>9}")
+        print("  products: " + ", ".join(
+            f"{suffix} x{n}" for suffix, n
+            in sorted(exposure_bundle.suffix_histogram(exposures).items())))
+    print()
 
 
 def stage(items, field, version, release_root, mode, do_checksum,
-          continuity_gate=None):
+          continuity_gate=None, allow_older=False):
+    assert_writable(version, release_root, allow_older, field)
     field_dir = field_release_dir(field, version, release_root)
     field_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1295,6 +1475,14 @@ def stage(items, field, version, release_root, mode, do_checksum,
 
     checksum_lines = []
     for it in items:
+        # Detector-frame exposures are ALWAYS symlinked and never checksummed,
+        # even under --copy.  A field-filter is ~20 GB of frames against ~500 MB
+        # of mosaics, so copying them would grow the frozen tree ~40x for data
+        # that a re-reduction only re-headers; and a sha256 over a symlink whose
+        # target is expected to change is not the frozen-copy integrity claim
+        # that CHECKSUMS.sha256 makes.  See exposure_bundle's module docstring.
+        is_exposure = it.get("category") == exposure_bundle.EXPOSURE_CATEGORY
+        item_mode = "hardlink" if is_exposure else mode
         src = Path(it["src"]).resolve()
         dest = field_dir / it["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1308,18 +1496,19 @@ def stage(items, field, version, release_root, mode, do_checksum,
         # under a fresh build timestamp. `copy2` preserves mtime, so requiring the
         # mtime to match too is what makes the skip mean "this is that file".
         dest_stat = dest.stat() if (dest.is_file() and not dest.is_symlink()) else None
-        unchanged = (mode == "copy" and dest_stat is not None
+        unchanged = (item_mode == "copy" and dest_stat is not None
                      and dest_stat.st_size == src_size
                      and abs(dest_stat.st_mtime - src_stat.st_mtime) < 1e-3)
         if not unchanged:
-            if dest.exists() or dest.is_symlink():
-                dest.unlink()
-            if mode == "copy":
+            if item_mode == "copy":
+                if dest.exists() or dest.is_symlink():
+                    dest.unlink()
                 shutil.copy2(src, dest)
             else:
-                dest.symlink_to(src)
+                it["link_mode"] = exposure_bundle.link_frame(src, dest)
+                it["source_identity"] = exposure_bundle.source_identity(src)
 
-        if do_checksum:
+        if do_checksum and not is_exposure:
             cached = prior.get(it["dest"])
             if unchanged and cached and cached[0] == src_size:
                 digest = cached[1]  # reuse; content unchanged
@@ -1327,6 +1516,10 @@ def stage(items, field, version, release_root, mode, do_checksum,
                 digest = sha256sum(src)
             it["sha256"] = digest
             checksum_lines.append(f"{digest}  {it['dest']}")
+
+    exposure_bundle.report_symlink_fallbacks(
+        [it for it in items
+         if it.get("category") == exposure_bundle.EXPOSURE_CATEGORY])
 
     # release-relative globus path and URL for each item
     for it in items:
@@ -1345,6 +1538,13 @@ def stage(items, field, version, release_root, mode, do_checksum,
         "release_path": "/" + str(field_dir.relative_to(GLOBUS_COLLECTION_ROOT)),
         "built": datetime.datetime.now().astimezone().isoformat(),
         "mode": mode,
+        # `mode` describes the deliverables. Detector-frame exposures are
+        # always links and always unchecksummed, so state that separately
+        # rather than let "mode": "copy" imply a frozen copy of every entry.
+        # DERIVED from the entries, never asserted: see link_mode_summary.
+        "exposure_mode": exposure_bundle.link_mode_summary(
+            [it for it in items
+             if it.get("category") == exposure_bundle.EXPOSURE_CATEGORY]),
         # Positive outcome of the photometric-continuity gate for this staging:
         # "passed" (all clean), "waived" (a documented known limit was recorded --
         # see per-file continuity_waivers), "skipped(override)", or a
@@ -1360,14 +1560,365 @@ def stage(items, field, version, release_root, mode, do_checksum,
     if do_checksum:
         (field_dir / "CHECKSUMS.sha256").write_text("\n".join(checksum_lines) + "\n")
 
-    write_readme(field_dir, field, version, items, mode)
+    exposure_dests = [it["dest"] for it in items
+                      if it["category"] == exposure_bundle.EXPOSURE_CATEGORY]
+    if exposure_dests:
+        orphans, unexpected = prune_exposure_orphans(field_dir, exposure_dests)
+        if orphans:
+            print(f"  removed {orphans} stale exposure link(s) this release no "
+                  f"longer claims")
+        for rel in unexpected:
+            print(f"  WARNING: {rel} under exposures/ is a real file, not a "
+                  f"link -- left in place")
+
+    write_readme(field_dir, field, version, items, mode,
+                 built_at=manifest["built"])
 
     # world-readable
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
     return field_dir
 
 
-def write_readme(field_dir, field, version, items, mode):
+def _exposures_from_disk(field, version, field_dir):
+    """Exposure items enumerated from the pipeline directories, no mosaic needed.
+
+    Detector frames are a DEPENDENCY of the mosaic -- Stage 2/3 write them first
+    -- so a field can release them before anything is drizzled, and should: a
+    two-filter program mid-reduction has its ``_cal``/``_destreak`` frames on
+    disk and nothing about them is waiting on a drizzle.
+
+    Behind an explicit flag rather than used as a silent fallback.  The
+    association path answers "which frames went INTO this mosaic"; this one
+    answers "which frames belong to this field/observation/filter", which is a
+    weaker claim, and the difference is real -- on wd1 F150W the two disagree,
+    because that mosaic was drizzled from ``_cal`` members while a separate
+    ``_o001_crf`` family also sits in the same directory.  Choosing between them
+    by accident is the guesswork ``exposures_for_mosaic`` exists to refuse.
+    """
+    found = exposure_bundle.enumerate_field_exposures(FIELDS[field], field)
+    items = []
+    for (obs, filt), paths in sorted(found.items(),
+                                     key=lambda kv: (kv[0][0] or "", kv[0][1])):
+        for path in paths:
+            items.append({
+                "category": exposure_bundle.EXPOSURE_CATEGORY,
+                "kind": exposure_bundle.EXPOSURE_KIND,
+                "filter": filt, "iteration": None, "observation": obs,
+                "instrument": "MIRI" if "mirimage" in path.name else "NIRCam",
+                "src": str(path), "version": version,
+            })
+    for it in items:
+        it["dest"] = str(assign_dest(it, field))
+        src = Path(it["src"])
+        it["size_bytes"] = src.stat().st_size if src.is_file() else None
+        rel = (field_dir / it["dest"]).relative_to(GLOBUS_COLLECTION_ROOT)
+        it["globus_path"] = "/" + str(rel)
+        it["url"] = GLOBUS_HTTPS_BASE + it["globus_path"]
+    return items
+
+
+def prune_exposure_orphans(field_dir, keep_dests):
+    """Remove staged exposure links this release no longer claims.
+
+    Re-staging with a CHANGED frame list -- which is exactly what correcting the
+    input-list rule does -- leaves the previous links in place, so the directory
+    accumulates: 240 links on disk against 120 manifest entries. That matters
+    beyond tidiness, because the bulk-download button transfers the FOLDER, not
+    the manifest, so an orphan is a file the release still hands out while
+    claiming not to.
+
+    Removes only links -- a symlink, or a hardlink sharing its inode with a file
+    outside the release tree.  A frame with a link count of 1 is the release's
+    ONLY copy of those bytes and is left alone and reported: deleting it would
+    destroy data rather than unpublish it, and nothing in this design writes
+    one.  (Before hardlinks this checked ``is_symlink()``, which after the
+    switch would have matched nothing and silently pruned no orphan at all.)
+    """
+    exposures_dir = Path(field_dir) / "exposures"
+    if not exposures_dir.is_dir():
+        return 0, []
+    keep = {str(d) for d in keep_dests}
+    removed, unexpected = 0, []
+    for path in sorted(exposures_dir.rglob("*")):
+        if path.is_dir():
+            continue
+        rel = path.relative_to(field_dir).as_posix()
+        if rel in keep:
+            continue
+        if path.is_symlink() or path.stat().st_nlink > 1:
+            path.unlink()
+            removed += 1
+        else:
+            unexpected.append(rel)
+    for directory in sorted(exposures_dir.rglob("*"), reverse=True):
+        if directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+    return removed, unexpected
+
+
+class FrozenReleaseError(RuntimeError):
+    """Writing into a release directory that already exists, without saying so."""
+
+
+def refuse_older_version(version, release_root, allow_older, field=None):
+    """``(refuse, why)`` for writing into ``version``.
+
+    Keyed on whether THIS FIELD'S directory already exists, not on version
+    ordering.  Ordering had two holes, both real:
+
+    * ``version < max(existing)`` leaves the NEWEST published version writable
+      with no flag.  Of the four field directories written on 2026-08-17 it
+      would have stopped three; ``v1.3-2026.08/arches`` was already
+      ``max(existing)`` and stayed open, and still is.
+    * the comparison is lexicographic, so it inverts at the first two-digit
+      minor: with ``v1.9`` and ``v1.10`` on disk, ``v1.9`` (frozen) is writable
+      and ``v1.10`` (newest) is refused.
+
+    A directory holding a ``MANIFEST.json`` has been staged before, whatever its
+    version string sorts as, so re-cutting it is the deliberate act the flag is
+    for.  ``field=None`` falls back to the ordering check for callers that have
+    no field yet.
+    """
+    if allow_older:
+        return False, ""
+    if field is not None:
+        manifest = Path(release_root) / version
+        cfg = FIELDS.get(field, {})
+        if cfg.get("group"):
+            manifest = manifest / cfg["group"]
+        manifest = manifest / field / "MANIFEST.json"
+        if manifest.is_file():
+            return True, (f"'{version}', which already holds a staged {field} release "
+                          f"({manifest}); re-cutting it rewrites a MANIFEST, "
+                          f"README and CHECKSUMS whose checksums are cited")
+    root = Path(release_root)
+    existing = sorted(p.name for p in root.iterdir()
+                      if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
+    if existing and version < max(existing):
+        return True, (f"'{version}', which is older than the newest release on "
+                      f"disk ('{max(existing)}')")
+    return False, ""
+
+
+def assert_writable(version, release_root, allow_older, field=None):
+    """Raise ``FrozenReleaseError`` unless this release directory may be written.
+
+    Called by the functions that DO the writing rather than only from ``main``.
+    The guard used to live in two ``main()`` branches, so any other caller --
+    including this repo's own tests, which call ``stage_exposures_only``
+    directly -- bypassed it entirely while the docstring claimed every path went
+    through one check.
+    """
+    refuse, why = refuse_older_version(version, release_root, allow_older, field)
+    if refuse:
+        raise FrozenReleaseError(
+            f"REFUSING to write into {why}. Pass --allow-older-version if "
+            f"re-cutting it is intended.")
+
+
+def stage_exposures_only(field, version, release_root, from_disk=False,
+                         allow_older=False):
+    """Add the detector-frame exposures to an ALREADY-STAGED release.
+
+    Stages nothing but symlinks, and rewrites ``MANIFEST.json`` and ``README.md``
+    around them.  ``images/``, ``catalogs/`` and ``CHECKSUMS.sha256`` are not
+    touched, and the mosaic gates are deliberately not re-run -- see
+    ``exposure_bundle.add_to_release`` for why that is sound and for the
+    ``built`` trap it avoids.
+
+    ``from_disk`` enumerates the frames from the pipeline directories instead of
+    from the staged mosaics, which is what lets a field release them BEFORE it
+    has any mosaic at all -- and it will create the release directory if there
+    is none yet.
+
+    Returns ``(field_dir, n_exposures)``, or ``(None, 0)`` when there is nothing
+    to add to and no way to enumerate.
+    """
+    assert_writable(version, release_root, allow_older, field)
+    field_dir = field_release_dir(field, version, release_root)
+    have_manifest = (field_dir / "MANIFEST.json").is_file()
+    if not have_manifest and not from_disk:
+        print(f"\nNo staged release at {field_dir} -- --exposures-only adds "
+              f"frames to an EXISTING release; stage the field first, or pass "
+              f"--exposures-from-disk to release the detector frames on their "
+              f"own (they do not need a mosaic).", file=sys.stderr)
+        return None, 0
+
+    problems = []
+    if from_disk:
+        field_dir.mkdir(parents=True, exist_ok=True)
+        exposures = _exposures_from_disk(field, version, field_dir)
+        manifest = (json.loads((field_dir / "MANIFEST.json").read_text())
+                    if have_manifest else {
+            "field": field, "version": version,
+            "group": FIELDS.get(field, {}).get("group"),
+            "release_path": "/" + str(field_dir.relative_to(GLOBUS_COLLECTION_ROOT)),
+            # A release that has never held a mosaic has no prior staging time to
+            # preserve, so stamping `built` here is correct -- unlike the
+            # add-to-existing path, where moving it would re-publish quarantined
+            # mosaics (see exposure_bundle.add_to_release).
+            "built": datetime.datetime.now().astimezone().isoformat(),
+            "mode": "symlink", "continuity_gate": "not_applicable(exposures-only)",
+            "globus_collection_id": GLOBUS_COLLECTION_ID,
+            "globus_https_base": GLOBUS_HTTPS_BASE, "files": []})
+        # No parent mosaic to inherit withholding from. Say so rather than let
+        # the absence of `parent_dest` read as "checked and fine".
+        print("  enumerated from the pipeline directories: these frames are not "
+              "tied to a staged mosaic, so none of them is withheld by a "
+              "mosaic's astrometry verdict.")
+    else:
+        exposures, manifest = exposure_bundle.add_to_release(
+            field_dir, lambda it: assign_dest(it, field),
+            GLOBUS_COLLECTION_ROOT, GLOBUS_HTTPS_BASE,
+            search_root=FIELDS[field]["data_dir"], problems=problems)
+    if problems:
+        print(f"\nEXPOSURE PROVENANCE: could not establish the detector-frame "
+              f"input list for {len(problems)} staged mosaic(s); their frames "
+              f"are NOT offered:")
+        for problem in problems:
+            print(f"    - {problem}")
+    if not exposures:
+        print(f"\nNo detector-frame exposures could be resolved for '{field}'.",
+              file=sys.stderr)
+        return field_dir, 0
+
+    print_manifest(exposures)
+    orphans, unexpected = prune_exposure_orphans(
+        field_dir, [it["dest"] for it in exposures])
+    if orphans:
+        print(f"  removed {orphans} stale exposure link(s) this release no "
+              f"longer claims")
+    for rel in unexpected:
+        print(f"  WARNING: {rel} under exposures/ is a real file, not a link -- "
+              f"left in place")
+    for it in exposures:
+        dest = field_dir / it["dest"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        it["link_mode"] = exposure_bundle.link_frame(Path(it["src"]).resolve(), dest)
+        it["source_identity"] = exposure_bundle.source_identity(it["src"])
+    exposure_bundle.report_symlink_fallbacks(exposures)
+
+    # A frames-only release must still carry the table those frames are on --
+    # that is the whole point of preserving it, and the frames are the products
+    # whose own bytes are not frozen.
+    table = astrometry_provenance.stage_item(field, FIELDS[field],
+                                             manifest.get("version", version))
+    if table is not None:
+        dest = field_dir / table["dest"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(table["src"], dest)
+        table["size_bytes"] = os.path.getsize(table["src"])
+        table["sha256"] = sha256sum(table["src"])
+        rel = dest.relative_to(GLOBUS_COLLECTION_ROOT)
+        table["globus_path"] = "/" + str(rel)
+        table["url"] = GLOBUS_HTTPS_BASE + table["globus_path"]
+        # ...and it goes into CHECKSUMS.sha256, which this path otherwise does
+        # not touch. The no-touch promise exists so the FROZEN MOSAIC hashes are
+        # never disturbed; appending a line for a newly added frozen deliverable
+        # completes that record rather than disturbing it. Omitting it would
+        # leave the README and the page claiming a checksum that is only in
+        # MANIFEST.json -- a checksum file that does not list something the
+        # release ships frozen is simply wrong.
+        checksums = field_dir / "CHECKSUMS.sha256"
+        existing = [ln for ln in (checksums.read_text().splitlines()
+                                  if checksums.is_file() else [])
+                    if ln.strip() and not ln.endswith(f"  {table['dest']}")]
+        checksums.write_text("\n".join(existing
+                                       + [f"{table['sha256']}  {table['dest']}"]) + "\n")
+        print(f"  + offsets table {Path(table['src']).name} "
+              f"({table['size_bytes']} bytes, frozen copy, checksummed)")
+    kept = [f for f in manifest.get("files", [])
+            if f.get("category") not in (exposure_bundle.EXPOSURE_CATEGORY,
+                                         astrometry_provenance.ASTROMETRY_CATEGORY)]
+    manifest["files"] = kept + exposures + ([table] if table else [])
+    manifest["exposure_mode"] = exposure_bundle.link_mode_summary(exposures)
+    # `built` is NOT touched -- release_freshness reads it as the staging time
+    # and would re-publish this field's quarantined mosaics if it moved.  The
+    # separate key records when the frames were added without claiming the
+    # release itself was rebuilt.
+    manifest["exposures_added"] = datetime.datetime.now().astimezone().isoformat()
+    (field_dir / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
+    write_readme(field_dir, field, manifest.get("version", version),
+                 manifest["files"], manifest.get("mode", "copy"),
+                 built_at=manifest.get("built"))
+    subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
+    return field_dir, len(exposures)
+
+
+def latest_staged_version(field, release_root):
+    """Newest version directory that actually holds a staged `field`, or ``None``.
+
+    Ordered by the release date embedded in the version string rather than
+    lexicographically, which inverts at the first two-digit minor: with
+    ``v1.9-2026.09`` and ``v1.10-2026.10`` on disk, a string sort calls
+    ``v1.9`` the newer one.  Read-only: nothing here decides what may be
+    written, only which staged tree to audit.
+    """
+    root = Path(release_root)
+    if not root.is_dir():
+        return None
+    staged = [p.name for p in root.iterdir()
+              if p.is_dir() and p.name.startswith("v")
+              and (field_release_dir(field, p.name, release_root)
+                   / "MANIFEST.json").is_file()]
+    if not staged:
+        return None
+
+    def key(name):
+        version = name.split("-", 1)[0].lstrip("v")
+        parts = tuple(int(p) if p.isdigit() else 0
+                      for p in version.split("."))
+        return (parts, name)
+    return max(staged, key=key)
+
+
+def check_exposures(field, version, release_root):
+    """Audit a staged release's detector frames.  Returns a process exit code.
+
+    ``diverged_frames`` existed with no caller outside the tests while the
+    README told readers the release "reports any that have diverged" -- a claim
+    with nothing behind it.  This is what performs it.  Divergence is expected
+    over time and is not a staging failure: the release still serves real,
+    readable bytes, just an older generation than the pipeline now holds, which
+    is the property a symlink would have hidden by following along silently.
+    """
+    field_dir = field_release_dir(field, version, release_root)
+    manifest_path = field_dir / "MANIFEST.json"
+    if not manifest_path.is_file():
+        print(f"No staged release at {manifest_path}", file=sys.stderr)
+        return 2
+    manifest = json.loads(manifest_path.read_text())
+    exposures = [f for f in manifest.get("files", [])
+                 if f.get("category") == exposure_bundle.EXPOSURE_CATEGORY]
+    if not exposures:
+        print(f"{field} {version}: release ships no detector-frame exposures.")
+        return 0
+    recorded = manifest.get("exposure_mode")
+    derived = exposure_bundle.link_mode_summary(exposures)
+    print(f"{field} {version}: {len(exposures)} detector-frame exposures, "
+          f"link mode {derived}"
+          + (f" (MANIFEST says {recorded!r})" if recorded != derived else ""))
+    fallbacks = exposure_bundle.report_symlink_fallbacks(exposures)
+    diverged = exposure_bundle.diverged_frames(manifest)
+    if diverged:
+        print(f"  {len(diverged)} frame(s) have diverged from their source:")
+        for dest, why in diverged[:20]:
+            print(f"    - {dest}: {why}")
+        if len(diverged) > 20:
+            print(f"    ... and {len(diverged) - 20} more")
+    else:
+        print("  no frame has diverged from its source")
+    return 1 if (diverged or recorded != derived) else 0
+
+
+def _link_mode_phrase(exposures):
+    """How the frames were placed, in README prose -- derived, never asserted."""
+    return {"hardlink": "HARDLINKS", "symlink": "SYMLINKS",
+            "mixed": "LINKS (some hard, some symbolic)"}.get(
+                exposure_bundle.link_mode_summary(exposures), "LINKS")
+
+
+def write_readme(field_dir, field, version, items, mode, built_at=None):
     images = [it for it in items if it["category"] == "image"]
     catalogs = [it for it in items if it["category"] == "catalog"]
     # describe the mosaics ACTUALLY staged: a module-split field (arches,
@@ -1431,6 +1982,100 @@ def write_readme(field_dir, field, version, items, mode):
                 f"{w['pair'].upper()} colors. Provisional -- expected to improve in "
                 f"a later release.")
         limitation_lines.append("")
+
+    # Detector-frame exposures.  Stated in the README as well as MANIFEST.json
+    # because the two things a downloader has to know about them -- that they
+    # are symlinks into the live pipeline tree, and that they are therefore not
+    # part of the frozen, checksummed release -- are the kind of thing that gets
+    # discovered from a broken link months later otherwise.
+    exposures = [it for it in items
+                 if it["category"] == exposure_bundle.EXPOSURE_CATEGORY]
+    exposure_lines = []
+    if exposures:
+        exp_total = sum(it["size_bytes"] or 0 for it in exposures)
+        suffixes = exposure_bundle.suffix_histogram(exposures)
+        exposure_lines = [
+            "## Detector-frame exposures (`exposures/`)",
+            "",
+            f"{len(exposures)} individual exposures ({human_size(exp_total)}) -- the",
+            "frames each mosaic above was drizzled from, in the ORIGINAL DETECTOR",
+            "FRAME, with the full GWCS distortion chain and this pipeline's",
+            "astrometric solution. Laid out to mirror `images/`, and taken from the",
+            "record each mosaic carries of what went into it, so",
+            "`exposures/<...>/<FILTER>/` holds exactly the frames behind",
+            "`images/<...>/<FILTER>/`.",
+            "",
+            "Products present here: "
+            + ", ".join(f"`*_{s}.fits` ({n})" for s, n in sorted(suffixes.items()))
+            + ".",
+            "The last detector-frame product varies by field and filter -- `_crf` is",
+            "the Stage-3 (outlier/CR-flagged) frame where one was written, otherwise",
+            "the `_destreak`/`_align`/`_cal` frame the mosaic was drizzled from",
+            "directly.",
+            "",
+            f"**These are {_link_mode_phrase(exposures)} to the pipeline's own "
+            f"frames, not frozen copies.**",
+            "They cost no additional storage and unlike",
+            "everything else in this release they are not checksummed and are not",
+            "covered by `CHECKSUMS.sha256`. A re-reduction writes a NEW file rather",
+            "than rewriting these bytes, so a frame here can become an older",
+            "generation than the pipeline currently holds; the release records each",
+            "source's identity, which",
+            "`stage_release.py --check-exposures --field <field>` compares against",
+            "the sources now to report the frames that have diverged. Cite the mosaics",
+            "and catalogs, which are frozen; the exposures are a working convenience",
+            "for re-drizzling and per-exposure work.",
+            "",
+        ]
+        if exposure_bundle.symlink_fallbacks(exposures):
+            n_sym = len(exposure_bundle.symlink_fallbacks(exposures))
+            exposure_lines[-1:] = [
+                f"**{n_sym} of these frames are SYMLINKS and can only be taken by",
+                "Globus transfer.** This field's data are on a different filesystem",
+                "from the release tree, where a hardlink is impossible. The Globus",
+                "HTTPS data plane refuses a symlink pointing out of the release tree",
+                "(404); the transfer API follows it. Use",
+                "`globus transfer --recursive` (or the bundle buttons on the web",
+                "page), not `wget` on a per-frame URL. Mosaics, catalogs and tables",
+                "are real files and are unaffected.",
+                "",
+            ]
+
+    # Astrometry provenance. Present for EVERY field, including -- especially --
+    # the ones with nothing to report: a release that ships detector frames and
+    # says nothing about what frame they are on is asserting by omission that
+    # they are tied. Proposal 1939 was ~14.8" off while saying nothing.
+    provenance_lines = ["## Astrometric provenance (READ BEFORE USING THE FRAMES)", ""]
+    _cfg = FIELDS.get(field)
+    if _cfg is None:
+        # `write_readme` must stay total: an unregistered field name is a reason
+        # to say the provenance is unknown, never to abort the staging that has
+        # already copied the files.
+        provenance_lines.append(
+            f"`{field}` is not in the release registry, so no astrometric "
+            f"provenance could be determined for it.")
+    else:
+        _record = astrometry_provenance.collect(field, _cfg)
+        # The README is the FROZEN, in-tarball surface and never got the
+        # webpage's treatment: it claimed a shipped frozen table for a field
+        # that ships none, and an --allow-older-version re-cut wrote today's
+        # ties and today's sha256 under a June `built` timestamp. Same
+        # corrections, same two inputs.
+        _ships_table = any(
+            it.get("category") == astrometry_provenance.ASTROMETRY_CATEGORY
+            for it in items)
+        if _record.get("state") == "table" and not _ships_table:
+            _record = dict(_record, state="table-not-shipped")
+        _built = str(built_at or "")
+        _on_record = _record.get("ties") or {}
+        _record = dict(_record, ties={
+            f: t for f, t in _on_record.items()
+            if _record.get("state") != "table-not-shipped"
+            and not (_built and str(t.get("date") or "") > _built)})
+        provenance_lines += astrometry_provenance.summary_lines(
+            _record, n_on_record=len(_on_record))
+    provenance_lines.append("")
+
     lines = [
         f"# JWST Galactic Center survey -- {field} -- release {version}",
         "",
@@ -1453,7 +2098,8 @@ def write_readme(field_dir, field, version, items, mode):
         "## Catalogs (`catalogs/`)",
         "",
         "- `basic_merged_indivexp_photometry_tables_merged_*` : final merged photometry",
-        "  table (`.fits` + `.ecsv`); `_qualcuts_oksep2221` is the quality-filtered subset.",
+        "  table (`.fits` + `.ecsv`); the `_qualcuts_oksep<proposal>` variant is the",
+        "  quality-filtered subset.",
         "- `*_dao_basic_vetted.fits` : per-filter vetted catalogs.",
         "- `seed_union_iter3_*.fits` : seed source list.",
         "",
@@ -1464,7 +2110,7 @@ def write_readme(field_dir, field, version, items, mode):
         "are current, but the photometry catalogs for this field are not yet",
         "certified. They will follow in a later release.",
         "",
-    ]) + limitation_lines + [
+    ]) + exposure_lines + provenance_lines + limitation_lines + [
         "## Astrometric frame and epoch (READ BEFORE TARGETING)",
         "",
         "- **Reference frame:** Gaia DR3 (via the Gaia+VIRAC2 per-field reference",
@@ -1479,7 +2125,9 @@ def write_readme(field_dir, field, version, items, mode):
         "",
         "## Integrity",
         "",
-        "`CHECKSUMS.sha256` lists SHA-256 for every file. `MANIFEST.json` records",
+        "`CHECKSUMS.sha256` lists SHA-256 for every frozen deliverable"
+        + (" (not the symlinked `exposures/`, see above)." if exposures else ".")
+        + " `MANIFEST.json` records",
         "provenance (original pipeline path, merge iteration, size, checksum, URL).",
         "",
     ]
@@ -1505,11 +2153,18 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--field", default="sgrb2", choices=sorted(FIELDS))
-    # No safe default exists: v1.0-2026.06 is a FROZEN release, and `stage()`
-    # unlinks-and-copies without a frozen-version guard, so a forgotten
-    # `--version` used to write into the oldest published tree.  Require it.
-    parser.add_argument("--version", required=True,
-                        help="release version directory, e.g. v1.2-2026.08")
+    # No safe default exists for anything that WRITES: v1.0-2026.06 is a FROZEN
+    # release, and `stage()` unlinks-and-copies, so a forgotten `--version` used
+    # to write into the oldest published tree.  Required below for every writing
+    # path.  `--check-exposures` writes nothing -- it reads a staged manifest and
+    # reports -- and requiring it there made the invocation this script prints in
+    # every shipped README (`--check-exposures --field <field>`) exit 2 without
+    # doing anything: a documented command that does not run, which is the same
+    # defect as a documented check with no implementation.
+    parser.add_argument("--version", default=None,
+                        help="release version directory, e.g. v1.2-2026.08. "
+                             "Required except with --check-exposures, which "
+                             "defaults to the newest version holding the field.")
     parser.add_argument("--allow-older-version", action="store_true",
                         help="permit staging into a version older than the newest "
                              "one present under --release-root (re-cutting a frozen "
@@ -1526,6 +2181,33 @@ def main(argv=None):
                         help="grant all-authenticated-users read on the release path")
     parser.add_argument("--print-urls", action="store_true",
                         help="print HTTPS download URLs (requires --stage)")
+    parser.add_argument("--no-exposures", action="store_true",
+                        help="do not offer the detector-frame exposures behind each "
+                             "shipped mosaic (default: offer them, symlinked)")
+    parser.add_argument("--exposures-only", action="store_true",
+                        help="add ONLY the detector-frame exposures to an already-"
+                             "staged release: symlinks + MANIFEST/README, leaving "
+                             "images/, catalogs/ and CHECKSUMS.sha256 untouched and "
+                             "not re-running the mosaic gates (it cannot change which "
+                             "mosaics ship). Use when a field's frames should go out "
+                             "but a band has no live mosaic to re-stage.")
+    parser.add_argument("--exposures-from-disk", action="store_true",
+                        help="with --exposures-only: enumerate the frames from the "
+                             "pipeline directories instead of from staged mosaics, "
+                             "and create the release directory if there is none. "
+                             "Detector frames are a DEPENDENCY of the mosaic, so a "
+                             "field can release them before anything is drizzled. "
+                             "Weaker provenance than the association path -- it "
+                             "answers 'which frames belong to this field/obs/filter', "
+                             "not 'which frames went into that mosaic' -- so it is "
+                             "opt-in, never a silent fallback.")
+    parser.add_argument("--check-exposures", action="store_true",
+                        help="audit a STAGED release's detector frames instead of "
+                             "staging: report the frames whose source has been "
+                             "rewritten or removed since they were linked, and the "
+                             "ones that fell back to a symlink (not HTTPS-servable). "
+                             "Exits 1 when anything has diverged. This is the check "
+                             "the README tells readers the release performs.")
     parser.add_argument("--images-only", action="store_true",
                         help="ship mosaics only, no catalogs (e.g. images are internally "
                              "consistent but the catalog/absolute frame is not yet certified)")
@@ -1541,6 +2223,17 @@ def main(argv=None):
                              "CRDS_CTX, within an instrument (default: report only)")
     args = parser.parse_args(argv)
 
+    if args.check_exposures:
+        version = args.version or latest_staged_version(args.field,
+                                                        args.release_root)
+        if version is None:
+            print(f"No staged release of '{args.field}' under "
+                  f"{args.release_root}", file=sys.stderr)
+            return 2
+        return check_exposures(args.field, version, args.release_root)
+    if args.version is None:
+        parser.error("--version is required for every path that writes")
+
     # ---- LISTED-SOURCE GATE ---------------------------------------------------------
     # `nircam`/`miri` entries are curated by hand, so an absent one means the config is
     # stale -- most often because the m2 astrometry checkpoint quarantined the product
@@ -1549,9 +2242,46 @@ def main(argv=None):
     # printed: sickle's F210M was in exactly that state on 2026-08-05. Refuse, and name
     # the quarantined sibling so the operator can see what took the file. There is
     # deliberately no override -- the fix is a one-line config edit, not a flag.
+    # Handled before everything below: this path adds no mosaic and makes no
+    # mosaic decision, so the gates that decide which mosaics ship have nothing
+    # to rule on. Running them anyway would refuse a field whose ALREADY-STAGED
+    # release is exactly what is being added to (arches: F212N has no live
+    # mosaic, so the listed-source gate refuses the field while its published
+    # v1.2 tree sits there gated and frozen).
+    if args.exposures_only:
+        # The frozen-version guard runs HERE too, not only on the full staging
+        # path below. Adding an exposures/ tree and an astrometry/ table to a
+        # published version is still writing into it: it rewrites MANIFEST.json,
+        # README.md and CHECKSUMS.sha256 of a release whose checksums are cited.
+        try:
+            field_dir, n = stage_exposures_only(
+                args.field, args.version, args.release_root,
+                from_disk=args.exposures_from_disk,
+                allow_older=args.allow_older_version)
+        except FrozenReleaseError as err:
+            print(f"\n{err}", file=sys.stderr)
+            return 2
+        if field_dir is None:
+            return 2
+        if not n:
+            return 1
+        print(f"Added {n} detector-frame exposures (linked, not checksummed) "
+              f"to {field_dir}. Mosaics and catalogs unchanged.")
+        return 0
+
     missing = []
+    exposure_problems = []
     items = build_manifest(args.field, args.version, images_only=args.images_only,
-                           missing=missing)
+                           missing=missing, exposures=not args.no_exposures,
+                           exposure_problems=exposure_problems)
+    if exposure_problems:
+        # Reported, never a refusal -- see build_manifest.  Printed before the
+        # manifest so it is not lost under a long file list.
+        print(f"\nEXPOSURE PROVENANCE: could not establish the detector-frame input "
+              f"list for {len(exposure_problems)} shipped mosaic(s); their frames are "
+              f"NOT offered (the mosaics themselves are unaffected):")
+        for problem in exposure_problems:
+            print(f"    - {problem}")
     if missing:
         print(f"\nREFUSING TO STAGE '{args.field}': {len(missing)} explicitly-listed "
               f"source file(s) are not on disk. Staging would ship a release that is "
@@ -1578,8 +2308,17 @@ def main(argv=None):
     # it is about to copy, so a rebuilt source is simply the current one and is
     # exactly what should be staged.  The size check only becomes meaningful
     # once a manifest exists to disagree with.
+    #
+    # Exposures are exempt, for two reasons that point the same way.  The
+    # checkpoint quarantines MOSAICS, not detector frames -- there is no
+    # `*_im0_badastrom.fits` twin of a `_crf` to find -- so the check has no
+    # signal to give here; and each glob over a pipeline directory holding tens
+    # of thousands of entries, times several thousand frames, would cost minutes
+    # to establish that.  The frames are covered by the mosaic they came from:
+    # `parent_dest` withholds them wherever it is withheld.
     stale = [it for it in items
-             if release_freshness.source_state(it["src"]) != release_freshness.LIVE]
+             if it["category"] != exposure_bundle.EXPOSURE_CATEGORY
+             and release_freshness.source_state(it["src"]) != release_freshness.LIVE]
     if stale:
         print(f"\nREFUSING TO STAGE '{args.field}': {len(stale)} product(s) have no "
               f"live source -- the pipeline has superseded or removed them since "
@@ -1621,14 +2360,20 @@ def main(argv=None):
     # rewrites files under a fresh `built` timestamp with no record that it
     # happened.  Refuse to target anything older than the newest version on disk
     # unless that is explicitly what is wanted.
-    root = Path(args.release_root)
-    existing = sorted(p.name for p in root.iterdir()
-                      if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
-    if existing and args.version < max(existing) and not args.allow_older_version:
-        print(f"\nREFUSING TO STAGE into '{args.version}': it is older than the newest "
-              f"release on disk ('{max(existing)}'), and a published version is frozen "
-              f"-- its checksums are cited. Stage into '{max(existing)}' or a new "
-              f"version, or pass --allow-older-version if re-cutting it is intended.",
+    # `why` is what the guard actually decided; printing hardcoded ordering text
+    # instead told the operator the wrong reason -- refusing v1.3 on the
+    # field-manifest branch read "it is older than the newest release on disk
+    # ('v1.3-2026.08')", i.e. older than itself. And `max(existing)` was left in
+    # a branch that no longer implies `existing` is non-empty: the
+    # field-manifest leg can refuse with no `v*` directory present at all, which
+    # raises `ValueError: max() iterable argument is empty`. Both go away by
+    # using the reason the guard returned.
+    refuse, why = refuse_older_version(args.version, args.release_root,
+                                       args.allow_older_version, args.field)
+    if refuse:
+        print(f"\nREFUSING TO STAGE into {why}, and a published version is frozen "
+              f"-- its checksums are cited. Stage into a new version, or pass "
+              f"--allow-older-version if re-cutting it is intended.",
               file=sys.stderr)
         return 2
 
@@ -1732,6 +2477,39 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
 
+        # ---- FROZEN-STAGE ASTROMETRY CHECKPOINT GATE ----------------------------------
+        # The frozen stages (m3+) and the m7 cross-filter check now RECORD a
+        # failure instead of raising inside the chain
+        # (ASTROM_CHECKPOINT_ENFORCE=release, the default).  That is only
+        # defensible because the stop moved HERE rather than disappearing: this
+        # refuses any field carrying a checkpoint record with passed=false, and
+        # it fails closed on records it cannot read and on a field that has none.
+        ckpt_gate = Path(__file__).with_name("check_astrometry_checkpoints.py")
+        ckpt_cmd = [sys.executable, str(ckpt_gate), "--field", args.field, "--scan"]
+        if rel_obs:
+            ckpt_cmd += ["--observations", ",".join(sorted(rel_obs))]
+        rc = subprocess.run(ckpt_cmd).returncode
+        if rc == 1:
+            print(f"\nREFUSING TO STAGE '{args.field}': a frozen-stage astrometry "
+                  f"checkpoint FAILED (see above). The chain was allowed to finish so "
+                  f"the products exist to diagnose from; the field still does not ship. "
+                  f"Fix the astrometry and re-run the affected stages, or override with "
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
+                  file=sys.stderr)
+            return 2
+        if rc == 3:
+            print(f"\nREFUSING TO STAGE '{args.field}': no astrometry checkpoint records "
+                  f"for this field/observation set. A field that never ran the checkpoint "
+                  f"is unverified, not verified. Run the cataloging chain, or override "
+                  f"with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
+                  file=sys.stderr)
+            return 2
+        if rc != 0:
+            print(f"\nREFUSING TO STAGE '{args.field}': the astrometry checkpoint gate "
+                  f"could not run (rc={rc}); cannot confirm the frozen-stage astrometry.",
+                  file=sys.stderr)
+            return 2
+
         # ---- SAME-RUN GATE: image <-> catalog provenance -------------------------------
         # When a release ships BOTH images and per-filter catalogs, they MUST come from
         # the same pipeline/cataloging run. We enforce it directly: each shipped science
@@ -1804,8 +2582,20 @@ def main(argv=None):
 
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,
-                      mode, not args.no_checksum, continuity_gate=continuity_gate)
-    print(f"Staged {len(items)} files into {field_dir} (mode: {mode}).")
+                      mode, not args.no_checksum, continuity_gate=continuity_gate,
+                      allow_older=args.allow_older_version)
+    # Broken out rather than reported as one total: "222 files (mode: copy)"
+    # reads as 222 frozen copies when 216 of them are symlinks that --copy did
+    # not apply to, which is the one thing about this tree an operator must not
+    # misread.
+    staged_exposures = [it for it in items
+                        if it["category"] == exposure_bundle.EXPOSURE_CATEGORY]
+    n_exposures = len(staged_exposures)
+    exp_mode = exposure_bundle.link_mode_summary(staged_exposures)
+    print(f"Staged {len(items) - n_exposures} deliverables into {field_dir} "
+          f"(mode: {mode})"
+          + (f", plus {n_exposures} detector-frame exposures "
+             f"({exp_mode} links, not checksummed)." if n_exposures else "."))
 
     if args.set_acl:
         set_acl(args.field, args.version, args.release_root)

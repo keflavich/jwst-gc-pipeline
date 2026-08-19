@@ -32,7 +32,8 @@ import field_overview
 import release_freshness
 import make_preview_rgb
 import preview_plan
-from stage_release import field_release_dir
+from stage_release import FIELDS, field_release_dir
+import astrometry_provenance
 
 # Display label per group folder (None = Galactic Center, the default survey).
 GROUP_LABEL = {
@@ -128,12 +129,23 @@ code { background:#0b0f14; padding:.1rem .35rem; border-radius:4px; font-size:.8
        border:1px solid var(--border); border-radius:999px; padding:.05rem .55rem;
        font-size:.78rem; }
 .checksum { font-family:monospace; color:var(--muted); font-size:.78rem; }
+.warn { background:#2b2011; border:1px solid #7c5e10; border-radius:8px;
+        padding:.7rem 1rem; font-size:.9rem; }
 .bulk { background:var(--panel); border:1px solid var(--border); border-radius:8px;
         padding:1rem 1.2rem; margin:1rem 0; }
 .btn { display:inline-block; background:var(--accent); color:#0d1117;
        font-weight:600; padding:.5rem 1rem; border-radius:6px; margin:.3rem .5rem .3rem 0; }
 .btn:hover { text-decoration:none; filter:brightness(1.1); }
 .btn.secondary { background:#21262d; color:var(--fg); border:1px solid var(--border); }
+.btn.small { padding:.25rem .7rem; font-size:.82rem; font-weight:500; }
+/* Per-exposure link lists. A field ships up to ~700 frames, so the individual
+   links are collapsed by default and wrap into columns when opened -- the row
+   above them (count, size, bundle button) is what most readers need. */
+details.frames { margin:.2rem 0 0; }
+details.frames summary { cursor:pointer; color:var(--muted); font-size:.85rem; }
+details.frames .names { columns:3 21rem; column-gap:1.5rem; margin:.5rem 0 0;
+                        font-size:.78rem; line-height:1.55; }
+details.frames .names a { display:block; overflow-wrap:anywhere; }
 """
 
 KIND_LABEL = {
@@ -144,7 +156,13 @@ KIND_LABEL = {
     "catalog_qualcut": "Merged catalog (quality-cut)",
     "seed": "Seed source list",
     "catalog_per_filter_vetted": "Per-filter vetted",
+    "detector_frame": "Detector-frame exposure",
 }
+
+#: Manifest category of a detector-frame exposure (see `exposure_bundle`).
+#: Named here rather than imported so the page generator keeps working against
+#: an older manifest that predates the exposure staging.
+EXPOSURE_CATEGORY = "exposure"
 
 
 def human_size(num_bytes):
@@ -608,8 +626,20 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     # is worse than showing nothing. The file itself is untouched.
     superseded = set(superseded or ())
     reasons = dict(reasons or {})
-    files = [f for f in manifest["files"] if f.get("dest") not in superseded]
-    withheld = [f for f in manifest["files"] if f.get("dest") in superseded]
+
+    # A detector-frame exposure carries the same astrometric solution as the
+    # mosaic it was drizzled into -- the pipeline's WCS correction is baked into
+    # the frame, which is what `resample` then reads. So withholding a mosaic
+    # for a superseded solution while still offering its input frames publishes
+    # that solution anyway, one level down. `parent_dest` (written by
+    # `exposure_bundle.link_parents`) is the tie; an exposure is withheld
+    # exactly when its parent mosaic is.
+    def _withheld(entry):
+        return (entry.get("dest") in superseded
+                or (entry.get("parent_dest") or "") in superseded)
+
+    files = [f for f in manifest["files"] if not _withheld(f)]
+    withheld = [f for f in manifest["files"] if _withheld(f)]
     # A preview RENDERED FROM a withheld mosaic is the thing a reader actually
     # looks at, so withholding the download row and leaving the picture up
     # publishes the bad astrometry anyway.
@@ -680,9 +710,21 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         # and the rebuilt case is now the majority (52 of 116).  Naming a
         # quarantine that did not happen is a public-facing false statement --
         # it would have appeared on 23 of brick's 31 frozen v1.0 images.
-        quarantined = [f for f in withheld
+        #
+        # Counted over the AUDITED products only.  The freshness audit runs on
+        # mosaics, so only a mosaic has an entry in `reasons`; a detector-frame
+        # exposure is withheld by association with its parent and has none.
+        # Pooling them would put every frame in the `rebuilt` bucket and read
+        # "353 withheld as superseded" where one mosaic was withheld and 352
+        # frames followed it -- a count that overstates by two orders of
+        # magnitude what the audit actually found.
+        withheld_products = [f for f in withheld
+                             if f.get("category") != EXPOSURE_CATEGORY]
+        withheld_frames = [f for f in withheld
+                           if f.get("category") == EXPOSURE_CATEGORY]
+        quarantined = [f for f in withheld_products
                        if reasons.get(f.get("dest")) == release_freshness.QUARANTINED]
-        rebuilt = [f for f in withheld if f not in quarantined]
+        rebuilt = [f for f in withheld_products if f not in quarantined]
 
         def _bands(group):
             return html.escape(', '.join(sorted({f.get("filter") or "?"
@@ -706,11 +748,17 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                 f"these are the older bytes. Why is not recorded here, and no "
                 f"claim is made about their astrometry: "
                 f"<code>{_bands(rebuilt)}</code>.")
-        out.append(
-            "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
-            + " ".join(lines)
-            + " They will return when the field is re-staged from current"
-              " products.</p>")
+        if withheld_frames:
+            lines.append(
+                f"The {len(withheld_frames)} detector-frame exposures behind "
+                f"those mosaics are withheld with them: the same astrometric "
+                f"solution is baked into the frames.")
+        if lines:
+            out.append(
+                "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
+                + " ".join(lines)
+                + " They will return when the field is re-staged from current"
+                  " products.</p>")
     if all_versions and manifest['version'] != all_versions[0]:
         out.append(f"<p class=muted style='border:1px solid #b58900;padding:.5em'>"
                    f"You are viewing an <b>older</b> release ({html.escape(manifest['version'])}). "
@@ -763,7 +811,15 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     # v1.0-2026.06 mosaics" about a PNG from neither release.  It is already
     # shown, correctly captioned, in the curated block above; showing it again
     # under someone else's provenance is worse than not showing it.
-    if preview_rel and not preview_from_curated:
+    # `preview_from_curated` must suppress ONLY the single headline re-render
+    # below, never the generated gallery: gating the whole block on it removed
+    # every automatically-generated preview from every field that has a curated
+    # image. brick went from 3 curated + 4 generated to 3, and arches,
+    # quintuplet, sgrb2, sickle, cloudc, gc2211 and wd2 all lost theirs the same
+    # way -- the curated renders were the only survivors, which is why the
+    # regression read as "the good images are gone" rather than "a duplicate
+    # stopped appearing".
+    if previews or (preview_rel and not preview_from_curated):
         # Attribute the preview's version whenever it is not this page's. The
         # fallback exists so a re-stage does not blank the card, but "the same
         # mosaics under a new version" is not always true: cloudc, sgrc and wd1
@@ -795,7 +851,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                            f"<figcaption class=muted>{html.escape(cap)}</figcaption>"
                            f"</figure>")
             out.append("</div>")
-        else:
+        elif previews or not preview_from_curated:
             # `_preview_caption` rather than `preview_channels`: the latter drops
             # the pointing, so a one-preview multi-pointing field (gc2211, m4)
             # said "RGB preview (R=F277W ...)" with no hint WHICH of its
@@ -803,7 +859,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
             cap = (_preview_caption(previews[0][1], field) if previews
                    else (f"R={preview_channels[0]}, G={preview_channels[1]}, "
                          f"B={preview_channels[2]}" if preview_channels else "Preview"))
-            out.append(f"<img class=preview src='{html.escape(preview_rel)}' "
+            # The GENERATED preview when there is one, never `preview_rel` --
+            # that is a byte copy of the curated render whenever a field has
+            # one, and emitting it here is what put the hand-made image on the
+            # page a second time under a generated caption naming bands it does
+            # not contain.
+            single = previews[0][0] if previews else preview_rel
+            out.append(f"<img class=preview src='{html.escape(single)}' "
                        f"alt='{html.escape(field)} preview'>")
             out.append(f"<div class=muted>RGB preview - {html.escape(cap)}."
                        f"{html.escape(provenance)} "
@@ -833,25 +895,37 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     coll = manifest["globus_collection_id"]
     have_images = any(f["category"] == "image" for f in files)
     have_catalogs = any(f["category"] == "catalog" for f in files)
+    exposures = [f for f in files if f.get("category") == EXPOSURE_CATEGORY]
 
-    def app_link(subpath, label):
+    def app_link(subpath, label, cls="btn"):
         url = (f"{GLOBUS_APP}?origin_id={coll}"
                f"&origin_path={urllib.parse.quote(subpath + '/')}")
-        return f"<a class=btn href='{html.escape(url)}'>⬇ {label}</a>"
+        return f"<a class='{cls}' href='{html.escape(url)}'>⬇ {label}</a>"
 
     buttons = []
     if have_images and have_catalogs:
         buttons.append(app_link(base, "Everything"))
     if have_images:
-        buttons.append(app_link(base + "/images", "Images only"))
+        buttons.append(app_link(base + "/images",
+                                "Mosaic images only (resampled onto a sky grid)"))
     if have_catalogs:
         buttons.append(app_link(base + "/catalogs", "Catalogs only"))
+    if exposures:
+        exp_bytes = sum(f.get("size_bytes") or 0 for f in exposures)
+        buttons.append(app_link(
+            base + "/exposures",
+            f"All detector-frame exposures, reduced "
+            f"({len(exposures)}, {human_size(exp_bytes)})"))
     txt_links = [
         f"<a href='{html.escape(field)}_files.txt'>all</a>"]
     if have_images:
-        txt_links.append(f"<a href='{html.escape(field)}_images.txt'>images</a>")
+        txt_links.append(
+            f"<a href='{html.escape(field)}_images.txt'>mosaic images</a>")
     if have_catalogs:
         txt_links.append(f"<a href='{html.escape(field)}_catalogs.txt'>catalogs</a>")
+    if exposures:
+        txt_links.append(
+            f"<a href='{html.escape(field)}_exposures.txt'>detector-frame exposures</a>")
 
     out.append(
         "<div class=bulk><b>Bulk download</b>"
@@ -876,7 +950,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         return html.escape(str(f.get("version") or manifest["version"]))
 
     # images table grouped by (observation, filter)
-    out.append("<h2>Images</h2>")
+    out.append("<h2>Mosaic images <span class=muted>(resampled onto a sky grid)</span></h2>")
     out.append(f"<table><tr>{obs_col}<th>Filter</th><th>Type</th><th>Iteration</th>"
                "<th>Version</th><th>Size</th><th>Download</th></tr>")
     groups = {}
@@ -925,10 +999,272 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                    f"<td>{dl(f)}</td></tr>")
     out.append("</table>")
 
+    out.append(render_exposures(field, exposures, base, app_link, multi))
+    out.append(render_astrometry(field, files, base,
+                                 manifest_built=manifest.get('built')))
+
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
     return "\n".join(out)
+
+
+def published_urls(manifest, superseded=(), categories=None):
+    """Download URLs for the files this release actually publishes.
+
+    The ``<field>_*.txt`` lists must withhold exactly what the page withholds.
+    They are linked FROM the page that carries the withholding notice, so a
+    superseded mosaic pulled from the table and left in ``<field>_files.txt`` is
+    still published -- one click further away, to a ``wget -i`` that fetches it
+    without ever showing the notice.
+
+    Exposures follow their parent mosaic here for the same reason they do on the
+    page: the withdrawn astrometric solution is baked into the frames.
+    """
+    superseded = set(superseded or ())
+
+    def keep(entry):
+        return (entry.get("dest") not in superseded
+                and (entry.get("parent_dest") or "") not in superseded
+                and (categories is None or entry.get("category") in categories))
+
+    return [f["url"] for f in manifest["files"] if f.get("url") and keep(f)]
+
+
+def render_exposures(field, exposures, base, app_link, multi):
+    """The detector-frame exposures section: one row per (observation, filter).
+
+    A per-frame row would be unusable -- wd1 ships 696 frames, and a table of
+    696 near-identical file names is not a download interface.  Each group
+    instead gets its count, size, a one-click bundle button for that group's
+    folder, and a collapsed list of the individual links, which is where "a link
+    to each file" actually lives.
+
+    On the bundle: there is no tarball, here or anywhere else on this site, and
+    that is a size decision rather than an oversight.  One field-filter is
+    ~20 GB of frames and the release is several hundred GB of them; a
+    pre-built archive would double that on disk for data that is symlinked
+    precisely so it is NOT duplicated, and it would go stale the moment the
+    pipeline re-headers a frame.  The Globus folder link transfers the whole
+    group in one action, resumably, which is what the archive would have been
+    for.
+    """
+    if not exposures:
+        return ""
+    out = ["<h2>Detector-frame exposures</h2>"]
+    total = sum(f.get("size_bytes") or 0 for f in exposures)
+    out.append(
+        f"<p class=muted>The <b>{len(exposures)} individual exposures</b> "
+        f"({human_size(total)}) the mosaics above were drizzled from, in the "
+        f"original detector frame, carrying the full distortion solution and this "
+        f"pipeline's astrometry as it stood before the images were resampled onto "
+        f"a sky grid. Each group holds exactly the frames behind the matching "
+        f"mosaic, taken from the record that mosaic itself carries of what went "
+        f"into it. Use these to re-drizzle, re-fit, or chase a per-exposure "
+        f"systematic.</p>")
+    out.append(
+        "<p class=muted>The last detector-frame product differs by field and "
+        "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
+        "one was written, otherwise the <code>_destreak</code> / "
+        "<code>_align</code> / <code>_cal</code> frame the mosaic was drizzled "
+        "from directly. <b>These are links to the pipeline's own frames, not "
+        "frozen copies</b> -- they cost no extra storage, and they are not in "
+        "<code>CHECKSUMS.sha256</code>. A re-reduction writes a new file rather "
+        "than rewriting these bytes, so a frame here can become an older "
+        "generation than the pipeline now holds. Cite the mosaics and catalogs; "
+        "treat these as a working convenience.</p>")
+
+    symlinked = [f for f in exposures if f.get("link_mode") == "symlink"]
+    if symlinked:
+        out.append(
+            f"<p class=warn><b>Globus transfer only for "
+            f"{'these' if len(symlinked) == len(exposures) else str(len(symlinked))} "
+            f"frames.</b> This field's data sit on a different filesystem from the "
+            f"release tree, so the frames are symlinked rather than hardlinked, and "
+            f"the Globus HTTPS data plane will not serve a symlink that points out "
+            f"of the release tree. Use the <b>bundle</b> button or "
+            f"<code>globus transfer --recursive</code>, which follow them; a browser "
+            f"or <code>wget</code> on a single frame URL returns 404. The mosaics, "
+            f"catalogs and tables above are unaffected.</p>")
+
+    groups = {}
+    for f in exposures:
+        groups.setdefault((f.get("observation") or "", f.get("filter") or "?"),
+                          []).append(f)
+    obs_col = "<th>Obs</th>" if multi else ""
+    out.append(f"<table><tr>{obs_col}<th>Filter</th><th>Frames</th><th>Size</th>"
+               "<th>Product</th><th>Download</th></tr>")
+    for key in sorted(groups, key=lambda k: (k[0], FILTER_WAVELENGTH.get(k[1], 99))):
+        obs, filt = key
+        rows = sorted(groups[key], key=lambda f: f["dest"])
+        size = sum(f.get("size_bytes") or 0 for f in rows)
+        # The product suffix is the one thing here worth stating per group: it
+        # says whether this band has Stage-3 flags or was drizzled from `_cal`.
+        suffixes = sorted({_frame_product(f) for f in rows})
+        subpath = Path(rows[0]["dest"]).parent.as_posix()
+        obs_cell = f"<td><b>{html.escape(obs)}</b></td>" if multi else ""
+        # A symlinked frame has no working per-file URL: the Globus HTTPS data
+        # plane refuses a symlink pointing out of the release tree (404), while
+        # the transfer API follows it. Rendering the name without an anchor says
+        # "take this group with the bundle button", which is the only route that
+        # works for it -- an anchor there would be a link that 404s.
+        links = "".join(
+            (f"<a href='{html.escape(f['url'])}'>"
+             f"{html.escape(Path(f['dest']).name)}</a>"
+             if f.get("url") and f.get("link_mode") != "symlink"
+             else f"<span class=muted>{html.escape(Path(f['dest']).name)}</span>")
+            for f in rows)
+        out.append(
+            f"<tr>{obs_cell}<td><b>{html.escape(filt)}</b></td>"
+            f"<td>{len(rows)}</td>"
+            f"<td class=size>{human_size(size)}</td>"
+            f"<td><span class=tag>{html.escape(', '.join(suffixes))}</span></td>"
+            f"<td>{app_link(f'{base}/{subpath}', 'bundle', cls='btn small')}</td></tr>")
+        if links:
+            out.append(
+                f"<tr><td colspan={6 if multi else 5}>"
+                f"<details class=frames><summary>{len(rows)} individual frames"
+                f"</summary><div class=names>{links}</div></details></td></tr>")
+    out.append("</table>")
+    return "\n".join(out)
+
+
+def render_astrometry(field, files, base, manifest_built=None):
+    """What solution these products are on, and the frozen table that defines it.
+
+    Rendered for EVERY field, including the ones with nothing to report. A page
+    that offers detector frames and says nothing about their astrometry asserts
+    by omission that they are tied; proposal 1939's mosaics were ~14.8" off
+    while saying exactly nothing.
+    """
+    entry = next((f for f in files
+                  if f.get("category") == astrometry_provenance.ASTROMETRY_CATEGORY),
+                 None)
+    try:
+        record = astrometry_provenance.collect(field, FIELDS[field])
+    except (KeyError, OSError, ValueError):
+        return ""
+    # The TABLE half is described from the manifest entry this version actually
+    # ships, never from the table on disk now. Reading live disk made a page for
+    # a June release quote the sha256 of a table modified today and call it
+    # frozen; five of sixteen fields have a table whose mtime postdates the
+    # release it would attach to. A version that shipped no table says so.
+    if record.get("state") == "table" and entry is None:
+        record = dict(record, state="table-not-shipped")
+    # The TIE half was still read live and unconditionally, so a v1.0-2026.06
+    # page said it described nothing about the shipped solution and then printed
+    # eight rows of accuracy for it, two of them measured two months after that
+    # version was cut. A version that ships no table has nothing to attach ties
+    # to; and a tie measured after the release was built describes a later
+    # solution, not this one.
+    built = str(manifest_built or "")
+    on_record = record.get("ties") or {}
+    ties = {f: t for f, t in on_record.items()
+            if not (built and str(t.get("date") or "") > built)}
+    if record.get("state") == "table-not-shipped":
+        ties = {}
+    # Suppressed is not the same as absent. Falling through to "no reference-tie
+    # measurement is recorded for this field" put a false sentence on 20 live
+    # pages -- sgrc has 8 on record and its page said none did. Round 4's
+    # complaint was a page saying something untrue about ties; substituting a
+    # different untrue sentence is not a fix, so the two cases get two messages.
+    suppressed = bool(on_record) and not ties
+    record = dict(record, ties=ties)
+    out = ["<h2>Astrometric provenance</h2>"]
+    state = record.get("state")
+    if state == "unregistered":
+        out.append(
+            "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
+            "<b>This field has no registered pointing correction.</b> It is absent "
+            "from the pipeline's alignment registry, so no per-exposure correction "
+            "was applied and these products carry the raw <code>assign_wcs</code> "
+            "astrometry. Do not assume they are tied to Gaia or VIRAC2. (A field in "
+            "this state shipped mosaics ~14.8&Prime; off before it was noticed.)</p>")
+    elif state == "no-table":
+        out.append("<p class=muted>This field is registered but uses no offsets "
+                   "table, so there is no per-exposure correction to preserve.</p>")
+    elif state == "table-not-shipped":
+        out.append("<p class=muted>This release version does not ship a "
+                   "pointing-correction table. The field has one, but it was not "
+                   "staged with this version, so nothing here describes the "
+                   "solution these products were built on.</p>")
+    else:
+        table = record.get("table") or {}
+        link = (f"<a href='{html.escape(entry['url'])}'>{html.escape(table.get('name',''))}</a>"
+                if entry and entry.get("url") else
+                f"<code>{html.escape(table.get('name') or '?')}</code>")
+        out.append(
+            f"<p>Pointing corrections: {link}"
+            + (f" <span class=muted>({human_size(table.get('size_bytes'))}, "
+               f"modified {html.escape(str(table.get('modified'))[:19])})</span>"
+               if table.get("exists") else
+               " <span class=muted>(not on disk)</span>")
+            + "</p>")
+        if table.get("sha256"):
+            out.append(f"<p class=checksum>sha256 {html.escape(table['sha256'])}</p>")
+        out.append(
+            "<p class=muted>The table ships as a <b>frozen, checksummed copy</b>; the "
+            "detector frames do not, because a re-reduction rewrites their headers in "
+            "place. This table, not the FITS, is what makes this version's astrometry "
+            "reconstructible after the frames have moved on.</p>")
+    ties = record.get("ties") or {}
+    if ties:
+        out.append("<table><tr><th>Filter</th><th>vs Gaia (sparse)</th>"
+                   "<th>vs VIRAC2 (dense)</th><th>Quote</th><th>Measured</th></tr>")
+        for filt in sorted(ties):
+            tie = ties[filt]
+
+            def _cell(off_key, con_key, chosen):
+                if off_key not in tie:
+                    return "&mdash;"
+                con = tie.get(con_key)
+                mark = "<b>" if chosen else ""
+                end = "</b>" if chosen else ""
+                return (f"{mark}{tie[off_key]:.2f} mas{end}"
+                        + (f" <span class=muted>(contrast {con:.0f})</span>"
+                           if con is not None else ""))
+
+            leg, why = astrometry_provenance.preferred_leg(tie)
+            out.append(
+                f"<tr><td><b>{html.escape(filt)}</b></td>"
+                f"<td>{_cell('sparse_mas', 'sparse_contrast', leg == 'sparse')}</td>"
+                f"<td>{_cell('dense_mas', 'dense_contrast', leg == 'dense')}</td>"
+                f"<td>{html.escape(leg or 'neither')} "
+                f"<span class=muted>{html.escape(why)}</span></td>"
+                f"<td class=muted>{html.escape(str(tie.get('date') or '')[:10])}"
+                f"</td></tr>")
+        out.append("</table>")
+        out.append(
+            "<p class=muted>Where the two references differ, which one to believe "
+            "is decided per filter by the <b>contrast</b> of the measurement "
+            "rather than by a fixed preference &mdash; a sparse reference can "
+            "have too few stars to place a peak at all. The bolded value is the "
+            "one to quote. &ldquo;neither&rdquo; means the measurement is either "
+            "too weak to cite or too large to be an accuracy figure, and the "
+            "reason says which. Both columns are bulk offsets; a per-star error "
+            "bar is a separate quantity.</p>")
+    elif suppressed:
+        out.append(
+            f"<p class=muted>{len(on_record)} reference-tie measurement(s) exist "
+            f"for this field, and none is shown here: they are not attached to "
+            f"what this version ships &mdash; either the version carries no "
+            f"pointing-correction table, or the measurements postdate the "
+            f"release. A later version's page carries the ties that describe "
+            f"it.</p>")
+    else:
+        out.append("<p class=muted>No reference-tie measurement is recorded for this "
+                   "field, so no astrometric accuracy is claimed here.</p>")
+    return "\n".join(out)
+
+
+def _frame_product(entry):
+    """``destreak_o001_crf`` / ``align_o001_crf`` / ``cal`` -- which product a
+    frame is, taken from its name after the standard JWST exposure prefix
+    (``jw<prop><obs><visit>_<exp>_<n>_<detector>_``)."""
+    stem = Path(entry["dest"]).name
+    if stem.endswith(".fits"):
+        stem = stem[:-len(".fits")]
+    return "_".join(stem.split("_")[4:]) or "?"
 
 
 def footer():
@@ -990,7 +1326,8 @@ def render_help():
     out.append("<p>Just click any <b>download</b> link on a field page. If you are not "
                "already signed in, Globus will prompt you to log in (your "
                "<b>ORCID</b> works), then the file downloads. The bulk "
-               "<b>⬇ Everything / Images / Catalogs</b> buttons open the folder in the "
+               "<b>⬇ Everything / Mosaic images / Catalogs / Detector-frame "
+               "exposures</b> buttons open the folder in the "
                "Globus file manager — press <b>Ctrl/Cmd-A</b> to select all and "
                "<b>Start</b> a transfer to your own collection. "
                "<b>No access token is required for browser downloads.</b></p>")
@@ -1010,6 +1347,13 @@ def render_help():
                "<a href='https://www.globus.org/globus-connect-personal'>Globus Connect "
                "Personal</a> once to make it a collection. Track progress with "
                "<code>globus task list</code>.</p>")
+    out.append("<p>This is also the best way to take the "
+               "<b>detector-frame exposures</b>: a field's <code>exposures/</code> "
+               "folder runs to tens or hundreds of GB across hundreds of files, "
+               "which is what a recursive, resumable Globus transfer is for. "
+               "Append <code>exposures/</code> (or "
+               "<code>exposures/&lt;FILTER&gt;/</code>) to the source path above "
+               "to take just those.</p>")
 
     out.append("<h2>No Globus collection at your destination? <code>wget</code> / <code>curl</code></h2>")
     out.append("<p>Only needed if you cannot use a Globus collection as the destination "
@@ -1286,13 +1630,13 @@ def main(argv=None):
             (out_dir / fname).write_text(page)
             if v == latest:
                 def write_urls(suffix, cats):
-                    urls = [f["url"] for f in manifest["files"]
-                            if f.get("url") and (cats is None or f["category"] in cats)]
+                    urls = published_urls(manifest, stale_files, cats)
                     if urls:
                         (out_dir / f"{field}_{suffix}.txt").write_text("\n".join(urls) + "\n")
                 write_urls("files", None)
                 write_urls("images", {"image"})
                 write_urls("catalogs", {"catalog"})
+                write_urls("exposures", {EXPOSURE_CATEGORY})
                 files = manifest["files"]
                 fields_info.append({
                     "field": field, "version": manifest["version"],
@@ -1318,12 +1662,76 @@ def main(argv=None):
     # field whose mosaics cannot be read is simply left off the map, and if no
     # field yields geometry the panel is omitted entirely and the index is
     # exactly what it was before.
+    # ---- the index covers every field the SITE has, not just this run's -------
+    # `--fields <subset>` is the obvious way to refresh one field after
+    # re-staging it, and it used to rewrite index.html from that subset alone:
+    # a one-field rebuild silently reduced the front page from fifteen cards to
+    # one, with every other field's page still sitting there unreachable. The
+    # per-field pages are written independently, so only the index had this
+    # coupling -- and nothing about the output said so.
+    #
+    # So the index is assembled from a small sidecar that accumulates: this
+    # run's entries overwrite their own fields and every other field's entry is
+    # carried forward. A full run is unchanged (it overwrites all of them);
+    # a subset run now updates exactly what it rebuilt.
+    roster_path = out_dir / "_fields_index.json"
+    roster = {}
+    if roster_path.is_file():
+        try:
+            for entry in json.loads(roster_path.read_text()):
+                roster[entry["field"]] = entry
+        except (OSError, ValueError, KeyError, TypeError):
+            roster = {}          # unreadable sidecar: rebuilt from disk below
+    # The sidecar is a CACHE, not the source of truth, and must not be the only
+    # thing standing between a subset build and a truncated index: it does not
+    # exist yet on any site built before this change, so keying solely off it
+    # would let the very first partial build after deployment truncate exactly
+    # as before. The authority is which `<field>.html` pages are on disk; the
+    # sidecar only supplies their card metadata, and anything it is missing is
+    # re-read from that field's staged manifest.
+    rebuilt = {fi["field"] for fi in fields_info}
+    for page in sorted(out_dir.glob("*.html")):
+        name = page.stem
+        if ("." in name or name in rebuilt or name in roster
+                or name not in FIELDS):
+            continue             # version pages, help pages, non-fields
+        found = discover_versions(name)
+        if not found:
+            continue
+        try:
+            man = json.loads((field_release_dir(name, found[0], args.release_root)
+                              / "MANIFEST.json").read_text())
+        except (OSError, ValueError):
+            continue
+        thumb = f"assets/{name}.jpg"
+        roster[name] = {
+            "field": name, "version": man.get("version", found[0]),
+            "group": man.get("group"),
+            "preview": thumb if (out_dir / thumb).is_file() else None,
+            "n_images": sum(1 for f in man.get("files", [])
+                            if f.get("category") == "image"),
+            "n_catalogs": sum(1 for f in man.get("files", [])
+                              if f.get("category") == "catalog"),
+        }
+    carried = sorted(set(roster) - rebuilt)
+    for info in fields_info:
+        roster[info["field"]] = info
+    # A field whose page is gone (dropped from the release) must not keep a card
+    # pointing at a 404.
+    roster = {f: e for f, e in roster.items() if (out_dir / f"{f}.html").is_file()}
+    roster_path.write_text(json.dumps(list(roster.values()), indent=1,
+                                      sort_keys=True))
+    if carried:
+        print(f"index: carrying forward {len(carried)} field(s) not rebuilt this "
+              f"run ({', '.join(carried)})")
+    index_fields = [roster[f] for f in sorted(roster)]
+
     overview_geoms = field_overview.collect(overview_entries)
     if overview_entries and not overview_geoms:
         print("note: no footprints readable -- on-sky overview omitted")
     overview_html = field_overview.section(overview_geoms)
 
-    index_html = render_index(fields_info, overview_html=overview_html)
+    index_html = render_index(index_fields, overview_html=overview_html)
     if cmz_explorer_link:
         # surface the explorer at the top of the index (additive; no-op otherwise)
         index_html = index_html.replace(
@@ -1336,7 +1744,8 @@ def main(argv=None):
     # .txt extension so the web server serves it as text (a .py 500s under CGI)
     (out_dir / "get_globus_token_helper.txt").write_text(TOKEN_HELPER)
     print(f"wrote index.html + download_help.html + get_globus_token_helper.txt "
-          f"({len(fields_info)} fields) into {out_dir}")
+          f"({len(fields_info)} field(s) rebuilt, {len(index_fields)} on the "
+          f"index) into {out_dir}")
 
 
 if __name__ == "__main__":

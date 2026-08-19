@@ -105,7 +105,8 @@ def test_allowed_entries_still_match():
 #: is blind to.  Pin them here instead, so moving a field has to be deliberate.
 EXPECTED_ROOTS = {
     'arches': 'orange', 'brick': 'blue', 'cloudc': 'blue',
-    'cloudef': 'orange', 'gc2211': 'orange', 'm4': 'orange', 'm92': 'orange',
+    'cloudef': 'orange', 'gc-treasury': 'blue', 'gc2211': 'orange',
+    'm4': 'orange', 'm92': 'orange',
     'ngc6334': 'orange', 'ngc6397': 'orange', 'omegacen': 'orange',
     'quintuplet': 'orange', 'sgra': 'orange', 'sgrb2': 'orange',
     'sgrc': 'orange', 'sickle': 'orange', 'w51': 'orange', 'wd1': 'orange',

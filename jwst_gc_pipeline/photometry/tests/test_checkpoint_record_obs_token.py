@@ -14,6 +14,16 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     _m2_exposure_baseline, _m2_record_path, _record_name)
 
 
+@pytest.fixture(autouse=True)
+def _enforce_at_the_stage(monkeypatch):
+    """These tests assert on the EXCEPTION, which is the detection they are for.
+
+    `ASTROM_CHECKPOINT_ENFORCE` now defaults to `release`, so a frozen-stage
+    failure is recorded and the chain continues.  What is detected is unchanged;
+    only where the stop happens moved.  See test_checkpoint_enforcement.py.
+    """
+    monkeypatch.setenv('ASTROM_CHECKPOINT_ENFORCE', 'stage')
+
 def test_record_name_carries_the_token():
     assert _record_name("m2", "F360M") == "checkpoint_m2_F360M"
     assert _record_name("m2", "F360M", "_o002") == "checkpoint_m2_F360M_o002"

@@ -6,11 +6,13 @@ separation, ambiguity) and not about whatever happens to be on disk today.
 """
 import json
 import os
+import inspect
 import re
 
 import pytest
 
-from jwst_gc_pipeline.monitoring import checks, jobs, render, scan
+from jwst_gc_pipeline import fields as _fields
+from jwst_gc_pipeline.monitoring import checks, jobs, probe, render, scan
 
 
 # --------------------------------------------------------------------------
@@ -143,6 +145,138 @@ def test_crf_and_reduced_are_counted_separately(tmp_path):
     rows = scan._reduction_stages(str(tmp_path), 'F150W', '1905', '001')
     assert rows['crf']['n'] == 4
     assert rows['reduced']['n'] == 0
+
+
+def test_crossband_row_prefers_this_observations_own_catalog(tmp_path):
+    """A multi-observation field's m7/m8 carry ``_o<obs>``.
+
+    ``merge_daophot`` appends the token for gc2211's per-pointing m7 and
+    brick's per-proposal m8, and 10678's 139 tiles each write their own.  A
+    monitor that globs only the untokened name reports the tile's own
+    catalogue as ``ambiguous`` -- 'a catalogue exists, but not one attributable
+    to this observation' -- on every field where one does exist.
+    """
+    d = tmp_path / 'catalogs'
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o023.fits'))
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o023.fits'))
+    scan.clear_cache()
+    rows = scan._crossband_stages(str(tmp_path), '2211', '023')
+    assert (rows['m7']['n'], rows['m7']['scope']) == (1, 'obs')
+    assert (rows['m8']['n'], rows['m8']['scope']) == (1, 'obs')
+
+
+def test_crossband_row_falls_back_to_the_pooled_catalog_as_ambiguous(tmp_path):
+    """Single-observation fields write the untokened name; it is counted, and
+    reported as attributable to no one observation."""
+    d = tmp_path / 'catalogs'
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits'))
+    scan.clear_cache()
+    rows = scan._crossband_stages(str(tmp_path), '2221', '001')
+    assert (rows['m7']['n'], rows['m7']['scope']) == (1, 'ambiguous')
+    assert (rows['m8']['n'], rows['m8']['scope']) == (0, 'none')
+
+
+def test_crossband_row_does_not_borrow_another_observations_catalog(tmp_path):
+    """Tile 023's catalogue is not tile 042's m7."""
+    d = tmp_path / 'catalogs'
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o023.fits'))
+    scan.clear_cache()
+    rows = scan._crossband_stages(str(tmp_path), '2211', '042')
+    assert (rows['m7']['n'], rows['m7']['scope']) == (0, 'none')
+
+
+def test_a_wildcard_obsid_counts_every_observation_of_its_proposal(tmp_path):
+    """The wildcard is what ``scan.observations`` hands the stage counters for
+    gc-treasury, and compared as a LITERAL it equals no observation number.
+
+    ``_matches_obs(frame, '10678', '*')`` was False for a genuine
+    ``jw10678037001_..._o037_crf.fits`` frame, and the reduced tail was built
+    as the literal ``_o*_crf.fits``, which no file on disk ends with.  Every
+    uncal/cal/crf/reduced/i2d and satstar count for the largest programme in
+    the registry therefore read zero while its catalog rows -- which are not
+    observation-scoped -- counted normally: "0 reduced frames, N catalogs" in
+    one panel.
+    """
+    d = tmp_path / 'F212N' / 'pipeline'
+    for obsnum in ('037', '042'):
+        for exp in range(2):
+            stem = f'jw10678{obsnum}001_02101_0000{exp}_nrca1'
+            _touch(str(d / f'{stem}_uncal.fits'))
+            _touch(str(d / f'{stem}_cal.fits'))
+            _touch(str(d / f'{stem}_o{obsnum}_crf.fits'))
+            _touch(str(d / f'{stem}_destreak_o{obsnum}_crf.fits'))
+            _touch(str(d / f'{stem}_satstar_catalog.fits'))
+        _touch(str(d / f'jw10678-o{obsnum}_t001_nircam_clear-f212n-nrca_i2d.fits'))
+    # a different proposal in the same tree stays out of the counts
+    _touch(str(d / 'jw02221001001_05101_00001_nrcb1_destreak_o001_crf.fits'))
+    scan.clear_cache()
+
+    rows = scan._reduction_stages(str(tmp_path), 'F212N', '10678',
+                                  _fields.WILDCARD_OBSID)
+    assert rows['uncal']['n'] == 4
+    assert rows['cal']['n'] == 4
+    assert rows['crf']['n'] == 4
+    assert rows['reduced']['n'] == 4
+    assert rows['reduced']['variant'] == 'destreak'
+    assert rows['i2d']['n'] == 2
+    sat = scan.satstar_frames(str(tmp_path), 'F212N', '10678',
+                              _fields.WILDCARD_OBSID)
+    assert sat['accepted'] == 4
+
+    # a concrete obsid still scopes to that one observation
+    concrete = scan._reduction_stages(str(tmp_path), 'F212N', '10678', '037')
+    assert concrete['crf']['n'] == 2
+    assert concrete['reduced']['n'] == 2
+    assert scan.satstar_frames(str(tmp_path), 'F212N', '10678',
+                               '037')['accepted'] == 2
+
+
+def test_the_wildcard_tail_still_separates_crf_from_the_reduced_copy(tmp_path):
+    """Reading the observation token as a shape keeps the two rows apart:
+    ``*_o037_crf.fits`` also matches ``*_destreak_o037_crf.fits``, and folding
+    them together hides "reduction ran but destreaking never did".
+    """
+    d = tmp_path / 'F212N' / 'pipeline'
+    for exp in range(3):
+        _touch(str(d / f'jw10678037001_02101_0000{exp}_nrca1_o037_crf.fits'))
+    scan.clear_cache()
+    rows = scan._reduction_stages(str(tmp_path), 'F212N', '10678',
+                                  _fields.WILDCARD_OBSID)
+    assert rows['crf']['n'] == 3
+    assert rows['reduced']['n'] == 0
+
+
+def test_a_joint_observation_token_survives_the_wildcard_shape(tmp_path):
+    r"""sgrb2/sickle write one product covering several observations as
+    ``_o002-998_crf.fits``.  A shape accepting only ``_o\d{3}_`` would drop
+    those frames from a wildcard field's counts."""
+    d = tmp_path / 'F212N' / 'pipeline'
+    _touch(str(d / 'jw10678002001_02101_00001_nrca1_destreak_o002-998_crf.fits'))
+    scan.clear_cache()
+    rows = scan._reduction_stages(str(tmp_path), 'F212N', '10678',
+                                  _fields.WILDCARD_OBSID)
+    assert rows['reduced']['n'] == 1
+
+
+def test_frame_provenance_reads_a_wildcard_fields_frames(tmp_path):
+    """``frame_provenance`` built the same literal ``_o*_crf.fits`` tail, so it
+    returned None for a wildcard field however many frames were on disk -- the
+    CRDS_CTX/CAL_VER and LW filteroffset checks silently had no input."""
+    from astropy.io import fits
+    d = tmp_path / 'F212N' / 'pipeline'
+    os.makedirs(str(d), exist_ok=True)
+    for obsnum in ('037', '042'):
+        hdu = fits.PrimaryHDU()
+        hdu.header['CRDS_CTX'] = 'jwst_1321.pmap'
+        hdu.header['CAL_VER'] = '1.19.1'
+        hdu.header['DETECTOR'] = 'NRCA1'
+        hdu.writeto(str(d / f'jw10678{obsnum}001_02101_00001_nrca1'
+                            f'_destreak_o{obsnum}_crf.fits'))
+    scan.clear_cache()
+    got = scan.frame_provenance(str(tmp_path), 'F212N', '10678',
+                                _fields.WILDCARD_OBSID)
+    assert got is not None
+    assert got['n_frames'] == 2, got
 
 
 def test_i2d_row_excludes_per_exposure_outlier_products(tmp_path):
@@ -1084,6 +1218,84 @@ def test_unglobbed_observation_cannot_make_a_filter_ambiguous():
     # the genuinely shared cases still fire
     assert scan.shared_filters('ngc6334') == {'F200W', 'F470N'}
     assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+
+
+def test_a_wildcard_field_is_reported_as_multi_observation():
+    """``observations()`` returns ONE row for a wildcard field -- the literal
+    ``'*'`` standing for all 139 of 10678's observations -- so counting rows
+    read gc-treasury as single-observation.  ``multi_obs`` gates the warning
+    that an untagged cross-band product cannot be attributed to one
+    observation (``checks.py`` ``scope == 'ambiguous' and multi_obs``), so
+    the largest programme in the registry was the one field where that
+    warning could not fire.
+    """
+    got = scan.scan_observation('gc-treasury', '10678', '*', 'nircam',
+                                with_headers=False)
+    assert got['multi_obs'] is True
+    # a genuinely single-observation field is unchanged
+    assert scan.scan_observation('sgrc', '4147', '012', 'nircam',
+                                 with_headers=False)['multi_obs'] is False
+
+
+def test_every_filter_of_a_wildcard_field_is_ambiguous():
+    """``shared_filters`` marks the filters a per-filter catalog name cannot
+    attribute to one observation.  A wildcard field contributes ONE token,
+    ``('10678', '*')``, so no filter of it ever collided with a second token
+    and none was marked -- while all 139 observations write F212N catalogs
+    into one ``<basepath>/F212N/`` tree under one name, which is exactly the
+    condition the mark exists for.
+    """
+    assert scan.shared_filters('gc-treasury') == {'F212N', 'F480M'}
+    assert scan.shared_filters('gc-treasury', 'miri') == {'F770W'}
+    # every other field reports what it did before
+    assert scan.shared_filters('wd1') == set()
+    assert scan.shared_filters('brick') == set()
+    assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+    assert scan.shared_filters('cloudef') == {'F162M', 'F210M', 'F360M',
+                                              'F480M'}
+    # sgrb2 is why `_belongs` scopes by instrument: its 3 MIRI obsids made all
+    # 14 of its filters shared, including 11 NIRCam-only bands, and 10 records
+    # were refused with "more than one observation of this field images F212N"
+    # about a band MIRI does not have.
+    assert scan.shared_filters('sgrb2') == set()
+    assert scan.shared_filters('sgrb2', 'miri') == {'F770W', 'F1280W', 'F2550W'}
+    assert scan.shared_filters('ngc6334') == {'F200W', 'F470N'}
+    assert scan.shared_filters('ngc6334', 'miri') == set()
+
+
+def test_a_wildcard_field_says_why_it_cannot_be_probed():
+    """``plan_probe`` fed the wildcard to ``resolve``, which zero-pads it to
+    ``'00*'`` -- a key no registry lookup answers.  The error that came back
+    told the operator to register ``nircam: ['00*']``, which fields.yaml does
+    not accept, about a field that is already registered.
+    """
+    got = probe.plan_probe('gc-treasury')
+    assert 'error' in got, got
+    assert 'claims every observation' in got['error'], got['error']
+    assert '00*' not in got['error'], got['error']
+    # the remedy the message names has to exist
+    assert 'obsid=' in got['error'], got['error']
+    assert 'obsid' in inspect.signature(probe.plan_probe).parameters
+
+
+def test_a_wildcard_field_is_probeable_once_an_observation_is_named(tmp_path,
+                                                                    monkeypatch):
+    """The error said "probe one by name instead" while ``plan_probe`` had no
+    parameter for a name, so gc-treasury stayed unprobeable however the
+    operator read it.  Naming the observation is the remedy, and it resolves
+    through the wildcard the same way ``--field`` does."""
+    d = tmp_path / 'F212N' / 'pipeline'
+    for exp in range(2):
+        _touch(str(d / f'jw10678042001_02101_0000{exp}_nrca1'
+                      f'_destreak_o042_crf.fits'))
+    monkeypatch.setattr(scan, 'basepath', lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(probe, 'choose_center',
+                        lambda *a, **k: (266.5, -28.7, 'frame', 2))
+    scan.clear_cache()
+    got = probe.plan_probe('gc-treasury', obsid='042')
+    assert 'error' not in got, got
+    assert got['obsid'] == '042'
+    assert got['job_name'].startswith('gc-treasury10678-o042-cut')
 
 
 def test_unpinned_provenance_is_marked_ambiguous_not_asserted_as_fail():

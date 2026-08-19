@@ -313,3 +313,391 @@ def test_an_OSCILLATION_declines_at_three_and_fires_at_four(tmp_path):
     stuck, lines = find_fixed_point(four, repeats=4)
     assert stuck
     assert any('OSCILLATING' in ln for ln in lines)
+
+
+# ---------------------------------------------------------------------------
+# --accept-below-mas: a fixed point is a repeat, not a size
+# ---------------------------------------------------------------------------
+#
+# Stopping on every fixed point holds a field for a decision the records have
+# already made.  The two cases need opposite answers and the loop could not
+# tell them apart:
+#
+#   * cloudc F212N and cloudef F360M repeat at 7-11 mas -- a per-detector
+#     SIAF/DVA term the per-exposure offsets table cannot express, so no number
+#     of further passes removes it;
+#   * arches F212N exposure 4 repeats at 18-26 mas on six detectors at once,
+#     which is a correction not reaching the frame -- a defect, and stopping is
+#     right.
+#
+# So the ceiling is the decision, and it is written down rather than taken per
+# run.  Everything below it still gets MEASURED and RECORDED; only the
+# CORRECTION is withheld, by raising the m2 floor to just above it.
+
+#: repeats at ~5.2 mas -- the systematic shape
+SMALL = {('1', 1, 'nrca1'): (-0.21, -2.52), ('1', 2, 'nrca1'): (-0.11, -3.43),
+         ('1', 1, 'nrcb4'): (-0.79, -5.14)}
+SMALL_AGAIN = {k: (v[0] + 0.03, v[1] + 0.06) for k, v in SMALL.items()}
+#: repeats at ~26 mas -- arches exposure 4, the defect shape
+BIG = {**SMALL, ('1', 4, 'nrca4'): (-15.70, 20.88)}
+BIG_AGAIN = {k: (v[0] + 0.03, v[1] + 0.06) for k, v in BIG.items()}
+
+
+def _cli(record_dir, *extra):
+    from jwst_gc_pipeline.photometry.retie_fixed_point import main
+    return main(['--record-dir', record_dir, *extra])
+
+
+def test_largest_residual_is_over_the_NEWEST_pass_only(tmp_path):
+    """The older passes are what the loop has already superseded.  Including
+    them reports a residual that no longer exists, and the caller sizes its
+    floor against it."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    huge = {k: (v[0] * 100, v[1] * 100) for k, v in SMALL.items()}
+    d = _history(tmp_path, [huge, SMALL, SMALL_AGAIN])
+    worst, key, label = largest_measured_residual(d)
+    assert worst == pytest.approx(5.2, abs=0.3), (worst, key)
+    assert 'F162M' in label
+
+
+def test_without_the_flag_every_fixed_point_still_stops(tmp_path):
+    """The behaviour before this existed, kept as the default: a ceiling is a
+    decision, and it has to be made deliberately rather than inherited."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    assert _cli(d) == 3
+
+
+def test_a_bounded_residual_is_accepted(tmp_path, capsys):
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    assert _cli(d, '--accept-below-mas', '15') == 4
+    out = capsys.readouterr().out
+    assert 'BOUNDED' in out
+    assert 'ASTROM_M2_CORRECTION_FLOOR_MAS=' in out
+
+
+def test_the_floor_it_prints_is_ABOVE_the_residual_it_has_to_clear(tmp_path,
+                                                                  capsys):
+    """A floor equal to the measurement re-corrects it on the very next pass,
+    and the frozen m3+ stages then raise on the shift -- so the field stops one
+    stage later than before, having spent a whole reduce to get there."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    _cli(d, '--accept-below-mas', '15')
+    line = [ln for ln in capsys.readouterr().out.splitlines()
+            if ln.startswith('ASTROM_M2_CORRECTION_FLOOR_MAS=')][-1]
+    floor = float(line.split('=')[1])
+    worst, _, _ = largest_measured_residual(d)
+    assert floor > worst
+
+
+def test_a_residual_too_big_to_be_a_systematic_still_stops(tmp_path, capsys):
+    """arches exposure 4: 26 mas repeating on six detectors at once is not a
+    distortion term the table cannot express, it is a correction that is not
+    reaching the frame."""
+    d = _history(tmp_path, [BIG, BIG_AGAIN, BIG, BIG_AGAIN])
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    out = capsys.readouterr().out
+    assert 'NOT BOUNDED' in out
+    assert '26' in out                     # the number the decision needs
+
+
+def test_the_ceiling_does_not_make_a_MOVING_loop_stop_early(tmp_path):
+    """Acceptance applies to a fixed point only.  A loop still converging must
+    keep iterating however small its residual is -- it is about to succeed."""
+    states = [{k: (v[0] / 2 ** i, v[1] / 2 ** i) for k, v in SMALL.items()}
+              for i in range(5)]
+    d = _history(tmp_path, states)
+    assert _cli(d, '--accept-below-mas', '15') == 0
+
+
+# ---------------------------------------------------------------------------
+# What the floor may be sized against
+# ---------------------------------------------------------------------------
+
+def _multi_history(tmp_path, per_filter):
+    """One record directory holding several filters' histories."""
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir(exist_ok=True)
+    for filt, states in per_filter.items():
+        for i, st in enumerate(states):
+            (d / f'checkpoint_m2_{filt}_o012_2026080{i}T000000Z.json').write_text(
+                json.dumps(_rec(st)))
+    return str(d)
+
+
+#: still converging: 96 -> 48 -> 24 -> 12 mas, one pass from done
+_CONVERGING = [{('1', 7, 'nrca1'): (96.0, 0.0)},
+               {('1', 7, 'nrca1'): (48.0, 0.0)},
+               {('1', 7, 'nrca1'): (24.0, 0.0)},
+               {('1', 7, 'nrca1'): (12.0, 0.0)}]
+
+
+def test_a_still_converging_filter_blocks_acceptance(tmp_path, capsys):
+    """The floor is applied to EVERY filter in the field.
+
+    Accepting while one band is still halving its residual hands that band an
+    amnesty it never needed and was one pass from clearing -- and the number
+    the floor is sized from would be its residual, not the stuck one's.
+    """
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],   # stuck at ~5 mas
+        'F212N': _CONVERGING,                                # still moving
+    })
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    out = capsys.readouterr().out
+    assert 'NOT ACCEPTED' in out
+    assert 'F212N' in out
+
+
+def test_the_floor_is_sized_only_from_the_STUCK_filters(tmp_path):
+    """A group that has too little history to judge is not stuck, so its
+    residual must not set the ceiling the whole field then runs under."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        group_verdicts, largest_measured_residual)
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+        'F444W': [{('1', 8, 'nrcb1'): (300.0, 0.0)}],        # 1 pass, unjudged
+    })
+    stuck, moving, unjudged, _ = group_verdicts(d)
+    assert ('F162M', 'o012') in stuck
+    assert not moving, 'one pass is not "still moving", it is unjudged'
+    assert ('F444W', 'o012') in unjudged, (
+        'a group with too little history must be reported as unjudged: the '
+        'floor is applied to the whole field, so accepting while it is unknown '
+        'waives a residual nothing has looked at')
+    worst, _, label = largest_measured_residual(d, only_groups=stuck)
+    assert worst == pytest.approx(5.2, abs=0.3), worst
+    assert 'F162M' in label
+    unrestricted, _, _ = largest_measured_residual(d)
+    assert unrestricted > 200, 'the guard is what keeps the 300 mas group out'
+
+
+def test_an_exposure_the_checkpoint_would_never_correct_does_not_size_the_floor(
+        tmp_path):
+    """A module-antisymmetric residual is filed `alias_suspect` and is never
+    corrected -- it is a detector-naming collision, not a misalignment.  Letting
+    it set the floor would waive real corrections up to its size."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    rec = _rec(SMALL)
+    rec['visits'][0]['exposures'].append(
+        {'key': ['1', 9, 'nrcb2'], 'dra': 900.0, 'ddec': 0.0, 'off': 900.0,
+         'alias_suspect': True})
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir()
+    (d / 'checkpoint_m2_F162M_o012_20260801T000000Z.json').write_text(
+        json.dumps(rec))
+    worst, key, _ = largest_measured_residual(str(d))
+    assert worst == pytest.approx(5.2, abs=0.3), (worst, key)
+
+
+def test_the_margin_is_the_tolerance_that_defined_the_fixed_point(tmp_path,
+                                                                  capsys):
+    """Consecutive passes may differ by up to --tol-mas and still count as
+    repeating, so the next pass can legitimately read that much larger.  A
+    margin below the tolerance leaves the field one ordinary wobble from
+    re-correcting at m2 and raising in the frozen stages."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    _cli(d, '--accept-below-mas', '15', '--tol-mas', '2.0')
+    floor = float([ln for ln in capsys.readouterr().out.splitlines()
+                   if ln.startswith('ASTROM_M2_CORRECTION_FLOOR_MAS=')
+                   ][-1].split('=')[1])
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    worst, _, _ = largest_measured_residual(d)
+    assert floor >= worst + 2.0, (floor, worst)
+
+
+def test_an_unjudged_group_blocks_acceptance(tmp_path, capsys):
+    """w51 today: three stuck groups reading zero beside an unjudged one whose
+    newest residual is 29 arcseconds.  The floor is applied to every filter in
+    the field, so accepting waives a residual nothing has looked at."""
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],   # stuck at ~5 mas
+        'F444W': [{('1', 8, 'nrcb1'): (29000.0, 0.0)}],      # 1 pass, unjudged
+    })
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    out = capsys.readouterr().out
+    assert 'NOT ACCEPTED' in out
+    assert 'F444W' in out
+
+
+def test_a_stuck_group_with_nothing_correctable_is_not_BOUNDED(tmp_path, capsys):
+    """"the largest residual is 0.00 mas" is the absence of a measurement, not a
+    small one -- and the floor derived from it (0.5 mas) is LOWER than the 4.0
+    the campaign runs at, so the next pass corrects everything and the loop
+    never converges."""
+    rec = _rec(SMALL)
+    for exp in rec['visits'][0]['exposures']:
+        exp['misaligned'] = False              # measured, and none actionable
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir()
+    for i in range(4):
+        (d / f'checkpoint_m2_F162M_o012_2026080{i}T000000Z.json').write_text(
+            json.dumps(rec))
+    assert _cli(str(d), '--accept-below-mas', '15') == 3
+    assert 'no correctable residual' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('bad', [float('inf'), float('nan'), 1e9, 100000.0])
+def test_a_ceiling_that_is_not_a_small_number_is_refused(tmp_path, bad):
+    """`inf`, `nan` and 1e9 all reached the acceptance branch, caught only by a
+    character class in the shell wrapper -- which let 100000 through."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    with pytest.raises(SystemExit) as exc:
+        _cli(d, '--accept-below-mas', str(bad))
+    assert exc.value.code == 2
+
+
+def test_the_floor_may_not_exceed_the_ceiling_it_was_accepted_under(tmp_path,
+                                                                    capsys):
+    """The tolerance margin can push the floor past the ceiling: a 14.6 mas
+    residual under a 15 mas ceiling needs a 15.1 mas floor, which waives more
+    than was agreed to."""
+    big = {('1', 1, 'nrca1'): (14.6, 0.0)}
+    big_again = {k: (v[0] + 0.03, v[1]) for k, v in big.items()}
+    d = _history(tmp_path, [big, big_again, big, big_again])
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    assert 'exceeds the 15.0 mas ceiling' in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# the scan is scoped; the floor is not  (PR #388 re-review, blocker 2)
+# ---------------------------------------------------------------------------
+
+def test_a_filter_the_scoped_scan_never_saw_refuses_acceptance(tmp_path):
+    """`--obs-token` and `--since` shrink the SCAN. They do not shrink the
+    correction floor, which is applied to every filter in the field.
+
+    Live: `--obs-token o012` on sgrc hid six groups the bare scan calls
+    unjudged, with residuals up to 4.99 mas; `--obs-token o002` on cloudc hid
+    three, up to 3.96 mas. Those filters were not stuck, not moving, not even
+    unjudged -- they were absent, and the acceptance never considered them.
+    """
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012') == 4
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                '--expect-filters', 'F162M F480M') == 3
+
+
+def test_the_refusal_names_the_filters_that_were_not_covered(tmp_path, capsys):
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M F480M F405N')
+    out = capsys.readouterr().out
+    assert 'F405N' in out and 'F480M' in out
+    assert 'F162M produced no' not in out, 'the covered filter must not be named'
+
+
+def test_expect_filters_is_case_insensitive(tmp_path):
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                '--expect-filters', 'f162m') == 4
+
+
+def test_expect_filters_does_nothing_when_acceptance_is_off(tmp_path):
+    """It is a guard on ACCEPTING, not a new way to fail a scan."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--obs-token', 'o012', '--expect-filters', 'F162M F480M') == 3
+
+
+# ---------------------------------------------------------------------------
+# what the coverage refusal PRINTS, and what the declaration does not cover
+# (PR #388 re-review: neither of the previous commit's code changes had a test)
+# ---------------------------------------------------------------------------
+
+def test_the_coverage_refusal_reports_the_measured_residual_first(tmp_path,
+                                                                  capsys):
+    """The refusal and the NOT-BOUNDED branch share a return code, so printing
+    the number before returning costs no safety -- and returning first threw
+    away the only thing that identifies the problem.  Live: gc2211/o023 printed
+    the coverage refusal and lost `9340.44 mas at ('1',4,'nrcb1','F200W',...)`.
+    """
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M F480M')
+    out = capsys.readouterr().out
+    assert 'largest measured residual in scope' in out, out
+    lines = out.splitlines()
+    resid = next(i for i, ln in enumerate(lines)
+                 if 'largest measured residual in scope' in ln)
+    refusal = next(i for i, ln in enumerate(lines) if ln.startswith('NOT ACCEPTED'))
+    assert resid < refusal, 'the residual must be readable above the refusal'
+
+
+def test_the_residual_line_says_it_excludes_the_unscanned_filters(tmp_path,
+                                                                  capsys):
+    """It measures the SCANNED scope, which by construction excludes exactly
+    the filters the refusal below it names.  Without the caveat a small number
+    sits directly above a refusal whose real subject may be far larger."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M F480M')
+    line = next(ln for ln in capsys.readouterr().out.splitlines()
+                if 'largest measured residual in scope' in ln)
+    assert 'NOT scanned' in line, line
+
+
+def test_a_filter_OUTSIDE_the_scan_and_undeclared_is_named(tmp_path, capsys):
+    """The dangerous under-declaration is a filter whose records lie outside the
+    SCAN -- untokened while a tokened sibling exists, or older than `--since` --
+    and which is not declared either.  It is in no group, so the moving and
+    unjudged refusals and `largest_measured_residual` are all blind to it, and
+    the correction floor still reaches it.
+
+    Live shape: F162M/o012 stuck beside an untokened F200W history carrying
+    8602 mas, accepted at rc=4 with F200W named nowhere.
+    """
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _history(tmp_path, [BIG, BIG_AGAIN], filt='F200W', token='')
+    rc = _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+              '--expect-filters', 'F162M')
+    out = capsys.readouterr().out
+    assert 'F200W' in out, out
+    assert 'did not declare' in out, out
+    assert rc == 4, 'reported, not refused -- a narrowed scope is legitimate'
+
+
+def test_the_undeclared_note_is_case_insensitive(tmp_path, capsys):
+    """It compared a raw record filter against an upper-cased declaration, so a
+    lowercase record with an uppercase declaration raised a spurious note."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='f162m', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M')
+    assert 'did not declare' not in capsys.readouterr().out
+
+
+def test_a_whitespace_only_declaration_is_an_error_not_a_silent_no_op(tmp_path):
+    """`--expect-filters ""` and `--expect-filters " "` used to split to `[]`
+    and turn the coverage gate off -- the exact regression the flag exists to
+    stop, spelled as an empty string."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    for empty in ('', '   ', '\t'):
+        with pytest.raises(SystemExit) as ex:
+            _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                 '--expect-filters', empty)
+        assert ex.value.code == 2
+
+
+def test_a_comma_separated_declaration_is_one_filter_name(tmp_path):
+    """The loop splits the SAME string with `read -r -a`, and the reduce it
+    submits reads `FILTERS="F115W,F162M"` as one filter (NF=1).  Splitting on
+    commas here would have the gate see two declared filters while the loop
+    submits a one-task reduce array -- two parsers, one string, different
+    answers.  So a comma-joined declaration refuses, loudly, rather than
+    quietly meaning something the rest of the run does not."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                '--expect-filters', 'F162M,F480M') == 3

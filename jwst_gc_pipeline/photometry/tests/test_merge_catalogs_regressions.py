@@ -706,12 +706,13 @@ def test_replace_saturated_without_dxdy_columns(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 def test_qualcuts_oksep_suffix_per_target():
     # targets with proposal 2221 keep the historical literal name that
-    # stage_release.py / make_all_cmds_m7.py glob
-    assert MC._qualcuts_oksep_suffix('brick') == '_qualcuts_oksep2221'
-    assert MC._qualcuts_oksep_suffix('cloudc') == '_qualcuts_oksep2221'
+    # targets that include 2221 keep the literal so their existing catalogs
+    # are not renamed (brick registers 1182+2221, cloudc 2221+2526)
+    assert MC._qualcuts_oksep_suffix('brick') == '_qualcuts_oksep2221'  # noqa: qualcuts-token
+    assert MC._qualcuts_oksep_suffix('cloudc') == '_qualcuts_oksep2221'  # noqa: qualcuts-token
     # other targets get their own proposal token(s), not a hardcoded "2221"
-    assert MC._qualcuts_oksep_suffix('sgrc') == '_qualcuts_oksep4147'
-    assert MC._qualcuts_oksep_suffix('ngc6334') == '_qualcuts_oksep6778-7213'
+    assert MC._qualcuts_oksep_suffix('sgrc') == '_qualcuts_oksep4147'  # noqa: qualcuts-token
+    assert MC._qualcuts_oksep_suffix('ngc6334') == '_qualcuts_oksep6778-7213'  # noqa: qualcuts-token
     # unknown target: fall back to the target name
     assert MC._qualcuts_oksep_suffix('nosuchtarget') == '_qualcuts_oksepnosuchtarget'
 

@@ -131,7 +131,11 @@ is re-measured against its visit consensus (2 mas tol) and the consensus is
 tied to VIRAC2/Gaia with multiple independent checks — a real misalignment
 CORRECTS the offsets table (with provenance), stale-tags the im0 mosaics
 (`*_im0_badastrom.fits`), and STOPS the run for regeneration; at m3–m6 the
-solution is FROZEN and any measured shift raises; at the m7 cross-band merge
+solution is FROZEN and any measured shift is RECORDED and blocks the RELEASE
+(`ASTROM_CHECKPOINT_ENFORCE=release`, the default -- set `=stage` to raise
+inside the stage instead; the release gate is
+`scripts/release/check_astrometry_checkpoints.py`, wired into
+`stage_release.py`); at the m7 cross-band merge
 every filter must agree with the VIRAC2-Ks-nearest anchor to <5 mas with no
 significant 2″ cell >15 mas.  Do not disable (`ASTROM_CHECKPOINT=0`) or
 override (`ALLOW_LATE_STAGE_ASTROM_SHIFT`, `ALLOW_CROSSFILTER_ASTROM_FAIL`)

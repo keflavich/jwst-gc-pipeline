@@ -35,11 +35,43 @@ path (data-qa already deploys its MAST monitor that way — see
 # faster mostly re-reads an unchanged tree, and anything slower makes the page
 # stale enough that people stop trusting it.
 #SCRON --account=astronomy-dept --qos=astronomy-dept-b --partition=hpg-default
-#SCRON --cpus-per-task=2 --mem=8gb --time=00:40:00
+#SCRON --cpus-per-task=2 --mem=8gb --time=00:50:00
 #SCRON --job-name=gc-monitor-refresh
 #SCRON --output=/orange/adamginsburg/jwst/logs/gc-monitor-%j.out
-0 * * * * /orange/adamginsburg/repos/jwst-gc-pipeline/scripts/monitoring/refresh_monitor.sh
+0 * * * * MONITOR_DEPLOY=1 REPO=<checkout> PATH=<python-env>/bin:$PATH bash <checkout>/scripts/monitoring/refresh_monitor.sh
 ```
+
+**`REPO` is not optional and its value is not obvious.** `refresh_monitor.sh`
+does `cd "$REPO"` and then `python -m jwst_gc_pipeline.monitoring`, and `-m`
+puts the working directory first on `sys.path` — so the checkout named by
+`REPO` is the code that runs, whatever `PIPE_ROOT` says. The installed job on
+2026-08-15 therefore names the checkout that carries this feature, not
+`/orange/adamginsburg/repos/jwst-gc-pipeline`, which is a separate clone that
+sits on `main` and does not update itself. Point `REPO` at whichever checkout
+you intend to serve from, and remember that nothing pulls it.
+
+Read the installed job rather than trusting this file:
+
+```bash
+scrontab -l
+```
+
+`MONITOR_DEPLOY=1` is on in that line because the two things it needs were
+**measured** on a compute node (`srun` onto an existing allocation, 2026-08-15):
+
+```
+c0712a-s1.ufhpc
+https stsci: 200
+ssh starformation: OK
+```
+
+Outbound HTTPS reaches STScI (which the schedule panel needs) and outbound ssh
+reaches the web host (which the deploy needs). Without the deploy the refresh
+rebuilds the page into `/orange` and **nothing on HiPerGator is web-served**, so
+the served copy at starformation.astro.ufl.edu stays at whatever the last manual
+deploy left -- which is exactly how it came to read *Generated 2026-08-05* on
+2026-08-15. The default stays 0 for anyone whose node cannot do this; check
+before turning it on, as the note in `refresh_monitor.sh` says.
 
 `scrontab` runs the line as a SLURM job, so it inherits the compute node's view
 of `/orange` and `/blue` and does not need a login shell.
@@ -180,3 +212,33 @@ stat -c '%i %n' /orange/adamginsburg/jwst/monitor/monitor.html \
 Two identical inode numbers means the published page is the generated page. The
 copy on the web host is a *copy*: it is only as fresh as the last
 `deploy_monitor.sh`, so the refresh cron should run that too.
+
+## The observing schedule panel
+
+The page also reads the **published STScI weekly observing schedule** and shows
+program 10678's scheduled visits (`jwst_gc_pipeline/monitoring/schedule.py`).
+This is what lets the monitor answer *when does the Treasury start* rather than
+only *what is on disk*.
+
+The plan moves. The 20260817 week originally carried 34 10678 visits
+(generation `20260814`); it was **reissued** on 2026-08-17 with 10678 replanned
+out, and the superseded generation is now a 404. The reissue-dedup keeps the
+newest generation per week, so the panel follows the plan rather than a
+snapshot of it -- and at the time of writing that means it reads "no visits for
+program 10678 in the weekly schedules read". That is the correct reading of the
+published schedule, not a fault in the read.
+
+```bash
+# default: program 10678, live fetch, cached under <outdir>/schedule/
+python -m jwst_gc_pipeline.monitoring --outdir ... --publish-dir ...
+
+python -m jwst_gc_pipeline.monitoring --schedule-program 2221   # another program
+python -m jwst_gc_pipeline.monitoring --schedule-offline        # cache only
+python -m jwst_gc_pipeline.monitoring --schedule-program ''     # no panel
+```
+
+Reports are cached under `<outdir>/schedule/` and the parsed result is written
+to `schedule.json` beside the page, so the panel survives a network failure and
+says on the page that it did. A schedule is a **plan** -- STScI's own note is
+that executed observations can differ from those scheduled -- so the panel never
+claims a visit happened; a past visit with no data on disk reads *not seen*.

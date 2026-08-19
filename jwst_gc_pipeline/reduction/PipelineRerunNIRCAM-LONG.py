@@ -29,6 +29,7 @@ import datetime
 # Before importing jwst: CRDS reads its cache path when jwst loads.  config.yaml
 # supplies the default; an exported CRDS_PATH wins.
 from jwst_gc_pipeline.config import apply_crds_environment
+from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_filename
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")
@@ -49,15 +50,25 @@ from jwst.tweakreg.utils import adjust_wcs
 from jwst.datamodels import ImageModel
 
 from jwst_gc_pipeline.reduction.destreak import destreak
+from jwst_gc_pipeline.reduction.mast_obs_scope import observation_scope_mask
 
 from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
 from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
 from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
+from jwst_gc_pipeline.reduction.stage12_selection import (member_in_stage12_pass,
+                                                          note_stage12_processed,
+                                                          stage12_skip_reason)
 
 import crds
 import jwst
 
 filter_regex = re.compile('f[0-9][0-9][0-9][nmw]')
+
+# Detector1 keeps the fitted ramp alongside the rate/cal products (the satstar
+# path reads it).  Ramp retention policy is #421's concern; the stage-1/2
+# resume check is told about this flag so it cannot look for a _ramp.fits that
+# the driver never writes.
+SAVE_CALIBRATED_RAMP = True
 
 import warnings
 from astropy.utils.exceptions import AstropyWarning, AstropyDeprecationWarning
@@ -378,8 +389,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     # 35773493, 2026-06-26).  Skip the network entirely when the files we need
     # are already on disk; otherwise set a hard TIMEOUT so a stalled MAST
     # connection fails fast instead of hanging the whole pipeline.
-    existing_asn = glob(os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
-    existing_uncal = glob(os.path.join(output_dir, f'jw0{proposal_id}{field}*_uncal.fits'))
+    existing_asn = glob(os.path.join(output_dir, f'{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
+    existing_uncal = glob(os.path.join(output_dir, f'{jw_prefix(proposal_id)}{field}*_uncal.fits'))
     mast_needed = (len(existing_asn) == 0) or (not skip_step1and2 and len(existing_uncal) == 0)
     if not mast_needed:
         print(f"Skipping MAST query for {filtername}: {len(existing_asn)} asn json(s) and "
@@ -396,6 +407,17 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # np.array wrapper needed as of 2026-04-10 to avoid masked array type error that shouldn't happen
         msk = ((np.char.find(np.array(obs_table['filters']), filtername.upper()) >= 0) |
                (np.char.find(np.array(obs_table['obs_id']), filtername.lower()) >= 0))
+        # Restrict to the observation under reduction (issue #416): all 139
+        # gc-treasury tiles share FILTERS='F212N;F480M', so the filter mask
+        # alone selects every released observation and each fresh tile would
+        # download the whole program's asn products.  The table is queried per
+        # PROPOSAL, so this narrows the two-field proposals as well (2221 =
+        # brick o001 + cloudc o002, 3958 = brick + sickle, 2045 = arches +
+        # quintuplet): a brick reduce stops pulling the other field's asn
+        # products into brick's output_dir.  The asn glob below is already
+        # -o{field}-scoped, so the narrowing removes download volume.
+        msk &= observation_scope_mask(np.array(obs_table['obs_id']),
+                                      proposal_id, field)
         data_products_by_obs = Observations.get_product_list(obs_table[msk])
         print("data prodcts by obs length: ", len(data_products_by_obs))
 
@@ -423,9 +445,14 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     if mast_needed and not skip_step1and2:
         products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
         print("products_fits length:", len(products_fits))
+        # TODO(#438): `field` is used RAW here while the obs mask above pads it
+        # through `observation_number`, so `--field 1` narrows the obs table to
+        # jw10678-o001 correctly and then this substring test looks for
+        # `jw106781` and keeps nothing.  #438 normalises --field once, at the
+        # driver's entry, for this site and the asn glob below.
         uncal_mask = np.array([
             uri.endswith('_uncal.fits')
-            and f'jw0{proposal_id}{field}' in uri
+            and f'{jw_prefix(proposal_id)}{field}' in uri
             and ('_nrc' in uri)
             for uri in products_fits['dataURI']
         ])
@@ -449,10 +476,15 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
 
     # all cases, except if you're just doing a merger?
+    #
+    # TODO(#438): the association glob below uses `field` RAW, while the obs
+    # mask above pads it through `observation_number`: `--field 1` downloads
+    # jw10678-o001's association and then globs `-o1*`, which matches nothing.
+    # #438 normalises --field once, at the driver's entry, for both sites.
     if module in ('nrca', 'nrcb', 'merged'):
         print(f"Working on module {module}: running initial pipeline setup steps (skip_step1and2={skip_step1and2})")
-        print(f"Searching for {os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json')}")
-        asn_file_search = glob(os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
+        print(f"Searching for {os.path.join(output_dir, f'{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json')}")
+        asn_file_search = glob(os.path.join(output_dir, f'{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
         # Filter out non-NIRCam asn files (e.g. NIRISS asns from same proposal/obs).
         # Members of NIRCam asns have 'nrc' in expname (nrca/nrcb/nrcalong/nrcblong); NIRISS members are '_nis_'.
         nircam_asn_files = []
@@ -551,14 +583,37 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                     print(f"Skipping non-NIRCam member {member['expname']}")
                     continue
                 # example filename: jw02221002001_02201_00002_nrcalong_cal.fits
-                assert f'jw0{proposal_id}{field}' in member['expname']
+                # This whole-asn provenance check runs on every member of
+                # every pass, above the per-module scoping below, so a foreign
+                # member from a mis-globbed asn is caught even on a field
+                # whose module policy narrows to a single module.
+                assert f'{jw_prefix(proposal_id)}{field}' in member['expname']
+                # #417: each module pass claims only its own members, with the
+                # same substring semantics as the per-module member trim in
+                # the tweakreg block below ('nrca' claims nrca1-4 + nrcalong).
+                # The merged pass keeps every NIRCam member so a merged-only
+                # or single-module run still produces every _cal it needs; on
+                # the default nrca,nrcb,merged sequence the in-process memo
+                # below skips the members the module passes already produced.
+                if not member_in_stage12_pass(member['expname'], module):
+                    print(f"Skipping member {member['expname']}: the {module} pass does not claim it")
+                    continue
+                uncal_fn = member['expname'].replace("_cal.fits", "_uncal.fits")
+                # #417: skip a member THIS process already ran stage 1+2 on in
+                # an earlier module pass (and, only under STAGE12_RESUME=1, one
+                # whose products on disk are newer than its uncal).  A fresh
+                # process with SKIP=0 still re-fits every ramp.
+                skip_stage12 = stage12_skip_reason(uncal_fn,
+                                                  require_ramp=SAVE_CALIBRATED_RAMP)
+                if skip_stage12:
+                    print(f"Skipping stage 1+2 for {member['expname']}: {skip_stage12}")
+                    continue
                 print(f"DETECTOR PIPELINE on {member['expname']}")
                 print("Detector1Pipeline step")
                 # from Hosek: expand_large_events -> false; turn off "snowball" detection
-                Detector1Pipeline.call(member['expname'].replace("_cal.fits",
-                                                                 "_uncal.fits"),
+                Detector1Pipeline.call(uncal_fn,
                                        save_results=True, output_dir=output_dir,
-                                       save_calibrated_ramp=True,
+                                       save_calibrated_ramp=SAVE_CALIBRATED_RAMP,
                                        steps={'ramp_fit': {'suppress_one_group':False, 'save_results':True},
                                               "refpix": {"use_side_ref_pixels": True},
                                               "jump":{"save_results":True}})
@@ -575,6 +630,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                                                               "_rate.fits"),
                                     save_results=True, output_dir=output_dir,
                                    )
+                # #417: a later module pass in this same interpreter must not
+                # redo the member we just calibrated.
+                note_stage12_processed(uncal_fn)
         else:
             print("Skipped step 1 and step2")
 
@@ -597,7 +655,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
         with open(asn_file) as f_obj:
             asn_data = json.load(f_obj)
-        asn_data['products'][0]['name'] = f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}'
+        asn_data['products'][0]['name'] = f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}'
         asn_data['products'][0]['members'] = [row for row in asn_data['products'][0]['members']
                                                 if f'{module}' in row['expname']]
 
@@ -768,10 +826,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
         # CRF NAMING FIX (port of PipelineMIRI 2026-06-20): outlier_detection in
         # Image3 names the CR-flagged crfs after the asn PRODUCT
-        #   jw0{prop}-o{field}_t001_nircam_clear-{filt}-{module}_<N>_o{field}_crf.fits
+        #   jw{prop:05d}-o{field}_t001_nircam_clear-{filt}-{module}_<N>_o{field}_crf.fits
         # but the manual cataloging globs PER-EXPOSURE crf with the destreak/align
         # suffix
-        #   jw0{prop}{field}{visit}_..._{module}_{align|destreak}_o{field}_crf.fits .
+        #   jw{prop:05d}{field}{visit}_..._{module}_{align|destreak}_o{field}_crf.fits .
         # Those never matched, so a corrected re-reduction's crf (e.g. the skymatch
         # background fix) silently never reached cataloging -- the per-exposure
         # *_{align|destreak}_o{field}_crf.fits stayed at the OLD reduction's mtime.
@@ -894,9 +952,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # saturated star "removal" should only be done in the cataloging stage
         # print(f"Removing saturated stars.  cwd={os.getcwd()}")
         # try:
-        #     remove_saturated_stars(f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits')
+        #     remove_saturated_stars(f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits')
         #     if did_vvv_realign:
-        #         remove_saturated_stars(f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits')
+        #         remove_saturated_stars(f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits')
         # except (TimeoutError, requests.exceptions.ReadTimeout) as ex:
         #     print("Failed to run remove_saturated_stars with failure {ex}")
 
@@ -910,8 +968,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
         #try:
         #    # this is probably wrong / has wrong path names.
-        #    remove_saturated_stars(f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}-reproject_i2d.fits')
-        #    remove_saturated_stars(f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_realigned-to-vvv.fits')
+        #    remove_saturated_stars(f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}-reproject_i2d.fits')
+        #    remove_saturated_stars(f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_realigned-to-vvv.fits')
         #except (TimeoutError, requests.exceptions.ReadTimeout) as ex:
         #    print("Failed to run remove_saturated_stars with failure {ex}")
 
@@ -946,7 +1004,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
                 fix_alignment(member['expname'], proposal_id=proposal_id, module=module, field=field, basepath=basepath, filtername=filtername, use_average=use_average)
 
-        asn_data['products'][0]['name'] = f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-merged'
+        asn_data['products'][0]['name'] = f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-merged'
         asn_file_merged = asn_file.replace("_asn.json", f"_merged_asn.json")
         with open(asn_file_merged, 'w') as fh:
             json.dump(asn_data, fh)
@@ -1011,8 +1069,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # removing saturated stars should only be done in cataloging stage
         # print(f"Removing saturated stars.  cwd={os.getcwd()}")
         # try:
-        #     remove_saturated_stars(f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-merged_i2d.fits')
-        #     remove_saturated_stars(f'jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits')
+        #     remove_saturated_stars(f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-merged_i2d.fits')
+        #     remove_saturated_stars(f'{jw_prefix(proposal_id)}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits')
         # except (TimeoutError, requests.exceptions.ReadTimeout) as ex:
         #     print("Failed to run remove_saturated_stars with failure {ex}")
 
@@ -1056,7 +1114,10 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
 
     mod = ImageModel(fn)
     if proposal_id is None:
-        proposal_id = os.path.basename(fn)[3:7]
+        # The first five digits after ``jw`` are the proposal for BOTH the
+        # zero-padded 4-digit products on disk and 5-digit ones; the [3:7]
+        # slice this replaces read '0678' off a jw10678 product (issue #414).
+        proposal_id = proposal_id_from_filename(fn)
     if filtername is None:
         try:
             filtername = filter_regex.search(fn).group()

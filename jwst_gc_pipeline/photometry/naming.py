@@ -168,6 +168,131 @@ def vetted_to_i2dseed(vetted_path):
     return vetted_path.replace('_vetted.fits', '_i2dseed.fits')
 
 
+# --- observation scoping ---------------------------------------------------
+# Which proposals put more than one observation under ONE basepath with
+# RESTARTED (visit, vgroup, exposure) numbering, so per-frame catalog names
+# need the ``_o{field}`` disambiguator ``crowdsource_catalogs_long.obs_token``
+# inserts.  2211 = gc2211 (5 GC pointings); 10678 = the GC Treasury program
+# (139 tiles sharing the gc-treasury tree; issue #416).  Lives here (a
+# heavy-import-free module) so merge_catalogs.py can consult it without a
+# circular import of crowdsource_catalogs_long.
+MULTIOBS_PROPOSALS = ('2211', '10678')
+
+#: The subset whose MERGED catalogs are per-observation too.  gc2211 is multi-
+#: obs at the per-frame level but pools all five pointings into one untokened
+#: merged catalog by design; at 139 tiles that pooling is itself the corruption
+#: mode, so 10678 scopes the merged catalogs to one observation as well.
+PER_OBS_MERGED_PROPOSALS = ('10678',)
+
+#: What a ``field`` may look like inside an observation token: an observation
+#: number, or several joined by ``-`` for a joint registration ('002-998').
+_OBSERVATION_FIELD_RE = re.compile(r'\d+(?:-\d+)*')
+
+
+class ObservationFieldError(ValueError):
+    """``field`` does not name an observation, so no token can be built."""
+
+
+def observation_field_token(field):
+    """``field`` normalised to the three-digit spelling used in filenames.
+
+    ``'1'``, ``'01'`` and ``'001'`` all name observation 001, and MAST, the
+    reduction products and ``naming.OBS_TOKEN_PATTERN`` (``o\\d{3}``) all spell
+    it ``001``.  An unpadded ``--field`` wrote ``_o1`` -- a name every reader of
+    the token skips.  Joint registrations ('002-998') normalise part by part.
+
+    A field that does not name an observation raises.  ``fields.py`` registers
+    a program whose observation numbers land as the campaign executes with the
+    wildcard obsid ``'*'``, and ``default_field_token`` hands that wildcard back
+    when ``--field`` is omitted; ``f'_o{field}'`` then put a literal ``*``
+    inside every catalog name the run wrote, where every ``_o*`` glob in the
+    tree matches it.  A run that cannot name its observation stops here.
+    """
+    text = str(field).strip()
+    if not _OBSERVATION_FIELD_RE.fullmatch(text):
+        raise ObservationFieldError(
+            f'field={field!r} does not name an observation, so the observation '
+            f'token this run stamps into its catalog names cannot be built.  A '
+            f"wildcard ('*') arrives when the field is registered obsids: "
+            f"{{'nircam': '*'}} and --field was omitted; pass --field <NNN> "
+            f'naming the observation under reduction.')
+    return '-'.join(f'{int(part):03d}' for part in text.split('-'))
+
+
+def merge_field_for_proposal(proposal_id, field):
+    """The ``field`` to hand ``merge_individual_frames``, or ``None``.
+
+    Per-obs-merged proposals scope the merge to one observation (glob and
+    output both carry ``_o{field}``); every other proposal passes ``None``, so
+    gc2211's all-obs pooling (``_o*`` glob, untokened output) and the
+    single-obs targets' untokened names are unchanged.
+
+    A field-less call on a per-obs-merged proposal raises HERE, at the point
+    the observation is decided.  ``merge_individual_frames`` refuses such a
+    call too, but that refusal arrives inside the cutout run's
+    print-and-continue handler, where it becomes one printed line and a cutout
+    tree with no merged catalog.  Raising at the decision keeps the two callers
+    that resolve the field before entering a handler (``observation_merge``)
+    loud.
+    """
+    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS and field in (None, ''):
+        raise ObservationFieldError(
+            f'proposal {proposal_id} merges per observation, and this run has '
+            f'no field to name one, so the merge would pool tiles or write a '
+            f'name no reader spells.  Pass --field <NNN>.')
+    return field if merged_catalog_obs_token(proposal_id, field) else None
+
+
+def vetted_obs_tokens(proposal_id, field, filtername=None, module=None):
+    """``(vetted_token, combined_token)`` for the END of a catalog name.
+
+    The vetted catalog is per-observation where one basepath holds several
+    observations of a filter: MIRI multi-obs targets (cloudef obs 002+005) vet
+    each observation against its own ``data_i2d``, and gc2211's five NIRCam
+    pointings share one tree and reuse ``(visit, vgroup, exp)`` tuples, so a
+    single vetting pass would carry sources outside each pointing's footprint.
+    gc2211's COMBINED (post-vet) catalog is per-observation as well; MIRI's
+    stays all-obs.  Single-obs NIRCam targets get ``('', '')``.
+
+    Per-obs-MERGED proposals (10678) get ``('', '')`` too: their merged name
+    already carries ``_o{field}`` after the module, the vetted and combined
+    names inherit that token, and an end-slot token would double it -- the m7
+    seed reader and ``merge_daophot``'s input glob spell the module-slot form.
+    """
+    if field in (None, ''):
+        return '', ''
+    if merged_catalog_obs_token(proposal_id, field):
+        return '', ''
+    token = f'_o{observation_field_token(field)}'
+    multiobs = str(proposal_id) in MULTIOBS_PROPOSALS
+    miri = (str(module).lower() == 'mirimage'
+            or _instrument_from_filter(filtername) == 'MIRI')
+    return (token if (miri or multiobs) else ''), (token if multiobs else '')
+
+
+def merged_catalog_obs_token(proposal_id, field):
+    """Observation token baked into the MERGED catalog names, post-module slot.
+
+    Only ``PER_OBS_MERGED_PROPOSALS`` get one: 10678's 139 tiles share the
+    gc-treasury tree, and pooling another tile's frames into a merge is the
+    corruption class the obs scoping exists to prevent, so every per-filter
+    merged catalog is scoped to one observation
+    (``{filt}_{module}_o{field}_indivexp_merged...``).  gc2211 keeps its
+    all-obs UNTOKENED merged names ('' here): its five pointings are pooled at
+    merge by design (the ``_o*`` glob in ``merge_individual_frames``) and
+    scoped afterwards at the vetting step (``_vtok`` in cataloging.py).
+    Writers (``merge_individual_frames``' ``out_obs_``) and every reader of a
+    merged-catalog name (``cataloging.merged_catalog_path``, the m7 seed
+    reader, ``merge_daophot``'s input glob) must agree on this token.
+
+    ``field`` goes through ``observation_field_token``, which normalises the
+    spelling and refuses a field that does not name an observation.
+    """
+    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS and field not in (None, ''):
+        return f'_o{observation_field_token(field)}'
+    return ''
+
+
 # --- reading a per-frame catalog name back --------------------------------
 # Every reader that parses `{band}_{detector}_visit{NNN}_vgroup...` out of a
 # per-frame catalog name has to allow for the per-observation token `obs_token`

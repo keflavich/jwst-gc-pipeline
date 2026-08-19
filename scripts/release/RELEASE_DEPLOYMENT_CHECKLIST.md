@@ -204,8 +204,58 @@ a plain dry run (no `--stage` needed).
   (`best_dao_basic()` — the catalog-selection helper in **brick-jwst-2221**, absent from this repo — can
   return a stale LOCKED file that is ~1.9″/21″ off).
 
+### The `oksep` quality-cut table carries the field's own proposal number
+
+`oksep` is a hand-written label from program **2221**: a source's detections in
+different exposures sit close enough together to call it one real star.  The
+filtered table it names is written per field, and its suffix carries that
+field's own registered proposal(s) --
+`merge_catalogs._qualcuts_oksep_suffix()` builds `_qualcuts_oksep1905` for wd1 <!-- noqa: qualcuts-token -->
+and `_qualcuts_oksep6151` for w51.  Fields that include program 2221 (brick, <!-- noqa: qualcuts-token -->
+cloudc) keep the bare `2221` token so their existing catalogs are not renamed.
+
+Two consequences for a release:
+
+- Never match one program's token literally.  `stage_release.py` matches
+  `QUALCUTS_RE`, and its catalog loops `continue` on a non-match, so a literal
+  drops another field's quality-filtered table from the release **silently**.
+  A grep-guard test (`jwst_gc_pipeline/tests/test_no_hardcoded_qualcuts_token.py`)
+  fails CI on a new literal.
+- 11 fields with no connection to program 2221 (arches, cloudef, gc2211,
+  quintuplet, sgra, sgrb2, sgrc, sickle, w51, ...) still hold
+  `_qualcuts_oksep2221` catalogs written before the suffix was per-field.  They <!-- noqa: qualcuts-token -->
+  are mislabelled, not corrupt.  Check which token a field's staged table
+  carries before quoting the program in release notes.
+
 ## 5. Versioning & provenance
 - MANIFEST per-file version bumped; webpage version column updated.
+- `exposures/` (the detector frames behind each mosaic; on by default,
+  `--no-exposures` to omit) is **symlinks, never copies, even under `--copy`**,
+  and is deliberately absent from `CHECKSUMS.sha256` — a re-reduction rewrites
+  those frames' headers in place, so a frozen hash of one is a claim the
+  release cannot keep. `MANIFEST.json` records this as `exposure_mode`. Two
+  consequences to check:
+  - A dangling link under `exposures/` means the pipeline moved a frame; a
+    dangling link under `images/` is a real defect, because that tree must be
+    `--copy`. Audit both with
+    `find <field> -type l ! -exec test -e {} \; -print`.
+  - `EXPOSURE PROVENANCE:` lines at staging name mosaics whose input list
+    could not be established, so their frames are not offered. The list is read
+    from the mosaic's own `HDRTAB.FILENAME` — `resample` writes one row per
+    input, which is the drizzle's own record of what it consumed; the
+    `ASNTABLE` association is a fallback for a mosaic with no `HDRTAB`.
+    (Inferring the inputs from the association plus a `_crf` twin was wrong for
+    25 of 170 staged mosaics, because the pipeline REPLACES the `_cal` suffix
+    where that construction appended to it.) The mosaic still ships — the line
+    exists so a field quietly offering frames for 9 of its 10 bands is visible
+    at staging time rather than from the page.
+  - `link mode symlink` in `MANIFEST.json` or at staging means the field's data
+    are on a different filesystem from the release root, where a hardlink is
+    impossible (brick and cloudc: `/blue` vs `/orange`). Those frames are
+    Globus-transfer-only — the HTTPS data plane will not serve a symlink
+    pointing out of the release tree — and the page and README say so. Audit a
+    staged field with `stage_release.py --check-exposures --field <field>`,
+    which also reports frames whose source has been rewritten since staging.
 
 ## 6. Publishing the site (do not hand-write the rsync)
 - Deploy with `scripts/release/deploy_site.sh` (`--dry-run` first). The docroot

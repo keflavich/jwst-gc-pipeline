@@ -281,6 +281,24 @@ def test_gc2211_is_tied():
         assert cfg.reference_frame == ac.VIRAC2
 
 
+def test_the_treasury_is_tied_before_its_first_delivery():
+    """Program 10678 (gc-treasury, #413) is registered ahead of its first
+    delivery: without an entry the first delivery would reduce at the raw
+    assign_wcs frame while m2's corrections landed in
+    offsets/Offsets_JWST_Brick10678_consensus.csv, which nothing would read --
+    the 1939/sgra failure class.  Proposal-wide, because all 139 of its
+    observations are one field."""
+    for field in ('001', '037', '139'):
+        cfg = ac.resolve('10678', field)
+        assert cfg is not None, f"gc-treasury o{field} has no alignment source"
+        assert cfg.source == ac.TABLE_CONSENSUS
+        assert cfg.reference_frame == ac.VIRAC2
+        assert cfg.reference_filter == 'F212N'
+    assert ac.offsets_channel('10678', '001') == ac.CHANNEL_CONSENSUS
+    assert ac.offsets_table_path('/b', '10678', '001') == (
+        '/b/offsets/Offsets_JWST_Brick10678_consensus.csv')
+
+
 def test_corrections_now_reach_the_frames(tmp_path):
     """The shape of the arches failure end to end: a correction sitting in the
     consensus table must now produce a non-zero shift on the frame."""

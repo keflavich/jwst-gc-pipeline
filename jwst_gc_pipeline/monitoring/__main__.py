@@ -11,7 +11,7 @@ import json
 import os
 import sys
 
-from . import probe as _probe, report as _report
+from . import probe as _probe, report as _report, schedule as _schedule
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(
     os.path.join(__file__, '..'))))
@@ -37,6 +37,15 @@ def build_parser():
     parser.add_argument('--no-per-field', action='store_true',
                         help='write only the aggregate page')
     parser.add_argument('--log-dir', default=None)
+    # ON by default, with the Treasury as the program: the question the monitor
+    # could not answer for months was "when does 10678 start", and a panel you
+    # have to remember to switch on does not answer it either.
+    parser.add_argument('--schedule-program', default=_schedule.DEFAULT_PROGRAM,
+                        help='JWST program whose scheduled visits to show '
+                             '(default %(default)s); empty string disables')
+    parser.add_argument('--schedule-offline', action='store_true',
+                        help='use only the cached schedule reports, fetch '
+                             'nothing')
     parser.add_argument('--json', dest='json_path', default=None,
                         help='also write the scan+verdicts as JSON')
     parser.add_argument('--publish-dir', default=None,
@@ -89,7 +98,9 @@ def cmd_report(args):
     out = _report.write_report(
         outdir=args.outdir, targets=args.target, instrument=args.instrument,
         cutout_label=args.cutout_label, show_skip=args.show_skip,
-        per_field=not args.no_per_field, log_dir=args.log_dir)
+        per_field=not args.no_per_field, log_dir=args.log_dir,
+        schedule_program=args.schedule_program or None,
+        schedule_offline=args.schedule_offline)
     print(_report.summarize(out['entries']))
     print(f"\naggregate : {out['aggregate']}")
     print(f"fragment  : {out['fragment']}")

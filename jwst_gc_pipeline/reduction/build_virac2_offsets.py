@@ -58,6 +58,7 @@ import warnings
 warnings.filterwarnings('ignore')
 # GENERATION LOCK: recompute RA/Dec from stable detector x/y through the live crf WCS.
 from ..astrometry_utils import _resolve_existing_path
+from ..mast_names import jw_prefix
 # Sanctioned density-immune, window-swept, guarded bulk-offset estimator (replaces the
 # bespoke coarse_xcorr this module used to reimplement -- see brick-jwst-2221 PR #39 review).
 from ..photometry.astrometry_offsets import measure_offset
@@ -194,7 +195,7 @@ def coarse_from_i2d(filt, rc, ref, n_modules=2):
     """
     sub = rc['filts'][filt][0]
     stem = (f"{rc['basepath']}/{sub}/pipeline/"
-            f"jw0{rc['proposal']}-o{rc['field']}_t001_nircam_clear-{filt}")
+            f"{jw_prefix(rc['proposal'])}-o{rc['field']}_t001_nircam_clear-{filt}")
     candidates = mosaic_candidates(stem, n_modules=n_modules)
     if not candidates:
         print(f"  [coarse] no i2d for {filt}: nothing matches {stem}-*_i2d.fits")
@@ -752,7 +753,7 @@ def _gather(filt, base, sub, mtag, dets, prop=None, field=None, otag=''):
     """
     from collections import defaultdict
     byve = defaultdict(lambda: [[], []]); byv = defaultdict(list); coarse = defaultdict(lambda: [[], []])
-    expect = f'jw0{prop}{field}' if (prop is not None and field is not None) else None
+    expect = f'{jw_prefix(prop)}{field}' if (prop is not None and field is not None) else None
     wrong_obs = {}
     seen = {}
     unstamped = []
@@ -770,7 +771,7 @@ def _gather(filt, base, sub, mtag, dets, prop=None, field=None, otag=''):
                 # legacy catalog with no FILENAME meta: the observation cannot be
                 # verified.  Fall back to the region's own token, but SAY SO --
                 # this is the case the refusal above cannot police.
-                vis = f'jw0{prop}{field}{vis3}' if expect else vis3
+                vis = f'{jw_prefix(prop)}{field}{vis3}' if expect else vis3
                 unstamped.append(b)
             else:
                 vis = os.path.basename(crf).split('_')[0]
@@ -1007,7 +1008,9 @@ if __name__ == '__main__':
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # FIELD-SAFE merge: replace only rows for the SAME (Filter, proposal+field Visit prefix);
     # preserve every other filter AND every other field that shares this per-proposal table.
-    new_visit_prefixes = set(str(v)[:11] for v in t['Visit'])   # jw0<prop><field>
+    # 11 chars = 'jw' + proposal(5, MAST zero-pads) + observation(3) + 1, i.e.
+    # the visit-token prefix through the observation number.
+    new_visit_prefixes = set(str(v)[:11] for v in t['Visit'])
     new_filts = set(str(x) for x in t['Filter'])
     if os.path.exists(path):
         old = Table.read(path)

@@ -10,6 +10,8 @@ from astropy import units as u
 from astropy import log
 from astropy.coordinates import SkyCoord
 from grid_strategy import strategies
+
+from jwst_gc_pipeline.mast_names import jw_prefix
 from astropy.table import Table
 from astropy import wcs
 from astropy.wcs import WCS
@@ -1033,8 +1035,18 @@ def ccds_withiso(basetable, sel=True,
 def xmatch_plot(basetable, ref_filter='f405n', filternames=filternames,
                 maxsep=0.13*u.arcsec, obsid='001', sel=None, axlims=[-0.5, 0.5, -0.5, 0.5],
                 alpha=0.01,
-                regs=['brick_nrca.reg', 'brick_nrcb.reg']):
+                regs=['brick_nrca.reg', 'brick_nrcb.reg'],
+                proposal_id='2221', basepath=None):
+    """Cross-filter separation plots against the reference filter's mosaic.
+
+    ``proposal_id`` and ``basepath`` default to the Brick, matching the module
+    default and the ``regs`` above; the reference mosaic name is built through
+    ``jw_prefix`` rather than a literal ``jw02221``, so pointing this at
+    another field's tree needs no edit here.
+    """
     statsd = {}
+    if basepath is None:
+        basepath = globals()['basepath']
     fig1 = pl.figure(1)
     fig2 = pl.figure(2)
 
@@ -1044,7 +1056,10 @@ def xmatch_plot(basetable, ref_filter='f405n', filternames=filternames,
 
     basecrds = basetable[f'skycoord_{ref_filter}']
 
-    refhdr = fits.getheader(f'{basepath}/{ref_filter.upper()}/pipeline/jw02221-o{obsid}_t001_nircam_clear-{ref_filter}-merged_i2d.fits', ext=('SCI', 1))
+    refname = (f'{jw_prefix(proposal_id)}-o{obsid}_t001_nircam_clear'
+               f'-{ref_filter}-merged_i2d.fits')
+    refhdr = fits.getheader(f'{basepath}/{ref_filter.upper()}/pipeline/{refname}',
+                            ext=('SCI', 1))
     refwcs = WCS(refhdr)
 
     gridspec = sqgrid.get_grid(len(filternames)-1)

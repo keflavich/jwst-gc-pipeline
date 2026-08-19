@@ -61,11 +61,57 @@ the m4–m8 chain over a defect m2 had already handled.  The exposure's own data
 quality is the thing to investigate; a frozen-solution regression is not what
 happened.
 
+## WHERE a frozen-stage failure stops the pipeline
+
+`ASTROM_CHECKPOINT_ENFORCE` — `release` (default) or `stage`.
+
+At `release`, a failure at m3–m6 or at the m7 cross-filter check is **measured,
+recorded with `passed: false`, and printed**, and the chain continues. The field
+is then refused by
+
+```bash
+python scripts/release/check_astrometry_checkpoints.py --field <f>
+```
+
+which `stage_release.py` runs before staging. At `stage`, the failure raises
+inside the stage that measured it, which is what it did before.
+
+**Why the default moved.** m3 and later cannot change the astrometry — the
+solution is frozen, which is what makes a shift there a defect — so the check is
+a *measurement* wired up as a *control*. Raising inside the stage bought one
+thing, not spending compute on a run that would be refused, and cost three:
+
+* the chain is `afterok`, so one filter's raise discarded every other filter's
+  finished stages. cloudef 002 spent ten re-tie iterations reaching m2 and lost
+  all of it at m3 (2026-08-18);
+* the products an investigator needs were never made, so every diagnosis began
+  by re-running the chain to get them back;
+* every frozen-stage failure diagnosed so far has been a *comparison artefact*
+  rather than movement — the one-sided star restriction (#285), the
+  full-set-vs-shared baseline (#430: sickle F335M read 2.23 mas of "movement"
+  and 0.637 on the stars both stages carry), the refused-m2-tie inversion (w51
+  F140M), the absolute-vs-delta per-exposure gate (brick F115W).
+
+**Nothing is waived.** The stop moved; it did not disappear. The gate fails
+closed on a record it cannot read (rc 2) and on a field with no records at all
+(rc 3) — a field that never ran the checkpoint is unverified, not verified.
+`ALLOW_LATE_STAGE_ASTROM_SHIFT` and `ALLOW_CROSSFILTER_ASTROM_FAIL` still work
+as before and are still the only way to make a failure non-blocking.
+
+**m2 is untouched.** It is the one stage where the astrometry can still change:
+its response to a measured offset is to correct the offsets table, stale-tag the
+mosaics, and have its caller stop the run for regeneration. That is a control
+action no later gate can perform, so the deferral does not apply to it.
+
+A typo in the variable enforces at the **stage** — anything that is not exactly
+`release` is read as `stage`, so a misspelling costs a stopped chain rather than
+a shipped misalignment.
+
 The **consensus→reference** tie is gated the same way, with the same distinction:
 
 | m2 state | frozen-stage verdict |
 |---|---|
-| tie applied (`apply_ok: true`) | delta vs the reported bulk; > tol ⇒ `AstrometryRegressionError` |
+| tie applied (`apply_ok: true`) | delta vs the reported bulk; > tol ⇒ **re-measured on the stars the two consensi share** (below), and only a delta that survives that raises `AstrometryRegressionError` |
 | tie measured but **refused** (`apply_ok: false` — no coherent dense peak, gross sparse-Gaia split, failed per-tile / same-star gate), and the later stage lands **within** tol of it | **STABLE**. A refused tie is still a *measurement*: two readings of the same quantity agreeing is evidence the solution did not move. `apply_ok: false` says the *absolute* tie is uncertified, not that the consensus was free to move — so the pass is kept and the message notes the tie remains uncertified. (sgra F212N: m2 refused 48.49 mas, m3 reads 48.09 — a 0.41 mas delta) |
 | tie measured but **refused**, and the later stage lands **beyond** tol | **UNVERIFIED**. It moved, but away from something that was never applied, so this is not a frozen-solution regression. The delta and m2's value are both named in the message; the field's *absolute* tie is the thing to investigate |
 | no m2 record at all | `AstrometryRegressionError` — fail closed |
@@ -79,6 +125,73 @@ window-limited histogram peak), refused to apply it, and recorded it in
 blocked because the measurement got *better*.  Note the failure only fires in
 that direction: w51 F162M and F182M, whose m3 ties were *also* refused, passed,
 because a refused m3 tie never reaches the baseline comparison at all.
+
+### The comparison is made on the stars both stages have
+
+A delta over tolerance is **not** reported as movement until both ties have been
+re-measured over the stars the two consensi share.  Issue #285 restricted the
+later stage's consensus to m2's star *list*, but the number it is differenced
+against was measured over m2's *full* set — so the stars a later stage cannot
+re-detect drag the baseline and nothing else.  From the live sickle records
+(2026-08-16), F335M m2 vs m5:
+
+```
+m2 over its full 2964 stars    (-0.013, +0.014) mas
+m5 over its      2644 stars    (+0.457, +2.194) mas    raw delta 2.230
+both over the shared 2642      (-0.013, +1.764) mas -> delta 0.637  PASS
+```
+
+Those are the numbers the on-disk records carry, measured before the *stage*
+side was restricted as well. With both sides restricted the same two cases read
+0.651 and 2.536 — same verdicts, slightly larger numbers, because the stage side
+now drops the one or two stars m2 does not carry.
+
+`STAGE_STABILITY_TOL_MAS` is unchanged at 2.0; what changes is which two
+numbers it is applied to.  The re-measure runs **only** when the raw comparison
+is over tolerance, so a passing stage never pays for it.
+
+It is not a way to get a pass.  It **refuses**, leaving the raw comparison to
+raise, when
+
+* m2's pooled consensus catalog is missing or unreadable;
+* either consensus holds fewer than `SURVIVOR_MIN_STARS` (50);
+* the m2 consensus catalog pools more than one visit — its positions are
+  visit-averaged while the stage measures one visit, and on brick F115W that
+  substitution alone is 1.7–1.9 mas against a 2.0 mas budget;
+* the shared set is below `max(50, SURVIVOR_MIN_FRACTION × max(n_m2, n_stage))`
+  — two 90,000-star catalogs sharing 0.07% of their stars clear any absolute
+  floor while saying nothing about each other;
+* either re-measure returns a non-finite tie, sets `apply_ok: false`, or had to
+  **sweep** its window — a measurement the estimator declined to sign cannot
+  overturn a blocking failure;
+* the two re-measures used different estimators (`bulk_source` `same-star` vs
+  `histogram`), whose difference against a dense reference is several mas of
+  method rather than a shift.
+
+Matching is mutual (`_mutual_match_mask`) at `SURVIVOR_MATCH_TOL_MAS` = 150 mas,
+mirroring `build_visit_consensus(restrict_radius=0.15")`, which is what produced
+the stage consensus in the first place.
+
+The record grows `visits[].symmetric_baseline`: both ties on the shared stars,
+`delta_mas`, `raw_delta_mas`, the three counts, the floor, `bulk_source`, the
+refusal `reason`, and `mag_split` — the median magnitude of the kept and dropped
+stars. The intersection is a **biased sample** and the direction is not fixed:
+sickle's F335M drop-outs are ~1.1 mag fainter than its survivors, its F187N
+drop-outs ~1.9 mag brighter (1.86 as `mag_split` records it). It characterises
+the **m2 side only**, so the stars the later stage carries and m2 does not are
+not described. Displacement confined to the stars a later stage
+drops is not visible to this comparison; that is a real reduction in coverage,
+and `mag_split` is what makes the skew visible to whoever reads the pass.
+
+Absent `symmetric_baseline` means the re-measure never ran — the raw comparison
+passed, or the stage is a correcting one, or there is no reference catalog, or
+the offset is under `REFERENCE_APPLY_MIN_MAS`, or m2 refused its own tie.
+
+The check removes a *baseline artefact*; it does not soften the gate. sickle
+F187N m3 fails either way — 2.342 mas raw, 2.536 mas on the shared stars at
+this head —
+because there the drop-outs are brighter than the survivors and carry no
+artefact to remove.
 
 Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting
@@ -374,6 +487,32 @@ the same table rows.
 | `CATALOG_ALLOW_UNVETTED_FALLBACK=1` | allow the unvetted-catalog fallback |
 | `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit guard raise instead of warn (`reduction/validate_offsets_table.py`) |
 | `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
+| `ASTROM_M2_CORRECTION_FLOOR_MAS=<f>` | at m2, MEASURE and RECORD every residual as usual but only ACT on those at or above this magnitude (default 0 = act on all). See below. |
+| `ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1` | let a checkpoint that measured a shift and then refused to apply it count as a pass |
+
+### The m2 correction floor, and what it may not suppress
+
+`ASTROM_M2_CORRECTION_FLOOR_MAS` exists for ONE class of residual: a
+per-detector distortion term (instrument aperture model, velocity aberration)
+that the module-locked offsets table has no way to express. Applying its
+detector mean is what the previous cycle already did, so the re-tie loop never
+converges. That argument is about the SHAPE of the residual, not its size.
+
+Two consequences follow, and both are enforced in code:
+
+- **The consensus-to-reference tie is never floored.** It is one rigid shift of
+  a whole visit onto the reference catalog, which the table expresses exactly,
+  so the floor's rationale does not reach it. Flooring it would let an absolute
+  frame error up to the floor through with nothing downstream to catch it: a
+  common-mode shift moves every band equally, so the m7 cross-band gate sees
+  agreement, and the ~100 mas gross gate is two orders of magnitude away.
+  (`cataloging._is_whole_consensus_shift`.)
+- **The value in force is written into the record**, as
+  `tolerances.correction_floor_mas`. Without it, a pass that passed only
+  because the floor had been raised is indistinguishable from a clean one, and
+  the only trace is a line in a SLURM log. `run_field_retie_loop.sh` can now
+  raise the floor by itself (`RETIE_ACCEPT_RESIDUAL_MAS`), which makes that
+  distinction matter more, not less.
 
 Set an override to record a decision you have already justified by other
 means. A red gate stays red: the override is the record, not the justification (same policy as

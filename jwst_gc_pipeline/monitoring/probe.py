@@ -33,6 +33,8 @@ import subprocess
 
 import numpy as np
 
+from ..mast_names import jw_prefix
+
 #: Preferred probe filters, narrow/medium SW first: they are the fastest to fit
 #: and the best-exercised.  ``F150W2``/``F322W2`` are last because only the
 #: globular-cluster fields (m4, ngc6397) carry them.
@@ -59,7 +61,7 @@ class ProbeError(ValueError):
 def _frame_prefix(proposal=None, obsid=None):
     """``'jw06778001'`` -- the exposure-name prefix pinning proposal+observation."""
     if proposal and obsid:
-        return f'jw{int(proposal):05d}{int(obsid):03d}'
+        return f'{jw_prefix(proposal)}{int(obsid):03d}'
     return 'jw'
 
 
@@ -129,7 +131,7 @@ def choose_center(base, filt, each_suffix, proposal=None, obsid=None, n_sample=1
     # carries both 6778 and 7213 ``align_o001_crf`` frames, pointing at different
     # sky -- so an unpinned glob picks a frame the run will never read, and the
     # cutout lands where none of its own frames are.
-    prefix = f'jw{int(proposal):05d}{int(obsid):03d}' if proposal and obsid else 'jw'
+    prefix = f'{jw_prefix(proposal)}{int(obsid):03d}' if proposal and obsid else 'jw'
     frames = sorted(glob.glob(os.path.join(pipe, f'{prefix}*_{each_suffix}.fits')))
     if not frames:
         raise ProbeError(
@@ -176,13 +178,20 @@ def choose_center(base, filt, each_suffix, proposal=None, obsid=None, n_sample=1
 
 
 def plan_probe(target, instrument='nircam', size_arcsec=DEFAULT_PROBE_ARCSEC,
-               label=PROBE_LABEL):
+               label=PROBE_LABEL, obsid=None):
     """The full probe recipe for one field, or a dict carrying ``error``.
 
     Never raises for an unprobeable field: an error is part of the monitor's
     output (``omegacen`` has no delivered data at all), so it is returned as a
     row rather than aborting the whole matrix.
+
+    ``obsid`` names the observation to probe.  It is what a field claiming
+    every observation of its proposal (gc-treasury/10678) needs, since the
+    registry hands back only the wildcard for it and the wildcard names no
+    cutout.  Omitted, the registered observations are tried in order, which is
+    what every enumerated field wants.
     """
+    from .. import fields as _fields
     from ..run_pipeline import resolve
     from . import scan
 
@@ -195,25 +204,47 @@ def plan_probe(target, instrument='nircam', size_arcsec=DEFAULT_PROBE_ARCSEC,
 
     base = scan.basepath(target)
     errors = []
-    for proposal, obsid in obs:
+    wanted = None if obsid is None else str(obsid)
+    for proposal, registered in obs:
+        if registered == _fields.WILDCARD_OBSID and wanted is None:
+            # A wildcard registration names no observation number, and
+            # `resolve` zero-pads what it is given -- '*' becomes '00*',
+            # which no registry lookup answers.  The message that came back
+            # from there told the operator to register `nircam: ['00*']`,
+            # which is not a thing fields.yaml accepts.
+            errors.append(
+                f"{proposal}: {target} claims every observation of the "
+                f"proposal (fields.yaml obsids: '*'), so there is no "
+                f"observation number to build a probe cutout from; pass "
+                f"obsid=<NNN> to name one, e.g. plan_probe({target!r}, "
+                f"obsid='042').")
+            continue
+        obsid_here = registered
+        if wanted is not None:
+            if registered == _fields.WILDCARD_OBSID:
+                obsid_here = wanted
+            elif str(registered) != wanted:
+                errors.append(f'{proposal}/o{registered}: skipped, the caller '
+                              f'asked for o{wanted}')
+                continue
         try:
-            plan = resolve(proposal, obsid, instrument)
+            plan = resolve(proposal, obsid_here, instrument)
             each_suffix = plan['each_suffix']
             filt, nframes = choose_filter(base, each_suffix,
-                                          proposal=proposal, obsid=obsid)
+                                          proposal=proposal, obsid=obsid_here)
             ra, dec, frame, n_cover = choose_center(base, filt, each_suffix,
-                                                    proposal, obsid)
+                                                    proposal, obsid_here)
         except (ProbeError, KeyError, ValueError) as ex:
-            errors.append(f'{proposal}/o{obsid}: {ex}')
+            errors.append(f'{proposal}/o{obsid_here}: {ex}')
             continue
         return {
-            'target': target, 'proposal': str(proposal), 'obsid': str(obsid),
+            'target': target, 'proposal': str(proposal), 'obsid': str(obsid_here),
             'instrument': instrument, 'basepath': base, 'filter': filt,
             'each_suffix': each_suffix, 'n_frames': nframes,
             'ra': ra, 'dec': dec, 'center_from': frame, 'n_overlapping': n_cover,
             'size_arcsec': float(size_arcsec), 'label': label,
             'cutout_region': f'{ra:.6f},{dec:.6f},{size_arcsec:g}',
-            'job_name': f'{target}{proposal}-o{obsid}-cut{size_arcsec:g}-{filt}',
+            'job_name': f'{target}{proposal}-o{obsid_here}-cut{size_arcsec:g}-{filt}',
         }
     return {'target': target, 'error': '; '.join(errors) or 'no probeable observation'}
 

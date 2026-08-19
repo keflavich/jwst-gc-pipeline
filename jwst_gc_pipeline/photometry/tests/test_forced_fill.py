@@ -226,12 +226,6 @@ def test_forced_fill_drops_offfootprint_nan_positions():
     assert bool(tbl['mask_f405n'][ifar])                # stays a non-detection
 
 
-if __name__ == '__main__':
-    test_forced_fill_recovers_phantom()
-    test_forced_fill_survives_world2pix_nonconvergence()
-    print("PASS")
-
-
 def test_fill_targets_are_selected_by_mask_column():
     """The coupling merge_catalogs' ``mask_{filt}`` change relies on: forced_fill's target set IS
     the mask column, so widening the mask (badsep -> badsep|non-mutual) is what makes the

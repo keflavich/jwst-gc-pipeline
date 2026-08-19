@@ -24,6 +24,25 @@ from .test_visit_consensus import (
 DEC_TEST = DEC0
 
 
+@pytest.fixture(autouse=True)
+def _enforce_at_the_stage(monkeypatch):
+    """These tests ask "does the checkpoint NOTICE x", and each of them says so
+    with `pytest.raises`.
+
+    That spelling only works while a frozen-stage failure raises where it is
+    measured, which is no longer the default: `ASTROM_CHECKPOINT_ENFORCE`
+    defaults to `release`, so the failure is recorded and the chain continues.
+    The detection is unchanged and is what these tests are for, so they run
+    under `stage` enforcement and keep asserting on the exception.
+
+    WHERE the stop happens is a separate question, pinned in
+    `test_checkpoint_enforcement.py` -- including that the default is `release`,
+    that the record still carries `passed: false`, and that the release gate
+    refuses the field.
+    """
+    monkeypatch.setenv('ASTROM_CHECKPOINT_ENFORCE', 'stage')
+
+
 # ---------------------------------------------------------------------------
 # measure_offset error bars
 # ---------------------------------------------------------------------------
