@@ -51,6 +51,31 @@ import os
 import re
 import sys
 
+
+def jw_prefix(proposal):
+    """The MAST filename prefix: the proposal zero-padded to five digits.
+
+    Inlined rather than imported.  This script's whole point is to answer in
+    ten seconds a question the reduce takes 20 h of queue to answer, so it
+    stays runnable with no package on the path: its imports are stdlib-only,
+    it PARSES the reduce driver instead of importing it (see
+    `reduce_module_policy`), and it defers `fields` to the registry check that
+    needs it.  Importing `jwst_gc_pipeline.mast_names` for a one-line pad would
+    put the package `__init__` -- numpy, astropy, and the provenance
+    `HDUList.writeto` hook -- on every functional path, including
+    `--skip-registry`, which needs no package at all.
+
+    `jwst_gc_pipeline.mast_names.jw_prefix` is the canonical helper (issue #414);
+    `test_preflight_reduce_inputs.py` asserts this agrees with it over 4- and
+    5-digit proposals, so the two cannot drift.
+    """
+    text = proposal if isinstance(proposal, str) else str(proposal)
+    if not re.fullmatch(r'[0-9]{1,5}', text) or int(text) == 0:
+        raise ValueError(f'proposal {proposal!r} is not a JWST proposal '
+                         f'number: expected one to five decimal digits')
+    return f'jw{int(text):05d}'
+
+
 #: The association glob the reduce ITSELF uses -- copied verbatim from
 #: ``reduction/PipelineRerunNIRCAM-LONG.py`` and ``reduction/PipelineMIRI.py``,
 #: and pinned to them by ``test_preflight_reduce_inputs.py``.
@@ -62,7 +87,9 @@ import sys
 #: all of them made this check self-confirming from a previous run's products --
 #: sgra/F115W reads 113 association files of which exactly ONE is an image3, and
 #: brick/F115W 547 of which 3 are.
-ASN_GLOB = 'jw0{proposal}-o{obsid}*_image3_*0[0-9][0-9]_asn.json'
+#: ``{jw}`` is filled with ``jw_prefix(proposal)``, the 5-digit-padded MAST
+#: prefix (issue #414).
+ASN_GLOB = '{jw}-o{obsid}*_image3_*0[0-9][0-9]_asn.json'
 
 #: ``jw01939001001_02101_00001_nrca1_cal.fits`` / ``..._mirimage_cal.fits``
 DETECTOR_RE = re.compile(r'_(nrc[ab](?:long|[1-4])|mirimage|nis)_')
@@ -326,10 +353,10 @@ def check(root, target, proposal, obsid, filters, modules, instrument='nircam'):
         if not os.path.isdir(d):
             rows.append(Row(filt, 0, 0, [], sorted(wanted), f'no directory {d}'))
             continue
-        pat = ASN_GLOB.format(proposal=int(proposal), obsid=obsid)
+        pat = ASN_GLOB.format(jw=jw_prefix(proposal), obsid=obsid)
         candidates = glob.glob(os.path.join(d, pat))
         cals = glob.glob(os.path.join(
-            d, f'jw{int(proposal):05d}{obsid}*_cal.fits'))
+            d, f'{jw_prefix(proposal)}{obsid}*_cal.fits'))
         try:
             asns, dropped = usable_associations(candidates, instrument)
         except UnreadableAssociation as exc:
@@ -364,7 +391,7 @@ def check(root, target, proposal, obsid, filters, modules, instrument='nircam'):
             why = ('no image3 association the reduce would use: '
                    + '; '.join(f'{os.path.basename(p)} ({r})' for p, r in dropped))
         elif not cals:
-            why = f'no _cal for jw{int(proposal):05d}{obsid}'
+            why = f'no _cal for {jw_prefix(proposal)}{obsid}'
         elif missing:
             why = (f'module(s) {missing} have no members in the association '
                    f'the reduce would use')

@@ -33,6 +33,8 @@ import subprocess
 
 import numpy as np
 
+from ..mast_names import jw_prefix
+
 #: Preferred probe filters, narrow/medium SW first: they are the fastest to fit
 #: and the best-exercised.  ``F150W2``/``F322W2`` are last because only the
 #: globular-cluster fields (m4, ngc6397) carry them.
@@ -59,7 +61,7 @@ class ProbeError(ValueError):
 def _frame_prefix(proposal=None, obsid=None):
     """``'jw06778001'`` -- the exposure-name prefix pinning proposal+observation."""
     if proposal and obsid:
-        return f'jw{int(proposal):05d}{int(obsid):03d}'
+        return f'{jw_prefix(proposal)}{int(obsid):03d}'
     return 'jw'
 
 
@@ -129,7 +131,7 @@ def choose_center(base, filt, each_suffix, proposal=None, obsid=None, n_sample=1
     # carries both 6778 and 7213 ``align_o001_crf`` frames, pointing at different
     # sky -- so an unpinned glob picks a frame the run will never read, and the
     # cutout lands where none of its own frames are.
-    prefix = f'jw{int(proposal):05d}{int(obsid):03d}' if proposal and obsid else 'jw'
+    prefix = f'{jw_prefix(proposal)}{int(obsid):03d}' if proposal and obsid else 'jw'
     frames = sorted(glob.glob(os.path.join(pipe, f'{prefix}*_{each_suffix}.fits')))
     if not frames:
         raise ProbeError(

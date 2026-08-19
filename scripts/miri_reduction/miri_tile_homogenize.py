@@ -23,6 +23,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.stats import sigma_clipped_stats
 from reproject import reproject_interp
+from jwst_gc_pipeline.mast_names import jw_prefix
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -40,10 +41,10 @@ os.environ.setdefault("CRDS_SERVER_URL", "https://jwst-crds.stsci.edu")
 
 pipedir = f'{BASEPATH}/{FILT}/pipeline'
 inst = 'miri'
-prod = f'jw0{PROP}-o{FIELD}_t001_{inst}_{FILT.lower()}'
+prod = f'{jw_prefix(PROP)}-o{FIELD}_t001_{inst}_{FILT.lower()}'
 ref_i2d = f'{pipedir}/{prod}_i2d.fits'
 
-align = sorted(glob.glob(f'{pipedir}/jw0{PROP}{FIELD}*_mirimage_align.fits'))
+align = sorted(glob.glob(f'{pipedir}/{jw_prefix(PROP)}{FIELD}*_mirimage_align.fits'))
 if not align:
     raise SystemExit(f"no align frames in {pipedir}")
 ref_fh = fits.open(ref_i2d)
@@ -51,7 +52,10 @@ ref_ext = 'SCI' if 'SCI' in [h.name for h in ref_fh] else 1
 ref_wcs = WCS(ref_fh[ref_ext].header)
 ny, nx = ref_fh[ref_ext].data.shape
 
-# group by TILE = visit + mosaic-position prefix (jw0PROPVVVVV_MMMMM)
+# group by TILE = visit token + mosaic-position group, the first 19 characters
+# of the basename: jw + proposal(5) + observation(3) + visit(3) + '_' +
+# vgroup(5), i.e. jwPPPPPOOOVVV_MMMMM.  MAST pads the proposal to five digits
+# whatever its width, so 10678 gives the same 19-character prefix as 2221.
 tiles = {}
 for fn in align:
     tiles.setdefault(os.path.basename(fn)[:19], []).append(fn)

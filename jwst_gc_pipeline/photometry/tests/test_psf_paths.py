@@ -54,6 +54,50 @@ def test_the_reader_of_merged_grids_uses_the_shared_name():
         'get_psf builds the merged-grid filename itself again')
     assert 'merged_PSFgrid' not in src, (
         'get_psf has a hand-written copy of the merged-grid filename')
+    assert "PROGRAM'][1:5]" not in src and 'PROGRAM"][1:5]' not in src, (
+        'get_psf reads the proposal with the 4-digit-only PROGRAM slice again')
+
+
+# ---------------------------------------------------------------------------
+# the header-keyed name (issue #414): PROGRAM is MAST's padded form
+# ---------------------------------------------------------------------------
+
+def _header(program, obs='001'):
+    return {'PROGRAM': program, 'OBSERVTN': obs}
+
+
+def test_the_header_keyed_name_matches_the_slice_on_a_four_digit_frame():
+    """A real brick frame carries PROGRAM='01182'.  The name is unchanged from
+    what the old ``PROGRAM[1:5]`` slice built, so no grid on disk is renamed."""
+    name = PP.legacy_merged_psf_grid_name_from_header(
+        _header('01182'), 'f405n', oversample=2)
+    assert name == 'F405N_1182_001_merged_PSFgrid_oversample2.fits'
+    assert name == PP.legacy_merged_psf_grid_name('f405n', '01182'[1:5], '001',
+                                                  oversample=2)
+
+
+def test_the_header_keyed_name_keeps_all_five_digits_of_a_treasury_frame():
+    """The writer (`reduction.make_merged_psf`) names the grid with the
+    registry proposal '10678'.  The old slice asked for ``F212N_0678_...``,
+    which nothing writes, and the caller fell through to a detector-specific
+    grid with no report that it had looked."""
+    name = PP.legacy_merged_psf_grid_name_from_header(
+        _header('10678'), 'f212n', oversample=2)
+    assert name == 'F212N_10678_001_merged_PSFgrid_oversample2.fits'
+    assert name != PP.legacy_merged_psf_grid_name('f212n', '10678'[1:5], '001',
+                                                  oversample=2)
+
+
+def test_the_header_keyed_name_agrees_with_what_the_writer_names():
+    """Reader and writer both start from the registry proposal, for both
+    digit widths."""
+    for proposal, program in (('1182', '01182'), ('10678', '10678'),
+                              ('12587', '12587')):
+        written = PP.legacy_merged_psf_grid_name('f212n', proposal, '001',
+                                                 oversample=2)
+        read = PP.legacy_merged_psf_grid_name_from_header(
+            _header(program), 'f212n', oversample=2)
+        assert read == written, proposal
 
 
 def _resolve(present):

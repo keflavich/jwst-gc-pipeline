@@ -133,7 +133,7 @@ def test_nvisits_is_the_transpose_and_keeps_its_values():
 
 
 def test_no_view_emits_none_where_a_glob_is_built():
-    """`jw0{proposal}-o{obsid}_*` with obsid None matches nothing and says so
+    """`jw{proposal:05d}-o{obsid}_*` with obsid None matches nothing and says so
     to no one; a missing entry must be missing, not None."""
     for target, per_proposal in F.project_obsnum().items():
         for proposal, obsid in per_proposal.items():

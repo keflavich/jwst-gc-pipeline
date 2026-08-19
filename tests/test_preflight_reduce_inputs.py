@@ -20,6 +20,8 @@ import importlib.util
 import json
 import os
 import pathlib
+import subprocess
+import sys
 
 import pytest
 
@@ -83,14 +85,58 @@ def test_the_glob_is_the_one_the_reduce_itself_uses():
     Both reduce entry points build the same literal.  If either changes, this
     check would keep passing on files the reduce no longer reads.
     """
-    literal = "jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json"
-    ours = PF.ASN_GLOB.replace('{proposal}', '{proposal_id}') \
+    literal = "{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json"
+    ours = PF.ASN_GLOB.replace('{jw}', '{jw_prefix(proposal_id)}') \
                       .replace('{obsid}', '{field}')
     assert ours == literal, (
         f'preflight globs {ours!r}; the reduce globs {literal!r}')
     for name in ('PipelineRerunNIRCAM-LONG.py', 'PipelineMIRI.py'):
         src = (REPO / 'jwst_gc_pipeline' / 'reduction' / name).read_text()
         assert literal in src, f'{name} no longer builds {literal!r}'
+
+
+def test_the_inlined_prefix_agrees_with_the_package_helper():
+    """This script inlines the five-digit pad to stay runnable with no package
+    on the path (see `jw_prefix`'s docstring).  Two copies can drift, so pin
+    them equal over both digit widths and the sub-1000 case."""
+    from jwst_gc_pipeline.mast_names import jw_prefix as canonical
+    for proposal in ('2221', 2221, '02221', '1182', '10678', 10678, '12587',
+                     '618', 1, 99999):
+        assert PF.jw_prefix(proposal) == canonical(proposal), proposal
+    assert PF.jw_prefix('10678') == 'jw10678'
+    assert PF.jw_prefix('2221') == 'jw02221'
+
+
+@pytest.mark.parametrize('bad', ['brick', '', None, -1, '-2221', 123456, 0,
+                                 '2_221', ' 2221 ', '+2221'])
+def test_the_inlined_prefix_refuses_what_the_helper_refuses(bad):
+    with pytest.raises(ValueError):
+        PF.jw_prefix(bad)
+
+
+def test_the_script_runs_with_no_package_on_the_path():
+    """The gate answers in ten seconds a question the reduce answers in 20 h of
+    queue, so it must run wherever it is invoked from.  Every functional path,
+    `--skip-registry` included, stays off `jwst_gc_pipeline`: an editable
+    install pointing at a different checkout, or none at all, would otherwise
+    take the gate down.  Measured on the real script, from a directory that is
+    not the repo, with PYTHONPATH cleared."""
+    env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+    probe = (
+        "import importlib.util, sys, json\n"
+        f"spec = importlib.util.spec_from_file_location('pf', {str(SCRIPT)!r})\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "mod.check('/nonexistent-root', 'brick', '10678', '001', ['F212N'],\n"
+        "          ['nrca'])\n"
+        "print(json.dumps(sorted({m.split('.')[0] for m in sys.modules}\n"
+        "                        & {'jwst_gc_pipeline', 'numpy', 'astropy',\n"
+        "                           'jwst'})))\n"
+    )
+    out = subprocess.run([sys.executable, '-c', probe], cwd=os.sep,
+                         env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout.strip().splitlines()[-1]) == [], out.stdout
 
 
 def test_an_image2_association_is_not_counted_as_an_input(tmp_path):
@@ -120,6 +166,41 @@ def test_a_real_image3_association_passes(tmp_path):
     rows = PF.check(root, 'sgra', '1939', '001', ['F115W'], ['nrca', 'nrcb'])
     assert rows[0].ok, rows[0].why
     assert rows[0].n_asn == 1
+
+
+def test_a_five_digit_proposals_products_are_found(tmp_path):
+    """Issue #414 at this call site, pinned on the VALUE the template is
+    filled with.
+
+    ``test_the_glob_is_the_one_the_reduce_itself_uses`` pins ``ASN_GLOB``'s
+    text alone, so it stays green when the ``{jw}`` field carries the old
+    4-digit-only spelling.  MAST writes ``jw10678-o001...`` for the GC
+    Treasury program; the old spelling globs ``jw010678-o001...`` and reads a
+    complete field as having no inputs at all -- 20 h of queue answering a
+    question this gate exists to answer in ten seconds.
+    """
+    members = ('jw10678001001_02101_00001_nrca1_cal.fits',
+               'jw10678001001_02101_00001_nrcb1_cal.fits')
+    root = _field(tmp_path, 'sgra', 'F212N',
+                  asns=['jw10678-o001_20260816t000000_image3_00001_asn.json'],
+                  cals=list(members), members=members)
+    rows = PF.check(root, 'sgra', '10678', '001', ['F212N'], ['nrca', 'nrcb'])
+    assert rows[0].ok, rows[0].why
+    assert rows[0].n_asn == 1 and rows[0].n_cal == 2
+
+
+def test_a_five_digit_proposal_does_not_match_the_over_padded_name(tmp_path):
+    """The converse: products written under the WRONG prefix are not accepted
+    as this proposal's inputs, so a run that fabricated ``jw010678`` names
+    cannot make the gate green."""
+    members = ('jw010678001001_02101_00001_nrca1_cal.fits',
+               'jw010678001001_02101_00001_nrcb1_cal.fits')
+    root = _field(tmp_path, 'sgra', 'F212N',
+                  asns=['jw010678-o001_20260816t000000_image3_00001_asn.json'],
+                  cals=list(members), members=members)
+    rows = PF.check(root, 'sgra', '10678', '001', ['F212N'], ['nrca', 'nrcb'])
+    assert not rows[0].ok
+    assert 'jw10678-o001' in rows[0].why, rows[0].why
 
 
 # ---------------------------------------------------------------------------

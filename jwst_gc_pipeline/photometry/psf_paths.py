@@ -58,6 +58,26 @@ def legacy_merged_psf_grid_name(filtername, proposal_id, field,
             f'_oversample{oversample}{_blur_token(blur)}.fits')
 
 
+def legacy_merged_psf_grid_name_from_header(header, filtername, oversample=1,
+                                            blur=False):
+    """``legacy_merged_psf_grid_name`` keyed off a frame header.
+
+    The reader in ``reduction.saturated_star_finding.get_psf`` has a header,
+    not a registry entry, so it has to recover the proposal from ``PROGRAM``.
+    ``PROGRAM`` is MAST's five-character zero-padded form (``'02221'``,
+    ``'10678'``); the writer, ``reduction.make_merged_psf``, names the grid
+    with the UNPADDED registry proposal (``'2221'``, ``'10678'``).  Stripping
+    the pad is what makes the two agree.  The four-character PROGRAM slice
+    this replaces agreed only for a 4-digit proposal: on 10678 it asked for
+    ``F212N_0678_...``, which nothing writes, and the caller fell through to a
+    detector-specific grid without reporting that it looked (issue #414).
+    """
+    from ..mast_names import proposal_id_from_program
+    return legacy_merged_psf_grid_name(
+        filtername, proposal_id_from_program(header['PROGRAM']),
+        str(header['OBSERVTN']).strip(), oversample=oversample, blur=blur)
+
+
 def legacy_merged_psf_grid_path(jwst_root, target, filtername, proposal_id,
                                 field, oversample=1, blur=False):
     """The historical per-(proposal, field) merged gridded-PSF path."""

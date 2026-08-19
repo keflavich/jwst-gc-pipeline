@@ -58,6 +58,7 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
+from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_filename
 from jwst_gc_pipeline.reduction.crds_cache import open_crds_reference
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
@@ -311,9 +312,9 @@ def main(filtername, Observations=None, regionname='sgrc',
     products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
     print("products_fits length:", len(products_fits))
     # uncal for THIS obs + NIRISS detector only (the NIRCam frames of obs 012
-    # share the jw0{prop}{field} prefix -- '_nis_' is the disambiguator).
+    # share the jw{prop:05d}{field} prefix -- '_nis_' is the disambiguator).
     uncal_mask = np.array([uri.endswith('_uncal.fits')
-                           and f'jw0{proposal_id}{field}' in uri
+                           and f'{jw_prefix(proposal_id)}{field}' in uri
                            and f'_{DETECTOR_TOKEN}_' in uri
                            for uri in products_fits['dataURI']])
     uncal_mask &= products_fits['productType'] == 'SCIENCE'
@@ -330,7 +331,7 @@ def main(filtername, Observations=None, regionname='sgrc',
         relocate_manifest_products(manifest, output_dir)
 
     print(f"Working on NIRISS: initial pipeline setup (skip_step1and2={skip_step1and2})")
-    asn_all = glob(os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
+    asn_all = glob(os.path.join(output_dir, f'{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
     asn_file_search = _select_asn_for_filter(asn_all, filtername)
     print(f"Searching asn for {filtername}: {len(asn_all)} candidates -> {len(asn_file_search)} niriss match(es)")
     if len(asn_file_search) == 1:
@@ -385,7 +386,7 @@ def main(filtername, Observations=None, regionname='sgrc',
 
     if (not skip_step1and2) or (skip_step1and2 and len([m['expname'] for m in members if not os.path.exists(m['expname'])]) > 0):
         for member in members:
-            assert f'jw0{proposal_id}{field}' in member['expname']
+            assert f'{jw_prefix(proposal_id)}{field}' in member['expname']
             assert f'_{DETECTOR_TOKEN}_' in member['expname'], member['expname']
             cal_name = member['expname']
             if skip_step1and2 and os.path.exists(cal_name):
@@ -409,7 +410,7 @@ def main(filtername, Observations=None, regionname='sgrc',
 
     with open(asn_file) as f_obj:
         asn_data = json.load(f_obj)
-    asn_data['products'][0]['name'] = f'jw0{proposal_id}-o{field}_t001_{INSTRUMENT_PRODUCT_TOKEN}_{filtername.lower()}'
+    asn_data['products'][0]['name'] = f'{jw_prefix(proposal_id)}-o{field}_t001_{INSTRUMENT_PRODUCT_TOKEN}_{filtername.lower()}'
 
     for member in asn_data['products'][0]['members']:
         print(f"Preparing alignment copy for {member}")
@@ -543,7 +544,10 @@ def fix_alignment(fn, proposal_id=None, regionname='sgrc', field=None, basepath=
 
     mod = ImageModel(fn)
     if proposal_id is None:
-        proposal_id = os.path.basename(fn)[3:7]
+        # The first five digits after ``jw`` are the proposal for BOTH the
+        # zero-padded 4-digit products on disk and 5-digit ones; the [3:7]
+        # slice this replaces read '0678' off a jw10678 product (issue #414).
+        proposal_id = proposal_id_from_filename(fn)
     if filtername is None:
         try:
             filtername = filter_regex.search(fn).group()

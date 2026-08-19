@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass, field as _dcfield
 
 from jwst_gc_pipeline import fields as _fields
+from jwst_gc_pipeline.mast_names import jw_prefix
 
 # Post-hoc derivatives that are never the canonical product.
 _DERIVATIVE_RE = re.compile(
@@ -189,7 +190,7 @@ def _mosaic_for(basepath, filtername, proposals):
     # Restrict to this field's proposals so a stale, mis-filed product from a
     # neighbouring field cannot be picked up (see the brick-2221 retraction).
     scoped = [h for h in hits
-              if any(f'jw{int(p):05d}' in os.path.basename(h) for p in proposals)]
+              if any(jw_prefix(p) in os.path.basename(h) for p in proposals)]
     hits = scoped or hits
     if not hits:
         return None
