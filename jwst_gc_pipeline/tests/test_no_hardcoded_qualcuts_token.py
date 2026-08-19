@@ -52,8 +52,21 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 SCANNED_SUFFIXES = {".py", ".md", ".rst", ".sh", ".sbatch", ".slurm",
                     ".json", ".yml", ".yaml", ".toml"}
 
-#: The one file allowed to spell the token: the function that decides it.
-ALLOWLIST = {"jwst_gc_pipeline/photometry/merge_catalogs.py"}
+#: Files allowed to spell the token: the function that decides the suffix, and
+#: the docstrings that explain the ban -- this module cannot state its own rule
+#: without quoting what it forbids, and neither can the tests that assert the
+#: per-field mapping.  Same carve-out `test_no_jw0_prefix_literals.py` makes,
+#: for the same reason; prose everywhere else stays in scope.
+ALLOWLIST = {
+    "jwst_gc_pipeline/photometry/merge_catalogs.py",
+    "jwst_gc_pipeline/tests/test_no_hardcoded_qualcuts_token.py",
+}
+
+#: A floor on the file count, so a guard that scans NOTHING fails instead of
+#: passing over an empty offender list (a `git ls-files` that returns nothing
+#: from a detached worktree, say).  Borrowed from the jw0 guard, which carries
+#: the same failure mode.
+MIN_SCANNED_FILES = 350
 
 PRAGMA = "noqa: qualcuts-token"
 
@@ -75,6 +88,14 @@ def _tracked_files():
 def _offending_lines(text):
     return [n for n, line in enumerate(text.splitlines(), 1)
             if BANNED.search(line) and PRAGMA not in line]
+
+
+def test_the_guard_actually_scans_the_repository():
+    """A guard that scans nothing passes for the wrong reason."""
+    scanned = list(_tracked_files())
+    assert len(scanned) >= MIN_SCANNED_FILES, (
+        f"only {len(scanned)} files scanned (floor {MIN_SCANNED_FILES}); the "
+        "file walk is broken, so an empty offender list means nothing")
 
 
 def test_no_hardcoded_qualcuts_token():

@@ -509,6 +509,40 @@ CAT_BASE = "basic_merged_indivexp_photometry_tables_merged"
 # quality-filtered table: the loops below `continue` on a non-match, so wd1's
 # and w51's tables sat on disk and never reached a release.
 QUALCUTS_RE = r"_qualcuts_oksep[0-9A-Za-z-]+"
+
+
+def field_qualcuts_suffix(field):
+    """The quality-cut suffix this field's own catalogs should carry, or None.
+
+    Imported lazily: stage_release runs as a script from scripts/release, and
+    a missing/!importable pipeline package must not stop a release from being
+    staged -- the caller falls back to alphabetical order.
+    """
+    try:
+        from jwst_gc_pipeline.photometry.merge_catalogs import (
+            _qualcuts_oksep_suffix)
+    except ImportError:
+        return None
+    return _qualcuts_oksep_suffix(field)
+
+
+def _qualcuts_sort_key(field):
+    """Order a catalog directory so the LAST quality-cut table wins on merit.
+
+    The loops below assign ``entry["qualcuts"] = path``, so with an unsorted
+    glob the winner was whatever the directory listing happened to yield last.
+    Eleven fields carry a mislabelled ``_qualcuts_oksep2221`` table written  # noqa: qualcuts-token
+    before the suffix was per-field, and w51 holds that one NEXT TO its correct
+    ``_qualcuts_oksep6151`` at the same iteration -- so which table reached  # noqa: qualcuts-token
+    the release was decided by inode order.  Sorting puts the field's own token
+    last, and is otherwise alphabetical so a rerun stages the same file twice.
+    """
+    own = field_qualcuts_suffix(field)
+
+    def key(path):
+        return (own is not None and own in path.name, path.name)
+
+    return key
 # combined (all-pointings) merged table; the (?!_o\d) guard keeps per-pointing
 # "..._m7_o023.fits" variants OUT of the combined match.
 COMBINED_RE = re.compile(
@@ -555,7 +589,7 @@ def discover_catalogs(field_cfg, field):
 
     # combined (all-pointings) merged table -- highest iteration
     combined = {}  # rank -> {iter, full_fits, full_ecsv, qualcuts}
-    for path in cat_dir.glob(f"{CAT_BASE}_*"):
+    for path in sorted(cat_dir.glob(f"{CAT_BASE}_*"), key=_qualcuts_sort_key(field)):
         m = COMBINED_RE.match(path.name)
         if m is None:
             continue
@@ -571,7 +605,8 @@ def discover_catalogs(field_cfg, field):
     # per-pointing merged tables (multi-pointing fields) -- highest iter per obs
     if observations:
         per_obs = {}  # obs -> {rank -> entry}
-        for path in cat_dir.glob(f"{CAT_BASE}_*"):
+        for path in sorted(cat_dir.glob(f"{CAT_BASE}_*"),
+                           key=_qualcuts_sort_key(field)):
             m = PERPOINT_RE.match(path.name)
             if m is None or m.group("obs") not in observations:
                 continue
