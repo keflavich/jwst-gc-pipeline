@@ -4272,7 +4272,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     _blocking = record.get('unverified_blocking') or []
     if _failures:
         msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: FAILED -- "
-               f"{len(_failures)} failure(s).\n"
+               f"{len(_failures)} failure(s); the gate did NOT run.\n"
                + "\n".join(f"  {f}" for f in _failures[:8])
                + ("\n  ..." if len(_failures) > 8 else "")
                + f"\n  record: {record.get('record_path')}")
