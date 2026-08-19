@@ -503,16 +503,29 @@ def test_the_consensus_writer_records_the_declination_too(tmp_path):
     assert got[0] == pytest.approx(GC_DEC), (
         f"recorded {got[0]} for a correction made at declination {GC_DEC}")
 
-    # ...and again on the UPSERT branch, which is a different write
+    # ...and again on the UPSERT branch, which is a different write.
+    #
+    # The second correction is at a DIFFERENT declination, on the same key so
+    # it upserts the same row.  Repeating the first declination made this half
+    # unfalsifiable: the row already held GC_DEC from the insert above, so
+    # deleting the upsert branch's write entirely left `got2[0]` reading the
+    # first branch's value and the assertion still passed.
+    other_dec = GC_DEC + 5.0
+    corr2 = _correction(dra_onsky=100.0, ddec_onsky=0.0, dec=other_dec)
     out2 = seed_offsets_table_from_consensus(
-        str(base), "1182", "004", [corr], stage="m2")
+        str(base), "1182", "004", [corr2], stage="m2")
     tbl2 = Table.read(out2)
+    assert len(tbl2) == len(tbl), (
+        "the second write inserted a row instead of upserting one, so this "
+        "does not exercise the upsert branch")
     written2 = np.ma.filled(np.ma.asarray(tbl2[PROV_DEC_DEG_KEY], dtype=float),
                             np.nan)
     got2 = written2[np.isfinite(written2)]
     assert len(got2), "the upsert branch recorded no declination"
-    assert got2[0] == pytest.approx(GC_DEC), (
-        f"the upsert branch recorded {got2[0]}, not {GC_DEC}")
+    assert got2[0] == pytest.approx(other_dec), (
+        f"the upsert branch recorded {got2[0]}, not the {other_dec} of the "
+        f"correction it had just applied -- a stale declination here "
+        f"mis-converts every on-sky value accumulated into this row")
 
 
 def test_the_revert_resolves_each_provenance_axis_independently():
