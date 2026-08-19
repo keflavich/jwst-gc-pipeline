@@ -185,8 +185,7 @@ def test_m1_frame_discovery_is_unchanged_for_a_four_digit_proposal(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# structural: no f-string anywhere in the package builds `jw` + interpolation
-# by hand
+# structural: no f-string anywhere in the repo glues `jw` to an unpadded value
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -242,8 +241,9 @@ def _five_digit_constants(tree):
 def _format_spec_text(node):
     """The literal text of a ``FormattedValue`` format spec.
 
-    The spec is itself a ``JoinedStr``; a constant one unparses as ``f'05d'``,
-    and a computed one (``f'{width}d'``) keeps its braces and so never reads as
+    The spec is itself a ``JoinedStr``, so a constant one (``:05d``) is a
+    single ``Constant`` child.  A computed spec (``f'{width}d'``) has an
+    interpolation among its children and returns ``''``, so it never reads as
     the five-digit pad.
     """
     if node.format_spec is None:
@@ -261,11 +261,10 @@ def jw_glue_offenders(source, label='<source>'):
     an explicit ``:05d`` format spec, and a name bound at module level to a
     five-digit string literal.  ``jw_prefix`` is the one to reach for -- it
     also validates its argument, where ``f'jw{pid:05d}'`` renders ``jw100000``
-    for a six-digit input -- and the other two are what the sites that cannot
-    import it (a stdlib-only script) or do not need it (an already-padded
-    token) look like.  Everything else renders ``jw10678`` as ``jw10678`` only
-    by accident of the value's width, and renders ``jw2221`` where MAST wrote
-    ``jw02221``.
+    for a six-digit input -- and the other two cover the sites that cannot
+    import it (a stdlib-only script) or already hold the padded token.  Every
+    other spelling leaves the width to the value, so it renders ``jw2221``
+    where MAST wrote ``jw02221`` and ``jw010678`` where MAST wrote ``jw10678``.
     """
     with warnings.catch_warnings():
         # plotting/plot_tools.py:1083 carries LaTeX ($\mu$, $\sigma$) in a

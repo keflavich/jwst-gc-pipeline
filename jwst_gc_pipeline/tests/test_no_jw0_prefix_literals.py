@@ -46,6 +46,11 @@ later still fires; the three files that quote the banned spelling on nearly
 every line (this one, ``mast_names.py``, ``test_mast_names.py``) carry a
 whole-file ``ALLOWLIST`` entry instead of a pragma per line.
 
+A line regex sees one line at a time, so the form split over two -- ``PREFIX =
+'jw0'`` here and ``PREFIX + str(proposal_id)`` elsewhere -- would evade every
+pattern above.  The binding half is banned on its own: the string ``'jw0'``
+alone names nothing, so a name bound to it is being built into a prefix.
+
 Untracked working-tree files are deliberately out of scope: the guard polices
 what the repository ships, and an untracked scratch script becomes covered the
 moment it is ``git add``ed.
@@ -86,6 +91,14 @@ PRAGMA = "noqa: jw0-literal"
 #: The header-slice spelling of the same 4-digit assumption.
 BANNED_PROGRAM_SLICE_RE = re.compile(r"""\[\s*['"]PROGRAM['"]\s*\]\s*\[""")
 
+#: A name bound to the bare prefix, which splits the banned form over two lines
+#: (``PREFIX = 'jw0'`` ... ``PREFIX + str(proposal_id)``) and so matches none of
+#: the patterns above.  The binding is the half worth banning: no correct use
+#: of the string ``'jw0'`` on its own exists, and catching it here means the
+#: concatenation on the other line never gets written.
+BANNED_BARE_PREFIX_RE = re.compile(
+    r"""^\s*[A-Za-z_]\w*\s*(?::[^=]+)?=\s*['"]jw0['"]\s*(?:\#.*)?$""")
+
 ALLOWLIST = {
     # document the banned spellings in the docstrings that explain the fix
     "jwst_gc_pipeline/mast_names.py",
@@ -124,7 +137,9 @@ def _iter_scanned_files(root=REPO_ROOT):
 
 def _offending_lines(text):
     return [i for i, line in enumerate(text.splitlines(), 1)
-            if (BANNED_RE.search(line) or BANNED_PROGRAM_SLICE_RE.search(line))
+            if (BANNED_RE.search(line)
+                or BANNED_PROGRAM_SLICE_RE.search(line)
+                or BANNED_BARE_PREFIX_RE.search(line))
             and PRAGMA not in line]
 
 
@@ -205,6 +220,10 @@ def test_allowlist_entries_exist():
     'project_id = header["PROGRAM"][1:5]',
     "FRAME_GLOB = f'{BASE}/pipeline/jw0*_{DET}_destreak_o001_crf.fits'",
     "ls /orange/adamginsburg/jwst/m92/F090W/pipeline/jw0*_crf.fits",
+    # the two-line evasion: bind the prefix here, concatenate somewhere else
+    "PREFIX = 'jw0'",
+    '    PREFIX = "jw0"  # the MAST prefix',
+    "    _JW: str = 'jw0'",
 ])
 def test_the_guard_matches_every_banned_spelling(bad):
     """A guard that cannot fire is not a guard."""
