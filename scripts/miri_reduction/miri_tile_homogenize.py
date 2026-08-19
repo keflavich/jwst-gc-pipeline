@@ -52,8 +52,10 @@ ref_ext = 'SCI' if 'SCI' in [h.name for h in ref_fh] else 1
 ref_wcs = WCS(ref_fh[ref_ext].header)
 ny, nx = ref_fh[ref_ext].data.shape
 
-# group by TILE = visit + mosaic-position prefix (jwPPPPPVVVVVV_MMMMM; the
-# proposal is 5-digit-padded, so the prefix width is the same either way)
+# group by TILE = visit token + mosaic-position group, the first 19 characters
+# of the basename: jw + proposal(5) + observation(3) + visit(3) + '_' +
+# vgroup(5), i.e. jwPPPPPOOOVVV_MMMMM.  MAST pads the proposal to five digits
+# whatever its width, so 10678 gives the same 19-character prefix as 2221.
 tiles = {}
 for fn in align:
     tiles.setdefault(os.path.basename(fn)[:19], []).append(fn)

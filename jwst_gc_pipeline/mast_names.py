@@ -91,10 +91,10 @@ def proposal_id_from_program(program):
 
     ``PROGRAM`` carries the same five-character zero-padded form MAST puts in
     the filename -- ``'02221'`` for proposal 2221, ``'10678'`` for the GC
-    Treasury -- so the pipeline's unpadded key comes from stripping the pad,
-    not from the slice ``header['PROGRAM'][1:5]`` three reduction sites used.
-    That slice drops the fifth digit and reads ``'0678'`` off a 10678 frame,
-    which is silent: ``destreak.add_background_map`` warns that the filter has
+    Treasury -- so the pipeline's unpadded key comes from stripping that pad.
+    Three reduction sites took the fixed slice ``header['PROGRAM'][1:5]``
+    instead, which drops the fifth digit and reads ``'0678'`` off a 10678
+    frame, silently: ``destreak.add_background_map`` warns that the filter has
     no background map and returns the frame unchanged, and
     ``saturated_star_finding.get_psf`` looks for a merged PSF grid nobody
     wrote and falls back to a detector-specific one.
