@@ -100,6 +100,13 @@ FIELDS = {
     #                                                  and disjoint from F2550W
     #     brick  NIRCam F405N   266.5356 -28.7128
     #     brick  MIRI  F2550W   266.5372 -28.7066   <- 2221-o002, brick's own
+    #
+    # F770W is the weakest of the three on distance alone (3.7' to cloudc vs
+    # 5.7' to brick, against 3.9x and 23x for the other two).  What settles it
+    # is PROGRAM MEMBERSHIP: 2526 appears nowhere in brick's release, and the
+    # frames are filed under cloudc/F770W/.  TARGPROP cannot separate the 2221
+    # pair at all -- both read BRICK-IKP2016-G0.253+0.015 -- which is why the
+    # centres are quoted rather than the header target name.
     "cloudc": {
         "data_dir": Path("/orange/adamginsburg/jwst/cloudc"),
         "proposal_prefix": "jw02221-o002_t001_nircam_clear",
