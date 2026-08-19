@@ -792,6 +792,14 @@ def test_load_survives_an_uncreatable_cache_directory(tmp_path, monkeypatch):
         os.chmod(root, 0o700)
     assert out['stale'] is True, out
     assert out['note'], 'a cache directory it could not create has to say so'
+    # WHICH note, not merely that there is one.  `stale` alone cannot pin this
+    # branch: an uncreatable cache directory also fails the index write further
+    # down, which sets `stale` again, so deleting `stale = True` from the
+    # makedirs handler leaves the flag correct by accident.  The note is the
+    # only observable that separates "could not create the directory" from
+    # "could not write into it", and those send an operator to different places.
+    assert 'create' in out['note'], out['note']
+    assert 'schedule cache directory' in out['note'], out['note']
     assert out['visits'] == []
 
 
