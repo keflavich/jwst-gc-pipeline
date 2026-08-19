@@ -98,3 +98,17 @@ def test_no_refcat_mapped_returns_none(monkeypatch, tmp_path):
     ref, refpath = _refcat(tmp_path)
     items = _catalog(tmp_path, ref)
     assert stage_release.check_catalog_on_frame(items, "brick") is None
+
+
+def test_every_mapped_refcat_is_on_disk_and_belongs_to_its_field():
+    """A `FRAME_REFCAT` entry pointing at a path that does not exist disables the
+    gate for that field SILENTLY: `check_catalog_on_frame` returns `None` on
+    `not os.path.exists(refpath)`, which the caller reports as "cannot enforce".
+    So a typo, a moved catalog or a copy-paste of a neighbouring field's path
+    turns a mapped field back into an unmapped one with the map still claiming
+    otherwise.  Both halves are checked here because the second failure mode --
+    a path under the WRONG field's directory -- would gate a field against
+    another field's sky and read as a gross off-frame."""
+    for field, path in stage_release.FRAME_REFCAT.items():
+        assert Path(path).is_file(), f"{field}: refcat missing at {path}"
+        assert f"/{field}/" in path, f"{field}: refcat path is not under {field}/"

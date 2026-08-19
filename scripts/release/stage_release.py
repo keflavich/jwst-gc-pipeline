@@ -697,6 +697,15 @@ FRAME_REFCAT = {
     # printed "no Gaia refcat mapped for 'arches' in FRAME_REFCAT" while the refcat
     # sat on disk beside the ones already in use.
     "arches": "/orange/adamginsburg/jwst/arches/catalogs/gaia_virac2_refcat_epoch2023.64.fits",
+    # quintuplet: arches's twin -- same program (2045), same module-split
+    # `geometry: disjoint`, same two filters, same refcat construction (177791
+    # rows).  Measured the same way, on the mosaics `build_manifest` selects:
+    # F212N nrca/nrcb 6.4/6.3 mas, F323N nrca/nrcb 6.6/7.3 mas; contrast
+    # 157-266, none swept at 3", window_edge_fraction 0.002.  A tighter tie than
+    # arches's own (8.5-10.4 mas), so mapping arches while leaving its twin
+    # unmapped would have been an accident of which field was looked at first.
+    "quintuplet": "/orange/adamginsburg/jwst/quintuplet/catalogs/"
+                  "gaia_virac2_refcat_epoch2024.62.fits",
 }
 
 # NOT mapped, deliberately, though a `gaia_virac2_refcat_*.fits` exists for each:
