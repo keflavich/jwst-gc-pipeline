@@ -3480,13 +3480,22 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
         path = f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv"
         if os.path.exists(path):
             return path
-        # the pre-locked average / per-exposure tables fix_alignment still falls
-        # back to when no locked table exists yet
-        for pat in (f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*locked.csv",
-                    f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*_average.csv"):
-            cands = sorted(glob.glob(pat))
-            if cands:
-                return cands[0]
+        # No VIRAC2locked table -> None.  There USED to be a fallback here, to
+        # `*locked.csv` and then `*_average.csv`, for fields that had not been
+        # locked yet.  Those globs also match the pre-VIRAC2 tables that are
+        # still on disk from the VVV and GNS era:
+        #
+        #     Offsets_JWST_Brick1182_VVV_average.csv
+        #     Offsets_JWST_Brick1182_F200ref_average.csv   (and F405ref, F444ref)
+        #     Offsets_JWST_Brick2221_VVV_average.csv
+        #
+        # and `sorted(...)[0]` picks alphabetically, so brick/1182 would have
+        # silently selected `F200ref_average` -- a table tied to a different
+        # frame entirely.  Every GC field is VIRAC2 now (CLAUDE.md: Gaia is the
+        # frame, VIRAC2 is the reference catalog), so the fallback can only fire
+        # when the right table is missing, and what it does then is reach for a
+        # frame we deliberately left.  Returning None routes the caller to say
+        # so out loud instead.
         return None
     return None
 
