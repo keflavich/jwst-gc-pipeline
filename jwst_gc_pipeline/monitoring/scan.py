@@ -15,9 +15,11 @@ Two rules shape every glob here, both learned from bugs:
    directory.  A pattern that omits the observation token reports one
    observation's products under another's name.  Where the pipeline itself
    writes a name that carries no observation token -- the per-filter merged
-   catalogs are named ``<filter>_<module>_indivexp_merged_...`` with no ``_o``
-   -- the ambiguity is REPORTED (``scope='ambiguous'``) rather than resolved by
-   guessing.
+   catalogs are named ``<filter>_<module>_indivexp_merged_...``, with no ``_o``
+   for every proposal except the per-obs-merged ones (10678/gc-treasury, which
+   spell ``<filter>_<module>_o<obs>_indivexp_merged_...``;
+   naming.PER_OBS_MERGED_PROPOSALS) -- the ambiguity is REPORTED
+   (``scope='ambiguous'``) rather than resolved by guessing.
 
 2. **Follow symlinks.**  ``brick``, ``cloudc`` and ``wd1`` under
    ``/orange/adamginsburg/jwst`` are symlinks into ``/blue`` and

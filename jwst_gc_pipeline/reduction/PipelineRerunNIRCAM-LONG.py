@@ -49,6 +49,7 @@ from jwst.tweakreg.utils import adjust_wcs
 from jwst.datamodels import ImageModel
 
 from jwst_gc_pipeline.reduction.destreak import destreak
+from jwst_gc_pipeline.reduction.mast_obs_scope import observation_scope_mask
 
 from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
 from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
@@ -405,6 +406,17 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # np.array wrapper needed as of 2026-04-10 to avoid masked array type error that shouldn't happen
         msk = ((np.char.find(np.array(obs_table['filters']), filtername.upper()) >= 0) |
                (np.char.find(np.array(obs_table['obs_id']), filtername.lower()) >= 0))
+        # Restrict to the observation under reduction (issue #416): all 139
+        # gc-treasury tiles share FILTERS='F212N;F480M', so the filter mask
+        # alone selects every released observation and each fresh tile would
+        # download the whole program's asn products.  The table is queried per
+        # PROPOSAL, so this narrows the two-field proposals as well (2221 =
+        # brick o001 + cloudc o002, 3958 = brick + sickle, 2045 = arches +
+        # quintuplet): a brick reduce stops pulling the other field's asn
+        # products into brick's output_dir.  The asn glob below is already
+        # -o{field}-scoped, so the narrowing removes download volume.
+        msk &= observation_scope_mask(np.array(obs_table['obs_id']),
+                                      proposal_id, field)
         data_products_by_obs = Observations.get_product_list(obs_table[msk])
         print("data prodcts by obs length: ", len(data_products_by_obs))
 
@@ -432,6 +444,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     if mast_needed and not skip_step1and2:
         products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
         print("products_fits length:", len(products_fits))
+        # TODO(#438): `field` is used RAW here while the obs mask above pads it
+        # through `observation_number`, so `--field 1` narrows the obs table to
+        # jw10678-o001 correctly and then this substring test looks for
+        # `jw106781` and keeps nothing.  #438 normalises --field once, at the
+        # driver's entry, for this site and the asn glob below.
         uncal_mask = np.array([
             uri.endswith('_uncal.fits')
             and f'jw0{proposal_id}{field}' in uri
@@ -458,6 +475,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
 
     # all cases, except if you're just doing a merger?
+    #
+    # TODO(#438): the association glob below uses `field` RAW, while the obs
+    # mask above pads it through `observation_number`: `--field 1` downloads
+    # jw10678-o001's association and then globs `-o1*`, which matches nothing.
+    # #438 normalises --field once, at the driver's entry, for both sites.
     if module in ('nrca', 'nrcb', 'merged'):
         print(f"Working on module {module}: running initial pipeline setup steps (skip_step1and2={skip_step1and2})")
         print(f"Searching for {os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json')}")

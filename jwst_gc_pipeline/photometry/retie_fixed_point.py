@@ -136,8 +136,8 @@ def load_records(record_dir, stage="m2", filtername=None, obs_token=None,
     timestamped record, so counting it would compare a pass against itself and
     report a repeat that never happened.
 
-    ``obs_token`` is a PREFERENCE, not a filter.  Only sgrc and gc2211 write
-    ``_oNNN`` m2 records; on brick, cloudc, cloudef, sgrb2, arches, quintuplet,
+    ``obs_token`` is a PREFERENCE, not a filter.  Only sgrc, gc2211 and
+    gc-treasury (10678) write ``_oNNN`` m2 records; on brick, cloudc, cloudef, sgrb2, arches, quintuplet,
     sickle, sgra and ngc6334 the records are untokened, and requiring the token
     made this glob match nothing -- the check exited 0 in silence and the loop
     ran to MAXITER on exactly the fields with the longest histories.  So: use

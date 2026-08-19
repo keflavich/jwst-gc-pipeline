@@ -423,8 +423,8 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 ### The `<obs>` token in merged filenames
 
 `<obs>` above is `crowdsource_catalogs_long.obs_token()`, a filename
-disambiguator. It is empty for most fields and non-empty for exactly three
-proposals. It covers the two collisions below — brick 1182+2221
+disambiguator. It is empty for most fields and non-empty for the four proposals
+below. It covers the collisions below — brick 1182+2221
 sharing a basepath is worked around by a file copy in `cataloging.py`, m4/1979 obs
 002+003 is a known deferred collision noted in `merge_catalogs.py`, and cloudef uses
 a separate visit token:
@@ -433,7 +433,17 @@ a separate visit token:
 |---|---|---|
 | 2211 (gc2211) | `_o<field>`, e.g. `_o023` | 5 GC pointings (023/028/046/049/050) REUSE the same `(visit, vgroup, exp)` tuples, so the obs-less per-frame catalog name is identical across observations sharing a filter (F200W: o023/o046/o049/o050; F277W: all five) |
 | 7213 and 6778 (ngc6334) | `_j7213` / `_j6778`, keyed on **proposal**, not observation | TWO proposals share one target directory **and** the filters F200W + F470N, cataloged with the same obs number (001) and the same tuples — 6778 silently overwrote 7213's F200W/F470N catalogs on 2026-07-09 (real data loss). Non-shared filters get the token too, for uniformity. |
+| 10678 (gc-treasury) | `_o<field>`, e.g. `_o042` | The GC Treasury program is 2211's shape at 139 tiles: every observation is one mosaic tile of the single `gc-treasury` tree, all of them image F212N+F480M, and the numbering restarts per observation, so tile 2 would overwrite tile 1 (issue #416). |
 | everything else | `''` | single-obs-per-basepath; filenames unchanged |
+
+10678 additionally scopes the **merged** catalogs per observation
+(`naming.PER_OBS_MERGED_PROPOSALS`), which the other multi-obs proposals do not:
+gc2211 pools its five pointings into one untokened merged catalog by design, and
+at 139 tiles that pooling is itself the corruption mode. The token lands at the
+**module slot** there (`f212n_nrcblong_o042_indivexp_merged_..._dao_basic.fits`,
+and its `_vetted` sibling), the same slot ngc6334's `_j{proposal}` uses, so a
+10678 vetted catalog carries NO end-slot token. A field-less 10678 merge raises
+rather than glob unscoped (finds nothing) or `_o*` (pools tiles).
 
 Note `obs_token('2211', None) == ''`: an all-observations gc2211 run (`field=None`)
 writes the **token-less** name, so on disk gc2211 carries both

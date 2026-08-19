@@ -37,6 +37,7 @@ from jwst_gc_pipeline.photometry.residual_background import (
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
+    PER_OBS_MERGED_PROPOSALS, merged_catalog_obs_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
@@ -1450,6 +1451,11 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # _o{field}; see obs_token() / save_photutils_results / _predict_tblfilename).
     # The GLOB token and the OUTPUT token differ for the all-obs merge:
     #   - field set (per-obs merge): glob only that obs (_o{field}), write per-obs.
+    #     Proposal 10678 (gc-treasury, 139 tiles under one tree) ALWAYS takes
+    #     this branch -- the manual pipeline passes its field through, and a
+    #     field-less 10678 call is refused below: an un-tokened glob finds
+    #     nothing (the per-frame writer stamps _o{field}) and an _o* glob pools
+    #     other tiles' frames, both silent corruption modes (issue #416).
     #   - field unset on gc2211 (the manual pipeline's internal all-obs merge,
     #     cataloging.py:run_manual_pipeline): glob EVERY obs (_o*) so the merged
     #     catalog pools all obs-tagged tables (NOT the legacy un-tokened orphans),
@@ -1467,7 +1473,14 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # ``glob_obs_`` fully determines which frames are pooled, so we glob it ONCE
     # per (module, visit, exposure) -- the old per-progid loop globbed the SAME
     # pattern once per obs_filters entry and deduped, which was purely redundant.
-    ngc6334_multiprop = any(str(p) in ('7213', '6778') for p in _obs_filters_for(target))
+    if str(progid) in PER_OBS_MERGED_PROPOSALS and field in (None, ''):
+        raise ValueError(
+            f"proposal {progid} shares one basepath across many observations "
+            f"whose merged catalogs are per-obs (naming.merged_catalog_obs_token); "
+            f"pass field=<obs>.  An unscoped merge would glob nothing (the "
+            f"per-frame writer stamps _o{{field}}) or pool other tiles' frames.")
+    ngc6334_multiprop = any(str(p) in ('7213', '6778')
+                            for p in (_obs_filters_for(target) or ()))
     if ngc6334_multiprop:
         glob_obs_ = out_obs_ = f'_j{progid}'
     elif field not in (None, ''):
@@ -1770,6 +1783,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   vetted=False,
                   filternames_override=None,
                   field=None,
+                  progid=None,
                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     """Cross-filter merge of per-filter daophot catalogs.
 
@@ -1779,6 +1793,11 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     the full ``_obs_filters_for(target)`` set -- REQUIRED for the manual NIRCam path,
     whose target (e.g. sickle) registers MIRI filters in the same obs_filters
     entry that must NOT enter the NIRCam cross-band merge.
+
+    ``progid`` is the RUNNING proposal.  It decides the per-obs-merged
+    module-slot token (``naming.merged_catalog_obs_token``) of the per-filter
+    input glob; the field registry answers only for a caller that names no
+    proposal.
     """
 
     desat = "_unsatstar" if desat else ""
@@ -1817,7 +1836,34 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # Empty for other targets.  MUST match _vtok/_combsuf in cataloging.py and
     # obs_token() in crowdsource_catalogs_long.
     _obssuf = f'_o{field}' if (target == 'gc2211' and field not in (None, '')) else ''
-    vetted_tok = f'{_obssuf}_vetted' if vetted else ''
+    # Per-obs-MERGED proposals (10678/gc-treasury) place the obs token after the
+    # module instead: the per-filter merged/vetted inputs are
+    # ``{filt}_{module}_o{field}_indivexp_merged..._vetted.fits`` (see
+    # naming.merged_catalog_obs_token and _merged_path/_vtok in cataloging.py),
+    # so the input glob must carry the module-slot token -- an unscoped ``*``
+    # would match another tile's catalogs -- while the OUTPUT keeps the end-slot
+    # ``_o{field}`` that cataloging's m7/m8 readers spell via obs_token().
+    #
+    # The RUNNING proposal decides, when the caller names it.  Reading the token
+    # off the field registry alone gets it wrong in both directions: an
+    # unregistered gc-treasury (no fields.yaml entry yet, issue #416) reads ''
+    # and globs unscoped, and the `*` after the module swallows another tile's
+    # `_o001_` -- while a target that registers 10678 ALONGSIDE another proposal
+    # would hand 10678's convention to that proposal's run.  The registry scan
+    # stays as the fallback for a caller that passes no progid.
+    _perobs_merged_tok = ''
+    if field not in (None, ''):
+        if progid not in (None, ''):
+            _perobs_merged_tok = merged_catalog_obs_token(progid, field)
+        else:
+            for _p in map(str, _obs_filters_for(target) or ()):
+                _perobs_merged_tok = merged_catalog_obs_token(_p, field)
+                if _perobs_merged_tok:
+                    break
+    if _perobs_merged_tok:
+        _obssuf = _perobs_merged_tok
+    _mtk = f'{_perobs_merged_tok}_' if _perobs_merged_tok else ''
+    vetted_tok = ('_vetted' if _perobs_merged_tok else f'{_obssuf}_vetted') if vetted else ''
 
     # Resolve each filter's catalog AND its i2d (for WCS) TOGETHER, keeping
     # filternames / catfns / imgfns / tbls / wcses strictly aligned 1:1.
@@ -1832,7 +1878,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     for filn in filternames:
         if indivexp:
             _cat_matches = sorted(glob.glob(
-                f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged"
+                f"{basepath}/catalogs/{filn.lower()}*{module}*{_mtk}indivexp_merged"
                 f"{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits"))
             if not _cat_matches:
                 print(f"WARNING: no indivexp daophot {daophot_type} catalog for "
@@ -2068,6 +2114,13 @@ def load_satstar_catalog(filtername, target='brick',
     # phantoms, ~2600 rows each) -- which ballooned the consolidated satstar
     # catalog ~40x (38764 vs ~150 real) and corrupted the daophot merge via
     # near-sat flagging.  See project_miri_partialsat_divot.
+    # TODO(#416): NOT obs-scoped.  All of a program's observations share this
+    # one {FILTER}/pipeline directory, so an obs-scoped merged catalog still
+    # takes every observation's saturated stars through here, and the
+    # consolidated cache below is written under one name per filter.  The
+    # per-exposure names DO carry the token (`..._o{obs}_crf_..._m<N>_
+    # satstar_catalog.fits`), so this is scopable once the #416 layout decision
+    # says whether tiles share a tree at all.
     _all_sat = sorted(glob.glob(f'{basepath}/{filtername.upper()}/pipeline/*satstar_catalog.fits'))
     _tok = re.compile(r'_m\d+_satstar_catalog\.fits$')
     fallback = [f for f in _all_sat if _tok.search(os.path.basename(f))]

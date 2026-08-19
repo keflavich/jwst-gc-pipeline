@@ -199,9 +199,12 @@ class CappedSourceGrouper:
 # restructure).  Imported here so existing references keep working unchanged.
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
-    MIRI_FILTERS, _instrument_from_filter, _inst_token, _instrument_override,
+    MIRI_FILTERS, MULTIOBS_PROPOSALS,
+    observation_field_token,
+    _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
+from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -1019,14 +1022,24 @@ def obs_token(proposal_id, field):
     that REUSE the same ``(visit, vgroup, exp)`` tuples, so the obs-less per-frame
     catalog-table name ``{filter}_{module}_visit001_vgroup02201_exp00001_...`` is
     identical across obs that share a filter and silently overwrites (= data loss;
-    F200W: o023/o046/o049/o050; F277W: all 5).  Insert ``_o{field}`` for prop 2211
-    so each obs writes a distinct catalog table.  The per-frame residual/model
-    products under ``{filter}/pipeline/`` already carry ``-o{field}`` and are
-    unaffected.  Other proposals are single-obs-per-basepath and get the empty
-    token, so their filenames and existing products are unchanged.
+    F200W: o023/o046/o049/o050; F277W: all 5).  Proposal 10678 (the GC Treasury
+    program) is the same shape at 139 tiles: every obs images F212N+F480M under
+    the one gc-treasury tree with per-obs restarted numbering, so the second tile
+    would overwrite the first (issue #416).  Insert ``_o{field}`` for these
+    proposals (``naming.MULTIOBS_PROPOSALS``) so each obs writes a distinct
+    catalog table.  The per-frame residual/model products under
+    ``{filter}/pipeline/`` already carry ``-o{field}`` and are unaffected.
+    Other proposals are single-obs-per-basepath and get the empty token, so
+    their filenames and existing products are unchanged.
+
+    ``field`` goes through ``naming.observation_field_token``, which normalises
+    ``'1'`` to the ``'001'`` spelling every reader of the token expects and
+    refuses a field that does not name an observation -- a program registered
+    with the wildcard obsid and run without ``--field`` stops here rather than
+    writing a literal ``_o*`` into every catalog name it produces.
     """
-    if str(proposal_id) == '2211' and field not in (None, ''):
-        return f'_o{field}'
+    if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
+        return f'_o{observation_field_token(field)}'
     # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
     # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names
     # collide and the second run overwrites the first.  Tag by proposal id.
@@ -2097,9 +2110,12 @@ def save_photutils_results(result, ww, filename,
         result.meta['BKGMETH'] = 'bkg2d_sampled' if background_map is not None else 'none'
 
     iter_ = _iteration_token(iteration_label)
-    # Per-observation disambiguator (prop 2211/gc2211 only; empty elsewhere).
-    # gc2211's 5 obs reuse the same visit/vgroup/exp tuples, so without _o{field}
-    # the catalog tables collide across obs and silently overwrite.  MUST match
+    # Per-observation disambiguator (naming.MULTIOBS_PROPOSALS -- 2211/gc2211
+    # and 10678/gc-treasury -- plus ngc6334's per-proposal `_j`; empty
+    # elsewhere).  Both multi-obs proposals restart the visit/vgroup/exp tuples
+    # per observation, so without _o{field} the catalog tables collide across
+    # obs and silently overwrite (gc2211's 5 pointings; 10678's 139 tiles, where
+    # the collision is certain at tile 2).  MUST match
     # _predict_tblfilename and the merge_catalogs.py glob.  See obs_token().
     obs_ = _obs_token_from_options(options)
     # {module} only, no detector token -- that is what merge_catalogs.py globs
@@ -5039,28 +5055,24 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                 # tree doesn't contain it.
                 if (_cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None
                         and options.daophot):
-                    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
                     _cut_bp = _cutout_out_basepath(basepath, options)
                     os.makedirs(os.path.join(_cut_bp, 'catalogs'), exist_ok=True)
-                    _merge_methods = [('dao', '_basic')]
-                    if not options.basic_only:
-                        _merge_methods.append(('daoiterative', '_iterative'))
-                    for _mname, _msuffix in _merge_methods:
-                        try:
-                            _merge_catalogs.merge_individual_frames(
-                                module=module, filtername=filtername.lower(),
-                                progid=proposal_id, method=_mname, suffix=_msuffix,
-                                target=target, basepath=_cut_bp,
-                                iteration_label=options.iteration_label or None,
-                                bgsub=options.bgsub, desat=options.desaturated,
-                                epsf=options.epsf, blur=options.blur,
-                                resbgsub=getattr(options, 'use_iter3_residual_bg', False),
-                                fwhm_basepath=basepath)
-                            print(f"cutout: wrote merged {_mname} catalog under "
-                                  f"{_cut_bp}/catalogs/", flush=True)
-                        except Exception as ex:
-                            print(f"cutout: merge_individual_frames({_mname}) "
-                                  f"failed: {ex}", flush=True)
+                    # The merge methods, the per-method handler and the
+                    # observation this merge covers all live in
+                    # `observation_merge.merge_cutout_catalogs`, which tests
+                    # call directly -- this branch is a thousand lines inside
+                    # main() and nothing drove it, so a dropped `field` was
+                    # pinned only by reading the source.
+                    #
+                    # `field` is the RESOLVED value (the registry default when
+                    # --field was omitted), not `options.field`: with --field
+                    # omitted the raw option is None, and a field-less merge on
+                    # a per-obs-merged proposal (10678) is refused.
+                    merge_cutout_catalogs(
+                        proposal_id=proposal_id, field=field, target=target,
+                        module=module, filtername=filtername,
+                        basepath=_cut_bp, fwhm_basepath=basepath,
+                        options=options)
             else:
                 # Mosaic-mode photometry deprecated 2026-05-25 (see main()
                 # deprecation guard).  Unreachable in normal CLI use, but

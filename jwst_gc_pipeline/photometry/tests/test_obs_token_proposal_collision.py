@@ -26,6 +26,17 @@ def test_prop2211_multiobs_unchanged():
     assert obs_token('2211', '') == ''   # no field -> no token
 
 
+def test_prop10678_treasury_tiles_get_obs_tokens():
+    # program 10678 (GC Treasury): 139 tiles under the one gc-treasury tree,
+    # all sharing F212N+F480M with per-obs restarted (visit, vgroup, exp)
+    # numbering -- the same collision shape as 2211, at 139x (issue #416).
+    assert obs_token('10678', '001') == '_o001'
+    assert obs_token('10678', '139') == '_o139'
+    assert obs_token('10678', '001') != obs_token('10678', '002')
+    assert obs_token('10678', '') == ''   # no field -> no token
+    assert obs_token('10678', None) == ''
+
+
 def test_other_targets_get_no_token():
     # single-proposal-per-basepath targets keep the empty token (unchanged names)
     for prop in ('2221', '1182', '4147', '1334', '1979', '3523', '1905'):
