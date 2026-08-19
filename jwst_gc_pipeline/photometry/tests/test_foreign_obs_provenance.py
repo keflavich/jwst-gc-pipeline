@@ -328,6 +328,71 @@ def test_an_unregistered_target_still_takes_its_field_verbatim():
                                 field="007")) == "007"
 
 
+# ------------------------------------------------- a wildcard-obsid field (10678)
+
+def test_a_wildcard_field_accepts_any_obsid_shaped_field():
+    """gc-treasury registers `obsids: {nircam: '*'}`, so `allowed == {'*'}` and
+    membership rejects every REAL obsid -- `'042' not in {'*'}` -- handing the
+    checkpoint None on every run of the program.  None is the "keep them all"
+    path, which is exactly what must not happen here: every tile writes into
+    one <basepath>/<filter>/ tree.  A wildcard has no list to check against,
+    so `--field` is validated on shape."""
+    assert _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                                field="042")) == "042"
+    assert _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                                field="001", modules="mirimage")) == "001"
+
+
+def test_a_wildcard_field_still_refuses_a_field_that_is_not_an_obsid(capsys):
+    """The shape check is the only validation left, so it has to do the
+    `FIELD=${FIELD:-012}` job: a module name or a filter is not an obsid."""
+    got = _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                               field="nrcb"))
+    assert got is None, got
+    assert "not shaped like an obsid" in capsys.readouterr().out
+
+
+def test_a_wildcard_field_never_resolves_to_the_wildcard_itself():
+    """Without `--field` there is nothing to resolve, and the registry token
+    '*' is not an answer: downstream it becomes the substring `_o*_`, which
+    matches no crf basename, so every catalog would be dropped -- the
+    sgrb2/sickle joint-token failure (F770W 60 -> 0) by another door."""
+    for instrument in ("merged", "mirimage"):
+        got = _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                                   field=None, modules=instrument))
+        assert got is None, (instrument, got)
+
+
+def test_the_wildcard_field_takes_the_shared_branch_of_the_filter(tmp_path):
+    """Two 10678 tiles with identical per-frame basenames, through the REAL
+    filter on the LIVE registry -- no stubbed count.
+
+    `filter_observation_count` decides whether the foreign-observation filter
+    runs at all (`shared = n_obs > 1`), and a wildcard obsid list is one entry
+    long.  Counted as ONE observation it sends 10678 down the
+    single-observation branch, whose premise is "every catalog here is this
+    run's whatever its name": that branch groups by identity and keeps
+    `sorted(group)[0]`, so o037's catalog stands in for o042's and the run
+    that asked for o042 measures the wrong tile with no error raised.
+    """
+    # Every 10678 tile is visit001 and reuses the same exposure suffixes, so
+    # the per-frame basenames collide exactly; the observation lives only in
+    # the crf provenance.
+    name = "f212n_nrca1_visit001_vgroup02101_exp00001_m2_daophot_basic.fits"
+    ours, theirs = [], []
+    for obs, bucket in (("042", ours), ("037", theirs)):
+        d = tmp_path / obs
+        d.mkdir()
+        bucket.append(_catalog(
+            d, name,
+            f"/x/jw10678{obs}001_02101_00001_nrca1_destreak_o{obs}_crf.fits"))
+
+    kept = _drop_foreign_obs_duplicates(ours + theirs, "", "f212n", "m2",
+                                        "nrca1", "gc-treasury",
+                                        target_obs="042")
+    assert kept == ours, kept
+
+
 def test_the_checkpoint_runs_the_REAL_filter_on_mixed_provenance(tmp_path, monkeypatch):
     """The wiring test above stubs `_drop_foreign_obs_duplicates` with a spy,
     so it pins the wiring and never runs the real filter.  A test of THAT

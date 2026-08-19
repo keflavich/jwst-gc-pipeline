@@ -31,6 +31,98 @@ class FieldRegistryError(ValueError):
     """The registry file says something the pipeline cannot act on."""
 
 
+#: An observation block may declare ``obsids: {nircam: '*'}``: every
+#: observation of the proposal belongs to this field for that instrument.
+#:
+#: Written for 10678, the GC Treasury, where one field owns the whole
+#: proposal.  The observation numbers ARE published --
+#: ``Observations.query_criteria(proposal_id='10678')`` returns 1668 planned
+#: exposure-level rows carrying 139 distinct observation numbers, 001..139
+#: contiguous, the same set for NIRCAM/IMAGE and MIRI/IMAGE (checked
+#: 2026-08-17; ``t_min`` is NaN on every row, so none has executed).  The
+#: wildcard records "one field owns them all", which stays true through a
+#: replan that renumbers or adds observations, and spares the registry a
+#: 139-entry list that each replan re-issues.  The cost it accepts is that an
+#: obsid outside the plan resolves to this field where a list would raise, so
+#: a proposal whose observations are split between fields enumerates them.
+WILDCARD_OBSID = '*'
+
+#: A wildcard says "every observation of this proposal", and the registry does
+#: not record how many that is.  Where a count is used only as "one
+#: observation, or several?" -- ``filter_observation_count``, whose one caller
+#: is the m2 (second merge iteration) foreign-observation filter -- the answer
+#: for a wildcard is
+#: "several", so it contributes this rather than ``len(('*',)) == 1``.
+WILDCARD_OBSERVATION_COUNT = 2
+
+#: What a concrete observation number looks like: three digits, or several of
+#: them joined by '-' for a joint-obsid token ('002-998').  Every obsid in
+#: fields.yaml has this shape.  The wildcard resolves only keys that match, so
+#: a typo or a module name ('nrcb', '0001') raises ``KeyError`` from the
+#: mapping instead of being absorbed into the catch-all owner.
+OBSID_RE = re.compile(r'\d{3}(?:-\d{3})*')
+
+
+def is_obsid(token):
+    """True when ``token`` has the shape of an observation number.
+
+    Shape only.  A wildcard field declares no obsid list, so shape is all the
+    registry gives to validate a key against.
+    """
+    return bool(OBSID_RE.fullmatch(str(token)))
+
+
+class WildcardObsidMap(dict):
+    """``{obsid: target}`` whose lookups fall back to a ``'*'`` catch-all owner.
+
+    The reduce drivers hard-index ``mapping[obsid]`` with concrete observation
+    numbers, so a wildcard-owning proposal has to resolve those through an
+    ordinary dict interface: ``[]``, ``get`` and ``in`` all fall back to the
+    wildcard owner when the concrete key is absent.  An explicit entry from
+    another field still wins over the wildcard.
+
+    The fallback applies only to obsid-SHAPED keys (``is_obsid``).  Resolving
+    anything at all would make ``'nrcb' in mapping`` true and
+    ``target_for_obsid(proposal, 'typo')`` answer the wildcard owner, so a
+    misspelling would be absorbed rather than raised.
+    """
+
+    def __init__(self, mapping=(), wildcard_target=None):
+        super().__init__(mapping)
+        self.wildcard_target = wildcard_target
+
+    def _wildcard_for(self, key):
+        """The wildcard owner if it claims ``key``, else None."""
+        if self.wildcard_target is None or not is_obsid(key):
+            return None
+        return self.wildcard_target
+
+    def __missing__(self, key):
+        owner = self._wildcard_for(key)
+        if owner is None:
+            raise KeyError(key)
+        return owner
+
+    def __contains__(self, key):
+        return super().__contains__(key) or self._wildcard_for(key) is not None
+
+    def get(self, key, default=None):
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        owner = self._wildcard_for(key)
+        return default if owner is None else owner
+
+    def copy(self):
+        """A copy that is still wildcard-resolving.
+
+        ``dict.copy`` returns a plain ``dict``, which silently drops the
+        fallback and restores the ``KeyError`` this class exists to prevent.
+        """
+        return WildcardObsidMap(self, wildcard_target=self.wildcard_target)
+
+    __copy__ = copy
+
+
 def _wavelength_key(filtername):
     """Sort key putting filters in wavelength order: f115w, f405n, f2550w.
 
@@ -47,6 +139,8 @@ class Obs:
 
     proposal: str
     #: Every observation number, per instrument, that images this field.
+    #: ``('*',)`` claims every observation of the proposal for that instrument;
+    #: at most one field may hold the wildcard per (proposal, instrument).
     obsids: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     #: Tokens naming several observations cataloged in one run, e.g. '002-998'.
     joint_obsids: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
@@ -65,6 +159,11 @@ class Obs:
     reference_catalogs: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     #: The rare per-filter override of the above: obsid -> filter -> file.
     reference_catalogs_by_filter: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    #: Reference catalog files consulted for any observation that has no exact
+    #: ``reference_catalogs`` key, in preference order.  What makes a
+    #: wildcard-obsid proposal tie-able: it declares no obsid list, so there
+    #: is nothing to hang per-obsid keys on.
+    default_reference_catalog: Tuple[str, ...] = ()
     #: Path to the measured astrometric offsets, relative to the field
     #: directory. Measured from the data once and then fixed.
     offsets_table: Optional[str] = None
@@ -126,13 +225,31 @@ def _load(path=REGISTRY_PATH):
         observations = []
         for proposal, obs in sorted((spec.get('observations') or {}).items(),
                                     key=lambda kv: int(kv[0])):
-            obsids = {inst.lower(): tuple(sorted(ids))
-                      for inst, ids in (obs.get('obsids') or {}).items()}
+            # `nircam: '*'` is a scalar; sorted('*') would still give ('*',)
+            # but only by the accident of it being one character.  Any OTHER
+            # scalar is refused rather than silently exploded: `nircam: '001'`
+            # would load as ('0', '0', '1'), and the wildcard documented above
+            # makes a scalar look like a supported spelling.
+            obsids = {}
+            for inst, ids in (obs.get('obsids') or {}).items():
+                if ids == WILDCARD_OBSID:
+                    obsids[inst.lower()] = (WILDCARD_OBSID,)
+                elif isinstance(ids, (str, bytes, int)):
+                    raise FieldRegistryError(
+                        f'{name}/{proposal} obsids.{inst} is the scalar '
+                        f'{ids!r}; write a list ([{ids!r}]) or the wildcard '
+                        f"{WILDCARD_OBSID!r}.  A bare string loads as its "
+                        f'individual characters.')
+                else:
+                    obsids[inst.lower()] = tuple(sorted(ids))
             unknown = set(obsids) - set(INSTRUMENTS)
             if unknown:
                 raise FieldRegistryError(
                     f'{name}/{proposal} lists unknown instrument(s) '
                     f'{sorted(unknown)}; known: {list(INSTRUMENTS)}')
+            default_refcat = obs.get('default_reference_catalog') or ()
+            if not isinstance(default_refcat, (list, tuple)):
+                default_refcat = (default_refcat,)
             observations.append(Obs(
                 proposal=str(proposal),
                 obsids=obsids,
@@ -152,13 +269,41 @@ def _load(path=REGISTRY_PATH):
                 reference_catalogs_by_filter={
                     str(k): {f.lower(): v for f, v in fd.items()}
                     for k, fd in (obs.get('reference_catalog_by_filter') or {}).items()},
+                default_reference_catalog=tuple(default_refcat),
                 offsets_table=obs.get('offsets_table'),
             ))
         loaded.append(Field(name=name, root=spec['root'],
                             observations=tuple(observations),
                             fov_region=spec.get('fov_region'),
                             roots=roots))
+    _assert_one_wildcard_owner(loaded)
     return roots, tuple(sorted(loaded, key=lambda f: f.name))
+
+
+def _assert_one_wildcard_owner(loaded):
+    """At most one field may claim ``'*'`` per (proposal, instrument).
+
+    ``docs/FIELDS.md`` states this as a property of the registry, so it is
+    checked when the registry loads.  Checking it only inside
+    ``field_to_reg_mapping`` makes it a property of one lookup: a file with two
+    wildcard owners imports clean, every instrument nobody asked about stays
+    silent, and the contradiction surfaces on whichever run happens to query
+    the clashing instrument first.
+    """
+    owners = {}
+    for field in loaded:
+        for obs in field.observations:
+            for inst, ids in obs.obsids.items():
+                if WILDCARD_OBSID not in ids:
+                    continue
+                key = (obs.proposal, inst)
+                if key in owners and owners[key] != field.name:
+                    raise FieldRegistryError(
+                        f'proposal {obs.proposal} ({inst}) has two wildcard '
+                        f'obsid owners: {owners[key]!r} and {field.name!r}. '
+                        f"'*' claims every observation, which only one field "
+                        f'can do.')
+                owners[key] = field.name
 
 
 ROOTS, FIELDS = _load()
@@ -251,6 +396,13 @@ def filter_observation_count(target, filtername, instrument=None):
     disk is 6778's whatever its name, and discarding the untokened ones would
     throw away real exposures (nrca exists ONLY under the pre-token name).
 
+    A ``'*'`` (wildcard) obsid list contributes
+    ``WILDCARD_OBSERVATION_COUNT`` (2), not 1: it claims every observation of
+    the proposal, so the count is "several" and the registry does not record
+    how many.  The exact number would matter only to a caller asking "how
+    many", and the one caller (``cataloging._drop_foreign_obs_duplicates``)
+    asks "one, or several?".
+
     ``instrument`` defaults to the one the filter NAME implies (MIRI bands are
     counted against MIRI's observations, everything else against NIRCam's);
     pass it explicitly for NIRISS.
@@ -283,11 +435,38 @@ def filter_observation_count(target, filtername, instrument=None):
         # `obsids` (sgrb2 miri lists 001/002/998 and joins 002-998), so adding
         # it would count the same observation twice.
         ids = tuple(o.obsids.get(instrument, ()))
+        if WILDCARD_OBSID in ids:
+            # '*' claims EVERY observation of the proposal, so this filter is
+            # shared by definition -- `len(('*',)) == 1` would read as "one
+            # observation images it", which switches the m2 foreign-observation
+            # filter off and lets one tile's per-frame catalogs stand in for
+            # another's (the gc2211 #259/#298 class).
+            n += WILDCARD_OBSERVATION_COUNT
+            continue
         # A proposal that declares the filter but lists no obsid for this
         # instrument still counts as one observation: the registry cannot say
         # how many, and 1 means "not shared", which keeps every catalog.
         n += len(ids) or 1
     return n
+
+
+def claims_every_observation(target, instrument='nircam'):
+    """Does ``target`` claim every observation of one of its proposals?
+
+    True when any observation block declares ``obsids: {<instrument>: '*'}``.
+
+    Callers that enumerate ``obsids`` to ask "does this field have several
+    observations?" get ONE entry from a wildcard -- the literal ``'*'`` -- and
+    read that as "a single observation", which is the answer that switches
+    ambiguity handling off.  This says so directly, without pretending to know
+    how many.
+    """
+    known = BY_NAME.get(target)
+    if known is None:
+        return False
+    instrument = instrument.lower()
+    return any(WILDCARD_OBSID in o.obsids.get(instrument, ())
+               for o in known.observations)
 
 
 def glob_obsid(target, proposal, instrument='nircam'):
@@ -337,21 +516,40 @@ def field_to_reg_mapping(proposal, instrument='nircam'):
 
     The reduce and catalog drivers use this to name the field an observation
     belongs to.
+
+    A field declaring the ``'*'`` wildcard owns every observation of the
+    proposal for that instrument, and the returned mapping resolves any
+    concrete obsid through it, so the drivers' ``mapping[obsid]`` works for
+    observation numbers that land after the registry was written.  An explicit
+    entry from another field still wins; two fields claiming the wildcard for
+    one (proposal, instrument) is an error.
     """
     instrument = instrument.lower()
     out = {}
+    wildcard_owner = None
     for field in FIELDS:
         obs = field.observation(proposal)
         if obs is None:
             continue
         for obsid in (tuple(obs.obsids.get(instrument, ()))
                       + tuple(obs.joint_obsids.get(instrument, ()))):
+            if obsid == WILDCARD_OBSID:
+                if wildcard_owner is not None and wildcard_owner != field.name:
+                    raise FieldRegistryError(
+                        f'proposal {proposal} ({instrument}) has two wildcard '
+                        f'obsid owners: {wildcard_owner!r} and {field.name!r}. '
+                        f"'*' claims every observation, which only one field "
+                        f'can do.')
+                wildcard_owner = field.name
+                continue
             if obsid in out:
                 raise FieldRegistryError(
                     f'proposal {proposal} observation {obsid} ({instrument}) '
                     f'is claimed by both {out[obsid]!r} and {field.name!r}')
             out[obsid] = field.name
-    return out
+    if wildcard_owner is not None:
+        out[WILDCARD_OBSID] = wildcard_owner
+    return WildcardObsidMap(out, wildcard_target=wildcard_owner)
 
 
 def target_for_obsid(proposal, obsid, instrument='nircam'):
@@ -381,6 +579,13 @@ def default_field_token(target, proposal, instrument='nircam'):
     between them and are cataloged as '002-998', so picking either one alone
     would catalog half a mosaic.  Relying on which key an inverted dict happened
     to keep is how that used to be decided.
+
+    The ``'*'`` wildcard is filtered out, so a field that declares only the
+    wildcard answers ``None``.  ``'*'`` is a registry token, not an
+    observation number, and the caller interpolates this value into product
+    names as ``-o{field}``: the literal ``-o*`` would be WRITTEN into mosaic
+    and catalog filenames that no reader globs back.  ``None`` sends the
+    caller to its "name the observation" error instead.
     """
     known = BY_NAME.get(target)
     if known is None:
@@ -392,8 +597,46 @@ def default_field_token(target, proposal, instrument='nircam'):
     joint = obs.joint_obsids.get(instrument, ())
     if joint:
         return joint[0]
-    seen = obs.obsids.get(instrument, ())
+    seen = tuple(o for o in obs.obsids.get(instrument, ())
+                 if o != WILDCARD_OBSID)
     return seen[0] if seen else None
+
+
+def field_token_for_run(target, proposal, instrument='nircam'):
+    """The observation token a run names its products with, or raise.
+
+    The catalog driver interpolates this into ~40 product-name f-strings as
+    ``-o{token}``, so it has to be a real observation number.  Two sources,
+    in order: the registry's default for this (target, proposal, instrument),
+    then the field name's entry in the inverted ``field_to_reg_mapping`` --
+    the historical fallback, with the ``'*'`` key removed so a wildcard-owning
+    proposal cannot supply it.
+
+    Raises ``FieldRegistryError`` when neither answers.  Two cases reach that
+    raise and it says which one it is: a field that claims every observation of
+    its proposal has no default by construction (the value it used to yield was
+    the literal ``'*'``, so ``jw010678-o*_t001_nircam_..._i2d.fits`` names went
+    to disk), and a (field, proposal, instrument) triple the registry lists no
+    observations for at all -- arches/2045 on MIRI, and 39 more, which raised
+    ``KeyError`` from the inversion before this function existed.
+    """
+    token = default_field_token(target, proposal, instrument)
+    if token:
+        return str(token)
+    inverted = {v: k for k, v in field_to_reg_mapping(proposal, instrument).items()
+                if k != WILDCARD_OBSID}
+    token = inverted.get(target)
+    if token:
+        return str(token)
+    why = ("A field that claims every observation of its proposal "
+           "(fields.yaml obsids: '*') has no default"
+           if claims_every_observation(target, instrument) else
+           f'fields.yaml registers no {instrument} observation for this '
+           f'field and proposal')
+    raise FieldRegistryError(
+        f'{target}/{proposal} ({instrument}) does not name one observation to '
+        f'work on, so --field is required.  {why}: pass --field <obsid>, '
+        f'e.g. --field 042.')
 
 
 def reference_frame(proposal):
@@ -424,7 +667,10 @@ def reference_catalog_candidates(proposal, obsid, filtername=None,
     """Every registered reference catalog for one observation, best first.
 
     MIRI and NIRISS register several and take the first present on disk; NIRCam
-    registers one.
+    registers one.  An exact ``reference_catalog`` key for the obsid wins;
+    ``default_reference_catalog`` answers for any observation without one,
+    which is how a wildcard-obsid proposal registers a catalog for observations
+    whose numbers the registry does not list one by one.
     """
     obsid = str(obsid)
     if target is None:
@@ -443,6 +689,8 @@ def reference_catalog_candidates(proposal, obsid, filtername=None,
             relative = (one,)
     if not relative:
         relative = obs.reference_catalogs.get(obsid, ())
+    if not relative:
+        relative = obs.default_reference_catalog
     if not relative:
         raise FieldRegistryError(
             f'no reference catalog registered for {target} proposal {proposal} '

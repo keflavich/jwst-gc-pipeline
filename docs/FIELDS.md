@@ -44,7 +44,7 @@ shuffling the file and comparing.
 
 | key | meaning |
 |---|---|
-| `obsids` | Every observation number that images this field, per instrument. |
+| `obsids` | Every observation number that images this field, per instrument, as a **list**. `'*'` is the one supported scalar and claims **every** observation of the proposal for that instrument — see [The `'*'` wildcard](#the--wildcard) below. |
 | `glob_obsid` | The observation number the merge builds filename patterns from, per instrument. Needed only when `obsids` lists more than one; `'*'` matches several. |
 | `joint_obsids` | Tokens naming several observations cataloged in one run, e.g. `'002-998'`. |
 | `nvisits` | How many visits the observation has. |
@@ -53,7 +53,39 @@ shuffling the file and comparing.
 | `reference_frame` | The astrometric frame token (`VIRAC2`, `Gaia`), used to name a per-proposal offsets table, `offsets/Offsets_JWST_Brick<proposal>_<token>[_average].csv`, on the fallback path taken when the proposal has no locked table. Keyed per proposal: two fields sharing a proposal must agree, and the loader raises if they disagree. **Leave it out** when the proposal aligns from a table declared in `reduction/alignment_config.py` — that is where the frame a product records comes from, and an absent token makes `resolve_shift` refuse to build the fallback filename rather than name a table that should not be used. |
 | `reference_catalog` | Observation number → the catalog file the astrometry ties TO, relative to the field directory. Per observation, because different observations of one proposal sit at different epochs. A value may be a list; `reference_catalog_path` takes the first entry present on disk, whatever the instrument. MIRI and NIRISS are simply the ones that register more than one. What happens when none is present differs: the NIRCam driver **raises**, while MIRI falls through to `twomass.fits` and then to running with no reference. |
 | `reference_catalog_by_filter` | The rare per-filter override of the above: observation → filter → file. |
+| `default_reference_catalog` | The catalog consulted for any observation that has no exact `reference_catalog` key. An exact key still wins, and an observation with neither still raises. This is what makes a wildcard-obsid proposal tie-able: it declares no obsid list, so there is nothing for per-obsid keys to hang on. |
 | `offsets_table` | Path to the measured astrometric offsets, relative to the field's directory. Measured from the data once and then fixed. |
+
+### The `'*'` wildcard
+
+`obsids: {nircam: '*'}` claims every observation of the proposal for that
+instrument. It is for a field that owns a whole proposal whose plan is long and
+provisional — 10678, the GC Treasury, whose 139 observation numbers (001..139,
+the same set for NIRCam and MIRI) are published today and are re-issued by
+every replan. The wildcard records the ownership, which survives a replan, in
+place of a 139-entry list.
+
+**Use a list instead** for any proposal whose observations are split between
+fields: the wildcard takes an obsid outside the plan as this field's where a
+list would raise. That is the cost it accepts.
+
+Rules the loader and the registry hold to:
+
+- At most one field may hold the wildcard per (proposal, instrument), checked
+  when the registry **loads**.
+- An explicit number registered by another field wins over the wildcard.
+- The wildcard resolves only obsid-**shaped** keys (`fields.is_obsid`: `042`,
+  `002-998`), so a typo raises rather than being absorbed.
+- Any other scalar (`nircam: '001'`) raises `FieldRegistryError`: a bare string
+  would load as its individual characters.
+
+What it means to a consumer that asks "how many observations?": a wildcard
+answers "several, count unknown". `filter_observation_count` reports more than
+one observation, so the foreign-observation filter at the m2 merge iteration
+stays switched on; `monitoring.scan` reports the field as multi-observation and
+counts its products across every observation of the proposal; and
+`default_field_token` answers `None`. `'*'` is never handed out as an
+observation number, because callers write what they get into product filenames.
 
 ### Observation numbers are per instrument, and they have to be
 

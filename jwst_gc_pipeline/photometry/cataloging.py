@@ -3597,6 +3597,14 @@ def _resolved_obsid(options):
     caller keeps everything: the pre-existing behaviour, loud rather than
     wrong.  Where exactly one is listed there is nothing to guess and it is
     returned.
+
+    A field registered with the ``'*'`` wildcard (10678) has no obsid list to
+    validate against, so ``--field`` is accepted on SHAPE
+    (``fields.is_obsid``) and a run without ``--field`` resolves to None.  The
+    wildcard itself is never returned: it is a registry token, not an
+    observation number, and downstream it becomes the substring ``_o*_``,
+    which matches no ``crf`` (the stage-3 per-exposure product cataloging
+    reads, ``..._o037_crf.fits``) on disk.
     """
     from jwst_gc_pipeline import fields as _freg
     target = getattr(options, 'target', None)
@@ -3618,6 +3626,23 @@ def _resolved_obsid(options):
             return str(field)          # unregistered target: nothing to check against
         allowed = ({str(o) for o in obs.obsids.get(instrument, ())}
                    | {str(j) for j in obs.joint_obsids.get(instrument, ())})
+        if _freg.WILDCARD_OBSID in allowed:
+            # This field claims EVERY observation of the proposal (10678, the
+            # GC Treasury: all 139 of its observations belong to gc-treasury,
+            # so fields.yaml declares the ownership and not the list).  There
+            # is no membership list to check `--field` against, only its SHAPE.
+            # Testing membership anyway rejects every real obsid --
+            # `'042' not in {'*'}` -- and hands the checkpoint None on every
+            # run, which is the "keep them all" path: one tile's per-frame
+            # catalogs standing in for another tile's.
+            if _freg.is_obsid(field):
+                return str(field)
+            print(f"astrom checkpoint: --field {field!r} is not shaped like an "
+                  f"obsid of {target}/{proposal} {instrument} (which claims "
+                  f"every observation of the proposal); NOT using it to "
+                  f"identify this run's per-frame catalogs (keeping them all).",
+                  flush=True)
+            return None
         if allowed and str(field) not in allowed:
             print(f"astrom checkpoint: --field {field!r} is not an obsid of "
                   f"{target}/{proposal} {instrument} ({sorted(allowed)}); "
@@ -3630,7 +3655,15 @@ def _resolved_obsid(options):
     joint = obs.joint_obsids.get(instrument, ())
     if joint:
         return str(joint[0]) if len(joint) == 1 else None
-    seen = obs.obsids.get(instrument, ())
+    # A wildcard is not an observation number.  Returning it would send the
+    # literal '*' downstream, where `_drop_foreign_obs_duplicates` builds
+    # `want = {'_o*_'}` and tests it as a plain substring against the
+    # stage-3 per-exposure `..._o037_crf.fits` basenames -- matching none of
+    # them and dropping every catalog, which is
+    # the sgrb2/sickle joint-token failure (F770W 60 -> 0) reached by another
+    # door.  Unknown means None: keep everything.
+    seen = tuple(o for o in obs.obsids.get(instrument, ())
+                 if o != _freg.WILDCARD_OBSID)
     return str(seen[0]) if len(seen) == 1 else None
 
 

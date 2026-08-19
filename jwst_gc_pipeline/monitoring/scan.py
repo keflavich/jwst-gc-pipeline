@@ -209,6 +209,14 @@ def shared_filters(target, instrument='nircam'):
             # and ngc6334.
             if not is_globbed(target, obs.proposal, obsid, instrument):
                 continue
+            if obsid == _fields.WILDCARD_OBSID:
+                # This entry claims EVERY observation of the proposal, so each
+                # of its filters is written by many observations into one
+                # <basepath>/<FILTER>/ tree under one name -- ambiguous by
+                # definition.  Counted as a single token it matched nothing and
+                # no gc-treasury filter was ever marked.
+                shared |= {f.upper() for f in obs.filters if _belongs(f)}
+                continue
             token = (obs.proposal, obsid)
             for filt in obs.filters:
                 if not _belongs(filt):
@@ -256,11 +264,43 @@ def _matches_obs(filename, proposal, obsid):
 
     Returns ``None`` when the name carries no observation at all -- the caller
     must then decide whether the ambiguity matters, never assume a match.
+
+    ``obsid`` is ``fields.WILDCARD_OBSID`` for a field that claims every
+    observation of its proposal (gc-treasury/10678).  Compared as a literal it
+    equals no observation number, so a genuine ``jw10678037001_..._o037_crf``
+    frame read as a non-match and every per-observation count for the largest
+    programme came back zero.  Under the wildcard the proposal alone decides.
     """
     got = _obs_of(filename)
     if got is None:
         return None
+    if str(obsid) == _fields.WILDCARD_OBSID:
+        return got[0] == str(proposal).lstrip('0')
     return got == (str(proposal).lstrip('0'), str(obsid).lstrip('0') or '0')
+
+
+#: The observation token as the reduced products spell it: ``_o037_``, and the
+#: joint ``_o002-998_`` form sgrb2/sickle write when one product covers several
+#: observations.  Used only under the wildcard, where there is no single number
+#: to spell into the tail.
+_OBS_TOKEN_PATTERN = r'_o\d{3}(?:-\d{3})*'
+
+
+def crf_tail_predicate(obsid, suffix=None):
+    """``name -> bool`` for a ``[_<suffix>]_o<obs>_crf.fits`` tail.
+
+    A concrete ``obsid`` spells the tail literally.  ``fields.WILDCARD_OBSID``
+    has no number to spell, and the literal ``_o*_crf.fits`` it used to build
+    matched nothing on disk, so the observation token is read as a SHAPE there
+    and every reduced frame of the proposal counts.  The caller still scopes by
+    proposal through ``_matches_obs``.
+    """
+    lead = f'_{suffix}' if suffix else ''
+    if str(obsid) == _fields.WILDCARD_OBSID:
+        rx = re.compile(re.escape(lead) + _OBS_TOKEN_PATTERN + r'_crf\.fits$')
+        return lambda name: rx.search(name) is not None
+    tail = f'{lead}_o{obsid}_crf.fits'
+    return lambda name: name.endswith(tail)
 
 
 #: Directory NAMES only, one ``scandir`` per directory, cached for the life of a
@@ -380,16 +420,16 @@ def _reduction_stages(base, filt, proposal, obsid):
     # counted SEPARATELY -- `*_o<obs>_crf.fits` also matches
     # `..._destreak_o<obs>_crf.fits`, and folding them together hides "reduction
     # ran but destreaking never did", the wd1 F150W failure.
-    reduced_tails = tuple(f'_{s}_o{obsid}_crf.fits' for s in _REDUCED_SUFFIXES)
-    crf_tail = f'_o{obsid}_crf.fits'
+    reduced_hits = tuple(crf_tail_predicate(obsid, s) for s in _REDUCED_SUFFIXES)
+    crf_hit = crf_tail_predicate(obsid)
     rows['crf'] = count_matching(
         entries,
-        lambda n: n.endswith(crf_tail) and not n.endswith(reduced_tails),
+        lambda n: crf_hit(n) and not any(hit(n) for hit in reduced_hits),
         proposal, obsid)
 
     reduced = {'n': 0, 'mtime': None, 'files': [], 'scope': 'none', 'variant': None}
-    for suffix, tail in zip(_REDUCED_SUFFIXES, reduced_tails):
-        got = count_matching(entries, lambda n, t=tail: n.endswith(t),
+    for suffix, hit in zip(_REDUCED_SUFFIXES, reduced_hits):
+        got = count_matching(entries, lambda n, h=hit: h(n),
                              proposal, obsid)
         if got['n'] > reduced['n']:
             reduced = dict(got, variant=suffix)
@@ -704,11 +744,12 @@ def frame_provenance(base, filt, proposal, obsid, each_suffix_variant=None,
     """
     entries = listing(os.path.join(base, filt, 'pipeline'))
     dirpath, names = entries
-    tails = tuple(f'_{s}_o{obsid}_crf.fits' for s in _REDUCED_SUFFIXES)
+    hits = tuple(crf_tail_predicate(obsid, s) for s in _REDUCED_SUFFIXES)
     if each_suffix_variant:
-        tails = (f'_{each_suffix_variant}_o{obsid}_crf.fits',)
+        hits = (crf_tail_predicate(obsid, each_suffix_variant),)
     kept = [n for n in names
-            if n.endswith(tails) and _matches_obs(n, proposal, obsid) is not False]
+            if any(hit(n) for hit in hits)
+            and _matches_obs(n, proposal, obsid) is not False]
     if not kept:
         return None
     kept.sort()
@@ -873,7 +914,12 @@ def scan_observation(target, proposal, obsid, instrument='nircam',
         use = list(filters or on_disk)
     else:
         use = list(filters or registered or on_disk)
-    multi_obs = len(observations(target, instrument)) > 1
+    # A wildcard field registers ONE entry -- the literal '*' -- for every
+    # observation of its proposal, so counting rows reads a 139-observation
+    # campaign as single-observation and suppresses the untagged-product
+    # ambiguity warning (checks.py `scope == 'ambiguous' and multi_obs`).
+    multi_obs = (len(observations(target, instrument)) > 1
+                 or _fields.claims_every_observation(target, instrument))
     ambiguous_filters = shared_filters(target, instrument)
 
     per_filter = {}
