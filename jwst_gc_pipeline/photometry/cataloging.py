@@ -4448,7 +4448,12 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                 f"{len(corrections)} real correction(s) for proposal "
                 f"{proposal_id} observation {_field}, but its LOCKED offsets "
                 f"table does not exist:\n"
-                f"    {offsets_table_path(cut_bp, str(proposal_id), str(_field))}\n"
+                # `basepath`, not `cut_bp`: the lookup four lines above probes
+                # `basepath`, and the two diverge on a --cutout-region run
+                # (`_cutout_out_basepath` returns `<basepath>/cutouts/<label>`).
+                # Naming cut_bp sent the operator to a directory that was never
+                # probed and where a locked table does not belong.
+                f"    {offsets_table_path(basepath, str(proposal_id), str(_field))}\n"
                 f"  A locked field's corrections belong in that file and "
                 f"nowhere else.  Build it (scripts/reduction/"
                 f"build_virac2_offsets.py --region <r> --per-module), or change "

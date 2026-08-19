@@ -164,6 +164,77 @@ def test_a_locked_field_with_no_table_names_the_file_it_wants(tmp_path,
         assert token in head, f'the message must carry {token!r}'
 
 
+def _drive_missing_table(monkeypatch, cut_bp, basepath):
+    """Run the real checkpoint on a LOCKED field whose table is absent.
+
+    Only ``run_visit_checkpoint`` is stubbed, so the branch under test is the
+    shipping one.  ``cut_bp`` and ``basepath`` are passed as DIFFERENT
+    directories: they are separate parameters and diverge on every
+    ``--cutout-region`` run, which is the case that showed the message naming a
+    path the lookup never probed.
+    """
+    import types
+
+    from astropy.table import Table
+
+    d = os.path.join(cut_bp, 'F200W')
+    os.makedirs(d, exist_ok=True)
+    Table({'x': [1.0]}).write(
+        os.path.join(d, 'f200w_nrca1_visit001_vgroup02201_exp00001_m2_'
+                        'daophot_basic.fits'), overwrite=True)
+
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint
+    monkeypatch.setattr(
+        astrometry_checkpoint, 'run_visit_checkpoint',
+        lambda *a, **kw: dict(
+            passed=True, failures=[], unverified_blocking=[],
+            record_path='/x/rec.json',
+            corrections=[dict(visit='jw01182004001', exposure=1,
+                              module='nrca1', filtername='F200W',
+                              dra_onsky_mas=100.0, ddec_onsky_mas=0.0,
+                              dec_deg=-28.7)]))
+    monkeypatch.setenv('ASTROM_CHECKPOINT_APPLY', '1')
+    monkeypatch.setenv('ASTROM_CHECKPOINT_WARN_ONLY', '')
+
+    options = types.SimpleNamespace(field='004', proposal_id='1182',
+                                    target='brick')
+    return _cat._run_astrometry_stage_checkpoint(
+        'm2', 'nrca', 'F200W', cut_bp, basepath, '1182', options,
+        {'refcat': {'all': None, 'sparse': None}}, context='test')
+
+
+def test_the_missing_table_message_names_the_directory_that_was_probed(
+        tmp_path, monkeypatch):
+    """The lookup probes ``basepath``; the message must name the same place.
+
+    ``_astrom_find_offsets_table(basepath, ...)`` decides this branch, so a
+    message built from ``cut_bp`` sends the operator to a directory that was
+    never looked in -- and on a cutout run, to one where a locked table does
+    not belong.  The source-text check above cannot see this: it asserts the
+    token ``offsets_table_path`` is present, which is true of a message built
+    from any directory at all.
+    """
+    from jwst_gc_pipeline.reduction.alignment_config import offsets_table_path
+
+    basepath = tmp_path / 'field'
+    cut_bp = basepath / 'cutouts' / 'nrca4_5as'
+    (basepath / 'offsets').mkdir(parents=True)      # exists, holds no table
+    cut_bp.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError) as ex:
+        _drive_missing_table(monkeypatch, str(cut_bp), str(basepath))
+
+    msg = str(ex.value)
+    want = offsets_table_path(str(basepath), '1182', '004')
+    never_probed = offsets_table_path(str(cut_bp), '1182', '004')
+    assert want != never_probed, 'the two directories must differ for this test'
+    assert want in msg, f'the message does not name the probed table:\n{msg}'
+    assert never_probed not in msg, (
+        f'the message names {never_probed}, which the lookup never '
+        f'probed:\n{msg}')
+    assert 'Nothing was written' in msg
+
+
 def test_every_locked_field_has_a_computable_expected_filename():
     """The message names the file rather than spelling a pattern, so it stays
     right for all ten locked entries."""
