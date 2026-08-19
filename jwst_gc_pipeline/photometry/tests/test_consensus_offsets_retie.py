@@ -142,7 +142,7 @@ def test_upsert_accumulates_residual_on_existing_row(tmp_path):
     cosd = np.cos(np.radians(DEC))
     assert abs(float(row["dra (arcsec)"][0]) - (8.0 + 1.5) / 1000.0 / cosd) < 1e-9
     assert abs(float(row["ddec (arcsec)"][0]) - (-2.0 + 0.5) / 1000.0) < 1e-9
-    assert abs(float(row["prov_dra_added_mas"][0]) - 9.5) < 1e-9
+    assert abs(float(row["prov_dra_onsky_mas"][0]) - 9.5) < 1e-9
 
 
 def _bulk(visit, dra_mas, ddec_mas, filt="F115W"):
@@ -211,7 +211,7 @@ def test_upsert_migrates_pre_vgroup_row_instead_of_orphaning_it(tmp_path):
     assert str(t["Vgroup"][0]).strip() in ("2101", "02101")
     # the 20 mas the legacy row carried is still there, plus the new 5
     assert abs(float(t["ddec (arcsec)"][0]) - 0.025) < 1e-12
-    assert abs(float(t["prov_ddec_added_mas"][0]) - 25.0) < 1e-9
+    assert abs(float(t["prov_ddec_onsky_mas"][0]) - 25.0) < 1e-9
     # and it is found by a vgroup-aware lookup
     dra, ddec = lookup_consensus_offset(t, "jw02045001001", 1, "nrca1", "F115W",
                                         vgroup="02101")

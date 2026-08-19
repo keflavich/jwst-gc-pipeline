@@ -315,8 +315,21 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   correction against a per-visit (module-locked) table, validates the result
   with the collapsed-visit guard (which raises on the brick-1182 signature),
   keeps a timestamped backup, and stamps provenance
-  columns (`prov_stage`, `prov_date`, `prov_dra_added_mas`,
-  `prov_ddec_added_mas`, `prov_source`).
+  columns (`prov_stage`, `prov_date`, `prov_dra_onsky_mas`,
+  `prov_ddec_onsky_mas`, `prov_dec_deg`, `prov_source`).
+
+  The `_onsky_` in those names is load-bearing. Right ascension has two
+  quantities that are both angles and differ by cos(declination) — about 14% at
+  Galactic Centre declinations: an **on-sky separation** (how far the source
+  actually moved) and a **coordinate offset** (how much the right-ascension
+  number changed). The table's own `dra` columns hold the coordinate one; these
+  provenance columns hold the on-sky one, and now say so. `prov_dec_deg` records
+  the declination each conversion used, so the coordinate offset a provenance
+  entry implies can be re-derived exactly rather than bounded.
+
+  Tables written before that convention use `prov_dra_added_mas` /
+  `prov_ddec_added_mas`; they are renamed on their next correction, values
+  untouched.
 * **`Vgroup` is part of a per-exposure row's identity.** A visit can dither
   across several visit groups (physically disjoint sky tiles) and the exposure
   number RESTARTS in each, so `(visit, filter, exposure, module)` names two
@@ -352,12 +365,12 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
 * **Cumulative drift bound.** The per-correction ceiling bounds one call at a
   time, so creep accumulates across successive calls (five legal 0.4″ corrections
   = 2″ of silent drift; cloudef reached 105″ that way). Because
-  `prov_dra/ddec_added_mas` accumulate, the write
+  `prov_dra/ddec_onsky_mas` accumulate, the write
   path also rejects any ROW whose total accumulated correction exceeds the **bulk**
   limit. ⚠ That bounds accumulation at 60″, so a table can still reach tens of
-  arcseconds of `prov_*_added_mas` inside the bound. **The diagnostic for a
-  poisoned table is `prov_*_added_mas`, not the total `|offset|`** — an m2 visit-consensus correction is
-  mas-scale by construction, so arcsecond-scale `prov_*_added_mas` is a category
+  arcseconds of `prov_*_onsky_mas` inside the bound. **The diagnostic for a
+  poisoned table is `prov_*_onsky_mas`, not the total `|offset|`** — an m2 visit-consensus correction is
+  mas-scale by construction, so arcsecond-scale `prov_*_onsky_mas` is a category
   error, while a large *total* `|offset|` can be perfectly correct (brick-1182's
   released table is median 12.1″ with 68/7.6 mas of `prov_*` additions).
   ⚠ **Blind spot:** `update_offsets_table` zero-fills the `prov_*` columns when

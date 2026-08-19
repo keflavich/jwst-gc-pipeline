@@ -181,7 +181,7 @@ def test_update_offsets_table_applies_correction_with_provenance(tmp_path):
     assert row["dra"] == pytest.approx(-17.5 + 0.1 / COSD, abs=1e-6)
     assert row["ddec"] == pytest.approx(0.5 - 0.05, abs=1e-9)
     assert row["prov_stage"] == "m2"
-    assert row["prov_dra_added_mas"] == pytest.approx(100.0)
+    assert row["prov_dra_onsky_mas"] == pytest.approx(100.0)
     # untouched row keeps its value and carries no provenance
     other = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004002")][0]
     assert other["dra"] == pytest.approx(1.9)
@@ -2200,8 +2200,8 @@ def _two_pair_offsets_csv(tmp_path, prov_dra_mas=-47.6, prov_ddec_mas=-16.0):
                 "dra (arcsec)": base + (prov_dra_mas / 1000.0) / COSD,
                 "ddec (arcsec)": 0.5 + prov_ddec_mas / 1000.0,
                 "prov_stage": "m2", "prov_date": "2026-01-01T00:00:00Z",
-                "prov_dra_added_mas": prov_dra_mas,
-                "prov_ddec_added_mas": prov_ddec_mas,
+                "prov_dra_onsky_mas": prov_dra_mas,
+                "prov_ddec_onsky_mas": prov_ddec_mas,
                 "prov_source": "fixture",
             })
     path = str(tmp_path / "Offsets_JWST_Brick1182_TWOPAIR.csv")
@@ -2231,8 +2231,8 @@ def test_update_offsets_table_writes_a_two_pair_table_with_provenance(tmp_path):
     assert row["dra (arcsec)"] == pytest.approx(row["dra"], abs=1e-9)
     assert row["ddec (arcsec)"] == pytest.approx(row["ddec"], abs=1e-9)
     # provenance ACCUMULATED past the heal rather than being reset by it
-    assert row["prov_dra_added_mas"] == pytest.approx(-47.6 + 12.0)
-    assert row["prov_ddec_added_mas"] == pytest.approx(-16.0 - 8.0)
+    assert row["prov_dra_onsky_mas"] == pytest.approx(-47.6 + 12.0)
+    assert row["prov_ddec_onsky_mas"] == pytest.approx(-16.0 - 8.0)
     # and it is on disk, not just returned
     assert Table.read(path)["dra"][0] == pytest.approx(out["dra"][0], abs=1e-9)
 
@@ -2264,7 +2264,7 @@ def test_update_offsets_table_does_not_CREATE_a_divergence(tmp_path):
     for dra, ddec in ((12.0, -8.0), (-3.0, 4.5), (0.7, 0.2)):
         out = update_offsets_table(path, _corr(dra, ddec), "m2")
         assert flag_diverged_column_pairs(out) == [], (dra, ddec)
-    assert out["prov_dra_added_mas"][0] == pytest.approx(-47.6 + 12.0 - 3.0 + 0.7)
+    assert out["prov_dra_onsky_mas"][0] == pytest.approx(-47.6 + 12.0 - 3.0 + 0.7)
 
 
 def test_update_offsets_table_REFUSES_a_pair_moved_outside_the_writer(tmp_path):
