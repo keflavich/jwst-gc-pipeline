@@ -282,6 +282,24 @@ def _reduction_lineage(field, filt, obs, detector):
     return "_" + suffix.split("_o")[0]             # '_destreak'
 
 
+class OutOfReleaseScope(Exception):
+    """This filter directory's products belong to other observations entirely.
+
+    Not a verification failure and not a missing product: the frames are on
+    disk and well-formed, they are simply not part of the release being gated.
+    Carried as an exception rather than an empty result so it cannot be
+    confused with "found nothing", which must keep failing closed.
+    """
+
+    def __init__(self, field, filt, derived, requested):
+        self.field, self.filt = field, filt
+        self.derived, self.requested = set(derived), set(requested)
+        super().__init__(
+            f"{field}/{filt}: products belong to "
+            f"{', '.join(sorted(self.derived))}, which this release does not "
+            f"claim ({', '.join(sorted(self.requested))})")
+
+
 class UnparseableFrameError(ValueError):
     """A frame reached the selector whose name it cannot identify."""
 
@@ -517,6 +535,23 @@ def build_groups(field, filt, observations=None):
             # restrict-only: intersect with the per-directory derivation when it
             # exists; fall back to the passed set only when nothing was derived
             scope = (derived & passed) if derived else passed
+            if derived and not scope:
+                # The directory HAS products and they are well-formed; they just
+                # belong to observations this release does not claim.  Returning
+                # an empty scope filters every frame out and the caller reports
+                # "NO crf frames matched -- glob mismatch / missing products?",
+                # which names the wrong cause and refuses the whole field.
+                #
+                # Live case: cloudc ships NIRCam 2221-o002 and its F770W
+                # directory holds 8 well-formed 2526-o021 crf.  The empty
+                # intersection refused a NIRCam-only release over a MIRI band
+                # that release never touched, while the frames sat on disk and
+                # parsed cleanly.
+                #
+                # Distinct from a derivation that yields NOTHING (no mosaic on
+                # disk), which stays fail-closed above: there the glob really
+                # may have drifted.
+                raise OutOfReleaseScope(field, filt, derived, passed)
     # Enumerate broadly, then let the precise _parse_crf regex decide -- a name
     # that is not a well-formed crf, or belongs to an out-of-scope observation,
     # is dropped.  MIRI crf carry no _destreak token; the parser covers them
@@ -959,7 +994,21 @@ def _samestar_pair_footprint(a_src, b_src, ref, global_result, tol_mas=None,
 
 
 def check_filter(field, filt, refcat=None, verbose=True, observations=None):
-    pooled, ndet, nframes = build_groups(field, filt, observations=observations)
+    try:
+        pooled, ndet, nframes = build_groups(field, filt,
+                                             observations=observations)
+    except OutOfReleaseScope as out:
+        # Reported, never blocking, and never counted as verified: a band this
+        # release does not ship has nothing for this gate to say about it.
+        if verbose:
+            print(f"  {field} {filt}: NOT IN THIS RELEASE -- {out}", flush=True)
+        # PASS is None, not True: this gate did not verify anything here and
+        # must not claim it did.  `not_in_release` is what the scan reads to
+        # skip it; anything that only looks at PASS sees "no verdict".
+        return dict(field=field, filt=filt, PASS=None, not_in_release=True,
+                    derived=sorted(out.derived),
+                    note=f"not in this release's observations "
+                         f"({', '.join(sorted(out.derived))})")
     # FAIL-CLOSED on "found nothing": a gate that goes green because its glob
     # matched zero files (renamed products, naming drift) is the silent
     # false-agreement class this repo bans.  Distinguish it from a genuine
@@ -1295,10 +1344,22 @@ def main(argv=None):
         return 2
     any_fail = False
     any_noverify = False
+    # How many bands this scan actually MEASURED.  Skipping out-of-release bands
+    # without counting them let a scan whose every band was skipped fall through
+    # to `return 0` -- eight "NOT IN THIS RELEASE" lines and a pass, which
+    # `stage_release` (refusing only on rc != 0) reads as the gate having run.
+    # That is the same false-agreement this file's own could-not-verify message
+    # argues against, arrived at from the other side: a wrong
+    # `_release_observations` derivation used to REFUSE a good field, and would
+    # then have PASSED one.
+    checked = 0
     for f in filts:
         r = check_filter(args.field, f, refcat=args.refcat,
                          observations=(set(args.observations.split(","))
                                        if args.observations else None))
+        if r.get("not_in_release"):
+            continue          # not this release's band; neither passed nor failed
+        checked += 1
         if r.get("could_not_verify"):
             any_noverify = True
         elif not r.get("PASS"):
@@ -1308,6 +1369,12 @@ def main(argv=None):
               f"(> {TOL_MAS:.0f} mas). Do NOT stage; re-examine per-visit alignment.",
               flush=True)
         return 1
+    if filts and not checked:
+        print(f"\nOVERLAP GATE: COULD NOT VERIFY {args.field} -- every band was "
+              f"skipped as belonging to other observations, so nothing was "
+              f"measured. A scope that excludes the whole field is a wrong scope, "
+              f"not a passing gate.", flush=True)
+        return 2
     if any_noverify:
         # exit 2 = could-not-verify: distinct from a measured FAIL, but still
         # refused by stage_release (its rc != 0 branch) -- fail closed, never
