@@ -272,10 +272,50 @@ def frozen_failure_is_deferred(merge_label):
             and checkpoint_enforcement() == ENFORCE_AT_RELEASE)
 
 
+def override_reason_env(env_override):
+    """The companion variable that carries the written justification."""
+    return f"{env_override}_REASON"
+
+
+def gate_override_state(env_override):
+    """What an operator did to this gate, as a dict for the record.
+
+    CLAUDE.md: "Do not disable (``ASTROM_CHECKPOINT=0``) or override
+    (``ALLOW_LATE_STAGE_ASTROM_SHIFT``, ``ALLOW_CROSSFILTER_ASTROM_FAIL``)
+    without written justification."  Nothing recorded whether an override had
+    been used, so the justification had nowhere to live: the only trace was one
+    WARNING line in a SLURM log, and the record on disk was identical whether
+    the run had stopped at the gate or walked past it.
+
+    Issue #258 is what that costs.  brick's m5 F200W record has been red since
+    2026-07-23 and the run continued, so the override was set -- but two weeks
+    later nothing on disk says by whom, or why, or against which of the four
+    failures.  This is the same reasoning that already puts
+    ``correction_floor_mas`` in the record.
+    """
+    used = _env_flag(env_override)
+    reason = os.environ.get(override_reason_env(env_override), '').strip()
+    return dict(env=env_override, used=bool(used),
+                reason=reason if used else '',
+                reason_env=override_reason_env(env_override),
+                enforcement=checkpoint_enforcement())
+
+
 def _defer_to_release(msg, what, env_override):
     """Print the deferral and return True, or return False to raise here."""
     if _env_flag(env_override):
+        reason = os.environ.get(override_reason_env(env_override), '').strip()
         print(f"WARNING (override {env_override}=1): {msg}", flush=True)
+        if reason:
+            print(f"  override justification: {reason}", flush=True)
+        else:
+            # Loud, and recorded: an override with no stated reason is the
+            # state CLAUDE.md forbids, and the release gate reports it.
+            print(f"  NO JUSTIFICATION RECORDED.  CLAUDE.md requires written "
+                  f"justification for this override; set "
+                  f"{override_reason_env(env_override)} to a sentence saying "
+                  f"why, and it is stored in the checkpoint record beside the "
+                  f"failure it waives.", flush=True)
         return True
     if checkpoint_enforcement() != ENFORCE_AT_RELEASE:
         return False
@@ -3734,6 +3774,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         consensus_catalog_error = None
 
     passed = _checkpoint_passed(failures, unverified_blocking)
+    # What an operator did to the gate this record is about.  Only meaningful
+    # where the override is actually consulted -- a correcting stage never
+    # defers, and a stage with no failures never reaches the override -- so it
+    # is None elsewhere rather than a misleading `used: false`.
+    gate_override = (gate_override_state("ALLOW_LATE_STAGE_ASTROM_SHIFT")
+                     if failures and not correcting else None)
     record = dict(stage=stage, filtername=filtername, context=context,
                   consensus_catalog=consensus_catalog_path,
                   consensus_catalog_error=consensus_catalog_error,
@@ -3741,6 +3787,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                   corrections=corrections, failures=failures,
                   unverified=unverified, unverified_blocking=unverified_blocking,
                   passed=passed, all_verified=not unverified,
+                  gate_override=gate_override,
                   tolerances=dict(
                       exposure_consensus_tol_mas=EXPOSURE_CONSENSUS_TOL_MAS,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
@@ -3993,6 +4040,9 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                   filters=filters, failures=failures, passed=passed,
                   unverified=unverified, unverified_blocking=unverified_blocking,
                   all_verified=not unverified,
+                  gate_override=(
+                      gate_override_state("ALLOW_CROSSFILTER_ASTROM_FAIL")
+                      if failures else None),
                   tolerances=dict(crossfilter_tol_mas=tol_mas,
                                   local_cell_tol_mas=cell_tol_mas,
                                   local_cell_size_arcsec=cell_arcsec,

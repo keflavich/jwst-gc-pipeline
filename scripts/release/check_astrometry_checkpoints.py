@@ -195,6 +195,23 @@ def main(argv=None):
             print(f"    {line}")
         for line in (rec.get("unverified_blocking") or []):
             print(f"    [measured and refused] {line}")
+        # Whether the run STOPPED here or walked past it.  Both leave the same
+        # `passed: false`, and until the record carried this the difference
+        # existed only in a SLURM log: issue #258 is a red m5 record whose run
+        # continued, with nothing on disk saying why.  `None` means the record
+        # predates the field, which is not the same as "not overridden".
+        ov = rec.get("gate_override")
+        if ov is None:
+            print("    [override] not recorded -- this record predates the "
+                  "field, so whether the run stopped here is not knowable "
+                  "from it")
+        elif ov.get("used"):
+            reason = (ov.get("reason") or "").strip()
+            print(f"    [override] {ov.get('env')}=1 was set: the run "
+                  f"CONTINUED past this failure")
+            print(f"    [override] justification: {reason}" if reason else
+                  f"    [override] NO JUSTIFICATION RECORDED -- CLAUDE.md "
+                  f"requires one; set {ov.get('reason_env')} on the run")
     if not failed and not current:
         # rc 3 covers two states and the remedy is the same for both, but they
         # are different situations for whoever picks the field up, so they get

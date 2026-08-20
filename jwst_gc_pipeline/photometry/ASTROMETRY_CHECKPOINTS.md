@@ -96,7 +96,15 @@ thing, not spending compute on a run that would be refused, and cost three:
 closed on a record it cannot read (rc 2) and on a field with no records at all
 (rc 3) — a field that never ran the checkpoint is unverified, not verified.
 `ALLOW_LATE_STAGE_ASTROM_SHIFT` and `ALLOW_CROSSFILTER_ASTROM_FAIL` still work
-as before and are still the only way to make a failure non-blocking.
+as before and are still the only way to make a failure non-blocking.  Using
+either is now RECORDED: the checkpoint record carries a `gate_override` block
+naming the variable, whether it was set, and the justification read from
+`<VAR>_REASON`.  Before that, a record walked past and a record that stopped
+the chain were byte-identical (`passed: false` on both), so the only trace of a
+waiver was one WARNING line in a SLURM log -- which is why brick's m5 F200W
+failure could not be attributed two weeks later (issue #258).  The release gate
+prints the block beside the failure, and says `not recorded` for records that
+predate the field rather than calling them un-overridden.
 
 **m2 is untouched.** It is the one stage where the astrometry can still change:
 its response to a measured offset is to correct the offsets table, stale-tag the
@@ -494,7 +502,9 @@ the same table rows.
 | `ASTROM_CHECKPOINT_APPLY=1` | at m2, auto-apply corrections to the offsets table + stale-tag im0 |
 | `ASTROM_REFCAT=<path>` | reference catalog override (default: `{basepath}/catalogs/gaia_virac2_refcat*.fits`) |
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` | override the m3+ frozen-solution gate |
+| `ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON=<text>` | the written justification CLAUDE.md requires; stored in the record |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
+| `ALLOW_CROSSFILTER_ASTROM_FAIL_REASON=<text>` | as above, for the cross-filter gate |
 | `ASTROM_MAX_CORRECTION_ARCSEC=<f>` | raise/lower the per-exposure ceiling (default 0.5″) |
 | `ASTROM_MAX_BULK_CORRECTION_ARCSEC=<f>` | raise/lower the per-visit bulk ceiling **and** the cumulative-drift bound (default 60″) |
 | `ASTROM_ALLOW_MISSING_PERFRAME=1` | demote the missing-per-frame-catalog stop (`cataloging.py`) |
