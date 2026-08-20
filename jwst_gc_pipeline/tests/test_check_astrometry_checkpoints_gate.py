@@ -293,3 +293,78 @@ def test_the_summary_is_printed_before_the_verdict_that_cites_it(tmp_path):
     assert r.stdout.index('superseded)') < r.stdout.index('REFUSING'), (
         f'the counts must be readable above the verdict that cites them:\n'
         f'{r.stdout}')
+
+
+# ---------------------------------------------------------------------------
+# whether the run STOPPED at the gate or walked past it (issue #258)
+# ---------------------------------------------------------------------------
+
+def _write_with_override(tmp_path, name, override):
+    """A failed frozen record carrying (or lacking) a `gate_override` block."""
+    d = tmp_path / 'fld' / 'astrometry_checkpoints'
+    d.mkdir(parents=True, exist_ok=True)
+    doc = dict(passed=False,
+               failures=["F200W visit 2 [m5]: exposure MOVED 2.30 mas"],
+               unverified_blocking=[], date='2026-08-18T00:00:00Z')
+    if override is not _ABSENT:
+        doc['gate_override'] = override
+    (d / name).write_text(json.dumps(doc))
+    return d / name
+
+
+_ABSENT = object()
+
+
+def test_an_overridden_failure_says_the_run_continued(gate, tmp_path, capsys):
+    """`passed: false` alone cannot say whether the chain stopped here.  Both
+    states produced identical records until the override was recorded, which is
+    why issue #258 could not be answered from disk two weeks later."""
+    _write_with_override(tmp_path, 'checkpoint_m5_F200W_o001_latest.json',
+                         dict(env='ALLOW_LATE_STAGE_ASTROM_SHIFT', used=True,
+                              reason='transient, m6/m7 green',
+                              reason_env='ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON',
+                              enforcement='release'))
+    assert gate.main(['--field', 'fld']) == 1
+    out = capsys.readouterr().out
+    assert 'ALLOW_LATE_STAGE_ASTROM_SHIFT=1 was set' in out, out
+    assert 'transient, m6/m7 green' in out, out
+
+
+def test_an_unjustified_override_is_named_as_such(gate, tmp_path, capsys):
+    """CLAUDE.md requires written justification for this override.  An override
+    with none is the state to surface, not to render as a blank line."""
+    _write_with_override(tmp_path, 'checkpoint_m5_F200W_o001_latest.json',
+                         dict(env='ALLOW_LATE_STAGE_ASTROM_SHIFT', used=True,
+                              reason='',
+                              reason_env='ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON',
+                              enforcement='release'))
+    assert gate.main(['--field', 'fld']) == 1
+    out = capsys.readouterr().out
+    assert 'NO JUSTIFICATION RECORDED' in out, out
+    assert 'ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON' in out, out
+
+
+def test_a_failure_that_stopped_the_run_is_not_reported_as_overridden(
+        gate, tmp_path, capsys):
+    _write_with_override(tmp_path, 'checkpoint_m5_F200W_o001_latest.json',
+                         dict(env='ALLOW_LATE_STAGE_ASTROM_SHIFT', used=False,
+                              reason='',
+                              reason_env='ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON',
+                              enforcement='stage'))
+    assert gate.main(['--field', 'fld']) == 1
+    out = capsys.readouterr().out
+    assert 'was set' not in out, out
+    assert 'NO JUSTIFICATION RECORDED' not in out, out
+
+
+def test_a_record_predating_the_field_says_it_cannot_answer(gate, tmp_path,
+                                                            capsys):
+    """Every record written before this change lacks the field.  Reporting that
+    as "not overridden" would assert something the file does not say -- and the
+    one record this was built for, brick m5 F200W, is exactly such a file."""
+    _write_with_override(tmp_path, 'checkpoint_m5_F200W_o001_latest.json',
+                         _ABSENT)
+    assert gate.main(['--field', 'fld']) == 1
+    out = capsys.readouterr().out
+    assert 'not recorded' in out, out
+    assert 'was set' not in out, out
