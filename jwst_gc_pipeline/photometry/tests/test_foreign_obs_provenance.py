@@ -420,6 +420,12 @@ def test_the_checkpoint_runs_the_REAL_filter_on_mixed_provenance(tmp_path, monke
 
     monkeypatch.setattr(cataloging, "_drop_foreign_obs_duplicates", _watch)
     monkeypatch.delenv("ASTROM_CHECKPOINT", raising=False)
+    # sgrb2 is VIRAC2-framed, and this synthetic tree has no catalogs/ dir, so
+    # the refcat gate (#415) would stop the run before the filter under test
+    # runs.  The subject here is which per-frame catalogs reach the consensus,
+    # not the absolute tie, so the gate is opted out of explicitly rather than
+    # worked around by giving the fixture a fake reference catalog.
+    monkeypatch.setenv(cataloging.ALLOW_CONSENSUS_ONLY_ENV, "1")
     opts = _Opt(target="sgrb2", proposal_id="5365", field="002-998",
                 modules="mirimage", each_exposure=True, cutout_region="")
     try:

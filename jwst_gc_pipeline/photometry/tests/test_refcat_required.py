@@ -198,3 +198,44 @@ def test_the_checkpoint_call_site_passes_the_proposal():
         else:
             assert isinstance(value, ast.Name), ast.dump(value)
             assert value.id == 'proposal_id', ast.dump(value)
+
+
+def test_the_gate_fires_through_the_real_checkpoint_entry_point(tmp_path,
+                                                                monkeypatch):
+    """End-to-end through `_run_astrometry_stage_checkpoint`, not the helper.
+
+    The call-site test above reads the source, so it proves the argument is
+    PASSED and not that it arrives.  This one drives the entry point the
+    pipeline actually calls, with a VIRAC2-framed field and no catalogs
+    directory, and asserts the run stops.
+    """
+    class _Opt:
+        target = 'sgrb2'
+        proposal_id = '5365'
+        field = '002-998'
+        modules = 'mirimage'
+        each_exposure = True
+        cutout_region = ''
+
+    from astropy.table import Table
+
+    cut_bp = tmp_path / 'cutouts' / 'merged'
+    (cut_bp / 'F770W').mkdir(parents=True)
+    # the checkpoint skips before it looks for a refcat when no per-frame
+    # catalog matches, so the gate needs something to work on
+    for obs in ('002', '998'):
+        for i in (1, 2):
+            t = Table({'x': [1.0]})
+            t.meta['FILENAME'] = (f'/x/jw05365{obs}001_{obs}01_{i:05d}'
+                                  f'_mirimage_destreak_o{obs}_crf.fits')
+            t.write(str(cut_bp / 'F770W' /
+                        f'f770w_mirimage_visit001_vgroup{obs}01_exp{i:05d}'
+                        f'_m2_daophot_basic.fits'))
+    monkeypatch.delenv('ASTROM_CHECKPOINT', raising=False)
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    monkeypatch.delenv(cataloging.ALLOW_CONSENSUS_ONLY_ENV, raising=False)
+
+    with pytest.raises(cataloging.MissingReferenceCatalogError):
+        cataloging._run_astrometry_stage_checkpoint(
+            'm2', 'merged', 'F770W', str(cut_bp), str(tmp_path), '5365',
+            _Opt(), {}, context='test')
