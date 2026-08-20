@@ -52,13 +52,16 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 SCANNED_SUFFIXES = {".py", ".md", ".rst", ".sh", ".sbatch", ".slurm",
                     ".json", ".yml", ".yaml", ".toml"}
 
-#: Files allowed to spell the token: the function that decides the suffix, and
-#: the docstrings that explain the ban -- this module cannot state its own rule
-#: without quoting what it forbids, and neither can the tests that assert the
-#: per-field mapping.  Same carve-out `test_no_jw0_prefix_literals.py` makes,
-#: for the same reason; prose everywhere else stays in scope.
+#: The one file exempted wholesale: this module cannot state its own rule
+#: without quoting what it forbids, and it quotes the token on ~11 lines.
+#:
+#: `merge_catalogs.py` is deliberately NOT here.  It owns the three lines that
+#: legitimately spell the literal -- the two docstring sentences explaining the
+#: 2221 carve-out and the `return` that implements it -- and those carry the
+#: line pragma instead.  A whole-file exemption would blind the guard across
+#: 3300 other lines of a module whose subject is catalog filenames, which is
+#: exactly where the next hardcoded token would land.
 ALLOWLIST = {
-    "jwst_gc_pipeline/photometry/merge_catalogs.py",
     "jwst_gc_pipeline/tests/test_no_hardcoded_qualcuts_token.py",
 }
 
@@ -138,3 +141,23 @@ def test_the_guard_would_catch_the_defect_it_exists_for():
     ]
     for line in spared:
         assert _offending_lines(line) == [], line
+
+
+def test_the_suffix_module_is_scanned_rather_than_exempted():
+    """`merge_catalogs.py` owns the token, so it is where a new literal lands.
+
+    Exempting the whole file would hide one anywhere in its ~3300 lines; the
+    three lines that legitimately spell it carry the pragma instead.
+    """
+    rel = "jwst_gc_pipeline/photometry/merge_catalogs.py"
+    assert rel not in ALLOWLIST
+    scanned = {r for r, _ in _tracked_files()}
+    assert rel in scanned, "the suffix module dropped out of the scanned set"
+    text = (REPO / rel).read_text()
+    assert _offending_lines(text) == [], (
+        "unpragma'd literal in the module that owns the suffix")
+    # and the pragma is doing real work there: without it the file offends
+    assert [n for n, line in enumerate(text.splitlines(), 1)
+            if BANNED.search(line)], (
+        "no literal left in merge_catalogs.py -- if the carve-out is gone, "
+        "drop this test with it")
