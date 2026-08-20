@@ -38,7 +38,8 @@ from astropy.modeling.fitting import LevMarLSQFitter
 
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
-    MULTIOBS_PROPOSALS, merged_catalog_obs_token, vetted_obs_tokens,
+    MULTIOBS_PROPOSALS, merged_catalog_obs_token, proposal_is_multiobs,
+    vetted_obs_tokens,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
@@ -5799,7 +5800,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _combine_per_obs_vetted(
                         vetted_path, merged_path, combined_vetted_path,
                         this_obs_only=('-' in str(field)
-                                       or str(proposal_id) in MULTIOBS_PROPOSALS),
+                                       or proposal_is_multiobs(proposal_id)),
                         label=f'manual [{phase}]')
 
                 # build vetted mergedcat residual i2d, smooth -> bg for next phase

@@ -200,7 +200,7 @@ class CappedSourceGrouper:
 # restructure).  Imported here so existing references keep working unchanged.
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
-    MIRI_FILTERS, MULTIOBS_PROPOSALS,
+    MIRI_FILTERS, MULTIOBS_PROPOSALS, proposal_is_multiobs,
     observation_field_token,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
@@ -1039,7 +1039,12 @@ def obs_token(proposal_id, field):
     with the wildcard obsid and run without ``--field`` stops here rather than
     writing a literal ``_o*`` into every catalog name it produces.
     """
-    if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
+    # `proposal_is_multiobs`, not a membership test on the tuple.  This is the
+    # site that names the PER-FRAME catalogs, and it kept deciding on its own
+    # after the policy moved: cloudef's o005 recatalog on 2026-08-19 wrote 528
+    # untokened names because `naming.observation_tokens` had been taught the
+    # registry and this had not.
+    if proposal_is_multiobs(proposal_id) and field not in (None, ''):
         return f'_o{observation_field_token(field)}'
     # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
     # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names

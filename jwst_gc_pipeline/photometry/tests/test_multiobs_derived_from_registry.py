@@ -107,3 +107,48 @@ def test_cloudef_and_a_single_obs_field_no_longer_collide():
     b = naming.vetted_obs_tokens('2092', '005', 'F162M', 'nrca1')
     assert a != b, 'obs 002 and obs 005 still write the same catalog name'
     assert '_o002' in ''.join(a) and '_o005' in ''.join(b)
+
+
+# ---------------------------------------------------------------------------
+# every site that decides "is this multi-obs" must ask the same function
+# ---------------------------------------------------------------------------
+
+def test_no_site_does_a_bare_membership_test_on_the_tuple():
+    """The regression this file exists for, twice over.
+
+    `proposal_is_multiobs` was added and `naming.observation_tokens` taught to
+    use it -- while `crowdsource_catalogs_long.obs_token`, the site that names
+    the PER-FRAME catalogs, kept its own `in MULTIOBS_PROPOSALS` test.  So
+    cloudef's o005 recatalog on 2026-08-19 ran to completion and wrote 528
+    UNTOKENED names, and the collision the change exists to stop was untouched.
+
+    Two enforcement points deciding the same question independently is how they
+    come to disagree -- the same shape as #442/#447, one module over.
+    """
+    import inspect
+    from jwst_gc_pipeline.photometry import cataloging, crowdsource_catalogs_long
+    from jwst_gc_pipeline.photometry import naming as N
+    offenders = []
+    for mod in (crowdsource_catalogs_long, cataloging, N):
+        for line in inspect.getsource(mod).splitlines():
+            code = line.split('#')[0]
+            if 'in MULTIOBS_PROPOSALS' in code:
+                # naming.proposal_is_multiobs IS the one allowed reader: it is
+                # the floor lookup inside the policy itself.
+                if mod is N and 'if prop in MULTIOBS_PROPOSALS' in code:
+                    continue
+                offenders.append(f'{mod.__name__}: {line.strip()}')
+    assert not offenders, (
+        'these decide multi-obs without asking proposal_is_multiobs:\n  '
+        + '\n  '.join(offenders))
+
+
+def test_the_per_frame_catalog_name_carries_the_observation():
+    """`obs_token` is what actually goes into the per-frame filename, and it is
+    the site that was missed."""
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import obs_token
+    assert obs_token('2092', '005') == '_o005'
+    assert obs_token('2092', '002') == '_o002'
+    assert obs_token('2092', '005') != obs_token('2092', '002')
+    # single-observation proposals keep the name they have always had
+    assert obs_token('1182', '004') == ''
