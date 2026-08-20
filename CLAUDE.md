@@ -139,7 +139,10 @@ inside the stage instead; the release gate is
 every filter must agree with the VIRAC2-Ks-nearest anchor to <5 mas with no
 significant 2″ cell >15 mas.  Do not disable (`ASTROM_CHECKPOINT=0`) or
 override (`ALLOW_LATE_STAGE_ASTROM_SHIFT`, `ALLOW_CROSSFILTER_ASTROM_FAIL`)
-without written justification.
+without written justification — put it in `<VAR>_REASON`, which is stored in the
+checkpoint record's `gate_override` block and printed beside the failure by the
+release gate.  An override with no reason is recorded as having none and named
+at the gate.
 
 ### ⛔ ASTROMETRY RULE #2 — read the GWCS; the SIP header is only an approximation
 

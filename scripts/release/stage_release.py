@@ -79,9 +79,45 @@ FIELDS = {
              "src": "/orange/adamginsburg/jwst/sgrb2/F2550W/pipeline/jw05365-o002-998_t001_miri_clear-f2550w-mirimage_data_i2d.fits"},
         ],
     },
+    # cloudc: NIRCam from JWST 2221 o002, and MIRI from TWO SEPARATE PROGRAMS
+    # imaging NON-OVERLAPPING pointings of the same cloud -- 2221 o001 (F2550W)
+    # and 2526 o021 (F770W).  Both are cloudc and both belong in its release;
+    # neither is discoverable from `proposal_prefix`, which names one NIRCam
+    # program.
+    #
+    # The MIRI observation numbering is INVERTED with respect to NIRCam within
+    # 2221, and that trap is why these are spelled out rather than derived:
+    #
+    #     cloudc  NIRCam 2221-o002    cloudc  MIRI 2221-o001  (F2550W)
+    #     brick   NIRCam 2221-o001    brick   MIRI 2221-o002  (F2550W)
+    #
+    # Verified by field centre rather than by name, since the names invite
+    # exactly the wrong pairing:
+    #
+    #     cloudc NIRCam F405N   266.5872 -28.5902
+    #     cloudc MIRI  F2550W   266.5695 -28.5918   <- 2221-o001, ~1' away: cloudc
+    #     cloudc MIRI  F770W    266.5823 -28.6271   <- 2526-o021, ~2' S: cloudc,
+    #                                                  and disjoint from F2550W
+    #     brick  NIRCam F405N   266.5356 -28.7128
+    #     brick  MIRI  F2550W   266.5372 -28.7066   <- 2221-o002, brick's own
+    #
+    # F770W is the weakest of the three on distance alone (3.7' to cloudc vs
+    # 5.7' to brick, against 3.9x and 23x for the other two).  What settles it
+    # is PROGRAM MEMBERSHIP: 2526 appears nowhere in brick's release, and the
+    # frames are filed under cloudc/F770W/.  TARGPROP cannot separate the 2221
+    # pair at all -- both read BRICK-IKP2016-G0.253+0.015 -- which is why the
+    # centres are quoted rather than the header target name.
     "cloudc": {
         "data_dir": Path("/orange/adamginsburg/jwst/cloudc"),
         "proposal_prefix": "jw02221-o002_t001_nircam_clear",
+        "miri": [
+            {"filter": "F770W",
+             "src": "/orange/adamginsburg/jwst/cloudc/F770W/pipeline/"
+                    "jw02526-o021_t001_miri_clear-f770w-mirimage_data_i2d.fits"},
+            {"filter": "F2550W",
+             "src": "/orange/adamginsburg/jwst/cloudc/F2550W/pipeline/"
+                    "jw02221-o001_t001_miri_clear-f2550w-mirimage_data_i2d.fits"},
+        ],
     },
     "sgrc": {
         "data_dir": Path("/orange/adamginsburg/jwst/sgrc"),
@@ -762,6 +798,20 @@ FRAME_REFCAT = {
 # * cloudef -- its o002 mosaics are ~185 mas off this refcat in all four bands
 #   (o005 F480M is 5.4 mas), so the field is not tied to it yet.  Mapping it now
 #   would assert a frame the data does not sit on.
+# * sgra -- absent for the OPPOSITE reason to gc2211's, and the distinction is
+#   the point: its reference is fine, and the arbiter is simply never reached.
+#   The overlap gate finds NO OVERLAPPING PAIRS in any band, so there is no tie
+#   to break:
+#
+#       sgra F115W: 96 crf -> 2 groups, 0 overlapping pairs, 0 FAIL
+#       sgra F212N: 96 crf -> 2 groups, 0 overlapping pairs, 0 FAIL
+#       sgra F405N: 24 crf -> 2 groups, 0 overlapping pairs, 0 FAIL
+#
+#   `overlap_arbiter_refcat('sgra')` returning None is therefore correct rather
+#   than a gap.  Recorded because sgra has the DENSEST refcat of the four
+#   (191,462 rows, against brick's 115,032 and arches/quintuplet's ~177,800)
+#   sitting unused, so "why is sgra not mapped?" is the obvious question and its
+#   answer is not gc2211's.
 
 # ---------------------------------------------------------------------------
 # The star list the OVERLAP gate uses to arbitrate a pair it cannot measure
@@ -870,6 +920,71 @@ def _obs_keys_from_name(name):
     if m.group("obs2"):
         keys.add(f"{m.group('prop')}-{m.group('obs2')}")
     return keys
+
+
+def _instrument_of(item):
+    """``"miri"`` / ``"nircam"`` for a manifest item, from the single source of
+    truth (`photometry.naming.MIRI_FILTERS`).  Items with no filter (a merged
+    catalog, the offsets table) belong to the NIRCam side of a release: every
+    field's NIRCam bands are what those products are built from."""
+    from jwst_gc_pipeline.photometry.naming import MIRI_FILTERS
+    return "miri" if str(item.get("filter") or "").lower() in MIRI_FILTERS \
+        else "nircam"
+
+
+def gate_by_instrument(field, items, run_gate):
+    """Run the inter-frame overlap gate PER INSTRUMENT.
+
+    ``(kept_items, withheld, refusal)``.  ``run_gate(instrument)`` returns the
+    gate's exit code for that instrument's bands.
+
+    NIRCam and MIRI are independent observations of the same sky -- different
+    detectors, different exposures, usually a different program entirely
+    (cloudc's MIRI is 2221-o001 and 2526-o021 against its NIRCam 2221-o002).  A
+    MIRI verdict therefore says NOTHING about the NIRCam mosaics, and refusing
+    the whole field on one withholds good data for a reason that does not apply
+    to it.  cloudc was refused exactly that way on 2026-08-19, over a MIRI band
+    its release did not even ship.
+
+    So a failing MIRI gate WITHHOLDS the MIRI products and the rest of the
+    release goes out, with the reason recorded for the manifest.  Nothing is
+    loosened: a NIRCam failure still refuses the field, because the NIRCam
+    mosaics are every field's main deliverable and there is nothing left to ship
+    without them.
+    """
+    withheld = {}
+    for instrument in sorted({_instrument_of(it) for it in items}):
+        rc = run_gate(instrument)
+        if rc == 0:
+            continue
+        why = ("FAILED -- two overlapping visits/detectors are misregistered vs "
+               "EACH OTHER (>30 mas), so the drizzle overlap has doubled/smeared "
+               "stars even though each frame is fine vs a reference"
+               if rc == 1 else
+               f"could not run (rc={rc}); frame-vs-frame registration is "
+               f"unconfirmed")
+        if instrument == "nircam":
+            return items, {}, (
+                f"REFUSING TO STAGE '{field}': NIRCam inter-frame OVERLAP gate "
+                f"{why}. Re-examine per-visit alignment. Override with "
+                f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 "
+                f"(dangerous).")
+        withheld[instrument] = why
+        print(f"\nWITHHOLDING {instrument.upper()} from '{field}': its "
+              f"inter-frame overlap gate {why}.\n  Those products are NOT "
+              f"staged; everything else ships. Recorded in MANIFEST.json as "
+              f"`withheld_instruments`, so the release cannot read as complete.",
+              flush=True)
+    if not withheld:
+        return items, {}, None
+    kept = [it for it in items if _instrument_of(it) not in withheld]
+    print(f"  dropped {len(items) - len(kept)} {'/'.join(sorted(withheld))} "
+          f"item(s) from the manifest", flush=True)
+    if not kept:
+        return kept, withheld, (
+            f"REFUSING TO STAGE '{field}': withholding "
+            f"{'/'.join(sorted(withheld))} leaves nothing to ship.")
+    return kept, withheld, None
 
 
 def _release_observations(field_cfg):
@@ -1459,7 +1574,7 @@ def print_manifest(items):
 
 
 def stage(items, field, version, release_root, mode, do_checksum,
-          continuity_gate=None, allow_older=False):
+          continuity_gate=None, allow_older=False, withheld_instruments=None):
     assert_writable(version, release_root, allow_older, field)
     field_dir = field_release_dir(field, version, release_root)
     field_dir.mkdir(parents=True, exist_ok=True)
@@ -1551,6 +1666,11 @@ def stage(items, field, version, release_root, mode, do_checksum,
         # "not_enforced/not_applicable" reason. A manifest with no waiver is thus
         # not ambiguous. None only for a stage() call outside the gated main path.
         "continuity_gate": continuity_gate,
+        # Instruments whose products this release does NOT carry because their
+        # own gate refused them, `{instrument: why}`.  Present so a consumer can
+        # tell "this field has no MIRI" from "this field's MIRI was withheld",
+        # which the file list alone cannot say.
+        "withheld_instruments": withheld_instruments or {},
         "globus_collection_id": GLOBUS_COLLECTION_ID,
         "globus_https_base": GLOBUS_HTTPS_BASE,
         "files": items,
@@ -1572,7 +1692,8 @@ def stage(items, field, version, release_root, mode, do_checksum,
                   f"link -- left in place")
 
     write_readme(field_dir, field, version, items, mode,
-                 built_at=manifest["built"])
+                 built_at=manifest["built"],
+                 withheld_instruments=withheld_instruments)
 
     # world-readable
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
@@ -1918,7 +2039,8 @@ def _link_mode_phrase(exposures):
                 exposure_bundle.link_mode_summary(exposures), "LINKS")
 
 
-def write_readme(field_dir, field, version, items, mode, built_at=None):
+def write_readme(field_dir, field, version, items, mode, built_at=None,
+                 withheld_instruments=None):
     images = [it for it in items if it["category"] == "image"]
     catalogs = [it for it in items if it["category"] == "catalog"]
     # describe the mosaics ACTUALLY staged: a module-split field (arches,
@@ -1982,6 +2104,34 @@ def write_readme(field_dir, field, version, items, mode, built_at=None):
                 f"{w['pair'].upper()} colors. Provisional -- expected to improve in "
                 f"a later release.")
         limitation_lines.append("")
+
+    # A WITHHELD INSTRUMENT is the same class of fact as a waiver, and needs the
+    # same treatment: `items` here is the already-filtered list, so without this
+    # the README describes a field that simply HAS no MIRI.  The distinction --
+    # "this field has no MIRI" vs "this field's MIRI was withheld" -- is
+    # invisible in a file list, and the reader who most needs it is the one
+    # reading the README rather than MANIFEST.json.
+    if withheld_instruments:
+        limitation_lines += [
+            "## Instruments withheld from this release (READ FIRST)",
+            "",
+            "This release is PARTIAL.  The products below exist and were reduced, but",
+            "their registration could not be confirmed, so they are NOT shipped here:",
+            "",
+        ]
+        for instrument, why in sorted(withheld_instruments.items()):
+            limitation_lines.append(
+                f"- **{instrument.upper()}**: the inter-frame overlap gate "
+                f"{why}. The other instrument(s) in this release are unaffected "
+                f"-- they are separate observations, on separate detectors, "
+                f"often from a separate program, and this verdict says nothing "
+                f"about them.")
+        limitation_lines += [
+            "",
+            "Also in `MANIFEST.json` as `withheld_instruments`.  Do not read the",
+            "absence of these bands as the field not having them.",
+            "",
+        ]
 
     # Detector-frame exposures.  Stated in the README as well as MANIFEST.json
     # because the two things a downloader has to know about them -- that they
@@ -2456,25 +2606,19 @@ def main(argv=None):
         if overlap_refcat:
             overlap_cmd += ["--refcat", overlap_refcat]
         else:
+            # Said BEFORE the gate runs, because the consequence is a refusal
+            # further down that names the pair rather than the missing list.
             print(f"  no overlap arbiter star list for '{args.field}' "
                   f"(OVERLAP_ARBITER_REFCAT / FRAME_REFCAT) -- any pair whose "
                   f"footprints overlap too thinly to compare frame-against-frame "
                   f"will stay unmeasurable and block staging", flush=True)
-        rc = subprocess.run(overlap_cmd).returncode
-        if rc == 1:
-            print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
-                  f"-- two overlapping visits/detectors are misregistered vs EACH OTHER "
-                  f"(>30 mas), so the drizzle overlap has doubled/smeared stars even though "
-                  f"each frame is fine vs a reference. Re-examine per-visit alignment (the "
-                  f"per-visit shift may be leaving a field-dependent residual). Override with "
-                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
-                  file=sys.stderr)
-            return 2
-        if rc != 0:
-            print(f"\nREFUSING TO STAGE '{args.field}': inter-frame overlap gate could not "
-                  f"run (rc={rc}); cannot confirm frame-vs-frame registration. Fix it, or "
-                  f"override with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
-                  file=sys.stderr)
+        # PER INSTRUMENT: see `gate_by_instrument`.
+        items, withheld, refusal = gate_by_instrument(
+            args.field, items,
+            lambda instrument: subprocess.run(
+                overlap_cmd + ["--instrument", instrument]).returncode)
+        if refusal:
+            print(f"\n{refusal}", file=sys.stderr)
             return 2
 
         # ---- FROZEN-STAGE ASTROMETRY CHECKPOINT GATE ----------------------------------
@@ -2583,7 +2727,8 @@ def main(argv=None):
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,
                       mode, not args.no_checksum, continuity_gate=continuity_gate,
-                      allow_older=args.allow_older_version)
+                      allow_older=args.allow_older_version,
+                      withheld_instruments=withheld or None)
     # Broken out rather than reported as one total: "222 files (mode: copy)"
     # reads as 222 frozen copies when 216 of them are symlinks that --copy did
     # not apply to, which is the one thing about this tree an operator must not

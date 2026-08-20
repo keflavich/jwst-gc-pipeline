@@ -3407,12 +3407,36 @@ def _record_pooling(record, pooled, n_before, offsets_path):
     """
     groups = [{'module': c.get('module'),
                'filtername': c.get('filtername'),
+               # `visit` is the key a reader needs to match a pooled group back
+               # to its exposures, and it was the one field the correction
+               # carried that this dict did not write.  Without it a reader's
+               # visit match short-circuits and pools across visits.
+               #
+               # The value written here is the correction's own visit, which
+               # `resolve_full_visit_id` has upgraded to jwPPPPPOOOVVV, while
+               # the exposure key carries the frame's bare VISIT metadatum
+               # ('1', '2').  A reader comparing the two as strings gets
+               # `'1' == 'jw02221001001'` and matches nothing, so filling this
+               # field turns a working candidate sweep into an empty member
+               # list.  `_same_visit` in reports/measure_pooling_population.py
+               # normalises both sides through `visit_obs_key`; measured
+               # 2026-08-19, 1758 of 1758 groups reconstruct with that
+               # normalisation and 0 of 1758 with a string compare.
+               'visit': c.get('visit'),
                'exposure': c.get('exposure'),
                'vgroup': c.get('vgroup'),
                'pooled_from': c.get('pooled_from'),
                'n': c.get('pooled_n'),
                'stat': c.get('pooled_stat'),
+               # BOTH keys, for one release.  `spread_mas` is the name a
+               # reader already knows, and its MEANING changed: it held a
+               # peak-to-peak of magnitudes and now holds a maximum
+               # pairwise vector separation.  Without the new name beside
+               # it, comparing records across that boundary silently
+               # compares two different quantities.  `max_pair_sep_mas` is the
+               # one to read.
                'spread_mas': c.get('pooled_spread_mas'),
+               'max_pair_sep_mas': c.get('pooled_max_pair_sep_mas'),
                'dra_onsky_mas': c.get('dra_onsky_mas'),
                'ddec_onsky_mas': c.get('ddec_onsky_mas')}
               for c in pooled if c.get('pooled_from')]
@@ -3468,8 +3492,11 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
 
     ``field`` is required to distinguish observations of one proposal that are
     aligned differently (2045: arches is consensus-driven, quintuplet locked).
-    Falls back to the legacy globs only for a field with no config entry, which
-    the caller reports separately.
+
+    Returns ``None`` when the declared table is absent, and there is NO glob
+    fallback: the legacy globs also matched the VVV/GNS-era tables still on disk
+    and would substitute a different frame silently.  The caller raises with the
+    expected filename instead.
     """
     channel = _astrom_offsets_channel(proposal_id, field)
     if channel == 'consensus':
@@ -3480,13 +3507,22 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
         path = f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv"
         if os.path.exists(path):
             return path
-        # the pre-locked average / per-exposure tables fix_alignment still falls
-        # back to when no locked table exists yet
-        for pat in (f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*locked.csv",
-                    f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*_average.csv"):
-            cands = sorted(glob.glob(pat))
-            if cands:
-                return cands[0]
+        # No VIRAC2locked table -> None.  There USED to be a fallback here, to
+        # `*locked.csv` and then `*_average.csv`, for fields that had not been
+        # locked yet.  Those globs also match the pre-VIRAC2 tables that are
+        # still on disk from the VVV and GNS era:
+        #
+        #     Offsets_JWST_Brick1182_VVV_average.csv
+        #     Offsets_JWST_Brick1182_F200ref_average.csv   (and F405ref, F444ref)
+        #     Offsets_JWST_Brick2221_VVV_average.csv
+        #
+        # and `sorted(...)[0]` picks alphabetically, so brick/1182 would have
+        # silently selected `F200ref_average` -- a table tied to a different
+        # frame entirely.  Every GC field is VIRAC2 now (CLAUDE.md: Gaia is the
+        # frame, VIRAC2 is the reference catalog), so the fallback can only fire
+        # when the right table is missing, and what it does then is reach for a
+        # frame we deliberately left.  Returning None routes the caller to say
+        # so out loud instead.
         return None
     return None
 
@@ -4351,7 +4387,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # 185.7 -> 525.7 -> 1678.5 mas over three re-tie iterations).
     #
     # A family row can only express the module-COMMON shift, so pool with the
-    # MEDIAN.  Doing it before the floor is what makes the loop converge: four
+    # MEAN.  Doing it before the floor is what makes the loop converge: four
     # SIAF-class detector residuals that largely cancel pool to a sub-floor
     # module shift and the checkpoint PASSES, instead of writing their sum and
     # re-measuring a larger residual next iteration.
@@ -4445,6 +4481,33 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
                   f"{'SEEDED' if seeded else 'UPSERTED'} consensus offsets table "
                   f"({len(corrections)} corrections) -> {offsets_path}", flush=True)
+        elif offsets_path is None:
+            # A LOCKED field whose table is missing.  This used to substitute
+            # whatever `_*_average.csv` sorted first, which on brick/1182 is a
+            # table tied to a different frame; the substitution is gone, and
+            # without this branch the None fell through to
+            # `update_offsets_table` -> `Table.read(None)` and an astropy
+            # IORegistryError naming no field, no proposal and no filename.  A
+            # silent wrong answer traded for an unattributable crash is not a
+            # fix, so say which table is missing and where it goes -- the same
+            # treatment the `_channel == 'none'` case above gets.
+            from ..reduction.alignment_config import offsets_table_path
+            raise RuntimeError(
+                f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "
+                f"{len(corrections)} real correction(s) for proposal "
+                f"{proposal_id} observation {_field}, but its LOCKED offsets "
+                f"table does not exist:\n"
+                # `basepath`, not `cut_bp`: the lookup four lines above probes
+                # `basepath`, and the two diverge on a --cutout-region run
+                # (`_cutout_out_basepath` returns `<basepath>/cutouts/<label>`).
+                # Naming cut_bp sent the operator to a directory that was never
+                # probed and where a locked table does not belong.
+                f"    {offsets_table_path(basepath, str(proposal_id), str(_field))}\n"
+                f"  A locked field's corrections belong in that file and "
+                f"nowhere else.  Build it (scripts/reduction/"
+                f"build_virac2_offsets.py --region <r> --per-module), or change "
+                f"the field's source in alignment_config if it should not be "
+                f"locked.  Nothing was written.")
         else:
             update_offsets_table(offsets_path, corrections, merge_label)
         renames = mark_i2d_stale(

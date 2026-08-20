@@ -96,7 +96,15 @@ thing, not spending compute on a run that would be refused, and cost three:
 closed on a record it cannot read (rc 2) and on a field with no records at all
 (rc 3) — a field that never ran the checkpoint is unverified, not verified.
 `ALLOW_LATE_STAGE_ASTROM_SHIFT` and `ALLOW_CROSSFILTER_ASTROM_FAIL` still work
-as before and are still the only way to make a failure non-blocking.
+as before and are still the only way to make a failure non-blocking.  Using
+either is now RECORDED: the checkpoint record carries a `gate_override` block
+naming the variable, whether it was set, and the justification read from
+`<VAR>_REASON`.  Before that, a record walked past and a record that stopped
+the chain were byte-identical (`passed: false` on both), so the only trace of a
+waiver was one WARNING line in a SLURM log -- which is why brick's m5 F200W
+failure could not be attributed two weeks later (issue #258).  The release gate
+prints the block beside the failure, and says `not recorded` for records that
+predate the field rather than calling them un-overridden.
 
 **m2 is untouched.** It is the one stage where the astrometry can still change:
 its response to a measured offset is to correct the offsets table, stale-tag the
@@ -315,8 +323,21 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   correction against a per-visit (module-locked) table, validates the result
   with the collapsed-visit guard (which raises on the brick-1182 signature),
   keeps a timestamped backup, and stamps provenance
-  columns (`prov_stage`, `prov_date`, `prov_dra_added_mas`,
-  `prov_ddec_added_mas`, `prov_source`).
+  columns (`prov_stage`, `prov_date`, `prov_dra_onsky_mas`,
+  `prov_ddec_onsky_mas`, `prov_dec_deg`, `prov_source`).
+
+  The `_onsky_` in those names is load-bearing. Right ascension has two
+  quantities that are both angles and differ by cos(declination) — about 14% at
+  Galactic Centre declinations: an **on-sky separation** (how far the source
+  actually moved) and a **coordinate offset** (how much the right-ascension
+  number changed). The table's own `dra` columns hold the coordinate one; these
+  provenance columns hold the on-sky one, and now say so. `prov_dec_deg` records
+  the declination each conversion used, so the coordinate offset a provenance
+  entry implies can be re-derived exactly rather than bounded.
+
+  Tables written before that convention use `prov_dra_added_mas` /
+  `prov_ddec_added_mas`; they are renamed on their next correction, values
+  untouched.
 * **`Vgroup` is part of a per-exposure row's identity.** A visit can dither
   across several visit groups (physically disjoint sky tiles) and the exposure
   number RESTARTS in each, so `(visit, filter, exposure, module)` names two
@@ -352,12 +373,12 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
 * **Cumulative drift bound.** The per-correction ceiling bounds one call at a
   time, so creep accumulates across successive calls (five legal 0.4″ corrections
   = 2″ of silent drift; cloudef reached 105″ that way). Because
-  `prov_dra/ddec_added_mas` accumulate, the write
+  `prov_dra/ddec_onsky_mas` accumulate, the write
   path also rejects any ROW whose total accumulated correction exceeds the **bulk**
   limit. ⚠ That bounds accumulation at 60″, so a table can still reach tens of
-  arcseconds of `prov_*_added_mas` inside the bound. **The diagnostic for a
-  poisoned table is `prov_*_added_mas`, not the total `|offset|`** — an m2 visit-consensus correction is
-  mas-scale by construction, so arcsecond-scale `prov_*_added_mas` is a category
+  arcseconds of `prov_*_onsky_mas` inside the bound. **The diagnostic for a
+  poisoned table is `prov_*_onsky_mas`, not the total `|offset|`** — an m2 visit-consensus correction is
+  mas-scale by construction, so arcsecond-scale `prov_*_onsky_mas` is a category
   error, while a large *total* `|offset|` can be perfectly correct (brick-1182's
   released table is median 12.1″ with 68/7.6 mas of `prov_*` additions).
   ⚠ **Blind spot:** `update_offsets_table` zero-fills the `prov_*` columns when
@@ -388,7 +409,7 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   before the actionability floor, and `update_offsets_table(..., pool=True)` /
   `--pool` on `apply_m2_checkpoint_corrections.py` and
   `run_astrometry_checkpoint.py` expose it to the recovery tooling. It takes the
-  **median** of the corrections sharing a row, because a family row can only
+  **mean** of the corrections sharing a row, because a family row can only
   express the module-common shift; the per-detector spread is a
   distortion/DVA-class systematic the row has no freedom to remove. Pooling
   before the floor is what makes the loop converge — residuals that largely
@@ -398,9 +419,10 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   "rebuild `--per-module`" refusal instead of a silent A/B average), a module
   contributing twice to one row (two vgroups against a `Vgroup`-less table), a
   group whose members disagree by more than `ASTROM_MAX_POOL_SPREAD_MAS`
-  (50 mas), and any member over the magnitude ceiling — which is checked on the
-  **members**, since `median ≤ max` means pooling would otherwise average a
-  blown-up detector out of existence. What was collapsed is written to the
+  (50 mas) measured as the largest separation between any two of them **as
+  vectors**, and any member over the magnitude ceiling — which is checked on the
+  **members**, since a mean cannot exceed the largest of them and pooling would
+  otherwise average a blown-up detector out of existence. What was collapsed is written to the
   checkpoint record under `pooling`. The correction's `source` string survives in
   the offsets table -- its provenance column is widened to fit the value being
   written rather than left at whatever width the table happened to have, so the
@@ -480,7 +502,9 @@ the same table rows.
 | `ASTROM_CHECKPOINT_APPLY=1` | at m2, auto-apply corrections to the offsets table + stale-tag im0 |
 | `ASTROM_REFCAT=<path>` | reference catalog override (default: `{basepath}/catalogs/gaia_virac2_refcat*.fits`) |
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` | override the m3+ frozen-solution gate |
+| `ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON=<text>` | the written justification CLAUDE.md requires; stored in the record |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
+| `ALLOW_CROSSFILTER_ASTROM_FAIL_REASON=<text>` | as above, for the cross-filter gate |
 | `ASTROM_MAX_CORRECTION_ARCSEC=<f>` | raise/lower the per-exposure ceiling (default 0.5″) |
 | `ASTROM_MAX_BULK_CORRECTION_ARCSEC=<f>` | raise/lower the per-visit bulk ceiling **and** the cumulative-drift bound (default 60″) |
 | `ASTROM_ALLOW_MISSING_PERFRAME=1` | demote the missing-per-frame-catalog stop (`cataloging.py`) |

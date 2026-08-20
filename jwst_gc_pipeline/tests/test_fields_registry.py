@@ -344,7 +344,11 @@ def test_joint_observations_survive(proposal, token, target):
 def test_the_default_field_prefers_the_joint_token():
     """It used to come from whichever key an inverted dict happened to keep."""
     assert F.default_field_token('sgrb2', '5365', 'miri') == '002-998'
-    assert F.default_field_token('sickle', '3958', 'nircam') == '001'
+    # '007', not '001': sickle's NIRCam observation is 007 and only 007.  This
+    # asserted '001' while 001 was listed under `nircam`, and 001 is a MIRI
+    # observation -- so the default NIRCam token named a pointing with no NIRCam
+    # data.  Verified from disk: every NIRCam `_cal` for 3958 is obs 007.
+    assert F.default_field_token('sickle', '3958', 'nircam') == '007'
 
 
 #: Every (proposal, obsid) that PipelineRerunNIRCAM-LONG.py listed before the
@@ -766,7 +770,7 @@ FIELD_MAPS_BEFORE_THE_WILDCARD = {
                          '049': 'gc2211', '050': 'gc2211'},
     ('2221', 'nircam'): {'001': 'brick', '002': 'cloudc'},
     ('3523', 'nircam'): {'003': 'wd2', '005': 'wd2'},
-    ('3958', 'nircam'): {'001': 'sickle', '002': 'sickle', '007': 'sickle'},
+    ('3958', 'nircam'): {'007': 'sickle'},
     ('4147', 'nircam'): {'012': 'sgrc'},
     ('5365', 'nircam'): {'001': 'sgrb2'},
     ('6151', 'nircam'): {'001': 'w51'},
@@ -789,7 +793,14 @@ FIELD_MAPS_BEFORE_THE_WILDCARD = {
 def test_every_preexisting_proposal_maps_exactly_as_before():
     """The no-regression sweep for the wildcard change: a pre-existing proposal
     has no wildcard, so its mapping must compare equal to the plain dict it
-    used to be -- same keys, same targets, no fallback."""
+    used to be -- same keys, same targets, no fallback.
+
+    One entry deliberately does NOT match what it was: ('3958', 'nircam') used
+    to be {'001','002','007'} and is now {'007'}.  001 and 002 are the MIRI
+    observations, and listing them under `nircam` is what made the monitor
+    report all five NIRCam filters missing for two observations that can never
+    have any.  The snapshot below is corrected rather than the code, because
+    the snapshot was recording the defect."""
     for (proposal, instrument), expected in FIELD_MAPS_BEFORE_THE_WILDCARD.items():
         got = F.field_to_reg_mapping(proposal, instrument)
         assert dict(got) == expected, (proposal, instrument)

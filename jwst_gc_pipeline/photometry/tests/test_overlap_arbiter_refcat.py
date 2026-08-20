@@ -96,6 +96,30 @@ def test_a_field_with_no_list_at_all_says_so_rather_than_pretending():
     assert stage.overlap_arbiter_refcat('not-a-field') is None
 
 
+def test_the_two_unmapped_disjoint_fields_are_unmapped_for_different_reasons():
+    """gc2211 and sgra are both absent from both registries, and the reasons are
+    opposites -- which is why the block above explains each separately.
+
+    gc2211's reference CANNOT serve it (a field-wide refcat does not see o028),
+    so mapping it would be worse than no arbiter.  sgra's reference is fine and
+    is in fact the densest of the four; the gate simply never reaches the
+    arbiter, because its observations produce no overlapping pairs.  Reading
+    both as one "deliberately absent" case is what prompted the review question,
+    and it would make mapping sgra look like an oversight to fix.
+    """
+    for field in ('gc2211', 'sgra'):
+        assert field not in stage.OVERLAP_ARBITER_REFCAT
+        assert field not in stage.FRAME_REFCAT
+        assert stage.overlap_arbiter_refcat(field) is None
+
+    import pathlib as _p
+    src = _p.Path(stage.__file__).read_text()
+    block = src.split('NOT mapped, deliberately')[1].split('OVERLAP_ARBITER_REFCAT = ')[0]
+    assert 'no overlapping pairs' in block.lower(), (
+        'the block must say WHY sgra is unmapped, and it is not gc2211\'s reason')
+    assert 'ref_in_fov=0' in block or 'cannot see' in block or 'footprint' in block
+
+
 def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
     """The gating slot used to be labelled `VIRAC2` whatever was read.
 

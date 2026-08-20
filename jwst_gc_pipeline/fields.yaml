@@ -336,11 +336,28 @@ fields:
           '007': catalogs/gaia_virac2_refcat_epoch2024.64.fits
         nvisits: 1
         reference_frame: VIRAC2
+        # NIRCam is obs 007 ONLY.  001 and 002 are MIRI observations; listing
+        # them under `nircam` made every consumer expect the five NIRCam filters
+        # from them, and the monitor rendered two observations with all five
+        # "missing" on a field whose NIRCam half is fine (528 m7 per-frame
+        # catalogs on disk, three filters merged through m7).  Counted from disk
+        # 2026-08-19: F187N/F210M 96 `_cal` each and F335M/F470N/F480M 24 each,
+        # every one obs 007.  `run_sickle_3958_o007.sh` says the same in prose --
+        # "NIRCam is obs 007.  The 3958 MIRI data are obs 001".
+        #
+        # 3958/003 exists on disk (F770W/F1130W/F1500W, 5 frames each) and is
+        # NOT sickle's: brick claims it above with its own reference catalogs,
+        # and `TARGPROP = SICKLE-MIR-BACKGROUND` marks it a dedicated background
+        # pointing rather than a science field -- a different kind of thing from
+        # the POS1/POS2 beside it.  Adding it here is a double-claim.  (Distance
+        # does not decide this: all three 3958 MIRI pointings are nearer brick's
+        # NIRCam centre than sickle's, because the 3958 MIRI footprint sits ~14'
+        # from the 3958 NIRCam one.)
         obsids:
-          nircam: ['001', '002', '007']
+          nircam: ['007']
           miri: ['001', '002']
-        # Both MIRI observations are cataloged in one run; this token names that
-        # run, and get_filenames globs both.
+        # Both of sickle's MIRI observations are cataloged in one run; this
+        # token names that run, and get_filenames globs both.
         joint_obsids:
           miri: ['001-002']
         glob_obsid:

@@ -759,6 +759,23 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                 + " ".join(lines)
                 + " They will return when the field is re-staged from current"
                   " products.</p>")
+
+    # An instrument withheld at STAGING time is a different thing from a product
+    # withheld at page-build time above: those files are in the release and are
+    # being held back here; these were never staged, so nothing in `files` or in
+    # the tables below can hint at them.  Without this the page shows a field
+    # that simply has no MIRI, which is the one reading a partial release must
+    # not invite.
+    for instrument, why in sorted((manifest.get("withheld_instruments")
+                                   or {}).items()):
+        out.append(
+            f"<p class=warn><b>{html.escape(instrument.upper())} is withheld "
+            f"from this release.</b> Those products exist and were reduced, but "
+            f"their inter-frame overlap gate {html.escape(str(why))}, so they "
+            f"are not shipped here. The instrument(s) below are unaffected: they "
+            f"are separate observations, on separate detectors, often from a "
+            f"separate program, and that verdict says nothing about them. Do not "
+            f"read the absence of these bands as the field not having them.</p>")
     if all_versions and manifest['version'] != all_versions[0]:
         out.append(f"<p class=muted style='border:1px solid #b58900;padding:.5em'>"
                    f"You are viewing an <b>older</b> release ({html.escape(manifest['version'])}). "

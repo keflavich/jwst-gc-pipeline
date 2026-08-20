@@ -1114,18 +1114,18 @@ def _qualcuts_oksep_suffix(target):
     between a source's detections in different exposures are small enough to
     call it one real star.  The old code stamped the literal ``2221`` on every
     target's file, which is why 11 fields that have nothing to do with that
-    program carry ``_qualcuts_oksep2221`` catalogs on disk today.
+    program carry ``_qualcuts_oksep2221`` catalogs on disk today.  (noqa: qualcuts-token)
 
     Targets that include proposal 2221 keep the literal, for filename
     stability rather than for any reader's sake: brick registers 1182+2221 and
     cloudc 2221+2526, so the generic token would rename their existing
-    catalogs to ``_qualcuts_oksep1182-2221`` / ``_qualcuts_oksep2221-2526``.
+    catalogs to ``_qualcuts_oksep1182-2221`` / ``_qualcuts_oksep2221-2526``.  (noqa: qualcuts-token)
     Consumers read whatever token a field carries -- ``stage_release.py``
     matches ``QUALCUTS_RE`` and ``make_all_cmds_m7.py`` asks this function.
     """
     props = sorted(obs_filters.get(target, {}).keys())
     if '2221' in props:
-        return '_qualcuts_oksep2221'
+        return '_qualcuts_oksep2221'  # noqa: qualcuts-token
     token = '-'.join(props) if props else str(target)
     return f'_qualcuts_oksep{token}'
 

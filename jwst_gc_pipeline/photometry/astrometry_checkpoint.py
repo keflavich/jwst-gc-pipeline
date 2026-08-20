@@ -272,10 +272,59 @@ def frozen_failure_is_deferred(merge_label):
             and checkpoint_enforcement() == ENFORCE_AT_RELEASE)
 
 
+def override_reason_env(env_override):
+    """The companion variable that carries the written justification."""
+    return f"{env_override}_REASON"
+
+
+def gate_override_state(env_override):
+    """What an operator did to this gate, as a dict for the record.
+
+    CLAUDE.md: "Do not disable (``ASTROM_CHECKPOINT=0``) or override
+    (``ALLOW_LATE_STAGE_ASTROM_SHIFT``, ``ALLOW_CROSSFILTER_ASTROM_FAIL``)
+    without written justification."  Nothing recorded whether an override had
+    been used, so the justification had nowhere to live: the only trace was one
+    WARNING line in a SLURM log, and the record on disk was identical whether
+    the run had stopped at the gate or walked past it.
+
+    Issue #258 is what that costs.  brick's m5 F200W record has been red since
+    2026-07-23 and the run continued, so the override was set -- but two weeks
+    later nothing on disk says by whom, or why, or against which of the four
+    failures.  This is the same reasoning that already puts
+    ``correction_floor_mas`` in the record.
+
+    The reason is stored ONLY alongside a used override.  A ``<VAR>_REASON``
+    left in the environment without the flag records nothing -- a justification
+    for an override that did not happen would read as a waiver that did.  The
+    reverse pair, the flag without a reason, IS recorded (``used`` true,
+    ``reason`` empty) and is said loudly at the gate, because that is the state
+    CLAUDE.md forbids.  An operator who sets the reason and forgets the flag
+    therefore gets no trace of either, and the run stops at the gate as it
+    would have anyway.
+    """
+    used = _env_flag(env_override)
+    reason = os.environ.get(override_reason_env(env_override), '').strip()
+    return dict(env=env_override, used=bool(used),
+                reason=reason if used else '',
+                reason_env=override_reason_env(env_override),
+                enforcement=checkpoint_enforcement())
+
+
 def _defer_to_release(msg, what, env_override):
     """Print the deferral and return True, or return False to raise here."""
     if _env_flag(env_override):
+        reason = os.environ.get(override_reason_env(env_override), '').strip()
         print(f"WARNING (override {env_override}=1): {msg}", flush=True)
+        if reason:
+            print(f"  override justification: {reason}", flush=True)
+        else:
+            # Loud, and recorded: an override with no stated reason is the
+            # state CLAUDE.md forbids, and the release gate reports it.
+            print(f"  NO JUSTIFICATION RECORDED.  CLAUDE.md requires written "
+                  f"justification for this override; set "
+                  f"{override_reason_env(env_override)} to a sentence saying "
+                  f"why, and it is stored in the checkpoint record beside the "
+                  f"failure it waives.", flush=True)
         return True
     if checkpoint_enforcement() != ENFORCE_AT_RELEASE:
         return False
@@ -596,15 +645,76 @@ def _assert_one_correction_per_row(corrections, tbl, offsets_path):
 
 
 def pool_corrections_to_table_granularity(corrections, offsets_path,
-                                          tbl=None, stat="median"):
-    """Collapse corrections that share a table row into one, robustly.
+                                          tbl=None, stat="mean"):
+    """Collapse corrections that share a table row into one.
 
     A module-FAMILY offsets row cannot express a per-DETECTOR shift: the four
     detectors of a NIRCam module sit at fixed SIAF positions within it, so their
     individual residuals are a distortion/DVA-class systematic the row has no
-    freedom to remove.  What the row CAN express is the part they share.  Take
-    the median (not the sum, and not the mean -- one bad detector should not
-    move it) of every correction that lands on the same row.
+    freedom to remove.  What the row CAN express is the part they share, so
+    every correction landing on one row is combined into one.
+
+    **The MEAN, not the median** (and never the sum).  A robust statistic earns
+    its cost when the population it protects against exists, and at these group
+    sizes it mostly does not.  The protection comes INSTEAD from the spread
+    refusal below, which rejects a group whose members disagree by more than
+    ``MAX_POOL_SPREAD_MAS`` rather than quietly averaging it.  A median INSIDE
+    that limit silently down-weights a member the refusal has already judged
+    acceptable.
+
+    Two things to be clear about, because earlier versions of this docstring
+    were not:
+
+    * **For half the groups this changes nothing.**  Group size, counted
+      straight from ``pooled_from`` in the records (2026-08-15, 1052 records,
+      285 unique groups): **N=2 51.6%**, N=3 27.7%, N=4 20.7%.  At N=2 the
+      median IS the mean.  So the change reaches the ~48% at N>=3, where the
+      median keeps one of three, or averages the middle two of four and
+      discards the outer pair.
+    * **A member is not always the consensus of thousands of stars.**  Over the
+      per-detector measurements in the live records the median is ~4700 matched
+      stars, but 20% are under 1000 and the 1st percentile is ~100.  The group
+      this function now refuses (gc2211 F200W exposure 4) has members built from
+      54-69 stars.  So "no blunders to protect against" is not true by
+      construction; it is true because the spread refusal catches the case a
+      median would otherwise dilute.
+
+    Over the groups this function actually pools -- after ``_assert_poolable``
+    and the spread refusal have removed the ones it refuses, the only population
+    where the choice of statistic has any effect -- the two statistics differ by
+    more than 0.5 mas in **19%** of groups, and the largest single difference is
+    **2.7 mas**.  At N=3 the typical difference is 0.63 mas against a typical
+    pooled correction of 2.42 mas, i.e. ~26% of the correction, and against a
+    2.0 mas exposure-consensus tolerance.
+
+    **Where the mean is bounded rather than protected.**  Inside the refusal's
+    limit the mean does move where a median would not: with the other members at
+    zero and one at the limit ``L``, the pooled value shifts by ``L/3`` at N=3
+    and ``L/4`` at N=4 -- so at the current ``MAX_POOL_SPREAD_MAS = 50`` that is
+    16.6 and 12.5 mas, several times the 2.0 mas exposure-consensus tolerance.
+    Those are the true maxima, not examples.  The bound is
+    ``(N-1)/N * MAX_POOL_SPREAD_MAS`` in the worst case, and tightening the
+    limit tightens it proportionally: the largest separation among groups
+    actually pooled today is 16.4 mas (99th percentile 11.4), so a limit of
+    20 mas would refuse nothing currently pooled and cap the shift at 6.7 mas.
+    That is a gate change and is left as a decision rather than taken here;
+    weighting each member by its own measured precision removes the question
+    entirely and is issue #386.
+
+    Regenerate every figure above with ``reports/measure_pooling_population.py``,
+    which reports the size distribution directly from the records and the
+    difference figures from a reconstruction it validates against each record's
+    own pooled value (discarding the ~35% it cannot verify, rather than counting
+    them).
+    An earlier version of this docstring said 14.6 mas; that group is gc2211
+    F200W exposure 4, whose members sit 76 mas apart, and the spread refusal
+    below now rejects it -- so that figure cannot occur under this code.
+
+    A better answer than either exists and is deliberately NOT taken here: each
+    member already reports its own measured precision (``dra_err``/``ddec_err``,
+    spanning 0.011-6.02 mas in the records), and weighting by it needs neither
+    statistic's assumption.  It is a wider change -- those errors are dropped at
+    three hops before they reach this function -- and is issue #386.
 
     Returns a NEW list; corrections that own their row are passed through
     unchanged.  Pooled entries carry the member modules and count in ``source``
@@ -643,8 +753,9 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
                 f"{offsets_path} has no Visit column ({tbl.colnames}) -- a "
                 f"correction cannot be matched to a row without one")
     corrections = list(corrections)
-    # Magnitude ceiling BEFORE the median.  Pooling cannot inflate a correction
-    # past the ceiling (median <= max), so the risk runs the other way: a
+    # Magnitude ceiling BEFORE the members are combined.  Pooling cannot inflate a correction
+    # past the ceiling (a mean cannot exceed its largest member), so the risk
+    # runs the other way: a
     # detector whose measurement blew up is averaged out of existence and the
     # operator never learns the measurement failed.  Check the MEMBERS.
     _assert_correction_magnitudes(corrections, offsets_path)
@@ -679,9 +790,10 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
             seen[i] = key
 
     if stat not in _POOL_STATS:
-        # `agg = np.median if stat == "median" else np.mean` silently degraded a
-        # typo to the LESS robust statistic, and the statistic is the whole
-        # point: members 1,1,1,100 give 1.0 as "median" and 25.75 as "medain".
+        # `agg = np.median if stat == "median" else np.mean` silently degraded
+        # a typo to whichever statistic the `else` named, and the statistic is
+        # the whole point: members 1,1,1,100 give 1.0 under one and 25.75 under
+        # the other.  A typo must not choose between them.
         raise ValueError(f"pool stat must be one of {sorted(_POOL_STATS)}, "
                          f"got {stat!r}")
     agg = _POOL_STATS[stat]
@@ -697,13 +809,47 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         dra = float(agg([float(c["dra_onsky_mas"]) for c in members]))
         ddec = float(agg([float(c["ddec_onsky_mas"]) for c in members]))
         # Dispersion, so a bimodal group is visible rather than pooling to a
-        # meaningless middle with no trace.  Peak-to-peak of the 2-D residual
-        # magnitudes; carried in `source` AND returned on the dict for the
-        # checkpoint record (`source` is bounded at PROV_TEXT_MAX_CHARS on
-        # write, and the column is sized to fit whatever is written).
-        mags = [float(np.hypot(c["dra_onsky_mas"], c["ddec_onsky_mas"]))
-                for c in members]
-        spread = float(np.ptp(mags))
+        # meaningless middle with no trace.  Carried in `source` AND returned on
+        # the dict for the checkpoint record (`source` is bounded at
+        # PROV_TEXT_MAX_CHARS on write, and the column is sized to fit whatever
+        # is written).
+        #
+        # The LARGEST SEPARATION BETWEEN ANY TWO MEMBERS, as vectors.  It was
+        # the peak-to-peak of their MAGNITUDES, which cannot see direction:
+        # members (+30,0) (+30,0) (+30,0) (-30,0) all have magnitude 30, so a
+        # 60 mas disagreement reported `ptp 0.00mas` and the provenance
+        # positively asserted perfect agreement.
+        #
+        # Measured on the live checkpoint records, TEN real groups across TWO
+        # fields exceed the 50 mas refusal limit by vector separation, and the
+        # magnitude form caught none of them:
+        #
+        #   gc2211 F200W o049   2 groups   76-77 mas   read as 8.5 / 13.8
+        #   cloudef F360M       8 groups   52-58 mas   read as 0.7 - 4.8
+        #
+        # both in `correcting: True` records.  The cloudef case is the more
+        # striking: each group pairs an `nrcb` correction at dra ~ +27 with an
+        # `nrcblong` one at dra ~ -26.5 -- equal size, opposite sign, so their
+        # magnitudes are nearly identical and the old metric read ~0.  The
+        # "synthetic worst case" this fix was written against is not synthetic;
+        # it is live in cloudef, eight times over.
+        #
+        # BLAST RADIUS, measured through the guard that runs FIRST.  Of the 285
+        # pooled groups in the live checkpoint records, `_assert_poolable`
+        # ALREADY refuses 11 -- 8 cloudef F360M and 3 F480M, all on the bare-vs-
+        # `long` spelling of one module (issue #298) -- and one more is refused
+        # under either metric.  What this change NEWLY refuses is TWO groups,
+        # both gc2211 F200W exposure 4 vgroup 04201:
+        #
+        #     nrca1,nrca2,nrca3        59.0 mas apart   (old metric read 14.9)
+        #     nrca1,nrca2,nrca3,nrca4  76.2 mas apart   (old metric read  8.5)
+        #
+        # One field, one filter, one exposure.  An earlier version of this
+        # comment said cloudef F360M stops here too.  It does not: it stops one
+        # guard earlier, already, on main.  Counting groups whose vector spread
+        # exceeds the limit WITHOUT applying `_assert_poolable` first overstates
+        # this change's effect by 5x.
+        spread = _max_pairwise_separation(members)
         _assert_pool_spread(spread, members, mods, offsets_path)
         pooled = dict(members[0])
         pooled["dra_onsky_mas"] = dra
@@ -712,27 +858,49 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         pooled["module"] = _pooled_module_label(mods, tbl, key)
         pooled["pooled_from"] = mods
         pooled["pooled_n"] = len(members)
+        pooled["pooled_max_pair_sep_mas"] = spread
+        # Written under the old key too, for one release, so a reader of a
+        # mixed set of checkpoint records is not silently comparing two
+        # different quantities: before this change `spread_mas` held a
+        # peak-to-peak of magnitudes, and it now holds a maximum pairwise
+        # vector separation.  The new key is the one to read.
         pooled["pooled_spread_mas"] = spread
         pooled["pooled_stat"] = stat
         pooled["source"] = (f"{members[0].get('source', 'astrometry_checkpoint')}"
-                            f" [{stat} of {len(members)}, ptp {spread:.2f}mas: "
+                            f" [{stat} of {len(members)}, max_pair_sep {spread:.2f}mas: "
                             f"{','.join(mods)}]")
         out.append(pooled)
     return out
 
 
-# dra and ddec are aggregated INDEPENDENTLY, which is the component-wise median
-# and not the geometric (2-D) median.  For the N<=4 groups this pooler is built
-# for the two differ negligibly, and the component-wise form has the property
-# that matters here -- it cannot exceed the component-wise max, so it can never
-# sum.  Revisit if groups ever get large.
+# dra and ddec are aggregated INDEPENDENTLY.  For the mean that is exact -- the
+# mean of a set of vectors is the vector of component means -- so unlike the
+# component-wise median it is not an approximation to anything.  Either way the
+# result cannot exceed the component-wise maximum, so pooling can never sum.
 _POOL_STATS = {"median": np.median, "mean": np.mean}
 
-# Refuse a group whose members disagree by more than this; they are not one
-# shift seen four times, and their middle means nothing.  Generous by default:
-# real per-detector SIAF/DVA spread is a few mas, and the sgrb2 groups measured
-# on 2026-08-01 ran 1.7-3.4 mas peak-to-peak.
+# Refuse a group whose members disagree by more than this -- measured as the
+# largest separation between any two of them AS VECTORS.  Beyond it they are not
+# one shift seen four times, and their middle means nothing.  Generous by
+# default: real per-detector SIAF/DVA spread is a few mas, and the sgrb2 groups
+# measured on 2026-08-01 ran 1.7-3.4 mas.
 MAX_POOL_SPREAD_MAS = 50.0
+
+
+def _max_pairwise_separation(members):
+    """The largest separation between any two corrections in a group, in mas.
+
+    A dispersion measure for a set of 2-D shifts has to be computed on the
+    VECTORS.  Reducing each to its magnitude first discards direction, and
+    direction is exactly what distinguishes "four detectors measuring one
+    shift" from "one detector disagreeing with three".
+    """
+    vec = np.array([[float(c["dra_onsky_mas"]), float(c["ddec_onsky_mas"])]
+                    for c in members], dtype=float)
+    if len(vec) < 2:
+        return 0.0
+    diff = vec[:, None, :] - vec[None, :, :]
+    return float(np.hypot(diff[..., 0], diff[..., 1]).max())
 
 
 def _assert_poolable(members, mods, row_key, tbl, offsets_path):
@@ -785,8 +953,8 @@ def _assert_pool_spread(spread, members, mods, offsets_path):
         return
     raise OffsetsTableUpdateError(
         f"cannot pool corrections for {os.path.basename(offsets_path)}: "
-        f"{len(members)} corrections for modules {mods} disagree by "
-        f"{spread:.1f} mas peak-to-peak (limit {limit} mas, "
+        f"{len(members)} corrections for modules {mods} disagree -- they are "
+        f"{spread:.1f} mas apart at their furthest (limit {limit} mas, "
         f"ASTROM_MAX_POOL_SPREAD_MAS).  That is not one shift measured several "
         f"times, so their middle is not a measurement of anything -- one "
         f"detector's tie has probably failed.  Inspect the checkpoint record.")
@@ -1185,7 +1353,7 @@ PROV_TEXT_MIN_CHARS = 64
 #: no longer states a figure.  What the longest string is MADE OF, which is
 #: checkable and does not go stale:
 #:
-#:     <stage> <base> [median of <k>, ptp <spread>mas: <detectors>]
+#:     <stage> <base> [mean of <k>, max_pair_sep <spread>mas: <detectors>]
 #:
 #:   stage      one of ``CORRECTION_STAGES`` -- currently m1, m2, m12, so up to
 #:              three characters.  (Assuming "m2" is what produced the 70/71.)
@@ -1205,10 +1373,10 @@ PROV_TEXT_MIN_CHARS = 64
 #: The retracted figures, kept because each was retracted for a different reason
 #: and the pattern is the point:
 #:
-#:   102  claimed "median of 4" while listing two detectors.
+#:   102  claimed "mean of 4" while listing two detectors.
 #:   138  listed eight detectors across both modules -- refused by
 #:        `_assert_poolable`.
-#:   114  put a pooled median on top of w51's 62-character
+#:   114  put a pooled value on top of w51's 62-character
 #:        `m2 consensus->reference (cross-band tied-F210M, contrast>2900)`.
 #:        That base is real, and sits in three rows of w51's live table, but no
 #:        code at this head writes the parenthetical, and it belongs to the
@@ -1268,10 +1436,10 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
     ``StringTruncateWarning``, but it is one line in a log that carries
     thousands, and nothing downstream can tell a truncated value from a short
     one.  ``prov_source`` is the column this bites -- the source string the m2
-    checkpoint writes when it pools four detectors' corrections into one is 70
+    checkpoint writes when it pools four detectors' corrections into one is 71
     characters --
 
-        'm2 visit-consensus [median of 4, ptp 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
+        'm2 visit-consensus [mean of 4, max_pair_sep 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
 
     -- while six of the thirteen live offsets tables carry ``prov_source`` as
     ``<U23``, because no row written into them so far has been longer than that.
@@ -1354,9 +1522,144 @@ PROV_EXPLAINS_TOL_MAS = 0.5
 
 #: Lower bound on cos(dec) over the fields this runs on -- all Galactic Centre or
 #: nearer the equator, so |dec| < 30 deg.  Used to BOUND the RA-axis check: the
-#: apply loop divides on-sky mas by cos(dec) and dec_deg is not stored per row,
-#: so the exact factor is unrecoverable but confined to [COS_DEC_MIN, 1].
+#: apply loop divides on-sky mas by cos(dec).  This is the FALLBACK bound: a row
+#: that records ``prov_dec_deg`` gives the exact factor, and any row whose cell
+#: is blank falls back here.  That is not only rows predating the column --
+#: migration NaN-fills every row it does not touch, so a table that HAS the
+#: column still reads blank on most of its rows.  Without a declination the
+#: factor is confined to [COS_DEC_MIN, 1].
 COS_DEC_MIN = np.cos(np.radians(30.0))
+
+# ---------------------------------------------------------------------------
+# Provenance column names, and the naming rule they follow
+# ---------------------------------------------------------------------------
+# Right ascension has TWO quantities that are both measured in angle and differ
+# by cos(declination) -- about 14% at Galactic Centre declinations:
+#
+#   * an ON-SKY separation: how far the source actually moved on the sky;
+#   * a COORDINATE offset: how much the right-ascension NUMBER changed.
+#
+# Declination has only one, which is why the confusion has only ever shown up
+# on the RA axis.  The rule is that a name must say which of the two it holds.
+# The offsets table's `dra`/`dra (arcsec)` columns are COORDINATE offsets (see
+# generate_offsets_table.py); the provenance record of what was added is an
+# ON-SKY separation, and now says so in its name.
+#
+# `prov_dra_added_mas` said neither, and that cost three mis-diagnoses of one
+# issue (#319) before the difference was identified as the explanation.
+PROV_ONSKY_RA_KEY = "prov_dra_onsky_mas"
+PROV_ONSKY_DEC_KEY = "prov_ddec_onsky_mas"
+
+#: The declination the cos(dec) conversion used, per row.  Without it the
+#: coordinate offset a provenance entry implies is only bounded, not known, so
+#: the right-ascension axis cannot be validated as strictly as declination --
+#: which is what let a 14% right-ascension provenance corruption pass.
+PROV_DEC_DEG_KEY = "prov_dec_deg"
+
+#: What these columns were called before the convention was in the name.  Read
+#: for compatibility and renamed on the next write; every live table predates
+#: the rename.
+_LEGACY_PROV_NAMES = {"prov_dra_added_mas": PROV_ONSKY_RA_KEY,
+                      "prov_ddec_added_mas": PROV_ONSKY_DEC_KEY}
+
+
+def _accumulated_prov(row, current_key, legacy_key):
+    """The accumulated on-sky provenance on a row, under either spelling.
+
+    ``row.get(current, row.get(legacy, 0.0))`` is NOT enough and was a real
+    defect: once a table carries both column names -- which happens the moment
+    one row dict is written with the new spelling and another still has the old
+    -- ``astropy`` fills the missing side as a MASKED cell rather than leaving
+    the key absent.  ``.get`` then returns the mask, the fallback never fires,
+    and the accumulated history is silently replaced by zero.
+
+    So this checks the VALUE, not merely the key.
+    """
+    names = getattr(row, "colnames", None)
+    names = set(names) if names is not None else set(row)
+    for key in (current_key, legacy_key):
+        if key not in names:
+            continue
+        value = row[key]
+        if value is None or value is np.ma.masked:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            return value
+    return 0.0
+
+
+def migrate_prov_column_names(tbl):
+    """Bring the provenance columns onto the current spelling, in place.
+
+    Returns ``{old name: what happened}`` for whatever it changed, empty when
+    the table was already current.
+
+    The values are unchanged -- they were always on-sky milliarcseconds, the
+    name simply did not say so.
+
+    A table carrying BOTH spellings is MERGED when the two are disjoint, which
+    is the only way that state arises here: it comes from rebuilding a table
+    out of a mixture of old- and new-spelled row dictionaries, so each row's
+    value sits in exactly one column and the other is masked.  Leaving such a
+    table alone -- which this function used to do, on the reasoning that
+    merging two records is a curation decision -- stranded every legacy value
+    where a reader resolving to the new name would miss it, which is the silent
+    loss the rename exists to prevent.
+
+    A row where BOTH columns hold a finite value AND they differ is a genuine
+    disagreement, no rule picks correctly, and it raises.  Equal values in both
+    are not a disagreement; that is one record written twice.
+    """
+    renamed = {}
+    for legacy, current in _LEGACY_PROV_NAMES.items():
+        if legacy not in tbl.colnames:
+            continue
+        if current not in tbl.colnames:
+            tbl.rename_column(legacy, current)
+            renamed[legacy] = current
+            continue
+        # BOTH spellings present.  This used to be left alone and reported,
+        # on the reasoning that merging two columns each claiming to be the
+        # record is a curation decision.  That was wrong in the case that
+        # actually arises: the two are DISJOINT -- each row's value lives in
+        # exactly one of them and the other is masked -- because the state is
+        # produced by rebuilding a table from a mixture of old- and new-spelled
+        # row dictionaries, never by two writers recording different totals.
+        # Leaving it alone stranded the legacy values where every reader
+        # resolving to the new name would miss them, which is the silent data
+        # loss this whole rename exists to prevent.
+        old_vals = np.ma.filled(np.ma.asarray(tbl[legacy], dtype=float), np.nan)
+        new_vals = np.ma.filled(np.ma.asarray(tbl[current], dtype=float), np.nan)
+        conflict = np.isfinite(old_vals) & np.isfinite(new_vals) & (
+            old_vals != new_vals)
+        if conflict.any():
+            # A genuine disagreement IS a curation decision, and there is no
+            # rule that picks correctly.  Refuse rather than choose.
+            raise OffsetsTableUpdateError(
+                f"{legacy} and {current} both hold a value on "
+                f"{int(conflict.sum())} row(s) and they disagree (e.g. "
+                f"{old_vals[conflict][0]:+.3f} vs {new_vals[conflict][0]:+.3f} "
+                f"mas).  These are two columns each claiming to be the record "
+                f"of what was added, and nothing here can say which is right.  "
+                f"Resolve by hand before correcting this table again.")
+        merged = np.where(np.isfinite(new_vals), new_vals, old_vals)
+        tbl[current] = np.where(np.isfinite(merged), merged, 0.0)
+        tbl.remove_column(legacy)
+        renamed[legacy] = f"{current} (merged; the two were disjoint)"
+    return renamed
+
+
+def prov_onsky_columns(tbl):
+    """``(ra_key, dec_key)`` for whichever spelling this table carries."""
+    ra = (PROV_ONSKY_RA_KEY if PROV_ONSKY_RA_KEY in tbl.colnames
+          else "prov_dra_added_mas")
+    dec = (PROV_ONSKY_DEC_KEY if PROV_ONSKY_DEC_KEY in tbl.colnames
+           else "prov_ddec_added_mas")
+    return ra, dec
 
 
 def _row_label(tbl, i):
@@ -1374,7 +1677,7 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     is as-built + everything applied.  That is not a guess: across all ten live
     ``*_VIRAC2locked.csv`` tables,
 
-        max | ((arcsec) - plain)*1000 - prov_*_added_mas |  =  0.000000 mas
+        max | ((arcsec) - plain)*1000 - prov_*_onsky_mas |  =  0.000000 mas
 
     so the gap is exactly the recorded provenance.  When that identity holds the
     plain pair carries no information the ``(arcsec)`` pair lacks, and the two can
@@ -1392,8 +1695,12 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     right when nothing on record says so.
 
     Both axes are checked before anything is written, because both are written.
-    Dec is exact (prov and ddec are both on-sky); RA is bounded, since the apply
-    loop divided by a cos(dec) this function cannot recover exactly.
+    Dec is exact (prov and ddec are both on-sky).  RA is exact too when the row
+    records ``prov_dec_deg``, which gives back the cos(dec) the apply loop
+    divided by; where that cell is BLANK it is bounded by [COS_DEC_MIN, 1]
+    instead.  Blank is not only rows predating the column: migration NaN-fills
+    every row it does not touch, so a table that HAS the column still reads
+    blank on most of its rows and this branch is live on migrated tables.
 
     ``rows``: restrict to these row indices (the ones a correction will touch).
     A field with one stale filter and ten clean ones must be able to recover
@@ -1417,25 +1724,57 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     if not len(bad):
         return 0
 
-    prov_d = (np.asarray(tbl["prov_dra_added_mas"], dtype=float)
-              if "prov_dra_added_mas" in tbl.colnames else np.zeros(len(tbl)))
-    prov_c = (np.asarray(tbl["prov_ddec_added_mas"], dtype=float)
-              if "prov_ddec_added_mas" in tbl.colnames else np.zeros(len(tbl)))
+    _ra_key, _dec_key = prov_onsky_columns(tbl)
+    prov_d = (np.asarray(tbl[_ra_key], dtype=float)
+              if _ra_key in tbl.colnames else np.zeros(len(tbl)))
+    prov_c = (np.asarray(tbl[_dec_key], dtype=float)
+              if _dec_key in tbl.colnames else np.zeros(len(tbl)))
     # DEC is exact: prov is on-sky mas and ddec is an on-sky arcsec offset, no
     # cos(dec) between them.
     dec_bad = np.abs(c_gap * 1000.0 - prov_c) > PROV_EXPLAINS_TOL_MAS
 
-    # RA needs a BOUND rather than an equality.  The apply loop divides the
-    # on-sky mas by cos(dec) to get the coordinate offset, and dec_deg is not
-    # stored per row, so the exact factor is unrecoverable -- but it is confined
-    # to [cos(dec_max), 1], which for these fields is a ~14% window.  That is far
+    # RA needs a BOUND rather than an equality WHEN THE ROW DOES NOT RECORD ITS
+    # DECLINATION.  The apply loop divides the on-sky mas by cos(dec) to get the
+    # coordinate offset; a row carrying ``prov_dec_deg`` gives that factor back
+    # exactly, and the branch below uses it.  Where the cell is BLANK -- which
+    # includes every row migration NaN-filled, not only rows predating the
+    # column -- the factor is confined to [cos(dec_max), 1], which
+    # for these fields is a ~14% window.  That is far
     # tighter than needed to reject a hand-edited RA gap against a recorded zero,
     # and the heal WRITES this column, so it has to be checked: without it a row
     # whose Dec gap is explained and whose RA gap is not gets its dra silently
     # overwritten.
-    lo = np.minimum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
-    hi = np.maximum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
     slack = PROV_EXPLAINS_TOL_MAS / 1000.0
+    # With the declination recorded, the coordinate offset a provenance entry
+    # implies is EXACT and right ascension is checked as strictly as
+    # declination.  Without it the factor is only bounded to
+    # [COS_DEC_MIN, 1] -- a ~14% window, which is wide enough for a 14%
+    # corruption of the right-ascension provenance to pass unnoticed.  That is
+    # the gap prov_dec_deg exists to close, and every row whose cell is blank --
+    # migration-filled rows included, not just rows predating the column --
+    # keeps the loose check for as long as it is not re-corrected.
+    if PROV_DEC_DEG_KEY in tbl.colnames:
+        # filled(nan) FIRST: a masked or empty cell read straight through
+        # `np.asarray(..., float)` becomes 0.0, which would be taken as a
+        # declination of zero -- the celestial equator, cos = 1 -- and the row
+        # checked EXACTLY against a factor that never applied.  That inverts
+        # this check in both directions: it refuses a correct correction and
+        # accepts the cos(dec) corruption it exists to catch.  An absent
+        # declination must read as ABSENT.
+        _dec = np.asarray(np.ma.filled(np.ma.masked_invalid(
+            np.ma.filled(np.ma.asarray(tbl[PROV_DEC_DEG_KEY], dtype=float),
+                         np.nan)), np.nan), dtype=float)
+        _cosd = np.cos(np.radians(_dec))
+        _known = np.isfinite(_dec) & (np.abs(_cosd) > 1e-6)
+    else:
+        _known = np.zeros(len(tbl), dtype=bool)
+        _cosd = np.ones(len(tbl))
+    exact = np.where(_known, prov_d / 1000.0 / np.where(_known, _cosd, 1.0),
+                     np.nan)
+    lo = np.where(_known, exact,
+                  np.minimum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN))
+    hi = np.where(_known, exact,
+                  np.maximum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN))
     ra_bad = (d_gap < lo - slack) | (d_gap > hi + slack)
 
     rogue = np.where(diverged & (dec_bad | ra_bad))[0]
@@ -1444,11 +1783,11 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
         if dec_bad[i]:
             axis, gap_i, prov_i, col_a, col_b, expect = (
                 "Dec", c_gap[i], prov_c[i], ca, cb,
-                f"prov_ddec_added_mas {prov_c[i]:.2f} mas")
+                f"{_dec_key} {prov_c[i]:.2f} mas")
         else:
             axis, gap_i, prov_i, col_a, col_b, expect = (
                 "RA", d_gap[i], prov_d[i], da, db,
-                f"prov_dra_added_mas {prov_d[i]:.2f} mas, i.e. a coordinate gap "
+                f"{_ra_key} {prov_d[i]:.2f} mas, i.e. a coordinate gap "
                 f"in [{lo[i] * 1000:.2f}, {hi[i] * 1000:.2f}] mas after the "
                 f"cos(dec) the apply loop divided by")
         raise OffsetsTableUpdateError(
@@ -1462,7 +1801,7 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     worst = int(bad[np.argmax(np.abs(c_gap[bad]))])
     print(f"  {os.path.basename(offsets_path)}: re-syncing '{db}'/'{cb}' from "
           f"'{da}'/'{ca}' on {len(bad)} row(s) -- only the '(arcsec)' pair was "
-          f"ever written, and the gap matches prov_*_added_mas exactly, so the "
+          f"ever written, and the gap matches the recorded on-sky provenance exactly, so the "
           f"plain pair is the as-built value and carries nothing the other lacks. "
           f"Worst {_row_label(tbl, worst)}: {c_gap[worst] * 1000:.1f} mas.",
           flush=True)
@@ -1489,8 +1828,14 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     The corrected table is validated with ``assert_offsets_table_sane``
     (collapsed-visit guard) before it is written.  The original is kept as a
     ``.pre_<stage>_<timestamp>`` backup.  Every corrected row gets provenance
-    columns (``prov_stage``, ``prov_date``, ``prov_dra_added_mas``,
-    ``prov_ddec_added_mas``, ``prov_source``).
+    columns (``prov_stage``, ``prov_date``, ``prov_dra_onsky_mas``,
+    ``prov_ddec_onsky_mas``, ``prov_dec_deg``, ``prov_source``).  The
+    ``_onsky_`` in those names is load-bearing: the table's own ``dra`` columns
+    hold a COORDINATE offset, and the two differ by cos(dec) -- ~14% at these
+    declinations.  ``prov_dec_deg`` records the declination the conversion
+    used, so the coordinate offset a provenance entry implies is exact rather
+    than bounded.  Tables written under the older ``prov_*_added_mas`` names
+    are renamed on the next write, values untouched.
 
     Returns the corrected Table.  Raises ``OffsetsTableUpdateError`` when a
     correction matches no row or the corrected table fails validation.
@@ -1580,9 +1925,32 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                                    dtype=f"U{PROV_TEXT_MIN_CHARS}")
         # Sized to what THIS write puts in them, floored at the baseline.
         _widen_prov_text_columns(tbl, _prov_text_width(corrections, stage, now))
-        for col in ("prov_dra_added_mas", "prov_ddec_added_mas"):
+        _renamed = migrate_prov_column_names(tbl)
+        if _renamed:
+            print(f"  {os.path.basename(offsets_path)}: renaming provenance "
+                  f"column(s) "
+                  + ", ".join(f"{a} -> {b}" for a, b in sorted(_renamed.items()))
+                  + " -- the values are unchanged (they were always on-sky "
+                    "milliarcseconds); the name now says so, because right "
+                    "ascension also has a COORDINATE offset differing by "
+                    "cos(dec) (~14% here)", flush=True)
+        for col in (PROV_ONSKY_RA_KEY, PROV_ONSKY_DEC_KEY):
             if col not in tbl.colnames:
                 tbl[col] = np.zeros(len(tbl))
+        # NaN, not 0.0: a declination of exactly zero is a real (if
+        # impossible-here) value, so filling with it would claim every legacy
+        # row was corrected on the celestial equator.  The validator reads
+        # non-finite as "not recorded" and falls back to the loose bound.
+        if PROV_DEC_DEG_KEY not in tbl.colnames:
+            tbl[PROV_DEC_DEG_KEY] = np.full(len(tbl), np.nan)
+        elif tbl[PROV_DEC_DEG_KEY].dtype.kind != "f":
+            # An all-blank column round-trips from CSV as int64, and writing a
+            # declination of -28.7 into it silently stores -28 -- 0.7 degrees
+            # out, which is enough to make the exact check reject a correct row
+            # later.  The dra/ddec pairs are coerced a few lines below for the
+            # same reason; this column needs it too.
+            tbl[PROV_DEC_DEG_KEY] = np.ma.filled(
+                np.ma.asarray(tbl[PROV_DEC_DEG_KEY], dtype=float), np.nan)
         # An INT offset column truncates every fractional correction to zero and,
         # once one pair is float and the other is not, locks the table into a
         # permanent disagreement no write can clear.  Coerce before anything is
@@ -1664,12 +2032,33 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                 tbl[_cc][idx] = np.asarray(tbl[_cc][idx], dtype=float) + ddec_add
             tbl["prov_stage"][idx] = _prov_text(stage)
             tbl["prov_date"][idx] = _prov_text(now)
-            tbl["prov_dra_added_mas"][idx] = (
-                np.asarray(tbl["prov_dra_added_mas"][idx], dtype=float)
+            # `np.ma.filled(..., 0.0)`: on a table that reached here carrying
+            # BOTH spellings, the new column is MASKED on rows whose value lives
+            # under the legacy name, and a bare asarray turns that mask into
+            # whatever numpy feels like rather than the accumulated total.  The
+            # rename above should make that unreachable; this makes the failure
+            # a zero rather than a silent corruption if it is not.
+            tbl[PROV_ONSKY_RA_KEY][idx] = (
+                np.ma.filled(np.ma.asarray(tbl[PROV_ONSKY_RA_KEY][idx],
+                                           dtype=float), 0.0)
                 + float(corr["dra_onsky_mas"]))
-            tbl["prov_ddec_added_mas"][idx] = (
-                np.asarray(tbl["prov_ddec_added_mas"][idx], dtype=float)
+            tbl[PROV_ONSKY_DEC_KEY][idx] = (
+                np.ma.filled(np.ma.asarray(tbl[PROV_ONSKY_DEC_KEY][idx],
+                                           dtype=float), 0.0)
                 + float(corr["ddec_onsky_mas"]))
+            # The declination this correction's cos(dec) used.  Recorded per
+            # row so the coordinate offset it implies can be re-derived exactly
+            # rather than bounded -- the whole point of the column.  A row
+            # corrected twice from different declinations keeps the LATEST,
+            # while the accumulated total reflects both, so the two agree only
+            # while the declination barely moves.  `dec_deg` is whatever the
+            # caller passes: the visit checkpoints pass the MEDIAN declination
+            # of the consensus star set, recomputed per re-tie iteration, and
+            # the pooled path passes the mean of its members' values -- so it
+            # moves with the sampled stars rather than with the pointing, and is
+            # not bounded here.  The tolerance it needs is
+            # prov[mas] x delta-dec[deg] <~ 46 (45.9 at dec = -28.7); see #387.
+            tbl[PROV_DEC_DEG_KEY][idx] = float(corr["dec_deg"])
             tbl["prov_source"][idx] = _prov_text(
                 corr.get("source", "astrometry_checkpoint"))
 
@@ -1681,8 +2070,8 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # guide-star fix of arcseconds, but never more than a swept peak could mean.
         drift_limit = _positive_env_float("ASTROM_MAX_BULK_CORRECTION_ARCSEC",
                                           MAX_BULK_CORRECTION_ARCSEC)
-        drift = np.hypot(np.asarray(tbl["prov_dra_added_mas"], dtype=float),
-                         np.asarray(tbl["prov_ddec_added_mas"], dtype=float)) / 1000.0
+        drift = np.hypot(np.asarray(tbl[PROV_ONSKY_RA_KEY], dtype=float),
+                         np.asarray(tbl[PROV_ONSKY_DEC_KEY], dtype=float)) / 1000.0
         over = np.where(drift > drift_limit)[0]
         if len(over):
             worst = [(str(tbl["Visit"][i]), str(tbl["Filter"][i]),
@@ -1690,7 +2079,7 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             raise OffsetsTableUpdateError(
                 f"{len(over)} row(s) of {os.path.basename(offsets_path)} have "
                 f"accumulated more than {drift_limit}\" of correction across all "
-                f"writes (prov_dra/ddec_added_mas) -- runaway feedback, not a "
+                f"writes (prov_dra/ddec_onsky_mas) -- runaway feedback, not a "
                 f"measurement.  NOT writing.  (visit, filter, |accumulated|\"): "
                 f"{worst}")
 
@@ -1891,7 +2280,24 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         existed = os.path.exists(out_path)
         bykey = {}
         if existed:
-            for r in Table.read(out_path):
+            # Rename the provenance columns on the WHOLE table before any row is
+            # read out of it.  Popping the legacy key per touched row is not
+            # enough and was the round-1 fix's mistake: untouched rows keep the
+            # old key, so `Table(rows)` below re-creates BOTH columns with each
+            # masked on the other's rows -- the state this is supposed to
+            # prevent, and one that then makes migrate_prov_column_names a
+            # permanent silent no-op because both spellings are present forever.
+            _existing = Table.read(out_path)
+            _renamed = migrate_prov_column_names(_existing)
+            if _renamed:
+                print(f"  {os.path.basename(out_path)}: renaming provenance "
+                      f"column(s) "
+                      + ", ".join(f"{a} -> {b}"
+                                  for a, b in sorted(_renamed.items()))
+                      + " -- values unchanged; the name now states that these "
+                        "are ON-SKY milliarcseconds, which right ascension's "
+                        "COORDINATE offset is not", flush=True)
+            for r in _existing:
                 row = {c: r[c] for c in r.colnames}
                 # normalise the round-tripped cell ONCE (masked/'--'/int64 -> canonical
                 # string) so the key, the migration below and the written column all
@@ -1955,8 +2361,10 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
             row = bykey.pop(legacy)
             row["Vgroup"] = vgroup
             bykey[legacy[:4] + (vgroup,)] = row
-            kept = tuple(_finite_float(row.get(c))
-                         for c in ("prov_dra_added_mas", "prov_ddec_added_mas"))
+            kept = (_accumulated_prov(row, PROV_ONSKY_RA_KEY,
+                                      "prov_dra_added_mas"),
+                    _accumulated_prov(row, PROV_ONSKY_DEC_KEY,
+                                      "prov_ddec_added_mas"))
             print(f"[consensus] migrated pre-Vgroup row {legacy[:4]} -> "
                   f"Vgroup={vgroup} (keeps its accumulated "
                   f"{kept[0]:+.2f},{kept[1]:+.2f} mas)", flush=True)
@@ -1969,10 +2377,20 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                 row = bykey[key]
                 row["dra (arcsec)"] = float(row["dra (arcsec)"]) + dra_add
                 row["ddec (arcsec)"] = float(row["ddec (arcsec)"]) + ddec_add
-                row["prov_dra_added_mas"] = (float(row.get("prov_dra_added_mas", 0.0))
-                                             + float(corr["dra_onsky_mas"]))
-                row["prov_ddec_added_mas"] = (float(row.get("prov_ddec_added_mas", 0.0))
-                                              + float(corr["ddec_onsky_mas"]))
+                row[PROV_ONSKY_RA_KEY] = (
+                    _accumulated_prov(row, PROV_ONSKY_RA_KEY,
+                                      "prov_dra_added_mas")
+                    + float(corr["dra_onsky_mas"]))
+                row[PROV_ONSKY_DEC_KEY] = (
+                    _accumulated_prov(row, PROV_ONSKY_DEC_KEY,
+                                      "prov_ddec_added_mas")
+                    + float(corr["ddec_onsky_mas"]))
+                # Belt and braces after the table-wide rename above: if a row
+                # dict reached here from somewhere that had not been migrated,
+                # this stops it re-introducing the legacy key.
+                row.pop("prov_dra_added_mas", None)
+                row.pop("prov_ddec_added_mas", None)
+                row[PROV_DEC_DEG_KEY] = float(corr["dec_deg"])
                 row["prov_stage"] = _prov_text(stage)
                 row["prov_date"] = _prov_text(now)
                 row["prov_source"] = _prov_text(
@@ -1994,8 +2412,9 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                     "dra (arcsec)": dra_add, "ddec (arcsec)": ddec_add,
                     "prov_stage": _prov_text(stage),
                     "prov_date": _prov_text(now),
-                    "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
-                    "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
+                    PROV_ONSKY_RA_KEY: float(corr["dra_onsky_mas"]),
+                    PROV_ONSKY_DEC_KEY: float(corr["ddec_onsky_mas"]),
+                    PROV_DEC_DEG_KEY: float(corr["dec_deg"]),
                     "prov_source": _prov_text(
                         corr.get("source", "m2 visit-consensus seed")),
                 }
@@ -3364,6 +3783,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         consensus_catalog_error = None
 
     passed = _checkpoint_passed(failures, unverified_blocking)
+    # What an operator did to the gate this record is about.  Only meaningful
+    # where the override is actually consulted -- a correcting stage never
+    # defers, and a stage with no failures never reaches the override -- so it
+    # is None elsewhere rather than a misleading `used: false`.
+    gate_override = (gate_override_state("ALLOW_LATE_STAGE_ASTROM_SHIFT")
+                     if failures and not correcting else None)
     record = dict(stage=stage, filtername=filtername, context=context,
                   consensus_catalog=consensus_catalog_path,
                   consensus_catalog_error=consensus_catalog_error,
@@ -3371,6 +3796,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                   corrections=corrections, failures=failures,
                   unverified=unverified, unverified_blocking=unverified_blocking,
                   passed=passed, all_verified=not unverified,
+                  gate_override=gate_override,
                   tolerances=dict(
                       exposure_consensus_tol_mas=EXPOSURE_CONSENSUS_TOL_MAS,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
@@ -3623,6 +4049,9 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                   filters=filters, failures=failures, passed=passed,
                   unverified=unverified, unverified_blocking=unverified_blocking,
                   all_verified=not unverified,
+                  gate_override=(
+                      gate_override_state("ALLOW_CROSSFILTER_ASTROM_FAIL")
+                      if failures else None),
                   tolerances=dict(crossfilter_tol_mas=tol_mas,
                                   local_cell_tol_mas=cell_tol_mas,
                                   local_cell_size_arcsec=cell_arcsec,

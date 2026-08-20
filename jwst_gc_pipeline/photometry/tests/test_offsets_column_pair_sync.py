@@ -229,7 +229,11 @@ def test_an_RA_only_gap_the_provenance_does_not_explain_is_refused(tmp_path):
         update_offsets_table(p, [_corr(2)], stage="m2")
     msg = str(exc.value)
     assert "RA axis" in msg
-    assert "prov_dra_added_mas" in msg
+    # The write renames a legacy table to the current spelling before this
+    # message is built, so the message always quotes the current name.  The
+    # second disjunct this used to carry was unreachable and only weakened the
+    # assertion.
+    assert "prov_dra_onsky_mas" in msg
     assert "NOT writing" in msg
 
 
