@@ -158,5 +158,6 @@ reaches them only if you use the tool that reads them.
 The last three are worth folding in next; each is a place two copies of one
 fact can drift apart, which is what this change is about.
 
-`jwst_gc_pipeline/reduction/make_merged_psf.py` keeps its own out-of-date copies.
-It is deprecated and scheduled for removal; nothing imports it.
+A fifth list used to sit in a deprecated make_merged_psf module, which kept
+its own out-of-date copies of these facts; 538153b removed the module and with
+it that list.
