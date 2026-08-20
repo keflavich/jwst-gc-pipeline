@@ -74,6 +74,23 @@ def query_gaia(ra, dec, radius, retries=6):
     return _query_gaia_vizier(ra, dec, radius)
 
 
+def refcat_filename(epoch_tag, obs_token=None):
+    """``gaia_virac2_refcat_epoch<tag>[_o<obs>].fits``.
+
+    The token is what ``astrometry_utils.pick_refcat`` matches on to give each
+    observation its OWN catalog in a shared field directory; without one it
+    falls back to the alphabetically last file for every observation alike.
+    ``o`` is not doubled if the caller already passed ``o037``, and the number
+    is zero-padded to three digits so ``37`` and ``037`` name one file.
+    """
+    if obs_token in (None, ''):
+        return f'gaia_virac2_refcat_epoch{epoch_tag}.fits'
+    token = str(obs_token).lstrip('oO')
+    if token.isdigit():
+        token = f'{int(token):03d}'
+    return f'gaia_virac2_refcat_epoch{epoch_tag}_o{token}.fits'
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--base', required=True, help='target basepath (writes <base>/catalogs/...)')
@@ -82,9 +99,17 @@ def main():
     ap.add_argument('--dec', type=float, required=True)
     ap.add_argument('--radius', type=float, default=0.1, help='query radius (deg)')
     ap.add_argument('--out-epoch-tag', default=None, help='epoch tag in filename, e.g. 2024.68')
+    ap.add_argument('--obs-token', default=None, metavar='NNN',
+                    help='observation number to stamp into the filename '
+                         '(gaia_virac2_refcat_epoch<tag>_o<NNN>.fits).  REQUIRED '
+                         'for a field whose observations share one directory: '
+                         'pick_refcat hands an untokened catalog to every '
+                         'observation, which for tiles arcminutes apart is the '
+                         'wrong sky (gc2211 o023 took a -9.28" correction that '
+                         'way).')
     args = ap.parse_args()
     tag = args.out_epoch_tag or f'{args.epoch:.2f}'
-    out = f'{args.base}/catalogs/gaia_virac2_refcat_epoch{tag}.fits'
+    out = f'{args.base}/catalogs/{refcat_filename(tag, args.obs_token)}'
 
     g = query_gaia(args.ra, args.dec, args.radius)
     gra, gdec = prop(farr(g['ra']), farr(g['dec']), farr(g['pmra']), farr(g['pmdec']),

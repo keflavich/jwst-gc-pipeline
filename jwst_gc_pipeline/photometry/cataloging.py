@@ -102,6 +102,28 @@ class VettedCombineError(RuntimeError):
     """
 
 
+class MissingReferenceCatalogError(RuntimeError):
+    """A VIRAC2-framed field has no absolute reference catalog on disk.
+
+    Fail-closed, because the alternative already shipped once: without the
+    refcat the astrometry checkpoints fall back to consensus-only checks, which
+    verify that the exposures agree WITH EACH OTHER and say nothing about where
+    that agreed frame sits on the sky.  A field can then reduce, pass every
+    internal check, and ship arcseconds off -- proposal 1939's sgra mosaics sat
+    ~14.8" from VIRAC2 while their offsets table went unread.
+
+    Scoped to fields whose ``ALIGNMENT_CONFIG`` declares ``VIRAC2``: those are
+    the crowded GC fields whose tie is MADE with this catalog, and every one of
+    them carries a refcat today except a newly-registered one.  Gaia-framed
+    fields (m4, m92, ngc6397, w51) legitimately run without this file and are
+    left alone.
+
+    ``ALLOW_CONSENSUS_ONLY_ASTROMETRY=1`` overrides, for the deliberate case of
+    a first look at a field whose refcat has not been built yet.  It buys a run
+    whose absolute frame is unverified, so it does not belong in a release.
+    """
+
+
 class MergedcatMosaicError(RuntimeError):
     """A phase could not write its merged-catalog residual / model i2d mosaics.
 
@@ -3365,7 +3387,28 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
 _pick_refcat = _au_pick_refcat
 
 
-def _astrom_checkpoint_refcat(basepath, field):
+#: Set to 1 to run a VIRAC2-framed field with no reference catalog on disk.
+#: The checkpoints then verify only that the exposures agree with each other.
+ALLOW_CONSENSUS_ONLY_ENV = 'ALLOW_CONSENSUS_ONLY_ASTROMETRY'
+
+
+def _refcat_is_required(proposal_id, field):
+    """Whether a missing reference catalog must stop the run for this field.
+
+    True for the fields whose ``ALIGNMENT_CONFIG`` frame is VIRAC2 -- the tie
+    those fields declare is MADE with this catalog, so running without it
+    silently downgrades the checkpoints to internal-consistency only.  A field
+    with no entry, or one framed on Gaia, keeps the previous behaviour: those
+    run without this file today (m4, m92, ngc6397, w51 measured 2026-08-20).
+    """
+    if proposal_id is None:
+        return False
+    from jwst_gc_pipeline.reduction import alignment_config as _ac
+    cfg = _ac.resolve(str(proposal_id), str(field) if field is not None else None)
+    return bool(cfg) and cfg.reference_frame == _ac.VIRAC2
+
+
+def _astrom_checkpoint_refcat(basepath, field, proposal_id=None):
     """Locate + load the absolute reference catalog for the astrometry
     checkpoints: env ``ASTROM_REFCAT`` first, else the seed refcat matching this
     OBSERVATION (see :func:`pick_refcat`).  None (consensus-only checks) when
@@ -3386,7 +3429,28 @@ def _astrom_checkpoint_refcat(basepath, field):
     if path and os.path.exists(path):
         print(f"astrom checkpoint: reference catalog {path}", flush=True)
         return load_reference_catalog(path)
-    print(f"astrom checkpoint: no reference catalog found under {basepath}/catalogs "
+    where = f"{basepath}/catalogs"
+    if _refcat_is_required(proposal_id, field):
+        msg = (f"astrom checkpoint: no reference catalog under {where} for "
+               f"proposal {proposal_id} observation {field}, whose alignment "
+               f"config declares the VIRAC2 frame.  Without it the checkpoints "
+               f"verify only that the exposures agree with each other, which is "
+               f"how a field ships arcseconds off with every internal check "
+               f"green.  Build one with\n"
+               f"  python -m jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery "
+               f"--base {basepath} --epoch <YYYY.Y> --ra <deg> --dec <deg> "
+               f"--radius <deg> [--obs-token {field}]\n"
+               f"or point ASTROM_REFCAT at an existing one.  Set "
+               f"{ALLOW_CONSENSUS_ONLY_ENV}=1 to run without an absolute tie "
+               f"(the result is not releasable).")
+        if os.environ.get(ALLOW_CONSENSUS_ONLY_ENV, '') != '1':
+            raise MissingReferenceCatalogError(msg)
+        print(f"WARNING: {msg}", flush=True)
+        print(f"astrom checkpoint: {ALLOW_CONSENSUS_ONLY_ENV}=1 -- continuing "
+              f"with consensus-only checks; the absolute frame is UNVERIFIED",
+              flush=True)
+        return None
+    print(f"astrom checkpoint: no reference catalog found under {where} "
           f"(set ASTROM_REFCAT to provide one); running consensus-only checks",
           flush=True)
     return None
@@ -4251,7 +4315,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
 
     if 'refcat' not in refcat_cache:
         refcat_cache['refcat'] = _astrom_checkpoint_refcat(
-            basepath, field=getattr(options, 'field', None))
+            basepath, field=getattr(options, 'field', None),
+            proposal_id=getattr(options, 'proposal_id', None))
     refcat = refcat_cache['refcat']
 
     warn_only = os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1'
@@ -4597,7 +4662,8 @@ def _stamp_wcs_source(path):
 
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
                                        refcat_cache, context="",
-                                       record_dir=None, obs_token=""):
+                                       record_dir=None, obs_token="",
+                                       proposal_id=None):
     """Cross-filter astrometry agreement checkpoint before the m7 cross-band
     merge (see astrometry_checkpoint.run_crossfilter_checkpoint): anchor =
     filter nearest VIRAC2 Ks; <5 mas bulk agreement per filter; no significant
@@ -4621,7 +4687,8 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
     if 'refcat' not in refcat_cache:
         _m = re.search(r'o(\d{3})', obs_token or '')
         refcat_cache['refcat'] = _astrom_checkpoint_refcat(
-            basepath, field=_m.group(1) if _m else None)
+            basepath, field=_m.group(1) if _m else None,
+            proposal_id=proposal_id)
     try:
         run_crossfilter_checkpoint(catalogs, refcat=refcat_cache['refcat'],
                                    basepath=cut_bp, context=context,
@@ -5822,7 +5889,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 record_dir=os.path.join(basepath, 'astrometry_checkpoints'),
                 obs_token=_xf_consensus_obs_token(
                     getattr(options, 'proposal_id', None),
-                    getattr(options, 'field', None)))
+                    getattr(options, 'field', None)),
+                proposal_id=getattr(options, 'proposal_id', None))
 
             print(f"manual [{last_phase}]: CROSS-BAND MERGE (module={module}, "
                   f"ref_filter={ref_filter}, filters={list(filternames)})", flush=True)
