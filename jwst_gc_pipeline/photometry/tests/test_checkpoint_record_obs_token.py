@@ -182,8 +182,21 @@ def test_apply_script_refuses_legacy_BESIDE_tokened(tmp_path):
     # the field NEAREST the record dir wins: first-in-dict-order read this as
     # 'brick' and, brick having no shared filters, called it unambiguous
     ("/blue/x/jwst/brick/scratch/cloudef/astrometry_checkpoints", "F360M", True),
-    # longest-match does not fix it either -- 'arches' and 'sickle' tie
-    ("/home/arches/runs/sickle/astrometry_checkpoints", "F187N", True),
+    # longest-match does not fix it either -- 'arches' and 'sickle' tie.  The
+    # path resolves to sickle (nearest component naming a field); what is then
+    # asked is whether the FILTER is shared across that field's observations.
+    #
+    # F187N: NOT ambiguous.  sickle images it in exactly one observation (007),
+    # so an untokened F187N record can only belong to that one.  This asserted
+    # True while 001 and 002 were listed under `nircam` -- the bug this change
+    # fixes -- so the old answer came from two MIRI observations pretending to
+    # carry NIRCam filters.
+    ("/home/arches/runs/sickle/astrometry_checkpoints", "F187N", False),
+    # ...and a GENUINE ambiguity on the same path shape, so the field-resolution
+    # case this row was written for is still exercised: F770W IS imaged by both
+    # of sickle's MIRI observations (001 and 002), so an untokened record cannot
+    # say which.
+    ("/home/arches/runs/sickle/astrometry_checkpoints", "F770W", True),
     ("/orange/adamginsburg/jwst/brick/astrometry_checkpoints", "F212N", False),
     # sgrb2 registers nircam ['001'] but miri ['001','002','998'] -- and ONE
     # `filters` list shared by both.  Asking for the nircam default returned
