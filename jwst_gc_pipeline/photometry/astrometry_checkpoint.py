@@ -292,6 +292,15 @@ def gate_override_state(env_override):
     later nothing on disk says by whom, or why, or against which of the four
     failures.  This is the same reasoning that already puts
     ``correction_floor_mas`` in the record.
+
+    The reason is stored ONLY alongside a used override.  A ``<VAR>_REASON``
+    left in the environment without the flag records nothing -- a justification
+    for an override that did not happen would read as a waiver that did.  The
+    reverse pair, the flag without a reason, IS recorded (``used`` true,
+    ``reason`` empty) and is said loudly at the gate, because that is the state
+    CLAUDE.md forbids.  An operator who sets the reason and forgets the flag
+    therefore gets no trace of either, and the run stops at the gate as it
+    would have anyway.
     """
     used = _env_flag(env_override)
     reason = os.environ.get(override_reason_env(env_override), '').strip()
