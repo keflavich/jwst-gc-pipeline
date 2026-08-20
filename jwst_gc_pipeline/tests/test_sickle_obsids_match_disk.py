@@ -12,13 +12,15 @@ Counted from disk on 2026-08-19:
 
     F187N  96 _cal   F210M  96      all obs 007
     F335M  24        F470N  24      F480M 24
-    F770W   5        F1130W  5      F1500W 5   under obs 001, 002 AND 003
+    F770W   5        F1130W  5      F1500W 5   under obs 001, 002 and 003
 
 `run_sickle_3958_o007.sh` says the same in prose: "NIRCam is obs 007.  The 3958
 MIRI data are obs 001 and are NOT covered here."
 
-MIRI 003 was missing from the registry for the same reason the NIRCam list was
-wrong -- nobody had compared the entry with the tree.
+3958/003 is on disk but is NOT sickle's: brick claims it, with its own reference
+catalogs, and `TARGPROP = SICKLE-MIR-BACKGROUND` marks it a background pointing
+rather than a science field.  An earlier revision of this change added it to
+sickle's MIRI list and produced a double-claim.
 """
 import pytest
 
@@ -45,14 +47,22 @@ def test_the_miri_observations_are_not_listed_as_nircam(bad):
     assert bad not in _sickle().obsids.get('nircam', ())
 
 
-def test_miri_carries_all_three_of_its_observations():
-    assert _sickle().obsids.get('miri') == ('001', '002', '003')
+def test_miri_carries_the_two_that_are_sickles():
+    """003 is on disk and belongs to BRICK -- claiming it here collides."""
+    assert _sickle().obsids.get('miri') == ('001', '002')
 
 
-def test_the_joint_miri_token_still_names_only_the_joint_run():
-    """001 and 002 are cataloged together and 003 is not, so widening the obsid
-    list must not widen the joint token -- that would name a catalog run that
-    never happened."""
+def test_the_background_pointing_is_claimed_by_exactly_one_field():
+    """3958/003 was added to sickle in an earlier revision of this change, which
+    double-claimed it.  Whoever owns it, it must be one field."""
+    from jwst_gc_pipeline import fields as F
+    owners = [fld.name for fld in F.FIELDS for obs in fld.observations
+              if obs.proposal == '3958' and '003' in (obs.obsids.get('miri') or ())]
+    assert owners == ['brick'], owners
+
+
+def test_the_joint_miri_token_names_the_joint_run():
+    """001 and 002 are cataloged together, and the token names that run."""
     assert _sickle().joint_obsids.get('miri') == ('001-002',)
 
 
