@@ -191,6 +191,42 @@ not described. Displacement confined to the stars a later stage
 drops is not visible to this comparison; that is a real reduction in coverage,
 and `mag_split` is what makes the skew visible to whoever reads the pass.
 
+## A VIRAC2-framed field stops when its reference catalog is missing
+
+The checkpoints load `{basepath}/catalogs/gaia_virac2_refcat*.fits` (or
+`ASTROM_REFCAT`).  Without it they still run, and what they check collapses to
+internal consistency: the exposures agree WITH EACH OTHER, and nothing says
+where that agreed frame sits on the sky.  A field can reduce, pass every check,
+and ship arcseconds off — proposal 1939's sgra mosaics sat ~14.8″ from VIRAC2
+with its offsets table unread.
+
+So a field whose `ALIGNMENT_CONFIG` declares **VIRAC2** now raises
+`MissingReferenceCatalogError` rather than printing and continuing.  The scope
+is deliberate, and measured (2026-08-20): every VIRAC2-framed field carries a
+refcat today except a newly-registered one, and no Gaia-framed field carries
+one at all, so the gate stops the field that needs stopping and leaves m4, m92,
+ngc6397 and w51 running as before.
+
+Build the missing catalog with
+
+```bash
+python -m jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery \
+    --base <basepath> --epoch <YYYY.Y> --ra <deg> --dec <deg> --radius <deg> \
+    [--obs-token <NNN>]
+```
+
+`--obs-token` stamps `_o<NNN>` into the filename, which is what `pick_refcat`
+matches on to give each observation its OWN catalog in a shared field
+directory.  A field whose observations share one directory (the treasury tiles,
+gc2211) needs it: an untokened catalog is handed to every observation alike,
+and for pointings arcminutes apart that is the wrong sky — the way gc2211 o023
+took a −9.28″ correction.
+
+`ALLOW_CONSENSUS_ONLY_ASTROMETRY=1` runs without one, for a deliberate first
+look at a field whose catalog has not been built.  It never lets a run borrow
+another observation's catalog: `pick_refcat` refuses that separately, override
+or not.
+
 Absent `symmetric_baseline` means the re-measure never ran — the raw comparison
 passed, or the stage is a correcting one, or there is no reference catalog, or
 the offset is under `REFERENCE_APPLY_MIN_MAS`, or m2 refused its own tie.
@@ -501,6 +537,7 @@ the same table rows.
 | `ASTROM_CHECKPOINT_WARN_ONLY=1` | demote blocking failures to loud warnings |
 | `ASTROM_CHECKPOINT_APPLY=1` | at m2, auto-apply corrections to the offsets table + stale-tag im0 |
 | `ASTROM_REFCAT=<path>` | reference catalog override (default: `{basepath}/catalogs/gaia_virac2_refcat*.fits`) |
+| `ALLOW_CONSENSUS_ONLY_ASTROMETRY=1` | run a **VIRAC2-framed** field with no reference catalog on disk; the checkpoints then verify only that the exposures agree with each other, so the absolute frame is UNVERIFIED and the result is not releasable |
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` | override the m3+ frozen-solution gate |
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON=<text>` | the written justification CLAUDE.md requires; stored in the record |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
