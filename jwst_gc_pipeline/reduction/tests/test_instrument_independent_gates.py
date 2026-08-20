@@ -126,3 +126,62 @@ def test_a_release_with_nothing_withheld_says_so_explicitly(tmp_path,
     field_dir = sr.stage(items, "cloudc", "v9", root, "copy", False)
     manifest = json.loads((field_dir / "MANIFEST.json").read_text())
     assert manifest["withheld_instruments"] == {}
+
+
+def test_the_readme_says_which_instrument_was_withheld(tmp_path, monkeypatch):
+    """`items` reaching write_readme is the already-FILTERED list, so without
+    this the README describes a field that simply has no MIRI. The reader who
+    most needs the distinction is the one reading the README, not MANIFEST.json."""
+    from astropy.io import fits
+    src = tmp_path / "a_i2d.fits"
+    fits.PrimaryHDU().writeto(src)
+    items = [{"category": "image", "kind": "science", "src": str(src),
+              "dest": "images/F405N/a_i2d.fits", "filter": "F405N",
+              "observation": None, "iteration": None,
+              "size_bytes": src.stat().st_size}]
+    root = tmp_path / "releases"
+    monkeypatch.setattr(sr, "GLOBUS_COLLECTION_ROOT", root)
+    field_dir = sr.stage(items, "cloudc", "v9", root, "copy", False,
+                         withheld_instruments={"miri": "could not run (rc=2)"})
+    readme = (field_dir / "README.md").read_text()
+    assert "Instruments withheld" in readme
+    assert "MIRI" in readme and "could not run (rc=2)" in readme
+    assert "PARTIAL" in readme
+
+
+def test_a_complete_release_readme_claims_nothing_withheld(tmp_path,
+                                                           monkeypatch):
+    from astropy.io import fits
+    src = tmp_path / "a_i2d.fits"
+    fits.PrimaryHDU().writeto(src)
+    items = [{"category": "image", "kind": "science", "src": str(src),
+              "dest": "images/F405N/a_i2d.fits", "filter": "F405N",
+              "observation": None, "iteration": None,
+              "size_bytes": src.stat().st_size}]
+    root = tmp_path / "releases"
+    monkeypatch.setattr(sr, "GLOBUS_COLLECTION_ROOT", root)
+    field_dir = sr.stage(items, "cloudc", "v9", root, "copy", False)
+    assert "Instruments withheld" not in (field_dir / "README.md").read_text()
+
+
+def test_the_release_page_says_which_instrument_was_withheld():
+    """The page reads MANIFEST.json, so it CAN say this -- it just did not."""
+    import importlib.util
+    from pathlib import Path as _P
+    spec = importlib.util.spec_from_file_location(
+        "make_webpage",
+        _P(sr.__file__).parent / "make_webpage.py")
+    mw = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mw)
+    manifest = {"field": "cloudc", "version": "v9", "group": None,
+                "release_path": "/releases/v9/cloudc", "mode": "copy",
+                "built": "2026-08-19T00:00:00", "globus_collection_id": "x",
+                "globus_https_base": "https://example.invalid", "files": [],
+                "withheld_instruments": {"miri": "could not run (rc=2)"}}
+    page = mw.render_field_page("cloudc", manifest, None)
+    assert "MIRI is withheld from this release" in page
+    assert "could not run (rc=2)" in page
+    # ...and a complete release says nothing of the kind
+    clean = dict(manifest, withheld_instruments={})
+    assert "is withheld from this release" not in mw.render_field_page(
+        "cloudc", clean, None)

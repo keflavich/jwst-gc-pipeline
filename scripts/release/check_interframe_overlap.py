@@ -1351,6 +1351,14 @@ def main(argv=None):
         filts = [f for f in filts
                  if (str(f).lower() in MIRI_FILTERS) == want_miri]
         if not filts:
+            # rc 0, deliberately, and NOT the all-skipped case #452 made rc 2.
+            # There, bands existed and every one was excluded by a scope that
+            # could be wrong -- nothing was measured but something should have
+            # been.  Here the caller asked about an instrument this field has no
+            # bands for at all, which is a true and complete answer.  The caller
+            # only asks per instrument PRESENT IN ITS MANIFEST, so an empty list
+            # means the manifest and the filter directories disagree; that is
+            # the listed-source gate's job, and it refuses before reaching here.
             print(f"  {args.field}: no {args.instrument} bands to check",
                   flush=True)
             return 0

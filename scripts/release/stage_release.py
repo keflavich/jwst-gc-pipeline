@@ -1645,7 +1645,8 @@ def stage(items, field, version, release_root, mode, do_checksum,
                   f"link -- left in place")
 
     write_readme(field_dir, field, version, items, mode,
-                 built_at=manifest["built"])
+                 built_at=manifest["built"],
+                 withheld_instruments=withheld_instruments)
 
     # world-readable
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
@@ -1991,7 +1992,8 @@ def _link_mode_phrase(exposures):
                 exposure_bundle.link_mode_summary(exposures), "LINKS")
 
 
-def write_readme(field_dir, field, version, items, mode, built_at=None):
+def write_readme(field_dir, field, version, items, mode, built_at=None,
+                 withheld_instruments=None):
     images = [it for it in items if it["category"] == "image"]
     catalogs = [it for it in items if it["category"] == "catalog"]
     # describe the mosaics ACTUALLY staged: a module-split field (arches,
@@ -2055,6 +2057,34 @@ def write_readme(field_dir, field, version, items, mode, built_at=None):
                 f"{w['pair'].upper()} colors. Provisional -- expected to improve in "
                 f"a later release.")
         limitation_lines.append("")
+
+    # A WITHHELD INSTRUMENT is the same class of fact as a waiver, and needs the
+    # same treatment: `items` here is the already-filtered list, so without this
+    # the README describes a field that simply HAS no MIRI.  The distinction --
+    # "this field has no MIRI" vs "this field's MIRI was withheld" -- is
+    # invisible in a file list, and the reader who most needs it is the one
+    # reading the README rather than MANIFEST.json.
+    if withheld_instruments:
+        limitation_lines += [
+            "## Instruments withheld from this release (READ FIRST)",
+            "",
+            "This release is PARTIAL.  The products below exist and were reduced, but",
+            "their registration could not be confirmed, so they are NOT shipped here:",
+            "",
+        ]
+        for instrument, why in sorted(withheld_instruments.items()):
+            limitation_lines.append(
+                f"- **{instrument.upper()}**: the inter-frame overlap gate "
+                f"{why}. The other instrument(s) in this release are unaffected "
+                f"-- they are separate observations, on separate detectors, "
+                f"often from a separate program, and this verdict says nothing "
+                f"about them.")
+        limitation_lines += [
+            "",
+            "Also in `MANIFEST.json` as `withheld_instruments`.  Do not read the",
+            "absence of these bands as the field not having them.",
+            "",
+        ]
 
     # Detector-frame exposures.  Stated in the README as well as MANIFEST.json
     # because the two things a downloader has to know about them -- that they
