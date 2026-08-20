@@ -106,6 +106,10 @@ def test_project_obsnum_matches_apart_from_the_listed_changes():
               'quintuplet': {'2045': '003'},
               'sgra': {'1939': '001'},
               'gc2211': {'2211': '*'},
+              # 2092 obs 005 (CLOUDEF-REFERENCE) is its own field now: it points
+              # 11.77' from obs 002 (CLOUDEF-CENTER) and shares no sources with
+              # it, so nothing downstream should be able to associate the two.
+              'cloudef_controlfield': {'2092': '*'},
               'wd1': {'1905': '001'},
               'wd2': {'3523': '005'},
               'w51': {'6151': '001', '1182': '002'},
@@ -765,7 +769,7 @@ FIELD_MAPS_BEFORE_THE_WILDCARD = {
     ('1939', 'nircam'): {'001': 'sgra'},
     ('1979', 'nircam'): {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
     ('2045', 'nircam'): {'001': 'arches', '003': 'quintuplet'},
-    ('2092', 'nircam'): {'002': 'cloudef', '005': 'cloudef'},
+    ('2092', 'nircam'): {'002': 'cloudef', '005': 'cloudef_controlfield'},
     ('2211', 'nircam'): {'023': 'gc2211', '028': 'gc2211', '046': 'gc2211',
                          '049': 'gc2211', '050': 'gc2211'},
     ('2221', 'nircam'): {'001': 'brick', '002': 'cloudc'},
