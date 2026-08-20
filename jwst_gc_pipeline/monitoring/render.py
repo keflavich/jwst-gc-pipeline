@@ -223,6 +223,8 @@ CSS = """
 .gcm-step.ambig { background: repeating-linear-gradient(45deg,
                   var(--warn-soft), var(--warn-soft) 3px,
                   var(--warn) 3px, var(--warn) 4px); border-color: var(--warn); }
+.gcm-step.stale { background: repeating-linear-gradient(90deg,
+    var(--accent) 0 3px, var(--surface-2) 3px 6px); border-color: var(--accent); }
 .gcm-step.bad { background: var(--fail); border-color: var(--fail); }
 .gcm-ladder-key { display: flex; gap: .5rem; font-family: var(--mono);
                   font-size: .62rem; color: var(--text-faint);
@@ -370,15 +372,59 @@ TABLE_COLUMNS = (('uncal', 'unc'), ('cal', 'cal'), ('crf', 'crf'),
                  ('m6', 'm6'))
 
 
+def _step_mtimes(run):
+    """``{step: newest product mtime}``, over all filters, for the ladder."""
+    per_filter = run.get('per_filter') or {}
+    cross = run.get('crossband') or {}
+    out = {}
+    for step, _ in LADDER:
+        if step in ('m7', 'm8'):
+            rows = [cross.get(step) or {}]
+        else:
+            rows = [(f.get(step) or {}) for f in per_filter.values()]
+        times = [r.get('mtime') for r in rows if r.get('n') and r.get('mtime')]
+        out[step] = max(times) if times else None
+    return out
+
+
+def _stale_steps(run):
+    """Steps whose newest product PREDATES an earlier step's.
+
+    Within one chain the stages run in order, so a later stage is always newer.
+    A later stage that is OLDER was built from inputs that have since been
+    regenerated, and it describes products that no longer exist.
+
+    The ladder showed presence only, so a stage from a superseded generation
+    looked identical to one built this morning.  sgrb2 on 2026-08-19 is the
+    case: m2 dated 08-18 with m3 through m6 from 07-04, six weeks and several
+    re-ties earlier, all rendered the same as fresh.  cloudef is the same shape
+    -- an m7 cross-band merge from 07-01 under an m3 from 08-19.
+    """
+    times = _step_mtimes(run)
+    stale, high = set(), None
+    for step, _ in LADDER:
+        t = times.get(step)
+        if t is None:
+            continue
+        if high is not None and t < high:
+            stale.add(step)
+        else:
+            high = t
+    return stale
+
+
 def _ladder_state(run):
-    """``{step: ('done'|'part'|'ambig'|'')}`` rolled up over the run's filters.
+    """``{step: ('done'|'part'|'ambig'|'stale'|'')}`` over the run's filters.
 
     ``part`` means some filters have the product and some do not -- the common
-    real state mid-run, and the one a boolean "done" would hide.
+    real state mid-run, and the one a boolean "done" would hide.  ``stale``
+    means the product exists but predates an earlier stage's, so it was built
+    from inputs that have since been regenerated.
     """
     per_filter = run.get('per_filter') or {}
     cross = run.get('crossband') or {}
     n_filters = len(per_filter) or 1
+    stale = _stale_steps(run)
     state = {}
     for step, _ in LADDER:
         if step in ('m7', 'm8'):
@@ -387,6 +433,8 @@ def _ladder_state(run):
                 state[step] = ''
             elif row.get('scope') == 'ambiguous':
                 state[step] = 'ambig'
+            elif step in stale:
+                state[step] = 'stale'
             else:
                 state[step] = 'done'
             continue
@@ -401,6 +449,10 @@ def _ladder_state(run):
             state[step] = 'done'
         else:
             state[step] = 'part'
+        # A stage built before an earlier one is describing products that are
+        # gone; that outranks "how many filters have it".
+        if step in stale and state[step] in ('done', 'part'):
+            state[step] = 'stale'
     return state
 
 
@@ -948,7 +1000,7 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
 <section class="gcm-sec" id="overview"><h2>Overview</h2>
 <p class="gcm-note">One card per registered observation. The bar is the stage
 ladder in run order — reduction (unc·cal·red·i2d) then cataloging
-(m12→m8). Solid = every filter has it, pale = some do, hatched = the product
+(m12→m8). Solid = every filter has it, pale = some do, STRIPED = it exists but predates an earlier stage, so it was built from inputs that have since been regenerated, hatched = the product
 name cannot be attributed to this observation. {card_note}</p>
 {unattr}
 <div class="gcm-grid">{cards}</div></section>
