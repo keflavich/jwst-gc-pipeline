@@ -1251,8 +1251,14 @@ def test_every_filter_of_a_wildcard_field_is_ambiguous():
     assert scan.shared_filters('wd1') == set()
     assert scan.shared_filters('brick') == set()
     assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
-    assert scan.shared_filters('cloudef') == {'F162M', 'F210M', 'F360M',
-                                              'F480M'}
+    # cloudef's four NIRCam bands were shared while obs 002 and 005 sat under
+    # one field: both wrote `f162m_*_indivexp_merged_*` into one tree and the
+    # name could not say which.  The split (obs 005 -> `cloudef_controlfield`,
+    # its own tree) is what removes the collision, so BOTH sides must now be
+    # unshared -- one obsid each.  A non-empty set here again means the two
+    # observations have been re-merged under one field.
+    assert scan.shared_filters('cloudef') == set()
+    assert scan.shared_filters('cloudef_controlfield') == set()
     # sgrb2 is why `_belongs` scopes by instrument: its 3 MIRI obsids made all
     # 14 of its filters shared, including 11 NIRCam-only bands, and 10 records
     # were refused with "more than one observation of this field images F212N"
