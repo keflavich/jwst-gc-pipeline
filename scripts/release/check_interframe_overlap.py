@@ -632,7 +632,69 @@ def _refcat(path):
     if src is not None:
         gm = np.array([s in (b"GaiaDR3", "GaiaDR3") for s in t[src]])
         gaia = rc[gm] if gm.any() else None
-    return rc, gaia
+    # What the whole-table set actually IS, for the log.  A catalogue built by
+    # build_gaia_virac2_refcat_byquery carries a `source` column naming each
+    # star's origin, and its bulk is VIRAC2 (the VVV-based near-infrared
+    # catalogue).  A table WITHOUT that column is something else -- w51's is
+    # Gaia only, and w51 lies outside the VVV footprint, so VIRAC2 does not
+    # exist there at all.  Calling it "VIRAC2" in the log told an operator a
+    # catalogue had been used that cannot exist for the field.
+    if src is None:
+        label = (f"{os.path.basename(path)} -- no `source` column, so this is "
+                 f"NOT the Gaia+VIRAC2 catalogue the gating slot assumes")
+    else:
+        label = "VIRAC2"
+    return rc, gaia, label
+
+
+#: How many of a filter's detections a reference catalogue must actually match,
+#: inside the mosaic footprint, before it is allowed to FAIL the field on an
+#: absolute-frame tie.
+#:
+#: Arbitrating a PAIR needs only that two exposures be compared against the same
+#: stars, and a sparse list does that.  Gating the ABSOLUTE FRAME is a different
+#: claim -- "this whole filter sits in the wrong place" -- and a list that
+#: matches a few hundred stars over a mosaic cannot support it.
+#:
+#: Measured, rather than inferred from the catalogue's provenance: brick F405N
+#: has 5119 reference stars inside its footprint, w51 F140M has 270.  A floor of
+#: 1000 separates them, and neither number depends on the field being correctly
+#: aligned.
+#:
+#: The first version of this keyed on whether the table had a `source` column,
+#: which is not a density test and inverts at the boundary: omegacen's
+#: 115,009-row list has no such column and would have been barred, while
+#: ngc6334's 23,639-row list has one and would have gated.  m4, m92, ngc6397 and
+#: omegacen are all in reduction now.
+MIN_GATING_MATCHES = 1000
+
+#: Radius at which a detection counts as matching a reference star.
+GATING_MATCH_ARCSEC = 0.2
+
+
+def _may_gate_absolute_frame(allsrc, ref):
+    """``(may_gate, n_in_footprint, n_ref)`` -- can this catalogue fail the field?
+
+    Counts the reference stars lying INSIDE the filter's footprint, rather than
+    the ones that match a detection.  Matching would be self-defeating here: a
+    genuine absolute offset is exactly what pushes detections off their
+    reference stars, so a match count collapses on the fields this arm exists to
+    catch.  Measured: a 500 mas whole-field shift takes a 9000-row reference
+    from 9000 in-footprint to 468 matched at 0.2".
+
+    Footprint density does not depend on the alignment being right, which is the
+    property needed to decide whether a catalogue is dense enough to be believed
+    about the alignment.
+    """
+    if ref is None or not len(ref):
+        return False, 0, 0
+    pad = GATING_MATCH_ARCSEC / 3600.0
+    ra, dec = allsrc.ra.deg, allsrc.dec.deg
+    rra, rdec = ref.ra.deg, ref.dec.deg
+    inside = ((rra >= ra.min() - pad) & (rra <= ra.max() + pad)
+              & (rdec >= dec.min() - pad) & (rdec <= dec.max() + pad))
+    n = int(inside.sum())
+    return n >= MIN_GATING_MATCHES, n, int(len(ref))
 
 
 def _val_mas(x):
@@ -1143,7 +1205,7 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
     ext_ran = False
     field_clean = False
     if refcat:
-        rc, gaia = _refcat(refcat)
+        rc, gaia, rc_label = _refcat(refcat)
         allsrc = SkyCoord(np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
                           np.concatenate([p.dec.deg for p in pooled.values()]) * u.deg)
         # GC reference-frame policy (gc-gaia-frame-not-catalog): VIRAC2 is the GC
@@ -1152,7 +1214,17 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
         # per-tile a dense field -- on a fine grid its cells are star-starved and
         # false-fail, so it is measured as a DIAGNOSTIC only and never sets
         # ext_fail. A real absolute-frame problem shows up against dense VIRAC2.
-        for rn, rr, gates in (("VIRAC2", rc, True), ("Gaia", gaia, False)):
+        #
+        # CAVEAT, and it is not yet resolved (issue #263): the split above is by
+        # PRESENCE OF A `source` COLUMN, not by what the catalogue is.  A
+        # Gaia-only table without that column lands whole in the GATING slot --
+        # exactly what this comment says must not happen to Gaia.  w51's list is
+        # that case.  No false block has been observed there only because the
+        # list is too sparse for the gating paths to measure at all, which is
+        # luck rather than separation.  Routing by content is issue #263's
+        # item (c); until it lands, the label below at least names what was
+        # actually read.
+        for rn, rr, gates in ((rc_label, rc, True), ("Gaia", gaia, False)):
             if rr is None:
                 continue
             g = _samestar_ref_grid(allsrc, rr, max_off_mas=GRID_MAX_OFF_MAS)
@@ -1182,7 +1254,19 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                           f"{rad['field_ratio']:.2f}) -- a sub-population sitting at "
                           f"~the match radius there; inspect those frames.", flush=True)
             if gates and g["measurable"] and not g["clean"]:
-                ext_fail = True
+                may_gate, n_matched, n_ref = _may_gate_absolute_frame(allsrc, rr)
+                if may_gate:
+                    ext_fail = True
+                elif verbose:
+                    print(f"      NOT blocking {field}/{filt} on this: "
+                          f"{os.path.basename(refcat)} has only {n_matched} "
+                          f"reference stars inside this filter's footprint "
+                          f"(of {n_ref} rows; {MIN_GATING_MATCHES} needed to "
+                          f"fail a field on an absolute-frame tie).  It is "
+                          f"still used to arbitrate individual overlapping "
+                          f"pairs, which needs far fewer stars.  A denser "
+                          f"catalogue for this field would let this block.",
+                          flush=True)
             # PER-PAIR scoping (issue #174 item 3): the field-wide map is ONE
             # boolean for the whole filter, so a single clean map cleared EVERY
             # deferred pair -- and on brick F405N every cell it could measure sat
@@ -1217,14 +1301,47 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
             cleared += 1                  # cleared on its OWN footprint
             continue
         if ext_ran and field_clean:
-            cleared += 1
+            # The field-wide map CANNOT settle this pair, and saying so in a
+            # warning while clearing it anyway is the thing issue #174
+            # concluded must not happen: a sliver is a minority of every cell it
+            # touches, so a localized seam inside it leaves the field-wide
+            # verdict clean.  Demonstrated with the real gate -- a 500 mas seam
+            # in a thin sliver, against a star list dense over the field and
+            # thin inside the sliver, took this branch and reported PASS.
+            #
+            # This has been REACHABLE all along for any field `stage_release`
+            # passes --refcat for, which is brick (via the FRAME_REFCAT
+            # fallback) on every staging run.  An earlier version of this
+            # comment said it "never fired while no field had an arbiter star
+            # list"; that was wrong, and it was the stated reason the default
+            # flip needed no measurement.  Routing a list to w51 adds a second
+            # such field, and w51 clears the density this needs by a factor of
+            # only 3.4.
+            #
+            # So it is OFF by default and fails closed: the pair stays
+            # unverified and the field does not stage.  The override exists
+            # because a field can be genuinely un-arbitrable and the operator
+            # may have settled it another way.  Setting it is the RECORD of that
+            # decision, not the justification for it -- same policy as
+            # ALLOW_REGISTRATION_FAIL.
+            why = v["reason"] if v is not None else "external reference not run"
+            if os.environ.get("OVERLAP_ALLOW_FIELDWIDE_CLEAR") == "1":
+                cleared += 1
+                if verbose:
+                    print(f"      WARNING: pair {r['a']} | {r['b']} could NOT be "
+                          f"arbitrated in its own overlap footprint ({why}); "
+                          f"cleared ONLY by the FIELD-WIDE same-star map, which "
+                          f"cannot resolve this pair's sliver -- because "
+                          f"OVERLAP_ALLOW_FIELDWIDE_CLEAR=1 was set.", flush=True)
+                continue
             if verbose:
-                why = v["reason"] if v is not None else "external reference not run"
-                print(f"      WARNING: pair {r['a']} | {r['b']} could NOT be arbitrated "
-                      f"in its own overlap footprint ({why}); cleared only by the "
-                      f"FIELD-WIDE same-star map, which does not resolve this "
-                      f"pair's sliver.", flush=True)
-            continue
+                print(f"      pair {r['a']} | {r['b']} could NOT be arbitrated in "
+                      f"its own overlap footprint ({why}).  The field-wide "
+                      f"same-star map is clean, and it cannot see this pair's "
+                      f"sliver, so it does not clear it: the pair stays "
+                      f"UNVERIFIED.  A denser arbiter star list for this field "
+                      f"resolves it; OVERLAP_ALLOW_FIELDWIDE_CLEAR=1 overrides.",
+                      flush=True)
         still_open.append(r)
     could_not_verify = bool(still_open)
     if cleared and verbose:
@@ -1233,6 +1350,10 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
     return dict(field=field, filt=filt,
                 PASS=bool(not bad and not ext_fail and not could_not_verify),
                 could_not_verify=could_not_verify,
+                # reported so a caller (and a test) can tell WHICH arm refused:
+                # a pair measured as misregistered, a pair nothing could
+                # measure, or the whole filter tied wrong against the reference
+                ext_fail=ext_fail,
                 n_fail=len(bad), pairs=res)
 
 
