@@ -177,6 +177,49 @@ def test_every_virac2_locked_field_has_a_builder_region():
         'their offsets tables cannot be rebuilt: ' + ', '.join(sorted(missing)))
 
 
+def test_every_region_basepath_matches_the_registry():
+    """A region's `basepath` and the field registry must name the same tree.
+
+    They drifted apart the moment obs 005's 3,991 files moved to
+    `cloudef_controlfield`: `cloudef5` went on pointing at `/…/jwst/cloudef`,
+    where it finds obs 002's catalogs (72/64/16/16 `_m3` across the four bands,
+    none of them obs 005's) and would lock obs 002's offsets into obs 005's
+    table.  Nothing raises on that -- the glob succeeds, it just reads the wrong
+    field -- so it needs a test rather than an observation.
+    """
+    import os
+
+    from jwst_gc_pipeline import fields as _fields
+
+    def _real(path):
+        # `/orange/adamginsburg/jwst/<field>` is a SYMLINK to
+        # `/blue/adamginsburg/adamginsburg/jwst/<field>`; the registry uses one
+        # spelling and the regions the other, and they are the same tree.
+        return os.path.realpath(str(path).rstrip('/'))
+
+    by_obs = {}
+    for fld in getattr(_fields, 'FIELDS', ()):
+        for obs in getattr(fld, 'observations', ()):
+            for ids in (getattr(obs, 'obsids', None) or {}).values():
+                for i in ids:
+                    by_obs.setdefault((str(obs.proposal), str(i)), set()).add(
+                        _real(_fields.basepath(fld.name)))
+
+    wrong = []
+    for key, rc in REGION.items():
+        # ANY candidate, because one (proposal, obsid) can legitimately name two
+        # fields across instruments: 2221/002 is cloudc's NIRCam AND brick's
+        # MIRI.  What this catches is a region pointing at a tree the registry
+        # does not associate with that observation at all.
+        want = by_obs.get((rc['proposal'], rc['field']))
+        if not want:
+            continue                     # region for an unregistered obsid
+        if _real(rc['basepath']) not in want:
+            wrong.append(f"{key}: region says {rc['basepath']}, registry says "
+                         f"{sorted(want)}")
+    assert not wrong, 'region basepath disagrees with the field registry:\n' + '\n'.join(wrong)
+
+
 def test_a_declared_module_with_no_catalogs_is_refused(monkeypatch, tmp_path):
     """DECLARED and empty means cataloging has not finished for a module the
     field DOES have.  Locking then writes a table missing it entirely, so it must

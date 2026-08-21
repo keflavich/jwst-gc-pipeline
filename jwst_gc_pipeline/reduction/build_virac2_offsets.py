@@ -275,7 +275,18 @@ REGION = {
     'cloudef2': dict(proposal='2092', field='002', basepath='/orange/adamginsburg/jwst/cloudef',
                      filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
                             'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
-    'cloudef5': dict(proposal='2092', field='005', basepath='/orange/adamginsburg/jwst/cloudef',
+    # obs 005's tree moved to `cloudef_controlfield` with the field split (this
+    # PR); 3,991 paths, receipt in
+    # cloudef_controlfield/MIGRATION_from_cloudef_20260820T185854Z.json.  Left
+    # pointing at `cloudef`, this region reads obs 002's catalogs instead --
+    # 72/64/16/16 `_m3` across the four bands, none of them obs 005's -- and
+    # would lock obs 002's offsets into obs 005's table.
+    #
+    # NOTE the control field has no `_m3` catalogs yet (only m1/m2, and only in
+    # F360M: 8 each), so `--region cloudef5` cannot be rebuilt until its chain
+    # has run to m3 under the new tree.  The mtag stays `_m2` for that reason.
+    'cloudef5': dict(proposal='2092', field='005',
+                     basepath='/orange/adamginsburg/jwst/cloudef_controlfield',
                      filts={'f162m': ('F162M', 2023.21, '_m2'), 'f210m': ('F210M', 2023.21, '_m2'),
                             'f360m': ('F360M', 2023.21, '_m2'), 'f480m': ('F480M', 2023.21, '_m2')}),
     # sgrc (4147/012).  The VIRAC2locked table was previously authored without a
