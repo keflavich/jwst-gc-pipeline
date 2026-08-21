@@ -192,10 +192,18 @@ def test_every_region_basepath_matches_the_registry():
     from jwst_gc_pipeline import fields as _fields
 
     def _real(path):
-        # `/orange/adamginsburg/jwst/<field>` is a SYMLINK to
+        # The FIELD DIRECTORY NAME, not the absolute path.
+        #
+        # `/orange/adamginsburg/jwst/<field>` is a symlink to
         # `/blue/adamginsburg/adamginsburg/jwst/<field>`; the registry uses one
-        # spelling and the regions the other, and they are the same tree.
-        return os.path.realpath(str(path).rstrip('/'))
+        # spelling and the regions the other.  Resolving with `os.path.realpath`
+        # reconciles them on a machine that HAS those trees and silently does
+        # not on one that does not -- `realpath` of a non-existent path is the
+        # path itself -- so that version passed here and failed in CI.
+        #
+        # What this test is actually asserting is field identity, and the last
+        # component carries it under either root.
+        return os.path.basename(str(path).rstrip('/'))
 
     by_obs = {}
     for fld in getattr(_fields, 'FIELDS', ()):
