@@ -104,29 +104,18 @@ def get_fwhm(header, instrument_replacement='NIRCam'):
 
 
 def get_filtername(header):
+    """The science bandpass this exposure used.
 
-    filtername = header['FILTER']
-    if 'PUPIL' in header:
-        # NIRCam: pupil-wheel narrow-bands (PUPIL=F162M/F323N/...) paired with a
-        # wide FILTER, or CLEAR.  NIRISS: pupil-wheel filters (F356W/F480M) have
-        # FILTER=<real>, PUPIL=CLEARP (the NIRISS "clear" pupil); filter-wheel
-        # filters (F158M/F200W) have FILTER=CLEAR, PUPIL=<real>.  Treat BOTH
-        # 'CLEAR' and 'CLEARP' as the empty slot.
-        filtername2 = header['PUPIL']
-        _clears = ('CLEAR', 'CLEARP')
-        if filtername in _clears:
-            filtername = filtername2
-        elif filtername2 in _clears:
-            # do nothing here (the real filter is in the filter wheel)
-            pass
-        else:
-            # filtername is real, but so is filtername2 (NIRCam narrow+wide):
-            # the pupil-wheel entry wins (historical behavior).
-            filtername = filtername2
-
-    assert filtername not in ('CLEAR', 'CLEARP'), filtername
-
-    return filtername
+    Thin delegation to ``mast_names.filtername_from_header``, which is now the
+    pipeline's single spelling of the FILTER/PUPIL rule -- see its docstring
+    for why the rule is not "read one keyword".  Behaviour here is unchanged
+    (NIRCam pupil-wheel bands win over the wide blocker; CLEAR/CLEARP are the
+    empty slot; a MIRI header with no PUPIL returns FILTER), except that the
+    empty-slot case now raises ``ValueError`` rather than ``AssertionError`` so
+    it survives ``python -O``.
+    """
+    from ..mast_names import filtername_from_header
+    return filtername_from_header(header)
 
 def estimate_background(data, header, medfilt_size=[15,15], do_segment_mask=False, save_products=True,
                         path_prefix='./',
