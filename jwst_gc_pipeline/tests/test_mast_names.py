@@ -181,10 +181,15 @@ def test_parse_refuses_a_non_jw_basename():
 #
 # JWST splits one bandpass over two wheels and which wheel holds it varies, so
 # neither keyword alone is the answer.  `reduction.destreak.add_background_map`
-# carried its own copy of the rule that only knew six hardcoded narrow/medium
-# bands; every CLEAR-pupil WIDE band fell through it to the literal 'CLEAR',
-# which is why the f200w/f356w/f444w entries of `destreak.background_mapping`
-# were unreachable.
+# carries a second copy of the rule that knows only six hardcoded narrow/medium
+# bands (PR #465 replaces it); every CLEAR-pupil WIDE band falls through that
+# copy to the literal 'CLEAR'.
+#
+# That is one of two independent locks on the f200w/f356w/f444w entries of
+# `destreak.background_mapping`.  The other -- the operative one for the frames
+# on disk -- is that those entries sit under the proposal-'2221' key while every
+# wide-band brick frame is jw01182, a proposal the mapping has no key for.  The
+# filter rule matters for the NEXT map someone registers, not for those three.
 # ---------------------------------------------------------------------------
 
 from jwst_gc_pipeline.mast_names import filtername_from_header
@@ -235,8 +240,15 @@ def test_both_wheels_empty_is_refused():
 
 
 def test_the_wide_bands_would_have_matched_their_background_map_keys():
-    """The concrete consequence: `background_mapping['2221']['001']` holds
-    'f200w'/'f356w'/'f444w' keys that the old rule could never produce."""
+    """`background_mapping['2221']['001']` holds 'f200w'/'f356w'/'f444w' keys
+    that the six-band rule in destreak.py cannot produce.
+
+    Note what this does and does not show.  It pins that the KEY resolves; it
+    does not claim those three entries become reachable, because they are also
+    behind a proposal lookup that misses (they name 1182 maps under the 2221
+    key) and behind files renamed `.fits_stale` in 2023.  The test is here for
+    the next map someone registers under a wide-band name.
+    """
     from jwst_gc_pipeline.reduction.destreak import background_mapping
     keys = background_mapping['2221']['001']
     for filt in ('F200W', 'F356W', 'F444W'):

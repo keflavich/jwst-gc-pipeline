@@ -135,7 +135,8 @@ def filtername_from_header(header):
     hot path (``reduction.destreak``) must not drag in to answer a question
     about two header keywords.
 
-    ``reduction.destreak.add_background_map`` used to carry its own copy::
+    ``reduction.destreak.add_background_map`` carries a second copy, which this
+    does not yet replace -- that is PR #465, which is stacked on this one::
 
         filtername = hdu[0].header['PUPIL']
         if filtername in ('CLEAR', 'F444W') and hdu[0].header['FILTER'] in (
@@ -143,12 +144,26 @@ def filtername_from_header(header):
             filtername = hdu[0].header['FILTER']
 
     -- correct only for the six narrow/medium bands hardcoded in that tuple,
-    which are brick's and Cloud C's.  Every CLEAR-pupil WIDE band fell through
-    it and resolved to the literal ``'CLEAR'``: F115W, F200W, F356W and F444W
-    all looked up the background-map key ``'clear'``.  That silently made the
-    ``f200w``/``f356w``/``f444w`` entries of ``destreak.background_mapping``
-    unreachable, and would have made any future wide-band or Cloud E/F map
-    (``f210m``, ``f360m``, ``f480m``) unreachable the same way.
+    which are brick's and Cloud C's.  Every CLEAR-pupil WIDE band falls through
+    it and resolves to the literal ``'CLEAR'``: F115W, F200W, F356W and F444W
+    all look up the background-map key ``'clear'``.
+
+    That is one of TWO independent reasons the ``f200w``/``f356w``/``f444w``
+    entries of ``destreak.background_mapping`` are unreachable, and for the
+    frames actually on disk it is not the operative one.  Those three entries
+    sit under the proposal-``'2221'`` key while naming proposal-1182 maps, and
+    every wide-band brick frame on disk is ``jw01182`` -- a proposal that has
+    no key in that mapping at all -- so the proposal lookup misses first and
+    the filter key is never consulted.  (The files they name were also renamed
+    ``.fits_stale`` in 2023.)  The filter rule is the lock that would still be
+    shut after someone fixed the proposal key; it is also the lock that would
+    silently swallow any NEW wide-band or Cloud E/F map (``f210m``, ``f360m``,
+    ``f480m``), which is the case this fix is really for.
+
+    Returns the band name stripped and upper-cased.  Real FITS headers are
+    already in that form, so this is a no-op on every frame on disk and on
+    both existing callers, but a hand-built ``{'FILTER': 'f212n'}`` now comes
+    back ``'F212N'`` rather than verbatim.
 
     Raises ``ValueError`` when both wheels are empty or the keywords are
     missing, which no real science exposure has.
