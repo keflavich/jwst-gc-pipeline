@@ -125,6 +125,58 @@ def test_sickle_region_is_registered_single_module_and_obs_007():
     assert {v[2] for v in rc['filts'].values()} == {'_m3'}
 
 
+def test_sgra_region_is_registered():
+    """sgra 1939/001 had NO region, and that was a hard block (issue #409).
+
+    Its m12 finalize dies every iteration on ``OffsetsTableUpdateError: cannot
+    pool corrections ... 8 corrections spanning module families ['nrca','nrcb']
+    land on the same row(s)`` -- correct, because the live table is 36 rows keyed
+    (Visit, Exposure, Filter) with NO Module column.  The guard's message names
+    ``build_virac2_offsets --per-module`` as the remedy, and without a region key
+    that remedy could not be run at all.
+    """
+    rc = REGION['sgra']
+    assert rc['proposal'] == '1939'
+    assert rc['field'] == '001'
+    assert set(rc['filts']) == {'f115w', 'f212n', 'f405n'}
+    # one visit, one epoch: DATE-OBS 2022-09-19
+    assert {v[1] for v in rc['filts'].values()} == {2022.715}
+    assert {v[2] for v in rc['filts'].values()} == {'_m3'}
+
+
+def test_every_virac2_locked_field_has_a_builder_region():
+    """The gap sgra fell into is structural, not a typo.
+
+    A field routed to ``TABLE_LOCKED`` against VIRAC2 can only get its table from
+    this builder, so a locked field with no region key is a field whose table
+    cannot be rebuilt -- and the m2 checkpoint's own remedy message points at a
+    command that will refuse.  Keyed on (proposal, obsid) because that is what
+    both registries agree on; the region KEY itself is free-form (``1182``,
+    ``cloudef2``, ``gc2211_023``).
+    """
+    from jwst_gc_pipeline.reduction import alignment_config as ac
+
+    have = {(rc['proposal'], rc['field']) for rc in REGION.values()}
+    have_prop = {rc['proposal'] for rc in REGION.values()}
+    missing = []
+    for fa in ac.ALIGNMENT_CONFIG:
+        if fa.source != ac.TABLE_LOCKED or fa.reference_frame != ac.VIRAC2:
+            continue
+        if fa.fields is None:
+            # a proposal-wide entry (4147, 5365, 2211): any region for the
+            # proposal can rebuild it, and gc2211 deliberately has one per
+            # observation.
+            if fa.proposal not in have_prop:
+                missing.append(f'{fa.proposal}/<all>')
+            continue
+        for fld in fa.fields:
+            if (fa.proposal, fld) not in have:
+                missing.append(f'{fa.proposal}/{fld}')
+    assert not missing, (
+        'VIRAC2 TABLE_LOCKED field(s) with no build_virac2_offsets region, so '
+        'their offsets tables cannot be rebuilt: ' + ', '.join(sorted(missing)))
+
+
 def test_a_declared_module_with_no_catalogs_is_refused(monkeypatch, tmp_path):
     """DECLARED and empty means cataloging has not finished for a module the
     field DOES have.  Locking then writes a table missing it entirely, so it must

@@ -306,6 +306,48 @@ REGION = {
                          'f360m': ('F360M', 2024.685, '_m3'), 'f405n': ('F405N', 2024.685, '_m3'),
                          'f410m': ('F410M', 2024.685, '_m3'), 'f466n': ('F466N', 2024.685, '_m3'),
                          'f480m': ('F480M', 2024.685, '_m3')}),
+    # brick 2221/001.  The second field the
+    # `test_every_virac2_locked_field_has_a_builder_region` guard caught: 2221
+    # had a region for obs 002 (`cloudc`) but none for obs 001, even though both
+    # are VIRAC2 TABLE_LOCKED and they keep SEPARATE tables in separate trees
+    # (brick/offsets/ vs cloudc/offsets/, same basename).  Note `1182` above is
+    # brick's OTHER observation, obs 004 -- one target, two proposals, two
+    # tables, and the shared `brick` basepath is why the filter sets must stay
+    # disjoint (o001 F182M/F187N/F212N/F405N/F410M/F466N,
+    # o004 F115W/F200W/F356W/F444W).
+    #
+    # Epoch from DATE-OBS 2022-08-28 = 2022.655.
+    'brick2221': dict(proposal='2221', field='001',
+                      basepath='/orange/adamginsburg/jwst/brick',
+                      filts={'f182m': ('F182M', 2022.655, '_m3'),
+                             'f187n': ('F187N', 2022.655, '_m3'),
+                             'f212n': ('F212N', 2022.655, '_m3'),
+                             'f405n': ('F405N', 2022.655, '_m3'),
+                             'f410m': ('F410M', 2022.655, '_m3'),
+                             'f466n': ('F466N', 2022.655, '_m3')}),
+    # sgra (1939/001), the Galactic Centre pointing.  It had NO region here at
+    # all, and that absence was a hard block rather than an inconvenience: its
+    # m12 finalize dies every iteration on
+    #
+    #     OffsetsTableUpdateError: cannot pool corrections for
+    #     Offsets_JWST_Brick1939_VIRAC2locked.csv: 8 corrections spanning module
+    #     families ['nrca', 'nrcb'] land on the same row(s)
+    #
+    # which is the guard working as designed -- the table is 36 rows keyed
+    # (Visit, Exposure, Filter) with no Module column, so module A's and module
+    # B's corrections median together.  The guard's own message names the remedy
+    # (`build_virac2_offsets --per-module`), and that remedy could not be run for
+    # this field because `--region` had no key for it (issue #409).
+    #
+    # One visit (jw01939001001), three bands, 216 frames.  Epoch from DATE-OBS
+    # 2022-09-19 = 2022.715.  `_m3` because per-exposure catalogs exist through
+    # _m7 for all three bands, and _m3 is what every other VIRAC2-tied GC region
+    # here reads.
+    'sgra': dict(proposal='1939', field='001',
+                 basepath='/orange/adamginsburg/jwst/sgra',
+                 filts={'f115w': ('F115W', 2022.715, '_m3'),
+                        'f212n': ('F212N', 2022.715, '_m3'),
+                        'f405n': ('F405N', 2022.715, '_m3')}),
     'quintuplet': dict(proposal='2045', field='003',
                        basepath='/orange/adamginsburg/jwst/quintuplet',
                        filts={'f212n': ('F212N', 2024.617, '_m3'),
