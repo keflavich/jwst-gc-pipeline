@@ -139,18 +139,30 @@ class _Opt:
 
 
 def test_an_explicit_field_wins():
-    assert _resolved_obsid(_Opt(target="cloudef", proposal_id="2092",
-                                field="005")) == "005"
+    # obs 005 is `cloudef_controlfield`'s now, not `cloudef`'s: the two point
+    # 11.77' apart and were split into separate fields.
+    assert _resolved_obsid(_Opt(target="cloudef_controlfield",
+                                proposal_id="2092", field="005")) == "005"
 
 
 def test_a_multi_observation_target_refuses_to_guess():
-    """``fields.default_field_token`` answers ``obsids[0]`` -- on cloudef that
-    is the same value whichever observation is running.  Using it here would
-    make one of the two runs read its own frames as foreign, drop them, and
-    PASS on the other observation's exposures.  None means "keep everything",
-    which is what happened before this filter existed."""
-    got = _resolved_obsid(_Opt(target="cloudef", proposal_id="2092", field=None))
+    """``fields.default_field_token`` answers ``obsids[0]`` -- on a field with
+    several observations that is the same value whichever one is running.
+    Using it here would make one run read its own frames as foreign, drop them,
+    and PASS on another observation's exposures.  None means "keep everything",
+    which is what happened before this filter existed.
+
+    gc2211 rather than cloudef: cloudef was the example until obs 005 became
+    `cloudef_controlfield`, leaving one NIRCam obsid a side and nothing to
+    guess between.  gc2211 still registers five (023/028/046/049/050)."""
+    got = _resolved_obsid(_Opt(target="gc2211", proposal_id="2211", field=None))
     assert got is None, got
+
+    # and the split sides now resolve, because each has exactly one
+    assert _resolved_obsid(_Opt(target="cloudef", proposal_id="2092",
+                                field=None)) == "002"
+    assert _resolved_obsid(_Opt(target="cloudef_controlfield",
+                                proposal_id="2092", field=None)) == "005"
 
 
 def test_a_single_observation_target_resolves():
@@ -187,7 +199,7 @@ def test_the_checkpoint_passes_its_own_observation_down(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cataloging, "_drop_foreign_obs_duplicates", _spy)
     monkeypatch.delenv("ASTROM_CHECKPOINT", raising=False)
-    opts = _Opt(target="cloudef", proposal_id="2092", field="005",
+    opts = _Opt(target="cloudef_controlfield", proposal_id="2092", field="005",
                 each_exposure=True, cutout_region="")
     cataloging._run_astrometry_stage_checkpoint(
         "m2", "merged", "F360M", str(cut_bp), str(tmp_path), "2092",
@@ -314,8 +326,8 @@ def test_a_field_that_is_not_an_obsid_of_this_target_is_refused(capsys):
 
 
 def test_a_real_obsid_and_a_real_joint_obsid_both_pass_validation():
-    assert _resolved_obsid(_Opt(target="cloudef", proposal_id="2092",
-                                field="005")) == "005"
+    assert _resolved_obsid(_Opt(target="cloudef_controlfield",
+                                proposal_id="2092", field="005")) == "005"
     assert _resolved_obsid(_Opt(target="sgrb2", proposal_id="5365",
                                 field="002-998",
                                 modules="mirimage")) == "002-998"

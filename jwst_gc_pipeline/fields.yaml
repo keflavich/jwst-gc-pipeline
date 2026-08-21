@@ -106,6 +106,22 @@ fields:
           miri: ['021']
         filters: [f770w]
 
+  # 2092 images TWO pointings 11.77' apart, and they are different things:
+  #
+  #   002  CLOUDEF-CENTER      266.68578 -28.51733   320 frames  2023-03-19
+  #   005  CLOUDEF-REFERENCE   266.46581 -28.48404   160 frames  2023-03-20
+  #
+  # (centres measured from the `_cal` CRVALs, 2026-08-20; the TARGPROP headers
+  # say which is which.)  They do not overlap -- a NIRCam mosaic is ~5' -- so
+  # pooling them was never right, and one field entry made the pipeline do
+  # exactly that: both restart at visit 001 / vgroup 02101, their per-frame
+  # catalog names collided, and the merged catalogs came out spanning 15' in RA
+  # in two disjoint lobes with an empty 9' gap between them (172 such products
+  # tagged `.STALE_obscollision_20260820`).
+  #
+  # Separate FIELDS, not just separate observation tokens: a control field and
+  # a science field share no sources, so nothing downstream -- merge, crossband,
+  # release -- should ever have the chance to associate them.
   cloudef:
     root: orange
     fov_region: regions_/nircam_cloudef_fov.reg
@@ -113,16 +129,35 @@ fields:
       '2092':
         reference_catalog:
           '002': catalogs/gaia_virac2_refcat_epoch2023.21.fits
-          '005': catalogs/gaia_virac2_refcat_epoch2023.21.fits
         nvisits: 1
         reference_frame: VIRAC2
         obsids:
-          nircam: ['002', '005']
+          nircam: ['002']
+          # 004/006/008 are registered and NOT reduced -- no `_cal` under this
+          # tree on 2026-08-20 -- so which pointing each belongs to cannot be
+          # measured yet.  They stay with the science field until they have
+          # data to place them; assigning an unreduced observation by guess is
+          # how 3958/003 got double-claimed.
           miri: ['004', '006', '008']
         glob_obsid:
           nircam: '*'
           miri: '*'
         filters: [f162m, f210m, f360m, f480m, f770w, f2100w]
+
+  cloudef_controlfield:
+    root: orange
+    fov_region: regions_/nircam_cloudef_fov.reg
+    observations:
+      '2092':
+        reference_catalog:
+          '005': catalogs/gaia_virac2_refcat_epoch2023.21.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['005']
+        glob_obsid:
+          nircam: '*'
+        filters: [f162m, f210m, f360m, f480m]
 
   gc-treasury:
     # The GC Treasury (program 10678): 139 observations, 001..139, the same
