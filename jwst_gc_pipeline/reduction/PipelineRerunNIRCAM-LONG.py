@@ -493,6 +493,22 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 with open(candidate) as fh:
                     cand_data = json.load(fh)
                 members = cand_data.get('products', [{}])[0].get('members', [])
+                # Excluded exposures must not reach the drizzle either.  The
+                # instruction is "all imaging AND analysis"; an exposure dropped
+                # from cataloging but still coadded into the mosaic leaves the
+                # catalog and the image disagreeing about what was observed.
+                from jwst_gc_pipeline.reduction.exposure_exclusions import (
+                    is_excluded as _is_excluded_exposure)
+                _kept = [m for m in members
+                         if not _is_excluded_exposure(m.get('expname', ''))]
+                if len(_kept) != len(members):
+                    print(f"  {os.path.basename(candidate)}: dropping "
+                          f"{len(members) - len(_kept)} excluded exposure "
+                          f"member(s) from the association", flush=True)
+                    cand_data['products'][0]['members'] = _kept
+                    with open(candidate, 'w') as _fh:
+                        json.dump(cand_data, _fh, indent=4)
+                    members = _kept
                 if members and any('nrc' in m.get('expname', '') for m in members):
                     nircam_asn_files.append(candidate)
             except (json.JSONDecodeError, KeyError, IndexError) as exc:

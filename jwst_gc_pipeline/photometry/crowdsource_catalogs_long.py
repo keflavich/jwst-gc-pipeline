@@ -5137,6 +5137,16 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
             glstr = f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}{sf}{visitid}*{gm}*{sf_suffix}.fits'
             glstr_list.append(glstr)
             fglob.extend(glob.glob(glstr))
+    # Exposures excluded from the survey never reach ANY stage.  Filtered here
+    # because this is cataloging's single frame-enumeration point: everything
+    # downstream -- `frame_cache`, the per-phase `frame_args`, the fan-out
+    # shards, the merges -- reads its frames through this function, so one
+    # filter covers them all.  `drop_excluded` announces the drop; a frame
+    # vanishing silently is the failure this project has a hard rule against.
+    from jwst_gc_pipeline.reduction.exposure_exclusions import drop_excluded
+    fglob, _dropped = drop_excluded(
+        fglob, label=f'get_filenames {filtername}/{module}')
+
     if len(fglob) == 0:
         if allow_empty:
             # Tolerated by callers sweeping a visit range (run_manual_pipeline):
