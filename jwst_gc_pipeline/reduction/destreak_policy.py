@@ -8,7 +8,21 @@ cannot disagree about it.
 
 #: Extended emission dominates these fields and no background map exists for
 #: them yet, so destreaking is off: it opens outlier_detection coverage holes.
-EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2', 'ngc6334')
+#:
+#: cloudef joined on 2026-08-21: its destreaked frames look bad (operator call on
+#: the drizzled products).  Cloud E/F is the same kind of target as the rest of
+#: this list -- a GC cloud whose extended emission the destreaker reads as
+#: structure to remove -- so it belongs here rather than behind a one-off
+#: ``--no_destreak`` on the reduce.  That distinction matters: ``crf_suffix`` is
+#: read by stage 2's ``--each-suffix``, by ``run_pipeline`` and by the release
+#: gate's ``check_interframe_overlap``, so a runtime-only flag would leave stage
+#: 1 writing ``align_o002_crf`` while all three of those went on looking for
+#: ``destreak_o002_crf``.
+#:
+#: ``cloudef_controlfield`` is the same physical target (obs 005, split out as
+#: its own field) and takes the same treatment.
+EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2', 'ngc6334',
+                            'cloudef', 'cloudef_controlfield')
 
 #: Sickle overrides that per filter. Its short-wavelength filters destreak
 #: ("the streaks are worse than the destreak artifacts"); its long-wavelength
