@@ -1,6 +1,6 @@
 """The destreaker must not delete the sky when it has no map to put back.
 
-``destreak_data(add_smoothed=False)`` subtracts a per-row, per-512-column
+``destreak_data(add_smoothed=False)`` subtracts a per-row, per-amplifier
 percentile and adds nothing back.  That is the correct first half of
 "subtract everything, then add the mosaic background", and it is a plain sky
 subtraction in every other context: it drives each chunk's row percentile to
@@ -16,11 +16,14 @@ with no restore.  Measured consequences on those products: Cloud E/F F210M
 frame median 6.37 -> 1.45 MJy/sr, frame p10 4.36 -> -0.001, 10.06% of pixels
 negative, mosaic diffuse-sky transfer slope 0.17 (vs 0.95 where a map exists).
 
-These tests pin the three things that make that unrepresentable:
+These tests pin the things that make that unrepresentable:
   1. the bare branch raises unless the caller declares it restores the scales;
   2. ``destreak()`` resolves the map first and picks the mode from the result;
   3. with a map, the output is bit-identical to the old code (so the seven
-     good combinations are not silently re-reduced into something new).
+     good combinations are not silently re-reduced into something new);
+  4. the chunk width comes from NOUTPUTS, so a subarray is not split at a
+     boundary its readout does not have;
+  5. the product records which of the two sky conventions it carries.
 """
 import numpy as np
 import pytest
@@ -159,14 +162,87 @@ def test_add_smoothed_removes_the_streaks_it_is_for():
 
 
 # --------------------------------------------------------------------------
-# 3. the detector-shape assumption
+# 3. the chunk width is the readout structure, not a constant
 # --------------------------------------------------------------------------
 
-def test_a_non_nircam_width_is_refused():
-    """`range(0, 2048, 512)` silently produced empty chunks on a narrower
-    detector, destreaking only part of the frame.  MIRI is 1032 columns."""
-    with pytest.raises(ValueError, match='2048-column'):
-        D.destreak_data(np.zeros((1024, 1032), dtype='float32'), add_smoothed=True)
+def test_a_full_frame_still_chunks_at_512():
+    """NOUTPUTS=4 over 2048 columns reproduces the old hardcode exactly."""
+    assert D.amplifier_width(np.zeros((2048, 2048)), 4) == 512
+
+
+def test_a_single_output_subarray_is_one_chunk():
+    """sickle 3958/007 is NIRCam SUB640: 640x640, NOUTPUTS=1.  The old
+    `range(0, 2048, 512)` gave it a 512-column chunk, a 128-column remainder
+    estimated from a quarter as many pixels, and two empty slices."""
+    assert D.amplifier_width(np.zeros((640, 640)), 1) == 640
+
+
+def test_a_subarray_gets_no_step_at_column_512():
+    """The defect the width fix removes.  Build a SUB640-shaped frame with a
+    flat sky and per-row streaks; destreaking must not leave a discontinuity
+    at column 512, which is where the hardcoded chunk boundary used to fall."""
+    rng = np.random.default_rng(11)
+    # an x-gradient is what makes the two chunks disagree: chunk 0 sees columns
+    # 0-511 and the remainder sees 512-639, so their percentiles differ by the
+    # sky difference between those column ranges, and that difference is what
+    # gets stamped in as a step.  A spatially flat sky hides the defect.
+    x = np.arange(640)[None, :]
+    sky = 20.0 + 4.0 * (x / 640.0) + rng.normal(0, 0.3, (640, 640))
+    streaks = rng.normal(0, 1.5, (640, 1)) * np.ones((1, 640))
+    frame = (sky + streaks).astype('float32')
+
+    good = D.destreak_data(frame.copy(), median_filter_size=2048,
+                           add_smoothed=True, noutputs=1)
+    colmed = np.median(good, axis=0)
+    step = abs(np.median(colmed[512:524]) - np.median(colmed[500:512]))
+    assert step < 0.1, f'{step:.3f} MJy/sr step at the old chunk boundary'
+
+    # and the old chunking on the same frame does leave one
+    bad = frame.copy()
+    for start in (0, 512):
+        chunk = bad[:, start:start + 512]
+        pct = D.nozero_percentile(chunk, 10, axis=1)
+        bad[:, start:start + 512] = chunk - pct[:, None]
+    colmed = np.median(bad, axis=0)
+    assert abs(np.median(colmed[512:524]) - np.median(colmed[500:512])) > 0.1
+
+
+def test_a_width_the_outputs_do_not_divide_is_refused():
+    with pytest.raises(ValueError, match='NOUTPUTS must divide'):
+        D.amplifier_width(np.zeros((1024, 1030)), 4)   # 1030 % 4 == 2
+
+
+def test_destreak_takes_the_chunk_width_from_the_frame(tmp_path):
+    """NOUTPUTS comes off the header, so a subarray does not need a caller to
+    know it is one."""
+    frame = tmp_path / 'jw03958007001_03102_00001_nrcb1_cal.fits'
+    hdul = _frame_hdul(program='03958', obs='007', filtername='F187N')
+    hdul[0].header['NOUTPUTS'] = 1
+    hdul[0].header['SUBARRAY'] = 'SUB640'
+    rng = np.random.default_rng(5)
+    hdul[('SCI', 1)].data = (8.0 + rng.normal(0, 0.4, (640, 640))).astype('float32')
+    hdul.writeto(frame)
+
+    out = D.destreak(str(frame), median_filter_size=2048, use_background_map=True)
+    hdr = fits.getheader(out)
+    assert hdr['DESTRKAW'] == 640
+    assert hdr['DESTRKMD'] == 'insitu'
+
+
+# --------------------------------------------------------------------------
+# 3b. the two sky conventions are distinguishable in the product
+# --------------------------------------------------------------------------
+
+def test_the_output_records_which_sky_convention_it_carries(tmp_path):
+    """Both generations are named `*_destreak.fits`.  ~6,200 products on disk
+    were made under the bare subtraction and nothing in them says so."""
+    frame = tmp_path / 'jw02092002001_02101_00001_nrca1_cal.fits'
+    _frame_hdul(program='02092').writeto(frame)
+    out = D.destreak(str(frame), median_filter_size=2048, use_background_map=True)
+    hdr = fits.getheader(out)
+    assert hdr['DESTRKMD'] == 'insitu'
+    assert hdr['DESTRKAW'] == 512
+    assert 'DESTRKBG' not in hdr
 
 
 # --------------------------------------------------------------------------

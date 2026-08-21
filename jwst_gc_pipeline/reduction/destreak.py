@@ -34,23 +34,7 @@ background_mapping = { '2221':
                         'f405n': 'jw02221-o001_t001_nircam_f405n-f444w_i2d_medfilt128.fits',
                         'f182m': 'jw02221-o001_t001_nircam_clear-f182m_i2d_medfilt256.fits',
                         'f466n': 'jw02221-o001_t001_nircam_f444w-f466n_i2d_medfilt128.fits',
-                        # UNREACHABLE, and the three files below do not exist on
-                        # disk (only *.fits_stale).  F444W/F356W/F200W/F115W are
-                        # brick's proposal-1182 obs-004 bands, not 2221/001's, and
-                        # 1182 has no key in this mapping at all -- so these
-                        # entries have never been read.  They are kept only as a
-                        # record of which maps someone meant to build; with
-                        # background_map_path()'s existence check, wiring 1182 in
-                        # without building them now fails loudly instead of
-                        # silently subtracting the sky.
-                        # 2026-07-11: was '..._merged_nodestreak_realigned-to-refcat_background.fits'
-                        # (realign retired; that name was already .fits_stale since 2023 -> destreak
-                        # was silently degraded).  Point at the real mosaic background that exists on
-                        # disk (the _i2d background map).  Missing -> add_background_map warns + skips.
-                        'f444w': 'jw01182-o004_t001_nircam_clear-f444w-merged_i2d_background.fits',
-                        'f356w': 'jw01182-o004_t001_nircam_clear-f356w-merged_i2d_background.fits',
-                        'f200w': 'jw01182-o004_t001_nircam_clear-f200w-merged_i2d_background.fits',
-                        #'f115w': 'jw01182-o004_t001_nircam_clear-f115w-merged_nodestreak_i2d_medfilt128.fits',
+                        # brick's wide bands are NOT here -- see MAPS_TO_BUILD below.
                        },
                         '002':
                        {
@@ -69,6 +53,27 @@ background_mapping = { '2221':
                        }
                       }
                      }
+
+#: Maps someone intended to build and did not.  NOT part of
+#: ``background_mapping`` -- keeping them there made them a trap rather than a
+#: record: none was reachable (they name proposal-1182 products while filed
+#: under the 2221 key, and every wide-band brick frame on disk is jw01182,
+#: which has no key at all), and none of the files exists (all were renamed
+#: ``.fits_stale`` in 2023 when the post-resample realign was retired).  With
+#: ``background_map_path``'s existence check, leaving them live meant that
+#: registering proposal 1182 -- the obvious next step -- would abort the
+#: reduction on a missing file rather than do anything useful.
+#:
+#: To use one: build the map, then move its entry into ``background_mapping``
+#: under a ``'1182': {'004': {...}}`` key with ``regionname='brick'``.
+MAPS_TO_BUILD = {
+    '1182': {'004': {'regionname': 'brick',
+                     'f444w': 'jw01182-o004_t001_nircam_clear-f444w-merged_i2d_background.fits',
+                     'f356w': 'jw01182-o004_t001_nircam_clear-f356w-merged_i2d_background.fits',
+                     'f200w': 'jw01182-o004_t001_nircam_clear-f200w-merged_i2d_background.fits',
+                     'f115w': 'jw01182-o004_t001_nircam_clear-f115w-merged_nodestreak_i2d_medfilt128.fits',
+                     }},
+}
 
 
 def compute_zero_spacing_approximation(filename, ext=('SCI', 1), dx=128,
@@ -146,13 +151,36 @@ def nozero_percentile(arr, pct, **kwargs):
     return np.nan_to_num(rslt)
 
 
+def amplifier_width(data, noutputs):
+    """Width in columns of one amplifier's stripe of this frame.
+
+    The destreaker's chunking IS the readout structure: the 1/f it removes is
+    correlated within an output, so the percentile has to be taken per output.
+    A NIRCam FULL frame is 2048 columns through ``NOUTPUTS=4`` -> 512, which is
+    the number that used to be hardcoded.  A subarray is read through a single
+    output -- sickle's ``SUB640`` is 640 columns, ``NOUTPUTS=1`` -> one chunk of
+    640 -- so the same hardcode splits it into a 512-column chunk and a
+    128-column remainder that never belonged to a separate amplifier.
+    """
+    ncol = data.shape[1]
+    if noutputs < 1 or ncol % noutputs:
+        raise ValueError(
+            f"cannot split {ncol} columns into {noutputs} amplifier outputs: "
+            f"NOUTPUTS must divide the frame width.  Pass the frame's own "
+            f"NOUTPUTS keyword (FULL NIRCam is 2048/4, SUB640 is 640/1).")
+    return ncol // noutputs
+
+
 def destreak_data(data, percentile=10, median_filter_size=256, add_smoothed=True,
-                  caller_restores_large_scales=False):
+                  caller_restores_large_scales=False, noutputs=4):
     """Subtract the 1/f streaks from one NIRCam frame, in place.
 
     The streak estimator is a per-ROW percentile taken independently inside
-    each of the four 512-column amplifier chunks, so the correction is
-    ``f(y, x//512)`` -- four independent row profiles, not one.
+    each amplifier's column stripe, so the correction is
+    ``f(y, x // amplifier_width)`` -- one row profile per output, not one per
+    frame.  ``noutputs`` is the frame's ``NOUTPUTS`` keyword; the stripe width
+    is ``ncol // noutputs``, which is 512 for a NIRCam FULL frame and the whole
+    frame for a single-output subarray.
 
     ``add_smoothed=True`` (the safe mode) subtracts that profile and adds back
     a median-filtered copy of it, so only the structure finer than
@@ -190,10 +218,20 @@ def destreak_data(data, percentile=10, median_filter_size=256, add_smoothed=True
     one setting where the window spans the array.  ``median_filter(pct, 2048)``
     on a length-2048 profile is not flat (``mode='reflect'`` keeps ~60% of the
     input std), which is why that setting worked and the default did not.
+
+    The chunk width used to be the literal 512 inside ``range(0, 2048, 512)``.
+    That is right for a FULL frame and wrong for a subarray, and the archive
+    has one: sickle observation 3958/007 is NIRCam ``SUB640``, 640x640, read
+    through one output.  The old loop gave it a 512-column chunk, a 128-column
+    remainder estimated from a quarter as many pixels, and two empty slices --
+    stamping a step at column 512 into all 192 of its destreak products
+    (measured 0.52 MJy/sr on one, 1.4 MJy/sr on another).  Deriving the width
+    from ``NOUTPUTS`` reproduces 512 exactly for FULL frames and gives a
+    subarray the single chunk it should have had.
     """
     if not add_smoothed and not caller_restores_large_scales:
         raise DestreakWouldDeleteSky(
-            "destreak_data(add_smoothed=False) subtracts a per-row, per-512-column "
+            "destreak_data(add_smoothed=False) subtracts a per-row, per-amplifier "
             "percentile and adds nothing back, which deletes the sky pedestal and "
             "the large-scale sky along with the 1/f streaks and drives "
             f"~{percentile}% of the pixels negative.  Pass add_smoothed=True to "
@@ -203,24 +241,16 @@ def destreak_data(data, percentile=10, median_filter_size=256, add_smoothed=True
             "background_map_path() -- may ask for this, and it must say so with "
             "caller_restores_large_scales=True.")
 
-    if data.shape[1] != 2048:
-        # The 512-column chunking IS the NIRCam amplifier layout.  On a
-        # narrower detector `range(0, 2048, 512)` silently produced empty
-        # slices for the chunks past the edge and destreaked only part of the
-        # frame; on a wider one it would ignore the remainder.
-        raise ValueError(
-            f"destreak_data is written for the 2048-column NIRCam detector and its "
-            f"four 512-column amplifiers; got {data.shape[1]} columns.  MIRI and "
-            f"NIRISS do not have this readout structure and are not destreaked.")
+    width = amplifier_width(data, noutputs)
 
-    for start in range(0, 2048, 512):
-        chunk = data[:, slice(start, start + 512)]
+    for start in range(0, data.shape[1], width):
+        chunk = data[:, slice(start, start + width)]
         pct = nozero_percentile(chunk, percentile, axis=1)
         if add_smoothed:
             smoothed_pct = median_filter(pct, min(int(median_filter_size), pct.size))
-            data[:, slice(start, start + 512)] = chunk - pct[:, None] + smoothed_pct[:, None]
+            data[:, slice(start, start + width)] = chunk - pct[:, None] + smoothed_pct[:, None]
         else:
-            data[:, slice(start, start + 512)] = chunk - pct[:, None]
+            data[:, slice(start, start + width)] = chunk - pct[:, None]
 
     return data
 
@@ -317,11 +347,16 @@ def add_background_map(data, hdu, background_mapping=background_mapping,
     if not np.all(np.isfinite(bg)):
         bg = np.nan_to_num(bg, nan=np.nanmedian(bg))
 
+    # Same amplifier chunking destreak_data used to subtract, so what is added
+    # back lines up with what was taken off.  Was hardcoded 2048/512 here too.
+    nrow, ncol = data.shape
+    width = amplifier_width(data, int(hdu[0].header.get('NOUTPUTS', 4)))
+
     # we want the middles of the columns
-    for start in range(0, 2048, 512):
+    for start in range(0, ncol, width):
         # pixel coordinates (px)
-        pxy = np.arange(2048)
-        pxx = np.ones(2048) * (start + 256)
+        pxy = np.arange(nrow)
+        pxx = np.ones(nrow) * (start + width / 2)
         crds = ww.pixel_to_world(pxx, pxy)
 
         wwbg = WCS(fits.getheader(bgfile))
@@ -331,7 +366,7 @@ def add_background_map(data, hdu, background_mapping=background_mapping,
         if verbose:
             print(f'bg_sampled shape: {bg_sampled.shape}, nanmedian: {np.nanmedian(bg_sampled)}')
 
-        data[:, slice(start, start + 512)] += bg_sampled[:, None]
+        data[:, slice(start, start + width)] += bg_sampled[:, None]
 
     return data
 
@@ -375,7 +410,17 @@ def destreak(frame, percentile=10, median_filter_size=256, overwrite=True, write
     seven combinations: they previously came out with their sky pedestal set
     to zero and ~10% of pixels negative, and now keep it.  Products made
     before this commit and after it must not be mixed in one mosaic or one
-    catalog.
+    catalog.  Both generations are named ``*_destreak.fits``, so the output
+    now carries ``DESTRKMD`` (``'submap'`` / ``'insitu'``) to tell them apart;
+    a frame with no ``DESTRKMD`` at all predates this commit.  Failing that,
+    the discriminator is in the pixels: a per-row, per-amplifier 10th
+    percentile whose median is exactly 0.000 is an old bare-subtracted frame.
+
+    A registered background map whose FILE is missing now aborts this frame's
+    reduction (``FileNotFoundError`` out of ``background_map_path``) rather
+    than degrading it, and it does so before anything is subtracted.  Nothing
+    on disk hits that today, but moving or deleting a map file will surface as
+    a stopped pipeline.
 
     ``background_folder`` overrides the directory the map is looked up in.  It
     used to default to brick's ``images/`` and was then never read -- the
@@ -400,10 +445,16 @@ def destreak(frame, percentile=10, median_filter_size=256, overwrite=True, write
               f"with add_smoothed=True (large scales kept in-frame) instead of "
               f"subtracting them.", flush=True)
 
+    # The chunking is the readout structure, so it comes off the frame.  FULL
+    # NIRCam is NOUTPUTS=4 -> the historical 512; sickle's SUB640 is 1 -> one
+    # chunk.  Defaulted rather than required so a hand-built test header works.
+    noutputs = int(hdu[0].header.get('NOUTPUTS', 4))
+
     data = destreak_data(data, percentile=percentile,
                          median_filter_size=median_filter_size,
                          add_smoothed=bgfile is None,
                          caller_restores_large_scales=bgfile is not None,
+                         noutputs=noutputs,
                          )
 
     if bgfile is not None:
@@ -411,6 +462,20 @@ def destreak(frame, percentile=10, median_filter_size=256, overwrite=True, write
                                   bgfile=bgfile)
 
     hdu[('SCI', 1)].data = data
+
+    # Stamp which of the two sky conventions this frame carries.  Before this
+    # commit both came out named `*_destreak.fits` with nothing to tell them
+    # apart, and ~6,200 products on disk were made under 'submap-missing'
+    # (subtracted, nothing restored).  A mosaic or catalog step can refuse a
+    # mixed input list on this keyword instead of averaging two conventions.
+    hdu[0].header['DESTRKMD'] = (
+        'submap' if bgfile is not None else 'insitu',
+        'submap: bg map added; insitu: smoothed kept')
+    hdu[0].header['DESTRKAW'] = (amplifier_width(data, noutputs),
+                                 'destreak chunk width, columns')
+    if bgfile is not None:
+        hdu[0].header['DESTRKBG'] = (os.path.basename(bgfile),
+                                     'background map added back')
 
     if write:
         outname = frame.replace("_cal.fits", "_destreak.fits")

@@ -239,19 +239,18 @@ def test_both_wheels_empty_is_refused():
             filtername_from_header(bad)
 
 
-def test_the_wide_bands_would_have_matched_their_background_map_keys():
-    """`background_mapping['2221']['001']` holds 'f200w'/'f356w'/'f444w' keys
-    that the six-band rule in destreak.py cannot produce.
+def test_the_wide_bands_resolve_to_the_keys_their_maps_are_filed_under():
+    """`destreak.MAPS_TO_BUILD` files brick's wide bands under 'f115w'/'f200w'/
+    'f356w'/'f444w' -- keys the six-band rule in destreak.py cannot produce.
 
     Note what this does and does not show.  It pins that the KEY resolves; it
-    does not claim those three entries become reachable, because they are also
-    behind a proposal lookup that misses (they name 1182 maps under the 2221
-    key) and behind files renamed `.fits_stale` in 2023.  The test is here for
-    the next map someone registers under a wide-band name.
+    does not claim anything is reachable, because those maps do not exist yet
+    (that is why they are in MAPS_TO_BUILD and not in `background_mapping`).
+    The test is here so that whoever builds one is not defeated by the lookup.
     """
-    from jwst_gc_pipeline.reduction.destreak import background_mapping
-    keys = background_mapping['2221']['001']
-    for filt in ('F200W', 'F356W', 'F444W'):
+    from jwst_gc_pipeline.reduction.destreak import MAPS_TO_BUILD
+    keys = MAPS_TO_BUILD['1182']['004']
+    for filt in ('F115W', 'F200W', 'F356W', 'F444W'):
         assert filt.lower() in keys
         resolved = filtername_from_header({'FILTER': filt, 'PUPIL': 'CLEAR'}).lower()
         assert resolved in keys, (
