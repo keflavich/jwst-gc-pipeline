@@ -41,18 +41,23 @@ FAILED_STATES = ('FAILED', 'TIMEOUT', 'OUT_OF_MEMORY', 'NODE_FAIL',
 # against the field registry (longest registered name first).
 #
 # brick2221-o001-m12-fanout / arches2045-o001-cat-F182M / sgrb25365-o001-m12-finalize
+# The head may carry an underscore: `cloudef_controlfield`, `gc2211_o046`.
+# With `[a-z][a-z0-9]*` the match stopped at the underscore, `_resolve_head` was
+# handed a truncated head, and the job fell through every shape to
+# "unattributed" -- so a whole field's jobs were invisible to the monitor while
+# running perfectly.
 _NAME_FULL = re.compile(
-    r'^(?P<head>[a-z][a-z0-9]*)-o(?P<obsid>\d+)'
+    r'^(?P<head>[a-z][a-z0-9_]*)-o(?P<obsid>\d+)'
     r'-(?P<stage>[a-z0-9]+)(?:-(?P<filter>[Ff]\d{3,4}[A-Za-z0-9]*))?')
 # arches-001-m12-fanout  (older: no proposal, obsid separated by a dash)
 _NAME_NOPROP = re.compile(
-    r'^(?P<head>[a-z][a-z0-9]*)-(?P<obsid>\d{3})'
+    r'^(?P<head>[a-z][a-z0-9_]*)-(?P<obsid>\d{3})'
     r'-(?P<stage>[a-z0-9]+)(?:-(?P<filter>[Ff]\d{3,4}[A-Za-z0-9]*))?')
 # pf_sgrb2_m12_s3 / pf_arches_m12_fin -- the trailing _s<N>/_fin is the shard,
 # not part of the stage, so it is not captured.
-_NAME_PF = re.compile(r'^pf_(?:gc_)?(?P<head>[a-z][a-z0-9]*)_(?P<stage>m\d+)')
+_NAME_PF = re.compile(r'^pf_(?:gc_)?(?P<head>[a-z][a-z0-9_]*)_(?P<stage>m\d+)')
 # brick-catalog / w51-catalog / w51-9filt-reseed-gaiafix / w51-miri-rereduce
-_NAME_LOOSE = re.compile(r'^(?P<head>[a-z][a-z0-9]*)-(?P<stage>.+)$')
+_NAME_LOOSE = re.compile(r'^(?P<head>[a-z][a-z0-9_]*)-(?P<stage>.+)$')
 
 _PROPOSAL_RE = re.compile(r'^\d{4,5}$')
 

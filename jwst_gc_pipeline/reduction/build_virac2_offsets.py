@@ -415,28 +415,32 @@ REGION = {
     # NB the per-(obs,filter) catalog coverage is incomplete mid-campaign; a build
     # of a pair that has no catalogs (or no merged i2d) fails loudly rather than
     # writing a partial table.
+    # gc2211's five observations were split into one tree each on 2026-08-21 --
+    # different target fields, different sky, different epochs, sharing only a
+    # proposal id.  Left pointing at the old shared tree these regions still
+    # glob, they just read a tree with no frames in it.
     'gc2211_023': dict(proposal='2211', field='023', otag=True,
-                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       basepath='/orange/adamginsburg/jwst/gc2211_o023',
                        filts={'f150w': ('F150W', 2023.707, '_m3'),
                               'f200w': ('F200W', 2023.707, '_m3'),
                               'f277w': ('F277W', 2023.707, '_m3')}),
     'gc2211_028': dict(proposal='2211', field='028', otag=True,
-                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       basepath='/orange/adamginsburg/jwst/gc2211_o028',
                        filts={'f150w': ('F150W', 2023.703, '_m3'),
                               'f200w': ('F200W', 2023.703, '_m3'),
                               'f277w': ('F277W', 2023.703, '_m3')}),
     'gc2211_046': dict(proposal='2211', field='046', otag=True,
-                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       basepath='/orange/adamginsburg/jwst/gc2211_o046',
                        filts={'f150w': ('F150W', 2024.316, '_m3'),
                               'f200w': ('F200W', 2024.316, '_m3'),
                               'f277w': ('F277W', 2024.316, '_m3')}),
     'gc2211_049': dict(proposal='2211', field='049', otag=True,
-                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       basepath='/orange/adamginsburg/jwst/gc2211_o049',
                        filts={'f150w': ('F150W', 2024.633, '_m3'),
                               'f200w': ('F200W', 2024.633, '_m3'),
                               'f277w': ('F277W', 2024.633, '_m3')}),
     'gc2211_050': dict(proposal='2211', field='050', otag=True,
-                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       basepath='/orange/adamginsburg/jwst/gc2211_o050',
                        filts={'f150w': ('F150W', 2025.302, '_m3'),
                               'f200w': ('F200W', 2025.302, '_m3'),
                               'f277w': ('F277W', 2025.302, '_m3')}),

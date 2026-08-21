@@ -168,30 +168,35 @@ def test_bare_module_dropped_only_for_its_own_module():
 # ---------------------------------------------------------------------------
 #
 # The glob is `{filt}_*visit*_vgroup*_exp*`, so the `*` swallows the detector
-# AND the per-observation token.  gc2211's five observations share a directory,
+# AND the per-observation token.  wd1's obs 001 and 003 share a directory,
 # VISIT=001 and the same (vgroup, exp) tuples; ngc6334's 6778 and 7213 share a
 # directory, a filter list and obsid 001; and every field carries pre-token
 # copies of its own frames.  `exposure_key` carries no obs/proposal, so every
-# one of those neighbours collides -- issue #259 (gc2211 F200W: 592 files ->
-# 192 keys, all duplicated 2-5x).
+# one of those neighbours collides -- issue #259, measured on gc2211 F200W
+# (592 files -> 192 keys, all duplicated 2-5x).
+#
+# gc2211 was the original example and is no longer one: its five observations
+# were split into a tree each on 2026-08-21, which removes the collision by
+# construction.  wd1 (1905, nircam 001+003) still has the property, so the
+# behaviour is exercised against a field that really does share a tree.
 
-def _mixed_gc2211():
-    """One exposure of one detector, as written by three gc2211 runs plus the
+def _mixed_shared_tree():
+    """One exposure of one detector, as written by two wd1 runs plus the
     pre-token name."""
-    return [_name(filt="f200w", tok=t) for t in ("_o023", "_o046", "_o050", "")]
+    return [_name(filt="f200w", tok=t) for t in ("_o001", "_o003", "")]
 
 
 def test_tokened_run_keeps_only_its_own_observation():
-    kept = _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023",
-                                        "f200w", "m2", "nrcb", "gc2211")
-    assert kept == [_name(filt="f200w", tok="_o023")]
+    kept = _drop_foreign_obs_duplicates(_mixed_shared_tree(), "_o001",
+                                        "f200w", "m2", "nrcb", "wd1")
+    assert kept == [_name(filt="f200w", tok="_o001")]
 
 
 def test_untokened_run_drops_the_tokened_siblings():
     """Otherwise a run that writes pre-token names still ingests every
     observation's tokened catalogs beside it."""
-    kept = _drop_foreign_obs_duplicates(_mixed_gc2211(), "",
-                                        "f200w", "m2", "nrcb", "gc2211")
+    kept = _drop_foreign_obs_duplicates(_mixed_shared_tree(), "",
+                                        "f200w", "m2", "nrcb", "wd1")
     assert kept == [_name(filt="f200w", tok="")]
 
 
@@ -210,21 +215,21 @@ def test_proposal_token_form_separates_the_two_ngc6334_proposals():
 def test_nothing_is_dropped_when_the_directory_holds_one_observation():
     fns = [_name(filt="f200w", tok="_o023", exp=e) for e in (1, 2, 3)]
     assert _drop_foreign_obs_duplicates(fns, "_o023", "f200w", "m2", "nrcb",
-                                        "gc2211") == fns
+                                        "wd1") == fns
 
 
 def test_the_drop_is_reported(capsys):
     """It narrows the checkpoint's input, so it may not happen silently."""
-    _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023", "f200w", "m2",
-                                 "nrcb", "gc2211")
+    _drop_foreign_obs_duplicates(_mixed_shared_tree(), "_o001", "f200w", "m2",
+                                 "nrcb", "wd1")
     out = capsys.readouterr().out
-    assert "excluded 3 of 4 foreign-observation per-frame catalog(s)" in out
-    assert "o046" in out and "o050" in out and "<untokened>" in out
-    assert "_o023" in out
+    assert "excluded 2 of 3 foreign-observation per-frame catalog(s)" in out
+    assert "o003" in out and "<untokened>" in out
+    assert "_o001" in out
 
 
 def test_checkpoint_passes_its_own_token_to_the_filter(tmp_path, capsys):
-    """End-to-end wiring, gc2211: the per-frame writer and the consensus namer
+    """End-to-end wiring, gc2211_o023: the per-frame writer and the consensus namer
     return the SAME token here, so the filter keeps only o023."""
     (tmp_path / "F200W").mkdir(parents=True)
     (tmp_path / "catalogs").mkdir(parents=True)
@@ -233,7 +238,7 @@ def test_checkpoint_passes_its_own_token_to_the_filter(tmp_path, capsys):
     _run_astrometry_stage_checkpoint(
         "m2", "nrcb", "f200w", str(tmp_path), str(tmp_path), "2211",
         types.SimpleNamespace(cutout_region="", proposal_id="2211",
-                              field="023", target="gc2211"), {}, context="test")
+                              field="023", target="gc2211_o023"), {}, context="test")
     out = capsys.readouterr().out
     assert "excluded 2 of 2 foreign-observation per-frame catalog(s)" in out
     # nothing of this observation is left, so the checkpoint cannot run -- it
@@ -317,13 +322,13 @@ def test_single_observation_filter_keeps_its_untokened_catalogs():
 
 
 def test_shared_filter_still_drops_untokened():
-    """gc2211 images F200W in five observations that all use VISIT=001, so an
-    untokened basename cannot say which one wrote it and must go."""
-    fns = [_pf("F200W", "nrcb1", "o023", 1), _pf("F200W", "nrcb1", "o046", 1),
+    """wd1 images F200W in obs 001 AND 003 from one tree, so an untokened
+    basename cannot say which one wrote it and must go."""
+    fns = [_pf("F200W", "nrcb1", "o001", 1), _pf("F200W", "nrcb1", "o003", 1),
            _pf("F200W", "nrcb1", None, 1)]
     kept = _drop_foreign_obs_duplicates(
-        fns, "o023", "F200W", "m2", "all", "gc2211")
-    assert kept == [_pf("F200W", "nrcb1", "o023", 1)], kept
+        fns, "o001", "F200W", "m2", "all", "wd1")
+    assert kept == [_pf("F200W", "nrcb1", "o001", 1)], kept
 
 
 def test_shared_filter_of_the_same_field_is_decided_per_filter():
@@ -332,7 +337,9 @@ def test_shared_filter_of_the_same_field_is_decided_per_filter():
     filter, not per field."""
     assert fields.filter_observation_count("ngc6334", "F090W") == 1
     assert fields.filter_observation_count("ngc6334", "F200W") == 2
-    assert fields.filter_observation_count("gc2211", "F200W") == 5
+    # gc2211 is five FIELDS now, one obsid each; wd1 still shares a tree.
+    assert fields.filter_observation_count("wd1", "F200W") == 2
+    assert fields.filter_observation_count("gc2211_o023", "F200W") == 1
 
 
 def test_shared_filter_without_a_written_token_keeps_everything():

@@ -206,23 +206,81 @@ fields:
           miri: '*'
         filters: [f212n, f480m, f770w]
 
-  gc2211:
+  # gc2211's five observations are DIFFERENT TARGET FIELDS -- different sky,
+  # different epochs -- that shared a proposal id and therefore one directory,
+  # and nothing else.  Pooling them produced a single untokened merged catalog
+  # covering five fields, and five concurrent chains all writing that one name.
+  # Split into one tree per observation on 2026-08-21: 69,815 files moved,
+  # receipt gc2211/_SPLIT_per_observation_20260821T202441Z.json, offsets table
+  # partitioned 296 -> 16/96/96/64/24 rows with every offset copied unchanged.
+  #
+  # o028 keeps its OWN reference catalogue.  Its pointing is ~13' south of the
+  # other four and falls entirely outside the shared one -- zero stars within
+  # 3.6' -- so the shared file would leave its m2 with no reference at all.
+  gc2211_o023:
     root: orange
     observations:
       '2211':
         reference_catalog:
           '023': catalogs/gaia_virac2_refcat_epoch2023.71.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['023']
+        filters: [f200w, f277w]
+    # 266.4085 -28.9580, observed 2023-09-15
+
+  gc2211_o028:
+    root: orange
+    observations:
+      '2211':
+        reference_catalog:
           '028': catalogs/gaia_virac2_refcat_epoch2023.71_o028.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['028']
+        filters: [f150w, f277w]
+    # 266.3537 -29.1777, observed 2023-09-14
+
+  gc2211_o046:
+    root: orange
+    observations:
+      '2211':
+        reference_catalog:
           '046': catalogs/gaia_virac2_refcat_epoch2023.71.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['046']
+        filters: [f200w, f277w]
+    # 266.4959 -28.8372, observed 2024-04-25
+
+  gc2211_o049:
+    root: orange
+    observations:
+      '2211':
+        reference_catalog:
           '049': catalogs/gaia_virac2_refcat_epoch2023.71.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['049']
+        filters: [f200w, f277w]
+    # 266.4047 -28.9588, observed 2024-08-19
+
+  gc2211_o050:
+    root: orange
+    observations:
+      '2211':
+        reference_catalog:
           '050': catalogs/gaia_virac2_refcat_epoch2023.71.fits
         nvisits: 1
         reference_frame: VIRAC2
         obsids:
-          nircam: ['023', '028', '046', '049', '050']
-        glob_obsid:
-          nircam: '*'
-        filters: [f150w, f200w, f277w]
+          nircam: ['050']
+        filters: [f200w, f277w]
+    # 266.4803 -28.9098, observed 2025-04-21
 
   m4:
     root: orange

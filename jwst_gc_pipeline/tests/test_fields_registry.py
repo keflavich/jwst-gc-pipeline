@@ -86,7 +86,12 @@ def test_obs_filters_lists_the_same_filters_as_before():
         'sgra': {'1939': ['f115w', 'f212n', 'f405n']},
         'arches': {'2045': ['f212n', 'f323n']},
         'quintuplet': {'2045': ['f212n', 'f323n']},
-        'gc2211': {'2211': ['f150w', 'f200w', 'f277w']},
+        # one field per observation; o028 is the F150W pointing, the rest F200W
+        'gc2211_o023': {'2211': ['f200w', 'f277w']},
+        'gc2211_o028': {'2211': ['f150w', 'f277w']},
+        'gc2211_o046': {'2211': ['f200w', 'f277w']},
+        'gc2211_o049': {'2211': ['f200w', 'f277w']},
+        'gc2211_o050': {'2211': ['f200w', 'f277w']},
         'm92': {'1334': ['f090w', 'f150w', 'f277w', 'f444w']},
     }
     view = F.obs_filters()
@@ -105,7 +110,16 @@ def test_project_obsnum_matches_apart_from_the_listed_changes():
               'arches': {'2045': '001'},
               'quintuplet': {'2045': '003'},
               'sgra': {'1939': '001'},
-              'gc2211': {'2211': '*'},
+              # gc2211's five observations are separate target fields on
+              # different sky at different epochs; they shared a proposal id and
+              # therefore one directory, and pooling them produced a single
+              # merged catalog spanning five fields.  Split into one tree each
+              # on 2026-08-21.
+              'gc2211_o023': {'2211': '023'},
+              'gc2211_o028': {'2211': '028'},
+              'gc2211_o046': {'2211': '046'},
+              'gc2211_o049': {'2211': '049'},
+              'gc2211_o050': {'2211': '050'},
               # 2092 obs 005 (CLOUDEF-REFERENCE) is its own field now: it points
               # 11.77' from obs 002 (CLOUDEF-CENTER) and shares no sources with
               # it, so nothing downstream should be able to associate the two.
@@ -577,7 +591,11 @@ def test_a_wildcard_filter_counts_as_more_than_one_observation():
     assert F.filter_observation_count('gc-treasury', 'F480M') > 1
     assert F.filter_observation_count('gc-treasury', 'F770W') > 1
     # ... and the counts every other field reports are untouched.
-    assert F.filter_observation_count('gc2211', 'F200W') == 5
+    # gc2211's five observations are five FIELDS now, so each counts its own
+    # single observation rather than one field counting five.
+    assert F.filter_observation_count('gc2211_o023', 'F200W') == 1
+    assert F.filter_observation_count('gc2211_o049', 'F200W') == 1
+    assert F.filter_observation_count('gc2211_o028', 'F150W') == 1
     assert F.filter_observation_count('ngc6334', 'F090W') == 1
     assert F.filter_observation_count('sgrb2', 'F770W') == 3
 
@@ -608,7 +626,8 @@ def test_field_token_for_run_refuses_a_wildcard_field_and_answers_the_rest():
     inverted obsid map with the ``'*'`` key removed, then a raise naming
     ``--field``.  Yielding ``'*'`` here is how it reached the product names.
     """
-    assert F.field_token_for_run('gc2211', '2211', 'nircam') == '023'
+    assert F.field_token_for_run('gc2211_o023', '2211', 'nircam') == '023'
+    assert F.field_token_for_run('gc2211_o050', '2211', 'nircam') == '050'
     assert F.field_token_for_run('brick', '2221', 'nircam') == '001'
     assert F.field_token_for_run('sgrb2', '5365', 'miri') == '002-998'
     for instrument in ('nircam', 'miri'):
@@ -690,7 +709,7 @@ def test_a_wildcard_field_reports_that_it_claims_every_observation():
     That is the answer that switches ambiguity handling off."""
     assert F.claims_every_observation('gc-treasury') is True
     assert F.claims_every_observation('gc-treasury', 'miri') is True
-    assert F.claims_every_observation('gc2211') is False
+    assert F.claims_every_observation('gc2211_o023') is False
     assert F.claims_every_observation('brick') is False
     assert F.claims_every_observation('not-a-field') is False
 
@@ -770,8 +789,9 @@ FIELD_MAPS_BEFORE_THE_WILDCARD = {
     ('1979', 'nircam'): {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
     ('2045', 'nircam'): {'001': 'arches', '003': 'quintuplet'},
     ('2092', 'nircam'): {'002': 'cloudef', '005': 'cloudef_controlfield'},
-    ('2211', 'nircam'): {'023': 'gc2211', '028': 'gc2211', '046': 'gc2211',
-                         '049': 'gc2211', '050': 'gc2211'},
+    ('2211', 'nircam'): {'023': 'gc2211_o023', '028': 'gc2211_o028',
+                         '046': 'gc2211_o046', '049': 'gc2211_o049',
+                         '050': 'gc2211_o050'},
     ('2221', 'nircam'): {'001': 'brick', '002': 'cloudc'},
     ('3523', 'nircam'): {'003': 'wd2', '005': 'wd2'},
     ('3958', 'nircam'): {'007': 'sickle'},
