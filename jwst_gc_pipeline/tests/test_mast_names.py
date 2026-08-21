@@ -174,3 +174,96 @@ def test_parse_refuses_a_non_jw_basename():
     for bad in ('f182m_nrcb1_cal.fits', 'jw123_cal.fits', 'jwabcde_x.fits'):
         with pytest.raises(ValueError):
             proposal_id_from_filename(bad)
+
+
+# ---------------------------------------------------------------------------
+# filtername_from_header
+#
+# JWST splits one bandpass over two wheels and which wheel holds it varies, so
+# neither keyword alone is the answer.  `reduction.destreak.add_background_map`
+# carries a second copy of the rule that knows only six hardcoded narrow/medium
+# bands (PR #465 replaces it); every CLEAR-pupil WIDE band falls through that
+# copy to the literal 'CLEAR'.
+#
+# That is one of two independent locks on the f200w/f356w/f444w entries of
+# `destreak.background_mapping`.  The other -- the operative one for the frames
+# on disk -- is that those entries sit under the proposal-'2221' key while every
+# wide-band brick frame is jw01182, a proposal the mapping has no key for.  The
+# filter rule matters for the NEXT map someone registers, not for those three.
+# ---------------------------------------------------------------------------
+
+from jwst_gc_pipeline.mast_names import filtername_from_header
+
+
+@pytest.mark.parametrize('filt, pupil, expected', [
+    # filter-wheel band, empty pupil -- NIRCam narrow/medium/wide alike
+    ('F212N', 'CLEAR', 'F212N'),
+    ('F182M', 'CLEAR', 'F182M'),
+    ('F187N', 'CLEAR', 'F187N'),
+    ('F410M', 'CLEAR', 'F410M'),
+    ('F210M', 'CLEAR', 'F210M'),
+    ('F360M', 'CLEAR', 'F360M'),
+    ('F480M', 'CLEAR', 'F480M'),
+    # THE REGRESSION: CLEAR-pupil WIDE bands.  The destreak copy returned
+    # 'CLEAR' for every one of these.
+    ('F115W', 'CLEAR', 'F115W'),
+    ('F200W', 'CLEAR', 'F200W'),
+    ('F356W', 'CLEAR', 'F356W'),
+    ('F444W', 'CLEAR', 'F444W'),
+    # NIRCam pupil-wheel bands parked behind a wide blocker: the pupil wins
+    ('F444W', 'F405N', 'F405N'),
+    ('F444W', 'F466N', 'F466N'),
+    ('F444W', 'F470N', 'F470N'),
+    ('F150W2', 'F162M', 'F162M'),
+    ('F150W2', 'F164N', 'F164N'),
+    ('F322W2', 'F323N', 'F323N'),
+    # NIRISS spells its empty pupil CLEARP
+    ('F480M', 'CLEARP', 'F480M'),
+    ('F200W', 'CLEARP', 'F200W'),
+])
+def test_filtername_resolves_both_wheel_conventions(filt, pupil, expected):
+    assert filtername_from_header({'FILTER': filt, 'PUPIL': pupil}) == expected
+
+
+def test_a_header_with_no_pupil_keyword_uses_filter():
+    """MIRI carries no PUPIL."""
+    assert filtername_from_header({'FILTER': 'F2550W'}) == 'F2550W'
+
+
+def test_both_wheels_empty_is_refused():
+    for bad in ({'FILTER': 'CLEAR', 'PUPIL': 'CLEAR'},
+                {'FILTER': 'CLEAR', 'PUPIL': 'CLEARP'},
+                {'FILTER': '', 'PUPIL': ''},
+                {}):
+        with pytest.raises(ValueError):
+            filtername_from_header(bad)
+
+
+def test_the_wide_bands_would_have_matched_their_background_map_keys():
+    """`background_mapping['2221']['001']` holds 'f200w'/'f356w'/'f444w' keys
+    that the six-band rule in destreak.py cannot produce.
+
+    Note what this does and does not show.  It pins that the KEY resolves; it
+    does not claim those three entries become reachable, because they are also
+    behind a proposal lookup that misses (they name 1182 maps under the 2221
+    key) and behind files renamed `.fits_stale` in 2023.  The test is here for
+    the next map someone registers under a wide-band name.
+    """
+    from jwst_gc_pipeline.reduction.destreak import background_mapping
+    keys = background_mapping['2221']['001']
+    for filt in ('F200W', 'F356W', 'F444W'):
+        assert filt.lower() in keys
+        resolved = filtername_from_header({'FILTER': filt, 'PUPIL': 'CLEAR'}).lower()
+        assert resolved in keys, (
+            f'{filt} resolves to {resolved!r}, which is not a mapping key')
+
+
+def test_filtering_get_filtername_delegates_here():
+    """One rule, one spelling.  `reduction.filtering.get_filtername` is the
+    older public name and must not drift from it."""
+    from jwst_gc_pipeline.reduction.filtering import get_filtername
+    for filt, pupil in (('F212N', 'CLEAR'), ('F444W', 'F405N'),
+                        ('F150W2', 'F162M'), ('F480M', 'CLEARP'),
+                        ('F444W', 'CLEAR')):
+        hdr = {'FILTER': filt, 'PUPIL': pupil}
+        assert get_filtername(hdr) == filtername_from_header(hdr)

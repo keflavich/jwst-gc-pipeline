@@ -106,6 +106,82 @@ def proposal_id_from_program(program):
     return str(int(jw_prefix(str(program).strip())[2:]))
 
 
+#: Filter/pupil wheel entries that hold no bandpass.  NIRCam spells the empty
+#: slot ``CLEAR``, NIRISS spells its empty pupil ``CLEARP``.
+_EMPTY_WHEEL = ('CLEAR', 'CLEARP')
+
+
+def filtername_from_header(header):
+    """The science bandpass a JWST ``FILTER``/``PUPIL`` header pair names.
+
+    JWST spreads one bandpass over two wheels, and which wheel holds it is not
+    fixed.  NIRCam parks its narrow and medium pupil-wheel bands behind a wide
+    filter-wheel band -- ``FILTER='F444W', PUPIL='F405N'`` is an F405N
+    exposure, and ``FILTER='F150W2', PUPIL='F162M'`` is an F162M one -- while a
+    filter-wheel band flies with an empty pupil, ``FILTER='F212N',
+    PUPIL='CLEAR'``.  NIRISS inverts the convention: its pupil-wheel bands read
+    ``FILTER=<band>, PUPIL='CLEARP'``.  So neither keyword alone is the answer,
+    and reading ``PUPIL`` first is wrong exactly as often as reading ``FILTER``
+    first.
+
+    Rule: whichever wheel is not empty holds the band; when both are real, the
+    pupil wheel wins, because that is where NIRCam's narrow/medium bands live
+    and the filter wheel is then only the blocking element.
+
+    This is the pipeline's single spelling of that rule.
+    ``reduction.filtering.get_filtername`` delegates here.  The reason it lives
+    in ``mast_names`` rather than in ``filtering`` is import weight:
+    ``filtering`` pulls in photutils, astroquery and pylab, which the reduction
+    hot path (``reduction.destreak``) must not drag in to answer a question
+    about two header keywords.
+
+    ``reduction.destreak.add_background_map`` carries a second copy, which this
+    does not yet replace -- that is PR #465, which is stacked on this one::
+
+        filtername = hdu[0].header['PUPIL']
+        if filtername in ('CLEAR', 'F444W') and hdu[0].header['FILTER'] in (
+                'F405N', 'F466N', 'F410M', 'F212N', 'F187N', 'F182M'):
+            filtername = hdu[0].header['FILTER']
+
+    -- correct only for the six narrow/medium bands hardcoded in that tuple,
+    which are brick's and Cloud C's.  Every CLEAR-pupil WIDE band falls through
+    it and resolves to the literal ``'CLEAR'``: F115W, F200W, F356W and F444W
+    all look up the background-map key ``'clear'``.
+
+    That is one of TWO independent reasons the ``f200w``/``f356w``/``f444w``
+    entries of ``destreak.background_mapping`` are unreachable, and for the
+    frames actually on disk it is not the operative one.  Those three entries
+    sit under the proposal-``'2221'`` key while naming proposal-1182 maps, and
+    every wide-band brick frame on disk is ``jw01182`` -- a proposal that has
+    no key in that mapping at all -- so the proposal lookup misses first and
+    the filter key is never consulted.  (The files they name were also renamed
+    ``.fits_stale`` in 2023.)  The filter rule is the lock that would still be
+    shut after someone fixed the proposal key; it is also the lock that would
+    silently swallow any NEW wide-band or Cloud E/F map (``f210m``, ``f360m``,
+    ``f480m``), which is the case this fix is really for.
+
+    Returns the band name stripped and upper-cased.  Real FITS headers are
+    already in that form, so this is a no-op on every frame on disk and on
+    both existing callers, but a hand-built ``{'FILTER': 'f212n'}`` now comes
+    back ``'F212N'`` rather than verbatim.
+
+    Raises ``ValueError`` when both wheels are empty or the keywords are
+    missing, which no real science exposure has.
+    """
+    filtername = str(header.get('FILTER', '') or '').strip().upper()
+    pupil = str(header.get('PUPIL', '') or '').strip().upper()
+
+    if pupil and pupil not in _EMPTY_WHEEL:
+        # A real pupil-wheel band. NIRCam narrow/medium behind a wide blocker,
+        # or a filter-wheel band whose FILTER slot reads CLEAR.
+        filtername = pupil
+    if not filtername or filtername in _EMPTY_WHEEL:
+        raise ValueError(
+            f"header names no science bandpass: FILTER={header.get('FILTER')!r}, "
+            f"PUPIL={header.get('PUPIL')!r}")
+    return filtername
+
+
 def proposal_id_from_filename(filename):
     """Proposal number parsed from a JWST product filename or path.
 
