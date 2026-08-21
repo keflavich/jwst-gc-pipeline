@@ -181,7 +181,7 @@ def test_apply_script_refuses_legacy_BESIDE_tokened(tmp_path):
 @pytest.mark.parametrize("path,filt,ambiguous", [
     # the field NEAREST the record dir wins: first-in-dict-order read this as
     # 'brick' and, brick having no shared filters, called it unambiguous
-    ("/blue/x/jwst/brick/scratch/cloudef/astrometry_checkpoints", "F360M", True),
+    ("/blue/x/jwst/brick/scratch/cloudef/astrometry_checkpoints", "F360M", False),
     # longest-match does not fix it either -- 'arches' and 'sickle' tie.  The
     # path resolves to sickle (nearest component naming a field); what is then
     # asked is whether the FILTER is shared across that field's observations.
@@ -209,8 +209,14 @@ def test_apply_script_refuses_legacy_BESIDE_tokened(tmp_path):
     ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F212N", False),
     ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F770W", True),
     ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F1280W", True),
-    # ... and the fields the refusal exists for are unchanged
-    ("/orange/adamginsburg/jwst/cloudef/astrometry_checkpoints", "F360M", True),
+    # ... and the fields the refusal exists for are unchanged.  cloudef USED to
+    # be one of them and is now the counter-example: obs 005 moved to
+    # `cloudef_controlfield` (its own tree), so each side has a single NIRCam
+    # obsid and neither can be ambiguous.  Both are asserted -- a True on either
+    # means the two observations are sharing a tree again.
+    ("/orange/adamginsburg/jwst/cloudef/astrometry_checkpoints", "F360M", False),
+    ("/orange/adamginsburg/jwst/cloudef_controlfield/astrometry_checkpoints",
+     "F360M", False),
     ("/orange/adamginsburg/jwst/gc2211/astrometry_checkpoints", "F200W", True),
     ("/tmp/nowhere/astrometry_checkpoints", "F360M", True),      # fail-closed
 ])

@@ -379,7 +379,12 @@ def test_miri_filter_counts_miri_observations_not_nircam():
     assert fields.filter_observation_count("sgrb2", "F770W") == 3   # miri 001/002/998
     assert fields.filter_observation_count("sgrb2", "F212N") == 1   # nircam 001
     assert fields.filter_observation_count("cloudef", "F770W") == 3  # miri 004/006/008
-    assert fields.filter_observation_count("cloudef", "F162M") == 2  # nircam 002/005
+    # cloudef's NIRCam side is ONE observation since obs 005 became
+    # `cloudef_controlfield`; the MIRI count above is untouched by that split,
+    # which is the asymmetry this test exists to hold on to.
+    assert fields.filter_observation_count("cloudef", "F162M") == 1  # nircam 002
+    assert fields.filter_observation_count(
+        "cloudef_controlfield", "F162M") == 1                        # nircam 005
 
 
 def test_checkpoint_filters_on_the_written_token_not_the_consensus_name(
