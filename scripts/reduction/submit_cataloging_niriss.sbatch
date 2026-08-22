@@ -70,7 +70,20 @@ EXTRA_ARGS=${EXTRA_ARGS:-}
 
 # Pin this worktree/branch (NIRISS support is not yet on main).
 PIPE_ROOT=${PIPE_ROOT:-/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-niriss}
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
+# Locate the helper.  sbatch COPIES the batch script to a spool dir, so
+# ${BASH_SOURCE[0]} at runtime need not be the repo copy -- hence the ordered
+# fallback.  If PIPE_ROOT is set and the helper cannot be found we STOP: a
+# missing pin is the failure this exists to prevent, so it must not be skipped.
+_PR_H=""
+for _d in "${GC_SCRIPTS_DIR:-}" "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")" \
+          "${PIPE_ROOT:-}/scripts/reduction" "${SLURM_SUBMIT_DIR:-}/scripts/reduction"; do
+    [ -n "$_d" ] && [ -r "$_d/_pipe_root.sh" ] && { _PR_H="$_d/_pipe_root.sh"; break; }
+done
+if [ -n "$_PR_H" ]; then . "$_PR_H"
+elif [ -n "${PIPE_ROOT:-}" ]; then
+    echo "[pipe-root] PIPE_ROOT=$PIPE_ROOT set but _pipe_root.sh not found -- refusing" >&2
+    exit 2
+fi
 
 read -r -a FILT_ARR <<< "$FILTERS"
 IDX=${SLURM_ARRAY_TASK_ID:-0}

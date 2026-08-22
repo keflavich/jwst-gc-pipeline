@@ -64,6 +64,9 @@ if [ -z "${PHASES:-}" ]; then
     [ "${#_FA[@]}" -gt 1 ] && PHASES="$PHASES m7"
 fi
 
+# Where _pipe_root.sh lives.  sbatch copies the batch script to a spool
+# dir, so the job cannot always find its own siblings; hand it the path.
+export GC_SCRIPTS_DIR="$HERE"
 COMMON="ALL,PROPOSAL=$PROPOSAL,FIELD=$FIELD,TARGET=$TARGET"
 COMMON="$COMMON,EACH_SUFFIX=$EACH_SUFFIX,MAX_GROUP_SIZE=$MAX_GROUP_SIZE,NSHARDS=$NSHARDS"
 COMMON="$COMMON,FILTERS=$FILTERS"

@@ -49,6 +49,98 @@ def _run(script, env):
                           env=full, cwd=REPO, timeout=300)
 
 
+def _locator_block(name):
+    """The pipe-root block as literally written in a submitter.
+
+    Extracted rather than executed: running a whole submitter would launch a
+    real reduction/cataloging job.  The block is taken verbatim from the file,
+    so it is still the shipped code under test.
+    """
+    path = os.path.join(REPO, 'scripts', 'reduction', name)
+    lines = open(path).read().split('\n')
+    i = next(k for k, ln in enumerate(lines) if ln.strip().startswith('_PR_H='))
+    j = next(k for k in range(i, len(lines)) if lines[k].strip() == 'fi')
+    return '\n'.join(ln.strip() for ln in lines[i:j + 1])
+
+
+def test_the_locator_survives_sbatch_copying_the_script(tmp_path):
+    """sbatch COPIES the batch script to a spool dir.  Verified on this cluster
+    (job 39949056)::
+
+        BASH_SOURCE0=[/var/spool/slurmd/job39949056/slurm_script]
+        dirname=[/var/spool/slurmd/job39949056]
+
+    So `dirname $BASH_SOURCE` is the SPOOL directory and cannot be the only way
+    a job finds its own helper -- the first version of this change would have
+    failed on every pinned job.  Here the block runs from a spool stand-in with
+    only PIPE_ROOT set, which is what a hand-submitted job has, and must fall
+    back to $PIPE_ROOT/scripts/reduction.
+    """
+    spool = tmp_path / 'var' / 'spool' / 'job1'
+    spool.mkdir(parents=True)
+    block = _locator_block('submit_cataloging.sbatch')
+    r = subprocess.run(['bash', '-c', block], capture_output=True, text=True,
+                       cwd=str(spool), timeout=300,
+                       env={**{k: v for k, v in os.environ.items()
+                               if k not in ('GC_SCRIPTS_DIR', 'SLURM_SUBMIT_DIR')},
+                            'PIPE_ROOT': REPO, 'PYTHON': sys.executable})
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert 'jwst_gc_pipeline resolves to' in out, (
+        'the copied script could not locate _pipe_root.sh:\n' + out)
+    assert os.path.realpath(REPO) in out
+
+
+def test_the_locator_refuses_when_the_helper_is_unreachable(tmp_path):
+    """The other half: PIPE_ROOT set, helper genuinely unreachable.  Continuing
+    unpinned is the failure this exists to stop, so a dry fallback chain must
+    exit rather than skip."""
+    spool = tmp_path / 'spool'
+    spool.mkdir()
+    fake_root = tmp_path / 'root'
+    (fake_root / 'jwst_gc_pipeline').mkdir(parents=True)
+    (fake_root / 'jwst_gc_pipeline' / '__init__.py').write_text('')
+    # fake_root has the package but no scripts/reduction/_pipe_root.sh
+    block = _locator_block('submit_cataloging.sbatch')
+    r = subprocess.run(['bash', '-c', block], capture_output=True, text=True,
+                       cwd=str(spool), timeout=300,
+                       env={**{k: v for k, v in os.environ.items()
+                               if k not in ('GC_SCRIPTS_DIR', 'SLURM_SUBMIT_DIR')},
+                            'PIPE_ROOT': str(fake_root),
+                            'PYTHON': sys.executable})
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert 'not found -- refusing' in r.stdout + r.stderr
+
+
+def test_an_unpinned_job_does_not_refuse_when_the_helper_is_missing(tmp_path):
+    """No PIPE_ROOT means nothing to pin, so an unreachable helper is not an
+    error -- production runs must not start failing because of this change."""
+    spool = tmp_path / 'spool'
+    spool.mkdir()
+    block = _locator_block('submit_cataloging.sbatch')
+    r = subprocess.run(['bash', '-c', block], capture_output=True, text=True,
+                       cwd=str(spool), timeout=300,
+                       env={**{k: v for k, v in os.environ.items()
+                               if k not in ('GC_SCRIPTS_DIR', 'SLURM_SUBMIT_DIR',
+                                            'PIPE_ROOT')},
+                            'PYTHON': sys.executable})
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize('name', SUBMITTERS)
+def test_every_submitter_has_the_locator_block(name):
+    """All ten, or the one that lacks it silently keeps the old behaviour."""
+    assert _locator_block(name).strip(), f'{name} has no locator block'
+
+
+def test_the_driver_hands_down_the_scripts_dir():
+    """GC_SCRIPTS_DIR is the first and most direct candidate; the chain-driver
+    knows where it lives, so it should not make the job guess."""
+    src = open(os.path.join(REPO, 'scripts', 'reduction',
+                            'submit_cataloging_perframe.sh')).read()
+    assert 'export GC_SCRIPTS_DIR=' in src
+
+
 @pytest.mark.parametrize('name', SUBMITTERS)
 def test_every_submitter_routes_through_the_helper(name):
     """A submitter that hand-rolls the PYTHONPATH line reintroduces the bug in
