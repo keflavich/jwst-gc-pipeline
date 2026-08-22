@@ -31,6 +31,12 @@ FIELDS = {
     # carries a dec_ref_deg for 3958 (that key is RECORDED_BULK-only and sickle is
     # now TABLE_LOCKED).
     'sickle': (SkyCoord(266.5733, -28.8009, unit='deg'), 5 * u.arcmin, 5 * u.arcmin),
+    # cloud E/F control field (2092/o005, t002): a separate offset pointing from cloudef.
+    # Centre + extent from its own o005 F210M i2d (266.466, -28.484; 2.7 x 6.1 arcmin);
+    # 10 arcmin square is generous margin for PM propagation.  It had a gaia_virac2 refcat
+    # (positions) but no virac2 Ks cache, so stage-3 photometric calibration could not run.
+    'cloudef_controlfield': (SkyCoord(266.4658, -28.4842, unit='deg'),
+                             10 * u.arcmin, 10 * u.arcmin),
 }
 BASE = '/orange/adamginsburg/jwst'
 
