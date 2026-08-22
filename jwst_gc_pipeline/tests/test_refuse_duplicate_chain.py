@@ -26,6 +26,10 @@ import pytest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SUBMITTER = os.path.join(REPO, 'scripts', 'reduction',
                          'submit_cataloging_perframe.sh')
+M8_SUBMITTER = os.path.join(REPO, 'scripts', 'reduction',
+                            'submit_cataloging_m8.sh')
+HELPER = os.path.join(REPO, 'scripts', 'reduction',
+                      '_refuse_duplicate_chain.sh')
 
 BASE_ENV = dict(
     PROPOSAL='4147', FIELD='012', TARGET='sgrc',
@@ -162,3 +166,83 @@ def test_the_refusal_names_the_jobs_it_found(tmp_path):
     them without going hunting."""
     r = _run(tmp_path, ['sgrc4147-o012-m12-fanout'])
     assert 'sgrc4147-o012' in r.stderr
+
+
+# --------------------------------------------------------------------------
+# the m8 driver, which fans 18 jobs per field and was unguarded (#483 review)
+# --------------------------------------------------------------------------
+
+M8_ENV = dict(TARGET='wd2', PROPOSAL='3523', FIELD='005', MODULES='merged',
+              FILTERS='F115W F150W', EACH_SUFFIX='align_o005_crf')
+
+
+def _run_m8(tmp_path, queued, **over):
+    d = _fake_bin(tmp_path, queued)
+    env = {**os.environ, **M8_ENV, **over}
+    env['PATH'] = f"{d}:{env['PATH']}"
+    return subprocess.run(['bash', M8_SUBMITTER], capture_output=True,
+                          text=True, env=env, cwd=REPO, timeout=300)
+
+
+def test_a_second_m8_fan_is_refused(tmp_path):
+    """The exposure the #483 review named: 18 m8 jobs for one field with no
+    duplicate check.  Two fans write the same per-filter partials and the same
+    merge."""
+    r = _run_m8(tmp_path, ['wd23523-o005-m8-F115W', 'wd23523-o005-m8-merge'])
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert 'REFUSING' in r.stderr
+    assert not _submitted(tmp_path), 'it submitted anyway'
+
+
+def test_an_m8_fan_submits_when_the_queue_is_clear(tmp_path):
+    r = _run_m8(tmp_path, [])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _submitted(tmp_path)
+
+
+def test_an_m8_fan_is_not_blocked_by_the_fields_m7(tmp_path):
+    """Arming m8 behind a running m7 is the normal flow -- that is exactly how
+    a field is re-armed after a failed finalize.  Only a queued m8 blocks."""
+    r = _run_m8(tmp_path, ['wd23523-o005-m7-finalize',
+                           'wd23523-o005-m7-fanout'])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _submitted(tmp_path)
+
+
+def test_another_fields_m8_does_not_block(tmp_path):
+    r = _run_m8(tmp_path, ['brick1182-o004-m8-F200W'])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_m8_override_works(tmp_path):
+    r = _run_m8(tmp_path, ['wd23523-o005-m8-F115W'],
+                GC_ALLOW_DUPLICATE_CHAIN='1')
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'submitting anyway' in r.stderr
+
+
+# --------------------------------------------------------------------------
+# one implementation, not two copies
+# --------------------------------------------------------------------------
+
+def test_both_drivers_source_the_shared_helper():
+    """A second copy is how the trailing-'-' bug and the `set -e` exit-code bug
+    would come back in only one of them."""
+    for path in (SUBMITTER, M8_SUBMITTER):
+        src = open(path).read()
+        assert '_refuse_duplicate_chain.sh' in src, (
+            f'{os.path.basename(path)} does not source the shared guard')
+
+
+def test_neither_driver_hand_rolls_the_check():
+    for path in (SUBMITTER, M8_SUBMITTER):
+        src = open(path).read()
+        assert 'GC_ALLOW_DUPLICATE_CHAIN:-0' not in src, (
+            f'{os.path.basename(path)} has its own copy of the guard')
+
+
+def test_the_helper_keeps_the_trailing_dash():
+    """The bug that made 'm1' match 'm12-fanout'.  Pinned in the helper now
+    that it is the single implementation."""
+    src = open(HELPER).read()
+    assert '${_ph}-' in src, 'phase pattern lost its trailing dash'
