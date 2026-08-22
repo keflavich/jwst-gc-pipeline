@@ -178,11 +178,26 @@ def vetted_to_i2dseed(vetted_path):
 # circular import of crowdsource_catalogs_long.
 MULTIOBS_PROPOSALS = ('2211', '10678')
 
-#: The subset whose MERGED catalogs are per-observation too.  gc2211 is multi-
-#: obs at the per-frame level but pools all five pointings into one untokened
-#: merged catalog by design; at 139 tiles that pooling is itself the corruption
-#: mode, so 10678 scopes the merged catalogs to one observation as well.
-PER_OBS_MERGED_PROPOSALS = ('10678',)
+#: The subset whose MERGED catalogs are per-observation too.
+#:
+#: 10678 (gc-treasury): 139 tiles share one tree, and pooling another tile's
+#: frames into a merge is itself the corruption mode.
+#:
+#: 2211 (gc2211): its five observations are DIFFERENT targets -- different
+#: parts of the sky, observed at different times -- that happen to share a
+#: parent observation id and therefore a directory.  They were pooled into one
+#: untokened merged catalog, which this entry ends; each observation now merges
+#: to its own ``_o{field}`` catalog.  The five have since been split into
+#: separate fields (``gc2211_o023`` ... ``gc2211_o050``, #469), which is what
+#: exposed the mismatch: the per-frame writer stamps ``_o023`` while the merge
+#: still globbed by the literal target name ``'gc2211'``, matched nothing under
+#: the new name, and every m12 finalize died with::
+#:
+#:     ValueError: No tables found matching
+#:     /orange/adamginsburg/jwst/gc2211_o023//F200W/f200w_nrca...._dao_basic.fits
+#:
+#: after its 8 fan-out shards had written 192 per-frame tables (2026-08-22).
+PER_OBS_MERGED_PROPOSALS = ('10678', '2211')
 
 #: What a ``field`` may look like inside an observation token: an observation
 #: number, or several joined by ``-`` for a joint registration ('002-998').
@@ -277,11 +292,11 @@ def merged_catalog_obs_token(proposal_id, field):
     gc-treasury tree, and pooling another tile's frames into a merge is the
     corruption class the obs scoping exists to prevent, so every per-filter
     merged catalog is scoped to one observation
-    (``{filt}_{module}_o{field}_indivexp_merged...``).  gc2211 keeps its
-    all-obs UNTOKENED merged names ('' here): its five pointings are pooled at
-    merge by design (the ``_o*`` glob in ``merge_individual_frames``) and
-    scoped afterwards at the vetting step (``_vtok`` in cataloging.py).
-    Writers (``merge_individual_frames``' ``out_obs_``) and every reader of a
+    (``{filt}_{module}_o{field}_indivexp_merged...``).  2211 is here for the
+    same reason: its five pointings are five different fields, so pooling them
+    into one merged catalog mixes unrelated sky.  (They previously kept
+    UNTOKENED merged names and were scoped only afterwards, at the vetting
+    step.)  Writers (``merge_individual_frames``' ``out_obs_``) and every reader of a
     merged-catalog name (``cataloging.merged_catalog_path``, the m7 seed
     reader, ``merge_daophot``'s input glob) must agree on this token.
 
