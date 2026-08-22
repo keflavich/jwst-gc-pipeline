@@ -5137,7 +5137,34 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
             glstr = f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}{sf}{visitid}*{gm}*{sf_suffix}.fits'
             glstr_list.append(glstr)
             fglob.extend(glob.glob(glstr))
+    # Exposures excluded from the survey never reach ANY stage.  Filtered here
+    # because this is cataloging's single frame-enumeration point: everything
+    # downstream -- `frame_cache`, the per-phase `frame_args`, the fan-out
+    # shards, the merges -- reads its frames through this function, so one
+    # filter covers them all.  `drop_excluded` announces the drop; a frame
+    # vanishing silently is the failure this project has a hard rule against.
+    from jwst_gc_pipeline.reduction.exposure_exclusions import drop_excluded
+    fglob, _dropped = drop_excluded(
+        fglob, label=f'get_filenames {filtername}/{module}')
+
     if len(fglob) == 0:
+        if _dropped:
+            # EVERY frame the glob found was excluded.  That is a different
+            # thing from "the glob found nothing", and it must not be reported
+            # as one: an operator told the files are missing goes looking for a
+            # reduction that did not run, when the frames are on disk and were
+            # excluded on purpose.  It also must not pass silently under
+            # `allow_empty` -- a whole (filter, module, visit) vanishing without
+            # a word is the silent-frame-drop failure this project hard-crashes
+            # on, and `allow_empty` exists for an ABSENT visit, not an excluded
+            # one.
+            from jwst_gc_pipeline.reduction.exposure_exclusions import (
+                exclusion_reason)
+            why = exclusion_reason(_dropped[0]) or ''
+            raise ValueError(
+                f"every frame matching {glstr_list} is an EXCLUDED exposure "
+                f"({len(_dropped)} file(s)); nothing is missing from disk. "
+                f"First exclusion: {why[:200]}")
         if allow_empty:
             # Tolerated by callers sweeping a visit range (run_manual_pipeline):
             # a target's configured nvisits can exceed the visits actually

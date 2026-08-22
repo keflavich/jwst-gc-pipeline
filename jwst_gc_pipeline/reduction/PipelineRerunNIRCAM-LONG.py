@@ -192,6 +192,35 @@ def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field
         f"fields.yaml before reducing -- refusing to run first-pass off-frame.")
 
 
+def _drop_excluded_asn_members(candidate, cand_data, members):
+    """``(members, asn_path)`` with excluded exposures removed.
+
+    Writes a SIBLING file, never in place.  MAST's association is the record of
+    what was observed: rewriting it would make this read path a writer, would
+    not be idempotent, and would destroy the evidence that the exposure was ever
+    part of the product.  When nothing is excluded -- the overwhelmingly common
+    case -- the original path is returned untouched and nothing is written.
+    """
+    import json as _json
+    import os as _os
+
+    from jwst_gc_pipeline.reduction.exposure_exclusions import (
+        drop_excluded, is_excluded)
+
+    kept = [m for m in members if not is_excluded(m.get('expname', ''))]
+    if len(kept) == len(members):
+        return members, candidate
+
+    drop_excluded([m.get('expname', '') for m in members],
+                  label=f'asn {_os.path.basename(candidate)}')
+    out = candidate.replace('_asn.json', '_exclfiltered_asn.json')
+    filtered = _json.loads(_json.dumps(cand_data))   # never mutate the caller's dict
+    filtered['products'][0]['members'] = kept
+    with open(out, 'w') as fh:
+        _json.dump(filtered, fh, indent=4)
+    return kept, out
+
+
 def _module_group(module):
     if module == 'merged':
         return 'merged'
@@ -493,6 +522,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 with open(candidate) as fh:
                     cand_data = json.load(fh)
                 members = cand_data.get('products', [{}])[0].get('members', [])
+                # Excluded exposures must not reach the drizzle either.  The
+                # instruction is "all imaging AND analysis"; an exposure dropped
+                # from cataloging but still coadded into the mosaic leaves the
+                # catalog and the image disagreeing about what was observed.
+                members, candidate = _drop_excluded_asn_members(
+                    candidate, cand_data, members)
                 if members and any('nrc' in m.get('expname', '') for m in members):
                     nircam_asn_files.append(candidate)
             except (json.JSONDecodeError, KeyError, IndexError) as exc:
