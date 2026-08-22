@@ -242,3 +242,70 @@ def test_a_genuinely_absent_visit_still_returns_empty(tmp_path):
     assert get_filenames(str(tmp_path), 'F212N', '2045', '001',
                          each_suffix='destreak_o001_crf', module='nrca1',
                          visitid='009', allow_empty=True) == []
+
+
+# --------------------------------------------------------------------------
+# gc2211 observation 023: the whole observation is junk
+# --------------------------------------------------------------------------
+
+O023 = [f'jw02211023001_02201_{n:05d}' for n in (1, 2, 3, 4)]
+
+
+@pytest.mark.parametrize('stem', O023)
+def test_every_o023_exposure_is_excluded(stem):
+    """All four, not a subset.  o023's exposures were assessed on the raw _cal
+    pixels: exp4 is drawn into long curved streaks on all six detectors checked,
+    exp1 is smeared on all six, and exp2/exp3 -- the "good" pair against their
+    own siblings -- are degraded against a clean observation (o046 yields
+    ~750-980 usable isolated bright stars per detector, o023 yields 2-35)."""
+    assert ex.is_excluded(f'{stem}_nrca1_destreak_o023_crf.fits') is True
+    assert '023' in ex.exclusion_reason(f'{stem}_nrca1_destreak_o023_crf.fits')
+
+
+def test_o023_contributes_nothing_in_either_filter():
+    """One vgroup covers both of o023's filters, so the four stems remove the
+    whole observation rather than one band of it."""
+    for filt, det in (('F200W', 'nrca1'), ('F277W', 'nrcalong')):
+        for stem in O023:
+            assert ex.is_excluded(f'{stem}_{det}_destreak_o023_crf.fits'), (filt, stem)
+
+
+@pytest.mark.parametrize('stem,why', [
+    ('jw02211049001_02201_00004', 'o049 exp4: small visible defect, judged '
+                                  'recoverable at <10%'),
+    ('jw02211028001_02201_00002', 'o028 exp2: cleared by the pixels'),
+    ('jw02211046001_02201_00001', 'o046: clean throughout'),
+    ('jw02211050001_02201_00001', 'o050: not implicated'),
+])
+def test_the_sibling_observations_are_kept(stem, why):
+    """The qfit/source-count proxies flagged four exposures across the program.
+    The images supported one observation and cleared the rest -- o049 exp4 in
+    particular is round at n~750-980 stars per detector.  Excluding those would
+    lose good data to a proxy the pixels contradict."""
+    assert ex.is_excluded(f'{stem}_nrca1_destreak_crf.fits') is False, why
+
+
+def test_o023_is_flagged_in_the_field_registry():
+    """A reader of fields.yaml must not queue it without noticing."""
+    import os
+
+    import yaml
+
+    here = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(ex.__file__))))
+    raw = open(os.path.join(here, 'jwst_gc_pipeline', 'fields.yaml')).read()
+    head = raw[:raw.index('  gc2211_o023:')]
+    assert 'JUNK' in head[-900:], 'no junk warning above the gc2211_o023 entry'
+    # and it is still parseable and present -- kept, not deleted
+    doc = yaml.safe_load(raw)
+    assert 'gc2211_o023' in doc.get('fields', doc)
+
+
+def test_o023_is_flagged_in_the_alignment_registry():
+    """alignment_config is the other place someone looks before running 2211."""
+    from jwst_gc_pipeline.reduction.alignment_config import ALIGNMENT_CONFIG
+
+    notes = [e.notes for e in ALIGNMENT_CONFIG if e.proposal == '2211']
+    assert notes, 'no 2211 entry'
+    assert 'JUNK' in notes[0]
+    assert '023' in notes[0]

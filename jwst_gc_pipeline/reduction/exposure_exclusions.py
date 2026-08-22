@@ -35,6 +35,61 @@ EXCLUDED_EXPOSURES = {
         'connected components >100 px against 20-23 for its siblings, largest '
         '28,127 px). Both are consequences of the tracking failure, and neither '
         'is removable by re-reduction because both are in the ramp.'),
+
+    # gc2211 observation 023 -- the WHOLE observation.  All four exposures carry
+    # serious tracking errors (operator decision, 2026-08-22, on the raw _cal
+    # pixels).  Every exposure is listed individually because that is the unit
+    # this module excludes; the effect is that observation 023 contributes
+    # nothing to the survey.
+    #
+    # exp4 is the extreme case: bright unsaturated stars are drawn into long
+    # curved streaks several times the PSF width, on ALL SIX detectors checked
+    # (nrca1-4, nrcb1, nrcb2) -- common to the focal plane, so guiding rather
+    # than a detector effect.  exp1 is smeared on all six as well, and exp2/exp3,
+    # which read as the "good" pair against their own siblings, are themselves
+    # degraded against a clean observation: o046's stars are round and crisp at
+    # ~750-980 usable isolated bright stars per detector, where o023 yields 2-35.
+    #
+    # It was assessed by eye because three summary statistics could not tell the
+    # streaked frames from a clean control: second moments at 19x19 px read exp4
+    # 1.689 against a clean exp2 1.655 (the trails are longer than the box, so
+    # the moments truncate), the same moments at 41x41 put every exposure of
+    # every observation in 1.47-1.67 including the o046 control, and R80 read
+    # exp4 18.1 px against a control 17.5-17.7 (in a bright crowded field an
+    # 80%-enclosed radius measures the stamp, not the star).
+    #
+    # Downstream symptoms, all now explained: a ~150 mas per-exposure split
+    # (exp1 154.6, exp2 13.5, exp3 11.3, exp4 138.8 mas vs the visit consensus),
+    # consensus scatter 37.41 mas against ~1 mas for healthy fields, and an
+    # m2 checkpoint that could not write its correction because the four nrca
+    # detectors disagreed by 73.7 mas (jwst-gc-pipeline#484).
+    #
+    # NOT excluded, deliberately: gc2211 o049 exposure 4 and o028 exposure 2.
+    # Both were flagged by the same qfit/source-count proxies, and the pixels
+    # clear them -- o049 exp4 has a small visible defect judged recoverable at
+    # <10%, and its stars are round at n~750-980 per detector.  The proxies
+    # flagged four exposures across the program; the images support these four
+    # (one observation) and not those two.
+    'jw02211023001_02201_00001': (
+        'gc2211 023 exposure 1: tracking errors across the whole observation. '
+        'Excluded from all imaging and analysis (operator decision, 2026-08-22, '
+        'assessed on the raw _cal pixels -- see the block above and issue #484). '
+        'All four exposures of 023 are excluded; the observation contributes nothing.'),
+    'jw02211023001_02201_00002': (
+        'gc2211 023 exposure 2: tracking errors across the whole observation. '
+        'Excluded from all imaging and analysis (operator decision, 2026-08-22, '
+        'assessed on the raw _cal pixels -- see the block above and issue #484). '
+        'All four exposures of 023 are excluded; the observation contributes nothing.'),
+    'jw02211023001_02201_00003': (
+        'gc2211 023 exposure 3: tracking errors across the whole observation. '
+        'Excluded from all imaging and analysis (operator decision, 2026-08-22, '
+        'assessed on the raw _cal pixels -- see the block above and issue #484). '
+        'All four exposures of 023 are excluded; the observation contributes nothing.'),
+    'jw02211023001_02201_00004': (
+        'gc2211 023 exposure 4: tracking errors across the whole observation. '
+        'Excluded from all imaging and analysis (operator decision, 2026-08-22, '
+        'assessed on the raw _cal pixels -- see the block above and issue #484). '
+        'All four exposures of 023 are excluded; the observation contributes nothing.'),
 }
 
 

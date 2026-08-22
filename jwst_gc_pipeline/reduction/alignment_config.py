@@ -292,7 +292,11 @@ ALIGNMENT_CONFIG = (
         proposal='2211', fields=None,
         reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F200W',
-        notes=('gc2211. Absent from the old dispatch -> unaligned, so its '
+        notes=('gc2211. OBSERVATION 023 IS JUNK: all four of its exposures have '
+               'tracking errors and are listed in exposure_exclusions.py (#484), '
+               'so no 023 row here ever reaches a frame. 028/046/049/050 are '
+               'unaffected. '
+               'Absent from the old dispatch -> unaligned, so its '
                'Offsets_JWST_Brick2211_VIRAC2locked.csv (per-exposure, m2-written, '
                'arcsecond-scale ties) was read by nothing. Five observations '
                '(023/028/046/049/050) that all reduce to visit001 and reuse vgroup '
