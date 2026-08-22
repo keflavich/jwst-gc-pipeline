@@ -217,6 +217,18 @@ fields:
   # o028 keeps its OWN reference catalogue.  Its pointing is ~13' south of the
   # other four and falls entirely outside the shared one -- zero stars within
   # 3.6' -- so the shared file would leave its m2 with no reference at all.
+  # ###################################################################
+  # gc2211_o023 -- JUNK.  Do not queue.
+  #
+  # All four exposures carry serious tracking errors and are listed in
+  # reduction/exposure_exclusions.py, so this observation contributes NOTHING
+  # to the survey.  The entry is kept rather than deleted so the field stays
+  # named and its history readable; cataloging it now raises a distinct
+  # "everything matched was excluded" error rather than producing a thin
+  # catalog.  Assessed on the raw _cal pixels (operator decision 2026-08-22);
+  # see jwst-gc-pipeline#484.  Its sibling observations 028/046/049/050 are
+  # unaffected and are being processed normally.
+  # ###################################################################
   gc2211_o023:
     root: orange
     observations:
