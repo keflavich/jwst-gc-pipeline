@@ -2629,9 +2629,11 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
         # keep the filter list in sync with obs_filters so shared code paths
         # (sickle/sgrb2/etc.) don't KeyError on filters that aren't listed.
         radius = {# short-wave (< ~2.5 um)
+                  'f090w': 0.55*u.arcsec,
                   'f115w': 0.55*u.arcsec,
                   'f140m': 0.55*u.arcsec,
                   'f150w': 0.55*u.arcsec,
+                  'f150w2': 0.55*u.arcsec,
                   'f162m': 0.55*u.arcsec,
                   'f164n': 0.55*u.arcsec,
                   'f182m': 0.55*u.arcsec,
@@ -2640,8 +2642,10 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
                   'f210m': 0.55*u.arcsec,
                   'f212n': 0.55*u.arcsec,
                   'f277w': 0.55*u.arcsec,
+                  'f250m': 0.55*u.arcsec,
                   # long-wave (> ~2.5 um)
                   'f300m': 0.55*u.arcsec,
+                  'f322w2': 0.55*u.arcsec,
                   'f323n': 0.55*u.arcsec,
                   'f335m': 0.55*u.arcsec,
                   'f356w': 0.55*u.arcsec,
@@ -2663,7 +2667,21 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
                   'f1800w': 2.0*u.arcsec,
                   'f2100w': 2.3*u.arcsec,
                   'f2550w': 2.75*u.arcsec,
-                  }[filtername]
+                  }
+        if filtername not in radius:
+            # A bare KeyError here costs a whole m7: wd2's F250M raised one
+            # 10918 s into the finalize (job 39950409, 2026-08-22), after the
+            # per-frame fits and the satstar consolidation were already done.
+            # Say what is wrong and where to fix it.  The companion test
+            # (test_satstar_radius_covers_every_observed_filter) fails in CI for
+            # any filter in fields.yaml that is missing here, so this should
+            # only ever be reached for a filter that is not yet registered.
+            raise KeyError(
+                f"no near-saturated flagging radius for {filtername!r}. "
+                f"Add it to the radius map in merge_catalogs.flag_near_saturated "
+                f"(every NIRCam band in the project uses 0.55 arcsec; MIRI "
+                f"scales with PSF FWHM). Known: {sorted(radius)}")
+        radius = radius[filtername]
 
     satfinite = np.isfinite(satstar_coords.ra.deg) & np.isfinite(satstar_coords.dec.deg)
     catfinite = np.isfinite(cat_coords.ra.deg) & np.isfinite(cat_coords.dec.deg)
