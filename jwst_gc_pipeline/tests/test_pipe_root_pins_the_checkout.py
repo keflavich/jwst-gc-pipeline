@@ -16,6 +16,7 @@ verifies by importing and comparing paths.  The verification is the load-bearing
 part: it turns a silent wrong-code run into a refusal in the log's first lines.
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -221,3 +222,48 @@ def test_submitters_stay_syntactically_valid(name):
     path = os.path.join(REPO, 'scripts', 'reduction', name)
     r = subprocess.run(['bash', '-n', path], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+# --------------------------------------------------------------------------
+# provenance: WHICH CODE, not just which tree
+# --------------------------------------------------------------------------
+
+def test_the_report_names_the_commit(tmp_path):
+    """A path says which tree ran; it does not say which code.
+
+    Two jobs that both printed `.../jwst-gc-pipeline-wt-excl` this week ran
+    different code, because main was merged into that worktree between their
+    submissions.  Answering "did sgrc job 39941339 have the per-field floor
+    (#478)?" meant comparing its submit time against a merge time.  The commit
+    makes it one line.
+    """
+    r = _run(HELPER, {'PIPE_ROOT': REPO})
+    assert r.returncode == 0, r.stderr + r.stdout
+    m = re.search(r'resolves to \S+ @ ([0-9a-f]{7,})', r.stdout)
+    assert m, f'no commit in the report:\n{r.stdout}'
+    head = subprocess.run(['git', '-C', REPO, 'rev-parse', '--short', 'HEAD'],
+                          capture_output=True, text=True).stdout.strip()
+    assert m.group(1) == head
+
+
+def test_a_dirty_tree_says_so(tmp_path):
+    """A dirty checkout is running code that is in no commit at all, so the
+    sha alone would be misleading."""
+    r = _run(HELPER, {'PIPE_ROOT': REPO})
+    out = r.stdout
+    dirty = bool(subprocess.run(['git', '-C', REPO, 'status', '--porcelain'],
+                                capture_output=True, text=True).stdout.strip())
+    assert ('(DIRTY)' in out) == dirty, out
+
+
+def test_provenance_never_blocks_a_run(tmp_path):
+    """Reporting is not a gate.  A PIPE_ROOT that holds the package but is not
+    a git repo still runs -- refusing there would stop reductions for the sake
+    of a log line."""
+    root = tmp_path / 'notarepo'
+    (root / 'jwst_gc_pipeline').mkdir(parents=True)
+    (root / 'jwst_gc_pipeline' / '__init__.py').write_text('')
+    r = _run(HELPER, {'PIPE_ROOT': str(root)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'resolves to' in r.stdout
+    assert '@' not in r.stdout.split('resolves to')[1].split('\n')[0]
