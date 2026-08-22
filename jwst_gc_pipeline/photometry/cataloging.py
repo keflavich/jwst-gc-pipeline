@@ -76,6 +76,8 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
 import os
 import re
 from jwst_gc_pipeline.astrometry_utils import pick_refcat as _au_pick_refcat
+from jwst_gc_pipeline.photometry.m2_correction_floors import (
+    m2_correction_floor)
 import types
 import uuid
 import traceback
@@ -4324,6 +4326,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         record = run_visit_checkpoint(
             tables, merge_label, refcat=refcat, filtername=filt,
             basepath=cut_bp, context=context or f"{filt}/{module}",
+            target=getattr(options, 'target', None),
             # ngc6334's two proposals and cloudef's two obsids share a target
             # directory AND a filter list, so the per-filter consensus catalog
             # this writes needs the same disambiguator every other per-obs
@@ -4494,14 +4497,21 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # floor. Default keeps the strict 2 mas behaviour; raise deliberately via
     # ASTROM_M2_CORRECTION_FLOOR_MAS (with written justification) when the
     # residual class is known table-inexpressible.
-    floor_mas = float(os.environ.get('ASTROM_M2_CORRECTION_FLOOR_MAS', '0') or 0)
+    # Per-FIELD default (m2_correction_floors): the floor is a property of this
+    # field's own per-exposure scatter, so leaving it to an operator's memory
+    # means any run submitted without the env var dies at m12 and takes m3-m7
+    # with it.  brick paid that twice (jobs 37614271, 39884095).  An explicitly
+    # set env var still wins.
+    floor_mas, floor_source = m2_correction_floor(getattr(options, 'target', None))
     if floor_mas > 0:
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: correction "
+              f"floor {floor_mas} mas ({floor_source})", flush=True)
         actionable = _floor_actionable_corrections(
             corrections, floor_mas, f"{merge_label}] {filt}/{module}")
         if not actionable:
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS with "
                   f"{len(corrections)} sub-floor residual(s) "
-                  f"(< {floor_mas} mas; ASTROM_M2_CORRECTION_FLOOR_MAS) -- "
+                  f"(< {floor_mas} mas; floor source={floor_source}) -- "
                   f"recorded in {record.get('record_path')}, not actionable in "
                   f"the module-locked offsets table", flush=True)
             return
