@@ -53,6 +53,8 @@ ladder.  Nothing here ever edits ``_cal.fits`` or pokes a mosaic GWCS.
 import glob
 import json
 import os
+from jwst_gc_pipeline.photometry.m2_correction_floors import (
+    m2_correction_floor)
 import re
 from datetime import datetime, timezone
 
@@ -95,6 +97,19 @@ REFERENCE_APPLY_MIN_MAS = 2.0
 #: the floor is for per-detector terms the offsets table cannot express, and a
 #: rigid whole-visit shift is not one of those.
 REFERENCE_TIE_SOURCE_SUFFIX = 'consensus->reference'
+
+
+def _target_from_basepath(basepath):
+    """Field name from a basepath, for callers that do not pass ``target``.
+
+    Every field's products live under ``<root>/jwst/<field>/``, so the leaf
+    directory IS the target (``brick``, ``gc2211_o023``,
+    ``cloudef_controlfield``).  Returns None for an unusable basepath, which
+    lands on the strict 0 mas default -- the safe direction.
+    """
+    if not basepath:
+        return None
+    return os.path.basename(os.path.normpath(str(basepath))) or None
 
 # Late-stage (m3+) stability tolerance: the astrometric solution must not move.
 STAGE_STABILITY_TOL_MAS = 2.0
@@ -3184,7 +3199,7 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
 
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
-                         consensus_kwargs=None, obs_token=""):
+                         consensus_kwargs=None, obs_token="", target=None):
     """Run the per-(visit, filter) consensus checkpoint over per-frame catalogs.
 
     Parameters
@@ -3789,6 +3804,11 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     # is None elsewhere rather than a misleading `used: false`.
     gate_override = (gate_override_state("ALLOW_LATE_STAGE_ASTROM_SHIFT")
                      if failures and not correcting else None)
+    # Floor is a per-FIELD property (m2_correction_floors); record both the
+    # value and WHERE it came from, so a pass at the field's standing floor
+    # is distinguishable from one where an operator raised it by hand.
+    _floor_mas, _floor_source = m2_correction_floor(
+        target if target is not None else _target_from_basepath(basepath))
     record = dict(stage=stage, filtername=filtername, context=context,
                   consensus_catalog=consensus_catalog_path,
                   consensus_catalog_error=consensus_catalog_error,
@@ -3807,8 +3827,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                       # raised is indistinguishable from a clean one, and the
                       # sole trace is one line in a SLURM log.  The re-tie loop
                       # now raises it automatically, which makes that worse.
-                      correction_floor_mas=float(os.environ.get(
-                          'ASTROM_M2_CORRECTION_FLOOR_MAS', '0') or 0)))
+                      correction_floor_mas=_floor_mas,
+                      correction_floor_source=_floor_source))
     if record_dir:
         _write_record(record_dir, _record_name(stage, filtername, obs_token),
                       record)
