@@ -38,13 +38,15 @@ def _options(field='001', proposal_id='10678', target='gc-treasury'):
 # the merged-catalog token: per-obs for 10678 ONLY
 # ---------------------------------------------------------------------------
 
-def test_merged_catalog_token_is_per_obs_for_treasury_only():
-    """gc2211 pools its five pointings into one UNTOKENED merged catalog by
-    design; at 139 tiles that pooling is itself the corruption mode, so 10678
-    scopes the merged names too."""
+def test_merged_catalog_token_is_per_obs_for_treasury_and_gc2211():
+    """10678's 139 tiles share one tree, so pooling another tile's frames is
+    the corruption mode.  2211 joined for the same reason: its five pointings
+    are five DIFFERENT targets that merely share a parent observation id, so
+    pooling them mixes unrelated sky.  They used to merge untokened."""
     assert naming.merged_catalog_obs_token('10678', '001') == '_o001'
     assert naming.merged_catalog_obs_token('10678', '002') == '_o002'
-    assert naming.merged_catalog_obs_token('2211', '023') == ''
+    assert naming.merged_catalog_obs_token('2211', '023') == '_o023'
+    assert naming.merged_catalog_obs_token('2211', '050') == '_o050'
     assert naming.merged_catalog_obs_token('2221', '001') == ''
     assert naming.merged_catalog_obs_token('10678', None) == ''
     assert naming.merged_catalog_obs_token('10678', '') == ''
@@ -54,7 +56,8 @@ def test_treasury_is_a_multiobs_proposal():
     assert '10678' in naming.MULTIOBS_PROPOSALS
     assert '10678' in naming.PER_OBS_MERGED_PROPOSALS
     assert '2211' in naming.MULTIOBS_PROPOSALS
-    assert '2211' not in naming.PER_OBS_MERGED_PROPOSALS
+    # 2211 is per-obs-merged now: its five pointings are separate fields.
+    assert '2211' in naming.PER_OBS_MERGED_PROPOSALS
 
 
 # ---------------------------------------------------------------------------
@@ -135,32 +138,56 @@ def test_treasury_merge_without_field_is_refused(tmp_path):
             do_replace_saturated=False)
 
 
-def test_gc2211_all_obs_pooling_is_unchanged(tmp_path, monkeypatch):
-    """The field-less gc2211 merge keeps its design: pool EVERY obs (_o* glob)
-    into the untokened all-obs merged catalog."""
+def _write_gc2211_frames(tmp_path):
+    """One m2 per-frame table for each of two gc2211 pointings."""
     (tmp_path / 'catalogs').mkdir()
     (tmp_path / 'F480M').mkdir()
     for f in ('023', '046'):
         fn = _predict_tblfilename(
-            str(tmp_path), 'F480M', 'nrcblong', _options(f, '2211', 'gc2211'),
+            str(tmp_path), 'F480M', 'nrcblong',
+            _options(f, '2211', f'gc2211_o{f}'),
             1, '02101', 1, iteration_label='m2', method='daophot',
             basic_or_iterative='basic')
         t = Table({'flux_fit': [1.0]})
         t.meta['FILENAME'] = (f'/x/jw02211{f}001_02101_00001_nrcblong'
                               f'_align_o{f}_crf.fits')
         t.write(fn)
+
+
+def test_a_gc2211_merge_pools_only_its_own_observation(tmp_path, monkeypatch):
+    """The five pointings are five different fields, so a merge sees ONE.
+
+    This used to pool every observation into an untokened all-obs catalog.
+    Two pointings' frames are on disk; the o023 merge must take only o023's.
+    """
+    _write_gc2211_frames(tmp_path)
     seen = []
     monkeypatch.setattr(MC, 'combine_singleframe', _stub_combine(seen))
     MC.merge_individual_frames(
-        module='nrcblong', filtername='f480m', progid='2211',
-        method='dao', suffix='_basic', target='gc2211',
+        module='nrcblong', filtername='f480m', progid='2211', field='023',
+        method='dao', suffix='_basic', target='gc2211_o023',
         basepath=str(tmp_path), iteration_label='m2',
         do_replace_saturated=False)
     assert seen[-1] == [
-        '/x/jw02211023001_02101_00001_nrcblong_align_o023_crf.fits',
-        '/x/jw02211046001_02101_00001_nrcblong_align_o046_crf.fits']
+        '/x/jw02211023001_02101_00001_nrcblong_align_o023_crf.fits'], (
+        'the merge reached another pointing')
     assert (tmp_path / 'catalogs' /
-            'f480m_nrcblong_indivexp_merged_m2_dao_basic.fits').exists()
+            'f480m_nrcblong_o023_indivexp_merged_m2_dao_basic.fits').exists()
+    # and the old untokened all-obs name is NOT written
+    assert not (tmp_path / 'catalogs' /
+                'f480m_nrcblong_indivexp_merged_m2_dao_basic.fits').exists()
+
+
+def test_a_field_less_gc2211_merge_refuses(tmp_path, monkeypatch):
+    """Pooling is unreachable now, not merely unused."""
+    _write_gc2211_frames(tmp_path)
+    monkeypatch.setattr(MC, 'combine_singleframe', _stub_combine([]))
+    with pytest.raises(ValueError, match='pass field'):
+        MC.merge_individual_frames(
+            module='nrcblong', filtername='f480m', progid='2211',
+            method='dao', suffix='_basic', target='gc2211_o023',
+            basepath=str(tmp_path), iteration_label='m2',
+            do_replace_saturated=False)
 
 
 # ---------------------------------------------------------------------------
@@ -203,17 +230,18 @@ def test_m7_seed_does_not_pool_another_tiles_m6(tmp_path):
                               ['F212N', 'F480M'], _options('002'))
 
 
-def test_m7_seed_still_reads_gc2211s_end_token_spelling(tmp_path):
-    """gc2211's vetted names carry the token at the END
-    (``..._m6_dao_basic_o023_vetted.fits``); the 10678 module-slot change must
-    not regress that reader."""
+def test_m7_seed_reads_gc2211s_module_slot_token(tmp_path):
+    """gc2211's token moved from the END slot to the MODULE slot when 2211
+    became a per-obs-MERGED proposal: the merged name already carries
+    ``_o023`` after the module and the vetted name inherits it, so an end-slot
+    token would double it.  Same spelling as 10678 now."""
     from jwst_gc_pipeline.photometry.cataloging import _build_crossband_seed
     (tmp_path / 'catalogs').mkdir()
     for filt in ('f212n', 'f480m'):
-        _write_m6_vetted(tmp_path, filt, endtok='_o023')
+        _write_m6_vetted(tmp_path, filt, modtok='_o023')
     out = _build_crossband_seed(str(tmp_path), ['nrcblong'],
                                 ['F212N', 'F480M'],
-                                _options('023', '2211', 'gc2211'))
+                                _options('023', '2211', 'gc2211_o023'))
     assert len(Table.read(out)) == 1
 
 
@@ -690,7 +718,9 @@ def test_an_unpadded_field_is_normalised_to_the_spelling_readers_expect():
     # 10678: the module slot carries the token, so the END slot must not
     ('10678', '001', 'f212n', 'nrcblong', ('', '')),
     # gc2211: vetted AND combined are per-pointing
-    ('2211', '023', 'f200w', 'nrcb', ('_o023', '_o023')),
+    # 2211 is per-obs-MERGED now, so its token lives in the module slot and
+    # the end slot stays empty -- carrying both would double it.
+    ('2211', '023', 'f200w', 'nrcb', ('', '')),
     # MIRI multi-obs (cloudef): vetted per obs, combined pooled
     ('2092', '005', 'f770w', 'mirimage', ('_o005', '')),
     # single-obs NIRCam: neither
@@ -710,16 +740,17 @@ def test_vetted_and_combined_obs_tokens(proposal, field, filt, module,
 
 
 def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
-    """gc2211 pools its five pointings into one merged catalog by design; a
-    field would scope that away."""
+    """Both per-obs-merged proposals scope the merge to one observation; every
+    other proposal passes None and keeps its pooled names."""
     assert naming.merge_field_for_proposal('10678', '001') == '001'
-    assert naming.merge_field_for_proposal('2211', '023') is None
+    assert naming.merge_field_for_proposal('2211', '023') == '023'
     assert naming.merge_field_for_proposal('2221', '001') is None
     # a field-less call on a per-obs-merged proposal names no observation, and
     # is refused where the observation is decided rather than inside the merge
     with pytest.raises(naming.ObservationFieldError):
         naming.merge_field_for_proposal('10678', None)
-    assert naming.merge_field_for_proposal('2211', None) is None
+    with pytest.raises(naming.ObservationFieldError):
+        naming.merge_field_for_proposal('2211', None)
 
 
 @pytest.mark.parametrize('proposal, field, module_slot', [
@@ -727,7 +758,7 @@ def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
     ('10678', '139', 'nrcblong_o139'),
     ('7213', '001', 'nrcblong_j7213'),
     ('6778', '001', 'nrcblong_j6778'),
-    ('2211', '023', 'nrcblong'),
+    ('2211', '023', 'nrcblong_o023'),
     ('2221', '001', 'nrcblong'),
 ])
 def test_merged_catalog_path_spells_the_module_slot_token(proposal, field,
@@ -853,12 +884,15 @@ def test_the_manual_merge_hands_the_merge_this_runs_observation():
                                  method='dao', suffix='_basic')
     assert rec.fields == ['001']
     assert rec.calls[0]['progid'] == '10678'
-    # every other proposal keeps its merged names: gc2211 pools its five
-    # pointings, and a field would scope that away
+    # 2211 is per-obs-merged too: each pointing is its own field
     rec = _RecordingMerge()
     merge_frames_for_observation('2211', '023', merge=rec, module='nrcb')
-    assert rec.fields == [None]
+    assert rec.fields == ['023']
     assert rec.calls[0]['progid'] == '2211'
+    # a single-obs proposal still passes None and keeps its pooled names
+    rec = _RecordingMerge()
+    merge_frames_for_observation('2221', '001', merge=rec, module='nrcb')
+    assert rec.fields == [None]
 
 
 def test_a_treasury_merge_with_no_field_raises_before_it_reaches_the_merge():
@@ -895,9 +929,15 @@ def test_the_cutout_merge_passes_the_resolved_field_to_every_method():
     assert [c['method'] for c in rec.calls] == ['dao']
 
 
-def test_the_cutout_merge_keeps_every_other_proposals_pooled_names():
+def test_the_cutout_merge_scopes_a_gc2211_cutout_to_its_observation():
     rec = _RecordingMerge()
     _run_cutout_merge(rec, proposal_id='2211', field='023')
+    assert rec.fields == ['023', '023']
+
+
+def test_the_cutout_merge_keeps_every_other_proposals_pooled_names():
+    rec = _RecordingMerge()
+    _run_cutout_merge(rec, proposal_id='2221', field='001')
     assert rec.fields == [None, None]
 
 

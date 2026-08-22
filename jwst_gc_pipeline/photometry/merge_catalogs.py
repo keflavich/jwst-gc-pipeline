@@ -1497,8 +1497,15 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         glob_obs_ = out_obs_ = f'_j{progid}'
     elif field not in (None, ''):
         glob_obs_, out_obs_ = f'_o{field}', f'_o{field}'
-    elif target == 'gc2211':
-        glob_obs_, out_obs_ = '_o*', ''
+    # (There was a `target == 'gc2211'` branch here that globbed `_o*` and wrote
+    # an UNTOKENED merged catalog -- i.e. pooled all five pointings into one.
+    # 2211 is a PER_OBS_MERGED_PROPOSAL now, so a field-less 2211 merge raises
+    # above and a field-scoped one takes the `_o{field}` branch: the pooling
+    # branch became unreachable.  It also keyed off the literal target name,
+    # which the per-observation split (#469) changed to `gc2211_o023`.., so it
+    # had already stopped matching -- silently, into the `else` below, which
+    # globs with no obs token at all and finds none of the `_o023`-stamped
+    # per-frame tables.)
     else:
         glob_obs_, out_obs_ = '', ''
     raw_fns = []
@@ -1846,11 +1853,15 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # basic; the daoiterative filename is ``_daoiterative_iterative.fits``.
     method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
 
-    # Per-obs token for gc2211 (prop 2211): the per-filter vetted inputs AND the
-    # cross-band output catalog are per-obs (each gc2211 obs is a distinct target).
-    # Empty for other targets.  MUST match _vtok/_combsuf in cataloging.py and
-    # obs_token() in crowdsource_catalogs_long.
-    _obssuf = f'_o{field}' if (target == 'gc2211' and field not in (None, '')) else ''
+    # End-slot per-obs token.  This used to test `target == 'gc2211'`, which the
+    # per-observation split (#469) broke by renaming the targets to
+    # `gc2211_o023`..; 2211 is a PER_OBS_MERGED_PROPOSAL now, so the block below
+    # supplies the token from the RUNNING PROPOSAL and overrides this.  Keying
+    # off the proposal rather than a target spelling is what keeps it working
+    # when a field is renamed or split.
+    # MUST match _vtok/_combsuf in cataloging.py and obs_token() in
+    # crowdsource_catalogs_long.
+    _obssuf = ''
     # Per-obs-MERGED proposals (10678/gc-treasury) place the obs token after the
     # module instead: the per-filter merged/vetted inputs are
     # ``{filt}_{module}_o{field}_indivexp_merged..._vetted.fits`` (see
