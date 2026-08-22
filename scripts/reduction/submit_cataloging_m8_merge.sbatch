@@ -55,8 +55,11 @@ if [ ! -f "$MERGE_PY" ]; then
     exit 66
 fi
 
-[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
-    JobName="${TARGET}-catalog-m8merge" 2>/dev/null || true
+# See submit_cataloging_m8_partial.sbatch: only rename a bare submission.
+if [ "${SLURM_JOB_NAME:-catalog_m8merge}" = "catalog_m8merge" ] && [ -n "${SLURM_JOB_ID:-}" ]; then
+    scontrol update JobId="$SLURM_JOB_ID" \
+        JobName="${TARGET}${PROPOSAL}-o${FIELD}-m8-merge" 2>/dev/null || true
+fi
 
 FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')
 M7_ARG=""

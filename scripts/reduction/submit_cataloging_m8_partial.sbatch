@@ -84,8 +84,15 @@ elif [ -n "${PIPE_ROOT:-}" ]; then
 fi
 PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 
-[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
-    JobName="${TARGET}-catalog-m8p-${FILT}" 2>/dev/null || true
+# Rename ONLY when submitted bare, i.e. the name is still the #SBATCH
+# placeholder.  submit_cataloging_m8.sh passes a proper submit-time
+# --job-name; overwriting it here would DEGRADE it (the runtime form
+# carries no program and no obsid) and would only fire once the job
+# starts, long after the pending queue was read.
+if [ "${SLURM_JOB_NAME:-catalog_m8p}" = "catalog_m8p" ] && [ -n "${SLURM_JOB_ID:-}" ]; then
+    scontrol update JobId="$SLURM_JOB_ID" \
+        JobName="${TARGET}${PROPOSAL}-o${FIELD}-m8-${FILT}" 2>/dev/null || true
+fi
 
 echo "NODE=$(hostname) nproc=$(nproc) FILT=$FILT SUFFIX=$SUFFIX start=$(date -u +%FT%TZ)"
 "$PY" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
