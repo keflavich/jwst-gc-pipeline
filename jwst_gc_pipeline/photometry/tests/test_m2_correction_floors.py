@@ -25,12 +25,13 @@ from jwst_gc_pipeline.photometry.m2_correction_floors import (
 def test_a_registered_field_gets_its_own_floor():
     assert m2_correction_floor('brick', env={}) == (4.0, 'per-field')
     assert m2_correction_floor('cloudc', env={}) == (8.0, 'per-field')
+    assert m2_correction_floor('sgra', env={}) == (4.0, 'per-field')
 
 
 def test_an_unregistered_field_keeps_the_strict_default():
     """Absent means strict, never lenient: a field nobody has measured must not
     inherit somebody else's tolerance."""
-    for target in ('sgra', 'gc2211_o023', 'w51', 'arches', 'quintuplet'):
+    for target in ('gc2211_o023', 'w51', 'arches', 'quintuplet'):
         assert m2_correction_floor(target, env={}) == (0.0, 'default'), target
 
 
@@ -150,3 +151,19 @@ def test_basepath_fallback_recovers_the_field(basepath, expect):
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         _target_from_basepath)
     assert _target_from_basepath(basepath) == expect
+
+
+def test_sgra_has_a_floor_matching_its_own_scatter():
+    """sgra was in the unregistered list until 2026-08-22, when its m12 finalize
+    stopped twice (jobs 39933168, 39972201) on a single 2.08 mas correction
+    against a consensus scatter of 1.84 mas over 96 measurements -- credible
+    (contrast 976, rank 77/96), but the same size as the field's own noise, so
+    not a displacement the module-locked table should express.
+
+    4.0 matches brick, whose scatter is 2.27 mas.  The entry has to clear the
+    2 mas checkpoint tolerance to change anything, and stay far below the ~90 mas
+    seams the checkpoint exists to catch; the table-wide bounds test covers both.
+    """
+    floor, source = m2_correction_floor('sgra', env={})
+    assert source == 'per-field'
+    assert floor == 4.0
