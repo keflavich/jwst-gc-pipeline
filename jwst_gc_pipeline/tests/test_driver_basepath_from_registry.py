@@ -108,7 +108,10 @@ EXPECTED_ROOTS = {
     'cloudef': 'orange',
     # 2092 obs 005 (CLOUDEF-REFERENCE), split out of cloudef because it is a
     # control field 11.77' away sharing no sources with CLOUDEF-CENTER.
-    'cloudef_controlfield': 'orange', 'gc-treasury': 'blue', 'gc2211': 'orange',
+    'cloudef_controlfield': 'orange', 'gc-treasury': 'blue',
+    # gc2211 split into one field per observation, 2026-08-21
+    'gc2211_o023': 'orange', 'gc2211_o028': 'orange', 'gc2211_o046': 'orange',
+    'gc2211_o049': 'orange', 'gc2211_o050': 'orange',
     'm4': 'orange', 'm92': 'orange',
     'ngc6334': 'orange', 'ngc6397': 'orange', 'omegacen': 'orange',
     'quintuplet': 'orange', 'sgra': 'orange', 'sgrb2': 'orange',

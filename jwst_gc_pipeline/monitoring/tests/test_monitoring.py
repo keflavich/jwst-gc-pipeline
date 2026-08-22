@@ -19,7 +19,7 @@ from jwst_gc_pipeline.monitoring import checks, jobs, probe, render, scan
 # Job-name parsing
 # --------------------------------------------------------------------------
 
-TARGETS = ('sgrb2', 'sgrb', 'brick', 'gc2211', 'wd1', 'wd2', 'm4', 'm92', 'w51',
+TARGETS = ('sgrb2', 'sgrb', 'brick', 'gc2211_o046', 'wd1', 'wd2', 'm4', 'm92', 'w51',
            'arches', 'quintuplet', 'ngc6334')
 
 
@@ -28,7 +28,7 @@ TARGETS = ('sgrb2', 'sgrb', 'brick', 'gc2211', 'wd1', 'wd2', 'm4', 'm92', 'w51',
     # 'sgrb25365' is sgrb2+5365, NOT sgrb+25365, and both are registered names.
     ('sgrb25365-o001-m12-finalize', 'sgrb2', '5365', '001', 'm12'),
     ('brick2221-o001-m12-fanout', 'brick', '2221', '001', 'm12'),
-    ('gc22112211-o046-cat-F200W', 'gc2211', '2211', '046', 'cat'),
+    ('gc2211_o0462211-o046-cat-F200W', 'gc2211_o046', '2211', '046', 'cat'),
     ('wd11905-o001-cat', 'wd1', '1905', '001', 'cat'),
     ('m921334-o001-cat', 'm92', '1334', '001', 'cat'),
     ('arches-001-m12-fanout', 'arches', None, '001', 'm12'),
@@ -68,9 +68,9 @@ def test_log_job_name():
 
 def test_log_belongs_to_respects_observation():
     """An o050 crash must not be reported against o023: they share only the field."""
-    log = 'catalog_gc22112211-o050-m3-fanout_38263470_0.out'
-    assert jobs.log_belongs_to(log, 'gc2211', '050')
-    assert not jobs.log_belongs_to(log, 'gc2211', '023')
+    log = 'catalog_gc2211_o0502211-o050-m3-fanout_38263470_0.out'
+    assert jobs.log_belongs_to(log, 'gc2211_o050', '050')
+    assert not jobs.log_belongs_to(log, 'gc2211_o050', '023')
     assert not jobs.log_belongs_to(log, 'brick', None)
     # a name that carries no observation is field-level, shown for every obs
     assert jobs.log_belongs_to('catalog_w51-catalog_1.out', 'w51', '001')
@@ -295,9 +295,16 @@ def test_i2d_row_excludes_per_exposure_outlier_products(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_shared_filters_expands_multiple_obsids_of_one_proposal():
-    """gc2211's five observations sit under ONE registry entry sharing a filter
-    list, so every one of its filters is ambiguous."""
-    assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+    """sgrb2's three MIRI obsids share one tree and one filter list, so its MIRI
+    bands are ambiguous.
+
+    gc2211 used to be the example here -- five observations under one registry
+    entry -- until they were split into a field each (2026-08-21).  Each side
+    now has ONE obsid and nothing is shared, which is asserted below.
+    """
+    assert scan.shared_filters('sgrb2', 'miri') == {'F770W', 'F1280W', 'F2550W'}
+    for o in ('023', '028', '046', '049', '050'):
+        assert scan.shared_filters(f'gc2211_o{o}') == set(), o
 
 
 def test_shared_filters_finds_the_ngc6334_cross_proposal_collision():
@@ -1217,7 +1224,9 @@ def test_unglobbed_observation_cannot_make_a_filter_ambiguous():
     assert scan.shared_filters('wd1') == set()
     # the genuinely shared cases still fire
     assert scan.shared_filters('ngc6334') == {'F200W', 'F470N'}
-    assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+    # gc2211's five observations became five fields on 2026-08-21, one obsid
+    # each, so none of their filters is shared any more.
+    assert scan.shared_filters('gc2211_o046') == set()
 
 
 def test_a_wildcard_field_is_reported_as_multi_observation():
@@ -1250,7 +1259,8 @@ def test_every_filter_of_a_wildcard_field_is_ambiguous():
     # every other field reports what it did before
     assert scan.shared_filters('wd1') == set()
     assert scan.shared_filters('brick') == set()
-    assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+    assert scan.shared_filters('gc2211_o046') == set()
+    assert scan.shared_filters('gc2211_o028') == set()
     # cloudef's four NIRCam bands were shared while obs 002 and 005 sat under
     # one field: both wrote `f162m_*_indivexp_merged_*` into one tree and the
     # name could not say which.  The split (obs 005 -> `cloudef_controlfield`,
