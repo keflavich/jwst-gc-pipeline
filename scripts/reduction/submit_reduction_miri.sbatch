@@ -73,7 +73,7 @@ PIPE_ROOT=${PIPE_ROOT:-}
 if [ -n "$PIPE_ROOT" ]; then
     # ${PYTHONPATH:+:...} so an unset PYTHONPATH leaves no trailing
     # colon, which would put the cwd on sys.path.
-    export PYTHONPATH="$PIPE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+    . "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
     PIPE="$PIPE_ROOT/jwst_gc_pipeline/reduction/PipelineMIRI.py"
 else
     PIPE="$(python -c 'import os,jwst_gc_pipeline as p; print(os.path.join(os.path.dirname(p.__file__),"reduction","PipelineMIRI.py"))')"

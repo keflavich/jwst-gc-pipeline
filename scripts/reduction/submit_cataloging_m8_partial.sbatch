@@ -68,7 +68,7 @@ GROUP_MIN_SEP=${GROUP_MIN_SEP:-3.0}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
 PIPE_ROOT=${PIPE_ROOT:-}
-[ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
 PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 
 [ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \

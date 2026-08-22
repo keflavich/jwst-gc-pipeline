@@ -150,7 +150,7 @@ FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 # use the pip-installed package location.
 PIPE_ROOT=${PIPE_ROOT:-}
 if [ -n "$PIPE_ROOT" ]; then
-    export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+    . "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
     PIPE="$PIPE_ROOT/jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py"
 else
     PIPE="$(python -c 'import os,jwst_gc_pipeline as p; print(os.path.join(os.path.dirname(p.__file__),"reduction","PipelineRerunNIRCAM-LONG.py"))')"

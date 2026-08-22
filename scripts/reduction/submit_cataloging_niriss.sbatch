@@ -70,7 +70,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-}
 
 # Pin this worktree/branch (NIRISS support is not yet on main).
 PIPE_ROOT=${PIPE_ROOT:-/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-niriss}
-[ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
 
 read -r -a FILT_ARR <<< "$FILTERS"
 IDX=${SLURM_ARRAY_TASK_ID:-0}

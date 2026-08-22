@@ -25,7 +25,7 @@ M7=${M7:-}
 MERGE_EXTRA=${MERGE_EXTRA:-}
 
 PIPE_ROOT=${PIPE_ROOT:-}
-[ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
 PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 # Locate m8_merge_partials.py robustly.  Under `sbatch` SLURM copies the batch
 # script to a spool dir, so ${BASH_SOURCE[0]} points there and $HERE/<sibling>.py

@@ -64,7 +64,7 @@ SKYMATCH=${SKYMATCH:-match}
 # Pin to this worktree/branch by default (the NIRISS pipeline is not yet on main).
 PIPE_ROOT=${PIPE_ROOT:-/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-niriss}
 if [ -n "$PIPE_ROOT" ]; then
-    export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+    . "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
     PIPE="$PIPE_ROOT/jwst_gc_pipeline/reduction/PipelineRerunNIRISS.py"
 else
     PIPE="$(python -c 'import os,jwst_gc_pipeline as p; print(os.path.join(os.path.dirname(p.__file__),"reduction","PipelineRerunNIRISS.py"))')"

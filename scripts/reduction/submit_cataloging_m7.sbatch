@@ -99,7 +99,7 @@ DEBLEND_ARG=""
 [ -n "$DEBLEND_SATSTARS" ] && DEBLEND_ARG="--deblend-satstars"
 
 PIPE_ROOT=${PIPE_ROOT:-}
-[ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
 
 # crowdsource_catalogs_long takes a comma-separated filter list.
 FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')

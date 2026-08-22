@@ -95,7 +95,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-}
 
 # Pin a worktree/branch (this feature is new -> usually needed until merged).
 PIPE_ROOT=${PIPE_ROOT:-}
-[ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
 
 # crowdsource_catalogs_long wants a comma-separated filter list.
 FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')

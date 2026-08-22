@@ -74,7 +74,7 @@ MERGE_WORKERS=${MERGE_WORKERS:-4}
 MERGE_EXTRA=${MERGE_EXTRA:-}
 
 PIPE_ROOT=${PIPE_ROOT:-}
-[ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
 PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 
 SINGLE_ARG=""

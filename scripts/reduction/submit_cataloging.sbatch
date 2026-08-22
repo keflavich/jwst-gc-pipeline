@@ -95,7 +95,7 @@ FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 
 # Pin a worktree/branch by setting PIPE_ROOT (prepends to PYTHONPATH).
 PIPE_ROOT=${PIPE_ROOT:-}
-[ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/_pipe_root.sh"
 
 # --max-group-size caps overlap-group size so the joint LevMar PSF fit cost
 # (~cubic in group size) cannot blow up in dense/wide-PSF fields.  LW filters
