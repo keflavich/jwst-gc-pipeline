@@ -202,3 +202,43 @@ def test_the_quarantine_receipt_matches_the_entry():
 def glob_receipts(base):
     import glob
     return glob.glob(os.path.join(base, '_EXCLUDED_exposure4_*.json'))
+
+
+def test_a_filter_emptied_BY_EXCLUSION_is_not_reported_as_missing(tmp_path):
+    """"Nothing matched" and "everything matched was excluded" are different
+    facts and must not share a message.
+
+    An operator told the frames are missing goes looking for a reduction that
+    did not run; the frames are on disk and were excluded on purpose.  It must
+    also not pass quietly under `allow_empty`, which exists for an ABSENT visit
+    -- a whole (filter, module, visit) disappearing without a word is the
+    silent-frame-drop failure this project hard-crashes on.
+    """
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import get_filenames
+
+    d = tmp_path / 'F212N' / 'pipeline'
+    d.mkdir(parents=True)
+    # the ONLY frames present are the excluded exposure's
+    for det in ('nrca1', 'nrca2'):
+        (d / f'jw02045001001_02101_00004_{det}_destreak_o001_crf.fits').write_bytes(b'')
+
+    for allow in (False, True):
+        with pytest.raises(ValueError) as ex:
+            get_filenames(str(tmp_path), 'F212N', '2045', '001',
+                          each_suffix='destreak_o001_crf', module='nrca1',
+                          visitid='001', allow_empty=allow)
+        msg = str(ex.value)
+        assert 'EXCLUDED' in msg, msg
+        assert 'nothing is missing from disk' in msg, msg
+        assert 'tracking' in msg.lower(), msg
+
+
+def test_a_genuinely_absent_visit_still_returns_empty(tmp_path):
+    """The `allow_empty` path is unchanged for its real case: a visit that was
+    never observed contributes zero frames rather than crashing a sweep."""
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import get_filenames
+
+    (tmp_path / 'F212N' / 'pipeline').mkdir(parents=True)
+    assert get_filenames(str(tmp_path), 'F212N', '2045', '001',
+                         each_suffix='destreak_o001_crf', module='nrca1',
+                         visitid='009', allow_empty=True) == []

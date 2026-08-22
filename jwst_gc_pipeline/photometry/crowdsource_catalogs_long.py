@@ -5148,6 +5148,23 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
         fglob, label=f'get_filenames {filtername}/{module}')
 
     if len(fglob) == 0:
+        if _dropped:
+            # EVERY frame the glob found was excluded.  That is a different
+            # thing from "the glob found nothing", and it must not be reported
+            # as one: an operator told the files are missing goes looking for a
+            # reduction that did not run, when the frames are on disk and were
+            # excluded on purpose.  It also must not pass silently under
+            # `allow_empty` -- a whole (filter, module, visit) vanishing without
+            # a word is the silent-frame-drop failure this project hard-crashes
+            # on, and `allow_empty` exists for an ABSENT visit, not an excluded
+            # one.
+            from jwst_gc_pipeline.reduction.exposure_exclusions import (
+                exclusion_reason)
+            why = exclusion_reason(_dropped[0]) or ''
+            raise ValueError(
+                f"every frame matching {glstr_list} is an EXCLUDED exposure "
+                f"({len(_dropped)} file(s)); nothing is missing from disk. "
+                f"First exclusion: {why[:200]}")
         if allow_empty:
             # Tolerated by callers sweeping a visit range (run_manual_pipeline):
             # a target's configured nvisits can exceed the visits actually
