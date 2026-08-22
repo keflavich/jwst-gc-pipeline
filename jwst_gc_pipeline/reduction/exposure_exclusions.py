@@ -87,39 +87,27 @@ def drop_excluded(paths, label=''):
     return kept, dropped
 
 
-def _excluded_visit_keys():
-    """``{(visit, vgroup, exposure)}`` of the excluded exposures.
-
-    The PER-EXPOSURE CATALOG names are built differently from the frames --
-    ``f212n_nrca1_visit001_vgroup02101_exp00004_m2_daophot_basic.fits`` carries
-    visit / vgroup / exposure / detector but NOT proposal or observation -- so
-    the frame stem cannot match them.  Within one field's directory the triple
-    is unique, which is enough.
-    """
-    import re
-    out = set()
-    for stem in EXCLUDED_EXPOSURES:
-        m = re.match(r'jw\d{5}\d{3}(\d{3})_([0-9a-z]{5})_(\d{5})$', stem)
-        if m:
-            out.add(m.groups())
-    return out
-
-
-def is_excluded_catalog_name(path):
-    """Is this a PER-EXPOSURE CATALOG of an excluded exposure?
-
-    Needed because the exclusion has to survive on disk: arches exposure 4 has
-    catalogs through m7 written before it was excluded, and a merge globbing
-    ``*_exp*_m*_daophot_basic.fits`` would ingest them.
-    """
-    import os
-    import re
-
-    m = re.search(r'_visit(\d{3})_vgroup([0-9a-z]{5})_exp(\d{5})_',
-                  os.path.basename(str(path)))
-    return bool(m) and m.groups() in _excluded_visit_keys()
-
-
-def is_excluded_any(path):
-    """Either spelling: a frame/product stem, or a per-exposure catalog name."""
-    return is_excluded(path) or is_excluded_catalog_name(path)
+# --------------------------------------------------------------------------
+# NO catalog-name matcher lives here, deliberately
+# --------------------------------------------------------------------------
+#
+# Per-exposure CATALOGS are named
+# ``f212n_nrca1_visit001_vgroup02101_exp00004_m2_daophot_basic.fits`` -- visit,
+# vgroup, exposure and detector, but NO proposal, observation or field.  A
+# matcher keyed on that triple looks like it identifies an exposure and does
+# not: ``visit001_vgroup02101_exp00004`` is an ordinary first-visit-group
+# exposure that eight other fields also have.  Counted 2026-08-21:
+#
+#     wd1 150   brick 126   cloudef 120   sgrc 82
+#     quintuplet 74   sgra 56   cloudc 6   sickle 6
+#
+# So such a matcher would have reported 150 good wd1 catalogs as arches
+# exposure 4 and dropped them, with a message naming the wrong field.
+#
+# The need it was written for is real but already met on disk: arches exposure
+# 4 had catalogs through m7 written before the exclusion existed, and all 396 of
+# its derived products were renamed `.EXCLUDED_tracking_errors_*` with a
+# receipt, so no merge glob reaches them.  A future caller that genuinely needs
+# to recognise the catalog spelling must key it by FIELD as well and take the
+# field from its caller -- until then, a ready-to-misfire matcher whose whole
+# purpose is to drop data does not belong here.

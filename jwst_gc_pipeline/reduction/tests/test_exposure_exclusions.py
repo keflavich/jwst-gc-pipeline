@@ -62,36 +62,6 @@ def test_per_observation_products_yield_no_stem(name):
 # the catalog spelling, which the stem cannot reach
 # --------------------------------------------------------------------------
 
-def test_the_catalog_naming_form_is_matched_too():
-    """Per-exposure CATALOGS are named
-    ``f212n_nrca1_visit001_vgroup02101_exp00004_m2_daophot_basic.fits`` --
-    visit / vgroup / exposure / detector, but no proposal or observation -- so
-    the frame stem cannot match them.  It has to: arches exposure 4 had catalogs
-    through m7 written before it was excluded, and a merge globbing
-    ``*_exp*_m*_daophot_basic.fits`` would ingest them.
-    """
-    assert ex.is_excluded_catalog_name(
-        'f212n_nrca1_visit001_vgroup02101_exp00004_m2_daophot_basic.fits')
-    assert ex.is_excluded_catalog_name(
-        'f323n_nrcblong_visit001_vgroup02101_exp00004_resbgsub_m7_daophot_basic.fits')
-    # neighbours
-    assert not ex.is_excluded_catalog_name(
-        'f212n_nrca1_visit001_vgroup02101_exp00003_m2_daophot_basic.fits')
-    assert not ex.is_excluded_catalog_name(
-        'f212n_nrca1_visit002_vgroup02101_exp00004_m2_daophot_basic.fits')
-
-
-def test_is_excluded_any_covers_both_spellings():
-    assert ex.is_excluded_any(f'{ARCHES_EXP4}_nrca1_destreak_o001_crf.fits')
-    assert ex.is_excluded_any(
-        'f212n_nrca1_visit001_vgroup02101_exp00004_m2_daophot_basic.fits')
-    assert not ex.is_excluded_any('f212n_nrca1_visit001_vgroup02101_exp00005_m2_daophot_basic.fits')
-
-
-# --------------------------------------------------------------------------
-# the drop is announced
-# --------------------------------------------------------------------------
-
 def test_drop_excluded_announces_what_it_dropped(capsys):
     """Silence is the failure mode here.  This project hard-crashes on a dropped
     exposure precisely because a frame that vanishes quietly is
@@ -118,28 +88,89 @@ def test_dropping_nothing_says_nothing(capsys):
 # both halves of the pipeline consult it
 # --------------------------------------------------------------------------
 
-def test_cataloging_filters_at_its_single_enumeration_point():
-    """`get_filenames` is where cataloging turns a (filter, module, visit) into
-    frames; `frame_cache`, the per-phase `frame_args`, the fan-out shards and
-    every merge read through it, so filtering once covers them all."""
-    import inspect
+def test_get_filenames_actually_returns_short(tmp_path, capsys):
+    """BEHAVIOURAL, not a source grep.
 
-    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as ccl
-    src = inspect.getsource(ccl.get_filenames)
-    assert 'drop_excluded' in src, (
-        'get_filenames no longer filters excluded exposures; every stage '
-        'downstream inherits its frame list from here')
+    A grep for `drop_excluded` in the source passes even if the call is moved
+    somewhere it cannot affect the return value.  This builds a tree holding one
+    excluded exposure and three of its neighbours, and asserts what comes back.
+    """
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import get_filenames
+
+    d = tmp_path / 'F212N' / 'pipeline'
+    d.mkdir(parents=True)
+    names = [f'jw02045001001_02101_{n:05d}_nrca1_destreak_o001_crf.fits'
+             for n in (3, 4, 5, 6)]
+    for n in names:
+        (d / n).write_bytes(b'')
+
+    got = get_filenames(str(tmp_path), 'F212N', '2045', '001',
+                        each_suffix='destreak_o001_crf', module='nrca1',
+                        visitid='001')
+    base = sorted(os.path.basename(g) for g in got)
+    assert len(base) == 3, base
+    assert not any('_00004_' in b for b in base), base
+    assert 'excluded' in capsys.readouterr().out
 
 
-def test_the_association_builder_filters_too():
-    """"All imaging AND analysis": an exposure dropped from cataloging but still
-    coadded into the mosaic leaves the catalog and the image disagreeing about
-    what was observed."""
+def test_the_association_filter_drops_the_member_and_does_not_rewrite_mast(tmp_path):
+    """The imaging half, driven.
+
+    Also pins that MAST's association is left ALONE: the filtered members go to
+    a sibling file, so re-running is idempotent and the original still records
+    what was observed.
+    """
+    import json
+
+
+    mod = _load_pipeline_module()
+    asn = tmp_path / 'jw02045-o001_20260701t010704_image3_00001_asn.json'
+    members = [{'expname': f'jw02045001001_02101_{n:05d}_nrca1_cal.fits',
+                'exptype': 'science'} for n in (3, 4, 5)]
+    data = {'products': [{'name': 'p', 'members': members}]}
+    asn.write_text(json.dumps(data))
+
+    kept, path = mod._drop_excluded_asn_members(str(asn), data, members)
+    assert len(kept) == 2
+    assert not any('_00004_' in m['expname'] for m in kept)
+    assert path != str(asn), 'must not hand back the MAST association'
+    assert path.endswith('_exclfiltered_asn.json')
+    # the original is untouched
+    assert len(json.loads(asn.read_text())['products'][0]['members']) == 3
+    # and the caller's dict was not mutated
+    assert len(data['products'][0]['members']) == 3
+
+
+def test_the_association_filter_is_a_no_op_when_nothing_is_excluded(tmp_path):
+    """The common case writes nothing at all and returns the original path."""
+    import json
+
+    mod = _load_pipeline_module()
+    asn = tmp_path / 'jw02045-o001_20260701t010704_image3_00002_asn.json'
+    members = [{'expname': f'jw02045001001_02101_{n:05d}_nrca1_cal.fits',
+                'exptype': 'science'} for n in (3, 5, 6)]
+    data = {'products': [{'name': 'p', 'members': members}]}
+    asn.write_text(json.dumps(data))
+
+    kept, path = mod._drop_excluded_asn_members(str(asn), data, members)
+    assert kept == members and path == str(asn)
+    assert not list(tmp_path.glob('*_exclfiltered_asn.json'))
+
+
+def _load_pipeline_module():
+    """`PipelineRerunNIRCAM-LONG.py` has a hyphen, so it cannot be imported by
+    name."""
+    import importlib.util
+
     here = os.path.dirname(os.path.dirname(os.path.abspath(ex.__file__)))
     path = os.path.join(here, 'reduction', 'PipelineRerunNIRCAM-LONG.py')
-    src = open(path).read()
-    assert '_is_excluded_exposure' in src, (
-        'the Image3 association builder no longer drops excluded exposures')
+    spec = importlib.util.spec_from_file_location('_pipeline_rerun', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+
 
 
 # --------------------------------------------------------------------------
