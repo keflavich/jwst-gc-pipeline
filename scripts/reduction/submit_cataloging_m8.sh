@@ -61,10 +61,22 @@ DEP=""
 echo "target=$TARGET ${PROPOSAL}/${FIELD} modules=$MODULES wait=${WAIT_JOBID:-none} (${DEP_TYPE})"
 
 export TARGET PROPOSAL FIELD MODULES PIPE_ROOT
+
+# SLURM job naming (CLAUDE.md standing rule): target + program + obsid + stage
+# (+ filter), passed at SUBMIT time.  The two m8 sbatch scripts rename
+# themselves at RUNTIME, which only fires once a job STARTS -- so a quota-bound
+# m8 fan sits PENDING as the bare `catalog_m8p` placeholder for hours, which is
+# exactly when the queue is being watched.  The runtime name also dropped the
+# program and the obsid (`wd2-catalog-m8p-F115W`), so several fields' m8 runs in
+# flight together are indistinguishable.  Same defect PR #177 fixed for the
+# retie / per-frame jobs.
+JOB_PREFIX="${TARGET}${PROPOSAL}-o${FIELD}-m8"
+
 PARTIAL_IDS=()
 for i in "${!_F[@]}"; do
     F="${_F[$i]}"; S="${_S[$i]}"
     JID=$(sbatch --parsable $DEP --export=ALL \
+          --job-name="${JOB_PREFIX}-${F}" \
           "$HERE/submit_cataloging_m8_partial.sbatch" "$F" "$S")
     echo "  submitted m8 partial $F (suffix=$S) -> $JID"
     PARTIAL_IDS+=("$JID")
@@ -73,6 +85,7 @@ done
 DEPLIST=$(IFS=:; echo "${PARTIAL_IDS[*]}")
 export FILTERS
 MID=$(sbatch --parsable --dependency=afterok:"$DEPLIST" --export=ALL \
+      --job-name="${JOB_PREFIX}-merge" \
       "$HERE/submit_cataloging_m8_merge.sbatch")
 echo "  submitted m8 merge -> $MID (afterok:$DEPLIST)"
 echo "DONE: ${#_F[@]} partials + merge armed."
