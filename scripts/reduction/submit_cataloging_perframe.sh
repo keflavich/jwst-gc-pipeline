@@ -81,6 +81,46 @@ if [ -n "$DEP" ]; then
     case "$DEP" in after*:*) prev_dep="$DEP";; *) prev_dep="afterok:$DEP";; esac
 fi
 
+# ---------------------------------------------------------------------------
+# Refuse a chain that duplicates a PHASE already queued for this field.
+#
+# Two full chains for one field were queued for sgrc (2026-08-21 20:35 and
+# 2026-08-22 01:34), neither with a dependency, so both would have started on
+# priority and run 12 jobs each over the SAME per-frame products and the same
+# merged catalogs -- two writers, one output tree.  Nothing noticed: the
+# collision guards in cataloging protect one run's frames from each other, not
+# one field from two concurrent runs.
+#
+# The check is per PHASE, not per field, because adding phases to a field that
+# already has a chain is the normal way to extend one -- cloudef's m4-m7 went
+# on behind its m3, and sgrb2's m3-m7 behind eleven per-filter m12 finalizes.
+# Only re-submitting a phase that is already queued is the mistake.
+#
+# GC_ALLOW_DUPLICATE_CHAIN=1 overrides, for the case where the queued chain is
+# known-dead and is about to be cancelled.
+_JOB_PREFIX="${TARGET}${PROPOSAL}-o${FIELD}-"
+_QUEUED=$(squeue -u "$USER" -h -o "%j" 2>/dev/null || true)
+_dupes=""
+for ph in $PHASES; do
+    # The trailing '-' is what keeps 'm1' from matching 'm12-fanout'.
+    if printf '%s\n' "$_QUEUED" | grep -q "^${_JOB_PREFIX}${ph}-"; then
+        _dupes="$_dupes $ph"
+    fi
+done
+if [ -n "$_dupes" ]; then
+    echo "REFUSING: ${TARGET} ${PROPOSAL}/${FIELD} already has queued jobs for phase(s):${_dupes}" >&2
+    # List from the names already captured, and never let a no-match grep
+    # under `set -e` kill the script before it reaches its own exit code --
+    # that turned the intended `exit 3` into a bare `exit 1`.
+    printf '%s\n' "$_QUEUED" | grep "^${_JOB_PREFIX}" | sed 's/^/    /' >&2 || true
+    if [ "${GC_ALLOW_DUPLICATE_CHAIN:-0}" != "1" ]; then
+        echo "Two chains over one field write the same products concurrently." >&2
+        echo "Cancel the queued chain first, or set GC_ALLOW_DUPLICATE_CHAIN=1." >&2
+        exit 3
+    fi
+    echo "GC_ALLOW_DUPLICATE_CHAIN=1 -- submitting anyway." >&2
+fi
+
 echo "Per-frame chain: target=$TARGET $PROPOSAL/$FIELD modules=$MODULES"
 echo "  phases: $PHASES   NSHARDS=$NSHARDS   filters: $FILTERS"
 SB="$HERE/submit_cataloging_perframe_phase.sbatch"
