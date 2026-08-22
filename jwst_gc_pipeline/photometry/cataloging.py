@@ -5339,10 +5339,20 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # them across N workers when ``--parallel-workers > 1``.
                 frame_args = []
                 for filename in candidate_frames:
-                    exposure_id = filename.split("_")[2]
-                    visit_id = filename.split("_")[0][-3:]
-                    vgroup_id = filename.split("_")[1]
-                    file_detector = filename.split("_")[3]
+                    # Split the BASENAME.  These indices count underscores from
+                    # the left, so any underscore in the DIRECTORY shifts every
+                    # one of them: with a basepath of `.../gc2211_o023/`,
+                    # `filename.split("_")[0][-3:]` read '211' out of the path
+                    # and the detector slot picked up '00001'.  Every frame of a
+                    # filter then shared one identity, and the collision guard
+                    # below -- correctly -- aborted the run.  Fields whose
+                    # directory carries an underscore are ordinary now
+                    # (`gc2211_o023`, `cloudef_controlfield`).
+                    _base = os.path.basename(filename)
+                    exposure_id = _base.split("_")[2]
+                    visit_id = _base.split("_")[0][-3:]
+                    vgroup_id = _base.split("_")[1]
+                    file_detector = _base.split("_")[3]
                     # JOINT multi-obs runs (field like '002-998'): two observations
                     # can share visit+vgroup+exposure -- e.g. sgrb2 obs998 ("redo")
                     # reused obs002's mosaic tile numbers, so both map to tile 02101
@@ -5353,7 +5363,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # stay unique; the merge globs vgroup* so it still finds both.
                     # Single-obs runs (no '-') are unchanged.
                     if '-' in str(field):
-                        obs_id = filename.split("_")[0][-6:-3]
+                        obs_id = _base.split("_")[0][-6:-3]
                         vgroup_id = f'{obs_id}{vgroup_id}'
                     # Per-frame products MUST be named by the actual DETECTOR, never
                     # the (coarser) requested module.  Otherwise SW exposures whose
