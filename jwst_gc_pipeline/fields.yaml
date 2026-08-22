@@ -476,7 +476,14 @@ fields:
           miri: ['001', '002']
         glob_obsid:
           miri: '002'
-        filters: [f140m, f162m, f182m, f187n, f210m, f335m, f360m, f405n, f410m, f480m, f770w, f1280w, f2100w]
+        # NIRCam f150w/f444w and MIRI f560w/f1000w were observed by 6151 and
+        # are reduced on disk (128/32/32/32 crf), but were absent here.  A
+        # cataloging run that included them died at the m12 finalize:
+        #   KeyError: filter 'f150w' not observed by target 'w51'
+        # after the fan-out had completed (job 39893953, 2026-08-22).
+        filters: [f140m, f150w, f162m, f182m, f187n, f210m, f335m, f360m,
+                  f405n, f410m, f444w, f480m, f560w, f770w, f1000w, f1280w,
+                  f2100w]
 
   wd1:
     root: orange
