@@ -70,6 +70,13 @@ export TARGET PROPOSAL FIELD MODULES PIPE_ROOT
 # program and the obsid (`wd2-catalog-m8p-F115W`), so several fields' m8 runs in
 # flight together are indistinguishable.  Same defect PR #177 fixed for the
 # retie / per-frame jobs.
+# The m8 fan submits N per-filter partials + a merge over one field's
+# products, so two fans racing write the same partials and the same merge
+# -- the failure #483 guards in the per-frame driver, in a driver it did
+# not cover.  m8 is if anything the likelier source, being what you re-run
+# to re-arm a field after a failed m7.
+PHASES="m8" . "$HERE/_refuse_duplicate_chain.sh"
+
 JOB_PREFIX="${TARGET}${PROPOSAL}-o${FIELD}-m8"
 
 PARTIAL_IDS=()
