@@ -30,13 +30,42 @@ if [ -n "${PIPE_ROOT:-}" ]; then
     export PYTHONPATH="$PIPE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
+_PR_ROOT=$("${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}" - <<'_PIPE_ROOT_PY'
+import os
+
+import jwst_gc_pipeline as _p
+
+print(os.path.dirname(os.path.dirname(os.path.abspath(_p.__file__))))
+_PIPE_ROOT_PY
+) || exit 2
+
+# Report the COMMIT, not just the path.  A checkout's path says which tree ran;
+# it does not say which code.  Two jobs that both printed
+# `.../jwst-gc-pipeline-wt-excl` this week ran different code, because the
+# worktree had main merged into it between their submissions -- sgrc job
+# 39941339 tripped on a sub-floor residual that the merged per-field floor
+# (#478) would have filtered, and answering "did that job have the fix?"
+# required comparing its submit time against a merge time.  With the commit in
+# the log it is one line.
+#
+# Not fatal if git is unavailable or the tree is not a repo: this is provenance
+# for the log, and it must never be the reason a reduction does not start.
+_PR_DESC="$_PR_ROOT"
+if _PR_SHA=$(git -C "$_PR_ROOT" rev-parse --short HEAD 2>/dev/null); then
+    if [ -n "$(git -C "$_PR_ROOT" status --porcelain 2>/dev/null)" ]; then
+        _PR_DESC="$_PR_ROOT @ $_PR_SHA (DIRTY)"
+    else
+        _PR_DESC="$_PR_ROOT @ $_PR_SHA"
+    fi
+fi
+echo "[pipe-root] jwst_gc_pipeline resolves to $_PR_DESC"
+
 "${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}" - <<'_PIPE_ROOT_PY' || exit 2
 import os
 
 import jwst_gc_pipeline as _p
 
 root = os.path.dirname(os.path.dirname(os.path.abspath(_p.__file__)))
-print(f"[pipe-root] jwst_gc_pipeline resolves to {root}", flush=True)
 want = os.environ.get('PIPE_ROOT') or ''
 if want and os.path.realpath(want) != os.path.realpath(root):
     raise SystemExit(
