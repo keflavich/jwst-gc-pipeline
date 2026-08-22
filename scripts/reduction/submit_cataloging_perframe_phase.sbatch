@@ -1,8 +1,11 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
 # One manual-pipeline PHASE as either a per-frame fan-out array task or the
-# per-phase finalize barrier.  Driven by submit_cataloging_perframe.sh; not
-# usually launched by hand.
+# per-phase finalize barrier.  Driven by submit_cataloging_perframe.sh.
+#
+# Launching it by hand is supported (re-running a failed finalize without
+# repeating its fan-out is the main reason to); the #SBATCH lines below carry a
+# usable resource floor for that case.
 #
 #   MODE=fanout   : array task; fits frame-shard ${SLURM_ARRAY_TASK_ID}/${NSHARDS}
 #                   of PHASE, writes per-frame completion markers, STOPS before the
@@ -23,6 +26,21 @@
 #SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
 #SBATCH --output=/orange/adamginsburg/jwst/logs/catalog_%x_%A_%a.out
+# Resource FLOOR for a hand-launched job.  submit_cataloging_perframe.sh passes
+# --cpus-per-task/--mem/--time on the command line, which override these, so a
+# driver-submitted job is unchanged.  Without them a direct `sbatch` inherits
+# the CLUSTER default -- about 10 minutes -- and dies mid-phase having done
+# partial work: wd2's m7 finalize was re-run by hand to avoid repeating a 3-hour
+# fan-out and hit TIMEOUT at 00:10:18 (job 39963352, 2026-08-22), taking its 18
+# chained m8 jobs down with it.
+#
+# Re-running ONE phase by hand is a legitimate thing to do -- it is how you
+# recover a finalize without redoing its fan-out -- so the bare path needs to be
+# survivable rather than merely discouraged.  These match the driver's finalize
+# slice (FINALIZE_CPUS/MEM/TIME).
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64gb
+#SBATCH --time=12:00:00
 
 source ~/.bash_profile 2>/dev/null
 export CRDS_PATH=${CRDS_PATH:-/orange/adamginsburg/jwst/crds}
