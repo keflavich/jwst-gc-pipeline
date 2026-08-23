@@ -119,6 +119,60 @@ def check_astrometry(run):
             f'and the checkpoint file names only the filter, so this record '
             f'cannot be attributed to {run.get("proposal")}/o{run.get("obsid")} — '
             f'it describes whichever observation last ran m2.')
+
+        # A checkpoint that FAILED before it measured anything.  Every counter
+        # below this point is derived from the per-exposure list, so a record
+        # whose visits all refused -- duplicate exposure identity, a consensus
+        # that would not build -- carries zeros everywhere and reads exactly
+        # like a field that simply has not been cataloged.  `n_mis` is 0, the
+        # `elif n_exp` info line is skipped because n_exp is 0, and the whole
+        # loop body emits NOTHING.  Measured on ngc6334 F090W (issue #407):
+        # the only m2 record the field has ever produced says `passed: false`
+        # with three visits refused and zero exposures, and
+        # `check_astrometry` returned an empty verdict list for it -- so a
+        # field with no astrometry at all has been invisible on the page since
+        # 2026-07-29 and surfaced only through a hand survey.
+        #
+        # No supersede-suppression here, unlike the misalignment branch: the
+        # `_latest` record is OVERWRITTEN by the next m2 run, so a record still
+        # saying "zero exposures" is the newest thing m2 has managed to say.
+        # Newer reduced frames do not answer it.
+        if rec.get('passed') is False and n_exp == 0:
+            reasons = rec.get('failures') or []
+            n_vis = rec.get('n_visits') or 0
+            out.append(_verdict(
+                f'astrometry-checkpoint-empty-{filt}',
+                'fail' if attributable else 'warn',
+                f'{filt}: m2 built no visit consensus — '
+                f'{n_vis} visit(s) attempted, 0 exposures ingested'
+                + ('' if attributable else ' (unattributed)'),
+                'The checkpoint ran and recorded `passed: false` without '
+                'measuring a single exposure, so the filter has NO m2 '
+                'astrometry: no exposure was compared with its visit '
+                'consensus and no tie to the reference frame was made. Every '
+                'per-exposure count on this card is 0 because the list is '
+                'empty, which is a different state from "all exposures '
+                'agree".' + unattributed_note,
+                value=0, threshold=1, source=src,
+                cause=(
+                    'The usual cause is that one physical (visit, exposure, '
+                    'module, filter, vgroup) identity resolves to more than '
+                    'one per-frame catalog, and build_visit_consensus refuses '
+                    'rather than picking one — correctly, since picking one '
+                    'would tie the field to whichever it happened to read. '
+                    'That happens where tokened and untokened catalogs sit in '
+                    'one directory, or where grouped-fit (`_group_`) or stale '
+                    'module-level variants sit alongside the per-detector '
+                    'ones. Re-catalog the filter at m2, or retokenise the '
+                    'untokened catalogs, then re-run the checkpoint.'),
+                evidence={
+                    'rows': {
+                        'columns': ['recorded failure'],
+                        'data': [[r] for r in reasons[:10]],
+                        'total': len(reasons)},
+                    'filter': bare_filt,
+                    'obs_token': rec.get('obs_token', '')}))
+
         if n_mis:
             from . import figures as _fig
             severity = 'fail' if (attributable and not superseded) else 'warn'
