@@ -26,7 +26,7 @@ def test_a_registered_field_gets_its_own_floor():
     assert m2_correction_floor('brick', env={}) == (4.0, 'per-field')
     assert m2_correction_floor('cloudc', env={}) == (8.0, 'per-field')
     assert m2_correction_floor('sgra', env={}) == (4.0, 'per-field')
-    assert m2_correction_floor('w51', env={}) == (4.0, 'per-field')
+    assert m2_correction_floor('w51', env={}) == (6.0, 'per-field')
 
 
 def test_an_unregistered_field_keeps_the_strict_default():
@@ -170,17 +170,21 @@ def test_sgra_has_a_floor_matching_its_own_scatter():
     assert floor == 4.0
 
 
-def test_w51_has_a_floor_matching_its_own_scatter():
-    """w51 F140M: scatter 1.40 mas over 64 measurements, and m2 emitted five
-    corrections of 2.50-3.64 mas at ABOVE-median contrast (ranks 46-53/64).
-    Credible measurements the size of the field's own noise -- four of them are
-    nrcb2 exposures 1-4 reading a consistent 2.8-3.6 mas, i.e. the per-detector
-    SIAF/DVA class the module-locked table cannot express.
+def test_w51_floor_covers_its_systematic_class_but_not_f444w():
+    """Set from ALL of w51's filters, not the first one that tripped.
 
-    4.0 clears the largest of them (3.64) and matches brick (2.27 mas scatter)
-    and sgra (1.84).
+    4.0 came from F140M alone (max 3.64 mas) and F162M then exceeded it at 5.42,
+    because m2 stops at the FIRST filter with an actionable correction.  A
+    WARN_ONLY measurement pass measured all eleven: eight are clean (no
+    corrections, residuals < 2 mas), the per-detector systematic class tops out
+    at 5.42, and F444W sits apart at 9.58 with 15 of its 16 exposures displaced.
+
+    6.0 covers the systematic class and deliberately leaves F444W stopping the
+    run -- it is not a module split (antisymmetry detected=False, A-B = -1.6 mas)
+    and is not understood.  A floor of 10 would have hidden it.
     """
     floor, source = m2_correction_floor('w51', env={})
     assert source == 'per-field'
-    assert floor == 4.0
-    assert floor > 3.64, 'must clear the largest observed sub-noise correction'
+    assert floor == 6.0
+    assert floor > 5.42, 'must cover the per-detector systematic class (F162M)'
+    assert floor < 8.74, 'must NOT swallow F444W (p90 8.74, max 9.58)'
