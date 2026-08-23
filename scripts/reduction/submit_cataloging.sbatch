@@ -84,6 +84,20 @@ MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 
+# Per-filter suffix override, e.g.
+# EACH_SUFFIX_OVERRIDES="F187N:destreak_o007_crf,F210M:destreak_o007_crf".
+# A field whose destreak policy splits by wavelength (sickle: SW destreaks, LW
+# stays on the aligned copy -- reduction/destreak_policy.py) has no single
+# EACH_SUFFIX that serves every filter, and the filters on the other side of
+# the split glob ZERO inputs at m1.  run_pipeline sets this for the sbatch path
+# (`_job_environment`); without it read here the override was dropped and every
+# filter ran on the one EACH_SUFFIX.  Optional, so it is NOT part of the
+# travel-together guard above.
+EACH_SUFFIX_OVERRIDES=${EACH_SUFFIX_OVERRIDES:-}
+EACH_SUFFIX_OVERRIDES_ARG=""
+[ -n "$EACH_SUFFIX_OVERRIDES" ] && \
+    EACH_SUFFIX_OVERRIDES_ARG="--each-suffix-overrides=$EACH_SUFFIX_OVERRIDES"
+
 # NB there is deliberately NO rename here.  This used to be an UNGATED
 # `JobName="${TARGET}-catalog"`, which clobbered the submit-time name every
 # time -- and the gated rename further down could never undo it, because that
@@ -168,7 +182,7 @@ fi
 # array env so the guard passes; this is array-over-FILTERS, not phase-splitting.
 unset SLURM_ARRAY_TASK_ID SLURM_ARRAY_JOB_ID
 
-echo "CATALOG start: $TARGET $PROPOSAL/$FIELD filter=$FILT modules=$MODULES"
+echo "CATALOG start: $TARGET $PROPOSAL/$FIELD filter=$FILT modules=$MODULES suffix=$EACH_SUFFIX overrides=${EACH_SUFFIX_OVERRIDES:-none}"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 "$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
     --filternames="$FILT" \
@@ -178,6 +192,7 @@ PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/p
     --field="$FIELD" \
     --target="$TARGET" \
     --each-suffix="$EACH_SUFFIX" \
+    $EACH_SUFFIX_OVERRIDES_ARG \
     --max-group-size="$MAX_GROUP_SIZE" \
     --parallel-workers="$PARALLEL_WORKERS" \
     $DEBLEND_ARG \

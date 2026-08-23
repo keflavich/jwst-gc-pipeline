@@ -79,6 +79,15 @@ MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
+
+# Per-filter suffix override (see submit_cataloging.sbatch), e.g.
+# EACH_SUFFIX_OVERRIDES="F187N:destreak_o007_crf,F210M:destreak_o007_crf".
+# Optional; a field whose destreak policy splits by wavelength has no single
+# EACH_SUFFIX that serves every filter.
+EACH_SUFFIX_OVERRIDES=${EACH_SUFFIX_OVERRIDES:-}
+EACH_SUFFIX_OVERRIDES_ARG=""
+[ -n "$EACH_SUFFIX_OVERRIDES" ] && \
+    EACH_SUFFIX_OVERRIDES_ARG="--each-suffix-overrides=$EACH_SUFFIX_OVERRIDES"
 CROSSBAND_REF=${CROSSBAND_REF:-}
 PHASE=${PHASE:?set PHASE=m12|m3|m4|m5|m6|m7}
 MODE=${MODE:?set MODE=fanout|finalize}
@@ -184,6 +193,7 @@ run_pipeline() {
         --field="$FIELD" \
         --target="$TARGET" \
         --each-suffix="$EACH_SUFFIX" \
+        $EACH_SUFFIX_OVERRIDES_ARG \
         --max-group-size="$MAX_GROUP_SIZE" \
         --parallel-workers="$PARALLEL_WORKERS" \
         --manual-start-phase="$PHASE" \
