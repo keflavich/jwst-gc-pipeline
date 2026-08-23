@@ -654,6 +654,17 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
             'stage': rec.get('stage'),
             'context': rec.get('context'),
             'correcting': rec.get('correcting'),
+            # The record's OWN verdict and the reasons behind it.  A checkpoint
+            # can fail before it ever measures an exposure -- a visit whose
+            # consensus refuses to build (duplicate exposure identity) ingests
+            # nothing, so every per-exposure counter below is 0 and the summary
+            # is indistinguishable from a clean field that has not been
+            # cataloged.  ngc6334 F090W has been in exactly that state since
+            # 2026-07-29 (issue #407): `passed: false`, three visits refused,
+            # zero exposures, and the monitor produced no verdict at all.
+            'passed': rec.get('passed'),
+            'failures': [str(f) for f in (rec.get('failures') or [])],
+            'n_visits': len(rec.get('visits') or []),
             # A record that NAMES its observation is attributable to it, shared
             # filter or not -- that is the whole point of the token.  Only an
             # untokened record on a filter more than one observation images
