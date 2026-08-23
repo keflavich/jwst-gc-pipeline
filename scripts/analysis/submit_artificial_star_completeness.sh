@@ -28,6 +28,7 @@ JID=$(sbatch --parsable \
     --ntasks=1 --cpus-per-task=4 --mem=48gb --time=12:00:00 \
     --output="$LOGDIR/brick-artstar-completeness_%A_%a.log" \
     --wrap "
+ulimit -c 0
 DETS=(nrca1 nrca2 nrca3 nrca4 nrcb1 nrcb2 nrcb3 nrcb4)
 IDX=\$SLURM_ARRAY_TASK_ID
 if [ \$IDX -lt 8 ]; then BAND=F212N; else BAND=F200W; fi
@@ -44,5 +45,5 @@ AID=$(sbatch --parsable \
     --dependency=afterany:$JID \
     --ntasks=1 --cpus-per-task=1 --mem=8gb --time=0:30:00 \
     --output="$LOGDIR/brick-artstar-analyze_%j.log" \
-    --wrap "PYTHONPATH=$PIPE_ROOT $PY -m jwst_gc_pipeline.photometry.artificial_stars analyze --workdir $WORKDIR")
+    --wrap "ulimit -c 0; PYTHONPATH=$PIPE_ROOT $PY -m jwst_gc_pipeline.photometry.artificial_stars analyze --workdir $WORKDIR")
 echo "analysis job (afterany:$JID): $AID"

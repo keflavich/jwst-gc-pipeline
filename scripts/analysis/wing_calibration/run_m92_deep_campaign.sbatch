@@ -10,6 +10,14 @@
 #SBATCH --mem=48gb
 #SBATCH --time=04:00:00
 
+# No core dumps.  A python SIGBUS in a 60+ GB reduction writes a core file
+# the size of the process (43 GiB measured, 2026-08-06) into the working
+# directory, and /orange runs at 97% full.  HiPerGator sets
+# PropagateResourceLimits=NONE, so a `ulimit -c 0` in the submitting shell
+# does NOT reach the compute node -- it has to be set here, inside the batch
+# script itself (jwst-gc-pipeline#428).
+ulimit -c 0
+
 # M92 sparse-field deep-mask wing-calibration campaign (GO-1334 F090W/F150W,
 # 8 SW detectors x 4 frames each): stage 1 builds empirical/model PSF stacks,
 # stage 2 measures deep C(r_mask) curves to 26 px.  See m92_deep_stacks.py
