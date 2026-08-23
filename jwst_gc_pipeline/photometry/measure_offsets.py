@@ -96,6 +96,26 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
                     nsigma_reject=5,
                     reject_niter=7,
                     filtername='', ab='', expno=''):
+    """Iteratively shift ``skycrds_cat`` onto a SPARSE ``reference_coordinates``.
+
+    Returns an 11-tuple::
+
+        (total_dra, total_ddec, med_dra, med_ddec, std_dra, std_ddec,
+         keep, skykeep, reject, iteration, measured)
+
+    ``measured`` is the element a caller has to read before using the offsets.
+    It is ``True`` when the loop left through convergence or the 50-iteration
+    cap, having produced at least one median.  It is ``False`` when a pass fell
+    below the five-match floor, in which case ``total_dra`` / ``total_ddec``
+    are the accumulators as they stood -- a PARTIAL result the routine declines
+    to certify -- and the per-pass statistics are NaN.
+
+    Reading it is not optional: an offset of exactly zero is a legitimate
+    measurement AND was, before issue #394, what this routine returned when it
+    could measure nothing at all.  The two are indistinguishable by value, and
+    for an offsets table zero is the positive claim that the frame needs no
+    correction.
+    """
     # FORBIDDEN-METHOD GUARD: this routine estimates a bulk shift as the median of
     # nearest-neighbour matches, which is invalid against a dense reference (see
     # assert_sparse_reference_for_nn_median).  Refuse dense references outright.
@@ -121,12 +141,30 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
         if keep.sum() < 5:
             print(f"Only {keep.sum()} sources matched - this is too few to be useful")
             print(f"{filtername:5s}, {ab:3s}, {expno:5s}, {keep.sum():6d}, {iteration:5d}", flush=True)
-            # same types as the normal-path return: Quantities for the offsets/
-            # scatters, boolean arrays for keep/skykeep/reject, int iteration
-            zero = 0 * u.arcsec
-            return (zero, zero, zero, zero, zero, zero,
+            # NOT zero.  Zero is a positive claim -- "this frame needs no
+            # correction" -- and it is the one claim this branch cannot make,
+            # because nothing was measured on this pass.  Returning zero for
+            # the ACCUMULATORS did a second thing as well: `total_dra` /
+            # `total_ddec` arrive as arguments and are summed at every pass of
+            # the loop, so an iteration that dropped below five matches DELETED
+            # the shift the earlier passes of this same call had already found
+            # (issue #394).  Hand the accumulators back untouched, so an
+            # unmeasurable pass can no longer undo a measured one, and return
+            # `measured=False` so the caller can tell "measured, and it is
+            # zero" from "could not measure" -- which by value it cannot.
+            #
+            # The per-pass statistics are NaN rather than zero for the same
+            # reason: `med_dra == 0` reads as "converged to no residual", and
+            # this pass converged on nothing.
+            #
+            # `keep` / `skykeep` are returned as computed, and they describe
+            # coordinates ALREADY shifted by every earlier pass (`skycrds_cat`
+            # is rewritten at the end of each one) -- the same frame the
+            # accumulators now describe.
+            nan = np.nan * u.arcsec
+            return (total_dra, total_ddec, nan, nan, nan, nan,
                     np.asarray(keep, dtype=bool), np.asarray(skykeep, dtype=bool),
-                    np.zeros(int(keep.sum()), dtype=bool), iteration)
+                    np.zeros(int(keep.sum()), dtype=bool), iteration, False)
 
         # ratio = skyflux[idx[keep]] / refflux[keep]
         # magnitude-style
@@ -195,4 +233,7 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
     if verbose and success:
         print(f"{filtername:5s}, {ab:3s}, {expno:5s}, {total_dra.value:8.3f}, {total_ddec.value:8.3f}, {med_dra.value:8.3f}, {med_ddec.value:8.3f}, {std_dra.value:8.3f}, {std_ddec.value:8.3f}, {keep.sum():6d}, {reject.sum():7d}, {iteration:5d}", flush=True)
 
-    return total_dra, total_ddec, med_dra, med_ddec, std_dra, std_ddec, keep, skykeep, reject, iteration
+    # `success` is already exactly the "at least one pass measured something"
+    # flag the caller needs; it was computed and thrown away.
+    return (total_dra, total_ddec, med_dra, med_ddec, std_dra, std_ddec,
+            keep, skykeep, reject, iteration, success)
