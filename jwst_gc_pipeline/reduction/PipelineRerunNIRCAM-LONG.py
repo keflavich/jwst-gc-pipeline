@@ -126,6 +126,22 @@ from jwst_gc_pipeline.reduction.crds_cache import open_crds_reference
 # Sickle is NRCB-only (SUB640 subarray) but detectors differ by wavelength:
 # - Short-wavelength (F187N, F210M): nrcb1, nrcb2, nrcb3, nrcb4
 # - Long-wavelength (F335M, F470N, F480M): nrcb only
+#
+# gc2211 2211/050 is NRCB-only in both of its filters, counted from the `_cal`
+# frames on disk 2026-08-22 (issue #436): F200W 48 frames, nrcb1-4 only; F277W
+# 12 frames, nrcblong only.  Its four sibling observations (023/028/046/049)
+# carry both modules.  Asking for nrca stops the reduce ~41 s in with `No nrca
+# members found in ... jw02211-o050_..._asn.json`; with this entry the request
+# is narrowed here instead, and `--modules merged` raises immediately (no nrca
+# means no merged mosaic to produce).
+#
+# The families are spelled once each rather than detector-by-detector: every
+# consumer maps the entry through `_module_group` / `module_family`
+# (`get_allowed_modules` below, `preflight_reduce_inputs.allowed_modules`), and
+# the main loop makes one `main()` pass per surviving list entry -- so the
+# four-detector spelling above costs sickle four nrcb-family passes over the
+# same members (see `test_a_repeated_module_family_fits_each_ramp_once`, which
+# pins that the stage-1/2 memo still fits each ramp once).
 MODULES_BY_PROPOSAL_FIELD_FILTER = {
     '3958': {
         '007': {
@@ -135,7 +151,13 @@ MODULES_BY_PROPOSAL_FIELD_FILTER = {
             'F470N': ('nrcb',),
             'F480M': ('nrcb',),
         }
-    }
+    },
+    '2211': {
+        '050': {
+            'F200W': ('nrcb',),
+            'F277W': ('nrcb',),
+        }
+    },
 }
 
 
