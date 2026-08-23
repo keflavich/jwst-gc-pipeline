@@ -207,9 +207,86 @@ def test_a_subarray_gets_no_step_at_column_512():
     assert abs(np.median(colmed[512:524]) - np.median(colmed[500:512])) > 0.1
 
 
+@pytest.mark.parametrize('mode', ['insitu', 'bare'])
+def test_one_output_gives_one_correction_per_row(mode):
+    """The property `test_a_subarray_gets_no_step_at_column_512` is after, on
+    the CORRECTION rather than on the output image.
+
+    Inside a chunk the correction is ``-pct[:, None] (+ smoothed_pct[:, None])``
+    -- a per-row SCALAR.  So a single-output frame, which is one chunk, must
+    have a correction that is constant along every row, no matter what its sky
+    looks like.  Split it at 512 and columns 512+ get a second chunk's
+    percentile instead, which is exactly the defect.
+
+    Asserting on the output image instead does not pin it: in ``add_smoothed``
+    mode most of the two chunks' pedestal difference is added straight back, so
+    the surviving step in a synthetic frame sits under a 0.1 MJy/sr threshold
+    even when the frame IS split at 512.  Reverting ``width =
+    amplifier_width(data, noutputs)`` to the old literal 512 left the whole
+    suite green (20 passed) before this test existed; it fails here in both
+    modes.
+    """
+    rng = np.random.default_rng(11)
+    # An x-gradient is what makes two chunks disagree: columns 0-511 and 512-639
+    # have different sky, so their percentiles differ.  A spatially flat sky
+    # hides the defect.
+    x = np.arange(640)[None, :]
+    sky = 20.0 + 4.0 * (x / 640.0) + rng.normal(0, 0.3, (640, 640))
+    streaks = rng.normal(0, 1.5, (640, 1)) * np.ones((1, 640))
+    frame = (sky + streaks).astype('float32')
+
+    kwargs = ({'add_smoothed': True} if mode == 'insitu'
+              else {'add_smoothed': False, 'caller_restores_large_scales': True})
+    corr = D.destreak_data(frame.copy(), median_filter_size=2048,
+                           noutputs=1, **kwargs) - frame
+    spread = float(np.max(np.abs(corr - corr[:, :1])))
+    # 1e-3 MJy/sr is float32 round-off headroom on a ~20 MJy/sr frame and far
+    # below what a 512 split produces (0.33 insitu / 3.77 bare on sickle o007).
+    assert spread < 1e-3, (
+        f'{mode}: correction varies by {spread:.4f} across a single-output '
+        f'frame -- it was split at a boundary its readout does not have')
+
+
 def test_a_width_the_outputs_do_not_divide_is_refused():
     with pytest.raises(ValueError, match='NOUTPUTS must divide'):
         D.amplifier_width(np.zeros((1024, 1030)), 4)   # 1030 % 4 == 2
+
+
+def test_the_background_is_sampled_at_the_centre_of_each_chunk(tmp_path):
+    """`add_background_map` puts back what `destreak_data` took off, so it
+    chunks the same way and samples each chunk at ITS centre,
+    ``start + width / 2``.
+
+    A FULL frame makes that indistinguishable from a hardcoded ``start + 256``
+    (2048 // 4 // 2 == 256), so only a subarray can pin it: a single-output
+    640-wide frame is one chunk whose centre is column 320.  Nothing on disk is
+    that combination today -- a SUB640 frame with a registered background map
+    -- which is why this is regression insurance ahead of the case rather than
+    a live gap.
+
+    The background map here is a column ramp on the frame's own WCS, so the
+    value sampled at ``pxx`` is ``pxx`` itself and the assertion reads the
+    sampling column directly.
+    """
+    hdul = _frame_hdul(filtername='F187N',
+                       data=np.zeros((640, 640), dtype='float32'))
+    hdul[0].header['NOUTPUTS'] = 1
+    hdul[0].header['SUBARRAY'] = 'SUB640'
+
+    bgpath = tmp_path / 'bg_column_ramp.fits'
+    ramp = np.repeat(np.arange(640, dtype='float32')[None, :], 640, axis=0)
+    bghdu = fits.PrimaryHDU(ramp)
+    for key in ('CTYPE1', 'CTYPE2', 'CRVAL1', 'CRVAL2',
+                'CRPIX1', 'CRPIX2', 'CDELT1', 'CDELT2'):
+        bghdu.header[key] = hdul[('SCI', 1)].header[key]
+    bghdu.writeto(bgpath)
+
+    out = D.add_background_map(np.zeros((640, 640), dtype='float32'), hdul,
+                               bgfile=str(bgpath))
+    sampled = float(np.median(out))
+    assert abs(sampled - 320.0) < 0.5, (
+        f'background sampled at column {sampled:.1f}; the single 640-wide '
+        f'chunk is centred on 320, and 256 is the full-frame constant')
 
 
 def test_destreak_takes_the_chunk_width_from_the_frame(tmp_path):
