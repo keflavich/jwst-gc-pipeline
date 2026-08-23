@@ -8,10 +8,13 @@ outside that mark, instead.
 """
 import glob
 
+import numpy as np
 import pytest
 
 from . import test_residual_model_policy as policy
-from .test_residual_model_policy import _REQUIRED, f480m
+from .test_residual_model_policy import (
+    _REQUIRED, f480m, over_rendered, over_subtracted,
+    MODEL_PEAK_CEILING, RESID_CORE_FLOOR)
 
 
 def test_each_required_glob_matches_at_most_one_file():
@@ -55,6 +58,7 @@ def test_skip_predicate_covers_every_product_the_fixture_opens(monkeypatch):
     monkeypatch.setattr(policy, "_read_points", lambda path: None)
     monkeypatch.setattr(policy, "_img", lambda path, what="": (None, None))
     monkeypatch.setattr(policy, "_peaks", lambda arr, w, stars, box=3: None)
+    monkeypatch.setattr(policy, "_troughs", lambda arr, w, stars, box=3: None)
     try:
         f480m.__wrapped__()
     except (pytest.skip.Exception, OSError, ValueError):
@@ -84,3 +88,59 @@ def test_skip_predicate_covers_every_product_the_fixture_opens(monkeypatch):
         "the fixture opens product(s) the skip predicate does not check, so a "
         "tree missing them errors instead of skipping:\n  "
         + "\n  ".join(unknown))
+
+
+class _FakeWCS:
+    """Identity world->pixel, so the box arithmetic can be tested without a FITS."""
+
+    def __init__(self, xy):
+        self._xy = np.asarray(xy, float)
+
+    def world_to_pixel(self, stars):
+        return self._xy[:, 0], self._xy[:, 1]
+
+
+def test_troughs_reads_the_core_minimum_and_peaks_the_maximum():
+    """`_peaks` alone cannot see a crater: both a hole and a clean subtraction
+    have a small positive maximum, which is why the over-subtraction assertions
+    need their own reduction over the same box (issue #266 item 4)."""
+    arr = np.zeros((21, 21))
+    arr[10, 10] = -500.0          # crater
+    arr[10, 11] = +3.0            # the max `_peaks` would report
+    w = _FakeWCS([[10, 10]])
+    assert policy._peaks(arr, w, None, box=3)[0] == pytest.approx(3.0)
+    assert policy._troughs(arr, w, None, box=3)[0] == pytest.approx(-500.0)
+
+
+def test_troughs_is_nan_off_image():
+    arr = np.zeros((21, 21))
+    w = _FakeWCS([[-5, -5]])
+    assert np.isnan(policy._troughs(arr, w, None)[0])
+
+
+def test_over_rendered_flags_only_above_the_ceiling():
+    d = np.array([100.0, 100.0, 100.0, 100.0])
+    m = np.array([146.0,             # the worst star measured 2026-08-21: kept
+                  MODEL_PEAK_CEILING * 100.0 - 1,
+                  MODEL_PEAK_CEILING * 100.0 + 1,
+                  1000.0])
+    assert list(over_rendered(d, m)) == [2, 3]
+
+
+def test_over_subtracted_flags_only_below_the_floor():
+    d = np.array([100.0, 100.0, 100.0, 100.0])
+    rmin = np.array([-47.0,          # the worst star measured 2026-08-21: kept
+                     RESID_CORE_FLOOR * 100.0 + 1,
+                     RESID_CORE_FLOOR * 100.0 - 1,
+                     -900.0])
+    assert list(over_subtracted(d, rmin)) == [2, 3]
+
+
+def test_two_sided_predicates_ignore_unusable_stars():
+    """A star off the mosaic, or with a non-positive data peak, cannot be graded
+    either way -- the same `ok` mask the one-sided assertions already use."""
+    d = np.array([np.nan, 0.0, -5.0, 100.0])
+    m = np.array([1e6, 1e6, 1e6, 1e6])
+    rmin = np.array([-1e6, -1e6, -1e6, -1e6])
+    assert list(over_rendered(d, m)) == [3]
+    assert list(over_subtracted(d, rmin)) == [3]
