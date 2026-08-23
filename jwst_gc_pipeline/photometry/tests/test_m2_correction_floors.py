@@ -32,7 +32,7 @@ def test_a_registered_field_gets_its_own_floor():
 def test_an_unregistered_field_keeps_the_strict_default():
     """Absent means strict, never lenient: a field nobody has measured must not
     inherit somebody else's tolerance."""
-    for target in ('gc2211_o023', 'arches', 'quintuplet', 'sgrb2_nonexistent'):
+    for target in ('gc2211_o023', 'quintuplet', 'sgrb2_nonexistent'):
         assert m2_correction_floor(target, env={}) == (0.0, 'default'), target
 
 
@@ -188,3 +188,46 @@ def test_w51_floor_covers_its_systematic_class_but_not_f444w():
     assert floor == 6.0
     assert floor > 5.42, 'must cover the per-detector systematic class (F162M)'
     assert floor < 8.74, 'must NOT swallow F444W (p90 8.74, max 9.58)'
+
+
+def test_arches_has_a_floor_matching_its_measured_corrections():
+    """arches ran at 4.0 from the env var on every record it has ever written,
+    so it depended on the operator memory this table exists to replace.
+
+    Measured from its own m2 records (2026-08-23): consensus scatter 1.18-1.53
+    mas, 107 corrections across F212N and F323N spanning 2.00-4.22 mas, all but
+    one below 4.  The two current records read ``passed: true`` only because
+    ``correction_floor_source`` is ``env``; at the 0.0 default the same
+    measurements are 51 actionable corrections and an m12 stop.
+    """
+    floor, source = m2_correction_floor('arches', env={})
+    assert source == 'per-field'
+    assert floor == 4.0
+    assert floor > 3.93, 'must cover the largest current-record correction'
+    # and NOT chosen to swallow the one 4.22 mas outlier of 2026-08-01
+    assert floor < 4.22
+
+
+def test_the_two_clean_gc2211_pointings_have_floors_and_the_rest_do_not():
+    """o046 and o050 measure the per-exposure scatter class and nothing else
+    (58 corrections, 2.00-3.52 mas, consensus scatter 0.68-6.91).
+
+    o023, o028 and o049 measure something different -- 118 mas of trailed-
+    exposure displacement, a coherent ~200 mas exposure-2 shift, and three
+    lowest-contrast cells at 5.4-22.4 mas respectively (#484) -- so they stay on
+    the strict default rather than inheriting their siblings' tolerance.
+    """
+    for target in ('gc2211_o046', 'gc2211_o050'):
+        assert m2_correction_floor(target, env={}) == (4.0, 'per-field'), target
+    for target in ('gc2211_o023', 'gc2211_o028', 'gc2211_o049'):
+        assert m2_correction_floor(target, env={}) == (0.0, 'default'), target
+
+
+def test_quintuplet_stays_unregistered_until_it_measures_something():
+    """Its records carry ``correction_floor_mas: 4.0`` from the env var like
+    arches's do, but all four (2026-08-01 and 2026-08-15, F212N and F323N) hold
+    ZERO corrections at a consensus scatter of 1.16-1.32 mas.  An entry there
+    would record the operator's setting rather than the field's scatter, which
+    is the distinction this table is built on.
+    """
+    assert m2_correction_floor('quintuplet', env={}) == (0.0, 'default')
