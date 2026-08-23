@@ -226,6 +226,18 @@ def reduce_module_policy(script=None):
     return {}
 
 
+def registry_obs_key(field):
+    """``field`` spelled the way the module registry keys an observation.
+
+    The reduce's own ``registry_obs_key`` (in ``PipelineRerunNIRCAM-LONG.py``);
+    kept in step so the preflight answers what the reduce will do for `7` as
+    well as for `007`.  A number is padded to three digits, anything else
+    (a wildcard obsid `'*'`) is handed back untouched.  Issue #438.
+    """
+    text = str(field).strip()
+    return f'{int(text):03d}' if text.isdigit() else text
+
+
 def allowed_modules(proposal, obsid, filtername, requested, policy=None,
                     as_written=None):
     """``requested``, narrowed to what the reduce will actually run.
@@ -235,7 +247,7 @@ def allowed_modules(proposal, obsid, filtername, requested, policy=None,
     is every field but one.
     """
     policy = reduce_module_policy() if policy is None else policy
-    entry = (policy.get(str(proposal), {}).get(str(obsid), {})
+    entry = (policy.get(str(proposal), {}).get(registry_obs_key(obsid), {})
              .get(str(filtername).upper()))
     if not entry:
         return set(requested)

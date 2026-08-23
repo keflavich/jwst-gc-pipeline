@@ -253,16 +253,38 @@ def _module_group(module):
     return module
 
 
+def registry_obs_key(field):
+    """``field`` spelled the way the module registry keys an observation.
+
+    MAST, the association names and ``MODULES_BY_PROPOSAL_FIELD_FILTER`` all
+    spell an observation with three digits (``'007'``, ``'050'``), while
+    ``--field`` is taken as typed, so ``7`` and ``07`` name the same
+    observation and miss the registry.  A miss here is SILENT: `allowed_modules`
+    stays None and the request is returned unrestricted with nothing printed,
+    so an unpadded field asks for both modules on an observation that has only
+    one and the reduce goes looking for members that were never taken (issue
+    #438, sickle 3958/007 and gc2211 2211/050).
+
+    Anything that is not a plain number is handed back untouched -- the
+    wildcard obsid ``'*'`` a not-yet-executed program registers, and any
+    non-numeric field spelling -- so this only ever narrows the gap between two
+    spellings of the same number.
+    """
+    text = str(field).strip()
+    return f'{int(text):03d}' if text.isdigit() else text
+
+
 def get_allowed_modules(proposal_id, field, requested_modules, filtername=None):
     allowed_modules = None
-    
+    field_key = registry_obs_key(field)
+
     # Check for filter-specific policy first
     if proposal_id in MODULES_BY_PROPOSAL_FIELD_FILTER:
-        if field in MODULES_BY_PROPOSAL_FIELD_FILTER[proposal_id]:
-            field_policy = MODULES_BY_PROPOSAL_FIELD_FILTER[proposal_id][field]
+        if field_key in MODULES_BY_PROPOSAL_FIELD_FILTER[proposal_id]:
+            field_policy = MODULES_BY_PROPOSAL_FIELD_FILTER[proposal_id][field_key]
             if filtername and filtername in field_policy:
                 allowed_modules = field_policy[filtername]
-    
+
     if allowed_modules is None:
         return requested_modules
 
