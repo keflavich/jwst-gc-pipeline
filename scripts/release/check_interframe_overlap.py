@@ -126,8 +126,27 @@ def _detect(path, nsigma=8.0, box=5):
 # target directory (the brick dir also holds 2221 o002 = cloudc crf) leaks stray
 # frames from other observations/programs into the verdict.  The regex both
 # validates a name and yields (proposal, observation, visit, module) exactly.
+#
+# ``<GGSAA>`` is visit-group + parallel-sequence-id + ACTIVITY id, and the
+# activity id is BASE 36 -- `0`-`9` then `a`-`z`.  It was captured as ``\d+``,
+# which rejects every exposure whose activity id has reached a letter.  Measured
+# 2026-08-22 over ``/orange/adamginsburg/jwst/*/*/pipeline/*_crf.fits``, that is
+# 368 frames in 7 directories, and one of them loses ALL of its frames:
+#
+#     wd1/F200W       96 on disk    0 parsed   (every frame is `_0210b_`)
+#     sickle/F210M   192 on disk   64 parsed
+#     sickle/F187N   192 on disk  128 parsed
+#     sickle/F335M    24 on disk    8 parsed
+#     sickle/F480M    24 on disk    8 parsed
+#     sickle/F470N    24 on disk   16 parsed
+#     w51 MIRI (5 bands)   8 of each band's 32 rejected (`_0210b_`.. `_0210j_`)
+#
+# ``check_filter`` fails closed on zero frames, so wd1/F200W read "NO crf frames
+# matched -- cannot verify" rather than passing; the cost is that the band has
+# never actually been checked, and the message names a glob mismatch instead of
+# the parser.  ``exp`` is left ``\d+``: the exposure counter is decimal.
 _CRF_RE = re.compile(
-    r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_(?P<vgroup>\d+)_(?P<exp>\d+)_"
+    r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_(?P<vgroup>[0-9a-z]+)_(?P<exp>\d+)_"
     r"(?P<det>mirimage|nrc[ab](?:long|[1-4])?)"
     r"(?P<lineage>(?:_[a-z0-9]+)*?)_o(?P<obs2>\d{3})_crf\.fits$")
 

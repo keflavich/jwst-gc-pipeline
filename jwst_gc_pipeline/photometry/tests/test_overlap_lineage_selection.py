@@ -169,12 +169,28 @@ def test_the_destreak_policy_is_not_applied_to_MIRI(tmp_path, monkeypatch):
 def test_a_name_the_selector_cannot_identify_raises_rather_than_vanishing(tmp_path):
     """Frames disappearing without a word is the failure this whole change
     exists to remove, so the selector must not reproduce it on its own input.
-    wd1/F200W's names really do defeat the parser today (see the base-36
-    activity-id issue), and they must not silently shrink a frame set."""
+
+    This used to use wd1/F200W's ``jw01905001001_0210b_...`` as the specimen,
+    because the base-36 activity id defeated the parser.  It no longer does --
+    that was the defect, not the intent -- so the specimen here is a name that
+    is genuinely unidentifiable: a product-level crf
+    (``jw05365-o002_t001_miri_...``), which carries no exposure number at all
+    and sits beside the per-exposure frames in sgrb2's MIRI directories."""
     good = _touch(tmp_path, _name(lineage='_destreak'))
-    odd = _touch(tmp_path, 'jw01905001001_0210b_00001_nrca1_destreak_o001_crf.fits')
+    odd = _touch(tmp_path, 'jw05365-o002_t001_miri_f770w_0_o002_crf.fits')
     with pytest.raises(cio.UnparseableFrameError, match='cannot identify'):
         cio.select_one_copy_per_exposure([good, odd], 'cloudc', 'F405N')
+
+
+def test_the_base36_specimen_no_longer_defeats_the_selector(tmp_path):
+    """The other half of the same statement: wd1/F200W's real names must now go
+    THROUGH the selector rather than raising.  All 96 of that band's frames
+    have a base-36 activity id, so before the parser was widened the gate saw
+    an empty directory there."""
+    a = _touch(tmp_path, 'jw01905001001_0210b_00001_nrca1_destreak_o001_crf.fits')
+    kept, dropped = cio.select_one_copy_per_exposure([a], 'wd1', 'F200W')
+    assert [os.path.basename(k) for k in kept] == [os.path.basename(a)]
+    assert dropped == []
 
 
 def test_a_retired_path_copy_never_competes(tmp_path):
