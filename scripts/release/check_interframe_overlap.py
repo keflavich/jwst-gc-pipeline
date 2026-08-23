@@ -57,8 +57,12 @@ from jwst_gc_pipeline.photometry.naming import MIRI_FILTERS
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.interframe_overlap import (
     overlap_offset_grid, pairwise_overlap_offsets, DEFAULT_OVERLAP_TOL_MAS)
+# NOT measure_offset_grid: this script's per-tile layer is
+# `overlap_offset_grid` (the reason is in `_samestar_ref_grid`'s docstring), and
+# the import outlived the call -- which is what left CLAUDE.md's release-gate
+# sentence naming it as the gate (issue #392).
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    measure_offset_grid, measure_offset, local_residual_map)
+    measure_offset, local_residual_map)
 
 BASE = os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst")
 TOL_MAS = float(os.environ.get("OVERLAP_TOL_MAS", DEFAULT_OVERLAP_TOL_MAS))

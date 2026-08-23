@@ -50,9 +50,13 @@ import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord, search_around_sky
 
+# NOT measure_offset_grid.  This module used to gate per-tile with it and
+# stopped in 0fb1958 (2026-07-13): a per-tile histogram over a 40-250-star tile
+# produces a noise peak that clears any contrast floor and lands anywhere in the
+# window.  The import outlived the call, and left the module reading as though
+# it still used the estimator CLAUDE.md named as the gate (issue #392).
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    confirm_peak_windows, local_residual_map, measure_offset,
-    measure_offset_grid)
+    confirm_peak_windows, local_residual_map, measure_offset)
 
 
 # Overlapping same-instrument frames should co-register to well under a NIRCam

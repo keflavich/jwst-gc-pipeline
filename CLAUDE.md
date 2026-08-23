@@ -236,8 +236,19 @@ Two structural blind spots to respect:
 The real gate: **`scripts/release/check_interframe_overlap.py --field <f> --scan`**
 (reference-free, per-tile, swept; wired BLOCKING into `stage_release.py`). It uses
 `jwst_gc_pipeline.photometry.interframe_overlap` (`assert_overlaps_registered`,
-`overlap_offset_grid`) and the offset-magnitude gate in
-`astrometry_offsets.measure_offset_grid(..., max_off_mas=…)`. See checklist item 0.
+`overlap_offset_grid`), and the offset-magnitude gate is
+`overlap_offset_grid(..., tol_mas=…)` — `DEFAULT_OVERLAP_TOL_MAS` = 30 mas,
+applied on **both** of its layers: the pooled swept tie per pair, and each cell
+of the matched-pair `local_residual_map` over the intersection. See checklist
+item 0.
+
+This sentence used to name `astrometry_offsets.measure_offset_grid(...,
+max_off_mas=…)`. The gate stopped using that estimator in 0fb1958 (2026-07-13):
+a per-tile histogram over a 40–250-star tile produces a noise peak that clears
+any contrast floor and lands anywhere in the window. `measure_offset_grid` is
+still the right tool for mapping an offset against a REFERENCE per tile (the
+paragraph above), and its `max_off_mas` has never been passed by a production
+caller — issue #392.
 
 ---
 
