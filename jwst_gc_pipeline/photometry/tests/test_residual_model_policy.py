@@ -60,17 +60,67 @@ def _img(path, what=""):
     return sci.data, WCS(sci.header)
 
 
-def _peaks(arr, w, stars, box=3):
-    out = []
+def _box(arr, w, stars, box=3):
+    """Yield each star's (2*box+1)^2 core cutout, or ``None`` when off-image."""
     ny, nx = arr.shape
     xs, ys = w.world_to_pixel(stars)
     for x, y in zip(np.atleast_1d(xs), np.atleast_1d(ys)):
         xi, yi = int(round(float(x))), int(round(float(y)))
         if not (0 <= xi < nx and 0 <= yi < ny):
-            out.append(np.nan); continue
-        sub = arr[max(0, yi - box):yi + box + 1, max(0, xi - box):xi + box + 1]
-        out.append(float(np.nanmax(sub)) if np.isfinite(sub).any() else np.nan)
-    return np.array(out)
+            yield None
+            continue
+        yield arr[max(0, yi - box):yi + box + 1, max(0, xi - box):xi + box + 1]
+
+
+def _peaks(arr, w, stars, box=3):
+    return np.array([np.nan if sub is None or not np.isfinite(sub).any()
+                     else float(np.nanmax(sub))
+                     for sub in _box(arr, w, stars, box)])
+
+
+def _troughs(arr, w, stars, box=3):
+    """Deepest pixel in each star's core box -- the over-subtraction counterpart
+    of `_peaks`.  A model carrying more flux than the star leaves a HOLE here,
+    and `_peaks` on the residual cannot see one: a crater and a clean
+    subtraction both have a small positive maximum."""
+    return np.array([np.nan if sub is None or not np.isfinite(sub).any()
+                     else float(np.nanmin(sub))
+                     for sub in _box(arr, w, stars, box)])
+
+
+#: Ceilings for the OVER-subtraction direction (issue #266 item 4).  Both are
+#: ratios to the star's own data peak, and both are deliberately loose against
+#: the current products.  Measured over the 39 curated stars in the sickle F480M
+#: ``resbgsub_m5`` products of 2026-08-21:
+#:
+#:     model/data peak      max  1.46   (4 stars over 1.2, 3 over 1.3, 1 over 1.4)
+#:     resid core / data    min -0.47   (4 stars below -0.3, 3 below -0.4)
+#:
+#: so the tighter pair suggested on the issue (1.5 and -0.5) clears today's worst
+#: star by 3% and 5%, which is inside the run-to-run movement this file's own
+#: history records -- a permanently-red assertion one re-reduction later.  These
+#: sit where the claim stops depending on the metric's known bias instead: the
+#: model mosaic is sharper than the drizzled data mosaic, so a peak ratio
+#: over-reads by roughly 1.1-1.3x, and nothing in that explains a model at twice
+#: the star's peak or a crater deeper than the whole star.  What they pin is that
+#: the direction is TESTED, which it was not; tightening them wants the
+#: integrated metric the issue asks for, calibrated on its own.
+MODEL_PEAK_CEILING = 2.0
+RESID_CORE_FLOOR = -1.0
+
+
+def over_rendered(d, m, ceiling=MODEL_PEAK_CEILING):
+    """Indices where the model peak exceeds ``ceiling`` x the data peak."""
+    d, m = np.asarray(d, float), np.asarray(m, float)
+    ok = np.isfinite(d) & (d > 0) & np.isfinite(m)
+    return np.flatnonzero(ok & (m > ceiling * d))
+
+
+def over_subtracted(d, rmin, floor=RESID_CORE_FLOOR):
+    """Indices where the residual core digs below ``floor`` x the data peak."""
+    d, rmin = np.asarray(d, float), np.asarray(rmin, float)
+    ok = np.isfinite(d) & (d > 0) & np.isfinite(rmin)
+    return np.flatnonzero(ok & (rmin < floor * d))
 
 
 #: The EXACT products the fixture opens.  The skip predicate must be keyed on
@@ -129,7 +179,7 @@ def f480m():
                      f"{STAGE} model i2d")
     return dict(stars=stars,
                 d=_peaks(data, dw, stars), r=_peaks(resid, rw, stars),
-                m=_peaks(model, mw, stars),
+                m=_peaks(model, mw, stars), rmin=_troughs(resid, rw, stars),
                 model=model, resid=resid)
 
 
@@ -161,6 +211,39 @@ def test_model_contains_the_stars(f480m):
         f"{n_missing}/{int(ok.sum())} curated bright stars are missing/weak in "
         f"the F480M model i2d (peak <20% of data); the model must contain all "
         f"stars, saturated and unsaturated.")
+
+
+def test_model_not_overrendered(f480m):
+    """The other direction of `test_model_contains_the_stars`.
+
+    That test fails a model peak BELOW 20% of the data peak and says nothing
+    about one above it, so a star rendered at several times its own brightness
+    passes cleanly -- one did, at 3.3x, in the census on issue #266.  An
+    over-rendered model is subtracted from the data, so it is the same defect as
+    a missing one seen from the other side.
+    """
+    bad = over_rendered(f480m['d'], f480m['m'])
+    assert bad.size == 0, (
+        f"{bad.size} curated bright star(s) render at more than "
+        f"{MODEL_PEAK_CEILING}x their data peak in the F480M model i2d "
+        f"(worst {np.nanmax(np.asarray(f480m['m'])[bad] / np.asarray(f480m['d'])[bad]):.2f}x); "
+        f"the model must carry the star's flux, not more.")
+
+
+def test_residual_not_oversubtracted(f480m):
+    """The other direction of `test_residual_contains_no_stars`.
+
+    That test reads the residual's MAXIMUM, so it fails a star left behind and
+    passes a star gouged out: a crater and a clean subtraction both have a small
+    positive maximum.  A hole biases the sky estimate the same way a leftover
+    star does, and the residual-bg feedback loop reads that sky.
+    """
+    bad = over_subtracted(f480m['d'], f480m['rmin'])
+    assert bad.size == 0, (
+        f"{bad.size} curated bright star(s) leave a residual core below "
+        f"{RESID_CORE_FLOOR}x their data peak "
+        f"(worst {np.nanmin(np.asarray(f480m['rmin'])[bad] / np.asarray(f480m['d'])[bad]):.2f}x); "
+        f"the residual must contain background only, in both directions.")
 
 
 def test_model_background_not_negative(f480m):
