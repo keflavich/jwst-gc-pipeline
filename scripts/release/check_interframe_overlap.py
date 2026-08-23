@@ -1504,14 +1504,45 @@ def main(argv=None):
         if r.get("not_in_release"):
             continue          # not this release's band; neither passed nor failed
         checked += 1
+        # The two arms are INDEPENDENT (issue #393).  `check_filter` sets
+        # `could_not_verify` and `PASS` separately, and one filter can carry
+        # BOTH -- a pair measured as misregistered AND a different pair nothing
+        # could arbitrate.  Under an `elif` such a filter set only
+        # `any_noverify`, and the run printed "no matchable crf frames / no
+        # detections", naming a cause that did not occur, for a field whose real
+        # finding was exposures more than TOL_MAS apart.  Both refusals reach
+        # `stage_release` the same way (rc != 0), so what the `elif` cost was the
+        # operator's next move: check the file naming, or check the alignment.
+        #
+        # `any_fail` reads the MEASURED-failure arms directly rather than
+        # `not PASS`.  `PASS` is already False for every could-not-verify filter
+        # (`PASS=bool(not bad and not ext_fail and not could_not_verify)`, and
+        # the no-frames/no-detections early returns hard-code `PASS=False`), so
+        # `not r["PASS"]` would relabel every could-not-verify as a measured
+        # misregistration -- the same confusion pointing the other way.
         if r.get("could_not_verify"):
             any_noverify = True
-        elif not r.get("PASS"):
+        if r.get("n_fail") or r.get("ext_fail"):
             any_fail = True
+    # Print EVERY refusal that applies before returning one code, so a field
+    # carrying both is described by both lines.
     if any_fail:
         print(f"\nOVERLAP GATE: FAIL for {args.field} -- inter-frame misregistration "
               f"(> {TOL_MAS:.0f} mas). Do NOT stage; re-examine per-visit alignment.",
               flush=True)
+    if any_noverify:
+        # exit 2 = could-not-verify: distinct from a measured FAIL, but still
+        # refused by stage_release (its rc != 0 branch) -- fail closed, never
+        # green-because-the-glob-matched-nothing.  The wording stays
+        # cause-neutral: several arms reach here (no matchable crf frames, no
+        # detections, a pair whose own overlap footprint could not be
+        # arbitrated), and the per-filter lines above say which.
+        print(f"\nOVERLAP GATE: COULD NOT VERIFY {args.field} -- at least one filter "
+              f"had something nothing could measure; the per-filter lines above name "
+              f"it. Fix the products, the glob or the arbiter reference; a gate that "
+              f"finds nothing is not a passing gate.", flush=True)
+    # A measured FAIL is the more severe verdict, so it owns the exit code.
+    if any_fail:
         return 1
     if filts and not checked:
         print(f"\nOVERLAP GATE: COULD NOT VERIFY {args.field} -- every band was "
@@ -1520,12 +1551,6 @@ def main(argv=None):
               f"not a passing gate.", flush=True)
         return 2
     if any_noverify:
-        # exit 2 = could-not-verify: distinct from a measured FAIL, but still
-        # refused by stage_release (its rc != 0 branch) -- fail closed, never
-        # green-because-the-glob-matched-nothing.
-        print(f"\nOVERLAP GATE: COULD NOT VERIFY {args.field} -- at least one filter "
-              f"had no matchable crf frames / no detections. Fix the products or the "
-              f"glob; a gate that finds nothing is not a passing gate.", flush=True)
         return 2
     return 0
 
