@@ -58,6 +58,62 @@ RECORD_RE = re.compile(
 CORRECTING_STAGES = ("m1", "m2", "m12")
 
 
+def _stage_index(stage):
+    """``m5`` -> 5, ``m7_crossfilter`` -> 7.  ``None`` for an unparseable name."""
+    m = re.match(r"^m(\d+)", str(stage or ""))
+    return int(m.group(1)) if m else None
+
+
+def _superseded_by_later_stage(info, rec, found, shipped_stages):
+    """The later frozen record that answers this failure, or ``None``.
+
+    The frozen ladder asks ONE question at every stage: is the solution still
+    the one m2 froze?  A LATER stage on the SAME chain answering "no movement"
+    is a measurement of that same property, on the same exposures, against the
+    same m2 baseline -- and it is a measurement made after the failing one.  So
+    an excursion that a later stage does not see did not reach the products the
+    later stage describes.
+
+    brick F200W is the live case (issue #258).  One chain, 22-24 July:
+
+        m2  2/7 = (+1.90, -0.31)   the freeze
+        m5  2/7 = (+4.06, -1.10)   MOVED 2.30 mas   <- FAILED, tol 2.0
+        m6  2/7 = (+2.56, -0.42)   moved 0.68 mas   -- passed
+        m7  2/7 = (+2.41, -0.34)   moved 0.51 mas   -- passed
+
+    and brick ships the m7 products.  Refusing the field on m5 refuses it for a
+    transient in an intermediate nobody receives, while the two later
+    measurements of the same property, on the shipped stage, both say the
+    solution held.
+
+    ``shipped_stages`` is the guard, and it is what keeps this from being a
+    blanket "a later pass forgives an earlier failure": if the RELEASE actually
+    ships the failing stage's products, the failure is about something a user
+    will download and is never superseded.  Empty/None means the caller did not
+    say, and nothing is superseded -- fail closed.
+    """
+    idx = _stage_index(info["stage"])
+    if idx is None or not shipped_stages:
+        return None
+    if info["stage"] in shipped_stages or f"m{idx}" in shipped_stages:
+        return None
+    date = str(rec.get("date") or "")
+    best = None
+    for _p, i2, r2 in found:
+        if i2["stage"] in CORRECTING_STAGES or not r2.get("passed"):
+            continue
+        if (i2["filt"], i2["obs"]) != (info["filt"], info["obs"]):
+            continue
+        j = _stage_index(i2["stage"])
+        if j is None or j <= idx:
+            continue
+        if str(r2.get("date") or "") <= date:
+            continue          # not later in the same chain
+        if best is None or j > _stage_index(best[1]["stage"]):
+            best = (_p, i2, r2)
+    return best
+
+
 def _newest_correcting(found):
     """Newest correcting-stage record date, by ``(filter, obs)`` and overall.
 
@@ -135,11 +191,34 @@ def main(argv=None):
     ap.add_argument("--field", required=True)
     ap.add_argument("--observations", default="",
                     help="comma-separated obsids to scope to (e.g. 001,004)")
+    ap.add_argument("--shipped-stages", default="",
+                    help="comma-separated stages whose products this release "
+                         "actually ships (e.g. m7,m8). A failure at a stage "
+                         "that is NOT shipped, and that a LATER stage of the "
+                         "same chain measured as passing, describes an "
+                         "intermediate nobody receives and is reported as "
+                         "superseded rather than refused. Omit to supersede "
+                         "nothing (fail closed).")
     ap.add_argument("--scan", action="store_true",
                     help="accepted for symmetry with the sibling gates; this "
                          "check always scans every record in scope")
     args = ap.parse_args(argv)
-    obs = {o.strip().lstrip("o") for o in args.observations.split(",") if o.strip()}
+    # Accept BOTH spellings.  This gate keys on the bare obsid a record name
+    # carries (`checkpoint_m3_F212N_o007_latest.json` -> "007"), while
+    # `stage_release._release_observations` -- shared with the overlap gate --
+    # yields PROPOSAL-obs keys ("02221-002").  Parsing those as bare obsids
+    # matched nothing, so every TOKENISED record was silently dropped; with the
+    # newest m2 among them, a superseded failure came back as live and refused
+    # the field.  Measured on 2026-08-20: cloudc read "1 FAILED" (m3/F182M,
+    # 2026-08-06) under the proposal-obs spelling and "0 FAILED, superseded by
+    # the 2026-08-12 m2" under the bare one; arches the same with m3/F212N.
+    # A false FAILED sends someone hunting an astrometry defect that is not there.
+    obs = set()
+    for token in args.observations.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        obs.add(token.rsplit("-", 1)[-1].lstrip("o"))
 
     found, unreadable = records(args.field, obs or None)
     if unreadable:
@@ -158,8 +237,10 @@ def main(argv=None):
               f"the ones this release ships.", file=sys.stderr)
         return 3
 
+    shipped_stages = {t.strip() for t in args.shipped_stages.split(",")
+                      if t.strip()}
     by_key, overall = _newest_correcting(found)
-    failed, stale, current = [], [], []
+    failed, stale, current, answered = [], [], [], []
     for path, info, rec in found:
         if info["stage"] in CORRECTING_STAGES:
             continue
@@ -168,16 +249,34 @@ def main(argv=None):
             stale.append((path, info, rec, older_than))
             continue
         current.append((path, info, rec))
-        if not rec.get("passed"):
-            failed.append((path, info, rec))
+        if rec.get("passed"):
+            continue
+        later = _superseded_by_later_stage(info, rec, found, shipped_stages)
+        if later is not None:
+            answered.append((path, info, rec, later))
+            continue
+        failed.append((path, info, rec))
 
     n_frozen = len(current) + len(stale)
     # Summary FIRST.  It goes to stdout and the verdict goes to stderr, so on a
     # terminal the two interleave by order of printing -- and a verdict that
     # cites counts printed after it reads backwards.
     print(f"{args.field}: {len(found)} checkpoint record(s), {n_frozen} at a "
-          f"frozen stage ({len(stale)} superseded), {len(failed)} FAILED")
+          f"frozen stage ({len(stale)} superseded), {len(failed)} FAILED"
+          + (f", {len(answered)} answered by a later stage" if answered else ""))
     sys.stdout.flush()
+    for path, info, rec, (_lp, li, lr) in answered:
+        who = "/".join(x for x in (info["stage"], info["filt"],
+                                   (f"o{info['obs']}" if info["obs"] else None))
+                       if x)
+        print(f"ANSWERED BY A LATER STAGE {who}: recorded FAILED "
+              f"{rec.get('date')}, but {li['stage']} measured the same property "
+              f"on the same exposures at {lr.get('date')} and passed. This "
+              f"release does not ship {info['stage']} products "
+              f"(shipped: {','.join(sorted(shipped_stages)) or 'none declared'}), "
+              f"so the excursion did not reach anything a user receives.")
+        for line in (rec.get("failures") or [])[:4]:
+            print(f"    was: {line}")
     for path, info, rec, older_than in stale:
         who = "/".join(x for x in (info["stage"], info["filt"],
                                    (f"o{info['obs']}" if info["obs"] else None))
