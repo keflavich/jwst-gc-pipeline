@@ -20,11 +20,13 @@ from astropy.coordinates import SkyCoord
 from scipy.spatial import cKDTree
 from jwst_gc_pipeline.reduction import saturated_star_finding as ssf
 
-GC = '/orange/adamginsburg/jwst/gc2211'
+import gc2211_paths as gc
+
+EXAMPLE_EXP = 'jw02211023001_02201_00001_nrca1'
 mode = sys.argv[1] if len(sys.argv) > 1 else 'deblend'
 assert mode in ('baseline', 'deblend')
 crf = sys.argv[2] if len(sys.argv) > 2 else (
-    f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_destreak_'
+    f'{gc.pipeline(EXAMPLE_EXP, "F200W")}/{EXAMPLE_EXP}_destreak_'
     f'jw02211-o023_20260515t014922_image3_00001_crf.fits')
 OUT = os.path.join(os.path.dirname(__file__), 'out_compare')
 os.makedirs(OUT, exist_ok=True)
@@ -35,7 +37,7 @@ if 'CRPIX1' not in header:
     from astropy import wcs as _wcs
     header.update(_wcs.WCS(fh['SCI'].header).to_header())
 
-kwargs = dict(path_prefix=f'{GC}/psfs/', plot=False,
+kwargs = dict(path_prefix=gc.PSFS, plot=False,
               use_merged_psf_for_merged=False)
 
 if mode == 'deblend':
@@ -45,7 +47,7 @@ if mode == 'deblend':
     # daophot is_saturated snap + full-catalog confirm (production would pass the
     # current per-filter merged catalog; use it here for a realistic run)
     ww = WCS(fh['SCI'].header)
-    dao = Table.read(f'{GC}/catalogs/f200w_merged_indivexp_merged_dao_basic.fits')
+    dao = Table.read(gc.catalog('f200w_merged_indivexp_merged_dao_basic.fits'))
     dsc = SkyCoord(dao['skycoord']); issat = np.asarray(dao['is_saturated'], bool)
 
     def dedupe(sc, link=2.0):

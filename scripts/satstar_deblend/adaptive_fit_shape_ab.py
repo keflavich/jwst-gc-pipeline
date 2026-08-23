@@ -31,9 +31,11 @@ import astropy.units as u
 
 from jwst_gc_pipeline.reduction import saturated_star_finding as ssf
 
-GC = '/orange/adamginsburg/jwst/gc2211'
+import gc2211_paths as gc
+
+EXAMPLE_EXP = 'jw02211023001_02201_00001_nrca1'
 CRF = sys.argv[1] if len(sys.argv) > 1 else (
-    f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_destreak_'
+    f'{gc.pipeline(EXAMPLE_EXP, "F200W")}/{EXAMPLE_EXP}_destreak_'
     f'jw02211-o023_20260515t014922_image3_00001_crf.fits')
 OUT = os.path.join(os.path.dirname(__file__), 'out_footprint')
 BASELINE = os.path.join(OUT, 'satstar_size081.fits')   # flat size=81 (from the sweep)
@@ -51,7 +53,7 @@ def run_adaptive():
         from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
         sync_header_to_gwcs(header, frame_wcs(fh).gwcs, fh['SCI'].data.shape,
                             label='adaptive-ab')
-    kwargs = dict(path_prefix=f'{GC}/psfs/', plot=False,
+    kwargs = dict(path_prefix=gc.PSFS, plot=False,
                   use_merged_psf_for_merged=False, pad=81,
                   adaptive_fit_shape=True)
     zf = ssf._find_zeroframe_for(CRF)

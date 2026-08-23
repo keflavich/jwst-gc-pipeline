@@ -18,10 +18,13 @@ from jwst_gc_pipeline.reduction.filtering import get_fwhm
 from jwst_gc_pipeline.reduction.satstar_deblend import (
     deblend_blob_zeroframe, robust_zf_ceiling)
 
-GC = '/orange/adamginsburg/jwst/gc2211'
-CAL = f'{GC}/F200W/jw02211023001_02201_00001_nrca1_cal.fits'
-RAMP = f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_ramp.fits'
-RESID = f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_destreak_o023_crf_iter3_satstar_residual.fits'
+import gc2211_paths as gc
+
+EXP = 'jw02211023001_02201_00001_nrca1'
+PIPE = gc.pipeline(EXP, 'F200W')
+CAL = gc.frame(EXP, 'F200W')
+RAMP = f'{PIPE}/{EXP}_ramp.fits'
+RESID = f'{PIPE}/{EXP}_destreak_o023_crf_iter3_satstar_residual.fits'
 OUTDIR = os.path.join(os.path.dirname(__file__), 'out')
 os.makedirs(OUTDIR, exist_ok=True)
 
@@ -44,7 +47,7 @@ slices = find_objects(sources)
 sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)
 
 # deduped daophot is_saturated positions in-frame
-dao = Table.read(f'{GC}/catalogs/f200w_merged_indivexp_merged_dao_basic.fits')
+dao = Table.read(gc.catalog('f200w_merged_indivexp_merged_dao_basic.fits'))
 dsc = SkyCoord(dao['skycoord'])
 issat = np.asarray(dao['is_saturated'], dtype=bool)
 dx, dy = ww.world_to_pixel(dsc[issat])

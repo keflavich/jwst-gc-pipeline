@@ -34,16 +34,19 @@ from scipy.ndimage import label, find_objects, sum_labels
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import find_saturated_stars
 
-GC = '/orange/adamginsburg/jwst/gc2211'
+import gc2211_paths as gc
+
 FILTER = sys.argv[1].upper() if len(sys.argv) > 1 else 'F200W'
 N_EX = int(sys.argv[2]) if len(sys.argv) > 2 else 8
 OUTDIR = os.path.join(os.path.dirname(__file__), 'out')
 os.makedirs(OUTDIR, exist_ok=True)
 
 # ---- pick one deep GC obs frame (o028) ----
-cands = sorted(glob.glob(f'{GC}/{FILTER}/jw02211028*nrca1_cal.fits'))
+cands = sorted(glob.glob(gc.frame_glob('jw02211028*nrca1_cal.fits', FILTER)))
 if not cands:
-    cands = sorted(glob.glob(f'{GC}/{FILTER}/jw02211*nrca1_cal.fits'))
+    # no observation in the pattern, so every post-split tree is searched
+    cands = sorted(c for pattern in gc.all_obs_frame_globs('jw02211*nrca1_cal.fits', FILTER)
+                   for c in glob.glob(pattern))
 calfn = cands[0]
 print(f'frame = {calfn}', flush=True)
 
@@ -59,11 +62,11 @@ slices = find_objects(sources)
 print(f'{nsrc} saturated components', flush=True)
 
 # ---- reference catalogs ----
-gns = Table.read(f'{GC}/catalogs/GALACTICNUCLEUS_2021_gc2211.fits')
+gns = Table.read(gc.catalog('GALACTICNUCLEUS_2021_gc2211.fits'))
 gns_sc = SkyCoord(gns['RAJ2000'], gns['DEJ2000'], unit=(u.deg, u.deg))
 gx, gy = ww.world_to_pixel(gns_sc)
 
-dao = Table.read(f'{GC}/catalogs/{FILTER.lower()}_merged_indivexp_merged_dao_basic.fits')
+dao = Table.read(gc.catalog(f'{FILTER.lower()}_merged_indivexp_merged_dao_basic.fits'))
 dsc = SkyCoord(dao['skycoord'])
 issat = np.asarray(dao['is_saturated'], dtype=bool)
 dsat_sc_all = dsc[issat]

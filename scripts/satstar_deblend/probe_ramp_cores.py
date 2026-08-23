@@ -17,9 +17,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-GC = '/orange/adamginsburg/jwst/gc2211'
-RAMP = f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_ramp.fits'
-CAL = f'{GC}/F200W/jw02211023001_02201_00001_nrca1_cal.fits'
+import gc2211_paths as gc
+
+EXP = 'jw02211023001_02201_00001_nrca1'
+RAMP = f'{gc.pipeline(EXP, "F200W")}/{EXP}_ramp.fits'
+CAL = gc.frame(EXP, 'F200W')
 OUTDIR = os.path.join(os.path.dirname(__file__), 'out')
 os.makedirs(OUTDIR, exist_ok=True)
 

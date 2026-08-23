@@ -47,14 +47,16 @@ import astropy.units as u
 
 from jwst_gc_pipeline.reduction import saturated_star_finding as ssf
 
-GC = '/orange/adamginsburg/jwst/gc2211'
+import gc2211_paths as gc
+
+EXAMPLE_EXP = 'jw02211023001_02201_00001_nrca1'
 SIZES = [int(s) for s in (sys.argv[1] if len(sys.argv) > 1
                           else os.environ.get('SWEEP_SIZES', '11,17,21,31,51,81')).split(',')]
 CRF = sys.argv[2] if len(sys.argv) > 2 else os.environ.get('SWEEP_CRF', (
-    f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_destreak_'
+    f'{gc.pipeline(EXAMPLE_EXP, "F200W")}/{EXAMPLE_EXP}_destreak_'
     f'jw02211-o023_20260515t014922_image3_00001_crf.fits'))
 # PSF path_prefix: production uses {basepath}/psfs; override per field via env.
-PATH_PREFIX = os.environ.get('SWEEP_PSFS', f'{GC}/psfs/')
+PATH_PREFIX = os.environ.get('SWEEP_PSFS', gc.PSFS)
 OUT = os.environ.get('SWEEP_OUT', os.path.join(os.path.dirname(__file__), 'out_footprint'))
 os.makedirs(OUT, exist_ok=True)
 PAD = 81                 # held FIXED across the sweep (cutout/mask/model-eval)

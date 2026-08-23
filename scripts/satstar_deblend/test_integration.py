@@ -21,18 +21,20 @@ for p in ('zeroframe', 'deblend_daophot_xy', 'deblend_confirm_xy'):
     assert p in sig.parameters and sig.parameters[p].default is None, p
 print('OK get_saturated_stars signature has opt-in deblend params (default None)')
 
-GC = '/orange/adamginsburg/jwst/gc2211'
-fd = fits.open(f'{GC}/F200W/jw02211023001_02201_00001_nrca1_cal.fits')
+import gc2211_paths as gc
+
+EXP = 'jw02211023001_02201_00001_nrca1'
+fd = fits.open(gc.frame(EXP, 'F200W'))
 data = fd['SCI'].data
 ww = WCS(fd['SCI'].header)
 _, fwhm_pix = get_fwhm(fd[0].header, instrument_replacement='NIRCam')
-zeroframe = fits.open(f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_ramp.fits')['ZEROFRAME'].data[0].astype(float)
+zeroframe = fits.open(f'{gc.pipeline(EXP, "F200W")}/{EXP}_ramp.fits')['ZEROFRAME'].data[0].astype(float)
 
 saturated, sources, coms, _seed_kinds = ssf.find_saturated_stars(fd)
 coms = ssf._refine_coms_by_data(coms, data, sources)
 sizes = sum_labels(saturated, sources, np.arange(int(sources.max())) + 1)
 
-dao = Table.read(f'{GC}/catalogs/f200w_merged_indivexp_merged_dao_basic.fits')
+dao = Table.read(gc.catalog('f200w_merged_indivexp_merged_dao_basic.fits'))
 dsc = SkyCoord(dao['skycoord']); issat = np.asarray(dao['is_saturated'], bool)
 dx, dy = ww.world_to_pixel(dsc[issat])
 m = np.isfinite(dx) & np.isfinite(dy) & (dx > -5) & (dx < data.shape[1]+5) & (dy > -5) & (dy < data.shape[0]+5)

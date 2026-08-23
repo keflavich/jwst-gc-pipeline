@@ -24,11 +24,12 @@ from jwst_gc_pipeline.reduction.filtering import get_fwhm
 from jwst_gc_pipeline.reduction.satstar_deblend import (
     deblend_blob_zeroframe, robust_zf_ceiling)
 
-GC = '/orange/adamginsburg/jwst/gc2211'
+import gc2211_paths as gc
+
 EXP = 'jw02211023001_02201_00001_nrca1'
-CAL = f'{GC}/F200W/{EXP}_cal.fits'
-RAMP = f'{GC}/F200W/pipeline/{EXP}_ramp.fits'
-PIPE = f'{GC}/F200W/pipeline'
+CAL = gc.frame(EXP, 'F200W')
+PIPE = gc.pipeline(EXP, 'F200W')
+RAMP = f'{PIPE}/{EXP}_ramp.fits'
 
 fd = fits.open(CAL)
 data = fd['SCI'].data
@@ -49,7 +50,7 @@ slices = find_objects(sources)
 sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)
 
 # deduped daophot is_saturated (snap) positions
-dao = Table.read(f'{GC}/catalogs/f200w_merged_indivexp_merged_dao_basic.fits')
+dao = Table.read(gc.catalog('f200w_merged_indivexp_merged_dao_basic.fits'))
 dsc = SkyCoord(dao['skycoord'])
 issat = np.asarray(dao['is_saturated'], dtype=bool)
 dx, dy = ww.world_to_pixel(dsc[issat])
