@@ -399,11 +399,17 @@ def _checkpoint_passed(failures, unverified_blocking):
 # 2026-07-28, compounding across re-tie iterations (13.5" -> 19.2" -> 27.1" in
 # dra) until the table was unusable, with no guard firing.
 #
-# seed_offsets_table_from_consensus already gates the RESULTING consensus row
-# at this limit (a consensus table holds nothing but jitter, so its absolute
-# value is bounded).  The curated VIRAC2locked tables carry legitimate
-# arcsec-scale BULK offsets in their rows, so they cannot be gated on absolute
-# value -- they are gated here, on the CORRECTION.
+# seed_offsets_table_from_consensus gates the RESULTING consensus row at this
+# limit -- for its PER-EXPOSURE rows, which hold nothing but jitter, so their
+# absolute value is bounded.  It is NOT true that a consensus table holds
+# nothing else: the per-visit BULK tie lands in the same table under the
+# (BULK_EXPOSURE, BULK_MODULE) sentinel row, and on the `consensus`-channel
+# fields (w51, arches, gc-treasury) that row is how the field is tied to its
+# reference.  Those rows are bounded by MAX_BULK_CORRECTION_ARCSEC there, the
+# same way this module bounds the CORRECTION below (issue #395).  The curated
+# VIRAC2locked tables carry legitimate arcsec-scale BULK offsets in their rows,
+# so they cannot be gated on absolute value -- they are gated here, on the
+# CORRECTION.
 MAX_CORRECTION_ARCSEC = 0.5
 
 # The per-VISIT BULK tie (consensus -> reference; exposure=None AND module=None)
@@ -2542,14 +2548,72 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                 f"against NaN is False), and fix_alignment would apply NaN to "
                 f"those frames.  Repair the row(s) by hand before correcting "
                 f"this table again.")
-        big = [(k, a, d) for k, (a, d) in zip(keys, offs)
-               if abs(a) > 0.5 or abs(d) > 0.5]
+        # A per-exposure consensus (internal-jitter) fix is mas-scale, and an
+        # accumulated row over the ceiling means the upstream measurement is
+        # wrong -- do NOT bake it in.  Three things this test used to get wrong
+        # (issue #395):
+        #
+        # 1. THE BULK ROW IS NOT A PER-EXPOSURE JITTER FIX.  The per-visit
+        #    consensus->reference tie is stored here under the sentinel
+        #    (BULK_EXPOSURE, BULK_MODULE) row, and it is the row that repairs a
+        #    wrong-guide-star visit -- brick-1182's ~20", cloudc F410M's 4.06",
+        #    sgra/1939's ~14.8".  `MAX_BULK_CORRECTION_ARCSEC` (60") exists to
+        #    let exactly that be written, and `_assert_correction_magnitudes`
+        #    already applies it to the incoming corrections.  Holding the
+        #    RESULTING bulk row to the per-exposure ceiling closed the repair
+        #    path on every `consensus`-channel field -- w51, whose registry
+        #    note says the bulk sentinel is how the whole field is tied to
+        #    gaia_refcat, arches, and gc-treasury's 139 undelivered tiles,
+        #    which were registered ahead of data precisely so a gross offset
+        #    could be corrected.  The refusal also blamed the measurement
+        #    ("the upstream per-exposure measurement is wrong") for what was
+        #    the ceiling.
+        #
+        # 2. IT COMPARED A COORDINATE OFFSET AGAINST AN ON-SKY CEILING.
+        #    `dra (arcsec)` is a right-ascension COORDINATE difference (the
+        #    convention fix_alignment applies, AOFFCONV='coordinate'), while
+        #    MAX_CORRECTION_ARCSEC is on-sky.  The two differ by cos(dec) --
+        #    14.2% at arches' -28.85 deg, measured on its own table's F323N
+        #    bulk row (-0.060663" coordinate vs -53.135 mas on-sky) -- so the
+        #    effective ceiling was 0.438" there and field-dependent.  Convert
+        #    with the row's own recorded declination where it has one.  A row
+        #    with no `prov_dec_deg` keeps cos(dec) = 1, which is the CONSERVATIVE
+        #    end of [COS_DEC_MIN, 1]: the on-sky value can only be smaller, so
+        #    an unlabelled row is held to exactly the ceiling it is held to
+        #    today and this change can only ever refuse LESS, never more.
+        #
+        # 3. THE CEILING WAS A LITERAL, so `ASTROM_MAX_CORRECTION_ARCSEC` --
+        #    which the docs say raises it -- did not reach it.  Read the
+        #    constants and their overrides.
+        limit = _positive_env_float("ASTROM_MAX_CORRECTION_ARCSEC",
+                                    MAX_CORRECTION_ARCSEC)
+        bulk_limit = _positive_env_float("ASTROM_MAX_BULK_CORRECTION_ARCSEC",
+                                         MAX_BULK_CORRECTION_ARCSEC)
+        big = []
+        for k, r, (a, d) in zip(keys, rows, offs):
+            is_bulk = (int(r["Exposure"]) == BULK_EXPOSURE
+                       and str(r["Module"]) == BULK_MODULE)
+            cap = bulk_limit if is_bulk else limit
+            raw_dec = r.get(PROV_DEC_DEG_KEY)
+            if isinstance(raw_dec, str):
+                # a CSV round trip can leave the cell as '' or '--'
+                raw_dec = raw_dec.strip()
+                raw_dec = raw_dec if raw_dec not in ("", "--") else None
+            dec = _finite_float(raw_dec, float("nan"))
+            cosd = float(np.cos(np.radians(dec))) if np.isfinite(dec) else 1.0
+            onsky_ra = abs(a) * cosd
+            if onsky_ra > cap or abs(d) > cap:
+                big.append((k, "bulk" if is_bulk else "per-exposure",
+                            round(onsky_ra, 6), round(abs(d), 6), cap))
         if big:
-            # a consensus (internal-jitter) fix is mas-scale; > 0.5" means the
-            # upstream per-exposure measurement is wrong -- do NOT bake it in.
             raise OffsetsTableUpdateError(
-                f"consensus table {os.path.basename(out_path)} has |offset| > "
-                f"0.5\" (mas-scale expected): {big}")
+                f"consensus table {os.path.basename(out_path)} has row(s) whose "
+                f"ON-SKY |offset| > their ceiling "
+                f"(per-exposure {limit}\", bulk sentinel {bulk_limit}\"): "
+                f"(key, kind, |dra on-sky|\", |ddec|\", ceiling\") = {big}.  "
+                f"Raise ASTROM_MAX_CORRECTION_ARCSEC / "
+                f"ASTROM_MAX_BULK_CORRECTION_ARCSEC with written justification "
+                f"if the shift is deliberate.")
         tbl = Table(rows)
         if existed:
             # A COPY, as in update_offsets_table: the table must never be
