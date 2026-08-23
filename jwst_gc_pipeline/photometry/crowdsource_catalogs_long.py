@@ -201,6 +201,7 @@ class CappedSourceGrouper:
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
     MIRI_FILTERS, MULTIOBS_PROPOSALS,
+    frame_identity,
     observation_field_token,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
@@ -3411,23 +3412,21 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                                 meta={'grid_xypos': shifted_xy,
                                       'oversampling': grid.oversampling}))
         bn = os.path.basename(orig)
-        visit_id = bn.split('_')[0][-3:]
-        vgroup_id = bn.split('_')[1]
-        exposure_id = bn.split('_')[2]
         # JOINT multi-obs runs (field like '002-998'): the per-frame products fold
         # the observation number into vgroup_id (cataloging.py do_photometry frame
         # loop) so two obs that share a visit+vgroup+exposure (e.g. sgrb2 obs998's
-        # redo reused obs002's tile 02101) don't collide.  Mirror that fold here so
-        # the raw per-frame residual/model are FOUND (else this build aborts with
-        # "missing raw basic products").  Single-obs runs (no '-') unchanged.
-        if '-' in str(field):
-            vgroup_id = f'{bn.split("_")[0][-6:-3]}{vgroup_id}'
+        # redo reused obs002's tile 02101) don't collide.  `frame_identity` does
+        # that fold given the field, so the raw per-frame residual/model are FOUND
+        # (else this build aborts with "missing raw basic products").  Single-obs
+        # runs (no '-') unchanged.
+        #
         # Per-frame products are named by the actual DETECTOR (the manual path
         # writes them per-detector to avoid SW filename collisions); use it in the
         # stem so the raw residual/model are found and the mergedcat per-frame
         # products are written per-detector too.  The FINAL coadded mosaic below
         # keeps the requested ``module`` (merged-module) name.
-        frame_detector = bn.split('_')[3]
+        (visit_id, vgroup_id, exposure_id,
+         frame_detector) = frame_identity(orig, field=field)
         (visitid_, vgroupid_, exposure_, desat, bgsub,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
@@ -3806,7 +3805,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
                                 meta={'grid_xypos': shifted_xy,
                                       'oversampling': grid.oversampling}))
         bn = os.path.basename(orig)
-        visit_id, vgroup_id, exposure_id = bn.split('_')[0][-3:], bn.split('_')[1], bn.split('_')[2]
+        visit_id, vgroup_id, exposure_id, _ = frame_identity(orig)
         catfn = _predict_tblfilename(cut_bp, filtername, module, options,
                                      visit_id, vgroup_id, exposure_id,
                                      iteration_label='iter2', method='daophot',
@@ -4862,12 +4861,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             task_idx = index // bundle
                             if task_idx > max_task:
                                 max_task = task_idx
-                            exposure_id = filename.split("_")[2]
-                            visit_id = filename.split("_")[0][-3:]
-                            vgroup_id = filename.split("_")[1]
-                            # Match the per-file detector token convention
-                            # used by the main each-exposure loop above.
-                            file_detector = filename.split("_")[3]
+                            # From the BASENAME: `get_filenames` returns full
+                            # paths, and an underscore in the field directory
+                            # shifts every index (#472, #477).  The detector
+                            # token matches the convention the main
+                            # each-exposure loop above uses.
+                            (visit_id, vgroup_id, exposure_id,
+                             file_detector) = frame_identity(filename)
                             # The MANUAL per-frame writer names by DETECTOR
                             # unconditionally (cataloging.py:4848) -- module is
                             # only the merge label.  `module == 'merged'` is not
@@ -4972,14 +4972,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                     print(f'Task={task_env} (bundle {bundle_size}, range [{lo},{hi})) skipping index {index}')
                                     continue
 
-                            exposure_id = filename.split("_")[2]
-                            visit_id = filename.split("_")[0][-3:]
-                            vgroup_id = filename.split("_")[1]
-                            # Name outputs by the file's own detector token.
+                            # From the BASENAME: `get_filenames` returns full
+                            # paths, and an underscore in the field directory
+                            # shifts every index (#472, #477).  Outputs are
+                            # named by the file's own detector token;
                             # module='merged' spans all detectors, so writing
                             # them all under 'merged' would overwrite 8 outputs
                             # per exposure down to 1.
-                            file_detector = filename.split("_")[3]
+                            (visit_id, vgroup_id, exposure_id,
+                             file_detector) = frame_identity(filename)
                             file_module, _skip_phase = perframe_sentinel_key(
                                 options, module, file_detector)
                             if options.skip_if_done and _expected_output_exists(
