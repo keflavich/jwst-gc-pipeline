@@ -4363,7 +4363,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     #       RAN and REFUSED.  A measured-and-refused item (#312/#341): a gross
     #       consensus->reference tie, a module-antisymmetric alias.  It already
     #       has its own message at the writer, its own escape hatch
-    #       (ALLOW_UNVERIFIED_ASTROM=1, which makes _checkpoint_passed return
+    #       (ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1 -- the module constant
+    #       `ALLOW_UNVERIFIED_ENV`, which makes _checkpoint_passed return
     #       True so this never sees it) and its own issue.
     #
     # Reporting the second as "0 failure(s); the gate did NOT run" is false on
@@ -4406,10 +4407,17 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         else:
             raise AstrometryCheckpointFailedError(msg)
     elif record.get('passed') is False and _blocking:
+        # Name the hatch from the constant the reader ACTUALLY consults.  This
+        # line used to spell it `ALLOW_UNVERIFIED_ASTROM=1`, which nothing in
+        # the tree reads: an operator who set it saw no change and reached for
+        # ASTROM_CHECKPOINT_WARN_ONLY=1 instead, which demotes EVERY blocking
+        # failure rather than this one item (issue #400 item 1).
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+            ALLOW_UNVERIFIED_ENV)
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: NOT A PASS "
               f"-- {len(_blocking)} item(s) were MEASURED and REFUSED (the gate "
               f"ran).  See the checkpoint's own report above; "
-              f"ALLOW_UNVERIFIED_ASTROM=1 proceeds.\n"
+              f"{ALLOW_UNVERIFIED_ENV}=1 proceeds.\n"
               + "\n".join(f"  {b}" for b in _blocking[:4])
               + ("\n  ..." if len(_blocking) > 4 else "")
               + f"\n  record: {record.get('record_path')}", flush=True)
