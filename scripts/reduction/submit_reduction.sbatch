@@ -143,6 +143,12 @@ MODULES=${MODULES:-nrca,nrcb,merged}
 # also skip exposures whose _cal/_ramp are newer than their _uncal, which
 # resumes a killed SKIP=0 job (leave it unset for a forcing re-reduce).
 SKIP=${SKIP:-1}
+# Declared (and exported) here so the value the log reports below is exactly the
+# one `stage12_selection.stage12_resume_enabled` reads out of the environment.
+# 0 and unset mean the same thing to it, so this changes no behaviour; what it
+# adds is that a job log answers "was this reduction forced, or resumed off
+# products already on disk?".
+export STAGE12_RESUME=${STAGE12_RESUME:-0}
 # Full Sgr C filter set. Override with --export=ALL,FILTERS="F405N F470N".
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 
@@ -197,7 +203,7 @@ if [ "${SLURM_JOB_NAME:-reduce}" = "reduce" ]; then
 fi
 
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-echo "REDUCE start: proposal=$PROPOSAL field=$FIELD filter=$FILT modules=$MODULES skip=$SKIP skymatch=${SKYMATCH:-off}"
+echo "REDUCE start: proposal=$PROPOSAL field=$FIELD filter=$FILT modules=$MODULES skip=$SKIP resume=$STAGE12_RESUME skymatch=${SKYMATCH:-off}"
 echo "PIPE=$PIPE"
 "$PYTHON" "$PIPE" -p "$PROPOSAL" -d "$FIELD" -f "$FILT" -m "$MODULES" $SKIP_FLAG $SKYMATCH_FLAG
 rc=$?
