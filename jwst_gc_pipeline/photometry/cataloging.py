@@ -1426,25 +1426,45 @@ def _resolve_each_suffix(options, filtername):
 
 
 def _satstar_recovery_signature(options):
-    """A compact string identifying the saturated-core RECOVERY configuration
-    that ``_fill_saturated_pixels`` applies before the satstar wing fit.  It is
-    stamped into the per-exposure satstar catalog (meta key ``SATRECOV``) and
-    checked when that cache is reused, so toggling recovery forces a refit
-    instead of silently returning a pre-recovery catalog.  Keep it stable for a
-    fixed config: only the fields that change the recovered flux belong here.
+    """A compact string identifying every option that changes the per-exposure
+    satstar FIT.  It is stamped into the per-exposure satstar catalog (meta key
+    ``SATRECOV``) and checked when that cache is reused, so toggling one of
+    those options forces a refit instead of silently returning a catalog built
+    under the other setting.  Keep it stable for a fixed config: only the fields
+    that change the fitted flux belong here.
 
-    Returns ``"off"`` when NO recovery is requested (the dilation is irrelevant
+    Two groups are covered:
+
+    * the saturated-core RECOVERY that ``_fill_saturated_pixels`` applies before
+      the wing fit (``--satstar-zeroframe-recover`` / ``--satstar-ramp-recover``,
+      and the dilation, which matters only once recovery is on);
+    * ``--deblend-satstars``, which sets ``zeroframe_deblend=True`` on
+      ``get_saturated_stars`` so a merged saturated blob is split into its
+      components using the group-0 ZEROFRAME cores.  A deblended exposure
+      catalog holds a different set of sources at different fluxes, so a cache
+      built without it is not reusable with it (issue #427).
+
+    Returns ``"off"`` when nothing here is requested (the dilation is irrelevant
     then).  A legacy cache with no stamp was built by the pre-signature pipeline,
-    which had no recovery, so it is treated as ``"off"`` on read -- that way a
-    plain non-recovery re-run does NOT needlessly rebuild every field's satstar
-    catalogs; only a recovery run rebuilds a legacy (or differently-configured)
-    cache."""
+    which had neither recovery nor deblending, so it is treated as ``"off"`` on
+    read -- that way a plain re-run does NOT needlessly rebuild every field's
+    satstar catalogs; only a recovery/deblend run rebuilds a legacy (or
+    differently-configured) cache.
+
+    The deblend flag is an appended ``_dbl1`` token rather than a field of the
+    recovery triple, so that with deblending OFF this returns byte-identical
+    strings to the pre-#427 version: the ~409 cached catalogs in a single
+    filter of brick alone stay valid for every run that does not ask for the
+    deblend."""
     zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
     ramp = bool(getattr(options, 'satstar_ramp_recover', False))
+    deblend = bool(getattr(options, 'deblend_satstars', False))
     if not zf and not ramp:
-        return "off"
-    return "zf%d_ramp%d_dil%d" % (
-        int(zf), int(ramp), int(getattr(options, 'satstar_zeroframe_dilate', 3)))
+        base = "off"
+    else:
+        base = "zf%d_ramp%d_dil%d" % (
+            int(zf), int(ramp), int(getattr(options, 'satstar_zeroframe_dilate', 3)))
+    return base + "_dbl1" if deblend else base
 
 
 def _fill_saturated_pixels(filename, data, dqarr, was_sat, finite_model,
