@@ -41,6 +41,13 @@ PIPE_ROOT=${PIPE_ROOT:-}
 # Exported (not listed in --export) because its value may contain commas, which
 # would corrupt SLURM's comma-separated --export list; --export=ALL inherits it.
 export EXTRA_ARGS=${EXTRA_ARGS:-}
+# Per-filter suffix override, e.g.
+# EACH_SUFFIX_OVERRIDES="F187N:destreak_o007_crf,F210M:destreak_o007_crf" --
+# for a field whose destreak policy splits by wavelength (sickle), where one
+# EACH_SUFFIX cannot serve every filter.  Exported for the SAME comma reason as
+# EXTRA_ARGS above: the value is comma-separated, so listing it in
+# COMMON_EXPORT would truncate it at the first pair.
+export EACH_SUFFIX_OVERRIDES=${EACH_SUFFIX_OVERRIDES:-}
 
 # Per-filter (stage 1) resource slice -- keep small so it fits queue holes.
 # A smaller cpu ask only trades runtime for a faster start; mem/time stay

@@ -91,6 +91,15 @@ EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
 # ALL filters that participate in the cross-band merge (space-separated).
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
+
+# Per-filter suffix override (see submit_cataloging.sbatch), e.g.
+# EACH_SUFFIX_OVERRIDES="F187N:destreak_o007_crf,F210M:destreak_o007_crf".
+# Optional; a field whose destreak policy splits by wavelength has no single
+# EACH_SUFFIX that serves every filter.
+EACH_SUFFIX_OVERRIDES=${EACH_SUFFIX_OVERRIDES:-}
+EACH_SUFFIX_OVERRIDES_ARG=""
+[ -n "$EACH_SUFFIX_OVERRIDES" ] && \
+    EACH_SUFFIX_OVERRIDES_ARG="--each-suffix-overrides=$EACH_SUFFIX_OVERRIDES"
 PARALLEL_WORKERS=${PARALLEL_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}
 # Optional: pin the cross-band astrometric reference filter.
 CROSSBAND_REF=${CROSSBAND_REF:-}
@@ -152,7 +161,7 @@ _m7_rename_wanted() { [ "${SLURM_JOB_NAME:-catalog_m7}" = "catalog_m7" ] && [ -n
 _m7_rename_wanted && scontrol update JobId="$SLURM_JOB_ID" \
     JobName="${TARGET}${PROPOSAL}-o${FIELD}-m7" 2>/dev/null || true
 
-echo "CATALOG m7 start: $TARGET $PROPOSAL/$FIELD filters=$FILT_CSV modules=$MODULES"
+echo "CATALOG m7 start: $TARGET $PROPOSAL/$FIELD filters=$FILT_CSV modules=$MODULES suffix=$EACH_SUFFIX overrides=${EACH_SUFFIX_OVERRIDES:-none}"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 "$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
     --filternames="$FILT_CSV" \
@@ -162,6 +171,7 @@ PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/p
     --field="$FIELD" \
     --target="$TARGET" \
     --each-suffix="$EACH_SUFFIX" \
+    $EACH_SUFFIX_OVERRIDES_ARG \
     --max-group-size="$MAX_GROUP_SIZE" \
     --parallel-workers="$PARALLEL_WORKERS" \
     --manual-start-phase=m7 \
