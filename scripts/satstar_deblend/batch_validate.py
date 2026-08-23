@@ -18,19 +18,22 @@ from jwst_gc_pipeline.reduction.filtering import get_fwhm
 from jwst_gc_pipeline.reduction.satstar_deblend import (
     deblend_blob_zeroframe, robust_zf_ceiling)
 
-GC = '/orange/adamginsburg/jwst/gc2211'
+import gc2211_paths as gc
+
 OUTDIR = os.path.join(os.path.dirname(__file__), 'out_batch')
 os.makedirs(OUTDIR, exist_ok=True)
 
-# (filter, cal-glob) spanning SW/LW, A/B modules, multiple obs
+# (filter, cal-glob) spanning SW/LW, A/B modules, multiple obs.  Each pattern
+# names its own observation, and gc.frame_glob roots it in that observation's
+# post-split tree (#469/#470) -- four different trees are read here.
 FRAMES = [
-    ('F150W', f'{GC}/F150W/jw02211028*_nrca1_cal.fits'),
-    ('F150W', f'{GC}/F150W/jw02211028*_nrcb3_cal.fits'),
-    ('F200W', f'{GC}/F200W/jw02211023001_02201_00001_nrca1_cal.fits'),
-    ('F200W', f'{GC}/F200W/jw02211046*_nrca3_cal.fits'),
-    ('F200W', f'{GC}/F200W/jw02211049*_nrcb2_cal.fits'),
-    ('F277W', f'{GC}/F277W/jw02211023*_nrcalong_cal.fits'),
-    ('F277W', f'{GC}/F277W/jw02211028*_nrcblong_cal.fits'),
+    ('F150W', gc.frame_glob('jw02211028*_nrca1_cal.fits', 'F150W')),
+    ('F150W', gc.frame_glob('jw02211028*_nrcb3_cal.fits', 'F150W')),
+    ('F200W', gc.frame_glob('jw02211023001_02201_00001_nrca1_cal.fits', 'F200W')),
+    ('F200W', gc.frame_glob('jw02211046*_nrca3_cal.fits', 'F200W')),
+    ('F200W', gc.frame_glob('jw02211049*_nrcb2_cal.fits', 'F200W')),
+    ('F277W', gc.frame_glob('jw02211023*_nrcalong_cal.fits', 'F277W')),
+    ('F277W', gc.frame_glob('jw02211028*_nrcblong_cal.fits', 'F277W')),
 ]
 
 def dedupe_inframe(sc, ww, shape, link=2.0):
@@ -54,7 +57,7 @@ def dedupe_inframe(sc, ww, shape, link=2.0):
 dao_cache = {}
 def get_dao(filt):
     if filt not in dao_cache:
-        t = Table.read(f'{GC}/catalogs/{filt.lower()}_merged_indivexp_merged_dao_basic.fits')
+        t = Table.read(gc.catalog(f'{filt.lower()}_merged_indivexp_merged_dao_basic.fits'))
         dao_cache[filt] = (SkyCoord(t['skycoord']), np.asarray(t['is_saturated'], dtype=bool))
     return dao_cache[filt]
 
@@ -64,7 +67,7 @@ for filt, cglob in FRAMES:
         print(f'\n### {filt} {cglob}: NO MATCH', flush=True); continue
     cal = cands[0]
     stem = os.path.basename(cal).replace('_cal.fits', '')
-    ramp = f'{GC}/{filt}/pipeline/{stem}_ramp.fits'
+    ramp = f'{gc.pipeline(stem, filt)}/{stem}_ramp.fits'
     print(f'\n### {filt}  {stem}', flush=True)
     try:
         fd = fits.open(cal)
