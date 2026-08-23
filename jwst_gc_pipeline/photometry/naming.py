@@ -349,3 +349,38 @@ def perframe_name_re(band_pattern=r'[a-z0-9]+',
     return re.compile(
         rf'({band_pattern})_({detector_pattern}){OBS_TOKEN_PATTERN}'
         rf'_visit(\d+)_vgroup(\w+)_exp(\d+)')
+
+
+def frame_identity(path, field=None):
+    """``(visit_id, vgroup_id, exposure_id, detector)`` of a per-exposure product.
+
+    The four tokens every per-frame writer names its output from, counted as
+    underscore-separated fields of ``jw<PPPPP><OOO><VVV>_<vgroup>_<exp>_<det>_...``.
+
+    Read from the BASENAME, always.  The indices count underscores from the
+    left, so parsing the full path shifts every one of them as soon as the
+    DIRECTORY contains an underscore -- and underscored field directories are
+    ordinary now (the gc2211 per-observation split, ``cloudef_controlfield``).
+    Measured with a basepath of ``/orange/adamginsburg/jwst/gc2211_o023/``, the
+    path split gave visit ``'211'`` (off ``.../jwst/gc2211``), vgroup
+    ``'o023/F200W/pipeline/jw02211023001'`` and detector ``'00001'``, so all
+    four exposures of a filter shared one identity.  Three fields lost every m12
+    shard to it (issue #472); this helper exists so the expression has one home
+    instead of five copies, four of which still had the bug when it was fixed in
+    the fifth (issue #477).
+
+    ``field`` folds the observation number into ``vgroup_id`` for a JOINT
+    multi-obs run (a field like ``'002-998'``), where two observations can share
+    visit+vgroup+exposure -- sgrb2 obs998 reused obs002's mosaic tile numbers --
+    and would otherwise write one another's outputs.  Left ``None``, or any
+    field without a ``-``, the vgroup is returned unchanged.
+    """
+    base = os.path.basename(path)
+    parts = base.split('_')
+    visit_id = parts[0][-3:]
+    vgroup_id = parts[1]
+    exposure_id = parts[2]
+    detector = parts[3]
+    if field is not None and '-' in str(field):
+        vgroup_id = f'{parts[0][-6:-3]}{vgroup_id}'
+    return visit_id, vgroup_id, exposure_id, detector

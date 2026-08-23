@@ -21,6 +21,7 @@ not the host module.
 """
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as _host
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry.naming import frame_identity
 import pylab as pl
 
 # Reproduce the exact module namespace the relocated code had while it lived in
@@ -493,10 +494,10 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                 n_overlap_phase = 0
                 overlapping_now = []
                 for filename in candidate_frames:
-                    exposure_id = filename.split("_")[2]
-                    visit_id = filename.split("_")[0][-3:]
-                    vgroup_id = filename.split("_")[1]
-                    file_detector = filename.split("_")[3]
+                    # From the BASENAME: these are full paths, and an underscore
+                    # in the field directory shifts every index (#472, #477).
+                    (visit_id, vgroup_id, exposure_id,
+                     file_detector) = frame_identity(filename)
                     file_module = file_detector if module == 'merged' else module
                     if options.skip_if_done and _expected_output_exists(
                             cut_bp, filt, file_module, opts_phase,

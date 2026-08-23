@@ -31,6 +31,7 @@ from astropy.table import Table
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 
+from jwst_gc_pipeline.photometry.naming import frame_identity
 from jwst_gc_pipeline.photometry.psf_fitting import forced_psf_photometry
 
 ABMAG_OFFSET = 8.90  # -2.5 log10(flux_jy) + 8.90  (AB)
@@ -45,13 +46,12 @@ def _frame_args_from_filename(filename, *, options, filt, field, basepath,
 
     ``satstar_label`` selects which phase's satstar products to subtract; m8
     has none of its own, so it reuses the final real phase (m7)."""
-    exposure_id = filename.split("_")[2]
-    visit_id = filename.split("_")[0][-3:]
-    vgroup_id = filename.split("_")[1]
-    file_detector = filename.split("_")[3]
-    if '-' in str(field):
-        obs_id = filename.split("_")[0][-6:-3]
-        vgroup_id = f'{obs_id}{vgroup_id}'
+    # `get_filenames` returns FULL PATHS, so the tokens come from the basename.
+    # Splitting the path shifted every index for a field directory with an
+    # underscore -- gc2211_o023 read visit '211' and detector '00001' -- which is
+    # the defect #472 fixed in run_manual_pipeline and left standing here.
+    visit_id, vgroup_id, exposure_id, file_detector = frame_identity(
+        filename, field=field)
     return dict(
         options=options, filtername=filt, module=file_detector, field=field,
         basepath=basepath, filename=filename, proposal_id=proposal_id,
