@@ -89,17 +89,27 @@ echo "Per-frame chain: target=$TARGET $PROPOSAL/$FIELD modules=$MODULES"
 echo "  phases: $PHASES   NSHARDS=$NSHARDS   filters: $FILTERS"
 SB="$HERE/submit_cataloging_perframe_phase.sbatch"
 
+# Job-name stem, per the standing convention <target><program>-o<obsid>-<stage>.
+# A target whose name ALREADY ends in its proposal number -- gc2211 on proposal
+# 2211 -- would otherwise read "gc22112211-o028-m12-fanout", which is what the
+# queue showed for the o028 measurement pass.  The jicama runner collapses this
+# (common.sh run_retie) and this script did not, so the same field was named two
+# different ways depending on which entry point submitted it.
+JOB_STEM="${TARGET}${PROPOSAL}"
+case "$TARGET" in *"$PROPOSAL") JOB_STEM="$TARGET";; esac
+echo "  job names: ${JOB_STEM}-o${FIELD}-<phase>-{fanout,finalize}"
+
 for ph in $PHASES; do
     dep_arg=""; [ -n "$prev_dep" ] && dep_arg="--dependency=$prev_dep"
     A=$(sbatch --parsable $dep_arg \
-        --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-fanout" \
+        --job-name="${JOB_STEM}-o${FIELD}-${ph}-fanout" \
         --array=0-$((NSHARDS-1)) \
         --cpus-per-task="$FANOUT_CPUS" --mem="$FANOUT_MEM" --time="$FANOUT_TIME" \
         --export="$COMMON,PHASE=$ph,MODE=fanout,PARALLEL_WORKERS=$FANOUT_CPUS" \
         "$SB")
     echo "  $ph fan-out array : $A  (0-$((NSHARDS-1)))${dep_arg:+  [$dep_arg]}"
     B=$(sbatch --parsable --dependency=afterok:"$A" \
-        --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-finalize" \
+        --job-name="${JOB_STEM}-o${FIELD}-${ph}-finalize" \
         --cpus-per-task="$FINALIZE_CPUS" --mem="$FINALIZE_MEM" --time="$FINALIZE_TIME" \
         --export="$COMMON,PHASE=$ph,MODE=finalize,PARALLEL_WORKERS=$FINALIZE_CPUS" \
         "$SB")
