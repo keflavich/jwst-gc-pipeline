@@ -26,12 +26,13 @@ def test_a_registered_field_gets_its_own_floor():
     assert m2_correction_floor('brick', env={}) == (4.0, 'per-field')
     assert m2_correction_floor('cloudc', env={}) == (8.0, 'per-field')
     assert m2_correction_floor('sgra', env={}) == (4.0, 'per-field')
+    assert m2_correction_floor('w51', env={}) == (4.0, 'per-field')
 
 
 def test_an_unregistered_field_keeps_the_strict_default():
     """Absent means strict, never lenient: a field nobody has measured must not
     inherit somebody else's tolerance."""
-    for target in ('gc2211_o023', 'w51', 'arches', 'quintuplet'):
+    for target in ('gc2211_o023', 'arches', 'quintuplet', 'sgrb2_nonexistent'):
         assert m2_correction_floor(target, env={}) == (0.0, 'default'), target
 
 
@@ -167,3 +168,19 @@ def test_sgra_has_a_floor_matching_its_own_scatter():
     floor, source = m2_correction_floor('sgra', env={})
     assert source == 'per-field'
     assert floor == 4.0
+
+
+def test_w51_has_a_floor_matching_its_own_scatter():
+    """w51 F140M: scatter 1.40 mas over 64 measurements, and m2 emitted five
+    corrections of 2.50-3.64 mas at ABOVE-median contrast (ranks 46-53/64).
+    Credible measurements the size of the field's own noise -- four of them are
+    nrcb2 exposures 1-4 reading a consistent 2.8-3.6 mas, i.e. the per-detector
+    SIAF/DVA class the module-locked table cannot express.
+
+    4.0 clears the largest of them (3.64) and matches brick (2.27 mas scatter)
+    and sgra (1.84).
+    """
+    floor, source = m2_correction_floor('w51', env={})
+    assert source == 'per-field'
+    assert floor == 4.0
+    assert floor > 3.64, 'must clear the largest observed sub-noise correction'
