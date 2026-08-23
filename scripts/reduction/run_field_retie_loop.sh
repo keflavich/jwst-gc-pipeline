@@ -139,6 +139,15 @@ if [ -n "${ASTROM_M2_CORRECTION_FLOOR_MAS:-}" ]; then
 else
     echo "[floor] ASTROM_M2_CORRECTION_FLOOR_MAS unset -- using the per-field table"
 fi
+
+# What the field WOULD get with nothing exported.  Resolved once, here, where
+# TARGET is in scope: the bounded-fixed-point branch below needs it as the "never
+# lowered" baseline, and that branch is extracted and run standalone by
+# test_retie_accept_bounded_branch.py with only a handful of variables defined --
+# so it must not reach for TARGET, PIPE_ROOT or python itself.
+PER_FIELD_FLOOR=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python -c "
+from jwst_gc_pipeline.photometry.m2_correction_floors import m2_correction_floor
+print(m2_correction_floor('${TARGET:-}', env={})[0])" 2>/dev/null || echo 0)
 # Which offsets table does m2 REWRITE for this field?  The before/after md5sum
 # check below is only meaningful against that one file, and the answer depends on
 # the field's CONFIGURED CHANNEL -- not on which tables happen to exist.
@@ -598,10 +607,7 @@ for ((it=1; it<=MAXITER; it++)); do
             # effective floor is the field's PER-FIELD value, not 0, and taking 0
             # here would let the raise LOWER a field whose table entry is above
             # what the fixed-point check computed (sgrc/cloudc 8.0, w51 6.0).
-            _prev_floor=${ASTROM_M2_CORRECTION_FLOOR_MAS:-$(
-                PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python -c "
-from jwst_gc_pipeline.photometry.m2_correction_floors import m2_correction_floor
-print(m2_correction_floor('$TARGET', env={})[0])" 2>/dev/null || echo 0)}
+            _prev_floor=${ASTROM_M2_CORRECTION_FLOOR_MAS:-${PER_FIELD_FLOOR:-0}}
             _effective_floor=$(awk -v a="$_prev_floor" -v b="$fp_floor" \
                 'BEGIN{print (a>b)?a:b}')
             echo "[iter $it] BOUNDED fixed point -- re-reducing once more with"
