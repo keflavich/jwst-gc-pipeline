@@ -8,6 +8,14 @@
 #SBATCH --time=2:00:00
 #SBATCH --output=/blue/adamginsburg/adamginsburg/logs/outlier161-dither-dependence_%j.log
 
+# No core dumps.  A python SIGBUS in a 60+ GB reduction writes a core file
+# the size of the process (43 GiB measured, 2026-08-06) into the working
+# directory, and /orange runs at 97% full.  HiPerGator sets
+# PropagateResourceLimits=NONE, so a `ulimit -c 0` in the submitting shell
+# does NOT reach the compute node -- it has to be set here, inside the batch
+# script itself (jwst-gc-pipeline#428).
+ulimit -c 0
+
 # keflavich/jwst-gc-pipeline#161 DIAGNOSIS: run outlier_detection's own flagging
 # test against a blot of the exposure's OWN resampled image, so no other
 # exposure can contribute.  Whatever it flags is pure resample/blot round-trip.

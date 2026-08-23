@@ -24,6 +24,14 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=/orange/adamginsburg/jwst/logs/reduce_%x_%A_%a.out
 
+# No core dumps.  A python SIGBUS in a 60+ GB reduction writes a core file
+# the size of the process (43 GiB measured, 2026-08-06) into the working
+# directory, and /orange runs at 97% full.  HiPerGator sets
+# PropagateResourceLimits=NONE, so a `ulimit -c 0` in the submitting shell
+# does NOT reach the compute node -- it has to be set here, inside the batch
+# script itself (jwst-gc-pipeline#428).
+ulimit -c 0
+
 source ~/.bash_profile 2>/dev/null
 export CRDS_PATH=${CRDS_PATH:-/orange/adamginsburg/jwst/crds}
 export GC_ALLOW_DEV="${GC_ALLOW_DEV:-1}"

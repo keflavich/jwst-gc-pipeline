@@ -8,6 +8,14 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=/blue/adamginsburg/adamginsburg/logs/satstar-cmd-regen-brick-o001_%j.log
 
+# No core dumps.  A python SIGBUS in a 60+ GB reduction writes a core file
+# the size of the process (43 GiB measured, 2026-08-06) into the working
+# directory, and /orange runs at 97% full.  HiPerGator sets
+# PropagateResourceLimits=NONE, so a `ulimit -c 0` in the submitting shell
+# does NOT reach the compute node -- it has to be set here, inside the batch
+# script itself (jwst-gc-pipeline#428).
+ulimit -c 0
+
 # Regenerate the saturated-star CMD figures (astrometry paper app:satstar) from the
 # FRESH satstar-recovered 2221 catalog, as soon as the per-exposure cataloging job
 # (37553031, phases m12..m7 + m8 forced-fill/dedup) finishes successfully.

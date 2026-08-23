@@ -9,6 +9,14 @@
 #SBATCH --array=1-8
 #SBATCH --output=/blue/adamginsburg/adamginsburg/logs/satstar-fitsweep-cal_%A_%a.log
 
+# No core dumps.  A python SIGBUS in a 60+ GB reduction writes a core file
+# the size of the process (43 GiB measured, 2026-08-06) into the working
+# directory, and /orange runs at 97% full.  HiPerGator sets
+# PropagateResourceLimits=NONE, so a `ulimit -c 0` in the submitting shell
+# does NOT reach the compute node -- it has to be set here, inside the batch
+# script itself (jwst-gc-pipeline#428).
+ulimit -c 0
+
 # Calibration array for the fit-footprint flux correction: one task per frame in
 # cal_manifest.tsv, each running the full size sweep (default 11..81). Produces
 # per-size satstar catalogs under each frame's OUT dir for the correction fit.

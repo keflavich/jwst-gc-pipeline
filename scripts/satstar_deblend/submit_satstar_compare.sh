@@ -15,7 +15,8 @@ for MODE in baseline deblend; do
          --job-name="satcmp_${MODE}" \
          --output="$LOG/satcmp_${MODE}_%j.log" \
          --time=8:00:00 --mem=48G --cpus-per-task=4 --nodes=1 --ntasks=1 \
-         --wrap "export STPSF_PATH=/orange/adamginsburg/jwst/stpsf-data/; \
+         --wrap "ulimit -c 0; \
+                 export STPSF_PATH=/orange/adamginsburg/jwst/stpsf-data/; \
                  $PY $SCR/run_satstar_compare.py $MODE"
 done
 echo "submitted baseline + deblend"

@@ -32,7 +32,8 @@ for FIELD in "${FIELDS[@]}"; do
         --job-name="${FIELD}-diagwriteup" \
         --output="${LOGDIR}/${FIELD}-diagwriteup_%j.log" \
         --ntasks=1 --cpus-per-task=4 --mem=64gb --time=08:00:00 \
-        --wrap "PYTHONPATH='$REPO' '$PYTHON' -u \
+        --wrap "ulimit -c 0; \
+                PYTHONPATH='$REPO' '$PYTHON' -u \
                 '$REPO/scripts/analysis/make_diagnostic_writeup.py' \
                 --field '$FIELD' --skip-empty"
 done
