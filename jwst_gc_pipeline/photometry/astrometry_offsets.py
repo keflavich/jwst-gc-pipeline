@@ -10,6 +10,29 @@ brick-1182 / prop-2221 astrometry.  See CLAUDE.md and
 ``reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md``.
 
 Do NOT write ad-hoc NN-median matching.  Call ``measure_offset`` here.
+
+Density-immune is NOT unbiased against a DENSE reference
+--------------------------------------------------------
+
+"Density-immune" here means immune to NN-COLLAPSE, the failure this module was
+written to replace.  It does NOT mean the peak is unbiased.  The histogram peak
+is unbiased only while the NON-matching pair background is uniform, and against
+a DENSE reference (full VIRAC2) two catalogs tracing the SAME clustered stellar
+field make a correlated, non-uniform wrong-pair background that PULLS THE PEAK
+by several mas.  Measured on brick (2026-07-16): the histogram read ~9-10 mas
+against dense VIRAC2 with a +-6.5 mas RA term whose SIGN FLIPPED between
+filters -- an artifact, since a real field offset cannot flip sign per filter --
+while the same-star tie over the same data was ~0 in RA and ~-5 mas in Dec.
+Against SPARSE Gaia the histogram was clean.
+
+So against a dense reference use ``measure_offset`` to DETECT that the tie is
+small, then take the PRECISE bulk value same-star, from ``local_residual_map``
+(single giant cell) -- or simply call
+``visit_consensus.measure_reference_tie``, which does the whole detect-then-
+refine sequence and reports which route produced its number
+(``bulk_source``: ``"same-star"`` / ``"histogram"``).  A shipped correction must
+come from the same-star bulk.  See CLAUDE.md and the
+``histogram-vs-samestar-offset-bias`` note.
 """
 
 import numpy as np
@@ -399,6 +422,16 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         ``off_mas`` is written on the derived per-cell / per-window RECORDS
         (``measure_offset_grid`` cells, ``windows`` entries), which nothing
         mutates after the fact.  See issue #267.
+
+        ``dra``/``ddec`` here are the HISTOGRAM PEAK, which against a DENSE
+        reference carries a several-mas bias -- the correlated wrong-pair
+        background described in this module's docstring, distinct from the
+        NN-collapse this method is immune to.  Read it as a DETECTION of the
+        tie's size, not as the precise bulk: refine same-star through
+        ``local_residual_map`` (single giant cell), or call
+        ``visit_consensus.measure_reference_tie``, which sequences the two and
+        reports ``bulk_source``.  Against a SPARSE reference (the Gaia-only
+        subset) the peak is clean and no refinement is needed.  Issue #397.
     """
     min_contrast = DEFAULT_MIN_CONTRAST if min_contrast is None else min_contrast
     maxsep_arcsec = maxsep.to(u.arcsec).value if hasattr(maxsep, "to") else float(maxsep)
