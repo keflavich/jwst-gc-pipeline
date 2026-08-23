@@ -54,6 +54,13 @@ PER_FIELD_FLOOR_MAS = {
     'cloudef_controlfield': 4.0,   # same program + optics as cloudef (2092)
     'cloudc': 8.0,              # never converges at 4.0
     'sgrc': 8.0,                # issue #261
+    # sgra F115W: consensus scatter 1.84 mas over 96 measurements, and its m2
+    # emitted a single 2.08 mas correction -- credible (contrast 976, rank
+    # 77/96) but the same size as the field's own scatter, so it is not a
+    # displacement the module-locked table should express.  It stopped the m12
+    # finalize twice (jobs 39933168, 39972201) after a full regeneration had
+    # already been run for it.  Same shape as brick, whose scatter is 2.27.
+    'sgra': 4.0,
 }
 
 
