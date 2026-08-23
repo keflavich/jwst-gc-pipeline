@@ -289,3 +289,62 @@ def test_seed_accepts_a_normal_single_observation_field(tmp_path):
     p = seed_offsets_table_from_consensus(
         str(tmp_path), "5365", "002", [_corr("1", 1, "nrca1", 0.0, 5.0)])
     assert Table.read(p)["Visit"][0] == "jw05365002001"
+
+
+def _blank_a_cell(path, column, row_index):
+    """Blank one CSV cell, the way a heterogeneous `Table(rows)` write does."""
+    lines = open(path).read().splitlines()
+    col = lines[0].split(',').index(column)
+    fields = lines[1 + row_index].split(',')
+    fields[col] = ''
+    lines[1 + row_index] = ','.join(fields)
+    with open(path, 'w') as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def test_a_blank_offset_cell_is_REFUSED_rather_than_written_as_NaN(tmp_path):
+    """A blank `dra (arcsec)` cell reads back MASKED, `float()` makes it NaN,
+    and the |offset| > 0.5" guard cannot see it -- `abs(nan) > 0.5` is False.
+
+    So the row used to be carried straight through the upsert and written
+    again, and `fix_alignment` would shift that frame by NaN.  The row does not
+    even have to be one this call touches: `rows` is every value in `bykey`, so
+    an untouched blank rides through every later correction (issue #399).
+
+    Blank cells arise the ordinary way -- `Table(rows)` over row dicts with
+    differing keys masks the missing side, and that survives a CSV round trip.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        OffsetsTableUpdateError)
+    import pytest
+    p = seed_offsets_table_from_consensus(
+        str(tmp_path), "4147", "012",
+        [_corr("1", 2, "nrcb2", 7.78, -2.0), _corr("1", 3, "nrcb2", 5.0, 1.0)],
+        stage="m2")
+    _blank_a_cell(p, "dra (arcsec)", 1)
+    before = open(p).read()
+
+    # correct a DIFFERENT exposure: the blank row is untouched, and used to be
+    # written back verbatim
+    with pytest.raises(OffsetsTableUpdateError, match="NOT A NUMBER"):
+        seed_offsets_table_from_consensus(
+            str(tmp_path), "4147", "012",
+            [_corr("1", 4, "nrcb2", 1.0, 1.0)], stage="m2")
+    assert open(p).read() == before, (
+        "the table was rewritten despite the refusal")
+
+
+def test_the_magnitude_guard_still_refuses_a_big_finite_offset(tmp_path):
+    """The non-finite check runs first; it must not shadow the > 0.5" guard."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        OffsetsTableUpdateError)
+    import pytest
+    # each individual correction is under the per-correction ceiling; two of
+    # them ACCUMULATE onto one row and push it past 0.5"
+    seed_offsets_table_from_consensus(
+        str(tmp_path), "4147", "012",
+        [_corr("1", 2, "nrcb2", 400.0, 0.0)], stage="m2")
+    with pytest.raises(OffsetsTableUpdateError, match=r"\|offset\| > "):
+        seed_offsets_table_from_consensus(
+            str(tmp_path), "4147", "012",
+            [_corr("1", 2, "nrcb2", 400.0, 0.0)], stage="m2")

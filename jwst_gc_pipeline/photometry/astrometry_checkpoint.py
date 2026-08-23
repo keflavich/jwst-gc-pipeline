@@ -2518,8 +2518,32 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                   f"frame it describes CANNOT be read -- repair with "
                   f"scripts/reduction/unwind_alias_module_rows.py (issue #298).",
                   flush=True)
-        big = [(k, r["dra (arcsec)"], r["ddec (arcsec)"]) for k, r in zip(keys, rows)
-               if abs(float(r["dra (arcsec)"])) > 0.5 or abs(float(r["ddec (arcsec)"])) > 0.5]
+        # NON-FINITE FIRST, because the magnitude guard below CANNOT see it:
+        # `abs(nan) > 0.5` is False, so a NaN shift is not "big" and gets
+        # written out unexamined.  That is the comparison-against-NaN blindness
+        # this module documents at :277-282 ("NaN must be caught EXPLICITLY"),
+        # and a blank cell is the ordinary way one arises: `Table(rows)` over row
+        # dicts with differing keys MASKS the missing side, the blank survives
+        # the CSV round trip, and `float(masked)` is nan with only a
+        # UserWarning.  UNTOUCHED rows reach here too (`rows` is every value in
+        # `bykey`, not just the corrected ones), so one blank cell written by
+        # any earlier path keeps riding through every later upsert -- and
+        # `fix_alignment` would then shift that frame by NaN (issue #399).
+        offs = [(_finite_float(r["dra (arcsec)"], float("nan")),
+                 _finite_float(r["ddec (arcsec)"], float("nan"))) for r in rows]
+        nonfinite = [(k, a, d) for k, (a, d) in zip(keys, offs)
+                     if not (np.isfinite(a) and np.isfinite(d))]
+        if nonfinite:
+            raise OffsetsTableUpdateError(
+                f"consensus table {os.path.basename(out_path)} has row(s) whose "
+                f"offset is NOT A NUMBER (a blank or masked "
+                f"`dra (arcsec)`/`ddec (arcsec)` cell): {nonfinite}.  A NaN "
+                f"clears the |offset| > 0.5\" guard below (every comparison "
+                f"against NaN is False), and fix_alignment would apply NaN to "
+                f"those frames.  Repair the row(s) by hand before correcting "
+                f"this table again.")
+        big = [(k, a, d) for k, (a, d) in zip(keys, offs)
+               if abs(a) > 0.5 or abs(d) > 0.5]
         if big:
             # a consensus (internal-jitter) fix is mas-scale; > 0.5" means the
             # upstream per-exposure measurement is wrong -- do NOT bake it in.
