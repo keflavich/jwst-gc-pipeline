@@ -25,14 +25,38 @@ GCTAG_KEY = 'GCTAG'
 _GCTAG_COMMENT = 'gc-pipeline tag'
 
 
+def _tree_is_dirty(repo_dir):
+    """True iff ``repo_dir`` differs from HEAD in any way that changes output.
+
+    ``git status --porcelain`` catches all three cases ``git diff --quiet``
+    misses: STAGED edits (index != HEAD), unstaged edits, AND untracked files.
+    ``git diff`` compares the worktree to the INDEX, so ``git add``-ing an edit
+    -- or dropping a brand-new module into the package -- made the tree read
+    clean, and ``GCPIPEV`` then stamped a commit id that does not describe the
+    code that produced the file.  ``versioning.tags._is_dirty`` closed the same
+    gap for ``GCTAG``; this is the ``GCPIPEV`` half of it.
+
+    Fail-closed: when git cannot be run, the tree cannot be shown to be clean,
+    so the stamp reads ``-dirty`` rather than asserting cleanliness unchecked.
+    """
+    try:
+        out = subprocess.check_output(
+            ['git', '-C', repo_dir, 'status', '--porcelain'],
+            stderr=subprocess.DEVNULL, text=True)
+    except (subprocess.SubprocessError, OSError):
+        return True
+    return out.strip() != ''
+
+
 @functools.lru_cache(maxsize=1)
 def get_pipeline_commit():
     """Return the running jwst-gc-pipeline git commit id for ``GCPIPEV``.
 
     Resolution order (cached for the process):
       1. ``git rev-parse HEAD`` in the repo that contains this package (the
-         editable-install / worktree case), with a ``-dirty`` suffix if the
-         working tree has uncommitted tracked changes;
+         editable-install / worktree case), with a ``-dirty`` suffix when the
+         tree differs from HEAD in ANY way -- unstaged edits, staged edits, or
+         untracked files (see ``_tree_is_dirty``);
       2. the installed package version (setuptools_scm embeds the commit, e.g.
          ``0.1.dev34+gabcdef0``) when there is no ``.git`` (wheel install);
       3. ``'unknown'`` if neither is available.
@@ -47,10 +71,7 @@ def get_pipeline_commit():
                 ['git', '-C', repo_dir, 'rev-parse', 'HEAD'],
                 stderr=subprocess.DEVNULL, text=True).strip()
             if commit:
-                dirty = subprocess.call(
-                    ['git', '-C', repo_dir, 'diff', '--quiet'],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0
-                return commit + ('-dirty' if dirty else '')
+                return commit + ('-dirty' if _tree_is_dirty(repo_dir) else '')
         except (subprocess.SubprocessError, OSError):
             pass
 
