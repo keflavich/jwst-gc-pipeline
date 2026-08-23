@@ -156,7 +156,7 @@ def _stub_checks(monkeypatch, passing=True):
 
     monkeypatch.setattr(rf, "detect", _detect)
     monkeypatch.setattr(rf, "per_cell", _per_cell)
-    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: None)
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt, view="merged": None)
     return seen
 
 
@@ -349,7 +349,7 @@ def test_sole_band_with_passing_own_catalog_is_not_blocked(tmp_path, monkeypatch
     from astropy.coordinates import SkyCoord
     import astropy.units as u
     monkeypatch.setattr(rf, "catalog_sc",
-                        lambda field, filt: SkyCoord([266.5] * u.deg, [-28.5] * u.deg))
+                        lambda field, filt, view="merged": SkyCoord([266.5] * u.deg, [-28.5] * u.deg))
     res = rf.scan_field("sgra", verbose=False, images_only=False)
     assert res["PASS"] is True, res.get("unresolved")
 
@@ -450,7 +450,7 @@ def test_sole_band_still_fails_when_a_check_fails(tmp_path, monkeypatch):
     from astropy.coordinates import SkyCoord
     import astropy.units as u
     _stub_checks(monkeypatch, passing=False)
-    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: SkyCoord(
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt, view="merged": SkyCoord(
         np.linspace(266.0, 266.01, 20) * u.deg,
         np.linspace(-28.0, -27.99, 20) * u.deg))
     res = rf.scan_field("quintuplet", verbose=False, images_only=False)
@@ -479,7 +479,7 @@ def test_partner_that_exists_but_yields_nothing_still_blocks(tmp_path,
     monkeypatch.setattr(rf, "detect", _detect)
     monkeypatch.setattr(rf, "per_cell",
                         lambda *a, **k: dict(label="x", PASS=True, n_fail=0))
-    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: None)
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt, view="merged": None)
     res = rf.scan_field("quintuplet", verbose=False, images_only=True)
     assert res["PASS"] is None, res
     assert res["unresolved"], res
@@ -520,7 +520,7 @@ def test_a_pass_records_whether_anything_was_actually_graded(tmp_path,
 
     # ...and the same field on the full path, where own-catalog supplies the
     # evidence, is a pass of the other kind.
-    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: SkyCoord(
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt, view="merged": SkyCoord(
         np.linspace(266.0, 266.01, 20) * u.deg,
         np.linspace(-28.0, -27.99, 20) * u.deg))
     res = rf.scan_field("quintuplet", verbose=False, images_only=False)
@@ -558,7 +558,7 @@ def test_a_check_that_errored_is_not_counted_as_graded(tmp_path, monkeypatch):
     monkeypatch.setattr(rf, "detect", _detect)
     monkeypatch.setattr(rf, "per_cell",
                         lambda *a, **k: dict(label="x", error="too few pairs"))
-    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: None)
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt, view="merged": None)
     res = rf.scan_field("quintuplet", verbose=False, images_only=True)
     assert res["n_graded"] == 0 and res["evidence"] == "none", res
     assert res["unresolved"], res          # errored checks still block

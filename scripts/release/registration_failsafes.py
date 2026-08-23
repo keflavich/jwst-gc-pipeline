@@ -127,8 +127,68 @@ def mosaic(field, filt, module="merged", observations=None):
     return cands[0][1] if cands else None
 
 
-def catalog_sc(field, filt):
-    g = glob.glob(f"{BASE}/{field}/catalogs/{filt.lower()}_merged_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits")
+def catalog_module_tokens(view):
+    """Catalog module tokens for a scan *view*.
+
+    The vetted catalog name carries the module in the slot after the filter, the
+    same way the mosaic name does -- and a field that never made a ``merged``
+    product has no ``merged`` catalog either.  sickle is nrcb-only and writes
+    ``f187n_nrcb_...``; sgrb2 keeps eight nrcb-only bands.  Asking for
+    ``merged`` in a per-module view therefore matched nothing for them, and a
+    no-match was indistinguishable from "this field has no catalog at all".
+
+    Both spellings are returned for a module view because a field names its LW
+    products with either token (``nrcb`` or ``nrcblong``) -- the ambiguity
+    ``module_family`` already absorbs on the mosaic side.
+    """
+    if not str(view).startswith("module-"):
+        return ("merged",)
+    fam = str(view).split("-", 1)[1]
+    return (f"nrc{fam}", f"nrc{fam}long")
+
+
+def catalog_candidates(field, filt, view="merged"):
+    """Sorted m7 vetted catalogs for (field, filt, view).
+
+    An observation token appears in ONE OF TWO slots -- after the module
+    (``f200w_nrcb_o050_indivexp_...``, the post-#469 spelling) or at the end
+    (``..._dao_basic_o050_vetted.fits``, the pre-#469 one) -- and gc2211 o050
+    carries BOTH on disk simultaneously, so a pattern that pins one placement
+    matches half of its own field.  All three forms are enumerated, with the
+    token as a 3-digit character class rather than ``*`` so it cannot span a
+    neighbouring name segment.
+    """
+    out = []
+    for mod in catalog_module_tokens(view):
+        stem = f"{filt.lower()}_{mod}"
+        tail = "indivexp_merged_resbgsub_m7_dao_basic"
+        for pat in (f"{stem}_{tail}_vetted.fits",
+                    f"{stem}_{tail}_o[0-9][0-9][0-9]_vetted.fits",
+                    f"{stem}_o[0-9][0-9][0-9]_{tail}_vetted.fits"):
+            out += glob.glob(f"{BASE}/{field}/catalogs/{pat}")
+    return sorted(set(out))
+
+
+def no_catalog_note(field, filt, view):
+    """The line a band with no vetted catalog contributes to the report.
+
+    Its own function so the wording is testable without standing up a mosaic:
+    the point of the line is that the absence is STATED, and a source-grep for a
+    phrase that happens to straddle two f-string fragments would pass on a
+    version that says nothing.
+    """
+    return (f"{filt}: no m7 vetted catalog under {field}/catalogs matching view "
+            f"{view} ({'/'.join(catalog_module_tokens(view))}); own-catalog "
+            f"check not run")
+
+
+def catalog_sc(field, filt, view="merged"):
+    """Positions from the m7 vetted catalog for (field, filt, view), or None.
+
+    Deterministic when more than one candidate matches: a sorted pick, as
+    ``mosaic`` does.
+    """
+    g = catalog_candidates(field, filt, view)
     if not g:
         return None
     t = Table.read(g[0])
@@ -500,11 +560,23 @@ def _scan_view(field, view, band_paths, verbose, images_only):
             r = per_cell(d, fl, tru, f"{b} vs cross-band [{view}]"); r.pop("_g", None)
             checks["cross_band"] = r
         if not images_only:
-            cat = catalog_sc(field, b)
+            cat = catalog_sc(field, b, view)
             if cat is not None:
                 r = per_cell(d, fl, cat, f"{b} vs own-catalog [{view}]",
                              fail_min_ratio=FAIL_MIN_RATIO); r.pop("_g", None)
                 checks["own_catalog"] = r
+            else:
+                # A band with no vetted catalog to match against SAYS SO.  It
+                # used to drop out of `checks` with nothing recorded, so a field
+                # whose catalogs this pattern never matched (sickle, the gc2211
+                # observations, sgrb2's nrcb-only bands) reported a green gate on
+                # a check that had never run -- the silent-pass hole this script
+                # exists to close, one level up from the `per_cell` one below.
+                # UNAVAILABLE rather than unchecked: an m7 vetted catalog that
+                # has not been produced yet is a state of the campaign, not a
+                # defect in the mosaics, and blocking on it would block every
+                # field that reaches this gate before its catalogs do.
+                unavailable.append(no_catalog_note(field, b, view))
         # A check that MATCHED NOTHING is not a pass.  ``per_cell`` returns
         # ``dict(error=...)`` with no ``PASS`` key for "too few pairs" / "missing
         # detections", and ``.get("PASS", True)`` used to read those as passes --
