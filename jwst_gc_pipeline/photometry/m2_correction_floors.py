@@ -95,6 +95,56 @@ PER_FIELD_FLOOR_MAS = {
     # floor of 10 would have hidden it, which is the argument against choosing
     # the floor to make a field green.
     'w51': 6.0,
+    # arches: every m2 record it has ever written carries
+    # `correction_floor_mas: 4.0` from the env var, so the field has only ever
+    # run with an operator remembering to set it.  Measured from the records
+    # themselves (2026-08-23, `astrometry_checkpoints/*_latest.json`), each
+    # correction as hypot(dra_onsky_mas, ddec_onsky_mas):
+    #
+    #     record         filter  scatter   n   min    med    max
+    #     2026-08-22     F212N    1.23    38   2.00   2.94   3.93
+    #     2026-08-22     F323N    1.25    13   2.20   3.44   3.78
+    #     2026-08-01     F212N    1.18    43   2.00   2.99   3.91
+    #     2026-08-01     F323N    1.53    13   2.52   3.34   4.22
+    #
+    # 107 corrections, all but one under 4 mas, against a consensus scatter of
+    # 1.2-1.5 -- the brick shape (scatter 2.27, corrections to 3.39), one band
+    # tighter.  The two 2026-08-22 records read `passed: true` with
+    # `correction_floor_source: env`; the same measurements at the 0.0 default
+    # are 51 actionable corrections and an m12 stop.
+    #
+    # 4.0 deliberately does NOT cover the single 4.22 mas F323N correction of
+    # 2026-08-01.  Choosing 5.0 to swallow it would be picking a constant to
+    # keep a field green, which is the habit the w51 entry above argues against;
+    # if it recurs it should stop the run and be looked at.
+    'arches': 4.0,
+    # gc2211 o046 and o050: the two pointings whose corrections are entirely the
+    # per-exposure scatter class.  Same records, same measurement:
+    #
+    #     field        filter  scatter    n   min    med    max
+    #     gc2211_o046  F200W    0.70     31   2.01   2.53   3.13
+    #     gc2211_o046  F277W    6.91     14   2.17   2.56   3.52
+    #     gc2211_o050  F200W    0.68     13   2.00   2.31   2.84
+    #     gc2211_o050  F277W    0.76      0     --     --     --
+    #
+    # 58 corrections, every one under 4 mas.  Both were run with the env var set;
+    # at the default they stop at m12 the way brick did twice.
+    #
+    # The other three 2211 pointings are NOT registered, because their measured
+    # corrections are not this class and a floor would be a guess about them
+    # rather than a measurement of them: o023 median 118 mas (its four exposures
+    # are trailed -- excluded outright in #493), o028 median 28 mas with a
+    # coherent ~200 mas exposure-2 displacement on seven of eight detectors, and
+    # o049 only three corrections, 5.4-22.4 mas, from the joint-lowest-contrast
+    # cells in its whole record.  See #484.
+    'gc2211_o046': 4.0,
+    'gc2211_o050': 4.0,
+    # quintuplet is deliberately absent as well.  Its records carry
+    # `correction_floor_mas: 4.0` like arches's do, but all four of them
+    # (2026-08-01 and 2026-08-15, F212N and F323N) contain ZERO corrections at a
+    # consensus scatter of 1.16-1.32 mas.  There is no measured distribution for
+    # a floor to sit above, and an entry justified by "the operator set the env
+    # var" is the operator memory this table replaces rather than a measurement.
 }
 
 
