@@ -2578,6 +2578,17 @@ def main(argv=None):
         ckpt_cmd = [sys.executable, str(ckpt_gate), "--field", args.field, "--scan"]
         if rel_obs:
             ckpt_cmd += ["--observations", ",".join(sorted(rel_obs))]
+        # Which stages' products this release actually SHIPS, from the items'
+        # own iteration tokens (`resbgsub_m7` -> m7).  A frozen-stage failure at
+        # a stage that is NOT shipped, which a LATER stage of the same chain
+        # measured as passing, describes an intermediate nobody downloads --
+        # brick's m5/F200W, answered by m6 and m7 (issue #258).  Declaring
+        # nothing supersedes nothing, so a caller that cannot say stays strict.
+        shipped_stages = sorted({m.group(0) for m in
+                                 (re.search(r"m\d+$", str(it.get("iteration") or ""))
+                                  for it in items) if m})
+        if shipped_stages:
+            ckpt_cmd += ["--shipped-stages", ",".join(shipped_stages)]
         rc = subprocess.run(ckpt_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': a frozen-stage astrometry "
