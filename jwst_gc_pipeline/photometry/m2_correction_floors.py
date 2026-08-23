@@ -61,6 +61,14 @@ PER_FIELD_FLOOR_MAS = {
     # finalize twice (jobs 39933168, 39972201) after a full regeneration had
     # already been run for it.  Same shape as brick, whose scatter is 2.27.
     'sgra': 4.0,
+    # w51 F140M: consensus scatter 1.40 mas over 64 measurements; m2 emitted 5
+    # corrections of 2.50-3.64 mas, all above-median contrast (ranks 46-53/64),
+    # so credible but the size of the field's own noise.  Four of the five are
+    # nrcb2 exposures 1-4 reading a consistent 2.8-3.6 mas -- the per-detector
+    # SIAF/DVA class this floor exists for, which the module-locked table cannot
+    # express.  It stopped w51's m12 finalize (job 40012056) immediately after a
+    # 24-shard fan-out had completed successfully.
+    'w51': 4.0,
 }
 
 
