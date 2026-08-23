@@ -45,7 +45,7 @@ import pytest
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    AstrometryCheckpointFailedError)
+    ALLOW_UNVERIFIED_ENV, AstrometryCheckpointFailedError, _checkpoint_passed)
 
 
 def _record(passed=True, failures=(), corrections=(), blocking=()):
@@ -149,7 +149,36 @@ def test_a_refused_record_still_reports_the_item_and_its_hatch(tmp_path,
     _run(tmp_path, monkeypatch, rec)
     out = capsys.readouterr().out
     assert 'the offending item' in out
-    assert 'ALLOW_UNVERIFIED_ASTROM=1' in out
+    assert f'{ALLOW_UNVERIFIED_ENV}=1' in out
+
+
+def test_the_hatch_it_names_is_one_the_code_reads(tmp_path, monkeypatch,
+                                                  capsys):
+    """The env var this message tells the operator to set must be the one
+    `_checkpoint_passed` consults.
+
+    It was not: the line read `ALLOW_UNVERIFIED_ASTROM=1` while the reader is
+    `ALLOW_UNVERIFIED_ASTROM_CHECKPOINT` (issue #400 item 1).  Setting the name
+    in the message changed nothing, and the next lever to hand
+    (`ASTROM_CHECKPOINT_WARN_ONLY=1`) demotes every blocking failure rather
+    than the one refused item.  The old assertion pinned the typo, so widening
+    the message alone would not have caught it.
+
+    Asserted behaviourally: setting exactly the name the message prints must
+    turn this record into a pass.
+    """
+    rec = _record(passed=False, blocking=['the offending item'])
+    _run(tmp_path, monkeypatch, rec)
+    printed = [tok.rstrip('=1') for tok in capsys.readouterr().out.split()
+               if tok.endswith('=1') and tok[0].isupper()]
+    hatches = [name for name in printed if name.startswith('ALLOW_UNVERIFIED')]
+    assert hatches, 'the refused-record message names no ALLOW_UNVERIFIED hatch'
+    for name in hatches:
+        monkeypatch.setenv(name, '1')
+        assert _checkpoint_passed([], ['the offending item']) is True, (
+            f'{name} is printed as the escape hatch but does not make a '
+            f'measured-and-refused record pass')
+        monkeypatch.delenv(name)
 
 
 def test_failures_WIN_when_both_lists_are_populated(tmp_path, monkeypatch):
