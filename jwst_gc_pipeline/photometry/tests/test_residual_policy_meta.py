@@ -13,8 +13,8 @@ import pytest
 
 from . import test_residual_model_policy as policy
 from .test_residual_model_policy import (
-    _REQUIRED, f480m, over_rendered, over_subtracted,
-    MODEL_PEAK_CEILING, RESID_CORE_FLOOR)
+    _REQUIRED, f480m, over_rendered, over_subtracted, cross_run_reason,
+    MODEL_PEAK_CEILING, RESID_CORE_FLOOR, SAME_RUN_HOURS)
 
 
 def test_each_required_glob_matches_at_most_one_file():
@@ -88,6 +88,67 @@ def test_skip_predicate_covers_every_product_the_fixture_opens(monkeypatch):
         "the fixture opens product(s) the skip predicate does not check, so a "
         "tree missing them errors instead of skipping:\n  "
         + "\n  ".join(unknown))
+
+
+#: The three products on disk 2026-08-21 -- one generation, and the ordering a
+#: generation has: the data mosaic is drizzled first, the m5 QA products follow.
+_SAME_RUN = ("2026-08-21T08:05:17.713",   # data
+             "2026-08-21T12:50:35.615",   # residual
+             "2026-08-21T12:51:01.406")   # model
+
+#: The 2026-07-05 state that made this file red for five weeks with no commit
+#: behind it: a partial re-run rewrote the data mosaic and left the June QA
+#: products in place (issue #266 item 2).
+_CROSS_RUN = ("2026-07-05T19:11:39",
+              "2026-06-27T18:40:04",
+              "2026-06-27T18:40:04")
+
+
+def test_cross_run_reason_accepts_one_generation():
+    assert cross_run_reason(*_SAME_RUN) is None
+
+
+def test_cross_run_reason_catches_a_data_mosaic_newer_than_its_qa_products():
+    reason = cross_run_reason(*_CROSS_RUN)
+    assert reason is not None
+    # the skip has to NAME both sides, or it is another unreadable line
+    assert "2026-07-05T19:11:39" in reason and "2026-06-27T18:40:04" in reason
+
+
+def test_cross_run_reason_catches_a_residual_and_model_from_two_runs():
+    reason = cross_run_reason("2026-08-21T08:05:17",
+                              "2026-08-21T12:50:35",
+                              "2026-08-19T12:51:01")
+    assert reason is not None and "not from one cataloging run" in reason
+
+
+def test_cross_run_reason_tolerates_the_within_run_gap():
+    """The residual and model are written seconds apart; the check must not fire
+    on that, or it becomes a permanent skip."""
+    later = f"2026-08-21T{8 + int(SAME_RUN_HOURS):02d}:00:00"
+    assert cross_run_reason("2026-08-21T07:00:00",
+                            "2026-08-21T08:00:00", later) is None
+
+
+def test_cross_run_reason_reports_an_unreadable_date_rather_than_passing():
+    reason = cross_run_reason(None, _SAME_RUN[1], "not-a-date")
+    assert reason is not None
+    assert "data i2d" in reason and "model i2d" in reason
+    assert "residual i2d" not in reason
+
+
+def test_fixture_consults_the_generation_check(monkeypatch):
+    """Wiring pin.  The predicate above is a pure function; nothing in it forces
+    the fixture to call it, and an uncalled guard is the shape this file's
+    history is made of.  Stub it to complain and assert the fixture skips."""
+    monkeypatch.setattr(policy, "cross_run_reason",
+                        lambda *a, **k: "STUB cross-run complaint")
+    monkeypatch.setattr(policy, "_read_points", lambda path: None)
+    monkeypatch.setattr(policy, "_img", lambda path, what="": (None, None))
+    monkeypatch.setattr(policy, "_peaks", lambda arr, w, stars, box=3: None)
+    monkeypatch.setattr(policy, "_troughs", lambda arr, w, stars, box=3: None)
+    with pytest.raises(pytest.skip.Exception, match="STUB cross-run complaint"):
+        f480m.__wrapped__()
 
 
 class _FakeWCS:
