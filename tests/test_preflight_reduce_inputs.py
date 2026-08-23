@@ -231,19 +231,40 @@ def test_the_module_SPEC_is_normalized_too(tmp_path):
 
 
 def test_a_module_the_observation_does_not_have_is_reported(tmp_path):
-    """gc2211 observation 050 is module B only.
+    """A module with no members in the association is reported missing.
 
-    Its driver script does NOT override the module list -- only sickle's does --
-    so the campaign submits module A for it and the reduce fails those tasks.
-    That is issue #408, and this test is the shape that finds it.
+    brick 1182/004 is not in ``MODULES_BY_PROPOSAL_FIELD_FILTER``, so the
+    preflight expects both modules and says so when one has no members.  The
+    registered case is the test below: once the reduce's own policy declares an
+    observation single-module, asking it for the other module stops being a
+    finding.
+    """
+    root = _field(tmp_path, 'brick', 'F405N', asns=[
+        'jw01182-o004_20260101t000000_image3_00001_asn.json'],
+        cals=['jw01182004001_02101_00001_nrcalong_cal.fits'],
+        members=('jw01182004001_02101_00001_nrcalong_cal.fits',))
+    rows = PF.check(root, 'brick', '1182', '004', ['F405N'],
+                    ['nrcalong', 'nrcblong'])
+    assert not rows[0].ok
+    assert rows[0].missing == ['nrcb']
+
+
+def test_a_registered_single_module_observation_is_not_a_false_alarm(tmp_path):
+    """gc2211 observation 050 is module B only, and the reduce now knows it.
+
+    Before the registry entry the campaign submitted module A for it and the
+    reduce failed those tasks (#408, #436).  With ``2211/050`` declared NRCB
+    in ``MODULES_BY_PROPOSAL_FIELD_FILTER``, asking for both modules narrows to
+    the one the observation has, and module A is no longer reported missing --
+    a false alarm rather than a finding.
     """
     root = _field(tmp_path, 'gc2211', 'F200W', asns=[
         'jw02211-o050_20260101t000000_image3_00001_asn.json'],
         cals=['jw02211050001_02101_00001_nrcb1_cal.fits'],
         members=('jw02211050001_02101_00001_nrcb1_cal.fits',))
     rows = PF.check(root, 'gc2211', '2211', '050', ['F200W'], ['nrca', 'nrcb'])
-    assert not rows[0].ok
-    assert rows[0].missing == ['nrca']
+    assert rows[0].ok, rows[0].why
+    assert rows[0].missing == []
 
 
 def test_asking_for_the_combined_product_asks_for_BOTH_modules(tmp_path):
@@ -255,7 +276,11 @@ def test_asking_for_the_combined_product_asks_for_BOTH_modules(tmp_path):
         members=('jw02211050001_02101_00001_nrcb1_cal.fits',))
     rows = PF.check(root, 'gc2211', '2211', '050', ['F200W'], ['merged'])
     assert not rows[0].ok, 'a one-module observation cannot produce a merged product'
-    assert rows[0].missing == ['nrca']
+    # the reduce's policy allows only nrcb here, so `merged` -- which asks for
+    # both -- is refused outright rather than narrowed.  The row carries the
+    # reduce's own refusal, which names what it would have raised.
+    assert rows[0].missing == ['nrca', 'nrcb']
+    assert 'No requested modules are allowed' in rows[0].why
 
 
 # ---------------------------------------------------------------------------
