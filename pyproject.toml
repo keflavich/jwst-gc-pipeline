@@ -48,7 +48,10 @@ test = [
     # scope-aware undefined-name analysis, used by
     # photometry/tests/test_no_undefined_module_names.py.  That test skips
     # without it, so listing it here is what makes the check actually run.
-    "pyflakes",
+    # Bounded to the major version because that test reads two undocumented
+    # APIs -- `pyflakes.checker.Checker` and `msg.message % msg.message_args`
+    # -- so an unrelated upgrade could turn a green gate into an ImportError.
+    "pyflakes>=3,<4",
 ]
 docs = [
     "sphinx",
