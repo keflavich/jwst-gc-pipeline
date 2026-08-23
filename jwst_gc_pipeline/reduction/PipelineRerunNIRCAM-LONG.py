@@ -29,7 +29,7 @@ import datetime
 # Before importing jwst: CRDS reads its cache path when jwst loads.  config.yaml
 # supplies the default; an exported CRDS_PATH wins.
 from jwst_gc_pipeline.config import apply_crds_environment
-from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_filename
+from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_datamodel
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")
@@ -1171,10 +1171,12 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
 
     mod = ImageModel(fn)
     if proposal_id is None:
-        # The first five digits after ``jw`` are the proposal for BOTH the
-        # zero-padded 4-digit products on disk and 5-digit ones; the [3:7]
-        # slice this replaces read '0678' off a jw10678 product (issue #414).
-        proposal_id = proposal_id_from_filename(fn)
+        # Read the proposal out of the frame's own PROGRAM header, which
+        # travels inside the file: a renamed or copied frame still reports the
+        # proposal it was observed under (issue #440).  `fn` is the fallback
+        # for a model with no PROGRAM, parsed five digits wide -- the [3:7]
+        # slice that preceded it read '0678' off a jw10678 product (#414).
+        proposal_id = proposal_id_from_datamodel(mod, fn)
     if filtername is None:
         try:
             filtername = filter_regex.search(fn).group()
@@ -1187,11 +1189,10 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 filtername = [x for x in filters if 'W' not in x][0]
     if field is None:
         field = mod.meta.observation.observation_number
-    if proposal_id is None:
-        # `mod` is open just above; without this the registry lookup below
-        # reports "proposal None ... known observations: []", which names the
-        # wrong problem.
-        proposal_id = mod.meta.observation.program_number
+    # The second `if proposal_id is None:` that stood here read the program
+    # number off `mod` as a late fallback.  The assignment above now reads the
+    # same header first and raises when neither source names a proposal, so
+    # the branch could never run.
     if basepath is None:
         # Every in-pipeline caller passes basepath.  Reaching here means an
         # ad-hoc call, so name the field from the registry rather than guessing

@@ -44,7 +44,8 @@ test asserts the two agree.
 import os
 import re
 
-__all__ = ["jw_prefix", "proposal_id_from_filename", "proposal_id_from_program"]
+__all__ = ["jw_prefix", "proposal_id_from_filename", "proposal_id_from_program",
+           "proposal_id_from_datamodel"]
 
 #: The proposal number is the first five digits after ``jw`` in every product
 #: basename -- 4-digit proposals are stored zero-padded on disk, so one parse
@@ -201,3 +202,35 @@ def proposal_id_from_filename(filename):
             f"{base!r} does not start with a 'jw<5-digit proposal>' prefix; "
             f"cannot infer its proposal id")
     return str(int(match.group(1)))
+
+
+def proposal_id_from_datamodel(model, filename=None):
+    """Proposal number of an open JWST datamodel, read from its own header.
+
+    ``model.meta.observation.program_number`` is the ``PROGRAM`` keyword, and
+    it travels INSIDE the file: a frame that was renamed, copied into another
+    field's tree, or written under a hand-built name still reports the
+    proposal it was observed under, where ``proposal_id_from_filename``
+    reports whatever the new name says.  That is the whole reason to prefer
+    this over the filename parse (issue #440).
+
+    ``filename`` is the fallback source, used only when the header carries no
+    ``PROGRAM`` -- a hand-built model, or a product assembled outside the
+    JWST calibration pipeline.  Passing ``None`` makes a header-less model an
+    error instead.
+
+    Returns the unpadded string form the pipeline passes around, so
+    ``PROGRAM='02221'`` -> ``'2221'`` and ``PROGRAM='10678'`` -> ``'10678'``;
+    a caller comparing against the literal ``'2221'`` keeps working.  Raises
+    ``ValueError`` when neither source names a proposal.
+    """
+    meta = getattr(model, 'meta', None)
+    observation = getattr(meta, 'observation', None)
+    program = getattr(observation, 'program_number', None)
+    if program is not None and str(program).strip():
+        return proposal_id_from_program(program)
+    if filename is None:
+        raise ValueError(
+            "datamodel carries no observation.program_number (PROGRAM) and no "
+            "filename was given to fall back on; cannot infer its proposal id")
+    return proposal_id_from_filename(filename)
