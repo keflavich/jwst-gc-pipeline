@@ -30,7 +30,7 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
-from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_filename
+from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_datamodel
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")
@@ -683,10 +683,12 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
 
     mod = ImageModel(fn)
     if proposal_id is None:
-        # The first five digits after ``jw`` are the proposal for BOTH the
-        # zero-padded 4-digit products on disk and 5-digit ones; the [3:7]
-        # slice this replaces read '0678' off a jw10678 product (issue #414).
-        proposal_id = proposal_id_from_filename(fn)
+        # Read the proposal out of the frame's own PROGRAM header, which
+        # travels inside the file: a renamed or copied frame still reports the
+        # proposal it was observed under (issue #440).  `fn` is the fallback
+        # for a model with no PROGRAM, parsed five digits wide -- the [3:7]
+        # slice that preceded it read '0678' off a jw10678 product (#414).
+        proposal_id = proposal_id_from_datamodel(mod, fn)
     if filtername is None:
         try:
             filtername = filter_regex.search(fn).group()
