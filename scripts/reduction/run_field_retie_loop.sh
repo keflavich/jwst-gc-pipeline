@@ -145,6 +145,34 @@ if [ -z "$CONSENSUS_TBL" ]; then
 fi
 echo "offsets table watched for changes: $CONSENSUS_TBL"
 
+# Digest the table's SHIFT VALUES, so the "did this iteration re-tie anything?"
+# test below answers that question rather than "did any byte change".
+#
+# This was an md5sum of the whole file.  The m2 checkpoint re-stamps `prov_date`
+# on rows it did not move, so a round that wrote no correction still changed the
+# file, the loop concluded a re-tie had been made, and it re-reduced and
+# re-measured an identical residual -- issue #272, where three consecutive
+# rounds each reported 15 corrections against 0 changed `dra`/`ddec` cells.  The
+# guard was aimed at the opposite mistake (stopping while a correction HAD been
+# made), and this is that condition inverted.
+#
+# A digest failure must NOT read as "unchanged": that would stop a loop that is
+# working.  offsets_value_digest.py exits 2 on a table it cannot parse, and this
+# then emits a per-call unique token so the comparison reports movement and the
+# loop continues, with the reason on stderr.
+table_value_digest () {
+    local path="$1" out rc=0
+    out=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
+          "$HERE/offsets_value_digest.py" "$path" 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "WARNING: could not digest $path ($out); treating this iteration as" >&2
+        echo "         having changed the table, which is the fail-open side." >&2
+        echo "undigestible-$(date -u +%s%N)-$RANDOM"
+        return 0
+    fi
+    echo "$out"
+}
+
 read -r -a _FA <<< "$FILTERS"
 NF=${#_FA[@]}
 export_common="ALL,PROPOSAL=$PROPOSAL,FIELD=$FIELD,TARGET=$TARGET,FILTERS=$FILTERS"
@@ -447,7 +475,7 @@ for ((it=1; it<=MAXITER; it++)); do
 
     # --- 2. catalog to m2 only, with auto-apply ON ---
     echo "[iter $it] cataloging to m2 (ASTROM_CHECKPOINT_APPLY=1)"
-    tbl_before=$( [ -f "$CONSENSUS_TBL" ] && md5sum "$CONSENSUS_TBL" | cut -d' ' -f1 || echo none )
+    tbl_before=$(table_value_digest "$CONSENSUS_TBL")
     # submit_cataloging_perframe.sh self-sbatches the chain; PHASES="m12" stops at
     # the m2 merge+checkpoint.  Capture the finalize (stage B) job id it prints.
     export ASTROM_CHECKPOINT_APPLY=1
@@ -481,13 +509,15 @@ for ((it=1; it<=MAXITER; it++)); do
     echo "[iter $it] m2 finalize state: $st"
 
     # --- 3. converged? ---
-    tbl_after=$( [ -f "$CONSENSUS_TBL" ] && md5sum "$CONSENSUS_TBL" | cut -d' ' -f1 || echo none )
+    tbl_after=$(table_value_digest "$CONSENSUS_TBL")
     if [ "$st" = "COMPLETED" ]; then
         echo "[iter $it] m2 checkpoint PASSED -- converged after $it iter(s)."
         break
     fi
     if [ "$tbl_after" = "$tbl_before" ]; then
-        echo "[iter $it] m2 finalize failed ($st) but the consensus table did NOT change."
+        echo "[iter $it] m2 finalize failed ($st) but no SHIFT VALUE in the consensus"
+        echo "           table changed (provenance re-stamps and re-serialisation do"
+        echo "           not count -- see offsets_value_digest.py)."
         echo "           This is NOT a checkpoint re-tie (some other failure) -- STOPPING."
         echo "           Inspect logs/catalog_pf_${fin_jid}*.out before retrying."
         exit 1
