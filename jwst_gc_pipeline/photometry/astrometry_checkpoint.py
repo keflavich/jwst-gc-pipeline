@@ -3969,6 +3969,14 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     < ``tol_mas`` bulk (histogram + sweep), and the matched-pair local residual
     map must show no significant ``cell_arcsec`` cell above ``cell_tol_mas``.
 
+    The bulk term carries a SIGNIFICANCE requirement as well as the tolerance,
+    the same one the local cell gate documents: an offset over ``tol_mas``
+    fails only when it also exceeds 3x its own combined error bar
+    (``hypot(dra_err, ddec_err)``), or when that error bar is not finite.  An
+    over-tolerance offset the error bar covers is recorded in ``unverified``
+    with both numbers rather than passing silently -- so ``passed`` is
+    unchanged by it, ``all_verified`` is not.
+
     ``catalogs_by_filter``: dict filtername -> Table (vetted merged catalog).
 
     Raises ``CrossFilterAstrometryError`` on any failure (override only via
@@ -4037,15 +4045,40 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                     f"{fctx}: bulk offset {bulk['off']:.2f} mas > {tol_mas} mas "
                     f"(dra={bulk['dra']:.2f}±{bulk.get('dra_err', float('nan')):.2f}, "
                     f"ddec={bulk['ddec']:.2f}±{bulk.get('ddec_err', float('nan')):.2f})")
+            elif bulk["off"] > tol_mas:
+                # OVER TOLERANCE, and the 3-sigma clause above declined to call
+                # it a failure.  Say so at the VERDICT level.  Without this the
+                # only trace is `filters[i].bulk`, which a reader has to
+                # recompute the condition from -- `failures` and `unverified`
+                # are both empty and `passed` is true, so the record reads as a
+                # clean pass on a filter measured four times the documented
+                # tolerance from the anchor (issue #396).  The branch below
+                # claims to catch this case and cannot: it is guarded on
+                # `swept or off >= 100`, and a suppressed failure is by
+                # construction unswept with `tol < off < 100`.
+                #
+                # This is `unverified`, not `failures`: a number that is not
+                # significant is not evidence of a misalignment, and the
+                # error bar is the measurement's own statement about itself.
+                # It has never fired on the records to date -- the largest
+                # combined error bar in 141 m7 filter entries is 0.196 mas
+                # against the 1.67 mas this needs -- so it is a record-keeping
+                # guard against a regime that has not been entered, not a
+                # change to what passes.
+                unverified.append(
+                    f"{fctx}: bulk offset {bulk['off']:.2f} mas > {tol_mas} mas "
+                    f"but NOT significant "
+                    f"(dra={bulk['dra']:.2f}±{bulk.get('dra_err', float('nan')):.2f}, "
+                    f"ddec={bulk['ddec']:.2f}±{bulk.get('ddec_err', float('nan')):.2f}; "
+                    f"combined err {err:.2f} mas, 3-sigma = {3 * err:.2f} mas) "
+                    f"-- not treated as a failure, and nothing here says the "
+                    f"filter agrees with the anchor")
             if bulk.get("swept"):
                 failures.append(f"{fctx}: tie only found by window SWEEP "
                                 f"({bulk['off']:.0f} mas) -- grossly shifted")
             if bulk.get("swept") or bulk["off"] >= 100.0:
                 # The local map is skipped on these paths, so NOTHING local was
-                # checked.  A large-but-finite error bar can also suppress the
-                # bulk failure above (`off > 3*err` false), leaving a record
-                # that PASSED having measured nothing -- the same shape this
-                # branch exists to stop.
+                # checked.
                 unverified.append(
                     f"{fctx}: bulk tie {bulk['off']:.1f} mas "
                     f"(swept={bulk.get('swept')}) skipped the local cell map "
