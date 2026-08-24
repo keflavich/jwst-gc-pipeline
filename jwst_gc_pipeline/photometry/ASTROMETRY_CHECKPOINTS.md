@@ -122,7 +122,19 @@ The **consensus→reference** tie is gated the same way, with the same distincti
 | tie applied (`apply_ok: true`) | delta vs the reported bulk; > tol ⇒ **re-measured on the stars the two consensi share** (below), and only a delta that survives that raises `AstrometryRegressionError` |
 | tie measured but **refused** (`apply_ok: false` — no coherent dense peak, gross sparse-Gaia split, failed per-tile / same-star gate), and the later stage lands **within** tol of it | **STABLE**. A refused tie is still a *measurement*: two readings of the same quantity agreeing is evidence the solution did not move. `apply_ok: false` says the *absolute* tie is uncertified, not that the consensus was free to move — so the pass is kept and the message notes the tie remains uncertified. (sgra F212N: m2 refused 48.49 mas, m3 reads 48.09 — a 0.41 mas delta) |
 | tie measured but **refused**, and the later stage lands **beyond** tol | **UNVERIFIED**. It moved, but away from something that was never applied, so this is not a frozen-solution regression. The delta and m2's value are both named in the message; the field's *absolute* tie is the thing to investigate |
-| no m2 record at all | `AstrometryRegressionError` — fail closed |
+| no m2 record at all, and the current tie is **over** `REFERENCE_APPLY_MIN_MAS` | `AstrometryRegressionError` — fail closed |
+| no m2 record at all, and the current tie is **under** `REFERENCE_APPLY_MIN_MAS` | nothing recorded — there is no baseline to compare against and no magnitude to report |
+
+The comparison runs on **any finite tie** at a frozen stage, whatever the
+current value reads.  `REFERENCE_APPLY_MIN_MAS` (2 mas) gates whether a
+correction is worth APPLYING and whether a refused tie is worth reporting;
+until issue #398 it also gated the stability comparison, so a tie frozen at
+50 mas that a later stage re-measured at 1 mas was never compared and the stage
+passed on a 49 mas move.  Two questions, asked separately now: *is this
+measurement large* (magnitude, `REFERENCE_APPLY_MIN_MAS`) and *has it moved
+since m2* (stability, `STAGE_STABILITY_TOL_MAS`).  The `apply_ok: false` arm
+stays magnitude-gated: a sub-2 mas tie that could not be certified is a
+sub-floor number and stays out of the blocking list.
 
 w51 F140M (2026-08-02) is the case: m2 measured a **7827 mas** consensus→reference
 offset, judged it untrustworthy (`per_tile clean: false`, `swept: true`, a
@@ -229,7 +241,10 @@ or not.
 
 Absent `symmetric_baseline` means the re-measure never ran — the raw comparison
 passed, or the stage is a correcting one, or there is no reference catalog, or
-the offset is under `REFERENCE_APPLY_MIN_MAS`, or m2 refused its own tie.
+the tie is non-finite, or m2 refused its own tie.  A tie under
+`REFERENCE_APPLY_MIN_MAS` used to be on that list and no longer is (issue
+#398): the comparison runs at any magnitude, so a small current value reaches
+the re-measure like any other.
 
 The check removes a *baseline artefact*; it does not soften the gate. sickle
 F187N m3 fails either way — 2.342 mas raw, 2.536 mas on the shared stars at

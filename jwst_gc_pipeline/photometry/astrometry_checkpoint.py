@@ -88,6 +88,13 @@ CORRECTION_STAGES = ("m1", "m2", "m12")
 
 # A reference correction is only APPLIED when it exceeds this (below it the
 # im0 solution already agrees with the reference at the measurement floor).
+#
+# This gates the APPLY decision and the "measured but refused" report, both of
+# which are about the magnitude of the CURRENT measurement.  It must NOT gate
+# the frozen-stage STABILITY comparison, which asks a different question --
+# has this number moved since m2 froze it -- and whose answer does not depend
+# on the current value being large.  A tie frozen at 50 mas that now reads
+# 1 mas has moved 49 mas (issue #398).
 REFERENCE_APPLY_MIN_MAS = 2.0
 
 #: ``source`` written on the correction that ties a whole visit consensus onto
@@ -3593,7 +3600,26 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
                 context=vctx)
             off = ref_tie["off_mas"]
-            if np.isfinite(off) and off > REFERENCE_APPLY_MIN_MAS:
+            # ACTIONABLE = the current measurement is large enough to be worth
+            # applying, or to report as measured-and-refused.  Both of those
+            # are questions about the magnitude of THIS number.
+            #
+            # The frozen-stage stability comparison is not (issue #398).  It
+            # asks whether the tie has MOVED since m2 froze it, and a tie
+            # frozen at 50 mas that now reads 1 mas has moved 49 mas.  Gating
+            # it on REFERENCE_APPLY_MIN_MAS -- an APPLY threshold -- meant a
+            # later stage measuring <= 2 mas skipped the comparison entirely,
+            # while ASTROMETRY_CHECKPOINTS.md:25 promises "any measured shift
+            # raises" at m3-m6.  So the comparison runs on any finite tie at a
+            # frozen stage.
+            #
+            # The `apply_ok is False` arm below stays ACTIONABLE-gated.  It
+            # appends to `unverified_blocking`, and a 0.2 mas tie that could
+            # not be certified is not an astrometric defect -- opening that arm
+            # too would have turned sickle F480M o007 m4 (off 0.22 mas,
+            # apply_ok False) into a blocking item.
+            actionable = np.isfinite(off) and off > REFERENCE_APPLY_MIN_MAS
+            if np.isfinite(off) and (actionable or not correcting):
                 if ref_tie["apply_ok"]:
                     if correcting:
                         dec_mid = float(np.median(cons["coords"].dec.deg))
@@ -3720,6 +3746,14 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                         f"which would say whether this is movement "
                                         f"or a population change, was unavailable: "
                                         f"{sym_info['reason']}")
+                        elif not actionable:
+                            # No baseline to compare against, and the current
+                            # value is under the apply floor: there is nothing
+                            # this stage can say (issue #398).  Reporting a
+                            # 0.5 mas tie as "offset at a LATE stage" would be
+                            # a fabricated failure, so the two arms below stay
+                            # gated on the magnitude they are about.
+                            pass
                         elif m2_rejected:
                             # m2 measured a tie and REFUSED it as untrustworthy.
                             # Nothing was frozen, so nothing can have moved; this
@@ -3743,7 +3777,14 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 f"{vctx}: consensus->reference offset {off:.2f} mas at a "
                                 f"LATE stage (solution was supposed to be frozen; "
                                 f"no m2 baseline record found)")
-                else:
+                elif actionable:
+                    # ACTIONABLE-gated on purpose (issue #398): this arm is
+                    # reached at a frozen stage now that the stability
+                    # comparison no longer needs the magnitude test, and a tie
+                    # UNDER the apply floor that could not be certified is not
+                    # a defect to block on -- it is a sub-floor number nobody
+                    # would have applied either way.
+                    #
                     # apply_ok is False only for a genuinely bad tie now: no
                     # coherent dense peak, a GROSS sparse split (spurious peak),
                     # or -- per reference regime -- the gating check failed. Point
