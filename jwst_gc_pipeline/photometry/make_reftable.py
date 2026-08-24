@@ -70,13 +70,24 @@ def main(return_method=None, return_filter=None):
             mag_jw = -2.5 * np.log10(flux_jy / zeropoint) * u.mag
 
             (total_dra, total_ddec, med_dra, med_ddec, std_dra,
-             std_ddec, keep, skykeep, reject, iteration) = measure_offsets(reference_coordinates=vvvcrds,
-                                                                           skycrds_cat=refcrds,
-                                                                           refflux=10**vvvtb['Ksmag3'],
-                                                                           skyflux=10**mag_jw.value,
-                                                                           sel=slice(None),
-                                                                           verbose=True,
-                                                                           )
+             std_ddec, keep, skykeep, reject, iteration,
+             measured) = measure_offsets(reference_coordinates=vvvcrds,
+                                         skycrds_cat=refcrds,
+                                         refflux=10**vvvtb['Ksmag3'],
+                                         skyflux=10**mag_jw.value,
+                                         sel=slice(None),
+                                         verbose=True,
+                                         )
+
+            if not measured:
+                # The alternative is to write a reference catalogue whose
+                # coordinates were never tied to VVV, under a name that says
+                # they were.  Refuse (issue #394).
+                raise ValueError(
+                    f"measure_offsets could not tie {filtername} ({method}) to "
+                    f"VVV: fewer than 5 mutual matches survived on iteration "
+                    f"{iteration}, so no reference catalogue is written. The "
+                    f"partial accumulators were {total_dra}, {total_ddec}.")
 
             refcrds_updated = SkyCoord(refcrds.ra + total_dra, refcrds.dec + total_ddec, frame=refcrds.frame)
 

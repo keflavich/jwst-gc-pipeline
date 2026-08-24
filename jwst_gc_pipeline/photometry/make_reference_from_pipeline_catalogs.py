@@ -992,6 +992,7 @@ def refine_with_vvv(
         skykeep,
         reject,
         iteration,
+        measured,
     ) = measure_offsets(
         reference_coordinates=vvv_table["skycoord"],
         skycrds_cat=ref_table["skycoord"],
@@ -1004,6 +1005,15 @@ def refine_with_vvv(
         ratio_match=True,
     )
 
+    if not measured:
+        # This guard was written for the too-few-matches case and could not see
+        # it: `measure_offsets` used to report that case as `0 * u.arcsec`,
+        # which is a Quantity, so the isinstance test below passed and the
+        # reference table was written with no shift applied (issue #394).
+        raise ValueError(
+            f"Iterative VVV refinement could not measure a shift: fewer than 5 "
+            f"mutual matches survived on iteration {iteration}. The partial "
+            f"accumulators were {total_dra}, {total_ddec}.")
     if not isinstance(total_dra, u.Quantity) or not isinstance(total_ddec, u.Quantity):
         raise ValueError("Iterative VVV refinement failed to converge to a valid astrometric shift.")
 
