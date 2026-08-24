@@ -208,19 +208,40 @@ def test_arches_has_a_floor_matching_its_measured_corrections():
     assert floor < 4.22
 
 
-def test_the_two_clean_gc2211_pointings_have_floors_and_the_rest_do_not():
+def test_only_the_gc2211_pointings_that_measure_scatter_have_floors():
     """o046 and o050 measure the per-exposure scatter class and nothing else
-    (58 corrections, 2.00-3.52 mas, consensus scatter 0.68-6.91).
+    (58 corrections, 2.00-3.52 mas, consensus scatter 0.68-6.91), and o028 now
+    joins them at a wider 6.0.
 
-    o023, o028 and o049 measure something different -- 118 mas of trailed-
-    exposure displacement, a coherent ~200 mas exposure-2 shift, and three
-    lowest-contrast cells at 5.4-22.4 mas respectively (#484) -- so they stay on
-    the strict default rather than inheriting their siblings' tolerance.
+    o028 previously sat on the strict default because its record showed a
+    coherent ~200 mas exposure-2 shift.  That shift was never on the sky -- m2
+    wrote it into the offsets table on 2026-07-23, and F277W, simultaneous with
+    SW and never corrected, put exposure 2 within 2.9 mas of exposure 3
+    throughout.  After the revert and a regeneration from _cal, F150W measures
+    **zero** corrections at 0.86 mas scatter (it had 192, median 28.47) and
+    F277W measures 20 spanning 2.19-4.33 on 2.60 mas scatter -- the scatter
+    class.
+
+    o023 and o049 still measure something else: 118 mas of trailed-exposure
+    displacement (excluded outright in #493) and three lowest-contrast cells at
+    5.4-22.4 mas (#484).  They stay on the strict default rather than inheriting
+    a sibling's tolerance.
     """
     for target in ('gc2211_o046', 'gc2211_o050'):
         assert m2_correction_floor(target, env={}) == (4.0, 'per-field'), target
-    for target in ('gc2211_o023', 'gc2211_o028', 'gc2211_o049'):
+    assert m2_correction_floor('gc2211_o028', env={}) == (6.0, 'per-field')
+    for target in ('gc2211_o023', 'gc2211_o049'):
         assert m2_correction_floor(target, env={}) == (0.0, 'default'), target
+
+
+def test_the_o028_floor_covers_its_measured_scatter_with_margin():
+    """4.33 mas is the largest correction its post-revert record holds.  5.0
+    would clear that by 0.67 mas, inside the run-to-run variation these
+    distributions show; it must also stay under the seam-hiding cap."""
+    floor, _ = m2_correction_floor('gc2211_o028', env={})
+    assert floor > 4.33, 'must cover the largest measured correction'
+    assert floor >= 5.5, 'and with more margin than 5.0 would give'
+    assert floor <= 10.0
 
 
 def test_quintuplet_stays_unregistered_until_it_measures_something():
