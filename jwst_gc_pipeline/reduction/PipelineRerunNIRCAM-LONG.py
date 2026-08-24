@@ -326,6 +326,21 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     can save time if you just want to redo the tweakreg steps but already have
     the zero-frame stuff done.
     """
+    # `field` is canonicalised ONCE, here, because every glob and every product
+    # name below is interpolated from it: the association search
+    # (`jw02221-o{field}*_image3_*asn.json`), the uncal download filter
+    # (`jw02221{field}*_uncal.fits`), the drizzle product names
+    # (`...-o{field}_t001_nircam_clear-...`) and the `_o{field}_crf` frames.
+    # MAST spells an observation with three digits, so `--field 1` built
+    # `jw02221-o1*`, which matches nothing on disk and at MAST; the run then
+    # stopped at "Did not find any NIRCam asn files" -- loud, for the wrong
+    # stated reason -- or re-entered the MAST call.  Padding at the entry point
+    # keeps the two spellings of one observation from diverging below this line.
+    # `registry_obs_key` hands a non-number back untouched, so a joint
+    # registration ('002-998') and the wildcard obsid are unchanged; the
+    # cataloging side has the stricter `photometry.naming.observation_field_token`,
+    # which refuses those instead.  Issue #438.
+    field = registry_obs_key(field)
     print(f"Processing filter {filtername} module {module} with do_destreak={do_destreak} and skip_step1and2={skip_step1and2} for field {field} and proposal id {proposal_id} in region {regionname}")
 
     # ------------------------------------------------------------------
@@ -1475,7 +1490,11 @@ if __name__ == "__main__":
 
     filternames = options.filternames.split(",")
     modules = options.modules.split(",")
-    fields = options.field.split(",")
+    # Padded here as well as in `main`, because the CLI uses the value before
+    # `main` sees it: `field_to_reg_mapping[field]` keys on the three-digit
+    # spelling, so `--field 1` raised `KeyError: '1'` against a registry that
+    # holds the observation it names.  Issue #438.
+    fields = [registry_obs_key(part) for part in options.field.split(",")]
     proposal_id = options.proposal_id
     skip_step1and2 = options.skip_step1and2
     no_destreak = bool(options.no_destreak)
