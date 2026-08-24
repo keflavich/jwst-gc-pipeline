@@ -1151,7 +1151,42 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # backstop -- added because per-tile alone missed brick-1182 v001 at a narrow
     # window -- cannot fire without a measurable Gaia peak.  brick-1182 v001
     # itself is unaffected: Gaia WAS measurable there, sep ~700 mas, finite.)
-    cross_gross_ok = bool((not np.isfinite(sep_mas)) or sep_mas <= gross_tol_mas)
+    # ...and the same reasoning covers a sparse tie that IS a number but is not a
+    # measurement.  "Too few Gaia stars to form a coherent peak" does not always
+    # surface as nan: the estimator can return a finite arg-max off a handful of
+    # chance pairs, and then a VETO gets built on noise.  sgrc F162M is the case
+    # -- the sparse peak MOVED 1426.67 -> 6432.71 -> 14701.21 -> 49104.93 mas
+    # across windows 3/10/30/60 on n_peak 4/17/97/223 at contrast 4.0-5.5, and
+    # the estimator recorded its own verdict on all three counts:
+    #
+    #     ok False    alias_rejected True    window_consistent False
+    #
+    # while the VIRAC side read a stable 11.5-17.6 mas at contrast 40.75 on 1147
+    # peak pairs, per_tile_ok, same-star 6.098 +/- 0.56 mas.  The gate withheld a
+    # good 6 mas correction on the strength of that noise.  CLAUDE.md is explicit
+    # that a Gaia-sparse tie "must never BLOCK a coherent VIRAC tie", and this
+    # gate exists to catch a spurious peak in the FULL reference -- so it must
+    # not fire when the spurious peak is the cross-reference's own.
+    #
+    # Only the estimator's EXISTING verdicts are consulted; no new threshold is
+    # invented here.  Measured over the live checkpoint records this releases 5
+    # of the 12 blocked filter-visits (sgrc F115W + F162M, gc2211 and
+    # gc2211_o046 F277W) -- every one of which reports all three flags against
+    # itself -- and leaves the real disagreements blocked, notably cloudc F410M
+    # (sparse contrast 149 on 160 peak pairs, window_consistent, 3326 mas) and
+    # cloudef F480M (contrast 82 on 106, 156 mas).
+    #
+    # KNOWN GAP: three gc2211 F150W entries carry ok=True on n_peak of 5 and 6,
+    # which is not a coherent peak by any reading, and they stay blocked because
+    # the estimator never said otherwise.  Tightening `ok` belongs in
+    # measure_offset, not as a special case here.
+    sparse_untrustworthy = bool(
+        res_b is None
+        or res_b.get("ok") is False
+        or res_b.get("alias_rejected") is True
+        or res_b.get("window_consistent") is False)
+    cross_gross_ok = bool((not np.isfinite(sep_mas)) or sparse_untrustworthy
+                          or sep_mas <= gross_tol_mas)
     grid = measure_offset_grid(consensus_coords, ref_coords_all,
                                nx=grid_nx, ny=grid_ny,
                                context=f"{context} per-tile")
@@ -1227,6 +1262,10 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                     and per_tile_ok and cross_gross_ok)
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
                cross_reference_gross_ok=cross_gross_ok,
+               # WHY it passed: without this, a gross_ok=True recorded because the
+               # cross-reference was noise is indistinguishable from one recorded
+               # because the two references agreed.  Those are opposite situations.
+               cross_reference_sparse_untrustworthy=sparse_untrustworthy,
                cross_reference_gross_tol_mas=gross_tol_mas,
                per_tile=grid, per_tile_ok=per_tile_ok, reference_dense=bool(dense),
                flux_matched=fluxmatched, same_star=same_star,
