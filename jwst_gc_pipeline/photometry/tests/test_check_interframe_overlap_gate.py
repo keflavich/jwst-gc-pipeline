@@ -7,6 +7,7 @@ import pathlib
 import sys
 
 import numpy as np
+import pytest
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 
@@ -248,3 +249,85 @@ def test_underivable_scope_warns_and_disables(monkeypatch, tmp_path, capsys):
     _, _, nframes = gate.build_groups("brick", "F405N")   # no mosaic -> no scope
     assert nframes == 2   # both accepted (scoping disabled)
     assert "scoping DISABLED" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# "This directory is EMPTY" vs "this directory is full of frames I could not
+# read" (#376).  Both fail closed; only the reported cause differs, and the
+# second one is a defect in this gate's own name pattern rather than in the
+# reduction.  wd1/F200W spent an unknown length of time in the second state
+# reporting the first: 96 frames on disk, 0 parsed, message naming the glob.
+# ---------------------------------------------------------------------------
+
+def _unreadable_pdir(tmp_path):
+    """A filter directory whose crf files exist and whose names do not parse."""
+    pdir = tmp_path / "wd1" / "F200W" / "pipeline"
+    pdir.mkdir(parents=True)
+    for n in (
+            # leading/trailing observation tokens disagree
+            "jw01905001001_0210b_00001_nrca1_destreak_o002_crf.fits",
+            # a detector token the pattern does not know
+            "jw01905001001_0210b_00001_guider1_destreak_o001_crf.fits",
+            # too few digits before the first underscore for prop+obs+visit
+            "jw1905001001_0210b_00001_nrca1_destreak_o001_crf.fits"):
+        (pdir / n).write_bytes(b"x")
+    return pdir
+
+
+def test_a_directory_of_unreadable_crf_names_raises_rather_than_reading_empty(
+        monkeypatch, tmp_path):
+    _unreadable_pdir(tmp_path)
+    monkeypatch.setattr(gate, "BASE", str(tmp_path))
+    monkeypatch.setattr(gate, "_detect", lambda path: None)
+    with pytest.raises(gate.UnreadableCrfNames) as exc:
+        gate.build_groups("wd1", "F200W")
+    assert len(exc.value.unreadable) == 3
+    assert "NONE parse" in str(exc.value)
+
+
+def test_check_filter_names_the_pattern_not_a_glob_mismatch(
+        monkeypatch, tmp_path, capsys):
+    """The verdict is unchanged -- blocking, could-not-verify.  What must change
+    is where the operator is sent: the name pattern in the gate, not a missing
+    or misnamed reduction product."""
+    _unreadable_pdir(tmp_path)
+    monkeypatch.setattr(gate, "BASE", str(tmp_path))
+    monkeypatch.setattr(gate, "_detect", lambda path: None)
+    r = gate.check_filter("wd1", "F200W", verbose=True)
+    out = capsys.readouterr().out
+    assert r["PASS"] is False
+    assert r["could_not_verify"] is True
+    assert "none parseable" in r["note"]
+    assert len(r["unreadable_names"]) == 3
+    assert "NAME-PATTERN failure" in out
+    assert "glob mismatch" not in out
+
+
+def test_a_partially_readable_directory_does_not_raise(monkeypatch, tmp_path):
+    """One parsed frame means the directory IS covered, so the loud arm must not
+    fire.  Every MIRI band on disk is this shape: per-exposure crf alongside
+    product-named ones (jw05365-o002_t001_miri_f770w_0_o002_crf.fits) that are
+    correctly not per-exposure frames."""
+    pdir = tmp_path / "sgrb2" / "F770W" / "pipeline"
+    pdir.mkdir(parents=True)
+    (pdir / "jw05365002001_02101_00001_mirimage_o002_crf.fits").write_bytes(b"x")
+    (pdir / "jw05365-o002_t001_miri_f770w_0_o002_crf.fits").write_bytes(b"x")
+    monkeypatch.setattr(gate, "BASE", str(tmp_path))
+    monkeypatch.setattr(gate, "_detect", lambda path: None)
+    _, _, nframes = gate.build_groups("sgrb2", "F770W")
+    assert nframes == 1
+
+
+def test_a_directory_of_only_retired_lineage_keeps_the_empty_result(
+        monkeypatch, tmp_path):
+    """Retired-path products are READ, recognised and deliberately excluded, so
+    a directory holding only those is not an unreadable-name failure; it keeps
+    the existing empty result (which still fails closed)."""
+    pdir = tmp_path / "cloudc" / "F405N" / "pipeline"
+    pdir.mkdir(parents=True)
+    (pdir / "jw02221002001_03101_00001_nrcalong_realigned_vvv_o002_crf.fits"
+     ).write_bytes(b"x")
+    monkeypatch.setattr(gate, "BASE", str(tmp_path))
+    monkeypatch.setattr(gate, "_detect", lambda path: None)
+    _, _, nframes = gate.build_groups("cloudc", "F405N")
+    assert nframes == 0

@@ -145,6 +145,11 @@ def _detect(path, nsigma=8.0, box=5):
 # matched -- cannot verify" rather than passing; the cost is that the band has
 # never actually been checked, and the message names a glob mismatch instead of
 # the parser.  ``exp`` is left ``\d+``: the exposure counter is decimal.
+#
+# The MESSAGE half of that is now ``UnreadableCrfNames``: a directory that holds
+# crf files of which NONE parse says so, instead of reporting itself empty.  The
+# verdict is unchanged (blocking either way); what changes is whether the
+# operator is sent to the reduction or to the pattern above.
 _CRF_RE = re.compile(
     r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_(?P<vgroup>[0-9a-z]+)_(?P<exp>\d+)_"
     r"(?P<det>mirimage|nrc[ab](?:long|[1-4])?)"
@@ -318,6 +323,26 @@ class OutOfReleaseScope(Exception):
             f"{field}/{filt}: products belong to "
             f"{', '.join(sorted(self.derived))}, which this release does not "
             f"claim ({', '.join(sorted(self.requested))})")
+
+
+class UnreadableCrfNames(Exception):
+    """This filter directory holds crf files and NONE of their names parse.
+
+    Distinct from an empty directory, which is the other route to
+    ``nframes == 0``: here the products exist and it is this file's own name
+    pattern that cannot read them, so the remedy is the parser rather than the
+    reduction.  Both keep failing closed; only the reported cause differs.
+    """
+
+    def __init__(self, field, filt, unreadable):
+        self.field, self.filt = field, filt
+        self.unreadable = list(unreadable)
+        examples = ", ".join(os.path.basename(p) for p in self.unreadable[:3])
+        super().__init__(
+            f"{field}/{filt}: {len(self.unreadable)} crf file(s) on disk and "
+            f"NONE parse as a per-exposure crf name -- the name pattern in "
+            f"{os.path.basename(__file__)} cannot read this directory "
+            f"(e.g. {examples})")
 
 
 class UnparseableFrameError(ValueError):
@@ -578,7 +603,10 @@ def build_groups(field, filt, observations=None):
     # (excluding MIRI once silently PASSED the F2550W doubled-star saga).
     frames = []
     n_retired = 0
-    for fn in sorted(glob.glob(f"{BASE}/{field}/{filt}/pipeline/jw*_crf.fits")):
+    n_parsed = 0
+    unreadable = []
+    on_disk = sorted(glob.glob(f"{BASE}/{field}/{filt}/pipeline/jw*_crf.fits"))
+    for fn in on_disk:
         p = _parse_crf(fn)
         if p is None:
             # _parse_crf returns None both for "not a well-formed crf name" and
@@ -589,10 +617,33 @@ def build_groups(field, filt, observations=None):
             # groups and no trace.
             if _retired_lineage(fn):
                 n_retired += 1
+            else:
+                unreadable.append(fn)
             continue
+        n_parsed += 1
         if scope is not None and p["obs_key"] not in scope:
             continue
         frames.append(fn)
+    if unreadable and n_parsed == 0:
+        # "The directory is empty" and "the directory is full of frames whose
+        # names I could not read" both arrive at nframes == 0, where
+        # check_filter reports "NO crf frames matched -- glob mismatch /
+        # missing products?".  That message names the wrong cause for the
+        # second case and hides the first symptom of a naming change.
+        #
+        # Live case (#376): every one of wd1/F200W's 96 frames is
+        # jw01905001001_0210b_00001_<det>_destreak_o001_crf.fits, and the
+        # vgroup capture accepted digits only, so the band read as an empty
+        # directory for as long as that was true.  It blocked -- check_filter
+        # fails closed on zero frames -- under a message pointing at the glob.
+        #
+        # Raised rather than returned empty, for the same reason as
+        # OutOfReleaseScope: a caller that only counts frames cannot tell the
+        # two apart, and one of them is a defect in this file.  A directory
+        # holding ONLY retired-lineage products is NOT this case -- those are
+        # read, recognised and deliberately excluded -- so it keeps the
+        # existing empty-result path.
+        raise UnreadableCrfNames(field, filt, unreadable)
     if n_retired:
         print(f"  {field}/{filt}: excluded {n_retired} retired-path crf "
               f"(realign_to_vvv lineage; FITS header and GWCS disagree by "
@@ -1091,6 +1142,21 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                     derived=sorted(out.derived),
                     note=f"not in this release's observations "
                          f"({', '.join(sorted(out.derived))})")
+    except UnreadableCrfNames as bad:
+        # Blocking, exactly as an empty directory is -- what changes is the
+        # cause the operator is sent to look at.  "Glob mismatch / missing
+        # products?" sends them to the reduction; this sends them to the name
+        # pattern in this file, which is where wd1/F200W's defect lived.
+        if verbose:
+            print(f"  {field} {filt}: {len(bad.unreadable)} crf on disk and "
+                  f"NONE parse as a per-exposure crf name -- cannot verify "
+                  f"inter-frame registration.  This is a NAME-PATTERN failure "
+                  f"in {os.path.basename(__file__)}, not an empty directory "
+                  f"(e.g. {os.path.basename(bad.unreadable[0])})", flush=True)
+        return dict(field=field, filt=filt, PASS=False, could_not_verify=True,
+                    unreadable_names=[os.path.basename(p)
+                                      for p in bad.unreadable],
+                    note=f"{len(bad.unreadable)} crf on disk, none parseable")
     # FAIL-CLOSED on "found nothing": a gate that goes green because its glob
     # matched zero files (renamed products, naming drift) is the silent
     # false-agreement class this repo bans.  Distinguish it from a genuine
