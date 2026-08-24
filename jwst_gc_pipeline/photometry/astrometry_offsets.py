@@ -521,9 +521,23 @@ def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
     side, where a single rigid per-visit shift left a field-dependent residual)
     pass with contrast ~20 — and the drizzle doubled every star in the overlap.
     When ``max_off_mas`` is set, a tile is ``ok`` only if it BOTH has a coherent
-    peak (contrast) AND that peak is within ``max_off_mas`` of zero.  Pass it
-    (e.g. 50) for any release/QC sign-off; leave it ``None`` only for pure
-    offset-mapping where you want the value, not a verdict.
+    peak (contrast) AND that peak is within ``max_off_mas`` of zero.  Leave it
+    ``None`` for pure offset-mapping, where you want the value and not a
+    verdict.
+
+    **No production caller passes it, and this docstring used to tell you to
+    pass it "for any release/QC sign-off" (issue #392).**  That instruction was
+    written when this function was the interframe-overlap gate's per-tile
+    estimator; it stopped being that in 0fb1958 (2026-07-13), because a
+    per-tile histogram over a 40-250-star tile produces a noise peak that
+    clears any contrast floor and lands anywhere in the window.  The release
+    gate's magnitude limit is now ``interframe_overlap.overlap_offset_grid(...,
+    tol_mas=...)``, on matched pairs.  The one remaining production caller of
+    THIS parameter's owner -- the monitoring scan -- deliberately leaves it
+    ``None`` and says so in a comment, so with ``max_off_mas=None``
+    ``off_ok`` is unconditionally True and ``clean`` is a statement about
+    contrast alone.  Whether the monitoring scan should switch it on is the
+    open half of #392.
 
     Use a FINE grid for QC (``nx=ny`` >= ~16 so a thin overlap strip is not
     diluted inside a coarse tile); a 4x4 grid hid the brick-1182 seam.
