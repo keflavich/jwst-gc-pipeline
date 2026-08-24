@@ -15,6 +15,7 @@ absent (e.g. CI without the data tree), and run as a hard regression on the
 analysis machine.  Pin: 2026-06-17 bright stars left in the residual at ~88% of
 their data peak (saturated-star model under-fit -> dirty residual).
 """
+import datetime
 import glob
 import os
 import numpy as np
@@ -47,6 +48,79 @@ def _read_points(path):
 def _latest(pattern):
     fns = sorted(glob.glob(pattern), key=os.path.getmtime)
     return fns[-1] if fns else None
+
+
+def _product_date(path):
+    """The mosaic's ``DATE`` (when it was written), or ``None``."""
+    if path is None:
+        return None
+    from astropy.io import fits as _fits
+    try:
+        return _fits.getheader(path).get("DATE")
+    except (OSError, ValueError):
+        return None
+
+
+def _parse_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+#: The residual and the model are written seconds apart by one m5 finalize (26 s
+#: on the 2026-08-21 products).  An hour is far outside that and well inside any
+#: single run, so it separates "two products of one chain" from "two chains".
+SAME_RUN_HOURS = 1.0
+
+
+def cross_run_reason(data_date, resid_date, model_date,
+                     same_run_hours=SAME_RUN_HOURS):
+    """Why these three products are not one reduction generation, else ``None``.
+
+    Item 2 of issue #266, which pinning the globs did not close.  ``STAGE``
+    makes each glob match exactly one file, so numerator and denominator can no
+    longer come from two *stages*; nothing yet stops them coming from two
+    *runs*.  That is the failure that turned this file red on 2026-07-05 with no
+    commit behind it:
+
+        data_i2d                DATE = 2026-07-05T19:11:39
+        model / residual i2d    DATE = 2026-06-27T18:40:04
+
+    A partial re-run regenerated the data mosaic and never rewrote the QA
+    products, so every ratio graded a June model against a July data mosaic.
+    The ordering is what makes this checkable without a tolerance: within one
+    generation the data mosaic is drizzled BEFORE the catalog chain that
+    subtracts from it, so a data mosaic NEWER than the residual it is divided
+    into means the residual describes a data mosaic that no longer exists.
+
+    Returns a reason string suitable for ``pytest.skip`` -- an unverifiable
+    comparison is not a verdict, in either direction.
+    """
+    named = (("data i2d", data_date), ("residual i2d", resid_date),
+             ("model i2d", model_date))
+    parsed = {what: _parse_date(value) for what, value in named}
+    unknown = sorted(what for what, when in parsed.items() if when is None)
+    if unknown:
+        return ("cannot establish that the QA products are one reduction "
+                "generation: no readable DATE on " + ", ".join(unknown))
+    data, resid, model = (parsed["data i2d"], parsed["residual i2d"],
+                          parsed["model i2d"])
+    gap_hours = abs((resid - model).total_seconds()) / 3600.0
+    if gap_hours > same_run_hours:
+        return (f"residual and model i2d are {gap_hours:.1f} h apart "
+                f"(> {same_run_hours:.1f} h), so they are not from one "
+                f"cataloging run: residual {resid.isoformat()}, "
+                f"model {model.isoformat()}")
+    older = min(resid, model)
+    if data > older:
+        return (f"the data i2d ({data.isoformat()}) is NEWER than the QA "
+                f"products graded against it ({older.isoformat()}), so a "
+                f"re-reduction has moved the denominator out from under them "
+                f"(issue #266 item 2)")
+    return None
 
 
 def _img(path, what=""):
@@ -172,11 +246,19 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def f480m():
     stars = _read_points(REG)
-    data, dw = _img(_latest(_REQUIRED["data i2d"]), "data i2d")
-    resid, rw = _img(_latest(_REQUIRED[f"{STAGE} residual i2d"]),
-                     f"{STAGE} residual i2d")
-    model, mw = _img(_latest(_REQUIRED[f"{STAGE} model i2d"]),
-                     f"{STAGE} model i2d")
+    data_path = _latest(_REQUIRED["data i2d"])
+    resid_path = _latest(_REQUIRED[f"{STAGE} residual i2d"])
+    model_path = _latest(_REQUIRED[f"{STAGE} model i2d"])
+    # The three globs are resolved FIRST so this check cannot mask which
+    # products the fixture asks for (test_residual_policy_meta.py records them).
+    mismatch = cross_run_reason(_product_date(data_path),
+                                _product_date(resid_path),
+                                _product_date(model_path))
+    if mismatch:
+        pytest.skip(mismatch)
+    data, dw = _img(data_path, "data i2d")
+    resid, rw = _img(resid_path, f"{STAGE} residual i2d")
+    model, mw = _img(model_path, f"{STAGE} model i2d")
     return dict(stars=stars,
                 d=_peaks(data, dw, stars), r=_peaks(resid, rw, stars),
                 m=_peaks(model, mw, stars), rmin=_troughs(resid, rw, stars),
