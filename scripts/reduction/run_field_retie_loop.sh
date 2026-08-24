@@ -104,7 +104,21 @@ BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # residuals of a few mas are SIAF/DVA-class systematics the module-locked/consensus
 # offsets table cannot express, so correcting on their detector means never converges.
 # Setting this ABOVE the residual scatter lets the loop stop on a sub-floor PASS while
-# still measuring+recording every residual. Default 0 = strict 2 mas (unchanged).
+# still measuring+recording every residual.
+#
+# Do NOT default it here.  The floor is PER FIELD now, derived from each field's
+# own scatter and held in `jwst_gc_pipeline.photometry.m2_correction_floors`
+# (sgrc/cloudc 8.0, w51 6.0, brick/sgrb2/sickle/cloudef/sgra 4.0).
+# `m2_correction_floor` resolves the environment BEFORE that table, so any value
+# exported here overrides every per-field entry.  A default of 0 is the worst of
+# those: 0 is a VALUE, not "unset" -- it resolves to `(0.0, 'env')` and disables
+# the floor outright, so every residual above the 2 mas consensus tolerance
+# becomes actionable and m2 corrects a field's intrinsic per-exposure scatter
+# (the brick-1182 failure: 35 corrections and an AstrometryCorrectionRequiredError
+# on F115W's own 2-3.3 mas jitter).  That never fired only because the jicama
+# runner's common.sh happened to export 4.0 first and shadow it.
+#
+# So leave it UNSET unless the caller set one, and let the per-field table answer.
 # When this loop started, in the checkpoint records' own stamp format.  The
 # fixed-point check counts only records written at/after it: brick, cloudc and
 # cloudef all carry repeating histories from earlier campaigns, and without this
@@ -112,8 +126,28 @@ BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # a different campaign.
 RETIE_RUN_START=$(date -u +%Y%m%dT%H%M%SZ)
 
-ASTROM_M2_CORRECTION_FLOOR_MAS=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
-export ASTROM_M2_CORRECTION_FLOOR_MAS
+# `floor_env` is how the value reaches every child.  It is EMPTY when the caller
+# set nothing, so the child inherits no variable at all and the per-field table
+# answers.  An array rather than a bare `VAR=$VAR` because `set -u` aborts the
+# script on an unset expansion, and because a conditional string would have to be
+# re-split at every use site.
+floor_env=()
+if [ -n "${ASTROM_M2_CORRECTION_FLOOR_MAS:-}" ]; then
+    export ASTROM_M2_CORRECTION_FLOOR_MAS
+    floor_env=(ASTROM_M2_CORRECTION_FLOOR_MAS="$ASTROM_M2_CORRECTION_FLOOR_MAS")
+    echo "[floor] ASTROM_M2_CORRECTION_FLOOR_MAS=$ASTROM_M2_CORRECTION_FLOOR_MAS (explicit override)"
+else
+    echo "[floor] ASTROM_M2_CORRECTION_FLOOR_MAS unset -- using the per-field table"
+fi
+
+# What the field WOULD get with nothing exported.  Resolved once, here, where
+# TARGET is in scope: the bounded-fixed-point branch below needs it as the "never
+# lowered" baseline, and that branch is extracted and run standalone by
+# test_retie_accept_bounded_branch.py with only a handful of variables defined --
+# so it must not reach for TARGET, PIPE_ROOT or python itself.
+PER_FIELD_FLOOR=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python -c "
+from jwst_gc_pipeline.photometry.m2_correction_floors import m2_correction_floor
+print(m2_correction_floor('${TARGET:-}', env={})[0])" 2>/dev/null || echo 0)
 # Which offsets table does m2 REWRITE for this field?  The before/after md5sum
 # check below is only meaningful against that one file, and the answer depends on
 # the field's CONFIGURED CHANNEL -- not on which tables happen to exist.
@@ -483,7 +517,7 @@ for ((it=1; it<=MAXITER; it++)); do
     chain_out=$(PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
         EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
         PHASES="m12" PIPE_ROOT=$PIPE_ROOT \
-        ASTROM_M2_CORRECTION_FLOOR_MAS=$ASTROM_M2_CORRECTION_FLOOR_MAS \
+        "${floor_env[@]}" \
         bash "$HERE/submit_cataloging_perframe.sh") || chain_rc=$?
     echo "$chain_out"
     if [ "${chain_rc:-0}" -ne 0 ]; then
@@ -599,7 +633,11 @@ for ((it=1; it<=MAXITER; it++)); do
             # 0.6 the log said the run was continuing at 0.6, and the
             # last-iteration line then handed a human the exact lowering this
             # max exists to prevent.
-            _prev_floor=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
+            # Baseline for "a floor is never lowered".  With nothing exported the
+            # effective floor is the field's PER-FIELD value, not 0, and taking 0
+            # here would let the raise LOWER a field whose table entry is above
+            # what the fixed-point check computed (sgrc/cloudc 8.0, w51 6.0).
+            _prev_floor=${ASTROM_M2_CORRECTION_FLOOR_MAS:-${PER_FIELD_FLOOR:-0}}
             _effective_floor=$(awk -v a="$_prev_floor" -v b="$fp_floor" \
                 'BEGIN{print (a>b)?a:b}')
             echo "[iter $it] BOUNDED fixed point -- re-reducing once more with"
@@ -609,6 +647,9 @@ for ((it=1; it<=MAXITER; it++)); do
             echo "           the frames and the offsets table end up agreeing."
             ASTROM_M2_CORRECTION_FLOOR_MAS="$_effective_floor"
             export ASTROM_M2_CORRECTION_FLOOR_MAS
+            # From here the value IS explicit, so it must reach the children --
+            # the array is empty until now whenever the caller set nothing.
+            floor_env=(ASTROM_M2_CORRECTION_FLOOR_MAS="$ASTROM_M2_CORRECTION_FLOOR_MAS")
             if [ "$it" -eq "$MAXITER" ]; then
                 echo "[iter $it] ...but this is the last iteration (MAXITER=$MAXITER)."
                 echo "           Re-run with MAXITER=$((MAXITER + 1)) and"
@@ -659,6 +700,6 @@ unset ASTROM_CHECKPOINT_APPLY   # m3+ must be a FROZEN solution; no more correct
 PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
     EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
     PIPE_ROOT=$PIPE_ROOT \
-    ASTROM_M2_CORRECTION_FLOOR_MAS=$ASTROM_M2_CORRECTION_FLOOR_MAS \
+    "${floor_env[@]}" \
     bash "$HERE/submit_cataloging_perframe.sh"
 echo "Submitted full cataloging chain for $TARGET $PROPOSAL/$FIELD."

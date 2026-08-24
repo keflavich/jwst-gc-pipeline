@@ -10,6 +10,11 @@ with ``ALL`` and the loop exports the variable -- so this is about legibility,
 not propagation: a value that decides whether a gate raises should be visible at
 the call site, and the two invocations should be symmetric.
 
+The floor is now forwarded through the ``floor_env`` array, which is EMPTY when
+the caller set nothing so that the per-field table answers instead of a driver
+default (see ``test_m2_floor_not_defaulted_by_drivers.py``).  Symmetry is what
+these tests pin, so they follow the mechanism rather than the literal name.
+
 These tests pin the naming.  They cannot tell whether the value ARRIVES; that was
 settled by probe (``sbatch --export="ALL,..." --wrap='echo $VAR'`` returns the
 exported value) and is recorded in the script's comment.
@@ -20,10 +25,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LOOP = REPO_ROOT / 'scripts' / 'reduction' / 'run_field_retie_loop.sh'
 
-#: Variables that must reach BOTH cataloging invocations.  Each one changes what
-#: the m2 checkpoint decides, so passing it to one and not the other means the
-#: two runs judge the same frames by different rules.
-MUST_REACH_BOTH = ('ASTROM_M2_CORRECTION_FLOOR_MAS',)
+#: What must reach BOTH cataloging invocations.  Each one changes what the m2
+#: checkpoint decides, so passing it to one and not the other means the two runs
+#: judge the same frames by different rules.
+#:
+#: The correction floor is carried by the ``floor_env`` ARRAY rather than a bare
+#: ``VAR=$VAR`` assignment.  The loop must not DEFAULT the floor -- the env is
+#: resolved before the per-field table, so any default overrides every entry in
+#: ``PER_FIELD_FLOOR_MAS``, and a default of 0 disables the floor outright.  So
+#: the value is only forwarded when the caller set one, and an empty array
+#: forwards nothing (a bare unset expansion would also abort under ``set -u``).
+#: The invariant is unchanged: whatever the floor is, both invocations get it.
+MUST_REACH_BOTH = ('"${floor_env[@]}"',)
 
 
 #: The line that actually runs the submit script -- not the mentions of its name
