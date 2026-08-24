@@ -130,15 +130,41 @@ PER_FIELD_FLOOR_MAS = {
     # 58 corrections, every one under 4 mas.  Both were run with the env var set;
     # at the default they stop at m12 the way brick did twice.
     #
-    # The other three 2211 pointings are NOT registered, because their measured
-    # corrections are not this class and a floor would be a guess about them
-    # rather than a measurement of them: o023 median 118 mas (its four exposures
-    # are trailed -- excluded outright in #493), o028 median 28 mas with a
-    # coherent ~200 mas exposure-2 displacement on seven of eight detectors, and
-    # o049 only three corrections, 5.4-22.4 mas, from the joint-lowest-contrast
-    # cells in its whole record.  See #484.
+    # The other three 2211 pointings were NOT registered, because their measured
+    # corrections were not this class and a floor would have been a guess about
+    # them rather than a measurement of them: o023 median 118 mas (its four
+    # exposures are trailed -- excluded outright in #493), o028 median 28 mas
+    # with a coherent ~200 mas exposure-2 displacement on seven of eight
+    # detectors, and o049 only three corrections, 5.4-22.4 mas, from the
+    # joint-lowest-contrast cells in its whole record.  See #484.
     'gc2211_o046': 4.0,
     'gc2211_o050': 4.0,
+    # o028 NOW QUALIFIES, and the paragraph above is exactly why it did not
+    # before.  That "~200 mas exposure-2 displacement" was never on the sky: m2
+    # wrote it into the offsets table on 2026-07-23 and the frames were
+    # regenerated carrying it.  The tell was F277W -- LW is simultaneous with SW,
+    # its rows were never corrected, and it put exposure 2 within 2.9 mas of
+    # exposure 3, which no real pointing error can do.  The 36 affected rows were
+    # reverted to their pre-m2 values (identical across all eight 2026-07-22/23
+    # backups) and F150W was regenerated from _cal.
+    #
+    # Re-measured afterwards with APPLY=0, both filters:
+    #
+    #     field        filter  scatter    n   min    med    max
+    #     gc2211_o028  F150W    0.86      0     --     --     --
+    #     gc2211_o028  F277W    2.60     20   2.19   2.70   4.33
+    #
+    # F150W emits NOTHING where it previously emitted 192 corrections at a median
+    # of 28.47 mas: those were the pipeline chasing its own earlier write.  What
+    # is left is F277W's ordinary per-exposure scatter, the same class as the two
+    # entries above.
+    #
+    # 6.0 rather than 5.0 -- the measured maximum is 4.33, and 5.0 clears it by
+    # only 0.67 mas, inside the run-to-run variation these distributions show.
+    # It also matches the w51 entry, set at 6.0 for a worst filter of 5.42.  The
+    # siblings stay at 4.0 because their maxima are 3.1-3.5; o028's scatter is
+    # genuinely a little wider, so it takes its own entry rather than theirs.
+    'gc2211_o028': 6.0,
     # quintuplet is deliberately absent as well.  Its records carry
     # `correction_floor_mas: 4.0` like arches's do, but all four of them
     # (2026-08-01 and 2026-08-15, F212N and F323N) contain ZERO corrections at a
