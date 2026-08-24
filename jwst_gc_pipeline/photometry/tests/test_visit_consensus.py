@@ -1170,3 +1170,86 @@ def test_a_component_with_no_restricted_member_says_so(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     assert "NO exposure could be restricted" in out, out
     assert all(e.get("restrict_refused") for e in cons["exposures"])
+
+
+# ---------------------------------------------------------------------------
+# The gross cross-check must not veto on a cross-reference that is itself noise
+# ---------------------------------------------------------------------------
+
+def test_gross_gate_ignores_an_untrustworthy_sparse_peak():
+    """A finite sparse "offset" built on chance pairs must not block a coherent
+    VIRAC tie.
+
+    ``sep_mas`` being nan is already handled (too few Gaia stars -> no peak at
+    all), but "too few to form a coherent peak" does not always surface as nan:
+    the estimator can return a finite arg-max off a handful of chance pairs and
+    the gate then builds a VETO on noise.
+
+    sgrc F162M, 2026-08-24: the sparse peak MOVED 1426.67 -> 6432.71 ->
+    14701.21 -> 49104.93 mas across windows 3/10/30/60 on ``n_peak`` 4/17/97/223
+    at contrast 4.0-5.5, reporting ``ok=False``, ``alias_rejected=True`` and
+    ``window_consistent=False`` -- while VIRAC read a stable 11.5-17.6 mas at
+    contrast 40.75 on 1147 peak pairs with ``per_tile_ok`` and a same-star bulk
+    of 6.098 +/- 0.56 mas.  A good 6 mas correction was withheld on that basis.
+    """
+    rng = np.random.default_rng(1234)
+    ra, dec = _field()
+    cons = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    ref_all, _ = _reference_sets(ra, dec)
+    # A sparse "reference" of positions unrelated to the field: it shares no
+    # stars, so any peak it produces is chance coincidence.
+    sr, sd = _field(n=40, rng=rng)
+    ref_sparse_noise = SkyCoord(ra=sr * u.deg, dec=sd * u.deg, frame="icrs")
+
+    tie = measure_reference_tie(cons, ref_all, ref_sparse_noise,
+                                context="test-untrustworthy-sparse",
+                                grid_nx=2, grid_ny=2)
+
+    sp = tie["vs_sparse"]
+    untrustworthy = (sp is None or sp.get("ok") is False
+                     or sp.get("alias_rejected") is True
+                     or sp.get("window_consistent") is False)
+    assert untrustworthy, (
+        f"the synthetic sparse reference produced a peak the estimator considers "
+        f"sound ({sp}); this test can only exercise the gate when it does not")
+
+    assert tie["cross_reference_sparse_untrustworthy"] is True
+    assert tie["cross_reference_gross_ok"], (
+        "a sparse peak the estimator itself rejected must not veto the tie")
+    assert tie["vs_full"]["ok"]
+    assert tie["apply_ok"], "the coherent VIRAC tie should still apply"
+
+
+def test_a_sound_sparse_disagreement_still_blocks():
+    """The guard above must not become a blanket exemption.
+
+    cloudc F410M and cloudef F480M carry sparse peaks at contrast 149 and 82 on
+    160 and 106 peak pairs -- as strong as their dense side -- disagreeing by
+    3326 and 156 mas.  Those are real conflicts and must stay blocked.
+    """
+    ra, dec = _field()
+    cons = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    ref_all, _ = _reference_sets(ra, dec)
+    # Real stars, coherently shifted 300 mas: a SOUND peak that disagrees.
+    ref_sparse_bad = SkyCoord(ra=(ra[::10] + 300.0 / 3.6e6 / COSD) * u.deg,
+                              dec=dec[::10] * u.deg, frame="icrs")
+    tie = measure_reference_tie(cons, ref_all, ref_sparse_bad,
+                                context="test-sound-sparse-disagrees",
+                                grid_nx=2, grid_ny=2)
+    assert tie["vs_sparse"]["ok"], "precondition: the sparse peak is sound"
+    assert tie["cross_reference_sparse_untrustworthy"] is False
+    assert not tie["cross_reference_gross_ok"]
+    assert not tie["apply_ok"]
+
+
+def test_the_record_says_WHY_the_gross_check_passed():
+    """`gross_ok=True` because the references agreed and `gross_ok=True` because
+    the cross-reference was noise are opposite situations; the record must tell
+    them apart."""
+    ra, dec = _field()
+    cons = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    ref_all, ref_sparse = _reference_sets(ra, dec)
+    agreed = measure_reference_tie(cons, ref_all, ref_sparse,
+                                   context="test-why-agreed", grid_nx=2, grid_ny=2)
+    assert agreed["cross_reference_gross_ok"]
+    assert agreed["cross_reference_sparse_untrustworthy"] is False
