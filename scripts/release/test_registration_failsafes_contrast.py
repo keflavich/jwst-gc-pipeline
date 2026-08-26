@@ -64,10 +64,22 @@ def test_margin_demotes_lowcontrast_highoff_and_would_fail_at_floor():
         surfaced in n_unconfident_highoff.
     Conservation (strict n_fail == relaxed n_fail + relaxed n_unconfident) pins the
     behaviour: reverting FAIL_MIN_RATIO to the floor makes n_unconfident_highoff 0 and
-    breaks the first assert."""
+    breaks the first assert.
+
+    ``min_seam_cells`` is set past the size of the whole grid so the seam axis (#170)
+    cannot fire, isolating the CONTRAST axis this test was written to pin.  The seam
+    axis DOES fail this field -- the construction shifts 15 % of the stars everywhere,
+    so its high-offset cells form one large connected patch, which is the behaviour
+    change that axis exists for.  That is asserted in
+    ``test_seam_axis_fails_the_fieldwide_weak_construction`` below, and the scattered
+    case that the brick F405N false positives actually were is asserted in
+    ``test_seam_mask_ignores_scattered_singletons``."""
     det, truth = _weak_spurious_field()
-    strict = rf.per_cell(det, None, truth, "strict", fail_min_ratio=rf.MIN_PEAK_RATIO)
-    relaxed = rf.per_cell(det, None, truth, "relaxed", fail_min_ratio=rf.FAIL_MIN_RATIO)
+    off_axis = rf.GRID * rf.GRID + 1        # larger than the grid -> seam axis disabled
+    strict = rf.per_cell(det, None, truth, "strict", fail_min_ratio=rf.MIN_PEAK_RATIO,
+                         min_seam_cells=off_axis)
+    relaxed = rf.per_cell(det, None, truth, "relaxed", fail_min_ratio=rf.FAIL_MIN_RATIO,
+                          min_seam_cells=off_axis)
     assert relaxed["n_unconfident_highoff"] > 0            # fails if margin == floor
     assert relaxed["n_fail"] < strict["n_fail"]           # margin actually demoted some
     # every demoted cell was a strict FAIL (nothing invented, nothing lost)
@@ -113,3 +125,95 @@ def test_clean_field_passes_full_coverage():
     truth = _sc_xy(x, y); det = _sc_xy(x, y)
     r = rf.per_cell(det, None, truth, "clean", fail_min_ratio=rf.FAIL_MIN_RATIO)
     assert r["PASS"] and r["n_fail"] == 0 and r["verified_cells"] > 0
+
+
+# ---- seam contiguity: the second, amplitude-free axis (issue #170) -----------------
+
+
+def test_seam_mask_requires_three_touching_cells():
+    """The measured lower bound. Two of the seven brick F405N false positives are
+    4-adjacent -- component sizes were [2, 1, 1, 1, 1, 1] -- so a 2-cell bar re-creates
+    the exact false alarm #166/#172 removed."""
+    g = np.zeros((20, 20), bool)
+    g[5, 5] = g[5, 6] = True                 # an adjacent PAIR, as on brick F405N
+    keep, sizes = rf.seam_mask(g)
+    assert not keep.any() and sizes == []
+    g[5, 7] = True                           # now three in a row
+    keep, sizes = rf.seam_mask(g)
+    assert keep.sum() == 3 and sizes == [3]
+
+
+def test_seam_mask_ignores_scattered_singletons():
+    """Wrong-pair noise is scattered; five isolated cells are not a seam at any count."""
+    g = np.zeros((20, 20), bool)
+    for i, j in ((1, 1), (4, 9), (9, 4), (14, 15), (18, 2)):
+        g[i, j] = True
+    keep, sizes = rf.seam_mask(g)
+    assert not keep.any() and sizes == []
+
+
+def test_seam_mask_uses_edge_connectivity_not_corners():
+    """Diagonal-only contact is one corner's worth and must not build a component."""
+    g = np.zeros((20, 20), bool)
+    g[3, 3] = g[4, 4] = g[5, 5] = True       # a diagonal chain of three
+    keep, sizes = rf.seam_mask(g)
+    assert not keep.any() and sizes == []
+
+
+def test_seam_mask_counts_a_real_seam_strip():
+    """A one-cell-wide strip across the grid is the shape this axis exists for."""
+    g = np.zeros((20, 20), bool)
+    g[:, 7] = True
+    keep, sizes = rf.seam_mask(g)
+    assert keep.sum() == 20 and sizes == [20]
+
+
+def test_seam_mask_is_empty_on_an_empty_grid():
+    keep, sizes = rf.seam_mask(np.zeros((20, 20), bool))
+    assert not keep.any() and sizes == []
+
+
+def test_seam_axis_fails_the_fieldwide_weak_construction():
+    """The behaviour change, on #172's own synthetic field.
+
+    15 % of the stars are displaced +80 mas EVERYWHERE, so the high-offset cells form
+    one large connected patch.  The contrast bar alone passes many of them (that is what
+    ``test_margin_demotes_lowcontrast_highoff_and_would_fail_at_floor`` records); the
+    seam axis fails them on shape.  A misregistration covering the field is exactly what
+    a release gate must not let through on a density technicality.
+    """
+    det, truth = _weak_spurious_field()
+    off_axis = rf.GRID * rf.GRID + 1
+    without = rf.per_cell(det, None, truth, "contrast only",
+                          fail_min_ratio=rf.FAIL_MIN_RATIO, min_seam_cells=off_axis)
+    with_seam = rf.per_cell(det, None, truth, "both axes",
+                            fail_min_ratio=rf.FAIL_MIN_RATIO)
+    assert without["n_unconfident_highoff"] > 0        # the contrast bar tolerated some
+    assert with_seam["n_fail"] > without["n_fail"]     # the seam axis fails them
+    assert with_seam["n_fail_seam_only"] > 0           # ... on shape alone
+    assert max(with_seam["seam_component_sizes"]) >= rf.MIN_SEAM_CELLS
+    # the two reports stay disjoint: a cell that now fails is not also "tolerated"
+    assert (with_seam["n_unconfident_highoff"]
+            + with_seam["n_fail_seam_only"] == without["n_unconfident_highoff"])
+
+
+def test_seam_axis_is_strictly_additive():
+    """It can only ADD failures.  A clean field stays a PASS with the axis on."""
+    x, y = _grid(seed=9)
+    truth = _sc_xy(x, y)
+    det = _sc_xy(x, y)
+    r = rf.per_cell(det, None, truth, "clean", fail_min_ratio=rf.FAIL_MIN_RATIO)
+    assert r["PASS"] and r["n_fail"] == 0 and r["n_fail_seam"] == 0
+    assert r["seam_component_sizes"] == []
+    # and a high-contrast whole-field seam still fails, with both axes agreeing
+    det2 = _sc_xy(x, y + 90e-3)
+    r2 = rf.per_cell(det2, None, truth, "seam", fail_min_ratio=rf.FAIL_MIN_RATIO)
+    assert not r2["PASS"] and r2["n_fail"] > 0 and r2["n_fail_seam"] > 0
+
+
+def test_min_seam_cells_default_and_constant():
+    """No silent relaxation: the default is the module constant, and it is 3."""
+    import inspect
+    assert (inspect.signature(rf.per_cell).parameters["min_seam_cells"].default
+            == rf.MIN_SEAM_CELLS)
+    assert rf.MIN_SEAM_CELLS == 3

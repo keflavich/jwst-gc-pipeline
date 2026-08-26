@@ -20,6 +20,10 @@ so crowding/extinction can't fool them):
 Per cell: fraction of bright detections that have a truth-set match ("agreement") and the
 median offset.  Agreement ~1 where registered; it COLLAPSES in a misregistered band.
 FAIL if any covered cell drops below FRAC_FLOOR (or << field median) or offset > OFF_MAX.
+A cell also FAILs, whatever its peak contrast, when it belongs to a connected patch of
+MIN_SEAM_CELLS or more high-offset cells: a misregistration is a connected patch, while
+wrong-pair noise is scattered singletons, and shape -- unlike the contrast statistic --
+does not scale with star density (issue #170).
 Non-zero exit on FAIL so it can gate a chain.
 """
 import argparse
@@ -36,6 +40,7 @@ from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
 from astropy.wcs import WCS
+from scipy.ndimage import label as _ndlabel
 from scipy.stats import binned_statistic_2d
 import matplotlib
 matplotlib.use("Agg")
@@ -59,6 +64,51 @@ FAIL_MIN_RATIO = 10.0            # a FAIL needs peak/background >= this -- CONFI
                                  # of those regions read <=22 mas, 2026-07). Coverage is
                                  # unchanged (no detections removed); only the fail bar rises.
 OFF_MAX = 60.0                   # a VERIFIED cell whose peak offset exceeds this (mas) -> FAIL
+
+# A SECOND, INDEPENDENT reason for a cell to fail, added ALONGSIDE the contrast bar
+# above and never in place of it (issue #170).
+#
+# `ratio` is `H.max() / median(H[H>0])`, and that divisor is 1 in every cell measured:
+# the 2.5" search disk holds 12,271 bins of 40x40 mas against 90-10,476 pairs per cell,
+# so the median OCCUPIED bin never rises off one count (1199 of 1199 cells across brick
+# F405N/F187N/F212N, measured 2026-08-22).  `ratio` is therefore the raw peak-BIN
+# COUNT, which grows with the cell's star count: on those 1199 cells -- every one of
+# which peaks in the ZERO-offset bin, i.e. is identically well registered -- it spans
+# 3 to 127, a factor of 42, regressing against pair count with a log-log slope of 0.72.
+# A fixed bar on it is a density cut.
+#
+# The consequence this constant addresses is measured, not modelled.  #179 injected
+# +90 mas seams into real brick F405N data and read their per-cell `ratio` as 5-49 with
+# medians of 12-18.  `FAIL_MIN_RATIO = 10` sits INSIDE that distribution: the seam's
+# sparser cells score below it and are recorded as `unconfident_highoff` rather than as
+# failures.  A seam confined to sparse regions can therefore be measured, reported, and
+# not blocked.
+#
+# Contiguity does not depend on the amplitude scale at all.  A misregistration is a
+# CONNECTED patch of cells -- a seam, a visit footprint, a module overlap -- while
+# wrong-pair noise is scattered singletons.  #179's trial found it much the stronger
+# axis: it fired on 365 / 179 / 45 cells of three injected seams against the contrast
+# bar's 273 / 127 / 29, and on ZERO cells across ten brick bands and five cloudc bands.
+#
+# MIN_SEAM_CELLS = 3, not 2, and that lower bound is measured: two of the seven brick
+# F405N cells that were a false own-catalog FAIL in July 2026 -- (12,13) and (13,13) --
+# are 4-adjacent, so a 2-cell bar re-creates the exact false alarm #166/#172 removed.
+# Real component sizes on that band were [2, 1, 1, 1, 1, 1]; the injected seams' largest
+# components were 371, 184 and 26 cells, so 3 leaves ~100x headroom on a real seam while
+# clearing the known false-positive population.  Those seven cells are no longer on disk
+# (F405N's merged mosaic was rebuilt 2026-08-22 and every verified cell now peaks in the
+# zero bin), which is why this is the axis that needs NO recalibration: it is a shape
+# requirement, not a threshold in the units that moved.
+#
+# 4-CONNECTIVITY (edge neighbours, not corners).  Diagonal-only touching is one cell's
+# worth of contact and is what a scattered pair of noise cells produces; requiring a
+# shared edge is the stricter reading and is what the [2,1,1,1,1,1] figure above counts.
+#
+# Strictly ADDITIVE.  `fail` is OR-ed with this, so the seam axis can only add failures
+# and can never turn an existing FAIL into a PASS.  Whether a LONE high-offset,
+# high-contrast cell should stop failing the field -- #170's proposal 2 in full -- is a
+# RELAXATION of the gate and is deliberately not part of this.
+MIN_SEAM_CELLS = 3               # connected high-offset cells that FAIL regardless of contrast
 
 OVERLAP_STRIDE = 16              # pixel stride when sampling a mosaic for module overlap
 MIN_OVERLAP_SAMPLES = 50         # sampled positions with real data in BOTH modules before
@@ -199,7 +249,35 @@ def catalog_sc(field, filt, view="merged"):
     return None
 
 
-def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_RATIO):
+def seam_mask(highoff, min_cells=MIN_SEAM_CELLS):
+    """Cells belonging to a 4-connected component of ``min_cells`` or more.
+
+    ``highoff`` is the boolean grid of VERIFIED cells whose peak offset exceeds
+    ``OFF_MAX``.  Returns ``(mask, sizes)``: the same-shaped boolean grid keeping only
+    cells in a large-enough component, and the sorted (descending) list of the sizes of
+    the components kept.
+
+    A shape test, not an amplitude test -- see ``MIN_SEAM_CELLS``.  It reads only the
+    grids ``per_cell`` already computes, so it costs nothing to measure.
+    """
+    highoff = np.asarray(highoff, bool)
+    if not highoff.any():
+        return np.zeros_like(highoff), []
+    # 4-connectivity: edge neighbours only.  scipy's default structure is exactly this.
+    lab, n = _ndlabel(highoff)
+    keep = np.zeros_like(highoff)
+    sizes = []
+    for k in range(1, n + 1):
+        member = lab == k
+        size = int(member.sum())
+        if size >= min_cells:
+            keep |= member
+            sizes.append(size)
+    return keep, sorted(sizes, reverse=True)
+
+
+def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_RATIO,
+             min_seam_cells=MIN_SEAM_CELLS):
     """Per-cell registration offset by pair-separation HISTOGRAM cross-correlation.
 
     For every det-truth pair within MX, bin by the detection's spatial cell and by the
@@ -217,6 +295,12 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     peak in a dense bright-star cell is wrong-pair noise, not a seam.  The cross-band
     and per-module checks keep the strict floor, so a real seam that own-catalog's
     relaxed bar might miss is still caught by them (defense in depth).
+
+    A cell ALSO fails, whatever its contrast, when it belongs to a 4-connected patch of
+    ``min_seam_cells`` or more high-offset verified cells (issue #170).  The contrast
+    bar is arithmetically the raw peak-BIN COUNT and so is a density cut; real injected
+    seams score 5-49 on it, straddling ``FAIL_MIN_RATIO``.  Shape does not scale with
+    density.  The two axes are OR-ed, so this can only add failures.
     """
     if det is None or truth is None or len(det) < 200 or len(truth) < 200:
         return dict(label=label, error="missing detections/truth")
@@ -261,9 +345,18 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     # cell yields a floor-level peak (ratio ~ MIN_PEAK_RATIO) at a spurious offset.
     # Sub-FAIL_MIN_RATIO high-offset cells stay verified-but-not-failed (reported).
     fail = verified & (off > OFF_MAX) & (ratio >= fail_min_ratio)
-    # High offset but sub-fail_min_ratio contrast: NOT a fail, but reported so a real
-    # low-contrast issue is never silently hidden by the margin.
-    unconfident = verified & (off > OFF_MAX) & (ratio < fail_min_ratio)
+    # SECOND AXIS (issue #170): a connected patch of >= min_seam_cells high-offset
+    # cells fails whatever its contrast.  The contrast bar is a raw peak-bin count and
+    # therefore a density cut, and real injected seams score 5-49 on it -- straddling
+    # FAIL_MIN_RATIO = 10 -- so a seam in sparse cells is measured and not blocked.
+    # Shape does not scale with density.  OR-ed in, so this can only ADD failures.
+    seam, seam_sizes = seam_mask(verified & (off > OFF_MAX), min_cells=min_seam_cells)
+    fail = fail | seam
+    # High offset but sub-fail_min_ratio contrast AND not part of a seam-shaped patch:
+    # NOT a fail, but reported so a real low-contrast issue is never silently hidden by
+    # the margin.  Excluding `seam` here keeps the two reports disjoint -- a cell that
+    # now fails must not also be listed as a tolerated sub-margin cell.
+    unconfident = verified & (off > OFF_MAX) & (ratio < fail_min_ratio) & ~seam
     worst = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                   offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
                   npairs=int(npair[i, j]))
@@ -278,6 +371,13 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
                 n_fail=int(fail.sum()), PASS=bool(fail.sum() == 0), worst=worst,
                 n_unconfident_highoff=int(unconfident.sum()),
                 unconfident_highoff_cells=unconfident_cells,
+                # The seam axis, reported separately so a reader can tell WHICH test
+                # failed the field.  `n_fail_seam_only` counts cells that fail on shape
+                # alone -- the ones the contrast bar would have let through.
+                n_fail_seam=int(seam.sum()),
+                n_fail_seam_only=int((seam & (ratio < fail_min_ratio)).sum()),
+                seam_component_sizes=seam_sizes,
+                min_seam_cells=int(min_seam_cells),
                 _g=(off, verified, (xe, ye)))
 
 
@@ -625,7 +725,14 @@ def _scan_view(field, view, band_paths, verbose, images_only):
             def _tag(k, v):
                 s = f"{k}={'PASS' if v.get('PASS') else 'FAIL:'+str(v.get('n_fail'))}"
                 nu = v.get("n_unconfident_highoff") or 0
-                return s + (f"(unconf={nu})" if nu else "")   # high-off, sub-margin cells
+                s += (f"(unconf={nu})" if nu else "")   # high-off, sub-margin cells
+                # Which axis failed it.  `seam` cells fail on SHAPE; `seam_only` are
+                # the ones the contrast bar alone would have passed (issue #170).
+                ns = v.get("n_fail_seam") or 0
+                if ns:
+                    s += (f"[seam={ns},only={v.get('n_fail_seam_only') or 0},"
+                          f"comp={v.get('seam_component_sizes')}]")
+                return s
             tags = " ".join(_tag(k, v) for k, v in checks.items())
             print(f"  {field} [{view}] {b}: {'FAIL' if bad else 'ok'}  {tags}",
                   flush=True)
