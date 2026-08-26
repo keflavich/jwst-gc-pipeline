@@ -150,3 +150,22 @@ def test_docstring_names_the_real_caller_not_the_monitoring_scan():
     assert not re.search(r"remaining production caller[^.]*monitoring", doc), (
         "the docstring attributed the call to `monitoring/`, which contains "
         "the string only in comments and prose (issue #392)")
+
+
+def test_docstring_bounds_the_census_it_quotes():
+    """The census counts `clean` maps whose worst CELL is large.  Most of those
+    cells were measured at a swept window, which is the per-tile noise/geometry
+    regime of issue #158 -- so the count bounds what `clean` does not say and
+    does not measure how many fields are misregistered.  Quoting the count
+    without that qualification invites the stronger reading."""
+    from jwst_gc_pipeline.photometry import astrometry_offsets
+    doc = astrometry_offsets.measure_offset_grid.__doc__
+    marker = "above 30 mas"
+    assert marker in doc, "the #392 census is gone from the docstring"
+    tail = doc.split(marker, 1)[1]
+    assert re.search(r"\bSWEPT\b", tail), (
+        "the docstring quotes the per-tile census without saying that most of "
+        "those worst cells are SWEPT per-tile peaks (issue #158), which reads "
+        "as a claim that that many fields are misregistered")
+    assert "#158" in tail, (
+        "name the issue that explains a swept per-tile peak (#158)")
