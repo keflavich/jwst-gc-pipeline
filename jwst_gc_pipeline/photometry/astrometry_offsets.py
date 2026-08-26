@@ -153,20 +153,111 @@ class NoCoherentTieError(RuntimeError):
     source lists have no coherent astrometric tie (broken/untied WCS)."""
 
 
+#: Hard ceiling (bins) on the adaptive exclusion radius in ``_peak_margin``, so
+#: the exclusion cannot eat the plane.  24 bins is 480 mas over a 3" window,
+#: i.e. a hill whose half-max radius alone is ~240 mas -- per-star scatter of
+#: order 200 mas, an unusable measurement whatever the peak says.
+#:
+#: A hill wider than the cap falls back to dividing by its own shoulder, so its
+#: margin reads ~1 (measured: a synthetic hill 30 bins across reads 1.11).  That
+#: sends it to could-not-verify, which is the correct direction for a
+#: measurement that noisy; note that ``contrast`` does NOT necessarily catch
+#: this case first -- the same synthetic reads contrast 500, because contrast
+#: divides by a TYPICAL bin and a broad hill still towers over one.
+_MAX_PEAK_PAD_BINS = 24
+
+
+def _box(shape, i, j, r):
+    """Index bounds of the (2r+1)-bin Chebyshev box around ``(i, j)``, clipped."""
+    return (max(i - r, 0), min(i + r + 1, shape[0]),
+            max(j - r, 0), min(j + r + 1, shape[1]))
+
+
+def _peak_half_width_bins(H, i, j, max_r=_MAX_PEAK_PAD_BINS):
+    """Chebyshev radius (bins) at which the winner's own profile first drops
+    below HALF the peak bin — the half-max radius of the hill it sits on.
+
+    Returns ``max_r`` if it never does within that radius."""
+    half = 0.5 * float(H[i, j])
+    for r in range(1, int(max_r) + 1):
+        lo_i, hi_i, lo_j, hi_j = _box(H.shape, i, j, r)
+        sub = np.array(H[lo_i:hi_i, lo_j:hi_j], dtype=float)
+        ii_lo, ii_hi, jj_lo, jj_hi = _box(H.shape, i, j, r - 1)
+        sub[ii_lo - lo_i:ii_hi - lo_i, jj_lo - lo_j:jj_hi - lo_j] = 0.0
+        if float(sub.max()) < half:
+            return r
+    return int(max_r)
+
+
+def _peak_margin(H, i, j, pad=1):
+    """``H.max()`` divided by the tallest bin OUTSIDE the winner's own hill.
+
+    ``contrast`` (peak / median non-empty bin) answers "is this bin far above a
+    TYPICAL bin?".  Over a +-3" window the median non-empty bin holds ONE pair,
+    so any spot with a few hundred pairs reads a contrast in the hundreds no
+    matter how many equally tall spots sit beside it.  The question a gate needs
+    answered is "is this bin far above the RUNNER-UP?", and on a near-degenerate
+    histogram those have opposite answers: measured on w51 F140M (issue #411) the
+    pooled peak beat the true zero peak by 1.7% and reported ``contrast 546,
+    ok=True``, i.e. a coin flip presented as a confident tie.
+
+    The exclusion radius is ADAPTIVE — twice the peak's own half-max radius, at
+    least ``pad`` bins — because a fixed one-bin pad turns this number into a
+    measure of peak WIDTH rather than of degeneracy.  The bin width here is
+    ``max(bin_arcsec, window/150)``, i.e. 20 mas over a 3" window, so a peak
+    broadened by ordinary per-star scatter (VIRAC2's own precision is ~40 mas)
+    is several bins wide and its own shoulders sit outside a one-bin pad.
+    Measured on a synthetic 500 mas RIGID shift — one hill, no rival anywhere —
+    against a reference with that scatter, at 0.02" bins over a 3" window:
+
+        per-star scatter     5      10     20     30     40     50     70  mas
+        margin, pad=1      75.67   3.71   1.63   1.13   1.10   1.06   1.00
+        margin, adaptive  113.50  78.00  33.50  17.50  11.50   8.50  10.00
+
+    The pad=1 row is the tell: it falls monotonically with the scatter and
+    crosses any usable floor at ~25 mas, so a genuine gross offset would stop
+    being reported as measured for no reason but its own noise.  What it is
+    dividing by there is the same hill two bins away (at 40 mas: peak bin 23,
+    shoulder bin 21, and the shells run 20/21/21/14/10/7/5/3/2/1 out to r=10).
+    The adaptive row stays high because the divisor is then the background.
+    A near-degenerate LATTICE is unaffected — its rivals sit at a distinct lag
+    with background in between, far outside twice the half-max radius of a spot
+    — and still reads ~1.0.
+
+    Returns ``inf`` when nothing outside the hill holds anything.
+    """
+    pad = max(int(pad),
+              min(2 * _peak_half_width_bins(H, i, j), _MAX_PEAK_PAD_BINS))
+    lo_i, hi_i, lo_j, hi_j = _box(H.shape, i, j, pad)
+    masked = np.array(H, dtype=float)
+    masked[lo_i:hi_i, lo_j:hi_j] = 0.0
+    second = float(masked.max())
+    return float(H.max() / second) if second > 0 else float("inf")
+
+
 def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     """2-D histogram peak of a cloud of pair offsets.  Returns
     (dra_mas, ddec_mas, off_mas, npairs, contrast, dra_err_mas, ddec_err_mas,
-    n_peak).
+    n_peak, peak_margin).
 
     ``contrast`` is ``H.max() / np.median(H[H > 0])`` -- the peak bin over the
     median of the OCCUPIED bins, which in a sparse histogram is 1.  See the
     ``DEFAULT_MIN_CONTRAST`` comment for what that means for the floor.
+
+    ``peak_margin`` is the peak over the tallest bin OUTSIDE its own hill (twice
+    the half-max radius), which is the quantity ``contrast`` cannot supply: a
+    replica lattice puts a rival of nearly equal height elsewhere in the plane
+    while the median occupied bin stays at 1, so contrast reads healthy and the
+    arg-max is a coin flip.  The exclusion radius is adaptive rather than one
+    bin so that the number reads degeneracy and not peak WIDTH -- see
+    ``_peak_margin`` for the measured difference.
     """
     n = len(dra_arcsec)
     m = maxsep_arcsec
     bins = np.arange(-m, m + bin_arcsec, bin_arcsec)
     H, xe, ye = np.histogram2d(dra_arcsec, ddec_arcsec, bins=[bins, bins])
     i, j = np.unravel_index(H.argmax(), H.shape)
+    margin = _peak_margin(H, i, j)
     bg = float(np.median(H[H > 0])) if (H > 0).any() else 0.0
     dra0 = (xe[i] + xe[i + 1]) / 2.0
     ddec0 = (ye[j] + ye[j + 1]) / 2.0
@@ -184,7 +275,7 @@ def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
         ddec_err = float(np.median(np.abs(ddec_arcsec[near] - ddec0)) * mad_scale * 1000.0)
     contrast = float(H.max() / bg) if bg else float("inf")
     return (dra0 * 1000.0, ddec0 * 1000.0, float(np.hypot(dra0, ddec0) * 1000.0),
-            int(n), contrast, dra_err, ddec_err, n_peak)
+            int(n), contrast, dra_err, ddec_err, n_peak, margin)
 
 
 # Windows (arcsec) the sweep escalates through when a narrow window shows no
@@ -286,6 +377,7 @@ def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
         probes.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
                            off=res["off"], off_mas=float(res["off"]),
                            contrast=res["contrast"],
+                           peak_margin=res["peak_margin"],
                            npairs=res["npairs"], sep_mas=sep, tol_mas=tol,
                            agrees=bool(sep <= tol)))
     measured = [p for p in probes if p.get("dra") is not None]
@@ -331,10 +423,12 @@ def _measure_at_window_tree(a, ref, maxsep_arcsec, bin_arcsec, min_pairs,
     ddec = (ref.dec_deg[ib] - a_dec[ia]) * 3600.0
     bw = max(bin_arcsec, maxsep_arcsec / 150.0)
     (dra_mas, ddec_mas, off_mas, npairs, contrast,
-     dra_err_mas, ddec_err_mas, n_peak) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
+     dra_err_mas, ddec_err_mas, n_peak, peak_margin) = _hist_peak(
+        dra, ddec, maxsep_arcsec, bw)
     return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
                 contrast=contrast, window_arcsec=maxsep_arcsec,
-                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak)
+                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak,
+                peak_margin=peak_margin)
 
 
 def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
@@ -362,10 +456,12 @@ def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
     # keep ~150 bins across the window so the peak stays resolved as we widen
     bw = max(bin_arcsec, maxsep_arcsec / 150.0)
     (dra_mas, ddec_mas, off_mas, npairs, contrast,
-     dra_err_mas, ddec_err_mas, n_peak) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
+     dra_err_mas, ddec_err_mas, n_peak, peak_margin) = _hist_peak(
+        dra, ddec, maxsep_arcsec, bw)
     return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
                 contrast=contrast, window_arcsec=maxsep_arcsec,
-                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak)
+                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak,
+                peak_margin=peak_margin)
 
 
 def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
@@ -418,8 +514,8 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     Returns
     -------
     dict or None
-        ``dict(dra, ddec, off, npairs, contrast, ok, window_arcsec, swept,
-        dra_err, ddec_err, n_peak, window_edge_fraction, windows)`` (mas), or
+        ``dict(dra, ddec, off, npairs, contrast, peak_margin, ok, window_arcsec,
+        swept, dra_err, ddec_err, n_peak, window_edge_fraction, windows)`` (mas), or
         None if too few pairs at every window.  ``ok`` is False when NO window
         reaches ``min_contrast`` (or, with ``confirm_windows``, when a swept peak
         failed confirmation).
@@ -483,6 +579,7 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         evaluated.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
                               off=res["off"], off_mas=float(res["off"]),
                               contrast=res["contrast"],
+                              peak_margin=res["peak_margin"],
                               npairs=res["npairs"], n_peak=res["n_peak"]))
         if best is None or res["contrast"] > best["contrast"]:
             best = res

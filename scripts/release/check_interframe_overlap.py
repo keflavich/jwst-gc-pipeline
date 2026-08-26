@@ -73,6 +73,35 @@ GRID_N = int(os.environ.get("OVERLAP_GRID_N", 16))
 # much louder) failure than a 30 mas local seam, and conflating the two made the
 # arbiter blind to everything between TOL_MAS and 80 mas (issue #174).
 GRID_MAX_OFF_MAS = float(os.environ.get("OVERLAP_GRID_MAX_OFF_MAS", 80.0))
+# How far the global tie's histogram peak must beat its RUNNER-UP bin before a
+# GROSS reading is treated as a measured absolute-frame offset rather than an
+# arg-max coin flip (issue #411).  Measured on w51, whose 64 F140M frames are each
+# within 24 mas of the same catalogue while the pooled tie read 378 mas:
+#     pooled   peak 546  runner-up 537  margin 1.02   (zero bin 537)
+#     module A peak 286  runner-up 271  margin 1.00   (the zero bin WON)
+#     module B peak 290  runner-up 287  margin 1.16
+# Every one of those is a draw from the same near-degenerate lattice.  1.25 sits
+# above all three and far below a real gross offset, which has one spot and an
+# empty background (margin inf on a rigid synthetic shift).
+#
+# HEADROOM on the other side, which is what says whether 1.25 is comfortable or
+# tight.  The number that matters is the margin of a legitimately BROAD single
+# hill -- one physical shift, no rival anywhere -- because that is the reading
+# this floor must never eat.  A 500 mas rigid synthetic shift measured through
+# `measure_offset` at 0.02" bins over a 3" window, as the reference's per-star
+# precision degrades (VIRAC2's own is ~40 mas):
+#
+#     per-star scatter    5      10     20     30     40     50     70  mas
+#     peak_margin      113.50  78.00  33.50  17.50  11.50   8.50  10.00
+#
+# The worst of those is 8.50, i.e. ~7x the floor, so 1.25 is comfortable rather
+# than tight.  Those numbers hold only because `_peak_margin`'s exclusion radius
+# is ADAPTIVE; with the fixed one-bin pad it was first written with, the same
+# row reads 75.67/3.71/1.63/1.13/1.10/1.06/1.00 and crosses this floor at ~25
+# mas of scatter -- a genuine gross offset silently demoted to could-not-verify
+# by nothing but its own noise.  `test_a_broad_single_hill_keeps_its_margin`
+# pins that direction; do not reintroduce a fixed pad.
+GLOBAL_TIE_MIN_MARGIN = float(os.environ.get("OVERLAP_TIE_MIN_PEAK_MARGIN", 1.25))
 # Ladder of same-star residual-map cell sizes (arcsec).  A single 30" cell
 # averages a sliver narrower than itself away (a 4"-wide strip shifted 150 mas
 # read clean, worst=0.0), and the deferred pairs this arbiter is authoritative
@@ -883,9 +912,33 @@ def _global_tie(allsrc, ref, max_off_mas,
     if g.get("swept") or goff > max_off_mas:
         # a gross or window-swept global tie == a genuine absolute-frame offset
         # (brick-1182 v001 ~20" class); reference cross-check is DIRTY.
+        #
+        # ... PROVIDED the histogram actually picked a winner.  ``contrast`` is
+        # peak / MEDIAN non-empty bin, and over a +-3" window the median non-empty
+        # bin holds one pair, so a lattice of dozens of near-equal spots still
+        # reads a contrast in the hundreds and ``ok=True``.  Measured on w51 F140M
+        # (issue #411): the pooled peak said 378 mas at contrast 546 while every
+        # one of the 64 frames is within 24 mas of the same catalogue, and it beat
+        # the true zero spot by 1.7%.  ``peak_margin`` (peak / tallest
+        # non-adjacent bin) is 1.02 there and 1.16 on the worse module; a real
+        # gross offset has one spot and no runner-up.  Below the floor this is a
+        # coin flip, so the verdict is COULD-NOT-VERIFY -- the pair-scoped arbiter
+        # and the frame-vs-frame layers still have to clear the field.
+        margin = g.get("peak_margin")
+        mtxt = "unknown" if margin is None else f"{margin:.2f}"
+        if margin is not None and np.isfinite(margin) and margin < GLOBAL_TIE_MIN_MARGIN:
+            return None, _verdict(
+                False, measurable=False, worst_off_mas=goff,
+                reason=f"global tie {goff:.0f} mas beats the runner-up bin of the "
+                       f"offset histogram by only {margin:.2f}x "
+                       f"(< {GLOBAL_TIE_MIN_MARGIN:.2f}), so the peak is not "
+                       f"separated from the rest of the lattice -- contrast "
+                       f"{g.get('contrast'):.0f} measures the peak against a TYPICAL "
+                       f"bin, not against its rival (issue #411)")
         return None, _verdict(False, measurable=True, worst_off_mas=goff, n_total=1,
                               reason=f"global tie {goff:.0f} mas "
-                                     f"(swept={bool(g.get('swept'))}) > {max_off_mas:.0f} mas")
+                                     f"(swept={bool(g.get('swept'))}) > {max_off_mas:.0f} mas "
+                                     f"(peak beats the runner-up bin by {mtxt}x)")
     if goff > match_radius_arcsec * 1000.0 / 3.0:
         # same precondition, stated by the library; keep it out of the traceback
         return None, _verdict(False, measurable=False, worst_off_mas=goff,
