@@ -11,6 +11,7 @@ correction ~1 mas).
 The floor now comes from the field, and the env var still wins when set.
 """
 import os
+import warnings
 
 import pytest
 
@@ -252,3 +253,57 @@ def test_quintuplet_stays_unregistered_until_it_measures_something():
     is the distinction this table is built on.
     """
     assert m2_correction_floor('quintuplet', env={}) == (0.0, 'default')
+
+
+# --------------------------------------------------------------------------
+# an env-var floor on an unregistered field is a registration that is owed
+# --------------------------------------------------------------------------
+
+def test_env_floor_on_an_unregistered_field_warns():
+    """The state every retroactively-added entry was in first.
+
+    sgra (#494), w51 (#508), arches (#512) and gc2211_o028 (#533) were each
+    added AFTER a chain stopped, and each had been running with
+    ``ASTROM_M2_CORRECTION_FLOOR_MAS`` set by hand for weeks beforehand.  The
+    records said so in ``correction_floor_source`` and nothing surfaced it.
+    The warning fires when the override is USED, which is when the evidence
+    exists and the operator is there to act on it.
+    """
+    from jwst_gc_pipeline.photometry.m2_correction_floors import (
+        UnregisteredM2FloorWarning)
+    with pytest.warns(UnregisteredM2FloorWarning, match='quintuplet'):
+        floor, source = m2_correction_floor('quintuplet',
+                                            env={FLOOR_ENV: '4.0'})
+    # and the override still wins -- the warning changes nothing about the run
+    assert (floor, source) == (4.0, 'env')
+
+
+def test_env_floor_on_a_registered_field_is_silent():
+    """A registered field being overridden is a deliberate act, not a gap."""
+    from jwst_gc_pipeline.photometry.m2_correction_floors import (
+        UnregisteredM2FloorWarning)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', UnregisteredM2FloorWarning)
+        assert m2_correction_floor('brick', env={FLOOR_ENV: '12'}) == (12.0, 'env')
+
+
+def test_a_zero_env_floor_does_not_warn():
+    """``ASTROM_M2_CORRECTION_FLOOR_MAS=0`` is somebody asking for the STRICT
+    behaviour on purpose.  No entry is owed for that, and warning would train
+    the reader to ignore the message."""
+    from jwst_gc_pipeline.photometry.m2_correction_floors import (
+        UnregisteredM2FloorWarning)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', UnregisteredM2FloorWarning)
+        assert m2_correction_floor('gc2211_o023',
+                                   env={FLOOR_ENV: '0'}) == (0.0, 'env')
+
+
+def test_the_unregistered_warning_names_the_table_to_edit():
+    from jwst_gc_pipeline.photometry.m2_correction_floors import (
+        UnregisteredM2FloorWarning)
+    with pytest.warns(UnregisteredM2FloorWarning) as rec:
+        m2_correction_floor('some_new_field', env={FLOOR_ENV: '5'})
+    msg = str(rec[0].message)
+    assert 'PER_FIELD_FLOOR_MAS' in msg
+    assert 'm2_correction_floors.py' in msg
