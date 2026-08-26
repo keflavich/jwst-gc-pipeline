@@ -70,6 +70,10 @@ from jwst_gc_pipeline.reduction.alignment_config import (
 __all__ = [
     'AlignmentShift', 'resolve_shift',
     'write_alignment_header', 'check_alignment_stale',
+    'realign_delta', 'RealignDelta', 'realign_delta_enabled',
+    'alignment_apply_plan', 'APPLY_FULL', 'APPLY_DELTA',
+    'SKIP_CURRENT', 'SKIP_STALE',
+    'PREV_RA_KEY', 'PREV_DEC_KEY', 'NREALIGN_KEY',
     'BULK_RA_KEY', 'BULK_DEC_KEY', 'JITTER_RA_KEY', 'JITTER_DEC_KEY',
     'TOTAL_RA_KEY', 'TOTAL_DEC_KEY',
 ]
@@ -84,6 +88,12 @@ JITTER_RA_KEY = 'RAOFFJIT'
 JITTER_DEC_KEY = 'DEOFFJIT'
 SOURCE_KEY = 'ALIGNSRC'
 FRAME_KEY = 'ALIGNREF'
+#: Totals the frame carried BEFORE a delta re-correction, so the step is as
+#: reversible as the first apply was.
+PREV_RA_KEY = 'APREVRA'
+PREV_DEC_KEY = 'APREVDE'
+#: How many delta re-corrections this frame has received.
+NREALIGN_KEY = 'ANREALGN'
 
 # Offsets tables already collapse-checked in this process (warn once per file).
 _VALIDATED_OFFSETS_TABLES = set()
@@ -687,6 +697,150 @@ def check_alignment_stale(header, shift: AlignmentShift, fn, tol_arcsec=None):
             f"the working copy from _cal (destreak overwrite) so the offsets reset "
             f"and the current table is applied, OR set FORCE_REALIGN_ON_DISAGREE=1 "
             f"to re-apply now.")
+
+
+@dataclass
+class RealignDelta:
+    """The shift still owed to bring an already-corrected frame up to date.
+
+    ``refusal`` is ``None`` when ``dra``/``ddec`` may be applied, and otherwise
+    says why the delta must not be taken.
+    """
+
+    dra: float = 0.0
+    ddec: float = 0.0
+    refusal: Optional[str] = None
+    #: The totals the frame currently carries, for the header record.
+    baked_ra: float = 0.0
+    baked_dec: float = 0.0
+
+    @property
+    def ok(self) -> bool:
+        return self.refusal is None
+
+
+def _as_float(value):
+    """``value`` as a float, or NaN when it is absent or not a number.
+
+    A header card can hold a string ('UNKNOWN') or nothing at all; either way
+    the frame cannot say what correction it carries, and NaN routes that to the
+    refusal below instead of to a ``ValueError`` in the middle of a reduction.
+    """
+    if value is None:
+        return np.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def realign_delta(header, shift: AlignmentShift, fn='') -> RealignDelta:
+    """``shift`` minus what ``header`` already carries -- the correction owed.
+
+    The frame records the correction that was applied to it, so a frame whose
+    table row has since changed does not need regenerating from ``_cal``: apply
+    the DIFFERENCE and rewrite the totals.  That is what makes the
+    frame-vs-table disagreement a thing to FIX rather than a thing to report,
+    and it is why this returns a shift rather than a message (issue #274).
+
+    Refuses in the three cases where subtracting would destroy information
+    rather than restore it:
+
+    * **the field has no configured alignment** -- ``resolve_shift`` returns
+      ``(0, 0)`` for an unconfigured (proposal, observation), so treating that
+      as the target would UNDO a real correction some other configuration
+      applied.  ``configured=False`` exists precisely to keep "undeterminable"
+      distinguishable from "measured zero"; honouring it here is the whole
+      point of the flag.
+    * **the configured table does not exist yet** -- same argument, one level
+      down (``table_present=False``).
+    * **the baked totals are unreadable** -- a delta needs a minuend.  A frame
+      with a non-finite or missing ``RAOFFSET``/``DEOFFSET`` cannot say what it
+      already carries, so nothing can be subtracted from the new value.
+    """
+    if not shift.configured:
+        return RealignDelta(refusal=(
+            f"{fn or 'this frame'} has no configured alignment "
+            f"(alignment_config has no entry), so the resolved shift is the "
+            f"placeholder (0,0) rather than a measurement.  Re-correcting to it "
+            f"would UNDO whatever correction the frame carries."))
+    if not shift.table_present:
+        return RealignDelta(refusal=(
+            f"the offsets table configured for {fn or 'this frame'} does not "
+            f"exist, so the resolved shift is undeterminable rather than zero.  "
+            f"Nothing may be subtracted from an undeterminable target."))
+    if TOTAL_RA_KEY not in header:
+        return RealignDelta(refusal=(
+            f"{fn or 'this frame'} carries no {TOTAL_RA_KEY}, so there is no "
+            f"baked correction to subtract (this is the first-apply path)."))
+    baked_ra = _as_float(header.get(TOTAL_RA_KEY))
+    baked_dec = _as_float(header.get(TOTAL_DEC_KEY))
+    if not np.isfinite([baked_ra, baked_dec]).all():
+        return RealignDelta(refusal=(
+            f"{fn or 'this frame'} carries an unreadable baked offset "
+            f"({TOTAL_RA_KEY}={header.get(TOTAL_RA_KEY)!r}, "
+            f"{TOTAL_DEC_KEY}={header.get(TOTAL_DEC_KEY)!r}); the correction it "
+            f"already holds is unknown, so no delta can be computed.  "
+            f"Regenerate it from _cal."))
+    return RealignDelta(dra=shift.total_ra - baked_ra,
+                        ddec=shift.total_dec - baked_dec,
+                        baked_ra=baked_ra, baked_dec=baked_dec)
+
+
+#: ``alignment_apply_plan`` verdicts.
+APPLY_FULL = 'apply-full'       # virgin frame: apply the whole resolved shift
+APPLY_DELTA = 'apply-delta'     # corrected frame, table moved: apply the difference
+SKIP_CURRENT = 'skip-current'   # frame already agrees with its table
+SKIP_STALE = 'skip-stale'       # disagrees and cannot/must not be delta-corrected
+
+
+def alignment_apply_plan(header, shift: AlignmentShift, fn='', tol_arcsec=None):
+    """What ``fix_alignment`` should do with one frame.
+
+    Returns ``(verdict, delta, reason)``:
+
+    ``APPLY_FULL``
+        the frame carries no correction; apply ``shift`` in full.
+    ``APPLY_DELTA``
+        the frame carries a correction that disagrees with the current table.
+        ``delta`` is the difference still owed -- apply THAT and rewrite the
+        totals, rather than reporting the disagreement and keeping a frame the
+        table contradicts (issue #274).
+    ``SKIP_CURRENT``
+        the baked correction matches the table; nothing to do.
+    ``SKIP_STALE``
+        it disagrees, and either ``realign_delta`` refused (``reason`` says why)
+        or ``REALIGN_DELTA_ON_DISAGREE=0``.  The caller applies the historical
+        warn / hard-stop policy.
+
+    Kept separate from the driver so the policy has a verdict without a FITS
+    file, a GWCS or a reduction environment.
+    """
+    if TOTAL_RA_KEY not in header:
+        return APPLY_FULL, None, ''
+    stale = check_alignment_stale(header, shift, fn, tol_arcsec=tol_arcsec)
+    if stale is None:
+        return SKIP_CURRENT, None, ''
+    delta = realign_delta(header, shift, fn)
+    if not delta.ok:
+        return SKIP_STALE, None, delta.refusal
+    if not realign_delta_enabled():
+        return SKIP_STALE, delta, (
+            'REALIGN_DELTA_ON_DISAGREE=0: reporting the disagreement instead of '
+            'correcting it')
+    return APPLY_DELTA, delta, stale
+
+
+def realign_delta_enabled():
+    """Whether a stale frame is re-corrected by its delta (default) or reported.
+
+    ``REALIGN_DELTA_ON_DISAGREE=0`` restores the historical behaviour: skip the
+    frame and warn (or hard-stop under ``FORCE_REALIGN_ON_DISAGREE=1``).  It is
+    an escape hatch for a run that would rather stop than have its frames move,
+    not a mode anything should rely on -- keeping a frame that disagrees with
+    its table is how half of brick-1182 stayed ~20" out for weeks.
+    """
+    return os.environ.get('REALIGN_DELTA_ON_DISAGREE', '1') != '0'
 
 
 def warn_or_raise_if_stale(header, shift: AlignmentShift, fn):

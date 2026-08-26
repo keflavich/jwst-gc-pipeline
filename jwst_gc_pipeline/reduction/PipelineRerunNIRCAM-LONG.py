@@ -1256,7 +1256,9 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     # distinguishable from a genuine zero tie via `_shift.configured`.
     # ---------------------------------------------------------------------
     from jwst_gc_pipeline.reduction.unified_alignment import (
-        resolve_shift, warn_or_raise_if_stale, write_alignment_header)
+        resolve_shift, warn_or_raise_if_stale, write_alignment_header,
+        alignment_apply_plan, APPLY_FULL, APPLY_DELTA, SKIP_STALE,
+        PREV_RA_KEY, PREV_DEC_KEY, NREALIGN_KEY)
     _shift = resolve_shift(fn, proposal_id, field, filtername, module, basepath,
                            refname=field_registry.reference_frame(str(proposal_id)),
                            use_average=use_average)
@@ -1275,25 +1277,44 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                            f'the astrometric reference frame for {fn}')
     print(f"Shift for {fn} is {_shift}")
     align_fits = fits.open(fn)
+    # `_delta` is None on the first apply (the frame carries no correction) and
+    # is the SHIFT STILL OWED when the frame is already corrected but its table
+    # row has moved underneath it.
+    # DISAGREEMENT POLICY: the plain skip-if-present check silently KEPT a stale
+    # RAOFFSET after the offsets table was corrected -- brick-1182 v001 crf held
+    # +1.9" while the table said -17.5", so half the mosaic stayed ~20" off and
+    # the idempotent guard blocked its own fix. The header records what WAS
+    # applied and the table says what SHOULD be, so a stale frame does not need
+    # regenerating from _cal to move: apply the DIFFERENCE and rewrite the
+    # totals (issue #274). Frames carrying the component keywords are compared
+    # PER COMPONENT, so a re-measured bulk can no longer be masked by an
+    # opposite jitter change that happens to sum back to the same total.
+    _verdict, _delta, _why = alignment_apply_plan(align_fits[1].header, _shift, fn)
     if 'RAOFFSET' in align_fits[1].header:
         # don't shift twice if we re-run
         print(f"{fn} is already aligned ({align_fits[1].header['RAOFFSET']}, {align_fits[1].header['DEOFFSET']})")
-        # DISAGREEMENT GUARD: the plain skip-if-present check silently KEPT a stale
-        # RAOFFSET after the offsets table was corrected -- brick-1182 v001 crf held
-        # +1.9" while the table said -17.5", so half the mosaic stayed ~20" off and
-        # the idempotent guard blocked the fix. Compare what is baked into the frame
-        # against what we WOULD apply now; if they disagree, this frame is stale.
-        # Frames carrying the component keywords are compared PER COMPONENT, so a
-        # re-measured bulk can no longer be masked by an opposite jitter change that
-        # happens to sum back to the same total.
+    if _verdict == APPLY_DELTA:
+        print(f"STALE ASTROMETRY -- RE-CORRECTING {fn} by the delta: "
+              f"baked ({_delta.baked_ra:+.4f},{_delta.baked_dec:+.4f})\" -> "
+              f"table ({_shift.total_ra:+.4f},{_shift.total_dec:+.4f})\" "
+              f"= applying ({_delta.dra:+.4f},{_delta.ddec:+.4f})\".", flush=True)
+    elif _verdict == SKIP_STALE:
+        print(f"NOT re-correcting {fn}: {_why}", flush=True)
         warn_or_raise_if_stale(align_fits[1].header, _shift, fn)
-    else:
+        _delta = None
+    if _verdict in (APPLY_FULL, APPLY_DELTA):
+        # What goes into the WCS is the delta when re-correcting and the whole
+        # shift on a first apply.  What goes into RAOFFSET below is the TOTAL in
+        # both cases, so the keyword keeps meaning "the correction this frame
+        # carries" and the next run's idempotency check reads it unchanged.
+        _apply_ra = (_delta.dra * u.arcsec) if _delta is not None else rashift
+        _apply_dec = (_delta.ddec * u.arcsec) if _delta is not None else decshift
         # ASDF header
         fa = ImageModel(fn)
         wcsobj = fa.meta.wcs
         print(f"Before shift, crval={wcsobj.to_fits()[0]['CRVAL1']}, {wcsobj.to_fits()[0]['CRVAL2']}, {wcsobj.forward_transform.param_sets[-1]}")
         fa.meta.oldwcs = copy.copy(wcsobj)
-        ww = adjust_wcs(wcsobj, delta_ra=rashift, delta_dec=decshift)
+        ww = adjust_wcs(wcsobj, delta_ra=_apply_ra, delta_dec=_apply_dec)
         print(f"After shift, crval={ww.to_fits()[0]['CRVAL1']}, {ww.to_fits()[0]['CRVAL2']}, {wcsobj.forward_transform.param_sets[-1]}")
         fa.meta.wcs = ww
         fa.save(fn, overwrite=True)
@@ -1312,8 +1333,8 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             float(wcsobj.pixel_to_world(_fx, _fy).dec.deg)
         _tgt_ra, _tgt_dec = float(ww.pixel_to_world(_fx, _fy).ra.deg), \
             float(ww.pixel_to_world(_fx, _fy).dec.deg)
-        _exp_ra = _base_ra + rashift.to(u.deg).value   # COORDINATE convention
-        _exp_dec = _base_dec + decshift.to(u.deg).value
+        _exp_ra = _base_ra + _apply_ra.to(u.deg).value   # COORDINATE convention
+        _exp_dec = _base_dec + _apply_dec.to(u.deg).value
         if not np.isfinite([_base_ra, _base_dec, _tgt_ra, _tgt_dec]).all():
             raise RuntimeError(
                 f"astrometric apply for {fn}: fiducial pixel ({_fx},{_fy}) maps to a "
@@ -1331,8 +1352,12 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
 
         # FITS header
         align_fits = fits.open(fn)
-        align_fits[1].header['OLCRVAL1'] = align_fits[1].header['CRVAL1']
-        align_fits[1].header['OLCRVAL2'] = align_fits[1].header['CRVAL2']
+        # OLCRVAL must keep pointing at the UNCORRECTED sky: on a delta
+        # re-correction the current CRVAL already carries the old shift, so
+        # re-stamping it would lose the only record of where the frame started.
+        if 'OLCRVAL1' not in align_fits[1].header:
+            align_fits[1].header['OLCRVAL1'] = align_fits[1].header['CRVAL1']
+            align_fits[1].header['OLCRVAL2'] = align_fits[1].header['CRVAL2']
         # NOT ``header.update(ww.to_fits()[0])``: gwcs's to_fits defaults to
         # max_pix_error=0.25 px, which fitted a degree-3 SIP disagreeing with
         # the GWCS by up to 5.5 mas (SW) / 6.6 mas (LW) -- on top of the 2 mas
@@ -1358,6 +1383,16 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         align_fits[1].header['ATGTDE'] = (_tgt_dec, '[deg] fiducial dec AFTER correction')
         align_fits[1].header['AOFFCONV'] = ('coordinate', 'RAOFFSET is dra_coordinate (on-sky = *cos(dec))')
         align_fits[1].header['AVERMAS'] = (_resid_mas, '[mas] base+shift vs target residual (proof)')
+        if _delta is not None:
+            # Keep the delta step as reversible as the first apply: record what
+            # the frame carried before it and how many times it has moved.
+            align_fits[1].header[PREV_RA_KEY] = (
+                _delta.baked_ra, 'arcsec, total dRA before this re-correction')
+            align_fits[1].header[PREV_DEC_KEY] = (
+                _delta.baked_dec, 'arcsec, total dDec before this re-correction')
+            align_fits[1].header[NREALIGN_KEY] = (
+                int(align_fits[1].header.get(NREALIGN_KEY, 0)) + 1,
+                'delta re-corrections applied to this frame')
         if _frame_gen is not None:
             align_fits[1].header['AGENCAL'] = (_frame_gen.get('cal_ver', ''), 'CAL_VER at correction')
             align_fits[1].header['AGENCTX'] = (_frame_gen.get('crds_ctx', ''), 'CRDS_CTX at correction')
