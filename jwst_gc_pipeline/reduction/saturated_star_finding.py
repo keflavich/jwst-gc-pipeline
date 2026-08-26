@@ -4432,6 +4432,44 @@ def correct_dq_first_group_saturation(dq, filename, instrument=''):
     return dq
 
 
+def truly_lost_saturated_mask(dq):
+    """Pixel mask of TRULY-LOST saturation: ``SATURATED & DO_NOT_USE``.
+
+    A pixel flagged ``SATURATED`` only in a LATE ramp group still has a good
+    group 0, so the ramp fit recovers a valid rate and it carries NO
+    ``DO_NOT_USE``; only pixels the fit could not recover (0 good groups) carry
+    ``DO_NOT_USE``.  The cal/crf ``SATURATED`` flag alone marks *any-group*
+    saturation and so over-masks recovered data.  Verified on delivered
+    products: pixels flagged ``SATURATED`` without ``DO_NOT_USE`` have 100%
+    finite ``SCI`` and ``ERR`` (arches F323N, arches F212N, quintuplet F212N,
+    wd1 F200W, cloudc F770W), while ``SATURATED & DO_NOT_USE`` pixels are 100%
+    NaN in ``SCI``.
+
+    Falls back to the full ``SATURATED`` mask when NO saturated pixel carries
+    ``DO_NOT_USE``.  That fallback is a SYNTHETIC-data guard: it fires on none
+    of the 140 delivered bands in the census (lowest is sickle F1500W at
+    0.51%), so it is not a safety net for real products.  Gate off with
+    ``SATSTAR_REQUIRE_DO_NOT_USE=0``.  This is the
+    daophot-path twin of the ``find_saturated_stars`` finder restriction, so
+    both channels agree on what "saturated" means.
+
+    How much this removes depends on the REDUCTION, not the instrument: every
+    band reduced with ``jwst <= 1.20.2`` has the two flags coextensive, so this
+    is a bit-for-bit no-op there, while current products keep a median 15.7% of
+    the saturation mask on NIRCam *and* MIRI alike.  Census:
+    ``scripts/analysis/truly_lost_saturation_census.py``.  Callers must not
+    assume this is cheap on one instrument and expensive on the other, and see
+    the SCOPE note at the ``cataloging._prepare_frame_for_photometry`` call
+    site for what the restriction does and does not currently reach.
+    """
+    SAT = dqflags.pixel['SATURATED']
+    sat = (dq & SAT) > 0
+    if not int(os.environ.get('SATSTAR_REQUIRE_DO_NOT_USE', 1)):
+        return sat
+    truly = sat & ((dq & dqflags.pixel['DO_NOT_USE']) > 0)
+    return truly if np.any(truly) else sat
+
+
 def _find_zeroframe_for(filename):
     """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
 

@@ -1788,14 +1788,32 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     mask = np.isnan(data) | bad
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
     if dqarr is not None:
-        # Correct the SATURATED bit to FIRST-group saturation (env-gated, MIRI):
-        # the cal/crf flag marks any pixel saturated in ANY ramp group, which on
-        # bright emission vetoes real point sources from daophot although the
-        # ramp fitter recovers their flux.  Clearing the later-group-only flags
-        # here propagates to is_saturated, the fit mask, AND _filter_near_saturation
-        # (which reads ctx.dqarr).  See first_group_saturation_mask.
+        # TRULY-LOST vs recovered saturation.  The cal/crf SATURATED flag marks
+        # any pixel saturated in ANY ramp group, but a late-group saturation with
+        # a good group 0 is RECOVERED by the ramp fit (valid rate, no
+        # DO_NOT_USE).  Restrict is_saturated to the truly-lost core
+        # (SATURATED & DO_NOT_USE) so it agrees with the set the satstar FINDER
+        # uses (find_saturated_stars); reads only this frame's DQ, no ramp file.
+        # The MIRI-only, opt-in first-group correction is kept as a subordinate
+        # pre-pass for older products where DO_NOT_USE is absent.
+        #
+        # SCOPE, measured -- do not restate the #418 rationale without reading
+        # this.  As wired today the restriction reaches `data_` (and hence the
+        # interpolated detection image) and NOTHING ELSE:
+        #   * the fit `mask` is unchanged, because two lines below it ORs in
+        #     `_bad_dq_bitmask(instrument)`, which lists SATURATED for BOTH
+        #     instruments and puts every any-group pixel straight back;
+        #   * `_filter_near_saturation` is handed the unmodified `dqarr` and
+        #     recomputes `(dq & SATURATED)` itself, so the near-sat veto still
+        #     fires on recovered pixels.
+        # Both pinned in photometry/tests/test_truly_lost_saturation.py.
+        # How much this removes is a property of the REDUCTION, not of the
+        # instrument: every band reduced with jwst <= 1.20.2 has SATURATED and
+        # DO_NOT_USE coextensive (no-op), while current products keep a median
+        # 15.7% of the mask on both NIRCam and MIRI.  See
+        # scripts/analysis/truly_lost_saturation_census.py.
         dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
-        is_saturated = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+        is_saturated = _L.truly_lost_saturated_mask(dqarr)
         # A real saturated core sits at/near the detector saturation level; but
         # JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated
         # sources (e.g. W51 F480M star RA=290.929589 Dec=+14.504683: DQ=6
