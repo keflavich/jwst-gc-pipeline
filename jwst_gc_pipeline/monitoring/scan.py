@@ -95,12 +95,81 @@ def basepath(target, cutout_label=None):
     return base
 
 
+#: Detector token an exposure name carries for each instrument, and the token a
+#: level-3 mosaic name carries.  Used to attribute a DISCOVERED observation
+#: number to one instrument: 10678 takes NIRCam prime and MIRI parallel under
+#: observation numbers that need not agree, and a wildcard row asked about
+#: NIRCam must not grow from MIRI products.
+_INSTRUMENT_TOKENS = {
+    'nircam': ('_nrc', '_nircam_'),
+    'miri': ('_mirimage', '_miri_'),
+    'niriss': ('_nis_', '_niriss_'),
+}
+
+
+def _obsid_of(name, proposal5, instrument):
+    """The observation number ``name`` belongs to, or ``None``.
+
+    Reads both product spellings -- the per-exposure ``jw{PPPPP}{OOO}{VVV}_``
+    and the mosaic/association ``jw{PPPPP}-o{OOO}_`` -- and requires the name to
+    carry ``instrument``'s own token, so one instrument's products cannot supply
+    the other's observation numbers.
+    """
+    tokens = _INSTRUMENT_TOKENS.get(instrument, ())
+    if not any(tok in name for tok in tokens):
+        return None
+    for regex in (_EXPNAME_RE, _MOSAIC_RE):
+        m = regex.match(name)
+        if m is not None and m.group('proposal') == proposal5:
+            return f"{int(m.group('obsid')):03d}"
+    return None
+
+
+def discovered_obsids(target, proposal, instrument='nircam'):
+    """Observation numbers of ``proposal`` that have products on disk.
+
+    A wildcard registration (``obsids: {nircam: '*'}``) records "this field owns
+    every observation of the proposal" and carries no observation numbers, so
+    there is nothing to enumerate -- the monitor showed ONE row standing for all
+    139 of 10678's tiles, pooling a tile that reduced with a tile that did not.
+    The numbers exist on disk as soon as anything lands, so they are read from
+    there.
+
+    Cheap: every directory read goes through the cached ``listing``, which the
+    stage ladder is about to read anyway.  Returns ``[]`` while nothing has
+    landed, which is the caller's signal to keep the wildcard row.
+    """
+    proposal5 = f'{int(proposal):05d}'
+    try:
+        base = basepath(target)
+    except ScanError:
+        return []
+    found = set()
+    _, top = listing(base)
+    for entry in top:
+        for dirpath in (os.path.join(base, entry),
+                        os.path.join(base, entry, 'pipeline')):
+            for name in listing(dirpath)[1]:
+                obsid = _obsid_of(name, proposal5, instrument)
+                if obsid is not None:
+                    found.add(obsid)
+    return sorted(found)
+
+
 def observations(target, instrument='nircam'):
     """``[(proposal, obsid), ...]`` registered for ``target``.
 
     Read from ``fields.yaml`` rather than from disk, so an observation whose
     products are entirely missing still appears in the monitor as a row of
     pending stages instead of vanishing.
+
+    The one exception is a WILDCARD registration, which carries no observation
+    numbers to be missing: ``obsids: {nircam: '*'}`` says the field owns every
+    observation of the proposal, and every consumer that enumerates obsids to
+    build one row per observation got the literal ``'*'`` back.  For those the
+    numbers are DISCOVERED from the products on disk, so the monitor tracks what
+    actually arrived; while nothing has arrived the wildcard row is kept, which
+    is the state gc-treasury is in today (issue #439).
     """
     field = _fields.BY_NAME.get(target)
     if field is None:
@@ -108,7 +177,14 @@ def observations(target, instrument='nircam'):
     out = []
     for obs in field.observations:
         for obsid in obs.obsids.get(instrument, ()):
-            out.append((obs.proposal, obsid))
+            if obsid != _fields.WILDCARD_OBSID:
+                out.append((obs.proposal, obsid))
+                continue
+            landed = discovered_obsids(target, obs.proposal, instrument)
+            if landed:
+                out.extend((obs.proposal, o) for o in landed)
+            else:
+                out.append((obs.proposal, obsid))
     return out
 
 
