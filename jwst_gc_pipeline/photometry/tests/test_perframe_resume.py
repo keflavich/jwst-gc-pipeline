@@ -324,27 +324,52 @@ def test_the_legacy_spelling_is_only_generated_where_it_differed():
     assert _perframe_detector_tokens(AFFECTED) == ('nrcalong', '00001')
 
 
+def _affected_frame(tmp_path):
+    """A REAL frame under a directory whose name carries an underscore.
+
+    The resume compares marker mtime against the frame's, so the frame has to
+    exist.  It must also be a path a caller would really hold: the constant
+    `AFFECTED` is an absolute /orange/... path that happens to exist on the
+    reduction host and does not exist in CI, so a test resuming on it passed
+    locally by depending on survey data being mounted.  Build it under tmp_path
+    instead.
+
+    The legacy token is whatever this particular tmp_path makes it -- pytest's
+    directory names contain underscores of their own -- so tests derive it with
+    the real function rather than hardcoding a value.
+    """
+    d = tmp_path / 'gc2211_o049' / 'pipeline'
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / os.path.basename(AFFECTED)
+    p.touch()
+    return str(p)
+
+
 def test_a_PRE_562_marker_still_resumes(tmp_path):
     """The migration guarantee.  Markers already on disk were written with the
     old token; refusing them would refit every frame on the affected trees --
     and, in the finalize, report them as dropped exposures and hard-crash."""
     d = _marker_dir(tmp_path)
-    (d / _marker_name(AFFECTED, 'f277w', '00001', 'm12',
-                      merge='nrca')).write_text('')
-    todo, ok, _ = _select([{'filename': AFFECTED}], str(d), 'f277w', 'm12',
+    frame = _affected_frame(tmp_path)
+    legacy = perframe_legacy_detector_token(frame)
+    if legacy == perframe_detector_token(frame):
+        pytest.skip('this tmp_path does not shift the split; nothing to migrate')
+    (d / _marker_name(frame, 'f277w', legacy, 'm12', merge='nrca')).write_text('')
+    todo, ok, _ = _select([{'filename': frame}], str(d), 'f277w', 'm12',
                           resume=True, merge='nrca')
-    assert ok == [AFFECTED]
+    assert ok == [frame]
     assert todo == []
 
 
 def test_a_post_562_marker_resumes(tmp_path):
     """The new spelling, same frame."""
     d = _marker_dir(tmp_path)
-    (d / _marker_name(AFFECTED, 'f277w', 'nrcalong', 'm12',
+    frame = _affected_frame(tmp_path)
+    (d / _marker_name(frame, 'f277w', perframe_detector_token(frame), 'm12',
                       merge='nrca')).write_text('')
-    todo, ok, _ = _select([{'filename': AFFECTED}], str(d), 'f277w', 'm12',
+    todo, ok, _ = _select([{'filename': frame}], str(d), 'f277w', 'm12',
                           resume=True, merge='nrca')
-    assert ok == [AFFECTED]
+    assert ok == [frame]
     assert todo == []
 
 
@@ -353,12 +378,21 @@ def test_the_legacy_token_stays_MERGE_SCOPED(tmp_path):
     name: a marker that cannot say which pass wrote it would let the merged pass
     resume on the nrca pass's work (the 1440-marker collision)."""
     d = _marker_dir(tmp_path)
-    (d / _marker_name(AFFECTED, 'f277w', '00001', 'm12',
-                      merge='nrca')).write_text('')
-    todo, ok, _ = _select([{'filename': AFFECTED}], str(d), 'f277w', 'm12',
+    frame = _affected_frame(tmp_path)
+    legacy = perframe_legacy_detector_token(frame)
+    if legacy == perframe_detector_token(frame):
+        pytest.skip('this tmp_path does not shift the split; no legacy path here')
+    (d / _marker_name(frame, 'f277w', legacy, 'm12', merge='nrca')).write_text('')
+    # The frame is REAL and the marker is NEWER than it, so the mtime gate would
+    # resume -- it is merge scoping alone that must send this to todo.  With a
+    # nonexistent frame this test passed no matter what scoping did.
+    todo, ok, _ = _select([{'filename': frame}], str(d), 'f277w', 'm12',
+                          resume=True, merge='nrca')
+    assert ok == [frame], 'precondition: the marker resumes for its OWN pass'
+    todo, ok, _ = _select([{'filename': frame}], str(d), 'f277w', 'm12',
                           resume=True, merge='merged')
     assert ok == []
-    assert todo == [{'filename': AFFECTED}]
+    assert todo == [{'filename': frame}]
 
 
 def test_the_WRITER_never_emits_the_legacy_token():
@@ -451,9 +485,8 @@ def test_a_LEGACY_spelled_marker_is_gated_too(tmp_path):
     args = _args(tmp_path, FRAMES)
     f = args[0]['filename']
     legacy = perframe_legacy_detector_token(f)
-    assert legacy != perframe_detector_token(f), (
-        'tmp_path must contain an underscore for this to exercise the legacy '
-        'path; pytest tmp dirs do (test_a_LEGACY_...)')
+    if legacy == perframe_detector_token(f):
+        pytest.skip('this tmp_path does not shift the split; no legacy path here')
     (d / _marker_name(f, 'f212n', legacy, 'm12', merge='nrca')).touch()
     todo, ok, nov, stale = select_resumable_frames(args, str(d), 'f212n', 'm12',
                                                    'nrca')
