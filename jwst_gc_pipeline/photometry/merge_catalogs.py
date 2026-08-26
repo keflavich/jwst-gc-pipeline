@@ -27,6 +27,31 @@ from tqdm.auto import tqdm
 # https://en.wikipedia.org/wiki/AB_magnitude
 ABMAG_OFFSET = 8.90
 
+#: Default ``--modules`` for the merge driver.
+#:
+#: ``merged-reproject`` used to be in this default and is deliberately gone
+#: (issue #475).  That product is written ONCE, by
+#: ``reduction/align_to_catalogs.py`` (``outsuffix='merged-reproject'``), at the
+#: moment alignment is measured, and nothing ever refreshes it.  It therefore
+#: carries whatever frame ``align_to_catalogs`` last wrote, INDEPENDENT of the
+#: frames the rest of the pipeline is using, and which of the two files is
+#: closer to the frames depends on whether the field is registered at all:
+#:
+#:   * registered field (m92 1334, m4 1979) -- the frames were corrected after
+#:     the reproject mosaic was written, so the reproject mosaic is the
+#:     PRE-correction frame.  Measured against ``gaia_refcat.fits`` with the
+#:     swept offset histogram: m92's four ``-merged-reproject`` mosaics read
+#:     1852-2212 mas while their plain siblings read 10-32 mas.
+#:   * unregistered field (wd1 1905, no ALIGNMENT_CONFIG entry) -- the frames
+#:     were never corrected, so the reproject mosaic holds the only tie there
+#:     is: wd1's read ~11 mas against ~40 mas for the plain ones.
+#:
+#: So it is neither reliably stale nor reliably current, and a merge that takes
+#: the default should not silently pull in a mosaic that may be 2" off in a
+#: frame nothing else shares.  Ask for it explicitly (``--modules
+#: merged,merged-reproject``) when that is what you mean.
+DEFAULT_MERGE_MODULES = 'merged'
+
 # Instrument/filter tokens live in photometry/naming.py (heavy-import-free) so
 # this module shares one source of truth without importing webbpsf.  The
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
@@ -3171,8 +3196,11 @@ def main():
     from optparse import OptionParser
     parser = OptionParser()
     parser.add_option("-m", "--modules", dest="modules",
-                      default='merged,merged-reproject',
-                      help="module list", metavar="modules")
+                      default=DEFAULT_MERGE_MODULES,
+                      help=("module list (comma separated).  "
+                            "'merged-reproject' is deliberately NOT a default "
+                            "-- see DEFAULT_MERGE_MODULES."),
+                      metavar="modules")
     parser.add_option('--merge-singlefields', dest='merge_singlefields',
                       default=False, action='store_true',)
     parser.add_option("--target", dest="target",
