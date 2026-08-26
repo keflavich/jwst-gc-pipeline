@@ -31,6 +31,9 @@ import os
 # Imported as field_registry: `fields` is a local variable in these
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
+# The shared spelling rule for an observation number: three digits, anything
+# that is not a plain number handed back untouched.  Issue #438.
+from jwst_gc_pipeline.reduction.mast_obs_scope import observation_number
 import re
 import shutil
 import numpy as np
@@ -215,6 +218,18 @@ def main(filtername, Observations=None, regionname='sgrc',
     can save time if you just want to redo the tweakreg steps but already have
     the ramp/cal stuff done.
     """
+    # FIRST statement: every name below is interpolated from `field` -- the
+    # uncal download filter (`jw{PPPPP}{field}`, whose '_nis_' sibling test is
+    # the only other disambiguator), the association search
+    # (`jw{PPPPP}-o{field}*_image3_*asn.json`), the drizzle product name
+    # (`...-o{field}_t001_niriss_{filt}`), the `_o{field}_crf` frames and the
+    # per-exposure i2d regeneration glob -- and `assert field == '012'` guards
+    # the one registered NIRISS observation.  MAST spells an observation with
+    # three digits, so `--field 12` built `jw04147-o12*` and tripped that
+    # assert instead of reducing observation 012.  This is the NIRISS half of
+    # what #528 did for the NIRCam driver; a non-number is handed back
+    # untouched.  Issue #438.
+    field = observation_number(field)
     print(f"Processing filter {filtername} skip_step1and2={skip_step1and2} for field {field} and proposal id {proposal_id} in region {regionname}")
 
     wavelength = int(filtername[1:4])
@@ -661,7 +676,11 @@ if __name__ == "__main__":
     (options, args) = parser.parse_args()
 
     filternames = options.filternames.split(",")
-    fields = options.field.split(",")
+    # Padded here as well as in `main`, because the CLI uses the value before
+    # `main` sees it: `field_to_reg_mapping[field]` keys on the three-digit
+    # spelling, so `--field 12` raised `KeyError: '12'` against a registry that
+    # holds the observation it names.  Issue #438.
+    fields = [observation_number(part) for part in options.field.split(",")]
     proposal_id = options.proposal_id
     skip_step1and2 = options.skip_step1and2
     reference_catalog = options.reference_catalog

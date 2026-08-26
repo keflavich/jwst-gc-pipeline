@@ -79,6 +79,9 @@ print(jwst.__version__)
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
 from jwst_gc_pipeline.reduction.crds_cache import open_crds_reference
+# The shared spelling rule for an observation number: three digits, anything
+# that is not a plain number handed back untouched.  Issue #438.
+from jwst_gc_pipeline.reduction.mast_obs_scope import observation_number
 
 # Reference catalog configuration by proposal and field.
 # Paths are relative to basepath.
@@ -273,6 +276,20 @@ def main(filtername, Observations=None, regionname='brick',
     can save time if you just want to redo the tweakreg steps but already have
     the zero-frame stuff done.
     """
+    # FIRST statement: every name below is interpolated from `field` -- the
+    # uncal download filter (`jw{PPPPP}{field}*_uncal.fits`), the association
+    # search (`jw{PPPPP}-o{field}*_image3_*asn.json`), the drizzle product name
+    # (`...-o{field}_t001_miri_{filt}`), the `_o{field}_crf` frames and the
+    # per-exposure i2d regeneration glob -- and the region sanity checks
+    # compare it against '001'/'002'/'003'/'021'.  MAST spells an observation
+    # with three digits, so `--field 2` built `jw02221-o2*`, which matches
+    # nothing on disk or at MAST; the run then stopped at "Did not find any asn
+    # files" or tripped `assert field == '002'`, both for the wrong stated
+    # reason.  This is the MIRI half of what #528 did for the NIRCam driver.
+    # A non-number is handed back untouched, so the JOINT registrations MIRI
+    # actually uses -- sgrb2's '002-998', sickle's '001-002' -- are unchanged.
+    # Issue #438.
+    field = observation_number(field)
     print(f"Processing filter {filtername} with and skip_step1and2={skip_step1and2} for field {field} and proposal id {proposal_id} in region {regionname}")
 
     wavelength = int(filtername[1:4])
@@ -833,7 +850,11 @@ if __name__ == "__main__":
     (options, args) = parser.parse_args()
 
     filternames = options.filternames.split(",")
-    fields = options.field.split(",")
+    # Padded here as well as in `main`, because the CLI uses the value before
+    # `main` sees it: `field_to_reg_mapping[field]` keys on the three-digit
+    # spelling, so `--field 2` raised `KeyError: '2'` against a registry that
+    # holds the observation it names.  Issue #438.
+    fields = [observation_number(part) for part in options.field.split(",")]
     proposal_id = options.proposal_id
     skip_step1and2 = options.skip_step1and2
     reference_catalog = options.reference_catalog
