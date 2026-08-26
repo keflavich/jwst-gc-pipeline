@@ -113,6 +113,38 @@ def test_the_pattern_merge_actually_globs_carries_the_writer_token(
         assert not any('_o' in s or '_j' in s for s in slots), slots[:3]
 
 
+@pytest.mark.parametrize('target', ['ngc6334', 'ngc6334_o001', 'NGC6334'])
+def test_the_shared_tree_token_does_not_depend_on_the_target_string(
+        target, monkeypatch, tmp_path):
+    """The `_j{proposal}` token follows the RUNNING PROPOSAL, not the target
+    name the caller happened to pass.
+
+    The branch this replaces asked ``_obs_filters_for(target)`` whether the
+    target's proposal list contained 7213/6778, so it produced the writer's
+    ``_j6778`` only when ``target`` was spelled exactly as the registry key.
+    Any other spelling -- an observation-scoped target name, a different case --
+    fell through to the hand-rolled ``f'_o{field}'`` and globbed ``_o001``,
+    which none of the 1230 ``*_j6778_visit*`` per-frame catalogs on disk carry.
+    The writer keys on the proposal alone, so the glob does too."""
+    seen = []
+
+    def _spy(pattern, *a, **kw):
+        seen.append(pattern)
+        return []
+
+    monkeypatch.setattr(MC.glob, 'glob', _spy)
+    with pytest.raises(ValueError, match='No tables found'):
+        MC.merge_individual_frames(
+            module='nrca', filtername='f200w', progid='6778', target=target,
+            method='dao', suffix='_basic', field='001',
+            basepath=str(tmp_path), max_visitid=1, exposure_numbers=[1])
+
+    heads = [os.path.basename(p).split('_visit')[0] for p in seen
+             if '_visit' in p and 'f200w_nrc' in p]
+    assert heads, f'no per-frame glob was built (patterns: {seen[:3]})'
+    assert all(h.endswith('_j6778') for h in heads), heads[:3]
+
+
 def test_merge_individual_frames_derives_both_tokens_from_naming():
     """Reverting to a hand-rolled ``f'_o{field}'`` here fails, even though the
     token functions above still agree with themselves."""
