@@ -86,14 +86,31 @@ MODULE_ANTISYMMETRY_COS_MAX = -0.9
 # fractional magnitude agreement required between the two module vectors
 MODULE_ANTISYMMETRY_MAG_TOL = 0.3
 
-# Fraction of consensus rows with a neighbour inside the association radius
-# above which the consensus is reported as probably duplicated (see
-# `consensus_duplication`).  A real stellar field's NN distribution only starts
-# rising well past 0.2"; gc2211 o023 F200W's duplicated consensus read 16.9%
-# within 0.25" against a p50 NN of 0.441" (#484).  5% is far above the clean
-# case and far below the observed bad one, so it separates them without being
-# tuned to either.
-CONSENSUS_DUPLICATION_WARN_FRAC = 0.05
+# Fraction of consensus rows sitting in an AXIS-ALIGNED close pair above which
+# the consensus is reported as probably duplicated (see
+# `consensus_duplication`).
+#
+# The raw fraction of rows with a close neighbour does NOT work as the trigger,
+# and the measurement that says so is worth keeping: over the 75 consensus
+# catalogs on disk (2026-08-26), `frac_within_match_radius` at 0.2" ranks the
+# archive by DENSITY.  27 of the 75 exceed 5%, including fields with no
+# suspicion of this defect (brick F200W o004 24.1%, sgrb2 F210M o001 21.6%),
+# while gc2211 o023 F200W -- the catalog the diagnostic exists for -- reads
+# 13.0% against 13.3% expected for a clean Poisson field of its own median NN
+# separation.  Excess over that Poisson expectation does not work either: it is
+# below 5% for all 75, o023 included (-0.003), so it warns on nothing.
+#
+# What DOES separate o023 is direction.  Shadow copies come from ONE rigid
+# exposure displacement, so their pair vectors share an axis; crowding blends
+# are isotropic.  `aligned_frac` is the resultant length of the close-pair axes
+# in excess of the isotropic floor, expressed as a fraction of the catalog.  On
+# the same 75 catalogs it reads 0.0309 on o023 and at most 0.0086 on every
+# other one (sgrb2 F150W o001), so 0.015 sits 2.1x below the known-bad case and
+# 1.7x above the whole rest of the archive.
+CONSENSUS_DUPLICATION_WARN_ALIGNED_FRAC = 0.015
+
+# Below this many close pairs the axis statistic is too noisy to report.
+CONSENSUS_DUPLICATION_MIN_PAIRS = 50
 
 # Same-star bulk refinement (memory: histogram-vs-samestar-offset-bias): the
 # all-pairs offset HISTOGRAM (check A) is biased by several mas against a DENSE
@@ -912,17 +929,22 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     skipped = [e["key"] for i, e in enumerate(entries) if i not in usable_idx]
     anchor = usable[int(np.argmax([e["n_reliable"] for e in usable]))]
     dup = consensus_duplication(consensus, match_radius)
-    if (np.isfinite(dup["frac_within_match_radius"])
-            and dup["frac_within_match_radius"] > CONSENSUS_DUPLICATION_WARN_FRAC):
+    if (np.isfinite(dup["aligned_frac"])
+            and dup["aligned_frac"] > CONSENSUS_DUPLICATION_WARN_ALIGNED_FRAC):
         print(f"WARNING: visit consensus ({context}): "
-              f"{100 * dup['frac_within_match_radius']:.1f}% of its "
-              f"{dup['n']} rows have a neighbour within the "
-              f"{dup['match_radius_arcsec']:.2f}\" association radius "
-              f"(p50 NN {dup['nn_p50_arcsec']:.3f}\").  A real stellar field "
-              f"has almost none, so this consensus is probably carrying shadow "
-              f"copies of its own stars from a displaced exposure -- and every "
-              f"per-exposure offset below is an argmax against a BIMODAL "
-              f"reference (issue #484).")
+              f"{100 * dup['aligned_frac']:.1f}% of its {dup['n']} rows sit in "
+              f"a close pair whose separation vector shares a common axis "
+              f"(PA {dup['axis_pa_deg']:.0f} deg, typical separation "
+              f"{dup['aligned_sep_p50_arcsec']:.3f}\"; "
+              f"{dup['n_close_pairs']} pairs inside the "
+              f"{dup['match_radius_arcsec']:.2f}\" association radius, "
+              f"axis alignment {dup['close_pair_axis_alignment']:.3f} against "
+              f"an isotropic {dup['close_pair_axis_isotropic']:.3f}).  "
+              f"Crowding blends have no preferred direction, so a common axis "
+              f"says this consensus is probably carrying shadow copies of its "
+              f"own stars from ONE displaced exposure -- and every per-exposure "
+              f"offset below is an argmax against a BIMODAL reference "
+              f"(issue #484).")
     return dict(coords=consensus, mag=consensus_mag, nexp=nexp,
                 scatter_mas=scatter_mas, exposures=exposures,
                 consensus_ok=consensus_ok, anchor_key=anchor["key"],
@@ -941,53 +963,108 @@ def consensus_duplication(consensus, match_radius=0.2 * u.arcsec):
     bimodal without saying so.
 
     That is not hypothetical.  gc2211 o023 F200W (#484): exposure 1 sits 156-201
-    mas from its siblings, straddling the 0.2" radius, and the resulting
-    consensus has **16.9%** of its 39,297 rows with a neighbour within 0.25" --
-    an excess sitting on top of a stellar NN distribution that only starts
-    rising past 0.2" (p50 NN 0.441").  ``measure_offset`` then takes
-    ``H.argmax()`` over the window with no zero-lag prior, so on three of eight
-    detectors it locked onto the WRONG mode and attributed a real per-exposure
-    displacement to the two GOOD exposures, fabricating a 74 mas per-detector
-    spread out of it.
+    mas from its siblings, straddling the 0.2" radius.  ``measure_offset`` then
+    takes ``H.argmax()`` over the window with no zero-lag prior, so on three of
+    eight detectors it locked onto the WRONG mode and attributed a real
+    per-exposure displacement to the two GOOD exposures, fabricating a 74 mas
+    per-detector spread out of it.
 
-    A real stellar field has almost no pairs below ``match_radius``: two stars
-    that close are one blended source in these catalogs.  So a population there
-    is a direct, cheap tell for the duplication, independent of any offset
-    measurement.  This reports it; it decides nothing.
+    **Counting close pairs does not find that state.**  These fields are crowded
+    enough that a clean catalog already has a large population inside 0.2":
+    across the 75 consensus catalogs on disk (2026-08-26) the median NN
+    separation runs 0.26-1.8", 27 of the 75 have more than 5% of their rows
+    inside 0.2", and o023 itself reads 13.0% against the 13.3% a Poisson field
+    of its own median density predicts.  ``frac_within_match_radius`` therefore
+    ranks the archive by DENSITY; it is reported below as context and nothing is
+    decided from it.
 
-    Returns ``dict(n, frac_within_match_radius, frac_within_half_radius,
-    nn_p50_arcsec, match_radius_arcsec)``.  The fractions are NaN when there
-    are too few rows to characterise.
+    **Direction is what separates them.**  Shadow copies all come from ONE rigid
+    exposure displacement, so their pair separation vectors share a common axis.
+    Crowding blends have no preferred direction.  So take the close pairs, fold
+    their position angles to an axis (doubling the angle, which makes the two
+    orientations of an unordered pair coincide), and measure the resultant
+    length ``close_pair_axis_alignment`` (``Rbar``).  Under isotropy ``Rbar``
+    sits at ``close_pair_axis_isotropic`` = ``sqrt(pi / (4 * n_pairs))``; the
+    excess over that floor, times the pair count, over the catalog size, is
+    ``aligned_frac`` -- the fraction of consensus rows sitting in a
+    directionally coherent close pair.  On the 75 archive catalogs it reads
+    0.0309 for o023 and at most 0.0086 for every other one.
+
+    Returns ``dict(n, match_radius_arcsec, n_close_pairs,
+    frac_within_match_radius, frac_within_half_radius, nn_p50_arcsec,
+    close_pair_axis_alignment, close_pair_axis_isotropic, aligned_frac,
+    axis_pa_deg, aligned_sep_p50_arcsec)``.  Values are NaN when there are too
+    few rows, or too few close pairs, to characterise.
 
     NOT an astrometric measurement: no offset, correction or tie is derived
     from these separations, and this is not a nearest-neighbour median of
     positional offsets (CLAUDE.md rule #1).  It is a one-catalog geometry
-    statistic.
+    statistic, and the only direction it reports is an AXIS (mod 180 deg),
+    which cannot be applied as a shift.
     """
     radius_arcsec = (match_radius.to(u.arcsec).value
                      if hasattr(match_radius, "to") else float(match_radius))
     n = len(consensus)
     out = dict(n=int(n), match_radius_arcsec=float(radius_arcsec),
+               n_close_pairs=0,
                frac_within_match_radius=float("nan"),
                frac_within_half_radius=float("nan"),
-               nn_p50_arcsec=float("nan"))
+               nn_p50_arcsec=float("nan"),
+               close_pair_axis_alignment=float("nan"),
+               close_pair_axis_isotropic=float("nan"),
+               aligned_frac=float("nan"),
+               axis_pa_deg=float("nan"),
+               aligned_sep_p50_arcsec=float("nan"))
     if n < 100:
         return out
     xyz = _unit_xyz(consensus)
     tree = cKDTree(xyz)
     # k=2: a point's first neighbour is itself.
-    dist, _ = tree.query(xyz, k=2, workers=-1)
+    dist, idx = tree.query(xyz, k=2, workers=-1)
     chord = dist[:, 1]
     # chord -> angular separation, exact on the unit sphere
     nn_arcsec = np.degrees(2.0 * np.arcsin(np.clip(chord / 2.0, 0.0, 1.0))) * 3600.0
-    nn_arcsec = nn_arcsec[np.isfinite(nn_arcsec)]
-    if nn_arcsec.size < 100:
+    finite = np.isfinite(nn_arcsec)
+    if np.count_nonzero(finite) < 100:
         return out
+    n_finite = int(np.count_nonzero(finite))
     out["frac_within_match_radius"] = float(
-        np.count_nonzero(nn_arcsec < radius_arcsec) / nn_arcsec.size)
+        np.count_nonzero(nn_arcsec[finite] < radius_arcsec) / n_finite)
     out["frac_within_half_radius"] = float(
-        np.count_nonzero(nn_arcsec < 0.5 * radius_arcsec) / nn_arcsec.size)
-    out["nn_p50_arcsec"] = float(np.percentile(nn_arcsec, 50))
+        np.count_nonzero(nn_arcsec[finite] < 0.5 * radius_arcsec) / n_finite)
+    out["nn_p50_arcsec"] = float(np.percentile(nn_arcsec[finite], 50))
+
+    close = finite & (nn_arcsec < radius_arcsec)
+    n_pairs = int(np.count_nonzero(close))
+    out["n_close_pairs"] = n_pairs
+    if n_pairs < CONSENSUS_DUPLICATION_MIN_PAIRS:
+        return out
+    ra_deg = np.asarray(consensus.ra.deg, dtype=float)
+    dec_deg = np.asarray(consensus.dec.deg, dtype=float)
+    a = np.nonzero(close)[0]
+    b = idx[a, 1]
+    dra = (ra_deg[b] - ra_deg[a]) * np.cos(np.radians(dec_deg[a])) * 3600.0
+    ddec = (dec_deg[b] - dec_deg[a]) * 3600.0
+    # DOUBLE the position angle: an unordered pair contributes its vector and
+    # the negative of it, and 2*PA maps those onto the same point, so this is an
+    # AXIS statistic with no sign to it.
+    pa2 = 2.0 * np.arctan2(dra, ddec)
+    cbar = float(np.cos(pa2).mean())
+    sbar = float(np.sin(pa2).mean())
+    rbar = float(np.hypot(cbar, sbar))
+    riso = float(np.sqrt(np.pi / (4.0 * n_pairs)))
+    out["close_pair_axis_alignment"] = rbar
+    out["close_pair_axis_isotropic"] = riso
+    out["aligned_frac"] = float(max(rbar - riso, 0.0) * n_pairs / n_finite)
+    axis = 0.5 * np.arctan2(sbar, cbar)
+    out["axis_pa_deg"] = float(np.degrees(axis) % 180.0)
+    # separations of the pairs lying along that axis (within 20 deg of it) --
+    # the SCALE of the displacement, which is what tells a reader whether the
+    # population is an exposure shift or a genuine blend
+    on_axis = np.abs(np.cos(0.5 * pa2 - axis)) > np.cos(np.radians(20.0))
+    if np.count_nonzero(on_axis) >= 10:
+        out["aligned_sep_p50_arcsec"] = float(
+            np.percentile(np.hypot(dra, ddec)[on_axis], 50))
     return out
 
 

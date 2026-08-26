@@ -3818,9 +3818,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 median_scatter_mas=float(np.median(cons["scatter_mas"]))
                 if len(cons["scatter_mas"]) else float("nan"),
                 # Shadow copies of the consensus's own stars, from the one-way
-                # non-exclusive association at `match_radius` (issue #484).  A
-                # real stellar field has almost no pairs that close, so a
-                # population there says the consensus is bimodal and a
+                # non-exclusive association at `match_radius` (issue #484).
+                # Read `aligned_frac`, not `frac_within_match_radius`: these
+                # fields are crowded enough that a CLEAN catalog already has a
+                # fifth of its rows inside 0.2", so the raw count tracks
+                # DENSITY.  Shadow copies come from ONE rigid exposure
+                # displacement and so share an AXIS, which crowding does not;
+                # a population there says the consensus is bimodal and a
                 # per-exposure `H.argmax()` measured against it may have locked
                 # onto the wrong mode.  Diagnostic only -- it gates nothing.
                 duplication=cons.get("duplication"),
