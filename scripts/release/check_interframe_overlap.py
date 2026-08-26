@@ -83,6 +83,24 @@ GRID_MAX_OFF_MAS = float(os.environ.get("OVERLAP_GRID_MAX_OFF_MAS", 80.0))
 # Every one of those is a draw from the same near-degenerate lattice.  1.25 sits
 # above all three and far below a real gross offset, which has one spot and an
 # empty background (margin inf on a rigid synthetic shift).
+#
+# HEADROOM on the other side, which is what says whether 1.25 is comfortable or
+# tight.  The number that matters is the margin of a legitimately BROAD single
+# hill -- one physical shift, no rival anywhere -- because that is the reading
+# this floor must never eat.  A 500 mas rigid synthetic shift measured through
+# `measure_offset` at 0.02" bins over a 3" window, as the reference's per-star
+# precision degrades (VIRAC2's own is ~40 mas):
+#
+#     per-star scatter    5      10     20     30     40     50     70  mas
+#     peak_margin      113.50  78.00  33.50  17.50  11.50   8.50  10.00
+#
+# The worst of those is 8.50, i.e. ~7x the floor, so 1.25 is comfortable rather
+# than tight.  Those numbers hold only because `_peak_margin`'s exclusion radius
+# is ADAPTIVE; with the fixed one-bin pad it was first written with, the same
+# row reads 75.67/3.71/1.63/1.13/1.10/1.06/1.00 and crosses this floor at ~25
+# mas of scatter -- a genuine gross offset silently demoted to could-not-verify
+# by nothing but its own noise.  `test_a_broad_single_hill_keeps_its_margin`
+# pins that direction; do not reintroduce a fixed pad.
 GLOBAL_TIE_MIN_MARGIN = float(os.environ.get("OVERLAP_TIE_MIN_PEAK_MARGIN", 1.25))
 # Ladder of same-star residual-map cell sizes (arcsec).  A single 30" cell
 # averages a sliver narrower than itself away (a 4"-wide strip shifted 150 mas

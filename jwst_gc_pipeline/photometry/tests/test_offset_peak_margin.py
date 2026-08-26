@@ -32,13 +32,36 @@ def _sc(ra, dec):
 
 def test_peak_margin_masks_only_the_neighbourhood_of_the_winner():
     """A single tall bin with its own spillover in the bins next to it must not be
-    read as having a rival: the runner-up is taken OUTSIDE a 1-bin pad."""
+    read as having a rival: the runner-up is taken OUTSIDE the winner's hill."""
     H = np.zeros((9, 9))
     H[4, 4] = 100.0
     H[4, 5] = H[3, 4] = 40.0        # spillover, adjacent
     assert not np.isfinite(_peak_margin(H, 4, 4))   # nothing else anywhere
     H[0, 0] = 20.0                                   # a real, separated rival
     assert np.isclose(_peak_margin(H, 4, 4), 5.0)
+
+
+def test_the_exclusion_radius_follows_the_width_of_the_hill():
+    """A fixed one-bin pad makes ``peak_margin`` a measure of peak WIDTH: a broad
+    hill's own shoulders sit outside the pad and are divided by as if they were a
+    rival.  The exclusion radius is twice the half-max radius, so it grows with
+    the hill and the divisor stays the background."""
+    # one hill, descending 8 per ring from 100 (half-max radius 7), and NOTHING
+    # else anywhere on the plane
+    H = np.zeros((41, 41))
+    for di in range(-6, 7):
+        for dj in range(-6, 7):
+            H[20 + di, 20 + dj] = max(0.0, 100.0 - 8.0 * max(abs(di), abs(dj)))
+    # what a FIXED one-bin pad would divide by: the hill itself, two bins out
+    fixed = H.copy()
+    fixed[19:22, 19:22] = 0.0
+    assert fixed.max() == 84.0
+    assert np.isclose(H.max() / fixed.max(), 100.0 / 84.0, rtol=1e-6)
+    # with the adaptive radius nothing outside the hill holds anything
+    assert not np.isfinite(_peak_margin(H, 20, 20))
+    # ... and a genuinely separate rival, past the hill, is still seen
+    H[2, 2] = 50.0
+    assert np.isclose(_peak_margin(H, 20, 20), 2.0)
 
 
 def test_rigid_offset_has_no_runner_up():
@@ -82,3 +105,33 @@ def test_a_replica_lattice_reads_high_contrast_and_a_margin_of_one():
     assert r["contrast"] > 50, r           # ... comfortably ...
     assert r["off"] > 100.0, r             # ... at an offset that is not in the data
     assert r["peak_margin"] < 1.25, r      # ... and the runner-up is right beside it
+
+
+def test_a_broad_single_hill_keeps_its_margin():
+    """The fail-open direction of the gate this number feeds.
+
+    ``check_interframe_overlap._global_tie`` demotes a GROSS tie whose margin is
+    below 1.25 to could-not-verify, which does not block.  A genuine gross offset
+    measured against a reference of ordinary per-star precision is ONE hill with
+    no rival anywhere, and it must keep a margin far above that floor at every
+    scatter the reference can have -- VIRAC2's own precision is ~40 mas, against
+    20 mas bins over a 3" window, so the hill is several bins wide.
+
+    With the fixed one-bin pad this test's own 30/40/50/70 mas rows read
+    1.13/1.10/1.06/1.00: the divisor was the hill's own shoulder, so a real 500
+    mas offset stopped being reported as measured for no reason but its noise.
+    """
+    shift = 0.500                              # arcsec: gross, > the gate's 80 mas
+    for scatter_mas in (5, 10, 20, 30, 40, 50, 70):
+        rng = np.random.default_rng(3)
+        n = 900
+        ra = RA0 + rng.uniform(0, 0.05, n) / COSD
+        dec = DEC0 + rng.uniform(0, 0.05, n)
+        s = scatter_mas / 1000.0 / 3600.0
+        ref = _sc(ra + rng.normal(0, s, n) / COSD, dec + rng.normal(0, s, n))
+        src = _sc(ra + shift / 3600.0 / COSD + rng.normal(0, s, n) / COSD,
+                  dec + rng.normal(0, s, n))
+        r = measure_offset(src, ref, maxsep=3.0 * u.arcsec, sweep=False)
+        assert r["off"] > 400.0, (scatter_mas, r)      # the shift IS recovered
+        # 5x the 1.25 floor: this is headroom, not a boundary the noise can walk
+        assert r["peak_margin"] > 6.25, (scatter_mas, r["peak_margin"], r["contrast"])

@@ -153,8 +153,44 @@ class NoCoherentTieError(RuntimeError):
     source lists have no coherent astrometric tie (broken/untied WCS)."""
 
 
+#: Hard ceiling (bins) on the adaptive exclusion radius in ``_peak_margin``, so
+#: the exclusion cannot eat the plane.  24 bins is 480 mas over a 3" window,
+#: i.e. a hill whose half-max radius alone is ~240 mas -- per-star scatter of
+#: order 200 mas, an unusable measurement whatever the peak says.
+#:
+#: A hill wider than the cap falls back to dividing by its own shoulder, so its
+#: margin reads ~1 (measured: a synthetic hill 30 bins across reads 1.11).  That
+#: sends it to could-not-verify, which is the correct direction for a
+#: measurement that noisy; note that ``contrast`` does NOT necessarily catch
+#: this case first -- the same synthetic reads contrast 500, because contrast
+#: divides by a TYPICAL bin and a broad hill still towers over one.
+_MAX_PEAK_PAD_BINS = 24
+
+
+def _box(shape, i, j, r):
+    """Index bounds of the (2r+1)-bin Chebyshev box around ``(i, j)``, clipped."""
+    return (max(i - r, 0), min(i + r + 1, shape[0]),
+            max(j - r, 0), min(j + r + 1, shape[1]))
+
+
+def _peak_half_width_bins(H, i, j, max_r=_MAX_PEAK_PAD_BINS):
+    """Chebyshev radius (bins) at which the winner's own profile first drops
+    below HALF the peak bin — the half-max radius of the hill it sits on.
+
+    Returns ``max_r`` if it never does within that radius."""
+    half = 0.5 * float(H[i, j])
+    for r in range(1, int(max_r) + 1):
+        lo_i, hi_i, lo_j, hi_j = _box(H.shape, i, j, r)
+        sub = np.array(H[lo_i:hi_i, lo_j:hi_j], dtype=float)
+        ii_lo, ii_hi, jj_lo, jj_hi = _box(H.shape, i, j, r - 1)
+        sub[ii_lo - lo_i:ii_hi - lo_i, jj_lo - lo_j:jj_hi - lo_j] = 0.0
+        if float(sub.max()) < half:
+            return r
+    return int(max_r)
+
+
 def _peak_margin(H, i, j, pad=1):
-    """``H.max()`` divided by the tallest bin that is NOT adjacent to the winner.
+    """``H.max()`` divided by the tallest bin OUTSIDE the winner's own hill.
 
     ``contrast`` (peak / median non-empty bin) answers "is this bin far above a
     TYPICAL bin?".  Over a +-3" window the median non-empty bin holds ONE pair,
@@ -165,13 +201,35 @@ def _peak_margin(H, i, j, pad=1):
     pooled peak beat the true zero peak by 1.7% and reported ``contrast 546,
     ok=True``, i.e. a coin flip presented as a confident tie.
 
-    The runner-up is taken OUTSIDE a ``pad``-bin neighbourhood of the winner so a
-    genuine peak spilling into the bins next to it does not look like a rival.
-    Returns ``inf`` when no non-adjacent bin holds anything.
+    The exclusion radius is ADAPTIVE — twice the peak's own half-max radius, at
+    least ``pad`` bins — because a fixed one-bin pad turns this number into a
+    measure of peak WIDTH rather than of degeneracy.  The bin width here is
+    ``max(bin_arcsec, window/150)``, i.e. 20 mas over a 3" window, so a peak
+    broadened by ordinary per-star scatter (VIRAC2's own precision is ~40 mas)
+    is several bins wide and its own shoulders sit outside a one-bin pad.
+    Measured on a synthetic 500 mas RIGID shift — one hill, no rival anywhere —
+    against a reference with that scatter, at 0.02" bins over a 3" window:
+
+        per-star scatter     5      10     20     30     40     50     70  mas
+        margin, pad=1      75.67   3.71   1.63   1.13   1.10   1.06   1.00
+        margin, adaptive  113.50  78.00  33.50  17.50  11.50   8.50  10.00
+
+    The pad=1 row is the tell: it falls monotonically with the scatter and
+    crosses any usable floor at ~25 mas, so a genuine gross offset would stop
+    being reported as measured for no reason but its own noise.  What it is
+    dividing by there is the same hill two bins away (at 40 mas: peak bin 23,
+    shoulder bin 21, and the shells run 20/21/21/14/10/7/5/3/2/1 out to r=10).
+    The adaptive row stays high because the divisor is then the background.
+    A near-degenerate LATTICE is unaffected — its rivals sit at a distinct lag
+    with background in between, far outside twice the half-max radius of a spot
+    — and still reads ~1.0.
+
+    Returns ``inf`` when nothing outside the hill holds anything.
     """
-    lo_i, hi_i = max(i - pad, 0), min(i + pad + 1, H.shape[0])
-    lo_j, hi_j = max(j - pad, 0), min(j + pad + 1, H.shape[1])
-    masked = H.copy()
+    pad = max(int(pad),
+              min(2 * _peak_half_width_bins(H, i, j), _MAX_PEAK_PAD_BINS))
+    lo_i, hi_i, lo_j, hi_j = _box(H.shape, i, j, pad)
+    masked = np.array(H, dtype=float)
     masked[lo_i:hi_i, lo_j:hi_j] = 0.0
     second = float(masked.max())
     return float(H.max() / second) if second > 0 else float("inf")
@@ -186,10 +244,13 @@ def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     median of the OCCUPIED bins, which in a sparse histogram is 1.  See the
     ``DEFAULT_MIN_CONTRAST`` comment for what that means for the floor.
 
-    ``peak_margin`` is the peak over its best NON-adjacent bin, which is the
-    quantity ``contrast`` cannot supply: a replica lattice puts a rival of
-    nearly equal height elsewhere in the plane while the median occupied bin
-    stays at 1, so contrast reads healthy and the arg-max is a coin flip.
+    ``peak_margin`` is the peak over the tallest bin OUTSIDE its own hill (twice
+    the half-max radius), which is the quantity ``contrast`` cannot supply: a
+    replica lattice puts a rival of nearly equal height elsewhere in the plane
+    while the median occupied bin stays at 1, so contrast reads healthy and the
+    arg-max is a coin flip.  The exclusion radius is adaptive rather than one
+    bin so that the number reads degeneracy and not peak WIDTH -- see
+    ``_peak_margin`` for the measured difference.
     """
     n = len(dra_arcsec)
     m = maxsep_arcsec
