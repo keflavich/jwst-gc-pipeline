@@ -38,7 +38,8 @@ from astropy.modeling.fitting import LevMarLSQFitter
 
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
-    MULTIOBS_PROPOSALS, merged_catalog_obs_token, vetted_obs_tokens,
+    MULTIOBS_PROPOSALS, merged_catalog_obs_token, merged_catalog_module_token,
+    vetted_obs_tokens,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
@@ -4835,12 +4836,13 @@ def merged_catalog_path(cut_bp, label, module, filt, proposal_id, field,
     it: these tokens decide which file each phase reads, and a reader spelling a
     name the writer never wrote finds nothing.
     """
-    _jtok = f'_j{proposal_id}' if str(proposal_id) in ('7213', '6778') else ''
-    _otok = merged_catalog_obs_token(proposal_id, field)
+    # One expression, from naming, so this reader and merge_individual_frames'
+    # output name cannot be spelled differently (issue #316).
+    _mtok = merged_catalog_module_token(proposal_id, field)
     _desat = '_unsatstar' if desat else ''
     _bgsub = ('_bgsub' if bgsub else '') + ('_resbgsub' if resbgsub else '')
     _blur = '_blur' if blur else ''
-    return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_otok}'
+    return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_mtok}'
             f'_indivexp_merged{_desat}{_bgsub}{_blur}_{label}_dao_basic.fits')
 
 

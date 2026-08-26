@@ -202,7 +202,7 @@ from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
     MIRI_FILTERS, MULTIOBS_PROPOSALS,
     frame_identity,
-    observation_field_token,
+    observation_field_token, perframe_obs_token,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
@@ -1040,14 +1040,13 @@ def obs_token(proposal_id, field):
     with the wildcard obsid and run without ``--field`` stops here rather than
     writing a literal ``_o*`` into every catalog name it produces.
     """
-    if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
-        return f'_o{observation_field_token(field)}'
-    # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
-    # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names
-    # collide and the second run overwrites the first.  Tag by proposal id.
-    if str(proposal_id) in ('7213', '6778'):
-        return f'_j{proposal_id}'
-    return ''
+    # The rule itself lives in naming.perframe_obs_token, so the merge's input
+    # glob predicts exactly what this writes rather than re-deriving it
+    # (issue #316).  ngc6334's two proposals (7213, 6778) share a target dir,
+    # filters, obs number AND (visit, vgroup, exp) tuples, so their per-frame
+    # catalog names collide and the second run overwrites the first; they are
+    # tagged by proposal id there.
+    return perframe_obs_token(proposal_id, field)
 
 
 def _obs_token_from_options(options):
