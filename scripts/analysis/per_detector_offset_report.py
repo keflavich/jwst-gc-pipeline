@@ -36,6 +36,34 @@ For each exposure entry in every ``checkpoint_m2_*.json``:
 The MEAN is the estimator, not the median: with n=4 detectors ``np.median``
 averages the middle two and discards the extremes, which is ~2x the variance of
 the mean and cannot respond to one detector being genuinely offset.
+
+THE ROLL DEGENERACY, AND WHY STEP 4 IS NOT SUFFICIENT ON ITS OWN
+----------------------------------------------------------------
+Step 4 is run on ON-SKY dRA/dDec.  A detector's placement error is fixed in the
+INSTRUMENT frame, so on sky it is rotated by the observation's roll -- and this
+archive's fields do not share a roll.  Measured from the ``PA_V3`` of one
+``_crf`` per band:
+
+    arches 88.2   sgrb2 88.7-90.0   gc2211_o049 88.1   brick 89.1 AND 275.5
+    sgrc 91.4     w51 105.0-247.1   wd2 140.8   m92 170.0   ngc6397 267.3
+    cloudef 272.2 gc2211_o046 272.7 gc2211_o050 279.6   wd1 284.8   m4 290.1
+
+Two clusters ~180 deg apart.  A term that is perfectly static in the instrument
+frame therefore MUST reverse sign on sky between a PA~89 field and a PA~275
+one, which is exactly the observation ("each changes sign between fields") that
+the report uses to conclude the term is not static.  Read on sky alone, the
+test cannot separate "not static" from "static, and you rotated the telescope".
+
+So the report runs the SAME test a second time on de-rotated deviations
+(``derotate``), and a third time with the rolls SHUFFLED between bands
+(``shuffle_rolls``) as the control that says whether any improvement is the
+rotation or is just axis mixing -- de-rotating by ~90 deg swaps the two axes,
+and averaging a noisy axis into a quiet one shrinks the scatter of both
+whatever the angle was.  A real instrument-frame term shows up in the de-rotated
+column and NOT in the shuffled one.  Measured on the archive as it stands
+(2026-08-25), it shows up in neither: the shuffled control reproduces the whole
+of the de-rotated scatter reduction, so the "not static" verdict survives the
+one objection the on-sky test could not answer.
 """
 import argparse
 import collections
@@ -105,6 +133,78 @@ def collect(root='/orange/adamginsburg/jwst'):
                     module=det[:4] + ('long' if det.endswith('long') else ''),
                     det=det, dra=float(exp['dra']), ddec=float(exp['ddec'])))
     return rows
+
+
+def roll_by_band(root='/orange/adamginsburg/jwst', per_dir=1):
+    """(field, filter) -> PA_V3 in degrees, read from that band's own frames.
+
+    ``PA_V3`` lives in the SCI header of a ``_crf``, not the primary one.  One
+    frame per band is enough: within a band the spread is 0.00-0.07 deg
+    everywhere it was checked.  Fields that hold two epochs at opposite rolls
+    (brick, cloudc, sickle, ngc6334, w51) get a DIFFERENT value per band, which
+    is the point -- pooling those two rolls into one field-level angle would
+    reintroduce the degeneracy this function exists to break.
+    """
+    from astropy.io import fits
+    out = {}
+    for d in sorted(glob.glob(f'{root}/*/*/pipeline')):
+        parts = d.split('/')
+        field, filt = parts[-3], parts[-2]
+        fns = sorted(glob.glob(os.path.join(d, 'jw*_crf.fits')))[:per_dir]
+        for fn in fns:
+            try:
+                pa = fits.getheader(fn, 1).get('PA_V3')
+            except (OSError, IndexError, KeyError):
+                continue
+            if pa is not None:
+                out[(field, filt)] = float(pa)
+                break
+    return out
+
+
+def derotate(rows, roll):
+    """Rotate each row's on-sky (dRA, dDec) into the instrument frame.
+
+    ``roll`` maps ``(field, filter) -> PA_V3`` (degrees); a band with no entry
+    is DROPPED rather than assigned an angle, because a wrong angle is a
+    rotation of a real vector into a wrong one and would be indistinguishable
+    from noise in the output.
+
+    Applied to ROWS, before ``deviations``: the rotation is linear and every
+    member of a module-group shares one PA, so rotating then subtracting the
+    group mean is the same operation as subtracting the group mean then
+    rotating.  Doing it here keeps ``deviations`` and ``analyse`` untouched, so
+    the on-sky and instrument-frame verdicts come out of the same estimator.
+    """
+    out = []
+    for r in rows:
+        pa = roll.get((r['field'], r['filt']))
+        if pa is None:
+            continue
+        th = math.radians(pa)
+        c, s = math.cos(th), math.sin(th)
+        q = dict(r)
+        q['dra'] = c * r['dra'] - s * r['ddec']
+        q['ddec'] = s * r['dra'] + c * r['ddec']
+        out.append(q)
+    return out
+
+
+def shuffle_rolls(roll, seed=0):
+    """The control: the same angles, dealt to the wrong bands.
+
+    De-rotating by ~90 deg exchanges the two axes, so it mixes a noisy axis
+    with a quiet one and shrinks the between-field scatter of both regardless
+    of whether any instrument-frame term exists.  Re-running the de-rotated
+    test with the angles permuted measures exactly that artifact: a reduction
+    the shuffled control reproduces is axis mixing and is not evidence.
+    """
+    import random
+    rng = random.Random(seed)
+    keys = sorted(roll)
+    vals = [roll[k] for k in keys]
+    rng.shuffle(vals)
+    return dict(zip(keys, vals))
 
 
 def deviations(rows, min_detectors=3):
@@ -206,7 +306,15 @@ def main():
     ap.add_argument('--out', default='reports/figures/per_detector_offsets.png')
     ap.add_argument('--exclude-field', action='append', default=[],
                     help='field to drop (e.g. a known-broken epoch)')
+    ap.add_argument('--skip-roll-frame', action='store_true',
+                    help='skip the instrument-frame repeat of the test '
+                         '(it opens one FITS header per band)')
+    ap.add_argument('--control-seed', type=int, action='append', default=None,
+                    help='seed(s) for the shuffled-roll control '
+                         '(default 1 2 3)')
     args = ap.parse_args()
+    if args.control_seed is None:
+        args.control_seed = [1, 2, 3]
 
     rows = collect(args.root)
     dev, ngroups = deviations(rows)
@@ -222,6 +330,40 @@ def main():
         print('\nNo detector shows a static offset: for every one, the '
               'between-field scatter exceeds the mean.\n'
               'Per-detector corrections would inject field-specific noise.')
+
+    if not args.skip_roll_frame:
+        roll = roll_by_band(args.root)
+        excl = tuple(args.exclude_field)
+        inst = analyse(deviations(derotate(rows, roll))[0], exclude_fields=excl)
+        ctrl = [analyse(deviations(derotate(rows, shuffle_rolls(roll, s)))[0],
+                        exclude_fields=excl) for s in args.control_seed]
+        print(f'\nROLL FRAME -- {len(roll)} (field, band) angles, '
+              f'{min(roll.values()):.1f} to {max(roll.values()):.1f} deg')
+        print('An instrument-frame term reverses sign on sky between the ~89 '
+              'and ~275 deg\nclusters, so the on-sky column above cannot '
+              'reject it.  De-rotating removes that.\nThe shuffled column is '
+              'the control: it de-rotates by the WRONG angle, so any\n'
+              'reduction it also produces is axis mixing rather than a '
+              'recovered term.')
+        print(f'\n{"det":9s} {"sd on sky":>10s} {"sd derot":>9s} '
+              f'{"sd shuffled":>12s}  verdict (de-rotated)')
+        for det in sorted(res):
+            if det not in inst:
+                continue
+            sh = [c[det]['between_field_sd'] for c in ctrl if det in c]
+            print(f'{det:9s} {res[det]["between_field_sd"]:10.3f} '
+                  f'{inst[det]["between_field_sd"]:9.3f} '
+                  f'{(float(np.mean(sh)) if sh else float("nan")):12.3f}  '
+                  f'{"STATIC" if inst[det]["static"] else "not static"}')
+        _sum = lambda t: sum(t[d]['between_field_sd'] for d in t)
+        print(f'\nsummed between-field sd:  on sky {_sum(res):.3f}   '
+              f'de-rotated {_sum(inst):.3f}   '
+              f'shuffled {np.mean([_sum(c) for c in ctrl]):.3f}')
+        if not any(r['static'] for r in inst.values()):
+            print('No detector is static in the INSTRUMENT frame either, so '
+                  'the on-sky verdict\nis not an artifact of the archive\'s '
+                  'two roll clusters.')
+
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     print('\nwrote', make_figure(res, args.out))
 
