@@ -72,9 +72,17 @@ def test_is_a_noop_where_every_saturated_pixel_is_lost():
 
 
 def test_falls_back_to_the_full_mask_when_no_pixel_carries_do_not_use():
-    """Synthetic frames and older products whose per-group DQ was not
-    propagated: restricting would return an EMPTY saturation mask and silently
-    turn every saturated core into ordinary data."""
+    """Without the fallback, a frame with SATURATED but no DO_NOT_USE anywhere
+    would get an EMPTY saturation mask and silently turn every saturated core
+    into ordinary data.
+
+    This is a SYNTHETIC-data guard and nothing more: of the 140 delivered bands
+    in the census, ZERO have no saturated pixel carrying DO_NOT_USE, so the
+    fallback never fires on real products.  The lowest band is sickle F1500W at
+    6,837 / 1,330,121 = 0.51%.  It is therefore not a safety net for the bands
+    where the restriction cuts the most -- arches F323N has 14,413 such pixels,
+    so the fallback does not trigger and the mask shrinks by 92%.
+    """
     dq = np.zeros((20, 20), dtype=np.uint32)
     dq[8:12, 8:12] |= SAT
     mask = truly_lost_saturated_mask(dq)

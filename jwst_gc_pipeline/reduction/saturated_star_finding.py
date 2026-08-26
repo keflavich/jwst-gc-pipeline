@@ -4446,8 +4446,10 @@ def truly_lost_saturated_mask(dq):
     NaN in ``SCI``.
 
     Falls back to the full ``SATURATED`` mask when NO saturated pixel carries
-    ``DO_NOT_USE`` (synthetic frames / older products without per-group DQ
-    propagated).  Gate off with ``SATSTAR_REQUIRE_DO_NOT_USE=0``.  This is the
+    ``DO_NOT_USE``.  That fallback is a SYNTHETIC-data guard: it fires on none
+    of the 140 delivered bands in the census (lowest is sickle F1500W at
+    0.51%), so it is not a safety net for real products.  Gate off with
+    ``SATSTAR_REQUIRE_DO_NOT_USE=0``.  This is the
     daophot-path twin of the ``find_saturated_stars`` finder restriction, so
     both channels agree on what "saturated" means.
 
