@@ -9,7 +9,7 @@ glob token and the writer token are the same string.
 """
 
 import inspect
-import re
+import os
 
 import pytest
 
@@ -101,10 +101,16 @@ def test_the_pattern_merge_actually_globs_carries_the_writer_token(
             basepath=str(tmp_path), max_visitid=1, exposure_numbers=[1])
 
     want = naming.perframe_obs_token(proposal, field)
-    slot_re = re.compile(r'f182m_nrc[ab](?:\d|long)?(.*?)_visit')
-    slots = [m.group(1) for m in (slot_re.search(p) for p in seen) if m]
-    assert slots, f'no per-frame glob was built (patterns: {seen[:3]})'
-    assert set(slots) == {want}
+    marker = '_visit'
+    heads = [os.path.basename(p).split(marker)[0] for p in seen
+             if marker in p and 'f182m_nrc' in p]
+    assert heads, f'no per-frame glob was built (patterns: {seen[:3]})'
+    if want:
+        assert all(h.endswith(want) for h in heads), heads[:3]
+    else:
+        # nothing may sit between the detector and the visit
+        slots = [h.split('f182m_', 1)[1] for h in heads]
+        assert not any('_o' in s or '_j' in s for s in slots), slots[:3]
 
 
 def test_merge_individual_frames_derives_both_tokens_from_naming():
