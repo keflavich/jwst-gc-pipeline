@@ -32,6 +32,15 @@ PROPOSAL=${PROPOSAL:-4147}
 FIELD=${FIELD:-012}
 TARGET=${TARGET:-sgrc}
 MODULES=${MODULES:-nrcb}
+# MODULES is comma-valued for any multi-module field ("nrca,nrcb,merged"), and
+# sbatch --export is ITSELF comma-separated: inlining it as MODULES=$MODULES in
+# the --export list makes sbatch read only "nrca" as the value and treat "nrcb"
+# and "merged" as names of variables to inherit.  The job then runs on ONE
+# module and reports success, so half the field is never merged -- w51 and
+# brick2221 both lost their m12 that way on 2026-08-24 (#532), and m3 only
+# caught it because it happens to hard-crash on the missing products.  Export it
+# and let --export=ALL carry it, exactly as EXTRA_ARGS below.
+export MODULES
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
@@ -65,7 +74,7 @@ read -r -a FILT_ARR <<< "$FILTERS"
 NF=${#FILT_ARR[@]}
 if [ "$NF" -lt 1 ]; then echo "No filters given (FILTERS='$FILTERS')."; exit 1; fi
 
-COMMON_EXPORT="ALL,PROPOSAL=$PROPOSAL,FIELD=$FIELD,TARGET=$TARGET,MODULES=$MODULES"
+COMMON_EXPORT="ALL,PROPOSAL=$PROPOSAL,FIELD=$FIELD,TARGET=$TARGET"
 COMMON_EXPORT="$COMMON_EXPORT,EACH_SUFFIX=$EACH_SUFFIX,MAX_GROUP_SIZE=$MAX_GROUP_SIZE"
 COMMON_EXPORT="$COMMON_EXPORT,FILTERS=$FILTERS"
 [ -n "$PIPE_ROOT" ] && COMMON_EXPORT="$COMMON_EXPORT,PIPE_ROOT=$PIPE_ROOT"
