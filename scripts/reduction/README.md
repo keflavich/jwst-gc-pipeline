@@ -39,6 +39,21 @@ declaration and does not report the other module as missing.
 Add `--instrument miri` / `--instrument niriss` (and for NIRISS,
 `--target <target>/niriss`, which is where its data lives) for those.
 
+### A NEW field: seed its PSF grid cache first
+
+```
+python scripts/reduction/seed_psf_cache.py --field gc-treasury \
+    --filters F212N F480M F770W --apply
+```
+
+Cataloging always passes `psf_cache_dir={field_basepath}/psfs`, so a new field
+starts with an empty cache and the first run per filter re-does a MAST login
+plus a Poppy build the code prices at ~17-20 min and ~300 GB peak per detector
+(~7-8 h for the merged/all-detectors path). The grids are set by the physics —
+instrument, detector, filter, oversampling — so other fields already have them;
+this links them in. Dry run unless `--apply`. Reads only the donors, writes only
+into the destination `psfs/`, and never overwrites (#420).
+
 ```
 sbatch --array=0-7 scripts/reduction/submit_reduction.sbatch          # Sgr C, all 8 filters (default)
 ```
