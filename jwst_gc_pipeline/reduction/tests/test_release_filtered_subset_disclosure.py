@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from jwst_gc_pipeline.photometry.merge_catalogs import _qualcuts_oksep_suffix
+
 _SPEC = importlib.util.spec_from_file_location(
     "stage_release",
     Path(__file__).resolve().parents[3] / "scripts" / "release" / "stage_release.py")
@@ -45,12 +47,23 @@ def _full_items(field_cfg, field="w51"):
             if it.get("kind") in ("catalog_full", "catalog_qualcut")]
 
 
+def _qualcut_name(field, iteration=None):
+    """The quality-cut filename a given field really writes.
+
+    The oksep suffix carries each field's own proposal, so the fixture asks
+    the registry for it rather than spelling one program's token -- the same
+    rule the readers follow (`jwst_gc_pipeline/tests/test_no_hardcoded_qualcuts_token.py`).
+    """
+    iter_token = f"_{iteration}" if iteration else ""
+    return f"{CAT_BASE}{iter_token}{_qualcuts_oksep_suffix(field)}.fits"
+
+
 def test_m8_combined_table_records_the_missing_subset(tmp_path):
     """w51's shape: m7 with its cut, m8 without.  m8 ships, and the record
     names the iteration whose cut exists but is not shipped."""
     cfg = _catdir(tmp_path, [
         f"{CAT_BASE}_resbgsub_m7.fits",
-        f"{CAT_BASE}_resbgsub_m7_qualcuts_oksep6151.fits",
+        _qualcut_name("w51", "resbgsub_m7"),
         f"{CAT_BASE}_resbgsub_m8.fits",
     ])
     items = _full_items(cfg)
@@ -69,7 +82,7 @@ def test_a_field_that_ships_its_cut_still_reads_shipped(tmp_path):
     that does ship the filtered subset."""
     cfg = _catdir(tmp_path, [
         f"{CAT_BASE}_resbgsub_m7.fits",
-        f"{CAT_BASE}_resbgsub_m7_qualcuts_oksep1905.fits",
+        _qualcut_name("wd1", "resbgsub_m7"),
     ])
     items = _full_items(cfg, field="wd1")
     assert {it["kind"] for it in items} == {"catalog_full", "catalog_qualcut"}
@@ -79,9 +92,13 @@ def test_a_field_that_ships_its_cut_still_reads_shipped(tmp_path):
 
 def test_a_field_with_no_cut_anywhere_says_so(tmp_path):
     """arches's shape: its only quality-cut file carries no iteration token, so
-    it matches no iteration and there is nothing to point at."""
+    it matches no iteration and there is nothing to point at.
+
+    Which oksep token that file carries is beside the point -- `QUALCUTS_RE`
+    matches any field's -- so the fixture takes the registry's.
+    """
     cfg = _catdir(tmp_path, [f"{CAT_BASE}_resbgsub_m7.fits",
-                             f"{CAT_BASE}_qualcuts_oksep2221.fits"])
+                             _qualcut_name("arches")])
     items = _full_items(cfg, field="arches")
     assert [it["kind"] for it in items] == ["catalog_full"]
     assert items[0]["filtered_subset_at_iteration"] is None
