@@ -45,9 +45,19 @@ def _md():
 # ---------------------------------------------------------------------------
 
 def test_contrast_denominator_is_the_median_of_the_OCCUPIED_bins():
-    """The code's denominator, measured rather than read."""
+    """The code's denominator, measured rather than read.
+
+    The docstring is cut away first: it carries the expression too, so reading
+    the whole source would let a moved denominator pass on the strength of the
+    prose that describes it -- the failure mode this module exists to catch.
+    (Cut by the triple quotes, not by ``__doc__``: 3.13 dedents ``__doc__``, so
+    subtracting it from the indented source removes nothing.)
+    """
     src = inspect.getsource(ao._hist_peak)
-    assert "np.median(H[H > 0])" in src, (
+    _, q, rest = src.partition('"""')
+    code = rest.partition('"""')[2]
+    assert q and code.strip(), "could not separate _hist_peak's docstring"
+    assert "np.median(H[H > 0])" in code, (
         "the contrast denominator moved; the module docstring describes it")
 
 
