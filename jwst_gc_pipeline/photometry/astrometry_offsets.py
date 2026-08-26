@@ -555,12 +555,31 @@ def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
     per-tile histogram over a 40-250-star tile produces a noise peak that
     clears any contrast floor and lands anywhere in the window.  The release
     gate's magnitude limit is now ``interframe_overlap.overlap_offset_grid(...,
-    tol_mas=...)``, on matched pairs.  The one remaining production caller of
-    THIS parameter's owner -- the monitoring scan -- deliberately leaves it
-    ``None`` and says so in a comment, so with ``max_off_mas=None``
-    ``off_ok`` is unconditionally True and ``clean`` is a statement about
-    contrast alone.  Whether the monitoring scan should switch it on is the
-    open half of #392.
+    tol_mas=...)``, on matched pairs.
+
+    The production callers of THIS function are
+    ``visit_consensus.measure_reference_tie`` (every m2-m6 checkpoint),
+    ``bulk_astrometry_update`` and ``diagnostics.astrometry_figs``; none passes
+    ``max_off_mas``.  ``monitoring/`` names this function in comments and prose
+    only -- it reads the per-tile map out of a checkpoint record and applies
+    its own ``LOCAL_CELL_TOL_MAS`` test, so it is not the caller and cannot
+    switch the parameter on.  With ``max_off_mas=None`` ``off_ok`` is
+    unconditionally True and ``clean`` is a statement about contrast alone --
+    and ``measure_reference_tie`` reads exactly that ``clean`` as its
+    ``per_tile_ok``, which is one of the four terms of ``apply_ok``, the
+    verdict that decides whether a measured reference tie may correct a
+    field's offsets table.  So the open half of #392 is a checkpoint question,
+    not a monitoring one, and it is not free: of the 312 ``clean`` per-tile
+    maps in the checkpoint records on 2026-08-26, 113 carry a
+    ``worst_off_mas`` above 30 mas, so a 30 mas ceiling would turn each of
+    those ``apply_ok`` false.  Read that census as a bound on what ``clean``
+    does NOT say, and not as 113 misregistered fields: in 102 of the 113 the
+    worst CELL was measured at a SWEPT window (> 3"), the per-tile
+    noise/geometry regime of issue #158, while the same records' bulk ties
+    have a median of 10.9 mas.  A ceiling here therefore has to say what to do
+    with a swept cell as well as what number to use.  (The counts move as the
+    tree moves -- they read 434 maps / 312 ``clean`` / 120 over 30 mas one day
+    earlier; recount before quoting them.)
 
     Use a FINE grid for QC (``nx=ny`` >= ~16 so a thin overlap strip is not
     diluted inside a coarse tile); a 4x4 grid hid the brick-1182 seam.

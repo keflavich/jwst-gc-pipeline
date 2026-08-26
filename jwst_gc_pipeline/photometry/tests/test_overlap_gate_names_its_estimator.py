@@ -103,3 +103,69 @@ def test_max_off_mas_is_still_documented_as_unused_in_production():
     from jwst_gc_pipeline.photometry import astrometry_offsets
     doc = astrometry_offsets.measure_offset_grid.__doc__
     assert "No production caller passes it" in doc
+
+
+# ---------------------------------------------------------------------------
+# The docstring must name the caller that actually calls it (issue #392)
+# ---------------------------------------------------------------------------
+
+MONITORING = os.path.join(REPO, "jwst_gc_pipeline", "monitoring")
+VISIT_CONSENSUS = os.path.join(REPO, "jwst_gc_pipeline", "photometry",
+                               "visit_consensus.py")
+
+
+def test_monitoring_does_not_call_measure_offset_grid():
+    """`monitoring/` mentions `measure_offset_grid` in comments and prose; it
+    reads the per-tile map out of a checkpoint record instead.  If that ever
+    changes, the docstring below has to change with it."""
+    for name in sorted(os.listdir(MONITORING)):
+        if not name.endswith(".py"):
+            continue
+        assert "measure_offset_grid" not in _called_names(
+            os.path.join(MONITORING, name)), (
+                f"monitoring/{name} now CALLS measure_offset_grid; "
+                "measure_offset_grid's docstring says monitoring is not a "
+                "caller (issue #392)")
+
+
+def test_visit_consensus_is_the_checkpoint_caller():
+    """`measure_reference_tie` is the m2-m6 caller, and its `clean` is
+    `per_tile_ok`, a term of `apply_ok`."""
+    assert "measure_offset_grid" in _called_names(VISIT_CONSENSUS)
+    src = open(VISIT_CONSENSUS).read()
+    assert re.search(r"per_tile_ok\s*=\s*bool\(grid\.get\(\"clean\"\)\)", src), (
+        "measure_offset_grid's `clean` is no longer read as `per_tile_ok`; "
+        "its docstring says it is (issue #392)")
+    assert re.search(r"apply_ok\s*=.*per_tile_ok", src, re.S)
+
+
+def test_docstring_names_the_real_caller_not_the_monitoring_scan():
+    from jwst_gc_pipeline.photometry import astrometry_offsets
+    doc = astrometry_offsets.measure_offset_grid.__doc__
+    assert "visit_consensus.measure_reference_tie" in doc, (
+        "the docstring must name the caller that calls it (issue #392)")
+    assert "apply_ok" in doc, (
+        "the consequence of leaving max_off_mas None is that `clean` feeds "
+        "`apply_ok`; the docstring must say so")
+    assert not re.search(r"remaining production caller[^.]*monitoring", doc), (
+        "the docstring attributed the call to `monitoring/`, which contains "
+        "the string only in comments and prose (issue #392)")
+
+
+def test_docstring_bounds_the_census_it_quotes():
+    """The census counts `clean` maps whose worst CELL is large.  Most of those
+    cells were measured at a swept window, which is the per-tile noise/geometry
+    regime of issue #158 -- so the count bounds what `clean` does not say and
+    does not measure how many fields are misregistered.  Quoting the count
+    without that qualification invites the stronger reading."""
+    from jwst_gc_pipeline.photometry import astrometry_offsets
+    doc = astrometry_offsets.measure_offset_grid.__doc__
+    marker = "above 30 mas"
+    assert marker in doc, "the #392 census is gone from the docstring"
+    tail = doc.split(marker, 1)[1]
+    assert re.search(r"\bSWEPT\b", tail), (
+        "the docstring quotes the per-tile census without saying that most of "
+        "those worst cells are SWEPT per-tile peaks (issue #158), which reads "
+        "as a claim that that many fields are misregistered")
+    assert "#158" in tail, (
+        "name the issue that explains a swept per-tile peak (#158)")
