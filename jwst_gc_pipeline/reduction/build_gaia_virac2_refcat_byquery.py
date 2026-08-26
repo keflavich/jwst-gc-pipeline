@@ -23,6 +23,38 @@ GAIA_EPOCH = 2016.0    # Gaia DR3 reference epoch
 VIRAC2_EPOCH = 2014.0  # VIRAC2 reference epoch (Smith+2025 II/387: fixed at 2014.0)
 
 
+class ThinReferenceCoverageError(RuntimeError):
+    """The queried reference coverage is far below anything the sky can explain.
+
+    This is a BROKEN-QUERY guard, not a thin-sky guard, and the distinction is
+    the reason it is expressed as a DENSITY rather than a row count.  Measured
+    2026-08-23 over all 139 program-10678 tile centres with a VizieR cone at
+    0.02 deg against II/387 and I/355:
+
+        thinnest tile   GC_130 (l=0.641, b=+0.006)   2094 VIRAC2 per cone
+        median                                       4356
+        densest         GC_49  (l=359.874, b=-0.030) 6184
+        brick's refcat centre, same cone             2908  (its same-star tie reads ~0.6 mas)
+
+    The whole survey spans a factor of 3.0 and the thinnest tile carries 0.72x
+    the density of the field whose tie is known good, so no floor set for thin
+    SKY would fire on this program -- VVV's bulge coverage is uniform over it,
+    and the gradient is stellar density falling away from Sgr A*.  What a floor
+    can still catch is a query that went wrong: a truncated VizieR response, a
+    wrong --radius, a cone placed off the field.  Those return orders of
+    magnitude less, so the floor sits at roughly HALF the thinnest real tile and
+    two orders above a broken query, and as a density it applies unchanged at
+    any radius (an absolute row count tuned for the CMZ would trip on legitimate
+    non-GC fields -- ngc6334's refcats are ~1.4 MB against sgrb2's 8.4 MB for
+    comparable radii).  Issue #415 gap 4.
+    """
+
+
+# Usable reference sources per square degree, below which the query is treated
+# as broken.  1000 per 0.02 deg cone = 1000 / (pi * 0.02**2) ~ 8e5 deg^-2.
+MIN_REF_DENSITY_PER_SQDEG = 8.0e5
+
+
 def query_virac2(ra, dec, radius):
     from astroquery.vizier import Vizier
     Vizier.ROW_LIMIT = -1
@@ -74,6 +106,31 @@ def query_gaia(ra, dec, radius, retries=6):
     return _query_gaia_vizier(ra, dec, radius)
 
 
+def check_reference_coverage(n_usable, radius_deg, context="",
+                             min_density=MIN_REF_DENSITY_PER_SQDEG):
+    """Refuse to write a refcat whose usable source density is below the floor.
+
+    ``n_usable`` counts the sources that survive the finite-position mask, i.e.
+    the rows a tie can actually be measured against, not the rows the query
+    returned.  Returns the measured density so a caller can record it.
+    """
+    area = np.pi * float(radius_deg) ** 2
+    if area <= 0:
+        raise ValueError(f"refcat coverage check: non-positive radius {radius_deg}")
+    density = float(n_usable) / area
+    if density < min_density:
+        raise ThinReferenceCoverageError(
+            f"reference coverage {density:.3g} usable sources/deg^2 "
+            f"({n_usable} within {radius_deg} deg) is below the "
+            f"{min_density:.3g} deg^-2 floor{' for ' + context if context else ''}.  "
+            f"Every program-10678 tile measured 1.7e6-4.9e6 deg^-2 and the brick's "
+            f"working refcat 2.3e6, so this is a BROKEN QUERY -- a truncated VizieR "
+            f"response, the wrong --radius, or a cone off the field -- rather than "
+            f"thin sky.  Check the query before building; --min-ref-density 0 "
+            f"records a deliberate override.")
+    return density
+
+
 def refcat_filename(epoch_tag, obs_token=None):
     """``gaia_virac2_refcat_epoch<tag>[_o<obs>].fits``.
 
@@ -107,6 +164,14 @@ def main():
                          'observation, which for tiles arcminutes apart is the '
                          'wrong sky (gc2211 o023 took a -9.28" correction that '
                          'way).')
+    ap.add_argument('--min-ref-density', type=float,
+                    default=MIN_REF_DENSITY_PER_SQDEG, metavar='PER_SQDEG',
+                    help='refuse to build below this usable-source density '
+                         '(deg^-2).  A BROKEN-QUERY guard: every program-10678 '
+                         'tile measures 1.7e6-4.9e6 and the brick refcat 2.3e6, '
+                         'so the default sits ~2x below the thinnest real sky '
+                         'and two orders above a truncated query.  0 disables '
+                         'it, and setting it is the record of that decision.')
     args = ap.parse_args()
     tag = args.out_epoch_tag or f'{args.epoch:.2f}'
     out = f'{args.base}/catalogs/{refcat_filename(tag, args.obs_token)}'
@@ -123,6 +188,16 @@ def main():
     vfin = np.isfinite(vra) & np.isfinite(vdec)
     virac_sc = SkyCoord(vra[vfin] * u.deg, vdec[vfin] * u.deg)
     vJ = farr(v['Jmag'])[vfin]
+
+    # Coverage floor BEFORE anything is written (issue #415 gap 4).  Counts the
+    # sources that survive the finite-position masks -- the rows a tie can be
+    # measured against -- not the rows the query returned.
+    density = check_reference_coverage(
+        int(gfin.sum()) + int(vfin.sum()), args.radius,
+        context=f"{args.base} epoch {args.epoch} at ({args.ra}, {args.dec})",
+        min_density=args.min_ref_density)
+    print(f"reference coverage: {density:.3g} usable sources/deg^2 "
+          f"(floor {args.min_ref_density:.3g})")
 
     idx, sep, _ = virac_sc.match_to_catalog_sky(gaia_sc)
     fill = sep > 0.3 * u.arcsec
@@ -147,6 +222,7 @@ def main():
     ref.meta['EPOCH'] = args.epoch
     ref.meta['V2EPOCH'] = VIRAC2_EPOCH
     ref.meta['GAEPOCH'] = GAIA_EPOCH
+    ref.meta['REFDENS'] = density
     ref.meta['NOTE'] = (f'GC reference-frame policy: Gaia DR3 abs frame + VIRAC2 NIR fill, per-star '
                         f'PM-propagated (VIRAC2 from {VIRAC2_EPOCH}, Gaia from {GAIA_EPOCH}) to {args.epoch}.')
     ref.write(out, overwrite=True)
