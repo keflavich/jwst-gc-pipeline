@@ -896,6 +896,30 @@ FRAME_REFCAT = {
 # why it belongs here and NOT in FRAME_REFCAT.
 OVERLAP_ARBITER_REFCAT = {
     "w51": "/orange/adamginsburg/jwst/w51/catalogs/gaia_refcat.fits",
+    # sgrb2: its two MIRI pointings (o002 and o998) overlap on a strip that
+    # produces ZERO mutual-coverage tiles, so the gate measured the pair only
+    # with the pooled frame-vs-frame histogram, declined to fail on that alone,
+    # and filed it `could_not_verify` -- exit 2, "we do not know", on a pair
+    # four independent measurements agree is misregistered (issue #384).  This
+    # is the arbiter it was waiting for, and it settles it: F770W 33 mas (+-7)
+    # over 87 common stars, F1280W 37 mas (+-11) over 30, both above the 30 mas
+    # tolerance, both now exit 1 -- a MEASURED refusal rather than an unknown.
+    #
+    # The list is the file fields.yaml already registers for 5365/001, at epoch
+    # 2024.68: 173,909 rows, with 4,517 inside o002's footprint and 4,650
+    # inside o998's.  It is DENSE, so it would serve FRAME_REFCAT too -- it is
+    # here and not there deliberately.  FRAME_REFCAT feeds the blocking
+    # absolute-frame check on the SHIPPED CATALOGUES, and switching that on for
+    # a field is a measurement someone has to make first; this registry feeds a
+    # tie-break between two exposures and needs no such warrant.
+    #
+    # Epoch: o002 is 2024-09-15 (nine days from the catalogue) and o998 is
+    # 2025-09-02 (about a year).  GC bulk proper motion is of order 6 mas/yr, so
+    # the epoch gap can bias o998's side of the tie-break by a few mas -- well
+    # inside the 30 mas tolerance and far below the 33-37 mas it measures.  A
+    # per-observation propagated catalogue would remove even that.
+    "sgrb2": "/orange/adamginsburg/jwst/sgrb2/catalogs/"
+             "gaia_virac2_refcat_epoch2024.68.fits",
 }
 
 
