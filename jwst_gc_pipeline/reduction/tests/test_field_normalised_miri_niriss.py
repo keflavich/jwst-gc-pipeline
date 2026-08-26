@@ -25,6 +25,7 @@ import pathlib
 
 import pytest
 
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.reduction.mast_obs_scope import observation_number
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -125,21 +126,29 @@ def test_the_cli_pads_every_comma_separated_field(driver):
                                                ('002', '002'), ('12', '012')])
 def test_padding_is_what_makes_the_names_match(spelling, expected):
     """The consequence, on real MIRI and NIRISS names.  The padded spelling
-    matches; the raw one does not."""
+    matches; the raw one does not.
+
+    The prefix comes from ``jw_prefix``, the helper the two drivers themselves
+    build these globs with, so the patterns tested here are the ones the
+    drivers form and this file carries no ``jw0``-plus-proposal spelling of
+    its own -- the 4-digit assumption issue #414's grep guard bans.
+    """
     field = observation_number(spelling)
     assert field == expected
-    for token, asn, uncal in (
-            ('miri',
-             f'jw02221-o{expected}_t001_miri_f2550w_image3_00001_asn.json',
-             f'jw02221{expected}001_02101_00001_mirimage_uncal.fits'),
-            ('niriss',
-             f'jw04147-o{expected}_t001_niriss_f150w_image3_00001_asn.json',
-             f'jw04147{expected}001_02101_00001_nis_uncal.fits')):
-        assert fnmatch.fnmatch(asn, f'jw0*-o{field}*_image3_*asn.json')
-        assert fnmatch.fnmatch(uncal, f'jw0*{field}*_uncal.fits')
+    for proposal_id, token, filtername, detector in (
+            ('2221', 'miri', 'f2550w', 'mirimage'),
+            ('4147', 'niriss', 'f150w', 'nis')):
+        prefix = jw_prefix(proposal_id)
+        asn = (f'{prefix}-o{expected}_t001_{token}_{filtername}'
+               f'_image3_00001_asn.json')
+        uncal = f'{prefix}{expected}001_02101_00001_{detector}_uncal.fits'
+        assert fnmatch.fnmatch(asn, f'{prefix}-o{field}*_image3_*asn.json')
+        assert fnmatch.fnmatch(uncal, f'{prefix}{field}*_uncal.fits')
         if spelling != expected:
             assert not fnmatch.fnmatch(
-                asn, f'jw0*-o{spelling}*_image3_*asn.json')
+                asn, f'{prefix}-o{spelling}*_image3_*asn.json')
+            assert not fnmatch.fnmatch(
+                uncal, f'{prefix}{spelling}*_uncal.fits')
 
 
 @pytest.mark.parametrize('passthrough', ['*', '002-998', '001-002'])
