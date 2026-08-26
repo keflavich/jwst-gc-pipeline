@@ -269,6 +269,30 @@ active `main` working tree (it is the live reduction environment).
   monolith.
 - No bare `try/except`; catch specific exceptions only.
 
+## GitHub comments (standing rule)
+
+Every GitHub comment, review, issue body and issue edit posted by an agent MUST
+be signed with the session that wrote it:
+
+```
+Written by claude <sessionid>
+```
+
+`<sessionid>` is the Claude Code session id — the value that already appears in
+the `Claude-Session:` commit trailer (e.g. `session_012qB97Yac6eoJiZr8Aq2Uww`).
+
+Put it at the END of the body, beside the `🤖 Generated with [Claude Code]`
+footer rather than in place of it: the footer names the tool, the signature
+names the run. A reader who finds a measurement in a thread can then trace it
+back to the session that produced it, and agent-authored comments stay
+distinguishable from the maintainer's own.
+
+This applies to the sibling repos of this campaign (`JWST-GC/data-qa`,
+`JWST-GC/pipeline-runners`) as well. It also applies to any SUBAGENT told to
+post: the signature line has to be written into the subagent's instructions, or
+it will not appear — a sweep that posts a hundred comments carries the rule only
+if its prompt does.
+
 ## SLURM job naming (standing rule)
 
 Every submitted job name MUST identify **target + program** (+ **obsid** whenever
