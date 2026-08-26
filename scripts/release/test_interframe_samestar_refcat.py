@@ -375,3 +375,54 @@ def test_the_precision_requirement_is_the_only_thing_holding_the_noisy_pair(monk
     v = ck._samestar_pair_footprint(a, b, ref, _ZERO_TIE)
     assert v["clean"] and v["measurable"], v
     assert 3.0 * v["sem_mas"] > ck.TOL_MAS, v
+
+
+# --- issue #411: a gross global tie must beat its RUNNER-UP, not just a typical bin
+def _gross(margin, off_mas=378.0):
+    return dict(dra=off_mas, ddec=0.0, off=off_mas, ok=True, swept=False,
+                contrast=546.0, peak_margin=margin, npairs=50000, n_peak=546,
+                window_arcsec=3.0)
+
+
+def test_a_gross_tie_with_no_margin_is_could_not_verify(monkeypatch):
+    """w51 F140M: the pooled tie read 378 mas at contrast 546 with ``ok=True``
+    while all 64 of that filter's frames sit within 24 mas of the same catalogue.
+    The winning bin beat the true zero bin by 1.7%, so the arg-max was a coin
+    flip.  ``contrast`` measures the peak against a TYPICAL bin (median non-empty
+    bin = 1 pair over a 3" window) and cannot see that; the verdict must be
+    could-not-verify rather than a block."""
+    ra, dec = _field(seed=51)
+    a = _sc(*_noisy(ra, dec, 51))
+    ref = _sc(ra, dec)
+    monkeypatch.setattr(ck, "measure_offset", lambda *args, **kw: _gross(1.02))
+    v = ck._samestar_ref_grid(a, ref, max_off_mas=80.0)
+    assert not v["clean"], v
+    assert not v["measurable"], v          # NOT a measured absolute-frame offset
+    assert "runner-up" in v["reason"], v["reason"]
+
+
+def test_a_gross_tie_that_beats_its_runner_up_still_blocks(monkeypatch):
+    """The regression direction: a real gross offset has one spot and no rival, so
+    it still comes back measurable=True and still fails the field."""
+    ra, dec = _field(seed=53)
+    a = _sc(*_noisy(ra, dec, 53))
+    ref = _sc(ra, dec)
+    monkeypatch.setattr(ck, "measure_offset",
+                        lambda *args, **kw: _gross(float("inf"), off_mas=20400.0))
+    v = ck._samestar_ref_grid(a, ref, max_off_mas=80.0)
+    assert v["measurable"] and not v["clean"], v
+    assert "global tie" in v["reason"], v["reason"]
+
+
+def test_a_gross_tie_from_a_record_with_no_margin_still_blocks(monkeypatch):
+    """Fail-closed on the missing key: a result dict from an older writer carries
+    no ``peak_margin``, and the absence of the diagnostic must not turn a gross
+    reading into could-not-verify."""
+    ra, dec = _field(seed=55)
+    a = _sc(*_noisy(ra, dec, 55))
+    ref = _sc(ra, dec)
+    stale = _gross(1.02)
+    del stale["peak_margin"]
+    monkeypatch.setattr(ck, "measure_offset", lambda *args, **kw: stale)
+    v = ck._samestar_ref_grid(a, ref, max_off_mas=80.0)
+    assert v["measurable"] and not v["clean"], v

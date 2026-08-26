@@ -153,20 +153,50 @@ class NoCoherentTieError(RuntimeError):
     source lists have no coherent astrometric tie (broken/untied WCS)."""
 
 
+def _peak_margin(H, i, j, pad=1):
+    """``H.max()`` divided by the tallest bin that is NOT adjacent to the winner.
+
+    ``contrast`` (peak / median non-empty bin) answers "is this bin far above a
+    TYPICAL bin?".  Over a +-3" window the median non-empty bin holds ONE pair,
+    so any spot with a few hundred pairs reads a contrast in the hundreds no
+    matter how many equally tall spots sit beside it.  The question a gate needs
+    answered is "is this bin far above the RUNNER-UP?", and on a near-degenerate
+    histogram those have opposite answers: measured on w51 F140M (issue #411) the
+    pooled peak beat the true zero peak by 1.7% and reported ``contrast 546,
+    ok=True``, i.e. a coin flip presented as a confident tie.
+
+    The runner-up is taken OUTSIDE a ``pad``-bin neighbourhood of the winner so a
+    genuine peak spilling into the bins next to it does not look like a rival.
+    Returns ``inf`` when no non-adjacent bin holds anything.
+    """
+    lo_i, hi_i = max(i - pad, 0), min(i + pad + 1, H.shape[0])
+    lo_j, hi_j = max(j - pad, 0), min(j + pad + 1, H.shape[1])
+    masked = H.copy()
+    masked[lo_i:hi_i, lo_j:hi_j] = 0.0
+    second = float(masked.max())
+    return float(H.max() / second) if second > 0 else float("inf")
+
+
 def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     """2-D histogram peak of a cloud of pair offsets.  Returns
     (dra_mas, ddec_mas, off_mas, npairs, contrast, dra_err_mas, ddec_err_mas,
-    n_peak).
+    n_peak, peak_margin).
 
     ``contrast`` is ``H.max() / np.median(H[H > 0])`` -- the peak bin over the
     median of the OCCUPIED bins, which in a sparse histogram is 1.  See the
     ``DEFAULT_MIN_CONTRAST`` comment for what that means for the floor.
+
+    ``peak_margin`` is the peak over its best NON-adjacent bin, which is the
+    quantity ``contrast`` cannot supply: a replica lattice puts a rival of
+    nearly equal height elsewhere in the plane while the median occupied bin
+    stays at 1, so contrast reads healthy and the arg-max is a coin flip.
     """
     n = len(dra_arcsec)
     m = maxsep_arcsec
     bins = np.arange(-m, m + bin_arcsec, bin_arcsec)
     H, xe, ye = np.histogram2d(dra_arcsec, ddec_arcsec, bins=[bins, bins])
     i, j = np.unravel_index(H.argmax(), H.shape)
+    margin = _peak_margin(H, i, j)
     bg = float(np.median(H[H > 0])) if (H > 0).any() else 0.0
     dra0 = (xe[i] + xe[i + 1]) / 2.0
     ddec0 = (ye[j] + ye[j + 1]) / 2.0
@@ -184,7 +214,7 @@ def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
         ddec_err = float(np.median(np.abs(ddec_arcsec[near] - ddec0)) * mad_scale * 1000.0)
     contrast = float(H.max() / bg) if bg else float("inf")
     return (dra0 * 1000.0, ddec0 * 1000.0, float(np.hypot(dra0, ddec0) * 1000.0),
-            int(n), contrast, dra_err, ddec_err, n_peak)
+            int(n), contrast, dra_err, ddec_err, n_peak, margin)
 
 
 # Windows (arcsec) the sweep escalates through when a narrow window shows no
@@ -286,6 +316,7 @@ def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
         probes.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
                            off=res["off"], off_mas=float(res["off"]),
                            contrast=res["contrast"],
+                           peak_margin=res["peak_margin"],
                            npairs=res["npairs"], sep_mas=sep, tol_mas=tol,
                            agrees=bool(sep <= tol)))
     measured = [p for p in probes if p.get("dra") is not None]
@@ -331,10 +362,12 @@ def _measure_at_window_tree(a, ref, maxsep_arcsec, bin_arcsec, min_pairs,
     ddec = (ref.dec_deg[ib] - a_dec[ia]) * 3600.0
     bw = max(bin_arcsec, maxsep_arcsec / 150.0)
     (dra_mas, ddec_mas, off_mas, npairs, contrast,
-     dra_err_mas, ddec_err_mas, n_peak) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
+     dra_err_mas, ddec_err_mas, n_peak, peak_margin) = _hist_peak(
+        dra, ddec, maxsep_arcsec, bw)
     return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
                 contrast=contrast, window_arcsec=maxsep_arcsec,
-                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak)
+                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak,
+                peak_margin=peak_margin)
 
 
 def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
@@ -362,10 +395,12 @@ def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
     # keep ~150 bins across the window so the peak stays resolved as we widen
     bw = max(bin_arcsec, maxsep_arcsec / 150.0)
     (dra_mas, ddec_mas, off_mas, npairs, contrast,
-     dra_err_mas, ddec_err_mas, n_peak) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
+     dra_err_mas, ddec_err_mas, n_peak, peak_margin) = _hist_peak(
+        dra, ddec, maxsep_arcsec, bw)
     return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
                 contrast=contrast, window_arcsec=maxsep_arcsec,
-                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak)
+                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak,
+                peak_margin=peak_margin)
 
 
 def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
@@ -418,8 +453,8 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     Returns
     -------
     dict or None
-        ``dict(dra, ddec, off, npairs, contrast, ok, window_arcsec, swept,
-        dra_err, ddec_err, n_peak, window_edge_fraction, windows)`` (mas), or
+        ``dict(dra, ddec, off, npairs, contrast, peak_margin, ok, window_arcsec,
+        swept, dra_err, ddec_err, n_peak, window_edge_fraction, windows)`` (mas), or
         None if too few pairs at every window.  ``ok`` is False when NO window
         reaches ``min_contrast`` (or, with ``confirm_windows``, when a swept peak
         failed confirmation).
@@ -483,6 +518,7 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         evaluated.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
                               off=res["off"], off_mas=float(res["off"]),
                               contrast=res["contrast"],
+                              peak_margin=res["peak_margin"],
                               npairs=res["npairs"], n_peak=res["n_peak"]))
         if best is None or res["contrast"] > best["contrast"]:
             best = res
