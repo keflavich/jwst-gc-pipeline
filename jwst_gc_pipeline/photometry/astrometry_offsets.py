@@ -41,8 +41,24 @@ from astropy.coordinates import SkyCoord, search_around_sky
 from scipy.spatial import cKDTree
 
 
-# Contrast (peak / median of the pair-offset histogram) below this = NO coherent
-# tie (scattered pairs), i.e. the two frames are NOT registered at this scale.
+# Contrast (peak bin / median of the OCCUPIED bins of the pair-offset
+# histogram) below this = NO coherent tie (scattered pairs), i.e. the two
+# frames are NOT registered at this scale.
+#
+# The denominator is the median over the bins holding at least one pair --
+# `H[H > 0]` in `_hist_peak`, whose docstring carries the expression -- NOT the
+# median over all bins, and not a background level.  In a SPARSE histogram most
+# occupied bins hold exactly one pair, so the denominator is 1 and the default
+# floor of 5 means "at least 5 pairs in the peak bin" rather than "5x above
+# background" (issue #400).  In a dense one the denominator is a real occupancy
+# and the ratio reads as a contrast.
+#
+# The expression lives in `_hist_peak`'s docstring rather than here on purpose:
+# the module docstring above names `match_to_catalog_sky` as the forbidden
+# method, and the NN-median grep-guard
+# (tests/test_no_adhoc_nn_median_astrometry.py) reports a file whose
+# module-level text carries BOTH a match token and a median/mean CALL.  Inside
+# the function the guard attributes the reduce where it belongs.
 DEFAULT_MIN_CONTRAST = 5.0
 
 
@@ -140,7 +156,12 @@ class NoCoherentTieError(RuntimeError):
 def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     """2-D histogram peak of a cloud of pair offsets.  Returns
     (dra_mas, ddec_mas, off_mas, npairs, contrast, dra_err_mas, ddec_err_mas,
-    n_peak)."""
+    n_peak).
+
+    ``contrast`` is ``H.max() / np.median(H[H > 0])`` -- the peak bin over the
+    median of the OCCUPIED bins, which in a sparse histogram is 1.  See the
+    ``DEFAULT_MIN_CONTRAST`` comment for what that means for the floor.
+    """
     n = len(dra_arcsec)
     m = maxsep_arcsec
     bins = np.arange(-m, m + bin_arcsec, bin_arcsec)
@@ -236,7 +257,9 @@ def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
     (see ``WINDOW_EDGE_FRACTION``) is a property of the WINDOW, so it slides to
     the new edge as soon as the window changes.
 
-    Returns ``dict(consistent, probes, tol_mas, n_probes)``.  ``consistent`` is
+    Returns ``dict(consistent, probes, n_probes)``; the per-window agreement
+    tolerance is ``tol_mas`` on each PROBE, not a top-level key (issue #400).
+    ``consistent`` is
     True when at least one probe reproduced the peak, False when every probe
     that produced a result disagreed, and None when no probe could be run (no
     pairs, or the probe window would exceed ``max_window_arcsec``) -- an
@@ -680,8 +703,10 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     Returns
     -------
     dict
-        ``dict(cells=[...], n_cells, n_measured, n_flagged, worst_off_mas,
-        worst_sig_off_mas, clean)``.  Each cell:
+        ``dict(cells=[...], n_cells, n_measured, n_pairs, n_flagged,
+        worst_off_mas, worst_sig_off_mas, clean)``, plus ``reason`` on an empty
+        map.  ``n_pairs`` is the number of UNAMBIGUOUS matched pairs the map
+        was built from.  Each cell:
         ``dict(ra0, dec0, ix, iy, n, dra_mas, ddec_mas, dra_sem, ddec_sem,
         off_mas, significant, flagged)``.  ``clean`` is True when no cell is
         flagged AND at least one cell was measurable.
@@ -711,19 +736,24 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     gdra_deg = (global_result["dra"] / 3.6e6)  # on-sky mas -> deg (Δα·cosδ)
     gddec_deg = (global_result["ddec"] / 3.6e6)
 
-    def _no_pairs(n_pairs=0):
-        # n_pairs distinguishes the three ways a map can come back empty:
-        # 0 pairs found at all, pairs found but all ambiguous (the crowded-field
-        # case that crashed the brick F187N --refcat run), or pairs binned but
-        # every cell below min_stars.  A caller reporting "every cell held too
-        # few stars" would be naming a cause it never checked.
-        return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0, n_pairs=n_pairs,
+    def _no_pairs(n_pairs=0, reason=None):
+        # A map can come back empty three ways, and `n_pairs` alone separates
+        # only one of them (issue #400): the "0 pairs found" and "pairs found
+        # but ALL ambiguous" branches both report 0, because n_pairs counts
+        # UNAMBIGUOUS pairs and the second case has none either.  The third --
+        # pairs binned but every cell below min_stars -- does not come through
+        # here at all; it returns the full dict with `cells=[]` and a non-zero
+        # n_pairs.  `reason` names which branch this is, so a caller reporting
+        # "every cell held too few stars" is not naming a cause it never
+        # checked.
+        return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
+                    n_pairs=n_pairs, reason=reason,
                     worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
                     clean=False)
 
     ia, ib, sep, _ = search_around_sky(a, b, radius_arcsec * u.arcsec)
     if len(ia) == 0:
-        return _no_pairs(n_pairs=0)
+        return _no_pairs(n_pairs=0, reason="no pairs within match_radius")
     # keep only the NEAREST b for each a (unambiguous association given the
     # verified small tie), then require uniqueness of the b partner
     order = np.lexsort((sep.arcsec, ia))
@@ -745,7 +775,9 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     # already cleared F182M -- an unhandled exception instead of the "could not
     # measure this pair" answer the caller is written to handle.
     if len(ia_n) == 0:
-        return _no_pairs(n_pairs=0)
+        return _no_pairs(n_pairs=0,
+                         reason=f"all {len(ia)} pair(s) ambiguous "
+                                f"(no unique nearest partner)")
 
     cosd = np.cos(np.radians(a[ia_n].dec.value))
     dra = (b[ib_n].ra - a[ia_n].ra).to(u.arcsec).value * cosd * 1000.0 - global_result["dra"]
@@ -783,6 +815,9 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     sig = [c for c in cells if c["significant"]]
     return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                 n_pairs=int(len(ia_n)), n_flagged=len(flagged),
+                reason=(None if cells else
+                        f"every cell held fewer than min_stars={min_stars} "
+                        f"of the {len(ia_n)} unambiguous pair(s)"),
                 worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
                 worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
                 clean=bool(cells) and not flagged)

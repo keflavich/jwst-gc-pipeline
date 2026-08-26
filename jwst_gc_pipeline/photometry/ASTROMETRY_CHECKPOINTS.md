@@ -21,7 +21,7 @@ pipeline.
 
 | stage (merge token) | what runs | shift found ⇒ |
 |---|---|---|
-| **m2** (after the m12 merge — first per-frame catalogs) | per-(visit, filter) consensus; every exposure re-measured vs the consensus (tol **2 mas**); consensus tied to VIRAC2/Gaia with the multi-check ladder | **CORRECT**: offsets table updated (provenance columns, validated, backed up), im0 `_i2d` mosaics stale-tagged `*_im0_badastrom.fits`, run STOPS (`AstrometryCorrectionRequiredError`) — the crf frames must be regenerated before any further cataloging |
+| **m2** (after the m12 merge — first per-frame catalogs) | per-(visit, filter) consensus; every exposure re-measured vs the consensus (tol **2 mas**); consensus tied to VIRAC2/Gaia with the multi-check ladder | **CORRECT, only with `ASTROM_CHECKPOINT_APPLY=1`**: offsets table updated (provenance columns, validated, backed up), im0 `_i2d` mosaics stale-tagged `*_im0_badastrom.fits`, run STOPS (`AstrometryCorrectionRequiredError`) — the crf frames must be regenerated before any further cataloging. **By default (`ASTROM_CHECKPOINT_APPLY` unset) nothing is written**: the run raises `AstrometryCorrectionRequiredError` with the corrections recorded and the message “NOT auto-applied”, and the table and mosaics are left as they are (issue #400) |
 | **m3, m4, m5, m6** | same measurement | **RED FLAG**: the solution is frozen after m2; positions come from the same crf GWCS, so a shift here is a real defect (centroiding systematics, seed drag, stale frame). `AstrometryRegressionError`, blocking |
 | **m7 cross-band merge** | cross-filter agreement: anchor = filter nearest VIRAC2 Ks (2.149 µm); every filter vs anchor < **5 mas** bulk **and significant** (an offset over 5 mas fails only when it also exceeds 3× its own combined error bar, or the error bar is not finite; an over-tolerance offset the error bar covers is recorded in `unverified`, not in `failures`); matched-pair local residual map, no significant **2″** cell > **15 mas** (error bars mandatory). Plus a recorded, non-gating **residual-field** measurement (below) | `CrossFilterAstrometryError`, blocking, before the merge pools positions |
 
@@ -558,6 +558,7 @@ the same table rows.
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL_REASON=<text>` | as above, for the cross-filter gate |
 | `ASTROM_MAX_CORRECTION_ARCSEC=<f>` | raise/lower the per-exposure ceiling (default 0.5″) |
+| `OFFSETS_TABLE_DIVERGENCE_RAISE=1` | promote a diverged on-sky/coordinate column pair in the offsets table from a warning to `DivergedColumnPairError` (`validate_offsets_table.assert_offsets_table_sane`). Off by default because a divergence costs the audit trail rather than the applied shift |
 | `ASTROM_MAX_BULK_CORRECTION_ARCSEC=<f>` | raise/lower the per-visit bulk ceiling **and** the cumulative-drift bound (default 60″) |
 | `ASTROM_ALLOW_MISSING_PERFRAME=1` | demote the missing-per-frame-catalog stop (`cataloging.py`) |
 | `CATALOG_ALLOW_UNVETTED_FALLBACK=1` | allow the unvetted-catalog fallback |
