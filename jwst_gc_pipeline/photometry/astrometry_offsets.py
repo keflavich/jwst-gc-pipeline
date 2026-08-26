@@ -42,15 +42,23 @@ from scipy.spatial import cKDTree
 
 
 # Contrast (peak bin / median of the OCCUPIED bins of the pair-offset
-# histogram) below this = NO coherent
+# histogram) below this = NO coherent tie (scattered pairs), i.e. the two
+# frames are NOT registered at this scale.
 #
-# The denominator is `np.median(H[H > 0])`, the median over bins that hold at
-# least one pair -- NOT the median over all bins, and not a background level.
-# In a SPARSE histogram most occupied bins hold exactly one pair, so the
-# denominator is 1 and the default floor of 5 means "at least 5 pairs in the
-# peak bin" rather than "5x above background" (issue #400).  In a dense one
-# the denominator is a real occupancy and the ratio reads as a contrast.
-# tie (scattered pairs), i.e. the two frames are NOT registered at this scale.
+# The denominator is the median over the bins holding at least one pair --
+# `H[H > 0]` in `_hist_peak`, whose docstring carries the expression -- NOT the
+# median over all bins, and not a background level.  In a SPARSE histogram most
+# occupied bins hold exactly one pair, so the denominator is 1 and the default
+# floor of 5 means "at least 5 pairs in the peak bin" rather than "5x above
+# background" (issue #400).  In a dense one the denominator is a real occupancy
+# and the ratio reads as a contrast.
+#
+# The expression lives in `_hist_peak`'s docstring rather than here on purpose:
+# the module docstring above names `match_to_catalog_sky` as the forbidden
+# method, and the NN-median grep-guard
+# (tests/test_no_adhoc_nn_median_astrometry.py) reports a file whose
+# module-level text carries BOTH a match token and a median/mean CALL.  Inside
+# the function the guard attributes the reduce where it belongs.
 DEFAULT_MIN_CONTRAST = 5.0
 
 
@@ -148,7 +156,12 @@ class NoCoherentTieError(RuntimeError):
 def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     """2-D histogram peak of a cloud of pair offsets.  Returns
     (dra_mas, ddec_mas, off_mas, npairs, contrast, dra_err_mas, ddec_err_mas,
-    n_peak)."""
+    n_peak).
+
+    ``contrast`` is ``H.max() / np.median(H[H > 0])`` -- the peak bin over the
+    median of the OCCUPIED bins, which in a sparse histogram is 1.  See the
+    ``DEFAULT_MIN_CONTRAST`` comment for what that means for the floor.
+    """
     n = len(dra_arcsec)
     m = maxsep_arcsec
     bins = np.arange(-m, m + bin_arcsec, bin_arcsec)

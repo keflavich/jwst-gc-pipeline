@@ -62,6 +62,30 @@ def test_the_module_docstring_says_occupied_bins():
     assert "sparse" in stated.lower()
 
 
+def test_the_contrast_prose_keeps_the_nn_median_guards_classification():
+    """Documenting the denominator must not move where the NN-median guard
+    reports this file.
+
+    The module docstring names ``match_to_catalog_sky`` as the FORBIDDEN
+    method, so a median/mean CALL anywhere in module-level text puts both
+    tokens there and the guard reports ``astrometry_offsets.py::<module>`` --
+    a key the allowlist does not carry, and one whose arrival also makes the
+    reviewed ``<unattributed>`` entry read as dead.  That is what turned this
+    file red the first time item 10 was written up.  The expression belongs in
+    ``_hist_peak``'s docstring, inside the function, where the guard attributes
+    the reduce to code rather than to prose.
+    """
+    from jwst_gc_pipeline.photometry.tests import (
+        test_no_adhoc_nn_median_astrometry as guard)
+    with open(ao.__file__) as fh:
+        text = fh.read()
+    assert guard._live_keys(text) == {guard.UNATTRIBUTED}, (
+        "the module-level prose of astrometry_offsets.py now carries a "
+        "median/mean call beside the docstring's match_to_catalog_sky; move "
+        "the expression into a function docstring")
+    assert "np.median(H[H > 0])" in (ao._hist_peak.__doc__ or "")
+
+
 def test_a_sparse_histogram_makes_contrast_a_pair_count():
     """The consequence the docstring now states, demonstrated: with one pair
     per occupied bin the denominator is 1, so `contrast` IS the peak-bin
