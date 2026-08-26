@@ -1517,6 +1517,112 @@ def check_generation_span(items, max_span_days=GENERATION_SPAN_DAYS, verbose=Tru
     return complaints
 
 
+# ---- merged-vs-per-module generation check -----------------------------------------
+# `check_generation_span` compares the STAGED science images against each other.  A
+# NIRCam band's staged science image is its `-merged_i2d.fits`, and the per-module
+# `-nrca_i2d.fits` / `-nrcb_i2d.fits` beside it are usually not staged at all, so a
+# merged mosaic left behind by a re-drizzle of its own modules is invisible to every
+# leg of that check: one band, one instrument, one CRDS context, zero span.
+#
+# That is the state #256 is about.  The merged mosaic is the ONLY product in which
+# module A and module B are combined, so the inter-module seam -- the thing
+# `registration_failsafes.py` exists to catch, and where brick-1182 F356W hid several
+# arcseconds behind a whole-field average of ~0 -- exists nowhere else.  A merged
+# mosaic older than the per-module mosaics it is supposed to combine is not a missing
+# product (the gate that refuses those already fires); it looks built, it stages, and
+# the seam that gets checked is the previous generation's.
+#
+# Measured on disk 2026-08-25, DATE headers rather than mtimes:
+#
+#   wd1   F200W  nrca 2026-07-01T04:08  nrcb 2026-07-01T04:26  merged 2026-06-13T13:27
+#   brick F356W  nrca 2026-08-22T21:44                         merged 2026-08-19T13:46
+#
+# SLACK: one generation's modules and merged come out of a single Image3 batch, so the
+# merged product is written minutes to hours AFTER its modules and the lag is
+# negative-to-small by construction.  0.5 d keeps a slow batch (and a merged mosaic
+# written first) quiet while still catching wd1's 17.6 d and brick's 3.3 d.
+MERGED_GENERATION_LAG_DAYS = 0.5
+
+#: Per-module spellings a merged NIRCam mosaic combines.  `nrcalong`/`nrcblong` are
+#: the LW module names; a band uses one pair or the other, never both.
+_MODULE_TOKENS = ("nrca", "nrcb", "nrcalong", "nrcblong")
+
+_MERGED_SUFFIX = "-merged_i2d.fits"
+
+
+def _module_siblings(src):
+    """Per-module mosaics on disk beside a ``-merged_i2d.fits`` science mosaic.
+
+    Returns ``[(module, path)]``, sorted, for the same proposal-observation, target,
+    instrument, optical element and filter -- i.e. the same name with the module token
+    swapped.  Empty when ``src`` is not a merged mosaic or the field imaged one module
+    (sickle has no module A, so it has no merged product and no siblings to compare).
+    """
+    src = str(src)
+    if not src.endswith(_MERGED_SUFFIX):
+        return []
+    stem = src[:-len(_MERGED_SUFFIX)]
+    out = []
+    for module in _MODULE_TOKENS:
+        candidate = f"{stem}-{module}_i2d.fits"
+        if os.path.isfile(candidate):
+            out.append((module, candidate))
+    return sorted(out)
+
+
+def check_merged_mosaic_generation(items, max_lag_days=MERGED_GENERATION_LAG_DAYS,
+                                   verbose=True):
+    """Report staged merged mosaics that predate the per-module mosaics they combine.
+
+    Returns a list of complaint strings; empty means every staged merged mosaic is at
+    least as new as its own modules (or carries no comparable DATE, or has no
+    per-module sibling on disk, both of which are reported as skips rather than
+    complaints -- a missing sibling is a single-module band, which the release gate
+    handles elsewhere and which has no seam to be stale about).
+    """
+    complaints, checked, skipped = [], 0, 0
+    for it in items:
+        if it.get("category") != "image" or it.get("kind") != "science":
+            continue
+        siblings = _module_siblings(it["src"])
+        if not siblings:
+            continue
+        merged_date = _parse_header_date(_image_provenance(it["src"])[0])
+        dated = []
+        for module, path in siblings:
+            when = _parse_header_date(_image_provenance(path)[0])
+            if when is not None:
+                dated.append((module, when))
+        if merged_date is None or not dated:
+            skipped += 1
+            if verbose:
+                print(f"  {it.get('filter') or '?'}: merged-vs-module generation "
+                      f"NOT COMPARED (no DATE on "
+                      f"{'the merged mosaic' if merged_date is None else 'any module'})")
+            continue
+        checked += 1
+        newest_module, newest_when = max(dated, key=lambda row: row[1])
+        lag_days = (newest_when - merged_date).total_seconds() / 86400.0
+        if verbose:
+            print(f"  {it.get('filter') or '?'}"
+                  f"{('/' + it['observation']) if it.get('observation') else ''}: "
+                  f"merged {merged_date.isoformat()} vs newest module "
+                  f"{newest_module} {newest_when.isoformat()} "
+                  f"(lag {lag_days:+.2f} d)")
+        if lag_days > max_lag_days:
+            complaints.append(
+                f"{it.get('filter') or '?'}"
+                f"{('/' + it['observation']) if it.get('observation') else ''}: "
+                f"merged mosaic is {lag_days:.1f} d OLDER than its {newest_module} "
+                f"mosaic (merged {merged_date.isoformat()}, {newest_module} "
+                f"{newest_when.isoformat()}) -- the module seam this release ships "
+                f"was built from the previous generation of the modules "
+                f"({os.path.basename(it['src'])})")
+    if verbose and not checked and not skipped:
+        print("  (no staged merged mosaic has a per-module sibling on disk)")
+    return complaints
+
+
 def sha256sum(path, chunk=1 << 20):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -2498,6 +2604,26 @@ def main(argv=None):
                   f"not from a single reduction generation (see above). Re-drizzle the "
                   f"lagging band(s) so the whole field comes from one run, or drop "
                   f"--refuse-mixed-generations to stage anyway.", file=sys.stderr)
+            return 2
+        print("  (report only; pass --refuse-mixed-generations to make this a refusal)")
+
+    # ---- MERGED-VS-MODULE GENERATION REPORT ------------------------------------------
+    # The span check above compares the staged bands against EACH OTHER, so a merged
+    # mosaic that is one generation behind its own nrca/nrcb siblings passes it with a
+    # span of zero.  The merged mosaic is the only product carrying the inter-module
+    # seam, so a stale one ships a seam built from modules this release does not
+    # contain (#256).
+    print("MERGED-VS-MODULE GENERATION CHECK:")
+    merged_complaints = check_merged_mosaic_generation(items)
+    if merged_complaints:
+        for complaint in merged_complaints:
+            print(f"  STALE MERGED MOSAIC: {complaint}")
+        if args.refuse_mixed_generations:
+            print(f"\nREFUSING TO STAGE '{args.field}': a staged merged mosaic predates "
+                  f"the per-module mosaics it combines (see above), so its inter-module "
+                  f"seam describes a previous generation. Re-drizzle with "
+                  f"`module='merged'`, or drop --refuse-mixed-generations to stage "
+                  f"anyway.", file=sys.stderr)
             return 2
         print("  (report only; pass --refuse-mixed-generations to make this a refusal)")
 
