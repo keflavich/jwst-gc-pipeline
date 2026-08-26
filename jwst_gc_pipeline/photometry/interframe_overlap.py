@@ -199,8 +199,12 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
         n_close = min(n_a_in, n_b_in)
         if bounds is None or n_close < min_overlap_pairs:
             # same schema as every other result dict (n_peak/measurable
-            # included): consumers index r["measurable"] unconditionally
+            # included): consumers index r["measurable"] unconditionally.
+            # n_a_in/n_b_in are carried for parity with overlap_offset_grid
+            # (issue #402): min(n_a_in, n_b_in) alone cannot tell a
+            # 29-and-53 strip from a 0-and-64 one.
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
+                                n_a_in=int(n_a_in), n_b_in=int(n_b_in),
                                 off_mas=None, dra_mas=None, ddec_mas=None,
                                 contrast=None, n_peak=0, measurable=False,
                                 ok=True, swept=False, window_arcsec=None,
@@ -215,6 +219,7 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
                            sweep=sweep, context=f"{context} overlap {la}|{lb}")
         if m is None:
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
+                                n_a_in=int(n_a_in), n_b_in=int(n_b_in),
                                 off_mas=None, dra_mas=None, ddec_mas=None,
                                 contrast=None, n_peak=0, measurable=False,
                                 ok=True, swept=False, window_arcsec=None,
@@ -250,6 +255,7 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
                 min_pairs=min_overlap_pairs)
             m = dict(m, window_consistent=_conf_w["consistent"])
         results.append(dict(a=la, b=lb, overlap=True, n_overlap=n_close,
+                            n_a_in=int(n_a_in), n_b_in=int(n_b_in),
                             off_mas=float(m["off"]), dra_mas=float(m["dra"]),
                             ddec_mas=float(m["ddec"]), contrast=float(m["contrast"]),
                             n_peak=int(m.get("n_peak", 0)),
@@ -290,28 +296,68 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
            intersection at the grid's cell scale: any significant cell above
            ``tol_mas`` -> FAIL (the 30-100 mas seam class).
 
+    GEOMETRY decides ``overlap``; SOURCE COUNTS decide measurability (issue
+    #402).  A pair whose footprints DO intersect but which holds fewer than
+    ``min_overlap_pairs`` sources of the sparser side inside the intersection
+    used to be recorded as ``overlap=False, clean=True, ok=True,
+    could_not_verify=False`` -- indistinguishable, in the record and in the
+    gate's verdict line, from a pair with nothing to check.  That merged
+    "checked and clean" with "too thin to look at" for exactly the population
+    most likely to be misregistered: sickle F770W's two MIRI visits intersect
+    over a strip holding 29 and 53 sources, carry a 37 mas swept candidate
+    against a 30 mas tolerance, and are the field's ONLY pair, so the filter
+    reported "0 overlapping pairs" and passed with nothing examined.  Such a
+    pair is now ``overlap=True, could_not_verify=True, clean=False``, which is
+    the fail-closed route everything else unmeasurable takes and is what makes
+    it visible to the reference arbiter.  Only ``bounds is None`` -- footprints
+    that do not intersect at all -- stays ``overlap=False``.
+
+    Every record carries ``n_a_in``/``n_b_in``, the source counts inside the
+    intersection box, so a consumer can tell 29-and-53 from 0-and-64.
+
     Returns
     -------
     list[dict]
-        Per compared pair: ``dict(a, b, overlap, pooled_off_mas, pooled,
-        worst_off_mas, worst_off_cell, n_ok, n_total, n_no_coverage,
-        could_not_verify, clean, ok, fail_reason)``.
+        Per compared pair: ``dict(a, b, overlap, n_a_in, n_b_in,
+        pooled_off_mas, pooled, worst_off_mas, worst_off_cell, n_ok, n_total,
+        n_no_coverage, could_not_verify, clean, ok, fail_reason)``.
     """
     labels = list(groups)
     results = []
     for la, lb in itertools.combinations(labels, 2):
         a, b = groups[la], groups[lb]
         bounds, n_a_in, n_b_in = _footprint_intersection(a, b)
-        if bounds is None or min(n_a_in, n_b_in) < min_overlap_pairs:
-            results.append(dict(a=la, b=lb, overlap=False, pooled_off_mas=None,
+        if bounds is None:
+            # geometrically disjoint -- there is genuinely nothing to check
+            results.append(dict(a=la, b=lb, overlap=False,
+                                n_a_in=int(n_a_in), n_b_in=int(n_b_in),
+                                pooled_off_mas=None,
                                 pooled=None, worst_off_mas=None,
                                 worst_off_cell=None, n_ok=0, n_total=0,
                                 n_no_coverage=0, could_not_verify=False,
                                 clean=True, ok=True, fail_reason=None))
             continue
+        if min(n_a_in, n_b_in) < min_overlap_pairs:
+            # footprints DO intersect, too few sources to measure the pair:
+            # could-not-verify, not "not overlapping" (issue #402)
+            results.append(dict(a=la, b=lb, overlap=True,
+                                n_a_in=int(n_a_in), n_b_in=int(n_b_in),
+                                pooled_off_mas=None,
+                                pooled=None, worst_off_mas=None,
+                                worst_off_cell=None, n_ok=0, n_total=0,
+                                n_no_coverage=0, could_not_verify=True,
+                                clean=False, ok=True,
+                                fail_reason=(
+                                    f"thin overlap: {n_a_in} / {n_b_in} "
+                                    f"sources inside the footprint "
+                                    f"intersection, below the "
+                                    f"min_overlap_pairs={min_overlap_pairs} "
+                                    f"floor -- NOT measured")))
+            continue
         a_in = a[_in_bounds(a, bounds)]
         b_in = b[_in_bounds(b, bounds)]
-        base = dict(a=la, b=lb, overlap=True, worst_off_mas=None,
+        base = dict(a=la, b=lb, overlap=True, n_a_in=int(n_a_in),
+                    n_b_in=int(n_b_in), worst_off_mas=None,
                     worst_off_cell=None, n_ok=0, n_total=0, n_no_coverage=0,
                     could_not_verify=False, clean=False, ok=False,
                     fail_reason=None)
