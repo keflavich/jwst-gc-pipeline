@@ -148,8 +148,11 @@ MODULES=${MODULES:-nrca,nrcb,merged}
 # re-download + re-fit ramps from MAST (much slower; overwrites all products).
 # SKIP=0 re-fits every exposure whatever is on disk; each exposure is processed
 # once per run, shared across the module passes (#417).  Set STAGE12_RESUME=1 to
-# also skip exposures whose _cal/_ramp are newer than their _uncal, which
-# resumes a killed SKIP=0 job (leave it unset for a forcing re-reduce).
+# also skip exposures whose _cal/_ramp are newer than their _uncal AND carry
+# this run's CRDS_CTX/CAL_VER, which resumes a killed SKIP=0 job (leave it
+# unset for a forcing re-reduce).  The stamp comparison is #433: after a CRDS
+# repin or a jwst bump a resume re-fits the whole filter directory rather than
+# leaving one Image3 input set straddling two calibrations.
 SKIP=${SKIP:-1}
 # Declared (and exported) here so the value the log reports below is exactly the
 # one `stage12_selection.stage12_resume_enabled` reads out of the environment.

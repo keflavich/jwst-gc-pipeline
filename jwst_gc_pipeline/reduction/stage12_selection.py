@@ -27,15 +27,19 @@ intra-process, so it is removed intra-process:
 * **Opt-in resume** (`stage12_products_fresh`, reached only when
   ``STAGE12_RESUME=1``): with the operator asking for it, a member whose
   ``_cal.fits`` (and ``_ramp.fits``, when ramps are being saved) are newer
-  than its ``_uncal.fits`` is left alone, so a retry after a partial failure
-  reprocesses exactly the missing/stale members.  It is off by default because
-  on-disk products are current only with respect to the ``_uncal`` mtime: a
-  CRDS repin, a ``jwst`` version bump or a Detector1/Image2 parameter change
-  leaves every product in place and newer than its input while making all of
-  them wrong, and that is the case bare ``SKIP=0`` exists to fix.  It also
-  reads whole-file states only -- a ``_cal.fits`` truncated when a job was
-  killed has a newer mtime and reads as current (it surfaces as a read error
-  downstream rather than silently).
+  than its ``_uncal.fits`` **and carry this run's ``CRDS_CTX``/``CAL_VER``**
+  is left alone, so a retry after a partial failure reprocesses exactly the
+  missing/stale members.  The stamp half is #433: every member a resume
+  reprocesses is written with the current context and ``jwst`` version, so
+  keeping a member stamped with an older one would leave ONE filter directory
+  -- one Image3 input set -- straddling two calibrations.  A CRDS repin or a
+  version bump therefore makes a resume reprocess the whole directory, which
+  is what bare ``SKIP=0`` gives.  Reading the header also refuses a
+  ``_cal.fits`` truncated when a job was killed, which has a newer mtime and
+  used to read as current on mtimes alone.  It remains off by default: a
+  Detector1/Image2 *parameter* change leaves every product in place, newer
+  than its input and stamped with the current context, and no header read
+  can see it.
 
 `stage12_skip_reason` is the one entry point the driver calls: it returns the
 message to log, or None to process the member.
@@ -97,20 +101,85 @@ def stage12_resume_enabled(env=None):
         '1', 'true', 'yes', 'on')
 
 
-def stage12_products_fresh(uncal_path, require_ramp=True):
-    """Whether ``uncal_path``'s stage-1/2 products are newer than it.
+#: Primary-header keywords stamping the calibration a stage-1/2 product was
+#: made with: the CRDS context that supplied its reference files, and the
+#: ``jwst`` version of the code that ran.  Both are written by every
+#: Detector1/Image2 product (verified on ``_cal.fits`` and ``_ramp.fits``).
+CALIBRATION_STAMP_KEYWORDS = ('CRDS_CTX', 'CAL_VER')
+
+#: Memo for :func:`current_calibration_stamp`, which is otherwise a CRDS call
+#: per asn member.  A process's answer cannot change under it: the pipeline
+#: resolves the context once and calibrates the whole run against it.
+_CURRENT_STAMP = []
+
+
+def current_calibration_stamp():
+    """``(CRDS context, jwst version)`` the NEXT stage-1/2 call would stamp.
+
+    ``crds.get_context_name('jwst')`` is the same resolution the pipeline
+    itself does (operational context, or ``CRDS_CONTEXT`` when the run pins
+    one), and reads from the local ``CRDS_PATH`` cache.  Memoized per process.
+    """
+    if not _CURRENT_STAMP:
+        import crds
+        import jwst
+        _CURRENT_STAMP.append((str(crds.get_context_name('jwst')),
+                               str(jwst.__version__)))
+    return _CURRENT_STAMP[0]
+
+
+def reset_current_calibration_stamp():
+    """Forget the memoized current stamp (tests)."""
+    _CURRENT_STAMP.clear()
+
+
+def product_calibration_stamp(path):
+    """``(CRDS_CTX, CAL_VER)`` from a product's primary header, or None.
+
+    None means "this file does not answer the question": it is not readable as
+    FITS (the truncated ``_cal.fits`` a killed job leaves behind, which has a
+    newer mtime than its uncal and so reads as current on mtimes alone), or it
+    is missing either keyword.  Callers treat None as "reprocess".
+    """
+    from astropy.io import fits
+    try:
+        header = fits.getheader(path, ext=0)
+    except (OSError, ValueError, IndexError):
+        # OSError covers truncated/empty/non-FITS; astropy raises ValueError or
+        # IndexError on some malformed-header and no-HDU cases.
+        return None
+    values = tuple(header.get(key) for key in CALIBRATION_STAMP_KEYWORDS)
+    if any(value is None or str(value).strip() == '' for value in values):
+        return None
+    return tuple(str(value).strip() for value in values)
+
+
+def stage12_products_fresh(uncal_path, require_ramp=True, stamp=None):
+    """Whether ``uncal_path``'s stage-1/2 products are current.
 
     True when the sibling ``_cal.fits`` (and ``_ramp.fits``, unless
-    ``require_ramp`` is False because the driver is not saving ramps) exist
-    and have strictly newer mtimes than the ``_uncal.fits``.  With the uncal
-    itself absent, present products count as current: reprocessing is
-    impossible without the uncal, and running Detector1 on it would only fail
-    loudly.  With a required product missing the member is reprocessed, so the
-    caller gets that same loud failure on a missing uncal.
+    ``require_ramp`` is False because the driver is not saving ramps) exist,
+    have strictly newer mtimes than the ``_uncal.fits``, AND carry the same
+    ``CRDS_CTX``/``CAL_VER`` this process would stamp on them if it reprocessed
+    them.  With the uncal itself absent, present products count as current on
+    mtimes: reprocessing is impossible without the uncal, and running
+    Detector1 on it would only fail loudly.  With a required product missing
+    the member is reprocessed, so the caller gets that same loud failure on a
+    missing uncal.  The stamp check applies either way -- a product that cannot
+    be reprocessed is still not allowed to carry a foreign calibration into the
+    kept set.
 
-    "Newer than the uncal" is the only thing this can see; it says nothing
-    about the code, CRDS context or step parameters the products were made
-    with, which is why the caller reaches it only under ``STAGE12_RESUME=1``.
+    The stamp comparison is what keeps a resume from leaving one Image3 input
+    set straddling two CRDS contexts (#433).  Every member this run reprocesses
+    is written with the CURRENT context and ``jwst`` version, so the set is
+    homogeneous exactly when every member it KEEPS already carries those --
+    which is the comparison made here, not a separate strictness policy.  A
+    repin or a version bump therefore makes a resume reprocess the whole
+    filter directory, which is the behaviour bare ``SKIP=0`` exists to give.
+
+    ``stamp`` overrides the current ``(CRDS_CTX, CAL_VER)`` (tests, and callers
+    that resolve it once for a whole asn).  ``stamp=False`` skips the
+    comparison and restores the mtime-only test.
     """
     if not uncal_path.endswith('_uncal.fits'):
         raise ValueError(
@@ -120,25 +189,34 @@ def stage12_products_fresh(uncal_path, require_ramp=True):
         required.append(uncal_path.replace('_uncal.fits', '_ramp.fits'))
     if not all(os.path.exists(path) for path in required):
         return False
+    if stamp is not False:
+        if stamp is None:
+            stamp = current_calibration_stamp()
+        stamp = tuple(str(value).strip() for value in stamp)
+        if any(product_calibration_stamp(path) != stamp for path in required):
+            return False
     if not os.path.exists(uncal_path):
         return True
     uncal_mtime = os.path.getmtime(uncal_path)
     return all(os.path.getmtime(path) > uncal_mtime for path in required)
 
 
-def stage12_skip_reason(uncal_path, resume=None, require_ramp=True):
+def stage12_skip_reason(uncal_path, resume=None, require_ramp=True, stamp=None):
     """Why the stage-1/2 loop should skip ``uncal_path``, or None to process it.
 
     Two reasons, in order: this interpreter already ran stage 1+2 on the
     member in an earlier module pass (#417's 3x), or ``STAGE12_RESUME=1`` and
-    its products are newer than the uncal.  Without the resume opt-in, a fresh
-    process reprocesses every member, which is what ``SKIP=0`` means.
+    its products are current -- newer than the uncal and carrying this run's
+    CRDS context and ``jwst`` version (#433).  Without the resume opt-in, a
+    fresh process reprocesses every member, which is what ``SKIP=0`` means.
     """
     if stage12_already_processed(uncal_path):
         return ("this run already ran stage 1+2 on it in an earlier module pass")
     if resume is None:
         resume = stage12_resume_enabled()
-    if resume and stage12_products_fresh(uncal_path, require_ramp=require_ramp):
+    if resume and stage12_products_fresh(uncal_path, require_ramp=require_ramp,
+                                         stamp=stamp):
         return (f"{STAGE12_RESUME_ENV} is set and its stage-1/2 products are "
-                "newer than the _uncal.fits")
+                "newer than the _uncal.fits and carry this run's "
+                f"{'/'.join(CALIBRATION_STAMP_KEYWORDS)}")
     return None

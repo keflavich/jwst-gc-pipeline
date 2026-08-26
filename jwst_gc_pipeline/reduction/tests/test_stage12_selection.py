@@ -34,10 +34,19 @@ import pathlib
 
 import pytest
 
+from jwst_gc_pipeline.reduction import stage12_selection
 from jwst_gc_pipeline.reduction.stage12_selection import (
-    STAGE12_RESUME_ENV, member_in_stage12_pass, note_stage12_processed,
-    reset_stage12_processed, stage12_already_processed, stage12_products_fresh,
-    stage12_resume_enabled, stage12_skip_reason)
+    CALIBRATION_STAMP_KEYWORDS, STAGE12_RESUME_ENV, member_in_stage12_pass,
+    note_stage12_processed, product_calibration_stamp, reset_stage12_processed,
+    stage12_already_processed, stage12_products_fresh, stage12_resume_enabled,
+    stage12_skip_reason)
+
+#: What this fake run would stamp on anything it reprocessed.  Pinned so the
+#: suite never resolves a real CRDS context.
+STAMP = ('jwst_1590.pmap', '1.21.0.dev314+g61bd2fe47')
+#: The context brick's five SW filter directories actually carry (#433).
+OLDER_CONTEXT = ('jwst_1253.pmap', '1.21.0.dev314+g61bd2fe47')
+OLDER_CAL_VER = ('jwst_1590.pmap', '1.14.1.dev43+g4641c6a09')
 
 SRC = (pathlib.Path(__file__).resolve().parents[1]
        / "PipelineRerunNIRCAM-LONG.py")
@@ -59,6 +68,17 @@ def _clean_memo():
     reset_stage12_processed()
     yield
     reset_stage12_processed()
+
+
+@pytest.fixture(autouse=True)
+def _pinned_current_stamp(monkeypatch):
+    """Pin what "this run would stamp" so no test resolves a real CRDS context.
+
+    ``current_calibration_stamp`` memoizes into this list, so seeding it is the
+    documented reset point rather than a patched-out function.
+    """
+    monkeypatch.setattr(stage12_selection, '_CURRENT_STAMP', [STAMP])
+    yield
 
 
 # ---------------------------------------------------------------------------
@@ -135,19 +155,35 @@ def test_unknown_module_claims_every_member():
 UNCAL_T = 1_000_000.0
 
 
-def _touch(path, mtime):
-    path.write_bytes(b'x')
+def _touch(path, mtime, stamp=STAMP):
+    """Write a minimal FITS carrying ``stamp``; ``stamp=None`` writes garbage.
+
+    Products have to be readable FITS with ``CRDS_CTX``/``CAL_VER`` now that
+    the freshness test reads them (#433); ``stamp=None`` is the truncated
+    ``_cal.fits`` a killed job leaves behind.
+    """
+    from astropy.io import fits
+    if stamp is None:
+        path.write_bytes(b'SIMPLE  =                    T' + b' ' * 20)
+    else:
+        header = fits.Header()
+        for key, value in zip(CALIBRATION_STAMP_KEYWORDS, stamp):
+            header[key] = value
+        fits.PrimaryHDU(header=header).writeto(path, overwrite=True)
     os.utime(path, (mtime, mtime))
 
 
-def _member(tmp_path, uncal=UNCAL_T, cal=UNCAL_T + 60, ramp=UNCAL_T + 30):
+def _member(tmp_path, uncal=UNCAL_T, cal=UNCAL_T + 60, ramp=UNCAL_T + 30,
+            cal_stamp=STAMP, ramp_stamp=STAMP, stem=None):
     """Lay down an uncal/cal/ramp triple; None omits that file."""
-    stem = 'jw10678001001_02101_00001_nrcalong'
+    stem = stem or 'jw10678001001_02101_00001_nrcalong'
     paths = {suffix: tmp_path / f'{stem}_{suffix}.fits'
              for suffix in ('uncal', 'cal', 'ramp')}
-    for suffix, mtime in (('uncal', uncal), ('cal', cal), ('ramp', ramp)):
+    for suffix, mtime, stamp in (('uncal', uncal, STAMP),
+                                 ('cal', cal, cal_stamp),
+                                 ('ramp', ramp, ramp_stamp)):
         if mtime is not None:
-            _touch(paths[suffix], mtime)
+            _touch(paths[suffix], mtime, stamp=stamp)
     return str(paths['uncal'])
 
 
@@ -205,6 +241,98 @@ def test_missing_uncal_and_missing_product_reprocesses(tmp_path):
 def test_wrong_suffix_raises():
     with pytest.raises(ValueError, match='_uncal'):
         stage12_products_fresh('jw10678001001_02101_00001_nrcalong_cal.fits')
+
+
+# ---------------------------------------------------------------------------
+# (a2) the calibration stamp: no resume may leave one input set straddling
+#      two CRDS contexts (#433)
+# ---------------------------------------------------------------------------
+
+def test_product_stamp_is_read_from_the_primary_header(tmp_path):
+    path = tmp_path / 'x_cal.fits'
+    _touch(path, UNCAL_T, stamp=OLDER_CONTEXT)
+    assert product_calibration_stamp(str(path)) == OLDER_CONTEXT
+
+
+def test_product_stamp_is_none_for_an_unreadable_file(tmp_path):
+    """A ``_cal.fits`` truncated when a job was killed: newer mtime, and on
+    mtimes alone it read as current."""
+    path = tmp_path / 'x_cal.fits'
+    _touch(path, UNCAL_T, stamp=None)
+    assert product_calibration_stamp(str(path)) is None
+
+
+def test_product_stamp_is_none_when_a_keyword_is_missing(tmp_path):
+    from astropy.io import fits
+    path = tmp_path / 'x_cal.fits'
+    fits.PrimaryHDU(header=fits.Header({'CRDS_CTX': 'jwst_1590.pmap'})).writeto(path)
+    assert product_calibration_stamp(str(path)) is None
+
+
+def test_cal_from_another_crds_context_reprocesses(tmp_path):
+    """The #433 straddle: this run would write jwst_1590 over a jwst_1253
+    product, so the member is reprocessed instead of kept."""
+    assert stage12_products_fresh(
+        _member(tmp_path, cal_stamp=OLDER_CONTEXT, ramp_stamp=OLDER_CONTEXT)) is False
+
+
+def test_cal_from_another_jwst_version_reprocesses(tmp_path):
+    assert stage12_products_fresh(
+        _member(tmp_path, cal_stamp=OLDER_CAL_VER, ramp_stamp=OLDER_CAL_VER)) is False
+
+
+def test_a_foreign_ramp_alone_reprocesses(tmp_path):
+    """Detector1 and Image2 are one resume unit: a current _cal beside a ramp
+    from another context is a half-state, not a fresh member."""
+    assert stage12_products_fresh(
+        _member(tmp_path, ramp_stamp=OLDER_CONTEXT)) is False
+
+
+def test_a_foreign_ramp_is_ignored_when_ramps_are_not_saved(tmp_path):
+    assert stage12_products_fresh(_member(tmp_path, ramp_stamp=OLDER_CONTEXT),
+                                  require_ramp=False) is True
+
+
+def test_truncated_cal_reprocesses(tmp_path):
+    assert stage12_products_fresh(_member(tmp_path, cal_stamp=None)) is False
+
+
+def test_foreign_stamp_reprocesses_even_with_the_uncal_absent(tmp_path):
+    """Missing-uncal is a free pass on mtimes only.  A product carrying a
+    foreign calibration still may not join the kept set -- it proceeds and
+    fails loudly on the absent uncal, which is the pre-existing behaviour for
+    a member that cannot be reprocessed."""
+    assert stage12_products_fresh(
+        _member(tmp_path, uncal=None, cal_stamp=OLDER_CONTEXT,
+                ramp_stamp=OLDER_CONTEXT)) is False
+
+
+def test_stamp_false_restores_the_mtime_only_test(tmp_path):
+    uncal = _member(tmp_path, cal_stamp=OLDER_CONTEXT, ramp_stamp=OLDER_CONTEXT)
+    assert stage12_products_fresh(uncal, stamp=False) is True
+
+
+def test_explicit_stamp_overrides_the_current_one(tmp_path):
+    uncal = _member(tmp_path, cal_stamp=OLDER_CONTEXT, ramp_stamp=OLDER_CONTEXT)
+    assert stage12_products_fresh(uncal, stamp=OLDER_CONTEXT) is True
+
+
+def test_resume_never_keeps_a_set_straddling_two_contexts(tmp_path, monkeypatch):
+    """The shape #433 describes, at the level of one filter directory: four
+    members re-fit under a newer context, the rest not.  Whatever the resume
+    keeps must carry ONE stamp, and it must be the one this run writes -- so
+    the directory after the resume is homogeneous."""
+    monkeypatch.setenv(STAGE12_RESUME_ENV, '1')
+    members = {}
+    for index in range(6):
+        stamp = STAMP if index < 2 else OLDER_CONTEXT
+        members[_member(tmp_path,
+                        stem=f'jw10678001001_03101_{index:05d}_nrcalong',
+                        cal_stamp=stamp, ramp_stamp=stamp)] = stamp
+    kept = [uncal for uncal in members
+            if stage12_skip_reason(uncal) is not None]
+    assert len(kept) == 2
+    assert {members[uncal] for uncal in kept} == {STAMP}
 
 
 # ---------------------------------------------------------------------------
