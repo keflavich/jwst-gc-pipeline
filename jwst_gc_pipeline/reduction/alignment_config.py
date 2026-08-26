@@ -215,6 +215,39 @@ ALIGNMENT_CONFIG = (
                'two from drifting apart again.'),
     ),
     FieldAlignment(
+        proposal='1905', fields=None,
+        reference_frame=GAIA, source=TABLE_CONSENSUS,
+        reference_filter='F212N',
+        notes=('wd1 (Westerlund 1). Same class as w51 above: well outside the '
+               'VVV/VIRAC2 footprint, so the reference is a pure '
+               'gaia_refcat.fits (13074 sources over the footprint, median NN '
+               '3.41") and the bulk sentinel ties the consensus to it.\n\n'
+               'ABSENT until now, which is what #479 measured: with no entry '
+               'every frame stayed at the raw assign_wcs frame and any offsets '
+               'table written for the field was read by nothing.  Measured '
+               '2026-08-24 on the per-filter m7 catalogs (NOT the merged '
+               "catalog -- its skycoord_* columns carry other stars' positions "
+               'while PR #300 is open, which manufactured a spurious 2.883" '
+               'peak that survived the issue-158 window sweep):\n\n'
+               '    all 11 filters, A-B against gaia_refcat.fits\n'
+               '      east half   27.6 - 33.2 mas   contrast up to 383\n'
+               '      west half   49.3 - 62.0 mas   contrast up to 285\n\n'
+               'So the ~40 mas bulk this issue reports is real and consistent '
+               'across every band.  A single bulk entry does NOT make the field '
+               'clean -- there is a ~20 mas east-west gradient underneath it, '
+               'so expect a residual of roughly +/-10 mas after this lands.  It '
+               'is registered anyway because ~10 mas beats ~40 mas and because '
+               'an unregistered field silently discards every correction the '
+               'checkpoint measures; the gradient is tracked separately.\n\n'
+               'reference_filter F212N: present in 1905 (f115w f150w f164n '
+               'f187n f200w f212n f277w f323n f405n f444w f466n) and what '
+               'consensus_catalog.reference_filter ranks first for that list, '
+               'so test_reference_filter_agrees_with_alignment_config holds.\n\n'
+               'fields=None covers both nircam obsids (001 and 003).  '
+               'fields.yaml names a reference_catalog for 001 only; 003 falls '
+               'back to the same gaia_refcat.fits in the field tree.'),
+    ),
+    FieldAlignment(
         proposal='2045', fields=('001',),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F212N',
