@@ -600,16 +600,80 @@ VETTED_RE = re.compile(
 MIN_VETTED_RANK = 51
 
 
-def _emit_table_group(items, entry, observation):
+def _emit_table_group(items, entry, observation, qualcuts_at=None):
+    """Emit one merged-table group, and RECORD it when the filtered subset is missing.
+
+    The quality cut is written in exactly one place -- inside ``merge_catalogs``,
+    which runs at the m7 cross-band merge.  m8 is a forced cross-band FILL rather
+    than a merge (``forced_fill.run_forced_crossband_fill`` adds
+    ``forced_filled_*``/``forced_snr_*`` columns to m7's rows and writes a sibling
+    table), so it goes nowhere near the cut and writes no ``_qualcuts_oksep*``
+    output for ANY field.  No field on either data root has an m8 quality-cut
+    table; every field that has one has it at m7.
+
+    This function takes the qualcuts OF THE SELECTED ITERATION, which is right --
+    pairing an m7-filtered subset with an m8 combined table ships two products of
+    different provenance under one release, and the m7 file on disk is not even a
+    subset of anything shipped (it predates the 11 columns m7 itself gained after
+    the cut ran).  What was wrong is that advancing a field from m7 to m8 then
+    dropped its filtered catalog from the release with NOTHING logged: six fields
+    have already advanced that way.
+
+    So the absence is now a recorded fact -- ``filtered_subset`` on the full
+    table, surfaced in ``MANIFEST.json`` and in the README -- rather than a file
+    that quietly stops appearing.  ``qualcuts_at`` names the highest iteration
+    that DOES have one, so the record says what exists as well as what does not.
+    Issue #450.
+    """
+    absent = "qualcuts" not in entry
     for key, kind in (("full_fits", "catalog_full"),
                       ("full_ecsv", "catalog_full"),
                       ("qualcuts", "catalog_qualcut")):
         if key in entry:
-            items.append({
+            it = {
                 "category": "catalog", "kind": kind, "filter": None,
                 "iteration": entry["iter"], "observation": observation,
                 "src": str(entry[key]),
-            })
+            }
+            if kind == "catalog_full" and absent:
+                it["filtered_subset"] = "absent"
+                it["filtered_subset_at_iteration"] = qualcuts_at
+            items.append(it)
+    if absent:
+        where = f"; one exists at {qualcuts_at}" if qualcuts_at else ""
+        print(f"  NOTE: no quality-cut table at {entry['iter']}"
+              f"{(' for ' + observation) if observation else ''}{where} -- this "
+              f"release ships an UNFILTERED combined catalog (recorded in "
+              f"MANIFEST.json and the README)")
+
+
+def _highest_qualcuts_iteration(ranked):
+    """The ``iter`` token of the highest-ranked entry that has a qualcuts table."""
+    have = [r for r, e in ranked.items() if "qualcuts" in e]
+    return ranked[max(have)]["iter"] if have else None
+
+
+def filtered_subset_state(items):
+    """One string for MANIFEST.json: does this release ship a filtered catalog?
+
+    ``"shipped"`` / ``"absent(...)"`` / ``"not_applicable(...)"``, mirroring
+    ``continuity_gate`` -- a manifest that says nothing about the filtered subset
+    is the state this exists to end.
+    """
+    catalogs = [it for it in items if it.get("category") == "catalog"]
+    if not catalogs:
+        return "not_applicable(no-catalogs)"
+    if any(it.get("kind") == "catalog_qualcut" for it in catalogs):
+        return "shipped"
+    full = [it for it in catalogs if it.get("kind") == "catalog_full"]
+    if not full:
+        return "not_applicable(no-combined-table)"
+    at = sorted({it.get("filtered_subset_at_iteration") for it in full} - {None})
+    iters = sorted({it.get("iteration") for it in full if it.get("iteration")})
+    return (f"absent(shipped {'/'.join(iters)}"
+            + (f", quality cut only at {'/'.join(at)}" if at else
+               ", no quality cut written for this field")
+            + ")")
 
 
 def discover_catalogs(field_cfg, field):
@@ -636,7 +700,8 @@ def discover_catalogs(field_cfg, field):
         slot = "qualcuts" if m.group("qc") else f"full_{m.group('ext')}"
         entry[slot] = path
     if combined:
-        _emit_table_group(items, combined[max(combined)], None)
+        _emit_table_group(items, combined[max(combined)], None,
+                          qualcuts_at=_highest_qualcuts_iteration(combined))
 
     # per-pointing merged tables (multi-pointing fields) -- highest iter per obs
     if observations:
@@ -655,7 +720,8 @@ def discover_catalogs(field_cfg, field):
             entry[slot] = path
         for obs in sorted(per_obs):
             ranks = per_obs[obs]
-            _emit_table_group(items, ranks[max(ranks)], obs)
+            _emit_table_group(items, ranks[max(ranks)], obs,
+                              qualcuts_at=_highest_qualcuts_iteration(ranks))
 
     # seed catalog
     seed = cat_dir / f"seed_union_iter3_{field}.fits"
@@ -1772,6 +1838,12 @@ def stage(items, field, version, release_root, mode, do_checksum,
         # "not_enforced/not_applicable" reason. A manifest with no waiver is thus
         # not ambiguous. None only for a stage() call outside the gated main path.
         "continuity_gate": continuity_gate,
+        # Does this release ship the quality-filtered subset of the combined
+        # table?  "shipped", "absent(...)" or "not_applicable(...)".  The cut is
+        # written only by `merge_catalogs` at m7, so a field advanced to m8 ships
+        # an unfiltered combined table -- which used to happen with nothing
+        # logged anywhere.  DERIVED from the entries, never asserted.  Issue #450.
+        "filtered_subset": filtered_subset_state(items),
         # Instruments whose products this release does NOT carry because their
         # own gate refused them, `{instrument: why}`.  Present so a consumer can
         # tell "this field has no MIRI" from "this field's MIRI was withheld",
@@ -2350,12 +2422,40 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
         "",
     ]
     # an image-only release ships no catalogs/ directory at all
+    # The filtered subset is NOT shipped by every field, and the README used to
+    # describe it unconditionally: a downloader for one of the fields that ships
+    # an m8 combined table went looking for a `_qualcuts_oksep*` file that is not
+    # there.  Say which of the two this release is.  Issue #450.
+    _qualcut_shipped = any(it.get("kind") == "catalog_qualcut" for it in catalogs)
+    _qualcut_at = sorted({it.get("filtered_subset_at_iteration") for it in catalogs
+                          if it.get("filtered_subset") == "absent"} - {None})
+    _catalog_lines = [
+        "- `basic_merged_indivexp_photometry_tables_merged_*` : final merged photometry",
+        "  table (`.fits` + `.ecsv`)"
+        + ("; the `_qualcuts_oksep<proposal>` variant is the"
+           if _qualcut_shipped else "."),
+    ]
+    if _qualcut_shipped:
+        _catalog_lines.append("  quality-filtered subset.")
+    else:
+        _catalog_lines += [
+            "",
+            "  **This release ships NO quality-filtered subset.** The combined table is",
+            "  UNFILTERED: every merged source is in it, including low-quality fits.",
+            "  The `_qualcuts_oksep<proposal>` cut is written by the cross-band merge",
+            "  (m7); this field's combined table is a later iteration, which adds",
+            "  columns to m7's rows without re-running the merge, so no filtered",
+            "  table was produced for it."
+            + (f"  (An m7 cut exists on disk at {'/'.join(_qualcut_at)} and is NOT"
+               "  shipped: it is a different iteration from the table above.)"
+               if _qualcut_at else ""),
+            "  Apply your own cuts on `qfit_<band>`, `sep_<band>` and",
+            "  `nmatch_good_<band>`; also in `MANIFEST.json` as `filtered_subset`.",
+        ]
     lines += ([
         "## Catalogs (`catalogs/`)",
         "",
-        "- `basic_merged_indivexp_photometry_tables_merged_*` : final merged photometry",
-        "  table (`.fits` + `.ecsv`); the `_qualcuts_oksep<proposal>` variant is the",
-        "  quality-filtered subset.",
+        *_catalog_lines,
         "- `*_dao_basic_vetted.fits` : per-filter vetted catalogs.",
         "- `seed_union_iter3_*.fits` : seed source list.",
         "",
