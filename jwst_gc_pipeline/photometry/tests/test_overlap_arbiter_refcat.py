@@ -457,3 +457,47 @@ def test_the_gating_floor_is_a_measured_match_count(tmp_path):
         f'a misaligned field made its own reference look too sparse to gate '
         f'({n_shift} in footprint) -- the arm would switch off exactly when it '
         f'is needed')
+
+
+# ---------------------------------------------------------------------------
+# sgrb2's MIRI pair -- the arbiter that turns "could not verify" into a verdict
+# ---------------------------------------------------------------------------
+
+def test_sgrb2_has_an_arbiter_for_its_miri_pair():
+    """sgrb2's two MIRI pointings (o002, o998) overlap on a strip with zero
+    mutual-coverage tiles, so the frame-vs-frame layers cannot settle the pair
+    and it was filed `could_not_verify` -- exit 2 -- while four independent
+    measurements agree it is misregistered by 60-74 mas (issue #384).
+
+    With the arbiter the same run reads a measured 33 mas (F770W) and 37 mas
+    (F1280W), both over the 30 mas tolerance, and exits 1.
+    """
+    path = stage.OVERLAP_ARBITER_REFCAT.get('sgrb2')
+    assert path, 'sgrb2 has no arbiter star list'
+    if os.path.exists(path):
+        assert stage.overlap_arbiter_refcat('sgrb2') == path
+
+
+def test_the_sgrb2_arbiter_is_the_list_the_field_registry_already_names():
+    """The arbiter must be the catalogue registered for the field, not a new
+    file: `fields.yaml` registers it for 5365/001 and the MIRI observations
+    resolve to nothing at all, which is why both pointings ran relative-only
+    tweakreg."""
+    from jwst_gc_pipeline import fields
+    registered = fields.reference_catalog_candidates('5365', '001',
+                                                     instrument='miri')
+    arbiter = stage.OVERLAP_ARBITER_REFCAT['sgrb2']
+    assert any(os.path.basename(c) == os.path.basename(arbiter)
+               for c in registered), (registered, arbiter)
+
+
+def test_sgrb2_is_not_promoted_into_the_blocking_frame_registry():
+    """A dense list would serve FRAME_REFCAT too.  It is deliberately NOT
+    there: that registry feeds the blocking absolute-frame check on the
+    SHIPPED catalogues, which is a separate decision and a separate
+    measurement (issue #384)."""
+    assert 'sgrb2' not in stage.FRAME_REFCAT
+    src = _REPO / 'scripts' / 'release' / 'stage_release.py'
+    block = src.read_text().split('OVERLAP_ARBITER_REFCAT = ')[1].split('}')[0]
+    assert 'FRAME_REFCAT' in block, (
+        'the entry must say why it is here rather than in FRAME_REFCAT')
