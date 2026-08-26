@@ -1331,10 +1331,18 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                   f"{'; ' + r['fail_reason'] if r.get('fail_reason') else ''})",
                   flush=True)
         for r in unverifiable:
-            print(f"      COULD NOT VERIFY: {r['a']} | {r['b']} -- footprints "
-                  f"intersect but neither the per-tile grid (no mutual-coverage "
-                  f"cells) nor the pooled swept histogram (no measurable peak) "
-                  f"could measure the pair.  Fail-closed: requires the external "
+            # A THIN overlap (issue #402) carries its own reason and its source
+            # counts; say which of the two unverifiable cases this is rather
+            # than printing the generic sentence over both.
+            _why = (r["fail_reason"] if str(r.get("fail_reason") or "")
+                    .startswith("thin overlap")
+                    else ("footprints intersect but neither the per-tile grid "
+                          "(no mutual-coverage cells) nor the pooled swept "
+                          "histogram (no measurable peak) could measure the "
+                          "pair"))
+            print(f"      COULD NOT VERIFY: {r['a']} | {r['b']} -- {_why}"
+                  f"  (n_a_in={r.get('n_a_in')}, n_b_in={r.get('n_b_in')}).  "
+                  f"Fail-closed: requires the external "
                   f"reference map (--refcat) or a fixed reduction to stage.",
                   flush=True)
 

@@ -277,3 +277,95 @@ def test_unrelated_populations_in_shared_footprint_are_unmeasurable():
     # what is FORBIDDEN is a >tol FAIL fabricated from noise
     bad = [] if pair["clean"] or pair["could_not_verify"] else [pair]
     assert pair["ok"] is True, bad
+
+
+# ---------------------------------------------------------------------------
+# (3) thin overlaps are could-not-verify, not "not overlapping" (issue #402)
+# ---------------------------------------------------------------------------
+
+def _thin_strip_pair(n_strip_a=29, n_strip_b=53, off_mas=800.0, seed=402):
+    """Two groups whose footprints intersect over a strip holding fewer than
+    `min_overlap_pairs` sources of the sparser side, misregistered by
+    `off_mas`.  This is the sickle F770W geometry (29 and 53 sources in the
+    intersection, floor 40) with the issue description's 800 mas offset."""
+    rng = np.random.default_rng(seed)
+    ra0, dec0 = 266.54, -28.70
+    # A: a wide block; B: a block displaced in dec so only a thin strip is shared
+    ra_a = ra0 + (rng.random(2000) - 0.5) * 0.02
+    dec_a = dec0 + rng.random(2000) * 0.01           # dec0 .. dec0+36"
+    ra_b = ra0 + (rng.random(2000) - 0.5) * 0.02
+    dec_b = dec0 + 0.01 - rng.random(2000) * 0.01    # overlaps only at the top
+    # carve the shared strip explicitly: a few stars of each group inside it
+    strip_lo, strip_hi = dec0 + 0.0099, dec0 + 0.0100
+    dec_a = dec_a[dec_a < strip_lo]
+    dec_b = dec_b[dec_b > strip_hi]
+    sra = ra0 + (rng.random(n_strip_b) - 0.5) * 0.02
+    sdec = strip_lo + rng.random(n_strip_b) * (strip_hi - strip_lo)
+    # group A sees only the first n_strip_a of the strip stars, shifted
+    ra_sa, dec_sa = _shift(sra[:n_strip_a], sdec[:n_strip_a], off_mas, 0.0)
+    a = SkyCoord(np.concatenate([ra_a[:len(dec_a)], ra_sa]) * u.deg,
+                 np.concatenate([dec_a, dec_sa]) * u.deg)
+    b = SkyCoord(np.concatenate([ra_b[:len(dec_b)], sra]) * u.deg,
+                 np.concatenate([dec_b, sdec]) * u.deg)
+    return {"visit001": a, "visit002": b}
+
+
+def test_thin_overlap_is_could_not_verify_with_its_source_counts():
+    """A pair whose footprints intersect but whose strip holds fewer than
+    `min_overlap_pairs` sources per side must NOT be recorded as
+    non-overlapping-and-clean.  It is could-not-verify -- the fail-closed path
+    -- and carries the counts that say how thin it was (issue #402)."""
+    groups = _thin_strip_pair()
+    grid = overlap_offset_grid(groups, tol_mas=30.0, nx=8, ny=8,
+                               maxsep=3 * u.arcsec, min_overlap_pairs=40)
+    pair = grid[0]
+    assert pair["overlap"] is True, \
+        "footprints intersect; the geometry, not the source count, sets `overlap`"
+    assert pair["could_not_verify"] is True
+    assert pair["clean"] is False, \
+        "a pair nothing looked at is not a CLEAN pair"
+    assert pair["ok"] is True, "unmeasurable is not a measured FAIL"
+    assert min(pair["n_a_in"], pair["n_b_in"]) < 40
+    assert pair["n_a_in"] > 0 and pair["n_b_in"] > 0
+    assert "thin overlap" in (pair["fail_reason"] or ""), pair["fail_reason"]
+    assert str(pair["n_a_in"]) in pair["fail_reason"]
+    # the release gate iterates the grid results and skips `overlap=False`, so
+    # this is what makes the pair reach the gate and the reference arbiter
+    assert pair["overlap"] and pair["could_not_verify"]
+
+
+def test_thin_overlap_counts_separate_a_thin_strip_from_an_empty_one():
+    """m4 F322W2's below-floor pairs have ZERO sources of one side inside the
+    intersection; sickle F770W's has 29 and 53 with a candidate above
+    tolerance.  Both used to write the identical record.  The counts must
+    tell them apart (issue #402)."""
+    thin = overlap_offset_grid(_thin_strip_pair(n_strip_a=29, n_strip_b=53),
+                               tol_mas=30.0, nx=8, ny=8, maxsep=3 * u.arcsec,
+                               min_overlap_pairs=40)[0]
+    empty = overlap_offset_grid(_thin_strip_pair(n_strip_a=0, n_strip_b=53),
+                                tol_mas=30.0, nx=8, ny=8, maxsep=3 * u.arcsec,
+                                min_overlap_pairs=40)[0]
+    assert (thin["n_a_in"], thin["n_b_in"]) != (empty["n_a_in"], empty["n_b_in"])
+    assert empty["n_a_in"] == 0 or empty["n_b_in"] == 0
+
+
+def test_thin_overlap_does_not_raise_the_in_pipeline_assert():
+    """`assert_overlaps_registered` refuses on a MEASURED misregistration.  A
+    thin overlap is unmeasured, so it must not raise there -- the fail-closed
+    consequence belongs to the release gate, which reads could_not_verify."""
+    groups = _thin_strip_pair()
+    results = assert_overlaps_registered(groups, tol_mas=30.0, per_tile=True,
+                                         grid=(8, 8), maxsep=3 * u.arcsec,
+                                         min_overlap_pairs=40)
+    assert results[0]["could_not_verify"] is True
+
+
+def test_pairwise_layer_carries_the_same_counts():
+    """The pairwise layer already reported `n_overlap` = min(n_a_in, n_b_in),
+    which cannot distinguish 29-and-53 from 0-and-64.  It now carries both
+    (issue #402)."""
+    groups = _thin_strip_pair()
+    pw = pairwise_overlap_offsets(groups, tol_mas=30.0, maxsep=3 * u.arcsec,
+                                  min_overlap_pairs=40)[0]
+    assert pw["n_a_in"] > 0 and pw["n_b_in"] > 0
+    assert pw["n_overlap"] == min(pw["n_a_in"], pw["n_b_in"])
