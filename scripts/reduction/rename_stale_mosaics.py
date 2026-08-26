@@ -180,6 +180,31 @@ Usage:
 
 Dry-run by default; --execute renames and appends to
 ``<fieldpath>/_stale_rename_<date>.log``.
+
+--only: EXECUTE THE SUBSET YOU HAVE MEASURED
+--------------------------------------------
+"Measure before quarantining.  The date of reduction is not strong enough signal
+alone." (#339, 2026-08-10).  Rule 2 selects on generation, which is not a
+measurement, and the seven files it selects today do NOT all clear the 4 arcsec
+bar that instruction was given under:
+
+    cloudc  jw02221-o002_..._f405n-f444w_i2d      4122 mas   } meet the bar
+    brick   jw02221-o002_..._f405n-f444w_i2d      7862 mas   }
+    brick   jw02221-o002_..._clear-f410m_i2d      7841 mas   }
+    brick   jw02221-o002_..._f444w-f466n_i2d      7858 mas   }
+    brick   jw02221-o001_..._f405n-f444w_i2d       163 mas   } measured, real,
+    brick   jw02221-o001_..._clear-f410m_i2d       157 mas   } 25x the current
+    brick   jw02221-o001_..._f444w-f466n_i2d       163 mas   } generation, but
+                                                             } not arcsecond-scale
+
+Without a way to name files, ``--execute`` was all seven or none, so following
+that instruction was not expressible in this tool.  ``--only <basename>``
+(repeatable) restricts the run to the named files.
+
+It REFUSES rather than proceeds when a name matches nothing selected: a typo,
+or a file the rules stopped selecting, would otherwise rename nothing and exit
+0, which is indistinguishable from a successful run.  Names withheld by the
+filter are printed, so the log records that the run was deliberately partial.
 """
 import argparse
 import calendar
@@ -557,7 +582,61 @@ def audit_age_guard(fields, campaign_days=21):
     return held, caught
 
 
-def rename_stale_for_field(field, execute=False, campaign_days=21):
+class UnmatchedOnlyName(Exception):
+    """``--only`` named a file this run did not select.
+
+    Raised rather than warned.  A name that matches nothing silently renames
+    nothing and exits 0, which reads exactly like "the rename ran" -- and the
+    operator who typed the name is executing on data, so the one outcome that
+    must not be silent is "your instruction reached no file".
+    """
+
+    def __init__(self, field, unmatched, available):
+        self.field = field
+        self.unmatched = sorted(unmatched)
+        self.available = sorted(available)
+        super().__init__(
+            f"[{field}] --only named {len(self.unmatched)} file(s) that this "
+            f"run did not select: {', '.join(self.unmatched)}.\n"
+            f"  selected here: "
+            f"{', '.join(self.available) if self.available else '(nothing)'}\n"
+            f"  Run without --only to see the full selection; a name that "
+            f"matches nothing would rename nothing and exit 0.")
+
+
+def _apply_only(plan, only, field):
+    """Restrict ``plan`` to the basenames in ``only``.
+
+    Does NOT refuse on a name it does not hold: with several ``--field`` a name
+    belongs to exactly one of them, so per-field refusal would fire on every
+    other field.  The refusal lives in ``main``, which checks the names against
+    the union of every field's selection BEFORE anything is renamed.
+    """
+    if not only:
+        return plan
+    want = {os.path.basename(n) for n in only}
+    available = {os.path.basename(p[0]) for p in plan}
+    kept = [p for p in plan if os.path.basename(p[0]) in want]
+    withheld = sorted(available - want)
+    if withheld:
+        print(f"[{field}] --only: {len(withheld)} selected file(s) LEFT IN "
+              f"PLACE by the filter:")
+        for name in withheld:
+            print(f"    withheld: {name}")
+    return kept
+
+
+def plan_stale_for_field(field, campaign_days=21):
+    """What the rules select for ``field``, with nothing printed and nothing
+    renamed.  Used to validate ``--only`` before the executing pass runs."""
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        return rename_stale_for_field(field, execute=False,
+                                      campaign_days=campaign_days)
+
+
+def rename_stale_for_field(field, execute=False, campaign_days=21, only=None):
     pipe = f'{BASE}/{field}'
     gens = field_generations(field, campaign_days)
     if gens is None:
@@ -660,6 +739,9 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
     print(f"[{field}] {'EXECUTE' if execute else 'DRY RUN'}: "
           f"{len(plan)} superseded, {kept} current kept "
           f"(campaign floors: rule 1 {fmt(campaign1)}; rule 2 {floors2})")
+    # Applied AFTER the count above, so the log always records how many files
+    # the rules selected as well as how many the operator acted on.
+    plan = _apply_only(plan, only, field)
     skipped = 0
     log = None
     if execute and plan:
@@ -734,13 +816,32 @@ def main():
     ap.add_argument('--audit-age-guard', action='store_true',
                     help='report what MIN_ORPHAN_AGE_DAYS holds back and its '
                          'two margins, and rename nothing')
+    ap.add_argument('--only', action='append', default=[], metavar='BASENAME',
+                    help='act on these selected files only (repeatable). '
+                         'Refuses if a name matches nothing this run selected. '
+                         'Use it to quarantine the subset whose astrometry has '
+                         'actually been measured (#339)')
     args = ap.parse_args()
     if args.audit_age_guard:
         audit_age_guard(args.field, campaign_days=args.campaign_days)
         return
+    if args.only:
+        # Check every name against the union of what the rules select across
+        # ALL the named fields, and refuse BEFORE anything is renamed.  Doing
+        # it after would leave the matched names already quarantined while
+        # reporting a failure, which is the worst of both.
+        available = set()
+        for field in args.field:
+            available |= {os.path.basename(p[0])
+                          for p in plan_stale_for_field(
+                              field, campaign_days=args.campaign_days)}
+        unmatched = {os.path.basename(n) for n in args.only} - available
+        if unmatched:
+            raise UnmatchedOnlyName(', '.join(args.field), unmatched, available)
     for field in args.field:
         rename_stale_for_field(field, execute=args.execute,
-                               campaign_days=args.campaign_days)
+                               campaign_days=args.campaign_days,
+                               only=args.only or None)
 
 
 if __name__ == '__main__':
