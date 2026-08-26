@@ -513,7 +513,12 @@ def test_m2_still_keeps_untokened_catalogs(tmp_path, monkeypatch):
     dropping them builds a consensus from nrcb alone and PASSES.  An untokened
     name leaves its observation open, so the drop applies only to a name that
     SPELLS a different one -- and a pre-token copy of an exposure that also has
-    a tokened one still goes, as before.
+    a tokened one still goes when the tokened copy is the CURRENT one.
+
+    Since #391 the pre-token/tokened tie-break is recency rather than
+    spelling, so the mtimes are set explicitly here instead of being whatever
+    order the fixture happened to write them in.  What the test is about --
+    nrca surviving, and one exposure never counted twice -- is unchanged.
     """
     from jwst_gc_pipeline.photometry.cataloging import (
         _drop_foreign_obs_duplicates)
@@ -529,9 +534,17 @@ def test_m2_still_keeps_untokened_catalogs(tmp_path, monkeypatch):
     nrcb_pre = _perframe_catalog(
         tmp_path, 'f090w_nrcb1_visit001_vgroup1_exp00001_m2_daophot_basic.fits',
         '/x/jw06778001001_1_00001_nrcb1_o001_crf.fits')
+    os.utime(nrcb_pre, (1_700_000_000, 1_700_000_000))
+    os.utime(nrcb_tok, (1_700_086_400, 1_700_086_400))   # the current copy
     kept = _drop_foreign_obs_duplicates([nrca, nrcb_tok, nrcb_pre], '_j6778',
                                         'f090w', 'm2', 'nrcb', 'ngc6334')
     assert sorted(kept) == sorted([nrca, nrcb_tok]), kept
+    # and with the pre-token copy the current one, it is the survivor -- the
+    # fail-safe (nrca) and the no-double-count rule both hold either way (#391)
+    os.utime(nrcb_pre, (1_700_172_800, 1_700_172_800))
+    kept = _drop_foreign_obs_duplicates([nrca, nrcb_tok, nrcb_pre], '_j6778',
+                                        'f090w', 'm2', 'nrcb', 'ngc6334')
+    assert sorted(kept) == sorted([nrca, nrcb_pre]), kept
 
 
 def test_m2_selection_end_to_end_through_the_checkpoint(tmp_path, monkeypatch):

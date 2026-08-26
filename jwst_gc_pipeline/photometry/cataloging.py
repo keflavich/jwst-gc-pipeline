@@ -3825,6 +3825,37 @@ def _catalog_source_frame(fn):
         return None
 
 
+def _newest_of(tokened, untokened):
+    """The most recently WRITTEN of two spellings of one exposure, or None.
+
+    Returns None when any candidate's mtime cannot be read, and when the two
+    sides are written at the same second -- both mean "the file system cannot
+    separate these", and the caller then keeps its previous, name-based
+    preference rather than picking arbitrarily.  A caller passing bare
+    basenames (the unit tests) always lands here.
+
+    ``os.stat`` is the only failure mode that matters: a file the glob listed
+    and something removed between the glob and this call.  Catching
+    ``OSError`` covers both that and an unreadable directory.
+    """
+    def _mtime(fn):
+        try:
+            return os.path.getmtime(fn)
+        except OSError:
+            return None
+    t_times = [_mtime(f) for f in tokened]
+    u_times = [_mtime(f) for f in untokened]
+    if any(t is None for t in t_times + u_times):
+        return None
+    t_best = max(zip(t_times, tokened))
+    u_best = max(zip(u_times, untokened))
+    if u_best[0] > t_best[0]:
+        return u_best[1]
+    if t_best[0] > u_best[0]:
+        return t_best[1]
+    return None          # same second -> not separable; caller decides
+
+
 def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                                  target, target_obs=None):
     """Drop per-frame catalogs belonging to a DIFFERENT observation/proposal.
@@ -3859,6 +3890,9 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
       tokened name.  ngc6334 F090W is this case, and its nrca detectors exist
       ONLY under the pre-token name; discarding them would build a consensus
       from nrcb alone and PASS, which is worse than the duplicate it avoids.
+      Where BOTH spellings of one exposure exist, the copy written last is the
+      one kept: the token is a fact about the name and does not say which
+      product is current (issue #391).
       A catalog that SPELLS a different observation is still dropped here: the
       registry's count is what this branch cannot trust (0 for an unregistered
       field, and 1 for a wildcard obsid list wherever ``fields.py`` still reads
@@ -4017,8 +4051,10 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # throw away real exposures -- ngc6334 F090W's nrca detectors exist ONLY
         # under the pre-token name, and dropping them would build a consensus
         # from nrcb alone and PASS, which is worse than the duplicate it avoids.
-        # Keep both spellings, preferring the tokened copy of any exposure that
-        # has one, so the same exposure is still never counted twice.
+        # Keep both spellings, keeping the copy of any exposure that was
+        # written LAST where both exist, so the same exposure is still never
+        # counted twice and a stale copy does not shadow a re-catalogued one
+        # (issue #391).
         # Compare on an identity with BOTH the token and the chunk suffix
         # removed.  The checkpoint collapses `_chunk\d+of\d+` itself further
         # down, so `..._m2_chunk00of02_...` and `..._m2_...` land on one
@@ -4074,7 +4110,27 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         for ident, group in untokened.items():
             group = sorted(group)
             if ident in tokened:
-                drop.extend(group)
+                # Both spellings of the SAME exposure are on disk, so one of
+                # them is redundant -- but "tokened" is a fact about the NAME,
+                # and the name says nothing about which copy is CURRENT.
+                # cloudef_controlfield F360M holds eight `_o005_` nrcblong
+                # catalogs recovered from a 2026-06 quarantine beside the same
+                # eight exposures re-catalogued on 2026-08-22, and the June
+                # copies -- 44,148-44,760 rows against 48,666-49,135, about 10%
+                # short -- won every time, so F360M's visit consensus paired a
+                # June nrcblong against a same-day nrcalong (issue #391).
+                # Prefer the copy written LAST.
+                #
+                # Only when both mtimes can be read: a caller passing bare
+                # basenames (every unit test here does) gets the previous
+                # tokened-wins behaviour, and so does a tie.
+                keep = _newest_of(tokened[ident], group)
+                if keep is None or keep in tokened[ident]:
+                    drop.extend(group)
+                else:
+                    drop.extend(tokened[ident])
+                    drop.extend([f for f in group if f != keep])
+                    tokened[ident] = [keep]
             else:
                 # Same exposure written twice under the same spelling can only
                 # differ by chunking; keep one.

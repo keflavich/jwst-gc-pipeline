@@ -477,3 +477,68 @@ def test_the_foreign_drop_runs_first_and_saves_o005s_own_frames(tmp_path, monkey
     # o002's frames -- the failure this ordering prevents
     blind = _drop_module_level_duplicates(fns, "f360m", "m2", "merged")
     assert all("_nrcblong_" in os.path.basename(f) for f in blind)
+
+
+# ---------------------------------------------------------------------------
+# a stale tokened copy must not shadow a re-catalogued untokened one (#391)
+# ---------------------------------------------------------------------------
+
+def _write(tmp_path, name, mtime):
+    p = tmp_path / name
+    p.write_bytes(b"x")
+    os.utime(p, (mtime, mtime))
+    return str(p)
+
+
+def test_newer_untokened_copy_wins_over_a_stale_tokened_one(tmp_path):
+    """cloudef_controlfield F360M: eight `_o005_` nrcblong catalogs recovered
+    from a June quarantine sat beside the SAME exposures re-catalogued in
+    August, and the June copies won because their names carried a token.  The
+    August ones are ~10% longer, and F360M's consensus paired a June nrcblong
+    with a same-day nrcalong."""
+    old = _write(tmp_path, _name(filt="f360m", det="nrcblong", tok="_o005"),
+                 1_700_000_000)
+    new = _write(tmp_path, _name(filt="f360m", det="nrcblong"),
+                 1_700_086_400)      # one day later
+    kept = _drop_foreign_obs_duplicates([old, new], "", "f360m", "m2",
+                                        "nrcblong", "cloudef_controlfield")
+    assert kept == [new], "the copy written last must be the one kept"
+
+
+def test_newer_tokened_copy_still_wins(tmp_path):
+    """The rule is recency, not spelling: a tokened copy written after the
+    untokened one is still the one kept."""
+    new = _write(tmp_path, _name(filt="f360m", det="nrcblong", tok="_o005"),
+                 1_700_086_400)
+    old = _write(tmp_path, _name(filt="f360m", det="nrcblong"),
+                 1_700_000_000)
+    kept = _drop_foreign_obs_duplicates([old, new], "", "f360m", "m2",
+                                        "nrcblong", "cloudef_controlfield")
+    assert kept == [new]
+
+
+def test_equal_mtimes_keep_the_previous_tokened_preference(tmp_path):
+    """When the file system cannot separate the two, nothing is picked
+    arbitrarily: the pre-#391 behaviour stands."""
+    tok = _write(tmp_path, _name(filt="f360m", det="nrcblong", tok="_o005"),
+                 1_700_000_000)
+    unt = _write(tmp_path, _name(filt="f360m", det="nrcblong"),
+                 1_700_000_000)
+    kept = _drop_foreign_obs_duplicates([tok, unt], "", "f360m", "m2",
+                                        "nrcblong", "cloudef_controlfield")
+    assert kept == [tok]
+
+
+def test_exactly_one_copy_survives_whichever_wins(tmp_path):
+    """Whatever the preference, the exposure must be counted once -- keeping
+    both is the DuplicateExposureError of #259."""
+    for older_is_tokened in (True, False):
+        d = tmp_path / f"case{int(older_is_tokened)}"
+        d.mkdir()
+        t = _write(d, _name(filt="f360m", det="nrcblong", tok="_o005"),
+                   1_700_000_000 if older_is_tokened else 1_700_086_400)
+        u = _write(d, _name(filt="f360m", det="nrcblong"),
+                   1_700_086_400 if older_is_tokened else 1_700_000_000)
+        kept = _drop_foreign_obs_duplicates([t, u], "", "f360m", "m2",
+                                            "nrcblong", "cloudef_controlfield")
+        assert len(kept) == 1
