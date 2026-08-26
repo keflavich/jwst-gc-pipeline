@@ -110,7 +110,7 @@ OFF_MAX = 60.0                   # a VERIFIED cell whose peak offset exceeds thi
 # RELAXATION of the gate and is deliberately not part of this.
 MIN_SEAM_CELLS = 3               # connected high-offset cells that FAIL regardless of contrast
 
-OVERLAP_STRIDE = 16             # pixel stride when sampling a mosaic for module overlap
+OVERLAP_STRIDE = 16              # pixel stride when sampling a mosaic for module overlap
 MIN_OVERLAP_SAMPLES = 50         # sampled positions with real data in BOTH modules before
                                  # the modules count as overlapping.  At the i2d pixel scale
                                  # a stride-16 sample is ~0.5"; 50 samples is a few arcsec of
