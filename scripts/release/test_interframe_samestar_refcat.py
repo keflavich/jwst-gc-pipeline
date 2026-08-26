@@ -288,3 +288,90 @@ def test_global_tie_too_close_to_the_match_radius_is_could_not_verify(monkeypatc
     g = ck._samestar_ref_grid(a, ref, max_off_mas=300.0)
     assert not g["measurable"] and not g["clean"]
     assert "match radius" in g["reason"], g["reason"]
+
+
+# --- issue #403: the 20-star floor is a COUNT, not a PRECISION ----------------
+# The arbiter demands significance to FAIL (``off_mas > nsigma * sem_mas``) and
+# demanded nothing to PASS, so a pair measured too coarsely to resolve a
+# tolerance-sized seam was protected from flagging twice over -- once by the noise
+# and once by that clause -- and fell straight through to "clean".  These pin the
+# missing half: a clean verdict requires that a seam AT the tolerance could have
+# been flagged.
+_ZERO_TIE = dict(dra=0.0, ddec=0.0, off=0.0, ok=True, swept=False, contrast=50.0,
+                 npairs=500, n_peak=100, window_arcsec=3.0)
+
+
+def _footprint_pair(n_stars, jitter_mas, seam_mas=0.0, seed=101, box_arcsec=20.0):
+    """A mutual-coverage footprint holding ``n_stars`` reference stars, each
+    detected once by group A and once by group B with ``jitter_mas`` per-axis
+    measurement noise.  ``seam_mas`` is a rigid RA shift applied to B only, i.e.
+    the inter-frame misregistration this arbiter exists to catch.  ``n_stars`` is
+    well above ``SAMESTAR_MIN_STARS`` and the jitter is small against the smallest
+    match radius, so every radius keeps its matches and the existing
+    spread-across-radii and keep-ratio mitigations do NOT fire: what is left is
+    precision alone."""
+    rng = np.random.default_rng(seed)
+    half = box_arcsec / 2.0 / 3600.0
+    ra = RA0 + rng.uniform(-half, half, n_stars) / COSD
+    dec = DEC0 + rng.uniform(-half, half, n_stars)
+    dra_a = rng.normal(0, jitter_mas, n_stars) / 3.6e6 / COSD
+    ddec_a = rng.normal(0, jitter_mas, n_stars) / 3.6e6
+    dra_b = rng.normal(0, jitter_mas, n_stars) / 3.6e6 / COSD
+    ddec_b = rng.normal(0, jitter_mas, n_stars) / 3.6e6
+    a = _sc(ra + dra_a, dec + ddec_a)
+    b = _sc(ra + dra_b + seam_mas / 3.6e6 / COSD, dec + ddec_b)
+    return _sc(ra, dec), a, b
+
+
+def test_a_real_seam_lost_in_the_per_star_scatter_is_not_reported_clean():
+    """The case in the issue, with the seam actually present: 60 stars at ~60 mas
+    per-star scatter measure a REAL 60 mas seam as 55 mas +- 18, which is below
+    the 3-sigma the flag rule requires, so the pair used to come back CLEAN with a
+    misregistration in it.  It must be could-not-verify."""
+    ref, a, b = _footprint_pair(n_stars=60, jitter_mas=60.0, seam_mas=60.0)
+    v = ck._samestar_pair_footprint(a, b, ref, _ZERO_TIE)
+    assert v["n_common"] >= ck.SAMESTAR_MIN_STARS, v        # the count floor is met
+    assert v["worst_off_mas"] > ck.TOL_MAS, v               # the seam IS in the data
+    assert 3.0 * v["sem_mas"] > ck.TOL_MAS, v               # and cannot be resolved
+    assert not v["clean"] and not v["measurable"], v
+    assert "could not have been flagged" in v["reason"], v["reason"]
+
+
+def test_coarse_astrometry_with_no_seam_is_could_not_verify_not_clean():
+    """Same geometry, no seam: still could-not-verify, because the measurement
+    could not have SEEN one.  A pass has to mean something."""
+    ref, a, b = _footprint_pair(n_stars=60, jitter_mas=60.0, seam_mas=0.0)
+    v = ck._samestar_pair_footprint(a, b, ref, _ZERO_TIE)
+    assert v["n_common"] >= ck.SAMESTAR_MIN_STARS, v
+    assert not v["clean"] and not v["measurable"], v
+    assert "could not have been flagged" in v["reason"], v["reason"]
+
+
+def test_precise_stars_still_clear_the_pair():
+    """The regression direction: the same geometry measured well enough to resolve
+    a tolerance-sized seam is still CLEAN, and now records its precision."""
+    ref, a, b = _footprint_pair(n_stars=60, jitter_mas=8.0)
+    v = ck._samestar_pair_footprint(a, b, ref, _ZERO_TIE)
+    assert v["clean"] and v["measurable"], v
+    assert 3.0 * v["sem_mas"] < ck.TOL_MAS, v
+    assert "resolvable" in v["reason"], v["reason"]
+
+
+def test_a_resolvable_seam_still_fails():
+    """The measurability condition guards the PASS only: a seam the measurement CAN
+    resolve is still a FAIL with measurable=True, so the pair still blocks."""
+    ref, a, b = _footprint_pair(n_stars=60, jitter_mas=8.0, seam_mas=150.0)
+    v = ck._samestar_pair_footprint(a, b, ref, _ZERO_TIE)
+    assert v["measurable"] and not v["clean"], v
+    assert v["worst_off_mas"] > ck.TOL_MAS, v
+
+
+def test_the_precision_requirement_is_the_only_thing_holding_the_noisy_pair(monkeypatch):
+    """With the condition switched off the noisy pair passes every OTHER check --
+    which is what makes it the missing half rather than a duplicate of the
+    spread-across-radii or keep-ratio mitigations."""
+    ref, a, b = _footprint_pair(n_stars=60, jitter_mas=60.0, seam_mas=60.0)
+    monkeypatch.setattr(ck, "SAMESTAR_REQUIRE_RESOLVABLE", False)
+    v = ck._samestar_pair_footprint(a, b, ref, _ZERO_TIE)
+    assert v["clean"] and v["measurable"], v
+    assert 3.0 * v["sem_mas"] > ck.TOL_MAS, v
