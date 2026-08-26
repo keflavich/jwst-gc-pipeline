@@ -3817,6 +3817,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 anchor=list(cons["anchor_key"]),
                 median_scatter_mas=float(np.median(cons["scatter_mas"]))
                 if len(cons["scatter_mas"]) else float("nan"),
+                # Shadow copies of the consensus's own stars, from the one-way
+                # non-exclusive association at `match_radius` (issue #484).  A
+                # real stellar field has almost no pairs that close, so a
+                # population there says the consensus is bimodal and a
+                # per-exposure `H.argmax()` measured against it may have locked
+                # onto the wrong mode.  Diagnostic only -- it gates nothing.
+                duplication=cons.get("duplication"),
                 consensus_ok=cons["consensus_ok"],
                 skipped=[list(k) for k in cons["skipped"]],
                 # The POPULATION change, recorded whether or not the same-star

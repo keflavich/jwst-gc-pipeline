@@ -86,6 +86,15 @@ MODULE_ANTISYMMETRY_COS_MAX = -0.9
 # fractional magnitude agreement required between the two module vectors
 MODULE_ANTISYMMETRY_MAG_TOL = 0.3
 
+# Fraction of consensus rows with a neighbour inside the association radius
+# above which the consensus is reported as probably duplicated (see
+# `consensus_duplication`).  A real stellar field's NN distribution only starts
+# rising well past 0.2"; gc2211 o023 F200W's duplicated consensus read 16.9%
+# within 0.25" against a p50 NN of 0.441" (#484).  5% is far above the clean
+# case and far below the observed bad one, so it separates them without being
+# tuned to either.
+CONSENSUS_DUPLICATION_WARN_FRAC = 0.05
+
 # Same-star bulk refinement (memory: histogram-vs-samestar-offset-bias): the
 # all-pairs offset HISTOGRAM (check A) is biased by several mas against a DENSE
 # reference -- two catalogs tracing the same clustered field make a non-uniform
@@ -902,10 +911,84 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
 
     skipped = [e["key"] for i, e in enumerate(entries) if i not in usable_idx]
     anchor = usable[int(np.argmax([e["n_reliable"] for e in usable]))]
+    dup = consensus_duplication(consensus, match_radius)
+    if (np.isfinite(dup["frac_within_match_radius"])
+            and dup["frac_within_match_radius"] > CONSENSUS_DUPLICATION_WARN_FRAC):
+        print(f"WARNING: visit consensus ({context}): "
+              f"{100 * dup['frac_within_match_radius']:.1f}% of its "
+              f"{dup['n']} rows have a neighbour within the "
+              f"{dup['match_radius_arcsec']:.2f}\" association radius "
+              f"(p50 NN {dup['nn_p50_arcsec']:.3f}\").  A real stellar field "
+              f"has almost none, so this consensus is probably carrying shadow "
+              f"copies of its own stars from a displaced exposure -- and every "
+              f"per-exposure offset below is an argmax against a BIMODAL "
+              f"reference (issue #484).")
     return dict(coords=consensus, mag=consensus_mag, nexp=nexp,
                 scatter_mas=scatter_mas, exposures=exposures,
                 consensus_ok=consensus_ok, anchor_key=anchor["key"],
-                n_components=n_components, skipped=skipped)
+                n_components=n_components, skipped=skipped,
+                duplication=dup)
+
+
+def consensus_duplication(consensus, match_radius=0.2 * u.arcsec):
+    """Is this consensus catalog carrying SHADOW COPIES of its own stars?
+
+    ``build_visit_consensus`` associates each member exposure to the seed with a
+    ONE-WAY, non-exclusive nearest-neighbour query inside ``match_radius``, and
+    every member star that finds no partner is APPENDED as a new consensus row.
+    So an exposure displaced by about ``match_radius`` contributes a second copy
+    of stars already in the seed, at the displacement, and the consensus becomes
+    bimodal without saying so.
+
+    That is not hypothetical.  gc2211 o023 F200W (#484): exposure 1 sits 156-201
+    mas from its siblings, straddling the 0.2" radius, and the resulting
+    consensus has **16.9%** of its 39,297 rows with a neighbour within 0.25" --
+    an excess sitting on top of a stellar NN distribution that only starts
+    rising past 0.2" (p50 NN 0.441").  ``measure_offset`` then takes
+    ``H.argmax()`` over the window with no zero-lag prior, so on three of eight
+    detectors it locked onto the WRONG mode and attributed a real per-exposure
+    displacement to the two GOOD exposures, fabricating a 74 mas per-detector
+    spread out of it.
+
+    A real stellar field has almost no pairs below ``match_radius``: two stars
+    that close are one blended source in these catalogs.  So a population there
+    is a direct, cheap tell for the duplication, independent of any offset
+    measurement.  This reports it; it decides nothing.
+
+    Returns ``dict(n, frac_within_match_radius, frac_within_half_radius,
+    nn_p50_arcsec, match_radius_arcsec)``.  The fractions are NaN when there
+    are too few rows to characterise.
+
+    NOT an astrometric measurement: no offset, correction or tie is derived
+    from these separations, and this is not a nearest-neighbour median of
+    positional offsets (CLAUDE.md rule #1).  It is a one-catalog geometry
+    statistic.
+    """
+    radius_arcsec = (match_radius.to(u.arcsec).value
+                     if hasattr(match_radius, "to") else float(match_radius))
+    n = len(consensus)
+    out = dict(n=int(n), match_radius_arcsec=float(radius_arcsec),
+               frac_within_match_radius=float("nan"),
+               frac_within_half_radius=float("nan"),
+               nn_p50_arcsec=float("nan"))
+    if n < 100:
+        return out
+    xyz = _unit_xyz(consensus)
+    tree = cKDTree(xyz)
+    # k=2: a point's first neighbour is itself.
+    dist, _ = tree.query(xyz, k=2, workers=-1)
+    chord = dist[:, 1]
+    # chord -> angular separation, exact on the unit sphere
+    nn_arcsec = np.degrees(2.0 * np.arcsin(np.clip(chord / 2.0, 0.0, 1.0))) * 3600.0
+    nn_arcsec = nn_arcsec[np.isfinite(nn_arcsec)]
+    if nn_arcsec.size < 100:
+        return out
+    out["frac_within_match_radius"] = float(
+        np.count_nonzero(nn_arcsec < radius_arcsec) / nn_arcsec.size)
+    out["frac_within_half_radius"] = float(
+        np.count_nonzero(nn_arcsec < 0.5 * radius_arcsec) / nn_arcsec.size)
+    out["nn_p50_arcsec"] = float(np.percentile(nn_arcsec, 50))
+    return out
 
 
 def module_family(module):
