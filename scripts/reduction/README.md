@@ -39,6 +39,19 @@ declaration and does not report the other module as missing.
 Add `--instrument miri` / `--instrument niriss` (and for NIRISS,
 `--target <target>/niriss`, which is where its data lives) for those.
 
+It also reports free space on the filesystem the field tree lives on, and
+refuses below `--min-free-tb` (default 2 TB, `0` disables) — #421. Nothing else
+in this repo looks at free space, and data-qa's `--min-free-tb` floor watches
+its download staging, which is a different filesystem whenever a field's
+`root:` differs from it: the treasury is `root: blue` while the staging is on
+/orange, so the monitor can keep downloading into a healthy /orange and keep
+triggering reductions into a full /blue. The check reads `{root}/{target}`
+rather than `--root`, because `/orange/adamginsburg/jwst/brick` is a symlink to
+`/blue/.../jwst/brick` — several targets under an /orange root write to /blue,
+and it is the destination filesystem that runs out. Sizing: one filter of one
+field is 1.42 TB all-in on `brick/F212N`, of which 1.23 GB per detector-exposure
+is the per-frame product chain.
+
 ### A NEW field: seed its PSF grid cache first
 
 ```
