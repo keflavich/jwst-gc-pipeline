@@ -308,6 +308,52 @@ def merged_catalog_obs_token(proposal_id, field):
     return ''
 
 
+#: ngc6334 is imaged by two proposals that share one target directory, one
+#: filter list, one observation number AND the same ``(visit, vgroup, exp)``
+#: tuples, so their per-frame catalog names collide.  Tagged by proposal id.
+SHARED_TREE_PROPOSALS = ('7213', '6778')
+
+
+def perframe_obs_token(proposal_id, field):
+    """The token the PER-FRAME catalog writer stamps between detector and visit.
+
+    This is the single source for that token.  ``crowdsource_catalogs_long
+    .obs_token`` (the writer) delegates here, and every consumer that has to
+    predict a per-frame name -- above all ``merge_individual_frames``' input
+    glob -- calls it rather than re-deriving the rule.  Re-deriving it is what
+    issue #316 is about: a glob that spells the token differently from the
+    writer does not raise, it matches nothing, and the caller reports "no
+    per-frame catalogs for this filter" and moves on.
+
+    Two spellings the hand-rolled versions got wrong:
+
+    * ``_o{field}`` unpadded.  The writer normalises through
+      ``observation_field_token``, so ``--field 23`` writes ``_o023`` while a
+      raw f-string globs ``_o23``.
+    * a token on a single-observation proposal.  Only
+      ``MULTIOBS_PROPOSALS`` and ``SHARED_TREE_PROPOSALS`` are tokened; every
+      other target's per-frame names carry none, whatever ``field`` says.
+    """
+    if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
+        return f'_o{observation_field_token(field)}'
+    if str(proposal_id) in SHARED_TREE_PROPOSALS:
+        return f'_j{proposal_id}'
+    return ''
+
+
+def merged_catalog_module_token(proposal_id, field):
+    """The whole module-slot token of a MERGED catalog name.
+
+    ``_j{proposal}`` for the shared ngc6334 tree, plus
+    ``merged_catalog_obs_token``.  The merge's output name and every reader of
+    it (``cataloging.merged_catalog_path``, the m7 seed reader,
+    ``merge_daophot``'s glob) are one contract, so they take it from here.
+    """
+    jtok = (f'_j{proposal_id}'
+            if str(proposal_id) in SHARED_TREE_PROPOSALS else '')
+    return jtok + merged_catalog_obs_token(proposal_id, field)
+
+
 # --- reading a per-frame catalog name back --------------------------------
 # Every reader that parses `{band}_{detector}_visit{NNN}_vgroup...` out of a
 # per-frame catalog name has to allow for the per-observation token `obs_token`

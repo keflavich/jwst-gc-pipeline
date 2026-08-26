@@ -64,6 +64,7 @@ from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     PER_OBS_MERGED_PROPOSALS, merged_catalog_obs_token,
+    perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
@@ -1516,23 +1517,28 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             f"whose merged catalogs are per-obs (naming.merged_catalog_obs_token); "
             f"pass field=<obs>.  An unscoped merge would glob nothing (the "
             f"per-frame writer stamps _o{{field}}) or pool other tiles' frames.")
-    ngc6334_multiprop = any(str(p) in ('7213', '6778')
-                            for p in (_obs_filters_for(target) or ()))
-    if ngc6334_multiprop:
-        glob_obs_ = out_obs_ = f'_j{progid}'
-    elif field not in (None, ''):
-        glob_obs_, out_obs_ = f'_o{field}', f'_o{field}'
+    # The two tokens come from the two functions that DEFINE them, so neither
+    # can be spelled differently here than where it is written (issue #316,
+    # item 1).  The hand-rolled `f'_o{field}'` this replaces disagreed with the
+    # per-frame writer in two live cases, and a glob that disagrees does not
+    # raise -- it matches nothing, `merge_individual_frames` reports "No tables
+    # found", and the CLI logs "no per-frame catalogs for this filter":
+    #   * a SINGLE-OBSERVATION proposal called with a field (w51/6151,
+    #     sgrc/4147, cloudef/2092 ...).  The writer stamps NO token; this
+    #     globbed `_o001`.
+    #   * an UNPADDED field on a per-obs proposal.  The writer normalises
+    #     through observation_field_token, so `--field 23` writes `_o023`
+    #     while this globbed `_o23`.
     # (There was a `target == 'gc2211'` branch here that globbed `_o*` and wrote
     # an UNTOKENED merged catalog -- i.e. pooled all five pointings into one.
     # 2211 is a PER_OBS_MERGED_PROPOSAL now, so a field-less 2211 merge raises
-    # above and a field-scoped one takes the `_o{field}` branch: the pooling
+    # above and a field-scoped one is tokened per observation: the pooling
     # branch became unreachable.  It also keyed off the literal target name,
     # which the per-observation split (#469) changed to `gc2211_o023`.., so it
-    # had already stopped matching -- silently, into the `else` below, which
-    # globs with no obs token at all and finds none of the `_o023`-stamped
-    # per-frame tables.)
-    else:
-        glob_obs_, out_obs_ = '', ''
+    # had already stopped matching -- silently, into an un-tokened glob that
+    # finds none of the `_o023`-stamped per-frame tables.)
+    glob_obs_ = perframe_obs_token(progid, field)
+    out_obs_ = merged_catalog_module_token(progid, field)
     raw_fns = []
     for module_ in modules:
         for visitid in range(1, max_visitid + 1):
