@@ -36,9 +36,40 @@ whole-visit shift IS expressible, so it is always actionable no matter how
 small.  A field absent from the table keeps the strict 2 mas behaviour.
 """
 import os
+import warnings
 
 #: env var an operator sets to override the per-field default
 FLOOR_ENV = 'ASTROM_M2_CORRECTION_FLOOR_MAS'
+
+
+class UnregisteredM2FloorWarning(UserWarning):
+    """A field is running on an env-var floor with no entry of its own.
+
+    That is the state every retroactively-added entry was in first, and each
+    one cost a stopped chain to discover: sgra (#494, m12 stopped twice),
+    w51 (#508), arches (#512), gc2211_o028 (#533).  In each case the field had
+    been run with ``ASTROM_M2_CORRECTION_FLOOR_MAS`` set by hand for weeks, the
+    records said so in ``correction_floor_source``, and nothing surfaced it
+    until a run was submitted without the variable and died at m12.
+
+    So the warning fires at the moment the override is USED, which is the
+    moment the evidence for an entry exists and the operator is present to act
+    on it -- rather than at the next run, when neither is true.
+    """
+
+
+def _warn_unregistered(target, floor):
+    warnings.warn(
+        f"m2 correction floor for {target!r} is {floor} mas from "
+        f"${FLOOR_ENV}, and {target!r} has NO entry in PER_FIELD_FLOOR_MAS. "
+        f"The next run submitted without that variable gets the strict 0.0 "
+        f"default and stops at m12 on this field's own per-exposure scatter "
+        f"(sgra, w51, arches and gc2211_o028 each paid a stopped chain to "
+        f"learn this). Register the field in "
+        f"jwst_gc_pipeline/photometry/m2_correction_floors.py with the "
+        f"measured distribution beside it, or record there why it is "
+        f"deliberately absent.",
+        UnregisteredM2FloorWarning, stacklevel=3)
 
 #: Per-field floor in mas, keyed by target.  Each entry is a measurement of THAT
 #: field's per-exposure scatter, not a preference -- raise one only with the
@@ -165,12 +196,28 @@ PER_FIELD_FLOOR_MAS = {
     # siblings stay at 4.0 because their maxima are 3.1-3.5; o028's scatter is
     # genuinely a little wider, so it takes its own entry rather than theirs.
     'gc2211_o028': 6.0,
-    # quintuplet is deliberately absent as well.  Its records carry
-    # `correction_floor_mas: 4.0` like arches's do, but all four of them
-    # (2026-08-01 and 2026-08-15, F212N and F323N) contain ZERO corrections at a
-    # consensus scatter of 1.16-1.32 mas.  There is no measured distribution for
-    # a floor to sit above, and an entry justified by "the operator set the env
-    # var" is the operator memory this table replaces rather than a measurement.
+    # quintuplet is deliberately absent as well, and the reason is narrower than
+    # "no measured distribution" -- that wording sent the next reader looking
+    # for records that are there.
+    #
+    # Its FOUR `*_latest.json` records (2026-08-01 and 2026-08-15, F212N and
+    # F323N) hold ZERO corrections at a consensus scatter of 1.16-1.32 mas.  But
+    # it has 37 records in total, and the other 33 are not empty: 88 corrections,
+    # 26 of them (30%) in the 2-4 mas band -- the band that is actionable at the
+    # strict default and suppressed by a 4.0 floor -- and they are the
+    # nrcb1-nrcb4 per-detector class against a 1.21-1.26 mas scatter.  That is
+    # the arches shape, on the same instrument and the same two filters.
+    #
+    # What is true is that quintuplet is absent-and-FINE rather than
+    # absent-and-broken.  Its 2026-07-30/31 records hold real 120 mas and 232 mas
+    # displacements; those were applied, and the field has read zero corrections
+    # for 21 consecutive records over three weeks since.  So submitting it today
+    # without the env var does NOT stop the chain, which is not the case for
+    # arches (51 corrections behind a `correction_floor_source: env` pass).
+    #
+    # It takes an entry when it next measures the 2-4 mas class -- which a re-tie
+    # or a regeneration from _cal would put back, since that is where those
+    # earlier records came from.
 }
 
 
@@ -182,11 +229,20 @@ def m2_correction_floor(target, env=None):
     caller so the checkpoint record can say which it was: a pass that passed
     because the floor was RAISED BY HAND has to be distinguishable from one
     that passed at the field's standing floor.
+
+    Using the env var on a field with NO entry emits
+    ``UnregisteredM2FloorWarning``: that combination is precisely the state
+    every retroactively-added entry was in, and the warning is the only moment
+    at which both the evidence and the operator are present.  It does not
+    change the returned floor -- the override still wins.
     """
     env = os.environ if env is None else env
     raw = env.get(FLOOR_ENV)
     if raw not in (None, ''):
-        return float(raw), 'env'
+        floor = float(raw)
+        if target not in PER_FIELD_FLOOR_MAS and floor > 0:
+            _warn_unregistered(target, floor)
+        return floor, 'env'
     if target in PER_FIELD_FLOOR_MAS:
         return float(PER_FIELD_FLOOR_MAS[target]), 'per-field'
     return 0.0, 'default'
