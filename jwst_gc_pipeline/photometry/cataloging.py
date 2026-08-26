@@ -4776,6 +4776,58 @@ def perframe_marker_path(marker_dir, filename, detector, filt, phase,
         f'{os.path.basename(filename)}.{filt.lower()}.{tail}.{phase}.{kind}')
 
 
+def perframe_detector_token(filename):
+    """The detector token of a per-frame product, e.g. ``nrca1`` / ``nrcalong``.
+
+    ONE definition, for the same reason ``perframe_marker_path`` is one: the
+    writer, the finalize completeness check and the resume all have to spell a
+    marker the same way or they disagree about whether a frame was fitted.
+
+    Basenames FIRST.  ``jw..._03107_00001_nrcalong_destreak_o049_crf.fits`` puts
+    the detector at index 3, but only relative to the file name -- and callers
+    hold full paths.  A field directory whose own name contains an underscore
+    (``gc2211_o049``, ``cloudef_controlfield``) then contributes one to the split
+    and shifts every index by one, so the token silently became the EXPOSURE
+    number instead (#562):
+
+        '/orange/.../gc2211_o049/F277W/pipeline/jw...crf.fits'.split('_')[3]
+            -> '00001'      # exposure
+        os.path.basename(same).split('_')[3]
+            -> 'nrcalong'   # detector
+
+    Both spellings are on the gc2211_o049 tree, 16 markers each, because
+    different call sites passed different things.
+    """
+    return os.path.basename(filename).split('_')[3]
+
+
+def perframe_legacy_detector_token(filename):
+    """The pre-#562 token: the split taken on the RAW value the caller held.
+
+    Identical to :func:`perframe_detector_token` for a basename, and for a full
+    path under a field directory with no underscore in its name -- which is why
+    this went unnoticed on brick / w51 / sgrb2.  It differs only on the affected
+    trees, and there it returns the exposure number.
+
+    Kept so the READERS (the finalize completeness check, the resume) can still
+    see markers already on disk.  Writers must not use it: a run that writes the
+    legacy spelling is what created the divergence in the first place.
+    """
+    return filename.split('_')[3]
+
+
+def _perframe_detector_tokens(filename):
+    """Detector tokens a READER should try, correct spelling first.
+
+    One entry on an unaffected tree (the two agree); two on an affected one, so
+    a marker written before #562 is still found and the frame is not needlessly
+    refit -- or, worse, reported as a dropped exposure by the completeness guard.
+    """
+    det = perframe_detector_token(filename)
+    legacy = perframe_legacy_detector_token(filename)
+    return (det,) if legacy == det else (det, legacy)
+
+
 def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
     """Split ``frame_args`` into (still to fit, already done, already no-overlap).
 
@@ -4795,21 +4847,27 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
       exists to catch real drops;
     * ``resumed_nooverlap`` -- ``(filename, reason)`` for legitimate misses.
 
-    Merge-scoped ONLY, deliberately without the legacy fallback the completeness
-    check keeps: an unscoped marker cannot say WHICH pass wrote it, and resuming
-    on one would skip a merged frame that was never fitted.  Re-fitting a frame
-    is cheap; a silently absent merged catalog is not.
+    Merge-scoped ONLY, deliberately without the unscoped-marker fallback the
+    completeness check keeps: an unscoped marker cannot say WHICH pass wrote it,
+    and resuming on one would skip a merged frame that was never fitted.
+    Re-fitting a frame is cheap; a silently absent merged catalog is not.
+
+    The pre-#562 detector spelling IS accepted, because it is merge-scoped and so
+    does say which pass wrote it.  Refusing it would make this resume refit every
+    frame on the affected trees.
     """
     todo, resumed_ok, resumed_nooverlap = [], [], []
     for a in frame_args:
         fn = a['filename']
-        det = fn.split('_')[3]
-        if os.path.exists(perframe_marker_path(marker_dir, fn, det, filt, phase,
-                                               'ok', merge=merge)):
+        dets = _perframe_detector_tokens(fn)
+        if any(os.path.exists(perframe_marker_path(marker_dir, fn, det, filt,
+                                                   phase, 'ok', merge=merge))
+               for det in dets):
             resumed_ok.append(fn)
-        elif os.path.exists(perframe_marker_path(marker_dir, fn, det, filt,
-                                                 phase, 'nooverlap',
-                                                 merge=merge)):
+        elif any(os.path.exists(perframe_marker_path(marker_dir, fn, det, filt,
+                                                     phase, 'nooverlap',
+                                                     merge=merge))
+                 for det in dets):
             resumed_nooverlap.append((fn, 'no-overlap (marker)'))
         else:
             todo.append(a)
@@ -5461,16 +5519,23 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # missing marker = a silently dropped exposure -> HARD-CRASH.
                     _missing_marker = []
                     for fn in all_frames:
-                        _det = fn.split('_')[3]   # per-frame products keyed by detector
-                        if (os.path.exists(_marker_path(fn, _det, filt, phase, 'ok',
-                                                        merge=module))
-                                or os.path.exists(
-                                    _marker_path(fn, _det, filt, phase, 'ok'))):
+                        # per-frame products keyed by detector; try the pre-#562
+                        # spelling too, or a marker written by an earlier fan-out
+                        # reads as a dropped exposure and hard-crashes below.
+                        _dets = _perframe_detector_tokens(fn)
+                        if any(os.path.exists(_marker_path(fn, _det, filt, phase,
+                                                           'ok', merge=module))
+                               or os.path.exists(
+                                   _marker_path(fn, _det, filt, phase, 'ok'))
+                               for _det in _dets):
                             overlapping_now.append(fn)
-                        elif (os.path.exists(_marker_path(fn, _det, filt, phase,
-                                                          'nooverlap', merge=module))
-                              or os.path.exists(
-                                  _marker_path(fn, _det, filt, phase, 'nooverlap'))):
+                        elif any(os.path.exists(_marker_path(fn, _det, filt, phase,
+                                                             'nooverlap',
+                                                             merge=module))
+                                 or os.path.exists(
+                                     _marker_path(fn, _det, filt, phase,
+                                                  'nooverlap'))
+                                 for _det in _dets):
                             no_overlap.append((fn, 'no-overlap (marker)'))
                         else:
                             _missing_marker.append(fn)
@@ -5519,16 +5584,21 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         frame_args = _todo
 
                     def _on_result(filename, ok, err):
+                        # WRITER: correct spelling only.  Readers accept the
+                        # pre-#562 one, but writing it would keep the divergence
+                        # growing on the affected trees.
                         if ok:
                             overlapping_now.append(filename)
                             if skip_finalize or finalize_only:
-                                open(_marker_path(filename, filename.split('_')[3],
+                                open(_marker_path(filename,
+                                                  perframe_detector_token(filename),
                                                   filt, phase, 'ok',
                                                   merge=module), 'w').close()
                         elif err and err.startswith('no-overlap'):
                             no_overlap.append((filename, err))
                             if skip_finalize or finalize_only:
-                                open(_marker_path(filename, filename.split('_')[3],
+                                open(_marker_path(filename,
+                                                  perframe_detector_token(filename),
                                                   filt, phase, 'nooverlap',
                                                   merge=module), 'w').close()
                         else:

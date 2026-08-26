@@ -236,3 +236,105 @@ def test_both_marker_WRITES_carry_the_merge_label():
     assert len(writes) >= 2, writes
     for w in writes:
         assert 'merge=' in w, f'marker write without a merge label: {w}'
+
+
+# ---------------------------------------------------------------------------
+# #562 -- the detector token was taken from the RAW value the caller held, and
+# callers hold full paths.  A field directory whose own name contains an
+# underscore then contributes one to the split and shifts every index by one, so
+# the token became the EXPOSURE number.  Both spellings are on the gc2211_o049
+# tree, 16 markers under each.
+# ---------------------------------------------------------------------------
+
+#: A real affected path: `gc2211_o049` carries the extra underscore.
+AFFECTED = ('/orange/adamginsburg/jwst/gc2211_o049/F277W/pipeline/'
+            'jw02211049001_02201_00001_nrcalong_destreak_o049_crf.fits')
+
+#: The same shape under a field directory with no underscore, where the bug is
+#: invisible -- which is why brick / w51 / sgrb2 never showed it.
+UNAFFECTED = ('/orange/adamginsburg/jwst/brick/F410M/pipeline/'
+              'jw02221001001_02201_00001_nrcalong_destreak_o001_crf.fits')
+
+
+def test_the_detector_token_is_the_DETECTOR_not_the_exposure():
+    """The defect itself: '00001' is an exposure number, not a detector."""
+    from jwst_gc_pipeline.photometry.cataloging import perframe_detector_token
+    assert perframe_detector_token(AFFECTED) == 'nrcalong'
+    assert perframe_detector_token(UNAFFECTED) == 'nrcalong'
+
+
+def test_a_full_path_and_its_basename_agree():
+    """Callers pass either; the marker must not depend on which."""
+    from jwst_gc_pipeline.photometry.cataloging import perframe_detector_token
+    assert (perframe_detector_token(AFFECTED)
+            == perframe_detector_token(os.path.basename(AFFECTED)))
+
+
+def test_the_marker_name_no_longer_depends_on_the_field_directory():
+    """Two trees, same frame, same marker."""
+    from jwst_gc_pipeline.photometry.cataloging import perframe_detector_token
+    a = _marker_name(AFFECTED, 'f277w',
+                     perframe_detector_token(AFFECTED),
+                     'm12', merge='nrca')
+    b = _marker_name(os.path.basename(AFFECTED), 'f277w', 'nrcalong', 'm12',
+                     merge='nrca')
+    assert a == b == (os.path.basename(AFFECTED)
+                      + '.f277w.nrca-nrcalong.m12.ok')
+
+
+def test_the_legacy_spelling_is_only_generated_where_it_differed():
+    """On an unaffected tree there is one token to try, not two -- otherwise
+    every reader does double the stat() calls for nothing."""
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _perframe_detector_tokens)
+    assert _perframe_detector_tokens(UNAFFECTED) == ('nrcalong',)
+    assert _perframe_detector_tokens(AFFECTED) == ('nrcalong', '00001')
+
+
+def test_a_PRE_562_marker_still_resumes(tmp_path):
+    """The migration guarantee.  Markers already on disk were written with the
+    old token; refusing them would refit every frame on the affected trees --
+    and, in the finalize, report them as dropped exposures and hard-crash."""
+    d = _marker_dir(tmp_path)
+    (d / _marker_name(AFFECTED, 'f277w', '00001', 'm12',
+                      merge='nrca')).write_text('')
+    todo, ok, _ = _select([{'filename': AFFECTED}], str(d), 'f277w', 'm12',
+                          resume=True, merge='nrca')
+    assert ok == [AFFECTED]
+    assert todo == []
+
+
+def test_a_post_562_marker_resumes(tmp_path):
+    """The new spelling, same frame."""
+    d = _marker_dir(tmp_path)
+    (d / _marker_name(AFFECTED, 'f277w', 'nrcalong', 'm12',
+                      merge='nrca')).write_text('')
+    todo, ok, _ = _select([{'filename': AFFECTED}], str(d), 'f277w', 'm12',
+                          resume=True, merge='nrca')
+    assert ok == [AFFECTED]
+    assert todo == []
+
+
+def test_the_legacy_token_stays_MERGE_SCOPED(tmp_path):
+    """Accepting the old detector spelling must not also re-admit the unscoped
+    name: a marker that cannot say which pass wrote it would let the merged pass
+    resume on the nrca pass's work (the 1440-marker collision)."""
+    d = _marker_dir(tmp_path)
+    (d / _marker_name(AFFECTED, 'f277w', '00001', 'm12',
+                      merge='nrca')).write_text('')
+    todo, ok, _ = _select([{'filename': AFFECTED}], str(d), 'f277w', 'm12',
+                          resume=True, merge='merged')
+    assert ok == []
+    assert todo == [{'filename': AFFECTED}]
+
+
+def test_the_WRITER_never_emits_the_legacy_token():
+    """Readers accept it; writers must not, or the divergence keeps growing."""
+    src = _run_manual_src()
+    import re
+    writes = re.findall(r'open\(_marker_path\((?:[^()]|\([^()]*\))*\)', src)
+    assert len(writes) >= 2, writes
+    for w in writes:
+        assert 'perframe_detector_token(' in w, (
+            f'marker write not using the basename-derived token: {w}')
+        assert "split('_')[3]" not in w, w
