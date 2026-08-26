@@ -100,6 +100,21 @@ SAMESTAR_COLLAPSE_FRAC = float(os.environ.get("OVERLAP_SAMESTAR_COLLAPSE_FRAC", 
 # Measured on brick F405N's real deferred-pair geometry: 0.837 vs 0.849 (gap
 # 0.012) for the frames as reduced.
 SAMESTAR_KEEP_MARGIN = float(os.environ.get("OVERLAP_SAMESTAR_KEEP_MARGIN", 0.12))
+# A COUNT of matched stars is not a PRECISION (issue #403).  The footprint arbiter
+# refuses to flag an offset it cannot resolve -- ``off_mas > nsigma * sem_mas`` is
+# an explicit significance requirement on the FAIL side -- and then took the same
+# unresolvable measurement as a PASS.  A pair whose per-star differential scatter
+# is large is protected from flagging twice over (once by the noise, once by that
+# clause) and falls straight through to "clean".  Monte Carlo over the gate's own
+# estimator and flag rule, 60 mas seam at the 20-star floor: caught with
+# probability 1.000 at 20 mas per-star scatter, 0.831 at 50 mas, and 0.198 at
+# 100 mas -- the last being the undersampled mid-infrared case the arbiter was
+# written for.  So a clean verdict now also requires that a seam AT the tolerance
+# would have been resolvable: ``nsigma * sem_mas < tol_mas`` at some radius that
+# met the star floor.  A pair that cannot meet it is COULD-NOT-VERIFY, the same
+# fail-closed path everything else unmeasurable takes.
+SAMESTAR_REQUIRE_RESOLVABLE = os.environ.get(
+    "OVERLAP_SAMESTAR_REQUIRE_RESOLVABLE", "1") == "1"
 
 
 def _detect(path, nsigma=8.0, box=5):
@@ -1015,7 +1030,13 @@ def _samestar_pair_footprint(a_src, b_src, ref, global_result, tol_mas=None,
     blend bias of a seeing-limited catalog) cancel.
 
     Measured at several match radii; if the answer moves with the radius the
-    matching is NN-collapsing and the verdict is could-not-verify, not clean."""
+    matching is NN-collapsing and the verdict is could-not-verify, not clean.
+
+    A clean verdict also requires the measurement to have had the PRECISION to
+    resolve a seam at ``tol_mas``: ``nsigma * sem_mas < tol_mas`` at some radius
+    that met the star floor (issue #403).  ``min_stars`` is a count, and twenty
+    stars each measured to 100 mas cannot see a 60 mas seam -- that pair is
+    could-not-verify, not clean."""
     tol_mas = TOL_MAS if tol_mas is None else float(tol_mas)
     # The INTER-FRAME difference is what this gate owns, and it is measured to a
     # few mas, so it is held to TOL_MAS.  The ABSOLUTE excursion of the footprint
@@ -1099,6 +1120,18 @@ def _samestar_pair_footprint(a_src, b_src, ref, global_result, tol_mas=None,
     abs_flag = any(max(p["a_off_mas"], p["b_off_mas"]) > abs_tol_mas for p in ok_r)
     consistent = spread <= tol_mas and len(ok_r) == len(per_radius)
     worst = max(max(p["off_mas"], p["a_off_mas"], p["b_off_mas"]) for p in ok_r)
+    # MEASURABILITY, the missing half of the flag rule (issue #403).  ``flagged``
+    # is an ``any`` over ok_r, so a radius can only ever raise a flag when its own
+    # ``nsigma * sem_mas`` sits below the offset it is testing.  The complementary
+    # statement -- required here for a PASS -- is that at least one of those radii
+    # could have resolved a seam AT the tolerance.  ``sem_mas`` falls as
+    # 1/sqrt(n), so on the usual monotone n-vs-radius this is the widest radius,
+    # which is the form issue #403 proposes; taking the minimum over ok_r keeps it
+    # exactly complementary to the ``any`` above rather than slightly stronger.
+    resolvable = [p for p in ok_r
+                  if np.isfinite(p["sem_mas"]) and nsigma * p["sem_mas"] < tol_mas]
+    best_sem = min((p["sem_mas"] for p in ok_r if np.isfinite(p["sem_mas"])),
+                   default=float("nan"))
     if flagged or abs_flag:
         reason = (f"inter-frame same-star offset {widest['off_mas']:.0f} mas "
                   f"(+-{widest['sem_mas']:.0f}) over {widest['n']} common stars in the "
@@ -1108,7 +1141,19 @@ def _samestar_pair_footprint(a_src, b_src, ref, global_result, tol_mas=None,
         return _verdict(False, measurable=True, worst_off_mas=worst,
                         n_ok=0, n_total=widest["n"], n_common=widest["n"],
                         n_footprint_ref=len(rsub), per_radius=per_radius,
-                        reason=reason)
+                        sem_mas=float(best_sem), reason=reason)
+    if SAMESTAR_REQUIRE_RESOLVABLE and not resolvable:
+        return _verdict(False, measurable=False, worst_off_mas=worst,
+                        n_common=widest["n"], n_footprint_ref=len(rsub),
+                        per_radius=per_radius, keep_ratio=keep,
+                        sem_mas=float(best_sem),
+                        reason=f"{widest['n']} common same-star matches carry a "
+                               f"standard error of {best_sem:.0f} mas at best, so "
+                               f"{nsigma:.0f}-sigma is {nsigma * best_sem:.0f} mas "
+                               f"and a seam at the {tol_mas:.0f} mas tolerance could "
+                               f"not have been flagged -- too few stars OR too much "
+                               f"per-star scatter to arbitrate, not verifiable as "
+                               f"clean")
     if not consistent or not keep_consistent:
         why = (f"same-star offset moves {spread:.0f} mas across match radii "
                f"{[p['radius'] for p in per_radius]} (or a radius lost its matches)"
@@ -1121,13 +1166,16 @@ def _samestar_pair_footprint(a_src, b_src, ref, global_result, tol_mas=None,
         return _verdict(False, measurable=False, worst_off_mas=worst,
                         n_common=widest["n"], n_footprint_ref=len(rsub),
                         per_radius=per_radius, keep_ratio=keep,
+                        sem_mas=float(best_sem),
                         reason=f"{why} -- NN-collapsing, not verifiable as clean")
     return _verdict(True, measurable=True, worst_off_mas=worst,
                     n_ok=widest["n"], n_total=widest["n"], n_common=widest["n"],
                     n_footprint_ref=len(rsub), per_radius=per_radius,
-                    keep_ratio=keep,
+                    keep_ratio=keep, sem_mas=float(best_sem),
                     reason=f"{widest['n']} common same-star matches, inter-frame "
-                           f"{widest['off_mas']:.0f} mas")
+                           f"{widest['off_mas']:.0f} mas "
+                           f"(+-{best_sem:.0f} mas, so a {tol_mas:.0f} mas seam "
+                           f"was resolvable at {nsigma:.0f} sigma)")
 
 
 def check_filter(field, filt, refcat=None, verbose=True, observations=None):
