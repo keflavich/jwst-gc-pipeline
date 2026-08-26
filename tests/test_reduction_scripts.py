@@ -1077,3 +1077,121 @@ def test_a_wholly_stale_pointing_is_caught_when_another_pointing_is_current(tmp_
         sorted(p.name for p in stale), 'a wholly stale pointing must be caught'
     for p in stale:
         assert not p.exists() and os.path.exists(str(p) + m.SUFFIX)
+
+
+# --------------------------------------------------------------------------
+# --only: execute the subset that has been measured (#339)
+# --------------------------------------------------------------------------
+def _two_orphans(tmp_path, m):
+    """One band holding a current mosaic and TWO canonically-named orphans.
+
+    Miniature of the live case: rule 2 selects both on generation, but only one
+    of them has a measured arcsecond-scale offset, so only one of them clears
+    the bar the quarantine instruction was given under.
+    """
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    measured = _age(pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 1100)
+    unmeasured = _age(pipe / 'jw02221-o001_t001_nircam_f405n-f444w_i2d.fits', 1100)
+    return pipe, measured, unmeasured
+
+
+def test_only_quarantines_the_named_file_and_leaves_the_rest(tmp_path):
+    """The gap this closes: --execute was all of a field's selections or none,
+    so 'measure before quarantining' could not be carried out with this tool."""
+    m = _load('rename_stale_mosaics')
+    _pipe, measured, unmeasured = _two_orphans(tmp_path, m)
+    plan = m.rename_stale_for_field('myfield', execute=True,
+                                    only=[measured.name])
+    assert [os.path.basename(p[0]) for p in plan] == [measured.name]
+    assert not measured.exists()
+    assert os.path.exists(str(measured) + m.SUFFIX)
+    assert unmeasured.exists(), 'a file the filter withheld was renamed anyway'
+    assert not os.path.exists(str(unmeasured) + m.SUFFIX)
+
+
+def test_without_only_both_orphans_are_still_taken(tmp_path):
+    """--only must be a restriction on the existing selection, not a new rule:
+    absent the flag the behaviour is exactly what it was."""
+    m = _load('rename_stale_mosaics')
+    _pipe, measured, unmeasured = _two_orphans(tmp_path, m)
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert sorted(os.path.basename(p[0]) for p in plan) == sorted(
+        [measured.name, unmeasured.name])
+    assert not measured.exists() and not unmeasured.exists()
+
+
+def test_a_full_path_is_accepted_as_well_as_a_basename(tmp_path):
+    """The dry run prints basenames but an operator may paste a path."""
+    m = _load('rename_stale_mosaics')
+    _pipe, measured, unmeasured = _two_orphans(tmp_path, m)
+    plan = m.rename_stale_for_field('myfield', execute=True,
+                                    only=[str(measured)])
+    assert [os.path.basename(p[0]) for p in plan] == [measured.name]
+    assert unmeasured.exists()
+
+
+def test_an_only_name_that_matches_nothing_REFUSES(tmp_path, monkeypatch,
+                                                   capsys):
+    """A typo, or a file the rules stopped selecting, would otherwise rename
+    nothing and exit 0 -- indistinguishable from a run that did its job."""
+    m = _load('rename_stale_mosaics')
+    _pipe, measured, unmeasured = _two_orphans(tmp_path, m)
+    monkeypatch.setattr('sys.argv', ['rename_stale_mosaics.py',
+                                     '--field', 'myfield', '--execute',
+                                     '--only', 'jw02221-o009_t001_nircam_'
+                                               'f405n-f444w_i2d.fits'])
+    with pytest.raises(m.UnmatchedOnlyName) as excinfo:
+        m.main()
+    assert 'jw02221-o009' in str(excinfo.value)
+    assert measured.name in str(excinfo.value)       # names what IS selectable
+    # and nothing was renamed on the way to refusing
+    assert measured.exists() and unmeasured.exists()
+
+
+def test_the_refusal_happens_before_any_rename(tmp_path, monkeypatch):
+    """One good name and one bad one: the good file must NOT be quarantined
+    while the run reports a failure."""
+    m = _load('rename_stale_mosaics')
+    _pipe, measured, unmeasured = _two_orphans(tmp_path, m)
+    monkeypatch.setattr('sys.argv', ['rename_stale_mosaics.py',
+                                     '--field', 'myfield', '--execute',
+                                     '--only', measured.name,
+                                     '--only', 'not_a_real_product_i2d.fits'])
+    with pytest.raises(m.UnmatchedOnlyName):
+        m.main()
+    assert measured.exists(), 'refused, but renamed the matching file anyway'
+    assert unmeasured.exists()
+
+
+def test_only_across_two_fields_does_not_refuse_on_the_other_fields_name(
+        tmp_path, monkeypatch):
+    """A name belongs to exactly one field, so a per-field refusal would fire
+    on every other field named in the same command."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    a = _band_dir(tmp_path, field='fieldA', band='F405N')
+    b = _band_dir(tmp_path, field='fieldB', band='F410M')
+    _age(a / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    _age(b / 'jw02221-o002_t001_nircam_clear-f410m-merged_i2d.fits', 0)
+    oa = _age(a / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 1100)
+    ob = _age(b / 'jw02221-o002_t001_nircam_f444w-f410m_i2d.fits', 1100)
+    monkeypatch.setattr('sys.argv', ['rename_stale_mosaics.py',
+                                     '--field', 'fieldA', '--field', 'fieldB',
+                                     '--execute',
+                                     '--only', oa.name, '--only', ob.name])
+    m.main()
+    assert os.path.exists(str(oa) + m.SUFFIX)
+    assert os.path.exists(str(ob) + m.SUFFIX)
+
+
+def test_the_withheld_files_are_named_in_the_output(tmp_path, capsys):
+    """A partial run must say so: the log is the record that the other
+    selections were a deliberate choice rather than an oversight."""
+    m = _load('rename_stale_mosaics')
+    _pipe, measured, unmeasured = _two_orphans(tmp_path, m)
+    m.rename_stale_for_field('myfield', execute=True, only=[measured.name])
+    out = capsys.readouterr().out
+    assert 'withheld' in out
+    assert unmeasured.name in out
