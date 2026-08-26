@@ -260,13 +260,23 @@ def neutered_memo_source():
     return f"{header}\n    reset_stage12_processed()\n{rest}"
 
 
+#: What this fake run stamps on anything it calibrates.  The resume check reads
+#: CRDS_CTX/CAL_VER off the products (#433), so the laid-down tree carries them
+#: and the suite never resolves a real CRDS context.
+STAMP = ('jwst_1590.pmap', '1.21.0.dev314+g61bd2fe47')
+
+
 def _lay_down_products(tmp_path, members, uncal_mtime=1_000_000.0,
-                       product_mtime=1_000_060.0):
+                       product_mtime=1_000_060.0, stamp=STAMP):
     """An already-reduced tree: every member's uncal, cal and ramp on disk."""
+    from astropy.io import fits
+    header = fits.Header()
+    for key, value in zip(stage12_selection.CALIBRATION_STAMP_KEYWORDS, stamp):
+        header[key] = value
     for expname in members:
         for suffix in ('uncal', 'cal', 'ramp'):
             path = tmp_path / expname.replace('_cal.fits', f'_{suffix}.fits')
-            path.write_bytes(b'x')
+            fits.PrimaryHDU(header=header).writeto(path, overwrite=True)
             mtime = uncal_mtime if suffix == 'uncal' else product_mtime
             os.utime(path, (mtime, mtime))
 
@@ -276,6 +286,13 @@ def _clean_memo():
     reset_stage12_processed()
     yield
     reset_stage12_processed()
+
+
+@pytest.fixture(autouse=True)
+def _pinned_current_stamp(monkeypatch):
+    """Pin the stamp a reprocess would write, so the resume tests compare
+    against ``STAMP`` rather than against the machine's CRDS context."""
+    monkeypatch.setattr(stage12_selection, '_CURRENT_STAMP', [STAMP])
 
 
 @pytest.fixture(autouse=True)
@@ -492,6 +509,48 @@ def test_ramps_not_saved_stops_the_ramp_clause_forcing_a_reprocess(
     assert run_stage12(ALL_NIRCAM, save_calibrated_ramp=False).detector1 == []
     assert len(run_stage12(ALL_NIRCAM,
                            save_calibrated_ramp=True).detector1) == len(ALL_NIRCAM)
+
+
+def test_resume_reprocesses_a_tree_from_an_older_crds_context(tmp_path,
+                                                              monkeypatch):
+    """#433 through the driver: every product on disk is newer than its uncal
+    but was written under jwst_1253, and this run would write jwst_1590.  The
+    resume re-fits all ten rather than keeping them."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(STAGE12_RESUME_ENV, '1')
+    _lay_down_products(tmp_path, ALL_NIRCAM,
+                       stamp=('jwst_1253.pmap', STAMP[1]))
+    assert len(run_stage12(ALL_NIRCAM).detector1) == len(ALL_NIRCAM)
+
+
+def test_resume_leaves_no_filter_directory_straddling_two_contexts(
+        tmp_path, monkeypatch):
+    """The archive state #433 was filed against, in miniature: brick F405N's
+    obs-001 members are split, four re-fit under jwst_1586 and the rest still
+    jwst_1253.  A resume must not keep the jwst_1253 half beside the four it
+    would re-fit under the current context -- so the members it skips all
+    carry the current stamp, and the ones it processes are exactly the rest."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(STAGE12_RESUME_ENV, '1')
+    current, stale = ALL_NIRCAM[:4], ALL_NIRCAM[4:]
+    _lay_down_products(tmp_path, current, stamp=STAMP)
+    _lay_down_products(tmp_path, stale, stamp=('jwst_1253.pmap', STAMP[1]))
+    run = run_stage12(ALL_NIRCAM)
+    assert sorted(run.detector1_inputs) == sorted(
+        e.replace('_cal.fits', '_uncal.fits') for e in stale)
+
+
+def test_resume_reprocesses_a_truncated_cal(tmp_path, monkeypatch):
+    """The kill that stopped the job left a half-written _cal with a newer
+    mtime; on mtimes alone the resume kept it."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(STAGE12_RESUME_ENV, '1')
+    _lay_down_products(tmp_path, ALL_NIRCAM)
+    truncated = tmp_path / LW_A[0]
+    truncated.write_bytes(truncated.read_bytes()[:1000])
+    os.utime(truncated, (1_000_060.0, 1_000_060.0))
+    run = run_stage12(ALL_NIRCAM)
+    assert run.detector1_inputs == [LW_A[0].replace('_cal.fits', '_uncal.fits')]
 
 
 def test_detector1_is_told_the_same_ramp_flag_the_skip_check_is():

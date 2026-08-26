@@ -108,12 +108,19 @@ passes in that same run did not (#417 — it used to ramp-fit everything three
 times). The driver keeps that list of already-calibrated exposures in the
 running interpreter, so it covers the module passes of one run and nothing
 else. Set `STAGE12_RESUME=1` to additionally skip exposures
-whose `_cal`/`_ramp` on disk are newer than their `_uncal`, which resumes a
-killed `SKIP=0` job without redoing what it finished. Leave it unset for a
-forcing re-reduce. The resume check compares mtimes, so a `_cal.fits` truncated
-by the kill that stopped the job reads as current and is kept — delete the
-products of the exposure the job died on before resuming, or leave the flag
-unset.
+whose `_cal`/`_ramp` on disk are newer than their `_uncal` **and carry this
+run's `CRDS_CTX` and `CAL_VER`**, which resumes a killed `SKIP=0` job without
+redoing what it finished. Leave it unset for a forcing re-reduce.
+
+The stamp half of that test is #433: a resume writes the current context onto
+every exposure it re-fits, so keeping an exposure stamped with an older one
+would leave one filter directory — one Image3 input set — straddling two
+calibrations. After a CRDS repin or a `jwst` bump, `STAGE12_RESUME=1`
+therefore re-fits the whole directory rather than half of it. Reading the
+header also refuses a `_cal.fits` truncated by the kill that stopped the job,
+which has a newer mtime and used to be kept. A Detector1/Image2 *parameter*
+change stays invisible to it — the products are present, newer, and stamped
+with the current context — which is why the flag remains off by default.
 
 Image3 resamples a filter's exposures together, so per-filter is the finest
 fan-out any script offers. The NIRCam driver does take `-m nrca` / `-m nrcb`
