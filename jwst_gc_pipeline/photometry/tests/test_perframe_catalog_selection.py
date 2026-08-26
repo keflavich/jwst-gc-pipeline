@@ -542,3 +542,46 @@ def test_exactly_one_copy_survives_whichever_wins(tmp_path):
         kept = _drop_foreign_obs_duplicates([t, u], "", "f360m", "m2",
                                             "nrcblong", "cloudef_controlfield")
         assert len(kept) == 1
+
+
+def test_the_log_names_the_spelling_that_WON(tmp_path, capsys):
+    """The exclusion line names the tokens of what was DROPPED, and on a mixed
+    outcome that is the same list either way.  A second line says how many
+    exposures the mtime separated, which spelling won them, and the timestamp
+    the tie-break read -- so a job log shows the fix where it happened."""
+    # exp00001: the pre-token copy is newer; exp00002: the tokened copy is.
+    a_old = _write(tmp_path, _name(filt="f360m", det="nrcblong", exp=1,
+                                   tok="_o005"), 1_700_000_000)
+    a_new = _write(tmp_path, _name(filt="f360m", det="nrcblong", exp=1),
+                   1_700_086_400)
+    b_new = _write(tmp_path, _name(filt="f360m", det="nrcblong", exp=2,
+                                   tok="_o005"), 1_700_172_800)
+    b_old = _write(tmp_path, _name(filt="f360m", det="nrcblong", exp=2),
+                   1_700_000_000)
+    kept = _drop_foreign_obs_duplicates([a_old, a_new, b_new, b_old], "",
+                                        "f360m", "m2", "nrcblong",
+                                        "cloudef_controlfield")
+    assert sorted(kept) == sorted([a_new, b_new])
+    out = capsys.readouterr().out
+    assert "2 exposure(s) present under BOTH spellings" in out
+    assert "kept the copy written LAST -- 1 tokened, 1 pre-token" in out
+    # the newest of everything kept, with the date the decision was read from.
+    # Formatted in local time, so the expectation is computed the same way
+    # rather than hard-coded to one TZ.
+    import time as _time
+    stamp = _time.strftime("%Y-%m-%d", _time.localtime(1_700_172_800))
+    assert f"Newest kept: {os.path.basename(b_new)} ({stamp})" in out
+
+
+def test_an_abstention_prints_no_tie_break_line(tmp_path, capsys):
+    """Equal mtimes resolve nothing, so the line must not claim they did --
+    otherwise a run that kept the stale copy reads as though recency chose it.
+    """
+    tok = _write(tmp_path, _name(filt="f360m", det="nrcblong", tok="_o005"),
+                 1_700_000_000)
+    unt = _write(tmp_path, _name(filt="f360m", det="nrcblong"),
+                 1_700_000_000)
+    kept = _drop_foreign_obs_duplicates([tok, unt], "", "f360m", "m2",
+                                        "nrcblong", "cloudef_controlfield")
+    assert kept == [tok]
+    assert "present under BOTH spellings" not in capsys.readouterr().out

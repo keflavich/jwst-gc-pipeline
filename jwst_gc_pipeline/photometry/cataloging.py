@@ -3828,6 +3828,10 @@ def _catalog_source_frame(fn):
 def _newest_of(tokened, untokened):
     """The most recently WRITTEN of two spellings of one exposure, or None.
 
+    Returns ``(mtime, filename)`` -- the mtime the decision was made on, so the
+    caller can report it without re-stat'ing a file that may have been removed
+    in between.
+
     Returns None when any candidate's mtime cannot be read, and when the two
     sides are written at the same second -- both mean "the file system cannot
     separate these", and the caller then keeps its previous, name-based
@@ -3850,9 +3854,9 @@ def _newest_of(tokened, untokened):
     t_best = max(zip(t_times, tokened))
     u_best = max(zip(u_times, untokened))
     if u_best[0] > t_best[0]:
-        return u_best[1]
+        return u_best
     if t_best[0] > u_best[0]:
-        return t_best[1]
+        return t_best
     return None          # same second -> not separable; caller decides
 
 
@@ -3926,6 +3930,11 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     drop = []
     foreign_token = []
     want = None
+    # Exposures whose two spellings were separated by mtime, and the copy kept.
+    # The exclusion line below names only what was DROPPED, and on a mixed
+    # outcome that reads the same either way; this is what makes the tie-break
+    # visible in the job output where it happened.
+    recency_kept = []
     if shared:
         # More than one observation of this field images this filter, so a
         # pre-token basename cannot say which one wrote it FROM ITS NAME.
@@ -4124,7 +4133,10 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                 # Only when both mtimes can be read: a caller passing bare
                 # basenames (every unit test here does) gets the previous
                 # tokened-wins behaviour, and so does a tie.
-                keep = _newest_of(tokened[ident], group)
+                newest = _newest_of(tokened[ident], group)
+                keep = None if newest is None else newest[1]
+                if newest is not None:
+                    recency_kept.append(newest)
                 if keep is None or keep in tokened[ident]:
                     drop.extend(group)
                 else:
@@ -4181,6 +4193,29 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                   f"silently disabled gate, not a pass -- check that "
                   f"--field/target_obs names an observation these frames were "
                   f"actually taken in.", flush=True)
+    if recency_kept:
+        # Name the spelling that WON, not only the one that lost.  The
+        # exclusion line above lists the tokens of what was DROPPED, which
+        # separates the two outcomes only while every exposure goes the same
+        # way: a call where some exposures resolve to the tokened copy and some
+        # to the pre-token one prints both tokens and says nothing about which
+        # went which way, and the abstentions (unreadable or equal mtime) print
+        # a token too while no tie-break happened at all.  So say how many
+        # exposures the mtime actually separated, which spelling won them, and
+        # the timestamp the decision was read from -- reported from the value
+        # `_newest_of` compared, so nothing is re-stat'ed (issue #391).
+        import time as _time
+        n_tokened = sum(1 for _, f in recency_kept
+                        if _OBS_TOKEN_RE.search(os.path.basename(f)))
+        n_pretoken = len(recency_kept) - n_tokened
+        newest_mtime, newest_fn = max(recency_kept)
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+              f"{len(recency_kept)} exposure(s) present under BOTH spellings; "
+              f"kept the copy written LAST -- {n_tokened} tokened, "
+              f"{n_pretoken} pre-token.  Newest kept: "
+              f"{os.path.basename(newest_fn)} "
+              f"({_time.strftime('%Y-%m-%d', _time.localtime(newest_mtime))})",
+              flush=True)
     drop = set(drop)
     return [fn for fn in fns if fn not in drop]
 
