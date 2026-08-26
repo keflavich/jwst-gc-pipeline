@@ -3844,6 +3844,41 @@ def _catalog_source_frame(fn):
         return None
 
 
+def _newest_of(tokened, untokened):
+    """The most recently WRITTEN of two spellings of one exposure, or None.
+
+    Returns ``(mtime, filename)`` -- the mtime the decision was made on, so the
+    caller can report it without re-stat'ing a file that may have been removed
+    in between.
+
+    Returns None when any candidate's mtime cannot be read, and when the two
+    sides are written at the same second -- both mean "the file system cannot
+    separate these", and the caller then keeps its previous, name-based
+    preference rather than picking arbitrarily.  A caller passing bare
+    basenames (the unit tests) always lands here.
+
+    ``os.stat`` is the only failure mode that matters: a file the glob listed
+    and something removed between the glob and this call.  Catching
+    ``OSError`` covers both that and an unreadable directory.
+    """
+    def _mtime(fn):
+        try:
+            return os.path.getmtime(fn)
+        except OSError:
+            return None
+    t_times = [_mtime(f) for f in tokened]
+    u_times = [_mtime(f) for f in untokened]
+    if any(t is None for t in t_times + u_times):
+        return None
+    t_best = max(zip(t_times, tokened))
+    u_best = max(zip(u_times, untokened))
+    if u_best[0] > t_best[0]:
+        return u_best
+    if t_best[0] > u_best[0]:
+        return t_best
+    return None          # same second -> not separable; caller decides
+
+
 def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                                  target, target_obs=None):
     """Drop per-frame catalogs belonging to a DIFFERENT observation/proposal.
@@ -3878,6 +3913,9 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
       tokened name.  ngc6334 F090W is this case, and its nrca detectors exist
       ONLY under the pre-token name; discarding them would build a consensus
       from nrcb alone and PASS, which is worse than the duplicate it avoids.
+      Where BOTH spellings of one exposure exist, the copy written last is the
+      one kept: the token is a fact about the name and does not say which
+      product is current (issue #391).
       A catalog that SPELLS a different observation is still dropped here: the
       registry's count is what this branch cannot trust (0 for an unregistered
       field, and 1 for a wildcard obsid list wherever ``fields.py`` still reads
@@ -3911,6 +3949,11 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     drop = []
     foreign_token = []
     want = None
+    # Exposures whose two spellings were separated by mtime, and the copy kept.
+    # The exclusion line below names only what was DROPPED, and on a mixed
+    # outcome that reads the same either way; this is what makes the tie-break
+    # visible in the job output where it happened.
+    recency_kept = []
     if shared:
         # More than one observation of this field images this filter, so a
         # pre-token basename cannot say which one wrote it FROM ITS NAME.
@@ -4036,8 +4079,10 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # throw away real exposures -- ngc6334 F090W's nrca detectors exist ONLY
         # under the pre-token name, and dropping them would build a consensus
         # from nrcb alone and PASS, which is worse than the duplicate it avoids.
-        # Keep both spellings, preferring the tokened copy of any exposure that
-        # has one, so the same exposure is still never counted twice.
+        # Keep both spellings, keeping the copy of any exposure that was
+        # written LAST where both exist, so the same exposure is still never
+        # counted twice and a stale copy does not shadow a re-catalogued one
+        # (issue #391).
         # Compare on an identity with BOTH the token and the chunk suffix
         # removed.  The checkpoint collapses `_chunk\d+of\d+` itself further
         # down, so `..._m2_chunk00of02_...` and `..._m2_...` land on one
@@ -4093,7 +4138,30 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         for ident, group in untokened.items():
             group = sorted(group)
             if ident in tokened:
-                drop.extend(group)
+                # Both spellings of the SAME exposure are on disk, so one of
+                # them is redundant -- but "tokened" is a fact about the NAME,
+                # and the name says nothing about which copy is CURRENT.
+                # cloudef_controlfield F360M holds eight `_o005_` nrcblong
+                # catalogs recovered from a 2026-06 quarantine beside the same
+                # eight exposures re-catalogued on 2026-08-22, and the June
+                # copies -- 44,148-44,760 rows against 48,666-49,135, about 10%
+                # short -- won every time, so F360M's visit consensus paired a
+                # June nrcblong against a same-day nrcalong (issue #391).
+                # Prefer the copy written LAST.
+                #
+                # Only when both mtimes can be read: a caller passing bare
+                # basenames (every unit test here does) gets the previous
+                # tokened-wins behaviour, and so does a tie.
+                newest = _newest_of(tokened[ident], group)
+                keep = None if newest is None else newest[1]
+                if newest is not None:
+                    recency_kept.append(newest)
+                if keep is None or keep in tokened[ident]:
+                    drop.extend(group)
+                else:
+                    drop.extend(tokened[ident])
+                    drop.extend([f for f in group if f != keep])
+                    tokened[ident] = [keep]
             else:
                 # Same exposure written twice under the same spelling can only
                 # differ by chunking; keep one.
@@ -4144,6 +4212,29 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                   f"silently disabled gate, not a pass -- check that "
                   f"--field/target_obs names an observation these frames were "
                   f"actually taken in.", flush=True)
+    if recency_kept:
+        # Name the spelling that WON, not only the one that lost.  The
+        # exclusion line above lists the tokens of what was DROPPED, which
+        # separates the two outcomes only while every exposure goes the same
+        # way: a call where some exposures resolve to the tokened copy and some
+        # to the pre-token one prints both tokens and says nothing about which
+        # went which way, and the abstentions (unreadable or equal mtime) print
+        # a token too while no tie-break happened at all.  So say how many
+        # exposures the mtime actually separated, which spelling won them, and
+        # the timestamp the decision was read from -- reported from the value
+        # `_newest_of` compared, so nothing is re-stat'ed (issue #391).
+        import time as _time
+        n_tokened = sum(1 for _, f in recency_kept
+                        if _OBS_TOKEN_RE.search(os.path.basename(f)))
+        n_pretoken = len(recency_kept) - n_tokened
+        newest_mtime, newest_fn = max(recency_kept)
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+              f"{len(recency_kept)} exposure(s) present under BOTH spellings; "
+              f"kept the copy written LAST -- {n_tokened} tokened, "
+              f"{n_pretoken} pre-token.  Newest kept: "
+              f"{os.path.basename(newest_fn)} "
+              f"({_time.strftime('%Y-%m-%d', _time.localtime(newest_mtime))})",
+              flush=True)
     drop = set(drop)
     return [fn for fn in fns if fn not in drop]
 
