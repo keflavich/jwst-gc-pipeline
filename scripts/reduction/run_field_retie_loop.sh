@@ -514,7 +514,24 @@ for ((it=1; it<=MAXITER; it++)); do
     # the m2 merge+checkpoint.  Capture the finalize (stage B) job id it prints.
     export ASTROM_CHECKPOINT_APPLY=1
     chain_rc=0
-    chain_out=$(PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
+    # `env` is REQUIRED here, not decoration.  bash fixes the boundary of an
+    # assignment prefix at PARSE time, before "${floor_env[@]}" expands, so a
+    # quoted array expansion sitting after literal VAR=value tokens becomes the
+    # COMMAND WORD.  With the array non-empty this tries to RUN
+    # `ASTROM_M2_CORRECTION_FLOOR_MAS=4.0` as a program -- rc=127, and the loop
+    # stops at iteration 1 having reduced but cataloged nothing:
+    #
+    #   $ fe=(FOO=1); BAR=2 "${fe[@]}" echo hi
+    #   bash: FOO=1: command not found              (rc 127)
+    #   $ fe=(FOO=1); env BAR=2 "${fe[@]}" echo hi
+    #   hi                                          (rc 0)
+    #
+    # An EMPTY array expands to nothing and the prefix parses normally, which is
+    # why every field taking its floor from PER_FIELD_FLOOR_MAS was unaffected
+    # and only an explicit env override hit it (gc2211_o049, 2026-08-27).  That
+    # is also the path the manual-restart note tells operators to use.
+    # common.sh already prefixes `env` at its own forwarding site.
+    chain_out=$(env PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
         EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
         PHASES="m12" PIPE_ROOT=$PIPE_ROOT \
         "${floor_env[@]}" \
@@ -697,7 +714,9 @@ unset ASTROM_CHECKPOINT_APPLY   # m3+ must be a FROZEN solution; no more correct
 #
 # cloudef obs005's m3..m7 chain died here on 2026-08-04, and this is NOT why --
 # see #281.  Do not treat this line as having closed that.
-PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
+# `env` for the same parse-time reason as the m12 submission above: without it a
+# non-empty "${floor_env[@]}" is read as the command word, not an assignment.
+env PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
     EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
     PIPE_ROOT=$PIPE_ROOT \
     "${floor_env[@]}" \
