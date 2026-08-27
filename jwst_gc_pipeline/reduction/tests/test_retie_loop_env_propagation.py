@@ -96,3 +96,86 @@ def test_the_reason_is_recorded_at_the_call_site():
     with the `export` at the top of the script."""
     full_chain = _invocations(LOOP.read_text())[-1]
     assert 'DependencyNeverSatisfied' in full_chain or 'export' in full_chain
+
+
+# ---------------------------------------------------------------------------
+# The tests above pin the NAMING and say so: "They cannot tell whether the value
+# ARRIVES."  On 2026-08-27 it did not.  gc2211_o049 was relaunched with an
+# explicit ASTROM_M2_CORRECTION_FLOOR_MAS=4.0 and the loop died at iteration 1:
+#
+#   run_field_retie_loop.sh: line 521: ASTROM_M2_CORRECTION_FLOOR_MAS=4.0: command not found
+#   [iter 1] the cataloging submission FAILED (rc=127) -- STOPPING.
+#
+# bash fixes the boundary of an assignment prefix at PARSE time, before
+# "${floor_env[@]}" expands, so a quoted array expansion after literal VAR=value
+# tokens is the COMMAND WORD.  An EMPTY array expands to nothing and parses fine,
+# which is why every field taking its floor from PER_FIELD_FLOOR_MAS was
+# unaffected -- the bug only fires on the explicit-override path, which is the
+# one the manual-restart note tells operators to use.
+# ---------------------------------------------------------------------------
+import subprocess
+
+
+def test_bash_treats_a_quoted_array_after_assignments_as_the_COMMAND():
+    """The mechanism, demonstrated rather than asserted.
+
+    If this ever stops failing, bash changed and the `env` prefixes below became
+    optional -- but they are still correct, so the fix does not depend on it."""
+    broken = subprocess.run(
+        ['bash', '-c', 'fe=(FOO=1); BAR=2 "${fe[@]}" echo hi'],
+        capture_output=True, text=True)
+    assert broken.returncode == 127, broken
+    assert 'command not found' in broken.stderr
+
+    fixed = subprocess.run(
+        ['bash', '-c', 'fe=(FOO=1); env BAR=2 "${fe[@]}" echo hi'],
+        capture_output=True, text=True)
+    assert fixed.returncode == 0, fixed
+    assert fixed.stdout.strip() == 'hi'
+
+
+def test_an_empty_floor_env_hides_the_bug():
+    """Why this survived: with no override the array is empty and the prefix
+    parses normally, so the 11 fields on PER_FIELD_FLOOR_MAS never saw it."""
+    ok = subprocess.run(
+        ['bash', '-c', 'fe=(); BAR=2 "${fe[@]}" echo hi'],
+        capture_output=True, text=True)
+    assert ok.returncode == 0, ok
+    assert ok.stdout.strip() == 'hi'
+
+
+def _floor_env_sites(text):
+    """Every line expanding the floor array, with the command it belongs to.
+
+    The expansion sits on its own continuation line, so walk BACK to the start
+    of the command -- the first preceding line that is not itself a continuation.
+    """
+    lines = text.splitlines()
+    out = []
+    for i, ln in enumerate(lines):
+        # comments discuss the array too (including the one explaining this bug)
+        if '"${floor_env[@]}"' not in ln or ln.lstrip().startswith('#'):
+            continue
+        j = i
+        while j > 0 and lines[j - 1].rstrip().endswith('\\'):
+            j -= 1
+        out.append(lines[j].strip())
+    return out
+
+
+def test_every_floor_env_forwarding_site_is_prefixed_with_env():
+    """The fix itself.  Both cataloging invocations forward the array, and a
+    forwarding site without `env` is rc=127 the moment anyone overrides."""
+    sites = _floor_env_sites(LOOP.read_text())
+    assert len(sites) == 2, f'expected 2 forwarding sites, found {len(sites)}: {sites}'
+    for s in sites:
+        head = s.split('=', 1)[0]
+        assert re.match(r'^(chain_out=\$\(env |env )', s), (
+            f'floor_env forwarded without an `env` prefix -- bash will run the '
+            f'assignment as a command (rc 127). Offending command starts: {head}')
+
+
+def test_the_loop_script_still_parses():
+    """A syntax error here is a dead campaign, not a failed test."""
+    r = subprocess.run(['bash', '-n', str(LOOP)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
