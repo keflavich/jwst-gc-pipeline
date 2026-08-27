@@ -223,16 +223,38 @@ def test_only_the_gc2211_pointings_that_measure_scatter_have_floors():
     F277W measures 20 spanning 2.19-4.33 on 2.60 mas scatter -- the scatter
     class.
 
-    o023 and o049 still measure something else: 118 mas of trailed-exposure
-    displacement (excluded outright in #493) and three lowest-contrast cells at
-    5.4-22.4 mas (#484).  They stay on the strict default rather than inheriting
-    a sibling's tolerance.
+    o049 has now measured it too, and the earlier reading of that field was an
+    artifact of how it had been measured.  "Three lowest-contrast cells at
+    5.4-22.4 mas" was true of every record it had -- and every one of those ran
+    with `correction_floor_source: env` at 4.0, which cannot report a sub-4 mas
+    population.  Run at the default on 2026-08-27 it emits eight: the same three
+    (23.21 / 13.19 / 5.46, against 22.40 / 13.42 / 5.45 four days earlier) plus
+    2.03, 2.08, 2.22, 2.24, 2.29.  Four of those five are nrca3 exposure 2 in
+    four different vgroups at +1.74..+1.93 dRA -- one per-detector term, not four
+    pointing errors.  Scatter class, o046/o050 shape, so it takes their 4.0.
+
+    o023 still measures something else: 118 mas of trailed-exposure displacement,
+    excluded outright in #493.  It stays on the strict default rather than
+    inheriting a sibling's tolerance.
     """
-    for target in ('gc2211_o046', 'gc2211_o050'):
+    for target in ('gc2211_o046', 'gc2211_o050', 'gc2211_o049'):
         assert m2_correction_floor(target, env={}) == (4.0, 'per-field'), target
     assert m2_correction_floor('gc2211_o028', env={}) == (6.0, 'per-field')
-    for target in ('gc2211_o023', 'gc2211_o049'):
-        assert m2_correction_floor(target, env={}) == (0.0, 'default'), target
+    assert m2_correction_floor('gc2211_o023', env={}) == (0.0, 'default')
+
+
+def test_the_o049_floor_separates_its_two_measured_populations():
+    """4.0 is not a constant chosen to keep o049 green.
+
+    Its scatter class tops out at 2.29 mas and its smallest REAL correction is
+    5.46, so the floor sits in a >3 mas gap between the two populations and all
+    three real corrections stay actionable."""
+    floor, source = m2_correction_floor('gc2211_o049', env={})
+    assert (floor, source) == (4.0, 'per-field')
+    scatter_max, real_min = 2.29, 5.46
+    assert scatter_max < floor < real_min
+    assert floor - scatter_max > 1.5, 'floor must clear the scatter with margin'
+    assert real_min - floor > 1.0, 'floor must not swallow a real correction'
 
 
 def test_the_o028_floor_covers_its_measured_scatter_with_margin():
