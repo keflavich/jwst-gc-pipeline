@@ -2537,17 +2537,15 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
         for fi, filt in enumerate(filternames):
             # ngc6334's two proposals tag the per-proposal merged catalog AFTER
             # the module (matching merge_individual_frames' _j{proposal} output),
-            # as do the per-obs-MERGED proposals (10678: _o{field}, see
-            # naming.merged_catalog_obs_token -- their vetted names carry NO end
-            # token, _vtok='' below); every other target keeps its token at the
-            # END (unchanged).
-            _jtok = (f'_j{getattr(options, "proposal_id", None)}'
-                     if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
-            _modtok = merged_catalog_obs_token(
+            # as do the per-obs-MERGED proposals (10678: _o{field}); every other
+            # target keeps its token at the END (unchanged).  The whole
+            # module-slot token is `naming.merged_catalog_module_token`, which
+            # is what the WRITER (merge_individual_frames' `out_obs_`) calls.
+            _modtok = merged_catalog_module_token(
                 getattr(options, 'proposal_id', None),
                 getattr(options, 'field', None))
-            _endsuf = '' if (_jtok or _modtok) else _obssuf
-            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_modtok}_indivexp_merged'
+            _endsuf = '' if _modtok else _obssuf
+            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_modtok}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 continue
@@ -2798,11 +2796,10 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     # module (see merge_individual_frames), as do the per-obs-merged proposals
     # (10678 _o{field}; their vetted names carry NO end token); others keep
     # the end token.
-    _jtok = (f'_j{getattr(options, "proposal_id", None)}'
-             if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
-    _modtok = merged_catalog_obs_token(getattr(options, 'proposal_id', None),
-                                       getattr(options, 'field', None))
-    _endsuf = '' if (_jtok or _modtok) else _obssuf
+    _modtok = merged_catalog_module_token(
+        getattr(options, 'proposal_id', None),
+        getattr(options, 'field', None))
+    _endsuf = '' if _modtok else _obssuf
     _modules = (getattr(options, 'modules', '') or 'merged').split(',')
     # Per-filter independence is OR-ed across modules and counted ONCE per
     # filter.  (The previous module-outer loop added ``indep`` to
@@ -2814,7 +2811,7 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
         col = f'independently_detected_{f}'
         indep = np.zeros(len(t), dtype=bool)
         for module in _modules:
-            p = (f'{cut_bp}/catalogs/{f}_{module}{_jtok}{_modtok}_indivexp_merged'
+            p = (f'{cut_bp}/catalogs/{f}_{module}{_modtok}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 continue
@@ -4408,11 +4405,15 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         # ngc6334 (_j{proposal}) and the per-obs-merged proposals (10678,
         # _o{field}) tag the merged name after the module -- spell THIS run's
         # token, so another observation's merge cannot stand in for our own.
-        _mergetok = (f'_j{getattr(options, "proposal_id", None)}'
-                     if str(getattr(options, 'proposal_id', None)) in ('7213', '6778')
-                     else merged_catalog_obs_token(
-                         getattr(options, 'proposal_id', None),
-                         getattr(options, 'field', None)))
+        # This glob decides whether the raise below fires, so it has to spell
+        # the token the WRITER emits.  An if/else treating the two tokens as
+        # mutually exclusive globs a name nothing wrote the moment a proposal
+        # needs both; the glob comes back empty, and a FROZEN stage with no
+        # inputs then stops raising -- the gate fails OPEN, which is the
+        # outcome this whole block exists to prevent.
+        _mergetok = merged_catalog_module_token(
+            getattr(options, 'proposal_id', None),
+            getattr(options, 'field', None))
         merged = glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}{_mergetok}_"
                             f"indivexp_merged*_{merge_label}_dao_basic.fits")
         msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: NO per-frame "
