@@ -11,7 +11,7 @@ import os
 import pytest
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    _m2_exposure_baseline, _m2_record_path, _record_name)
+    _m2_exposure_baseline, _m2_record_path, _record_name, parse_record_name)
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +35,65 @@ def test_two_observations_do_not_share_a_record_name():
     a = _record_name("m2", "F360M", "_o002")
     b = _record_name("m2", "F360M", "_o005")
     assert a != b
+
+
+# ------------------------------------------------- writer <-> reader agreement
+
+@pytest.mark.parametrize("stage", ["m2", "m3", "m5", "m12"])
+@pytest.mark.parametrize("filt", [None, "F360M", "F150W2"])
+@pytest.mark.parametrize("token,obs,proposal", [
+    ("", None, None),
+    ("_o002", "002", None),
+    ("_o002-998", "002-998", None),     # sgrb2's joint registration
+    ("_j7213", None, "7213"),           # ngc6334's shared tree
+])
+def test_every_name_the_writer_emits_parses_back(stage, filt, token, obs,
+                                                 proposal):
+    """`parse_record_name` is the inverse of `_record_name`, and the release
+    gate depends on it being one.
+
+    A record's name is the only thing that says WHICH observation a verdict
+    belongs to.  `check_astrometry_checkpoints.py` refuses a field on that
+    reading, and while it owned a private regex the two disagreed on real
+    records: the shared-tree `_j` names matched nothing (an unparseable name is
+    skipped, so the verdict was invisible), and the m7 name below put the
+    observation in the filter slot.
+    """
+    name = _record_name(stage, filt, token) + "_latest.json"
+    assert parse_record_name(name) == {
+        "stage": stage, "filt": filt or "all", "obs": obs,
+        "proposal": proposal}
+
+
+def test_the_hand_built_crossfilter_name_parses_back_too():
+    """The m7 call site builds its name directly rather than through
+    `_record_name`, because it has no filter of its own -- so it is the one
+    shape a filter-slot-shaped inverse gets wrong, and seven such records are
+    on disk.  Its observation must read as an observation.
+    """
+    for token, obs in (("", None), ("_o050", "050"), ("_o003", "003")):
+        name = f"checkpoint_m7_crossfilter{token}_latest.json"
+        assert parse_record_name(name) == {
+            "stage": "m7_crossfilter", "filt": None, "obs": obs,
+            "proposal": None}
+
+
+def test_a_timestamped_sibling_parses_as_the_same_record():
+    """Every record is written twice, `_latest` and `_<stamp>`."""
+    stamped = parse_record_name(
+        "checkpoint_m7_crossfilter_o003_20260816T143240Z.json")
+    assert stamped == parse_record_name(
+        "checkpoint_m7_crossfilter_o003_latest.json")
+
+
+@pytest.mark.parametrize("name", [
+    "consensus_catalog_F360M_o002.fits",
+    "checkpoint_.json",
+    "checkpoint_x9_F360M_latest.json",
+    "not_a_record_at_all",
+])
+def test_a_non_record_name_is_rejected_rather_than_guessed(name):
+    assert parse_record_name(name) is None
 
 
 def _write(tmp_path, name, dra, corrections=True):

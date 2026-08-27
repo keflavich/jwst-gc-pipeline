@@ -41,15 +41,10 @@ import os
 import re
 import sys
 
+from jwst_gc_pipeline.photometry.astrometry_checkpoint import parse_record_name
+
 BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
                       os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst"))
-
-#: ``checkpoint_m3_F212N_o001_latest.json`` -> stage m3, filter F212N, obs 001.
-RECORD_RE = re.compile(
-    r"^checkpoint_(?P<stage>m\d+(?:_crossfilter)?)"
-    r"(?:_(?P<filt>[A-Za-z0-9]+))?"
-    r"(?:_o(?P<obs>\d+))?"
-    r"_latest\.json$")
 
 #: m2 raises in place, so an m2 record that reached disk with ``passed: false``
 #: is a run that was stopped and re-run.  Reading it here would refuse a field
@@ -146,16 +141,28 @@ def _stale_against(info, rec, by_key, overall):
     return overall if (overall and date < overall) else ""
 
 
+def _obs_in_scope(obs, observations):
+    """Is a record's observation token inside the release's scope?
+
+    A joint registration writes both observations into one token
+    (``_o002-998``); it describes each of them, so it is in scope when the
+    release ships EITHER.  Requiring the whole token to appear in
+    ``--observations`` would silently drop the only record covering an
+    observation that IS being shipped.
+    """
+    return any(part in observations for part in str(obs).split("-"))
+
+
 def records(field, observations=None):
     """``[(path, parsed-name, record)]`` for the field's ``*_latest`` records."""
     d = os.path.join(BASE, field, "astrometry_checkpoints")
     out, unreadable = [], []
     for path in sorted(glob.glob(os.path.join(d, "checkpoint_*_latest.json"))):
-        m = RECORD_RE.match(os.path.basename(path))
-        if not m:
+        info = parse_record_name(os.path.basename(path))
+        if info is None:
             continue
-        info = m.groupdict()
-        if observations and info["obs"] and info["obs"] not in observations:
+        if observations and info["obs"] and not _obs_in_scope(info["obs"],
+                                                              observations):
             continue
         try:
             with open(path) as fh:
@@ -179,10 +186,17 @@ def _prefer_tokenised(found):
     Keyed on (stage, filter): the untokened file cannot say which observation it
     belonged to, so the only safe reading is that a tokenised record for the same
     stage and filter supersedes it.
+
+    ngc6334's shared-tree token (``_j7213``) counts as tokenised for the same
+    reason an obs token does -- it names which run wrote the record -- so an
+    untokened sibling of the same stage and filter is superseded by it.
     """
-    tokenised = {(i["stage"], i["filt"]) for _p, i, _r in found if i["obs"]}
+    def _tokenised(i):
+        return bool(i["obs"] or i["proposal"])
+
+    tokenised = {(i["stage"], i["filt"]) for _p, i, _r in found if _tokenised(i)}
     return [(p, i, r) for p, i, r in found
-            if i["obs"] or (i["stage"], i["filt"]) not in tokenised]
+            if _tokenised(i) or (i["stage"], i["filt"]) not in tokenised]
 
 
 def main(argv=None):
