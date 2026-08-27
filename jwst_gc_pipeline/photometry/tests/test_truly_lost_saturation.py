@@ -213,3 +213,55 @@ def test_the_near_saturation_veto_still_uses_the_any_group_mask():
         'now passes, _filter_near_saturation was rewired and the #418 '
         'measurement in this module needs redoing')
     assert set(np.asarray(phot.results['id'])) == {2}
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-27: `cataloging._prepare_frame_for_photometry` called
+# `_L.truly_lost_saturated_mask(dqarr)`, but crowdsource_catalogs_long
+# re-exported only `remove_saturated_stars` and
+# `correct_dq_first_group_saturation` from saturated_star_finding.  Every
+# per-frame fit raised AttributeError -- 16 of 16 sgra m12 fan-out tasks in
+# under a minute each, and the finalize path with them.
+#
+# The tests above exercise the FUNCTION.  Nothing checked that the name
+# cataloging.py actually uses resolves, which is the whole failure.
+# ---------------------------------------------------------------------------
+
+
+def test_every_L_attribute_cataloging_uses_actually_resolves():
+    """Guard the class, not the instance.
+
+    cataloging.py imports crowdsource_catalogs_long as `_L` and reaches through
+    it for helpers that live in other modules.  Any `_L.<name>` that is not
+    re-exported is an AttributeError at fit time -- never at import time, so it
+    survives every smoke test and dies once per frame in production.
+    """
+    import ast
+    import pathlib
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
+
+    src = pathlib.Path(
+        _L.__file__).parent.joinpath('cataloging.py').read_text()
+    tree = ast.parse(src)
+
+    used = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == '_L'):
+            used.add(node.attr)
+
+    assert used, 'cataloging.py no longer reaches through _L; drop this test'
+    missing = sorted(n for n in used if not hasattr(_L, n))
+    assert not missing, (
+        f'cataloging.py calls _L.{{{", ".join(missing)}}}, which '
+        f'crowdsource_catalogs_long does not export. This raises AttributeError '
+        f'per frame at fit time, not at import, so nothing else catches it.')
+
+
+def test_the_two_dq_helpers_are_exported_together():
+    """They are called on consecutive lines; exporting one without the other is
+    exactly the break above."""
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
+    assert hasattr(_L, 'correct_dq_first_group_saturation')
+    assert hasattr(_L, 'truly_lost_saturated_mask')

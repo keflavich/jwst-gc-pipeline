@@ -587,7 +587,15 @@ import crowdsource
 from crowdsource.crowdsource_base import fit_im
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
-    remove_saturated_stars, correct_dq_first_group_saturation)
+    remove_saturated_stars, correct_dq_first_group_saturation,
+    # `cataloging._prepare_frame_for_photometry` reaches BOTH DQ helpers through
+    # this module -- `_L.correct_dq_first_group_saturation(...)` and then
+    # `_L.truly_lost_saturated_mask(...)` on the very next line.  Only the first
+    # was re-exported, so every per-frame fit raised AttributeError: 16 of 16
+    # sgra m12 fan-out tasks died in under a minute each on 2026-08-27, and any
+    # fan-out or finalize would have done the same.  Keep the pair together --
+    # they are called together, and one without the other is a break.
+    truly_lost_saturated_mask)
 
 from astroquery.svo_fps import SvoFps
 
