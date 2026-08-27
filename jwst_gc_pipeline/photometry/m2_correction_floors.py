@@ -218,6 +218,35 @@ PER_FIELD_FLOOR_MAS = {
     # It takes an entry when it next measures the 2-4 mas class -- which a re-tie
     # or a regeneration from _cal would put back, since that is where those
     # earlier records came from.
+    #
+    # o049 now has the measurement the paragraph above said it lacked.  The claim
+    # there -- "only three corrections, 5.4-22.4 mas", not the scatter class --
+    # was true of every record it had, and every one of those was taken with
+    # `correction_floor_source: env` at 4.0.  A 4 mas floor cannot report the
+    # sub-4 mas population, so the absence of that class was a property of the
+    # measurement, not of the field.
+    #
+    # 2026-08-27 it ran at the default 0.0 (unintentionally -- there was no entry
+    # here, and the relaunch did not set the env var), which is the first look at
+    # o049 below 4 mas:
+    #
+    #     field        filter  n   min    med    max
+    #     gc2211_o049  F200W   8   2.03   2.26   23.21
+    #
+    # Split by class, the three known corrections reproduce almost exactly --
+    # 23.21 / 13.19 / 5.46 against 22.40 / 13.42 / 5.45 measured on 2026-08-22 --
+    # and the five new ones are 2.03, 2.08, 2.22, 2.24, 2.29.  Four of those five
+    # are nrca3 exposure 2 in four different vgroups reading +1.74..+1.93 dRA and
+    # +1.08..+1.41 dDec, i.e. one systematic per-detector term, not four
+    # independent pointing errors.  That is the o046/o050 shape (2.01-3.13 and
+    # 2.00-2.84) on the same instrument and the same filter.
+    #
+    # 4.0, matching the siblings rather than taking its own entry: the measured
+    # maximum of the scatter class is 2.29 and the smallest real correction is
+    # 5.46, so the two populations are separated by more than 3 mas and the
+    # constant is not being chosen to keep anything green.  The three real
+    # corrections stay actionable.
+    'gc2211_o049': 4.0,
 }
 
 
