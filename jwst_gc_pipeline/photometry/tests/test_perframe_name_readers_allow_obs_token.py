@@ -17,6 +17,7 @@ subset.  Measured on the live trees before this fix:
 """
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -72,13 +73,49 @@ _PARDON = {
 }
 
 
+#: A tree this size has ~480 python files.  A floor turns "the enumeration
+#: broke" into a failure instead of a clean sweep over nothing: an empty file
+#: list makes every sweep below pass vacuously.
+MIN_SCANNED_FILES = 350
+
+
 def _py_files():
-    for root, dirs, files in os.walk(REPO):
-        dirs[:] = [d for d in dirs
-                   if d not in {'.git', '__pycache__', 'build', 'dist'}]
-        for f in files:
-            if f.endswith('.py'):
-                yield os.path.join(root, f)
+    """This repository's python files: tracked, plus untracked-not-ignored.
+
+    Enumerating with ``os.walk(REPO)`` swept every sibling git worktree
+    checked out UNDER the repo root -- 26 of them on the machine this runs on
+    -- so the guard reported offenders in files that are not in this
+    repository at this commit, including those worktrees' copies of this very
+    file (``_PARDON`` is keyed on the repo-relative path, so a copy does not
+    pardon itself).  A guard that is red for a reason unrelated to the change
+    is one people learn to ignore.
+
+    ``git ls-files`` refuses to descend into a directory that owns a ``.git``,
+    so a nested worktree comes back as a bare directory entry and is dropped
+    by the trailing-slash test.  ``-o --exclude-standard`` keeps the property
+    the ``os.walk`` was reaching for: a NEW file is policed before it is
+    staged, rather than passing locally and failing in CI once it is added.
+
+    ``check=True`` on purpose.  A guard that cannot enumerate cannot do its
+    job, and reporting a clean tree is the one answer it must not give.
+    """
+    out = subprocess.run(
+        ['git', '-C', REPO, 'ls-files', '-c', '-o', '--exclude-standard', '-z'],
+        capture_output=True, text=True, check=True).stdout
+    found = 0
+    for rel in out.split('\0'):
+        # A nested repository/worktree yields `name/`; a submodule yields a
+        # gitlink path with no trailing slash, which `isfile` drops as well.
+        if not rel or rel.endswith('/') or not rel.endswith('.py'):
+            continue
+        path = os.path.join(REPO, rel)
+        if os.path.isfile(path):
+            found += 1
+            yield path
+    assert found >= MIN_SCANNED_FILES, (
+        f'only {found} python files enumerated under {REPO}; the sweeps below '
+        f'would pass over almost nothing.  The enumeration is broken, not the '
+        f'tree.')
 
 
 def test_no_reader_requires_visit_immediately_after_the_detector():
