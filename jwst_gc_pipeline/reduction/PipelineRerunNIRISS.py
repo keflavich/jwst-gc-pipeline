@@ -88,6 +88,11 @@ import jwst
 filter_regex = re.compile('f[0-9][0-9][0-9][nmw]')
 
 import warnings
+# The check itself lives in `reduction.wcs_check` -- one implementation for
+# all three drivers.  The three copies had diverged: MIRI and NIRISS still
+# evaluated the hardcoded NIRCam centre (1024, 1024), which is OFF a MIRI
+# (1024, 1032) array, so every separation they printed was `nan`.
+from jwst_gc_pipeline.reduction.wcs_check import check_wcs
 from astropy.utils.exceptions import AstropyWarning, AstropyDeprecationWarning
 from astropy.wcs import FITSFixedWarning
 warnings.simplefilter('ignore', category=AstropyWarning)
@@ -618,34 +623,6 @@ def fix_alignment(fn, proposal_id=None, regionname='sgrc', field=None, basepath=
         align_fits.writeto(fn, overwrite=True)
         assert 'RAOFFSET' in fits.getheader(fn, ext=1)
     check_wcs(fn)
-
-
-def check_wcs(fn):
-    if os.path.exists(fn):
-        print(f"Checking WCS of {fn}")
-        fa = ImageModel(fn)
-        wcsobj = fa.meta.wcs
-        print(f"fa['meta']['wcs'] crval={wcsobj.to_fits()[0]['CRVAL1']}, {wcsobj.to_fits()[0]['CRVAL2']}")
-        new_1024 = wcsobj.pixel_to_world(1024, 1024)
-        print(f"new pixel_to_world(1024,1024) = {new_1024}")
-        if 'oldwcs' in fa.meta:
-            oldwcsobj = fa.meta.oldwcs
-            old_1024 = oldwcsobj.pixel_to_world(1024, 1024)
-            print(f"old pixel_to_world(1024,1024) = {old_1024}, sep from new GWCS={old_1024.separation(new_1024).to(u.arcsec)}")
-        fa.close()
-
-        fh = fits.open(fn)
-        print(f"CRVAL1={fh[1].header['CRVAL1']}, CRVAL2={fh[1].header['CRVAL2']}")
-        if 'OLCRVAL1' in fh[1].header:
-            print(f"OLCRVAL1={fh[1].header['OLCRVAL1']}, OLCRVAL2={fh[1].header['OLCRVAL2']}")
-        if 'RAOFFSET' in fh[1].header:
-            print("RA, DE offset: ", fh[1].header['RAOFFSET'], fh[1].header['DEOFFSET'])
-        ww = WCS(fh[1].header)
-        fits_1024 = ww.pixel_to_world(1024, 1024)
-        print(f"FITS pixel_to_world(1024,1024) = {fits_1024}, sep from new GWCS={fits_1024.separation(new_1024).to(u.arcsec)}")
-        fh.close()
-    else:
-        print(f"COULD NOT CHECK WCS FOR {fn}: does not exist")
 
 
 if __name__ == "__main__":
