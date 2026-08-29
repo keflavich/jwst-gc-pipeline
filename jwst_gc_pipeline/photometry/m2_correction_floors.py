@@ -247,6 +247,34 @@ PER_FIELD_FLOOR_MAS = {
     # constant is not being chosen to keep anything green.  The three real
     # corrections stay actionable.
     'gc2211_o049': 4.0,
+    # quintuplet: 0.0 -- the field needs NO floor, and that is a measurement,
+    # not an omission.  Its m2 records trace the retie loop converging:
+    #
+    #     date          filter  ncorr   max      scatter
+    #     2026-07-27    F212N     4     2.53      1.26
+    #     2026-07-30    F212N    21   120.00      1.34
+    #     2026-07-31    F212N    21   232.00      2.46
+    #     2026-07-31    F212N     1    18.08      1.16
+    #     2026-07-31    F323N     1     6.31      1.27
+    #     2026-08-01    F212N     0      --       1.16
+    #     2026-08-15    F212N     0      --       1.16   (x6, o003)
+    #     2026-08-15    F323N     0      --       1.32   (x6, o003)
+    #
+    # The 120 and 232 mas excursions were real displacements; they were
+    # corrected and the field reached a fixed point.  Every run since
+    # 2026-08-01 -- including all six o003 runs of 2026-08-15 that produced the
+    # shipped m7/m8 -- emits ZERO corrections against a consensus scatter of
+    # 1.16-1.32 mas.  Those six carry `correction_floor_mas: 4.0` from the env
+    # var, but the floor never did anything: ncorr is 0 at 4.0 and 0 at the
+    # strict default alike.
+    #
+    # So 0.0 is the entry.  Raising it to 4.0 to match the neighbouring
+    # GC fields would buy nothing and would silence a future 2-3 mas excursion
+    # on a field that has demonstrably converged below that -- the habit the
+    # w51 entry above argues against.  The entry exists to record the
+    # measurement and to stop `UnregisteredM2FloorWarning` firing on a field
+    # whose evidence is already in hand.
+    'quintuplet': 0.0,
 }
 
 
