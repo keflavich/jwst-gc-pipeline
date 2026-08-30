@@ -197,7 +197,22 @@ MULTIOBS_PROPOSALS = ('2211', '10678')
 #:     /orange/adamginsburg/jwst/gc2211_o023//F200W/f200w_nrca...._dao_basic.fits
 #:
 #: after its 8 fan-out shards had written 192 per-frame tables (2026-08-22).
-PER_OBS_MERGED_PROPOSALS = ('10678', '2211')
+#: 1182 + 2221 (brick): the brick field is imaged by TWO proposals with
+#: DISJOINT filter sets -- 1182 contributes F115W/F200W/F356W/F444W, 2221
+#: contributes F182M/F187N/F212N/F405N/F410M/F466N -- run as two separate
+#: per-proposal chains into one tree.  Neither was tokened, so both chains
+#: wrote the same untokened merged name and whichever finished last won.  The
+#: combined m8 therefore held one proposal's bands and never all eleven:
+#: measured 2026-08-29, the untokened table was byte-identical to the 1182 half
+#: (651903 rows, f115w/f200w/f356w/f444w) while the 2221 half sat beside it
+#: under a different name (323024 rows, six bands).  `stage_release
+#: .discover_catalogs` ships the untokened file and brick's release config has
+#: no `observations` key, so a release staged in that state shipped four of
+#: eleven bands with nothing saying so (#590).
+#:
+#: Tokening both ends the collision: each chain writes its own `_o{field}`
+#: catalog and the ambiguous untokened name stops being produced.
+PER_OBS_MERGED_PROPOSALS = ('10678', '2211', '1182', '2221')
 
 #: What a ``field`` may look like inside an observation token: an observation
 #: number, or several joined by ``-`` for a joint registration ('002-998').
