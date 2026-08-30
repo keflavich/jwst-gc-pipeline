@@ -10,6 +10,9 @@ glob token and the writer token are the same string.
 
 import inspect
 import os
+import pathlib
+import re
+import subprocess
 
 import pytest
 
@@ -155,3 +158,86 @@ def test_merge_individual_frames_derives_both_tokens_from_naming():
     assert 'merged_catalog_module_token(progid, field)' in code
     # the hand-rolled spelling, in code rather than in the comment that records it
     assert "f'_o{field}'" not in code
+
+
+# ---------------------------------------------------------------------------
+# nobody re-derives the shared-tree proposal set from a literal
+# ---------------------------------------------------------------------------
+
+#: A MEMBERSHIP TEST against a literal copy of `naming.SHARED_TREE_PROPOSALS`
+#: -- `in ('7213', '6778')` in either order, tuple/list/set, either quote.
+#: The ids themselves appear legitimately as DATA (the fields registry) and in
+#: prose (`ngc6334 is [('6778','001'), ('7213','001')]`); only re-deriving the
+#: SET is the branch that stops agreeing with the writer.
+_SHARED_MEMBERSHIP = re.compile(
+    r'''in\s*[\(\[\{]\s*['"](?:7213|6778)['"]\s*,\s*['"](?:7213|6778)['"]''')
+
+#: Files allowed to contain the literals: the module that DECLARES them, and
+#: this test.  Everything else must call `naming.SHARED_TREE_PROPOSALS` or,
+#: better, `merged_catalog_module_token`.
+_PARDON = {
+    'jwst_gc_pipeline/photometry/naming.py',
+    'jwst_gc_pipeline/photometry/tests/test_merge_glob_matches_the_writer.py',
+}
+
+MIN_SCANNED_FILES = 350
+
+
+def _repo_py_files():
+    """Tracked plus untracked-not-ignored python files.
+
+    `git ls-files` will not descend into a directory that owns a `.git`, so a
+    sibling worktree checked out under the repo root is skipped; `-o
+    --exclude-standard` still polices a NEW file before it is staged.
+    `check=True`: a guard that cannot enumerate must not report a clean tree.
+    """
+    root = pathlib.Path(__file__).resolve().parents[3]
+    out = subprocess.run(
+        ['git', '-C', str(root), 'ls-files', '-c', '-o', '--exclude-standard',
+         '-z'], capture_output=True, text=True, check=True).stdout
+    found = []
+    for rel in out.split('\0'):
+        if not rel or rel.endswith('/') or not rel.endswith('.py'):
+            continue
+        if (root / rel).is_file():
+            found.append((rel, root / rel))
+    assert len(found) >= MIN_SCANNED_FILES, (
+        f'only {len(found)} python files enumerated; the sweep below would '
+        f'pass over almost nothing')
+    return found
+
+
+def test_the_shared_tree_proposal_ids_are_not_spelled_outside_naming():
+    """`naming.SHARED_TREE_PROPOSALS` is the set; a literal copy of it is a
+    branch that stops agreeing the day the set changes.
+
+    Three readers in `cataloging.py` carried `('7213', '6778')` inline while
+    the WRITER (`merge_individual_frames`) called
+    `merged_catalog_module_token`.  One of the three -- the frozen-stage
+    "did the merge actually run?" discriminator -- also treated `_j` and the
+    observation token as mutually exclusive where the helper concatenates
+    them.  A glob that spells a name the writer never wrote returns empty, and
+    the `AstrometryRegressionError` beside it is then skipped: the gate fails
+    OPEN.
+    """
+    offenders = []
+    for rel, path in _repo_py_files():
+        if rel in _PARDON:
+            continue
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith('#') or 'noqa: shared-tree-literal' in line:
+                continue
+            if _SHARED_MEMBERSHIP.search(line):
+                offenders.append(f'{rel}:{i}: {line.strip()}')
+    assert not offenders, (
+        'these re-derive naming.SHARED_TREE_PROPOSALS from a literal, so they '
+        'stop agreeing with the writer the day the set changes:\n  '
+        + '\n  '.join(offenders)
+        + '\n\nCall naming.merged_catalog_module_token(proposal_id, field) for '
+          'the whole module-slot token, or naming.SHARED_TREE_PROPOSALS for '
+          'the set itself.')
