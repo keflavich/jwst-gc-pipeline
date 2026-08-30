@@ -117,6 +117,11 @@ medfilt_size = {'F410M': 15, 'F405N': 256, 'F466N': 55,
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
 from jwst_gc_pipeline.reduction.crds_cache import open_crds_reference
+# The check itself lives in `reduction.wcs_check` -- one implementation for
+# all three drivers.  The three copies had diverged: MIRI and NIRISS still
+# evaluated the hardcoded NIRCam centre (1024, 1024), which is OFF a MIRI
+# (1024, 1032) array, so every separation they printed was `nan`.
+from jwst_gc_pipeline.reduction.wcs_check import check_wcs
 
 
 # Reference catalog configuration by proposal and field.
@@ -1424,54 +1429,6 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     check_wcs(fn)
 
 
-def check_wcs(fn):
-    if os.path.exists(fn):
-        print(f"Checking WCS of {fn}")
-        fa = ImageModel(fn)
-        wcsobj = fa.meta.wcs
-        _fy, _fx = fa.data.shape[0] / 2.0, fa.data.shape[1] / 2.0   # array center (subarray-safe)
-        print(f"fa['meta']['wcs'] crval={wcsobj.to_fits()[0]['CRVAL1']}, {wcsobj.to_fits()[0]['CRVAL2']}, {wcsobj.forward_transform.param_sets[-1]}")
-        new_center = wcsobj.pixel_to_world(_fx, _fy)
-        print(f"new pixel_to_world({_fx},{_fy}) = {new_center}")
-        if 'oldwcs' in fa.meta:
-            oldwcsobj = fa.meta.oldwcs
-            print(f"fa['meta']['oldwcs'] crval={oldwcsobj.to_fits()[0]['CRVAL1']}, {oldwcsobj.to_fits()[0]['CRVAL2']}, {oldwcsobj.forward_transform.param_sets[-1]}")
-            old_center = oldwcsobj.pixel_to_world(_fx, _fy)
-            print(f"old pixel_to_world({_fx},{_fy}) = {old_center}, sep from new GWCS={old_center.separation(new_center).to(u.arcsec)}")
-        fa.close()
-
-
-        # FITS header
-        fh = fits.open(fn)
-        print(f"CRVAL1={fh[1].header['CRVAL1']}, CRVAL2={fh[1].header['CRVAL2']}")
-        if 'OLCRVAL1' in fh[1].header:
-            print(f"OLCRVAL1={fh[1].header['OLCRVAL1']}, OLCRVAL2={fh[1].header['OLCRVAL2']}")
-        if 'RAOFFSET' in fh[1].header:
-            print("RA, DE offset: ", fh[1].header['RAOFFSET'], fh[1].header['DEOFFSET'])
-        # relax=True: a header whose CTYPE lost the '-SIP' suffix still carries
-        # A_*/B_*; without relax the distortion is silently dropped.
-        ww = WCS(fh[1].header, relax=True)
-        fits_center = ww.pixel_to_world(_fx, _fy)
-        print(f"FITS pixel_to_world({_fx},{_fy}) = {fits_center}, sep from new GWCS={fits_center.separation(new_center).to(u.arcsec)}")
-        # The center agrees by construction even when the SIP fit is poor --
-        # the distortion residual lives at the corners.  Measure the whole
-        # array (this is what caught the 0.25 px to_fits() default).
-        from jwst_gc_pipeline.reduction.fits_wcs_sync import (
-            fits_gwcs_discrepancy_mas, FITS_GWCS_TOL_MAS)
-        _max_mas, _med_mas = fits_gwcs_discrepancy_mas(
-            fh[1].header, wcsobj, (int(_fy * 2), int(_fx * 2)))
-        print(f"FITS/SIP vs GWCS over the array: max {_max_mas:.4f} mas, "
-              f"median {_med_mas:.4f} mas")
-        if _max_mas > FITS_GWCS_TOL_MAS:
-            warnings.warn(
-                f"{fn}: the FITS/SIP header disagrees with the GWCS by up to "
-                f"{_max_mas:.3f} mas (> {FITS_GWCS_TOL_MAS} mas). This frame "
-                f"predates the tight-SIP fix; anything reading the FITS header "
-                f"instead of the GWCS carries that position-dependent error. "
-                f"Regenerate it, or read the GWCS.")
-        fh.close()
-    else:
-        print(f"COULD NOT CHECK WCS FOR {fn}: does not exist")
 
 if __name__ == "__main__":
     from optparse import OptionParser
