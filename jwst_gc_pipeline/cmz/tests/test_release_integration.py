@@ -217,10 +217,18 @@ def test_readme_says_image_only_when_no_catalogs(tmp_path):
 # ---- staging guards ----
 def test_image_only_fields_declare_skip_catalogs():
     """An image-only field's status must not depend on the operator remembering
-    --images-only: sgra's uncertified catalogs include the held F115W band."""
+    --images-only: sgra's uncertified catalogs include the held F115W band.
+
+    arches, quintuplet and sickle were on this list while their catalogs were
+    uncertified and have since left it -- each now ships catalogs, so declaring
+    `skip_catalogs` would suppress them.  They are asserted the other way below,
+    which is what keeps the removal deliberate rather than a silent drop.
+    """
     sr = _sr()
-    for field in ('sgra', 'arches', 'quintuplet', 'sickle'):
+    for field in ('sgra',):
         assert sr.FIELDS[field].get('skip_catalogs') is True, field
+    for field in ('arches', 'quintuplet', 'sickle'):
+        assert sr.FIELDS[field].get('skip_catalogs') is not True, field
 
 
 def test_version_is_required():
@@ -2167,19 +2175,27 @@ def test_both_catalog_loops_iterate_in_sorted_order():
     and fails only on some other machine, some other day.  The wiring is
     asserted structurally instead: every ``cat_dir.glob`` in
     ``discover_catalogs`` is wrapped in ``sorted(..., key=_qualcuts_sort_key)``.
+
+    The combined-table globs used to interpolate the module-level ``CAT_BASE``
+    directly.  They now interpolate a ``base`` bound from ``cat_base(field)``,
+    so a field with per-module tables globs one base per module -- the count
+    below is of the glob CALLS in the source, which is unchanged, not of the
+    bases they expand to at run time.
     """
     import ast
     src = open(os.path.join(_REL, 'stage_release.py')).read()
     fn = next(n for n in ast.walk(ast.parse(src))
               if isinstance(n, ast.FunctionDef) and n.name == 'discover_catalogs')
-    # only the CAT_BASE globs matter; the per-filter vetted glob is separate
+    # The two combined-table globs interpolate the per-module `base`; the
+    # per-filter vetted glob is a separate literal pattern and is excluded.
     globs = [n for n in ast.walk(fn)
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
              and n.func.attr == 'glob'
-             and any(isinstance(sub, ast.Name) and sub.id == 'CAT_BASE'
+             and any(isinstance(sub, ast.Name) and sub.id in ('base', 'base0')
                      for sub in ast.walk(n))]
     assert len(globs) == 2, (
-        f'{len(globs)} CAT_BASE globs in discover_catalogs; update this test')
+        f'{len(globs)} combined-table globs in discover_catalogs; '
+        'update this test')
     sorted_keys = [n for n in ast.walk(fn)
                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                    and n.func.id == 'sorted'

@@ -132,7 +132,22 @@ FIELDS = {
     "arches": {
         "data_dir": Path("/orange/adamginsburg/jwst/arches"),
         "proposal_prefix": "jw02045-o001_t001_nircam_clear",
-        "no_auto_images": True, "skip_catalogs": True,
+        # NRCA and NRCB do not overlap on the sky here (`geometry: disjoint`),
+        # so a merged table is two disjoint halves concatenated and hides which
+        # module a source came from -- which is why per-module is the product
+        # this field wants.  It is NOT what this field currently HAS.  The
+        # 2026-08-29 rerun wrote only `basic_merged_...resbgsub_m8` (208736
+        # rows, spanning both modules: nrca 107679 + nrcb 103202 less dedup);
+        # the per-module tables beside it are 2026-08-23, six days behind the
+        # 2026-08-28 mosaics this release ships.  Selecting per-module here
+        # would pair the current images with the previous generation of
+        # catalogs, which is the defect the same-run gate exists to catch.
+        #
+        # So arches ships `merged` until a rerun writes per-module tables of
+        # the shipped generation.  quintuplet keeps per-module because its two
+        # generations are the same day (both 2026-08-16).
+        "catalog_module": "merged",
+        "no_auto_images": True,
         "nircam": [
             {"filter": "F212N", "src": "/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045-o001_t001_nircam_clear-f212n-nrca_i2d.fits"},
             {"filter": "F212N", "src": "/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045-o001_t001_nircam_clear-f212n-nrcb_i2d.fits"},
@@ -143,7 +158,12 @@ FIELDS = {
     "quintuplet": {
         "data_dir": Path("/orange/adamginsburg/jwst/quintuplet"),
         "proposal_prefix": "jw02045-o003_t001_nircam_clear",
-        "no_auto_images": True, "skip_catalogs": True,
+        # Disjoint modules, as arches.  A merged sibling does exist (2026-08-16,
+        # same generation as the per-module tables), but per-module is what a
+        # user of a disjoint field wants: the merged table is the two halves
+        # concatenated and loses the module each source came from.
+        "catalog_modules": ["nrca", "nrcb"],
+        "no_auto_images": True,
         "nircam": [
             {"filter": "F212N", "src": "/orange/adamginsburg/jwst/quintuplet/F212N/pipeline/jw02045-o003_t001_nircam_clear-f212n-nrca_i2d.fits"},
             {"filter": "F212N", "src": "/orange/adamginsburg/jwst/quintuplet/F212N/pipeline/jw02045-o003_t001_nircam_clear-f212n-nrcb_i2d.fits"},
@@ -200,8 +220,12 @@ FIELDS = {
         "proposal_prefix": "jw02211",
         "observations": ["o023", "o028", "o046", "o049"],
     },
-    # sickle: NIRCam science mosaics + MIRI; catalogs still in progress so they are
-    # NOT shipped yet (skip_catalogs). NIRCam is single-module (nrcb only), so the
+    # sickle: NIRCam science mosaics + MIRI. NIRCam is single-module (nrcb only),
+    # so its cataloging writes `basic_nrcb_...`/`f<band>_nrcb_...` tables and no
+    # `_merged_` sibling -- see `catalog_modules`. Those are shipped now; the
+    # `skip_catalogs` flag that held them back predates the selector being able
+    # to see them (it matched only the `_merged_` stem, and picked up a June
+    # `seed_union_iter3` instead of the m8 table beside it). The
     # mosaics are listed explicitly (no_auto_images) and ALL FIVE are `-nrcb_`.
     # F210M used to point at a `-merged_i2d.fits`, which on a single-module field
     # cannot be a merge -- it was a leftover from an April 2026 generation. The m2
@@ -214,7 +238,10 @@ FIELDS = {
         "data_dir": Path("/orange/adamginsburg/jwst/sickle"),
         "proposal_prefix": "jw03958-o007_t001_nircam_clear",
         "no_auto_images": True,
-        "skip_catalogs": True,
+        
+        # NRCB only -- sickle has no NRCA coverage, so its cataloging writes
+        # `basic_nrcb_...` and never a `basic_merged_...` table.
+        "catalog_modules": ["nrcb"],
         "nircam": [
             {"filter": "F187N",
              "src": "/orange/adamginsburg/jwst/sickle/F187N/pipeline/jw03958-o007_t001_nircam_clear-f187n-nrcb_i2d.fits"},
@@ -537,6 +564,61 @@ def discover_images(field_cfg):
 
 
 CAT_BASE = "basic_merged_indivexp_photometry_tables_merged"
+
+
+def cat_base(field):
+    """The merged-table basename stem this FIELD's cataloging writes.
+
+    ``basic_merged_...`` for a field whose mosaics are the merged (all-module)
+    product, but a MODULE-SCOPED field never writes one: sickle images only
+    NRCB, so its cataloging writes ``basic_nrcb_indivexp_photometry_tables_
+    merged_resbgsub_m8*`` and there is no `_merged_` sibling to find.  Matching
+    only `basic_merged_` therefore skipped sickle's tables entirely -- the
+    release picked up a June `seed_union_iter3` instead of the m8 table beside
+    it, and nothing said why.
+
+    Declared per field (`catalog_module`) rather than guessed from the mosaic
+    names: which module a field catalogs is a fact about how it was run, and a
+    field that images two modules but catalogs them merged must keep the
+    merged stem.
+    """
+    return [CAT_BASE if m == "merged"
+            else f"basic_{m}_indivexp_photometry_tables_merged"
+            for m in catalog_modules(field)]
+
+
+def catalog_modules(field):
+    """Which module(s) this field's cataloging writes tables for.
+
+    ``["merged"]`` for a field whose modules overlap and are catalogued as one
+    product.  A field whose modules DO NOT overlap on the sky has no merged
+    product to write and none to ship: arches and quintuplet drizzle and
+    catalogue NRCA and NRCB separately (``geometry: disjoint``), and a merged
+    table for them would be two disjoint halves concatenated -- a "trivial"
+    merge that adds nothing a user cannot do and hides which module a source
+    came from.  sickle is the one-module case of the same thing.
+
+    So a disjoint field ships its PER-MODULE tables, and the release says which
+    module each one covers.  Declared, never guessed: whether two modules
+    overlap is a fact about the observation, not about the file names.
+    """
+    cfg = FIELDS.get(field) or {}
+    mods = cfg.get("catalog_modules") or cfg.get("catalog_module")
+    if not mods:
+        return ["merged"]
+    return [mods] if isinstance(mods, str) else list(mods)
+
+
+def _combined_re(base):
+    return re.compile(
+        rf"^{re.escape(base)}_(?P<iter>(?:resbgsub_)?m\d+)"
+        rf"(?P<qc>{QUALCUTS_RE})?\.(?P<ext>fits|ecsv)$")
+
+
+def _perpoint_re(base):
+    return re.compile(
+        rf"^{re.escape(base)}_(?P<iter>(?:resbgsub_)?m\d+)_(?P<obs>o\d+)"
+        rf"(?P<qc>{QUALCUTS_RE})?\.(?P<ext>fits|ecsv)$")
 # The oksep quality-cut suffix carries the target's OWN proposal token(s):
 # merge_catalogs._qualcuts_oksep_suffix() builds it from the field's registered
 # proposals, so wd1 and w51 write their own program numbers and only the fields
@@ -592,7 +674,8 @@ PERPOINT_RE = re.compile(
 )
 # per-filter vetted, optionally per-pointing (excludes *_vetted_carta.fits)
 VETTED_RE = re.compile(
-    r"^(?P<filt>f\d{3,4}[wmn])_merged_indivexp_merged_"
+    r"^(?P<filt>f\d{3,4}[wmn])_(?P<module>merged|nrca|nrcb|nrcalong|nrcblong|mirimage)"
+    r"_indivexp_merged_"
     r"(?P<iter>(?:resbgsub_)?m\d+)_dao_basic(?:_(?P<obs>o\d+))?_vetted\.fits$"
 )
 # quality floor: do not ship per-filter vetted catalogs below this iteration
@@ -600,7 +683,7 @@ VETTED_RE = re.compile(
 MIN_VETTED_RANK = 51
 
 
-def _emit_table_group(items, entry, observation, qualcuts_at=None):
+def _emit_table_group(items, entry, observation, qualcuts_at=None, module=None):
     """Emit one merged-table group, and RECORD it when the filtered subset is missing.
 
     The quality cut is written in exactly one place -- inside ``merge_catalogs``,
@@ -635,6 +718,9 @@ def _emit_table_group(items, entry, observation, qualcuts_at=None):
                 "iteration": entry["iter"], "observation": observation,
                 "src": str(entry[key]),
             }
+            if module:
+                # a disjoint field ships one table per module; say which
+                it["module"] = module
             if kind == "catalog_full" and absent:
                 it["filtered_subset"] = "absent"
                 it["filtered_subset_at_iteration"] = qualcuts_at
@@ -688,27 +774,33 @@ def discover_catalogs(field_cfg, field):
         return items
 
     # combined (all-pointings) merged table -- highest iteration
-    combined = {}  # rank -> {iter, full_fits, full_ecsv, qualcuts}
-    for path in sorted(cat_dir.glob(f"{CAT_BASE}_*"), key=_qualcuts_sort_key(field)):
-        m = COMBINED_RE.match(path.name)
-        if m is None:
-            continue
-        rank = iteration_rank(m.group("iter"))
-        if rank is None:
-            continue
-        entry = combined.setdefault(rank, {"iter": m.group("iter")})
-        slot = "qualcuts" if m.group("qc") else f"full_{m.group('ext')}"
-        entry[slot] = path
-    if combined:
-        _emit_table_group(items, combined[max(combined)], None,
-                          qualcuts_at=_highest_qualcuts_iteration(combined))
+    # rank -> {iter, full_fits, full_ecsv, qualcuts}, per module
+    modules = catalog_modules(field)
+    for module, base in zip(modules, cat_base(field)):
+        combined = {}
+        for path in sorted(cat_dir.glob(f"{base}_*"),
+                           key=_qualcuts_sort_key(field)):
+            m = _combined_re(base).match(path.name)
+            if m is None:
+                continue
+            rank = iteration_rank(m.group("iter"))
+            if rank is None:
+                continue
+            entry = combined.setdefault(rank, {"iter": m.group("iter")})
+            slot = "qualcuts" if m.group("qc") else f"full_{m.group('ext')}"
+            entry[slot] = path
+        if combined:
+            _emit_table_group(items, combined[max(combined)], None,
+                              qualcuts_at=_highest_qualcuts_iteration(combined),
+                              module=None if module == "merged" else module)
 
     # per-pointing merged tables (multi-pointing fields) -- highest iter per obs
     if observations:
         per_obs = {}  # obs -> {rank -> entry}
-        for path in sorted(cat_dir.glob(f"{CAT_BASE}_*"),
+        base0 = cat_base(field)[0]
+        for path in sorted(cat_dir.glob(f"{base0}_*"),
                            key=_qualcuts_sort_key(field)):
-            m = PERPOINT_RE.match(path.name)
+            m = _perpoint_re(base0).match(path.name)
             if m is None or m.group("obs") not in observations:
                 continue
             rank = iteration_rank(m.group("iter"))
@@ -732,10 +824,20 @@ def discover_catalogs(field_cfg, field):
         })
 
     # per-filter vetted catalogs -- highest iteration per (filter, observation)
-    best_pf = {}  # (filt, obs) -> (rank, path, iter)
+    # Keyed on MODULE too.  A disjoint field writes one vetted table per module
+    # per filter and no `_merged_` sibling; keying on (filter, observation)
+    # alone made those collide, and matching only `_merged_` skipped them
+    # entirely -- arches shipped a stale 2026-06-29 merged table beside its
+    # 2026-08-21 mosaics (34 mas apart, caught by the same-run gate) while its
+    # current 2026-08-23 nrca/nrcb tables sat unread.
+    wanted_modules = set(catalog_modules(field))
+    best_pf = {}  # (filt, obs, module) -> (rank, path, iter)
     for path in cat_dir.glob("*_dao_basic*_vetted.fits"):
         m = VETTED_RE.match(path.name)
         if m is None:
+            continue
+        module = m.group("module")
+        if module not in wanted_modules:
             continue
         obs = m.group("obs")
         if obs is not None and (not observations or obs not in observations):
@@ -743,15 +845,17 @@ def discover_catalogs(field_cfg, field):
         rank = iteration_rank(m.group("iter"))
         if rank is None or rank < MIN_VETTED_RANK:
             continue
-        key = (m.group("filt"), obs)
+        key = (m.group("filt"), obs, module)
         current = best_pf.get(key)
         if current is None or rank > current[0]:
             best_pf[key] = (rank, path, m.group("iter"))
-    for (filt, obs) in sorted(best_pf, key=lambda k: (k[0], k[1] or "")):
-        rank, path, iteration = best_pf[(filt, obs)]
+    for (filt, obs, module) in sorted(best_pf,
+                                      key=lambda k: (k[0], k[1] or "", k[2])):
+        rank, path, iteration = best_pf[(filt, obs, module)]
         items.append({
             "category": "catalog", "kind": "catalog_per_filter_vetted",
             "filter": filt.upper(), "iteration": iteration, "observation": obs,
+            "module": None if module == "merged" else module,
             "src": str(path),
         })
 
@@ -780,6 +884,69 @@ def _detect_i2d(path, thr=50.0):
     return SkyCoord(w.pixel_to_world(t["xcentroid"], t["ycentroid"]))
 
 
+def _img_module_of(src):
+    """Module a science mosaic covers, from its filename, or None."""
+    m = re.search(r"-(merged|nrca|nrcb|nrcalong|nrcblong|mirimage)"
+                  r"(?:_data)?_i2d\.fits$", os.path.basename(src))
+    return m.group(1) if m else None
+
+
+def same_run_pairs(items):
+    """Pair every shipped science image with the catalog it must agree with.
+
+    Returns ``(pairs, unpaired)``: ``pairs`` is a list of ``(key, image, catalog)``
+    ordered for reporting, ``unpaired`` the keys of images this release ships
+    catalogs for but not one that covers them.
+
+    Keyed on MODULE as well as (filter, observation), or a disjoint field
+    compares NRCA's image with NRCB's catalog -- two non-overlapping halves of
+    the sky, which cannot tie and would read as a same-run failure that is
+    really a pairing error.
+
+    An image's partner is the catalog of its OWN module when one ships, and
+    otherwise the merged catalog of the same (filter, observation) -- a merged
+    table spans every module, so it ties an NRCA image as well as an NRCA table
+    does.
+
+    Without that fallback the pairing is a plain key intersection, and a field
+    shipping per-module IMAGES with a merged CATALOG (arches, 2026-08-30:
+    nrca/nrcb mosaics, one `basic_merged_...m8` table) intersects to the EMPTY
+    set: the caller's loop runs zero times and reports a pass having compared
+    nothing, which is the failure mode this gate was written to prevent.  So the
+    pairing widens, and ``unpaired`` lets the caller turn a still-empty
+    comparison into a refusal rather than a silent pass.
+    """
+    imgs = {(it["filter"], it.get("observation"), _img_module_of(it["src"])): it
+            for it in items
+            if it["category"] == "image" and it.get("kind") == "science"
+            and it.get("filter")}
+    cats = {(it["filter"], it.get("observation"),
+             it.get("module") or "merged"): it for it in items
+            if it.get("kind") == "catalog_per_filter_vetted" and it.get("filter")}
+    # Owed a partner PER INSTRUMENT.  NIRCam and MIRI are independent
+    # observations -- different detectors, different exposures, usually a
+    # different program -- and a missing MIRI catalog must not block the NIRCam
+    # release (the same rule `gate_by_instrument` applies to the overlap gate).
+    # brick ships a MIRI F2550W mosaic and no MIRI catalog; sickle ships F770W,
+    # F1130W and F1500W the same way.  Charging those to the NIRCam catalogs
+    # would refuse both fields for something the NIRCam release does not depend
+    # on.
+    cat_instruments = {_instrument_of(it) for it in items
+                       if it.get("kind") == "catalog_per_filter_vetted"
+                       and it.get("filter")}
+    pairs, unpaired = [], []
+    for key in sorted(imgs, key=lambda k: (k[0], k[1] or "", k[2] or "")):
+        cat = cats.get(key) or cats.get((key[0], key[1], "merged"))
+        if cat is None:
+            # Only a release shipping catalogs FOR THIS INSTRUMENT owes this
+            # image a partner; an images-only release ships none by design.
+            if _instrument_of(imgs[key]) in cat_instruments:
+                unpaired.append(key)
+            continue
+        pairs.append((key, imgs[key], cat))
+    return pairs, unpaired
+
+
 def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
     """SAME-RUN gate. Every shipped science image must agree astrometrically with the
     shipped per-filter catalog of the same (filter, observation) to < ``tol_mas``.
@@ -795,16 +962,13 @@ def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
     from astropy.table import Table
     from astropy.coordinates import SkyCoord
     from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
-    imgs = {(it["filter"], it.get("observation")): it for it in items
-            if it["category"] == "image" and it.get("kind") == "science" and it.get("filter")}
-    cats = {(it["filter"], it.get("observation")): it for it in items
-            if it.get("kind") == "catalog_per_filter_vetted" and it.get("filter")}
     fails = []
-    for key in sorted(set(imgs) & set(cats), key=lambda k: (k[0], k[1] or "")):
-        det = _detect_i2d(imgs[key]["src"])
+    pairs, unpaired = same_run_pairs(items)
+    for key, img, cat in pairs:
+        det = _detect_i2d(img["src"])
         if det is None:
             continue
-        t = Table.read(cats[key]["src"])
+        t = Table.read(cat["src"])
         if "skycoord" not in t.colnames:
             continue
         csc = SkyCoord(t["skycoord"])
@@ -813,10 +977,16 @@ def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
         off = None if r is None else r["off"]
         ok = off is not None and off <= tol_mas
         tag = "ok" if ok else "MISMATCH -> different runs"
-        print(f"  same-run {key[0]} {key[1] or ''}: image<->catalog "
+        print(f"  same-run {key[0]} {key[1] or ''}{'/' + key[2] if key[2] and key[2] != 'merged' else ''}: image<->catalog "
               + ("no tie" if off is None else f"{off:.1f} mas") + f"  {tag}", flush=True)
         if not ok:
             fails.append((key, off))
+    for key in unpaired:
+        print(f"  same-run {key[0]} {key[1] or ''}{'/' + key[2] if key[2] and key[2] != 'merged' else ''}: "
+              f"NO CATALOG PARTNER -- this release ships catalogs but none for "
+              f"this image; the image<->catalog tie was never measured",
+              flush=True)
+        fails.append((key, None))
     return fails
 
 
