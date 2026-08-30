@@ -45,9 +45,30 @@ BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
                       os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst"))
 
 #: ``checkpoint_m3_F212N_o001_latest.json`` -> stage m3, filter F212N, obs 001.
+#:
+#: The filter group must REFUSE an obs token.  ``m7_crossfilter`` records carry
+#: no filter (they are the cross-FILTER check), so
+#: ``checkpoint_m7_crossfilter_o050_latest.json`` offered its ``o050`` to the
+#: optional filter group, which accepted it as ``[A-Za-z0-9]+`` and left
+#: ``obs=None``.  Two things broke, on all nine fields that have a crossfilter
+#: record:
+#:
+#: 1. ``--observations`` stopped scoping.  ``records()`` skips a record only
+#:    when ``info["obs"]`` is truthy and out of scope, so an obs-less
+#:    crossfilter record survived EVERY scope -- gc2211's failing o050 anchor
+#:    refused o023, o028 and o049 as well, none of which it describes.
+#: 2. ``_prefer_tokenised`` keys on ``(stage, filt)``, so the tokenised record
+#:    (``filt='o050'``) and its untokened predecessor (``filt=None``) landed in
+#:    different buckets and the stale one was never superseded.  brick and
+#:    quintuplet both carry the pair today; both happen to say ``passed: true``,
+#:    so nothing is wrongly refused right now, but a stale ``false`` would
+#:    refuse those fields forever.
+#:
+#: Filters are all ``F...`` (F212N, F1130W, F150W2), so excluding a bare
+#: ``o<digits>`` costs no real filter name.
 RECORD_RE = re.compile(
     r"^checkpoint_(?P<stage>m\d+(?:_crossfilter)?)"
-    r"(?:_(?P<filt>[A-Za-z0-9]+))?"
+    r"(?:_(?P<filt>(?!o\d+_latest\.json$)[A-Za-z0-9]+))?"
     r"(?:_o(?P<obs>\d+))?"
     r"_latest\.json$")
 

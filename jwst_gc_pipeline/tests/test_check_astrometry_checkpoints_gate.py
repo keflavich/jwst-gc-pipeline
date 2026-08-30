@@ -368,3 +368,76 @@ def test_a_record_predating_the_field_says_it_cannot_answer(gate, tmp_path,
     out = capsys.readouterr().out
     assert 'not recorded' in out, out
     assert 'was set' not in out, out
+
+
+# --- m7_crossfilter records carry an obs token but NO filter -----------------
+#
+# `checkpoint_m7_crossfilter_o050_latest.json` used to parse as
+# `filt='o050', obs=None`: the optional filter group accepted the obs token.
+# That silently disabled --observations scoping for every crossfilter record,
+# and broke _prefer_tokenised's (stage, filter) key.
+
+def test_crossfilter_obs_token_parses_as_obs_not_filter(gate):
+    """The obs token must land in `obs`, leaving `filt` empty."""
+    m = gate.RECORD_RE.match('checkpoint_m7_crossfilter_o050_latest.json')
+    assert m is not None
+    assert m.group('obs') == '050'
+    assert m.group('filt') is None, (
+        "an obs token was accepted as a filter name; --observations scoping "
+        "and _prefer_tokenised both key on these fields")
+
+
+@pytest.mark.parametrize('name,stage,filt,obs', [
+    ('checkpoint_m7_crossfilter_o003_latest.json', 'm7_crossfilter', None, '003'),
+    ('checkpoint_m7_crossfilter_latest.json', 'm7_crossfilter', None, None),
+    ('checkpoint_m3_F212N_o001_latest.json', 'm3', 'F212N', '001'),
+    ('checkpoint_m3_F212N_latest.json', 'm3', 'F212N', None),
+    # Filters whose names could be mistaken for something else.
+    ('checkpoint_m7_F1130W_o007_latest.json', 'm7', 'F1130W', '007'),
+    ('checkpoint_m12_F150W2_o002_latest.json', 'm12', 'F150W2', '002'),
+])
+def test_record_name_parsing(gate, name, stage, filt, obs):
+    m = gate.RECORD_RE.match(name)
+    assert m is not None, f'{name} did not parse'
+    assert (m.group('stage'), m.group('filt'), m.group('obs')) == (stage, filt, obs)
+
+
+def test_observations_scope_excludes_other_obs_crossfilter(gate, tmp_path):
+    """A failing crossfilter record must not refuse an observation it is not about.
+
+    gc2211's o050 anchor failure refused o023/o028/o049 as well, because the
+    record parsed with obs=None and `records()` only skips records whose obs is
+    both known and out of scope.
+    """
+    _write(tmp_path, 'checkpoint_m7_crossfilter_o050_latest.json', False,
+           failures=['anchor F200W: no coherent tie to the reference'])
+    _write(tmp_path, 'checkpoint_m7_F200W_o028_latest.json', True)
+
+    found, _ = gate.records('fld', {'028'})
+    names = {os.path.basename(p) for p, _i, _r in found}
+    assert 'checkpoint_m7_crossfilter_o050_latest.json' not in names
+    assert 'checkpoint_m7_F200W_o028_latest.json' in names
+
+    # ...and it IS read when its own observation is in scope.
+    found50, _ = gate.records('fld', {'050'})
+    assert 'checkpoint_m7_crossfilter_o050_latest.json' in {
+        os.path.basename(p) for p, _i, _r in found50}
+
+
+def test_tokenised_crossfilter_supersedes_untokened(gate, tmp_path):
+    """_prefer_tokenised keys on (stage, filt); both must key alike.
+
+    With the obs token misparsed as a filter, the tokenised record keyed
+    (m7_crossfilter, 'o050') and the untokened one (m7_crossfilter, None), so a
+    stale untokened record was never dropped. brick and quintuplet both carry
+    the pair on disk today.
+    """
+    _write(tmp_path, 'checkpoint_m7_crossfilter_latest.json', False,
+           failures=['stale verdict from an earlier campaign'])
+    _write(tmp_path, 'checkpoint_m7_crossfilter_o050_latest.json', True)
+
+    found, _ = gate.records('fld')
+    names = {os.path.basename(p) for p, _i, _r in found}
+    assert 'checkpoint_m7_crossfilter_latest.json' not in names, (
+        'stale untokened crossfilter record was not superseded')
+    assert 'checkpoint_m7_crossfilter_o050_latest.json' in names
