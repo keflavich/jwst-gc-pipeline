@@ -2730,6 +2730,80 @@ def _record_name(stage, filtername, obs_token=""):
     return f"checkpoint_{stage}_{filtername or 'all'}{token}"
 
 
+#: A stage as ``_record_name`` spells it: ``m2``, ``m7_crossfilter``.
+_RECORD_STAGE_RE = re.compile(r'^checkpoint_(?P<stage>m\d+(?:_crossfilter)?)')
+#: The observation token ``naming.perframe_obs_token`` emits, INCLUDING the
+#: joint-registration form ``_o002-998`` that ``naming.OBS_TOKEN_PATTERN``
+#: cannot express.
+_RECORD_OBS_RE = re.compile(r'_o(?P<obs>\d+(?:-\d+)*)$')
+#: The shared-tree proposal token (ngc6334's ``_j7213``/``_j6778``).
+_RECORD_PROPOSAL_RE = re.compile(r'_j(?P<proposal>\d+)$')
+
+
+def parse_record_name(basename):
+    """Inverse of :func:`_record_name`: a record filename -> its identity.
+
+    Returns ``{'stage', 'filt', 'obs', 'proposal'}`` (``filt`` verbatim, so a
+    mixed-filter record reads back as the literal ``'all'`` it was written as),
+    or ``None`` when the name is not a checkpoint record.
+
+    This lives beside the writer because a checkpoint record's name is the only
+    thing that says WHICH observation a verdict belongs to, and the release gate
+    (``scripts/release/check_astrometry_checkpoints.py``) refuses a field on the
+    strength of that reading.  That gate used to own a private regex, and it
+    disagreed with the writer on both of the shapes the writer actually emits:
+
+    * ``checkpoint_m7_crossfilter_o050_latest.json`` -- the m7 call site builds
+      its name without a filter slot, so an inverse that expects one parses the
+      OBSERVATION as the filter.  Seven such records are on disk today.  The
+      observation then reads as ``None``, ``--observations`` cannot scope it,
+      and gc2211 is refused on its quarantined o050 record; quintuplet keeps an
+      untokened August-2 record alive beside its o003 successor because the two
+      land under different parsed filters.
+    * ``checkpoint_m2_F090W_j7213_latest.json`` -- ngc6334's shared-tree token
+      matched nothing at all, and an unparseable name is skipped, leaving the
+      gate to judge the field on whatever untokened legacy record remains.
+
+    Tokens are stripped from the END, which is where ``_record_name`` appends
+    them, so a filter is never mistaken for a token and vice versa: no filter
+    name has the shape ``o<digits>`` or ``j<digits>``.
+    """
+    name = str(basename)
+    if name.endswith('.json'):
+        name = name[:-len('.json')]
+    if name.endswith('_latest'):
+        name = name[:-len('_latest')]
+    else:
+        # A timestamped sibling (``..._20260816T143240Z``); drop the stamp so
+        # both spellings of the same record parse identically.
+        name = re.sub(r'_\d{8}T\d{6}Z$', '', name)
+    m = _RECORD_STAGE_RE.match(name)
+    if not m:
+        return None
+    rest = name[m.end():]
+    obs = proposal = None
+    tok = _RECORD_OBS_RE.search(rest)
+    if tok:
+        obs = tok.group('obs')
+        rest = rest[:tok.start()]
+    else:
+        tok = _RECORD_PROPOSAL_RE.search(rest)
+        if tok:
+            proposal = tok.group('proposal')
+            rest = rest[:tok.start()]
+    if rest.startswith('_'):
+        filt = rest[1:]
+    elif rest:
+        # Trailing text that is neither a filter slot nor a known token.
+        return None
+    else:
+        filt = None
+    if filt is not None and not filt:
+        return None
+    return {'stage': m.group('stage'), 'filt': filt,
+            'obs': obs, 'proposal': proposal}
+
+
 def _filter_is_obs_ambiguous(record_dir, filtername):
     """True when more than one observation of this field images ``filtername``.
 

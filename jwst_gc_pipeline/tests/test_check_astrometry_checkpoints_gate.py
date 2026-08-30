@@ -124,6 +124,66 @@ def test_an_untokened_record_with_no_sibling_is_still_read(gate, tmp_path):
     assert gate.main(['--field', 'fld']) == 1
 
 
+def test_the_crossfilter_records_observation_is_read_as_an_observation(
+        gate, tmp_path):
+    """The m7 record has no filter slot, so an inverse that expects one reads
+    ``_o050`` as the FILTER and the observation as absent.
+
+    ``--observations`` then cannot scope it.  gc2211 quarantines o050 and
+    excludes it from the release, and its
+    ``checkpoint_m7_crossfilter_o050_latest.json`` carries ``passed: false``:
+    the gate was refusing the field on a record it had been told to ignore.
+    """
+    _write(tmp_path, 'checkpoint_m7_crossfilter_o023_latest.json', True)
+    _write(tmp_path, 'checkpoint_m7_crossfilter_o050_latest.json', False,
+           failures=['the quarantined observation'])
+    assert gate.main(['--field', 'fld', '--observations', '023']) == 0
+    assert gate.main(['--field', 'fld', '--observations', '050']) == 1
+    assert gate.main(['--field', 'fld']) == 1, 'unscoped must see both'
+
+
+def test_a_tokenised_crossfilter_record_supersedes_its_untokened_sibling(
+        gate, tmp_path):
+    """Same rule as the per-filter one, and it could not fire while the two
+    names parsed to different filters -- quintuplet holds an untokened m7
+    record from 2026-08-02 beside its o003 successor from 2026-08-16."""
+    _write(tmp_path, 'checkpoint_m7_crossfilter_latest.json', False,
+           failures=['a superseded 2026-08-02 verdict'])
+    _write(tmp_path, 'checkpoint_m7_crossfilter_o003_latest.json', True)
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_a_shared_tree_proposal_record_is_read(gate, tmp_path):
+    """ngc6334's two proposals share one record directory and are told apart by
+    ``_j{proposal}`` (``naming.perframe_obs_token``).  An inverse that knows
+    only ``_o<digits>`` does not match the name at all, and an unparseable name
+    is SKIPPED -- so the failure below was invisible to the gate."""
+    _write(tmp_path, 'checkpoint_m3_F212N_j7213_latest.json', False,
+           failures=['7213 moved'])
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_shared_tree_record_supersedes_its_untokened_sibling(gate, tmp_path):
+    """``_j`` names which run wrote the record, exactly as an obs token does."""
+    _write(tmp_path, 'checkpoint_m3_F212N_latest.json', False,
+           failures=['a superseded untokened verdict'])
+    _write(tmp_path, 'checkpoint_m3_F212N_j7213_latest.json', True)
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_a_joint_registration_record_is_in_scope_for_either_observation(
+        gate, tmp_path):
+    """A joint registration writes both observations into one token
+    (``_o002-998``); it describes each of them.  Requiring the whole token to
+    appear in ``--observations`` would drop the only record covering an
+    observation that IS shipping."""
+    _write(tmp_path, 'checkpoint_m3_F212N_o002-998_latest.json', False,
+           failures=['the joint registration moved'])
+    assert gate.main(['--field', 'fld', '--observations', '002']) == 1
+    assert gate.main(['--field', 'fld', '--observations', '998']) == 1
+    assert gate.main(['--field', 'fld', '--observations', '007']) == 3
+
+
 def test_precedence_is_per_FILTER_not_per_field(gate, tmp_path):
     """One filter having a tokenised record must not silence another filter's
     untokened one."""
