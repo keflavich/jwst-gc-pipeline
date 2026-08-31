@@ -909,7 +909,7 @@ _JS = """
 def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
                 subtitle='', standalone=False, show_skip=False,
                 generated=None, unattributed_jobs=(), figure_base=None,
-                footprints=None, roman=None, asset_prefix='',
+                footprints=None, roman=None, rgps=None, asset_prefix='',
                 include_detail=True, include_skyview=True,
                 schedule=None, include_schedule=True,
                 detail_href=None, home_href='#overview'):
@@ -963,7 +963,9 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
     sky = (skyview.section(footprints, roman,
                            aladin_src=asset_prefix + skyview.ALADIN_LOCAL,
                            data_url=asset_prefix + skyview.FOOTPRINTS_JSON,
-                           roman_url=asset_prefix + skyview.ROMAN_JSON)
+                           roman_url=asset_prefix + skyview.ROMAN_JSON,
+                           rgps=rgps,
+                           rgps_url=asset_prefix + skyview.RGPS_JSON)
            if include_skyview else '')
     detail_sec = (f'<section class="gcm-sec"><h2>Detail</h2>{details}</section>'
                   if include_detail else '')

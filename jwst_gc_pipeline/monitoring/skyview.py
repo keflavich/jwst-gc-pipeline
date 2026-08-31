@@ -55,6 +55,10 @@ FOOTPRINTS_JSON = 'footprints.json'
 #: still fetched for the interactive view, which wants the full-precision
 #: polygons rather than the map's rounded ones.
 ROMAN_JSON = 'roman_gbtds.json'
+#: Roman Galactic Plane Survey regions, written by
+#: ``scripts/monitoring/build_rgps_footprints.py``.  Same role as ROMAN_JSON:
+#: context, drawn in the static map and off by default.
+RGPS_JSON = 'rgps.json'
 
 #: Layer colours.  JWST uses the page's own accent family; Roman keeps the
 #: blue/orange of the source page so the two are recognisably the same layers.
@@ -62,8 +66,20 @@ COLOR_NIRCAM_PLANNED = '#46bcd6'
 COLOR_MIRI_PLANNED = '#a78bfa'
 COLOR_OBSERVED = '#4ade80'
 COLOR_SPRING = '#1E90FF'
-COLOR_AUTUMN = '#FF8C00'
 COLOR_ACES = '#ff6b6b'
+#: RGPS components.  Three layers because they are three different surveys in
+#: cadence and depth, not three renderings of one: the wide-area strip is a
+#: single pass over 117 deg of longitude, the time-domain fields are revisited,
+#: and the deep spectroscopic fields are pointed.  One colour each, in the warm
+#: half of the wheel so RGPS reads as a family distinct from Roman GBTDS blue.
+COLOR_RGPS_WIDE = '#FF8C00'
+COLOR_RGPS_TDS = '#f0b429'
+COLOR_RGPS_DEEP = '#e05fa8'
+RGPS_COMPONENTS = (
+    ('wide_area', 'rgps-wide', COLOR_RGPS_WIDE, 'RGPS wide area'),
+    ('time_domain', 'rgps-tds', COLOR_RGPS_TDS, 'RGPS time domain'),
+    ('deep_spec', 'rgps-deep', COLOR_RGPS_DEEP, 'RGPS deep fields'),
+)
 
 #: Backgrounds worth having here.  The first is the one the view opens on, so it has to be all-sky.  The survey's
 #: own imagery is a CMZ-only HiPS (``hips_initial_fov`` 0.077 deg, no tiles below
@@ -568,23 +584,50 @@ def _reframe_polys(polys, frame_name):
 
 
 def _roman_polys(roman):
-    """``(spring, autumn)`` polygon lists from the Roman GBTDS file.
+    """Roman GBTDS **spring** polygons from the GBTDS file.
 
     ``target_area`` in that file is the **JWST** target area, not a Roman layer;
     it was offered under the Roman heading, where it read as Roman context and
     was simply mislabelled.  It is not drawn.
+
+    The autumn season is not drawn either.  Spring and autumn are the same tiles
+    at two roll angles, so the two layers covered nearly the same sky twice and
+    the second one added a colour and a toggle without adding information.  The
+    file still carries ``autumn`` and this function still ignores it, so nothing
+    has to be regenerated to change that decision back.
     """
-    spring, autumn = [], []
+    spring = []
     if not isinstance(roman, dict):
-        return spring, autumn
+        return spring
     tiles = roman.get('tiles')
     if isinstance(tiles, dict):
         for tile in tiles.values():
             if not isinstance(tile, dict):
                 continue
             spring.extend(tile.get('spring') or [])
-            autumn.extend(tile.get('autumn') or [])
-    return spring, autumn
+    return spring
+
+
+def _rgps_polys(rgps):
+    """``{component: [poly, ...]}`` from the RGPS file, in declared order.
+
+    Every component key is present even when empty, so a missing or partial
+    file yields empty layers with working toggles rather than absent buttons.
+    """
+    out = {key: [] for key, _id, _c, _label in RGPS_COMPONENTS}
+    if not isinstance(rgps, dict):
+        return out
+    components = rgps.get('components')
+    if not isinstance(components, dict):
+        return out
+    for key in out:
+        for region in components.get(key) or []:
+            if not isinstance(region, dict):
+                continue
+            poly = region.get('poly')
+            if poly:
+                out[key].append(poly)
+    return out
 
 
 def _plain_layer(frame, polys, color, fill_opacity, layer_id, label, width=1.2):
@@ -626,7 +669,7 @@ def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
                         fill_opacity, ''.join(body))), count
 
 
-def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
+def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
     """The footprints as a self-contained inline SVG.
 
     Returns ``(svg, info)``; ``svg`` is ``''`` when there is nothing drawable,
@@ -672,20 +715,34 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
                             '.18', 'stat-obs-miri', 'observed MIRI')
 
     # Roman is drawn here too, not only in the interactive view. It used to be
-    # Aladin-only, which made its three toggles do nothing at all until someone
+    # Aladin-only, which made its toggles do nothing at all until someone
     # loaded 1.8 MB of script -- they looked like live buttons and were not.
-    spring_p, autumn_p = _roman_polys(roman)
+    # The same applies to RGPS, so it is reframed and drawn in this pass.
+    spring_p = _roman_polys(roman)
+    rgps_p = _rgps_polys(rgps)
     aces_p = [[tuple(v[:2]) for v in poly if len(v) >= 2]
               for poly in (footprints.get('aces') or [])]
-    n_roman = len(spring_p) + len(autumn_p)
-    reframed = _reframe_polys(spring_p + autumn_p + aces_p, frame_name)
-    spring = _plain_layer(frame, reframed[:len(spring_p)], COLOR_SPRING, '.05',
-                          'stat-spring', 'Roman GBTDS spring')
-    autumn = _plain_layer(frame, reframed[len(spring_p):len(spring_p) + len(autumn_p)],
-                          COLOR_AUTUMN, '.05', 'stat-autumn', 'Roman GBTDS autumn')
-    aces = _plain_layer(frame, reframed[len(spring_p) + len(autumn_p):],
+    rgps_order = [key for key, _id, _c, _label in RGPS_COMPONENTS]
+    rgps_flat = [poly for key in rgps_order for poly in rgps_p[key]]
+    n_roman = len(spring_p)
+    n_rgps = len(rgps_flat)
+    # One reframe call for everything: it is the expensive step (a SkyCoord
+    # transform per vertex), and the RGPS wide-area box alone is ~120 vertices.
+    reframed = _reframe_polys(spring_p + aces_p + rgps_flat, frame_name)
+    at = 0
+    spring = _plain_layer(frame, reframed[at:at + len(spring_p)], COLOR_SPRING,
+                          '.05', 'stat-spring', 'Roman GBTDS spring')
+    at += len(spring_p)
+    aces = _plain_layer(frame, reframed[at:at + len(aces_p)],
                         COLOR_ACES, '.04', 'stat-aces', 'ACES coverage',
                         width=1.6)
+    at += len(aces_p)
+    rgps_layers = []
+    for key, layer_id, color, label in RGPS_COMPONENTS:
+        count = len(rgps_p[key])
+        rgps_layers.append(_plain_layer(frame, reframed[at:at + count], color,
+                                        '.04', 'stat-' + layer_id, label))
+        at += count
 
     # The HUD is rendered at zoom 1 here so it exists without JavaScript, and
     # rewritten by the viewer's zoom handler: the bar has to stay a real angular
@@ -715,11 +772,12 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
            'role="group" aria-label="Survey footprints on the sky, %s">'
            '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s</g>%s</svg>'
            % (_num(frame.width), _num(frame.height), _esc(axes),
-              ''.join(grid), ''.join(gal), spring, autumn, aces,
+              ''.join(grid), ''.join(gal), spring, ''.join(rgps_layers), aces,
               nircam, miri, obs_n, obs_m, hud))
     info = {'n_nircam': n_nircam, 'n_miri': n_miri,
             'n_observed': n_obs_n + n_obs_m, 'n_roman': n_roman,
-            'n_aces': len(aces_p),
+            'n_aces': len(aces_p), 'n_rgps': n_rgps,
+            'n_rgps_by': {k: len(rgps_p[k]) for k in rgps_order},
             'width': frame.width, 'height': frame.height,
             'scale': frame.scale,          # SVG user units per degree
             'frame': frame_name, 'axes': axes,
@@ -729,7 +787,7 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
 
 def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
             data_url=FOOTPRINTS_JSON, roman_url=ROMAN_JSON,
-            frame_name=DEFAULT_FRAME):
+            frame_name=DEFAULT_FRAME, rgps=None, rgps_url=RGPS_JSON):
     """The whole sky-view section, or a note when there is no footprint data."""
     if not isinstance(footprints, dict) or not footprints:
         return ('<section class="gcm-sec" id="skyview"><h2>Sky view</h2>'
@@ -781,7 +839,8 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     surveys = ''.join(_survey_button(i, *entry)
                       for i, entry in enumerate(SURVEYS))
 
-    static_svg, static_info = static_map(footprints, roman, frame_name)
+    static_svg, static_info = static_map(footprints, roman, frame_name,
+                                        rgps=rgps)
     if not static_svg:
         static_svg = ('<div class="gcm-sky-nostatic">Footprint data contains no '
                       'drawable polygons.</div>')
@@ -797,8 +856,9 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                  % (spec['lon_label'], spec['lat_label'],
                     (', %s/%s dashed' % (other['lon_label'], other['lat_label']))
                     if static_info.get('overlay_grid') else ''))
-    spring_p, autumn_p = _roman_polys(roman)
-    n_spring, n_autumn = len(spring_p), len(autumn_p)
+    spring_p = _roman_polys(roman)
+    n_spring = len(spring_p)
+    n_rgps_by = static_info.get('n_rgps_by') or {}
     # Enough zoom-out to reach the Roman tiles, which sit outside the JWST
     # bounding box that sets the home view; a little more when they are absent
     # would only show empty sky.
@@ -850,11 +910,17 @@ pointings observed so far, from the APT visit status.</p>
         <button class="gcm-sky-btn" id="lyr-aces"
                 style="color:{COLOR_ACES}">ACES</button>
         <button class="gcm-sky-btn" id="lyr-spring"
-                style="color:{COLOR_SPRING}">Roman spring
+                style="color:{COLOR_SPRING}">Roman GBTDS
           <span class="gcm-sky-count">{n_spring}</span></button>
-        <button class="gcm-sky-btn" id="lyr-autumn"
-                style="color:{COLOR_AUTUMN}">Roman autumn
-          <span class="gcm-sky-count">{n_autumn}</span></button>
+        <button class="gcm-sky-btn" id="lyr-rgps-wide"
+                style="color:{COLOR_RGPS_WIDE}">RGPS wide
+          <span class="gcm-sky-count">{n_rgps_by.get('wide_area', 0)}</span></button>
+        <button class="gcm-sky-btn" id="lyr-rgps-tds"
+                style="color:{COLOR_RGPS_TDS}">RGPS TDS
+          <span class="gcm-sky-count">{n_rgps_by.get('time_domain', 0)}</span></button>
+        <button class="gcm-sky-btn" id="lyr-rgps-deep"
+                style="color:{COLOR_RGPS_DEEP}">RGPS deep
+          <span class="gcm-sky-count">{n_rgps_by.get('deep_spec', 0)}</span></button>
       </div>
     </div>
 
@@ -891,19 +957,28 @@ interactive view adds sky imagery you can pan across.
   var ALADIN_SRC = {json.dumps(aladin_src)};
   var ROMAN_URL = {json.dumps(roman_url)};
   var ROMAN = {{}};
+  var RGPS_URL = {json.dumps(rgps_url)};
+  var RGPS = {{}};
   var VIEW = {json.dumps([view_w, view_h])};
   var UNITS_PER_DEG = {frame_scale:.6f};
   var C = {json.dumps({'nircam': COLOR_NIRCAM_PLANNED, 'miri': COLOR_MIRI_PLANNED,
                        'observed': COLOR_OBSERVED, 'spring': COLOR_SPRING,
-                       'autumn': COLOR_AUTUMN, 'aces': COLOR_ACES})};
+                       'aces': COLOR_ACES,
+                       'rgps-wide': COLOR_RGPS_WIDE,
+                       'rgps-tds': COLOR_RGPS_TDS,
+                       'rgps-deep': COLOR_RGPS_DEEP})};
+  // Layer key -> component key in rgps.json, so the fetch and the toggles
+  // agree without repeating either name.
+  var RGPS_KEYS = {json.dumps({lid: key for key, lid, _c, _l in RGPS_COMPONENTS})};
 
   // Which static <g> each toggle owns.  `observed` owns two, because the
   // observed layer draws both instruments in one colour.
   var STATIC_GROUPS = {{
     nircam: ['stat-nircam'], miri: ['stat-miri'],
     observed: ['stat-obs-nircam', 'stat-obs-miri'],
-    spring: ['stat-spring'], autumn: ['stat-autumn'],
-    aces: ['stat-aces']
+    spring: ['stat-spring'], aces: ['stat-aces'],
+    'rgps-wide': ['stat-rgps-wide'], 'rgps-tds': ['stat-rgps-tds'],
+    'rgps-deep': ['stat-rgps-deep']
   }};
 
   var svg = document.getElementById('gcm-sky-static');
@@ -915,7 +990,8 @@ interactive view adds sky imagery you can pan across.
   // Layer state is shared: a toggle drives the static groups now and the Aladin
   // overlays later, so the view you built survives the upgrade.
   var on = {{ nircam: true, miri: true, observed: true,
-             spring: false, autumn: false, aces: false }};
+             spring: false, aces: false,
+             'rgps-wide': false, 'rgps-tds': false, 'rgps-deep': false }};
   var L = null;                      // Aladin overlays, once they exist
 
   function applyLayers() {{
@@ -931,7 +1007,9 @@ interactive view adds sky imagery you can pan across.
   }}
 
   [['lyr-nircam', 'nircam'], ['lyr-miri', 'miri'], ['lyr-observed', 'observed'],
-   ['lyr-spring', 'spring'], ['lyr-autumn', 'autumn'], ['lyr-aces', 'aces']
+   ['lyr-spring', 'spring'], ['lyr-aces', 'aces'],
+   ['lyr-rgps-wide', 'rgps-wide'], ['lyr-rgps-tds', 'rgps-tds'],
+   ['lyr-rgps-deep', 'rgps-deep']
   ].forEach(function (pair) {{
     var el = document.getElementById(pair[0]);
     if (!el) {{ return; }}
@@ -1109,10 +1187,18 @@ interactive view adds sky imagery you can pan across.
       }}).then(function (fp) {{
         // Roman is context and every one of its layers is off by default, so a
         // failure to load it must not stop the JWST view from rendering.
-        return fetch(ROMAN_URL)
-          .then(function (r) {{ return r.ok ? r.json() : {{}}; }})
-          .catch(function () {{ return {{}}; }})
-          .then(function (rm) {{ ROMAN = rm || {{}}; return fp; }});
+        // Both context files are fetched together; either failing leaves its
+        // own layers empty and neither can stop the JWST view rendering.
+        return Promise.all([
+          fetch(ROMAN_URL).then(function (r) {{ return r.ok ? r.json() : {{}}; }})
+            .catch(function () {{ return {{}}; }}),
+          fetch(RGPS_URL).then(function (r) {{ return r.ok ? r.json() : {{}}; }})
+            .catch(function () {{ return {{}}; }})
+        ]).then(function (ctx) {{
+          ROMAN = ctx[0] || {{}};
+          RGPS = ctx[1] || {{}};
+          return fp;
+        }});
       }}).then(start).catch(function (e) {{
         restore();
         fail(describe(e));
@@ -1192,8 +1278,10 @@ interactive view adds sky imagery you can pan across.
         nircam: layer('JWST NIRCam (planned)', C.nircam, 1.1),
         miri: layer('JWST MIRI parallel (planned)', C.miri, 1.1),
         observed: layer('JWST observed', C.observed, 2.0),
-        spring: layer('Roman GBTDS spring', C.spring, 1.2),
-        autumn: layer('Roman GBTDS autumn', C.autumn, 1.2),
+        spring: layer('Roman GBTDS', C.spring, 1.2),
+        'rgps-wide': layer('RGPS wide area', C['rgps-wide'], 1.2),
+        'rgps-tds': layer('RGPS time domain', C['rgps-tds'], 1.2),
+        'rgps-deep': layer('RGPS deep fields', C['rgps-deep'], 1.2),
         aces: layer('ACES coverage', C.aces, 1.6)
       }};
 
@@ -1208,7 +1296,12 @@ interactive view adds sky imagery you can pan across.
       Object.keys(ROMAN.tiles || {{}}).forEach(function (name) {{
         var t = ROMAN.tiles[name];
         (t.spring || []).forEach(function (poly) {{ L.spring.add(A.polygon(poly)); }});
-        (t.autumn || []).forEach(function (poly) {{ L.autumn.add(A.polygon(poly)); }});
+      }});
+      Object.keys(RGPS_KEYS).forEach(function (lid) {{
+        var regions = ((RGPS.components || {{}})[RGPS_KEYS[lid]]) || [];
+        regions.forEach(function (rg) {{
+          if (rg && rg.poly) {{ L[lid].add(A.polygon(rg.poly)); }}
+        }});
       }});
       (fp.aces || []).forEach(function (poly) {{
         L.aces.add(A.polygon(poly));
