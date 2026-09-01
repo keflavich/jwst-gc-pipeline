@@ -328,6 +328,7 @@ fields:
         reference_catalog:
           '001': catalogs/gaia_virac2_refcat_epoch2024.68.fits
         nvisits: 3
+        reference_frame: VIRAC2
         obsids:
           nircam: ['001']
         filters: [f090w, f187n, f200w, f277w, f335m, f470n]
@@ -335,6 +336,7 @@ fields:
         reference_catalog:
           '001': catalogs/gaia_virac2_refcat_epoch2026.30.fits
         nvisits: 2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['001']
         filters: [f115w, f162m, f182m, f200w, f356w, f405n, f444w, f470n]

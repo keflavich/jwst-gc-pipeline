@@ -411,6 +411,49 @@ ALIGNMENT_CONFIG = (
                'gaia_refcat, per (visit, filter) -- M4 differs SW(F150W2) vs '
                'LW(F322W2) by ~300-500 mas so it is keyed per filter.'),
     ),
+    # ngc6334 -- the Cat's Paw, imaged by TWO proposals over the SAME sky: 6778
+    # (3 visits; F090W/F187N/F200W/F277W/F335M/F470N, 450 crf) and 7213 (2 visits;
+    # F115W/F162M/F182M/F200W/F356W/F405N/F444W/F470N, 800 crf).  Both were absent
+    # from this registry, so every exposure of both stayed at the raw assign_wcs
+    # frame -- the same dispatch gap that left sgra/1939 ~14.8" out of place.  The
+    # 2026-07-10 audit measured the consequence here as per-filter offsets off the
+    # channel anchors: F115W 63, F162M 61, F182M 66 mas (F405N 67 mas).
+    #
+    # Neither proposal has an offsets table, so there is nothing to LOCK to and
+    # the bulk cannot be a recorded constant: TABLE_CONSENSUS is the
+    # self-bootstrapping mode, and the m2 checkpoint writes the table (with
+    # provenance) as it measures.  reference_frame is VIRAC2 -- the field's
+    # refcat is VIRAC2-dominated (22236 VIRAC2 + 1403 GaiaDR3 of 23639 rows at
+    # epoch 2026.30), so VVV disk coverage reaches this longitude and Gaia is far
+    # too sparse to be the catalog here, exactly as in the GC fields.
+    #
+    # reference_filter is F200W for BOTH: it is the only band the two proposals
+    # share besides F470N, and it is the wider/brighter of the two, so one anchor
+    # band defines the field's internal frame across both programs.
+    FieldAlignment(
+        proposal='6778', fields=('001',),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F200W',
+        notes=('ngc6334 (Cat\'s Paw), 3 visits, 450 crf over 6 bands. Registered '
+               '2026-09-01 after the field was found absent from ALIGNMENT_CONFIG '
+               'entirely -- unregistered means the raw assign_wcs frame, and the '
+               '2026-07-10 audit had already flagged 61-67 mas per-filter offsets '
+               'off the channel anchors. No offsets table exists for 6778, so the '
+               'bulk is bootstrapped by the m2 visit-consensus re-tie rather than '
+               'locked to a table. Shares sky and the F200W/F470N bands with '
+               '7213.'),
+    ),
+    FieldAlignment(
+        proposal='7213', fields=('001',),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F200W',
+        notes=('ngc6334, the SECOND proposal on the same sky as 6778: 2 visits, '
+               '800 crf over 8 bands. Registered 2026-09-01 for the same reason '
+               'and in the same mode. Kept as its own entry because '
+               'reference_frame is per-PROPOSAL (it names the offsets table), so '
+               'the two programs cannot share one row even though they image one '
+               'field -- the same split brick carries for 1182 and 2221.'),
+    ),
     FieldAlignment(
         proposal='1334', fields=None,
         reference_frame=GAIA, source=RECORDED_BULK,
