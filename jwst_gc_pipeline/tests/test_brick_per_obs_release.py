@@ -54,19 +54,25 @@ def test_cloudc_is_not_swept_in_with_brick():
 
 # --- a LIST proposal_prefix must survive the observations branch ------------
 
-def test_list_prefix_selects_rather_than_composes(tmp_path):
-    """brick's prefixes already carry their own -oNNN.
+def test_list_prefix_keeps_full_field_untagged_images(tmp_path):
+    """A LIST prefix means one field imaged by several PROPOSALS.
 
-    Composing `f'{base_prefix}-{obs}...'` on a list interpolates the list's
-    repr and matches nothing -- brick went 29 discovered images -> 0.
+    brick is 1182 and 2221 over the SAME sky with disjoint filter sets, so its
+    mosaics are per-FILTER full-field products.  They must NOT be tagged with an
+    observation: `check_image_catalog_match` keys on (filter, observation), the
+    per-filter vetted catalogs are untokened until brick is re-merged, and a tag
+    makes the two sets disjoint -- zero pairs, and a provenance gate that passes
+    having compared nothing.
     """
     sr = _stage_release()
-    fdir = tmp_path / 'F200W' / 'pipeline'
-    fdir.mkdir(parents=True)
-    good = 'jw01182-o004_t001_nircam_clear-f200w-merged_i2d.fits'
-    other = 'jw02221-o001_t001_nircam_clear-f200w-merged_i2d.fits'
-    for n in (good, other):
-        (fdir / n).write_bytes(b'')
+    # The two proposals have DISJOINT filters, so each filter directory holds
+    # exactly one mosaic: F200W is 1182's, F182M is 2221's.
+    a = 'jw01182-o004_t001_nircam_clear-f200w-merged_i2d.fits'
+    b = 'jw02221-o001_t001_nircam_clear-f182m-merged_i2d.fits'
+    for filt, n in (('F200W', a), ('F182M', b)):
+        d = tmp_path / filt / 'pipeline'
+        d.mkdir(parents=True)
+        (d / n).write_bytes(b'')
 
     cfg = {'data_dir': tmp_path,
            'proposal_prefix': ['jw01182-o004_t001_nircam_clear',
@@ -74,8 +80,9 @@ def test_list_prefix_selects_rather_than_composes(tmp_path):
            'observations': ['o004', 'o001']}
     items = sr.discover_images(cfg)
     names = {pathlib.Path(i['src']).name for i in items if 'src' in i}
-    assert good in names, 'the o004 prefix was not selected'
-    assert other in names, 'the o001 prefix was not selected'
+    assert {a, b} <= names, 'both proposals\' mosaics must be found'
+    assert all(i.get('observation') is None for i in items), (
+        'a list-prefix field must not tag its images with an observation')
 
 
 def test_bare_prefix_still_composes(tmp_path):
@@ -127,3 +134,27 @@ def test_cloudc_has_no_observations_key():
     gains this key its untokened tables stop being found."""
     sr = _stage_release()
     assert 'observations' not in sr.FIELDS['cloudc']
+
+
+# --- validation strictness, made deliberate --------------------------------
+
+def test_a_malformed_field_raises_for_every_proposal():
+    """Validation runs before the membership test, so this is not per-obs-only.
+
+    Latent rather than live -- the only registry `obsids: '*'` is
+    gc-treasury/10678, which raised on main too -- but pinned so the strictness
+    is a decision rather than a side effect of where the call moved.
+    """
+    from jwst_gc_pipeline.photometry import naming
+    for bad in ('*', 'garbage'):
+        with pytest.raises(naming.ObservationFieldError):
+            naming.merged_catalog_obs_token('4147', bad)   # not a per-obs proposal
+        with pytest.raises(naming.ObservationFieldError):
+            naming.merged_catalog_obs_token('2211', bad)   # per-obs proposal
+
+
+def test_field_none_is_still_permitted():
+    """`None` means 'no observation given', which is legitimate."""
+    from jwst_gc_pipeline.photometry.naming import merged_catalog_obs_token
+    assert merged_catalog_obs_token('4147', None) == ''
+    assert merged_catalog_obs_token('2211', None) == ''

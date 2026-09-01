@@ -536,24 +536,22 @@ def discover_images(field_cfg):
         pipeline = fdir / "pipeline"
         if not pipeline.is_dir():
             continue
-        if observations:
+        # A LIST of prefixes means ONE field imaged by SEVERAL PROPOSALS -- brick
+        # is 1182 (F115W/F200W/F356W/F444W) and 2221 (F182M/F187N/F212N/F405N/
+        # F410M/F466N) over the SAME sky.  Its mosaics are per-FILTER full-field
+        # products, so they are neither tagged with an observation nor laid out
+        # under images/<obs>/.  gc2211's `observations` mean the opposite thing:
+        # separate POINTINGS of different sky, which do get both.
+        #
+        # brick still needs the key for CATALOG discovery, where the per-pointing
+        # branch finds its tokened `_o001`/`_o004` combined tables.  Letting it
+        # re-route images too tagged them with an observation the per-filter
+        # vetted catalogs do not carry, so `check_image_catalog_match` -- which
+        # keys on (filter, observation) -- found zero pairs and the provenance
+        # gate passed having compared nothing.
+        if observations and not isinstance(base_prefix, list):
             for obs in observations:
-                if isinstance(base_prefix, list):
-                    # A LIST of prefixes is already complete -- brick's entries
-                    # are 'jw01182-o004_t001_nircam_clear' and
-                    # 'jw02221-o001_t001_nircam_clear', each carrying its own
-                    # -oNNN.  Compose here and the f-string interpolates the
-                    # list's repr ("['jw01182-...', 'jw02221-...']-o001_...")
-                    # which matches nothing: brick went from 29 discovered
-                    # images to 0, and the same-run gate from 10 pairs to a
-                    # vacuous pass.  Select the entry for this observation
-                    # instead.
-                    prefixes = [x for x in base_prefix if f"-{obs}_" in x]
-                else:
-                    # A bare proposal prefix (gc2211's 'jw02211') composes.
-                    prefixes = [f"{base_prefix}-{obs}_t001_nircam_clear"]
-                if not prefixes:
-                    continue
+                prefixes = [f"{base_prefix}-{obs}_t001_nircam_clear"]
                 items += _collect_images(pipeline, prefixes, filt, observation=obs)
         else:
             prefixes = base_prefix if isinstance(base_prefix, list) else [base_prefix]

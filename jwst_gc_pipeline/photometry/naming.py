@@ -324,6 +324,15 @@ def merged_catalog_obs_token(proposal_id, field):
 
     ``field`` goes through ``observation_field_token``, which normalises the
     spelling and refuses a field that does not name an observation.
+
+    That validation now runs BEFORE the membership test rather than inside it,
+    so a malformed field raises for EVERY proposal instead of only per-obs ones:
+    ``('4147', 'garbage')`` and ``('4147', '*')`` raise where they used to
+    return ``''``.  Deliberate -- a field that does not name an observation is a
+    caller error whatever the proposal, and answering it with an untokened name
+    is how a wrong spelling reaches a glob that silently matches nothing (#316).
+    ``field=None`` still returns ``''``: that means "no observation given",
+    which is a legitimate call for a proposal that does not use one.
     """
     if field in (None, ''):
         return ''
