@@ -538,7 +538,22 @@ def discover_images(field_cfg):
             continue
         if observations:
             for obs in observations:
-                prefixes = [f"{base_prefix}-{obs}_t001_nircam_clear"]
+                if isinstance(base_prefix, list):
+                    # A LIST of prefixes is already complete -- brick's entries
+                    # are 'jw01182-o004_t001_nircam_clear' and
+                    # 'jw02221-o001_t001_nircam_clear', each carrying its own
+                    # -oNNN.  Compose here and the f-string interpolates the
+                    # list's repr ("['jw01182-...', 'jw02221-...']-o001_...")
+                    # which matches nothing: brick went from 29 discovered
+                    # images to 0, and the same-run gate from 10 pairs to a
+                    # vacuous pass.  Select the entry for this observation
+                    # instead.
+                    prefixes = [x for x in base_prefix if f"-{obs}_" in x]
+                else:
+                    # A bare proposal prefix (gc2211's 'jw02211') composes.
+                    prefixes = [f"{base_prefix}-{obs}_t001_nircam_clear"]
+                if not prefixes:
+                    continue
                 items += _collect_images(pipeline, prefixes, filt, observation=obs)
         else:
             prefixes = base_prefix if isinstance(base_prefix, list) else [base_prefix]

@@ -197,22 +197,29 @@ MULTIOBS_PROPOSALS = ('2211', '10678')
 #:     /orange/adamginsburg/jwst/gc2211_o023//F200W/f200w_nrca...._dao_basic.fits
 #:
 #: after its 8 fan-out shards had written 192 per-frame tables (2026-08-22).
-#: 1182 + 2221 (brick): the brick field is imaged by TWO proposals with
-#: DISJOINT filter sets -- 1182 contributes F115W/F200W/F356W/F444W, 2221
-#: contributes F182M/F187N/F212N/F405N/F410M/F466N -- run as two separate
-#: per-proposal chains into one tree.  Neither was tokened, so both chains
-#: wrote the same untokened merged name and whichever finished last won.  The
-#: combined m8 therefore held one proposal's bands and never all eleven:
-#: measured 2026-08-29, the untokened table was byte-identical to the 1182 half
-#: (651903 rows, f115w/f200w/f356w/f444w) while the 2221 half sat beside it
-#: under a different name (323024 rows, six bands).  `stage_release
-#: .discover_catalogs` ships the untokened file and brick's release config has
-#: no `observations` key, so a release staged in that state shipped four of
-#: eleven bands with nothing saying so (#590).
+PER_OBS_MERGED_PROPOSALS = ('10678', '2211')
+
+#: Per-OBSERVATION exceptions, for a proposal where only SOME observations need
+#: the token.  Keyed on ``(proposal, field)`` because 2221 is not one field:
+#: alignment_config gives it ``001`` = brick NIRCam and ``002`` = cloudc.
 #:
-#: Tokening both ends the collision: each chain writes its own `_o{field}`
-#: catalog and the ambiguous untokened name stops being produced.
-PER_OBS_MERGED_PROPOSALS = ('10678', '2211', '1182', '2221')
+#: brick is imaged by TWO proposals with DISJOINT filter sets -- 1182
+#: (F115W/F200W/F356W/F444W) and 2221 (F182M/F187N/F212N/F405N/F410M/F466N) --
+#: run as two chains into ONE tree, so both wrote the same untokened merged name
+#: and whichever finished last won.  Measured 2026-08-29: the untokened combined
+#: table was byte-identical to the 1182 half (651903 rows, 4 bands) while the
+#: 2221 half sat beside it under a different name (323024 rows, 6 bands).  The
+#: canonical name has never held all eleven.
+#:
+#: cloudc is deliberately NOT here.  It has one proposal, one observation and no
+#: collision in its tree; tokening 2221 wholesale would rename cloudc's merged
+#: catalogs to `_o002`, which `COMBINED_RE` does not match, taking cloudc from
+#: shipping a combined catalog to shipping none -- the exact failure this fixes
+#: for brick, inflicted on a field that never had it.
+PER_OBS_MERGED_FIELDS = (
+    ('1182', '004'),   # brick, the 4-band half
+    ('2221', '001'),   # brick, the 6-band half
+)
 
 #: What a ``field`` may look like inside an observation token: an observation
 #: number, or several joined by ``-`` for a joint registration ('002-998').
@@ -318,8 +325,13 @@ def merged_catalog_obs_token(proposal_id, field):
     ``field`` goes through ``observation_field_token``, which normalises the
     spelling and refuses a field that does not name an observation.
     """
-    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS and field not in (None, ''):
-        return f'_o{observation_field_token(field)}'
+    if field in (None, ''):
+        return ''
+    tok = observation_field_token(field)
+    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS:
+        return f'_o{tok}'
+    if (str(proposal_id), tok) in PER_OBS_MERGED_FIELDS:
+        return f'_o{tok}'
     return ''
 
 

@@ -62,8 +62,14 @@ def test_brick_proposals_are_per_obs_merged():
     """
     assert naming.merged_catalog_obs_token('2221', '001') == '_o001'
     assert naming.merged_catalog_obs_token('1182', '004') == '_o004'
-    assert '1182' in naming.PER_OBS_MERGED_PROPOSALS
-    assert '2221' in naming.PER_OBS_MERGED_PROPOSALS
+    # Membership is per (proposal, field), NOT per proposal: 2221 is brick
+    # o001 AND cloudc o002, and tokening cloudc would take it from shipping a
+    # combined catalog to shipping none.
+    assert ('1182', '004') in naming.PER_OBS_MERGED_FIELDS
+    assert ('2221', '001') in naming.PER_OBS_MERGED_FIELDS
+    assert ('2221', '002') not in naming.PER_OBS_MERGED_FIELDS   # cloudc
+    assert '1182' not in naming.PER_OBS_MERGED_PROPOSALS
+    assert '2221' not in naming.PER_OBS_MERGED_PROPOSALS
     # Per-FRAME names are untouched: the two proposals' filters are disjoint,
     # so per-frame tables never collided and MULTIOBS_PROPOSALS must not grow.
     assert '1182' not in naming.MULTIOBS_PROPOSALS
