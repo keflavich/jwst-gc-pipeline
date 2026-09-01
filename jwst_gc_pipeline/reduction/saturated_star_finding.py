@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 
 #os.environ['stpsf_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
 import stpsf
+from jwst_gc_pipeline.photometry.psf_channel import (
+    nircam_channel_safe_psf_kwargs)
 from stpsf.utils import to_griddedpsfmodel
 
 
@@ -187,10 +189,17 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
         log.info(f"starfinding: Calculating grid for psf_fn={psf_fn}")
         # https://github.com/spacetelescope/webbpsf/blob/cc16c909b55b2a26e80b074b9ab79ed9a312f14c/webbpsf/webbpsf_core.py#L640
         # https://github.com/spacetelescope/webbpsf/blob/cc16c909b55b2a26e80b074b9ab79ed9a312f14c/webbpsf/gridded_library.py#L424
+        # F150W2 oversteps stpsf's SHORT_WAVELENGTH_MAX, so a COLD-cache build
+        # raises here just as it did in get_psf_model.  #586 patched only
+        # crowdsource_catalogs_long's two sites; this one is reached by a
+        # different path (load_or_make_satstar_catalog -> remove_saturated_stars)
+        # and still killed every m4/ngc6397 shard (jobs 40691533, 40691535).
+        _chan_kw = nircam_channel_safe_psf_kwargs(psfgen)
         big_grid = psfgen.psf_grid(num_psfs=npsf, oversample=oversample,
                        all_detectors=False, fov_pixels=fov_pixels,
                                    outdir=path_prefix,
-                                   save=True, outfile=None, overwrite=True)
+                                   save=True, outfile=None, overwrite=True,
+                                   **_chan_kw)
         # now the PSF should be written
         assert glob.glob(psf_fn.replace(".fits", "*"))
         if isinstance(big_grid, list):

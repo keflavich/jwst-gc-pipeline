@@ -15,6 +15,8 @@ except ImportError:
                                DAOGroup as SourceGrouper)
 
 import numpy as np
+from jwst_gc_pipeline.photometry.psf_channel import (
+    nircam_channel_safe_psf_kwargs)
 import time
 from astropy.stats import mad_std
 from astropy import stats
@@ -164,7 +166,8 @@ def estimate_background(data, header, medfilt_size=[15,15], do_segment_mask=Fals
     medfilt_sub[data==0] = np.nan
 
     # calculate a PSF and use it as a kernel
-    psf_kernel = nc.calc_psf(fov_pixels=psf_size, oversample=1)[0].data
+    psf_kernel = nc.calc_psf(fov_pixels=psf_size, oversample=1,
+                             **nircam_channel_safe_psf_kwargs(nc))[0].data
     log.info(f"Calculating PSF kernel done at {time.time()-t0:0.1f}s")
 
     # replace the saturated pixels with interpolated ones
@@ -184,7 +187,8 @@ def estimate_background(data, header, medfilt_size=[15,15], do_segment_mask=Fals
         # As a file
         pp = fits.getdata(psf_fn)  # file created 2 cells above
     else:
-        psf_hdu = nc.calc_psf(oversample=1, fov_pixels=psf_size+1)
+        psf_hdu = nc.calc_psf(oversample=1, fov_pixels=psf_size+1,
+                              **nircam_channel_safe_psf_kwargs(nc))
         psf_hdu.writeto(psf_fn)
         pp = psf_hdu[0].data
     log.info(f"Calculating PSF for mask done at {time.time()-t0:0.1f}s")
@@ -330,9 +334,10 @@ def estimate_background(data, header, medfilt_size=[15,15], do_segment_mask=Fals
         grid = to_griddedpsfmodel(psf_fn.replace(".fits", "_nrca5.fits"))
     else:
         log.info(f"filtering: Calculating grid for psf_fn={psf_fn}")
+        _chan_kw = nircam_channel_safe_psf_kwargs(nc)
         grid = nc.psf_grid(num_psfs=npsf, oversample=oversample,
                            all_detectors=False, save=True, outfile=psf_fn,
-                           fov_pixels=fov_pixels)
+                           fov_pixels=fov_pixels, **_chan_kw)
 
     yy,xx = np.indices(epsf_quadratic_filtered.data.shape)
     xc,yc = np.unravel_index(epsf_quadratic_filtered.data.argmax(), epsf_quadratic_filtered.data.shape)
