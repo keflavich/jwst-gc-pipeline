@@ -525,7 +525,7 @@ ALIGNMENT_CONFIG = (
     ),
     FieldAlignment(
         proposal='9438', fields=('005', '006'),
-        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_frame=GAIA, source=TABLE_CONSENSUS,
         reference_filter='F210M',
         notes=('9438 (Schlafly) o005 = G007.470+00.050 (l=+7.46, b=+0.06) and '
                'o006 = crowded_l3 (l=+3.00, b=+0.00): the two pointings of this '

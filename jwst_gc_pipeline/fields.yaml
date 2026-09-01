@@ -539,10 +539,16 @@ fields:
   # PER_OBS_MERGED_PROPOSALS so every per-frame and merged catalog carries its
   # `_o00N` token.
   #
-  # Reference frame follows VVV coverage, checked per pointing from its own
-  # galactic coordinates: only o005 (l=+7.46, b=+0.06) and o006 (l=+3.00,
-  # b=+0.00) fall inside the VVV bulge footprint, so those two tie to VIRAC2 and
-  # the other five -- at l = 20, 28, 33, 41, 54 -- tie to Gaia alone, the same
+  # FRAME is Gaia for the whole proposal, and must be: `reference_frame` names
+  # the offsets table, which is per PROPOSAL, so fields.reference_frame() raises
+  # if one proposal carries two.  It is also the right answer -- Gaia is the
+  # frame everywhere and VIRAC2 is a CATALOG choice, not a frame.
+  #
+  # The CATALOG does vary, checked per pointing from its own galactic
+  # coordinates: only o005 (l=+7.46, b=+0.06) and o006 (l=+3.00, b=+0.00) fall
+  # inside the VVV bulge, so those two get a gaia+VIRAC2 refcat (~48-52k rows,
+  # carrying the `source` column the sparse-Gaia subset keys on) while the other
+  # five -- at l = 20, 28, 33, 41, 54 -- get Gaia alone (4-12k rows), the same
   # regime as w51/wd1/wd2 outside the survey.
 
   g028:
@@ -600,7 +606,7 @@ fields:
         reference_catalog:
           '005': catalogs/gaia_virac2_refcat.fits
         nvisits: 1
-        reference_frame: VIRAC2
+        reference_frame: Gaia
         obsids:
           nircam: ['005']
         filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
@@ -612,7 +618,7 @@ fields:
         reference_catalog:
           '006': catalogs/gaia_virac2_refcat.fits
         nvisits: 1
-        reference_frame: VIRAC2
+        reference_frame: Gaia
         obsids:
           nircam: ['006']
         filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
