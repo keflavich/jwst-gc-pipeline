@@ -526,3 +526,103 @@ fields:
         glob_obsid:
           nircam: '005'
         filters: [f115w, f150w, f162m, f164n, f182m, f187n, f200w, f212n, f250m, f277w, f300m, f323n, f335m, f405n, f410m, f444w, f466n]
+
+  # --- JWST 9438 (PI Schlafly): seven Galactic-plane pointings ---------------
+  #
+  # ONE proposal, SEVEN distinct targets spread over l = 3 to 54 deg, each with
+  # the same 14-filter NIRCam set.  They are registered as seven FIELDS, not as
+  # one field with seven observations, for the reason #469 split gc2211: the
+  # pointings are different sky, so pooling their frames into one merge mixes
+  # unrelated fields.  9438 is in naming.MULTIOBS_PROPOSALS and
+  # PER_OBS_MERGED_PROPOSALS so every per-frame and merged catalog carries its
+  # `_o00N` token.
+  #
+  # Reference frame follows VVV coverage, checked per pointing from its own
+  # galactic coordinates: only o005 (l=+7.46, b=+0.06) and o006 (l=+3.00,
+  # b=+0.00) fall inside the VVV bulge footprint, so those two tie to VIRAC2 and
+  # the other five -- at l = 20, 28, 33, 41, 54 -- tie to Gaia alone, the same
+  # regime as w51/wd1/wd2 outside the survey.
+
+  g028:
+    root: orange
+    observations:
+      '9438':
+        reference_catalog:
+          '001': catalogs/gaia_refcat.fits
+        nvisits: 1
+        reference_frame: Gaia
+        obsids:
+          nircam: ['001']
+        filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
+
+  g033:
+    root: orange
+    observations:
+      '9438':
+        reference_catalog:
+          '002': catalogs/gaia_refcat.fits
+        nvisits: 1
+        reference_frame: Gaia
+        obsids:
+          nircam: ['002']
+        filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
+
+  g041:
+    root: orange
+    observations:
+      '9438':
+        reference_catalog:
+          '003': catalogs/gaia_refcat.fits
+        nvisits: 1
+        reference_frame: Gaia
+        obsids:
+          nircam: ['003']
+        filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
+
+  g054:
+    root: orange
+    observations:
+      '9438':
+        reference_catalog:
+          '004': catalogs/gaia_refcat.fits
+        nvisits: 1
+        reference_frame: Gaia
+        obsids:
+          nircam: ['004']
+        filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
+
+  g007:
+    root: orange
+    observations:
+      '9438':
+        reference_catalog:
+          '005': catalogs/gaia_virac2_refcat.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['005']
+        filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
+
+  crowded_l3:
+    root: orange
+    observations:
+      '9438':
+        reference_catalog:
+          '006': catalogs/gaia_virac2_refcat.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['006']
+        filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
+
+  crowded_l20:
+    root: orange
+    observations:
+      '9438':
+        reference_catalog:
+          '007': catalogs/gaia_refcat.fits
+        nvisits: 1
+        reference_frame: Gaia
+        obsids:
+          nircam: ['007']
+        filters: [f070w, f090w, f115w, f140m, f150w, f182m, f210m, f277w, f300m, f335m, f360m, f410m, f430m, f480m]
