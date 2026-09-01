@@ -123,6 +123,25 @@ FIELDS = {
         "data_dir": Path("/orange/adamginsburg/jwst/sgrc"),
         "proposal_prefix": "jw04147-o012_t001_nircam_clear",
     },
+    # cloudef / cloudef_controlfield: JWST 2092 imaged the Cloud E/F ridge (o002)
+    # and an offset control field (o005) with the same four NIRCam bands. They are
+    # SEPARATE SKY, so each gets its own entry keyed on its own observation -- the
+    # `cloudef` tree also holds a few stray o005 mosaics, and the exact
+    # `proposal_prefix` is what keeps them out of the o002 release.
+    #
+    # MIRI is WITHHELD from both on purpose: 2092's o004/o006/o008 F770W/F2100W
+    # were never run through the pipeline (only 2024 MAST i2d sit on disk), so
+    # there is no product to ship and no `miri:` key here. Issue #596 tracks
+    # reducing them; when it closes, add the entries rather than pointing these
+    # at the archive files.
+    "cloudef": {
+        "data_dir": Path("/orange/adamginsburg/jwst/cloudef"),
+        "proposal_prefix": "jw02092-o002_t001_nircam_clear",
+    },
+    "cloudef_controlfield": {
+        "data_dir": Path("/orange/adamginsburg/jwst/cloudef_controlfield"),
+        "proposal_prefix": "jw02092-o005_t001_nircam_clear",
+    },
     # arches / quintuplet: the two GC starburst clusters (JWST 2045, o001 & o003).
     # The reduction drizzles these per module, so there is no `-merged_i2d`; the
     # canonical science products are the NRCA and NRCB mosaics (both current: the
