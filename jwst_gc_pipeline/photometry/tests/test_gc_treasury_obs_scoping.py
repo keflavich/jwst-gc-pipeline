@@ -47,9 +47,35 @@ def test_merged_catalog_token_is_per_obs_for_treasury_and_gc2211():
     assert naming.merged_catalog_obs_token('10678', '002') == '_o002'
     assert naming.merged_catalog_obs_token('2211', '023') == '_o023'
     assert naming.merged_catalog_obs_token('2211', '050') == '_o050'
-    assert naming.merged_catalog_obs_token('2221', '001') == ''
     assert naming.merged_catalog_obs_token('10678', None) == ''
     assert naming.merged_catalog_obs_token('10678', '') == ''
+
+
+def test_brick_proposals_are_per_obs_merged():
+    """1182 and 2221 image the SAME field with DISJOINT filter sets.
+
+    They run as two per-proposal chains into one tree.  While both were
+    untokened they wrote the same merged name and whichever finished last won,
+    so brick's combined table held one proposal's bands and never all eleven
+    (#590).  `2221` asserted `== ''` here until 2026-08-30; that assertion
+    encoded the collision.
+    """
+    assert naming.merged_catalog_obs_token('2221', '001') == '_o001'
+    assert naming.merged_catalog_obs_token('1182', '004') == '_o004'
+    # Membership is per (proposal, field), NOT per proposal: 2221 is brick
+    # o001 AND cloudc o002, and tokening cloudc would take it from shipping a
+    # combined catalog to shipping none.
+    assert ('1182', '004') in naming.PER_OBS_MERGED_FIELDS
+    assert ('2221', '001') in naming.PER_OBS_MERGED_FIELDS
+    assert ('2221', '002') not in naming.PER_OBS_MERGED_FIELDS   # cloudc
+    assert '1182' not in naming.PER_OBS_MERGED_PROPOSALS
+    assert '2221' not in naming.PER_OBS_MERGED_PROPOSALS
+    # Per-FRAME names are untouched: the two proposals' filters are disjoint,
+    # so per-frame tables never collided and MULTIOBS_PROPOSALS must not grow.
+    assert '1182' not in naming.MULTIOBS_PROPOSALS
+    assert '2221' not in naming.MULTIOBS_PROPOSALS
+    assert naming.perframe_obs_token('2221', '001') == ''
+    assert naming.perframe_obs_token('1182', '004') == ''
 
 
 def test_treasury_is_a_multiobs_proposal():
@@ -392,7 +418,7 @@ def test_merge_daophot_does_not_hand_10678s_convention_to_a_sibling(
         tmp_path / 'reduction' / 'fwhm_table.ecsv')
     _fake_svo(monkeypatch)
     monkeypatch.setattr(MC, '_obs_filters_for',
-                        lambda target: {'10678': ['f212n'], '2221': ['f212n']})
+                        lambda target: {'10678': ['f212n'], '4147': ['f212n']})
     monkeypatch.setattr(MC, 'sanity_check_individual_table', lambda tbl: None)
     calls = {}
     monkeypatch.setattr(MC, 'merge_catalogs',
@@ -407,8 +433,8 @@ def test_merge_daophot_does_not_hand_10678s_convention_to_a_sibling(
     MC.merge_daophot(module='nrcblong', daophot_type='basic', indivexp=True,
                      resbgsub=True, iteration_label='m7', target='sometarget',
                      basepath=str(tmp_path), ref_filter='f212n',
-                     filternames_override=['f212n'], field='001',
-                     progid='2221', vetted=True)
+                     filternames_override=['f212n'], field='012',
+                     progid='4147', vetted=True)
     assert calls['obs_suffix'] == ''
     assert [os.path.basename(f) for f in calls['files']] == [
         'f212n_nrcblong_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits']
@@ -736,7 +762,11 @@ def test_an_unpadded_field_is_normalised_to_the_spelling_readers_expect():
     ('2211', '023', 'f200w', 'nrcb', ('', '')),
     # MIRI multi-obs (cloudef): vetted per obs, combined pooled
     ('2092', '005', 'f770w', 'mirimage', ('_o005', '')),
-    # single-obs NIRCam: neither
+    # single-obs NIRCam: neither.  NOT a brick proposal -- 1182/2221 became
+    # per-obs-merged in #590, so they no longer exemplify the pooled case.
+    ('4147', '012', 'f182m', 'nrca', ('', '')),
+    ('6151', '001', 'f200w', 'merged', ('', '')),
+    # brick's two chains: module slot tokened, end slot empty (not doubled)
     ('2221', '001', 'f182m', 'nrca', ('', '')),
     ('1182', '004', 'f200w', 'merged', ('', '')),
 ])
@@ -757,7 +787,10 @@ def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
     other proposal passes None and keeps its pooled names."""
     assert naming.merge_field_for_proposal('10678', '001') == '001'
     assert naming.merge_field_for_proposal('2211', '023') == '023'
-    assert naming.merge_field_for_proposal('2221', '001') is None
+    assert naming.merge_field_for_proposal('2221', '001') == '001'
+    assert naming.merge_field_for_proposal('1182', '004') == '004'
+    # a proposal that is NOT per-obs-merged still passes None
+    assert naming.merge_field_for_proposal('4147', '012') is None
     # a field-less call on a per-obs-merged proposal names no observation, and
     # is refused where the observation is decided rather than inside the merge
     with pytest.raises(naming.ObservationFieldError):
@@ -772,7 +805,9 @@ def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
     ('7213', '001', 'nrcblong_j7213'),
     ('6778', '001', 'nrcblong_j6778'),
     ('2211', '023', 'nrcblong_o023'),
-    ('2221', '001', 'nrcblong'),
+    ('2221', '001', 'nrcblong_o001'),
+    ('1182', '004', 'nrcblong_o004'),
+    ('4147', '012', 'nrcblong'),
 ])
 def test_merged_catalog_path_spells_the_module_slot_token(proposal, field,
                                                           module_slot):
@@ -904,7 +939,7 @@ def test_the_manual_merge_hands_the_merge_this_runs_observation():
     assert rec.calls[0]['progid'] == '2211'
     # a single-obs proposal still passes None and keeps its pooled names
     rec = _RecordingMerge()
-    merge_frames_for_observation('2221', '001', merge=rec, module='nrcb')
+    merge_frames_for_observation('4147', '012', merge=rec, module='nrcb')
     assert rec.fields == [None]
 
 
@@ -950,7 +985,7 @@ def test_the_cutout_merge_scopes_a_gc2211_cutout_to_its_observation():
 
 def test_the_cutout_merge_keeps_every_other_proposals_pooled_names():
     rec = _RecordingMerge()
-    _run_cutout_merge(rec, proposal_id='2221', field='001')
+    _run_cutout_merge(rec, proposal_id='4147', field='012')
     assert rec.fields == [None, None]
 
 

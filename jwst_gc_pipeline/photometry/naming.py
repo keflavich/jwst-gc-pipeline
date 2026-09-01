@@ -199,6 +199,28 @@ MULTIOBS_PROPOSALS = ('2211', '10678')
 #: after its 8 fan-out shards had written 192 per-frame tables (2026-08-22).
 PER_OBS_MERGED_PROPOSALS = ('10678', '2211')
 
+#: Per-OBSERVATION exceptions, for a proposal where only SOME observations need
+#: the token.  Keyed on ``(proposal, field)`` because 2221 is not one field:
+#: alignment_config gives it ``001`` = brick NIRCam and ``002`` = cloudc.
+#:
+#: brick is imaged by TWO proposals with DISJOINT filter sets -- 1182
+#: (F115W/F200W/F356W/F444W) and 2221 (F182M/F187N/F212N/F405N/F410M/F466N) --
+#: run as two chains into ONE tree, so both wrote the same untokened merged name
+#: and whichever finished last won.  Measured 2026-08-29: the untokened combined
+#: table was byte-identical to the 1182 half (651903 rows, 4 bands) while the
+#: 2221 half sat beside it under a different name (323024 rows, 6 bands).  The
+#: canonical name has never held all eleven.
+#:
+#: cloudc is deliberately NOT here.  It has one proposal, one observation and no
+#: collision in its tree; tokening 2221 wholesale would rename cloudc's merged
+#: catalogs to `_o002`, which `COMBINED_RE` does not match, taking cloudc from
+#: shipping a combined catalog to shipping none -- the exact failure this fixes
+#: for brick, inflicted on a field that never had it.
+PER_OBS_MERGED_FIELDS = (
+    ('1182', '004'),   # brick, the 4-band half
+    ('2221', '001'),   # brick, the 6-band half
+)
+
 #: What a ``field`` may look like inside an observation token: an observation
 #: number, or several joined by ``-`` for a joint registration ('002-998').
 _OBSERVATION_FIELD_RE = re.compile(r'\d+(?:-\d+)*')
@@ -302,9 +324,23 @@ def merged_catalog_obs_token(proposal_id, field):
 
     ``field`` goes through ``observation_field_token``, which normalises the
     spelling and refuses a field that does not name an observation.
+
+    That validation now runs BEFORE the membership test rather than inside it,
+    so a malformed field raises for EVERY proposal instead of only per-obs ones:
+    ``('4147', 'garbage')`` and ``('4147', '*')`` raise where they used to
+    return ``''``.  Deliberate -- a field that does not name an observation is a
+    caller error whatever the proposal, and answering it with an untokened name
+    is how a wrong spelling reaches a glob that silently matches nothing (#316).
+    ``field=None`` still returns ``''``: that means "no observation given",
+    which is a legitimate call for a proposal that does not use one.
     """
-    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS and field not in (None, ''):
-        return f'_o{observation_field_token(field)}'
+    if field in (None, ''):
+        return ''
+    tok = observation_field_token(field)
+    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS:
+        return f'_o{tok}'
+    if (str(proposal_id), tok) in PER_OBS_MERGED_FIELDS:
+        return f'_o{tok}'
     return ''
 
 

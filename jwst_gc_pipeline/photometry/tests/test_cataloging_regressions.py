@@ -312,8 +312,11 @@ def _annotate_setup(tmp_path, modules):
         t.write(f'{tmp_path}/catalogs/f405n_{module}_indivexp_merged'
                 f'_resbgsub_m6_dao_basic_vetted.fits', overwrite=True)
 
+    # 4147 (sgrc), NOT a brick proposal: this fixture writes UNTOKENED m6
+    # names, and 1182/2221 became per-obs-merged in #590, so a reader given
+    # those now looks for `_o{field}` and finds nothing.
     options = SimpleNamespace(desaturated=False, bgsub=False, blur=False,
-                              proposal_id='2221', field='001', modules=modules)
+                              proposal_id='4147', field='012', modules=modules)
     return merged_path, write_m6, options
 
 

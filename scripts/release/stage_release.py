@@ -168,6 +168,16 @@ FIELDS = {
         "data_dir": Path("/orange/adamginsburg/jwst/brick"),
         "proposal_prefix": ["jw01182-o004_t001_nircam_clear",
                             "jw02221-o001_t001_nircam_clear"],
+        # brick is imaged by TWO proposals with DISJOINT filter sets, run as two
+        # per-proposal chains: o004 = 1182 (F115W/F200W/F356W/F444W), o001 =
+        # 2221 (F182M/F187N/F212N/F405N/F410M/F466N).  Both are now in
+        # naming.PER_OBS_MERGED_PROPOSALS, so each chain writes its OWN
+        # `..._m8_o00N.fits` and the ambiguous untokened name is no longer
+        # produced (#590).  Without this key `discover_catalogs` would gate the
+        # per-pointing branch off and match nothing, because COMBINED_RE only
+        # matches the untokened name -- i.e. tokening alone would take brick
+        # from "ships one proposal's bands silently" to "ships no catalog".
+        "observations": ["o001", "o004"],
         "miri": [
             {"filter": "F2550W",
              "src": "/orange/adamginsburg/jwst/brick/images/jw02221-o002_t001_miri_f2550w_i2d.fits"},
@@ -526,7 +536,20 @@ def discover_images(field_cfg):
         pipeline = fdir / "pipeline"
         if not pipeline.is_dir():
             continue
-        if observations:
+        # A LIST of prefixes means ONE field imaged by SEVERAL PROPOSALS -- brick
+        # is 1182 (F115W/F200W/F356W/F444W) and 2221 (F182M/F187N/F212N/F405N/
+        # F410M/F466N) over the SAME sky.  Its mosaics are per-FILTER full-field
+        # products, so they are neither tagged with an observation nor laid out
+        # under images/<obs>/.  gc2211's `observations` mean the opposite thing:
+        # separate POINTINGS of different sky, which do get both.
+        #
+        # brick still needs the key for CATALOG discovery, where the per-pointing
+        # branch finds its tokened `_o001`/`_o004` combined tables.  Letting it
+        # re-route images too tagged them with an observation the per-filter
+        # vetted catalogs do not carry, so `check_image_catalog_match` -- which
+        # keys on (filter, observation) -- found zero pairs and the provenance
+        # gate passed having compared nothing.
+        if observations and not isinstance(base_prefix, list):
             for obs in observations:
                 prefixes = [f"{base_prefix}-{obs}_t001_nircam_clear"]
                 items += _collect_images(pipeline, prefixes, filt, observation=obs)

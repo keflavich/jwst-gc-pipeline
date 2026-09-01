@@ -20,7 +20,9 @@ from jwst_gc_pipeline.photometry import cataloging as C
 def _opts():
     return types.SimpleNamespace(
         desaturated=False, bgsub=False, blur=False,
-        proposal_id='2221', field='001', modules='merged')
+        # 4147 (sgrc), NOT a brick proposal -- `_write_m6` below writes
+        # UNTOKENED names and 1182/2221 are per-obs-merged now (#590).
+        proposal_id='4147', field='012', modules='merged')
 
 
 def _write_m6(cut_bp, filt, ras, decs, snr=20.0, qfit=0.05):

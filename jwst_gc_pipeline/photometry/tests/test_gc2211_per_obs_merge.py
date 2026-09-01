@@ -60,10 +60,18 @@ def test_an_unscoped_2211_merge_refuses():
 
 
 def test_other_proposals_are_untouched():
-    for pid, field in (('1182', '004'), ('2221', '001'), ('4147', '012'),
-                       ('5365', '001'), ('3958', '007')):
+    # 1182/2221 (brick) left this list in #590: they image one field with
+    # disjoint filter sets and were overwriting a single untokened merged
+    # catalog, so they are per-obs-merged now and asserted below instead.
+    for pid, field in (('4147', '012'), ('5365', '001'), ('3958', '007')):
         assert merged_catalog_obs_token(pid, field) == ''
         assert merge_field_for_proposal(pid, field) is None
+
+
+def test_bricks_two_proposals_are_per_obs_merged():
+    for pid, field, tok in (('1182', '004', '_o004'), ('2221', '001', '_o001')):
+        assert merged_catalog_obs_token(pid, field) == tok
+        assert merge_field_for_proposal(pid, field) == field
 
 
 def test_10678_still_per_obs():
