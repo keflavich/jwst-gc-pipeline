@@ -134,19 +134,21 @@ FIELDS = {
         "proposal_prefix": "jw02045-o001_t001_nircam_clear",
         # NRCA and NRCB do not overlap on the sky here (`geometry: disjoint`),
         # so a merged table is two disjoint halves concatenated and hides which
-        # module a source came from -- which is why per-module is the product
-        # this field wants.  It is NOT what this field currently HAS.  The
-        # 2026-08-29 rerun wrote only `basic_merged_...resbgsub_m8` (208736
-        # rows, spanning both modules: nrca 107679 + nrcb 103202 less dedup);
-        # the per-module tables beside it are 2026-08-23, six days behind the
-        # 2026-08-28 mosaics this release ships.  Selecting per-module here
-        # would pair the current images with the previous generation of
-        # catalogs, which is the defect the same-run gate exists to catch.
+        # module a source came from.  Per-module is both what this field wants
+        # and the generation closest to what it ships:
         #
-        # So arches ships `merged` until a rerun writes per-module tables of
-        # the shipped generation.  quintuplet keeps per-module because its two
-        # generations are the same day (both 2026-08-16).
-        "catalog_module": "merged",
+        #     mosaics shipped (nrca/nrcb)   2026-08-21 15:49 .. 2026-08-22 00:42
+        #     per-module m7 vetted / m8     2026-08-23 04:30 / 06:15  (+1-2 d)
+        #     merged     m7 vetted / m8     2026-08-29 04:08 / 05:42  (+8 d)
+        #
+        # An earlier revision of this comment argued for `merged` on the
+        # grounds that the per-module tables were "six days behind the
+        # 2026-08-28 mosaics".  That measured the *merged* mosaic, which this
+        # field does not ship -- its `nircam` entries below name the nrca/nrcb
+        # ones, dated 08-21/22.  Against those, the per-module tables are one
+        # to two days AFTER the images and the merged table is eight days
+        # after, so the date argument ran backwards.
+        "catalog_modules": ["nrca", "nrcb"],
         "no_auto_images": True,
         "nircam": [
             {"filter": "F212N", "src": "/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045-o001_t001_nircam_clear-f212n-nrca_i2d.fits"},
@@ -945,6 +947,33 @@ def same_run_pairs(items):
             continue
         pairs.append((key, imgs[key], cat))
     return pairs, unpaired
+
+
+def _same_run_detail(key, off):
+    """One `filter[/obs][/module]: N mas` clause of the SAME-RUN refusal.
+
+    Kept beside the gate because it consumes exactly what the gate returns, and
+    the two drifted apart once already: the gate grew module-keyed 3-tuples and
+    a ``None`` offset for an image with no catalog partner, while the caller
+    still unpacked ``(f, o), v`` and formatted ``v`` with ``:.0f``.  Every
+    same-run failure then died in the f-string -- ``too many values to unpack``,
+    or ``unsupported format string passed to NoneType.__format__`` -- instead of
+    reaching the REFUSING TO STAGE line.  The release still stopped, because a
+    traceback is a non-zero exit, but the operator lost the part naming which
+    filter and module failed and by how much, on the one gate whose entire job
+    is to name a provenance mismatch.
+
+    Accepts the 2-tuple shape too: a caller that has not been updated formats
+    rather than raising.
+    """
+    parts = list(key) if isinstance(key, (tuple, list)) else [key]
+    filt = parts[0] if parts else '?'
+    rest = [str(x) for x in parts[1:] if x and str(x) != 'merged']
+    where = ('/' + '/'.join(rest)) if rest else ''
+    # `None` is the no-catalog-partner case, which is a failure without a
+    # measurement -- saying "0 mas" there would report a perfect tie.
+    measured = 'no catalog partner' if off is None else f'{off:.0f} mas'
+    return f'{filt}{where}: {measured}'
 
 
 def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
@@ -3095,8 +3124,7 @@ def main(argv=None):
             print("\nSAME-RUN CHECK (shipped image <-> shipped catalog):")
             fails = check_image_catalog_match(items)
             if fails:
-                detail = "; ".join(f"{f}{('/' + o) if o else ''}: {v:.0f} mas"
-                                   for (f, o), v in fails)
+                detail = "; ".join(_same_run_detail(key, off) for key, off in fails)
                 print(f"\nREFUSING TO STAGE '{args.field}': image<->catalog SAME-RUN check "
                       f"FAILED (> {SAME_RUN_TOL_MAS:.0f} mas): {detail}. The shipped image "
                       f"and catalog are from DIFFERENT runs (different astrometric "

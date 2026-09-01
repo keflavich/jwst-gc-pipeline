@@ -218,3 +218,50 @@ def test_the_exemption_runs_both_ways(sr):
               'src': '/d/catalogs/f770w_merged_vetted.fits'}]
     pairs, unpaired = sr.same_run_pairs(items)
     assert (pairs, unpaired) == ([], [])
+
+
+# ---- the refusal message ---------------------------------------------------
+#
+# The gate's return shape and the caller that formats it drifted apart once:
+# keys became module-keyed 3-tuples and an unpaired image reports `off=None`,
+# while the caller still unpacked `(f, o), v` and formatted with `:.0f`.  Every
+# same-run failure then raised inside the f-string instead of reaching the
+# REFUSING TO STAGE line.  Nothing exercised the formatter, so the whole suite
+# passed over it -- these tests drive it directly.
+
+def test_the_refusal_names_filter_and_module(sr):
+    """The operator has to be told WHICH pairing failed and by how much; that
+    is the entire purpose of this gate's message."""
+    assert sr._same_run_detail(('F212N', None, 'nrca'), 34.0) == 'F212N/nrca: 34 mas'
+
+
+def test_a_three_tuple_key_does_not_raise(sr):
+    """`too many values to unpack (expected 2)` -- the module-keyed shape."""
+    for key in [('F212N', None, 'nrca'), ('F200W', 'o046', 'nrcb')]:
+        out = sr._same_run_detail(key, 31.0)
+        assert 'mas' in out and out.startswith(key[0])
+
+
+def test_an_unpaired_image_reports_no_measurement_not_zero(sr):
+    """`off` is None when no catalog covers the image.  Formatting that with
+    `:.0f` raised; formatting it as 0 would report a perfect tie for a
+    comparison that never happened."""
+    out = sr._same_run_detail(('F323N', None, 'merged'), None)
+    assert 'no catalog partner' in out
+    assert '0 mas' not in out
+
+
+def test_merged_is_not_spelled_out_as_a_module(sr):
+    """'F212N: 34 mas' reads better than 'F212N/merged: 34 mas' when there is
+    only one module in play."""
+    assert sr._same_run_detail(('F212N', None, 'merged'), 34.0) == 'F212N: 34 mas'
+
+
+def test_the_observation_appears_when_there_is_one(sr):
+    """Two observations of one filter must be distinguishable in the refusal."""
+    assert sr._same_run_detail(('F200W', 'o046', 'merged'), 44.0) == 'F200W/o046: 44 mas'
+
+
+def test_the_old_two_tuple_shape_still_formats(sr):
+    """A caller that has not been updated should format, not raise."""
+    assert sr._same_run_detail(('F212N', None), 12.0) == 'F212N: 12 mas'
