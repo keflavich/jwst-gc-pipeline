@@ -485,15 +485,21 @@ def test_sky_view_defaults_to_the_jwst_layers_only():
     assert state['nircam'] == 'true' and state['miri'] == 'true'
     # observed is on despite being empty, so the first executed visit shows up
     assert state['observed'] == 'true'
-    assert state['spring'] == 'false' and state['autumn'] == 'false'
+    assert state['spring'] == 'false'
     assert state['aces'] == 'false'
+    # RGPS is context on the same terms as Roman GBTDS, so it defaults off too.
+    for key in ('rgps-wide', 'rgps-tds', 'rgps-deep'):
+        assert state[key] == 'false', key
 
 
 def _re_search_state(html):
     import re as _re
     m = _re.search(r'var on = \{(.*?)\}', html, _re.S)
     assert m, 'default layer state not found'
-    return dict(_re.findall(r'(\w+):\s*(true|false)', m.group(1)))
+    # The RGPS keys contain hyphens, so they are quoted in the emitted object
+    # and are not bare identifiers; match both spellings or they read as absent.
+    return dict((k.strip('\'"'), v) for k, v in
+                _re.findall(r'([\w-]+|\'[\w-]+\'):\s*(true|false)', m.group(1)))
 
 
 def test_sky_view_keeps_the_observed_toggle_when_nothing_is_observed():
@@ -1811,6 +1817,25 @@ _ROMAN = {
     'target_area': [[266.4, -29.7], [266.9, -29.7], [266.9, -29.2]],
 }
 
+#: One RGPS region per component, in the file's own shape.  The real regions
+#: are Galactic boxes and circles converted to ICRS by
+#: ``scripts/monitoring/build_rgps_footprints.py``; by the time skyview sees
+#: them they are just ICRS rings, which is all these need to be.
+_RGPS = {
+    'components': {
+        'wide_area': [{'name': 'Disk', 'shape': 'box',
+                       'poly': [[266.3, -29.8], [266.9, -29.8],
+                                [266.9, -29.3], [266.3, -29.3]]}],
+        'time_domain': [{'name': 'TDS_Galactic_Center_Q1', 'shape': 'box',
+                         'poly': [[266.4, -29.2], [266.7, -29.2],
+                                  [266.7, -28.9], [266.4, -28.9]]}],
+        'deep_spec': [{'name': 'Deep_W51', 'shape': 'circle',
+                       'poly': [[266.5, -29.5], [266.6, -29.5],
+                                [266.6, -29.4]]}],
+    },
+    'source': 'test fixture',
+}
+
 #: The true ACES outline is ~700 vertices; three is enough to be drawable.
 _ACES = [[[266.4, -29.4], [266.9, -29.4], [266.9, -28.9], [266.4, -28.9]]]
 
@@ -1821,16 +1846,20 @@ def test_roman_toggles_are_not_dead_without_aladin():
     else — a live-looking control that did nothing."""
     from jwst_gc_pipeline.monitoring import skyview
     svg, info = skyview.static_map(
-        _fp(planned=_POINTINGS, aces=_ACES), _ROMAN)
-    assert info['n_roman'] == 2                    # 1 spring + 1 autumn
+        _fp(planned=_POINTINGS, aces=_ACES), _ROMAN, rgps=_RGPS)
+    assert info['n_roman'] == 1                    # spring only; autumn is not drawn
     assert info['n_aces'] == 1
-    for group in ('stat-spring', 'stat-autumn', 'stat-aces'):
+    assert info['n_rgps'] == 3                     # one region per component
+    groups = ('stat-spring', 'stat-aces', 'stat-rgps-wide', 'stat-rgps-tds',
+              'stat-rgps-deep')
+    for group in groups:
         assert 'id="%s"' % group in svg
-    html = skyview.section(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN)
-    for group in ('stat-spring', 'stat-autumn', 'stat-aces'):
+    html = skyview.section(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN,
+                           rgps=_RGPS)
+    for group in groups:
         assert "'%s'" % group in html              # reachable from STATIC_GROUPS
     # and the buttons must not be inert
-    spring = html[html.index('id="lyr-spring"'):html.index('id="lyr-autumn"')]
+    spring = html[html.index('id="lyr-spring"'):html.index('id="lyr-rgps-wide"')]
     assert 'disabled' not in spring
 
 
@@ -1889,8 +1918,10 @@ def test_background_buttons_work_before_the_viewer_exists():
 def test_roman_layers_start_hidden():
     """Roman is context on a JWST monitor: drawn, but off until asked for."""
     from jwst_gc_pipeline.monitoring import skyview
-    svg, _ = skyview.static_map(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN)
-    for group in ('stat-spring', 'stat-autumn', 'stat-aces'):
+    svg, _ = skyview.static_map(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN,
+                                rgps=_RGPS)
+    for group in ('stat-spring', 'stat-aces', 'stat-rgps-wide',
+                  'stat-rgps-tds', 'stat-rgps-deep'):
         block = svg[svg.index('id="%s"' % group):]
         assert 'gcm-sky-off' in block[:block.index('>')]
     for group in ('stat-nircam', 'stat-miri'):
@@ -2092,7 +2123,7 @@ def test_the_jwst_target_area_is_not_a_roman_layer():
     simply mislabelled, so it is not drawn at all."""
     from jwst_gc_pipeline.monitoring import skyview
     svg, info = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
-    assert info['n_roman'] == 2, 'target_area is still being counted as Roman'
+    assert info['n_roman'] == 1, 'target_area is still being counted as Roman'
     assert 'stat-target' not in svg
     html = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
     assert 'lyr-target' not in html

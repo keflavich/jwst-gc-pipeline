@@ -160,6 +160,7 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
     footprints = skyview.load_footprints(
         os.path.join(outdir, skyview.FOOTPRINTS_JSON))
     roman = skyview.load_footprints(os.path.join(outdir, 'roman_gbtds.json'))
+    rgps = skyview.load_footprints(os.path.join(outdir, skyview.RGPS_JSON))
     # The published observing schedule.  Fetched here rather than in the
     # renderer so the JSON is written next to the page and the network is
     # touched once per run, not once per page.  `load` never raises on a
@@ -196,7 +197,7 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
     front = dict(entries=entries, cutouts=cutouts, subtitle=subtitle,
                  show_skip=show_skip, generated=generated,
                  unattributed_jobs=unattributed, footprints=footprints,
-                 roman=roman, schedule=schedule,
+                 roman=roman, rgps=rgps, schedule=schedule,
                  # The front page is the overview: map, then status cards, then
                  # a link out per field. Inlining 18 fields' tables and evidence
                  # below the cards made the monitor's entry point its largest
@@ -244,7 +245,7 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
                 # assets sit beside the aggregate page.  Without these the
                 # per-field pages told the reader to generate a file that was
                 # already sitting next to them.
-                footprints=footprints, roman=roman,
+                footprints=footprints, roman=roman, rgps=rgps,
                 include_schedule=False,
                 asset_prefix='../',
                 # The map is ~100 kB of identical inline geometry; carrying it
@@ -408,7 +409,7 @@ def publish(outdir, publish_dir, index_from='monitor.html'):
     # Sky-view assets: the footprint data and a same-origin copy of Aladin Lite,
     # so the page depends on no third-party CDN.
     for name in (skyview.FOOTPRINTS_JSON, 'roman_gbtds.json',
-                 _schedule.SCHEDULE_JSON):
+                 skyview.RGPS_JSON, _schedule.SCHEDULE_JSON):
         src = os.path.join(outdir, name)
         if os.path.exists(src):
             done[name] = _link(src, os.path.join(publish_dir, name))
