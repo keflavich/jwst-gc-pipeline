@@ -34,6 +34,20 @@ _SPEC.loader.exec_module(stage_release)
 CAT_BASE = stage_release.CAT_BASE
 
 
+def _base(field):
+    """The combined-table stem THIS field globs.
+
+    Not the module-level ``CAT_BASE``: a field whose modules are disjoint
+    catalogs per module (`basic_nrca_...` / `basic_nrcb_...`) and never writes
+    a merged sibling, so `cat_base()` returns its per-module stems instead.
+    Spelling `CAT_BASE` here made the fixture write a filename the field does
+    not look for, and `discover_catalogs` then correctly found nothing -- the
+    same class of mistake as hardcoding one program's oksep token, which this
+    file already avoids by asking the registry.
+    """
+    return stage_release.cat_base(field)[0]
+
+
 def _catdir(tmp_path, names):
     cat_dir = tmp_path / "catalogs"
     cat_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +69,7 @@ def _qualcut_name(field, iteration=None):
     rule the readers follow (`jwst_gc_pipeline/tests/test_no_hardcoded_qualcuts_token.py`).
     """
     iter_token = f"_{iteration}" if iteration else ""
-    return f"{CAT_BASE}{iter_token}{_qualcuts_oksep_suffix(field)}.fits"
+    return f"{_base(field)}{iter_token}{_qualcuts_oksep_suffix(field)}.fits"
 
 
 def test_m8_combined_table_records_the_missing_subset(tmp_path):
@@ -97,7 +111,7 @@ def test_a_field_with_no_cut_anywhere_says_so(tmp_path):
     Which oksep token that file carries is beside the point -- `QUALCUTS_RE`
     matches any field's -- so the fixture takes the registry's.
     """
-    cfg = _catdir(tmp_path, [f"{CAT_BASE}_resbgsub_m7.fits",
+    cfg = _catdir(tmp_path, [f'{_base("arches")}_resbgsub_m7.fits',
                              _qualcut_name("arches")])
     items = _full_items(cfg, field="arches")
     assert [it["kind"] for it in items] == ["catalog_full"]
