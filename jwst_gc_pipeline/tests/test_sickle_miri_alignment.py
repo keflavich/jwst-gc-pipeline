@@ -43,9 +43,15 @@ def test_miri_shares_the_nircam_frame(field):
 
 
 @pytest.mark.parametrize("field", MIRI_FIELDS)
-def test_miri_anchor_is_f770w(field):
-    """The only MIRI band present in every observation."""
-    assert AC.resolve("3958", field).reference_filter == "F770W"
+def test_miri_anchor_matches_the_formula_and_the_nircam_entry(field):
+    """`consensus_catalog.reference_filter` answers F210M for 3958's bands.
+
+    Sharing the anchor with the NIRCam entry is the point: it names the band
+    whose consensus defines the FIELD's internal frame, so both instruments tie
+    to the same one.
+    """
+    assert AC.resolve("3958", field).reference_filter == "F210M"
+    assert AC.resolve("3958", "007").reference_filter == "F210M"
 
 
 def test_nircam_entry_is_untouched():
