@@ -130,7 +130,16 @@ def test_project_obsnum_matches_apart_from_the_listed_changes():
               'm92': {'1334': '001'},
               'ngc6397': {'1979': '001'},
               'm4': {'1979': '002'},
-              'ngc6334': {'7213': '001', '6778': '001'}}
+              'ngc6334': {'7213': '001', '6778': '001'},
+              # JWST 9438 (Schlafly), added 2026-08-31: seven Galactic-plane
+              # pointings, one field per observation.
+              'g028': {'9438': '001'},
+              'g033': {'9438': '002'},
+              'g041': {'9438': '003'},
+              'g054': {'9438': '004'},
+              'g007': {'9438': '005'},
+              'crowded_l3': {'9438': '006'},
+              'crowded_l20': {'9438': '007'}}
     view = F.project_obsnum()
     for target, per_proposal in todays.items():
         for proposal, obsid in per_proposal.items():
@@ -837,4 +846,8 @@ def test_every_preexisting_proposal_maps_exactly_as_before():
     populated = {(p, inst) for inst in F.INSTRUMENTS for p in proposals
                  if F.field_to_reg_mapping(p, inst)}
     new = populated - set(FIELD_MAPS_BEFORE_THE_WILDCARD)
-    assert new == {('10678', 'nircam'), ('10678', 'miri')}, sorted(new)
+    # 9438 (Schlafly) joined 2026-08-31: seven Galactic-plane pointings, NIRCam
+    # only, one field per observation.  It post-dates the snapshot for the same
+    # reason the treasury does, so it is named here rather than back-filled.
+    assert new == {('10678', 'nircam'), ('10678', 'miri'),
+                   ('9438', 'nircam')}, sorted(new)

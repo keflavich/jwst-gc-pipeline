@@ -176,7 +176,10 @@ def vetted_to_i2dseed(vetted_path):
 # (139 tiles sharing the gc-treasury tree; issue #416).  Lives here (a
 # heavy-import-free module) so merge_catalogs.py can consult it without a
 # circular import of crowdsource_catalogs_long.
-MULTIOBS_PROPOSALS = ('2211', '10678')
+#: 9438 (Schlafly): seven Galactic-plane pointings, l = 3 to 54 deg, under one
+#: proposal.  Same shape as 2211 and 10678 -- different sky per observation, so
+#: an untokened per-frame name could belong to any of the seven.
+MULTIOBS_PROPOSALS = ('2211', '10678', '9438')
 
 #: The subset whose MERGED catalogs are per-observation too.
 #:
@@ -197,7 +200,9 @@ MULTIOBS_PROPOSALS = ('2211', '10678')
 #:     /orange/adamginsburg/jwst/gc2211_o023//F200W/f200w_nrca...._dao_basic.fits
 #:
 #: after its 8 fan-out shards had written 192 per-frame tables (2026-08-22).
-PER_OBS_MERGED_PROPOSALS = ('10678', '2211')
+#: 9438 joins for the same reason as 2211: its seven observations are seven
+#: DIFFERENT targets, so one untokened merged catalog would pool unrelated sky.
+PER_OBS_MERGED_PROPOSALS = ('10678', '2211', '9438')
 
 #: Per-OBSERVATION exceptions, for a proposal where only SOME observations need
 #: the token.  Keyed on ``(proposal, field)`` because 2221 is not one field:
