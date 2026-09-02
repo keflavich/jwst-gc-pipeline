@@ -361,6 +361,61 @@ ALIGNMENT_CONFIG = (
                '(gradients <=0.3 mas/arcsec). Brings visit 002 onto visit 001; '
                'the absolute zero point comes from the subsequent tie.'),
     ),
+    # sickle MIRI (3958 observations 001 and 002, jointly registered as the
+    # single field '001-002' -- the two pointings sit 58" apart and overlap, so
+    # they are cataloged together).  The NIRCam entry below deliberately covers
+    # only obs 007 and says so; that left MIRI with NO table-driven correction
+    # channel, and the m2 checkpoint refuses to write a correction it cannot
+    # route:
+    #
+    #   astrom checkpoint [m2] F770W/mirimage: measured 6 real correction(s) for
+    #   proposal 3958 observation 001-002, but alignment_config declares NO
+    #   table-driven correction channel for this field
+    #
+    # That refusal is correct -- without an entry the numbers would land in a
+    # table fix_alignment never reads and the next re-tie would re-measure the
+    # identical residual (the arches/sgrb2 failure).
+    #
+    # TABLE_CONSENSUS, not TABLE_LOCKED: the authored table
+    # Offsets_JWST_Brick3958_VIRAC2locked.csv is 120 rows over the five NIRCam
+    # bands (F187N/F210M/F335M/F470N/F480M, 24 exposures each) and carries no
+    # MIRI rows at all, so there is nothing for MIRI to lock to.  The m2
+    # visit-consensus re-tie bootstraps its own table with provenance.
+    #
+    # Frame is VIRAC2, matching the NIRCam entry -- the two instruments observe
+    # the same sky and a MIRI tie to a different frame would put the field's own
+    # bands in disagreement.
+    #
+    # Anchor is F770W, and it CANNOT be the NIRCam entry's F210M.
+    # `promote_reference_filter` resolves the anchor's consensus under the
+    # OBSERVATION's token, and obs 001/002 are MIRI-only:
+    #
+    #     _o007       f210m_o007_consensus.fits        exists
+    #     _o001-002   f770w_o001-002_consensus.fits    exists
+    #                 f210m_o001-002_consensus.fits    cannot exist -- F210M is
+    #                                                  not observed in 001/002
+    #
+    # An F210M anchor here would raise FileNotFoundError on a checkpoint that can
+    # never run.  The anchor is per OBSERVATION, not per field: the two tokens
+    # have disjoint band sets.
+    #
+    # obs 003 is NOT here on purpose.  Those frames live in the sickle tree but
+    # 3958/003 is registered to BRICK in fields.yaml (obsids miri: ['003']), and
+    # its pointing is 394" from 001/002 -- different sky, a different field's
+    # deliverable.
+    FieldAlignment(
+        proposal='3958', fields=('001-002', '001', '002'),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F770W',
+        notes=('sickle MIRI (F770W/F1130W/F1500W, obs 001+002 jointly '
+               'registered as 001-002; 10 crf per band). Registered 2026-09-01 '
+               'after the m2 checkpoint refused to route 6 measured corrections '
+               'for want of a channel. Consensus rather than locked because the '
+               'VIRAC2locked table is NIRCam-only (120 rows, 5 bands, no MIRI). '
+               'The single-observation spellings are included so a per-obs run '
+               'resolves the same way as the joint one. obs 003 belongs to '
+               'brick, not sickle.'),
+    ),
     FieldAlignment(
         proposal='3958', fields=('007',),
         reference_frame=VIRAC2, source=TABLE_LOCKED,

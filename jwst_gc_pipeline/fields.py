@@ -450,6 +450,69 @@ def filter_observation_count(target, filtername, instrument=None):
     return n
 
 
+def filters_for_observation(target, proposal, obs, instruments=NIRCAM_MIRI):
+    """A proposal's filters restricted to the instrument that took ``obs``.
+
+    ``fields.yaml`` carries ONE flat ``filters`` list per proposal, so
+    ``obs_filters`` hands back the same union for every instrument -- for sickle
+    3958 both ``obs_filters('nircam')`` and ``obs_filters('miri')`` return all
+    eight bands.  Anything that ranks a field's bands from the registry
+    therefore cannot tell the instruments apart, while the consensus catalogs it
+    ranks are written per OBSERVATION token, and an observation belongs to one
+    instrument:
+
+        sickle 3958   obs 007        F187N F210M F335M F470N F480M   (NIRCam)
+                      obs 001, 002   F770W F1130W F1500W             (MIRI)
+
+    So a band chosen from the union can be one the observation never took, and
+    its consensus can never exist.  Scoping by the observation's own instrument
+    is what makes the choice resolvable.
+
+    ``obs`` accepts the joint spelling (``'001-002'``); every part must belong
+    to the same instrument, else the observation is not a single pointing set
+    and ranking over it is meaningless.  Returns ``[]`` when the observation is
+    not registered, so callers keep their existing "nothing to check" path.
+    """
+    from .photometry.naming import _instrument_from_filter
+
+    _, loaded = _load()
+    parts = [part for part in str(obs).split('-') if part]
+
+    def _owner(entry):
+        """The single instrument that registered ``obs``, or None."""
+        obsids = entry.obsids or {}
+        joint = entry.joint_obsids or {}
+        found = set()
+        for instrument in instruments:
+            registered = {str(o) for o in (obsids.get(instrument) or ())}
+            registered |= {str(o) for o in (joint.get(instrument) or ())}
+            if str(obs) in registered or any(p in registered for p in parts):
+                found.add(instrument.upper())
+        # Unregistered here, or a joint spelling straddling two instruments:
+        # say nothing rather than guess.
+        return found.pop() if len(found) == 1 else None
+
+    # `target=None` searches every field for the proposal: ALIGNMENT_CONFIG is
+    # keyed on (proposal, observation) and never names the target, so its
+    # readers cannot supply one.  One proposal can appear under SEVERAL fields
+    # -- 3958 is sickle's NIRCam 007 and MIRI 001/002, and separately brick's
+    # MIRI 003 -- so the match is the field that actually registers THIS
+    # observation, not merely the first that mentions the proposal.
+    for field in loaded:
+        if target is not None and field.name != target:
+            continue
+        for entry in field.observations:
+            if str(entry.proposal) != str(proposal):
+                continue
+            owner = _owner(entry)
+            if owner is None:
+                continue
+            declared = {str(f).upper() for f in (entry.filters or ())}
+            return sorted(f for f in declared
+                          if str(_instrument_from_filter(f)).upper() == owner)
+    return []
+
+
 def claims_every_observation(target, instrument='nircam'):
     """Does ``target`` claim every observation of one of its proposals?
 
