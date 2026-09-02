@@ -48,14 +48,32 @@ def test_source_is_consensus_because_no_table_exists(proposal):
     assert AC.resolve(proposal, "001").source == AC.TABLE_CONSENSUS
 
 
-@pytest.mark.parametrize("proposal", NGC6334_PROPOSALS)
-def test_anchor_band_is_shared_by_both_proposals(proposal):
-    """F200W is the anchor for both, so one band defines the field's frame.
+@pytest.mark.parametrize("proposal,expected", [
+    ("6778", "F187N"),
+    ("7213", "F182M"),
+])
+def test_anchor_matches_the_reference_filter_formula(proposal, expected):
+    """The anchor is chosen by formula, not by which band the proposals share.
 
-    It is the only wide band the two programs have in common (the other shared
-    band is the F470N narrowband).
+    ``consensus_catalog.reference_filter`` ranks a field's bands by closeness to
+    VIRAC2 in wavelength and in which stars they leave unsaturated.  Two places
+    answer "which band anchors this field" and they must agree, or the m2
+    consensus catalog and the reducer end up on different bands -- which is what
+    ``test_the_formula_reproduces_the_hand_set_reference_filters`` enforces
+    globally.  Picking F200W here because both proposals observe it was wrong
+    for exactly that reason.
     """
-    assert AC.resolve(proposal, "001").reference_filter == "F200W"
+    from jwst_gc_pipeline.photometry.consensus_catalog import reference_filter
+    from jwst_gc_pipeline import fields as fields_mod
+
+    cfg = AC.resolve(proposal, "001")
+    assert cfg.reference_filter == expected
+
+    available = set()
+    for instrument in ("nircam", "miri", "niriss"):
+        for by_proposal in fields_mod.obs_filters(instrument).values():
+            available.update(str(f).upper() for f in by_proposal.get(proposal, []))
+    assert reference_filter(sorted(available)).upper() == expected
 
 
 def test_the_two_proposals_get_separate_offsets_tables():

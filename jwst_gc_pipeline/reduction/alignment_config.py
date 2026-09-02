@@ -427,13 +427,17 @@ ALIGNMENT_CONFIG = (
     # epoch 2026.30), so VVV disk coverage reaches this longitude and Gaia is far
     # too sparse to be the catalog here, exactly as in the GC fields.
     #
-    # reference_filter is F200W for BOTH: it is the only band the two proposals
-    # share besides F470N, and it is the wider/brighter of the two, so one anchor
-    # band defines the field's internal frame across both programs.
+    # reference_filter comes from `consensus_catalog.reference_filter`, which
+    # ranks a field's bands by closeness to VIRAC2 in wavelength and in which
+    # stars they leave unsaturated -- NOT from picking the band the two proposals
+    # happen to share.  It answers F187N for 6778 and F182M for 7213, and
+    # `test_the_formula_reproduces_the_hand_set_reference_filters` requires the
+    # config to agree with it, so that the m2 consensus catalog and the reducer
+    # anchor to the same band.
     FieldAlignment(
         proposal='6778', fields=('001',),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
-        reference_filter='F200W',
+        reference_filter='F187N',
         notes=('ngc6334 (Cat\'s Paw), 3 visits, 450 crf over 6 bands. Registered '
                '2026-09-01 after the field was found absent from ALIGNMENT_CONFIG '
                'entirely -- unregistered means the raw assign_wcs frame, and the '
@@ -446,7 +450,7 @@ ALIGNMENT_CONFIG = (
     FieldAlignment(
         proposal='7213', fields=('001',),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
-        reference_filter='F200W',
+        reference_filter='F182M',
         notes=('ngc6334, the SECOND proposal on the same sky as 6778: 2 visits, '
                '800 crf over 8 bands. Registered 2026-09-01 for the same reason '
                'and in the same mode. Kept as its own entry because '
