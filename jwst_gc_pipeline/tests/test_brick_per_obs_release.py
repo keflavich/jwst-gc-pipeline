@@ -26,8 +26,12 @@ def _stage_release():
 # --- the token keys on (proposal, field), not proposal ----------------------
 
 @pytest.mark.parametrize('proposal,field,expected', [
-    ('1182', '004', '_o004'),   # brick, 4-band half
-    ('2221', '001', '_o001'),   # brick, 6-band half
+    # brick is NOT tokened: its two proposals have disjoint filters, so the
+    # per-filter names never collided, and tokening them stranded the m7 seed
+    # (#625).  stage_release separates the two through its own `observations`
+    # config, which is what the rest of this file exercises.
+    ('1182', '004', ''),
+    ('2221', '001', ''),
     # cloudc is 2221 too.  It has one proposal, one observation and no
     # collision; tokening it would rename its merged catalogs to `_o002`, which
     # COMBINED_RE does not match, so cloudc would ship NO combined catalog.
@@ -41,15 +45,26 @@ def test_merged_token_is_per_proposal_field(proposal, field, expected):
     assert merged_catalog_obs_token(proposal, field) == expected
 
 
-def test_cloudc_is_not_swept_in_with_brick():
-    """Explicit: 2221 appears in the pair list only for brick's observation."""
+def test_neither_brick_proposal_nor_cloudc_is_tokened():
+    """brick is out of the pair list, and 2221 must not be tokened at all.
+
+    Tokening brick renamed its per-filter catalogs out from under the m7
+    crossband seed (#625).  cloudc shares proposal 2221 with brick's obs 001,
+    so a whole-proposal entry would sweep it in as well -- that must stay
+    impossible however brick is handled.
+    """
     from jwst_gc_pipeline.photometry import naming
-    props = {p for p, _f in naming.PER_OBS_MERGED_FIELDS}
-    assert '2221' in props
-    assert ('2221', '002') not in naming.PER_OBS_MERGED_FIELDS
-    # and the whole-proposal set must not have grown to cover it
+    for pair in (('1182', '004'), ('2221', '001'), ('2221', '002')):
+        assert pair not in naming.PER_OBS_MERGED_FIELDS, pair
     assert '2221' not in naming.PER_OBS_MERGED_PROPOSALS
     assert '1182' not in naming.PER_OBS_MERGED_PROPOSALS
+
+
+def test_the_multi_tile_proposals_are_untouched():
+    """The mechanism still tokens the fields that genuinely need it."""
+    from jwst_gc_pipeline.photometry.naming import merged_catalog_obs_token
+    assert merged_catalog_obs_token('2211', '028') == '_o028'    # gc2211 pointings
+    assert merged_catalog_obs_token('10678', '001') == '_o001'   # gc-treasury tiles
 
 
 # --- a LIST proposal_prefix must survive the observations branch ------------

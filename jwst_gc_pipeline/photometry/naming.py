@@ -216,9 +216,20 @@ PER_OBS_MERGED_PROPOSALS = ('10678', '2211')
 #: catalogs to `_o002`, which `COMBINED_RE` does not match, taking cloudc from
 #: shipping a combined catalog to shipping none -- the exact failure this fixes
 #: for brick, inflicted on a field that never had it.
+# NOTE brick is deliberately ABSENT.  #597 put it here to stop its two
+# proposals overwriting one cross-band catalog, but this tuple drives the
+# MODULE-slot token, which lands on every PER-FILTER merged catalog as well --
+# and brick's per-filter names never collided, because its two proposals have
+# DISJOINT filters (1182 = F115W/F200W/F356W/F444W, 2221 = F182M/F187N/F212N/
+# F405N/F410M/F466N).  Tokening them only renamed 796 existing products out from
+# under the m7 crossband seed, whose input glob then matched nothing and killed
+# the chain (#625/#620).  The cross-band products it was protecting are already
+# per-observation on disk -- basic_..._m8_o001.fits (2026-08-02) and _o004
+# (2026-08-29) both predate the #597 merge (2026-09-01) -- and stage_release
+# separates the two proposals through its own `observations` config and a
+# filename regex, never through this token.  So the protection stands without
+# the entry, and adding brick back here requires migrating the catalogs first.
 PER_OBS_MERGED_FIELDS = (
-    ('1182', '004'),   # brick, the 4-band half
-    ('2221', '001'),   # brick, the 6-band half
 )
 
 #: What a ``field`` may look like inside an observation token: an observation
