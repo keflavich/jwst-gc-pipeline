@@ -300,6 +300,8 @@ around the visit consensus, re-measured every re-tie iteration.
 | 6778 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F187N | ngc6334 (Cat's Paw); unregistered until 2026-09-01, so every exposure of both its proposals stayed on the raw `assign_wcs` frame -- the 2026-07-10 audit measured 61-67 mas per-filter offsets. No offsets table existed, so the bulk bootstraps from the m2 re-tie |
 | 7213 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F182M | ngc6334, the SECOND proposal over the same sky as 6778; separate row because `reference_frame` is per-proposal (it names the offsets table) |
 | 1334 | all | **Gaia** | `RECORDED_BULK` + jitter | — | M92 (o001), pure per-visit shift; same `consensus_jitter` reason as 1979 |
+| 9438 | 005, 006 | VIRAC2 | `TABLE_CONSENSUS` | F210M | Schlafly, the two pointings INSIDE the VVV bulge -- o005 = G007.470+00.050 (l=+7.46) and o006 = crowded_l3 (l=+3.00). Their refcats are VIRAC2-dominated (49502/2720 and 44392/3541), so they tie to VIRAC2 like the GC fields. Consensus rather than locked because 9438 is new: no region entry, no locked table, so the m2 checkpoint seeds one |
+| 9438 | 001, 002, 003, 004, 007 | **Gaia** | `TABLE_CONSENSUS` | F210M | Schlafly, the five pointings OUTSIDE the VVV footprint (l = 20, 28, 33, 41, 54), so Gaia is both frame and catalog -- the w51/wd1/wd2 regime. Expect its caveats: against a Gaia-only refcat the per-tile map is noise and measure_reference_tie falls back to same-star (#411, #263) |
 
 Keep this table in step with `ALIGNMENT_CONFIG`; the module's own docstrings carry
 the per-field provenance (`notes=`).
