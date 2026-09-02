@@ -219,6 +219,14 @@ PER_OBS_MERGED_PROPOSALS = ('10678', '2211')
 PER_OBS_MERGED_FIELDS = (
     ('1182', '004'),   # brick, the 4-band half
     ('2221', '001'),   # brick, the 6-band half
+    # m4: 1979 observations 002 and 003 ("M-4-shift") are SEPARATE SKY -- their
+    # pointings are 174" apart, wider than a NIRCam module -- and they share the
+    # single `m4/` tree.  Untokened, both write
+    # `f150w2_merged_indivexp_merged_m2_dao_basic.fits`, so whichever runs last
+    # silently replaces the other's catalog.  Unlike brick's pair this is one
+    # proposal imaging two places, which is why it keys on (proposal, obs).
+    ('1979', '002'),   # m4
+    ('1979', '003'),   # m4, the shifted pointing
 )
 
 #: What a ``field`` may look like inside an observation token: an observation
