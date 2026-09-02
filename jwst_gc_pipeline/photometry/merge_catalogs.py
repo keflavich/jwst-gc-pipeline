@@ -2660,11 +2660,13 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
         # keep the filter list in sync with obs_filters so shared code paths
         # (sickle/sgrb2/etc.) don't KeyError on filters that aren't listed.
         radius = {# short-wave (< ~2.5 um)
+                  'f070w': 0.55*u.arcsec,   # 9438 (Schlafly) Galactic plane
                   'f090w': 0.55*u.arcsec,
                   'f115w': 0.55*u.arcsec,
                   'f140m': 0.55*u.arcsec,
                   'f150w': 0.55*u.arcsec,
                   'f150w2': 0.55*u.arcsec,
+                  'f158m': 0.55*u.arcsec,   # NIRISS SW (1.58 um), sgrc
                   'f162m': 0.55*u.arcsec,
                   'f164n': 0.55*u.arcsec,
                   'f182m': 0.55*u.arcsec,
@@ -2683,6 +2685,7 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
                   'f360m': 0.55*u.arcsec,
                   'f405n': 0.55*u.arcsec,
                   'f410m': 0.55*u.arcsec,
+                  'f430m': 0.55*u.arcsec,   # 9438 (Schlafly) Galactic plane
                   'f444w': 0.55*u.arcsec,
                   'f466n': 0.55*u.arcsec,
                   'f470n': 0.55*u.arcsec,
@@ -2782,6 +2785,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
 
     if radius is None:
         radius = {# short-wave (< ~2.5 um)
+                  'f070w': 0.05*u.arcsec,   # 9438 (Schlafly) Galactic plane
                   'f090w': 0.05*u.arcsec,   # globular clusters (Anderson co-I)
                   'f150w2': 0.05*u.arcsec,  # wide SW
                   'f322w2': 0.1*u.arcsec,   # wide LW
@@ -2806,6 +2810,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f360m': 0.1*u.arcsec,
                   'f405n': 0.1*u.arcsec,
                   'f410m': 0.1*u.arcsec,
+                  'f430m': 0.1*u.arcsec,    # 9438 (Schlafly) Galactic plane
                   'f444w': 0.1*u.arcsec,
                   'f466n': 0.1*u.arcsec,
                   'f470n': 0.1*u.arcsec,
@@ -2821,7 +2826,19 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f1800w': 0.35*u.arcsec,
                   'f2100w': 0.4*u.arcsec,
                   'f2550w': 0.5*u.arcsec,
-                  }[filtername]
+                  }
+    if filtername not in radius:
+        # A bare KeyError here surfaces only AFTER the fan-out has run, so it
+        # costs hours to learn a band simply has no entry (9438's F070W).
+        # `flag_near_saturated` already names the band and its table; do the
+        # same here.  NOTE the two tables are NOT the same map -- flagging uses
+        # 0.55" for every NIRCam band, this one uses 0.05" SW / 0.1" LW.
+        raise KeyError(
+            f"replace_saturated: no saturated-star match radius for "
+            f"{filtername!r}.  Add it to the radius map in "
+            f"merge_catalogs.replace_saturated (short-wave 0.05\", "
+            f"long-wave 0.1\").  Known: {sorted(radius)}")
+    radius = radius[filtername]
 
     filtername_meta = cat.meta.get('filter', filtername)
     zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername_meta)]['ZeroPoint'], u.Jy)
