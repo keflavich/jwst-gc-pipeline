@@ -650,7 +650,12 @@ def test_ambiguous_consensus_row_names_the_table_and_frame(tmp_path):
     ('2092', '002', 'consensus'),   # cloudef obs002: constant bulk + table jitter
     ('1182', '004', 'locked'),
     ('6151', '001', 'consensus'),   # w51: no table yet, checkpoint seeds one
-    ('1334', '001', 'none'),        # halo cluster: whole tie is a constant
+    # halo clusters: the BULK stays a hand-measured constant, but the
+    # per-exposure jitter is table-driven (`consensus_jitter`), so the
+    # checkpoint has somewhere to write.  With 'none' the m2 checkpoint
+    # refused its own measured corrections and the m12 finalize stopped.
+    ('1334', '001', 'consensus'),   # m92
+    ('1979', '002', 'consensus'),   # m4
     ('9999', '001', 'none'),        # unconfigured
 ])
 def test_checkpoint_writes_where_the_reducer_reads(proposal, field, expect):
