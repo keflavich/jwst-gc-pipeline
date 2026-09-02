@@ -88,3 +88,27 @@ def test_fanout_memory_is_untouched():
     """Fan-out is per-shard; only the finalize merges the whole field."""
     text = SCRIPT.read_text()
     assert re.search(r'FANOUT_MEM=\$\{FANOUT_MEM:-\d+gb\}', text)
+
+
+def test_a_missing_data_tree_does_not_abort_the_submit():
+    """The driver runs under `set -euo pipefail`.
+
+    `ls` exits non-zero when its glob matches nothing, so a bare
+    `ls ... | wc -l` killed the whole submit on any host without the data tree
+    -- CI, a fresh checkout, a new field before its first reduce.  The count
+    must swallow that status and fall to the smallest tier.
+    """
+    src = SCRIPT.read_text()
+    assert "set -euo pipefail" in src, "premise: the driver still uses set -e"
+    block = src[src.index("FINALIZE MEMORY SCALES WITH THE FIELD"):]
+    block = block[:block.index("FINALIZE_TIME")]
+    assert "|| true; } | wc -l" in block, (
+        "the crf count must not abort the submit when the tree is absent")
+
+
+def test_the_count_is_scoped_to_this_target():
+    """A glob over the whole archive would size every field by the largest."""
+    src = SCRIPT.read_text()
+    block = src[src.index("FINALIZE MEMORY SCALES WITH THE FIELD"):]
+    block = block[:block.index("FINALIZE_TIME")]
+    assert '/$TARGET"' in block

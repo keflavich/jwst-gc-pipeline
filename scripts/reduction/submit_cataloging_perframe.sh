@@ -72,8 +72,13 @@ FINALIZE_CPUS=${FINALIZE_CPUS:-4}
 # Fan-out is per-shard and unaffected.  FINALIZE_MEM in the environment still
 # wins, so a one-off can override without editing this.
 if [ -z "${FINALIZE_MEM:-}" ]; then
-    _crf_count=$(ls "${BASEPATH:-/orange/adamginsburg/jwst}/$TARGET"/*/pipeline/*crf.fits \
-                 2>/dev/null | wc -l)
+    # `ls` exits non-zero when the glob matches nothing, and this script runs
+    # under `set -euo pipefail`, so a bare `ls ... | wc -l` ABORTS the whole
+    # submit on any host without the data tree -- which is exactly CI.  Swallow
+    # the status inside the pipeline so a missing tree counts 0 and falls to the
+    # smallest tier instead of killing the run.
+    _crf_count=$({ ls "${BASEPATH:-/orange/adamginsburg/jwst}/$TARGET"/*/pipeline/*crf.fits \
+                   2>/dev/null || true; } | wc -l)
     if   [ "$_crf_count" -ge 1000 ]; then FINALIZE_MEM=256gb
     elif [ "$_crf_count" -ge 200 ];  then FINALIZE_MEM=128gb
     else                                  FINALIZE_MEM=64gb
