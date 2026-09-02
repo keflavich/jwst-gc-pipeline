@@ -54,6 +54,32 @@ FANOUT_CPUS=${FANOUT_CPUS:-2}
 FANOUT_MEM=${FANOUT_MEM:-32gb}
 FANOUT_TIME=${FANOUT_TIME:-12:00:00}
 FINALIZE_CPUS=${FINALIZE_CPUS:-4}
+
+# FINALIZE MEMORY SCALES WITH THE FIELD (issue #611).  A flat 64gb was the same
+# request for sgrb2 -- 1540 crf over 16 filters, merging 14.2M detections -- as
+# for m92's 80.  sgrb2's m3-finalize was OOM-killed at 64gb (accounting recorded
+# MaxRSS 155G) and the kill landed *inside* a multiprocessing queue write, so the
+# survivors deadlocked and the job sat at ~0 CPU for 44 h before anyone looked;
+# the afterok chain behind it died with it.  It completed in 12 h 26 at 256gb.
+#
+# The merge is per-field-size, so size the request the same way.  crf count is
+# the proxy available at submit time, and it tracks the merge's real input:
+#
+#     m92 80 / ngc6397 120 / m4 150 / arches 110      -> 64gb   (m92 ran at 96)
+#     sgrc 240 / sickle 536 / cloudef 640 / wd1 696   -> 128gb
+#     w51 1120 / cloudc 1208 / sgrb2 1540 / brick 2016 -> 256gb (sgrb2 measured)
+#
+# Fan-out is per-shard and unaffected.  FINALIZE_MEM in the environment still
+# wins, so a one-off can override without editing this.
+if [ -z "${FINALIZE_MEM:-}" ]; then
+    _crf_count=$(ls "${BASEPATH:-/orange/adamginsburg/jwst}/$TARGET"/*/pipeline/*crf.fits \
+                 2>/dev/null | wc -l)
+    if   [ "$_crf_count" -ge 1000 ]; then FINALIZE_MEM=256gb
+    elif [ "$_crf_count" -ge 200 ];  then FINALIZE_MEM=128gb
+    else                                  FINALIZE_MEM=64gb
+    fi
+    echo "finalize memory: $FINALIZE_MEM (${_crf_count} crf under $TARGET)"
+fi
 FINALIZE_MEM=${FINALIZE_MEM:-64gb}
 FINALIZE_TIME=${FINALIZE_TIME:-12:00:00}
 
