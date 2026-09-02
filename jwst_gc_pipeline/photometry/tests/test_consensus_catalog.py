@@ -328,8 +328,25 @@ def test_a_filter_offset_from_the_reference_is_measured(tmp_path):
 # The registry and the formula must give the same answer.
 # --------------------------------------------------------------------------
 
-def _registry_filters(proposal):
+def _registry_filters(proposal, obs=None):
+    """The proposal's filters, scoped to ``obs``'s instrument when it can be.
+
+    `fields.yaml` carries one flat filter list per proposal, so `obs_filters`
+    returns the same union for every instrument.  Ranking over that union can
+    choose a band the observation never took -- and `promote_reference_filter`
+    resolves the chosen band's consensus under the OBSERVATION's token, so such
+    a choice names a file that cannot exist (sickle: F210M is NIRCam obs 007,
+    F770W is MIRI obs 001-002, and neither token has the other's bands).
+
+    Falls back to the union when the observation's instrument is ambiguous --
+    sgrb2's obs 001 is registered under both nircam and miri -- so nothing that
+    was checkable before stops being checked.
+    """
     from jwst_gc_pipeline import fields as fields_mod
+    if obs:
+        scoped = fields_mod.filters_for_observation(None, proposal, obs)
+        if scoped:
+            return scoped
     out = set()
     for instrument in ('nircam', 'miri', 'niriss'):
         for by_proposal in fields_mod.obs_filters(instrument).values():
@@ -346,7 +363,8 @@ def test_a_hand_set_reference_filter_is_one_the_field_actually_observes():
     for entry in ac.ALIGNMENT_CONFIG:
         if not entry.reference_filter:
             continue
-        available = _registry_filters(entry.proposal)
+        available = _registry_filters(
+            entry.proposal, (entry.fields or (None,))[0])
         if not available:
             continue          # proposal not in fields.yaml; nothing to check
         assert entry.reference_filter.upper() in available, (
@@ -362,7 +380,8 @@ def test_the_formula_reproduces_the_hand_set_reference_filters():
     for entry in ac.ALIGNMENT_CONFIG:
         if not entry.reference_filter:
             continue
-        available = _registry_filters(entry.proposal)
+        available = _registry_filters(
+            entry.proposal, (entry.fields or (None,))[0])
         if not available:
             continue
         computed = reference_filter(available)

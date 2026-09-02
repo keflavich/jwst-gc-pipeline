@@ -43,14 +43,15 @@ def test_miri_shares_the_nircam_frame(field):
 
 
 @pytest.mark.parametrize("field", MIRI_FIELDS)
-def test_miri_anchor_matches_the_formula_and_the_nircam_entry(field):
-    """`consensus_catalog.reference_filter` answers F210M for 3958's bands.
+def test_miri_anchor_is_f770w_and_differs_from_nircam(field):
+    """The anchor is per OBSERVATION; the two tokens have disjoint bands.
 
-    Sharing the anchor with the NIRCam entry is the point: it names the band
-    whose consensus defines the FIELD's internal frame, so both instruments tie
-    to the same one.
+    `promote_reference_filter` resolves the anchor's consensus under the
+    observation's token, and F210M is not observed in 001/002 -- so
+    `f210m_o001-002_consensus.fits` can never exist and an F210M anchor here
+    would raise on a checkpoint that cannot run.
     """
-    assert AC.resolve("3958", field).reference_filter == "F210M"
+    assert AC.resolve("3958", field).reference_filter == "F770W"
     assert AC.resolve("3958", "007").reference_filter == "F210M"
 
 
@@ -81,3 +82,55 @@ def test_sickle_yaml_still_registers_the_joint_miri_field():
     doc = yaml.safe_load(FIELDS_YAML.read_text())
     obs = doc["fields"]["sickle"]["observations"]["3958"]
     assert "001-002" in (obs.get("joint_obsids") or {}).get("miri", [])
+
+
+# --------------------------------------------------------------------------
+# The anchor is per OBSERVATION, not per field.
+# --------------------------------------------------------------------------
+
+def test_the_two_sickle_tokens_have_disjoint_bands():
+    """Which is why one anchor cannot serve both instruments.
+
+    ``promote_reference_filter`` resolves the anchor's consensus under the
+    observation's token, so an anchor must be a band that observation took.
+    """
+    from jwst_gc_pipeline.fields import filters_for_observation
+
+    nircam = set(filters_for_observation("sickle", "3958", "007"))
+    miri = set(filters_for_observation("sickle", "3958", "001-002"))
+    assert nircam and miri
+    assert not (nircam & miri), "the two tokens share a band after all"
+    assert "F210M" in nircam and "F210M" not in miri
+    assert "F770W" in miri and "F770W" not in nircam
+
+
+@pytest.mark.parametrize("obs,expected", [
+    ("007", "F210M"),        # NIRCam
+    ("001-002", "F770W"),    # MIRI, the joint field
+    ("001", "F770W"),
+])
+def test_the_formula_agrees_once_scoped_to_the_observation(obs, expected):
+    """Unscoped, the ranking sees all eight bands and answers F210M for both."""
+    from jwst_gc_pipeline.fields import filters_for_observation
+    from jwst_gc_pipeline.photometry.consensus_catalog import reference_filter
+
+    assert reference_filter(
+        filters_for_observation("sickle", "3958", obs)).upper() == expected
+
+
+def test_scoping_declines_rather_than_guesses_when_ambiguous():
+    """sgrb2 registers obs 001 under BOTH nircam and miri.
+
+    Returning one instrument's bands there would be a guess, so the helper
+    returns nothing and its callers fall back to the union they used before.
+    """
+    from jwst_gc_pipeline.fields import filters_for_observation
+    assert filters_for_observation("sgrb2", "5365", "001") == []
+
+
+def test_scoping_picks_the_field_that_registers_the_observation():
+    """3958 appears under sickle AND brick; 003 is brick's MIRI, not sickle's."""
+    from jwst_gc_pipeline.fields import filters_for_observation
+    assert filters_for_observation(None, "3958", "001-002") == ["F1130W", "F1500W", "F770W"]
+    assert filters_for_observation(None, "3958", "007")
+    assert AC.resolve("3958", "003") is None

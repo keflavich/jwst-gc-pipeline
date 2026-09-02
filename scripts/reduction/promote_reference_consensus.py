@@ -44,13 +44,24 @@ def _filters_on_disk(basepath, token):
     return out
 
 
-def _filters_from_registry(field_name, proposal_id=None):
-    """The field's filters from ``fields.yaml``, across every instrument.
+def _filters_from_registry(field_name, proposal_id=None, obs=None):
+    """The field's filters from ``fields.yaml``.
 
     Scoped to one proposal when given: a target observed by two proposals
     (ngc6334 6778/7213) has two independent reference catalogs, not one.
+
+    Scoped further to ``obs``'s instrument when that is unambiguous.  The
+    registry holds ONE flat filter list per proposal, so without this the
+    ranking can pick a band the observation never took -- and the consensus it
+    then looks for is written under the observation's own token, so the file
+    cannot exist.  sickle is the case: obs 007 is NIRCam (F210M), obs 001-002 is
+    MIRI (F770W), and neither token carries the other's bands.
     """
     from jwst_gc_pipeline import fields as fields_mod
+    if obs and proposal_id:
+        scoped = fields_mod.filters_for_observation(field_name, proposal_id, obs)
+        if scoped:
+            return scoped
     out = []
     for instrument in ('nircam', 'miri', 'niriss'):
         by_proposal = fields_mod.obs_filters(instrument).get(field_name, {})
@@ -85,7 +96,11 @@ def main(argv=None):
     elif args.from_disk:
         filters, source = _filters_on_disk(args.basepath, token), 'consensus catalogs on disk'
     elif args.field_name:
-        filters = _filters_from_registry(args.field_name, args.proposal_id)
+        # The obs token is what `promote_reference_filter` resolves the
+        # chosen band's consensus under, so the ranking must see the same
+        # observation.
+        filters = _filters_from_registry(args.field_name, args.proposal_id,
+                                         obs=args.obsid)
         source = 'fields.yaml'
     else:
         p.error('need one of --filter, --from-disk or --field-name')

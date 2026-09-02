@@ -462,7 +462,13 @@ def test_alignment_config_table_matches_code():
         if not re.fullmatch(r'\d{4,5}', _plain(cells[0])):
             continue  # header or legend row
         assert len(cells) >= 5, f'field-table row has {len(cells)} cells: {cells}'
-        obs = ','.join(sorted(re.findall(r'\d{3}', cells[1]))) or _plain(cells[1]).lower()
+        # A JOINT observation is one field spelled '001-002' (sickle's MIRI
+        # obs 001+002 are cataloged together), and that is how
+        # `entry.fields` spells it.  A bare `\d{3}` split it into two
+        # separate observations, so a joint field could not be documented
+        # in this table at all -- match the hyphenated form as one token.
+        obs = ','.join(sorted(re.findall(r'\d{3}(?:-\d{3})*', cells[1]))) \
+            or _plain(cells[1]).lower()
         source = _plain(cells[3]).lower().replace(' ', '')
         documented.add((_plain(cells[0]), obs, _plain(cells[2]).lower(), source,
                         _plain(cells[4]).upper()))

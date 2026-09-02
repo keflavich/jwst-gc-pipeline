@@ -384,11 +384,20 @@ ALIGNMENT_CONFIG = (
     #
     # Frame is VIRAC2, matching the NIRCam entry -- the two instruments observe
     # the same sky and a MIRI tie to a different frame would put the field's own
-    # bands in disagreement.  Anchor is F210M, which `consensus_catalog.
-    # reference_filter` picks for 3958 across BOTH instruments' bands, and which
-    # the NIRCam entry already uses.  Sharing it is correct rather than
-    # accidental: reference_filter names the band whose consensus defines the
-    # FIELD's internal frame, so MIRI ties to the same band NIRCam does.
+    # bands in disagreement.
+    #
+    # Anchor is F770W, and it CANNOT be the NIRCam entry's F210M.
+    # `promote_reference_filter` resolves the anchor's consensus under the
+    # OBSERVATION's token, and obs 001/002 are MIRI-only:
+    #
+    #     _o007       f210m_o007_consensus.fits        exists
+    #     _o001-002   f770w_o001-002_consensus.fits    exists
+    #                 f210m_o001-002_consensus.fits    cannot exist -- F210M is
+    #                                                  not observed in 001/002
+    #
+    # An F210M anchor here would raise FileNotFoundError on a checkpoint that can
+    # never run.  The anchor is per OBSERVATION, not per field: the two tokens
+    # have disjoint band sets.
     #
     # obs 003 is NOT here on purpose.  Those frames live in the sickle tree but
     # 3958/003 is registered to BRICK in fields.yaml (obsids miri: ['003']), and
@@ -397,7 +406,7 @@ ALIGNMENT_CONFIG = (
     FieldAlignment(
         proposal='3958', fields=('001-002', '001', '002'),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
-        reference_filter='F210M',
+        reference_filter='F770W',
         notes=('sickle MIRI (F770W/F1130W/F1500W, obs 001+002 jointly '
                'registered as 001-002; 10 crf per band). Registered 2026-09-01 '
                'after the m2 checkpoint refused to route 6 measured corrections '
