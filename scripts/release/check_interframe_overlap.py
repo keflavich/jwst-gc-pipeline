@@ -1736,7 +1736,19 @@ def main(argv=None):
         # from could-not-verify (pairs existed, nothing could arbitrate them)
         # and from a pass (pairs existed and agreed).  Kept separate so a
         # reader totalling green gates does not count it (#572).
-        if not r.get("n_overlapping"):
+        #
+        # `== 0`, never a falsy `not r.get(...)`: only the FULL result carries
+        # `n_overlapping`.  All four early returns omit the key -- crf on disk
+        # and none parseable, no crf matched, no detections, single
+        # exposure-group -- so a falsy test read that ABSENCE as a measured
+        # zero and listed a band that died on a NAME PATTERN or on missing
+        # products under a summary blaming module-split geometry, a cause that
+        # did not occur.  That is the #393 `elif` confusion arrived at from a
+        # third side, and it lands on exactly the bands whose next move is to
+        # check the naming or the glob.  An absent key means the band never got
+        # far enough to compare anything; it keeps its own verdict and stays
+        # out of this list.
+        if r.get("n_overlapping") == 0:
             no_coverage.append(r["filt"])
     # Say plainly when the gate measured nothing.  The exit code stays 0 --
     # on a single-visit module-split field the geometry will NEVER produce
