@@ -44,6 +44,8 @@ from jwst_gc_pipeline.photometry.naming import (
 from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
+from jwst_gc_pipeline.photometry.requested_filters import (
+    assert_requested_filters_have_frames)
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
 from jwst_gc_pipeline.atomic_io import write_table_atomic
@@ -5204,6 +5206,37 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
 
     orig_last_phase = phases[-1]
 
+    # --- requested-filter preflight (issue #592) ------------------------------
+    # Scan every requested filter's candidate frames ONCE, before any phase runs,
+    # and refuse a filter that resolves to zero.  This used to be discovered only
+    # by the finalize job's `no {filt}/{module} frames produced output` raise
+    # below, which fires after the whole fan-out array has already run: wd1's
+    # F150W (frames on disk as `o001_crf`, requested as `destreak_o001_crf`) cost
+    # ~10 h of array time across 32 shards, each printing `0 of 0 frames ...
+    # nothing to fit` and exiting 0, before the finalize noticed.  The distinction
+    # that decides raise-vs-skip lives in `requested_filters`: frames on disk
+    # under another lineage, or a filter fields.yaml declares for this
+    # observation, are errors; a band the observation never took is skipped.
+    # A per-VISIT or per-MODULE empty stays legitimate (allow_empty=True below,
+    # and a module a filter does not cover); only zero across all of them fails.
+    _preflight_frames = {}
+    for _filt in filternames:
+        for _mod in modules:
+            _cf = []
+            for _vid in range(1, nvisits[proposal_id][target] + 1):
+                _cf.extend(sorted(_L.get_filenames(
+                    basepath, _filt, proposal_id, field,
+                    visitid=f'{_vid:03d}',
+                    each_suffix=_resolve_each_suffix(options, _filt),
+                    module=_mod, pupil='clear', allow_empty=True)))
+            _preflight_frames[(_mod, _filt)] = _cf
+    assert_requested_filters_have_frames(
+        {_filt: sum(len(_preflight_frames[(_mod, _filt)]) for _mod in modules)
+         for _filt in filternames},
+        target=target, proposal_id=proposal_id, field=field, basepath=basepath,
+        each_suffix_for=lambda _f: _resolve_each_suffix(options, _f),
+        label='manual preflight')
+
     start_phase = (getattr(options, 'manual_start_phase', '') or '').strip()
     # Explicit ordering guard: with both set, start must not come after stop.
     # Without this the downstream slice (phases[_si:] then stop check) only
@@ -5550,13 +5583,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
 
                 # candidate frames (scan on first phase, cache thereafter)
                 if phase == phases[0]:
-                    candidate_frames = []
-                    for visitid in range(1, nvisits[proposal_id][target] + 1):
-                        candidate_frames.extend(sorted(_L.get_filenames(
-                            basepath, filt, proposal_id, field,
-                            visitid=f'{visitid:03d}',
-                            each_suffix=_resolve_each_suffix(options, filt),
-                            module=module, pupil='clear', allow_empty=True)))
+                    # Same scan the preflight above already ran (same basepath,
+                    # each_suffix, module and visit sweep); reuse it rather than
+                    # globbing every filter's pipeline directory a second time.
+                    candidate_frames = list(_preflight_frames[(module, filt)])
                 else:
                     candidate_frames = frame_cache.get((module, filt), [])
 
