@@ -55,18 +55,28 @@ def test_only_an_exact_1_overrides(monkeypatch, value):
     assert A._checkpoint_passed([], [CLOUDC]) is expected
 
 
-def test_the_two_blocking_sites_feed_the_blocking_list():
+def test_the_blocking_sites_feed_the_blocking_list():
     """Only the MEASURED-AND-REFUSED sites may block.  Pinned by source because
     the alternative -- a string-matched severity -- would silently reclassify
-    an entry whenever someone reworded a message."""
+    an entry whenever someone reworded a message.
+
+    The count is a tripwire: raising it is a deliberate act, and the third site
+    (DETECTOR-ANTISYMMETRIC, issue #624) was added deliberately.  The module
+    guard buckets an exposure's detectors by ``module_family`` and tests only a
+    group splitting into exactly two families, so an alias BETWEEN TWO
+    DETECTORS OF ONE MODULE averages toward ~0 and clears it -- ngc6334 read
+    equal-and-opposite +/-22.9" that way and its recorded run passed with
+    ``n_antisymmetric: 0``.  Same measured-and-refused character as the other
+    two: a number was measured and the correction refused.
+    """
     import inspect
     src = inspect.getsource(A)
-    assert src.count('unverified_blocking.append(') == 2, (
-        'exactly two sites are measured-and-refused: MODULE-ANTISYMMETRIC and '
-        'the untrustworthy consensus->reference tie')
-    # both must ALSO appear in the full unverified list, or they stop being
+    assert src.count('unverified_blocking.append(') == 3, (
+        'exactly three sites are measured-and-refused: MODULE-ANTISYMMETRIC, '
+        'DETECTOR-ANTISYMMETRIC and the untrustworthy consensus->reference tie')
+    # each must ALSO appear in the full unverified list, or they stop being
     # reported at all
-    assert src.count('unverified.append(unverified_blocking[-1])') == 2
+    assert src.count('unverified.append(unverified_blocking[-1])') == 3
 
 
 def test_could_not_measure_is_still_a_PASS():
