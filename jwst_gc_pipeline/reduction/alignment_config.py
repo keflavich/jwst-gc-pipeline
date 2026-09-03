@@ -453,6 +453,16 @@ ALIGNMENT_CONFIG = (
     FieldAlignment(
         proposal='1979', fields=None,
         reference_frame=GAIA, source=RECORDED_BULK,
+        # The recorded bulk is a hand-measured CONSTANT, so it has no
+        # exposure axis and `offsets_channel` returned 'none' -- with which
+        # the m2 checkpoint REFUSES to write the per-exposure corrections it
+        # measures, because they would land in a table fix_alignment never
+        # reads.  That refusal blocked this field's m12 finalize outright.
+        # `consensus_jitter` routes ONLY the small per-exposure term to the
+        # consensus table and leaves the recorded bulk untouched, which is
+        # exactly what a hand-measured-bulk field needs.  cloudef 2092/002 is
+        # the precedent already in this file.
+        consensus_jitter=True,
         visit_key='full', dec_ref_deg=-26.427, warn_on_missing=True,
         recorded_bulk={
             ('jw01979002001', 'F150W2'): BulkEntry(104.7, -180.3, onsky_mas=True),
@@ -516,6 +526,16 @@ ALIGNMENT_CONFIG = (
     FieldAlignment(
         proposal='1334', fields=None,
         reference_frame=GAIA, source=RECORDED_BULK,
+        # The recorded bulk is a hand-measured CONSTANT, so it has no
+        # exposure axis and `offsets_channel` returned 'none' -- with which
+        # the m2 checkpoint REFUSES to write the per-exposure corrections it
+        # measures, because they would land in a table fix_alignment never
+        # reads.  That refusal blocked this field's m12 finalize outright.
+        # `consensus_jitter` routes ONLY the small per-exposure term to the
+        # consensus table and leaves the recorded bulk untouched, which is
+        # exactly what a hand-measured-bulk field needs.  cloudef 2092/002 is
+        # the precedent already in this file.
+        consensus_jitter=True,
         visit_key='full', dec_ref_deg=43.139, warn_on_missing=True,
         recorded_bulk={
             ('jw01334001001', 'F090W'): BulkEntry(-1832.1, -708.2, onsky_mas=True),

@@ -296,10 +296,10 @@ around the visit consensus, re-measured every re-tie iteration.
 | 2092 | 002 | VIRAC2 | `RECORDED_BULK` + jitter | F210M | cloudef obs 002 |
 | 3958 | 007 | VIRAC2 | `TABLE_LOCKED` | F210M | sickle; re-tied to VIRAC2 2026-08-04, GNS numbers deliberately NOT carried over |
 | 3958 | 001, 001-002, 002 | VIRAC2 | `TABLE_CONSENSUS` | F770W | sickle MIRI (obs 001+002, jointly registered as 001-002). The NIRCam entry above covers only obs 007, which left MIRI with no correction channel and stopped its m12 finalize at the m2 checkpoint. Consensus because the authored VIRAC2locked table is NIRCam-only. obs 003 belongs to brick |
-| 1979 | all | **Gaia** | `RECORDED_BULK` | — | M4 (o002 + o003), halo cluster outside VVV |
+| 1979 | all | **Gaia** | `RECORDED_BULK` + jitter | — | M4 (o002 + o003), halo cluster outside VVV. `consensus_jitter` routes only the per-exposure term to the consensus table; the hand-measured bulk stays fixed. Without it `offsets_channel` was `none`, and the m2 checkpoint refused to write its measured corrections, which blocked the m12 finalize outright |
 | 6778 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F187N | ngc6334 (Cat's Paw); unregistered until 2026-09-01, so every exposure of both its proposals stayed on the raw `assign_wcs` frame -- the 2026-07-10 audit measured 61-67 mas per-filter offsets. No offsets table existed, so the bulk bootstraps from the m2 re-tie |
 | 7213 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F182M | ngc6334, the SECOND proposal over the same sky as 6778; separate row because `reference_frame` is per-proposal (it names the offsets table) |
-| 1334 | all | **Gaia** | `RECORDED_BULK` | — | M92 (o001), pure per-visit shift |
+| 1334 | all | **Gaia** | `RECORDED_BULK` + jitter | — | M92 (o001), pure per-visit shift; same `consensus_jitter` reason as 1979 |
 
 Keep this table in step with `ALIGNMENT_CONFIG`; the module's own docstrings carry
 the per-field provenance (`notes=`).
