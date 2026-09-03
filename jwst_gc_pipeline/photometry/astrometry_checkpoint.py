@@ -2346,6 +2346,33 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername, vgroup=Non
     return dra, ddec
 
 
+def _bulk_vgroups(exposures):
+    """One representative Vgroup per OBSERVATION in a visit consensus.
+
+    A consensus->reference correction is the per-VISIT bulk tie and carries no
+    exposure and no module, so before this it carried no Vgroup either.  That
+    is fine for a single-observation run, where
+    ``_observation_for_correction`` reads the observation off the field.  A
+    JOINT run ('001-002') cannot: the field names several observations, and a
+    bulk row with no Vgroup makes that helper fall back to the field, so
+    ``assert_visit_token`` refuses ``jw03958001-002001``.
+
+    Returning one Vgroup per observation makes the caller emit one bulk row per
+    observation, each resolving to its own visit token.  A consensus covering a
+    single observation yields exactly one Vgroup, so single-observation fields
+    emit the one row they always did.  ``None`` is returned when no exposure
+    carries a parseable Vgroup, which reproduces the previous behaviour (and
+    the previous refusal) rather than inventing an observation.
+    """
+    seen = {}
+    for e in exposures:
+        key = e.get("key") or ()
+        vg = str(key[4]) if len(key) > 4 and key[4] else ""
+        if len(vg) >= 8 and vg[:3].isdigit():
+            seen.setdefault(vg[:3], vg)
+    return [vg for _, vg in sorted(seen.items())] or [None]
+
+
 def _observation_for_correction(field, corr):
     """The 3-digit observation this correction's frames belong to.
 
@@ -3820,13 +3847,30 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 if ref_tie["apply_ok"]:
                     if correcting:
                         dec_mid = float(np.median(cons["coords"].dec.deg))
-                        corrections.append(dict(
-                            visit=corr_visit, exposure=None, module=None,
-                            filtername=filt,
-                            dra_onsky_mas=ref_tie["dra_mas"],
-                            ddec_onsky_mas=ref_tie["ddec_mas"],
-                            dec_deg=dec_mid,
-                            source=f"{stage} {REFERENCE_TIE_SOURCE_SUFFIX}"))
+                        # The bulk tie applies to EVERY exposure of this
+                        # visit/filter.  In a JOINT run those exposures span
+                        # more than one OBSERVATION, and the offsets table is
+                        # keyed by a visit token that embeds the observation --
+                        # so one row cannot address both.  Carry a
+                        # representative Vgroup per observation, exactly as the
+                        # per-exposure corrections above do, so
+                        # `_observation_for_correction` can resolve each row's
+                        # real observation.  Without it the row has no Vgroup,
+                        # that helper falls back to the field, and
+                        # `assert_visit_token` refuses `jw03958001-002001` --
+                        # the error the sickle joint runs kept dying on (#640
+                        # gave the per-exposure rows their Vgroup and left this
+                        # path untouched).  The written Vgroup is still the ""
+                        # sentinel: `is_bulk` forces it below, because a bulk
+                        # row is visit-wide by construction.
+                        for _vg in _bulk_vgroups(cons["exposures"]):
+                            corrections.append(dict(
+                                visit=corr_visit, exposure=None, module=None,
+                                filtername=filt, vgroup=_vg,
+                                dra_onsky_mas=ref_tie["dra_mas"],
+                                ddec_onsky_mas=ref_tie["ddec_mas"],
+                                dec_deg=dec_mid,
+                                source=f"{stage} {REFERENCE_TIE_SOURCE_SUFFIX}"))
                         print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {vctx} "
                               f"consensus is {off:.2f} mas off VIRAC2 "
                               f"(coherent dense tie, per-tile clean, no gross "
