@@ -2014,8 +2014,13 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         wcses = [frame_wcs(fn) if fn is not None else None for fn in imgfns]
 
     from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
-    _ftname = ('fwhm_table_niriss.ecsv' if _iov() == 'NIRISS' else 'fwhm_table.ecsv')
-    fwhm_tbl = Table.read(f'{basepath}/reduction/{_ftname}')
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    # PSF FWHM is an instrument constant, so the packaged table answers for any
+    # target; a field tree's own reduction/fwhm_table.ecsv still wins where it
+    # exists.  A bare `{basepath}/reduction/fwhm_table.ecsv` read raised
+    # FileNotFoundError on a NEW tree (gc-treasury has no such file, and nothing
+    # in the repo writes one) -- at m7, after the whole m12-m6 fan-out (#646).
+    fwhm_tbl = Table.read(fwhm_table_path(basepath, _iov()))
 
     for ii, tbl in enumerate(tbls):
         ww = wcses[ii] if ii < len(wcses) else None
