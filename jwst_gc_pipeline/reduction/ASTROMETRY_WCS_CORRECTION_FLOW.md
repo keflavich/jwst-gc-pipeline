@@ -258,6 +258,19 @@ and its own inline policy constants (a `_PER_VISIT_SHIFT` map and a w51 rule);
 staleness guard. Folding them
 in is follow-up work — read `alignment_config.py` as NIRCam-only.
 
+That scope is now answerable in code, because m2 has to act on it:
+`offsets_channel(proposal, field, instrument='miri')` (and `'niriss'`) returns
+`none` whatever the field declares, since neither reducer opens an offsets
+table — the two files name no offsets table, no `alignment_config` and no
+`resolve_shift` anywhere. Without the instrument the answer is unchanged, so
+every NIRCam caller reads the same table it always did. The m2 checkpoint asks
+with the instrument of the module it is merging (`mirimage` → MIRI, `nis` →
+NIRISS), so a measured MIRI correction now stops the run naming the reducer,
+instead of being seeded into `Offsets_JWST_Brick<pid>_consensus.csv` where
+nothing would read it and the next re-tie would measure the same residual.
+Until a reducer grows a table reader, a MIRI band's registration goes through
+the manual pre-step below.
+
 Each entry declares two orthogonal things:
 
 - **`reference_frame`** — WHICH absolute frame (`VIRAC2` / `Gaia` / `GNS`). GC

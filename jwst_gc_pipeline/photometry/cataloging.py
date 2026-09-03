@@ -3621,17 +3621,78 @@ def _record_pooling(record, pooled, n_before, offsets_path):
                   flush=True)
 
 
-def _astrom_offsets_channel(proposal_id, field):
+#: Module token -> instrument.  ``mirimage`` is MIRI's only module and ``nis``
+#: is NIRISS's (``run_pipeline.INSTRUMENT_MODULES``); everything else here is a
+#: NIRCam detector/module family or the ``merged`` pseudo-module.
+_MODULE_INSTRUMENT = {'mirimage': 'miri', 'nis': 'niriss'}
+
+
+def _instrument_for_module(module):
+    """Which instrument the checkpoint's ``module`` token belongs to."""
+    return _MODULE_INSTRUMENT.get(str(module).strip().lower(), 'nircam')
+
+
+def _astrom_offsets_channel(proposal_id, field, instrument=None):
     """Which offsets table THIS field is aligned from, per ``alignment_config``.
 
     Thin delegate: the mapping lives in ``alignment_config.offsets_channel`` so
     the re-tie loop can ask the same question without importing this module.
+
+    ``instrument`` matters because ``alignment_config`` is read by the NIRCam
+    reducer alone: ``PipelineMIRI.fix_alignment`` and
+    ``PipelineRerunNIRISS.fix_alignment`` open no offsets table, so a field's
+    channel is not theirs to inherit.  Passing it makes those instruments
+    answer ``'none'`` and the caller refuse, instead of writing rows nothing
+    reads.  Omitting it keeps the previous answer for every other call site.
     """
     from jwst_gc_pipeline.reduction.alignment_config import offsets_channel
-    return offsets_channel(proposal_id, field)
+    return offsets_channel(proposal_id, field, instrument=instrument)
 
 
-def _astrom_find_offsets_table(basepath, proposal_id, field=None):
+def _astrom_no_channel_error(merge_label, module, filt, proposal_id, field,
+                             instrument, n_corrections):
+    """The error for measured corrections that have nowhere to go.
+
+    Two different reasons, and they need different instructions.  The FIELD may
+    have no entry -- add one.  Or the INSTRUMENT has no reader for the table the
+    entry names: ``PipelineMIRI.fix_alignment`` and
+    ``PipelineRerunNIRISS.fix_alignment`` open no offsets table at all (MIRI
+    applies inline constants -- (0, 0) except a w51 rule and one brick per-visit
+    entry -- and then writes RAOFFSET/DEOFFSET), so adding an entry changes
+    nothing and the next re-tie measures the identical residual.
+    """
+    from jwst_gc_pipeline.reduction.alignment_config import (
+        instrument_has_table_channel)
+    head = (f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "
+            f"{n_corrections} real correction(s) for proposal {proposal_id} "
+            f"observation {field}, but ")
+    if not instrument_has_table_channel(instrument):
+        reducer = ('PipelineMIRI' if str(instrument).lower() == 'miri'
+                   else 'PipelineRerunNIRISS')
+        return RuntimeError(
+            head +
+            f"{str(instrument).upper()} has NO table-driven correction "
+            f"channel: its reducer ({reducer}.fix_alignment) reads no offsets "
+            f"table, so these numbers would land in a file nothing opens and "
+            f"the next re-tie would re-measure the identical residual.  "
+            f"Adding an alignment_config entry does not change that.  Correct "
+            f"this band's astrometry outside the table channel, or teach that "
+            f"reducer to resolve its shift through "
+            f"jwst_gc_pipeline.reduction.unified_alignment.resolve_shift "
+            f"(alignment_config's scope note tracks that work).  Nothing was "
+            f"written.")
+    return RuntimeError(
+        head +
+        f"alignment_config declares NO table-driven correction channel for "
+        f"this field -- so anything written here would land in a table "
+        f"fix_alignment never reads, and the next re-tie would re-measure the "
+        f"identical residual (the arches/sgrb2 failure). Add an entry to "
+        f"jwst_gc_pipeline/reduction/alignment_config.py declaring where this "
+        f"field's tie lives before correcting it.")
+
+
+def _astrom_find_offsets_table(basepath, proposal_id, field=None,
+                               instrument=None):
     """The offsets table ``fix_alignment`` will consume for THIS field.
 
     Resolved from ``alignment_config`` -- the SAME declaration the reducer reads
@@ -3652,7 +3713,7 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
     and would substitute a different frame silently.  The caller raises with the
     expected filename instead.
     """
-    channel = _astrom_offsets_channel(proposal_id, field)
+    channel = _astrom_offsets_channel(proposal_id, field, instrument=instrument)
     if channel == 'consensus':
         path = f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv"
         # absent -> None, which routes the caller to seed it
@@ -4633,7 +4694,12 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         return
 
     _field = str(getattr(options, 'field', ''))
-    _channel = _astrom_offsets_channel(proposal_id, _field)
+    # Scoped to the instrument this merge belongs to: `alignment_config` is
+    # read by the NIRCam reducer only, so a MIRI/NIRISS module gets 'none'
+    # however the field is declared -- see the raise below.
+    _instrument = _instrument_for_module(module)
+    _channel = _astrom_offsets_channel(proposal_id, _field,
+                                       instrument=_instrument)
 
     # POOL to the target table's granularity BEFORE the floor and before the
     # apply.  The visit consensus emits one correction per DETECTOR
@@ -4656,7 +4722,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # table gives every detector its own row -- pooling there would throw away
     # resolution the table has.
     if _channel == 'locked':
-        _pool_path = _astrom_find_offsets_table(basepath, proposal_id, _field)
+        _pool_path = _astrom_find_offsets_table(basepath, proposal_id, _field,
+                                                instrument=_instrument)
         if _pool_path is not None and os.path.exists(_pool_path):
             from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
                 pool_corrections_to_table_granularity)
@@ -4711,16 +4778,10 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
     if _channel == 'none':
-        raise RuntimeError(
-            f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "
-            f"{len(corrections)} real correction(s) for proposal {proposal_id} "
-            f"observation {_field}, but alignment_config declares NO table-driven "
-            f"correction channel for this field -- so anything written here would "
-            f"land in a table fix_alignment never reads, and the next re-tie would "
-            f"re-measure the identical residual (the arches/sgrb2 failure). Add an "
-            f"entry to jwst_gc_pipeline/reduction/alignment_config.py declaring "
-            f"where this field's tie lives before correcting it.")
-    offsets_path = _astrom_find_offsets_table(basepath, proposal_id, _field)
+        raise _astrom_no_channel_error(merge_label, module, filt, proposal_id,
+                                       _field, _instrument, len(corrections))
+    offsets_path = _astrom_find_offsets_table(basepath, proposal_id, _field,
+                                              instrument=_instrument)
     applied = False
     seeded = False
     if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1':

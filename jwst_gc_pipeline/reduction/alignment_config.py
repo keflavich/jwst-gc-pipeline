@@ -7,7 +7,9 @@ SCOPE: NIRCam only.  ``PipelineMIRI.fix_alignment`` and
 own inline policy constants (MIRI keeps a ``_PER_VISIT_SHIFT`` map and a w51
 rule; neither writes the component keywords nor runs the staleness guard).
 Folding those in is follow-up work -- until then, do not read this file as
-repo-wide.
+repo-wide.  That scope is now answerable in code: ``offsets_channel(prop, field,
+instrument='miri')`` returns ``'none'``, because no correction written into
+these tables can reach a MIRI or NIRISS frame (``TABLE_DRIVEN_INSTRUMENTS``).
 
 This replaces the per-proposal ``if/elif`` chain that used to live inside
 ``PipelineRerunNIRCAM-LONG.fix_alignment``.  That chain had grown one branch per
@@ -75,6 +77,7 @@ __all__ = [
     'BulkEntry', 'FieldAlignment', 'resolve', 'lookup_recorded_bulk',
     'ALIGNMENT_CONFIG', 'offsets_channel', 'offsets_table_path',
     'CHANNEL_LOCKED', 'CHANNEL_CONSENSUS', 'CHANNEL_NONE',
+    'TABLE_DRIVEN_INSTRUMENTS', 'instrument_has_table_channel',
 ]
 
 #: Wildcard for a ``recorded_bulk`` key component (matches any visit / filter).
@@ -650,8 +653,38 @@ CHANNEL_LOCKED = 'locked'
 CHANNEL_CONSENSUS = 'consensus'
 CHANNEL_NONE = 'none'
 
+#: Instruments whose reducer READS an offsets table.
+#:
+#: ``PipelineRerunNIRCAM-LONG.fix_alignment`` resolves its shift through
+#: ``unified_alignment.resolve_shift``, which reads exactly the table
+#: :func:`offsets_table_path` names.  ``PipelineMIRI.fix_alignment`` and
+#: ``PipelineRerunNIRISS.fix_alignment`` do not: neither file mentions an
+#: offsets table, ``alignment_config`` or ``resolve_shift`` anywhere (which is
+#: what the scope note at the top of this module means by "NIRCam only").  MIRI
+#: applies inline constants -- ``rashift``/``decshift`` start at (0, 0), a w51
+#: rule sets RA to 0.2", and a ``_PER_VISIT_SHIFT`` map holds one brick entry --
+#: and then writes ``RAOFFSET``/``DEOFFSET``.
+#:
+#: So a correction written into a table on MIRI's or NIRISS's behalf reaches no
+#: frame, and the next re-tie re-measures the identical residual: the
+#: arches/sgrb2 failure, with the instrument rather than the field as the
+#: reason.  Callers that know their instrument should say so, and get
+#: ``CHANNEL_NONE`` back rather than a table nothing will read.
+TABLE_DRIVEN_INSTRUMENTS = frozenset({'nircam'})
 
-def offsets_channel(proposal_id, field):
+
+def instrument_has_table_channel(instrument) -> bool:
+    """Can a table-driven correction actually reach ``instrument``'s frames?
+
+    ``instrument=None`` means the caller did not say, and keeps the historical
+    answer (True) so every existing call site is unchanged.
+    """
+    if instrument is None:
+        return True
+    return str(instrument).strip().lower() in TABLE_DRIVEN_INSTRUMENTS
+
+
+def offsets_channel(proposal_id, field, instrument=None):
     """Which offsets table m2 REWRITES for this field: ``'locked'`` /
     ``'consensus'`` / ``'none'``.
 
@@ -664,7 +697,17 @@ def offsets_channel(proposal_id, field):
     ``_consensus.csv`` -- while a stale ``_VIRAC2locked.csv`` sat beside it and
     won the preference).  Both produced the same silent symptom: the re-tie loop
     watched a file nobody wrote, saw no change, and stopped.
+
+    ``instrument`` is the third way the writer and the reader can point at
+    different things, and the one this module's own scope note describes: the
+    entries here are read by the NIRCam reducer, so a MIRI or NIRISS caller
+    that inherits a field's channel is told to write a table its reducer never
+    opens (``TABLE_DRIVEN_INSTRUMENTS``).  Naming the instrument returns
+    ``'none'`` instead, which is what makes the caller say so out loud.
+    Omitting it keeps the historical answer.
     """
+    if not instrument_has_table_channel(instrument):
+        return CHANNEL_NONE
     cfg = resolve(proposal_id, field)
     if cfg is None:
         return CHANNEL_NONE
@@ -678,14 +721,14 @@ def offsets_channel(proposal_id, field):
     return CHANNEL_NONE
 
 
-def offsets_table_path(basepath, proposal_id, field):
+def offsets_table_path(basepath, proposal_id, field, instrument=None):
     """Absolute path of the offsets table m2 rewrites, or ``''`` for ``'none'``.
 
     Existence is deliberately NOT checked: on the first re-tie iteration the
     table does not exist yet, and "absent now, written by the checkpoint" is
     exactly the transition callers need to observe.
     """
-    ch = offsets_channel(proposal_id, field)
+    ch = offsets_channel(proposal_id, field, instrument=instrument)
     if ch == CHANNEL_LOCKED:
         return f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
     if ch == CHANNEL_CONSENSUS:
