@@ -39,6 +39,16 @@ cross-check blocks a good VIRAC tie (Sgr C is deep; the JWST-detectable Gaia
 subset is small). So for first light we demote the checkpoint to a warning and
 ship the tweakreg-abs VIRAC tie (~9 mas).
 
+The same switch also demotes the m2 no-channel refusal, which is what a NIRISS
+run now meets first: `offsets_channel(..., instrument='niriss')` is `none`
+because `PipelineRerunNIRISS.fix_alignment` reads no offsets table, so an
+above-floor per-exposure correction has nowhere to go and the checkpoint says so
+by name. Under `ASTROM_CHECKPOINT_WARN_ONLY=1` that is a warning and the run
+proceeds, exactly as this section already describes; with
+`ASTROM_CHECKPOINT_APPLY=1` the measured-misaligned im0 mosaics are still
+stale-tagged `*_i2d_im0_badastrom.fits` and nothing is written to any offsets
+table.
+
 DEFERRED (after first light): (a) the 2–10 mas per-exposure consensus
 refinement (would need NIRISS `fix_alignment` to consume a consensus offsets
 table, à la the NIRCAM sgrc `_apply_consensus_offsets_table` path, then

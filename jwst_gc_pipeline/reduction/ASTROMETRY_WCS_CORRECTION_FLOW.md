@@ -264,10 +264,29 @@ That scope is now answerable in code, because m2 has to act on it:
 table — the two files name no offsets table, no `alignment_config` and no
 `resolve_shift` anywhere. Without the instrument the answer is unchanged, so
 every NIRCam caller reads the same table it always did. The m2 checkpoint asks
-with the instrument of the module it is merging (`mirimage` → MIRI, `nis` →
-NIRISS), so a measured MIRI correction now stops the run naming the reducer,
-instead of being seeded into `Offsets_JWST_Brick<pid>_consensus.csv` where
-nothing would read it and the next re-tie would measure the same residual.
+with the instrument of the merge it is running — the module token first
+(`mirimage` → MIRI, `nis` → NIRISS), then `_instrument_from_filter`, which
+reads `--instrument` / `GC_INSTRUMENT_OVERRIDE` before the MIRI filter set.
+Both signals, in that order, because a MIRI or NIRISS run can carry a
+NIRCam-shaped `--modules` (the sbatch default is `nrcb`) or the `merged`
+pseudo-module, and the token alone would then answer `nircam`.
+
+So a measured MIRI correction stops the run naming the reducer, instead of
+being seeded into `Offsets_JWST_Brick<pid>_consensus.csv` where nothing would
+read it and the next re-tie would measure the same residual. Two things about
+that stop:
+
+- **`ASTROM_CHECKPOINT_WARN_ONLY=1` demotes it**, like every other blocking
+  error in `_run_astrometry_stage_checkpoint`. NIRISS/sgrc first light is a
+  written, justified WARN_ONLY procedure
+  (`NOTES_niriss_sgrc_firstlight.md`), and a refusal it cannot demote stops
+  that run rather than warning it.
+- **Under `ASTROM_CHECKPOINT_APPLY=1` the im0 mosaics are still stale-tagged**
+  `*_i2d_im0_badastrom.fits` (scoped to this observation) before the refusal.
+  Nothing is written to any offsets table — that is what has nowhere to go —
+  but the measurement stands, and the tag is what keeps a misaligned mosaic out
+  of `stage_release` (the sickle F210M precedent).
+
 Until a reducer grows a table reader, a MIRI band's registration goes through
 the manual pre-step below.
 
@@ -308,7 +327,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 2092 | 005 | VIRAC2 | `TABLE_LOCKED` | F210M | cloudef obs 005 |
 | 2092 | 002 | VIRAC2 | `RECORDED_BULK` + jitter | F210M | cloudef obs 002 |
 | 3958 | 007 | VIRAC2 | `TABLE_LOCKED` | F210M | sickle; re-tied to VIRAC2 2026-08-04, GNS numbers deliberately NOT carried over |
-| 3958 | 001, 001-002, 002 | VIRAC2 | `TABLE_CONSENSUS` | F770W | sickle MIRI (obs 001+002, jointly registered as 001-002). The NIRCam entry above covers only obs 007, which left MIRI with no correction channel and stopped its m12 finalize at the m2 checkpoint. Consensus because the authored VIRAC2locked table is NIRCam-only. obs 003 belongs to brick |
+| 3958 | 001, 001-002, 002 | VIRAC2 | `TABLE_CONSENSUS` | F770W | sickle MIRI (obs 001+002, jointly registered as 001-002). Supplies the FRAME and the F770W anchor; it does **not** give MIRI a write channel — `offsets_channel(..., instrument='miri')` is `none` whatever the entry declares, because `PipelineMIRI.fix_alignment` reads no offsets table. The NIRCam entry above covers only obs 007. Consensus rather than locked because the authored VIRAC2locked table is NIRCam-only. obs 003 belongs to brick |
 | 1979 | all | **Gaia** | `RECORDED_BULK` + jitter | — | M4 (o002 + o003), halo cluster outside VVV. `consensus_jitter` routes only the per-exposure term to the consensus table; the hand-measured bulk stays fixed. Without it `offsets_channel` was `none`, and the m2 checkpoint refused to write its measured corrections, which blocked the m12 finalize outright |
 | 6778 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F187N | ngc6334 (Cat's Paw); unregistered until 2026-09-01, so every exposure of both its proposals stayed on the raw `assign_wcs` frame -- the 2026-07-10 audit measured 61-67 mas per-filter offsets. No offsets table existed, so the bulk bootstraps from the m2 re-tie |
 | 7213 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F182M | ngc6334, the SECOND proposal over the same sky as 6778; separate row because `reference_frame` is per-proposal (it names the offsets table) |

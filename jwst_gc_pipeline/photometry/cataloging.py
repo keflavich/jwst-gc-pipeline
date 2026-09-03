@@ -3624,15 +3624,37 @@ def _record_pooling(record, pooled, n_before, offsets_path):
                   flush=True)
 
 
-#: Module token -> instrument.  ``mirimage`` is MIRI's only module and ``nis``
-#: is NIRISS's (``run_pipeline.INSTRUMENT_MODULES``); everything else here is a
-#: NIRCam detector/module family or the ``merged`` pseudo-module.
+#: Module tokens that name ONE instrument.  ``mirimage`` is MIRI's only module
+#: and ``nis`` is NIRISS's (``run_pipeline.INSTRUMENT_MODULES``).  Every other
+#: token -- a NIRCam detector/module family, or the ``merged`` pseudo-module --
+#: says nothing about the instrument, which is why this map is a first signal
+#: and not the whole answer.
 _MODULE_INSTRUMENT = {'mirimage': 'miri', 'nis': 'niriss'}
 
 
-def _instrument_for_module(module):
-    """Which instrument the checkpoint's ``module`` token belongs to."""
-    return _MODULE_INSTRUMENT.get(str(module).strip().lower(), 'nircam')
+def _instrument_for_merge(module, filtername=None):
+    """Which instrument a merge belongs to: the module token, then the filter.
+
+    The SAME two signals, in the same order, that this module already reads for
+    ``_sat_is_miri`` and ``_miri_field`` (``module == 'mirimage' or
+    _L._instrument_from_filter(filt) == 'MIRI'``).  A third spelling of one
+    question is a third answer waiting to disagree with the other two.
+
+    The module token alone is not enough, and the direction it fails matters:
+    ``submit_cataloging.sbatch`` defaults ``MODULES`` to ``nrcb`` and a
+    cross-module merge is spelled ``merged``, so a MIRI or NIRISS run can reach
+    the checkpoint with a NIRCam-shaped token, read ``nircam``, and take the
+    silent write path this scoping exists to close -- fail-open.
+    ``_instrument_from_filter`` consults ``--instrument`` /
+    ``GC_INSTRUMENT_OVERRIDE`` (part of the standard MIRI/NIRISS cataloging
+    invocation, GETTING_STARTED.md) before the MIRI filter-name set, and that
+    override is the ONLY signal NIRISS has beyond the ``nis`` token: its filter
+    names are NIRCam's.
+    """
+    token = _MODULE_INSTRUMENT.get(str(module).strip().lower())
+    if token is not None:
+        return token
+    return _L._instrument_from_filter(filtername).lower()
 
 
 def _astrom_offsets_channel(proposal_id, field, instrument=None):
@@ -4698,9 +4720,13 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
 
     _field = str(getattr(options, 'field', ''))
     # Scoped to the instrument this merge belongs to: `alignment_config` is
-    # read by the NIRCam reducer only, so a MIRI/NIRISS module gets 'none'
-    # however the field is declared -- see the raise below.
-    _instrument = _instrument_for_module(module)
+    # read by the NIRCam reducer only, so a MIRI/NIRISS merge gets 'none'
+    # however the field is declared -- see the refusal below.  The module token
+    # is only the FIRST signal: a MIRI/NIRISS run can carry a NIRCam-shaped
+    # `--modules` (the sbatch default is `nrcb`) or the `merged` pseudo-module,
+    # so the filter/`--instrument` answer decides those, exactly as it does for
+    # `_sat_is_miri` and `_miri_field`.
+    _instrument = _instrument_for_merge(module, filt)
     _channel = _astrom_offsets_channel(proposal_id, _field,
                                        instrument=_instrument)
 
@@ -4781,8 +4807,41 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
     if _channel == 'none':
-        raise _astrom_no_channel_error(merge_label, module, filt, proposal_id,
-                                       _field, _instrument, len(corrections))
+        _no_channel = _astrom_no_channel_error(
+            merge_label, module, filt, proposal_id, _field, _instrument,
+            len(corrections))
+        # QUARANTINE FIRST, then refuse.  The measurement stands whatever the
+        # channel is: these im0 mosaics are misaligned by the amount just
+        # measured, and the `_im0_badastrom` tag is what keeps them out of
+        # `stage_release` (the sickle F210M precedent -- a band shipped short
+        # because the tag was the only thing that could stop it).  Writing the
+        # correction is what has nowhere to go; tagging the mosaics does not.
+        # Gated on APPLY=1 like every other rename in this function, so a
+        # measure-only run still renames nothing.
+        if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1':
+            _nc_renames = mark_i2d_stale(
+                find_i2d_for_filter(cut_bp, filt,
+                                    observation=_resolved_obsid(options)),
+                reason=(f"{merge_label} checkpoint measured "
+                        f"{len(corrections)} correction(s) with NO "
+                        f"table-driven correction channel for {_instrument}"),
+                record_dir=os.path.join(cut_bp, 'astrometry_checkpoints'))
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                  f"{len(_nc_renames)} stale im0 mosaic(s) tagged "
+                  f"_im0_badastrom (no correction channel; nothing was "
+                  f"written to any offsets table)", flush=True)
+        # WARN_ONLY demotes this like every other blocking error in this
+        # function.  It used to be the one raise that ignored it, which broke
+        # the written first-light procedure for NIRISS/sgrc
+        # (NOTES_niriss_sgrc_firstlight.md): that run is documented to proceed
+        # under ASTROM_CHECKPOINT_WARN_ONLY=1 with 2-10 mas per-exposure
+        # jitter above sgrc's 8.0 mas floor, and a refusal it cannot demote
+        # stops the run instead of warning it.
+        if warn_only:
+            print(f"WARNING (ASTROM_CHECKPOINT_WARN_ONLY=1): {_no_channel}",
+                  flush=True)
+            return
+        raise _no_channel
     offsets_path = _astrom_find_offsets_table(basepath, proposal_id, _field,
                                               instrument=_instrument)
     applied = False

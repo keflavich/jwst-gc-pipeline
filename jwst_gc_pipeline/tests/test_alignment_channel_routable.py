@@ -1,4 +1,12 @@
-"""Every registered field can route a measured correction somewhere.
+"""Every registered field can route a measured NIRCam correction somewhere.
+
+NIRCam, because that is the instrument the tables reach: ``fix_alignment``
+resolves a NIRCam shift through ``unified_alignment.resolve_shift``, which reads
+exactly the table ``offsets_table_path`` names, while ``PipelineMIRI`` and
+``PipelineRerunNIRISS`` open no offsets table at all
+(``TABLE_DRIVEN_INSTRUMENTS``).  Asked WITH one of those instruments, a
+registered field answers ``'none'`` however it is declared -- that is the
+scoping, not a hole in this invariant, and the bottom of this file pins it.
 
 The m2 checkpoint REFUSES to write corrections for a field whose
 ``offsets_channel`` is ``'none'``:
@@ -9,9 +17,11 @@ The m2 checkpoint REFUSES to write corrections for a field whose
     fix_alignment never reads, and the next re-tie would re-measure the identical
     residual (the arches/sgrb2 failure).
 
-That refusal is correct, and it is fatal: it stops the m12 finalize, so the field
-cannot be cataloged at all.  m92 (1334) and m4/ngc6397 (1979) were both in that
-state -- ``RECORDED_BULK`` with ``consensus_jitter`` unset.
+That refusal is correct, and it stops the m12 finalize, so the field cannot be
+cataloged at all (``ASTROM_CHECKPOINT_WARN_ONLY=1`` demotes it, like every other
+blocking error in the checkpoint -- which is a deliberate override, not a
+default).  m92 (1334) and m4/ngc6397 (1979) were both in that state --
+``RECORDED_BULK`` with ``consensus_jitter`` unset.
 
 ``consensus_jitter`` routes ONLY the per-exposure term to the consensus table and
 leaves the hand-measured bulk alone, which is what these halo-cluster fields
@@ -30,18 +40,27 @@ def _first_field(entry):
     "entry", AC.ALIGNMENT_CONFIG,
     ids=[f"{e.proposal}-{'|'.join(e.fields) if e.fields else 'all'}"
          for e in AC.ALIGNMENT_CONFIG])
-def test_every_entry_can_route_a_correction(entry):
+def test_every_entry_can_route_a_nircam_correction(entry):
     """The invariant: a registered field with nowhere to write is unusable.
 
     A field is registered precisely so the checkpoint can correct it; an entry
     whose channel is ``'none'`` blocks its own cataloging at the m2 gate.
+
+    Asked for NIRCam explicitly -- the instrument whose reducer reads these
+    tables.  The instrument-blind call answers the same thing (omitting the
+    argument keeps the historical answer), and both are asserted so a future
+    change to that default cannot quietly move this invariant.
     """
-    channel = AC.offsets_channel(entry.proposal, _first_field(entry))
-    assert channel != AC.CHANNEL_NONE, (
-        f"proposal {entry.proposal} ({entry.source}) has no correction channel, "
-        f"so the m2 checkpoint will refuse to write measured corrections and the "
-        f"field cannot be cataloged"
-    )
+    field = _first_field(entry)
+    for instrument in (None, 'nircam'):
+        channel = AC.offsets_channel(entry.proposal, field,
+                                     instrument=instrument)
+        assert channel != AC.CHANNEL_NONE, (
+            f"proposal {entry.proposal} ({entry.source}) has no correction "
+            f"channel for instrument={instrument!r}, so the m2 checkpoint will "
+            f"refuse to write measured corrections and the field cannot be "
+            f"cataloged"
+        )
 
 
 @pytest.mark.parametrize("proposal,field", [
@@ -88,3 +107,40 @@ def test_bulk_source_is_still_recorded_not_consensus():
     """
     for proposal, field in (("1334", "001"), ("1979", "002")):
         assert AC.resolve(proposal, field).source == AC.RECORDED_BULK
+
+
+# --------------------------------------------------------------------------
+# The other half of the invariant: the instruments the tables do NOT reach.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("proposal,field", [
+    ("3958", "001-002"),   # sickle MIRI, registered for its FRAME and anchor
+    ("3958", "007"),       # sickle NIRCam, TABLE_LOCKED
+    ("10678", "088"),      # gc-treasury, proposal-wide TABLE_CONSENSUS
+])
+@pytest.mark.parametrize("instrument", ["miri", "niriss"])
+def test_a_registered_field_still_routes_nothing_to_miri_or_niriss(
+        proposal, field, instrument):
+    """Registration is about the frame and the anchor, not about a channel.
+
+    Neither reducer opens an offsets table, so a correction written on their
+    behalf reaches no frame and the next re-tie re-measures the identical
+    residual.  The checkpoint refuses instead, naming the reducer -- the thing
+    an operator can act on -- rather than sending them to add an entry that
+    would change nothing.
+    """
+    assert AC.resolve(proposal, field) is not None
+    assert AC.offsets_channel(proposal, field,
+                              instrument=instrument) == AC.CHANNEL_NONE
+
+
+def test_the_miri_only_entry_still_supplies_a_frame_and_an_anchor():
+    """3958/001-002 is the entry that makes the distinction visible: it is
+    registered, it is MIRI-only, and what it gives MIRI is the frame and the
+    F770W anchor rather than a table."""
+    cfg = AC.resolve("3958", "001-002")
+    assert cfg.reference_frame == AC.VIRAC2
+    assert cfg.reference_filter == "F770W"
+    assert AC.offsets_channel("3958", "001-002") == AC.CHANNEL_CONSENSUS
+    assert AC.offsets_channel("3958", "001-002",
+                              instrument="miri") == AC.CHANNEL_NONE
