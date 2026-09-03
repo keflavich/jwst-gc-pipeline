@@ -4850,7 +4850,12 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             # 138 false quarantines.  `_resolved_obsid` is the same vetted
             # answer the per-frame catalog filter above uses, and it returns
             # None (-> unscoped, today's behaviour) whenever this run cannot
-            # establish its own obsid.
+            # establish its own obsid.  It carries the OBSID only: on a
+            # shared tree (ngc6334, where proposals 6778 and 7213 both call
+            # it observation 001) that still spans both proposals.  The
+            # `_j{proposal}` scope exists (`observation_scope`) and the
+            # `--obs-token` CLI uses it; wiring it in here would change what
+            # ngc6334 cataloging quarantines, which is a separate decision.
             find_i2d_for_filter(cut_bp, filt,
                                 observation=_resolved_obsid(options)),
             reason=f"{merge_label} checkpoint {'seeded' if seeded else 'corrected'} {offsets_path}",
