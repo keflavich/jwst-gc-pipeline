@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 
 #os.environ['stpsf_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
 import stpsf
+from jwst_gc_pipeline.atomic_io import publish_into
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
 from stpsf.utils import to_griddedpsfmodel
@@ -194,14 +195,39 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
         # crowdsource_catalogs_long's two sites; this one is reached by a
         # different path (load_or_make_satstar_catalog -> remove_saturated_stars)
         # and still killed every m4/ngc6397 shard (jobs 40691533, 40691535).
+        #
+        # ``psf_grid(save=True)`` names its own output file and writes it in
+        # place, so between ``hdu.writeto``'s create and its close the shared
+        # cache holds a file that EXISTS and is INCOMPLETE -- and the reader
+        # in the other branch of this ``if`` gates on ``os.path.exists``
+        # alone, then loads whatever is there.  A 9438 m12
+        # fan-out shard read a 536 MB nrcb5/F480M grid 30 s before the shard
+        # writing it finished (read 2026-09-01T20:17:40, write completed
+        # 20:18:10) and died in astropy with "buffer is too small for
+        # requested array", 16 h 39 m into its own work (#617, #618).  Build
+        # into a private ``.building-*`` subdirectory of the cache and publish
+        # each finished file with ``os.replace``, which is atomic within one
+        # filesystem -- and the build directory is a CHILD of the destination,
+        # so it is on that filesystem by construction.  Two shards building
+        # the same grid then both succeed, one rename wins, and no reader ever
+        # sees a partial file.  (``_chan_kw`` stays adjacent to the call: the
+        # #605 grep-guard reads a four-line window around it.)
         _chan_kw = nircam_channel_safe_psf_kwargs(psfgen)
-        big_grid = psfgen.psf_grid(num_psfs=npsf, oversample=oversample,
-                       all_detectors=False, fov_pixels=fov_pixels,
-                                   outdir=path_prefix,
-                                   save=True, outfile=None, overwrite=True,
-                                   **_chan_kw)
-        # now the PSF should be written
-        assert glob.glob(psf_fn.replace(".fits", "*"))
+        with publish_into(path_prefix) as _build_dir:
+            big_grid = psfgen.psf_grid(num_psfs=npsf, oversample=oversample,
+                                       all_detectors=False,
+                                       fov_pixels=fov_pixels,
+                                       outdir=_build_dir,
+                                       save=True, outfile=None, overwrite=True,
+                                       **_chan_kw)
+        # now the PSF should be written.  Not `assert`: asserts are stripped
+        # under `python -O`, and this is the only check that the name the
+        # reader will look for is the name that was published.
+        if not glob.glob(psf_fn.replace(".fits", "*")):
+            raise FileNotFoundError(
+                f"psf_grid reported success but published nothing matching "
+                f"{psf_fn} into {path_prefix}; the cache would stay cold and "
+                f"every later frame would rebuild it.")
         if isinstance(big_grid, list):
             print(f"PSF FROM PSF_GEN IS A LIST OF GRIDS!!!", flush=True)
             big_grid = big_grid[0]

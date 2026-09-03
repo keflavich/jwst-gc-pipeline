@@ -57,7 +57,7 @@ module exists to remove.*
 | Per-frame product names | `saturated_star_finding.py::remove_saturated_stars`, `crowdsource_catalogs_long.py::load_or_make_satstar_catalog` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
 | Per-phase seed caches | `atomic_io.py::write_table_atomic` | several caches are keyed by (filter, module) rather than by shard, so every shard of a phase rebuilt and wrote the same path | fixed — temp sibling named for the writer, then `os.replace` |
 | Offsets / consensus tables | `astrometry_checkpoint.py::update_offsets_table` | see below | **open** |
-| PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model` | see below | fixed — built in a private directory, moved into the cache when finished |
+| PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model`, `saturated_star_finding.py::get_psf`, `filtering.py::estimate_background`, `scripts/miri_reduction/build_large_psf_grids_miri.py` | see below | fixed — built in a private directory, moved into the cache when finished |
 
 ### Open: the offsets and consensus tables
 
@@ -103,6 +103,23 @@ file exists from creation until complete — and a concurrent task checking
 The build now goes into a private `.building-<host>-<pid>/` inside the cache,
 and each finished file is moved into place with `os.replace`
 (`atomic_io.publish_into`), so a file a reader can see is a file that is done.
+
+`get_psf_model` was the first writer fixed and for a while the only one.
+`saturated_star_finding.get_psf` reaches the same cache by a different path
+(`load_or_make_satstar_catalog` -> `remove_saturated_stars`) and still wrote in
+place, which is what a 9438 m12 fan-out shard hit on 2026-09-01: it read a
+536 MB `nircam_nrcb5_f480m_fovp1024_samp2_npsf16.fits` at 20:17:40 against a
+write that completed at 20:18:10, and died in astropy with `TypeError: buffer
+is too small for requested array` after 16 h 39 m of its own work (#617, #618).
+Every `psf_grid(save=True)` in the tree now publishes, and
+`jwst_gc_pipeline/tests/test_psf_grid_atomic_publish.py` checks that with an
+AST walk rather than a grep, so a call that merely sits beside a `publish_into`
+does not pass.
+
+The exposure is worst on a **cold** cache, which is the normal state of a new
+program: N shards all find the grid missing at once and all build it. Program
+10678 brings 139 fields with no `psfs/` directory and three bands, so this is
+the common case there rather than a rare one.
 
 The window costs work as well as correctness: array tasks starting together all
 miss the cache, all build the same grid (17–20 minutes, ~300 GB peak each), and
