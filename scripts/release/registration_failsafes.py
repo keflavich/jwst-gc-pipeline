@@ -47,7 +47,24 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from photutils.detection import DAOStarFinder
 
-BASE = "/orange/adamginsburg/jwst"
+# The tree the products live under.  Read from the environment with the same
+# spelling the sibling release gates use -- `check_interframe_overlap.py` and
+# `check_astrometry_checkpoints.py` both take `JWST_BASE` with this default --
+# so all three gates can be pointed at one tree together.  It was hardcoded
+# here, and `fields.yaml` has TWO roots: `orange` (/orange/adamginsburg/jwst)
+# and `blue` (/blue/adamginsburg/adamginsburg/jwst).  A `root: blue` field is
+# reachable under /orange only if someone made a symlink for it (brick and
+# cloudc have one; gc-treasury, root blue per #421, does not), and without one
+# every glob below matched nothing -- the gate reported on an empty tree.
+# The default is unchanged, so nothing moves for the fields that resolve today.
+#
+# `GC_BASEPATH_OVERRIDE` is deliberately NOT consulted (check_astrometry_
+# checkpoints.py reads it ahead of JWST_BASE): in
+# `jwst_gc_pipeline.scratch_basepath` that variable is a per-FIELD basepath --
+# it already ends in the field name -- while BASE here is the root the globs
+# join `{BASE}/{field}/...` onto, so honouring it would look for
+# `<scratch>/brick/brick/F410M/pipeline`.
+BASE = os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst")
 GRID = 20
 MX = 2.5 * u.arcsec              # pair-separation search radius (recovers offsets up to this)
 XBIN = 0.04                      # arcsec, offset-histogram bin
