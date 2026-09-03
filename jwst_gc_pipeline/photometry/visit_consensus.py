@@ -1131,14 +1131,10 @@ def detect_module_antisymmetry(exposures,
         (fa, va), (fb, vb) = sorted(fams.items())
         a = np.array([np.mean([v[1] for v in va]), np.mean([v[2] for v in va])])
         b = np.array([np.mean([v[1] for v in vb]), np.mean([v[2] for v in vb])])
-        na, nb = float(np.hypot(*a)), float(np.hypot(*b))
-        if na < min_mas or nb < min_mas:
-            continue                      # mas-scale split: real, not an alias
-        cos = float(np.dot(a, b) / (na * nb))
-        if cos > cos_max:
-            continue                      # not opposed
-        if abs(na - nb) > mag_tol * max(na, nb):
-            continue                      # not equal in magnitude
+        is_alias, na, nb, cos = _antisymmetric_pair(a, b, min_mas, cos_max,
+                                                    mag_tol)
+        if not is_alias:
+            continue
         n_anti += 1
         for _, vals in fams.items():
             for key, _dra, _ddec in vals:
@@ -1154,6 +1150,102 @@ def detect_module_antisymmetry(exposures,
     return dict(detected=bool(n_anti), n_pairs_tested=int(n_tested),
                 n_antisymmetric=int(n_anti), keys=flagged_keys,
                 examples=examples, min_mas=float(min_mas))
+
+
+def _antisymmetric_pair(a, b, min_mas, cos_max, mag_tol):
+    """Shared issue-158 alias test for two mean offset vectors.
+
+    Returns ``(is_alias, na, nb, cos)``.  ``a``/``b`` are length-2 arrays of
+    (dra, ddec) in mas.  A pair qualifies when BOTH offsets are large (the
+    scale test), they point in opposed directions, and they are equal in
+    magnitude -- the signature of one frame tied onto the other's stars.
+    """
+    na, nb = float(np.hypot(*a)), float(np.hypot(*b))
+    if na < min_mas or nb < min_mas:
+        return False, na, nb, float("nan")   # mas-scale split: real, not an alias
+    cos = float(np.dot(a, b) / (na * nb))
+    if cos > cos_max:
+        return False, na, nb, cos            # not opposed
+    if abs(na - nb) > mag_tol * max(na, nb):
+        return False, na, nb, cos            # not equal in magnitude
+    return True, na, nb, cos
+
+
+def detect_detector_antisymmetry(exposures,
+                                 min_mas=MODULE_ANTISYMMETRY_MIN_MAS,
+                                 cos_max=MODULE_ANTISYMMETRY_COS_MAX,
+                                 mag_tol=MODULE_ANTISYMMETRY_MAG_TOL):
+    """Flag the issue-158 alias at DETECTOR granularity (issue #624).
+
+    ``detect_module_antisymmetry`` buckets an exposure's detectors by
+    ``module_family`` and tests only a group that splits into exactly TWO
+    families, so an alias BETWEEN TWO DETECTORS OF ONE MODULE is invisible to
+    it: nrca1 and nrca2 land in the same bucket, their opposed offsets average
+    toward ~0, and the group is then skipped (one family) or passes on the
+    diluted mean.  ngc6334 carries exactly that -- nrca1 and nrca2 read
+    equal-and-opposite ~22.9" -- and it cleared the module guard.
+
+    Same physics as the module guard: real per-exposure jitter is common-mode
+    across every detector of an exposure (they ride one guide-star pointing
+    error), so two detectors reading LARGE, equal-and-opposite offsets is
+    footprint geometry.  Here the test runs over every unordered PAIR of
+    detectors in the exposure, so it fires whether the pair spans two modules
+    or sits inside one.
+
+    ``exposures`` is ``build_visit_consensus(...)['exposures']``.
+
+    Returns ``dict(detected, n_pairs_tested, n_antisymmetric, keys, examples,
+    min_mas, n_exposures_tested)``, where ``n_pairs_tested`` counts DETECTOR
+    PAIRS (the module guard counts exposure groups).
+    """
+    by_exp = {}
+    for e in exposures:
+        res = e.get("vs_consensus")
+        if res is None or not res.get("ok"):
+            continue
+        key = tuple(e["key"])
+        # (visit, exposure, vgroup) -- detector (key[2]) is what we compare across
+        grp = (key[0], key[1], key[4] if len(key) > 4 else None)
+        by_exp.setdefault(grp, {}).setdefault(str(key[2]), []).append(
+            (key, float(res["dra"]), float(res["ddec"])))
+    n_tested = 0
+    n_anti = 0
+    n_exp = 0
+    flagged_keys = set()
+    examples = []
+    for grp, dets in sorted(by_exp.items(), key=lambda kv: str(kv[0])):
+        if len(dets) < 2:
+            continue
+        n_exp += 1
+        names = sorted(dets)
+        means = {d: np.array([np.mean([v[1] for v in dets[d]]),
+                              np.mean([v[2] for v in dets[d]])])
+                 for d in names}
+        for i, da in enumerate(names):
+            for db in names[i + 1:]:
+                n_tested += 1
+                a, b = means[da], means[db]
+                is_alias, na, nb, cos = _antisymmetric_pair(
+                    a, b, min_mas, cos_max, mag_tol)
+                if not is_alias:
+                    continue
+                n_anti += 1
+                for d in (da, db):
+                    for key, _dra, _ddec in dets[d]:
+                        flagged_keys.add(key)
+                if len(examples) < 4:
+                    examples.append(dict(
+                        visit=grp[0], exposure=grp[1], vgroup=grp[2],
+                        module_a=da, module_b=db,
+                        detector_a=da, detector_b=db,
+                        same_module=bool(module_family(da) == module_family(db)),
+                        dra_a_mas=float(a[0]), ddec_a_mas=float(a[1]),
+                        dra_b_mas=float(b[0]), ddec_b_mas=float(b[1]),
+                        separation_mas=float(np.hypot(*(a - b))), cos=cos))
+    return dict(detected=bool(n_anti), n_pairs_tested=int(n_tested),
+                n_antisymmetric=int(n_anti), keys=flagged_keys,
+                examples=examples, min_mas=float(min_mas),
+                n_exposures_tested=int(n_exp))
 
 
 def _brightest_subset_for_spacing(coords, mag, target_spacing_arcsec):

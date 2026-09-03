@@ -30,7 +30,8 @@ from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
 from jwst_gc_pipeline.photometry.visit_consensus import (
-    PER_EXPOSURE_SWEEP_WINDOWS, detect_module_antisymmetry, module_family)
+    PER_EXPOSURE_SWEEP_WINDOWS, detect_detector_antisymmetry,
+    detect_module_antisymmetry, module_family)
 
 
 def _clumpy_field(ra0, dec0, width_arcsec, seed, n_clump=300, per_clump=6,
@@ -222,3 +223,88 @@ def test_bounded_sweep_still_finds_a_confirmed_gross_offset():
     wide = measure_offset(a, b, sweep=True, confirm_windows=True)
     assert wide["ok"] and wide["window_consistent"] is True, wide
     assert abs(wide["dra"] - 20000) < 400 and abs(wide["ddec"] - 4000) < 400, wide
+
+
+# ---------------------------------------------------------------------------
+# DETECTOR antisymmetry (issue #624), against the RECORDED ngc6334 m2 run
+# (checkpoint_m2_F090W_j6778_latest.json, 2026-09-02, correcting=True,
+# 35 corrections emitted).  nrca1 and nrca2 of the SAME module read
+# equal-and-opposite ~22.9", and the module guard recorded
+# detected=False / n_pairs_tested=4 / n_antisymmetric=0 -- it tested those
+# groups and passed them, because the nrca family MEAN of
+# (+22903, -22918, -1.5) is -5.4 mas, far below the 500 mas floor.
+# ---------------------------------------------------------------------------
+
+_NGC6334_F090W = {
+    ("jw06778001001", 1): {"nrca1": (22903.0, 2153.8), "nrca2": (-22917.8, -2154.9),
+                           "nrca3": (-1.5, -7.4), "nrcb4": (-7.7, 1.2)},
+    ("jw06778001001", 2): {"nrcb4": (-6.4, 1.5)},
+    ("jw06778001001", 3): {"nrca1": (22911.2, 2153.9), "nrca2": (-22904.0, -2156.0)},
+    ("jw06778001001", 4): {"nrca1": (22912.2, 2158.3), "nrca2": (-22898.7, -2153.6),
+                           "nrcb4": (5.6, 2.0)},
+    ("jw06778001001", 5): {"nrca1": (22911.7, 2156.1), "nrca2": (-22898.9, -2155.6),
+                           "nrcb4": (5.9, -0.8)},
+    ("jw06778001002", 2): {"nrca2": (-8.0, -5.6), "nrca3": (-2.9, -3.3),
+                           "nrcb3": (-10.6, -6.3)},
+    ("jw06778001002", 3): {"nrca3": (4.8, 4.0)},
+    ("jw06778001002", 4): {"nrca2": (4.0, -1.8)},
+}
+
+
+def _detector_exposures(recorded, filtername="F090W", vgroup="02103"):
+    out = []
+    for (visit, exposure), dets in recorded.items():
+        for det, (dra, ddec) in dets.items():
+            out.append(dict(
+                key=(visit, exposure, det, filtername, vgroup),
+                vs_consensus=dict(dra=dra, ddec=ddec,
+                                  off=float(np.hypot(dra, ddec)), ok=True)))
+    return out
+
+
+def test_module_guard_misses_the_recorded_ngc6334_within_module_alias():
+    """The #624 bug, pinned to the recorded run: the module guard TESTS these
+    exposures and passes them, because averaging +22.9" with -22.9" inside one
+    module collapses the family mean to a few mas."""
+    res = detect_module_antisymmetry(_detector_exposures(_NGC6334_F090W))
+    assert not res["detected"], res
+    assert res["n_antisymmetric"] == 0, res
+    assert not res["keys"], res
+
+
+def test_detector_antisymmetry_detected_on_recorded_ngc6334_alias():
+    res = detect_detector_antisymmetry(_detector_exposures(_NGC6334_F090W))
+    assert res["detected"], res
+    # exposures 1, 3, 4 and 5 of visit ...001 each carry one nrca1/nrca2 pair
+    assert res["n_antisymmetric"] == 4, res
+    flagged = {(k[0], k[1], k[2]) for k in res["keys"]}
+    assert flagged == {("jw06778001001", e, d)
+                       for e in (1, 3, 4, 5) for d in ("nrca1", "nrca2")}, flagged
+    ex = next(e for e in res["examples"] if e["same_module"])
+    assert ex["cos"] < -0.99, ex
+    assert 45_000 < ex["separation_mas"] < 47_000, ex
+
+
+def test_detector_guard_leaves_the_correct_detectors_alone():
+    """nrca3 and nrcb4 measure at mas scale in the very same exposures and must
+    not be swept up, and the all-correct visit ...002 must stay clean."""
+    res = detect_detector_antisymmetry(_detector_exposures(_NGC6334_F090W))
+    assert not any(k[2] in ("nrca3", "nrcb3", "nrcb4") for k in res["keys"]), res
+    assert not any(k[0] == "jw06778001002" for k in res["keys"]), res
+
+
+def test_detector_guard_still_catches_the_cross_module_w51_alias():
+    """The detector guard subsumes the module case: W51 F335M fires in both."""
+    res = detect_detector_antisymmetry(_exposures(_W51_F335M, "F335M"))
+    assert res["detected"] and res["n_antisymmetric"] == 8, res
+    assert len(res["keys"]) == 16, res
+    assert not any(e["same_module"] for e in res["examples"]), res["examples"]
+
+
+def test_detector_guard_does_not_flag_real_module_splits():
+    """Same controls as the module guard, at detector granularity -- including
+    W51 F410M, whose real split is anti-parallel at cos = -0.96."""
+    for recorded, filt in ((_W51_F480M, "F480M"), (_W51_F410M, "F410M")):
+        res = detect_detector_antisymmetry(_exposures(recorded, filt))
+        assert not res["detected"], (filt, res)
+        assert not res["keys"], (filt, res)
