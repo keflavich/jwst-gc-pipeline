@@ -1366,10 +1366,12 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                 r["fail_reason"] = f"gross pairwise offset {p['off_mas']:.0f} mas"
                 bad.append(r)
     if verbose:
+        _cov = ("  -- NO COVERAGE: nothing overlaps, so this band contributes "
+                "no evidence" if not overlapped else "")
         print(f"  {field} {filt}: {nframes} crf -> {len(pooled)} groups, "
               f"{len(overlapped)} overlapping pairs, {len(bad)} FAIL, "
               f"{len(unverifiable)} could-not-verify (tol {TOL_MAS:.0f} mas, "
-              f"{GRID_N}x{GRID_N} tiles + pooled swept)", flush=True)
+              f"{GRID_N}x{GRID_N} tiles + pooled swept){_cov}", flush=True)
         for r in sorted(overlapped, key=lambda r: -(r["worst_off_mas"] or 0))[:8]:
             tag = ("FAIL" if r in bad
                    else ("could-not-verify" if r in unverifiable else "ok"))
@@ -1552,6 +1554,13 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                 # a pair measured as misregistered, a pair nothing could
                 # measure, or the whole filter tied wrong against the reference
                 ext_fail=ext_fail,
+                # How many pairs the gate actually COMPARED.  Zero is not a
+                # pass: on a single-visit module-split field (arches,
+                # quintuplet) nrca and nrcb point at different sky, so the
+                # geometry yields no pairs and this band contributes no
+                # evidence at all.  Reported so the caller can say so rather
+                # than counting it green (#572).
+                n_overlapping=len(overlapped),
                 n_fail=len(bad), pairs=res)
 
 
@@ -1695,6 +1704,7 @@ def main(argv=None):
     # `_release_observations` derivation used to REFUSE a good field, and would
     # then have PASSED one.
     checked = 0
+    no_coverage = []
     for f in filts:
         r = check_filter(args.field, f, refcat=args.refcat,
                          observations=(set(args.observations.split(","))
@@ -1722,6 +1732,43 @@ def main(argv=None):
             any_noverify = True
         if r.get("n_fail") or r.get("ext_fail"):
             any_fail = True
+        # A band the gate MEASURED but found nothing to compare in.  Distinct
+        # from could-not-verify (pairs existed, nothing could arbitrate them)
+        # and from a pass (pairs existed and agreed).  Kept separate so a
+        # reader totalling green gates does not count it (#572).
+        #
+        # `== 0`, never a falsy `not r.get(...)`: only the FULL result carries
+        # `n_overlapping`.  All four early returns omit the key -- crf on disk
+        # and none parseable, no crf matched, no detections, single
+        # exposure-group -- so a falsy test read that ABSENCE as a measured
+        # zero and listed a band that died on a NAME PATTERN or on missing
+        # products under a summary blaming module-split geometry, a cause that
+        # did not occur.  That is the #393 `elif` confusion arrived at from a
+        # third side, and it lands on exactly the bands whose next move is to
+        # check the naming or the glob.  An absent key means the band never got
+        # far enough to compare anything; it keeps its own verdict and stays
+        # out of this list.
+        if r.get("n_overlapping") == 0:
+            no_coverage.append(r["filt"])
+    # Say plainly when the gate measured nothing.  The exit code stays 0 --
+    # on a single-visit module-split field the geometry will NEVER produce
+    # pairs, so blocking would be permanent rather than actionable -- but a
+    # silent 0 let arches and quintuplet read as verified when this gate had
+    # contributed nothing to them.  Their registration evidence comes from the
+    # m7 cross-filter checkpoints (arches 1.01 mas, quintuplet 0.44 mas)
+    # instead, and that stands on its own; the point is not to double-count
+    # this gate on top of it (#572).
+    if no_coverage:
+        print(f"\nOVERLAP GATE: NO COVERAGE for {args.field} in "
+              f"{len(no_coverage)}/{checked} band(s): "
+              f"{', '.join(sorted(no_coverage))}.\n"
+              f"  Nothing overlapped, so the gate compared nothing and this is "
+              f"NOT a verified pass for {'them' if len(no_coverage) > 1 else 'it'}.\n"
+              f"  A single-visit module-split field (nrca and nrcb on different "
+              f"sky) has no seam to check by construction -- look to the m7 "
+              f"cross-filter checkpoint for that field's registration evidence.",
+              flush=True)
+
     # Print EVERY refusal that applies before returning one code, so a field
     # carrying both is described by both lines.
     if any_fail:
