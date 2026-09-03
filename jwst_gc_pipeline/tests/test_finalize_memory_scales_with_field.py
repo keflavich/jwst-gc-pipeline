@@ -10,7 +10,9 @@ These tests pin the policy in the submit driver rather than executing it: the
 script is shell and runs sbatch, so the check is that the thresholds exist, are
 ordered, and map the measured field sizes to the right tier.
 """
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -112,3 +114,97 @@ def test_the_count_is_scoped_to_this_target():
     block = src[src.index("FINALIZE MEMORY SCALES WITH THE FIELD"):]
     block = block[:block.index("FINALIZE_TIME")]
     assert '/$TARGET"' in block
+
+
+# --- the count has to look where the data actually is -------------------------
+#
+# The tests above read the policy out of the driver.  These EXECUTE it: the
+# sizing block is self-contained, so it can be lifted out and run against a
+# synthetic tree without reaching sbatch.
+
+def _sizing_block():
+    """The `if [ -z "${FINALIZE_MEM:-}" ]` block, runnable on its own."""
+    text = SCRIPT.read_text()
+    start = text.index('if [ -z "${FINALIZE_MEM:-}" ]; then')
+    end = text.index('FINALIZE_MEM=${FINALIZE_MEM:-64gb}', start)
+    return text[start:end]
+
+
+def _run_sizing(tmp_path, target, field, trees):
+    """Run the block with `trees` = {directory name: number of crf} on disk."""
+    for tree, n in trees.items():
+        pipeline = tmp_path / tree / "F200W" / "pipeline"
+        pipeline.mkdir(parents=True, exist_ok=True)
+        for i in range(n):
+            (pipeline / f"jw_{i:05d}_destreak_crf.fits").touch()
+    env = {k: v for k, v in os.environ.items() if k != "FINALIZE_MEM"}
+    env.update(TARGET=target, FIELD=field, BASEPATH=str(tmp_path))
+    # `set -e` is the driver's own state (line 28); the block must survive it.
+    done = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + _sizing_block()
+         + '\necho "MEM=$FINALIZE_MEM"\n'],
+        env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def test_a_split_tree_field_is_counted_under_its_own_observation(tmp_path):
+    """TARGET=gc2211 FIELD=046 -- the data is in gc2211_o046/, not gc2211/.
+
+    886 job logs invoke the driver with the target and the observation split
+    apart, and bare gc2211/ holds 0 crf.  Keyed on $TARGET alone o046's 240 crf
+    read as 0 and took the smallest tier -- and o046 is one of the OOMs this
+    sizing exists to prevent.
+    """
+    out = _run_sizing(tmp_path, "gc2211", "046",
+                      {"gc2211_o046": 240, "gc2211": 0})
+    assert "MEM=128gb" in out, out
+    assert "gc2211_o046" in out, out
+
+
+def test_the_per_observation_tree_is_tried_before_the_plain_one(tmp_path):
+    """Both spellings present: the observation's own tree is the measurement.
+
+    gc2211/ carries shared products (catalogs, offsets, cutouts); counting it
+    instead of the observation would size o023 by the wrong field.
+    """
+    out = _run_sizing(tmp_path, "gc2211", "023",
+                      {"gc2211_o023": 80, "gc2211": 1200})
+    assert "MEM=64gb" in out, out
+    assert "80 crf" in out, out
+
+
+def test_a_single_tree_field_still_falls_back_to_the_plain_target(tmp_path):
+    """sgrb2/001 has no sgrb2_o001/; the fallback is what keeps it at 256gb."""
+    out = _run_sizing(tmp_path, "sgrb2", "001", {"sgrb2": 1540})
+    assert "MEM=256gb" in out, out
+    assert "1540 crf" in out, out
+
+
+def test_a_target_that_already_carries_its_obsid_still_counts(tmp_path):
+    """TARGET=gc2211_o046 FIELD=046 -- gc2211_o046_o046/ does not exist."""
+    out = _run_sizing(tmp_path, "gc2211_o046", "046", {"gc2211_o046": 240})
+    assert "MEM=128gb" in out, out
+
+
+def test_an_empty_count_is_not_silent(tmp_path):
+    """0 means two different things, and only one of them is a memory decision.
+
+    An absent tree is a supported state (CI, a fresh checkout, a field before
+    its first reduce), so "count 0" is also what "I looked in the wrong place"
+    looks like -- the split-tree bug above.  The log has to distinguish them, so
+    a zero count names every path it tried and says the count came back empty.
+    """
+    out = _run_sizing(tmp_path, "gc2211", "023", {})
+    assert "MEM=64gb" in out, out
+    assert "EMPTY" in out, out
+    tokens = out.replace(";", " ").split()
+    assert str(tmp_path / "gc2211_o023") in tokens, out
+    assert str(tmp_path / "gc2211") in tokens, out
+
+
+def test_a_nonzero_count_reports_the_path_it_measured(tmp_path):
+    """The counted path is the one to check when a tier looks wrong."""
+    out = _run_sizing(tmp_path, "gc2211", "049", {"gc2211_o049": 320})
+    assert "EMPTY" not in out, out
+    assert str(tmp_path / "gc2211_o049") in out, out

@@ -77,13 +77,39 @@ if [ -z "${FINALIZE_MEM:-}" ]; then
     # submit on any host without the data tree -- which is exactly CI.  Swallow
     # the status inside the pipeline so a missing tree counts 0 and falls to the
     # smallest tier instead of killing the run.
-    _crf_count=$({ ls "${BASEPATH:-/orange/adamginsburg/jwst}/$TARGET"/*/pipeline/*crf.fits \
-                   2>/dev/null || true; } | wc -l)
+    #
+    # A split-tree field is NOT under $TARGET.  The driver is invoked
+    # TARGET=gc2211 FIELD=023 (886 job logs use that spelling) while the data
+    # sits in gc2211_o023/; bare gc2211/ holds 0 crf.  Keyed on $TARGET alone
+    # every gc2211 observation measured 0 and took the SMALLEST tier --
+    # including o046 (240 crf -> 128gb), one of the OOMs that motivated this
+    # sizing.  So try <target>_o<field> first and fall back to <target>, which
+    # is what a single-tree field (sgrb2/001) and an already-per-obs TARGET
+    # (gc2211_o046, whose _o046_o046 does not exist) both need.
+    _crf_base=${BASEPATH:-/orange/adamginsburg/jwst}
+    _crf_dir="$_crf_base/${TARGET}_o${FIELD}"
+    _crf_tried="$_crf_dir"
+    _crf_count=$({ ls "$_crf_dir"/*/pipeline/*crf.fits 2>/dev/null || true; } | wc -l)
+    if [ "$_crf_count" -eq 0 ]; then
+        _crf_dir="$_crf_base/$TARGET"
+        _crf_tried="$_crf_tried then $_crf_dir"
+        _crf_count=$({ ls "$_crf_dir"/*/pipeline/*crf.fits 2>/dev/null || true; } | wc -l)
+    fi
     if   [ "$_crf_count" -ge 1000 ]; then FINALIZE_MEM=256gb
     elif [ "$_crf_count" -ge 200 ];  then FINALIZE_MEM=128gb
     else                                  FINALIZE_MEM=64gb
     fi
-    echo "finalize memory: $FINALIZE_MEM (${_crf_count} crf under $TARGET)"
+    if [ "$_crf_count" -eq 0 ]; then
+        # 0 is two different states now that an absent tree is supported: the
+        # data is genuinely not here (CI, a fresh checkout, a field before its
+        # first reduce), or the count looked in the wrong place.  Only the
+        # second is a memory decision, so name the paths -- a job log has to be
+        # able to tell them apart.
+        echo "finalize memory: $FINALIZE_MEM (crf count came back EMPTY --" \
+             "tried $_crf_tried; smallest tier by default, not a measurement)"
+    else
+        echo "finalize memory: $FINALIZE_MEM (${_crf_count} crf under $_crf_dir)"
+    fi
 fi
 FINALIZE_MEM=${FINALIZE_MEM:-64gb}
 FINALIZE_TIME=${FINALIZE_TIME:-12:00:00}
