@@ -273,9 +273,33 @@ def main(argv=None):
         else:
             unrouted.append(c)
     if unrouted:
+        missing = sorted({c["filtername"] for c in unrouted})
         print(f"ERROR: {len(unrouted)} correction(s) match no table "
-              f"(filters {sorted({c['filtername'] for c in unrouted})})",
-              file=sys.stderr)
+              f"(filters {missing})", file=sys.stderr)
+        if len(tables) == 1:
+            # The single-table case is not a routing mistake -- there is no
+            # other table it could have gone to.  The filter is simply absent
+            # from this one, and this script UPDATES existing rows
+            # (`update_offsets_table`); it cannot create a filter's first row.
+            # Say so here rather than letting it run on and die further down on
+            # "correction ... matches NO row", which reads like a curation bug.
+            # crowded_l3 hit exactly this: its table held only the 11 F070W
+            # rows its first m2 pass seeded, so the other 13 filters had no
+            # rows to update.
+            only = next(iter(tables))
+            print(f"  {os.path.basename(only)} carries no row for "
+                  f"{', '.join(missing)}.  This script UPDATES rows that "
+                  f"already exist; it cannot seed a filter's first row.  Seed "
+                  f"those filters with the checkpoint runner, which calls "
+                  f"seed_offsets_table_from_consensus:\n"
+                  f"    python scripts/reduction/run_astrometry_checkpoint.py "
+                  f"--stage m2 --filter <FILT> \\\n"
+                  f"        --catalog-glob '<basepath>/<FILT>/<filt>_*_visit*_"
+                  f"exp*_m2_daophot_basic.fits' \\\n"
+                  f"        --refcat <refcat> --basepath <basepath> --apply "
+                  f"--offsets-table {only} --mark-stale\n"
+                  f"  Then re-run this script for the cycle-N updates.",
+                  file=sys.stderr)
         return 2
 
     stale_filters = set()
