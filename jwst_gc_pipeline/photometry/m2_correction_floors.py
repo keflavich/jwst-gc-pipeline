@@ -92,6 +92,23 @@ PER_FIELD_FLOOR_MAS = {
     # finalize twice (jobs 39933168, 39972201) after a full regeneration had
     # already been run for it.  Same shape as brick, whose scatter is 2.27.
     'sgra': 4.0,
+    # m92 (1334/001): measured with EVERY filter reached in one pass, which is
+    # what the w51 entry below says to require -- job 40964659, 2026-09-03,
+    # m12 finalize COMPLETED after the floor was applied.
+    #
+    #     filter  ncorr   min    med    max
+    #     F090W     0      -      -      -
+    #     F150W     8    2.37   2.43   2.47
+    #     F277W     2    3.57   3.57   3.57
+    #     F444W     1    2.05   2.05   2.05
+    #
+    # Max over all four filters is 3.57 mas.  F090W is clean outright.  The
+    # F150W corrections are a tight cluster whose eight detectors all read the
+    # same (-1.0, -2.2) mas -- common-mode across the exposure, so per-exposure
+    # jitter rather than a displacement the module-locked table can express.
+    # Its m12 finalize died three times on this scatter before the floor was
+    # set (jobs 40934852, 40938196, 40941927), each taking m3-m7 with it.
+    'm92': 4.0,
     # w51: set from ALL of its filters, not the first one that tripped.
     #
     # 4.0 was originally chosen from F140M alone (max correction 3.64 mas).  The
