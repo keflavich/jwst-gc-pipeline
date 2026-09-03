@@ -17,7 +17,8 @@ jw03958001001_02101 and jw03958002001_03101.
 import pytest
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    _observation_for_correction, assert_visit_token, OffsetsTableUpdateError)
+    _bulk_vgroups, _observation_for_correction, assert_visit_token,
+    OffsetsTableUpdateError)
 from jwst_gc_pipeline.mast_names import jw_prefix
 
 
@@ -63,3 +64,61 @@ def test_both_observations_of_one_joint_run_get_distinct_tokens():
         for vg in ("00102101", "00203101")
     }
     assert toks == {"jw03958001001", "jw03958002001"}
+
+
+# ---------------------------------------------------------------------------
+# The BULK consensus->reference row (the half #640 left open).
+#
+# #640 gave the PER-EXPOSURE corrections their Vgroup, but the per-visit bulk
+# tie carries exposure=None AND module=None and carried no Vgroup either, so
+# `_observation_for_correction` still fell back to the field and the joint run
+# still died on `jw03958001-002001` -- the same error, one code path over.
+# ---------------------------------------------------------------------------
+
+def _exposures(*vgroups):
+    """Consensus exposure records, keyed as build_visit_consensus keys them."""
+    return [dict(key=("1", i + 1, "mirimage", "F770W", vg))
+            for i, vg in enumerate(vgroups)]
+
+
+def test_a_joint_consensus_yields_one_vgroup_per_observation():
+    """sickle MIRI: obs 001 and 002 in one consensus -> one bulk row each."""
+    assert _bulk_vgroups(_exposures("00102101", "00102101",
+                                    "00203101", "00203101")) == \
+        ["00102101", "00203101"]
+
+
+def test_a_single_observation_consensus_yields_exactly_one_bulk_row():
+    """The common path keeps emitting the single bulk row it always did."""
+    assert _bulk_vgroups(_exposures("00102101", "00102101")) == ["00102101"]
+
+
+def test_bulk_vgroups_does_not_invent_an_observation():
+    """No parseable Vgroup -> None, so the caller reproduces the old refusal
+    rather than guessing an observation the frames may not have."""
+    assert _bulk_vgroups([dict(key=("1", 1, "mirimage", "F770W"))]) == [None]
+    assert _bulk_vgroups(_exposures("", "abc")) == [None]
+    assert _bulk_vgroups([]) == [None]
+
+
+def test_the_bulk_rows_of_a_joint_run_resolve_to_accepted_tokens():
+    """End to end for the bulk path: every emitted row keys to a real frame."""
+    exposures = _exposures("00102101", "00203101")
+    toks = set()
+    for vg in _bulk_vgroups(exposures):
+        corr = dict(visit="1", exposure=None, module=None,
+                    filtername="F770W", vgroup=vg)
+        obs = _observation_for_correction("001-002", corr)
+        tok = f"{jw_prefix('3958')}{obs}001"
+        assert assert_visit_token(tok, "test") == tok
+        toks.add(tok)
+    assert toks == {"jw03958001001", "jw03958002001"}
+
+
+def test_the_bulk_row_of_a_joint_run_used_to_be_refused():
+    """Pin the defect: a bulk row with no Vgroup is exactly what raised."""
+    corr = dict(visit="1", exposure=None, module=None, filtername="F770W")
+    obs = _observation_for_correction("001-002", corr)
+    assert obs == "001-002"
+    with pytest.raises(OffsetsTableUpdateError):
+        assert_visit_token(f"{jw_prefix('3958')}{obs}001", "test")
