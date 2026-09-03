@@ -487,6 +487,17 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   separately.
 * Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` and kept intact (+ a
   `.why.json` sidecar and a ledger in `astrometry_checkpoints/`).
+* The stale-tag is scoped to the CORRECTING observation.  `find_i2d_for_filter`
+  globs `<FILTER>/pipeline` on the filter alone, and every observation of a
+  proposal writes its mosaics there, so unscoped it renamed the neighbours'
+  good mosaics too — and the release gate then refuses those fields for a
+  quarantine they did not earn.  Eight directories on disk hold more than one
+  observation today (cloudef F162M/F360M, sgrb2 F770W/F1280W/F2550W, sickle
+  F770W/F1130W/F1500W), and 10678 puts all 139 GC Treasury observations in one
+  tree.  The scope comes from `_resolved_obsid`, the same vetted obsid the
+  per-frame catalog filter uses; a run that cannot establish its own obsid
+  falls back to the unscoped lookup, and a joint association
+  (`jw05365-o002-998_…`) counts as each observation it names.
 * `fix_alignment` stamps `APROVST/APROVMT/APROVDR/APROVDD/APROVRF/APROVTB/
   APROVDT` header cards when it (re-)applies a table, so every aligned frame
   carries the provenance of its astrometric fix next to `RAOFFSET/DEOFFSET`.
