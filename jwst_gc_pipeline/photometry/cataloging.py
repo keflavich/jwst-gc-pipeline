@@ -3492,12 +3492,13 @@ def _refcat_is_required(proposal_id, field):
     silently downgrades the checkpoints to internal-consistency only.  A field
     with no entry, or one framed on Gaia, keeps the previous behaviour: those
     run without this file today (m4, m92, ngc6397, w51 measured 2026-08-20).
+
+    The rule itself lives in ``alignment_config.reference_catalog_required``
+    so the reduce driver asks the SAME question before it starts, rather than
+    reducing in full and stopping here.
     """
-    if proposal_id is None:
-        return False
     from jwst_gc_pipeline.reduction import alignment_config as _ac
-    cfg = _ac.resolve(str(proposal_id), str(field) if field is not None else None)
-    return bool(cfg) and cfg.reference_frame == _ac.VIRAC2
+    return _ac.reference_catalog_required(proposal_id, field)
 
 
 def _astrom_checkpoint_refcat(basepath, field, proposal_id=None):

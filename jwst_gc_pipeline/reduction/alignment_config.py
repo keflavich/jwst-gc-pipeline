@@ -721,6 +721,34 @@ def offsets_channel(proposal_id, field, instrument=None):
     return CHANNEL_NONE
 
 
+def reference_catalog_required(proposal_id, field):
+    """Whether a missing reference catalog must STOP this (proposal, obsid).
+
+    True for the fields whose alignment frame here is VIRAC2: the tie those
+    fields declare is MADE against that catalog -- ``build_virac2_offsets``
+    measures the per-visit consensus against it and the m2 checkpoint re-ties
+    against it -- so running without it downgrades every check to
+    internal-consistency only, which is how a field ships arcseconds off with
+    every internal gate green (sgra/1939, ~14.8").
+
+    False for a field with no entry here, and for one framed on Gaia: those
+    reduce with no reference catalog today (m4, m92, ngc6397, w51, and wd1
+    obs003 / wd2 obs003, whose registry has no ``reference_catalog`` key --
+    measured 2026-09-03).
+
+    This is the ONE rule, asked by both halves that must agree about it: the
+    m2 checkpoint (``photometry.cataloging._refcat_is_required``) and the
+    reduce driver's ``get_existing_reference_astrometric_catalog_path``.  They
+    used to answer differently -- m2 raised while the reduce printed a notice
+    and carried on -- so a treasury tile with no catalog reduced in full and
+    only stopped hours later at the checkpoint.
+    """
+    if proposal_id is None:
+        return False
+    cfg = resolve(str(proposal_id), str(field) if field is not None else None)
+    return bool(cfg) and cfg.reference_frame == VIRAC2
+
+
 def offsets_table_path(basepath, proposal_id, field, instrument=None):
     """Absolute path of the offsets table m2 rewrites, or ``''`` for ``'none'``.
 

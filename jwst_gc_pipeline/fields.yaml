@@ -199,13 +199,20 @@ fields:
         #
         # With nothing registered, reference_catalog_candidates raises its own
         # named FieldRegistryError telling the operator which block to add,
-        # and run_pipeline stops at plan time rather than reducing a tile
-        # whose reference is unresolved.  Meanwhile the two paths that MEASURE
-        # the tie -- photometry.cataloging._astrom_checkpoint_refcat (m2) and
+        # and BOTH ways in stop before any product is written: run_pipeline at
+        # plan time, and PipelineRerunNIRCAM-LONG's own getter -- which the
+        # data-qa auto-trigger reaches directly, without passing through
+        # run_pipeline -- because alignment_config.reference_catalog_required
+        # is True for this VIRAC2-framed proposal.  So the registry block below
+        # has to be pasted before a tile can reduce; the files being on disk is
+        # not enough.
+        #
+        # The two paths that MEASURE the tie --
+        # photometry.cataloging._astrom_checkpoint_refcat (m2) and
         # reduction.bulk_offset_step0.refcat_for_frame -- glob catalogs/ and
         # select by OBSERVATION TOKEN via astrometry_utils.pick_refcat, so
-        # they find a per-tile catalog with no registry edit and refuse to
-        # substitute another tile's.
+        # they read the per-tile file itself and refuse to substitute another
+        # tile's whatever the registry says.
         #
         # Build the per-tile catalogs with
         #   python scripts/reduction/build_treasury_refcats.py \
