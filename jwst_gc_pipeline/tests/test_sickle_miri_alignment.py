@@ -1,14 +1,20 @@
-"""sickle's MIRI observations have a correction channel; obs 003 stays brick's.
+"""sickle's MIRI observations are registered; obs 003 stays brick's.
 
-The m2 checkpoint refuses to write a correction for a field with no
-table-driven channel, because the numbers would land in a table
-``fix_alignment`` never reads and the next re-tie would re-measure the identical
-residual (the arches/sgrb2 failure).  sickle's only 3958 entry covered NIRCam
-obs 007, so its MIRI run stopped with:
+sickle's only 3958 entry covered NIRCam obs 007, so its MIRI run had no entry at
+all and stopped with:
 
     astrom checkpoint [m2] F770W/mirimage: measured 6 real correction(s) for
     proposal 3958 observation 001-002, but alignment_config declares NO
     table-driven correction channel for this field
+
+What the MIRI entry supplies is the FRAME (VIRAC2, shared with the NIRCam obs)
+and the F770W anchor.  It does NOT supply a write channel:
+``offsets_channel(..., instrument='miri')`` is ``CHANNEL_NONE`` however the entry
+is declared, because ``PipelineMIRI.fix_alignment`` opens no offsets table
+(``alignment_config.TABLE_DRIVEN_INSTRUMENTS``).  An above-floor MIRI correction
+therefore still refuses -- naming the reducer rather than a missing entry --
+while ``ASTROM_CHECKPOINT_APPLY=1`` stale-tags the mosaics it measured and
+``ASTROM_CHECKPOINT_WARN_ONLY=1`` demotes the stop.
 """
 import pytest
 import yaml
@@ -29,10 +35,23 @@ def test_miri_field_resolves(field):
 
 
 @pytest.mark.parametrize("field", MIRI_FIELDS)
-def test_miri_channel_is_consensus(field):
+def test_the_declared_source_is_consensus(field):
     """The authored VIRAC2locked table is NIRCam-only, so nothing can be LOCKED."""
     assert AC.resolve("3958", field).source == AC.TABLE_CONSENSUS
     assert AC.offsets_channel("3958", field) == "consensus"
+
+
+@pytest.mark.parametrize("field", MIRI_FIELDS)
+def test_but_miri_itself_still_gets_no_write_channel(field):
+    """Which is the point of the entry: frame and anchor, not a table.
+
+    ``PipelineMIRI.fix_alignment`` opens no offsets table, so a correction
+    written into one on MIRI's behalf reaches no frame and the next re-tie
+    re-measures the identical residual.
+    """
+    assert AC.offsets_channel("3958", field,
+                              instrument="miri") == AC.CHANNEL_NONE
+    assert AC.offsets_table_path("/bp", "3958", field, instrument="miri") == ""
 
 
 @pytest.mark.parametrize("field", MIRI_FIELDS)

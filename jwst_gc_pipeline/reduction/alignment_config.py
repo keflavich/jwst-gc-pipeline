@@ -367,17 +367,25 @@ ALIGNMENT_CONFIG = (
     # sickle MIRI (3958 observations 001 and 002, jointly registered as the
     # single field '001-002' -- the two pointings sit 58" apart and overlap, so
     # they are cataloged together).  The NIRCam entry below deliberately covers
-    # only obs 007 and says so; that left MIRI with NO table-driven correction
-    # channel, and the m2 checkpoint refuses to write a correction it cannot
-    # route:
+    # only obs 007 and says so; that left MIRI with no entry at all, and the m2
+    # checkpoint refused to write a correction it could not route:
     #
     #   astrom checkpoint [m2] F770W/mirimage: measured 6 real correction(s) for
     #   proposal 3958 observation 001-002, but alignment_config declares NO
     #   table-driven correction channel for this field
     #
-    # That refusal is correct -- without an entry the numbers would land in a
-    # table fix_alignment never reads and the next re-tie would re-measure the
-    # identical residual (the arches/sgrb2 failure).
+    # WHAT THIS ENTRY DOES AND DOES NOT DO.  It supplies the FRAME (VIRAC2) and
+    # the F770W anchor, which is what the rest of the checkpoint reads.  It does
+    # NOT give MIRI a write channel: ``offsets_channel(..., instrument='miri')``
+    # answers CHANNEL_NONE whatever this entry declares, because
+    # ``PipelineMIRI.fix_alignment`` opens no offsets table
+    # (TABLE_DRIVEN_INSTRUMENTS).  So an above-floor MIRI correction still
+    # refuses -- now naming the reducer rather than a missing entry, which is
+    # the thing an operator could act on.  ``ASTROM_CHECKPOINT_WARN_ONLY=1``
+    # demotes that refusal, and ``ASTROM_CHECKPOINT_APPLY=1`` still stale-tags
+    # the measured-misaligned im0 mosaics.  Registering MIRI here remains right
+    # for the frame and the anchor; routing its corrections needs the reducer to
+    # resolve its shift through ``unified_alignment.resolve_shift``.
     #
     # TABLE_CONSENSUS, not TABLE_LOCKED: the authored table
     # Offsets_JWST_Brick3958_VIRAC2locked.csv is 120 rows over the five NIRCam
@@ -413,11 +421,15 @@ ALIGNMENT_CONFIG = (
         notes=('sickle MIRI (F770W/F1130W/F1500W, obs 001+002 jointly '
                'registered as 001-002; 10 crf per band). Registered 2026-09-01 '
                'after the m2 checkpoint refused to route 6 measured corrections '
-               'for want of a channel. Consensus rather than locked because the '
-               'VIRAC2locked table is NIRCam-only (120 rows, 5 bands, no MIRI). '
-               'The single-observation spellings are included so a per-obs run '
-               'resolves the same way as the joint one. obs 003 belongs to '
-               'brick, not sickle.'),
+               'for want of a channel. Supplies the FRAME and the F770W anchor; '
+               'it does NOT give MIRI a write channel -- offsets_channel(..., '
+               "instrument='miri') is CHANNEL_NONE whatever this entry says, "
+               'because PipelineMIRI.fix_alignment reads no offsets table '
+               '(TABLE_DRIVEN_INSTRUMENTS). Consensus rather than locked '
+               'because the VIRAC2locked table is NIRCam-only (120 rows, 5 '
+               'bands, no MIRI). The single-observation spellings are included '
+               'so a per-obs run resolves the same way as the joint one. obs '
+               '003 belongs to brick, not sickle.'),
     ),
     FieldAlignment(
         proposal='3958', fields=('007',),
