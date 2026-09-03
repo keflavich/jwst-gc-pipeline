@@ -164,15 +164,23 @@ fields:
     # set for NIRCAM/IMAGE and MIRI/IMAGE, over ~1668 planned exposure-level
     # MAST rows (data-qa mast_monitor.py:79-83), tiling the inner Galactic
     # Centre as GC_<n> targets, every visit NIRCam F212N+F480M prime with MIRI
-    # F770W parallel.  Nothing has executed: MAST gives t_min NaN on all 1668
-    # rows, and the published STScI weekly schedules for the weeks of
-    # 2026-08-03, -08-10 and -08-17 list no 10678 visit (checked 2026-08-17).
+    # F770W parallel.  The schedule is published: the STScI visit status report
+    # (https://www.stsci.edu/jwst-program-info/visits/?program=10678, fetched
+    # 2026-09-02) puts observations 088-139 -- 52 of the 139 -- in state
+    # Scheduled, executing back to back at ~0.9-1.5 h each from
+    # 2026-09-10 19:05 UT to 2026-09-13.  The other 87 (001-087) are still in
+    # Implementation.  Readiness for that window is tracked in #636.
     # The name must stay exactly 'gc-treasury': the JWST-GC/data-qa
     # repository's mast_monitor.TREASURY_FIELD routes every 10678 observation
     # to it, and the triggered reduce looks the field up under that name
     # (#413).
-    # root is blue: /orange is 97% full hosting the download staging (804T of
-    # 834T, df 2026-08-18), /blue has 17T free (#421).
+    # root is blue: /orange was 97% full hosting the download staging (804T of
+    # 834T, df 2026-08-18), /blue had 17T free (#421).  That comparison has
+    # since inverted -- df 2026-09-03 reads /orange 71T free of 826T and /blue
+    # 15T free of 45T -- so the choice of root is open again and is one of the
+    # decisions #421 and #636 ask for.  Left as written until it is taken:
+    # moving the root after a tile lands means re-pathing every downstream
+    # table.
     root: blue
     observations:
       '10678':
