@@ -73,7 +73,9 @@ def main(argv=None):
                         "SCOPES the stale-tag to this observation's mosaics "
                         "(one <FILTER>/pipeline directory holds every "
                         "observation's; unscoped, one observation's correction "
-                        "quarantines the others' good mosaics)")
+                        "quarantines the others' good mosaics).  Padding does "
+                        "not matter (3 == 003), but an obsid with no product "
+                        "in the directory RAISES rather than tagging zero")
     p.add_argument("--offsets-table", default=None)
     p.add_argument("--apply", action="store_true",
                    help="apply implied corrections to --offsets-table "

@@ -491,13 +491,34 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   globs `<FILTER>/pipeline` on the filter alone, and every observation of a
   proposal writes its mosaics there, so unscoped it renamed the neighbours'
   good mosaics too — and the release gate then refuses those fields for a
-  quarantine they did not earn.  Eight directories on disk hold more than one
-  observation today (cloudef F162M/F360M, sgrb2 F770W/F1280W/F2550W, sickle
-  F770W/F1130W/F1500W), and 10678 puts all 139 GC Treasury observations in one
-  tree.  The scope comes from `_resolved_obsid`, the same vetted obsid the
-  per-frame catalog filter uses; a run that cannot establish its own obsid
-  falls back to the unscoped lookup, and a joint association
+  quarantine they did not earn.  Enumerating every `<FILTER>/pipeline`
+  directory under `/orange/adamginsburg/jwst` on 2026-09-03 with that
+  function: 186 directories, 6666 mosaics, and NINE directories holding more
+  than one `(proposal, observation)` pair — cloudef F162M/F360M (002 + the
+  005 control field), m4 F150W2/F322W2 (002 + 003), sgrb2 F2550W and sickle
+  F1130W/F1500W (a joint `o002-998` / `o001-002` association beside its solo
+  parts), and ngc6334 F200W/F470N, which hold two PROPOSALS (6778 and 7213)
+  both calling their observation 001.  10678 puts all 139 GC Treasury
+  observations in one tree.  The scope comes from `_resolved_obsid`, the same
+  vetted obsid the per-frame catalog filter uses; a run that cannot establish
+  its own obsid falls back to the unscoped lookup, and a joint association
   (`jw05365-o002-998_…`) counts as each observation it names.
+* The scope has a FLOOR, because zero-tagging fails more quietly than
+  over-tagging: an over-tag is visible (the gate refuses a quarantined field),
+  a zero-tag is not (the gate passes a field whose mosaics are stale behind a
+  corrected offsets table).  `observation_scope` reads every spelling the
+  callers use — `2` / `002` / `o002` / `_o002`, the joint `001-002`, and
+  `_j{proposal}`, which is what `naming.perframe_obs_token` stamps for the
+  shared-tree proposals (7213/6778 → ngc6334) and therefore a required value
+  of `apply_m2_checkpoint_corrections --obs-token` there — normalising the
+  obsid through `naming.observation_field_token` rather than re-deriving the
+  padding rule.  A token that names neither an observation nor a proposal
+  raises `ObservationScopeError`; a scope that matches no observation-tagged
+  product in the `<FILTER>/pipeline` directory raises
+  `ObservationScopeMatchedNothingError`.  An observation that is present there
+  but has no un-tagged mosaic (a second pass over an already-quarantined
+  observation; a proposal that does not image this filter) returns nothing,
+  quietly.
 * `fix_alignment` stamps `APROVST/APROVMT/APROVDR/APROVDD/APROVRF/APROVTB/
   APROVDT` header cards when it (re-)applies a table, so every aligned frame
   carries the provenance of its astrometric fix next to `RAOFFSET/DEOFFSET`.

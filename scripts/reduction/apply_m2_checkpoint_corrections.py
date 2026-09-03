@@ -216,7 +216,9 @@ def main(argv=None):
     p.add_argument("--pool", action="store_true",
                    help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.")
     p.add_argument("--obs-token", default=None,
-                   help="Restrict to ONE observation's m2 records (e.g. _o002). "
+                   help="Restrict to ONE observation's m2 records (e.g. _o002, "
+                        "or _j6778 on a shared tree -- ngc6334's records are "
+                        "named that way, see naming.SHARED_TREE_PROPOSALS). "
                         "Checkpoint records are keyed on the observation "
                         "(issue #281); without this, a directory holding more "
                         "than one observation is REFUSED rather than unioned, "
@@ -227,7 +229,9 @@ def main(argv=None):
                         "*_im0_badastrom.fits.  Scoped by --obs-token: without "
                         "it, every observation's mosaics in the shared "
                         "<FILTER>/pipeline directory are tagged, not just the "
-                        "corrected one's")
+                        "corrected one's.  A --obs-token that matches no "
+                        "product in a <FILTER>/pipeline directory RAISES "
+                        "rather than tagging zero mosaics")
     args = p.parse_args(argv)
 
     records, corrections = load_corrections(args.records_dir, args.obs_token)

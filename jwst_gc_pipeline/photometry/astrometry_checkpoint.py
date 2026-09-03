@@ -53,6 +53,7 @@ ladder.  Nothing here ever edits ``_cal.fits`` or pokes a mosaic GWCS.
 import glob
 import json
 import os
+from collections import namedtuple
 from jwst_gc_pipeline.photometry.m2_correction_floors import (
     m2_correction_floor)
 import re
@@ -80,6 +81,8 @@ from .consensus_catalog import (pool_visit_consensi,
                                  write_filter_consensus)
 from ..atomic_io import atomic_write, keep_a_copy, locked
 from ..mast_names import jw_prefix
+from . import naming
+from .naming import ObservationFieldError, observation_field_token
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
 # (the first checkpoint after the first per-frame photometry).  At every later
@@ -553,90 +556,200 @@ def mark_i2d_stale(i2d_paths, reason, record_dir=None):
     return renames
 
 
-_OBS_TOKEN_RE = re.compile(r'^jw\d+-o(\d+(?:-\d+)*)_')
+#: The observation token every stage-3 product carries:
+#: ``jw{proposal:05d}-o{obs:03d}[-{obs:03d}...]_t{target}_...``.  The PROPOSAL
+#: half matters as much as the observation half -- ngc6334 is imaged by 6778
+#: and 7213 into ONE tree, and both call their observation 001, so an obsid
+#: alone cannot separate them (``naming.SHARED_TREE_PROPOSALS``).
+_OBS_TOKEN_RE = re.compile(r'^jw(?P<proposal>\d+)-o(?P<obs>\d+(?:-\d+)*)_')
+
+
+class ObservationScopeError(ValueError):
+    """``observation=`` names neither an observation nor a proposal."""
+
+
+class ObservationScopeMatchedNothingError(RuntimeError):
+    """An observation scope matched no product in a ``<FILTER>/pipeline`` dir.
+
+    Raised rather than returning ``[]``, because an empty return reads as
+    "nothing to quarantine" and the run continues with a corrected offsets
+    table and un-quarantined stale mosaics.  Silent zero-tagging is a worse
+    failure than the over-tagging the scope exists to stop: the over-tag is
+    loud (the release gate refuses a field that was quarantined), the
+    zero-tag is not (the gate passes a field whose mosaics are stale).
+    """
+
+
+class ObservationScope(namedtuple('ObservationScope', 'obsids proposals')):
+    """Which mosaics a scope claims.  ``None`` in a slot = no constraint."""
+
+    __slots__ = ()
+
+    @property
+    def unscoped(self):
+        return self.obsids is None and self.proposals is None
+
+
+def observation_scope(observation):
+    """Parse an observation/proposal token into an :class:`ObservationScope`.
+
+    Callers spell this several ways and they all have to land on the same
+    mosaics:
+
+    * ``'2'`` / ``'02'`` / ``'002'`` -- ``--field``, ``options.field`` and
+      ``run_astrometry_checkpoint --obsid``, none of which is padded for us.
+      Normalised through ``naming.observation_field_token``, the SINGLE source
+      for that rule (issue #316: a consumer that re-derives the spelling does
+      not raise, it matches nothing).  ``--obsid 3`` used to give ``{'3'}``
+      while every m4 mosaic carries ``o003``, so the scope matched nothing.
+    * ``'o002'`` / ``'_o002'`` -- ``apply_m2_checkpoint_corrections
+      --obs-token``, whose value is the record-FILENAME token.
+    * ``'_j6778'`` -- the same ``--obs-token`` on a SHARED-TREE proposal.
+      ``naming.perframe_obs_token`` stamps ``_j{proposal}`` (not ``_o{obs}``)
+      for ``naming.SHARED_TREE_PROPOSALS`` (7213, 6778 -> ngc6334), and
+      ngc6334's checkpoint records are named that way on disk today, so this
+      is a REQUIRED value of the flag rather than an exotic one.  It names a
+      PROPOSAL, and 438 ngc6334 mosaics carry ``jw06778``/``jw07213`` and no
+      such obsid -- read as an obsid it matched zero files.
+    * ``'001-002'`` / ``'002-998'`` -- a JOINT association, which
+      ``fields.Obs.joint_obsids`` carries and ``_resolved_obsid`` returns
+      verbatim (sickle MIRI, sgrb2 MIRI).  It names BOTH observations, so it
+      becomes a two-element set; matched as one opaque string it finds no
+      mosaic at all.
+    * ``'_j7213_o001'`` -- both halves, which ``naming
+      .merged_catalog_module_token`` concatenates.  Parsed part by part.
+
+    ``None``, ``''`` and the ``'*'`` wildcard obsid (also ``'o*'``, ``'_o*'``)
+    give an unscoped result: they mean "this run cannot say which observation
+    it is", and the caller's contract for that is the pre-existing unscoped
+    behaviour.
+
+    A token that is neither raises ``ObservationScopeError`` -- it would
+    otherwise become a scope that quietly matches nothing.
+    """
+    if observation is None:
+        return ObservationScope(None, None)
+    text = str(observation).strip()
+    if not text:
+        return ObservationScope(None, None)
+    obsids, proposals = set(), set()
+    for chunk in text.lstrip('_').split('_'):
+        if not chunk:
+            continue
+        if chunk[:1] in ('j', 'J') and chunk[1:].isdigit():
+            proposals.add(f'{int(chunk[1:]):05d}')
+            continue
+        body = chunk[1:] if chunk[:1] in ('o', 'O') else chunk
+        if not body or '*' in body:
+            continue                    # wildcard obsid: no constraint
+        try:
+            obsids.update(observation_field_token(body).split('-'))
+        except ObservationFieldError as exc:
+            raise ObservationScopeError(
+                f'observation={observation!r} names neither an observation '
+                f'(NNN, oNNN, _oNNN, or a joint NNN-NNN) nor a proposal '
+                f'(_j{{proposal}}, the shared-tree token for '
+                f'{naming.SHARED_TREE_PROPOSALS}).  Refusing to build a scope '
+                f'from it: it would match no mosaic on disk and stale-tag '
+                f'nothing.') from exc
+    return ObservationScope(frozenset(obsids) or None,
+                            frozenset(proposals) or None)
 
 
 def observation_ids(observation):
-    """The obsid(s) ``observation`` names, as a frozenset, or None if unknown.
+    """The OBSERVATION half of :func:`observation_scope` (or None).
 
-    Callers spell this four ways and they all mean the same observation:
-    ``'002'`` (``--field`` / ``options.field``), ``'o002'``, ``'_o002'``
-    (``apply_m2_checkpoint_corrections --obs-token``, whose value is the
-    record-filename token), and ``'001-002'`` -- a JOINT association, which
-    ``fields.Obs.joint_obsids`` carries and ``_resolved_obsid`` returns
-    verbatim (sickle MIRI, sgrb2 MIRI ``002-998``).  A joint token names BOTH
-    of its observations, so it becomes a two-element set rather than the
-    literal string; matching it as one string would find no mosaic at all and
-    stale-tag nothing, which is the fail-open half of this defect.
-
-    Returns None for None, ``''`` and the ``'*'`` wildcard obsid (also
-    ``'o*'``/``'_o*'``): those mean "this run cannot say which observation it
-    is", and the caller's contract for None is the unscoped, pre-existing
-    behaviour.
+    Kept as the narrow question "which obsids does this token name"; a
+    ``_j{proposal}`` token names none, and its scope lives in the proposal
+    half, so do not use this alone to decide whether a token is scoped -- ask
+    ``observation_scope(...).unscoped``.
     """
-    if observation is None:
-        return None
-    tok = str(observation).strip()
-    if tok.startswith('_'):
-        tok = tok[1:]
-    if tok[:1] in ('o', 'O'):
-        tok = tok[1:]
-    parts = frozenset(p for p in tok.split('-') if p)
-    if not parts or '*' in parts:
-        return None
-    return parts
+    return observation_scope(observation).obsids
 
 
-def _basename_observations(basename):
-    """The observation ids a stage-3 mosaic basename declares, as a set.
+def _basename_scope(basename):
+    """The (obsids, proposal) a stage-3 mosaic basename declares.
 
-    Mosaics are named ``jw{proposal}-o{obs}[-{obs}...]_t{target}_...`` --
-    ``jw02221-o001_t001_nircam_clear-f410m-merged_i2d.fits``, and for a joint
-    association ``jw05365-o002-998_t001_miri_clear-f770w-mirimage_data_i2d.fits``,
-    which belongs to BOTH 002 and 998.  Returns an empty set when the basename
-    carries no such token, which the caller reads as "cannot attribute".
+    ``jw02221-o001_t001_nircam_clear-f410m-merged_i2d.fits`` -> ``({'001'},
+    '02221')``; the joint ``jw05365-o002-998_t001_miri_..._i2d.fits`` belongs
+    to BOTH 002 and 998.  ``(frozenset(), None)`` when the basename carries no
+    such token, which the caller reads as "cannot attribute".
     """
     m = _OBS_TOKEN_RE.search(basename)
     if m is None:
-        return frozenset()
-    return frozenset(part for part in m.group(1).split('-') if part)
+        return frozenset(), None
+    obs = frozenset(f'{int(part):03d}'
+                    for part in m.group('obs').split('-') if part)
+    return obs, f"{int(m.group('proposal')):05d}"
+
+
+def _in_scope(path, scope):
+    """Does ``path`` belong to ``scope``?  An unattributable file always does."""
+    got_obs, got_proposal = _basename_scope(os.path.basename(path))
+    if (scope.proposals is not None and got_proposal is not None
+            and got_proposal not in scope.proposals):
+        return False
+    if scope.obsids is not None and got_obs and not (got_obs & scope.obsids):
+        return False
+    return True
 
 
 def find_i2d_for_filter(basepath, filtername, extra_globs=(), observation=None):
     """Locate the first-pass (im0) ``_i2d.fits`` mosaics for a filter.
 
-    ``observation`` scopes the result to ONE observation's mosaics.  Every
-    stage-3 product in a ``<FILTER>/pipeline`` directory is named
-    ``jw{proposal}-o{obs}_t{target}_...``, but the globs below match on the
-    FILTER alone -- so in a directory holding more than one observation they
-    return every observation's mosaics, and the caller (``mark_i2d_stale``)
-    renames all of them to ``*_im0_badastrom.fits``.  One tile's m2 correction
-    then quarantines its neighbours' good mosaics, and the release gate refuses
-    the neighbours.
+    ``observation`` scopes the result to ONE observation's (or one proposal's)
+    mosaics.  Every stage-3 product in a ``<FILTER>/pipeline`` directory is
+    named ``jw{proposal}-o{obs}_t{target}_...``, but the globs below match on
+    the FILTER alone -- so in a directory holding more than one observation
+    they return every observation's mosaics, and the caller
+    (``mark_i2d_stale``) renames all of them to ``*_im0_badastrom.fits``.  One
+    tile's m2 correction then quarantines its neighbours' good mosaics, and
+    the release gate refuses the neighbours.
 
-    That is already live: ``sickle/F770W/pipeline`` holds o001, o002 and o003
-    mosaics side by side, and 10678 (the GC Treasury) puts all 139 of its
-    observations in ONE tree, so a correction on tile 088 would stale-tag 138
-    innocent tiles.
+    That is already live.  Enumerating every ``<FILTER>/pipeline`` directory
+    under ``/orange/adamginsburg/jwst`` on 2026-09-03 with this function, 186
+    of them hold 6666 mosaics and NINE hold more than one (proposal,
+    observation) pair: cloudef F162M/F360M (002 + the 005 control field), m4
+    F150W2/F322W2 (002 + 003), sgrb2 F2550W and sickle F1130W/F1500W (a joint
+    ``o001-002``/``o002-998`` association beside its solo parts), and ngc6334
+    F200W/F470N -- which hold TWO PROPOSALS, 6778 and 7213, both calling their
+    observation 001.  10678 (the GC Treasury) puts all 139 of its observations
+    in ONE tree, so a correction on tile 088 would stale-tag 138 innocent
+    tiles.
 
-    ``observation`` accepts ``'002'``, ``'o002'``, ``'_o002'`` and the joint
-    ``'001-002'``.  ``None`` (the default, and what ``observation_ids``
-    returns for the ``'*'`` wildcard obsid) keeps the unscoped behaviour,
-    which is what a single-observation tree needs and what every existing
-    caller had.
+    ``observation`` accepts every spelling ``observation_scope`` documents:
+    ``'2'``, ``'002'``, ``'o002'``, ``'_o002'``, the joint ``'001-002'`` and
+    the shared-tree ``'_j6778'``.  ``None`` -- the default, and what the
+    ``'*'`` wildcard obsid resolves to -- keeps the unscoped behaviour, which
+    is what a single-observation tree needs and what every caller had before.
 
-    A joint-association mosaic (``jw05365-o002-998_...``) belongs to each of the
-    observations it names and is kept for any of them; a joint ``observation``
-    (``'002-998'``, which is what ``fields.Obs.joint_obsids`` holds) likewise
-    claims each of its parts.  A matched file whose
-    basename carries NO observation token is KEPT: it cannot be attributed, and
-    dropping it would leave a genuinely stale mosaic untagged (fail-open) --
-    across every tree on disk at 2026-09-03 the globs matched 5404 files and
-    all 5404 carried a token, so this branch is a guard, not a routine path.
+    Two fail-open cases are handled explicitly, because a scope that matches
+    nothing tags nothing:
+
+    * a matched file whose basename carries NO observation token is KEPT: it
+      cannot be attributed, and dropping it would leave a genuinely stale
+      mosaic untagged.  Of the 6666 files measured above, 0 lacked a token, so
+      this is a guard rather than a routine path;
+    * a scope that matches NO observation-tagged product in the
+      ``<FILTER>/pipeline`` directory at all raises
+      ``ObservationScopeMatchedNothingError``
+      (``_refuse_empty_scope``).  That is the signature of a MIS-SPELLED
+      scope, and every spelling this function cannot read degrades the same
+      silent way: before this floor, ``--obs-token _j6778`` took ngc6334 from
+      438 mosaics to 0, ``--obsid 3`` took m4 F322W2 from 52 to 0 (while
+      ``--obsid 003`` gave 16), and a mistyped ``--field 012`` took brick
+      F200W from 60 to 0.  ``mark_i2d_stale([])`` renames nothing, writes no
+      ledger line and returns ``[]``, so the run carried on with a corrected
+      offsets table, stale mosaics still in place, and a release gate with
+      nothing to refuse.  An observation that IS present in the directory but
+      has no un-tagged mosaic returns ``[]`` quietly -- a second correction
+      pass over an already-quarantined observation, or a proposal that does
+      not image this filter (ngc6334 F162M is 7213-only), has nothing to do.
 
     ``extra_globs`` are NOT scoped -- they are the caller's own literal
-    patterns, and narrowing them here would silently discard matches the caller
-    asked for by name.
+    patterns, and narrowing them here would silently discard matches the
+    caller asked for by name.  They are also outside the floor, for the same
+    reason.
     """
     pats = [
         f"{basepath}/{filtername.upper()}/pipeline/*-{filtername.lower()}-*_i2d.fits",
@@ -645,15 +758,56 @@ def find_i2d_for_filter(basepath, filtername, extra_globs=(), observation=None):
     out = []
     for pat in pats:
         out.extend(p for p in glob.glob(pat) if not p.endswith(STALE_TAG))
-    want = observation_ids(observation)
-    if want is not None:
-        def _mine(path):
-            got = _basename_observations(os.path.basename(path))
-            return (not got) or bool(got & want)
-        out = [p for p in out if _mine(p)]
+    scope = observation_scope(observation)
+    if not scope.unscoped:
+        kept = [p for p in out if _in_scope(p, scope)]
+        if out and not kept:
+            _refuse_empty_scope(basepath, filtername, observation, scope, out)
+        out = kept
     for pat in extra_globs:
         out.extend(p for p in glob.glob(pat) if not p.endswith(STALE_TAG))
     return sorted(set(out))
+
+
+def _refuse_empty_scope(basepath, filtername, observation, scope, found):
+    """Raise unless the scope is a real, present observation with no mosaic.
+
+    Two ways the scoped set can come back empty:
+
+    * the scope names an observation/proposal that IS in this
+      ``<FILTER>/pipeline`` directory -- it has ``_crf``/``_cal`` products, or
+      its mosaics were already renamed ``*_im0_badastrom.fits`` by an earlier
+      correction pass -- and simply has no un-tagged mosaic left to tag.  That
+      is legitimate (a re-run over an already-quarantined observation; a
+      proposal that does not image this filter), so return quietly;
+    * the scope matches NO file in the directory at all.  That is a spelling
+      the products do not use, and returning ``[]`` would report "no stale
+      mosaics" for a filter whose offsets table was just corrected.
+    """
+    pipeline = os.path.join(basepath, filtername.upper(), 'pipeline')
+    tokened = [(path, _basename_scope(os.path.basename(path)))
+               for path in glob.glob(os.path.join(pipeline, '*'))]
+    tokened = [(path, sc) for path, sc in tokened if sc[1] is not None]
+    if any(_in_scope(path, scope) for path, _ in tokened):
+        return
+    present_obs = sorted({o for _, (obs, _) in tokened for o in obs})
+    present_proposals = sorted({prop for _, (_, prop) in tokened})
+    raise ObservationScopeMatchedNothingError(
+        f"observation={observation!r} matches none of the {len(tokened)} "
+        f"observation-tagged product(s) in {pipeline} "
+        f"({len(found)} of them are un-tagged mosaics the filter globs "
+        f"returned).  Present there: observations "
+        f"{present_obs or 'none'}, proposals {present_proposals or 'none'}.  "
+        f"Parsed scope: obsids="
+        f"{sorted(scope.obsids) if scope.obsids else None}, proposals="
+        f"{sorted(scope.proposals) if scope.proposals else None}.  Refusing "
+        f"to report zero stale mosaics: the caller RENAMES what this returns, "
+        f"so an empty answer quarantines nothing and leaves the stale im0 "
+        f"mosaics in place behind an offsets table that was just corrected -- "
+        f"and the release gate then passes a field it should refuse.  Pass "
+        f"the observation the way the products spell it (NNN / oNNN / _oNNN, "
+        f"a joint NNN-NNN, or _j{{proposal}} for a shared tree such as "
+        f"ngc6334), or pass observation=None for the unscoped lookup.")
 
 
 # ---------------------------------------------------------------------------
