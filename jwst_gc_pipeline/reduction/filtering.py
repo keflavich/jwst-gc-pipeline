@@ -15,6 +15,7 @@ except ImportError:
                                DAOGroup as SourceGrouper)
 
 import numpy as np
+from jwst_gc_pipeline.atomic_io import publish_into
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
 import time
@@ -334,10 +335,20 @@ def estimate_background(data, header, medfilt_size=[15,15], do_segment_mask=Fals
         grid = to_griddedpsfmodel(psf_fn.replace(".fits", "_nrca5.fits"))
     else:
         log.info(f"filtering: Calculating grid for psf_fn={psf_fn}")
+        # Same publish-then-rename as saturated_star_finding.get_psf (#617):
+        # save=True writes in place, so the two os.path.exists checks above
+        # can see a file that is still being written.  ``outfile`` carries the
+        # full path here (stpsf joins ``outdir`` only when ``outfile`` is
+        # None), so it is the outfile that has to point into the build
+        # directory; the published name -- including the ``_<det>`` suffix
+        # stpsf appends -- is unchanged.
         _chan_kw = nircam_channel_safe_psf_kwargs(nc)
-        grid = nc.psf_grid(num_psfs=npsf, oversample=oversample,
-                           all_detectors=False, save=True, outfile=psf_fn,
-                           fov_pixels=fov_pixels, **_chan_kw)
+        with publish_into(path_prefix) as _build_dir:
+            grid = nc.psf_grid(num_psfs=npsf, oversample=oversample,
+                               all_detectors=False, save=True,
+                               outfile=os.path.join(_build_dir,
+                                                    os.path.basename(psf_fn)),
+                               fov_pixels=fov_pixels, **_chan_kw)
 
     yy,xx = np.indices(epsf_quadratic_filtered.data.shape)
     xc,yc = np.unravel_index(epsf_quadratic_filtered.data.argmax(), epsf_quadratic_filtered.data.shape)

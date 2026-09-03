@@ -20,6 +20,8 @@ import os
 import sys
 import stpsf
 
+from jwst_gc_pipeline.atomic_io import publish_into
+
 OUT_DIR = sys.argv[1]
 FILTER = sys.argv[2]
 OBSDATE = sys.argv[3] if len(sys.argv) > 3 else None
@@ -42,7 +44,14 @@ if OBSDATE:
         psfgen.load_wss_opd_by_date(OBSDATE)
     except Exception as exc:
         print(f"  load_wss_opd_by_date warning: {exc}")
-psfgen.psf_grid(num_psfs=NPSF, oversample=OVERSAMPLE, all_detectors=False,
-                fov_pixels=FOV_PIXELS, outdir=OUT_DIR, save=True,
-                outfile=None, overwrite=True)
+# Publish, do not write in place (#617).  This script writes into the SAME
+# shared psfs/ directory that saturated_star_finding.get_psf existence-checks,
+# and a 1024-px MIRI grid is ~500 MB and minutes of writing -- long enough for
+# a fan-out shard to load a half-written file.  ``publish_into`` builds in a
+# private subdirectory of OUT_DIR (same filesystem by construction) and
+# ``os.replace``s each finished file into place.
+with publish_into(OUT_DIR) as build_dir:
+    psfgen.psf_grid(num_psfs=NPSF, oversample=OVERSAMPLE, all_detectors=False,
+                    fov_pixels=FOV_PIXELS, outdir=build_dir, save=True,
+                    outfile=None, overwrite=True)
 print(f"[done] wrote {fn}", flush=True)
