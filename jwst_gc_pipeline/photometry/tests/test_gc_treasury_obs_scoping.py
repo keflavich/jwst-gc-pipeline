@@ -24,6 +24,7 @@ from jwst_gc_pipeline.photometry import merge_catalogs as MC
 from jwst_gc_pipeline.photometry import naming
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     _predict_tblfilename, obs_token)
+from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
 
 
 def _options(field='001', proposal_id='10678', target='gc-treasury'):
@@ -438,6 +439,98 @@ def test_merge_daophot_does_not_hand_10678s_convention_to_a_sibling(
     assert calls['obs_suffix'] == ''
     assert [os.path.basename(f) for f in calls['files']] == [
         'f212n_nrcblong_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits']
+
+
+# ---------------------------------------------------------------------------
+# merge_daophot's FWHM table: packaged fallback for a tree that has none
+# ---------------------------------------------------------------------------
+
+def _fake_svo_with_miri(monkeypatch):
+    jfilts = Table({'filterID': ['JWST/NIRCam.F212N', 'JWST/NIRCam.F480M',
+                                 'JWST/MIRI.F770W'],
+                    'ZeroPoint': [1.0, 1.0, 1.0]})
+    monkeypatch.setattr(
+        MC, 'SvoFps', types.SimpleNamespace(get_filter_list=lambda fac: jfilts))
+
+
+def _treasury_registry_with_miri(monkeypatch):
+    monkeypatch.setattr(MC, '_obs_filters_for',
+                        lambda target: {'10678': ['f212n', 'f480m', 'f770w']})
+
+
+def _run_treasury_merge(tmp_path, monkeypatch, filters=('f212n', 'f480m',
+                                                        'f770w')):
+    """Run a Treasury-shaped m7 cross-band merge and return the tables it
+    handed to ``merge_catalogs``, keyed by filter."""
+    _fake_svo_with_miri(monkeypatch)
+    _treasury_registry_with_miri(monkeypatch)
+    monkeypatch.setattr(MC, 'sanity_check_individual_table', lambda tbl: None)
+    seen = {}
+    monkeypatch.setattr(
+        MC, 'merge_catalogs',
+        lambda tbls, **kw: seen.update({t.meta['filter']: t for t in tbls}))
+    for filt in filters:
+        _write_m7_vetted(tmp_path, filt, '001')
+    MC.merge_daophot(module='nrcblong', daophot_type='basic', indivexp=True,
+                     resbgsub=True, iteration_label='m7',
+                     target='gc-treasury', basepath=str(tmp_path),
+                     ref_filter='f480m', filternames_override=list(filters),
+                     field='001', vetted=True)
+    return seen
+
+
+def test_packaged_fwhm_table_carries_the_treasury_bands():
+    """The fallback is only a fallback if it answers for what 10678 images:
+    F212N + F480M prime, F770W in parallel, with the two columns
+    ``merge_daophot`` reads out of the row."""
+    tbl = Table.read(fwhm_table_path())
+    rows = {str(r['Filter']): r for r in tbl}
+    for filt in ('F212N', 'F480M', 'F770W'):
+        assert filt in rows, f'packaged fwhm_table.ecsv has no {filt} row'
+        assert float(rows[filt]['PSF FWHM (arcsec)']) > 0
+        assert float(rows[filt]['PSF FWHM (pixel)']) > 0
+
+
+def test_merge_daophot_runs_on_a_tree_with_no_reduction_fwhm_table(
+        tmp_path, monkeypatch):
+    """gc-treasury is a NEW tree.
+
+    Nothing in the repo writes ``reduction/fwhm_table.ecsv`` (GETTING_STARTED
+    says you no longer supply one); every older field tree carries one only
+    from an earlier era.  ``merge_daophot`` used to read that path literally,
+    so the m7 cross-band merge raised ``FileNotFoundError`` on a fresh tree --
+    after the whole m12-m6 fan-out had been spent (#646).  The packaged table
+    answers instead, and its values are the ones that land in the meta.
+    """
+    (tmp_path / 'catalogs').mkdir()
+    assert not (tmp_path / 'reduction').exists()
+
+    seen = _run_treasury_merge(tmp_path, monkeypatch)
+
+    packaged = Table.read(fwhm_table_path())
+    for filt in ('f212n', 'f480m', 'f770w'):
+        row = packaged[packaged['Filter'] == filt.upper()]
+        assert seen[filt].meta['fwhm_arcsec'] == u.Quantity(
+            float(row['PSF FWHM (arcsec)'][0]), u.arcsec)
+        assert seen[filt].meta['fwhm_pix'] == float(row['PSF FWHM (pixel)'][0])
+
+
+def test_a_field_trees_own_fwhm_table_still_wins(tmp_path, monkeypatch):
+    """The fallback must not overrule a per-field override.  The existing
+    field trees each carry their own copy; those runs keep reading it."""
+    (tmp_path / 'catalogs').mkdir()
+    (tmp_path / 'reduction').mkdir()
+    # sentinel values, distinct from the packaged table's
+    Table({'Filter': ['F212N', 'F480M', 'F770W'],
+           'PSF FWHM (arcsec)': [0.911, 0.922, 0.933],
+           'PSF FWHM (pixel)': [9.11, 9.22, 9.33]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv')
+
+    seen = _run_treasury_merge(tmp_path, monkeypatch)
+
+    assert seen['f212n'].meta['fwhm_pix'] == 9.11
+    assert seen['f480m'].meta['fwhm_pix'] == 9.22
+    assert seen['f770w'].meta['fwhm_pix'] == 9.33
 
 
 # ---------------------------------------------------------------------------
