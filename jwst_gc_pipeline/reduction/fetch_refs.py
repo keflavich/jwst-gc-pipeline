@@ -37,6 +37,19 @@ FIELDS = {
     # (positions) but no virac2 Ks cache, so stage-3 photometric calibration could not run.
     'cloudef_controlfield': (SkyCoord(266.4658, -28.4842, unit='deg'),
                              10 * u.arcmin, 10 * u.arcmin),
+    # JWST 9438 (Schlafly): seven Galactic-plane pointings, centres from their
+    # own MAST s_ra/s_dec, observed 2025.71-2025.74.  10 arcmin square each --
+    # a NIRCam two-module mosaic is ~5 x 2.2 arcmin, so this is generous margin
+    # for dithers and for propagating proper motions to the 2025.72 epoch.
+    # Only g007 and crowded_l3 are inside VVV; VIRAC2 will return nothing for
+    # the other five, which is the expected answer, not a failure.
+    'g028':        (SkyCoord(279.64500,  -3.53500, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    'g033':        (SkyCoord(281.87000,   0.59100, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    'g041':        (SkyCoord(284.31700,   8.26600, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    'g054':        (SkyCoord(291.24400,  19.57500, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    'g007':        (SkyCoord(270.54615, -22.47238, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    'crowded_l3':  (SkyCoord(268.14900, -26.36400, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    'crowded_l20': (SkyCoord(276.88200, -11.48900, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
 }
 BASE = '/orange/adamginsburg/jwst'
 

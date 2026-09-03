@@ -492,6 +492,17 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         Observations.TIMEOUT = 120  # seconds; avoid indefinite hang on a stalled MAST connection
         obs_table = Observations.query_criteria(
                                                 proposal_id=proposal_id,
+                                                # JWST only: a proposal NUMBER is
+                                                # not unique across missions.  9438
+                                                # is both a JWST program (Schlafly,
+                                                # NIRCam) and an HST one (West,
+                                                # WFPC2/ACS of ABELL1185), and the
+                                                # unscoped query returned all 211
+                                                # rows of both.  Downstream filter/
+                                                # instrument cuts happened to drop
+                                                # the HST rows, but nothing
+                                                # guaranteed that.
+                                                obs_collection='JWST',
                                                 #proposal_pi="Ginsburg*",
                                                 #calib_level=3,
                                                 )

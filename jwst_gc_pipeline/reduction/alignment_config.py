@@ -524,6 +524,41 @@ ALIGNMENT_CONFIG = (
                'field -- the same split brick carries for 1182 and 2221.'),
     ),
     FieldAlignment(
+        proposal='9438', fields=('005', '006'),
+        # VIRAC2, not Gaia: these two pointings sit inside the VVV bulge and
+        # their own refcats are VIRAC2-dominated -- crowded_l3 49502 VIRAC2 vs
+        # 2720 GaiaDR3, g007 44392 vs 3541 -- so Gaia is far too sparse to be
+        # the catalog here, exactly as in the GC fields.  The other five 9438
+        # pointings are outside the footprint and stay Gaia.
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F210M',
+        notes=('9438 (Schlafly) o005 = G007.470+00.050 (l=+7.46, b=+0.06) and '
+               'o006 = crowded_l3 (l=+3.00, b=+0.00): the two pointings of this '
+               'seven-field program that fall inside the VVV bulge footprint, so '
+               'they tie to VIRAC2 like the GC fields.  TABLE_CONSENSUS rather '
+               'than TABLE_LOCKED because 9438 is NEW -- there is no '
+               'build_virac2_offsets region entry and no locked table on disk, '
+               'and seed_offsets_table_from_consensus builds its own from the m2 '
+               'consensus.  Consensus also keys by (visit, filter, exposure, '
+               'module, vgroup), so a per-exposure residual is expressible; '
+               'RECORDED_BULK has no exposure axis and is what leaves m92/m4/'
+               'ngc6397 unable to correct at all (#589).'),
+    ),
+    FieldAlignment(
+        proposal='9438', fields=('001', '002', '003', '004', '007'),
+        reference_frame=GAIA, source=TABLE_CONSENSUS,
+        reference_filter='F210M',
+        notes=('9438 o001/002/003/004/007 = G028.320, G033.007, G040.954, '
+               'G054.093 and crowded_l20, at l = 28, 33, 41, 54 and 20 deg.  All '
+               'lie OUTSIDE the VVV footprint (checked per pointing from its own '
+               'galactic coordinates), so Gaia is both frame and catalog here, '
+               'the same regime as w51/wd1/wd2.  Expect the w51 caveats to '
+               'apply: against a Gaia-ONLY refcat the per-tile map is noise and '
+               'measure_reference_tie falls back to the same-star refinement '
+               '(#411, #263), and the m7 cross-filter local map may not populate '
+               'at all on a mosaic-scale field (#565).'),
+    ),
+    FieldAlignment(
         proposal='1334', fields=None,
         reference_frame=GAIA, source=RECORDED_BULK,
         # The recorded bulk is a hand-measured CONSTANT, so it has no

@@ -117,6 +117,12 @@ EXPECTED_ROOTS = {
     'quintuplet': 'orange', 'sgra': 'orange', 'sgrb2': 'orange',
     'sgrc': 'orange', 'sickle': 'orange', 'w51': 'orange', 'wd1': 'orange',
     'wd2': 'orange',
+    # JWST 9438 (Schlafly): seven Galactic-plane pointings, l = 3 to 54 deg,
+    # registered one field per observation for the reason #469 split gc2211 --
+    # the pointings are different sky, so pooling them into one merge mixes
+    # unrelated fields.
+    'g007': 'orange', 'g028': 'orange', 'g033': 'orange', 'g041': 'orange',
+    'g054': 'orange', 'crowded_l3': 'orange', 'crowded_l20': 'orange',
 }
 
 
