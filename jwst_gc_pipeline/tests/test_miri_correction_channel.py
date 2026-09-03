@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.reduction import alignment_config as AC
 
 REDUCTION = Path(AC.__file__).resolve().parent
@@ -278,7 +279,12 @@ def _drive_no_channel(monkeypatch, tmp_path, *, module, filt, proposal, field,
         lambda *a, **kw: dict(
             passed=True, failures=[], unverified_blocking=[],
             record_path='/x/rec.json',
-            corrections=[dict(visit=f'jw0{proposal}001001', exposure=1,
+            # jw_prefix rather than the literal 4-digit prefix spelling:
+            # 10678 is one of the proposals this test parametrises over,
+            # and that spelling pads it to six digits instead of the
+            # jw10678 MAST writes (#414).  # noqa: jw0-literal
+            corrections=[dict(visit=f'{jw_prefix(proposal)}001001',
+                              exposure=1,
                               module=module, filtername=filt,
                               dra_onsky_mas=100.0, ddec_onsky_mas=0.0,
                               dec_deg=-28.7)]))
