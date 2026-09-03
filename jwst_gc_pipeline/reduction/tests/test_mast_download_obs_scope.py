@@ -87,7 +87,10 @@ def test_the_download_is_handed_only_this_observations_rows(driver, tmp_path,
     """brick's o001 rows plus the unattributed candidate; cloudc's o002/o003
     stay behind."""
     fake = _run(driver, tmp_path, monkeypatch)
-    assert fake.criteria == {'proposal_id': '2221'}
+    # ``obs_collection`` is part of the query, not decoration: a proposal NUMBER
+    # is not unique across missions (9438 is a JWST program and an HST one), and
+    # the unscoped query returns both missions' rows.
+    assert fake.criteria == {'proposal_id': '2221', 'obs_collection': 'JWST'}
     assert fake.handed == ['jw02221-o001_t001_nircam_clear-f212n',
                            'jw02221-c1001_t001_nircam_clear-f212n']
 
