@@ -1313,11 +1313,41 @@ def test_a_wildcard_field_is_probeable_once_an_observation_is_named(tmp_path,
     monkeypatch.setattr(scan, 'basepath', lambda *a, **k: str(tmp_path))
     monkeypatch.setattr(probe, 'choose_center',
                         lambda *a, **k: (266.5, -28.7, 'frame', 2))
+    # 10678 registers no reference catalog (one file cannot serve 139 tiles
+    # spanning 1.28 x 0.71 deg), and `resolve` refuses to plan a reduction
+    # whose reference is unresolved.  That refusal is its own test below; what
+    # THIS test pins is the wildcard obsid resolution, so give the tile a
+    # reference and let the rest of the recipe be built.
+    monkeypatch.setattr(_fields, 'reference_catalog_path',
+                        lambda *a, **k: str(tmp_path / 'refcat_o042.fits'))
     scan.clear_cache()
     got = probe.plan_probe('gc-treasury', obsid='042')
     assert 'error' not in got, got
     assert got['obsid'] == '042'
     assert got['job_name'].startswith('gc-treasury10678-o042-cut')
+
+
+def test_a_treasury_tile_without_a_reference_catalog_is_refused_by_name(
+        tmp_path, monkeypatch):
+    """10678 registers no reference catalog on purpose: a single CMZ-wide file
+    would be the wrong sky for all but a handful of its 139 tiles.  Planning a
+    reduction against an unresolved reference has to stop, and the message has
+    to name the tile the operator must register."""
+    d = tmp_path / 'F212N' / 'pipeline'
+    for exp in range(2):
+        _touch(str(d / f'jw10678042001_02101_0000{exp}_nrca1'
+                      f'_destreak_o042_crf.fits'))
+    monkeypatch.setattr(scan, 'basepath', lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(probe, 'choose_center',
+                        lambda *a, **k: (266.5, -28.7, 'frame', 2))
+    scan.clear_cache()
+    got = probe.plan_probe('gc-treasury', obsid='042')
+    assert 'error' in got, got
+    # the wildcard still resolved -- the refusal is about the reference, and it
+    # names the tile and the registry block to add
+    assert '10678/o042' in got['error'], got['error']
+    assert 'reference catalog' in got['error'], got['error']
+    assert 'reference_catalog:' in got['error'], got['error']
 
 
 def test_unpinned_provenance_is_marked_ambiguous_not_asserted_as_fail():
