@@ -198,18 +198,45 @@ def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field
     belongs to, and so a field wired to a catalog that was never built stops
     before producing products whose provenance names a missing file.
 
-    ``None`` when the observation has no entry in fields.yaml -- a field whose
-    absolute zero point is set some other way.
+    ``None`` when the observation has no entry in fields.yaml AND its frame
+    does not depend on one -- a field whose absolute zero point is set some
+    other way (m4, m92, ngc6397, w51, wd1 obs003, wd2 obs003).
+
+    NOT registered but REQUIRED raises instead.  ``alignment_config.
+    reference_catalog_required`` is the one rule for that, and the m2
+    checkpoint asks it too: a VIRAC2-framed field's tie is MADE against this
+    catalog, so with none registered the reduce would run to completion and
+    the FIRST refusal would come hours later at m2.  Program 10678 is 139
+    such tiles, reduced by an automated trigger
+    (``data_qa.pipeline_trigger`` -> ``submit_reduction.sbatch`` -> this
+    module) that never passes through ``run_pipeline.build_plan``, where the
+    plan-time refusal lives.  The message names the block to add.
 
     A registered catalog whose FILE is absent raises: the seeds live outside
     the repo, so a typo or a not-yet-run build must abort rather than reduce
     with an unverifiable frame.
     """
+    from jwst_gc_pipeline.reduction import alignment_config as _ac
     try:
         path = field_registry.reference_catalog_path(
             proposal_id, field, filtername=filtername, basepath=basepath)
-    except (field_registry.FieldRegistryError, KeyError):
-        return None
+    except (field_registry.FieldRegistryError, KeyError) as exc:
+        if not _ac.reference_catalog_required(proposal_id, field):
+            return None
+        raise field_registry.FieldRegistryError(
+            f"No reference astrometric catalog is REGISTERED for "
+            f"proposal_id={proposal_id} field={field}, and this field's "
+            f"alignment config declares the VIRAC2 frame, so its tie is made "
+            f"against that catalog.  Reducing without it would produce "
+            f"products at the raw assign_wcs frame and stop only at the m2 "
+            f"astrometry checkpoint, after the full reduce.  Register it in "
+            f"fields.yaml under the field's observations.{proposal_id!r} "
+            f"block:\n"
+            f"        reference_catalog:\n"
+            f"          {str(field)!r}: catalogs/<your-refcat>.fits\n"
+            f"For program 10678 the per-tile catalogs and the block to paste "
+            f"come from scripts/reduction/build_treasury_refcats.py.\n"
+            f"Registry said: {exc}") from exc
     if os.path.exists(path):
         return path
     raise FileNotFoundError(

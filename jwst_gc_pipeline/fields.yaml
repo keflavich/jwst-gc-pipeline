@@ -184,10 +184,45 @@ fields:
     root: blue
     observations:
       '10678':
-        # Consulted for every observation without an exact reference_catalog
-        # key -- for this program, all of them.  The file is owed by the refcat
-        # provisioning issue (#415) and does not exist yet.
-        default_reference_catalog: catalogs/gaia_virac2_refcat_epoch2026.65.fits
+        # NO default_reference_catalog, and no per-observation
+        # reference_catalog keys yet -- both on purpose.
+        #
+        # A default is consulted for every observation without an exact key,
+        # so the single CMZ-wide file that used to sit here
+        # (catalogs/gaia_virac2_refcat_epoch2026.65.fits, never built) named
+        # ONE catalog for all 139 tiles.  Those tiles span
+        # l = -0.573..+0.705, b = -0.138..+0.576 (1.28 x 0.71 deg) with
+        # neighbouring centres 2.17-3.78' apart, measured off the planned MAST
+        # footprints 2026-09-03, so for all but a handful that file would be
+        # the WRONG SKY -- the gc2211 o023 failure, where a neighbour's
+        # catalog produced a -9.28" per-exposure "correction".
+        #
+        # With nothing registered, reference_catalog_candidates raises its own
+        # named FieldRegistryError telling the operator which block to add,
+        # and BOTH ways in stop before any product is written: run_pipeline at
+        # plan time, and PipelineRerunNIRCAM-LONG's own getter -- which the
+        # data-qa auto-trigger reaches directly, without passing through
+        # run_pipeline -- because alignment_config.reference_catalog_required
+        # is True for this VIRAC2-framed proposal.  So the registry block below
+        # has to be pasted before a tile can reduce; the files being on disk is
+        # not enough.
+        #
+        # The two paths that MEASURE the tie --
+        # photometry.cataloging._astrom_checkpoint_refcat (m2) and
+        # reduction.bulk_offset_step0.refcat_for_frame -- glob catalogs/ and
+        # select by OBSERVATION TOKEN via astrometry_utils.pick_refcat, so
+        # they read the per-tile file itself and refuse to substitute another
+        # tile's whatever the registry says.
+        #
+        # Build the per-tile catalogs with
+        #   python scripts/reduction/build_treasury_refcats.py \
+        #       --observations 088-139 --epoch 2026.69
+        # and paste its --emit-registry output in here as
+        #   reference_catalog:
+        #     '088': catalogs/gaia_virac2_refcat_epoch2026.69_o088.fits
+        # once the files exist.  The epoch tag is per tile (a visit's own
+        # observation date), which is why the entries are written back from
+        # the build rather than templated ahead of it.
         nvisits: 1
         # The alignment SOURCE is alignment_config.py's 10678 entry
         # (TABLE_CONSENSUS), which names Offsets_JWST_Brick10678_consensus.csv

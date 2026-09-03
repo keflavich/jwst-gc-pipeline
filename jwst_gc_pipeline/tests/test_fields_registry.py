@@ -735,15 +735,23 @@ def test_a_scalar_obsid_list_is_refused(tmp_path):
         _reload_from(tmp_path, raw)
 
 
-def test_the_default_reference_catalog_answers_for_any_observation():
-    """10678 has no exact reference_catalog keys, so every obsid falls through
-    to the default -- reaching stage 1 with a catalog rather than a raise."""
-    for obsid in ('001', '037', '139'):
-        path = F.reference_catalog_path('10678', obsid)
-        assert path == ('/blue/adamginsburg/adamginsburg/jwst/gc-treasury/'
-                        'catalogs/gaia_virac2_refcat_epoch2026.65.fits'), obsid
-    miri = F.reference_catalog_path('10678', '105', instrument='miri')
-    assert miri.endswith('gaia_virac2_refcat_epoch2026.65.fits')
+def test_no_one_catalog_serves_every_treasury_tile():
+    """10678 registers NO reference catalog, and asking for one raises.
+
+    It used to carry a single ``default_reference_catalog``, which answered
+    for all 139 tiles alike -- and those tiles span 1.28 x 0.71 deg with
+    neighbouring centres 2.17-3.78' apart, so one file is the wrong sky for
+    nearly all of them (the gc2211 o023 failure).  The raise names the block
+    to add, and the per-tile catalogs come from
+    ``scripts/reduction/build_treasury_refcats.py``.
+    """
+    for obsid in ('001', '037', '088', '139'):
+        with pytest.raises(F.FieldRegistryError) as excinfo:
+            F.reference_catalog_path('10678', obsid)
+        assert 'no reference catalog registered' in str(excinfo.value), obsid
+        assert obsid in str(excinfo.value), obsid
+    with pytest.raises(F.FieldRegistryError):
+        F.reference_catalog_path('10678', '105', instrument='miri')
 
 
 def test_an_exact_reference_catalog_key_wins_over_the_default(monkeypatch):
