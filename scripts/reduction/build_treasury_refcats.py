@@ -85,6 +85,44 @@ class TileGeometryError(RuntimeError):
     """A tile's pointing could not be determined from the MAST rows."""
 
 
+def observation_number(obs_id, proposal=TREASURY_PROPOSAL):
+    """The three-digit observation number in a MAST ``obs_id``, or ``None``.
+
+    MAST spells it two ways for the same program, and this driver has to read
+    BOTH.  A program that has not executed returns only PLANNED, exposure-level
+    rows, which carry the number inline right after the proposal::
+
+        jw10678088001_02101_00001_nrca1   ->  088
+
+    A RELEASED program also returns observation-level rows, whose obs_id is an
+    association-candidate name with the number behind an ``-o``::
+
+        jw01182-o001_t001_nircam_clear-f200w   ->  001
+        jw02221-o001_t001_nircam_clear-f187n   ->  001
+
+    (both verified live against MAST on 2026-09-03).  10678 carries only the
+    first form today because nothing of it has been observed yet; from the
+    2026-09-10 delivery it carries both, and a parser that reads the planned
+    form alone selects NOTHING -- the driver would print "no MAST rows for
+    observation(s) ..." and exit 0 having built no catalog, which is exactly
+    when it is needed.  It is also the released rows, and only those, that
+    carry a finite ``t_min``, so the per-tile epoch depends on reading them.
+
+    Association candidates that are not a single observation -- ``-c1001``
+    (candidate), ``-a3001`` (association) -- return ``None``: they pool several
+    observations, so there is no one tile whose cone they describe.
+    """
+    text = str(obs_id)
+    prefix = f'jw{int(proposal):05d}'
+    if not text.startswith(prefix):
+        return None
+    rest = text[len(prefix):]
+    digits = rest[2:5] if rest[:2] == '-o' else rest[:3]
+    if len(digits) != 3 or not digits.isdigit():
+        return None
+    return digits
+
+
 def parse_observations(spec):
     """``'088-139'``/``'001,005'``/``'001,088-090'`` -> zero-padded obsids.
 
@@ -205,17 +243,16 @@ def tiles_from_table(table, observations=None, proposal=TREASURY_PROPOSAL,
     Every instrument's rows for an observation go into ONE cone -- that is the
     point: the MIRI parallel is 7.79' off the NIRCam prime, so a cone fitted to
     the prime alone leaves the parallel with no reference.  The observation
-    number is read off ``obs_id`` (``jw10678088001_...`` -> ``088``), which is
-    where it lives for planned rows; ``t_min`` is NaN until a visit executes.
+    number is read off ``obs_id`` by :func:`observation_number`, which handles
+    both the planned exposure-level spelling and the observation-level ``-o``
+    spelling a released program returns; ``t_min`` is NaN until a visit
+    executes, and rows of both spellings for one observation merge into the
+    same tile.
     """
     rows = {}
     for row in table:
-        obs_id = str(row['obs_id'])
-        prefix = f'jw{int(proposal):05d}'
-        if not obs_id.startswith(prefix):
-            continue
-        obsid = obs_id[len(prefix):len(prefix) + 3]
-        if not obsid.isdigit():
+        obsid = observation_number(row['obs_id'], proposal=proposal)
+        if obsid is None:
             continue
         if observations is not None and obsid not in observations:
             continue
@@ -278,6 +315,21 @@ def existing_refcat(base, obsid):
     found = sorted(glob.glob(os.path.join(
         str(base), 'catalogs', f'gaia_virac2_refcat_epoch*_o{token}.fits')))
     return found[-1] if found else None
+
+
+def ensure_catalog_dir(base):
+    """Create ``<base>/catalogs`` if it is not there, and return it.
+
+    The per-tile builder writes its result with ``ref.write(out)``, which
+    raises ``FileNotFoundError`` on a missing parent directory -- AFTER both
+    cone queries have run.  ``gc-treasury`` is a new field: neither its
+    basepath nor its ``catalogs/`` existed on either root on 2026-09-03, so a
+    52-tile batch would have run 52 Gaia+VIRAC2 query pairs and failed all 52
+    at the write.
+    """
+    path = os.path.join(str(base), 'catalogs')
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def build_command(tile, base, epoch, python=sys.executable,
@@ -377,6 +429,9 @@ def main(argv=None):
         print(f'  o{tile.obsid} {tile.target}: already built '
               f'({os.path.basename(path)}); --force to rebuild', flush=True)
 
+    if todo and not args.dry_run:
+        ensure_catalog_dir(base)
+
     failures = []
     for tile in todo:
         cmd = build_command(tile, base, epochs[tile.obsid],
@@ -404,8 +459,9 @@ def main(argv=None):
 
     if args.dry_run:
         print(f'\n--dry-run: {len(todo)} tile(s) would be built, '
-              f'{len(skipped)} already on disk.  Nothing was queried.',
-              flush=True)
+              f'{len(skipped)} already on disk.  The MAST query above ran '
+              f'(it is where the cones come from); no reference catalog was '
+              f'queried and nothing was written.', flush=True)
         return 0
     if failures:
         print(f'\n{len(failures)} tile(s) failed: '

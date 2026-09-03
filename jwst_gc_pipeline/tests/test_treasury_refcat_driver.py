@@ -160,6 +160,25 @@ def _rows(obsid, ra0, dec0):
     ]
 
 
+def _released_rows(obsid, ra0, dec0, t_min=61293.0):
+    """The same tile as :func:`_rows`, spelled the way MAST returns a program
+    that has actually flown.
+
+    Verified live 2026-09-03: proposal 1182 returns
+    ``jw01182-o001_t001_nircam_clear-f200w`` and 2221 returns
+    ``jw02221-o001_t001_nircam_clear-f187n``.  The observation number moves
+    behind an ``-o``, and these rows -- and only these -- carry a finite
+    ``t_min``.  10678 returns the planned spelling today because nothing of it
+    has been observed; from the 2026-09-10 delivery it returns this one.
+    """
+    planned = _rows(obsid, ra0, dec0)
+    planned[0]['obs_id'] = f'jw10678-o{obsid}_t001_nircam_f212n'
+    planned[1]['obs_id'] = f'jw10678-o{obsid}_t001_miri_f770w'
+    for row in planned:
+        row['t_min'] = t_min
+    return planned
+
+
 def _table(rows):
     return Table(rows=rows, names=list(rows[0]))
 
@@ -256,3 +275,77 @@ def test_a_wildcard_obsid_field_still_takes_per_observation_keys(monkeypatch):
     assert got.endswith('catalogs/o088.fits')
     with pytest.raises(F.FieldRegistryError):
         F.reference_catalog_candidates('4242', '089')
+
+
+# --------------------------------------------------------------------------
+# the two spellings MAST uses for an observation number
+# --------------------------------------------------------------------------
+
+def test_the_observation_number_is_read_from_both_mast_spellings():
+    """A released program spells the observation behind an ``-o``; a program
+    that has not flown spells it inline.  10678 changes spelling on
+    2026-09-10, so the driver has to read both or select nothing at all."""
+    planned = 'jw10678088001_02101_00001_nrca1'
+    released = 'jw10678-o088_t001_nircam_f212n'
+    assert DRIVER.observation_number(planned) == '088'
+    assert DRIVER.observation_number(released) == '088'
+    # and the observation-level form of another program, measured live
+    assert DRIVER.observation_number('jw01182-o001_t001_nircam_clear-f200w',
+                                     proposal='1182') == '001'
+    assert DRIVER.observation_number('jw02221-o001_t001_nircam_clear-f187n',
+                                     proposal='2221') == '001'
+
+
+@pytest.mark.parametrize('obs_id', [
+    'jw01182-o001_t001_nircam_clear-f200w',   # another proposal entirely
+    'jw10678-c1001_t001_nircam_f212n',        # a multi-observation candidate
+    'jw10678-a3001_t001_nircam_f212n',        # an association, not one tile
+    'jw10678_t001_nircam_f212n',              # no observation at all
+    'jw1067808_x',                            # truncated
+])
+def test_a_row_that_names_no_single_observation_is_dropped(obs_id):
+    assert DRIVER.observation_number(obs_id) is None
+
+
+def test_a_released_program_still_yields_its_tiles():
+    """The regression this pins: with the observation number parsed off the
+    planned spelling alone, a released 10678 row matched nothing, so
+    ``tiles_from_table`` returned [] and the driver printed "no MAST rows for
+    observation(s) ['088']" and exited 0 having built no catalog."""
+    table = _table(_released_rows('088', 266.6926, -28.7879))
+    tiles = DRIVER.tiles_from_table(table, observations=['088'])
+    assert [t.obsid for t in tiles] == ['088']
+    assert tiles[0].instruments == ('miri', 'nircam')
+    assert tiles[0].radius_deg * 60.0 > 6.0
+
+
+def test_a_released_row_is_what_carries_the_epoch():
+    """``t_min`` is NaN on every planned row, so the per-tile epoch can only
+    ever come from a released row -- which is exactly the row the positional
+    parser dropped."""
+    table = _table(_released_rows('088', 266.6926, -28.7879, t_min=61293.0))
+    tile, = DRIVER.tiles_from_table(table)
+    assert tile.epoch == pytest.approx(2026.69, abs=0.01)
+
+
+def test_the_two_spellings_of_one_observation_merge_into_one_tile():
+    """A program mid-delivery returns both.  They are the same sky and must
+    not become two tiles competing for one filename."""
+    rows = (_rows('088', 266.6926, -28.7879)
+            + _released_rows('088', 266.6926, -28.7879))
+    tiles = DRIVER.tiles_from_table(_table(rows))
+    assert [t.obsid for t in tiles] == ['088']
+    assert tiles[0].epoch == pytest.approx(2026.69, abs=0.01)
+
+
+def test_the_catalogs_directory_is_created_before_the_first_query(tmp_path):
+    """The per-tile builder writes with ``ref.write(out)`` only after both
+    cone queries have finished, so a missing ``catalogs/`` costs the whole
+    query and then fails.  gc-treasury is a new field: neither its basepath
+    nor ``catalogs/`` existed on either root on 2026-09-03."""
+    base = tmp_path / 'gc-treasury'
+    assert not (base / 'catalogs').exists()
+    made = DRIVER.ensure_catalog_dir(base)
+    assert os.path.isdir(made)
+    # idempotent: a rerun over a populated directory is fine
+    assert DRIVER.ensure_catalog_dir(base) == made
