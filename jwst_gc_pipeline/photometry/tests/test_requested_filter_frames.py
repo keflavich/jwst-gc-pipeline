@@ -15,10 +15,12 @@ legitimately names a band a given observation never took.
 import pytest
 
 from jwst_gc_pipeline.photometry.requested_filters import (
+    ALLOW_ABSENT_ENV,
     RequestedFilterHasNoFramesError,
     assert_requested_filters_have_frames,
     classify_requested_filter,
     frame_lineages_on_disk,
+    requested_lineages,
 )
 
 WD1 = dict(target='wd1', proposal_id='1905', field='001',
@@ -134,6 +136,110 @@ def test_verdicts(n, lineages, declared, expect):
     assert verdict == expect
 
 
+# --- which lineage the run actually asked for -----------------------------
+#
+# Both of these were wrong-lineage before: the classifier compared the raw
+# `each_suffix` string against the keys on disk, so any key that was not that
+# exact string counted as "somebody else's lineage".
+
+def test_a_field_carrying_both_lineages_is_not_told_to_switch():
+    """brick/2221 obs 001 F410M verbatim: {'o001_crf': 48,
+    'destreak_o001_crf': 48}.  48 frames sit under the REQUESTED suffix, so the
+    suffix is right and the run's modules/visits are what missed them.  The
+    earlier order returned wrong-lineage and printed
+    ``--each-suffix-overrides=F410M:o001_crf`` -- advice to read the other
+    lineage while the requested one is on disk, which is the ~106 mas
+    two-lineage mix, on exactly the four fields (brick, cloudc, cloudef,
+    sickle) that carry both."""
+    verdict, msg = classify_requested_filter(
+        'F410M', 0, target='brick', proposal_id='2221', field='001',
+        basepath='/orange/adamginsburg/jwst/brick',
+        each_suffix='destreak_o001_crf', declared={'F410M'},
+        lineages={'o001_crf': 48, 'destreak_o001_crf': 48})
+    assert verdict == 'outside-this-run'
+    assert 'each-suffix-overrides' not in msg, (
+        'never recommend switching lineage on a field that has both')
+    assert '--modules' in msg
+    assert 'o001_crf (n=48)' in msg and 'MIX lineages' in msg, (
+        'the other lineage is still named, as context rather than as the fix')
+
+
+def test_the_joint_field_lineages_are_both_requested():
+    """``get_filenames`` rewrites the obs token of ``each_suffix`` per subfield,
+    so a joint field asks for one lineage per observation."""
+    assert requested_lineages('o002_crf', '002-998') == {'o002_crf',
+                                                         'o998_crf'}
+    assert requested_lineages('destreak_o002_crf', '002-998') == {
+        'destreak_o002_crf', 'destreak_o998_crf'}
+    assert requested_lineages('destreak_o001_crf', '001') == {
+        'destreak_o001_crf'}
+
+
+def test_a_joint_field_is_not_wrong_lineage_on_every_call():
+    """sickle 5365 MIRI ``002-998`` (and 3958 ``001-002``): both observations'
+    frames ARE the requested lineage.  The raw-string comparison put the second
+    one in `other` and diagnosed wrong-lineage every single time, recommending
+    an override to a lineage the run was already globbing."""
+    verdict, msg = classify_requested_filter(
+        'F200W', 0, target='sickle', proposal_id='5365', field='002-998',
+        basepath='/x', each_suffix='o002_crf', declared={'F200W'},
+        lineages={'o002_crf': 10, 'o998_crf': 10})
+    assert verdict == 'outside-this-run'
+    assert 'each-suffix-overrides' not in msg
+
+
+def test_a_joint_field_with_frames_in_only_one_observation():
+    """sickle 3958 MIRI ``001-002`` with F770W frames written for obs 002 only.
+    The run globs BOTH ``o001_crf`` and ``o002_crf``, so ``o002_crf`` is a
+    requested lineage and the diagnosis is the run's modules/visits.  Comparing
+    the raw ``each_suffix`` string instead made this wrong-lineage and printed
+    ``--each-suffix-overrides=F770W:o002_crf`` -- an override to a lineage the
+    run already globs, which changes nothing."""
+    verdict, msg = classify_requested_filter(
+        'F770W', 0, target='sickle', proposal_id='3958', field='001-002',
+        basepath='/x', each_suffix='o001_crf', declared={'F770W'},
+        lineages={'o002_crf': 12})
+    assert verdict == 'outside-this-run'
+    assert 'each-suffix-overrides' not in msg
+
+
+def test_a_joint_field_can_still_be_wrong_lineage():
+    """The other side: on the same joint field, a destreak request when only the
+    bare lineages exist is a real lineage mismatch and must still say so."""
+    verdict, msg = classify_requested_filter(
+        'F200W', 0, target='sickle', proposal_id='5365', field='002-998',
+        basepath='/x', each_suffix='destreak_o002_crf', declared={'F200W'},
+        lineages={'o002_crf': 10, 'o998_crf': 10})
+    assert verdict == 'wrong-lineage'
+    assert '--each-suffix-overrides=F200W:' in msg
+
+
+def test_requested_lineages_matches_what_the_globber_globs(tmp_path):
+    """The invariant behind the two tests above, checked against the real
+    globber rather than against a restatement of it: every frame
+    ``get_filenames`` returns for a joint field carries a lineage
+    ``requested_lineages`` calls requested.  If ``get_filenames``'s per-subfield
+    rewrite ever changes, this fails instead of the diagnosis quietly drifting
+    back."""
+    import os
+
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+        get_filenames)
+
+    pipeline = tmp_path / 'F770W' / 'pipeline'
+    pipeline.mkdir(parents=True)
+    for obs, lineage in (('002', 'o002_crf'), ('998', 'o998_crf')):
+        (pipeline / f'jw05365{obs}001_02101_00001_mirimage_{lineage}.fits').touch()
+
+    found = get_filenames(str(tmp_path), 'F770W', '5365', '002-998',
+                          each_suffix='o002_crf', module='mirimage',
+                          visitid='001')
+    assert len(found) == 2, 'the globber spans both observations'
+    on_disk = {'_'.join(os.path.basename(f)[:-len('.fits')].split('_')[4:])
+               for f in found}
+    assert on_disk <= requested_lineages('o002_crf', '002-998')
+
+
 # --- the registry side of the distinction ---------------------------------
 
 def test_the_registry_declares_the_treasury_bands_for_a_wildcard_tile():
@@ -157,6 +263,21 @@ def test_the_registry_is_scoped_to_the_observation_not_the_field():
         declared_for_observation)
     declared = declared_for_observation('sickle', '3958', '007')
     assert 'F187N' in declared and 'F770W' not in declared
+
+
+def test_the_registry_fallback_leaves_niriss_out():
+    """``fields.declared_filters`` defaults to NIRCam+MIRI and says why: NIRISS
+    has its own band list and its own layout, so a NIRISS-only name can never
+    have a ``{FILTER}/pipeline/`` directory.  sgrc/4147 declares F158M/F356W for
+    NIRISS only; unioned in, a NIRCam sgrc run naming one would be refused as
+    declared-but-absent with no reduction able to clear it, instead of skipped
+    as a band this observation never took.  (sgrc/4147 reaches the fallback:
+    ``filters_for_observation`` returns [] for its observations.)"""
+    from jwst_gc_pipeline.photometry.requested_filters import (
+        declared_for_observation)
+    declared = declared_for_observation('sgrc', '4147', '001')
+    assert 'F405N' in declared, 'the NIRCam/MIRI bands are still declared'
+    assert 'F158M' not in declared and 'F356W' not in declared
 
 
 def test_an_unregistered_proposal_declares_nothing():
@@ -235,11 +356,21 @@ def _options(**kw):
     return opts
 
 
-def _run(basepath, options):
+def _tree(tmp_path, filters):
+    """``{filter: lineage}`` -> two exposures each, under that lineage."""
+    for filt, suffix in filters.items():
+        pipeline = tmp_path / filt / 'pipeline'
+        pipeline.mkdir(parents=True)
+        for exp in (1, 2):
+            (pipeline / f'jw01905001001_02101_{exp:05d}_nrca1_{suffix}.fits').touch()
+    return str(tmp_path)
+
+
+def _run(basepath, options, filternames=('F115W', 'F150W')):
     from jwst_gc_pipeline.photometry import cataloging
 
     return cataloging.run_manual_pipeline(
-        options, ['nrca'], ['F115W', 'F150W'], {'1905': {'wd1': 1}},
+        options, ['nrca'], list(filternames), {'1905': {'wd1': 1}},
         '1905', 'wd1', '001', basepath, {}, {})
 
 
@@ -269,3 +400,115 @@ def test_the_override_gets_past_the_preflight(tmp_path):
         _run(basepath, options)
     assert 'not-a-phase' in str(excinfo.value)
     assert not isinstance(excinfo.value, RequestedFilterHasNoFramesError)
+
+
+# --- a skipped filter has to LEAVE the run --------------------------------
+#
+# The not-observed verdict is documented as "reported and skipped, not raised".
+# Logging it and leaving it in `filternames` does not deliver that: the filter
+# walks into the phase loop with zero frames and dies on
+# `no {filt}/{module} frames produced output in phase {phase}`
+# (cataloging.py), which is the raise this verdict exists to avoid.  The
+# preflight therefore runs BEFORE `multifilter`/`phases`/`is_miri` are derived
+# and drops the filter, and the "MANUAL PIPELINE:" banner -- printed after that
+# point -- is where both halves are observable.
+
+def test_a_not_observed_filter_is_dropped_from_the_run(tmp_path, capsys):
+    """F480M is not declared for wd1/1905 and nothing is on disk for it, so the
+    run continues on F115W alone.  It must not still be in `filternames`, and
+    the m7 cross-band phase (multifilter, decided from that list) must be gone
+    with it."""
+    basepath = _tree(tmp_path, {'F115W': 'destreak_o001_crf'})
+    options = _options(manual_start_phase='not-a-phase')
+    with pytest.raises(ValueError) as excinfo:
+        _run(basepath, options, filternames=('F115W', 'F480M'))
+    assert 'not-a-phase' in str(excinfo.value), (
+        'the preflight must not have refused the run')
+    out = capsys.readouterr().out
+    assert "dropping ['F480M']" in out
+    banner = [ln for ln in out.splitlines() if ln.startswith('MANUAL PIPELINE:')]
+    assert len(banner) == 1, out
+    assert "filters=['F115W']" in banner[0], (
+        'a dropped filter must not survive into the phase loop')
+    assert "'m7'" not in banner[0], (
+        'multifilter is decided AFTER the drop: one filter left means no m7')
+
+
+def test_a_run_left_with_no_filters_refuses(tmp_path):
+    """Dropping is not the same as succeeding.  If every requested band is one
+    the observation never took, the run has nothing to catalog and must say so
+    rather than walk through six phases and report success."""
+    basepath = _tree(tmp_path, {'F115W': 'destreak_o001_crf'})
+    with pytest.raises(RequestedFilterHasNoFramesError) as excinfo:
+        _run(basepath, _options(), filternames=('F480M',))
+    assert 'nothing to catalog' in str(excinfo.value)
+
+
+# --- the fan-out consequence, and the one override ------------------------
+#
+# On origin/main a fan-out shard whose filter resolved to zero printed
+# `nothing to fit` and exited 0, so the array still fitted the other bands and
+# only the finalize died.  With the preflight the shard refuses before any
+# phase, so a run naming one absent band now produces nothing for the good
+# bands either.  That is the intended trade for #592 -- the wd1 run spent ~10 h
+# of array time on a pass whose correction floor then came from ten of eleven
+# filters -- so the refusal says it, and the one case an operator cannot fix by
+# editing the command line (a band still being reduced) has a waiver.
+
+def test_the_refusal_says_the_whole_run_stops(tmp_path):
+    basepath = _wd1_tree(tmp_path)
+    with pytest.raises(RequestedFilterHasNoFramesError) as excinfo:
+        _run(basepath, _options())
+    msg = str(excinfo.value)
+    assert 'THE WHOLE RUN STOPS' in msg and 'fan-out shard' in msg
+
+
+def test_a_declared_but_absent_band_is_waivable_with_a_reason(tmp_path,
+                                                              capsys,
+                                                              monkeypatch):
+    """The Treasury shape on 2026-09-10: F444W is declared for wd1/1905 and its
+    reduction has not written frames.  Unwaived the run stops and names the
+    waiver; waived, the band is dropped and F115W still produces."""
+    basepath = _tree(tmp_path, {'F115W': 'destreak_o001_crf'})
+    with pytest.raises(RequestedFilterHasNoFramesError) as excinfo:
+        _run(basepath, _options(), filternames=('F115W', 'F444W'))
+    msg = str(excinfo.value)
+    assert 'fields.yaml declares it' in msg
+    assert ALLOW_ABSENT_ENV in msg, 'the refusal must name its own waiver'
+
+    monkeypatch.setenv(ALLOW_ABSENT_ENV, '1')
+    monkeypatch.setenv(f'{ALLOW_ABSENT_ENV}_REASON',
+                       'F444W reduction still running')
+    options = _options(manual_start_phase='not-a-phase')
+    with pytest.raises(ValueError) as excinfo:
+        _run(basepath, options, filternames=('F115W', 'F444W'))
+    assert 'not-a-phase' in str(excinfo.value)
+    out = capsys.readouterr().out
+    assert f'WARNING (override {ALLOW_ABSENT_ENV}=1)' in out
+    assert 'F444W reduction still running' in out
+    assert "filters=['F115W']" in out
+
+
+def test_the_waiver_does_not_cover_a_wrong_lineage(tmp_path, monkeypatch):
+    """wd1's F150W is on disk under the other lineage: a mis-specified command
+    line, fixed by one flag and a resubmission.  There is nothing to waive, so
+    the waiver must not open that door."""
+    monkeypatch.setenv(ALLOW_ABSENT_ENV, '1')
+    monkeypatch.setenv(f'{ALLOW_ABSENT_ENV}_REASON', 'trying to get past this')
+    basepath = _wd1_tree(tmp_path)
+    with pytest.raises(RequestedFilterHasNoFramesError) as excinfo:
+        _run(basepath, _options())
+    assert '--each-suffix-overrides=F150W:o001_crf' in str(excinfo.value)
+
+
+def test_a_waived_band_with_no_reason_is_said_loudly(tmp_path, capsys,
+                                                     monkeypatch):
+    """The flag without the justification is the state CLAUDE.md forbids for the
+    astrometry gates; the same is said here rather than passing silently."""
+    monkeypatch.setenv(ALLOW_ABSENT_ENV, '1')
+    monkeypatch.delenv(f'{ALLOW_ABSENT_ENV}_REASON', raising=False)
+    basepath = _tree(tmp_path, {'F115W': 'destreak_o001_crf'})
+    options = _options(manual_start_phase='not-a-phase')
+    with pytest.raises(ValueError):
+        _run(basepath, options, filternames=('F115W', 'F444W'))
+    assert 'NO JUSTIFICATION RECORDED' in capsys.readouterr().out
