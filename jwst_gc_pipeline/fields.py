@@ -731,9 +731,12 @@ def reference_catalog_candidates(proposal, obsid, filtername=None,
 
     MIRI and NIRISS register several and take the first present on disk; NIRCam
     registers one.  An exact ``reference_catalog`` key for the obsid wins;
-    ``default_reference_catalog`` answers for any observation without one,
-    which is how a wildcard-obsid proposal registers a catalog for observations
-    whose numbers the registry does not list one by one.
+    ``default_reference_catalog`` answers for any observation without one, so
+    it belongs only where ONE catalog is right for every observation of the
+    proposal.  A wildcard ``obsids`` is not a reason to reach for it: the
+    lookup below is by obsid STRING and never consults the declared obsid
+    list, so per-observation keys work under a wildcard too (which is how
+    program 10678 registers one catalog per tile).
     """
     obsid = str(obsid)
     if target is None:
