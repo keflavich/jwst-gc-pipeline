@@ -94,6 +94,13 @@ MANUAL_DEFAULTS = {
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.
     'manual_keep_intermediate_model_i2d': False,
+    # -- retention: at each phase barrier, drop the per-frame images the
+    # barrier makes unreachable (this phase's mergedcat renders, the previous
+    # phase's raw residual/model).  OFF by default: a completed run currently
+    # leaves every phase's scaffolding for inspection, and taking that away is
+    # a deliberate decision, not an upgrade side effect.  See
+    # jwst_gc_pipeline/retention.py and docs/PRODUCT_RETENTION.md.
+    'manual_gc_superseded_perframe': False,
 }
 
 

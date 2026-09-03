@@ -4576,6 +4576,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False,
                       action='store_true',
                       help='After --each-exposure, resample all per-exposure residuals into a residual_i2d product by default; this parameter skips that step. Residual kinds are auto-determined based on enabled photometry types.')
+    parser.add_option('--manual-gc-superseded-perframe',
+                      dest='manual_gc_superseded_perframe',
+                      default=MANUAL_DEFAULTS['manual_gc_superseded_perframe'],
+                      action='store_true',
+                      help=('At each phase barrier, delete the per-frame images '
+                            'the barrier makes unreachable: this phase\'s '
+                            '*_mergedcat_{residual,model}.fits (their i2d has '
+                            'just been written) and the PREVIOUS phase\'s '
+                            '*_{residual,model}.fits (their mergedcat build '
+                            'finished a barrier ago).  This phase\'s own raw '
+                            'pair and every mosaic are kept.  Off by default; '
+                            'the same selection is available offline via '
+                            'scripts/maintenance/prune_products.py.'))
     parser.add_option('--manual-keep-intermediate-model-i2d',
                       dest='manual_keep_intermediate_model_i2d',
                       default=MANUAL_DEFAULTS['manual_keep_intermediate_model_i2d'],

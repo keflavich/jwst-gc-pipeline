@@ -1411,6 +1411,19 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
         basetable[oksep].write(oksep_fn, overwrite=True)
 
 
+def _want_allcols(write_allcols=None):
+    """Whether to write the `_allcols` superset table.
+
+    Precedence: explicit argument > ``GC_WRITE_ALLCOLS`` env > off.  The env
+    hook exists so a debugging run can turn it back on without editing a call
+    site three layers down, exactly like ``GC_BASEPATH_OVERRIDE``.
+    """
+    if write_allcols is not None:
+        return bool(write_allcols)
+    return os.environ.get('GC_WRITE_ALLCOLS', '').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+
+
 def merge_individual_frames(module='merged', suffix="", desat=False, filtername='f410m',
                                         progid='2221',
                                         bgsub=False, epsf=False, fitpsf=False, blur=False, target='brick',
@@ -1426,6 +1439,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         n_spatial_chunks=1,
                                         merge_workers=1,
                                         field=None,
+                                        write_allcols=None,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
@@ -1629,9 +1643,22 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         merged_exposure_table = combine_singleframe(
             tables, offsets_table=offsets_table, filtername=filtername)
 
-    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{out_obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
-    print(f"Writing {outfn} with length {len(merged_exposure_table)}")
-    merged_exposure_table.write(outfn, overwrite=True)
+    # The _allcols superset is a debugging artifact, not a product: the minimal
+    # table below is derived from THIS in-memory table by column selection, so
+    # skipping the write costs the minimal table nothing.  Nothing downstream
+    # reads it -- the note ~1000 lines up says the per-exposure 2-D arrays were
+    # dropped because "downstream code doesn't consume them", and
+    # diagnostics/inventory.py lists `_allcols` in _DERIVATIVE_RE, the products
+    # that are never the canonical one.  It is 922 GB across the archive (798 of
+    # them brick's), so it is opt-in rather than opt-out.
+    if _want_allcols(write_allcols):
+        outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{out_obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
+        print(f"Writing {outfn} with length {len(merged_exposure_table)}")
+        merged_exposure_table.write(outfn, overwrite=True)
+    else:
+        print("Skipping the _allcols superset table (--write-allcols to keep "
+              "it); the minimal table below carries every column downstream "
+              "reads.", flush=True)
 
     # make a table that is nearly equivalent to standard tables (with no 'x' or 'y' coordinate)
     minimal_version = {colname: merged_exposure_table[f'{colname}_avg']
@@ -3274,6 +3301,14 @@ def main():
                            'for fields with >1M detections; safe to leave at default 4 for '
                            'smaller fields (no-op below the 1M threshold).  Requires the '
                            'SLURM job to request --cpus-per-task >= this value.')
+    parser.add_option('--write-allcols', dest='write_allcols', default=False,
+                      action='store_true',
+                      help=('Also write the *_allcols.fits superset table for '
+                            'each per-filter merge.  Off by default: the '
+                            'minimal table is derived from it in memory and is '
+                            'what every downstream reader uses, so the superset '
+                            'is a debugging artifact that costs ~1 GB-100 GB '
+                            'per filter.  GC_WRITE_ALLCOLS=1 does the same.'))
     parser.add_option('--n-spatial-chunks', dest='n_spatial_chunks', default=0, type='int',
                       help='Explicit spatial tile count for chunked merge.  0 = auto-derive '
                            'from --merge-workers (recommended).  Only needed to force a '
@@ -3354,7 +3389,8 @@ def main():
                     iteration_label=options.iteration_label,
                     resbgsub=options.resbgsub,
                     n_spatial_chunks=int(options.n_spatial_chunks),
-                    merge_workers=int(options.merge_workers))
+                    merge_workers=int(options.merge_workers),
+                    write_allcols=getattr(options, 'write_allcols', None))
             except ValueError as ex:
                 # A filter with no per-frame catalogs is normal -- the obs may
                 # not have that filter, or this pass cataloged one instrument

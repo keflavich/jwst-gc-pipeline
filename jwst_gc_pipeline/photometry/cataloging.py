@@ -3236,6 +3236,58 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
     return merged[~drop], n_dedup, n_off
 
 
+def _gc_perframe_images(cut_bp, proposal_id, field, filt, phase, phases):
+    """Remove the per-frame images a completed phase barrier retires.
+
+    Called only once this phase's ``*_mergedcat_residual_i2d.fits`` exists and
+    its smoothed bg is built -- the state ``_reconstruct_smoothed_bg_path``
+    calls "the only cross-phase state".  Two classes become unreachable at that
+    moment:
+
+    * THIS phase's per-frame ``*_mergedcat_{residual,model}.fits``: they were
+      rendered so the resample could write the i2d that now exists, and no
+      other reader takes them.
+    * The PREVIOUS phase's per-frame ``*_{residual,model}.fits``: their only
+      consumer was that phase's own mergedcat build, one barrier ago.
+
+    This phase's own raw pair is deliberately kept: a retry of this phase's
+    mosaic still needs it, and ``build_mergedcat_residuals`` hard-crashes on a
+    missing frame rather than punching a hole in the mosaic.  The final phase's
+    raw pair is therefore never removed by this function at all -- there is no
+    later barrier to retire it.
+
+    Failure here is reported and swallowed: a cleanup that cannot run is not a
+    reason to fail a phase that succeeded.
+    """
+    from jwst_gc_pipeline import retention
+
+    pipeline_dir = os.path.join(cut_bp, filt, 'pipeline')
+    try:
+        idx = list(phases).index(phase)
+    except ValueError:
+        return
+    doomed = retention.spent_mergedcat_frames(
+        pipeline_dir, proposal_id=proposal_id, field=field, filtername=filt,
+        label=phase)
+    if idx > 0:
+        doomed += retention.superseded_perframe_products(
+            pipeline_dir, proposal_id=proposal_id, field=field, filtername=filt,
+            label=phases[idx - 1])
+    freed = 0
+    removed = 0
+    for path in doomed:
+        try:
+            freed += os.path.getsize(path)
+            os.unlink(path)
+            removed += 1
+        except OSError as ex:
+            print(f"manual [{phase}]: could not remove {os.path.basename(path)}"
+                  f" ({ex})", flush=True)
+    if removed:
+        print(f"manual [{phase}]: retention removed {removed} superseded "
+              f"per-frame images ({freed / 1e9:.1f} GB) for {filt}", flush=True)
+
+
 def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
                                   label, options, pupil):
     """Rebuild the on-disk smoothed-bg i2d path for a completed phase ``label``.
@@ -6123,6 +6175,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(mc_i2d)
                         print(f"manual [{phase}]: smoothed bg for next phase = "
                               f"{bg_for_next[(module, filt)]}", flush=True)
+                        # Everything the next phase needs is now on disk, so
+                        # the scaffolding this phase and the one before it left
+                        # behind is unreachable.  Off by default: turning it on
+                        # changes what a completed run leaves for inspection,
+                        # which is a decision to make deliberately and not as a
+                        # side effect of upgrading.
+                        if bool(mopt(options, 'manual_gc_superseded_perframe')):
+                            _gc_perframe_images(cut_bp, proposal_id, field,
+                                                filt, phase, phases)
                     else:
                         raise MergedcatMosaicError(
                             f"[{phase}] {module}/{filt}: build_mergedcat_residuals "
