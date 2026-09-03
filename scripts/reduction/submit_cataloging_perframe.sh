@@ -54,6 +54,63 @@ FANOUT_CPUS=${FANOUT_CPUS:-2}
 FANOUT_MEM=${FANOUT_MEM:-32gb}
 FANOUT_TIME=${FANOUT_TIME:-12:00:00}
 FINALIZE_CPUS=${FINALIZE_CPUS:-4}
+
+# FINALIZE MEMORY SCALES WITH THE FIELD (issue #611).  A flat 64gb was the same
+# request for sgrb2 -- 1540 crf over 16 filters, merging 14.2M detections -- as
+# for m92's 80.  sgrb2's m3-finalize was OOM-killed at 64gb (accounting recorded
+# MaxRSS 155G) and the kill landed *inside* a multiprocessing queue write, so the
+# survivors deadlocked and the job sat at ~0 CPU for 44 h before anyone looked;
+# the afterok chain behind it died with it.  It completed in 12 h 26 at 256gb.
+#
+# The merge is per-field-size, so size the request the same way.  crf count is
+# the proxy available at submit time, and it tracks the merge's real input:
+#
+#     m92 80 / ngc6397 120 / m4 150 / arches 110      -> 64gb   (m92 ran at 96)
+#     sgrc 240 / sickle 536 / cloudef 640 / wd1 696   -> 128gb
+#     w51 1120 / cloudc 1208 / sgrb2 1540 / brick 2016 -> 256gb (sgrb2 measured)
+#
+# Fan-out is per-shard and unaffected.  FINALIZE_MEM in the environment still
+# wins, so a one-off can override without editing this.
+if [ -z "${FINALIZE_MEM:-}" ]; then
+    # `ls` exits non-zero when the glob matches nothing, and this script runs
+    # under `set -euo pipefail`, so a bare `ls ... | wc -l` ABORTS the whole
+    # submit on any host without the data tree -- which is exactly CI.  Swallow
+    # the status inside the pipeline so a missing tree counts 0 and falls to the
+    # smallest tier instead of killing the run.
+    #
+    # A split-tree field is NOT under $TARGET.  The driver is invoked
+    # TARGET=gc2211 FIELD=023 (886 job logs use that spelling) while the data
+    # sits in gc2211_o023/; bare gc2211/ holds 0 crf.  Keyed on $TARGET alone
+    # every gc2211 observation measured 0 and took the SMALLEST tier --
+    # including o046 (240 crf -> 128gb), one of the OOMs that motivated this
+    # sizing.  So try <target>_o<field> first and fall back to <target>, which
+    # is what a single-tree field (sgrb2/001) and an already-per-obs TARGET
+    # (gc2211_o046, whose _o046_o046 does not exist) both need.
+    _crf_base=${BASEPATH:-/orange/adamginsburg/jwst}
+    _crf_dir="$_crf_base/${TARGET}_o${FIELD}"
+    _crf_tried="$_crf_dir"
+    _crf_count=$({ ls "$_crf_dir"/*/pipeline/*crf.fits 2>/dev/null || true; } | wc -l)
+    if [ "$_crf_count" -eq 0 ]; then
+        _crf_dir="$_crf_base/$TARGET"
+        _crf_tried="$_crf_tried then $_crf_dir"
+        _crf_count=$({ ls "$_crf_dir"/*/pipeline/*crf.fits 2>/dev/null || true; } | wc -l)
+    fi
+    if   [ "$_crf_count" -ge 1000 ]; then FINALIZE_MEM=256gb
+    elif [ "$_crf_count" -ge 200 ];  then FINALIZE_MEM=128gb
+    else                                  FINALIZE_MEM=64gb
+    fi
+    if [ "$_crf_count" -eq 0 ]; then
+        # 0 is two different states now that an absent tree is supported: the
+        # data is genuinely not here (CI, a fresh checkout, a field before its
+        # first reduce), or the count looked in the wrong place.  Only the
+        # second is a memory decision, so name the paths -- a job log has to be
+        # able to tell them apart.
+        echo "finalize memory: $FINALIZE_MEM (crf count came back EMPTY --" \
+             "tried $_crf_tried; smallest tier by default, not a measurement)"
+    else
+        echo "finalize memory: $FINALIZE_MEM (${_crf_count} crf under $_crf_dir)"
+    fi
+fi
 FINALIZE_MEM=${FINALIZE_MEM:-64gb}
 FINALIZE_TIME=${FINALIZE_TIME:-12:00:00}
 
