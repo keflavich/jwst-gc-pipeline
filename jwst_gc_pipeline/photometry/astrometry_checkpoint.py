@@ -2256,6 +2256,27 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername, vgroup=Non
     return dra, ddec
 
 
+def _observation_for_correction(field, corr):
+    """The 3-digit observation this correction's frames belong to.
+
+    For a single-observation run that is just ``field``.  For a JOINT run
+    (``'001-002'``) the field names several observations at once and cannot be
+    interpolated into a visit token, so take the observation from the
+    correction's own ``Vgroup``, which is ``{obs:03d}{vgroup:05d}``.
+
+    Falls back to the field when the Vgroup is missing or not in that form --
+    ``assert_visit_token`` then refuses the malformed token as before rather
+    than this guessing.
+    """
+    fld = str(field)
+    if '-' not in fld:
+        return fld
+    vg = str(corr.get('vgroup') or '')
+    if len(vg) >= 8 and vg[:3].isdigit():
+        return vg[:3]
+    return fld
+
+
 def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                                       stage="m2", out_path=None,
                                       base_stamp_for=None):
@@ -2340,8 +2361,20 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         prepared = []
         for corr in corrections:
             visit = int(str(corr["visit"])[-3:])
+            # A JOINT run ('001-002') cannot interpolate its field into the token
+            # -- `jw03958001-002001` matches no frame, so every lookup would
+            # silently return (0, 0), which `assert_visit_token` refuses.  But the
+            # observation is not lost: each correction's Vgroup is
+            # `{obs:03d}{vgroup:05d}`, so the frames' real observation is right
+            # there per correction.  sickle MIRI: corrections carry 00102101 and
+            # 00203101, and the frames are jw03958001001_02101 and
+            # jw03958002001_03101 -- obs 001 and 002.  Take it from the
+            # correction, exactly as that guard's message prescribes ("give the
+            # corrections their real per-frame observation"), so one joint run
+            # seeds correctly-keyed rows for both observations.
+            obs = _observation_for_correction(field, corr)
             visit_tok = assert_visit_token(
-                f"{jw_prefix(proposal_id)}{field}{visit:03d}",
+                f"{jw_prefix(proposal_id)}{obs}{visit:03d}",
                 f"seed_offsets_table_from_consensus({os.path.basename(out_path)})")
             # A consensus->reference correction is the per-VISIT bulk tie (whole
             # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store
