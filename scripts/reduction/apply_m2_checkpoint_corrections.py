@@ -222,7 +222,12 @@ def main(argv=None):
                         "than one observation is REFUSED rather than unioned, "
                         "because their `visit` fields are both \"1\" and the "
                         "corrections would land on the same table rows.")
-    p.add_argument("--mark-stale", action="store_true")
+    p.add_argument("--mark-stale", action="store_true",
+                   help="rename the affected filters' im0 _i2d mosaics to "
+                        "*_im0_badastrom.fits.  Scoped by --obs-token: without "
+                        "it, every observation's mosaics in the shared "
+                        "<FILTER>/pipeline directory are tagged, not just the "
+                        "corrected one's")
     args = p.parse_args(argv)
 
     records, corrections = load_corrections(args.records_dir, args.obs_token)
@@ -305,7 +310,12 @@ def main(argv=None):
     if args.apply and args.mark_stale and args.basepath:
         for filt in sorted(stale_filters):
             renames = mark_i2d_stale(
-                find_i2d_for_filter(args.basepath, filt),
+                # --obs-token already restricts which records are read; carry
+                # the same restriction into the stale-tag, or a run scoped to
+                # one observation still quarantines every other observation's
+                # mosaics in the shared <FILTER>/pipeline directory.
+                find_i2d_for_filter(args.basepath, filt,
+                                    observation=args.obs_token),
                 reason="m2 cycle-2 checkpoint corrections applied; im0 stale",
                 record_dir=os.path.join(args.basepath, "astrometry_checkpoints"))
             for old, new in renames:

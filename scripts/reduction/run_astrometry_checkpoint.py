@@ -69,7 +69,11 @@ def main(argv=None):
                    help="proposal id, for the per-observation filename token of "
                         "the m2 per-filter consensus catalog (see obs_token)")
     p.add_argument("--obsid", default=None,
-                   help="observation id, ditto")
+                   help="observation id, ditto -- and with --mark-stale it "
+                        "SCOPES the stale-tag to this observation's mosaics "
+                        "(one <FILTER>/pipeline directory holds every "
+                        "observation's; unscoped, one observation's correction "
+                        "quarantines the others' good mosaics)")
     p.add_argument("--offsets-table", default=None)
     p.add_argument("--apply", action="store_true",
                    help="apply implied corrections to --offsets-table "
@@ -174,7 +178,12 @@ def main(argv=None):
         print(f"offsets table corrected: {args.offsets_table} "
               f"({len(corrections)} corrections; backup kept)")
         if args.mark_stale and args.basepath and args.filtername:
-            i2ds = find_i2d_for_filter(args.basepath, args.filtername)
+            # --obsid scopes the stale-tag: one directory holds every
+            # observation's mosaics, and unscoped this renames the other
+            # observations' good ones too.  Without --obsid the lookup is
+            # unscoped, as before.
+            i2ds = find_i2d_for_filter(args.basepath, args.filtername,
+                                       observation=args.obsid)
             renames = mark_i2d_stale(
                 i2ds, reason=f"{args.stage} checkpoint corrected the offsets "
                              f"table; im0 mosaics are stale",

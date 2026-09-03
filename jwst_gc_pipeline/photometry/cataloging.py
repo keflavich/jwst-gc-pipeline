@@ -4725,7 +4725,19 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         else:
             update_offsets_table(offsets_path, corrections, merge_label)
         renames = mark_i2d_stale(
-            find_i2d_for_filter(cut_bp, filt),
+            # SCOPE the stale-tag to THIS run's observation.  The lookup globs
+            # on the filter alone, and every observation of a proposal writes
+            # its mosaics into the same `<FILTER>/pipeline` directory, so
+            # unscoped it renames the NEIGHBOURS' good mosaics to
+            # `*_im0_badastrom.fits` as well -- and the release gate then
+            # refuses those fields for a quarantine they did not earn.  10678
+            # (139 observations in one tree) turns one tile's correction into
+            # 138 false quarantines.  `_resolved_obsid` is the same vetted
+            # answer the per-frame catalog filter above uses, and it returns
+            # None (-> unscoped, today's behaviour) whenever this run cannot
+            # establish its own obsid.
+            find_i2d_for_filter(cut_bp, filt,
+                                observation=_resolved_obsid(options)),
             reason=f"{merge_label} checkpoint {'seeded' if seeded else 'corrected'} {offsets_path}",
             record_dir=os.path.join(cut_bp, 'astrometry_checkpoints'))
         applied = True

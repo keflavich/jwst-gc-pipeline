@@ -553,15 +553,105 @@ def mark_i2d_stale(i2d_paths, reason, record_dir=None):
     return renames
 
 
-def find_i2d_for_filter(basepath, filtername, extra_globs=()):
-    """Locate the merged first-pass (im0) ``_i2d.fits`` mosaics for a filter."""
+_OBS_TOKEN_RE = re.compile(r'^jw\d+-o(\d+(?:-\d+)*)_')
+
+
+def observation_ids(observation):
+    """The obsid(s) ``observation`` names, as a frozenset, or None if unknown.
+
+    Callers spell this four ways and they all mean the same observation:
+    ``'002'`` (``--field`` / ``options.field``), ``'o002'``, ``'_o002'``
+    (``apply_m2_checkpoint_corrections --obs-token``, whose value is the
+    record-filename token), and ``'001-002'`` -- a JOINT association, which
+    ``fields.Obs.joint_obsids`` carries and ``_resolved_obsid`` returns
+    verbatim (sickle MIRI, sgrb2 MIRI ``002-998``).  A joint token names BOTH
+    of its observations, so it becomes a two-element set rather than the
+    literal string; matching it as one string would find no mosaic at all and
+    stale-tag nothing, which is the fail-open half of this defect.
+
+    Returns None for None, ``''`` and the ``'*'`` wildcard obsid (also
+    ``'o*'``/``'_o*'``): those mean "this run cannot say which observation it
+    is", and the caller's contract for None is the unscoped, pre-existing
+    behaviour.
+    """
+    if observation is None:
+        return None
+    tok = str(observation).strip()
+    if tok.startswith('_'):
+        tok = tok[1:]
+    if tok[:1] in ('o', 'O'):
+        tok = tok[1:]
+    parts = frozenset(p for p in tok.split('-') if p)
+    if not parts or '*' in parts:
+        return None
+    return parts
+
+
+def _basename_observations(basename):
+    """The observation ids a stage-3 mosaic basename declares, as a set.
+
+    Mosaics are named ``jw{proposal}-o{obs}[-{obs}...]_t{target}_...`` --
+    ``jw02221-o001_t001_nircam_clear-f410m-merged_i2d.fits``, and for a joint
+    association ``jw05365-o002-998_t001_miri_clear-f770w-mirimage_data_i2d.fits``,
+    which belongs to BOTH 002 and 998.  Returns an empty set when the basename
+    carries no such token, which the caller reads as "cannot attribute".
+    """
+    m = _OBS_TOKEN_RE.search(basename)
+    if m is None:
+        return frozenset()
+    return frozenset(part for part in m.group(1).split('-') if part)
+
+
+def find_i2d_for_filter(basepath, filtername, extra_globs=(), observation=None):
+    """Locate the first-pass (im0) ``_i2d.fits`` mosaics for a filter.
+
+    ``observation`` scopes the result to ONE observation's mosaics.  Every
+    stage-3 product in a ``<FILTER>/pipeline`` directory is named
+    ``jw{proposal}-o{obs}_t{target}_...``, but the globs below match on the
+    FILTER alone -- so in a directory holding more than one observation they
+    return every observation's mosaics, and the caller (``mark_i2d_stale``)
+    renames all of them to ``*_im0_badastrom.fits``.  One tile's m2 correction
+    then quarantines its neighbours' good mosaics, and the release gate refuses
+    the neighbours.
+
+    That is already live: ``sickle/F770W/pipeline`` holds o001, o002 and o003
+    mosaics side by side, and 10678 (the GC Treasury) puts all 139 of its
+    observations in ONE tree, so a correction on tile 088 would stale-tag 138
+    innocent tiles.
+
+    ``observation`` accepts ``'002'``, ``'o002'``, ``'_o002'`` and the joint
+    ``'001-002'``.  ``None`` (the default, and what ``observation_ids``
+    returns for the ``'*'`` wildcard obsid) keeps the unscoped behaviour,
+    which is what a single-observation tree needs and what every existing
+    caller had.
+
+    A joint-association mosaic (``jw05365-o002-998_...``) belongs to each of the
+    observations it names and is kept for any of them; a joint ``observation``
+    (``'002-998'``, which is what ``fields.Obs.joint_obsids`` holds) likewise
+    claims each of its parts.  A matched file whose
+    basename carries NO observation token is KEPT: it cannot be attributed, and
+    dropping it would leave a genuinely stale mosaic untagged (fail-open) --
+    across every tree on disk at 2026-09-03 the globs matched 5404 files and
+    all 5404 carried a token, so this branch is a guard, not a routine path.
+
+    ``extra_globs`` are NOT scoped -- they are the caller's own literal
+    patterns, and narrowing them here would silently discard matches the caller
+    asked for by name.
+    """
     pats = [
         f"{basepath}/{filtername.upper()}/pipeline/*-{filtername.lower()}-*_i2d.fits",
         f"{basepath}/{filtername.upper()}/pipeline/*_{filtername.lower()}_*_i2d.fits",
     ]
-    pats.extend(extra_globs)
     out = []
     for pat in pats:
+        out.extend(p for p in glob.glob(pat) if not p.endswith(STALE_TAG))
+    want = observation_ids(observation)
+    if want is not None:
+        def _mine(path):
+            got = _basename_observations(os.path.basename(path))
+            return (not got) or bool(got & want)
+        out = [p for p in out if _mine(p)]
+    for pat in extra_globs:
         out.extend(p for p in glob.glob(pat) if not p.endswith(STALE_TAG))
     return sorted(set(out))
 
