@@ -65,7 +65,8 @@ from astropy.table import Table
 from .visit_consensus import (
     EXPOSURE_CONSENSUS_TOL_MAS, ConsensusBuildError, DuplicateExposureError,
     build_visit_consensus,
-    catalog_coords, detect_module_antisymmetry, load_reference_catalog,
+    catalog_coords, detect_detector_antisymmetry,
+    detect_module_antisymmetry, load_reference_catalog,
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
     # The same-star SELECTION the #285 restriction uses: mutual nearest
     # partners within a radius, returning a boolean MASK and no offset.
@@ -3522,7 +3523,36 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 f"UNVERIFIED and the visit consensus for this filter should be "
                 f"rebuilt/investigated")
             unverified.append(unverified_blocking[-1])
-        antisym_keys = antisym["keys"]
+        # issue #624: the guard above buckets by module_family and tests only a
+        # group that splits into exactly TWO families, so an alias between two
+        # detectors of ONE module is invisible to it -- nrca1/nrca2 land in the
+        # same bucket and their opposed offsets average toward ~0 (ngc6334
+        # reads +/-22.9" that way and cleared it).  Re-run the same test over
+        # every detector PAIR.  Report only what the module guard missed.
+        det_antisym = detect_detector_antisymmetry(cons["exposures"])
+        det_extra = det_antisym["keys"] - antisym["keys"]
+        if det_antisym["detected"] and det_extra:
+            dex = next((e for e in det_antisym["examples"] if e["same_module"]),
+                       det_antisym["examples"][0])
+            unverified_blocking.append(
+                f"{vctx}: DETECTOR-ANTISYMMETRIC offsets on "
+                f"{det_antisym['n_antisymmetric']}/"
+                f"{det_antisym['n_pairs_tested']} detector pair(s) -- detector "
+                f"{dex['detector_a']} reads "
+                f"({dex['dra_a_mas']:+.0f},{dex['ddec_a_mas']:+.0f}) mas and "
+                f"detector {dex['detector_b']} reads "
+                f"({dex['dra_b_mas']:+.0f},{dex['ddec_b_mas']:+.0f}) mas, i.e. "
+                f"equal and OPPOSITE at "
+                f"{dex['separation_mas'] / 1000.0:.1f}\" apart"
+                + (" WITHIN ONE MODULE" if dex["same_module"] else "") +
+                f".  Real per-exposure jitter is common-mode across an "
+                f"exposure's detectors, so this is a wide-sweep/"
+                f"footprint-geometry ALIAS, not a misalignment (issues #158, "
+                f"#624).  NOT correcting; the affected exposures are UNVERIFIED "
+                f"and the visit consensus for this filter should be "
+                f"rebuilt/investigated")
+            unverified.append(unverified_blocking[-1])
+        antisym_keys = antisym["keys"] | det_antisym["keys"]
         exp_records = []
         for exp in cons["exposures"]:
             res = exp["vs_consensus"]
