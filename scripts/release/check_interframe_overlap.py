@@ -1058,6 +1058,117 @@ def _global_tie(allsrc, ref, max_off_mas,
     return g, None
 
 
+def _one_position_per_ref_star(src, ref, radius_arcsec=SAMESTAR_MATCH_RADIUS):
+    """Collapse a POOLED per-exposure detection list to ONE position per
+    reference star -- the mean of that star's detections (issue #410).
+
+    ``local_residual_map`` keeps the nearest ``b`` (reference) star for each
+    ``a`` and then requires that ``b`` to be unique.  ``allsrc`` holds one copy
+    of every star per exposure, so each reference star is the nearest partner of
+    all N copies, the uniqueness filter is all-False, and the function returns
+    through its "all pairs ambiguous" branch.  There is no partial-failure
+    regime: N=2 is enough, and the resulting map measures ZERO cells at every
+    cell size on every field.  Brick's 115032-star VIRAC2 list reads exactly the
+    same as w51's 9.5k Gaia one, which is why "no residual-map cell was ever
+    built" is a statement about this caller and not about a catalogue.
+
+    ``_nearest_residuals`` below carries the same workaround for the pair-scoped
+    arbiter -- its docstring is the prose statement of the incompatibility -- so
+    this is the field-wide arm's version of a fix the pair-scoped arm has had all
+    along.
+
+    CAVEAT, and it is why the caller keeps this report-only: the mean is the
+    right estimator only where the exposures are already mutually registered,
+    which is what the REFERENCE-FREE layers of this gate exist to establish.  On
+    a field where one visit is displaced, the mean sits between the two clusters
+    and this map reads a diluted residual rather than the seam.  The
+    reference-free layers remain the authority on inter-frame registration; this
+    map is the ABSOLUTE-frame cross-check it has always been.
+
+    A detection within ``radius_arcsec`` of two reference stars is averaged into
+    both -- deliberately, since the alternative is to drop the blended pair
+    entirely, and ``_match_radius_consistency`` is the check that owns that
+    failure mode.
+
+    Returns ``(src_mean, ref_matched, n_det)``, one entry per reference star that
+    had at least one detection within ``radius_arcsec``, in matching order, with
+    ``n_det`` the number of detections averaged.  ``(None, None, None)`` when
+    nothing matched at all.
+    """
+    iref, isrc, _, _ = search_around_sky(ref, src, radius_arcsec * u.arcsec)
+    if len(iref) == 0:
+        return None, None, None
+    order = np.argsort(iref, kind="stable")
+    iref, isrc = iref[order], isrc[order]
+    starts = np.flatnonzero(np.concatenate(([True], iref[1:] != iref[:-1])))
+    n_det = np.diff(np.append(starts, len(iref)))
+    # Average the OFFSET from each reference star rather than the absolute
+    # coordinates: wrap-safe at RA 0, and it keeps the arithmetic local so a
+    # degree-scale field does not lose precision in the mean.
+    dra = (src.ra.deg[isrc] - ref.ra.deg[iref] + 180.0) % 360.0 - 180.0
+    ddec = src.dec.deg[isrc] - ref.dec.deg[iref]
+    rsub = ref[iref[starts]]
+    return (SkyCoord((rsub.ra.deg + np.add.reduceat(dra, starts) / n_det) * u.deg,
+                     (rsub.dec.deg + np.add.reduceat(ddec, starts) / n_det) * u.deg),
+            rsub, n_det)
+
+
+def _residual_ladder(src, ref, g, cells_arcsec, min_stars, tol_mas):
+    """``local_residual_map`` at every cell size of the ladder, summarised.
+
+    Returns ``(scales, n_measured, n_flagged, worst_off_mas)``.  Each entry of
+    ``scales`` carries the per-cell offset DISTRIBUTION (median and 90th
+    percentile) as well as the counts: a worst cell alone does not say whether
+    the map is quietly clean or broadly offset.
+    """
+    scales, n_meas_tot, n_flag_tot, worst = [], 0, 0, float("nan")
+    for cell in sorted(float(c) for c in cells_arcsec):
+        lr = local_residual_map(src, ref, g, cell_arcsec=cell,
+                                match_radius=SAMESTAR_MATCH_RADIUS * u.arcsec,
+                                min_stars=min_stars, tol_mas=tol_mas)
+        n_meas = int(lr.get("n_measured", 0))
+        n_flag = int(lr.get("n_flagged", 0))
+        w = lr.get("worst_off_mas")
+        offs = [c["off_mas"] for c in lr.get("cells", [])]
+        scales.append(dict(cell_arcsec=cell, n_measured=n_meas, n_flagged=n_flag,
+                           worst_off_mas=(float(w) if w is not None else float("nan")),
+                           off_mas_p50=(float(np.median(offs)) if offs else float("nan")),
+                           off_mas_p90=(float(np.percentile(offs, 90)) if offs
+                                        else float("nan")),
+                           n_pairs=int(lr.get("n_pairs", 0))))
+        n_meas_tot += n_meas
+        n_flag_tot += n_flag
+        if n_meas and w is not None and np.isfinite(w):
+            worst = float(w) if not np.isfinite(worst) else max(worst, float(w))
+    return scales, n_meas_tot, n_flag_tot, worst
+
+
+def _dedup_ladder(allsrc, ref, g, cells_arcsec, min_stars, tol_mas):
+    """The residual ladder over ONE POSITION PER REFERENCE STAR (issue #410).
+
+    Always measured, so the numbers exist for every field the gate runs on.
+    ``gating`` says whether the caller is allowed to derive its verdict from it
+    (``OVERLAP_SAMESTAR_DEDUP_GATE=1``); by default it is report-only, because
+    the two verdicts this branch can then produce -- a per-cell FAIL and a clean
+    -- have never been exercised on real data, and the caveat in
+    ``_one_position_per_ref_star`` applies to both.
+    """
+    gating = os.environ.get("OVERLAP_SAMESTAR_DEDUP_GATE", "") == "1"
+    dsrc, dref, n_det = _one_position_per_ref_star(allsrc, ref)
+    if dsrc is None:
+        return dict(gating=gating, n_src=0, n_pooled=int(len(allsrc)),
+                    copies_median=float("nan"), scales=[], n_measured=0,
+                    n_flagged=0, worst_off_mas=float("nan"),
+                    reason="no detection within the match radius of any "
+                           "reference star")
+    scales, n_meas, n_flag, worst = _residual_ladder(
+        dsrc, dref, g, cells_arcsec, min_stars=min_stars, tol_mas=tol_mas)
+    return dict(gating=gating, n_src=int(len(dsrc)), n_pooled=int(len(allsrc)),
+                copies_median=float(np.median(n_det)), scales=scales,
+                n_measured=int(n_meas), n_flagged=int(n_flag),
+                worst_off_mas=float(worst), reason="")
+
+
 def _samestar_ref_grid(allsrc, ref, max_off_mas, tol_mas=None, cells_arcsec=None,
                        min_stars=SAMESTAR_MIN_STARS, check_radii=True):
     """Absolute cross-check of ``allsrc`` vs a reference catalog by the SAME-STAR
@@ -1079,29 +1190,46 @@ def _samestar_ref_grid(allsrc, ref, max_off_mas, tol_mas=None, cells_arcsec=None
     tolerance made every local seam between 30 and 80 mas read clean.
 
     Returns ``clean, measurable, worst_off_mas, n_ok, n_total`` (+ diagnostics).
-    ``measurable=False`` is could-not-verify, NOT clean."""
+    ``measurable=False`` is could-not-verify, NOT clean.
+
+    ``dedup`` carries the SAME ladder measured over one position per reference
+    star (issue #410).  It is REPORT-ONLY: the pooled ladder cannot measure a
+    single cell on any field, because every star appears once per exposure in
+    ``allsrc``, so ``dedup`` is where the per-cell numbers actually live -- but
+    the verdict above is still derived exactly as it was, until
+    ``OVERLAP_SAMESTAR_DEDUP_GATE=1`` says otherwise."""
     tol_mas = TOL_MAS if tol_mas is None else float(tol_mas)
     cells_arcsec = SAMESTAR_CELLS_ARCSEC if cells_arcsec is None else cells_arcsec
     g, bad = _global_tie(allsrc, ref, max_off_mas)
     if bad is not None:
         return bad
-    scales, n_meas_tot, n_flag_tot, worst = [], 0, 0, float("nan")
-    for cell in sorted(float(c) for c in cells_arcsec):
-        lr = local_residual_map(allsrc, ref, g, cell_arcsec=cell,
-                                match_radius=SAMESTAR_MATCH_RADIUS * u.arcsec,
-                                min_stars=min_stars, tol_mas=tol_mas)
-        n_meas = int(lr.get("n_measured", 0))
-        n_flag = int(lr.get("n_flagged", 0))
-        w = lr.get("worst_off_mas")
-        scales.append(dict(cell_arcsec=cell, n_measured=n_meas, n_flagged=n_flag,
-                           worst_off_mas=(float(w) if w is not None else float("nan"))))
-        n_meas_tot += n_meas
-        n_flag_tot += n_flag
-        if n_meas and w is not None and np.isfinite(w):
-            worst = float(w) if not np.isfinite(worst) else max(worst, float(w))
+    scales, n_meas_tot, n_flag_tot, worst = _residual_ladder(
+        allsrc, ref, g, cells_arcsec, min_stars=min_stars, tol_mas=tol_mas)
+    # ONE POSITION PER REFERENCE STAR (issue #410).  The ladder above is fed the
+    # POOLED per-exposure list, in which every star appears once per exposure, so
+    # ``local_residual_map``'s b-side uniqueness filter discards every pair and
+    # the map reports zero measured cells -- on every field, at every cell size,
+    # against every reference.  Measured 2026-09-04 on brick F405N vs its own
+    # 115032-star VIRAC2 catalogue (361892 pooled detections, 48 crf):
+    # ``n_measured = 0`` at 2/4/8/16/30".  De-duplicating first makes the same
+    # data measurable.
+    #
+    # REPORT-ONLY.  The verdict below is still derived from the pooled ladder, so
+    # no field's answer moves and this cannot change a staging status; the
+    # de-duplicated map is measured and RECORDED so the per-cell numbers exist
+    # before anything gates on them.  ``OVERLAP_SAMESTAR_DEDUP_GATE=1`` promotes
+    # it to the verdict (the same report-then-gate idiom as
+    # ``OVERLAP_SAMESTAR_RADII_GATE`` below).
+    dedup = _dedup_ladder(allsrc, ref, g, cells_arcsec, min_stars=min_stars,
+                          tol_mas=tol_mas)
+    if dedup["gating"]:
+        scales = dedup["scales"]
+        n_meas_tot, n_flag_tot = dedup["n_measured"], dedup["n_flagged"]
+        worst = dedup["worst_off_mas"]
     if n_meas_tot == 0:
         # no scale had a cell with enough stars: UNMEASURABLE, not clean.
         return _verdict(False, measurable=False, global_tie=g, scales=scales,
+                        dedup=dedup,
                         reason=f"no residual-map cell held >= {min_stars} matched "
                                f"stars at any scale {tuple(cells_arcsec)}\"")
     amb = (_match_radius_consistency(allsrc, ref,
@@ -1130,7 +1258,8 @@ def _samestar_ref_grid(allsrc, ref, max_off_mas, tol_mas=None, cells_arcsec=None
     return _verdict(clean, measurable=True,
                     worst_off_mas=(0.0 if not np.isfinite(worst) else worst),
                     n_ok=n_meas_tot - n_flag_tot, n_total=n_meas_tot,
-                    reason=reason, global_tie=g, scales=scales, radii=amb)
+                    reason=reason, global_tie=g, scales=scales, radii=amb,
+                    dedup=dedup)
 
 
 def _nearest_residuals(src, ref, radius_arcsec, global_result):
@@ -1565,6 +1694,23 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None,
                       f"(cell tol {TOL_MAS:.0f}, global max {GRID_MAX_OFF_MAS:.0f}) "
                       f"n_ok={g['n_ok']}/{g['n_total']} cells [{scales}]{tag}"
                       f"{'; ' + g['reason'] if g.get('reason') else ''}", flush=True)
+                ded = g.get("dedup")
+                if ded:
+                    # Issue #410: what the SAME map measures once the pooled list
+                    # is collapsed to one position per reference star.  Printed
+                    # whether or not it gates, because the pooled ladder above
+                    # reports zero cells on every field and that number has been
+                    # read as evidence about the CATALOGUE.
+                    dsc = ",".join(f"{x['cell_arcsec']:g}\":{x['n_measured']}"
+                                   for x in ded.get("scales", []))
+                    print(f"        one-position-per-ref-star map "
+                          f"[{'GATING' if ded['gating'] else 'report-only'}, #410]: "
+                          f"{ded['n_src']} stars from {ded['n_pooled']} pooled "
+                          f"detections (median {ded['copies_median']:.0f} copies/star), "
+                          f"n_measured={ded['n_measured']} n_flagged={ded['n_flagged']} "
+                          f"worst={ded['worst_off_mas']:.0f} mas [{dsc}]"
+                          f"{'; ' + ded['reason'] if ded.get('reason') else ''}",
+                          flush=True)
                 rad = g.get("radii") or {}
                 if rad.get("n_ambiguous"):
                     # non-gating field-wide: a stray group from another program in
