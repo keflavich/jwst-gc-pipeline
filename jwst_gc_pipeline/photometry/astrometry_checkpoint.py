@@ -64,9 +64,9 @@ from astropy import units as u
 from astropy.table import Table
 
 from .visit_consensus import (
-    EXPOSURE_CONSENSUS_TOL_MAS, ConsensusBuildError, DuplicateExposureError,
+    EXPOSURE_CONSENSUS_TOL_MAS, MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS,
+    ConsensusBuildError, DuplicateExposureError,
     build_visit_consensus,
-    MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS,
     catalog_coords, detect_detector_antisymmetry,
     detect_module_antisymmetry, load_reference_catalog,
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
