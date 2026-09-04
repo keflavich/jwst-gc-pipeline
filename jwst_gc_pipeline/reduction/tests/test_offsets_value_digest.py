@@ -149,3 +149,138 @@ def test_the_loop_uses_the_digest_and_not_an_md5_of_the_table():
     assert re.search(r'tbl_before=\$\(table_value_digest', text)
     assert re.search(r'tbl_after=\$\(table_value_digest', text)
     assert 'md5sum "$CONSENSUS_TBL"' not in text
+
+
+# --------------------------------------------------------------------------
+# One table, more than one observation (issue #714).  10678 registers
+# fields=None, so all 139 treasury tiles share one consensus table and an
+# unscoped digest reads a neighbouring tile's correction as this tile's re-tie.
+# `_table()` above already holds observations 002 and 005.
+# --------------------------------------------------------------------------
+
+def test_a_sibling_observations_move_is_not_this_observations_retie(mod, tmp_path):
+    """THE regression: obs 005 re-ties, obs 002's loop must see no movement."""
+    before = mod.digest(_write(tmp_path, _table()), observation='002')
+    t = _table()
+    t['dra (arcsec)'][2] += 0.005          # row 2 is jw02092005001
+    t['ddec (arcsec)'][2] -= 0.005
+    assert mod.digest(_write(tmp_path, t), observation='002') == before
+
+
+def test_scoping_still_sees_this_observations_own_retie(mod, tmp_path):
+    """The gate the scope must NOT weaken: a correction on obs 002's own rows
+    still reads as movement, so the loop still re-reduces and re-measures."""
+    before = mod.digest(_write(tmp_path, _table()), observation='002')
+    t = _table()
+    t['dra (arcsec)'][0] += 0.005          # row 0 is jw02092002001
+    assert mod.digest(_write(tmp_path, t), observation='002') != before
+
+
+def test_scoping_still_sees_a_row_added_or_removed(mod, tmp_path):
+    """The first m2 seeds rows rather than moving them; a seeded row for this
+    observation is a re-tie."""
+    before = mod.digest(_write(tmp_path, _table()), observation='002')
+    t = _table()[[0, 2]]                   # obs 002 loses exposure 8
+    assert mod.digest(_write(tmp_path, t), observation='002') != before
+
+
+def test_scoping_does_not_hide_a_provenance_restamp_as_movement(mod, tmp_path):
+    """#272's false positive stays fixed under the scope."""
+    before = mod.digest(_write(tmp_path, _table()), observation='002')
+    t = _table()
+    t['prov_date'] = ['2026-09-05T11:00:00Z', '2026-09-05T11:00:00Z', '']
+    assert mod.digest(_write(tmp_path, t), observation='002') == before
+
+
+def test_the_unscoped_digest_is_unchanged_by_the_option(mod, tmp_path):
+    """Every single-observation field passes its own FIELD, and the eight fields
+    running today must digest exactly as they did: no scope, every row."""
+    path = _write(tmp_path, _table())
+    assert mod.digest(path, observation=None) == mod.digest(path)
+    before = mod.digest(path)
+    t = _table()
+    t['dra (arcsec)'][2] += 0.005          # obs 005, which the scope hides
+    assert mod.digest(_write(tmp_path, t)) != before
+
+
+def test_an_unattributable_visit_is_kept_in_a_scoped_digest(mod, tmp_path):
+    """Scoping may hide a change that BELONGS to another observation, never one
+    that cannot be placed: a row whose Visit does not parse still counts."""
+    t = _table()
+    t['Visit'] = ['jw02092002001', 'jw02092002001', 'hand-edited']
+    before = mod.digest(_write(tmp_path, t), observation='002')
+    t['dra (arcsec)'][2] += 0.005
+    assert mod.digest(_write(tmp_path, t), observation='002') != before
+
+
+def test_an_observation_number_is_zero_padded(mod, tmp_path):
+    """FIELD=2 and FIELD=002 name the same observation; the table writes 002."""
+    path = _write(tmp_path, _table())
+    assert mod.digest(path, observation='2') == mod.digest(path, observation='002')
+
+
+def test_a_prefix_of_an_observation_number_does_not_match(mod, tmp_path):
+    """Observations 002 and 020 are different tiles; matching on a prefix would
+    pool them."""
+    t = _table()
+    t['Visit'] = ['jw10678088001', 'jw10678088001', 'jw10678008001']
+    before = mod.digest(_write(tmp_path, t), observation='008')
+    t['dra (arcsec)'][0] += 0.005          # observation 088, not 008
+    assert mod.digest(_write(tmp_path, t), observation='008') == before
+
+
+def test_an_observation_with_no_rows_yet_digests_stably_and_is_not_none(mod, tmp_path):
+    """A treasury tile's first iteration digests a table holding only its
+    neighbours' rows; that must be a stable value distinguishable from an
+    absent table, so seeding this tile's rows reads as the re-tie."""
+    path = _write(tmp_path, _table())
+    empty = mod.digest(path, observation='099')
+    assert empty == mod.digest(path, observation='099')
+    assert empty != "none"
+    t = _table()
+    t['Visit'] = ['jw02092002001', 'jw02092002001', 'jw02092099001']
+    assert mod.digest(_write(tmp_path, t), observation='099') != empty
+
+
+def test_scoping_a_table_with_no_visit_column_raises(mod, tmp_path):
+    """Refuse rather than digest every row as if it were this observation's --
+    that is the unscoped behaviour wearing the scope's name."""
+    path = _write(tmp_path, Table({
+        'Exposure': [7], 'Filter': ['F212N'], 'Module': ['nrcb1'],
+        'Vgroup': ['2101'], 'dra (arcsec)': [0.1], 'ddec (arcsec)': [0.1]}))
+    assert mod.digest(path) is not None            # unscoped is fine
+    with pytest.raises(ValueError, match="Visit"):
+        mod.digest(path, observation='002')
+
+
+def test_a_malformed_observation_number_raises(mod, tmp_path):
+    path = _write(tmp_path, _table())
+    with pytest.raises(ValueError, match="observation"):
+        mod.digest(path, observation='o002')
+
+
+def test_cli_takes_the_observation(mod, tmp_path, capsys):
+    path = _write(tmp_path, _table())
+    assert mod.main([path, '--observation', '002']) == 0
+    assert capsys.readouterr().out.strip() == mod.digest(path, observation='002')
+
+
+def test_cli_exits_2_on_an_unscopeable_table(mod, tmp_path, capsys):
+    """The loop reads a nonzero rc as 'the table changed' and keeps going, with
+    the reason on stderr -- it must never read as 'unchanged'."""
+    path = _write(tmp_path, Table({
+        'Exposure': [7], 'dra (arcsec)': [0.1], 'ddec (arcsec)': [0.1]}))
+    assert mod.main([path, '--observation', '002']) == 2
+    assert "cannot digest" in capsys.readouterr().err
+
+
+def test_the_loop_scopes_the_digest_to_its_own_observation():
+    """The wiring: an unscoped digest of a shared table is the defect."""
+    text = _LOOP.read_text()
+    assert re.search(r'--observation "\$FIELD"', text)
+
+
+def test_a_malformed_observation_raises_even_on_an_absent_table(mod, tmp_path):
+    """Reporting it as `none` would run the loop on with the scope not applied."""
+    with pytest.raises(ValueError, match="observation"):
+        mod.digest(str(tmp_path / 'nope.csv'), observation='')

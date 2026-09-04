@@ -194,10 +194,18 @@ echo "offsets table watched for changes: $CONSENSUS_TBL"
 # working.  offsets_value_digest.py exits 2 on a table it cannot parse, and this
 # then emits a per-call unique token so the comparison reports movement and the
 # loop continues, with the reason on stderr.
+#
+# Scoped to THIS observation.  A table is not always one field's: 10678 registers
+# fields=None, so all 139 treasury tiles write into one consensus table, and an
+# unscoped digest would let a neighbouring tile's correction -- written while
+# this one was in its m2 -- read as this tile's re-tie.  Same false positive as
+# the prov_date re-stamp, a different writer.  The fixed-point check below is
+# already scoped this way (`--obs-token o$FIELD`).
 table_value_digest () {
     local path="$1" out rc=0
     out=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
-          "$HERE/offsets_value_digest.py" "$path" 2>&1) || rc=$?
+          "$HERE/offsets_value_digest.py" "$path" \
+          --observation "$FIELD" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
         echo "WARNING: could not digest $path ($out); treating this iteration as" >&2
         echo "         having changed the table, which is the fail-open side." >&2
@@ -567,8 +575,9 @@ for ((it=1; it<=MAXITER; it++)); do
     fi
     if [ "$tbl_after" = "$tbl_before" ]; then
         echo "[iter $it] m2 finalize failed ($st) but no SHIFT VALUE in the consensus"
-        echo "           table changed (provenance re-stamps and re-serialisation do"
-        echo "           not count -- see offsets_value_digest.py)."
+        echo "           table changed for observation $FIELD (provenance re-stamps,"
+        echo "           re-serialisation and another observation's rows do not"
+        echo "           count -- see offsets_value_digest.py)."
         echo "           This is NOT a checkpoint re-tie (some other failure) -- STOPPING."
         echo "           Inspect logs/catalog_pf_${fin_jid}*.out before retrying."
         exit 1
