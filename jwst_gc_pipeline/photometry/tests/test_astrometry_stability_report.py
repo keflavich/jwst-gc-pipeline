@@ -196,3 +196,38 @@ def test_malformed_exposure_entries_are_skipped_not_fatal(tmp_path):
         'm3_F200W_o004': bad})
     rows = collect(str(d))['per_stage']['m3']
     assert [r['exposure'] for r in rows] == [3]
+
+
+# --- shipped vs intermediate stages -----------------------------------------
+
+def test_shipped_stage_worst_is_not_conflated_with_an_intermediate(tmp_path):
+    # brick's real shape: the excursion is in m4 (an intermediate) while the
+    # shipped m7 is quiet.  Quoting 3.30 as this release's number would
+    # overstate what the downloaded files carry.
+    base = {_key('nrcb2', i): (0.0, 0.0) for i in range(1, 5)}
+    d = _field(tmp_path, {
+        'm2_F200W_o004': _record(base),
+        'm4_F200W_o004': _record({_key('nrcb2', i): (3.30, 0.0)
+                                  for i in range(1, 5)}),
+        'm7_F200W_o004': _record({_key('nrcb2', i): (0.40, 0.0)
+                                  for i in range(1, 5)})})
+    text = render('brick', collect(str(d)), 'vtest', shipped_stages=['m7'])
+    assert 'ships **m7**' in text
+    assert 'worst single exposure moved **0.40 mas**' in text
+    assert 'does NOT distribute' in text
+    assert 'intermediates this release does NOT distribute; their worst is 3.30' in text
+    # the shipped stage is described first
+    assert text.index('### Stage m7') < text.index('### Stage m4')
+    assert 'SHIPPED by this release' in text
+    assert 'intermediate, not distributed' in text
+
+
+def test_without_shipped_stages_no_release_claim_is_made(tmp_path):
+    base = {_key('nrcb2', i): (0.0, 0.0) for i in range(1, 5)}
+    d = _field(tmp_path, {
+        'm2_F200W_o004': _record(base),
+        'm4_F200W_o004': _record({_key('nrcb2', i): (3.30, 0.0)
+                                  for i in range(1, 5)})})
+    text = render('brick', collect(str(d)), 'vtest')
+    assert 'ships **' not in text
+    assert 'SHIPPED by this release' not in text

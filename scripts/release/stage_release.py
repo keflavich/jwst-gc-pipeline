@@ -2206,8 +2206,16 @@ def stage(items, field, version, release_root, mode, do_checksum,
     write_readme(field_dir, field, version, items, mode,
                  built_at=manifest["built"],
                  withheld_instruments=withheld_instruments)
+    # Which merge iterations this release actually distributes, derived the
+    # same way the checkpoint gate derives them.  Without it the report would
+    # quote an intermediate stage's worst case as though it described a shipped
+    # file -- brick's m4 peaks at 3.33 mas while its shipped m7 peaks at 1.47.
+    _shipped = sorted({m.group(0) for m in
+                       (re.search(r"m\d+$", str(it.get("iteration") or ""))
+                        for it in items) if m})
     write_astrometry_report(field_dir, field, version,
-                            FIELDS[field]["data_dir"])
+                            FIELDS[field]["data_dir"],
+                            shipped_stages=_shipped or None)
 
     # world-readable
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
@@ -2827,7 +2835,7 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
 
 
 def write_astrometry_report(field_dir, field, version, data_dir,
-                            obs_token=None):
+                            obs_token=None, shipped_stages=None):
     """Write ``ASTROMETRY.md`` -- this release's astrometric stability statement.
 
     Built fresh for every release from the field's own frozen-stage checkpoint
@@ -2852,7 +2860,7 @@ def write_astrometry_report(field_dir, field, version, data_dir,
         from astrometry_stability_report import collect, render
     try:
         data = collect(str(data_dir), obs_token)
-        text = render(field, data, version)
+        text = render(field, data, version, shipped_stages=shipped_stages)
     except (OSError, ValueError, TypeError, AttributeError, KeyError,
             IndexError) as ex:
         text = (f"# Astrometric stability — {field}\n\n"

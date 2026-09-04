@@ -209,7 +209,7 @@ def _group_spread_mas(gstats):
     return spread
 
 
-def _describe_stage(stage, rows, out):
+def _describe_stage(stage, rows, out, shipped_note=""):
     groups = defaultdict(list)
     for r in rows:
         groups[_group_key(r)].append(r)
@@ -217,7 +217,7 @@ def _describe_stage(stage, rows, out):
     overall = _stats(rows)
     spread = _group_spread_mas(gstats)
 
-    out.append(f"### Stage {stage}\n")
+    out.append(f"### Stage {stage}{shipped_note}\n")
     out.append(f"{overall['n']} exposure(s) measured at both m2 and {stage}, in "
                f"{len(groups)} group(s) of (filter, visit, detector).  "
                f"Worst single exposure **{overall['worst']:.2f} mas**.")
@@ -245,8 +245,18 @@ def _describe_stage(stage, rows, out):
     out.append("\n" + _table(rows) + "\n")
 
 
-def render(field, data, version=None):
-    """The report, as Markdown."""
+def render(field, data, version=None, shipped_stages=None):
+    """The report, as Markdown.
+
+    ``shipped_stages`` names the merge iterations this release actually
+    distributes (``stage_release`` derives them from the staged items).  It
+    matters: brick's excursion lives in m3/m4, which no user downloads, while
+    the shipped m7 peaks at 1.47 mas.  Reporting 3.33 mas without saying it
+    came from an intermediate would overstate what the released products
+    carry, and the header of this file claims the numbers describe the files
+    shipped beside it.  When it is None every stage is described without such
+    a claim.
+    """
     per_stage = data["per_stage"]
     out = [f"# Astrometric stability — {field}"]
     if version:
@@ -295,10 +305,41 @@ are stable.
         out.append(f"The gate's frozen-stage tolerance is **{tol:.1f} mas** per "
                    f"exposure.  Movements below it are reported here but did not "
                    f"block the release.\n")
-    for stage in FROZEN_STAGES:
+    shipped = set(shipped_stages or ())
+    if shipped:
+        shipped_here = [st for st in FROZEN_STAGES
+                        if st in shipped and per_stage.get(st)]
+        other = [st for st in FROZEN_STAGES
+                 if st not in shipped and per_stage.get(st)]
+        if shipped_here:
+            worst = max(r["moved_mas"] for st in shipped_here
+                        for r in per_stage[st])
+            out.append(f"This release ships **{', '.join(sorted(shipped))}** "
+                       f"products.  Across the shipped stage(s) the worst single "
+                       f"exposure moved **{worst:.2f} mas**.")
+        if other:
+            worst_other = max(r["moved_mas"] for st in other
+                              for r in per_stage[st])
+            out.append(
+                f"  The remaining stage(s) below ({', '.join(other)}) are "
+                f"intermediates this release does NOT distribute; their worst "
+                f"is {worst_other:.2f} mas.  They are reported because they "
+                f"describe the same exposures and a movement there is evidence "
+                f"about the field, but they are not a property of any file you "
+                f"downloaded.")
+        out.append("")
+        order = shipped_here + other
+    else:
+        order = [st for st in FROZEN_STAGES if per_stage.get(st)]
+
+    for stage in order:
         rows = per_stage.get(stage)
         if rows:
-            _describe_stage(stage, rows, out)
+            shipped_note = ""
+            if shipped:
+                shipped_note = (" — SHIPPED by this release" if stage in shipped
+                                else " — intermediate, not distributed")
+            _describe_stage(stage, rows, out, shipped_note)
 
     out.append("""## How to read this
 
@@ -345,10 +386,16 @@ def main(argv=None):
                          "e.g. o004; omit to use every record")
     ap.add_argument("--version", default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--shipped-stages", default=None,
+                    help="comma-separated merge iterations this release "
+                         "distributes, e.g. m7")
     args = ap.parse_args(argv)
 
     basepath = args.basepath or f"/orange/adamginsburg/jwst/{args.field}"
-    text = render(args.field, collect(basepath, args.obs_token), args.version)
+    shipped = ([x for x in args.shipped_stages.split(",") if x]
+               if args.shipped_stages else None)
+    text = render(args.field, collect(basepath, args.obs_token), args.version,
+                  shipped_stages=shipped)
     if args.out:
         with open(args.out, "w") as fh:
             fh.write(text)
