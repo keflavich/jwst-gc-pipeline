@@ -72,15 +72,49 @@ PER_EXPOSURE_SWEEP_WINDOWS = (3.0, 10.0)
 # exactly that at ~28" per module, with the two modules ~56" apart -- the
 # adjacency ridge of their footprints, not any pointing error.
 #
-# The magnitude floor is what makes this specific.  A genuine per-module
-# astrometric split (SIAF/distortion residual) is TENS OF MAS -- W51 F480M and
-# F410M both carry a real ~35 mas module split in exactly this antisymmetric
-# shape, and must NOT be flagged.  The floor is set at the per-exposure
-# correction ceiling (astrometry_checkpoint.MAX_CORRECTION_ARCSEC = 0.5"), so
-# the guard can only ever fire on a correction that is ALREADY refused as
-# unappliable: it takes nothing away, it only replaces an opaque hard stop with
-# a specific, recorded diagnosis.
-MODULE_ANTISYMMETRY_MIN_MAS = 500.0
+# The floor is the A-B DIFFERENTIAL the pair implies, in mas: an antisymmetric
+# pair at +d / -d moves the two modules 2d apart, and 2d is the quantity the
+# products actually carry.  15 mas is where the reference-free measurement says
+# a reported differential stops describing the pixels.
+#
+# This constant was 500.0 until 2026-09-04, on the reasoning that a genuine
+# per-module split is tens of mas and W51 F480M/F410M carried "a real ~35 mas
+# module split in exactly this antisymmetric shape".  MEASURED, reference-free,
+# in the strip where the two modules see the same stars (m2 per-frame catalogs,
+# offset-histogram stacking, four bounded windows, issue #473):
+#
+#   w51    F480M  1.64 mas   F410M  2.40 mas   F335M  0.52   F444W 11.63
+#   sgrc   F182M  0.18       F405N  1.63       F480M  1.01   F212N  7.10
+#          F115W  6.17       F162M 13.05       F470N  4.04
+#   brick  F182M  1.48       F405N  2.74       F410M  1.98
+#   cloudc F182M  5.25       F410M  3.26       F466N  3.97
+#
+# Every value is stable to <0.01 mas across windows 0.3-2.0" with edge fraction
+# <= 0.04, so none is a window artifact.  The largest as-built module relation
+# anywhere is 13.05 mas; the ~35 mas W51 split the old comment protected reads
+# 1.6-2.4 mas in its own overlap.  So a reported differential of 15 mas or more
+# is not a measurement of the module relation, and correcting per-exposure from
+# it writes a split INTO products that do not have one.
+#
+# Below MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS the guard DISCARDS the corrections
+# and records the pair; it does not stop the run.  That distinction is the whole
+# reason the floor can come down: at 500.0 firing meant a hard stop, so a lower
+# floor would have converted mas-scale sets into hard stops.
+MODULE_ANTISYMMETRY_MIN_MAS = 15.0
+
+# The differential at or above which an antisymmetric pair BLOCKS (checkpoint
+# `passed=False`) instead of being discarded.
+#
+# It is TWICE the per-exposure correction ceiling
+# (astrometry_checkpoint.MAX_CORRECTION_ARCSEC = 0.5") because it is a
+# DIFFERENTIAL and the old floor was a per-module magnitude: an opposed,
+# equal-magnitude pair at 500 mas per module is 1000 mas apart.  Keeping the
+# factor of 2 means every record on disk that blocks today still blocks and no
+# record that passes today starts blocking -- verified over the 4577 checkpoint
+# records under /orange (2026-09-04): the blocking set is unchanged, and the
+# whole effect of the lower floor is corrections DISCARDED.  The W51 ~56" ridge
+# that issue #158 was opened for is 56x over this.
+MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS = 1000.0
 # cos of the angle between the two module vectors; -1 = exactly opposed.
 MODULE_ANTISYMMETRY_COS_MAX = -0.9
 # fractional magnitude agreement required between the two module vectors
@@ -1103,6 +1137,12 @@ def detect_module_antisymmetry(exposures,
     nrcalong<->nrcblong reference-point separation is ~174".  Keying on a
     hardcoded separation would have made this guard silently never fire.
 
+    ``min_mas`` is the A-B DIFFERENTIAL floor: the pair must imply moving the
+    two modules at least this far apart.  Detection alone does not decide what
+    the caller does about it -- ``astrometry_checkpoint`` discards the
+    corrections either way, and only BLOCKS above
+    ``MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS``.
+
     ``exposures`` is ``build_visit_consensus(...)['exposures']``.
 
     Returns ``dict(detected, n_pairs_tested, n_antisymmetric, keys, examples)``
@@ -1161,8 +1201,16 @@ def _antisymmetric_pair(a, b, min_mas, cos_max, mag_tol):
     magnitude -- the signature of one frame tied onto the other's stars.
     """
     na, nb = float(np.hypot(*a)), float(np.hypot(*b))
-    if na < min_mas or nb < min_mas:
-        return False, na, nb, float("nan")   # mas-scale split: real, not an alias
+    if na <= 0.0 or nb <= 0.0:
+        return False, na, nb, float("nan")
+    # Scale test on the A-B DIFFERENTIAL, which is what the pair would move the
+    # two modules apart by, and the quantity a reference-free overlap
+    # measurement returns.  (It was `na < min_mas or nb < min_mas` -- the
+    # per-module magnitude -- until 2026-09-04; for an opposed, equal-magnitude
+    # pair the two differ by exactly the factor 2, so this only restates the
+    # threshold in the units the measurement and the issue report it in.)
+    if float(np.hypot(*(a - b))) < min_mas:
+        return False, na, nb, float("nan")
     cos = float(np.dot(a, b) / (na * nb))
     if cos > cos_max:
         return False, na, nb, cos            # not opposed

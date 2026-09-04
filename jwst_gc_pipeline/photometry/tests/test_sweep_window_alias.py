@@ -30,6 +30,7 @@ from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
 from jwst_gc_pipeline.photometry.visit_consensus import (
+    MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS, MODULE_ANTISYMMETRY_MIN_MAS,
     PER_EXPOSURE_SWEEP_WINDOWS, detect_detector_antisymmetry,
     detect_module_antisymmetry, module_family)
 
@@ -134,10 +135,13 @@ _W51_F480M = {
                  (-12.7, -13.5), (-15.4, -13.4), (-19.5, -16.5), (-19.5, -14.7)],
 }
 
-# F410M — same field, also correct.  Exposure 1 here is the sharpest possible
-# false-positive probe: (+17.2,+4.8) vs (-18.9,-11.8) is anti-parallel to
-# cos = -0.96 with magnitudes within 20%, so ONLY the magnitude floor keeps it
-# out.  That floor is what makes the guard safe.
+# F410M — same field.  Exposure 1, (+17.2,+4.8) vs (-18.9,-11.8), is
+# anti-parallel to cos = -0.96 with magnitudes within 20% and a 39.7 mas
+# differential, so it is exactly the "+/-20 mas correction to the offset between
+# modules" class the maintainer asked to discard (issue #473).  Measured
+# reference-free in the strip where w51's two modules see the same stars, the
+# F410M module relation is 2.40 mas and F480M's is 1.64 -- so the "~35 mas real
+# module split" these fixtures were once said to carry is not in the products.
 _W51_F410M = {
     "nrcalong": [(17.2, 4.8), (16.6, 5.6), (25.8, 6.8), (25.0, 7.2),
                  (14.8, 12.0), (12.6, 11.9), (9.5, 7.7), (9.8, 9.6)],
@@ -167,24 +171,52 @@ def test_module_antisymmetry_detected_on_recorded_w51_alias():
     assert 55_000 < ex["separation_mas"] < 62_000, ex
 
 
-def test_real_module_split_is_not_flagged():
-    """W51 F480M and F410M measure correctly and must be left alone -- including
-    F410M exposure 1, whose real module split is anti-parallel at cos = -0.96."""
+def test_twenty_mas_module_differential_is_flagged():
+    """W51 F480M/F410M carry +/-20 mas antisymmetric sets whose implied module
+    differential is ~37-40 mas, where the reference-free strip measurement of
+    the same field reads 1.6-2.4 mas.  Those corrections must be discarded, not
+    applied (issue #473).  Before 2026-09-04 the 500 mas floor let every one of
+    them through."""
     for recorded, filt in ((_W51_F480M, "F480M"), (_W51_F410M, "F410M")):
         res = detect_module_antisymmetry(_exposures(recorded, filt))
-        assert not res["detected"], (filt, res)
+        assert res["detected"], (filt, res)
         assert res["n_pairs_tested"] == 8, (filt, res)
-        assert not res["keys"], (filt, res)
+        assert res["keys"], (filt, res)
+        for ex in res["examples"]:
+            assert ex["separation_mas"] >= MODULE_ANTISYMMETRY_MIN_MAS, (filt, ex)
 
 
-def test_antisymmetry_floor_sits_at_the_appliable_ceiling():
-    """The guard can only fire above the per-exposure correction ceiling, so it
-    never removes a correction that could have been applied anyway."""
+def test_module_relation_at_the_measured_scale_is_not_flagged():
+    """The as-built module relation measured reference-free in the shared strip
+    is 0.2-13 mas across brick/cloudc/sgrc/w51 (issue #473).  A consensus that
+    reports a split at that scale is describing the products and must be left
+    alone -- otherwise every field would be flagged."""
+    measured = {
+        "nrcalong": [(0.7, -0.3), (2.6, -1.1), (0.1, -0.1), (3.6, 1.6)],
+        "nrcblong": [(-0.7, 0.3), (-2.6, 1.1), (-0.1, 0.1), (-3.6, -1.6)],
+    }
+    res = detect_module_antisymmetry(_exposures(measured, "F410M"))
+    assert not res["detected"], res
+    assert res["n_pairs_tested"] == 4, res
+    assert not res["keys"], res
+
+
+def test_antisymmetry_floor_is_below_the_appliable_ceiling():
+    """The floor used to sit AT the per-exposure correction ceiling, so the
+    guard could only ever fire on a correction already refused as unappliable --
+    which is why a +/-20 mas module differential was applied instead of
+    discarded.  It is now well below that ceiling, and a pair between the two
+    is discarded rather than blocking."""
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         MAX_CORRECTION_ARCSEC)
     from jwst_gc_pipeline.photometry.visit_consensus import (
-        MODULE_ANTISYMMETRY_MIN_MAS)
-    assert MODULE_ANTISYMMETRY_MIN_MAS >= MAX_CORRECTION_ARCSEC * 1000.0
+        MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS, MODULE_ANTISYMMETRY_MIN_MAS)
+    assert MODULE_ANTISYMMETRY_MIN_MAS < MAX_CORRECTION_ARCSEC * 1000.0
+    # twice the ceiling because the floor is a DIFFERENTIAL where the old one
+    # was a per-module magnitude -- so the blocking verdict is bit-preserved.
+    assert (MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS
+            == 2.0 * MAX_CORRECTION_ARCSEC * 1000.0)
+    assert MODULE_ANTISYMMETRY_MIN_MAS < MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS
 
 
 def test_module_family_mapping():
@@ -305,6 +337,38 @@ def test_detector_guard_does_not_flag_real_module_splits():
     """Same controls as the module guard, at detector granularity -- including
     W51 F410M, whose real split is anti-parallel at cos = -0.96."""
     for recorded, filt in ((_W51_F480M, "F480M"), (_W51_F410M, "F410M")):
-        res = detect_detector_antisymmetry(_exposures(recorded, filt))
+        res = detect_detector_antisymmetry(
+            _exposures(recorded, filt),
+            min_mas=MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS)
         assert not res["detected"], (filt, res)
         assert not res["keys"], (filt, res)
+
+
+def test_twenty_mas_module_set_is_discarded_without_blocking():
+    """The +/-20 mas class is dropped, and the run carries on.
+
+    Two fields were held out of the release for weeks because an m2 correction
+    set at the field's floor stopped their m12 (issue #473).  Firing the
+    antisymmetry guard on that class only helps if firing means "discard these
+    corrections", not "stop": the products' own module registration, measured
+    reference-free in the strip where the modules see the same stars, is
+    0.2-13 mas, so there is nothing to stop FOR.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        antisymmetry_guards)
+    g = antisymmetry_guards(_exposures(_W51_F410M, "F410M"))
+    assert g["module"]["detected"], g["module"]
+    assert g["keys"], g
+    assert not g["module_blocking"], g
+    assert not g["detector_blocking"], g
+
+
+def test_gross_alias_still_blocks():
+    """The issue-158 case -- W51's ~56" footprint ridge -- keeps stopping the
+    run.  A pair that large is over the appliable ceiling, so discarding it
+    leaves the frames misaligned with nothing able to fix them."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        antisymmetry_guards)
+    g = antisymmetry_guards(_exposures(_W51_F335M, "F335M"))
+    assert g["module"]["detected"], g["module"]
+    assert g["module_blocking"], g
