@@ -301,9 +301,22 @@ def test_gaia_only_reference_per_tile_does_not_gate():
     """VIRAC2-absent fields (w51/sgrc): the refcat is Gaia-ONLY, so the per-tile
     check D is measured against a SPARSE catalog and returns noise -- its grid is
     not 'clean' (starved tiles), which under the dense gate would strand the bulk
-    Gaia tie the reducer needs.  With ``dense=False`` the per-tile check is
-    replaced by the same-star refinement, so a coherent, same-star-verified tie
-    APPLIES; with ``dense=True`` the same starved grid still (correctly) blocks."""
+    Gaia tie the reducer needs.  With ``dense=False`` the spatial check is the
+    same-star bulk refinement, so a coherent, same-star-verified tie APPLIES.
+
+    ``dense`` selects the spatial estimator, and ``per_tile_source`` names it.
+    It no longer decides the verdict on THIS data: since issue #610 a DENSE
+    reference with a small, same-star-verified tie is gated by the same-star
+    REGION map, which on a 90" field of 400 perfectly-paired stars reads four
+    45" cells at sub-mas residual and passes -- correctly, the field carries a
+    pure 10 mas rigid shift and no spatial structure at all.  The starved
+    histogram grid calling that same data unclean is the #610 defect itself.
+    What keeps the dense arm meaningful on a REAL Gaia-only field is that its
+    reference is far too sparse for the region map to measure, so the histogram
+    grid keeps the gate and still blocks -- held by
+    ``test_same_star_region_map.py::
+    test_reference_tie_falls_back_to_the_histogram_grid_when_regions_are_starved``.
+    """
     ra, dec = _field(n=400)
     cons = SkyCoord(ra=(ra - 10.0 / 3.6e6 / COSD) * u.deg, dec=dec * u.deg,
                     frame="icrs")
@@ -317,8 +330,10 @@ def test_gaia_only_reference_per_tile_does_not_gate():
 
     # the shared, sparse per-tile grid is not clean (starved tiles)
     assert not tie_dense["per_tile"].get("clean")
-    # dense gate: per-tile blocks -> the bug that stranded the w51 bulk sentinel
-    assert not tie_dense["apply_ok"]
+    # ...and it is no longer what the dense arm reads: `dense` routes to the
+    # same-star REGION map, `not dense` to the same-star BULK refinement.
+    assert tie_dense["per_tile_source"] == "same-star-region"
+    assert tie_sparse["per_tile_source"] == "same-star-bulk"
     # Gaia-only regime: same-star refinement carries the sign-off -> applies
     assert tie_sparse["vs_full"]["ok"]
     assert tie_sparse["same_star"] is not None
