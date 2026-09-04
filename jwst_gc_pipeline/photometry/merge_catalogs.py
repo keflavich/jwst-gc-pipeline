@@ -57,6 +57,9 @@ DEFAULT_MERGE_MODULES = 'merged'
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
+    frame_path_for_satstar_catalog, refresh_satstar_skycoords,
+    satstar_frame_state_signature)
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
@@ -2165,6 +2168,43 @@ def _ensure_satstar_aperture_photometry(cat, filtername, target, basepath,
     return cat
 
 
+#: A refresh larger than this is worth naming in the log: the cache's stored sky
+#: no longer matches its own pixels, i.e. the frame moved under it.
+_SATSTAR_STALE_SKY_REPORT_MAS = 5.0
+
+
+def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
+    """Read one per-exposure satstar catalog with its sky columns re-projected
+    through its frame's CURRENT GWCS.
+
+    The satstar fit is cached per exposure and is deliberately NOT invalidated
+    when the frame's WCS changes (``_satstar_recovery_signature`` keys it on the
+    recovery/deblend config only), so a cache written before an offsets-table
+    correction, a frame regeneration, or the GWCS-first change stores a sky
+    position that no longer matches its own pixel centroid.  The FIT is still
+    good -- the star is at the same pixel -- so re-project rather than refit.
+    See :mod:`jwst_gc_pipeline.photometry.satstar_wcs_refresh` and issue #193.
+
+    One frame carries several stage catalogs (``_m3``/``_m4``/``_m12``/...), so
+    the frame WCS is read once per frame, not once per catalog.
+    """
+    tbl = Table.read(filename)
+    frame = frame_path_for_satstar_catalog(filename)
+    if frame is None:
+        refresh_satstar_skycoords(tbl, catalog_path=filename)
+        return tbl
+    _wcs = wcs_cache.get(frame)
+    if _wcs is None:
+        _wcs = frame_wcs(frame)
+        wcs_cache[frame] = _wcs
+    tbl, shift = refresh_satstar_skycoords(tbl, wcs=_wcs, catalog_path=filename)
+    if np.isfinite(shift[0]) and np.hypot(*shift) > _SATSTAR_STALE_SKY_REPORT_MAS:
+        print(f"  satstar sky refresh: {os.path.basename(filename)} moved "
+              f"{shift[0]:+.1f}/{shift[1]:+.1f} mas onto the frame's current "
+              f"WCS ({len(tbl)} sources)", flush=True)
+    return tbl
+
+
 def load_satstar_catalog(filtername, target='brick',
                          basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     proj = _project_for_target_filter(target, filtername)
@@ -2238,6 +2278,13 @@ def load_satstar_catalog(filtername, target='brick',
     # rewrite) whenever any per-exposure catalog is newer.  The cache lives in
     # catalogs/ (NOT the pipeline dir) so the *satstar_catalog.fits glob above
     # never re-globs it.  Result is identical to rebuilding every time.
+    #
+    # Freshness is keyed on the per-exposure catalogs (mtime + count), the dedup
+    # radius, the dedup algorithm AND the FRAME STATE (SATFRMSG).  The frame term
+    # is what makes the sky positions durable: everything else is a property of
+    # the satstar catalogs, which a frame regeneration or re-alignment does not
+    # touch, so without it the cache goes stale again the next time the offsets
+    # table is corrected (issue #193).
     cache = (f'{basepath}/catalogs/'
              f'{filtername.lower()}_consolidated_satstar_catalog.fits')
     try:
@@ -2259,12 +2306,22 @@ def load_satstar_catalog(filtername, target='brick',
             # would auto-validate legacy caches against whatever the current
             # setting happens to be.
             _rcache = float(cached.meta.get('SATDDUPR', 0.15))
+            # ...and on the FRAME STATE.  Every term above is a property of the
+            # satstar catalogs, and a frame can move without any of them moving:
+            # correcting the offsets table and regenerating the working copy from
+            # _cal rewrites the exposure and leaves the satstar catalogs alone, so
+            # the consolidated cache would keep serving the pre-correction sky.
+            # That is the per-exposure staleness this cache is built from, one
+            # level up -- see satstar_frame_state_signature.
+            _fsig = satstar_frame_state_signature(fallback)
             if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
                     and abs(_rcache - _rcur) < 1e-6
-                    and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG):
+                    and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG
+                    and str(cached.meta.get('SATFRMSG', '')) == _fsig):
                 print(f"Using consolidated satstar catalog {cache} "
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
-                      f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG})")
+                      f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG}, "
+                      f"frame state {_fsig})")
                 return _ensure_satstar_aperture_photometry(
                     cached, filtername, target, basepath, cache_path=cache)
             if str(cached.meta.get('SATDDALG', '')) != _SATSTAR_DEDUP_ALG:
@@ -2273,15 +2330,29 @@ def load_satstar_catalog(filtername, target='brick',
             if abs(_rcache - _rcur) >= 1e-6:
                 print(f"Rebuilding satstar cache {cache}: dedup radius changed "
                       f"{_rcache}\" -> {_rcur}\"")
-            print(f"Rebuilding satstar cache {cache}: built from "
-                  f"{cached.meta.get('NSATSRC', 'unknown')} per-exposure "
-                  f"catalogs but {len(fallback)} now exist")
+            if str(cached.meta.get('SATFRMSG', '')) != _fsig:
+                print(f"Rebuilding satstar cache {cache}: the exposures moved "
+                      f"under it -- frame state "
+                      f"{cached.meta.get('SATFRMSG', 'unrecorded')!r} -> {_fsig!r} "
+                      f"(a regenerated or re-aligned frame changes no satstar "
+                      f"catalog mtime; issue #193)")
+            if int(cached.meta.get('NSATSRC', -1)) != len(fallback):
+                print(f"Rebuilding satstar cache {cache}: built from "
+                      f"{cached.meta.get('NSATSRC', 'unknown')} per-exposure "
+                      f"catalogs but {len(fallback)} now exist")
     except OSError:
         pass  # stat/read failure -> rebuild from per-exposure catalogs below
 
     print(f"Building consolidated satstar catalog for {filtername} from "
           f"{len(fallback)} per-exposure catalogs")
-    sat_tables = [Table.read(fn) for fn in fallback]
+    # Snapshot the frame state BEFORE reading, not after: if an exposure is
+    # rewritten while this build runs, the recorded signature is the pre-change
+    # one, so the next read rebuilds rather than trusting a half-old cache.
+    _frame_sig = satstar_frame_state_signature(fallback)
+    _wcs_cache = {}
+    sat_tables = [_read_satstar_catalog_on_current_frame(fn, _wcs_cache)
+                  for fn in fallback]
+    del _wcs_cache
     combined = table.vstack(sat_tables, metadata_conflicts='silent')
     # The fallback globs the PER-EXPOSURE satstar catalogs, so the same physical
     # saturated star appears once per frame it was fit in.  Without dedup,
@@ -2305,6 +2376,9 @@ def load_satstar_catalog(filtername, target='brick',
     deduped.meta['NSATSRC'] = len(fallback)
     deduped.meta['SATDDUPR'] = float(_satstar_dedup_radius().to(u.arcsec).value)
     deduped.meta['SATDDALG'] = _SATSTAR_DEDUP_ALG
+    # ...and the state of the frames those positions were re-projected onto, so
+    # the next read rebuilds when a frame has since moved (issue #193).
+    deduped.meta['SATFRMSG'] = _frame_sig
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         # write to a temp sibling + atomic rename so a concurrent reader never
@@ -2323,7 +2397,7 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp3'
+_SATSTAR_DEDUP_ALG = 'fp4'  # fp4: sky columns re-projected onto the current GWCS (#193)
 
 
 # Wide second-chance radius for matching a fitted satstar to its daophot row

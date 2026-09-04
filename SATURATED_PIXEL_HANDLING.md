@@ -378,6 +378,52 @@ these flag sets would remove the footgun of setting them individually.)*
   is a uint8 bitmask — bit 1 partly saturated (recoverable), bit 2 totally
   saturated (NaN-variance core), bit 4 included in an accepted satstar fit.
 
+### 6a. Saturated-source astrometry: the sky column is recomputed on every read
+
+A per-exposure `*_satstar_catalog.fits` is a **cache of a FIT**, and the fit is
+the pixel centroid (`xcentroid`/`ycentroid`).  Its `skycoord_fit` is that
+centroid projected through the frame's WCS **at fit time**, which is a different
+thing: the frame's WCS changes underneath the cache whenever the offsets table
+is corrected and the working copy is regenerated from `_cal`, and the way the
+pipeline reads that WCS changed once (GWCS-first, 2026-07-29).  The cache
+survives both — `_satstar_recovery_signature` keys it on the recovery/deblend
+config only, deliberately, so a plain re-run does not refit every field.
+
+So a stored sky position is never trusted.  Both readers
+(`load_or_make_satstar_catalog` on a cache hit, and the consolidated-catalog
+build in `merge_catalogs.load_satstar_catalog`) re-project the stored pixel
+centroid through `frame_wcs()` of the frame the catalog sits beside
+(`jwst_gc_pipeline.photometry.satstar_wcs_refresh`).  On a field whose frames
+have not moved since the fit this is a no-op to <0.01 mas.
+
+The component anchor `sat_com_ra`/`sat_com_dec` is stored as sky only, so there
+is no pixel to re-project; it is **transported** by the same tangent-plane offset
+the row's own `skycoord_fit` just moved by.  It is the bbox centre of the
+component that star was fit in, so the WCS-difference gradient over that
+separation is the whole error: 0.001 mas median / 0.003 mas max against the exact
+pixel transport (brick F182M nrcb1, 411 anchors, frame displaced 2″ with a 0.05°
+roll).  Do **not** recover the anchor pixel by rebuilding the fit-time WCS from
+the header cards in the catalog's meta — that is ASTROMETRY RULE #2's forbidden
+SIP-header inversion, and a linear-card whitelist that drops `A_ORDER`/`A_i_j`/
+`B_ORDER`/`B_i_j` inverts a `RA---TAN-SIP` projection through a distortion-free
+TAN: 54.87 mas median / 224.30 mas max (1.79 / 7.26 px) on an UNMOVED frame.
+
+Without the refresh, a June fit publishes June's astrometry through an August
+frame: brick F200W's caches read +56.8 / +88.7 mas away from their own pixels'
+current sky positions, and the m6 catalog built from them showed a matching
++58.7 / +88.2 mas saturated-versus-unsaturated position excess (issue #193).  A
+cache mtime does not detect this — the comparison that does is stored
+`skycoord_fit` versus `frame_wcs(frame).pixel_to_world(xcentroid, ycentroid)`.
+
+The **consolidated** per-filter satstar catalog is itself a cache, and it is
+invalidated on the same axis: its freshness key carries `SATFRMSG`, a stat-only
+digest of the resolved frames' name/mtime/size
+(`satstar_wcs_refresh.satstar_frame_state_signature`), alongside the source
+count, dedup radius and dedup algorithm.  Those other terms are all properties of
+the per-exposure satstar catalogs, which an offsets-table correction plus
+regeneration from `_cal` does not touch — so without the frame term the
+consolidated catalog silently goes stale again the next time a frame moves.
+
 ---
 
 ## 7. Flags & environment reference
