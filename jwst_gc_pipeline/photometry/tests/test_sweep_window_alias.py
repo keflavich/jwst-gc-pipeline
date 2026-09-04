@@ -372,3 +372,31 @@ def test_gross_alias_still_blocks():
     g = antisymmetry_guards(_exposures(_W51_F335M, "F335M"))
     assert g["module"]["detected"], g["module"]
     assert g["module_blocking"], g
+
+
+def test_gross_detector_alias_blocks_even_when_the_module_guard_covers_it():
+    """A gross DETECTOR pair must not be downgraded by the module guard.
+
+    The detector message is emitted only for what the module guard missed
+    (`det_extra`).  Now that the module guard fires at 15 mas it can cover the
+    exposures of a detector pair that is gross, and reporting only the module
+    message -- which is a discard below 1000 mas -- would turn a blocking alias
+    into a discard.  The guards report the detector blocking flag independently
+    of that overlap.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        antisymmetry_guards)
+    # One exposure, two detectors per module.  The module MEANS are +/-10 mas,
+    # so the module guard fires on a 20 mas differential (discard, not
+    # blocking), while nrca1 against nrcb1 is 60" apart (gross, must block).
+    exps = []
+    for det, dra in (("nrca1", 30010.0), ("nrca2", -29990.0),
+                     ("nrcb1", -30010.0), ("nrcb2", 29990.0)):
+        exps.append(dict(key=("1", 1, det, "F410M", "03103"),
+                         vs_consensus=dict(dra=dra, ddec=0.0, ok=True)))
+    g = antisymmetry_guards(exps)
+    assert g["module"]["detected"] and not g["module_blocking"], g
+    # the module guard has flagged every exposure key, so the "report only what
+    # the module guard missed" rule alone would drop the detector message
+    assert not (g["detector"]["keys"] - g["module"]["keys"]), g
+    assert g["detector_blocking"], g

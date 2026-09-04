@@ -4062,10 +4062,15 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # every detector PAIR.  Report only what the module guard missed.
         det_antisym = guards["detector"]
         det_extra = det_antisym["keys"] - antisym["keys"]
-        if det_antisym["detected"] and det_extra:
+        det_blocking = guards["detector_blocking"]
+        # `det_extra` is the "report only what the module guard missed" rule.
+        # Since the module guard fires at 15 mas it can now cover the exposures
+        # of a detector pair that is GROSS, and reporting only the module
+        # message would then downgrade a blocking alias to a discard.  A gross
+        # detector pair is therefore always reported (issue #473).
+        if det_antisym["detected"] and (det_extra or det_blocking):
             dex = next((e for e in det_antisym["examples"] if e["same_module"]),
                        det_antisym["examples"][0])
-            det_blocking = guards["detector_blocking"]
             det_sink = unverified_blocking if det_blocking else unverified
             det_sink.append(
                 f"{vctx}: DETECTOR-ANTISYMMETRIC offsets on "
