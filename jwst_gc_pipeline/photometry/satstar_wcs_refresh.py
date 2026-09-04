@@ -82,8 +82,9 @@ _SAT_TAIL = re.compile(r'_satstar_catalog\.fits$')
 
 
 class MissingSatstarFrameWarning(UserWarning):
-    """A satstar catalog had no frame beside it, so its sky columns could not
-    be refreshed and are served as stored (possibly against an older WCS)."""
+    """Some or all of a satstar catalog's sky columns could not be refreshed --
+    no frame beside it, or sources off the detector where the GWCS is undefined
+    -- so those rows are served as stored (possibly against an older WCS)."""
 
 
 def frame_path_for_satstar_catalog(catalog_path):
@@ -173,6 +174,24 @@ def refresh_satstar_skycoords(table, frame_path=None, catalog_path=None,
     fresh = wcs.pixel_to_world(x, y)
     if not isinstance(fresh, SkyCoord):
         return table, nan_shift
+
+    # A GWCS returns NaN for a pixel off the detector -- the right sentinel, but
+    # an outside-FOV satstar seed IS fit at such a pixel (its star is off the
+    # frame; only its diffraction spikes are on it).  Re-projecting those to NaN
+    # would delete positions the off-FOV flux reconciliation needs, so keep what
+    # the cache stored there and say how many.
+    off_detector = ~np.isfinite(fresh.ra.deg) & np.isfinite(stored.ra.deg)
+    if np.any(off_detector):
+        ra = fresh.ra.deg.copy()
+        dec = fresh.dec.deg.copy()
+        ra[off_detector] = stored.ra.deg[off_detector]
+        dec[off_detector] = stored.dec.deg[off_detector]
+        fresh = SkyCoord(ra * u.deg, dec * u.deg, frame=stored.frame.name)
+        warnings.warn(
+            f"{int(off_detector.sum())} satstar source(s) in {catalog_path!r} "
+            f"sit off the detector, where the GWCS is undefined; their stored "
+            f"sky positions were kept and are NOT re-projected.",
+            MissingSatstarFrameWarning)
     table[_PIXEL_DERIVED_SKY_COL] = fresh
 
     dra = ((fresh.ra - stored.ra).wrap_at(180 * u.deg).to(u.mas).value

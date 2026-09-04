@@ -197,3 +197,39 @@ def test_consolidated_cache_generation_forces_a_rebuild():
     rebuild instead of serving the old positions."""
     from jwst_gc_pipeline.photometry import merge_catalogs as MC
     assert MC._SATSTAR_DEDUP_ALG != 'fp3'
+
+
+def test_off_detector_seeds_keep_their_stored_sky(tmp_path):
+    """An outside-FOV satstar seed is fit at a pixel OFF the detector (its star
+    is off the frame; only the spikes are on it).  A GWCS returns NaN there --
+    the right sentinel, but re-projecting those rows to NaN would delete
+    positions the off-FOV flux reconciliation reads.  Keep the stored value and
+    say so, rather than silently NaN-ing them."""
+    fit_wcs = _wcs()
+    now_wcs = _wcs(crval1=266.5 + 100e-3 / 3600.0 / np.cos(np.radians(-28.7)))
+    x = np.array([30.0, 90.0, -400.0])          # third is off the 128x128 frame
+    y = np.array([40.0, 100.0, -400.0])
+    tbl = _satstar_table(fit_wcs, x, y)
+    stored = SkyCoord(tbl['skycoord_fit'])
+
+    frame = str(tmp_path / 'exp_crf.fits')
+    _write_frame(frame, now_wcs)
+
+    class _Bounded:
+        """Stands in for a GWCS: NaN outside the detector."""
+        def pixel_to_world(self, px, py):
+            sky = now_wcs.pixel_to_world(np.asarray(px), np.asarray(py))
+            bad = (px < 0) | (px > 127) | (py < 0) | (py > 127)
+            ra, dec = sky.ra.deg.copy(), sky.dec.deg.copy()
+            ra[bad] = np.nan
+            dec[bad] = np.nan
+            return SkyCoord(ra * u.deg, dec * u.deg, frame='icrs')
+
+    with pytest.warns(MissingSatstarFrameWarning):
+        out, shift = refresh_satstar_skycoords(tbl, wcs=_Bounded())
+
+    got = SkyCoord(out['skycoord_fit'])
+    assert np.all(np.isfinite(got.ra.deg))                      # nothing NaN-ed
+    assert got[2].separation(stored[2]).to(u.mas).value < 0.01   # kept as stored
+    assert np.all(_seps(out, now_wcs.pixel_to_world(x, y))[:2] < 0.01)
+    assert np.hypot(*shift) == pytest.approx(100.0, rel=0.05)
