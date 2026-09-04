@@ -28,8 +28,8 @@ The guards: a swept peak must REPRODUCE at an independent window
 ``PER_EXPOSURE_SWEEP_WINDOWS``, and an antisymmetric per-module correction set
 is refused outright (``detect_module_antisymmetry``).
 """
-import pytest
 import numpy as np
+import pytest
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
