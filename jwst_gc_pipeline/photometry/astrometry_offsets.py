@@ -318,10 +318,38 @@ MAX_PAIRS_PER_WINDOW = 3_000_000
 #     the peak to REPRODUCE.  This is the gate (see ``confirm_peak_windows``).
 WINDOW_EDGE_FRACTION = 0.85
 
+# Edge fraction at which the confirmation probe is WORTH RUNNING (issue #600).
+# Distinct from WINDOW_EDGE_FRACTION above, which labels a peak edge-riding in
+# the diagnostic figures: this one only decides whether to SPEND a re-measure,
+# and the re-measure rejects nothing unless it MEASURES a disagreement.  So it
+# is set low, well below the diagnostic label.
+#
+# The probe used to be conditioned on ``swept`` alone, which reads "the peak is
+# larger than the FIRST window, so a wider window is what found it".  An alias
+# does not need a sweep to appear: a peak at 2.95" inside the very first 3"
+# window is already riding that window's edge, and ``swept`` is False.  All 38
+# gc2211 checkpoint records are exactly that -- swept False and
+# ``window_consistent`` None on every one, so the guard never ran -- and the
+# edge fraction separates their two populations where contrast does not:
+#
+#     good ties    47-116 mas   edge 0.016-0.037   n_peak  94-914
+#     artifacts   895-2973 mas  edge 0.298-0.991   n_peak   6-114
+#
+# 0.25 sits above every good tie and below every artifact there.
+CONFIRM_EDGE_FRACTION = 0.25
+
 # Confirmation probes are placed so the candidate peak sits WELL INSIDE the
 # probe window (a probe barely wider than the peak would put it back on the
 # edge and confirm the artifact).  1.4x and 2.2x of the measured offset.
 CONFIRM_WINDOW_FACTORS = (1.4, 2.2)
+
+# ...and never narrower than these multiples of the window the peak came from,
+# paired one-to-one with CONFIRM_WINDOW_FACTORS: a probe at the SAME window is
+# not an independent measurement.  Two floors rather than one because for an
+# UNSWEPT peak (off < its own window) both factors fall below a single floor
+# and collapse onto the same probe window, which would have made the two probes
+# one repeated measurement in precisely the case issue #600 added.
+CONFIRM_MIN_PROBE_FACTORS = (1.25, 2.0)
 
 # Never probe past this: beyond it the pair count explodes and no per-frame or
 # per-visit tie could mean anything anyway.
@@ -340,13 +368,20 @@ def _window_bin_arcsec(window_arcsec, bin_arcsec):
 
 def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
                          factors=CONFIRM_WINDOW_FACTORS,
-                         max_window_arcsec=CONFIRM_MAX_WINDOW_ARCSEC):
+                         max_window_arcsec=CONFIRM_MAX_WINDOW_ARCSEC,
+                         min_probe_factors=CONFIRM_MIN_PROBE_FACTORS):
     """Re-measure ``best``'s peak at INDEPENDENT wider windows; does it survive?
 
     A real rigid offset is a property of the two source lists, so it reads the
     same at every window large enough to contain it.  A window-edge artifact
     (see ``WINDOW_EDGE_FRACTION``) is a property of the WINDOW, so it slides to
     the new edge as soon as the window changes.
+
+    ``min_probe_factors`` pairs one-to-one with ``factors`` and floors each
+    probe window at that multiple of the peak's own window, so the two probes
+    stay at DIFFERENT windows even when the peak is small relative to its window
+    (an unswept edge-riding peak, issue #600); a probe repeated at one window is
+    one measurement, not two.
 
     Returns ``dict(consistent, probes, n_probes)``; the per-window agreement
     tolerance is ``tol_mas`` on each PROBE, not a top-level key (issue #400).
@@ -359,10 +394,12 @@ def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
     off_arcsec = float(best["off"]) / 1000.0
     base_w = float(best["window_arcsec"])
     probes = []
-    for f in factors:
-        w = max(float(f) * off_arcsec, base_w * 1.25)
+    for f, floor in zip(factors, min_probe_factors):
+        w = max(float(f) * off_arcsec, base_w * float(floor))
         if w > max_window_arcsec or abs(w - base_w) < 0.1 * base_w:
             continue
+        if any(abs(w - p["window_arcsec"]) < 0.1 * w for p in probes):
+            continue   # already probed there; not an independent measurement
         res = _measure_at_window(a, b, w, bin_arcsec, min_pairs)
         if res is None:
             probes.append(dict(window_arcsec=w, dra=None, ddec=None))
@@ -496,20 +533,26 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     sweep_windows : iterable of float or None
         Windows (arcsec) to escalate through (default ``DEFAULT_SWEEP_WINDOWS``).
     confirm_windows : bool
-        Require a SWEPT peak to reproduce at independent, wider windows before
-        it is trusted (``confirm_peak_windows``).  A window-edge alias -- a peak
-        that is a property of the search window rather than of the two source
-        lists -- is rejected here (``ok`` False, ``alias_rejected`` True); see
-        ``WINDOW_EDGE_FRACTION`` and issue #158.  Costs one or two extra
-        measurements, and ONLY on a swept result, so the common (small, un-swept)
-        tie is numerically and computationally untouched.  Off by default so an
-        arbitrary caller opts in, but the BULK reference tie
-        (``measure_reference_tie``) now opts in: the earlier worry -- that it
-        legitimately reports a large swept offset only the widest window can
-        contain -- is covered by ``confirm_peak_windows`` rejecting only on a
-        MEASURED disagreement, so a genuine gross shift reproduces at the wider
-        probes and survives (``test_true_large_offset_survives_confirmation``,
-        issues #158 and #257).
+        Require a peak that could be an ARTIFACT OF ITS WINDOW to reproduce at
+        independent, wider windows before it is trusted
+        (``confirm_peak_windows``).  A window-edge alias -- a peak that is a
+        property of the search window rather than of the two source lists -- is
+        rejected here (``ok`` False, ``alias_rejected`` True); see
+        ``WINDOW_EDGE_FRACTION`` and issue #158.  Two peaks qualify: a SWEPT one
+        (bigger than the first window, so widening is what found it) and one
+        whose ``window_edge_fraction`` reaches ``CONFIRM_EDGE_FRACTION`` --
+        an unswept peak already riding its FIRST window's edge, which is what
+        every gc2211 checkpoint record was and what the swept-only trigger
+        skipped (issue #600).  Costs one or two extra measurements, and only on
+        those, so an ordinary small tie (edge fraction ~0.01) is numerically and
+        computationally untouched.  Off by default so an arbitrary caller opts
+        in, but the BULK reference tie (``measure_reference_tie``) now opts in:
+        the earlier worry -- that it legitimately reports a large swept offset
+        only the widest window can contain -- is covered by
+        ``confirm_peak_windows`` rejecting only on a MEASURED disagreement, so a
+        genuine gross shift reproduces at the wider probes and survives
+        (``test_true_large_offset_survives_confirmation``, issues #158 and
+        #257).
 
     Returns
     -------
@@ -517,8 +560,8 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         ``dict(dra, ddec, off, npairs, contrast, peak_margin, ok, window_arcsec,
         swept, dra_err, ddec_err, n_peak, window_edge_fraction, windows)`` (mas), or
         None if too few pairs at every window.  ``ok`` is False when NO window
-        reaches ``min_contrast`` (or, with ``confirm_windows``, when a swept peak
-        failed confirmation).
+        reaches ``min_contrast`` (or, with ``confirm_windows``, when a swept or
+        edge-riding peak failed confirmation).
         ``window_arcsec`` is the window the reported peak came from -- a value
         >> your expected offset is the tell that the tie was only found after
         widening (investigate: the frame is grossly shifted).  ``dra_err`` /
@@ -595,12 +638,18 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     best["window_edge_fraction"] = (
         float(best["off"] / 1000.0 / best["window_arcsec"])
         if best["window_arcsec"] > 0 else 0.0)
-    # A swept peak must REPRODUCE at an independent window or it is geometry,
-    # not a tie (issue #158).  Only a measured DISAGREEMENT rejects: an
-    # undetermined confirmation (no probe could run) leaves the result as it was.
+    # A peak that could be an artifact of its own window must REPRODUCE at an
+    # independent window or it is geometry/noise, not a tie (issue #158).  Only
+    # a measured DISAGREEMENT rejects: an undetermined confirmation (no probe
+    # could run) leaves the result as it was.
     best["window_consistent"] = None
     best["alias_rejected"] = False
-    if confirm_windows and best["ok"] and best["swept"]:
+    # ``swept`` means the peak exceeded the FIRST window; an alias riding the
+    # edge of that first window is not swept and used to skip the probe
+    # entirely (issue #600), so the edge fraction triggers it as well.
+    if confirm_windows and best["ok"] and (
+            best["swept"]
+            or best["window_edge_fraction"] >= CONFIRM_EDGE_FRACTION):
         conf = confirm_peak_windows(a, b, best, bin_arcsec=bin_arcsec,
                                     min_pairs=min_pairs)
         best["window_confirmation"] = conf
