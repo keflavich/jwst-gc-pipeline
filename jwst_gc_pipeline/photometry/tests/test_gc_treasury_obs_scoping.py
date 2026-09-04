@@ -442,6 +442,72 @@ def test_merge_daophot_does_not_hand_10678s_convention_to_a_sibling(
 
 
 # ---------------------------------------------------------------------------
+# merge_daophot: a NAMED filter set must resolve in full
+# ---------------------------------------------------------------------------
+
+def test_merge_daophot_refuses_a_partial_named_filter_set(tmp_path, monkeypatch):
+    """One band's catalog missing must stop the cross-band merge, not shrink it.
+
+    10678's NIRCam prime is two filters, so a single glob miss leaves ONE
+    band -- and `merge_catalogs` accepts a one-table list, so that single-band
+    table is written under the m7 cross-band product's name.  The two guards
+    that run immediately before this call (the m7 cross-filter astrometry
+    checkpoint: `missing vetted catalog ...; filter not checked`, then `<2
+    vetted catalogs; skipped`) both fail open on the same condition.
+    """
+    (tmp_path / 'catalogs').mkdir()
+    (tmp_path / 'reduction').mkdir()
+    Table({'Filter': ['F212N', 'F480M'],
+           'PSF FWHM (arcsec)': [0.072, 0.162],
+           'PSF FWHM (pixel)': [2.3, 2.5]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv')
+    _fake_svo(monkeypatch)
+    _treasury_registry(monkeypatch)
+    monkeypatch.setattr(MC, 'sanity_check_individual_table', lambda tbl: None)
+    merged = []
+    monkeypatch.setattr(MC, 'merge_catalogs',
+                        lambda tbls, **kw: merged.append(tbls))
+    _write_m7_vetted(tmp_path, 'f212n', '001')      # f480m never arrived
+    with pytest.raises(MC.MissingRequiredFilterError) as exc:
+        MC.merge_daophot(module='nrcblong', daophot_type='basic',
+                         indivexp=True, resbgsub=True, iteration_label='m7',
+                         target='gc-treasury', basepath=str(tmp_path),
+                         ref_filter='f480m',
+                         filternames_override=['f212n', 'f480m'],
+                         field='001', progid='10678', vetted=True)
+    msg = str(exc.value)
+    assert 'f480m' in msg
+    # the glob that missed, so the operator can see WHICH name was expected
+    assert 'f480m*nrcblong*_o001_indivexp_merged' in msg
+    assert merged == [], 'a partial cross-band merge was still written'
+
+
+def test_merge_daophot_still_merges_when_the_registry_lists_an_absent_band(
+        tmp_path, monkeypatch):
+    """No override: the filter list is every band the target is REGISTERED for,
+    and a field legitimately lacks one.  That case keeps warn-and-continue."""
+    (tmp_path / 'catalogs').mkdir()
+    (tmp_path / 'reduction').mkdir()
+    Table({'Filter': ['F212N', 'F480M'],
+           'PSF FWHM (arcsec)': [0.072, 0.162],
+           'PSF FWHM (pixel)': [2.3, 2.5]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv')
+    _fake_svo(monkeypatch)
+    _treasury_registry(monkeypatch)
+    monkeypatch.setattr(MC, 'sanity_check_individual_table', lambda tbl: None)
+    merged = []
+    monkeypatch.setattr(MC, 'merge_catalogs',
+                        lambda tbls, **kw: merged.append(
+                            [t.meta['filter'] for t in tbls]))
+    _write_m7_vetted(tmp_path, 'f212n', '001')      # f480m not observed here
+    MC.merge_daophot(module='nrcblong', daophot_type='basic', indivexp=True,
+                     resbgsub=True, iteration_label='m7',
+                     target='gc-treasury', basepath=str(tmp_path),
+                     ref_filter='f212n', field='001', vetted=True)
+    assert merged == [['f212n']]
+
+
+# ---------------------------------------------------------------------------
 # merge_daophot's FWHM table: packaged fallback for a tree that has none
 # ---------------------------------------------------------------------------
 

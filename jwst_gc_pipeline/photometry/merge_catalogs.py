@@ -1879,6 +1879,15 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                    basepath=basepath)
 
 
+class MissingRequiredFilterError(ValueError):
+    """A caller NAMED its filters and one of them has no catalog on disk.
+
+    ``merge_daophot(filternames_override=[...])`` is a request to merge THOSE
+    bands.  Silently dropping one and merging the rest writes a partial
+    cross-band product under the full product's name.
+    """
+
+
 def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False, bgsub=False, epsf=False, blur=False, target='brick',
                   indivexp=False,
                   ref_filter=None,
@@ -1983,12 +1992,15 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # Now we iterate filters once and drop any with no catalog (with a warning),
     # so the remaining parallel lists are guaranteed consistent.
     present_filters, catfns, imgfns = [], [], []
+    missing_filters = []          # [(filter, the glob/path that found nothing)]
     for filn in filternames:
         if indivexp:
-            _cat_matches = sorted(glob.glob(
+            _cat_glob = (
                 f"{basepath}/catalogs/{filn.lower()}*{module}*{_mtk}indivexp_merged"
-                f"{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits"))
+                f"{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits")
+            _cat_matches = sorted(glob.glob(_cat_glob))
             if not _cat_matches:
+                missing_filters.append((filn, _cat_glob))
                 print(f"WARNING: no indivexp daophot {daophot_type} catalog for "
                       f"filter {filn} (module={module}, vetted={vetted}); dropping "
                       f"it from the cross-filter merge", flush=True)
@@ -2001,6 +2013,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
             catfn = (f"{basepath}/{filn.upper()}/{filn.lower()}_{module}{detector}"
                      f"{desat}{bgsub}{epsf_}{blur_}_daophot_{daophot_type}.fits")
             if not os.path.exists(catfn):
+                missing_filters.append((filn, catfn))
                 print(f"WARNING: no daophot {daophot_type} catalog {catfn} for "
                       f"filter {filn}; dropping it from the cross-filter merge",
                       flush=True)
@@ -2025,6 +2038,32 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
             f"module={module} in {basepath} (indivexp={indivexp}, "
             f"iter_token={iter_token!r}, desat={desat!r}, bgsub={bgsub!r}, "
             f"vetted={vetted})")
+
+    # A caller that NAMES its bands is asking for a merge OF THOSE BANDS.  The
+    # manual m7 path always names them (cataloging.py's cross-band merge passes
+    # filternames_override), and it stamps the result `m7` -- so a band dropped
+    # here ships a PARTIAL cross-band catalog under the complete product's name,
+    # with the warning above as its only trace.  The two guards immediately
+    # upstream fail open on this same condition (the m7 cross-filter astrometry
+    # checkpoint skips an unresolved filter, then skips itself entirely with
+    # <2 catalogs), and nothing downstream tests per-band completeness of the
+    # merged product.  10678's NIRCam prime is two filters, so one glob miss is
+    # a single-band "cross-band" catalog.
+    #
+    # The registry-derived filter list keeps print-and-continue: there the list
+    # is every band the target is registered for, and a field legitimately
+    # lacks one.
+    if filternames_override is not None and missing_filters:
+        _miss = '\n'.join(f"    {_f}: no match for {_g}"
+                          for _f, _g in missing_filters)
+        raise MissingRequiredFilterError(
+            f"cross-filter merge was asked for "
+            f"{[str(f).lower() for f in filternames_override]} but "
+            f"{[_f for _f, _ in missing_filters]} resolved to no catalog "
+            f"(module={module}, indivexp={indivexp}, vetted={vetted}).  "
+            f"Merging the remaining {list(filternames)} would write a partial "
+            f"cross-band catalog under the full product's name.  Missing:\n"
+            f"{_miss}")
 
     tbls = [Table.read(catfn) for catfn in catfns]
 
