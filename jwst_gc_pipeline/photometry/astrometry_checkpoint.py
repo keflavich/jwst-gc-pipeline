@@ -229,6 +229,12 @@ def _env_flag(name):
 #: proceed on a field the checkpoint could not verify, not a default.
 ALLOW_UNVERIFIED_ENV = "ALLOW_UNVERIFIED_ASTROM_CHECKPOINT"
 
+#: The BROADEST override: it demotes every blocking checkpoint in the run, at
+#: every stage, including a CORRECTING stage's stop.  Read here only to RECORD
+#: that it was set -- the demotions themselves live at the call sites in
+#: ``cataloging.py``, which spell the same name and the same ``== "1"`` test.
+WARN_ONLY_ENV = "ASTROM_CHECKPOINT_WARN_ONLY"
+
 #: WHERE a FROZEN-stage failure stops the pipeline.  ``"stage"`` raises inside
 #: the stage that measured it; ``"release"`` records it, says so loudly, and
 #: lets the chain finish -- the release gate then refuses to stage the field.
@@ -334,6 +340,36 @@ def gate_override_state(env_override):
                 reason=reason if used else '',
                 reason_env=override_reason_env(env_override),
                 enforcement=checkpoint_enforcement())
+
+
+def record_gate_override(narrow_env, narrow_applies):
+    """The ``gate_override`` block a checkpoint record should carry.
+
+    ``ASTROM_CHECKPOINT_WARN_ONLY`` first, and with no condition attached to
+    it.  It is the broadest of the three overrides -- it demotes EVERY
+    blocking check in the run, at every stage, including a CORRECTING stage's
+    stop -- so neither of the conditions that guard a narrow override applies
+    to it, and the record that most needs to name it is precisely the one
+    those conditions exclude: a PASSING record at a correcting stage.
+
+    That is the arches m2 repair pass of 2026-08-28 (issue #581).  The run was
+    given a written ``_REASON``, the demotion happened, and the record it named
+    reads ``passed=True, correcting=True, gate_override=None`` -- so the
+    release gate reported ``0 FAILED`` and exit 0, and the justification
+    survived only in a SLURM log that rotates.  CLAUDE.md already promises this
+    variable's justification is "stored in the checkpoint record's
+    ``gate_override`` block"; for the two narrow overrides that was true.
+
+    ``narrow_env`` is the override consulted at THIS record's own gate, and it
+    stays conditional on ``narrow_applies``: reporting ``used: false`` for a
+    gate the record never reached would read as a gate that was offered and
+    declined.  With both set the broad one is what the record carries, because
+    it is the one that demotes this stage's raise whether or not the narrow one
+    is present.
+    """
+    if _env_flag(WARN_ONLY_ENV):
+        return gate_override_state(WARN_ONLY_ENV)
+    return gate_override_state(narrow_env) if narrow_applies else None
 
 
 def _defer_to_release(msg, what, env_override):
@@ -4538,12 +4574,14 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         consensus_catalog_error = None
 
     passed = _checkpoint_passed(failures, unverified_blocking)
-    # What an operator did to the gate this record is about.  Only meaningful
-    # where the override is actually consulted -- a correcting stage never
-    # defers, and a stage with no failures never reaches the override -- so it
-    # is None elsewhere rather than a misleading `used: false`.
-    gate_override = (gate_override_state("ALLOW_LATE_STAGE_ASTROM_SHIFT")
-                     if failures and not correcting else None)
+    # What an operator did to the gate this record is about.  The narrow
+    # override is only meaningful where it is actually consulted -- a
+    # correcting stage never defers, and a stage with no failures never
+    # reaches it -- so it is None elsewhere rather than a misleading
+    # `used: false`.  ASTROM_CHECKPOINT_WARN_ONLY carries neither condition:
+    # see `record_gate_override`.
+    gate_override = record_gate_override("ALLOW_LATE_STAGE_ASTROM_SHIFT",
+                                         bool(failures) and not correcting)
     # Floor is a per-FIELD property (m2_correction_floors); record both the
     # value and WHERE it came from, so a pass at the field's standing floor
     # is distinguishable from one where an operator raised it by hand.
@@ -4842,9 +4880,8 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                   filters=filters, failures=failures, passed=passed,
                   unverified=unverified, unverified_blocking=unverified_blocking,
                   all_verified=not unverified,
-                  gate_override=(
-                      gate_override_state("ALLOW_CROSSFILTER_ASTROM_FAIL")
-                      if failures else None),
+                  gate_override=record_gate_override(
+                      "ALLOW_CROSSFILTER_ASTROM_FAIL", bool(failures)),
                   tolerances=dict(crossfilter_tol_mas=tol_mas,
                                   local_cell_tol_mas=cell_tol_mas,
                                   local_cell_size_arcsec=cell_arcsec,

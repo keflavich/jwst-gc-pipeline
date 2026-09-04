@@ -138,11 +138,15 @@ inside the stage instead; the release gate is
 `stage_release.py`); at the m7 cross-band merge
 every filter must agree with the VIRAC2-Ks-nearest anchor to <5 mas with no
 significant 2″ cell >15 mas.  Do not disable (`ASTROM_CHECKPOINT=0`) or
-override (`ALLOW_LATE_STAGE_ASTROM_SHIFT`, `ALLOW_CROSSFILTER_ASTROM_FAIL`)
+override (`ASTROM_CHECKPOINT_WARN_ONLY`, `ALLOW_LATE_STAGE_ASTROM_SHIFT`,
+`ALLOW_CROSSFILTER_ASTROM_FAIL`)
 without written justification — put it in `<VAR>_REASON`, which is stored in the
 checkpoint record's `gate_override` block and printed beside the failure by the
 release gate.  An override with no reason is recorded as having none and named
-at the gate.
+at the gate.  `ASTROM_CHECKPOINT_WARN_ONLY=1` is the broad one — it demotes
+every blocking check at every stage, a correcting stage's stop included — so it
+is recorded whatever the stage and whatever the verdict, and the gate reports
+the resulting pass as `OVERRIDDEN` rather than as a clean one.
 
 ### ⛔ ASTROMETRY RULE #2 — read the GWCS; the SIP header is only an approximation
 

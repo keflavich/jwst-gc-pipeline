@@ -119,10 +119,18 @@ thing, not spending compute on a run that would be refused, and cost three:
 closed on a record it cannot read (rc 2) and on a field with no records at all
 (rc 3) — a field that never ran the checkpoint is unverified, not verified.
 `ALLOW_LATE_STAGE_ASTROM_SHIFT` and `ALLOW_CROSSFILTER_ASTROM_FAIL` still work
-as before and are still the only way to make a failure non-blocking.  Using
+as before and are still the only way to make a *failure* non-blocking.  Using
 either is now RECORDED: the checkpoint record carries a `gate_override` block
 naming the variable, whether it was set, and the justification read from
-`<VAR>_REASON`.  Before that, a record walked past and a record that stopped
+`<VAR>_REASON`.  `ASTROM_CHECKPOINT_WARN_ONLY=1` is recorded in the same block
+and on the same terms, with one difference that follows from what it does: it
+demotes every blocking check at every stage, a CORRECTING stage's stop
+included, so it is recorded regardless of stage and regardless of `passed`.
+The record that needs it most is a passing m2 one -- arches, 2026-08-28, two
+F323N corrections demoted, `passed=True correcting=True gate_override=None`,
+and the release gate reporting `0 FAILED` (issue #581).  The gate now prints an
+`OVERRIDDEN` line for any record carrying a used override, at any verdict; it
+does not change the exit code, which stays a separate decision.  Before that, a record walked past and a record that stopped
 the chain were byte-identical (`passed: false` on both), so the only trace of a
 waiver was one WARNING line in a SLURM log -- which is why brick's m5 F200W
 failure could not be attributed two weeks later (issue #258).  The release gate
@@ -604,7 +612,8 @@ the same table rows.
 | var | effect |
 |---|---|
 | `ASTROM_CHECKPOINT=0` | disable all checkpoints (emergencies only) |
-| `ASTROM_CHECKPOINT_WARN_ONLY=1` | demote blocking failures to loud warnings |
+| `ASTROM_CHECKPOINT_WARN_ONLY=1` | demote blocking failures to loud warnings, at every stage; recorded in the record's `gate_override` block whatever the verdict, and reported as `OVERRIDDEN` by the release gate |
+| `ASTROM_CHECKPOINT_WARN_ONLY_REASON=<text>` | the written justification CLAUDE.md requires; stored in the record |
 | `ASTROM_CHECKPOINT_APPLY=1` | at m2, auto-apply corrections to the offsets table + stale-tag im0 |
 | `ASTROM_REFCAT=<path>` | reference catalog override (default: `{basepath}/catalogs/gaia_virac2_refcat*.fits`) |
 | `ALLOW_CONSENSUS_ONLY_ASTROMETRY=1` | run a **VIRAC2-framed** field with no reference catalog on disk; the checkpoints then verify only that the exposures agree with each other, so the absolute frame is UNVERIFIED and the result is not releasable |
