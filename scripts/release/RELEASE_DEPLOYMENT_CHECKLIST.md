@@ -128,11 +128,22 @@ or the `ALLOW_*` overrides without a written justification.
   tie-break an inter-frame overlap too thin to measure frame-against-frame.
   `overlap_arbiter_refcat` falls back to `FRAME_REFCAT`, so a field with a dense
   catalogue needs one entry, not two.
-- ⚠ **Known gap (issue #263).** The overlap check routes a star list into its
-  gating or diagnostic slot by whether the file has a `source` column, not by
-  how dense it is — so a sparse Gaia-only list without that column is used for
-  gating. Routing by content has not landed. Until it does, read that check's
+- **Which star list may FAIL a field on the absolute tie** is decided by
+  `check_interframe_overlap._may_gate_absolute_frame`, on two properties read
+  off the file (issue #263): it must hold at least `MIN_GATING_MATCHES` = 1000
+  stars inside the filter's footprint, and it must not be JWST-INTERNAL. A
+  sparse list still arbitrates pairs and cannot refuse a field; an internal list
+  (a field's own merged photometry, recognised by its `skycoord_ref` position
+  columns) is barred whatever its density, because a field measured against a
+  catalogue built from that same field agrees by construction. Read the check's
   log line for the catalogue it names rather than assuming VIRAC2.
+- **A field in neither registry falls back to its own merged photometry**
+  (`internal_arbiter_refcat`, `basic_merged_indivexp_photometry_tables_merged_resbgsub_m8.fits`
+  then `…_m7.fits`) to tie-break an overlap. That is legitimate for a tie-break
+  and only there: the arbiter differences the two groups' residuals star by
+  star, so the reference cancels exactly and only its density inside the overlap
+  footprint matters. w51's F187N inter-module pair reaches 15 matches against
+  its Gaia list (floor 20) and 571 at worst 4 mas against its own m8.
 
 ## 1b. Astrometric frame + epoch declaration (BLOCKING)
 

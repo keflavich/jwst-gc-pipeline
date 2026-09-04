@@ -94,6 +94,7 @@ def test_a_field_with_only_a_dense_list_still_uses_it_to_arbitrate():
 
 def test_a_field_with_no_list_at_all_says_so_rather_than_pretending():
     assert stage.overlap_arbiter_refcat('not-a-field') is None
+    assert stage.internal_arbiter_refcat('not-a-field') is None
 
 
 def test_the_two_unmapped_disjoint_fields_are_unmapped_for_different_reasons():
@@ -110,7 +111,14 @@ def test_the_two_unmapped_disjoint_fields_are_unmapped_for_different_reasons():
     for field in ('gc2211', 'sgra'):
         assert field not in stage.OVERLAP_ARBITER_REFCAT
         assert field not in stage.FRAME_REFCAT
-        assert stage.overlap_arbiter_refcat(field) is None
+        # Asserted on the REGISTRIES, which is what this block decides.  Both
+        # fields may still reach the generated fallback -- their own merged
+        # photometry -- and that does not undo either reason: the fallback is
+        # barred from the absolute-frame arm by provenance, so it cannot fail
+        # gc2211 on a reference that does not see o028, and sgra produces no
+        # overlapping pairs for any arbiter to be reached by.
+        assert stage.overlap_arbiter_refcat(field) in (
+            None, stage.internal_arbiter_refcat(field))
 
     import pathlib as _p
     src = _p.Path(stage.__file__).read_text()
@@ -138,7 +146,8 @@ def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
     w51 = stage.OVERLAP_ARBITER_REFCAT.get('w51')
     if not (w51 and os.path.exists(w51)):
         pytest.skip('w51 star list not on this host')
-    _rc, _gaia, label = cio._refcat(w51)
+    _rc, _gaia, label, internal = cio._refcat(w51)
+    assert internal is False
     assert 'VIRAC2' not in label.split('NOT')[0]
     assert 'no `source` column' in label
 

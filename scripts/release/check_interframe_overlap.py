@@ -739,7 +739,56 @@ def build_groups(field, filt, observations=None):
     return pooled, ndet, len(frames)
 
 
+#: Position columns of a JWST-INTERNAL arbiter list: the field's own cross-band
+#: merged photometry, whose per-row reference position is ``skycoord_ref``.
+#: Their presence (with no plain ``ra``/``dec``) is what marks a list internal --
+#: provenance read off the file, not off its name.
+INTERNAL_RA_COLUMN = "skycoord_ref.ra"
+INTERNAL_DEC_COLUMN = "skycoord_ref.dec"
+
+
+def _internal_positions(path):
+    """``(ra_deg, dec_deg)`` from a field's own merged catalogue, or ``None``.
+
+    Read column-wise rather than through ``Table.read``: a merged catalogue is
+    hundreds of MB over hundreds of columns (wd1's m7 is 394 MB / 180,479 rows)
+    and two of those columns are all an arbiter needs.
+    """
+    with fits.open(path, memmap=True) as hdul:
+        for hdu in hdul[1:]:
+            cols = getattr(hdu, "columns", None)
+            if cols is None:
+                continue
+            names = {c.lower(): c for c in cols.names}
+            if "ra" in names and "dec" in names:
+                return None                       # an ordinary external list
+            if INTERNAL_RA_COLUMN in names and INTERNAL_DEC_COLUMN in names:
+                ra = np.array(hdu.data[names[INTERNAL_RA_COLUMN]], dtype=float)
+                dec = np.array(hdu.data[names[INTERNAL_DEC_COLUMN]], dtype=float)
+                return ra, dec
+    return None
+
+
 def _refcat(path):
+    """``(coords, gaia_subset, label, internal)`` for a reference star list.
+
+    ``internal`` marks a list built from the field's OWN JWST photometry.  Such
+    a list arbitrates PAIRS well -- the arbiter differences the two groups'
+    residuals star by star, so the reference cancels exactly and only its
+    density inside the overlap footprint matters -- and it says NOTHING about
+    the absolute frame, because measuring a field against a catalogue derived
+    from that same field passes by construction.  The flag is what keeps the
+    second use out of the first's slot; see ``_may_gate_absolute_frame``.
+    """
+    internal = _internal_positions(path)
+    if internal is not None:
+        ra, dec = internal
+        good = np.isfinite(ra) & np.isfinite(dec)
+        rc = SkyCoord(ra[good] * u.deg, dec[good] * u.deg)
+        label = (f"{os.path.basename(path)} -- JWST-INTERNAL: this field's own "
+                 f"merged photometry, an anchor for tie-breaking pairs and NOT "
+                 f"an independent absolute frame")
+        return rc, None, label, True
     t = Table.read(path)
     cols = {c.lower(): c for c in t.colnames}
     ra, dec = t[cols["ra"]], t[cols["dec"]]
@@ -762,7 +811,7 @@ def _refcat(path):
                  f"NOT the Gaia+VIRAC2 catalogue the gating slot assumes")
     else:
         label = "VIRAC2"
-    return rc, gaia, label
+    return rc, gaia, label, False
 
 
 #: How many of a filter's detections a reference catalogue must actually match,
@@ -790,8 +839,18 @@ MIN_GATING_MATCHES = 1000
 GATING_MATCH_ARCSEC = 0.2
 
 
-def _may_gate_absolute_frame(allsrc, ref):
+def _may_gate_absolute_frame(allsrc, ref, internal=False):
     """``(may_gate, n_in_footprint, n_ref)`` -- can this catalogue fail the field?
+
+    ``internal`` bars a list built from the field's OWN JWST photometry, by
+    PROVENANCE and ahead of the density test, which such a list would otherwise
+    sail through: w51's merged catalogue holds ~57,000 stars against
+    ``MIN_GATING_MATCHES`` = 1000.  Density is the wrong question for it.
+    Measuring a field's absolute frame against a catalogue derived from that
+    same field's exposures passes by construction -- including on a field whose
+    absolute tie is wrong, which for w51 is an open question (#257).  An
+    internal list is a common ANCHOR for differencing two exposures, and it is
+    not evidence about where either of them sits on the sky.
 
     Counts the reference stars lying INSIDE the filter's footprint, rather than
     the ones that match a detection.  Matching would be self-defeating here: a
@@ -812,7 +871,9 @@ def _may_gate_absolute_frame(allsrc, ref):
     inside = ((rra >= ra.min() - pad) & (rra <= ra.max() + pad)
               & (rdec >= dec.min() - pad) & (rdec <= dec.max() + pad))
     n = int(inside.sum())
-    return n >= MIN_GATING_MATCHES, n, int(len(ref))
+    # The count is still reported for an internal list, so the log can say how
+    # dense the arbiter was; it just cannot buy the right to fail the field.
+    return (not internal) and n >= MIN_GATING_MATCHES, n, int(len(ref))
 
 
 def _val_mas(x):
@@ -1405,7 +1466,7 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
     ext_ran = False
     field_clean = False
     if refcat:
-        rc, gaia, rc_label = _refcat(refcat)
+        rc, gaia, rc_label, rc_internal = _refcat(refcat)
         allsrc = SkyCoord(np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
                           np.concatenate([p.dec.deg for p in pooled.values()]) * u.deg)
         # GC reference-frame policy (gc-gaia-frame-not-catalog): VIRAC2 is the GC
@@ -1415,25 +1476,36 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
         # false-fail, so it is measured as a DIAGNOSTIC only and never sets
         # ext_fail. A real absolute-frame problem shows up against dense VIRAC2.
         #
-        # CAVEAT, and it is not yet resolved (issue #263): the split above is by
-        # PRESENCE OF A `source` COLUMN, not by what the catalogue is.  A
-        # Gaia-only table without that column lands whole in the GATING slot --
-        # exactly what this comment says must not happen to Gaia.  w51's list is
-        # that case.  No false block has been observed there only because the
-        # list is too sparse for the gating paths to measure at all, which is
-        # luck rather than separation.  Routing by content is issue #263's
-        # item (c); until it lands, the label below at least names what was
-        # actually read.
+        # Two things decide whether the first slot may speak about the ABSOLUTE
+        # frame, and both are read off the file rather than assumed:
+        # `_may_gate_absolute_frame` counts stars in the footprint (a sparse
+        # list may arbitrate pairs and may not fail a field), and `rc_internal`
+        # marks a list built from THIS FIELD's own photometry, which may not
+        # judge the field's absolute frame at any density.
         for rn, rr, gates in ((rc_label, rc, True), ("Gaia", gaia, False)):
             if rr is None:
                 continue
             g = _samestar_ref_grid(allsrc, rr, max_off_mas=GRID_MAX_OFF_MAS)
-            if gates:
+            # An internal list is an anchor for differencing two exposures, and
+            # its field-wide map against those same exposures is clean by
+            # construction.  So it neither fails the field (below) nor clears a
+            # deferred pair through the field-wide fallback: a verdict that
+            # cannot come out any other way is not evidence in either
+            # direction.  The PER-PAIR arbiter still runs on it -- that is the
+            # whole point of it, and there the reference cancels exactly.
+            absolute = gates and not rc_internal
+            if absolute:
                 # a map that could not be measured did NOT run: it clears nothing
                 ext_ran = bool(g["measurable"])
                 field_clean = bool(g["clean"])
             if verbose:
-                tag = "" if gates else " [diagnostic, non-gating: Gaia too sparse]"
+                if gates and rc_internal:
+                    tag = (" [diagnostic, non-gating: JWST-internal list, clean "
+                           "against this field by construction]")
+                elif gates:
+                    tag = ""
+                else:
+                    tag = " [diagnostic, non-gating: Gaia too sparse]"
                 scales = ",".join(f"{s['cell_arcsec']:g}\":{s['n_measured']}"
                                   for s in g.get("scales", []))
                 print(f"      same-star residual map vs {rn}: clean={g['clean']} "
@@ -1454,9 +1526,19 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                           f"{rad['field_ratio']:.2f}) -- a sub-population sitting at "
                           f"~the match radius there; inspect those frames.", flush=True)
             if gates and g["measurable"] and not g["clean"]:
-                may_gate, n_matched, n_ref = _may_gate_absolute_frame(allsrc, rr)
+                may_gate, n_matched, n_ref = _may_gate_absolute_frame(
+                    allsrc, rr, internal=rc_internal)
                 if may_gate:
                     ext_fail = True
+                elif verbose and rc_internal:
+                    print(f"      NOT blocking {field}/{filt} on this: "
+                          f"{os.path.basename(refcat)} is this field's own "
+                          f"merged photometry ({n_matched} of {n_ref} stars "
+                          f"inside this filter's footprint).  It arbitrates "
+                          f"individual overlapping pairs, where it cancels out "
+                          f"of the two groups' difference; it is not an "
+                          f"independent frame and cannot say where this field "
+                          f"sits on the sky.", flush=True)
                 elif verbose:
                     print(f"      NOT blocking {field}/{filt} on this: "
                           f"{os.path.basename(refcat)} has only {n_matched} "
