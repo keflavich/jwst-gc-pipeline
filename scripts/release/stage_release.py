@@ -14,6 +14,7 @@ and stages them into
         catalogs/        field-wide merged catalog (full + quality-cut) + seed
                          + per-filter vetted catalogs
         README.md
+        ASTROMETRY.md    per-release astrometric stability statement
         MANIFEST.json    machine-readable list of every staged file w/ provenance
         CHECKSUMS.sha256
 
@@ -2205,6 +2206,8 @@ def stage(items, field, version, release_root, mode, do_checksum,
     write_readme(field_dir, field, version, items, mode,
                  built_at=manifest["built"],
                  withheld_instruments=withheld_instruments)
+    write_astrometry_report(field_dir, field, version,
+                            FIELDS[field]["data_dir"])
 
     # world-readable
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
@@ -2821,6 +2824,63 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
         "",
     ]
     (field_dir / "README.md").write_text("\n".join(lines))
+
+
+def write_astrometry_report(field_dir, field, version, data_dir,
+                            obs_token=None):
+    """Write ``ASTROMETRY.md`` -- this release's astrometric stability statement.
+
+    Built fresh for every release from the field's own frozen-stage checkpoint
+    records, because the numbers describe the products staged beside it.  A
+    field the gate passed can still carry movement it correctly tolerated, and
+    a tolerated movement is still a measurement an astrometric user needs.
+
+    This is documentation OF a release, never a gate ON one -- the gate is
+    ``check_astrometry_checkpoints.py``, which has already run by the time we
+    get here.  So it must not be able to abort staging: it runs after
+    MANIFEST.json and CHECKSUMS.sha256 are written and before the final
+    ``chmod -R a+rX``, and a crash here would leave a fully-copied release
+    directory that is not world-readable.  Hence the guard, and hence the
+    failure being written INTO the tree rather than only to stdout -- a
+    release whose stability statement could not be built should say so where
+    the reader will find it.
+    """
+    try:
+        from astrometry_stability_report import collect, render
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from astrometry_stability_report import collect, render
+    try:
+        data = collect(str(data_dir), obs_token)
+        text = render(field, data, version)
+    except (OSError, ValueError, TypeError, AttributeError, KeyError,
+            IndexError) as ex:
+        text = (f"# Astrometric stability — {field}\n\n"
+                f"Release `{version}`.\n\n"
+                f"This report could not be built: "
+                f"`{type(ex).__name__}: {ex}`.\n\n"
+                f"The release gate (`check_astrometry_checkpoints.py`) ran and "
+                f"passed independently of this file; what is missing here is "
+                f"the DESCRIPTION of any movement the gate tolerated, not the "
+                f"gate itself.  Treat the frozen-stage stability of this field "
+                f"as unstated rather than as clean.\n")
+        print(f"  WARNING: ASTROMETRY.md could not be built "
+              f"({type(ex).__name__}: {ex}) -- wrote a placeholder saying so")
+        (field_dir / "ASTROMETRY.md").write_text(text)
+        return
+    (field_dir / "ASTROMETRY.md").write_text(text + "\n")
+    n_moved = sum(len(v) for v in (data.get("per_stage") or {}).values())
+    worst = 0.0
+    for rows in (data.get("per_stage") or {}).values():
+        for r in rows:
+            worst = max(worst, r["moved_mas"])
+    if n_moved:
+        print(f"  ASTROMETRY.md: {n_moved} exposure measurement(s) across the "
+              f"frozen stages, worst {worst:.2f} mas -- see the report for what "
+              f"that means for astrometric use")
+    else:
+        print("  ASTROMETRY.md: no frozen-stage movement could be measured")
+
 
 
 def set_acl(field, version, release_root):
