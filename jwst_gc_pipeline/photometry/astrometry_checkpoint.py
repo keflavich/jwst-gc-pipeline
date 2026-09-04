@@ -3361,9 +3361,78 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit, obs_token=""):
     return None, False
 
 
+def _m2_exposure_untrustworthy(entry):
+    """Why an m2 exposure entry is NOT a freeze point, or ``None`` when it is.
+
+    An m2 per-exposure record carries the measurement m2 made WHETHER OR NOT m2
+    believed it.  The write path already knows the difference and says so in the
+    record: ``ok`` False (``measure_offset`` did not certify the peak),
+    ``unverified`` True (no measurable tie to the visit consensus -- the number
+    is the wide-sweep DIAGNOSTIC, and the record's own message ends "recorded,
+    NOT applied"), ``alias_rejected``/``alias_suspect`` True (the #158
+    window-edge / module-antisymmetric footprint geometry).  m2 emits no
+    correction from any of those.
+
+    The frozen-stage reader used to admit them anyway, on ``np.isfinite`` alone,
+    and a refused diagnostic then became the value every later stage was
+    compared against.  cloudc F182M o002 (2026-08-24): the four
+    ('2', n, 'nrcb2', 'F182M', '06201') exposures landed alone in one
+    parity half of ``build_visit_consensus``, had no true pairs with the
+    opposite half, and swept out to the footprint pair-density ridge at the
+    search-window edge -- 9.86" at a 10" window, 29.50" at 30", 58.23" at 60",
+    i.e. 0.97-0.99 of the window every time.  m2 recorded ``ok=False``,
+    ``alias_rejected=True``, ``window_consistent=False``, ``component=-1`` and
+    corrected nothing; the frames themselves read 1-2.5 mas.  m3-m7 each then
+    computed hypot(now - 9.8") and reported "MOVED 9858 mas since the m2
+    freeze", five FAILED records that no later stage could ever clear
+    (issue #626).
+
+    Fields differ ONLY in the flag that fired, so test them all.  Legacy records
+    predate these fields; ``is False``/``is True`` (not truthiness) keeps a
+    missing flag meaning "not stated" -> admit, so an old clean baseline is not
+    thrown away.  The magnitude bound catches the legacy records that carry no
+    flags at all: a per-exposure vs-consensus offset is mas-scale by
+    construction, and ``_assert_correction_magnitudes`` already refuses to WRITE
+    one past ``MAX_CORRECTION_ARCSEC``, so a baseline past it is a value m2
+    could not have acted on either.
+    """
+    reasons = []
+    if entry.get("unverified") is True:
+        reasons.append("m2 found no measurable tie to the visit consensus for "
+                       "this exposure and recorded a wide-sweep diagnostic it "
+                       "did not apply")
+    if entry.get("alias_rejected") is True or entry.get("alias_suspect") is True:
+        reasons.append("m2 rejected this exposure's peak as footprint geometry, "
+                       "not a tie (issue #158 window-edge / "
+                       "module-antisymmetric alias)")
+    if entry.get("ok") is False:
+        reasons.append("m2 did not certify this exposure's tie (ok=False)")
+    dra, ddec = entry.get("dra"), entry.get("ddec")
+    limit = _positive_env_float("ASTROM_MAX_CORRECTION_ARCSEC",
+                                MAX_CORRECTION_ARCSEC)
+    if dra is not None and ddec is not None \
+            and np.isfinite(dra) and np.isfinite(ddec) \
+            and max(abs(float(dra)), abs(float(ddec))) / 1000.0 > limit:
+        reasons.append(
+            f"the m2 baseline for this exposure is "
+            f"({float(dra):+.0f},{float(ddec):+.0f}) mas, outside the "
+            f"{limit * 1000.0:.0f} mas per-exposure bound m2 itself applies "
+            f"when WRITING a correction, so it is not a freeze point")
+    # Report EVERY mechanism that fired, not the first: cloudc's exposures trip
+    # three at once, and reading only "ok=False" says nothing about why.
+    return "; ".join(reasons) or None
+
+
 def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
-    """Map exposure-key tuple -> (dra_mas, ddec_mas) of the m2 per-exposure
-    vs-consensus offset, from the latest m2 record; ``{}`` when unavailable.
+    """``(baselines, untrustworthy)`` for this (filter, visit) from the latest
+    m2 record.
+
+    ``baselines`` maps exposure-key tuple -> (dra_mas, ddec_mas) of the m2
+    per-exposure vs-consensus offset, for the entries m2 CERTIFIED.
+    ``untrustworthy`` maps the remaining keys -> the reason
+    ``_m2_exposure_untrustworthy`` gave, so the frozen stage can say which
+    mechanism applied rather than reporting the exposure as simply absent.
+    Both are empty when no m2 record is available.
 
     The frozen-stage per-exposure gate is a MOVEMENT check (mirror of
     ``_m2_reference_tie_baseline`` for the consensus->reference tie): an exposure
@@ -3376,11 +3445,16 @@ def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
     2.0-3.3 mas at m2; the bluest/sparsest filter's intrinsic scatter sits in the
     dead-zone between the m2 correction floor (4 mas) and this 2 mas tol, so it
     could NEVER pass a frozen stage, 2026-07-20).
+
+    A movement check needs a value m2 STOOD BEHIND, which is what
+    ``_m2_exposure_untrustworthy`` decides.  ``_m2_reference_tie_baseline``
+    already carries that concept for the consensus->reference tie
+    (``apply_ok`` False -> ``m2_rejected``); this is its per-exposure mirror.
     """
-    out = {}
+    out, refused = {}, {}
     path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
-        return out
+        return out, refused
     with open(path) as fh:
         rec = json.load(fh)
     for v in rec.get("visits", []):
@@ -3389,10 +3463,15 @@ def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
         for e in v.get("exposures", []) or []:
             key = tuple(e.get("key", []) or [])
             dra, ddec = e.get("dra"), e.get("ddec")
-            if key and dra is not None and ddec is not None \
-                    and np.isfinite(dra) and np.isfinite(ddec):
+            if not (key and dra is not None and ddec is not None
+                    and np.isfinite(dra) and np.isfinite(ddec)):
+                continue
+            reason = _m2_exposure_untrustworthy(e)
+            if reason is None:
                 out[key] = (float(dra), float(ddec))
-    return out
+            else:
+                refused[key] = reason
+    return out, refused
 
 
 def _m2_skipped_exposures(record_dir, filtername, visit, obs_token=""):
@@ -3794,9 +3873,9 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # baseline (see _m2_exposure_baseline), NOT an absolute vs-consensus
         # magnitude check -- the latter re-trips on intrinsic per-exposure
         # scatter that m2 already tolerated.
-        exp_baseline = ({} if correcting
-                        else _m2_exposure_baseline(record_dir, filt, visit,
-                                                  obs_token))
+        exp_baseline, m2_untrusted = (
+            ({}, {}) if correcting
+            else _m2_exposure_baseline(record_dir, filt, visit, obs_token))
         # An exposure m2 deliberately skipped has no baseline BY CONSTRUCTION;
         # that absence is not evidence the frozen solution moved.
         m2_skipped = (set() if correcting
@@ -3945,6 +4024,23 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                   f"{STAGE_STABILITY_TOL_MAS}; absolute "
                                   f"{res['off']:.2f} mas is intrinsic scatter)",
                                   flush=True)
+                    elif tuple(exp["key"]) in m2_untrusted:
+                        # m2 MEASURED this exposure and REFUSED the result (no
+                        # certified tie / a #158 footprint alias / past the
+                        # per-exposure write bound).  It corrected nothing from
+                        # that number, so there is no frozen value here for a
+                        # later stage to have moved away from -- comparing
+                        # against it manufactures a movement the size of the
+                        # refused measurement (cloudc F182M o002: ~9.8" at
+                        # every frozen stage, issue #626).  Same verdict as the
+                        # m2-skipped case: UNVERIFIED, not STABLE and not a
+                        # measured movement.
+                        unverified.append(
+                            msg + f" [{m2_untrusted[tuple(exp['key'])]}; no"
+                            " frozen baseline exists, so this is its first"
+                            " certified measurement, not a movement]")
+                        print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                              f"(m2 baseline refused): {msg}", flush=True)
                     elif tuple(exp["key"]) in m2_skipped:
                         # m2 EXCLUDED this exposure from its consensus (too few
                         # reliable stars -- a data-quality defect m2 found and
