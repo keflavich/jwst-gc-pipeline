@@ -28,13 +28,14 @@ The guards: a swept peak must REPRODUCE at an independent window
 ``PER_EXPOSURE_SWEEP_WINDOWS``, and an antisymmetric per-module correction set
 is refused outright (``detect_module_antisymmetry``).
 """
+import pytest
 import numpy as np
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
 from jwst_gc_pipeline.photometry.visit_consensus import (
-    MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS, MODULE_ANTISYMMETRY_MIN_MAS,
+    DETECTOR_ANTISYMMETRY_MIN_MAS, MODULE_ANTISYMMETRY_MIN_MAS,
     PER_EXPOSURE_SWEEP_WINDOWS, detect_detector_antisymmetry,
     detect_module_antisymmetry, module_family)
 
@@ -190,6 +191,28 @@ def test_twenty_mas_module_differential_is_flagged():
             assert ex["separation_mas"] >= MODULE_ANTISYMMETRY_MIN_MAS, (filt, ex)
 
 
+def test_the_floor_is_a_differential_not_a_per_module_magnitude():
+    """+/-10 mas a side is a 20 mas differential and must fire.
+
+    Issue #473 asks for "corrections of the order +/-20 mas to the offset
+    BETWEEN modules" to be discarded, and the offset between modules is the A-B
+    differential.  The scale test used to be on each module's OWN magnitude, so
+    at any given floor it demanded twice as much as the issue asks for and twice
+    as much as the reference-free strip measurement returns.  Here each module
+    reads under the 15 mas floor while the pair still moves the two modules
+    20 mas apart -- past every strip measurement on disk.
+    """
+    pair = {"nrcalong": [(10.0, 0.0), (9.8, 0.3)],
+            "nrcblong": [(-10.0, 0.0), (-9.8, -0.3)]}
+    res = detect_module_antisymmetry(_exposures(pair, "F410M"))
+    assert res["detected"], res
+    assert res["n_pairs_tested"] == 2 and res["n_antisymmetric"] == 2, res
+    for ex in res["examples"]:
+        assert np.hypot(ex["dra_a_mas"],
+                        ex["ddec_a_mas"]) < MODULE_ANTISYMMETRY_MIN_MAS, ex
+        assert ex["separation_mas"] >= MODULE_ANTISYMMETRY_MIN_MAS, ex
+
+
 def test_module_relation_at_the_measured_scale_is_not_flagged():
     """The as-built module relation measured reference-free in the shared strip
     is 0.2-13 mas across brick/cloudc/sgrc/w51 (issue #473).  A consensus that
@@ -206,21 +229,51 @@ def test_module_relation_at_the_measured_scale_is_not_flagged():
 
 
 def test_antisymmetry_floor_is_below_the_appliable_ceiling():
-    """The floor used to sit AT the per-exposure correction ceiling, so the
-    guard could only ever fire on a correction already refused as unappliable --
-    which is why a +/-20 mas module differential was applied instead of
-    discarded.  It is now well below that ceiling, and a pair between the two
-    is discarded rather than blocking."""
+    """The MODULE floor used to sit AT the per-exposure correction ceiling, so
+    the guard could only ever fire on a correction already refused as
+    unappliable -- which is why a +/-20 mas module differential was applied
+    instead of discarded.  It is now well below that ceiling.
+
+    The DETECTOR floor did not move.  The strip measurement that brought the
+    module floor down is module-A stars against module-B stars and constrains
+    nothing about two detectors of one module, so that guard keeps its old
+    500 mas-a-side value restated as a 1000 mas differential.
+    """
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         MAX_CORRECTION_ARCSEC)
     from jwst_gc_pipeline.photometry.visit_consensus import (
-        MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS, MODULE_ANTISYMMETRY_MIN_MAS)
+        DETECTOR_ANTISYMMETRY_MIN_MAS, MODULE_ANTISYMMETRY_MIN_MAS)
     assert MODULE_ANTISYMMETRY_MIN_MAS < MAX_CORRECTION_ARCSEC * 1000.0
-    # twice the ceiling because the floor is a DIFFERENTIAL where the old one
-    # was a per-module magnitude -- so the blocking verdict is bit-preserved.
-    assert (MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS
-            == 2.0 * MAX_CORRECTION_ARCSEC * 1000.0)
-    assert MODULE_ANTISYMMETRY_MIN_MAS < MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS
+    # twice the old per-module floor, because this one is a DIFFERENTIAL: an
+    # opposed, equal-magnitude pair at 500 mas a side is 1000 mas apart.
+    assert DETECTOR_ANTISYMMETRY_MIN_MAS == 2.0 * 500.0
+    assert MODULE_ANTISYMMETRY_MIN_MAS < DETECTOR_ANTISYMMETRY_MIN_MAS
+
+
+def test_detector_floor_did_not_follow_the_module_floor_down():
+    """A 20 mas antisymmetric DETECTOR pair inside one module is not flagged.
+
+    The module floor came down on a module-vs-module overlap measurement; the
+    o049 nrca3 divergence (23 mas, #585) is the detector-vs-detector class and
+    nothing in that measurement covers it.  Sharing one constant discarded 56
+    of the 194 corrections in the archive replay on evidence that is not about
+    them.
+    """
+    exps = []
+    for det, dra in (("nrca1", 10.0), ("nrca2", -10.0),
+                     ("nrca3", 0.2), ("nrca4", -0.1)):
+        exps.append(dict(key=("1", 1, det, "F212N", "03103"),
+                         vs_consensus=dict(dra=dra, ddec=0.0, ok=True)))
+    res = detect_detector_antisymmetry(exps)
+    assert not res["detected"], res
+    assert not res["keys"], res
+    # ...and the same pair at the detector guard's own floor still fires
+    gross = [dict(e, vs_consensus=dict(e["vs_consensus"],
+                                       dra=e["vs_consensus"]["dra"] * 60.0))
+             for e in exps]
+    res = detect_detector_antisymmetry(gross)
+    assert res["detected"], res
+    assert {k[2] for k in res["keys"]} == {"nrca1", "nrca2"}, res
 
 
 def test_module_family_mapping():
@@ -341,66 +394,139 @@ def test_detector_guard_does_not_flag_real_module_splits():
     """Same controls as the module guard, at detector granularity -- including
     W51 F410M, whose real split is anti-parallel at cos = -0.96."""
     for recorded, filt in ((_W51_F480M, "F480M"), (_W51_F410M, "F410M")):
-        res = detect_detector_antisymmetry(
-            _exposures(recorded, filt),
-            min_mas=MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS)
+        res = detect_detector_antisymmetry(_exposures(recorded, filt))
         assert not res["detected"], (filt, res)
         assert not res["keys"], (filt, res)
 
 
-def test_twenty_mas_module_set_is_discarded_without_blocking():
-    """The +/-20 mas class is dropped, and the run carries on.
+# ---------------------------------------------------------------------------
+# What DETECTION does and does not establish, and what the checkpoint owes the
+# release gate because of it (issue #473).
+# ---------------------------------------------------------------------------
 
-    Two fields were held out of the release for weeks because an m2 correction
-    set at the field's floor stopped their m12 (issue #473).  Firing the
-    antisymmetry guard on that class only helps if firing means "discard these
-    corrections", not "stop": the products' own module registration, measured
-    reference-free in the strip where the modules see the same stars, is
-    0.2-13 mas, so there is nothing to stop FOR.
+RA0, DEC0 = 266.5, -28.7
+COSD = np.cos(np.radians(DEC0))
+
+
+def _star_field(n=400, extent_arcsec=90.0, seed=42):
+    rng = np.random.default_rng(seed)
+    ra = RA0 + rng.uniform(0, extent_arcsec, n) / 3600.0 / COSD
+    dec = DEC0 + rng.uniform(0, extent_arcsec, n) / 3600.0
+    return ra, dec
+
+
+def _frame_table(ra, dec, exposure, module, dra_mas=0.0, filtername="F212N"):
+    """Synthetic per-frame catalog carrying a rigid on-sky offset."""
+    from astropy.table import Table
+    rng = np.random.default_rng(1000 + exposure)
+    n = len(ra)
+    tbl = Table()
+    tbl["skycoord"] = SkyCoord(
+        ra=(ra + (dra_mas + rng.normal(0, 1.0, n)) / 3.6e6 / COSD) * u.deg,
+        dec=(dec + rng.normal(0, 1.0, n) / 3.6e6) * u.deg, frame="icrs")
+    tbl["flux_fit"] = rng.uniform(1e3, 1e5, n)
+    tbl["flux_err"] = tbl["flux_fit"] / 100.0
+    tbl["qfit"] = rng.uniform(0.01, 0.05, n)
+    tbl.meta.update(VISIT="001", EXPOSURE=f"{exposure:05d}", MODULE=module,
+                    FILTER=filtername, RAOFFSET=0.1, DEOFFSET=-0.05)
+    return tbl
+
+
+def _split_visit(module_b_offset_mas, filtername="F212N"):
+    """Two exposures x two modules, module B rigidly offset on sky."""
+    ra, dec = _star_field()
+    tables = []
+    for e in (1, 2):
+        tables.append(_frame_table(ra, dec, e, "nrca1", 0.0, filtername))
+        tables.append(_frame_table(ra, dec, e, "nrcb1", module_b_offset_mas,
+                                   filtername))
+    return tables
+
+
+@pytest.mark.parametrize("injected", [20.0, 200.0])
+def test_antisymmetric_shape_is_forced_by_the_median_recentring(injected):
+    """`detected` does NOT mean "alias" -- the shape is an identity, not evidence.
+
+    `build_visit_consensus` re-centres each component on the MEDIAN of its
+    members' relative offsets, so a component whose exposures split evenly
+    between two module families comes back at exactly +D/2 and -D/2 whatever D
+    is and wherever it came from.  Here D is a REAL rigid shift injected into
+    module B's catalogs, and it still satisfies both shape tests to four
+    significant figures.
+
+    So the guard's cos/magnitude conditions carry no information for a
+    two-family component (every NIRCam module split, and NIRCam LW at detector
+    granularity), and a real inter-module misregistration -- the brick-1182
+    F200W ~90 mas seam class -- is indistinguishable from the issue-158 alias.
+    That is why the checkpoint must both discard the corrections AND refuse the
+    visit rather than choosing between them.
+    """
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        build_visit_consensus)
+    cons = build_visit_consensus(_split_visit(injected), context="degeneracy")
+    seen = {tuple(e["key"])[1:3]: e["vs_consensus"] for e in cons["exposures"]}
+    for (_exp, module), res in seen.items():
+        expected = injected / 2.0 * (1.0 if module == "nrca1" else -1.0)
+        assert res["dra"] == pytest.approx(expected, abs=0.5), (module, res)
+    res = detect_module_antisymmetry(cons["exposures"])
+    assert res["detected"], res
+    for ex in res["examples"]:
+        assert ex["cos"] < -0.999, ex
+        na = np.hypot(ex["dra_a_mas"], ex["ddec_a_mas"])
+        nb = np.hypot(ex["dra_b_mas"], ex["ddec_b_mas"])
+        assert abs(na - nb) < 0.01 * max(na, nb), ex
+        assert ex["separation_mas"] == pytest.approx(injected, abs=1.0), ex
+
+
+def test_module_antisymmetric_set_is_discarded_AND_refused(tmp_path):
+    """A 200 mas module split emits no corrections and does not pass.
+
+    Both halves matter.  Discarding alone is what let this class through: the
+    exposures are dropped from the correction path, the visit is reported as
+    merely `unverified`, `passed` stays True, and the release gate
+    (check_astrometry_checkpoints.py, which reads `unverified_blocking`) never
+    hears about a misregistration the pipeline measured and declined to act on.
     """
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        antisymmetry_guards)
-    g = antisymmetry_guards(_exposures(_W51_F410M, "F410M"))
-    assert g["module"]["detected"], g["module"]
-    assert g["keys"], g
-    assert not g["module_blocking"], g
-    assert not g["detector_blocking"], g
+        run_visit_checkpoint)
+    rec = run_visit_checkpoint(_split_visit(200.0), "m2", filtername="F212N",
+                               record_dir=str(tmp_path), context="test")
+    assert rec["correcting"]
+    assert rec["corrections"] == [], rec["corrections"]
+    blocking = [b for b in rec["unverified_blocking"]
+                if "MODULE-ANTISYMMETRIC" in b]
+    assert blocking, rec["unverified_blocking"]
+    assert rec["passed"] is False, rec
+    anti = rec["visits"][0]["module_antisymmetry"]
+    assert anti["detected"] and anti["n_antisymmetric"] == 2, anti
+    # the detector guard's own verdict now reaches disk as well, so a
+    # detector-level discard is auditable instead of existing only as prose
+    det = rec["visits"][0]["detector_antisymmetry"]
+    assert det["min_mas"] == DETECTOR_ANTISYMMETRY_MIN_MAS, det
+    assert det["n_pairs_tested"] == 2 and not det["detected"], det
 
 
-def test_gross_alias_still_blocks():
-    """The issue-158 case -- W51's ~56" footprint ridge -- keeps stopping the
-    run.  A pair that large is over the appliable ceiling, so discarding it
-    leaves the frames misaligned with nothing able to fix them."""
-    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        antisymmetry_guards)
-    g = antisymmetry_guards(_exposures(_W51_F335M, "F335M"))
-    assert g["module"]["detected"], g["module"]
-    assert g["module_blocking"], g
+def test_frozen_stage_movement_survives_the_alias_guard(tmp_path, monkeypatch):
+    """A flagged exposure that MOVED since the m2 freeze still fails.
 
-
-def test_gross_detector_alias_blocks_even_when_the_module_guard_covers_it():
-    """A gross DETECTOR pair must not be downgraded by the module guard.
-
-    The detector message is emitted only for what the module guard missed
-    (`det_extra`).  Now that the module guard fires at 15 mas it can cover the
-    exposures of a detector pair that is gross, and reporting only the module
-    message -- which is a discard below 1000 mas -- would turn a blocking alias
-    into a discard.  The guards report the detector blocking flag independently
-    of that overlap.
+    The alias explanation is about the ABSOLUTE vs-consensus reading; a frozen
+    stage compares a DELTA against m2's own value for the same exposure, and a
+    static footprint-geometry alias cancels in that delta.  Suppressing the
+    frozen branch as well as the correction branch was the one way an
+    antisymmetric visit could move after the freeze and still report no
+    failure.
     """
+    monkeypatch.setenv("ASTROM_CHECKPOINT_ENFORCE", "release")
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        antisymmetry_guards)
-    # One exposure, two detectors per module.  The module MEANS are +/-10 mas,
-    # so the module guard fires on a 20 mas differential (discard, not
-    # blocking), while nrca1 against nrcb1 is 60" apart (gross, must block).
-    exps = []
-    for det, dra in (("nrca1", 30010.0), ("nrca2", -29990.0),
-                     ("nrcb1", -30010.0), ("nrcb2", 29990.0)):
-        exps.append(dict(key=("1", 1, det, "F410M", "03103"),
-                         vs_consensus=dict(dra=dra, ddec=0.0, ok=True)))
-    g = antisymmetry_guards(exps)
-    assert g["module"]["detected"] and not g["module_blocking"], g
-    # the module guard has flagged every exposure key, so the "report only what
-    # the module guard missed" rule alone would drop the detector message
-    assert not (g["detector"]["keys"] - g["module"]["keys"]), g
-    assert g["detector_blocking"], g
+        run_visit_checkpoint)
+    m2 = run_visit_checkpoint(_split_visit(100.0), "m2", filtername="F212N",
+                              record_dir=str(tmp_path), context="test")
+    assert m2["visits"][0]["module_antisymmetry"]["detected"], m2
+    # the split widens to 300 mas: every exposure moves 100 mas, and the set is
+    # still antisymmetric so the guard still flags all four
+    m4 = run_visit_checkpoint(_split_visit(300.0), "m4", filtername="F212N",
+                              record_dir=str(tmp_path), context="test")
+    assert m4["visits"][0]["module_antisymmetry"]["detected"], m4
+    moved = [f for f in m4["failures"] if "MOVED" in f]
+    assert len(moved) == 4, m4["failures"]
+    assert m4["passed"] is False, m4

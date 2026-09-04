@@ -96,25 +96,43 @@ PER_EXPOSURE_SWEEP_WINDOWS = (3.0, 10.0)
 # is not a measurement of the module relation, and correcting per-exposure from
 # it writes a split INTO products that do not have one.
 #
-# Below MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS the guard DISCARDS the corrections
-# and records the pair; it does not stop the run.  That distinction is the whole
-# reason the floor can come down: at 500.0 firing meant a hard stop, so a lower
-# floor would have converted mas-scale sets into hard stops.
+# CAVEAT on the table: those are offset-histogram peaks between two catalogs of
+# the same crowded field, which is the correlated wrong-pair background CLAUDE.md
+# warns about (memory `histogram-vs-samestar-offset-bias`, several-mas pull).
+# 15.0 is therefore a POLICY floor -- comfortably above every measured relation
+# and its plausible bias, and far below the 500 it replaces -- not a measured
+# boundary.  A same-star `local_residual_map` over each strip would sharpen it;
+# it would not move it past the 15 mas mark.
+#
+# WHAT FIRING MEANS.  Not "this is an artifact".  For a component holding
+# exactly two module families the antisymmetric SHAPE is forced by the median
+# re-centring in build_visit_consensus and carries no information at all (see
+# `_antisymmetric_pair`), so all this constant selects is a differential too
+# large to be the module relation.  A reading of 15 mas or more is therefore
+# UNRESOLVED between an alias and a real inter-module misregistration, and the
+# two responses follow from that directly: the corrections are DISCARDED (they
+# cannot be trusted onto the products) and the visit is RECORDED AND REFUSED
+# (`unverified_blocking` -> `passed=False`), because declining to apply a
+# number is not the same as deciding there is nothing there.
 MODULE_ANTISYMMETRY_MIN_MAS = 15.0
 
-# The differential at or above which an antisymmetric pair BLOCKS (checkpoint
-# `passed=False`) instead of being discarded.
+# The DETECTOR guard (issue #624) keeps the old 500 mas per-module floor,
+# restated in the new differential units: an opposed, equal-magnitude pair at
+# 500 mas a side is 1000 mas apart, so this leaves detector-vs-detector exactly
+# where it was before 2026-09-04.
 #
-# It is TWICE the per-exposure correction ceiling
-# (astrometry_checkpoint.MAX_CORRECTION_ARCSEC = 0.5") because it is a
-# DIFFERENTIAL and the old floor was a per-module magnitude: an opposed,
-# equal-magnitude pair at 500 mas per module is 1000 mas apart.  Keeping the
-# factor of 2 means every record on disk that blocks today still blocks and no
-# record that passes today starts blocking -- verified over the 4577 checkpoint
-# records under /orange (2026-09-04): the blocking set is unchanged, and the
-# whole effect of the lower floor is corrections DISCARDED.  The W51 ~56" ridge
-# that issue #158 was opened for is 56x over this.
-MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS = 1000.0
+# It is a separate constant because the evidence above is not about it.  Every
+# number in that table is module-A stars against module-B stars; nothing there
+# was measured between two detectors of ONE module, which is the class the
+# o049 nrca3 divergence (23 mas, #585) belongs to and the class the detector
+# guard exists for.  Replayed over the 4607 checkpoint records on disk
+# (2026-09-04): moving BOTH guards to 15 newly fires on 57 visits in 18
+# (field, filter, stage) groups, of which 11 groups are detector-only -- all of
+# them discarded on evidence that is not about them.  Holding this one at its
+# old value leaves 12 visits in 6 groups, every one a module split and every
+# one at m2.  Lower it when a detector-level overlap measurement exists, not
+# before.
+DETECTOR_ANTISYMMETRY_MIN_MAS = 1000.0
 # cos of the angle between the two module vectors; -1 = exactly opposed.
 MODULE_ANTISYMMETRY_COS_MAX = -0.9
 # fractional magnitude agreement required between the two module vectors
@@ -1138,10 +1156,12 @@ def detect_module_antisymmetry(exposures,
     hardcoded separation would have made this guard silently never fire.
 
     ``min_mas`` is the A-B DIFFERENTIAL floor: the pair must imply moving the
-    two modules at least this far apart.  Detection alone does not decide what
-    the caller does about it -- ``astrometry_checkpoint`` discards the
-    corrections either way, and only BLOCKS above
-    ``MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS``.
+    two modules at least this far apart.  Detection says the reading cannot be
+    applied, NOT that there is nothing there -- for a two-family component the
+    antisymmetric shape is an artefact of the median re-centring and a real
+    module misregistration reads identically (see ``_antisymmetric_pair``).
+    ``astrometry_checkpoint`` therefore both DISCARDS the corrections and
+    records the visit as measured-and-refused.
 
     ``exposures`` is ``build_visit_consensus(...)['exposures']``.
 
@@ -1196,19 +1216,42 @@ def _antisymmetric_pair(a, b, min_mas, cos_max, mag_tol):
     """Shared issue-158 alias test for two mean offset vectors.
 
     Returns ``(is_alias, na, nb, cos)``.  ``a``/``b`` are length-2 arrays of
-    (dra, ddec) in mas.  A pair qualifies when BOTH offsets are large (the
-    scale test), they point in opposed directions, and they are equal in
-    magnitude -- the signature of one frame tied onto the other's stars.
+    (dra, ddec) in mas.  A pair qualifies when the two are far enough apart
+    (the scale test on the differential), point in opposed directions, and are
+    equal in magnitude.
+
+    THE SHAPE TESTS ARE DEGENERATE FOR A TWO-FAMILY COMPONENT and the caller
+    must not read "detected" as "artefact".  ``build_visit_consensus``
+    re-centres each component on the MEDIAN of its members' relative offsets,
+    so a component whose members split evenly between two families comes back
+    at exactly +D/2 and -D/2 whatever D is and wherever it came from.  Measured
+    on synthetic visits (400 stars, two exposures, one module rigidly shifted
+    by D, 2026-09-04):
+
+        injected D    module A / module B      cos        |A| vs |B|
+           20 mas     +10.000 / -10.002    -0.999941    equal to 4 s.f.
+           40 mas     +20.002 / -20.003    -0.999985    equal to 4 s.f.
+          200 mas    +100.012 / -100.016   -0.999999    equal to 4 s.f.
+
+    Those are REAL rigid shifts injected into the catalogs, not aliases, and
+    they satisfy ``cos_max`` and ``mag_tol`` by construction.  So for the module
+    guard (NIRCam has two module families) and for NIRCam LW at detector
+    granularity (two detectors), the effective rule is ``|a - b| >= min_mas``
+    and nothing more.  The shape tests still do work where a component holds
+    three or more families -- NIRCam SW at detector granularity, eight of them,
+    where the median is not pinned between a balanced pair.
     """
     na, nb = float(np.hypot(*a)), float(np.hypot(*b))
     if na <= 0.0 or nb <= 0.0:
         return False, na, nb, float("nan")
     # Scale test on the A-B DIFFERENTIAL, which is what the pair would move the
     # two modules apart by, and the quantity a reference-free overlap
-    # measurement returns.  (It was `na < min_mas or nb < min_mas` -- the
-    # per-module magnitude -- until 2026-09-04; for an opposed, equal-magnitude
-    # pair the two differ by exactly the factor 2, so this only restates the
-    # threshold in the units the measurement and the issue report it in.)
+    # measurement returns.  It was `na < min_mas or nb < min_mas` -- the
+    # per-module magnitude -- until 2026-09-04.  For an opposed, equal-magnitude
+    # pair the differential is exactly twice each magnitude, so at a FIXED
+    # `min_mas` this both restates the threshold in the units #473 and the
+    # measurement use AND halves the split at which it fires: +/-10 mas a side
+    # is a 20 mas differential and now qualifies.
     if float(np.hypot(*(a - b))) < min_mas:
         return False, na, nb, float("nan")
     cos = float(np.dot(a, b) / (na * nb))
@@ -1220,7 +1263,7 @@ def _antisymmetric_pair(a, b, min_mas, cos_max, mag_tol):
 
 
 def detect_detector_antisymmetry(exposures,
-                                 min_mas=MODULE_ANTISYMMETRY_MIN_MAS,
+                                 min_mas=DETECTOR_ANTISYMMETRY_MIN_MAS,
                                  cos_max=MODULE_ANTISYMMETRY_COS_MAX,
                                  mag_tol=MODULE_ANTISYMMETRY_MAG_TOL):
     """Flag the issue-158 alias at DETECTOR granularity (issue #624).

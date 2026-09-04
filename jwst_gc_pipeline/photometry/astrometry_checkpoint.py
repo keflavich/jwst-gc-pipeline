@@ -64,7 +64,8 @@ from astropy import units as u
 from astropy.table import Table
 
 from .visit_consensus import (
-    EXPOSURE_CONSENSUS_TOL_MAS, MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS,
+    EXPOSURE_CONSENSUS_TOL_MAS, DETECTOR_ANTISYMMETRY_MIN_MAS,
+    MODULE_ANTISYMMETRY_MIN_MAS,
     ConsensusBuildError, DuplicateExposureError,
     build_visit_consensus,
     catalog_coords, detect_detector_antisymmetry,
@@ -402,36 +403,6 @@ def _defer_to_release(msg, what, env_override):
     return True
 
 
-def antisymmetry_guards(exposures):
-    """Run the module and detector antisymmetry guards and say what BLOCKS.
-
-    The guards fire on a small A-B differential (15 mas,
-    ``MODULE_ANTISYMMETRY_MIN_MAS``) so that a per-exposure correction set which
-    would move the two modules apart by more than they measurably are is
-    DISCARDED.  Whether it also stops the run is a separate, larger threshold
-    (``MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS``, the appliable ceiling as a
-    differential): a set at that scale is refused as unappliable anyway, so
-    nothing can be done with it but stop, while the 15-1000 mas class has an
-    action -- drop the corrections and carry on with the registration the
-    products already have (issue #473).
-
-    Returns ``dict(module, detector, module_blocking, detector_blocking,
-    keys)``, where ``keys`` is every exposure key either guard flagged and the
-    two ``*_blocking`` flags follow the same "report only what the module guard
-    missed" rule the messages do.
-    """
-    mod = detect_module_antisymmetry(exposures)
-    det = detect_detector_antisymmetry(exposures)
-    mod_gross = detect_module_antisymmetry(
-        exposures, min_mas=MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS)
-    det_gross = detect_detector_antisymmetry(
-        exposures, min_mas=MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS)
-    return dict(module=mod, detector=det,
-                module_blocking=bool(mod_gross["detected"]),
-                detector_blocking=bool(det_gross["keys"] - mod_gross["keys"]),
-                keys=mod["keys"] | det["keys"])
-
-
 def _checkpoint_passed(failures, unverified_blocking):
     """``passed`` for a checkpoint record.
 
@@ -449,6 +420,16 @@ def _checkpoint_passed(failures, unverified_blocking):
         or read equal-and-opposite offsets across an exposure's modules, and
         declined to apply anything.  A number exists and says the field is
         misaligned; the checkpoint simply cannot act on it.
+
+        The antisymmetry half of that is REFUSED, not explained away.  Since
+        2026-09-04 it fires on a 15 mas A-B differential rather than 500 mas a
+        side (issue #473), which is well inside the appliable range -- so the
+        reading is no longer self-evidently unappliable, and detection does not
+        establish that it is an alias either: a real rigid module offset comes
+        back from the consensus in the identical antisymmetric shape (see
+        ``visit_consensus._antisymmetric_pair``).  Both responses are therefore
+        required and neither substitutes for the other: DISCARD the corrections,
+        and record the visit here so a frozen stage cannot ship on it.
 
     Only the second blocks (#312).  cloudc F410M/nrcblong/visit002 is the case
     that named this: m2 MEASURED 731.47 mas, over
@@ -4015,64 +3996,70 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         m2_skipped = (set() if correcting
                       else _m2_skipped_exposures(record_dir, filt, visit,
                                                  obs_token))
-        # issue #158 backstop: an ALIAS reads antisymmetric across the modules of
-        # an exposure, where real jitter is common-mode.  Never emit corrections
-        # from an antisymmetric set -- they are the footprint geometry, not a
-        # misalignment.
+        # issue #158 backstop: an antisymmetric reading across the modules of one
+        # exposure is a number this checkpoint cannot act on.  Two things follow,
+        # and they are separate decisions (issue #473):
         #
-        # The response is TIERED by the A-B differential (issue #473).  At or
-        # above MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS the pair is unappliable
-        # anyway and BLOCKS, as it always has.  Below it -- the 15-40 mas class
-        # -- the corrections are DISCARDED and recorded, and the run continues:
-        # the module relation measured reference-free in the strip where the two
-        # modules see the same stars is 0.2-13 mas in every field on disk, so a
-        # 15 mas+ antisymmetric reading is not a measurement of it, and stopping
-        # a field over one would trade a wrong correction for a stall.
-        guards = antisymmetry_guards(cons["exposures"])
-        antisym = guards["module"]
+        #   DISCARD the corrections.  The module relation measured reference-free
+        #     in the strip where the two modules see the same stars is 0.2-13 mas
+        #     in every field on disk, so a 15 mas+ antisymmetric reading is not a
+        #     measurement of it and applying it writes a split INTO products that
+        #     do not have one.
+        #
+        #   RECORD AND REFUSE the visit (`unverified_blocking` -> passed=False).
+        #     Detection does NOT establish that the reading is an artefact: for a
+        #     component with two module families the antisymmetric shape is forced
+        #     by build_visit_consensus's median re-centring, and a REAL rigid
+        #     module offset of 20/40/200 mas comes back as +/-D/2 at cos -0.9999
+        #     with equal magnitudes (measured on synthetic visits, 2026-09-04).
+        #     So the reading is unresolved between an alias and a real
+        #     misregistration -- including the brick-1182 F200W ~90 mas seam class
+        #     -- and routing it anywhere but the blocking list would let exactly
+        #     that pass with passed=True and nothing on disk saying so.
+        #
+        # A blocking-unverified item at a CORRECTING stage does not stop the run
+        # (cataloging prints it and continues; _checkpoint_passed only marks the
+        # record), so refusing here costs no m2 throughput -- it costs a release
+        # gate refusal at a frozen stage, which is the point.
+        antisym = detect_module_antisymmetry(cons["exposures"])
         if antisym["detected"]:
             ex = antisym["examples"][0]
-            blocking = guards["module_blocking"]
-            sink = unverified_blocking if blocking else unverified
-            sink.append(
+            unverified_blocking.append(
                 f"{vctx}: MODULE-ANTISYMMETRIC offsets on "
                 f"{antisym['n_antisymmetric']}/{antisym['n_pairs_tested']} "
                 f"exposure(s) -- module {ex['module_a']} reads "
                 f"({ex['dra_a_mas']:+.0f},{ex['ddec_a_mas']:+.0f}) mas and module "
                 f"{ex['module_b']} reads ({ex['dra_b_mas']:+.0f},"
                 f"{ex['ddec_b_mas']:+.0f}) mas, i.e. equal and OPPOSITE at "
-                f"{ex['separation_mas'] / 1000.0:.1f}\" apart.  Real per-exposure "
-                f"jitter is common-mode across an exposure's detectors, so this "
-                f"is a wide-sweep/footprint-geometry ALIAS, not a misalignment "
-                f"(issue #158).  NOT correcting; the affected exposures are "
-                f"UNVERIFIED and the visit consensus for this filter should be "
-                f"rebuilt/investigated"
-                + ("" if blocking else
-                   f".  DISCARDED, not blocking: the differential is under "
-                   f"{MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS:.0f} mas, where the "
-                   f"reference-free module relation measured in the shared "
-                   f"strip is 0.2-13 mas in every field on disk (issue #473)"))
-            if blocking:
-                unverified.append(unverified_blocking[-1])
+                f"{ex['separation_mas'] / 1000.0:.1f}\" apart, a differential of "
+                f"{ex['separation_mas']:.0f} mas against a floor of "
+                f"{MODULE_ANTISYMMETRY_MIN_MAS:.0f}.  The reference-free module "
+                f"relation measured in the shared strip is 0.2-13 mas in every "
+                f"field on disk, so this is not a measurement of it -- it is "
+                f"either a wide-sweep/footprint-geometry ALIAS (issue #158) or a "
+                f"real inter-module misregistration, and the median re-centring "
+                f"makes those two read identically.  The corrections are "
+                f"DISCARDED and the visit is MEASURED AND REFUSED: the affected "
+                f"exposures are UNVERIFIED and the visit consensus for this "
+                f"filter should be rebuilt/investigated (issue #473)")
+            unverified.append(unverified_blocking[-1])
         # issue #624: the guard above buckets by module_family and tests only a
         # group that splits into exactly TWO families, so an alias between two
         # detectors of ONE module is invisible to it -- nrca1/nrca2 land in the
         # same bucket and their opposed offsets average toward ~0 (ngc6334
         # reads +/-22.9" that way and cleared it).  Re-run the same test over
         # every detector PAIR.  Report only what the module guard missed.
-        det_antisym = guards["detector"]
+        #
+        # This one keeps the pre-2026-09-04 floor (DETECTOR_ANTISYMMETRY_MIN_MAS,
+        # 500 mas a side restated as a 1000 mas differential): the strip
+        # measurement that brought the module floor down is module-A against
+        # module-B and says nothing about two detectors of one module.
+        det_antisym = detect_detector_antisymmetry(cons["exposures"])
         det_extra = det_antisym["keys"] - antisym["keys"]
-        det_blocking = guards["detector_blocking"]
-        # `det_extra` is the "report only what the module guard missed" rule.
-        # Since the module guard fires at 15 mas it can now cover the exposures
-        # of a detector pair that is GROSS, and reporting only the module
-        # message would then downgrade a blocking alias to a discard.  A gross
-        # detector pair is therefore always reported (issue #473).
-        if det_antisym["detected"] and (det_extra or det_blocking):
+        if det_antisym["detected"] and det_extra:
             dex = next((e for e in det_antisym["examples"] if e["same_module"]),
                        det_antisym["examples"][0])
-            det_sink = unverified_blocking if det_blocking else unverified
-            det_sink.append(
+            unverified_blocking.append(
                 f"{vctx}: DETECTOR-ANTISYMMETRIC offsets on "
                 f"{det_antisym['n_antisymmetric']}/"
                 f"{det_antisym['n_pairs_tested']} detector pair(s) -- detector "
@@ -4083,19 +4070,17 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 f"equal and OPPOSITE at "
                 f"{dex['separation_mas'] / 1000.0:.1f}\" apart"
                 + (" WITHIN ONE MODULE" if dex["same_module"] else "") +
+                f", a differential of {dex['separation_mas']:.0f} mas against "
+                f"this guard's own floor of "
+                f"{DETECTOR_ANTISYMMETRY_MIN_MAS:.0f} mas"
                 f".  Real per-exposure jitter is common-mode across an "
                 f"exposure's detectors, so this is a wide-sweep/"
                 f"footprint-geometry ALIAS, not a misalignment (issues #158, "
                 f"#624).  NOT correcting; the affected exposures are UNVERIFIED "
                 f"and the visit consensus for this filter should be "
-                f"rebuilt/investigated"
-                + ("" if det_blocking else
-                   f".  DISCARDED, not blocking: the differential is under "
-                   f"{MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS:.0f} mas (issue "
-                   f"#473)"))
-            if det_blocking:
-                unverified.append(unverified_blocking[-1])
-        antisym_keys = guards["keys"]
+                f"rebuilt/investigated")
+            unverified.append(unverified_blocking[-1])
+        antisym_keys = antisym["keys"] | det_antisym["keys"]
         exp_records = []
         for exp in cons["exposures"]:
             res = exp["vs_consensus"]
@@ -4132,10 +4117,19 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     f"visit consensus (isolated footprint / too few overlap "
                     f"stars) -- internally UNVERIFIED; the reference tie is its "
                     f"only check.{extra}")
-            if exp["misaligned"] and tuple(exp["key"]) in antisym_keys:
-                # antisymmetric alias: recorded above at the visit level, never
-                # corrected, never a late-stage regression (the number it would
-                # be compared against is not a measurement of anything).
+            if (exp["misaligned"] and correcting
+                    and tuple(exp["key"]) in antisym_keys):
+                # antisymmetric reading at a CORRECTING stage: recorded above at
+                # the visit level (blocking), and no correction is emitted from
+                # it.  Suppression stops there.
+                #
+                # It used to cover the FROZEN branch too, which deleted the
+                # MOVED-since-m2 failure for every flagged exposure.  That
+                # comparison is a DELTA against m2's own value, and a static
+                # footprint-geometry alias cancels in a delta -- so a nonzero
+                # delta is a movement whatever the absolute reading is, and
+                # dropping it was the one way an antisymmetric visit could reach
+                # a frozen stage, move, and still report passed=True.
                 print(f"ASTROM CHECKPOINT [{stage}] ALIAS (not correcting): "
                       f"{vctx} exposure {exp['key']} "
                       f"({res['dra']:+.0f},{res['ddec']:+.0f}) mas is "
@@ -4584,13 +4578,23 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 n_pairs_tested=antisym["n_pairs_tested"],
                 n_antisymmetric=antisym["n_antisymmetric"],
                 min_mas=antisym["min_mas"],
-                # True = the differential is at/above the appliable ceiling and
-                # the pair BLOCKS; False = detected, corrections discarded, run
-                # continues (issue #473).
-                blocking=guards["module_blocking"],
-                blocking_min_mas=float(MODULE_ANTISYMMETRY_BLOCKING_MIN_MAS),
                 keys=[list(k) for k in sorted(antisym["keys"])],
                 examples=[_jsonable(x) for x in antisym["examples"]]),
+            # The DETECTOR guard's own result.  It ran from the beginning but
+            # only ever reached disk as a line of prose in
+            # `unverified_blocking`, and then only when it found something the
+            # module guard had missed -- so a detector-level discard left
+            # nothing auditable.  It carries its own floor because it has its
+            # own floor (DETECTOR_ANTISYMMETRY_MIN_MAS).
+            detector_antisymmetry=dict(
+                detected=det_antisym["detected"],
+                n_pairs_tested=det_antisym["n_pairs_tested"],
+                n_exposures_tested=det_antisym["n_exposures_tested"],
+                n_antisymmetric=det_antisym["n_antisymmetric"],
+                min_mas=det_antisym["min_mas"],
+                reported=bool(det_antisym["detected"] and det_extra),
+                keys=[list(k) for k in sorted(det_antisym["keys"])],
+                examples=[_jsonable(x) for x in det_antisym["examples"]]),
             exposures=exp_records,
             reference_tie=_jsonable(ref_tie),
             # Present only when the raw frozen-stage delta exceeded tolerance:
