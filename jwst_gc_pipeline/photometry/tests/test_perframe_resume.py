@@ -510,3 +510,157 @@ def test_a_missing_frame_is_not_treated_as_current(tmp_path):
                                                    'nrca')
     assert FRAMES[0] in _bn(a['filename'] for a in todo)
     assert FRAMES[0] not in _bn(ok)
+
+
+# ---------------------------------------------------------------------------
+# #570 review, 2026-09-04 -- the frame is the only input to m12.  m3..m7 also
+# fit against the PREVIOUS phase's finalize output: the prior vetted merged
+# catalog, the prior mergedcat residual i2d, the prior smoothed bg, and for m7
+# the m6 vetted catalogs the cross-band seed is clustered from.  Re-running a
+# finalize, or restarting the chain at an earlier phase, rewrites that seed
+# while no frame's mtime moves -- so a gate that watches only the frame reports
+# "current" for the whole shard and the phase keeps per-frame catalogs fitted
+# against a seed that no longer exists.
+# ---------------------------------------------------------------------------
+
+
+def _seed_file(tmp_path, name, offset=0):
+    """A stand-in for a finalize product, with a controllable mtime."""
+    p = tmp_path / 'catalogs'
+    p.mkdir(exist_ok=True)
+    f = p / name
+    f.touch()
+    if offset:
+        t = os.path.getmtime(f) + offset
+        os.utime(f, (t, t))
+    return str(f)
+
+
+def test_a_marker_older_than_the_phase_SEED_does_not_resume(tmp_path):
+    """THE finding.  Frames untouched, markers all present -- but the m3 seed
+    (m2's vetted merged catalog) was rewritten by a re-run m2 finalize."""
+    d = _marker_dir(tmp_path)
+    args = _args(tmp_path, FRAMES)
+    _mark_all(d, args, phase='m3')
+    seed = _seed_file(tmp_path, 'f212n_nrca_..._m2_dao_basic_vetted.fits',
+                      offset=3600)
+    todo, ok, nov, stale = select_resumable_frames(
+        args, str(d), 'f212n', 'm3', 'nrca', seed_inputs=[seed])
+    assert set(_bn(stale)) == set(FRAMES), (
+        'a re-seeded phase resumed anyway -- every per-frame catalog would '
+        'stay a fit against the superseded seed')
+    assert ok == [] and nov == []
+    assert set(_bn(a['filename'] for a in todo)) == set(FRAMES)
+
+
+def test_a_seed_OLDER_than_the_markers_still_resumes(tmp_path):
+    """The ordinary wall-clock restart: the seed has not moved since the fits,
+    so the resume this PR exists for must still fire."""
+    d = _marker_dir(tmp_path)
+    args = _args(tmp_path, FRAMES)
+    seed = _seed_file(tmp_path, 'm2_vetted.fits', offset=-3600)
+    _mark_all(d, args, phase='m3')
+    todo, ok, nov, stale = select_resumable_frames(
+        args, str(d), 'f212n', 'm3', 'nrca', seed_inputs=[seed])
+    assert stale == [] and todo == []
+    assert set(_bn(ok)) == set(FRAMES)
+
+
+def test_ANY_ONE_stale_seed_input_is_enough(tmp_path):
+    """A phase has several (vetted catalog, residual i2d, smoothed bg); the
+    marker has to lose to the newest of them, not to all of them."""
+    d = _marker_dir(tmp_path)
+    args = _args(tmp_path, FRAMES)
+    _mark_all(d, args, phase='m5')
+    old_a = _seed_file(tmp_path, 'm4_vetted.fits', offset=-3600)
+    old_b = _seed_file(tmp_path, 'm4_resid_i2d.fits', offset=-3600)
+    fresh = _seed_file(tmp_path, 'm4_smoothed_bg.fits', offset=3600)
+    todo, ok, nov, stale = select_resumable_frames(
+        args, str(d), 'f212n', 'm5', 'nrca',
+        seed_inputs=[old_a, old_b, fresh])
+    assert set(_bn(stale)) == set(FRAMES)
+    assert ok == []
+
+
+def test_a_MISSING_seed_input_is_not_evidence(tmp_path):
+    """An absent seed cannot say the marker is stale.  The phase raises on a
+    genuinely missing one at --manual-start-phase, with a better message."""
+    d = _marker_dir(tmp_path)
+    args = _args(tmp_path, FRAMES)
+    _mark_all(d, args, phase='m3')
+    todo, ok, nov, stale = select_resumable_frames(
+        args, str(d), 'f212n', 'm3', 'nrca',
+        seed_inputs=[str(tmp_path / 'catalogs' / 'never_written.fits')])
+    assert stale == [] and set(_bn(ok)) == set(FRAMES)
+
+
+def test_a_stale_seed_beats_a_LEGACY_spelled_marker_too(tmp_path):
+    """PR #563 lets readers accept the pre-#562 detector token, which WIDENS
+    what the resume can match; the seed gate has to cover that path as well."""
+    d = _marker_dir(tmp_path)
+    frame = _affected_frame(tmp_path)
+    legacy = perframe_legacy_detector_token(frame)
+    if legacy == perframe_detector_token(frame):
+        pytest.skip('this tmp_path does not shift the split; no legacy path here')
+    (d / _marker_name(frame, 'f277w', legacy, 'm3', merge='nrca')).touch()
+    seed = _seed_file(tmp_path, 'm2_vetted.fits', offset=3600)
+    todo, ok, nov, stale = select_resumable_frames(
+        [{'filename': frame}], str(d), 'f277w', 'm3', 'nrca',
+        seed_inputs=[seed])
+    assert _bn(stale) == [os.path.basename(frame)]
+    assert ok == []
+
+
+def test_the_default_argument_keeps_m12_behaviour(tmp_path):
+    """m12 has no seed; the call with no seed_inputs must behave as before."""
+    d = _marker_dir(tmp_path)
+    args = _args(tmp_path, FRAMES)
+    _mark_all(d, args)
+    todo, ok, nov, stale = select_resumable_frames(args, str(d), 'f212n',
+                                                   'm12', 'nrca')
+    assert todo == [] and stale == [] and set(_bn(ok)) == set(FRAMES)
+
+
+# --- CALL-SITE guards for the two halves above -----------------------------
+
+def test_the_call_site_passes_the_phase_SEED_INPUTS():
+    """The helper can gate on seeds all it likes; if `run_manual_pipeline`
+    never hands it any, m3..m7 are back to watching the frame alone."""
+    import re
+    src = _run_manual_src()
+    calls = re.findall(r'select_resumable_frames\((?:[^()]|\([^()]*\))*\)', src)
+    assert calls, 'run_manual_pipeline no longer calls select_resumable_frames'
+    for c in calls:
+        assert 'seed_inputs=' in c, f'resume not gated on the phase seed: {c}'
+
+
+def test_the_seed_inputs_are_the_previous_phase_products_not_the_seed_FILE():
+    """Every shard rebuilds the derived seed (`prev_seed`) at the same path on
+    every run, so its mtime is always 'now'.  Gating on it would mean nothing
+    ever resumes; gating on what it is BUILT FROM is the point."""
+    src = _run_manual_src()
+    assert '_seed_inputs = [q for q in (vetted_prev, det_i2d, bg_sub,' in src
+    assert 'crossband_seed_inputs(' in src, (
+        'm7 fits against the m6 vetted catalogs; those are its seed inputs'
+    )
+    import re
+    m = re.search(r'_seed_inputs = \[q for q in \(([^)]*)\)', src)
+    assert m and 'prev_seed' not in m.group(1), (
+        'prev_seed is rebuilt every run -- gating on it disables the resume'
+    )
+
+
+def test_the_resume_is_OPT_IN():
+    """Defaulting it on makes a re-catalog for a photometry fix a near-no-op:
+    the markers are newer than the frames and newer than the seeds, so the
+    fan-out skips everything and the chain reports green with the old fits."""
+    src = _run_manual_src()
+    assert "_resume = bool(getattr(options, 'skip_if_done', False))" in src
+    assert 'if not _resume:' in src
+
+
+def test_the_run_names_the_opt_in_when_it_is_off():
+    """The count of resumable frames is printed with the variable that would
+    use them, so a wall-clocked restart learns the flag from its own log."""
+    src = _run_manual_src()
+    assert 'SKIP_IF_DONE=1' in src

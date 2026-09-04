@@ -94,3 +94,46 @@ def test_annotate_independent_detection(tmp_path):
     assert bool(out['independently_detected_f405n'][1]) is False
     assert out['n_filt_independent'][0] == 2
     assert out['n_filt_independent'][1] == 0
+
+
+# ---------------------------------------------------------------------------
+# The m7 fan-out resume needs to know WHICH files the seed is built from, so a
+# marker written against a superseded seed can be refit (#570 review).  The seed
+# FILE itself is no use: every m7 shard rewrites it at the same path, so its
+# mtime is always "now".  `crossband_seed_inputs` is that list, and the builder
+# consumes it -- one spelling, or the resume watches files the seed never read.
+# ---------------------------------------------------------------------------
+
+def test_the_seed_inputs_are_the_files_the_builder_reads(tmp_path):
+    cut_bp = str(tmp_path)
+    written = [_write_m6(cut_bp, f, [10.0], [20.0])
+               for f in ('f405n', 'f410m', 'f187n')]
+    got = C.crossband_seed_inputs(cut_bp, ['merged'],
+                                  ['f405n', 'f410m', 'f187n'], _opts())
+    assert [p for _m, _f, p in got] == written
+
+
+def test_a_filter_with_no_m6_catalog_is_not_listed(tmp_path):
+    """Only existing inputs: a path that was never written cannot make a marker
+    stale, and the builder skips it too."""
+    cut_bp = str(tmp_path)
+    _write_m6(cut_bp, 'f405n', [10.0], [20.0])
+    got = C.crossband_seed_inputs(cut_bp, ['merged'],
+                                  ['f405n', 'f480m'], _opts())
+    assert [os.path.basename(p) for _m, _f, p in got] == [
+        'f405n_merged_indivexp_merged_resbgsub_m6_dao_basic_vetted.fits']
+
+
+def test_the_builder_reads_the_seed_input_list(tmp_path):
+    """Behavioural: hide one filter's catalog from the list and the seed loses
+    that filter's confirmation, so a 2-filter position drops out."""
+    cut_bp = str(tmp_path)
+    _write_m6(cut_bp, 'f405n', [10.0], [20.0])
+    _write_m6(cut_bp, 'f410m', [10.0], [20.0])
+    out = C._build_crossband_seed(cut_bp, ['merged'], ['f405n', 'f410m'],
+                                  _opts())
+    assert len(Table.read(out)) == 1
+    os.remove(C.crossband_seed_inputs(cut_bp, ['merged'], ['f410m'],
+                                      _opts())[0][2])
+    with pytest.raises(ValueError):
+        C._build_crossband_seed(cut_bp, ['merged'], ['f405n', 'f410m'], _opts())

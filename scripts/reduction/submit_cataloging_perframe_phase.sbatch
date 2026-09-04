@@ -128,24 +128,37 @@ NSHARDS=${NSHARDS:-16}
 _pf_rename_wanted() { [ "${SLURM_JOB_NAME:-pf}" = "pf" ] && [ -n "${SLURM_JOB_ID:-}" ]; }
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
-# RESUME (fan-out only).  A fan-out task that hits its wall clock leaves a
-# completion marker for every frame it finished, and the resubmit refits all of
-# them and hits the same wall unless --skip-if-done is passed.  Measured on wd1,
-# 2026-08-29 -- same field, same phase, 32 shards either way (#570):
+# RESUME (fan-out only, OPT-IN).  A fan-out task that hits its wall clock leaves
+# a completion marker for every frame it finished, and the resubmit refits all
+# of them and hits the same wall unless --skip-if-done is passed.  Set
+# SKIP_IF_DONE=1 to resume; it reaches the array through the driver's
+# --export=ALL, so
 #
-#   without --skip-if-done (job 40592842)   4:26:41 - 4:29:20 per shard
-#   with    --skip-if-done (job 40623830)   0:00:46 - 0:00:50 per shard
+#   SKIP_IF_DONE=1 scripts/reduction/submit_cataloging_perframe.sh
 #
-# On by default because the resume is no longer existence-only: it keeps a
-# marker only when the marker is at least as new as the `_crf` it is a receipt
-# for (cataloging._marker_is_current / select_resumable_frames, #571).  A frame
-# REGENERATED after its last fit is therefore refitted, not skipped, and the run
-# prints "skip-if-done REFITTING <n> frame(s)" for that count -- the gc2211_o046
-# state that made an existence-only resume unsafe.
+# is the whole restart recipe.  Measured on wd1, 2026-08-29 -- same field, same
+# phase (m12), 32 shards either way (#570), full range over the 32 tasks:
 #
-# SKIP_IF_DONE=0 restores the unconditional refit.  Finalize mode is untouched:
-# it fits nothing, and verifies markers through its own strict check.
-SKIP_IF_DONE=${SKIP_IF_DONE:-1}
+#   without --skip-if-done (job 40592842)   4:26:41 - 8:44:12  (median 5:51:17)
+#   with    --skip-if-done (job 40623830)   0:00:46 - 0:01:12  (median 0:00:50)
+#
+# OFF by default, deliberately.  The marker's staleness gate
+# (cataloging._marker_is_current) compares mtimes: it refuses a marker older
+# than its `_crf` (the frame was regenerated -- the gc2211_o046 state) and older
+# than the phase's SEED inputs (the previous phase's vetted catalog / residual
+# i2d / smoothed bg were rewritten by a re-run finalize).  Nothing in a marker
+# changes when the PHOTOMETRY CODE changes, and re-running cataloging to apply a
+# fit fix -- on frames whose mtimes never move -- is the campaign's most common
+# reason to launch this.  Defaulted on, that run would skip every frame and
+# report green with the old photometry.  So the operator asks for the resume in
+# the one case it is right for: same code, same seeds, wall clock hit.
+#
+# A run that leaves it off PRINTS how many frames carry a current marker and
+# names this variable, so the restart case does not depend on reading a doc.
+#
+# Finalize mode is untouched: it fits nothing, and verifies markers through its
+# own strict check.
+SKIP_IF_DONE=${SKIP_IF_DONE:-0}
 
 # Pin a worktree/branch (this feature is new -> usually needed until merged).
 PIPE_ROOT=${PIPE_ROOT:-}
