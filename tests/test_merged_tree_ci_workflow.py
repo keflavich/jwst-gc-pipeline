@@ -24,8 +24,18 @@ loss would make it report green while the merged tree is broken:
 * both workflows must run ONE definition of the suite.  A second copy of the
   install/pytest steps drifts, and then the merged-tree check tests something
   other than what the pull request check tested.
+* a conflicting pull request must get NO job.  A job that finds the conflict
+  itself, skips the suite step and concludes success puts a green mark on a
+  tree nobody built -- ``PR #132 merged into main  pass  7s`` beside
+  ``PR #544 merged into main  pass  29m58s`` -- which is the state being
+  guarded against, produced by the guard.
+* ``git merge --abort`` must be guarded.  It exits 128 when the merge left no
+  MERGE_HEAD, and under ``set -euo pipefail`` that ends the loop before the
+  combined tree is assembled.
 """
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -55,6 +65,12 @@ def _steps(job):
 def _all_steps(workflow):
     for job in workflow['jobs'].values():
         yield from _steps(job)
+
+
+def _suite_steps(job):
+    """The steps of ``job`` that run the one shared install+pytest definition."""
+    return [step for step in _steps(job)
+            if step.get('uses') == './.github/actions/pytest-suite']
 
 
 def test_merged_tree_workflow_runs_when_main_moves():
@@ -134,7 +150,9 @@ def test_every_open_pr_is_accounted_for():
     ``gh pr list`` answers ``mergeable: UNKNOWN`` until GitHub computes it --
     4 of the 5 open pull requests on 2026-09-04 -- so selecting on
     ``mergeable == "MERGEABLE"`` drops most of the population without saying
-    so.  Enumerate them all; report the conflicting ones as conflicting.
+    so.  Enumerate them all, decide mergeability by trying the merge, and put
+    each one in exactly one of the two lists: tested, or recorded as
+    conflicting.
     """
     body = MERGED_TREE.read_text()
     code = '\n'.join(line for line in body.splitlines()
@@ -142,28 +160,176 @@ def test_every_open_pr_is_accounted_for():
     assert 'MERGEABLE' not in code, (
         'do not filter the enumeration on mergeable; it reads UNKNOWN for '
         'pull requests GitHub has not evaluated yet')
-    assert 'git merge --abort' in code, (
-        'a conflicting merge must be aborted and recorded, not left to fail '
-        'the job as if the tree were broken')
+
+    wf = _load(MERGED_TREE)
+    trial = [step for step in _steps(wf['jobs']['enumerate'])
+             if 'git merge' in (step.get('run') or '')]
+    assert len(trial) == 1, (
+        'the `enumerate` job must decide mergeability by TRYING the merge, '
+        'once, over the whole open-pull-request list')
+    assert 'outputs.prs' in yaml.dump(trial[0].get('env') or {}), (
+        'the trial must run over the full enumerated list, not a subset')
+    script = trial[0]['run']
+    for key in ('mergeable', 'conflicts'):
+        assert f'{key}=' in script, (
+            f'the trial must record the {key} pull requests; a pull request '
+            'that appears in neither list has gone unreported')
 
 
 def test_the_combined_tree_is_tested_too():
-    """The two recorded incidents are visible only with BOTH branches merged."""
+    """The two recorded incidents are visible only with BOTH branches merged.
+
+    The detector has to PIN that job.  A previous version of this test looked
+    for a non-matrix job whose body mentioned ``jq``, which the ``enumerate``
+    job also satisfies -- so deleting the whole ``all-together:`` job left all
+    seven tests passing.  A job counts here only if it RUNS THE SUITE, and the
+    combined one only if it merges the enumerated list rather than one branch.
+    """
     wf = _load(MERGED_TREE)
     jobs = wf['jobs']
-    per_pr = [name for name, job in jobs.items()
-              if 'matrix' in (job.get('strategy') or {})]
-    assert per_pr, 'expected a per-pull-request matrix job'
+    runs_suite = {name for name, job in jobs.items() if _suite_steps(job)}
+    per_pr = sorted(name for name in runs_suite
+                    if 'matrix' in (jobs[name].get('strategy') or {}))
+    assert per_pr, 'expected a per-pull-request matrix job that runs the suite'
     for name in per_pr:
         assert jobs[name]['strategy']['fail-fast'] is False, (
             'one broken pull request must not cancel the others')
-    combined = [name for name, job in jobs.items()
-                if name not in per_pr and 'steps' in job
-                and 'jq' in yaml.dump(job)]
+
+    combined = sorted(runs_suite - set(per_pr))
     assert combined, (
-        'expected a job that merges every open pull request together: it is '
-        'the only arrangement that sees a two-branch interaction while both '
-        'are still open (#235 + #243, #426 + #435)')
+        'expected a job that merges every open pull request together AND runs '
+        'the suite on the result: it is the only arrangement that sees a '
+        'two-branch interaction while both are still open (#235 + #243, '
+        '#426 + #435)')
+    for name in combined:
+        merges = [step for step in _steps(jobs[name])
+                  if 'git merge' in (step.get('run') or '')]
+        assert merges, f'{name}: runs the suite but merges nothing into it'
+        script = '\n'.join(step['run'] for step in merges)
+        assert re.search(r'for\s+\w+\s+in\b', script), (
+            f'{name}: must merge the pull requests in a loop, not one branch')
+        env = yaml.dump([step.get('env') or {} for step in merges])
+        assert 'needs.enumerate.outputs.' in env, (
+            f'{name}: the loop must be fed the list from the `enumerate` job')
+
+
+def test_a_conflicting_pr_gets_no_green_mark():
+    """A job that finds a conflict and skips the suite still concludes success.
+
+    Measured on this pull request's own run: ``PR #132 merged into main  pass
+    7s`` and ``#140  pass  10s``, beside ``PR #544  pass  29m58s``.  The two
+    seven-second jobs hit a conflict, skipped the pytest step and went green --
+    a green mark describing a tree nobody built, which is the state #249 exists
+    to catch.
+
+    So mergeability is decided in ``enumerate``, before any job exists, and
+    only the mergeable pull requests enter the matrix.  ``matrix`` is not among
+    the contexts available to ``jobs.<job_id>.if`` (github, needs, vars,
+    inputs), so a conflicting pull request cannot be rendered as a *skipped*
+    job; it gets none, and is named by the ``conflicts`` job instead.
+    """
+    wf = _load(MERGED_TREE)
+    jobs = wf['jobs']
+    outputs = jobs['enumerate'].get('outputs') or {}
+    for key in ('mergeable', 'conflicts'):
+        assert key in outputs, (
+            f'the `enumerate` job must publish `{key}`; the conflict decision '
+            'belongs there, before a job is created for the pull request')
+
+    matrix_jobs = [name for name, job in jobs.items()
+                   if 'matrix' in (job.get('strategy') or {})]
+    assert matrix_jobs, 'expected a per-pull-request matrix job'
+    for name in matrix_jobs:
+        src = yaml.dump(jobs[name]['strategy']['matrix'])
+        assert 'outputs.mergeable' in src, (
+            f'{name}: the matrix must be built from the MERGEABLE list, so '
+            'that a conflicting pull request gets no job rather than a green '
+            'one that ran nothing')
+
+    for name, job in jobs.items():
+        for step in _suite_steps(job):
+            assert 'if' not in step, (
+                f'{name}: the suite step is conditional (if: {step["if"]!r}); '
+                'a skipped step leaves the job green, which is the same defect '
+                'in a different place')
+
+    assert 'outputs.conflicts' in MERGED_TREE.read_text(), (
+        'the conflicting pull requests must still be named in the run')
+
+
+def test_a_failed_merge_is_cleaned_up_without_ending_the_script():
+    """``git merge --abort`` is not a safe cleanup on its own.
+
+    It exits 128 when the merge failed WITHOUT leaving MERGE_HEAD -- e.g.
+    ``fatal: refusing to merge unrelated histories``.  Both merge loops run
+    under ``set -euo pipefail``, so an unguarded ``--abort`` ends the script:
+    in ``enumerate`` no lists are published, and in ``all-together`` the
+    combined tree -- the one arrangement that catches the recorded incidents --
+    is never assembled.
+    """
+    aborts = [line.strip() for line in MERGED_TREE.read_text().splitlines()
+              if 'git merge --abort' in line
+              and not line.lstrip().startswith('#')]
+    assert aborts, 'a failed merge must be cleaned up before the loop goes on'
+    for line in aborts:
+        assert re.search(r'git merge --abort\b[^|]*\|\|\s*git reset --hard',
+                         line), (
+            f'{line!r}: guard it with `|| git reset --hard <sha>`; --abort '
+            'exits 128 when the merge left no MERGE_HEAD, and under '
+            '`set -euo pipefail` that ends the loop')
+
+
+def test_git_merge_abort_alone_exits_nonzero_after_a_refused_merge(tmp_path):
+    """The measurement behind the assertion above, run rather than asserted."""
+    if shutil.which('git') is None:
+        pytest.skip('git is not installed')
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(('git',) + args, cwd=repo, capture_output=True,
+                              text=True, check=True)
+
+    git('init', '-q')
+    git('config', 'user.email', 'merged-tree-check@invalid')
+    git('config', 'user.name', 'merged-tree check')
+    (repo / 'a').write_text('a\n')
+    git('add', 'a')
+    git('commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD').stdout.strip()
+    # an unrelated history: `git merge` refuses it outright, so it fails
+    # WITHOUT writing MERGE_HEAD -- the state `--abort` cannot undo
+    git('checkout', '-q', '--orphan', 'other')
+    (repo / 'b').write_text('b\n')
+    git('add', 'b')
+    git('commit', '-qm', 'other')
+    other = git('rev-parse', 'HEAD').stdout.strip()
+    git('checkout', '-q', '--detach', base)
+
+    def run(cleanup):
+        script = (f'set -euo pipefail\n'
+                  f'before=$(git rev-parse HEAD)\n'
+                  f'if git merge --no-edit --no-ff {other}; then\n'
+                  f'  echo merged\n'
+                  f'else\n'
+                  f'  {cleanup}\n'
+                  f'fi\n'
+                  f'echo loop-continues\n')
+        return subprocess.run(['bash', '-c', script], cwd=repo,
+                              capture_output=True, text=True)
+
+    plain = run('git merge --abort')
+    assert plain.returncode != 0, (
+        'expected the unguarded --abort to end the script')
+    assert 'MERGE_HEAD missing' in plain.stderr
+    assert 'loop-continues' not in plain.stdout, (
+        'the loop must be shown to die, or this test proves nothing')
+
+    guarded = run('git merge --abort || git reset --hard "$before"')
+    assert guarded.returncode == 0, guarded.stderr
+    assert 'loop-continues' in guarded.stdout
+    assert git('rev-parse', 'HEAD').stdout.strip() == base, (
+        'the fallback must leave the tree back at the base commit')
 
 
 def test_the_suite_definition_is_not_taken_from_the_tree_under_test():

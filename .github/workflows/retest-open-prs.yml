@@ -27,6 +27,17 @@ name: merged-tree check
 #     (4 of the 5 open pull requests on 2026-09-04), so selecting on
 #     `mergeable == "MERGEABLE"` silently drops most of the population.
 #
+# A CONFLICTING PULL REQUEST GETS NO JOB.  `enumerate` decides mergeability by
+# trying the merge, and only the pull requests that merge cleanly enter the
+# matrix.  An earlier arrangement let the matrix job find the conflict itself,
+# skip the suite step and conclude success, which put a green
+# `PR #132 merged into main  pass  7s` beside a real
+# `PR #544 merged into main  pass  29m58s` -- a green mark describing a tree
+# nobody built, which is the state this workflow exists to catch.  Rendering
+# such a job as SKIPPED instead is not available: `matrix` is not one of the
+# contexts a job-level `if:` can read (github, needs, vars, inputs).  So the
+# conflicting ones get no job and are named by the `conflicts` job below.
+#
 # This reports; it cannot block.  Blocking needs branch protection on `main`
 # with `tests` as a required check -- a repository setting, see the pull
 # request that added this file.
@@ -58,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       prs: ${{ steps.list.outputs.prs }}
+      mergeable: ${{ steps.trial.outputs.mergeable }}
+      conflicts: ${{ steps.trial.outputs.conflicts }}
       base_sha: ${{ steps.list.outputs.base_sha }}
     steps:
       - id: list
@@ -75,31 +88,102 @@ jobs:
           fi
           echo "base_sha=$base" >> "$GITHUB_OUTPUT"
 
-          # every open pull request, including drafts and conflicting ones:
-          # a conflicting merge is reported as such by the job below rather
-          # than being filtered out here, where it would go unrecorded
+          # every open pull request, including drafts and conflicting ones;
+          # mergeability is decided by the step below, which tries the merge,
+          # rather than by the `mergeable` field, which reads UNKNOWN until
+          # GitHub gets round to computing it
           prs=$(gh pr list -R "$REPO" --state open --limit 100 \
                   --json number --jq '[.[] | .number] | sort')
           echo "prs=$prs" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.list.outputs.base_sha }}
+          fetch-depth: 0
+          path: base
+
+      - id: trial
+        name: Which open pull requests merge onto the base
+        working-directory: base
+        env:
+          PRS: ${{ steps.list.outputs.prs }}
+          BASE: ${{ steps.list.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          git config user.name  "merged-tree check"
+          git config user.email "merged-tree-check@invalid"
+
+          mergeable=()
+          conflicts=()
+          for n in $(echo "$PRS" | jq -r '.[]'); do
+            git checkout --detach --quiet "$BASE"
+            git reset --hard --quiet "$BASE"
+            git fetch --no-tags --quiet origin "refs/pull/$n/head:refs/remotes/pr/$n"
+            if git merge --no-edit --no-ff -q "refs/remotes/pr/$n" >/dev/null 2>&1; then
+              mergeable+=("$n")
+            else
+              # `git merge --abort` exits 128 when the merge failed WITHOUT
+              # leaving MERGE_HEAD ("refusing to merge unrelated histories"),
+              # and under `set -euo pipefail` that would end this loop with no
+              # lists published at all
+              git merge --abort || git reset --hard "$BASE"
+              conflicts+=("$n")
+            fi
+          done
+
+          # `printf` with no arguments still prints its format once, so an
+          # empty list comes out as `[]` rather than as a malformed value
+          as_json() { printf '%s\n' "$@" | jq -R 'select(length > 0) | tonumber' | jq -sc .; }
+          m=$(as_json "${mergeable[@]+"${mergeable[@]}"}")
+          c=$(as_json "${conflicts[@]+"${conflicts[@]}"}")
+          echo "mergeable=$m" >> "$GITHUB_OUTPUT"
+          echo "conflicts=$c" >> "$GITHUB_OUTPUT"
+
           {
             echo "## merged-tree check"
             echo
-            echo "base: \`$base\`"
+            echo "base: \`$BASE\`"
             echo
-            echo "open pull requests: \`$prs\`"
+            echo "open pull requests: \`$PRS\`"
+            echo
+            echo "merge onto the base, and are tested: \`$m\`"
+            echo
+            echo "conflict with the base, so no tree exists to test: \`$c\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  conflicts:
+    needs: enumerate
+    if: needs.enumerate.outputs.conflicts != '[]'
+    runs-on: ubuntu-latest
+    name: "PRs that conflict with main (left untested)"
+    steps:
+      # dropping the conflicting pull requests from the matrix must not also
+      # drop them out of sight: name them where the run is read
+      - env:
+          CONFLICTS: ${{ needs.enumerate.outputs.conflicts }}
+          BASE: ${{ needs.enumerate.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          echo "### conflicts with \`$BASE\`, so no merged tree exists to test" \
+            >> "$GITHUB_STEP_SUMMARY"
+          for n in $(echo "$CONFLICTS" | jq -r '.[]'); do
+            echo "- #$n: needs a hand merge; not tested" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::#$n conflicts with $BASE and was not tested"
+          done
 
   per-pr:
     needs: enumerate
-    if: needs.enumerate.outputs.prs != '[]'
+    if: needs.enumerate.outputs.mergeable != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 6
       matrix:
-        pr: ${{ fromJson(needs.enumerate.outputs.prs) }}
+        # only the pull requests that merge cleanly onto the base: a
+        # conflicting one must not get a job that concludes success without
+        # having run anything
+        pr: ${{ fromJson(needs.enumerate.outputs.mergeable) }}
     name: "PR #${{ matrix.pr }} merged into main"
     steps:
       # the workspace root holds THIS workflow's ref, which is where the
@@ -115,8 +199,7 @@ jobs:
           fetch-depth: 0
           path: merged
 
-      - id: merge
-        name: Merge PR #${{ matrix.pr }} onto the base
+      - name: Merge PR #${{ matrix.pr }} onto the base
         working-directory: merged
         env:
           PR: ${{ matrix.pr }}
@@ -127,27 +210,26 @@ jobs:
           git config user.email "merged-tree-check@invalid"
           git fetch --no-tags origin "refs/pull/$PR/head:refs/remotes/pr/$PR"
           git checkout --detach "$BASE"
-          # a conflict is information, not a failure of this job: GitHub will
-          # not merge a conflicting pull request either way, and resolving it
-          # by hand re-runs the suite anyway
-          if git merge --no-edit --no-ff "refs/remotes/pr/$PR"; then
-            echo "status=merged" >> "$GITHUB_OUTPUT"
-            echo "- #$PR: merged onto \`$BASE\`, running the suite" >> "$GITHUB_STEP_SUMMARY"
-          else
-            git merge --abort
-            echo "status=conflict" >> "$GITHUB_OUTPUT"
-            echo "- #$PR: CONFLICTS with \`$BASE\`; not tested, needs a hand merge" >> "$GITHUB_STEP_SUMMARY"
+          # `enumerate` merged this pull request onto this same base a few
+          # minutes ago, so a conflict here means its head moved mid-run:
+          # stop, rather than report on a tree that was never built
+          if ! git merge --no-edit --no-ff "refs/remotes/pr/$PR"; then
+            git merge --abort || git reset --hard "$BASE"
+            echo "::error::#$PR merged onto $BASE during enumeration but conflicts now"
+            exit 1
           fi
+          echo "- #$PR: merged onto \`$BASE\`, running the suite" >> "$GITHUB_STEP_SUMMARY"
 
-      # the suite's exit status is this job's exit status
-      - if: steps.merge.outputs.status == 'merged'
-        uses: ./.github/actions/pytest-suite
+      # The suite's exit status is this job's exit status, and this step is
+      # UNCONDITIONAL: an `if:` here is how a job comes to conclude success
+      # without having run the suite.
+      - uses: ./.github/actions/pytest-suite
         with:
           path: merged
 
   all-together:
     needs: enumerate
-    if: needs.enumerate.outputs.prs != '[]'
+    if: needs.enumerate.outputs.mergeable != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     name: "every open PR merged together"
@@ -162,10 +244,10 @@ jobs:
           fetch-depth: 0
           path: merged
 
-      - name: Merge every open PR onto the base
+      - name: Merge every mergeable PR onto the base
         working-directory: merged
         env:
-          PRS: ${{ needs.enumerate.outputs.prs }}
+          PRS: ${{ needs.enumerate.outputs.mergeable }}
           BASE: ${{ needs.enumerate.outputs.base_sha }}
         run: |
           set -euo pipefail
@@ -175,17 +257,25 @@ jobs:
           echo "### every open PR merged together" >> "$GITHUB_STEP_SUMMARY"
           for n in $(echo "$PRS" | jq -r '.[]'); do
             git fetch --no-tags origin "refs/pull/$n/head:refs/remotes/pr/$n"
+            # each of these merges onto the BASE on its own; they can still
+            # conflict with ONE ANOTHER, which is information about this
+            # combined tree rather than a failure of the job
+            before=$(git rev-parse HEAD)
             if git merge --no-edit --no-ff "refs/remotes/pr/$n"; then
               echo "- #$n: merged" >> "$GITHUB_STEP_SUMMARY"
             else
-              git merge --abort
-              echo "- #$n: CONFLICT, left out of this tree" >> "$GITHUB_STEP_SUMMARY"
+              # `--abort` exits 128 when the merge left no MERGE_HEAD; under
+              # `set -euo pipefail` that would end the loop and leave the
+              # combined tree -- the one arrangement that sees a two-branch
+              # interaction -- unbuilt
+              git merge --abort || git reset --hard "$before"
+              echo "- #$n: CONFLICT with the tree so far, left out" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
           echo >> "$GITHUB_STEP_SUMMARY"
           echo "tree under test: \`$(git rev-parse HEAD)\`" >> "$GITHUB_STEP_SUMMARY"
 
-      # the suite's exit status is this job's exit status
+      # unconditional, as in `per-pr`: the suite's exit status is the job's
       - uses: ./.github/actions/pytest-suite
         with:
           path: merged
