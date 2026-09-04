@@ -233,8 +233,13 @@ def _correctable(rec, key):
     and must be excluded here too, because this number sizes the floor that m2
     will then apply:
 
-    * ``alias_suspect`` -- a module-antisymmetric residual, which the checkpoint
-      never corrects (it is a detector-naming collision, not a misalignment);
+    * ``alias_suspect`` -- a module- or detector-antisymmetric residual, which
+      the checkpoint never corrects.  It does not follow that there is nothing
+      there: the antisymmetric shape is forced by the consensus's median
+      re-centring, so a real inter-module misregistration reads the same way
+      (``visit_consensus._antisymmetric_pair``).  The checkpoint records those
+      visits as measured-and-refused; what matters HERE is only that m2 will
+      not act on them, so they cannot size the floor;
     * anything the pass did not call misaligned.
 
     Including them cuts both ways.  A 900 mas alias alongside a 3 mas fixed

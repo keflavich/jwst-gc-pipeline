@@ -477,8 +477,9 @@ def test_the_floor_is_sized_only_from_the_STUCK_filters(tmp_path):
 def test_an_exposure_the_checkpoint_would_never_correct_does_not_size_the_floor(
         tmp_path):
     """A module-antisymmetric residual is filed `alias_suspect` and is never
-    corrected -- it is a detector-naming collision, not a misalignment.  Letting
-    it set the floor would waive real corrections up to its size."""
+    corrected -- whether it is an alias or a real inter-module split, m2 will
+    not act on it (the checkpoint records it as measured-and-refused instead).
+    Letting it set the floor would waive real corrections up to its size."""
     from jwst_gc_pipeline.photometry.retie_fixed_point import (
         largest_measured_residual)
     rec = _rec(SMALL)

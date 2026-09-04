@@ -77,6 +77,14 @@ def test_the_blocking_sites_feed_the_blocking_list():
     visit whose exposures drizzle 4.06" out of place.  Its sibling case -- m2
     could not measure a tie at all -- goes to plain ``unverified`` from the same
     branch and deliberately does NOT block.
+
+    Issue #473 lowered the antisymmetry floor from 500 mas a side to a 15 mas
+    A-B differential, which put the 15-1000 mas class inside the guard for the
+    first time.  Those sets have their CORRECTIONS discarded -- but they still
+    append here, because discarding a correction is not the same as deciding
+    nothing was measured, and a real inter-module misregistration in that band
+    reads exactly like an alias (test_antisymmetric_shape_is_forced_by_the_
+    median_recentring in test_sweep_window_alias.py).
     """
     import inspect
     src = inspect.getsource(A)
@@ -84,6 +92,10 @@ def test_the_blocking_sites_feed_the_blocking_list():
         'exactly four sites are measured-and-refused: MODULE-ANTISYMMETRIC, '
         'DETECTOR-ANTISYMMETRIC, the untrustworthy consensus->reference tie, '
         'and an m2 per-exposure baseline m2 measured and refused to apply')
+    # no conditional sink may reroute one of them away from the blocking list
+    assert 'sink' not in src, (
+        'an antisymmetry message routed to `unverified` instead of '
+        '`unverified_blocking` is invisible to the release gate')
     # each must ALSO appear in the full unverified list, or they stop being
     # reported at all
     assert src.count('unverified.append(unverified_blocking[-1])') == 4
