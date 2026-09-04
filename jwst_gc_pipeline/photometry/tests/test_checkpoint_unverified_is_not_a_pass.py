@@ -68,15 +68,25 @@ def test_the_blocking_sites_feed_the_blocking_list():
     equal-and-opposite +/-22.9" that way and its recorded run passed with
     ``n_antisymmetric: 0``.  Same measured-and-refused character as the other
     two: a number was measured and the correction refused.
+
+    The FOURTH site (issue #626) is the frozen-stage per-exposure baseline m2
+    MEASURED and refused to APPLY -- ``alias_suspect``, or past
+    ``MAX_CORRECTION_ARCSEC`` with ``ok`` not false.  It is the same character
+    again, read out of the m2 record instead of measured in this stage: w51
+    F444W holds 16 such entries at ~29" and cloudc F410M 16 at ~734 mas, the
+    visit whose exposures drizzle 4.06" out of place.  Its sibling case -- m2
+    could not measure a tie at all -- goes to plain ``unverified`` from the same
+    branch and deliberately does NOT block.
     """
     import inspect
     src = inspect.getsource(A)
-    assert src.count('unverified_blocking.append(') == 3, (
-        'exactly three sites are measured-and-refused: MODULE-ANTISYMMETRIC, '
-        'DETECTOR-ANTISYMMETRIC and the untrustworthy consensus->reference tie')
+    assert src.count('unverified_blocking.append(') == 4, (
+        'exactly four sites are measured-and-refused: MODULE-ANTISYMMETRIC, '
+        'DETECTOR-ANTISYMMETRIC, the untrustworthy consensus->reference tie, '
+        'and an m2 per-exposure baseline m2 measured and refused to apply')
     # each must ALSO appear in the full unverified list, or they stop being
     # reported at all
-    assert src.count('unverified.append(unverified_blocking[-1])') == 3
+    assert src.count('unverified.append(unverified_blocking[-1])') == 4
 
 
 def test_could_not_measure_is_still_a_PASS():

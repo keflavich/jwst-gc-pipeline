@@ -113,8 +113,8 @@ def _write(tmp_path, name, dra, corrections=True):
 def test_reader_prefers_its_own_observation(tmp_path):
     _write(tmp_path, "checkpoint_m2_F360M_o002", 1.0)
     _write(tmp_path, "checkpoint_m2_F360M_o005", 9.0)
-    a = _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002")
-    b = _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o005")
+    a, _ = _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002")
+    b, _ = _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o005")
     assert a[("1", 1, "nrcblong", "F360M", "02101")][0] == 1.0
     assert b[("1", 1, "nrcblong", "F360M", "02101")][0] == 9.0
 
@@ -130,21 +130,21 @@ def test_untokened_legacy_record_is_refused_when_it_could_be_another_obs(
     describes, with a warning attached -- see the review on PR #306.)
     """
     _write(tmp_path, "checkpoint_m2_F360M", 2.0)
-    assert _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002") == {}
+    assert _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002") == ({}, {})
     assert "REFUSING" in capsys.readouterr().out
 
 
 def test_tokened_record_wins_over_the_legacy_one(tmp_path, capsys):
     _write(tmp_path, "checkpoint_m2_F360M", 2.0)
     _write(tmp_path, "checkpoint_m2_F360M_o002", 7.0)
-    base = _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002")
+    base, _ = _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002")
     assert base[("1", 1, "nrcblong", "F360M", "02101")][0] == 7.0
     assert "falling back" not in capsys.readouterr().out
 
 
 def test_no_token_behaves_exactly_as_before(tmp_path, capsys):
     _write(tmp_path, "checkpoint_m2_F360M", 3.0)
-    base = _m2_exposure_baseline(str(tmp_path), "F360M", "1")
+    base, _ = _m2_exposure_baseline(str(tmp_path), "F360M", "1")
     assert base[("1", 1, "nrcblong", "F360M", "02101")][0] == 3.0
     assert "falling back" not in capsys.readouterr().out
 

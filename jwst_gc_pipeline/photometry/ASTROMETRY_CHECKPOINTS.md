@@ -34,7 +34,9 @@ has none:
 
 | m2 state | frozen-stage verdict |
 |---|---|
-| recorded in m2's `exposures` | delta vs that baseline; > tol ⇒ `AstrometryRegressionError` |
+| recorded in m2's `exposures` **and m2 stood behind the number** | delta vs that baseline; > tol ⇒ `AstrometryRegressionError` |
+| recorded in m2's `exposures` but **m2 refused its own measurement** — `ok: false`, `unverified: true`, `alias_rejected: true` | **UNVERIFIED**, not a failure and not blocking. m2 corrected nothing from that number, so there is no frozen value to have moved away from; comparing against it manufactures a movement the size of the refused measurement (`_m2_exposure_untrustworthy`) |
+| recorded in m2's `exposures` but **m2 measured a number and refused to APPLY it** — `alias_suspect: true` (a #158/#624 antisymmetric alias, certified by construction), or past `MAX_CORRECTION_ARCSEC` with `ok` not false | **UNVERIFIED and BLOCKING**: it goes to `unverified_blocking`, so `passed` is false and the release gate refuses the field. Still not a "movement", but a number exists saying the exposure may be misaligned — the #312 rule |
 | recorded in m2's `consensus.skipped` (too few reliable stars — m2 found and reported the defect) | **UNVERIFIED**, not a failure. It never had a frozen solution, so this is its first measurement and cannot be a movement. `all_verified` goes false — see the caveat below |
 
 > ⚠ **`all_verified` is not an enforced gate.** It is written into the checkpoint
@@ -43,7 +45,10 @@ has none:
 > human to check it. So routing something to `unverified` rather than `failures`
 > converts an automatic `AstrometryRegressionError` into a manual checklist item,
 > which is a real reduction in enforcement — worth knowing when reading the tables
-> above. Automating the walk is its own change: the naive rule (`passed is not
+> above. `unverified_blocking` is the exception and is enforced: it sets
+> `passed: false`, which `check_astrometry_checkpoints.py` does read, so row
+> three of the table above refuses the field automatically. Automating the walk
+> is its own change: the naive rule (`passed is not
 > True or all_verified is not True` over every `*_latest.json`) refuses 12 of 14
 > fields today, so the triage of those records is the actual deliverable, and the
 > gate additionally needs a run token (records carry only `date`, and brick holds
@@ -52,6 +57,24 @@ has none:
 > defaults — w51's 60 records were written at `stage_stability_tol_mas: 20.0`
 > against a module value of 2.0.
 | absent for no recorded reason (new or renamed frame after the freeze) | `AstrometryRegressionError` — fail closed |
+
+Rows two and three exist because of cloudc F182M o002 (issue #626).  All four
+dithers of `('2', n, 'nrcb2', 'F182M', '06201')` landed in one parity half of
+`build_visit_consensus`, so nothing in the opposite half imaged that sky;
+`measure_offset` swept and returned the footprint pair-density ridge at the
+search-window edge (9.86″ at a 10″ window, 29.50″ at 30″, 58.23″ at 60″ —
+0.97–0.99 of the window every time, contrast 9.0).  m2 wrote `ok=false`,
+`alias_rejected=true`, `component=-1` and "recorded, NOT applied", and the
+frozen reader admitted the number on `np.isfinite` alone: m3–m7 each reported
+"MOVED 9858 mas since the m2 freeze" against frames that read 1–2.5 mas, five
+FAILED records nothing downstream can rewrite.
+
+The split between rows two and three is the same one `_checkpoint_passed` draws:
+a number m2 could not certify measures nothing and stays advisory, while a
+number m2 certified and declined to act on is the loudest evidence of
+misalignment there is and must not read as a pass — w51's July F444W record
+holds 16 `ok=true` entries at ~29″, and cloudc F410M 16 at ~734 mas with
+contrast 4010–4152, the visit whose exposures drizzle 4.06″ out of place.
 
 The middle row exists because of arches F212N (2026-08-02): a snowball storm in
 exposure 4 (JUMP_DET 1.2 % → 7.6 %, 261 blobs > 100 px vs 9) cut its source count
