@@ -128,6 +128,25 @@ NSHARDS=${NSHARDS:-16}
 _pf_rename_wanted() { [ "${SLURM_JOB_NAME:-pf}" = "pf" ] && [ -n "${SLURM_JOB_ID:-}" ]; }
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
+# RESUME (fan-out only).  A fan-out task that hits its wall clock leaves a
+# completion marker for every frame it finished, and the resubmit refits all of
+# them and hits the same wall unless --skip-if-done is passed.  Measured on wd1,
+# 2026-08-29 -- same field, same phase, 32 shards either way (#570):
+#
+#   without --skip-if-done (job 40592842)   4:26:41 - 4:29:20 per shard
+#   with    --skip-if-done (job 40623830)   0:00:46 - 0:00:50 per shard
+#
+# On by default because the resume is no longer existence-only: it keeps a
+# marker only when the marker is at least as new as the `_crf` it is a receipt
+# for (cataloging._marker_is_current / select_resumable_frames, #571).  A frame
+# REGENERATED after its last fit is therefore refitted, not skipped, and the run
+# prints "skip-if-done REFITTING <n> frame(s)" for that count -- the gc2211_o046
+# state that made an existence-only resume unsafe.
+#
+# SKIP_IF_DONE=0 restores the unconditional refit.  Finalize mode is untouched:
+# it fits nothing, and verifies markers through its own strict check.
+SKIP_IF_DONE=${SKIP_IF_DONE:-1}
+
 # Pin a worktree/branch (this feature is new -> usually needed until merged).
 PIPE_ROOT=${PIPE_ROOT:-}
 # Locate the helper.  sbatch COPIES the batch script to a spool dir, so
@@ -154,6 +173,9 @@ REF_ARG=""
 if [ "$MODE" = "fanout" ]; then
     SHARD="${SLURM_ARRAY_TASK_ID:-0}/${NSHARDS}"
     MODE_ARGS="--manual-skip-finalize --manual-frame-shard=$SHARD"
+    if [ "$SKIP_IF_DONE" = "1" ]; then
+        MODE_ARGS="$MODE_ARGS --skip-if-done"
+    fi
     _pf_rename_wanted && scontrol update JobId="$SLURM_JOB_ID" \
         JobName="pf_${TARGET}_${PHASE}" 2>/dev/null || true
 elif [ "$MODE" = "finalize" ]; then
