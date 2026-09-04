@@ -12,8 +12,12 @@ to be true for that:
    edge and MOVES with it --
        window  55"   60"   66"   70"   80"   90"  100"
        off     54.8  59.8  64.7  67.2  75.9  89.0  99.5
-   -- while a real tie reads the same offset at every window that can contain it
-   (W51 F480M: (+20.6, -1.7) mas identically at 1/3/10/30/60").
+   -- while a stable measurement reads the same offset at every window that can
+   contain it (W51 F480M: (+20.6, -1.7) mas identically at 1/3/10/30/60").  That
+   stability says the number is not a window artifact; whether the two modules
+   really are that far apart is a separate question, and the reference-free
+   measurement in the strip where they see the same stars says they are not
+   (1.64 mas, issue #473).
 2. that one bad tie merged both modules into a single consensus component, whose
    MEDIAN re-centring then split the error evenly between the modules -- which
    is why every exposure of one module read +d and every exposure of the other
