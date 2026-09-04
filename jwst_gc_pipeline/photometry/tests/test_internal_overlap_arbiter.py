@@ -255,11 +255,24 @@ def test_only_an_external_list_fails_a_field_on_the_absolute_tie(
 # ...while still doing the job it was added for
 # ---------------------------------------------------------------------------
 
-def _sliver_pair(seam_mas=0.0, seed=31, n=9000, sliver_arcsec=7.2):
-    """Two groups overlapping in a thin strip, with the reference drawn from
-    the same truth positions -- the shape a merged catalogue has.
+def _sliver_pair(seam_mas=0.0, seed=31, n=9000, sliver_arcsec=0.6):
+    """Two groups overlapping in a strip too thin to measure, with the reference
+    drawn from the same truth positions -- the shape a merged catalogue has.
 
     ``seam_mas`` is a real inter-module offset applied inside the strip.
+
+    The strip width matters and is checked, not assumed: at 7.2" this fixture
+    yields 6 measured mutual-coverage tiles and the pair is settled
+    frame-against-frame, so no arbiter is ever consulted and a test written on
+    it passes whatever the arbiter does.  At 0.6" no tile is measurable
+    (``n_total == 0``), which is the DEFERRAL this whole path exists for --
+    w51's real F187N pair reads n_a_in=18453, n_b_in=14196 and 0 tiles.
+    ``_assert_deferred`` below fails loudly if that stops being true.
+
+    The seam is kept inside the widest same-star match radius (0.3"): a seam
+    larger than that leaves the two groups matching disjoint reference stars,
+    which is correctly could-not-verify rather than a measured refusal, and so
+    cannot show the arbiter refusing anything.
     """
     ra0, dec0 = 266.5, -28.7
     cosd = float(np.cos(np.deg2rad(dec0)))
@@ -277,14 +290,26 @@ def _sliver_pair(seam_mas=0.0, seed=31, n=9000, sliver_arcsec=7.2):
     return pooled, SkyCoord(ra * u.deg, dec * u.deg)
 
 
-@pytest.mark.parametrize('seam_mas,expect_pass', [(0.0, True), (500.0, False)])
+def _assert_deferred(r):
+    """The pair reached the arbiter because NOTHING else could measure it."""
+    assert r['n_overlapping'] == 1
+    pair = r['pairs'][0]
+    assert int(pair.get('n_total') or 0) == 0, (
+        'the fixture measured mutual-coverage tiles, so the pair is settled '
+        'frame-against-frame and never reaches an arbiter at all'
+    )
+    return pair
+
+
+@pytest.mark.parametrize('seam_mas,expect_pass', [(0.0, True), (60.0, False)])
 def test_the_internal_list_arbitrates_the_pair_it_was_added_for(
         tmp_path, monkeypatch, seam_mas, expect_pass):
     """Through the REAL slot -- `fallback_refcat`, with no `refcat` at all.
 
     Both directions, because a fallback that only ever says "clean" is worse
-    than none: a pair with a 500 mas seam inside the sliver must still be
-    refused by the same list that clears the aligned one.
+    than none: a 60 mas seam (2x the 30 mas tolerance) inside the sliver must
+    be refused by the same list that clears the aligned one -- and refused as a
+    MEASUREMENT (`n_fail`), not as another could-not-verify.
     """
     pooled, ref = _sliver_pair(seam_mas=seam_mas)
     path = _write_internal(tmp_path / 'merged.fits', ref)
@@ -293,11 +318,13 @@ def test_the_internal_list_arbitrates_the_pair_it_was_added_for(
                         (pooled, {k: len(v) for k, v in pooled.items()}, 64))
     monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
     r = cio.check_filter('w51', 'F187N', fallback_refcat=path, verbose=False)
-    assert r['n_overlapping'] == 1
+    pair = _assert_deferred(r)
+    assert pair['ext_pair_fallback']['measurable'] is True, (
+        'the last-resort arbiter did not measure the pair it was reached for')
     assert r['PASS'] is expect_pass
-    if expect_pass:
-        assert r['could_not_verify'] is False, (
-            'the pair the fallback exists for was still not arbitrated')
+    assert r['could_not_verify'] is False, (
+        'the pair the fallback exists for was still not arbitrated')
+    assert r['n_fail'] == (0 if expect_pass else 1)
 
 
 def test_the_last_resort_runs_when_a_registered_list_left_the_pair_open(
@@ -311,7 +338,7 @@ def test_the_last_resort_runs_when_a_registered_list_left_the_pair_open(
     all, and this is the field the change was written for.
     """
     pooled, ref = _sliver_pair(seam_mas=0.0)
-    dec0, half = -28.7, 7.2 / 2.0 / 3600.0
+    dec0, half = -28.7, 0.6 / 2.0 / 3600.0
     outside = np.abs(ref.dec.deg - dec0) > half
     rng = np.random.default_rng(11)
     sparse = np.concatenate([np.where(outside)[0],
@@ -331,6 +358,7 @@ def test_the_last_resort_runs_when_a_registered_list_left_the_pair_open(
 
     r = cio.check_filter('w51', 'F187N', refcat=registered,
                          fallback_refcat=internal, verbose=False)
+    _assert_deferred(r)
     assert r['could_not_verify'] is False
     assert r['PASS'] is True
     assert r['pairs'][0]['ext_pair_fallback']['clean'] is True
@@ -376,10 +404,10 @@ def test_a_deferred_pair_is_not_cleared_by_an_internal_field_wide_map(
     under OVERLAP_ALLOW_FIELDWIDE_CLEAR, which exists for an INDEPENDENT map
     that could not see the sliver.
     """
-    pooled, ref = _sliver_pair(seam_mas=500.0)
+    pooled, ref = _sliver_pair(seam_mas=60.0)
     # thin the reference inside the sliver so the pair's own footprint cannot
     # arbitrate, leaving only the field-wide route
-    dec0, half = -28.7, 7.2 / 2.0 / 3600.0
+    dec0, half = -28.7, 0.6 / 2.0 / 3600.0
     outside = np.abs(ref.dec.deg - dec0) > half
     rng = np.random.default_rng(3)
     inside = np.where(~outside)[0]
@@ -393,6 +421,8 @@ def test_a_deferred_pair_is_not_cleared_by_an_internal_field_wide_map(
     # passed to `refcat` deliberately: this pins the second line of the bar,
     # for a list handed to that slot by hand rather than through the wiring.
     r = cio.check_filter('w51', 'F187N', refcat=path, verbose=False)
+    _assert_deferred(r)
+    assert r['could_not_verify'] is True
     assert r['PASS'] is False, (
         'a pair nothing could arbitrate in its own footprint was cleared by a '
         'field-wide map against the field\'s own catalogue, which reads clean '
