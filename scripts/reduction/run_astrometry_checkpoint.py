@@ -89,7 +89,7 @@ def main(argv=None):
                         "the one the in-pipeline m2 checkpoint uses.  Needs "
                         "--proposal-id and --obsid")
     p.add_argument("--pool", action="store_true",
-                   help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.")
+                   help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.  Not compatible with --seed: the seeder writes rows at the granularity of the corrections it is handed, so there is nothing to pool onto yet.")
     p.add_argument("--mark-stale", action="store_true",
                    help="with --apply: stale-tag the filter's im0 _i2d mosaics "
                         "(renamed *_im0_badastrom.fits)")
@@ -102,6 +102,21 @@ def main(argv=None):
                         "or a significant slope.")
     p.add_argument("--brightness-tol-mas", type=float, default=5.0)
     args = p.parse_args(argv)
+
+    if args.seed and args.pool:
+        # --pool exists because "module-family rows cannot express a
+        # per-detector shift, and un-pooled corrections are SUMMED onto the
+        # shared row".  `seed_offsets_table_from_consensus` takes no `pool`
+        # argument, so --seed --pool would drop the pooling with no warning and
+        # write per-detector corrections into rows keyed on
+        # (Visit, Filter, Exposure, Module, Vgroup) -- several landing on one
+        # row and summing, the exact failure --pool exists to prevent.  The
+        # pair is incoherent whatever the run later discovers, so it is
+        # rejected here rather than after a catalog load.
+        p.error("--seed cannot be combined with --pool: the seeder writes rows "
+                "at the granularity of the corrections it is handed, so there "
+                "is nothing yet to pool onto.  Seed first, then re-run with "
+                "--pool to correct the rows it created.")
 
     refcat = load_reference_catalog(args.refcat) if args.refcat else None
 
