@@ -3361,16 +3361,31 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit, obs_token=""):
     return None, False
 
 
-def _m2_exposure_untrustworthy(entry):
-    """Why an m2 exposure entry is NOT a freeze point, or ``None`` when it is.
+# An m2 per-exposure entry that is not a freeze point, and WHY -- plus whether
+# that refusal is itself evidence of a problem.  The two are different questions
+# and _checkpoint_passed already draws exactly this line (#312):
+#
+#   COULD NOT MEASURE -- m2 got no tie it could certify, so the number in the
+#     record measures nothing.  Nothing is being ignored; non-blocking.
+#   MEASURED AND REFUSED -- m2 got a certified number and declined to ACT on it
+#     (a #158 footprint alias, or a magnitude past the per-exposure write
+#     bound).  A number exists and says this exposure may be misaligned; the
+#     checkpoint cannot act on it, so it must not read as a pass.
+M2Refusal = namedtuple("M2Refusal", "reason blocking")
+
+
+def _m2_exposure_untrustworthy(entry, limit=None):
+    """``M2Refusal`` for an m2 exposure entry that is NOT a freeze point, else
+    ``None``.
 
     An m2 per-exposure record carries the measurement m2 made WHETHER OR NOT m2
     believed it.  The write path already knows the difference and says so in the
     record: ``ok`` False (``measure_offset`` did not certify the peak),
     ``unverified`` True (no measurable tie to the visit consensus -- the number
     is the wide-sweep DIAGNOSTIC, and the record's own message ends "recorded,
-    NOT applied"), ``alias_rejected``/``alias_suspect`` True (the #158
-    window-edge / module-antisymmetric footprint geometry).  m2 emits no
+    NOT applied"), ``alias_suspect`` True (the #158/#624 module- or
+    detector-antisymmetric footprint geometry), ``alias_rejected`` True (the
+    #158 window-edge alias ``measure_offset`` itself threw out).  m2 emits no
     correction from any of those.
 
     The frozen-stage reader used to admit them anyway, on ``np.isfinite`` alone,
@@ -3395,32 +3410,65 @@ def _m2_exposure_untrustworthy(entry):
     construction, and ``_assert_correction_magnitudes`` already refuses to WRITE
     one past ``MAX_CORRECTION_ARCSEC``, so a baseline past it is a value m2
     could not have acted on either.
+
+    ``blocking`` separates the two kinds of refusal (see ``M2Refusal`` and
+    ``_checkpoint_passed``).  Dropping a MEASURED-AND-REFUSED entry into the
+    non-blocking bucket would rebuild #312 one level down: w51's July F444W
+    record holds 16 certified ``ok=True`` entries at ~29", and cloudc F410M
+    holds 16 at ~734 mas with contrast 4010-4152 -- the visit whose 8 exposures
+    really do drizzle 4.06" out of place.  Those must reach
+    ``unverified_blocking``, not be waved through as "could not measure".
+    ``alias_suspect`` implies ``ok`` True by construction
+    (``detect_module_antisymmetry`` skips any exposure whose tie is not ``ok``),
+    so it is a certified number m2 declined to apply.
     """
-    reasons = []
+    if limit is None:
+        # Read once per record at the call site in the ordinary path; the
+        # default keeps the function callable on a single entry.
+        limit = _positive_env_float("ASTROM_MAX_CORRECTION_ARCSEC",
+                                    MAX_CORRECTION_ARCSEC)
+    reasons, blocking = [], False
     if entry.get("unverified") is True:
         reasons.append("m2 found no measurable tie to the visit consensus for "
                        "this exposure and recorded a wide-sweep diagnostic it "
                        "did not apply")
-    if entry.get("alias_rejected") is True or entry.get("alias_suspect") is True:
-        reasons.append("m2 rejected this exposure's peak as footprint geometry, "
-                       "not a tie (issue #158 window-edge / "
-                       "module-antisymmetric alias)")
+    if entry.get("alias_rejected") is True:
+        reasons.append("measure_offset threw this exposure's peak out as a "
+                       "window-edge footprint alias, not a tie (issue #158)")
     if entry.get("ok") is False:
         reasons.append("m2 did not certify this exposure's tie (ok=False)")
+    if entry.get("alias_suspect") is True:
+        # MEASURED AND REFUSED: the peak WAS certified; m2 declined to apply it
+        # because the per-module/per-detector pattern is footprint geometry.
+        # m2 files this in `unverified_blocking` at the visit level, so the
+        # frozen-stage mirror of it blocks too.
+        reasons.append("m2 measured this exposure's tie and refused to apply "
+                       "it as module-/detector-ANTISYMMETRIC footprint "
+                       "geometry (issues #158, #624) -- a measured refusal, "
+                       "not an absent measurement")
+        blocking = True
     dra, ddec = entry.get("dra"), entry.get("ddec")
-    limit = _positive_env_float("ASTROM_MAX_CORRECTION_ARCSEC",
-                                MAX_CORRECTION_ARCSEC)
     if dra is not None and ddec is not None \
             and np.isfinite(dra) and np.isfinite(ddec) \
             and max(abs(float(dra)), abs(float(ddec))) / 1000.0 > limit:
+        # max(|dra|,|ddec|), matching _assert_correction_magnitudes' per-axis
+        # test, so this reads the baseline by the same rule that would have
+        # refused to write it (the issue-#626 triage quoted the hypot).
         reasons.append(
             f"the m2 baseline for this exposure is "
             f"({float(dra):+.0f},{float(ddec):+.0f}) mas, outside the "
             f"{limit * 1000.0:.0f} mas per-exposure bound m2 itself applies "
             f"when WRITING a correction, so it is not a freeze point")
+        if entry.get("ok") is not False:
+            # A GROSS number m2 certified and could not write is the loudest
+            # evidence of misalignment there is; it blocks (#312).  A gross
+            # number m2 did not certify measures nothing and does not.
+            blocking = True
     # Report EVERY mechanism that fired, not the first: cloudc's exposures trip
     # three at once, and reading only "ok=False" says nothing about why.
-    return "; ".join(reasons) or None
+    if not reasons:
+        return None
+    return M2Refusal("; ".join(reasons), blocking)
 
 
 def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
@@ -3429,10 +3477,11 @@ def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
 
     ``baselines`` maps exposure-key tuple -> (dra_mas, ddec_mas) of the m2
     per-exposure vs-consensus offset, for the entries m2 CERTIFIED.
-    ``untrustworthy`` maps the remaining keys -> the reason
+    ``untrustworthy`` maps the remaining keys -> the ``M2Refusal``
     ``_m2_exposure_untrustworthy`` gave, so the frozen stage can say which
-    mechanism applied rather than reporting the exposure as simply absent.
-    Both are empty when no m2 record is available.
+    mechanism applied rather than reporting the exposure as simply absent, and
+    can tell a refusal that measured nothing from one that measured a number m2
+    would not act on.  Both are empty when no m2 record is available.
 
     The frozen-stage per-exposure gate is a MOVEMENT check (mirror of
     ``_m2_reference_tie_baseline`` for the consensus->reference tie): an exposure
@@ -3448,13 +3497,24 @@ def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
 
     A movement check needs a value m2 STOOD BEHIND, which is what
     ``_m2_exposure_untrustworthy`` decides.  ``_m2_reference_tie_baseline``
-    already carries that concept for the consensus->reference tie
-    (``apply_ok`` False -> ``m2_rejected``); this is its per-exposure mirror.
+    already carries that CONCEPT for the consensus->reference tie
+    (``apply_ok`` False -> ``m2_rejected``), and this is its per-exposure
+    counterpart -- but not a line-for-line mirror, deliberately.  The sibling
+    KEEPS the refused number, compares against it anyway and prints STABLE when
+    the delta is small ("two measurements of the same quantity agreeing is
+    evidence either way").  It can: the tie is ONE number per visit, so an
+    agreement is informative.  Here the refused numbers are the wide-sweep
+    window-edge ridge, which reproduces exactly because it is set by the
+    FOOTPRINT, not the sky -- cloudc's four exposures agree with each other to
+    <2 mas at 9.858" and are all equally wrong.  Agreement with that is not
+    evidence, so the value is dropped rather than compared.
     """
     out, refused = {}, {}
     path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
         return out, refused
+    limit = _positive_env_float("ASTROM_MAX_CORRECTION_ARCSEC",
+                                MAX_CORRECTION_ARCSEC)
     with open(path) as fh:
         rec = json.load(fh)
     for v in rec.get("visits", []):
@@ -3466,11 +3526,18 @@ def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
             if not (key and dra is not None and ddec is not None
                     and np.isfinite(dra) and np.isfinite(ddec)):
                 continue
-            reason = _m2_exposure_untrustworthy(e)
-            if reason is None:
+            refusal = _m2_exposure_untrustworthy(e, limit=limit)
+            if refusal is None:
                 out[key] = (float(dra), float(ddec))
             else:
-                refused[key] = reason
+                refused[key] = refusal
+    # A key can reach both maps if two matching visit entries carry it (a
+    # duplicate-exposure record).  A certified entry wins: the consumer looks in
+    # `out` first, and a key in both would otherwise be reported as refused in
+    # the record's text while being gated as a real baseline.  State it here
+    # rather than leave it to lookup order.
+    for key in out:
+        refused.pop(key, None)
     return out, refused
 
 
@@ -4025,22 +4092,33 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                   f"{res['off']:.2f} mas is intrinsic scatter)",
                                   flush=True)
                     elif tuple(exp["key"]) in m2_untrusted:
-                        # m2 MEASURED this exposure and REFUSED the result (no
-                        # certified tie / a #158 footprint alias / past the
-                        # per-exposure write bound).  It corrected nothing from
-                        # that number, so there is no frozen value here for a
-                        # later stage to have moved away from -- comparing
-                        # against it manufactures a movement the size of the
-                        # refused measurement (cloudc F182M o002: ~9.8" at
-                        # every frozen stage, issue #626).  Same verdict as the
-                        # m2-skipped case: UNVERIFIED, not STABLE and not a
-                        # measured movement.
-                        unverified.append(
-                            msg + f" [{m2_untrusted[tuple(exp['key'])]}; no"
-                            " frozen baseline exists, so this is its first"
-                            " certified measurement, not a movement]")
-                        print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
-                              f"(m2 baseline refused): {msg}", flush=True)
+                        # m2 refused this exposure's number, so there is no
+                        # frozen value here for a later stage to have moved away
+                        # from -- comparing against it manufactures a movement
+                        # the size of the refused measurement (cloudc F182M
+                        # o002: ~9.8" at every frozen stage, issue #626).  It is
+                        # never a measured MOVEMENT, so never a `failure`.
+                        #
+                        # Which unverified bucket it lands in is the #312
+                        # question, and the two refusal kinds answer it
+                        # differently (see M2Refusal): "m2 could not measure a
+                        # tie" is nothing to act on and stays advisory, while "m2
+                        # measured a tie and refused to APPLY it" is a number
+                        # saying the exposure may be misaligned and must not read
+                        # as a pass.
+                        refusal = m2_untrusted[tuple(exp["key"])]
+                        text = (msg + f" [{refusal.reason}; no frozen baseline"
+                                " exists, so this is its first certified"
+                                " measurement, not a movement]")
+                        if refusal.blocking:
+                            unverified_blocking.append(text)
+                            print(f"ASTROM CHECKPOINT [{stage}] NOT VERIFIED "
+                                  f"(m2 MEASURED and REFUSED this exposure's "
+                                  f"baseline -- blocking): {msg}", flush=True)
+                        else:
+                            print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                                  f"(m2 baseline refused): {msg}", flush=True)
+                        unverified.append(text)
                     elif tuple(exp["key"]) in m2_skipped:
                         # m2 EXCLUDED this exposure from its consensus (too few
                         # reliable stars -- a data-quality defect m2 found and
