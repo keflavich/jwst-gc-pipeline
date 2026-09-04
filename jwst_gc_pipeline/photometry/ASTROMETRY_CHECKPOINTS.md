@@ -142,6 +142,24 @@ its response to a measured offset is to correct the offsets table, stale-tag the
 mosaics, and have its caller stop the run for regeneration. That is a control
 action no later gate can perform, so the deferral does not apply to it.
 
+**The release gate checks that m2's stop was obeyed** (issue #746). It grades no
+m2 verdict -- an m2 record on disk reading `passed: false` is an iteration that
+was stopped and re-run -- but it does read what m2 MEASURED. A newest-m2 record
+still holding corrections at or above the field's floor, with frozen-stage
+records for the same filter written AFTER it, is a chain that went on without
+the regeneration m2 asked for: rc 1, naming the count and the record. The frozen
+stages passing there says nothing, because all they ask is whether the solution
+still matches the m2 freeze, and the freeze is the misaligned thing. In the
+sanctioned flow the frames are regenerated and m2 re-runs, so the newest record
+is the post-regeneration one and carries no corrections; a field that stopped
+and is waiting for regeneration still reads rc 3 (its frozen records predate the
+new m2). The floor is read from the record's own
+`tolerances.correction_floor_mas`, because m2 writes the record BEFORE
+`_floor_actionable_corrections` filters the list -- a field at a standing floor
+(cloudc, sgrc: 8.0 mas) passes with a non-empty `corrections`. The
+consensus->reference tie is exempt from the floor here for the same reason it is
+exempt there.
+
 A typo in the variable enforces at the **stage** — anything that is not exactly
 `release` is read as `stage`, so a misspelling costs a stopped chain rather than
 a shipped misalignment.
