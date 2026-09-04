@@ -1,0 +1,172 @@
+name: merged-tree check
+
+# Issue #249.  `tests.yml` runs when a branch is PUSHED and never again, so a
+# green mark on a pull request describes the branch merged into the `main` of
+# that moment.  When `main` moves, the mark is not recomputed and nothing
+# recomputes it: two branches that are each green, each mergeable, and touch
+# different lines can still produce a `main` that raises (#235 + #243 ->
+# `NameError: name 'pool' is not defined`; #426 + #435 -> 21 failures in
+# `test_stage12_loop_behavior.py`).  Both were found by hand, about an hour
+# late.
+#
+# This workflow re-runs the suite on the merge result every time `main` moves,
+# once per open pull request and once with all of them merged together.  The
+# combined job is the only one of the two that can see an interaction while
+# both branches are still open.
+#
+# THE MERGE IS PERFORMED HERE, not read from `refs/pull/N/merge`:
+#   * GitHub recomputes that ref asynchronously after a push to `main`, so
+#     checking it out can test the very staleness this workflow exists to
+#     catch, while `git merge` against an explicit base SHA cannot;
+#   * `gh run rerun` on the pull request's own run is worse still -- a re-run
+#     reuses the original event's `GITHUB_SHA`, which for a `pull_request` is
+#     the merge commit computed when the run was FIRST triggered, so it
+#     replays the stale merge and reports green on it;
+#   * a conflicting pull request has no merge ref at all, and `gh pr list`
+#     answers `mergeable: UNKNOWN` until GitHub gets round to computing it
+#     (4 of the 5 open pull requests on 2026-09-04), so selecting on
+#     `mergeable == "MERGEABLE"` silently drops most of the population.
+#
+# This reports; it cannot block.  Blocking needs branch protection on `main`
+# with `tests` as a required check -- a repository setting, see the pull
+# request that added this file.
+
+on:
+  push:
+    branches: [main]
+  # so that the pull request which changes this workflow exercises it before
+  # it lands -- a `push: [main]` trigger cannot be run from a branch, and
+  # shipping an untestable CI change is how #374 went wrong
+  pull_request:
+    paths:
+      - .github/workflows/retest-open-prs.yml
+      - .github/actions/pytest-suite/action.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only.  This workflow checks out and runs code from open pull requests,
+# so it must hold nothing worth stealing.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  enumerate:
+    runs-on: ubuntu-latest
+    outputs:
+      prs: ${{ steps.list.outputs.prs }}
+      base_sha: ${{ steps.list.outputs.base_sha }}
+    steps:
+      - id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # on a push to main this is exactly the commit that was pushed; on
+          # any other event resolve the branch instead
+          PUSH_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+        run: |
+          set -euo pipefail
+          base="$PUSH_SHA"
+          if [ -z "$base" ]; then
+            base=$(gh api "repos/$REPO/commits/heads/main" --jq .sha)
+          fi
+          echo "base_sha=$base" >> "$GITHUB_OUTPUT"
+
+          # every open pull request, including drafts and conflicting ones:
+          # a conflicting merge is reported as such by the job below rather
+          # than being filtered out here, where it would go unrecorded
+          prs=$(gh pr list -R "$REPO" --state open --limit 100 \
+                  --json number --jq '[.[] | .number] | sort')
+          echo "prs=$prs" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## merged-tree check"
+            echo
+            echo "base: \`$base\`"
+            echo
+            echo "open pull requests: \`$prs\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  per-pr:
+    needs: enumerate
+    if: needs.enumerate.outputs.prs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        pr: ${{ fromJson(needs.enumerate.outputs.prs) }}
+    name: "PR #${{ matrix.pr }} merged into main"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.enumerate.outputs.base_sha }}
+          fetch-depth: 0
+
+      - id: merge
+        name: Merge PR #${{ matrix.pr }} onto the base
+        env:
+          PR: ${{ matrix.pr }}
+          BASE: ${{ needs.enumerate.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          git config user.name  "merged-tree check"
+          git config user.email "merged-tree-check@invalid"
+          git fetch --no-tags origin "refs/pull/$PR/head:refs/remotes/pr/$PR"
+          git checkout --detach "$BASE"
+          # a conflict is information, not a failure of this job: GitHub will
+          # not merge a conflicting pull request either way, and resolving it
+          # by hand re-runs the suite anyway
+          if git merge --no-edit --no-ff "refs/remotes/pr/$PR"; then
+            echo "status=merged" >> "$GITHUB_OUTPUT"
+            echo "- #$PR: merged onto \`$BASE\`, running the suite" >> "$GITHUB_STEP_SUMMARY"
+          else
+            git merge --abort
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            echo "- #$PR: CONFLICTS with \`$BASE\`; not tested, needs a hand merge" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # the suite's exit status is this job's exit status
+      - if: steps.merge.outputs.status == 'merged'
+        uses: ./.github/actions/pytest-suite
+
+  all-together:
+    needs: enumerate
+    if: needs.enumerate.outputs.prs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    name: "every open PR merged together"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.enumerate.outputs.base_sha }}
+          fetch-depth: 0
+
+      - name: Merge every open PR onto the base
+        env:
+          PRS: ${{ needs.enumerate.outputs.prs }}
+          BASE: ${{ needs.enumerate.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          git config user.name  "merged-tree check"
+          git config user.email "merged-tree-check@invalid"
+          git checkout --detach "$BASE"
+          echo "### every open PR merged together" >> "$GITHUB_STEP_SUMMARY"
+          for n in $(echo "$PRS" | jq -r '.[]'); do
+            git fetch --no-tags origin "refs/pull/$n/head:refs/remotes/pr/$n"
+            if git merge --no-edit --no-ff "refs/remotes/pr/$n"; then
+              echo "- #$n: merged" >> "$GITHUB_STEP_SUMMARY"
+            else
+              git merge --abort
+              echo "- #$n: CONFLICT, left out of this tree" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "tree under test: \`$(git rev-parse HEAD)\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # the suite's exit status is this job's exit status
+      - uses: ./.github/actions/pytest-suite

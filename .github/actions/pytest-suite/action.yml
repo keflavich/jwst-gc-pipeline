@@ -1,0 +1,45 @@
+name: pytest suite
+description: >-
+  Install the package and run the unit-test suite against whatever tree is
+  already checked out.  Factored out of tests.yml so that the merged-tree
+  check (retest-open-prs.yml) runs the SAME environment and the SAME pytest
+  invocation, instead of a second copy that can drift away from it.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: pip
+
+    - name: Install package + test deps
+      shell: bash
+      env:
+        # the repo tag style (v1.0-2026.06) is unparseable by setuptools_scm;
+        # CI does not need a real version.  MUST be package-scoped: the
+        # unscoped variable leaks into every scm-built sdist in the same
+        # pip run (it broke dust_extinction's build).
+        SETUPTOOLS_SCM_PRETEND_VERSION_FOR_JWST_GC_PIPELINE: 0.0.dev0
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[test]
+
+    - name: Run test suite (local-survey-data tests auto-skip)
+      shell: bash
+      env:
+        # CRDS is never contacted by the unit tests, but imports want the vars
+        CRDS_PATH: ${{ runner.temp }}/crds
+        CRDS_SERVER_URL: https://jwst-crds.stsci.edu
+        # saturated_star_finding refuses to import without STPSF_PATH; the
+        # unit tests never compute a PSF, so an empty dir satisfies it
+        STPSF_PATH: ${{ runner.temp }}/stpsf-data
+        WEBBPSF_PATH: ${{ runner.temp }}/stpsf-data
+        MPLBACKEND: Agg
+      # pytest's exit status is the step's exit status.  Do not wrap this in a
+      # conditional, a `|| true`, or a grep over its output: PR #374 reported
+      # green on a tree that could not import because it discarded the exit
+      # code and looked for "ERROR" lines that `-rf` never prints.
+      run: |
+        mkdir -p "$STPSF_PATH"
+        pytest jwst_gc_pipeline tests -q -rs --color=yes
