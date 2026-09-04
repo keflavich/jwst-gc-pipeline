@@ -217,17 +217,19 @@ def test_readme_says_image_only_when_no_catalogs(tmp_path):
 # ---- staging guards ----
 def test_image_only_fields_declare_skip_catalogs():
     """An image-only field's status must not depend on the operator remembering
-    --images-only: sgra's uncertified catalogs include the held F115W band.
+    --images-only: ngc6334 is private and image-only by design, and the three
+    globulars are public image-only releases.
 
-    arches, quintuplet and sickle were on this list while their catalogs were
-    uncertified and have since left it -- each now ships catalogs, so declaring
-    `skip_catalogs` would suppress them.  They are asserted the other way below,
-    which is what keeps the removal deliberate rather than a silent drop.
+    arches, quintuplet, sickle and sgra were on the first list while their
+    catalogs were uncertified and have since left it -- each now ships catalogs,
+    so declaring `skip_catalogs` would suppress them.  They are asserted the
+    other way below, which is what keeps the removal deliberate rather than a
+    silent drop.
     """
     sr = _sr()
-    for field in ('sgra',):
+    for field in ('ngc6334', 'm4', 'm92', 'ngc6397'):
         assert sr.FIELDS[field].get('skip_catalogs') is True, field
-    for field in ('arches', 'quintuplet', 'sickle'):
+    for field in ('arches', 'quintuplet', 'sickle', 'sgra'):
         assert sr.FIELDS[field].get('skip_catalogs') is not True, field
 
 

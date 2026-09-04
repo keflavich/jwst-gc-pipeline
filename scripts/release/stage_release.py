@@ -192,18 +192,24 @@ FIELDS = {
             {"filter": "F323N", "src": "/orange/adamginsburg/jwst/quintuplet/F323N/pipeline/jw02045-o003_t001_nircam_clear-f323n-nrcb_i2d.fits"},
         ],
     },
-    # sgra: Sgr A* (JWST 1939). Image-only: F212N + F405N mosaics are current;
+    # sgra: Sgr A* (JWST 1939). Ships catalogs.  It carried `skip_catalogs` while
     # F115W's mosaics were stale-tagged (*_im0_badastrom) by the m2 astrometry
-    # checkpoint on 2026-07-28 when it corrected the offsets table, so that band
-    # is held until it is re-drizzled. Catalogs are not certified yet.
-    # `skip_catalogs` is what ENFORCES that: without it, a re-stage that forgets
-    # `--images-only` would publish six catalogs including the F115W one, built
-    # against the offsets that same checkpoint corrected by 32-55 mas -- a
-    # catalog with no image beside it, on a superseded solution.
+    # checkpoint on 2026-07-28 -- the field was then ~14.8" off for want of an
+    # ALIGNMENT_CONFIG entry -- so the flag held back a catalog built on a
+    # solution that same checkpoint superseded.  Both premises have since
+    # expired: all three bands were re-drizzled 2026-08-27 (the *_im0_badastrom
+    # copies beside them are the older quarantine), the chain finished
+    # 2026-08-31 00:32, and the field now ties at 7.5-9.9 mas same-star in every
+    # filter with check_astrometry_checkpoints, registration_failsafes and
+    # check_interframe_overlap all exiting 0 (#602).
+    #
+    # No `catalog_modules` key: sgra's modules are disjoint, but it drizzles and
+    # catalogs `merged` as well, so the default ["merged"] is what matches the
+    # merged mosaics this field ships.  Per-module tables would ship two
+    # non-overlapping halves with no image beside either.
     "sgra": {
         "data_dir": Path("/orange/adamginsburg/jwst/sgra"),
         "proposal_prefix": "jw01939-o001_t001_nircam_clear",
-        "skip_catalogs": True,
     },
     "brick": {
         "data_dir": Path("/orange/adamginsburg/jwst/brick"),
