@@ -42,6 +42,11 @@ per-exposure + reference multi-check, sweep-aware) and
 no sweep, so **it cannot detect a >2.5″ overlap offset** (zero pairs → "can't verify",
 not FAIL). Until it is given a sweep / wide window, a passing `registration_failsafes`
 is **not sufficient** — the swept per-visit/overlap check above must also pass.
+Since #588 it also declines to **grade** a cell whose peak lands beyond half that
+window (`WINDOW_EDGE_FRAC = 0.5`, i.e. > 1250 mas): with no true pair inside 2.5″ the
+arg-max is the disk's own wrong-pair background, which rides the rim, so the cell is
+reported as `n_window_edge` / `window_edge_cells` instead of failed. Its graded band
+is 60–1250 mas; above that the gate is `check_interframe_overlap.py --scan`.
 
 ### What `registration_failsafes --scan` gates, per module geometry
 
