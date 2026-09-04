@@ -111,14 +111,7 @@ def test_the_two_unmapped_disjoint_fields_are_unmapped_for_different_reasons():
     for field in ('gc2211', 'sgra'):
         assert field not in stage.OVERLAP_ARBITER_REFCAT
         assert field not in stage.FRAME_REFCAT
-        # Asserted on the REGISTRIES, which is what this block decides.  Both
-        # fields may still reach the generated fallback -- their own merged
-        # photometry -- and that does not undo either reason: the fallback is
-        # barred from the absolute-frame arm by provenance, so it cannot fail
-        # gc2211 on a reference that does not see o028, and sgra produces no
-        # overlapping pairs for any arbiter to be reached by.
-        assert stage.overlap_arbiter_refcat(field) in (
-            None, stage.internal_arbiter_refcat(field))
+        assert stage.overlap_arbiter_refcat(field) is None
 
     import pathlib as _p
     src = _p.Path(stage.__file__).read_text()

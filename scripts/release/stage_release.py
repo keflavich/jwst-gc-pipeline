@@ -1119,6 +1119,15 @@ FRAME_REFCAT = {
 #   (191,462 rows, against brick's 115,032 and arches/quintuplet's ~177,800)
 #   sitting unused, so "why is sgra not mapped?" is the obvious question and its
 #   answer is not gc2211's.
+#
+# All three still resolve `internal_arbiter_refcat` -- their own merged
+# photometry -- and that undoes none of the three reasons above.  It goes into a
+# DIFFERENT slot (`--fallback-refcat`, reached only by a pair the registered list
+# left unsettled, never used for the absolute frame, not even opened while no
+# pair is open), so: gc2211 cannot be failed on a reference that does not see
+# o028, cloudef cannot be asserted onto a frame it does not sit on, and sgra --
+# which produces no overlapping pairs at all -- never reaches an arbiter of
+# either kind and pays nothing for having one available.
 
 # ---------------------------------------------------------------------------
 # The star list the OVERLAP gate uses to arbitrate a pair it cannot measure
@@ -1176,11 +1185,13 @@ INTERNAL_ARBITER_CATALOGS = (
 def internal_arbiter_refcat(field):
     """The field's own merged catalogue, or ``None`` -- the arbiter of last resort.
 
-    Registered lists run out before the pairs do.  w51's F187N inter-module
-    pair reaches 15 common same-star matches against its 9,454-row Gaia list
-    and needs 20, so the gate reports "could not verify" and the field cannot
-    stage; the same pair reaches 571 matches at worst 4 mas / inter-frame 2 mas
-    against a reference built from w51's own m8 merge, which is 6x denser
+    Passed to the gate as ``--fallback-refcat``, a slot that is reached ONLY by
+    a pair the registered list left unsettled and is never used for the
+    absolute-frame arm.  Registered lists run out before the pairs do: w51's
+    F187N inter-module pair reaches 15 common same-star matches against its
+    9,454-row Gaia list and needs 20, so the gate reports "could not verify"
+    and the field cannot stage; the same pair reaches 624 matches at worst
+    4 mas / inter-frame 1 mas against a reference built from w51's own m8 merge
     (issue #263).  wd1 has five deferred F200W pairs and no registered list at
     all.
 
@@ -1193,10 +1204,12 @@ def internal_arbiter_refcat(field):
 
     That reasoning holds for a PAIR and fails for the ABSOLUTE frame, where the
     reference does not cancel and a field measured against its own catalogue
-    agrees by construction.  ``check_interframe_overlap._refcat`` therefore
-    marks this list internal and ``_may_gate_absolute_frame`` bars it from the
-    absolute-frame arm by provenance -- the density floor would not: an
-    internal list carries ~57,000 stars against a floor of 1000.
+    agrees by construction.  Keeping the two slots separate is the first line
+    of that separation; ``check_interframe_overlap._refcat`` marking the list
+    internal and ``_may_gate_absolute_frame`` barring it by provenance is the
+    second, for a list handed to ``--refcat`` by hand -- the density floor
+    would not stop it, an internal list carrying ~57,000 stars against a floor
+    of 1000.
     """
     cfg = FIELDS.get(field)
     if not cfg:
@@ -1210,21 +1223,20 @@ def internal_arbiter_refcat(field):
 
 
 def overlap_arbiter_refcat(field):
-    """The star list to arbitrate an unmeasurable overlap pair, or ``None``.
+    """The REGISTERED star list to arbitrate an unmeasurable overlap pair.
 
-    Prefers the field's own arbiter entry, then its absolute-frame catalogue
-    (denser, and it works for this too), then the field's own merged photometry.
-    The last is generated from the field's layout rather than registered, so a
-    field needs no entry in either dict to get an arbiter -- which is also why
-    it comes last: a registered EXTERNAL list is independent evidence and an
-    internal one is not, so the internal list is reached only where nothing
-    else can arbitrate the pair at all.
+    Prefers the field's own arbiter entry; falls back to its absolute-frame
+    catalogue, which is denser and works for this too.  ``None`` when neither
+    registry names the field -- the field's own merged photometry is NOT
+    returned here: it is a separate, weaker slot
+    (``internal_arbiter_refcat``), because this value is also what the gate
+    measures the ABSOLUTE frame against.
     """
     for source in (OVERLAP_ARBITER_REFCAT, FRAME_REFCAT):
         path = source.get(field)
         if path and os.path.exists(path):
             return path
-    return internal_arbiter_refcat(field)
+    return None
 
 
 
@@ -3144,15 +3156,12 @@ def main(argv=None):
         # residual map vs VIRAC2 is the authoritative arbiter (fail-closed still
         # applies if the refcat is missing).
         overlap_refcat = overlap_arbiter_refcat(args.field)
+        overlap_fallback = internal_arbiter_refcat(args.field)
         if overlap_refcat:
             overlap_cmd += ["--refcat", overlap_refcat]
-            if overlap_refcat == internal_arbiter_refcat(args.field):
-                print(f"  overlap arbiter for '{args.field}' is the field's own "
-                      f"merged photometry ({os.path.basename(overlap_refcat)}): "
-                      f"no registered star list covers it.  It tie-breaks pairs, "
-                      f"where it cancels out of the two groups' difference, and "
-                      f"is barred from the absolute-frame arm.", flush=True)
-        else:
+        if overlap_fallback:
+            overlap_cmd += ["--fallback-refcat", overlap_fallback]
+        if not overlap_refcat and not overlap_fallback:
             # Said BEFORE the gate runs, because the consequence is a refusal
             # further down that names the pair rather than the missing list.
             print(f"  no overlap arbiter star list for '{args.field}' "
@@ -3160,6 +3169,18 @@ def main(argv=None):
                   f"catalogue on disk) -- any pair whose "
                   f"footprints overlap too thinly to compare frame-against-frame "
                   f"will stay unmeasurable and block staging", flush=True)
+        elif overlap_fallback:
+            # The two slots do different jobs and only one of them can refuse
+            # the field, so say which list is in which.
+            print(f"  overlap arbiter for '{args.field}': "
+                  + (f"{os.path.basename(overlap_refcat)} (registered), with "
+                     if overlap_refcat else "no registered list, so ")
+                  + f"{os.path.basename(overlap_fallback)} -- this field's own "
+                    f"merged photometry -- as the last resort for a pair that "
+                    f"list cannot settle.  The last-resort list tie-breaks "
+                    f"pairs, where it cancels out of the two groups' "
+                    f"difference; it is never used for the absolute frame and "
+                    f"is not opened unless a pair is left open.", flush=True)
         # PER INSTRUMENT: see `gate_by_instrument`.
         items, withheld, refusal = gate_by_instrument(
             args.field, items,

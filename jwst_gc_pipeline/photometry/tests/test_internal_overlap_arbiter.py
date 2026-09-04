@@ -58,7 +58,7 @@ def _write_external(path, coords):
 # Which list is reached, and in what order
 # ---------------------------------------------------------------------------
 
-def test_a_field_no_registry_names_falls_back_to_its_own_merged_catalogue(
+def test_a_field_resolves_its_own_merged_catalogue_as_the_last_resort(
         tmp_path, monkeypatch):
     """Without this, w51 stays blocked on a pair 5 reference stars short and
     wd1 cannot stage at all -- the registries have no entry that would help."""
@@ -68,7 +68,10 @@ def test_a_field_no_registry_names_falls_back_to_its_own_merged_catalogue(
     merged.write_text('')
     monkeypatch.setitem(stage.FIELDS, 'fakefield', {'data_dir': tmp_path})
     assert stage.internal_arbiter_refcat('fakefield') == str(merged)
-    assert stage.overlap_arbiter_refcat('fakefield') == str(merged)
+    # NOT through `overlap_arbiter_refcat`: that value is also what the gate
+    # measures the ABSOLUTE frame against, and the whole point of the internal
+    # list is that it may not speak there.
+    assert stage.overlap_arbiter_refcat('fakefield') is None
 
 
 def test_an_older_merge_stage_is_used_when_the_newest_is_absent(tmp_path,
@@ -83,9 +86,9 @@ def test_an_older_merge_stage_is_used_when_the_newest_is_absent(tmp_path,
     assert stage.internal_arbiter_refcat('fakefield') == str(older)
 
 
-def test_a_registered_external_list_still_wins(tmp_path, monkeypatch):
+def test_a_registered_external_list_keeps_the_refcat_slot(tmp_path, monkeypatch):
     """An external list is independent evidence and an internal one is not, so
-    the internal list is reached only where nothing else can arbitrate."""
+    the registered list keeps the slot that can also fail the field."""
     catdir = tmp_path / 'catalogs'
     catdir.mkdir()
     (catdir / stage.INTERNAL_ARBITER_CATALOGS[0]).write_text('')
@@ -95,6 +98,28 @@ def test_a_registered_external_list_still_wins(tmp_path, monkeypatch):
     monkeypatch.setitem(stage.OVERLAP_ARBITER_REFCAT, 'fakefield',
                         str(registered))
     assert stage.overlap_arbiter_refcat('fakefield') == str(registered)
+    # ...and the internal list is STILL resolved, because the registered list
+    # is exactly what runs short on w51.  A fallback that fired only where no
+    # list is registered would never reach the field it was written for.
+    assert stage.internal_arbiter_refcat('fakefield') == str(
+        catdir / stage.INTERNAL_ARBITER_CATALOGS[0])
+
+
+def test_w51_gets_the_last_resort_list_despite_having_a_registered_one():
+    """The field this exists for HAS an `OVERLAP_ARBITER_REFCAT` entry.
+
+    Its Gaia list is what gets the F187N inter-module pair to 15 common
+    same-star matches against a floor of 20.  Resolving the fallback only for a
+    field absent from both registries would leave w51 exactly where it was.
+    """
+    if 'w51' not in stage.FIELDS:                             # pragma: no cover
+        pytest.skip('w51 not configured on this host')
+    assert 'w51' in stage.OVERLAP_ARBITER_REFCAT
+    internal = stage.internal_arbiter_refcat('w51')
+    if internal is None:                                      # pragma: no cover
+        pytest.skip("w51's merged catalogue is not on this host")
+    assert internal != stage.overlap_arbiter_refcat('w51')
+    assert Path(internal).name in stage.INTERNAL_ARBITER_CATALOGS
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +280,11 @@ def _sliver_pair(seam_mas=0.0, seed=31, n=9000, sliver_arcsec=7.2):
 @pytest.mark.parametrize('seam_mas,expect_pass', [(0.0, True), (500.0, False)])
 def test_the_internal_list_arbitrates_the_pair_it_was_added_for(
         tmp_path, monkeypatch, seam_mas, expect_pass):
-    """Both directions, because a fallback that only ever says "clean" is worse
-    than none: a registered pair with a 500 mas seam inside the sliver must
-    still be refused by the same list that clears the aligned one.
+    """Through the REAL slot -- `fallback_refcat`, with no `refcat` at all.
+
+    Both directions, because a fallback that only ever says "clean" is worse
+    than none: a pair with a 500 mas seam inside the sliver must still be
+    refused by the same list that clears the aligned one.
     """
     pooled, ref = _sliver_pair(seam_mas=seam_mas)
     path = _write_internal(tmp_path / 'merged.fits', ref)
@@ -265,12 +292,81 @@ def test_the_internal_list_arbitrates_the_pair_it_was_added_for(
                         lambda f, filt, observations=None:
                         (pooled, {k: len(v) for k, v in pooled.items()}, 64))
     monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
-    r = cio.check_filter('w51', 'F187N', refcat=path, verbose=False)
+    r = cio.check_filter('w51', 'F187N', fallback_refcat=path, verbose=False)
     assert r['n_overlapping'] == 1
     assert r['PASS'] is expect_pass
     if expect_pass:
         assert r['could_not_verify'] is False, (
             'the pair the fallback exists for was still not arbitrated')
+
+
+def test_the_last_resort_runs_when_a_registered_list_left_the_pair_open(
+        tmp_path, monkeypatch):
+    """w51's shape: a registered list IS passed, and it cannot settle the pair.
+
+    The registered list here holds five stars inside the sliver, so the
+    pair-scoped arbiter runs on it and comes back could-not-verify -- which is
+    w51/F187N at 15 matches against a floor of 20.  The last-resort list then
+    settles it.  A fallback keyed on "no registered list" would not fire at
+    all, and this is the field the change was written for.
+    """
+    pooled, ref = _sliver_pair(seam_mas=0.0)
+    dec0, half = -28.7, 7.2 / 2.0 / 3600.0
+    outside = np.abs(ref.dec.deg - dec0) > half
+    rng = np.random.default_rng(11)
+    sparse = np.concatenate([np.where(outside)[0],
+                             rng.choice(np.where(~outside)[0], size=5,
+                                        replace=False)])
+    registered = _write_external(tmp_path / 'gaia.fits', ref[sparse])
+    internal = _write_internal(tmp_path / 'merged.fits', ref)
+    monkeypatch.setattr(cio, 'build_groups',
+                        lambda f, filt, observations=None:
+                        (pooled, {k: len(v) for k, v in pooled.items()}, 64))
+    monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
+
+    blocked = cio.check_filter('w51', 'F187N', refcat=registered, verbose=False)
+    assert blocked['could_not_verify'] is True, (
+        'the fixture no longer reproduces a pair the registered list cannot '
+        'settle, so it cannot show the fallback firing for one')
+
+    r = cio.check_filter('w51', 'F187N', refcat=registered,
+                         fallback_refcat=internal, verbose=False)
+    assert r['could_not_verify'] is False
+    assert r['PASS'] is True
+    assert r['pairs'][0]['ext_pair_fallback']['clean'] is True
+
+
+def test_the_last_resort_list_is_not_opened_when_no_pair_needs_it(
+        tmp_path, monkeypatch):
+    """Cost, and it is the reason this is a separate slot.
+
+    The `--refcat` slot runs a field-wide same-star residual map over every
+    band; on sgra F405N that peaks at ~20 GB over an hour and cannot change a
+    verdict, because sgra produces no overlapping pairs in any band.  Eight
+    fields resolve a merged catalogue, so a default that put it in that slot
+    would bill all of them.  Nothing here may touch the file.
+    """
+    pooled, ref = _one_pointing_off_the_reference()      # disjoint: no pairs
+    path = _write_internal(tmp_path / 'merged.fits', ref)
+    monkeypatch.setattr(cio, 'build_groups',
+                        lambda f, filt, observations=None:
+                        (pooled, {k: len(v) for k, v in pooled.items()}, 8))
+    opened = []
+    real_refcat = cio._refcat
+    monkeypatch.setattr(
+        cio, '_refcat',
+        lambda p: (opened.append(p), real_refcat(p))[1])
+
+    r = cio.check_filter('sgra', 'F405N', fallback_refcat=path, verbose=False)
+    assert r['n_overlapping'] == 0
+    assert opened == [], (
+        'the last-resort star list was read although no pair was left open -- '
+        'this is what costs sgra an hour and ~20 GB per band for a verdict it '
+        'cannot change'
+    )
+    # ...and it did not quietly gate the field on the absolute frame either:
+    # the same fixture DOES fail on an external list in the `--refcat` slot.
+    assert r['ext_fail'] is False
 
 
 def test_a_deferred_pair_is_not_cleared_by_an_internal_field_wide_map(
@@ -294,8 +390,35 @@ def test_a_deferred_pair_is_not_cleared_by_an_internal_field_wide_map(
                         lambda f, filt, observations=None:
                         (pooled, {k: len(v) for k, v in pooled.items()}, 64))
     monkeypatch.setenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', '1')
+    # passed to `refcat` deliberately: this pins the second line of the bar,
+    # for a list handed to that slot by hand rather than through the wiring.
     r = cio.check_filter('w51', 'F187N', refcat=path, verbose=False)
     assert r['PASS'] is False, (
         'a pair nothing could arbitrate in its own footprint was cleared by a '
         'field-wide map against the field\'s own catalogue, which reads clean '
         'whatever the field does')
+
+
+# ---------------------------------------------------------------------------
+# A refcat this gate cannot read is a crash inside a BLOCKING gate
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('writer,expect_internal', [
+    (_write_internal, True),
+    (_write_external, False),
+])
+def test_a_non_fits_star_list_is_still_read(tmp_path, writer, expect_internal):
+    """`_internal_positions` opens the file with `fits.open` to read two
+    columns out of a very wide table, and `--refcat` is an operator-supplied
+    path.  wd1's catalogs directory holds a 488 MB `..._m7.ecsv` beside its
+    FITS twin; handed to the gate it died with `OSError: No SIMPLE card found`
+    before `Table.read` was ever reached.  Both provenances must survive the
+    format.
+    """
+    sc = SkyCoord(np.linspace(266.5, 266.51, 50) * u.deg,
+                  np.linspace(-28.7, -28.69, 50) * u.deg)
+    path = writer(tmp_path / 'ref.ecsv', sc)
+    rc, _gaia, _label, internal = cio._refcat(path)
+    assert internal is expect_internal
+    assert len(rc) == 50
+    assert float(np.max(rc.separation(sc).mas)) < 1.0

@@ -137,13 +137,20 @@ or the `ALLOW_*` overrides without a written justification.
   columns) is barred whatever its density, because a field measured against a
   catalogue built from that same field agrees by construction. Read the check's
   log line for the catalogue it names rather than assuming VIRAC2.
-- **A field in neither registry falls back to its own merged photometry**
-  (`internal_arbiter_refcat`, `basic_merged_indivexp_photometry_tables_merged_resbgsub_m8.fits`
-  then `…_m7.fits`) to tie-break an overlap. That is legitimate for a tie-break
-  and only there: the arbiter differences the two groups' residuals star by
-  star, so the reference cancels exactly and only its density inside the overlap
-  footprint matters. w51's F187N inter-module pair reaches 15 matches against
-  its Gaia list (floor 20) and 571 at worst 4 mas against its own m8.
+- **A pair no registered list can settle falls back to the field's own merged
+  photometry** — `internal_arbiter_refcat`, passed as `--fallback-refcat`
+  (`basic_merged_indivexp_photometry_tables_merged_resbgsub_m8.fits`, then
+  `…_m7.fits`). It is a **second, weaker slot**, not a `--refcat` default:
+  - reached only by a pair `--refcat` left unsettled, so a field whose
+    registered list runs short (w51) gets it too, and a field with no
+    overlapping pairs at all (sgra) never opens it and pays nothing;
+  - scoped to that pair's own overlap footprint, never to the absolute-frame
+    arm. That is what makes it legitimate: the arbiter differences the two
+    groups' residuals star by star, so the reference cancels exactly and only
+    its density inside the footprint matters, while a field measured against a
+    catalogue built from that same field would agree by construction.
+  w51's F187N inter-module pair reaches 15 matches against its Gaia list (floor
+  20), and 624 at worst 4 mas / inter-frame 1 mas against its own m8.
 
 ## 1b. Astrometric frame + epoch declaration (BLOCKING)
 
