@@ -515,6 +515,16 @@ def test_frozen_stage_movement_survives_the_alias_guard(tmp_path, monkeypatch):
     frozen branch as well as the correction branch was the one way an
     antisymmetric visit could move after the freeze and still report no
     failure.
+
+    Since #669 the frozen stage spells that outcome differently, and the
+    difference is the point of that issue: m2 MEASURED these exposures and
+    REFUSED to apply the tie, so no frozen baseline was ever written for them.
+    m4 therefore has nothing to take a delta against, and reports each exposure
+    as its FIRST certified measurement -- blocking-unverified rather than
+    ``MOVED``.  What this test guards is unchanged and is asserted on the
+    property rather than the wording: the visit does not pass, and every one of
+    the four exposures is named on a blocking list.  A suppression that let the
+    antisymmetric set out of both lists is what would break it.
     """
     monkeypatch.setenv("ASTROM_CHECKPOINT_ENFORCE", "release")
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
@@ -527,6 +537,9 @@ def test_frozen_stage_movement_survives_the_alias_guard(tmp_path, monkeypatch):
     m4 = run_visit_checkpoint(_split_visit(300.0), "m4", filtername="F212N",
                               record_dir=str(tmp_path), context="test")
     assert m4["visits"][0]["module_antisymmetry"]["detected"], m4
-    moved = [f for f in m4["failures"] if "MOVED" in f]
-    assert len(moved) == 4, m4["failures"]
+    blocking = list(m4["failures"]) + list(m4.get("unverified_blocking") or [])
+    named = [e for e in ("nrca1", "nrcb1")
+             for v in (1, 2)
+             if any(f"'{v}', '{e}'" in b or f"{v}, '{e}'" in b for b in blocking)]
+    assert len(named) == 4, blocking
     assert m4["passed"] is False, m4
