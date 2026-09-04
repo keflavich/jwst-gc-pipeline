@@ -1,9 +1,19 @@
 name: pytest suite
 description: >-
-  Install the package and run the unit-test suite against whatever tree is
-  already checked out.  Factored out of tests.yml so that the merged-tree
-  check (retest-open-prs.yml) runs the SAME environment and the SAME pytest
+  Install the package and run the unit-test suite against a checked-out tree.
+  Factored out of tests.yml so that the merged-tree check
+  (retest-open-prs.yml) runs the SAME environment and the SAME pytest
   invocation, instead of a second copy that can drift away from it.
+
+inputs:
+  path:
+    description: >-
+      Directory holding the tree to test, relative to the workspace.  The
+      merged-tree check builds its merge in a subdirectory so that this
+      definition is read from the workflow's own ref rather than from the
+      pull request being judged by it.
+    required: false
+    default: '.'
 
 runs:
   using: composite
@@ -15,6 +25,7 @@ runs:
 
     - name: Install package + test deps
       shell: bash
+      working-directory: ${{ inputs.path }}
       env:
         # the repo tag style (v1.0-2026.06) is unparseable by setuptools_scm;
         # CI does not need a real version.  MUST be package-scoped: the
@@ -27,6 +38,7 @@ runs:
 
     - name: Run test suite (local-survey-data tests auto-skip)
       shell: bash
+      working-directory: ${{ inputs.path }}
       env:
         # CRDS is never contacted by the unit tests, but imports want the vars
         CRDS_PATH: ${{ runner.temp }}/crds

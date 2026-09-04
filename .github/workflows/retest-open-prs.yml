@@ -102,13 +102,22 @@ jobs:
         pr: ${{ fromJson(needs.enumerate.outputs.prs) }}
     name: "PR #${{ matrix.pr }} merged into main"
     steps:
+      # the workspace root holds THIS workflow's ref, which is where the
+      # suite definition below is read from; the tree under test is built in
+      # `merged/`.  Keeping the two apart means the pull request being judged
+      # does not supply the thing judging it, and it is also the only way the
+      # check can run before the composite action reaches `main`.
+      - uses: actions/checkout@v4
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.enumerate.outputs.base_sha }}
           fetch-depth: 0
+          path: merged
 
       - id: merge
         name: Merge PR #${{ matrix.pr }} onto the base
+        working-directory: merged
         env:
           PR: ${{ matrix.pr }}
           BASE: ${{ needs.enumerate.outputs.base_sha }}
@@ -133,6 +142,8 @@ jobs:
       # the suite's exit status is this job's exit status
       - if: steps.merge.outputs.status == 'merged'
         uses: ./.github/actions/pytest-suite
+        with:
+          path: merged
 
   all-together:
     needs: enumerate
@@ -141,12 +152,18 @@ jobs:
     timeout-minutes: 90
     name: "every open PR merged together"
     steps:
+      # as above: suite definition from this workflow's ref, tree under test
+      # in `merged/`
+      - uses: actions/checkout@v4
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.enumerate.outputs.base_sha }}
           fetch-depth: 0
+          path: merged
 
       - name: Merge every open PR onto the base
+        working-directory: merged
         env:
           PRS: ${{ needs.enumerate.outputs.prs }}
           BASE: ${{ needs.enumerate.outputs.base_sha }}
@@ -170,3 +187,5 @@ jobs:
 
       # the suite's exit status is this job's exit status
       - uses: ./.github/actions/pytest-suite
+        with:
+          path: merged

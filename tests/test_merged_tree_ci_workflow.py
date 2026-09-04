@@ -164,3 +164,46 @@ def test_the_combined_tree_is_tested_too():
         'expected a job that merges every open pull request together: it is '
         'the only arrangement that sees a two-branch interaction while both '
         'are still open (#235 + #243, #426 + #435)')
+
+
+def test_the_suite_definition_is_not_taken_from_the_tree_under_test():
+    """The merged tree must be built in a subdirectory, not over the workspace.
+
+    The first run of this workflow failed on every mergeable pull request with
+    ``Can't find 'action.yml' ... under .github/actions/pytest-suite``: the
+    merge is built from ``main``, and ``main`` does not carry a definition that
+    has not landed yet.  Checking the base out over the workspace root also
+    hands the pull request under test the composite action that judges it.
+    Both are fixed by checking the workflow's own ref out at the root and the
+    merged tree into ``merged/``.
+    """
+    wf = _load(MERGED_TREE)
+    for name, job in wf['jobs'].items():
+        steps = _steps(job)
+        checkouts = [s for s in steps
+                     if str(s.get('uses', '')).startswith('actions/checkout')]
+        suite = [s for s in steps
+                 if s.get('uses') == './.github/actions/pytest-suite']
+        if not suite:
+            continue
+        assert len(checkouts) == 2, (
+            f'{name}: expected two checkouts -- this workflow ref at the root '
+            'for the suite definition, and the base into a subdirectory')
+        root, tree = checkouts
+        assert 'path' not in (root.get('with') or {}), (
+            f'{name}: the first checkout must land at the workspace root, '
+            'where `uses: ./.github/actions/pytest-suite` resolves')
+        assert 'ref' not in (root.get('with') or {}), (
+            f'{name}: the first checkout must take the default ref, i.e. the '
+            'commit this workflow is running from')
+        path = (tree.get('with') or {}).get('path')
+        assert path, (
+            f'{name}: the base checkout must use `path:` so it does not '
+            'overwrite the suite definition')
+        assert (suite[0].get('with') or {}).get('path') == path, (
+            f'{name}: the suite must be pointed at {path!r}, otherwise it '
+            'tests the workflow ref instead of the merged tree')
+        for step in steps:
+            if 'git merge' in (step.get('run') or ''):
+                assert step.get('working-directory') == path, (
+                    f'{name}: the merge must happen inside {path!r}')
