@@ -49,6 +49,11 @@ candidate, and :func:`plan` applies it to every match:
 3. anything younger than ``min_age_days``.
 4. anything under a caller-supplied protect glob.
 
+The Guard belongs to :func:`plan`.  The in-run helpers at the bottom of this
+module -- the ones the phase loop calls -- do NOT go through it, and the block
+above them says why that is sufficient there and what it costs anyone adding to
+them.  See also docs/PRODUCT_RETENTION.md.
+
 Nothing in this module deletes unless :func:`apply` is called with
 ``dry_run=False``, and that refuses to run without a manifest path.
 """
@@ -602,6 +607,19 @@ def apply(candidates, *, dry_run=True, manifest_path=None, on_error='raise'):
 
 # --------------------------------------------------------------------------
 # In-run helpers (used by the phase loop; see cataloging.py)
+#
+# These do NOT go through :class:`Guard`.  They apply ``_is_protected_name`` and
+# their own narrow globs, and that is the whole of their protection.  It is
+# enough here for reasons that do not generalise: the caller runs inside a live
+# chain, so the busy-field veto would refuse everything; every release symlink
+# target is a ``_crf.fits``, which the name filter already excludes (measured:
+# 0 of 1200 reach a Guard unprotected) and which these globs cannot name
+# anyway; an age floor is meaningless for a file the same run just wrote; and
+# ``--protect`` is an operator flag with no operator in a SLURM job.
+#
+# A NEW in-run selector therefore inherits no Guard.  Either earn the safety
+# from ``_is_protected_name`` plus the glob, as these two do, or route the
+# selection through :func:`plan`.  See docs/PRODUCT_RETENTION.md.
 # --------------------------------------------------------------------------
 
 def _stem_prefix(proposal_id, field, filtername):
