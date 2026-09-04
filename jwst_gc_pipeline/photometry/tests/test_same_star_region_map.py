@@ -170,3 +170,34 @@ def test_reference_tie_keeps_the_histogram_grid_on_an_unverified_tie(monkeypatch
     assert tie["same_star"] is None, tie["same_star"]
     assert tie["per_tile_source"] == "histogram-grid", tie["per_tile_source"]
     assert tie["per_tile_same_star"] is None
+
+
+def test_reference_tie_falls_back_to_the_histogram_grid_when_regions_are_starved():
+    """A reference too SPARSE for the region map keeps the histogram grid as the
+    gate, so a dense-flagged Gaia-only field still blocks.
+
+    This is the guard that ``test_gaia_only_reference_per_tile_does_not_gate``
+    and ``test_measure_bulk_offset_signs_off_on_a_gaia_only_reference`` used to
+    carry through ``assert not tie_dense["apply_ok"]``.  Those two run a 90"
+    field of 400 perfectly-paired stars -- ~180 stars/arcmin^2, denser than
+    VIRAC2 over the Brick -- so since #610 the region map measures it, finds no
+    spatial structure (there is none) and passes.  A REAL Gaia-only reference is
+    nowhere near that: at 150 stars over a 120" box no 45" cell reaches the 40
+    matched pairs a region needs, ``measurable`` is False, and the fallback
+    keeps the old verdict.  ``measurable=False`` must never read as a pass.
+    """
+    rng = np.random.RandomState(7)
+    n, width = 150, 120.0
+    x = (rng.rand(n) - 0.5) * width
+    y = (rng.rand(n) - 0.5) * width
+    ref = _sky(x + rng.randn(n) * 0.040, y + rng.randn(n) * 0.040)
+    a = _sky(x - 0.015, y + 0.008)      # small, pairable 15/8 mas tie
+
+    tie = measure_reference_tie(a, ref, ref, dense=True,
+                                grid_nx=6, grid_ny=6, context="starved")
+    assert tie["same_star"] is not None          # the tie IS pairable...
+    assert tie["per_tile_same_star"]["measurable"] is False   # ...the map is not
+    assert tie["per_tile_same_star"]["clean"] is False
+    assert tie["per_tile_source"] == "histogram-grid"
+    assert tie["per_tile_ok"] is False
+    assert tie["apply_ok"] is False

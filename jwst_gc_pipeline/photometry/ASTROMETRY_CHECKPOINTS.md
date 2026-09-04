@@ -363,7 +363,11 @@ than five independent checks would be.
     half-mosaic, which keeps its sources and loses its pairs);
   * `histogram-grid` — `measure_offset_grid`, used on a swept or otherwise
     unverified tie, where matched-pair statistics have no standing and the
-    histogram is the only estimator that works.
+    histogram is the only estimator that works, **and** whenever the region map
+    is not `measurable` (fewer than 4 regions reach 40 matched pairs — a
+    reference too sparse to fill a 45″ cell, which is what a real Gaia-only
+    reference wrongly flagged `dense=True` looks like).  `measurable: False`
+    never reads as a pass.
   The histogram grid is always measured and recorded in `per_tile`; on a small tie
   it is a diagnostic, because over a tile holding ~100 reference-matched stars its
   peak clears the tallest noise bin by only a handful of counts — measured on
