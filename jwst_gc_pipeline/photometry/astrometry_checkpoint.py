@@ -4112,13 +4112,14 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 " measurement, not a movement]")
                         if refusal.blocking:
                             unverified_blocking.append(text)
+                            unverified.append(unverified_blocking[-1])
                             print(f"ASTROM CHECKPOINT [{stage}] NOT VERIFIED "
                                   f"(m2 MEASURED and REFUSED this exposure's "
                                   f"baseline -- blocking): {msg}", flush=True)
                         else:
+                            unverified.append(text)
                             print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
                                   f"(m2 baseline refused): {msg}", flush=True)
-                        unverified.append(text)
                     elif tuple(exp["key"]) in m2_skipped:
                         # m2 EXCLUDED this exposure from its consensus (too few
                         # reliable stars -- a data-quality defect m2 found and
