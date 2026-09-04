@@ -879,6 +879,8 @@ def catalog_zoom_diagnostic(data, modsky, zoomcut, stars):
 # Table column-convention resolvers factored into photometry/column_utils.py
 # (bloat refactor).  Imported here so existing references (_get_source_xy etc.,
 # and _L.<name> access from cataloging.py) keep working unchanged.
+from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
+    refresh_satstar_skycoords)
 from jwst_gc_pipeline.photometry.column_utils import (
     _XY_COLUMN_CANDIDATES, _get_source_xy, _column_to_float_array,
     _best_available_xy, _has_any_xy_columns, _skycoord_radec_arrays,
@@ -1879,12 +1881,28 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         cached_sig = str(tbl.meta.get('SATRECOV', '')) or "off"
         return cached_sig == str(recovery_signature)
 
+    def _on_current_frame(tbl, cache_name):
+        """Re-project a cache HIT onto the frame's current GWCS.
+
+        The cache is keyed on the recovery/deblend config only, so it survives
+        an offsets-table correction and a frame regeneration -- after which its
+        stored ``skycoord_fit`` no longer matches its own pixel centroid.  The
+        FIT is still valid, so re-project rather than refit (issue #193)."""
+        tbl, shift = refresh_satstar_skycoords(tbl, frame_path=filename,
+                                               catalog_path=cache_name)
+        if np.isfinite(shift[0]) and np.hypot(*shift) > 5.0:
+            print(f"Cached satstar catalog {os.path.basename(cache_name)} "
+                  f"predates the frame's current WCS; re-projected its "
+                  f"{len(tbl)} sources by {shift[0]:+.1f}/{shift[1]:+.1f} mas",
+                  flush=True)
+        return tbl
+
     extended_filename = filename.replace(
         '.fits', f'{file_suffix}_extended_satstar_catalog.fits')
     if os.path.exists(extended_filename) and not overwrite:
         _c = Table.read(extended_filename)
         if _cache_ok(_c):
-            return _c
+            return _on_current_frame(_c, extended_filename)
         print(f"Rebuilding satstar catalog: {os.path.basename(extended_filename)} "
               f"recovery config {_c.meta.get('SATRECOV', '')!r} != "
               f"{recovery_signature!r}", flush=True)
@@ -1893,7 +1911,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     if os.path.exists(satstar_filename) and not overwrite:
         _c = Table.read(satstar_filename)
         if _cache_ok(_c):
-            return _c
+            return _on_current_frame(_c, satstar_filename)
         print(f"Rebuilding satstar catalog: {os.path.basename(satstar_filename)} "
               f"recovery config {_c.meta.get('SATRECOV', '')!r} != "
               f"{recovery_signature!r}", flush=True)
