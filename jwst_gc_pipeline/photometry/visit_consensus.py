@@ -1433,10 +1433,22 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # (sparse contrast 149 on 160 peak pairs, window_consistent, 3326 mas) and
     # cloudef F480M (contrast 82 on 106, 156 mas).
     #
-    # KNOWN GAP: three gc2211 F150W entries carry ok=True on n_peak of 5 and 6,
-    # which is not a coherent peak by any reading, and they stay blocked because
-    # the estimator never said otherwise.  Tightening `ok` belongs in
-    # measure_offset, not as a special case here.
+    # KNOWN GAP (now largely closed, #600): three gc2211 F150W entries carried
+    # ok=True on n_peak of 5 and 6, which is not a coherent peak by any reading,
+    # and stayed blocked because the estimator never said otherwise.  Tightening
+    # `ok` belongs in measure_offset, not as a special case here -- and that is
+    # where it happened: widening the confirmation trigger from `swept` to
+    # `swept or edge >= CONFIRM_EDGE_FRACTION` sends an UNSWEPT peak riding its
+    # first window's edge through the probe too, so the estimator now DOES say
+    # otherwise about that shape (`alias_rejected`) and this valve opens for it.
+    # That is a live change in verdict, not only in diagnosis: six _latest
+    # records (sgrc F182M m2-m6, gc2211_o028 m2 F150W) have `apply_ok` flip
+    # False -> True on it.  Five are under REFERENCE_APPLY_MIN_MAS and so change
+    # nothing the checkpoint acts on; gc2211_o028 m2 F150W is a 43.9 mas bulk
+    # that stops being an `unverified_blocking` "measured but not trustworthy"
+    # row and becomes an applied correction -- which is what m3-m7 of that same
+    # field/filter already do with the same tie.  Pinned by
+    # tests/test_reference_tie_unswept_sparse_alias.py.
     sparse_untrustworthy = bool(
         res_b is None
         or res_b.get("ok") is False
