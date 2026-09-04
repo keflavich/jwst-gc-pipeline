@@ -681,6 +681,20 @@ def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
     Use a FINE grid for QC (``nx=ny`` >= ~16 so a thin overlap strip is not
     diluted inside a coarse tile); a 4x4 grid hid the brick-1182 seam.
 
+    **This is no longer the spatial GATE against a dense reference on a small,
+    verified tie** (issue #610).  Each cell's answer is the height of one
+    histogram bin over the tallest noise bin, and over a tile holding ~100
+    stars in common with a reference whose positions scatter ~40 mas that
+    margin is a handful of COUNTS -- on cloudef F210M vs VIRAC2 it ran -4 to
+    +17 across 36 cells and went NEGATIVE in four, which reported 0.93"-5.95"
+    off noise bins on a field tied at 0.334 mas same-star.  So
+    ``measure_reference_tie`` gates on :func:`same_star_region_map` whenever
+    same-star pairing is unambiguous, keeps THIS grid as the gate on a swept
+    or otherwise unpairable tie (where matched pairs have no standing and this
+    is the only estimator that works), and records which in
+    ``per_tile_source``.  The map itself is still measured and recorded on
+    every path.
+
     Returns
     -------
     dict
@@ -937,6 +951,169 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
                 worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
                 worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
                 clean=bool(cells) and not flagged)
+
+
+#: Cell size (arcsec) of the same-star REGION map that gates a dense reference
+#: tie.  Large enough that a cell holds tens of matched pairs in a GC field
+#: (cloudef: 26 cells x 40-192 pairs), small enough to localise a mosaic seam.
+DEFAULT_REGION_CELL_ARCSEC = 45.0
+#: Matched pairs a region cell needs before its residual is a measurement.
+DEFAULT_REGION_MIN_STARS = 40
+#: Region cells the map needs before it can gate anything at all.
+DEFAULT_REGION_MIN_CELLS = 4
+#: A region cell is UNCOVERED when it holds this fraction or less of the pairs
+#: the field's own match rate predicts for its source count.  A region that has
+#: been DISPLACED past the match radius keeps its sources and loses its pairs,
+#: which is the one seam class a matched-pair statistic cannot see in its
+#: residuals -- so it is caught here instead, in the coverage.
+REGION_COVERAGE_FRACTION = 0.3
+
+
+def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_ARCSEC,
+                         min_stars=DEFAULT_REGION_MIN_STARS,
+                         min_cells=DEFAULT_REGION_MIN_CELLS,
+                         match_radius=0.3 * u.arcsec, tol_mas=15.0, nsigma=3.0,
+                         coverage_fraction=REGION_COVERAGE_FRACTION, context=""):
+    """Per-REGION seam map from SAME-STAR matched pairs, bulk removed.
+
+    The spatial check ``measure_offset_grid`` is meant to be, measured with the
+    estimator CLAUDE.md prescribes for a DENSE reference.  A per-tile histogram
+    decides each cell by the height of one bin over the tallest noise bin, and
+    over a tile that holds ~100 matched stars whose reference positions scatter
+    by ~40 mas that margin is a handful of counts: measured on cloudef F210M vs
+    VIRAC2 (issue #610) it ran from -4 to +17 across the 36 cells, and went
+    NEGATIVE in four of them -- which is a cell reporting the densest noise bin
+    in its search window, 0.93" to 5.95", as if it were a measured offset.  The
+    same field's same-star cells read 0.3-21 mas with a median 3-sigma of
+    23 mas.
+
+    Two independent things are tested, because a matched-pair residual can only
+    see a seam it can still pair across:
+
+    * RESIDUAL -- each cell's median pair residual, with the map's own median
+      removed (the bulk is the tie's job, not the map's), against ``tol_mas``
+      AND ``nsigma`` times its standard error.  This catches a seam INSIDE the
+      match radius: brick-1182 F200W's ~90 mas visit-001 strip is 6x this
+      tolerance.
+    * COVERAGE -- a cell that holds sources but almost none of the matched
+      pairs its source count predicts.  A region displaced BEYOND the match
+      radius (brick-1182 v001, ~20") keeps every source and loses every pair,
+      so it is invisible in the residuals and unmistakable here.  The test is
+      relative to the field's OWN match rate, so a genuinely sparse footprint
+      edge is reported as unmeasured rather than as a seam.
+
+    ``global_result`` is a ``measure_offset`` result and carries the same
+    preconditions as :func:`local_residual_map` (ok, not swept, offset well
+    inside the match radius) -- ``GlobalTieNotVerifiedError`` propagates, and a
+    caller that cannot satisfy them has no business using a matched-pair
+    statistic at all.
+
+    Returns
+    -------
+    dict
+        ``dict(cells, n_cells, n_measured, n_flagged, n_uncovered,
+        uncovered_cells, n_pairs, worst_off_mas, worst_sig_off_mas,
+        bulk_dra_mas, bulk_ddec_mas, measurable, clean, reason)``.
+        ``measurable`` is False when fewer than ``min_cells`` cells could be
+        measured -- the caller must then fall back rather than read ``clean``,
+        which is False in that case for the same reason an unverifiable check
+        never passes.
+    """
+    lrm = local_residual_map(a, b, global_result, cell_arcsec=cell_arcsec,
+                             match_radius=match_radius, min_stars=min_stars,
+                             tol_mas=float("inf"), nsigma=nsigma,
+                             context=f"{context} region map")
+    cells = list(lrm.get("cells") or [])
+    base = dict(n_pairs=int(lrm.get("n_pairs", 0)),
+                bulk_dra_mas=float("nan"), bulk_ddec_mas=float("nan"),
+                cell_arcsec=float(cell_arcsec), tol_mas=float(tol_mas),
+                nsigma=float(nsigma))
+    if len(cells) < min_cells:
+        return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
+                    n_flagged=0, n_uncovered=0, uncovered_cells=[],
+                    worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
+                    measurable=False, clean=False,
+                    reason=(lrm.get("reason") or
+                            f"only {len(cells)} region cell(s) of >= {min_stars} "
+                            f"matched pairs (< {min_cells}) -- too little of the "
+                            f"field is checked for a verdict to mean anything"),
+                    **base)
+
+    d = np.array([[c["dra_mas"], c["ddec_mas"]] for c in cells], dtype=float)
+    # The bulk belongs to the tie; what this map tests is what VARIES across the
+    # field.  Without removing it, the histogram's several-mas dense-reference
+    # bias (which local_residual_map subtracted as the global offset) would show
+    # up as the SAME offset in every cell and flag the whole map at once.
+    bulk = np.median(d, axis=0)
+    resid = d - bulk
+    for c, (rdra, rddec) in zip(cells, resid):
+        sem = float(np.hypot(c["dra_sem"], c["ddec_sem"]))
+        off = float(np.hypot(rdra, rddec))
+        c["resid_dra_mas"] = float(rdra)
+        c["resid_ddec_mas"] = float(rddec)
+        c["resid_off_mas"] = off
+        c["significant"] = bool(sem > 0 and off > nsigma * sem)
+        c["flagged"] = bool(off > tol_mas and c["significant"])
+
+    # --- coverage: sources present, matched pairs missing ---------------------
+    # Rebuild local_residual_map's own cell grid (it anchors on the minimum
+    # matched-pair position, which is why the origin is recovered from a cell
+    # rather than recomputed from `a`), then count SOURCES per cell.
+    cell_deg_dec = cell_arcsec / 3600.0
+    # Take the RA cell width from the cells THEMSELVES rather than recomputing
+    # cos(dec): local_residual_map divides by the cos(dec) of its matched pairs,
+    # and a grid built on a slightly different one drifts out of register with
+    # the cells whose origin it is about to reconstruct.
+    cell_deg_ra = None
+    for c in cells[1:]:
+        if c["ix"] != cells[0]["ix"]:
+            cell_deg_ra = ((float(c["ra0"]) - float(cells[0]["ra0"]))
+                           / (c["ix"] - cells[0]["ix"]))
+            break
+    if not cell_deg_ra:      # one column only: nothing to measure it from
+        dec_mid = float(np.median([c["dec0"] for c in cells]))
+        cell_deg_ra = cell_arcsec / 3600.0 / max(np.cos(np.radians(dec_mid)), 1e-6)
+    c0 = cells[0]
+    r0 = float(c0["ra0"]) - (c0["ix"] + 0.5) * cell_deg_ra
+    d0 = float(c0["dec0"]) - (c0["iy"] + 0.5) * cell_deg_dec
+    a_ra = np.asarray(a.ra.deg, dtype=float)
+    a_dec = np.asarray(a.dec.deg, dtype=float)
+    a_ix = np.floor((a_ra - r0) / cell_deg_ra).astype(int)
+    a_iy = np.floor((a_dec - d0) / cell_deg_dec).astype(int)
+    keys, n_src = np.unique(np.column_stack([a_ix, a_iy]), axis=0,
+                            return_counts=True)
+    rate = float(lrm.get("n_pairs", 0)) / max(len(a_ra), 1)
+    measured = {(c["ix"], c["iy"]): c for c in cells}
+    uncovered = []
+    for (kx, ky), n_a in zip(keys.tolist(), n_src.tolist()):
+        expected = n_a * rate
+        if expected < min_stars:
+            continue          # not expected to be measurable: silent, not a seam
+        got = measured[(kx, ky)]["n"] if (kx, ky) in measured else 0
+        if got <= coverage_fraction * expected:
+            uncovered.append(dict(ix=int(kx), iy=int(ky), n_sources=int(n_a),
+                                  n_pairs=int(got), expected_pairs=float(expected)))
+
+    flagged = [c for c in cells if c["flagged"]]
+    sig = [c for c in cells if c["significant"]]
+    worst = max((c["resid_off_mas"] for c in cells), default=float("nan"))
+    reason = None
+    if flagged:
+        reason = (f"{len(flagged)} region cell(s) above {tol_mas} mas at "
+                  f"{nsigma}-sigma (worst {worst:.1f} mas)")
+    elif uncovered:
+        reason = (f"{len(uncovered)} region cell(s) hold sources but not the "
+                  f"matched pairs the field's match rate predicts -- a region "
+                  f"displaced beyond the {match_radius} match radius looks "
+                  f"exactly like this")
+    base.update(bulk_dra_mas=float(bulk[0]), bulk_ddec_mas=float(bulk[1]))
+    return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
+                n_flagged=len(flagged), n_uncovered=len(uncovered),
+                uncovered_cells=uncovered, worst_off_mas=worst,
+                worst_sig_off_mas=max((c["resid_off_mas"] for c in sig),
+                                      default=float("nan")),
+                measurable=True, reason=reason,
+                clean=bool(not flagged and not uncovered), **base)
 
 
 def residual_vs_magnitude(a, b, mag, global_result, match_radius=0.3 * u.arcsec,

@@ -353,7 +353,21 @@ than five independent checks would be.
   * **gross** (`REFERENCE_CROSSCHECK_GROSS_MAS`, ~100 mas) — `cross_reference_gross_ok`;
     the only cross-check that gates `apply_ok`, catching a spurious/window-limited
     VIRAC peak (brick-1182 v001 ~700 mas tell);
-* D: per-tile map (`measure_offset_grid`) must be clean;
+* D: the SPATIAL map must be clean.  Two estimators, and `per_tile_source` in the
+  record says which one gated:
+  * `same-star-region` — `same_star_region_map`, used whenever A′ verified the tie
+    is small enough for unambiguous pairing.  Per ~45″ region it tests the median
+    pair residual (bulk removed) against 15 mas at 3σ, **and** the region's match
+    COVERAGE, so both seam classes are covered: one inside the match radius
+    (brick-1182 F200W's ~90 mas strip) and one beyond it (brick-1182 v001's ~20″
+    half-mosaic, which keeps its sources and loses its pairs);
+  * `histogram-grid` — `measure_offset_grid`, used on a swept or otherwise
+    unverified tie, where matched-pair statistics have no standing and the
+    histogram is the only estimator that works.
+  The histogram grid is always measured and recorded in `per_tile`; on a small tie
+  it is a diagnostic, because over a tile holding ~100 reference-matched stars its
+  peak clears the tallest noise bin by only a handful of counts — measured on
+  cloudef F210M, −4 to +17 across 36 cells, negative in four (issue #610);
 * E (bands overlapping VIRAC2, 1.0–2.5 µm): flux-cut source-by-source residual
   (both catalogs bright-cut until the estimated spacing ≥ 3× the match radius,
   then `local_residual_map` — which itself REFUSES to run without a verified
