@@ -109,6 +109,28 @@ PER_FIELD_FLOOR_MAS = {
     # Its m12 finalize died three times on this scatter before the floor was
     # set (jobs 40934852, 40938196, 40941927), each taking m3-m7 with it.
     'm92': 4.0,
+    # ngc6397 (1979/001): registered only AFTER both filters had been measured,
+    # because the first pass would have set it wrong.  F150W2 passed at this
+    # floor with 31 sub-floor residuals, and on that evidence alone 4.0 looked
+    # settled -- but the very next filter, F322W2, raised with 16 corrections
+    # reaching 11.46 mas.  Exactly the trap the w51 entry below records.
+    #
+    # Those 16 were real, not scatter: both modules of each exposure agreed
+    # closely (exp 10 read +10.82 mas ddec on nrcalong and +11.45 on nrcblong),
+    # which is guide-star pointing jitter.  They were seeded into the consensus
+    # table and the frames regenerated from _cal.
+    #
+    # Post-regeneration, with every filter measured (jobs 41012891 regen,
+    # 41012903 m12):
+    #
+    #     filter  ncorr   min    med    max
+    #     F150W2    31   2.02   2.41   3.61
+    #     F322W2     0     -      -      -
+    #
+    # F322W2 went 16 -> 0, which is what a correct seed-and-regenerate looks
+    # like.  Max over both filters is 3.61 mas, so 4.0 covers the remaining
+    # per-exposure class with margin.
+    'ngc6397': 4.0,
     # w51: set from ALL of its filters, not the first one that tripped.
     #
     # 4.0 was originally chosen from F140M alone (max correction 3.64 mas).  The
