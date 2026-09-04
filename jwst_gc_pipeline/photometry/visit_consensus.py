@@ -101,8 +101,8 @@ PER_EXPOSURE_SWEEP_WINDOWS = (3.0, 10.0)
 # warns about (memory `histogram-vs-samestar-offset-bias`, several-mas pull).
 # 15.0 is therefore a POLICY floor -- comfortably above every measured relation
 # and its plausible bias, and far below the 500 it replaces -- not a measured
-# boundary.  A same-star `local_residual_map` over each strip would sharpen it;
-# it would not move it past the 15 mas mark.
+# boundary.  A same-star `local_residual_map` over each strip would sharpen
+# these numbers; that measurement has not been made.
 #
 # WHAT FIRING MEANS.  Not "this is an artifact".  For a component holding
 # exactly two module families the antisymmetric SHAPE is forced by the median
