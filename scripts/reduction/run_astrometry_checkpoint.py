@@ -42,7 +42,8 @@ from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
-    run_crossfilter_checkpoint, run_visit_checkpoint, update_offsets_table,
+    run_crossfilter_checkpoint, run_visit_checkpoint,
+    seed_offsets_table_from_consensus, update_offsets_table,
 )
 from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
 from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
@@ -79,9 +80,18 @@ def main(argv=None):
     p.add_argument("--offsets-table", default=None)
     p.add_argument("--apply", action="store_true",
                    help="apply implied corrections to --offsets-table "
-                        "(correction stages only)")
+                        "(correction stages only).  UPDATES existing rows: a "
+                        "correction matching no row hard-fails, by design.  "
+                        "For a filter the table has never carried, use --seed")
+    p.add_argument("--seed", action="store_true",
+                   help="with --apply: UPSERT instead of update -- create the "
+                        "table if absent, add to a matching row, INSERT a row "
+                        "for an exposure not previously flagged.  This is the "
+                        "bootstrap path (seed_offsets_table_from_consensus), "
+                        "the one the in-pipeline m2 checkpoint uses.  Needs "
+                        "--proposal-id and --obsid")
     p.add_argument("--pool", action="store_true",
-                   help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.")
+                   help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.  Not compatible with --seed: the seeder writes rows at the granularity of the corrections it is handed, so there is nothing to pool onto yet.")
     p.add_argument("--mark-stale", action="store_true",
                    help="with --apply: stale-tag the filter's im0 _i2d mosaics "
                         "(renamed *_im0_badastrom.fits)")
@@ -94,6 +104,21 @@ def main(argv=None):
                         "or a significant slope.")
     p.add_argument("--brightness-tol-mas", type=float, default=5.0)
     args = p.parse_args(argv)
+
+    if args.seed and args.pool:
+        # --pool exists because "module-family rows cannot express a
+        # per-detector shift, and un-pooled corrections are SUMMED onto the
+        # shared row".  `seed_offsets_table_from_consensus` takes no `pool`
+        # argument, so --seed --pool would drop the pooling with no warning and
+        # write per-detector corrections into rows keyed on
+        # (Visit, Filter, Exposure, Module, Vgroup) -- several landing on one
+        # row and summing, the exact failure --pool exists to prevent.  The
+        # pair is incoherent whatever the run later discovers, so it is
+        # rejected here rather than after a catalog load.
+        p.error("--seed cannot be combined with --pool: the seeder writes rows "
+                "at the granularity of the corrections it is handed, so there "
+                "is nothing yet to pool onto.  Seed first, then re-run with "
+                "--pool to correct the rows it created.")
 
     refcat = load_reference_catalog(args.refcat) if args.refcat else None
 
@@ -175,10 +200,29 @@ def main(argv=None):
             return 1
         if not args.offsets_table:
             p.error("--apply needs --offsets-table")
-        update_offsets_table(args.offsets_table, corrections, args.stage,
-                             pool=args.pool)
-        print(f"offsets table corrected: {args.offsets_table} "
-              f"({len(corrections)} corrections; backup kept)")
+        if args.seed:
+            # UPSERT.  `update_offsets_table` can only EDIT existing rows, so a
+            # field whose table has never carried this filter cannot be
+            # bootstrapped with it -- the first iteration has nowhere to record
+            # the fix and every correction hard-fails "matches NO row".  That
+            # left the CLI unable to seed at all: the only seeding path was a
+            # full cataloging m12 pass with ASTROM_CHECKPOINT_APPLY=1, which
+            # seeds ONE filter and then raises to force regeneration, so a
+            # 14-filter field needed 14 cataloging cycles (crowded_l3).
+            if not (args.proposal_id and args.obsid):
+                p.error("--seed needs --proposal-id and --obsid")
+            if not args.basepath:
+                p.error("--seed needs --basepath")
+            out = seed_offsets_table_from_consensus(
+                args.basepath, args.proposal_id, args.obsid, corrections,
+                stage=args.stage, out_path=args.offsets_table)
+            print(f"offsets table SEEDED (upsert): {out} "
+                  f"({len(corrections)} corrections; backup kept)")
+        else:
+            update_offsets_table(args.offsets_table, corrections, args.stage,
+                                 pool=args.pool)
+            print(f"offsets table corrected: {args.offsets_table} "
+                  f"({len(corrections)} corrections; backup kept)")
         if args.mark_stale and args.basepath and args.filtername:
             # --obsid scopes the stale-tag: one directory holds every
             # observation's mosaics, and unscoped this renames the other
