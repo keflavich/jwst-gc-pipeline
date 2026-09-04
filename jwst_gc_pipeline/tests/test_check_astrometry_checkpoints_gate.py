@@ -532,3 +532,159 @@ def test_an_overridden_FAILURE_is_still_reported_once(gate, tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.count('ASTROM_CHECKPOINT_WARN_ONLY=1 was set') == 1, out
     assert 'OVERRIDDEN' not in out, out
+
+
+# ---------------------------------------------------------------------------
+# m2 measured corrections and nothing applied them (issue #746)
+# ---------------------------------------------------------------------------
+
+def _m2(tmp_path, name, date, corrections, floor_mas=0.0, passed=True):
+    """A correcting-stage record carrying what m2 measured."""
+    d = tmp_path / 'fld' / 'astrometry_checkpoints'
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps(dict(
+        stage='m2', passed=passed, correcting=True, failures=[],
+        unverified_blocking=[], date=date, corrections=list(corrections),
+        tolerances=dict(correction_floor_mas=floor_mas,
+                        correction_floor_source='default'))))
+    return d / name
+
+
+def _corr(dra, ddec, source='m2 visit-consensus', **kw):
+    c = dict(visit='jw01905001001', exposure=2, module='nrca1',
+             filtername='F115W', dra_onsky_mas=dra, ddec_onsky_mas=ddec,
+             source=source)
+    c.update(kw)
+    return c
+
+
+def test_m2_corrections_the_chain_ran_past_are_REFUSED(gate, tmp_path, capsys):
+    """wd1, live on 2026-09-04: eleven m2 records from 30-31 August holding 523
+    corrections between them, `_crf` still dated 1 July, and m3..m6 records from
+    2-4 September.  Every frozen record is NEWER than its m2, so none is
+    superseded and the field reads clean -- while the solution those stages
+    certify as unmoved is the one m2 said to move."""
+    _m2(tmp_path, 'checkpoint_m2_F115W_o001_latest.json', '2026-08-30T20:51:39Z',
+        [_corr(7.89, -4.04), _corr(-11.2, 3.1)])
+    _dated(tmp_path, 'checkpoint_m3_F115W_o001_latest.json', True,
+           '2026-09-02T06:13:48Z')
+    assert gate.main(['--field', 'fld']) == 1
+    both = capsys.readouterr()
+    assert 'CORRECTIONS NEVER APPLIED m2/F115W/o001' in both.out, both.out
+    assert '2 correction(s)' in both.out, both.out
+    assert 'MEASURED and never applied' in both.err, both.err
+
+
+def test_the_post_regeneration_m2_record_is_a_PASS(gate, tmp_path):
+    """The sanctioned flow ends with m2 re-run on the regenerated frames, and
+    that record carries no corrections.  The rule must not fire on the state it
+    is asking for, or every correctly-remediated field is refused forever."""
+    _m2(tmp_path, 'checkpoint_m2_F115W_o001_latest.json', '2026-09-01T00:00:00Z',
+        [])
+    _dated(tmp_path, 'checkpoint_m3_F115W_o001_latest.json', True,
+           '2026-09-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_SUB_FLOOR_corrections_do_not_refuse(gate, tmp_path):
+    """m2 writes its record BEFORE the correction floor filters the list, so a
+    field with a standing floor passes and goes on with a non-empty
+    `corrections` -- cloudc and sgrc sit at 8.0 mas (`m2_correction_floors`).
+    Reading the raw list would refuse them for being in the state they are
+    supposed to be in."""
+    _m2(tmp_path, 'checkpoint_m2_F182M_o002_latest.json', '2026-09-01T00:00:00Z',
+        [_corr(3.0, 2.0), _corr(-1.5, 0.5)], floor_mas=8.0)
+    _dated(tmp_path, 'checkpoint_m3_F182M_o002_latest.json', True,
+           '2026-09-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_the_reference_TIE_is_never_floored_away(gate, tmp_path, capsys):
+    """The floor is for per-detector terms the module-locked table cannot
+    express; a rigid whole-consensus tie onto the reference catalog is not one
+    of those, and `cataloging._is_whole_consensus_shift` exempts it.  Flooring
+    it here would let an absolute frame error up to the floor through with
+    nothing downstream to catch it -- a common-mode shift moves every band
+    equally, so the m7 cross-band gate sees agreement."""
+    _m2(tmp_path, 'checkpoint_m2_F182M_o002_latest.json', '2026-09-01T00:00:00Z',
+        [_corr(4.0, 2.0, source='m2 consensus->reference (contrast>2900)')],
+        floor_mas=8.0)
+    _dated(tmp_path, 'checkpoint_m3_F182M_o002_latest.json', True,
+           '2026-09-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+    assert 'consensus->reference' in capsys.readouterr().out
+
+
+def test_an_UNREADABLE_correction_magnitude_is_counted_not_dropped(gate,
+                                                                   tmp_path):
+    """A correction with no finite on-sky magnitude cannot be shown to be
+    sub-floor.  `cataloging._floor_actionable_corrections` raises on it for the
+    same reason: a reader that drops what it cannot measure reports a clean
+    field on the strength of a broken record."""
+    _m2(tmp_path, 'checkpoint_m2_F182M_o002_latest.json', '2026-09-01T00:00:00Z',
+        [_corr(None, None), _corr(float('nan'), 1.0)], floor_mas=8.0)
+    _dated(tmp_path, 'checkpoint_m3_F182M_o002_latest.json', True,
+           '2026-09-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_stopped_field_awaiting_regeneration_still_reads_rc3(gate, tmp_path):
+    """m2 corrected and STOPPED is the correct behaviour, and it already has a
+    verdict: the frozen records predate the new m2, so they are superseded and
+    the field is unverified (rc 3).  This rule is about the chain that went ON,
+    so it must not restate the stopped case as a failure."""
+    _dated(tmp_path, 'checkpoint_m3_F115W_o001_latest.json', True,
+           '2026-08-20T00:00:00Z')
+    _m2(tmp_path, 'checkpoint_m2_F115W_o001_latest.json', '2026-09-01T00:00:00Z',
+        [_corr(7.89, -4.04)])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_the_rule_is_keyed_per_FILTER(gate, tmp_path, capsys):
+    """The filters are cataloged independently, so one filter's unapplied
+    corrections must refuse the field without being attributed to a filter whose
+    m2 came back clean."""
+    _m2(tmp_path, 'checkpoint_m2_F115W_o001_latest.json', '2026-09-01T00:00:00Z',
+        [_corr(7.89, -4.04)])
+    _m2(tmp_path, 'checkpoint_m2_F405N_o001_latest.json', '2026-09-01T00:00:00Z',
+        [])
+    _dated(tmp_path, 'checkpoint_m3_F115W_o001_latest.json', True,
+           '2026-09-02T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m3_F405N_o001_latest.json', True,
+           '2026-09-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+    out = capsys.readouterr().out
+    assert 'CORRECTIONS NEVER APPLIED m2/F115W/o001' in out, out
+    assert 'CORRECTIONS NEVER APPLIED m2/F405N' not in out, out
+
+
+def test_a_LATER_m2_with_no_corrections_clears_an_earlier_one(gate, tmp_path):
+    """Only the NEWEST correcting record for a key is read.  A field that was
+    corrected, regenerated and re-run keeps the old record on disk under its
+    timestamped name, and reading that one would refuse the field for a state it
+    has already left."""
+    _m2(tmp_path, 'checkpoint_m2_F115W_o001_20260830T205139Z.json',
+        '2026-08-30T20:51:39Z', [_corr(7.89, -4.04)])
+    _m2(tmp_path, 'checkpoint_m2_F115W_o001_latest.json', '2026-09-01T00:00:00Z',
+        [])
+    _dated(tmp_path, 'checkpoint_m3_F115W_o001_latest.json', True,
+           '2026-09-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_a_frozen_FAILURE_is_still_refused_and_still_reported(gate, tmp_path,
+                                                             capsys):
+    """The gate this touches must keep catching what it caught.  A 1.5 arcsec
+    frozen-stage misregistration refuses the field on its own terms, and its
+    detail still reaches the operator, whether or not an m2 correction is also
+    outstanding."""
+    _m2(tmp_path, 'checkpoint_m2_F115W_o001_latest.json', '2026-09-01T00:00:00Z',
+        [_corr(7.89, -4.04)])
+    _dated(tmp_path, 'checkpoint_m5_F115W_o001_latest.json', False,
+           '2026-09-02T00:00:00Z',
+           failures=['F115W visit 1 [m5]: consensus->reference MOVED 1500.0 mas'])
+    assert gate.main(['--field', 'fld']) == 1
+    both = capsys.readouterr()
+    assert 'MOVED 1500.0 mas' in both.out, both.out
+    assert 'checkpoint(s) FAILED' in ' '.join(both.err.split()), both.err
+    assert 'MEASURED and never applied' in ' '.join(both.err.split()), both.err
