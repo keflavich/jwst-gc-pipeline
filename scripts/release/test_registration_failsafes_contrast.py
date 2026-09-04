@@ -82,8 +82,16 @@ def test_margin_demotes_lowcontrast_highoff_and_would_fail_at_floor():
                           min_seam_cells=off_axis)
     assert relaxed["n_unconfident_highoff"] > 0            # fails if margin == floor
     assert relaxed["n_fail"] < strict["n_fail"]           # margin actually demoted some
-    # every demoted cell was a strict FAIL (nothing invented, nothing lost)
-    assert strict["n_fail"] == relaxed["n_fail"] + relaxed["n_unconfident_highoff"]
+    # every demoted cell was a strict FAIL (nothing invented, nothing lost).  The
+    # relaxed call has THREE places a strict FAIL can land since #588: still failed,
+    # tolerated sub-margin, or withdrawn as unresolvable at the window edge (17 cells
+    # here -- this construction's random detections put a few arg-maxes past 0.5*MX,
+    # and the sweep does not reproduce them).  The strict call has no third bucket: its
+    # `fail_min_ratio` is the verify floor, so every verified cell is confident and the
+    # window-edge arm is inert (measured: strict n_window_edge = 0).
+    assert strict["n_fail"] == (relaxed["n_fail"] + relaxed["n_unconfident_highoff"]
+                                + relaxed["n_window_edge"])
+    assert strict["n_window_edge"] == 0
     assert strict.get("n_unconfident_highoff", 0) == 0    # floor has no unconfident band
     # demoted cells carry npairs for triage (nit)
     assert all("npairs" in c for c in relaxed["unconfident_highoff_cells"])
