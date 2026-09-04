@@ -26,11 +26,12 @@ same place (two adjacent footprints, ridge truncated by a SWEPT window) is
 covered by ``test_sweep_window_alias.py``.
 """
 import numpy as np
+import pytest
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    CONFIRM_EDGE_FRACTION, measure_offset)
+    CONFIRM_EDGE_FRACTION, confirm_peak_windows, measure_offset)
 
 # (3, 10) rather than the full (3, 10, 30, 60): the same bounded sweep the
 # per-exposure consensus tie uses, and it keeps this file to a few seconds.
@@ -130,3 +131,118 @@ def test_real_offset_at_a_high_edge_fraction_survives_the_probe():
     assert r["window_consistent"] is True, r
     assert r["ok"] and not r["alias_rejected"], r
     assert abs(r["dra"] - 2000) < 100 and abs(r["ddec"] + 1800) < 100, r
+
+
+# --- the probe WINDOWS, which the widened trigger is what first reaches ------
+#
+# Six live ``_latest`` reference-tie records whose sparse leg is an UNSWEPT
+# edge-riding peak, read on 2026-09-04 from
+# ``/orange/adamginsburg/jwst/<field>/astrometry_checkpoints/``.  Under the old
+# single ``base_w * 1.25`` floor five of the six place BOTH probes at 3.75" --
+# one window measured twice, which ``consistent = any(agrees)`` then reads as a
+# two-probe confirmation.  ``CONFIRM_MIN_PROBE_FACTORS`` pairs a floor to each
+# factor so they land at 3.75" and 6.0" instead.
+#
+# (field/stage/filter, off_mas, window_arcsec, dra_mas, ddec_mas)
+_LIVE_UNSWEPT_EDGE_PEAKS = [
+    ("sgrc m2 F182M", 939.84, 3.0, -473.91, 811.61),
+    ("sgrc m3 F182M", 938.41, 3.0, -474.03, 809.88),
+    ("sgrc m4 F182M", 938.30, 3.0, -473.85, 809.86),
+    ("sgrc m5 F182M", 937.42, 3.0, -474.11, 808.69),
+    ("sgrc m6 F182M", 2574.26, 3.0, -1129.58, -2313.20),
+    ("gc2211_o028 m2 F150W", 1147.61, 3.0, -375.02, 1084.61),
+]
+
+
+@pytest.mark.parametrize("label,off,window,dra,ddec", _LIVE_UNSWEPT_EDGE_PEAKS)
+def test_live_edge_peak_is_probed_at_two_distinct_windows(label, off, window,
+                                                          dra, ddec):
+    """Every live record the widened trigger newly reaches must get TWO probes
+    at DIFFERENT windows.
+
+    An unswept peak is by definition SMALLER than its own window, so
+    ``f * off`` is under the floor for both factors and a single floor collapses
+    them.  These are the exact numbers on disk; ``CONFIRM_WINDOW_FACTORS``
+    (1.4, 2.2) never separates them, only the paired
+    ``CONFIRM_MIN_PROBE_FACTORS`` (1.25, 2.0) does.
+    """
+    a, b = _unrelated_pair()
+    conf = confirm_peak_windows(
+        a, b, dict(off=off, window_arcsec=window, dra=dra, ddec=ddec))
+    windows = sorted(round(p["window_arcsec"], 6) for p in conf["probes"])
+    assert windows == [window * 1.25, window * 2.0], (label, conf)
+    assert conf["n_probes"] == 2, (label, conf)
+
+
+def test_a_probe_window_is_never_measured_twice():
+    """The dedup.  With the floors collapsed onto one value the second probe
+    lands on the first's window; it is dropped rather than recorded as a second
+    independent measurement.  The shipped constants never produce this (the
+    factors and floors are separated by 1.57x and 1.6x), so it guards a caller
+    that passes its own ``factors``/``min_probe_factors``, and it keeps
+    ``n_probes`` an honest count of independent windows.
+    """
+    a, b = _unrelated_pair()
+    best = dict(off=939.84, window_arcsec=3.0, dra=-473.91, ddec=811.61)
+    conf = confirm_peak_windows(a, b, best, min_probe_factors=(1.25, 1.25))
+    assert [round(p["window_arcsec"], 6) for p in conf["probes"]] == [3.75], conf
+    assert conf["n_probes"] == 1, conf
+
+
+def test_collapse_band_peak_is_rejected_on_two_independent_probes():
+    """The band the live records sit in -- edge fraction between the trigger
+    (0.25) and ``1.25 / 2.2 = 0.568``, below which BOTH factors fall under the
+    old single floor.  Seed 2 of the uncorrelated fixture lands at 0.45 with the
+    recorded signature (unswept, 3" window, n_peak 8, contrast 6) -- alongside
+    the live sgrc 0.313 / gc2211_o028 0.383 -- and it is rejected on probes at
+    two different windows, not one window twice.
+    """
+    a, b = _unrelated_pair(2)
+    r = measure_offset(a, b, sweep=True, sweep_windows=_WINDOWS,
+                       confirm_windows=True)
+    assert r is not None and not r["swept"], r
+    assert CONFIRM_EDGE_FRACTION <= r["window_edge_fraction"] <= 0.568, r
+    assert r["alias_rejected"] and not r["ok"], r
+    probes = r["window_confirmation"]["probes"]
+    assert sorted(round(p["window_arcsec"], 6) for p in probes) == [3.75, 6.0], probes
+    assert not any(p["agrees"] for p in probes if p["dra"] is not None), probes
+
+
+def _clumpy_field(ra0, dec0, width_arcsec, seed, n_clump=300, per_clump=6,
+                  sigma_arcsec=1.5):
+    """A clustered star field -- the regime that makes the footprint-geometry
+    ridge sharp enough to clear the contrast floor (see test_sweep_window_alias).
+    """
+    rng = np.random.RandomState(seed)
+    cra = ra0 + (rng.rand(n_clump) - 0.5) * width_arcsec / 3600.0
+    cdec = dec0 + (rng.rand(n_clump) - 0.5) * width_arcsec / 3600.0
+    ra = (np.repeat(cra, per_clump)
+          + rng.randn(n_clump * per_clump) * sigma_arcsec / 3600.0)
+    dec = (np.repeat(cdec, per_clump)
+           + rng.randn(n_clump * per_clump) * sigma_arcsec / 3600.0)
+    return SkyCoord(ra * u.deg, dec * u.deg)
+
+
+def test_swept_footprint_alias_in_the_collapse_band_is_still_rejected():
+    """The SWEPT path, which the probe-window change also touches.
+
+    ``CONFIRM_MIN_PROBE_FACTORS`` moves the second probe outward wherever both
+    factors used to fall under the single floor -- for a swept peak that is
+    ``maxsep < off < 0.568 * best_window``, e.g. a 3.75" peak found at the 10"
+    window (the cloudc F410M nrcb shape).  There the probes were 12.5" and 12.5"
+    and are now 12.5" and 20".  Since ``consistent = any(agrees)`` a further
+    probe could in principle rescue an alias, so the #158 case has to be shown
+    still rejected in exactly that band: two offset 160" footprints with NO
+    shared stars, 8" apart, give a swept ridge peak at edge fraction 0.375 and
+    both probes disagree.
+    """
+    a = _clumpy_field(290.915, 14.529, 160.0, seed=1)
+    b = _clumpy_field(290.915, 14.529 - 8.0 / 3600.0, 160.0, seed=2)
+    r = measure_offset(a, b, sweep=True, confirm_windows=True)
+    assert r["swept"], r
+    assert CONFIRM_EDGE_FRACTION <= r["window_edge_fraction"] <= 0.568, r
+    probes = r["window_confirmation"]["probes"]
+    assert sorted(round(p["window_arcsec"], 6) for p in probes) == [12.5, 20.0], probes
+    assert not any(p["agrees"] for p in probes if p["dra"] is not None), probes
+    assert r["window_consistent"] is False and r["alias_rejected"], r
+    assert not r["ok"], r
