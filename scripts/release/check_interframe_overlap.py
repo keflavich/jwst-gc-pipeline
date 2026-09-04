@@ -20,12 +20,21 @@ MUTUAL offset. Overlapping same-instrument groups must co-register to < 30 mas.
 Non-zero exit on FAIL so it gates a release/staging chain.
 
 A pair NEITHER reference-free layer can measure (a near-non-overlap sliver: 0
-mutual-coverage tiles) is DEFERRED to the external same-star arbiter, which is
-scoped to that pair's OWN overlap footprint and ties each exposure group to the
-reference there, then differences the two star by star -- the reference is only a
-common anchor, so its local systematics cancel.  A field-wide residual map cannot
-do this job: a sliver is a minority of every cell it touches, and one field-wide
+mutual-coverage tiles) is DEFERRED to a same-star arbiter, which is scoped to
+that pair's OWN overlap footprint and ties each exposure group to the reference
+there, then differences the two star by star -- the reference is only a common
+anchor, so its local systematics cancel.  A field-wide residual map cannot do
+this job: a sliver is a minority of every cell it touches, and one field-wide
 boolean cleared every deferred pair at once (issue #174).
+
+Two star lists, two slots.  ``--refcat`` is the field's registered reference: it
+arbitrates pairs AND is what the absolute-frame arm measures the field against,
+so it has to be independent of the field.  ``--fallback-refcat`` arbitrates only
+a pair ``--refcat`` left unsettled, on that pair's own footprint, and never
+speaks about the absolute frame -- which is what lets it be the field's own
+merged photometry, a list dense where the registered one runs short and one the
+absolute frame would agree with by construction (issue #263).  It is opened only
+when such a pair exists.
 
 Usage::
 
@@ -36,6 +45,9 @@ Usage::
     python check_interframe_overlap.py --field brick --scan --observations 02221-001,01182-004
     # optional external absolute cross-check (fine grid vs VIRAC2/Gaia):
     python check_interframe_overlap.py --field brick --filter F200W --refcat <path>
+    # last-resort arbiter for a pair --refcat cannot settle (pairs only):
+    python check_interframe_overlap.py --field w51 --filter F187N \
+        --refcat <gaia> --fallback-refcat <field's own merged catalogue>
 """
 import argparse
 import glob
@@ -739,9 +751,95 @@ def build_groups(field, filt, observations=None):
     return pooled, ndet, len(frames)
 
 
+#: Position columns of a JWST-INTERNAL arbiter list: the field's own cross-band
+#: merged photometry, whose per-row reference position is ``skycoord_ref``.
+#: Their presence (with no plain ``ra``/``dec``) is what marks a list internal --
+#: provenance read off the file, not off its name.
+INTERNAL_RA_COLUMN = "skycoord_ref.ra"
+INTERNAL_DEC_COLUMN = "skycoord_ref.dec"
+
+
+def _is_fits(path):
+    """Whether ``path`` is a FITS file, read off its first card rather than its
+    name.
+
+    ``_internal_positions`` below opens the file with ``fits.open`` to read two
+    columns out of a very wide table.  Every star list this gate has been given
+    so far is FITS, and a refcat is an operator-supplied ``--refcat`` path: an
+    ``.ecsv`` one (wd1's catalogs directory holds a 488 MB
+    ``..._m7.ecsv`` beside its FITS twin) reached ``fits.open`` and died with
+    ``OSError: No SIMPLE card found`` out of a BLOCKING gate, where before it
+    would have been read by ``Table.read``.  So the fast path is taken only for
+    an actual FITS file and everything else falls through to ``Table.read``,
+    which reads every format astropy does.
+    """
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(6) == b"SIMPLE"
+    except OSError:
+        return False
+
+
+def _internal_positions(path):
+    """``(ra_deg, dec_deg)`` from a field's own merged catalogue, or ``None``.
+
+    Read column-wise rather than through ``Table.read``: a merged catalogue is
+    hundreds of MB over hundreds of columns (wd1's m7 is 394 MB / 180,479 rows)
+    and two of those columns are all an arbiter needs.
+
+    FITS only; a non-FITS list is recognised from the table ``_refcat`` reads.
+    """
+    if not _is_fits(path):
+        return None
+    with fits.open(path, memmap=True) as hdul:
+        for hdu in hdul[1:]:
+            cols = getattr(hdu, "columns", None)
+            if cols is None:
+                continue
+            names = {c.lower(): c for c in cols.names}
+            if "ra" in names and "dec" in names:
+                return None                       # an ordinary external list
+            if INTERNAL_RA_COLUMN in names and INTERNAL_DEC_COLUMN in names:
+                ra = np.array(hdu.data[names[INTERNAL_RA_COLUMN]], dtype=float)
+                dec = np.array(hdu.data[names[INTERNAL_DEC_COLUMN]], dtype=float)
+                return ra, dec
+    return None
+
+
+def _internal_label(path):
+    return (f"{os.path.basename(path)} -- JWST-INTERNAL: this field's own "
+            f"merged photometry, an anchor for tie-breaking pairs and NOT "
+            f"an independent absolute frame")
+
+
 def _refcat(path):
+    """``(coords, gaia_subset, label, internal)`` for a reference star list.
+
+    ``internal`` marks a list built from the field's OWN JWST photometry.  Such
+    a list arbitrates PAIRS well -- the arbiter differences the two groups'
+    residuals star by star, so the reference cancels exactly and only its
+    density inside the overlap footprint matters -- and it says NOTHING about
+    the absolute frame, because measuring a field against a catalogue derived
+    from that same field passes by construction.  The flag is what keeps the
+    second use out of the first's slot; see ``_may_gate_absolute_frame``.
+    """
+    internal = _internal_positions(path)
+    if internal is not None:
+        ra, dec = internal
+        good = np.isfinite(ra) & np.isfinite(dec)
+        rc = SkyCoord(ra[good] * u.deg, dec[good] * u.deg)
+        return rc, None, _internal_label(path), True
     t = Table.read(path)
     cols = {c.lower(): c for c in t.colnames}
+    if "ra" not in cols and INTERNAL_RA_COLUMN in cols:
+        # the same list in a non-FITS format: recognised from the table rather
+        # than from the FITS columns, so provenance does not depend on which
+        # serialisation of the merged catalogue was handed to --refcat.
+        ra = np.asarray(t[cols[INTERNAL_RA_COLUMN]], dtype=float)
+        dec = np.asarray(t[cols[INTERNAL_DEC_COLUMN]], dtype=float)
+        good = np.isfinite(ra) & np.isfinite(dec)
+        return (SkyCoord(ra[good] * u.deg, dec[good] * u.deg), None,
+                _internal_label(path), True)
     ra, dec = t[cols["ra"]], t[cols["dec"]]
     rc = SkyCoord(ra.data * u.deg if ra.unit is None else ra,
                   dec.data * u.deg if dec.unit is None else dec)
@@ -762,7 +860,7 @@ def _refcat(path):
                  f"NOT the Gaia+VIRAC2 catalogue the gating slot assumes")
     else:
         label = "VIRAC2"
-    return rc, gaia, label
+    return rc, gaia, label, False
 
 
 #: How many of a filter's detections a reference catalogue must actually match,
@@ -790,8 +888,18 @@ MIN_GATING_MATCHES = 1000
 GATING_MATCH_ARCSEC = 0.2
 
 
-def _may_gate_absolute_frame(allsrc, ref):
+def _may_gate_absolute_frame(allsrc, ref, internal=False):
     """``(may_gate, n_in_footprint, n_ref)`` -- can this catalogue fail the field?
+
+    ``internal`` bars a list built from the field's OWN JWST photometry, by
+    PROVENANCE and ahead of the density test, which such a list would otherwise
+    sail through: w51's merged catalogue holds ~57,000 stars against
+    ``MIN_GATING_MATCHES`` = 1000.  Density is the wrong question for it.
+    Measuring a field's absolute frame against a catalogue derived from that
+    same field's exposures passes by construction -- including on a field whose
+    absolute tie is wrong, which for w51 is an open question (#257).  An
+    internal list is a common ANCHOR for differencing two exposures, and it is
+    not evidence about where either of them sits on the sky.
 
     Counts the reference stars lying INSIDE the filter's footprint, rather than
     the ones that match a detection.  Matching would be self-defeating here: a
@@ -812,7 +920,9 @@ def _may_gate_absolute_frame(allsrc, ref):
     inside = ((rra >= ra.min() - pad) & (rra <= ra.max() + pad)
               & (rdec >= dec.min() - pad) & (rdec <= dec.max() + pad))
     n = int(inside.sum())
-    return n >= MIN_GATING_MATCHES, n, int(len(ref))
+    # The count is still reported for an internal list, so the log can say how
+    # dense the arbiter was; it just cannot buy the right to fail the field.
+    return (not internal) and n >= MIN_GATING_MATCHES, n, int(len(ref))
 
 
 def _val_mas(x):
@@ -1231,7 +1341,8 @@ def _samestar_pair_footprint(a_src, b_src, ref, global_result, tol_mas=None,
                            f"was resolvable at {nsigma:.0f} sigma)")
 
 
-def check_filter(field, filt, refcat=None, verbose=True, observations=None):
+def check_filter(field, filt, refcat=None, verbose=True, observations=None,
+                 fallback_refcat=None):
     try:
         pooled, ndet, nframes = build_groups(field, filt,
                                              observations=observations)
@@ -1397,15 +1508,16 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                           "pair"))
             print(f"      COULD NOT VERIFY: {r['a']} | {r['b']} -- {_why}"
                   f"  (n_a_in={r.get('n_a_in')}, n_b_in={r.get('n_b_in')}).  "
-                  f"Fail-closed: requires the external "
-                  f"reference map (--refcat) or a fixed reduction to stage.",
+                  f"Fail-closed: requires a same-star arbiter "
+                  f"(--refcat, or --fallback-refcat) or a fixed reduction "
+                  f"to stage.",
                   flush=True)
 
     ext_fail = False
     ext_ran = False
     field_clean = False
     if refcat:
-        rc, gaia, rc_label = _refcat(refcat)
+        rc, gaia, rc_label, rc_internal = _refcat(refcat)
         allsrc = SkyCoord(np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
                           np.concatenate([p.dec.deg for p in pooled.values()]) * u.deg)
         # GC reference-frame policy (gc-gaia-frame-not-catalog): VIRAC2 is the GC
@@ -1415,25 +1527,36 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
         # false-fail, so it is measured as a DIAGNOSTIC only and never sets
         # ext_fail. A real absolute-frame problem shows up against dense VIRAC2.
         #
-        # CAVEAT, and it is not yet resolved (issue #263): the split above is by
-        # PRESENCE OF A `source` COLUMN, not by what the catalogue is.  A
-        # Gaia-only table without that column lands whole in the GATING slot --
-        # exactly what this comment says must not happen to Gaia.  w51's list is
-        # that case.  No false block has been observed there only because the
-        # list is too sparse for the gating paths to measure at all, which is
-        # luck rather than separation.  Routing by content is issue #263's
-        # item (c); until it lands, the label below at least names what was
-        # actually read.
+        # Two things decide whether the first slot may speak about the ABSOLUTE
+        # frame, and both are read off the file rather than assumed:
+        # `_may_gate_absolute_frame` counts stars in the footprint (a sparse
+        # list may arbitrate pairs and may not fail a field), and `rc_internal`
+        # marks a list built from THIS FIELD's own photometry, which may not
+        # judge the field's absolute frame at any density.
         for rn, rr, gates in ((rc_label, rc, True), ("Gaia", gaia, False)):
             if rr is None:
                 continue
             g = _samestar_ref_grid(allsrc, rr, max_off_mas=GRID_MAX_OFF_MAS)
-            if gates:
+            # An internal list is an anchor for differencing two exposures, and
+            # its field-wide map against those same exposures is clean by
+            # construction.  So it neither fails the field (below) nor clears a
+            # deferred pair through the field-wide fallback: a verdict that
+            # cannot come out any other way is not evidence in either
+            # direction.  The PER-PAIR arbiter still runs on it -- that is the
+            # whole point of it, and there the reference cancels exactly.
+            absolute = gates and not rc_internal
+            if absolute:
                 # a map that could not be measured did NOT run: it clears nothing
                 ext_ran = bool(g["measurable"])
                 field_clean = bool(g["clean"])
             if verbose:
-                tag = "" if gates else " [diagnostic, non-gating: Gaia too sparse]"
+                if gates and rc_internal:
+                    tag = (" [diagnostic, non-gating: JWST-internal list, clean "
+                           "against this field by construction]")
+                elif gates:
+                    tag = ""
+                else:
+                    tag = " [diagnostic, non-gating: Gaia too sparse]"
                 scales = ",".join(f"{s['cell_arcsec']:g}\":{s['n_measured']}"
                                   for s in g.get("scales", []))
                 print(f"      same-star residual map vs {rn}: clean={g['clean']} "
@@ -1454,9 +1577,19 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                           f"{rad['field_ratio']:.2f}) -- a sub-population sitting at "
                           f"~the match radius there; inspect those frames.", flush=True)
             if gates and g["measurable"] and not g["clean"]:
-                may_gate, n_matched, n_ref = _may_gate_absolute_frame(allsrc, rr)
+                may_gate, n_matched, n_ref = _may_gate_absolute_frame(
+                    allsrc, rr, internal=rc_internal)
                 if may_gate:
                     ext_fail = True
+                elif verbose and rc_internal:
+                    print(f"      NOT blocking {field}/{filt} on this: "
+                          f"{os.path.basename(refcat)} is this field's own "
+                          f"merged photometry ({n_matched} of {n_ref} stars "
+                          f"inside this filter's footprint).  It arbitrates "
+                          f"individual overlapping pairs, where it cancels out "
+                          f"of the two groups' difference; it is not an "
+                          f"independent frame and cannot say where this field "
+                          f"sits on the sky.", flush=True)
                 elif verbose:
                     print(f"      NOT blocking {field}/{filt} on this: "
                           f"{os.path.basename(refcat)} has only {n_matched} "
@@ -1543,10 +1676,79 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                       f"resolves it; OVERLAP_ALLOW_FIELDWIDE_CLEAR=1 overrides.",
                       flush=True)
         still_open.append(r)
+
+    # ARBITER OF LAST RESORT (issue #263): the field's own merged photometry,
+    # reached HERE and only here -- after every registered star list has had
+    # its turn and left a pair unsettled.
+    #
+    # Not in the `--refcat` slot, for two reasons.
+    #
+    # (1) It has to reach a field that HAS a registered list which runs short.
+    #     w51's Gaia list is its `--refcat`, and it gets the F187N inter-module
+    #     pair to 15 common same-star matches against a floor of 20.  A
+    #     fallback that fired only where no list is registered would never run
+    #     on the field it was written for.
+    # (2) Cost.  The `--refcat` slot runs a field-wide same-star residual map
+    #     over every band of the field, which on sgra F405N peaks at ~20 GB
+    #     over an hour -- and sgra has ZERO overlapping pairs in any band, so
+    #     no arbiter can ever be reached there.  Routing the internal list
+    #     through that slot billed eight fields for a measurement that cannot
+    #     change a verdict.  Here nothing is opened unless a pair is open.
+    #
+    # What runs is the pair-scoped arbiter and the global tie it needs, never
+    # the field-wide ladder: the tie is a common anchor subtracted from BOTH
+    # groups, so it cancels out of their difference.  `ext_fail`, `ext_ran` and
+    # `field_clean` are deliberately untouched -- this list cannot fail the
+    # field on its absolute frame (`_may_gate_absolute_frame`'s provenance bar
+    # says the same thing for the `--refcat` slot) and cannot clear a pair
+    # through the field-wide route.  It can only settle a pair on the pair's
+    # own footprint, in either direction.
+    if still_open and fallback_refcat and (
+            not refcat
+            or os.path.realpath(fallback_refcat) != os.path.realpath(refcat)):
+        fb_rc, _fb_gaia, fb_label, _fb_internal = _refcat(fallback_refcat)
+        fb_src = SkyCoord(
+            np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
+            np.concatenate([p.dec.deg for p in pooled.values()]) * u.deg)
+        gfb, tie_bad = _global_tie(fb_src, fb_rc, GRID_MAX_OFF_MAS)
+        if verbose:
+            print(f"      last-resort arbiter for {len(still_open)} unsettled "
+                  f"pair(s) -- {fb_label}", flush=True)
+        if gfb is None:
+            if verbose:
+                print(f"        NOT usable: {tie_bad['reason']}.  The pair(s) "
+                      f"stay unverified.", flush=True)
+        else:
+            reopened = []
+            for r in still_open:
+                v = _samestar_pair_footprint(pooled[r["a"]], pooled[r["b"]],
+                                             fb_rc, gfb)
+                r["ext_pair_fallback"] = v
+                if verbose:
+                    print(f"        footprint-scoped same-star arbiter "
+                          f"{r['a']} | {r['b']}: clean={v['clean']} "
+                          f"measurable={v['measurable']} "
+                          f"worst={v['worst_off_mas']:.0f} mas -- {v['reason']}",
+                          flush=True)
+                if v["measurable"] and not v["clean"]:
+                    r["fail_reason"] = (
+                        (f"{r['fail_reason']}; " if r.get("fail_reason") else "")
+                        + f"last-resort reference arbiter: {v['reason']}")
+                    if verbose:
+                        print(f"      FAIL: {r['a']} | {r['b']} -- "
+                              f"{r['fail_reason']}", flush=True)
+                    bad.append(r)
+                    continue
+                if v["clean"]:
+                    cleared += 1
+                    continue
+                reopened.append(r)
+            still_open = reopened
     could_not_verify = bool(still_open)
     if cleared and verbose:
-        print(f"      {cleared}/{len(unverifiable)} deferred pair(s) accepted by the "
-              f"external same-star reference", flush=True)
+        print(f"      {cleared}/{len(unverifiable)} deferred pair(s) accepted by a "
+              f"same-star reference arbiter on the pair's own footprint",
+              flush=True)
     return dict(field=field, filt=filt,
                 PASS=bool(not bad and not ext_fail and not could_not_verify),
                 could_not_verify=could_not_verify,
@@ -1665,6 +1867,15 @@ def main(argv=None):
                          "separately and withholds only what failed.")
     ap.add_argument("--refcat", default=None,
                     help="optional external refcat for the fine-grid absolute cross-check")
+    ap.add_argument("--fallback-refcat", default=None,
+                    help="star list used ONLY to arbitrate an overlapping pair "
+                         "that --refcat left unsettled, on the pair's own "
+                         "footprint.  Never used for the absolute-frame arm and "
+                         "never opened unless such a pair exists.  This is where "
+                         "a field's own merged photometry belongs: the arbiter "
+                         "differences the two groups' residuals star by star, so "
+                         "the reference cancels, while the absolute frame it "
+                         "would agree with by construction is not asked of it.")
     ap.add_argument("--observations", default=None,
                     help="csv of <proposal>-<observation> keys (e.g. "
                          "02221-001,01182-004) to scope the check to; stray crf "
@@ -1707,6 +1918,7 @@ def main(argv=None):
     no_coverage = []
     for f in filts:
         r = check_filter(args.field, f, refcat=args.refcat,
+                         fallback_refcat=args.fallback_refcat,
                          observations=(set(args.observations.split(","))
                                        if args.observations else None))
         if r.get("not_in_release"):

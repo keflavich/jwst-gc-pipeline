@@ -51,7 +51,7 @@ def test_single_group_with_frames_is_a_genuine_pass(monkeypatch):
 
 def test_main_exit_2_on_could_not_verify(monkeypatch):
     monkeypatch.setattr(gate, "check_filter",
-                        lambda field, filt, refcat=None, verbose=True, observations=None: dict(
+                        lambda field, filt, refcat=None, verbose=True, observations=None, fallback_refcat=None: dict(
                             field=field, filt=filt, PASS=False,
                             could_not_verify=True, note="no crf frames matched"))
     rc = gate.main(["--field", "x", "--filter", "F200W"])
@@ -64,7 +64,7 @@ def test_main_exit_1_on_measured_fail_beats_noverify(monkeypatch):
         dict(field="x", filt="F212N", PASS=False, could_not_verify=True),
     ])
     monkeypatch.setattr(gate, "check_filter",
-                        lambda field, filt, refcat=None, verbose=True, observations=None: next(results))
+                        lambda field, filt, refcat=None, verbose=True, observations=None, fallback_refcat=None: next(results))
     monkeypatch.setattr(gate, "field_filters", lambda field: ["F200W", "F212N"])
     rc = gate.main(["--field", "x", "--scan"])
     assert rc == 1

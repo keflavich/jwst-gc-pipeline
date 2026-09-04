@@ -94,6 +94,7 @@ def test_a_field_with_only_a_dense_list_still_uses_it_to_arbitrate():
 
 def test_a_field_with_no_list_at_all_says_so_rather_than_pretending():
     assert stage.overlap_arbiter_refcat('not-a-field') is None
+    assert stage.internal_arbiter_refcat('not-a-field') is None
 
 
 def test_the_two_unmapped_disjoint_fields_are_unmapped_for_different_reasons():
@@ -138,7 +139,8 @@ def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
     w51 = stage.OVERLAP_ARBITER_REFCAT.get('w51')
     if not (w51 and os.path.exists(w51)):
         pytest.skip('w51 star list not on this host')
-    _rc, _gaia, label = cio._refcat(w51)
+    _rc, _gaia, label, internal = cio._refcat(w51)
+    assert internal is False
     assert 'VIRAC2' not in label.split('NOT')[0]
     assert 'no `source` column' in label
 
