@@ -19,7 +19,7 @@ import pytest
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Table
-from astropy.wcs import WCS
+from astropy.wcs import WCS, Sip
 from astropy import units as u
 
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
@@ -233,3 +233,200 @@ def test_off_detector_seeds_keep_their_stored_sky(tmp_path):
     assert got[2].separation(stored[2]).to(u.mas).value < 0.01   # kept as stored
     assert np.all(_seps(out, now_wcs.pixel_to_world(x, y))[:2] < 0.01)
     assert np.hypot(*shift) == pytest.approx(100.0, rel=0.05)
+
+
+def _sip_wcs(crval1=266.5, crval2=-28.7):
+    """A JWST-shaped ``RA---TAN-SIP``: the projection every real detector-frame
+    satstar catalog stamps into its meta."""
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN-SIP', 'DEC--TAN-SIP']
+    w.wcs.crpix = [64.5, 64.5]
+    w.wcs.crval = [crval1, crval2]
+    w.wcs.cdelt = [-PIXSCALE, PIXSCALE]
+    a = np.zeros((3, 3))
+    b = np.zeros((3, 3))
+    a[2, 0], a[1, 1], a[0, 2] = 4e-5, -2e-5, 3e-5
+    b[2, 0], b[1, 1], b[0, 2] = -3e-5, 5e-5, 2e-5
+    w.sip = Sip(a, b, None, None, w.wcs.crpix)
+    return w
+
+
+def test_anchor_transport_survives_a_sip_projection(tmp_path):
+    """The component anchor is stored as sky only.  Recovering its pixel by
+    inverting a WCS rebuilt from the meta's LINEAR cards drops the SIP terms and
+    lands on the wrong pixel -- 54.87 mas median / 224.30 mas max (1.79 / 7.26 px)
+    on brick F182M nrcb1, an UNMOVED frame that should have refreshed by 0.00.
+    Transport the anchor by the offset ``skycoord_fit`` itself moved by instead,
+    which needs no fit-time WCS and so cannot lose the distortion."""
+    fit_wcs = _sip_wcs()
+    x = np.array([12.0, 40.0, 64.0, 100.0, 124.0])
+    y = np.array([18.0, 110.0, 64.0, 30.0, 121.0])
+    tbl = _satstar_table(fit_wcs, x, y)
+    # anchor = the saturated component's bbox centre, a few px off the centroid
+    anchor_sky = fit_wcs.pixel_to_world(x + 3.0, y - 2.0)
+    tbl['sat_com_ra'] = anchor_sky.ra.deg
+    tbl['sat_com_dec'] = anchor_sky.dec.deg
+
+    # the frame has NOT moved: the fit-time WCS is the current one
+    frame = str(tmp_path / 'exp_crf.fits')
+    _write_frame(frame, fit_wcs)
+
+    out, shift = refresh_satstar_skycoords(tbl, frame_path=frame)
+
+    got = SkyCoord(np.asarray(out['sat_com_ra']) * u.deg,
+                   np.asarray(out['sat_com_dec']) * u.deg)
+    assert np.hypot(*shift) < 0.01
+    # an unmoved frame must not move the anchor either
+    assert np.all(got.separation(anchor_sky).to(u.mas).value < 0.01)
+
+
+def test_anchor_transport_matches_the_exact_pixel_transport(tmp_path):
+    """With a SIP projection AND a moved frame, the transported anchor has to
+    agree with the exact answer -- invert the fit-time WCS to the anchor pixel,
+    project that pixel through the current one."""
+    fit_wcs = _sip_wcs()
+    now_wcs = _sip_wcs(crval1=266.5 + 2.0 / 3600.0 / np.cos(np.radians(-28.7)),
+                       crval2=-28.7 + 1.0 / 3600.0)
+    x = np.array([12.0, 40.0, 64.0, 100.0, 124.0])
+    y = np.array([18.0, 110.0, 64.0, 30.0, 121.0])
+    ax, ay = x + 3.0, y - 2.0
+    tbl = _satstar_table(fit_wcs, x, y)
+    anchor_sky = fit_wcs.pixel_to_world(ax, ay)
+    tbl['sat_com_ra'] = anchor_sky.ra.deg
+    tbl['sat_com_dec'] = anchor_sky.dec.deg
+
+    frame = str(tmp_path / 'exp_crf.fits')
+    _write_frame(frame, now_wcs)
+    out, _ = refresh_satstar_skycoords(tbl, frame_path=frame)
+
+    exact = now_wcs.pixel_to_world(ax, ay)
+    got = SkyCoord(np.asarray(out['sat_com_ra']) * u.deg,
+                   np.asarray(out['sat_com_dec']) * u.deg)
+    # it MOVED (the frame moved 2.2")
+    assert np.all(got.separation(anchor_sky).arcsec > 2.0)
+    # and it landed where the exact pixel transport puts it
+    assert np.all(got.separation(exact).to(u.mas).value < 0.5)
+
+
+def test_module_builds_no_wcs_from_a_stamped_header():
+    """ASTROMETRY RULE #2: the only WCS this module reads is the frame's GWCS
+    through ``frame_wcs``.  Rebuilding the fit-time WCS from the catalog meta's
+    header cards is what lost the SIP terms."""
+    import inspect
+    from jwst_gc_pipeline.photometry import satstar_wcs_refresh as mod
+    src = inspect.getsource(mod)
+    for token in ('astropy_wcs.WCS(', 'wcs.WCS(', 'all_world2pix', 'wcs_world2pix'):
+        assert token not in src, f"{token} rebuilds a header WCS in {mod.__name__}"
+
+
+# ---------------------------------------------------------------------------
+# The consolidated cache must go stale when the FRAMES move, not only when the
+# per-exposure satstar catalogs do.
+# ---------------------------------------------------------------------------
+
+def test_frame_state_signature_moves_when_a_frame_is_rewritten(tmp_path):
+    """Re-aligning or regenerating an exposure rewrites the FRAME and touches no
+    satstar catalog, so a signature over the satstar catalogs alone cannot see
+    it.  This one is taken over the frames they resolve to."""
+    from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
+        satstar_frame_state_signature)
+
+    frame = tmp_path / 'exp_crf.fits'
+    _write_frame(str(frame), _wcs())
+    cat = str(tmp_path / 'exp_crf_m3_satstar_catalog.fits')
+    _satstar_table(_wcs(), np.array([10.0]), np.array([20.0])).write(cat)
+
+    before = satstar_frame_state_signature([cat])
+    assert before and satstar_frame_state_signature([cat]) == before  # stable
+
+    _write_frame(str(frame), _wcs(crval1=266.6))   # the frame moved
+    os.utime(frame, (1e9, 1e9))                    # ...to a distinct mtime
+    assert satstar_frame_state_signature([cat]) != before
+
+
+def test_frame_state_signature_marks_a_missing_frame(tmp_path):
+    """A catalog whose frame is gone must not silently contribute nothing --
+    that would make an appearing/disappearing frame invisible to the cache."""
+    from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
+        satstar_frame_state_signature)
+
+    cat = str(tmp_path / 'exp_crf_m3_satstar_catalog.fits')
+    _satstar_table(_wcs(), np.array([10.0]), np.array([20.0])).write(cat)
+    without = satstar_frame_state_signature([cat])
+
+    _write_frame(str(tmp_path / 'exp_crf.fits'), _wcs())
+    assert satstar_frame_state_signature([cat]) != without
+    assert satstar_frame_state_signature([]) == ''
+
+
+def test_consolidated_cache_rebuilds_after_the_frames_move(tmp_path, capsys):
+    """The durable half of the fix.  ``load_satstar_catalog``'s freshness test
+    is cache mtime + source count + dedup radius + algorithm -- all properties of
+    the satstar catalogs.  Correcting the offsets table and regenerating from
+    ``_cal`` changes none of them, so without a frame term the consolidated
+    catalog (the file that feeds the merged photometry) keeps serving the
+    pre-correction sky."""
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    pdir = tmp_path / 'F182M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    (tmp_path / 'catalogs').mkdir()
+    x = np.array([25.0, 75.0])
+    y = np.array([35.0, 85.0])
+    fit_wcs = _wcs()
+    frames = []
+    for i in (1, 2):
+        frame = pdir / f'jw02221001001_02101_0000{i}_nrca1_o001_crf.fits'
+        _write_frame(str(frame), fit_wcs)
+        frames.append(frame)
+        _satstar_table(fit_wcs, x, y).write(
+            str(frame).replace('.fits', '_m6_satstar_catalog.fits'))
+
+    first = MC.load_satstar_catalog('f182m', target='brick',
+                                    basepath=str(tmp_path) + '/')
+    assert first is not None and len(first) == 2
+    assert np.all(_seps(first, fit_wcs.pixel_to_world(x, y)) < 0.01)
+
+    # The frames move 90 mas (offsets-table correction + regeneration from _cal).
+    # No satstar catalog is touched, and the consolidated cache stays newer than
+    # all of them -- every pre-existing freshness term still says "fresh".
+    now_wcs = _wcs(crval1=266.5 + 90e-3 / 3600.0 / np.cos(np.radians(-28.7)))
+    for frame in frames:
+        _write_frame(str(frame), now_wcs)
+    cache = tmp_path / 'catalogs' / 'f182m_consolidated_satstar_catalog.fits'
+    assert cache.exists()
+    newest_cat = max(os.path.getmtime(str(f).replace('.fits',
+                                                     '_m6_satstar_catalog.fits'))
+                     for f in frames)
+    assert os.path.getmtime(cache) >= newest_cat
+
+    capsys.readouterr()
+    second = MC.load_satstar_catalog('f182m', target='brick',
+                                     basepath=str(tmp_path) + '/')
+    out = capsys.readouterr().out
+    assert 'the exposures moved under it' in out, out
+    assert np.all(_seps(second, now_wcs.pixel_to_world(x, y)) < 0.01)
+    assert np.all(_seps(second, fit_wcs.pixel_to_world(x, y)) > 50)
+
+
+def test_consolidated_cache_is_still_reused_when_nothing_moved(tmp_path, capsys):
+    """The frame term must not defeat the cache: the consolidation is the
+    dominant cost of every merge (~1400 files, dozens of times per run), so an
+    unchanged field has to hit."""
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    pdir = tmp_path / 'F182M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    (tmp_path / 'catalogs').mkdir()
+    fit_wcs = _wcs()
+    frame = pdir / 'jw02221001001_02101_00001_nrca1_o001_crf.fits'
+    _write_frame(str(frame), fit_wcs)
+    _satstar_table(fit_wcs, np.array([25.0]), np.array([35.0])).write(
+        str(frame).replace('.fits', '_m6_satstar_catalog.fits'))
+
+    MC.load_satstar_catalog('f182m', target='brick', basepath=str(tmp_path) + '/')
+    capsys.readouterr()
+    MC.load_satstar_catalog('f182m', target='brick', basepath=str(tmp_path) + '/')
+    out = capsys.readouterr().out
+    assert 'Using consolidated satstar catalog' in out, out
+    assert 'Rebuilding' not in out, out

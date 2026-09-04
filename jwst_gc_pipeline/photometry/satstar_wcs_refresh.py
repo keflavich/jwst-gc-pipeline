@@ -37,43 +37,48 @@ no-op to <0.01 mas on a cache whose frame has not moved since the fit, so it
 costs nothing but the WCS read on an up-to-date field.
 
 ``sat_com_ra``/``sat_com_dec`` are stored as sky only (the component bbox centre
-pixel is not kept), so they are round-tripped through the WCS the cache stamped
-into its own meta -- which reproduces ``skycoord_fit`` from the stored pixels to
-0.00 mas, so it is the exact inverse of what wrote them.
+pixel is not kept), so there is no pixel to re-project.  They are TRANSPORTED
+instead: the anchor is displaced by the same tangent-plane offset the row's own
+``skycoord_fit`` just moved by.  The anchor is the bbox centre of the same
+saturated component the star was fit in -- tens of pixels away at most -- and the
+old-minus-new WCS difference is a smooth surface, so its gradient over that
+separation is the only error.  Measured against the exact pixel transport on
+brick F182M nrcb1 (411 anchors, frame displaced 2" with a 0.05 deg roll): median
+0.001 mas, max 0.003 mas.
+
+This deliberately does NOT rebuild the fit-time WCS from the header cards in the
+catalog's meta.  Doing that means inverting through an `astropy.wcs.WCS` built
+from a detector-frame SIP header, which ASTROMETRY RULE #2 forbids; an earlier
+draft of this module did it with a linear-card whitelist that dropped
+``A_ORDER``/``A_i_j``/``B_ORDER``/``B_i_j``, so a ``RA---TAN-SIP`` projection was
+inverted through a distortion-free TAN and moved the anchor 54.87 mas median /
+224.30 mas max (1.79 / 7.26 px) on that same UNMOVED frame.  The transport above
+needs no fit-time WCS at all and is exactly zero when the frame has not moved.
 
 Measured on brick F200W (issue #193): 40 exposures, 3279 saturated stars, stored
 minus current-GWCS = +56.8 / +88.7 mas, against a +58.7 / +88.2 mas
 saturated-versus-unsaturated position excess measured in the m6 catalog built
 from those caches.
 """
+import hashlib
 import os
 import re
 import warnings
 
 import numpy as np
 from astropy.coordinates import SkyCoord
-from astropy.io import fits
 from astropy import units as u
-from astropy import wcs as astropy_wcs
 
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 
 __all__ = ['frame_path_for_satstar_catalog', 'refresh_satstar_skycoords',
-           'MissingSatstarFrameWarning']
+           'satstar_frame_state_signature', 'MissingSatstarFrameWarning']
 
 #: Sky columns rebuilt from ``xcentroid``/``ycentroid``.
 _PIXEL_DERIVED_SKY_COL = 'skycoord_fit'
 
-#: Sky-only columns round-tripped through the cache's stamped WCS.
+#: Sky-only columns transported by the same offset as ``skycoord_fit``.
 _ANCHOR_RA_COL, _ANCHOR_DEC_COL = 'sat_com_ra', 'sat_com_dec'
-
-#: Header cards the fit stamps into the satstar catalog's meta.  They describe
-#: the frame WCS AT FIT TIME, which is what makes the round trip exact.
-_STAMPED_WCS_KEYS = ('WCSAXES', 'CRPIX1', 'CRPIX2', 'PC1_1', 'PC1_2',
-                     'PC2_1', 'PC2_2', 'CD1_1', 'CD1_2', 'CD2_1', 'CD2_2',
-                     'CDELT1', 'CDELT2', 'CUNIT1', 'CUNIT2',
-                     'CTYPE1', 'CTYPE2', 'CRVAL1', 'CRVAL2',
-                     'LONPOLE', 'LATPOLE', 'RADESYS')
 
 #: How many trailing ``_token`` suffixes may be stripped looking for the frame.
 _MAX_SUFFIX_TOKENS = 4
@@ -110,17 +115,50 @@ def frame_path_for_satstar_catalog(catalog_path):
     return None
 
 
-def _stamped_wcs(meta):
-    """The frame WCS the satstar fit stamped into the catalog meta, or None."""
-    header = fits.Header()
-    for key in _STAMPED_WCS_KEYS:
-        if key in meta:
-            header[key] = meta[key]
-    if 'CTYPE1' not in header or 'CRVAL1' not in header:
-        return None
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', astropy_wcs.FITSFixedWarning)
-        return astropy_wcs.WCS(header, relax=True)
+def satstar_frame_state_signature(catalog_paths):
+    """A digest of the FRAME STATE behind a set of per-exposure satstar catalogs.
+
+    The consolidated per-filter satstar catalog is itself a cache, and its
+    freshness test compares its mtime and source count against the per-exposure
+    catalogs.  Those do not move when the FRAME moves: ``fix_alignment`` baking a
+    corrected ``RAOFFSET`` into a regenerated working copy rewrites the exposure
+    and leaves every satstar catalog untouched, so a consolidated catalog built
+    before the correction keeps serving the old frame's sky.  That is the same
+    staleness this module refreshes per exposure, one level up.
+
+    So key the consolidated cache on the exposures too.  The digest covers each
+    resolved frame's name, mtime and size -- stat only, no file is opened, and a
+    regeneration or a re-alignment changes all three.  A catalog with no frame on
+    disk contributes a ``missing`` marker rather than being skipped, so a frame
+    appearing or disappearing also invalidates.
+
+    Returns a 16-character hex string; ``''`` for an empty input.
+    """
+    paths = list(catalog_paths or ())
+    if not paths:
+        return ''
+    parts = []
+    for cat in sorted(str(p) for p in paths):
+        frame = frame_path_for_satstar_catalog(cat)
+        if frame is None:
+            parts.append(f'{os.path.basename(cat)}\0missing')
+            continue
+        try:
+            st = os.stat(frame)
+        except OSError:
+            parts.append(f'{os.path.basename(frame)}\0unstatable')
+            continue
+        parts.append(f'{os.path.basename(frame)}\0{st.st_mtime_ns}\0{st.st_size}')
+    digest = hashlib.sha256('\n'.join(parts).encode('utf-8')).hexdigest()
+    return digest[:16]
+
+
+
+def _in_frame(coord, reference):
+    """``coord`` expressed in ``reference``'s frame (a no-op when they match)."""
+    if coord.frame.name == reference.frame.name:
+        return coord
+    return coord.transform_to(reference.frame)
 
 
 def refresh_satstar_skycoords(table, frame_path=None, catalog_path=None,
@@ -201,23 +239,23 @@ def refresh_satstar_skycoords(table, frame_path=None, catalog_path=None,
     shift = ((float(np.median(dra[finite])), float(np.median(ddec[finite])))
              if np.any(finite) else nan_shift)
 
-    # The component anchor is stored as sky only; invert it through the WCS the
-    # fit stamped into meta, which is exactly what projected it.
+    # The component anchor is stored as sky only, so there is no pixel to
+    # re-project.  TRANSPORT it by the tangent-plane offset the row's own
+    # skycoord_fit just moved by -- see the module docstring.  Rebuilding the
+    # fit-time WCS from the meta's header cards would be ASTROMETRY RULE #2's
+    # forbidden SIP-header inversion, and it is not needed.
     if _ANCHOR_RA_COL in table.colnames and _ANCHOR_DEC_COL in table.colnames:
-        old = _stamped_wcs(table.meta)
-        if old is not None:
-            ra = np.asarray(table[_ANCHOR_RA_COL], dtype=float)
-            dec = np.asarray(table[_ANCHOR_DEC_COL], dtype=float)
-            ok = np.isfinite(ra) & np.isfinite(dec)
-            if np.any(ok):
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore')
-                    ax, ay = old.all_world2pix(ra[ok], dec[ok], 0)
-                    anchor = wcs.pixel_to_world(np.asarray(ax, dtype=float),
-                                                np.asarray(ay, dtype=float))
-                if isinstance(anchor, SkyCoord):
-                    ra[ok] = anchor.ra.deg
-                    dec[ok] = anchor.dec.deg
-                    table[_ANCHOR_RA_COL] = ra
-                    table[_ANCHOR_DEC_COL] = dec
+        ra = np.asarray(table[_ANCHOR_RA_COL], dtype=float)
+        dec = np.asarray(table[_ANCHOR_DEC_COL], dtype=float)
+        dlon, dlat = stored.spherical_offsets_to(_in_frame(fresh, stored))
+        ok = (np.isfinite(ra) & np.isfinite(dec)
+              & np.isfinite(dlon.deg) & np.isfinite(dlat.deg))
+        if np.any(ok):
+            anchor = SkyCoord(ra[ok] * u.deg, dec[ok] * u.deg,
+                              frame=stored.frame.name)
+            moved = anchor.spherical_offsets_by(dlon[ok], dlat[ok])
+            ra[ok] = moved.ra.deg
+            dec[ok] = moved.dec.deg
+            table[_ANCHOR_RA_COL] = ra
+            table[_ANCHOR_DEC_COL] = dec
     return table, shift
