@@ -113,6 +113,29 @@ behind for inspection. Landing it off means this PR can be reviewed on the
 offline tool's output first, on a field that is idle, before any chain behaves
 differently.
 
+### The in-run path is protected by the name filter alone
+
+`cataloging._gc_perframe_images` calls `spent_mergedcat_frames` and
+`superseded_perframe_products` and unlinks what they return. Those two apply
+`_is_protected_name` — `PROTECTED_SUFFIXES` and `PROTECTED_SUBSTRINGS` — and
+**not** `Guard`. No release-target check, no busy-field check, no age floor, no
+`--protect`. That is deliberate, and each missing veto is missing for a reason:
+
+* **busy-field**: the in-run pruner runs *inside* a live chain, so this veto
+  would refuse everything by construction. It is the offline tool's guard
+  against a chain it is not part of.
+* **release targets**: all 1,200 are `_crf.fits`, which `PROTECTED_SUFFIXES`
+  already excludes — measured, 0 of 1,200 reach the Guard unprotected. The
+  in-run selectors also glob only `*_{label}_daophot_*_{residual,model}.fits`,
+  a shape no release has ever published.
+* **age floor**: meaningless for a file this same run wrote minutes ago.
+* **`--protect`**: an operator flag, and there is no operator in a SLURM job.
+
+**If you add a rule to the in-run path, it does not get the Guard.** The two
+paths have different safety properties on purpose; anything new on the in-run
+side has to earn its safety from `_is_protected_name` and from the glob it uses,
+or go through `plan()` instead.
+
 ## Measured, 2026-08-31
 
 Floors, from a direct `find -printf` inventory. Pipeline-directory rows cover
