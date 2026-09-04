@@ -183,6 +183,13 @@ def sanity_check_individual_table(tbl):
     abmag = (-2.5 * np.log10(flux_jy / u.Jy) + ABMAG_OFFSET) * u.mag
 
     print(f'Units of abmag columns are: abmag={abmag.unit}, abmag_tbl={abmag_tbl.unit}')
+    if len(flux_jy) == 0:
+        # Everything was cut by the `flux_jy > 0` filter above.  The reductions
+        # below (nanmax, min/max) have no identity on a zero-size array and
+        # raise -- another diagnostic that would stop the merge.
+        print("no positive-flux sources in this table, so no brightness "
+              "diagnostic")
+        return
     assert abmag.unit == u.mag
     assert abmag_tbl.unit == u.mag
     assert flux_jy.unit == u.Jy
@@ -195,7 +202,21 @@ def sanity_check_individual_table(tbl):
     fluxcolname = 'flux' if 'flux' in tbl.colnames else 'flux_fit'
     print(f"Max flux in tbl for {wl}: {tbl[fluxcolname].max()};"
           f" in jy={flux_jy.max()}; magmin={abmag_tbl.min()}={np.nanmin(abmag_tbl)}, magmax={abmag_tbl.max()}={np.nanmax(abmag_tbl)}")
-    print(f"100th brightest flux={flux_jy[-100]} abmag={abmag[-100]} abmag_tbl={abmag_tbl[-100]}")
+    # A DIAGNOSTIC line must never be able to stop a merge.  This indexed
+    # [-100] unconditionally, so any table with fewer than 100 rows raised
+    # IndexError out of a print -- and because merge_daophot re-raises, it took
+    # the whole stage with it.  sickle F1130W (88 sources) killed its m6
+    # finalize this way, after m12-m5 had all succeeded.
+    n = len(flux_jy)
+    if n >= 100:
+        print(f"100th brightest flux={flux_jy[-100]} abmag={abmag[-100]} "
+              f"abmag_tbl={abmag_tbl[-100]}")
+    elif n:
+        print(f"faintest of only {n} source(s) (fewer than 100, so no 100th "
+              f"brightest): flux={flux_jy[-1]} abmag={abmag[-1]} "
+              f"abmag_tbl={abmag_tbl[-1]}")
+    else:
+        print("no sources in this table, so no brightness diagnostic")
 
 
 def nanaverage_numpy(data, weights, **kwargs):
