@@ -2,12 +2,14 @@
 
 These check the plan and the commands rather than submitting anything.
 """
+import fnmatch
 import os
 
 import pytest
 
 from jwst_gc_pipeline import config as pipeline_config
 from jwst_gc_pipeline import run_pipeline as rp
+from jwst_gc_pipeline.reduction import destreak_policy
 
 
 # --------------------------------------------------------------------------
@@ -239,6 +241,61 @@ def test_the_suffix_follows_the_destreak_policy():
     hard-coded destreak_ suffix would find no files."""
     assert rp.resolve('2221', '001')['each_suffix'] == 'destreak_o001_crf'
     assert rp.resolve('6778', '001')['each_suffix'] == 'align_o001_crf'
+
+
+def test_a_miri_plan_asks_for_the_lineage_miri_writes():
+    """MIRI's driver has no destreak step and tags nothing.
+
+    ``PipelineMIRI`` names the per-exposure frame straight off the ``_cal``
+    stem (line 663) -- ``..._mirimage_o002_crf.fits`` -- so a plan asking for
+    ``destreak_o002_crf`` sends ``get_filenames`` after a name no MIRI frame on
+    disk carries, and the cataloging stage refuses with zero candidate frames.
+    """
+    plan = rp.resolve('2221', '002', instrument='miri')
+    assert plan['each_suffix'] == 'o002_crf'
+    assert plan['suffix_by_filter'] == {'F2550W': 'o002_crf'}
+    # The glob crowdsource_catalogs_long.get_filenames builds from it has to
+    # match the name PipelineMIRI writes -- and the ``_align_o<obs>_crf``
+    # variant an older Image3 crf-naming branch left on brick/F2550W.
+    for written in ('jw02221002001_02101_00001_mirimage_o002_crf.fits',
+                    'jw02221002001_02101_00001_mirimage_align_o002_crf.fits'):
+        assert fnmatch.fnmatch(written, f"*mirimage*{plan['each_suffix']}.fits")
+
+
+def test_niriss_has_no_lineage_token_either():
+    """``PipelineRerunNIRISS`` writes ``_o<obs>_crf`` too (line 525), and its
+    filter names are NIRCam's, so only the instrument argument can say so."""
+    plan = rp.resolve('4147', '012', instrument='niriss')
+    assert plan['each_suffix'] == 'o012_crf'
+    assert set(plan['suffix_by_filter'].values()) == {'o012_crf'}
+
+
+def test_nircam_keeps_its_lineage_token():
+    """What the MIRI/NIRISS split must NOT loosen.
+
+    brick, cloudc, cloudef and sickle carry BOTH lineages in one directory
+    (``o001_crf`` and ``destreak_o001_crf``).  A NIRCam plan that dropped the
+    token would glob both and mix them -- the ~106 mas two-lineage catalog.
+    """
+    assert rp.resolve('2221', '001')['each_suffix'] == 'destreak_o001_crf'
+    assert rp.resolve('6778', '001')['each_suffix'] == 'align_o001_crf'
+    # An untokened suffix would match the destreaked frame as well; the
+    # tokened one is what keeps the two lineages apart.
+    assert not fnmatch.fnmatch(
+        'jw02221001001_02101_00001_nrcb3_destreak_o001_crf.fits',
+        '*nrcb3*align_o001_crf.fits')
+
+
+def test_destreaking_is_off_for_every_non_nircam_instrument():
+    """The policy answers the reduction driver, not just the cataloger:
+    ``destreaks`` gates NIRCam stage 1's streak removal, and neither
+    ``PipelineMIRI`` nor ``PipelineRerunNIRISS`` has that step."""
+    assert destreak_policy.destreaks('brick', 'F2550W') is False
+    assert destreak_policy.destreaks('brick', 'F2550W', instrument='miri') is False
+    assert destreak_policy.destreaks('sgrb2', 'F770W') is False
+    # NIRISS shares F200W with NIRCam, so it has to be named.
+    assert destreak_policy.destreaks('m4-1979', 'F200W', instrument='niriss') is False
+    assert destreak_policy.destreaks('brick', 'F410M') is True
 
 
 def test_sickle_gets_per_filter_suffixes():

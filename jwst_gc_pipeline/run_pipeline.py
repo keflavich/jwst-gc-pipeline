@@ -122,12 +122,15 @@ def resolve(proposal, obsid, instrument='nircam', filters=None):
         'reference_catalog': fields.reference_catalog_path(
             proposal, obsid, target=target, instrument=instrument,
             basepath=basepath),
+        # The instrument is passed because the destreak/align lineage token is
+        # NIRCam's: MIRI and NIRISS write a bare o<obs>_crf, and a NIRISS run
+        # cannot be told apart from a NIRCam one by filter name alone.
         'each_suffix': destreak_policy.crf_suffix(
-            target, filternames[0], obsid),
+            target, filternames[0], obsid, instrument=instrument),
         # sickle destreaks its short filters and not its long ones, so no one
         # suffix is right for the observation.
         'suffix_by_filter': destreak_policy.suffixes_by_filter(
-            target, filternames, obsid),
+            target, filternames, obsid, instrument=instrument),
     }
 
 
