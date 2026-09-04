@@ -428,3 +428,107 @@ def test_a_record_predating_the_field_says_it_cannot_answer(gate, tmp_path,
     out = capsys.readouterr().out
     assert 'not recorded' in out, out
     assert 'was set' not in out, out
+
+
+# ---------------------------------------------------------------------------
+# an OVERRIDDEN PASS (issue #581)
+#
+# The block above lives inside the `failed` loop.  ASTROM_CHECKPOINT_WARN_ONLY
+# never produces a record that reaches it: the raise is demoted, so the record
+# is written `passed: true`, and a correcting stage is skipped before it enters
+# any list.  arches ran that way and this gate printed "0 FAILED", exit 0.
+# ---------------------------------------------------------------------------
+
+def _warn_only(reason='arches F323N: 4.02/4.00 mas against a 4.0 floor'):
+    return dict(env='ASTROM_CHECKPOINT_WARN_ONLY', used=True, reason=reason,
+                reason_env='ASTROM_CHECKPOINT_WARN_ONLY_REASON',
+                enforcement='release')
+
+
+def _write_passing_with_override(tmp_path, name, override, date=None):
+    d = tmp_path / 'fld' / 'astrometry_checkpoints'
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps(dict(
+        passed=True, correcting=name.startswith('checkpoint_m2'),
+        failures=[], unverified_blocking=[],
+        date=date or '2026-08-18T00:00:00Z', gate_override=override)))
+    return d / name
+
+
+def test_an_overridden_CORRECTING_record_is_reported(gate, tmp_path, capsys):
+    """The arches case verbatim: an m2 record, passed, demoted.  m2 is skipped
+    before the gate builds any list, so nothing here reported it at all."""
+    _write_passing_with_override(tmp_path,
+                                 'checkpoint_m2_F323N_o001_latest.json',
+                                 _warn_only())
+    _write(tmp_path, 'checkpoint_m3_F323N_o001_latest.json', True)
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'OVERRIDDEN m2/F323N/o001' in out, out
+    assert 'ASTROM_CHECKPOINT_WARN_ONLY=1 was set' in out, out
+    assert '4.02/4.00 mas against a 4.0 floor' in out, out
+
+
+def test_an_overridden_PASSING_frozen_record_is_reported(gate, tmp_path,
+                                                         capsys):
+    """`passed: true` kept it out of the `failed` loop, which is the only place
+    the block was printed."""
+    _write_passing_with_override(tmp_path,
+                                 'checkpoint_m5_F200W_o001_latest.json',
+                                 _warn_only(reason=''))
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'OVERRIDDEN m5/F200W/o001' in out, out
+    assert 'NO JUSTIFICATION RECORDED' in out, out
+    assert 'ASTROM_CHECKPOINT_WARN_ONLY_REASON' in out, out
+
+
+def test_reporting_an_overridden_pass_does_not_change_the_verdict(gate,
+                                                                  tmp_path):
+    """Whether an overridden pass should REFUSE is a policy question this
+    change does not answer.  Pinned so the reporting cannot quietly become a
+    gate, and so the reverse -- a real failure going green because it also
+    carries an override -- cannot happen either."""
+    _write_passing_with_override(tmp_path,
+                                 'checkpoint_m3_F212N_o001_latest.json',
+                                 _warn_only())
+    assert gate.main(['--field', 'fld']) == 0
+    _write(tmp_path, 'checkpoint_m5_F200W_o001_latest.json', False,
+           failures=['F200W visit 2 [m5]: exposure MOVED 2.30 mas'])
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_clean_pass_is_not_reported_as_overridden(gate, tmp_path, capsys):
+    _write_passing_with_override(tmp_path,
+                                 'checkpoint_m3_F212N_o001_latest.json',
+                                 None)
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'OVERRIDDEN' not in out, out
+
+
+def test_an_overridden_SUPERSEDED_record_is_left_to_the_superseded_line(
+        gate, tmp_path, capsys):
+    """A record the newest m2 has superseded describes products that no longer
+    exist; repeating its waiver as live would send someone after a run that has
+    been re-reduced away."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-20T00:00:00Z')
+    _write_passing_with_override(tmp_path,
+                                 'checkpoint_m5_F212N_o001_latest.json',
+                                 _warn_only(), date='2026-08-02T00:00:00Z')
+    gate.main(['--field', 'fld'])
+    out = capsys.readouterr().out
+    assert 'SUPERSEDED m5/F212N/o001' in out, out
+    assert 'OVERRIDDEN m5' not in out, out
+
+
+def test_an_overridden_FAILURE_is_still_reported_once(gate, tmp_path, capsys):
+    """The `failed` loop already names it; the new block must not print it a
+    second time."""
+    _write_with_override(tmp_path, 'checkpoint_m5_F200W_o001_latest.json',
+                         _warn_only())
+    assert gate.main(['--field', 'fld']) == 1
+    out = capsys.readouterr().out
+    assert out.count('ASTROM_CHECKPOINT_WARN_ONLY=1 was set') == 1, out
+    assert 'OVERRIDDEN' not in out, out

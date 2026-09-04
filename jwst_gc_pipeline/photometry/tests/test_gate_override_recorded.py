@@ -206,3 +206,125 @@ def test_the_record_builder_resolves_the_override_before_writing():
         'the override state must be resolved before the record is written; '
         'stamping it after `_defer_to_release` leaves the file on disk '
         'without it, which is the whole defect')
+
+
+# ---------------------------------------------------------------------------
+# the BROAD override (issue #581): ASTROM_CHECKPOINT_WARN_ONLY
+#
+# It demotes every blocking check at every stage, a CORRECTING stage's stop
+# included, and it was the one override the record never mentioned.  arches ran
+# its m2 repair pass under it on 2026-08-28 with a written justification: the
+# record reads `passed=True correcting=True gate_override=None`, the release
+# gate reports `0 FAILED` and exit 0, and the reason lives only in a SLURM log.
+# ---------------------------------------------------------------------------
+
+WARN_ONLY = "ASTROM_CHECKPOINT_WARN_ONLY"
+WARN_ONLY_REASON = "ASTROM_CHECKPOINT_WARN_ONLY_REASON"
+
+
+@pytest.fixture(autouse=True)
+def _clean_warn_only(monkeypatch):
+    for name in (WARN_ONLY, WARN_ONLY_REASON):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_the_broad_override_is_the_one_named_in_the_module():
+    """Spelled once, and identically to the demotion sites in cataloging.py --
+    a second spelling records an override that was never consulted, or misses
+    one that was."""
+    assert AC.WARN_ONLY_ENV == WARN_ONLY
+    assert AC.override_reason_env(AC.WARN_ONLY_ENV) == WARN_ONLY_REASON
+
+
+def test_a_PASSING_correcting_stage_record_carries_the_broad_override(
+        tmp_path, monkeypatch):
+    """The arches shape end to end.  m2 measures a correction, WARN_ONLY
+    demotes the stop, and the record on disk must say a gate was demoted --
+    `passed` is true and the stage is correcting, so both conditions that guard
+    the narrow overrides exclude exactly this record."""
+    from .test_astrometry_checkpoint import _visit_tables
+
+    monkeypatch.setenv(WARN_ONLY, "1")
+    monkeypatch.setenv(WARN_ONLY_REASON,
+                       "arches F323N: 4.02/4.00 mas against a 4.0 floor")
+    rec = AC.run_visit_checkpoint(_visit_tables(misaligned={2: (8.0, 0.0)}),
+                                  "m2", filtername="F323N",
+                                  record_dir=str(tmp_path), context="test")
+    assert rec["correcting"] and rec["passed"], (
+        'the arches record is a PASSING correcting-stage one')
+
+    disk = _on_disk(tmp_path)
+    assert disk["gate_override"] is not None, (
+        'a run that demoted every blocking check must not be indistinguishable '
+        'from one that met them')
+    assert disk["gate_override"]["env"] == WARN_ONLY
+    assert disk["gate_override"]["used"] is True
+    assert "4.02/4.00 mas" in disk["gate_override"]["reason"]
+    assert disk["gate_override"]["reason_env"] == WARN_ONLY_REASON
+
+
+def test_a_CLEAN_frozen_stage_run_under_the_broad_override_records_it(
+        tmp_path, monkeypatch):
+    """No failures anywhere, so the narrow override is never reached -- but the
+    run still had every blocking check demoted, and the pass is not an
+    unassisted one."""
+    from .test_astrometry_checkpoint import _visit_tables
+
+    monkeypatch.setenv(WARN_ONLY, "1")
+    rec = AC.run_visit_checkpoint(_visit_tables(), "m5", filtername="F212N",
+                                  record_dir=str(tmp_path), context="test")
+    assert rec["passed"] and not rec["failures"]
+    disk = _on_disk(tmp_path)
+    assert disk["gate_override"]["env"] == WARN_ONLY
+    assert disk["gate_override"]["used"] is True
+
+
+def test_an_unjustified_broad_override_is_recorded_as_having_no_reason(
+        tmp_path, monkeypatch):
+    """The state CLAUDE.md forbids, for the broadest of the three."""
+    from .test_astrometry_checkpoint import _visit_tables
+
+    monkeypatch.setenv(WARN_ONLY, "1")
+    AC.run_visit_checkpoint(_visit_tables(), "m5", filtername="F212N",
+                            record_dir=str(tmp_path), context="test")
+    disk = _on_disk(tmp_path)
+    assert disk["gate_override"]["used"] is True
+    assert disk["gate_override"]["reason"] == ""
+
+
+def test_the_broad_override_is_what_a_both_set_run_records(tmp_path,
+                                                           monkeypatch):
+    """WARN_ONLY demotes this stage's raise whether or not the narrow one is
+    set, so it is the one that describes what let the run past."""
+    from .test_astrometry_checkpoint import _visit_tables
+
+    monkeypatch.setenv(ENV, "1")
+    monkeypatch.setenv(WARN_ONLY, "1")
+    AC.run_visit_checkpoint(_visit_tables(misaligned={2: (8.0, 0.0)}),
+                            "m5", filtername="F212N",
+                            record_dir=str(tmp_path), context="test")
+    assert _on_disk(tmp_path)["gate_override"]["env"] == WARN_ONLY
+
+
+def test_a_run_without_the_broad_override_is_unchanged(tmp_path):
+    """The variable unset records nothing new: a clean frozen pass still
+    carries `None`, so `gate_override` keeps meaning "a gate was touched"."""
+    from .test_astrometry_checkpoint import _visit_tables
+
+    AC.run_visit_checkpoint(_visit_tables(), "m5", filtername="F212N",
+                            record_dir=str(tmp_path), context="test")
+    assert _on_disk(tmp_path)["gate_override"] is None
+
+
+def test_the_crossfilter_record_carries_it_too(monkeypatch):
+    """m7 is demoted by the same variable (`cataloging.
+    _run_crossfilter_astrom_checkpoint`), so its record answers the same
+    question."""
+    monkeypatch.setenv(WARN_ONLY, "1")
+    assert AC.record_gate_override("ALLOW_CROSSFILTER_ASTROM_FAIL",
+                                   False)["env"] == WARN_ONLY
+    import inspect
+    src = inspect.getsource(AC.run_crossfilter_checkpoint)
+    assert "record_gate_override(" in src, (
+        'the m7 record must resolve its override through the same helper, or '
+        'the broad one is recorded at m2..m6 and silently dropped at m7')

@@ -141,6 +141,29 @@ def _stale_against(info, rec, by_key, overall):
     return overall if (overall and date < overall) else ""
 
 
+def _who(info):
+    """``m5/F200W/o001`` -- the record's identity, as the report spells it."""
+    return "/".join(x for x in (info["stage"], info["filt"],
+                                (f"o{info['obs']}" if info["obs"] else None))
+                    if x)
+
+
+def _print_justification(ov):
+    """The operator's written reason, or the fact that there is none."""
+    reason = (ov.get("reason") or "").strip()
+    if reason:
+        print(f"    [override] justification: {reason}")
+    else:
+        print(f"    [override] NO JUSTIFICATION RECORDED -- CLAUDE.md "
+              f"requires one; set {ov.get('reason_env')} on the run")
+
+
+def _used_override(rec):
+    """The record's ``gate_override`` block if a gate was demoted, else None."""
+    ov = rec.get("gate_override")
+    return ov if isinstance(ov, dict) and ov.get("used") else None
+
+
 def _obs_in_scope(obs, observations):
     """Is a record's observation token inside the release's scope?
 
@@ -280,9 +303,7 @@ def main(argv=None):
           + (f", {len(answered)} answered by a later stage" if answered else ""))
     sys.stdout.flush()
     for path, info, rec, (_lp, li, lr) in answered:
-        who = "/".join(x for x in (info["stage"], info["filt"],
-                                   (f"o{info['obs']}" if info["obs"] else None))
-                       if x)
+        who = _who(info)
         print(f"ANSWERED BY A LATER STAGE {who}: recorded FAILED "
               f"{rec.get('date')}, but {li['stage']} measured the same property "
               f"on the same exposures at {lr.get('date')} and passed. This "
@@ -292,17 +313,13 @@ def main(argv=None):
         for line in (rec.get("failures") or [])[:4]:
             print(f"    was: {line}")
     for path, info, rec, older_than in stale:
-        who = "/".join(x for x in (info["stage"], info["filt"],
-                                   (f"o{info['obs']}" if info["obs"] else None))
-                       if x)
+        who = _who(info)
         print(f"SUPERSEDED {who}: recorded {rec.get('date')}, but m2 last ran "
               f"{older_than} -- this verdict is about products that have since "
               f"been re-reduced"
               f"{'' if rec.get('passed') else ' (it says FAILED, and that is not a statement about what is on disk now)'}")
     for path, info, rec in failed:
-        who = "/".join(x for x in (info["stage"], info["filt"],
-                                   (f"o{info['obs']}" if info["obs"] else None))
-                       if x)
+        who = _who(info)
         print(f"\nFAILED {who}  ({os.path.basename(path)}, {rec.get('date')})")
         for line in (rec.get("failures") or []):
             print(f"    {line}")
@@ -319,12 +336,35 @@ def main(argv=None):
                   "field, so whether the run stopped here is not knowable "
                   "from it")
         elif ov.get("used"):
-            reason = (ov.get("reason") or "").strip()
             print(f"    [override] {ov.get('env')}=1 was set: the run "
                   f"CONTINUED past this failure")
-            print(f"    [override] justification: {reason}" if reason else
-                  f"    [override] NO JUSTIFICATION RECORDED -- CLAUDE.md "
-                  f"requires one; set {ov.get('reason_env')} on the run")
+            _print_justification(ov)
+    # An overridden PASS.  The block above is inside the `failed` loop, and
+    # the broadest override never produces a record that reaches it:
+    # ASTROM_CHECKPOINT_WARN_ONLY demotes the stage's raise, so the record is
+    # written `passed: true`, and a correcting stage is skipped before it
+    # enters any list at all.  arches ran its m2 repair pass that way and this
+    # gate printed "0 FAILED", exit 0, with the operator's justification alive
+    # only in a SLURM log (#581).  Report a demoted gate wherever it sits and
+    # whatever its verdict; a superseded record is left to the SUPERSEDED line
+    # above, which already says it describes products that no longer exist.
+    #
+    # Reporting only.  Whether an overridden pass should also REFUSE the field
+    # is a policy question this gate does not answer, and the exit codes are
+    # unchanged by this block.
+    _already_said = {p for p, _i, _r in failed}
+    _superseded = {p for p, _i, _r, _o in stale}
+    for path, info, rec in found:
+        if path in _already_said or path in _superseded:
+            continue
+        ov = _used_override(rec)
+        if ov is None:
+            continue
+        print(f"\nOVERRIDDEN {_who(info)}  ({os.path.basename(path)}, "
+              f"{rec.get('date')}): {ov.get('env')}=1 was set and the record "
+              f"reads passed={bool(rec.get('passed'))} -- a blocking check was "
+              f"DEMOTED on this run, so the verdict is not an unassisted one.")
+        _print_justification(ov)
     if not failed and not current:
         # rc 3 covers two states and the remedy is the same for both, but they
         # are different situations for whoever picks the field up, so they get
