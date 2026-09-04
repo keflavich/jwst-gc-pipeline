@@ -190,6 +190,47 @@ def normalize_obsid(obsid):
 DEFAULT_MIN_FREE_TB = 2.0
 
 
+def _registry():
+    """The field registry, or None when the package is not importable.
+
+    This script is deliberately runnable with no package on the path -- its
+    module-level imports are stdlib only -- so every registry read is lazy and
+    has to tolerate the registry not being there at all.
+    """
+    try:
+        from jwst_gc_pipeline import fields
+    except ImportError:
+        return None
+    return fields
+
+
+def write_root(root, target, registry=None):
+    """Where the reduce will actually write for ``target``.
+
+    ``{root}/{target}`` is right only when it happens to coincide with the
+    registry's answer.  It does for brick -- but only by accident, because
+    ``/orange/adamginsburg/jwst/brick`` is a symlink whose target ``statvfs``
+    follows.  It does NOT for gc-treasury: the registry puts it on
+    ``/blue/.../jwst/gc-treasury`` while an /orange root reports /orange's free
+    space, and gc-treasury has no compensating symlink because the directory
+    does not exist yet -- which is precisely the pre-tile-1 state this gate is
+    for.  Measured at the time: 67.5 TB reported for a filesystem the reduce
+    never touches, against 18.4 TB where tile 1 actually lands.
+
+    Resolving through the registry also drops the gate's dependence on
+    ``--root`` matching the registry's ``root:`` key, which is the thing that
+    differed between the two fields.  An unregistered target keeps the old
+    ``{root}/{target}``: there is nothing better to consult, and inventing a
+    /blue path for a field nobody has declared would be a worse guess than the
+    one the operator just typed.
+    """
+    reg = registry if registry is not None else _registry()
+    known = None if reg is None else getattr(reg, 'BY_NAME', {}).get(target)
+    if known is not None and getattr(known, 'basepath', None):
+        return str(known.basepath).rstrip('/')
+    return os.path.join(root, target)
+
+
 def free_tb(path, statvfs=os.statvfs):
     """Free TB on the filesystem holding ``path``, or None if it cannot tell.
 
@@ -529,14 +570,18 @@ def main(argv=None):
         ap.error(f'--proposal {args.proposal!r} is not a number')
 
     bad = 0
-    # The FIELD TREE, not --root: `/orange/adamginsburg/jwst/brick` is a
-    # symlink to `/blue/.../jwst/brick`, so several targets under an /orange
-    # root actually write to /blue.  `os.path.exists`/`os.statvfs` follow the
-    # link, so this reads the filesystem the products land on; before tile 1
-    # the tree does not exist yet and `free_tb` walks up to --root, which is
-    # where the reduce will create it.
-    ok, msg = headroom_verdict(os.path.join(args.root, args.target),
-                               args.min_free_tb)
+    # The FIELD TREE the REGISTRY names, not `{--root}/{target}`.  Several
+    # targets under an /orange root actually write to /blue; brick gets the
+    # right answer from the joined path only because
+    # `/orange/adamginsburg/jwst/brick` is a symlink that `statvfs` follows,
+    # and gc-treasury -- the field whose 139 tiles are the reason this gate
+    # exists -- has no such symlink, because before tile 1 the directory does
+    # not exist.  Joined, it reported 67.5 TB for a filesystem the reduce never
+    # touches while 18.4 TB was free where the tile lands.  `free_tb` still
+    # walks up to the nearest existing ancestor, so the pre-tile-1 case reads
+    # the filesystem the reduce will create the tree on.
+    _dest = write_root(args.root, args.target)
+    ok, msg = headroom_verdict(_dest, args.min_free_tb)
     print(f'{"OK     " if ok else "NO SPACE"}  disk: {msg}')
     if not ok:
         bad += 1

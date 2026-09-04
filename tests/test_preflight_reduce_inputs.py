@@ -718,18 +718,28 @@ def test_main_refuses_a_full_reduction_root(tmp_path, capsys, monkeypatch):
     assert 'NO SPACE' in out
 
 
-def test_main_checks_the_field_tree_not_the_bare_root(tmp_path, monkeypatch):
-    """`/orange/adamginsburg/jwst/brick` is a symlink to /blue/.../jwst/brick,
-    so several targets under an /orange root write to /blue.  Reading --root
-    alone would gate the wrong filesystem."""
+def test_main_checks_the_registry_destination_not_the_bare_root(tmp_path,
+                                                                monkeypatch):
+    """Reading --root alone gates the wrong filesystem -- and so does joining.
+
+    This originally pinned `{root}/{target}`, which lands on the right
+    filesystem for brick only because `/orange/adamginsburg/jwst/brick` is a
+    symlink `statvfs` follows.  gc-treasury has no such symlink and writes to
+    /blue while its --root is /orange, so the destination comes from the
+    registry now.  The registry is stubbed so this pins the wiring rather than
+    today's fields.yaml.
+    """
     asked = []
     monkeypatch.setattr(PF, 'free_tb',
                         lambda path: (asked.append(path), 500.0)[1])
+    monkeypatch.setattr(PF, '_registry',
+                        lambda: _Registry({'sgra': _Known('/blue/x/jwst/sgra/')}))
     _field(tmp_path, 'sgra', 'F115W', asns=[IMAGE3], cals=CALS_AB)
     PF.main(['--target', 'sgra', '--proposal', '1939', '--obsid', '001',
              '--filters', 'F115W', '--root', str(tmp_path),
              '--modules', 'nrca,nrcb'])
-    assert asked == [os.path.join(str(tmp_path), 'sgra')]
+    assert asked == ['/blue/x/jwst/sgra']
+    assert str(tmp_path) not in asked[0], 'the bare root is still not the answer'
 
 
 def test_main_can_turn_the_disk_check_off(tmp_path, capsys, monkeypatch):
@@ -745,3 +755,72 @@ def test_main_can_turn_the_disk_check_off(tmp_path, capsys, monkeypatch):
 def test_the_disk_check_is_on_by_default():
     """Reverting the default to 0 would leave the gate present and inert."""
     assert PF.DEFAULT_MIN_FREE_TB > 0
+
+
+# ---------------------------------------------------------------------------
+# Where the gate looks (#544 review): the registry's basepath, not {root}/{target}
+# ---------------------------------------------------------------------------
+
+class _Known:
+    def __init__(self, basepath):
+        self.basepath = basepath
+
+
+class _Registry:
+    def __init__(self, mapping):
+        self.BY_NAME = mapping
+
+
+def test_write_root_follows_the_registry_not_the_joined_path():
+    """gc-treasury writes to /blue while its --root is /orange.
+
+    Joining gave the free space of a filesystem the reduce never touches, and
+    it kept passing all the way down to zero on the one field whose 139 tiles
+    are the reason the gate exists.
+    """
+    reg = _Registry({'gc-treasury': _Known(
+        '/blue/adamginsburg/adamginsburg/jwst/gc-treasury/')})
+    assert PF.write_root('/orange/adamginsburg/jwst', 'gc-treasury',
+                         registry=reg) == \
+        '/blue/adamginsburg/adamginsburg/jwst/gc-treasury'
+
+
+def test_write_root_falls_back_for_an_unregistered_target():
+    """Nothing better to consult, so keep what the operator typed.
+
+    Inventing a /blue path for a field nobody has declared would be a worse
+    guess than the one on the command line.
+    """
+    reg = _Registry({})
+    assert PF.write_root('/orange/adamginsburg/jwst', 'nosuchfield',
+                         registry=reg) == '/orange/adamginsburg/jwst/nosuchfield'
+
+
+def test_write_root_survives_the_registry_being_absent(monkeypatch):
+    """The script must stay runnable with no package on the path."""
+    monkeypatch.setattr(PF, '_registry', lambda: None)
+    assert PF.write_root('/orange/adamginsburg/jwst', 'brick') == \
+        '/orange/adamginsburg/jwst/brick'
+
+
+def test_headroom_reads_the_registry_destination(monkeypatch, capsys):
+    """End to end: the free-space number must come from the write destination.
+
+    A gate that measures the wrong filesystem is the #421 failure with extra
+    steps, so this pins the path handed to free_tb, not just the helper.
+    """
+    reg = _Registry({'gc-treasury': _Known('/blue/x/jwst/gc-treasury/')})
+    monkeypatch.setattr(PF, '_registry', lambda: reg)
+    seen = []
+
+    def _free(path):
+        seen.append(path)
+        return 18.4
+
+    ok, msg = PF.headroom_verdict(
+        PF.write_root('/orange/adamginsburg/jwst', 'gc-treasury'),
+        min_free_tb=2.0, free=_free)
+    assert ok
+    assert seen == ['/blue/x/jwst/gc-treasury']
+    assert '/blue/x/jwst/gc-treasury' in msg
+    assert '/orange' not in msg
