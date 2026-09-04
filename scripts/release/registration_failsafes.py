@@ -24,6 +24,9 @@ A cell also FAILs, whatever its peak contrast, when it belongs to a connected pa
 MIN_SEAM_CELLS or more high-offset cells: a misregistration is a connected patch, while
 wrong-pair noise is scattered singletons, and shape -- unlike the contrast statistic --
 does not scale with star density (issue #170).
+Neither fail axis grades a cell whose peak rides the fixed, UNSWEPT MX search window
+(off > WINDOW_EDGE_FRAC * MX): that arg-max is the window's own wrong-pair background,
+so the cell measured nothing and is reported as could-not-measure (issue #588).
 Non-zero exit on FAIL so it can gate a chain.
 """
 import argparse
@@ -126,6 +129,37 @@ OFF_MAX = 60.0                   # a VERIFIED cell whose peak offset exceeds thi
 # high-contrast cell should stop failing the field -- #170's proposal 2 in full -- is a
 # RELAXATION of the gate and is deliberately not part of this.
 MIN_SEAM_CELLS = 3               # connected high-offset cells that FAIL regardless of contrast
+
+# A THIRD requirement on a fail, and the only one that reads the SEARCH WINDOW itself
+# (issue #588).  `MX` is a FIXED 2.5" pair-separation disk and this estimator cannot
+# sweep it, so a cell in which no true counterpart pair exists inside 2.5" still
+# returns an arg-max: the largest bin of the wrong-pair background.  That background
+# is uniform over the disk, so its arg-max radius follows p(r) dr ~ r dr -- median
+# 0.71*MX = 1768 mas, with 75 % of it beyond 0.5*MX.  `gc2211_o028` F150W merged
+# reads exactly that shape: 138 of 139 verified cells high-offset, median 1826 mas
+# (0.73*MX), worst 2487 mas (0.995*MX), every one at peak_bg 5.0-7.0 -- the verify
+# floor.  A real 1.8" misregistration and "no tie exists inside 2.5 arcsec" produce
+# the same arg-max there, and nothing in this estimator separates them.  CLAUDE.md's
+# rule for this shape (#158's W51 case) is that a peak near the window edge is
+# geometry, not a tie, and off/window ~ 1 is the tell.  Failing such a cell asserts a
+# measurement that was not made.
+#
+# 0.5 here against `astrometry_offsets.WINDOW_EDGE_FRACTION = 0.85`, because that
+# estimator SWEEPS -- 3/10/30/60" -- so a peak that survives at 0.85 has been checked
+# against a window that could contain it.  This one measures at one fixed window, so
+# the range it can defend is the range where the wrong-pair background is thin.
+#
+# What this gives up is real and is stated plainly: the check stops claiming anything
+# about offsets larger than half its window.  It never could measure them, and the
+# regime the two fail axes were calibrated on is untouched -- #179's injected seams
+# were +90 mas and `OFF_MAX` is 60, so the whole 60-1250 mas band fails exactly as it
+# does today.  The larger regime belongs to `check_interframe_overlap.py --scan`:
+# reference-free, per pair, PER TILE and SWEPT, the blocking gate of checklist item 0
+# (exit 0 on o028 in both bands).  Edge cells are not dropped on the floor: they are
+# counted in `n_window_edge`, listed in `window_edge_cells`, and printed on the scan
+# line, so "could not measure" is visible rather than silent.
+WINDOW_EDGE_FRAC = 0.5           # off > this * MX -> the peak rides the (unswept)
+                                 # window: geometry, not a tie.  Reported, never a fail.
 
 OVERLAP_STRIDE = 16              # pixel stride when sampling a mosaic for module overlap
 MIN_OVERLAP_SAMPLES = 50         # sampled positions with real data in BOTH modules before
@@ -294,7 +328,7 @@ def seam_mask(highoff, min_cells=MIN_SEAM_CELLS):
 
 
 def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_RATIO,
-             min_seam_cells=MIN_SEAM_CELLS):
+             min_seam_cells=MIN_SEAM_CELLS, window_edge_frac=WINDOW_EDGE_FRAC):
     """Per-cell registration offset by pair-separation HISTOGRAM cross-correlation.
 
     For every det-truth pair within MX, bin by the detection's spatial cell and by the
@@ -318,6 +352,12 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     bar is arithmetically the raw peak-BIN COUNT and so is a density cut; real injected
     seams score 5-49 on it, straddling ``FAIL_MIN_RATIO``.  Shape does not scale with
     density.  The two axes are OR-ed, so this can only add failures.
+
+    NEITHER axis grades a cell whose peak rides the search window: ``off >
+    window_edge_frac * MX`` is the arg-max of the wrong-pair background of an UNSWEPT
+    2.5" disk, not a measured offset (issue #588, ``WINDOW_EDGE_FRAC``).
+    Those cells are reported as ``n_window_edge`` / ``window_edge_cells`` -- could-not-
+    measure, disjoint from both ``fail`` and ``n_unconfident_highoff``.
     """
     if det is None or truth is None or len(det) < 200 or len(truth) < 200:
         return dict(label=label, error="missing detections/truth")
@@ -357,23 +397,30 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
         off[i0, j0] = np.hypot(dcen, ecen)
 
     verified = np.isfinite(ratio) & (ratio >= MIN_PEAK_RATIO) & (npair >= MIN_PAIRS)
+    # WINDOW-EDGE ARM (issue #588), applied BEFORE either fail axis: a peak sitting at
+    # a large fraction of the fixed, unswept MX disk is that disk's wrong-pair
+    # background, whose arg-max radius is distributed as r dr and so piles up near the
+    # rim.  Such a cell measured nothing, so it grades as neither a fail nor a
+    # tolerated sub-margin cell; it is reported on its own.
+    edge = verified & (off > window_edge_frac * MX.to(u.mas).value)
+    highoff = verified & (off > OFF_MAX) & ~edge
     # A FAIL requires a large offset AND confident contrast. A real localized seam
     # doubles stars into a sharp high-contrast peak; a bright-star-crowded, sparse
     # cell yields a floor-level peak (ratio ~ MIN_PEAK_RATIO) at a spurious offset.
     # Sub-FAIL_MIN_RATIO high-offset cells stay verified-but-not-failed (reported).
-    fail = verified & (off > OFF_MAX) & (ratio >= fail_min_ratio)
+    fail = highoff & (ratio >= fail_min_ratio)
     # SECOND AXIS (issue #170): a connected patch of >= min_seam_cells high-offset
     # cells fails whatever its contrast.  The contrast bar is a raw peak-bin count and
     # therefore a density cut, and real injected seams score 5-49 on it -- straddling
     # FAIL_MIN_RATIO = 10 -- so a seam in sparse cells is measured and not blocked.
     # Shape does not scale with density.  OR-ed in, so this can only ADD failures.
-    seam, seam_sizes = seam_mask(verified & (off > OFF_MAX), min_cells=min_seam_cells)
+    seam, seam_sizes = seam_mask(highoff, min_cells=min_seam_cells)
     fail = fail | seam
     # High offset but sub-fail_min_ratio contrast AND not part of a seam-shaped patch:
     # NOT a fail, but reported so a real low-contrast issue is never silently hidden by
     # the margin.  Excluding `seam` here keeps the two reports disjoint -- a cell that
     # now fails must not also be listed as a tolerated sub-margin cell.
-    unconfident = verified & (off > OFF_MAX) & (ratio < fail_min_ratio) & ~seam
+    unconfident = highoff & (ratio < fail_min_ratio) & ~seam
     worst = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                   offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
                   npairs=int(npair[i, j]))
@@ -382,12 +429,23 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
                               offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
                               npairs=int(npair[i, j]))
                          for i, j in sorted(zip(*np.where(unconfident)), key=lambda c: -off[c])][:8]
+    edge_cells = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
+                       offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
+                       npairs=int(npair[i, j]),
+                       window_edge_fraction=float(round(off[i, j] / MX.to(u.mas).value, 3)))
+                  for i, j in sorted(zip(*np.where(edge)), key=lambda c: -off[c])][:8]
     return dict(label=label, verified_cells=int(verified.sum()),
                 unverified_cells=int((npair >= MIN_PAIRS).sum() - verified.sum()),
                 median_verified_offset_mas=round(float(np.nanmedian(off[verified])), 1) if verified.any() else None,
                 n_fail=int(fail.sum()), PASS=bool(fail.sum() == 0), worst=worst,
                 n_unconfident_highoff=int(unconfident.sum()),
                 unconfident_highoff_cells=unconfident_cells,
+                # COULD-NOT-MEASURE (issue #588), reported so the state is visible:
+                # cells whose peak rides the unswept MX window.  Neither fail axis
+                # reads them, and they are disjoint from `unconfident_highoff_cells`.
+                n_window_edge=int(edge.sum()),
+                window_edge_cells=edge_cells,
+                window_edge_frac=float(window_edge_frac),
                 # The seam axis, reported separately so a reader can tell WHICH test
                 # failed the field.  `n_fail_seam_only` counts cells that fail on shape
                 # alone -- the ones the contrast bar would have let through.
@@ -743,6 +801,10 @@ def _scan_view(field, view, band_paths, verbose, images_only):
                 s = f"{k}={'PASS' if v.get('PASS') else 'FAIL:'+str(v.get('n_fail'))}"
                 nu = v.get("n_unconfident_highoff") or 0
                 s += (f"(unconf={nu})" if nu else "")   # high-off, sub-margin cells
+                # Cells whose peak rode the unswept 2.5" window: not graded, and said
+                # so on the line rather than dropped silently (issue #588).
+                ne = v.get("n_window_edge") or 0
+                s += (f"(window_edge={ne})" if ne else "")
                 # Which axis failed it.  `seam` cells fail on SHAPE; `seam_only` are
                 # the ones the contrast bar alone would have passed (issue #170).
                 ns = v.get("n_fail_seam") or 0
