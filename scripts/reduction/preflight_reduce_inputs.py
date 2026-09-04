@@ -28,7 +28,7 @@ NIRCam reduce queries MAST for the proposal it was given and downloads what it
 finds, so a 4147 sgra run would have written Sgr C's products into the sgra tree
 before failing.
 
-Two checks, cheapest first:
+Three checks, cheapest first:
 
 1. **against the registry** -- ``fields.yaml`` already records which target owns
    each (proposal, observation).  This needs no filesystem access, catches the
@@ -41,6 +41,17 @@ Two checks, cheapest first:
    listing of the directory, because the reduce narrows the association to one
    module's members and raises when none remain -- a module present on disk but
    absent from the association is a failure a listing cannot see.
+3. **against the disk the reduce WRITES to** (#421) -- free space on the
+   filesystem holding ``--root``, against ``--min-free-tb``.  Nothing else in
+   this repo looks at free space (``git grep -E 'statvfs|disk_usage|min_free'``
+   over the package: no hits).  data-qa's monitor has a ``--min-free-tb`` floor,
+   but it is evaluated at its ``--download-dir`` on /orange while the treasury's
+   ``root: blue`` sends every reduction product to /blue -- so the monitor can
+   keep downloading into a healthy /orange and keep triggering reductions into a
+   full /blue, and the products die on ENOSPC after the queue wait with no gate
+   having looked.  The measured unit: brick F212N holds 1.42 TB for one filter
+   of one field, of which 1.23 GB per detector-exposure is the part that scales
+   one-per-frame.
 
 Reports and returns nonzero if anything is missing.  Changes nothing.
 """
@@ -164,6 +175,113 @@ def normalize_obsid(obsid):
                          f'(a wildcard would pool several observations and '
                          f'let them satisfy the module check between them)')
     return f'{int(s):03d}'
+
+
+#: Free TB the reduction root must have before a reduce is worth submitting.
+#:
+#: One filter of one field, measured on ``brick/F212N/pipeline`` (2026-08-24):
+#: 1.42 TB all-in over 192 detector-exposures, of which 236 GB (1.23 GB per
+#: detector-exposure) is the per-frame product chain -- uncal, ramp, rate, cal,
+#: destreak, tweakreg, crf, bgsub, unsatstar -- and the rest is cataloging
+#: byproducts and mosaics.  2 TB is one such pass plus margin: enough that a
+#: reduce which clears the gate can finish, small enough that it does not
+#: refuse work on a filesystem that is merely busy.  Raise it with
+#: ``--min-free-tb`` for a deep field; ``--min-free-tb 0`` turns the check off.
+DEFAULT_MIN_FREE_TB = 2.0
+
+
+def _registry():
+    """The field registry, or None when the package is not importable.
+
+    This script is deliberately runnable with no package on the path -- its
+    module-level imports are stdlib only -- so every registry read is lazy and
+    has to tolerate the registry not being there at all.
+    """
+    try:
+        from jwst_gc_pipeline import fields
+    except ImportError:
+        return None
+    return fields
+
+
+def write_root(root, target, registry=None):
+    """Where the reduce will actually write for ``target``.
+
+    ``{root}/{target}`` is right only when it happens to coincide with the
+    registry's answer.  It does for brick -- but only by accident, because
+    ``/orange/adamginsburg/jwst/brick`` is a symlink whose target ``statvfs``
+    follows.  It does NOT for gc-treasury: the registry puts it on
+    ``/blue/.../jwst/gc-treasury`` while an /orange root reports /orange's free
+    space, and gc-treasury has no compensating symlink because the directory
+    does not exist yet -- which is precisely the pre-tile-1 state this gate is
+    for.  Measured at the time: 67.5 TB reported for a filesystem the reduce
+    never touches, against 18.4 TB where tile 1 actually lands.
+
+    Resolving through the registry also drops the gate's dependence on
+    ``--root`` matching the registry's ``root:`` key, which is the thing that
+    differed between the two fields.  An unregistered target keeps the old
+    ``{root}/{target}``: there is nothing better to consult, and inventing a
+    /blue path for a field nobody has declared would be a worse guess than the
+    one the operator just typed.
+    """
+    reg = registry if registry is not None else _registry()
+    known = None if reg is None else getattr(reg, 'BY_NAME', {}).get(target)
+    if known is not None and getattr(known, 'basepath', None):
+        return str(known.basepath).rstrip('/')
+    return os.path.join(root, target)
+
+
+def free_tb(path, statvfs=os.statvfs):
+    """Free TB on the filesystem holding ``path``, or None if it cannot tell.
+
+    Walks up to the nearest existing ancestor, because the field tree is
+    normally created BY the reduce: ``/blue/.../jwst/gc-treasury`` does not
+    exist before tile 1, and a check that gave up there would be silent
+    exactly on the first run, which is the run this exists for.
+
+    ``f_bavail`` (available to a non-root user), not ``f_bfree`` -- the
+    reserved blocks are not usable and counting them overstates the headroom.
+    TB here is 1e12 bytes, matching ``df -h``'s ``T`` closely enough for a
+    threshold and matching the units the issue and the monitor are stated in.
+    """
+    probe = os.path.abspath(path)
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    try:
+        st = statvfs(probe)
+    except OSError:
+        # An unmounted or unreadable path: report "cannot tell", which the
+        # verdict turns into a refusal.  Guessing would be the #421 failure.
+        return None
+    return st.f_bavail * st.f_frsize / 1e12
+
+
+def headroom_verdict(root, min_free_tb=DEFAULT_MIN_FREE_TB, free=None):
+    """``(ok, message)`` for free space on the reduction root (#421).
+
+    ``min_free_tb <= 0`` disables the check and says so, rather than passing
+    silently -- a gate that reports "not checked" is a different thing from a
+    gate that reports OK, and the whole point of #421 is that a filesystem
+    nobody looked at read as fine.
+
+    ``free`` is injectable for testing; None looks up the module-level
+    ``free_tb`` at call time, so a test can replace that instead.
+    """
+    if min_free_tb is None or min_free_tb <= 0:
+        return True, f'free-space check disabled (--min-free-tb {min_free_tb})'
+    available = (free_tb if free is None else free)(root)
+    if available is None:
+        return False, (f'cannot determine free space for {root} -- statvfs '
+                       f'failed on it and on every existing ancestor, so '
+                       f'nothing here knows where the reduce would write')
+    ok = available >= min_free_tb
+    return ok, (f'{available:.1f} TB free on the filesystem holding {root} '
+                f'(floor {min_free_tb:.1f} TB)'
+                + ('' if ok else ' -- the reduce would write into this and the '
+                                 'products die on ENOSPC after the queue wait'))
 
 
 def registry_verdict(target, proposal, obsid, instrument='nircam'):
@@ -432,6 +550,13 @@ def main(argv=None):
     ap.add_argument('--skip-registry', action='store_true',
                     help='do not cross-check the spec against fields.yaml '
                          '(for a field that is deliberately not registered)')
+    ap.add_argument('--min-free-tb', type=float, default=DEFAULT_MIN_FREE_TB,
+                    help='refuse when the filesystem holding --root has less '
+                         'than this many TB free (#421; 0 disables). The '
+                         'reduce writes there, and nothing else in this repo '
+                         'checks it -- data-qa\'s floor watches its download '
+                         'staging, which is a different filesystem whenever a '
+                         'field\'s root: differs from it.')
     args = ap.parse_args(argv)
 
     filters = args.filters.split()
@@ -445,6 +570,21 @@ def main(argv=None):
         ap.error(f'--proposal {args.proposal!r} is not a number')
 
     bad = 0
+    # The FIELD TREE the REGISTRY names, not `{--root}/{target}`.  Several
+    # targets under an /orange root actually write to /blue; brick gets the
+    # right answer from the joined path only because
+    # `/orange/adamginsburg/jwst/brick` is a symlink that `statvfs` follows,
+    # and gc-treasury -- the field whose 139 tiles are the reason this gate
+    # exists -- has no such symlink, because before tile 1 the directory does
+    # not exist.  Joined, it reported 67.5 TB for a filesystem the reduce never
+    # touches while 18.4 TB was free where the tile lands.  `free_tb` still
+    # walks up to the nearest existing ancestor, so the pre-tile-1 case reads
+    # the filesystem the reduce will create the tree on.
+    _dest = write_root(args.root, args.target)
+    ok, msg = headroom_verdict(_dest, args.min_free_tb)
+    print(f'{"OK     " if ok else "NO SPACE"}  disk: {msg}')
+    if not ok:
+        bad += 1
     if not args.skip_registry:
         ok, msg = registry_verdict(args.target, args.proposal, obsid,
                                    instrument=args.instrument)
@@ -473,7 +613,8 @@ def main(argv=None):
     if bad:
         print(f'\n{bad} problem(s).  The reduce would fail those tasks and the '
               f'loop would refuse to catalog the rest -- check the PROPOSAL and '
-              f'OBSID against what is on disk before spending the queue.')
+              f'OBSID against what is on disk, and the free space on the '
+              f'filesystem the field tree lives on, before spending the queue.')
     return 1 if bad else 0
 
 

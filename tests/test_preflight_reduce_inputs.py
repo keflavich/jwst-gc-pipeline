@@ -75,6 +75,23 @@ CALS_AB = ['jw01939001001_02101_00001_nrca1_cal.fits',
            'jw01939001001_02101_00001_nrcb1_cal.fits']
 
 
+#: The real ``free_tb``, captured before ``_roomy_disk`` shadows it, so the
+#: tests OF ``free_tb`` still exercise the shipped function.
+REAL_FREE_TB = PF.free_tb
+
+
+@pytest.fixture(autouse=True)
+def _roomy_disk(monkeypatch):
+    """Every test that is not about disk sees an empty filesystem.
+
+    The free-space check (#421) is on by default in ``main``, and ``tmp_path``
+    is a real filesystem whose headroom varies by machine -- without this the
+    input-presence tests would pass or fail on how full the test host is.  The
+    disk tests below inject their own numbers.
+    """
+    monkeypatch.setattr(PF, 'free_tb', lambda path: 500.0)
+
+
 # ---------------------------------------------------------------------------
 # the association file the reduce actually consumes
 # ---------------------------------------------------------------------------
@@ -603,3 +620,207 @@ def test_a_single_detector_spec_rejects_another_instruments_association(
     assert not row.ok, (
         f'a {instrument} spec accepted an association whose only member is a '
         f'NIRCam exposure; the reduce keeps only its own instrument')
+
+
+# ---------------------------------------------------------------------------
+# free space on the filesystem the reduce WRITES to (#421)
+#
+# Nothing else in the repo looks at it.  data-qa's monitor has a --min-free-tb
+# floor, but it reads its own download staging: with a field whose `root:` is a
+# different filesystem, the monitor downloads into a healthy /orange and
+# triggers reductions into a full /blue, and neither the trigger nor the driver
+# notices until ENOSPC, after the queue wait.
+# ---------------------------------------------------------------------------
+
+class _Statvfs:
+    def __init__(self, avail_tb, frsize=4096):
+        self.f_frsize = frsize
+        self.f_bavail = int(avail_tb * 1e12 / frsize)
+        # Reserved blocks a non-root writer cannot use: f_bfree over-reports.
+        self.f_bfree = self.f_bavail * 10
+
+
+def test_free_tb_reports_the_available_blocks(tmp_path):
+    assert REAL_FREE_TB(str(tmp_path),
+                        statvfs=lambda p: _Statvfs(12.5)) == pytest.approx(12.5)
+
+
+def test_free_tb_uses_bavail_not_bfree(tmp_path):
+    """Counting the root-reserved blocks would report 10x the usable space."""
+    assert REAL_FREE_TB(str(tmp_path),
+                        statvfs=lambda p: _Statvfs(3.0)) == pytest.approx(3.0)
+
+
+def test_free_tb_walks_up_to_an_existing_ancestor(tmp_path):
+    """The field tree is created BY the reduce: /blue/.../jwst/gc-treasury does
+    not exist before tile 1, and giving up there would be silent on the very
+    run this exists for."""
+    seen = []
+
+    def statvfs(path):
+        seen.append(path)
+        return _Statvfs(9.0)
+
+    missing = tmp_path / 'gc-treasury' / 'F212N' / 'pipeline'
+    assert REAL_FREE_TB(str(missing), statvfs=statvfs) == pytest.approx(9.0)
+    assert seen == [str(tmp_path)]
+
+
+def test_free_tb_is_none_when_the_filesystem_cannot_be_queried(tmp_path):
+    """An unmounted or unreadable path answers "cannot tell", which the verdict
+    turns into a refusal.  Guessing a number would be the #421 failure again."""
+    def statvfs(path):
+        raise OSError(5, 'Input/output error')
+
+    assert REAL_FREE_TB(str(tmp_path), statvfs=statvfs) is None
+
+
+def test_headroom_ok_above_the_floor():
+    ok, msg = PF.headroom_verdict('/root', 2.0, free=lambda p: 17.0)
+    assert ok, msg
+    assert '17.0 TB free' in msg
+
+
+def test_headroom_refuses_below_the_floor():
+    ok, msg = PF.headroom_verdict('/root', 2.0, free=lambda p: 0.4)
+    assert not ok
+    assert 'ENOSPC' in msg
+
+
+def test_headroom_floor_is_inclusive():
+    assert PF.headroom_verdict('/root', 2.0, free=lambda p: 2.0)[0]
+
+
+def test_headroom_says_so_when_it_is_disabled():
+    """A gate that reports 'not checked' is a different thing from one that
+    reports OK -- #421 is a filesystem nobody looked at reading as fine."""
+    ok, msg = PF.headroom_verdict('/root', 0, free=lambda p: 0.0)
+    assert ok
+    assert 'disabled' in msg
+
+
+def test_headroom_refuses_an_unresolvable_root():
+    ok, msg = PF.headroom_verdict('/root', 2.0, free=lambda p: None)
+    assert not ok
+    assert 'cannot determine free space' in msg
+
+
+def test_main_refuses_a_full_reduction_root(tmp_path, capsys, monkeypatch):
+    """The whole point: inputs all present, spec correct, and the reduce still
+    must not be submitted."""
+    monkeypatch.setattr(PF, 'free_tb', lambda path: 0.3)
+    _field(tmp_path, 'sgra', 'F115W', asns=[IMAGE3], cals=CALS_AB)
+    rc = PF.main(['--target', 'sgra', '--proposal', '1939', '--obsid', '001',
+                  '--filters', 'F115W', '--root', str(tmp_path),
+                  '--modules', 'nrca,nrcb'])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert 'NO SPACE' in out
+
+
+def test_main_checks_the_registry_destination_not_the_bare_root(tmp_path,
+                                                                monkeypatch):
+    """Reading --root alone gates the wrong filesystem -- and so does joining.
+
+    This originally pinned `{root}/{target}`, which lands on the right
+    filesystem for brick only because `/orange/adamginsburg/jwst/brick` is a
+    symlink `statvfs` follows.  gc-treasury has no such symlink and writes to
+    /blue while its --root is /orange, so the destination comes from the
+    registry now.  The registry is stubbed so this pins the wiring rather than
+    today's fields.yaml.
+    """
+    asked = []
+    monkeypatch.setattr(PF, 'free_tb',
+                        lambda path: (asked.append(path), 500.0)[1])
+    monkeypatch.setattr(PF, '_registry',
+                        lambda: _Registry({'sgra': _Known('/blue/x/jwst/sgra/')}))
+    _field(tmp_path, 'sgra', 'F115W', asns=[IMAGE3], cals=CALS_AB)
+    PF.main(['--target', 'sgra', '--proposal', '1939', '--obsid', '001',
+             '--filters', 'F115W', '--root', str(tmp_path),
+             '--modules', 'nrca,nrcb'])
+    assert asked == ['/blue/x/jwst/sgra']
+    assert str(tmp_path) not in asked[0], 'the bare root is still not the answer'
+
+
+def test_main_can_turn_the_disk_check_off(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(PF, 'free_tb', lambda path: 0.0)
+    _field(tmp_path, 'sgra', 'F115W', asns=[IMAGE3], cals=CALS_AB)
+    rc = PF.main(['--target', 'sgra', '--proposal', '1939', '--obsid', '001',
+                  '--filters', 'F115W', '--root', str(tmp_path),
+                  '--modules', 'nrca,nrcb', '--min-free-tb', '0'])
+    assert rc == 0
+    assert 'disabled' in capsys.readouterr().out
+
+
+def test_the_disk_check_is_on_by_default():
+    """Reverting the default to 0 would leave the gate present and inert."""
+    assert PF.DEFAULT_MIN_FREE_TB > 0
+
+
+# ---------------------------------------------------------------------------
+# Where the gate looks (#544 review): the registry's basepath, not {root}/{target}
+# ---------------------------------------------------------------------------
+
+class _Known:
+    def __init__(self, basepath):
+        self.basepath = basepath
+
+
+class _Registry:
+    def __init__(self, mapping):
+        self.BY_NAME = mapping
+
+
+def test_write_root_follows_the_registry_not_the_joined_path():
+    """gc-treasury writes to /blue while its --root is /orange.
+
+    Joining gave the free space of a filesystem the reduce never touches, and
+    it kept passing all the way down to zero on the one field whose 139 tiles
+    are the reason the gate exists.
+    """
+    reg = _Registry({'gc-treasury': _Known(
+        '/blue/adamginsburg/adamginsburg/jwst/gc-treasury/')})
+    assert PF.write_root('/orange/adamginsburg/jwst', 'gc-treasury',
+                         registry=reg) == \
+        '/blue/adamginsburg/adamginsburg/jwst/gc-treasury'
+
+
+def test_write_root_falls_back_for_an_unregistered_target():
+    """Nothing better to consult, so keep what the operator typed.
+
+    Inventing a /blue path for a field nobody has declared would be a worse
+    guess than the one on the command line.
+    """
+    reg = _Registry({})
+    assert PF.write_root('/orange/adamginsburg/jwst', 'nosuchfield',
+                         registry=reg) == '/orange/adamginsburg/jwst/nosuchfield'
+
+
+def test_write_root_survives_the_registry_being_absent(monkeypatch):
+    """The script must stay runnable with no package on the path."""
+    monkeypatch.setattr(PF, '_registry', lambda: None)
+    assert PF.write_root('/orange/adamginsburg/jwst', 'brick') == \
+        '/orange/adamginsburg/jwst/brick'
+
+
+def test_headroom_reads_the_registry_destination(monkeypatch, capsys):
+    """End to end: the free-space number must come from the write destination.
+
+    A gate that measures the wrong filesystem is the #421 failure with extra
+    steps, so this pins the path handed to free_tb, not just the helper.
+    """
+    reg = _Registry({'gc-treasury': _Known('/blue/x/jwst/gc-treasury/')})
+    monkeypatch.setattr(PF, '_registry', lambda: reg)
+    seen = []
+
+    def _free(path):
+        seen.append(path)
+        return 18.4
+
+    ok, msg = PF.headroom_verdict(
+        PF.write_root('/orange/adamginsburg/jwst', 'gc-treasury'),
+        min_free_tb=2.0, free=_free)
+    assert ok
+    assert seen == ['/blue/x/jwst/gc-treasury']
+    assert '/blue/x/jwst/gc-treasury' in msg
+    assert '/orange' not in msg
