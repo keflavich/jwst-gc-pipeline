@@ -226,6 +226,30 @@ PER_OBS_MERGED_FIELDS = (
     ('2221', '001'),   # brick, the 6-band half
 )
 
+#: Per-OBSERVATION exceptions for the PER-FRAME token, same shape as
+#: PER_OBS_MERGED_FIELDS above and for the same reason -- some observations of a
+#: proposal need the token and others must NOT get it.
+#:
+#: m4 is proposal 1979 observations 002 and 003, two pointings 174" apart in one
+#: tree.  They reuse the SAME (visit001, vgroup02101, exp00001-00003) in both
+#: F150W2 and F322W2, so their per-frame catalog names are equal and the second
+#: writer silently overwrites the first.  Measured 2026-09-03:
+#:
+#:     filter   _cal o002   _cal o003   total   per-frame m2 catalogs   deficit
+#:     F150W2       96          24       120             96               24
+#:     F322W2       24           6        30             24                6
+#:
+#: The deficit equals the o003 count exactly, in both filters.
+#:
+#: This CANNOT be fixed by adding 1979 to MULTIOBS_PROPOSALS: ngc6397 is
+#: 1979 observation 001, in its own tree with no collision, and tokening it
+#: would orphan every per-frame catalog it already has.  So the exception is
+#: keyed per (proposal, observation), exactly as the merged one is.
+PER_OBS_PERFRAME_FIELDS = (
+    ('1979', '002'),   # m4, one of two pointings sharing a tree
+    ('1979', '003'),   # m4, the other
+)
+
 #: What a ``field`` may look like inside an observation token: an observation
 #: number, or several joined by ``-`` for a joint registration ('002-998').
 _OBSERVATION_FIELD_RE = re.compile(r'\d+(?:-\d+)*')
@@ -372,13 +396,18 @@ def perframe_obs_token(proposal_id, field):
       ``observation_field_token``, so ``--field 23`` writes ``_o023`` while a
       raw f-string globs ``_o23``.
     * a token on a single-observation proposal.  Only
-      ``MULTIOBS_PROPOSALS`` and ``SHARED_TREE_PROPOSALS`` are tokened; every
-      other target's per-frame names carry none, whatever ``field`` says.
+      ``MULTIOBS_PROPOSALS``, ``SHARED_TREE_PROPOSALS`` and the per-observation
+      exceptions in ``PER_OBS_PERFRAME_FIELDS`` are tokened; every other
+      target's per-frame names carry none, whatever ``field`` says.
     """
     if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
         return f'_o{observation_field_token(field)}'
     if str(proposal_id) in SHARED_TREE_PROPOSALS:
         return f'_j{proposal_id}'
+    if field not in (None, ''):
+        tok = observation_field_token(field)
+        if (str(proposal_id), tok) in PER_OBS_PERFRAME_FIELDS:
+            return f'_o{tok}'
     return ''
 
 
