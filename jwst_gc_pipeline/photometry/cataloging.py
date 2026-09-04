@@ -3823,6 +3823,168 @@ def _perframe_catalog_re(merge_label):
         + r'(?:_chunk\d+of\d+)?_daophot_basic\.fits$')
 
 
+class FinalizeModuleCoverageError(RuntimeError):
+    """A finalize was asked for fewer modules than the field has on disk."""
+
+
+#: Which module families a NIRCam ``--modules`` entry stands for.  MIRI
+#: (``mirimage``) and NIRISS (``nis``) are single-detector instruments with no
+#: module split, so they have no family here and the coverage check does not
+#: apply to them.
+NIRCAM_MODULE_FAMILIES = ('nrca', 'nrcb')
+
+#: An observation/proposal token as it appears BETWEEN the module and ``visit``
+#: in a per-frame catalog basename (``f212n_nrcb1_o037_visit001_...``).  Written
+#: only for ``naming.MULTIOBS_PROPOSALS`` and ngc6334; empty elsewhere.
+_PERFRAME_OBS_TOKEN_ONLY_RE = re.compile(r'\A(?:o\d{3}(?:-\d{3})?|j\d{4,5})\Z')
+
+
+def perframe_module_family(basename, filt):
+    """The module FAMILY a per-frame catalog basename belongs to.
+
+    ``f212n_nrcb1_o037_visit001_vgroup...`` -> ``('nrcb', 'o037')``;
+    ``f770w_mirimage_visit001_vgroup...``   -> ``('mirimage', '')``.
+
+    Per-frame products are named by the real DETECTOR, never by the requested
+    module (``file_module = file_detector`` in the phase loop, so four SW
+    detectors do not collapse onto one filename), so the family is what the
+    detector token starts with.  Returns ``(None, '')`` for a basename this
+    cannot read rather than guessing.
+    """
+    head = os.path.basename(basename).split('_visit', 1)[0]
+    parts = head.split('_')
+    if len(parts) < 2 or parts[0].lower() != str(filt).lower():
+        return None, ''
+    parts = parts[1:]
+    obs = ''
+    if _PERFRAME_OBS_TOKEN_ONLY_RE.match(parts[-1]):
+        obs = parts[-1]
+        parts = parts[:-1]
+    token = '_'.join(parts).lower()
+    if not token:
+        return None, ''
+    for fam in NIRCAM_MODULE_FAMILIES:
+        if token.startswith(fam):
+            return fam, obs
+    return token, obs
+
+
+def requested_nircam_families(modules):
+    """The NIRCam module families a ``--modules`` list covers.
+
+    ``None`` means "everything": ``merged`` expands, in ``get_filenames``, to
+    every detector token of the filter (both modules for NIRCam, ``mirimage``
+    for MIRI), so a run that asks for it is not truncated whatever is on disk.
+    An empty set means the run asked for no NIRCam module at all (a MIRI or
+    NIRISS run, including one carrying the ``--modules nrcb`` sbatch default),
+    and the check does not apply.
+    """
+    fams = set()
+    for m in modules or ():
+        m = str(m).strip().lower()
+        if m == 'merged':
+            return None
+        for fam in NIRCAM_MODULE_FAMILIES:
+            if m.startswith(fam):
+                fams.add(fam)
+    return fams
+
+
+def perframe_families_on_disk(cut_bp, filt, merge_label, obs_token=''):
+    """NIRCam module families with per-frame ``merge_label`` catalogs on disk.
+
+    Returns ``{family: example basename}``, restricted to
+    :data:`NIRCAM_MODULE_FAMILIES` -- a single-detector instrument cannot be
+    module-truncated, and a NIRCam-shaped ``--modules`` on a MIRI filter (the
+    sbatch default is ``nrcb``) must not read ``mirimage`` as a missing module.
+
+    Scoped to this run's observation BY NAME.  ``obs_token`` is what the
+    per-frame writer emits (``crowdsource_catalogs_long.obs_token``): ``_o037``
+    for 10678's 139 tiles sharing one tree, empty for everything else.  A
+    catalog spelling a different token belongs to another tile, and reading it
+    would refuse tile 037 for tile 042's modules.  No header is read: the
+    question is which modules were fitted, and the name answers it.
+    """
+    want_obs = str(obs_token or '').lstrip('_')
+    base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
+    fns = sorted(set(
+        glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
+        + glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
+    accept = _perframe_catalog_re(merge_label)
+    found = {}
+    for fn in fns:
+        bn = os.path.basename(fn)
+        if not accept.search(bn):
+            continue
+        fam, obs = perframe_module_family(bn, filt)
+        if fam not in NIRCAM_MODULE_FAMILIES or obs != want_obs:
+            continue
+        found.setdefault(fam, bn)
+    return found
+
+
+def assert_finalize_covers_disk_modules(cut_bp, modules, filternames,
+                                        merge_label, options, obs_token='',
+                                        label='finalize'):
+    """Refuse a finalize whose ``--modules`` omits a module the field has fitted.
+
+    The finalize is a barrier over a per-frame fan-out, and it reports success
+    for whatever module list it was handed.  Nothing compared that list against
+    the field, so a truncated ``--modules`` produced a half-field catalog
+    stamped complete: ``w516151-o001-m12-finalize`` ran ``modules=nrca`` against
+    a field carrying nrcb1-4 per-frame catalogs for twelve filters and exited 0,
+    and the loss surfaced 2 h 24 m later only because m3 happens to crash on the
+    missing input.  ``brick2221-o001-m12-finalize`` did the same thing the same
+    day.
+
+    The per-frame catalogs are the authority -- they record which modules were
+    actually fitted, so a field that only ever runs one module (sickle's NIRCam
+    is nrcb alone) stays quiet, while a field that fitted both and is being
+    finalized for one stops here.
+
+    Deliberate single-module finalizes go through the two-factor override this
+    repo uses for ``--allow-registration-fail``: ``--allow-partial-modules`` AND
+    ``ALLOW_PARTIAL_MODULES=1``.
+    """
+    want = requested_nircam_families(modules)
+    if want is None or not want:
+        return          # `merged` covers every detector; no NIRCam module asked
+    missing = {}
+    for filt in filternames:
+        have = perframe_families_on_disk(cut_bp, filt, merge_label,
+                                         obs_token=obs_token)
+        for fam, example in sorted(have.items()):
+            if fam not in want:
+                missing.setdefault(fam, []).append((filt, example))
+    if not missing:
+        return
+    detail = '\n'.join(
+        f"    {fam}: {len(hits)} filter(s) -- "
+        + ', '.join(f for f, _ in hits[:12])
+        + (' ...' if len(hits) > 12 else '')
+        + f"\n      e.g. {hits[0][1]}"
+        for fam, hits in sorted(missing.items()))
+    msg = (f"manual [{label}]: --modules={','.join(modules)} does not cover the "
+           f"modules this field has fitted.  Per-frame {merge_label} catalogs "
+           f"exist for module(s) {sorted(missing)} that this run would not "
+           f"merge, so the finalize would stamp a HALF-FIELD catalog complete:\n"
+           f"{detail}\n"
+           f"  asked for: {sorted(want)}\n"
+           f"  on disk:   {sorted(set(want) | set(missing))}\n"
+           f"  Re-run the finalize with the full module list (NIRCam fields "
+           f"image `merged` too), or, for a deliberate single-module run, pass "
+           f"--allow-partial-modules AND set ALLOW_PARTIAL_MODULES=1.")
+    if getattr(options, 'allow_partial_modules', False):
+        if os.environ.get('ALLOW_PARTIAL_MODULES') == '1':
+            print(msg + "\n  (--allow-partial-modules + ALLOW_PARTIAL_MODULES=1 "
+                        "-- continuing)", flush=True)
+            return
+        raise FinalizeModuleCoverageError(
+            msg + "\n  --allow-partial-modules ALONE is not enough: it also "
+                  "requires ALLOW_PARTIAL_MODULES=1 in the environment.")
+    raise FinalizeModuleCoverageError(msg)
+
+
 def _drop_module_level_duplicates(fns, filt, merge_label, module):
     """Drop stale MODULE-level per-frame catalogs when per-DETECTOR ones exist.
 
@@ -5498,6 +5660,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     _marker_dir = os.path.join(cut_bp, 'catalogs', '_perframe_markers')
     if skip_finalize or finalize_only:
         os.makedirs(_marker_dir, exist_ok=True)
+
+    # MODULE COVERAGE.  The finalize reports success for whatever `--modules` it
+    # was handed; nothing compared that list against the field, so a truncated
+    # argument stamped a half-field catalog complete (#734).  The per-frame m2
+    # catalogs record which modules were actually fitted, so ask them -- before
+    # any merging, and once per run rather than once per phase.
+    if finalize_only:
+        assert_finalize_covers_disk_modules(
+            cut_bp, modules, filternames, 'm2', options,
+            obs_token=_L.obs_token(proposal_id, field),
+            label='finalize-only')
 
     def _marker_path(filename, detector, filt, phase, kind='ok', merge=None):
         return perframe_marker_path(_marker_dir, filename, detector, filt,
