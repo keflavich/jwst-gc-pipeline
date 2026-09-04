@@ -2489,6 +2489,43 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
 # ---------------------------------------------------------------------------
 # Cross-band stringent seed (step 18; multifilter only)
 # ---------------------------------------------------------------------------
+def crossband_seed_inputs(cut_bp, modules, filternames, options):
+    """The m6 vetted catalogs the m7 cross-band seed is built FROM.
+
+    Returns ``(module, filtername, path)`` for the ones that EXIST, in
+    (module, filter) order.
+
+    ONE spelling, read by the builder below AND by the fan-out resume.  The
+    seed FILE is rewritten by every m7 shard, so its own mtime says nothing
+    about whether the seed changed; these inputs -- the previous phase's
+    finalize output -- are what does.
+
+    The spelling itself: ngc6334's two proposals tag the per-proposal merged
+    catalog AFTER the module (matching merge_individual_frames' `_j{proposal}`
+    output), as do the per-obs-MERGED proposals (10678: `_o{field}`); every
+    other target keeps its token at the END.  The module-slot token is
+    `naming.merged_catalog_module_token`, which is what the WRITER
+    (merge_individual_frames' `out_obs_`) calls.
+    """
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = ('_bgsub' if options.bgsub else '') + '_resbgsub'
+    blur_ = '_blur' if options.blur else ''
+    _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
+                           getattr(options, 'field', None))
+    _modtok = merged_catalog_module_token(
+        getattr(options, 'proposal_id', None),
+        getattr(options, 'field', None))
+    _endsuf = '' if _modtok else _obssuf
+    out = []
+    for module in modules:
+        for filt in filternames:
+            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_modtok}_indivexp_merged'
+                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
+            if os.path.exists(p):
+                out.append((module, filt, p))
+    return out
+
+
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                           min_filters=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],
@@ -2522,9 +2559,6 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
       (NOT recommended -- reintroduces the single-band propagation bug).
     """
     from astropy.coordinates import SkyCoord
-    desat = '_unsatstar' if options.desaturated else ''
-    bgsub = ('_bgsub' if options.bgsub else '') + '_resbgsub'
-    blur_ = '_blur' if options.blur else ''
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
                            getattr(options, 'field', None))
     min_filters = int(getattr(options, 'manual_crossband_seed_min_filters', min_filters))
@@ -2532,43 +2566,31 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     qfit_max = float(getattr(options, 'manual_crossband_seed_qfit_max', qfit_max))
     max_sep_mas = float(getattr(options, 'manual_crossband_seed_max_sep_mas', max_sep_mas))
 
-    # collect GOOD (independently-confirmed) detections from each filter's m6
+    # collect GOOD (independently-confirmed) detections from each filter's m6.
+    # The path spelling lives in `crossband_seed_inputs` so the fan-out resume's
+    # staleness check reads exactly the list this loop consumes.
     ras = []; decs = []; filtidx = []; snrs = []
     flist = []
-    for module in modules:
-        for fi, filt in enumerate(filternames):
-            # ngc6334's two proposals tag the per-proposal merged catalog AFTER
-            # the module (matching merge_individual_frames' _j{proposal} output),
-            # as do the per-obs-MERGED proposals (10678: _o{field}); every other
-            # target keeps its token at the END (unchanged).  The whole
-            # module-slot token is `naming.merged_catalog_module_token`, which
-            # is what the WRITER (merge_individual_frames' `out_obs_`) calls.
-            _modtok = merged_catalog_module_token(
-                getattr(options, 'proposal_id', None),
-                getattr(options, 'field', None))
-            _endsuf = '' if _modtok else _obssuf
-            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_modtok}_indivexp_merged'
-                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
-            if not os.path.exists(p):
-                continue
-            t = Table.read(p)
-            if 'skycoord' not in t.colnames or len(t) == 0:
-                continue
-            sc = t['skycoord'] if isinstance(t['skycoord'], SkyCoord) else SkyCoord(t['skycoord'])
-            qf = np.asarray(t['qfit'], float) if 'qfit' in t.colnames else np.zeros(len(t))
-            fx = np.asarray(t['flux'], float) if 'flux' in t.colnames else np.full(len(t), np.nan)
-            fe = np.asarray(t['flux_err'], float) if 'flux_err' in t.colnames else np.full(len(t), np.nan)
-            with np.errstate(invalid='ignore', divide='ignore'):
-                snr = np.where(fe > 0, fx / fe, np.nan)
-            good = np.isfinite(snr) & (snr > snr_min) & (qf < qfit_max)
-            key = f'{filt.lower()}'
-            if key not in flist:
-                flist.append(key)
-            k = flist.index(key)
-            ras.extend(np.atleast_1d(sc.ra.deg)[good])
-            decs.extend(np.atleast_1d(sc.dec.deg)[good])
-            snrs.extend(snr[good])
-            filtidx.extend([k] * int(good.sum()))
+    for module, filt, p in crossband_seed_inputs(cut_bp, modules, filternames,
+                                                 options):
+        t = Table.read(p)
+        if 'skycoord' not in t.colnames or len(t) == 0:
+            continue
+        sc = t['skycoord'] if isinstance(t['skycoord'], SkyCoord) else SkyCoord(t['skycoord'])
+        qf = np.asarray(t['qfit'], float) if 'qfit' in t.colnames else np.zeros(len(t))
+        fx = np.asarray(t['flux'], float) if 'flux' in t.colnames else np.full(len(t), np.nan)
+        fe = np.asarray(t['flux_err'], float) if 'flux_err' in t.colnames else np.full(len(t), np.nan)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            snr = np.where(fe > 0, fx / fe, np.nan)
+        good = np.isfinite(snr) & (snr > snr_min) & (qf < qfit_max)
+        key = f'{filt.lower()}'
+        if key not in flist:
+            flist.append(key)
+        k = flist.index(key)
+        ras.extend(np.atleast_1d(sc.ra.deg)[good])
+        decs.extend(np.atleast_1d(sc.dec.deg)[good])
+        snrs.extend(snr[good])
+        filtidx.extend([k] * int(good.sum()))
     if not ras:
         raise ValueError(f"m7 crossband seed: no confirmed m6 detections under {cut_bp}/catalogs/ "
                          f"(snr>{snr_min}, qfit<{qfit_max})")
@@ -5130,8 +5152,8 @@ def _perframe_detector_tokens(filename):
     return (det,) if legacy == det else (det, legacy)
 
 
-def _marker_is_current(marker_path, frame_path):
-    """Is ``marker_path`` a receipt for the frame that is on disk NOW?
+def _marker_is_current(marker_path, frame_path, seed_inputs=()):
+    """Is ``marker_path`` a receipt for the fit this run would do NOW?
 
     A marker records that a frame was fitted ONCE.  It does not record WHICH
     frame: regenerating from ``_cal`` rewrites every ``_crf`` and leaves every
@@ -5153,14 +5175,45 @@ def _marker_is_current(marker_path, frame_path):
     A missing frame is NOT current: the caller sends it to ``todo`` and the
     existing dropped-exposure guard deals with it, rather than this function
     inventing a second answer for a case that already has one.
+
+    ``seed_inputs`` -- THE SECOND HALF (2026-09-04).  The frame is the only
+    input to m12.  Every later phase also fits against the PREVIOUS phase's
+    finalize output: the prior vetted merged catalog, the prior mergedcat
+    residual i2d, the prior smoothed background (m3..m6), and for m7 the m6
+    vetted catalogs the cross-band seed is clustered from.  Re-running a
+    finalize -- which the phase sbatch names as the main reason to launch it by
+    hand -- or restarting the chain at an earlier phase REWRITES that seed while
+    no frame's mtime moves.  Comparing against the frame alone then reports
+    "current" for every frame, the whole shard resumes, and the phase keeps
+    per-frame catalogs fitted against a seed that no longer exists.
+
+    So a marker is current only if it is at least as new as the frame AND as
+    every seed input that exists.  A seed input that does NOT exist is not
+    evidence of anything and is ignored (the phase raises on a genuinely missing
+    one, at ``--manual-start-phase``, with a better message than this could).
+
+    Do not pass a DERIVED seed file here (the i2d-augmented seed, the crossband
+    seed): every shard rebuilds those at the same path on every run, so their
+    mtime is always "now" and nothing would ever resume.  Pass what they are
+    built FROM.
     """
     try:
-        return os.path.getmtime(marker_path) >= os.path.getmtime(frame_path)
+        m = os.path.getmtime(marker_path)
+        if m < os.path.getmtime(frame_path):
+            return False
     except OSError:
         return False
+    for inp in seed_inputs:
+        try:
+            if m < os.path.getmtime(inp):
+                return False
+        except OSError:
+            continue          # absent input -> no evidence either way
+    return True
 
 
-def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
+def select_resumable_frames(frame_args, marker_dir, filt, phase, merge,
+                            seed_inputs=()):
     """Split ``frame_args`` into (still to fit, already done, already no-overlap).
 
     The --skip-if-done resume for the per-frame fan-out.  A fan-out that hits
@@ -5190,13 +5243,17 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
     function can match, so the staleness gate below is what keeps that safe --
     the two changes have to travel together (#570).
 
-    A marker only resumes when it is at least as new as its frame; see
-    ``_marker_is_current``.  ``stale`` counts markers that existed but lost that
-    test, so a caller can say how many frames are being refit because they were
-    regenerated rather than because they were never done.
+    A marker only resumes when it is at least as new as its frame AND as every
+    ``seed_inputs`` path -- the previous phase's finalize products this phase
+    fits against (m3..m7 have them; m12 has none).  See ``_marker_is_current``
+    for why the frame alone is not enough and for what must NOT be passed.
+    ``stale`` counts markers that existed but lost that test, so a caller can
+    say how many frames are being refit because their input moved rather than
+    because they were never done.
 
     Returns ``(todo, resumed_ok, resumed_nooverlap, stale)``.
     """
+    seed_inputs = tuple(seed_inputs or ())
     todo, resumed_ok, resumed_nooverlap, stale = [], [], [], []
     for a in frame_args:
         fn = a['filename']
@@ -5207,14 +5264,17 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
                                           'nooverlap', merge=merge)
                      for det in dets]
         present = [p for p in ok_paths + nov_paths if os.path.exists(p)]
-        if present and not any(_marker_is_current(p, fn) for p in present):
-            # Fitted once, but not from the frame sitting there now.
+        if present and not any(_marker_is_current(p, fn, seed_inputs)
+                               for p in present):
+            # Fitted once, but not from the frame -- or the seed -- sitting
+            # there now.
             stale.append(fn)
             todo.append(a)
             continue
-        if any(os.path.exists(p) and _marker_is_current(p, fn) for p in ok_paths):
+        if any(os.path.exists(p) and _marker_is_current(p, fn, seed_inputs)
+               for p in ok_paths):
             resumed_ok.append(fn)
-        elif any(os.path.exists(p) and _marker_is_current(p, fn)
+        elif any(os.path.exists(p) and _marker_is_current(p, fn, seed_inputs)
                  for p in nov_paths):
             resumed_nooverlap.append((fn, 'no-overlap (marker)'))
         else:
@@ -5789,6 +5849,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                               f"using {os.path.basename(vetted_prev)}", flush=True)
                         prev_seed = vetted_prev
 
+                # SEED PROVENANCE for the fan-out resume.  Everything this phase
+                # fits against that the PREVIOUS phase's finalize wrote.  A
+                # marker older than any of these is a receipt for a fit against
+                # a seed that has since been replaced -- see
+                # `_marker_is_current`.  The DERIVED seed files (prev_seed) are
+                # deliberately absent: every shard rebuilds them at the same
+                # path on every run, so their mtime is always "now".
+                _seed_inputs = [q for q in (vetted_prev, det_i2d, bg_sub,
+                                            resbg_path) if q]
+                if phase == 'm7':
+                    _seed_inputs += [q for _m, _f, q in crossband_seed_inputs(
+                        cut_bp, modules, filternames, options)]
+
                 # candidate frames (scan on first phase, cache thereafter)
                 if phase == phases[0]:
                     # Same scan the preflight above already ran (same basepath,
@@ -5954,38 +6027,65 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                               f"{shard_i}/{shard_n} -> {len(frame_args)} of "
                               f"{len(all_frames)} frames", flush=True)
 
-                    # RESUME.  A fan-out that hit its wall clock leaves every
-                    # finished frame's completion marker on disk; without this
-                    # the re-run refits all of them and hits the same wall
-                    # (#333).  The marker is written by the worker that
-                    # SUCCEEDED, so unlike a predicted output filename it cannot
-                    # drift from what the writer does -- which is how the
-                    # filename-prediction half of this shipped disagreeing with
-                    # itself.  Frames already marked are carried into
-                    # `overlapping_now` so the finalize's completeness check
-                    # still sees them.
-                    if getattr(options, 'skip_if_done', False) and (
-                            skip_finalize or finalize_only):
+                    # RESUME (OPT-IN, --skip-if-done).  A fan-out that hit its
+                    # wall clock leaves every finished frame's completion marker
+                    # on disk; without this the re-run refits all of them and
+                    # hits the same wall (#333).  The marker is written by the
+                    # worker that SUCCEEDED, so unlike a predicted output
+                    # filename it cannot drift from what the writer does --
+                    # which is how the filename-prediction half of this shipped
+                    # disagreeing with itself.  Frames already marked are
+                    # carried into `overlapping_now` so the finalize's
+                    # completeness check still sees them.
+                    #
+                    # NOT on by default: nothing in a marker changes when the
+                    # PHOTOMETRY CODE does, so a re-catalog run to apply a fit
+                    # fix -- the campaign's most common reason to re-run
+                    # cataloging -- would skip every frame and report green with
+                    # the old photometry.  The operator asks for the resume when
+                    # the code is the same and only the wall clock was hit; the
+                    # hint below is printed at exactly that moment.
+                    if (skip_finalize or finalize_only):
+                        _resume = bool(getattr(options, 'skip_if_done', False))
                         _todo, _ok, _nov, _stale = select_resumable_frames(
-                            frame_args, _marker_dir, filt, phase, module)
-                        overlapping_now.extend(_ok)
-                        no_overlap.extend(_nov)
-                        _resumed = len(_ok) + len(_nov)
-                        if _resumed:
-                            print(f"manual [{phase}] {filt}/{module}: skip-if-done "
-                                  f"resumed {_resumed} frame(s) from completion "
-                                  f"markers; {len(_todo)} left to fit", flush=True)
-                        if _stale:
-                            # Say it loudly: a large count here means the frames
-                            # were REGENERATED under their markers, and a resume
-                            # that trusted existence alone would have skipped
-                            # them (#570).
-                            print(f"manual [{phase}] {filt}/{module}: skip-if-done "
-                                  f"REFITTING {len(_stale)} frame(s) whose marker "
-                                  f"is older than the frame on disk -- these were "
-                                  f"regenerated after they were last fitted",
-                                  flush=True)
-                        frame_args = _todo
+                            frame_args, _marker_dir, filt, phase, module,
+                            seed_inputs=_seed_inputs)
+                        if not _resume:
+                            # Do not skip anything -- just say the offer exists,
+                            # with the count, so the operator restarting a
+                            # wall-clocked array does not have to know the flag
+                            # from a doc (#570).
+                            _avail = len(_ok) + len(_nov)
+                            if _avail:
+                                print(f"manual [{phase}] {filt}/{module}: "
+                                      f"{_avail} frame(s) carry a CURRENT "
+                                      f"completion marker and will be refitted "
+                                      f"anyway (the resume is opt-in).  Re-run "
+                                      f"with SKIP_IF_DONE=1 (--skip-if-done) to "
+                                      f"resume them instead -- do that only if "
+                                      f"the photometry code is unchanged since "
+                                      f"they were fitted", flush=True)
+                        else:
+                            overlapping_now.extend(_ok)
+                            no_overlap.extend(_nov)
+                            _resumed = len(_ok) + len(_nov)
+                            if _resumed:
+                                print(f"manual [{phase}] {filt}/{module}: skip-if-done "
+                                      f"resumed {_resumed} frame(s) from completion "
+                                      f"markers; {len(_todo)} left to fit", flush=True)
+                            if _stale:
+                                # Say it loudly: a large count here means the
+                                # frames were REGENERATED, or the phase's SEED
+                                # was rewritten, under their markers -- and a
+                                # resume that trusted existence alone would have
+                                # skipped them (#570).
+                                print(f"manual [{phase}] {filt}/{module}: skip-if-done "
+                                      f"REFITTING {len(_stale)} frame(s) whose marker "
+                                      f"is older than the frame on disk or than this "
+                                      f"phase's seed inputs -- these were regenerated, "
+                                      f"or re-seeded, after they were last fitted",
+                                      flush=True)
+                            frame_args = _todo
 
                     def _on_result(filename, ok, err):
                         # WRITER: correct spelling only.  Readers accept the

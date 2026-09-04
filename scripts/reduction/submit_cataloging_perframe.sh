@@ -24,6 +24,18 @@
 #
 # NOTE (MIRI): all-MIRI multifilter runs drop m7 internally.  Set PHASES
 # explicitly (e.g. PHASES="m12 m3 m4 m5 m6") for those.
+#
+# RESTARTING a chain that hit its wall clock:
+#
+#   SKIP_IF_DONE=1 scripts/reduction/submit_cataloging_perframe.sh ...
+#
+# The fan-out then resumes from the completion markers the killed tasks left
+# behind instead of refitting the shard (wd1 #570: 4:26-8:44 per shard down to
+# ~50 s).  It is OPT-IN because no marker changes when the photometry code
+# does, so a re-catalog run to apply a fit fix must NOT inherit it -- that run
+# would skip every frame and report green with the old photometry.  Markers
+# that are older than their `_crf`, or than the phase's seed inputs, are
+# refitted even with the flag on, and counted in the run's REFITTING line.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +50,10 @@ MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
 CROSSBAND_REF=${CROSSBAND_REF:-}
 PIPE_ROOT=${PIPE_ROOT:-}
 export EXTRA_ARGS=${EXTRA_ARGS:-}   # may contain commas -> inherit via --export=ALL
+# Opt-in fan-out resume (see the header).  Exported rather than folded into
+# COMMON so a wrapper that sets it without `export` still reaches the array;
+# COMMON begins with ALL, so the phase script reads it from the environment.
+export SKIP_IF_DONE=${SKIP_IF_DONE:-}
 # MODULES is comma-valued for any multi-module field ("nrca,nrcb"), and sbatch
 # --export is itself comma-separated: inlining it as MODULES=$MODULES makes
 # sbatch read "nrcb" as a separate KEY=VALUE-less token and the variable arrives
