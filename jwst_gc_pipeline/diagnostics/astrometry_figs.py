@@ -328,11 +328,12 @@ def absolute_astrometry(inv, outdir, anchor=None):
             ax.set_title(filt.upper())
             continue
         coords, n_used = got
-        # confirm_windows: an unconfirmed SWEPT bulk peak can be footprint
-        # geometry rather than a real tie (issue #158).  The write-up escalates
-        # a swept bulk to a "grossly shifted" verdict, so the peak has to be
-        # confirmed before it earns that; the cost is one or two extra
-        # measurements and only on a swept result.
+        # confirm_windows: an unconfirmed bulk peak that is large relative to
+        # its own search window can be footprint geometry or a sparse-histogram
+        # chance bin rather than a real tie (issues #158, #600).  The write-up
+        # escalates such a bulk to a "grossly shifted" verdict, so the peak has
+        # to be confirmed before it earns that; the cost is one or two extra
+        # measurements, and only on a swept or edge-riding result.
         result = measure_offset(coords, ref_tree, context=f'{inv.name}/{filt}',
                                 confirm_windows=True)
         bounds = (float(coords.ra.deg.min()), float(coords.ra.deg.max()),

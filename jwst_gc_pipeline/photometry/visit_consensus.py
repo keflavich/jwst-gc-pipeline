@@ -1377,8 +1377,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # confirmation both look identical in the record -- w51 carried a 7.8"
     # ``bulk_source: histogram`` tie with ``window_consistent: null`` for want of
     # the probe (issue #257).  Only a MEASURED disagreement rejects, so a genuine
-    # large tie is untouched, and the probe only ever runs on a swept peak, so the
-    # ordinary small tie is numerically identical.
+    # large tie is untouched, and the probe only runs on a peak that could be an
+    # artifact of its own window -- swept, or riding its window's edge
+    # (``CONFIRM_EDGE_FRACTION``, issue #600) -- so the ordinary small tie is
+    # numerically identical.  Before #600 the trigger was ``swept`` alone, and
+    # every gc2211 record was unswept: a 2.95" peak inside the FIRST 3" window
+    # is edge-riding without ever having been swept, so all 38 recorded
+    # ``window_consistent: null`` and the probe never ran.
     res_a = measure_offset(consensus_coords, ref_coords_all, sweep=True,
                            confirm_windows=True,
                            context=f"{context} vs full-ref")
