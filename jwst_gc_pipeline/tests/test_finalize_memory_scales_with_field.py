@@ -21,15 +21,31 @@ SCRIPT = (Path(__file__).resolve().parents[2] / "scripts" / "reduction"
           / "submit_cataloging_perframe.sh")
 
 
+def _sizing_text():
+    """The driver's field-size block: the crf count, the tier, and the memory.
+
+    The count is shared with the wall-time sizing (#737), so the crf-count
+    thresholds now name a tier (`FIELD_TIER`) and the memory is selected from
+    that.  Same policy, one measurement.
+    """
+    text = SCRIPT.read_text()
+    start = text.index("FIELD SIZE, measured once")
+    end = text.index("FINALIZE_MEM=${FINALIZE_MEM:-64gb}", start)
+    return text[start:end]
+
+
 def _tiers():
     """[(threshold, mem)] parsed from the driver, highest threshold first."""
-    text = SCRIPT.read_text()
-    block = text[text.index("FINALIZE MEMORY SCALES WITH THE FIELD"):]
-    block = block[:block.index("FINALIZE_TIME")]
-    tiers = [(int(n), mem) for n, mem in
-             re.findall(r'-ge\s+(\d+)\s*\];\s*then\s+FINALIZE_MEM=(\d+gb)', block)]
-    floor = re.search(r'else\s+FINALIZE_MEM=(\d+gb)', block)
+    block = _sizing_text()
+    named = dict(re.findall(r'^\s*(\w+)\)\s*FINALIZE_MEM=(\d+gb)\s*;;',
+                            block, re.M))
+    floor = re.search(r'^\s*\*\)\s*FINALIZE_MEM=(\d+gb)\s*;;', block, re.M)
     assert floor, "no default tier"
+    tiers = []
+    for n, tier in re.findall(r'-ge\s+(\d+)\s*\];\s*then\s+FIELD_TIER=(\w+)',
+                              block):
+        assert tier in named, f'tier {tier} has no memory case'
+        tiers.append((int(n), named[tier]))
     return tiers, floor.group(1)
 
 
@@ -86,6 +102,19 @@ def test_an_explicit_request_still_wins():
         "the tiering must be skipped when the caller set FINALIZE_MEM")
 
 
+def test_the_field_is_measured_exactly_once():
+    """Memory (#611) and wall time (#737) size from the same crf count.
+
+    Two globs would drift: a field could take the 256gb tier for memory and the
+    small tier for wall time from the same tree.
+    """
+    src = SCRIPT.read_text()
+    assert src.count("pipeline/*crf.fits") == 2, (
+        "the crf glob should appear exactly twice -- the per-observation tree "
+        "and its plain-target fallback -- and be reused for both sizings")
+    assert src.count("FIELD_TIER=") == 3, "one assignment per tier"
+
+
 def test_fanout_memory_is_untouched():
     """Fan-out is per-shard; only the finalize merges the whole field."""
     text = SCRIPT.read_text()
@@ -102,18 +131,14 @@ def test_a_missing_data_tree_does_not_abort_the_submit():
     """
     src = SCRIPT.read_text()
     assert "set -euo pipefail" in src, "premise: the driver still uses set -e"
-    block = src[src.index("FINALIZE MEMORY SCALES WITH THE FIELD"):]
-    block = block[:block.index("FINALIZE_TIME")]
+    block = _sizing_text()
     assert "|| true; } | wc -l" in block, (
         "the crf count must not abort the submit when the tree is absent")
 
 
 def test_the_count_is_scoped_to_this_target():
     """A glob over the whole archive would size every field by the largest."""
-    src = SCRIPT.read_text()
-    block = src[src.index("FINALIZE MEMORY SCALES WITH THE FIELD"):]
-    block = block[:block.index("FINALIZE_TIME")]
-    assert '/$TARGET"' in block
+    assert '/$TARGET"' in _sizing_text()
 
 
 # --- the count has to look where the data actually is -------------------------
@@ -123,9 +148,9 @@ def test_the_count_is_scoped_to_this_target():
 # synthetic tree without reaching sbatch.
 
 def _sizing_block():
-    """The `if [ -z "${FINALIZE_MEM:-}" ]` block, runnable on its own."""
+    """The crf count, the tier and the memory selection, runnable on its own."""
     text = SCRIPT.read_text()
-    start = text.index('if [ -z "${FINALIZE_MEM:-}" ]; then')
+    start = text.index('_crf_base=${BASEPATH:-')
     end = text.index('FINALIZE_MEM=${FINALIZE_MEM:-64gb}', start)
     return text[start:end]
 
@@ -142,7 +167,7 @@ def _run_sizing(tmp_path, target, field, trees):
     # `set -e` is the driver's own state (line 28); the block must survive it.
     done = subprocess.run(
         ["bash", "-c", "set -euo pipefail\n" + _sizing_block()
-         + '\necho "MEM=$FINALIZE_MEM"\n'],
+         + '\necho "MEM=$FINALIZE_MEM TIER=$FIELD_TIER"\n'],
         env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     return done.stdout

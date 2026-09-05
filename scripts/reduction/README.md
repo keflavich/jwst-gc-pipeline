@@ -233,3 +233,24 @@ Only the **cpu** ask is shrunk. `--mem` and `--time` are kept generous on purpos
 trimming those risks an OOM/timeout kill mid-run (losing the whole job's work),
 whereas a smaller cpu ask only changes *when* the job starts. Prefer "schedule
 later, finish once" over "start sooner, risk a re-run".
+
+Generous, and specific to what the job does: `submit_cataloging_perframe.sh`
+counts the field's `_crf` frames once and sizes both `--mem` (#611) and `--time`
+(#737) from it, wall time additionally per stage (`_stage_time`). A flat 12 h
+was below what the big fields run — sgrb2's m12-finalize has taken 55.3 h — and
+a stage killed on its limit takes its whole `afterok` chain with it.
+
+Wall time is not a free parameter in the other direction either: a 4-cpu job
+asking a 3-day wall only backfills into a 3-day-wide gap, and sgrb2's
+m6-finalize waited exactly its own 3 d on an otherwise finished field. So the
+small tier (arches, m92, ngc6397, m4 — nothing measured past 6.5 h over 452
+runs, and no small field has ever hit a time limit)
+keeps the 12 h it had; only the mid and large tiers get more.
+
+`FINALIZE_MEM`, `FANOUT_TIME` and `FINALIZE_TIME` in the environment still
+override. `FANOUT_TIME`/`FINALIZE_TIME` are one knob for SIX phases each, which
+is how sgrb2's m3–m7 finalizes (12.5–17.3 h) came to carry the 72 h its runner
+sized for m12; prefer the per-phase spelling `FANOUT_TIME_<PHASE>` /
+`FINALIZE_TIME_<PHASE>` (e.g. `FINALIZE_TIME_M12=72:00:00`). Every submit line
+prints the limit it asked for and where it came from, so a stale blanket
+override is visible in the log.

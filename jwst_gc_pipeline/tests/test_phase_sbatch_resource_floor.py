@@ -66,16 +66,57 @@ def test_the_declared_wall_time_is_hours_not_minutes():
 
 
 def test_the_floor_matches_the_drivers_finalize_slice():
-    """Two numbers for the same job should not drift apart."""
+    """Two numbers for the same job should not drift apart.
+
+    cpu and memory the driver still names once (its smallest tier).  Wall time
+    it now sizes per field tier and stage (`_stage_time`, issue #737), so the
+    floor mirrors the SHORTEST limit any finalize gets -- the same relationship
+    ``--mem=64gb`` already has to the smallest memory tier.  A hand-launched
+    phase that needs a big field's wall passes ``--time`` on the command line,
+    which overrides this; the floor exists only so the bare path does not
+    inherit the cluster's ~10 minute default.
+    """
     src = open(DRIVER).read()
     want = {
         'cpus-per-task': re.search(r'FINALIZE_CPUS=\$\{FINALIZE_CPUS:-(\d+)\}', src).group(1),
         'mem': re.search(r'FINALIZE_MEM=\$\{FINALIZE_MEM:-(\S+?)\}', src).group(1),
-        'time': re.search(r'FINALIZE_TIME=\$\{FINALIZE_TIME:-(\S+?)\}', src).group(1),
+        'time': min(_driver_stage_times(src), key=_hours),
     }
     got = _directives(PHASE)
     for k, v in want.items():
         assert got[k] == v, f'{k}: script says {got[k]}, driver default is {v}'
+
+
+def _driver_stage_times(src):
+    """Every --time the driver's `_stage_time` table can hand a phase job."""
+    body = src.split('_stage_time() {', 1)[1].split('\n}', 1)[0]
+    times = re.findall(r'\)\s*echo\s+(\S+)\s*;;', body)
+    assert times, 'the driver no longer declares per-stage wall times'
+    return times
+
+
+def _hours(t):
+    parts = [int(x) for x in t.split('-')[-1].split(':')]
+    hours = parts[0] + (parts[1] / 60 if len(parts) > 1 else 0)
+    return hours + (int(t.split('-')[0]) * 24 if '-' in t else 0)
+
+
+def test_the_floor_clears_a_small_fields_measured_finalize_maximum():
+    """The floor exists so a hand-launched phase survives its own stage.
+
+    wd2's m7 finalize was re-run by hand, inherited the cluster default and
+    died at 00:10:18.  The floor has to beat that by a wide margin, and it is
+    sized on the SMALL tier because that is the wall the driver itself hands a
+    small field: 14 days of sacct put every small-field finalize under 3.6 h
+    (m92 m12-finalize), so 12 h is ~3x the measurement.  A hand-launched
+    finalize on sgrb2 or brick needs the big-field wall and has to pass
+    ``--time``; baking 36 h in here instead would cost a 107-second
+    finalize-only recovery (crowded_l3, 2026-09-04) a 36 h backfill window.
+    """
+    assert _hours(_directives(PHASE)['time']) >= 3 * 3.6, (
+        'the hand-launch floor is below 3x a small field\'s measured '
+        'finalize maximum'
+    )
 
 
 def test_the_directives_are_reachable_by_the_parser():
