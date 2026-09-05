@@ -91,8 +91,16 @@ retired 2026-07-11), and tests
 `reduction/validate_offsets_table.py` (`flag_collapsed_visits` /
 `assert_offsets_table_sane` + `test_validate_offsets_table.py`) flags a COLLAPSED
 offsets table (distinct visits of a filter sharing an offset to within ~20 mas) and
-runs inside `unified_alignment._shift_from_locked`, on the `fix_alignment` path. It fires a warning
-by default, or raises `CollapsedOffsetsTableError` with `OFFSETS_TABLE_COLLAPSE_RAISE=1`.
+runs inside `unified_alignment._shift_from_locked`, on the `fix_alignment` path, where
+it RAISES `CollapsedOffsetsTableError` (PR #770 — that call site passes
+`raise_on_issue=True`; it warned by default until then, and the warning is what let
+brick-1182 v001 be baked in). `raise_on_issue=True` also promotes
+`flag_broadcast_provenance` to `BroadcastProvenanceError`; the as-built/as-corrected
+divergence keeps its own switch (`raise_on_diverged` / `OFFSETS_TABLE_DIVERGENCE_RAISE=1`)
+and still warns, because it costs the audit trail rather than the applied shift.
+`OFFSETS_TABLE_COLLAPSE_RAISE=1` no longer changes anything on this path or on the
+`astrometry_checkpoint.update_offsets_table` write path — both already pass
+`raise_on_issue=True` — and remains only for a caller that does not.
 This audit documents the redundancies below that make the collapse possible in
 the first place.
 

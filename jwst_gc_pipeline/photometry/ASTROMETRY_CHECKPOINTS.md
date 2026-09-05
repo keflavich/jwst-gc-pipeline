@@ -644,7 +644,7 @@ the same table rows.
 | `ASTROM_MAX_BULK_CORRECTION_ARCSEC=<f>` | raise/lower the per-visit bulk ceiling **and** the cumulative-drift bound (default 60″) |
 | `ASTROM_ALLOW_MISSING_PERFRAME=1` | demote the missing-per-frame-catalog stop (`cataloging.py`) |
 | `CATALOG_ALLOW_UNVETTED_FALLBACK=1` | allow the unvetted-catalog fallback |
-| `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit guard raise instead of warn (`reduction/validate_offsets_table.py`) |
+| `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit and broadcast-provenance guards raise instead of warn (`reduction/validate_offsets_table.py`). **No-op on both production paths**: `astrometry_checkpoint.update_offsets_table` (write) and `unified_alignment._validate_once` (apply, PR #770) already pass `raise_on_issue=True`, so they raise whether or not it is set. It still applies to a caller that passes `raise_on_issue=False` |
 | `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
 | `ASTROM_M2_CORRECTION_FLOOR_MAS=<f>` | at m2, MEASURE and RECORD every residual as usual but only ACT on those at or above this magnitude (default 0 = act on all). See below. |
 | `ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1` | let a checkpoint that measured a shift and then refused to apply it count as a pass |
