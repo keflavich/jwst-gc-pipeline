@@ -4481,6 +4481,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '(hard-crash on any miss -> no silent exposure drop), '
                             'then run the per-phase barrier over the per-frame '
                             'products already on disk.'))
+    parser.add_option('--allow-partial-modules', dest='allow_partial_modules',
+                      default=False, action='store_true',
+                      help=('Let --manual-finalize-only run with a --modules list '
+                            'that does not cover every module the field has '
+                            'per-frame catalogs for (normally a REFUSAL: a '
+                            'truncated list stamps a half-field catalog '
+                            'complete).  Deliberate single-module finalizes '
+                            'only; ALSO requires ALLOW_PARTIAL_MODULES=1 in the '
+                            'environment.'))
     parser.add_option('--no-forced-fill-m8', dest='forced_fill_m8',
                       default=True, action='store_false',
                       help=('Skip the inline m8 forced cross-band fill at the end of '
