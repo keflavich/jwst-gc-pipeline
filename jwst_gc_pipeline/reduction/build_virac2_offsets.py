@@ -540,10 +540,36 @@ def _offhist_peak(dra_mas, dde_mas, win_mas=500.0, bin_mas=2.0):
     return (xe[i] + xe[i + 1]) / 2, (ye[j] + ye[j + 1]) / 2, pk / max(bg, 1.0)
 
 
-def crosstie_offset(filt, rc):
+class CrosstieCatalogMissingError(RuntimeError):
+    """A region keyed in ``CROSSTIE`` whose master or src catalog cannot be resolved."""
+
+
+def _crosstie_cat_note(loaded, pattern):
+    """One line saying why ``_load_cat_fluxpos(pattern)`` did or did not resolve."""
+    if loaded is not None:
+        return f"resolved {loaded[2]}"
+    n = len(glob.glob(pattern))
+    if n == 0:
+        return f"no file matches {pattern}"
+    return (f"{n} file(s) match {pattern}, but the newest carries no skycoord column")
+
+
+def crosstie_offset(filt, rc, allow_missing=False):
     """Flux-vetted coordinate shift (Δα no-cosδ, Δδ; arcsec) to ADD to this filter's
-    VIRAC2-locked tie so it lands on the master (2221 F212N) frame.  Returns (0,0) with a
-    loud warning if it cannot be measured cleanly (never silently skips)."""
+    VIRAC2-locked tie so it lands on the master (2221 F212N) frame.
+
+    An unresolved master/src catalog RAISES ``CrosstieCatalogMissingError``.  This
+    function's output is pasted into ``CROSSTIE`` by hand, and a glob that matches
+    nothing used to print ``(+0.00000, +0.00000)`` in the same paste-ready form as a
+    measured value -- indistinguishable from a real zero, and the brick/1182 constants
+    it would replace are 18-21 mas, the size the cross-tie exists to remove.  Pass
+    ``allow_missing=True`` (CLI ``--allow-missing-crosstie-catalog``) to restore the
+    warn-and-return-0 behaviour for a build run before those catalogs exist.
+
+    A measurement that RAN and was declined (too few pairs, too few vetted core
+    matches) still returns (0,0) with a loud warning -- that is a different severity
+    and is left alone here.
+    """
     region = None
     for rk, rv in REGION.items():
         if rv is rc:
@@ -551,10 +577,22 @@ def crosstie_offset(filt, rc):
     cfg = CROSSTIE.get(region)
     if cfg is None:
         return 0.0, 0.0
-    master = _load_cat_fluxpos(cfg['master_cat'])
-    src = _load_cat_fluxpos(f"{rc['basepath']}/catalogs/"
-                            f"{filt}_merged_indivexp_merged*_m[0-9]*_dao_basic_vetted.fits")
+    master_pat = cfg['master_cat']
+    src_pat = (f"{rc['basepath']}/catalogs/"
+               f"{filt}_merged_indivexp_merged*_m[0-9]*_dao_basic_vetted.fits")
+    master = _load_cat_fluxpos(master_pat)
+    src = _load_cat_fluxpos(src_pat)
     if master is None or src is None:
+        if not allow_missing:
+            raise CrosstieCatalogMissingError(
+                f"{filt}: region {region!r} is keyed in CROSSTIE but its cross-tie "
+                f"catalogs did not resolve; refusing to report a zero shift that is "
+                f"indistinguishable from a measured one.\n"
+                f"  master ({cfg['master_name']}): "
+                f"{_crosstie_cat_note(master, master_pat)}\n"
+                f"  src ({filt}): {_crosstie_cat_note(src, src_pat)}\n"
+                f"Re-run with --allow-missing-crosstie-catalog only if you intend the "
+                f"printed constants to be zero.")
         print(f"  [crosstie] {filt}: missing master/src catalog -> APPLYING 0 (WARN)", flush=True)
         return 0.0, 0.0
     (msc, mmag, mnm), (ssc, smag, snm) = master, src
@@ -1027,6 +1065,9 @@ if __name__ == '__main__':
                          '(removes a real inter-module offset; fix_alignment narrows by Module)')
     ap.add_argument('--out', default=None, help='override output path (for validation before '
                     'overwriting the production table)')
+    ap.add_argument('--allow-missing-crosstie-catalog', action='store_true',
+                    help='with --remeasure-crosstie, print a 0 constant (with a WARN) instead '
+                         'of raising when a cross-tie catalog glob resolves to nothing')
     ap.add_argument('--remeasure-crosstie', action='store_true',
                     help='flux-vetted RE-MEASURE of the JWST<->JWST cross-tie vs the 2221 master; '
                          'PRINTS suggested CROSSTIE constants and EXITS (writes nothing). Run this '
@@ -1042,7 +1083,8 @@ if __name__ == '__main__':
             print(f"region {args.region} has no cross-tie master; nothing to measure."); sys.exit(0)
         print(f"# flux-vetted cross-tie vs {cfg['master_name']} -- paste into CROSSTIE['{args.region}']['shifts']:")
         for f in filts:
-            ra, de = crosstie_offset(f, rc)
+            ra, de = crosstie_offset(
+                f, rc, allow_missing=args.allow_missing_crosstie_catalog)
             print(f"    '{f}': ({ra:+.5f}, {de:+.5f}),")
         sys.exit(0)
 
