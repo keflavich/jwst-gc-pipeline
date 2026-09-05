@@ -46,12 +46,20 @@ Since #588 a cell whose peak lands beyond half that window (`WINDOW_EDGE_FRAC = 
 i.e. > 1250 mas) is not graded on that number alone — at that radius a real large
 offset and the arg-max of the disk's own wrong-pair background are the same number.
 It is resolved first, by contrast and by **sweeping** the cell to 5″ and 10″
-(`SWEEP_FACTORS`): an offset that reproduces across windows is graded at the swept
-value, so the check now measures the 2.5–10″ regime it used to alias to ~1.8″. A cell
+(`SWEEP_FACTORS`): a swept peak that stands clear of its own window's rim *and* is
+improbable under that window's own wrong-pair background is graded at the swept value,
+so the check now measures the 2.5–10″ regime it used to alias to ~1.8″. The bar there
+is `SWEEP_MAX_EXPECTED_BINS` — the expected number of bins of the cell's own background
+reaching the observed peak — because the windows are NESTED on a shared bin grid, so
+"the offsets agree across windows" is arithmetic rather than evidence, and a contrast
+floor calibrated at 2.5″ is a weaker bar at 5″ and 10″ where 4× and 16× the bins were
+searched. A cell
 neither test can resolve measured nothing; it is reported as `n_window_edge` /
 `window_edge_cells` (with each cell's `swept_windows`), and a 4-connected patch of
 `MIN_SEAM_CELLS` such cells makes the verdict **could-not-verify** — exit 2, which
-`stage_release.py` refuses on. It is never a pass. Above 10″, and for anything
+`stage_release.py` refuses on. It is never a pass, and the `MIN_SEAM_CELLS` quorum is counted on the
+**union** of the failed and withdrawn cells, so a region that straddles the two does not
+fall under the quorum on both at once. Above 10″, and for anything
 frame-vs-frame, the gate is `check_interframe_overlap.py --scan`.
 A displacement large enough to carry a region entirely **off** the truth footprint still
 leaves that region with no pairs at all — cells that never verify, and so are reported

@@ -166,9 +166,19 @@ def no_tie():
     lands mostly beyond half of it -- 'no tie exists inside 2.5 arcsec', which is what
     o028's per-exposure catalog (294704 rows against 23296 detections) produces.
 
-    ``sweep_factors=(2.0,)`` keeps one shared fixture affordable; a background arg-max
-    is refuted by the first widening (it moves from 0.71*2.5" to 0.71*5"), so the second
-    window changes the cost, not the verdict.
+    ``sweep_factors=(2.0,)`` keeps one shared fixture affordable: the full-size field
+    at the shipped ``SWEEP_FACTORS`` searches 10" around 6000 detections in a truth set
+    of 60000 and takes tens of minutes, which is not a CI cost.
+
+    It is a COST reduction and nothing more.  This fixture's own numbers are therefore
+    the numbers at ``(2.0,)``, and the review of #758 was right that the earlier claim
+    here -- "the second window changes the cost, not the verdict" -- was an assumption:
+    at the shipped default the second window confirms a fraction of these
+    pure-background cells and grades them at multi-arcsecond offsets.  What the fixture
+    can pin cheaply is the field-level SHAPE (withdrawn wholesale, never a pass); the
+    confirmation rule at the shipped ``SWEEP_FACTORS`` is pinned directly, one cell at a
+    time, by ``test_the_sweep_does_not_confirm_pure_wrong_pair_background`` and its
+    real-tie counterpart below.
     """
     rng = np.random.default_rng(3)
     det = _sc(rng.uniform(0, EXTENT, 6000), rng.uniform(0, EXTENT, 6000))
@@ -331,3 +341,236 @@ def test_window_edge_and_sweep_defaults():
     assert rf.WINDOW_EDGE_FRAC * rf.MX.to(u.mas).value > 20 * rf.OFF_MAX
     # a real tie has to reproduce to within a few histogram bins, not "anywhere"
     assert rf.SWEEP_AGREE_MAS <= 5 * rf.XBIN * 1000
+
+
+
+# ---------------------------------------------------------------------------
+# what the sweep's confirmation actually rests on (review of #758)
+# ---------------------------------------------------------------------------
+#
+# The rule this arm shipped with was "the smallest resolving window's offset is
+# reproduced by a second resolving window".  The review of #758 showed that agreement
+# is arithmetic rather than evidence, and these tests pin the statistic that replaced
+# it -- on both sides, so the bar cannot be moved in either direction unnoticed.
+
+def _one_cell_field(n_det=15, truth_per_sq_arcsec=37.5, seed=21, shift_mas=None):
+    """One cell's detections plus a uniform truth set at the gc2211_o028 pair density.
+
+    ``n_det`` is set so the cell's wrong-pair background is ~0.9 pairs per 40 mas bin --
+    the regime o028 sits in (peak/background 5-7, the verify floor) and the regime the
+    whole #588 argument is about.  ``shift_mas`` adds one true counterpart per detection
+    at that Dec offset.
+    """
+    rng = np.random.default_rng(seed)
+    dx = rng.uniform(-0.5, 0.5, n_det)
+    dy = rng.uniform(-0.5, 0.5, n_det)
+    pad = 12.0
+    n_truth = int(truth_per_sq_arcsec * (2 * pad) ** 2)
+    tx = rng.uniform(-pad, pad, n_truth)
+    ty = rng.uniform(-pad, pad, n_truth)
+    if shift_mas is not None:
+        tx = np.concatenate([tx, dx])
+        ty = np.concatenate([ty, dy - shift_mas / 1000.0])
+    return _sc(dx, dy), _sc(tx, ty)
+
+
+def _sweep_one_cell(det, truth, base_off=2400.0, base_ratio=6.0, **kw):
+    """Drive ``sweep_cell_windows`` on a single cell at the SHIPPED sweep factors.
+
+    A near-edge cell by definition has ``off > WINDOW_EDGE_FRAC * MX``, so its base
+    measurement can never resolve and only the swept windows can confirm anything;
+    ``base`` is that arriving reading.
+    """
+    base = {0: rf._PeakStats(off=base_off, ratio=base_ratio, dra_mas=0.0,
+                             dde_mas=base_off, peak=base_ratio, lam=0.9,
+                             n_bins=12272.0, expected=1.0)}
+    return rf.sweep_cell_windows(det, truth, np.zeros(len(det), int), [0], base,
+                                 pairs_per_det=736.0, **kw)
+
+
+def test_two_nested_windows_agree_arithmetically_so_agreement_is_not_evidence():
+    """The review's B1, as a property of the estimator rather than a sample of one.
+
+    ``SWEEP_FACTORS`` are nested radius searches on a SHARED 40 mas bin grid, so the
+    wider window's histogram equals the narrower one's bin for bin inside the narrower
+    disk.  Whenever the wider window RESOLVES -- arg-max within ``WINDOW_EDGE_FRAC`` of
+    its own window, i.e. inside the narrower window's disk -- it therefore reports the
+    narrower window's arg-max exactly.  "The two windows agree" is then arithmetic and
+    carries no information, which is why the confirmation rule no longer rests on it.
+    """
+    bin_mas = rf.XBIN * 1000
+    # the mechanism: every window is a whole number of bins from the origin, so the
+    # narrower grid's edges are a subset of the wider one's
+    mx_mas = rf.MX.to(u.mas).value
+    for fac in rf.SWEEP_FACTORS:
+        n = (fac * mx_mas) / bin_mas
+        assert abs(n - round(n)) < 1e-6, (fac, n)
+    rng = np.random.default_rng(4)
+    agreed = resolved = 0
+    for _ in range(150):
+        n = 30000                                     # a uniform wrong-pair background
+        r = 10000 * np.sqrt(rng.random(n))
+        th = rng.uniform(0, 2 * np.pi, n)
+        dra, dde = r * np.cos(th), r * np.sin(th)
+        narrow = rf._hist_peak_stats(dra[r <= 5000], dde[r <= 5000], 5000.0)
+        wide = rf._hist_peak_stats(dra, dde, 10000.0)
+        if wide.off > rf.WINDOW_EDGE_FRAC * 10000.0:  # the wider window did not resolve
+            continue
+        resolved += 1
+        agreed += int(abs(wide.dra_mas - narrow.dra_mas) <= rf.SWEEP_AGREE_MAS
+                      and abs(wide.dde_mas - narrow.dde_mas) <= rf.SWEEP_AGREE_MAS)
+    assert resolved >= 5, resolved
+    assert agreed == resolved, (agreed, resolved)     # it never once disagreed
+
+
+def test_the_sweep_does_not_confirm_pure_wrong_pair_background():
+    """The consequence B1 predicted, and the failure this fix exists for.
+
+    These cells have NO counterpart at any offset -- every pair is a chance coincidence
+    at o028's density -- so nothing in them may be confirmed and graded as a
+    multi-arcsecond misregistration.  What rejects them is the look-elsewhere statistic:
+    a background arg-max is the extreme value of that cell's own background over the
+    bins the window searched, so ``expected`` is order 1 at EVERY window, while
+    ``SWEEP_MAX_EXPECTED_BINS`` is 0.01.
+
+    The second count is what makes the first mean something: these cells DO clear the
+    shipped rule's conditions (peak clear of its own rim, at or above the verify floor),
+    repeatedly -- so a rule that then confirms on cross-window agreement, which is
+    arithmetic, confirms wrong-pair background.  Both numbers are asserted, so removing
+    the look-elsewhere bar turns this red rather than merely trivially green.
+    """
+    confirmations, merged_rule_resolutions = [], 0
+    for seed in range(12):
+        det, truth = _one_cell_field(seed=100 + seed)
+        confirmed, meas = _sweep_one_cell(det, truth)
+        merged_rule_resolutions += sum(
+            1 for (w, st) in meas[0]
+            if w > rf.MX.to(u.mas).value and np.isfinite(st.off)
+            and st.ratio >= rf.MIN_PEAK_RATIO and st.off <= rf.WINDOW_EDGE_FRAC * w)
+        if confirmed:
+            confirmations.append((seed, confirmed[0],
+                                  [(w, st.off, st.ratio, st.expected) for w, st in meas[0]]))
+    assert merged_rule_resolutions >= 4, merged_rule_resolutions
+    assert confirmations == [], confirmations
+
+
+def test_the_sweep_still_confirms_a_real_tie_beyond_the_base_window():
+    """The other side of the same bar, at cloudc F410M's amplitude: a real 4.06"
+    displacement, invisible to the 2.5" base window, in a truth set at the same o028
+    density.  It is confirmed and graded at its true value -- so the fix is not "confirm
+    less"."""
+    det, truth = _one_cell_field(seed=21, shift_mas=4060.0)
+    confirmed, meas = _sweep_one_cell(det, truth)
+    assert 0 in confirmed, [(w, st.off, st.ratio, st.expected) for (w, st) in meas[0]]
+    assert abs(confirmed[0][0] - 4060.0) < rf.SWEEP_AGREE_MAS, confirmed[0]
+
+
+def test_the_swept_value_is_taken_at_the_widest_resolving_window():
+    """B4's second half.  The NARROWEST resolving window is the one whose true
+    counterpart is most likely to sit outside it, so it is the one most likely to be
+    reading an alias.  A 4.06" tie cannot resolve at 5" (4060 > 0.5 * 5000); the graded
+    value is the 10" reading."""
+    det, truth = _one_cell_field(seed=21, shift_mas=4060.0)
+    confirmed, meas = _sweep_one_cell(det, truth)
+    at5 = [st for (w, st) in meas[0] if abs(w - 5000.0) < 1]
+    assert at5 and at5[0].off > rf.WINDOW_EDGE_FRAC * 5000.0, at5
+    assert abs(confirmed[0][0] - 4060.0) < rf.SWEEP_AGREE_MAS
+
+
+@pytest.mark.parametrize("base_dde, confirms", [(-3000.0, True), (+3000.0, False)])
+def test_the_sweep_compares_offset_vectors_not_magnitudes(base_dde, confirms):
+    """The review's B4.  ``_hist_peak`` returns a hypot, so two peaks at the same RADIUS
+    in OPPOSITE directions used to count as the same reading.
+
+    The cell carries a real tie at (0, -3000) mas.  The arriving base reading is given
+    the same magnitude, once with the same sign and once with the opposite one; only the
+    first is the same measurement, and only the first may confirm.  ``window_edge_frac``
+    is raised for this test so that the base window resolves too -- with two resolving
+    windows in play there is a comparison to make, which the nested sweep factors alone
+    cannot arrange (see the test above).
+    """
+    det, truth = _one_cell_field(seed=21, shift_mas=3000.0)
+    base = {0: rf._PeakStats(off=3000.0, ratio=20.0, dra_mas=0.0, dde_mas=base_dde,
+                             peak=20.0, lam=0.9, n_bins=12272.0, expected=1e-12)}
+    confirmed, meas = rf.sweep_cell_windows(
+        det, truth, np.zeros(len(det), int), [0], base,
+        window_edge_frac=1.5, pairs_per_det=736.0)
+    swept = [(w, st.dra_mas, st.dde_mas, st.expected) for (w, st) in meas[0]]
+    assert (0 in confirmed) is confirms, (base_dde, confirmed, swept)
+
+
+def test_the_look_elsewhere_statistic_carries_the_window_and_a_ratio_does_not():
+    """Why a contrast floor calibrated at the 2.5" base window (#179) cannot be reused
+    at 5" and 10": the same background peak COUNT is less surprising at a wider window,
+    because more bins were searched.  ``ratio`` does not know that; ``expected`` does."""
+    rng = np.random.default_rng(8)
+    n = 20000
+    r = 10000 * np.sqrt(rng.random(n))
+    th = rng.uniform(0, 2 * np.pi, n)
+    dra, dde = r * np.cos(th), r * np.sin(th)
+    inner = r <= rf.MX.to(u.mas).value
+    base = rf._hist_peak_stats(dra[inner], dde[inner], rf.MX.to(u.mas).value)
+    wide = rf._hist_peak_stats(dra, dde, 10000.0)
+    assert wide.n_bins > 10 * base.n_bins
+    # both are the extreme value of a background: order 1 expected bins, at both windows
+    assert 0.01 < base.expected < 100 and 0.01 < wide.expected < 100, (base, wide)
+    # a real tie is nowhere near it
+    st = rf._hist_peak_stats(np.concatenate([dra, np.zeros(60)]),
+                             np.concatenate([dde, np.full(60, 4060.0)]), 10000.0)
+    assert st.expected < rf.SWEEP_MAX_EXPECTED_BINS, st
+
+
+# ---------------------------------------------------------------------------
+# one region, one quorum (review B5)
+# ---------------------------------------------------------------------------
+
+def _quorate(mask):
+    keep, _ = rf.seam_mask(mask, min_cells=rf.MIN_SEAM_CELLS)
+    return bool(keep.any())
+
+
+def test_a_region_split_across_the_two_axes_is_counted_once():
+    """The review's B5.  One physical misregistration lands partly in cells the estimator
+    MEASURED (``highoff``) and partly in cells it COULD NOT (``edge``).  Testing each
+    half against ``MIN_SEAM_CELLS`` separately leaves a 2 + 2 region under the quorum on
+    both axes at once, so it blocks on neither.  Counted on the union it is one
+    component of 4, and it blocks.
+
+    Driven through ``could_not_verify_patch`` -- the function ``per_cell`` calls, not a
+    copy of it.  A synthetic field whose cells happened to split exactly 2/2 would pin
+    the field generator instead of the rule.
+    """
+    highoff = np.zeros((6, 6), bool)
+    edge = np.zeros((6, 6), bool)
+    highoff[2, 2] = highoff[2, 3] = True
+    edge[3, 2] = edge[3, 3] = True                     # 4-connected to the pair above
+    assert not _quorate(highoff), "2 measured cells alone are under the quorum"
+    assert not _quorate(edge), "2 withdrawn cells alone are under the quorum"
+    edge_patch, edge_sizes, region, region_sizes = rf.could_not_verify_patch(
+        highoff, edge, min_cells=rf.MIN_SEAM_CELLS)
+    assert edge_patch.any(), "a 2+2 region blocks on neither axis if each is counted alone"
+    assert region_sizes == [4] and edge_sizes == [4]
+    assert int(region.sum()) == 4
+
+
+def test_the_union_quorum_does_not_invent_measured_failures():
+    """The union arms the quorum; it does not move cells between axes.  A withdrawn cell
+    never becomes a measured failure because it touches one -- the gate would then be
+    reporting a misregistration it did not measure, which is the defect #588 was opened
+    for.  So the SEAM (fail) axis is still counted on ``highoff`` alone."""
+    highoff = np.zeros((6, 6), bool)
+    edge = np.zeros((6, 6), bool)
+    highoff[2, 2] = True                               # one measured cell ...
+    edge[2, 3] = edge[2, 4] = edge[3, 4] = True        # ... beside a quorate withdrawn patch
+    edge_patch, _sizes, region, _rsizes = rf.could_not_verify_patch(
+        highoff, edge, min_cells=rf.MIN_SEAM_CELLS)
+    assert edge_patch.sum() == 3 and not edge_patch[2, 2]
+    seam, seam_sizes = rf.seam_mask(highoff, min_cells=rf.MIN_SEAM_CELLS)
+    assert not seam.any() and seam_sizes == []         # the lone measured cell is not failed
+    assert region[2, 2]                                # though it is inside the region
+
+
+def test_the_sweep_bar_defaults_are_not_silently_relaxed():
+    sig = inspect.signature(rf.sweep_cell_windows).parameters
+    assert sig["max_expected_bins"].default == rf.SWEEP_MAX_EXPECTED_BINS
+    assert 0 < rf.SWEEP_MAX_EXPECTED_BINS <= 0.05     # two orders under a background max
