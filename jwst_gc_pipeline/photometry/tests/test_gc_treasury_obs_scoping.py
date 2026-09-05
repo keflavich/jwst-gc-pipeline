@@ -273,6 +273,103 @@ def test_m7_seed_reads_gc2211s_module_slot_token(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# m4 (1979/002 + 003): the SAME contract, for a per-OBSERVATION exception.
+#
+# 10678 and 2211 are per-obs-merged by PROPOSAL; m4 is the first field where
+# only SOME observations of a proposal are scoped -- 002 and 003 share the m4/
+# tree, while 001 (ngc6397) has its own.  The registry entry alone was pinned
+# when this landed; what broke brick in #620/#625 was the module-slot token
+# PROPAGATING into merge_field_for_proposal, the m7 seed reader and
+# merge_daophot's glob, so those are pinned here for m4 as well -- in both
+# directions, because a widening that tokens ngc6397 orphans its catalogs.
+# ---------------------------------------------------------------------------
+
+def test_m7_seed_reads_m4s_own_pointing_and_not_the_other(tmp_path):
+    from jwst_gc_pipeline.photometry.cataloging import _build_crossband_seed
+    (tmp_path / 'catalogs').mkdir()
+    for filt in ('f150w2', 'f322w2'):
+        _write_m6_vetted(tmp_path, filt, modtok='_o002')
+    out = _build_crossband_seed(str(tmp_path), ['nrcblong'],
+                                ['F150W2', 'F322W2'],
+                                _options('002', '1979', 'm4'))
+    assert len(Table.read(out)) == 1
+    # the other pointing is 174" away; its seed must refuse, not read these
+    with pytest.raises(ValueError, match='no confirmed m6'):
+        _build_crossband_seed(str(tmp_path), ['nrcblong'],
+                              ['F150W2', 'F322W2'],
+                              _options('003', '1979', 'm4'))
+
+
+def test_m7_seed_for_ngc6397_still_reads_the_UNTOKENED_name(tmp_path):
+    """1979/001 is a different tree with no collision, and its m6 vetted
+    catalogs carry no module-slot token.  A seed reader that spelled ``_o001``
+    because the proposal is 1979 would find nothing and raise, which is the
+    dead chain the per-(proposal, obs) key exists to avoid."""
+    from jwst_gc_pipeline.photometry.cataloging import _build_crossband_seed
+    (tmp_path / 'catalogs').mkdir()
+    for filt in ('f150w2', 'f322w2'):
+        _write_m6_vetted(tmp_path, filt, modtok='')
+    out = _build_crossband_seed(str(tmp_path), ['nrcblong'],
+                                ['F150W2', 'F322W2'],
+                                _options('001', '1979', 'ngc6397'))
+    assert len(Table.read(out)) == 1
+
+
+def test_merge_daophot_input_glob_is_obs_scoped_for_m4(tmp_path, monkeypatch):
+    """o002's cross-band merge must not fall back to o003's vetted catalogs."""
+    (tmp_path / 'catalogs').mkdir()
+    _fake_svo_m4(monkeypatch)
+    monkeypatch.setattr(MC, '_obs_filters_for',
+                        lambda target: {'1979': ['f150w2', 'f322w2']})
+    for filt in ('f150w2', 'f322w2'):
+        _write_m7_vetted_m4(tmp_path, filt, '003')
+    with pytest.raises(ValueError, match='No daophot basic catalogs found'):
+        MC.merge_daophot(module='nrcblong', daophot_type='basic',
+                         indivexp=True, resbgsub=True, iteration_label='m7',
+                         target='m4', basepath=str(tmp_path), progid='1979',
+                         filternames_override=['f150w2', 'f322w2'],
+                         field='002', vetted=True)
+
+
+def test_merge_daophot_glob_for_ngc6397_reads_its_UNTOKENED_catalogs(
+        tmp_path, monkeypatch):
+    """The negative direction: 1979/001's inputs carry no module-slot token, so
+    a glob that spelled one would report "no catalogs" for a field that has
+    them.  This asserts the glob MATCHES, without running the merge."""
+    (tmp_path / 'catalogs').mkdir()
+    for filt in ('f150w2', 'f322w2'):
+        t = Table({'skycoord': SkyCoord([266.0] * u.deg, [-28.9] * u.deg),
+                   'flux_fit': [1000.0], 'flux_err': [1.0]})
+        t.write(tmp_path / 'catalogs' /
+                f'{filt}_nrcblong_indivexp_merged_resbgsub'
+                f'_m7_dao_basic_vetted.fits')
+    tok = naming.merged_catalog_obs_token('1979', '001')
+    assert tok == ''
+    import glob as _glob
+    mtk = f'{tok}_' if tok else ''
+    for filt in ('f150w2', 'f322w2'):
+        pat = (f'{tmp_path}/catalogs/{filt}*nrcblong*{mtk}indivexp_merged'
+               f'_resbgsub_m7_dao_basic_vetted.fits')
+        assert _glob.glob(pat), pat
+
+
+def _fake_svo_m4(monkeypatch):
+    jfilts = Table({'filterID': ['JWST/NIRCam.F150W2', 'JWST/NIRCam.F322W2'],
+                    'ZeroPoint': [1.0, 1.0]})
+    monkeypatch.setattr(
+        MC, 'SvoFps', types.SimpleNamespace(get_filter_list=lambda fac: jfilts))
+
+
+def _write_m7_vetted_m4(base, filt, field):
+    t = Table({'skycoord': SkyCoord([266.0] * u.deg, [-28.9] * u.deg),
+               'flux_fit': [1000.0], 'flux_err': [1.0]})
+    t.meta['PIXSCALE'] = 0.063
+    t.write(base / 'catalogs' /
+            f'{filt}_nrcblong_o{field}_indivexp_merged_resbgsub'
+            f'_m7_dao_basic_vetted.fits')
+
+
+# ---------------------------------------------------------------------------
 # frozen-stage discriminator: another tile's merge is not OUR merge
 # ---------------------------------------------------------------------------
 
@@ -928,6 +1025,11 @@ def test_an_unpadded_field_is_normalised_to_the_spelling_readers_expect():
     # brick's two chains: module slot tokened, end slot empty (not doubled)
     ('2221', '001', 'f182m', 'nrca', ('', '')),
     ('1182', '004', 'f200w', 'merged', ('', '')),
+    # m4's two pointings: module slot tokened, end slot empty (not doubled)
+    ('1979', '002', 'f150w2', 'merged', ('', '')),
+    ('1979', '003', 'f322w2', 'nrca', ('', '')),
+    # ngc6397 (1979/001) is untokened in BOTH slots
+    ('1979', '001', 'f150w2', 'merged', ('', '')),
 ])
 def test_vetted_and_combined_obs_tokens(proposal, field, filt, module,
                                         expected):
@@ -948,6 +1050,13 @@ def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
     assert naming.merge_field_for_proposal('2211', '023') == '023'
     assert naming.merge_field_for_proposal('2221', '001') == '001'
     assert naming.merge_field_for_proposal('1182', '004') == '004'
+    # m4: ONE proposal over TWO pointings 174" apart in one tree, so the
+    # exception keys on (proposal, obs) and only 002/003 are scoped.
+    assert naming.merge_field_for_proposal('1979', '002') == '002'
+    assert naming.merge_field_for_proposal('1979', '003') == '003'
+    # ngc6397 is 1979 observation 001 in its OWN tree: it must keep passing
+    # None, or every merged catalog it has goes unreachable in the module slot.
+    assert naming.merge_field_for_proposal('1979', '001') is None
     # a proposal that is NOT per-obs-merged still passes None
     assert naming.merge_field_for_proposal('4147', '012') is None
     # a field-less call on a per-obs-merged proposal names no observation, and
@@ -966,6 +1075,9 @@ def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
     ('2211', '023', 'nrcblong_o023'),
     ('2221', '001', 'nrcblong_o001'),
     ('1182', '004', 'nrcblong_o004'),
+    ('1979', '002', 'nrcblong_o002'),
+    ('1979', '003', 'nrcblong_o003'),
+    ('1979', '001', 'nrcblong'),        # ngc6397, same proposal, own tree
     ('4147', '012', 'nrcblong'),
 ])
 def test_merged_catalog_path_spells_the_module_slot_token(proposal, field,

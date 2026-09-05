@@ -219,3 +219,180 @@ def test_MIRI_four_digit_filters_are_visible(tmp_path):
 def test_an_already_quarantined_name_is_not_itself_a_candidate(tmp_path):
     m = _load()
     assert m.identity(UNT + m.SUFFIX) is None
+
+
+# ---------------------------------------------------------------------------
+# MERGED catalogs (catalogs/), where the token sits in the MODULE slot.
+#
+# m4 is the case: 1979/002 and 003 share the m4/ tree, so 59 untokened merged
+# catalogs sat in catalogs/ that no post-token reader spells.  The pre-token
+# file pooled BOTH observations, so it cannot be re-tokened -- only renamed out
+# of the way, and only when something newer has actually replaced it.
+# ---------------------------------------------------------------------------
+
+MUNT = 'f150w2_nrca_indivexp_merged_m2_dao_basic.fits'
+MTOK = 'f150w2_nrca_o003_indivexp_merged_m2_dao_basic.fits'
+
+
+def _mkm(tmp_path, *specs):
+    """``specs`` are ``(name, mtime)``; the catalogs/ dir is returned."""
+    d = tmp_path / 'catalogs'
+    d.mkdir(parents=True, exist_ok=True)
+    for name, mtime in specs:
+        (d / name).write_bytes(b'x')
+        os.utime(d / name, (mtime, mtime))
+    return str(d)
+
+
+def test_a_merged_name_parses_with_the_token_in_the_MODULE_slot():
+    m = _load()
+    assert m.merged_identity(MUNT) == m.merged_identity(MTOK)
+    assert m.merged_token_of(MUNT) is None
+    assert m.merged_token_of(MTOK) == 'o003'
+
+
+def test_module_named_merged_is_not_confused_with_indivexp_merged():
+    """``f150w2_merged_indivexp_merged_m2_...`` is module=merged, token=absent.
+
+    A pattern that anchors on the literal ``merged`` in ``indivexp_merged``
+    parses the module as the token and every ``_merged`` product silently drops
+    out of the plan.
+    """
+    m = _load()
+    u = 'f150w2_merged_indivexp_merged_m2_dao_basic.fits'
+    t = 'f150w2_merged_o003_indivexp_merged_m2_dao_basic.fits'
+    assert m.merged_identity(u) is not None
+    assert m.merged_identity(u) == m.merged_identity(t)
+    assert m.merged_token_of(u) is None
+    assert m.merged_token_of(t) == 'o003'
+
+
+def test_a_superseded_merged_catalog_is_planned(tmp_path):
+    m = _load()
+    d = _mkm(tmp_path, (MUNT, 1000), (MTOK, 2000))
+    plan, orphans = m.plan_for_merged_dir(d)
+    assert [p[0] for p in plan] == [MUNT]
+    assert plan[0][1] == [MTOK]
+    assert orphans == []
+
+
+def test_a_merged_catalog_with_NO_replacement_is_REPORTED_not_renamed(tmp_path):
+    """The safety property, and the state m4 is actually in: its m3-m6 F322W2
+    chain is unreachable under the new token and nothing has re-written it yet.
+    Renaming those would take the field from a stale catalog to none at all."""
+    m = _load()
+    d = _mkm(tmp_path, (MUNT, 1000))
+    plan, orphans = m.plan_for_merged_dir(d)
+    assert plan == []
+    assert orphans == [MUNT]
+
+
+def test_a_replacement_at_a_DIFFERENT_STAGE_does_not_count(tmp_path):
+    """An ``_o003`` m2 catalog does not license removing an untokened m5 one."""
+    m = _load()
+    u5 = 'f150w2_nrca_indivexp_merged_resbgsub_m5_dao_basic.fits'
+    d = _mkm(tmp_path, (u5, 1000), (MTOK, 2000))
+    plan, orphans = m.plan_for_merged_dir(d)
+    assert plan == []
+    assert orphans == [u5]
+
+
+def test_a_replacement_for_a_DIFFERENT_VARIANT_does_not_count(tmp_path):
+    """``_vetted`` / ``_allcols`` / ``_i2dseed`` are separate products; m4 has
+    36 untokened merged catalogs whose only tokened sibling is a different
+    variant, and treating those as replacements would delete all 36."""
+    m = _load()
+    u = 'f150w2_nrca_indivexp_merged_m2_dao_basic_allcols.fits'
+    d = _mkm(tmp_path, (u, 1000), (MTOK, 2000))
+    plan, orphans = m.plan_for_merged_dir(d)
+    assert plan == []
+    assert orphans == [u]
+
+
+def test_a_replacement_on_a_DIFFERENT_MODULE_does_not_count(tmp_path):
+    m = _load()
+    d = _mkm(tmp_path, (MUNT, 1000),
+             (MTOK.replace('_nrca_', '_nrcb_'), 2000))
+    plan, orphans = m.plan_for_merged_dir(d)
+    assert plan == []
+    assert orphans == [MUNT]
+
+
+def test_an_OLDER_tokened_file_does_not_supersede_a_FRESH_untokened_one(tmp_path):
+    """The rollback case.  Someone re-runs an old checkout, which writes an
+    untokened merge NEWER than the tokened one beside it; that file is the
+    current product, and renaming it away because an older tokened name exists
+    destroys the run that just finished."""
+    m = _load()
+    d = _mkm(tmp_path, (MUNT, 5000), (MTOK, 1000))
+    plan, orphans = m.plan_for_merged_dir(d)
+    assert plan == []
+    assert orphans == [MUNT]
+
+
+def test_the_merged_pass_never_re_tokens(tmp_path, monkeypatch, capsys):
+    """The pre-token merge pooled both observations, so ownership is not
+    recoverable and the tool must not invent one.  The HDU-1 observation is
+    printed with that caveat and never used as a guard: a file whose header
+    names 002 is still superseded by an 003 twin, because what is being asserted
+    is staleness, not ownership."""
+    m = _load()
+    monkeypatch.setattr(m, 'BASE', str(tmp_path))
+    monkeypatch.setattr(m, 'source_observation', lambda p: ('1979', '002'))
+    (tmp_path / 'm4').mkdir()
+    d = _mkm(tmp_path / 'm4', (MUNT, 1000), (MTOK, 2000))
+    assert m.main(['--field', 'm4', '--execute']) == 0
+    out = capsys.readouterr().out
+    assert 'NOT attributable' in out
+    assert not os.path.exists(os.path.join(d, MUNT))
+    assert os.path.exists(os.path.join(d, MUNT + m.SUFFIX))
+    assert os.path.exists(os.path.join(d, MTOK)), 'the replacement must survive'
+    # the tool renamed; it did not rename INTO a tokened name
+    assert not os.path.exists(os.path.join(
+        d, 'f150w2_nrca_o002_indivexp_merged_m2_dao_basic.fits'))
+
+
+def test_the_prov_sidecar_moves_with_its_catalog(tmp_path, monkeypatch):
+    """A provenance record left pointing at a renamed catalog reads as a corrupt
+    record rather than an absent one."""
+    m = _load()
+    monkeypatch.setattr(m, 'BASE', str(tmp_path))
+    monkeypatch.setattr(m, 'source_observation', lambda p: None)
+    (tmp_path / 'm4').mkdir()
+    d = _mkm(tmp_path / 'm4', (MUNT, 1000), (MTOK, 2000))
+    prov = os.path.join(d, MUNT + '.prov.json')
+    with open(prov, 'w') as fh:
+        fh.write('{}')
+    assert m.main(['--field', 'm4', '--execute']) == 0
+    assert not os.path.exists(prov)
+    assert os.path.exists(prov + m.SUFFIX)
+
+
+def test_no_merged_leaves_the_catalogs_dir_alone(tmp_path, monkeypatch):
+    m = _load()
+    monkeypatch.setattr(m, 'BASE', str(tmp_path))
+    (tmp_path / 'm4' / 'F150W2').mkdir(parents=True)
+    d = _mkm(tmp_path / 'm4', (MUNT, 1000), (MTOK, 2000))
+    assert m.main(['--field', 'm4', '--no-merged', '--execute']) == 0
+    assert os.path.exists(os.path.join(d, MUNT))
+
+
+def test_the_merged_pass_runs_when_there_are_no_per_filter_dirs(tmp_path,
+                                                                monkeypatch):
+    """``field_dirs`` returning [] used to be an immediate rc=2, which would
+    have reported "nothing to do" for a tree whose merged catalogs were all
+    unreachable."""
+    m = _load()
+    monkeypatch.setattr(m, 'BASE', str(tmp_path))
+    monkeypatch.setattr(m, 'source_observation', lambda p: None)
+    (tmp_path / 'm4').mkdir()
+    _mkm(tmp_path / 'm4', (MUNT, 1000), (MTOK, 2000))
+    assert m.main(['--field', 'm4']) == 0
+
+
+def test_a_per_frame_name_is_not_matched_by_the_merged_pattern():
+    """The two families must not cross: a per-frame name reaching the merged
+    plan would be judged by mtime instead of by its own observation token."""
+    m = _load()
+    assert m.merged_identity(UNT) is None
+    assert m.identity(MUNT) is None
