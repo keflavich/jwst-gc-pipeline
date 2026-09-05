@@ -628,6 +628,7 @@ def enumerate_field_exposures(field_cfg, target, filters=None, requested=True):
     """
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from jwst_gc_pipeline.photometry.naming import MIRI_FILTERS
     from jwst_gc_pipeline.reduction import destreak_policy
 
     data_dir = Path(field_cfg["data_dir"])
@@ -646,8 +647,15 @@ def enumerate_field_exposures(field_cfg, target, filters=None, requested=True):
         # `destreak_policy` is the single authority on destreak-vs-align, and it
         # is per (field, filter) -- sickle destreaks its short filters and not
         # its long ones -- so it is asked per filter rather than per field.
-        token = "destreak" if destreak_policy.destreaks(
-            target, filter_dir.name, requested) else "align"
+        # The instrument is named from the filter directory rather than left to
+        # the policy's fallback, which reads GC_INSTRUMENT_OVERRIDE: this walks
+        # a whole field's filter directories, NIRCam and MIRI together, so no
+        # one process-wide instrument answers for the loop.
+        instrument = ("miri" if filter_dir.name.lower() in MIRI_FILTERS
+                      else "nircam")
+        destreaked = destreak_policy.destreaks(
+            target, filter_dir.name, requested, instrument=instrument)
+        token = "destreak" if destreaked else "align"
         multi = bool(field_cfg.get("observations"))
         by_product = {}
         for path in pipeline.glob("jw*.fits"):

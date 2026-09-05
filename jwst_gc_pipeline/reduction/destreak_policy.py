@@ -25,6 +25,23 @@ SICKLE_SHORTWAVE_FILTERS = (
     'F182M', 'F187N', 'F200W', 'F210M', 'F212N')
 
 
+class UnknownInstrumentError(ValueError):
+    """The instrument a lineage token was asked for did not resolve.
+
+    Raised rather than answered, because both answers are wrong: guessing
+    NIRCam asks a MIRI observation for a token no MIRI frame carries (#647),
+    and guessing not-NIRCam drops the token from a NIRCam run and globs both
+    of its co-resident lineages at once.
+    """
+
+
+#: The three instruments this project reduces.  ``naming._instrument_from_filter``
+#: returns its ``instrument`` argument unchanged when it does not recognise it
+#: (``''``, ``'nrcalong'``, a detector name), so the answer has to be checked
+#: against this before it decides anything.
+KNOWN_INSTRUMENTS = ('NIRCam', 'MIRI', 'NIRISS')
+
+
 def _is_nircam(filtername, instrument=None):
     """Whether this (filter, instrument) is reduced by the NIRCam driver.
 
@@ -34,8 +51,25 @@ def _is_nircam(filtername, instrument=None):
     filter-name heuristic.  NIRISS shares its filter names with NIRCam, so a
     NIRISS run has to say so; MIRI's filter names are its own and resolve
     without being told.
+
+    Fail-closed polarity: the lineage token is dropped only for a RESOLVED MIRI
+    or NIRISS.  An instrument argument that resolves to none of the three --
+    ``''``, ``'nrcalong'``, ``'NIRCAM '``, a typo -- raises
+    :class:`UnknownInstrumentError` instead of falling through to "not NIRCam",
+    which is what ``== 'NIRCam'`` alone did: it made the whole thing a
+    whitelist whose default was to drop the token, so a caller that could not
+    name its instrument silently got the untokened suffix and globbed brick's
+    ``o001_crf`` and ``destreak_o001_crf`` together.
     """
-    return _instrument_from_filter(filtername, instrument=instrument) == 'NIRCam'
+    resolved = _instrument_from_filter(filtername, instrument=instrument)
+    if resolved not in KNOWN_INSTRUMENTS:
+        raise UnknownInstrumentError(
+            f'instrument={instrument!r} (filter {filtername!r}) resolved to '
+            f'{resolved!r}, which is not one of {KNOWN_INSTRUMENTS}. The '
+            f'destreak/align lineage token is NIRCam-only, so this decides '
+            f'which frames the run reads; pass instrument as one of '
+            f"'nircam', 'miri', 'niriss'.")
+    return resolved == 'NIRCam'
 
 
 def destreaks(target, filtername, requested=True, instrument=None):
