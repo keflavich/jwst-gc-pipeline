@@ -39,6 +39,7 @@ import json
 import os
 import re
 import sys
+from collections import namedtuple as _namedtuple
 
 import numpy as np
 import astropy.units as u
@@ -48,6 +49,7 @@ from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
 from astropy.wcs import WCS
 from scipy.ndimage import label as _ndlabel
+from scipy.stats import poisson as _poisson
 from scipy.stats import binned_statistic_2d
 import matplotlib
 matplotlib.use("Agg")
@@ -161,9 +163,23 @@ MIN_SEAM_CELLS = 3               # connected high-offset cells that FAIL regardl
 #      them at all -- the diagnosis behind it (an own-catalog truth 12.6x denser than
 #      the detection list) is specific to the own-catalog leg.
 #   2. THE SWEEP (`sweep_cell_windows`), for the rest.  The cell's own pairs are
-#      re-histogrammed at 2x and 4x MX.  An offset that reproduces across windows is
-#      confirmed and graded AT THE SWEPT VALUE -- which is how this check now measures
+#      re-histogrammed at 2x and 4x MX.  A window RESOLVES the cell when its peak
+#      stands clear of that window's own rim AND is improbable under that window's own
+#      wrong-pair background -- `expected <= SWEEP_MAX_EXPECTED_BINS`, the number of
+#      bins of the cell's background expected to reach the observed peak, which carries
+#      the window with it (the bin count grows as W^2, a fixed contrast floor does not).
+#      A resolved cell is graded AT THE SWEPT VALUE -- which is how this check measures
 #      the 2.5-10" regime it previously could only alias to ~0.7*MX.
+#
+#      What the sweep is NOT: a cross-window agreement test.  `SWEEP_FACTORS` are
+#      NESTED searches on a shared 40 mas bin grid, so the wider window's pair set is a
+#      superset of the narrower one's and their histograms are bin-for-bin equal inside
+#      the narrower disk.  Whenever the wider window resolves (its arg-max inside half
+#      its own window = inside the narrower window's disk) it therefore reports the
+#      narrower window's arg-max EXACTLY, and "the offsets agree" is arithmetic rather
+#      than evidence.  That was the confirmation rule when this arm landed (#758) and
+#      the review of that PR refuted it; the look-elsewhere statistic replaced it.  The
+#      vector comparison is retained as a consistency assertion.
 #
 # Only a cell that survives BOTH is withdrawn, and withdrawing is not passing.  It is
 # recorded (`n_window_edge`, `window_edge_cells`, each with its `swept_windows`), and a
@@ -181,13 +197,29 @@ MIN_SEAM_CELLS = 3               # connected high-offset cells that FAIL regardl
 # believing.
 WINDOW_EDGE_FRAC = 0.5           # off > this * MX -> the base window alone is not
                                  # evidence; confirm by contrast or by sweeping
-SWEEP_FACTORS = (2.0, 4.0)       # multiples of MX the near-edge cells are re-measured at
-                                 # (5" and 10"): two windows, so "the same offset at
-                                 # every window that can contain it" is testable
-SWEEP_AGREE_MAS = 120.0          # 3 histogram bins.  A real tie reproduces to within a
-                                 # bin (the grids differ by <= half a bin between
-                                 # windows); a background arg-max moves with the window
-                                 # (0.71*W), which is 3550 -> 7100 mas across the sweep
+SWEEP_FACTORS = (2.0, 4.0)       # multiples of MX the near-edge cells are re-measured
+                                 # at (5" and 10").  What the extra window buys is REACH
+                                 # -- an offset of 2.5-10" has no true pair inside MX at
+                                 # all, so only a wider search can see it.  It does NOT
+                                 # buy an independent second opinion: the searches are
+                                 # nested on a shared bin grid (see `sweep_cell_windows`)
+SWEEP_AGREE_MAS = 120.0          # 3 histogram bins.  The tolerance of the cross-window
+                                 # VECTOR consistency check.  Note what this is NOT: with
+                                 # nested windows on a shared bin grid, two resolving
+                                 # windows agree ARITHMETICALLY (see `sweep_cell_windows`),
+                                 # so this is an assertion, not the evidence.
+SWEEP_MAX_EXPECTED_BINS = 0.01   # LOOK-ELSEWHERE bar for a swept peak: the expected
+                                 # number of bins of the cell's OWN wrong-pair background
+                                 # reaching the observed peak count must be <= this.
+                                 # A background arg-max sits at ~1 by construction at
+                                 # EVERY window, so 0.01 is two orders of magnitude
+                                 # clear of it; the real ties this file is calibrated on
+                                 # (a rigid shift, and a 6-counterpart-per-cell shift in
+                                 # a 15x denser truth) read far below it.  This replaces
+                                 # applying `MIN_PEAK_RATIO` / `FAIL_MIN_RATIO` -- both
+                                 # calibrated at the 2.5" BASE window (#179) -- at 5" and
+                                 # 10", where the bin count is 4x and 16x and the
+                                 # background's own maximum is correspondingly higher.
 SWEEP_MAX_PAIRS = 2_000_000      # cap on the transient pair array of ONE wider-window
                                  # search.  Pairs grow as W^2, so the detection batch is
                                  # sized from the base window's measured pairs-per-
@@ -359,6 +391,102 @@ def seam_mask(highoff, min_cells=MIN_SEAM_CELLS):
     return keep, sorted(sizes, reverse=True)
 
 
+_PeakStats = _namedtuple("_PeakStats", "off ratio dra_mas dde_mas peak lam n_bins expected")
+
+
+def could_not_verify_patch(highoff, edge, min_cells=MIN_SEAM_CELLS):
+    """The could-not-verify shape test: which withdrawn cells form a REGION.
+
+    Scattered withdrawn singletons are the wrong-pair background and are only reported.
+    A 4-connected patch is a region of the mosaic this estimator could not measure at
+    all -- the brick-1182 "no tie exists inside the window" shape -- and that is not a
+    pass: it takes ``PASS`` to None (exit 2, "could NOT VERIFY"), never to True.
+
+    The QUORUM is counted on the UNION of the two populations, not on the withdrawn
+    cells alone.  One physical misregistration lands partly in ``highoff`` (cells the
+    estimator MEASURED) and partly in ``edge`` (cells it COULD NOT), and testing the two
+    halves against ``min_cells`` SEPARATELY can leave a real region below the quorum on
+    both axes at once: 2 measured + 2 withdrawn is a 4-cell region that neither 3-cell
+    test sees, so it blocks on neither.  On the union it is one component of 4 and it
+    blocks.  (Review of #758, B5.)
+
+    Cells keep their own verdict inside a quorate region -- ``highoff`` members fail on
+    the seam axis exactly as before, ``edge`` members make ``PASS`` None -- so this can
+    only ADD blocking, and a cell is never reported as a MEASURED misregistration on the
+    strength of neighbours that measured nothing.
+
+    Returns ``(edge_patch, edge_sizes, region, region_sizes)``.
+    """
+    highoff = np.asarray(highoff, bool)
+    edge = np.asarray(edge, bool)
+    region, region_sizes = seam_mask(highoff | edge, min_cells=min_cells)
+    return (region & edge, _component_sizes_touching(region, edge),
+            region, region_sizes)
+
+
+def _component_sizes_touching(region, members):
+    """Sizes of the 4-connected components of ``region`` that contain a ``members`` cell.
+
+    ``region`` is the quorate union of the measured-high-offset and could-not-measure
+    populations; ``members`` picks one of them.  Reporting the size of the WHOLE region
+    a withdrawn cell belongs to (rather than of the withdrawn cells alone) is the point:
+    it is the size of the mosaic patch involved, which is what a reader needs.
+    """
+    region = np.asarray(region, bool)
+    members = np.asarray(members, bool)
+    if not (region & members).any():
+        return []
+    lab, n = _ndlabel(region)
+    return sorted({int((lab == k).sum()) for k in np.unique(lab[region & members])
+                   if k > 0}, reverse=True)
+
+
+def _hist_peak_stats(dra, dde, half_window_mas, bin_mas=XBIN * 1000):
+    """Full statistics of ONE cell's offset-histogram peak inside a window (mas).
+
+    Returns a ``_PeakStats``: the peak's offset MAGNITUDE and its two COMPONENTS
+    (``dra_mas``, ``dde_mas`` -- two peaks at the same radius in opposite directions are
+    not the same measurement), the peak/background ratio, and the LOOK-ELSEWHERE
+    statistic ``expected``.
+
+    ``expected`` is how many bins of this cell's OWN wrong-pair background are expected
+    to reach the observed peak count: ``n_bins * P(Poisson(lam) >= peak)``, with
+    ``lam = n_pairs / n_bins`` and ``n_bins`` the bins covering the searched DISK (the
+    pairs come from a radius search, so they populate a disk, not the square).  It is
+    ~1 for a background arg-max by construction -- that is what an extreme value IS --
+    and orders of magnitude below 1 for a real tie.
+
+    This is the statistic the SWEEP needs and ``ratio`` is not.  ``n_bins`` grows as
+    W^2, so a contrast floor calibrated at one window (``MIN_PEAK_RATIO`` /
+    ``FAIL_MIN_RATIO``, both calibrated at the 2.5" base window, #179) is a DIFFERENT,
+    weaker bar when applied at 5" or 10": the background's own maximum rises with the
+    number of bins searched while the floor does not.  ``expected`` carries the window
+    with it.  See ``sweep_cell_windows``.
+
+    LIMIT: the null is Poisson and uniform over the disk.  A clustered stellar field's
+    wrong-pair background is over-dispersed relative to that, so ``expected`` is a lower
+    bound on the true look-elsewhere probability -- which is why the bar it is compared
+    against (``SWEEP_MAX_EXPECTED_BINS``) sits two orders of magnitude below the null's
+    own maximum rather than at it, and why the ``MIN_PEAK_RATIO`` floor is kept
+    alongside it rather than replaced by it.
+    """
+    hb = np.arange(-half_window_mas, half_window_mas + bin_mas, bin_mas)
+    H, xb, yb = np.histogram2d(dra, dde, bins=[hb, hb])
+    n_bins = max(1.0, np.pi * float(half_window_mas) ** 2 / float(bin_mas) ** 2)
+    if not (H > 0).any():
+        return _PeakStats(np.nan, np.nan, np.nan, np.nan, 0.0, 0.0, n_bins, np.inf)
+    bg = np.median(H[H > 0])
+    pi, pj = np.unravel_index(H.argmax(), H.shape)
+    peak = float(H.max())
+    ratio = float(peak / bg) if bg > 0 else np.inf
+    dra_c = float((xb[pi] + xb[pi + 1]) / 2)
+    dde_c = float((yb[pj] + yb[pj + 1]) / 2)
+    lam = float(np.size(dra)) / n_bins
+    expected = float(n_bins * _poisson.sf(peak - 1, lam))
+    return _PeakStats(float(np.hypot(dra_c, dde_c)), ratio, dra_c, dde_c,
+                      peak, lam, n_bins, expected)
+
+
 def _hist_peak(dra, dde, half_window_mas, bin_mas=XBIN * 1000):
     """Offset-histogram peak of ONE cell's pair set inside +-``half_window_mas`` (mas).
 
@@ -369,15 +497,8 @@ def _hist_peak(dra, dde, half_window_mas, bin_mas=XBIN * 1000):
     across windows, so base and swept measurements have to be the identical estimator
     or their agreement means nothing.
     """
-    hb = np.arange(-half_window_mas, half_window_mas + bin_mas, bin_mas)
-    H, xb, yb = np.histogram2d(dra, dde, bins=[hb, hb])
-    if not (H > 0).any():
-        return np.nan, np.nan
-    bg = np.median(H[H > 0])
-    pi, pj = np.unravel_index(H.argmax(), H.shape)
-    ratio = float(H.max() / bg) if bg > 0 else np.inf
-    off = float(np.hypot((xb[pi] + xb[pi + 1]) / 2, (yb[pj] + yb[pj + 1]) / 2))
-    return off, ratio
+    s = _hist_peak_stats(dra, dde, half_window_mas, bin_mas)
+    return s.off, s.ratio
 
 
 def _det_cell_batches(cell_of_det, cells, chunk):
@@ -409,7 +530,8 @@ def _det_cell_batches(cell_of_det, cells, chunk):
 def sweep_cell_windows(det, truth, cell_of_det, cells, base,
                        factors=SWEEP_FACTORS, window_edge_frac=WINDOW_EDGE_FRAC,
                        agree_mas=SWEEP_AGREE_MAS, pairs_per_det=1.0,
-                       max_pairs=SWEEP_MAX_PAIRS, fail_min_ratio=FAIL_MIN_RATIO):
+                       max_pairs=SWEEP_MAX_PAIRS,
+                       max_expected_bins=SWEEP_MAX_EXPECTED_BINS):
     """SWEEP the search window for the cells whose base-window peak rode its rim.
 
     This is the step that keeps a window-edge peak from being waved through.  A peak at
@@ -421,24 +543,48 @@ def sweep_cell_windows(det, truth, cell_of_det, cells, base,
 
     ``cells``      flat cell keys (``i * GRID + j``) to re-measure.
     ``cell_of_det`` the flat cell key of every DETECTION (not of every pair).
-    ``base``       ``{cell: (off_mas, ratio)}`` from the base MX window.
+    ``base``       ``{cell: _PeakStats}`` from the base MX window.
     ``pairs_per_det`` pairs per detection measured at the BASE window, used to size the
                    detection batches so one wider search stays under ``max_pairs``.
 
     Each cell is re-measured at each of ``factors`` x MX from a fresh pair search at
-    that radius, restricted to that cell's detections.  A measurement RESOLVES an
-    offset when its peak stands clear of its OWN rim (``off <= window_edge_frac * W``)
-    at >= ``MIN_PEAK_RATIO``.  The cell is CONFIRMED -- there is a tie, and the gate
-    goes back to grading it, at the swept value -- when the smallest resolving window's
-    offset is either reproduced by a second resolving window to within ``agree_mas``,
-    or is itself a confident peak (>= ``fail_min_ratio``).
+    that radius, restricted to that cell's detections.  A measurement RESOLVES an offset
+    when its peak stands clear of its OWN rim (``off <= window_edge_frac * W``) AND is
+    improbable under that window's own wrong-pair background: the LOOK-ELSEWHERE
+    statistic ``expected`` (see ``_hist_peak_stats``) must be ``<= max_expected_bins``.
+    A cell is CONFIRMED -- there is a tie, and the gate goes back to grading it, at the
+    swept value -- when at least one window resolves and every resolving window reads
+    the same offset VECTOR to within ``agree_mas``.  It is graded at the WIDEST
+    resolving window.
+
+    WHY NOT "the offsets agree across windows", which is what this function did when it
+    landed (#758) and what the review of that PR refuted:
+
+    * ``SWEEP_FACTORS`` are NESTED searches on a SHARED 40 mas bin grid (the 5" grid's
+      edges are a subset of the 10" one's, both being multiples of the bin), so the 10"
+      pair set is a superset of the 5" one and their histograms are bin-for-bin equal
+      wherever both are defined.  If the 10" arg-max lands inside radius 5000 -- which
+      is exactly the condition for the 10" window to "resolve" at
+      ``window_edge_frac = 0.5`` -- then it is also the arg-max of the 5" histogram.
+      Agreement between the two is then arithmetic, not evidence.  Measured on a uniform
+      pair background: of the trials where both windows resolved, 3 of 3 "reproduced".
+    * and in the 2.5-5" band only the widest window can resolve at all, so there was no
+      second measurement to agree with and confirmation fell through to a raw contrast
+      floor calibrated at the 2.5" base window (#179) -- a floor the background's own
+      maximum rises past as the bin count grows with W^2.
+
+    ``expected`` is the statistic that does carry the window: it asks how many bins of
+    this cell's own background are expected to reach the observed peak, so it is ~1 for
+    a background arg-max at EVERY window and tiny for a real tie.  The cross-window
+    vector comparison is kept as a consistency assertion (and now compares vectors, not
+    magnitudes, so two peaks at the same radius in opposite directions no longer count
+    as the same reading), but it is no longer the evidence.
 
     Returns ``(confirmed, measurements)``: ``{cell: (off_mas, ratio)}`` for confirmed
-    cells, and ``{cell: [(window_mas, off, ratio), ...]}`` for every swept cell.
+    cells, and ``{cell: [(window_mas, _PeakStats), ...]}`` for every swept cell.
     """
     mx_mas = MX.to(u.mas).value
-    meas = {int(k): [(mx_mas, float(base[int(k)][0]), float(base[int(k)][1]))]
-            for k in cells}
+    meas = {int(k): [(mx_mas, base[int(k)])] for k in cells}
     if not meas:
         return {}, {}
     for fac in factors:
@@ -465,19 +611,33 @@ def sweep_cell_windows(det, truth, cell_of_det, cells, base,
             for k, a, b in zip(uk, start, stop):
                 if int(k) not in meas or b - a < MIN_PAIRS:
                     continue
-                meas[int(k)].append((w,) + _hist_peak(dra[a:b], dde[a:b], w))
+                meas[int(k)].append((w, _hist_peak_stats(dra[a:b], dde[a:b], w)))
     confirmed = {}
     for k, ms in meas.items():
-        resolving = sorted([(w, o, r) for (w, o, r) in ms
-                            if np.isfinite(o) and np.isfinite(r)
-                            and r >= MIN_PEAK_RATIO and o <= window_edge_frac * w],
+        # The merged rule's two conditions (clear of its own rim, above the verify
+        # floor) AND the look-elsewhere bar.  Strictly narrower than what shipped, so a
+        # cell can only move from confirmed-and-graded to withdrawn -- which is why the
+        # withdrawn population has to share the seam axis's quorum (see `per_cell`),
+        # or a small real region could fall below both quorums at once.
+        resolving = sorted([(w, st) for (w, st) in ms
+                            if np.isfinite(st.off) and np.isfinite(st.ratio)
+                            and st.ratio >= MIN_PEAK_RATIO
+                            and st.off <= window_edge_frac * w
+                            and st.expected <= max_expected_bins],
                            key=lambda t: t[0])
         if not resolving:
             continue
-        w0, o0, r0 = resolving[0]
-        reproduced = any(abs(o - o0) <= agree_mas for (_, o, _) in resolving[1:])
-        if reproduced or r0 >= fail_min_ratio:
-            confirmed[k] = (o0, r0)
+        # Grade at the WIDEST resolving window.  The narrowest is the one whose true
+        # counterpart is most likely to lie outside it, i.e. the one most likely to be
+        # reading an alias.
+        best = resolving[-1][1]
+        # Vector consistency, not magnitude: |(dra, dde) - (dra, dde)|, so a peak at the
+        # same radius in the opposite direction is a disagreement.
+        consistent = all(np.hypot(st.dra_mas - best.dra_mas,
+                                  st.dde_mas - best.dde_mas) <= agree_mas
+                         for (_, st) in resolving)
+        if consistent:
+            confirmed[k] = (best.off, best.ratio)
     return confirmed, meas
 
 
@@ -516,13 +676,23 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     * a CONFIDENT peak there (``ratio >= fail_min_ratio``) is a tie and is graded
       unchanged -- which is every verified cell for the strict checks, where
       ``fail_min_ratio`` IS the verify floor, so this arm is inert for them;
-    * otherwise the cell is SWEPT (``sweep_cell_windows``: 2x and 4x MX).  An offset
-      that reproduces across windows is confirmed and graded AT THE SWEPT VALUE, which
-      is how this check reaches the 2.5-10 arcsec regime it used to alias;
+    * otherwise the cell is SWEPT (``sweep_cell_windows``: 2x and 4x MX).  A peak that
+      stands clear of its own window's rim AND is improbable under that window's own
+      background (the look-elsewhere statistic, which scales with the window as a fixed
+      contrast floor does not) is confirmed and graded AT THE SWEPT VALUE, which is how
+      this check reaches the 2.5-10 arcsec regime it used to alias;
     * only a cell that survives both is withdrawn, as ``n_window_edge`` /
       ``window_edge_cells`` -- and withdrawing is not passing.  A 4-connected patch of
       ``min_seam_cells`` withdrawn cells makes ``PASS`` **None**: could-not-verify,
       which ``main`` returns as exit 2 and ``stage_release`` refuses on.
+
+    The ``min_seam_cells`` quorum is counted on the UNION of the high-offset and
+    withdrawn populations, because one physical misregistration lands in BOTH: testing
+    the two halves separately can leave a real region under the quorum on each axis at
+    once (2 + 2 is a 4-cell region that neither 3-cell test sees).  Cells keep their own
+    verdict inside a quorate region -- high-offset ones fail, withdrawn ones make
+    ``PASS`` None -- so a cell is never called a measured misregistration on the
+    strength of neighbours that measured nothing.
 
     ``PASS`` is tri-state: False (a cell failed), None (nothing failed but a coherent
     region could not be measured), True.
@@ -549,6 +719,7 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     off = np.full((GRID, GRID), np.nan)      # peak offset (mas)
     ratio = np.full((GRID, GRID), np.nan)    # peak/background
     npair = np.zeros((GRID, GRID), int)
+    base_stats = {}                          # cell -> _PeakStats at the BASE window
     order = np.lexsort((cj, ci))
     ci, cj, dra, dde = ci[order], cj[order], dra[order], dde[order]
     keyc = ci * GRID + cj
@@ -558,8 +729,9 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
         npair[k // GRID, k % GRID] = e - s
         if e - s < MIN_PAIRS:
             continue
-        off[k // GRID, k % GRID], ratio[k // GRID, k % GRID] = _hist_peak(
-            dra[s:e], dde[s:e], mx_mas)
+        st = _hist_peak_stats(dra[s:e], dde[s:e], mx_mas)
+        base_stats[k] = st
+        off[k // GRID, k % GRID], ratio[k // GRID, k % GRID] = st.off, st.ratio
 
     verified = np.isfinite(ratio) & (ratio >= MIN_PEAK_RATIO) & (npair >= MIN_PAIRS)
     # WINDOW EDGE (issue #588).  A peak beyond half the FIXED MX disk is ambiguous
@@ -587,15 +759,25 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     if sweep and unresolved_edge.any():
         cand = [int(i) * GRID + int(j) for i, j in zip(*np.where(unresolved_edge))]
         confirmed, swept = sweep_cell_windows(
-            det, truth, cell_of_det, cand,
-            {k: (off[k // GRID, k % GRID], ratio[k // GRID, k % GRID]) for k in cand},
+            det, truth, cell_of_det, cand, {k: base_stats[k] for k in cand},
             factors=sweep_factors, window_edge_frac=window_edge_frac,
-            fail_min_ratio=fail_min_ratio,
             pairs_per_det=len(ia) / max(1, len(det)))
         for k, (o, r) in confirmed.items():
             off[k // GRID, k % GRID] = o
             ratio[k // GRID, k % GRID] = r
             unresolved_edge[k // GRID, k % GRID] = False
+    # What each swept-confirmed number RESTS ON, carried into the report beside the
+    # number itself: the look-elsewhere statistic of the window it was read at.  A
+    # reader comparing a graded 3.7" against OFF_MAX should be able to see whether the
+    # peak behind it was one-in-a-thousand or one-in-a-hundred without re-running the
+    # gate.  (Withdrawn cells already carry their whole `swept_windows` ladder.)
+    sweep_expected = {}
+    for k, ladder in swept.items():
+        res = [st for (w, st) in ladder if np.isfinite(st.off)
+               and st.ratio >= MIN_PEAK_RATIO and st.off <= window_edge_frac * w
+               and st.expected <= SWEEP_MAX_EXPECTED_BINS]
+        if res:
+            sweep_expected[k] = float(f"{max(st.expected for st in res):.3g}")
     # 3. What is left measured nothing.  Reported, and refused (below) when it is
     #    shaped like a region rather than scattered noise.
     edge = unresolved_edge
@@ -617,15 +799,14 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     # the margin.  Excluding `seam` here keeps the two reports disjoint -- a cell that
     # now fails must not also be listed as a tolerated sub-margin cell.
     unconfident = highoff & (ratio < fail_min_ratio) & ~seam
-    # COULD-NOT-VERIFY.  The same shape test the seam axis uses, on the withdrawn
-    # cells: scattered singletons are the wrong-pair background and are only reported,
-    # while a 4-connected patch is a REGION of the mosaic this estimator could not
-    # measure at all -- the brick-1182 "no tie exists inside the window" shape.  That is
-    # not a pass, so it takes `PASS` to None (exit 2, "could NOT VERIFY"), never to True.
-    edge_patch, edge_sizes = seam_mask(edge, min_cells=min_seam_cells)
+    # COULD-NOT-VERIFY: the same shape test the seam axis uses, on the withdrawn cells.
+    edge_patch, edge_sizes, region, region_sizes = could_not_verify_patch(
+        highoff, edge, min_cells=min_seam_cells)
     worst = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                   offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
-                  npairs=int(npair[i, j]))
+                  npairs=int(npair[i, j]),
+                  **({"sweep_expected_bins": sweep_expected[i * GRID + j]}
+                     if (i * GRID + j) in sweep_expected else {}))
              for i, j in sorted(zip(*np.where(fail)), key=lambda c: -off[c])][:8]
     unconfident_cells = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                               offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
@@ -635,8 +816,9 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
                        offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
                        npairs=int(npair[i, j]),
                        window_edge_fraction=float(round(off[i, j] / mx_mas, 3)),
-                       swept_windows=[[round(w, 0), round(o, 0), round(r, 1)]
-                                      for (w, o, r) in swept.get(i * GRID + j, [])])
+                       swept_windows=[[round(w, 0), round(st.off, 0), round(st.ratio, 1),
+                                       float(f"{st.expected:.3g}")]
+                                      for (w, st) in swept.get(i * GRID + j, [])])
                   for i, j in sorted(zip(*np.where(edge)), key=lambda c: -off[c])][:8]
     n_fail = int(fail.sum())
     # Tri-state.  A fail outranks could-not-verify (both block; FAIL is the more
@@ -661,6 +843,11 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
                 window_edge_frac=float(window_edge_frac),
                 n_window_edge_patch=int(edge_patch.sum()),
                 window_edge_component_sizes=edge_sizes,
+                # The quorate UNION of the measured-high-offset and could-not-measure
+                # populations -- the mosaic region actually involved, which is what the
+                # `min_seam_cells` quorum is now counted on.
+                n_blocking_region=int(region.sum()),
+                blocking_region_component_sizes=region_sizes,
                 # Near-edge cells the two resolution steps GRADED rather than withdrew.
                 n_edge_confident=int(confident_edge.sum()),
                 n_edge_swept_confirmed=int(near_edge.sum() - confident_edge.sum()
@@ -1031,9 +1218,11 @@ def _scan_view(field, view, band_paths, verbose, images_only):
                 unchecked.append(
                     f"{b}: {k} could not resolve a tie in view {view}: "
                     f"{c.get('n_window_edge')} verified cells peaked beyond "
-                    f"{c.get('window_edge_frac')}*{MX} and no offset reproduced when "
-                    f"the window was swept to {max(SWEEP_FACTORS):.0f}x "
-                    f"({max(SWEEP_FACTORS) * MX}), in connected patches of "
+                    f"{c.get('window_edge_frac')}*{MX}, and when the window was swept "
+                    f"to {max(SWEEP_FACTORS):.0f}x ({max(SWEEP_FACTORS) * MX}) no peak "
+                    f"stood clear of its own rim above that window's own background "
+                    f"(look-elsewhere bar {SWEEP_MAX_EXPECTED_BINS}); in connected "
+                    f"patches of "
                     f"{(c.get('window_edge_component_sizes') or [])[:5]} cells -- no "
                     f"tie exists inside the widest window this check can search, so "
                     f"the registration of those cells is UNKNOWN, not good")
