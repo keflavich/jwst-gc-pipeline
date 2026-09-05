@@ -208,7 +208,7 @@ from jwst_gc_pipeline.photometry.naming import (
 )
 from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
-    assert_no_foreign_observation_overwrite,
+    assert_no_foreign_observation_overwrite, foreign_observation_conflict,
 )
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
@@ -1188,7 +1188,8 @@ def perframe_sentinel_key(options, module, file_detector):
 
 def _expected_output_exists(basepath, filtername, module, options,
                             visit_id, vgroup_id, exposure_id,
-                            iteration_label=None, manual_phase=None):
+                            iteration_label=None, manual_phase=None,
+                            source_exposure=None):
     """Main output sentinel for --skip-if-done / --list-missing-tasks.
 
     daophot-iterative is the final step when --daophot is set (or basic when
@@ -1207,6 +1208,18 @@ def _expected_output_exists(basepath, filtername, module, options,
     (``_save_manual_pass``, cataloging.py:2062, never reads ``--daophot``),
     labels the file with the phase (m12 -> the m2 pass), and derives
     ``_resbgsub`` from the PHASE (cataloging.py:4601).
+
+    ``source_exposure`` is the crf this frame would be measured on, and it
+    turns ``os.path.exists`` into "does MY output exist".  Without it the
+    sentinel is the mirror of the overwrite #718 is about: where two
+    observations under one basepath spell one per-frame name -- 134 exposure
+    keys on cloudef today -- a file the OTHER observation wrote answers
+    ``True``, ``--skip-if-done`` skips every colliding frame, the run exits 0
+    having measured nothing, and the foreign photometry stands in for it
+    downstream.  A foreign file therefore reads as NOT done, which routes the
+    frame to the writer, where ``assert_no_foreign_observation_overwrite``
+    stops the run by name.  Callers that cannot name a source exposure pass
+    None and get the plain existence test, as before.
     """
     manual_label = _manual_sentinel_label(manual_phase)
     if manual_label is not None:
@@ -1233,7 +1246,16 @@ def _expected_output_exists(basepath, filtername, module, options,
                                 iteration_label=iteration_label,
                                 method=method,
                                 basic_or_iterative=basic_or_iterative)
-    return os.path.exists(path)
+    if not os.path.exists(path):
+        return False
+    conflict = foreign_observation_conflict(path, source_exposure)
+    if conflict is not None:
+        mine, theirs = conflict
+        print(f"skip-if-done: {path} exists but records proposal {theirs[0]} "
+              f"observation {theirs[1]}, and this frame is proposal {mine[0]} "
+              f"observation {mine[1]} -- NOT done (issue #718).", flush=True)
+        return False
+    return True
 
 
 def _as_table(data):
@@ -4949,7 +4971,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                     basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
                                     iteration_label=options.iteration_label or None,
-                                    manual_phase=_phase):
+                                    manual_phase=_phase,
+                                    source_exposure=filename):
                                 missing_tasks.add(task_idx)
         finally:
             sys.stdout = _real_stdout
@@ -5054,7 +5077,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                     basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
                                     iteration_label=options.iteration_label or None,
-                                    manual_phase=_skip_phase):
+                                    manual_phase=_skip_phase,
+                                    source_exposure=filename):
                                 print(f'skip-if-done: expected output exists for '
                                       f'{filtername} {file_module} visit={visit_id} '
                                       f'vgroup={vgroup_id} exp={exposure_id}; skipping.')

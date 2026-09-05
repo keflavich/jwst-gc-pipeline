@@ -12,7 +12,31 @@ second write replaces the first.
 It happened.  cloudef's obs-005 recatalog on 2026-08-19 wrote over 528 of
 obs-002's per-frame catalogs; F480M kept none of its own and its offsets table
 could not be rebuilt.  Nothing raised, and nothing in the writers refused
-(issue #718).  The collision is live in three of sickle's MIRI filters (#719).
+(issue #718).
+
+Which trees this can fire on, measured rather than assumed (2026-09-05,
+grouping every per-frame catalog by ``(band, detector, visit, vgroup,
+exposure)`` and reading each file's own ``FILENAME`` stamp):
+
+* cloudef -- 134 exposure keys are spelled by BOTH 2092/002 and 2092/005:
+  F162M 63, F210M 49, F360M 9, F480M 13, out of 64/64/32/30 keys.  Those are
+  live collisions on disk today, and the ``pipeline/`` trees hold obs-002 crf
+  files only, so the next recatalog of either observation stops on them.  This
+  is the field to remediate first.
+* sickle MIRI does NOT collide today, contrary to what PR #774 claimed.
+  F770W, F1130W and F1500W each hold 120 per-frame catalogs -- 60 stamped
+  3958/001 and 60 stamped 3958/002 -- under 120 DISTINCT names, because the
+  two observations use different vgroups (001 -> 02101, 002 -> 03101) and one
+  naming lineage also carries the observation in an 8-digit vgroup slot
+  (``vgroup00102101``).  Zero names are held by more than one observation, so
+  the guard cannot fire there.  What sickle has is a LATENT collision:
+  ``jw03958003001_02101_0000{1..5}_mirimage`` reuses observation 001's
+  ``(visit001, vgroup02101, exp0000N, mirimage)`` tuple, so cataloging
+  observation 003 would land on observation 001's five untokenised F770W
+  names.
+* sgrb2's MIRI observations 002 and 998 fold the observation into the vgroup
+  slot (``vgroup00202101`` vs ``vgroup99802101``), so they never spell one
+  name and never reach the refusal.
 
 ``cataloging``'s existing collision guard compares the frames of ONE run
 against each other, so it cannot see a file a PREVIOUS run of a different
@@ -101,26 +125,51 @@ def recorded_source_exposure(catalog_path):
         return None
 
 
+def foreign_observation_conflict(out_path, source_exposure):
+    """``(mine, theirs)`` when ``out_path`` holds ANOTHER observation's catalog.
+
+    ``None`` means "nothing to compare, or it is ours": no file at
+    ``out_path``, a source or an existing stamp that does not name a JWST
+    exposure, or an existing file recorded against the same
+    ``(proposal, observation)`` -- an ordinary re-run overwriting its own
+    output, which every stage iteration does.
+
+    BOTH doors ask through here.  The WRITE door refuses
+    (``assert_no_foreign_observation_overwrite``); the SKIP door
+    (``crowdsource_catalogs_long._expected_output_exists``, which
+    ``--skip-if-done`` and ``--list-missing-tasks`` both go through) has to ask
+    the same question, because ``os.path.exists`` alone answers "this frame is
+    already done" about a file the OTHER observation wrote.  The run then skips
+    every colliding frame, measures nothing, exits 0, and the foreign catalog
+    stands in for it downstream -- the mirror of the overwrite, and just as
+    silent.
+    """
+    if not out_path or not os.path.exists(out_path):
+        return None
+    mine = exposure_observation(source_exposure)
+    if mine is None:
+        return None
+    existing_source = recorded_source_exposure(out_path)
+    theirs = exposure_observation(existing_source)
+    if theirs is None or theirs == mine:
+        return None
+    return mine, theirs
+
+
 def assert_no_foreign_observation_overwrite(out_path, source_exposure):
     """Refuse to write ``out_path`` over another observation's per-frame catalog.
 
     ``source_exposure`` is the exposure this catalog was measured on -- the
     same value the writer stamps into ``meta['filename']``.
 
-    Returns silently when there is nothing to compare: no file at ``out_path``
-    (the ordinary case), a source or an existing stamp that does not name an
-    exposure, or an existing file recorded against the SAME observation, which
-    is an ordinary re-run overwriting its own output.
+    Returns silently in every case ``foreign_observation_conflict`` calls
+    "nothing to compare, or it is ours".
     """
-    if not out_path or not os.path.exists(out_path):
+    conflict = foreign_observation_conflict(out_path, source_exposure)
+    if conflict is None:
         return
-    mine = exposure_observation(source_exposure)
-    if mine is None:
-        return
+    mine, theirs = conflict
     existing_source = recorded_source_exposure(out_path)
-    theirs = exposure_observation(existing_source)
-    if theirs is None or theirs == mine:
-        return
     raise ForeignObservationOverwriteError(
         f"per-frame catalog write would replace ANOTHER OBSERVATION's catalog "
         f"(issue #718):\n"

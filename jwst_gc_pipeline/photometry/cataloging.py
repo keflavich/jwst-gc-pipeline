@@ -44,6 +44,8 @@ from jwst_gc_pipeline.photometry.naming import (
 from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
+from jwst_gc_pipeline.photometry.perframe_write_guard import (
+    recorded_source_exposure)
 from jwst_gc_pipeline.photometry.requested_filters import (
     RequestedFilterHasNoFramesError, assert_requested_filters_have_frames)
 # Lives in atomic_io with the rest of the shared-file tools; imported here
@@ -4149,18 +4151,15 @@ def _catalog_source_frame(fn):
     earlier version of this docstring had it the other way round and named
     ``IORegistryError``, which is unreachable from here.  The caller treats
     "unreadable" as KEEP.
+
+    The body lives in ``perframe_write_guard.recorded_source_exposure``.  It
+    used to be duplicated there character for character, one copy per door --
+    this one reads the stamp to decide whose catalog a file IS, the guard reads
+    it to decide whose catalog it is about to replace, and two copies of one
+    measurement drift.  Importing is safe in this direction:
+    ``perframe_write_guard`` imports ``os`` and ``re`` only.
     """
-    from astropy.io import fits
-    if fn.endswith(('.fits', '.fit', '.fits.gz')):
-        try:
-            return str(fits.getheader(fn, ext=1).get('FILENAME') or '') or None
-        except (OSError, KeyError, IndexError, ValueError):
-            return None
-    try:
-        from astropy.table import Table
-        return str(Table.read(fn).meta.get('FILENAME') or '') or None
-    except (OSError, ValueError, KeyError):
-        return None
+    return recorded_source_exposure(fn)
 
 
 def _newest_of(tokened, untokened):
