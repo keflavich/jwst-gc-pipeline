@@ -363,7 +363,10 @@ def _reduction_lineage(field, filt, obs, detector):
         from jwst_gc_pipeline.reduction.destreak_policy import crf_suffix
     except ImportError:
         return None
-    suffix = crf_suffix(field, filt, obs)          # 'destreak_o002_crf'
+    # instrument='nircam': MIRI returned above, so everything reaching here is
+    # NIRCam.  Naming it keeps a stray GC_INSTRUMENT_OVERRIDE in the gate's
+    # environment from turning the lineage into the untokened MIRI spelling.
+    suffix = crf_suffix(field, filt, obs, instrument='nircam')
     return "_" + suffix.split("_o")[0]             # '_destreak'
 
 

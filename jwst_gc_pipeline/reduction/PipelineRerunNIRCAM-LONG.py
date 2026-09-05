@@ -410,7 +410,14 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     # ------------------------------------------------------------------
     from jwst_gc_pipeline.reduction.destreak_policy import destreaks
     _was = do_destreak
-    do_destreak = destreaks(regionname, filtername, do_destreak)
+    # instrument='nircam' explicitly: this IS the NIRCam driver, and the policy
+    # otherwise falls back to GC_INSTRUMENT_OVERRIDE, which a shell that last
+    # ran a MIRI/NIRISS job still has exported (`sbatch --export=ALL` carries
+    # it).  Left implicit, `GC_INSTRUMENT_OVERRIDE=miri` turned destreaking off
+    # for a NIRCam reduction and printed the message below, attributing it to
+    # the field policy.
+    do_destreak = destreaks(regionname, filtername, do_destreak,
+                            instrument='nircam')
     if _was and not do_destreak:
         print(f"Region {regionname} filter {filtername}: destreak off "
               f"(see reduction/destreak_policy.py); the working copy is a "
