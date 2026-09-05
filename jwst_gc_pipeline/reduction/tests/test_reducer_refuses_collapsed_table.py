@@ -163,3 +163,98 @@ def test_every_live_locked_table_still_passes(tmp_path):
         t = Table.read(path)
         assert flag_collapsed_visits(t) == [], os.path.basename(path)
         assert flag_broadcast_provenance(t) == [], os.path.basename(path)
+
+
+# ---------------------------------------------------------------------------
+# The docs that describe this call site (review of PR #770, B1)
+# ---------------------------------------------------------------------------
+#
+# Both docs described the apply path as warning by default and raising only
+# under ``OFFSETS_TABLE_COLLAPSE_RAISE=1``.  Once this call site passes
+# ``raise_on_issue=True`` that reads backwards, and an operator who trusted it
+# would set an env var expecting a behaviour change and get none.  Each test
+# below pins BOTH sides -- the prose and the code it describes -- so neither
+# can drift alone, following
+# ``photometry/tests/test_astrometry_docs_match_code.py``.
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+AUDIT_MD = os.path.join(REPO, 'jwst_gc_pipeline', 'reduction',
+                        'ASTROMETRY_REDUNDANCY_AUDIT.md')
+CHECKPOINTS_MD = os.path.join(REPO, 'jwst_gc_pipeline', 'photometry',
+                              'ASTROMETRY_CHECKPOINTS.md')
+
+
+def _production_sane_calls():
+    """Every non-test ``assert_offsets_table_sane(...)`` call in the package.
+
+    Returns ``{"<module>:<lineno>": raises_on_issue}``.  Read with ``ast`` so a
+    call spanning lines, or one whose keyword moves, is still seen.
+    """
+    import ast
+    from glob import glob
+    out = {}
+    for path in glob(os.path.join(REPO, 'jwst_gc_pipeline', '**', '*.py'),
+                     recursive=True):
+        if os.sep + 'tests' + os.sep in path:
+            continue
+        with open(path) as fh:
+            src = fh.read()
+        if 'assert_offsets_table_sane' not in src:
+            continue
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Call):
+                continue
+            fname = getattr(node.func, 'id', None) or getattr(
+                node.func, 'attr', None)
+            if fname != 'assert_offsets_table_sane':
+                continue
+            raises = any(
+                kw.arg == 'raise_on_issue'
+                and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                for kw in node.keywords)
+            key = f'{os.path.relpath(path, REPO)}:{node.lineno}'
+            out[key] = raises
+    return out
+
+
+def test_the_apply_path_call_site_raises():
+    """The code side of both doc claims below."""
+    calls = _production_sane_calls()
+    apply_calls = {k: v for k, v in calls.items()
+                   if 'unified_alignment.py' in k}
+    assert apply_calls, calls
+    assert all(apply_calls.values()), (
+        f'the reducer apply path no longer raises on a collapse: {apply_calls}')
+
+
+def test_the_audit_doc_does_not_call_the_apply_path_warn_only():
+    with open(AUDIT_MD) as fh:
+        section = fh.read().split('## Collapse safeguard')[1].split('\n## ')[0]
+    flat = ' '.join(section.split())
+    assert 'fires a warning by default' not in flat, (
+        'ASTROMETRY_REDUNDANCY_AUDIT.md still describes the fix_alignment '
+        'apply path as warning by default; it raises (PR #770)')
+    assert 'RAISES' in section or 'raises `CollapsedOffsetsTableError`' in flat
+
+
+def test_the_env_switch_row_matches_whether_any_caller_still_needs_it():
+    """``OFFSETS_TABLE_COLLAPSE_RAISE`` is a no-op exactly when every
+    production caller already passes ``raise_on_issue=True``.
+
+    Pinned as an equivalence, so reverting EITHER side turns this red: revert
+    the code and the doc's "no-op" becomes a lie; revert the doc and a switch
+    that changes nothing is still advertised as changing something.
+    """
+    with open(CHECKPOINTS_MD) as fh:
+        table = fh.read().split('## Environment switches')[1]
+    row = [ln for ln in table.splitlines()
+           if ln.startswith('| `OFFSETS_TABLE_COLLAPSE_RAISE')]
+    assert len(row) == 1, table
+    doc_says_noop = 'no-op' in row[0].lower()
+    calls = _production_sane_calls()
+    assert calls, 'no production call site found'
+    code_is_noop = all(calls.values())
+    assert doc_says_noop == code_is_noop, (
+        f'env-table row says no-op={doc_says_noop} while the production call '
+        f'sites give no-op={code_is_noop}: {calls}')
