@@ -60,6 +60,19 @@ import re
 from jwst_gc_pipeline.mast_names import jw_prefix
 
 
+class MixedLineageFramesError(ValueError):
+    """One exposure was matched under two lineages by a single glob.
+
+    ``get_filenames`` globs ``*{detector}*{each_suffix}.fits``, and the
+    wildcard before the suffix means a suffix that is a TAIL of another lineage
+    matches both.  The untokened MIRI/NIRISS lineage ``o<obs>_crf`` is a tail of
+    ``align_o<obs>_crf`` and of ``destreak_o<obs>_crf``, so a directory holding
+    the bare frames beside either of the tokened spellings hands cataloging the
+    same exposure twice -- two rows of every star, from two different
+    reductions of the same data.
+    """
+
+
 class RequestedFilterHasNoFramesError(ValueError):
     """A requested filter resolved to zero candidate frames but should not have.
 
@@ -102,6 +115,72 @@ def frame_lineages_on_disk(basepath, filtername, proposal_id, field,
             lineage = '_'.join(parts[4:])
             lineages[lineage] = lineages.get(lineage, 0) + 1
     return lineages
+
+
+#: A per-exposure JWST product: ``jw<PPPPP><OOO><VVV>_<vgroup>_<exp>_<det>_...``.
+#: Only these are keyed by exposure below.  Product-level names
+#: (``jw02221-o002_t001_miri_f2550w_7_o002_crf.fits``) do not carry an exposure
+#: number in that position -- all 48 of brick/F2550W's share their first four
+#: tokens -- so keying them the same way would call one directory's whole set a
+#: single duplicated exposure.
+_PER_EXPOSURE_NAME = re.compile(r'jw\d{11}_\w+_\d{5}_[a-z0-9]+_')
+
+
+def lineages_per_exposure(paths):
+    """``{exposure: {lineage: [path, ...]}}`` over per-exposure products.
+
+    The exposure key is the first four underscore-separated tokens of the
+    basename -- proposal, observation, visit, vgroup, exposure number and
+    detector -- the same tokens ``naming.frame_identity`` counts, and the
+    lineage is everything after them, as ``frame_lineages_on_disk`` reads it.
+    """
+    out = {}
+    for path in paths:
+        base = os.path.basename(str(path))
+        if not _PER_EXPOSURE_NAME.match(base):
+            continue
+        parts = base[:-len('.fits')].split('_') if base.endswith('.fits') \
+            else base.split('_')
+        if len(parts) < 5:
+            continue
+        exposure, lineage = '_'.join(parts[:4]), '_'.join(parts[4:])
+        out.setdefault(exposure, {}).setdefault(lineage, []).append(str(path))
+    return out
+
+
+def assert_one_lineage_per_exposure(paths, each_suffix=None, label='glob'):
+    """Refuse a frame list that holds the same exposure under two lineages.
+
+    The failure this exists for is #766's follow-up: MIRI and NIRISS write no
+    lineage token, so their ``each_suffix`` is the bare ``o<obs>_crf`` -- and
+    that string is a tail of ``align_o<obs>_crf``.  brick/F2550W carries 48
+    ``_mirimage_align_o002_crf`` frames from an older Image3 crf-naming branch;
+    the moment ``PipelineMIRI`` runs there again and writes the bare spelling
+    beside them, one glob returns 96 files for 48 exposures and every star is
+    fitted, merged and counted twice.
+
+    Raising is the whole point.  Silently keeping one of the two would pick a
+    lineage the operator did not ask for -- the ~106 mas two-lineage mix, made
+    invisible -- and the run cannot tell which of the two reductions is the
+    current one.  The fix is on disk: remove or rename the stale lineage.
+    """
+    conflicts = {exposure: lineages
+                 for exposure, lineages in lineages_per_exposure(paths).items()
+                 if len(lineages) > 1}
+    if not conflicts:
+        return
+    example = sorted(conflicts)[0]
+    spellings = sorted(conflicts[example])
+    raise MixedLineageFramesError(
+        f"[{label}] {len(conflicts)} exposure(s) matched under more than one "
+        f"lineage by one glob"
+        + (f" for each_suffix={each_suffix!r}" if each_suffix else "")
+        + f"; {example} is on disk as {spellings}. The requested suffix is a "
+        f"tail of another lineage in that directory, so the glob's wildcard "
+        f"matches both and every star in those exposures would be fitted and "
+        f"merged twice. Remove or rename the stale lineage (they are different "
+        f"reductions of the same exposures, and mixing them is the two-lineage "
+        f"catalog); asking for a different --each-suffix cannot separate them.")
 
 
 #: Env override for the ``declared-but-absent`` verdict ONLY, with the
