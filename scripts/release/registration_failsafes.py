@@ -766,6 +766,18 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
             off[k // GRID, k % GRID] = o
             ratio[k // GRID, k % GRID] = r
             unresolved_edge[k // GRID, k % GRID] = False
+    # What each swept-confirmed number RESTS ON, carried into the report beside the
+    # number itself: the look-elsewhere statistic of the window it was read at.  A
+    # reader comparing a graded 3.7" against OFF_MAX should be able to see whether the
+    # peak behind it was one-in-a-thousand or one-in-a-hundred without re-running the
+    # gate.  (Withdrawn cells already carry their whole `swept_windows` ladder.)
+    sweep_expected = {}
+    for k, ladder in swept.items():
+        res = [st for (w, st) in ladder if np.isfinite(st.off)
+               and st.ratio >= MIN_PEAK_RATIO and st.off <= window_edge_frac * w
+               and st.expected <= SWEEP_MAX_EXPECTED_BINS]
+        if res:
+            sweep_expected[k] = float(f"{max(st.expected for st in res):.3g}")
     # 3. What is left measured nothing.  Reported, and refused (below) when it is
     #    shaped like a region rather than scattered noise.
     edge = unresolved_edge
@@ -792,7 +804,9 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
         highoff, edge, min_cells=min_seam_cells)
     worst = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                   offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
-                  npairs=int(npair[i, j]))
+                  npairs=int(npair[i, j]),
+                  **({"sweep_expected_bins": sweep_expected[i * GRID + j]}
+                     if (i * GRID + j) in sweep_expected else {}))
              for i, j in sorted(zip(*np.where(fail)), key=lambda c: -off[c])][:8]
     unconfident_cells = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                               offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),

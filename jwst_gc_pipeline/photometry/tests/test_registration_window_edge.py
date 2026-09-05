@@ -108,6 +108,9 @@ def test_a_rigid_offset_beyond_the_search_window_is_measured_by_the_sweep():
     assert r["PASS"] is False, r
     assert r["n_edge_swept_confirmed"] > 0, r
     assert abs(r["worst"][0]["offset_mas"] - 4060.0) < 200, r["worst"][:2]
+    # a swept number carries what it rests on: the look-elsewhere statistic of the
+    # window it was read at, beside the offset itself
+    assert r["worst"][0]["sweep_expected_bins"] <= rf.SWEEP_MAX_EXPECTED_BINS, r["worst"][0]
     # ... and without the sweep the true offset is not merely un-failed: it is
     # unnameable, because every number the base window can return is inside its own disk
     nos = rf.per_cell(det, None, truth, "gross 4060 unswept", sweep=False, **OWN)
