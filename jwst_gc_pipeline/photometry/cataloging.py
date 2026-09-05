@@ -3464,9 +3464,20 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         return None
     if not (m8_path and os.path.exists(m8_path)):
         return None
-    out = m8_path.replace('_m8.fits', '_m8_dedup.fits')
-    if out == m8_path:
-        out = m8_path.replace('.fits', '_dedup.fits')
+    # The m8 path may already carry the per-observation token, since #772 made
+    # the cross-band reader spell it the way the writer does.  The canonical
+    # dedup name puts `_dedup` BEFORE that token (`..._m8_dedup_o001.fits`) --
+    # that is the order diagnostics._CROSSBAND_RE parses and the order the
+    # pre-#772 products on disk use.  Naively appending would give
+    # `..._m8_o001_dedup.fits`, which that regex does not match.
+    _obstok = re.search(r'(_o[0-9-]+)\.fits$', m8_path)
+    if _obstok:
+        _tok = _obstok.group(1)
+        out = m8_path[:-len(_tok + '.fits')] + '_dedup' + _tok + '.fits'
+    else:
+        out = m8_path.replace('_m8.fits', '_m8_dedup.fits')
+        if out == m8_path:
+            out = m8_path.replace('.fits', '_dedup.fits')
     try:
         from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
         dedup_merged_catalog(m8_path, out)
@@ -3480,8 +3491,13 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         import shutil
         _tgt = str(getattr(options, 'target', '') or '')
         _fld = str(getattr(options, 'field', '') or '')
+        # Since #772 the primary name ALREADY carries the token, so copying
+        # again would produce `..._m8_o001_o001.fits`.  Only scope a name that
+        # is still unscoped.
         if _tgt == 'brick' and _fld:
             for _src in (m8_path, out):
+                if re.search(r'_o[0-9-]+\.fits$', _src):
+                    continue
                 _scoped = _src.replace('.fits', f'_o{_fld}.fits')
                 if _scoped != _src:
                     shutil.copy(_src, _scoped)
