@@ -37,6 +37,11 @@ from jwst_gc_pipeline.photometry.astrometry_offsets import (
 # per-exposure consensus tie uses, and it keeps this file to a few seconds.
 _WINDOWS = (3.0, 10.0)
 
+#: the probe-window COLLAPSE BAND: below this edge fraction both
+#: ``CONFIRM_WINDOW_FACTORS`` fall under a single ``base_w * 1.25`` floor, which
+#: is where the paired ``CONFIRM_MIN_PROBE_FACTORS`` changes the probe windows.
+_COLLAPSE_BAND_MAX = 1.25 / 2.2
+
 
 def _uniform_field(seed, n=2000, width_arcsec=60.0, ra0=266.4, dec0=-28.9):
     rng = np.random.RandomState(seed)
@@ -139,9 +144,14 @@ def test_real_offset_at_a_high_edge_fraction_survives_the_probe():
 # edge-riding peak, read on 2026-09-04 from
 # ``/orange/adamginsburg/jwst/<field>/astrometry_checkpoints/``.  Under the old
 # single ``base_w * 1.25`` floor five of the six place BOTH probes at 3.75" --
-# one window measured twice, which ``consistent = any(agrees)`` then reads as a
-# two-probe confirmation.  ``CONFIRM_MIN_PROBE_FACTORS`` pairs a floor to each
-# factor so they land at 3.75" and 6.0" instead.
+# one window measured twice.  That is a BOOKKEEPING defect, not a hole in the
+# verdict: ``consistent = any(p['agrees'])`` and ``any({p, p}) == any({p})``, so
+# the duplicate could never confirm anything the single probe did not already
+# confirm; what it did was report ``n_probes`` 2 for one measured window.
+# ``CONFIRM_MIN_PROBE_FACTORS`` pairs a floor to each factor so they land at
+# 3.75" and 6.0" instead -- a genuinely second window.  The direction of that,
+# and the one path on which it is stricter rather than more permissive, are
+# pinned by the two tests below it.
 #
 # (field/stage/filter, off_mas, window_arcsec, dra_mas, ddec_mas)
 _LIVE_UNSWEPT_EDGE_PEAKS = [
@@ -174,6 +184,102 @@ def test_live_edge_peak_is_probed_at_two_distinct_windows(label, off, window,
     assert conf["n_probes"] == 2, (label, conf)
 
 
+def _sparse_pair(n=50, seed=11):
+    """Two uncorrelated fields thin enough that a 3.75" window cannot reach
+    ``min_pairs`` (30) but a 6.0" one can -- the area goes as r^2, so 50 sources
+    over 60" give ~20 pairs at 3.75" and ~60 at 6.0"."""
+    return _uniform_field(seed, n=n), _uniform_field(seed + 500, n=n)
+
+
+def test_in_the_collapse_band_the_second_probe_is_added_not_moved():
+    """The DIRECTION of the probe-window change, which the campaign's guard
+    rules require be stated: inside the collapse band it is PERMISSIVE.
+
+    Probe 1 is ``max(1.4 * off, 1.25 * base_w)`` under both the old single floor
+    and the new paired one, so it does not move; the second floor only lifts
+    probe 2 off it.  Below ``1.25 / 2.2`` the new probe set is therefore a
+    strict SUPERSET of the old one, and since ``consistent = any(p['agrees'])``
+    over the measured probes, adding a probe can only turn ``consistent``
+    False -> True -- the alias guard can only reject LESS often here, never
+    more.  ``base_w * 1.25`` for both factors is exactly the pre-#751
+    arithmetic.
+
+    Five of the six live records sit in that band.  The sixth (sgrc m6, edge
+    0.858) is ABOVE it, where the old second probe was already distinct
+    (2.2 * off) and the new floor MOVES it outward instead of adding to it; the
+    verdict direction there is not fixed by the arithmetic, so it is asserted as
+    a move, not as a superset.
+
+    What stops the permissive half from being a gate weakened into a pass is
+    that rejection is still a MEASURED disagreement at both windows:
+    ``test_collapse_band_peak_is_rejected_on_two_independent_probes`` and
+    ``test_swept_footprint_alias_in_the_collapse_band_is_still_rejected`` hold
+    the unswept and swept halves of this same band.
+    """
+    a, b = _unrelated_pair()
+    in_band = []
+    for label, off, window, dra, ddec in _LIVE_UNSWEPT_EDGE_PEAKS:
+        best = dict(off=off, window_arcsec=window, dra=dra, ddec=ddec)
+        new = confirm_peak_windows(a, b, best)
+        old = confirm_peak_windows(a, b, best, min_probe_factors=(1.25, 1.25))
+        new_w = {round(p["window_arcsec"], 6) for p in new["probes"]}
+        old_w = {round(p["window_arcsec"], 6) for p in old["probes"]}
+        if off / 1000.0 / window < _COLLAPSE_BAND_MAX:
+            in_band.append(label)
+            assert old_w < new_w, (label, old_w, new_w)
+            assert old_w == {round(window * 1.25, 6)}, (label, old_w)
+            # ...and the verdict is monotone in that: every probe the old set
+            # measured is still measured, with the same agreement.
+            old_agree = {round(p["window_arcsec"], 6): p["agrees"]
+                         for p in old["probes"] if p["dra"] is not None}
+            new_agree = {round(p["window_arcsec"], 6): p["agrees"]
+                         for p in new["probes"] if p["dra"] is not None}
+            for w, ag in old_agree.items():
+                assert new_agree[w] == ag, (label, w, ag, new_agree)
+        else:
+            # above the band: probe 2 was already its own window and is widened
+            assert len(old_w) == len(new_w) == 2, (label, old_w, new_w)
+            assert max(new_w) > max(old_w), (label, old_w, new_w)
+    assert len(in_band) == 5, in_band
+
+
+def test_a_first_probe_with_no_pairs_no_longer_leaves_the_verdict_undetermined():
+    """The one path on which the paired floors are STRICTER, and the only place
+    the probe-window change moves a verdict rather than a count.
+
+    When the first probe window holds fewer than ``min_pairs`` pairs it returns
+    no result.  With both probes collapsed onto it the whole confirmation was
+    (None, None) -> ``measured`` empty -> ``consistent`` None, i.e. UNDETERMINED,
+    and ``measure_offset`` leaves an undetermined confirmation alone (``ok``
+    unchanged, ``alias_rejected`` False -- only ``conf["consistent"] is False``
+    rejects in ``measure_offset``; see
+    ``test_sweep_window_alias.test_small_tie_is_numerically_untouched_by_confirmation``
+    for the same mapping on a peak whose probe never ran).
+    The second, wider probe can measure where the first could not, and here it
+    disagrees, so the peak is rejected instead of waved through.
+
+    Reverting the hunk to a single ``base_w * 1.25`` floor makes this test read
+    ``consistent`` None.
+    """
+    a, b = _sparse_pair()
+    best = dict(off=939.84, window_arcsec=3.0, dra=-473.91, ddec=811.61)
+    conf = confirm_peak_windows(a, b, best)
+    # THE VERDICT, asserted first so a revert fails on it and not on a window
+    # list: rejected, where the collapsed arithmetic returned UNDETERMINED.
+    assert conf["consistent"] is False, conf
+    collapsed = confirm_peak_windows(a, b, best, min_probe_factors=(1.25, 1.25))
+    assert collapsed["consistent"] is None, collapsed
+    # ...and why: the narrow probe cannot be measured at this source density
+    windows = sorted(round(p["window_arcsec"], 6) for p in conf["probes"])
+    assert windows == [3.75, 6.0], conf
+    narrow = [p for p in conf["probes"] if round(p["window_arcsec"], 6) == 3.75]
+    assert narrow and narrow[0]["dra"] is None, conf
+    # ...while the wide one can, and it disagrees
+    wide = [p for p in conf["probes"] if round(p["window_arcsec"], 6) == 6.0]
+    assert wide and wide[0]["dra"] is not None and wide[0]["agrees"] is False, conf
+    assert conf["n_probes"] == 1, conf
+
+
 def test_a_probe_window_is_never_measured_twice():
     """The dedup.  With the floors collapsed onto one value the second probe
     lands on the first's window; it is dropped rather than recorded as a second
@@ -201,7 +307,7 @@ def test_collapse_band_peak_is_rejected_on_two_independent_probes():
     r = measure_offset(a, b, sweep=True, sweep_windows=_WINDOWS,
                        confirm_windows=True)
     assert r is not None and not r["swept"], r
-    assert CONFIRM_EDGE_FRACTION <= r["window_edge_fraction"] <= 0.568, r
+    assert CONFIRM_EDGE_FRACTION <= r["window_edge_fraction"] <= _COLLAPSE_BAND_MAX, r
     assert r["alias_rejected"] and not r["ok"], r
     probes = r["window_confirmation"]["probes"]
     assert sorted(round(p["window_arcsec"], 6) for p in probes) == [3.75, 6.0], probes
@@ -240,7 +346,7 @@ def test_swept_footprint_alias_in_the_collapse_band_is_still_rejected():
     b = _clumpy_field(290.915, 14.529 - 8.0 / 3600.0, 160.0, seed=2)
     r = measure_offset(a, b, sweep=True, confirm_windows=True)
     assert r["swept"], r
-    assert CONFIRM_EDGE_FRACTION <= r["window_edge_fraction"] <= 0.568, r
+    assert CONFIRM_EDGE_FRACTION <= r["window_edge_fraction"] <= _COLLAPSE_BAND_MAX, r
     probes = r["window_confirmation"]["probes"]
     assert sorted(round(p["window_arcsec"], 6) for p in probes) == [12.5, 20.0], probes
     assert not any(p["agrees"] for p in probes if p["dra"] is not None), probes

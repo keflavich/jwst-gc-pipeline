@@ -36,6 +36,12 @@ in the same field: gc2211_o028 F150W m3-m7 already read ``apply_ok: true`` on
 the SAME ~51 mas tie because their sparse leg happened to land at a swept window
 and was already disqualified; only m2's stayed inside the first 3" window.
 
+What the released backstop leaves uncovered is at the bottom of this file
+(PR #757 review, B4): ``per_tile['clean']`` is a CONTRAST statement, so a
+half-mosaic seam still reaches ``apply_ok`` once an untrustworthy sparse leg has
+switched the gross cross-reference check off.  The mechanism is asserted; the
+verdict that should follow is an ``xfail(strict=True)``.
+
 The fixtures are 6000 consensus sources over 60" against a 1000-source dense
 reference and a 700-source sparse one, which reproduces the recorded regime:
 ~33k pairs at the 3" window over 90k bins, median occupied bin 1, so ``contrast``
@@ -113,6 +119,32 @@ def real_misregistration_case():
     sparse = _field(402, 700)
     return measure_reference_tie(cons, ref_all, sparse, dense=True,
                                  grid_nx=2, grid_ny=2, context="real-misreg")
+
+
+@pytest.fixture(scope="module")
+def seam_case():
+    """The corner the PR #757 review named (B4): the released gross-Gaia
+    backstop, with a DENSE leg that is coherent and a field that is not rigidly
+    offset.
+
+    Half the reference is at the clean 15 mas tie and half is displaced 2.5" --
+    the brick-1182 v001 half-mosaic class the gross cross-reference check is
+    credited with catching.  The sparse leg is the same uncorrelated chance peak
+    as ``flip_case``, so it is alias-rejected and the backstop is switched off.
+    """
+    cons = _consensus()
+    sub = cons[::6]
+    top = sub.dec.deg > _DEC0
+    ra = sub.ra.deg.copy()
+    dec = sub.dec.deg.copy()
+    ra[~top] += 0.012 / 3600.0 / _COSD
+    dec[~top] += -0.009 / 3600.0            # clean half: the 15 mas tie
+    ra[top] += 2.000 / 3600.0 / _COSD
+    dec[top] += -1.500 / 3600.0             # displaced half: 2.5"
+    ref_all = SkyCoord(ra * u.deg, dec * u.deg)
+    sparse = _field(402, 700)
+    return measure_reference_tie(cons, ref_all, sparse, dense=True,
+                                 grid_nx=2, grid_ny=2, context="seam")
 
 
 def test_the_sparse_leg_is_the_newly_probed_shape(flip_case):
@@ -198,3 +230,84 @@ def test_a_real_rigid_misregistration_still_reaches_the_apply_threshold(
     assert abs(real_misregistration_case["ddec_mas"] + 350.0) < 60.0, \
         real_misregistration_case
     assert real_misregistration_case["apply_ok"] is True, real_misregistration_case
+
+
+# ---------------------------------------------------------------------------
+# B4 of the PR #757 review: what covers the gate that the sparse-untrustworthy
+# valve switches OFF.
+#
+# The review asked for either a test asserting ``apply_ok`` False in that corner
+# or a written statement that per-tile + same-star is the accepted cover.
+# Measured, the statement would be wrong.  ``measure_offset_grid`` is called
+# with ``max_off_mas=None`` by every production caller (issue #392), so
+# ``per_tile['clean']`` asks only "does each tile have a coherent peak?", never
+# "is that peak where the bulk says it should be" -- its own docstring says so.
+# A half-mosaic seam gives every tile a razor-sharp peak, so the map reads
+# clean while two of its four cells sit 2.5" away.
+#
+# The other half of the brick-1182 v001 signature does not need the backstop: a
+# window-LIMITED dense peak (2.7" measured at the 3" window against a true ~20"
+# offset) rides edge 0.9, so #600's widened trigger probes it and it does not
+# reproduce at a window that can hold the true offset -- alongside the sweep,
+# which escalates to that window in the first place.  The uncovered residue is a
+# dense peak that is coherent and DOES reproduce while the field is not rigidly
+# offset.
+_DISPLACED_ARCSEC = 2.5
+
+
+def test_a_seam_reads_per_tile_clean_while_two_cells_sit_2500_mas_out(seam_case):
+    """The mechanism, asserted on real estimator output: ``per_tile_ok`` is a
+    statement about CONTRAST alone, so it does not cover a seam.
+
+    Each 2x2 cell finds a sharp peak -- 15 mas on the clean half, 2500 mas on
+    the displaced half -- so every cell is ``ok`` and ``clean`` is True with a
+    ``worst_off_mas`` of 2.5".  That is the whole of what ``per_tile_ok``
+    contributes to ``apply_ok`` here.
+    """
+    pt = seam_case["per_tile"]
+    assert pt["clean"] is True, pt
+    assert seam_case["per_tile_ok"] is True, seam_case
+    assert pt["n_ok"] == pt["n_total"] == 4, pt
+    offs = sorted(c["off_mas"] for c in pt["cells"])
+    assert all(abs(o - 15.0) < 3.0 for o in offs[:2]), offs
+    assert all(abs(o - _DISPLACED_ARCSEC * 1000.0) < 50.0 for o in offs[2:]), offs
+    assert pt["worst_off_mas"] > 2000.0, pt
+    assert pt["min_contrast_seen"] > 100.0, pt      # every cell is razor-sharp
+    # ...and the backstop that would have seen it is switched off, by the same
+    # route #751 opened: an alias-rejected sparse chance peak.
+    assert seam_case["vs_sparse"]["alias_rejected"] is True, seam_case
+    assert seam_case["cross_reference_sparse_untrustworthy"] is True, seam_case
+    sep = seam_case["cross_reference"]["sep_mas"]
+    assert np.isfinite(sep) and sep > REFERENCE_CROSSCHECK_GROSS_MAS, sep
+    assert seam_case["cross_reference_gross_ok"] is True, seam_case
+
+
+@pytest.mark.xfail(strict=True, reason="known gap, issue #775 (see also #392): "
+                   "per_tile['clean'] is contrast-only, so nothing left in "
+                   "apply_ok sees a half-mosaic seam once the gross-Gaia "
+                   "backstop is released by an untrustworthy sparse leg")
+def test_a_half_displaced_field_should_not_reach_apply_ok(seam_case):
+    """The desired end state, marked xfail(strict) so that closing the gap makes
+    this file fail until the marker is removed.
+
+    Today the run signs off: ``apply_ok`` True on a field where half the mosaic
+    is 2.5" out, and the adopted bulk is the DISPLACED half's peak rather than
+    the clean half's tie.  Nothing here weakens a gate -- the assertion is the
+    gate that does not exist yet.
+    """
+    assert seam_case["apply_ok"] is False, seam_case
+
+
+def test_the_seam_is_recorded_even_though_it_does_not_block(seam_case):
+    """What a reader of the record CAN see today, so the gap is diagnosable
+    from a written checkpoint without re-running the estimator: the per-tile map
+    carries the seam in ``worst_off_mas`` and in its cells, and the adopted bulk
+    disagrees with half of them by the full displacement.  This asserts the
+    record's CONTENT, not the verdict -- the verdict is the xfail above.
+    """
+    bulk = seam_case["off_mas"]
+    spread = (seam_case["per_tile"]["worst_off_mas"]
+              - min(c["off_mas"] for c in seam_case["per_tile"]["cells"]))
+    assert spread > 2000.0, seam_case["per_tile"]
+    # the bulk landed on the displaced half, not on the 15 mas tie
+    assert abs(bulk - _DISPLACED_ARCSEC * 1000.0) < 100.0, bulk
