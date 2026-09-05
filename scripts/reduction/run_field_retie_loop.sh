@@ -179,6 +179,76 @@ if [ -z "$CONSENSUS_TBL" ]; then
 fi
 echo "offsets table watched for changes: $CONSENSUS_TBL"
 
+# ---------------------------------------------------------------------------
+# Is the convergence digest's SCOPE usable?  Decided ONCE, here, beside the
+# CONSENSUS_TBL refusal -- not answered by table_value_digest's fail-open on
+# every iteration.
+#
+# The scope is FIELD, which is operator input, and alignment_config registers
+# spellings that are not a bare NNN: sickle's MIRI is field `001-002` and
+# sgrb2's is `002-998`, and `offsets_table_path` hands both a real table.  A
+# FIELD the digest cannot scope makes EVERY digest call exit 2;
+# table_value_digest then emits a fresh unique token each time, so
+# `[ "$tbl_after" = "$tbl_before" ]` can never hold, the "no SHIFT VALUE
+# changed -> this is NOT a checkpoint re-tie -> STOPPING" branch below is dead
+# for the whole run, and the loop re-reduces to MAXITER measuring the same
+# residual.  That is issue #272's behaviour, produced by the file written to
+# remove it.  A table with no `Visit` column (the `_average.csv` tables an
+# OFFSETS_TBL override can reach) does the same: no row of it can be attributed
+# to an observation.
+#
+# Fail-open is the right answer for a TRANSIENT (a table being rewritten under
+# the read).  It is the wrong answer for a condition settled before the first
+# iteration that cannot change during the run.  An absent table is NOT this
+# case: it digests to `none` with status 0, which is how a first iteration
+# starts.
+#
+# Layer 1, in bash, so it holds even where `python` does not resolve: FIELD has
+# to SPELL an observation -- NNN, or the hyphen-joined NNN-NNN of a joint
+# registration.  Same shape as naming._OBSERVATION_FIELD_RE.
+if ! [[ "$FIELD" =~ ^[0-9]{1,3}(-[0-9]{1,3})*$ ]]; then
+    echo "REFUSING: FIELD=$FIELD does not spell an observation, so the"
+    echo "  convergence digest cannot be scoped to it.  Every iteration's digest"
+    echo "  would exit 2, and this loop reads a failed digest fail-open as 'the"
+    echo "  table changed' -- so the 'no shift value changed -> STOPPING' branch"
+    echo "  could never fire and the run would re-reduce to MAXITER=$MAXITER"
+    echo "  measuring the same residual (issue #272), rather than stop."
+    echo "  FIELD is NNN, or the hyphen-joined NNN-NNN alignment_config"
+    echo "  registers for a joint field (sickle MIRI 001-002, sgrb2 MIRI"
+    echo "  002-998)."
+    exit 2
+fi
+# Layer 2: ask the digest itself, which is the only thing that can see whether
+# the TABLE can be attributed.  Refused only on its own "cannot digest" status
+# (2); any other status means the probe did not run (no interpreter, no
+# astropy) and is reported rather than acted on -- nothing else in this script
+# refuses on that either.
+_probe_rc=0
+_probe_out=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
+    "$HERE/offsets_value_digest.py" "$CONSENSUS_TBL" \
+    --observation "$FIELD" 2>&1) || _probe_rc=$?
+if [ "$_probe_rc" -eq 2 ]; then
+    echo "REFUSING: the convergence digest cannot be scoped to FIELD=$FIELD"
+    echo "  against $CONSENSUS_TBL:"
+    echo "    $_probe_out"
+    echo "  Every iteration's digest would fail the same way, and this loop"
+    echo "  reads a failed digest fail-open as 'the table changed'.  The"
+    echo "  'no shift value changed -> STOPPING' branch could then never fire,"
+    echo "  so the run would re-reduce to MAXITER=$MAXITER measuring the same"
+    echo "  residual (issue #272), rather than stop."
+    echo "  The table must carry a Visit column to attribute its rows to an"
+    echo "  observation."
+    exit 2
+elif [ "$_probe_rc" -ne 0 ]; then
+    echo "  NOTE: could not run the digest to check the scope (rc=$_probe_rc):"
+    echo "        $_probe_out"
+    echo "        Not refused here -- that status means the probe did not run,"
+    echo "        not that the scope is unusable."
+else
+    echo "convergence digest scoped to observation: $FIELD"
+fi
+# ---------------------------------------------------------------------------
+
 # Digest the table's SHIFT VALUES, so the "did this iteration re-tie anything?"
 # test below answers that question rather than "did any byte change".
 #
@@ -207,6 +277,11 @@ table_value_digest () {
           "$HERE/offsets_value_digest.py" "$path" \
           --observation "$FIELD" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
+        # Fail-open is for a TRANSIENT (a table being rewritten under the read).
+        # A scope that can NEVER be applied is settled before the first
+        # iteration and is refused there instead -- see the preflight above,
+        # which exists because this handler, applied to a permanent condition,
+        # silently disables the loop's stop condition for the whole run.
         echo "WARNING: could not digest $path ($out); treating this iteration as" >&2
         echo "         having changed the table, which is the fail-open side." >&2
         echo "undigestible-$(date -u +%s%N)-$RANDOM"
