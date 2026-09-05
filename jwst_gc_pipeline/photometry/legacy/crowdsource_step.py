@@ -510,7 +510,8 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                     if options.skip_if_done and _expected_output_exists(
                             cut_bp, filt, file_module, opts_phase,
                             visit_id, vgroup_id, exposure_id,
-                            iteration_label=iteration_label):
+                            iteration_label=iteration_label,
+                            source_exposure=filename):
                         print(f'skip-if-done [{phase}]: {filt} {file_module} '
                               f'visit={visit_id} exp={exposure_id}', flush=True)
                         overlapping_now.append(filename)
