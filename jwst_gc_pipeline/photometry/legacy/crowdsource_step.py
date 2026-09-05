@@ -22,6 +22,9 @@ not the host module.
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as _host
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.naming import frame_identity
+from jwst_gc_pipeline.photometry.perframe_write_guard import (
+    assert_no_foreign_observation_overwrite,
+)
 import pylab as pl
 
 # Reproduce the exact module namespace the relocated code had while it lived in
@@ -338,6 +341,11 @@ def save_crowdsource_results(results, ww, filename, suffix,
                    f"_crowdsource_{suffix}.fits")
 
     print(f"tblfilename={tblfilename}, filename={filename}, suffix={suffix}, filtername={filtername}, module={module}, desat={desat}, bgsub={bgsub}, fpsf={fpsf} blur={blur}")
+
+    # Same collision as the daophot writer's (#718): this name carries no
+    # observation token at all, so on a basepath holding two observations the
+    # second run's write destroys the first's catalog without a word.
+    assert_no_foreign_observation_overwrite(tblfilename, filename)
 
     stars.write(tblfilename, overwrite=True)
     with fits.open(tblfilename, mode='update', output_verify='fix') as fh:

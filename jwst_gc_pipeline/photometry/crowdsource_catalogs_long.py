@@ -207,6 +207,9 @@ from jwst_gc_pipeline.photometry.naming import (
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
 from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
+from jwst_gc_pipeline.photometry.perframe_write_guard import (
+    assert_no_foreign_observation_overwrite,
+)
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -2155,6 +2158,13 @@ def save_photutils_results(result, ww, filename,
         del result.meta[k]
 
     print(f"tblfilename={tblfilename}, filename={filename}, filtername={filtername}, module={module}, desat={desat}, bgsub={bgsub}, fpsf={fpsf} blur={blur}")
+
+    # Two observations under one basepath that reuse a
+    # (visit, vgroup, exp, detector) tuple spell THIS filename identically
+    # wherever obs_ is empty, so the write would destroy the other one's
+    # catalog in silence -- cloudef obs-005 over obs-002, 528 files (#718).
+    # The existing file records the exposure it was measured on, so ask it.
+    assert_no_foreign_observation_overwrite(tblfilename, filename)
 
     # Per-frame catalog write -- the highest-frequency per-frame output (once per
     # frame per pass).  Build on node-local scratch then copy, to spare the
