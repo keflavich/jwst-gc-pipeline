@@ -231,8 +231,16 @@ def test_a_prefix_of_an_observation_number_does_not_match(mod, tmp_path):
 
 def test_an_observation_with_no_rows_yet_digests_stably_and_is_not_none(mod, tmp_path):
     """A treasury tile's first iteration digests a table holding only its
-    neighbours' rows; that must be a stable value distinguishable from an
-    absent table, so seeding this tile's rows reads as the re-tie."""
+    neighbours' rows; that must be a stable value, so seeding this tile's rows
+    reads as the re-tie.
+
+    It is NOT distinguishable from an absent table any more, deliberately --
+    reporting the two differently made a neighbour CREATING the shared table
+    read as this tile's re-tie, which
+    `test_a_neighbour_creating_the_shared_table_is_not_this_tiles_retie`
+    covers.  What matters here is that the value is stable and not the
+    `"none"` sentinel, which both still hold.
+    """
     path = _write(tmp_path, _table())
     empty = mod.digest(path, observation='099')
     assert empty == mod.digest(path, observation='099')
