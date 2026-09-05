@@ -4980,6 +4980,29 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
 # record serialization
 # ---------------------------------------------------------------------------
 
+#: What a list element may be and still belong in a record.  ``np.generic`` is
+#: every numpy SCALAR and no array -- a 0-d ndarray is still an ndarray -- so
+#: array members stay stripped while measured numbers stay in.
+_RECORDABLE_ELEMENT = (dict, str, int, float, bool, type(None), np.generic)
+
+
+def _jsonable_element(x):
+    """One list element, converted the way the keyed scalar branches convert.
+
+    Without the ``np.generic`` arm a numpy scalar was neither converted nor
+    kept: it failed the element filter and left the record with no trace that
+    anything had been there (issue #706).  ``np.float64`` alone survived,
+    because it subclasses ``float``, so a list holding both floats and
+    ``np.int64`` counts kept the floats and dropped the counts -- shortening
+    the list and shifting every element after the first drop.
+    """
+    if isinstance(x, dict):
+        return _jsonable(x)
+    if isinstance(x, np.generic):
+        return x.item()
+    return x
+
+
 def _jsonable(obj):
     """Strip non-serializable members (SkyCoord, arrays) from a result dict."""
     if obj is None:
@@ -5000,9 +5023,8 @@ def _jsonable(obj):
             elif isinstance(v, (np.bool_,)):
                 out[k] = bool(v)
             elif isinstance(v, (list, tuple)):
-                out[k] = [_jsonable(x) if isinstance(x, dict) else x
-                          for x in v
-                          if isinstance(x, (dict, str, int, float, bool, type(None)))]
+                out[k] = [_jsonable_element(x) for x in v
+                          if isinstance(x, _RECORDABLE_ELEMENT)]
             # SkyCoord / ndarray members are measurement inputs, not record data
         return out
     return obj
