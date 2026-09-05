@@ -900,9 +900,10 @@ def discover_catalogs(field_cfg, field):
     # untokened name is a pre-tokening leftover with ambiguous provenance: it
     # says nothing about which observation produced it, and its contents need
     # not match its neighbours'.  brick carried an Aug-29 pair -- a 866 MB
-    # `_m7.ecsv` and a `_m7_qualcuts_oksep2221.fits` whose name says 2221 while
-    # its 651903 rows hold 1182's four bands -- selected beside the correct
-    # `_m8_o001`/`_m8_o004`, i.e. the same mislabel as #661 one layer up.
+    # `_m7.ecsv` and its quality-cut sibling, whose oksep suffix names the 2221
+    # proposal while its 651903 rows hold 1182's four bands -- selected beside
+    # the correct `_m8_o001`/`_m8_o004`, i.e. the same mislabel as #661 one
+    # layer up.
     # Shipping a lower-iteration untokened table next to tokened ones invites
     # exactly the confusion the tokens were added to end (#597).
     for module, combined in combined_by_module.items():

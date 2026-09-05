@@ -110,13 +110,21 @@ def test_non_vetted_names_are_rejected(name):
 
 def test_untokened_combined_is_dropped_when_per_obs_tables_exist(tmp_path):
     # brick shipped an Aug-29 untokened `_m7` pair beside the correct
-    # `_m8_o001`/`_m8_o004`, and the quality-cut half was named `oksep2221`
-    # while holding 1182's bands -- #661 one layer up.
+    # `_m8_o001`/`_m8_o004`, and the quality-cut half carried the 2221 oksep
+    # suffix while holding 1182's bands -- #661 one layer up.
+    #
+    # The suffix comes from the field's own helper rather than a literal: it
+    # is built per field from that field's registered proposals, and spelling
+    # one program's token in a test is what `test_no_hardcoded_qualcuts_token`
+    # exists to catch (a hardcoded token once skipped every other field's
+    # quality-filtered table).
+    qc = sr.field_qualcuts_suffix('brick')
+    assert qc, 'brick should have a quality-cut suffix'
     cat = tmp_path / 'catalogs'
     cat.mkdir()
     base = 'basic_merged_indivexp_photometry_tables_merged'
     for n in (f'{base}_resbgsub_m7.fits',
-              f'{base}_resbgsub_m7_qualcuts_oksep2221.fits',
+              f'{base}_resbgsub_m7{qc}.fits',
               f'{base}_resbgsub_m8_o001.fits',
               f'{base}_resbgsub_m8_o004.fits'):
         (cat / n).write_text('')
