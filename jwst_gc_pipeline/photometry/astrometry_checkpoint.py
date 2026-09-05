@@ -4980,26 +4980,46 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
 # record serialization
 # ---------------------------------------------------------------------------
 
-#: What a list element may be and still belong in a record.  ``np.generic`` is
-#: every numpy SCALAR and no array -- a 0-d ndarray is still an ndarray -- so
-#: array members stay stripped while measured numbers stay in.
-_RECORDABLE_ELEMENT = (dict, str, int, float, bool, type(None), np.generic)
+#: What a value may be and still belong in a record, whether it sits on a key
+#: or inside a list.  ``np.generic`` is every numpy SCALAR and no array -- a
+#: 0-d ndarray is still an ndarray -- so ``SkyCoord`` and ``ndarray``
+#: measurement inputs stay stripped while measured numbers stay in.
+#:
+#: ONE tuple for both positions.  #773 fixed the list filter and left the keyed
+#: filter alone, which inverted the asymmetry it set out to remove: an
+#: ``np.bytes_`` on a key still vanished while the same value inside a list was
+#: kept and reached disk as the literal ``"b'GaiaDR3'"`` through
+#: ``_json_default``'s ``str(o)`` fallback.
+_RECORDABLE = (dict, list, tuple, str, bytes, int, float, bool, type(None),
+               np.generic)
 
 
 def _jsonable_element(x):
-    """One list element, converted the way the keyed scalar branches convert.
+    """One recordable value -- keyed or inside a list -- made JSON-safe.
 
-    Without the ``np.generic`` arm a numpy scalar was neither converted nor
-    kept: it failed the element filter and left the record with no trace that
-    anything had been there (issue #706).  ``np.float64`` alone survived,
-    because it subclasses ``float``, so a list holding both floats and
-    ``np.int64`` counts kept the floats and dropped the counts -- shortening
-    the list and shifting every element after the first drop.
+    A numpy scalar becomes its Python counterpart (issue #706: it used to fail
+    the list filter and leave no trace it had been there; ``np.float64`` alone
+    survived because it subclasses ``float``, so a mixed list kept the floats,
+    dropped the counts, and reached disk shifted).
+
+    A nested list is recursed, because #773 closed the trap one level short:
+    ``_jsonable({'keys': [['F212N', 'o001', '001', 'nrca1', 1]]})`` returned
+    ``{'keys': []}`` -- #706's symptom verbatim on the shape the module- and
+    detector-antisymmetry ``keys`` and the consensus ``skipped`` list are built
+    in (220 of them on disk), which survive today only by bypassing
+    ``_jsonable``.
+
+    A ``bytes`` (usually an ``np.bytes_``, e.g. VIRAC2's ``source`` column) is
+    decoded rather than dropped on a key and mangled in a list.
     """
     if isinstance(x, dict):
         return _jsonable(x)
+    if isinstance(x, (list, tuple)):
+        return [_jsonable_element(e) for e in x if isinstance(e, _RECORDABLE)]
     if isinstance(x, np.generic):
-        return x.item()
+        x = x.item()
+    if isinstance(x, bytes):
+        return x.decode("utf-8", "replace")
     return x
 
 
@@ -5012,19 +5032,8 @@ def _jsonable(obj):
         for k, v in obj.items():
             if k in ("cells",):
                 out[k] = [_jsonable(c) for c in v]
-            elif isinstance(v, dict):
-                out[k] = _jsonable(v)
-            elif isinstance(v, (str, int, float, bool, type(None))):
-                out[k] = v
-            elif isinstance(v, (np.integer,)):
-                out[k] = int(v)
-            elif isinstance(v, (np.floating,)):
-                out[k] = float(v)
-            elif isinstance(v, (np.bool_,)):
-                out[k] = bool(v)
-            elif isinstance(v, (list, tuple)):
-                out[k] = [_jsonable_element(x) for x in v
-                          if isinstance(x, _RECORDABLE_ELEMENT)]
+            elif isinstance(v, _RECORDABLE):
+                out[k] = _jsonable_element(v)
             # SkyCoord / ndarray members are measurement inputs, not record data
         return out
     return obj
