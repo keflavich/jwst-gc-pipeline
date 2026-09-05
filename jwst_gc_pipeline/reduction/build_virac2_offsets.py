@@ -568,7 +568,20 @@ def crosstie_offset(filt, rc, allow_missing=False):
 
     A measurement that RAN and was declined (too few pairs, too few vetted core
     matches) still returns (0,0) with a loud warning -- that is a different severity
-    and is left alone here.
+    and is left alone here.  :func:`crosstie_offset_detail` says WHICH of the two a
+    given (0,0) is, and :func:`crosstie_block` marks it in the printed block.
+    """
+    return crosstie_offset_detail(filt, rc, allow_missing=allow_missing)[:2]
+
+
+def crosstie_offset_detail(filt, rc, allow_missing=False):
+    """:func:`crosstie_offset` plus a third element: ``None`` when the shift was
+    MEASURED, else a short string saying why it was not.
+
+    A returned ``(0.0, 0.0, None)`` cannot happen: every zero this function produces
+    carries a reason, so a caller that renders the pair can mark it.  Without that,
+    a declined measurement prints byte-identically to a measured zero (see
+    :func:`crosstie_block`).
     """
     region = None
     for rk, rv in REGION.items():
@@ -576,7 +589,7 @@ def crosstie_offset(filt, rc, allow_missing=False):
             region = rk; break
     cfg = CROSSTIE.get(region)
     if cfg is None:
-        return 0.0, 0.0
+        return 0.0, 0.0, f"region {region!r} has no CROSSTIE entry; nothing to tie"
     master_pat = cfg['master_cat']
     src_pat = (f"{rc['basepath']}/catalogs/"
                f"{filt}_merged_indivexp_merged*_m[0-9]*_dao_basic_vetted.fits")
@@ -594,12 +607,15 @@ def crosstie_offset(filt, rc, allow_missing=False):
                 f"Re-run with --allow-missing-crosstie-catalog only if you intend the "
                 f"printed constants to be zero.")
         print(f"  [crosstie] {filt}: missing master/src catalog -> APPLYING 0 (WARN)", flush=True)
-        return 0.0, 0.0
+        return 0.0, 0.0, ('catalog did not resolve, --allow-missing-crosstie-catalog '
+                          'was passed')
     (msc, mmag, mnm), (ssc, smag, snm) = master, src
     i2, i1, _, _ = msc.search_around_sky(ssc, CROSSTIE_SEED_WIN * u.arcsec)
     if len(i1) < CROSSTIE_MIN_N:
         print(f"  [crosstie] {filt}: only {len(i1)} candidate pairs -> APPLYING 0 (WARN)", flush=True)
-        return 0.0, 0.0
+        return 0.0, 0.0, (f'only {len(i1)} candidate pairs within {CROSSTIE_SEED_WIN}" '
+                          f'(need {CROSSTIE_MIN_N}); an offset larger than that window '
+                          f'leaves no true pairs in it')
     # on-sky separations (mas) for the seed peak + ridge learning
     dra_gc = (ssc[i2].ra - msc[i1].ra).to(u.arcsec).value * np.cos(msc[i1].dec.rad) * 1000.0
     dde = (ssc[i2].dec - msc[i1].dec).to(u.arcsec).value * 1000.0
@@ -608,7 +624,8 @@ def crosstie_offset(filt, rc, allow_missing=False):
     near = (np.hypot(dra_gc - ra0, dde - de0) < CROSSTIE_RIDGE_MAS) & np.isfinite(dm)
     if near.sum() < 20:
         print(f"  [crosstie] {filt}: too few near-peak for ridge -> APPLYING 0 (WARN)", flush=True)
-        return 0.0, 0.0
+        return 0.0, 0.0, (f'only {int(near.sum())} pairs within {CROSSTIE_RIDGE_MAS:.0f} mas '
+                          f'of the seed peak (need 20) to learn the cross-band mag ridge')
     med = np.median(dm[near]); mad = 1.4826 * np.median(np.abs(dm[near] - med))
     tol = max(3 * mad, 0.5)
     vet = np.isfinite(dm) & (np.abs(dm - med) < tol)          # FLUX VET
@@ -616,7 +633,8 @@ def crosstie_offset(filt, rc, allow_missing=False):
     core = vet & (np.hypot(dra_gc - ra1, dde - de1) < CROSSTIE_CORE_MAS)
     if core.sum() < CROSSTIE_MIN_N:
         print(f"  [crosstie] {filt}: only {core.sum()} vetted core matches -> APPLYING 0 (WARN)", flush=True)
-        return 0.0, 0.0
+        return 0.0, 0.0, (f'only {int(core.sum())} flux-vetted core matches within '
+                          f'{CROSSTIE_CORE_MAS:.0f} mas (need {CROSSTIE_MIN_N})')
     # coordinate offset (src - master), NO cosδ on RA (table convention); ADD its NEGATION
     dra_nc = (ssc[i2[core]].ra - msc[i1[core]].ra).to(u.arcsec).value
     dde_c = (ssc[i2[core]].dec - msc[i1[core]].dec).to(u.arcsec).value
@@ -626,7 +644,45 @@ def crosstie_offset(filt, rc, allow_missing=False):
           f"({np.median(dra_nc) * 1000:+.1f},{np.median(dde_c) * 1000:+.1f})mas -> ADD "
           f"({add_ra * 1000:+.1f},{add_de * 1000:+.1f})mas  n={core.sum()} pk/bg={pr:.0f} "
           f"ridgeΔm={med:+.2f} fluxcorr={fcorr:.2f} [{mnm} <- {snm}]", flush=True)
-    return add_ra, add_de
+    return add_ra, add_de, None
+
+
+def crosstie_block(region, rc, filts, allow_missing=False):
+    """The paste-ready ``--remeasure-crosstie`` block, as ``(text, n_unmeasured)``.
+
+    Two properties the caller depends on, both of which the streaming print this
+    replaced did not have:
+
+    * **All or nothing.**  Every filter is measured BEFORE any of the text exists, so
+      a ``CrosstieCatalogMissingError`` on filter *k* propagates with NOTHING
+      paste-ready on stdout.  Printing as it went left filters 1..k-1 under the
+      header as a block that reads complete while being short one filter -- and a
+      filter absent from ``CROSSTIE[...]['shifts']`` is ``(0.0, 0.0)`` in
+      :func:`crosstie_constant`, so the miss the raise exists to stop arrives anyway,
+      now invisibly.
+    * **Every unmeasured zero is marked.**  A rigid offset larger than
+      ``CROSSTIE_SEED_WIN`` leaves no true pairs in the window, so the catalogs
+      resolve, no raise fires, and the declined measurement used to print
+      ``'f115w': (+0.00000, +0.00000),`` byte-identically to a measured line.  Each
+      such line now carries a ``# NOT MEASURED -- <why>`` comment that survives the
+      paste into the source file, and ``n_unmeasured`` lets the CLI exit nonzero.
+    """
+    cfg = CROSSTIE[region]
+    n_unmeasured = 0
+    lines = [f"# flux-vetted cross-tie vs {cfg['master_name']} -- paste into "
+             f"CROSSTIE['{region}']['shifts']:"]
+    for f in filts:
+        ra, de, why = crosstie_offset_detail(f, rc, allow_missing=allow_missing)
+        mark = ''
+        if why is not None:
+            n_unmeasured += 1
+            mark = f"  # NOT MEASURED -- {why}"
+        lines.append(f"    '{f}': ({ra:+.5f}, {de:+.5f}),{mark}")
+    if n_unmeasured:
+        lines.append(f"# {n_unmeasured} of {len(filts)} filter(s) WERE NOT MEASURED "
+                     f"(marked above): those zeros are not measurements. Fix the cause "
+                     f"and re-run rather than pasting them.")
+    return '\n'.join(lines), n_unmeasured
 
 
 def farr(x):
@@ -1071,7 +1127,9 @@ if __name__ == '__main__':
     ap.add_argument('--remeasure-crosstie', action='store_true',
                     help='flux-vetted RE-MEASURE of the JWST<->JWST cross-tie vs the 2221 master; '
                          'PRINTS suggested CROSSTIE constants and EXITS (writes nothing). Run this '
-                         'when the master 2221 frame moves, then paste the numbers into CROSSTIE.')
+                         'when the master 2221 frame moves, then paste the numbers into CROSSTIE. '
+                         'Exit 2 = the block printed but one or more filters were NOT MEASURED '
+                         '(each such line is marked); exit 0 = every line is a measurement.')
     ap.add_argument('filts', nargs='*', help='filters (default: all of region)')
     args = ap.parse_args()
     rc = REGION[args.region]
@@ -1081,12 +1139,13 @@ if __name__ == '__main__':
         cfg = CROSSTIE.get(args.region)
         if cfg is None:
             print(f"region {args.region} has no cross-tie master; nothing to measure."); sys.exit(0)
-        print(f"# flux-vetted cross-tie vs {cfg['master_name']} -- paste into CROSSTIE['{args.region}']['shifts']:")
-        for f in filts:
-            ra, de = crosstie_offset(
-                f, rc, allow_missing=args.allow_missing_crosstie_catalog)
-            print(f"    '{f}': ({ra:+.5f}, {de:+.5f}),")
-        sys.exit(0)
+        # measure EVERY filter before printing anything paste-ready: a raise partway
+        # through must not leave a block that reads complete but is short a filter.
+        text, n_unmeasured = crosstie_block(
+            args.region, rc, filts,
+            allow_missing=args.allow_missing_crosstie_catalog)
+        print(text)
+        sys.exit(2 if n_unmeasured else 0)
 
     rows = []
     for f in filts:
