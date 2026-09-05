@@ -349,6 +349,34 @@ CONFIRM_WINDOW_FACTORS = (1.4, 2.2)
 # UNSWEPT peak (off < its own window) both factors fall below a single floor
 # and collapse onto the same probe window, which would have made the two probes
 # one repeated measurement in precisely the case issue #600 added.
+#
+# WHAT THE SECOND FLOOR CHANGES, precisely (PR #757 review, B1/B3).  A repeated
+# probe cannot manufacture a confirmation the single probe did not already
+# give: ``consistent = any(p['agrees'])`` and ``any({p, p}) == any({p})``.  The
+# collapse was a bookkeeping defect -- ``n_probes`` counted 2 where one window
+# was measured -- and the fix is to run a genuinely second window, not to undo
+# a false pass.  The direction of the change follows from that:
+#
+#   * In the COLLAPSE BAND (off/window < 1.25/2.2 = 0.568, where the old single
+#     1.25 floor swallowed both factors) the new probe set is a strict SUPERSET
+#     of the old -- probe 1 is unchanged and probe 2 is ADDED.  Since
+#     ``consistent`` is ``any(...)`` over the measured probes, adding a probe
+#     can only turn ``consistent`` False -> True, i.e. it can only make the
+#     alias guard reject LESS often.  It is a permissive change there.
+#     (``test_in_the_collapse_band_the_second_probe_is_added_not_moved``.)
+#   * The ONE strictness path is a first probe that returns no result: the old
+#     pair was then (None, None) -> ``consistent`` None -> UNDETERMINED, which
+#     rejects nothing; the added wider probe can measure, disagree, and reject.
+#     (``test_a_first_probe_with_no_pairs_no_longer_leaves_the_verdict_undetermined``.)
+#   * ABOVE the band the second probe is not a duplicate, so it is MOVED
+#     outward (2.2*off -> max(2.2*off, 2*base_w)) rather than added, and the
+#     verdict direction is not fixed by the arithmetic either way.
+#
+# Because the collapse-band effect is permissive, the guard that has to hold is
+# that an alias in that band is STILL rejected on the two independent probes:
+# ``test_collapse_band_peak_is_rejected_on_two_independent_probes`` (unswept)
+# and ``test_swept_footprint_alias_in_the_collapse_band_is_still_rejected``
+# (the issue #158 footprint geometry).
 CONFIRM_MIN_PROBE_FACTORS = (1.25, 2.0)
 
 # Never probe past this: beyond it the pair count explodes and no per-frame or

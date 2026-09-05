@@ -1540,6 +1540,36 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # row and becomes an applied correction -- which is what m3-m7 of that same
     # field/filter already do with the same tie.  Pinned by
     # tests/test_reference_tie_unswept_sparse_alias.py.
+    #
+    # WHAT COVERS THE GATE THIS SWITCHES OFF -- and what does not (PR #757
+    # review, B4).  Releasing the gross cross-reference check leaves `apply_ok`
+    # standing on res_a["ok"] (contrast + the window-confirmation probe) and on
+    # per_tile_ok.  Half of the brick-1182 v001 signature the backstop was added
+    # for reaches the DENSE leg's own checks and does not need it: a
+    # window-LIMITED peak (2.7" measured at the 3" window against a true ~20"
+    # offset) rides edge 0.90, so #600's widened trigger probes it, and it does
+    # not reproduce at a window that can hold the true offset -- alongside the
+    # sweep, which escalates to that window in the first place.  The other half
+    # is NOT covered.
+    # `per_tile_ok` is `measure_offset_grid(...)["clean"]`, and every production
+    # caller leaves `max_off_mas=None` (issue #392), so `clean` asks only
+    # whether each tile has a coherent peak -- never whether that peak is where
+    # the bulk says.  A half-mosaic seam gives every tile a razor-sharp peak:
+    # measured on a synthetic 2.5" half-displacement with an alias-rejected
+    # sparse leg, per_tile reads clean 4/4 at min contrast 242 with
+    # worst_off_mas 2500, and `apply_ok` is True on the displaced half's own
+    # peak (test_reference_tie_unswept_sparse_alias.py::
+    # test_a_seam_reads_per_tile_clean_while_two_cells_sit_2500_mas_out, and the
+    # xfail beside it).  Five of the 371 reference-tie legs on disk (2026-09-04)
+    # already carry that shape -- sparse_untrustworthy, per_tile clean, a worst
+    # cell 2.8-55.7" from a sub-mas bulk, apply_ok True -- though in those the
+    # worst cell is itself a SWEPT per-tile noise peak (contrast 5-9, n_peak
+    # 9-22), which is the same #392 ambiguity seen from the other side: `clean`
+    # cannot tell a noise cell from a seam cell.  Filed as issue #775.
+    # Closing it needs a per-tile
+    # criterion that separates the two, not a magnitude ceiling; until then the
+    # cover for a seam on these fields is the release-time interframe-overlap
+    # gate, not this checkpoint.
     sparse_untrustworthy = bool(
         res_b is None
         or res_b.get("ok") is False
