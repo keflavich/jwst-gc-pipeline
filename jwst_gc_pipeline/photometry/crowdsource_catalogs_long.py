@@ -5242,7 +5242,22 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
             return []
         raise ValueError(f"No matches found to any of {glstr_list}")
     else:
-        return sorted(set(fglob))
+        from jwst_gc_pipeline.photometry.requested_filters import (
+            assert_one_lineage_per_exposure)
+        frames = sorted(set(fglob))
+        # One exposure, one lineage.  The glob is `*{detector}*{suffix}.fits`,
+        # so a suffix that is a TAIL of another lineage matches both spellings:
+        # the untokened `o<obs>_crf` MIRI and NIRISS write is a tail of
+        # `align_o<obs>_crf`, and brick/F2550W holds 48 `_mirimage_align_o002_crf`
+        # frames from an older Image3 crf-naming branch.  The day PipelineMIRI
+        # writes the bare spelling beside them, this glob returns 96 files for
+        # 48 exposures and every star is fitted and merged twice.  Refuse
+        # instead: which of the two reductions is current is a question about
+        # the directory, not one this function may answer by picking.
+        assert_one_lineage_per_exposure(
+            frames, each_suffix=each_suffix,
+            label=f'get_filenames {filtername}/{module}')
+        return frames
 
 
 if __name__ == "__main__":

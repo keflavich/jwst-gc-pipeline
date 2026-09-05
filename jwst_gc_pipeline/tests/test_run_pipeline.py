@@ -255,8 +255,14 @@ def test_a_miri_plan_asks_for_the_lineage_miri_writes():
     assert plan['each_suffix'] == 'o002_crf'
     assert plan['suffix_by_filter'] == {'F2550W': 'o002_crf'}
     # The glob crowdsource_catalogs_long.get_filenames builds from it has to
-    # match the name PipelineMIRI writes -- and the ``_align_o<obs>_crf``
-    # variant an older Image3 crf-naming branch left on brick/F2550W.
+    # match the name PipelineMIRI writes -- and it also matches the
+    # ``_align_o<obs>_crf`` variant an older Image3 crf-naming branch left on
+    # brick/F2550W, because the untokened suffix is a TAIL of the tokened one.
+    # That is what takes brick/F2550W from 0 candidate frames to 48 while only
+    # the legacy spelling is on disk.  It is NOT licence to read both at once:
+    # a directory holding both spellings of one exposure is refused by
+    # requested_filters.assert_one_lineage_per_exposure, which get_filenames
+    # applies to its own result (test_one_lineage_per_exposure.py).
     for written in ('jw02221002001_02101_00001_mirimage_o002_crf.fits',
                     'jw02221002001_02101_00001_mirimage_align_o002_crf.fits'):
         assert fnmatch.fnmatch(written, f"*mirimage*{plan['each_suffix']}.fits")
