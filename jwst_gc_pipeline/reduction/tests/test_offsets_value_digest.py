@@ -284,3 +284,195 @@ def test_a_malformed_observation_raises_even_on_an_absent_table(mod, tmp_path):
     """Reporting it as `none` would run the loop on with the scope not applied."""
     with pytest.raises(ValueError, match="observation"):
         mod.digest(str(tmp_path / 'nope.csv'), observation='')
+
+
+# --------------------------------------------------------------------------
+# Review of PR #763.
+#
+# B1  A JOINT field spelling -- `alignment_config` registers sickle's MIRI as
+#     ('001-002', '001', '002') and sgrb2's as '002-998' -- made every digest
+#     call exit 2, and the loop's fail-open turned each into a fresh unique
+#     token.  `[ "$tbl_after" = "$tbl_before" ]` could then never hold, so the
+#     "no SHIFT VALUE changed -> STOPPING" branch was dead for the whole run.
+#
+# B3  The visit parse was looser than the one the m2 checkpoint WRITES rows
+#     with, and read a malformed id as a confident wrong observation.
+# --------------------------------------------------------------------------
+
+def _joint_table():
+    """Two observations jointly registered as one field, plus a third."""
+    t = _table()
+    t['Visit'] = ['jw03958001001', 'jw03958002001', 'jw03958007001']
+    return t
+
+
+def test_a_joint_field_spelling_can_be_scoped(mod, tmp_path):
+    """THE B1 regression: `--observation 001-002` is the spelling the registry
+    holds and the loop passes, and it must digest rather than raise."""
+    path = _write(tmp_path, _joint_table())
+    assert re.fullmatch(r'[0-9a-f]{64}', mod.digest(path, observation='001-002'))
+
+
+def test_a_joint_field_covers_every_observation_it_names(mod, tmp_path):
+    """001-002 is BOTH observations' rows, not a literal that matches none."""
+    path = _write(tmp_path, _joint_table())
+    joint = mod.digest(path, observation='001-002')
+    assert joint != mod.digest(path, observation='001')
+    assert joint != mod.digest(path, observation='002')
+    # ... and it is not merely "everything": obs 007 is still out of scope.
+    assert joint != mod.digest(path)
+
+
+def test_a_joint_field_still_sees_a_retie_on_either_of_its_observations(mod, tmp_path):
+    """Gate preservation: the scope must not hide the joint field's OWN
+    movement, on either half."""
+    before = mod.digest(_write(tmp_path, _joint_table()), observation='001-002')
+    for row in (0, 1):
+        t = _joint_table()
+        t['dra (arcsec)'][row] += 0.005
+        assert mod.digest(_write(tmp_path, t), observation='001-002') != before
+
+
+def test_a_joint_field_still_hides_a_foreign_observations_move(mod, tmp_path):
+    """And it must still narrow: obs 007 sharing the table is not this run."""
+    before = mod.digest(_write(tmp_path, _joint_table()), observation='001-002')
+    t = _joint_table()
+    t['dra (arcsec)'][2] += 0.005          # jw03958007001
+    assert mod.digest(_write(tmp_path, t), observation='001-002') == before
+
+
+def test_the_joint_spelling_agrees_with_naming_observation_field_token(mod):
+    """One decomposition, two places.  The digest spells `str(f).split('-')`
+    itself rather than importing the package (an ImportError here would exit 2
+    on every call, which is exactly the B1 failure); this pins the two
+    spellings together so they cannot drift apart."""
+    naming = pytest.importorskip('jwst_gc_pipeline.photometry.naming')
+    for field in ('1', '01', '001', '002-998', '001-002', '12', '1-2-3'):
+        assert ('-'.join(mod.normalise_observation(field))
+                == naming.observation_field_token(field)), field
+
+
+def test_an_observation_wider_than_three_digits_still_raises(mod, tmp_path):
+    """`observation_field_token` only pads, so it accepts '1234'.  Here that
+    would scope to zero attributable rows and report every iteration as 'no
+    re-tie' -- silent, and on the STOPPING side."""
+    path = _write(tmp_path, _table())
+    with pytest.raises(ValueError, match='1234'):
+        mod.digest(path, observation='1234')
+
+
+def test_a_trailing_or_leading_hyphen_still_raises(mod, tmp_path):
+    path = _write(tmp_path, _table())
+    for bad in ('001-', '-002', '001--002', 'o001-002'):
+        with pytest.raises(ValueError, match='observation'):
+            mod.digest(path, observation=bad)
+
+
+def test_a_malformed_visit_is_unparseable_rather_than_mis_attributed(mod):
+    """B3.  Unanchored, `^jw\\d{5}(\\d{3})` read a visit id one digit short as
+    observation `230` and one digit long as `102` -- neither of which is any
+    real observation, so the row fell out of EVERY scope and a re-tie on it was
+    invisible.  Unparseable means KEPT, which cannot hide movement."""
+    assert mod._observation_of('jw02211023001') == '023'      # well formed
+    assert mod._observation_of('jw2211023001') is None        # one digit short
+    assert mod._observation_of('jw002211023001') is None      # one digit long
+    assert mod._observation_of('jw02211023001_02101') is None  # a stem, not an id
+    assert mod._observation_of('hand-edited') is None
+
+
+def test_a_malformed_visit_row_still_counts_as_this_observations_movement(mod, tmp_path):
+    """The consequence of the above, at the digest: a shift on a row whose
+    Visit does not parse still reads as a re-tie for every observation."""
+    t = _table()
+    t['Visit'] = ['jw02092002001', 'jw02092002001', 'jw2211023001']
+    before = mod.digest(_write(tmp_path, t), observation='002')
+    t['dra (arcsec)'][2] += 0.005
+    assert mod.digest(_write(tmp_path, t), observation='002') != before
+
+
+def test_the_visit_parse_agrees_with_the_m2_checkpoints_own(mod):
+    """The rows are WRITTEN by `astrometry_checkpoint`, keyed on
+    `visit_obs_key`.  Two parsers of one column that disagree put a row in one
+    observation for the writer and another for this reader."""
+    ckpt = pytest.importorskip('jwst_gc_pipeline.photometry.astrometry_checkpoint')
+    for visit in ('jw02211023001', 'jw02211050001', 'jw10678088001',
+                  'jw10678008001', 'jw02092002001', 'jw03958001001',
+                  'jw2211023001', 'jw002211023001', 'jw02211023001 '):
+        assert mod._observation_of(visit) == ckpt.visit_obs_key(visit)[0], visit
+
+
+def test_every_registered_field_spelling_can_be_scoped(mod):
+    """The loop passes `$FIELD` straight through, and `alignment_config` is
+    where a field spelling is declared.  A registration the digest cannot scope
+    disables the loop's stop condition for that field."""
+    cfg = pytest.importorskip('jwst_gc_pipeline.reduction.alignment_config')
+    seen = 0
+    for entry in cfg.ALIGNMENT_CONFIG:
+        for field in (entry.fields or ()):
+            assert mod.normalise_observation(field), field
+            seen += 1
+    assert seen > 10, 'the registry should have supplied real field spellings'
+
+
+# --------------------------------------------------------------------------
+# Review item 4: the false positive that survives the window it matters in.
+#
+# The digest returned the literal "none" for an absent file and a hex for an
+# empty scope, so on the treasury's first night a tile that wrote NOTHING read
+# a re-tie as soon as a NEIGHBOUR's m2 created the shared table.  139 tiles
+# share a table that does not exist yet on Sep 10-13, so that is the first
+# iteration of most of them.
+# --------------------------------------------------------------------------
+
+def test_a_neighbour_creating_the_shared_table_is_not_this_tiles_retie(mod, tmp_path):
+    """THE regression: tile 088 wrote nothing; tile 089's m2 created the file."""
+    missing = str(tmp_path / 'not-written-yet.csv')
+    before = mod.digest(missing, observation='088')
+    t = _table()
+    t['Visit'] = ['jw10678089001', 'jw10678089001', 'jw10678089002']
+    assert mod.digest(_write(tmp_path, t), observation='088') == before
+
+
+def test_seeding_this_observations_own_rows_is_still_a_retie(mod, tmp_path):
+    """The gate this must NOT weaken: the FIRST m2 seeds rows rather than
+    moving them, and that is the re-tie the loop has to see."""
+    missing = str(tmp_path / 'not-written-yet.csv')
+    before = mod.digest(missing, observation='088')
+    t = _table()
+    t['Visit'] = ['jw10678089001', 'jw10678088001', 'jw10678089002']
+    assert mod.digest(_write(tmp_path, t), observation='088') != before
+
+
+def test_losing_every_row_of_this_observation_is_still_movement(mod, tmp_path):
+    """And the reverse: a table this observation's rows vanish from moved."""
+    t = _table()
+    t['Visit'] = ['jw10678089001', 'jw10678088001', 'jw10678089002']
+    populated = mod.digest(_write(tmp_path, t), observation='088')
+    t['Visit'] = ['jw10678089001', 'jw10678089001', 'jw10678089002']
+    assert mod.digest(_write(tmp_path, t), observation='088') != populated
+
+
+def test_an_absent_table_is_still_none_when_unscoped(mod, tmp_path):
+    """Every single-observation field digested `none` for an absent table
+    before `--observation` existed, and the unscoped answer is unchanged."""
+    assert mod.digest(str(tmp_path / 'nope.csv')) == "none"
+
+
+def test_the_empty_scope_value_does_not_depend_on_the_tables_columns(mod, tmp_path):
+    """It has to be reachable from an ABSENT table, where the value columns a
+    future table will carry are unknowable."""
+    t = _table()
+    t['Visit'] = ['jw10678089001'] * 3
+    with_all = mod.digest(_write(tmp_path, t), observation='088')
+    t.remove_columns(['dra', 'ddec'])
+    fewer = mod.digest(_write(tmp_path, t, name='fewer.csv'), observation='088')
+    assert with_all == fewer == mod.digest(str(tmp_path / 'nope.csv'),
+                                           observation='088')
+
+
+def test_two_observations_with_no_rows_do_not_share_a_digest(mod, tmp_path):
+    """The empty value is still per-observation, so a digest taken for one tile
+    is not comparable with another's."""
+    missing = str(tmp_path / 'nope.csv')
+    assert (mod.digest(missing, observation='088')
+            != mod.digest(missing, observation='089'))
