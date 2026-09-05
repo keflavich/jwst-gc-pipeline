@@ -5736,7 +5736,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     satstar_overrides[(_mod, _filt)] = _ovr
                 if _drp:
                     satstar_drops[(_mod, _filt)] = _drp
-        _xbsuf = _L.obs_token(proposal_id, field)
+        # The cross-band MERGED catalog is written by merge_daophot with
+        # naming.merged_catalog_obs_token (its `_obssuf`), NOT the PER-FRAME
+        # token.  They differ for exactly the PER_OBS_MERGED_FIELDS entries:
+        # brick's 2221/001 and 1182/004 spell '' per-frame but '_o001'/'_o004'
+        # merged.  Reading with the per-frame spelling did not fail loudly -- it
+        # matched a STALE untokened sibling from before #597, and the m8 forced
+        # fill inherited that file's TEN bands under an _o001 name (#661).
+        # Spell it the way the writer does.
+        _xbsuf = merged_catalog_obs_token(proposal_id, field)
         for module in modules:
             _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
                    f'merged_resbgsub_m7{_xbsuf}.fits')
@@ -6710,7 +6718,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 field=field,
                 progid=proposal_id,
                 vetted=True)
-            _xbsuf = _L.obs_token(proposal_id, field)
+            # The cross-band MERGED catalog is written by merge_daophot with
+            # naming.merged_catalog_obs_token (its `_obssuf`), NOT the PER-FRAME
+            # token.  They differ for exactly the PER_OBS_MERGED_FIELDS entries:
+            # brick's 2221/001 and 1182/004 spell '' per-frame but '_o001'/'_o004'
+            # merged.  Reading with the per-frame spelling did not fail loudly -- it
+            # matched a STALE untokened sibling from before #597, and the m8 forced
+            # fill inherited that file's TEN bands under an _o001 name (#661).
+            # Spell it the way the writer does.
+            _xbsuf = merged_catalog_obs_token(proposal_id, field)
             _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
                    f'merged_resbgsub_{last_phase}{_xbsuf}.fits')
             print(f"manual [{last_phase}]: CROSS-BAND MERGE done (module={module}) "
