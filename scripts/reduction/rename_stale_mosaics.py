@@ -26,10 +26,14 @@ because its globs were narrower than these.)
   corrected the reproject holds the only tie the band has and the plain
   ``*-merged_i2d.fits`` beside it is at the raw ``assign_wcs`` frame.  Neither
   file's mtime distinguishes the two directions.  Such a file is therefore
-  selected only when its (proposal, observation) is registered in
-  ``ALIGNMENT_CONFIG`` AND its own pointing's frames carry a non-zero baked
-  ``RAOFFSET``/``DEOFFSET`` -- one header read per pointing, no name and no
-  clock.  See ``reproject_supersession`` and issue #724.
+  selected only when ALL FOUR of these hold: its (proposal, observation) is
+  registered in ``ALIGNMENT_CONFIG``; its own pointing's frames carry a
+  non-zero baked ``RAOFFSET``/``DEOFFSET``; the plain sibling EXISTS; and that
+  sibling POSTDATES those frames, so it can have inherited what they carry.
+  The last two are the ones that look at the file taking over -- the first two
+  are both statements about the frames, and a band can hold the reproject alone
+  (ngc6334 F115W does) or hold a plain mosaic drizzled before the correction
+  was baked.  See ``reproject_supersession`` and issue #724.
 
 RULE 2 -- BY RETIRED PRODUCT FAMILY.  A superseded mosaic need not say so in
 its name.  cloudc carries
@@ -252,6 +256,12 @@ PATTERNS = ('*reproject*i2d*.fits', '*realigned-to-*.fits',
 #: be the newer file and still be superseded.  What decides it is state on disk
 #: -- see `reproject_supersession`, which is applied to BOTH rules so the two
 #: cannot disagree about one file (#724).
+#:
+#: "The frames carry a shift" is NOT on its own "the plain mosaic has it": the
+#: mosaic only inherits the tie at the level-3 re-drizzle that runs after
+#: ``fix_alignment``.  So the gate also requires the plain sibling to EXIST and
+#: to postdate those frames; without that it concludes the plain mosaic is the
+#: current tie having never looked at the plain mosaic.
 REPROJECT_RE = re.compile(r'reproject', re.I)
 
 #: Fallback pointing parse for a name ``PRIMARY_MOSAIC_RE`` does not match.
@@ -260,10 +270,15 @@ REPROJECT_RE = re.compile(r'reproject', re.I)
 #: longer ends at ``_i2d.fits``, so the strict pattern misses it.
 POINTING_RE = re.compile(r'^(?P<pointing>jw\d+-o\d+)_')
 
-#: Working-copy frame suffixes, in the order they are searched for a baked
-#: ``RAOFFSET``.  ``_align`` and ``_destreak`` are the two lineages a field can
-#: be reduced on (see the sickle two-lineage note); ``_crf`` is the outlier-
-#: rejected copy of whichever one ran, and carries the same header cards.
+#: Working-copy frame suffixes searched for a baked ``RAOFFSET``.  ``_align``
+#: and ``_destreak`` are the two lineages a field can be reduced on (see the
+#: sickle two-lineage note); ``_crf`` is the outlier-rejected copy of whichever
+#: one ran, written by the same level-3 run that drizzles the mosaic, and
+#: carries the same header cards.
+#:
+#: ALL of them are globbed and the union is ordered by mtime -- see
+#: `_pointing_frames`.  Searching them in order and stopping at the first that
+#: matches reads the STALE lineage on the four fields that carry two.
 FRAME_SUFFIXES = ('_align.fits', '_destreak.fits', '_crf.fits')
 
 #: How many of a pointing's frames to read before concluding it carries no
@@ -278,10 +293,47 @@ FRAME_SAMPLE = 6
 #: Suffixes some OTHER pass has already used to take a product out of service
 #: while leaving the name ending in ``.fits``.  ``_im0_badastrom`` is what the
 #: m2 astrometry checkpoint writes when it stale-tags a mosaic it has just
-#: invalidated, and it writes a ``.why.json`` sidecar NEXT TO the tagged name --
-#: so renaming such a file again would both double-tag it and orphan the
-#: explanation of the first tag.
+#: invalidated, and it writes a ``.why.json`` sidecar NEXT TO the tagged name.
+#:
+#: THIS IS A POLICY DECISION ABOUT 32 FILES ON SIX FIELDS, not the four m4
+#: reprojects that motivated it.  Measured by diffing the dry run of
+#: ``origin/main`` against this revision over the 25 fields with a
+#: ``*/pipeline`` directory (2026-09-06) -- 275 selected before, 235 after, and
+#: 32 of that difference of 40 is this list:
+#:
+#:   brick    32 -> 26   (jw01182-o004 x4, jw02221-o001 x2)
+#:   sgrb2    44 -> 33   (jw05365-o001, F150W..F480M)
+#:   sgrc     40 -> 32   (jw04147-o012)
+#:   ngc6397   8 ->  6   (jw01979-o001)
+#:   m4       16 -> 12   (jw01979-o002/o003)
+#:   m92      13 -> 12   (jw01334-o001 F090W)
+#:
+#: Three reasons the withheld files are still quarantined, so that skipping
+#: them does not leave a live-looking product in ``*.fits``:
+#:
+#:   1. ``release_freshness.QUARANTINE_GLOBS`` already carries
+#:      ``{stem}_im0_badastrom*.fits``, so the release path treats them as
+#:      quarantined under the name they have.  Renaming one to
+#:      ``..._im0_badastrom.fits.bad`` takes it OUT of that glob -- the rename
+#:      would REMOVE the recognition it was meant to add.
+#:   2. The ``.why.json`` sits beside the tagged name.  Renaming the product
+#:      and not the sidecar orphans the first tag's explanation; renaming both
+#:      rewrites another pass's audit record.
+#:   3. Double-tagging loses which pass made the call.
+#:
+#: They are named in the output rather than skipped silently -- see the
+#: ``already tagged`` line in `rename_stale_for_field`.  Note that this list is
+#: the COMPLEMENT of ``QUARANTINE_SUFFIXES``: every member here ends in
+#: ``.fits`` by construction (that is what makes it a foreign marker rather
+#: than one of ours), which is exactly what the ``RuntimeError`` below forbids
+#: for the suffixes this script WRITES.  The assertion below states both halves
+#: so the two lists cannot be confused for each other.
 FOREIGN_QUARANTINE_MARKERS = ('_im0_badastrom.fits',)
+if not all(m.endswith('.fits') for m in FOREIGN_QUARANTINE_MARKERS):  # pragma: no cover
+    raise RuntimeError(
+        "FOREIGN_QUARANTINE_MARKERS names markers OTHER passes write, which "
+        "leave the name ending in '.fits'; one that does not is this script's "
+        "own convention and belongs in QUARANTINE_SUFFIXES")
 
 #: A PRIMARY drizzle product: the level-3 association output itself, ending at
 #: ``_i2d.fits`` immediately after the band/module token.  Excludes by
@@ -462,12 +514,49 @@ def _nonzero(card):
         return False
 
 
+def _pointing_frames(banddir, pointing):
+    """Every working-copy frame of ``pointing`` in ``banddir``, NEWEST FIRST.
+
+    All of ``FRAME_SUFFIXES`` are globbed and the union ordered by mtime, rather
+    than searching them in order and stopping at the first that matches.  Four
+    fields carry TWO reduction lineages in one directory (cloudc, cloudef,
+    sickle, brick -- SW on destreak, LW on align), and on those the retired
+    lineage's frames are still on disk carrying no ``RAOFFSET`` at all:
+
+        sgrb2/F182M   jw05365001001_11101_00001_nrca1
+            _align    2024-09-22   RAOFFSET absent
+            _destreak 2026-08-24   RAOFFSET=-0.01154  DEOFFSET=-0.12106
+        cloudc/F405N  jw02221002001_02201_00001_nrcalong
+            _align    2024-01-11   RAOFFSET absent
+            _destreak 2026-08-25   RAOFFSET=0.47905   DEOFFSET=7.87626
+
+    First-suffix-wins reads the 2024 copy and reports the pointing as
+    uncorrected.  That errs toward KEEPING the file, so nothing was ever
+    mis-renamed by it, but the reason an operator reads is then false about the
+    field -- and the newest frame's mtime is the clock the plain-sibling check
+    below is measured against, so reading the wrong lineage would misdate that
+    comparison as well.
+    """
+    prop, obs = proposal_and_obs(pointing)
+    if prop is None:
+        return []
+    stem = f'jw{pointing[2:].split("-o")[0]}{obs}'
+    paths = []
+    for suffix in FRAME_SUFFIXES:
+        paths.extend(glob.glob(f'{banddir}/{stem}*{suffix}'))
+    return sorted(set(paths), key=lambda p: (-(mt(p) or 0), p))
+
+
 def frames_carry_correction(banddir, pointing, sample=FRAME_SAMPLE):
     """Do this pointing's working frames carry a baked, NON-ZERO shift?
 
-    ``(True/False, detail)``, or ``(None, detail)`` when no frame could be read
-    -- which is a different answer from "no correction" and is treated as such
-    by the caller.
+    ``(True/False, detail, newest_mtime)``, or ``(None, detail, ...)`` when no
+    frame could be read -- which is a different answer from "no correction" and
+    is treated as such by the caller.  ``newest_mtime`` is the mtime of the
+    newest frame of this pointing, whatever it answered: it is the clock
+    ``reproject_supersession`` measures the plain sibling against, since a
+    mosaic drizzled before the frames were touched cannot have inherited what
+    they now carry.
 
     Reads the SCI header of up to ``sample`` frames of ``pointing`` in
     ``banddir``.  ``fix_alignment`` writes ``RAOFFSET``/``DEOFFSET`` there as it
@@ -499,41 +588,67 @@ def frames_carry_correction(banddir, pointing, sample=FRAME_SAMPLE):
     """
     try:
         from astropy.io import fits
+        from astropy.io.fits.verify import VerifyError
     except ImportError:
-        return None, 'astropy unavailable'
+        return None, 'astropy unavailable', None
     prop, obs = proposal_and_obs(pointing)
     if prop is None:
-        return None, f'unparseable pointing {pointing!r}'
-    stem = f'jw{pointing[2:].split("-o")[0]}{obs}'
-    paths = []
-    for suffix in FRAME_SUFFIXES:
-        paths = sorted(glob.glob(f'{banddir}/{stem}*{suffix}'))
-        if paths:
-            break
+        return None, f'unparseable pointing {pointing!r}', None
+    paths = _pointing_frames(banddir, pointing)
     if not paths:
-        return None, f'no {"/".join(FRAME_SUFFIXES)} frame for {pointing}'
+        return None, f'no {"/".join(FRAME_SUFFIXES)} frame for {pointing}', None
+    newest = mt(paths[0])
     read = 0
     for path in paths[:sample]:
+        # A truncated or malformed FITS raises `VerifyError` or `ValueError`
+        # rather than `OSError`; letting either escape would abort the whole
+        # field's pass instead of keeping this one file.
         try:
             header = fits.getheader(path, ext=1)
-        except (OSError, IndexError, KeyError):
+        except (OSError, IndexError, KeyError, ValueError, VerifyError):
             continue
         read += 1
         ra, dec = header.get('RAOFFSET'), header.get('DEOFFSET')
         if _nonzero(ra) or _nonzero(dec):
             return True, (f'{os.path.basename(path)} RAOFFSET={ra} '
-                          f'DEOFFSET={dec}')
+                          f'DEOFFSET={dec}'), newest
     if not read:
-        return None, f'could not read any of {len(paths)} frame header(s)'
+        return None, f'could not read any of {len(paths)} frame header(s)', newest
     return False, (f'{read} of {len(paths)} {pointing} frame(s) read, '
-                   f'all RAOFFSET/DEOFFSET absent or 0.0')
+                   f'all RAOFFSET/DEOFFSET absent or 0.0'), newest
+
+
+def plain_sibling(path):
+    """The plain ``*_i2d.fits`` a reproject is claimed to be superseded BY.
+
+    ``align_to_catalogs`` writes ``<product>-reproject<tail>`` beside the
+    level-3 output ``<product>_i2d.fits``, so the sibling's name is the part of
+    the reproject's name before ``-reproject`` plus ``_i2d.fits``.  That covers
+    every form on the archive:
+
+        clear-f150w-merged-reproject_i2d.fits            -> clear-f150w-merged_i2d.fits
+        clear-f405n-merged-reproject_vvvcat.fits         -> clear-f405n-merged_i2d.fits
+        clear-f405n-merged-reproject_i2d_im0_badastrom.fits
+                                                         -> clear-f405n-merged_i2d.fits
+        clear-f182m-merged-reproject-vvv_i2d.fits        -> clear-f182m-merged_i2d.fits
+
+    ``None`` when the name carries ``reproject`` without the ``-reproject``
+    token this derivation needs, which the caller treats as "cannot tell" and
+    therefore as keep.
+    """
+    base = os.path.basename(path)
+    token = base.find('-reproject')
+    if token < 0:
+        return None
+    return os.path.join(os.path.dirname(path), base[:token] + '_i2d.fits')
 
 
 def reproject_supersession(path, banddir):
-    """Is this reproject mosaic superseded by its plain sibling? ``(bool, why)``.
+    """Is this reproject superseded? ``(bool, why, frames_mtime)``.
 
     The precondition #724 asks for, and the reason it is not a date comparison:
-    see ``REPROJECT_RE``.  Both halves must hold.
+    see ``REPROJECT_RE``.  ALL FOUR halves must hold, and the last two are
+    about the file that is supposed to take over.
 
     1. The field is REGISTERED in ``ALIGNMENT_CONFIG``.  An unregistered
        (proposal, observation) is left at the raw ``assign_wcs`` frame by
@@ -544,34 +659,80 @@ def reproject_supersession(path, banddir):
        enough: ngc6334 was registered on 2026-09-01 and its frames still read
        ``RAOFFSET=0.0`` because no reduction has run since, so its plain
        mosaics are still untied and its reprojects are still the only tie.
+    3. THE PLAIN SIBLING EXISTS.  1 and 2 are both statements about the FRAMES;
+       neither of them looks at the mosaic that is supposed to inherit the tie,
+       and a band can hold the reproject alone.  That state is on disk today --
+       ``ngc6334/F115W/pipeline`` holds
+       ``jw07213-o001_..._merged-reproject_i2d_im0_badastrom.fits`` and no plain
+       sibling -- and renaming there leaves the band with no mosaic at all.
+    4. THE PLAIN SIBLING POSTDATES THE FRAMES.  "The frames carry a shift" and
+       "the plain mosaic inherited it" are different claims: ``fix_alignment``
+       bakes the shift into the frames, and only the level-3 re-drizzle AFTER
+       that puts it into the mosaic.  Between those two steps -- or if the
+       re-drizzle fails, or has not been submitted -- the plain mosaic is a
+       pre-correction product and the reproject is still the band's only tie.
+       ngc6334 (13 reprojects) and wd1 (7) are one re-reduction away from
+       exactly that shape, which is when this pass is next expected to run.
+
+       The comparison is the plain mosaic's `generation` (its ``DATE``, else
+       mtime) against the mtime of the pointing's NEWEST frame -- newest, not
+       the frame that answered, because any frame written after the mosaic
+       means the mosaic predates the current state of the pointing.  A tie is
+       allowed (``>=``): a drizzle writes its ``_crf`` frames and its mosaic in
+       one run, seconds apart in either order.
 
     Answering "keep" is the conservative outcome -- a kept file is renameable
     later, a renamed tie is a field's astrometry removed -- so every uncertain
-    case (unreadable frames, no astropy, an unparseable name) answers keep.
+    case (unreadable frames, no astropy, an unparseable name, an underivable or
+    undatable sibling) answers keep.
+
+    The third value is the newest frame mtime, so the caller can put the date
+    the file was actually judged against into the log and the ``.why.txt``.
     """
     base = os.path.basename(path)
     pointing = pointing_of(base)
     prop, obs = proposal_and_obs(pointing)
     if prop is None:
-        return False, f'cannot read a pointing out of {base!r}'
+        return False, f'cannot read a pointing out of {base!r}', None
     try:
         from jwst_gc_pipeline.reduction.alignment_config import resolve
     except ImportError as ex:
-        return False, f'alignment_config unavailable ({ex})'
+        return False, f'alignment_config unavailable ({ex})', None
     cfg = resolve(prop, obs)
     if cfg is None:
         return False, (f'{pointing} is NOT in ALIGNMENT_CONFIG -- untied '
-                       f'frames, so this reproject is the only tie')
-    corrected, detail = frames_carry_correction(banddir, pointing)
+                       f'frames, so this reproject is the only tie'), None
+    corrected, detail, frames_mtime = frames_carry_correction(banddir, pointing)
     if corrected is None:
-        return False, f'{pointing} frame state unknown ({detail})'
+        return False, f'{pointing} frame state unknown ({detail})', frames_mtime
     if not corrected:
-        return False, (f'{pointing} is registered ({cfg.reference_frame}/'
-                       f'{cfg.source}) but its frames carry NO baked shift '
-                       f'({detail}) -- this reproject is the only tie')
-    return True, (f'{pointing} is registered ({cfg.reference_frame}/'
-                  f'{cfg.source}) and its frames carry a baked shift '
-                  f'({detail}) -- the plain mosaic is the current tie')
+        return (False, (f'{pointing} is registered ({cfg.reference_frame}/'
+                        f'{cfg.source}) but its frames carry NO baked shift '
+                        f'({detail}) -- this reproject is the only tie'),
+                frames_mtime)
+    tied = (f'{pointing} is registered ({cfg.reference_frame}/{cfg.source}) '
+            f'and its frames carry a baked shift ({detail})')
+    plain = plain_sibling(path)
+    if plain is None:
+        return (False, (f'{tied}, but no plain sibling name can be derived '
+                        f'from {base!r} -- cannot tell what would take over'),
+                frames_mtime)
+    sib = os.path.basename(plain)
+    if not os.path.exists(plain):
+        return False, (f'{tied}, but {sib} DOES NOT EXIST -- this reproject is '
+                       f'the band\'s only mosaic'), frames_mtime
+    plain_gen, plain_clock = generation(plain)
+    if plain_gen is None or frames_mtime is None:
+        return (False, f'{tied}, but {sib} cannot be dated against them',
+                frames_mtime)
+    if plain_gen < frames_mtime:
+        return False, (f'{tied}, but {sib} ({plain_clock} {fmt(plain_gen)}) '
+                       f'PREDATES them ({fmt(frames_mtime)}) -- it was drizzled '
+                       f'before the tie was baked, so it has not inherited it '
+                       f'and this reproject is still the only tie'), frames_mtime
+    return True, (f'{tied}, and {sib} ({plain_clock} {fmt(plain_gen)}) '
+                  f'postdates them ({fmt(frames_mtime)}) -- the plain mosaic '
+                  f'is the current tie'), frames_mtime
 
 
 def date_header(path):
@@ -935,7 +1096,19 @@ def rename_stale_for_field(field, execute=False, campaign_days=21, only=None):
     for cands, which in ((named, 1), (generational, 2)):
         for f, why in sorted(cands.items()):
             base = os.path.basename(f)
-            if is_quarantined(base) or f in seen:
+            if f in seen:
+                continue
+            if is_quarantined(base):
+                # A marker ANOTHER pass wrote is worth naming: it is the reason
+                # 32 files across six fields are withheld from this pass, and
+                # skipping them silently is what made that invisible.  A name
+                # this script's own conventions produced (`.bad`, `_stale`) is
+                # not printed -- it is the record of a previous run of this
+                # tool and there is nothing for an operator to decide about it.
+                if any(base.endswith(mk) for mk in FOREIGN_QUARANTINE_MARKERS):
+                    print(f"  SKIP [{field}] {base} [rule{which}: already "
+                          f"tagged by another pass; see its .why.json]")
+                    seen.add(f)
                 continue
             band = band_of_dir.get(os.path.dirname(f)) or band_of(base)
             # The reproject family is decided by STATE, not by a clock, and by
@@ -947,14 +1120,22 @@ def rename_stale_for_field(field, execute=False, campaign_days=21, only=None):
             # the file that made this necessary: it is the one member of both
             # rules' sets, and its own pointing's frames read RAOFFSET=0.0.
             if REPROJECT_RE.search(base):
-                superseded, gate_why = reproject_supersession(
+                superseded, gate_why, frames_mtime = reproject_supersession(
                     f, os.path.dirname(f))
+                # `seen` on BOTH branches: a file in both rules' sets gets one
+                # answer and one line, not two identical ones (w51 printed its
+                # KEEP twice and counted it twice in "current kept").
+                seen.add(f)
                 if not superseded:
                     print(f"  KEEP [{field}] {base} [rule{which}: {gate_why}]")
                     kept += 1
                     continue
-                seen.add(f)
-                plan.append((f, mt(f), mt(f), f'{why}; {gate_why}',
+                # The reference slot is the FRAMES' date, which is what the gate
+                # judged this file against.  It used to hold the file's own
+                # mtime, so the log line and the `.why.txt` beside every rename
+                # read "its generation is X; the frames it is judged against is
+                # X" -- the same date twice, and never the frames'.
+                plan.append((f, mt(f), frames_mtime, f'{why}; {gate_why}',
                              'mtime', 'the frames it is judged against'))
                 continue
             if which == 1:
