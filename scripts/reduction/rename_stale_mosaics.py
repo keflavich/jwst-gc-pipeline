@@ -540,7 +540,12 @@ def _pointing_frames(banddir, pointing):
     prop, obs = proposal_and_obs(pointing)
     if prop is None:
         return []
-    stem = f'jw{pointing[2:].split("-o")[0]}{obs}'
+    from jwst_gc_pipeline.mast_names import jw_prefix
+    # jw_prefix, not string surgery on the pointing: it pads to five digits the
+    # way MAST does, so a 5-digit program (10678) and one below 1000 both come
+    # out right.  proposal_and_obs has already parsed `prop` two lines above,
+    # and the repo's guard test refuses a bare f'jw{...}' for this reason.
+    stem = f'{jw_prefix(prop)}{obs}'
     paths = []
     for suffix in FRAME_SUFFIXES:
         paths.extend(glob.glob(f'{banddir}/{stem}*{suffix}'))
