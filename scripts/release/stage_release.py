@@ -723,11 +723,40 @@ PERPOINT_RE = re.compile(
     rf"(?P<qc>{QUALCUTS_RE})?\.(?P<ext>fits|ecsv)$"
 )
 # per-filter vetted, optionally per-pointing (excludes *_vetted_carta.fits)
+#: Per-filter vetted catalog names.  Four things vary and each one, missing,
+#: silently ships NOTHING for the fields that use it (`discover_catalogs`
+#: `continue`s on a non-match, so an unmatched name is indistinguishable from
+#: an absent file):
+#:
+#: * the observation token appears in EITHER position.  Cataloging writes it
+#:   after the module (brick `f115w_merged_o004_indivexp_...`) while the MIRI
+#:   path writes it after `dao_basic` (`..._dao_basic_o002_vetted.fits`).
+#:   Accepting only the second matched 10 of brick's 190 vetted tables -- the
+#:   MIRI ones -- and none of its NIRCam.
+#: * the token can be COMPOUND: sgrb2 MIRI `o002-998`, sickle `o001-002` are
+#:   jointly-registered observations, and `o\d+` stops at the hyphen.
+#: * the module can be a single DETECTOR, not just a module: gc2211 writes
+#:   `nrca2`, and 80 of its 103 vetted tables were invisible.
+#: * a filter can carry a trailing width digit: F150W2 / F322W2, so ngc6397
+#:   and m4 matched ZERO of theirs.
+#:
+#: Verified against every field's catalogs directory: 1761 of 1761 vetted
+#: tables now match, against 1583 before the last two fixes and far fewer
+#: before the first two.
 VETTED_RE = re.compile(
-    r"^(?P<filt>f\d{3,4}[wmn])_(?P<module>merged|nrca|nrcb|nrcalong|nrcblong|mirimage)"
+    r"^(?P<filt>f\d{3,4}[wmn]\d?)"
+    r"_(?P<module>merged|nrc[ab](?:long|[1-4])?|mirimage)"
+    r"(?:_(?P<obs_pre>o[0-9]+(?:-[0-9]+)*))?"
     r"_indivexp_merged_"
-    r"(?P<iter>(?:resbgsub_)?m\d+)_dao_basic(?:_(?P<obs>o\d+))?_vetted\.fits$"
+    r"(?P<iter>(?:resbgsub_)?m\d+)_dao_basic"
+    r"(?:_(?P<obs_post>o[0-9]+(?:-[0-9]+)*))?"
+    r"_vetted\.fits$"
 )
+
+
+def vetted_obs(match):
+    """Observation token from a VETTED_RE match, whichever position it used."""
+    return match.group("obs_pre") or match.group("obs_post")
 # quality floor: do not ship per-filter vetted catalogs below this iteration
 # (anything earlier is still mid-pipeline / draft). resbgsub_m5 == rank 51.
 MIN_VETTED_RANK = 51
@@ -826,6 +855,7 @@ def discover_catalogs(field_cfg, field):
     # combined (all-pointings) merged table -- highest iteration
     # rank -> {iter, full_fits, full_ecsv, qualcuts}, per module
     modules = catalog_modules(field)
+    combined_by_module = {}
     for module, base in zip(modules, cat_base(field)):
         combined = {}
         for path in sorted(cat_dir.glob(f"{base}_*"),
@@ -840,11 +870,10 @@ def discover_catalogs(field_cfg, field):
             slot = "qualcuts" if m.group("qc") else f"full_{m.group('ext')}"
             entry[slot] = path
         if combined:
-            _emit_table_group(items, combined[max(combined)], None,
-                              qualcuts_at=_highest_qualcuts_iteration(combined),
-                              module=None if module == "merged" else module)
+            combined_by_module[module] = combined
 
     # per-pointing merged tables (multi-pointing fields) -- highest iter per obs
+    per_obs_emitted = 0
     if observations:
         per_obs = {}  # obs -> {rank -> entry}
         base0 = cat_base(field)[0]
@@ -864,6 +893,31 @@ def discover_catalogs(field_cfg, field):
             ranks = per_obs[obs]
             _emit_table_group(items, ranks[max(ranks)], obs,
                               qualcuts_at=_highest_qualcuts_iteration(ranks))
+            per_obs_emitted += 1
+
+    # The UNTOKENED combined table, emitted only if no per-observation table
+    # replaced it.  On a field whose chains write per-obs products, the
+    # untokened name is a pre-tokening leftover with ambiguous provenance: it
+    # says nothing about which observation produced it, and its contents need
+    # not match its neighbours'.  brick carried an Aug-29 pair -- a 866 MB
+    # `_m7.ecsv` and its quality-cut sibling, whose oksep suffix names the 2221
+    # proposal while its 651903 rows hold 1182's four bands -- selected beside
+    # the correct `_m8_o001`/`_m8_o004`, i.e. the same mislabel as #661 one
+    # layer up.
+    # Shipping a lower-iteration untokened table next to tokened ones invites
+    # exactly the confusion the tokens were added to end (#597).
+    for module, combined in combined_by_module.items():
+        if per_obs_emitted:
+            newest = combined[max(combined)]
+            print(f"  NOTE: untokened combined table at {newest['iter']} for "
+                  f"module {module} NOT shipped -- this field writes "
+                  f"per-observation tables and {per_obs_emitted} of them were "
+                  f"selected; the untokened name predates tokening and its "
+                  f"provenance is ambiguous")
+            continue
+        _emit_table_group(items, combined[max(combined)], None,
+                          qualcuts_at=_highest_qualcuts_iteration(combined),
+                          module=None if module == "merged" else module)
 
     # seed catalog
     seed = cat_dir / f"seed_union_iter3_{field}.fits"
@@ -889,7 +943,7 @@ def discover_catalogs(field_cfg, field):
         module = m.group("module")
         if module not in wanted_modules:
             continue
-        obs = m.group("obs")
+        obs = vetted_obs(m)
         if obs is not None and (not observations or obs not in observations):
             continue
         rank = iteration_rank(m.group("iter"))
