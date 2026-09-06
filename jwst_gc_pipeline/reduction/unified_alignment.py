@@ -95,7 +95,10 @@ PREV_DEC_KEY = 'APREVDE'
 #: How many delta re-corrections this frame has received.
 NREALIGN_KEY = 'ANREALGN'
 
-# Offsets tables already collapse-checked in this process (warn once per file).
+# Offsets tables that PASSED the collapse check in this process.  Only a pass
+# is recorded: the memo suppresses the repeat WARNING (a property of the
+# table, not of each of its thousands of frames) and must never let a frame
+# skip the refusal -- see _validate_once.
 _VALIDATED_OFFSETS_TABLES = set()
 
 #: Tables already reported as having no generation stamps -- the notice is a
@@ -491,19 +494,38 @@ def _derive_locked_bulk(offsets_tbl, visit, filtername):
 
 
 def _validate_once(offsets_tbl, locked_tbl):
-    """One-time collapse check per table per process.
+    """Collapse check on the table this frame's shift is about to come from.
 
     The ad-hoc VIRAC2locked curation once overwrote brick-1182 visit-001's
-    offset with visit-002's (both ~+1.9" for a visit truly ~20" off), so warn
-    when distinct visits share a value.
+    offset with visit-002's (both ~+1.9" for a visit truly ~20" off), and the
+    collapsed table is the one that got applied, so half the mosaic stayed ~20"
+    off.  This is the APPLY path for that table, and it REFUSES on the
+    signature rather than warning: every other consumer of a locked table
+    already stops (``astrometry_checkpoint.update_offsets_table`` raises
+    ``OffsetsTableUpdateError``), and a warning on the one path that bakes the
+    shift into the pixels is where the failure it describes actually happens.
+
+    ``raise_on_diverged`` stays at its default False.  The two findings differ
+    in severity and ``assert_offsets_table_sane`` separates them deliberately:
+    a collapse (or a broadcast correction) means the shift being applied is the
+    wrong one, while a divergence means only that the audit trail no longer
+    says how the still-self-consistent applied pair got there.
+
+    The memo is for the WARNING -- a property of the table, reported once
+    instead of once per frame -- and must not swallow the REFUSAL.  Recording
+    the table before the check made the stop fire at most once per table per
+    process, so anything that caught it and carried on reduced the remaining
+    frames of that table with no check at all.  ``_check_generation`` had the
+    same ordering bug and the same fix; keep the two consistent.
     """
     if locked_tbl in _VALIDATED_OFFSETS_TABLES:
         return
-    _VALIDATED_OFFSETS_TABLES.add(locked_tbl)
     from jwst_gc_pipeline.reduction.validate_offsets_table import (
         assert_offsets_table_sane,
     )
-    assert_offsets_table_sane(offsets_tbl, context=os.path.basename(locked_tbl))
+    assert_offsets_table_sane(offsets_tbl, context=os.path.basename(locked_tbl),
+                              raise_on_issue=True)
+    _VALIDATED_OFFSETS_TABLES.add(locked_tbl)
 
 
 def _check_generation(fn, offsets_tbl, locked_tbl):
