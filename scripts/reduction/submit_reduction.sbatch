@@ -200,7 +200,16 @@ SKIP_FLAG=""
 
 # Optional Image3 skymatch (level-match per-exposure background pedestals ->
 # removes mosaic seams/stripes; sickle F470N).  Set SKYMATCH=match (or global/
-# local).  Empty (default) preserves historical NIRCam behavior (skymatch off).
+# local).  Empty (default) skips it.
+#
+# Empty is a DECISION as of 2026-09-06 (#419), not an unset knob -- maintainer,
+# asked before the first program-10678 treasury reduce: "Leave skymatch off.  We
+# will only turn it on given strong evidence for the need."  So do not set
+# SKYMATCH for a production run without that evidence; the knob stays here for
+# the case where it appears.  The cost of leaving it off, measured 2026-08-25:
+# per-exposure sky levels spread 34-53% of the sky in F480M and 75-159% in
+# F212N, with sickle F470N (378%, -27..+72) the worked example assembled.  The
+# rationale is at the skymatch block in PipelineRerunNIRCAM-LONG.py.
 SKYMATCH=${SKYMATCH:-}
 SKYMATCH_FLAG=""
 [ -n "$SKYMATCH" ] && SKYMATCH_FLAG="--skymatch-method=$SKYMATCH"

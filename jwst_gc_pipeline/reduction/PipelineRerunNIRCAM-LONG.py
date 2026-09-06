@@ -915,16 +915,38 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             # is applied per exposure by fix_alignment, not here.
             tweakreg_parameters.update({'skip': True})
 
-        # skymatch: OFF by default (skymatch_method=None) -- historically left
-        # skipped here because a global subtraction can eat real GC diffuse
-        # emission.  Opt-in via --skymatch-method=match to remove the per-exposure
-        # background pedestals that otherwise leave visible seams/stripes in the
-        # mosaic (sickle F470N: per-exposure medians spanned -27..+72, range ~99,
-        # never level-matched).  'match' equalizes RELATIVE inter-frame offsets
-        # using overlap regions only (it does NOT subtract a global sky), so the
-        # common diffuse structure is preserved; match_down=False matches up.
-        # subtract=True is essential (else the matched levels are only recorded,
-        # not applied -- see PipelineMIRI.py).
+        # skymatch: OFF by default (skymatch_method=None), and off is a DECISION,
+        # not an oversight.  Maintainer, 2026-09-06 (#419), asked before the first
+        # program-10678 treasury reduce: "Leave skymatch off.  We will only turn it
+        # on given strong evidence for the need."  The bar for changing this is
+        # strong evidence of need; the --skymatch-method flag stays available for
+        # the case where that evidence appears.  Do not flip the default without
+        # it, and do not add a per-field policy module that flips it per target.
+        #
+        # What leaving it off costs, measured 2026-08-25 (#419) as the sigma-clipped
+        # median of every _cal SCI frame in a filter directory, spread quoted
+        # relative to that set's own median sky:
+        #   sickle F470N   378% (sky 26.3 MJy/sr; range ~99, the -27..+72 that
+        #                        striped that mosaic -- the worked example of what
+        #                        riding the default looks like assembled)
+        #   F212N           75-159% across brick / cloudc / sgrb2
+        #   F480M           34- 53% across cloudef / sgrb2 / sickle / sgrc
+        # A per-exposure median mixes the instrumental pedestal with genuinely
+        # different diffuse emission under different pointings, so those are upper
+        # bounds on the instrumental part; they size the discontinuity a viewer
+        # would see at a tile edge.  Weighed against that: a subtraction here can
+        # eat real GC diffuse emission, which is the science product.
+        #
+        # What the opt-in does when it is set.  'match' equalizes RELATIVE
+        # inter-frame offsets using overlap regions only (it does NOT subtract a
+        # global sky), so common diffuse structure is preserved; match_down=False
+        # matches up.  subtract=True is essential (else the matched levels are only
+        # recorded, not applied -- see PipelineMIRI.py).  With outlier_detection
+        # skipped (the GC default, #161) the subtraction reaches the _i2d only --
+        # the per-exposure crf are copied from the pre-skymatch member frames -- so
+        # a skymatch run leaves photometry unchanged and makes the mosaic and the
+        # frames carry different backgrounds.  See the warning at the crf-naming
+        # block below.
         image3_steps = {'tweakreg': tweakreg_parameters}
 
         # outlier_detection: SKIPPED by default on these crowded GC fields (#161).
@@ -1501,10 +1523,17 @@ if __name__ == "__main__":
     parser.add_option("--skymatch-method", dest="skymatch_method",
                       default='',
                       help="Image3 skymatch skymethod ('match'/'global'/'local'). "
-                           "Empty (default) skips skymatch (historical NIRCam "
-                           "behavior). Use 'match' to level-match per-exposure "
-                           "background pedestals and remove mosaic seams "
-                           "(subtract=True, match_down=False).",
+                           "Empty (default) skips skymatch. Off is a DECISION as "
+                           "of 2026-09-06 (#419), not an unset knob: the bar for "
+                           "turning it on is strong evidence of need, because a "
+                           "subtraction here can eat real GC diffuse emission. "
+                           "The measured cost of leaving it off is per-exposure "
+                           "sky levels spread 34-53% of the sky in F480M and "
+                           "75-159% in F212N, with sickle F470N (378%, -27..+72) "
+                           "the worked example of what that looks like assembled. "
+                           "Use 'match' to level-match those pedestals and remove "
+                           "mosaic seams (subtract=True, match_down=False) where "
+                           "such evidence exists.",
                       metavar="skymatch_method")
     parser.add_option("--run-outlier-detection", dest="run_outlier_detection",
                       default=False, action='store_true',
