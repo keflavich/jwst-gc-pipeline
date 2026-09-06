@@ -512,13 +512,19 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   **mean** of the corrections sharing a row, because a family row can only
   express the module-common shift; the per-detector spread is a
   distortion/DVA-class systematic the row has no freedom to remove. **That
-  discard is permanent, and was decided rather than defaulted**: writing
-  per-detector corrections into the table instead was put to the maintainer on
+  discard is permanent, and was decided rather than defaulted**: widening a
+  module-family table to per-detector rows instead was put to the maintainer on
   2026-09-06 and answered no (#697), on the calibration report
   `reports/per_detector_offsets.md` finding the per-detector term not static in
-  either the on-sky or the de-rotated instrument frame. Pooling is therefore
-  where the term is disposed of for good, and how the members are combined
-  (#386, a row of #800) is the only remaining lever on it. Pooling
+  either the on-sky or the de-rotated instrument frame. On a module-family table
+  how the members are combined (#386, a row of #800) is therefore the only
+  remaining lever on that spread. Pooling runs on the module-LOCKED channel
+  only (`cataloging.py`, under `_channel == 'locked'`): a `consensus` table
+  keys every detector separately, so `seed_offsets_table_from_consensus` writes
+  the per-detector corrections unpooled -- 819 such rows across 10 live
+  consensus tables on 2026-09-06, and 10678's first m2 seeds its table the same
+  way. What #697 refuses is a per-detector CALIBRATION TERM derived across
+  observations, not a row holding one frame's own measured tie. Pooling
   before the floor is what makes the loop converge — residuals that largely
   cancel pool to a sub-floor shift and the checkpoint PASSES instead of writing
   their sum. It is deliberately narrow and **refuses** rather than guessing:
