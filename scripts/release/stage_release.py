@@ -1020,7 +1020,14 @@ def same_run_pairs(items):
     pairing widens, and ``unpaired`` lets the caller turn a still-empty
     comparison into a refusal rather than a silent pass.
     """
-    imgs = {(it["filter"], it.get("observation"), _img_module_of(it["src"])): it
+    def _img_obs(it):
+        # The item's own tag first; the filename is the fallback, never the
+        # override -- a field that lays images out per observation has already
+        # said which one, and the name is only consulted when it did not.
+        return (it.get("observation")
+                or _obs_token_from_name(os.path.basename(str(it["src"]))))
+
+    imgs = {(it["filter"], _img_obs(it), _img_module_of(it["src"])): it
             for it in items
             if it["category"] == "image" and it.get("kind") == "science"
             and it.get("filter")}
@@ -1040,7 +1047,18 @@ def same_run_pairs(items):
                        and it.get("filter")}
     pairs, unpaired = [], []
     for key in sorted(imgs, key=lambda k: (k[0], k[1] or "", k[2] or "")):
-        cat = cats.get(key) or cats.get((key[0], key[1], "merged"))
+        # Own module, then the merged table of the same observation, then the
+        # same two with the observation dropped.  The last pair matters because
+        # the two sides name the observation independently: an image can read
+        # it off its filename while a single-observation field's catalogs carry
+        # no token at all (arches, sgra), so requiring the tokens to be equal
+        # would unpair every image on exactly the fields that were pairing
+        # correctly before.  Dropping the token is safe here because it is only
+        # reached when no tokened catalog matched.
+        cat = (cats.get(key)
+               or cats.get((key[0], key[1], "merged"))
+               or cats.get((key[0], None, key[2]))
+               or cats.get((key[0], None, "merged")))
         if cat is None:
             # Only a release shipping catalogs FOR THIS INSTRUMENT owes this
             # image a partner; an images-only release ships none by design.
@@ -1373,6 +1391,23 @@ def _obs_keys_from_name(name):
     if m.group("obs2"):
         keys.add(f"{m.group('prop')}-{m.group('obs2')}")
     return keys
+
+
+def _obs_token_from_name(name):
+    """``"oNNN"`` from a product basename ``jwPPPPP-oNNN...``, else None.
+
+    A science mosaic carries its observation in its own filename
+    (``jw01182-o004_t001_nircam_clear-f115w-merged_i2d.fits``) but
+    `discover_images` only TAGS an item with one for a field that declares
+    `observations` and lays its images out per observation.  brick declares
+    them and does not lay them out that way, so its images arrived at the
+    same-run pairing with ``observation: None`` while its catalogs carried
+    ``o001``/``o004`` -- the key never matched and all ten filters reported
+    "no catalog partner".  Reading the token off the name makes both sides
+    of the pair speak the same language.
+    """
+    m = re.match(r"^jw\d{5}-(o\d{3})", str(name))
+    return m.group(1) if m else None
 
 
 def _instrument_of(item):

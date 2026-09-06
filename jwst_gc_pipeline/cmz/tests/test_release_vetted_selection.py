@@ -147,3 +147,74 @@ def test_untokened_combined_is_kept_when_no_per_obs_table_exists(tmp_path):
     full = [i for i in items if i['kind'] == 'catalog_full']
     assert len(full) == 1
     assert full[0]['observation'] is None
+
+
+# --- same-run pairing must speak one language about observations -------------
+
+def _img(filt, src, obs=None):
+    return {'category': 'image', 'kind': 'science', 'filter': filt,
+            'observation': obs, 'src': src}
+
+
+def _cat(filt, obs=None, module=None):
+    # `category` is present on every real manifest item; same_run_pairs reads
+    # it directly, so a synthetic item without one is not a faithful stand-in.
+    return {'category': 'catalog', 'kind': 'catalog_per_filter_vetted',
+            'filter': filt, 'observation': obs, 'module': module,
+            'src': f'/x/{filt.lower()}_cat.fits'}
+
+
+def test_image_takes_its_observation_from_its_own_filename():
+    # brick: images are NOT laid out per observation, so discover_images left
+    # `observation: None` while the catalogs carried o001/o004.  The key never
+    # matched and all ten filters reported "no catalog partner" -- a refusal
+    # that only appeared once the selector fix made catalogs visible at all.
+    pairs, unpaired = sr.same_run_pairs([
+        _img('F115W', '/x/jw01182-o004_t001_nircam_clear-f115w-merged_i2d.fits'),
+        _cat('F115W', obs='o004'),
+    ])
+    assert not unpaired
+    assert len(pairs) == 1
+    assert pairs[0][0][1] == 'o004'
+
+
+def test_an_explicit_observation_tag_wins_over_the_filename():
+    pairs, _ = sr.same_run_pairs([
+        _img('F115W', '/x/jw01182-o004_t001_x-f115w-merged_i2d.fits', obs='o009'),
+        _cat('F115W', obs='o009'),
+    ])
+    assert len(pairs) == 1
+
+
+def test_untokened_catalogs_still_pair_with_tokened_image_names():
+    # arches / sgra: single-observation fields write no token on the catalog,
+    # but their mosaics are named jw02045-o001_...  Requiring equal tokens
+    # would unpair every image on exactly the fields that paired correctly
+    # before the filename fallback was added.
+    pairs, unpaired = sr.same_run_pairs([
+        _img('F212N', '/x/jw02045-o001_t001_nircam_clear-f212n-nrca_i2d.fits'),
+        _cat('F212N', obs=None, module='nrca'),
+    ])
+    assert not unpaired
+    assert len(pairs) == 1
+
+
+def test_a_genuinely_missing_partner_is_still_reported():
+    # The fallback must not pair an image with a different filter's catalog.
+    pairs, unpaired = sr.same_run_pairs([
+        _img('F115W', '/x/jw01182-o004_t001_x-f115w-merged_i2d.fits'),
+        _cat('F200W', obs='o004'),
+    ])
+    assert len(pairs) == 0
+    assert len(unpaired) == 1
+    assert unpaired[0][0] == 'F115W'
+
+
+@pytest.mark.parametrize('name,expect', [
+    ('jw01182-o004_t001_nircam_clear-f115w-merged_i2d.fits', 'o004'),
+    ('jw02221-o001_t001_nircam_clear-f182m-merged_i2d.fits', 'o001'),
+    ('basic_merged_indivexp_photometry_tables_merged_m8.fits', None),
+    ('', None),
+])
+def test_obs_token_from_name(name, expect):
+    assert sr._obs_token_from_name(name) == expect
