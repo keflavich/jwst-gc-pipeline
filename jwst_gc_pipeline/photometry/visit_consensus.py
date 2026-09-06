@@ -31,8 +31,8 @@ from scipy.spatial import cKDTree
 
 from .astrometry_offsets import (
     measure_offset, measure_offset_grid, agree_across_references,
-    local_residual_map, GlobalTieNotVerifiedError, KDTreeReference,
-    _unit_xyz, _chord,
+    local_residual_map, same_star_region_map, GlobalTieNotVerifiedError,
+    KDTreeReference, _unit_xyz, _chord,
 )
 
 # An exposure whose bulk offset from the visit consensus exceeds this is
@@ -1431,8 +1431,15 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
        block.  A fine split (~5-10 mas, the sparse-Gaia noise regime) is recorded
        but does NOT block — it is a JWST-side population effect
        (Gaia<->VIRAC2 agree ~2.3 mas over the Brick footprint).
-    D. per-tile map vs the full reference (``measure_offset_grid``) — a bulk
-       ~0 with a shifted half-mosaic FAILS here.
+    D. SPATIAL map vs the full reference — a bulk ~0 with a shifted half-mosaic
+       FAILS here.  Two estimators, and ``per_tile_source`` records which one
+       gated: the same-star ``same_star_region_map`` whenever A' verified the
+       tie is small enough to pair unambiguously (residual AND match-coverage
+       per region), and the per-tile histogram ``measure_offset_grid``
+       otherwise.  The histogram grid is always measured and recorded in
+       ``per_tile``; on a small tie it is a diagnostic, because over a tile
+       holding ~100 reference-matched stars its peak clears the tallest noise
+       bin by only a handful of counts (issue #610).
     E. (when the band overlaps VIRAC2 and magnitudes are provided) a
        flux-windowed source-by-source residual — an independent systematics
        check on the histogram peak.
@@ -1446,10 +1453,12 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
       reference); ``bulk_source`` = ``"same-star"`` or ``"histogram"``;
       ``same_star`` = the refined matched-pair result (or None);
       ``apply_ok`` — True when A is coherent, the sparse cross-check does not
-      GROSSLY disagree (C within ``gross_tol_mas``), and the per-tile check
-      passes.  With a DENSE (``dense=True``) reference the per-tile check is D
-      (``per_tile['clean']``).  With a Gaia-ONLY reference (``dense=False``) D is
-      pure noise (see the per-tile note below) and is replaced by the same-star
+      GROSSLY disagree (C within ``gross_tol_mas``), and the spatial check
+      passes.  With a DENSE (``dense=True``) reference the spatial check is D:
+      ``per_tile_same_star['clean']`` when that map is measurable, else
+      ``per_tile['clean']``; ``per_tile_source`` names which.  With a Gaia-ONLY
+      reference (``dense=False``) D is pure noise (see the per-tile note below)
+      and is replaced by the same-star
       matched-pair refinement (A') succeeding -- still multi-check, since A'
       refuses unless the global tie is verified-small.  NOTE the two checks that
       survive on a Gaia-ONLY field (A' and C) are both GLOBAL statistics: D is
@@ -1645,9 +1654,49 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # are structurally weak at a localized sub-population displaced beyond the match
     # radius -- see the brick F182M matched-pair blind-spot).  On these fields seam
     # coverage moves to the release-time interframe-overlap gate / manual QC; it is
-    # NOT recovered here.  A DENSE (VIRAC2) reference keeps the per-tile gate intact
-    # -- that is the brick-1182 half-mosaic-seam protection, unchanged.
-    per_tile_ok = bool(grid.get("clean")) if dense else (same_star is not None)
+    # NOT recovered here.  A DENSE (VIRAC2) reference keeps a SPATIAL gate -- the
+    # brick-1182 half-mosaic-seam protection -- measured by whichever estimator
+    # the tie's size makes valid; see the next comment.
+    #
+    # WHICH ESTIMATOR gates the spatial check (issue #610).  The per-tile
+    # HISTOGRAM decides each cell by the height of one bin over the tallest
+    # noise bin, and a tile that holds ~100 stars in common with the reference
+    # -- whose own positions scatter ~40 mas -- leaves that margin at a handful
+    # of COUNTS.  Measured on cloudef F210M vs VIRAC2: -4 to +17 across the 36
+    # cells, negative in four of them, so four cells reported 0.93"-5.95" off a
+    # noise bin while the field's same-star tie was 0.33 mas and its 1202-cell
+    # local map was clean.  One of the four failed the contrast floor and
+    # blocked the field; the other three passed.
+    #
+    # So when the tie is small enough for same-star pairing to be UNAMBIGUOUS --
+    # which is exactly when `same_star` is not None -- the spatial check is the
+    # same-star REGION map, and the histogram grid stays in the record as a
+    # diagnostic.  When it is NOT (a swept or large tie), nothing changes: the
+    # histogram is the only estimator that works on a grossly shifted frame and
+    # it keeps the gate.  The region map tests BOTH the per-cell residual (a
+    # seam inside the match radius, e.g. brick-1182 F200W's ~90 mas strip) and
+    # the per-cell match COVERAGE (a region displaced BEYOND it, e.g.
+    # brick-1182 v001's ~20" half-mosaic, which keeps its sources and loses its
+    # pairs), so the seam classes the per-tile grid was added for are both
+    # still covered -- see `same_star_region_map`.
+    per_tile_same_star = None
+    if dense and same_star is not None:
+        try:
+            per_tile_same_star = same_star_region_map(
+                consensus_coords, ref_coords_all, res_a,
+                match_radius=SAMESTAR_MATCH_RADIUS,
+                context=f"{context} per-region")
+        except GlobalTieNotVerifiedError:
+            per_tile_same_star = None
+    if not dense:
+        per_tile_ok = same_star is not None
+        per_tile_source = "same-star-bulk"
+    elif per_tile_same_star is not None and per_tile_same_star.get("measurable"):
+        per_tile_ok = bool(per_tile_same_star["clean"])
+        per_tile_source = "same-star-region"
+    else:
+        per_tile_ok = bool(grid.get("clean"))
+        per_tile_source = "histogram-grid"
     apply_ok = bool(res_a is not None and res_a.get("ok")
                     and per_tile_ok and cross_gross_ok)
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
@@ -1657,7 +1706,9 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                # because the two references agreed.  Those are opposite situations.
                cross_reference_sparse_untrustworthy=sparse_untrustworthy,
                cross_reference_gross_tol_mas=gross_tol_mas,
-               per_tile=grid, per_tile_ok=per_tile_ok, reference_dense=bool(dense),
+               per_tile=grid, per_tile_ok=per_tile_ok,
+               per_tile_same_star=per_tile_same_star,
+               per_tile_source=per_tile_source, reference_dense=bool(dense),
                flux_matched=fluxmatched, same_star=same_star,
                bulk_source=bulk_source, apply_ok=apply_ok)
     if bulk is not None:

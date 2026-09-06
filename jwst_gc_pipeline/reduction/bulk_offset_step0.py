@@ -241,11 +241,13 @@ def measure_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
     the codebase.  Returns its result dict unchanged.
 
     ``dense`` MUST be forwarded from ``load_reference_catalog(...)['dense']``: a
-    Gaia-only reference (``dense=False``) cannot gate on the per-tile map (it is
-    noise against a sparse catalog), so ``measure_reference_tie`` falls back to
-    the same-star check.  Leaving it True on a Gaia-only field reproduces the
-    stranded-bulk bug on the reducer side (apply_ok=False for a real, coherent
-    tie).
+    Gaia-only reference (``dense=False``) cannot gate on the per-tile histogram
+    map (it is noise against a sparse catalog), so ``measure_reference_tie``
+    falls back to the same-star bulk check.  Leaving it True on a Gaia-only
+    field reproduces the stranded-bulk bug on the reducer side (apply_ok=False
+    for a real, coherent tie): a real Gaia reference is too sparse to fill the
+    same-star REGION cells that gate a dense tie since issue #610, so the
+    starved histogram grid keeps the gate and rejects it.
     """
     from jwst_gc_pipeline.photometry.visit_consensus import measure_reference_tie
     return measure_reference_tie(

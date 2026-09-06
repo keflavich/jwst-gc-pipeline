@@ -78,9 +78,11 @@ def test_step0_forwards_dense_to_the_estimator(field, monkeypatch):
 def test_measure_bulk_offset_signs_off_on_a_gaia_only_reference():
     """Integration: the real measure_bulk_offset wrapper, given ``dense=False``
     for a Gaia-only reference (full == sparse), signs off a coherent small tie via
-    the same-star check -- whereas ``dense=True`` (per-tile gate on the sparse ref)
-    would reject the same data.  This is the reducer-side mirror of
-    test_gaia_only_reference_per_tile_does_not_gate."""
+    the same-star check, and threads ``dense`` down so ``per_tile_source`` names
+    the spatial estimator that was consulted.  This is the reducer-side mirror of
+    test_gaia_only_reference_per_tile_does_not_gate -- see its docstring for why
+    the dense arm no longer REJECTS this particular (unoffset, densely paired)
+    synthetic field since issue #610."""
     from astropy import units as u
     from astropy.coordinates import SkyCoord
     rng = np.random.default_rng(3)
@@ -98,7 +100,11 @@ def test_measure_bulk_offset_signs_off_on_a_gaia_only_reference():
     tie_dense = s0.measure_bulk_offset(cons, ref, ref, dense=True,
                                        context='gaia-only-dense')
     assert tie_sparse['apply_ok']                       # same-star signs off
-    assert not tie_dense['apply_ok']                    # per-tile gate (noise) blocks
+    # `dense` reaches measure_reference_tie and picks the spatial estimator
+    assert tie_sparse['per_tile_source'] == 'same-star-bulk'
+    assert tie_dense['per_tile_source'] == 'same-star-region'
+    # the histogram grid over this sparse reference is starved either way
+    assert not tie_dense['per_tile'].get('clean')
     assert tie_sparse['dra_mas'] == pytest.approx(10.0, abs=2.0)
 
 
