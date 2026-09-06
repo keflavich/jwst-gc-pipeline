@@ -337,7 +337,11 @@ ALIGNMENT_CONFIG = (
                'arcsecond-scale ties) was read by nothing. Five observations '
                '(023/028/046/049/050) that all reduce to visit001 and reuse vgroup '
                'ids, so the table separates them by Visit -- one proposal-wide entry '
-               'covers all five. Rebuild is pending --per-module + Vgroup.'),
+               'covers all five. Rebuild is pending --per-module + Vgroup -- '
+               'PER-MODULE, not per-detector: #744 posed that fork (one 23 mas '
+               'nrca3 correction pooled onto four detectors) and #697 answered '
+               'it on 2026-09-06, no. The remedy for a single bad detector is '
+               'an exposure exclusion, not a finer table.'),
     ),
     FieldAlignment(
         proposal='2092', fields=('005',),

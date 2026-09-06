@@ -832,7 +832,23 @@ def module_key(det):
     """fix_alignment (PipelineRerunNIRCAM-LONG.py:1208) matches a 'Module' cell against
     the detector name OR its digit-stripped root.  SW detectors nrca1..4 -> 'nrca',
     nrcb1..4 -> 'nrcb'; LW nrcalong/nrcblong keep their full names (strip('1234') is a
-    no-op there).  Grouping by this key gives one tie per PHYSICAL module (A vs B)."""
+    no-op there).  Grouping by this key gives one tie per PHYSICAL module (A vs B).
+
+    THE MODULE IS THE FINEST GRANULARITY THIS WRITER SOLVES, BY DECISION.  There is
+    no ``--per-detector`` counterpart to ``--per-module`` and one is not wanted: the
+    maintainer was asked on 2026-09-06 whether per-detector corrections should go
+    into the offsets table and answered no (issue #697).  The calibration report the
+    question was conditional on -- ``reports/per_detector_offsets.md``, 73,673
+    measurements -- finds the per-detector term is not static: on sky every
+    detector's between-field scatter exceeds its mean and every one changes sign
+    from field to field, and after de-rotating by each band's PA_V3 a
+    shuffled-angle control reproduces nearly all of the apparent shrinkage.  A term
+    that reverses between observations, written here, is read back by the next
+    observation with the wrong sign.  If a static per-detector placement term is
+    ever established, its home is the distortion/SIAF layer (#689, #299), which is
+    an instrument-frame quantity an on-sky per-(visit, exposure, module) row cannot
+    express in any case.  Do not add the flag; reopen #697 instead.
+    """
     return det if det in LW_DETS else det[:4]
 
 

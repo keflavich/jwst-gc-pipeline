@@ -511,7 +511,14 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   `run_astrometry_checkpoint.py` expose it to the recovery tooling. It takes the
   **mean** of the corrections sharing a row, because a family row can only
   express the module-common shift; the per-detector spread is a
-  distortion/DVA-class systematic the row has no freedom to remove. Pooling
+  distortion/DVA-class systematic the row has no freedom to remove. **That
+  discard is permanent, and was decided rather than defaulted**: writing
+  per-detector corrections into the table instead was put to the maintainer on
+  2026-09-06 and answered no (#697), on the calibration report
+  `reports/per_detector_offsets.md` finding the per-detector term not static in
+  either the on-sky or the de-rotated instrument frame. Pooling is therefore
+  where the term is disposed of for good, and how the members are combined
+  (#386, a row of #800) is the only remaining lever on it. Pooling
   before the floor is what makes the loop converge — residuals that largely
   cancel pool to a sub-floor shift and the checkpoint PASSES instead of writing
   their sum. It is deliberately narrow and **refuses** rather than guessing:

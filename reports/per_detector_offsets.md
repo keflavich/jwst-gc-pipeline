@@ -2,6 +2,17 @@
 
 **Answer: no, not as a static term — so per-detector corrections must not be applied.**
 
+**Decided 2026-09-06 (issue #697).** This report was written to answer a conditional
+request — write per-detector corrections into the offsets table *if* the term is
+stable between observations. It is not, and the maintainer answered **no**. Per-detector
+corrections do not go into the offsets table, and there is no `--per-detector` counterpart
+to `build_virac2_offsets --per-module`. The per-detector part of an m2 correction is
+disposed of by `pool_corrections_to_table_granularity` permanently, not until the table
+gets finer rows. If a static per-detector placement term is ever established, its home is
+the distortion/SIAF layer (#689, #299): it is an instrument-frame quantity, which an
+on-sky per-(visit, exposure, module) row cannot express whatever its granularity. Reopen
+#697 rather than adding the flag.
+
 Regenerate with:
 
 ```bash
