@@ -975,6 +975,58 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     freedom to remove.  What the row CAN express is the part they share, so
     every correction landing on one row is combined into one.
 
+    **The per-detector part is discarded on purpose, and that was DECIDED.**  The
+    obvious alternative -- stop pooling, give a module-family table a row per
+    detector and write each detector's own correction -- was put to the
+    maintainer on 2026-09-06 and answered no (issue #697).  The discard is
+    therefore not a stopgap until the table gets finer rows, and code that finds
+    the pooling lossy should not "fix" it by widening a module-family table.
+
+    **Scope: the module-LOCKED channel, the only one whose rows are coarser than
+    the corrections.**  ``cataloging.py`` calls this function under
+    ``_channel == 'locked'``.  On the ``consensus`` channel nothing is pooled
+    and the per-detector part is NOT discarded:
+    ``seed_offsets_table_from_consensus`` keys rows by (visit, filter, exposure,
+    module) at whatever granularity the corrections arrive in, so each detector
+    gets its own row.  10 live consensus tables carry 819 detector-keyed rows
+    today, every one ``prov_stage='m2'``, ``prov_source='m2 visit-consensus'``,
+    none pooled (measured 2026-09-06: w51 6151 289 rows, crowded_l3 9438 151,
+    m4 1979 89 / 1979_o002 88 / 1979_o003 1, ngc6397 1979 70, ngc6334 7213 51,
+    arches 2045 41, cloudef 2092 30, m92 1334 9).  10678 (GC treasury) is a
+    consensus field with no table yet, so its first m2 under
+    ``ASTROM_CHECKPOINT_APPLY=1`` SEEDS one at detector granularity.  That is
+    intended and #697 does not change it -- see the CALIBRATION TERM paragraph
+    below.
+
+    The decision rests on the calibration report the request was made conditional
+    on, ``reports/per_detector_offsets.md``: the per-detector term is not static.
+    On sky (the 2026-08-07 run, 34,672 measurements over 11 fields) every
+    detector's between-field scatter exceeds its mean, every one changes sign
+    from field to field, and pooling the fields together every one is consistent
+    with zero at <=0.9 sigma.  In the de-rotated re-run (2026-08-25, 73,673
+    measurements, 17,108 module-groups, 139 field-band angles) rotating each
+    measurement by its band's PA_V3 drops the summed between-field sd 2.912 ->
+    1.679, but a shuffled-angle control reproduces 1.928 of that, so the
+    shrinkage is axis mixing rather than a real static term.  Writing a term
+    that reverses between observations means the next observation reads it back
+    with the wrong sign.  And a per-detector placement term is an
+    INSTRUMENT-frame quantity: even were it static, an on-sky per-(visit,
+    exposure, module) row could not carry it -- its home is the distortion/SIAF
+    layer (#689's per-filter table, #299's unwired solver).
+
+    What #697 refuses is a per-detector CALIBRATION TERM -- a value derived from
+    MANY observations and written as a static per-detector row -- not the
+    detector token itself.  Rows keyed by detector are representable, read
+    correctly and in live use: ``_apply_module_rows`` matches an exact row value
+    first, ``fix_alignment`` matches a ``Module`` cell against the detector name
+    or its digit-stripped root, and the consensus tables above hold each frame's
+    OWN measured tie per detector, with real within-module spread (per-exposure
+    median 4.83 mas on w51 6151, 3.93 on ngc6397 1979, 3.12 on m4 1979_o002,
+    1.13 on cloudef 2092; largest single group 17.60 mas, on arches 2045).  No
+    schema check separates a measured tie from a derived term -- same column,
+    same bytes -- so what guards against the latter is this pooling and
+    ``_assert_one_correction_per_row``, not a row-shape test.
+
     **The MEAN, not the median** (and never the sum).  A robust statistic earns
     its cost when the population it protects against exists, and at these group
     sizes it mostly does not.  The protection comes INSTEAD from the spread
@@ -1035,7 +1087,11 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     member already reports its own measured precision (``dra_err``/``ddec_err``,
     spanning 0.011-6.02 mas in the records), and weighting by it needs neither
     statistic's assumption.  It is a wider change -- those errors are dropped at
-    three hops before they reach this function -- and is issue #386.
+    three hops before they reach this function -- and is issue #386, now carried
+    as a row of tracker #800.  The 2026-09-06 answer on #697 raises its standing
+    rather than settling it: on a module-family table, how the members are
+    combined onto the one row is now the only lever on the per-detector spread,
+    permanently rather than until the table is widened.
 
     Returns a NEW list; corrections that own their row are passed through
     unchanged.  Pooled entries carry the member modules and count in ``source``

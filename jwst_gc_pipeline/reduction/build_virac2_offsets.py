@@ -832,7 +832,32 @@ def module_key(det):
     """fix_alignment (PipelineRerunNIRCAM-LONG.py:1208) matches a 'Module' cell against
     the detector name OR its digit-stripped root.  SW detectors nrca1..4 -> 'nrca',
     nrcb1..4 -> 'nrcb'; LW nrcalong/nrcblong keep their full names (strip('1234') is a
-    no-op there).  Grouping by this key gives one tie per PHYSICAL module (A vs B)."""
+    no-op there).  Grouping by this key gives one tie per PHYSICAL module (A vs B).
+
+    THE MODULE IS THE FINEST GRANULARITY THIS WRITER SOLVES, and #697 is why it has
+    not been made finer.  Asked on 2026-09-06 whether per-detector corrections
+    should go into the offsets table, the maintainer answered no.  What that
+    answers is a per-detector CALIBRATION TERM: a value derived from many
+    observations and written as a static per-detector row.  The report the question
+    was conditional on, ``reports/per_detector_offsets.md``, finds that term is not
+    static -- on sky (the 2026-08-07 run, 34,672 measurements over 11 fields) every
+    detector's between-field scatter exceeds its mean and every one changes sign
+    from field to field, and in the de-rotated re-run (2026-08-25, 73,673
+    measurements) a shuffled-angle control reproduces nearly all of the apparent
+    shrinkage.  A term that reverses between observations, written here, is read
+    back by the next observation with the wrong sign.  If a static per-detector
+    placement term is ever established, its home is the distortion/SIAF layer
+    (#689, #299): it is an instrument-frame quantity an on-sky per-(visit,
+    exposure, module) row cannot express in any case.
+
+    A ``--per-detector`` counterpart to ``--per-module`` would be a different
+    quantity -- each detector's OWN measured tie against VIRAC2, the same category
+    as the per-detector rows the m2 ``consensus`` channel already writes and
+    ``fix_alignment`` already applies.  #697 did not rule on that, so it is neither
+    provided here nor forbidden; it stands or falls on its own merits (chiefly that
+    a per-detector tie is measured against a quarter of the stars, which is what
+    #386's precision weighting is about), not on #697.
+    """
     return det if det in LW_DETS else det[:4]
 
 
