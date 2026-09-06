@@ -231,3 +231,35 @@ def test_without_shipped_stages_no_release_claim_is_made(tmp_path):
     text = render('brick', collect(str(d)), 'vtest')
     assert 'ships **' not in text
     assert 'SHIPPED by this release' not in text
+
+
+# --- the writer must never take a staging run down ---------------------------
+
+def test_writer_survives_a_field_with_no_registered_data_dir(tmp_path):
+    # `stage()` takes a field NAME and is called with names that are not
+    # registry entries; indexing FIELDS at the call site raised KeyError
+    # OUTSIDE the writer's guard and killed the staging run (CI on #765).
+    import importlib.util
+    sr_path = os.path.join(_RELEASE, 'stage_release.py')
+    spec = importlib.util.spec_from_file_location('stage_release_w', sr_path)
+    srw = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(srw)
+
+    out = tmp_path / 'rel'
+    out.mkdir()
+    srw.write_astrometry_report(out, 'not-a-registered-field', 'vtest', None)
+    text = (out / 'ASTROMETRY.md').read_text()
+    assert 'unstated rather than clean' in text
+
+
+def test_writer_survives_a_data_dir_that_does_not_exist(tmp_path):
+    import importlib.util
+    sr_path = os.path.join(_RELEASE, 'stage_release.py')
+    spec = importlib.util.spec_from_file_location('stage_release_w2', sr_path)
+    srw = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(srw)
+
+    out = tmp_path / 'rel2'
+    out.mkdir()
+    srw.write_astrometry_report(out, 'brick', 'vtest', tmp_path / 'nope')
+    assert (out / 'ASTROMETRY.md').is_file()

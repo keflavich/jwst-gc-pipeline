@@ -2213,8 +2213,12 @@ def stage(items, field, version, release_root, mode, do_checksum,
     _shipped = sorted({m.group(0) for m in
                        (re.search(r"m\d+$", str(it.get("iteration") or ""))
                         for it in items) if m})
+    # `.get`, not `FIELDS[field]`: `stage()` takes a field NAME and is called
+    # in tests with names that are not registry entries, so indexing here
+    # raised KeyError OUTSIDE write_astrometry_report's own guard and took the
+    # staging run down with it -- the one thing this report must never do.
     write_astrometry_report(field_dir, field, version,
-                            FIELDS[field]["data_dir"],
+                            (FIELDS.get(field) or {}).get("data_dir"),
                             shipped_stages=_shipped or None)
 
     # world-readable
@@ -2858,6 +2862,15 @@ def write_astrometry_report(field_dir, field, version, data_dir,
     except ImportError:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from astrometry_stability_report import collect, render
+    if not data_dir:
+        (field_dir / "ASTROMETRY.md").write_text(
+            f"# Astrometric stability \u2014 {field}\n\nRelease "
+            f"`{version}`.\n\nNo pipeline directory is registered for this "
+            f"field, so its frozen-stage checkpoint records could not be "
+            f"located.  Treat its stability as unstated rather than clean.\n")
+        print("  ASTROMETRY.md: no data_dir registered for this field -- "
+              "wrote a placeholder saying its stability is unstated")
+        return
     try:
         data = collect(str(data_dir), obs_token)
         text = render(field, data, version, shipped_stages=shipped_stages)
