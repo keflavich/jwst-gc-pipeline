@@ -336,6 +336,47 @@ PER_FIELD_FLOOR_MAS = {
     # so it is seeded but unapplied.  It should be re-seeded at this floor
     # before any regeneration, not applied as it stands.
     'ngc6334': 8.0,
+    # crowded_l3 (9438/006).  Measured 2026-09-07 from the m2 records of a
+    # re-tie loop that reached ALL FOURTEEN filters in one pass -- which is
+    # what the w51 entry asks for -- and which ran at the 0.0 default because
+    # the field had no entry here, so this is the field's scatter seen from
+    # below 4 mas rather than through a 4 mas floor.
+    #
+    # Per-exposure tie offset, all 14 filters (`off`, mas):
+    #
+    #     filter    n  unver   mean    med    p90    max
+    #     F070W    28    4     2.84   2.92   4.66   6.65
+    #     F090W    32    0     0.55   0.41   1.18   1.90
+    #     F115W    32    0     0.78   0.49   1.61   1.88
+    #     F140M    32    0     0.68   0.42   1.34   1.74
+    #     F150W    32    0     0.64   0.42   1.40   1.82
+    #     F182M    32    0     0.50   0.19   1.38   1.52
+    #     F210M    32    0     0.49   0.23   1.39   1.63
+    #     F277W     8    0     0.78   0.73   1.33   1.40
+    #     F300M     8    0     0.72   0.69   1.34   1.36
+    #     F335M     8    0     0.82   0.77   1.45   1.52
+    #     F360M     8    0     0.77   0.74   1.37   1.45
+    #     F410M     8    0     0.76   0.71   1.34   1.46
+    #     F430M     8    0     0.77   0.71   1.42   1.50
+    #     F480M     8    0     0.70   0.66   1.38   1.42
+    #
+    # Thirteen of the fourteen sit at p90 <= 1.61 and max <= 1.90 -- a tighter
+    # field than brick.  F070W alone is elevated (p90 4.66, max 6.65) and is
+    # the only filter with unverified exposures: four nrca1 frames whose
+    # footprint does not overlap the visit consensus.  crowded_l3 is a
+    # Galactic-plane field at l = 3 deg, so F070W is the most extincted band
+    # and has the fewest stars; that scatter is the band, not the pointing.
+    #
+    # 4.0, matching brick/sgra/sgrb2/sickle/cloudef rather than taking a
+    # bespoke constant.  It covers the bulk of F070W's intrinsic spread while
+    # leaving the one correction m2 actually emitted for it -- nrca4 exposure
+    # 2, 5.17 mas at dra +4.64 +/- 1.12 -- above the floor and actionable, and
+    # it sits more than twice the max of the other thirteen filters, so it is
+    # not chosen to keep anything green.  The seven filters that currently fail
+    # this field's m2 fail on an untrustworthy consensus->reference tie (7.9 to
+    # 2648 mas, issue TBD), not on per-exposure scatter, so no floor value
+    # would change their verdict.
+    'crowded_l3': 4.0,
 }
 
 
