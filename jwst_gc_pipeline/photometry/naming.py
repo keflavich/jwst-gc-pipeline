@@ -179,7 +179,14 @@ def vetted_to_i2dseed(vetted_path):
 #: 9438 (Schlafly): seven Galactic-plane pointings, l = 3 to 54 deg, under one
 #: proposal.  Same shape as 2211 and 10678 -- different sky per observation, so
 #: an untokened per-frame name could belong to any of the seven.
-MULTIOBS_PROPOSALS = ('2211', '10678', '9438')
+#:
+#: 1266 (gc1266) and 3571 (gc3571): two MIRI imaging programs of the Galactic
+#: Centre, four and five pointings respectively under one tree each.  Measured
+#: from their MAST s_region footprints (2026-09-07), 1266's four imaging
+#: centres span 2.87' and 3571's five tiles span 3.22' -- wider than a MIRI
+#: imager footprint (1.4-1.8' radius), so the observations look at different
+#: sky and an untokened per-frame name could belong to any of them.
+MULTIOBS_PROPOSALS = ('2211', '10678', '9438', '1266', '3571')
 
 #: The subset whose MERGED catalogs are per-observation too.
 #:
@@ -202,7 +209,13 @@ MULTIOBS_PROPOSALS = ('2211', '10678', '9438')
 #: after its 8 fan-out shards had written 192 per-frame tables (2026-08-22).
 #: 9438 joins for the same reason as 2211: its seven observations are seven
 #: DIFFERENT targets, so one untokened merged catalog would pool unrelated sky.
-PER_OBS_MERGED_PROPOSALS = ('10678', '2211', '9438')
+#:
+#: 1266 and 3571 join for that same reason, and it is the reason they are
+#: registered as one field each rather than one field per observation: the
+#: pointings adjoin (they tile the inner few arcminutes around Sgr A*), so
+#: they belong together as a field, while their MERGED catalogs must still
+#: stay apart or a tile's stars land in a neighbour's table.
+PER_OBS_MERGED_PROPOSALS = ('10678', '2211', '9438', '1266', '3571')
 
 #: Per-OBSERVATION exceptions, for a proposal where only SOME observations need
 #: the token.  Keyed on ``(proposal, field)`` because 2221 is not one field:

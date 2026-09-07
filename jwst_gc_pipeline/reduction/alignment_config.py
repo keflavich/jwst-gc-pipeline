@@ -605,6 +605,60 @@ ALIGNMENT_CONFIG = (
                'shift -- all 4 filters agree to <20 mas -- but kept keyed per '
                'filter for symmetry with M4.'),
     ),
+    # gc1266 -- MIRI imaging from program 1266 (Garcia Marin), four pointings
+    # around Sgr A* registered together as the gc1266 field.  Same shape and
+    # same purpose as the sickle MIRI entry above: it supplies the FRAME
+    # (VIRAC2, the GC policy frame, matching sgra/sgrb2/sgrc/gc2211 which look
+    # at the same sky) and the F560W anchor, and it does NOT give MIRI a write
+    # channel -- ``offsets_channel(..., instrument='miri')`` answers
+    # CHANNEL_NONE whatever is declared here, because
+    # ``PipelineMIRI.fix_alignment`` opens no offsets table
+    # (TABLE_DRIVEN_INSTRUMENTS).  Registered up front so the m2 checkpoint's
+    # first run names the reducer rather than a missing entry.
+    #
+    # TABLE_CONSENSUS, not TABLE_LOCKED: nothing has been measured for this
+    # program yet, so there is no authored table to lock to; the m2
+    # visit-consensus re-tie bootstraps its own with provenance.
+    #
+    # Anchor is F560W.  MIRI has one pixel scale, so the anchor choice is about
+    # which band gives the best-measured consensus, and F560W is both the
+    # closest of the three to VIRAC2's Ks (2.15 um) and the one that detects
+    # the most stars -- the longer MIRI bands are dust-emission dominated in
+    # the CMZ.  All four observations are listed; the anchor resolves under the
+    # OBSERVATION's token and every observation carries all three bands.
+    FieldAlignment(
+        proposal='1266', fields=('004', '008', '009', '010'),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F560W',
+        notes=('gc1266 MIRI imaging (F560W/F770W/F1130W, obs 004/008/009/010 '
+               '-- four separate pointings spanning 2.87 arcmin about '
+               '(266.43624, -29.01889), footprints measured from the MAST '
+               's_region polygons 2026-09-07). Registered 2026-09-07 with the '
+               'field itself. Supplies the FRAME and the F560W anchor; it does '
+               'NOT give MIRI a write channel -- offsets_channel(..., '
+               "instrument='miri') is CHANNEL_NONE whatever this says, because "
+               'PipelineMIRI.fix_alignment reads no offsets table '
+               '(TABLE_DRIVEN_INSTRUMENTS). Consensus rather than locked '
+               'because nothing has been measured for 1266 yet. The program is '
+               'an IFU program; only its MIRI/IMAGE products are this '
+               "pipeline's business."),
+    ),
+    # gc3571 -- MIRI imaging of the CMZ from program 3571 (Yusef-Zadeh), five
+    # tiles around Sgr A*.  Identical reasoning to the gc1266 entry above.
+    FieldAlignment(
+        proposal='3571', fields=('001', '003', '004', '005', '016'),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F560W',
+        notes=('gc3571 MIRI imaging (F560W/F770W/F1000W/F1280W/F1500W, obs '
+               '001/003/004/005/016 = Tiles 1/2/3/4/6, five adjoining '
+               'pointings spanning 3.22 arcmin about (266.41973, -29.00509), '
+               'footprints measured from the MAST s_region polygons '
+               '2026-09-07; Tile-5 was never delivered, which is why the '
+               'observation numbers are listed and not wildcarded). Registered '
+               '2026-09-07 with the field itself. Supplies the FRAME (VIRAC2) '
+               'and the F560W anchor and no write channel, exactly as gc1266 '
+               'above.'),
+    ),
 )
 
 

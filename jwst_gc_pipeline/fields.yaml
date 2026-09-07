@@ -337,6 +337,86 @@ fields:
         filters: [f200w, f277w]
     # 266.4803 -28.9098, observed 2025-04-21
 
+  # gc1266 -- MIRI imaging from 1266, "NIRSpec & MIRI Integral-Field
+  # Spectroscopy of the Galactic Center" (PI Garcia Marin).  The program is an
+  # IFU program; the imaging is the companion/background exposures taken
+  # alongside it, and it is real GC imaging that nothing else in this pipeline
+  # covers.  Only the MIRI/IMAGE products are registered here -- the MIRI/IFU
+  # (CH1..CH4) and NIRSPEC/IFU observations of the same program are cubes and
+  # are not this pipeline's business.  The imaging filter names never collide
+  # with the IFU channel names, so the driver's filter mask selects the imaging
+  # cleanly.
+  #
+  # FOUR OBSERVATIONS, FOUR DIFFERENT POINTINGS.  Measured from the MAST
+  # s_region polygons of the MIRI/IMAGE products (2026-09-07), which are the
+  # imaging footprints and are NOT the target coordinates -- the imaging sits
+  # off the IFU prime:
+  #
+  #     obs   footprint centre           radius   epoch
+  #     004   266.42234  -29.04033       1.37'    2023.71
+  #     008   266.42345  -29.04108       1.37'    2024.63
+  #     009   266.43911  -28.99549       1.58'    2025.30
+  #     010   266.45938  -29.00409       1.36'    2025.30
+  #
+  # 004 and 008 repeat one pointing two epochs apart; 009 and 010 are two
+  # further pointings.  They span 2.87' about (266.43624, -29.01889), so no one
+  # reference catalog is right for all four and each observation carries its
+  # own -- exactly the gc2211 o023 lesson (a neighbour's catalog produced a
+  # -9.28" per-exposure "correction").  1266 is registered in
+  # photometry/naming.py as a per-observation MERGE proposal for the same
+  # reason: the four share this one tree.
+  gc1266:
+    root: orange
+    observations:
+      '1266':
+        reference_catalog:
+          '004': catalogs/gaia_virac2_refcat_epoch2023.71_o004.fits
+          '008': catalogs/gaia_virac2_refcat_epoch2024.63_o008.fits
+          '009': catalogs/gaia_virac2_refcat_epoch2025.30_o009.fits
+          '010': catalogs/gaia_virac2_refcat_epoch2025.30_o010.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          miri: ['004', '008', '009', '010']
+        filters: [f560w, f770w, f1130w]
+
+  # gc3571 -- MIRI imaging of the CMZ from 3571, "MIRI observations of YSO
+  # candidates for Unambiguous Evidence of Star formation in the 10pc Molecular
+  # Ring Orbiting the Galactic Center Black Hole" (PI Yusef-Zadeh).  Five tiles
+  # around Sgr A*, five filters each, MIRI/IMAGE only -- the whole program is
+  # imaging.
+  #
+  # FIVE OBSERVATIONS, FIVE TILES.  Footprint centres from the MAST s_region
+  # polygons (2026-09-07); every tile has the same 1.79' footprint radius:
+  #
+  #     obs   tile     footprint centre           epoch
+  #     001   Tile-1   266.43947  -28.99084       2024.32
+  #     003   Tile-2   266.39649  -29.00772       2024.67
+  #     004   Tile-3   266.42927  -29.01072       2024.63
+  #     005   Tile-4   266.42814  -29.02890       2024.67
+  #     016   Tile-6   266.40528  -28.98727       2025.24
+  #
+  # Tile-5 was never delivered; the plan's numbering is not contiguous, which
+  # is why the observation numbers are listed rather than wildcarded.  The
+  # tiles span 3.22' about (266.41973, -29.00509) and adjoin one another, so
+  # each carries its own reference catalog and 3571 is a per-observation MERGE
+  # proposal in photometry/naming.py.
+  gc3571:
+    root: orange
+    observations:
+      '3571':
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2024.32_o001.fits
+          '003': catalogs/gaia_virac2_refcat_epoch2024.67_o003.fits
+          '004': catalogs/gaia_virac2_refcat_epoch2024.63_o004.fits
+          '005': catalogs/gaia_virac2_refcat_epoch2024.67_o005.fits
+          '016': catalogs/gaia_virac2_refcat_epoch2025.24_o016.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        obsids:
+          miri: ['001', '003', '004', '005', '016']
+        filters: [f560w, f770w, f1000w, f1280w, f1500w]
+
   m4:
     root: orange
     observations:

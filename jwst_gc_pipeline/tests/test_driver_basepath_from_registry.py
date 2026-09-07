@@ -123,6 +123,10 @@ EXPECTED_ROOTS = {
     # unrelated fields.
     'g007': 'orange', 'g028': 'orange', 'g033': 'orange', 'g041': 'orange',
     'g054': 'orange', 'crowded_l3': 'orange', 'crowded_l20': 'orange',
+    # The two Galactic-Centre MIRI imaging programs, registered 2026-09-07:
+    # 1266 (Garcia Marin, the imaging alongside an IFU program) and 3571
+    # (Yusef-Zadeh, five CMZ tiles).  Both on orange with the other GC fields.
+    'gc1266': 'orange', 'gc3571': 'orange',
 }
 
 

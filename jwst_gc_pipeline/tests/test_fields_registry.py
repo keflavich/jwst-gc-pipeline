@@ -857,5 +857,10 @@ def test_every_preexisting_proposal_maps_exactly_as_before():
     # 9438 (Schlafly) joined 2026-08-31: seven Galactic-plane pointings, NIRCam
     # only, one field per observation.  It post-dates the snapshot for the same
     # reason the treasury does, so it is named here rather than back-filled.
+    #
+    # 1266 (gc1266) and 3571 (gc3571) joined 2026-09-07: two MIRI-only imaging
+    # programs of the Galactic Centre, four and five pointings respectively.
+    # Same reason again -- they post-date the snapshot, so they are named here.
     assert new == {('10678', 'nircam'), ('10678', 'miri'),
-                   ('9438', 'nircam')}, sorted(new)
+                   ('9438', 'nircam'),
+                   ('1266', 'miri'), ('3571', 'miri')}, sorted(new)
