@@ -3242,6 +3242,14 @@ def main(argv=None):
     # a manifest with no waiver is not ambiguous (clean vs gate-skipped vs
     # overridden). Set to a definite value on every path.
     continuity_gate = "skipped(override)" if override else None
+    # `withheld` is assigned by `gate_by_instrument` INSIDE the gate block, and
+    # the block is what `override` skips -- so on the override path the name
+    # was never bound and `main` raised UnboundLocalError at the `stage()`
+    # call, before copying a single file.  The override has therefore never
+    # actually worked: every use of --allow-registration-fail +
+    # ALLOW_REGISTRATION_FAIL=1 died here.  Nothing is withheld when no gate
+    # ran, so an empty mapping is the honest value.
+    withheld = {}
     if not override:
         gate = Path(__file__).with_name("registration_failsafes.py")
         gate_cmd = [sys.executable, str(gate), "--field", args.field, "--scan"]
