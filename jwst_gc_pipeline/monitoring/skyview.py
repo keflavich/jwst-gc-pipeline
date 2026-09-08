@@ -90,14 +90,27 @@ RGPS_COMPONENTS = (
 #: IDs checked against the CDS MOCServer rather than copied: ``P/DSS2/color``,
 #: ``P/2MASS/color`` and ``P/allWISE/color`` resolve (to ``CDS/P/...``), but
 #: ``P/Spitzer/GLIMPSE360`` matches nothing at all -- that button named a HiPS
-#: that has never existed under that ID.  GLIMPSE360 is served by IPAC.
+#: that has never existed under that ID.
+#:
+#: The Spitzer button pointed at ``IPAC/P/GLIMPSE360`` next, which resolves and
+#: serves real tiles -- but IRSA answers without an
+#: ``Access-Control-Allow-Origin`` header, so the browser blocks every tile this
+#: page requests (Aladin Lite v3 fetches tiles for a WebGL texture, which is a
+#: CORS read, not a plain ``<img>`` load).  ``CDS/P/SPITZER/color`` is the same
+#: imagery from the CDS mirror -- an IRAC I1/I2/I4 composite whose sources are
+#: GLIMPSE plus SAGE/SINGS -- served with ``Access-Control-Allow-Origin: *``.
+#: It reaches order 9 (2.24e-4 deg/px) and is centred on the GC by construction
+#: (``hips_initial_ra/dec`` 266.19, -29.18), so it is a better fit here than
+#: GLIMPSE360 was in the first place.  Verified 2026-09-08: tiles at orders
+#: 3/5/7/9 over Galactic (0,0) all return 200 with the CORS header; the IRSA
+#: path returns 200 with no such header.
 #:
 #: The third element is an optional note for the reader: the CMZ mosaic has no
 #: tiles below order 8, so it is blank until you are zoomed in past ~10'.
 SURVEYS = (
     ('DSS', 'P/DSS2/color', ''),
     ('2MASS', 'P/2MASS/color', ''),
-    ('GLIMPSE', 'IPAC/P/GLIMPSE360', ''),
+    ('Spitzer', 'CDS/P/SPITZER/color', ''),
     ('WISE', 'P/allWISE/color', ''),
     ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/',
      'the survey mosaic — zoom in past ~10′ for it to appear'),
