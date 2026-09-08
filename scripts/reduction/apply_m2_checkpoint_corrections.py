@@ -233,6 +233,41 @@ def main(argv=None):
                         "product in a <FILTER>/pipeline directory RAISES "
                         "rather than tagging zero mosaics")
     args = p.parse_args(argv)
+    # An ABSENT --table is a bad ARGUMENT, so it is checked before any
+    # work: a run whose records happen to carry no corrections would
+    # otherwise print 'nothing to do' and exit 0 on a path that does not
+    # exist, which reads as success.
+    #
+    # An ABSENT table is a different situation from an unreadable one, and it
+    # has its own remedy: this applier UPDATES rows that already exist, so it
+    # cannot bootstrap a field whose first table has never been written.  wd1
+    # is the live case -- alignment_config declares 1905 TABLE_CONSENSUS, m2
+    # recorded 523 corrections across 11 filters, and `offsets/` was created
+    # empty and never populated.  Raising FileNotFoundError from Table.read
+    # names the path and nothing else; the operator's next move is a different
+    # script, so say which.
+    missing = [tp for tp in args.table if not os.path.exists(tp)]
+    if missing:
+        print(f"ERROR: {len(missing)} offsets table(s) do not exist:",
+              file=sys.stderr)
+        for tp in missing:
+            print(f"    {tp}", file=sys.stderr)
+        print("\nThis script UPDATES existing rows -- it reads each table to "
+              "route corrections\nby Filter membership, so it cannot create a "
+              "field's FIRST table.  Bootstrap it\nwith the seeder, which "
+              "upserts and creates the table if absent:\n\n"
+              "    python scripts/reduction/run_astrometry_checkpoint.py "
+              "--stage m2 --seed --apply \\\n"
+              "        --catalog-glob '<basepath>/<FILTER>/*_visit*_exp*_m2_daophot_basic.fits' "
+              "\\\n        --filter <FILTER> --refcat <refcat.fits> "
+              "--basepath <basepath> \\\n"
+              "        --offsets-table <the table above>\n\n"
+              "Note --seed is NOT compatible with --pool: the seeder writes "
+              "rows at the\ngranularity of the corrections it is handed, so "
+              "there is nothing to pool onto\nyet.  Pool on a LATER pass, once "
+              "the table exists.", file=sys.stderr)
+        return 2
+
 
     records, corrections = load_corrections(args.records_dir, args.obs_token)
     print(f"{len(records)} m2 records -> {len(corrections)} raw corrections")
