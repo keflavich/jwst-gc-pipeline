@@ -3,6 +3,7 @@ the package; imported by path)."""
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import time
 
@@ -14,6 +15,18 @@ SCRIPTS = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'reduction')
 def _load(name):
     spec = importlib.util.spec_from_file_location(
         name, os.path.join(SCRIPTS, f'{name}.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+RELEASE = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'release')
+
+
+def _load_release(name):
+    """Same by-path import, for the release-side scripts."""
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(RELEASE, f'{name}.py'))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -46,13 +59,19 @@ def _age(path, days, now=None):
 
 
 def test_rename_stale_staleness_logic(tmp_path):
-    """A pre-campaign realigned mosaic is renamed; a same-campaign one is kept."""
+    """A pre-campaign realigned mosaic is renamed; a same-campaign one is kept.
+
+    The stale file is a ``realigned-to-vvv`` one rather than a ``reproject``:
+    this test is about rule 1's CLOCK, and the reproject family is decided by
+    ``reproject_supersession`` instead (its own tests below), so a reproject
+    name here would exercise the gate and never reach the clock.
+    """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
     pipe = _band_dir(tmp_path)
     # rule 1 judges against the band's `*-merged_data_i2d.fits`, unchanged
     ref = pipe / 'jw01182-o001_t001_nircam_clear-f182m-merged_data_i2d.fits'
-    stale = pipe / 'jw01182-o001_t001_nircam_clear-f182m-merged-reproject-vvv_i2d.fits'
+    stale = pipe / 'jw01182-o001_t001_nircam_clear-f182m-merged_realigned-to-vvv.fits'
     fresh = pipe / 'jw01182-o001_t001_nircam_clear-f182m-merged_realigned-to-refcat.fits'
     for p, age_days in ((ref, 0), (stale, 400), (fresh, 0.5)):
         _age(p, age_days)
@@ -1195,3 +1214,321 @@ def test_the_withheld_files_are_named_in_the_output(tmp_path, capsys):
     out = capsys.readouterr().out
     assert 'withheld' in out
     assert unmeasured.name in out
+
+
+
+
+# ---------------------------------------------------------------------------
+# The reproject precondition (#724)
+#
+# ``*-merged-reproject_i2d.fits`` sits beside a plain ``*-merged_i2d.fits`` on a
+# frame up to ~2" away, and neither the name nor either mtime says which is
+# current: the reproject is whatever ``align_to_catalogs`` last wrote, computed
+# from a reference catalog and independent of the frames.  Where the frames
+# carry a baked correction the plain mosaic is current; where they do not, the
+# reproject holds the only tie the band has.  So the family is decided by state
+# on disk: registration in ``ALIGNMENT_CONFIG``, a non-zero baked
+# ``RAOFFSET``/``DEOFFSET`` on the mosaic's OWN pointing's frames, and -- the
+# half that looks at the file taking over -- a plain sibling that EXISTS and
+# POSTDATES those frames.
+#
+# THE FIXTURES ARE BUILT SO THAT DELETING THE GATE CHANGES EVERY ANSWER, and
+# the two halves need OPPOSITE fixtures to manage it:
+#
+#   KEEP cases (the safety half -- the half whose failure removes a field's
+#   astrometry) use ``rule1_clock=True``: the band gets a
+#   ``*-merged_data_i2d.fits`` and the reproject is aged past rule 1's campaign
+#   floor, so WITHOUT the gate rule 1 renames the file.  Three earlier versions
+#   of these tests did not do this -- their bands had no ``data_i2d`` (rule 1
+#   printed ``SKIP no-data_i2d``) and their fixtures were ten days old (rule 2's
+#   365-day guard declined), so ``plan == []`` held for reasons that had nothing
+#   to do with the precondition, and they passed with the feature deleted.
+#
+#   SELECT cases use ``rule1_clock=False``: no ``data_i2d`` and a young file, so
+#   neither rule's own clock can reach it and the gate is the ONLY thing that
+#   can select it.  Giving these a ``data_i2d`` too would have made rule 1
+#   select them under the mutation and stopped THEM pinning anything.
+#
+# Mutation, `if False and REPROJECT_RE.search(base)` plus dropping the
+# ``FOREIGN_QUARANTINE_MARKERS`` branches: 12 red, and the two that stay green
+# are the control (which asserts what the mutation does) and the
+# release-freshness measurement (which does not import this script's gate).
+# ---------------------------------------------------------------------------
+def _frame(pipe, name, raoffset=None, deoffset=None, days=30):
+    """A 2-HDU FITS frame whose SCI header carries the baked shift, or none.
+
+    Backdated, because the gate compares the plain mosaic's date against the
+    NEWEST frame's: a fixture that writes both "now" decides that comparison on
+    the order the fixture happened to write them in.
+    """
+    from astropy.io import fits
+    sci = fits.ImageHDU(name='SCI')
+    if raoffset is not None:
+        sci.header['RAOFFSET'] = raoffset
+    if deoffset is not None:
+        sci.header['DEOFFSET'] = deoffset
+    path = pipe / name
+    fits.HDUList([fits.PrimaryHDU(), sci]).writeto(str(path))
+    now = time.time()
+    os.utime(str(path), (now - days * 86400,) * 2)
+    return path
+
+
+def _reproject_case(tmp_path, pointing, raoffset, deoffset, band='F150W',
+                    rule1_clock=False, reproject_age=None, frame_age=30,
+                    plain_age=0, plain=True, suffix='_i2d.fits'):
+    """One band directory holding a plain mosaic, a reproject and frames.
+
+    ``rule1_clock=True`` adds the band's ``*-merged_data_i2d.fits`` and ages the
+    reproject past rule 1's campaign floor, so that rule 1 WOULD select the file
+    and the gate is the only thing that can hold it back -- the shape a KEEP
+    assertion needs to mean anything.  ``False`` leaves the band without that
+    reference and the file young, so NEITHER rule's clock can reach it and the
+    gate is the only thing that can select it -- the shape a SELECT assertion
+    needs.
+    """
+    pipe = _band_dir(tmp_path, band=band)
+    prop, obs = pointing[2:].split('-o')
+    lo = band.lower()
+    if reproject_age is None:
+        reproject_age = 60 if rule1_clock else 10
+    if rule1_clock:
+        _age(pipe / f'{pointing}_t001_nircam_clear-{lo}-merged_data_i2d.fits', 0)
+    if plain:
+        _age(pipe / f'{pointing}_t001_nircam_clear-{lo}-merged_i2d.fits',
+             plain_age)
+    reproject = _age(
+        pipe / f'{pointing}_t001_nircam_clear-{lo}-merged-reproject{suffix}',
+        reproject_age)
+    for exposure in (1, 2):
+        _frame(pipe, f'jw{prop}{obs}001_02101_0000{exposure}_nrca1_align.fits',
+               raoffset=raoffset, deoffset=deoffset, days=frame_age)
+    return pipe, reproject
+
+
+def test_the_fixture_would_be_renamed_without_the_gate(tmp_path):
+    """The control for every KEEP test below: with the gate short-circuited,
+    ``_reproject_case`` IS selected.  Without this, a KEEP assertion cannot tell
+    "the precondition held the file" from "the rules never reached it"."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw09999-o001', -2.5, -0.71,
+                                       rule1_clock=True)
+    m.REPROJECT_RE = re.compile(r'(?!)')          # matches nothing
+    plan = m.rename_stale_for_field('myfield', execute=False)
+    assert [os.path.basename(p[0]) for p in plan] == [reproject.name]
+
+
+def test_a_reproject_of_an_unregistered_pointing_is_kept(tmp_path):
+    """No ALIGNMENT_CONFIG entry means untied frames, so the reproject is the
+    only tie that band has -- renaming it would remove the field's astrometry."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    # 9999 is deliberately not a real program, so `resolve` returns None
+    _pipe, reproject = _reproject_case(tmp_path, 'jw09999-o001', -2.5, -0.71,
+                                       rule1_clock=True)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert reproject.exists()
+
+
+def test_a_registered_pointing_whose_frames_carry_no_shift_keeps_it(tmp_path):
+    """Registration alone is not enough.  ngc6334 was registered on 2026-09-01
+    and its frames still read RAOFFSET=0.0 because no reduction has run since,
+    so its plain mosaics are untied and its reprojects are still the only tie."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw06778-o001', 0.0, 0.0,
+                                       band='F187N', rule1_clock=True)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert reproject.exists()
+
+
+def test_a_reproject_with_no_plain_sibling_is_kept(tmp_path, capsys):
+    """Registered, frames tied -- and the band holds NO plain mosaic, so there
+    is nothing for the tie to have been inherited by.
+
+    This state is on disk: ``ngc6334/F115W/pipeline`` holds
+    ``jw07213-o001_..._merged-reproject_i2d_im0_badastrom.fits`` and no plain
+    sibling.  The gate used to conclude "the plain mosaic is the current tie"
+    from the frames alone, having never looked for a plain mosaic, which leaves
+    the band with no mosaic at all.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw01334-o001', -2.54, -0.71,
+                                       rule1_clock=True, plain=False)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert reproject.exists()
+    # The REASON is asserted, not just the outcome: with only the date
+    # comparison, an absent sibling is kept as "cannot be dated against them",
+    # which tells an operator the wrong thing about a band that has no mosaic.
+    assert 'DOES NOT EXIST' in capsys.readouterr().out
+
+
+def test_a_plain_sibling_older_than_the_correction_keeps_the_reproject(tmp_path):
+    """``fix_alignment`` bakes the shift into the FRAMES; only the level-3
+    re-drizzle after it puts that shift into the mosaic.  A plain mosaic
+    drizzled before the frames were corrected has inherited nothing, so the
+    reproject is still the band's only tie.
+
+    This is the shape ngc6334 (13 reprojects) and wd1 (7) are one re-reduction
+    away from, and the run that would take their ties is the one that happens if
+    ``fix_alignment`` bakes the shift and the re-drizzle has not run or failed.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw01334-o001', -2.54, -0.71,
+                                       rule1_clock=True, plain_age=400,
+                                       frame_age=30)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert reproject.exists()
+
+
+def test_a_registered_pointing_with_a_baked_shift_loses_its_reproject(tmp_path):
+    """The m92 case: frames carry the tie and the plain mosaic was drizzled
+    after them, so the plain mosaic is the current product."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw01334-o001', -2.54, -0.71)
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert [os.path.basename(p[0]) for p in plan] == [reproject.name]
+    assert not reproject.exists()
+    assert os.path.exists(str(reproject) + m.SUFFIX)
+
+
+def test_the_rename_record_carries_the_frames_date_not_the_files_own(tmp_path):
+    """The log line and the ``.why.txt`` name the date the file was judged
+    against.  That slot used to hold the file's OWN mtime, so all three m92
+    sidecars read "its generation is 2026-07-01; the frames it is judged against
+    is 2026-07-01" -- the same date twice, and never the frames' 2026-09-02."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw01334-o001', -2.54, -0.71,
+                                       reproject_age=10, frame_age=30)
+    m.rename_stale_for_field('myfield', execute=True)
+    sidecar = str(reproject) + m.SUFFIX + '.why.txt'
+    text = open(sidecar).read()
+    assert m.fmt(time.time() - 30 * 86400) in text        # the frames'
+    own = m.fmt(time.time() - 10 * 86400)
+    assert text.count(own) == 1                           # its own, once
+
+
+def test_a_pure_declination_shift_counts_as_a_correction(tmp_path):
+    """#724 says "non-zero RAOFFSET"; taken literally that reads a pointing
+    corrected only in Dec as uncorrected and keeps a superseded mosaic."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw01334-o001', 0.0, -0.71)
+    assert len(m.rename_stale_for_field('myfield', execute=True)) == 1
+    assert not reproject.exists()
+
+
+def test_the_precondition_also_governs_rule_2(tmp_path):
+    """w51's F150W reproject is in BOTH rules' sets.  With the gate on rule 1
+    alone, rule 1 would keep it (untied frames) while rule 2 quarantined the
+    same file on age -- so the family's policy sits outside both rules."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    # 500 days behind the band's newest primary mosaic, and its own product
+    # family is retired -- exactly what rule 2 selects on
+    _pipe, reproject = _reproject_case(tmp_path, 'jw06151-o001', 0.0, 0.0,
+                                       reproject_age=500)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert reproject.exists()
+
+
+def test_one_answer_and_one_line_for_a_file_in_both_rules(tmp_path, capsys):
+    """A kept file used to be evaluated and printed by each rule that named it,
+    so w51 reported "32 superseded, 2 current kept" for one file."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw06151-o001', 0.0, 0.0,
+                                       rule1_clock=True, reproject_age=500)
+    m.rename_stale_for_field('myfield', execute=False)
+    out = capsys.readouterr().out
+    assert out.count(f'KEEP [myfield] {reproject.name}') == 1
+    assert '1 current kept' in out
+
+
+def test_the_frames_read_are_the_mosaics_own_pointing(tmp_path):
+    """One band directory routinely holds several independently-aligned
+    pointings (ngc6334 keeps 6778 and 7213 in one F200W/pipeline; m4 keeps
+    o002 and o003 in one F150W2/pipeline).  Reading a neighbour's frames would
+    answer for the wrong data, in the direction that takes a live tie."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F200W')
+    for pointing, raoffset in (('jw06778-o001', -2.54), ('jw07213-o001', 0.0)):
+        prop, obs = pointing[2:].split('-o')
+        _age(pipe / f'{pointing}_t001_nircam_clear-f200w-merged_i2d.fits', 0)
+        _age(pipe / (f'{pointing}_t001_nircam_clear-f200w-merged-reproject'
+                     f'_i2d.fits'), 10)
+        _frame(pipe, f'jw{prop}{obs}001_02105_00001_nrca1_align.fits',
+               raoffset=raoffset, deoffset=0.0, days=30)
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert [os.path.basename(p[0]) for p in plan] == [
+        'jw06778-o001_t001_nircam_clear-f200w-merged-reproject_i2d.fits']
+    assert (pipe / ('jw07213-o001_t001_nircam_clear-f200w-merged-reproject'
+                    '_i2d.fits')).exists()
+
+
+def test_the_newest_frame_lineage_is_read_not_the_first_suffix(tmp_path):
+    """Four fields carry TWO reduction lineages in one directory (cloudc,
+    cloudef, sickle, brick).  ``_align`` is searched before ``_destreak``, and
+    on those fields the ``_align`` copy is a 2024 leftover with no RAOFFSET at
+    all while the live ``_destreak`` carries the shift:
+
+        sgrb2/F182M  jw05365001001_11101_00001_nrca1
+            _align    2024-09-22  RAOFFSET absent
+            _destreak 2026-08-24  RAOFFSET=-0.01154 DEOFFSET=-0.12106
+
+    First-suffix-wins reports such a pointing as uncorrected, which keeps the
+    file (the safe direction) but tells the operator something false about the
+    field, and misdates the plain-sibling comparison.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, reproject = _reproject_case(tmp_path, 'jw01334-o001',
+                                       raoffset=None, deoffset=None,
+                                       frame_age=700)               # _align
+    _frame(_pipe, 'jw01334001001_02101_00001_nrca1_destreak.fits',
+           raoffset=-2.54, deoffset=-0.71, days=30)
+    plan = m.rename_stale_for_field('myfield', execute=False)
+    assert [os.path.basename(p[0]) for p in plan] == [reproject.name]
+
+
+def test_a_checkpoint_tagged_mosaic_is_not_tagged_again(tmp_path, capsys):
+    """The m2 checkpoint stale-tags a mosaic to ``..._im0_badastrom.fits`` and
+    writes the reason to a ``.why.json`` beside THAT name.  Renaming it again
+    would double-tag it and orphan the first tag's explanation -- the state 32
+    mosaics on six fields are in.  It is NAMED in the output, since withholding
+    32 files silently is what made the size of that carve-out invisible."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    _pipe, tagged = _reproject_case(tmp_path, 'jw01979-o002', 0.11, -0.18,
+                                    band='F150W2', rule1_clock=True,
+                                    suffix='_i2d_im0_badastrom.fits')
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert tagged.exists()
+    assert not os.path.exists(str(tagged) + m.SUFFIX)
+    assert 'already tagged by another pass' in capsys.readouterr().out
+
+
+def test_renaming_a_checkpoint_tag_would_hide_it_from_the_release_gate(tmp_path):
+    """The measurement behind the carve-out, rather than an argument for it.
+
+    ``release_freshness.QUARANTINE_GLOBS`` matches ``{stem}_im0_badastrom*.fits``
+    against the LIVE product's stem, so the m2 checkpoint's tag is already
+    recognised as a quarantine twin of that product.  Appending ``.bad`` to it
+    matches neither that pattern (it no longer ends in ``.fits``) nor
+    ``{src}.bad`` (whose ``src`` is the live name, not the tagged one) -- so the
+    rename would REMOVE the recognition it is supposed to add.
+    """
+    rf = _load_release('release_freshness')
+    pipe = _band_dir(tmp_path, band='F150W2')
+    live = pipe / 'jw01979-o002_t001_nircam_clear-f150w2-merged-reproject_i2d.fits'
+    tagged = pipe / (live.name.replace('_i2d.fits', '_i2d_im0_badastrom.fits'))
+    tagged.write_bytes(b'x')
+    assert rf.has_quarantine_twin(str(live))
+    os.rename(str(tagged), str(tagged) + '.bad')
+    assert not rf.has_quarantine_twin(str(live))
