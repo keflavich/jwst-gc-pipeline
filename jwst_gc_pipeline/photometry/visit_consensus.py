@@ -316,7 +316,24 @@ def exposure_key(tbl):
 _CROP_PAD_ARCSEC = 70.0   # > max(DEFAULT_SWEEP_WINDOWS) = 60"
 
 
-def _crop_to_footprint(ref, target, pad_arcsec=_CROP_PAD_ARCSEC):
+#: Below this many boxed reference stars, two footprints are treated as
+#: DISJOINT.  It is the threshold ``_crop_to_footprint`` has always used to
+#: decide the crop is not worth making; ``_boxed_overlap`` exposes the same
+#: decision to callers that need to know WHY the crop was skipped.
+_MIN_FOOTPRINT_OVERLAP = 100
+
+
+def _boxed_overlap(ref, target, pad_arcsec=_CROP_PAD_ARCSEC):
+    """``(selection, n, valid)`` for ``ref`` inside ``target``'s padded box.
+
+    ``valid`` is False where the box test cannot be made (the footprint
+    straddles the RA wrap).  Split out of :func:`_crop_to_footprint` so a
+    caller can distinguish its two very different reasons for handing back the
+    whole reference: "the box contains everything" (full overlap) and "the box
+    contains almost nothing" (the two footprints are DISJOINT).  Those are
+    opposite geometries and want opposite treatment; see the component-growth
+    loop.
+    """
     pad = pad_arcsec / 3600.0
     tdec = target.dec.deg
     dec_lo, dec_hi = float(tdec.min()) - pad, float(tdec.max()) + pad
@@ -326,11 +343,56 @@ def _crop_to_footprint(ref, target, pad_arcsec=_CROP_PAD_ARCSEC):
     ra_lo, ra_hi = float(tra.min()) - pad / cosd, float(tra.max()) + pad / cosd
     if ra_hi - ra_lo > 180.0:
         # footprint straddles the RA wrap: the box test is invalid there
-        return ref
+        return None, len(ref), False
     sel = ((ref.dec.deg >= dec_lo) & (ref.dec.deg <= dec_hi)
            & (ref.ra.deg >= ra_lo) & (ref.ra.deg <= ra_hi))
-    n = int(sel.sum())
-    if n == len(ref) or n < 100:
+    return sel, int(sel.sum()), True
+
+
+#: Overlap fraction below which two footprints are treated as DISJOINT.
+#:
+#: Measured on ngc6334 F090W visit 1, 2026-09-07 (#820) -- the fraction of one
+#: detector's stars falling inside another footprint's box, at ZERO pad:
+#:
+#:     nrca1 / nrca2   adjacent detector      0.12%
+#:     nrca1 / nrca3   adjacent detector      0.07%
+#:     nrca1 / nrca4   diagonal detector      0.00%
+#:     nrca1 / nrcb4   cross-module           0.00%
+#:     nrca1 exp1/exp2 SAME detector, dither  87.11%
+#:
+#: Three orders of magnitude of separation, so the threshold is not delicate.
+#: 10% keeps a frame carrying a real WCS error on the full-sweep branch: a
+#: 63.5"-wide SW detector displaced 20" (the brick-1182 v001 class) still
+#: overlaps its own footprint by ~69%, and it would take a ~55" error to fall
+#: under 10%.
+_DISJOINT_OVERLAP_FRACTION = 0.10
+
+
+def _footprints_disjoint(ref, target):
+    """True when ``target``'s footprint holds almost none of ``ref``.
+
+    Two adjacent NIRCam DETECTORS of one module sit ~69" apart and are each
+    ~64" across, so they share no sky -- the same geometry the cross-module
+    branch guards against, one level down.  An invalid box test (RA wrap)
+    answers False, which leaves the caller's behaviour unchanged.
+
+    The pad is ZERO here, and that is the whole point.  ``_CROP_PAD_ARCSEC``
+    is 70", deliberately wider than the 60" sweep so the CROP keeps every star
+    the sweep could reach; but 70" is also wider than the 68.8" detector gap,
+    so a padded box swallows the neighbouring detector whole (measured: 100%
+    of nrca1's stars inside nrca2's padded box) and cannot see the geometry at
+    all.  Cropping and adjacency are different questions and take different
+    pads.
+    """
+    if not len(ref):
+        return False
+    _sel, n, valid = _boxed_overlap(ref, target, pad_arcsec=0.0)
+    return bool(valid and n < _DISJOINT_OVERLAP_FRACTION * len(ref))
+
+
+def _crop_to_footprint(ref, target, pad_arcsec=_CROP_PAD_ARCSEC):
+    sel, n, valid = _boxed_overlap(ref, target, pad_arcsec)
+    if not valid or n == len(ref) or n < _MIN_FOOTPRINT_OVERLAP:
         # no/negligible boxed overlap: keep the full reference so the caller's
         # too-few-pairs / unverified semantics are exactly as before
         return ref
@@ -730,12 +792,40 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                 for i in sorted(remaining,
                                 key=lambda j: -usable[j]["n_reliable"]):
                     _cropped = _crop_to_footprint(union, usable[i]["coords"])
-                    if module_family(usable[i]["key"][2]) not in comp_modfam:
+                    # Two reasons to deny the wide sweep, and they are the same
+                    # geometry at two scales.  A different MODULE images an
+                    # adjacent tile ~174" away.  Two DETECTORS of one module sit
+                    # ~69" apart and are each ~64" across, so they share no sky
+                    # either -- and `module_family` cannot see that, because it
+                    # maps nrca1 and nrca2 both to 'nrca'.  Measured on ngc6334
+                    # F090W (2026-09-07, #820): nrca2 joined nrca1's component
+                    # through a 60" sweep and the component's stars were written
+                    # 23.1" off sky, while every one of those exposures ties to
+                    # the reference at 64.7-85.7 mas on its own.
+                    #
+                    # `_crop_to_footprint` is what made it reachable: on
+                    # negligible overlap it hands back the FULL reference, so
+                    # the sweep saw all of nrca1's stars and locked onto the
+                    # ridge that slides one detector onto the other.  Ask the
+                    # same box test directly instead.
+                    #
+                    # This does NOT weaken gross-frame detection.  A frame with
+                    # a real 20" WCS error (brick-1182 v001) still overlaps the
+                    # component union -- 20" is a third of a detector -- so it
+                    # keeps the full sweep.  What loses it is a frame that
+                    # shares no sky at all, where a wide peak can only be
+                    # geometry.
+                    _disjoint = _footprints_disjoint(union, usable[i]["coords"])
+                    if (module_family(usable[i]["key"][2]) not in comp_modfam
+                            or _disjoint):
+                        _why = ("cross-module"
+                                if module_family(usable[i]["key"][2])
+                                not in comp_modfam else "disjoint-footprint")
                         res = measure_offset(
                             usable[i]["coords"], _cropped,
                             sweep=False, maxsep=_CROSS_MODULE_TIE_MAXSEP,
                             context=f"{context} exp{usable[i]['key']} "
-                                    f"vs component {comp} union (cross-module)")
+                                    f"vs component {comp} union ({_why})")
                         if res is None or not res["ok"] or res.get("swept"):
                             continue
                     else:
