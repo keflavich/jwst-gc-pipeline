@@ -50,6 +50,14 @@ FIELDS = {
     'g007':        (SkyCoord(270.54615, -22.47238, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
     'crowded_l3':  (SkyCoord(268.14900, -26.36400, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
     'crowded_l20': (SkyCoord(276.88200, -11.48900, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    # The two Galactic-Centre MIRI imaging programs, centres and extents from
+    # their own MAST s_region footprint polygons (2026-09-07).  gc1266's four
+    # imaging pointings span 2.87' about (266.43624, -29.01889); gc3571's five
+    # tiles span 3.22' about (266.41973, -29.00509).  10 arcmin square is
+    # generous margin on both -- these sit deep inside VVV, so VIRAC2 is dense
+    # here and the cache is what stage-3 photometric calibration reads for Ks.
+    'gc1266':      (SkyCoord(266.43624, -29.01889, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
+    'gc3571':      (SkyCoord(266.41973, -29.00509, unit='deg'), 10 * u.arcmin, 10 * u.arcmin),
 }
 BASE = '/orange/adamginsburg/jwst'
 
