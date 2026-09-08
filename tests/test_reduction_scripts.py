@@ -1532,3 +1532,62 @@ def test_renaming_a_checkpoint_tag_would_hide_it_from_the_release_gate(tmp_path)
     assert rf.has_quarantine_twin(str(live))
     os.rename(str(tagged), str(tagged) + '.bad')
     assert not rf.has_quarantine_twin(str(live))
+
+
+# --- run_astrometry_checkpoint: the CLI must apply the m2 correction floor ---
+
+def _cli_corrections():
+    """One sub-floor per-exposure residual and one whole-consensus bulk tie."""
+    return [
+        dict(visit='jw07213001001', exposure=3, module='nrca4', filtername='F182M',
+             vgroup='02105', dra_onsky_mas=2.1, ddec_onsky_mas=1.0,
+             dec_deg=-35.78, source='m2 visit-consensus'),
+        dict(visit='jw07213001001', exposure=None, module=None, filtername='F182M',
+             vgroup=None, dra_onsky_mas=-44.9, ddec_onsky_mas=31.9,
+             dec_deg=-35.78, source='m2 consensus->reference'),
+    ]
+
+
+def test_checkpoint_cli_drops_subfloor_and_keeps_the_bulk_tie(tmp_path, monkeypatch,
+                                                              capsys):
+    """The CLI wrote EVERY measured residual while the m12 path wrote only what
+    cleared the floor, so one field got two different tables depending on which
+    entry point ran.
+
+    Measured on ngc6334 (2026-09-08): filters seeded through m12 carried zero
+    sub-floor rows (min 8.01 mas); filters seeded through this CLI in the same
+    campaign were 358 of 427 rows below the 8.0 mas floor (min 2.06).
+    """
+    m = _load('run_astrometry_checkpoint')
+    base = tmp_path / 'ngc6334'
+    (base / 'catalogs').mkdir(parents=True)
+    # the glob is resolved before anything is read, so the file must exist
+    cat = base / 'f182m_nrca1_j7213_visit001_exp00001_m2_daophot_basic.fits'
+    cat.write_bytes(b'')
+    monkeypatch.setenv('ASTROM_M2_CORRECTION_FLOOR_MAS', '8.0')
+
+    seen = {}
+    monkeypatch.setattr(m, 'run_visit_checkpoint', lambda *a, **k: dict(
+        passed=True, corrections=_cli_corrections(), failures=[]))
+    monkeypatch.setattr(m, 'seed_offsets_table_from_consensus',
+                        lambda *a, **k: seen.setdefault('corr', a[3]) and None
+                        or str(tmp_path / 't.csv'))
+    monkeypatch.setattr(m, 'load_reference_catalog', lambda *a, **k: object())
+    monkeypatch.setattr(m, 'Table', type('T', (), {'read': staticmethod(
+        lambda *a, **k: object())}))
+
+    rc = m.main(['--stage', 'm2', '--filter', 'F182M',
+                 '--catalog-glob', str(base / '*_m2_daophot_basic.fits'),
+                 '--refcat', str(base / 'catalogs' / 'r.fits'),
+                 '--basepath', str(base), '--proposal-id', '7213',
+                 '--obsid', '001', '--offsets-table', str(tmp_path / 't.csv'),
+                 '--apply', '--seed'])
+    assert rc == 0, rc
+    out = capsys.readouterr().out
+    assert 'correction floor 8.0 mas' in out, out
+    assert '1 of 2 correction(s) actionable' in out, out
+    # the sub-floor per-exposure residual is gone; the bulk tie -- floor-EXEMPT
+    # because it is a whole-consensus shift -- survives
+    kept = seen['corr']
+    assert len(kept) == 1, kept
+    assert 'consensus->reference' in kept[0]['source'], kept
