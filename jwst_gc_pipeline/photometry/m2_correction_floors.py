@@ -286,6 +286,56 @@ PER_FIELD_FLOOR_MAS = {
     # constant is not being chosen to keep anything green.  The three real
     # corrections stay actionable.
     'gc2211_o049': 4.0,
+    # ngc6334.  Two proposals share the tree -- 6778 (F090W/F187N/F200W/F277W/
+    # F335M/F470N) and 7213 (F115W/F162M/F182M/F200W/F356W/F405N/F444W/F470N).
+    # Measured 2026-09-07 from every m2 record on disk, all of which ran at the
+    # 0.0 default because the field has no entry here.
+    #
+    # Per-exposure tie offset, and the corrections that 0.0 floor emitted:
+    #
+    #     filter        pass  ncorr   med    p90     max   corr med   corr max
+    #     F090W  6778   False    27   5.98      *       *      7.5       80.5
+    #     F115W  7213   True     53   4.11   7.56   16.41      4.7      199.7
+    #     F187N  6778   True     92   3.27   7.57   11.38      4.7       83.2
+    #     F200W  6778   True     83   2.96   7.62   15.97      4.9       78.5
+    #     F277W  6778   False    23   3.50   8.20    9.60      6.2       71.9
+    #     F335M  6778   False    21   3.48   8.07    9.61      5.5       81.1
+    #     F470N  6778   True     26   4.00   7.88    9.84      5.6       83.3
+    #
+    #   * F090W's p90/max are 23004/23019 mas -- the +-22.9" nrca1/nrca2
+    #     sign-flipping artifact that stopped its own seed, not a scatter
+    #     measurement.  Its median is in family with the rest.
+    #
+    # The correction magnitudes are BIMODAL, and the same way in every filter:
+    #
+    #     filter   0-2  2-4  4-6  6-8  8-10  10-20  20-50  50+
+    #     F090W      0    3    6    7     4      4      1    2
+    #     F115W      0   20   15   11     4      1      0    2
+    #     F187N      0   40   15   23     7      4      0    3
+    #     F200W      0   30   20   18     7      5      0    3
+    #     F277W      0    8    2    7     4      0      0    2
+    #     F335M      0    8    3    5     4      0      0    1
+    #     F470N      0    8    7    5     3      0      0    3
+    #
+    # A dense 2-10 mas population -- the field's own per-exposure scatter, whose
+    # p90 is 7.56-8.20 in all seven filters -- and a sparse 67-83 mas population
+    # of two or three exposures that appears in EVERY band.  A displacement the
+    # same size in every filter of the same exposures is a pointing error, which
+    # is exactly what the table should express; 2-10 mas repeated 20-92 times is
+    # not.
+    #
+    # 8.0, the cloudc/sgrc value, chosen on the same criterion they used: it is
+    # the p90 of this field's measured scatter.  It leaves the 10-16 mas residue
+    # (1-5 per filter) and the whole 67-199 mas population actionable, so the
+    # separation is not being bought by hiding the ambiguous class.
+    #
+    # NOTE the seeded table.  ngc6334/offsets/Offsets_JWST_Brick7213_consensus.csv
+    # is 53 rows, ALL F115W, written by the 0.0-floor run of 2026-09-02 (job
+    # 40856183) -- so it is mostly that scatter.  Nothing has been regenerated
+    # from it (no _badastrom renames, reduction products still date from July),
+    # so it is seeded but unapplied.  It should be re-seeded at this floor
+    # before any regeneration, not applied as it stands.
+    'ngc6334': 8.0,
 }
 
 
