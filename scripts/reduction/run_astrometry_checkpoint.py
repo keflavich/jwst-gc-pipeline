@@ -213,6 +213,13 @@ def main(argv=None):
         # the floor exists to keep out of the table, and they would have been
         # baked into the frames at the next regeneration.
         #
+        # Those counts are HISTORICAL and no longer reproducible from the tree:
+        # both tables were cleaned back to 69 and 46 rows (min 8.01 / 8.06, no
+        # sub-floor rows left) right after the measurement, with the originals
+        # kept beside them as `*.pre_floor_cleanup_*`.  So the regression this
+        # guards against is not visible on disk any more, and the test below is
+        # the only thing holding the guarantee.
+        #
         # It matters most on THIS path: `--seed` is the documented way to
         # bootstrap a field's first table, so the floor was absent exactly where
         # a table is created from nothing.
