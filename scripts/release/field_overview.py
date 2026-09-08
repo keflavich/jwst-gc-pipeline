@@ -35,10 +35,18 @@ import os
 
 #: The survey's own imagery, first; the rest are context.  Same list the monitor
 #: uses, so a reader recognises the two pages as one survey.
+#:
+#: The Spitzer entry read ``P/Spitzer/GLIMPSE360``, an ID the CDS MOCServer
+#: matches nothing for -- so that button drew nothing on this page and never
+#: had.  ``IPAC/P/GLIMPSE360`` is the real ID for that imagery, but IRSA serves
+#: it without an ``Access-Control-Allow-Origin`` header and Aladin Lite v3 needs
+#: one (it fetches tiles for a WebGL texture rather than loading them as
+#: ``<img>``).  ``CDS/P/SPITZER/color`` is the CDS mirror of the same IRAC
+#: composite, CORS-enabled, order 9, GC-centred.
 SURVEYS = (
     ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/'),
     ('CMZ RGB', 'https://starformation.astro.ufl.edu/avm_images/rgb_final_uncropped_hips/'),
-    ('GLIMPSE', 'P/Spitzer/GLIMPSE360'),
+    ('Spitzer', 'CDS/P/SPITZER/color'),
     ('2MASS', 'P/2MASS/color'),
     ('DSS', 'P/DSS2/color'),
 )

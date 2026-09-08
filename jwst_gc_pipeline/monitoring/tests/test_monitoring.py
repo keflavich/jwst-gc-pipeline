@@ -1928,6 +1928,58 @@ def test_the_view_opens_on_an_all_sky_background():
         'the survey imagery should still be reachable, just not as the default')
 
 
+#: HiPS providers that answer without an ``Access-Control-Allow-Origin`` header.
+#: Aladin Lite v3 uploads each tile into a WebGL texture, so it reads tiles
+#: through ``fetch``/canvas rather than as plain ``<img>`` elements, and a
+#: response with no CORS header is discarded by the browser -- the survey button
+#: works, requests 200, and draws nothing.  Checked 2026-09-08:
+#: ``irsa.ipac.caltech.edu/data/hips/Spitzer/GLIMPSE360/properties`` returns 200
+#: with no such header, while ``alasky.cds.unistra.fr`` returns
+#: ``Access-Control-Allow-Origin: *`` on both ``properties`` and tiles.
+NO_CORS_HIPS_PREFIXES = ('IPAC/', 'irsa.ipac.caltech.edu')
+
+
+def _survey_urls():
+    from jwst_gc_pipeline.monitoring import skyview
+    import importlib.util
+    import os
+    fo_path = os.path.join(os.path.dirname(skyview.__file__),
+                           '..', '..', 'scripts', 'release', 'field_overview.py')
+    spec = importlib.util.spec_from_file_location('field_overview_surveys',
+                                                  os.path.abspath(fo_path))
+    fo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fo)
+    return ([(n, u) for n, u, _t in skyview.SURVEYS],
+            [(n, u) for n, u in fo.SURVEYS])
+
+
+def test_no_survey_button_names_a_hips_whose_host_blocks_cors():
+    """A background button that resolves, serves real tiles, and still draws
+    nothing.  GLIMPSE360 at IRSA is the case: the ID is correct and the tiles
+    are there, but the responses carry no ``Access-Control-Allow-Origin``, so
+    Aladin's WebGL tile reads are blocked and the panel stays empty.  Nothing
+    in the page or the console names the survey, so this reads as "the sky view
+    is broken" rather than "one button is."""
+    for page, entries in zip(('monitor', 'release'), _survey_urls()):
+        for name, url in entries:
+            for bad in NO_CORS_HIPS_PREFIXES:
+                assert bad not in url, (
+                    f'{page} survey {name!r} -> {url!r} is served by a host '
+                    f'that sends no CORS header; use the CDS mirror')
+
+
+def test_both_pages_name_the_same_spitzer_hips():
+    """The two sky panels are the same survey to a reader, so a background that
+    exists on one and not the other is a difference they have to explain.  This
+    also pins the ID itself: `P/Spitzer/GLIMPSE360` (the release page's previous
+    value) matches nothing at the MOCServer, and an ID that resolves to nothing
+    fails exactly as quietly as one whose host blocks CORS."""
+    monitor, release = _survey_urls()
+    spitzer = {u for _n, u in monitor if 'SPITZER' in u.upper()}
+    assert spitzer == {u for _n, u in release if 'SPITZER' in u.upper()}
+    assert spitzer == {'CDS/P/SPITZER/color'}
+
+
 def test_background_buttons_work_before_the_viewer_exists():
     """They were disabled until someone loaded the interactive view, so the row
     every reader sees first was a row of dead controls — and the background they
