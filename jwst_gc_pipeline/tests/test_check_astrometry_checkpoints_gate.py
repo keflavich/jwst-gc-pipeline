@@ -40,7 +40,20 @@ def _write(tmp_path, name, passed, failures=(), unverified_blocking=()):
     return d / name
 
 
+def _write_correcting(tmp_path, name='checkpoint_m2_F212N_o001_latest.json'):
+    """Seed the CORRECTING-stage record a well-formed field always has.
+
+    The frozen stages ask whether the solution moved since the m2 freeze, so a
+    field with no m1/m2/m12 record has no freeze for them to have held to and
+    the gate refuses it (issue #728).  Tests below are about tokenisation,
+    supersession and override REPORTING; they need the field to be well-formed
+    in this respect so their own subject is what decides the verdict.
+    """
+    return _write(tmp_path, name, True)
+
+
 def test_a_clean_field_passes(gate, tmp_path):
+    _write_correcting(tmp_path)
     _write(tmp_path, 'checkpoint_m3_F212N_o001_latest.json', True)
     _write(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', True)
     assert gate.main(['--field', 'fld']) == 0
@@ -97,6 +110,7 @@ def test_an_unreadable_record_refuses(gate, tmp_path):
 
 
 def test_observations_scope_the_scan(gate, tmp_path):
+    _write_correcting(tmp_path)
     _write(tmp_path, 'checkpoint_m3_F212N_o001_latest.json', True)
     _write(tmp_path, 'checkpoint_m3_F212N_o004_latest.json', False,
            failures=['o004 moved'])
@@ -110,6 +124,7 @@ def test_a_TOKENISED_record_supersedes_its_untokened_sibling(gate, tmp_path):
     the untokened one is frozen at whatever it last wrote.  sickle's untokened
     m3/F187N is from 2026-08-05 and its tokenised one from 2026-08-17; reading
     both refuses the field forever no matter what the current run measured."""
+    _write_correcting(tmp_path)
     _write(tmp_path, 'checkpoint_m3_F187N_latest.json', False,
            failures=['a superseded 2026-08-05 pass'])
     _write(tmp_path, 'checkpoint_m3_F187N_o007_latest.json', True)
@@ -134,6 +149,11 @@ def test_the_crossfilter_records_observation_is_read_as_an_observation(
     ``checkpoint_m7_crossfilter_o050_latest.json`` carries ``passed: false``:
     the gate was refusing the field on a record it had been told to ignore.
     """
+    # One per OBSERVATION: `--observations` scopes the scan before the
+    # correcting-record check sees it, so an o001 record would be out of scope
+    # for both runs below and each would refuse for want of a freeze.
+    _write_correcting(tmp_path, 'checkpoint_m2_F212N_o023_latest.json')
+    _write_correcting(tmp_path, 'checkpoint_m2_F212N_o050_latest.json')
     _write(tmp_path, 'checkpoint_m7_crossfilter_o023_latest.json', True)
     _write(tmp_path, 'checkpoint_m7_crossfilter_o050_latest.json', False,
            failures=['the quarantined observation'])
@@ -147,6 +167,7 @@ def test_a_tokenised_crossfilter_record_supersedes_its_untokened_sibling(
     """Same rule as the per-filter one, and it could not fire while the two
     names parsed to different filters -- quintuplet holds an untokened m7
     record from 2026-08-02 beside its o003 successor from 2026-08-16."""
+    _write_correcting(tmp_path)
     _write(tmp_path, 'checkpoint_m7_crossfilter_latest.json', False,
            failures=['a superseded 2026-08-02 verdict'])
     _write(tmp_path, 'checkpoint_m7_crossfilter_o003_latest.json', True)
@@ -165,6 +186,7 @@ def test_a_shared_tree_proposal_record_is_read(gate, tmp_path):
 
 def test_a_shared_tree_record_supersedes_its_untokened_sibling(gate, tmp_path):
     """``_j`` names which run wrote the record, exactly as an obs token does."""
+    _write_correcting(tmp_path)
     _write(tmp_path, 'checkpoint_m3_F212N_latest.json', False,
            failures=['a superseded untokened verdict'])
     _write(tmp_path, 'checkpoint_m3_F212N_j7213_latest.json', True)
@@ -473,6 +495,7 @@ def test_an_overridden_PASSING_frozen_record_is_reported(gate, tmp_path,
                                                          capsys):
     """`passed: true` kept it out of the `failed` loop, which is the only place
     the block was printed."""
+    _write_correcting(tmp_path)
     _write_passing_with_override(tmp_path,
                                  'checkpoint_m5_F200W_o001_latest.json',
                                  _warn_only(reason=''))
@@ -489,6 +512,7 @@ def test_reporting_an_overridden_pass_does_not_change_the_verdict(gate,
     change does not answer.  Pinned so the reporting cannot quietly become a
     gate, and so the reverse -- a real failure going green because it also
     carries an override -- cannot happen either."""
+    _write_correcting(tmp_path)
     _write_passing_with_override(tmp_path,
                                  'checkpoint_m3_F212N_o001_latest.json',
                                  _warn_only())
@@ -499,6 +523,7 @@ def test_reporting_an_overridden_pass_does_not_change_the_verdict(gate,
 
 
 def test_a_clean_pass_is_not_reported_as_overridden(gate, tmp_path, capsys):
+    _write_correcting(tmp_path)
     _write_passing_with_override(tmp_path,
                                  'checkpoint_m3_F212N_o001_latest.json',
                                  None)
@@ -688,3 +713,38 @@ def test_a_frozen_FAILURE_is_still_refused_and_still_reported(gate, tmp_path,
     assert 'MOVED 1500.0 mas' in both.out, both.out
     assert 'checkpoint(s) FAILED' in ' '.join(both.err.split()), both.err
     assert 'MEASURED and never applied' in ' '.join(both.err.split()), both.err
+
+
+def test_a_field_with_NO_correcting_record_refuses(gate, tmp_path, capsys):
+    """The frozen stages certify that nothing moved since a freeze that never
+    happened.
+
+    wd2 is the live case (issue #728): 73 checkpoint records, every one m7 and
+    not a single m1/m2/m12, and the gate printed "18 at a frozen stage, 0
+    FAILED" and exited 0.  Measured across every field on disk 2026-09-07, wd2
+    is the only one this refuses; the other 23 all carry correcting records.
+    """
+    _write(tmp_path, 'checkpoint_m7_F212N_o001_latest.json', True)
+    _write(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', True)
+    assert gate.main(['--field', 'fld']) == 1
+    err = capsys.readouterr().err
+    assert 'not one CORRECTING-stage record' in err, err
+
+
+def test_the_no_correcting_refusal_does_not_fire_on_an_empty_field(gate,
+                                                                   tmp_path):
+    """A field with no records AT ALL keeps its own rc=3 verdict.
+
+    The two states want different sentences: "never ran the checkpoint" and
+    "ran only the frozen half" are different situations for whoever picks the
+    field up, and rc=3 already says the first one accurately.
+    """
+    d = tmp_path / 'fld' / 'astrometry_checkpoints'
+    d.mkdir(parents=True, exist_ok=True)
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_a_correcting_record_alone_is_not_certified_as_a_pass(gate, tmp_path):
+    """m2 ran, the frozen stages did not: still rc=3, not the new refusal."""
+    _write_correcting(tmp_path)
+    assert gate.main(['--field', 'fld']) == 3

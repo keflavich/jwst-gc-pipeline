@@ -557,6 +557,29 @@ def main(argv=None):
               f"(scripts/reduction/apply_m2_checkpoint_corrections.py), "
               f"REGENERATE the affected frames from _cal, and re-run cataloging "
               f"from m2 so a post-regeneration record exists.", file=sys.stderr)
+    # A field whose CORRECTING stage never ran at all.  The frozen stages ask
+    # only "has the solution moved since the m2 freeze"; with no m1/m2/m12
+    # record there is no freeze, so a clean frozen sweep certifies that nothing
+    # moved away from a solution nothing ever verified.  wd2 is the live case:
+    # 73 records, every one m7, and this gate printed "18 at a frozen stage,
+    # 0 FAILED" and exited 0 (issue #728).
+    #
+    # Deliberately narrower than the two refusals above.  It fires only when
+    # frozen records are CURRENT -- a field with no records at all, or only
+    # superseded ones, is already refused by the rc=3 block, which says
+    # something more accurate about it.  Measured across every field on disk
+    # (2026-09-07): wd2 is the only one this newly refuses; the other 23 all
+    # carry correcting-stage records.
+    if current and not correcting_overall:
+        print(f"\nREFUSING TO STAGE '{args.field}': not one CORRECTING-stage "
+              f"record (m1/m2/m12) exists for this field, so there is no frozen "
+              f"solution for the {len(current)} current frozen-stage record(s) "
+              f"to have held to.  A frozen stage asks whether the astrometry "
+              f"MOVED since m2; with no m2 it can only answer 'not since a "
+              f"measurement that was never made'.  Run the cataloging chain "
+              f"from m2 so the field's solution is verified before the frozen "
+              f"stages certify it.", file=sys.stderr)
+        return 1
     if failed or unapplied:
         return 1
     return 0
