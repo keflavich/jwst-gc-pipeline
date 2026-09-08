@@ -44,7 +44,14 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
     run_crossfilter_checkpoint, run_visit_checkpoint,
     seed_offsets_table_from_consensus, update_offsets_table,
+    _target_from_basepath,
 )
+# The floor filter is IMPORTED, not re-implemented.  The m12 path
+# (cataloging._run_astrometry_stage_checkpoint) applies exactly this function to
+# exactly these corrections, and two copies of a five-line magnitude test are
+# how the two paths drift apart -- which is the defect this fixes.
+from jwst_gc_pipeline.photometry.cataloging import _floor_actionable_corrections
+from jwst_gc_pipeline.photometry.m2_correction_floors import m2_correction_floor
 from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
 from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
 
@@ -194,6 +201,38 @@ def main(argv=None):
                           n_corrections=len(corrections),
                           failures=record.get("failures", [])), indent=2))
     if corrections and args.apply:
+        # Apply the field's m2 correction FLOOR, exactly as the m12 path does.
+        #
+        # Without this the CLI wrote every measured residual, including the
+        # field's own per-exposure scatter, while the m12 path wrote only what
+        # cleared the floor -- so the same field got two different tables
+        # depending on which entry point ran.  Measured on ngc6334 (2026-09-08):
+        # filters seeded through m12 carried ZERO sub-floor rows (min 8.01 mas),
+        # filters seeded through this CLI in the same campaign were 358 of 427
+        # rows below the 8.0 mas floor (min 2.06).  Those rows are the scatter
+        # the floor exists to keep out of the table, and they would have been
+        # baked into the frames at the next regeneration.
+        #
+        # It matters most on THIS path: `--seed` is the documented way to
+        # bootstrap a field's first table, so the floor was absent exactly where
+        # a table is created from nothing.
+        #
+        # The whole-consensus reference tie stays exempt -- that is inside
+        # `_floor_actionable_corrections`, and it is why the bulk terms survive
+        # a floor larger than they are.
+        _floor_mas, _floor_src = m2_correction_floor(
+            _target_from_basepath(args.basepath))
+        if _floor_mas > 0:
+            _before = len(corrections)
+            corrections = _floor_actionable_corrections(
+                corrections, _floor_mas, f"cli {args.stage}/{args.filtername}")
+            print(f"correction floor {_floor_mas} mas ({_floor_src}): "
+                  f"{len(corrections)} of {_before} correction(s) actionable")
+            if not corrections:
+                print(f"nothing at or above the floor -- table unchanged "
+                      f"({_before} sub-floor residual(s) recorded in the "
+                      f"checkpoint record only)")
+                return 0
         if args.stage not in CORRECTION_STAGES:
             print(f"REFUSING --apply at stage {args.stage}: corrections are only "
                   f"sanctioned at {CORRECTION_STAGES}", file=sys.stderr)
