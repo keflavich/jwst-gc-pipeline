@@ -806,8 +806,13 @@ def test_the_aladin_host_is_sized_inline_because_aladin_outranks_the_class():
     build = out.split('function build()')[1].split('A.aladin(')[0]
     assert "host.style.position = 'absolute'" in build
     assert "host.style.height = '100%'" in build
-    # ... which needs a definite height on the stage, or 100% is itself auto
-    assert "stage.style.height = Math.max(measured, MIN_STAGE_PX) + 'px'" in build
+    # ... which needs a definite height on the stage, or 100% is itself auto.
+    # The VALUE moved from the static SVG's measured height to the viewport
+    # (liveStageHeight) so the live map gets the display area; what this test
+    # protects is that a definite PIXEL height is set here at all, before
+    # Aladin measures the container.
+    assert "stage.style.height = liveStageHeight() + 'px'" in build
+    assert 'MIN_STAGE_PX' in fo.section([_geom('brick', 0.2, 0.0)])
     # and layout must be flushed before Aladin measures the container
     assert 'void host.offsetHeight;' in build
     assert build.index('stage.style.height') < build.index('void host.offsetHeight')
@@ -2209,3 +2214,33 @@ def test_both_catalog_loops_iterate_in_sorted_order():
         f'{len(sorted_keys)} of the 2 catalog globs are sorted on the field\'s '
         'own token; an unsorted one ships whichever table the filesystem '
         'happens to list last')
+
+
+def test_the_sky_view_opens_on_the_galactic_centre_not_the_anti_centre():
+    """`cooFrame:'galactic'` already sets the display frame, so the target is
+    l/b as a bare pair.  The old `'galactic 0 0'` did not parse as coordinates,
+    Aladin treated it as an object NAME, found nothing, and kept the AIT
+    default -- which is centred on the anti-centre, so the map opened at
+    l=180 every time."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    ctor = out.split('A.aladin(')[1].split(');')[0]
+    assert "cooFrame: 'galactic'" in ctor
+    assert "target: '0 +0'" in ctor
+    # the frame-prefixed form must not survive as an actual target value
+    assert "target: 'galactic" not in out
+
+
+def test_the_live_map_takes_the_display_area_not_the_static_panel_height():
+    """The interactive map is the point of the panel, so once it is built it
+    is sized from the viewport rather than inheriting the static preview's
+    aspect ratio -- floored so a short window still gets a usable canvas."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert 'LIVE_STAGE_VH' in out
+    assert 'window.innerHeight' in out
+    assert 'Math.max(Math.round(vh), MIN_STAGE_PX)' in out
+    # and a resize while the map is up re-takes the display area, rather than
+    # snapping back to the SVG's intrinsic height
+    resize = out.split("addEventListener('resize'")[1].split('}}')[0]
+    assert 'liveStageHeight()' in resize

@@ -479,6 +479,16 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   var switchSeq = 0;              // a later click supersedes an in-flight one
   var READY_POLL_MS = 400, READY_TRIES = 25;     // ~10 s for a canvas to appear
   var MIN_STAGE_PX = 240;         // never hand Aladin a container worth nothing
+  // The interactive map is the point of the panel, so it gets the display
+  // area rather than inheriting the static preview's aspect ratio.  The
+  // static SVG stays as it was -- this height applies only once Aladin is
+  // built.  Capped so a very tall window does not push the tables off-screen,
+  // floored by MIN_STAGE_PX for a short one.
+  var LIVE_STAGE_VH = 0.82;
+  function liveStageHeight() {{
+    var vh = (window.innerHeight || 800) * LIVE_STAGE_VH;
+    return Math.max(Math.round(vh), MIN_STAGE_PX);
+  }}
   var MIN_CANVAS_PX = 64;         // below this the view exists but is unusable
   var svg = stage.querySelector('svg');
   var lastGlobalError = null;
@@ -498,9 +508,10 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   // height tracks the viewport. Without this the map keeps its load-time size
   // and either overflows or leaves a band of background after a resize.
   window.addEventListener('resize', function () {{
-    if (!host || !svg) {{ return; }}
-    var h = Math.round(svg.getBoundingClientRect().height);
-    stage.style.height = Math.max(h, MIN_STAGE_PX) + 'px';
+    if (!host) {{ return; }}
+    // While the live map is up it owns the display area; the static SVG's
+    // intrinsic height is irrelevant to it.
+    stage.style.height = liveStageHeight() + 'px';
   }});
   function fail(msg) {{
     teardown();
@@ -516,8 +527,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     // (see the CSS comment): a class-only host lands in flow at height 0. The
     // stage is `height:auto` off the SVG's intrinsic ratio, so pin the height it
     // currently has -- the map keeps the size the static panel already had.
-    var measured = Math.round(stage.getBoundingClientRect().height);
-    stage.style.height = Math.max(measured, MIN_STAGE_PX) + 'px';
+    stage.style.height = liveStageHeight() + 'px';
     host.style.position = 'absolute';
     host.style.top = '0';
     host.style.left = '0';
@@ -529,9 +539,14 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     // and it falls back to a 1-pixel canvas -- which would then satisfy any
     // "is there a canvas" check while showing nothing.
     void host.offsetHeight;
+    // Target is read in the DISPLAY frame, which cooFrame sets to galactic,
+    // so a bare pair is l/b.  Prefixing the frame name did NOT parse as a
+    // coordinate pair: Aladin took it for an object name, found nothing, and
+    // kept the AIT default view -- centred on the anti-centre, so the map
+    // opened at l=180 every time instead of on the Galactic centre.
     var aladin = A.aladin(host, {{
       survey: data.surveys[0].id, projection: 'AIT', cooFrame: 'galactic',
-      target: 'galactic 0 0', fov: 1.8, showReticle: false,
+      target: '0 +0', fov: 1.8, showReticle: false,
       showCooGrid: true, showFullscreenControl: false
     }});
     // Verification is only possible where the view can be READ back.  The
