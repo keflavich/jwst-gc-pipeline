@@ -1253,3 +1253,102 @@ def test_the_record_says_WHY_the_gross_check_passed():
                                    context="test-why-agreed", grid_nx=2, grid_ny=2)
     assert agreed["cross_reference_gross_ok"]
     assert agreed["cross_reference_sparse_untrustworthy"] is False
+
+
+# ---------------------------------------------------------------------------
+# detector-scoped growth (issue #820): two DETECTORS of ONE module image
+# adjacent, disjoint sky ~69" apart and are each ~64" wide, so they share no
+# stars either -- the same geometry as the module case above, one level down,
+# where `module_family` cannot see it.  On ngc6334 F090W that wrote a
+# component's stars 23.1" off sky.
+# ---------------------------------------------------------------------------
+def _capture_growth_contexts(monkeypatch):
+    """Record the `context=` of every component-growth measure_offset call.
+
+    The branch taken is not otherwise observable: both branches can return a
+    tie, and only the context string says whether the bounded no-sweep arm
+    ("disjoint-footprint" / "cross-module") or the full-sweep arm ran.
+    """
+    from jwst_gc_pipeline.photometry import visit_consensus as vc
+    seen = []
+    real = vc.measure_offset
+
+    def _spy(*a, **k):
+        if k.get("context"):
+            seen.append(k["context"])
+        return real(*a, **k)
+
+    monkeypatch.setattr(vc, "measure_offset", _spy)
+    return seen
+
+
+def test_adjacent_detectors_of_one_module_do_not_merge_across_the_gap(monkeypatch):
+    """nrca1 and nrca2 sit ~69" apart and are ~64" wide, so they share no sky.
+
+    `module_family` maps both to 'a', so before #820 they took the full 60"
+    sweep and locked onto the ridge that slides one detector onto the other.
+    """
+    seen = _capture_growth_contexts(monkeypatch)
+    rng = np.random.default_rng(820)
+    n = 350
+    ra_1 = RA0 + rng.uniform(0, 64.0, n) / 3600.0 / COSD
+    dec_1 = DEC0 + rng.uniform(0, 64.0, n) / 3600.0
+    # the neighbouring DETECTOR, 69" east: different sky, different stars
+    ra_2 = (RA0 + 69.0 / 3600.0 / COSD) + rng.uniform(0, 64.0, n) / 3600.0 / COSD
+    dec_2 = DEC0 + rng.uniform(0, 64.0, n) / 3600.0
+    tables = []
+    for e in range(1, 4):
+        tables.append(_exposure_table(ra_1, dec_1, exposure=e, module="nrca1",
+                                      filtername="F090W", noise_mas=1.0,
+                                      rng=np.random.default_rng(400 + e)))
+        tables.append(_exposure_table(ra_2, dec_2, exposure=e, module="nrca2",
+                                      filtername="F090W", noise_mas=1.0,
+                                      rng=np.random.default_rng(500 + e)))
+    cons = build_visit_consensus(tables, context="test-adjacent-detectors")
+    exps = cons["exposures"]
+    c1 = {e["component"] for e in exps if e["key"][2] == "nrca1" and e["component"] >= 0}
+    c2 = {e["component"] for e in exps if e["key"][2] == "nrca2" and e["component"] >= 0}
+    assert c1 and c2, "each detector should tie within its own footprint"
+    assert c1.isdisjoint(c2), (
+        f"nrca1 and nrca2 were merged into one component across a 69\" gap "
+        f"(the #820 alias): nrca1={c1} nrca2={c2}")
+    # and it must be the DISJOINT arm that refused, not the cross-module one --
+    # they are the same module family, so `cross-module` here would mean the
+    # test passed for the wrong reason
+    assert any("disjoint-footprint" in c for c in seen), (
+        f"no growth call took the disjoint-footprint branch: {seen[:6]}")
+    assert not any("cross-module" in c for c in seen), (
+        f"same-module pair took the cross-module branch: {seen[:6]}")
+
+
+def test_a_dithered_same_detector_still_merges(monkeypatch):
+    """The counterpart: ~87% footprint overlap must keep the full sweep.
+
+    A threshold that fixed adjacency by breaking dithers would pass the test
+    above and destroy every real visit, so this is the one that bounds it.
+    """
+    seen = _capture_growth_contexts(monkeypatch)
+    rng = np.random.default_rng(821)
+    n = 400
+    ra = RA0 + rng.uniform(0, 64.0, n) / 3600.0 / COSD
+    dec = DEC0 + rng.uniform(0, 64.0, n) / 3600.0
+    tables = [_exposure_table(ra, dec, exposure=1, module="nrca1",
+                              filtername="F090W", noise_mas=1.0,
+                              rng=np.random.default_rng(600))]
+    # exposure 2: dithered 8" east out of a 64" detector -> the shared 56" is
+    # ~87% of the footprint, which is what a real dither looks like
+    keep = ra > (RA0 + 8.0 / 3600.0 / COSD)
+    ra_2 = np.concatenate([ra[keep],
+                           (RA0 + 64.0 / 3600.0 / COSD)
+                           + rng.uniform(0, 8.0, int((~keep).sum())) / 3600.0 / COSD])
+    dec_2 = np.concatenate([dec[keep], rng.uniform(0, 64.0, int((~keep).sum())) / 3600.0 + DEC0])
+    tables.append(_exposure_table(ra_2, dec_2, exposure=2, module="nrca1",
+                                  filtername="F090W", noise_mas=1.0,
+                                  rng=np.random.default_rng(601)))
+    cons = build_visit_consensus(tables, context="test-dithered-detector")
+    comps = {e["component"] for e in cons["exposures"] if e["component"] >= 0}
+    assert len(comps) == 1, (
+        f"a dithered pair sharing ~87% of its footprint was split into "
+        f"{len(comps)} components -- the disjoint test is too aggressive")
+    assert not any("disjoint-footprint" in c for c in seen), (
+        f"a dithered pair was sent down the bounded no-sweep arm: {seen[:6]}")

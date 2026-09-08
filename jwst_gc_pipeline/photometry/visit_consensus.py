@@ -316,10 +316,18 @@ def exposure_key(tbl):
 _CROP_PAD_ARCSEC = 70.0   # > max(DEFAULT_SWEEP_WINDOWS) = 60"
 
 
-#: Below this many boxed reference stars, two footprints are treated as
-#: DISJOINT.  It is the threshold ``_crop_to_footprint`` has always used to
-#: decide the crop is not worth making; ``_boxed_overlap`` exposes the same
-#: decision to callers that need to know WHY the crop was skipped.
+#: Below this many boxed reference stars, cropping is not worth making.  It is
+#: the threshold ``_crop_to_footprint`` has always used; ``_boxed_overlap``
+#: exposes the same decision to callers that need to know WHY the crop was
+#: skipped.
+#:
+#: ABSOLUTE, where ``_DISJOINT_OVERLAP_FRACTION`` below is RELATIVE, because the
+#: two answer different questions.  This one asks "are there enough stars left
+#: to measure against", which is a floor on the SAMPLE and does not scale with
+#: how big the reference happens to be.  That one asks "do these two footprints
+#: describe the same sky", which is a property of the GEOMETRY and is only
+#: meaningful as a fraction -- 100 stars is most of a sparse frame and a rounding
+#: error in a crowded one.
 _MIN_FOOTPRINT_OVERLAP = 100
 
 
@@ -363,8 +371,7 @@ def _boxed_overlap(ref, target, pad_arcsec=_CROP_PAD_ARCSEC):
 #: Three orders of magnitude of separation, so the threshold is not delicate.
 #: 10% keeps a frame carrying a real WCS error on the full-sweep branch: a
 #: 63.5"-wide SW detector displaced 20" (the brick-1182 v001 class) still
-#: overlaps its own footprint by ~69%, and it would take a ~55" error to fall
-#: under 10%.
+#: overlaps its own footprint by ~69%, and the crossing into 10% is at 57.2".
 _DISJOINT_OVERLAP_FRACTION = 0.10
 
 
