@@ -90,8 +90,12 @@ retired 2026-07-11), and tests
 ## Collapse safeguard (already shipped, on main)
 `reduction/validate_offsets_table.py` (`flag_collapsed_visits` /
 `assert_offsets_table_sane` + `test_validate_offsets_table.py`) flags a COLLAPSED
-offsets table (distinct visits of a filter sharing an offset to within ~20 mas) and
-runs inside `unified_alignment._shift_from_locked`, on the `fix_alignment` path, where
+offsets table (distinct visits of a filter sharing an offset to within ~20 mas,
+**and that shared offset larger than the same ~20 mas** — two visits that each
+legitimately needed no correction also share one value, and nothing was
+overwritten there because nothing was applied) and
+runs inside `unified_alignment._shift_from_locked`, on the `fix_alignment` path — both
+its readers, the locked table and the pre-locked `_average` fallback — where
 it RAISES `CollapsedOffsetsTableError` (PR #770 — that call site passes
 `raise_on_issue=True`; it warned by default until then, and the warning is what let
 brick-1182 v001 be baked in). `raise_on_issue=True` also promotes

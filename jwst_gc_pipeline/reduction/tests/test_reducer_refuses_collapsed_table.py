@@ -146,11 +146,16 @@ def test_a_broken_audit_trail_alone_does_not_stop_the_reducer(tmp_path):
     assert shift.total_ra == pytest.approx(-17.5031 + 0.030)
 
 
-def test_every_live_locked_table_still_passes(tmp_path):
+def test_every_live_locked_table_still_passes():
     """The gate stops no field that is currently correct.
 
     Guards against a refusal that is right in principle and unshippable in
     practice five days before the 10678 window.
+
+    A DATA tripwire, deliberately red rather than skipped: this fails on the
+    machine where /orange is mounted the moment a live locked table develops
+    the signature, which is the moment somebody needs to know.  Where the
+    tables are not mounted (CI) it skips.
     """
     from glob import glob
     from jwst_gc_pipeline.reduction.validate_offsets_table import (
@@ -258,3 +263,48 @@ def test_the_env_switch_row_matches_whether_any_caller_still_needs_it():
     assert doc_says_noop == code_is_noop, (
         f'env-table row says no-op={doc_says_noop} while the production call '
         f'sites give no-op={code_is_noop}: {calls}')
+
+
+# ---------------------------------------------------------------------------
+# The amplitude floor, at the apply path (review of PR #770)
+# ---------------------------------------------------------------------------
+
+#: Two visits of one filter that each measured ~no correction.  Before the
+#: floor this WAS the collapse signature -- they agree to 2.5 mas -- and
+#: raising on it would have stopped a correctly-solved field.  Values from
+#: m4's live table (F150W2, jw01979002001 / jw01979003001), read 2026-09-09.
+WELL_ALIGNED = {'jw01182004001': (+0.0010, -0.0005),
+                'jw01182004002': (+0.0011, +0.0020)}
+
+
+def test_two_visits_that_needed_no_correction_still_reduce(tmp_path):
+    """The escalation must not turn a well-aligned field into a hard stop.
+
+    Nothing was overwritten here, because nothing was applied.  The refusal is
+    for a visit's real offset REPLACED by another's, and the replaced value has
+    to be big enough to matter -- brick-1182's was +1.9".
+    """
+    _write_table(tmp_path, _rows(WELL_ALIGNED))
+    shift = _resolve(tmp_path, 'jw01182004001')
+    assert shift.source == ua.TABLE_LOCKED
+    assert shift.total_ra == pytest.approx(+0.0010)
+    assert shift.total_dec == pytest.approx(-0.0005)
+
+
+def test_the_fallback_table_branch_is_checked_too(tmp_path):
+    """No locked CSV -> the ``_{refname}_average`` table, same refusal.
+
+    ``_shift_from_locked`` has a second reader 40 lines below the first, for
+    the pre-locked tables.  It bakes a shift into the pixels exactly as the
+    locked branch does, and it was reached with no collapse check at all.
+    Dormant while every TABLE_LOCKED field has its locked CSV.
+    """
+    offsets = tmp_path / 'offsets'
+    offsets.mkdir(exist_ok=True)
+    tbl = _rows(COLLAPSED)
+    tbl.write(str(offsets / f'Offsets_JWST_Brick{PROPOSAL}_VIRAC2_average.csv'),
+              overwrite=True)
+    with pytest.raises(CollapsedOffsetsTableError):
+        ua.resolve_shift(_frame(tmp_path, 'jw01182004001'), PROPOSAL, FIELD,
+                         FILTER, 'nrcb', str(tmp_path) + '/', refname='VIRAC2',
+                         use_average=True)

@@ -457,6 +457,14 @@ def _shift_from_locked(fn, cfg, basepath, proposal_id, filtername,
                     | (offsets_tbl['Module'] == thismodule.strip('1234')))
                  & (offsets_tbl['Filter'] == filtername))
 
+    # The fallback tables are the same kind of object as the locked one -- a
+    # per-(visit, filter) shift this function is about to bake into the pixels
+    # -- so they get the same refusal.  Dormant while every TABLE_LOCKED field
+    # has its locked CSV, which is why it was missed; a field that loses one
+    # lands here, and "the guard covered the branch we happened to be using"
+    # is not a property worth relying on.
+    _validate_once(offsets_tbl, tblfn)
+
     if match.sum() != 1:
         raise ValueError(f"too many or too few matches for {fn} "
                          f"(match.sum() = {match.sum()}).  exposure={exposure}, "

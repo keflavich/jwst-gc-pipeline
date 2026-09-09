@@ -2868,7 +2868,11 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         # 20 mas tol to catch the brick-1182 curation signature (a visit's real ~arcsec
         # BULK offset overwritten by another's).  Consensus shifts are mas-scale, so
         # any two visits agree within 20 mas by construction -- flagging that would be
-        # a category error.  A sparse per-exposure consensus table has two failure
+        # a category error.  `flag_collapsed_visits` now carries that reasoning itself
+        # (it skips a pair whose shared value is inside the same tolerance, PR #770),
+        # so this exemption is belt-and-braces rather than the only thing standing
+        # between a converged consensus table and a refusal.
+        # A sparse per-exposure consensus table has two failure
         # modes worth guarding instead:
         keys = [(str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]), str(r["Module"]),
                  vgroup_key(r.get("Vgroup", ""))) for r in rows]
