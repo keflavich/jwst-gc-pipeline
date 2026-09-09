@@ -1591,3 +1591,49 @@ def test_checkpoint_cli_drops_subfloor_and_keeps_the_bulk_tie(tmp_path, monkeypa
     kept = seen['corr']
     assert len(kept) == 1, kept
     assert 'consensus->reference' in kept[0]['source'], kept
+
+
+def test_an_absent_offsets_table_names_the_bootstrap_path(tmp_path, capsys):
+    """This applier UPDATES rows; it cannot create a field's FIRST table.
+
+    wd1 is the live case: alignment_config declares 1905 TABLE_CONSENSUS, m2
+    recorded 523 corrections across 11 filters, and `offsets/` was created
+    empty and never populated.  The bare FileNotFoundError from `Table.read`
+    named the path and nothing else, while the operator's next move is a
+    DIFFERENT script (`run_astrometry_checkpoint.py --seed`).
+    """
+    m = _load('apply_m2_checkpoint_corrections')
+    rd = tmp_path / 'astrometry_checkpoints'
+    rd.mkdir()
+    _write_m2_record(str(rd), 'F200W', {1: [1, 2]})
+    absent = tmp_path / 'offsets' / 'Offsets_JWST_Brick1905_consensus.csv'
+    rc = m.main(['--records-dir', str(rd), '--table', str(absent)])
+    assert rc == 2, rc
+    err = capsys.readouterr().err
+    assert 'do not exist' in err, err
+    assert str(absent) in err, err
+    assert 'run_astrometry_checkpoint.py' in err, err
+    assert '--seed' in err, err
+    # the seeder p.error()s without --proposal-id/--obsid, so a command that
+    # omits them is not a usable next move
+    assert '--proposal-id' in err, err
+    assert '--obsid' in err, err
+    # and it must say why --pool is not the answer on this pass
+    assert '--pool' in err, err
+
+
+def test_the_bootstrap_command_carries_the_observation_it_was_given(tmp_path,
+                                                                    capsys):
+    """--obs-token already names the observation; the seeder needs --obsid.
+
+    Printing a bare `<obsid>` placeholder when the run itself was scoped to one
+    observation makes the operator re-derive what they just typed.
+    """
+    m = _load('apply_m2_checkpoint_corrections')
+    rd = tmp_path / 'astrometry_checkpoints'
+    rd.mkdir()
+    _write_m2_record(str(rd), 'F200W', {1: [1, 2]})
+    rc = m.main(['--records-dir', str(rd), '--table', str(tmp_path / 'no.csv'),
+                 '--obs-token', '_o003'])
+    assert rc == 2, rc
+    assert '--obsid 003' in capsys.readouterr().err
