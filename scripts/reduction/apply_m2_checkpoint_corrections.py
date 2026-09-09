@@ -248,6 +248,12 @@ def main(argv=None):
     # script, so say which.
     missing = [tp for tp in args.table if not os.path.exists(tp)]
     if missing:
+        # `--seed` needs --proposal-id/--obsid as well (run_astrometry_checkpoint
+        # p.error()s without them), so name them here rather than let the
+        # operator find out on the next run.  --obs-token already carries the
+        # observation when it was passed, so fill it in.
+        m_obs = re.search(r"_o(\d+)", args.obs_token or "")
+        obsid = m_obs.group(1) if m_obs else "<obsid>"
         print(f"ERROR: {len(missing)} offsets table(s) do not exist:",
               file=sys.stderr)
         for tp in missing:
@@ -261,13 +267,16 @@ def main(argv=None):
               "        --catalog-glob '<basepath>/<FILTER>/*_visit*_exp*_m2_daophot_basic.fits' "
               "\\\n        --filter <FILTER> --refcat <refcat.fits> "
               "--basepath <basepath> \\\n"
+              f"        --proposal-id <proposal> --obsid {obsid} \\\n"
               "        --offsets-table <the table above>\n\n"
+              "Run it once per FILTER: the seeder writes the rows for the "
+              "filter it is\nhanded, and the field's m2 correction floor is "
+              "applied for you.\n\n"
               "Note --seed is NOT compatible with --pool: the seeder writes "
               "rows at the\ngranularity of the corrections it is handed, so "
               "there is nothing to pool onto\nyet.  Pool on a LATER pass, once "
               "the table exists.", file=sys.stderr)
         return 2
-
 
     records, corrections = load_corrections(args.records_dir, args.obs_token)
     print(f"{len(records)} m2 records -> {len(corrections)} raw corrections")

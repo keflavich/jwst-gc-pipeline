@@ -1216,6 +1216,8 @@ def test_the_withheld_files_are_named_in_the_output(tmp_path, capsys):
     assert unmeasured.name in out
 
 
+
+
 # ---------------------------------------------------------------------------
 # The reproject precondition (#724)
 #
@@ -1612,5 +1614,26 @@ def test_an_absent_offsets_table_names_the_bootstrap_path(tmp_path, capsys):
     assert str(absent) in err, err
     assert 'run_astrometry_checkpoint.py' in err, err
     assert '--seed' in err, err
+    # the seeder p.error()s without --proposal-id/--obsid, so a command that
+    # omits them is not a usable next move
+    assert '--proposal-id' in err, err
+    assert '--obsid' in err, err
     # and it must say why --pool is not the answer on this pass
     assert '--pool' in err, err
+
+
+def test_the_bootstrap_command_carries_the_observation_it_was_given(tmp_path,
+                                                                    capsys):
+    """--obs-token already names the observation; the seeder needs --obsid.
+
+    Printing a bare `<obsid>` placeholder when the run itself was scoped to one
+    observation makes the operator re-derive what they just typed.
+    """
+    m = _load('apply_m2_checkpoint_corrections')
+    rd = tmp_path / 'astrometry_checkpoints'
+    rd.mkdir()
+    _write_m2_record(str(rd), 'F200W', {1: [1, 2]})
+    rc = m.main(['--records-dir', str(rd), '--table', str(tmp_path / 'no.csv'),
+                 '--obs-token', '_o003'])
+    assert rc == 2, rc
+    assert '--obsid 003' in capsys.readouterr().err
