@@ -77,6 +77,18 @@ the ordered landing step for a field like m4 is: archive the ambiguous per-frame
 tables, re-fit from ``_cal`` under the new token, then run this tool again to
 clear the merged leftovers stage by stage.
 
+"Unreachable" is a claim about the FIELD BEING SCANNED, not about the name, and
+it is asked per (filter, module) through ``merged_token_expected``.  Most fields
+have an EMPTY ``merged_catalog_module_token``, and for those the untokened name
+is the one their own writer and readers spell -- the current product, with no
+re-fit owed.  Reported blind, this pass called w51's 1259 and ngc6397's 107
+merged catalogs unreachable (measured 2026-09-09), and cloudc is both at once:
+its NIRCam half (2221 obs 002) takes no token while its MIRI half (2221 obs 001)
+does, so a field-level answer is not enough either.  Where the registry has no
+answer -- an unregistered field name such as ``gc2211`` (split into
+``gc2211_o0NN``), or a filter no registered observation declares -- the report
+says so instead, and the disk-evidence-only behaviour is unchanged.
+
 Usage::
 
     python quarantine_pre_obstoken_catalogs.py --field gc2211            # dry run
@@ -253,7 +265,101 @@ def source_observation(path):
     return None
 
 
-def plan_for_merged_dir(directory):
+# --- does this field's merged names carry a module-slot token at all? -------
+#
+# The orphan report says a file is UNREACHABLE.  That is only true where the
+# field's own writer stamps a module-slot token: `merged_catalog_module_token`
+# is EMPTY for most fields, and for those the untokened name is the name every
+# reader spells -- it is the CURRENT product, not a leftover.  Reported blind,
+# w51's 1259 and ngc6397's 107 untokened merged catalogs read as a re-fit owed
+# on a field where nothing is owed at all (PR #778 review).
+#
+# The question is per (filter, module), not per field.  One field can hold both
+# spellings: cloudc's NIRCam half is 2221 observation 002, which takes NO token,
+# while its MIRI half is 2221 observation 001, a `PER_OBS_MERGED_FIELDS` entry
+# that DOES -- so a field-level "does any observation carry a token" answer
+# would report cloudc's untokened NIRCam merges, which are its live products.
+
+#: Instrument of a merged catalog's module slot.  ``merged`` is the NIRCam
+#: nrca+nrcb product and names no instrument, so it falls back to the filter.
+_MODULE_INSTRUMENT = (
+    ('mirim', 'miri'),
+    ('nis', 'niriss'),
+    ('nrc', 'nircam'),
+)
+
+
+def _registry():
+    """``(fields, naming)`` from the installed package, or ``(None, None)``.
+
+    Imported lazily and failure-tolerantly: the per-frame pass needs neither,
+    and a checkout without the package on ``sys.path`` must still be able to
+    quarantine per-frame duplicates.
+    """
+    try:
+        from jwst_gc_pipeline import fields
+        from jwst_gc_pipeline.photometry import naming
+    except ImportError:
+        return None, None
+    return fields, naming
+
+
+def merged_token_expected(field, filtername, module):
+    """Is an untokened merged name UNREACHABLE for this field/filter/module?
+
+    ``True``   every observation that could have written it stamps a module-slot
+               token, so nothing reads the untokened spelling.
+    ``False``  some observation writes exactly this untokened name -- the file
+               is that observation's current product, not a leftover.
+    ``None``   no answer: the package is unavailable, the field is not in
+               ``fields.yaml`` (``gc2211`` is split into ``gc2211_o0NN``), or no
+               registered observation declares this filter.  Callers must fall
+               back to the evidence on disk rather than assume either way.
+    """
+    fields_mod, naming = _registry()
+    if fields_mod is None:
+        return None
+    fobj = fields_mod.BY_NAME.get(field)
+    if fobj is None:
+        return None
+    mod = str(module).lower()
+    instrument = None
+    for prefix, inst in _MODULE_INSTRUMENT:
+        if mod.startswith(prefix):
+            instrument = inst
+            break
+    if instrument is None:      # module == 'merged'
+        instrument = naming._instrument_from_filter(filtername).lower()
+    tokened = []
+    for obs in fobj.observations:
+        declared = (obs.niriss_filters if instrument == 'niriss'
+                    else obs.filters) or ()
+        if declared and str(filtername).lower() not in {str(f).lower()
+                                                        for f in declared}:
+            continue
+        obsids = list(obs.obsids.get(instrument, ()))
+        obsids += list((obs.joint_obsids or {}).get(instrument, ()))
+        for obsid in obsids:
+            if str(obsid) == fields_mod.WILDCARD_OBSID:
+                # A wildcard claims every observation of the proposal, so the
+                # token depends on the proposal alone.  Asked with a made-up
+                # obsid instead, a `PER_OBS_MERGED_FIELDS` entry for that number
+                # under a different field would answer for this one.
+                tokened.append(
+                    str(obs.proposal) in naming.PER_OBS_MERGED_PROPOSALS
+                    or str(obs.proposal) in naming.SHARED_TREE_PROPOSALS)
+                continue
+            try:
+                tok = naming.merged_catalog_module_token(obs.proposal, obsid)
+            except naming.ObservationFieldError:
+                continue
+            tokened.append(bool(tok))
+    if not tokened:
+        return None
+    return all(tokened)
+
+
+def plan_for_merged_dir(directory, field=None):
     """``(plan, orphans)`` for the ``catalogs/`` directory.
 
     ``plan``    -- untokened merged catalogs a tokened, NEWER twin supersedes.
@@ -261,6 +367,14 @@ def plan_for_merged_dir(directory):
                    unreachable but that nothing has replaced yet.  Reported, not
                    touched: renaming one would take the field from "reads a
                    stale catalog" to "has no catalog at all" for that stage.
+
+    ``field`` names the field being scanned, which is what says whether the
+    untokened spelling is unreachable at all: where ``merged_token_expected``
+    answers False the untokened name is the one this field's own writer and
+    readers use, so the file is neither an orphan nor renameable, whatever else
+    sits beside it.  A tokened neighbour there is the foreign one.  ``None``
+    (the default, and every unregistered field) keeps the disk-evidence-only
+    behaviour, so the per-frame use on ``gc2211`` is unchanged.
     """
     try:
         names = os.listdir(directory)
@@ -288,6 +402,14 @@ def plan_for_merged_dir(directory):
     plan, orphans = [], []
     for i in sorted(untokened):
         name = untokened[i]
+        filt, module, _ = i
+        if merged_token_expected(field, filt, module) is False:
+            # This field spells the merged name for this filter WITHOUT a
+            # token, so the untokened file is the current product.  Calling it
+            # unreachable sends an operator re-fitting a field that owes
+            # nothing, and renaming it would delete the only catalog a reader
+            # can find.
+            continue
         twins = sorted(tokened.get(i, ()))
         if not twins:
             orphans.append(name)
@@ -313,6 +435,14 @@ def sidecars(directory, name):
     """
     return [n for n in (name + ".prov.json",)
             if os.path.exists(os.path.join(directory, n))]
+
+
+def _show(names, limit=5):
+    """Print the first ``limit`` names and how many more there are."""
+    for n in names[:limit]:
+        print(f"    {n}")
+    if len(names) > limit:
+        print(f"    ... and {len(names) - limit} more")
 
 
 def field_dirs(field):
@@ -376,7 +506,7 @@ def main(argv=None):
                 renamed += 1
 
     if args.merged:
-        mplan, orphans = plan_for_merged_dir(catdir)
+        mplan, orphans = plan_for_merged_dir(catdir, field=args.field)
         if mplan:
             print(f"catalogs/: {len(mplan)} untokened MERGED catalog(s) "
                   f"superseded by a newer tokened one")
@@ -389,15 +519,27 @@ def main(argv=None):
                 print(f"      (HDU-1 FILENAME names {obs[0]}/{obs[1]}; a pooled "
                       f"merge is NOT attributable, so this is not ownership)")
         total += len(mplan)
-        if orphans:
-            print(f"catalogs/: {len(orphans)} untokened MERGED catalog(s) are "
-                  f"UNREACHABLE under the module-slot token and have no "
+        # An orphan is only UNREACHABLE where this field stamps a module-slot
+        # token for that filter.  Where the answer is unknown -- an unregistered
+        # field, or a filter no registered observation declares -- say that
+        # rather than assert a re-fit is owed.
+        unreachable, undetermined = [], []
+        for o in orphans:
+            filt, module, _ = merged_identity(o)
+            (unreachable if merged_token_expected(args.field, filt, module)
+             else undetermined).append(o)
+        if unreachable:
+            print(f"catalogs/: {len(unreachable)} untokened MERGED catalog(s) "
+                  f"are UNREACHABLE under the module-slot token and have no "
                   f"replacement yet -- left alone; re-run once the re-fit "
                   f"reaches that stage:")
-            for o in orphans[:5]:
-                print(f"    {o}")
-            if len(orphans) > 5:
-                print(f"    ... and {len(orphans) - 5} more")
+            _show(unreachable)
+        if undetermined:
+            print(f"catalogs/: {len(undetermined)} untokened MERGED catalog(s) "
+                  f"have no tokened twin, and the registry does not say whether "
+                  f"a module-slot token applies to them ({args.field!r} "
+                  f"unregistered, or the filter undeclared) -- left alone:")
+            _show(undetermined)
         if args.execute:
             for old_name, _ in mplan:
                 for n in [old_name] + sidecars(catdir, old_name):

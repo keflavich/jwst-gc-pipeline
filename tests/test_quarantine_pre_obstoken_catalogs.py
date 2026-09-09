@@ -396,3 +396,132 @@ def test_a_per_frame_name_is_not_matched_by_the_merged_pattern():
     m = _load()
     assert m.merged_identity(UNT) is None
     assert m.identity(MUNT) is None
+
+
+# ---------------------------------------------------------------------------
+# "UNREACHABLE" is a claim about the FIELD, and most fields have no module-slot
+# token at all.  Reported blind, the orphan pass called w51's 1259 and
+# ngc6397's 107 untokened merged catalogs unreachable and told an operator to
+# re-run as a re-fit advanced -- a re-fit those fields do not owe, because the
+# untokened name is the one their own reader spells (PR #778 review).
+#
+# The answer is per (filter, module): cloudc is BOTH at once, its NIRCam half
+# (2221 obs 002) untokened and its MIRI half (2221 obs 001, a
+# PER_OBS_MERGED_FIELDS entry) tokened, so a field-level answer still misfires.
+# ---------------------------------------------------------------------------
+
+W51_UNT = 'f405n_nrca_indivexp_merged_m2_dao_basic.fits'
+W51_TOK = 'f405n_nrca_o001_indivexp_merged_m2_dao_basic.fits'
+
+
+def test_a_field_that_stamps_NO_module_token_expects_none():
+    """w51 (6151/001+002) and ngc6397 (1979/001) are not in
+    PER_OBS_MERGED_FIELDS, so their merged names carry no token and an
+    untokened one is the current product."""
+    m = _load()
+    assert m.merged_token_expected('w51', 'f405n', 'merged') is False
+    assert m.merged_token_expected('w51', 'f405n', 'nrca') is False
+    assert m.merged_token_expected('ngc6397', 'f150w2', 'merged') is False
+
+
+def test_a_field_that_DOES_stamp_one_expects_it():
+    m = _load()
+    assert m.merged_token_expected('m4', 'f150w2', 'merged') is True
+    assert m.merged_token_expected('m4', 'f322w2', 'nrcb') is True
+    # brick's NIRCam halves are 1182/004 and 2221/001, both registered
+    assert m.merged_token_expected('brick', 'f200w', 'merged') is True
+    # ngc6334's token is the shared-tree _j{proposal}, not an obs token
+    assert m.merged_token_expected('ngc6334', 'f200w', 'merged') is True
+
+
+def test_the_answer_is_per_FILTER_not_per_FIELD():
+    """cloudc holds both spellings.  A field-level "does any observation of
+    this field carry a token" answer reports its live NIRCam merges."""
+    m = _load()
+    assert m.merged_token_expected('cloudc', 'f182m', 'merged') is False
+    assert m.merged_token_expected('cloudc', 'f2550w', 'mirimage') is True
+
+
+def test_an_unregistered_field_gets_NO_answer():
+    """gc2211 is split into gc2211_o0NN, so the directory name this tool is
+    pointed at is not in fields.yaml.  Unknown must not read as either
+    verdict."""
+    m = _load()
+    assert m.merged_token_expected('gc2211', 'f200w', 'nrca') is None
+    assert m.merged_token_expected('m4', 'f444w', 'merged') is None, \
+        'a filter no registered observation declares is unknown, not tokened'
+
+
+def test_a_no_token_fields_untokened_merge_is_NOT_an_orphan(tmp_path):
+    m = _load()
+    d = _mkm(tmp_path, (W51_UNT, 1000))
+    assert m.plan_for_merged_dir(d, field='w51') == ([], [])
+    # and the same directory read without a field keeps the old behaviour
+    assert m.plan_for_merged_dir(d)[1] == [W51_UNT]
+
+
+def test_a_no_token_fields_CURRENT_product_is_never_renamed(tmp_path):
+    """The rename half needs the same guard.  A newer tokened neighbour on a
+    field whose readers spell the name untokened is the foreign file; renaming
+    the untokened one away would leave that filter with no catalog any reader
+    can find."""
+    m = _load()
+    d = _mkm(tmp_path, (W51_UNT, 1000), (W51_TOK, 2000))
+    assert m.plan_for_merged_dir(d, field='w51') == ([], [])
+    plan, _ = m.plan_for_merged_dir(d, field=None)
+    assert [p[0] for p in plan] == [W51_UNT], 'unchanged where the field is unknown'
+
+
+def test_a_TOKENED_fields_orphans_are_still_reported(tmp_path):
+    m = _load()
+    d = _mkm(tmp_path, (MUNT, 1000))
+    assert m.plan_for_merged_dir(d, field='m4') == ([], [MUNT])
+
+
+def test_MAIN_says_nothing_unreachable_on_a_field_with_no_token(tmp_path,
+                                                                monkeypatch,
+                                                                capsys):
+    m = _load()
+    monkeypatch.setattr(m, 'BASE', str(tmp_path))
+    (tmp_path / 'w51' / 'F405N').mkdir(parents=True)
+    _mkm(tmp_path / 'w51', (W51_UNT, 1000))
+    assert m.main(['--field', 'w51']) == 0
+    out = capsys.readouterr().out
+    assert 'UNREACHABLE' not in out
+    assert 'registry does not say' not in out
+    assert 'dry run: 0 file(s)' in out
+
+
+def test_MAIN_still_reports_the_m4_orphans(tmp_path, monkeypatch, capsys):
+    m = _load()
+    monkeypatch.setattr(m, 'BASE', str(tmp_path))
+    (tmp_path / 'm4' / 'F150W2').mkdir(parents=True)
+    _mkm(tmp_path / 'm4', (MUNT, 1000))
+    assert m.main(['--field', 'm4']) == 0
+    assert 'UNREACHABLE' in capsys.readouterr().out
+
+
+def test_MAIN_says_UNKNOWN_rather_than_unreachable_on_an_unregistered_field(
+        tmp_path, monkeypatch, capsys):
+    m = _load()
+    monkeypatch.setattr(m, 'BASE', str(tmp_path))
+    (tmp_path / 'gc2211' / 'F150W2').mkdir(parents=True)
+    _mkm(tmp_path / 'gc2211', (MUNT, 1000))
+    assert m.main(['--field', 'gc2211']) == 0
+    out = capsys.readouterr().out
+    assert 'UNREACHABLE' not in out
+    assert 'registry does not say' in out
+    assert MUNT in out, 'the files are still named, just not diagnosed'
+
+
+def test_the_registry_being_unavailable_falls_back_to_disk_evidence(tmp_path,
+                                                                    monkeypatch):
+    """A checkout without the package installed must still quarantine per-frame
+    duplicates, so an unimportable registry answers None, never False."""
+    m = _load()
+    monkeypatch.setattr(m, '_registry', lambda: (None, None))
+    assert m.merged_token_expected('w51', 'f405n', 'merged') is None
+    d = _mkm(tmp_path, (W51_UNT, 1000), (W51_TOK, 2000))
+    plan, orphans = m.plan_for_merged_dir(d, field='w51')
+    assert [p[0] for p in plan] == [W51_UNT]
+    assert orphans == []
