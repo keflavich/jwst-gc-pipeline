@@ -409,7 +409,33 @@ than five independent checks would be.
     pair residual (bulk removed) against 15 mas at 3σ, **and** the region's match
     COVERAGE, so both seam classes are covered: one inside the match radius
     (brick-1182 F200W's ~90 mas strip) and one beyond it (brick-1182 v001's ~20″
-    half-mosaic, which keeps its sources and loses its pairs);
+    half-mosaic, which keeps its sources and loses its pairs).
+
+    Coverage is counted three ways, because the plain "pairs inside the 0.3″
+    match radius per source" count misses a displaced region twice over (both
+    measured in the #667 review, on cloudef F210M vs VIRAC2 with a 20″
+    displacement injected):
+    * over **tight** pairs (within `REGION_TIGHT_PAIR_MAS`, 50 mas).  Against a
+      GC-density reference (~7 stars/arcsec², ~2 candidates inside the match
+      radius) a displaced source does not lose its pair, it finds a DIFFERENT
+      star, and the region keeps 0.55 of its expected pairs — over the 0.3 bar.
+      Those replacements are chance matches spread over the whole radius, so the
+      tight count reads ~0.07 of expected where the all-pair count reads ~0.86;
+    * over **all** pairs inside the match radius — the count that fires against a
+      SPARSE reference, where a displaced region finds nothing to pair with;
+    * over contiguous **groups** of cells too small to judge alone.  A 20″
+      displacement never fills a 45″ cell: each straddling cell keeps its
+      undisplaced half's pairs and clears the bar, and the fully-displaced cells
+      predict fewer than `min_stars` pairs and get no verdict.  A connected group
+      of such starved cells is tested against the same two bars once their summed
+      expectation reaches `min_stars` — no new tunable.
+
+    Stated limit: a displaced region whose cells cannot between them predict
+    `min_stars` (40) pairs is not separable from noise by a matched-pair
+    statistic and is NOT caught (a 2% corner of a footprint predicts ~24 pairs
+    and reads clean).  `n_skipped` / `skipped_expected_pairs` record how much of
+    the field got no coverage verdict, so a `clean=True` over silently unchecked
+    cells is distinguishable from one over a field that was checked;
   * `histogram-grid` — `measure_offset_grid`, used on a swept or otherwise
     unverified tie, where matched-pair statistics have no standing and the
     histogram is the only estimator that works, **and** whenever the region map

@@ -108,6 +108,71 @@ def test_region_displaced_beyond_the_match_radius_is_reported_uncovered():
     assert "displaced beyond" in m["reason"], m["reason"]
 
 
+def test_a_displaced_strip_smaller_than_a_cell_is_caught_as_a_group():
+    """#667 review: SHAPE, not displaced fraction, decided whether the coverage
+    test saw a 20" displacement -- a 16% strip was missed while an 11% quadrant
+    was caught.  A 20" feature never fills a 45" cell: every straddling cell
+    keeps enough pairs from its undisplaced half to clear the bar, and the cells
+    that ARE fully displaced predict fewer than min_stars pairs, so each was
+    skipped as "not expected to be measurable".  Those cells are adjacent and
+    they all lost their pairs, so the GROUP is tested against the same bar."""
+    x, y, ref = _field()
+    y = y.copy()
+    y[y > 40.0] += 20.0                 # a strip 16% of the field, 20" out
+    a = _sky(x, y)
+    m = same_star_region_map(a, ref, _tie(a, ref), context="strip")
+    assert m["measurable"] is True, m["reason"]
+    assert m["n_uncovered"] >= 1, m["uncovered_cells"]
+    assert any("cells" in c for c in m["uncovered_cells"]), m["uncovered_cells"]
+    assert m["clean"] is False
+    assert "displaced beyond" in m["reason"], m["reason"]
+
+
+def test_a_region_that_keeps_only_chance_pairs_is_caught_by_the_tight_count():
+    """A region displaced past the match radius does NOT lose its pairs against
+    a GC-density reference -- it finds DIFFERENT stars.
+
+    Measured on real cloudef F210M vs VIRAC2 with a 20" quadrant injected (#667
+    review): ~2 reference stars sit inside the 0.3" match radius of any
+    position, so the displaced region kept 0.55 of the pairs its source count
+    predicts -- over the 0.3 coverage bar -- while its pair separations moved
+    from the field's 108 mas median to 214 mas, and the random pairing inflated
+    the cells' standard errors to 52-77 mas at 3 sigma so the residual arm did
+    not fire either.  Counting only TIGHT pairs separates them: 0.07 of expected
+    against 0.86.
+
+    Here the chance partners are put in deliberately -- the region's own
+    reference stars are removed (they moved with it), and each source is given
+    one partner at 60-290 mas in a random direction -- so the ALL-pair count
+    stays at the field's own rate and only the tight count collapses.  The test
+    asserts the tight arm is the one that fires, which is what makes it a
+    regression test rather than a restatement of the previous one.
+    """
+    n_common = 1400
+    x, y, ref = _field(n_common=n_common)
+    rng = np.random.RandomState(3)
+    region = y > 20.0
+    ref_ra = np.asarray(ref.ra.deg, dtype=float)
+    ref_dec = np.asarray(ref.dec.deg, dtype=float)
+    keep = np.ones(len(ref_ra), dtype=bool)
+    keep[:n_common][region] = False     # the region's own stars went with it
+    rad = 0.060 + rng.rand(int(region.sum())) * 0.230     # 60-290 mas
+    ang = rng.rand(int(region.sum())) * 2.0 * np.pi
+    decoy_ra = ref_ra[:n_common][region] + rad * np.cos(ang) / 3600.0 / COSD
+    decoy_dec = ref_dec[:n_common][region] + rad * np.sin(ang) / 3600.0
+    ref2 = SkyCoord(np.concatenate([ref_ra[keep], decoy_ra]) * u.deg,
+                    np.concatenate([ref_dec[keep], decoy_dec]) * u.deg,
+                    frame="icrs")
+    a = _sky(x, y)
+    m = same_star_region_map(a, ref2, _tie(a, ref2), context="chance pairs")
+    assert m["measurable"] is True, m["reason"]
+    assert m["n_uncovered"] >= 1, m
+    assert {c["by"] for c in m["uncovered_cells"]} == {"tight-pairs"}, \
+        m["uncovered_cells"]            # the all-pair count alone would pass it
+    assert m["clean"] is False
+    assert m["coverage_rate_tight"] < m["coverage_rate_all"], m
+
+
 def test_a_sparse_footprint_edge_is_not_called_a_seam():
     """The cloudef corner cell (5,0) holds 38% of its box and 49 matched stars
     against a typical 130.  Thin coverage must read as unmeasured, never as a
@@ -119,6 +184,11 @@ def test_a_sparse_footprint_edge_is_not_called_a_seam():
     assert m["measurable"] is True, m["reason"]
     assert m["n_uncovered"] == 0, m["uncovered_cells"]
     assert m["clean"] is True, m["reason"]
+    # A cell no arm could predict min_stars pairs for got no coverage verdict at
+    # all; `clean=True` beside silently unchecked cells is a different statement
+    # from `clean=True` over a field that was checked, so it is reported (#667
+    # review).
+    assert "n_skipped" in m and "skipped_expected_pairs" in m, sorted(m)
 
 
 def test_reference_tie_gates_on_the_region_map_when_the_tie_is_small(monkeypatch):

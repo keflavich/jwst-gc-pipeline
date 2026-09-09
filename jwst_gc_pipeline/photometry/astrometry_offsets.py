@@ -871,7 +871,7 @@ class GlobalTieNotVerifiedError(RuntimeError):
 
 def local_residual_map(a, b, global_result, cell_arcsec=2.0,
                        match_radius=0.3 * u.arcsec, min_stars=10,
-                       tol_mas=15.0, nsigma=3.0, context=""):
+                       tol_mas=15.0, nsigma=3.0, context="", return_pairs=False):
     """Fine-scale (default 2"x2" cell) residual-offset map from matched pairs,
     AFTER a verified global tie.  This is the sanctioned "histogram refinement"
     class of measurement: the coarse offset is measured first with the
@@ -906,14 +906,21 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     nsigma : float
         Significance requirement: a cell is only flagged when its mean residual
         exceeds ``nsigma`` times its standard error.
+    return_pairs : bool
+        Also return the per-PAIR arrays the cells were binned from
+        (``pairs=dict(ia, ib, ix, iy, resid_mas)``).  ``same_star_region_map``
+        needs them to count each cell's TIGHT pairs, which is how a region
+        that kept only CHANCE matches is told from one that kept its own stars
+        (issue #610 review); a caller that re-matched to get them would be
+        re-running the pairing this function already did, on its own rules.
 
     Returns
     -------
     dict
         ``dict(cells=[...], n_cells, n_measured, n_pairs, n_flagged,
         worst_off_mas, worst_sig_off_mas, clean)``, plus ``reason`` on an empty
-        map.  ``n_pairs`` is the number of UNAMBIGUOUS matched pairs the map
-        was built from.  Each cell:
+        map and ``pairs`` when ``return_pairs``.  ``n_pairs`` is the number of
+        UNAMBIGUOUS matched pairs the map was built from.  Each cell:
         ``dict(ra0, dec0, ix, iy, n, dra_mas, ddec_mas, dra_sem, ddec_sem,
         off_mas, significant, flagged)``.  ``clean`` is True when no cell is
         flagged AND at least one cell was measurable.
@@ -953,10 +960,15 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         # n_pairs.  `reason` names which branch this is, so a caller reporting
         # "every cell held too few stars" is not naming a cause it never
         # checked.
-        return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
-                    n_pairs=n_pairs, reason=reason,
-                    worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
-                    clean=False)
+        out = dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
+                   n_pairs=n_pairs, reason=reason,
+                   worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
+                   clean=False)
+        if return_pairs:
+            empty_i = np.zeros(0, dtype=int)
+            out["pairs"] = dict(ia=empty_i, ib=empty_i, ix=empty_i, iy=empty_i,
+                                resid_mas=np.zeros(0, dtype=float))
+        return out
 
     ia, ib, sep, _ = search_around_sky(a, b, radius_arcsec * u.arcsec)
     if len(ia) == 0:
@@ -1020,14 +1032,21 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
             significant=significant, flagged=bool(off > tol_mas and significant)))
     flagged = [c for c in cells if c["flagged"]]
     sig = [c for c in cells if c["significant"]]
-    return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
-                n_pairs=int(len(ia_n)), n_flagged=len(flagged),
-                reason=(None if cells else
-                        f"every cell held fewer than min_stars={min_stars} "
-                        f"of the {len(ia_n)} unambiguous pair(s)"),
-                worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
-                worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
-                clean=bool(cells) and not flagged)
+    out = dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
+               n_pairs=int(len(ia_n)), n_flagged=len(flagged),
+               reason=(None if cells else
+                       f"every cell held fewer than min_stars={min_stars} "
+                       f"of the {len(ia_n)} unambiguous pair(s)"),
+               worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
+               worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
+               clean=bool(cells) and not flagged)
+    if return_pairs:
+        # `resid_mas` is the pair separation AFTER the verified global tie is
+        # removed -- the distance from where this star should be, not from
+        # where the frame happens to sit.
+        out["pairs"] = dict(ia=ia_n, ib=ib_n, ix=ix, iy=iy,
+                            resid_mas=np.hypot(dra, ddec))
+    return out
 
 
 #: Cell size (arcsec) of the same-star REGION map that gates a dense reference
@@ -1044,13 +1063,85 @@ DEFAULT_REGION_MIN_CELLS = 4
 #: which is the one seam class a matched-pair statistic cannot see in its
 #: residuals -- so it is caught here instead, in the coverage.
 REGION_COVERAGE_FRACTION = 0.3
+#: Pair separation (mas, after the verified global tie is removed) inside which
+#: a matched pair counts as TIGHT.  Coverage counted over ALL pairs inside the
+#: 0.3" match radius does NOT see a displaced region against a GC-density
+#: reference: at ~7 reference stars per arcsec^2 a displaced source finds a
+#: DIFFERENT star to pair with (~2 candidates inside the match radius), so the
+#: region keeps most of the field's pair rate and the coverage bar never fires
+#: (measured on cloudef F210M with a 20" quadrant injected: 0.55 of expected,
+#: over the 0.3 bar -- #667 review).  Those replacement pairs are CHANCE
+#: matches and sit where chance puts them; the field's own stars sit within the
+#: reference's per-star scatter (~40 mas for VIRAC2).  Counting only tight
+#: pairs separates the two: the same injected region keeps 7% of the field's
+#: tight-pair rate against 86% of its all-pair rate.
+REGION_TIGHT_PAIR_MAS = 50.0
+
+
+def _cell_counts(ix, iy):
+    """``{(ix, iy): count}`` for a pair of integer cell-index arrays."""
+    out = {}
+    for kx, ky in zip(np.asarray(ix).tolist(), np.asarray(iy).tolist()):
+        key = (int(kx), int(ky))
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def _connected_cells(entries):
+    """4-neighbour connected components of a list of ``dict(ix=, iy=, ...)``."""
+    remaining = {(e["ix"], e["iy"]): e for e in entries}
+    comps = []
+    while remaining:
+        stack = [next(iter(remaining))]
+        comp = []
+        while stack:
+            key = stack.pop()
+            entry = remaining.pop(key, None)
+            if entry is None:
+                continue
+            comp.append(entry)
+            kx, ky = key
+            for nb in ((kx + 1, ky), (kx - 1, ky), (kx, ky + 1), (kx, ky - 1)):
+                if nb in remaining:
+                    stack.append(nb)
+        comps.append(sorted(comp, key=lambda e: (e["ix"], e["iy"])))
+    return comps
+
+
+def _region_coverage_scan(keys, n_src, got_by_cell, rate, min_stars,
+                          coverage_fraction, by):
+    """Split source cells into UNCOVERED / STARVED / TESTABLE for one pair count.
+
+    ``rate`` is the field's OWN pairs-per-source for the statistic named by
+    ``by``, so the test is always relative to what this field/reference pair
+    actually achieves -- a genuinely sparse footprint edge thins its sources and
+    its pairs together and stays covered.
+
+    A cell whose source count predicts fewer than ``min_stars`` pairs cannot be
+    judged on its own; it is returned as STARVED when it also lost the pairs it
+    did predict, so the caller can test a contiguous GROUP of such cells against
+    the same bar (a 20" displacement never fills a 45" cell -- #667 review).
+    """
+    uncovered, starved, untestable = [], [], []
+    for (kx, ky), n_a in zip(keys, n_src):
+        expected = float(n_a) * rate
+        got = int(got_by_cell.get((int(kx), int(ky)), 0))
+        entry = dict(ix=int(kx), iy=int(ky), n_sources=int(n_a), n_pairs=got,
+                     expected_pairs=expected, by=by)
+        lost = got <= coverage_fraction * expected
+        if expected < min_stars:
+            (starved if lost else untestable).append(entry)
+        elif lost:
+            uncovered.append(entry)
+    return uncovered, starved, untestable
 
 
 def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_ARCSEC,
                          min_stars=DEFAULT_REGION_MIN_STARS,
                          min_cells=DEFAULT_REGION_MIN_CELLS,
                          match_radius=0.3 * u.arcsec, tol_mas=15.0, nsigma=3.0,
-                         coverage_fraction=REGION_COVERAGE_FRACTION, context=""):
+                         coverage_fraction=REGION_COVERAGE_FRACTION,
+                         tight_pair_mas=REGION_TIGHT_PAIR_MAS, context=""):
     """Per-REGION seam map from SAME-STAR matched pairs, bulk removed.
 
     The spatial check ``measure_offset_grid`` is meant to be, measured with the
@@ -1074,10 +1165,41 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
       tolerance.
     * COVERAGE -- a cell that holds sources but almost none of the matched
       pairs its source count predicts.  A region displaced BEYOND the match
-      radius (brick-1182 v001, ~20") keeps every source and loses every pair,
-      so it is invisible in the residuals and unmistakable here.  The test is
-      relative to the field's OWN match rate, so a genuinely sparse footprint
-      edge is reported as unmeasured rather than as a seam.
+      radius (brick-1182 v001, ~20") keeps every source and loses its own
+      stars' pairs, so it is invisible in the residuals and visible here.  The
+      test is relative to the field's OWN match rate, so a genuinely sparse
+      footprint edge is reported as unmeasured rather than as a seam.
+
+      Counted THREE ways, because the plain "pairs inside the match radius per
+      source" count misses the displaced region twice over (both measured, in
+      the #667 review):
+
+      - over TIGHT pairs (``tight_pair_mas``, default 50 mas).  Against a
+        GC-density reference a displaced source does not lose its pair, it
+        finds a DIFFERENT star: ~2 candidates sit inside a 0.3" radius at
+        ~7 stars/arcsec^2, so the region keeps 0.55 of its expected pairs and
+        clears a 0.3 bar.  Those replacements are chance matches spread over
+        the whole radius, while real pairs sit inside the reference's ~40 mas
+        per-star scatter, so the tight count reads 0.07 of expected where the
+        all-pair count reads 0.86.
+      - over ALL pairs inside the match radius, which is the count that fires
+        against a SPARSE reference, where a displaced region finds nothing at
+        all to pair with.
+      - over contiguous GROUPS of cells too small to judge alone.  A 20"
+        displacement never fills a 45" cell: every straddling cell keeps enough
+        pairs from its undisplaced half to clear the bar, and the cells that
+        are fully displaced predict fewer than ``min_stars`` pairs and are
+        skipped.  A connected group of such starved cells is tested against the
+        same two bars once their summed expectation reaches ``min_stars``.
+
+      LIMIT, stated rather than implied: a displaced region whose cells cannot
+      between them predict ``min_stars`` pairs is not separable from noise by a
+      matched-pair statistic and is NOT caught here (a 2% corner of the cloudef
+      footprint predicts ~24 pairs and stays clean).  ``n_skipped`` /
+      ``skipped_expected_pairs`` report how much of the field got no coverage
+      verdict, so "checked and fine" is distinguishable from "not checked".
+      Whole-field displacement never reaches this map at all: ``global_result``
+      must already be a verified small tie.
 
     ``global_result`` is a ``measure_offset`` result and carries the same
     preconditions as :func:`local_residual_map` (ok, not swept, offset well
@@ -1089,8 +1211,12 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     -------
     dict
         ``dict(cells, n_cells, n_measured, n_flagged, n_uncovered,
-        uncovered_cells, n_pairs, worst_off_mas, worst_sig_off_mas,
-        bulk_dra_mas, bulk_ddec_mas, measurable, clean, reason)``.
+        uncovered_cells, n_skipped, skipped_expected_pairs, n_pairs,
+        n_tight_pairs, coverage_rate_all, coverage_rate_tight,
+        tight_pair_mas, worst_off_mas, worst_sig_off_mas, bulk_dra_mas,
+        bulk_ddec_mas, measurable, clean, reason)``.
+        Each entry of ``uncovered_cells`` carries ``by`` (``"tight-pairs"`` /
+        ``"all-pairs"``) and either ``ix``/``iy`` or, for a group, ``cells``.
         ``measurable`` is False when fewer than ``min_cells`` cells could be
         measured -- the caller must then fall back rather than read ``clean``,
         which is False in that case for the same reason an unverifiable check
@@ -1099,15 +1225,24 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     lrm = local_residual_map(a, b, global_result, cell_arcsec=cell_arcsec,
                              match_radius=match_radius, min_stars=min_stars,
                              tol_mas=float("inf"), nsigma=nsigma,
-                             context=f"{context} region map")
+                             context=f"{context} region map", return_pairs=True)
     cells = list(lrm.get("cells") or [])
+    pairs = lrm.get("pairs") or {}
+    pair_sep_mas = np.asarray(pairs.get("resid_mas", []), dtype=float)
+    tight_sel = pair_sep_mas <= float(tight_pair_mas)
+    n_a_total = max(int(np.size(a)), 1)
     base = dict(n_pairs=int(lrm.get("n_pairs", 0)),
+                n_tight_pairs=int(tight_sel.sum()),
+                coverage_rate_all=float(len(pair_sep_mas)) / n_a_total,
+                coverage_rate_tight=float(tight_sel.sum()) / n_a_total,
+                tight_pair_mas=float(tight_pair_mas),
                 bulk_dra_mas=float("nan"), bulk_ddec_mas=float("nan"),
                 cell_arcsec=float(cell_arcsec), tol_mas=float(tol_mas),
                 nsigma=float(nsigma))
     if len(cells) < min_cells:
         return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                     n_flagged=0, n_uncovered=0, uncovered_cells=[],
+                    n_skipped=0, skipped_expected_pairs=0.0,
                     worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
                     measurable=False, clean=False,
                     reason=(lrm.get("reason") or
@@ -1159,17 +1294,68 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     a_iy = np.floor((a_dec - d0) / cell_deg_dec).astype(int)
     keys, n_src = np.unique(np.column_stack([a_ix, a_iy]), axis=0,
                             return_counts=True)
-    rate = float(lrm.get("n_pairs", 0)) / max(len(a_ra), 1)
-    measured = {(c["ix"], c["iy"]): c for c in cells}
-    uncovered = []
-    for (kx, ky), n_a in zip(keys.tolist(), n_src.tolist()):
-        expected = n_a * rate
-        if expected < min_stars:
-            continue          # not expected to be measurable: silent, not a seam
-        got = measured[(kx, ky)]["n"] if (kx, ky) in measured else 0
-        if got <= coverage_fraction * expected:
-            uncovered.append(dict(ix=int(kx), iy=int(ky), n_sources=int(n_a),
-                                  n_pairs=int(got), expected_pairs=float(expected)))
+    keys = [tuple(int(v) for v in k) for k in keys.tolist()]
+    n_src = [int(v) for v in n_src.tolist()]
+    # Pairs are counted from the pair arrays rather than from `cells`, so a cell
+    # holding 39 pairs against 45 expected reads as covered.  Reading `cells`
+    # gave it got=0 (it never became a cell) and called it uncovered -- the
+    # unmeasured/displaced conflation this map exists to remove, arriving from
+    # the other side.
+    p_ix = np.asarray(pairs.get("ix", []), dtype=int)
+    p_iy = np.asarray(pairs.get("iy", []), dtype=int)
+    got_all = _cell_counts(p_ix, p_iy)
+    got_tight = _cell_counts(p_ix[tight_sel], p_iy[tight_sel])
+    rate_all = base["coverage_rate_all"]
+    rate_tight = base["coverage_rate_tight"]
+
+    # TIGHT first: it is the arm that sees a displaced region against a DENSE
+    # reference, where the region keeps chance-matched pairs at nearly the
+    # field's own rate.  ALL-pairs second: it is the arm that fires against a
+    # SPARSE reference, where the region keeps nothing.  A cell that neither
+    # arm can predict `min_stars` pairs for got no verdict at all and is
+    # reported in `n_skipped`.
+    unc_tight, starved_tight, _untestable_tight = _region_coverage_scan(
+        keys, n_src, got_tight, rate_tight, min_stars, coverage_fraction,
+        "tight-pairs")
+    unc_all, starved_all, untestable_all = _region_coverage_scan(
+        keys, n_src, got_all, rate_all, min_stars, coverage_fraction,
+        "all-pairs")
+    uncovered, seen = [], set()
+    for entry in unc_tight + unc_all:
+        key = (entry["ix"], entry["iy"])
+        if key not in seen:
+            seen.add(key)
+            uncovered.append(entry)
+    # A displaced region SMALLER than a cell straddles several: each straddling
+    # cell keeps its undisplaced half's pairs and clears the bar, and the cells
+    # that are fully displaced predict too few pairs to judge alone.  Neither is
+    # noise -- they are adjacent and they all lost their pairs -- so a connected
+    # GROUP is tested against the same two bars, with no new tunable.
+    grouped = set()
+    for starved in (starved_tight, starved_all):
+        for comp in _connected_cells(starved):
+            exp_sum = float(sum(c["expected_pairs"] for c in comp))
+            got_sum = int(sum(c["n_pairs"] for c in comp))
+            if exp_sum < min_stars or got_sum > coverage_fraction * exp_sum:
+                continue
+            group = [(c["ix"], c["iy"]) for c in comp]
+            # The two statistics can starve overlapping sets of cells; report
+            # the region once rather than once per statistic.
+            if all(k in grouped for k in group):
+                continue
+            grouped.update(group)
+            uncovered.append(dict(cells=group, n_cells=len(group), by=comp[0]["by"],
+                                  n_sources=int(sum(c["n_sources"] for c in comp)),
+                                  n_pairs=got_sum, expected_pairs=exp_sum))
+    # Cells no arm could judge: too few sources for either rate to predict
+    # `min_stars` pairs, and not lost enough to enter a starved group.  Named,
+    # because `clean=True` over a field with silently skipped cells is not the
+    # same statement as `clean=True` over a field that was checked.
+    # (rate_tight <= rate_all, so a cell the ALL arm cannot predict min_stars
+    # pairs for is beyond the tight arm too.)
+    judged = {(c["ix"], c["iy"]) for c in unc_tight + unc_all}
+    judged |= {(c["ix"], c["iy"]) for c in starved_tight + starved_all}
+    skipped = [c for c in untestable_all if (c["ix"], c["iy"]) not in judged]
 
     flagged = [c for c in cells if c["flagged"]]
     sig = [c for c in cells if c["significant"]]
@@ -1179,14 +1365,20 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         reason = (f"{len(flagged)} region cell(s) above {tol_mas} mas at "
                   f"{nsigma}-sigma (worst {worst:.1f} mas)")
     elif uncovered:
-        reason = (f"{len(uncovered)} region cell(s) hold sources but not the "
-                  f"matched pairs the field's match rate predicts -- a region "
-                  f"displaced beyond the {match_radius} match radius looks "
-                  f"exactly like this")
+        by = sorted({c["by"] for c in uncovered})
+        reason = (f"{len(uncovered)} region cell(s)/group(s) hold sources but "
+                  f"not the matched pairs the field's own rate predicts "
+                  f"({', '.join(by)}; tight = within {tight_pair_mas:.0f} mas) "
+                  f"-- a region displaced beyond the {match_radius} match "
+                  f"radius looks exactly like this, and against a dense "
+                  f"reference it keeps CHANCE pairs while losing the tight ones")
     base.update(bulk_dra_mas=float(bulk[0]), bulk_ddec_mas=float(bulk[1]))
     return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                 n_flagged=len(flagged), n_uncovered=len(uncovered),
                 uncovered_cells=uncovered, worst_off_mas=worst,
+                n_skipped=len(skipped),
+                skipped_expected_pairs=float(sum(c["expected_pairs"]
+                                                 for c in skipped)),
                 worst_sig_off_mas=max((c["resid_off_mas"] for c in sig),
                                       default=float("nan")),
                 measurable=True, reason=reason,
