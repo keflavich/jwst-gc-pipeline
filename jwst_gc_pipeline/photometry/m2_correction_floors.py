@@ -369,13 +369,15 @@ PER_FIELD_FLOOR_MAS = {
     #
     # 4.0, matching brick/sgra/sgrb2/sickle/cloudef rather than taking a
     # bespoke constant.  It covers the bulk of F070W's intrinsic spread while
-    # leaving the one correction m2 actually emitted for it -- nrca4 exposure
-    # 2, 5.17 mas at dra +4.64 +/- 1.12 -- above the floor and actionable, and
-    # it sits more than twice the max of the other thirteen filters, so it is
-    # not chosen to keep anything green.  The seven filters that currently fail
-    # this field's m2 fail on an untrustworthy consensus->reference tie (7.9 to
-    # 2648 mas, issue TBD), not on per-exposure scatter, so no floor value
-    # would change their verdict.
+    # leaving the one PER-EXPOSURE correction m2 actually emitted for it --
+    # nrca4 exposure 2, 5.17 mas at dra +4.64 +/- 1.12 -- above the floor and
+    # actionable, and it sits more than twice the max of the other thirteen
+    # filters, so it is not chosen to keep anything green.  (F070W's record
+    # holds a second correction, the 4.30 mas consensus->reference bulk, which
+    # no floor gates -- the bulk term is floor-exempt by design.)  The seven
+    # filters that currently fail this field's m2 fail on an untrustworthy
+    # consensus->reference tie (7.9 to 2648 mas, issue #819), not on
+    # per-exposure scatter, so no floor value would change their verdict.
     'crowded_l3': 4.0,
 }
 
