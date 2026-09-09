@@ -45,6 +45,7 @@ import os
 import re
 
 __all__ = ["jw_prefix", "proposal_id_from_filename", "proposal_id_from_program",
+           "filtername_from_mast_filters",
            "proposal_id_from_datamodel"]
 
 #: The proposal number is the first five digits after ``jw`` in every product
@@ -181,6 +182,59 @@ def filtername_from_header(header):
             f"header names no science bandpass: FILTER={header.get('FILTER')!r}, "
             f"PUPIL={header.get('PUPIL')!r}")
     return filtername
+
+
+def filtername_from_mast_filters(spec):
+    """The science bandpass MAST's ``filters`` COLUMN names.
+
+    The same question :func:`filtername_from_header` answers, asked of the
+    other place the pair appears.  MAST joins the two wheels with ``';'`` in
+    FILTER;PUPIL order, so ``'F150W2;F162M'`` is the very exposure that
+    function resolves from ``FILTER='F150W2', PUPIL='F162M'`` -- and it
+    resolves to the same band, ``F162M``, by the same rule: whichever wheel is
+    not empty holds the band, and when both are real the pupil wheel wins
+    because that is where NIRCam parks its narrow and medium bands.
+
+    A single-wheel value (``'F212N'``) is its own band.  Returns ``None`` when
+    nothing readable is there -- a masked or empty cell -- because the caller
+    is filtering a table and a row it cannot read is a row that does not match,
+    not a crash.
+
+    WHY THIS EXISTS.  The reduce drivers masked the MAST observation table with
+    a SUBSTRING test::
+
+        np.char.find(obs_table['filters'], filtername.upper()) >= 0
+
+    and ``'F150W'`` is a substring of ``'F150W2;F162M'``.  So asking a proposal
+    for F150W matched an F162M observation, downloaded it, and wrote it to an
+    ``F150W/`` directory beside the ``F162M/`` one holding the same exposures.
+    Measured 2026-09-09: w51, wd1 and wd2 each carried such a pair (wd1's
+    ``F150W/`` and ``F164N/`` hold byte-distinct copies of the same 96
+    exposures), and every catalog, marker and checkpoint downstream of the
+    wide-named directory is a product of a band the proposal never observed.
+    ``F444W`` reached the same end by matching its own half of
+    ``'F444W;F405N'`` exactly.
+
+    The rule is not new here -- ``PipelineRerunNIRCAM-LONG._asn_effective_band``
+    already applies it when choosing an association, describing it as "pupil
+    narrow/medium band if present, else the wide filter".  It was applied only
+    after the wrong observation had already been fetched.
+    """
+    if spec is None:
+        return None
+    text = str(spec).strip()
+    if not text or text.lower() in ('--', 'none', 'nan', 'masked'):
+        return None
+    wheels = [w.strip().upper() for w in text.split(';') if w.strip()]
+    if not wheels:
+        return None
+    band = wheels[0]
+    for pupil in wheels[1:]:
+        if pupil not in _EMPTY_WHEEL:
+            band = pupil
+    if not band or band in _EMPTY_WHEEL:
+        return None
+    return band
 
 
 def proposal_id_from_filename(filename):

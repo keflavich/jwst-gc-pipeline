@@ -30,7 +30,8 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
-from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_datamodel
+from jwst_gc_pipeline.mast_names import (jw_prefix, proposal_id_from_datamodel,
+                                          filtername_from_mast_filters)
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")
@@ -387,8 +388,21 @@ def main(filtername, Observations=None, regionname='brick',
         except AttributeError:
             filters_col = np.array([str(val).upper() for val in obs_table['filters']])
             obs_id_col = np.array([str(val).lower() for val in obs_table['obs_id']])
-        msk = ((np.char.find(filters_col, filtername.upper()) >= 0) |
-               (np.char.find(obs_id_col, filtername.lower()) >= 0))
+        # Exact effective-band match, not a substring -- see the NIRCam
+        # driver's copy of this comment.  MIRI has no filter/pupil pairing
+        # today, so this is behaviour-preserving there and keeps the two
+        # drivers answering the same question the same way.
+        _want = filtername.upper()
+
+        def _obsid_has_band(obs_id):
+            return _want in {t.upper() for t in re.split(r'[^A-Za-z0-9]+',
+                                                         str(obs_id)) if t}
+
+        msk = np.array([
+            (filtername_from_mast_filters(_f) == _want)
+            if filtername_from_mast_filters(_f) is not None
+            else _obsid_has_band(_o)
+            for _f, _o in zip(filters_col, obs_id_col)])
     else:
         print("Warning: 'filters' or 'obs_id' column missing in obs_table; selecting all observations for this proposal")
         msk = np.ones(len(obs_table), dtype=bool)

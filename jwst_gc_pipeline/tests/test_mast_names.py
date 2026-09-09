@@ -266,3 +266,52 @@ def test_filtering_get_filtername_delegates_here():
                         ('F444W', 'CLEAR')):
         hdr = {'FILTER': filt, 'PUPIL': pupil}
         assert get_filtername(hdr) == filtername_from_header(hdr)
+
+
+# --- the FILTER;PUPIL pair in MAST's `filters` column (#828) --------------
+
+def test_effective_band_of_a_paired_filters_cell():
+    """With two filters in serial the NARROWER is the filter.
+
+    These are the real MAST `filters` values for the proposals that carried
+    phantom directories: 6151 observed `F150W2;F162M` and `F444W;F405N`, and
+    1905/3523 observed `F150W2;F164N`.
+    """
+    from jwst_gc_pipeline.mast_names import filtername_from_mast_filters as band
+    assert band('F150W2;F162M') == 'F162M'
+    assert band('F444W;F405N') == 'F405N'
+    assert band('F150W2;F164N') == 'F164N'
+    assert band('F322W2;F323N') == 'F323N'
+
+
+def test_effective_band_of_a_single_wheel_is_itself():
+    from jwst_gc_pipeline.mast_names import filtername_from_mast_filters as band
+    assert band('F212N') == 'F212N'
+    assert band('F150W') == 'F150W'
+    # an EMPTY second wheel does not win: CLEARP is a pupil element, not a band
+    assert band('F480M;CLEARP') == 'F480M'
+    assert band('CLEAR;F212N') == 'F212N'
+
+
+def test_effective_band_of_an_unreadable_cell_is_None():
+    """A masked cell must not raise -- the caller is filtering a table, and a
+    row it cannot read is a row that does not match."""
+    from jwst_gc_pipeline.mast_names import filtername_from_mast_filters as band
+    for empty in (None, '', '   ', '--', 'nan', 'None'):
+        assert band(empty) is None, empty
+
+
+def test_a_wide_blocker_no_longer_matches_its_own_pair():
+    """The defect itself: 'F150W' is a SUBSTRING of 'F150W2;F162M'.
+
+    Asking proposal 6151 for F150W matched an F162M observation, downloaded
+    it, and wrote it to an `F150W/` directory beside the `F162M/` one holding
+    the same exposures.  w51, wd1 and wd2 each carried such a pair.
+    """
+    from jwst_gc_pipeline.mast_names import filtername_from_mast_filters as band
+    cell = 'F150W2;F162M'
+    assert 'F150W' in cell, 'the substring that caused this is still there'
+    assert band(cell) != 'F150W'
+    assert band(cell) == 'F162M'
+    # and the wide half of the LW pair likewise
+    assert band('F444W;F405N') != 'F444W'
