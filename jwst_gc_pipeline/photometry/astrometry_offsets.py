@@ -1148,12 +1148,14 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     estimator CLAUDE.md prescribes for a DENSE reference.  A per-tile histogram
     decides each cell by the height of one bin over the tallest noise bin, and
     over a tile that holds ~100 matched stars whose reference positions scatter
-    by ~40 mas that margin is a handful of counts: measured on cloudef F210M vs
-    VIRAC2 (issue #610) it ran from -4 to +17 across the 36 cells, and went
-    NEGATIVE in four of them -- which is a cell reporting the densest noise bin
-    in its search window, 0.93" to 5.95", as if it were a measured offset.  The
-    same field's same-star cells read 0.3-21 mas with a median 3-sigma of
-    23 mas.
+    by ~40 mas that margin is a handful of counts.  Measured on cloudef F210M
+    vs VIRAC2 at the production nx=ny=6 (issue #610), 3" window, 20 mas bins:
+    the bin holding the true tie holds 0-5 pairs out of the 13k-300k in the
+    window, and another bin beats it in 22 of the 36 cells (margin -4 to +4
+    counts).  In 32 of those the winner is still within 31 mas -- right by
+    luck -- and in FOUR the cell reports the densest noise bin in its search
+    window, 0.93" to 5.95", as a measured offset.  The same field's same-star
+    cells read 0.3-21 mas with a median 3-sigma of 23 mas.
 
     Two independent things are tested, because a matched-pair residual can only
     see a seam it can still pair across:

@@ -444,9 +444,11 @@ than five independent checks would be.
     reference wrongly flagged `dense=True` looks like).  `measurable: False`
     never reads as a pass.
   The histogram grid is always measured and recorded in `per_tile`; on a small tie
-  it is a diagnostic, because over a tile holding ~100 reference-matched stars its
-  peak clears the tallest noise bin by only a handful of counts — measured on
-  cloudef F210M, −4 to +17 across 36 cells, negative in four (issue #610);
+  it is a diagnostic, because over a tile holding ~100 reference-matched stars the
+  bin holding the true tie holds only a handful of counts — measured on cloudef
+  F210M at nx=ny=6, 3″ window: 0–5 pairs out of the 13k–300k in the window, beaten
+  by another bin in 22 of the 36 cells (margin −4 to +4 counts), and in four of
+  those the winner sits 0.93″–5.95″ away (issue #610);
 * E (bands overlapping VIRAC2, 1.0–2.5 µm): flux-cut source-by-source residual
   (both catalogs bright-cut until the estimated spacing ≥ 3× the match radius,
   then `local_residual_map` — which itself REFUSES to run without a verified

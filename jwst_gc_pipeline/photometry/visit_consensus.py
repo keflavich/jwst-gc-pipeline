@@ -1759,11 +1759,14 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # HISTOGRAM decides each cell by the height of one bin over the tallest
     # noise bin, and a tile that holds ~100 stars in common with the reference
     # -- whose own positions scatter ~40 mas -- leaves that margin at a handful
-    # of COUNTS.  Measured on cloudef F210M vs VIRAC2: -4 to +17 across the 36
-    # cells, negative in four of them, so four cells reported 0.93"-5.95" off a
-    # noise bin while the field's same-star tie was 0.33 mas and its 1202-cell
-    # local map was clean.  One of the four failed the contrast floor and
-    # blocked the field; the other three passed.
+    # of COUNTS.  Measured on cloudef F210M vs VIRAC2 at the production
+    # nx=ny=6, 3" window, 20 mas bins: the bin holding the true tie holds 0-5
+    # pairs out of the 13k-300k in the window, and another bin beats it in 22
+    # of the 36 cells (margin -4 to +4 counts).  In 32 of those the winner is
+    # still within 31 mas, so the cell is right by luck; in FOUR it is
+    # 0.93"-5.95" away, while the field's same-star tie was 0.33 mas and its
+    # 1202-cell local map was clean.  One of the four failed the contrast floor
+    # and blocked the field; the other three passed.
     #
     # So when the tie is small enough for same-star pairing to be UNAMBIGUOUS --
     # which is exactly when `same_star` is not None -- the spatial check is the

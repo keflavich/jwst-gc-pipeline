@@ -4,10 +4,13 @@ per-tile histogram whose peak is a handful of counts (issue #610).
 cloudef's m7 cross-filter checkpoint blocked on ONE per-tile cell that reported
 5953.8 mas at contrast 4.5, on a field whose anchor ties to VIRAC2 at 0.334 mas
 same-star over 3682 pairs and whose 1202-cell same-star local map is clean.
-Reproducing the grid on the real catalogs shows why: in each cell the true peak
-bin at zero clears the tallest noise bin by a margin of -4 to +17 COUNTS out of
-20 000-380 000 pairs in the window, and in four cells the margin went negative,
-so those cells reported the densest noise bin (0.93"-5.95") as a measured
+Reproducing the grid on the real catalogs shows why -- catalog_coords(tbl)
+[select_reliable_stars(tbl)] on the m7 merged vetted table against
+load_reference_catalog(...)["all"], plain measure_offset_grid at nx=ny=6:
+the bin holding the true tie holds 0-5 pairs out of the 13k-300k in a cell's
+3" window, and another bin beats it in 22 of the 36 cells (margin -4 to +4
+COUNTS).  In 32 of those the winner is within 31 mas -- right by luck -- and
+in four the cell reports the densest noise bin (0.93"-5.95") as a measured
 offset.  One of the four fell under the contrast floor and blocked the field;
 the other three passed.
 
