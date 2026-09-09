@@ -618,8 +618,16 @@ fields:
         # cataloging run that included them died at the m12 finalize:
         #   KeyError: filter 'f150w' not observed by target 'w51'
         # after the fan-out had completed (job 39893953, 2026-08-22).
-        filters: [f140m, f150w, f162m, f182m, f187n, f210m, f335m, f360m,
-                  f405n, f410m, f444w, f480m, f560w, f770w, f1000w, f1280w,
+        # f150w and f444w are NOT bands this proposal observed.  Both are the
+        # WIDE half of a serial filter pair, and with two filters in serial the
+        # NARROWER one is the filter -- the wide element is only a blocker.
+        # MAST reports the pairs as `F150W2;F162M` and `F444W;F405N`, and the
+        # frame headers agree (FILTER=F150W2 PUPIL=F162M).  Naming the wide half
+        # made the reduce driver's substring mask fetch the same observation
+        # twice, into an `F150W/` directory beside the `F162M/` one holding the
+        # identical exposures (#828; the mask itself is fixed in #829).
+        filters: [f140m, f162m, f182m, f187n, f210m, f335m, f360m,
+                  f405n, f410m, f480m, f560w, f770w, f1000w, f1280w,
                   f2100w]
 
   wd1:
@@ -635,7 +643,15 @@ fields:
           nircam: ['001', '003']
         glob_obsid:
           nircam: '001'
-        filters: [f115w, f150w, f164n, f187n, f200w, f212n, f277w, f323n, f405n, f444w, f466n]
+        # f150w and f444w are NOT bands this proposal observed.  Both are the
+        # WIDE half of a serial filter pair, and with two filters in serial the
+        # NARROWER one is the filter -- the wide element is only a blocker.
+        # MAST reports the pairs as `F150W2;F164N` and `F444W;F405N`, and the
+        # frame headers agree (FILTER=F150W2 PUPIL=F162M).  Naming the wide half
+        # made the reduce driver's substring mask fetch the same observation
+        # twice, into an `F150W/` directory beside the `F164N/` one holding the
+        # identical exposures (#828; the mask itself is fixed in #829).
+        filters: [f115w, f164n, f187n, f200w, f212n, f277w, f323n, f405n, f466n]
 
   wd2:
     root: orange
@@ -650,7 +666,15 @@ fields:
           nircam: ['003', '005']
         glob_obsid:
           nircam: '005'
-        filters: [f115w, f150w, f162m, f164n, f182m, f187n, f200w, f212n, f250m, f277w, f300m, f323n, f335m, f405n, f410m, f444w, f466n]
+        # f150w and f444w are NOT bands this proposal observed.  Both are the
+        # WIDE half of a serial filter pair, and with two filters in serial the
+        # NARROWER one is the filter -- the wide element is only a blocker.
+        # MAST reports the pairs as `F150W2;F162M` and `F150W2;F164N` and `F444W;F405N`, and the
+        # frame headers agree (FILTER=F150W2 PUPIL=F162M).  Naming the wide half
+        # made the reduce driver's substring mask fetch the same observation
+        # twice, into an `F150W/` directory beside the `F162M/` and `F164N/` one holding the
+        # identical exposures (#828; the mask itself is fixed in #829).
+        filters: [f115w, f162m, f164n, f182m, f187n, f200w, f212n, f250m, f277w, f300m, f323n, f335m, f405n, f410m, f466n]
 
   # --- JWST 9438 (PI Schlafly): seven Galactic-plane pointings ---------------
   #
