@@ -1762,7 +1762,7 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # of COUNTS.  Measured on cloudef F210M vs VIRAC2 at the production
     # nx=ny=6, 3" window, 20 mas bins: the bin holding the true tie holds 0-5
     # pairs out of the 13k-300k in the window, and another bin beats it in 22
-    # of the 36 cells (margin -4 to +4 counts).  In 32 of those the winner is
+    # of the 36 cells (margin -4 to +4 counts).  In 32 of the 36 the winner is
     # still within 31 mas, so the cell is right by luck; in FOUR it is
     # 0.93"-5.95" away, while the field's same-star tie was 0.33 mas and its
     # 1202-cell local map was clean.  One of the four failed the contrast floor

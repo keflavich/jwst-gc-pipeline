@@ -1152,7 +1152,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     vs VIRAC2 at the production nx=ny=6 (issue #610), 3" window, 20 mas bins:
     the bin holding the true tie holds 0-5 pairs out of the 13k-300k in the
     window, and another bin beats it in 22 of the 36 cells (margin -4 to +4
-    counts).  In 32 of those the winner is still within 31 mas -- right by
+    counts).  In 32 of the 36 the winner is still within 31 mas -- right by
     luck -- and in FOUR the cell reports the densest noise bin in its search
     window, 0.93" to 5.95", as a measured offset.  The same field's same-star
     cells read 0.3-21 mas with a median 3-sigma of 23 mas.

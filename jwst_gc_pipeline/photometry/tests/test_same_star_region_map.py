@@ -9,7 +9,7 @@ Reproducing the grid on the real catalogs shows why -- catalog_coords(tbl)
 load_reference_catalog(...)["all"], plain measure_offset_grid at nx=ny=6:
 the bin holding the true tie holds 0-5 pairs out of the 13k-300k in a cell's
 3" window, and another bin beats it in 22 of the 36 cells (margin -4 to +4
-COUNTS).  In 32 of those the winner is within 31 mas -- right by luck -- and
+COUNTS).  In 32 of the 36 the winner is within 31 mas -- right by luck -- and
 in four the cell reports the densest noise bin (0.93"-5.95") as a measured
 offset.  One of the four fell under the contrast floor and blocked the field;
 the other three passed.
