@@ -29,7 +29,7 @@ import datetime
 # Before importing jwst: CRDS reads its cache path when jwst loads.  config.yaml
 # supplies the default; an exported CRDS_PATH wins.
 from jwst_gc_pipeline.config import apply_crds_environment
-from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_datamodel
+from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_datamodel, filtername_from_mast_filters
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")
@@ -543,8 +543,29 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         print("Obs table length:", len(obs_table))
 
         # np.array wrapper needed as of 2026-04-10 to avoid masked array type error that shouldn't happen
-        msk = ((np.char.find(np.array(obs_table['filters']), filtername.upper()) >= 0) |
-               (np.char.find(np.array(obs_table['obs_id']), filtername.lower()) >= 0))
+        # Match the requested band EXACTLY against each row's effective
+        # bandpass, never as a substring.  `'F150W' in 'F150W2;F162M'` is true,
+        # so the old `np.char.find(...) >= 0` fetched an F162M observation when
+        # asked for F150W and wrote it to an `F150W/` directory beside the
+        # `F162M/` one holding the same exposures (w51, wd1, wd2 each carried
+        # such a pair; wd1's two hold byte-distinct copies of the same 96
+        # frames).  `filtername_from_mast_filters` applies the rule the rest of
+        # this file already uses -- the narrower pupil band IS the filter.
+        #
+        # The obs_id fallback stays for rows whose `filters` cell is empty, but
+        # compares whole tokens: `f150w` must not match `...-f150w2-...`.
+        _want = filtername.upper()
+
+        def _obsid_has_band(obs_id):
+            return _want in {t.upper() for t in re.split(r'[^A-Za-z0-9]+',
+                                                         str(obs_id)) if t}
+
+        msk = np.array([
+            (filtername_from_mast_filters(_f) == _want)
+            if filtername_from_mast_filters(_f) is not None
+            else _obsid_has_band(_o)
+            for _f, _o in zip(np.array(obs_table['filters']),
+                              np.array(obs_table['obs_id']))])
         # Restrict to the observation under reduction (issue #416): all 139
         # gc-treasury tiles share FILTERS='F212N;F480M', so the filter mask
         # alone selects every released observation and each fresh tile would
