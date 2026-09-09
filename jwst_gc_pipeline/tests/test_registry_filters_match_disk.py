@@ -72,11 +72,34 @@ def test_every_reduced_filter_is_registered(field):
         f'finalize with "filter not observed by target"')
 
 
-@pytest.mark.parametrize('filt', ['f150w', 'f444w', 'f560w', 'f1000w'])
-def test_the_four_w51_filters_that_were_missing(filt):
+@pytest.mark.parametrize('filt', ['f560w', 'f1000w'])
+def test_the_w51_MIRI_filters_that_were_missing(filt):
     """Pinned by name.  The sweep above skips entirely on a machine with no
     /orange, which is every CI runner -- so without this the regression has no
-    guard where it would actually be caught."""
+    guard where it would actually be caught.
+
+    f150w and f444w were pinned here too and have been REMOVED, because 6151
+    never observed either.  MAST reports its NIRCam configurations as::
+
+        F140M  F150W2;F162M  F182M  F187N  F210M
+        F335M  F360M  F410M   F444W;F405N  F480M
+
+    -- two SERIAL PAIRS and no standalone F150W or F444W.  With two filters in
+    serial the NARROWER one is the filter, so those pairs are F162M and F405N,
+    both of which w51 already lists.
+
+    How the wrong names got pinned is worth recording, because the sweep above
+    could not have caught it: `_disk_filters` reads `F*/pipeline` DIRECTORY
+    names, and the directories were themselves created from the same mistake --
+    the reduce driver's substring mask matched `'F150W'` inside
+    `'F150W2;F162M'` and wrote an `F150W/` tree beside the `F162M/` one holding
+    the identical exposures (#828, mask fixed in #829).  So disk and registry
+    agreed, and agreed on something that was never observed.
+
+    wd1 and wd2 are the reason this is parametrised on MIRI bands only rather
+    than dropped: 1905 has a genuine standalone `F150W` AND `F444W`, and 3523 a
+    genuine standalone `F150W`, each ALONGSIDE their serial pairs.  The name
+    alone never says which a product is -- only FILTER/PUPIL does."""
     assert filt in _registered_filters(_registry()['w51'])
 
 
@@ -85,8 +108,21 @@ def test_w51_lists_both_instruments():
     belong here rather than in a separate key -- f770w/f1280w/f2100w were
     already listed that way."""
     filters = _registered_filters(_registry()['w51'])
-    assert {'f140m', 'f150w', 'f210m'} <= filters, 'NIRCam bands missing'
+    # f150w was here and is gone: 6151 observed F150W2;F162M, not F150W.
+    assert {'f140m', 'f162m', 'f210m'} <= filters, 'NIRCam bands missing'
     assert {'f560w', 'f770w', 'f1000w', 'f2100w'} <= filters, 'MIRI bands missing'
+
+
+def test_w51_does_not_list_the_wide_half_of_its_serial_pairs():
+    """The regression this PR fixes, stated positively.
+
+    6151's SW pair is `F150W2;F162M` and its LW pair `F444W;F405N`; the
+    narrower pupil band is the filter in each.  Naming the wide half made the
+    reduce driver fetch the same observation twice."""
+    filters = _registered_filters(_registry()['w51'])
+    assert 'f150w' not in filters, '6151 observed F150W2;F162M, not F150W'
+    assert 'f444w' not in filters, '6151 observed F444W;F405N, not F444W'
+    assert {'f162m', 'f405n'} <= filters, 'the real bands of both pairs'
 
 
 def test_registry_may_list_more_than_disk():
