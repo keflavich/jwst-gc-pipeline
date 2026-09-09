@@ -84,6 +84,18 @@ def flag_collapsed_visits(offsets_tbl, tol_arcsec=0.02):
     Reusing ``tol_arcsec`` rather than adding a second constant is deliberate:
     the floor and the agreement test are the same statement about the same
     scale, and two knobs would let a table be tuned into passing.
+
+    What the floor GIVES UP, stated so nobody reads a pass here as more than it
+    is: a collapse ONTO a shared value inside ``tol_arcsec`` is now invisible to
+    this rule, however wrong the visit that was overwritten.  The near-zero cell
+    is a shape this campaign has actually seen -- cloudc's F410M/nrcblong
+    visit-002 read (-0.0396,+0.0052)" while every sibling cell read
+    (+1.50,+3.76)", drizzling 8 exposures 4.06" out of place -- and that one
+    stays above the floor at |39.9| mas, but a collapse onto a smaller value
+    would not.  Nothing STATIC can separate "both visits were overwritten with
+    ~0" from "both visits converged at ~0"; the detector for that class is the
+    dynamic one -- the m2 consensus->reference tie and the reference-free
+    per-tile overlap gate -- not this check.
     """
     cols = offsets_tbl.colnames
     if 'Visit' not in cols or 'Filter' not in cols:
