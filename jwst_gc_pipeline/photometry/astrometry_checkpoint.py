@@ -3747,6 +3747,30 @@ def _m2_consensus_catalog(record_dir, basepath, filtername, obs_token=""):
     return coords[finite], mag, path, n_visits
 
 
+def _spatial_gate_detail(tie):
+    """Name the spatial check that ACTUALLY gated ``tie``, for a human.
+
+    Since #610 a dense reference has TWO spatial estimators and
+    ``measure_reference_tie`` chooses between them per tie, recording which in
+    ``per_tile_source``.  A message that prints ``per_tile['clean']`` regardless
+    can therefore report a gate as clean beside ``apply_ok=False`` -- the
+    histogram grid passed, the region map blocked, and the investigator is
+    pointed at the map that did not decide.  Every reporting site reads this
+    helper so they cannot drift apart again.
+    """
+    tie = tie or {}
+    if not tie.get("reference_dense", True):
+        return (f"same-star refined={tie.get('same_star') is not None} "
+                "[Gaia-only ref: per-tile map is noise, not gating]")
+    if tie.get("per_tile_source") == "same-star-region":
+        reg = tie.get("per_tile_same_star") or {}
+        return (f"same-star region map clean={reg.get('clean')} "
+                f"({reg.get('n_cells')} cells, {reg.get('n_flagged')} flagged, "
+                f"{reg.get('n_uncovered')} uncovered, "
+                f"{reg.get('n_skipped')} unchecked)")
+    return f"per-tile histogram grid clean={(tie.get('per_tile') or {}).get('clean')}"
+
+
 def _tie_signed_off(tie, label, info):
     """``True`` when ``measure_reference_tie`` stands behind ``tie``.
 
@@ -3766,8 +3790,8 @@ def _tie_signed_off(tie, label, info):
         info["reason"] = (
             f"the {label} re-measure did not sign off on itself "
             f"(apply_ok=False, cross-ref gross_ok="
-            f"{tie.get('cross_reference_gross_ok')}, per-tile clean="
-            f"{(tie.get('per_tile') or {}).get('clean')})")
+            f"{tie.get('cross_reference_gross_ok')}, "
+            f"{_spatial_gate_detail(tie)})")
         return False
     if tie.get("swept"):
         info["reason"] = (f"the {label} re-measure had to SWEEP the window "
@@ -4375,8 +4399,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 source=f"{stage} {REFERENCE_TIE_SOURCE_SUFFIX}"))
                         print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {vctx} "
                               f"consensus is {off:.2f} mas off VIRAC2 "
-                              f"(coherent dense tie, per-tile clean, no gross "
-                              f"sparse-Gaia split)", flush=True)
+                              f"(coherent dense tie, {_spatial_gate_detail(ref_tie)}, "
+                              f"no gross sparse-Gaia split)", flush=True)
                     else:
                         # FROZEN stage: regression = the tie MOVED since the
                         # m2 freeze (> STAGE_STABILITY_TOL_MAS), not a nonzero
@@ -4531,15 +4555,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     # apply_ok is False only for a genuinely bad tie now: no
                     # coherent dense peak, a GROSS sparse split (spurious peak),
                     # or -- per reference regime -- the gating check failed. Point
-                    # the investigator at the check that actually gated: per-tile
-                    # cleanliness for a DENSE reference, the same-star refinement
-                    # for a Gaia-only one (where per-tile is noise, not a signal).
-                    if ref_tie.get("reference_dense", True):
-                        gate = f"per-tile clean={ref_tie['per_tile'].get('clean')}"
-                    else:
-                        gate = ("same-star refined="
-                                f"{ref_tie.get('same_star') is not None} "
-                                "[Gaia-only ref: per-tile map is noise, not gating]")
+                    # the investigator at the check that actually gated: the
+                    # SPATIAL map for a DENSE reference (region map or histogram
+                    # grid, whichever the tie's size made valid -- #610), the
+                    # same-star refinement for a Gaia-only one (where per-tile is
+                    # noise, not a signal).
+                    gate = _spatial_gate_detail(ref_tie)
                     # BLOCKING: m2 MEASURED the offset and declined to apply it.
                     # This is the cloudc F410M/nrcblong case in #312 -- 731 mas,
                     # over REFERENCE_CROSSCHECK_GROSS_MAS, reported as a pass.
@@ -4832,10 +4853,21 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                 f"{anchor_tie.get('cross_reference_gross_tol_mas')} mas) -- "
                 f"VIRAC tie likely a spurious/window-limited peak")
         elif not anchor_tie.get("per_tile_ok"):
-            # DENSE reference: per-tile map D; Gaia-ONLY reference: same-star
-            # refinement A' (measure_reference_tie picks the right one per regime).
-            detail = ("per-tile reference map not clean" if anchor_tie.get("reference_dense", True)
-                      else "same-star tie could not be refined (Gaia-only reference)")
+            # DENSE reference: the spatial map D -- same-star REGION map when the
+            # tie is small enough to pair unambiguously, the per-tile histogram
+            # grid otherwise; Gaia-ONLY reference: same-star refinement A'.
+            # measure_reference_tie picks per regime and says which in
+            # `per_tile_source`, so the failure names the map that failed rather
+            # than a map that may not have been the one consulted (issue #610).
+            _src = anchor_tie.get("per_tile_source")
+            if not anchor_tie.get("reference_dense", True):
+                detail = "same-star tie could not be refined (Gaia-only reference)"
+            elif _src == "same-star-region":
+                _reg = anchor_tie.get("per_tile_same_star") or {}
+                detail = ("same-star per-region reference map not clean: "
+                          + (_reg.get("reason") or "no reason recorded"))
+            else:
+                detail = "per-tile reference map not clean"
             failures.append(f"anchor {anchor_filter}: {detail}")
 
     for filt, tbl in sorted(catalogs_by_filter.items()):
