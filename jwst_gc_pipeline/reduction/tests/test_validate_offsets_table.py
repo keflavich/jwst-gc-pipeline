@@ -52,3 +52,62 @@ def test_assert_can_raise():
 def test_clean_no_warn(recwarn):
     assert assert_offsets_table_sane(CLEAN) == []
     assert not any("COLLAPSED" in str(w.message) for w in recwarn.list)
+
+
+# ---------------------------------------------------------------------------
+# The amplitude floor (review of PR #770)
+# ---------------------------------------------------------------------------
+#
+# `flag_collapsed_visits` tested only whether two visits AGREE.  Two visits
+# that each legitimately needed no correction agree too, and that is the
+# common case on a table the m2 re-tie writes -- `astrometry_checkpoint` had
+# already had to write the exemption at one of its own call sites ("any two
+# visits agree within 20 mas by construction -- flagging that would be a
+# category error").  Once the apply path RAISES on the finding, that class
+# stops a reduction.
+
+#: Two visits that each measured ~no correction.  Per-visit medians read
+#: 2026-09-09 from the live tables the review named -- m4
+#: ``Offsets_JWST_Brick1979_consensus.csv`` F150W2 and ngc6334
+#: ``Offsets_JWST_Brick7213_consensus.csv`` F162M.
+WELL_ALIGNED = _tbl([
+    ('jw01979002001', 'F150W2', +0.0010, -0.0005),   # |1.1| mas
+    ('jw01979003001', 'F150W2', +0.0011, +0.0020),   # |2.3| mas, 2.5 mas apart
+    ('jw07213001001', 'F162M', -0.0015, +0.0016),    # |2.2| mas
+    ('jw07213001002', 'F162M', -0.0015, -0.0084),    # |8.5| mas, 10.0 mas apart
+])
+
+
+def test_two_visits_that_both_needed_no_correction_are_not_a_collapse():
+    """The false-positive class the floor exists for.
+
+    Nothing was overwritten here, because nothing was applied: both visits
+    carry ~1-10 mas.  At that scale the tolerance used to call the two equal
+    is as big as the value being compared, so "they agree" says nothing about
+    whether one was copied from the other.
+    """
+    assert flag_collapsed_visits(WELL_ALIGNED) == []
+
+
+def test_the_floor_still_catches_the_brick_1182_signature():
+    """+1.9" shared while one visit truly needed -17.5" -- the real failure."""
+    issues = flag_collapsed_visits(COLLAPSED)
+    assert {i['filter'] for i in issues} == {'F200W', 'F115W'}
+    assert all(i['amp_arcsec'] > 0.02 for i in issues)
+
+
+def test_the_floor_is_on_the_shared_VALUE_not_on_the_agreement():
+    """A pair agreeing to 1 mas is flagged or not by its amplitude alone."""
+    below = _tbl([('v1', 'F200W', 0.010, 0.0), ('v2', 'F200W', 0.011, 0.0)])
+    above = _tbl([('v1', 'F200W', 0.030, 0.0), ('v2', 'F200W', 0.031, 0.0)])
+    assert flag_collapsed_visits(below) == []
+    assert len(flag_collapsed_visits(above)) == 1
+
+
+def test_the_message_reports_the_shared_value(recwarn):
+    """An operator has to be able to see WHY the pair was called a collapse."""
+    assert_offsets_table_sane(COLLAPSED, context="test")
+    msgs = [str(w.message) for w in recwarn.list
+            if 'COLLAPSED OFFSETS TABLE' in str(w.message)]
+    assert msgs
+    assert 'shared value' in msgs[0]

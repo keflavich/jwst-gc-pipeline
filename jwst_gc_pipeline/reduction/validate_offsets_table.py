@@ -8,9 +8,12 @@ v001 = -17.5" correct, but the collapsed locked table is the one that got applie
 half the mosaic stayed ~20" off.
 
 The tell of that failure: two DISTINCT visits of the same filter carrying (near-)
-identical offsets. Independent per-visit pointing errors do not agree to a few mas by
-chance -- especially not across every filter at once. This module flags that pattern
-so a collapsed table cannot be silently applied again.
+identical offsets that are BIG ENOUGH TO MATTER. Independent per-visit pointing errors
+do not agree to a few mas by chance -- especially not across every filter at once.
+This module flags that pattern so a collapsed table cannot be silently applied again.
+The amplitude half of the tell is load-bearing: two visits that each legitimately
+needed no correction also share one value, and that pair is not a collapse (nothing
+was overwritten, because nothing was applied) -- see `flag_collapsed_visits`.
 
 This is a cheap STATIC check (no re-measurement). The strong dynamic check -- remeasure
 each row vs VIRAC2 with the window-swept helper -- lives in the standalone validator
@@ -51,13 +54,48 @@ def flag_collapsed_visits(offsets_tbl, tol_arcsec=0.02):
     tol_arcsec : float
         Two visits whose offsets agree within this are treated as suspiciously
         identical (default 0.02" = 20 mas; real per-visit pointing errors differ by
-        much more).
+        much more).  It is ALSO the amplitude floor -- see below.
 
     Returns
     -------
     list of dict
         One entry per suspicious (filter, visit-pair): ``dict(filter, visit_a,
-        visit_b, sep_arcsec, dra, ddec)``.  Empty list = clean.
+        visit_b, sep_arcsec, amp_arcsec, dra, ddec)``.  Empty list = clean.
+
+    Notes
+    -----
+    A pair is skipped when BOTH visits sit within ``tol_arcsec`` of zero.  The
+    signature this looks for is a visit's real offset OVERWRITTEN by another's,
+    and the value doing the overwriting has to be big enough to matter:
+    brick-1182's shared value was (+1.9021,-0.4402)" = |1952| mas, on a visit
+    that truly needed (-17.484,+13.546)" = |22118| mas.  Two visits that each
+    legitimately needed no correction share ~0 and agree by construction.
+    At that scale "these visits agree" and "these visits were collapsed onto
+    one" are the same statement, because the tolerance used to call them equal
+    is as large as the value being compared, so the agreement carries no
+    information.
+
+    ``astrometry_checkpoint`` already had to say this at one call site -- "any
+    two visits agree within 20 mas by construction -- flagging that would be a
+    category error" (the consensus-row writer) -- and a caller-side exemption
+    only protects the caller that knows to write it.  The floor puts it in the
+    rule, where every caller inherits it.
+
+    Reusing ``tol_arcsec`` rather than adding a second constant is deliberate:
+    the floor and the agreement test are the same statement about the same
+    scale, and two knobs would let a table be tuned into passing.
+
+    What the floor GIVES UP, stated so nobody reads a pass here as more than it
+    is: a collapse ONTO a shared value inside ``tol_arcsec`` is now invisible to
+    this rule, however wrong the visit that was overwritten.  The near-zero cell
+    is a shape this campaign has actually seen -- cloudc's F410M/nrcblong
+    visit-002 read (-0.0396,+0.0052)" while every sibling cell read
+    (+1.50,+3.76)", drizzling 8 exposures 4.06" out of place -- and that one
+    stays above the floor at |39.9| mas, but a collapse onto a smaller value
+    would not.  Nothing STATIC can separate "both visits were overwritten with
+    ~0" from "both visits converged at ~0"; the detector for that class is the
+    dynamic one -- the m2 consensus->reference tie and the reference-free
+    per-tile overlap gate -- not this check.
     """
     cols = offsets_tbl.colnames
     if 'Visit' not in cols or 'Filter' not in cols:
@@ -86,9 +124,15 @@ def flag_collapsed_visits(offsets_tbl, tol_arcsec=0.02):
             for j in range(i + 1, len(vlist)):
                 a, b = vlist[i], vlist[j]
                 sep = float(np.hypot(vals[a][0] - vals[b][0], vals[a][1] - vals[b][1]))
-                if sep <= tol_arcsec:
+                # The shared value's own size.  `max` rather than `min`: a pair
+                # only reaches the amplitude test with `sep <= tol_arcsec`, so
+                # the two amplitudes already differ by at most `tol_arcsec` --
+                # taking the larger keeps the flag on the borderline pair.
+                amp = max(float(np.hypot(*vals[a])), float(np.hypot(*vals[b])))
+                if sep <= tol_arcsec and amp > tol_arcsec:
                     issues.append(dict(filter=str(f), visit_a=str(a), visit_b=str(b),
-                                       sep_arcsec=sep, dra=vals[a][0], ddec=vals[a][1]))
+                                       sep_arcsec=sep, amp_arcsec=amp,
+                                       dra=vals[a][0], ddec=vals[a][1]))
     return issues
 
 
@@ -308,7 +352,9 @@ def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="",
     issues = flag_collapsed_visits(offsets_tbl, tol_arcsec=tol_arcsec)
     if issues:
         lines = [f"  {i['filter']}: visits {i['visit_a']} & {i['visit_b']} both "
-                 f"({i['dra']:+.4f},{i['ddec']:+.4f})\" (agree to {i['sep_arcsec']*1000:.1f} mas)"
+                 f"({i['dra']:+.4f},{i['ddec']:+.4f})\" (agree to "
+                 f"{i['sep_arcsec']*1000:.1f} mas, shared value "
+                 f"{i['amp_arcsec']*1000:.1f} mas)"
                  for i in issues]
         msg = (f"COLLAPSED OFFSETS TABLE{(' ' + context) if context else ''}: distinct "
                f"visits share (near-)identical offsets -- the brick-1182 v001 failure "
