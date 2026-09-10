@@ -103,14 +103,29 @@ def staged_groups(field_dir):
 
 
 def chunk_filters(filters, size=3):
-    """Consecutive-wavelength chunks covering every filter exactly once.
+    """Consecutive-wavelength chunks covering every filter.
 
     A trailing chunk of one cannot make an image, so it borrows from the chunk
     before it -- 7 filters become 3+2+2, never 3+3+1.
+
+    ``size + 1`` filters are the one length where covering each band EXACTLY
+    once makes every chunk a degraded one: 4 bands split 2+2, and a two-band
+    view has no measured green -- ``make_preview_rgb`` synthesises it as the
+    mean of red and blue, so the field gets two images and not one real colour
+    composite between them.  At that length the chunks OVERLAP instead, two
+    full-size sliding windows (4 bands -> [0,1,2] and [1,2,3]).  Every band
+    still appears, and the shared middle pair is the cost of both views being
+    three real bands.
+
+    Only this length overlaps.  From ``size + 2`` on, the plain split already
+    yields at least one full chunk (5 -> 3+2), so the exact-cover rule stands
+    and 7 stays 3+2+2.
     """
     ordered = sorted(filters, key=lambda f: (wavelength_um(f), f))
     if len(ordered) <= size:
         return [ordered] if ordered else []
+    if len(ordered) == size + 1:
+        return [ordered[:size], ordered[1:]]
     chunks = [ordered[i:i + size] for i in range(0, len(ordered), size)]
     if len(chunks[-1]) == 1:
         tail = chunks.pop()
