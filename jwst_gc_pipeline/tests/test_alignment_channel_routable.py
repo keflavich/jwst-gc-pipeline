@@ -118,29 +118,45 @@ def test_bulk_source_is_still_recorded_not_consensus():
     ("3958", "007"),       # sickle NIRCam, TABLE_LOCKED
     ("10678", "088"),      # gc-treasury, proposal-wide TABLE_CONSENSUS
 ])
-@pytest.mark.parametrize("instrument", ["miri", "niriss"])
-def test_a_registered_field_still_routes_nothing_to_miri_or_niriss(
-        proposal, field, instrument):
-    """Registration is about the frame and the anchor, not about a channel.
+def test_a_registered_field_still_routes_nothing_to_niriss(proposal, field):
+    """``PipelineRerunNIRISS.fix_alignment`` opens no offsets table, so a
+    correction written on its behalf reaches no frame and the next re-tie
+    re-measures the identical residual.  The checkpoint refuses instead, naming
+    the reducer -- the thing an operator can act on -- rather than sending them
+    to add an entry that would change nothing.
 
-    Neither reducer opens an offsets table, so a correction written on their
-    behalf reaches no frame and the next re-tie re-measures the identical
-    residual.  The checkpoint refuses instead, naming the reducer -- the thing
-    an operator can act on -- rather than sending them to add an entry that
-    would change nothing.
+    MIRI was in this list until 2026-09-10 (PR #832), when its reducer learned
+    to resolve through ``unified_alignment.resolve_shift``.
     """
     assert AC.resolve(proposal, field) is not None
     assert AC.offsets_channel(proposal, field,
-                              instrument=instrument) == AC.CHANNEL_NONE
+                              instrument="niriss") == AC.CHANNEL_NONE
 
 
-def test_the_miri_only_entry_still_supplies_a_frame_and_an_anchor():
+@pytest.mark.parametrize("proposal,field", [
+    ("3958", "001-002"),
+    ("3958", "007"),
+    ("10678", "088"),
+])
+def test_a_registered_field_now_routes_to_miri(proposal, field):
+    """The converse of the above, and the reason the distinction is worth a
+    test at all: a registered field's channel now reaches MIRI, so the entry's
+    declared source is what MIRI gets rather than a flat refusal."""
+    assert AC.offsets_channel(proposal, field, instrument="miri") == \
+        AC.offsets_channel(proposal, field)
+    assert AC.offsets_channel(proposal, field,
+                              instrument="miri") != AC.CHANNEL_NONE
+
+
+def test_the_miri_only_entry_supplies_a_frame_an_anchor_and_now_a_table():
     """3958/001-002 is the entry that makes the distinction visible: it is
-    registered, it is MIRI-only, and what it gives MIRI is the frame and the
-    F770W anchor rather than a table."""
+    registered and MIRI-only.  It always gave MIRI the frame and the F770W
+    anchor; since PR #832 it gives it the consensus table too."""
     cfg = AC.resolve("3958", "001-002")
     assert cfg.reference_frame == AC.VIRAC2
     assert cfg.reference_filter == "F770W"
     assert AC.offsets_channel("3958", "001-002") == AC.CHANNEL_CONSENSUS
     assert AC.offsets_channel("3958", "001-002",
-                              instrument="miri") == AC.CHANNEL_NONE
+                              instrument="miri") == AC.CHANNEL_CONSENSUS
+    assert AC.offsets_channel("3958", "001-002",
+                              instrument="niriss") == AC.CHANNEL_NONE

@@ -676,7 +676,7 @@ ALIGNMENT_CONFIG = (
                '2026-09-07; Tile-5 was never delivered, which is why the '
                'observation numbers are listed and not wildcarded). Registered '
                '2026-09-07 with the field itself. Supplies the FRAME (VIRAC2) '
-               'and the F560W anchor and no write channel, exactly as gc1266 '
+               'the F560W anchor and (since PR #832) the write channel, exactly as gc1266 '
                'above.'),
     ),
 )

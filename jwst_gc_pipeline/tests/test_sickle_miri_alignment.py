@@ -42,16 +42,24 @@ def test_the_declared_source_is_consensus(field):
 
 
 @pytest.mark.parametrize("field", MIRI_FIELDS)
-def test_but_miri_itself_still_gets_no_write_channel(field):
-    """Which is the point of the entry: frame and anchor, not a table.
+def test_miri_now_gets_that_write_channel_too(field):
+    """Until 2026-09-10 the entry gave MIRI a frame and an anchor but no table:
+    ``PipelineMIRI.fix_alignment`` opened none, so a correction written on
+    MIRI's behalf reached no frame and the next re-tie re-measured the
+    identical residual.  PR #832 taught that reducer to resolve through
+    ``unified_alignment.resolve_shift``, so the entry's declared channel now
+    reaches MIRI as it always did NIRCam.
 
-    ``PipelineMIRI.fix_alignment`` opens no offsets table, so a correction
-    written into one on MIRI's behalf reaches no frame and the next re-tie
-    re-measures the identical residual.
+    sickle's own 27 mas inter-observation residual is what this unblocks.
     """
     assert AC.offsets_channel("3958", field,
-                              instrument="miri") == AC.CHANNEL_NONE
-    assert AC.offsets_table_path("/bp", "3958", field, instrument="miri") == ""
+                              instrument="miri") == AC.CHANNEL_CONSENSUS
+    assert AC.offsets_table_path("/bp", "3958", field,
+                                 instrument="miri").endswith(
+        "offsets/Offsets_JWST_Brick3958_consensus.csv")
+    # NIRISS is the remaining instrument with no reader.
+    assert AC.offsets_channel("3958", field,
+                              instrument="niriss") == AC.CHANNEL_NONE
 
 
 @pytest.mark.parametrize("field", MIRI_FIELDS)
