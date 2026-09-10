@@ -740,6 +740,10 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
     if basepath is None:
         basepath = field_registry.basepath(regionname)
 
+    # ------------------------------------------------------------------
+    # The BASELINE shift: a per-target constant measured by hand, predating
+    # any offsets table.
+    #
     # 2026-06-11: the historical "Brick/CloudC" shift (-3.895", +1.28") was
     # measured offset-histogram-stacking the final mosaics against the NIRCam
     # reference catalogs to be the dominant astrometric ERROR, not a fix:
@@ -774,11 +778,57 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
         decshift = _pvs[1] * u.arcsec
         print(f"  PER-VISIT WCS correction ({regionname}/{field}/v{visit}): "
               f"dRA={_pvs[0]}\", dDec={_pvs[1]}\"", flush=True)
+
+    # ------------------------------------------------------------------
+    # The TABLE shift, summed on top of that baseline.
+    #
+    # Until 2026-09-10 this function stopped at the constants above and opened
+    # no offsets table, so a MIRI field had no correction channel at all: the m2
+    # checkpoint measured a residual, found `offsets_channel(...,
+    # instrument='miri') == 'none'`, and refused to write numbers that would
+    # land in a file nothing opened.  A MIRI field that was never aligned
+    # therefore could not BE aligned -- gc1266 obs 004 and 009 sat 4.28" and
+    # 5.70" off VIRAC2 (both confirmed against SPARSE Gaia independently, to 18
+    # and 10 mas, so neither is the histogram-vs-dense bias) and every re-tie
+    # re-measured the identical residual.
+    #
+    # SUM rather than replace, which is the RECORDED_BULK semantics this
+    # codebase already uses (`unified_alignment._shift_from_recorded_bulk`): the
+    # hand-measured constant is the STARTING bulk and the checkpoint's tie is
+    # the residual measured ON TOP of an already-shifted frame.  Replacing it
+    # would silently drop w51's 0.2" and brick 002/001's (-1.01, 4.12)" the
+    # moment their tables gained any MIRI row.
+    from jwst_gc_pipeline.reduction.unified_alignment import (
+        resolve_shift, warn_or_raise_if_stale)
+    _shift = resolve_shift(fn, proposal_id, field, filtername, 'mirimage',
+                           basepath,
+                           refname=field_registry.reference_frame(str(proposal_id)),
+                           use_average=use_average)
+    if _shift.configured and _shift.table_present:
+        rashift = rashift + _shift.total_ra * u.arcsec
+        decshift = decshift + _shift.total_dec * u.arcsec
+        print(f"  TABLE correction ({_shift.source} via "
+              f"{_shift.prov_table}): dRA={_shift.total_ra:+.4f}\", "
+              f"dDec={_shift.total_dec:+.4f}\"", flush=True)
+    else:
+        print(f"  no table correction for {os.path.basename(fn)} "
+              f"(configured={_shift.configured}, "
+              f"table_present={_shift.table_present}); "
+              f"baseline constant only", flush=True)
+
     print(f"Shift for {fn} is {rashift}, {decshift}")
     align_fits = fits.open(fn)
     if 'RAOFFSET' in align_fits[1].header:
         # don't shift twice if we re-run
         print(f"{fn} is already aligned ({align_fits[1].header['RAOFFSET']}, {align_fits[1].header['DEOFFSET']})")
+        # ...but say so when the table has MOVED underneath an aligned frame.
+        # Skipping silently is how brick-1182 v001 kept a stale +1.9" while its
+        # table said -17.5" and stayed ~20" off through its own fix.  MIRI has
+        # no delta-apply path yet (NIRCam's `alignment_apply_plan`), so the
+        # remedy here is to REGENERATE this frame from _cal rather than to
+        # re-apply on top of the stale shift -- but the disagreement must not
+        # be silent.  FORCE_REALIGN_ON_DISAGREE=1 turns it into a hard stop.
+        warn_or_raise_if_stale(align_fits[1].header, _shift, fn)
     else:
         # ASDF header
         fa = ImageModel(fn)

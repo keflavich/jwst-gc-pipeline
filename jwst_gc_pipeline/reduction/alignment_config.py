@@ -8,8 +8,10 @@ own inline policy constants (MIRI keeps a ``_PER_VISIT_SHIFT`` map and a w51
 rule; neither writes the component keywords nor runs the staleness guard).
 Folding those in is follow-up work -- until then, do not read this file as
 repo-wide.  That scope is now answerable in code: ``offsets_channel(prop, field,
-instrument='miri')`` returns ``'none'``, because no correction written into
-these tables can reach a MIRI or NIRISS frame (``TABLE_DRIVEN_INSTRUMENTS``).
+instrument='niriss')`` returns ``'none'``, because no correction written into
+these tables can reach a NIRISS frame (``TABLE_DRIVEN_INSTRUMENTS``).  MIRI was
+in that set until 2026-09-10, when ``PipelineMIRI.fix_alignment`` began
+resolving its shift through ``unified_alignment.resolve_shift``.
 
 This replaces the per-proposal ``if/elif`` chain that used to live inside
 ``PipelineRerunNIRCAM-LONG.fix_alignment``.  That chain had grown one branch per
@@ -382,18 +384,14 @@ ALIGNMENT_CONFIG = (
     #   proposal 3958 observation 001-002, but alignment_config declares NO
     #   table-driven correction channel for this field
     #
-    # WHAT THIS ENTRY DOES AND DOES NOT DO.  It supplies the FRAME (VIRAC2) and
-    # the F770W anchor, which is what the rest of the checkpoint reads.  It does
-    # NOT give MIRI a write channel: ``offsets_channel(..., instrument='miri')``
-    # answers CHANNEL_NONE whatever this entry declares, because
-    # ``PipelineMIRI.fix_alignment`` opens no offsets table
-    # (TABLE_DRIVEN_INSTRUMENTS).  So an above-floor MIRI correction still
-    # refuses -- now naming the reducer rather than a missing entry, which is
-    # the thing an operator could act on.  ``ASTROM_CHECKPOINT_WARN_ONLY=1``
-    # demotes that refusal, and ``ASTROM_CHECKPOINT_APPLY=1`` still stale-tags
-    # the measured-misaligned im0 mosaics.  Registering MIRI here remains right
-    # for the frame and the anchor; routing its corrections needs the reducer to
-    # resolve its shift through ``unified_alignment.resolve_shift``.
+    # WHAT THIS ENTRY DOES.  It supplies the FRAME (VIRAC2) and the F770W
+    # anchor, which is what the rest of the checkpoint reads -- and, since
+    # 2026-09-10, the write channel too: ``offsets_channel(...,
+    # instrument='miri')`` now answers CHANNEL_CONSENSUS here, because
+    # ``PipelineMIRI.fix_alignment`` resolves its shift through
+    # ``unified_alignment.resolve_shift`` (TABLE_DRIVEN_INSTRUMENTS).  Before
+    # that an above-floor MIRI correction refused outright, naming the reducer
+    # rather than a missing entry.
     #
     # TABLE_CONSENSUS, not TABLE_LOCKED: the authored table
     # Offsets_JWST_Brick3958_VIRAC2locked.csv is 120 rows over the five NIRCam
@@ -430,9 +428,8 @@ ALIGNMENT_CONFIG = (
                'registered as 001-002; 10 crf per band). Registered 2026-09-01 '
                'after the m2 checkpoint refused to route 6 measured corrections '
                'for want of a channel. Supplies the FRAME and the F770W anchor; '
-               'it does NOT give MIRI a write channel -- offsets_channel(..., '
-               "instrument='miri') is CHANNEL_NONE whatever this entry says, "
-               'because PipelineMIRI.fix_alignment reads no offsets table '
+               'and, since 2026-09-10, the write channel: PipelineMIRI.'
+               'fix_alignment resolves through unified_alignment.resolve_shift '
                '(TABLE_DRIVEN_INSTRUMENTS). Consensus rather than locked '
                'because the VIRAC2locked table is NIRCam-only (120 rows, 5 '
                'bands, no MIRI). The single-observation spellings are included '
@@ -609,12 +606,35 @@ ALIGNMENT_CONFIG = (
     # around Sgr A* registered together as the gc1266 field.  Same shape and
     # same purpose as the sickle MIRI entry above: it supplies the FRAME
     # (VIRAC2, the GC policy frame, matching sgra/sgrb2/sgrc/gc2211 which look
-    # at the same sky) and the F560W anchor, and it does NOT give MIRI a write
-    # channel -- ``offsets_channel(..., instrument='miri')`` answers
-    # CHANNEL_NONE whatever is declared here, because
-    # ``PipelineMIRI.fix_alignment`` opens no offsets table
-    # (TABLE_DRIVEN_INSTRUMENTS).  Registered up front so the m2 checkpoint's
-    # first run names the reducer rather than a missing entry.
+    # at the same sky) and the F560W anchor -- and, since 2026-09-10, the WRITE
+    # channel: ``offsets_channel(..., instrument='miri')`` answers
+    # CHANNEL_CONSENSUS here because ``PipelineMIRI.fix_alignment`` resolves its
+    # shift through ``unified_alignment.resolve_shift``
+    # (TABLE_DRIVEN_INSTRUMENTS).  Registered up front, which turned out to
+    # matter: this is the field that forced the channel open.
+    #
+    # MEASURED 2026-09-10, first m2 run.  Two of the four observations are
+    # grossly off VIRAC2 and two are fine:
+    #
+    #     obs   band    tie vs dense VIRAC2      vs sparse Gaia    bulk_source
+    #     004   F560W   4280.1 mas (-684,+4225)  4261.9 mas        histogram
+    #     009   F560W   5699.0 mas (-2285,+5221) 5688.7 mas        histogram
+    #     008   F560W     10.0 mas                                 same-star
+    #     010   F560W     12.8 mas                                 same-star
+    #     008   F770W      8.4 mas                                 same-star
+    #     010   F770W     13.3 mas                                 same-star
+    #
+    # The two large ties are REAL despite reading `bulk_source='histogram'`.
+    # That flag warns of the histogram-vs-dense bias, which is a property of a
+    # DENSE reference's correlated wrong-pair background and is a 5-100 mas
+    # effect; it cannot reproduce on a SPARSE reference, and here sparse Gaia
+    # independently agrees to 18 and 10 mas.  The window sweep says the same:
+    # the 3" window reads contrast 4 (noise -- it cannot contain a 4" offset)
+    # and the 10" window contrast 107, the "offset >> window" signature, with
+    # window_edge_fraction 0.43/0.57 rather than the ~1 of a window-edge
+    # artifact.  same-star refused on exactly these two because a 4-5" tie
+    # exceeds its pairing tolerance -- the fallback is circular, so read the
+    # sparse cross-check, not the flag, when the two disagree this far.
     #
     # TABLE_CONSENSUS, not TABLE_LOCKED: nothing has been measured for this
     # program yet, so there is no authored table to lock to; the m2
@@ -634,11 +654,11 @@ ALIGNMENT_CONFIG = (
                '-- four separate pointings spanning 2.87 arcmin about '
                '(266.43624, -29.01889), footprints measured from the MAST '
                's_region polygons 2026-09-07). Registered 2026-09-07 with the '
-               'field itself. Supplies the FRAME and the F560W anchor; it does '
-               'NOT give MIRI a write channel -- offsets_channel(..., '
-               "instrument='miri') is CHANNEL_NONE whatever this says, because "
-               'PipelineMIRI.fix_alignment reads no offsets table '
-               '(TABLE_DRIVEN_INSTRUMENTS). Consensus rather than locked '
+               'field itself. Supplies the FRAME, the F560W anchor and -- since '
+               '2026-09-10 -- the write channel, PipelineMIRI.fix_alignment '
+               'having learned to resolve through unified_alignment.'
+               'resolve_shift (TABLE_DRIVEN_INSTRUMENTS). Consensus rather '
+               'than locked '
                'because nothing has been measured for 1266 yet. The program is '
                'an IFU program; only its MIRI/IMAGE products are this '
                "pipeline's business."),
@@ -744,7 +764,12 @@ CHANNEL_NONE = 'none'
 #: arches/sgrb2 failure, with the instrument rather than the field as the
 #: reason.  Callers that know their instrument should say so, and get
 #: ``CHANNEL_NONE`` back rather than a table nothing will read.
-TABLE_DRIVEN_INSTRUMENTS = frozenset({'nircam'})
+#: 2026-09-10: MIRI joined once ``PipelineMIRI.fix_alignment`` began resolving
+#: its shift through ``unified_alignment.resolve_shift``.  Before that a MIRI
+#: field that was never aligned could not BE aligned -- the checkpoint measured
+#: the residual and refused, correctly, to write it somewhere nothing read.
+#: NIRISS is still out: ``PipelineRerunNIRISS.fix_alignment`` opens no table.
+TABLE_DRIVEN_INSTRUMENTS = frozenset({'nircam', 'miri'})
 
 
 def instrument_has_table_channel(instrument) -> bool:
@@ -773,12 +798,13 @@ def offsets_channel(proposal_id, field, instrument=None):
     watched a file nobody wrote, saw no change, and stopped.
 
     ``instrument`` is the third way the writer and the reader can point at
-    different things, and the one this module's own scope note describes: the
-    entries here are read by the NIRCam reducer, so a MIRI or NIRISS caller
-    that inherits a field's channel is told to write a table its reducer never
-    opens (``TABLE_DRIVEN_INSTRUMENTS``).  Naming the instrument returns
-    ``'none'`` instead, which is what makes the caller say so out loud.
-    Omitting it keeps the historical answer.
+    different things, and the one this module's own scope note describes: a
+    caller whose reducer opens no offsets table would otherwise inherit a
+    field's channel and be told to write a table nothing reads
+    (``TABLE_DRIVEN_INSTRUMENTS``).  Naming the instrument returns ``'none'``
+    instead, which is what makes the caller say so out loud.  Omitting it keeps
+    the historical answer.  NIRISS is the remaining case; MIRI left it on
+    2026-09-10 when its reducer learned ``resolve_shift``.
     """
     if not instrument_has_table_channel(instrument):
         return CHANNEL_NONE

@@ -3720,11 +3720,14 @@ def _astrom_no_channel_error(merge_label, module, filt, proposal_id, field,
 
     Two different reasons, and they need different instructions.  The FIELD may
     have no entry -- add one.  Or the INSTRUMENT has no reader for the table the
-    entry names: ``PipelineMIRI.fix_alignment`` and
-    ``PipelineRerunNIRISS.fix_alignment`` open no offsets table at all (MIRI
-    applies inline constants -- (0, 0) except a w51 rule and one brick per-visit
-    entry -- and then writes RAOFFSET/DEOFFSET), so adding an entry changes
-    nothing and the next re-tie measures the identical residual.
+    entry names, so adding an entry changes nothing and the next re-tie measures
+    the identical residual.
+
+    As of 2026-09-10 only NIRISS is in the second case:
+    ``PipelineRerunNIRISS.fix_alignment`` opens no offsets table.  MIRI left it
+    when ``PipelineMIRI.fix_alignment`` began resolving through
+    ``unified_alignment.resolve_shift`` -- it still applies its hand-measured
+    per-target constants, but now SUMS the table shift on top of them.
     """
     from jwst_gc_pipeline.reduction.alignment_config import (
         instrument_has_table_channel)
