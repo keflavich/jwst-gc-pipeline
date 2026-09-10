@@ -200,6 +200,26 @@ REFERENCE_AGREE_TOL_MAS = 5.0
 # regime so Gaia sparseness can never block a good VIRAC tie.
 REFERENCE_CROSSCHECK_GROSS_MAS = 100.0
 
+#: When the SPARSE arbiter is itself noise, judged against the DENSE peak it is
+#: meant to arbitrate.  A sparse tie can be internally self-consistent -- `ok`,
+#: `window_consistent`, not alias-rejected -- and still be a coincidence: Gaia is
+#: optical and MIRI 7.7/11.3 um sees different sources, so its "peak" lands tens
+#: of arcsec away on a handful of pairs.  gc1266 o004 F770W: dense contrast 161
+#: on 277 peak pairs with a clean per-tile grid, sparse contrast 6.0 on 10 pairs,
+#: 48906 mas apart (issue #833).
+#:
+#: These thresholds exist to NOT swallow the case the gross gate is for --
+#: brick-1182 v001, where VIRAC read 2.7" against Gaia's 2.0" on peaks of
+#: comparable strength and the dense per-tile grid was NOT clean.  That is a
+#: ~700 mas disagreement between two believable peaks; this rule needs the
+#: disagreement to be an order of magnitude beyond the gross tolerance AND the
+#: dense peak to be strong AND its per-tile grid clean AND the sparse peak to be
+#: built on far fewer pairs.  All four, or the arbiter stands.
+SPARSE_ARBITER_MIN_SEP_MAS = 10.0 * REFERENCE_CROSSCHECK_GROSS_MAS
+SPARSE_ARBITER_MIN_DENSE_CONTRAST = 20.0
+SPARSE_ARBITER_MAX_SPARSE_CONTRAST = 10.0
+SPARSE_ARBITER_MIN_PEAK_RATIO = 5.0
+
 # VIRAC2 is a Ks-selected survey; Ks pivot wavelength (um).  The JWST filter
 # closest to this is the most reliable absolute anchor for cross-filter checks.
 VIRAC2_KS_UM = 2.149
@@ -1676,16 +1696,28 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # criterion that separates the two, not a magnitude ceiling; until then the
     # cover for a seam on these fields is the release-time interframe-overlap
     # gate, not this checkpoint.
+    grid = measure_offset_grid(consensus_coords, ref_coords_all,
+                               nx=grid_nx, ny=grid_ny,
+                               context=f"{context} per-tile")
+    # The per-tile grid is now measured BEFORE the cross-reference verdict,
+    # because whether the sparse arbiter is believable depends on how strong the
+    # dense peak it is arbitrating actually is.
+    sparse_noise_vs_dense = bool(
+        res_a is not None and res_b is not None
+        and np.isfinite(sep_mas) and sep_mas > SPARSE_ARBITER_MIN_SEP_MAS
+        and bool(grid.get("clean"))
+        and (res_a.get("contrast") or 0.0) >= SPARSE_ARBITER_MIN_DENSE_CONTRAST
+        and (res_b.get("contrast") or 0.0) <= SPARSE_ARBITER_MAX_SPARSE_CONTRAST
+        and (res_b.get("n_peak") or 0) * SPARSE_ARBITER_MIN_PEAK_RATIO
+            <= (res_a.get("n_peak") or 0))
     sparse_untrustworthy = bool(
         res_b is None
         or res_b.get("ok") is False
         or res_b.get("alias_rejected") is True
-        or res_b.get("window_consistent") is False)
+        or res_b.get("window_consistent") is False
+        or sparse_noise_vs_dense)
     cross_gross_ok = bool((not np.isfinite(sep_mas)) or sparse_untrustworthy
                           or sep_mas <= gross_tol_mas)
-    grid = measure_offset_grid(consensus_coords, ref_coords_all,
-                               nx=grid_nx, ny=grid_ny,
-                               context=f"{context} per-tile")
 
     fluxmatched = None
     if (filtername is not None and consensus_mag is not None and ref_mag is not None
@@ -1788,6 +1820,15 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                 context=f"{context} per-region")
         except GlobalTieNotVerifiedError:
             per_tile_same_star = None
+    # `per_tile_measurable` separates "the grid was measured and is dirty" from
+    # "no cell could be measured at all".  `measure_offset_grid` reports both as
+    # clean=False (empty cells -> `bool(cells) and ...` is False, worst_off_mas
+    # nan), so a band too thin to populate a NIRCam-shaped grid read exactly like
+    # a seam.  gc1266's two F1130W legs are n_total=0, and one of them is
+    # confirmed by sparse Gaia to 10.9 mas -- refused on a check that never ran
+    # (issue #833).  The same-star region map already draws this distinction with
+    # its own `measurable`; this gives the histogram grid the same one.
+    per_tile_measurable = True
     if not dense:
         per_tile_ok = same_star is not None
         per_tile_source = "same-star-bulk"
@@ -1797,8 +1838,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     else:
         per_tile_ok = bool(grid.get("clean"))
         per_tile_source = "histogram-grid"
+        per_tile_measurable = bool((grid.get("n_total") or 0) > 0)
+    # An unmeasurable grid carries no information, so it does not VETO -- but a
+    # measured-and-dirty one still does.  Fail-open is confined to the case where
+    # there is nothing to fail on; NIRCam grids are always populated.
     apply_ok = bool(res_a is not None and res_a.get("ok")
-                    and per_tile_ok and cross_gross_ok)
+                    and (per_tile_ok or not per_tile_measurable)
+                    and cross_gross_ok)
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
                cross_reference_gross_ok=cross_gross_ok,
                # WHY it passed: without this, a gross_ok=True recorded because the
@@ -1807,6 +1853,11 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                cross_reference_sparse_untrustworthy=sparse_untrustworthy,
                cross_reference_gross_tol_mas=gross_tol_mas,
                per_tile=grid, per_tile_ok=per_tile_ok,
+               # WHY it passed, same reasoning as the sparse flag above: a
+               # per_tile_ok=False that did not veto must be distinguishable
+               # from one that did.
+               per_tile_measurable=per_tile_measurable,
+               cross_reference_sparse_noise_vs_dense=sparse_noise_vs_dense,
                per_tile_same_star=per_tile_same_star,
                per_tile_source=per_tile_source, reference_dense=bool(dense),
                flux_matched=fluxmatched, same_star=same_star,
