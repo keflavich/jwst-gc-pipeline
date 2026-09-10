@@ -1,17 +1,22 @@
-"""A MIRI correction has nowhere to go, and the channel must say so.
+"""A correction with nowhere to go, and the channel that must say so.
 
-``alignment_config`` is read by the NIRCam reducer alone -- its own scope note
-says so, and ``PipelineMIRI.fix_alignment`` / ``PipelineRerunNIRISS.fix_alignment``
-mention no offsets table anywhere.  ``offsets_channel`` took no instrument, so a
-proposal-wide entry answered ``'consensus'`` for MIRI exactly as it did for
-NIRCam, and the m2 checkpoint seeded ``mirimage`` rows into
-``Offsets_JWST_Brick<prop>_consensus.csv``.  Nothing reads them: the frames stay
-where they were, the next re-tie measures the identical residual, and the run
-reports a correction it never applied.
+``offsets_channel`` took no instrument, so a proposal-wide entry answered
+``'consensus'`` for every instrument, and the m2 checkpoint seeded ``mirimage``
+rows into ``Offsets_JWST_Brick<prop>_consensus.csv``.  Nothing read them: the
+frames stayed where they were, the next re-tie measured the identical residual,
+and the run reported a correction it never applied.  10678 (gc-treasury) is the
+field that was found on.
 
-10678 (gc-treasury) is the field this was found on -- its entry is proposal-wide
-``TABLE_CONSENSUS`` and every one of its 139 visits carries a MIRI F770W
-parallel -- but the defect is a property of the instrument, not of the entry.
+**2026-09-10: MIRI now HAS a channel.**  ``PipelineMIRI.fix_alignment``
+resolves its shift through ``unified_alignment.resolve_shift``, summing the
+table onto its hand-measured per-target constants, so ``offsets_channel(...,
+instrument='miri')`` answers from the entry like NIRCam does.  gc1266 forced
+this: obs 004 and 009 sat 4.28" and 5.70" off VIRAC2 (both confirmed against
+sparse Gaia to 18 and 10 mas) and the refusal meant a field that had never been
+aligned could not BE aligned.
+
+NIRISS is still in the old case -- ``PipelineRerunNIRISS.fix_alignment`` opens
+no offsets table -- so the machinery and every test of it stays, pointed there.
 """
 import inspect
 from pathlib import Path
@@ -28,15 +33,51 @@ REDUCTION = Path(AC.__file__).resolve().parent
 # The premise: neither reducer opens an offsets table.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("script", ["PipelineMIRI.py", "PipelineRerunNIRISS.py"])
 @pytest.mark.parametrize("token", ["offsets", "alignment_config", "resolve_shift"])
-def test_the_reducer_never_reads_an_offsets_table(script, token):
-    """If this fails, that instrument grew a table reader and the channel it
-    is given here should be revisited rather than left at 'none'."""
-    src = (REDUCTION / script).read_text()
+def test_the_niriss_reducer_never_reads_an_offsets_table(token):
+    """If this fails, NIRISS grew a table reader and the channel it is given
+    here should be revisited rather than left at 'none'."""
+    src = (REDUCTION / "PipelineRerunNIRISS.py").read_text()
     assert token not in src, (
-        f"{script} now mentions {token!r}; "
+        f"PipelineRerunNIRISS.py now mentions {token!r}; "
         f"alignment_config.TABLE_DRIVEN_INSTRUMENTS may need to include it")
+
+
+def test_the_miri_reducer_DOES_resolve_its_shift():
+    """The converse, pinned: MIRI's channel is only legitimate while its
+    reducer actually consumes the table.  Losing this call silently returns
+    MIRI to writing corrections nothing applies -- the exact defect the rest of
+    this file exists to prevent, one instrument over."""
+    src = (REDUCTION / "PipelineMIRI.py").read_text()
+    assert "from jwst_gc_pipeline.reduction.unified_alignment import (" in src
+    assert "resolve_shift" in src
+    assert "resolve_shift(fn, proposal_id, field, filtername, 'mirimage'" in src
+
+
+def test_an_already_aligned_miri_frame_does_not_skip_silently():
+    """Opening the channel means a MIRI frame's table row can now MOVE under an
+    already-aligned frame.  The plain skip-if-RAOFFSET-present check is how
+    brick-1182 v001 kept a stale +1.9" while its table said -17.5" -- so the
+    skip has to announce the disagreement.  MIRI has no delta-apply path yet
+    (NIRCam's ``alignment_apply_plan``); the remedy is regeneration from _cal,
+    which an operator can only choose if they are told."""
+    src = (REDUCTION / "PipelineMIRI.py").read_text()
+    assert "warn_or_raise_if_stale" in src
+    skip = src[src.index("is already aligned"):]
+    assert "warn_or_raise_if_stale(align_fits[1].header, _shift, fn)" in skip[:1200], (
+        "the staleness check is not on the already-aligned skip path")
+
+
+def test_the_miri_reducer_sums_the_table_onto_its_constants():
+    """SUM, not replace.  w51 carries a 0.2" MIRI constant and brick 002/001 a
+    (-1.01, 4.12)" per-visit one; a table lookup that REPLACED them would drop
+    both the moment their tables gained any MIRI row."""
+    src = (REDUCTION / "PipelineMIRI.py").read_text()
+    assert "rashift = rashift + _shift.total_ra * u.arcsec" in src
+    assert "decshift = decshift + _shift.total_dec * u.arcsec" in src
+    # and the constants themselves are still there
+    assert "if regionname == 'w51':" in src
+    assert "('brick', '002', '001'): (-1.01, 4.12)," in src
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +88,10 @@ TREASURY_FIELDS = ("088", "001", "139")
 
 
 @pytest.mark.parametrize("field", TREASURY_FIELDS)
-def test_miri_gets_no_channel_for_10678(field):
-    assert AC.offsets_channel("10678", field, instrument="miri") == AC.CHANNEL_NONE
+def test_miri_now_gets_the_consensus_channel_for_10678(field):
+    """Was CHANNEL_NONE until 2026-09-10; the entry always declared consensus
+    and it is the reducer that changed."""
+    assert AC.offsets_channel("10678", field, instrument="miri") == AC.CHANNEL_CONSENSUS
 
 
 @pytest.mark.parametrize("field", TREASURY_FIELDS)
@@ -70,13 +113,16 @@ def test_the_instrument_scope_is_not_10678_specific():
     assert cfg is not None and cfg.reference_filter == "F770W"
     assert AC.offsets_channel("3958", "001-002") == AC.CHANNEL_CONSENSUS
     assert AC.offsets_channel("3958", "001-002",
-                              instrument="miri") == AC.CHANNEL_NONE
+                              instrument="miri") == AC.CHANNEL_CONSENSUS
     # a LOCKED NIRCam field is unaffected either way
     assert AC.offsets_channel("3958", "007") == AC.CHANNEL_LOCKED
 
 
 def test_instrument_case_and_spacing_do_not_change_the_answer():
-    assert AC.offsets_channel("10678", "088", instrument=" MIRI ") == AC.CHANNEL_NONE
+    assert AC.offsets_channel("10678", "088",
+                              instrument=" MIRI ") == AC.CHANNEL_CONSENSUS
+    assert AC.offsets_channel("10678", "088",
+                              instrument=" NIRISS ") == AC.CHANNEL_NONE
     assert AC.offsets_channel("10678", "088",
                               instrument="NIRCam") == AC.CHANNEL_CONSENSUS
 
@@ -84,18 +130,21 @@ def test_instrument_case_and_spacing_do_not_change_the_answer():
 def test_helper_default_is_the_historical_answer():
     assert AC.instrument_has_table_channel(None) is True
     assert AC.instrument_has_table_channel("nircam") is True
-    assert AC.instrument_has_table_channel("miri") is False
+    assert AC.instrument_has_table_channel("miri") is True
+    assert AC.instrument_has_table_channel("niriss") is False
 
 
 # ---------------------------------------------------------------------------
 # The table path follows the channel.
 # ---------------------------------------------------------------------------
 
-def test_no_table_path_is_offered_to_miri(tmp_path):
+def test_the_table_path_is_now_offered_to_miri_but_not_niriss(tmp_path):
     bp = str(tmp_path)
-    assert AC.offsets_table_path(bp, "10678", "088").endswith(
-        "offsets/Offsets_JWST_Brick10678_consensus.csv")
-    assert AC.offsets_table_path(bp, "10678", "088", instrument="miri") == ""
+    expected = "offsets/Offsets_JWST_Brick10678_consensus.csv"
+    assert AC.offsets_table_path(bp, "10678", "088").endswith(expected)
+    assert AC.offsets_table_path(bp, "10678", "088",
+                                 instrument="miri").endswith(expected)
+    assert AC.offsets_table_path(bp, "10678", "088", instrument="niriss") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -155,12 +204,16 @@ def test_it_agrees_with_the_spelling_cataloging_already_uses(module, filt):
     assert (_instrument_for_merge(module, filt) == "miri") is existing
 
 
-def test_checkpoint_channel_is_none_for_a_mirimage_merge():
+def test_checkpoint_channel_is_now_consensus_for_a_mirimage_merge():
     from jwst_gc_pipeline.photometry.cataloging import (
         _astrom_offsets_channel, _instrument_for_merge)
     assert _astrom_offsets_channel(
         "10678", "088",
-        instrument=_instrument_for_merge("mirimage", "F770W")) == "none"
+        instrument=_instrument_for_merge("mirimage", "F770W")) == "consensus"
+    # NIRISS keeps the old answer
+    assert _astrom_offsets_channel(
+        "10678", "001",
+        instrument=_instrument_for_merge("nis", "F200W")) == "none"
     assert _astrom_offsets_channel(
         "10678", "088",
         instrument=_instrument_for_merge("nrcalong", "F480M")) == "consensus"
@@ -168,10 +221,11 @@ def test_checkpoint_channel_is_none_for_a_mirimage_merge():
     assert _astrom_offsets_channel("10678", "088") == "consensus"
 
 
-def test_an_existing_consensus_table_is_still_not_miris(tmp_path):
-    """The lookup is decided by the channel, not by what is on disk: once
-    NIRCam has seeded the proposal's consensus table, a MIRI merge must still
-    be told there is no table for it."""
+def test_an_existing_consensus_table_is_now_also_miris(tmp_path):
+    """The lookup is decided by the channel, not by what is on disk.  MIRI and
+    NIRCam share the proposal's consensus table -- rows are keyed by filter, so
+    the MIRI bands and the NIRCam bands do not collide.  NIRISS is still told
+    there is no table for it."""
     from jwst_gc_pipeline.photometry.cataloging import _astrom_find_offsets_table
     offsets = tmp_path / "offsets"
     offsets.mkdir()
@@ -182,7 +236,9 @@ def test_an_existing_consensus_table_is_still_not_miris(tmp_path):
     assert _astrom_find_offsets_table(bp, "10678", "088",
                                       instrument="nircam") == str(table)
     assert _astrom_find_offsets_table(bp, "10678", "088",
-                                      instrument="miri") is None
+                                      instrument="miri") == str(table)
+    assert _astrom_find_offsets_table(bp, "10678", "088",
+                                      instrument="niriss") is None
 
 
 def test_the_checkpoint_scopes_its_channel_question_to_the_merge_s_module():
@@ -206,11 +262,11 @@ def test_the_refusal_names_the_reducer_not_a_missing_entry():
         _astrom_no_channel_error, _instrument_for_merge)
 
     err = _astrom_no_channel_error(
-        "m2", "mirimage", "F770W", "10678", "088",
-        _instrument_for_merge("mirimage", "F770W"), 6)
+        "m2", "nis", "F200W", "10678", "001",
+        _instrument_for_merge("nis", "F200W"), 6)
     msg = str(err)
     assert isinstance(err, RuntimeError)
-    assert "PipelineMIRI.fix_alignment" in msg
+    assert "PipelineRerunNIRISS.fix_alignment" in msg
     assert "reads no offsets table" in msg
     assert "Nothing was written." in msg
     assert "Add an entry to" not in msg
@@ -306,8 +362,7 @@ TREASURY_I2D = 'jw10678-o088_t001_miri_clear-f770w-mirimage_data_i2d.fits'
 NEIGHBOUR_I2D = 'jw10678-o089_t001_miri_clear-f770w-mirimage_data_i2d.fits'
 
 
-@pytest.mark.parametrize("case", [NIRISS_SGRC, MIRI_TREASURY],
-                         ids=["niriss-sgrc", "miri-treasury"])
+@pytest.mark.parametrize("case", [NIRISS_SGRC], ids=["niriss-sgrc"])
 def test_the_refusal_still_stops_a_default_run(tmp_path, monkeypatch, case):
     """Nothing here weakens the stop itself: an ordinary run still refuses."""
     with pytest.raises(RuntimeError) as ex:
@@ -316,8 +371,7 @@ def test_the_refusal_still_stops_a_default_run(tmp_path, monkeypatch, case):
     assert "Nothing was written." in str(ex.value)
 
 
-@pytest.mark.parametrize("case", [NIRISS_SGRC, MIRI_TREASURY],
-                         ids=["niriss-sgrc", "miri-treasury"])
+@pytest.mark.parametrize("case", [NIRISS_SGRC], ids=["niriss-sgrc"])
 def test_warn_only_demotes_the_refusal(tmp_path, monkeypatch, capsys, case):
     """``ASTROM_CHECKPOINT_WARN_ONLY=1`` demotes THIS raise too.
 
@@ -377,18 +431,52 @@ def test_a_measure_only_run_renames_nothing(tmp_path, monkeypatch):
     assert (tmp_path / 'F770W' / 'pipeline' / TREASURY_I2D).exists()
 
 
-def test_no_offsets_table_is_written_on_any_of_those_paths(tmp_path,
-                                                           monkeypatch):
+def test_niriss_writes_no_offsets_table_on_any_of_those_paths(tmp_path,
+                                                             monkeypatch):
     """The point of the refusal: the numbers reach no table, ever."""
     for kwargs in (dict(), dict(warn_only=True), dict(apply_=True),
                    dict(apply_=True, warn_only=True)):
         d = tmp_path / str(len(list(tmp_path.iterdir())))
         d.mkdir()
         if kwargs.get('warn_only'):
-            _drive_no_channel(monkeypatch, d, i2d_names=(TREASURY_I2D,),
-                              **MIRI_TREASURY, **kwargs)
+            _drive_no_channel(monkeypatch, d, **NIRISS_SGRC, **kwargs)
         else:
             with pytest.raises(RuntimeError):
-                _drive_no_channel(monkeypatch, d, i2d_names=(TREASURY_I2D,),
-                                  **MIRI_TREASURY, **kwargs)
+                _drive_no_channel(monkeypatch, d, **NIRISS_SGRC, **kwargs)
         assert not (d / 'offsets').exists(), kwargs
+
+
+def test_miri_now_DOES_write_the_offsets_table(tmp_path, monkeypatch):
+    """The whole point of opening the channel, end to end.
+
+    ``ASTROM_CHECKPOINT_APPLY=1`` seeds the consensus table with the MIRI row,
+    stale-tags the mosaic and raises the ordinary CORRECTING stop -- the same
+    three things m2 does for NIRCam.  It is a stop, not a pass: the frames on
+    disk are still the misaligned ones until they are regenerated.
+    """
+    with pytest.raises(RuntimeError) as ex:
+        _drive_no_channel(monkeypatch, tmp_path, apply_=True,
+                          i2d_names=(TREASURY_I2D,), **MIRI_TREASURY)
+    msg = str(ex.value)
+    assert "NO table-driven correction channel" not in msg
+    assert "REGENERATE the affected frames from _cal" in msg
+
+    table = (tmp_path / 'offsets' / 'Offsets_JWST_Brick10678_consensus.csv')
+    assert table.exists(), "the MIRI correction reached no table"
+    body = table.read_text()
+    assert 'F770W' in body and 'mirimage' in body
+
+    pipe = tmp_path / 'F770W' / 'pipeline'
+    assert (pipe / TREASURY_I2D.replace('_i2d.fits',
+                                        '_i2d_im0_badastrom.fits')).exists()
+
+
+def test_a_miri_measure_only_run_still_writes_nothing(tmp_path, monkeypatch):
+    """Opening the channel did not move the APPLY gate: without
+    ``ASTROM_CHECKPOINT_APPLY=1`` the run measures, refuses and touches no
+    file -- the same gate every other write in this function sits behind."""
+    with pytest.raises(RuntimeError):
+        _drive_no_channel(monkeypatch, tmp_path, i2d_names=(TREASURY_I2D,),
+                          **MIRI_TREASURY)
+    assert not (tmp_path / 'offsets').exists()
+    assert (tmp_path / 'F770W' / 'pipeline' / TREASURY_I2D).exists()
