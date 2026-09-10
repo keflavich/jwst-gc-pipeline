@@ -45,24 +45,48 @@ def _thin_field(n=40, extent_arcsec=90.0, seed=11):
     return ra, dec
 
 
-def test_an_unmeasurable_per_tile_grid_does_not_veto():
-    """`n_total == 0` is "no information", not "failed"."""
+def test_an_unmeasurable_grid_does_not_veto_a_SWEPT_tie():
+    """`n_total == 0` is "no information" -- but that alone is not a reason to
+    pass, so the exemption is confined to a SWEPT (grossly displaced) tie.
+
+    gc1266 o004 F1130W is 4626 mas out with an empty grid: leaving that
+    uncorrected is far worse than an unmeasured seam on top of it.
+    """
+    ra, dec = _thin_field()
+    # 5" out, so the sweep has to find it.
+    cons = SkyCoord(ra=(ra - 5.0 / 3600.0 / COSD) * u.deg, dec=dec * u.deg,
+                    frame="icrs")
+    ref_all, ref_sparse = _reference_sets(ra, dec, dense_extra=200)
+    tie = measure_reference_tie(cons, ref_all, ref_sparse,
+                                context="test-thin-grid-swept",
+                                grid_nx=40, grid_ny=40)
+    if (tie["per_tile"].get("n_total") or 0) != 0 or not tie["vs_full"].get("swept"):
+        pytest.skip("synthetic field did not reproduce the empty-grid swept case")
+    assert tie["per_tile_ok"] is False
+    assert tie["per_tile_measurable"] is False
+    assert tie["per_tile_unmeasurable_exempt"] is True
+    assert tie["apply_ok"], (
+        "a grossly displaced frame must not stay displaced because a seam "
+        "check could not run")
+
+
+def test_an_unmeasurable_grid_STILL_vetoes_a_small_tie():
+    """The narrow half of the same rule, and the one
+    `test_reference_tie_falls_back_to_the_histogram_grid_when_regions_are_starved`
+    states outright: on a small tie the per-tile check is the entire value of
+    the gate, so `measurable=False` must never read as a pass."""
     ra, dec = _thin_field()
     cons = SkyCoord(ra=(ra - 10.0 / 3.6e6 / COSD) * u.deg, dec=dec * u.deg,
                     frame="icrs")
     ref_all, ref_sparse = _reference_sets(ra, dec, dense_extra=200)
-    # A grid far finer than the star count can populate.
     tie = measure_reference_tie(cons, ref_all, ref_sparse,
-                                context="test-thin-grid",
+                                context="test-thin-grid-small",
                                 grid_nx=40, grid_ny=40)
-    if (tie["per_tile"].get("n_total") or 0) != 0:
-        pytest.skip("this synthetic field populated the grid; nothing to test")
-    assert tie["per_tile_ok"] is False, (
-        "precondition: an empty grid still reports clean=False")
+    if (tie["per_tile"].get("n_total") or 0) != 0 or tie["vs_full"].get("swept"):
+        pytest.skip("synthetic field did not reproduce the empty-grid small case")
     assert tie["per_tile_measurable"] is False
-    assert tie["vs_full"]["ok"]
-    assert tie["apply_ok"], (
-        "a grid where no cell could be measured must not refuse a sound tie")
+    assert tie["per_tile_unmeasurable_exempt"] is False
+    assert not tie["apply_ok"]
 
 
 def test_a_measured_and_dirty_per_tile_grid_still_vetoes():

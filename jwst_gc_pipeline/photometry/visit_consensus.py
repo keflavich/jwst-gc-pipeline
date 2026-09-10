@@ -1839,11 +1839,22 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         per_tile_ok = bool(grid.get("clean"))
         per_tile_source = "histogram-grid"
         per_tile_measurable = bool((grid.get("n_total") or 0) > 0)
-    # An unmeasurable grid carries no information, so it does not VETO -- but a
-    # measured-and-dirty one still does.  Fail-open is confined to the case where
-    # there is nothing to fail on; NIRCam grids are always populated.
+    # An unmeasurable grid carries no information -- but "no information" is not
+    # by itself a reason to pass, and `test_reference_tie_falls_back_to_the_
+    # histogram_grid_when_regions_are_starved` says so directly: a starved
+    # Gaia-only field, where neither the region map nor the grid can measure,
+    # must keep blocking.  So the exemption is confined to a SWEPT tie.
+    #
+    # That is the case where the two risks are not comparable.  A swept tie was
+    # found by widening the window, i.e. the frame is grossly displaced -- 4626
+    # mas on gc1266 o004 F1130W -- and leaving that uncorrected is far worse than
+    # an unmeasured seam on top of it.  On a small unswept tie (the starved test's
+    # 15/8 mas) the per-tile check is the entire value of the gate, so an
+    # unmeasurable grid still refuses.
+    per_tile_unmeasurable_exempt = bool(
+        not per_tile_measurable and res_a is not None and res_a.get("swept"))
     apply_ok = bool(res_a is not None and res_a.get("ok")
-                    and (per_tile_ok or not per_tile_measurable)
+                    and (per_tile_ok or per_tile_unmeasurable_exempt)
                     and cross_gross_ok)
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
                cross_reference_gross_ok=cross_gross_ok,
@@ -1857,6 +1868,7 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                # per_tile_ok=False that did not veto must be distinguishable
                # from one that did.
                per_tile_measurable=per_tile_measurable,
+               per_tile_unmeasurable_exempt=per_tile_unmeasurable_exempt,
                cross_reference_sparse_noise_vs_dense=sparse_noise_vs_dense,
                per_tile_same_star=per_tile_same_star,
                per_tile_source=per_tile_source, reference_dense=bool(dense),
