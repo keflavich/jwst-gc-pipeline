@@ -349,6 +349,39 @@ ALIGNMENT_CONFIG = (
                'blocks it. o049 exposure 4 is deliberately NOT excluded '
                '(exposure_exclusions.py), so the 23 mas is uncorrected today.'),
     ),
+    # cloudef MIRI (obs 004/006/008).  Registered 2026-09-11, the day the MIRI
+    # data was first reduced -- it had never been downloaded, so there was
+    # nothing to register before.  Until this entry existed the m2 checkpoint
+    # measured real corrections and refused them with "alignment_config declares
+    # NO table-driven correction channel for this field", which is the
+    # field-shaped refusal (an operator CAN fix it here), not the
+    # instrument-shaped one that #832 removed for MIRI.
+    #
+    # Frame is VIRAC2, matching the cloudef NIRCam entries above: the two
+    # instruments observe the same sky, and a MIRI tie to a different frame
+    # would split the field's own astrometry.
+    #
+    # TABLE_CONSENSUS rather than TABLE_LOCKED: the shared 2092 VIRAC2locked
+    # table carries jw02092005001 and jw02092002001 NIRCam rows only, with
+    # nothing for the MIRI observations, so there is nothing to lock to.  The m2
+    # visit-consensus re-tie bootstraps its own rows with provenance.
+    #
+    # Anchor is F770W.  Only F770W and F2100W were observed; F770W is the
+    # shorter of the two and so the closer to VIRAC2's Ks, and at 21 um the
+    # field is dust-emission dominated with far fewer point sources.
+    FieldAlignment(
+        proposal='2092', fields=('004', '006', '008'),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F770W',
+        notes=('cloudef MIRI (F770W + F2100W, observations 004/006/008; 152 crf '
+               'per band). Reduced for the first time 2026-09-11 -- the MIRI '
+               'half of 2092 had never been downloaded, which is why no entry '
+               'existed. Supplies the FRAME, the F770W anchor and the write '
+               'channel. Consensus rather than locked because the shared 2092 '
+               'VIRAC2locked table has NIRCam rows only. The NIRCam half of '
+               'this field is obs002 (RECORDED_BULK) and obs005 (TABLE_LOCKED), '
+               'both entries above.'),
+    ),
     FieldAlignment(
         proposal='2092', fields=('005',),
         reference_frame=VIRAC2, source=TABLE_LOCKED,
