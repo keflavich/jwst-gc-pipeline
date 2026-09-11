@@ -2288,3 +2288,73 @@ def test_the_live_map_takes_the_display_area_not_the_static_panel_height():
     # snapping back to the SVG's intrinsic height
     resize = out.split("addEventListener('resize'")[1].split('}}')[0]
     assert 'liveStageHeight()' in resize
+
+
+# --- every field the pipeline knows about must be stageable -----------------
+
+def test_every_registry_entry_can_name_its_own_products():
+    """A `FIELDS` entry is what `stage_release` reads for a field's `data_dir`
+    and how it finds that field's mosaics.  An entry missing either cannot
+    stage -- and unlike the registry holes in #798, where an absent entry makes
+    the code take a silent wrong default, here it makes the field unshippable
+    with no default at all.  Pin the shape so a new entry cannot be added
+    half-written."""
+    sr = _sr()
+    for field, cfg in sr.FIELDS.items():
+        assert cfg.get("data_dir"), f"{field}: no data_dir"
+        has_prefix = bool(cfg.get("proposal_prefix"))
+        has_explicit = bool(cfg.get("nircam") or cfg.get("miri"))
+        assert has_prefix or has_explicit, (
+            f"{field}: neither proposal_prefix nor an explicit nircam/miri "
+            f"list, so build_manifest has no way to find its products")
+        if cfg.get("no_auto_images"):
+            assert has_explicit, (
+                f"{field}: no_auto_images suppresses discovery, so an explicit "
+                f"nircam/miri list is the only remaining source of images")
+
+
+def test_the_seven_9438_fields_are_registered_one_observation_each():
+    """JWST 9438 (Schlafly) tiles the plane as seven single-observation
+    pointings.  They were in `fields.yaml` and `alignment_config` but not in
+    `FIELDS`, which is the registry staging actually reads, so none of them
+    could be staged however complete its data got."""
+    sr = _sr()
+    expected = {
+        'g028': 'o001', 'g033': 'o002', 'g041': 'o003', 'g054': 'o004',
+        'g007': 'o005', 'crowded_l3': 'o006', 'crowded_l20': 'o007',
+    }
+    for field, obs in expected.items():
+        cfg = sr.FIELDS[field]
+        assert cfg["proposal_prefix"] == f"jw09438-{obs}_t001_nircam_clear", field
+        assert cfg["group"] == "galactic_plane", field
+        assert str(cfg["data_dir"]).endswith(f"/{field}"), field
+    # one observation each: no two fields may share a prefix, or a stage of one
+    # would pull in another's mosaics (the cloudef o002/o005 lesson).
+    prefixes = [sr.FIELDS[f]["proposal_prefix"] for f in expected]
+    assert len(set(prefixes)) == len(prefixes)
+
+
+def test_9438_fields_skip_catalogs_until_their_cataloging_lands():
+    """As of 2026-09-11 not one of the seven has a vetted catalog or an m8
+    table.  Without the flag the same-run gate reports NO CATALOG PARTNER for
+    every image and the stage refuses -- correctly, but for a reason that reads
+    as a defect rather than as 'cataloging has not run yet'.  Drop the flag per
+    field as that field completes, not as a group."""
+    sr = _sr()
+    for field in ('g007', 'g028', 'g033', 'g041', 'g054',
+                  'crowded_l3', 'crowded_l20'):
+        assert sr.FIELDS[field].get("skip_catalogs") is True, field
+
+
+def test_no_9438_field_claims_a_frame_refcat_it_has_not_been_tied_to():
+    """`FRAME_REFCAT` asserts the field IS on that frame; crowded_l3's m2
+    records (7 of 14 passed, 11 `tie is not trustworthy`, offsets to 2648 mas)
+    say 9438 is not tied yet.  A refcat file existing in the field's catalogs/
+    is not the same as a measured tie -- arches and quintuplet were each
+    measured before being mapped."""
+    sr = _sr()
+    for field in ('g007', 'g028', 'g033', 'g041', 'g054',
+                  'crowded_l3', 'crowded_l20'):
+        assert field not in sr.FRAME_REFCAT, (
+            f"{field} mapped in FRAME_REFCAT -- map it only once its own tie "
+            f"has been measured and holds")

@@ -381,6 +381,90 @@ FIELDS = {
             {"filter": "F322W2", "src": "/orange/adamginsburg/jwst/ngc6397/F322W2/pipeline/jw01979-o001_t001_nircam_clear-f322w2-merged_i2d.fits"},
         ],
     },
+    # --- JWST 9438 (Schlafly): seven Galactic-plane pointings -----------------
+    #
+    # These are registered in `fields.yaml` and in `alignment_config` already;
+    # this dict was the one registry they were missing from, and its absence is
+    # not a soft one.  `stage_release` looks a field up here for its `data_dir`
+    # and `proposal_prefix`, so a field with no entry cannot be staged at all --
+    # the same absent-means-silent shape as #798, except that here the default
+    # is not a wrong answer but no answer.  Registering them now means the
+    # plumbing is in place when cataloging lands, rather than being discovered
+    # on the day someone tries to ship one.
+    #
+    # Uniform layout, verified on disk 2026-09-11: one observation each, 14
+    # NIRCam filters, 280 crf, and 42 stage-3 mosaics per field (14 filters x
+    # merged/nrca/nrcb).  Auto image discovery finds the `-merged_i2d` products
+    # from `proposal_prefix`, so no explicit `nircam` list is needed.
+    #
+    #     field         obs    TARGPROP            l        b       DATE-OBS
+    #     g028          o001   G028.320+01.243    28.341   +1.252   2025-09-17
+    #     g033          o002   G033.007+01.150    33.027   +1.160   2025-09-26
+    #     g041          o003   G040.954+02.473    40.976   +2.481   2025-09-18
+    #     g054          o004   G054.093+01.748    54.115   +1.756   2025-09-29
+    #     g007          o005   G007.470+00.050     7.482   +0.073   2025-09-22
+    #     crowded_l3    o006   crowded_l3          3.021   +0.010   2025-09-25
+    #     crowded_l20   o007   crowded_l20        20.020   +0.009   2025-09-17
+    #
+    # `skip_catalogs` on ALL SEVEN, and it is not a formality: as of 2026-09-11
+    # not one of them has a single vetted catalog or an m8 table.  Six have a
+    # full m12->m7 chain queued (submitted 2026-09-10 22:28, all still PENDING);
+    # crowded_l3 has m1/m2 done across all 14 filters and no chain queued.
+    # Drop the flag per field as that field's cataloging completes -- not as a
+    # group, because they will not finish together.
+    #
+    # NOT added to `FRAME_REFCAT`, deliberately, though `gaia_refcat.fits` /
+    # `gaia_virac2_refcat.fits` sits in each field's `catalogs/`.  Mapping a
+    # refcat here asserts the field is TIED to it, and the only 9438 field with
+    # any astrometric measurement says otherwise: crowded_l3's 14 latest m2
+    # records are 7 passed / 7 not, with 11 `tie is not trustworthy` notes and
+    # consensus->reference offsets of 7.95 mas (F140M, cross-ref sep 8724.8,
+    # gross_ok=False), 103.58 (F150W), 142.13 (F182M, cross-ref sep nan) and
+    # 2648.02 mas (F277W).  These are sparse-Gaia ties in crowded plane fields,
+    # which is where a histogram peak goes noisy; the checkpoint refused to
+    # apply them, which is the ladder working.  Map each field once its own tie
+    # is measured and holds -- the way arches and quintuplet were.
+    "g007": {
+        "data_dir": Path("/orange/adamginsburg/jwst/g007"),
+        "proposal_prefix": "jw09438-o005_t001_nircam_clear",
+        "skip_catalogs": True, "group": "galactic_plane",
+    },
+    "g028": {
+        "data_dir": Path("/orange/adamginsburg/jwst/g028"),
+        "proposal_prefix": "jw09438-o001_t001_nircam_clear",
+        "skip_catalogs": True, "group": "galactic_plane",
+    },
+    "g033": {
+        "data_dir": Path("/orange/adamginsburg/jwst/g033"),
+        "proposal_prefix": "jw09438-o002_t001_nircam_clear",
+        "skip_catalogs": True, "group": "galactic_plane",
+    },
+    "g041": {
+        "data_dir": Path("/orange/adamginsburg/jwst/g041"),
+        "proposal_prefix": "jw09438-o003_t001_nircam_clear",
+        "skip_catalogs": True, "group": "galactic_plane",
+    },
+    "g054": {
+        "data_dir": Path("/orange/adamginsburg/jwst/g054"),
+        "proposal_prefix": "jw09438-o004_t001_nircam_clear",
+        "skip_catalogs": True, "group": "galactic_plane",
+    },
+    # crowded_l3 / crowded_l20: the two deliberately-crowded pointings, on the
+    # plane (b ~ +0.01) rather than a degree above it like the five G-fields.
+    # crowded_l3 is the only 9438 field with a measured m2 correction floor
+    # (`m2_correction_floors.PER_FIELD_FLOOR_MAS['crowded_l3'] = 4.0`,
+    # measured 2026-09-07); the other six take the strict 0.0 default until
+    # their own scatter is measured, which is #729's shape and is tracked there.
+    "crowded_l3": {
+        "data_dir": Path("/orange/adamginsburg/jwst/crowded_l3"),
+        "proposal_prefix": "jw09438-o006_t001_nircam_clear",
+        "skip_catalogs": True, "group": "galactic_plane",
+    },
+    "crowded_l20": {
+        "data_dir": Path("/orange/adamginsburg/jwst/crowded_l20"),
+        "proposal_prefix": "jw09438-o007_t001_nircam_clear",
+        "skip_catalogs": True, "group": "galactic_plane",
+    },
 }
 
 
