@@ -324,6 +324,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 5365 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrb2 |
 | 1939 | 001 | VIRAC2 | `TABLE_LOCKED` | F212N | sgra; unregistered until 2026-08-06, so every mosaic sits ~14.8″ off |
 | 2211 | all | VIRAC2 | `TABLE_LOCKED` | F200W | gc2211 |
+| 2092 | 004, 006, 008 | VIRAC2 | `TABLE_CONSENSUS` | F770W | cloudef MIRI (F770W + F2100W, 152 crf per band). Reduced for the first time 2026-09-11 -- the MIRI half of 2092 had never been downloaded, which is why no entry existed and m2 refused six real corrections with the field-shaped "declares NO table-driven correction channel". Consensus rather than locked because the shared 2092 VIRAC2locked table carries NIRCam rows only. F770W anchors because it is the shorter of the two bands and so closer to VIRAC2's Ks; at 21 um the field is dust-emission dominated |
 | 2092 | 005 | VIRAC2 | `TABLE_LOCKED` | F210M | cloudef obs 005 |
 | 2092 | 002 | VIRAC2 | `RECORDED_BULK` + jitter | F210M | cloudef obs 002 |
 | 3958 | 007 | VIRAC2 | `TABLE_LOCKED` | F210M | sickle; re-tied to VIRAC2 2026-08-04, GNS numbers deliberately NOT carried over |
