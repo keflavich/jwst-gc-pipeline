@@ -5312,6 +5312,14 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
         raise
 
 
+#: Merge labels a per-frame fan-out can run under.  A fit writes ONE
+#: detector-keyed product whatever label asked for it, so a marker under any of
+#: these is a receipt for the same file -- which is what lets
+#: ``select_resumable_frames`` resume across labels instead of refitting every
+#: frame once per label (issue #840).
+PERFRAME_MERGE_LABELS = ('nrca', 'nrcb', 'merged', 'mirimage', 'nis')
+
+
 def perframe_marker_path(marker_dir, filename, detector, filt, phase,
                          kind='ok', merge=None):
     """Path of one frame's per-phase completion marker.
@@ -5477,9 +5485,24 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge,
       exists to catch real drops;
     * ``resumed_nooverlap`` -- ``(filename, reason)`` for legitimate misses.
 
-    Merge-scoped ONLY, deliberately without the unscoped-marker fallback the
-    completeness check keeps: an unscoped marker cannot say WHICH pass wrote it,
-    and resuming on one would skip a merged frame that was never fitted.
+    Accepts a marker written under ANY merge label, not just ``merge``.  The
+    per-frame product a fit writes is keyed by the DETECTOR and carries no merge
+    token (``file_module = file_detector`` where ``frame_args`` is built), so one
+    fit of a frame serves every label that has that frame in scope.  A marker
+    under ``nrca`` is therefore a receipt for exactly the file the ``merged``
+    pass would otherwise recompute, byte for byte.
+
+    Without this, requesting the standard ``nrca,nrcb,merged`` fits every frame
+    TWICE -- crowded_l3 carried 560 markers for 280 frames (280 ``merged`` +
+    140 ``nrca`` + 140 ``nrcb``), and g028's m12 logged 560 photometry
+    completions for 280 frames, the second write landing on the first's
+    filename.  That is ~2x the per-frame cost at every phase on every NIRCam
+    field (issue #840).
+
+    The UNSCOPED fallback the completeness check keeps is still refused here,
+    and for the reason the merge-scoped rule was written: an unscoped marker
+    cannot say whether ANY pass wrote it, so resuming on one could skip a frame
+    that was never fitted.  A label-scoped marker names a pass that ran.
     Re-fitting a frame is cheap; a silently absent merged catalog is not.
 
     The pre-#562 detector spelling IS accepted, because it is merge-scoped and so
@@ -5500,14 +5523,18 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge,
     """
     seed_inputs = tuple(seed_inputs or ())
     todo, resumed_ok, resumed_nooverlap, stale = [], [], [], []
+    # Every label this run could have fitted the frame under.  `merge` first so
+    # the frame's own pass is preferred when several receipts exist.
+    merges = [merge] + [m for m in PERFRAME_MERGE_LABELS if m != merge]
     for a in frame_args:
         fn = a['filename']
         dets = _perframe_detector_tokens(fn)
         ok_paths = [perframe_marker_path(marker_dir, fn, det, filt, phase, 'ok',
-                                         merge=merge) for det in dets]
+                                         merge=m)
+                    for det in dets for m in merges]
         nov_paths = [perframe_marker_path(marker_dir, fn, det, filt, phase,
-                                          'nooverlap', merge=merge)
-                     for det in dets]
+                                          'nooverlap', merge=m)
+                     for det in dets for m in merges]
         present = [p for p in ok_paths + nov_paths if os.path.exists(p)]
         if present and not any(_marker_is_current(p, fn, seed_inputs)
                                for p in present):
