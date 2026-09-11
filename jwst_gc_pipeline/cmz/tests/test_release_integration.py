@@ -629,6 +629,50 @@ def test_a_trailing_singleton_borrows_instead_of_being_dropped():
     assert sorted(f for c in chunks for f in c) == sorted(seven)
 
 
+def test_four_bands_make_two_three_band_views_not_two_two_band_ones():
+    """Exact cover turns 4 bands into 2+2, and a two-band view has no measured
+    green -- make_preview_rgb synthesises it as the mean of red and blue.  So a
+    4-band field got two images and not one real colour composite between them.
+    cloudef_controlfield (F162M/F210M/F360M/F480M) and m92 are the two staged
+    fields at this length."""
+    pp = _pp()
+    chunks = pp.chunk_filters(['F162M', 'F210M', 'F360M', 'F480M'])
+    assert [len(c) for c in chunks] == [3, 3]
+    assert chunks == [['F162M', 'F210M', 'F360M'],
+                      ['F210M', 'F360M', 'F480M']]
+    # every band still appears somewhere
+    assert set(f for c in chunks for f in c) == {'F162M', 'F210M', 'F360M', 'F480M'}
+
+
+def test_only_the_size_plus_one_length_overlaps():
+    """The overlap is a targeted exception, not a new rule: from 5 bands on the
+    plain split already yields a full 3-band chunk, so exact cover stands and 7
+    must still be 3+2+2 (pinned above)."""
+    pp = _pp()
+    five = pp.chunk_filters(['F115W', 'F150W', 'F182M', 'F212N', 'F300M'])
+    assert [len(c) for c in five] == [3, 2]
+    flat = [f for c in five for f in c]
+    assert len(flat) == len(set(flat)) == 5, 'no band may repeat at length 5'
+    six = pp.chunk_filters(['F115W', 'F150W', 'F182M', 'F212N', 'F300M', 'F405N'])
+    flat6 = [f for c in six for f in c]
+    assert len(flat6) == len(set(flat6)) == 6
+
+
+def test_four_band_plan_still_puts_the_reddest_band_in_red(tmp_path):
+    """plan() reverses chunk_filters' bluest-first order; the overlapping
+    windows have to survive that the same way the disjoint ones do."""
+    pp = _pp()
+    _stage_filters(str(tmp_path), {'': ['F162M', 'F210M', 'F360M', 'F480M']})
+    specs = pp.plan(tmp_path)
+    assert len(specs) == 2
+    assert all(len(s['filters']) == 3 for s in specs)
+    for spec in specs:
+        waves = [pp.wavelength_um(f) for f in spec['filters']]
+        assert waves == sorted(waves, reverse=True), spec['filters']
+    assert {tuple(s['filters']) for s in specs} == {
+        ('F360M', 'F210M', 'F162M'), ('F480M', 'F360M', 'F210M')}
+
+
 def test_field_page_shows_every_preview(tmp_path):
     mw = _make_webpage()
     manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z', 'files': [],
