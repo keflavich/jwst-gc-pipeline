@@ -65,6 +65,15 @@ RGPS_JSON = 'rgps.json'
 COLOR_NIRCAM_PLANNED = '#46bcd6'
 COLOR_MIRI_PLANNED = '#a78bfa'
 COLOR_OBSERVED = '#4ade80'
+#: Scheduled: on a released observing schedule with a date, but not yet run.
+#: Amber reads as "imminent" between the cyan of merely-planned and the green
+#: of done, and the three are separated in HUE, not only in lightness -- the
+#: map is often read at a zoom where a tile is a few pixels across.
+COLOR_SCHEDULED = '#fbbf24'
+#: Skipped: it was on a schedule and did not run.  Drawn apart from the rest
+#: because it is the one status that leaves a HOLE -- a skipped tile is not a
+#: tile that has yet to come up, and until now it drew identically to one.
+COLOR_SKIPPED = '#f43f5e'
 COLOR_SPRING = '#1E90FF'
 COLOR_ACES = '#ff6b6b'
 #: RGPS components.  Three layers because they are three different surveys in
@@ -154,6 +163,25 @@ CSS = """
                  border-bottom: 1px solid rgba(255,255,255,.1);
                  font-family: var(--mono); }
 .gcm-sky-sec { padding: 6px 9px; border-bottom: 1px solid rgba(255,255,255,.07); }
+/* The selected tile.  `!important` because the colour and stroke-width are set
+   as PRESENTATION ATTRIBUTES on the parent <g> (see `_layer`), and a class
+   rule loses to those unless it is marked -- the highlight silently did
+   nothing without it. */
+.gcm-tile-hi path { stroke: #ffffff !important; stroke-width: 2.6 !important;
+                    fill-opacity: .34 !important; }
+.gcm-tile-dim { opacity: .28; }
+.gcm-sky-pick { width: 100%; box-sizing: border-box; font-family: var(--mono);
+                font-size: 11px; padding: 3px 4px; border-radius: 3px;
+                background: rgba(255,255,255,.07); color: #dfe9ec;
+                border: 1px solid rgba(255,255,255,.18); }
+.gcm-sky-pick option { background: #0d1418; color: #dfe9ec; }
+.gcm-sky-stat { font-family: var(--mono); font-size: 10.5px; line-height: 1.5;
+                color: #cfdde2; }
+.gcm-sky-stat b { font-weight: 600; }
+.gcm-sky-stat .ex { color: #4ade80; }
+.gcm-sky-stat .sk { color: #ff6b6b; }
+.gcm-sky-stat a { color: inherit; text-decoration: underline dotted;
+                  cursor: pointer; }
 .gcm-sky-sec:last-child { border-bottom: 0; }
 .gcm-sky-lab { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
                color: #7d919a; margin-bottom: 4px; font-family: var(--mono); }
@@ -674,8 +702,13 @@ def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
         if not path:
             continue
         count += 1
-        body.append('<g><title>%s</title><path d="%s"/></g>'
-                    % (_esc(_pointing_title(pointing)), path))
+        # data-obs is what the tile picker below keys on.  It is the
+        # observation NUMBER rather than the array index: the two coincide only
+        # while every pointing is drawable, and a pointing dropped for want of
+        # a target coordinate would silently shift every tile after it.
+        body.append('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
+                    % (_esc(pointing.get('number') or ''),
+                       _esc(_pointing_title(pointing)), path))
     return ('<g id="%s" class="gcm-lyr" data-label="%s" stroke="%s" fill="%s" '
             'fill-opacity="%s" stroke-width="1.1" vector-effect="non-scaling-stroke">'
             '%s</g>' % (layer_id, _esc(label), color, color,
@@ -696,6 +729,18 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
         return '', {}
     planned = [p for p in (data.get('planned') or []) if isinstance(p, dict)]
     observed = [p for p in (data.get('observed') or []) if isinstance(p, dict)]
+
+    # Status splits the planned group into three drawn layers.  Anything whose
+    # status is unrecognised -- including a footprint file built before statuses
+    # existed, where it is absent entirely -- falls through to the plain planned
+    # layer, so an older file renders exactly as it did.
+    def _status_of(rec):
+        return str(rec.get('status') or '').strip().lower()
+
+    scheduled = [p for p in planned if _status_of(p) == 'scheduled']
+    skipped = [p for p in planned if _status_of(p) == 'skipped']
+    rest = [p for p in planned
+            if _status_of(p) not in ('scheduled', 'skipped')]
     other = 'icrs' if frame_name == 'galactic' else 'galactic'
 
     grid = []
@@ -718,10 +763,18 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
                        'y="%s">%s</text>'
                        % (_num(label[0] + 3), _num(label[1] - 3), _esc(text)))
 
-    nircam, n_nircam = _layer(frame, planned, 'nircam', COLOR_NIRCAM_PLANNED,
+    nircam, n_nircam = _layer(frame, rest, 'nircam', COLOR_NIRCAM_PLANNED,
                               '.09', 'stat-nircam', 'NIRCam planned')
-    miri, n_miri = _layer(frame, planned, 'miri', COLOR_MIRI_PLANNED,
+    miri, n_miri = _layer(frame, rest, 'miri', COLOR_MIRI_PLANNED,
                           '.13', 'stat-miri', 'MIRI parallel planned')
+    sch_n, n_sch_n = _layer(frame, scheduled, 'nircam', COLOR_SCHEDULED,
+                            '.12', 'stat-sch-nircam', 'scheduled NIRCam')
+    sch_m, n_sch_m = _layer(frame, scheduled, 'miri', COLOR_SCHEDULED,
+                            '.12', 'stat-sch-miri', 'scheduled MIRI')
+    skp_n, n_skp_n = _layer(frame, skipped, 'nircam', COLOR_SKIPPED,
+                            '.16', 'stat-skp-nircam', 'skipped NIRCam')
+    skp_m, n_skp_m = _layer(frame, skipped, 'miri', COLOR_SKIPPED,
+                            '.16', 'stat-skp-miri', 'skipped MIRI')
     obs_n, n_obs_n = _layer(frame, observed, 'nircam', COLOR_OBSERVED,
                             '.18', 'stat-obs-nircam', 'observed NIRCam')
     obs_m, n_obs_m = _layer(frame, observed, 'miri', COLOR_OBSERVED,
@@ -783,12 +836,13 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
     svg = ('<svg id="gcm-sky-static" class="gcm-sky-static" '
            'viewBox="0 0 %s %s" preserveAspectRatio="xMidYMid meet" '
            'role="group" aria-label="Survey footprints on the sky, %s">'
-           '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s</g>%s</svg>'
+           '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s%s%s%s%s</g>%s</svg>'
            % (_num(frame.width), _num(frame.height), _esc(axes),
               ''.join(grid), ''.join(gal), spring, ''.join(rgps_layers), aces,
-              nircam, miri, obs_n, obs_m, hud))
+              nircam, miri, sch_n, sch_m, skp_n, skp_m, obs_n, obs_m, hud))
     info = {'n_nircam': n_nircam, 'n_miri': n_miri,
             'n_observed': n_obs_n + n_obs_m, 'n_roman': n_roman,
+            'n_scheduled': len(scheduled), 'n_skipped': len(skipped),
             'n_aces': len(aces_p), 'n_rgps': n_rgps,
             'n_rgps_by': {k: len(rgps_p[k]) for k in rgps_order},
             'width': frame.width, 'height': frame.height,
@@ -841,6 +895,91 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                 f" position is drawn, so the covered area is larger than these"
                 f" outlines.")
 
+    # ---- tile roster (the picker) and the execution ledger ----------------
+    # Built from BOTH groups: `planned` and `observed` are a display split, not
+    # an identity, and a tile has to stay findable by number whichever side of
+    # it it lands on.  Sorted numerically -- string order puts 10 before 2 and
+    # made the picker unusable for a 139-tile survey.
+    tiles = []
+    for group in ('planned', 'observed'):
+        for rec in (footprints.get(group) or []):
+            if not isinstance(rec, dict):
+                continue
+            num = _safe_num(rec.get('number'))
+            tiles.append({
+                'n': int(num) if num is not None else None,
+                'number': str(rec.get('number') or ''),
+                'target': str(rec.get('target') or ''),
+                'status': str(rec.get('status') or ''),
+                'ra': _safe_num(rec.get('ra')),
+                'dec': _safe_num(rec.get('dec')),
+                'start': str(rec.get('start') or ''),
+            })
+    tiles = sorted([t for t in tiles if t['n'] is not None],
+                   key=lambda t: t['n'])
+
+    def _by_status(name):
+        return [t for t in tiles if t['status'].strip().lower() == name]
+
+    executed, skipped = _by_status('executed'), _by_status('skipped')
+    status_counts = footprints.get('status_counts') or {}
+    status_source = footprints.get('status_source') or 'apt'
+
+    def _tile_links(items, cls):
+        return ', '.join(
+            '<a data-goto="%s" title="%s">%s</a>'
+            % (_esc(t['number']),
+               _esc('%s%s' % (t['target'], '  ' + t['start'] if t['start'] else '')),
+               _esc(t['number']))
+            for t in items) or '<span class="gcm-sky-empty">none</span>'
+
+    if status_counts:
+        ledger_rows = [
+            '<div><b class="ex">Executed %d</b> &nbsp;%s</div>'
+            % (len(executed), _tile_links(executed, 'ex')),
+            '<div><b class="sk">Skipped %d</b> &nbsp;%s</div>'
+            % (len(skipped), _tile_links(skipped, 'sk')),
+        ]
+        rest = ', '.join('%s %d' % (k, v) for k, v in sorted(status_counts.items())
+                         if k.strip().lower() not in ('executed', 'skipped'))
+        if rest:
+            ledger_rows.append('<div class="gcm-sky-lab" style="margin-top:4px">'
+                               '%s</div>' % _esc(rest))
+        ledger = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Execution'
+                  '</div><div class="gcm-sky-stat">%s</div></div>'
+                  % ''.join(ledger_rows))
+    else:
+        # No status source reached: say that, rather than showing "Executed 0",
+        # which asserts a fact that was never measured.
+        ledger = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Execution'
+                  '</div><div class="gcm-sky-stat gcm-sky-empty">visit status '
+                  'unavailable</div></div>')
+
+    status_note = ("STScI's per-visit status table"
+                   if status_source == 'stsci-visit-status'
+                   else 'the APT visit status, which reports IMPLEMENTATION '
+                        'for every visit and so cannot show a visit that has '
+                        'run or been skipped')
+
+    def _opt(t):
+        bits = [t['number']]
+        if t['target']:
+            bits.append(t['target'])
+        if t['status']:
+            bits.append(t['status'])
+        return '<option value="%s">%s</option>' % (
+            _esc(t['number']), _esc(' — '.join(bits)))
+
+    picker = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Tile</div>'
+              '<select class="gcm-sky-pick" id="gcm-sky-tile">'
+              '<option value="">all %d tiles</option>%s</select></div>'
+              % (len(tiles), ''.join(_opt(t) for t in tiles)))
+
+    tile_js = [{'n': t['number'], 'ra': t['ra'], 'dec': t['dec'],
+                'target': t['target'], 'status': t['status']}
+               for t in tiles]
+    tiles_json = json.dumps(tile_js)
+
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
 
     def _survey_button(index, name, url, note):
@@ -857,6 +996,13 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     if not static_svg:
         static_svg = ('<div class="gcm-sky-nostatic">Footprint data contains no '
                       'drawable polygons.</div>')
+    # After static_map: it is what splits the planned group by status, so the
+    # button counts have to come from its info rather than be recomputed here
+    # -- two independent counts of the same thing drift.
+    n_scheduled = int(_safe_num(static_info.get('n_scheduled'), 0) or 0)
+    n_skipped = int(_safe_num(static_info.get('n_skipped'), 0) or 0)
+    scheduled_cls = 'gcm-sky-empty' if not n_scheduled else ''
+    skipped_cls = 'gcm-sky-empty' if not n_skipped else ''
     view_w = _safe_num(static_info.get('width'), 1000.0)
     view_h = _safe_num(static_info.get('height'), 1000.0)
     frame_scale = _safe_num(static_info.get('scale'), 0.0)
@@ -887,7 +1033,7 @@ prime and so covers <em>different sky</em>, which is why it is drawn separately.
 request the 180° flip, so these positions are <em>indicative</em>: across the
 allowed range alone the MIRI parallel moves ~125″, about the width of a NIRCam
 module, and a flip moves it ~15′.{dither_note} <strong>{n_observed}</strong>
-pointings observed so far, from the APT visit status.</p>
+pointings observed so far, from {status_note}.</p>
 
 <div class="gcm-sky-wrap">
   <div id="gcm-aladin" class="gcm-sky-off"></div>
@@ -909,13 +1055,22 @@ pointings observed so far, from the APT visit status.</p>
     </div>
 
     <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">JWST — observed</div>
+      <div class="gcm-sky-lab">JWST — status</div>
       <div class="gcm-sky-row">
         <button class="gcm-sky-btn on" id="lyr-observed"
-                style="color:{COLOR_OBSERVED}">observed
+                style="color:{COLOR_OBSERVED}">executed
           <span class="gcm-sky-count {observed_cls}">{n_observed or 'none yet'}</span></button>
+        <button class="gcm-sky-btn on" id="lyr-scheduled"
+                style="color:{COLOR_SCHEDULED}">scheduled
+          <span class="gcm-sky-count {scheduled_cls}">{n_scheduled or 'none'}</span></button>
+        <button class="gcm-sky-btn on" id="lyr-skipped"
+                style="color:{COLOR_SKIPPED}">skipped
+          <span class="gcm-sky-count {skipped_cls}">{n_skipped or 'none'}</span></button>
       </div>
     </div>
+
+    {picker}
+    {ledger}
 
     <div class="gcm-sky-sec">
       <div class="gcm-sky-lab">Other surveys (context)</div>
@@ -949,8 +1104,12 @@ pointings observed so far, from the APT visit status.</p>
         <div>NIRCam planned</div>
         <div class="gcm-sky-sw" style="background:{COLOR_MIRI_PLANNED}"></div>
         <div>MIRI parallel planned</div>
+        <div class="gcm-sky-sw" style="background:{COLOR_SCHEDULED}"></div>
+        <div>scheduled — has a date, not yet run</div>
+        <div class="gcm-sky-sw" style="background:{COLOR_SKIPPED}"></div>
+        <div>skipped — was scheduled and did not run</div>
         <div class="gcm-sky-sw" style="background:{COLOR_OBSERVED}"></div>
-        <div>observed</div>
+        <div>executed</div>
       </div>
     </div>
   </div>
@@ -975,7 +1134,9 @@ interactive view adds sky imagery you can pan across.
   var VIEW = {json.dumps([view_w, view_h])};
   var UNITS_PER_DEG = {frame_scale:.6f};
   var C = {json.dumps({'nircam': COLOR_NIRCAM_PLANNED, 'miri': COLOR_MIRI_PLANNED,
-                       'observed': COLOR_OBSERVED, 'spring': COLOR_SPRING,
+                       'observed': COLOR_OBSERVED,
+                       'scheduled': COLOR_SCHEDULED, 'skipped': COLOR_SKIPPED,
+                       'spring': COLOR_SPRING,
                        'aces': COLOR_ACES,
                        'rgps-wide': COLOR_RGPS_WIDE,
                        'rgps-tds': COLOR_RGPS_TDS,
@@ -989,11 +1150,18 @@ interactive view adds sky imagery you can pan across.
   var STATIC_GROUPS = {{
     nircam: ['stat-nircam'], miri: ['stat-miri'],
     observed: ['stat-obs-nircam', 'stat-obs-miri'],
+    scheduled: ['stat-sch-nircam', 'stat-sch-miri'],
+    skipped: ['stat-skp-nircam', 'stat-skp-miri'],
     spring: ['stat-spring'], aces: ['stat-aces'],
     'rgps-wide': ['stat-rgps-wide'], 'rgps-tds': ['stat-rgps-tds'],
     'rgps-deep': ['stat-rgps-deep']
   }};
 
+  var TILES = {tiles_json};
+  // number -> its polygons, filled when footprints.json arrives.  The picker
+  // needs this to draw the highlight in Aladin; the static map highlights by
+  // class instead and so works before any fetch.
+  var FP = {{ byNumber: {{}} }};
   var svg = document.getElementById('gcm-sky-static');
   var note = document.getElementById('gcm-sky-note');
   var loadBtn = document.getElementById('gcm-sky-load');
@@ -1003,6 +1171,7 @@ interactive view adds sky imagery you can pan across.
   // Layer state is shared: a toggle drives the static groups now and the Aladin
   // overlays later, so the view you built survives the upgrade.
   var on = {{ nircam: true, miri: true, observed: true,
+             scheduled: true, skipped: true,
              spring: false, aces: false,
              'rgps-wide': false, 'rgps-tds': false, 'rgps-deep': false }};
   var L = null;                      // Aladin overlays, once they exist
@@ -1015,11 +1184,18 @@ interactive view adds sky imagery you can pan across.
       }});
     }});
     if (L) {{
-      Object.keys(L).forEach(function (k) {{ on[k] ? L[k].show() : L[k].hide(); }});
+      Object.keys(L).forEach(function (k) {{
+        // `pick` is the tile highlight: it belongs to the picker, not to a
+        // layer toggle, and `on.pick` is undefined -- so the generic loop
+        // would hide it the first time any toggle was touched.
+        if (k === 'pick') {{ return; }}
+        on[k] ? L[k].show() : L[k].hide();
+      }});
     }}
   }}
 
   [['lyr-nircam', 'nircam'], ['lyr-miri', 'miri'], ['lyr-observed', 'observed'],
+   ['lyr-scheduled', 'scheduled'], ['lyr-skipped', 'skipped'],
    ['lyr-spring', 'spring'], ['lyr-aces', 'aces'],
    ['lyr-rgps-wide', 'rgps-wide'], ['lyr-rgps-tds', 'rgps-tds'],
    ['lyr-rgps-deep', 'rgps-deep']
@@ -1031,6 +1207,79 @@ interactive view adds sky imagery you can pan across.
       on[pair[1]] = !on[pair[1]];
       el.classList.toggle('on', on[pair[1]]);
       applyLayers();
+    }});
+  }});
+
+  // ------------------------------------------------------------ tile picker
+  // Highlighting is done by CLASS on the static <g data-obs>, not by rewriting
+  // colours: the layer toggles own the colours, and a picker that set them
+  // directly would fight the toggles and win, leaving a tile lit after its
+  // layer was switched off.
+  var picker = document.getElementById('gcm-sky-tile');
+  var selected = '';
+
+  function tileByNumber(n) {{
+    for (var i = 0; i < TILES.length; i++) {{
+      if (String(TILES[i].n) === String(n)) {{ return TILES[i]; }}
+    }}
+    return null;
+  }}
+
+  function applyTile() {{
+    if (!svg) {{ return; }}
+    var groups = svg.querySelectorAll('g[data-obs]');
+    for (var i = 0; i < groups.length; i++) {{
+      var mine = selected && groups[i].getAttribute('data-obs') === selected;
+      groups[i].classList.toggle('gcm-tile-hi', !!mine);
+      // Dim the rest rather than hiding them: on a 139-tile mosaic the point
+      // of picking one is to see WHERE it sits, which needs its neighbours.
+      groups[i].classList.toggle('gcm-tile-dim', !!selected && !mine);
+    }}
+    if (L && L.pick) {{
+      L.pick.removeAll();
+      var t = selected ? tileByNumber(selected) : null;
+      if (t && FP) {{
+        (FP.byNumber[selected] || []).forEach(function (poly) {{
+          L.pick.add(A.polygon(poly));
+        }});
+      }}
+    }}
+  }}
+
+  function gotoTile(n) {{
+    var t = tileByNumber(n);
+    if (!t) {{ return; }}
+    selected = String(n);
+    if (picker) {{ picker.value = selected; }}
+    applyTile();
+    if (aladin && t.ra !== null && t.dec !== null) {{
+      aladin.gotoRaDec(t.ra, t.dec);
+    }} else if (svg && t.ra !== null) {{
+      // Static map: centre the viewBox on the tile's own drawn bbox, which is
+      // in SVG user units -- the sky coordinates cannot be used directly here.
+      var g = svg.querySelector('g[data-obs="' + CSS.escape(selected) + '"]');
+      if (g && g.getBBox) {{
+        var b = g.getBBox();
+        var pad = Math.max(b.width, b.height) * 6;
+        vb = [b.x + b.width / 2 - (b.width + pad) / 2,
+              b.y + b.height / 2 - (b.height + pad) / 2,
+              b.width + pad, b.height + pad];
+        setVB();
+      }}
+    }}
+  }}
+
+  if (picker) {{
+    picker.addEventListener('change', function () {{
+      if (!picker.value) {{ selected = ''; applyTile(); return; }}
+      gotoTile(picker.value);
+    }});
+  }}
+  // The execution ledger's numbers are clickable shortcuts into the same path.
+  document.querySelectorAll('.gcm-sky-stat a[data-goto]').forEach(function (a) {{
+    a.addEventListener('click', function (ev) {{
+      ev.preventDefault();
+      gotoTile(a.getAttribute('data-goto'));
     }});
   }});
 
@@ -1290,22 +1539,47 @@ interactive view adds sky imagery you can pan across.
       L = {{
         nircam: layer('JWST NIRCam (planned)', C.nircam, 1.1),
         miri: layer('JWST MIRI parallel (planned)', C.miri, 1.1),
-        observed: layer('JWST observed', C.observed, 2.0),
+        observed: layer('JWST executed', C.observed, 2.0),
+        scheduled: layer('JWST scheduled', C.scheduled, 1.4),
+        skipped: layer('JWST skipped', C.skipped, 1.8),
         spring: layer('Roman GBTDS', C.spring, 1.2),
         'rgps-wide': layer('RGPS wide area', C['rgps-wide'], 1.2),
         'rgps-tds': layer('RGPS time domain', C['rgps-tds'], 1.2),
         'rgps-deep': layer('RGPS deep fields', C['rgps-deep'], 1.2),
-        aces: layer('ACES coverage', C.aces, 1.6)
+        aces: layer('ACES coverage', C.aces, 1.6),
+        // Drawn last so it sits above the layer it duplicates.
+        pick: layer('selected tile', '#ffffff', 2.6)
       }};
 
+      function remember(p) {{
+        var key = String(p.number || '');
+        if (!key) {{ return; }}
+        FP.byNumber[key] = (p.nircam || []).concat(p.miri || []);
+      }}
       (fp.planned || []).forEach(function (p) {{
+        remember(p);
+        // Same three-way split the static map makes, and by the same rule: an
+        // unrecognised or absent status falls through to the plain planned
+        // layers, so a footprint file built before statuses existed draws
+        // exactly as it used to.
+        var st = String(p.status || '').trim().toLowerCase();
+        var target = (st === 'scheduled') ? 'scheduled'
+                   : (st === 'skipped') ? 'skipped' : null;
+        if (target) {{
+          (p.nircam || []).forEach(function (poly) {{ L[target].add(A.polygon(poly)); }});
+          (p.miri || []).forEach(function (poly) {{ L[target].add(A.polygon(poly)); }});
+          return;
+        }}
         (p.nircam || []).forEach(function (poly) {{ L.nircam.add(A.polygon(poly)); }});
         (p.miri || []).forEach(function (poly) {{ L.miri.add(A.polygon(poly)); }});
       }});
       (fp.observed || []).forEach(function (p) {{
+        remember(p);
         (p.nircam || []).forEach(function (poly) {{ L.observed.add(A.polygon(poly)); }});
         (p.miri || []).forEach(function (poly) {{ L.observed.add(A.polygon(poly)); }});
       }});
+      // A tile chosen BEFORE the interactive view loaded stays chosen after it.
+      if (selected) {{ applyTile(); }}
       Object.keys(ROMAN.tiles || {{}}).forEach(function (name) {{
         var t = ROMAN.tiles[name];
         (t.spring || []).forEach(function (poly) {{ L.spring.add(A.polygon(poly)); }});
