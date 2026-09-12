@@ -198,6 +198,16 @@ CSS = """
               border: 1px solid rgba(255,255,255,.13); border-radius: 4px;
               font-size: 11.5px; overflow: hidden;
               font-family: var(--sans); backdrop-filter: blur(6px); }
+/* The panel is DRAGGABLE by its header.  `overflow: hidden` on the wrap means
+   a panel dragged past an edge is clipped rather than scrolled to, so the drag
+   handler clamps instead of relying on the browser. */
+.gcm-sky-ui h4 { cursor: move; user-select: none; -webkit-user-select: none;
+                 /* Without `touch-action: none` a touch drag scrolls the page
+                    instead of moving the panel, and the pointermove events
+                    stop arriving mid-gesture. */
+                 touch-action: none; }
+.gcm-sky-ui.gcm-dragging { opacity: .92;
+                           box-shadow: 0 6px 18px rgba(0,0,0,.45); }
 .gcm-sky-ui h4 { margin: 0; padding: 6px 10px; font-size: 11px; font-weight: 600;
                  letter-spacing: .06em; text-transform: uppercase;
                  background: rgba(255,255,255,.06); color: #9fb4bc;
@@ -1120,7 +1130,7 @@ pointings observed so far, from {status_note}.</p>
   {static_svg}
 
   <div class="gcm-sky-ui" id="gcm-sky-ui">
-    <h4>Footprints</h4>
+    <h4 id="gcm-sky-grip" title="drag to move this panel">Footprints</h4>
 
     <div class="gcm-sky-sec">
       <div class="gcm-sky-lab">JWST — planned</div>
@@ -1289,6 +1299,86 @@ interactive view adds sky imagery you can pan across.
       applyLayers();
     }});
   }});
+
+  // ------------------------------------------------------------ drag the panel
+  // The controls sit ON the map, so wherever they are they hide part of it.
+  // Rather than pick a corner for everyone, let the reader move them.
+  (function () {{
+    var panel = document.getElementById('gcm-sky-ui');
+    var grip = document.getElementById('gcm-sky-grip');
+    var wrap = panel && panel.parentElement;
+    if (!panel || !grip || !wrap) {{ return; }}
+
+    var dragging = false, dx = 0, dy = 0;
+
+    function clampTo(left, top) {{
+      // Keep a grab-able strip on screen in every direction: a panel dropped
+      // past an edge would be clipped by the wrap's `overflow: hidden` and
+      // could never be dragged back.
+      var w = wrap.clientWidth, h = wrap.clientHeight;
+      var pw = panel.offsetWidth, ph = panel.offsetHeight;
+      var edge = 28;
+      return [Math.min(Math.max(left, edge - pw), w - edge),
+              Math.min(Math.max(top, 0), h - edge)];
+    }}
+
+    function place(left, top) {{
+      var xy = clampTo(left, top);
+      panel.style.left = xy[0] + 'px';
+      panel.style.top = xy[1] + 'px';
+      // The panel is anchored with `right` in CSS; setting `left` without
+      // clearing that pins BOTH edges and the panel stretches instead of
+      // moving.
+      panel.style.right = 'auto';
+    }}
+
+    grip.addEventListener('pointerdown', function (ev) {{
+      if (ev.button !== undefined && ev.button !== 0) {{ return; }}
+      dragging = true;
+      var p = panel.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+      dx = ev.clientX - p.left;
+      dy = ev.clientY - p.top;
+      place(p.left - w.left, p.top - w.top);   // right-anchored -> left-anchored
+      panel.classList.add('gcm-dragging');
+      if (grip.setPointerCapture) {{ grip.setPointerCapture(ev.pointerId); }}
+      ev.preventDefault();
+    }});
+
+    grip.addEventListener('pointermove', function (ev) {{
+      if (!dragging) {{ return; }}
+      var w = wrap.getBoundingClientRect();
+      place(ev.clientX - w.left - dx, ev.clientY - w.top - dy);
+      // The map pans on pointer drags of its own; without this a drag that
+      // wanders off the header would pan the sky underneath the panel.
+      ev.preventDefault();
+      ev.stopPropagation();
+    }});
+
+    function end(ev) {{
+      if (!dragging) {{ return; }}
+      dragging = false;
+      panel.classList.remove('gcm-dragging');
+      if (grip.releasePointerCapture && ev.pointerId !== undefined) {{
+        try {{ grip.releasePointerCapture(ev.pointerId); }} catch (e) {{}}
+      }}
+    }}
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+
+    // A panel parked near the right edge would be left off-screen by a
+    // narrowing window, with no way to reach it.
+    window.addEventListener('resize', function () {{
+      if (panel.style.left) {{
+        place(parseFloat(panel.style.left) || 0,
+              parseFloat(panel.style.top) || 0);
+      }}
+    }});
+
+    // Clicks inside the panel are for its own controls, never for the map.
+    panel.addEventListener('pointerdown', function (ev) {{ ev.stopPropagation(); }});
+    panel.addEventListener('wheel', function (ev) {{ ev.stopPropagation(); }},
+                           {{ passive: true }});
+  }}());
 
   // ------------------------------------------------------------ tile picker
   // Highlighting is done by CLASS on the static <g data-obs>, not by rewriting

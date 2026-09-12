@@ -354,3 +354,44 @@ def test_the_tile_picker_does_not_swallow_clicks_on_the_mast_links():
     links from navigating."""
     html = _section(_footprints({'1': 'Executed'}))
     assert ".gcm-sky-stat a[data-goto]'" in html
+
+
+# --- the controls panel is draggable -----------------------------------------
+
+def test_the_panel_has_a_drag_handle():
+    """The controls sit ON the map, so wherever they are they hide part of it.
+    The header is the handle rather than the whole panel: dragging from the
+    body would fight the buttons and the tile dropdown inside it."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert 'id="gcm-sky-grip"' in html
+    assert 'drag to move this panel' in html
+    from jwst_gc_pipeline.monitoring import skyview
+    assert '.gcm-sky-ui h4 { cursor: move' in skyview.CSS
+
+
+def test_dragging_clears_the_css_right_anchor():
+    """The panel is anchored with `right` in CSS.  Setting `left` without
+    clearing it pins BOTH edges, and the panel stretches instead of moving."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert "panel.style.right = 'auto'" in html
+
+
+def test_the_panel_cannot_be_dragged_out_of_reach():
+    """`.gcm-sky-wrap` is `overflow: hidden`, so a panel dropped past an edge
+    is clipped, not scrolled to -- it could never be dragged back.  The clamp
+    keeps a strip of it inside, and re-runs on resize so a narrowing window
+    cannot strand it either."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert 'function clampTo' in html
+    assert "addEventListener('resize'" in html
+
+
+def test_a_touch_drag_moves_the_panel_rather_than_scrolling_the_page():
+    from jwst_gc_pipeline.monitoring import skyview
+    assert 'touch-action: none' in skyview.CSS
+
+
+def test_the_map_does_not_pan_underneath_a_drag():
+    """Aladin and the static map both pan on pointer drags of their own."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert 'ev.stopPropagation();' in html

@@ -2123,8 +2123,13 @@ def test_wheel_zoom_does_not_hijack_page_scroll_unarmed():
     from jwst_gc_pipeline.monitoring import skyview
     html = skyview.section(_fp(planned=_POINTINGS))
     assert 'if (!armed) { return; }' in html
-    assert html.index('if (!armed) { return; }') < html.index('ev.preventDefault()',
-                                                              html.index('wheel'))
+    # Anchor on the MAP's wheel listener specifically.  `html.index('wheel')`
+    # used to find it because it was the only one; the draggable controls panel
+    # added a second (passive, no preventDefault) listener that now comes first
+    # in the document, so the loose locator started measuring the wrong handler.
+    wheel = html.index("svg.addEventListener('wheel'")
+    assert html.index('if (!armed) { return; }', wheel) < \
+        html.index('ev.preventDefault()', wheel)
 
 
 @pytest.mark.parametrize('bad', [
