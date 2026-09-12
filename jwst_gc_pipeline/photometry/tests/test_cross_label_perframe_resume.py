@@ -9,6 +9,11 @@ Measured 2026-09-11 (issue #840): crowded_l3 carried 560 markers for 280 frames
 (280 ``merged`` + 140 ``nrca`` + 140 ``nrcb``), and g028's m12 fan-out logged
 560 ``Completed basic photometry`` lines against 280 frames and 280 per-frame
 catalogs.
+
+``PHASE`` here is ``m12`` throughout, and every call passes ``cross_label=True``
+explicitly: that equivalence holds where the fit takes no label-scoped input,
+which is the first phase and no other.  ``test_label_scoped_phase_resume.py``
+covers m3..m7, where it does not.
 """
 import os
 
@@ -47,7 +52,7 @@ def test_the_merged_pass_resumes_a_frame_the_nrca_pass_fitted(tmp_path):
     fn = _frame(tmp_path)
     _mark(md, fn, 'nrca')
     todo, ok, nov, stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, 'merged')
+        _args(fn), str(md), FILT, PHASE, 'merged', cross_label=True)
     assert ok == [fn], "the merged pass refitted a frame nrca had already done"
     assert todo == [] and stale == []
 
@@ -57,7 +62,7 @@ def test_and_the_reverse_direction(tmp_path):
     fn = _frame(tmp_path)
     _mark(md, fn, 'merged')
     todo, ok, _nov, _stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, 'nrca')
+        _args(fn), str(md), FILT, PHASE, 'nrca', cross_label=True)
     assert ok == [fn] and todo == []
 
 
@@ -68,7 +73,7 @@ def test_any_label_receipt_satisfies_any_other(tmp_path, wrote, asks):
     fn = _frame(tmp_path)
     _mark(md, fn, wrote)
     todo, ok, _nov, _stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, asks)
+        _args(fn), str(md), FILT, PHASE, asks, cross_label=True)
     assert ok == [fn], f"{asks} refitted a frame {wrote} had fitted"
     assert todo == []
 
@@ -79,7 +84,7 @@ def test_a_frame_with_NO_marker_is_still_refitted(tmp_path):
     md = tmp_path / 'markers'; md.mkdir()
     fn = _frame(tmp_path)
     todo, ok, _nov, _stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, 'merged')
+        _args(fn), str(md), FILT, PHASE, 'merged', cross_label=True)
     assert todo and ok == []
 
 
@@ -92,7 +97,7 @@ def test_an_UNSCOPED_marker_still_does_not_resume(tmp_path):
     open(p, 'w').close()
     os.utime(p, (os.path.getmtime(fn) + 10,) * 2)
     todo, ok, _nov, _stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, 'merged')
+        _args(fn), str(md), FILT, PHASE, 'merged', cross_label=True)
     assert todo and ok == [], "an unscoped marker must not resume"
 
 
@@ -104,7 +109,7 @@ def test_a_STALE_cross_label_marker_does_not_resume(tmp_path):
     p = _mark(md, fn, 'nrca')
     os.utime(p, (os.path.getmtime(fn) - 3600,) * 2)   # older than the frame
     todo, ok, _nov, stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, 'merged')
+        _args(fn), str(md), FILT, PHASE, 'merged', cross_label=True)
     assert stale == [fn] and todo and ok == []
 
 
@@ -113,7 +118,7 @@ def test_a_cross_label_nooverlap_marker_carries_over(tmp_path):
     fn = _frame(tmp_path)
     _mark(md, fn, 'nrcb', kind='nooverlap')
     todo, ok, nov, _stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, 'merged')
+        _args(fn), str(md), FILT, PHASE, 'merged', cross_label=True)
     assert [f for f, _r in nov] == [fn] and todo == [] and ok == []
 
 
@@ -127,5 +132,6 @@ def test_seed_inputs_still_gate_a_cross_label_marker(tmp_path):
     seed.write_text('previous phase product')
     os.utime(str(seed), (os.path.getmtime(p) + 60,) * 2)   # seed newer than marker
     todo, ok, _nov, stale = select_resumable_frames(
-        _args(fn), str(md), FILT, PHASE, 'merged', seed_inputs=(str(seed),))
+        _args(fn), str(md), FILT, PHASE, 'merged', seed_inputs=(str(seed),),
+        cross_label=True)
     assert stale == [fn] and todo and ok == []

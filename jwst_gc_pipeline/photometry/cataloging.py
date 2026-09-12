@@ -5320,6 +5320,31 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
 PERFRAME_MERGE_LABELS = ('nrca', 'nrcb', 'merged', 'mirimage', 'nis')
 
 
+def perframe_cross_label_ok(prev_seed, resbg_path,
+                            satstar_flux_overrides, satstar_flux_drops):
+    """May a fit under one merge label be resumed from another label's marker?
+
+    Only where the per-frame fit takes no LABEL-SCOPED input.  These four are
+    exactly the ``frame_args`` values the fan-out keys on the REQUESTED module
+    (``nrca`` / ``nrcb`` / ``merged``) rather than on the frame: the previous
+    phase's seed catalog, the background map the frame is fitted on, and the
+    reconciled satstar flux overrides / drops.  All four are ``None`` at m12 and
+    all four are populated from ``{module}``-named products at m3..m7.
+
+    So at m12 the three passes over one frame are one computation done three
+    times, and at m3..m7 they are three different fits that happen to share an
+    output name -- measured on brick F115W (1182/004, 2026-09-11), the m3 seed
+    is 943427 rows for ``merged`` against 517025 for ``nrca``, on a separate
+    ``...-f115w-{module}_..._smoothed_bg_i2d`` from m5 on.  Resuming the second
+    case across labels would silently substitute one pass's fit for another's.
+
+    Reads the values rather than the phase name so a phase that gains or loses a
+    label-scoped input is covered without editing a list of phase names.
+    """
+    return all(q is None for q in (prev_seed, resbg_path,
+                                   satstar_flux_overrides, satstar_flux_drops))
+
+
 def perframe_marker_path(marker_dir, filename, detector, filt, phase,
                          kind='ok', merge=None):
     """Path of one frame's per-phase completion marker.
@@ -5466,7 +5491,7 @@ def _marker_is_current(marker_path, frame_path, seed_inputs=()):
 
 
 def select_resumable_frames(frame_args, marker_dir, filt, phase, merge,
-                            seed_inputs=()):
+                            seed_inputs=(), cross_label=False):
     """Split ``frame_args`` into (still to fit, already done, already no-overlap).
 
     The --skip-if-done resume for the per-frame fan-out.  A fan-out that hits
@@ -5485,19 +5510,34 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge,
       exists to catch real drops;
     * ``resumed_nooverlap`` -- ``(filename, reason)`` for legitimate misses.
 
-    Accepts a marker written under ANY merge label, not just ``merge``.  The
-    per-frame product a fit writes is keyed by the DETECTOR and carries no merge
-    token (``file_module = file_detector`` where ``frame_args`` is built), so one
-    fit of a frame serves every label that has that frame in scope.  A marker
-    under ``nrca`` is therefore a receipt for exactly the file the ``merged``
-    pass would otherwise recompute, byte for byte.
+    ``cross_label`` accepts a marker written under ANY merge label, not just
+    ``merge``.  The per-frame product a fit writes is keyed by the DETECTOR and
+    carries no merge token (``file_module = file_detector`` where ``frame_args``
+    is built), so ONE fit of a frame serves every label that has that frame in
+    scope -- a marker under ``nrca`` is a receipt for exactly the file the
+    ``merged`` pass would otherwise recompute.  Without it, the standard
+    ``nrca,nrcb,merged`` fits every frame TWICE (crowded_l3: 560 markers for 280
+    frames; g028 m12: 560 photometry completions for 280 frames, the second
+    write landing on the first's filename -- issue #840).
 
-    Without this, requesting the standard ``nrca,nrcb,merged`` fits every frame
-    TWICE -- crowded_l3 carried 560 markers for 280 frames (280 ``merged`` +
-    140 ``nrca`` + 140 ``nrcb``), and g028's m12 logged 560 photometry
-    completions for 280 frames, the second write landing on the first's
-    filename.  That is ~2x the per-frame cost at every phase on every NIRCam
-    field (issue #840).
+    It defaults to FALSE because that equivalence holds only where the fit takes
+    no LABEL-SCOPED input, which is the FIRST phase and no other.  ``frame_args``
+    carries four values keyed on the requested module -- ``prev_seed_catalog``,
+    ``resbg_path``, ``satstar_flux_overrides``, ``satstar_flux_drops`` -- and all
+    four are ``None`` at m12 and populated from ``{module}``-named products at
+    m3..m7.  Measured on brick F115W (1182/004, 2026-09-11):
+
+        phase  seed rows: nrca     nrcb    merged
+        m2 vetted        111126   196255   321234   (merged > nrca+nrcb)
+        m3 i2d seed      517025   440116   943427
+        m4 i2d seed      226917   335089   557144
+
+    plus a separate ``...-f115w-{nrca,nrcb,merged}_{phase}_..._smoothed_bg_i2d``
+    per label from m5 on.  So at m3..m7 the ``merged`` pass fits a frame against
+    a seed roughly twice the size of the one the ``nrca`` pass used, on a
+    different background map: a real second fit, not a recomputation.  Resuming
+    it from the other pass's marker would silently substitute one for the other.
+    The CALLER decides, from the values it is about to put in ``frame_args``.
 
     The UNSCOPED fallback the completeness check keeps is still refused here,
     and for the reason the merge-scoped rule was written: an unscoped marker
@@ -5524,8 +5564,11 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge,
     seed_inputs = tuple(seed_inputs or ())
     todo, resumed_ok, resumed_nooverlap, stale = [], [], [], []
     # Every label this run could have fitted the frame under.  `merge` first so
-    # the frame's own pass is preferred when several receipts exist.
-    merges = [merge] + [m for m in PERFRAME_MERGE_LABELS if m != merge]
+    # the frame's own pass is preferred when several receipts exist.  Without
+    # `cross_label` only the frame's own pass counts, because another label's
+    # fit of this frame used different inputs (see above).
+    merges = [merge] + ([m for m in PERFRAME_MERGE_LABELS if m != merge]
+                        if cross_label else [])
     for a in frame_args:
         fn = a['filename']
         dets = _perframe_detector_tokens(fn)
@@ -6387,9 +6430,30 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # hint below is printed at exactly that moment.
                     if (skip_finalize or finalize_only):
                         _resume = bool(getattr(options, 'skip_if_done', False))
+                        # CROSS-LABEL resume: one fit per frame instead of one
+                        # per merge label (#840).  Allowed only where this
+                        # phase's fit takes NO label-scoped input -- these are
+                        # the four `frame_args` values keyed on the requested
+                        # module, all None at m12 and all populated from
+                        # `{module}`-named products at m3..m7, where the
+                        # `merged` pass fits against a seed about twice the size
+                        # of the `nrca` pass's and on its own background map.
+                        # Read from the values themselves, not from the phase
+                        # name, so a phase that gains or loses one is covered.
+                        _cross_label = perframe_cross_label_ok(
+                            prev_seed, resbg_path,
+                            satstar_overrides.get((module, filt)),
+                            satstar_drops.get((module, filt)))
                         _todo, _ok, _nov, _stale = select_resumable_frames(
                             frame_args, _marker_dir, filt, phase, module,
-                            seed_inputs=_seed_inputs)
+                            seed_inputs=_seed_inputs,
+                            cross_label=_cross_label)
+                        if _resume and not _cross_label:
+                            print(f"manual [{phase}] {filt}/{module}: cross-label "
+                                  f"resume OFF -- this phase's fit takes "
+                                  f"label-scoped seed / background / satstar "
+                                  f"inputs, so only this pass's own completion "
+                                  f"markers resume", flush=True)
                         if not _resume:
                             # Do not skip anything -- just say the offer exists,
                             # with the count, so the operator restarting a
