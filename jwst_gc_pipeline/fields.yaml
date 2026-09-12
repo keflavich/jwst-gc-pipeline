@@ -476,17 +476,41 @@ fields:
           nircam: ['001']
         filters: [f150w2, f322w2]
 
+  # omega Cen (NGC 5139).  Two proposals, only one with data: 8322 delivered six
+  # level-3 observations (2026-09-12 MAST query) and 12587's sixteen rows are
+  # all calib_level -1 planning placeholders, so nothing of it can reduce yet.
+  #
+  # 8322 is NIRCam F115W/F200W/F444W + F405N (the narrowband is the pupil half
+  # of the `f405n-f444w` product, so it is its own band -- see the paired-filter
+  # rule in mast_names) and NIRISS F115W/F200W over the same pointing.  Only the
+  # NIRCam half is registered here: NIRISS dispatches internally and has no
+  # table-driven correction channel, so registering it would claim a routing
+  # that does not exist.
+  #
+  # Reduced for the first time 2026-09-12 (jobs 41880061_*); every exposure is
+  # visit 001 of observation 001, hence nvisits: 1.
+  #
+  # NOTE: this field has NO alignment_config entry, so its frames sit at the raw
+  # assign_wcs frame -- the reduce logs "RA, DE offset: 0.0 0.0".  It is a
+  # globular cluster with dense Gaia coverage and the refcat here is Gaia-only,
+  # so the tie is straightforward to measure; that entry has to go in before the
+  # catalogs are used for anything astrometric.
   omegacen:
     root: orange
     observations:
       '8322':
         reference_catalog:
           '001': catalogs/gaia_refcat.fits
+        nvisits: 1
+        reference_frame: Gaia
         obsids:
           nircam: ['001']
+        filters: [f115w, f200w, f405n, f444w]
       '12587':
         reference_catalog:
           '001': catalogs/gaia_refcat.fits
+        nvisits: 1
+        reference_frame: Gaia
         obsids:
           nircam: ['001']
 
