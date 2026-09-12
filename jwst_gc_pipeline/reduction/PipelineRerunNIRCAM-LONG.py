@@ -1130,9 +1130,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 # So an aliased crf would sometimes track its member and
                 # sometimes fork from it, decided by whichever writer ran last --
                 # and with no mtime of its own to show that it moved.  A rename
-                # is out too: the member is read afterwards (check_wcs, the
-                # merged pass, cataloging's --each-suffix).  Guarded by
-                # tests/test_crf_copy_is_not_a_link.py.
+                # is out too: check_wcs(member['expname']) reads the member a few
+                # lines below, and the merged pass writes to that same path.
+                # Guarded by tests/test_crf_copy_is_not_a_link.py.
                 shutil.copy(_src, _target)
                 _n_crf += 1
             print(f"  outlier_detection skipped: wrote {_n_crf} per-exposure crf as "

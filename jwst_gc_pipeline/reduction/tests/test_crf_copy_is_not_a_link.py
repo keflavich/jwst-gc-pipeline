@@ -24,9 +24,9 @@ Between them the crf would sometimes track its member and sometimes fork from
 it, decided by which writer happened to touch the file last.  A symlink is worse
 still: it follows the path across a whole re-reduction.
 
-``os.rename`` is not available either -- the member frame is read after the crf
-is written (``check_wcs``, the merged pass, cataloging's ``--each-suffix``), so
-moving it would delete an input.
+``os.rename`` is not available either -- ``check_wcs(member['expname'])`` reads
+the member a few lines below the crf block, and the merged pass writes to that
+same path, so moving it away would delete a file both still expect.
 
 The 4 s the copy costs (~11 GB of Lustre traffic per reduce at ~1.3 GB/s) buys
 a crf that is a snapshot.  These tests read the source rather than driving
