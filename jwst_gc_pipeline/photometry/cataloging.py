@@ -6373,6 +6373,30 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                       f"the photometry code is unchanged since "
                                       f"they were fitted", flush=True)
                         else:
+                            # A frame resumed from ANOTHER label's marker (#841)
+                            # has no receipt under THIS label, and the finalize's
+                            # completeness check is per label -- it would read
+                            # every such frame as a dropped exposure and abort.
+                            # Stamp this label's marker for what we are skipping,
+                            # so the receipt matches what the fan-out is
+                            # asserting: this frame's product is on disk and
+                            # current.  Measured: wd1 F150W/merged came back with
+                            # 1 merged marker where 96 were expected, because the
+                            # merged pass resumed all of them and recorded none.
+                            for _rfn in _ok:
+                                for _rdet in _perframe_detector_tokens(_rfn):
+                                    _rp = perframe_marker_path(
+                                        _marker_dir, _rfn, _rdet, filt, phase,
+                                        'ok', merge=module)
+                                    if not os.path.exists(_rp):
+                                        open(_rp, 'w').close()
+                            for _rfn, _rreason in _nov:
+                                for _rdet in _perframe_detector_tokens(_rfn):
+                                    _rp = perframe_marker_path(
+                                        _marker_dir, _rfn, _rdet, filt, phase,
+                                        'nooverlap', merge=module)
+                                    if not os.path.exists(_rp):
+                                        open(_rp, 'w').close()
                             overlapping_now.extend(_ok)
                             no_overlap.extend(_nov)
                             _resumed = len(_ok) + len(_nov)
