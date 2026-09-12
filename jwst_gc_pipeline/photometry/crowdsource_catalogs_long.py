@@ -13,6 +13,7 @@ from pathlib import Path
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry import psf_preflight
+from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
@@ -1942,6 +1943,37 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
               f"{recovery_signature!r}", flush=True)
         overwrite = True
 
+    # No catalog under THIS phase's suffix.  Another phase may nonetheless have
+    # fitted this frame from byte-identical inputs -- the fit reads the original
+    # _crf SCI array, which no phase writes, so m3..m7 recompute m12's answer to
+    # 0.000e+00.  Adopt those products rather than refit (opt-in, default OFF;
+    # see photometry/satstar_cache.py).
+    _content_key = None
+    if _satstar_cache.cross_phase_cache_enabled():
+        _content_key = _satstar_cache.satstar_content_key(
+            filename, path_prefix=path_prefix,
+            use_merged_psf_for_merged=use_merged_psf_for_merged,
+            recovery_signature=recovery_signature, partner_sky=partner_sky,
+            outside_star_pixels=outside_star_pixels,
+            outside_star_fit_box=outside_star_fit_box,
+            forced_grid_search_radius=forced_grid_search_radius,
+            flux_overrides=flux_overrides, flux_drops=flux_drops,
+            oversub_clamp_percentile=oversub_clamp_percentile,
+            seed_gate_image=seed_gate_image,
+            deblend_with_zeroframe=deblend_with_zeroframe)
+        _donor = (None if overwrite else
+                  _satstar_cache.find_reusable_satstar_catalog(
+                      filename, file_suffix, _content_key))
+        if _donor is not None:
+            _written = _satstar_cache.adopt_satstar_products(
+                _donor, filename, file_suffix)
+            print(f"Reusing satstar fit {os.path.basename(_donor)} for "
+                  f"{file_suffix or '(no suffix)'}: same content key "
+                  f"{_content_key[:12]}; copied {len(_written)} product(s) "
+                  f"instead of refitting", flush=True)
+            _c = Table.read(_written[0])
+            return _on_current_frame(_c, _written[0])
+
     remove_saturated_stars(filename, overwrite=overwrite, path_prefix=path_prefix,
                            recovery_signature=recovery_signature,
                            use_merged_psf_for_merged=use_merged_psf_for_merged,
@@ -1956,6 +1988,11 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            seed_gate_wcs=seed_gate_wcs,
                            deblend_with_zeroframe=deblend_with_zeroframe,
                            partner_sky=partner_sky)
+    for _fresh in (extended_filename, satstar_filename):
+        if os.path.exists(_fresh) and _content_key is not None:
+            # Stamp what this fit was run from, so a later phase can tell
+            # whether its own inputs match without rerunning the fitter.
+            _satstar_cache.stamp_content_key(_fresh, _content_key)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)
     return None
