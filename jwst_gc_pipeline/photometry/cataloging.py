@@ -5696,20 +5696,22 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 basepath, _filt, proposal_id, field, visitid='*',
                 each_suffix=_resolve_each_suffix(options, _filt),
                 module=_mod, pupil='clear', allow_empty=True)
-            _missed = sorted(set(_allv) - set(_cf))
+            # jw{proposal:05d}{obs:03d}{visit:03d}_... -- visit is [10:13].
+            # Only a frame whose visit token is three DIGITS can be placed
+            # against the range; anything else (a test fixture's literal glob
+            # token, a hand-named file) is left alone rather than reported as
+            # an unplaceable drop.
+            _missed = sorted(_m for _m in set(_allv) - set(_cf)
+                             if os.path.basename(_m)[10:13].isdigit())
             if _missed:
-                # jw{proposal:05d}{obs:03d}{visit:03d}_... -- visit is [10:13]
-                _vids = sorted({os.path.basename(_m)[10:13] for _m in _missed
-                                if os.path.basename(_m)[10:13].isdigit()})
-                if not _vids:
-                    _vids = ['???']
+                _vids = sorted({os.path.basename(_m)[10:13] for _m in _missed})
                 raise ValueError(
                     f"[manual preflight] {len(_missed)} {_filt}/{_mod} frame(s) "
                     f"on disk fall outside visits 001-"
                     f"{nvisits[proposal_id][target]:03d} and would be dropped "
                     f"silently: visit id(s) {_vids}.  Raise `nvisits` for "
                     f"proposal {proposal_id} / {target} in fields.yaml to at "
-                    f"least {max((int(_v) for _v in _vids if _v.isdigit()), default='?')} -- it is the largest "
+                    f"least {max(int(_v) for _v in _vids)} -- it is the largest "
                     f"visit id in use, not the number of visits per "
                     f"observation.  Example: {os.path.basename(_missed[0])}")
     _drop_filters = assert_requested_filters_have_frames(
