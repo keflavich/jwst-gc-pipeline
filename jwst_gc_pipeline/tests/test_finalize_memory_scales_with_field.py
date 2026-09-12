@@ -105,13 +105,21 @@ def test_an_explicit_request_still_wins():
 def test_the_field_is_measured_exactly_once():
     """Memory (#611) and wall time (#737) size from the same crf count.
 
-    Two globs would drift: a field could take the 256gb tier for memory and the
-    small tier for wall time from the same tree.
+    Two counts of the FIELD would drift: it could take the 256gb tier for
+    memory and the small tier for wall time from the same tree.  The guard is
+    on the count, not on the glob: the per-FILTER sizing of a split finalize
+    globs the same shape one directory down (``<filter>/pipeline/*crf.fits``)
+    and is a different quantity, so it is named here rather than counted
+    against the field.
     """
     src = SCRIPT.read_text()
-    assert src.count("pipeline/*crf.fits") == 2, (
-        "the crf glob should appear exactly twice -- the per-observation tree "
-        "and its plain-target fallback -- and be reused for both sizings")
+    field_globs = [ln for ln in src.splitlines()
+                   if "pipeline/*crf.fits" in ln and '$1' not in ln]
+    assert len(field_globs) == 2, (
+        "the FIELD crf glob should appear exactly twice -- the per-observation "
+        "tree and its plain-target fallback -- and be reused for both sizings:\n"
+        + "\n".join(field_globs))
+    assert src.count('_crf_count=$(') == 2, "one count expression per tree tried"
     assert src.count("FIELD_TIER=") == 3, "one assignment per tier"
 
 

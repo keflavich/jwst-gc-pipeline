@@ -434,14 +434,65 @@ def test_a_not_observed_filter_is_dropped_from_the_run(tmp_path, capsys):
         'multifilter is decided AFTER the drop: one filter left means no m7')
 
 
-def test_a_run_left_with_no_filters_refuses(tmp_path):
-    """Dropping is not the same as succeeding.  If every requested band is one
-    the observation never took, the run has nothing to catalog and must say so
-    rather than walk through six phases and report success."""
+def test_a_run_of_one_not_observed_filter_stops_without_failing(tmp_path,
+                                                                 capsys):
+    """A band the observation never took must not FAIL its own run.
+
+    The classifier already decided this: `not-observed` is "reported and
+    DROPPED", which is what an eleven-filter run does with it.  Deciding it
+    again by list length gave the same fact two answers -- skipped inside a
+    long list, a hard error on its own -- and the short list is the one the
+    per-filter finalize split creates.  A finalize holding one such band that
+    raises leaves an `afterok` barrier nothing can satisfy, so the field's
+    OTHER ten bands lose the rest of their chain to a band that was never
+    taken.
+
+    No phase runs (there is nothing to run) and the run returns instead of
+    raising, so the job exits 0 and its barrier is met.
+    """
+    basepath = _tree(tmp_path, {'F115W': 'destreak_o001_crf'})
+    # manual_start_phase='not-a-phase' is the marker used throughout this file:
+    # its raise is the first thing AFTER the preflight, so reaching it would
+    # prove a phase was attempted.  Nothing may raise at all here.
+    assert _run(basepath, _options(manual_start_phase='not-a-phase'),
+                filternames=('F480M',)) is None
+    out = capsys.readouterr().out
+    assert 'never took' in out
+    assert 'MANUAL PIPELINE:' not in out, 'no phase may be attempted'
+
+
+def test_a_run_left_with_only_a_WAIVED_absent_band_still_refuses(tmp_path,
+                                                                 monkeypatch):
+    """The other half of the same decision.
+
+    ``ALLOW_ABSENT_REQUESTED_FILTER=1`` drops a band that SHOULD be here so the
+    run's other bands still produce.  With no other bands left there is nothing
+    that waiver was for, and a green run would ship the field short exactly the
+    band the operator waived.  wd1's F444W is declared in fields.yaml and has
+    no frames, which is that shape.
+    """
+    monkeypatch.setenv(ALLOW_ABSENT_ENV, '1')
+    monkeypatch.setenv(f'{ALLOW_ABSENT_ENV}_REASON', 'reduction still running')
     basepath = _tree(tmp_path, {'F115W': 'destreak_o001_crf'})
     with pytest.raises(RequestedFilterHasNoFramesError) as excinfo:
-        _run(basepath, _options(), filternames=('F480M',))
-    assert 'nothing to catalog' in str(excinfo.value)
+        _run(basepath, _options(), filternames=('F444W',))
+    msg = str(excinfo.value)
+    assert 'nothing to catalog' in msg
+    assert 'F444W' in msg and ALLOW_ABSENT_ENV in msg
+
+
+def test_the_drop_verdicts_are_carried_back_to_the_caller(tmp_path):
+    """The mechanism the two tests above rest on.
+
+    ``assert_requested_filters_have_frames`` returns a list of NAMES; the
+    caller cannot act on a distinction it is not given, which is how both drops
+    became one hard failure.
+    """
+    from jwst_gc_pipeline.photometry.requested_filters import DroppedFilters
+    dropped = _assert({'F115W': 96, 'F480M': 0}, declared={'F115W'})
+    assert isinstance(dropped, DroppedFilters)
+    assert list(dropped) == ['F480M']          # still a plain list of names
+    assert dropped.verdicts == {'F480M': 'not-observed'}
 
 
 # --- the fan-out consequence, and the one override ------------------------

@@ -189,6 +189,159 @@ reconstructed from disk, plus the Spitzer-prior path);
 pass `DEBLEND_SATSTARS=1` to carry the ZEROFRAME deblend through every
 per-frame stage.
 
+#### Per-filter finalize (`PER_FILTER_FINALIZE=1`, opt-in)
+
+The fan-out is split per FRAME; the finalize is not split at all. It walks every
+(filter x module) combo serially, so on a big field the barrier is the sum of
+its filters. Measured on sgrb2 5365/001's m3 finalize (job 41424864,
+2026-09-09/11): **43.2 h over 33 combos**, of which F187N alone was 13.1 h and
+the five LW filters together were under 9 h. The time inside it is 65% merge +
+astrometry checkpoint + vetting and 35% the per-frame render loop.
+
+```
+PER_FILTER_FINALIZE=1 scripts/reduction/submit_cataloging_perframe.sh
+```
+
+submits **one finalize per filter** for `m3 m4 m5 m6` instead of one per phase,
+all `afterok` on the same fan-out array, named
+`<target><program>-o<obsid>-<phase>-finalize-<FILTER>`. The phase barrier is
+unchanged in meaning: the next phase's fan-out waits on `afterok` of **every**
+one of them. `PER_FILTER_FINALIZE_PHASES` narrows the set (e.g. `"m4"`).
+
+##### Each split job is sized for its own filter
+
+A split finalize does one filter's work and asks for one filter's slice. Both
+`--mem` and `--time` scale by the filter's own crf count over the largest
+filter's, because that is what each was measured to follow:
+
+* **memory does not pool.** The loop is `for module: for filt:` and what it
+  keeps between filters is paths plus a SkyCoord per combo, so the peak is the
+  biggest COMBO. sgrb2's whole 11-filter m3 finalize recorded MaxRSS 148 GiB;
+  its single-filter F187N m12 finalize (39933196) recorded 151 GiB. F187N *is*
+  the peak, so the largest filter keeps the field's memory and the other ten
+  stop asking for it.
+* **time is near-linear in frames.** F187N has 384 crf to F182M's 192, and took
+  13.09 h to its 6.79 h inside that m3 finalize (1.93x on 2.00x the frames).
+
+On sgrb2 5365/001's real counts (F187N 384, four SW 192, six LW 48) an m4
+phase therefore asks:
+
+| filters | crf | `--mem` | `--time` | was |
+|---|---:|---|---|---|
+| F187N | 384 | 256gb | 2-00:00:00 | unchanged |
+| F150W F182M F210M F212N | 192 | 128gb | 1-00:00:00 | 256gb / 2-00:00:00 |
+| F300M F360M F405N F410M F466N F480M | 48 | 64gb | 12:00:00 | 256gb / 2-00:00:00 |
+
+1152 GiB for the phase instead of 11 x 256 = 2816 GiB. The floor is the phase
+sbatch's own hand-launch slice (`--mem=64gb --time=12:00:00`); the whole-field
+value is the ceiling. **An explicit `FINALIZE_MEM` / `FINALIZE_TIME` /
+`FINALIZE_TIME_<PHASE>` is never scaled** -- it reaches every split job
+verbatim. With no crf counts on disk (CI, a fresh checkout) nothing is scaled
+and every split job asks the whole-field slice, which is what it asks today.
+
+##### A phase is submitted all-or-nothing
+
+The driver runs under `set -euo pipefail`, so a failed `sbatch` aborts it where
+it stands. Whole, that leaves at worst a fan-out with no finalize. Split it
+would leave a state that did not exist before -- phase p with some of its
+filters finalizing, the rest never submitted, nothing queued behind them, and
+every job that *was* submitted reaching COMPLETED on a field missing seven
+barriers, which nothing downstream can see.
+
+So the per-filter finalizes of a phase are submitted `--hold` and released in
+one `scontrol release` once all of them exist. An abort before that release
+cancels the held finalizes **and** the phase's own fan-out (neither has run)
+and prints the command that resumes the chain from the last complete phase,
+including the barrier dependency:
+
+```
+SUBMIT ABORTED (rc=1).  Jobs submitted by this run: 1001 1002 1003 1004 1005 1006 1007
+  Phase m4 was left PART-SUBMITTED: ...
+    scancel 1006 1007 1005 -- done
+  Everything before phase m4 is queued and intact.
+  Resume the rest of the chain with:
+    DEP='afterok:1004' PHASES='m4 m5 m6 m7' \
+      <the same environment as this run> .../submit_cataloging_perframe.sh
+```
+
+Being killed outright (SIGKILL) skips that trap and leaves the phase's
+finalizes HELD. Held jobs do not run, so that is a stalled chain the queue
+shows as `JobHeldUser` -- `scontrol release` recovers it -- rather than a
+half-finalized phase.
+
+##### m7 and m12 are never split
+
+Asking for either is refused at submit time (exit 4), not quietly ignored:
+
+* `m7` **is** the cross-band merge (`cataloging._do_crossband`) and the
+  cross-filter astrometry anchor gate, both of which read every filter's m6
+  vetted catalog. A one-filter run does not even build an m7 phase -- `phases`
+  appends m7 only when `len(filternames) > 1` -- so a split m7 dies on
+  `--manual-start-phase='m7' not in phases ['m12','m3','m4','m5','m6']`.
+* `m12` runs the **correcting** astrometry checkpoint, and a correcting
+  checkpoint's verdict on a real misalignment is to STOP THE FIELD: correct the
+  offsets table, rename the first-pass mosaics to `*_i2d_im0_badastrom.fits`,
+  and raise `AstrometryCorrectionRequiredError` saying the current crf frames
+  and catalogs are stale. **One process is what that raise ends.** Whole, the
+  m12 finalize stops the field the instant any filter measures a misalignment;
+  split, the stop reaches only the filter that raised it.
+
+  sgrb2's eleven per-filter m12 finalizes of 2026-08-22 (39933194-39933204) are
+  the measurement. Seven corrected `Offsets_JWST_Brick5365_VIRAC2locked.csv`
+  and stale-tagged im0 between 12:04:08 and 12:36:41 UTC; the other four ran on
+  and COMPLETED -- F210M 7:27, F150W 9:35, F182M 9:46 and F187N 23:11, i.e.
+  ~15 h past the first stop signal -- writing m12 products into a field the
+  checkpoint had already quarantined.
+
+  The offsets CSV itself is **not** the reason. `update_offsets_table` has
+  wrapped its whole read-modify-write in `with locked(offsets_path)` since
+  9f73c05 (2026-08-02), three weeks before that run, so those seven writes were
+  serialised. The one shared write with no lock on it is the ledger those
+  renames append to, `mark_i2d_stale`'s `stale_i2d_renames.json` -- the file a
+  bad run is undone from. It survived that seven-way append (462 lines, all
+  parseable), which is luck rather than a guarantee.
+
+m3-m6 have neither property: every path the per-phase body touches is keyed
+`(module, filter)`, the strict marker verify and the module-coverage check are
+both scoped to the run's own filters, and the astrometry checkpoint at a FROZEN
+stage records to a per-filter file and corrects nothing. Pinned by
+`jwst_gc_pipeline/tests/test_per_filter_finalize_barrier.py`.
+
+A filter the observation never took is dropped by the preflight
+(`requested_filters`, case 4) and no longer fails the job that holds it:
+`run_manual_pipeline` returns cleanly when every dropped filter carries that
+verdict, so a per-filter finalize for a band the field does not have satisfies
+its barrier instead of stranding the other ten. A **waived**
+`declared-but-absent` band still refuses -- that waiver exists so the run's
+other bands produce, and there are none left.
+
+##### Using it on a field whose chain is already queued
+
+The split phases must replace the queued ones, so cancel those first and
+resubmit while the *running* phase is still running, or the new chain has
+nothing to hang off. State the limits, because the driver's table is not what
+a hand-set `FINALIZE_TIME` gave the queued jobs:
+
+```
+scancel <the pending m4..m7 fan-out and finalize ids>
+squeue -u $USER -o "%.10i %.34j %.2t %R" | grep <target>   # expect the running one only
+
+PIPE_ROOT=$PWD PER_FILTER_FINALIZE=1 \
+  DEP=<the running finalize's id> PHASES="m4 m5 m6 m7" \
+  FINALIZE_TIME_M7=<the limit the queued m7 finalize carried> \
+  TARGET=... PROPOSAL=... FIELD=... MODULES=... EACH_SUFFIX=... FILTERS="..." \
+      scripts/reduction/submit_cataloging_perframe.sh
+```
+
+`FINALIZE_TIME_M7` is the one that has to be carried over by hand: **m7 is not
+split**, so its finalize does exactly the work the job it replaces was given,
+and the field-tier table (`1-12:00:00` for a large field) is shorter than the
+`4-00:00:00` a runner's blanket `FINALIZE_TIME` had put on it. A TIMEOUT there
+takes the rest of the `afterok` chain with it. The split phases' finalizes do
+ask less than the pooled jobs they replace -- that is the point -- and the
+driver prints each one's `--mem`/`--time` beside the whole-field value it
+replaced, so the reduction is in the submit log rather than implied.
+
 ## Overriding the target
 
 ```

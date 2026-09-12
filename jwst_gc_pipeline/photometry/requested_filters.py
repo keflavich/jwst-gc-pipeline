@@ -81,6 +81,35 @@ class RequestedFilterHasNoFramesError(ValueError):
     """
 
 
+class DroppedFilters(list):
+    """The filters a caller must drop, and the verdict that dropped each.
+
+    A plain ``list`` for every caller that only needs the names -- ``if drop:``,
+    ``sorted(drop)``, ``f not in drop``, ``== ['F480M']`` all behave as they
+    did.  ``.verdicts`` maps the name to the verdict, because the two drops are
+    not the same fact and a caller that cannot tell them apart has to treat
+    them alike:
+
+    * ``not-observed`` (case 4) -- the observation never took this band.
+      Dropping it IS the right answer; that is why this module classifies it
+      rather than raising.
+    * ``declared-but-absent`` (case 2, waived with
+      ``ALLOW_ABSENT_REQUESTED_FILTER=1``) -- the band SHOULD be here and was
+      waived so the run's OTHER bands could still produce.  A run with no other
+      bands left has nothing that waiver was for.
+
+    ``run_manual_pipeline`` is the caller that needed the distinction: it
+    re-escalated BOTH into a hard failure whenever the drop emptied the filter
+    list, so a job holding one not-observed band failed -- and under the
+    per-filter finalize split that failure is an ``afterok`` barrier that can
+    never be satisfied, i.e. a dead chain for the field's other bands.
+    """
+
+    def __init__(self, items=(), verdicts=None):
+        super().__init__(items)
+        self.verdicts = dict(verdicts or {})
+
+
 def frame_lineages_on_disk(basepath, filtername, proposal_id, field,
                            each_suffix='crf'):
     """``{lineage: n_frames}`` for every input lineage of ``filtername`` on disk.
@@ -336,7 +365,8 @@ def assert_requested_filters_have_frames(candidate_counts, *, target,
     filter at once -- one message, so an operator fixes all of them in one
     resubmission rather than discovering them one run at a time.
 
-    RETURNS THE FILTERS THE CALLER MUST DROP from its filter list: the
+    RETURNS THE FILTERS THE CALLER MUST DROP from its filter list, as a
+    :class:`DroppedFilters` -- a list of names carrying ``.verdicts``: the
     not-observed ones, plus any ``declared-but-absent`` one waived by
     ``ALLOW_ABSENT_REQUESTED_FILTER=1``.  The caller has to act on the return
     value; a filter that is only logged stays in ``filternames`` and dies later
@@ -350,7 +380,7 @@ def assert_requested_filters_have_frames(candidate_counts, *, target,
         declared = declared_for_observation(target, proposal_id, field)
     waive_absent = os.environ.get(ALLOW_ABSENT_ENV, '').strip() == '1'
     waive_reason = os.environ.get(f'{ALLOW_ABSENT_ENV}_REASON', '').strip()
-    failures, drop = [], []
+    failures, drop, drop_verdicts = [], [], {}
     for filtername, n_candidates in candidate_counts.items():
         each_suffix = each_suffix_for(filtername)
         lineages = (lineages_for(filtername) if lineages_for is not None
@@ -363,6 +393,7 @@ def assert_requested_filters_have_frames(candidate_counts, *, target,
             continue
         if verdict == 'not-observed':
             drop.append(filtername)
+            drop_verdicts[filtername] = verdict
             print(f"[{label}] {message}", flush=True)
             continue
         if verdict == 'declared-but-absent' and waive_absent:
@@ -372,6 +403,7 @@ def assert_requested_filters_have_frames(candidate_counts, *, target,
             # (a Treasury tile whose F480M lags its F212N).  Loud, greppable,
             # and the justification is printed beside it.
             drop.append(filtername)
+            drop_verdicts[filtername] = verdict
             print(f"[{label}] WARNING (override {ALLOW_ABSENT_ENV}=1): "
                   f"{message}  Dropping {filtername} from this run; its "
                   f"products will be absent.", flush=True)
@@ -399,4 +431,4 @@ def assert_requested_filters_have_frames(candidate_counts, *, target,
             f"the filters that did resolve and including a fan-out shard, which "
             f"used to print `nothing to fit` and let the array finish the other "
             f"bands:\n" + '\n'.join(failures) + _hint)
-    return drop
+    return DroppedFilters(drop, drop_verdicts)

@@ -5650,11 +5650,44 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         print(f"[manual preflight] dropping {_drop_filters} from this run; "
               f"cataloging {filternames}", flush=True)
         if not filternames:
+            # The drop emptied the list.  WHY it emptied decides whether that is
+            # a failure, and the classifier has already decided: a band the
+            # observation never took (`not-observed`) is DROPPED by design, and
+            # re-escalating that here purely because the list happened to be
+            # short gave the same fact two answers depending on list length --
+            # F480M silently skipped inside an eleven-filter run, F480M a hard
+            # error on its own.
+            #
+            # The short list is not hypothetical.  The per-filter finalize split
+            # (`PER_FILTER_FINALIZE=1`) hands each finalize exactly ONE filter,
+            # and a job that raises here leaves an `afterok` barrier that can
+            # never be satisfied -- so one band the field never took would stall
+            # the chain for every band it did.
+            #
+            # A WAIVED `declared-but-absent` band still raises: that waiver
+            # exists so the run's OTHER bands produce, and there are none left.
+            _verdicts = getattr(_drop_filters, 'verdicts', {})
+            _not_observed = [_f for _f in _drop_filters
+                             if _verdicts.get(_f) == 'not-observed']
+            if len(_not_observed) == len(_drop_filters):
+                print(f"[manual preflight] every requested filter "
+                      f"({sorted(_drop_filters)}) is a band this observation "
+                      f"never took, so there is nothing for this run to "
+                      f"catalog.  Exiting without error -- the same verdict an "
+                      f"eleven-filter run gives these bands, and the answer a "
+                      f"per-filter finalize needs so it does not strand the "
+                      f"phase barrier for the filters that DO exist.",
+                      flush=True)
+                return
             raise RequestedFilterHasNoFramesError(
                 f"[manual preflight] every requested filter "
                 f"({sorted(_drop_filters)}) resolved to zero frames and was "
                 f"dropped, so this run has nothing to catalog.  A run with no "
-                f"filters left must not report success.")
+                f"filters left must not report success.  "
+                f"{sorted(set(_drop_filters) - set(_not_observed))} "
+                f"was/were dropped as DECLARED-BUT-ABSENT under "
+                f"ALLOW_ABSENT_REQUESTED_FILTER=1 -- that override exists so "
+                f"the run's other bands still produce, and this run has none.")
 
     multifilter = len(filternames) > 1
     phases = ['m12', 'm3', 'm4', 'm5', 'm6']
