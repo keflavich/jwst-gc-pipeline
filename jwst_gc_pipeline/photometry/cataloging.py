@@ -5682,6 +5682,36 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     each_suffix=_resolve_each_suffix(options, _filt),
                     module=_mod, pupil='clear', allow_empty=True)))
             _preflight_frames[(_mod, _filt)] = _cf
+            # `nvisits` is scanned as visit ids 001..nvisits for EVERY
+            # observation of the proposal, so it has to cover the LARGEST
+            # visit number any of them used.  When it does not, the frames in
+            # the higher visits are skipped silently -- the run still finds
+            # visit 001, reports success, and ships a catalog short those
+            # exposures.  cloudef ran that way until 2026-09-12: `nvisits: 1`
+            # against o002 visit 002 and o004 visits 002-015 cataloged 352 of
+            # 792 crf frames and wrote only `..._visit001_...` products.
+            # A dropped exposure has to stop the run (see the no-silent-frame-
+            # drops rule), so compare against an unrestricted glob.
+            _allv = _L.get_filenames(
+                basepath, _filt, proposal_id, field, visitid='*',
+                each_suffix=_resolve_each_suffix(options, _filt),
+                module=_mod, pupil='clear', allow_empty=True)
+            _missed = sorted(set(_allv) - set(_cf))
+            if _missed:
+                # jw{proposal:05d}{obs:03d}{visit:03d}_... -- visit is [10:13]
+                _vids = sorted({os.path.basename(_m)[10:13] for _m in _missed
+                                if os.path.basename(_m)[10:13].isdigit()})
+                if not _vids:
+                    _vids = ['???']
+                raise ValueError(
+                    f"[manual preflight] {len(_missed)} {_filt}/{_mod} frame(s) "
+                    f"on disk fall outside visits 001-"
+                    f"{nvisits[proposal_id][target]:03d} and would be dropped "
+                    f"silently: visit id(s) {_vids}.  Raise `nvisits` for "
+                    f"proposal {proposal_id} / {target} in fields.yaml to at "
+                    f"least {max((int(_v) for _v in _vids if _v.isdigit()), default='?')} -- it is the largest "
+                    f"visit id in use, not the number of visits per "
+                    f"observation.  Example: {os.path.basename(_missed[0])}")
     _drop_filters = assert_requested_filters_have_frames(
         {_filt: sum(len(_preflight_frames[(_mod, _filt)]) for _mod in modules)
          for _filt in filternames},
