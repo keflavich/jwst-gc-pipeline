@@ -491,7 +491,9 @@ def test_the_treasury_field_is_registered():
     """The name must match data-qa's ``mast_monitor.TREASURY_FIELD``, which
     routes every 10678 observation to this field."""
     assert 'gc-treasury' in F.BY_NAME
-    assert F.basepath('gc-treasury').startswith('/blue/')
+    # /orange, taken by the maintainer on 2026-09-12 when GC_135 landed and had
+    # to be downloaded: "10678 needs to download to /orange, _not_ to /blue".
+    assert F.basepath('gc-treasury').startswith('/orange/')
     assert F.obs_filters()['gc-treasury']['10678'] == ['f212n', 'f480m', 'f770w']
 
 
