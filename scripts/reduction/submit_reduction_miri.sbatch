@@ -19,12 +19,62 @@
 #  --instrument miri` submits this for you, with the resources and the log
 # directory from config.yaml.
 # ---------------------------------------------------------------------------
+# RESOURCES: sized from the measured distribution, with headroom over the worst
+# observed job rather than over the median.
+#
+# 68 MIRI reduce array tasks submitted through THIS script (2026-09-07..10;
+# every one a plain `sbatch ... submit_reduction_miri.sbatch` with no --mem, so
+# the directive below is what they actually asked for), sacct MaxRSS joined to
+# the parent job:
+#
+#     median 0.93 GB    > 4 GB : 3 (4.4%)
+#     mean   1.26 GB    > 6 GB : 0
+#     p90    3.37 GB    > 8 GB : 0
+#     worst  4.33 GB (cloudef2092-o004 F2100W, 41673827_1)
+#     longest 02:22:07 (cloudef2092-o004 F770W) -- 9.9% of the 24 h limit
+#
+# 22 hand-launched PipelineMIRI jobs from an older checkout (2026-06) reach a
+# little higher: worst 5.86 GB (cloudc-2526-G0-F770W, 35443480).  Nothing that
+# has ever run PipelineMIRI has exceeded 6 GB.
+#
+# 128gb was ~100x the median and ~22x the worst.  What that costs here is NOT
+# node placement -- every hpg-default node has RealMemory=1004 GB and all 233
+# report >=128 GB free, so a 128 GB ask has never restricted which node a MIRI
+# reduce can land on.  It costs QOS headroom: astronomy-dept-b carries
+# GrpTRES=cpu=6336,mem=49500G with DenyOnLimit, so the ask is charged against a
+# shared 49500 GB pool.  At 128gb/16cpu a job sits at 8.0 GB per cpu against a
+# pool ratio of 7.81 GB per cpu (49500/6336), so memory becomes co-binding with
+# cpu the moment the QOS saturates; at 32gb/16cpu it is 2.0 GB per cpu and
+# stops being a limit at all.  10678 puts a MIRI F770W parallel on every one of
+# its 139 tiles, which is when that pool gets tested.
+#
+# Measured today, the QOS is nowhere near saturation (26 running jobs, 76 cpu,
+# 1712 GB; the queue is dependency-bound, 162 of 197 pending on Dependency), so
+# this buys nothing at this instant.  It is headroom for the fan-out, and an
+# ask the measurements support.
+#
+# 32gb is 5.5x the worst MIRI reduce ever observed and 7.4x the worst through
+# this script; the 4.33 GB job would have used 13.5% of it, the 5.86 GB one
+# 18.3%.  The largest MIRI ramp on disk (198 MB, NGROUPS=5 NINTS=15 FULL,
+# cloudef F770W) is the one that produced that 4.33 GB peak, so reaching 32 GB
+# needs an exposure several times larger than anything the survey has seen.
+# No job that has ever run PipelineMIRI has been OUT_OF_MEMORY.
+#
+# The walltime is NOT changed here.  It is loose by the same measure (24 h
+# against a 2:22 worst case), but an over-long limit costs only backfill
+# priority, and the argument for shortening it is a separate one.
+#
+# A field that needs more does NOT need this file edited: `#SBATCH` cannot read
+# a shell variable, but sbatch's own environment can --
+#     SBATCH_MEM=64gb sbatch ... submit_reduction_miri.sbatch
+# or pass --mem= on the command line.  Either overrides the directive below.
+# ---------------------------------------------------------------------------
 #SBATCH --job-name=reduce-miri
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128gb
+#SBATCH --mem=32gb
 #SBATCH --time=24:00:00
 #SBATCH --output=/orange/adamginsburg/jwst/logs/reduce_%x_%A_%a.out
 
