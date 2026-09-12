@@ -65,6 +65,15 @@ RGPS_JSON = 'rgps.json'
 COLOR_NIRCAM_PLANNED = '#46bcd6'
 COLOR_MIRI_PLANNED = '#a78bfa'
 COLOR_OBSERVED = '#4ade80'
+#: Scheduled: on a released observing schedule with a date, but not yet run.
+#: Amber reads as "imminent" between the cyan of merely-planned and the green
+#: of done, and the three are separated in HUE, not only in lightness -- the
+#: map is often read at a zoom where a tile is a few pixels across.
+COLOR_SCHEDULED = '#fbbf24'
+#: Skipped: it was on a schedule and did not run.  Drawn apart from the rest
+#: because it is the one status that leaves a HOLE -- a skipped tile is not a
+#: tile that has yet to come up, and until now it drew identically to one.
+COLOR_SKIPPED = '#f43f5e'
 COLOR_SPRING = '#1E90FF'
 COLOR_ACES = '#ff6b6b'
 #: RGPS components.  Three layers because they are three different surveys in
@@ -720,6 +729,18 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
         return '', {}
     planned = [p for p in (data.get('planned') or []) if isinstance(p, dict)]
     observed = [p for p in (data.get('observed') or []) if isinstance(p, dict)]
+
+    # Status splits the planned group into three drawn layers.  Anything whose
+    # status is unrecognised -- including a footprint file built before statuses
+    # existed, where it is absent entirely -- falls through to the plain planned
+    # layer, so an older file renders exactly as it did.
+    def _status_of(rec):
+        return str(rec.get('status') or '').strip().lower()
+
+    scheduled = [p for p in planned if _status_of(p) == 'scheduled']
+    skipped = [p for p in planned if _status_of(p) == 'skipped']
+    rest = [p for p in planned
+            if _status_of(p) not in ('scheduled', 'skipped')]
     other = 'icrs' if frame_name == 'galactic' else 'galactic'
 
     grid = []
@@ -742,10 +763,18 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
                        'y="%s">%s</text>'
                        % (_num(label[0] + 3), _num(label[1] - 3), _esc(text)))
 
-    nircam, n_nircam = _layer(frame, planned, 'nircam', COLOR_NIRCAM_PLANNED,
+    nircam, n_nircam = _layer(frame, rest, 'nircam', COLOR_NIRCAM_PLANNED,
                               '.09', 'stat-nircam', 'NIRCam planned')
-    miri, n_miri = _layer(frame, planned, 'miri', COLOR_MIRI_PLANNED,
+    miri, n_miri = _layer(frame, rest, 'miri', COLOR_MIRI_PLANNED,
                           '.13', 'stat-miri', 'MIRI parallel planned')
+    sch_n, n_sch_n = _layer(frame, scheduled, 'nircam', COLOR_SCHEDULED,
+                            '.12', 'stat-sch-nircam', 'scheduled NIRCam')
+    sch_m, n_sch_m = _layer(frame, scheduled, 'miri', COLOR_SCHEDULED,
+                            '.12', 'stat-sch-miri', 'scheduled MIRI')
+    skp_n, n_skp_n = _layer(frame, skipped, 'nircam', COLOR_SKIPPED,
+                            '.16', 'stat-skp-nircam', 'skipped NIRCam')
+    skp_m, n_skp_m = _layer(frame, skipped, 'miri', COLOR_SKIPPED,
+                            '.16', 'stat-skp-miri', 'skipped MIRI')
     obs_n, n_obs_n = _layer(frame, observed, 'nircam', COLOR_OBSERVED,
                             '.18', 'stat-obs-nircam', 'observed NIRCam')
     obs_m, n_obs_m = _layer(frame, observed, 'miri', COLOR_OBSERVED,
@@ -807,12 +836,13 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
     svg = ('<svg id="gcm-sky-static" class="gcm-sky-static" '
            'viewBox="0 0 %s %s" preserveAspectRatio="xMidYMid meet" '
            'role="group" aria-label="Survey footprints on the sky, %s">'
-           '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s</g>%s</svg>'
+           '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s%s%s%s%s</g>%s</svg>'
            % (_num(frame.width), _num(frame.height), _esc(axes),
               ''.join(grid), ''.join(gal), spring, ''.join(rgps_layers), aces,
-              nircam, miri, obs_n, obs_m, hud))
+              nircam, miri, sch_n, sch_m, skp_n, skp_m, obs_n, obs_m, hud))
     info = {'n_nircam': n_nircam, 'n_miri': n_miri,
             'n_observed': n_obs_n + n_obs_m, 'n_roman': n_roman,
+            'n_scheduled': len(scheduled), 'n_skipped': len(skipped),
             'n_aces': len(aces_p), 'n_rgps': n_rgps,
             'n_rgps_by': {k: len(rgps_p[k]) for k in rgps_order},
             'width': frame.width, 'height': frame.height,
@@ -966,6 +996,13 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     if not static_svg:
         static_svg = ('<div class="gcm-sky-nostatic">Footprint data contains no '
                       'drawable polygons.</div>')
+    # After static_map: it is what splits the planned group by status, so the
+    # button counts have to come from its info rather than be recomputed here
+    # -- two independent counts of the same thing drift.
+    n_scheduled = int(_safe_num(static_info.get('n_scheduled'), 0) or 0)
+    n_skipped = int(_safe_num(static_info.get('n_skipped'), 0) or 0)
+    scheduled_cls = 'gcm-sky-empty' if not n_scheduled else ''
+    skipped_cls = 'gcm-sky-empty' if not n_skipped else ''
     view_w = _safe_num(static_info.get('width'), 1000.0)
     view_h = _safe_num(static_info.get('height'), 1000.0)
     frame_scale = _safe_num(static_info.get('scale'), 0.0)
@@ -1018,11 +1055,17 @@ pointings observed so far, from {status_note}.</p>
     </div>
 
     <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">JWST — observed</div>
+      <div class="gcm-sky-lab">JWST — status</div>
       <div class="gcm-sky-row">
         <button class="gcm-sky-btn on" id="lyr-observed"
-                style="color:{COLOR_OBSERVED}">observed
+                style="color:{COLOR_OBSERVED}">executed
           <span class="gcm-sky-count {observed_cls}">{n_observed or 'none yet'}</span></button>
+        <button class="gcm-sky-btn on" id="lyr-scheduled"
+                style="color:{COLOR_SCHEDULED}">scheduled
+          <span class="gcm-sky-count {scheduled_cls}">{n_scheduled or 'none'}</span></button>
+        <button class="gcm-sky-btn on" id="lyr-skipped"
+                style="color:{COLOR_SKIPPED}">skipped
+          <span class="gcm-sky-count {skipped_cls}">{n_skipped or 'none'}</span></button>
       </div>
     </div>
 
@@ -1061,8 +1104,12 @@ pointings observed so far, from {status_note}.</p>
         <div>NIRCam planned</div>
         <div class="gcm-sky-sw" style="background:{COLOR_MIRI_PLANNED}"></div>
         <div>MIRI parallel planned</div>
+        <div class="gcm-sky-sw" style="background:{COLOR_SCHEDULED}"></div>
+        <div>scheduled — has a date, not yet run</div>
+        <div class="gcm-sky-sw" style="background:{COLOR_SKIPPED}"></div>
+        <div>skipped — was scheduled and did not run</div>
         <div class="gcm-sky-sw" style="background:{COLOR_OBSERVED}"></div>
-        <div>observed</div>
+        <div>executed</div>
       </div>
     </div>
   </div>
@@ -1087,7 +1134,9 @@ interactive view adds sky imagery you can pan across.
   var VIEW = {json.dumps([view_w, view_h])};
   var UNITS_PER_DEG = {frame_scale:.6f};
   var C = {json.dumps({'nircam': COLOR_NIRCAM_PLANNED, 'miri': COLOR_MIRI_PLANNED,
-                       'observed': COLOR_OBSERVED, 'spring': COLOR_SPRING,
+                       'observed': COLOR_OBSERVED,
+                       'scheduled': COLOR_SCHEDULED, 'skipped': COLOR_SKIPPED,
+                       'spring': COLOR_SPRING,
                        'aces': COLOR_ACES,
                        'rgps-wide': COLOR_RGPS_WIDE,
                        'rgps-tds': COLOR_RGPS_TDS,
@@ -1101,6 +1150,8 @@ interactive view adds sky imagery you can pan across.
   var STATIC_GROUPS = {{
     nircam: ['stat-nircam'], miri: ['stat-miri'],
     observed: ['stat-obs-nircam', 'stat-obs-miri'],
+    scheduled: ['stat-sch-nircam', 'stat-sch-miri'],
+    skipped: ['stat-skp-nircam', 'stat-skp-miri'],
     spring: ['stat-spring'], aces: ['stat-aces'],
     'rgps-wide': ['stat-rgps-wide'], 'rgps-tds': ['stat-rgps-tds'],
     'rgps-deep': ['stat-rgps-deep']
@@ -1120,6 +1171,7 @@ interactive view adds sky imagery you can pan across.
   // Layer state is shared: a toggle drives the static groups now and the Aladin
   // overlays later, so the view you built survives the upgrade.
   var on = {{ nircam: true, miri: true, observed: true,
+             scheduled: true, skipped: true,
              spring: false, aces: false,
              'rgps-wide': false, 'rgps-tds': false, 'rgps-deep': false }};
   var L = null;                      // Aladin overlays, once they exist
@@ -1143,6 +1195,7 @@ interactive view adds sky imagery you can pan across.
   }}
 
   [['lyr-nircam', 'nircam'], ['lyr-miri', 'miri'], ['lyr-observed', 'observed'],
+   ['lyr-scheduled', 'scheduled'], ['lyr-skipped', 'skipped'],
    ['lyr-spring', 'spring'], ['lyr-aces', 'aces'],
    ['lyr-rgps-wide', 'rgps-wide'], ['lyr-rgps-tds', 'rgps-tds'],
    ['lyr-rgps-deep', 'rgps-deep']
@@ -1486,7 +1539,9 @@ interactive view adds sky imagery you can pan across.
       L = {{
         nircam: layer('JWST NIRCam (planned)', C.nircam, 1.1),
         miri: layer('JWST MIRI parallel (planned)', C.miri, 1.1),
-        observed: layer('JWST observed', C.observed, 2.0),
+        observed: layer('JWST executed', C.observed, 2.0),
+        scheduled: layer('JWST scheduled', C.scheduled, 1.4),
+        skipped: layer('JWST skipped', C.skipped, 1.8),
         spring: layer('Roman GBTDS', C.spring, 1.2),
         'rgps-wide': layer('RGPS wide area', C['rgps-wide'], 1.2),
         'rgps-tds': layer('RGPS time domain', C['rgps-tds'], 1.2),
@@ -1503,6 +1558,18 @@ interactive view adds sky imagery you can pan across.
       }}
       (fp.planned || []).forEach(function (p) {{
         remember(p);
+        // Same three-way split the static map makes, and by the same rule: an
+        // unrecognised or absent status falls through to the plain planned
+        // layers, so a footprint file built before statuses existed draws
+        // exactly as it used to.
+        var st = String(p.status || '').trim().toLowerCase();
+        var target = (st === 'scheduled') ? 'scheduled'
+                   : (st === 'skipped') ? 'skipped' : null;
+        if (target) {{
+          (p.nircam || []).forEach(function (poly) {{ L[target].add(A.polygon(poly)); }});
+          (p.miri || []).forEach(function (poly) {{ L[target].add(A.polygon(poly)); }});
+          return;
+        }}
         (p.nircam || []).forEach(function (poly) {{ L.nircam.add(A.polygon(poly)); }});
         (p.miri || []).forEach(function (poly) {{ L.miri.add(A.polygon(poly)); }});
       }});

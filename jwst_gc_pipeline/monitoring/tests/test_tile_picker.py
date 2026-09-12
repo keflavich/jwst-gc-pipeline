@@ -114,7 +114,11 @@ def _footprints(statuses=None, n=5):
                'filters': {}, 'dithered': True,
                'nircam': [[[266.0 + i * 0.01, -29.0], [266.01 + i * 0.01, -29.0],
                            [266.01 + i * 0.01, -28.99], [266.0 + i * 0.01, -28.99]]],
-               'miri': []}
+               # A real pointing always has BOTH: MIRI rides as the coordinated
+               # parallel of every NIRCam observation.  An empty list here made
+               # the MIRI layers draw nothing and the split look half-broken.
+               'miri': [[[266.0 + i * 0.01, -28.9], [266.01 + i * 0.01, -28.9],
+                         [266.01 + i * 0.01, -28.89], [266.0 + i * 0.01, -28.89]]]}
         if str(i) in statuses:
             rec['status'] = statuses[str(i)]
         (observed if rec.get('status') == 'Executed' else planned).append(rec)
@@ -189,8 +193,9 @@ def test_static_polygons_are_keyed_by_observation_number_not_index():
     the moment one pointing is undrawable, silently shifting every tile after
     it onto its neighbour's outline."""
     html = _section(_footprints(n=4))
-    assert sorted(re.findall(r'<g data-obs="(\d+)">', html)) == \
-        sorted(['1', '2', '3', '4'])
+    # Each tile appears once per instrument layer, so the SET is what identifies
+    # the tiles; the count is checked by the partition test below.
+    assert set(re.findall(r'<g data-obs="(\d+)">', html)) == {'1', '2', '3', '4'}
 
 
 def test_the_highlight_overrides_the_layer_presentation_attributes():
@@ -207,3 +212,89 @@ def test_the_selected_tile_overlay_is_exempt_from_the_layer_toggles():
     show/hide loop would hide the highlight on the next toggle click."""
     html = _section(_footprints({'1': 'Executed'}))
     assert "if (k === 'pick') { return; }" in html
+
+
+# --- status colouring on the map ---------------------------------------------
+
+def _layer_counts(html):
+    """{static layer id: number of pointings drawn in it}."""
+    out = {}
+    for gid in ('stat-nircam', 'stat-miri', 'stat-sch-nircam', 'stat-sch-miri',
+                'stat-skp-nircam', 'stat-skp-miri',
+                'stat-obs-nircam', 'stat-obs-miri'):
+        m = re.search(r'<g id="%s"[^>]*>(.*?)(?=<g id=)' % gid, html, re.S)
+        out[gid] = len(re.findall(r'<g data-obs=', m.group(1))) if m else 0
+    return out
+
+
+def test_scheduled_and_skipped_are_drawn_in_their_own_colours():
+    html = _section(_footprints({'1': 'Scheduled', '2': 'Scheduled',
+                                 '3': 'Skipped', '4': 'Executed'}, n=6))
+    n = _layer_counts(html)
+    assert n['stat-sch-nircam'] == 2 and n['stat-sch-miri'] == 2
+    assert n['stat-skp-nircam'] == 1 and n['stat-skp-miri'] == 1
+    assert n['stat-obs-nircam'] == 1
+    # 5 and 6 have no status, so they stay in the plain planned layer
+    assert n['stat-nircam'] == 2
+
+
+def test_every_pointing_lands_in_exactly_one_nircam_layer():
+    """The four layers partition the field.  Drawing a tile twice would double
+    its outline's opacity and quietly misreport the counts beside the toggles."""
+    html = _section(_footprints({'1': 'Scheduled', '2': 'Skipped',
+                                 '3': 'Executed'}, n=9))
+    n = _layer_counts(html)
+    total = (n['stat-nircam'] + n['stat-sch-nircam']
+             + n['stat-skp-nircam'] + n['stat-obs-nircam'])
+    assert total == 9
+    assert len(re.findall(r'<g data-obs="1"', html)) == 2   # NIRCam + MIRI, once each
+
+
+def test_the_four_status_colours_are_distinct():
+    from jwst_gc_pipeline.monitoring import skyview
+    colours = {skyview.COLOR_NIRCAM_PLANNED, skyview.COLOR_SCHEDULED,
+               skyview.COLOR_SKIPPED, skyview.COLOR_OBSERVED}
+    assert len(colours) == 4
+
+
+def test_an_unknown_or_absent_status_still_draws_as_planned():
+    """A footprint file built before statuses existed carries none at all, and
+    a status this code has not seen must not make a tile vanish from the map."""
+    html = _section(_footprints({'1': 'Withdrawn', '2': ''}, n=3))
+    n = _layer_counts(html)
+    assert n['stat-nircam'] == 3
+    assert n['stat-sch-nircam'] == 0 and n['stat-skp-nircam'] == 0
+
+
+def test_the_status_layers_have_toggles_that_start_on():
+    html = _section(_footprints({'1': 'Scheduled', '2': 'Skipped'}))
+    for lid in ('lyr-scheduled', 'lyr-skipped'):
+        assert re.search(r'class="gcm-sky-btn on" id="%s"' % lid, html), lid
+    assert "scheduled: true" in html and "skipped: true" in html
+    assert "scheduled: ['stat-sch-nircam', 'stat-sch-miri']" in html
+    assert "skipped: ['stat-skp-nircam', 'stat-skp-miri']" in html
+
+
+def test_the_counts_beside_the_toggles_come_from_what_was_drawn():
+    """Recomputing them in `section` from the raw file is a second count of the
+    same thing, and the two drift the first time the split rule changes."""
+    html = _section(_footprints({'1': 'Scheduled', '2': 'Scheduled',
+                                 '3': 'Skipped'}, n=8))
+    assert re.search(r'id="lyr-scheduled".*?<span[^>]*>2</span>', html, re.S)
+    assert re.search(r'id="lyr-skipped".*?<span[^>]*>1</span>', html, re.S)
+
+
+def test_the_legend_says_what_scheduled_and_skipped_mean():
+    """'skipped' and 'not yet observed' are easy to conflate and mean opposite
+    things for coverage."""
+    import html as H
+    text = H.unescape(_section(_footprints({'1': 'Scheduled', '2': 'Skipped'})))
+    assert 'scheduled — has a date, not yet run' in text
+    assert 'skipped — was scheduled and did not run' in text
+
+
+def test_aladin_routes_the_same_three_ways_as_the_static_map():
+    html = _section(_footprints({'1': 'Scheduled'}))
+    assert "scheduled: layer('JWST scheduled'" in html
+    assert "skipped: layer('JWST skipped'" in html
+    assert "(st === 'scheduled') ? 'scheduled'" in html
