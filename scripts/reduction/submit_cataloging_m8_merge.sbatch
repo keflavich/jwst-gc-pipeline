@@ -71,7 +71,7 @@ fi
 
 FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')
 M7_ARG=""
-[ -n "$M7" ] && M7_ARG="--m7=$M7" || M7_ARG="--catdir=$CATDIR --module=$MODULES"
+[ -n "$M7" ] && M7_ARG="--m7=$M7" || M7_ARG="--catdir=$CATDIR --module=$MODULES --obs=$FIELD"
 
 echo "M8_MERGE start $(date -u +%FT%TZ) NODE=$(hostname) target=$TARGET filters=$FILT_CSV"
 "$PY" "$MERGE_PY" $M7_ARG --filters="$FILT_CSV" --execute $MERGE_EXTRA

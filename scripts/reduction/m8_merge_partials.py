@@ -22,10 +22,13 @@ complete but silently fall a band back to m7).  Pass ``--allow-missing`` to
 override.  Dry-run by default; pass ``--execute`` to write.
 
 Generic over field: pass the explicit ``--m7`` anchor path, or
-``--catdir``+``--module`` to derive the default
-``basic_<module>_indivexp_photometry_tables_merged_resbgsub_m7.fits``.
+``--catdir``+``--module`` to derive it.  A whole-field tree is
+``basic_<module>_indivexp_photometry_tables_merged_resbgsub_m7.fits``; a
+per-observation one appends the obs token, ``..._resbgsub_m7_o049.fits``, so add
+``--obs`` (or let a lone token'd anchor be found on its own).
 """
 import argparse
+import glob
 import os
 import sys
 
@@ -33,10 +36,45 @@ import numpy as np
 from astropy.table import Table
 
 
-def _default_m7(catdir, module):
-    return os.path.join(
-        catdir,
-        f'basic_{module}_indivexp_photometry_tables_merged_resbgsub_m7.fits')
+def _default_m7(catdir, module, obs=None):
+    """The m7 anchor for this module, obs-token variant included.
+
+    A per-observation field writes its merged catalogs with the obs token
+    appended -- ``..._resbgsub_m7_o049.fits`` -- while a whole-field one writes
+    ``..._resbgsub_m7.fits``.  Only the second name was ever derived, so the m8
+    merge of every per-obs field failed at the argument check with
+
+        m8_merge_partials.py: error: m7 anchor not found:
+        .../basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits
+
+    (gc2211_o049, job 41879980, 2026-09-12) AFTER both per-band partials had
+    already been fitted -- 9 and 8.5 minutes of work with nothing to show.
+    brick o001/o004, the other gc2211 observations, gc1266 and m4 all carry the
+    same token.
+
+    With ``obs`` given, the token'd name is tried first and the plain one is the
+    fallback.  Without it, any single token'd anchor for this module is
+    accepted, since one is unambiguous; two or more is the caller's to resolve
+    with an explicit --m7.
+    """
+    stem = f'basic_{module}_indivexp_photometry_tables_merged_resbgsub_m7'
+    plain = os.path.join(catdir, f'{stem}.fits')
+    if obs:
+        tokened = os.path.join(catdir, f'{stem}_o{str(obs).zfill(3)}.fits')
+        if os.path.exists(tokened):
+            return tokened
+        return plain
+    if os.path.exists(plain):
+        return plain
+    found = sorted(glob.glob(os.path.join(catdir, f'{stem}_o[0-9][0-9][0-9].fits')))
+    if len(found) == 1:
+        return found[0]
+    if len(found) > 1:
+        raise SystemExit(
+            f'{len(found)} obs-token m7 anchors in {catdir} '
+            f'({", ".join(os.path.basename(f) for f in found)}); '
+            f'pass --m7 or --obs to say which')
+    return plain
 
 
 def main(argv=None):
@@ -49,6 +87,10 @@ def main(argv=None):
                     help='catalogs/ dir (used with --module to derive --m7)')
     ap.add_argument('--module', default='nrcb',
                     help='module token for the derived --m7 (default nrcb)')
+    ap.add_argument('--obs', default=None,
+                    help='observation number for the derived --m7, e.g. 049 -- '
+                         'a per-obs field names its merged catalogs '
+                         '..._resbgsub_m7_o049.fits')
     ap.add_argument('--filters', required=True,
                     help='comma-separated filters to overlay, e.g. '
                          'F187N,F210M,F335M,F470N,F480M')
@@ -66,7 +108,7 @@ def main(argv=None):
     if args.m7 is None:
         if not args.catdir:
             ap.error('provide --m7, or --catdir (+ --module) to derive it')
-        args.m7 = _default_m7(args.catdir, args.module)
+        args.m7 = _default_m7(args.catdir, args.module, args.obs)
     if not os.path.exists(args.m7):
         ap.error(f'm7 anchor not found: {args.m7}')
 
