@@ -163,7 +163,7 @@ def test_executed_and_skipped_tiles_are_listed_by_number():
                                  '4': 'Skipped'}))
     ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
                        html, re.S).group(1)
-    assert 'Executed 2' in ledger and 'Skipped 1' in ledger
+    assert 'Observed 2' in ledger and 'Skipped 1' in ledger
     assert re.search(r'observtn=3&', ledger)
     assert re.search(r'observtn=5&', ledger)
     assert re.search(r'data-goto="4"', ledger)
@@ -395,3 +395,65 @@ def test_the_map_does_not_pan_underneath_a_drag():
     """Aladin and the static map both pan on pointer drags of their own."""
     html = _section(_footprints({'1': 'Executed'}))
     assert 'ev.stopPropagation();' in html
+
+
+# --- the status LIFECYCLE, not a single value --------------------------------
+
+def test_a_visit_that_has_run_is_observed_whatever_stage_it_reached():
+    """STScI walks a visit along Collecting -> Executed -> Archived.  Reading
+    only 'Executed' demotes the ones that have progressed PAST it: the observed
+    count went 12 -> 7 over two hours on 2026-09-12 with no visit un-running,
+    because five had become Archived (data in MAST, the strongest state) or
+    Collecting."""
+    for status in ('Executed', 'Archived', 'Collecting',
+                   'executed', 'ARCHIVED'):
+        assert bf.has_run(status), status
+    for status in ('Scheduled', 'Flight Ready', 'Skipped', '', None):
+        assert not bf.has_run(status), status
+
+
+def test_the_two_files_agree_on_which_statuses_mean_observed():
+    """`build_footprints` decides which tiles go in the observed layer and
+    `skyview` decides which get a MAST link; they are in different packages and
+    would drift silently."""
+    from jwst_gc_pipeline.monitoring import skyview
+    assert set(skyview.RUN_STATUSES) == set(bf.OBSERVED_STATUSES)
+
+
+def test_the_furthest_stage_wins_for_a_multi_visit_pointing():
+    r = bf._status_rank
+    assert r('Archived') > r('Executed') > r('Collecting') > r('Skipped') \
+        > r('Scheduled') > r('Flight Ready')
+
+
+def test_every_run_stage_is_listed_and_linked():
+    html = _section(_footprints({'1': 'Archived', '2': 'Collecting',
+                                 '3': 'Executed', '4': 'Skipped'}, n=6))
+    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+                       html, re.S).group(1)
+    assert 'Observed 3' in ledger
+    assert len(re.findall(r'href="https://mast', ledger)) == 3
+
+
+def test_the_total_is_not_labelled_with_one_of_its_parts():
+    """'Executed 12' when 3 of them are Archived reads as a count of Executed."""
+    html = _section(_footprints({'1': 'Archived', '2': 'Executed'}))
+    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+                       html, re.S).group(1)
+    assert 'Observed 2' in ledger
+    assert '1 archived' in ledger and '1 executed' in ledger
+
+
+def test_the_status_tail_does_not_re_count_the_observed_tiles():
+    """Excluding only 'executed' from the tail listed Archived and Collecting
+    again underneath the total, so the same tiles were counted twice on one
+    line and the numbers did not add to the tile count."""
+    import html as H
+    page = _section(_footprints({'1': 'Archived', '2': 'Collecting',
+                                 '3': 'Executed', '4': 'Skipped',
+                                 '5': 'Scheduled'}, n=6))
+    ledger = H.unescape(re.search(
+        r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+        page, re.S).group(1))
+    tail = ledger.split('Skipped')[-1]
+    assert 'archived' not in tail.lower() and 'collecting' not in tail.lower()

@@ -151,6 +151,12 @@ MAST_RESULTS_URL = (
     '&program_id={program}&observtn={observation}&useStore=false')
 
 
+#: Statuses meaning the visit has RUN.  Mirrors
+#: ``build_footprints.OBSERVED_STATUSES``; the two files do not share a package,
+#: and a test pins them equal so they cannot drift.
+RUN_STATUSES = ('executed', 'archived', 'collecting')
+
+
 def mast_url(program, observation):
     """The archive search for one executed observation, or ``None``.
 
@@ -993,7 +999,23 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     def _by_status(name):
         return [t for t in tiles if t['status'].strip().lower() == name]
 
-    executed, skipped = _by_status('executed'), _by_status('skipped')
+    def _has_run(status):
+        return str(status).strip().lower() in RUN_STATUSES
+
+    def _observed_breakdown(counts):
+        """' (3 archived, 7 executed)' -- the lifecycle stages behind the
+        total, since 'archived' means the data is in MAST and 'collecting'
+        means it is not there yet, and a reader chasing data cares which."""
+        parts = ['%d %s' % (v, k.lower())
+                 for k, v in sorted(counts.items()) if _has_run(k)]
+        return (' <span class="gcm-sky-lab" style="display:inline">(%s)</span>'
+                % ', '.join(parts)) if len(parts) > 1 else ''
+
+    # Every status that means the visit RAN, not just 'Executed' -- STScI moves
+    # a visit on to 'Collecting' and then 'Archived', and counting one value
+    # made the ledger drop tiles as they progressed.
+    executed = [t for t in tiles if _has_run(t['status'])]
+    skipped = _by_status('skipped')
     status_counts = footprints.get('status_counts') or {}
     status_source = footprints.get('status_source') or 'apt'
 
@@ -1009,7 +1031,7 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
             title = '%s%s' % (t['target'],
                               '  ' + t['start'] if t['start'] else '')
             url = (mast_url(program, t['number'])
-                   if t['status'].strip().lower() == 'executed' else None)
+                   if _has_run(t['status']) else None)
             if url:
                 out.append('<a href="%s" target="_blank" rel="noopener" '
                            'title="%s">%s</a>'
@@ -1024,14 +1046,21 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
         return ', '.join(out) or '<span class="gcm-sky-empty">none</span>'
 
     if status_counts:
+        # "Observed", not "Executed": the 12 tiles here are spread across
+        # Executed / Archived / Collecting, and labelling the total with one of
+        # its three members reads as a count of that member.
         ledger_rows = [
-            '<div><b class="ex">Executed %d</b> &nbsp;%s</div>'
-            % (len(executed), _tile_links(executed, 'ex')),
+            '<div><b class="ex">Observed %d</b>%s &nbsp;%s</div>'
+            % (len(executed), _observed_breakdown(status_counts),
+               _tile_links(executed, 'ex')),
             '<div><b class="sk">Skipped %d</b> &nbsp;%s</div>'
             % (len(skipped), _tile_links(skipped, 'sk')),
         ]
+        # The tail is what is NOT above it.  Excluding only 'executed' listed
+        # Archived and Collecting again underneath, so the same three tiles were
+        # counted twice on one line and 12 + 3 + 2 did not add up to anything.
         rest = ', '.join('%s %d' % (k, v) for k, v in sorted(status_counts.items())
-                         if k.strip().lower() not in ('executed', 'skipped'))
+                         if not _has_run(k) and k.strip().lower() != 'skipped')
         if rest:
             ledger_rows.append('<div class="gcm-sky-lab" style="margin-top:4px">'
                                '%s</div>' % _esc(rest))
