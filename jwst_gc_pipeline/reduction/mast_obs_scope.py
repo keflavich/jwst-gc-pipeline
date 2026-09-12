@@ -70,6 +70,12 @@ def obs_id_prefix(proposal_id, field):
     return f'{jw_prefix(proposal_id)}-o{observation_number(field)}'
 
 
+#: An exposure-level JWST obs_id: ``jw{proposal:05d}{observation:03d}{visit:03d}_``.
+#: The three digits after the five-digit proposal ARE the observation number, so
+#: such a row attributes itself as surely as a ``-o`` token does.
+_EXPOSURE_OBS_ID = re.compile(r'jw\d{5}(\d{3})\d{3}_')
+
+
 def observation_scope_mask(obs_ids, proposal_id, field):
     """Boolean mask keeping obs-table rows of the requested observation.
 
@@ -117,7 +123,33 @@ def observation_scope_mask(obs_ids, proposal_id, field):
                           + ')(?![0-9])')
     own = np.array([bool(anchored.match(str(o))) for o in obs_ids], dtype=bool)
     own = own.reshape(obs_ids.shape)
-    unattributed = np.char.find(obs_ids, '-o') < 0
+
+    # An EXPOSURE-level obs_id names its observation too, just in the other
+    # spelling: `jw{PPPPP}{OOO}{VVV}_...`, e.g. jw10678135001_02101_00001_nrcalong
+    # is observation 135 visit 001.  It carries no `-o` token, so the
+    # unattributed rule below used to keep it for EVERY field -- and on a
+    # many-observation proposal that is the whole program.  Measured on 10678
+    # (1777 rows, 2026-09-12): scoping to observation 134 kept **1774** of them,
+    # every planning placeholder and every other tile included, so each tile's
+    # download called `get_product_list` on the entire program.  With 139 tiles
+    # to land that is the #416 failure the caller's own comment says this mask
+    # exists to prevent.
+    #
+    # Only a row that names NEITHER spelling is genuinely unattributed -- a
+    # candidate association `jw{PPPPP}-c1234_...` is the case the rule was
+    # written for, and it still passes: no `-o`, and no observation digits
+    # straight after the proposal.
+    exposure_obs = np.array(
+        [(_m.group(1) if (_m := _EXPOSURE_OBS_ID.match(str(o))) else None)
+         for o in obs_ids], dtype=object).reshape(obs_ids.shape)
+    wanted_obs = {observation_number(p) for p in str(field).split('-') if p}
+    wanted_obs.add(observation_number(field))
+    own = own | np.array([o is not None and o in wanted_obs
+                          for o in exposure_obs.ravel()],
+                         dtype=bool).reshape(obs_ids.shape)
+    unattributed = (np.char.find(obs_ids, '-o') < 0) & np.array(
+        [o is None for o in exposure_obs.ravel()],
+        dtype=bool).reshape(obs_ids.shape)
     mask = own | unattributed
     if len(obs_ids) and not mask.any():
         print(f"MAST obs scoping: kept 0 of {len(obs_ids)} obs-table row(s) -- "

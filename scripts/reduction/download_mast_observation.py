@@ -105,11 +105,24 @@ def main():
                     rc = 1
             print(f'{want}: {label} -> {len(manifest)} file(s)', flush=True)
 
-        n_uncal = len([f for f in os.listdir(output_dir)
-                       if f.endswith('_uncal.fits')])
-        n_asn3 = len([f for f in os.listdir(output_dir) if '_image3_' in f])
-        print(f'{want}: on disk now {n_uncal} uncal, {n_asn3} image3 asn',
-              flush=True)
+        # Scoped to THIS observation.  Every tile of a program shares one
+        # `<FILTER>/pipeline/` directory, so an unscoped count reports the
+        # neighbours' files as this tile's: o134's run said "1 image3 asn" when
+        # the only one on disk was o135's, which reads as "o134 can reduce" on
+        # a tile that has no level-3 product at all.
+        names = os.listdir(output_dir)
+        exposure_tag = f'{jw_prefix(args.proposal)}{args.obsid}'
+        product_tag = f'{jw_prefix(args.proposal)}-o{args.obsid}'
+        n_uncal = len([f for f in names
+                       if f.endswith('_uncal.fits') and f.startswith(exposure_tag)])
+        n_asn3 = len([f for f in names
+                      if '_image3_' in f and f.startswith(product_tag)])
+        print(f'{want}: on disk now {n_uncal} uncal, {n_asn3} image3 asn '
+              f'for o{args.obsid}', flush=True)
+        if n_asn3 == 0:
+            print(f'{want}: NO image3 association for o{args.obsid} -- MAST has '
+                  f'not published level 3 for this observation, so the reduce '
+                  f'cannot run yet', flush=True)
     return rc
 
 
