@@ -72,7 +72,8 @@ def _age_frame(path, seconds):
     os.utime(path, (t, t))
 
 
-def _select(frame_args, marker_dir, filt, phase, resume, merge='nrca'):
+def _select(frame_args, marker_dir, filt, phase, resume, merge='nrca',
+            cross_label=True):
     """`run_manual_pipeline`'s own selection, imported rather than restated.
 
     `resume` mirrors the caller's `skip_if_done and (skip_finalize or
@@ -80,11 +81,17 @@ def _select(frame_args, marker_dir, filt, phase, resume, merge='nrca'):
     below it -- the marker format, the ok/nooverlap/todo split, the merge
     scoping -- comes from cataloging.py, so a change there that breaks the
     resume breaks these tests.
+
+    `cross_label` defaults to True here because every frame in this file is at
+    `m12`, the phase whose fit takes no label-scoped input and where the caller
+    therefore passes True.  The phases where it passes False have their own file
+    (`test_label_scoped_phase_resume.py`).
     """
     if not resume:
         return list(frame_args), [], []
     todo, ok, nov, _stale = select_resumable_frames(frame_args, marker_dir,
-                                                   filt, phase, merge)
+                                                    filt, phase, merge,
+                                                    cross_label=cross_label)
     return todo, ok, [f for f, _ in nov]
 
 
