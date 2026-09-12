@@ -738,7 +738,7 @@ def test_a_scalar_obsid_list_is_refused(tmp_path):
 
 
 def test_no_one_catalog_serves_every_treasury_tile():
-    """10678 registers NO reference catalog, and asking for one raises.
+    """10678 registers NO DEFAULT reference catalog, so an unbuilt tile raises.
 
     It used to carry a single ``default_reference_catalog``, which answered
     for all 139 tiles alike -- and those tiles span 1.28 x 0.71 deg with
@@ -746,14 +746,38 @@ def test_no_one_catalog_serves_every_treasury_tile():
     nearly all of them (the gc2211 o023 failure).  The raise names the block
     to add, and the per-tile catalogs come from
     ``scripts/reduction/build_treasury_refcats.py``.
+
+    The observation numbers below are ones no tile has delivered yet.  They used
+    to include 139, which is now a real registered tile -- as tiles land, move
+    the examples rather than the assertion: what this pins is that a tile with no
+    catalog of its OWN raises instead of silently borrowing a neighbour's sky.
     """
-    for obsid in ('001', '037', '088', '139'):
+    for obsid in ('001', '037', '088'):
         with pytest.raises(F.FieldRegistryError) as excinfo:
             F.reference_catalog_path('10678', obsid)
         assert 'no reference catalog registered' in str(excinfo.value), obsid
         assert obsid in str(excinfo.value), obsid
     with pytest.raises(F.FieldRegistryError):
         F.reference_catalog_path('10678', '105', instrument='miri')
+
+
+def test_a_delivered_treasury_tile_resolves_its_own_catalog():
+    """The other half of the rule above: a tile that HAS one gets its own.
+
+    Each path has to carry that tile's own observation token -- a registered
+    tile resolving to a neighbour's file is the failure the per-tile scheme
+    exists to prevent, and it would pass the raise-test above unnoticed.
+    """
+    obs = next(o for o in F.BY_NAME['gc-treasury'].observations
+               if str(o.proposal) == '10678')
+    registered = dict(obs.reference_catalogs or {})
+    assert registered, 'no treasury tile registered; update these tests together'
+    for obsid, expected in sorted(registered.items()):
+        path = F.reference_catalog_path('10678', obsid)
+        assert path.endswith(expected), (obsid, path, expected)
+        assert f'_o{obsid}.' in path, (
+            f'tile {obsid} resolves to {path}, which does not carry its own '
+            f'observation token')
 
 
 def test_an_exact_reference_catalog_key_wins_over_the_default(monkeypatch):
