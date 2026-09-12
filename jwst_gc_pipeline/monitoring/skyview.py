@@ -126,6 +126,47 @@ SURVEYS = (
 )
 
 
+#: MAST's executed-results route.  The bare ``#/jwst?...`` form opens a blank,
+#: UNEXECUTED search form; ``#/jwst/results?...&useStore=false`` runs the query
+#: and builds it from the explicit params instead of a session-saved hash.
+#: (That distinction was worked out in data-qa `observations.mast_search_url`;
+#: it is repeated here rather than imported because the two repos do not share
+#: a package.)
+#:
+#: VERIFIED: ``program`` and ``observtn`` are real JWST search columns, both
+#: indexed -- from MAST's own metadata API,
+#: ``search/util/api/v0.1/column_list?mission=jwst`` (2026-09-12).  ``observtn``
+#: is documented there as "the observation number ... within a proposal", which
+#: is exactly the tile number here.
+#: NOT VERIFIED: that the search UI honours ``observtn`` as a URL parameter --
+#: its bundle is lazily chunked, so grepping it settles nothing, and there is no
+#: way to execute the SPA from here.  If it is ignored the link still lands on
+#: this program's executed results, which is broader than intended but not
+#: wrong; the link's title says which observation it asks for, so a reader can
+#: see whether they got it.
+MAST_RESULTS_URL = (
+    'https://mast.stsci.edu/search/ui/#/jwst/results?resolve=true'
+    '&data_types=spectrum,timeseries,image,other'
+    '&instruments=MIRI,NIRCAM'
+    '&program_id={program}&observtn={observation}&useStore=false')
+
+
+def mast_url(program, observation):
+    """The archive search for one executed observation, or ``None``.
+
+    Only for tiles that have actually RUN.  A scheduled or skipped visit has no
+    data in MAST -- a skipped one never will without re-planning -- so linking
+    them would send a reader to an empty result and let them conclude the
+    archive had lost something.
+    """
+    try:
+        prog = int(str(program).strip())
+        obs = int(str(observation).strip())
+    except (TypeError, ValueError):
+        return None
+    return MAST_RESULTS_URL.format(program=prog, observation=obs)
+
+
 def load_footprints(path):
     """The footprint JSON, or ``None``.  Built by ``scripts/monitoring/build_footprints.py``."""
     try:
@@ -691,8 +732,15 @@ def _pointing_title(pointing):
                        ('  ' + bands) if bands else '', where)
 
 
-def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
-    """One instrument's polygons for one group, as a titled ``<g>`` per pointing."""
+def _layer(frame, pointings, key, color, fill_opacity, layer_id, label,
+           link=None):
+    """One instrument's polygons for one group, as a titled ``<g>`` per pointing.
+
+    ``link`` is an optional ``pointing -> url or None``; where it returns a url
+    the group is wrapped in an SVG ``<a>``, so the footprint itself is
+    clickable.  Used for executed tiles, which are the only ones with data to
+    link to.
+    """
     body = []
     count = 0
     for pointing in pointings:
@@ -706,9 +754,16 @@ def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
         # observation NUMBER rather than the array index: the two coincide only
         # while every pointing is drawable, and a pointing dropped for want of
         # a target coordinate would silently shift every tile after it.
-        body.append('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
-                    % (_esc(pointing.get('number') or ''),
-                       _esc(_pointing_title(pointing)), path))
+        group = ('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
+                 % (_esc(pointing.get('number') or ''),
+                    _esc(_pointing_title(pointing)), path))
+        url = link(pointing) if link else None
+        if url:
+            # `target=_blank` on an SVG <a> needs the XLink-free HTML form,
+            # which every browser that runs Aladin also supports.
+            group = ('<a href="%s" target="_blank" rel="noopener">%s</a>'
+                     % (_esc(url), group))
+        body.append(group)
     return ('<g id="%s" class="gcm-lyr" data-label="%s" stroke="%s" fill="%s" '
             'fill-opacity="%s" stroke-width="1.1" vector-effect="non-scaling-stroke">'
             '%s</g>' % (layer_id, _esc(label), color, color,
@@ -775,10 +830,17 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
                             '.16', 'stat-skp-nircam', 'skipped NIRCam')
     skp_m, n_skp_m = _layer(frame, skipped, 'miri', COLOR_SKIPPED,
                             '.16', 'stat-skp-miri', 'skipped MIRI')
+    program = footprints.get('program')
+
+    def _mast(pointing):
+        return mast_url(program, pointing.get('number'))
+
     obs_n, n_obs_n = _layer(frame, observed, 'nircam', COLOR_OBSERVED,
-                            '.18', 'stat-obs-nircam', 'observed NIRCam')
+                            '.18', 'stat-obs-nircam', 'observed NIRCam',
+                            link=_mast)
     obs_m, n_obs_m = _layer(frame, observed, 'miri', COLOR_OBSERVED,
-                            '.18', 'stat-obs-miri', 'observed MIRI')
+                            '.18', 'stat-obs-miri', 'observed MIRI',
+                            link=_mast)
 
     # Roman is drawn here too, not only in the interactive view. It used to be
     # Aladin-only, which made its toggles do nothing at all until someone
@@ -925,13 +987,31 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     status_counts = footprints.get('status_counts') or {}
     status_source = footprints.get('status_source') or 'apt'
 
+    program = footprints.get('program')
+
     def _tile_links(items, cls):
-        return ', '.join(
-            '<a data-goto="%s" title="%s">%s</a>'
-            % (_esc(t['number']),
-               _esc('%s%s' % (t['target'], '  ' + t['start'] if t['start'] else '')),
-               _esc(t['number']))
-            for t in items) or '<span class="gcm-sky-empty">none</span>'
+        """Executed tiles link OUT to the archive; everything else links IN to
+        the tile picker.  A skipped or scheduled visit has no data in MAST, so
+        sending a reader there would show an empty result and read as the
+        archive having lost something."""
+        out = []
+        for t in items:
+            title = '%s%s' % (t['target'],
+                              '  ' + t['start'] if t['start'] else '')
+            url = (mast_url(program, t['number'])
+                   if t['status'].strip().lower() == 'executed' else None)
+            if url:
+                out.append('<a href="%s" target="_blank" rel="noopener" '
+                           'title="%s">%s</a>'
+                           % (_esc(url),
+                              _esc('%s — search MAST for observation %s of '
+                                   'program %s' % (title, t['number'], program)),
+                              _esc(t['number'])))
+            else:
+                out.append('<a data-goto="%s" title="%s">%s</a>'
+                           % (_esc(t['number']), _esc(title),
+                              _esc(t['number'])))
+        return ', '.join(out) or '<span class="gcm-sky-empty">none</span>'
 
     if status_counts:
         ledger_rows = [
@@ -1276,6 +1356,8 @@ interactive view adds sky imagery you can pan across.
     }});
   }}
   // The execution ledger's numbers are clickable shortcuts into the same path.
+  // `a[data-goto]` only -- the executed entries are real hrefs to MAST and
+  // must not have their navigation prevented.
   document.querySelectorAll('.gcm-sky-stat a[data-goto]').forEach(function (a) {{
     a.addEventListener('click', function (ev) {{
       ev.preventDefault();

@@ -156,14 +156,19 @@ def test_a_tile_carries_its_number_target_and_status_in_the_option():
 
 
 def test_executed_and_skipped_tiles_are_listed_by_number():
+    """Both are listed and both are reachable, but by different routes:
+    an executed tile links OUT to its data in MAST, a skipped one has no data
+    to link to and instead selects itself on the map."""
     html = _section(_footprints({'3': 'Executed', '5': 'Executed',
                                  '4': 'Skipped'}))
     ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
                        html, re.S).group(1)
     assert 'Executed 2' in ledger and 'Skipped 1' in ledger
-    assert re.search(r'data-goto="3"', ledger)
+    assert re.search(r'observtn=3&', ledger)
+    assert re.search(r'observtn=5&', ledger)
     assert re.search(r'data-goto="4"', ledger)
-    assert re.search(r'data-goto="5"', ledger)
+    # every listed tile is reachable one way or the other
+    assert len(re.findall(r'<a [^>]*>', ledger)) == 3
 
 
 def test_an_executed_tile_is_still_in_the_picker_though_it_moved_layers():
@@ -298,3 +303,54 @@ def test_aladin_routes_the_same_three_ways_as_the_static_map():
     assert "scheduled: layer('JWST scheduled'" in html
     assert "skipped: layer('JWST skipped'" in html
     assert "(st === 'scheduled') ? 'scheduled'" in html
+
+
+# --- MAST links on the executed tiles ----------------------------------------
+
+def test_only_executed_tiles_link_to_the_archive():
+    """A scheduled visit has no data in MAST and a skipped one never will
+    without re-planning, so linking them sends a reader to an empty result --
+    which reads as the archive having lost something rather than as the visit
+    not having happened."""
+    html = _section(_footprints({'1': 'Executed', '2': 'Scheduled',
+                                 '3': 'Skipped'}, n=4))
+    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+                       html, re.S).group(1)
+    assert len(re.findall(r'href="https://mast[^"]*"', ledger)) == 1
+    # the skipped tile is still listed, still selects its tile, still no link
+    assert 'data-goto="3"' in ledger
+    assert not re.search(r'href="https://mast[^"]*observtn=3&', ledger)
+
+
+def test_the_link_names_the_program_and_the_observation():
+    from jwst_gc_pipeline.monitoring import skyview
+    url = skyview.mast_url('10678', '137')
+    assert 'program_id=10678' in url and 'observtn=137' in url
+    # the executed-RESULTS route, not the blank search form: the bare
+    # `#/jwst?...` form opens an unexecuted query
+    assert '#/jwst/results?' in url and 'useStore=false' in url
+
+
+def test_a_missing_or_junk_number_yields_no_link_rather_than_a_broken_one():
+    from jwst_gc_pipeline.monitoring import skyview
+    for prog, obs in (('10678', None), ('10678', ''), (None, '3'),
+                      ('10678', 'GC_3')):
+        assert skyview.mast_url(prog, obs) is None
+
+
+def test_the_executed_footprints_themselves_are_clickable():
+    """Both instruments of an executed tile, and nothing else."""
+    html = _section(_footprints({'1': 'Executed', '2': 'Executed',
+                                 '3': 'Scheduled'}, n=5))
+    wrapped = re.findall(
+        r'<a href="https://mast[^"]*observtn=(\d+)[^"]*" target="_blank" '
+        r'rel="noopener"><g data-obs=', html)
+    assert sorted(wrapped) == ['1', '1', '2', '2']   # NIRCam + MIRI each
+
+
+def test_the_tile_picker_does_not_swallow_clicks_on_the_mast_links():
+    """The ledger's numbers used to be goto shortcuts and the handler calls
+    preventDefault; if it bound to every anchor it would stop the archive
+    links from navigating."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert ".gcm-sky-stat a[data-goto]'" in html
