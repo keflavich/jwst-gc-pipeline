@@ -350,6 +350,62 @@ def get_allowed_modules(proposal_id, field, requested_modules, filtername=None):
 # Image2Pipeline.step_defs['resample'] = pre_resample(Image2Pipeline.resample)
 
 
+def image3_steps_for(tweakreg_parameters, skip_outlier_detection, label):
+    """The Image3 ``steps=`` dict shared by every NIRCam pass of this reduction.
+
+    Single authoring point for the outlier_detection policy, so the per-module
+    pass and the merged pass cannot drift apart.  They did: the merged pass
+    hand-rolled ``steps={'tweakreg': tweakreg_parameters}`` and therefore ran
+    outlier_detection at pipeline defaults on every field while nrca/nrcb
+    skipped it (#161).  ``--run-outlier-detection`` reached only the module
+    pass; the merged mosaic ignored the flag in both directions.
+
+    ``label`` names the pass in the log line and nothing else.
+
+    outlier_detection: SKIPPED by default on these crowded GC fields (#161).
+    Diagnosis (PR #180) established the step over-flags real bright-star PSF
+    signal -- diffraction spikes and the dark inter-spike gaps -- as OUTLIER,
+    punching NaN holes into the _crf/_i2d that cataloging then loses.  The
+    cause is a MIS-SPECIFIED VARIANCE MODEL, not a tunable threshold:
+    outlier_detection compares each exposure to the resampled-stack median
+    with a tolerance built from ERR (photon+read noise only), but an
+    UNDERSAMPLED PSF sampled at different sub-pixel dither phases legitimately
+    disperses 5-9x ERR wherever the PSF is steep (0.98x ERR on flat sky ->
+    9.4x on the spikes).  Decisive test: two exposures at the SAME dither
+    pointing agree at the ERR level even at the flagged pixels, while
+    exposures at DIFFERENT pointings differ ~9x more -- which excludes every
+    per-frame defect (cosmic rays, persistence, brighter-fatter, ramp
+    nonlinearity are all independent per exposure and would show up
+    within-pointing too; they do not).  Raising snr/scale (closed PR #163)
+    only rescales the wrong tolerance and would suppress genuine CRs equally.
+    Cosmic rays are already rejected per-ramp by JumpStep in Detector1
+    (independent, and that issue's ramp analysis found <1% genuine jumps
+    among the flagged pixels), so dropping the inapplicable image-space
+    comparison costs little.  Re-enable with --run-outlier-detection if a
+    field is sparse enough that residual (post-JumpStep) CRs dominate.
+
+    That reasoning is a property of the DATA -- undersampled PSF, dithered,
+    crowded field -- not of which detectors went into the association, and the
+    merged association holds the same exposures as its two module siblings.
+    It applies to the merged pass unchanged.
+
+    One caveat worth naming rather than hiding: NGROUPS=2 exposures carry
+    S_JUMP=SKIPPED (JumpStep needs >=3 groups), so the "JumpStep already
+    rejects CRs" half of the argument does not hold for them.  26 of the 217
+    merged mosaics on /orange are NGROUPS=2.  Their nrca/nrcb siblings already
+    ship with no CR rejection, so routing the merged pass through here does
+    not create that gap -- it makes it uniform and visible in one place.
+    --run-outlier-detection remains the way to opt such a field back in.
+    """
+    image3_steps = {'tweakreg': tweakreg_parameters}
+    if skip_outlier_detection:
+        image3_steps['outlier_detection'] = {'skip': True}
+        print(f"outlier_detection SKIPPED (#161; JumpStep handles CRs) ({label})")
+    else:
+        print(f"outlier_detection ENABLED at pipeline defaults ({label})")
+    return image3_steps
+
+
 def main(filtername, module, Observations=None, regionname='brick', do_destreak=True,
          field='001', proposal_id='2221', skip_step1and2=False, use_average=True,
          skymatch_method=None, skip_outlier_detection=True):
@@ -968,34 +1024,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # a skymatch run leaves photometry unchanged and makes the mosaic and the
         # frames carry different backgrounds.  See the warning at the crf-naming
         # block below.
-        image3_steps = {'tweakreg': tweakreg_parameters}
-
-        # outlier_detection: SKIPPED by default on these crowded GC fields (#161).
-        # Diagnosis (PR #180) established the step over-flags real bright-star PSF
-        # signal -- diffraction spikes and the dark inter-spike gaps -- as OUTLIER,
-        # punching NaN holes into the _crf/_i2d that cataloging then loses.  The
-        # cause is a MIS-SPECIFIED VARIANCE MODEL, not a tunable threshold:
-        # outlier_detection compares each exposure to the resampled-stack median
-        # with a tolerance built from ERR (photon+read noise only), but an
-        # UNDERSAMPLED PSF sampled at different sub-pixel dither phases legitimately
-        # disperses 5-9x ERR wherever the PSF is steep (0.98x ERR on flat sky ->
-        # 9.4x on the spikes).  Decisive test: two exposures at the SAME dither
-        # pointing agree at the ERR level even at the flagged pixels, while
-        # exposures at DIFFERENT pointings differ ~9x more -- which excludes every
-        # per-frame defect (cosmic rays, persistence, brighter-fatter, ramp
-        # nonlinearity are all independent per exposure and would show up
-        # within-pointing too; they do not).  Raising snr/scale (closed PR #163)
-        # only rescales the wrong tolerance and would suppress genuine CRs equally.
-        # Cosmic rays are already rejected per-ramp by JumpStep in Detector1
-        # (independent, and this issue's ramp analysis found <1% genuine jumps
-        # among the flagged pixels), so dropping the inapplicable image-space
-        # comparison costs little.  Re-enable with --run-outlier-detection if a
-        # field is sparse enough that residual (post-JumpStep) CRs dominate.
-        if skip_outlier_detection:
-            image3_steps['outlier_detection'] = {'skip': True}
-            print(f"outlier_detection SKIPPED (#161; JumpStep handles CRs) ({module})")
-        else:
-            print(f"outlier_detection ENABLED at pipeline defaults ({module})")
+        # The outlier_detection policy (#161) and the reasoning behind it live
+        # in image3_steps_for(); the merged pass below calls the same helper,
+        # so the two passes cannot drift apart again.
+        image3_steps = image3_steps_for(tweakreg_parameters,
+                                        skip_outlier_detection, module)
 
         if skymatch_method:
             image3_steps['skymatch'] = {'save_results': True,
@@ -1247,10 +1280,16 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # tweakreg_parameters carries skip=True on every NIRCam path.
         print("Running Image3Pipeline on the merged association "
               "(tweakreg configured but skipped; the tie is already baked in)")
+        # Same outlier_detection policy as the nrca/nrcb passes (#161).  Until
+        # 2026-09 this call hand-rolled steps={'tweakreg': ...}, so the merged
+        # mosaic ran outlier_detection at pipeline defaults on every field while
+        # its two module siblings skipped it: 178 of the 217 merged mosaics on
+        # /orange carry S_OUTLIR=COMPLETE beside nrca/nrcb S_OUTLIR=SKIPPED.
+        image3_steps_merged = image3_steps_for(tweakreg_parameters,
+                                               skip_outlier_detection, 'merged')
         calwebb_image3.Image3Pipeline.call(
             asn_file_merged,
-            steps={'tweakreg': tweakreg_parameters,},
-            #steps={'tweakreg': False,}
+            steps=image3_steps_merged,
             output_dir=output_dir,
             save_results=True)
         print(f"DONE running Image3Pipeline {asn_file_merged}.  This should have produced file {asn_data['products'][0]['name']}_i2d.fits")
