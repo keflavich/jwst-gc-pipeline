@@ -1,0 +1,146 @@
+"""`refresh_monitor.sh` must rebuild the footprints it publishes.
+
+It did not.  The pages regenerated hourly while `footprints.json` sat at
+whatever date somebody last ran the builder by hand, and because the sky view
+renders fine from stale data there was nothing to notice.  Measured 2026-09-12:
+the served page said 3 executed while STScI said 12 -- 9 tiles in nine hours.
+
+These run the real script with a STUB python, so they test the wiring rather
+than the builder.
+"""
+import json
+import os
+import stat
+import subprocess
+
+import pytest
+
+_SH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', '..',
+    'scripts', 'monitoring', 'refresh_monitor.sh'))
+
+
+def _stub(tmp_path, body):
+    """A fake `python` the script will call for every step."""
+    p = tmp_path / 'fakepython'
+    p.write_text('#!/bin/bash\n' + body + '\n')
+    p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    return str(p)
+
+
+def _run(tmp_path, body, **env):
+    outdir = tmp_path / 'out'
+    outdir.mkdir(exist_ok=True)
+    pub = tmp_path / 'pub'
+    pub.mkdir(exist_ok=True)
+    e = dict(os.environ, REPO=os.path.abspath(os.path.join(
+        os.path.dirname(_SH), '..', '..')),
+        OUTDIR=str(outdir), PUBDIR=str(pub),
+        PYTHON=_stub(tmp_path, body), MONITOR_DEPLOY='0')
+    e.update(env)
+    done = subprocess.run(['bash', _SH], env=e, capture_output=True, text=True,
+                          timeout=120)
+    return done, outdir
+
+
+#: A stub that writes a plausible footprints file when asked to build one, and
+#: succeeds silently for the two generator invocations.
+_GOOD = '''
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${next:-}" ]; then echo '{"program":"10678","n_planned":1}' > "$a"; exit 0; fi
+done
+exit 0
+'''
+
+
+def test_the_refresh_rebuilds_footprints_json(tmp_path):
+    done, outdir = _run(tmp_path, _GOOD)
+    fp = outdir / 'footprints.json'
+    assert fp.is_file(), done.stdout + done.stderr
+    assert json.loads(fp.read_text())['program'] == '10678'
+    assert 'footprints_rc=0' in done.stdout
+
+
+def test_a_failed_rebuild_keeps_the_previous_file_and_does_not_fail_the_job(tmp_path):
+    """The status comes from a third-party page.  That being down is not a
+    reason to stop publishing the pipeline's own status, and a half-written
+    file would be WORSE than a stale one -- the sky view parses it client-side,
+    so a truncated file is a broken map."""
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    good = {"program": "10678", "n_planned": 139, "keepme": True}
+    (outdir / 'footprints.json').write_text(json.dumps(good))
+    # the stub half-writes the temp file, then fails
+    done, _ = _run(tmp_path, '''
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${next:-}" ]; then printf '{"program": "106' > "$a"; exit 3; fi
+done
+exit 0
+''')
+    assert json.loads((outdir / 'footprints.json').read_text()) == good
+    assert done.returncode == 0
+    assert 'footprints_rc=3' in done.stdout
+    assert 'keeping the' in done.stderr
+
+
+def test_a_partial_write_never_replaces_a_good_file(tmp_path):
+    """rc 0 but an empty output -- a builder killed after opening the file."""
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    (outdir / 'footprints.json').write_text('{"keepme": true}')
+    done, _ = _run(tmp_path, '''
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${next:-}" ]; then : > "$a"; exit 0; fi
+done
+exit 0
+''')
+    assert json.loads((outdir / 'footprints.json').read_text()) == {'keepme': True}
+    assert done.returncode == 0
+
+
+def test_no_temp_file_is_left_behind(tmp_path):
+    done, outdir = _run(tmp_path, _GOOD)
+    leftovers = [p for p in os.listdir(outdir) if p.startswith('.footprints')]
+    assert leftovers == [], leftovers
+
+
+def test_the_rebuild_can_be_turned_off(tmp_path):
+    """Offline runs, or a deliberately pinned footprints.json."""
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    (outdir / 'footprints.json').write_text('{"pinned": true}')
+    done, _ = _run(tmp_path, _GOOD, FOOTPRINTS='0')
+    assert json.loads((outdir / 'footprints.json').read_text()) == {'pinned': True}
+    assert done.returncode == 0
+
+
+def test_footprints_are_rebuilt_before_the_pages_that_embed_them(tmp_path):
+    """A rebuild after the render publishes the OLD statuses for another hour."""
+    order = tmp_path / 'order.txt'
+    done, _ = _run(tmp_path, f'''
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${{next:-}}" ]; then
+    echo footprints >> {order}
+    echo '{{"program":"10678"}}' > "$a"; exit 0; fi
+done
+echo pages >> {order}
+exit 0
+''')
+    assert order.read_text().split() == ['footprints', 'pages', 'pages']
+
+
+def test_the_program_is_configurable(tmp_path):
+    seen = tmp_path / 'args.txt'
+    done, _ = _run(tmp_path, f'''
+echo "$@" >> {seen}
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${{next:-}}" ]; then echo '{{}}' > "$a"; exit 0; fi
+done
+exit 0
+''', FOOTPRINT_PROGRAM='99999')
+    assert '99999' in seen.read_text()
