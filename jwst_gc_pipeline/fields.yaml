@@ -129,15 +129,22 @@ fields:
       '2092':
         reference_catalog:
           '002': catalogs/gaia_virac2_refcat_epoch2023.21.fits
-        nvisits: 1
+        # Covers the largest visit id in use, not the count per observation
+        # (the preflight and the phase loops scan 001..nvisits for every
+        # observation of the proposal).  At `nvisits: 1` only 352 of cloudef's
+        # 792 crf frames were ever cataloged: NIRCam o002 visit 002 (320
+        # frames, both lineages) and MIRI o004 visits 002-015 / o006 visit 002
+        # were silently skipped, and every catalog on disk is
+        # `..._visit001_...`.  o004 reaches visit 015 (014 is absent), so 15.
+        nvisits: 15
         reference_frame: VIRAC2
         obsids:
           nircam: ['002']
-          # 004/006/008 are registered and NOT reduced -- no `_cal` under this
-          # tree on 2026-08-20 -- so which pointing each belongs to cannot be
-          # measured yet.  They stay with the science field until they have
-          # data to place them; assigning an unreduced observation by guess is
-          # how 3958/003 got double-claimed.
+          # 004/006/008 were registered and unreduced on 2026-08-20 -- no
+          # `_cal` under this tree -- so which pointing each belonged to could
+          # not be measured.  They are reduced now (o004 112 crf over visits
+          # 001-013+015, o006 32 over visits 001-002, o008 8 over visit 001)
+          # and stay with the science field.
           miri: ['004', '006', '008']
         glob_obsid:
           nircam: '*'
@@ -422,7 +429,17 @@ fields:
           '004': catalogs/gaia_virac2_refcat_epoch2024.63_o004.fits
           '005': catalogs/gaia_virac2_refcat_epoch2024.67_o005.fits
           '016': catalogs/gaia_virac2_refcat_epoch2025.24_o016.fits
-        nvisits: 1
+        # nvisits is scanned as visit ids 001..nvisits for EVERY observation of
+        # the proposal, so it has to cover the largest visit number any of them
+        # used, not the count of visits each one has.  o001's exposures are
+        # `jw03571001003_...` -- visit 003 -- while o003/o004/o005/o016 are all
+        # visit 001.  At nvisits: 1 the preflight scanned only visit 001 and
+        # o001 resolved to zero frames in all five bands, so its whole m12
+        # fan-out raised `RequestedFilterHasNoFramesError` (jobs 41873323_*,
+        # 2026-09-12) even though its 8 exposures per filter were on disk.
+        # The extra empty visits cost nothing: each per-visit glob is
+        # allow_empty.
+        nvisits: 3
         reference_frame: VIRAC2
         obsids:
           miri: ['001', '003', '004', '005', '016']
