@@ -617,6 +617,7 @@ def withheld_reason(pointing, bands, withheld_obs=(), withheld_bands=(),
 
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
+                      diagrams=(),
                       superseded=(), reasons=None, curated=(),
                       curated_prov=(), preview_from_curated=False):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
@@ -887,6 +888,31 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
             out.append(f"<div class=muted>RGB preview - {html.escape(cap)}."
                        f"{html.escape(provenance)} "
                        "Full-resolution images below.</div>")
+
+    # Colour-colour / colour-magnitude diagrams, drawn from the SAME merged
+    # table this page offers for download.  They sit with the previews rather
+    # than in a section of their own: they are what the catalogue looks like,
+    # next to what the sky looks like.
+    if diagrams:
+        out.append("<div class=previews>")
+        for rel, info in diagrams:
+            obs = info.get("observation")
+            kind = ('colour-colour' if info.get("kind") == 'ccd'
+                    else 'colour-magnitude')
+            cap = "%s%s - %s vs %s" % (
+                kind, f" ({obs})" if obs else "",
+                info.get("ylabel", "?"), info.get("xlabel", "?"))
+            note = ("S/N &gt; %g in every band shown, and a measurement in all "
+                    "%d - %s of %s catalogue sources. Vega magnitudes."
+                    % (info.get("snr_min", 10),
+                       len(set(info.get("bands") or ())),
+                       f'{info.get("n", 0):,}', f'{info.get("n_total", 0):,}'))
+            out.append(f"<figure><img class=preview src='{html.escape(rel)}' "
+                       f"loading=lazy alt='{html.escape(field)} {html.escape(cap)}'>"
+                       f"<figcaption class=muted>{html.escape(cap)}<br>"
+                       f"<span class=checksum>{note}</span>"
+                       f"</figcaption></figure>")
+        out.append("</div>")
 
     if multi:
         out.append("<p class=muted><b>Multi-pointing / multi-epoch field.</b> "
@@ -1623,6 +1649,33 @@ def main(argv=None):
                 print(f"  {field}: {len(unplanned)} preview(s) not in the plan, "
                       f"not shown: {', '.join(unplanned)}")
 
+        # The catalogue diagrams.  Read from the version the CATALOGUES were
+        # staged in, which is not always the latest: most fields' merged tables
+        # are still the v1.0/v1.1 ones while their imagery has been re-staged
+        # since.  Falling off the latest version would have shown no diagram
+        # for every field but the three re-staged this cycle.
+        diagram_items = []
+        for v in versions:
+            vdir = field_release_dir(field, v, args.release_root)
+            found = sorted((vdir / "preview").glob(f"{field}_ccd*.png")) \
+                if (vdir / "preview").is_dir() else []
+            if not found:
+                continue
+            for src in found:
+                meta = src.with_suffix(".json")
+                if not meta.is_file():
+                    continue
+                try:
+                    info = json.loads(meta.read_text())
+                except (OSError, ValueError):
+                    continue
+                shutil.copy2(src, assets / src.name)
+                diagram_items.append((f"assets/{src.name}", info))
+            if diagram_items:
+                if v != latest:
+                    print(f"  {field}: catalogue diagram(s) from {v}")
+                break
+
         # one page per region for the latest (<field>.html) + one per older version
         for v in versions:
             manifest = json.loads(
@@ -1642,7 +1695,8 @@ def main(argv=None):
                                      preview_from_curated=preview_from_curated,
                                      all_versions=versions,
                                      preview_version=preview_version,
-                                     previews=preview_items)
+                                     previews=preview_items,
+                                     diagrams=diagram_items)
             fname = f"{field}.html" if v == latest else f"{field}.{v}.html"
             (out_dir / fname).write_text(page)
             if v == latest:
