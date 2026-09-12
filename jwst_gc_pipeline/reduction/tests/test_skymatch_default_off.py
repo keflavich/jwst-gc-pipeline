@@ -81,7 +81,10 @@ def test_driver_skymatch_block_carries_the_rationale():
     """The block where the question arises states the bar and the cost."""
     text = SRC.read_text()
     block = text[text.index("# skymatch: OFF by default"):]
-    block = block[:block.index("image3_steps = {")]
+    # Delimiter is deliberately the assignment, not the dict literal: the
+    # outlier_detection policy moved into image3_steps_for() (#161), so the
+    # statement that ends this comment block is now a call, not a `{`.
+    block = block[:block.index("image3_steps = ")]
     assert "#419" in block and "2026-09-06" in block, (
         "the skymatch block no longer dates or cites the decision")
     assert "strong evidence" in block, (
