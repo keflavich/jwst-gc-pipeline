@@ -38,6 +38,8 @@ import json
 import os
 import re
 import sys
+from html import unescape as html_unescape
+import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -167,6 +169,85 @@ def parse_sexagesimal(value):
     sign = -1.0 if value.strip().split()[3].startswith('-') else 1.0
     dec = sign * (abs(dd) + dm / 60.0 + ds / 3600.0)
     return ra, dec
+
+
+#: STScI's per-visit status table.  This is the ONLY source that reports a
+#: SKIPPED visit -- see `fetch_visit_status`.
+VISIT_STATUS_URL = 'https://www.stsci.edu/jwst-program-info/visits/?program={program}'
+
+#: Statuses that mean the visit is done and the data exist (or will shortly).
+STATUS_EXECUTED = 'Executed'
+#: A visit the schedulers dropped.  It is NOT "not yet observed": it was on a
+#: schedule and did not run, and it needs re-planning to ever happen.
+STATUS_SKIPPED = 'Skipped'
+
+
+def _strip_tags(fragment):
+    return html_unescape(re.sub(r'<[^>]+>', '', fragment)).strip()
+
+
+def fetch_visit_status(program, url=None, timeout=90):
+    """``{observation_number: {status, hours, start, end}}`` from STScI.
+
+    WHY THIS EXISTS, given the APT file is already parsed above: the APT's
+    ``VisitStatus`` elements report the status **as of export**, and for this
+    program all 139 of them read ``IMPLEMENTATION`` even now that visits have
+    run -- so `parse_apt` alone reports 0 observed forever, exactly as this
+    module's docstring used to claim was the truth.  Checked 2026-09-12:
+    the APT gives ``{'IMPLEMENTATION': 139}`` while this table gives
+    3 Executed, 1 Skipped, 71 Scheduled, 64 Flight Ready.
+
+    It is also the only source that reports SKIPPED at all.  MAST cannot: a
+    skipped visit produces no data, and 10678's 1668 MAST rows are all
+    ``calib_level = -1`` (planned), so a MAST-driven view shows a skipped
+    pointing as indistinguishable from one that has simply not come up yet.
+    Those are very different facts for a survey's coverage.
+
+    Returns ``{}`` on any network or parse failure -- the footprint build must
+    not depend on a website being up, and the caller records which source it
+    got.  A skipped row carries only six cells (no start/end), so cells are
+    read by position with a length check rather than unpacked.
+    """
+    url = url or VISIT_STATUS_URL.format(program=program)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as fh:
+            page = fh.read().decode('utf-8', 'replace')
+    except (OSError, ValueError) as exc:
+        print('WARNING: could not fetch visit status from %s (%s); statuses '
+              'will come from the APT alone, which reports IMPLEMENTATION for '
+              'every visit of a program that has started observing'
+              % (url, exc), file=sys.stderr)
+        return {}
+    out = {}
+    for row in re.findall(r'<tr[^>]*>(.*?)</tr>', page, re.S | re.I):
+        cells = [_strip_tags(c) for c in
+                 re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.S | re.I)]
+        if len(cells) < 3 or not cells[0].isdigit():
+            continue                      # header, or a spacer row
+        number = cells[0].lstrip('0') or '0'
+        rec = {'status': cells[2], 'visit': cells[1]}
+        if len(cells) > 5 and cells[5]:
+            rec['hours'] = cells[5]
+        if len(cells) > 7:                # absent on a skipped row
+            rec['start'], rec['end'] = cells[6], cells[7]
+        # A pointing can have several visits.  Executed wins over anything
+        # else, then Skipped: a tile with one executed visit has data, and one
+        # with a skipped visit has a hole, and both matter more than "Scheduled".
+        prev = out.get(number)
+        if prev is None or _status_rank(rec['status']) > _status_rank(prev['status']):
+            out[number] = rec
+    return out
+
+
+#: Ordering for "which status wins" when a pointing has several visits.
+_STATUS_ORDER = ('Flight Ready', 'Scheduled', 'Skipped', 'Executed')
+
+
+def _status_rank(status):
+    try:
+        return _STATUS_ORDER.index(str(status).strip().title())
+    except ValueError:
+        return -1
 
 
 def parse_apt(xml_path):
@@ -343,10 +424,22 @@ def aperture_polygons(ra, dec, pa_v3, apertures, anchor, siaf_cache={}):
     return out
 
 
-def build(program, apt_path, pa_v3=None, aces_region=ACES_REGION):
+def build(program, apt_path, pa_v3=None, aces_region=ACES_REGION,
+          visit_status=None):
     parsed = parse_apt(apt_path)
     targets = parsed['targets']
     observed_targets = {o['target'] for o in parsed['observed']}
+    # STScI's table is authoritative over the APT's frozen VisitStatus, and is
+    # the only place a SKIPPED visit appears at all.  `None` means 'go fetch';
+    # `{}` (what the fetch returns on failure) means 'fall back to the APT'.
+    if visit_status is None:
+        visit_status = fetch_visit_status(program)
+    status_source = 'stsci-visit-status' if visit_status else 'apt'
+    for number, rec in visit_status.items():
+        if rec.get('status') == STATUS_EXECUTED:
+            for obs in parsed['observations']:
+                if (obs['number'].lstrip('0') or '0') == number:
+                    observed_targets.add(obs['target'])
 
     orients = [o['orient'] for o in parsed['observations'] if o['orient']]
     lo = min(o[0] for o in orients) if orients else None
@@ -396,6 +489,12 @@ def build(program, apt_path, pa_v3=None, aces_region=ACES_REGION):
                'filters': obs['filters'], 'dithered': bool(half),
                'nircam': nircam_polys,
                'miri': miri_polys}
+        vs = visit_status.get(obs['number'].lstrip('0') or '0')
+        if vs:
+            rec['status'] = vs.get('status')
+            for k in ('hours', 'start', 'end'):
+                if vs.get(k):
+                    rec[k] = vs[k]
         (observed if obs['target'] in observed_targets else planned).append(rec)
 
     dithers = {}
@@ -410,7 +509,17 @@ def build(program, apt_path, pa_v3=None, aces_region=ACES_REGION):
               'drawn per detector, at one dither position only'
               % ', '.join(sorted(unknown_dithers)), file=sys.stderr)
 
+    # Counted over the pointings actually drawn, not over the raw table: the
+    # table has a row per VISIT and a header row that survives cell-stripping,
+    # so counting it directly over-reports.
+    status_counts = {}
+    for rec in planned + observed:
+        if rec.get('status'):
+            status_counts[rec['status']] = status_counts.get(rec['status'], 0) + 1
+
     return {'program': str(program),
+            'status_source': status_source,
+            'status_counts': status_counts,
             'dither': {k: sorted(v) for k, v in dithers.items()},
             'dither_half_extent_arcsec': DITHER_HALF_EXTENT,
             'title': 'JWST/NIRCam Legacy Survey of the Galactic Center',
@@ -432,6 +541,11 @@ def main(argv=None):
                     help='re-download the APT file and re-extract, rather than '
                          'reusing a cached copy (needed to pick up visits that '
                          'have executed since)')
+    ap.add_argument('--no-visit-status', action='store_true',
+                    help='skip the STScI visit-status fetch and take statuses '
+                         'from the APT alone (offline builds; the APT reports '
+                         'IMPLEMENTATION for every visit, so this reports no '
+                         'executed and no skipped pointings)')
     ap.add_argument('--pa-v3', type=float, default=None,
                     help='override the PA_V3 used (default: midpoint of the '
                          'program OrientRange)')
@@ -447,11 +561,14 @@ def main(argv=None):
         with zipfile.ZipFile(aptx) as zf:
             zf.extract(xml_name, workdir)
 
-    data = build(args.program, xml_path, pa_v3=args.pa_v3)
+    data = build(args.program, xml_path, pa_v3=args.pa_v3,
+                 visit_status={} if args.no_visit_status else None)
     with open(args.out, 'w') as fh:
         json.dump(data, fh)
+    counts = ', '.join(f'{k} {v}' for k, v in sorted(data['status_counts'].items()))
     print(f"{args.out}: {data['n_planned']} planned, {data['n_observed']} observed "
           f"(PA_V3 {data['pa_v3']:.1f}°, range {data['pa_v3_range']})")
+    print(f"  visit status [{data['status_source']}]: {counts or 'none'}")
     return 0
 
 

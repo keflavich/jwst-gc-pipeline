@@ -154,6 +154,25 @@ CSS = """
                  border-bottom: 1px solid rgba(255,255,255,.1);
                  font-family: var(--mono); }
 .gcm-sky-sec { padding: 6px 9px; border-bottom: 1px solid rgba(255,255,255,.07); }
+/* The selected tile.  `!important` because the colour and stroke-width are set
+   as PRESENTATION ATTRIBUTES on the parent <g> (see `_layer`), and a class
+   rule loses to those unless it is marked -- the highlight silently did
+   nothing without it. */
+.gcm-tile-hi path { stroke: #ffffff !important; stroke-width: 2.6 !important;
+                    fill-opacity: .34 !important; }
+.gcm-tile-dim { opacity: .28; }
+.gcm-sky-pick { width: 100%; box-sizing: border-box; font-family: var(--mono);
+                font-size: 11px; padding: 3px 4px; border-radius: 3px;
+                background: rgba(255,255,255,.07); color: #dfe9ec;
+                border: 1px solid rgba(255,255,255,.18); }
+.gcm-sky-pick option { background: #0d1418; color: #dfe9ec; }
+.gcm-sky-stat { font-family: var(--mono); font-size: 10.5px; line-height: 1.5;
+                color: #cfdde2; }
+.gcm-sky-stat b { font-weight: 600; }
+.gcm-sky-stat .ex { color: #4ade80; }
+.gcm-sky-stat .sk { color: #ff6b6b; }
+.gcm-sky-stat a { color: inherit; text-decoration: underline dotted;
+                  cursor: pointer; }
 .gcm-sky-sec:last-child { border-bottom: 0; }
 .gcm-sky-lab { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
                color: #7d919a; margin-bottom: 4px; font-family: var(--mono); }
@@ -674,8 +693,13 @@ def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
         if not path:
             continue
         count += 1
-        body.append('<g><title>%s</title><path d="%s"/></g>'
-                    % (_esc(_pointing_title(pointing)), path))
+        # data-obs is what the tile picker below keys on.  It is the
+        # observation NUMBER rather than the array index: the two coincide only
+        # while every pointing is drawable, and a pointing dropped for want of
+        # a target coordinate would silently shift every tile after it.
+        body.append('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
+                    % (_esc(pointing.get('number') or ''),
+                       _esc(_pointing_title(pointing)), path))
     return ('<g id="%s" class="gcm-lyr" data-label="%s" stroke="%s" fill="%s" '
             'fill-opacity="%s" stroke-width="1.1" vector-effect="non-scaling-stroke">'
             '%s</g>' % (layer_id, _esc(label), color, color,
@@ -841,6 +865,91 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                 f" position is drawn, so the covered area is larger than these"
                 f" outlines.")
 
+    # ---- tile roster (the picker) and the execution ledger ----------------
+    # Built from BOTH groups: `planned` and `observed` are a display split, not
+    # an identity, and a tile has to stay findable by number whichever side of
+    # it it lands on.  Sorted numerically -- string order puts 10 before 2 and
+    # made the picker unusable for a 139-tile survey.
+    tiles = []
+    for group in ('planned', 'observed'):
+        for rec in (footprints.get(group) or []):
+            if not isinstance(rec, dict):
+                continue
+            num = _safe_num(rec.get('number'))
+            tiles.append({
+                'n': int(num) if num is not None else None,
+                'number': str(rec.get('number') or ''),
+                'target': str(rec.get('target') or ''),
+                'status': str(rec.get('status') or ''),
+                'ra': _safe_num(rec.get('ra')),
+                'dec': _safe_num(rec.get('dec')),
+                'start': str(rec.get('start') or ''),
+            })
+    tiles = sorted([t for t in tiles if t['n'] is not None],
+                   key=lambda t: t['n'])
+
+    def _by_status(name):
+        return [t for t in tiles if t['status'].strip().lower() == name]
+
+    executed, skipped = _by_status('executed'), _by_status('skipped')
+    status_counts = footprints.get('status_counts') or {}
+    status_source = footprints.get('status_source') or 'apt'
+
+    def _tile_links(items, cls):
+        return ', '.join(
+            '<a data-goto="%s" title="%s">%s</a>'
+            % (_esc(t['number']),
+               _esc('%s%s' % (t['target'], '  ' + t['start'] if t['start'] else '')),
+               _esc(t['number']))
+            for t in items) or '<span class="gcm-sky-empty">none</span>'
+
+    if status_counts:
+        ledger_rows = [
+            '<div><b class="ex">Executed %d</b> &nbsp;%s</div>'
+            % (len(executed), _tile_links(executed, 'ex')),
+            '<div><b class="sk">Skipped %d</b> &nbsp;%s</div>'
+            % (len(skipped), _tile_links(skipped, 'sk')),
+        ]
+        rest = ', '.join('%s %d' % (k, v) for k, v in sorted(status_counts.items())
+                         if k.strip().lower() not in ('executed', 'skipped'))
+        if rest:
+            ledger_rows.append('<div class="gcm-sky-lab" style="margin-top:4px">'
+                               '%s</div>' % _esc(rest))
+        ledger = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Execution'
+                  '</div><div class="gcm-sky-stat">%s</div></div>'
+                  % ''.join(ledger_rows))
+    else:
+        # No status source reached: say that, rather than showing "Executed 0",
+        # which asserts a fact that was never measured.
+        ledger = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Execution'
+                  '</div><div class="gcm-sky-stat gcm-sky-empty">visit status '
+                  'unavailable</div></div>')
+
+    status_note = ("STScI's per-visit status table"
+                   if status_source == 'stsci-visit-status'
+                   else 'the APT visit status, which reports IMPLEMENTATION '
+                        'for every visit and so cannot show a visit that has '
+                        'run or been skipped')
+
+    def _opt(t):
+        bits = [t['number']]
+        if t['target']:
+            bits.append(t['target'])
+        if t['status']:
+            bits.append(t['status'])
+        return '<option value="%s">%s</option>' % (
+            _esc(t['number']), _esc(' — '.join(bits)))
+
+    picker = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Tile</div>'
+              '<select class="gcm-sky-pick" id="gcm-sky-tile">'
+              '<option value="">all %d tiles</option>%s</select></div>'
+              % (len(tiles), ''.join(_opt(t) for t in tiles)))
+
+    tile_js = [{'n': t['number'], 'ra': t['ra'], 'dec': t['dec'],
+                'target': t['target'], 'status': t['status']}
+               for t in tiles]
+    tiles_json = json.dumps(tile_js)
+
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
 
     def _survey_button(index, name, url, note):
@@ -887,7 +996,7 @@ prime and so covers <em>different sky</em>, which is why it is drawn separately.
 request the 180° flip, so these positions are <em>indicative</em>: across the
 allowed range alone the MIRI parallel moves ~125″, about the width of a NIRCam
 module, and a flip moves it ~15′.{dither_note} <strong>{n_observed}</strong>
-pointings observed so far, from the APT visit status.</p>
+pointings observed so far, from {status_note}.</p>
 
 <div class="gcm-sky-wrap">
   <div id="gcm-aladin" class="gcm-sky-off"></div>
@@ -916,6 +1025,9 @@ pointings observed so far, from the APT visit status.</p>
           <span class="gcm-sky-count {observed_cls}">{n_observed or 'none yet'}</span></button>
       </div>
     </div>
+
+    {picker}
+    {ledger}
 
     <div class="gcm-sky-sec">
       <div class="gcm-sky-lab">Other surveys (context)</div>
@@ -994,6 +1106,11 @@ interactive view adds sky imagery you can pan across.
     'rgps-deep': ['stat-rgps-deep']
   }};
 
+  var TILES = {tiles_json};
+  // number -> its polygons, filled when footprints.json arrives.  The picker
+  // needs this to draw the highlight in Aladin; the static map highlights by
+  // class instead and so works before any fetch.
+  var FP = {{ byNumber: {{}} }};
   var svg = document.getElementById('gcm-sky-static');
   var note = document.getElementById('gcm-sky-note');
   var loadBtn = document.getElementById('gcm-sky-load');
@@ -1015,7 +1132,13 @@ interactive view adds sky imagery you can pan across.
       }});
     }});
     if (L) {{
-      Object.keys(L).forEach(function (k) {{ on[k] ? L[k].show() : L[k].hide(); }});
+      Object.keys(L).forEach(function (k) {{
+        // `pick` is the tile highlight: it belongs to the picker, not to a
+        // layer toggle, and `on.pick` is undefined -- so the generic loop
+        // would hide it the first time any toggle was touched.
+        if (k === 'pick') {{ return; }}
+        on[k] ? L[k].show() : L[k].hide();
+      }});
     }}
   }}
 
@@ -1031,6 +1154,79 @@ interactive view adds sky imagery you can pan across.
       on[pair[1]] = !on[pair[1]];
       el.classList.toggle('on', on[pair[1]]);
       applyLayers();
+    }});
+  }});
+
+  // ------------------------------------------------------------ tile picker
+  // Highlighting is done by CLASS on the static <g data-obs>, not by rewriting
+  // colours: the layer toggles own the colours, and a picker that set them
+  // directly would fight the toggles and win, leaving a tile lit after its
+  // layer was switched off.
+  var picker = document.getElementById('gcm-sky-tile');
+  var selected = '';
+
+  function tileByNumber(n) {{
+    for (var i = 0; i < TILES.length; i++) {{
+      if (String(TILES[i].n) === String(n)) {{ return TILES[i]; }}
+    }}
+    return null;
+  }}
+
+  function applyTile() {{
+    if (!svg) {{ return; }}
+    var groups = svg.querySelectorAll('g[data-obs]');
+    for (var i = 0; i < groups.length; i++) {{
+      var mine = selected && groups[i].getAttribute('data-obs') === selected;
+      groups[i].classList.toggle('gcm-tile-hi', !!mine);
+      // Dim the rest rather than hiding them: on a 139-tile mosaic the point
+      // of picking one is to see WHERE it sits, which needs its neighbours.
+      groups[i].classList.toggle('gcm-tile-dim', !!selected && !mine);
+    }}
+    if (L && L.pick) {{
+      L.pick.removeAll();
+      var t = selected ? tileByNumber(selected) : null;
+      if (t && FP) {{
+        (FP.byNumber[selected] || []).forEach(function (poly) {{
+          L.pick.add(A.polygon(poly));
+        }});
+      }}
+    }}
+  }}
+
+  function gotoTile(n) {{
+    var t = tileByNumber(n);
+    if (!t) {{ return; }}
+    selected = String(n);
+    if (picker) {{ picker.value = selected; }}
+    applyTile();
+    if (aladin && t.ra !== null && t.dec !== null) {{
+      aladin.gotoRaDec(t.ra, t.dec);
+    }} else if (svg && t.ra !== null) {{
+      // Static map: centre the viewBox on the tile's own drawn bbox, which is
+      // in SVG user units -- the sky coordinates cannot be used directly here.
+      var g = svg.querySelector('g[data-obs="' + CSS.escape(selected) + '"]');
+      if (g && g.getBBox) {{
+        var b = g.getBBox();
+        var pad = Math.max(b.width, b.height) * 6;
+        vb = [b.x + b.width / 2 - (b.width + pad) / 2,
+              b.y + b.height / 2 - (b.height + pad) / 2,
+              b.width + pad, b.height + pad];
+        setVB();
+      }}
+    }}
+  }}
+
+  if (picker) {{
+    picker.addEventListener('change', function () {{
+      if (!picker.value) {{ selected = ''; applyTile(); return; }}
+      gotoTile(picker.value);
+    }});
+  }}
+  // The execution ledger's numbers are clickable shortcuts into the same path.
+  document.querySelectorAll('.gcm-sky-stat a[data-goto]').forEach(function (a) {{
+    a.addEventListener('click', function (ev) {{
+      ev.preventDefault();
+      gotoTile(a.getAttribute('data-goto'));
     }});
   }});
 
@@ -1295,17 +1491,28 @@ interactive view adds sky imagery you can pan across.
         'rgps-wide': layer('RGPS wide area', C['rgps-wide'], 1.2),
         'rgps-tds': layer('RGPS time domain', C['rgps-tds'], 1.2),
         'rgps-deep': layer('RGPS deep fields', C['rgps-deep'], 1.2),
-        aces: layer('ACES coverage', C.aces, 1.6)
+        aces: layer('ACES coverage', C.aces, 1.6),
+        // Drawn last so it sits above the layer it duplicates.
+        pick: layer('selected tile', '#ffffff', 2.6)
       }};
 
+      function remember(p) {{
+        var key = String(p.number || '');
+        if (!key) {{ return; }}
+        FP.byNumber[key] = (p.nircam || []).concat(p.miri || []);
+      }}
       (fp.planned || []).forEach(function (p) {{
+        remember(p);
         (p.nircam || []).forEach(function (poly) {{ L.nircam.add(A.polygon(poly)); }});
         (p.miri || []).forEach(function (poly) {{ L.miri.add(A.polygon(poly)); }});
       }});
       (fp.observed || []).forEach(function (p) {{
+        remember(p);
         (p.nircam || []).forEach(function (poly) {{ L.observed.add(A.polygon(poly)); }});
         (p.miri || []).forEach(function (poly) {{ L.observed.add(A.polygon(poly)); }});
       }});
+      // A tile chosen BEFORE the interactive view loaded stays chosen after it.
+      if (selected) {{ applyTile(); }}
       Object.keys(ROMAN.tiles || {{}}).forEach(function (name) {{
         var t = ROMAN.tiles[name];
         (t.spring || []).forEach(function (poly) {{ L.spring.add(A.polygon(poly)); }});
