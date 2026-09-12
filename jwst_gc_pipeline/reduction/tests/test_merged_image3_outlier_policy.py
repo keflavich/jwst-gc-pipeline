@@ -10,8 +10,11 @@ flags real bright-star spikes and the dark inter-spike gaps as OUTLIER (PR #180)
 The merged pass hand-rolled its own ``steps={'tweakreg': tweakreg_parameters}``
 and so kept running the step at pipeline defaults, on every field, ignoring
 ``--run-outlier-detection`` in both directions.  On /orange that is visible in
-the products: 178 of 217 `-merged_i2d.fits` carry ``S_OUTLIR = COMPLETE`` while
-their `-nrca_i2d` / `-nrcb_i2d` siblings from the same run carry ``SKIPPED``.
+the products: 195 of 295 readable `-merged_i2d.fits` carry
+``S_OUTLIR = COMPLETE`` while their `-nrca_i2d` / `-nrcb_i2d` siblings from the
+same run carry ``SKIPPED`` (censused 2026-09-12 with `find -L`; the field dirs
+under /orange are symlinks, so a census that does not follow them sees 238 of
+the 296 mosaics and understates this).
 
 These tests read the source and exercise the extracted helper rather than driving
 Image3, which needs CRDS, real exposures and ~30 min.  What went wrong was that
@@ -157,6 +160,15 @@ def test_the_merged_call_passes_the_skip_flag_through():
 
     Hard-coding ``True`` there would make the two passes agree by default and
     still leave `--run-outlier-detection` unable to reach the merged mosaic.
+
+    Checked BY KEYWORD, and the call sites pass by keyword, because position
+    alone does not pin it.  With positional args,
+
+        image3_steps_for(tweakreg_parameters, 'merged', skip_outlier_detection)
+
+    still mentions `skip_outlier_detection`, so a name-membership test passes --
+    while the pass skips unconditionally ('merged' is truthy) and ignores
+    `--run-outlier-detection`, which is exactly the defect this test exists for.
     """
     tree = _tree()
     calls = [n for n in ast.walk(tree)
@@ -164,10 +176,20 @@ def test_the_merged_call_passes_the_skip_flag_through():
              and n.func.id == HELPER]
     assert len(calls) >= 2, f"{HELPER}() is called {len(calls)} time(s), expected >= 2"
     for c in calls:
-        names = {a.id for a in c.args if isinstance(a, ast.Name)}
-        assert "skip_outlier_detection" in names, (
-            f"{HELPER}() call at line {c.lineno} does not forward "
-            f"skip_outlier_detection, so --run-outlier-detection cannot reach it")
+        kw = {k.arg: k.value for k in c.keywords if k.arg}
+        assert "skip_outlier_detection" in kw, (
+            f"{HELPER}() call at line {c.lineno} does not pass "
+            f"skip_outlier_detection BY KEYWORD; positionally it cannot be "
+            f"distinguished from `label`, and transposing the two makes the pass "
+            f"ignore --run-outlier-detection while still naming the flag")
+        v = kw["skip_outlier_detection"]
+        assert isinstance(v, ast.Name) and v.id == "skip_outlier_detection", (
+            f"{HELPER}() call at line {c.lineno} hard-codes "
+            f"skip_outlier_detection={ast.dump(v)}, so --run-outlier-detection "
+            f"cannot reach it")
+        assert "label" in kw, (
+            f"{HELPER}() call at line {c.lineno} does not name its label=; keep "
+            f"both keyword so neither can slide into the other's position")
 
 
 def test_the_merged_pass_still_leaves_skymatch_alone():
