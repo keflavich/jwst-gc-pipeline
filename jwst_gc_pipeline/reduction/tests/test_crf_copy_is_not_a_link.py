@@ -75,7 +75,11 @@ def _skip_outlier_crf_branch():
 
 
 def _qualified_calls(node):
-    """``{(module, attr)}`` for every ``module.attr(...)`` call under ``node``."""
+    """``{(module, attr)}`` for every call under ``node``.
+
+    A bare ``link(...)`` (from ``from os import link``) is recorded as
+    ``(None, "link")`` so an imported name cannot walk past the guard.
+    """
     found = set()
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Call):
@@ -85,7 +89,14 @@ def _qualified_calls(node):
             found.add((fn.value.id, fn.attr))
         elif isinstance(fn, ast.Attribute):
             found.add((None, fn.attr))
+        elif isinstance(fn, ast.Name):
+            found.add((None, fn.id))
     return found
+
+
+def _bare_names(mapping):
+    """``{attr}`` for the qualified-call table, for the bare-import check."""
+    return {attr for _mod, attr in mapping}
 
 
 def test_the_crf_branch_copies():
@@ -105,6 +116,10 @@ def test_the_crf_branch_does_not_alias_the_member_frame():
     """
     calls = _qualified_calls(_skip_outlier_crf_branch())
     aliased = {call: why for call, why in _ALIASING_CALLS.items() if call in calls}
+    # ... and the same names reached bare, via `from os import link`.
+    bare = {(None, attr) for attr in _bare_names(_ALIASING_CALLS)}
+    aliased.update({call: _ALIASING_CALLS[('os', call[1])]
+                    for call in bare & calls if ('os', call[1]) in _ALIASING_CALLS})
     assert not aliased, (
         f"the skip_outlier_detection crf branch uses {sorted(aliased.values())} "
         f"({sorted('.'.join(c) for c in aliased)}). The member frame is written "
