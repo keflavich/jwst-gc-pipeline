@@ -174,29 +174,13 @@ def test_the_legacy_unscoped_name_is_still_expressible():
     assert _marker_name(frame, 'f212n', frame.split('_')[3], 'm12') == live
 
 
-def test_the_merged_pass_DOES_resume_on_a_PER_MODULE_marker(tmp_path):
-    """Reversed 2026-09-11 (issue #840).
-
-    The marker key stays merge-scoped -- that is what fixed the 1440-marker
-    collision on sgrb2, where a detector-keyed name was written three times and
-    did not grow while the merged pass ran.  What changed is what a scoped
-    marker from ANOTHER pass is taken to MEAN.
-
-    A fit writes ONE product, keyed by the detector, with no merge token in its
-    name (``file_module = file_detector`` where ``frame_args`` is built).  So an
-    ``nrca`` marker is a receipt for exactly the file the ``merged`` pass would
-    recompute -- byte for byte, since the merge label never reaches the fit.
-    Refusing it made the standard ``nrca,nrcb,merged`` fit every frame TWICE:
-    crowded_l3 carried 560 markers for 280 frames, and g028's m12 logged 560
-    photometry completions for 280 frames and 280 catalogs.
-
-    The original worry -- "silently produce no merged catalog" -- does not
-    follow: ``select_resumable_frames``' ``resumed_ok`` is extended into
-    ``overlapping_now``, which becomes ``frame_cache`` and feeds the merge, so a
-    resumed frame reaches the merged catalog like a freshly fitted one.
-
-    What must still NOT resume is a marker that cannot say whether any pass ran
-    at all -- see ``test_an_UNSCOPED_legacy_marker_does_not_resume_either``."""
+def test_the_merged_pass_does_not_resume_on_a_PER_MODULE_marker(tmp_path):
+    """THE defect this scoping exists for.  `merged` fits the SAME files as
+    nrca/nrcb with the same detector token, so a detector-keyed marker was
+    written three times under one name -- 1440 on the live sgrb2 tree,
+    saturated at 10 detectors x 144 and NOT growing while the merged pass ran.
+    Resuming on that would skip every merged frame whose nrca pass finished and
+    silently produce no merged catalog."""
     import tempfile
     d = tempfile.mkdtemp()
     args = _args(tmp_path, FRAMES)
@@ -204,9 +188,8 @@ def test_the_merged_pass_DOES_resume_on_a_PER_MODULE_marker(tmp_path):
         (open(os.path.join(d, _marker_name(f, 'f212n', perframe_detector_token(f), 'm12',
                                            merge='nrca')), 'w').close())
     todo, done, _ = _select(args, d, 'f212n', 'm12', resume=True, merge='merged')
-    assert sorted(done) == sorted(f['filename'] for f in args), (
-        'the merged pass refitted frames the nrca pass had already fitted')
-    assert todo == []
+    assert done == [], 'a per-module marker must not resume the merged pass'
+    assert len(todo) == len(FRAMES)
 
 
 def test_an_UNSCOPED_legacy_marker_does_not_resume_either(tmp_path):
@@ -390,13 +373,10 @@ def test_a_post_562_marker_resumes(tmp_path):
     assert todo == []
 
 
-def test_the_legacy_token_stays_LABEL_SCOPED(tmp_path):
-    """Accepting the old detector spelling must not also re-admit the UNSCOPED
-    name: a marker that cannot say whether any pass wrote it must never resume.
-
-    Since #840 a label-scoped marker resumes across labels, so the assertion
-    here is that the legacy spelling still carries its label (and so resumes),
-    not that it is confined to its own pass."""
+def test_the_legacy_token_stays_MERGE_SCOPED(tmp_path):
+    """Accepting the old detector spelling must not also re-admit the unscoped
+    name: a marker that cannot say which pass wrote it would let the merged pass
+    resume on the nrca pass's work (the 1440-marker collision)."""
     d = _marker_dir(tmp_path)
     frame = _affected_frame(tmp_path)
     legacy = perframe_legacy_detector_token(frame)
@@ -411,10 +391,8 @@ def test_the_legacy_token_stays_LABEL_SCOPED(tmp_path):
     assert ok == [frame], 'precondition: the marker resumes for its OWN pass'
     todo, ok, _ = _select([{'filename': frame}], str(d), 'f277w', 'm12',
                           resume=True, merge='merged')
-    assert ok == [frame], (
-        'a LABEL-scoped legacy marker is still a receipt for the same '
-        'detector-keyed file, so it resumes across labels (#840)')
-    assert todo == []
+    assert ok == []
+    assert todo == [{'filename': frame}]
 
 
 def test_the_WRITER_never_emits_the_legacy_token():
