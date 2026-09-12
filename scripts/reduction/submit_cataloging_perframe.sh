@@ -25,6 +25,23 @@
 # NOTE (MIRI): all-MIRI multifilter runs drop m7 internally.  Set PHASES
 # explicitly (e.g. PHASES="m12 m3 m4 m5 m6") for those.
 #
+# PER-FILTER FINALIZE (opt-in) -- PER_FILTER_FINALIZE=1.
+#
+# The finalize is ONE job that walks every (filter x module) combo serially, so
+# a big field's barrier is the sum of its filters: sgrb2 5365/001's m3 finalize
+# measured 43.2 h over 33 combos, of which F187N alone was 13.1 h.  With the
+# flag set, m3-m6 submit ONE finalize PER FILTER instead, all of them afterok on
+# the same fan-out, and the next phase's fan-out waits on afterok of ALL of them.
+# The phase barrier is unchanged -- it is now a list dependency rather than a
+# single job id -- and so is the science: nothing in m3-m6 reads another
+# filter's products (the cross-band merge and the cross-filter astrometry gate
+# are gated to m7).
+#
+# m7 is NEVER split and neither is m12: m7 IS the cross-band merge, and a
+# single-filter run does not even build an m7 phase; m12 runs the correcting
+# astrometry checkpoint, which writes the field's shared offsets CSV with no
+# locking.  Asking for either is refused rather than quietly ignored.
+#
 # RESTARTING a chain that hit its wall clock:
 #
 #   SKIP_IF_DONE=1 scripts/reduction/submit_cataloging_perframe.sh ...
@@ -233,12 +250,68 @@ if [ -z "${PHASES:-}" ]; then
     [ "${#_FA[@]}" -gt 1 ] && PHASES="$PHASES m7"
 fi
 
+# PER-FILTER FINALIZE (opt-in).  See the header.  OFF by default: sgrb2 is
+# mid-chain and the 10678 tiles are landing, so a run that does not ask for the
+# split submits exactly the jobs it submits today.
+PER_FILTER_FINALIZE=${PER_FILTER_FINALIZE:-0}
+
+# The phases whose finalize MAY be split, and the ones that may never be.  This
+# is a fixed list rather than a free-form knob because the two exclusions are
+# correctness, not taste:
+#
+#   m7   IS the cross-band merge (cataloging._do_crossband) and the cross-filter
+#        astrometry anchor gate, both of which read every filter's m6 vetted
+#        catalog.  A single-filter run does not even build an m7 phase --
+#        `phases` gets m7 only when len(filternames) > 1 -- so a split m7 dies
+#        with "--manual-start-phase='m7' not in phases ['m12','m3','m4','m5','m6']".
+#
+#   m12  runs the CORRECTING astrometry checkpoint (stage in CORRECTION_STAGES),
+#        whose correction path calls update_offsets_table on the field's single
+#        shared offsets CSV with no locking.  Eleven concurrent writers to
+#        Offsets_JWST_<field>_VIRAC2locked.csv is the offsets-curation collapse
+#        this campaign has already paid for once.
+#
+# m3-m6 have neither property: every path the per-phase body touches is keyed
+# (module, filter) -- bg_for_next, resid_i2d_for_next, prev_merged_for,
+# satstar_overrides, the merged-catalog and data-i2d paths -- the marker verify
+# and the module-coverage check are both scoped to the run's own filters, and
+# the astrometry checkpoint at a FROZEN stage records to a per-filter file
+# (checkpoint_<stage>_<filter><obs>_latest.json, written via a per-filter tmp
+# name) and corrects nothing.
+_SPLITTABLE_PHASES="m3 m4 m5 m6"
+
+PER_FILTER_FINALIZE_PHASES=${PER_FILTER_FINALIZE_PHASES:-$_SPLITTABLE_PHASES}
+
+_in_list() {             # $1 = needle, $2 = space-separated haystack
+    case " $2 " in *" $1 "*) return 0;; *) return 1;; esac
+}
+
+if [ "$PER_FILTER_FINALIZE" = "1" ]; then
+    for _ph in $PER_FILTER_FINALIZE_PHASES; do
+        if ! _in_list "$_ph" "$_SPLITTABLE_PHASES"; then
+            echo "REFUSING: PER_FILTER_FINALIZE_PHASES names '$_ph', which cannot" >&2
+            echo "  be split per filter.  Splittable: $_SPLITTABLE_PHASES" >&2
+            echo "  m7 is the cross-band merge (a one-filter run has no m7 phase at" >&2
+            echo "  all); m12 runs the correcting astrometry checkpoint, which writes" >&2
+            echo "  the field's single shared offsets table with no locking." >&2
+            exit 4
+        fi
+    done
+fi
+
+_split_finalize() {      # $1 = phase -> 0 when this phase's finalize is split
+    [ "$PER_FILTER_FINALIZE" = "1" ] || return 1
+    _in_list "$1" "$PER_FILTER_FINALIZE_PHASES"
+}
+
 # Where _pipe_root.sh lives.  sbatch copies the batch script to a spool
 # dir, so the job cannot always find its own siblings; hand it the path.
 export GC_SCRIPTS_DIR="$HERE"
 COMMON="ALL,PROPOSAL=$PROPOSAL,FIELD=$FIELD,TARGET=$TARGET"
 COMMON="$COMMON,EACH_SUFFIX=$EACH_SUFFIX,MAX_GROUP_SIZE=$MAX_GROUP_SIZE,NSHARDS=$NSHARDS"
-COMMON="$COMMON,FILTERS=$FILTERS"
+# FILTERS is NOT in COMMON: a split finalize overrides it with its own single
+# filter, and two FILTERS= entries in one --export list is not a documented
+# precedence.  Every submit site below appends the one it wants.
 [ -n "$PIPE_ROOT" ] && COMMON="$COMMON,PIPE_ROOT=$PIPE_ROOT"
 [ -n "$CROSSBAND_REF" ] && COMMON="$COMMON,CROSSBAND_REF=$CROSSBAND_REF"
 
@@ -256,6 +329,10 @@ fi
 
 echo "Per-frame chain: target=$TARGET $PROPOSAL/$FIELD modules=$MODULES"
 echo "  phases: $PHASES   NSHARDS=$NSHARDS   filters: $FILTERS"
+if [ "$PER_FILTER_FINALIZE" = "1" ]; then
+    echo "  per-filter finalize: ON for phases [$PER_FILTER_FINALIZE_PHASES]" \
+         "-- ${#_FA[@]} finalize jobs each; every other phase stays whole"
+fi
 SB="$HERE/submit_cataloging_perframe_phase.sbatch"
 
 for ph in $PHASES; do
@@ -266,16 +343,40 @@ for ph in $PHASES; do
         --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-fanout" \
         --array=0-$((NSHARDS-1)) \
         --cpus-per-task="$FANOUT_CPUS" --mem="$FANOUT_MEM" --time="$ph_fanout_time" \
-        --export="$COMMON,PHASE=$ph,MODE=fanout,PARALLEL_WORKERS=$FANOUT_CPUS" \
+        --export="$COMMON,FILTERS=$FILTERS,PHASE=$ph,MODE=fanout,PARALLEL_WORKERS=$FANOUT_CPUS" \
         "$SB")
     echo "  $ph fan-out array : $A  (0-$((NSHARDS-1)))  --time=$ph_fanout_time $ph_fanout_why${dep_arg:+  [$dep_arg]}"
-    B=$(sbatch --parsable --dependency=afterok:"$A" \
-        --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-finalize" \
-        --cpus-per-task="$FINALIZE_CPUS" --mem="$FINALIZE_MEM" --time="$ph_finalize_time" \
-        --export="$COMMON,PHASE=$ph,MODE=finalize,PARALLEL_WORKERS=$FINALIZE_CPUS" \
-        "$SB")
-    echo "  $ph finalize      : $B  (afterok:$A)  --time=$ph_finalize_time $ph_finalize_why"
-    prev_dep="afterok:$B"
+
+    # The fan-out is NOT split: one array already covers every frame of every
+    # filter, and its shard predicate needs the whole exposure list to partition.
+    if _split_finalize "$ph"; then
+        # One finalize per filter, all afterok on the SAME fan-out, and the
+        # PHASE BARRIER is the list of every one of them.  Dropping any id from
+        # this dependency would let phase p+1 start reading a filter whose
+        # barrier had not run -- a stale merged catalog and residual/bg seed for
+        # that filter, silently, with no missing-marker crash to catch it,
+        # because the marker verify only covers the filters a job was given.
+        fin_ids=""
+        for filt in "${_FA[@]}"; do
+            B=$(sbatch --parsable --dependency=afterok:"$A" \
+                --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-finalize-${filt}" \
+                --cpus-per-task="$FINALIZE_CPUS" --mem="$FINALIZE_MEM" --time="$ph_finalize_time" \
+                --export="$COMMON,FILTERS=$filt,PHASE=$ph,MODE=finalize,PARALLEL_WORKERS=$FINALIZE_CPUS" \
+                "$SB")
+            fin_ids="${fin_ids}:$B"
+            echo "  $ph finalize $filt : $B  (afterok:$A)  --time=$ph_finalize_time $ph_finalize_why"
+        done
+        prev_dep="afterok${fin_ids}"
+        echo "  $ph barrier       : ${#_FA[@]} finalize jobs -> next phase waits on $prev_dep"
+    else
+        B=$(sbatch --parsable --dependency=afterok:"$A" \
+            --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-finalize" \
+            --cpus-per-task="$FINALIZE_CPUS" --mem="$FINALIZE_MEM" --time="$ph_finalize_time" \
+            --export="$COMMON,FILTERS=$FILTERS,PHASE=$ph,MODE=finalize,PARALLEL_WORKERS=$FINALIZE_CPUS" \
+            "$SB")
+        echo "  $ph finalize      : $B  (afterok:$A)  --time=$ph_finalize_time $ph_finalize_why"
+        prev_dep="afterok:$B"
+    fi
 done
 
 echo "DONE.  Final phase finalize job is the last printed B; watch: squeue -u \$USER -n gc_pf"

@@ -189,6 +189,48 @@ reconstructed from disk, plus the Spitzer-prior path);
 pass `DEBLEND_SATSTARS=1` to carry the ZEROFRAME deblend through every
 per-frame stage.
 
+#### Per-filter finalize (`PER_FILTER_FINALIZE=1`, opt-in)
+
+The fan-out is split per FRAME; the finalize is not split at all. It walks every
+(filter x module) combo serially, so on a big field the barrier is the sum of
+its filters. Measured on sgrb2 5365/001's m3 finalize (job 41424864,
+2026-09-09/11): **43.2 h over 33 combos**, of which F187N alone was 13.1 h and
+the five LW filters together were under 9 h. The time inside it is 65% merge +
+astrometry checkpoint + vetting and 35% the per-frame render loop.
+
+```
+PER_FILTER_FINALIZE=1 scripts/reduction/submit_cataloging_perframe.sh
+```
+
+submits **one finalize per filter** for `m3 m4 m5 m6` instead of one per phase,
+all `afterok` on the same fan-out array, named
+`<target><program>-o<obsid>-<phase>-finalize-<FILTER>`. The phase barrier is
+unchanged in meaning: the next phase's fan-out waits on `afterok` of **every**
+one of them. `PER_FILTER_FINALIZE_PHASES` narrows the set (e.g. `"m4"`).
+
+Resources are untouched -- each per-filter job asks the same
+`--cpus-per-task/--mem/--time` as the whole-field finalize it replaces, which is
+an over-ask for a small filter. Read `sacct -o JobID,JobName%40,MaxRSS,Elapsed`
+after the first split phase and retune with `FINALIZE_MEM` / `FINALIZE_TIME_<PHASE>`.
+
+**m7 and m12 are never split**, and asking for either is refused (exit 4):
+
+* `m7` **is** the cross-band merge (`cataloging._do_crossband`) and the
+  cross-filter astrometry anchor gate, both of which read every filter's m6
+  vetted catalog. A one-filter run does not even build an m7 phase -- `phases`
+  appends m7 only when `len(filternames) > 1` -- so a split m7 dies on
+  `--manual-start-phase='m7' not in phases ['m12','m3','m4','m5','m6']`.
+* `m12` runs the **correcting** astrometry checkpoint, whose correction path
+  calls `update_offsets_table` on the field's one shared offsets CSV with no
+  locking. (sgrb2's eleven per-filter m12 finalizes of 2026-08-22 did exactly
+  that; F212N and F300M wrote it concurrently.)
+
+m3-m6 have neither property: every path the per-phase body touches is keyed
+`(module, filter)`, the strict marker verify and the module-coverage check are
+both scoped to the run's own filters, and the astrometry checkpoint at a FROZEN
+stage records to a per-filter file and corrects nothing. Pinned by
+`jwst_gc_pipeline/tests/test_per_filter_finalize_barrier.py`.
+
 ## Overriding the target
 
 ```
