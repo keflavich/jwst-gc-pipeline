@@ -1114,6 +1114,25 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                     print(f"  WARNING: member frame {_mb} missing; crf NOT written",
                           flush=True)
                     continue
+                # A COPY, NOT a hard link / symlink / rename, even though each
+                # of these is 117 MB (~5.6 GB per module pass).  The member
+                # frame is written AGAIN after this crf exists, by writers with
+                # three different inode semantics:
+                #   * shutil.copyfile(cal, align) in the merged pass re-derives
+                #     _align.fits for these same exposures and TRUNCATES the
+                #     existing inode in place ('wb'), so a hard-linked crf would
+                #     silently become the unaligned _cal content;
+                #   * fits.open(fn, mode='update') in fix_alignment (DVA,
+                #     provenance stamping, placement/filter corrections) edits
+                #     the member's headers in place, which a hard link inherits;
+                #   * HDUList.writeto(overwrite=True) / DataModel.save unlink
+                #     first, which BREAKS the link instead of following it.
+                # So an aliased crf would sometimes track its member and
+                # sometimes fork from it, decided by whichever writer ran last --
+                # and with no mtime of its own to show that it moved.  A rename
+                # is out too: check_wcs(member['expname']) reads the member a few
+                # lines below, and the merged pass writes to that same path.
+                # Guarded by tests/test_crf_copy_is_not_a_link.py.
                 shutil.copy(_src, _target)
                 _n_crf += 1
             print(f"  outlier_detection skipped: wrote {_n_crf} per-exposure crf as "
