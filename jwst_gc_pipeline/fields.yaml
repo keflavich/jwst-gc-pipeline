@@ -411,7 +411,17 @@ fields:
           '004': catalogs/gaia_virac2_refcat_epoch2024.63_o004.fits
           '005': catalogs/gaia_virac2_refcat_epoch2024.67_o005.fits
           '016': catalogs/gaia_virac2_refcat_epoch2025.24_o016.fits
-        nvisits: 1
+        # nvisits is scanned as visit ids 001..nvisits for EVERY observation of
+        # the proposal, so it has to cover the largest visit number any of them
+        # used, not the count of visits each one has.  o001's exposures are
+        # `jw03571001003_...` -- visit 003 -- while o003/o004/o005/o016 are all
+        # visit 001.  At nvisits: 1 the preflight scanned only visit 001 and
+        # o001 resolved to zero frames in all five bands, so its whole m12
+        # fan-out raised `RequestedFilterHasNoFramesError` (jobs 41873323_*,
+        # 2026-09-12) even though its 8 exposures per filter were on disk.
+        # The extra empty visits cost nothing: each per-visit glob is
+        # allow_empty.
+        nvisits: 3
         reference_frame: VIRAC2
         obsids:
           miri: ['001', '003', '004', '005', '016']
