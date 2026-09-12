@@ -116,7 +116,24 @@ RGPS_COMPONENTS = (
 #:
 #: The third element is an optional note for the reader: the CMZ mosaic has no
 #: tiles below order 8, so it is blank until you are zoomed in past ~10'.
+#: The survey's OWN imagery leads, by explicit request (2026-09-12).  This
+#: reverses the ordering rule the block above records, and the trade-off is
+#: real: `jwst_gc_treasury_hips` covers what 10678 has actually observed --
+#: one tile of 139 as of today, `hips_initial_fov` 0.048 deg -- so at the
+#: panel's opening ~1.6 deg field it is a speck of colour on black until
+#: coverage grows.  That is the point of putting it first on a page whose job
+#: is watching the survey arrive; it is not the CMZ mistake repeated by
+#: accident.  Moving `DSS` back to the front is the one-line revert.
+#:
+#: Its own `properties` carries a PROVISIONAL ASTROMETRY warning: 10678 has no
+#: offsets table yet, so o135 was aligned at (0,0)" on the raw assign_wcs frame
+#: with no measured tie.  The note below says so, because a background layer
+#: reads as ground truth otherwise.
 SURVEYS = (
+    ('JWST Treasury',
+     'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_hips/',
+     'program 10678 as observed so far — zoom in to a tile to see it; '
+     'astrometry is provisional (no offsets table yet)'),
     ('DSS', 'P/DSS2/color', ''),
     ('2MASS', 'P/2MASS/color', ''),
     ('Spitzer', 'CDS/P/SPITZER/color', ''),
