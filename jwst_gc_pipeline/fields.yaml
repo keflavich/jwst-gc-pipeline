@@ -238,9 +238,18 @@ fields:
         # 2026-09-11, released 2026-09-12); their catalogs below came from
         # that command with --observations 134 / 135.  The remaining 137
         # entries go in as their tiles land.
+        # The Gaia component of every one of these came from VizieR
+        # (I/355/gaiadr3), NOT the Gaia ESA TAP: the TAP silently caps at 2000
+        # rows and hangs without a timeout (#856).  o134 and o135 were first
+        # built through the TAP and are REBUILT here in place -- same filenames,
+        # so these keys are unchanged, but 2000 -> 8794 and 2000 -> 9937 Gaia.
+        # The capped originals are kept beside them as *.fits.gaia2000cap.
         reference_catalog:
+          '131': catalogs/gaia_virac2_refcat_epoch2026.70_o131.fits
+          '132': catalogs/gaia_virac2_refcat_epoch2026.70_o132.fits
           '134': catalogs/gaia_virac2_refcat_epoch2026.70_o134.fits
           '135': catalogs/gaia_virac2_refcat_epoch2026.70_o135.fits
+          '139': catalogs/gaia_virac2_refcat_epoch2026.69_o139.fits
         nvisits: 1
         # The alignment SOURCE is alignment_config.py's 10678 entry
         # (TABLE_CONSENSUS), which names Offsets_JWST_Brick10678_consensus.csv
