@@ -48,26 +48,55 @@ WHOLE_PHASES = ("m12", "m7")
 # harness
 # --------------------------------------------------------------------------
 def _stubs(tmp_path):
-    """A stub sbatch that logs its arguments and hands back a UNIQUE job id.
+    """Stub sbatch/scontrol/scancel that log their arguments.
 
-    Unique matters here: the whole point is which ids end up in the next
-    phase's --dependency, and a stub that always says 1000 cannot tell a
-    complete barrier from a dropped one.
+    sbatch hands back a UNIQUE job id: the whole point is which ids end up in
+    the next phase's --dependency, and a stub that always says 1000 cannot tell
+    a complete barrier from a dropped one.  It fails on the submission whose id
+    ``SBATCH_FAIL_AT`` names, which is how the mid-loop abort is exercised.
+
+    scontrol and scancel are stubs for the same reason: the split submits its
+    finalizes --hold and releases them together, and an abort cancels what it
+    held, so both calls are part of what this driver emits.
     """
     bindir = tmp_path / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
     (bindir / "sbatch").write_text(
         '#!/bin/bash\n'
-        'printf "%s\\n" "$*" >> "$SBATCH_LOG"\n'
         'n=$(cat "$SBATCH_SEQ" 2>/dev/null || echo 1000)\n'
+        'if [ -n "${SBATCH_FAIL_AT:-}" ] && [ "$n" -eq "$SBATCH_FAIL_AT" ]; then\n'
+        '  echo "sbatch: error: stub refusing to submit" >&2; exit 1\n'
+        'fi\n'
+        'printf "%s\\n" "$*" >> "$SBATCH_LOG"\n'
         'echo $((n + 1)) > "$SBATCH_SEQ"\n'
         'echo $((n + 1))\n')
     # The driver's duplicate-chain guard shells out to squeue; a real one here
     # would read this user's live queue.
     (bindir / "squeue").write_text("#!/bin/bash\ntrue\n")
-    for f in ("sbatch", "squeue"):
+    for name in ("scontrol", "scancel"):
+        (bindir / name).write_text(
+            '#!/bin/bash\n'
+            f'printf "{name} %s\\n" "$*" >> "$SLURM_CTL_LOG"\n')
+    for f in ("sbatch", "squeue", "scontrol", "scancel"):
         (bindir / f).chmod(0o755)
     return bindir
+
+
+def _crf_tree(tmp_path, counts, target="sgrb2", field="001"):
+    """A crf tree with ``counts`` frames per filter, as the driver globs it.
+
+    The driver sizes a split finalize from the filter's own crf count, so the
+    tree is the input to that decision.  Shapes here mirror sgrb2 5365/001,
+    whose real counts are F187N 384, four SW filters 192 and six LW 48.
+    """
+    root = tmp_path / "tree" / f"{target}_o{field}"
+    for filt, n in counts.items():
+        d = root / filt / "pipeline"
+        d.mkdir(parents=True, exist_ok=True)
+        for i in range(n):
+            (d / f"jw05365001001_02101_{i:05d}_nrca1_destreak_o001_crf.fits"
+             ).write_text("")
+    return tmp_path / "tree"
 
 
 class Submit:
@@ -83,6 +112,13 @@ class Submit:
         self.array = '--array=' in line
         self.mode = re.search(r'MODE=(\w+)', line).group(1)
         self.phase = re.search(r'PHASE=(\w+)', line).group(1)
+        self.mem = re.search(r'--mem=(\S+)', line).group(1)
+        self.time = re.search(r'--time=(\S+)', line).group(1)
+        self.held = '--hold' in line
+
+    @property
+    def mem_gb(self):
+        return int(re.sub(r'[^0-9]', '', self.mem))
 
     @property
     def dep_ids(self):
@@ -90,18 +126,24 @@ class Submit:
         return set(parts[1:]) if parts and parts[0].startswith("after") else set()
 
 
-def _run(tmp_path, script=SCRIPT, expect_rc=0, filters=FILTERS, **env):
-    """Run the driver against the stub sbatch; return (completed, [Submit])."""
+def _run(tmp_path, script=SCRIPT, expect_rc=0, filters=FILTERS,
+         basepath=None, **env):
+    """Run the driver against the stubs; return (completed, [Submit]).
+
+    ``completed.ctl`` carries the scontrol/scancel calls the run made.
+    """
     bindir = _stubs(tmp_path)
     log = tmp_path / "sbatch.log"
+    ctl = tmp_path / "slurmctl.log"
     child = {k: v for k, v in os.environ.items()
              if not k.startswith(("FANOUT_", "FINALIZE_", "PER_FILTER_",
-                                  "PHASES", "SKIP_IF_DONE"))}
+                                  "PHASES", "SKIP_IF_DONE", "SBATCH_FAIL_AT"))}
     child.update(PATH=f"{bindir}:{os.environ['PATH']}", SBATCH_LOG=str(log),
-                 SBATCH_SEQ=str(tmp_path / "seq"),
+                 SBATCH_SEQ=str(tmp_path / "seq"), SLURM_CTL_LOG=str(ctl),
                  GC_SCRIPTS_DIR=str(SCRIPTS),
                  TARGET="sgrb2", PROPOSAL="5365", FIELD="001",
-                 FILTERS=filters, BASEPATH=str(tmp_path / "no-such-tree"))
+                 FILTERS=filters,
+                 BASEPATH=str(basepath or tmp_path / "no-such-tree"))
     child.update({k: str(v) for k, v in env.items()})
     done = subprocess.run(["bash", str(script)], env=child,
                           capture_output=True, text=True)
@@ -109,6 +151,7 @@ def _run(tmp_path, script=SCRIPT, expect_rc=0, filters=FILTERS, **env):
                                           done.stderr)
     submits = ([Submit(l) for l in log.read_text().splitlines()]
                if log.exists() else [])
+    done.ctl = ctl.read_text() if ctl.exists() else ""
     return done, submits
 
 
@@ -281,23 +324,224 @@ def test_the_job_name_carries_the_filter_and_still_reads_as_the_phase(
         assert s.name.startswith(f"sgrb25365-o001-{phase}-")
 
 
-def test_the_split_changes_nothing_but_the_finalize(split, unsplit):
-    """Resources, mode flags and the fan-out are untouched by the split.
+def test_the_split_leaves_the_fanout_and_the_unsplit_phases_alone(split,
+                                                                  unsplit):
+    """The fan-out and every unsplit finalize keep their whole-field slice.
 
-    One concern: a per-filter finalize does strictly less work than the whole
-    one, so it keeps the same --cpus-per-task/--mem/--time it has today, and
-    retuning those is a separate measurement.
+    Only the split finalizes are re-sized, and only downward: a split job does
+    ONE filter's work, so it may never ask for more than the whole-field
+    finalize it replaces.
     """
     def slice_(line):
         return re.findall(r'--(?:cpus-per-task|mem|time)=\S+', line)
 
-    for phase in SPLIT_PHASES:
-        s = [x for x in split if x.mode == "finalize" and x.phase == phase][0]
-        u = [x for x in unsplit if x.mode == "finalize"
+    assert ([slice_(x.line) for x in split if x.mode == "fanout"]
+            == [slice_(x.line) for x in unsplit if x.mode == "fanout"])
+    for phase in WHOLE_PHASES:
+        a = [x for x in split if x.mode == "finalize" and x.phase == phase][0]
+        b = [x for x in unsplit if x.mode == "finalize"
              and x.phase == phase][0]
-        assert slice_(s.line) == slice_(u.line), (s.line, u.line)
-    assert ([slice_(s.line) for s in split if s.mode == "fanout"]
-            == [slice_(s.line) for s in unsplit if s.mode == "fanout"])
+        assert slice_(a.line) == slice_(b.line), (a.line, b.line)
+    for phase in SPLIT_PHASES:
+        whole = [x for x in unsplit if x.mode == "finalize"
+                 and x.phase == phase][0]
+        for x in [y for y in split if y.mode == "finalize"
+                  and y.phase == phase]:
+            assert x.mem_gb <= whole.mem_gb, x.line
+            assert _minutes(x.time) <= _minutes(whole.time), x.line
+
+
+# --------------------------------------------------------------------------
+# each split job is sized for ITS OWN filter
+# --------------------------------------------------------------------------
+#
+# A split finalize that keeps the whole field's --mem/--time contradicts the
+# reason the split exists.  sgrb2's m6 finalize -- 4 cpus asking a 3-day wall
+# on a stage whose measured maximum is 13.7 h -- waited exactly its own
+# walltime, because an over-ask can only be placed in a gap as wide as itself;
+# eleven copies of that ask, against a shared astronomy-dept-b GrpTRES with 52
+# treasury tiles landing, pays it eleven times.
+#
+# The scale is the filter's own crf count over the largest filter's, because
+# that is what both quantities were measured to follow:
+#   memory does not pool.  The whole 11-filter m3 finalize (41424864) recorded
+#   MaxRSS 148 GiB; the single-filter F187N m12 finalize (39933196) recorded
+#   151 GiB.  The peak is the biggest COMBO, and F187N IS it.
+#   time is near-linear in frames: F187N has 384 crf to F182M's 192 and took
+#   13.09 h to its 6.79 h inside the m3 finalize.
+SGRB2_CRF = dict(F187N=384, F150W=192, F182M=192, F210M=192, F212N=192,
+                 F300M=48, F360M=48, F405N=48, F410M=48, F466N=48, F480M=48)
+
+
+def _minutes(t):
+    """A SLURM --time to minutes."""
+    days, _, hms = t.rpartition("-")
+    h, m, sec = (int(x) for x in hms.split(":"))
+    return int(days or 0) * 1440 + h * 60 + m + (1 if sec else 0)
+
+
+@pytest.fixture(scope="module")
+def sgrb2_split(tmp_path_factory):
+    """The split on a tree shaped like sgrb2 5365/001's own crf counts."""
+    tmp = tmp_path_factory.mktemp("sized")
+    tree = _crf_tree(tmp, SGRB2_CRF)
+    return _run(tmp, PER_FILTER_FINALIZE=1, PER_FILTER_FINALIZE_PHASES="m4",
+                filters=" ".join(SGRB2_CRF), basepath=tree)[1]
+
+
+def _m4_finalizes(submits):
+    return {s.filters[0]: s for s in submits
+            if s.mode == "finalize" and s.phase == "m4"}
+
+
+def test_the_largest_filter_keeps_the_whole_field_request(sgrb2_split):
+    """F187N is the peak the pooled job was sized for, so it is not squeezed.
+
+    The whole-field m4 finalize on a large field asks --mem=256gb
+    --time=2-00:00:00; the filter that sets that peak keeps both.
+    """
+    f187n = _m4_finalizes(sgrb2_split)["F187N"]
+    assert f187n.mem == "256gb", f187n.line
+    assert _minutes(f187n.time) == _minutes("2-00:00:00"), f187n.line
+
+
+def test_a_smaller_filter_asks_for_less(sgrb2_split):
+    """Half the frames, half the slice; an eighth of the frames, the floor.
+
+    The floor is the phase sbatch's own hand-launch slice (--mem=64gb
+    --time=12:00:00), the smallest anything in this chain has been run at.
+    """
+    fins = _m4_finalizes(sgrb2_split)
+    for filt in ("F150W", "F182M", "F210M", "F212N"):   # 192 of 384 crf
+        assert fins[filt].mem == "128gb", fins[filt].line
+        assert _minutes(fins[filt].time) == _minutes("1-00:00:00")
+    for filt in ("F300M", "F405N", "F480M"):            # 48 of 384 -> floor
+        assert fins[filt].mem == "64gb", fins[filt].line
+        assert _minutes(fins[filt].time) == _minutes("12:00:00")
+
+
+def test_the_phases_memory_ask_drops_by_more_than_half(sgrb2_split):
+    """The number this is for: what the field asks the shared QOS to hold.
+
+    Eleven copies of 256 GiB is 2816 GiB for one phase of one field.
+    """
+    fins = _m4_finalizes(sgrb2_split)
+    assert len(fins) == 11
+    assert sum(f.mem_gb for f in fins.values()) == 1152
+    assert 1152 < 11 * 256 / 2
+
+
+def test_an_explicit_ask_is_never_scaled(tmp_path):
+    """What the operator NAMED reaches every split job verbatim.
+
+    Same rule the wall-clock overrides already follow: FINALIZE_TIME_<PHASE>
+    exists because a runner knows something the crf count does not, and a
+    driver that quietly halves it is the failure mode B4 describes from the
+    other end.
+    """
+    tree = _crf_tree(tmp_path, SGRB2_CRF)
+    _, submits = _run(tmp_path, PER_FILTER_FINALIZE=1,
+                      PER_FILTER_FINALIZE_PHASES="m4",
+                      filters=" ".join(SGRB2_CRF), basepath=tree,
+                      FINALIZE_MEM="200gb", FINALIZE_TIME_M4="4-00:00:00")
+    for filt, s in _m4_finalizes(submits).items():
+        assert s.mem == "200gb", s.line
+        assert s.time == "4-00:00:00", s.line
+
+
+def test_with_no_crf_tree_every_split_job_keeps_the_field_request(split,
+                                                                  unsplit):
+    """No counts means no measurement, so nothing is scaled off a guess.
+
+    CI and a fresh checkout have no data tree; the split there must ask exactly
+    what the whole-field finalize asks, as it does today.
+    """
+    for phase in SPLIT_PHASES:
+        whole = [x for x in unsplit if x.mode == "finalize"
+                 and x.phase == phase][0]
+        for x in [y for y in split if y.mode == "finalize"
+                  and y.phase == phase]:
+            assert (x.mem, x.time) == (whole.mem, whole.time), x.line
+
+
+# --------------------------------------------------------------------------
+# a phase is submitted all-or-nothing
+# --------------------------------------------------------------------------
+#
+# `set -euo pipefail` aborts the driver on a failed sbatch.  Whole, that leaves
+# at worst a fan-out with no finalize.  Split, it would leave phase p with SOME
+# of its filters finalizing, the rest never submitted and nothing queued
+# behind them -- every submitted job reaching COMPLETED on a field that is
+# missing seven barriers, which nothing downstream can see (a finalize's marker
+# verify covers only the filters its own job was given).  So the per-filter
+# finalizes are submitted --hold and released together.
+
+
+def test_the_split_finalizes_are_held_until_all_of_them_exist(sgrb2_split,
+                                                              tmp_path):
+    """Held at submit, released in one call once the barrier is whole."""
+    for s in sgrb2_split:
+        assert s.held == (s.mode == "finalize" and s.phase == "m4"), s.line
+    tree = _crf_tree(tmp_path, SGRB2_CRF)
+    done, submits = _run(tmp_path, PER_FILTER_FINALIZE=1,
+                         PER_FILTER_FINALIZE_PHASES="m4",
+                         filters=" ".join(SGRB2_CRF), basepath=tree)
+    releases = [l for l in done.ctl.splitlines() if l.startswith("scontrol")]
+    assert len(releases) == 1, done.ctl
+    ids = releases[0].split()[-1].split(",")
+    assert set(ids) == {str(1001 + i) for i, s in enumerate(submits)
+                        if s.mode == "finalize" and s.phase == "m4"}
+
+
+def test_a_failed_sbatch_mid_loop_leaves_no_half_finalized_phase(tmp_path):
+    """The abort undoes the whole phase instead of stranding part of it.
+
+    The held finalizes and the phase's own fan-out are cancelled -- neither has
+    run -- so the chain ends at the last COMPLETE phase rather than at a phase
+    that four filters finalized.
+    """
+    tree = _crf_tree(tmp_path, SGRB2_CRF)
+    # ids run 1001.. in submission order: m12 fan-out/finalize, m3
+    # fan-out/finalize, m4 fan-out (1005), then the eleven m4 finalizes from
+    # 1006.  The stub refuses the submit that would have been 1009, so three
+    # of the eleven exist when the driver aborts.
+    done, submits = _run(tmp_path, expect_rc=1, PER_FILTER_FINALIZE=1,
+                         PER_FILTER_FINALIZE_PHASES="m4",
+                         filters=" ".join(SGRB2_CRF), basepath=tree,
+                         SBATCH_FAIL_AT=1008)
+    assert [s.name for s in submits][-1].endswith("-m4-finalize-F182M")
+    cancels = [l for l in done.ctl.splitlines() if l.startswith("scancel")]
+    assert len(cancels) == 1, done.ctl
+    cancelled = set(cancels[0].split()[1:])
+    # the three held finalizes AND m4's fan-out
+    assert cancelled == {"1006", "1007", "1008", "1005"}, done.ctl
+    assert "scontrol" not in done.ctl, "a part-submitted phase was released"
+    # ... and nothing was left queued for the phases after it
+    assert {s.phase for s in submits} == {"m12", "m3", "m4"}
+
+
+def test_the_abort_prints_the_command_that_resumes_the_chain(tmp_path):
+    """Loud AND recoverable: the barrier the next phase needs is a list of ids
+    that is otherwise printed and then lost."""
+    tree = _crf_tree(tmp_path, SGRB2_CRF)
+    done, _ = _run(tmp_path, expect_rc=1, PER_FILTER_FINALIZE=1,
+                   PER_FILTER_FINALIZE_PHASES="m4",
+                   filters=" ".join(SGRB2_CRF), basepath=tree,
+                   SBATCH_FAIL_AT=1008)
+    err = done.stderr
+    assert "SUBMIT ABORTED" in err
+    assert "DEP='afterok:1004'" in err, err       # m3's finalize
+    assert "PHASES='m4 m5 m6 m7'" in err, err
+
+
+def test_an_abort_with_nothing_submitted_says_nothing(tmp_path):
+    """The refusal paths submit zero jobs; they must not grow a recovery block
+    telling the operator to cancel an empty list."""
+    done, submits = _run(tmp_path, expect_rc=4, PER_FILTER_FINALIZE=1,
+                         PER_FILTER_FINALIZE_PHASES="m3 m7")
+    assert submits == []
+    assert "SUBMIT ABORTED" not in done.stderr
+    assert done.ctl == ""
 
 
 # --------------------------------------------------------------------------
@@ -336,11 +580,32 @@ def test_off_by_default_matches_the_previous_driver_submit_for_submit(
     (old.parent / "_refuse_duplicate_chain.sh").write_text(
         (SCRIPTS / "_refuse_duplicate_chain.sh").read_text())
 
-    _, before = _run(tmp_path / "a", script=old)
-    _, after = _run(tmp_path / "b")
+    done_before, before = _run(tmp_path / "a", script=old)
+    done_after, after = _run(tmp_path / "b")
     strip = lambda ss: [re.sub(r'\S+submit_cataloging_perframe\S*', '', s.line)
                         for s in ss]
     assert strip(before) == strip(after)
+    # ...and the same on stdout.  The split prints more (the barrier is a list
+    # of ids that a recovery has to be able to read back); with the flag off
+    # there is nothing extra to say, so nothing extra is said.
+    scrub = lambda t: t.replace(str(tmp_path / "a"), "<run>").replace(
+        str(tmp_path / "b"), "<run>")
+    assert scrub(done_before.stdout) == scrub(done_after.stdout)
+
+
+def test_off_by_default_still_exits_zero(tmp_path):
+    """The last statement of the driver decides its exit status.
+
+    `cond && echo` as the final line makes the whole script exit 1 whenever
+    cond is false -- and with the EXIT trap in place that non-zero status is
+    reported as an aborted submission on a run that submitted the entire chain.
+    `_run` asserts the return code, so this is the check; it is spelled out
+    because the failure looks like a submit failure rather than a typo.
+    """
+    done, submits = _run(tmp_path)
+    assert done.returncode == 0
+    assert "SUBMIT ABORTED" not in done.stderr
+    assert len(submits) == 12        # six phases, fan-out + finalize each
 
 
 def test_a_phase_outside_the_requested_set_is_not_split(tmp_path):
