@@ -350,6 +350,224 @@ def get_allowed_modules(proposal_id, field, requested_modules, filtername=None):
 # Image2Pipeline.step_defs['resample'] = pre_resample(Image2Pipeline.resample)
 
 
+def image3_steps_for(tweakreg_parameters, skip_outlier_detection, label):
+    """The Image3 ``steps=`` dict shared by every NIRCam pass of this reduction.
+
+    Single authoring point for the outlier_detection policy, so the per-module
+    pass and the merged pass cannot drift apart.  They did: the merged pass
+    hand-rolled ``steps={'tweakreg': tweakreg_parameters}`` and therefore ran
+    outlier_detection at pipeline defaults on every field while nrca/nrcb
+    skipped it (#161).  ``--run-outlier-detection`` reached only the module
+    pass; the merged mosaic ignored the flag in both directions.
+
+    ``label`` names the pass in the log line and nothing else.
+
+    outlier_detection: SKIPPED by default on these crowded GC fields (#161).
+    Diagnosis (PR #180) established the step over-flags real bright-star PSF
+    signal -- diffraction spikes and the dark inter-spike gaps -- as OUTLIER,
+    punching NaN holes into the _crf/_i2d that cataloging then loses.  The
+    cause is a MIS-SPECIFIED VARIANCE MODEL, not a tunable threshold:
+    outlier_detection compares each exposure to the resampled-stack median
+    with a tolerance built from ERR (photon+read noise only), but an
+    UNDERSAMPLED PSF sampled at different sub-pixel dither phases legitimately
+    disperses 5-9x ERR wherever the PSF is steep (0.98x ERR on flat sky ->
+    9.4x on the spikes).  Decisive test: two exposures at the SAME dither
+    pointing agree at the ERR level even at the flagged pixels, while
+    exposures at DIFFERENT pointings differ ~9x more -- which excludes every
+    per-frame defect (cosmic rays, persistence, brighter-fatter, ramp
+    nonlinearity are all independent per exposure and would show up
+    within-pointing too; they do not).  Raising snr/scale (closed PR #163)
+    only rescales the wrong tolerance and would suppress genuine CRs equally.
+    Cosmic rays are already rejected per-ramp by JumpStep in Detector1
+    (independent, and that issue's ramp analysis found <1% genuine jumps
+    among the flagged pixels), so dropping the inapplicable image-space
+    comparison costs little.  Re-enable with --run-outlier-detection if a
+    field is sparse enough that residual (post-JumpStep) CRs dominate.
+
+    That reasoning is a property of the DATA -- undersampled PSF, dithered,
+    crowded field -- not of which detectors went into the association, and the
+    merged association holds the same exposures as its two module siblings.
+    It applies to the merged pass unchanged.
+
+    One caveat worth naming rather than hiding: NGROUPS=2 exposures carry
+    S_JUMP=SKIPPED (JumpStep needs >=3 groups), so the "JumpStep already
+    rejects CRs" half of the argument does not hold for them.  Censused
+    2026-09-12 with `find -L` (several field dirs under /orange are symlinks,
+    and brick's per-filter dirs are too): 55 of the 295 readable merged
+    mosaics have S_JUMP=SKIPPED with S_OUTLIR=COMPLETE -- cloudc 27, wd1 13,
+    brick 6, gc2211 6 + o023 2 + o049 1.  Because outlier_detection also
+    authors the per-exposure crf on those fields, what it costs them is CR
+    rejection on the frames CATALOGING fits, not only on the mosaic.  Their
+    nrca/nrcb siblings already ship with no CR rejection, so routing the
+    merged pass through here does not create that gap -- it makes it uniform
+    and visible in one place.  --run-outlier-detection remains the way to opt
+    such a field back in.
+    """
+    image3_steps = {'tweakreg': tweakreg_parameters}
+    if skip_outlier_detection:
+        image3_steps['outlier_detection'] = {'skip': True}
+        print(f"outlier_detection SKIPPED (#161; JumpStep handles CRs) ({label})")
+    else:
+        print(f"outlier_detection ENABLED at pipeline defaults ({label})")
+    return image3_steps
+
+
+def write_perexposure_crf(asn_data, output_dir, field, skip_outlier_detection,
+                          skymatch_method, label):
+    """Put this pass's per-exposure ``*_o{field}_crf.fits`` on disk.
+
+    Shared by every NIRCam Image3 pass of this reduction, for the same reason
+    ``image3_steps_for`` is: the crf are what cataloging photometers
+    (``--each-suffix=destreak_o{field}_crf``), and a pass that runs Image3 but
+    writes none leaves the PREVIOUS reduction's crf in place, with its WCS and
+    its mtime untouched -- invisible to every staleness check in the tree
+    (#270).
+
+    Until 2026-09 the merged pass had no crf handling of its own and did not
+    need any: it ran ``outlier_detection`` (the bug #848 fixes), and in this
+    jwst version that step names its output after each INPUT MODEL, so it wrote
+    the per-exposure names itself and, running last in ``nrca,nrcb,merged``,
+    overwrote the module passes' copies.  Skipping the step on the merged pass
+    removes that incidental author.  ``-m merged`` on its own -- the invocation
+    GETTING_STARTED.md gives -- would then write no crf at all, so the merged
+    branch calls this instead.
+
+    ``label`` names the pass in the log lines and nothing else.
+    """
+    # CRF NAMING FIX (port of PipelineMIRI 2026-06-20): outlier_detection in
+    # Image3 names the CR-flagged crfs after the asn PRODUCT
+    #   jw{prop:05d}-o{field}_t001_nircam_clear-{filt}-{module}_<N>_o{field}_crf.fits
+    # but the manual cataloging globs PER-EXPOSURE crf with the destreak/align
+    # suffix
+    #   jw{prop:05d}{field}{visit}_..._{module}_{align|destreak}_o{field}_crf.fits .
+    # Those never matched, so a corrected re-reduction's crf (e.g. the skymatch
+    # background fix) silently never reached cataloging -- the per-exposure
+    # *_{align|destreak}_o{field}_crf.fits stayed at the OLD reduction's mtime.
+    # Map product-named crf -> per-exposure names by EXPSTART (1:1) and copy
+    # into place.  member['expname'] already carries the _align/_destreak
+    # suffix (the caller's destreak/align loop sets it), so the target name
+    # matches what cataloging --each-suffix consumes.
+    #
+    # ORDER MATTERS: outlier_detection is the ONLY step that emits product-named
+    # crf, so when it is skipped THIS run wrote none and any on disk are
+    # leftovers from an older reduction.  Copying those forward overwrites the
+    # per-exposure crf with a previous generation's WCS while refreshing their
+    # mtime -- invisible to every mtime-based staleness check, and cataloging
+    # then photometers the old alignment.  sickle hit exactly this (#270): 96
+    # product crf from 2026-06-27 (its last run with outlier_detection on) were
+    # copied over the per-exposure names on every iteration of the VIRAC2 retie,
+    # so all 96 carried one constant GNS RAOFFSET while their aligned
+    # `_destreak.fits` inputs carried the new per-exposure VIRAC2 tie ~200 mas
+    # away.  The loop re-measured the same ~110 mas gap every iteration and
+    # could not converge.  So test skip_outlier_detection FIRST.
+    _prod_name = asn_data['products'][0]['name']
+    _prod_crf = sorted(glob(os.path.join(
+        output_dir, f'{_prod_name}_*_o{field}_crf.fits')))
+    if _prod_crf and not skip_outlier_detection:
+        def _crf_key(fn):
+            # (EXPSTART, DETECTOR): SW filters read nrcb1-4 SIMULTANEOUSLY, so
+            # EXPSTART alone collides across the 4 detectors of one exposure --
+            # the detector disambiguates (LW nrcblong is 1:1 on EXPSTART alone).
+            h = fits.getheader(fn)
+            es = h.get('EXPSTART')
+            det = h.get('DETECTOR')
+            if (es is None or det is None) and len(fits.open(fn)) > 1:
+                h1 = fits.getheader(fn, 1)
+                es = es if es is not None else h1.get('EXPSTART')
+                det = det if det is not None else h1.get('DETECTOR')
+            return (round(float(es), 6), str(det))
+        _targ_by_es = {}
+        for member in asn_data['products'][0]['members']:
+            _mb = os.path.basename(member['expname'])
+            _target = os.path.join(
+                output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
+            _cal_path = (member['expname'] if os.path.exists(member['expname'])
+                         else os.path.join(output_dir, _mb))
+            try:
+                _targ_by_es[_crf_key(_cal_path)] = _target
+            except (FileNotFoundError, OSError, TypeError, ValueError):
+                print(f"  WARNING: cannot read EXPSTART/DETECTOR of {_mb}; "
+                      f"skipping its crf mapping", flush=True)
+        for _pc in _prod_crf:
+            try:
+                _target = _targ_by_es.get(_crf_key(_pc))
+            except (FileNotFoundError, OSError, TypeError, ValueError):
+                _target = None
+            if _target is None:
+                print(f"  WARNING: product crf {os.path.basename(_pc)} has no "
+                      f"per-exposure cal match; per-exposure crf NOT written",
+                      flush=True)
+                continue
+            shutil.copy(_pc, _target)
+            print(f"  crf rename ({label}): {os.path.basename(_pc)} -> "
+                  f"{os.path.basename(_target)}", flush=True)
+    elif skip_outlier_detection:
+        # outlier_detection is the step that emits the CR-flagged crf; with it
+        # skipped (#161) Image3 writes none, so cataloging's per-exposure
+        # *_o{field}_crf.fits glob would starve (or silently reuse a stale
+        # reduction's crf).  tweakreg is also skip=True here (alignment was done
+        # upstream -- members already carry the final WCS), so the correct crf
+        # is just the member frame itself: same SCI/ERR/WCS, DQ WITHOUT the
+        # spurious OUTLIER flags.  Copy each member -> its per-exposure crf name.
+        #
+        # Reached whether or not product-named crf happen to sit in output_dir:
+        # if they do, they are an older reduction's and the branch above
+        # deliberately declines them.  This is the only correct source for the
+        # crf on a skip_outlier_detection run.
+        if _prod_crf:
+            print(f"  {len(_prod_crf)} product-named crf are on disk but "
+                  f"outlier_detection is SKIPPED, so THIS run wrote none -- they "
+                  f"are an EARLIER reduction's and carry its WCS. NOT copying "
+                  f"them forward (#270); writing crf from this run's aligned "
+                  f"member frames instead. First stale file: "
+                  f"{os.path.basename(_prod_crf[0])}", flush=True)
+        if skymatch_method:
+            print("  WARNING: --skymatch-method set WITH outlier_detection "
+                  "skipped: the per-exposure crf are copied from the PRE-skymatch "
+                  "member frames (skymatch's subtraction is applied in-memory and "
+                  "only reaches the resampled i2d, not these copies).", flush=True)
+        _n_crf = 0
+        for member in asn_data['products'][0]['members']:
+            _mb = os.path.basename(member['expname'])
+            _src = (member['expname'] if os.path.exists(member['expname'])
+                    else os.path.join(output_dir, _mb))
+            _target = os.path.join(
+                output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
+            if not os.path.exists(_src):
+                print(f"  WARNING: member frame {_mb} missing; crf NOT written",
+                      flush=True)
+                continue
+            # A COPY, NOT a hard link / symlink / rename, even though each
+            # of these is 117 MB (~5.6 GB per module pass).  The member
+            # frame is written AGAIN after this crf exists, by writers with
+            # three different inode semantics:
+            #   * shutil.copyfile(cal, align) in the merged pass re-derives
+            #     _align.fits for these same exposures and TRUNCATES the
+            #     existing inode in place ('wb'), so a hard-linked crf would
+            #     silently become the unaligned _cal content;
+            #   * fits.open(fn, mode='update') in fix_alignment (DVA,
+            #     provenance stamping, placement/filter corrections) edits
+            #     the member's headers in place, which a hard link inherits;
+            #   * HDUList.writeto(overwrite=True) / DataModel.save unlink
+            #     first, which BREAKS the link instead of following it.
+            # So an aliased crf would sometimes track its member and
+            # sometimes fork from it, decided by whichever writer ran last --
+            # and with no mtime of its own to show that it moved.  A rename
+            # is out too: the caller runs check_wcs(member['expname']) right
+            # after this returns, and the merged pass writes that same path.
+            # Guarded by tests/test_crf_copy_is_not_a_link.py.
+            shutil.copy(_src, _target)
+            _n_crf += 1
+        print(f"  outlier_detection skipped ({label}): "
+              f"wrote {_n_crf} per-exposure crf as "
+              f"copies of the aligned member frames (no OUTLIER flags added)",
+              flush=True)
+    else:
+        print(f"  (no product-named crf {_prod_name}_*_o{field}_crf.fits found "
+              f"({label}); outlier_detection ran and named its output after each "
+              f"INPUT MODEL, i.e. the per-exposure names, so they are already in "
+              f"place -- leaving them alone)", flush=True)
+
 def main(filtername, module, Observations=None, regionname='brick', do_destreak=True,
          field='001', proposal_id='2221', skip_step1and2=False, use_average=True,
          skymatch_method=None, skip_outlier_detection=True):
@@ -968,34 +1186,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # a skymatch run leaves photometry unchanged and makes the mosaic and the
         # frames carry different backgrounds.  See the warning at the crf-naming
         # block below.
-        image3_steps = {'tweakreg': tweakreg_parameters}
-
-        # outlier_detection: SKIPPED by default on these crowded GC fields (#161).
-        # Diagnosis (PR #180) established the step over-flags real bright-star PSF
-        # signal -- diffraction spikes and the dark inter-spike gaps -- as OUTLIER,
-        # punching NaN holes into the _crf/_i2d that cataloging then loses.  The
-        # cause is a MIS-SPECIFIED VARIANCE MODEL, not a tunable threshold:
-        # outlier_detection compares each exposure to the resampled-stack median
-        # with a tolerance built from ERR (photon+read noise only), but an
-        # UNDERSAMPLED PSF sampled at different sub-pixel dither phases legitimately
-        # disperses 5-9x ERR wherever the PSF is steep (0.98x ERR on flat sky ->
-        # 9.4x on the spikes).  Decisive test: two exposures at the SAME dither
-        # pointing agree at the ERR level even at the flagged pixels, while
-        # exposures at DIFFERENT pointings differ ~9x more -- which excludes every
-        # per-frame defect (cosmic rays, persistence, brighter-fatter, ramp
-        # nonlinearity are all independent per exposure and would show up
-        # within-pointing too; they do not).  Raising snr/scale (closed PR #163)
-        # only rescales the wrong tolerance and would suppress genuine CRs equally.
-        # Cosmic rays are already rejected per-ramp by JumpStep in Detector1
-        # (independent, and this issue's ramp analysis found <1% genuine jumps
-        # among the flagged pixels), so dropping the inapplicable image-space
-        # comparison costs little.  Re-enable with --run-outlier-detection if a
-        # field is sparse enough that residual (post-JumpStep) CRs dominate.
-        if skip_outlier_detection:
-            image3_steps['outlier_detection'] = {'skip': True}
-            print(f"outlier_detection SKIPPED (#161; JumpStep handles CRs) ({module})")
-        else:
-            print(f"outlier_detection ENABLED at pipeline defaults ({module})")
+        # The outlier_detection policy (#161) and the reasoning behind it live
+        # in image3_steps_for(); the merged pass below calls the same helper,
+        # so the two passes cannot drift apart again.
+        image3_steps = image3_steps_for(
+            tweakreg_parameters,
+            skip_outlier_detection=skip_outlier_detection, label=module)
 
         if skymatch_method:
             image3_steps['skymatch'] = {'save_results': True,
@@ -1011,136 +1207,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             save_results=True)
         print(f"DONE running {asn_file_each}")
 
-        # CRF NAMING FIX (port of PipelineMIRI 2026-06-20): outlier_detection in
-        # Image3 names the CR-flagged crfs after the asn PRODUCT
-        #   jw{prop:05d}-o{field}_t001_nircam_clear-{filt}-{module}_<N>_o{field}_crf.fits
-        # but the manual cataloging globs PER-EXPOSURE crf with the destreak/align
-        # suffix
-        #   jw{prop:05d}{field}{visit}_..._{module}_{align|destreak}_o{field}_crf.fits .
-        # Those never matched, so a corrected re-reduction's crf (e.g. the skymatch
-        # background fix) silently never reached cataloging -- the per-exposure
-        # *_{align|destreak}_o{field}_crf.fits stayed at the OLD reduction's mtime.
-        # Map product-named crf -> per-exposure names by EXPSTART (1:1) and copy
-        # into place.  member['expname'] already carries the _align/_destreak
-        # suffix (set in the destreak/align loop above), so the target name matches
-        # what cataloging --each-suffix consumes.
-        #
-        # ORDER MATTERS: outlier_detection is the ONLY step that emits product-named
-        # crf, so when it is skipped THIS run wrote none and any on disk are
-        # leftovers from an older reduction.  Copying those forward overwrites the
-        # per-exposure crf with a previous generation's WCS while refreshing their
-        # mtime -- invisible to every mtime-based staleness check, and cataloging
-        # then photometers the old alignment.  sickle hit exactly this (#270): 96
-        # product crf from 2026-06-27 (its last run with outlier_detection on) were
-        # copied over the per-exposure names on every iteration of the VIRAC2 retie,
-        # so all 96 carried one constant GNS RAOFFSET while their aligned
-        # `_destreak.fits` inputs carried the new per-exposure VIRAC2 tie ~200 mas
-        # away.  The loop re-measured the same ~110 mas gap every iteration and
-        # could not converge.  So test skip_outlier_detection FIRST.
-        _prod_name = asn_data['products'][0]['name']
-        _prod_crf = sorted(glob(os.path.join(
-            output_dir, f'{_prod_name}_*_o{field}_crf.fits')))
-        if _prod_crf and not skip_outlier_detection:
-            def _crf_key(fn):
-                # (EXPSTART, DETECTOR): SW filters read nrcb1-4 SIMULTANEOUSLY, so
-                # EXPSTART alone collides across the 4 detectors of one exposure --
-                # the detector disambiguates (LW nrcblong is 1:1 on EXPSTART alone).
-                h = fits.getheader(fn)
-                es = h.get('EXPSTART')
-                det = h.get('DETECTOR')
-                if (es is None or det is None) and len(fits.open(fn)) > 1:
-                    h1 = fits.getheader(fn, 1)
-                    es = es if es is not None else h1.get('EXPSTART')
-                    det = det if det is not None else h1.get('DETECTOR')
-                return (round(float(es), 6), str(det))
-            _targ_by_es = {}
-            for member in asn_data['products'][0]['members']:
-                _mb = os.path.basename(member['expname'])
-                _target = os.path.join(
-                    output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
-                _cal_path = (member['expname'] if os.path.exists(member['expname'])
-                             else os.path.join(output_dir, _mb))
-                try:
-                    _targ_by_es[_crf_key(_cal_path)] = _target
-                except (FileNotFoundError, OSError, TypeError, ValueError):
-                    print(f"  WARNING: cannot read EXPSTART/DETECTOR of {_mb}; "
-                          f"skipping its crf mapping", flush=True)
-            for _pc in _prod_crf:
-                try:
-                    _target = _targ_by_es.get(_crf_key(_pc))
-                except (FileNotFoundError, OSError, TypeError, ValueError):
-                    _target = None
-                if _target is None:
-                    print(f"  WARNING: product crf {os.path.basename(_pc)} has no "
-                          f"per-exposure cal match; per-exposure crf NOT written",
-                          flush=True)
-                    continue
-                shutil.copy(_pc, _target)
-                print(f"  crf rename: {os.path.basename(_pc)} -> "
-                      f"{os.path.basename(_target)}", flush=True)
-        elif skip_outlier_detection:
-            # outlier_detection is the step that emits the CR-flagged crf; with it
-            # skipped (#161) Image3 writes none, so cataloging's per-exposure
-            # *_o{field}_crf.fits glob would starve (or silently reuse a stale
-            # reduction's crf).  tweakreg is also skip=True here (alignment was done
-            # upstream -- members already carry the final WCS), so the correct crf
-            # is just the member frame itself: same SCI/ERR/WCS, DQ WITHOUT the
-            # spurious OUTLIER flags.  Copy each member -> its per-exposure crf name.
-            #
-            # Reached whether or not product-named crf happen to sit in output_dir:
-            # if they do, they are an older reduction's and the branch above
-            # deliberately declines them.  This is the only correct source for the
-            # crf on a skip_outlier_detection run.
-            if _prod_crf:
-                print(f"  {len(_prod_crf)} product-named crf are on disk but "
-                      f"outlier_detection is SKIPPED, so THIS run wrote none -- they "
-                      f"are an EARLIER reduction's and carry its WCS. NOT copying "
-                      f"them forward (#270); writing crf from this run's aligned "
-                      f"member frames instead. First stale file: "
-                      f"{os.path.basename(_prod_crf[0])}", flush=True)
-            if skymatch_method:
-                print("  WARNING: --skymatch-method set WITH outlier_detection "
-                      "skipped: the per-exposure crf are copied from the PRE-skymatch "
-                      "member frames (skymatch's subtraction is applied in-memory and "
-                      "only reaches the resampled i2d, not these copies).", flush=True)
-            _n_crf = 0
-            for member in asn_data['products'][0]['members']:
-                _mb = os.path.basename(member['expname'])
-                _src = (member['expname'] if os.path.exists(member['expname'])
-                        else os.path.join(output_dir, _mb))
-                _target = os.path.join(
-                    output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
-                if not os.path.exists(_src):
-                    print(f"  WARNING: member frame {_mb} missing; crf NOT written",
-                          flush=True)
-                    continue
-                # A COPY, NOT a hard link / symlink / rename, even though each
-                # of these is 117 MB (~5.6 GB per module pass).  The member
-                # frame is written AGAIN after this crf exists, by writers with
-                # three different inode semantics:
-                #   * shutil.copyfile(cal, align) in the merged pass re-derives
-                #     _align.fits for these same exposures and TRUNCATES the
-                #     existing inode in place ('wb'), so a hard-linked crf would
-                #     silently become the unaligned _cal content;
-                #   * fits.open(fn, mode='update') in fix_alignment (DVA,
-                #     provenance stamping, placement/filter corrections) edits
-                #     the member's headers in place, which a hard link inherits;
-                #   * HDUList.writeto(overwrite=True) / DataModel.save unlink
-                #     first, which BREAKS the link instead of following it.
-                # So an aliased crf would sometimes track its member and
-                # sometimes fork from it, decided by whichever writer ran last --
-                # and with no mtime of its own to show that it moved.  A rename
-                # is out too: check_wcs(member['expname']) reads the member a few
-                # lines below, and the merged pass writes to that same path.
-                # Guarded by tests/test_crf_copy_is_not_a_link.py.
-                shutil.copy(_src, _target)
-                _n_crf += 1
-            print(f"  outlier_detection skipped: wrote {_n_crf} per-exposure crf as "
-                  f"copies of the aligned member frames (no OUTLIER flags added)",
-                  flush=True)
-        else:
-            print(f"  (no product-named crf {_prod_name}_*_o{field}_crf.fits found; "
-                  f"assuming crf already per-exposure named)", flush=True)
+        # The crf-naming policy (#270) lives in write_perexposure_crf(); the
+        # merged pass below calls the same helper, so a pass that runs Image3
+        # and writes no crf cannot come back.
+        write_perexposure_crf(asn_data, output_dir, field,
+                              skip_outlier_detection=skip_outlier_detection,
+                              skymatch_method=skymatch_method, label=module)
 
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:
@@ -1247,13 +1319,44 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # tweakreg_parameters carries skip=True on every NIRCam path.
         print("Running Image3Pipeline on the merged association "
               "(tweakreg configured but skipped; the tie is already baked in)")
+        # Same outlier_detection policy as the nrca/nrcb passes (#161).  Until
+        # 2026-09 this call hand-rolled steps={'tweakreg': ...}, so the merged
+        # mosaic ran outlier_detection at pipeline defaults on every field while
+        # its two module siblings skipped it: 195 of the 295 readable merged
+        # mosaics on /orange carry S_OUTLIR=COMPLETE beside nrca/nrcb
+        # S_OUTLIR=SKIPPED (censused 2026-09-12 with `find -L`; a census that
+        # does not follow the symlinked field dirs sees only 238 of the 296).
+        image3_steps_merged = image3_steps_for(
+            tweakreg_parameters,
+            skip_outlier_detection=skip_outlier_detection, label='merged')
         calwebb_image3.Image3Pipeline.call(
             asn_file_merged,
-            steps={'tweakreg': tweakreg_parameters,},
-            #steps={'tweakreg': False,}
+            steps=image3_steps_merged,
             output_dir=output_dir,
             save_results=True)
         print(f"DONE running Image3Pipeline {asn_file_merged}.  This should have produced file {asn_data['products'][0]['name']}_i2d.fits")
+
+        # The merged pass writes the SAME per-exposure crf names as the module
+        # passes (they hold the same exposures), so this pass must author them
+        # too.  Until 2026-09 it did so only incidentally: it ran
+        # outlier_detection, and in this jwst version that step names its output
+        # after each INPUT MODEL, not after the asn product, so it wrote
+        # `<member>_o{field}_crf.fits` itself -- the exact names cataloging's
+        # --each-suffix consumes -- and, running LAST in `nrca,nrcb,merged`,
+        # overwrote the module passes' copies.  Measured on brick 2221 F410M
+        # o001: 48/48 per-exposure crf carry ASNTABLE=...merged_asn.json and
+        # S_OUTLIR=COMPLETE.  With the step now skipped here as well (#161),
+        # nothing else would write them: `-m merged` alone (GETTING_STARTED.md's
+        # NIRCam stage-1 invocation) would emit zero crf and silently leave the
+        # previous reduction's in place, mtime and WCS untouched -- the #270
+        # failure that test_crf_source_branch_order.py exists to prevent.
+        #
+        # skymatch_method is not forwarded: --skymatch-method configures the
+        # per-module pass only, so there is no skymatch on this pass to warn
+        # about.  Wiring it here would misreport the merged crf's provenance.
+        write_perexposure_crf(asn_data, output_dir, field,
+                              skip_outlier_detection=skip_outlier_detection,
+                              skymatch_method=None, label='merged')
 
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:
