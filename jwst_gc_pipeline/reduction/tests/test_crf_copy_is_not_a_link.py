@@ -43,16 +43,24 @@ SRC = (pathlib.Path(__file__).resolve().parents[1]
 #: ``os.link`` and ``shutil.move`` are used legitimately elsewhere in this file
 #: (the ``../*cal.fits`` staging link, the MAST download moves), so the guard is
 #: scoped to the crf branch instead of grepping the whole module.
-_ALIASING_CALLS = {
-    ("os", "link"): "a hard link",
-    ("os", "symlink"): "a symlink",
-    ("os", "rename"): "a rename",
-    ("os", "replace"): "a rename",
-    ("shutil", "move"): "a move",
-    ("pathlib", "rename"): "a rename",
+#:
+#: Matched on the called NAME alone, so ``os.link``, ``from os import link`` and
+#: ``Path(...).hardlink_to`` are all caught.  None of these names collides with
+#: a string or path method the branch legitimately calls.
+_ALIASING_NAMES = {
+    "link": "a hard link",
+    "hardlink_to": "a hard link",
+    "symlink": "a symlink",
+    "symlink_to": "a symlink",
+    "rename": "a rename",
+    "move": "a move",
 }
 
-_COPY_CALLS = {("shutil", "copy"), ("shutil", "copyfile"), ("shutil", "copy2")}
+#: ``replace`` needs its qualifier: the branch calls ``str.replace`` to build
+#: the crf name, and only ``os.replace`` is a rename.
+_ALIASING_QUALIFIED = {("os", "replace"): "a rename"}
+
+_COPY_NAMES = {"copy", "copyfile", "copy2"}
 
 
 def _skip_outlier_crf_branch():
@@ -74,35 +82,34 @@ def _skip_outlier_crf_branch():
         "could not find the `elif skip_outlier_detection:` crf branch")
 
 
-def _qualified_calls(node):
-    """``{(module, attr)}`` for every call under ``node``.
+def _calls(node):
+    """``{(qualifier_or_None, name)}`` for every call under ``node``.
 
-    A bare ``link(...)`` (from ``from os import link``) is recorded as
-    ``(None, "link")`` so an imported name cannot walk past the guard.
+    ``shutil.copy(...)`` -> ``("shutil", "copy")``; a bare ``link(...)`` from
+    ``from os import link`` -> ``(None, "link")``; ``Path(x).hardlink_to(...)``
+    -> ``(None, "hardlink_to")``.
     """
     found = set()
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Call):
             continue
         fn = sub.func
-        if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-            found.add((fn.value.id, fn.attr))
-        elif isinstance(fn, ast.Attribute):
-            found.add((None, fn.attr))
+        if isinstance(fn, ast.Attribute):
+            qual = fn.value.id if isinstance(fn.value, ast.Name) else None
+            found.add((qual, fn.attr))
         elif isinstance(fn, ast.Name):
             found.add((None, fn.id))
     return found
 
 
-def _bare_names(mapping):
-    """``{attr}`` for the qualified-call table, for the bare-import check."""
-    return {attr for _mod, attr in mapping}
+def _spell(mod, name):
+    return f"{mod}.{name}" if mod else name
 
 
 def test_the_crf_branch_copies():
     """A copy is what makes the crf a snapshot of the member at write time."""
-    calls = _qualified_calls(_skip_outlier_crf_branch())
-    assert calls & _COPY_CALLS, (
+    calls = _calls(_skip_outlier_crf_branch())
+    assert {name for _mod, name in calls} & _COPY_NAMES, (
         "the skip_outlier_detection crf branch no longer copies the member "
         "frame; the per-exposure crf must be an independent snapshot")
 
@@ -114,19 +121,19 @@ def test_the_crf_branch_does_not_alias_the_member_frame():
     and ``fix_alignment`` edits headers via ``mode='update'``; either would
     reach through a hard link into an already-written crf.
     """
-    calls = _qualified_calls(_skip_outlier_crf_branch())
-    aliased = {call: why for call, why in _ALIASING_CALLS.items() if call in calls}
-    # ... and the same names reached bare, via `from os import link`.
-    bare = {(None, attr) for attr in _bare_names(_ALIASING_CALLS)}
-    aliased.update({call: _ALIASING_CALLS[('os', call[1])]
-                    for call in bare & calls if ('os', call[1]) in _ALIASING_CALLS})
+    aliased = {}
+    for mod, name in _calls(_skip_outlier_crf_branch()):
+        if name in _ALIASING_NAMES:
+            aliased[_spell(mod, name)] = _ALIASING_NAMES[name]
+        elif (mod, name) in _ALIASING_QUALIFIED:
+            aliased[_spell(mod, name)] = _ALIASING_QUALIFIED[(mod, name)]
     assert not aliased, (
-        f"the skip_outlier_detection crf branch uses {sorted(aliased.values())} "
-        f"({sorted('.'.join(c) for c in aliased)}). The member frame is written "
-        f"again after the crf exists -- shutil.copyfile truncates its inode in "
-        f"place in the merged pass, and fits.open(mode='update') edits it in "
-        f"place in fix_alignment -- so an aliased crf silently changes content "
-        f"with no mtime of its own to show it.")
+        f"the skip_outlier_detection crf branch uses "
+        f"{sorted(set(aliased.values()))} ({sorted(aliased)}). The member frame "
+        f"is written again after the crf exists -- shutil.copyfile truncates "
+        f"its inode in place in the merged pass, and fits.open(mode='update') "
+        f"edits it in place in fix_alignment -- so an aliased crf silently "
+        f"changes content with no mtime of its own to show it.")
 
 
 def test_the_reason_is_recorded_at_the_call_site():
