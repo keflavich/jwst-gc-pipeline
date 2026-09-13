@@ -92,6 +92,30 @@ PER_FIELD_FLOOR_MAS = {
     # finalize twice (jobs 39933168, 39972201) after a full regeneration had
     # already been run for it.  Same shape as brick, whose scatter is 2.27.
     'sgra': 4.0,
+    # gc-treasury (10678/o135): measured across the field's FIRST two m2 cycles,
+    # with a verified regeneration between them -- which is what makes the
+    # second cycle evidence rather than a repeat of the first.
+    #
+    #     cycle  ncorr   min    med    max    note
+    #       1      37    2.08   3.69   7.99   all per-exposure, NO visit bulk
+    #       2       1    2.12   2.12   2.12   after regeneration
+    #
+    # Cycle 1's 37 corrections were written and applied; the regeneration was
+    # verified frame by frame (48 crf rewritten, RAOFFSET matching the seeded
+    # table row to full precision).  Cycle 2 then converged to a single 2.12 mas
+    # per-exposure term on nrca3 exp2 -- the field's own scatter, not a
+    # displacement the consensus table should express, and the same shape as
+    # sgra above (2.08) and brick (2.27).  At the 0.0 default that one term
+    # stops the m12 finalize indefinitely: every cycle re-measures scatter,
+    # applies it, and demands another regeneration, which is the churn
+    # `chain-seed-cycles` warns about.
+    #
+    # NOT derived from the 62.39 mas consensus->reference tie that cycle 2 also
+    # reported.  m2 REFUSED that one (same-star region map not clean: 5 of 25
+    # cells flagged, 8 uncovered) and left it in `unverified`, so it is recorded
+    # and unapplied -- the floor has no bearing on it, and it stays for the
+    # later-stage gates to judge.
+    'gc-treasury': 4.0,
     # m92 (1334/001): measured with EVERY filter reached in one pass, which is
     # what the w51 entry below says to require -- job 40964659, 2026-09-03,
     # m12 finalize COMPLETED after the floor was applied.
