@@ -332,6 +332,17 @@ def ensure_catalog_dir(base):
     return path
 
 
+#: Wall clock ONE tile subprocess may consume, seconds.  The per-tile builder
+#: bounds its own Gaia queries, but this is the layer that bounds a hang
+#: WHEREVER it happens in the child -- including an import-time stall, before
+#: any in-process handler is installed.  ``subprocess.run(cmd)`` took no
+#: ``timeout=`` at all, so across a 139-tile sweep one wedged tile stopped the
+#: rest: o131 held the run for 25+ minutes on an unbounded ESA TAP call.  1800 s
+#: is ~9x the slowest healthy tile observed (the 2026-09-12 run's tile-to-tile
+#: gaps were 1.5-21.5 min, the long ones being the hangs themselves).
+DEFAULT_TILE_TIMEOUT_S = 1800.0
+
+
 def build_command(tile, base, epoch, python=sys.executable,
                   min_ref_density=None):
     """The per-tile ``build_gaia_virac2_refcat_byquery`` command line."""
@@ -397,6 +408,13 @@ def main(argv=None):
     ap.add_argument('--emit-registry', action='store_true',
                     help='print the fields.yaml reference_catalog block for '
                          'the selected tiles')
+    ap.add_argument('--tile-timeout', type=float,
+                    default=DEFAULT_TILE_TIMEOUT_S, metavar='SECONDS',
+                    help='wall clock for ONE tile subprocess (default '
+                         f'{DEFAULT_TILE_TIMEOUT_S:g}).  A timed-out tile is '
+                         'reported as a failure and the sweep carries on; 0 '
+                         'means unbounded, which is what let o131 hold a '
+                         '139-tile run for 25+ minutes.')
     ap.add_argument('--stop-on-error', action='store_true',
                     help='abort the batch on the first tile that fails '
                          '(default: report it and carry on)')
@@ -443,11 +461,22 @@ def main(argv=None):
               flush=True)
         if args.dry_run:
             continue
-        result = subprocess.run(cmd)
-        if result.returncode != 0:
-            failures.append((tile.obsid, result.returncode))
-            print(f'  o{tile.obsid} FAILED (rc={result.returncode})',
-                  flush=True)
+        # A timeout here is the outermost bound on a tile: the builder bounds its
+        # own Gaia queries, but only this one covers a stall anywhere else in the
+        # child (an import, a VizieR read, a filesystem hang).
+        timeout = float(args.tile_timeout) if args.tile_timeout else None
+        try:
+            result = subprocess.run(cmd, timeout=timeout)
+            rc = result.returncode
+        except subprocess.TimeoutExpired:
+            rc = 'timeout'
+            print(f'  o{tile.obsid} TIMED OUT after {timeout:g} s and was '
+                  f'killed; carrying on with the next tile '
+                  f'(--tile-timeout to change, 0 for unbounded)', flush=True)
+        if rc != 0:
+            failures.append((tile.obsid, rc))
+            if rc != 'timeout':
+                print(f'  o{tile.obsid} FAILED (rc={rc})', flush=True)
             if args.stop_on_error:
                 break
 
