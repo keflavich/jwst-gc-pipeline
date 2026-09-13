@@ -59,9 +59,13 @@ def test_one_band_draws_nothing():
 
 
 def test_a_single_lw_band_cannot_satisfy_both_halves_of_a_pair():
-    """F444W is in the lw_red list, and an earlier cut of `choose_axes` let a
-    field whose only LW band was F444W plot F444W - F444W, which is zero
-    everywhere and looks like a real flat locus."""
+    """A field whose only LW band is F444W must not plot F444W - F444W, which is
+    zero everywhere and looks like a real flat locus.
+
+    What enforces this is `all(lw)`, NOT the `lw[0] != lw[1]` inequality beside
+    it: the slot lists are disjoint, so that inequality is dead code and a
+    mutation removing it changes nothing (review of #869).  The assertion below
+    is on the OUTCOME, so it holds whichever of the two is doing the work."""
     kind, used, x, y = cc.choose_axes(_sorted(['F182M', 'F212N', 'F444W']))
     assert x != y
     if kind == 'ccd':

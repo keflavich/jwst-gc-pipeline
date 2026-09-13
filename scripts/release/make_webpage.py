@@ -902,11 +902,18 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
             cap = "%s%s - %s vs %s" % (
                 kind, f" ({obs})" if obs else "",
                 info.get("ylabel", "?"), info.get("xlabel", "?"))
+            # Name the release the CATALOGUE came from.  It is often not this
+            # page's version -- most fields' merged tables are still v1.0/v1.1
+            # while their imagery has been re-staged since -- so without it a
+            # reader cannot tell which release's photometry this is.
+            cat_version = info.get("version")
             note = ("S/N &gt; %g in every band shown, and a measurement in all "
-                    "%d - %s of %s catalogue sources. Vega magnitudes."
+                    "%d - %s of %s catalogue sources. Vega magnitudes.%s"
                     % (info.get("snr_min", 10),
                        len(set(info.get("bands") or ())),
-                       f'{info.get("n", 0):,}', f'{info.get("n_total", 0):,}'))
+                       f'{info.get("n", 0):,}', f'{info.get("n_total", 0):,}',
+                       (" Catalogue from %s." % html.escape(str(cat_version)))
+                       if cat_version else ""))
             out.append(f"<figure><img class=preview src='{html.escape(rel)}' "
                        f"loading=lazy alt='{html.escape(field)} {html.escape(cap)}'>"
                        f"<figcaption class=muted>{html.escape(cap)}<br>"
@@ -1656,9 +1663,12 @@ def main(argv=None):
         # for every field but the three re-staged this cycle.
         diagram_items = []
         for v in versions:
-            vdir = field_release_dir(field, v, args.release_root)
-            found = sorted((vdir / "preview").glob(f"{field}_ccd*.png")) \
-                if (vdir / "preview").is_dir() else []
+            # `<release_root>/diagrams/<version>/<field>/`, NOT inside the
+            # version tree: a published release must stay inert, and a file
+            # added to it later makes its own MANIFEST/CHECKSUMS wrong
+            # (review of #869).
+            ddir = Path(args.release_root) / "diagrams" / v / field
+            found = sorted(ddir.glob(f"{field}_ccd*.png")) if ddir.is_dir() else []
             if not found:
                 continue
             for src in found:

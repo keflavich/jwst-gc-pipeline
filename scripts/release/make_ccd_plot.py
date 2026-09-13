@@ -32,13 +32,20 @@ S/N > 10 in EVERY band the diagram uses, and a finite magnitude in every one --
 so a point is a source measured in all of them, not one detected in two and
 extrapolated.  S/N is flux/flux_err from the table's own columns.
 
-Magnitudes are VEGA.  The AB zero points in these catalogues are ~1 mag off
-(cloudc investigation, 2026-07), and a colour built from them is wrong by the
-difference of two such errors.
+Magnitudes are VEGA, which is the convention for these colours and for the CMD
+axis.
+
+An earlier version of this note justified that by saying the catalogues' AB zero
+points are ~1 mag off.  That does not reproduce: measured on brick's own m8
+table, `mag_ab - mag_vega` is +1.583 (F182M), +1.827 (F212N), +3.110 (F405N),
++3.405 (F466N) -- the textbook Vega-to-AB offsets to a few hundredths.  The two
+systems in these catalogues are mutually consistent, so the choice is convention
+and not a correction for a defect.  (Review of #869.)
 """
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import sys
 
@@ -130,8 +137,14 @@ def choose_axes(bands):
     have = set(bands)
     sw = (_first('sw_blue', have), _first('sw_red', have))
     lw = (_first('lw_blue', have), _first('lw_red', have))
-    # Guard against one band satisfying both halves of a pair (F444W is in
-    # lw_red, and a field with only F444W in the LW must not plot F444W-F444W).
+    # The inequalities are DEFENSIVE, not load-bearing: the slot lists are
+    # disjoint today (`sw_blue & sw_red` and `lw_blue & lw_red` are both empty),
+    # so no band can satisfy both halves of a pair and neither can ever be
+    # False.  What actually stops `F444W - F444W` is `all(lw)` -- with F444W as
+    # the only LW band `_first('lw_blue')` is None and this branch is skipped,
+    # leaving the three-band fallback.  Kept so that adding a band to two slots
+    # cannot silently produce a colour of a band against itself; a mutation test
+    # will not see them go, which is why this says so.  (Review of #869.)
     if all(sw) and all(lw) and sw[0] != sw[1] and lw[0] != lw[1]:
         return ('ccd', (sw[0], sw[1], lw[0], lw[1]),
                 f'{sw[0]} - {sw[1]}', f'{lw[0]} - {lw[1]}')
@@ -257,7 +270,18 @@ def main(argv=None):
     # page describes, and picking by size chose the one whose bands are NOT the
     # requested diagram.  Draw each, and put the observation in the filename so
     # the page can say which pointing it is.
-    out_dir = fdir / 'preview'
+    # NOT inside the version directory.  A published release is the one
+    # artifact that should be inert: its MANIFEST.json and CHECKSUMS.sha256
+    # were written when it shipped, and adding a file two months later means
+    # they no longer describe their own tree.  Anyone who mirrored v1.0 in July
+    # and re-syncs gets files the checksum list does not mention, and a
+    # verifier comparing "listed vs present" reports a discrepancy on a release
+    # nobody meant to change.  (Review of #869.)
+    #
+    # These are page assets, not release products -- `make_webpage` copies them
+    # into `site/assets/` -- so they live beside the versioned trees, keyed by
+    # the version whose CATALOGUE they were drawn from.
+    out_dir = Path(args.release_root) / 'diagrams' / args.version / args.field
     out_dir.mkdir(parents=True, exist_ok=True)
     rc = 1
     for obs, src in select_tables(cats, iteration_rank):
@@ -279,6 +303,12 @@ def main(argv=None):
         # the one that drew the plot.
         info['observation'] = obs
         info['source_table'] = os.path.basename(src)
+        # The RELEASE the catalogue came from.  Six of the eleven diagrams are
+        # drawn from v1.0 tables while their field's imagery has been re-staged
+        # since, so without this a reader cannot tell which release's
+        # photometry they are looking at -- and v1.0-v1.4 are the versions
+        # carrying the sky-deleted products.  (Review of #869.)
+        info['version'] = args.version
         out.with_suffix('.json').write_text(json.dumps(info, indent=1))
         print(f'{tag}: {info["kind"]} {info["xlabel"]} vs {info["ylabel"]}, '
               f'{info["n"]:,} of {info["n_total"]:,} sources -> {out}')
