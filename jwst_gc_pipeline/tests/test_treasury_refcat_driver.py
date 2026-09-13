@@ -270,27 +270,18 @@ def _unregistered_treasury_obsids(limit=3):
 
 def test_the_registry_no_longer_serves_one_catalog_to_every_tile():
     """Companion to the driver: with no per-tile entry the lookup raises
-    rather than handing 139 tiles one CMZ-wide file."""
+    rather than handing 139 tiles one CMZ-wide file.
+
+    The observations come from the registry, so they are ones 10678 has not
+    delivered by construction.  What this pins is that a tile with no catalog
+    of its own raises instead of silently borrowing a neighbour's sky, and the
+    delivered tiles are covered by
+    ``test_a_delivered_treasury_tile_resolves_its_own_catalog`` in
+    test_fields_registry.
+    """
     for obsid in _unregistered_treasury_obsids():
         with pytest.raises(F.FieldRegistryError):
             F.reference_catalog_path('10678', obsid)
-
-
-def test_a_registered_treasury_tile_resolves_to_its_own_catalog():
-    """The other half: the raise-test above passes just as well if the lookup
-    is broken for every tile, so pin that a REGISTERED one still resolves --
-    and to a path carrying its own observation token, not a neighbour's sky
-    (the gc2211 o023 failure this module exists to prevent).
-    """
-    obs = next(o for o in F.BY_NAME['gc-treasury'].observations
-               if str(o.proposal) == '10678')
-    registered = dict(obs.reference_catalogs or {})
-    assert registered, 'no treasury tile registered; update these tests together'
-    for obsid in sorted(registered):
-        path = F.reference_catalog_path('10678', obsid)
-        assert f'_o{obsid}.' in path, (
-            f'tile {obsid} resolves to {path}, which does not carry its own '
-            f'observation token')
 
 
 def test_a_wildcard_obsid_field_still_takes_per_observation_keys(monkeypatch):
@@ -386,3 +377,60 @@ def test_the_catalogs_directory_is_created_before_the_first_query(tmp_path):
     assert os.path.isdir(made)
     # idempotent: a rerun over a populated directory is fine
     assert DRIVER.ensure_catalog_dir(base) == made
+
+
+# --------------------------------------------------------------------------
+# --tile-timeout: the outermost bound on a per-tile hang
+# --------------------------------------------------------------------------
+
+def test_a_hung_tile_is_killed_and_the_sweep_carries_on(monkeypatch, tmp_path):
+    """``subprocess.run(cmd)`` took no ``timeout=``, so a tile that wedged held
+    the whole sweep: o131 blocked a 139-tile run for 25+ minutes on an unbounded
+    Gaia ESA TAP call and had to be killed by hand.  The per-tile builder now
+    bounds its own queries, but only this layer bounds a stall anywhere ELSE in
+    the child -- an import, a VizieR read, a filesystem hang -- because it does
+    not depend on any handler being installed inside it.
+
+    The timed-out tile is reported as a failure (so the run exits non-zero and
+    names it) and the NEXT tile still runs."""
+    import subprocess as sp
+
+    ran = []
+
+    def fake_run(cmd, timeout=None, **kw):
+        ran.append((cmd[-1], timeout))
+        if len(ran) == 1:
+            raise sp.TimeoutExpired(cmd, timeout or 0)
+        return sp.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(DRIVER.subprocess, 'run', fake_run)
+    monkeypatch.setattr(DRIVER, 'query_tiles', lambda **kw: [
+        DRIVER.Tile(obsid='131', target='GC_131', ra=266.8, dec=-28.3,
+                    radius_deg=0.17, epoch=2026.6971, instruments=('nircam',)),
+        DRIVER.Tile(obsid='132', target='GC_132', ra=266.9, dec=-28.3,
+                    radius_deg=0.17, epoch=2026.6970, instruments=('nircam',)),
+    ])
+    rc = DRIVER.main(['--base', str(tmp_path), '--tile-timeout', '5'])
+    assert [o for o, _ in ran] == ['131', '132'], (
+        f"the sweep stopped at the hung tile: {ran}")
+    assert ran[0][1] == 5.0, "the bound was not passed to subprocess.run"
+    assert rc == 1, "a timed-out tile must be reported as a failure"
+
+
+def test_the_tile_bound_is_on_by_default_and_zero_opts_out(monkeypatch, tmp_path):
+    """A default of None would reintroduce the hang for every caller that does
+    not think to pass the flag -- which is every caller today."""
+    import subprocess as sp
+
+    seen = []
+    monkeypatch.setattr(DRIVER.subprocess, 'run',
+                        lambda cmd, timeout=None, **kw: (
+                            seen.append(timeout), sp.CompletedProcess(cmd, 0))[1])
+    monkeypatch.setattr(DRIVER, 'query_tiles', lambda **kw: [
+        DRIVER.Tile(obsid='131', target='GC_131', ra=266.8, dec=-28.3,
+                    radius_deg=0.17, epoch=2026.6971, instruments=('nircam',))])
+    DRIVER.main(['--base', str(tmp_path)])
+    assert seen == [DRIVER.DEFAULT_TILE_TIMEOUT_S]
+    seen.clear()
+    DRIVER.main(['--base', str(tmp_path), '--tile-timeout', '0', '--force'])
+    assert seen == [None], "0 must mean unbounded, not a 0 s timeout"

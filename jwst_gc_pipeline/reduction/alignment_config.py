@@ -220,6 +220,38 @@ ALIGNMENT_CONFIG = (
                'two from drifting apart again.'),
     ),
     FieldAlignment(
+        proposal='8322', fields=None,
+        reference_frame=GAIA, source=TABLE_CONSENSUS,
+        reference_filter='F200W',
+        notes=('omega Cen (NGC 5139), proposal 8322.  ABSENT until now, which is '
+               'the same gap #479 measured on wd1: with no entry every frame '
+               'stays at the raw assign_wcs frame -- the 2026-09-12 reduce logged '
+               '"RA, DE offset:  0.0 0.0" for every exposure -- and `offsets_channel` '
+               "returns 'none', so the m2 checkpoint REFUSES to write the "
+               'corrections it measures and the field cannot finish m12 at all. '
+               'That is the m92/m4/ngc6397 failure (#589), and omegacen would have '
+               'hit it the moment cataloging started.\n\n'
+               'GAIA rather than VIRAC2: at (201.70, -47.48) this is nowhere near '
+               'the VVV/VIRAC2 bulge footprint, and the field already carries a '
+               'pure gaia_refcat.fits -- 115,009 sources, median NN 1.80".  That is '
+               'DENSER than the 3" the dense-NN-median rule cares about, so the tie '
+               'must come from the sanctioned estimators, not a nearest-neighbour '
+               'median; the checkpoint path already enforces that.\n\n'
+               'TABLE_CONSENSUS rather than TABLE_LOCKED or RECORDED_BULK: 8322 has '
+               'no offsets table at all, so there is nothing to lock to, and a '
+               'hand-measured constant is what left m92/m4/ngc6397 unable to write '
+               'their per-exposure terms.  Consensus self-bootstraps -- m2 creates '
+               'the table with provenance as it measures.\n\n'
+               'reference_filter F200W: 8322 observes F115W/F200W/F444W + F405N '
+               '(NIRCam) and NIRISS F115W/F200W.  F200W is the band both '
+               'instruments share and the one with full 32-frame NIRCam coverage '
+               '(F405N and F444W have 8 each), so its consensus is the best-sampled '
+               'definition of the frame.\n\n'
+               'The second proposal on this field, 12587, is still all '
+               'calib_level -1 planning placeholders and gets no entry until it '
+               'has data.'),
+    ),
+    FieldAlignment(
         proposal='1905', fields=None,
         reference_frame=GAIA, source=TABLE_CONSENSUS,
         reference_filter='F212N',

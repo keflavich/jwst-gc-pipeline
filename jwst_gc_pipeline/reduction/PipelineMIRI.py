@@ -376,8 +376,26 @@ def main(filtername, Observations=None, regionname='brick',
     Observations.cache_location = output_dir
     obs_table = Observations.query_criteria(
                                             proposal_id=proposal_id,
-                                            #proposal_pi="Ginsburg*",
-                                            #calib_level=3,
+                                            # obs_collection and calib_level, for the
+                                            # reasons PipelineRerunNIRCAM-LONG
+                                            # spells out at its own query: a
+                                            # proposal NUMBER is not unique across
+                                            # missions (9438 is both a JWST program
+                                            # and an HST one), and the MAST
+                                            # discovery portal truncates a large
+                                            # result set -- 10678 carries 1668
+                                            # `calib_level = -1` planning
+                                            # placeholders against a few hundred
+                                            # real rows, so unfiltered it returns
+                                            # placeholders with the real rows cut
+                                            # off (measured 2026-09-12: o133 F212N
+                                            # 0 rows unfiltered, 48 with the
+                                            # filter).  An invisible row means an
+                                            # invisible association, which aborts
+                                            # the reduce on a tile whose
+                                            # association MAST has published.
+                                            obs_collection='JWST',
+                                            calib_level=[1, 2, 3],
                                             )
     print("Obs table length:", len(obs_table))
 
