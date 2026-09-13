@@ -72,6 +72,14 @@ def _max_order(root, ext):
 # --------------------------------------------------------------------------
 # mono HiPS build (reproject.hips)
 # --------------------------------------------------------------------------
+def _reproject_version():
+    try:
+        import reproject
+        return getattr(reproject, '__version__', '?')
+    except ImportError:                       # pragma: no cover
+        return '?'
+
+
 def build_mono_hips(i2d_paths, out_dir, order=None, coord_system_out='galactic',
                     tile_format='fits', threads=8, sci_ext='SCI'):
     """Build/refresh a mono HiPS from one or more ``_i2d`` mosaics.
@@ -91,10 +99,46 @@ def build_mono_hips(i2d_paths, out_dir, order=None, coord_system_out='galactic',
         with fits.open(p) as hdul:
             hdu = hdul[sci_ext] if sci_ext in [h.name for h in hdul] else hdul[0]
             inputs.append((np.asarray(hdu.data, float), WCS(hdu.header)))
-    os.makedirs(out_dir, exist_ok=True)
+    # `reproject_to_hips` creates the output directory itself and ERRORS if it
+    # already exists -- `os.makedirs(output_directory, exist_ok=False)`, with the
+    # comment "and error if it already exists" (reproject 0.19).  Pre-creating it
+    # here therefore guaranteed `FileExistsError` on every call, so this function
+    # could not build anything against that version; the treasury two-colour tree
+    # failed three for three in 6 seconds each.
+    #
+    # Make the PARENT instead, so callers can still pass a path whose directory
+    # does not exist yet, and hand reproject a name it is free to create.
+    parent = os.path.dirname(os.path.abspath(out_dir))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if os.path.isdir(out_dir):
+        if os.listdir(out_dir):
+            # A populated tree is someone's product, not scratch: refuse rather
+            # than delete, and say which path, since reproject's own error names
+            # a temp directory that tells the reader nothing.
+            raise FileExistsError(
+                f'{out_dir} already exists and is not empty; refusing to '
+                f'overwrite an existing HiPS tree')
+        os.rmdir(out_dir)
+    # `tile_format` is NOT a reproject_to_hips parameter in 0.19 -- it is
+    # INFERRED (`tile_format = "fits"`, becoming png/jpeg only when the INPUT is
+    # a png/jpeg file).  Forwarding it put it in **kwargs, which the function
+    # hands to `reproject_function`, so every call died with
+    # `reproject_interp() got an unexpected keyword argument 'tile_format'`
+    # -- the second of two independent incompatibilities on this one call.
+    #
+    # The input here is always arrays, so 0.19 writes FITS tiles, which is what
+    # every caller asks for.  Anything else has to fail loudly rather than be
+    # silently downgraded to FITS: a caller expecting png would get a tree of
+    # FITS tiles and no error.
+    if tile_format not in (None, 'fits'):
+        raise ValueError(
+            f'tile_format={tile_format!r}: reproject {_reproject_version()} '
+            f'infers the tile format from the input and writes FITS for array '
+            f'input, so png/jpeg cannot be requested here')
     kwargs = dict(reproject_function=reproject_interp,
                   output_directory=out_dir, coord_system_out=coord_system_out,
-                  threads=threads, tile_format=tile_format)
+                  threads=threads)
     if order is not None:
         kwargs['level'] = order
     # reproject_to_hips accepts a single (array, wcs) or a list to coadd.
