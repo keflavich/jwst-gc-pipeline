@@ -457,3 +457,54 @@ def test_the_status_tail_does_not_re_count_the_observed_tiles():
         page, re.S).group(1))
     tail = ledger.split('Skipped')[-1]
     assert 'archived' not in tail.lower() and 'collecting' not in tail.lower()
+
+
+# --- the two treasury imagery layers -----------------------------------------
+
+def test_miri_is_the_background_and_nircam_rides_on_top():
+    """They are drawn TOGETHER, not chosen between: the MIRI parallel sits
+    ~7.5' from its NIRCam prime, so they are different sky and the useful view
+    is both at once.  MIRI is the background (behind); NIRCam is an overlay
+    image layer (in front)."""
+    from jwst_gc_pipeline.monitoring import skyview
+    name, url, note = skyview.SURVEYS[0]
+    assert 'miri' in url.lower(), 'the MIRI layer is the background'
+    assert skyview.TREASURY_NIRCAM_HIPS not in [u for _n, u, _t in skyview.SURVEYS], \
+        'NIRCam must not also be a background CHOICE -- it is always on top'
+    html = _section(_footprints({'1': 'Executed'}))
+    assert 'setOverlayImageLayer' in html
+
+
+def test_both_treasury_layers_are_on_by_default():
+    html = _section(_footprints({'1': 'Executed'}))
+    assert re.search(r'class="gcm-sky-btn survey on"[^>]*data-survey="[^"]*miri', html)
+    assert 'class="gcm-sky-btn on" id="lyr-nircam-hips"' in html
+    assert 'var nircamOn = true;' in html
+
+
+def test_switching_the_background_does_not_lose_the_nircam_layer():
+    """`setImageSurvey` replaces the base and can clear the overlay stack, so
+    picking 2MASS would silently drop the survey's own data."""
+    html = _section(_footprints({'1': 'Executed'}))
+    switch = html.index('function applySurvey(')
+    after = html.index('aladin.setImageSurvey(', switch)
+    assert html.index('applyNircamHips();', after) < html.index('}', after) + 400
+
+
+def test_an_aladin_without_overlay_support_does_not_break_the_panel():
+    """The background, the footprints and the tile picker do not depend on the
+    overlay; an unguarded throw here would take their wiring down with it."""
+    html = _section(_footprints({'1': 'Executed'}))
+    block = html[html.index('function applyNircamHips'):]
+    assert 'try {' in block[:400] and 'catch' in block[:900]
+
+
+def test_the_layers_are_served_from_a_cors_enabled_host():
+    """Aladin reads tiles into a WebGL texture, so a host with no
+    Access-Control-Allow-Origin renders nothing.  data.rc.ufl.edu also answers
+    401 on this path, which is why both layers are published under avm_images
+    rather than linked where they were built."""
+    from jwst_gc_pipeline.monitoring import skyview
+    for url in [skyview.TREASURY_NIRCAM_HIPS, skyview.SURVEYS[0][1]]:
+        assert url.startswith('https://starformation.astro.ufl.edu/avm_images/')
+        assert 'data.rc.ufl.edu' not in url

@@ -129,10 +129,19 @@ RGPS_COMPONENTS = (
 #: offsets table yet, so o135 was aligned at (0,0)" on the raw assign_wcs frame
 #: with no measured tie.  The note below says so, because a background layer
 #: reads as ground truth otherwise.
+#: The two treasury layers are drawn TOGETHER, not chosen between: MIRI is the
+#: background and NIRCam rides on top as an overlay image layer, because they
+#: are different sky (the MIRI parallel sits ~7.5' from its NIRCam prime) and
+#: seeing both at once is the point.  NIRCam is therefore NOT in this list --
+#: it is `TREASURY_NIRCAM_HIPS` below, always in front of whatever background
+#: is selected, so switching to DSS still leaves the survey's own data visible.
+TREASURY_NIRCAM_HIPS = (
+    'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_hips/')
+
 SURVEYS = (
-    ('JWST Treasury',
-     'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_hips/',
-     'program 10678 as observed so far — zoom in to a tile to see it; '
+    ('JWST Treasury MIRI',
+     'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_miri_hips/',
+     'program 10678 F770W parallels as observed so far — zoom in to a tile; '
      'astrometry is provisional (no offsets table yet)'),
     ('DSS', 'P/DSS2/color', ''),
     ('2MASS', 'P/2MASS/color', ''),
@@ -1115,6 +1124,7 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                 'target': t['target'], 'status': t['status']}
                for t in tiles]
     tiles_json = json.dumps(tile_js)
+    nircam_hips_json = json.dumps(TREASURY_NIRCAM_HIPS)
 
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
 
@@ -1231,6 +1241,13 @@ pointings observed so far, from {status_note}.</p>
     <div class="gcm-sky-sec">
       <div class="gcm-sky-lab">Background</div>
       <div class="gcm-sky-row">{surveys}</div>
+      <div class="gcm-sky-lab" style="margin-top:6px">Over the background</div>
+      <div class="gcm-sky-row">
+        <button class="gcm-sky-btn on" id="lyr-nircam-hips"
+                title="program 10678 NIRCam (R=F480M G=mean B=F212N), drawn on
+                       top of the background; astrometry is provisional"
+                >NIRCam imagery</button>
+      </div>
     </div>
 
     <div class="gcm-sky-sec">
@@ -1693,6 +1710,43 @@ interactive view adds sky imagery you can pan across.
   // the interactive view existed, which meant the row a reader sees first was a
   // row of dead controls -- and the thing they select is exactly the reason to
   // load that view, so asking for one is a perfectly good way to ask for it.
+  // The NIRCam treasury layer rides ON TOP of whichever background is
+  // selected, rather than being one of the choices: it and the MIRI background
+  // are different sky (the parallel sits ~7.5' from its prime), so the useful
+  // view is both at once.  `A.HiPS(url)` is the same constructor the
+  // URL-specified backgrounds already use.
+  var NIRCAM_HIPS = {nircam_hips_json};
+  var NIRCAM_LAYER = 'treasury-nircam';
+  var nircamOn = true;
+
+  function applyNircamHips() {{
+    if (!aladin) {{ return; }}
+    // Wrapped: an Aladin build without overlay-image support would otherwise
+    // throw here and take the rest of the panel's wiring down with it.  The
+    // background, the footprints and the tile picker do not depend on this.
+    try {{
+      if (nircamOn) {{
+        aladin.setOverlayImageLayer(A.HiPS(NIRCAM_HIPS), NIRCAM_LAYER);
+      }} else {{
+        aladin.removeImageLayer(NIRCAM_LAYER);
+      }}
+    }} catch (e) {{
+      if (note) {{
+        note.textContent = 'NIRCam imagery layer unavailable (' + e + ')';
+      }}
+    }}
+  }}
+
+  var nircamBtn = document.getElementById('lyr-nircam-hips');
+  if (nircamBtn) {{
+    nircamBtn.addEventListener('click', function () {{
+      nircamOn = !nircamOn;
+      nircamBtn.classList.toggle('on', nircamOn);
+      if (!aladin) {{ loadInteractive(); return; }}
+      applyNircamHips();
+    }});
+  }}
+
   function applySurvey(target) {{
     if (!aladin) {{
       wanted = target;
@@ -1700,6 +1754,9 @@ interactive view adds sky imagery you can pan across.
       return;
     }}
     aladin.setImageSurvey(target.indexOf('http') === 0 ? A.HiPS(target) : target);
+    // Changing the BASE can clear the overlay stack, so put NIRCam back on top
+    // -- otherwise picking 2MASS silently loses the survey's own data.
+    applyNircamHips();
   }}
 
   document.querySelectorAll('#gcm-sky-ui button.survey').forEach(function (b) {{
@@ -1734,6 +1791,7 @@ interactive view adds sky imagery you can pan across.
         aladin.setImageSurvey(A.HiPS(wanted));
       }}
       wanted = null;
+      applyNircamHips();          // on by default, in front of the background
       if (svg) {{ svg.classList.add('gcm-sky-off'); }}
       // Hiding the map changes nothing about the container's box, but Aladin
       // caches its size, so nudge it to re-measure once the panel is settled.
