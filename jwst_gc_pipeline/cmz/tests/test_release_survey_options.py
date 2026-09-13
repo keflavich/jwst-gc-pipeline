@@ -73,3 +73,68 @@ def test_the_context_surveys_are_still_available():
     """Adding the JWST layers must not cost the all-sky context ones -- the
     treasury layers cover a few arcminutes and are useless for orientation."""
     assert any(not u.startswith('http') for u in _urls())
+
+
+# --- turning the footprint rectangles off ------------------------------------
+
+def _rendered():
+    geoms = [{'field': 'brick', 'href': 'brick.html', 'color': '#46bcd6',
+              'polys': [[[266.5, -28.7], [266.6, -28.7],
+                         [266.6, -28.6], [266.5, -28.6]]]}]
+    return fo.section(geoms)
+
+
+def test_the_viewer_can_hide_every_field_outline():
+    """At the treasury layers' scale a tile is smaller than the rectangle drawn
+    over it, so without this there is no way to see the imagery underneath."""
+    html = _rendered()
+    assert 'id=ov-outlines' in html
+    assert 'Field outlines' in html
+
+
+def test_one_control_reaches_every_field():
+    """Each field has its OWN graphicOverlay -- that is what gives it a colour
+    and a name in Aladin's layer list -- so there is no single object to
+    toggle and they have to be collected."""
+    html = _rendered()
+    assert 'fieldOverlays.push(ov)' in html
+    assert 'fieldOverlays.forEach' in html
+
+
+def test_hiding_does_not_destroy_the_overlays():
+    """`removeOverlay` would lose the objects, so turning them back on would
+    need every polygon rebuilt."""
+    html = _rendered()
+    assert 'ov.show();' in html and 'ov.hide();' in html
+    # a CALL, not the token -- the code comment explaining why it is avoided
+    # naturally contains the word
+    assert not re.search(r'\.removeOverlay\s*\(', html)
+
+
+def test_the_outlines_start_visible():
+    """They are the point of this map most of the time."""
+    html = _rendered()
+    assert re.search(r"outBtn\.className = 'on';", html)
+    assert re.search(r"outBtn\.setAttribute\('aria-pressed', 'true'\)", html)
+    # the variable must not be named so that it contains the survey button's
+    # `b.addEventListener('click'` as a substring: an existing test splits the
+    # page on that string and would land on this handler instead
+    assert "ob.addEventListener('click'" not in html
+
+
+def test_the_control_is_hidden_until_the_viewer_exists():
+    """A control that does nothing until 1.8 MB of Aladin loads is a dead
+    button; the survey switcher is unhidden in the same place for the same
+    reason."""
+    html = _rendered()
+    assert 'id=ov-outlines class=ov-surveys hidden' in html
+    assert 'outlineBar.hidden = false;' in html
+
+
+def test_the_clickable_field_markers_are_not_hidden_with_the_rectangles():
+    """They are the navigation to each field's page and do not cover the
+    imagery; hiding them would make the cleaned-up view a dead end."""
+    html = _rendered()
+    hide = html.index('fieldOverlays.forEach')
+    end = html.index('outlineBar.appendChild', hide)
+    assert 'cat.' not in html[hide:end]

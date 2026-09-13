@@ -496,7 +496,8 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
 <div class=ov-legend>{legend}</div>
 <div class=ov-live><button type=button id=ov-load>Load interactive sky view
 (Aladin Lite, ~1.8&nbsp;MB)</button> <span id=ov-status class=muted></span>
-<span id=ov-surveys class=ov-surveys hidden></span></div>
+<span id=ov-surveys class=ov-surveys hidden></span>
+<span id=ov-outlines class=ov-surveys hidden></span></div>
 <script id=ov-data type="application/json">{payload}</script>
 <script>
 (function () {{
@@ -504,6 +505,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   var status = document.getElementById('ov-status');
   var stage = document.getElementById('ov-stage');
   var surveyBar = document.getElementById('ov-surveys');
+  var outlineBar = document.getElementById('ov-outlines');
   if (!btn || !stage) {{ return; }}
   var data;
   try {{ data = JSON.parse(document.getElementById('ov-data').textContent); }}
@@ -647,8 +649,13 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     function finish() {{
     var cat = A.catalog({{name: 'released fields', sourceSize: 14, onClick: 'showPopup'}});
     aladin.addCatalog(cat);
+    // Kept so one control can hide them all.  Each field has its OWN overlay
+    // (one per field is what gives each its colour and name in Aladin's own
+    // layer list), so there is no single object to toggle.
+    var fieldOverlays = [];
     data.fields.forEach(function (f) {{
       var ov = A.graphicOverlay({{color: f.color, lineWidth: 2, name: f.field}});
+      fieldOverlays.push(ov);
       aladin.addOverlay(ov);
       var lon = 0, lat = 0, n = 0;
       f.polys.forEach(function (poly) {{
@@ -660,6 +667,36 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     aladin.on('objectClicked', function (src) {{
       if (src && src.data && src.data.href) {{ window.location.href = src.data.href; }}
     }});
+    // Turn the field outlines off, for looking at the imagery itself.  The
+    // rectangles are the point of this map most of the time, so they start ON
+    // -- but at the treasury layers' scale a tile is smaller than the outline
+    // drawn over it, and there is otherwise no way to see the data underneath.
+    //
+    // The clickable field MARKERS stay: they are the navigation to each field's
+    // page, they do not cover the imagery the way a filled rectangle does, and
+    // losing them would make a cleaned-up view a dead end.
+    if (outlineBar) {{
+      outlineBar.innerHTML = '';
+      outlineBar.hidden = false;
+      var outBtn = document.createElement('button');
+      outBtn.type = 'button';
+      outBtn.className = 'on';
+      outBtn.textContent = 'Field outlines';
+      outBtn.title = 'show or hide the released fields\u2019 footprint rectangles';
+      outBtn.setAttribute('aria-pressed', 'true');
+      outBtn.addEventListener('click', function () {{
+        var on = outBtn.className !== 'on';
+        outBtn.className = on ? 'on' : '';
+        outBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        fieldOverlays.forEach(function (ov) {{
+          // `show`/`hide` rather than removeOverlay: removing loses the
+          // objects, so turning them back on would need them rebuilt.
+          if (on) {{ ov.show(); }} else {{ ov.hide(); }}
+        }});
+      }});
+      outlineBar.appendChild(ob);
+    }}
+
     // the background switcher: without it the other entries in SURVEYS are
     // serialised into the page and never reachable
     if (surveyBar) {{
