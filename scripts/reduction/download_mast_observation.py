@@ -48,8 +48,25 @@ def main():
     Observations.clear_cache()
     Observations.TIMEOUT = 300
     bp = basepath(args.target)
+    # calib_level=[1,2,3] is REQUIRED, not an optimisation.  The MAST
+    # discovery portal truncates a large result set, and 10678 carries 1668
+    # `calib_level = -1` PLANNING placeholders against a few hundred real
+    # rows -- so the unfiltered query returns a table of placeholders with
+    # the real data rows cut off.  Measured 2026-09-12, same instant, same
+    # process:
+    #
+    #     unfiltered  o133 F212N -> 0 rows     o129 F212N -> 0 rows
+    #     calib 1,2,3 o133 F212N -> 48 rows    o129 F212N -> 24 rows
+    #
+    # The consequence is silent: an observation whose rows are invisible
+    # looks exactly like one that has released nothing, so a tile's uncal
+    # is never fetched and -- worse -- its level-3 association is never
+    # seen, which is the one thing the reduce refuses to start without.
+    # o132's image3 asn was invisible for exactly this reason until the
+    # filter was added.
     obs_table = Observations.query_criteria(proposal_id=args.proposal,
-                                            obs_collection='JWST')
+                                            obs_collection='JWST',
+                                            calib_level=[1, 2, 3])
     print(f'obs table: {len(obs_table)} rows', flush=True)
     scope = observation_scope_mask(np.array(obs_table['obs_id']),
                                    args.proposal, args.obsid)

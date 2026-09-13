@@ -755,8 +755,36 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                                                 # the HST rows, but nothing
                                                 # guaranteed that.
                                                 obs_collection='JWST',
+                                                # calib_level is REQUIRED on a
+                                                # program with many PLANNED
+                                                # observations, not an
+                                                # optimisation.  The MAST
+                                                # discovery portal truncates a
+                                                # large result set, and 10678
+                                                # carries 1668 `calib_level =
+                                                # -1` planning placeholders
+                                                # against a few hundred real
+                                                # rows, so the unfiltered query
+                                                # returns placeholders with the
+                                                # real rows cut off.  Measured
+                                                # 2026-09-12, same instant, same
+                                                # process:
+                                                #
+                                                #   unfiltered  o133 F212N -> 0
+                                                #   calib 1,2,3 o133 F212N -> 48
+                                                #
+                                                # This block exists to fetch the
+                                                # image3 association, and an
+                                                # invisible row means an
+                                                # invisible association -- which
+                                                # surfaces as the `Did not find
+                                                # any NIRCam asn files` abort on
+                                                # a tile whose association MAST
+                                                # has in fact published.
+                                                # 1 and 2 stay in: the uncal
+                                                # download below needs them.
+                                                calib_level=[1, 2, 3],
                                                 #proposal_pi="Ginsburg*",
-                                                #calib_level=3,
                                                 )
         print("Obs table length:", len(obs_table))
 
