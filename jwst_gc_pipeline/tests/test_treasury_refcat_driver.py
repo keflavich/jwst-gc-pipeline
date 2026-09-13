@@ -248,12 +248,49 @@ def test_the_emitted_registry_block_names_the_file_the_build_writes():
 # the registry
 # --------------------------------------------------------------------------
 
+def _unregistered_treasury_obsids(limit=3):
+    """Treasury observation numbers that have no reference catalog of their own.
+
+    Taken from the registry rather than written out here.  A literal list goes
+    stale the moment a tile lands: #860 registered o139, which this test named
+    as an example of an UNregistered tile, and the same list in
+    ``test_fields_registry.py`` was moved while this one was not -- so main went
+    red on a tile registration that was itself correct.  Derived, the examples
+    follow the registry and only the assertion has to be maintained.
+    """
+    obs = next(o for o in F.BY_NAME['gc-treasury'].observations
+               if str(o.proposal) == '10678')
+    registered = set(obs.reference_catalogs or {})
+    free = [f'{n:03d}' for n in range(1, 140) if f'{n:03d}' not in registered]
+    assert len(free) >= limit, (
+        'every treasury tile in 001-139 now has its own reference catalog; '
+        'this test needs an unregistered observation to probe with')
+    return free[:limit]
+
+
 def test_the_registry_no_longer_serves_one_catalog_to_every_tile():
     """Companion to the driver: with no per-tile entry the lookup raises
     rather than handing 139 tiles one CMZ-wide file."""
-    for obsid in ('001', '088', '139'):
+    for obsid in _unregistered_treasury_obsids():
         with pytest.raises(F.FieldRegistryError):
             F.reference_catalog_path('10678', obsid)
+
+
+def test_a_registered_treasury_tile_resolves_to_its_own_catalog():
+    """The other half: the raise-test above passes just as well if the lookup
+    is broken for every tile, so pin that a REGISTERED one still resolves --
+    and to a path carrying its own observation token, not a neighbour's sky
+    (the gc2211 o023 failure this module exists to prevent).
+    """
+    obs = next(o for o in F.BY_NAME['gc-treasury'].observations
+               if str(o.proposal) == '10678')
+    registered = dict(obs.reference_catalogs or {})
+    assert registered, 'no treasury tile registered; update these tests together'
+    for obsid in sorted(registered):
+        path = F.reference_catalog_path('10678', obsid)
+        assert f'_o{obsid}.' in path, (
+            f'tile {obsid} resolves to {path}, which does not carry its own '
+            f'observation token')
 
 
 def test_a_wildcard_obsid_field_still_takes_per_observation_keys(monkeypatch):
