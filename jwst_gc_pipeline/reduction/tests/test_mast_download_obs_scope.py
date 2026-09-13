@@ -87,10 +87,27 @@ def test_the_download_is_handed_only_this_observations_rows(driver, tmp_path,
     """brick's o001 rows plus the unattributed candidate; cloudc's o002/o003
     stay behind."""
     fake = _run(driver, tmp_path, monkeypatch)
-    # ``obs_collection`` is part of the query, not decoration: a proposal NUMBER
-    # is not unique across missions (9438 is a JWST program and an HST one), and
-    # the unscoped query returns both missions' rows.
-    assert fake.criteria == {'proposal_id': '2221', 'obs_collection': 'JWST'}
+    # Both extra criteria are part of the query, not decoration.
+    #
+    # ``obs_collection``: a proposal NUMBER is not unique across missions (9438 is
+    # a JWST program and an HST one), and the unscoped query returns both
+    # missions' rows.
+    #
+    # ``calib_level``: the MAST discovery portal TRUNCATES a large result set, and
+    # a program with many planned-but-unexecuted observations is mostly
+    # ``calib_level = -1`` placeholders -- 10678 carries 1668 of them against a
+    # few hundred real rows.  Measured 2026-09-12, same instant, same process:
+    #
+    #     unfiltered  o133 F212N -> 0 rows     calib 1,2,3 -> 48 rows
+    #     unfiltered  o129 F212N -> 0 rows     calib 1,2,3 -> 24 rows
+    #
+    # An invisible row means an invisible association, and this block exists to
+    # fetch the image3 association -- so the truncation surfaces as the
+    # `Did not find any NIRCam asn files` abort on a tile whose association MAST
+    # has in fact published.  1 and 2 stay in because the uncal download needs
+    # them.
+    assert fake.criteria == {'proposal_id': '2221', 'obs_collection': 'JWST',
+                             'calib_level': [1, 2, 3]}
     assert fake.handed == ['jw02221-o001_t001_nircam_clear-f212n',
                            'jw02221-c1001_t001_nircam_clear-f212n']
 
