@@ -252,6 +252,8 @@ fields:
           '133': catalogs/gaia_virac2_refcat_epoch2026.70_o133.fits
           '134': catalogs/gaia_virac2_refcat_epoch2026.70_o134.fits
           '135': catalogs/gaia_virac2_refcat_epoch2026.70_o135.fits
+          '137': catalogs/gaia_virac2_refcat_epoch2026.69_o137.fits
+          '138': catalogs/gaia_virac2_refcat_epoch2026.69_o138.fits
           '139': catalogs/gaia_virac2_refcat_epoch2026.69_o139.fits
         nvisits: 1
         # The alignment SOURCE is alignment_config.py's 10678 entry
