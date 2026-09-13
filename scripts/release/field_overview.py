@@ -43,9 +43,34 @@ import os
 #: one (it fetches tiles for a WebGL texture rather than loading them as
 #: ``<img>``).  ``CDS/P/SPITZER/color`` is the CDS mirror of the same IRAC
 #: composite, CORS-enabled, order 9, GC-centred.
+#: The four JWST layers are named EXPLICITLY rather than through the
+#: ``jwst_cmz_hips`` alias that used to lead this list.  That alias is a symlink
+#: to ``jwst_nir_hips``, so "JWST CMZ" was the near-infrared mosaic wearing a
+#: name that sounds like it covers everything -- and the MIRI mosaic beside it
+#: (``jwst_miri_hips``, same order, same frame) was not offered at all.  Naming
+#: the band in the label is the point: these are different sky at different
+#: wavelengths, not one dataset.
+#:
+#: Verified reachable and CORS-enabled from this page's own origin, 2026-09-13
+#: (Aladin reads tiles into a WebGL texture, so a host without
+#: ``Access-Control-Allow-Origin`` renders nothing at all):
+#:
+#:   jwst_nir_hips               200  *  order 14  galactic
+#:   jwst_miri_hips              200  *  order 14  galactic
+#:   jwst_gc_treasury_hips       200  *  order 14  galactic
+#:   jwst_gc_treasury_miri_hips  200  *  order 12  galactic
+#:
+#: The two treasury layers cover only what 10678 has observed so far, so they
+#: are sparse and will stay that way for a while; they lead anyway because this
+#: is the survey's own page.
+_AVM = 'https://starformation.astro.ufl.edu/avm_images/'
+
 SURVEYS = (
-    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/'),
-    ('CMZ RGB', 'https://starformation.astro.ufl.edu/avm_images/rgb_final_uncropped_hips/'),
+    ('CMZ NIR', _AVM + 'jwst_nir_hips/'),
+    ('CMZ MIRI', _AVM + 'jwst_miri_hips/'),
+    ('Treasury NIRCam', _AVM + 'jwst_gc_treasury_hips/'),
+    ('Treasury MIRI', _AVM + 'jwst_gc_treasury_miri_hips/'),
+    ('CMZ RGB', _AVM + 'rgb_final_uncropped_hips/'),
     ('Spitzer', 'CDS/P/SPITZER/color'),
     ('2MASS', 'P/2MASS/color'),
     ('DSS', 'P/DSS2/color'),
