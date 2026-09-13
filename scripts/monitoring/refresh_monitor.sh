@@ -50,8 +50,28 @@ if [ "$FOOTPRINTS" = "1" ]; then
     "$PYTHON" "$REPO/scripts/monitoring/build_footprints.py" \
         "$FOOTPRINT_PROGRAM" --out "$fp_tmp"
     footprints_rc=$?
-    if [ "$footprints_rc" -eq 0 ] && [ -s "$fp_tmp" ]; then
+    # A rebuild that lost the visit statuses is as much a bad file as a
+    # truncated one, and it does NOT fail: `fetch_visit_status` returns {} on an
+    # unresolvable host, a 404, or a page-shape change, `build` then exits 0 with
+    # `status_counts={}` and a perfectly well-formed file.  Without this an STScI
+    # hiccup replaces a good file hourly and the published page loses every
+    # status and every link.  (Review of #852.)
+    _n_status () {
+        python3 -c "import json,sys
+try:
+    print(len(json.load(open(sys.argv[1])).get('status_counts') or {}))
+except Exception:
+    print(0)" "$1" 2>/dev/null || echo 0
+    }
+    fp_new=$(_n_status "$fp_tmp")
+    fp_prev=$(_n_status "$OUTDIR/footprints.json")
+    if [ "$footprints_rc" -eq 0 ] && [ -s "$fp_tmp" ] \
+       && { [ "$fp_new" -gt 0 ] || [ "$fp_prev" -eq 0 ]; }; then
         mv -f "$fp_tmp" "$OUTDIR/footprints.json"
+    elif [ "$footprints_rc" -eq 0 ] && [ -s "$fp_tmp" ]; then
+        rm -f "$fp_tmp"
+        echo "WARNING: rebuild carries no visit statuses (previous file has" \
+             "$fp_prev) -- keeping the previous $OUTDIR/footprints.json" >&2
     else
         rm -f "$fp_tmp"
         echo "WARNING: footprints rebuild exited $footprints_rc -- keeping the" \

@@ -144,3 +144,61 @@ done
 exit 0
 ''', FOOTPRINT_PROGRAM='99999')
     assert '99999' in seen.read_text()
+
+
+def test_a_rebuild_that_lost_its_statuses_keeps_the_previous_file(tmp_path):
+    """`fetch_visit_status` returns {} on an unresolvable host, a 404 or a
+    page-shape change, and `build` then exits 0 with a perfectly well-formed
+    file carrying `status_counts: {}`.  Without a guard an STScI hiccup replaces
+    a good file hourly and the page loses every status and every link.
+    (Review of #852.)"""
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    good = {"program": "10678", "status_counts": {"Executed": 12},
+            "n_planned": 127}
+    (outdir / 'footprints.json').write_text(json.dumps(good))
+    done, _ = _run(tmp_path, '''
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${next:-}" ]; then
+    echo '{"program":"10678","status_counts":{},"n_planned":139}' > "$a"; exit 0; fi
+done
+exit 0
+''')
+    assert json.loads((outdir / 'footprints.json').read_text()) == good
+    assert done.returncode == 0
+    assert 'no visit statuses' in done.stderr
+
+
+def test_the_first_ever_build_is_not_blocked_by_the_guard(tmp_path):
+    """With no previous file there is nothing to protect, and a status-less
+    build is still better than none -- otherwise a fresh checkout could never
+    write one."""
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    done, _ = _run(tmp_path, '''
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${next:-}" ]; then
+    echo '{"program":"10678","status_counts":{}}' > "$a"; exit 0; fi
+done
+exit 0
+''')
+    assert (outdir / 'footprints.json').is_file()
+    assert done.returncode == 0
+
+
+def test_a_rebuild_that_gained_statuses_replaces_a_status_less_one(tmp_path):
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    (outdir / 'footprints.json').write_text('{"status_counts": {}}')
+    done, _ = _run(tmp_path, '''
+for a in "$@"; do
+  if [ "$a" = "--out" ]; then next=1; continue; fi
+  if [ -n "${next:-}" ]; then
+    echo '{"status_counts":{"Executed":12}}' > "$a"; exit 0; fi
+done
+exit 0
+''')
+    got = json.loads((outdir / 'footprints.json').read_text())
+    assert got['status_counts'] == {'Executed': 12}

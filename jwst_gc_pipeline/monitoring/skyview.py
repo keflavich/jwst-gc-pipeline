@@ -183,13 +183,54 @@ MAST_RESULTS_URL = (
 RUN_STATUSES = ('executed', 'archived', 'collecting')
 
 
-def mast_url(program, observation):
-    """The archive search for one executed observation, or ``None``.
+#: What a link actually reaches, per lifecycle stage.  Measured against MAST on
+#: 2026-09-13 (review of #852): of the twelve linked tiles, only five returned
+#: anything but planning placeholders --
+#:
+#:     Archived     3 of 3 have data
+#:     Executed     0 of 4
+#:     Collecting   2 of 5
+#:
+#: so no status gate is both precise and complete: gating on Archived would drop
+#: 131 and 139, which do have data.  Only MAST knows, and the builder does not
+#: ask it.  So the link is described as what it IS -- a search for that
+#: observation -- and the stage is named in the title, rather than promising
+#: data the reader may not get.
+STAGE_NOTE = {
+    'archived': 'products are in the archive',
+    'executed': 'visit ran; products not published yet',
+    'collecting': 'visit ran; products may not be published yet',
+}
 
-    Only for tiles that have actually RUN.  A scheduled or skipped visit has no
-    data in MAST -- a skipped one never will without re-planning -- so linking
-    them would send a reader to an empty result and let them conclude the
-    archive had lost something.
+
+#: How much of the panel must stay inside the map, px.  `.gcm-sky-wrap` is
+#: `overflow: hidden`, so a panel dropped past an edge is clipped rather than
+#: scrolled to and could never be dragged back.
+DRAG_EDGE_PX = 28
+
+
+def clamp_panel(left, top, wrap_w, wrap_h, panel_w, panel_h,
+                edge=DRAG_EDGE_PX):
+    """Where a dragged panel is allowed to land, in wrap-relative px.
+
+    The arithmetic lives HERE, in Python, and is emitted into the page -- so it
+    can be tested on its numbers instead of by grepping the rendered JS for a
+    function name.  The first version of the drag tests asserted
+    ``'function clampTo' in html``, which a reviewer defeated by replacing the
+    body with ``return [left, top]`` while keeping the name: the exact defect
+    the test named, 32 passed (review of #852).
+    """
+    return (min(max(left, edge - panel_w), wrap_w - edge),
+            min(max(top, 0), wrap_h - edge))
+
+
+def mast_url(program, observation):
+    """The archive search for one observation that has RUN, or ``None``.
+
+    Not offered for scheduled or skipped tiles, for a narrower reason than the
+    first version of this claimed: a tile that has not run has no observation to
+    search for.  It does NOT mean a linked tile has data -- see ``STAGE_NOTE``;
+    seven of the twelve linked today reach placeholders only.
     """
     try:
         prog = int(str(program).strip())
@@ -233,14 +274,15 @@ CSS = """
 /* The panel is DRAGGABLE by its header.  `overflow: hidden` on the wrap means
    a panel dragged past an edge is clipped rather than scrolled to, so the drag
    handler clamps instead of relying on the browser. */
-.gcm-sky-ui h4 { cursor: move; user-select: none; -webkit-user-select: none;
-                 /* Without `touch-action: none` a touch drag scrolls the page
-                    instead of moving the panel, and the pointermove events
-                    stop arriving mid-gesture. */
-                 touch-action: none; }
 .gcm-sky-ui.gcm-dragging { opacity: .92;
                            box-shadow: 0 6px 18px rgba(0,0,0,.45); }
-.gcm-sky-ui h4 { margin: 0; padding: 6px 10px; font-size: 11px; font-weight: 600;
+/* One block for the header, drag affordance included -- it was declared twice,
+   four lines apart, and the next edit would have picked one of them.
+   `touch-action: none` is required: without it a touch drag scrolls the page
+   and the pointermove events stop arriving mid-gesture. */
+.gcm-sky-ui h4 { cursor: move; user-select: none; -webkit-user-select: none;
+                 touch-action: none;
+                 margin: 0; padding: 6px 10px; font-size: 11px; font-weight: 600;
                  letter-spacing: .06em; text-transform: uppercase;
                  background: rgba(255,255,255,.06); color: #9fb4bc;
                  border-bottom: 1px solid rgba(255,255,255,.1);
@@ -1059,11 +1101,16 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
             url = (mast_url(program, t['number'])
                    if _has_run(t['status']) else None)
             if url:
+                stage = t['status'].strip().lower()
+                note = STAGE_NOTE.get(stage)
                 out.append('<a href="%s" target="_blank" rel="noopener" '
                            'title="%s">%s</a>'
                            % (_esc(url),
                               _esc('%s — search MAST for observation %s of '
-                                   'program %s' % (title, t['number'], program)),
+                                   'program %s%s'
+                                   % (title, t['number'], program,
+                                      ' (%s: %s)' % (t['status'], note)
+                                      if note else '')),
                               _esc(t['number'])))
             else:
                 out.append('<a data-goto="%s" title="%s">%s</a>'
@@ -1124,6 +1171,7 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                 'target': t['target'], 'status': t['status']}
                for t in tiles]
     tiles_json = json.dumps(tile_js)
+    drag_edge_px = json.dumps(DRAG_EDGE_PX)
     nircam_hips_json = json.dumps(TREASURY_NIRCAM_HIPS)
 
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
@@ -1374,15 +1422,14 @@ interactive view adds sky imagery you can pan across.
 
     var dragging = false, dx = 0, dy = 0;
 
+    // Same arithmetic as `skyview.clamp_panel`, whose tests cover the numbers;
+    // EDGE is emitted from that module so the two cannot drift.
+    var EDGE = {drag_edge_px};
     function clampTo(left, top) {{
-      // Keep a grab-able strip on screen in every direction: a panel dropped
-      // past an edge would be clipped by the wrap's `overflow: hidden` and
-      // could never be dragged back.
       var w = wrap.clientWidth, h = wrap.clientHeight;
       var pw = panel.offsetWidth, ph = panel.offsetHeight;
-      var edge = 28;
-      return [Math.min(Math.max(left, edge - pw), w - edge),
-              Math.min(Math.max(top, 0), h - edge)];
+      return [Math.min(Math.max(left, EDGE - pw), w - EDGE),
+              Math.min(Math.max(top, 0), h - EDGE)];
     }}
 
     function place(left, top) {{

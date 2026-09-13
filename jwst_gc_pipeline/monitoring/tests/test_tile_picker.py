@@ -377,12 +377,47 @@ def test_dragging_clears_the_css_right_anchor():
 
 
 def test_the_panel_cannot_be_dragged_out_of_reach():
-    """`.gcm-sky-wrap` is `overflow: hidden`, so a panel dropped past an edge
-    is clipped, not scrolled to -- it could never be dragged back.  The clamp
-    keeps a strip of it inside, and re-runs on resize so a narrowing window
-    cannot strand it either."""
+    """`.gcm-sky-wrap` is `overflow: hidden`, so a panel dropped past an edge is
+    clipped, not scrolled to -- it could never be dragged back.
+
+    Asserted on the ARITHMETIC, not on the presence of a function name: the
+    first version of this checked `'function clampTo' in html`, and a reviewer
+    defeated it by replacing the body with `return [left, top]` while keeping
+    the name -- the exact defect named here, 32 passed."""
+    from jwst_gc_pipeline.monitoring import skyview
+    W, H, PW, PH = 800, 560, 208, 300
+    E = skyview.DRAG_EDGE_PX
+
+    def clamp(x, y):
+        return skyview.clamp_panel(x, y, W, H, PW, PH)
+
+    # dragged far off each edge, a grabbable strip survives
+    assert clamp(-10_000, 0)[0] == E - PW          # left: `edge` px still visible
+    assert clamp(10_000, 0)[0] == W - E            # right
+    assert clamp(0, 10_000)[1] == H - E            # bottom
+    assert clamp(0, -10_000)[1] == 0               # top: header stays reachable
+    # a position already inside is untouched
+    assert clamp(100, 60) == (100, 60)
+    # and the identity mutation the reviewer used is caught
+    assert clamp(-10_000, 10_000) != (-10_000, 10_000)
+
+
+def test_the_clamp_leaves_a_grabbable_strip_at_every_edge():
+    """The point of the clamp is that the HEADER can still be reached, since it
+    is the only drag handle."""
+    from jwst_gc_pipeline.monitoring import skyview
+    W, H, PW, PH = 640, 480, 208, 300
+    for x, y in ((-9999, -9999), (9999, -9999), (-9999, 9999), (9999, 9999)):
+        left, top = skyview.clamp_panel(x, y, W, H, PW, PH)
+        assert left + PW >= skyview.DRAG_EDGE_PX and left <= W - skyview.DRAG_EDGE_PX
+        assert 0 <= top <= H - skyview.DRAG_EDGE_PX
+
+
+def test_the_page_and_the_python_clamp_share_one_edge_value():
+    """Two copies of the number would drift; the JS takes it from the module."""
+    from jwst_gc_pipeline.monitoring import skyview
     html = _section(_footprints({'1': 'Executed'}))
-    assert 'function clampTo' in html
+    assert 'var EDGE = %d;' % skyview.DRAG_EDGE_PX in html
     assert "addEventListener('resize'" in html
 
 
@@ -392,9 +427,15 @@ def test_a_touch_drag_moves_the_panel_rather_than_scrolling_the_page():
 
 
 def test_the_map_does_not_pan_underneath_a_drag():
-    """Aladin and the static map both pan on pointer drags of their own."""
+    """Aladin and the static map both pan on pointer drags of their own.
+
+    Scoped to the pointermove handler: a bare `'ev.stopPropagation();' in html`
+    passed even with the call deleted, because two other calls elsewhere in the
+    page satisfy the substring (review of #852)."""
     html = _section(_footprints({'1': 'Executed'}))
-    assert 'ev.stopPropagation();' in html
+    start = html.index("grip.addEventListener('pointermove'")
+    end = html.index('function end(', start)
+    assert 'ev.stopPropagation();' in html[start:end]
 
 
 # --- the status LIFECYCLE, not a single value --------------------------------
@@ -508,3 +549,22 @@ def test_the_layers_are_served_from_a_cors_enabled_host():
     for url in [skyview.TREASURY_NIRCAM_HIPS, skyview.SURVEYS[0][1]]:
         assert url.startswith('https://starformation.astro.ufl.edu/avm_images/')
         assert 'data.rc.ufl.edu' not in url
+
+
+def test_a_link_says_what_stage_the_tile_is_at():
+    """Of the twelve linked tiles, seven reach planning placeholders only --
+    Executed 0 of 4, Collecting 2 of 5, Archived 3 of 3 (measured 2026-09-13).
+    So the link is described as a SEARCH and the stage is named, rather than
+    promising data the reader may not get."""
+    html = _section(_footprints({'1': 'Archived', '2': 'Executed',
+                                 '3': 'Collecting'}, n=4))
+    import html as H
+    text = H.unescape(html)
+    assert 'products are in the archive' in text
+    assert 'products not published yet' in text
+    assert 'search MAST for observation' in text
+
+
+def test_every_run_stage_is_covered_by_a_note():
+    from jwst_gc_pipeline.monitoring import skyview
+    assert set(skyview.STAGE_NOTE) == set(skyview.RUN_STATUSES)
