@@ -14,6 +14,10 @@ OUTDIR=${OUTDIR:-/orange/adamginsburg/jwst/monitor}
 PUBDIR=${PUBDIR:-/orange/adamginsburg/web/public/jwst-gc}
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 CUTOUT_LABEL=${CUTOUT_LABEL:-monitor5as}
+#: The survey whose footprints the sky view draws.  Set FOOTPRINTS=0 to skip
+#: the rebuild (offline runs, or a deliberately pinned footprints.json).
+FOOTPRINT_PROGRAM=${FOOTPRINT_PROGRAM:-10678}
+FOOTPRINTS=${FOOTPRINTS:-1}
 
 # Pin a worktree/branch by setting PIPE_ROOT (prepended to PYTHONPATH).
 PIPE_ROOT=${PIPE_ROOT:-$REPO}
@@ -22,6 +26,58 @@ export PYTHONPATH="$PIPE_ROOT:${PYTHONPATH:-}"
 cd "$REPO" || exit 1
 
 echo "MONITOR refresh start: $(date -Is)  outdir=$OUTDIR pub=$PUBDIR"
+
+# The sky view's footprints, rebuilt BEFORE the pages that embed them.
+#
+# This step did not exist, and its absence was invisible: the pages regenerated
+# every hour while `footprints.json` sat at whatever date somebody last ran the
+# builder by hand.  The visit statuses in it -- executed / skipped / scheduled --
+# come from a LIVE STScI fetch rather than from the APT, so they go stale on
+# their own schedule.  Measured 2026-09-12: the served page said 3 executed
+# while STScI said 12, having drifted 9 tiles in nine hours.
+#
+# No `--force`: the APT is cached and changes rarely, and the half that changes
+# every few hours is the visit-status table, which is fetched live on every run
+# regardless.  Re-downloading 1.1 MB hourly would buy nothing.
+#
+# Written to a temp file and moved into place.  The builder dumps JSON straight
+# to `--out`, so one that dies mid-write leaves a TRUNCATED footprints.json --
+# and the sky view parses it client-side, which makes that a broken map rather
+# than a stale one.  A failed rebuild keeps the previous file instead.
+footprints_rc=0
+if [ "$FOOTPRINTS" = "1" ]; then
+    fp_tmp="$OUTDIR/.footprints.json.$$"
+    "$PYTHON" "$REPO/scripts/monitoring/build_footprints.py" \
+        "$FOOTPRINT_PROGRAM" --out "$fp_tmp"
+    footprints_rc=$?
+    # A rebuild that lost the visit statuses is as much a bad file as a
+    # truncated one, and it does NOT fail: `fetch_visit_status` returns {} on an
+    # unresolvable host, a 404, or a page-shape change, `build` then exits 0 with
+    # `status_counts={}` and a perfectly well-formed file.  Without this an STScI
+    # hiccup replaces a good file hourly and the published page loses every
+    # status and every link.  (Review of #852.)
+    _n_status () {
+        python3 -c "import json,sys
+try:
+    print(len(json.load(open(sys.argv[1])).get('status_counts') or {}))
+except Exception:
+    print(0)" "$1" 2>/dev/null || echo 0
+    }
+    fp_new=$(_n_status "$fp_tmp")
+    fp_prev=$(_n_status "$OUTDIR/footprints.json")
+    if [ "$footprints_rc" -eq 0 ] && [ -s "$fp_tmp" ] \
+       && { [ "$fp_new" -gt 0 ] || [ "$fp_prev" -eq 0 ]; }; then
+        mv -f "$fp_tmp" "$OUTDIR/footprints.json"
+    elif [ "$footprints_rc" -eq 0 ] && [ -s "$fp_tmp" ]; then
+        rm -f "$fp_tmp"
+        echo "WARNING: rebuild carries no visit statuses (previous file has" \
+             "$fp_prev) -- keeping the previous $OUTDIR/footprints.json" >&2
+    else
+        rm -f "$fp_tmp"
+        echo "WARNING: footprints rebuild exited $footprints_rc -- keeping the" \
+             "previous $OUTDIR/footprints.json" >&2
+    fi
+fi
 
 # The field view.  Its exit status is 1 when any run is failing, which is a
 # finding about the ARCHIVE, not a failure of this job -- so it is recorded and
@@ -36,7 +92,8 @@ fields_rc=$?
     --publish-dir "$PUBDIR"
 cutout_rc=$?
 
-echo "MONITOR refresh done: $(date -Is)  fields_rc=$fields_rc cutout_rc=$cutout_rc"
+echo "MONITOR refresh done: $(date -Is)  fields_rc=$fields_rc" \
+     "cutout_rc=$cutout_rc footprints_rc=$footprints_rc"
 
 # Push to Apache.  OFF by default: this needs outbound ssh to the web host, and
 # a SLURM compute node may not have it -- a cron that fails on the network every
@@ -52,6 +109,11 @@ fi
 # Fail the JOB only if the generator itself broke (rc >= 2) or could not run at
 # all (rc 127/126).  rc 1 means "the archive has failing runs", which is the
 # monitor working correctly.
+# `footprints_rc` is deliberately absent from this loop.  It reports a network
+# fetch of a third-party page; that failing is not a reason to stop publishing
+# the pipeline's status, and the previous footprints.json is still served.  It
+# is reported on the done line and warned about above.
+#
 # rc 1 from the GENERATOR means "the archive has failing runs", which is the
 # monitor working correctly. Anything higher is the generator itself breaking.
 for rc in "$fields_rc" "$cutout_rc"; do

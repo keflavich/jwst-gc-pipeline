@@ -116,7 +116,33 @@ RGPS_COMPONENTS = (
 #:
 #: The third element is an optional note for the reader: the CMZ mosaic has no
 #: tiles below order 8, so it is blank until you are zoomed in past ~10'.
+#: The survey's OWN imagery leads, by explicit request (2026-09-12).  This
+#: reverses the ordering rule the block above records, and the trade-off is
+#: real: `jwst_gc_treasury_hips` covers what 10678 has actually observed --
+#: one tile of 139 as of today, `hips_initial_fov` 0.048 deg -- so at the
+#: panel's opening ~1.6 deg field it is a speck of colour on black until
+#: coverage grows.  That is the point of putting it first on a page whose job
+#: is watching the survey arrive; it is not the CMZ mistake repeated by
+#: accident.  Moving `DSS` back to the front is the one-line revert.
+#:
+#: Its own `properties` carries a PROVISIONAL ASTROMETRY warning: 10678 has no
+#: offsets table yet, so o135 was aligned at (0,0)" on the raw assign_wcs frame
+#: with no measured tie.  The note below says so, because a background layer
+#: reads as ground truth otherwise.
+#: The two treasury layers are drawn TOGETHER, not chosen between: MIRI is the
+#: background and NIRCam rides on top as an overlay image layer, because they
+#: are different sky (the MIRI parallel sits ~7.5' from its NIRCam prime) and
+#: seeing both at once is the point.  NIRCam is therefore NOT in this list --
+#: it is `TREASURY_NIRCAM_HIPS` below, always in front of whatever background
+#: is selected, so switching to DSS still leaves the survey's own data visible.
+TREASURY_NIRCAM_HIPS = (
+    'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_hips/')
+
 SURVEYS = (
+    ('JWST Treasury MIRI',
+     'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_miri_hips/',
+     'program 10678 F770W parallels as observed so far — zoom in to a tile; '
+     'astrometry is provisional (no offsets table yet)'),
     ('DSS', 'P/DSS2/color', ''),
     ('2MASS', 'P/2MASS/color', ''),
     ('Spitzer', 'CDS/P/SPITZER/color', ''),
@@ -124,6 +150,94 @@ SURVEYS = (
     ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/',
      'the survey mosaic — zoom in past ~10′ for it to appear'),
 )
+
+
+#: MAST's executed-results route.  The bare ``#/jwst?...`` form opens a blank,
+#: UNEXECUTED search form; ``#/jwst/results?...&useStore=false`` runs the query
+#: and builds it from the explicit params instead of a session-saved hash.
+#: (That distinction was worked out in data-qa `observations.mast_search_url`;
+#: it is repeated here rather than imported because the two repos do not share
+#: a package.)
+#:
+#: VERIFIED: ``program`` and ``observtn`` are real JWST search columns, both
+#: indexed -- from MAST's own metadata API,
+#: ``search/util/api/v0.1/column_list?mission=jwst`` (2026-09-12).  ``observtn``
+#: is documented there as "the observation number ... within a proposal", which
+#: is exactly the tile number here.
+#: NOT VERIFIED: that the search UI honours ``observtn`` as a URL parameter --
+#: its bundle is lazily chunked, so grepping it settles nothing, and there is no
+#: way to execute the SPA from here.  If it is ignored the link still lands on
+#: this program's executed results, which is broader than intended but not
+#: wrong; the link's title says which observation it asks for, so a reader can
+#: see whether they got it.
+MAST_RESULTS_URL = (
+    'https://mast.stsci.edu/search/ui/#/jwst/results?resolve=true'
+    '&data_types=spectrum,timeseries,image,other'
+    '&instruments=MIRI,NIRCAM'
+    '&program_id={program}&observtn={observation}&useStore=false')
+
+
+#: Statuses meaning the visit has RUN.  Mirrors
+#: ``build_footprints.OBSERVED_STATUSES``; the two files do not share a package,
+#: and a test pins them equal so they cannot drift.
+RUN_STATUSES = ('executed', 'archived', 'collecting')
+
+
+#: What a link actually reaches, per lifecycle stage.  Measured against MAST on
+#: 2026-09-13 (review of #852): of the twelve linked tiles, only five returned
+#: anything but planning placeholders --
+#:
+#:     Archived     3 of 3 have data
+#:     Executed     0 of 4
+#:     Collecting   2 of 5
+#:
+#: so no status gate is both precise and complete: gating on Archived would drop
+#: 131 and 139, which do have data.  Only MAST knows, and the builder does not
+#: ask it.  So the link is described as what it IS -- a search for that
+#: observation -- and the stage is named in the title, rather than promising
+#: data the reader may not get.
+STAGE_NOTE = {
+    'archived': 'products are in the archive',
+    'executed': 'visit ran; products not published yet',
+    'collecting': 'visit ran; products may not be published yet',
+}
+
+
+#: How much of the panel must stay inside the map, px.  `.gcm-sky-wrap` is
+#: `overflow: hidden`, so a panel dropped past an edge is clipped rather than
+#: scrolled to and could never be dragged back.
+DRAG_EDGE_PX = 28
+
+
+def clamp_panel(left, top, wrap_w, wrap_h, panel_w, panel_h,
+                edge=DRAG_EDGE_PX):
+    """Where a dragged panel is allowed to land, in wrap-relative px.
+
+    The arithmetic lives HERE, in Python, and is emitted into the page -- so it
+    can be tested on its numbers instead of by grepping the rendered JS for a
+    function name.  The first version of the drag tests asserted
+    ``'function clampTo' in html``, which a reviewer defeated by replacing the
+    body with ``return [left, top]`` while keeping the name: the exact defect
+    the test named, 32 passed (review of #852).
+    """
+    return (min(max(left, edge - panel_w), wrap_w - edge),
+            min(max(top, 0), wrap_h - edge))
+
+
+def mast_url(program, observation):
+    """The archive search for one observation that has RUN, or ``None``.
+
+    Not offered for scheduled or skipped tiles, for a narrower reason than the
+    first version of this claimed: a tile that has not run has no observation to
+    search for.  It does NOT mean a linked tile has data -- see ``STAGE_NOTE``;
+    seven of the twelve linked today reach placeholders only.
+    """
+    try:
+        prog = int(str(program).strip())
+        obs = int(str(observation).strip())
+    except (TypeError, ValueError):
+        return None
+    return MAST_RESULTS_URL.format(program=prog, observation=obs)
 
 
 def load_footprints(path):
@@ -157,7 +271,18 @@ CSS = """
               border: 1px solid rgba(255,255,255,.13); border-radius: 4px;
               font-size: 11.5px; overflow: hidden;
               font-family: var(--sans); backdrop-filter: blur(6px); }
-.gcm-sky-ui h4 { margin: 0; padding: 6px 10px; font-size: 11px; font-weight: 600;
+/* The panel is DRAGGABLE by its header.  `overflow: hidden` on the wrap means
+   a panel dragged past an edge is clipped rather than scrolled to, so the drag
+   handler clamps instead of relying on the browser. */
+.gcm-sky-ui.gcm-dragging { opacity: .92;
+                           box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+/* One block for the header, drag affordance included -- it was declared twice,
+   four lines apart, and the next edit would have picked one of them.
+   `touch-action: none` is required: without it a touch drag scrolls the page
+   and the pointermove events stop arriving mid-gesture. */
+.gcm-sky-ui h4 { cursor: move; user-select: none; -webkit-user-select: none;
+                 touch-action: none;
+                 margin: 0; padding: 6px 10px; font-size: 11px; font-weight: 600;
                  letter-spacing: .06em; text-transform: uppercase;
                  background: rgba(255,255,255,.06); color: #9fb4bc;
                  border-bottom: 1px solid rgba(255,255,255,.1);
@@ -691,8 +816,15 @@ def _pointing_title(pointing):
                        ('  ' + bands) if bands else '', where)
 
 
-def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
-    """One instrument's polygons for one group, as a titled ``<g>`` per pointing."""
+def _layer(frame, pointings, key, color, fill_opacity, layer_id, label,
+           link=None):
+    """One instrument's polygons for one group, as a titled ``<g>`` per pointing.
+
+    ``link`` is an optional ``pointing -> url or None``; where it returns a url
+    the group is wrapped in an SVG ``<a>``, so the footprint itself is
+    clickable.  Used for executed tiles, which are the only ones with data to
+    link to.
+    """
     body = []
     count = 0
     for pointing in pointings:
@@ -706,9 +838,16 @@ def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
         # observation NUMBER rather than the array index: the two coincide only
         # while every pointing is drawable, and a pointing dropped for want of
         # a target coordinate would silently shift every tile after it.
-        body.append('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
-                    % (_esc(pointing.get('number') or ''),
-                       _esc(_pointing_title(pointing)), path))
+        group = ('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
+                 % (_esc(pointing.get('number') or ''),
+                    _esc(_pointing_title(pointing)), path))
+        url = link(pointing) if link else None
+        if url:
+            # `target=_blank` on an SVG <a> needs the XLink-free HTML form,
+            # which every browser that runs Aladin also supports.
+            group = ('<a href="%s" target="_blank" rel="noopener">%s</a>'
+                     % (_esc(url), group))
+        body.append(group)
     return ('<g id="%s" class="gcm-lyr" data-label="%s" stroke="%s" fill="%s" '
             'fill-opacity="%s" stroke-width="1.1" vector-effect="non-scaling-stroke">'
             '%s</g>' % (layer_id, _esc(label), color, color,
@@ -775,10 +914,17 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
                             '.16', 'stat-skp-nircam', 'skipped NIRCam')
     skp_m, n_skp_m = _layer(frame, skipped, 'miri', COLOR_SKIPPED,
                             '.16', 'stat-skp-miri', 'skipped MIRI')
+    program = footprints.get('program')
+
+    def _mast(pointing):
+        return mast_url(program, pointing.get('number'))
+
     obs_n, n_obs_n = _layer(frame, observed, 'nircam', COLOR_OBSERVED,
-                            '.18', 'stat-obs-nircam', 'observed NIRCam')
+                            '.18', 'stat-obs-nircam', 'observed NIRCam',
+                            link=_mast)
     obs_m, n_obs_m = _layer(frame, observed, 'miri', COLOR_OBSERVED,
-                            '.18', 'stat-obs-miri', 'observed MIRI')
+                            '.18', 'stat-obs-miri', 'observed MIRI',
+                            link=_mast)
 
     # Roman is drawn here too, not only in the interactive view. It used to be
     # Aladin-only, which made its toggles do nothing at all until someone
@@ -921,27 +1067,73 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     def _by_status(name):
         return [t for t in tiles if t['status'].strip().lower() == name]
 
-    executed, skipped = _by_status('executed'), _by_status('skipped')
+    def _has_run(status):
+        return str(status).strip().lower() in RUN_STATUSES
+
+    def _observed_breakdown(counts):
+        """' (3 archived, 7 executed)' -- the lifecycle stages behind the
+        total, since 'archived' means the data is in MAST and 'collecting'
+        means it is not there yet, and a reader chasing data cares which."""
+        parts = ['%d %s' % (v, k.lower())
+                 for k, v in sorted(counts.items()) if _has_run(k)]
+        return (' <span class="gcm-sky-lab" style="display:inline">(%s)</span>'
+                % ', '.join(parts)) if len(parts) > 1 else ''
+
+    # Every status that means the visit RAN, not just 'Executed' -- STScI moves
+    # a visit on to 'Collecting' and then 'Archived', and counting one value
+    # made the ledger drop tiles as they progressed.
+    executed = [t for t in tiles if _has_run(t['status'])]
+    skipped = _by_status('skipped')
     status_counts = footprints.get('status_counts') or {}
     status_source = footprints.get('status_source') or 'apt'
 
+    program = footprints.get('program')
+
     def _tile_links(items, cls):
-        return ', '.join(
-            '<a data-goto="%s" title="%s">%s</a>'
-            % (_esc(t['number']),
-               _esc('%s%s' % (t['target'], '  ' + t['start'] if t['start'] else '')),
-               _esc(t['number']))
-            for t in items) or '<span class="gcm-sky-empty">none</span>'
+        """Executed tiles link OUT to the archive; everything else links IN to
+        the tile picker.  A skipped or scheduled visit has no data in MAST, so
+        sending a reader there would show an empty result and read as the
+        archive having lost something."""
+        out = []
+        for t in items:
+            title = '%s%s' % (t['target'],
+                              '  ' + t['start'] if t['start'] else '')
+            url = (mast_url(program, t['number'])
+                   if _has_run(t['status']) else None)
+            if url:
+                stage = t['status'].strip().lower()
+                note = STAGE_NOTE.get(stage)
+                out.append('<a href="%s" target="_blank" rel="noopener" '
+                           'title="%s">%s</a>'
+                           % (_esc(url),
+                              _esc('%s — search MAST for observation %s of '
+                                   'program %s%s'
+                                   % (title, t['number'], program,
+                                      ' (%s: %s)' % (t['status'], note)
+                                      if note else '')),
+                              _esc(t['number'])))
+            else:
+                out.append('<a data-goto="%s" title="%s">%s</a>'
+                           % (_esc(t['number']), _esc(title),
+                              _esc(t['number'])))
+        return ', '.join(out) or '<span class="gcm-sky-empty">none</span>'
 
     if status_counts:
+        # "Observed", not "Executed": the 12 tiles here are spread across
+        # Executed / Archived / Collecting, and labelling the total with one of
+        # its three members reads as a count of that member.
         ledger_rows = [
-            '<div><b class="ex">Executed %d</b> &nbsp;%s</div>'
-            % (len(executed), _tile_links(executed, 'ex')),
+            '<div><b class="ex">Observed %d</b>%s &nbsp;%s</div>'
+            % (len(executed), _observed_breakdown(status_counts),
+               _tile_links(executed, 'ex')),
             '<div><b class="sk">Skipped %d</b> &nbsp;%s</div>'
             % (len(skipped), _tile_links(skipped, 'sk')),
         ]
+        # The tail is what is NOT above it.  Excluding only 'executed' listed
+        # Archived and Collecting again underneath, so the same three tiles were
+        # counted twice on one line and 12 + 3 + 2 did not add up to anything.
         rest = ', '.join('%s %d' % (k, v) for k, v in sorted(status_counts.items())
-                         if k.strip().lower() not in ('executed', 'skipped'))
+                         if not _has_run(k) and k.strip().lower() != 'skipped')
         if rest:
             ledger_rows.append('<div class="gcm-sky-lab" style="margin-top:4px">'
                                '%s</div>' % _esc(rest))
@@ -979,6 +1171,8 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                 'target': t['target'], 'status': t['status']}
                for t in tiles]
     tiles_json = json.dumps(tile_js)
+    drag_edge_px = json.dumps(DRAG_EDGE_PX)
+    nircam_hips_json = json.dumps(TREASURY_NIRCAM_HIPS)
 
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
 
@@ -1040,7 +1234,7 @@ pointings observed so far, from {status_note}.</p>
   {static_svg}
 
   <div class="gcm-sky-ui" id="gcm-sky-ui">
-    <h4>Footprints</h4>
+    <h4 id="gcm-sky-grip" title="drag to move this panel">Footprints</h4>
 
     <div class="gcm-sky-sec">
       <div class="gcm-sky-lab">JWST — planned</div>
@@ -1095,6 +1289,13 @@ pointings observed so far, from {status_note}.</p>
     <div class="gcm-sky-sec">
       <div class="gcm-sky-lab">Background</div>
       <div class="gcm-sky-row">{surveys}</div>
+      <div class="gcm-sky-lab" style="margin-top:6px">Over the background</div>
+      <div class="gcm-sky-row">
+        <button class="gcm-sky-btn on" id="lyr-nircam-hips"
+                title="program 10678 NIRCam (R=F480M G=mean B=F212N), drawn on
+                       top of the background; astrometry is provisional"
+                >NIRCam imagery</button>
+      </div>
     </div>
 
     <div class="gcm-sky-sec">
@@ -1210,6 +1411,85 @@ interactive view adds sky imagery you can pan across.
     }});
   }});
 
+  // ------------------------------------------------------------ drag the panel
+  // The controls sit ON the map, so wherever they are they hide part of it.
+  // Rather than pick a corner for everyone, let the reader move them.
+  (function () {{
+    var panel = document.getElementById('gcm-sky-ui');
+    var grip = document.getElementById('gcm-sky-grip');
+    var wrap = panel && panel.parentElement;
+    if (!panel || !grip || !wrap) {{ return; }}
+
+    var dragging = false, dx = 0, dy = 0;
+
+    // Same arithmetic as `skyview.clamp_panel`, whose tests cover the numbers;
+    // EDGE is emitted from that module so the two cannot drift.
+    var EDGE = {drag_edge_px};
+    function clampTo(left, top) {{
+      var w = wrap.clientWidth, h = wrap.clientHeight;
+      var pw = panel.offsetWidth, ph = panel.offsetHeight;
+      return [Math.min(Math.max(left, EDGE - pw), w - EDGE),
+              Math.min(Math.max(top, 0), h - EDGE)];
+    }}
+
+    function place(left, top) {{
+      var xy = clampTo(left, top);
+      panel.style.left = xy[0] + 'px';
+      panel.style.top = xy[1] + 'px';
+      // The panel is anchored with `right` in CSS; setting `left` without
+      // clearing that pins BOTH edges and the panel stretches instead of
+      // moving.
+      panel.style.right = 'auto';
+    }}
+
+    grip.addEventListener('pointerdown', function (ev) {{
+      if (ev.button !== undefined && ev.button !== 0) {{ return; }}
+      dragging = true;
+      var p = panel.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+      dx = ev.clientX - p.left;
+      dy = ev.clientY - p.top;
+      place(p.left - w.left, p.top - w.top);   // right-anchored -> left-anchored
+      panel.classList.add('gcm-dragging');
+      if (grip.setPointerCapture) {{ grip.setPointerCapture(ev.pointerId); }}
+      ev.preventDefault();
+    }});
+
+    grip.addEventListener('pointermove', function (ev) {{
+      if (!dragging) {{ return; }}
+      var w = wrap.getBoundingClientRect();
+      place(ev.clientX - w.left - dx, ev.clientY - w.top - dy);
+      // The map pans on pointer drags of its own; without this a drag that
+      // wanders off the header would pan the sky underneath the panel.
+      ev.preventDefault();
+      ev.stopPropagation();
+    }});
+
+    function end(ev) {{
+      if (!dragging) {{ return; }}
+      dragging = false;
+      panel.classList.remove('gcm-dragging');
+      if (grip.releasePointerCapture && ev.pointerId !== undefined) {{
+        try {{ grip.releasePointerCapture(ev.pointerId); }} catch (e) {{}}
+      }}
+    }}
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+
+    // A panel parked near the right edge would be left off-screen by a
+    // narrowing window, with no way to reach it.
+    window.addEventListener('resize', function () {{
+      if (panel.style.left) {{
+        place(parseFloat(panel.style.left) || 0,
+              parseFloat(panel.style.top) || 0);
+      }}
+    }});
+
+    // Clicks inside the panel are for its own controls, never for the map.
+    panel.addEventListener('pointerdown', function (ev) {{ ev.stopPropagation(); }});
+    panel.addEventListener('wheel', function (ev) {{ ev.stopPropagation(); }},
+                           {{ passive: true }});
+  }}());
+
   // ------------------------------------------------------------ tile picker
   // Highlighting is done by CLASS on the static <g data-obs>, not by rewriting
   // colours: the layer toggles own the colours, and a picker that set them
@@ -1276,6 +1556,8 @@ interactive view adds sky imagery you can pan across.
     }});
   }}
   // The execution ledger's numbers are clickable shortcuts into the same path.
+  // `a[data-goto]` only -- the executed entries are real hrefs to MAST and
+  // must not have their navigation prevented.
   document.querySelectorAll('.gcm-sky-stat a[data-goto]').forEach(function (a) {{
     a.addEventListener('click', function (ev) {{
       ev.preventDefault();
@@ -1475,6 +1757,43 @@ interactive view adds sky imagery you can pan across.
   // the interactive view existed, which meant the row a reader sees first was a
   // row of dead controls -- and the thing they select is exactly the reason to
   // load that view, so asking for one is a perfectly good way to ask for it.
+  // The NIRCam treasury layer rides ON TOP of whichever background is
+  // selected, rather than being one of the choices: it and the MIRI background
+  // are different sky (the parallel sits ~7.5' from its prime), so the useful
+  // view is both at once.  `A.HiPS(url)` is the same constructor the
+  // URL-specified backgrounds already use.
+  var NIRCAM_HIPS = {nircam_hips_json};
+  var NIRCAM_LAYER = 'treasury-nircam';
+  var nircamOn = true;
+
+  function applyNircamHips() {{
+    if (!aladin) {{ return; }}
+    // Wrapped: an Aladin build without overlay-image support would otherwise
+    // throw here and take the rest of the panel's wiring down with it.  The
+    // background, the footprints and the tile picker do not depend on this.
+    try {{
+      if (nircamOn) {{
+        aladin.setOverlayImageLayer(A.HiPS(NIRCAM_HIPS), NIRCAM_LAYER);
+      }} else {{
+        aladin.removeImageLayer(NIRCAM_LAYER);
+      }}
+    }} catch (e) {{
+      if (note) {{
+        note.textContent = 'NIRCam imagery layer unavailable (' + e + ')';
+      }}
+    }}
+  }}
+
+  var nircamBtn = document.getElementById('lyr-nircam-hips');
+  if (nircamBtn) {{
+    nircamBtn.addEventListener('click', function () {{
+      nircamOn = !nircamOn;
+      nircamBtn.classList.toggle('on', nircamOn);
+      if (!aladin) {{ loadInteractive(); return; }}
+      applyNircamHips();
+    }});
+  }}
+
   function applySurvey(target) {{
     if (!aladin) {{
       wanted = target;
@@ -1482,6 +1801,9 @@ interactive view adds sky imagery you can pan across.
       return;
     }}
     aladin.setImageSurvey(target.indexOf('http') === 0 ? A.HiPS(target) : target);
+    // Changing the BASE can clear the overlay stack, so put NIRCam back on top
+    // -- otherwise picking 2MASS silently loses the survey's own data.
+    applyNircamHips();
   }}
 
   document.querySelectorAll('#gcm-sky-ui button.survey').forEach(function (b) {{
@@ -1516,6 +1838,7 @@ interactive view adds sky imagery you can pan across.
         aladin.setImageSurvey(A.HiPS(wanted));
       }}
       wanted = null;
+      applyNircamHips();          // on by default, in front of the background
       if (svg) {{ svg.classList.add('gcm-sky-off'); }}
       // Hiding the map changes nothing about the container's box, but Aladin
       // caches its size, so nudge it to re-measure once the panel is settled.

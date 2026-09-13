@@ -1910,22 +1910,35 @@ def test_the_emitted_javascript_parses():
     assert done.returncode == 0, done.stderr
 
 
-def test_the_view_opens_on_an_all_sky_background():
-    """The survey's own CMZ HiPS declares hips_initial_fov = 0.077 deg and has
-    no low-order tiles, so opening on it at the panel's 1.6 deg field drew a
-    black rectangle — the imagery worked exactly as configured and showed
-    nothing. Whatever leads this list has to cover the whole sky."""
+def test_the_survey_list_is_well_formed():
+    """A HiPS named by ID must be one that exists; `P/Spitzer/GLIMPSE360`
+    matched nothing at the CDS MOCServer, so that button selected a survey that
+    has never been served under that name and simply did nothing."""
     from jwst_gc_pipeline.monitoring import skyview
-    first_url = skyview.SURVEYS[0][1]
-    # A HiPS named by ID must be one that exists; `P/Spitzer/GLIMPSE360` matched
-    # nothing at the CDS MOCServer, so that button selected a survey that has
-    # never been served under that name and simply did nothing.
     assert all(len(entry) == 3 for entry in skyview.SURVEYS)
     assert 'P/Spitzer/GLIMPSE360' not in [u for _n, u, _t in skyview.SURVEYS]
-    assert not first_url.startswith('http'), (
-        'the opening background is a specific HiPS, not an all-sky survey')
-    assert any(url.startswith('http') for _n, url, _note in skyview.SURVEYS), (
-        'the survey imagery should still be reachable, just not as the default')
+    assert any(not url.startswith('http') for _n, url, _note in skyview.SURVEYS), (
+        'an all-sky survey has to remain available, whatever leads the list')
+
+
+def test_a_partial_sky_default_says_why_it_looks_empty():
+    """This USED TO assert the default was all-sky, because the survey's own CMZ
+    HiPS (`hips_initial_fov` 0.077 deg, no low-order tiles) drew a black
+    rectangle at the panel's 1.6 deg field -- imagery working exactly as
+    configured and showing nothing.
+
+    The default is now the treasury layer by explicit request (2026-09-12), on
+    a page whose job is watching 10678 arrive.  The old assertion is therefore
+    wrong about what is wanted, but the failure it was written for is still
+    real: a partial-sky default IS mostly black at the opening field.  So the
+    rule becomes "a partial-sky default has to explain itself" rather than
+    "there must not be one", which is the part that protects a reader."""
+    from jwst_gc_pipeline.monitoring import skyview
+    name, url, note = skyview.SURVEYS[0]
+    if url.startswith('http'):
+        assert note, f'{name} leads the list and covers part of the sky; ' \
+                     f'it needs a note saying so'
+        assert 'zoom' in note.lower()
 
 
 #: HiPS providers that answer without an ``Access-Control-Allow-Origin`` header.
@@ -2123,8 +2136,13 @@ def test_wheel_zoom_does_not_hijack_page_scroll_unarmed():
     from jwst_gc_pipeline.monitoring import skyview
     html = skyview.section(_fp(planned=_POINTINGS))
     assert 'if (!armed) { return; }' in html
-    assert html.index('if (!armed) { return; }') < html.index('ev.preventDefault()',
-                                                              html.index('wheel'))
+    # Anchor on the MAP's wheel listener specifically.  `html.index('wheel')`
+    # used to find it because it was the only one; the draggable controls panel
+    # added a second (passive, no preventDefault) listener that now comes first
+    # in the document, so the loose locator started measuring the wrong handler.
+    wheel = html.index("svg.addEventListener('wheel'")
+    assert html.index('if (!armed) { return; }', wheel) < \
+        html.index('ev.preventDefault()', wheel)
 
 
 @pytest.mark.parametrize('bad', [
