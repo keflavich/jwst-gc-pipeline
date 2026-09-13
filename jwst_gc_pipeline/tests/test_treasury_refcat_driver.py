@@ -250,8 +250,17 @@ def test_the_emitted_registry_block_names_the_file_the_build_writes():
 
 def test_the_registry_no_longer_serves_one_catalog_to_every_tile():
     """Companion to the driver: with no per-tile entry the lookup raises
-    rather than handing 139 tiles one CMZ-wide file."""
-    for obsid in ('001', '088', '139'):
+    rather than handing 139 tiles one CMZ-wide file.
+
+    The observation numbers are ones 10678 has not delivered.  They used to
+    include 139, which is a registered tile now -- as tiles land, move the
+    EXAMPLES rather than the assertion.  What this pins is that a tile with no
+    catalog of its own raises instead of silently borrowing a neighbour's sky,
+    and the delivered tiles are covered by
+    ``test_a_delivered_treasury_tile_resolves_its_own_catalog`` in
+    test_fields_registry.
+    """
+    for obsid in ('001', '040', '088'):
         with pytest.raises(F.FieldRegistryError):
             F.reference_catalog_path('10678', obsid)
 
