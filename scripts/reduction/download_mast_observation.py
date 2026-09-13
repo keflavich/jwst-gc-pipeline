@@ -71,6 +71,20 @@ def main():
 
         products = Observations.get_product_list(obs_table[msk])
         print(f'{want}: {len(products)} product(s)', flush=True)
+        # An observation's rows can exist at MAST BEFORE any of its products is
+        # staged -- o129 and o130 both did on 2026-09-12, minutes after
+        # appearing.  `get_product_list` then warns NoResultsWarning and returns
+        # an EMPTY table, whose `productType` column will not `&=` with a boolean
+        # array:
+        #     TypeError: ufunc 'bitwise_and' not supported for the input types
+        # which aborted the whole band and skipped the tile.  Nothing is wrong
+        # in that state and the next pass picks the products up, so say so and
+        # move on.
+        if len(products) == 0:
+            print(f'{want}: no products staged for o{args.obsid} yet -- its '
+                  f'rows exist but MAST has nothing to download; will be '
+                  f'picked up on a later pass', flush=True)
+            continue
 
         asn = Observations.filter_products(products, extension='json')
         fits = Observations.filter_products(products, extension='fits')
@@ -78,12 +92,17 @@ def main():
             uri.endswith('_uncal.fits')
             and f'{jw_prefix(args.proposal)}{args.obsid}' in uri
             and token in uri
-            for uri in fits['dataURI']])
-        uncal &= fits['productType'] == 'SCIENCE'
-        have = np.array([os.path.exists(os.path.join(output_dir,
-                                                     os.path.basename(uri)))
-                         for uri in fits['dataURI']])
-        uncal &= ~have
+            for uri in fits['dataURI']], dtype=bool)
+        # dtype=bool on every mask below: a zero-length list comprehension
+        # yields a float64 array, which is the same TypeError one step later.
+        if len(fits):
+            uncal &= np.asarray(fits['productType'] == 'SCIENCE', dtype=bool)
+            have = np.array([os.path.exists(os.path.join(output_dir,
+                                                         os.path.basename(uri)))
+                             for uri in fits['dataURI']], dtype=bool)
+            uncal &= ~have
+        else:
+            have = np.zeros(0, dtype=bool)
         print(f'{want}: {len(asn)} asn, {uncal.sum()} uncal to fetch '
               f'({have.sum()} already on disk)', flush=True)
 
