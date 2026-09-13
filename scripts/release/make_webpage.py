@@ -1410,6 +1410,56 @@ def _field_cards(fields_info):
     return out
 
 
+def resolve_overview_geoms(roster, rebuilt, fresh, cached, read_from_disk):
+    """Footprint geometry for every CMZ field on the roster.
+
+    Split out of ``main`` for the reason the withholding rule was: which SOURCE
+    a field's footprint comes from is as much of a decision as drawing it, and
+    inline it could only be asserted by reading the source.
+
+    ``roster`` is ``{field: card-entry}``, and only entries with ``group`` None
+    are mapped -- this is a CMZ panel, and `galactic_plane` / `globular_clusters`
+    fields are elsewhere on sky.  The rule lives here rather than only at the
+    per-field append it mirrors, because the carry-forward paths below reach
+    fields that append never sees: the first build to resolve w51, wd1 and wd2
+    from disk put all three on the map, and l = 284..49 deg flattened every real
+    CMZ footprint to nothing (viewBox height 415.6 -> 170.2, 10 fields -> 13).
+
+    Three sources, in this order:
+
+    * ``fresh`` -- ``field_overview.collect`` ran on it this build;
+    * ``cached`` -- the ``_overview_geoms.json`` sidecar, so a subset run does
+      not re-read every other field's mosaic headers;
+    * ``read_from_disk(field, href)`` -- the authority.  A field on the roster
+      that is in neither of the above is read now.  Without this the FIRST
+      subset build on a site whose sidecar does not exist yet truncates the map
+      exactly as #812 describes, and the sidecar would be the only thing
+      standing between a partial build and a wrong page.
+
+    A field REBUILT this run that yielded no geometry is left OFF, never filled
+    in from the cache: ``collect`` returning nothing means its mosaics are
+    unreadable *now*, and drawing the previous build's footprint would have the
+    map assert a coverage the release has just stopped shipping.
+    """
+    rebuilt = set(rebuilt or ())
+    out = {}
+    for field in sorted(roster):
+        if (roster[field] or {}).get("group") is not None:
+            continue
+        href = f"{field}.html"
+        if field in fresh:
+            out[field] = fresh[field]
+        elif field in rebuilt:
+            continue
+        elif (cached.get(field) or {}).get("polys"):
+            out[field] = dict(cached[field], href=href)
+        else:
+            geom = read_from_disk(field, href)
+            if geom:
+                out[field] = geom
+    return [out[f] for f in sorted(out)]
+
+
 def render_index(fields_info, overview_html=""):
     out = [page_head("JWST Galactic Center survey — data release")]
     out.append("<header><h1>JWST Galactic Center survey</h1>")
@@ -1743,8 +1793,47 @@ def main(argv=None):
               f"run ({', '.join(carried)})")
     index_fields = [roster[f] for f in sorted(roster)]
 
-    overview_geoms = field_overview.collect(overview_entries)
-    if overview_entries and not overview_geoms:
+    # ---- and so does the on-sky overview, for exactly the same reason -------
+    # The cards got the roster treatment above; the map did not, so it went on
+    # regressing the same way in silence (#812).  Publishing
+    # `cloudef_controlfield` alone redrew the panel from that one field: viewBox
+    # `0 0 1068.0 322.4` -> `0 0 641.0 518.0`, axis range l = -0.5..0.75 ->
+    # 0.36..0.46, and all nine `<a class="ov-field">` polygons replaced by the
+    # control field's.  The build log said `16 on the index`, which was true of
+    # the cards and false of the map -- the failure had no output of its own.
+    #
+    # The map is now drawn for every field on the ROSTER.  Geometry is cached in
+    # a sidecar beside `_fields_index.json` so a subset run does not re-read
+    # every other field's mosaic headers, and the cache follows the same rule:
+    # it is a CACHE, never the authority.  A field that is on the roster and in
+    # neither this run nor the sidecar is read from disk, or the first subset
+    # build on a site with no sidecar yet would truncate exactly as before.
+    geom_path = out_dir / "_overview_geoms.json"
+    cached_geoms = {}
+    if geom_path.is_file():
+        try:
+            for geom in json.loads(geom_path.read_text()):
+                cached_geoms[geom["field"]] = geom
+        except (OSError, ValueError, KeyError, TypeError):
+            cached_geoms = {}          # unreadable sidecar: re-read from disk
+    fresh_geoms = {g["field"]: g for g in field_overview.collect(overview_entries)}
+
+    def _read_geom_from_disk(field, href):
+        found = discover_versions(field)
+        if not found:
+            return None
+        got = field_overview.collect(
+            [(field, field_release_dir(field, found[0], args.release_root), href)])
+        return got[0] if got else None
+
+    overview_geoms = resolve_overview_geoms(
+        roster, rebuilt, fresh_geoms, cached_geoms, _read_geom_from_disk)
+    geom_path.write_text(json.dumps(overview_geoms, indent=1, sort_keys=True))
+    carried_geoms = sorted({g["field"] for g in overview_geoms} - set(fresh_geoms))
+    if carried_geoms:
+        print(f"overview: carrying forward {len(carried_geoms)} field footprint(s) "
+              f"not rebuilt this run ({', '.join(carried_geoms)})")
+    if roster and not overview_geoms:
         print("note: no footprints readable -- on-sky overview omitted")
     overview_html = field_overview.section(overview_geoms)
 
