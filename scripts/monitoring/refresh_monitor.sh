@@ -41,8 +41,30 @@ echo "MONITOR refresh start: $(date -Is)  outdir=$OUTDIR pub=$PUBDIR"
 # staleness and must not block the run -- the check is skipped and says so.
 #
 # ALLOW_STALE_CHECKOUT=1 overrides, for a deliberate run from a branch.
+# FIRST, try to make the checkout current, because refusing to publish is not a
+# fix on its own: main takes several commits a day, nothing fast-forwards this
+# checkout on a schedule, so a distance-based gate reaches `behind > 0` within a
+# day and then freezes the page -- announced by one stderr line in a cron log,
+# with the job still reporting success.  "The monitor silently stopped
+# publishing" is the same class of failure as "the monitor silently published an
+# old page", which is what this is meant to end.
+#
+# `--ff-only`, and only with a clean tree: a checkout carrying real work is
+# never touched.  It simply fails here and falls through to the guard below,
+# which is what the guard is for.
 stale_checkout=0
 if [ "${ALLOW_STALE_CHECKOUT:-0}" != "1" ]; then
+    if git -C "$REPO" fetch --quiet origin 2>/dev/null \
+       && git -C "$REPO" diff --quiet 2>/dev/null \
+       && git -C "$REPO" diff --cached --quiet 2>/dev/null; then
+        if git -C "$REPO" merge --ff-only --quiet origin/main 2>/dev/null; then
+            :
+        else
+            echo "NOTE: $REPO could not be fast-forwarded to origin/main" \
+                 "(branch $(git -C "$REPO" rev-parse --abbrev-ref HEAD));" \
+                 "checking whether it is stale" >&2
+        fi
+    fi
     if git -C "$REPO" fetch --quiet origin 2>/dev/null; then
         behind=$(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
         if [ "${behind:-0}" -gt 0 ]; then
@@ -133,8 +155,13 @@ echo "MONITOR refresh done: $(date -Is)  fields_rc=$fields_rc" \
 # confirmed `ssh starformation true` works from wherever this runs.
 deploy_rc=0
 if [ "${MONITOR_DEPLOY:-0}" = "1" ] && [ "$stale_checkout" = "1" ]; then
-    echo "MONITOR deploy SKIPPED: checkout is behind origin/main" >&2
-    deploy_rc=0
+    # Non-zero so the SCHEDULER reports it.  Reaching here now means the
+    # fast-forward above could not fix it -- a dirty or diverged checkout,
+    # which needs a person -- so this is a real finding rather than routine
+    # drift, and a silent skip is how the original bug survived two days.
+    echo "MONITOR deploy SKIPPED: checkout is behind origin/main and could" \
+         "not be fast-forwarded; the published page is NOT being updated" >&2
+    deploy_rc=3
 elif [ "${MONITOR_DEPLOY:-0}" = "1" ]; then
     "$REPO/scripts/monitoring/deploy_monitor.sh" "$PUBDIR"
     deploy_rc=$?
