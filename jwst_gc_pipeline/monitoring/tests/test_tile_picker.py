@@ -140,42 +140,65 @@ def _section(fp):
     return skyview.section(fp)
 
 
-def test_every_tile_is_selectable_and_the_options_are_in_numeric_order():
-    """String order puts 10 before 2, which for a 139-tile survey makes the
-    picker unusable."""
+def _ledger(html):
+    """The Execution section's body.
+
+    Its own function because the section is a ``<details>`` now and ten tests
+    used to carry the same inline regex against the old ``<div>`` markup; one
+    of them would have been missed.
+    """
+    m = re.search(r'Execution</summary><div class="gcm-sky-stat">(.*?)</div>'
+                  r'</details>', html, re.S)
+    assert m, 'no Execution section in the rendered panel'
+    return m.group(1)
+
+
+def test_there_is_no_tile_dropdown():
+    """A <select> of 139 numbers, with no map beside it while it was open, that
+    answered the same question as the Execution section right below it."""
     html = _section(_footprints(n=12))
-    opts = re.findall(r'<option value="(\d+)">', html)
-    assert opts == [str(i) for i in range(1, 13)]
-    assert 'all 12 tiles' in html
+    assert '<option' not in html
+    assert 'gcm-sky-tile' not in html
+    assert 'gcm-sky-pick' not in html
 
 
-def test_a_tile_carries_its_number_target_and_status_in_the_option():
-    html = _section(_footprints({'3': 'Executed', '4': 'Skipped'}))
-    assert '3 — GC_3 — Executed' in html
-    assert '4 — GC_4 — Skipped' in html
+def test_the_execution_section_is_the_roster_the_dropdown_used_to_be():
+    """Removing the dropdown removed the only way to reach a tile that has not
+    run, so the scheduled tiles are listed by number here too."""
+    html = _section(_footprints({'3': 'Executed', '4': 'Skipped',
+                                 '5': 'Scheduled'}, n=6))
+    ledger = _ledger(html)
+    assert 'Observed 1' in ledger and 'Skipped 1' in ledger
+    assert 'Scheduled 1' in ledger
+    for n in ('3', '4', '5'):
+        assert 'data-goto="%s"' % n in ledger
 
 
-def test_executed_and_skipped_tiles_are_listed_by_number():
-    """Both are listed and both are reachable, but by different routes:
-    an executed tile links OUT to its data in MAST, a skipped one has no data
-    to link to and instead selects itself on the map."""
+def test_flight_ready_stays_a_count_and_not_a_wall_of_numbers():
+    """64 numbers with no date between them, none findable by anything but the
+    number itself."""
+    html = _section(_footprints({'1': 'Executed', '2': 'Flight Ready',
+                                 '3': 'Flight Ready'}, n=4))
+    ledger = _ledger(html)
+    assert 'Flight Ready 2' in ledger
+    assert 'data-goto="2"' not in ledger
+
+
+def test_every_listed_tile_is_selectable_by_number():
     html = _section(_footprints({'3': 'Executed', '5': 'Executed',
                                  '4': 'Skipped'}))
-    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
-                       html, re.S).group(1)
+    ledger = _ledger(html)
     assert 'Observed 2' in ledger and 'Skipped 1' in ledger
-    assert re.search(r'observtn=3&', ledger)
-    assert re.search(r'observtn=5&', ledger)
-    assert re.search(r'data-goto="4"', ledger)
-    # every listed tile is reachable one way or the other
     assert len(re.findall(r'<a [^>]*>', ledger)) == 3
+    for n in ('3', '4', '5'):
+        assert 'data-goto="%s"' % n in ledger
 
 
-def test_an_executed_tile_is_still_in_the_picker_though_it_moved_layers():
+def test_an_executed_tile_is_still_listed_though_it_moved_layers():
     """`planned` and `observed` are a display split, not an identity -- a tile
     must stay findable by number whichever list it lands in."""
-    html = _section(_footprints({'2': 'Executed'}))
-    assert '<option value="2">2 — GC_2 — Executed</option>' in html
+    ledger = _ledger(_section(_footprints({'2': 'Executed'})))
+    assert 'data-goto="2"' in ledger
 
 
 def test_with_no_status_source_the_ledger_says_unavailable_not_zero():
@@ -305,21 +328,29 @@ def test_aladin_routes_the_same_three_ways_as_the_static_map():
     assert "(st === 'scheduled') ? 'scheduled'" in html
 
 
-# --- MAST links on the executed tiles ----------------------------------------
+# --- the archive links left the map ------------------------------------------
 
-def test_only_executed_tiles_link_to_the_archive():
-    """A scheduled visit has no data in MAST and a skipped one never will
-    without re-planning, so linking them sends a reader to an empty result --
-    which reads as the archive having lost something rather than as the visit
-    not having happened."""
+def test_the_map_view_carries_no_archive_links():
+    """A click on a footprint used to select it or leave the site depending on
+    a status the reader could not see under the cursor.  The archive link now
+    lives on the schedule table's state badge; the map only selects."""
     html = _section(_footprints({'1': 'Executed', '2': 'Scheduled',
                                  '3': 'Skipped'}, n=4))
-    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
-                       html, re.S).group(1)
-    assert len(re.findall(r'href="https://mast[^"]*"', ledger)) == 1
-    # the skipped tile is still listed, still selects its tile, still no link
-    assert 'data-goto="3"' in ledger
-    assert not re.search(r'href="https://mast[^"]*observtn=3&', ledger)
+    assert 'https://mast.stsci.edu' not in html
+    assert not re.search(r'href="[^"]*observtn=', html)
+
+
+def test_every_number_in_the_execution_section_drives_the_map():
+    """Not some of them.  Mixed behaviour behind identical-looking numbers was
+    the reason for the move."""
+    html = _section(_footprints({'1': 'Executed', '2': 'Scheduled',
+                                 '3': 'Skipped'}, n=4))
+    ledger = _ledger(html)
+    anchors = re.findall(r'<a ([^>]*)>', ledger)
+    assert anchors
+    for attrs in anchors:
+        assert 'data-goto="' in attrs
+        assert 'href=' not in attrs
 
 
 def test_the_link_names_the_program_and_the_observation():
@@ -338,22 +369,47 @@ def test_a_missing_or_junk_number_yields_no_link_rather_than_a_broken_one():
         assert skyview.mast_url(prog, obs) is None
 
 
-def test_the_executed_footprints_themselves_are_clickable():
-    """Both instruments of an executed tile, and nothing else."""
+def test_no_footprint_is_wrapped_in_an_anchor():
+    """The executed footprints used to be SVG <a> elements to MAST.  Nothing in
+    the map navigates any more, so a stray anchor would be the old behaviour
+    surviving in one layer."""
     html = _section(_footprints({'1': 'Executed', '2': 'Executed',
                                  '3': 'Scheduled'}, n=5))
-    wrapped = re.findall(
-        r'<a href="https://mast[^"]*observtn=(\d+)[^"]*" target="_blank" '
-        r'rel="noopener"><g data-obs=', html)
-    assert sorted(wrapped) == ['1', '1', '2', '2']   # NIRCam + MIRI each
+    assert '<a ' not in html[html.index('<svg id="gcm-sky-static"'):
+                             html.index('</svg>')]
 
 
-def test_the_tile_picker_does_not_swallow_clicks_on_the_mast_links():
-    """The ledger's numbers used to be goto shortcuts and the handler calls
-    preventDefault; if it bound to every anchor it would stop the archive
-    links from navigating."""
-    html = _section(_footprints({'1': 'Executed'}))
-    assert ".gcm-sky-stat a[data-goto]'" in html
+def test_clicking_a_footprint_selects_it_and_lights_its_number():
+    """Map -> number, the direction that did not exist: a reader who found a
+    tile on the map had no way to learn which observation it was."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    assert "svg.addEventListener('click'" in html
+    assert "closest('g[data-obs]')" in html
+    assert 'gcm-num-hi' in html
+    # the number carries the key the map matches it on
+    assert 'data-obs="1"' in _ledger(html)
+
+
+def test_clicking_a_number_moves_the_map_and_clicking_the_map_does_not():
+    """Recentring under the cursor is disorienting -- the reader is already
+    looking at the tile they clicked."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    goto = html[html.index('function gotoTile'):html.index('// Number -> map.')]
+    select = html[html.index('function selectTile'):html.index('function gotoTile')]
+    assert 'gotoRaDec' in goto
+    assert 'gotoRaDec' not in select
+
+
+def test_selecting_from_the_map_opens_the_execution_section():
+    """A number highlighted inside a folded section is a highlight nobody
+    sees."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    assert 'execBox.open = true' in html
+
+
+def test_a_second_click_on_the_same_footprint_clears_the_selection():
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    assert "selected = (String(n) === selected) ? '' : String(n);" in html
 
 
 # --- the controls panel is draggable -----------------------------------------
@@ -467,20 +523,19 @@ def test_the_furthest_stage_wins_for_a_multi_visit_pointing():
         > r('Scheduled') > r('Flight Ready')
 
 
-def test_every_run_stage_is_listed_and_linked():
+def test_every_run_stage_is_listed_and_selectable():
     html = _section(_footprints({'1': 'Archived', '2': 'Collecting',
                                  '3': 'Executed', '4': 'Skipped'}, n=6))
-    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
-                       html, re.S).group(1)
+    ledger = _ledger(html)
     assert 'Observed 3' in ledger
-    assert len(re.findall(r'href="https://mast', ledger)) == 3
+    for n in ('1', '2', '3'):
+        assert 'data-goto="%s"' % n in ledger
 
 
 def test_the_total_is_not_labelled_with_one_of_its_parts():
     """'Executed 12' when 3 of them are Archived reads as a count of Executed."""
     html = _section(_footprints({'1': 'Archived', '2': 'Executed'}))
-    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
-                       html, re.S).group(1)
+    ledger = _ledger(html)
     assert 'Observed 2' in ledger
     assert '1 archived' in ledger and '1 executed' in ledger
 
@@ -493,9 +548,7 @@ def test_the_status_tail_does_not_re_count_the_observed_tiles():
     page = _section(_footprints({'1': 'Archived', '2': 'Collecting',
                                  '3': 'Executed', '4': 'Skipped',
                                  '5': 'Scheduled'}, n=6))
-    ledger = H.unescape(re.search(
-        r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
-        page, re.S).group(1))
+    ledger = H.unescape(_ledger(page))
     tail = ledger.split('Skipped')[-1]
     assert 'archived' not in tail.lower() and 'collecting' not in tail.lower()
 
@@ -551,18 +604,17 @@ def test_the_layers_are_served_from_a_cors_enabled_host():
         assert 'data.rc.ufl.edu' not in url
 
 
-def test_a_link_says_what_stage_the_tile_is_at():
-    """Of the twelve linked tiles, seven reach planning placeholders only --
+def test_a_number_still_says_what_stage_its_tile_is_at():
+    """Of the twelve observed tiles, seven reach planning placeholders only --
     Executed 0 of 4, Collecting 2 of 5, Archived 3 of 3 (measured 2026-09-13).
-    So the link is described as a SEARCH and the stage is named, rather than
-    promising data the reader may not get."""
+    The stage was carried in the MAST link's tooltip; the link has gone to the
+    schedule table, so the tooltip stays here on the number itself."""
     html = _section(_footprints({'1': 'Archived', '2': 'Executed',
                                  '3': 'Collecting'}, n=4))
     import html as H
     text = H.unescape(html)
     assert 'products are in the archive' in text
     assert 'products not published yet' in text
-    assert 'search MAST for observation' in text
 
 
 def test_every_run_stage_is_covered_by_a_note():
@@ -588,3 +640,80 @@ def test_the_bgmatch_layer_says_what_it_is_for():
     from jwst_gc_pipeline.monitoring import skyview
     note = next(t for n, _u, t in skyview.SURVEYS if 'bg-matched' in n)
     assert note and 'background' in note.lower()
+
+
+# --- the panel folds ---------------------------------------------------------
+
+def test_every_section_of_the_panel_is_collapsible():
+    """Seven stacked blocks covered a third of the map on a laptop.  Native
+    <details> gets the fold, the keyboard and the disclosure triangle without
+    any script -- and a panel whose sections could not be closed had no answer
+    for a reader who wanted to see the sky under it."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    panel = html[html.index('<div class="gcm-sky-ui"'):
+                 html.index('<p class="gcm-sky-foot">')]
+    # no section is left as a plain div
+    assert '<div class="gcm-sky-sec"' not in panel
+    sections = re.findall(r'<details class="gcm-sky-sec"[^>]*>', panel)
+    summaries = re.findall(r'<summary class="gcm-sky-lab">([^<]+)</summary>',
+                           panel)
+    assert len(sections) == len(summaries) >= 6
+    assert 'Execution' in summaries
+    assert panel.count('</details>') == len(sections)
+
+
+def test_the_sections_worth_seeing_first_start_open():
+    """Layer toggles and the execution ledger are what the panel is for; the
+    legend and the context surveys are reference."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    panel = html[html.index('<div class="gcm-sky-ui"'):
+                 html.index('<p class="gcm-sky-foot">')]
+    opened = re.findall(
+        r'<details class="gcm-sky-sec" open>\s*<summary[^>]*>([^<]+)<', panel)
+    closed = re.findall(
+        r'<details class="gcm-sky-sec">\s*<summary[^>]*>([^<]+)<', panel)
+    assert 'JWST — planned' in opened and 'JWST — status' in opened
+    assert 'Legend' in closed and 'Background' in closed
+
+
+def test_the_execution_section_starts_open_so_the_numbers_are_reachable():
+    """It replaced the tile dropdown; folded by default it would hide the only
+    remaining way to reach a tile by number."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    assert '<details class="gcm-sky-sec" id="gcm-sky-exec" open>' in html
+
+
+def test_the_summary_is_the_section_label_not_an_extra_row():
+    """The label used to be a <div> above the controls; reusing the same class
+    on the <summary> keeps the panel's type scale and spacing."""
+    from jwst_gc_pipeline.monitoring import skyview
+    assert '<summary class="gcm-sky-lab">' in _section(_footprints(n=4))
+    assert '.gcm-sky-sec > summary { cursor: pointer' in skyview.CSS
+
+
+def test_the_disclosure_triangle_is_drawn_rather_than_inherited():
+    """The UA marker sits on the baseline of an uppercase 9.5px label and reads
+    as a stray glyph."""
+    from jwst_gc_pipeline.monitoring import skyview
+    assert 'list-style: none' in skyview.CSS
+    assert '::-webkit-details-marker { display: none; }' in skyview.CSS
+    assert ".gcm-sky-sec > summary::before { content: '▸'" in skyview.CSS
+
+
+def test_the_roster_is_bounded_rather_than_making_the_panel_taller():
+    """34 observed + 7 skipped + 34 scheduled is ~75 numbers on the real
+    programme today -- taller than the map.  Scrolled, not truncated: every
+    tile has to stay reachable, which is what let the dropdown go."""
+    from jwst_gc_pipeline.monitoring import skyview
+    assert '#gcm-sky-exec .gcm-sky-stat { max-height:' in skyview.CSS
+    assert 'overflow-y: auto' in skyview.CSS
+    # and the panel as a whole cannot outgrow the map it sits on
+    ui = skyview.CSS[skyview.CSS.index('.gcm-sky-ui {'):]
+    assert 'max-height: calc(100% - 16px)' in ui[:ui.index('}')]
+
+
+def test_a_highlighted_number_is_scrolled_into_view():
+    """It can be below the fold of its own scrolled section, in which case the
+    map -> number direction would light something nobody sees."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    assert 'scrollIntoView' in html

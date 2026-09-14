@@ -139,11 +139,16 @@ def test_each_rgps_component_is_its_own_layer():
     they are three surveys rather than three drawings of one."""
     from jwst_gc_pipeline.monitoring import skyview
     svg, info = skyview.static_map(_FP, None, rgps=_RGPS)
-    assert info['n_rgps'] == 3
-    assert info['n_rgps_by'] == {'wide_area': 1, 'time_domain': 1,
-                                 'deep_spec': 1}
-    for group in ('stat-rgps-wide', 'stat-rgps-tds', 'stat-rgps-deep'):
-        assert 'id="%s"' % group in svg
+    # Only the time-domain fields are drawn.  The wide-area strip spans 117 deg
+    # of longitude and the deep fields are pointed elsewhere, so at this
+    # program's ~1.6 deg field they were a box around everything or nothing at
+    # all -- two toggles that told a reader nothing about the Galactic Centre.
+    # The PARSER still reads all three components; this is about what is drawn.
+    assert info['n_rgps'] == 1
+    assert info['n_rgps_by'] == {'time_domain': 1}
+    assert 'id="stat-rgps-tds"' in svg
+    for gone in ('stat-rgps-wide', 'stat-rgps-deep'):
+        assert 'id="%s"' % gone not in svg
 
 
 def test_rgps_toggles_reach_the_static_layers():
@@ -151,10 +156,10 @@ def test_rgps_toggles_reach_the_static_layers():
     until 1.8 MB of script loaded.  RGPS must not repeat that."""
     from jwst_gc_pipeline.monitoring import skyview
     html = skyview.section(_FP, None, rgps=_RGPS)
-    for lid in ('rgps-wide', 'rgps-tds', 'rgps-deep'):
-        assert 'id="lyr-%s"' % lid in html          # the button exists
-        assert "'stat-%s'" % lid in html            # ...and owns a static group
-        assert "['lyr-%s', '%s']" % (lid, lid) in html   # ...and is wired
+    lid = 'rgps-tds'
+    assert 'id="lyr-%s"' % lid in html          # the button exists
+    assert "'stat-%s'" % lid in html            # ...and owns a static group
+    assert "['lyr-%s', '%s']" % (lid, lid) in html   # ...and is wired
 
 
 def test_rgps_is_off_by_default():
@@ -163,8 +168,7 @@ def test_rgps_is_off_by_default():
     html = skyview.section(_FP, None, rgps=_RGPS)
     state = html[html.index('var on = {'):]
     state = state[:state.index('}')]
-    for lid in ('rgps-wide', 'rgps-tds', 'rgps-deep'):
-        assert "'%s': false" % lid in state, lid
+    assert "'rgps-tds': false" in state
 
 
 def test_a_missing_rgps_file_leaves_empty_layers_not_a_crash():
@@ -173,9 +177,9 @@ def test_a_missing_rgps_file_leaves_empty_layers_not_a_crash():
     from jwst_gc_pipeline.monitoring import skyview
     svg, info = skyview.static_map(_FP, None, rgps=None)
     assert info['n_rgps'] == 0
-    assert 'id="stat-rgps-wide"' in svg
+    assert 'id="stat-rgps-tds"' in svg
     html = skyview.section(_FP, None, rgps=None)
-    assert 'id="lyr-rgps-wide"' in html
+    assert 'id="lyr-rgps-tds"' in html
 
 
 def test_roman_autumn_is_no_longer_drawn():
@@ -202,3 +206,19 @@ def test_the_autumn_data_is_kept_even_though_it_is_not_drawn():
         'autumn': [[[266.7, -29.6], [266.8, -29.6], [266.8, -29.5]]]}}}
     assert skyview._roman_polys(roman) == roman['tiles']['T1']['spring']
     assert roman['tiles']['T1']['autumn'], 'the source data must be untouched'
+
+
+def test_the_wide_and_deep_components_are_no_longer_drawn():
+    """Removed from the panel, and from the map with it: a layer with no toggle
+    would be undrawable dead weight in the SVG, and a toggle with no layer a
+    dead button.  `_rgps_polys` still PARSES them -- the file is not this
+    module's to reinterpret, and putting one back is one line in
+    ``RGPS_COMPONENTS``."""
+    from jwst_gc_pipeline.monitoring import skyview
+    parsed = skyview._rgps_polys(_RGPS)
+    assert set(parsed) == {'time_domain'}
+    html = skyview.section(_FP, None, rgps=_RGPS)
+    for gone in ('rgps-wide', 'rgps-deep', 'RGPS wide', 'RGPS deep'):
+        assert gone not in html, gone
+    assert not hasattr(skyview, 'COLOR_RGPS_WIDE')
+    assert not hasattr(skyview, 'COLOR_RGPS_DEEP')
