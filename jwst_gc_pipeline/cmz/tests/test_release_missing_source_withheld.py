@@ -48,8 +48,12 @@ def _mw():
 
 
 def _entry(dest, src, size, filt):
+    # `kind` / `iteration` / `instrument` are what the images TABLE reads; the
+    # freshness check needs none of them, but `main()` renders the table, so a
+    # manifest entry here carries the same keys `stage_release` writes.
     return {'dest': dest, 'src': src, 'size_bytes': size, 'category': 'image',
-            'filter': filt, 'observation': 'o001',
+            'filter': filt, 'observation': 'o001', 'kind': 'science',
+            'iteration': None, 'instrument': 'NIRCam',
             'url': f'https://example.invalid/{dest}'}
 
 
@@ -187,3 +191,50 @@ def test_each_bucket_keeps_its_own_count(tmp_path):
     assert '<b>10 withheld as bad astrometry.</b>' in page
     assert '<b>2 withheld: source no longer on disk.</b>' in page
     assert 'withheld as superseded' not in page
+
+
+# ---- the call site, driven through main() --------------------------------
+
+def _staged_release(tmp_path, field='testfield', version='v1.0-2026.06'):
+    """A release tree on disk, with one live image and one whose source is gone.
+
+    Everything above this line hands `published_urls` and `render_field_page`
+    the set they are meant to withhold, so it pins that they honour what they
+    are GIVEN.  Which set the page ASKS for is a different line -- one word at
+    `make_webpage.py`, `withheld_reasons(manifest)` -- and #837 was exactly that
+    word being `superseded_reasons`.  Driving `main()` is what covers it: the
+    only input is the tree, so the builder has to choose the question itself.
+    """
+    import json
+    sources = tmp_path / 'sources'
+    sources.mkdir(exist_ok=True)
+    d = tmp_path / 'rel' / version / field
+    d.mkdir(parents=True, exist_ok=True)
+    files = [_entry('live.fits', _live(sources, 'live_i2d.fits'), 2048, 'F182M'),
+             _entry('phantom.fits', _gone(sources, 'phantom_i2d.fits'), 2048,
+                    'F150W')]
+    manifest = _manifest(files)
+    manifest.update(field=field, version=version,
+                    release_path=f'/releases/{version}/{field}')
+    (d / 'MANIFEST.json').write_text(json.dumps(manifest))
+    return str(tmp_path / 'rel'), str(tmp_path / 'site'), field
+
+
+def test_the_builder_asks_the_wider_question_of_its_own_accord(tmp_path):
+    """REGRESSION on the call site: `main()` over a tree with a vanished source.
+
+    Reverting the builder to `superseded_reasons` leaves `MISSING` out of
+    `stale_files`, so this field's `_images.txt` ships the phantom URL and the
+    page carries no notice about it -- which is #837 as the site served it.
+    """
+    mw = _mw()
+    root, out, field = _staged_release(tmp_path)
+    mw.main(['--fields', field, '--release-root', root, '--out', out])
+
+    published = (open(os.path.join(out, f'{field}_images.txt')).read().split()
+                 if os.path.isfile(os.path.join(out, f'{field}_images.txt')) else [])
+    assert published == ['https://example.invalid/live.fits'], published
+
+    page = open(os.path.join(out, f'{field}.html')).read()
+    assert '<b>1 withheld: source no longer on disk.</b>' in page
+    assert 'https://example.invalid/phantom.fits' not in page
