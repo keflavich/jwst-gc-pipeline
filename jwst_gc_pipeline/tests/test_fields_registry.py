@@ -748,9 +748,12 @@ def test_no_one_catalog_serves_every_treasury_tile():
     ``scripts/reduction/build_treasury_refcats.py``.
 
     The observation numbers below are ones no tile has delivered yet.  They used
-    to include 139, which is now a real registered tile -- as tiles land, move
-    the examples rather than the assertion: what this pins is that a tile with no
-    catalog of its OWN raises instead of silently borrowing a neighbour's sky.
+    to include 139, and then 105 on the miri line -- both are now real registered
+    tiles.  As tiles land, move the examples rather than the assertion: what this
+    pins is that a tile with no catalog of its OWN raises instead of silently
+    borrowing a neighbour's sky.  The ``instrument`` keyword does not change that
+    -- a registered tile resolves to the same file with or without it -- so the
+    miri line is an instrument-path spelling of the same rule, not a separate one.
     """
     for obsid in ('001', '037', '088'):
         with pytest.raises(F.FieldRegistryError) as excinfo:
@@ -758,7 +761,7 @@ def test_no_one_catalog_serves_every_treasury_tile():
         assert 'no reference catalog registered' in str(excinfo.value), obsid
         assert obsid in str(excinfo.value), obsid
     with pytest.raises(F.FieldRegistryError):
-        F.reference_catalog_path('10678', '105', instrument='miri')
+        F.reference_catalog_path('10678', '050', instrument='miri')
 
 
 def test_a_delivered_treasury_tile_resolves_its_own_catalog():
