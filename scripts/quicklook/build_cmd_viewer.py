@@ -53,14 +53,20 @@ DEFAULT_CACHE = '/orange/adamginsburg/jwst/quicklook/cmd_cache'
 DEFAULT_OUT = '/orange/adamginsburg/jwst/releases/site'
 
 
-def cache_key(paths):
-    """Identity of one pointing's inputs: the paths and their mtimes.
+def cache_key(paths, match_arcsec):
+    """Identity of one pointing's cached pairs: the inputs AND how they were paired.
 
     Content-addressing the catalogs themselves would mean hashing 50 MB per
     pointing, which is most of the cost we are avoiding.  A re-reduction writes
     a new filename anyway, so path+mtime turns over whenever the data does.
+
+    ``match_arcsec`` is in the key because the cache holds MATCHED PAIRS, not
+    catalogs: keyed on the inputs alone, a rebuild at a different radius reused
+    pairs made at the old one and the page then printed the new radius in its
+    own provenance block over data matched at the old one.  The band names are
+    in the paths, so they need no separate entry.
     """
-    parts = []
+    parts = [f'match={float(match_arcsec):.4f}']
     for band in sorted(paths):
         path = Path(paths[band])
         parts.append(f'{band}:{path}:{os.path.getmtime(path):.0f}')
@@ -70,7 +76,7 @@ def cache_key(paths):
 def load_pointing(obsid, entry, cache_dir, match_arcsec, allow_network=True,
                   use_cache=True):
     """``(colour, magnitude)`` for one pointing, from cache when it is current."""
-    key = cache_key(entry['paths'])
+    key = cache_key(entry['paths'], match_arcsec)
     cached = Path(cache_dir) / f'{obsid}_{key}.npz'
     if use_cache and cached.exists():
         with np.load(cached) as npz:
@@ -92,6 +98,12 @@ def load_pointing(obsid, entry, cache_dir, match_arcsec, allow_network=True,
                             mag=mag.astype(np.float32))
         tmp.replace(cached)
     return colour, mag, False
+
+
+def _module_of(path):
+    """``'merged'`` / ``'nrca'`` / ``'nrcb'`` for a pipeline catalog, else None."""
+    m = C._JICAMA.match(Path(path).name)
+    return m.group('module') if m else None
 
 
 def load_footprints(path):
@@ -143,7 +155,7 @@ def build(args):
           f'from MAST')
 
     footprints = load_footprints(args.footprints)
-    loaded, reused = {}, 0
+    loaded, reused, empty = {}, 0, []
     t0 = time.time()
     for obsid, entry in chosen.items():
         colour, mag, from_cache = load_pointing(
@@ -152,6 +164,12 @@ def build(args):
         reused += bool(from_cache)
         if len(colour):
             loaded[obsid] = (colour, mag)
+        else:
+            # Both bands present and nothing paired: a real condition (a failed
+            # cross-match, an astrometric offset between the two filters) and
+            # not the same thing as a missing band, so it is named rather than
+            # dropped into the same silence.
+            empty.append(obsid)
     print(f'loaded {len(loaded)} pointing(s) in {time.time() - t0:.1f} s '
           f'({reused} from cache)')
     if not loaded:
@@ -188,10 +206,21 @@ def build(args):
                     'centre': [None, None]}
         polys = foot['polys']
         centre = foot['centre']
+        # Which NIRCam module(s) the photometry came from.  Four of the ten
+        # live pointings resolve to a single-module catalog because no
+        # `merged` file exists for them yet, and one module is ~60% of a tile
+        # (o127: nrca 133k rows vs merged 217k).  Ranking cannot fix that --
+        # the wider file is absent, not out-ranked -- so the page has to SAY
+        # it rather than label 60% of the sky `GC_128` and stop there.
+        modules = sorted({_module_of(pth) for pth in
+                          chosen[obsid]['paths'].values()} - {None})
+        partial = bool(modules) and 'merged' not in modules
         fields.append({
             'id': obsid,
             'label': foot['label'],
             'source': chosen[obsid]['source'],
+            'modules': modules,
+            'partial': partial,
             'n': int(n_in),
             'max': int(peak),
             'cells': cells,
@@ -215,6 +244,7 @@ def build(args):
         'all': {'cells': all_cells, 'max': all_max, 'n': int(all_n)},
         'fields': fields,
         'incomplete': waiting,
+        'no_pairs': empty,
         'centre': ([float(np.average([c[0] for c in centres])),
                     float(np.average([c[1] for c in centres]))]
                    if centres else None),
@@ -229,6 +259,15 @@ def build(args):
     html_path.write_text(cmdview.render(data, data_path.name))
     print(f'wrote {html_path} ({html_path.stat().st_size / 1024:.0f} kB) and '
           f'{data_path} ({data_path.stat().st_size / 1024:.0f} kB)')
+    partial = [f['id'] for f in fields if f['partial']]
+    if partial:
+        print('single-module (part of the tile, and the page says so): '
+              + ', '.join(f"{o} [{'/'.join(f['modules'])}]"
+                          for o in partial
+                          for f in fields if f['id'] == o))
+    if empty:
+        print('both bands present but zero pairs matched (not plotted): '
+              + ', '.join(empty))
     if waiting:
         print('short a band, so not plotted: ' +
               ', '.join(f'{o} needs {"/".join(b).upper()}'

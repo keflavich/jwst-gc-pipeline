@@ -12,6 +12,18 @@ from astropy.table import Table                     # noqa: E402
 import astropy.units as u                           # noqa: E402
 
 
+def _module(path):
+    """The module token, parsed the way the code parses it.
+
+    Tests used to assert ``'_merged_' in path.name``, which is true of EVERY
+    candidate -- the filename convention is
+    ``..._indivexp_merged_m<N>_dao_basic...``, so the substring is present
+    whichever module won.  Both ranking tests passed under a ranking that put
+    stage first and under one that put vetting first, i.e. they pinned nothing.
+    """
+    return C._JICAMA.match(path.name).group('module')
+
+
 def _jicama(dirpath, band, module, obs, stage, vetted=True, n=5, flux=100.0):
     tail = '_vetted' if vetted else ''
     name = (f'{band}_{module}_o{obs}_indivexp_merged_m{stage}_dao_basic{tail}.fits')
@@ -82,7 +94,7 @@ def test_the_whole_tile_at_an_earlier_stage_beats_one_module_at_a_later_one(tmp_
         _jicama(cat, band, 'nrca', '127', 3, vetted=True)
         _jicama(cat, band, 'nrcb', '127', 2, vetted=True)
         _jicama(cat, band, 'merged', '127', 2, vetted=True)
-    assert '_merged_' in C.find_jicama(cat)['o127']['f212n'].name
+    assert _module(C.find_jicama(cat)['o127']['f212n']) == 'merged'
 
 
 def test_coverage_outranks_vetting(tmp_path):
@@ -92,7 +104,7 @@ def test_coverage_outranks_vetting(tmp_path):
     for band in C.BANDS:
         _jicama(cat, band, 'nrca', '132', 4, vetted=True)
         _jicama(cat, band, 'merged', '132', 4, vetted=False)
-    assert '_merged_' in C.find_jicama(cat)['o132']['f212n'].name
+    assert _module(C.find_jicama(cat)['o132']['f212n']) == 'merged'
 
 
 def test_vetting_breaks_the_tie_within_one_module(tmp_path):
@@ -109,7 +121,7 @@ def test_a_two_module_pointing_prefers_the_merged_file(tmp_path):
         _jicama(cat, band, 'nrca', '132', 2)
         _jicama(cat, band, 'nrcb', '132', 2)
         _jicama(cat, band, 'merged', '132', 2)
-    assert '_merged_' in C.find_jicama(cat)['o132']['f212n'].name
+    assert _module(C.find_jicama(cat)['o132']['f212n']) == 'merged'
 
 
 def test_an_ab_magnitude_is_converted_and_not_passed_through(tmp_path):
@@ -189,3 +201,13 @@ def test_a_seed_source_list_is_not_mistaken_for_a_catalog(tmp_path):
                                                      '_dao_basic_i2dseed')))
     chosen = C.find_jicama(cat)['o132']['f212n']
     assert 'i2dseed' not in chosen.name and '_m2_' in chosen.name
+
+
+def test_the_module_helper_distinguishes_the_candidates(tmp_path):
+    """The substring the old assertions used cannot tell these apart; this is
+    the check that the replacement can."""
+    cat = tmp_path / 'catalogs'; cat.mkdir()
+    merged = _jicama(cat, 'f212n', 'merged', '132', 2)
+    nrca = _jicama(cat, 'f212n', 'nrca', '132', 2)
+    assert '_merged_' in nrca.name          # why the old assertion was vacuous
+    assert _module(merged) == 'merged' and _module(nrca) == 'nrca'

@@ -13,6 +13,8 @@ from astropy.coordinates import SkyCoord            # noqa: E402
 from astropy.table import Table                     # noqa: E402
 import astropy.units as u                           # noqa: E402
 
+from jwst_gc_pipeline.quicklook import catalogs as C
+
 REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location(
     'build_cmd_viewer', REPO / 'scripts' / 'quicklook' / 'build_cmd_viewer.py')
@@ -177,3 +179,107 @@ def test_a_pointing_missing_from_the_footprints_is_listed_without_an_outline(tmp
     assert by_id['o127']['polys']
     assert by_id['o132']['polys'] == []
     assert by_id['o132']['n'] > 0
+
+
+def _offset_catalogs(cat_dir, sep_arcsec, obsids=('132',), n=400, seed=1):
+    """Two bands whose sources sit `sep_arcsec` apart, so the match radius
+    decides how many pairs come out."""
+    rng = np.random.default_rng(seed)
+    cat_dir.mkdir(parents=True, exist_ok=True)
+    for obs in obsids:
+        ra = 266.5 + rng.random(n) * 0.01
+        dec = -28.7 + rng.random(n) * 0.01
+        for band, shift in ((C.BLUE_BAND, 0.0), (C.RED_BAND, sep_arcsec / 3600.0)):
+            tbl = Table({'flux': rng.lognormal(np.log(300.0), 0.8, n)})
+            tbl['skycoord'] = SkyCoord(ra * u.deg, (dec + shift) * u.deg)
+            tbl.meta['PIXSCALE'] = 0.0312229602876695
+            tbl.meta['FILTER'] = band.upper()
+            tbl.write(cat_dir /
+                      f'{band}_merged_o{obs}_indivexp_merged_m2_dao_basic_vetted.fits',
+                      overwrite=True)
+
+
+def test_the_match_radius_is_part_of_the_cache_key(tmp_path):
+    """The cache holds MATCHED PAIRS, not catalogs. Keyed on the inputs alone,
+    a rebuild at a different radius reused pairs made at the old one, and the
+    page then printed the new radius in its provenance over old data."""
+    _offset_catalogs(tmp_path / 'catalogs', 0.15)
+    _footprints(tmp_path / 'footprints.json', obsids=('132',))
+    tight = _build(tmp_path, extra=('--match-arcsec', '0.10'))[1]
+    wide = _build(tmp_path, extra=('--match-arcsec', '0.50'))[1]
+    n_tight = sum(f['n'] for f in tight['fields'])
+    n_wide = sum(f['n'] for f in wide['fields'])
+    assert n_tight < n_wide, (
+        f'0.5" reused the 0.1" pairs: {n_tight} then {n_wide}')
+    assert wide['match_arcsec'] == 0.5
+
+
+def test_the_cache_key_changes_with_the_radius():
+    from pathlib import Path as _P
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = _P(d) / 'x.fits'
+        f.write_bytes(b'0')
+        paths = {C.BLUE_BAND: f, C.RED_BAND: f}
+        assert (build_cmd_viewer.cache_key(paths, 0.10)
+                != build_cmd_viewer.cache_key(paths, 0.50))
+        assert (build_cmd_viewer.cache_key(paths, 0.10)
+                == build_cmd_viewer.cache_key(paths, 0.10))
+
+
+def test_a_single_module_pointing_is_flagged_as_part_of_the_tile(tmp_path):
+    """One NIRCam module is ~60% of a tile. Four of the ten live pointings
+    resolve to a single-module catalog because no `merged` file exists for
+    them, which ranking cannot fix -- the wider file is absent, not
+    out-ranked -- so the page has to say so."""
+    cat = tmp_path / 'catalogs'
+    _catalogs(cat, obsids=('127',))                      # merged, both bands
+    _catalogs(cat, obsids=('128',))
+    for band in C.BANDS:                                  # o128: nrca only
+        src = cat / f'{band}_merged_o128_indivexp_merged_m2_dao_basic_vetted.fits'
+        src.rename(cat / f'{band}_nrca_o128_indivexp_merged_m2_dao_basic_vetted.fits')
+    _footprints(tmp_path / 'footprints.json', obsids=('127', '128'))
+    _, data = _build(tmp_path)
+    by_id = {f['id']: f for f in data['fields']}
+    assert by_id['o127']['partial'] is False
+    assert by_id['o127']['modules'] == ['merged']
+    assert by_id['o128']['partial'] is True
+    assert by_id['o128']['modules'] == ['nrca']
+
+
+def test_the_page_says_which_tiles_are_only_part_of_a_tile(tmp_path):
+    from jwst_gc_pipeline.quicklook import cmdview
+    cat = tmp_path / 'catalogs'
+    _catalogs(cat, obsids=('128',))
+    for band in C.BANDS:
+        src = cat / f'{band}_merged_o128_indivexp_merged_m2_dao_basic_vetted.fits'
+        src.rename(cat / f'{band}_nrca_o128_indivexp_merged_m2_dao_basic_vetted.fits')
+    _footprints(tmp_path / 'footprints.json', obsids=('128',))
+    out, data = _build(tmp_path)
+    html = (out / 'cmd_explorer.html').read_text()
+    assert 'Part of the tile' in html
+    assert 'nrca' in html
+    # and the table marks it rather than leaving it to the caveat block
+    assert "f.partial ? ' \\u26a0' : ''" in cmdview._SCRIPT
+
+
+def test_a_pointing_that_matches_nothing_is_named_not_dropped(tmp_path):
+    """Both bands present and zero pairs is a real condition -- a failed
+    cross-match, or an astrometric offset between the filters -- and not the
+    same thing as a missing band."""
+    _offset_catalogs(tmp_path / 'catalogs', 30.0)      # far beyond any radius
+    _footprints(tmp_path / 'footprints.json', obsids=('132',))
+    with pytest.raises(SystemExit):
+        _build(tmp_path)
+
+
+def test_a_mast_pointing_short_a_band_is_reported(tmp_path):
+    """`incomplete_pointings` iterated `find_mast`, which pre-filters to
+    complete pointings -- so the one function whose job is naming incomplete
+    pointings could never name a MAST one."""
+    mast = tmp_path / 'mast'; mast.mkdir()
+    tbl = Table({'aper_total_abmag': np.full(3, 18.0)})
+    tbl['sky_centroid'] = SkyCoord([266.5] * 3 * u.deg, [-28.7] * 3 * u.deg)
+    tbl.write(mast / 'jw10678-o140_t001_nircam_clear-f212n_cat.ecsv', overwrite=True)
+    assert C.find_mast(mast) == {}
+    assert C.incomplete_pointings(tmp_path / 'nocat', mast) == {'o140': ['f480m']}

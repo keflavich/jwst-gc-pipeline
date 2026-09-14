@@ -77,3 +77,40 @@ def test_the_block_sits_inside_main():
     mw = _make_webpage()
     html = mw.render_index(FIELDS)
     assert html.index('Quicklook analyses') < html.index('</main>')
+
+
+def _run_main(out_dir, release_root):
+    """Drive `make_webpage.main()` the way the deploy does.
+
+    The test above passes the card into `render_index` by hand, which exercises
+    the renderer and never the branch in `main()` that DECIDES whether to pass
+    it -- so replacing that branch with an unconditional append left the file
+    green. These run the decision.
+    """
+    mw = _make_webpage()
+    mw.main(['--out', str(out_dir), '--release-root', str(release_root)])
+    return (out_dir / 'index.html').read_text()
+
+
+def _empty_release(tmp_path):
+    root = tmp_path / 'releases'
+    root.mkdir()
+    return root
+
+
+def test_main_omits_the_card_when_the_explorer_has_not_been_built(tmp_path):
+    out = tmp_path / 'site'
+    out.mkdir()
+    html = _run_main(out, _empty_release(tmp_path))
+    assert 'cmd_explorer.html' not in html
+    assert 'Quicklook analyses' in html          # the other two are still there
+    assert "href='monitor/'" in html
+
+
+def test_main_adds_the_card_once_the_explorer_is_there(tmp_path):
+    out = tmp_path / 'site'
+    out.mkdir()
+    (out / 'cmd_explorer.html').write_text('<!doctype html><title>x</title>')
+    html = _run_main(out, _empty_release(tmp_path))
+    assert "href='cmd_explorer.html'" in html
+    assert html.count('Colour-magnitude explorer') == 1

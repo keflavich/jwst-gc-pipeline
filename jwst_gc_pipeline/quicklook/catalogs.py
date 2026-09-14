@@ -57,6 +57,9 @@ FALLBACK_VEGA_ZEROPOINT_JY = {
     'f480m': 153.22388044927,
 }
 
+#: Seconds to wait on SVO before falling back to the cached zeropoints.
+SVO_TIMEOUT_S = 30
+
 #: Match radius for pairing a F212N detection with its F480M counterpart.
 #: NIRCam SW pixels are 0.031" and LW 0.063", and both catalogs are on the same
 #: pointing's own astrometric solution, so a real pair lands well inside this.
@@ -130,14 +133,8 @@ def find_jicama(catalog_dir, bands=BANDS):
     return out
 
 
-def find_mast(mast_dir, bands=BANDS):
-    """``{obsid: {band: path}}`` for MAST ``*_cat.ecsv`` source catalogs.
-
-    A level-3 catalog is named ``jw<prop>-o<NNN>_t<NNN>_nircam_<optics>_cat.ecsv``
-    and the band is whichever requested filter appears in the optics element --
-    read that way rather than by position, because a pupil-wheel band arrives as
-    ``clear-f212n`` on some products and ``f212n-clear`` on others.
-    """
+def _mast_bands(mast_dir, bands=BANDS):
+    """``{obsid: {band: path}}`` for MAST catalogs, complete or not."""
     mast_dir = Path(mast_dir)
     if not mast_dir.is_dir():
         return {}
@@ -149,10 +146,24 @@ def find_mast(mast_dir, bands=BANDS):
             continue
         tokens = set(m.group('optics').lower().split('-'))
         band = next((b for b in bands if b in tokens), None)
-        if band is None:
-            continue
-        out.setdefault(f"o{m.group('obs')}", {})[band] = path
-    return {o: p for o, p in out.items() if all(b in p for b in bands)}
+        if band is not None:
+            out.setdefault(f"o{m.group('obs')}", {})[band] = path
+    return out
+
+
+def find_mast(mast_dir, bands=BANDS):
+    """``{obsid: {band: path}}`` for MAST ``*_cat.ecsv`` source catalogs.
+
+    A level-3 catalog is named ``jw<prop>-o<NNN>_t<NNN>_nircam_<optics>_cat.ecsv``
+    and the band is whichever requested filter appears in the optics element --
+    read that way rather than by position, because a pupil-wheel band arrives as
+    ``clear-f212n`` on some products and ``f212n-clear`` on others.
+
+    Only pointings complete in every band, matching ``find_jicama``.
+    ``_mast_bands`` is the unfiltered view, for reporting what is missing.
+    """
+    return {o: p for o, p in _mast_bands(mast_dir, bands).items()
+            if all(b in p for b in bands)}
 
 
 def choose_sources(jicama, mast):
@@ -184,7 +195,11 @@ def incomplete_pointings(catalog_dir, mast_dir, bands=BANDS):
         if (m and m.group('filt') in bands
                 and not any(t in m.group('tail') for t in _NOT_PHOTOMETRY)):
             have.setdefault(f"o{m.group('obs')}", set()).add(m.group('filt'))
-    for obsid, paths in find_mast(mast_dir, bands).items():
+    # NOT `find_mast`, which pre-filters to pointings complete in every band:
+    # feeding its output back in here meant a MAST pointing short a band was
+    # filtered out before it could be reported, so the one function whose job
+    # is naming incomplete pointings could never name a MAST one.
+    for obsid, paths in _mast_bands(mast_dir, bands).items():
         have.setdefault(obsid, set()).update(paths)
     return {o: sorted(set(bands) - b) for o, b in sorted(have.items())
             if set(bands) - b}
@@ -205,6 +220,11 @@ def vega_zeropoint_jy(band, allow_network=True):
     if allow_network:
         try:
             from astroquery.svo_fps import SvoFps
+            # The cached constants exist for an unreachable service, and a hang
+            # has no path to them: without a timeout the build stops rather
+            # than falls back.
+            SvoFps.TIMEOUT = min(getattr(SvoFps, 'TIMEOUT', SVO_TIMEOUT_S) or
+                                 SVO_TIMEOUT_S, SVO_TIMEOUT_S)
             table = SvoFps.get_filter_list('JWST')
             table.add_index('filterID')
             zp = float(table.loc[f'JWST/NIRCam.{band.upper()}']['ZeroPoint'])
@@ -318,6 +338,12 @@ def pair_bands(blue_coords, blue_mag, red_coords, red_mag,
     derived from it.  It is not the dense-nearest-neighbour-median astrometry
     that CLAUDE.md rule #1 forbids: nothing here reduces the separations to a
     number, and the separations are used only to reject pairs.
+
+    Nearest-neighbour and NOT one-to-one: several blue detections can claim the
+    same red source, since nothing rejects a red source already taken.  In a
+    field this crowded that happens.  Acceptable for a density map -- it
+    duplicates a red magnitude rather than inventing one -- and it would not be
+    for anything that counted sources or measured a luminosity function.
 
     Returns ``(blue_mag, red_mag)`` for the matched pairs.
     """

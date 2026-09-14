@@ -62,6 +62,7 @@ table.tiles td { padding:2px 4px; border-bottom:1px solid var(--border);
                  cursor:pointer; }
 table.tiles tr:hover td { background:#1f2937; }
 table.tiles tr.on td { background:#1f2937; color:var(--accent); }
+table.tiles tr.partial td:first-child { color:#d29922; }
 td.num { text-align:right; color:var(--muted); font-variant-numeric:tabular-nums; }
 .warn { border-left:2px solid #d29922; padding-left:9px; color:var(--muted);
         font-size:.75rem; margin-top:14px; }
@@ -92,6 +93,18 @@ def render(data, data_href=DATA_FILE,
     waiting = data.get('incomplete', {})
     blue = data['bands']['blue'].upper()
     red = data['bands']['red'].upper()
+
+    partial = [f for f in fields if f.get('partial')]
+    partial_html = ''
+    if partial:
+        names = ', '.join(f"{html.escape(f['label'])} ({'+'.join(f['modules'])})"
+                          for f in partial)
+        partial_html = (
+            f"<div class='warn'><b>Part of the tile:</b> {names}. These "
+            f"pointings have no combined-module catalog yet, so only the "
+            f"listed NIRCam module is plotted &mdash; roughly 60% of the "
+            f"tile's sky, under the whole tile's name. Marked \u26a0 in the "
+            f"table.</div>")
 
     waiting_html = ''
     if waiting:
@@ -134,6 +147,7 @@ def render(data, data_href=DATA_FILE,
       Magnitudes are <b>Vega</b>. Built {html.escape(str(data.get('built', '')))}.
       Grid {data['grid']['nx']} hexagons wide.</p>
     {waiting_html}
+    {partial_html}
     <div class=warn><b>Quicklook, not a release.</b> These are the catalogs that
       exist right now, cross-matched between the two filters at
       {data.get('match_arcsec', 0.1)}&Prime;. They have not been through the
@@ -270,9 +284,12 @@ function drawCMD(field) {
   if (field) drawCells(ctx, field.cells, field.max, ramp);
   drawAxes(ctx);
   if (field) {
-    labelEl.innerHTML = '<b>' + field.label + '</b> (' + field.id + ') &mdash; ' +
+    labelEl.textContent = field.label + ' (' + field.id + ') \u2014 ' +
       field.n.toLocaleString() + ' stars, ' + field.source + ' catalogs' +
-      (pinned && pinned.id === field.id ? ' &mdash; pinned' : '');
+      (field.partial
+        ? ' \u2014 \u26a0 ' + field.modules.join('+') + ' only, part of the tile'
+        : '') +
+      (pinned && pinned.id === field.id ? ' \u2014 pinned' : '');
   } else {
     labelEl.textContent = 'Whole sample: ' + DATA.all.n.toLocaleString() +
       ' stars matched in both bands across ' + DATA.fields.length + ' pointings.';
@@ -287,12 +304,28 @@ function show(field) {
   drawCMD(field || pinned);
 }
 
+function cell(tr, text, cls) {
+  var td = tr.insertCell();
+  if (cls) { td.className = cls; }
+  td.textContent = text;              // not innerHTML: these are data, not markup
+  return td;
+}
+
 function buildTable() {
   DATA.fields.forEach(function (f) {
     var tr = tilesEl.insertRow();
     tr.dataset.id = f.id;
-    tr.innerHTML = '<td>' + f.label + '</td><td class=num>' +
-                   f.n.toLocaleString() + '</td><td class=num>' + f.source + '</td>';
+    cell(tr, f.label + (f.partial ? ' \u26a0' : ''));
+    if (f.partial) {
+      // One NIRCam module is about 60% of a tile.  Saying `GC_128` over 60% of
+      // its sky with nothing to mark it is the page asserting coverage it does
+      // not have.
+      tr.title = f.label + ': ' + f.modules.join('+') + ' only \u2014 part of '
+               + 'the tile, no merged catalog for it yet';
+      tr.classList.add('partial');
+    }
+    cell(tr, f.n.toLocaleString(), 'num');
+    cell(tr, f.partial ? f.modules.join('+') : f.source, 'num');
     tr.addEventListener('mouseenter', function () { show(f); });
     tr.addEventListener('mouseleave', function () { show(null); });
     tr.addEventListener('click', function () {
