@@ -298,6 +298,113 @@ Two consequences for a release:
     staged field with `stage_release.py --check-exposures --field <field>`,
     which also reports frames whose source has been rewritten since staging.
 
+## ⛔ 5b. HiPS layers current AND astrometrically correct (BLOCKING for 10678)
+
+**Program 10678's release includes its HiPS layers.** They are part of the
+deliverable, not a by-product of it:
+
+    https://data.rc.ufl.edu/secure/adamginsburg/jwst/gc-treasury/pngs/jwst_gc_treasury_hips/
+    https://data.rc.ufl.edu/secure/adamginsburg/jwst/gc-treasury/pngs/jwst_gc_treasury_miri_hips/
+
+published to the same two hosts the viewers read
+(`/orange/adamginsburg/web/public/avm_images/` served by data.rc, and
+starformation's `htdocs/avm_images/`).
+
+### Current
+
+`python scripts/monitoring/publish_hips_layers.py --dry-run` compares
+`hips_release_date` in each `properties` against both destinations and says
+what it would republish. "up to date" on both lines is the pass.
+
+Builds happen and publishing does not: as of 2026-09-14 nothing in either
+treasury cron path calls the publisher, so the served layers lag the builds by
+hours as a steady state. Do not assume a fresh build is a fresh layer, and do
+not read the build directory as evidence about what is served.
+
+### Accurate — a separate question, and the one that bites
+
+**Release date and tile count are LIVENESS checks. They say nothing about
+position.** Both were green on 2026-09-14 while every treasury tile sat 1.26″
+off the sky.
+
+Two independent astrometric caveats apply to these layers. Fixing either does
+nothing for the other, so check both:
+
+1. **Source frame.** The treasury mosaics sit on the raw `assign_wcs` solution
+   with no measured tie to VIRAC2/Gaia (item 1 above). Both viewers say so.
+   This is a property of the input.
+2. **Publishing chain.** `save_rgb` reverses both pixel axes (`flip=-1` then
+   `ROTATE_180`) and `reproject` undoes only one, so a WCS-aware reader
+   reconstructs a 180° rotation of the input — while the callers embedded the
+   *unrotated* FITS WCS. pyavm's Scale+Rotation round-trip returns the negated
+   CD on its own, so orientation and scale come out right and CRPIX is the only
+   thing wrong: a pure translation of `|N + 1 - 2*CRPIX|` pixels per axis. The
+   FITS were fine (~50 mas); the HiPS were not.
+
+   Measured 2026-09-14 (avm-hips), current → corrected AVM: o112 NIRCam
+   1.258″→0.000″, o127 NIRCam 1.255″→0.001″, o138 NIRCam 1.275″→0.031″,
+   o127 MIRI 0.417″→0.002″, o138 MIRI 0.414″→0.002″. Sampling the *published*
+   tiles gave 1.061″ (o127) and 1.055″ (o138), so it reached the served
+   product. Fixed in `keflavich/jwst_scripts#11` (`avm_for_saved_png`);
+   rebuild in progress as of 2026-09-14.
+
+**The cheap check** — no reprojection needed. Read `Spatial.ReferencePixel`
+from the PNG's AVM and compare with the source FITS `CRPIX`:
+
+* equal to `CRPIX` → **affected**;
+* equal to `NAXIS + 1 - CRPIX` → **fixed**.
+
+Run it over every PNG feeding a layer, not a sample: on 2026-09-14 the build
+directory was *mixed* — 2 of 20 treasury PNGs carried the corrected AVM and 18
+did not, and one (o109) had tiles predating the AVM they claim. A mixed input
+set produces a mosaic that is wrong in patches, which no single-tile spot check
+finds. `publish_hips_layers.py`'s verification (properties parses, Norder3
+present, tile count matches) does **not** catch either condition.
+
+For a release, prefer a measured offset against the source mosaic over any
+proxy.
+
+### Complete — a third question, separate from both
+
+A layer can be current, astrometrically correct, and still **missing tiles**: a
+pointing whose L3 landed but whose RGB was never rendered simply is not in the
+mosaic, and nothing in `properties` says so. Compare the layer's contents
+against the registered observations rather than against its own last build.
+
+Known gaps as of 2026-09-14 (avm-hips):
+
+| layer | observed but never rendered |
+|---|---|
+| `jwst_gc_treasury_hips` (NIRCam) | o105, o106, o107 |
+| `jwst_gc_treasury_miri_hips` | o106, o107, o108 |
+| `jwst_gc_treasury_miri_bgmatch_hips` | o106–o109, o111–o113, o116–o118, o126 |
+
+The NIRCam and plain-MIRI gaps are queued. The **bgmatch layer covers fewer
+fields than the plain MIRI layer by construction** and will keep doing so:
+background matching needs per-field offsets from `MIRI_MATCH_JSON`, which
+covers 12 fields, and extending it needs a `--miri-match` re-run that has not
+been authorised. Treat bgmatch as a comparison layer, not as MIRI coverage.
+
+One mechanism worth knowing, because it is silent: the builder takes
+`.auto.lock` to stop the cron re-coadding mid-rebuild, and a long rebuild holds
+it. While held, newly delivered L3s are not built — `needs_build` reports "no
+RGB yet" and nothing escalates. o105/o106/o107 were missed exactly this way.
+
+### Ownership
+
+The treasury HiPS builds belong to the **avm-hips** session; it publishes them
+after verifying served tiles against the source mosaics. Do not publish these
+layers from the release side, and do not re-coadd them while a rebuild array is
+running — a re-coadd mid-array mixes corrected and uncorrected inputs.
+
+Auto-publishing on an mtime gate is **not** wired in, deliberately: it would
+have shipped the 1.26″-off tree automatically the day the bug was found. The
+duplicated treasury cron (`0 * * * *` building directly, `30 * * * *` running
+the wrapper, two interpreters) wants reconciling before anything else is hung
+off it.
+
+---
+
 ## 6. Publishing the site (do not hand-write the rsync)
 - Deploy with `scripts/release/deploy_site.sh` (`--dry-run` first). The docroot
   `htdocs/jwst-gc/` is shared: the release pages are ours, `monitor/` belongs to
