@@ -725,7 +725,16 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                            if f.get("category") == EXPOSURE_CATEGORY]
         quarantined = [f for f in withheld_products
                        if reasons.get(f.get("dest")) == release_freshness.QUARANTINED]
-        rebuilt = [f for f in withheld_products if f not in quarantined]
+        # MISSING gets its own bucket rather than falling through to `rebuilt`.
+        # `rebuilt` asserts "the sources are no longer the files they were
+        # copied from", which is an observation about bytes that are THERE; for
+        # a source that is gone there are no bytes to have observed, and saying
+        # so anyway is the same class of public-facing false statement as
+        # naming a quarantine that did not happen.  See #837.
+        missing = [f for f in withheld_products
+                   if reasons.get(f.get("dest")) == release_freshness.MISSING]
+        rebuilt = [f for f in withheld_products
+                   if f not in quarantined and f not in missing]
 
         def _bands(group):
             return html.escape(', '.join(sorted({f.get("filter") or "?"
@@ -749,6 +758,19 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                 f"these are the older bytes. Why is not recorded here, and no "
                 f"claim is made about their astrometry: "
                 f"<code>{_bands(rebuilt)}</code>.")
+        if missing:
+            # Says the least of the three, and says it plainly.  The only fact
+            # available is an absence, and the reason for the absence is not
+            # recorded anywhere this page can read -- it may be a deliberate
+            # quarantine out of tree (w51's fabricated bands), a move, or a
+            # deletion.  What follows from it is the same either way: the
+            # staged copy cannot be checked against anything.
+            lines.append(
+                f"<b>{len(missing)} withheld: source no longer on disk.</b> The "
+                f"mosaics these were staged from are not where the release "
+                f"recorded them, so the staged copies cannot be re-verified "
+                f"against anything. Why they are gone is not recorded here: "
+                f"<code>{_bands(missing)}</code>.")
         if withheld_frames:
             lines.append(
                 f"The {len(withheld_frames)} detector-frame exposures behind "
@@ -1740,7 +1762,13 @@ def main(argv=None):
         for v in versions:
             manifest = json.loads(
                 (field_release_dir(field, v, args.release_root) / "MANIFEST.json").read_text())
-            stale_reasons = release_freshness.superseded_reasons(manifest)
+            # `withheld_reasons`, not `superseded_reasons`: the page's question
+            # is "may these bytes be published", which is wider than "did the
+            # source change since staging" by the MISSING state.  Reading the
+            # narrower one is #837 -- w51's page then published exactly the two
+            # bands whose sources had been moved out of the tree as fabricated,
+            # and withheld the ten real ones.
+            stale_reasons = release_freshness.withheld_reasons(manifest)
             stale_files = sorted(stale_reasons)
             if stale_files and v == latest:
                 counts = collections.Counter(stale_reasons.values())

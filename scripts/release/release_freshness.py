@@ -110,6 +110,41 @@ def is_superseded(state):
     return state in SUPERSEDED_STATES
 
 
+#: What a PAGE must not publish.  Wider than `SUPERSEDED_STATES` by exactly one
+#: state, and the two sets are kept apart on purpose.
+#:
+#: `SUPERSEDED_STATES` answers "did the source CHANGE since staging?", which
+#: `MISSING` cannot: there is no source left to compare against.  But "cannot be
+#: re-derived" is a weaker position than either of the other two, not a stronger
+#: one -- with a rebuilt source you can at least diff, and with a quarantined
+#: one the twin says why -- and `MISSING` being in neither set is what shaped
+#: w51's page (#837).  Its ten real bands were withheld as quarantined, and its
+#: two PHANTOM bands (#829/#830) were kept, because those had been moved out of
+#: the tree to `w51/_phantom_paired_band_*/` on 2026-09-09: no source, no twin
+#: beside it, so `missing` -- and `missing` did not withhold.  `w51_images.txt`
+#: came out with 2 entries where the field ships 12, both of them fabricated.
+#:
+#: `MISSING` also cannot be assumed benign.  There it meant "deliberately moved
+#: out of tree as a fabricated band", the strongest reason on the list to stop
+#: serving something, and the code read it as no reason at all.
+#:
+#: Do NOT fix that by adding `MISSING` to `SUPERSEDED_STATES`.  "n withheld as
+#: bad astrometry" is a claim about what the m2 checkpoint ruled, and the
+#: checkpoint never ruled on a file it cannot see; folding the states together
+#: is the mistake the `SUPERSEDED` alias above was removed for.
+WITHHELD_STATES = (QUARANTINED, REBUILT, MISSING)
+
+
+def is_withheld(state):
+    """Should a page refuse to publish these staged bytes?
+
+    True for every non-``LIVE`` state.  Written as a membership test rather
+    than ``state != LIVE`` so that adding a state is a decision about what it
+    does, not a silent inheritance of whichever default the expression had.
+    """
+    return state in WITHHELD_STATES
+
+
 #: A rebuilt mosaic differs from the staged one by far more than this.  The
 #: tolerance exists only so a byte-identical re-copy (rsync, restore from tape)
 #: is not read as a rebuild.
@@ -268,6 +303,29 @@ def superseded_reasons(manifest, categories=("image",)):
             if is_superseded(state)}
 
 
+def withheld_files(manifest, categories=("image",)):
+    """Staged files a page must not publish -- superseded OR source gone."""
+    return sorted(dest
+                  for dest, state in audit_manifest(manifest, categories).items()
+                  if is_withheld(state))
+
+
+def withheld_reasons(manifest, categories=("image",)):
+    """``{dest: QUARANTINED | REBUILT | MISSING}`` -- WHY each is withheld.
+
+    This is what a page builder wants; ``superseded_reasons`` is the narrower
+    question "what CHANGED since staging", and answering the first with the
+    second is #837.  Three states, three sentences: ``QUARANTINED`` is a
+    statement about astrometry, ``REBUILT`` is one ``stat`` disagreeing with
+    the recorded size and names no cause, and ``MISSING`` says only that the
+    source is no longer on disk, so nothing about the staged copy can be
+    re-derived.
+    """
+    return {dest: state
+            for dest, state in audit_manifest(manifest, categories).items()
+            if is_withheld(state)}
+
+
 def load_manifest(field_dir):
     path = os.path.join(str(field_dir), "MANIFEST.json")
     try:
@@ -305,5 +363,6 @@ def describe(field, field_dir):
         parts.append(f"{len(rebuilt)} REBUILT "
                      f"(source rebuilt in place; these are the older bytes)")
     if missing:
-        parts.append(f"{len(missing)} with a missing source")
+        parts.append(f"{len(missing)} MISSING "
+                     f"(source no longer on disk; nothing to re-verify against)")
     return ", ".join(parts)
