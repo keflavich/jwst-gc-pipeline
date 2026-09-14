@@ -248,19 +248,38 @@ def test_the_emitted_registry_block_names_the_file_the_build_writes():
 # the registry
 # --------------------------------------------------------------------------
 
+def _unregistered_treasury_obsids(limit=3):
+    """Treasury observation numbers that have no reference catalog of their own.
+
+    Taken from the registry rather than written out here.  A literal list goes
+    stale the moment a tile lands: #860 registered o139, which this test named
+    as an example of an UNregistered tile, and the same list in
+    ``test_fields_registry.py`` was moved while this one was not -- so main went
+    red on a tile registration that was itself correct.  Derived, the examples
+    follow the registry and only the assertion has to be maintained.
+    """
+    obs = next(o for o in F.BY_NAME['gc-treasury'].observations
+               if str(o.proposal) == '10678')
+    registered = set(obs.reference_catalogs or {})
+    free = [f'{n:03d}' for n in range(1, 140) if f'{n:03d}' not in registered]
+    assert len(free) >= limit, (
+        'every treasury tile in 001-139 now has its own reference catalog; '
+        'this test needs an unregistered observation to probe with')
+    return free[:limit]
+
+
 def test_the_registry_no_longer_serves_one_catalog_to_every_tile():
     """Companion to the driver: with no per-tile entry the lookup raises
     rather than handing 139 tiles one CMZ-wide file.
 
-    The observation numbers are ones 10678 has not delivered.  They used to
-    include 139, which is a registered tile now -- as tiles land, move the
-    EXAMPLES rather than the assertion.  What this pins is that a tile with no
-    catalog of its own raises instead of silently borrowing a neighbour's sky,
-    and the delivered tiles are covered by
+    The observations come from the registry, so they are ones 10678 has not
+    delivered by construction.  What this pins is that a tile with no catalog
+    of its own raises instead of silently borrowing a neighbour's sky, and the
+    delivered tiles are covered by
     ``test_a_delivered_treasury_tile_resolves_its_own_catalog`` in
     test_fields_registry.
     """
-    for obsid in ('001', '040', '088'):
+    for obsid in _unregistered_treasury_obsids():
         with pytest.raises(F.FieldRegistryError):
             F.reference_catalog_path('10678', obsid)
 

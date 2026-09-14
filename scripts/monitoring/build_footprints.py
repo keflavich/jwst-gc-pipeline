@@ -175,11 +175,21 @@ def parse_sexagesimal(value):
 #: SKIPPED visit -- see `fetch_visit_status`.
 VISIT_STATUS_URL = 'https://www.stsci.edu/jwst-program-info/visits/?program={program}'
 
-#: Statuses that mean the visit is done and the data exist (or will shortly).
-STATUS_EXECUTED = 'Executed'
+#: Statuses that mean the visit HAS RUN.  Not one value -- STScI moves a visit
+#: along a lifecycle, and reading only 'Executed' silently demotes the ones
+#: that have progressed PAST it.  Caught 2026-09-12: the count went 12 -> 7
+#: over two hours with no visit un-running, because five had become 'Archived'
+#: (data in MAST -- the strongest state of all) or 'Collecting'.  Each of the
+#: three carries a completed start AND end time in the table, which is the
+#: evidence they ran; 'Skipped' is the one that has neither.
+OBSERVED_STATUSES = ('executed', 'archived', 'collecting')
 #: A visit the schedulers dropped.  It is NOT "not yet observed": it was on a
 #: schedule and did not run, and it needs re-planning to ever happen.
 STATUS_SKIPPED = 'Skipped'
+
+
+def has_run(status):
+    return str(status).strip().lower() in OBSERVED_STATUSES
 
 
 def _strip_tags(fragment):
@@ -239,8 +249,11 @@ def fetch_visit_status(program, url=None, timeout=90):
     return out
 
 
-#: Ordering for "which status wins" when a pointing has several visits.
-_STATUS_ORDER = ('Flight Ready', 'Scheduled', 'Skipped', 'Executed')
+#: Ordering for "which status wins" when a pointing has several visits, weakest
+#: first.  The tail is the observed lifecycle in the order STScI walks it, so a
+#: pointing whose visits are at different stages reports the furthest one.
+_STATUS_ORDER = ('Flight Ready', 'Scheduled', 'Skipped',
+                 'Collecting', 'Executed', 'Archived')
 
 
 def _status_rank(status):
@@ -436,7 +449,7 @@ def build(program, apt_path, pa_v3=None, aces_region=ACES_REGION,
         visit_status = fetch_visit_status(program)
     status_source = 'stsci-visit-status' if visit_status else 'apt'
     for number, rec in visit_status.items():
-        if rec.get('status') == STATUS_EXECUTED:
+        if has_run(rec.get('status')):
             for obs in parsed['observations']:
                 if (obs['number'].lstrip('0') or '0') == number:
                     observed_targets.add(obs['target'])

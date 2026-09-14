@@ -156,14 +156,19 @@ def test_a_tile_carries_its_number_target_and_status_in_the_option():
 
 
 def test_executed_and_skipped_tiles_are_listed_by_number():
+    """Both are listed and both are reachable, but by different routes:
+    an executed tile links OUT to its data in MAST, a skipped one has no data
+    to link to and instead selects itself on the map."""
     html = _section(_footprints({'3': 'Executed', '5': 'Executed',
                                  '4': 'Skipped'}))
     ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
                        html, re.S).group(1)
-    assert 'Executed 2' in ledger and 'Skipped 1' in ledger
-    assert re.search(r'data-goto="3"', ledger)
+    assert 'Observed 2' in ledger and 'Skipped 1' in ledger
+    assert re.search(r'observtn=3&', ledger)
+    assert re.search(r'observtn=5&', ledger)
     assert re.search(r'data-goto="4"', ledger)
-    assert re.search(r'data-goto="5"', ledger)
+    # every listed tile is reachable one way or the other
+    assert len(re.findall(r'<a [^>]*>', ledger)) == 3
 
 
 def test_an_executed_tile_is_still_in_the_picker_though_it_moved_layers():
@@ -298,3 +303,288 @@ def test_aladin_routes_the_same_three_ways_as_the_static_map():
     assert "scheduled: layer('JWST scheduled'" in html
     assert "skipped: layer('JWST skipped'" in html
     assert "(st === 'scheduled') ? 'scheduled'" in html
+
+
+# --- MAST links on the executed tiles ----------------------------------------
+
+def test_only_executed_tiles_link_to_the_archive():
+    """A scheduled visit has no data in MAST and a skipped one never will
+    without re-planning, so linking them sends a reader to an empty result --
+    which reads as the archive having lost something rather than as the visit
+    not having happened."""
+    html = _section(_footprints({'1': 'Executed', '2': 'Scheduled',
+                                 '3': 'Skipped'}, n=4))
+    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+                       html, re.S).group(1)
+    assert len(re.findall(r'href="https://mast[^"]*"', ledger)) == 1
+    # the skipped tile is still listed, still selects its tile, still no link
+    assert 'data-goto="3"' in ledger
+    assert not re.search(r'href="https://mast[^"]*observtn=3&', ledger)
+
+
+def test_the_link_names_the_program_and_the_observation():
+    from jwst_gc_pipeline.monitoring import skyview
+    url = skyview.mast_url('10678', '137')
+    assert 'program_id=10678' in url and 'observtn=137' in url
+    # the executed-RESULTS route, not the blank search form: the bare
+    # `#/jwst?...` form opens an unexecuted query
+    assert '#/jwst/results?' in url and 'useStore=false' in url
+
+
+def test_a_missing_or_junk_number_yields_no_link_rather_than_a_broken_one():
+    from jwst_gc_pipeline.monitoring import skyview
+    for prog, obs in (('10678', None), ('10678', ''), (None, '3'),
+                      ('10678', 'GC_3')):
+        assert skyview.mast_url(prog, obs) is None
+
+
+def test_the_executed_footprints_themselves_are_clickable():
+    """Both instruments of an executed tile, and nothing else."""
+    html = _section(_footprints({'1': 'Executed', '2': 'Executed',
+                                 '3': 'Scheduled'}, n=5))
+    wrapped = re.findall(
+        r'<a href="https://mast[^"]*observtn=(\d+)[^"]*" target="_blank" '
+        r'rel="noopener"><g data-obs=', html)
+    assert sorted(wrapped) == ['1', '1', '2', '2']   # NIRCam + MIRI each
+
+
+def test_the_tile_picker_does_not_swallow_clicks_on_the_mast_links():
+    """The ledger's numbers used to be goto shortcuts and the handler calls
+    preventDefault; if it bound to every anchor it would stop the archive
+    links from navigating."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert ".gcm-sky-stat a[data-goto]'" in html
+
+
+# --- the controls panel is draggable -----------------------------------------
+
+def test_the_panel_has_a_drag_handle():
+    """The controls sit ON the map, so wherever they are they hide part of it.
+    The header is the handle rather than the whole panel: dragging from the
+    body would fight the buttons and the tile dropdown inside it."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert 'id="gcm-sky-grip"' in html
+    assert 'drag to move this panel' in html
+    from jwst_gc_pipeline.monitoring import skyview
+    assert '.gcm-sky-ui h4 { cursor: move' in skyview.CSS
+
+
+def test_dragging_clears_the_css_right_anchor():
+    """The panel is anchored with `right` in CSS.  Setting `left` without
+    clearing it pins BOTH edges, and the panel stretches instead of moving."""
+    html = _section(_footprints({'1': 'Executed'}))
+    assert "panel.style.right = 'auto'" in html
+
+
+def test_the_panel_cannot_be_dragged_out_of_reach():
+    """`.gcm-sky-wrap` is `overflow: hidden`, so a panel dropped past an edge is
+    clipped, not scrolled to -- it could never be dragged back.
+
+    Asserted on the ARITHMETIC, not on the presence of a function name: the
+    first version of this checked `'function clampTo' in html`, and a reviewer
+    defeated it by replacing the body with `return [left, top]` while keeping
+    the name -- the exact defect named here, 32 passed."""
+    from jwst_gc_pipeline.monitoring import skyview
+    W, H, PW, PH = 800, 560, 208, 300
+    E = skyview.DRAG_EDGE_PX
+
+    def clamp(x, y):
+        return skyview.clamp_panel(x, y, W, H, PW, PH)
+
+    # dragged far off each edge, a grabbable strip survives
+    assert clamp(-10_000, 0)[0] == E - PW          # left: `edge` px still visible
+    assert clamp(10_000, 0)[0] == W - E            # right
+    assert clamp(0, 10_000)[1] == H - E            # bottom
+    assert clamp(0, -10_000)[1] == 0               # top: header stays reachable
+    # a position already inside is untouched
+    assert clamp(100, 60) == (100, 60)
+    # and the identity mutation the reviewer used is caught
+    assert clamp(-10_000, 10_000) != (-10_000, 10_000)
+
+
+def test_the_clamp_leaves_a_grabbable_strip_at_every_edge():
+    """The point of the clamp is that the HEADER can still be reached, since it
+    is the only drag handle."""
+    from jwst_gc_pipeline.monitoring import skyview
+    W, H, PW, PH = 640, 480, 208, 300
+    for x, y in ((-9999, -9999), (9999, -9999), (-9999, 9999), (9999, 9999)):
+        left, top = skyview.clamp_panel(x, y, W, H, PW, PH)
+        assert left + PW >= skyview.DRAG_EDGE_PX and left <= W - skyview.DRAG_EDGE_PX
+        assert 0 <= top <= H - skyview.DRAG_EDGE_PX
+
+
+def test_the_page_and_the_python_clamp_share_one_edge_value():
+    """Two copies of the number would drift; the JS takes it from the module."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = _section(_footprints({'1': 'Executed'}))
+    assert 'var EDGE = %d;' % skyview.DRAG_EDGE_PX in html
+    assert "addEventListener('resize'" in html
+
+
+def test_a_touch_drag_moves_the_panel_rather_than_scrolling_the_page():
+    from jwst_gc_pipeline.monitoring import skyview
+    assert 'touch-action: none' in skyview.CSS
+
+
+def test_the_map_does_not_pan_underneath_a_drag():
+    """Aladin and the static map both pan on pointer drags of their own.
+
+    Scoped to the pointermove handler: a bare `'ev.stopPropagation();' in html`
+    passed even with the call deleted, because two other calls elsewhere in the
+    page satisfy the substring (review of #852)."""
+    html = _section(_footprints({'1': 'Executed'}))
+    start = html.index("grip.addEventListener('pointermove'")
+    end = html.index('function end(', start)
+    assert 'ev.stopPropagation();' in html[start:end]
+
+
+# --- the status LIFECYCLE, not a single value --------------------------------
+
+def test_a_visit_that_has_run_is_observed_whatever_stage_it_reached():
+    """STScI walks a visit along Collecting -> Executed -> Archived.  Reading
+    only 'Executed' demotes the ones that have progressed PAST it: the observed
+    count went 12 -> 7 over two hours on 2026-09-12 with no visit un-running,
+    because five had become Archived (data in MAST, the strongest state) or
+    Collecting."""
+    for status in ('Executed', 'Archived', 'Collecting',
+                   'executed', 'ARCHIVED'):
+        assert bf.has_run(status), status
+    for status in ('Scheduled', 'Flight Ready', 'Skipped', '', None):
+        assert not bf.has_run(status), status
+
+
+def test_the_two_files_agree_on_which_statuses_mean_observed():
+    """`build_footprints` decides which tiles go in the observed layer and
+    `skyview` decides which get a MAST link; they are in different packages and
+    would drift silently."""
+    from jwst_gc_pipeline.monitoring import skyview
+    assert set(skyview.RUN_STATUSES) == set(bf.OBSERVED_STATUSES)
+
+
+def test_the_furthest_stage_wins_for_a_multi_visit_pointing():
+    r = bf._status_rank
+    assert r('Archived') > r('Executed') > r('Collecting') > r('Skipped') \
+        > r('Scheduled') > r('Flight Ready')
+
+
+def test_every_run_stage_is_listed_and_linked():
+    html = _section(_footprints({'1': 'Archived', '2': 'Collecting',
+                                 '3': 'Executed', '4': 'Skipped'}, n=6))
+    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+                       html, re.S).group(1)
+    assert 'Observed 3' in ledger
+    assert len(re.findall(r'href="https://mast', ledger)) == 3
+
+
+def test_the_total_is_not_labelled_with_one_of_its_parts():
+    """'Executed 12' when 3 of them are Archived reads as a count of Executed."""
+    html = _section(_footprints({'1': 'Archived', '2': 'Executed'}))
+    ledger = re.search(r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+                       html, re.S).group(1)
+    assert 'Observed 2' in ledger
+    assert '1 archived' in ledger and '1 executed' in ledger
+
+
+def test_the_status_tail_does_not_re_count_the_observed_tiles():
+    """Excluding only 'executed' from the tail listed Archived and Collecting
+    again underneath the total, so the same tiles were counted twice on one
+    line and the numbers did not add to the tile count."""
+    import html as H
+    page = _section(_footprints({'1': 'Archived', '2': 'Collecting',
+                                 '3': 'Executed', '4': 'Skipped',
+                                 '5': 'Scheduled'}, n=6))
+    ledger = H.unescape(re.search(
+        r'Execution</div><div class="gcm-sky-stat">(.*?)</div></div>',
+        page, re.S).group(1))
+    tail = ledger.split('Skipped')[-1]
+    assert 'archived' not in tail.lower() and 'collecting' not in tail.lower()
+
+
+# --- the two treasury imagery layers -----------------------------------------
+
+def test_miri_is_the_background_and_nircam_rides_on_top():
+    """They are drawn TOGETHER, not chosen between: the MIRI parallel sits
+    ~7.5' from its NIRCam prime, so they are different sky and the useful view
+    is both at once.  MIRI is the background (behind); NIRCam is an overlay
+    image layer (in front)."""
+    from jwst_gc_pipeline.monitoring import skyview
+    name, url, note = skyview.SURVEYS[0]
+    assert 'miri' in url.lower(), 'the MIRI layer is the background'
+    assert skyview.TREASURY_NIRCAM_HIPS not in [u for _n, u, _t in skyview.SURVEYS], \
+        'NIRCam must not also be a background CHOICE -- it is always on top'
+    html = _section(_footprints({'1': 'Executed'}))
+    assert 'setOverlayImageLayer' in html
+
+
+def test_both_treasury_layers_are_on_by_default():
+    html = _section(_footprints({'1': 'Executed'}))
+    assert re.search(r'class="gcm-sky-btn survey on"[^>]*data-survey="[^"]*miri', html)
+    assert 'class="gcm-sky-btn on" id="lyr-nircam-hips"' in html
+    assert 'var nircamOn = true;' in html
+
+
+def test_switching_the_background_does_not_lose_the_nircam_layer():
+    """`setImageSurvey` replaces the base and can clear the overlay stack, so
+    picking 2MASS would silently drop the survey's own data."""
+    html = _section(_footprints({'1': 'Executed'}))
+    switch = html.index('function applySurvey(')
+    after = html.index('aladin.setImageSurvey(', switch)
+    assert html.index('applyNircamHips();', after) < html.index('}', after) + 400
+
+
+def test_an_aladin_without_overlay_support_does_not_break_the_panel():
+    """The background, the footprints and the tile picker do not depend on the
+    overlay; an unguarded throw here would take their wiring down with it."""
+    html = _section(_footprints({'1': 'Executed'}))
+    block = html[html.index('function applyNircamHips'):]
+    assert 'try {' in block[:400] and 'catch' in block[:900]
+
+
+def test_the_layers_are_served_from_a_cors_enabled_host():
+    """Aladin reads tiles into a WebGL texture, so a host with no
+    Access-Control-Allow-Origin renders nothing.  data.rc.ufl.edu also answers
+    401 on this path, which is why both layers are published under avm_images
+    rather than linked where they were built."""
+    from jwst_gc_pipeline.monitoring import skyview
+    for url in [skyview.TREASURY_NIRCAM_HIPS, skyview.SURVEYS[0][1]]:
+        assert url.startswith('https://starformation.astro.ufl.edu/avm_images/')
+        assert 'data.rc.ufl.edu' not in url
+
+
+def test_a_link_says_what_stage_the_tile_is_at():
+    """Of the twelve linked tiles, seven reach planning placeholders only --
+    Executed 0 of 4, Collecting 2 of 5, Archived 3 of 3 (measured 2026-09-13).
+    So the link is described as a SEARCH and the stage is named, rather than
+    promising data the reader may not get."""
+    html = _section(_footprints({'1': 'Archived', '2': 'Executed',
+                                 '3': 'Collecting'}, n=4))
+    import html as H
+    text = H.unescape(html)
+    assert 'products are in the archive' in text
+    assert 'products not published yet' in text
+    assert 'search MAST for observation' in text
+
+
+def test_every_run_stage_is_covered_by_a_note():
+    from jwst_gc_pipeline.monitoring import skyview
+    assert set(skyview.STAGE_NOTE) == set(skyview.RUN_STATUSES)
+
+
+def test_both_miri_treasury_layers_are_offered():
+    """Plain and background-matched are the same F770W sky and are offered as a
+    pair: the matching is judged by switching between them, not asserted.  A
+    single layer would make the comparison impossible."""
+    from jwst_gc_pipeline.monitoring import skyview
+    urls = [u for _n, u, _t in skyview.SURVEYS]
+    # exact path segments -- `..._miri_hips` is a substring of nothing here, but
+    # `..._treasury_hips` IS a prefix of `..._treasury_miri_hips`, so the same
+    # trap applies one layer over.
+    for layer in ('jwst_gc_treasury_miri_hips',
+                  'jwst_gc_treasury_miri_bgmatch_hips'):
+        assert any(u.rstrip('/').endswith('/' + layer) for u in urls), layer
+
+
+def test_the_bgmatch_layer_says_what_it_is_for():
+    from jwst_gc_pipeline.monitoring import skyview
+    note = next(t for n, _u, t in skyview.SURVEYS if 'bg-matched' in n)
+    assert note and 'background' in note.lower()
