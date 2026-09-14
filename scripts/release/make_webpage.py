@@ -1493,7 +1493,54 @@ def resolve_overview_geoms(roster, rebuilt, fresh, cached, read_from_disk):
     return [out[f] for f in sorted(out)]
 
 
-def render_index(fields_info, overview_html=""):
+#: Standing quicklook views that live beside the release but are not part of it.
+#:
+#: Two different paths, deliberately spelled differently.  The monitor is a
+#: subdirectory of THIS site (``htdocs/jwst-gc/monitor/``, deployed separately
+#: by ``scripts/monitoring/deploy_monitor.sh`` and protected from this site's
+#: ``rsync --delete``), so it is reached relatively and keeps working from a
+#: staging copy or a ``file://`` build.  The HiPS viewer lives under a different
+#: docroot on the same host (``htdocs/avm_images/``), which a relative link can
+#: only reach by climbing out of the release tree -- correct on the server and
+#: broken everywhere else -- so it is named absolutely.
+QUICKLOOKS = (
+    ("monitor/", "Observing monitor",
+     "Programme 10678 tile by tile: what has executed, what is scheduled, "
+     "what was skipped, over the survey's own imagery."),
+    ("https://starformation.astro.ufl.edu/avm_images/jwst_gc_aladin.html",
+     "HiPS sky viewer",
+     "Pan and zoom the JWST CMZ and Treasury mosaics, NIRCam and MIRI, "
+     "blended over VVV / Spitzer / MeerKAT context."),
+)
+
+#: Built by ``scripts/quicklook/build_cmd_viewer.py`` into the same output
+#: directory.  Linked only when the file is actually there: the builder needs
+#: catalogs, and a card pointing at a 404 is worse than no card.
+CMD_VIEWER_FILE = "cmd_explorer.html"
+CMD_VIEWER_CARD = (
+    CMD_VIEWER_FILE, "Colour-magnitude explorer",
+    "Per-pointing footprints over the sky, with the F212N vs F212N-F480M "
+    "diagram for the whole sample and for whichever pointing is under the "
+    "cursor.")
+
+
+def _quicklook_cards(quicklooks):
+    """Link cards for the analyses that sit alongside the release."""
+    out = ["<h2>Quicklook analyses</h2>",
+           "<div class=muted>Interactive views built from the same data. "
+           "They are regenerated on their own schedules, so they can be ahead "
+           "of or behind the release below.</div>",
+           "<div class=grid>"]
+    for href, title, blurb in quicklooks:
+        out.append(
+            f"<a class=card href='{html.escape(href)}'>"
+            f"<div class=body><b>{html.escape(title)}</b><br>"
+            f"<span class=muted>{html.escape(blurb)}</span></div></a>")
+    out.append("</div>")
+    return out
+
+
+def render_index(fields_info, overview_html="", quicklooks=QUICKLOOKS):
     out = [page_head("JWST Galactic Center survey — data release")]
     out.append("<header><h1>JWST Galactic Center survey</h1>")
     out.append("<div class=muted>Final reduced mosaics, residual/model images, and "
@@ -1521,6 +1568,8 @@ def render_index(fields_info, overview_html=""):
             # panel maps CMZ fields only, so it must not float away from them
             if g is None and overview_html:
                 out.append(overview_html)
+    if quicklooks:
+        out += _quicklook_cards(quicklooks)
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
@@ -1901,7 +1950,14 @@ def main(argv=None):
         print("note: no footprints readable -- on-sky overview omitted")
     overview_html = field_overview.section(overview_geoms)
 
-    index_html = render_index(index_fields, overview_html=overview_html)
+    # The colour-magnitude explorer is built by a separate script on its own
+    # schedule (it reads catalogs, not the staged release), so its presence is
+    # tested rather than assumed -- a card pointing at a 404 is worse than none.
+    quicklooks = list(QUICKLOOKS)
+    if (out_dir / CMD_VIEWER_FILE).exists():
+        quicklooks.append(CMD_VIEWER_CARD)
+    index_html = render_index(index_fields, overview_html=overview_html,
+                              quicklooks=tuple(quicklooks))
     if cmz_explorer_link:
         # surface the explorer at the top of the index (additive; no-op otherwise)
         index_html = index_html.replace(
