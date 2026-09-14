@@ -24,6 +24,9 @@ REQUIRED = (
     'jwst_miri_hips',
     'jwst_gc_treasury_hips',
     'jwst_gc_treasury_miri_hips',
+    # the same F770W sky, background-matched -- offered beside the plain layer
+    # so the matching can be switched against rather than assumed
+    'jwst_gc_treasury_miri_bgmatch_hips',
 )
 
 
