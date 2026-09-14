@@ -717,3 +717,55 @@ def test_a_highlighted_number_is_scrolled_into_view():
     map -> number direction would light something nobody sees."""
     html = _section(_footprints({'1': 'Executed'}, n=4))
     assert 'scrollIntoView' in html
+
+
+def test_panning_the_map_does_not_change_the_selection():
+    """A `click` is dispatched after a pointer DRAG as well as after a tap, so
+    both maps pan and then deliver a click.  Without a guard a pan that ended
+    over empty sky cleared the selection, and a short pan that stayed inside
+    one footprint toggled that footprint off -- the feature undoing itself on
+    the commonest gesture there is.
+
+    `click` alone does not carry this: the earlier comment claimed it did.
+    """
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    assert 'function dragDetector(' in html
+    assert 'var svgWasDragged = dragDetector(svg);' in html
+    assert 'var aladinWasDragged = dragDetector(aladinDiv);' in html
+    # both click handlers consult it before doing anything
+    for guard in ('if (svgWasDragged(ev)) { return; }',
+                  'if (aladinWasDragged(ev)) { return; }'):
+        assert guard in html, guard
+
+
+def test_the_drag_threshold_is_shared_between_python_and_the_page():
+    from jwst_gc_pipeline.monitoring import skyview
+    html = _section(_footprints(n=4))
+    assert 'var DRAG_SLOP_PX = %d;' % skyview.DRAG_SLOP_PX in html
+    assert skyview.DRAG_SLOP_PX > 0
+
+
+def test_the_half_written_pan_guard_is_gone():
+    """`up()` ended with `if (!moved) { return; }` as its last statement -- dead
+    code that read like the guard above had been started and not finished, and
+    that is exactly what had happened."""
+    html = _section(_footprints(n=4))
+    assert 'if (!moved)' not in html
+
+
+def test_the_smallest_overlapping_tile_wins():
+    """Footprints overlap their neighbours.  Taking the first match would
+    always return the same tile of an overlapping pair, so the other could
+    never be selected from the map."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    assert 'if (area < bestArea) { bestArea = area; best = num; }' in html
+    assert 'var best = null, bestArea = Infinity;' in html
+
+
+def test_clicking_empty_sky_clears_the_selection():
+    """How you get back to seeing all of them; without it a selection made by
+    accident can only be undone by finding and re-clicking the same tile."""
+    html = _section(_footprints({'1': 'Executed'}, n=4))
+    body = html[html.index("svg.addEventListener('click'"):]
+    body = body[:body.index('// ----')]
+    assert "else if (selected) {" in body and "selected = '';" in body

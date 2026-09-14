@@ -43,6 +43,8 @@ import json
 import math
 import os
 
+from .. import jsgeom
+
 #: Where a copy of Aladin Lite is hardlinked from when publishing.  Same origin
 #: as the page, so no third-party CDN is involved.
 ALADIN_SOURCE = '/orange/adamginsburg/web/public/ACES_Aladin_tour/aladin.js'
@@ -218,6 +220,12 @@ STAGE_NOTE = {
 #: `overflow: hidden`, so a panel dropped past an edge is clipped rather than
 #: scrolled to and could never be dragged back.
 DRAG_EDGE_PX = 28
+
+#: How far the pointer may travel between `pointerdown` and `click` and still
+#: count as a click rather than a pan.  A `click` is dispatched after a drag as
+#: well as after a tap, so without a threshold every pan ends in a selection
+#: change; 4 px is above hand jitter on a tap and far below any real pan.
+DRAG_SLOP_PX = 4
 
 
 def clamp_panel(left, top, wrap_w, wrap_h, panel_w, panel_h,
@@ -1195,6 +1203,8 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     # already grouped by what the tile had DONE.  Selection now happens in the
     # Execution section or by clicking the map, and both directions light the
     # same tile.  `TILES` stays -- it is what turns a number into a position.
+    jsgeom_js = jsgeom.HIT_TEST_JS
+    drag_slop_px = json.dumps(DRAG_SLOP_PX)
     tile_js = [{'n': t['number'], 'ra': t['ra'], 'dec': t['dec'],
                 'target': t['target'], 'status': t['status']}
                for t in tiles]
@@ -1613,22 +1623,28 @@ interactive view adds sky imagery you can pan across.
   // Screen-space point-in-polygon and area, for hit-testing the interactive
   // view's footprints.  Projecting to the screen and testing there keeps this
   // correct under any projection and any rotation of the sky.
-  function inPoly(px, py, pts) {{
-    var inside = false;
-    for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {{
-      var xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
-      if (((yi > py) !== (yj > py)) &&
-          (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {{ inside = !inside; }}
-    }}
-    return inside;
-  }}
+{jsgeom_js}
 
-  function polyArea(pts) {{
-    var a = 0;
-    for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {{
-      a += (pts[j][0] + pts[i][0]) * (pts[j][1] - pts[i][1]);
-    }}
-    return Math.abs(a / 2);
+  // A `click` is dispatched after a pointer DRAG as well as after a tap, so
+  // both maps pan and then deliver a click.  Without this a pan that ended
+  // over empty sky cleared the selection, and a short pan that stayed inside
+  // one footprint TOGGLED that footprint off -- the feature undoing itself on
+  // the commonest gesture there is.
+  //
+  // Distance from the pointerdown decides, rather than the static map's own
+  // `moved` flag: the interactive view pans inside Aladin, where that flag
+  // does not exist, and one rule covering both views is one rule to keep true.
+  var DRAG_SLOP_PX = {drag_slop_px};
+  function dragDetector(el) {{
+    var from = null;
+    el.addEventListener('pointerdown', function (ev) {{
+      from = [ev.clientX, ev.clientY];
+    }});
+    return function (ev) {{
+      if (!from) {{ return false; }}
+      var dx = ev.clientX - from[0], dy = ev.clientY - from[1];
+      return (dx * dx + dy * dy) > DRAG_SLOP_PX * DRAG_SLOP_PX;
+    }};
   }}
 
   // Map -> number, static view.  `click` rather than `pointerdown`: the map
@@ -1636,7 +1652,9 @@ interactive view adds sky imagery you can pan across.
   // is a pan, not a selection.  A click that lands on empty sky clears the
   // selection, which is how you get back to seeing all of them.
   if (svg) {{
+    var svgWasDragged = dragDetector(svg);
     svg.addEventListener('click', function (ev) {{
+      if (svgWasDragged(ev)) {{ return; }}          // a pan, not a selection
       var g = ev.target && ev.target.closest
             ? ev.target.closest('g[data-obs]') : null;
       if (g) {{
@@ -1717,21 +1735,18 @@ interactive view adds sky imagery you can pan across.
     svg.addEventListener('pointerdown', function (ev) {{
       armed = true;
       var start = toUser(ev);
-      var moved = false;
       svg.setPointerCapture(ev.pointerId);
       svg.classList.add('gcm-dragging');
       function move(e2) {{
         var now = toUser(e2);
         vb[0] -= now[0] - start[0];
         vb[1] -= now[1] - start[1];
-        moved = true;
         setVB();
       }}
       function up() {{
         svg.removeEventListener('pointermove', move);
         svg.removeEventListener('pointerup', up);
         svg.classList.remove('gcm-dragging');
-        if (!moved) {{ return; }}
       }}
       svg.addEventListener('pointermove', move);
       svg.addEventListener('pointerup', up);
@@ -1994,7 +2009,9 @@ interactive view adds sky imagery you can pan across.
       // The smallest matching tile wins.  Where a NIRCam footprint overlaps a
       // neighbour, picking the first match would always return the same one.
       if (aladinDiv) {{
+        var aladinWasDragged = dragDetector(aladinDiv);
         aladinDiv.addEventListener('click', function (ev) {{
+          if (aladinWasDragged(ev)) {{ return; }}   // a pan, not a selection
           if (!aladin || !aladin.world2pix) {{ return; }}
           var box = aladinDiv.getBoundingClientRect();
           var px = ev.clientX - box.left, py = ev.clientY - box.top;

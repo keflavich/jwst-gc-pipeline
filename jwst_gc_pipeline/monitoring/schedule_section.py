@@ -120,7 +120,11 @@ def _state_badge(state, label, program, observation):
             f'{badge}</a>')
 
 
-def _row(visit, now, on_disk, program=None):
+def _row(visit, now, on_disk, program):
+    # `program` is positional and required.  It was defaulted to None, and a
+    # caller that forgot it got a table where every badge was a bare span --
+    # the 65-of-65 linking property resting on one call site remembering an
+    # optional argument.  `section` is the only caller, so requiring it is free.
     when = _schedule.start_datetime(visit)
     delta = (when - now).total_seconds() if when else None
     dur = _schedule.duration_seconds(visit.get('duration'))
