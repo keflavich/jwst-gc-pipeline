@@ -30,6 +30,7 @@ import datetime
 import html
 
 from . import schedule as _schedule
+from .skyview import mast_url as _mast_url
 
 
 def esc(text):
@@ -82,7 +83,48 @@ def observed_observations(entries, program):
     return seen
 
 
-def _row(visit, now, on_disk):
+#: What the state badge says when it is a link, per state.  Spelled out
+#: because a badge that navigates has to say where before it is clicked: the
+#: three states differ in whether MAST is expected to have anything.
+_MAST_TITLE = {
+    'ok': 'search MAST for observation %s of program %s — this monitor has '
+          'already scanned data for it',
+    'wait': 'search MAST for observation %s of program %s — this monitor has '
+            'not scanned data for it; it may be proprietary, not yet '
+            'delivered, or simply not downloaded here',
+    'sched': 'search MAST for observation %s of program %s — it has not run '
+             'yet, so expect an empty result until it does',
+}
+
+
+def _state_badge(state, label, program, observation):
+    """The state badge, linked to the archive search for its observation.
+
+    The archive link used to live on the footprints in the sky map, where a
+    click sometimes selected a tile and sometimes left the site depending on a
+    status the reader could not see under the cursor.  Here the row already
+    names the observation and states what is known about it, so the badge has
+    somewhere honest to point from.
+
+    Linked for every state, ``scheduled`` included, with the tooltip saying
+    what to expect: the query is well formed either way, and a badge that is a
+    link on some rows and not others is the ambiguity this moved away from.
+    """
+    url = _mast_url(program, observation)
+    badge = f'<span class="gcm-sch-badge is-{state}">{label}</span>'
+    if not url:
+        return badge
+    title = _MAST_TITLE.get(state, 'search MAST for observation %s of program %s')
+    return (f'<a class="gcm-sch-mast" href="{esc(url)}" target="_blank" '
+            f'rel="noopener" title="{esc(title % (observation, program))}">'
+            f'{badge}</a>')
+
+
+def _row(visit, now, on_disk, program):
+    # `program` is positional and required.  It was defaulted to None, and a
+    # caller that forgot it got a table where every badge was a bare span --
+    # the 65-of-65 linking property resting on one call site remembering an
+    # optional argument.  `section` is the only caller, so requiring it is free.
     when = _schedule.start_datetime(visit)
     delta = (when - now).total_seconds() if when else None
     dur = _schedule.duration_seconds(visit.get('duration'))
@@ -106,7 +148,7 @@ def _row(visit, now, on_disk):
   <td class="gcm-mono">{f'{dur // 60} m' if dur else '—'}</td>
   <td>{esc(visit.get('instrument') or '—')}
       {f'<span class="gcm-sch-par">+ {esc(parallels)}</span>' if parallels else ''}</td>
-  <td><span class="gcm-sch-badge is-{state}">{label}</span></td>
+  <td>{_state_badge(state, label, program, obs)}</td>
 </tr>"""
 
 
@@ -125,6 +167,11 @@ CSS = """
 .gcm-sch-badge.is-sched { color: var(--accent); border-color: var(--accent); }
 .gcm-sch-badge.is-ok { color: var(--ok); border-color: var(--ok); }
 .gcm-sch-badge.is-wait { color: var(--warn); border-color: var(--warn); }
+/* The badge is the archive link.  No underline and no link colour: it already
+   reads as a control, and recolouring it would destroy the state it encodes. */
+.gcm-sch-mast { text-decoration: none; }
+.gcm-sch-mast:hover .gcm-sch-badge { background: rgba(255,255,255,.09); }
+.gcm-sch-mast:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .gcm-sch-next { font-family: var(--mono); font-size: 1.35rem; font-weight: 600;
   color: var(--accent); }
 .gcm-sch-head { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: baseline;
@@ -189,7 +236,7 @@ def section(sched, entries=(), now=None):
         if upcoming and n_upcoming_shown >= UPCOMING_SHOWN:
             hidden += 1
             continue
-        rows.append(_row(visit, now, on_disk))
+        rows.append(_row(visit, now, on_disk, program))
         n_upcoming_shown += 1 if upcoming else 0
     more = (f'<p class="gcm-note">{hidden} further scheduled visit(s) not shown; '
             f'the full list is in <code>schedule.json</code>.</p>' if hidden else '')

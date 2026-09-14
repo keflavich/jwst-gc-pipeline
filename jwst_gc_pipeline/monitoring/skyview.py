@@ -43,6 +43,8 @@ import json
 import math
 import os
 
+from .. import jsgeom
+
 #: Where a copy of Aladin Lite is hardlinked from when publishing.  Same origin
 #: as the page, so no third-party CDN is involved.
 ALADIN_SOURCE = '/orange/adamginsburg/web/public/ACES_Aladin_tour/aladin.js'
@@ -76,18 +78,18 @@ COLOR_SCHEDULED = '#fbbf24'
 COLOR_SKIPPED = '#f43f5e'
 COLOR_SPRING = '#1E90FF'
 COLOR_ACES = '#ff6b6b'
-#: RGPS components.  Three layers because they are three different surveys in
-#: cadence and depth, not three renderings of one: the wide-area strip is a
-#: single pass over 117 deg of longitude, the time-domain fields are revisited,
-#: and the deep spectroscopic fields are pointed.  One colour each, in the warm
-#: half of the wheel so RGPS reads as a family distinct from Roman GBTDS blue.
-COLOR_RGPS_WIDE = '#FF8C00'
+#: RGPS components drawn here.  Only the time-domain fields: the wide-area
+#: strip is a single pass over 117 deg of longitude and the deep spectroscopic
+#: fields are pointed elsewhere, so at this program's ~1.6 deg field both were
+#: either off-screen or a box around everything -- context that cost two
+#: buttons and told a reader nothing about the Galactic Centre.  The
+#: time-domain fields overlap the survey and are worth seeing.
+#:
+#: The parser still reads whatever components the file carries; this tuple is
+#: what gets a colour, a layer and a toggle.  Adding one back is one line.
 COLOR_RGPS_TDS = '#f0b429'
-COLOR_RGPS_DEEP = '#e05fa8'
 RGPS_COMPONENTS = (
-    ('wide_area', 'rgps-wide', COLOR_RGPS_WIDE, 'RGPS wide area'),
     ('time_domain', 'rgps-tds', COLOR_RGPS_TDS, 'RGPS time domain'),
-    ('deep_spec', 'rgps-deep', COLOR_RGPS_DEEP, 'RGPS deep fields'),
 )
 
 #: Backgrounds worth having here.  The first is the one the view opens on, so it has to be all-sky.  The survey's
@@ -219,6 +221,12 @@ STAGE_NOTE = {
 #: scrolled to and could never be dragged back.
 DRAG_EDGE_PX = 28
 
+#: How far the pointer may travel between `pointerdown` and `click` and still
+#: count as a click rather than a pan.  A `click` is dispatched after a drag as
+#: well as after a tap, so without a threshold every pan ends in a selection
+#: change; 4 px is above hand jitter on a tap and far below any real pan.
+DRAG_SLOP_PX = 4
+
 
 def clamp_panel(left, top, wrap_w, wrap_h, panel_w, panel_h,
                 edge=DRAG_EDGE_PX):
@@ -280,7 +288,8 @@ CSS = """
 .gcm-sky-ui { position: absolute; top: 8px; right: 8px; z-index: 10; width: 208px;
               background: rgba(10,16,20,.86); color: #dfe9ec;
               border: 1px solid rgba(255,255,255,.13); border-radius: 4px;
-              font-size: 11.5px; overflow: hidden;
+              font-size: 11.5px; overflow-y: auto;
+              max-height: calc(100% - 16px);
               font-family: var(--sans); backdrop-filter: blur(6px); }
 /* The panel is DRAGGABLE by its header.  `overflow: hidden` on the wrap means
    a panel dragged past an edge is clipped rather than scrolled to, so the drag
@@ -299,6 +308,25 @@ CSS = """
                  border-bottom: 1px solid rgba(255,255,255,.1);
                  font-family: var(--mono); }
 .gcm-sky-sec { padding: 6px 9px; border-bottom: 1px solid rgba(255,255,255,.07); }
+/* Every section is a <details>, so each one can be folded away.  The panel had
+   grown to seven stacked blocks and covered a third of the map on a laptop;
+   native <details> gets the fold, the keyboard and the disclosure triangle for
+   no script, and a section left open stays open across a reload only if the
+   browser restores it -- which is the right amount of memory for a control
+   panel, since the page is regenerated hourly. */
+.gcm-sky-sec > summary { cursor: pointer; list-style: none; user-select: none;
+                         -webkit-user-select: none; display: flex;
+                         align-items: center; gap: 5px; margin-bottom: 0; }
+.gcm-sky-sec[open] > summary { margin-bottom: 5px; }
+.gcm-sky-sec > summary::-webkit-details-marker { display: none; }
+/* The triangle is drawn rather than inherited: the UA marker sits on the text
+   baseline of an uppercase 9.5px label and reads as a stray glyph. */
+.gcm-sky-sec > summary::before { content: '▸'; font-size: 8px; line-height: 1;
+                                 color: #5d7178; transition: transform .12s; }
+.gcm-sky-sec[open] > summary::before { transform: rotate(90deg); }
+.gcm-sky-sec > summary:hover::before { color: #9fb4bc; }
+.gcm-sky-sec > summary:focus-visible { outline: 2px solid var(--accent);
+                                       outline-offset: 1px; }
 /* The selected tile.  `!important` because the colour and stroke-width are set
    as PRESENTATION ATTRIBUTES on the parent <g> (see `_layer`), and a class
    rule loses to those unless it is marked -- the highlight silently did
@@ -306,18 +334,25 @@ CSS = """
 .gcm-tile-hi path { stroke: #ffffff !important; stroke-width: 2.6 !important;
                     fill-opacity: .34 !important; }
 .gcm-tile-dim { opacity: .28; }
-.gcm-sky-pick { width: 100%; box-sizing: border-box; font-family: var(--mono);
-                font-size: 11px; padding: 3px 4px; border-radius: 3px;
-                background: rgba(255,255,255,.07); color: #dfe9ec;
-                border: 1px solid rgba(255,255,255,.18); }
-.gcm-sky-pick option { background: #0d1418; color: #dfe9ec; }
 .gcm-sky-stat { font-family: var(--mono); font-size: 10.5px; line-height: 1.5;
                 color: #cfdde2; }
+/* The Execution section is the tile roster now, so it carries ~75 numbers on a
+   survey this far along -- more than the panel can be tall.  Bounded and
+   scrolled rather than truncated: every tile has to stay reachable, which is
+   the whole reason the dropdown could be removed.  `selectTile` scrolls the
+   highlighted number into view here. */
+#gcm-sky-exec .gcm-sky-stat { max-height: 156px; overflow-y: auto; }
 .gcm-sky-stat b { font-weight: 600; }
 .gcm-sky-stat .ex { color: #4ade80; }
 .gcm-sky-stat .sk { color: #ff6b6b; }
 .gcm-sky-stat a { color: inherit; text-decoration: underline dotted;
-                  cursor: pointer; }
+                  cursor: pointer; border-radius: 2px; padding: 0 1px; }
+.gcm-sky-stat .sc { color: #fbbf24; }
+/* The selected tile's number, lit from the map side.  Same white as the
+   footprint highlight (`.gcm-tile-hi`), so the two ends of the association
+   read as one thing. */
+.gcm-sky-stat a.gcm-num-hi { background: #ffffff; color: #0a1014;
+                             text-decoration: none; font-weight: 600; }
 .gcm-sky-sec:last-child { border-bottom: 0; }
 .gcm-sky-lab { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
                color: #7d919a; margin-bottom: 4px; font-family: var(--mono); }
@@ -827,14 +862,15 @@ def _pointing_title(pointing):
                        ('  ' + bands) if bands else '', where)
 
 
-def _layer(frame, pointings, key, color, fill_opacity, layer_id, label,
-           link=None):
+def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
     """One instrument's polygons for one group, as a titled ``<g>`` per pointing.
 
-    ``link`` is an optional ``pointing -> url or None``; where it returns a url
-    the group is wrapped in an SVG ``<a>``, so the footprint itself is
-    clickable.  Used for executed tiles, which are the only ones with data to
-    link to.
+    Footprints used to be wrapped in an SVG ``<a>`` to MAST where the tile had
+    run.  They are not any more: clicking a footprint now SELECTS it, and a
+    click that sometimes selected and sometimes navigated to another site --
+    depending on a status the reader cannot see under the cursor -- is not one
+    gesture.  The archive link lives on the schedule table's state badge, which
+    names the observation it belongs to.
     """
     body = []
     count = 0
@@ -849,16 +885,9 @@ def _layer(frame, pointings, key, color, fill_opacity, layer_id, label,
         # observation NUMBER rather than the array index: the two coincide only
         # while every pointing is drawable, and a pointing dropped for want of
         # a target coordinate would silently shift every tile after it.
-        group = ('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
-                 % (_esc(pointing.get('number') or ''),
-                    _esc(_pointing_title(pointing)), path))
-        url = link(pointing) if link else None
-        if url:
-            # `target=_blank` on an SVG <a> needs the XLink-free HTML form,
-            # which every browser that runs Aladin also supports.
-            group = ('<a href="%s" target="_blank" rel="noopener">%s</a>'
-                     % (_esc(url), group))
-        body.append(group)
+        body.append('<g data-obs="%s"><title>%s</title><path d="%s"/></g>'
+                    % (_esc(pointing.get('number') or ''),
+                       _esc(_pointing_title(pointing)), path))
     return ('<g id="%s" class="gcm-lyr" data-label="%s" stroke="%s" fill="%s" '
             'fill-opacity="%s" stroke-width="1.1" vector-effect="non-scaling-stroke">'
             '%s</g>' % (layer_id, _esc(label), color, color,
@@ -925,17 +954,10 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME, rgps=None):
                             '.16', 'stat-skp-nircam', 'skipped NIRCam')
     skp_m, n_skp_m = _layer(frame, skipped, 'miri', COLOR_SKIPPED,
                             '.16', 'stat-skp-miri', 'skipped MIRI')
-    program = footprints.get('program')
-
-    def _mast(pointing):
-        return mast_url(program, pointing.get('number'))
-
     obs_n, n_obs_n = _layer(frame, observed, 'nircam', COLOR_OBSERVED,
-                            '.18', 'stat-obs-nircam', 'observed NIRCam',
-                            link=_mast)
+                            '.18', 'stat-obs-nircam', 'observed NIRCam')
     obs_m, n_obs_m = _layer(frame, observed, 'miri', COLOR_OBSERVED,
-                            '.18', 'stat-obs-miri', 'observed MIRI',
-                            link=_mast)
+                            '.18', 'stat-obs-miri', 'observed MIRI')
 
     # Roman is drawn here too, not only in the interactive view. It used to be
     # Aladin-only, which made its toggles do nothing at all until someone
@@ -1095,38 +1117,37 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     # made the ledger drop tiles as they progressed.
     executed = [t for t in tiles if _has_run(t['status'])]
     skipped = _by_status('skipped')
+    scheduled = _by_status('scheduled')
     status_counts = footprints.get('status_counts') or {}
     status_source = footprints.get('status_source') or 'apt'
 
     program = footprints.get('program')
 
     def _tile_links(items, cls):
-        """Executed tiles link OUT to the archive; everything else links IN to
-        the tile picker.  A skipped or scheduled visit has no data in MAST, so
-        sending a reader there would show an empty result and read as the
-        archive having lost something."""
+        """Every number here drives the MAP, and none of them leaves the page.
+
+        This used to send executed tiles out to MAST.  The archive link now
+        lives on the schedule table's state badge below, where the row already
+        says which observation it is and what state it is in; a link that
+        navigated away from the map, out of a control panel whose other numbers
+        moved the map, was two different gestures wearing one appearance.
+
+        Each anchor carries ``data-obs`` as well as ``data-goto`` so the map can
+        light the matching number up when a footprint is clicked -- the reverse
+        direction of the same association.
+        """
         out = []
         for t in items:
-            title = '%s%s' % (t['target'],
-                              '  ' + t['start'] if t['start'] else '')
-            url = (mast_url(program, t['number'])
-                   if _has_run(t['status']) else None)
-            if url:
-                stage = t['status'].strip().lower()
-                note = STAGE_NOTE.get(stage)
-                out.append('<a href="%s" target="_blank" rel="noopener" '
-                           'title="%s">%s</a>'
-                           % (_esc(url),
-                              _esc('%s — search MAST for observation %s of '
-                                   'program %s%s'
-                                   % (title, t['number'], program,
-                                      ' (%s: %s)' % (t['status'], note)
-                                      if note else '')),
-                              _esc(t['number'])))
-            else:
-                out.append('<a data-goto="%s" title="%s">%s</a>'
-                           % (_esc(t['number']), _esc(title),
-                              _esc(t['number'])))
+            stage = t['status'].strip().lower()
+            note = STAGE_NOTE.get(stage)
+            title = '%s%s%s' % (t['target'],
+                                '  ' + t['start'] if t['start'] else '',
+                                '  (%s: %s)' % (t['status'], note)
+                                if note else '')
+            out.append('<a data-goto="%s" data-obs="%s" class="%s" '
+                       'title="%s">%s</a>'
+                       % (_esc(t['number']), _esc(t['number']), _esc(cls),
+                          _esc(title), _esc(t['number'])))
         return ', '.join(out) or '<span class="gcm-sky-empty">none</span>'
 
     if status_counts:
@@ -1140,23 +1161,35 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
             '<div><b class="sk">Skipped %d</b> &nbsp;%s</div>'
             % (len(skipped), _tile_links(skipped, 'sk')),
         ]
+        # Listed with its numbers, not just a count, because this section
+        # replaced the tile dropdown: that is now the only way to reach a
+        # named tile that has not run.  Flight Ready stays a bare count in
+        # the tail below -- 64 numbers with no date between them is a wall,
+        # and none of them is findable by anything but its number anyway.
+        if scheduled:
+            ledger_rows.append(
+                '<div><b class="sc">Scheduled %d</b> &nbsp;%s</div>'
+                % (len(scheduled), _tile_links(scheduled, 'sc')))
         # The tail is what is NOT above it.  Excluding only 'executed' listed
         # Archived and Collecting again underneath, so the same three tiles were
         # counted twice on one line and 12 + 3 + 2 did not add up to anything.
         rest = ', '.join('%s %d' % (k, v) for k, v in sorted(status_counts.items())
-                         if not _has_run(k) and k.strip().lower() != 'skipped')
+                         if not _has_run(k)
+                         and k.strip().lower() not in ('skipped', 'scheduled'))
         if rest:
             ledger_rows.append('<div class="gcm-sky-lab" style="margin-top:4px">'
                                '%s</div>' % _esc(rest))
-        ledger = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Execution'
-                  '</div><div class="gcm-sky-stat">%s</div></div>'
+        ledger = ('<details class="gcm-sky-sec" id="gcm-sky-exec" open>'
+                  '<summary class="gcm-sky-lab">Execution</summary>'
+                  '<div class="gcm-sky-stat">%s</div></details>'
                   % ''.join(ledger_rows))
     else:
         # No status source reached: say that, rather than showing "Executed 0",
         # which asserts a fact that was never measured.
-        ledger = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Execution'
-                  '</div><div class="gcm-sky-stat gcm-sky-empty">visit status '
-                  'unavailable</div></div>')
+        ledger = ('<details class="gcm-sky-sec" id="gcm-sky-exec" open>'
+                  '<summary class="gcm-sky-lab">Execution</summary>'
+                  '<div class="gcm-sky-stat gcm-sky-empty">visit status '
+                  'unavailable</div></details>')
 
     status_note = ("STScI's per-visit status table"
                    if status_source == 'stsci-visit-status'
@@ -1164,20 +1197,14 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                         'for every visit and so cannot show a visit that has '
                         'run or been skipped')
 
-    def _opt(t):
-        bits = [t['number']]
-        if t['target']:
-            bits.append(t['target'])
-        if t['status']:
-            bits.append(t['status'])
-        return '<option value="%s">%s</option>' % (
-            _esc(t['number']), _esc(' — '.join(bits)))
-
-    picker = ('<div class="gcm-sky-sec"><div class="gcm-sky-lab">Tile</div>'
-              '<select class="gcm-sky-pick" id="gcm-sky-tile">'
-              '<option value="">all %d tiles</option>%s</select></div>'
-              % (len(tiles), ''.join(_opt(t) for t in tiles)))
-
+    # There is no tile dropdown any more.  A <select> of 139 entries was a
+    # scrolling list of numbers with no map next to it, and it duplicated the
+    # Execution section: both existed to answer "where is tile N", one of them
+    # already grouped by what the tile had DONE.  Selection now happens in the
+    # Execution section or by clicking the map, and both directions light the
+    # same tile.  `TILES` stays -- it is what turns a number into a position.
+    jsgeom_js = jsgeom.HIT_TEST_JS
+    drag_slop_px = json.dumps(DRAG_SLOP_PX)
     tile_js = [{'n': t['number'], 'ra': t['ra'], 'dec': t['dec'],
                 'target': t['target'], 'status': t['status']}
                for t in tiles]
@@ -1247,8 +1274,8 @@ pointings observed so far, from {status_note}.</p>
   <div class="gcm-sky-ui" id="gcm-sky-ui">
     <h4 id="gcm-sky-grip" title="drag to move this panel">Footprints</h4>
 
-    <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">JWST — planned</div>
+    <details class="gcm-sky-sec" open>
+      <summary class="gcm-sky-lab">JWST — planned</summary>
       <div class="gcm-sky-row">
         <button class="gcm-sky-btn on" id="lyr-nircam"
                 style="color:{COLOR_NIRCAM_PLANNED}">NIRCam
@@ -1257,10 +1284,10 @@ pointings observed so far, from {status_note}.</p>
                 style="color:{COLOR_MIRI_PLANNED}">MIRI ∥
           <span class="gcm-sky-count">{n_planned}</span></button>
       </div>
-    </div>
+    </details>
 
-    <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">JWST — status</div>
+    <details class="gcm-sky-sec" open>
+      <summary class="gcm-sky-lab">JWST — status</summary>
       <div class="gcm-sky-row">
         <button class="gcm-sky-btn on" id="lyr-observed"
                 style="color:{COLOR_OBSERVED}">executed
@@ -1272,33 +1299,26 @@ pointings observed so far, from {status_note}.</p>
                 style="color:{COLOR_SKIPPED}">skipped
           <span class="gcm-sky-count {skipped_cls}">{n_skipped or 'none'}</span></button>
       </div>
-    </div>
+    </details>
 
-    {picker}
     {ledger}
 
-    <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">Other surveys (context)</div>
+    <details class="gcm-sky-sec">
+      <summary class="gcm-sky-lab">Other surveys (context)</summary>
       <div class="gcm-sky-row">
         <button class="gcm-sky-btn" id="lyr-aces"
                 style="color:{COLOR_ACES}">ACES</button>
         <button class="gcm-sky-btn" id="lyr-spring"
                 style="color:{COLOR_SPRING}">Roman GBTDS
           <span class="gcm-sky-count">{n_spring}</span></button>
-        <button class="gcm-sky-btn" id="lyr-rgps-wide"
-                style="color:{COLOR_RGPS_WIDE}">RGPS wide
-          <span class="gcm-sky-count">{n_rgps_by.get('wide_area', 0)}</span></button>
         <button class="gcm-sky-btn" id="lyr-rgps-tds"
                 style="color:{COLOR_RGPS_TDS}">RGPS TDS
           <span class="gcm-sky-count">{n_rgps_by.get('time_domain', 0)}</span></button>
-        <button class="gcm-sky-btn" id="lyr-rgps-deep"
-                style="color:{COLOR_RGPS_DEEP}">RGPS deep
-          <span class="gcm-sky-count">{n_rgps_by.get('deep_spec', 0)}</span></button>
       </div>
-    </div>
+    </details>
 
-    <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">Background</div>
+    <details class="gcm-sky-sec">
+      <summary class="gcm-sky-lab">Background</summary>
       <div class="gcm-sky-row">{surveys}</div>
       <div class="gcm-sky-lab" style="margin-top:6px">Over the background</div>
       <div class="gcm-sky-row">
@@ -1307,10 +1327,10 @@ pointings observed so far, from {status_note}.</p>
                        top of the background; astrometry is provisional"
                 >NIRCam imagery</button>
       </div>
-    </div>
+    </details>
 
-    <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">Legend</div>
+    <details class="gcm-sky-sec">
+      <summary class="gcm-sky-lab">Legend</summary>
       <div class="gcm-sky-legend">
         <div class="gcm-sky-sw" style="background:{COLOR_NIRCAM_PLANNED}"></div>
         <div>NIRCam planned</div>
@@ -1323,7 +1343,7 @@ pointings observed so far, from {status_note}.</p>
         <div class="gcm-sky-sw" style="background:{COLOR_OBSERVED}"></div>
         <div>executed</div>
       </div>
-    </div>
+    </details>
   </div>
 </div>
 
@@ -1350,9 +1370,7 @@ interactive view adds sky imagery you can pan across.
                        'scheduled': COLOR_SCHEDULED, 'skipped': COLOR_SKIPPED,
                        'spring': COLOR_SPRING,
                        'aces': COLOR_ACES,
-                       'rgps-wide': COLOR_RGPS_WIDE,
-                       'rgps-tds': COLOR_RGPS_TDS,
-                       'rgps-deep': COLOR_RGPS_DEEP})};
+                       'rgps-tds': COLOR_RGPS_TDS})};
   // Layer key -> component key in rgps.json, so the fetch and the toggles
   // agree without repeating either name.
   var RGPS_KEYS = {json.dumps({lid: key for key, lid, _c, _l in RGPS_COMPONENTS})};
@@ -1365,8 +1383,7 @@ interactive view adds sky imagery you can pan across.
     scheduled: ['stat-sch-nircam', 'stat-sch-miri'],
     skipped: ['stat-skp-nircam', 'stat-skp-miri'],
     spring: ['stat-spring'], aces: ['stat-aces'],
-    'rgps-wide': ['stat-rgps-wide'], 'rgps-tds': ['stat-rgps-tds'],
-    'rgps-deep': ['stat-rgps-deep']
+    'rgps-tds': ['stat-rgps-tds']
   }};
 
   var TILES = {tiles_json};
@@ -1385,7 +1402,7 @@ interactive view adds sky imagery you can pan across.
   var on = {{ nircam: true, miri: true, observed: true,
              scheduled: true, skipped: true,
              spring: false, aces: false,
-             'rgps-wide': false, 'rgps-tds': false, 'rgps-deep': false }};
+             'rgps-tds': false }};
   var L = null;                      // Aladin overlays, once they exist
 
   function applyLayers() {{
@@ -1409,8 +1426,7 @@ interactive view adds sky imagery you can pan across.
   [['lyr-nircam', 'nircam'], ['lyr-miri', 'miri'], ['lyr-observed', 'observed'],
    ['lyr-scheduled', 'scheduled'], ['lyr-skipped', 'skipped'],
    ['lyr-spring', 'spring'], ['lyr-aces', 'aces'],
-   ['lyr-rgps-wide', 'rgps-wide'], ['lyr-rgps-tds', 'rgps-tds'],
-   ['lyr-rgps-deep', 'rgps-deep']
+   ['lyr-rgps-tds', 'rgps-tds']
   ].forEach(function (pair) {{
     var el = document.getElementById(pair[0]);
     if (!el) {{ return; }}
@@ -1501,13 +1517,19 @@ interactive view adds sky imagery you can pan across.
                            {{ passive: true }});
   }}());
 
-  // ------------------------------------------------------------ tile picker
+  // ------------------------------------------------------ tile selection
+  // One selection, reachable from two directions and shown in both: click a
+  // number in the Execution section and its footprint lights up on the map;
+  // click a footprint on the map and its number lights up in the section.
+  // Before this the association only ran one way, so a reader who found a tile
+  // on the map had no way to learn which observation it was.
+  //
   // Highlighting is done by CLASS on the static <g data-obs>, not by rewriting
-  // colours: the layer toggles own the colours, and a picker that set them
+  // colours: the layer toggles own the colours, and a selection that set them
   // directly would fight the toggles and win, leaving a tile lit after its
   // layer was switched off.
-  var picker = document.getElementById('gcm-sky-tile');
   var selected = '';
+  var execBox = document.getElementById('gcm-sky-exec');
 
   function tileByNumber(n) {{
     for (var i = 0; i < TILES.length; i++) {{
@@ -1517,14 +1539,21 @@ interactive view adds sky imagery you can pan across.
   }}
 
   function applyTile() {{
-    if (!svg) {{ return; }}
-    var groups = svg.querySelectorAll('g[data-obs]');
-    for (var i = 0; i < groups.length; i++) {{
-      var mine = selected && groups[i].getAttribute('data-obs') === selected;
-      groups[i].classList.toggle('gcm-tile-hi', !!mine);
-      // Dim the rest rather than hiding them: on a 139-tile mosaic the point
-      // of picking one is to see WHERE it sits, which needs its neighbours.
-      groups[i].classList.toggle('gcm-tile-dim', !!selected && !mine);
+    if (svg) {{
+      var groups = svg.querySelectorAll('g[data-obs]');
+      for (var i = 0; i < groups.length; i++) {{
+        var mine = selected && groups[i].getAttribute('data-obs') === selected;
+        groups[i].classList.toggle('gcm-tile-hi', !!mine);
+        // Dim the rest rather than hiding them: on a 139-tile mosaic the point
+        // of picking one is to see WHERE it sits, which needs its neighbours.
+        groups[i].classList.toggle('gcm-tile-dim', !!selected && !mine);
+      }}
+    }}
+    // The other end of the association.
+    var nums = document.querySelectorAll('.gcm-sky-stat a[data-obs]');
+    for (var j = 0; j < nums.length; j++) {{
+      nums[j].classList.toggle('gcm-num-hi',
+        !!selected && nums[j].getAttribute('data-obs') === selected);
     }}
     if (L && L.pick) {{
       L.pick.removeAll();
@@ -1537,11 +1566,32 @@ interactive view adds sky imagery you can pan across.
     }}
   }}
 
+  // Selecting from the MAP must not move the map: the reader is already
+  // looking at the tile they clicked, and recentring under the cursor is
+  // disorienting.  Only the Execution section's numbers navigate.
+  function selectTile(n) {{
+    var t = tileByNumber(n);
+    if (!t) {{ return; }}
+    selected = (String(n) === selected) ? '' : String(n);
+    applyTile();
+    if (selected && execBox && !execBox.open) {{
+      // A number highlighted inside a folded section is a highlight nobody
+      // sees; opening it is what makes the map->number direction visible.
+      execBox.open = true;
+    }}
+    var lit = selected
+      ? document.querySelector('.gcm-sky-stat a[data-obs="' +
+                               CSS.escape(selected) + '"]')
+      : null;
+    if (lit && lit.scrollIntoView) {{
+      lit.scrollIntoView({{ block: 'nearest', inline: 'nearest' }});
+    }}
+  }}
+
   function gotoTile(n) {{
     var t = tileByNumber(n);
     if (!t) {{ return; }}
     selected = String(n);
-    if (picker) {{ picker.value = selected; }}
     applyTile();
     if (aladin && t.ra !== null && t.dec !== null) {{
       aladin.gotoRaDec(t.ra, t.dec);
@@ -1560,21 +1610,61 @@ interactive view adds sky imagery you can pan across.
     }}
   }}
 
-  if (picker) {{
-    picker.addEventListener('change', function () {{
-      if (!picker.value) {{ selected = ''; applyTile(); return; }}
-      gotoTile(picker.value);
-    }});
-  }}
-  // The execution ledger's numbers are clickable shortcuts into the same path.
-  // `a[data-goto]` only -- the executed entries are real hrefs to MAST and
-  // must not have their navigation prevented.
+  // Number -> map.  Every entry is `data-goto` now; none of them is an href,
+  // so preventDefault is about the anchor having no destination rather than
+  // about suppressing a navigation.
   document.querySelectorAll('.gcm-sky-stat a[data-goto]').forEach(function (a) {{
     a.addEventListener('click', function (ev) {{
       ev.preventDefault();
       gotoTile(a.getAttribute('data-goto'));
     }});
   }});
+
+  // Screen-space point-in-polygon and area, for hit-testing the interactive
+  // view's footprints.  Projecting to the screen and testing there keeps this
+  // correct under any projection and any rotation of the sky.
+{jsgeom_js}
+
+  // A `click` is dispatched after a pointer DRAG as well as after a tap, so
+  // both maps pan and then deliver a click.  Without this a pan that ended
+  // over empty sky cleared the selection, and a short pan that stayed inside
+  // one footprint TOGGLED that footprint off -- the feature undoing itself on
+  // the commonest gesture there is.
+  //
+  // Distance from the pointerdown decides, rather than the static map's own
+  // `moved` flag: the interactive view pans inside Aladin, where that flag
+  // does not exist, and one rule covering both views is one rule to keep true.
+  var DRAG_SLOP_PX = {drag_slop_px};
+  function dragDetector(el) {{
+    var from = null;
+    el.addEventListener('pointerdown', function (ev) {{
+      from = [ev.clientX, ev.clientY];
+    }});
+    return function (ev) {{
+      if (!from) {{ return false; }}
+      var dx = ev.clientX - from[0], dy = ev.clientY - from[1];
+      return (dx * dx + dy * dy) > DRAG_SLOP_PX * DRAG_SLOP_PX;
+    }};
+  }}
+
+  // Map -> number, static view.  `click` rather than `pointerdown`: the map
+  // pans on pointer drags, and a drag that happens to start over a footprint
+  // is a pan, not a selection.  A click that lands on empty sky clears the
+  // selection, which is how you get back to seeing all of them.
+  if (svg) {{
+    var svgWasDragged = dragDetector(svg);
+    svg.addEventListener('click', function (ev) {{
+      if (svgWasDragged(ev)) {{ return; }}          // a pan, not a selection
+      var g = ev.target && ev.target.closest
+            ? ev.target.closest('g[data-obs]') : null;
+      if (g) {{
+        selectTile(g.getAttribute('data-obs'));
+      }} else if (selected) {{
+        selected = '';
+        applyTile();
+      }}
+    }});
+  }}
 
   // ---------------------------------------------------------------- static
   // Pan and zoom by rewriting the viewBox.  Everything scales together, which
@@ -1645,21 +1735,18 @@ interactive view adds sky imagery you can pan across.
     svg.addEventListener('pointerdown', function (ev) {{
       armed = true;
       var start = toUser(ev);
-      var moved = false;
       svg.setPointerCapture(ev.pointerId);
       svg.classList.add('gcm-dragging');
       function move(e2) {{
         var now = toUser(e2);
         vb[0] -= now[0] - start[0];
         vb[1] -= now[1] - start[1];
-        moved = true;
         setVB();
       }}
       function up() {{
         svg.removeEventListener('pointermove', move);
         svg.removeEventListener('pointerup', up);
         svg.classList.remove('gcm-dragging');
-        if (!moved) {{ return; }}
       }}
       svg.addEventListener('pointermove', move);
       svg.addEventListener('pointerup', up);
@@ -1877,9 +1964,7 @@ interactive view adds sky imagery you can pan across.
         scheduled: layer('JWST scheduled', C.scheduled, 1.4),
         skipped: layer('JWST skipped', C.skipped, 1.8),
         spring: layer('Roman GBTDS', C.spring, 1.2),
-        'rgps-wide': layer('RGPS wide area', C['rgps-wide'], 1.2),
         'rgps-tds': layer('RGPS time domain', C['rgps-tds'], 1.2),
-        'rgps-deep': layer('RGPS deep fields', C['rgps-deep'], 1.2),
         aces: layer('ACES coverage', C.aces, 1.6),
         // Drawn last so it sits above the layer it duplicates.
         pick: layer('selected tile', '#ffffff', 2.6)
@@ -1914,6 +1999,44 @@ interactive view adds sky imagery you can pan across.
       }});
       // A tile chosen BEFORE the interactive view loaded stays chosen after it.
       if (selected) {{ applyTile(); }}
+
+      // Map -> number, interactive view.  Aladin's own object-hover events are
+      // not relied on: which of them a given v3 build exposes varies, and the
+      // footprints are plain polygons rather than catalogue sources.  Instead
+      // the tile outlines are projected with world2pix and the click point is
+      // tested against them -- a few hundred vertices for one click.
+      //
+      // The smallest matching tile wins.  Where a NIRCam footprint overlaps a
+      // neighbour, picking the first match would always return the same one.
+      if (aladinDiv) {{
+        var aladinWasDragged = dragDetector(aladinDiv);
+        aladinDiv.addEventListener('click', function (ev) {{
+          if (aladinWasDragged(ev)) {{ return; }}   // a pan, not a selection
+          if (!aladin || !aladin.world2pix) {{ return; }}
+          var box = aladinDiv.getBoundingClientRect();
+          var px = ev.clientX - box.left, py = ev.clientY - box.top;
+          var best = null, bestArea = Infinity;
+          Object.keys(FP.byNumber).forEach(function (num) {{
+            FP.byNumber[num].forEach(function (poly) {{
+              var pts = [], k;
+              for (k = 0; k < poly.length; k++) {{
+                var q = aladin.world2pix(poly[k][0], poly[k][1]);
+                if (!q) {{ return; }}
+                pts.push(q);
+              }}
+              if (!inPoly(px, py, pts)) {{ return; }}
+              var area = polyArea(pts);
+              if (area < bestArea) {{ bestArea = area; best = num; }}
+            }});
+          }});
+          if (best) {{
+            selectTile(best);
+          }} else if (selected) {{
+            selected = '';
+            applyTile();
+          }}
+        }});
+      }}
       Object.keys(ROMAN.tiles || {{}}).forEach(function (name) {{
         var t = ROMAN.tiles[name];
         (t.spring || []).forEach(function (poly) {{ L.spring.add(A.polygon(poly)); }});

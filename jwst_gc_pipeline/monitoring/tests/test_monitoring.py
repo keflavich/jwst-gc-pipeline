@@ -488,8 +488,9 @@ def test_sky_view_defaults_to_the_jwst_layers_only():
     assert state['spring'] == 'false'
     assert state['aces'] == 'false'
     # RGPS is context on the same terms as Roman GBTDS, so it defaults off too.
-    for key in ('rgps-wide', 'rgps-tds', 'rgps-deep'):
-        assert state[key] == 'false', key
+    # Only the time-domain component is drawn; see RGPS_COMPONENTS.
+    assert state['rgps-tds'] == 'false'
+    assert 'rgps-wide' not in state and 'rgps-deep' not in state
 
 
 def _re_search_state(html):
@@ -1879,9 +1880,8 @@ def test_roman_toggles_are_not_dead_without_aladin():
         _fp(planned=_POINTINGS, aces=_ACES), _ROMAN, rgps=_RGPS)
     assert info['n_roman'] == 1                    # spring only; autumn is not drawn
     assert info['n_aces'] == 1
-    assert info['n_rgps'] == 3                     # one region per component
-    groups = ('stat-spring', 'stat-aces', 'stat-rgps-wide', 'stat-rgps-tds',
-              'stat-rgps-deep')
+    assert info['n_rgps'] == 1                     # time-domain only
+    groups = ('stat-spring', 'stat-aces', 'stat-rgps-tds')
     for group in groups:
         assert 'id="%s"' % group in svg
     html = skyview.section(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN,
@@ -1889,7 +1889,7 @@ def test_roman_toggles_are_not_dead_without_aladin():
     for group in groups:
         assert "'%s'" % group in html              # reachable from STATIC_GROUPS
     # and the buttons must not be inert
-    spring = html[html.index('id="lyr-spring"'):html.index('id="lyr-rgps-wide"')]
+    spring = html[html.index('id="lyr-spring"'):html.index('id="lyr-rgps-tds"')]
     assert 'disabled' not in spring
 
 
@@ -2015,8 +2015,7 @@ def test_roman_layers_start_hidden():
     from jwst_gc_pipeline.monitoring import skyview
     svg, _ = skyview.static_map(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN,
                                 rgps=_RGPS)
-    for group in ('stat-spring', 'stat-aces', 'stat-rgps-wide',
-                  'stat-rgps-tds', 'stat-rgps-deep'):
+    for group in ('stat-spring', 'stat-aces', 'stat-rgps-tds'):
         block = svg[svg.index('id="%s"' % group):]
         assert 'gcm-sky-off' in block[:block.index('>')]
     for group in ('stat-nircam', 'stat-miri'):
