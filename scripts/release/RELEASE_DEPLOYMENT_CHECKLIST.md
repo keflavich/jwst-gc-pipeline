@@ -381,14 +381,44 @@ Known gaps as of 2026-09-14 (avm-hips):
 
 The NIRCam and plain-MIRI gaps are queued. The **bgmatch layer covers fewer
 fields than the plain MIRI layer by construction** and will keep doing so:
-background matching needs per-field offsets from `MIRI_MATCH_JSON`, which
-covers 12 fields, and extending it needs a `--miri-match` re-run that has not
-been authorised. Treat bgmatch as a comparison layer, not as MIRI coverage.
+background matching needs per-field offsets from `MIRI_MATCH_JSON`, and
+extending it needs a `--miri-match` re-run that has not been authorised.
 
-One mechanism worth knowing, because it is silent: the builder takes
-`.auto.lock` to stop the cron re-coadding mid-rebuild, and a long rebuild holds
-it. While held, newly delivered L3s are not built — `needs_build` reports "no
-RGB yet" and nothing escalates. o105/o106/o107 were missed exactly this way.
+    offsets present: o127 o128 o129 o130 o131 o132 o133 o134 o135 o137 o138 o139
+    offsets missing: o106 o107 o108 o109 o111 o112 o113 o116 o117 o118 o126
+
+Treat bgmatch as a comparison layer, not as MIRI coverage.
+
+**Until 2026-09-14 that gap did not present as a gap.** `miri_needs_build`
+checked only that `MIRI_MATCH_JSON` existed, not that it carried an offset for
+the field being built, while `build_miri_obs` raises for any field missing from
+it. So all 11 uncovered fields reported "no MIRI png yet", were built, and
+landed as FAILED entries on every hourly tick — a recurring build error rather
+than missing input, which is the sort of thing that gets tuned out. They now
+report `NOMATCH` and are excluded from both the build loop and the pending
+report (`jwst_scripts#13`). A coverage gap that reports itself as a build
+failure will not be found by looking at build failures.
+
+### Two silent-failure mechanisms to know about
+
+Both cost real coverage this week, and neither raises anything.
+
+1. **A held lock starves the inventory.** The builder takes `.auto.lock` so the
+   cron cannot re-coadd mid-rebuild. `cmd_auto` hits the held lock, prints one
+   line and returns **before the inventory loop runs** — so nothing is built and
+   nothing is listed. The defect was never in `needs_build`, which would have
+   answered correctly; it was that nothing called it. o105/o106/o107 sat
+   unrendered for hours this way while a 4-hour rebuild held the lock.
+   `cmd_auto` now names the lock holder and lists what an unblocked tick would
+   build:
+
+       another run holds the lock (263 min old); exiting
+         .auto.lock says: 549716 avm-astrometry-rebuild 2026-09-14T13:35:57
+         WAITING ON THE LOCK: 3 item(s)
+           o105 NIRCam -- no RGB yet
+
+2. **A missing input reported as a build failure** — the `MIRI_MATCH_JSON` case
+   above.
 
 ### Ownership
 
