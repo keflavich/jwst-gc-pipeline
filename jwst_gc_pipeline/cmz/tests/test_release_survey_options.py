@@ -141,3 +141,28 @@ def test_the_clickable_field_markers_are_not_hidden_with_the_rectangles():
     hide = html.index('fieldOverlays.forEach')
     end = html.index('outlineBar.appendChild', hide)
     assert 'cat.' not in html[hide:end]
+
+
+def test_every_element_the_script_creates_is_the_one_it_appends():
+    """A half-finished rename is invisible from Python and fatal in the browser.
+
+    The outlines button was created as ``outBtn`` and appended as ``ob`` -- the
+    name it had before it was renamed to keep it from colliding with the survey
+    switcher's ``b.addEventListener('click'`` (see the test above).  ``ob`` is
+    not declared, so the ``appendChild`` threw a ReferenceError inside the
+    Aladin init callback and took out everything wired after it, the survey
+    switcher included: one word, and the whole interactive view stopped
+    responding.
+
+    Written against the pattern rather than against that one name, so the next
+    rename that misses a use fails here instead of on the site.
+    """
+    html = _rendered()
+    created = set(re.findall(r"var\s+(\w+)\s*=\s*document\.createElement\(", html))
+    assert created, 'expected the script to build some elements'
+    appended = set(re.findall(r"\.appendChild\((\w+)\)", html))
+    missing = created - appended
+    assert not missing, (
+        f"{sorted(missing)} created but never appended -- a rename probably "
+        f"left an appendChild pointing at the old name "
+        f"(appended: {sorted(appended)})")

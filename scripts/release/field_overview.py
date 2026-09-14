@@ -697,7 +697,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
           if (on) {{ ov.show(); }} else {{ ov.hide(); }}
         }});
       }});
-      outlineBar.appendChild(ob);
+      outlineBar.appendChild(outBtn);
     }}
 
     // the background switcher: without it the other entries in SURVEYS are
