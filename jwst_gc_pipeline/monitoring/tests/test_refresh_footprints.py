@@ -46,6 +46,7 @@ def _run(tmp_path, body, **env):
 #: A stub that writes a plausible footprints file when asked to build one, and
 #: succeeds silently for the two generator invocations.
 _GOOD = '''
+set +C
 for a in "$@"; do
   if [ "$a" = "--out" ]; then next=1; continue; fi
   if [ -n "${next:-}" ]; then echo '{"program":"10678","n_planned":1}' > "$a"; exit 0; fi
@@ -202,3 +203,99 @@ exit 0
 ''')
     got = json.loads((outdir / 'footprints.json').read_text())
     assert got['status_counts'] == {'Executed': 12}
+
+
+# --- publishing from a stale checkout ---------------------------------------
+
+def _repo(tmp_path, behind):
+    """A git repo whose HEAD is `behind` commits behind its own origin/main."""
+    import subprocess as sp
+    up = tmp_path / 'upstream'
+    up.mkdir()
+    sp.run(['git', 'init', '-q', '-b', 'main', str(up)], check=True)
+    env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@x',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@x')
+    (up / 'f').write_text('0')
+    sp.run(['git', '-C', str(up), 'add', '.'], check=True)
+    sp.run(['git', '-C', str(up), 'commit', '-qm', 'base'], env=env, check=True)
+    repo = tmp_path / 'repo'
+    sp.run(['git', 'clone', '-q', str(up), str(repo)], check=True)
+    for i in range(behind):
+        (up / 'f').write_text(str(i + 1))
+        sp.run(['git', '-C', str(up), 'commit', '-qam', f'c{i}'], env=env, check=True)
+    sp.run(['git', '-C', str(repo), 'fetch', '-q', 'origin'], check=True)
+    return repo
+
+
+def test_the_checkout_is_fast_forwarded_so_it_does_not_go_stale(tmp_path):
+    """Refusing to publish is not a fix on its own.  main takes several commits
+    a day and nothing fast-forwards this checkout on a schedule, so a
+    distance gate reaches `behind > 0` within a day and freezes the page --
+    which is the same class of silent failure as publishing an old one."""
+    repo = _repo(tmp_path, behind=3)
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='0')
+    import subprocess as sp
+    behind = sp.run(['git', '-C', str(repo), 'rev-list', '--count',
+                     'HEAD..origin/main'], capture_output=True, text=True)
+    assert behind.stdout.strip() == '0', 'the run should have fast-forwarded it'
+    assert 'deploy SKIPPED' not in done.stderr
+
+
+def test_a_checkout_carrying_real_work_is_never_fast_forwarded(tmp_path):
+    """`--ff-only` and a clean-tree check: a checkout with uncommitted work is
+    left exactly as it is and falls through to the guard instead."""
+    repo = _repo(tmp_path, behind=2)
+    (repo / 'f').write_text('local edit')
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='1')
+    assert (repo / 'f').read_text() == 'local edit', 'local work was clobbered'
+    assert 'deploy SKIPPED' in done.stderr
+
+
+def test_a_refused_publish_is_reported_to_the_scheduler(tmp_path):
+    """A stderr line in an hourly cron is exactly where the original bug
+    survived two days, so reaching this state exits non-zero."""
+    repo = _repo(tmp_path, behind=2)
+    (repo / 'f').write_text('local edit')          # blocks the fast-forward
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='1')
+    assert done.returncode != 0
+    assert 'NOT being updated' in done.stderr
+
+
+def test_a_stale_checkout_generates_but_does_not_publish(tmp_path):
+    """The monitor reverted three times over two days because this cron ran
+    from a checkout 599 commits behind main with MONITOR_DEPLOY=1: it
+    regenerated a months-old page hourly and published it over the current
+    one.  Generating from a stale tree is harmless; publishing from one is
+    what overwrites good pages."""
+    repo = _repo(tmp_path, behind=3)
+    (repo / 'f').write_text('local edit')      # so the fast-forward cannot fix it
+    done, outdir = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='1')
+    assert 'behind origin/main' in done.stderr
+    assert 'deploy SKIPPED' in done.stderr
+    assert (outdir / 'footprints.json').is_file()   # generation still happened
+
+
+def test_a_current_checkout_publishes(tmp_path):
+    repo = _repo(tmp_path, behind=0)
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='0')
+    assert 'behind origin/main' not in done.stderr
+    assert 'deploy SKIPPED' not in done.stderr
+
+
+def test_the_override_exists_for_a_deliberate_branch_run(tmp_path):
+    repo = _repo(tmp_path, behind=3)
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='0',
+                   ALLOW_STALE_CHECKOUT='1')
+    assert 'behind origin/main' not in done.stderr
+
+
+def test_an_unfetchable_remote_is_not_treated_as_staleness(tmp_path):
+    """A network failure must not block the hourly run; it says so instead."""
+    import subprocess as sp
+    repo = tmp_path / 'norem'
+    repo.mkdir()
+    sp.run(['git', 'init', '-q', '-b', 'main', str(repo)], check=True)
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='0')
+    assert 'staleness not checked' in done.stderr
+    assert 'deploy SKIPPED' not in done.stderr
+    assert done.returncode == 0
