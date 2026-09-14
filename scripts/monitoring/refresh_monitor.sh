@@ -27,6 +27,38 @@ cd "$REPO" || exit 1
 
 echo "MONITOR refresh start: $(date -Is)  outdir=$OUTDIR pub=$PUBDIR"
 
+# ---- refuse to PUBLISH from a checkout that is behind its remote ----------
+#
+# The monitor reverted to an old page three times over two days, each time
+# hours after the fix had merged.  The cause was not the code: this cron runs
+# with REPO pointing at a THIRD checkout (`jwst-gc-pipeline-schedule`), which
+# sat on a feature branch 599 commits behind main with MONITOR_DEPLOY=1.  Every
+# hour it regenerated a months-old page and published it over the current one.
+# Pulling the other two checkouts, which is what I did twice, changed nothing.
+#
+# Generating from a stale tree is harmless; PUBLISHING from one is what
+# overwrites good pages, so that is what this refuses.  A fetch failure is not
+# staleness and must not block the run -- the check is skipped and says so.
+#
+# ALLOW_STALE_CHECKOUT=1 overrides, for a deliberate run from a branch.
+stale_checkout=0
+if [ "${ALLOW_STALE_CHECKOUT:-0}" != "1" ]; then
+    if git -C "$REPO" fetch --quiet origin 2>/dev/null; then
+        behind=$(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+        if [ "${behind:-0}" -gt 0 ]; then
+            stale_checkout=1
+            echo "WARNING: $REPO is $behind commit(s) behind origin/main" \
+                 "($(git -C "$REPO" rev-parse --short HEAD), branch" \
+                 "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)) --" \
+                 "generating but NOT publishing, because publishing from a" \
+                 "stale checkout overwrites the live page with an old one." \
+                 "Fast-forward it, or set ALLOW_STALE_CHECKOUT=1 to override." >&2
+        fi
+    else
+        echo "NOTE: could not fetch in $REPO; staleness not checked" >&2
+    fi
+fi
+
 # The sky view's footprints, rebuilt BEFORE the pages that embed them.
 #
 # This step did not exist, and its absence was invisible: the pages regenerated
@@ -100,7 +132,10 @@ echo "MONITOR refresh done: $(date -Is)  fields_rc=$fields_rc" \
 # hour trains everyone to ignore it.  Turn on with MONITOR_DEPLOY=1 once you have
 # confirmed `ssh starformation true` works from wherever this runs.
 deploy_rc=0
-if [ "${MONITOR_DEPLOY:-0}" = "1" ]; then
+if [ "${MONITOR_DEPLOY:-0}" = "1" ] && [ "$stale_checkout" = "1" ]; then
+    echo "MONITOR deploy SKIPPED: checkout is behind origin/main" >&2
+    deploy_rc=0
+elif [ "${MONITOR_DEPLOY:-0}" = "1" ]; then
     "$REPO/scripts/monitoring/deploy_monitor.sh" "$PUBDIR"
     deploy_rc=$?
     echo "MONITOR deploy rc=$deploy_rc"

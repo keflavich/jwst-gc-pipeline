@@ -202,3 +202,65 @@ exit 0
 ''')
     got = json.loads((outdir / 'footprints.json').read_text())
     assert got['status_counts'] == {'Executed': 12}
+
+
+# --- publishing from a stale checkout ---------------------------------------
+
+def _repo(tmp_path, behind):
+    """A git repo whose HEAD is `behind` commits behind its own origin/main."""
+    import subprocess as sp
+    up = tmp_path / 'upstream'
+    up.mkdir()
+    sp.run(['git', 'init', '-q', '-b', 'main', str(up)], check=True)
+    env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@x',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@x')
+    (up / 'f').write_text('0')
+    sp.run(['git', '-C', str(up), 'add', '.'], check=True)
+    sp.run(['git', '-C', str(up), 'commit', '-qm', 'base'], env=env, check=True)
+    repo = tmp_path / 'repo'
+    sp.run(['git', 'clone', '-q', str(up), str(repo)], check=True)
+    for i in range(behind):
+        (up / 'f').write_text(str(i + 1))
+        sp.run(['git', '-C', str(up), 'commit', '-qam', f'c{i}'], env=env, check=True)
+    sp.run(['git', '-C', str(repo), 'fetch', '-q', 'origin'], check=True)
+    return repo
+
+
+def test_a_stale_checkout_generates_but_does_not_publish(tmp_path):
+    """The monitor reverted three times over two days because this cron ran
+    from a checkout 599 commits behind main with MONITOR_DEPLOY=1: it
+    regenerated a months-old page hourly and published it over the current
+    one.  Generating from a stale tree is harmless; publishing from one is
+    what overwrites good pages."""
+    repo = _repo(tmp_path, behind=3)
+    done, outdir = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='1')
+    assert 'behind origin/main' in done.stderr
+    assert 'deploy SKIPPED' in done.stderr
+    assert done.returncode == 0            # a stale tree is not a job failure
+    assert (outdir / 'footprints.json').is_file()   # generation still happened
+
+
+def test_a_current_checkout_publishes(tmp_path):
+    repo = _repo(tmp_path, behind=0)
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='0')
+    assert 'behind origin/main' not in done.stderr
+    assert 'deploy SKIPPED' not in done.stderr
+
+
+def test_the_override_exists_for_a_deliberate_branch_run(tmp_path):
+    repo = _repo(tmp_path, behind=3)
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='0',
+                   ALLOW_STALE_CHECKOUT='1')
+    assert 'behind origin/main' not in done.stderr
+
+
+def test_an_unfetchable_remote_is_not_treated_as_staleness(tmp_path):
+    """A network failure must not block the hourly run; it says so instead."""
+    import subprocess as sp
+    repo = tmp_path / 'norem'
+    repo.mkdir()
+    sp.run(['git', 'init', '-q', '-b', 'main', str(repo)], check=True)
+    done, _ = _run(tmp_path, _GOOD, REPO=str(repo), MONITOR_DEPLOY='0')
+    assert 'staleness not checked' in done.stderr
+    assert 'deploy SKIPPED' not in done.stderr
+    assert done.returncode == 0
