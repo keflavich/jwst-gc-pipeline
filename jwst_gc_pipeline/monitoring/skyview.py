@@ -143,6 +143,17 @@ SURVEYS = (
      'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_miri_hips/',
      'program 10678 F770W parallels as observed so far — zoom in to a tile; '
      'astrometry is provisional (no offsets table yet)'),
+    # The same F770W sky, background-matched between tiles.  Offered BESIDE the
+    # plain layer rather than replacing it, so the matching can be judged
+    # instead of assumed: the two are a before/after pair and the useful thing
+    # is switching between them.  Backgrounds here are mutually exclusive, so
+    # picking one already IS the comparison -- in a viewer that stacks layers
+    # (jwst_gc_aladin.html) the bg-matched one has to default OFF, or it simply
+    # covers the plain one and there is nothing to see.
+    ('JWST Treasury MIRI bg-matched',
+     'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_miri_bgmatch_hips/',
+     'the same F770W parallels with the inter-tile background matched — '
+     'switch against the plain MIRI layer to judge it'),
     ('DSS', 'P/DSS2/color', ''),
     ('2MASS', 'P/2MASS/color', ''),
     ('Spitzer', 'CDS/P/SPITZER/color', ''),

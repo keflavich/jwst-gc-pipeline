@@ -568,3 +568,23 @@ def test_a_link_says_what_stage_the_tile_is_at():
 def test_every_run_stage_is_covered_by_a_note():
     from jwst_gc_pipeline.monitoring import skyview
     assert set(skyview.STAGE_NOTE) == set(skyview.RUN_STATUSES)
+
+
+def test_both_miri_treasury_layers_are_offered():
+    """Plain and background-matched are the same F770W sky and are offered as a
+    pair: the matching is judged by switching between them, not asserted.  A
+    single layer would make the comparison impossible."""
+    from jwst_gc_pipeline.monitoring import skyview
+    urls = [u for _n, u, _t in skyview.SURVEYS]
+    # exact path segments -- `..._miri_hips` is a substring of nothing here, but
+    # `..._treasury_hips` IS a prefix of `..._treasury_miri_hips`, so the same
+    # trap applies one layer over.
+    for layer in ('jwst_gc_treasury_miri_hips',
+                  'jwst_gc_treasury_miri_bgmatch_hips'):
+        assert any(u.rstrip('/').endswith('/' + layer) for u in urls), layer
+
+
+def test_the_bgmatch_layer_says_what_it_is_for():
+    from jwst_gc_pipeline.monitoring import skyview
+    note = next(t for n, _u, t in skyview.SURVEYS if 'bg-matched' in n)
+    assert note and 'background' in note.lower()

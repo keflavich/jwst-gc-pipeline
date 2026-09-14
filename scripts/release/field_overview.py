@@ -70,6 +70,9 @@ SURVEYS = (
     ('CMZ MIRI', _AVM + 'jwst_miri_hips/'),
     ('Treasury NIRCam', _AVM + 'jwst_gc_treasury_hips/'),
     ('Treasury MIRI', _AVM + 'jwst_gc_treasury_miri_hips/'),
+    # Same F770W sky, background-matched between tiles; offered beside the
+    # plain layer so the matching can be switched against rather than assumed.
+    ('Treasury MIRI bg-matched', _AVM + 'jwst_gc_treasury_miri_bgmatch_hips/'),
     ('CMZ RGB', _AVM + 'rgb_final_uncropped_hips/'),
     ('Spitzer', 'CDS/P/SPITZER/color'),
     ('2MASS', 'P/2MASS/color'),
