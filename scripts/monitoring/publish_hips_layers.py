@@ -58,6 +58,16 @@ LAYERS = {
     'jwst_gc_treasury_miri_hips': f'{BUILD_ROOT}/jwst_gc_treasury_miri_hips',
     'jwst_gc_treasury_miri_bgmatch_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_miri_bgmatch_hips',
+    # Three stretches of the SAME NIRCam data, all published: `vminmax` is
+    # fixed asinh cuts (-0.5..100 MJy/sr) and is the default everywhere;
+    # the unsuffixed one stretches each field on its own percentiles; `log`
+    # runs -0.5..500 and keeps structure in cluster cores that vminmax
+    # saturates, at the cost of the faint end.  Registered together because
+    # the gate is per layer: a flavour mid-rebuild is refused on its own
+    # (`verify` reads the staged properties) without holding up the others.
+    'jwst_gc_treasury_vminmax_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_vminmax_hips',
+    'jwst_gc_treasury_log_hips': f'{BUILD_ROOT}/jwst_gc_treasury_log_hips',
     # The CMZ overview coadds are rebuilt IN PLACE in the docroot by
     # `rebuild_jwst_cmz_hips.py`, so for these the docroot is the build
     # location and the local step is a no-op by construction: `needs_publish`
@@ -162,7 +172,12 @@ def publish_local(name, src, dry=False):
     expect = count_tiles(os.walk, src)
     rc = _run(['rm', '-rf', stage], dry) or \
         _run(['rsync', '-a', src + '/', stage + '/'], dry)
-    if rc or dry:
+    if rc and not dry:
+        subprocess.call(['rm', '-rf', stage])
+        print(f'  {name} docroot: TRANSFER FAILED rc={rc} -- live layer '
+              f'untouched, staging removed', file=sys.stderr)
+        return rc
+    if dry:
         return rc
     why = verify(_read_local(os.path.join(stage, 'properties')),
                  os.path.isdir(os.path.join(stage, 'Norder3')),
@@ -192,7 +207,19 @@ def publish_remote(name, src, dry=False, host=WEB_HOST, web_dir=WEB_DIR):
     expect = count_tiles(os.walk, src)
     rc = _run(['ssh', host, f'rm -rf {shlex.quote(stage)}'], dry) or \
         _run(['rsync', '-az', src + '/', f'{host}:{stage}/'], dry)
-    if rc or dry:
+    if rc and not dry:
+        # A failed transfer used to return here having printed NOTHING, so a
+        # publish that moved no bytes was indistinguishable from one that had
+        # nothing to do. That happened on 2026-09-15: an rsync of 11,430 tiles
+        # was killed by a caller's `timeout`, and the run reported only the
+        # docroot line while starformation stayed eight hours behind, with a
+        # 1.2 GB partial `.new` left on the far side. The staging tree is
+        # removed rather than left to be mistaken for progress.
+        subprocess.call(['ssh', host, f'rm -rf {shlex.quote(stage)}'])
+        print(f'  {name} {host}: TRANSFER FAILED rc={rc} -- live layer '
+              f'untouched, staging removed', file=sys.stderr)
+        return rc
+    if dry:
         return rc
     # Verify on the far side: counting locally would check the wrong tree.
     probe = subprocess.run(

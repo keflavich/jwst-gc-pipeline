@@ -131,6 +131,8 @@ def test_every_published_layer_is_registered_explicitly():
         'jwst_gc_treasury_hips',
         'jwst_gc_treasury_miri_hips',
         'jwst_gc_treasury_miri_bgmatch_hips',
+        'jwst_gc_treasury_vminmax_hips',
+        'jwst_gc_treasury_log_hips',
         'jwst_nir_hips',
         'jwst_miri_hips',
     }
@@ -165,3 +167,59 @@ def test_only_tile_files_are_counted():
     # so any consistent rule works.
     assert ph.count_tiles(lambda root: iter(tree), '/r') == 3
     assert ph.count_tiles(lambda root: iter([('/r', [], [])]), '/r') == 0
+
+
+def test_a_layer_mid_rebuild_is_refused_rather_than_shipped_partial():
+    """A coadd being rebuilt has no `properties` until the build finishes, and
+    the tree on disk at that moment is a strict subset of the right one.
+
+    This is not hypothetical: a manual --coadd raced the hourly cron on
+    2026-09-15 and left jwst_gc_treasury_hips at 2,007 of 11,426 tiles with a
+    zero exit status. `needs_publish` says yes (unknown means yes, so a layer
+    never silently stops updating), and `verify` is what stops it.
+    """
+    assert ph.needs_publish(None, 'hips_release_date = 2026-09-15T12:21Z\n')
+    assert ph.verify(None, True, 8535, 8535) == 'no readable properties'
+    # and a tree that grew under the rsync is caught by the count, not waved
+    # through because rsync exited 0
+    assert ph.verify('hips_release_date = 2026-09-15T20:12Z\n', True,
+                     2007, 11426) == 'tile count 2007 != source 11426'
+
+
+def test_a_failed_transfer_says_so_and_leaves_no_staging(tmp_path, capsys,
+                                                         monkeypatch):
+    """A publish that moved no bytes must not look like one with nothing to do.
+
+    Measured on 2026-09-15: an rsync of 11,430 tiles was killed by a caller's
+    `timeout`, and the run printed only the docroot line. starformation stayed
+    eight hours behind with a 1.2 GB partial `.new` beside the live layer, and
+    the only way to notice was to go and look at the served properties.
+    """
+    src = tmp_path / 'src'
+    (src / 'Norder3').mkdir(parents=True)
+    (src / 'properties').write_text('hips_release_date = 2026-09-15T20:12Z\n')
+    (src / 'Norder3' / 'Npix1.png').write_bytes(b'x')
+
+    calls = []
+
+    def fake_run(cmd, dry=False):
+        calls.append(cmd)
+        return 124 if cmd[0] == 'rsync' else 0        # 124 = timeout's rc
+
+    monkeypatch.setattr(ph, '_run', fake_run)
+    removed = []
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: removed.append(cmd) or 0)
+    monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+
+    rc = ph.publish_remote('zz_layer', str(src), host='zz_host',
+                           web_dir='/zz')
+    assert rc == 124
+    err = capsys.readouterr().err
+    assert 'TRANSFER FAILED' in err and 'rc=124' in err
+    assert 'live layer untouched' in err
+    # the partial staging tree is removed rather than left to be mistaken for
+    # progress by the next person who looks
+    assert any('rm -rf' in ' '.join(c) and '.new' in ' '.join(c)
+               for c in removed), removed
+    # and nothing was swapped
+    assert not any('mv ' in ' '.join(c) for c in removed), removed
