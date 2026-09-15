@@ -286,6 +286,47 @@ def test_a_mast_pointing_short_a_band_is_reported(tmp_path):
     assert C.incomplete_pointings(tmp_path / 'nocat', mast) == {'o140': ['f480m']}
 
 
+def test_a_reduction_variant_is_recorded_not_absorbed_into_the_stage():
+    """`resbgsub` is a different reduction, not a later pass, so its stage
+    number is not on a common scale with the plain chain's. The regex captures
+    it rather than letting `.*?` swallow it."""
+    assert C.lineage_of(Path(
+        'f212n_merged_o132_indivexp_merged_resbgsub_m5_dao_basic_vetted.fits')
+    ) == 'resbgsub'
+    assert C.lineage_of(Path(
+        'f212n_merged_o127_indivexp_merged_m3_dao_basic_vetted.fits')) == 'plain'
+
+
+def test_a_mixed_reduction_set_is_reported_on_the_page(tmp_path):
+    """On 2026-09-15 the published diagram pooled eight plain fields with two
+    resbgsub ones (o132, o135) and said nothing. A colour offset between those
+    and the rest would be processing, not sky."""
+    from jwst_gc_pipeline.quicklook import cmdview
+    cat = tmp_path / 'catalogs'
+    _catalogs(cat, obsids=('127', '132'))
+    for band in C.BANDS:                    # make o132 a resbgsub field
+        src = cat / f'{band}_merged_o132_indivexp_merged_m2_dao_basic_vetted.fits'
+        src.rename(cat /
+                   f'{band}_merged_o132_indivexp_merged_resbgsub_m5_dao_basic_vetted.fits')
+    _footprints(tmp_path / 'footprints.json', obsids=('127', '132'))
+    out, data = _build(tmp_path)
+    by_id = {f['id']: f for f in data['fields']}
+    assert by_id['o127']['lineage'] == 'plain'
+    assert by_id['o132']['lineage'] == 'resbgsub'
+    assert set(data['lineages']) == {'plain', 'resbgsub'}
+    html = (out / 'cmd_explorer.html').read_text()
+    assert 'Mixed reductions' in html and 'resbgsub' in html
+
+
+def test_a_single_reduction_set_says_nothing(tmp_path):
+    """The warning has to be absent when it does not apply, or it stops being
+    read."""
+    _catalogs(tmp_path / 'catalogs', obsids=('127', '132'))
+    _footprints(tmp_path / 'footprints.json', obsids=('127', '132'))
+    out, data = _build(tmp_path)
+    assert set(data['lineages']) == {'plain'}
+    assert 'Mixed reductions' not in (out / 'cmd_explorer.html').read_text()
+
 def test_selecting_a_field_outlines_it_on_the_sky():
     """Clicking a row highlights the tile, and one code path decides that.
 

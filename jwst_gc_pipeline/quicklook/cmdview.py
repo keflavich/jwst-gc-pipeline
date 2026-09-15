@@ -100,6 +100,20 @@ def render(data, data_href=DATA_FILE,
     blue = data['bands']['blue'].upper()
     red = data['bands']['red'].upper()
 
+    lineages = data.get('lineages') or {}
+    mixed_html = ''
+    if len(lineages) > 1:
+        rows = '; '.join(
+            f"<b>{html.escape(k)}</b> &mdash; {', '.join(html.escape(i) for i in v)}"
+            for k, v in sorted(lineages.items()))
+        mixed_html = (
+            f"<div class='warn'><b>Mixed reductions.</b> The pooled grey "
+            f"diagram combines fields from more than one reduction chain: "
+            f"{rows}. <code>resbgsub</code> is residual-background-subtracted "
+            f"&mdash; a different reduction, not a later pass &mdash; so a "
+            f"colour offset between those fields and the rest would be a "
+            f"property of the processing, not of the sky.</div>")
+
     partial = [f for f in fields if f.get('partial')]
     partial_html = ''
     if partial:
@@ -153,6 +167,7 @@ def render(data, data_href=DATA_FILE,
       Magnitudes are <b>Vega</b>. Built {html.escape(str(data.get('built', '')))}.
       Grid {data['grid']['nx']} hexagons wide.</p>
     {waiting_html}
+    {mixed_html}
     {partial_html}
     <div class=warn><b>Quicklook, not a release.</b> These are the catalogs that
       exist right now, cross-matched between the two filters at
@@ -357,7 +372,8 @@ function buildTable() {
       tr.classList.add('partial');
     }
     cell(tr, f.n.toLocaleString(), 'num');
-    cell(tr, f.partial ? f.modules.join('+') : f.source, 'num');
+    cell(tr, f.lineage && f.lineage !== 'plain' ? f.lineage
+            : (f.partial ? f.modules.join('+') : f.source), 'num');
     tr.addEventListener('mouseenter', function () { show(f); });
     tr.addEventListener('mouseleave', function () { show(null); });
     tr.addEventListener('click', function () {

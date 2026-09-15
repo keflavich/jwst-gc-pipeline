@@ -215,12 +215,19 @@ def build(args):
         modules = sorted({_module_of(pth) for pth in
                           chosen[obsid]['paths'].values()} - {None})
         partial = bool(modules) and 'merged' not in modules
+        # Which reduction chain this field's photometry came from.  Not the
+        # same axis as the merge stage: `resbgsub` is a different reduction,
+        # so pooling it with the plain chain mixes two photometries in one
+        # diagram.  Recorded per field and reported, not silently resolved.
+        lineages = sorted({C.lineage_of(pth)
+                           for pth in chosen[obsid]['paths'].values()})
         fields.append({
             'id': obsid,
             'label': foot['label'],
             'source': chosen[obsid]['source'],
             'modules': modules,
             'partial': partial,
+            'lineage': '+'.join(lineages),
             'n': int(n_in),
             'max': int(peak),
             'cells': cells,
@@ -228,6 +235,14 @@ def build(args):
             'centre': centre if centre and centre[0] is not None else None,
             'files': {b: Path(p).name for b, p in chosen[obsid]['paths'].items()},
         })
+
+    by_lineage = {}
+    for f in fields:
+        by_lineage.setdefault(f['lineage'], []).append(f['id'])
+    if len(by_lineage) > 1:
+        print('MIXED REDUCTIONS -- the pooled diagram combines these chains:')
+        for lin, ids in sorted(by_lineage.items()):
+            print(f'  {lin:10s} {len(ids):>2} field(s): {", ".join(ids)}')
 
     centres = [f['centre'] for f in fields if f['centre']]
     data = {
@@ -245,6 +260,7 @@ def build(args):
         'fields': fields,
         'incomplete': waiting,
         'no_pairs': empty,
+        'lineages': {k: sorted(v) for k, v in by_lineage.items()},
         'centre': ([float(np.average([c[0] for c in centres])),
                     float(np.average([c[1] for c in centres]))]
                    if centres else None),
