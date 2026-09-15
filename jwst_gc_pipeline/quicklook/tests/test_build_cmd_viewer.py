@@ -14,6 +14,7 @@ from astropy.table import Table                     # noqa: E402
 import astropy.units as u                           # noqa: E402
 
 from jwst_gc_pipeline.quicklook import catalogs as C
+from jwst_gc_pipeline.quicklook import cmdview
 
 REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location(
@@ -325,3 +326,52 @@ def test_a_single_reduction_set_says_nothing(tmp_path):
     out, data = _build(tmp_path)
     assert set(data['lineages']) == {'plain'}
     assert 'Mixed reductions' not in (out / 'cmd_explorer.html').read_text()
+
+def test_selecting_a_field_outlines_it_on_the_sky():
+    """Clicking a row highlights the tile, and one code path decides that.
+
+    The ledger, the sky, the hover and the unpin all change which field is
+    current; if each set the outline itself they would drift apart.  `drawCMD`
+    is the single place that already knows the answer, so the outline is drawn
+    from there.
+    """
+    page = cmdview._SCRIPT
+    assert 'function highlight(field)' in page
+    # driven from drawCMD, not from the click listener
+    drawcmd = page.split('function drawCMD(')[1].split('\nfunction ')[0]
+    assert 'highlight(field);' in drawcmd
+    # its own overlay, added after the base one so it draws over a shared edge
+    foot = page.split('function drawFootprints(')[1].split('\nfunction ')[0]
+    assert foot.index("name: 'Treasury pointings") < foot.index("name: 'Selected tile'")
+
+
+def test_the_outline_is_drawn_once_aladin_exists():
+    """`drawCMD(null)` runs before `A.init` resolves, so the first highlight
+    call has no overlay to draw into.  Boot has to re-assert it, or a page
+    restored with a selection shows the diagram without the tile."""
+    boot = cmdview._SCRIPT.split('function boot(')[1]
+    assert boot.index('drawFootprints();') < boot.index('highlight(hovered || pinned);')
+
+
+def test_every_javascript_name_the_page_uses_is_defined():
+    """A ReferenceError in the Aladin callback kills the rest of boot silently
+    (the survey switcher on the overview page died this way, #885)."""
+    import re
+    src = cmdview._SCRIPT
+    defined = set(re.findall(r'function\s+(\w+)\s*\(', src))
+    for name in ('highlight', 'drawFootprints', 'drawCMD', 'show', 'fieldAt'):
+        assert name in defined, f'{name} is called but never defined'
+    for var in ('hiOv', 'footOv', 'HILITE'):
+        assert re.search(rf'\bvar\s+[^;]*\b{var}\b', src), \
+            f'{var} is used but never declared with var'
+
+
+def test_the_nircam_layer_is_the_fixed_cut_build():
+    """Both NIRCam HiPS exist and they differ in a way that matters here: the
+    per-field percentile build stretches each tile on its own pixels, so equal
+    sky reads as unequal colour at every seam.  This page compares one pointing
+    against the others, so it takes the fixed-cut one, matching the main
+    viewer's default."""
+    urls = [u for _, u, _ in cmdview.HIPS_LAYERS]
+    assert any(u.endswith('jwst_gc_treasury_vminmax_hips/') for u in urls)
+    assert not any(u.endswith('jwst_gc_treasury_hips/') for u in urls)
