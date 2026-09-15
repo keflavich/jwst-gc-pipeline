@@ -445,6 +445,29 @@ Both cost real coverage this week, and neither raises anything.
 2. **A missing input reported as a build failure** — the `MIRI_MATCH_JSON` case
    above.
 
+3. **A rebuild that is not queued but stalled, with nothing saying so.** A job
+   behind a few hundred of the same user's own jobs in a burst QOS does not
+   start, and `Reason=Priority` reads identically at minute one and at hour
+   nineteen. The 51-task treasury AVM fix sat 19 h that way while
+   `hpg-default` had 111 idle nodes.
+
+   The cause is backfill scope, not load: `SchedulerParameters` carries
+   `bf_max_job_user=100`, backfill only tests a user's first 100 jobs, and
+   these ranked 111–115 behind 348 of the same account's pending jobs. **The
+   distinguishing check is rank versus `bf_max_job_user`** (`sprio` plus
+   `scontrol show config | grep bf_max_job_user`), not elapsed pending time.
+
+   Resubmitting makes it worse — priority here is largely age, so a new
+   submission restarts at zero. The ways out are to clear or hold enough of the
+   user's own pending jobs to bring the rebuild inside the window, to run the
+   work outside SLURM where it is small enough (the MIRI layers are 10 s each;
+   the NIRCam ones ~63 min single-core, which is not), or a QOS decision, which
+   belongs to the account owner.
+
+   For a release this matters because "the fix is queued" and "the fix is not
+   going to run" look the same from the outside, and only the second one means
+   the shipped layer stays wrong.
+
 ### Ownership
 
 The treasury HiPS builds belong to the **avm-hips** session; it publishes them
