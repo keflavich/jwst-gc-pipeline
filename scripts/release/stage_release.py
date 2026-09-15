@@ -263,11 +263,15 @@ FIELDS = {
     # Stage with `--exposures-only --exposures-from-disk`; a plain `--stage`
     # would look for mosaics and find none.
     #
-    # Every observation the registry knows is listed rather than globbed: the
-    # enumerator SCOPES the pipeline-directory scan to these (proposal,
-    # observation) pairs, and all 33 tiles keep their frames in one
-    # `<FILTER>/pipeline/` directory per filter.  An observation with nothing
-    # on disk yet simply contributes no frames.
+    # Every observation the registry knows is listed rather than globbed, and
+    # the list must never be emptied.  `enumerate_field_exposures` skips its
+    # scoping filter when the list is empty (`if keys and ... not in keys`) and
+    # `multi` is `bool(observations)`, so an empty list does not produce an
+    # empty release -- it produces one unlabelled bundle per filter with every
+    # tile's frames pooled into it, staged into a single directory, with no
+    # error.  The tiles all share one `<FILTER>/pipeline/` directory per
+    # filter, which is what makes the scoping load-bearing.  An observation
+    # with nothing on disk yet simply contributes no frames.
     "gc-treasury": {
         "data_dir": Path("/orange/adamginsburg/jwst/gc-treasury"),
         "proposal_prefix": "jw10678",
@@ -3068,19 +3072,33 @@ def write_astrometry_report(field_dir, field, version, data_dir,
 
 
 
-def set_acl(field, version, release_root):
-    """Grant all-authenticated-users (free Globus login required) read on the
-    field's release path."""
+def set_acl(field, version, release_root, public=False):
+    """Grant read on the field's release path.
+
+    Always grants `all_authenticated_users` -- anyone with a free Globus login.
+    With ``public``, ALSO grants `anonymous`, which is what "anyone can
+    download" means: no login, plain HTTPS, a `curl` with no credentials.
+
+    The two are not the same permission and the difference is invisible from
+    the inside, because whoever runs this is already logged in. An
+    all-authenticated rule tests green for the maintainer and stops a reader
+    who has no Globus account, which is most readers of a paper.
+    """
     field_path = field_release_dir(field, version, release_root)
     rel = "/" + str(field_path.relative_to(GLOBUS_COLLECTION_ROOT)) + "/"
-    cmd = [
-        GLOBUS_CLI, "endpoint", "permission", "create",
-        f"{GLOBUS_COLLECTION_ID}:{rel}",
-        "--permissions", "r",
-        "--all-authenticated",
-    ]
-    print("Running:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    principals = ["--all-authenticated"] + (["--anonymous"] if public else [])
+    for principal in principals:
+        cmd = [
+            GLOBUS_CLI, "endpoint", "permission", "create",
+            f"{GLOBUS_COLLECTION_ID}:{rel}",
+            "--permissions", "r",
+            principal,
+        ]
+        print("Running:", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+    if not public:
+        print("  note: a free Globus login is still required to read this path. "
+              "Pass --public to also grant anonymous read.")
 
 
 def main(argv=None):
@@ -3113,6 +3131,9 @@ def main(argv=None):
                         help="skip SHA-256 computation (faster dry staging)")
     parser.add_argument("--set-acl", action="store_true",
                         help="grant all-authenticated-users read on the release path")
+    parser.add_argument("--public", action="store_true",
+                        help="with --set-acl, ALSO grant anonymous read: no "
+                             "Globus login, downloadable with a bare curl")
     parser.add_argument("--print-urls", action="store_true",
                         help="print HTTPS download URLs (requires --stage)")
     parser.add_argument("--no-exposures", action="store_true",
@@ -3304,6 +3325,14 @@ def main(argv=None):
                   f"anyway.", file=sys.stderr)
             return 2
         print("  (report only; pass --refuse-mixed-generations to make this a refusal)")
+
+    # Before the dry-run return, not after it. `--set-acl` on an
+    # already-staged release used to fall into the early return and do nothing,
+    # silently: the tool printed "Dry run" and exited 0 while the release it
+    # was asked to publish stayed private.
+    if args.set_acl and not args.stage:
+        set_acl(args.field, args.version, args.release_root, public=args.public)
+        return 0
 
     if not args.stage:
         print("Dry run. Re-run with --stage to build the release tree.")
@@ -3581,7 +3610,7 @@ def main(argv=None):
              f"({exp_mode} links, not checksummed)." if n_exposures else "."))
 
     if args.set_acl:
-        set_acl(args.field, args.version, args.release_root)
+        set_acl(args.field, args.version, args.release_root, public=args.public)
 
     if args.print_urls:
         print("\nDownload URLs:")

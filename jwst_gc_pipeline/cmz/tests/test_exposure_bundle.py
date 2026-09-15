@@ -9,6 +9,7 @@ frames that are not the ones behind its own mosaic.
 import importlib.util
 import json
 import os
+import re
 
 import pytest
 
@@ -1544,3 +1545,127 @@ def test_the_index_card_counts_frames_when_that_is_all_there_is(mw):
     # and a release with no frames says nothing about them
     assert 'exposures' not in mw._card_counts({'n_images': 12, 'n_catalogs': 3,
                                                'n_exposures': 0})
+
+
+# ---- the scoping that an empty observation list silently removes ----
+def _two_observation_tree(tmp_path):
+    """A field directory holding two observations' frames in ONE filter dir,
+    which is how every multi-tile field on disk is laid out."""
+    pipeline = tmp_path / 'F212N' / 'pipeline'
+    pipeline.mkdir(parents=True)
+    for obs in ('001', '002'):
+        for exp in ('00001', '00002'):
+            (pipeline / f'jw12345{obs}001_02101_{exp}_nrca1_destreak_'
+                        f'o{obs}_crf.fits').write_bytes(b'')
+    return {'data_dir': tmp_path, 'proposal_prefix': 'jw12345'}
+
+
+def test_an_empty_observation_list_pools_every_tile_into_one_bundle(eb, tmp_path):
+    """The failure this guards is not an empty release -- it is a differently
+    shaped one, with no error.
+
+    `enumerate_field_exposures` skips its scoping filter when the list is empty
+    (`if keys and (prop, obs) not in keys`), and `multi` is
+    `bool(observations)`, so dropping the list keeps every frame and throws
+    away which observation each belongs to: one unlabelled bundle per filter,
+    staged into one directory, every tile pooled.
+    """
+    cfg = _two_observation_tree(tmp_path)
+
+    scoped = eb.enumerate_field_exposures(dict(cfg, observations=['o001', 'o002']),
+                                          'zz_test')
+    assert sorted(scoped) == [('o001', 'F212N'), ('o002', 'F212N')]
+    assert all(obs is not None for obs, _ in scoped)
+
+    unscoped = eb.enumerate_field_exposures(dict(cfg, observations=[]), 'zz_test')
+    assert sorted(unscoped) == [(None, 'F212N')]
+    # same frames, one heading -- which is why the list must never be emptied
+    assert (sum(len(v) for v in unscoped.values())
+            == sum(len(v) for v in scoped.values()))
+
+
+def test_the_treasury_entry_keeps_its_observation_list(sr):
+    """gc-treasury ships 34 tiles out of one directory per filter, so its
+    entry carries the scoping that `enumerate_field_exposures` needs."""
+    entry = sr.FIELDS['gc-treasury']
+    observations = entry.get('observations')
+    assert observations, 'the list is what scopes the scan; it cannot be empty'
+    assert all(re.fullmatch(r'o\d{3}', o) for o in observations)
+    keys = eb_module().field_observation_keys(entry)
+    assert {prop for prop, _ in keys} == {'10678'}
+    assert len(keys) == len(observations)
+
+
+def eb_module():
+    return _load('exposure_bundle', os.path.join(_REL, 'exposure_bundle.py'))
+
+
+def test_a_frames_only_release_does_not_claim_a_mosaic_drizzled_them(
+        mw, sr, eb, nircam_field):
+    """"the mosaics above were drizzled from" describes something that is not
+    on a frames-only page, and the provenance claim is genuinely weaker there:
+    the frames come from a directory scan, not from an association."""
+    page = mw.render_field_page('f', _exposures_only_manifest(sr, eb,
+                                                              nircam_field),
+                                None)
+    assert 'the mosaics above were drizzled from' not in page
+    assert 'No mosaic has been drizzled from them yet' in page
+    # the normal page keeps the stronger claim
+    full = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
+    assert 'the mosaics above were drizzled from' in full
+
+
+def test_the_page_names_the_registered_observations_it_lacks(mw):
+    """32 groups with no list leaves a reader unable to tell a complete tile
+    from one registered last week with nothing reduced."""
+    exposures = [{'observation': 'o127'}, {'observation': 'o128'}]
+    note = mw._coverage_note('gc-treasury', exposures)
+    assert '2 of' in note
+    assert 'o098' in note                       # registered, nothing reduced
+    assert 'o127' not in note                   # present, so not listed absent
+
+    full = [{'observation': o}
+            for o in mw.FIELDS['gc-treasury']['observations']]
+    assert 'All' in mw._coverage_note('gc-treasury', full)
+    # a field with no registry observation list says nothing rather than guessing
+    assert mw._coverage_note('zz_not_a_field', exposures) == ''
+
+
+# ---- publishing a release is not the same as staging one ----
+def test_set_acl_without_stage_actually_grants(sr, monkeypatch, tmp_path):
+    """`--set-acl` on an already-staged release used to hit the dry-run early
+    return: "Dry run." printed, exit 0, and the release still private.
+
+    A command that reports success while doing nothing is the failure mode that
+    hides longest, because the person checking is the person who ran it.
+    """
+    field_dir = tmp_path / 'v9-test' / 'gc-treasury'
+    field_dir.mkdir(parents=True)
+    (field_dir / 'MANIFEST.json').write_text('{}')
+
+    calls = []
+    monkeypatch.setattr(sr, 'set_acl',
+                        lambda *a, **kw: calls.append((a, kw)))
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v9-test',
+                  '--release-root', str(tmp_path), '--set-acl'])
+    assert rc == 0
+    assert len(calls) == 1, 'the ACL was never granted'
+
+
+def test_public_is_what_grants_anonymous_read(sr, monkeypatch):
+    """`all_authenticated_users` still requires a free Globus login. It tests
+    green for whoever runs it -- they are already logged in -- and stops every
+    reader without a Globus account, which is most readers of a paper."""
+    ran = []
+    monkeypatch.setattr(sr.subprocess, 'run',
+                        lambda cmd, **kw: ran.append(cmd))
+    monkeypatch.setattr(sr, 'field_release_dir',
+                        lambda *a, **kw: sr.GLOBUS_COLLECTION_ROOT / 'releases'
+                        / 'v9-test' / 'gc-treasury')
+
+    sr.set_acl('gc-treasury', 'v9-test', '/ignored')
+    assert [c[-1] for c in ran] == ['--all-authenticated']
+
+    ran.clear()
+    sr.set_acl('gc-treasury', 'v9-test', '/ignored', public=True)
+    assert [c[-1] for c in ran] == ['--all-authenticated', '--anonymous']

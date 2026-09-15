@@ -1083,7 +1083,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                        f"<td>{dl(f)}</td></tr>")
         out.append("</table>")
 
-    out.append(render_exposures(field, exposures, base, app_link, multi))
+    out.append(render_exposures(field, exposures, base, app_link, multi,
+                                have_mosaics=bool(images)))
     out.append(render_astrometry(field, files, base,
                                  manifest_built=manifest.get('built')))
 
@@ -1132,7 +1133,30 @@ def _no_mosaic_reason(manifest, exposures):
             "release README for what this version contains.")
 
 
-def render_exposures(field, exposures, base, app_link, multi):
+def _coverage_note(field, exposures):
+    """Which of the field's registered observations this release actually holds.
+
+    A reader given 32 groups has no way to tell a tile that is complete from
+    one that was registered last week and has nothing reduced yet. The registry
+    knows the full list, so the page names what is absent instead of leaving
+    the reader to infer it from a gap in the numbering.
+    """
+    registered = (FIELDS.get(field) or {}).get("observations") or []
+    if not registered:
+        return ""
+    present = {f.get("observation") for f in exposures} - {None}
+    missing = [o for o in registered if o not in present]
+    if not missing:
+        return (f"<p class=muted>All <b>{len(registered)}</b> registered "
+                f"observations of this programme are here.</p>")
+    return (f"<p class=muted><b>{len(present)} of {len(registered)}</b> "
+            f"registered observations are in this release. Absent, with nothing "
+            f"reduced for them when it was staged: "
+            f"{', '.join(html.escape(o) for o in missing)}.</p>")
+
+
+def render_exposures(field, exposures, base, app_link, multi,
+                     have_mosaics=True):
     """The detector-frame exposures section: one row per (observation, filter).
 
     A per-frame row would be unusable -- wd1 ships 696 frames, and a table of
@@ -1154,15 +1178,30 @@ def render_exposures(field, exposures, base, app_link, multi):
         return ""
     out = ["<h2>Detector-frame exposures</h2>"]
     total = sum(f.get("size_bytes") or 0 for f in exposures)
+    # With no mosaics, "the mosaics above" and "the frames behind the matching
+    # mosaic" both describe something that is not on the page. The frames are
+    # then enumerated from the pipeline directories by field/observation/filter,
+    # which is a weaker claim than an association's membership list, and the
+    # page says which claim it is making.
+    if have_mosaics:
+        provenance = ("the mosaics above were drizzled from, in the original "
+                      "detector frame, carrying the full distortion solution and "
+                      "this pipeline's astrometry as it stood before the images "
+                      "were resampled onto a sky grid. Each group holds exactly "
+                      "the frames behind the matching mosaic, taken from the "
+                      "record that mosaic itself carries of what went into it.")
+    else:
+        provenance = ("this programme has on disk, in the original detector "
+                      "frame, carrying the full distortion solution and this "
+                      "pipeline's astrometry. No mosaic has been drizzled from "
+                      "them yet, so they are grouped by observation and filter "
+                      "from the pipeline's own directories rather than from a "
+                      "mosaic's membership list.")
     out.append(
         f"<p class=muted>The <b>{len(exposures)} individual exposures</b> "
-        f"({human_size(total)}) the mosaics above were drizzled from, in the "
-        f"original detector frame, carrying the full distortion solution and this "
-        f"pipeline's astrometry as it stood before the images were resampled onto "
-        f"a sky grid. Each group holds exactly the frames behind the matching "
-        f"mosaic, taken from the record that mosaic itself carries of what went "
-        f"into it. Use these to re-drizzle, re-fit, or chase a per-exposure "
-        f"systematic.</p>")
+        f"({human_size(total)}) {provenance} Use these to re-drizzle, re-fit, or "
+        f"chase a per-exposure systematic.</p>")
+    out.append(_coverage_note(field, exposures))
     out.append(
         "<p class=muted>The last detector-frame product differs by field and "
         "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
