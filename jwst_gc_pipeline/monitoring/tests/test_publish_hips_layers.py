@@ -175,16 +175,34 @@ def test_force_does_not_change_the_normal_newer_case():
     assert P.needs_publish(newer, SAME, force=True) is True
 
 
-def test_force_reaches_both_destinations():
+def test_force_reaches_both_destinations(tmp_path, monkeypatch):
     """Publishing one host and not the other is the split the tool exists to
-    prevent; a flag that only reached one would reintroduce it."""
-    import inspect
-    from scripts.monitoring import publish_hips_layers as P
-    for fn in (P.publish_local, P.publish_remote):
-        assert 'force' in inspect.signature(fn).parameters, fn.__name__
-    src = inspect.getsource(P.main)
-    assert 'publish_local(name, src, dry=args.dry_run, force=args.force)' in src
-    assert 'force=args.force) or rc' in src
+    prevent; a flag that only reached one would reintroduce it.
+
+    Driven through `main()` with both publishers stubbed, rather than by
+    matching source text. The string this used to assert --
+    `'force=args.force) or rc'` -- is satisfied by the LOCAL call site on its
+    own, so deleting `force` from the remote call left the suite green while
+    shipping a `--force` that republishes data.rc and silently skips
+    starformation: the exact split named above.
+    """
+    layer = tmp_path / 'zz_layer'
+    layer.mkdir()
+    monkeypatch.setattr(ph, 'LAYERS', {'zz_layer': str(layer)})
+    seen = {}
+    monkeypatch.setattr(ph, 'publish_local',
+                        lambda name, src, dry=False, force=False:
+                        seen.setdefault('local', force) and 0 or 0)
+    monkeypatch.setattr(ph, 'publish_remote',
+                        lambda name, src, dry=False, force=False:
+                        seen.setdefault('remote', force) and 0 or 0)
+
+    assert ph.main(['--layer', 'zz_layer', '--force']) == 0
+    assert seen == {'local': True, 'remote': True}, seen
+
+    seen.clear()
+    assert ph.main(['--layer', 'zz_layer']) == 0
+    assert seen == {'local': False, 'remote': False}, seen
 
 
 def test_force_still_verifies_before_swapping():
