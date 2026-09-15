@@ -1643,6 +1643,15 @@ def test_set_acl_without_stage_actually_grants(sr, monkeypatch, tmp_path):
     field_dir.mkdir(parents=True)
     (field_dir / 'MANIFEST.json').write_text('{}')
 
+    # The real entry's data_dir is a cluster path that does not exist on a CI
+    # runner. It should not matter -- granting access to an already-staged
+    # release says nothing about the pipeline disk -- and this test is what
+    # says so: it points the entry at an empty tmp tree and still expects the
+    # ACL to be granted.
+    data_dir = tmp_path / 'pipeline'
+    data_dir.mkdir()
+    monkeypatch.setitem(sr.FIELDS['gc-treasury'], 'data_dir', data_dir)
+
     calls = []
     monkeypatch.setattr(sr, 'set_acl',
                         lambda *a, **kw: calls.append((a, kw)))
@@ -1650,6 +1659,14 @@ def test_set_acl_without_stage_actually_grants(sr, monkeypatch, tmp_path):
                   '--release-root', str(tmp_path), '--set-acl'])
     assert rc == 0
     assert len(calls) == 1, 'the ACL was never granted'
+
+    # ... and with no staged release there is nothing to publish, which is an
+    # error rather than a silent grant on a path that holds nothing.
+    calls.clear()
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v-absent',
+                  '--release-root', str(tmp_path), '--set-acl'])
+    assert rc == 1
+    assert calls == []
 
 
 def test_public_is_what_grants_anonymous_read(sr, monkeypatch):

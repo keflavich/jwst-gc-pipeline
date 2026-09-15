@@ -3178,6 +3178,23 @@ def main(argv=None):
                              "CRDS_CTX, within an instrument (default: report only)")
     args = parser.parse_args(argv)
 
+    # Granting an ACL on an ALREADY-STAGED release is independent of what is on
+    # the pipeline disk, so it runs before discovery and before the dry-run
+    # return -- both of which it used to fall into.  It fell into the dry-run
+    # return silently ("Dry run", exit 0, release still private); it fell into
+    # discovery loudly but for an irrelevant reason, since a release whose
+    # inputs have since moved or been cleaned is exactly one that still needs
+    # publishing.  What it does need is the staged tree, so that is what is
+    # checked.
+    if args.set_acl and not args.stage:
+        staged = field_release_dir(args.field, args.version, args.release_root)
+        if not (staged / "MANIFEST.json").is_file():
+            print(f"No staged release at {staged} -- nothing to grant access to. "
+                  f"Stage it first, or pass --stage to do both.", file=sys.stderr)
+            return 1
+        set_acl(args.field, args.version, args.release_root, public=args.public)
+        return 0
+
     if args.check_exposures:
         version = args.version or latest_staged_version(args.field,
                                                         args.release_root)
@@ -3325,14 +3342,6 @@ def main(argv=None):
                   f"anyway.", file=sys.stderr)
             return 2
         print("  (report only; pass --refuse-mixed-generations to make this a refusal)")
-
-    # Before the dry-run return, not after it. `--set-acl` on an
-    # already-staged release used to fall into the early return and do nothing,
-    # silently: the tool printed "Dry run" and exited 0 while the release it
-    # was asked to publish stayed private.
-    if args.set_acl and not args.stage:
-        set_acl(args.field, args.version, args.release_root, public=args.public)
-        return 0
 
     if not args.stage:
         print("Dry run. Re-run with --stage to build the release tree.")
