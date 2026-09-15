@@ -106,6 +106,16 @@ def _jicama_rank(path):
     from 86k matched pairs to 49k, and the diagram would have been labelled
     GC_127 either way.  A later merge stage is a refinement of the same stars;
     a missing module is missing sky.
+
+    The stage term is compared as an integer ACROSS reduction chains, and that
+    comparison has no meaning: ``resbgsub_m5`` is not a later pass than plain
+    ``m4``, it is a different reduction that happens to have run further.  This
+    function nevertheless leaves it alone, because the alternative -- ranking
+    lineage above stage -- would silently pick a chain for the whole survey,
+    and which chain a release pins is not this module's call.  What the module
+    does instead is REPORT the mixture: ``lineage_of`` records the chain per
+    file and the page names the fields on each side.  Read the reported
+    lineages before treating the pooled diagram as one photometry.
     """
     m = _JICAMA.match(Path(path).name)
     tail = m.group('tail')
