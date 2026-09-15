@@ -303,12 +303,16 @@ Two consequences for a release:
 **Program 10678's release includes its HiPS layers.** They are part of the
 deliverable, not a by-product of it:
 
-    https://data.rc.ufl.edu/secure/adamginsburg/jwst/gc-treasury/pngs/jwst_gc_treasury_hips/
-    https://data.rc.ufl.edu/secure/adamginsburg/jwst/gc-treasury/pngs/jwst_gc_treasury_miri_hips/
+    https://data.rc.ufl.edu/pub/adamginsburg/avm_images/jwst_gc_treasury_hips/
+    https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_hips/
 
-published to the same two hosts the viewers read
-(`/orange/adamginsburg/web/public/avm_images/` served by data.rc, and
-starformation's `htdocs/avm_images/`).
+Those are the SERVED copies, on the two hosts the viewers read
+(`/orange/adamginsburg/web/public/avm_images/` behind data.rc, and
+starformation's `htdocs/avm_images/`). Check them, and nothing else: the build
+tree under `.../gc-treasury/pngs/` is not the deliverable and returns **401**
+to anyone who follows it, so a gate written against it fails on a correct
+deployment and passes on none. What a reader needs to confirm is what the
+public can fetch, which is only ever the pair above.
 
 ### Current
 
@@ -361,7 +365,7 @@ pixel orientation, and those are independent: a PNG whose pixels are rotated
 needs the raw one, and both are correct.
 
 It is valid for the **GC Treasury** layers, which all come from
-`gc_treasury_rgb_images.py` with `flip=-1` and `ROTATE_180`, so the pixel
+`jwst_scripts/scripts/gc_treasury_rgb_images.py` with `flip=-1` and `ROTATE_180`, so the pixel
 orientation is fixed and the reference pixel alone settles it. It is **not**
 valid for the older CMZ layers, hand-built by many scripts over years. Using it
 there produced a confident 105″ error report for SgrA MIRI that measurement
@@ -494,8 +498,11 @@ Each cost real time or coverage this week, and none of them raises anything.
    established: the harness reproduces unbinned values at factor 1 to −0.0000,
    so the bias is a property of the binning and not of the validation.
 
-   `BG_MATCH_BIN = 1`, with the measured pairs in the comment and an
-   instruction not to re-enable without re-running that comparison. The
+   `BG_MATCH_BIN = 1` — **pending, not yet shipped**. It is proposed in
+   `keflavich/jwst_scripts#16` and is in neither that repo's `main` nor the
+   deployed `jwst_scripts/scripts/gc_treasury_rgb_images.py`, so a reader sent to check the
+   guard today will not find it. Carry the measured pairs in the comment and
+   the instruction not to re-enable without re-running that comparison. The
    transferable rule: **any shortcut in a measurement that feeds a correction
    needs comparison against unshortcut values before it ships**, and the
    comparison has to be checked against itself at the identity setting.
