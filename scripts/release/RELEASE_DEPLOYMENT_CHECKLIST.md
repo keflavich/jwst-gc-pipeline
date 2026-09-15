@@ -464,6 +464,21 @@ Each cost real time or coverage this week, and none of them raises anything.
    the old date until it is republished — so stamp, then publish, or the fix
    stops one hop short of the reader.
 
+   ⚠ **Do not generalise this to "rebuilt HiPS keep stale dates".** It is
+   specific to `coadd_hips`. A layer built directly through
+   `reproject_to_hips` — the catalogue-derived overlays, for instance — writes
+   fresh properties and advances its date correctly (verified 2026-09-15:
+   overlays rebuilt to `11:09Z` unprompted while the coadd needed stamping).
+   The wrong generalisation sends the next person looking in the wrong place.
+
+   **A shrinking selection over a growing sample is not necessarily a bug.**
+   The same rebuild took matched sources 805,136 → 813,659 while the
+   ultra-red count went 333 → 330. Better-vetted inputs drop marginal
+   detections, and an extreme-colour cut is exactly where mismatches
+   concentrate, so the tail should shrink slightly as the catalogue improves.
+   Say so in the release note; "sample grew, selection shrank" reads as a
+   defect otherwise.
+
 4. **An optimisation that is "obviously harmless" to a measurement feeding a
    correction.** Block-averaging frames 8× before measuring pairwise
    background offsets looked free — a background offset is large-scale and
