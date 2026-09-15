@@ -323,3 +323,14 @@ def test_every_javascript_name_the_page_uses_is_defined():
     for var in ('hiOv', 'footOv', 'HILITE'):
         assert re.search(rf'\bvar\s+[^;]*\b{var}\b', src), \
             f'{var} is used but never declared with var'
+
+
+def test_the_nircam_layer_is_the_fixed_cut_build():
+    """Both NIRCam HiPS exist and they differ in a way that matters here: the
+    per-field percentile build stretches each tile on its own pixels, so equal
+    sky reads as unequal colour at every seam.  This page compares one pointing
+    against the others, so it takes the fixed-cut one, matching the main
+    viewer's default."""
+    urls = [u for _, u, _ in cmdview.HIPS_LAYERS]
+    assert any(u.endswith('jwst_gc_treasury_vminmax_hips/') for u in urls)
+    assert not any(u.endswith('jwst_gc_treasury_hips/') for u in urls)

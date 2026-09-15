@@ -28,9 +28,15 @@ ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
 #: HiPS layers under the footprints, in paint order (last on top).  Same URLs
 #: and the same order as the main viewer, so the two pages show the same sky.
 _AVM = 'https://starformation.astro.ufl.edu/avm_images/'
+#: `vminmax` is the NIRCam layer, matching the main viewer's default: fixed
+#: asinh cuts, so one surface brightness is one colour across the whole mosaic.
+#: The per-field percentile build stretches each tile on its own pixel
+#: distribution, which renders equal sky as unequal colour at every seam --
+#: wrong for a page whose point is comparing one pointing against the rest.
 HIPS_LAYERS = (
     ('tmiri', _AVM + 'jwst_gc_treasury_miri_hips/', 'Treasury MIRI (F770W)'),
-    ('tnir', _AVM + 'jwst_gc_treasury_hips/', 'Treasury NIRCam (F212N/F480M)'),
+    ('tnir', _AVM + 'jwst_gc_treasury_vminmax_hips/',
+     'Treasury NIRCam (F212N/F480M)'),
 )
 
 #: Fallback background, used while the treasury layers are sparse.
