@@ -253,6 +253,36 @@ FIELDS = {
     # o050 is DELIBERATELY absent: it has no current mosaic at all, every
     # product of it is quarantined, and it was the worst-aligned pointing
     # (~5.6"). Re-add it here once it has been re-reduced and tied.
+    # gc-treasury: JWST 10678, the Treasury programme.  Registered here so its
+    # DETECTOR FRAMES can be released while the reduction is still running.
+    # There is no `proposal_prefix` observation token and no `miri:` list
+    # because this entry ships no mosaic: 10678's tiles land level-2 only (no
+    # image3 association at delivery, see `treasury-tiles-land-level2-only`),
+    # and the pipeline's own drizzles are mid-flight.  The frames are a
+    # DEPENDENCY of those mosaics, so they are complete and releasable now.
+    # Stage with `--exposures-only --exposures-from-disk`; a plain `--stage`
+    # would look for mosaics and find none.
+    #
+    # Every observation the registry knows is listed rather than globbed, and
+    # the list must never be emptied.  `enumerate_field_exposures` skips its
+    # scoping filter when the list is empty (`if keys and ... not in keys`) and
+    # `multi` is `bool(observations)`, so an empty list does not produce an
+    # empty release -- it produces one unlabelled bundle per filter with every
+    # tile's frames pooled into it, staged into a single directory, with no
+    # error.  The tiles all share one `<FILTER>/pipeline/` directory per
+    # filter, which is what makes the scoping load-bearing.  An observation
+    # with nothing on disk yet simply contributes no frames.
+    "gc-treasury": {
+        "data_dir": Path("/orange/adamginsburg/jwst/gc-treasury"),
+        "proposal_prefix": "jw10678",
+        "observations": [
+            "o098", "o100", "o102", "o105", "o106", "o107", "o108", "o109",
+            "o111", "o112", "o113", "o114", "o116", "o117", "o118", "o120",
+            "o121", "o122", "o123", "o124", "o125", "o126", "o127", "o128",
+            "o129", "o130", "o131", "o132", "o133", "o134", "o135", "o137",
+            "o138", "o139",
+        ],
+    },
     "gc2211": {
         "data_dir": Path("/orange/adamginsburg/jwst/gc2211"),
         "proposal_prefix": "jw02211",
@@ -3042,19 +3072,33 @@ def write_astrometry_report(field_dir, field, version, data_dir,
 
 
 
-def set_acl(field, version, release_root):
-    """Grant all-authenticated-users (free Globus login required) read on the
-    field's release path."""
+def set_acl(field, version, release_root, public=False):
+    """Grant read on the field's release path.
+
+    Always grants `all_authenticated_users` -- anyone with a free Globus login.
+    With ``public``, ALSO grants `anonymous`, which is what "anyone can
+    download" means: no login, plain HTTPS, a `curl` with no credentials.
+
+    The two are not the same permission and the difference is invisible from
+    the inside, because whoever runs this is already logged in. An
+    all-authenticated rule tests green for the maintainer and stops a reader
+    who has no Globus account, which is most readers of a paper.
+    """
     field_path = field_release_dir(field, version, release_root)
     rel = "/" + str(field_path.relative_to(GLOBUS_COLLECTION_ROOT)) + "/"
-    cmd = [
-        GLOBUS_CLI, "endpoint", "permission", "create",
-        f"{GLOBUS_COLLECTION_ID}:{rel}",
-        "--permissions", "r",
-        "--all-authenticated",
-    ]
-    print("Running:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    principals = ["--all-authenticated"] + (["--anonymous"] if public else [])
+    for principal in principals:
+        cmd = [
+            GLOBUS_CLI, "endpoint", "permission", "create",
+            f"{GLOBUS_COLLECTION_ID}:{rel}",
+            "--permissions", "r",
+            principal,
+        ]
+        print("Running:", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+    if not public:
+        print("  note: a free Globus login is still required to read this path. "
+              "Pass --public to also grant anonymous read.")
 
 
 def main(argv=None):
@@ -3087,6 +3131,9 @@ def main(argv=None):
                         help="skip SHA-256 computation (faster dry staging)")
     parser.add_argument("--set-acl", action="store_true",
                         help="grant all-authenticated-users read on the release path")
+    parser.add_argument("--public", action="store_true",
+                        help="with --set-acl, ALSO grant anonymous read: no "
+                             "Globus login, downloadable with a bare curl")
     parser.add_argument("--print-urls", action="store_true",
                         help="print HTTPS download URLs (requires --stage)")
     parser.add_argument("--no-exposures", action="store_true",
@@ -3141,6 +3188,29 @@ def main(argv=None):
         return check_exposures(args.field, version, args.release_root)
     if args.version is None:
         parser.error("--version is required for every path that writes")
+
+    # Granting an ACL on an ALREADY-STAGED release is independent of what is on
+    # the pipeline disk, so it runs ahead of discovery and ahead of the dry-run
+    # return -- both of which it used to fall into.  It fell into the dry-run
+    # return silently ("Dry run", exit 0, release still private); it fell into
+    # discovery loudly but for an irrelevant reason, since a release whose
+    # inputs have since moved or been cleaned is exactly one that still needs
+    # publishing.
+    #
+    # It sits BELOW the --version guard and below --check-exposures on purpose.
+    # Above the guard, `--set-acl` with no `--version` reached
+    # `field_release_dir` with None and raised TypeError instead of argparse's
+    # error; above --check-exposures, asking for both published the release
+    # without ever running the check.  What it does need is the staged tree, so
+    # that is what is checked here.
+    if args.set_acl and not args.stage:
+        staged = field_release_dir(args.field, args.version, args.release_root)
+        if not (staged / "MANIFEST.json").is_file():
+            print(f"No staged release at {staged} -- nothing to grant access to. "
+                  f"Stage it first, or pass --stage to do both.", file=sys.stderr)
+            return 1
+        set_acl(args.field, args.version, args.release_root, public=args.public)
+        return 0
 
     # ---- LISTED-SOURCE GATE ---------------------------------------------------------
     # `nircam`/`miri` entries are curated by hand, so an absent one means the config is
@@ -3555,7 +3625,7 @@ def main(argv=None):
              f"({exp_mode} links, not checksummed)." if n_exposures else "."))
 
     if args.set_acl:
-        set_acl(args.field, args.version, args.release_root)
+        set_acl(args.field, args.version, args.release_root, public=args.public)
 
     if args.print_urls:
         print("\nDownload URLs:")
