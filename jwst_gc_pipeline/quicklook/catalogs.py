@@ -67,9 +67,17 @@ SVO_TIMEOUT_S = 30
 DEFAULT_MATCH_ARCSEC = 0.10
 
 #: ``<filter>_<module>_o<NNN>_indivexp_merged[_resbgsub]_m<N>_dao_basic[_...]``
+#:
+#: ``lineage`` captures what sits between ``indivexp_merged`` and ``_m<N>``.
+#: Empty for the plain chain, ``resbgsub`` for the residual-background-
+#: subtracted one.  It is captured rather than absorbed into ``.*?`` because
+#: **the two are different reductions, not successive passes of one**, so
+#: their stage numbers are not on a common scale and comparing them as
+#: integers is meaningless.
 _JICAMA = re.compile(
     r'^(?P<filt>f\d{3,4}[a-z])_(?P<module>nrca|nrcb|merged)_o(?P<obs>\d{3})_'
-    r'.*?_m(?P<stage>\d+)_dao_basic(?P<tail>.*)\.fits$')
+    r'indivexp_merged(?:_(?P<lineage>[a-z]+))?'
+    r'_m(?P<stage>\d+)_dao_basic(?P<tail>.*)\.fits$')
 
 #: Products that share the naming convention but are not photometry.  An
 #: ``_i2dseed`` file is the seed source LIST that a merge stage starts from, so
@@ -103,6 +111,20 @@ def _jicama_rank(path):
     tail = m.group('tail')
     return (_MODULE_RANK[m.group('module')], int(m.group('stage')),
             1 if 'vetted' in tail else 0)
+
+
+def lineage_of(path):
+    """``'plain'`` or the reduction variant token (e.g. ``'resbgsub'``).
+
+    Kept separate from the stage because they are NOT the same axis.  On
+    2026-09-15 o132 and o135 had ``resbgsub_m5`` alongside a plain ``m4``, and
+    ranking by stage number alone silently preferred the resbgsub chain for
+    those two fields while the other eight stayed plain -- a diagram pooling
+    two reductions, with nothing saying so.  Reported rather than resolved:
+    which chain a release should use is not this module's call.
+    """
+    m = _JICAMA.match(Path(path).name)
+    return (m.group('lineage') or 'plain') if m else 'unknown'
 
 
 def find_jicama(catalog_dir, bands=BANDS):
