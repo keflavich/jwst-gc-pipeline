@@ -498,11 +498,18 @@ Each cost real time or coverage this week, and none of them raises anything.
    established: the harness reproduces unbinned values at factor 1 to −0.0000,
    so the bias is a property of the binning and not of the validation.
 
-   `BG_MATCH_BIN = 1` — **pending, not yet shipped**. It is proposed in
-   `keflavich/jwst_scripts#16` and is in neither that repo's `main` nor the
-   deployed `jwst_scripts/scripts/gc_treasury_rgb_images.py`, so a reader sent to check the
-   guard today will not find it. Carry the measured pairs in the comment and
-   the instruction not to re-enable without re-running that comparison. The
+   `BG_MATCH_BIN = 1`, with the measured pairs in the comment and an
+   instruction not to re-enable without re-running that comparison.
+
+   **Shipped in `keflavich/jwst_scripts` main (via #17), NOT in the checkout
+   the cron runs.** Verified 2026-09-15: `origin/main` carries
+   `BG_MATCH_BIN = 1` at line 548, four occurrences; the deployed
+   `/orange/adamginsburg/jwst/jwst_scripts/` sits at an older merge and its
+   copy of the script contains the name zero times, while
+   `30 * * * * .../jwst_scripts/scripts/gc_treasury_cron.sh` runs from that
+   checkout every hour. The guard exists and the running deployment does not
+   have it; pulling that checkout is what closes the gap. Check the deployed
+   file rather than the repo before relying on this. The
    transferable rule: **any shortcut in a measurement that feeds a correction
    needs comparison against unshortcut values before it ships**, and the
    comparison has to be checked against itself at the identity setting.
