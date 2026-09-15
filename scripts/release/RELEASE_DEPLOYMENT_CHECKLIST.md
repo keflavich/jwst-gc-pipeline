@@ -424,9 +424,9 @@ report `NOMATCH` and are excluded from both the build loop and the pending
 report (`jwst_scripts#13`). A coverage gap that reports itself as a build
 failure will not be found by looking at build failures.
 
-### Two silent-failure mechanisms to know about
+### Five silent-failure mechanisms to know about
 
-Both cost real coverage this week, and neither raises anything.
+Each cost real time or coverage this week, and none of them raises anything.
 
 1. **A held lock starves the inventory.** The builder takes `.auto.lock` so the
    cron cannot re-coadd mid-rebuild. `cmd_auto` hits the held lock, prints one
@@ -445,7 +445,47 @@ Both cost real coverage this week, and neither raises anything.
 2. **A missing input reported as a build failure** — the `MIRI_MATCH_JSON` case
    above.
 
-3. **A rebuild that is not queued but stalled, with nothing saying so.** A job
+3. **A coadd inherits its first input's release date.** `coadd_hips` writes
+   `reference_properties = all_properties[0]` verbatim, and new observations
+   sort last, so a full rebuild advertises the date of its OLDEST member and
+   reports "unchanged". On 2026-09-15 the corrected MIRI coadd — every field
+   rebuilt, measured at 0.000″ — carried the date already published, and
+   `publish_hips_layers.py` said "up to date" about a tree it had never
+   copied. Fixed upstream by stamping the coadd (`jwst_scripts#14`);
+   `publish_hips_layers.py --force` exists for the general case of a date that
+   is wrong for any reason.
+
+   Note the symmetry with the cron recoadd above: one puts a fresh date on
+   stale content, the other a stale date on fresh content. **A date gate is
+   blind in both directions**, which is why the accuracy check is a measured
+   offset and not a timestamp.
+
+   Stamping a layer changes no tiles, but the SERVED copy keeps advertising
+   the old date until it is republished — so stamp, then publish, or the fix
+   stops one hop short of the reader.
+
+4. **An optimisation that is "obviously harmless" to a measurement feeding a
+   correction.** Block-averaging frames 8× before measuring pairwise
+   background offsets looked free — a background offset is large-scale and
+   should survive binning — and produced plausible numbers. Validated against
+   unbinned values from the same code, it shifted every pair by about **−0.6,
+   the same size as the offsets being solved for**, and would have corrupted
+   every tile's correction while reading as a 64× speedup.
+
+   The cause is **unconfirmed** and deliberately recorded as such: footprint
+   edges via `np.nanmean` over partly-blank blocks was disproved by strict NaN
+   propagation, and a noise/sigma-clipping explanation is plausible and
+   untested. A recorded guess is how the next person gets misled. What IS
+   established: the harness reproduces unbinned values at factor 1 to −0.0000,
+   so the bias is a property of the binning and not of the validation.
+
+   `BG_MATCH_BIN = 1`, with the measured pairs in the comment and an
+   instruction not to re-enable without re-running that comparison. The
+   transferable rule: **any shortcut in a measurement that feeds a correction
+   needs comparison against unshortcut values before it ships**, and the
+   comparison has to be checked against itself at the identity setting.
+
+5. **A rebuild that is not queued but stalled, with nothing saying so.** A job
    behind a few hundred of the same user's own jobs in a burst QOS does not
    start, and `Reason=Priority` reads identically at minute one and at hour
    nineteen. The 51-task treasury AVM fix sat 19 h that way while
