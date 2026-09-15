@@ -145,3 +145,54 @@ def test_only_tile_files_are_counted():
     # so any consistent rule works.
     assert ph.count_tiles(lambda root: iter(tree), '/r') == 3
     assert ph.count_tiles(lambda root: iter([('/r', [], [])]), '/r') == 0
+
+
+# --- --force: fresh content under a stale date -------------------------------
+
+SAME = 'hips_release_date = 2026-09-15T04:19Z\n'
+
+
+def test_the_date_gate_skips_an_unchanged_date_by_default():
+    """What keeps the hourly path from re-copying 10,000 tiles for nothing."""
+    from scripts.monitoring import publish_hips_layers as P
+    assert P.needs_publish(SAME, SAME) is False
+
+
+def test_force_publishes_anyway():
+    """The date is the BUILDER's claim about itself, and a builder can rewrite
+    every tile without advancing it. On 2026-09-15 the MIRI treasury coadd was
+    rebuilt with the corrected AVM in all 34 fields and kept the 04:19 date
+    already published, so the corrected layer was unpublishable by its own
+    publisher."""
+    from scripts.monitoring import publish_hips_layers as P
+    assert P.needs_publish(SAME, SAME, force=True) is True
+
+
+def test_force_does_not_change_the_normal_newer_case():
+    from scripts.monitoring import publish_hips_layers as P
+    newer = 'hips_release_date = 2026-09-15T06:00Z\n'
+    assert P.needs_publish(newer, SAME) is True
+    assert P.needs_publish(newer, SAME, force=True) is True
+
+
+def test_force_reaches_both_destinations():
+    """Publishing one host and not the other is the split the tool exists to
+    prevent; a flag that only reached one would reintroduce it."""
+    import inspect
+    from scripts.monitoring import publish_hips_layers as P
+    for fn in (P.publish_local, P.publish_remote):
+        assert 'force' in inspect.signature(fn).parameters, fn.__name__
+    src = inspect.getsource(P.main)
+    assert 'publish_local(name, src, dry=args.dry_run, force=args.force)' in src
+    assert 'force=args.force) or rc' in src
+
+
+def test_force_still_verifies_before_swapping():
+    """It bypasses the DATE gate, not the staging and verification -- a forced
+    publish of a half-written tree must still refuse."""
+    import inspect
+    from scripts.monitoring import publish_hips_layers as P
+    for fn in (P.publish_local, P.publish_remote):
+        body = inspect.getsource(fn)
+        assert 'verify(' in body, fn.__name__
+        assert '.new' in body, fn.__name__
