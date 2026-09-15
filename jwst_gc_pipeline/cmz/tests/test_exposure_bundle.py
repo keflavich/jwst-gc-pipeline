@@ -1686,3 +1686,33 @@ def test_public_is_what_grants_anonymous_read(sr, monkeypatch):
     ran.clear()
     sr.set_acl('gc-treasury', 'v9-test', '/ignored', public=True)
     assert [c[-1] for c in ran] == ['--all-authenticated', '--anonymous']
+
+
+def test_set_acl_still_answers_to_the_argument_guards(sr, monkeypatch, tmp_path,
+                                                      capsys):
+    """Moving the grant ahead of discovery must not move it ahead of argparse.
+
+    Above the `--version` guard it reached `field_release_dir` with None and
+    raised TypeError where argparse should have said what was missing; above
+    `--check-exposures` it published a release without ever running the check
+    the user asked for.
+    """
+    monkeypatch.setattr(sr, 'set_acl', lambda *a, **kw: None)
+    with pytest.raises(SystemExit) as caught:
+        sr.main(['--field', 'gc-treasury', '--release-root', str(tmp_path),
+                 '--set-acl'])
+    assert caught.value.code == 2
+    assert '--version is required' in capsys.readouterr().err
+
+    # --check-exposures wins: publishing is not a substitute for checking
+    seen = []
+    monkeypatch.setattr(sr, 'check_exposures',
+                        lambda *a, **kw: seen.append(a) or 0)
+    granted = []
+    monkeypatch.setattr(sr, 'set_acl', lambda *a, **kw: granted.append(a))
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v9-test',
+                  '--release-root', str(tmp_path), '--set-acl',
+                  '--check-exposures'])
+    assert rc == 0
+    assert len(seen) == 1
+    assert granted == []
