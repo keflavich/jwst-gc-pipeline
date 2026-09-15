@@ -508,6 +508,31 @@ Each cost real time or coverage this week, and none of them raises anything.
    going to run" look the same from the outside, and only the second one means
    the shipped layer stays wrong.
 
+### When the default rendering flavour changes
+
+A layer can be current, correct and complete and still look wrong to someone
+who knew the previous one. `jwst_gc_treasury_vminmax_hips` renders every image
+with **one fixed pair of cuts, `vmin = -0.5`, `vmax = 100 MJy/sr`**, rather than
+per-image percentiles, so brightness is comparable between tiles — which is the
+point of it, and why it becomes the default.
+
+`vmax` sits **below the 99th percentile in both filters**: about **3.4% of
+F480M and 1.5% of F212N pixels saturate**. That is intended and was approved on
+the numbers, not an oversight. It does mean the default layer clips bright
+regions harder than the percentile layer it replaces, so **say so in the
+release note** — otherwise the first person to compare them reports it as a
+regression, and the second one "fixes" it.
+
+Keep the percentile layer published alongside rather than replacing it: it is
+the comparison that makes the clipping legible.
+
+Switching the default is **three** changes, not one, and doing only the first
+adds a layer nobody selects:
+
+1. `field_overview.SURVEYS` — the release index's survey list;
+2. `skyview.SURVEYS` — the monitor's background list;
+3. the monitor's default-background constant, which pins a layer **by name**.
+
 ### Ownership
 
 The treasury HiPS builds belong to the **avm-hips** session; it publishes them
