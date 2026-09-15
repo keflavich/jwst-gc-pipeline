@@ -348,21 +348,46 @@ nothing for the other, so check both:
    product. Fixed in `keflavich/jwst_scripts#11` (`avm_for_saved_png`);
    rebuild in progress as of 2026-09-14.
 
-**The cheap check** — no reprojection needed. Read `Spatial.ReferencePixel`
-from the PNG's AVM and compare with the source FITS `CRPIX`:
+**The cheap check, and the limit on it.** Read `Spatial.ReferencePixel` from
+the PNG's AVM and compare with the source FITS `CRPIX`:
 
-* equal to `CRPIX` → **affected**;
-* equal to `NAXIS + 1 - CRPIX` → **fixed**.
+* equal to `CRPIX` → raw form;
+* equal to `NAXIS + 1 - CRPIX` → reflected form.
 
-Run it over every PNG feeding a layer, not a sample: on 2026-09-14 the build
-directory was *mixed* — 2 of 20 treasury PNGs carried the corrected AVM and 18
-did not, and one (o109) had tiles predating the AVM they claim. A mixed input
-set produces a mosaic that is wrong in patches, which no single-tile spot check
-finds. `publish_hips_layers.py`'s verification (properties parses, Norder3
-present, tile count matches) does **not** catch either condition.
+⚠ **This is only decisive for layers built through ONE known code path.** It
+tells you which AVM *form* is embedded, not whether that form matches the PNG's
+pixel orientation, and those are independent: a PNG whose pixels are rotated
+180° *needs* the reflected reference pixel, one whose pixels are not rotated
+needs the raw one, and both are correct.
 
-For a release, prefer a measured offset against the source mosaic over any
-proxy.
+It is valid for the **GC Treasury** layers, which all come from
+`gc_treasury_rgb_images.py` with `flip=-1` and `ROTATE_180`, so the pixel
+orientation is fixed and the reference pixel alone settles it. It is **not**
+valid for the older CMZ layers, hand-built by many scripts over years. Using it
+there produced a confident 105″ error report for SgrA MIRI that measurement
+then disproved — both SgrA layers are correctly placed, written by different
+paths, each internally consistent.
+
+Run it over every PNG feeding a layer, not a sample: on 2026-09-14 the treasury
+build directory was *mixed* (2 of 20 corrected), and on 2026-09-15 it still was
+(NIRCam 14 corrected / 18 not; MIRI 14 / 20) because the 51-task fix array had
+been queued ~19 h on `Priority` and never started. A mixed input set produces a
+mosaic wrong in patches — and unlike a uniform offset, it cannot be corrected
+by a single shift afterwards. `publish_hips_layers.py`'s verification
+(properties parses, Norder3 present, tile count matches) catches none of this.
+
+**The general test is a content comparison**: reproject the PNG through its
+embedded AVM onto the source grid and cross-correlate. Two conditions on it,
+both of which produced false clean results in practice:
+
+* **Require a correlation floor.** A cutout on blank sky returns a tidy-looking
+  `offset 0.033″` at `r = 0.00`. Below about `r = 0.35` there is no
+  measurement, only a number. Report `r` beside every offset.
+* **Place the cutout on the data, not the frame centre.** These mosaics are
+  mostly empty — the SgrA grid is 12.4% valid — so a centre cutout is usually
+  blank, which is how the floor above gets exercised.
+
+For a release, prefer a measured offset with its correlation over any proxy.
 
 ### Complete — a third question, separate from both
 
