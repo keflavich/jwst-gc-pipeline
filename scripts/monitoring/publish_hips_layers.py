@@ -170,8 +170,12 @@ def publish_local(name, src, dry=False):
         return 0
     stage = dst + '.new'
     expect = count_tiles(os.walk, src)
-    rc = _run(['rm', '-rf', stage], dry) or \
-        _run(['rsync', '-a', src + '/', stage + '/'], dry)
+    rc = _run(['rm', '-rf', stage], dry)
+    if rc and not dry:
+        print(f'  {name} docroot: could not clear the staging path rc={rc} -- '
+              f'nothing transferred, live layer untouched', file=sys.stderr)
+        return rc
+    rc = _run(['rsync', '-a', src + '/', stage + '/'], dry)
     if rc and not dry:
         subprocess.call(['rm', '-rf', stage])
         print(f'  {name} docroot: TRANSFER FAILED rc={rc} -- live layer '
@@ -205,8 +209,12 @@ def publish_remote(name, src, dry=False, host=WEB_HOST, web_dir=WEB_DIR):
         return 0
     stage = dst + '.new'
     expect = count_tiles(os.walk, src)
-    rc = _run(['ssh', host, f'rm -rf {shlex.quote(stage)}'], dry) or \
-        _run(['rsync', '-az', src + '/', f'{host}:{stage}/'], dry)
+    rc = _run(['ssh', host, f'rm -rf {shlex.quote(stage)}'], dry)
+    if rc and not dry:
+        print(f'  {name} {host}: could not clear the staging path rc={rc} -- '
+              f'nothing transferred, live layer untouched', file=sys.stderr)
+        return rc
+    rc = _run(['rsync', '-az', src + '/', f'{host}:{stage}/'], dry)
     if rc and not dry:
         # A failed transfer used to return here having printed NOTHING, so a
         # publish that moved no bytes was indistinguishable from one that had

@@ -186,40 +186,65 @@ def test_a_layer_mid_rebuild_is_refused_rather_than_shipped_partial():
                      2007, 11426) == 'tile count 2007 != source 11426'
 
 
-def test_a_failed_transfer_says_so_and_leaves_no_staging(tmp_path, capsys,
-                                                         monkeypatch):
+@pytest.mark.parametrize('where', ['docroot', 'remote'])
+def test_a_failed_transfer_says_so_and_leaves_no_staging(where, tmp_path,
+                                                         capsys, monkeypatch):
     """A publish that moved no bytes must not look like one with nothing to do.
 
     Measured on 2026-09-15: an rsync of 11,430 tiles was killed by a caller's
-    `timeout`, and the run printed only the docroot line. starformation stayed
-    eight hours behind with a 1.2 GB partial `.new` beside the live layer, and
-    the only way to notice was to go and look at the served properties.
+    `timeout`, and the run printed only its docroot line and exited 0.
+    starformation stayed eight hours behind with a 1.2 GB partial `.new` beside
+    the live layer, and the only way to notice was to fetch the served
+    properties by hand.
+
+    Both call sites, because the docroot one is not the milder case: its
+    staging path is `dst + '.new'` INSIDE the directory the host serves, so a
+    killed rsync leaves a partial pyramid next to the live layer on the machine
+    publishing it.
     """
     src = tmp_path / 'src'
     (src / 'Norder3').mkdir(parents=True)
     (src / 'properties').write_text('hips_release_date = 2026-09-15T20:12Z\n')
     (src / 'Norder3' / 'Npix1.png').write_bytes(b'x')
 
-    calls = []
-
     def fake_run(cmd, dry=False):
-        calls.append(cmd)
         return 124 if cmd[0] == 'rsync' else 0        # 124 = timeout's rc
 
     monkeypatch.setattr(ph, '_run', fake_run)
     removed = []
     monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: removed.append(cmd) or 0)
-    monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
 
-    rc = ph.publish_remote('zz_layer', str(src), host='zz_host',
-                           web_dir='/zz')
+    if where == 'remote':
+        monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+        rc = ph.publish_remote('zz_layer', str(src), host='zz_host',
+                               web_dir='/zz')
+        stage = '/zz/zz_layer.new'
+    else:
+        monkeypatch.setattr(ph, 'DOCROOT', str(tmp_path / 'docroot'))
+        monkeypatch.setattr(ph, '_read_local', lambda path: (
+            None if 'docroot' in path else (src / 'properties').read_text()))
+        rc = ph.publish_local('zz_layer', str(src))
+        stage = str(tmp_path / 'docroot' / 'zz_layer.new')
+
     assert rc == 124
     err = capsys.readouterr().err
     assert 'TRANSFER FAILED' in err and 'rc=124' in err
     assert 'live layer untouched' in err
     # the partial staging tree is removed rather than left to be mistaken for
     # progress by the next person who looks
-    assert any('rm -rf' in ' '.join(c) and '.new' in ' '.join(c)
+    assert any(stage in ' '.join(c) and 'rm' in ' '.join(c)
                for c in removed), removed
     # and nothing was swapped
     assert not any('mv ' in ' '.join(c) for c in removed), removed
+
+
+def test_a_staging_path_that_cannot_be_cleared_is_not_reported_as_a_transfer():
+    """`rc = _run(rm) or _run(rsync)` reported TRANSFER FAILED when nothing had
+    been transferred. The two failures want different words: one says the
+    destination is unwritable, the other that the bytes did not arrive."""
+    import inspect
+    for fn in (ph.publish_local, ph.publish_remote):
+        body = inspect.getsource(fn)
+        assert 'could not clear the staging path' in body, fn.__name__
+        assert "_run(['rm', '-rf', stage], dry) or" not in body
+        assert "rm -rf {shlex.quote(stage)}'], dry) or" not in body
