@@ -119,14 +119,34 @@ def test_both_serving_destinations_are_covered():
     assert ph.WEB_HOST
 
 
-def test_the_three_treasury_layers_are_registered():
+def test_every_published_layer_is_registered_explicitly():
+    """The list is a diff, never a glob -- adding a public layer is a decision.
+
+    The CMZ overview coadds are here for a different reason from the treasury
+    ones: they are BUILT in the docroot, so their local step is a no-op and
+    what they need is the second destination. starformation had no scheduled
+    path to them at all, and its `jwst_nir_hips` fell 14 months behind.
+    """
     assert set(ph.LAYERS) == {
         'jwst_gc_treasury_hips',
         'jwst_gc_treasury_miri_hips',
         'jwst_gc_treasury_miri_bgmatch_hips',
+        'jwst_nir_hips',
+        'jwst_miri_hips',
     }
     for name, src in ph.LAYERS.items():
         assert src.endswith('/' + name), (name, src)
+
+
+def test_a_docroot_built_layer_does_not_copy_over_itself():
+    """For the CMZ coadds the source IS the docroot copy, so the local publish
+    must be a no-op rather than an rm -rf and a re-copy of a tree onto itself.
+    `needs_publish` comparing a properties file against itself is what makes
+    that safe, so it is asserted rather than assumed."""
+    for name in ('jwst_nir_hips', 'jwst_miri_hips'):
+        assert ph.LAYERS[name] == f'{ph.DOCROOT}/{name}'
+    same = 'hips_release_date = 2026-09-15T20:15Z\n'
+    assert not ph.needs_publish(same, same)
 
 
 def test_an_unknown_layer_name_is_an_error_not_a_silent_no_op(capsys):

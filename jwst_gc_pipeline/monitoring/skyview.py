@@ -160,8 +160,22 @@ SURVEYS = (
     ('2MASS', 'P/2MASS/color', ''),
     ('Spitzer', 'CDS/P/SPITZER/color', ''),
     ('WISE', 'P/allWISE/color', ''),
-    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/',
-     'the survey mosaic — zoom in past ~10′ for it to appear'),
+    # Named explicitly rather than through the `jwst_cmz_hips` alias this
+    # entry used to use.  Two reasons, and the first one broke the button:
+    # the alias is a symlink that exists only in the data.rc docroot, so this
+    # URL -- on starformation -- 404s, and Aladin renders a 404 layer as
+    # nothing at all with no message.  (`field_overview.py` named its layers
+    # explicitly for the second reason and incidentally avoided this one.)
+    # Second: the alias points at `jwst_nir_hips`, so "JWST CMZ" was the
+    # near-infrared mosaic wearing a name that sounds like it covers
+    # everything, while the MIRI mosaic beside it was not offered at all.
+    ('JWST CMZ NIRCam',
+     'https://starformation.astro.ufl.edu/avm_images/jwst_nir_hips/',
+     'the near-infrared survey mosaic — zoom in past ~10′ for it to appear'),
+    ('JWST CMZ MIRI',
+     'https://starformation.astro.ufl.edu/avm_images/jwst_miri_hips/',
+     'the mid-infrared mosaic over the same fields — different sky at a '
+     'different wavelength, not a rendering of the layer above'),
 )
 
 

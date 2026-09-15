@@ -51,11 +51,23 @@ import sys
 
 #: Layers to distribute, and where each is BUILT.  Explicit on purpose -- see 1.
 BUILD_ROOT = '/orange/adamginsburg/jwst/gc-treasury/pngs'
+#: Where the CMZ overview coadds are built, which is the docroot itself.
+DOCROOT_BUILD = '/orange/adamginsburg/web/public/avm_images'
 LAYERS = {
     'jwst_gc_treasury_hips': f'{BUILD_ROOT}/jwst_gc_treasury_hips',
     'jwst_gc_treasury_miri_hips': f'{BUILD_ROOT}/jwst_gc_treasury_miri_hips',
     'jwst_gc_treasury_miri_bgmatch_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_miri_bgmatch_hips',
+    # The CMZ overview coadds are rebuilt IN PLACE in the docroot by
+    # `rebuild_jwst_cmz_hips.py`, so for these the docroot is the build
+    # location and the local step is a no-op by construction: `needs_publish`
+    # compares a properties file against itself, reports "up to date", and
+    # nothing is copied or removed. What they need is the second destination.
+    # Without them here, starformation had no scheduled path to these layers
+    # at all -- its jwst_nir_hips copy was 14 months behind the docroot's
+    # (2025-07-05 against 2026-09-15) and nothing reported it.
+    'jwst_nir_hips': f'{DOCROOT_BUILD}/jwst_nir_hips',
+    'jwst_miri_hips': f'{DOCROOT_BUILD}/jwst_miri_hips',
 }
 
 #: Served directly by data.rc.
