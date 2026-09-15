@@ -253,6 +253,32 @@ FIELDS = {
     # o050 is DELIBERATELY absent: it has no current mosaic at all, every
     # product of it is quarantined, and it was the worst-aligned pointing
     # (~5.6"). Re-add it here once it has been re-reduced and tied.
+    # gc-treasury: JWST 10678, the Treasury programme.  Registered here so its
+    # DETECTOR FRAMES can be released while the reduction is still running.
+    # There is no `proposal_prefix` observation token and no `miri:` list
+    # because this entry ships no mosaic: 10678's tiles land level-2 only (no
+    # image3 association at delivery, see `treasury-tiles-land-level2-only`),
+    # and the pipeline's own drizzles are mid-flight.  The frames are a
+    # DEPENDENCY of those mosaics, so they are complete and releasable now.
+    # Stage with `--exposures-only --exposures-from-disk`; a plain `--stage`
+    # would look for mosaics and find none.
+    #
+    # Every observation the registry knows is listed rather than globbed: the
+    # enumerator SCOPES the pipeline-directory scan to these (proposal,
+    # observation) pairs, and all 33 tiles keep their frames in one
+    # `<FILTER>/pipeline/` directory per filter.  An observation with nothing
+    # on disk yet simply contributes no frames.
+    "gc-treasury": {
+        "data_dir": Path("/orange/adamginsburg/jwst/gc-treasury"),
+        "proposal_prefix": "jw10678",
+        "observations": [
+            "o098", "o100", "o102", "o105", "o106", "o107", "o108", "o109",
+            "o111", "o112", "o113", "o114", "o116", "o117", "o118", "o120",
+            "o121", "o122", "o123", "o124", "o125", "o126", "o127", "o128",
+            "o129", "o130", "o131", "o132", "o133", "o134", "o135", "o137",
+            "o138", "o139",
+        ],
+    },
     "gc2211": {
         "data_dir": Path("/orange/adamginsburg/jwst/gc2211"),
         "proposal_prefix": "jw02211",

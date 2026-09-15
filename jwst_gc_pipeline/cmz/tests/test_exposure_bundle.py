@@ -1470,3 +1470,77 @@ def test_the_page_passes_the_release_build_time_to_the_tie_section(mw,
     assert 'F212N' not in page                     # measured after this release
     manifest_later = dict(manifest, built='2026-09-01T00:00:00')
     assert 'F212N' in mw.render_field_page('zz_test', manifest_later, None)
+
+
+# ---- a release that ships frames and nothing else ----
+def _exposures_only_manifest(sr, eb, nircam_field):
+    """A manifest with detector frames and NO mosaic or catalog.
+
+    This is what `--exposures-only --exposures-from-disk` writes, and what
+    10678 released on 2026-09-15: the tiles land level-2 only, so the frames
+    exist and the mosaics do not yet.
+    """
+    manifest = _manifest(sr, eb, nircam_field)
+    manifest['files'] = [f for f in manifest['files']
+                         if f['category'] == eb.EXPOSURE_CATEGORY]
+    manifest['exposure_mode'] = 'hardlink'
+    return manifest
+
+
+def test_a_frames_only_release_says_why_there_are_no_mosaics(mw, sr, eb,
+                                                             nircam_field):
+    """An empty table under a heading cannot be read.
+
+    A reader seeing `Mosaic images` over a bare header row cannot tell a
+    withheld mosaic from one that was never drizzled, and the difference is
+    the whole provenance question.  The page has to say which it is.
+    """
+    page = mw.render_field_page('f', _exposures_only_manifest(sr, eb,
+                                                              nircam_field),
+                                None)
+    assert 'No mosaics in this release.' in page
+    assert 'No catalogs in this release.' in page
+    # and the reason names the actual relationship, not just the absence
+    assert 'input to the mosaics' in page
+    # the frames are still the deliverable
+    assert 'Detector-frame exposures' in page
+    assert '/exposures/F212N/' in page
+
+
+def test_a_frames_only_release_renders_no_empty_table(mw, sr, eb,
+                                                      nircam_field):
+    """The header row is the part that reads as a broken page, so assert the
+    table is gone rather than that a sentence was added beside it."""
+    page = mw.render_field_page('f', _exposures_only_manifest(sr, eb,
+                                                              nircam_field),
+                                None)
+    assert '<th>Type</th><th>Iteration</th>' not in page
+    assert '<table><tr><th>Catalog</th>' not in page
+    # the same page WITH mosaics and a catalog still draws both tables
+    manifest = _manifest(sr, eb, nircam_field)
+    manifest['files'] = manifest['files'] + [{
+        'category': 'catalog', 'kind': 'catalog_full', 'filter': None,
+        'iteration': 'm7', 'observation': None, 'instrument': 'NIRCam',
+        'dest': 'catalogs/f_merged.fits', 'size_bytes': 1024,
+        'version': 'v9-test',
+        'url': sr.GLOBUS_HTTPS_BASE + '/releases/v9-test/f/catalogs/f_merged.fits',
+    }]
+    full = mw.render_field_page('f', manifest, None)
+    assert '<th>Type</th><th>Iteration</th>' in full
+    assert '<table><tr><th>Catalog</th>' in full
+    assert 'No mosaics in this release.' not in full
+    assert 'No catalogs in this release.' not in full
+
+
+def test_the_index_card_counts_frames_when_that_is_all_there_is(mw):
+    """`0 images  0 catalogs` reads as a broken release."""
+    card = mw._card_counts({'n_images': 0, 'n_catalogs': 0,
+                            'n_exposures': 1974})
+    assert '1,974 detector-frame exposures' == card
+    # a normal release keeps its own wording, with the frames named beside it
+    mixed = mw._card_counts({'n_images': 12, 'n_catalogs': 3,
+                             'n_exposures': 96})
+    assert '12 images' in mixed and '3 catalogs' in mixed and '96 exposures' in mixed
+    # and a release with no frames says nothing about them
+    assert 'exposures' not in mw._card_counts({'n_images': 12, 'n_catalogs': 3,
+                                               'n_exposures': 0})
