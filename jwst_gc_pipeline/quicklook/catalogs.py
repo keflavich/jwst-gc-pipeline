@@ -340,10 +340,21 @@ def pair_bands(blue_coords, blue_mag, red_coords, red_mag,
     number, and the separations are used only to reject pairs.
 
     Nearest-neighbour and NOT one-to-one: several blue detections can claim the
-    same red source, since nothing rejects a red source already taken.  In a
-    field this crowded that happens.  Acceptable for a density map -- it
-    duplicates a red magnitude rather than inventing one -- and it would not be
-    for anything that counted sources or measured a luminosity function.
+    same red source, since nothing rejects a red source already taken.  It
+    happens, and the cost is now measured rather than asserted -- over the ten
+    treasury pointings on 2026-09-15, 889,443 pairs covered 850,633 distinct
+    F480M sources, a duplication factor of **1.046** (worst pointing o139 at
+    1.063).  Acceptable for a density map at that level -- it duplicates a red
+    magnitude rather than inventing one -- and it would not be for anything
+    that counted sources or measured a luminosity function.
+
+    Note the direction: this is each BLUE source's nearest red, because the
+    diagram is about F212N-detected completeness.  The catalogue-overlay tool
+    matches the other way round, F480M-primary, because it selects red objects
+    and wants one row per long-wave detection.  The two are answering different
+    questions, so their pair TOTALS are not comparable -- different ceilings
+    (2.17M F212N rows against 1.07M F480M).  Compare distinct-F480M-in-pairs
+    against that tool's total instead.
 
     Returns ``(blue_mag, red_mag)`` for the matched pairs.
     """
