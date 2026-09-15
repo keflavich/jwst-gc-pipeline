@@ -238,13 +238,48 @@ def test_a_failed_transfer_says_so_and_leaves_no_staging(where, tmp_path,
     assert not any('mv ' in ' '.join(c) for c in removed), removed
 
 
-def test_a_staging_path_that_cannot_be_cleared_is_not_reported_as_a_transfer():
-    """`rc = _run(rm) or _run(rsync)` reported TRANSFER FAILED when nothing had
-    been transferred. The two failures want different words: one says the
-    destination is unwritable, the other that the bytes did not arrive."""
-    import inspect
-    for fn in (ph.publish_local, ph.publish_remote):
-        body = inspect.getsource(fn)
-        assert 'could not clear the staging path' in body, fn.__name__
-        assert "_run(['rm', '-rf', stage], dry) or" not in body
-        assert "rm -rf {shlex.quote(stage)}'], dry) or" not in body
+@pytest.mark.parametrize('where', ['docroot', 'remote'])
+def test_a_pre_clean_failure_is_named_as_itself(where, tmp_path, capsys,
+                                                monkeypatch):
+    """`rc = _run(rm) or _run(rsync)` called a failed pre-clean a failed
+    TRANSFER. The two want different words -- one says the destination could
+    not be cleared, the other that the bytes did not arrive -- and someone
+    debugging the first while being told the second loses real time.
+
+    Asserted behaviourally. The version of this test that read
+    `inspect.getsource` and checked two literal forms were absent passed
+    happily on a recombination that kept the phrase in a comment and moved the
+    `or` to the next line: it caught the edit it was written against rather
+    than the behaviour. What the source could not express is the last
+    assertion here -- that the transfer never ran at all.
+    """
+    src = tmp_path / 'src'
+    (src / 'Norder3').mkdir(parents=True)
+    (src / 'properties').write_text('hips_release_date = 2026-09-15T20:12Z\n')
+    (src / 'Norder3' / 'Npix1.png').write_bytes(b'x')
+
+    ran = []
+
+    def fake_run(cmd, dry=False):
+        ran.append(cmd)
+        return 1 if ('rm' in cmd[0] or 'rm -rf' in ' '.join(cmd)) else 0
+
+    monkeypatch.setattr(ph, '_run', fake_run)
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: 0)
+
+    if where == 'remote':
+        monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+        rc = ph.publish_remote('zz_layer', str(src), host='zz_host',
+                               web_dir='/zz')
+    else:
+        monkeypatch.setattr(ph, 'DOCROOT', str(tmp_path / 'docroot'))
+        monkeypatch.setattr(ph, '_read_local', lambda path: (
+            None if 'docroot' in path else (src / 'properties').read_text()))
+        rc = ph.publish_local('zz_layer', str(src))
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert 'could not clear the staging path' in err
+    assert 'TRANSFER FAILED' not in err
+    # the thing the source-reading version could not say
+    assert not any(c[0] == 'rsync' for c in ran), ran
