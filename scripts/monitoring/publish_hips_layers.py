@@ -104,13 +104,28 @@ def release_date(properties_text):
     return m.group(1).strip() if m else None
 
 
-def needs_publish(src_props, dst_props):
+def needs_publish(src_props, dst_props, force=False):
     """Is the source strictly newer than the destination?
 
     Unknown on EITHER side means yes.  The failure this avoids is a silent
     no-op: a destination whose properties cannot be read looks "same" to any
     equality test, and the layer then never updates again.
+
+    ``force`` exists because the date is the BUILDER's claim about itself, and
+    a builder can rewrite every tile without advancing it.  That happened on
+    2026-09-15: the MIRI treasury coadd was rebuilt at 05:59 with the corrected
+    AVM in all 34 fields, and its ``hips_release_date`` still read the 04:19
+    value already published, so this returned False and the corrected layer was
+    unpublishable by its own publisher.  Fresh content under a stale date is
+    the mirror of the case the checklist already warns about, and the date gate
+    cannot see either.
+
+    The gate stays on by default.  It is what keeps the hourly path from
+    re-copying 10,000 tiles for nothing, and that is worth more than making the
+    rare case automatic.
     """
+    if force:
+        return True
     src, dst = release_date(src_props), release_date(dst_props)
     if src is None or dst is None:
         return True
@@ -161,11 +176,12 @@ def _read_remote(host, path):
     return done.stdout if done.returncode == 0 else None
 
 
-def publish_local(name, src, dry=False):
+def publish_local(name, src, dry=False, force=False):
     """Docroot copy (what data.rc serves), staged and swapped."""
     dst = os.path.join(DOCROOT, name)
     src_props = _read_local(os.path.join(src, 'properties'))
-    if not needs_publish(src_props, _read_local(os.path.join(dst, 'properties'))):
+    if not needs_publish(src_props, _read_local(os.path.join(dst, 'properties')),
+                         force=force):
         print(f'  {name} docroot: up to date')
         return 0
     stage = dst + '.new'
@@ -200,11 +216,13 @@ def publish_local(name, src, dry=False):
     return 0
 
 
-def publish_remote(name, src, dry=False, host=WEB_HOST, web_dir=WEB_DIR):
+def publish_remote(name, src, dry=False, host=WEB_HOST, web_dir=WEB_DIR,
+                   force=False):
     """starformation copy, staged and verified REMOTELY before the swap."""
     dst = f'{web_dir}/{name}'
     src_props = _read_local(os.path.join(src, 'properties'))
-    if not needs_publish(src_props, _read_remote(host, f'{dst}/properties')):
+    if not needs_publish(src_props, _read_remote(host, f'{dst}/properties'),
+                         force=force):
         print(f'  {name} {host}: up to date')
         return 0
     stage = dst + '.new'
@@ -264,6 +282,10 @@ def main(argv=None):
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--skip-remote', action='store_true',
                     help='docroot only (no ssh; for a host without web access)')
+    ap.add_argument('--force', action='store_true',
+                    help='publish even when hips_release_date says up to date '
+                         '-- for a rebuild that changed tiles without advancing '
+                         'the date. Still staged and verified before the swap.')
     args = ap.parse_args(argv)
 
     names = args.layer or sorted(LAYERS)
@@ -282,9 +304,10 @@ def main(argv=None):
             print(f'  source missing: {src}', file=sys.stderr)
             rc = rc or 1
             continue
-        rc = publish_local(name, src, dry=args.dry_run) or rc
+        rc = publish_local(name, src, dry=args.dry_run, force=args.force) or rc
         if not args.skip_remote:
-            rc = publish_remote(name, src, dry=args.dry_run) or rc
+            rc = publish_remote(name, src, dry=args.dry_run,
+                                force=args.force) or rc
     return rc
 
 

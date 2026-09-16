@@ -283,3 +283,71 @@ def test_a_pre_clean_failure_is_named_as_itself(where, tmp_path, capsys,
     assert 'TRANSFER FAILED' not in err
     # the thing the source-reading version could not say
     assert not any(c[0] == 'rsync' for c in ran), ran
+
+# --- --force: fresh content under a stale date -------------------------------
+
+SAME = 'hips_release_date = 2026-09-15T04:19Z\n'
+
+
+def test_the_date_gate_skips_an_unchanged_date_by_default():
+    """What keeps the hourly path from re-copying 10,000 tiles for nothing."""
+    from scripts.monitoring import publish_hips_layers as P
+    assert P.needs_publish(SAME, SAME) is False
+
+
+def test_force_publishes_anyway():
+    """The date is the BUILDER's claim about itself, and a builder can rewrite
+    every tile without advancing it. On 2026-09-15 the MIRI treasury coadd was
+    rebuilt with the corrected AVM in all 34 fields and kept the 04:19 date
+    already published, so the corrected layer was unpublishable by its own
+    publisher."""
+    from scripts.monitoring import publish_hips_layers as P
+    assert P.needs_publish(SAME, SAME, force=True) is True
+
+
+def test_force_does_not_change_the_normal_newer_case():
+    from scripts.monitoring import publish_hips_layers as P
+    newer = 'hips_release_date = 2026-09-15T06:00Z\n'
+    assert P.needs_publish(newer, SAME) is True
+    assert P.needs_publish(newer, SAME, force=True) is True
+
+
+def test_force_reaches_both_destinations(tmp_path, monkeypatch):
+    """Publishing one host and not the other is the split the tool exists to
+    prevent; a flag that only reached one would reintroduce it.
+
+    Driven through `main()` with both publishers stubbed, rather than by
+    matching source text. The string this used to assert --
+    `'force=args.force) or rc'` -- is satisfied by the LOCAL call site on its
+    own, so deleting `force` from the remote call left the suite green while
+    shipping a `--force` that republishes data.rc and silently skips
+    starformation: the exact split named above.
+    """
+    layer = tmp_path / 'zz_layer'
+    layer.mkdir()
+    monkeypatch.setattr(ph, 'LAYERS', {'zz_layer': str(layer)})
+    seen = {}
+    monkeypatch.setattr(ph, 'publish_local',
+                        lambda name, src, dry=False, force=False:
+                        seen.setdefault('local', force) and 0 or 0)
+    monkeypatch.setattr(ph, 'publish_remote',
+                        lambda name, src, dry=False, force=False:
+                        seen.setdefault('remote', force) and 0 or 0)
+
+    assert ph.main(['--layer', 'zz_layer', '--force']) == 0
+    assert seen == {'local': True, 'remote': True}, seen
+
+    seen.clear()
+    assert ph.main(['--layer', 'zz_layer']) == 0
+    assert seen == {'local': False, 'remote': False}, seen
+
+
+def test_force_still_verifies_before_swapping():
+    """It bypasses the DATE gate, not the staging and verification -- a forced
+    publish of a half-written tree must still refuse."""
+    import inspect
+    from scripts.monitoring import publish_hips_layers as P
+    for fn in (P.publish_local, P.publish_remote):
+        body = inspect.getsource(fn)
+        assert 'verify(' in body, fn.__name__
+        assert '.new' in body, fn.__name__
