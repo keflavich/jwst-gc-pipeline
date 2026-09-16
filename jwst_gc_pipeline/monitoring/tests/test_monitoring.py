@@ -1286,12 +1286,22 @@ def test_every_filter_of_a_wildcard_field_is_ambiguous():
     assert scan.shared_filters('ngc6334', 'miri') == set()
 
 
-def test_a_wildcard_field_says_why_it_cannot_be_probed():
+def test_a_wildcard_field_says_why_it_cannot_be_probed(tmp_path, monkeypatch):
     """``plan_probe`` fed the wildcard to ``resolve``, which zero-pads it to
     ``'00*'`` -- a key no registry lookup answers.  The error that came back
     told the operator to register ``nircam: ['00*']``, which fields.yaml does
     not accept, about a field that is already registered.
+
+    The tree is pinned to an empty one because this test used to read the live
+    one, which made it a statement about the machine rather than about the
+    code.  On a host with no ``/orange`` it passed; on a host with the real
+    gc-treasury tree the wildcard scan found observations on disk, resolved one
+    and planned a probe successfully -- so the test failed while the behaviour
+    it names was intact.  An empty tree is the condition the message is about:
+    a wildcard field with no observation to pick.
     """
+    monkeypatch.setattr(scan, 'basepath', lambda *a, **k: str(tmp_path))
+    scan.clear_cache()
     got = probe.plan_probe('gc-treasury')
     assert 'error' in got, got
     assert 'claims every observation' in got['error'], got['error']
