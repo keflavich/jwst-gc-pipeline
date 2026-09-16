@@ -382,7 +382,12 @@ def test_page_states_the_product_and_that_they_are_not_frozen(mw, sr, eb,
                                                               nircam_field):
     page = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
     assert 'destreak_o001_crf' in page
-    assert "links to the pipeline's own frames" in page
+    # The wording moved off the maintainer's framing ("links, not frozen
+    # copies", which is about how the release is stored) onto the reader's
+    # ("live products", which is about what they get and whether it can
+    # change). Both facts still have to be on the page.
+    assert "pipeline's live products rather than" in page
+    assert 'older generation than the pipeline now holds' in page
     assert 'CHECKSUMS.sha256' in page
 
 
@@ -1716,3 +1721,68 @@ def test_set_acl_still_answers_to_the_argument_guards(sr, monkeypatch, tmp_path,
     assert rc == 0
     assert len(seen) == 1
     assert granted == []
+
+
+# ---- what produced the frames ----
+def test_the_page_states_the_command_and_the_ramp_setting(mw, sr, eb,
+                                                          nircam_field):
+    """A release page that does not say what produced the files is asking the
+    reader to trust it. The Stage-1 setting is the one that changes what is IN
+    them: with `suppress_one_group` on, a 1-group ramp is discarded instead of
+    fit, and the brightest stars lose their only unsaturated measurement.
+    """
+    manifest = _manifest(sr, eb, nircam_field)
+    for item in manifest['files']:
+        if item['category'] == eb.EXPOSURE_CATEGORY:
+            item['provenance'] = {'GCTAG': '2026-09-13_PR867_dca0c5d-dirty',
+                                  'CAL_VER': '1.21.0.dev314+g61bd2fe47',
+                                  'CRDS_CTX': 'jwst_1596.pmap'}
+    page = mw.render_field_page('f', manifest, None)
+
+    assert 'How these frames were produced' in page
+    assert 'PipelineRerunNIRCAM-LONG.py' in page
+    assert 'suppress_one_group=False' in page
+    assert '1-group ramp is FIT' in page
+    # the versions come from the staged files, not from the running checkout
+    assert '2026-09-13_PR867_dca0c5d-dirty' in page
+    assert 'jwst_1596.pmap' in page
+
+
+def test_the_internal_storage_note_is_gone(mw, sr, eb, nircam_field):
+    """`they cost no extra storage` is an accounting note to the maintainer.
+    What a downloader needs from that paragraph is that the frames are live
+    products and are not checksummed."""
+    page = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
+    assert 'cost no extra storage' not in page
+    assert 'CHECKSUMS.sha256' in page          # the part that is for the reader
+
+
+def test_several_pipeline_versions_are_reported_as_several(mw, sr, eb,
+                                                           nircam_field):
+    """The frames of one release are reduced over days as tiles arrive, so
+    there is no single version. Quoting one would be the useful-looking wrong
+    answer; the page shows each with its frame count."""
+    manifest = _manifest(sr, eb, nircam_field)
+    frames = [i for i in manifest['files']
+              if i['category'] == eb.EXPOSURE_CATEGORY]
+    assert len(frames) >= 2, 'fixture needs at least two frames'
+    for i, item in enumerate(frames):
+        item['provenance'] = {'GCTAG': f'2026-09-1{3 + (i % 2)}_PR{867 + i}_abc'}
+    page = mw.render_field_page('f', manifest, None)
+    for item in frames:
+        assert item['provenance']['GCTAG'] in page
+    assert 'More than one <code>GCTAG</code>' in page
+
+
+def test_the_ramp_setting_on_the_page_is_the_one_the_pipeline_passes():
+    """The page states a parameter that the JWST metadata does not record --
+    `cal_step.ramp_fit` says COMPLETE, never with what -- so the only thing
+    keeping the claim true is the source it is read from. If the pipeline stops
+    passing it, this fails rather than the page quietly lying."""
+    import re
+    root = os.path.normpath(os.path.join(_REL, '..', '..'))
+    for name in ('PipelineRerunNIRCAM-LONG.py', 'PipelineMIRI.py',
+                 'PipelineRerunNIRISS.py'):
+        path = os.path.join(root, 'jwst_gc_pipeline', 'reduction', name)
+        src = open(path).read()
+        assert re.search(r"'suppress_one_group'\s*:\s*False", src), name

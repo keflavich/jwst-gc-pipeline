@@ -2394,6 +2394,34 @@ def stage(items, field, version, release_root, mode, do_checksum,
     return field_dir
 
 
+#: Provenance a released detector frame carries in its own primary header.
+#: `GCTAG`/`GCPIPEV` are stamped by `jwst_gc_pipeline.provenance` on every FITS
+#: write; the other two are the JWST calibration pipeline's own.  Recorded at
+#: STAGING time rather than read at page-build time: the frames are links to
+#: live pipeline products, so a header read months later describes whatever the
+#: pipeline holds then, not what this release shipped.
+FRAME_PROVENANCE_KEYS = ("GCTAG", "GCPIPEV", "CAL_VER", "CRDS_CTX")
+
+
+def frame_provenance(path):
+    """``{keyword: value}`` for the provenance keywords a frame carries.
+
+    Missing keywords are omitted rather than recorded as None: absent is a
+    fact about the file and an empty string would read as a measured blank.
+    """
+    # Imported here rather than at module scope, like the other astropy uses in
+    # this file: a top-level astropy import costs every caller of this script,
+    # including the ones that never open a FITS file.
+    from astropy.io import fits
+    try:
+        header = fits.getheader(path, 0)
+    except (OSError, ValueError) as err:
+        print(f"  WARNING: cannot read provenance from {path} ({err})")
+        return {}
+    return {key: str(header[key]).strip()
+            for key in FRAME_PROVENANCE_KEYS if key in header}
+
+
 def _exposures_from_disk(field, version, field_dir):
     """Exposure items enumerated from the pipeline directories, no mosaic needed.
 
@@ -2421,6 +2449,7 @@ def _exposures_from_disk(field, version, field_dir):
                 "filter": filt, "iteration": None, "observation": obs,
                 "instrument": "MIRI" if "mirimage" in path.name else "NIRCam",
                 "src": str(path), "version": version,
+                "provenance": frame_provenance(path),
             })
     for it in items:
         it["dest"] = str(assign_dest(it, field))
