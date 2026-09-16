@@ -114,3 +114,27 @@ def test_main_adds_the_card_once_the_explorer_is_there(tmp_path):
     html = _run_main(out, _empty_release(tmp_path))
     assert "href='cmd_explorer.html'" in html
     assert html.count('Colour-magnitude explorer') == 1
+
+
+def test_the_panner_card_is_gated_on_the_page_existing(tmp_path, monkeypatch):
+    """Same rule as the CMD explorer: the panner is built by its own script
+    from the per-field HiPS layers, so on a machine without them a card would
+    point at a 404."""
+    import importlib.util, os
+    _rel = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', '..', '..', 'scripts', 'release')
+    spec = importlib.util.spec_from_file_location(
+        'make_webpage', os.path.normpath(os.path.join(_rel, 'make_webpage.py')))
+    mw = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mw)
+
+    quicklooks = list(mw.QUICKLOOKS)
+    assert not any(h == mw.PANNER_FILE for h, _, _ in quicklooks)
+
+    without = mw.render_index([], quicklooks=tuple(quicklooks))
+    assert mw.PANNER_FILE not in without
+
+    with_card = mw.render_index([], quicklooks=tuple(quicklooks)
+                                + (mw.PANNER_CARD,))
+    assert mw.PANNER_FILE in with_card
+    assert 'Slow panner' in with_card

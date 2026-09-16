@@ -1630,6 +1630,15 @@ CMD_VIEWER_CARD = (
     "diagram for the whole sample and for whichever pointing is under the "
     "cursor.")
 
+#: Built by ``scripts/quicklook/build_panner.py``, gated the same way: it needs
+#: the per-field HiPS layers, so on a machine without them the card would point
+#: at a 404.
+PANNER_FILE = "slow_panner.html"
+PANNER_CARD = (
+    PANNER_FILE, "Slow panner",
+    "The Treasury mosaic at its own pixel scale, drifting across the "
+    "pointings that have imagery. Nothing to drive -- leave it running.")
+
 
 def _quicklook_cards(quicklooks):
     """Link cards for the analyses that sit alongside the release."""
@@ -2071,6 +2080,8 @@ def main(argv=None):
     quicklooks = list(QUICKLOOKS)
     if (out_dir / CMD_VIEWER_FILE).exists():
         quicklooks.append(CMD_VIEWER_CARD)
+    if (out_dir / PANNER_FILE).exists():
+        quicklooks.append(PANNER_CARD)
     index_html = render_index(index_fields, overview_html=overview_html,
                               quicklooks=tuple(quicklooks))
     if cmz_explorer_link:
