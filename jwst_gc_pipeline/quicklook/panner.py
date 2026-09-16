@@ -121,11 +121,16 @@ function step(now) {
   // A leg the builder marked as a cut is crossed instantly: the survey is not
   // one contiguous block, and panning the gap in real time is minutes of empty
   // sky rather than a view of the data.
-  while (ends[0].jump) {
+  // Bounded: an all-cut tour would spin here forever inside
+  // requestAnimationFrame and freeze the tab with nothing in the console. The
+  // builder refuses to write one, and this is the second line of defence for a
+  // hand-edited tour file.
+  for (var guard = 0; ends[0].jump && guard < TOUR.stops.length; guard++) {
     leg = (leg + 1) % TOUR.stops.length;
     along = 0;
     ends = legPoints(leg);
   }
+  if (ends[0].jump) { return; }
   var span = sep([ends[0].ra, ends[0].dec], [ends[1].ra, ends[1].dec]);
   if (span < 1e-6) { leg = (leg + 1) % TOUR.stops.length; along = 0; return; }
   along += (TOUR.rate * rate * dt) / span;
@@ -133,11 +138,12 @@ function step(now) {
     along -= 1;
     leg = (leg + 1) % TOUR.stops.length;
     ends = legPoints(leg);
-    while (ends[0].jump) {
+    for (var g2 = 0; ends[0].jump && g2 < TOUR.stops.length; g2++) {
       leg = (leg + 1) % TOUR.stops.length;
       along = 0;
       ends = legPoints(leg);
     }
+    if (ends[0].jump) { return; }
     span = sep([ends[0].ra, ends[0].dec], [ends[1].ra, ends[1].dec]);
     if (span < 1e-6) { along = 0; break; }
   }

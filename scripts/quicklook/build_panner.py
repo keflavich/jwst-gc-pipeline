@@ -111,6 +111,18 @@ def build(args):
     for i, span in enumerate(legs):
         path[i]['jump'] = span > args.max_leg * 60
     panned = [span for span, stop in zip(legs, path) if not stop['jump']]
+    if not panned:
+        # Every leg a cut is a tour with nothing to watch, and the page has no
+        # defence against it: its skip loop advances until it finds a leg to
+        # pan and would spin forever inside requestAnimationFrame, freezing the
+        # tab with no error. Refuse BEFORE writing -- the summary line used to
+        # raise on max() of an empty list, after both files were on disk, so a
+        # tour nobody could watch was published and the crash looked like the
+        # build had failed to produce one.
+        raise SystemExit(
+            f'every leg is longer than --max-leg={args.max_leg}\' , so the '
+            f'tour would cut between all {len(path)} stops and pan across '
+            f'none of them. Raise --max-leg.')
     total = sum(panned)
     tour = {'survey': args.survey, 'fov': args.fov, 'rate': args.rate,
             'stops': path}
