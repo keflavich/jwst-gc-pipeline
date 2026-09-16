@@ -9,6 +9,7 @@ frames that are not the ones behind its own mosaic.
 import importlib.util
 import json
 import os
+import re
 
 import pytest
 
@@ -381,7 +382,12 @@ def test_page_states_the_product_and_that_they_are_not_frozen(mw, sr, eb,
                                                               nircam_field):
     page = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
     assert 'destreak_o001_crf' in page
-    assert "links to the pipeline's own frames" in page
+    # The wording moved off the maintainer's framing ("links, not frozen
+    # copies", which is about how the release is stored) onto the reader's
+    # ("live products", which is about what they get and whether it can
+    # change). Both facts still have to be on the page.
+    assert "pipeline's live products rather than" in page
+    assert 'older generation than the pipeline now holds' in page
     assert 'CHECKSUMS.sha256' in page
 
 
@@ -1470,3 +1476,384 @@ def test_the_page_passes_the_release_build_time_to_the_tie_section(mw,
     assert 'F212N' not in page                     # measured after this release
     manifest_later = dict(manifest, built='2026-09-01T00:00:00')
     assert 'F212N' in mw.render_field_page('zz_test', manifest_later, None)
+
+
+# ---- a release that ships frames and nothing else ----
+def _exposures_only_manifest(sr, eb, nircam_field):
+    """A manifest with detector frames and NO mosaic or catalog.
+
+    This is what `--exposures-only --exposures-from-disk` writes, and what
+    10678 released on 2026-09-15: the tiles land level-2 only, so the frames
+    exist and the mosaics do not yet.
+    """
+    manifest = _manifest(sr, eb, nircam_field)
+    manifest['files'] = [f for f in manifest['files']
+                         if f['category'] == eb.EXPOSURE_CATEGORY]
+    manifest['exposure_mode'] = 'hardlink'
+    return manifest
+
+
+def test_a_frames_only_release_says_why_there_are_no_mosaics(mw, sr, eb,
+                                                             nircam_field):
+    """An empty table under a heading cannot be read.
+
+    A reader seeing `Mosaic images` over a bare header row cannot tell a
+    withheld mosaic from one that was never drizzled, and the difference is
+    the whole provenance question.  The page has to say which it is.
+    """
+    page = mw.render_field_page('f', _exposures_only_manifest(sr, eb,
+                                                              nircam_field),
+                                None)
+    assert 'No mosaics in this release.' in page
+    assert 'No catalogs in this release.' in page
+    # and the reason names the actual relationship, not just the absence
+    assert 'input to the mosaics' in page
+    # the frames are still the deliverable
+    assert 'Detector-frame exposures' in page
+    assert '/exposures/F212N/' in page
+
+
+def test_a_frames_only_release_renders_no_empty_table(mw, sr, eb,
+                                                      nircam_field):
+    """The header row is the part that reads as a broken page, so assert the
+    table is gone rather than that a sentence was added beside it."""
+    page = mw.render_field_page('f', _exposures_only_manifest(sr, eb,
+                                                              nircam_field),
+                                None)
+    assert '<th>Type</th><th>Iteration</th>' not in page
+    assert '<table><tr><th>Catalog</th>' not in page
+    # the same page WITH mosaics and a catalog still draws both tables
+    manifest = _manifest(sr, eb, nircam_field)
+    manifest['files'] = manifest['files'] + [{
+        'category': 'catalog', 'kind': 'catalog_full', 'filter': None,
+        'iteration': 'm7', 'observation': None, 'instrument': 'NIRCam',
+        'dest': 'catalogs/f_merged.fits', 'size_bytes': 1024,
+        'version': 'v9-test',
+        'url': sr.GLOBUS_HTTPS_BASE + '/releases/v9-test/f/catalogs/f_merged.fits',
+    }]
+    full = mw.render_field_page('f', manifest, None)
+    assert '<th>Type</th><th>Iteration</th>' in full
+    assert '<table><tr><th>Catalog</th>' in full
+    assert 'No mosaics in this release.' not in full
+    assert 'No catalogs in this release.' not in full
+
+
+def test_the_index_card_counts_frames_when_that_is_all_there_is(mw):
+    """`0 images  0 catalogs` reads as a broken release."""
+    card = mw._card_counts({'n_images': 0, 'n_catalogs': 0,
+                            'n_exposures': 1974})
+    assert '1,974 detector-frame exposures' == card
+    # a normal release keeps its own wording, with the frames named beside it
+    mixed = mw._card_counts({'n_images': 12, 'n_catalogs': 3,
+                             'n_exposures': 96})
+    assert '12 images' in mixed and '3 catalogs' in mixed and '96 exposures' in mixed
+    # and a release with no frames says nothing about them
+    assert 'exposures' not in mw._card_counts({'n_images': 12, 'n_catalogs': 3,
+                                               'n_exposures': 0})
+
+
+# ---- the scoping that an empty observation list silently removes ----
+def _two_observation_tree(tmp_path):
+    """A field directory holding two observations' frames in ONE filter dir,
+    which is how every multi-tile field on disk is laid out."""
+    pipeline = tmp_path / 'F212N' / 'pipeline'
+    pipeline.mkdir(parents=True)
+    for obs in ('001', '002'):
+        for exp in ('00001', '00002'):
+            (pipeline / f'jw12345{obs}001_02101_{exp}_nrca1_destreak_'
+                        f'o{obs}_crf.fits').write_bytes(b'')
+    return {'data_dir': tmp_path, 'proposal_prefix': 'jw12345'}
+
+
+def test_an_empty_observation_list_pools_every_tile_into_one_bundle(eb, tmp_path):
+    """The failure this guards is not an empty release -- it is a differently
+    shaped one, with no error.
+
+    `enumerate_field_exposures` skips its scoping filter when the list is empty
+    (`if keys and (prop, obs) not in keys`), and `multi` is
+    `bool(observations)`, so dropping the list keeps every frame and throws
+    away which observation each belongs to: one unlabelled bundle per filter,
+    staged into one directory, every tile pooled.
+    """
+    cfg = _two_observation_tree(tmp_path)
+
+    scoped = eb.enumerate_field_exposures(dict(cfg, observations=['o001', 'o002']),
+                                          'zz_test')
+    assert sorted(scoped) == [('o001', 'F212N'), ('o002', 'F212N')]
+    assert all(obs is not None for obs, _ in scoped)
+
+    unscoped = eb.enumerate_field_exposures(dict(cfg, observations=[]), 'zz_test')
+    assert sorted(unscoped) == [(None, 'F212N')]
+    # same frames, one heading -- which is why the list must never be emptied
+    assert (sum(len(v) for v in unscoped.values())
+            == sum(len(v) for v in scoped.values()))
+
+
+def test_the_treasury_entry_keeps_its_observation_list(sr):
+    """gc-treasury ships 34 tiles out of one directory per filter, so its
+    entry carries the scoping that `enumerate_field_exposures` needs."""
+    entry = sr.FIELDS['gc-treasury']
+    observations = entry.get('observations')
+    assert observations, 'the list is what scopes the scan; it cannot be empty'
+    assert all(re.fullmatch(r'o\d{3}', o) for o in observations)
+    keys = eb_module().field_observation_keys(entry)
+    assert {prop for prop, _ in keys} == {'10678'}
+    assert len(keys) == len(observations)
+
+
+def eb_module():
+    return _load('exposure_bundle', os.path.join(_REL, 'exposure_bundle.py'))
+
+
+def test_a_frames_only_release_does_not_claim_a_mosaic_drizzled_them(
+        mw, sr, eb, nircam_field):
+    """"the mosaics above were drizzled from" describes something that is not
+    on a frames-only page, and the provenance claim is genuinely weaker there:
+    the frames come from a directory scan, not from an association."""
+    page = mw.render_field_page('f', _exposures_only_manifest(sr, eb,
+                                                              nircam_field),
+                                None)
+    assert 'the mosaics above were drizzled from' not in page
+    assert 'No mosaic has been drizzled from them yet' in page
+    # the normal page keeps the stronger claim
+    full = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
+    assert 'the mosaics above were drizzled from' in full
+
+
+def test_the_page_names_the_registered_observations_it_lacks(mw):
+    """32 groups with no list leaves a reader unable to tell a complete tile
+    from one registered last week with nothing reduced."""
+    exposures = [{'observation': 'o127'}, {'observation': 'o128'}]
+    note = mw._coverage_note('gc-treasury', exposures)
+    assert '2 of' in note
+    assert 'o098' in note                       # registered, nothing reduced
+    assert 'o127' not in note                   # present, so not listed absent
+
+    full = [{'observation': o}
+            for o in mw.FIELDS['gc-treasury']['observations']]
+    assert 'All' in mw._coverage_note('gc-treasury', full)
+    # a field with no registry observation list says nothing rather than guessing
+    assert mw._coverage_note('zz_not_a_field', exposures) == ''
+
+
+# ---- publishing a release is not the same as staging one ----
+def test_set_acl_without_stage_actually_grants(sr, monkeypatch, tmp_path):
+    """`--set-acl` on an already-staged release used to hit the dry-run early
+    return: "Dry run." printed, exit 0, and the release still private.
+
+    A command that reports success while doing nothing is the failure mode that
+    hides longest, because the person checking is the person who ran it.
+    """
+    field_dir = tmp_path / 'v9-test' / 'gc-treasury'
+    field_dir.mkdir(parents=True)
+    (field_dir / 'MANIFEST.json').write_text('{}')
+
+    # The real entry's data_dir is a cluster path that does not exist on a CI
+    # runner. It should not matter -- granting access to an already-staged
+    # release says nothing about the pipeline disk -- and this test is what
+    # says so: it points the entry at an empty tmp tree and still expects the
+    # ACL to be granted.
+    data_dir = tmp_path / 'pipeline'
+    data_dir.mkdir()
+    monkeypatch.setitem(sr.FIELDS['gc-treasury'], 'data_dir', data_dir)
+
+    calls = []
+    monkeypatch.setattr(sr, 'set_acl',
+                        lambda *a, **kw: calls.append((a, kw)))
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v9-test',
+                  '--release-root', str(tmp_path), '--set-acl'])
+    assert rc == 0
+    assert len(calls) == 1, 'the ACL was never granted'
+
+    # ... and with no staged release there is nothing to publish, which is an
+    # error rather than a silent grant on a path that holds nothing.
+    calls.clear()
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v-absent',
+                  '--release-root', str(tmp_path), '--set-acl'])
+    assert rc == 1
+    assert calls == []
+
+
+def test_public_is_what_grants_anonymous_read(sr, monkeypatch):
+    """`all_authenticated_users` still requires a free Globus login. It tests
+    green for whoever runs it -- they are already logged in -- and stops every
+    reader without a Globus account, which is most readers of a paper."""
+    ran = []
+    monkeypatch.setattr(sr.subprocess, 'run',
+                        lambda cmd, **kw: ran.append(cmd))
+    monkeypatch.setattr(sr, 'field_release_dir',
+                        lambda *a, **kw: sr.GLOBUS_COLLECTION_ROOT / 'releases'
+                        / 'v9-test' / 'gc-treasury')
+
+    sr.set_acl('gc-treasury', 'v9-test', '/ignored')
+    assert [c[-1] for c in ran] == ['--all-authenticated']
+
+    ran.clear()
+    sr.set_acl('gc-treasury', 'v9-test', '/ignored', public=True)
+    assert [c[-1] for c in ran] == ['--all-authenticated', '--anonymous']
+
+
+def test_set_acl_still_answers_to_the_argument_guards(sr, monkeypatch, tmp_path,
+                                                      capsys):
+    """Moving the grant ahead of discovery must not move it ahead of argparse.
+
+    Above the `--version` guard it reached `field_release_dir` with None and
+    raised TypeError where argparse should have said what was missing; above
+    `--check-exposures` it published a release without ever running the check
+    the user asked for.
+    """
+    monkeypatch.setattr(sr, 'set_acl', lambda *a, **kw: None)
+    with pytest.raises(SystemExit) as caught:
+        sr.main(['--field', 'gc-treasury', '--release-root', str(tmp_path),
+                 '--set-acl'])
+    assert caught.value.code == 2
+    assert '--version is required' in capsys.readouterr().err
+
+    # --check-exposures wins: publishing is not a substitute for checking
+    seen = []
+    monkeypatch.setattr(sr, 'check_exposures',
+                        lambda *a, **kw: seen.append(a) or 0)
+    granted = []
+    monkeypatch.setattr(sr, 'set_acl', lambda *a, **kw: granted.append(a))
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v9-test',
+                  '--release-root', str(tmp_path), '--set-acl',
+                  '--check-exposures'])
+    assert rc == 0
+    assert len(seen) == 1
+    assert granted == []
+
+
+# ---- what produced the frames ----
+def test_the_page_states_the_command_and_the_ramp_setting(mw, sr, eb,
+                                                          nircam_field):
+    """A release page that does not say what produced the files is asking the
+    reader to trust it. The Stage-1 setting is the one that changes what is IN
+    them: with `suppress_one_group` on, a 1-group ramp is discarded instead of
+    fit, and the brightest stars lose their only unsaturated measurement.
+    """
+    manifest = _manifest(sr, eb, nircam_field)
+    for item in manifest['files']:
+        if item['category'] == eb.EXPOSURE_CATEGORY:
+            item['provenance'] = {'GCTAG': '2026-09-13_PR867_dca0c5d-dirty',
+                                  'CAL_VER': '1.21.0.dev314+g61bd2fe47',
+                                  'CRDS_CTX': 'jwst_1596.pmap'}
+    page = mw.render_field_page('f', manifest, None)
+
+    assert 'How these frames were produced' in page
+    assert 'PipelineRerunNIRCAM-LONG.py' in page
+    assert 'suppress_one_group=False' in page
+    assert '1-group ramp is FIT' in page
+    # the versions come from the staged files, not from the running checkout
+    assert '2026-09-13_PR867_dca0c5d-dirty' in page
+    assert 'jwst_1596.pmap' in page
+
+
+def test_the_internal_storage_note_is_gone(mw, sr, eb, nircam_field):
+    """`they cost no extra storage` is an accounting note to the maintainer.
+    What a downloader needs from that paragraph is that the frames are live
+    products and are not checksummed."""
+    page = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
+    assert 'cost no extra storage' not in page
+    assert 'CHECKSUMS.sha256' in page          # the part that is for the reader
+
+
+def test_several_pipeline_versions_are_reported_as_several(mw, sr, eb,
+                                                           nircam_field):
+    """The frames of one release are reduced over days as tiles arrive, so
+    there is no single version. Quoting one would be the useful-looking wrong
+    answer; the page shows each with its frame count."""
+    manifest = _manifest(sr, eb, nircam_field)
+    frames = [i for i in manifest['files']
+              if i['category'] == eb.EXPOSURE_CATEGORY]
+    assert len(frames) >= 2, 'fixture needs at least two frames'
+    for i, item in enumerate(frames):
+        item['provenance'] = {'GCTAG': f'2026-09-1{3 + (i % 2)}_PR{867 + i}_abc'}
+    page = mw.render_field_page('f', manifest, None)
+    for item in frames:
+        assert item['provenance']['GCTAG'] in page
+    assert 'More than one <code>GCTAG</code>' in page
+
+
+def test_the_ramp_setting_on_the_page_is_the_one_the_pipeline_passes():
+    """The page states a parameter that the JWST metadata does not record --
+    `cal_step.ramp_fit` says COMPLETE, never with what -- so the only thing
+    keeping the claim true is the source it is read from. If the pipeline stops
+    passing it, this fails rather than the page quietly lying."""
+    import re
+    root = os.path.normpath(os.path.join(_REL, '..', '..'))
+    for name in ('PipelineRerunNIRCAM-LONG.py', 'PipelineMIRI.py',
+                 'PipelineRerunNIRISS.py'):
+        path = os.path.join(root, 'jwst_gc_pipeline', 'reduction', name)
+        src = open(path).read()
+        # quote-agnostic: the neighbouring "refpix" key is already written
+        # both ways in the same dict literal
+        assert re.search(r"""["']suppress_one_group["']\s*:\s*False""", src), name
+        assert re.search(r"""["']refpix["']\s*:\s*\{\s*["']use_side_ref_pixels""",
+                         src), name
+        # The page says `expand_large_events` is NOT disabled despite a source
+        # comment saying it should be.  If someone acts on that comment, this
+        # fails rather than the page keeping a claim that has quietly become
+        # false -- the page claim with the least chance of being noticed.
+        assert 'expand_large_events' not in re.sub(r'#[^\n]*', '', src), name
+
+
+def test_staging_records_the_provenance_the_frames_carry(sr, tmp_path,
+                                                         monkeypatch):
+    """The page renders what the MANIFEST holds, so the rendering tests pass
+    whether or not anything ever recorded it.
+
+    Dropping `"provenance": frame_provenance(path)` from `_exposures_from_disk`
+    leaves every page test green and ships a release whose version table is
+    silently absent. This is the assertion that fails instead.
+
+    Compared against what the file says rather than against literals: the
+    GCTAG/GCPIPEV cards are stamped at WRITE time by
+    `jwst_gc_pipeline.provenance`, so a fixture that writes them reads back the
+    current checkout's values, not the ones it typed. Asserting equality with
+    `fits.getheader` makes this "recorded what the file says" rather than
+    "recorded what I typed twice".
+    """
+    from astropy.io import fits
+    import numpy as np
+
+    data_dir = tmp_path / 'field'
+    pipeline = data_dir / 'F212N' / 'pipeline'
+    pipeline.mkdir(parents=True)
+    frame = pipeline / 'jw12345001001_02101_00001_nrca1_destreak_o001_crf.fits'
+    hdu = fits.PrimaryHDU(np.zeros((2, 2), dtype='float32'))
+    hdu.header['CAL_VER'] = '1.21.0.dev314+g61bd2fe47'
+    hdu.header['CRDS_CTX'] = 'jwst_1596.pmap'
+    fits.HDUList([hdu]).writeto(frame)
+
+    monkeypatch.setitem(sr.FIELDS, 'zz_prov', {
+        'data_dir': data_dir, 'proposal_prefix': 'jw12345',
+        'observations': ['o001'],
+    })
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path)
+
+    items = sr._exposures_from_disk('zz_prov', 'v9-test',
+                                    tmp_path / 'v9-test' / 'zz_prov')
+    assert len(items) == 1, items
+    recorded = items[0].get('provenance')
+    assert recorded, 'nothing recorded the frame provenance'
+
+    # Named, not read from the constant under test. Taking the expectation
+    # from `sr.FRAME_PROVENANCE_KEYS` means a constant that lists less is
+    # asked for less: narrowing it to ("CAL_VER", "CRDS_CTX") dropped GCTAG
+    # and GCPIPEV from every staged release and every version table with the
+    # suite still green. Those two are the pipeline-identifying pair the
+    # fifteen-distinct-tags reporting rests on.
+    expected = {'GCTAG', 'GCPIPEV', 'CAL_VER', 'CRDS_CTX'}
+    assert set(sr.FRAME_PROVENANCE_KEYS) == expected
+    on_disk = fits.getheader(frame, 0)
+    for key in sorted(expected):
+        assert key in recorded, key
+        assert recorded[key] == str(on_disk[key]).strip(), key
+
+
+def test_the_recorded_keys_and_the_rendered_keys_are_the_same_set(sr, mw):
+    """The list lives twice -- `stage_release` records it, `make_webpage`
+    renders it -- and nothing compared them. Narrowing either alone drops rows
+    from the version table silently, since the renderer only shows keys it
+    knows and the recorder only writes keys it lists."""
+    assert set(sr.FRAME_PROVENANCE_KEYS) == set(mw.FRAME_PROVENANCE_ORDER)

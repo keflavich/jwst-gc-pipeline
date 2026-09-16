@@ -28,9 +28,15 @@ ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
 #: HiPS layers under the footprints, in paint order (last on top).  Same URLs
 #: and the same order as the main viewer, so the two pages show the same sky.
 _AVM = 'https://starformation.astro.ufl.edu/avm_images/'
+#: `vminmax` is the NIRCam layer, matching the main viewer's default: fixed
+#: asinh cuts, so one surface brightness is one colour across the whole mosaic.
+#: The per-field percentile build stretches each tile on its own pixel
+#: distribution, which renders equal sky as unequal colour at every seam --
+#: wrong for a page whose point is comparing one pointing against the rest.
 HIPS_LAYERS = (
     ('tmiri', _AVM + 'jwst_gc_treasury_miri_hips/', 'Treasury MIRI (F770W)'),
-    ('tnir', _AVM + 'jwst_gc_treasury_hips/', 'Treasury NIRCam (F212N/F480M)'),
+    ('tnir', _AVM + 'jwst_gc_treasury_vminmax_hips/',
+     'Treasury NIRCam (F212N/F480M)'),
 )
 
 #: Fallback background, used while the treasury layers are sparse.
@@ -94,6 +100,20 @@ def render(data, data_href=DATA_FILE,
     blue = data['bands']['blue'].upper()
     red = data['bands']['red'].upper()
 
+    lineages = data.get('lineages') or {}
+    mixed_html = ''
+    if len(lineages) > 1:
+        rows = '; '.join(
+            f"<b>{html.escape(k)}</b> &mdash; {', '.join(html.escape(i) for i in v)}"
+            for k, v in sorted(lineages.items()))
+        mixed_html = (
+            f"<div class='warn'><b>Mixed reductions.</b> The pooled grey "
+            f"diagram combines fields from more than one reduction chain: "
+            f"{rows}. <code>resbgsub</code> is residual-background-subtracted "
+            f"&mdash; a different reduction, not a later pass &mdash; so a "
+            f"colour offset between those fields and the rest would be a "
+            f"property of the processing, not of the sky.</div>")
+
     partial = [f for f in fields if f.get('partial')]
     partial_html = ''
     if partial:
@@ -147,6 +167,7 @@ def render(data, data_href=DATA_FILE,
       Magnitudes are <b>Vega</b>. Built {html.escape(str(data.get('built', '')))}.
       Grid {data['grid']['nx']} hexagons wide.</p>
     {waiting_html}
+    {mixed_html}
     {partial_html}
     <div class=warn><b>Quicklook, not a release.</b> These are the catalogs that
       exist right now, cross-matched between the two filters at
@@ -176,6 +197,7 @@ var cmdEl = document.getElementById('cmd');
 var labelEl = document.getElementById('cmdlabel');
 var tilesEl = document.getElementById('tiles');
 var DATA = null, aladin = null, byId = {}, hovered = null, pinned = null;
+var footOv = null, hiOv = null;
 
 // Viridis at 9 stops, interpolated.  Enough for a density map: the eye reads
 // the ramp, not the individual stops, and a 256-entry table is 8x the bytes
@@ -191,6 +213,9 @@ function ramp(t) {
                   Math.round(a[1] + f * (b[1] - a[1])) + ',' +
                   Math.round(a[2] + f * (b[2] - a[2])) + ')';
 }
+
+// The selection colour, one value for the map outline and the ledger row.
+var HILITE = '#f0b429';
 
 function grey(t) {
   // Floor at 45 so the sparsest occupied cell is still visible against the
@@ -297,6 +322,28 @@ function drawCMD(field) {
   Array.prototype.forEach.call(tilesEl.rows, function (row) {
     row.classList.toggle('on', !!field && row.dataset.id === field.id);
   });
+  highlight(field);
+}
+
+// The map half of the same selection.  Every path that changes which field the
+// diagram shows runs through drawCMD, so the outline is driven from there
+// rather than from each listener -- a click on the ledger, a click on the sky,
+// a hover and an unpin all have to agree about which tile is current, and
+// three listeners each setting it their own way is how they stop agreeing.
+function highlight(field) {
+  if (!hiOv) { return; }
+  // `removeAll` is the v3 API; a build without it gets a rebuilt overlay
+  // rather than a stale outline left on the sky.
+  if (typeof hiOv.removeAll === 'function') {
+    hiOv.removeAll();
+  } else {
+    if (typeof aladin.removeOverlay === 'function') { aladin.removeOverlay(hiOv); }
+    hiOv = A.graphicOverlay({color: HILITE, lineWidth: 3, name: 'Selected tile'});
+    aladin.addOverlay(hiOv);
+  }
+  if (field && field.polys) {
+    field.polys.forEach(function (poly) { hiOv.add(A.polygon(poly)); });
+  }
 }
 
 function show(field) {
@@ -325,7 +372,8 @@ function buildTable() {
       tr.classList.add('partial');
     }
     cell(tr, f.n.toLocaleString(), 'num');
-    cell(tr, f.partial ? f.modules.join('+') : f.source, 'num');
+    cell(tr, f.lineage && f.lineage !== 'plain' ? f.lineage
+            : (f.partial ? f.modules.join('+') : f.source), 'num');
     tr.addEventListener('mouseenter', function () { show(f); });
     tr.addEventListener('mouseleave', function () { show(null); });
     tr.addEventListener('click', function () {
@@ -366,12 +414,16 @@ function fieldAt(px, py) {
 }
 
 function drawFootprints() {
-  var ov = A.graphicOverlay({color: '#58a6ff', lineWidth: 1.4,
+  footOv = A.graphicOverlay({color: '#58a6ff', lineWidth: 1.4,
                              name: 'Treasury pointings with catalogs'});
-  aladin.addOverlay(ov);
+  aladin.addOverlay(footOv);
   DATA.fields.forEach(function (f) {
-    f.polys.forEach(function (poly) { ov.add(A.polygon(poly)); });
+    f.polys.forEach(function (poly) { footOv.add(A.polygon(poly)); });
   });
+  // Added after, so the selected tile's outline draws over its neighbours
+  // where two footprints share an edge.
+  hiOv = A.graphicOverlay({color: HILITE, lineWidth: 3, name: 'Selected tile'});
+  aladin.addOverlay(hiOv);
 }
 
 function boot() {
@@ -388,6 +440,9 @@ function boot() {
       aladin.setOverlayImageLayer(h, L.id);
     });
     drawFootprints();
+    // The overlays exist only now, so the first outline has to be drawn after
+    // them -- drawCMD ran before Aladin was up.
+    highlight(hovered || pinned);
     if (DATA.centre) { aladin.gotoRaDec(DATA.centre[0], DATA.centre[1]); }
     if (DATA.fov) { aladin.setFoV(DATA.fov); }
 

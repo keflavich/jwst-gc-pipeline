@@ -14,6 +14,7 @@ from astropy.table import Table                     # noqa: E402
 import astropy.units as u                           # noqa: E402
 
 from jwst_gc_pipeline.quicklook import catalogs as C
+from jwst_gc_pipeline.quicklook import cmdview
 
 REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location(
@@ -283,3 +284,94 @@ def test_a_mast_pointing_short_a_band_is_reported(tmp_path):
     tbl.write(mast / 'jw10678-o140_t001_nircam_clear-f212n_cat.ecsv', overwrite=True)
     assert C.find_mast(mast) == {}
     assert C.incomplete_pointings(tmp_path / 'nocat', mast) == {'o140': ['f480m']}
+
+
+def test_a_reduction_variant_is_recorded_not_absorbed_into_the_stage():
+    """`resbgsub` is a different reduction, not a later pass, so its stage
+    number is not on a common scale with the plain chain's. The regex captures
+    it rather than letting `.*?` swallow it."""
+    assert C.lineage_of(Path(
+        'f212n_merged_o132_indivexp_merged_resbgsub_m5_dao_basic_vetted.fits')
+    ) == 'resbgsub'
+    assert C.lineage_of(Path(
+        'f212n_merged_o127_indivexp_merged_m3_dao_basic_vetted.fits')) == 'plain'
+
+
+def test_a_mixed_reduction_set_is_reported_on_the_page(tmp_path):
+    """On 2026-09-15 the published diagram pooled eight plain fields with two
+    resbgsub ones (o132, o135) and said nothing. A colour offset between those
+    and the rest would be processing, not sky."""
+    from jwst_gc_pipeline.quicklook import cmdview
+    cat = tmp_path / 'catalogs'
+    _catalogs(cat, obsids=('127', '132'))
+    for band in C.BANDS:                    # make o132 a resbgsub field
+        src = cat / f'{band}_merged_o132_indivexp_merged_m2_dao_basic_vetted.fits'
+        src.rename(cat /
+                   f'{band}_merged_o132_indivexp_merged_resbgsub_m5_dao_basic_vetted.fits')
+    _footprints(tmp_path / 'footprints.json', obsids=('127', '132'))
+    out, data = _build(tmp_path)
+    by_id = {f['id']: f for f in data['fields']}
+    assert by_id['o127']['lineage'] == 'plain'
+    assert by_id['o132']['lineage'] == 'resbgsub'
+    assert set(data['lineages']) == {'plain', 'resbgsub'}
+    html = (out / 'cmd_explorer.html').read_text()
+    assert 'Mixed reductions' in html and 'resbgsub' in html
+
+
+def test_a_single_reduction_set_says_nothing(tmp_path):
+    """The warning has to be absent when it does not apply, or it stops being
+    read."""
+    _catalogs(tmp_path / 'catalogs', obsids=('127', '132'))
+    _footprints(tmp_path / 'footprints.json', obsids=('127', '132'))
+    out, data = _build(tmp_path)
+    assert set(data['lineages']) == {'plain'}
+    assert 'Mixed reductions' not in (out / 'cmd_explorer.html').read_text()
+
+def test_selecting_a_field_outlines_it_on_the_sky():
+    """Clicking a row highlights the tile, and one code path decides that.
+
+    The ledger, the sky, the hover and the unpin all change which field is
+    current; if each set the outline itself they would drift apart.  `drawCMD`
+    is the single place that already knows the answer, so the outline is drawn
+    from there.
+    """
+    page = cmdview._SCRIPT
+    assert 'function highlight(field)' in page
+    # driven from drawCMD, not from the click listener
+    drawcmd = page.split('function drawCMD(')[1].split('\nfunction ')[0]
+    assert 'highlight(field);' in drawcmd
+    # its own overlay, added after the base one so it draws over a shared edge
+    foot = page.split('function drawFootprints(')[1].split('\nfunction ')[0]
+    assert foot.index("name: 'Treasury pointings") < foot.index("name: 'Selected tile'")
+
+
+def test_the_outline_is_drawn_once_aladin_exists():
+    """`drawCMD(null)` runs before `A.init` resolves, so the first highlight
+    call has no overlay to draw into.  Boot has to re-assert it, or a page
+    restored with a selection shows the diagram without the tile."""
+    boot = cmdview._SCRIPT.split('function boot(')[1]
+    assert boot.index('drawFootprints();') < boot.index('highlight(hovered || pinned);')
+
+
+def test_every_javascript_name_the_page_uses_is_defined():
+    """A ReferenceError in the Aladin callback kills the rest of boot silently
+    (the survey switcher on the overview page died this way, #885)."""
+    import re
+    src = cmdview._SCRIPT
+    defined = set(re.findall(r'function\s+(\w+)\s*\(', src))
+    for name in ('highlight', 'drawFootprints', 'drawCMD', 'show', 'fieldAt'):
+        assert name in defined, f'{name} is called but never defined'
+    for var in ('hiOv', 'footOv', 'HILITE'):
+        assert re.search(rf'\bvar\s+[^;]*\b{var}\b', src), \
+            f'{var} is used but never declared with var'
+
+
+def test_the_nircam_layer_is_the_fixed_cut_build():
+    """Both NIRCam HiPS exist and they differ in a way that matters here: the
+    per-field percentile build stretches each tile on its own pixels, so equal
+    sky reads as unequal colour at every seam.  This page compares one pointing
+    against the others, so it takes the fixed-cut one, matching the main
+    viewer's default."""
+    urls = [u for _, u, _ in cmdview.HIPS_LAYERS]
+    assert any(u.endswith('jwst_gc_treasury_vminmax_hips/') for u in urls)
+    assert not any(u.endswith('jwst_gc_treasury_hips/') for u in urls)

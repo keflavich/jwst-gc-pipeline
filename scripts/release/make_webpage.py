@@ -1023,27 +1023,36 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     # images table grouped by (observation, filter)
     out.append("<h2>Mosaic images <span class=muted>(resampled onto a sky grid)</span></h2>")
-    out.append(f"<table><tr>{obs_col}<th>Filter</th><th>Type</th><th>Iteration</th>"
-               "<th>Version</th><th>Size</th><th>Download</th></tr>")
-    groups = {}
-    for f in images:
-        groups.setdefault((f.get("observation") or "", f["filter"]), []).append(f)
-    for key in sorted(groups, key=lambda k: (k[0], FILTER_WAVELENGTH.get(k[1], 99))):
-        obs, filt = key
-        rows = sorted(groups[key], key=lambda f: order.get(f["kind"], 9))
-        for i, f in enumerate(rows):
-            obs_cell = (f"<td><b>{html.escape(obs)}</b></td>"
-                        if multi and i == 0 else ("<td></td>" if multi else ""))
-            filt_cell = (f"<b>{filt}</b> "
-                         f"<span class=muted>{FILTER_WAVELENGTH.get(filt,'')}µm</span>"
-                         if i == 0 else "")
-            out.append(f"<tr>{obs_cell}<td>{filt_cell}</td>"
-                       f"<td>{KIND_LABEL.get(f['kind'], f['kind'])}</td>"
-                       f"<td><span class=tag>{html.escape(f['iteration'] or '')}</span></td>"
-                       f"<td><span class=tag>{file_version(f)}</span></td>"
-                       f"<td class=size>{human_size(f['size_bytes'])}</td>"
-                       f"<td>{dl(f)}</td></tr>")
-    out.append("</table>")
+    # An empty table under a heading says nothing about WHY it is empty -- a
+    # reader cannot tell a withheld mosaic from one that was never drizzled.
+    # A release that ships only detector frames is a normal state (the frames
+    # are a dependency of the mosaic, so they are ready first), and it has to
+    # say so rather than render a header row over nothing.
+    if not images:
+        out.append(f"<p class=muted><b>No mosaics in this release.</b> "
+                   f"{_no_mosaic_reason(manifest, exposures)}</p>")
+    else:
+        out.append(f"<table><tr>{obs_col}<th>Filter</th><th>Type</th><th>Iteration</th>"
+                   "<th>Version</th><th>Size</th><th>Download</th></tr>")
+        groups = {}
+        for f in images:
+            groups.setdefault((f.get("observation") or "", f["filter"]), []).append(f)
+        for key in sorted(groups, key=lambda k: (k[0], FILTER_WAVELENGTH.get(k[1], 99))):
+            obs, filt = key
+            rows = sorted(groups[key], key=lambda f: order.get(f["kind"], 9))
+            for i, f in enumerate(rows):
+                obs_cell = (f"<td><b>{html.escape(obs)}</b></td>"
+                            if multi and i == 0 else ("<td></td>" if multi else ""))
+                filt_cell = (f"<b>{filt}</b> "
+                             f"<span class=muted>{FILTER_WAVELENGTH.get(filt,'')}µm</span>"
+                             if i == 0 else "")
+                out.append(f"<tr>{obs_cell}<td>{filt_cell}</td>"
+                           f"<td>{KIND_LABEL.get(f['kind'], f['kind'])}</td>"
+                           f"<td><span class=tag>{html.escape(f['iteration'] or '')}</span></td>"
+                           f"<td><span class=tag>{file_version(f)}</span></td>"
+                           f"<td class=size>{human_size(f['size_bytes'])}</td>"
+                           f"<td>{dl(f)}</td></tr>")
+        out.append("</table>")
 
     # catalogs table
     out.append("<h2>Catalogs</h2>")
@@ -1052,26 +1061,30 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                    "merged photometry table is still being built; only the per-filter "
                    "vetted catalogs are provided for now. The merged table will be added "
                    "in a later update.</p>")
-    out.append(f"<table><tr><th>Catalog</th>{obs_col}<th>Filter</th><th>Iteration</th>"
-               "<th>Version</th><th>Size</th><th>Download</th></tr>")
-    cat_order = {"catalog_full": 0, "catalog_qualcut": 1, "seed": 2,
-                 "catalog_per_filter_vetted": 3}
-    for f in sorted(catalogs, key=lambda f: (f.get("observation") or "",
-                                             cat_order.get(f["kind"], 9),
-                                             f.get("filter") or "")):
-        name = KIND_LABEL.get(f["kind"], f["kind"])
-        fmt = Path(f["dest"]).suffix.lstrip(".")
-        obs_cell = (f"<td>{html.escape(f.get('observation') or '—')}</td>"
-                    if multi else "")
-        out.append(f"<tr><td>{name} <span class=muted>({fmt})</span></td>{obs_cell}"
-                   f"<td>{html.escape(f['filter'] or '—')}</td>"
-                   f"<td><span class=tag>{html.escape(f['iteration'] or '')}</span></td>"
-                   f"<td><span class=tag>{file_version(f)}</span></td>"
-                   f"<td class=size>{human_size(f['size_bytes'])}</td>"
-                   f"<td>{dl(f)}</td></tr>")
-    out.append("</table>")
+    if not catalogs:
+        out.append("<p class=muted><b>No catalogs in this release.</b> Photometry for these data is still being produced; when it is ready it will be added here under a new version.</p>")
+    else:
+        out.append(f"<table><tr><th>Catalog</th>{obs_col}<th>Filter</th><th>Iteration</th>"
+                   "<th>Version</th><th>Size</th><th>Download</th></tr>")
+        cat_order = {"catalog_full": 0, "catalog_qualcut": 1, "seed": 2,
+                     "catalog_per_filter_vetted": 3}
+        for f in sorted(catalogs, key=lambda f: (f.get("observation") or "",
+                                                 cat_order.get(f["kind"], 9),
+                                                 f.get("filter") or "")):
+            name = KIND_LABEL.get(f["kind"], f["kind"])
+            fmt = Path(f["dest"]).suffix.lstrip(".")
+            obs_cell = (f"<td>{html.escape(f.get('observation') or '—')}</td>"
+                        if multi else "")
+            out.append(f"<tr><td>{name} <span class=muted>({fmt})</span></td>{obs_cell}"
+                       f"<td>{html.escape(f['filter'] or '—')}</td>"
+                       f"<td><span class=tag>{html.escape(f['iteration'] or '')}</span></td>"
+                       f"<td><span class=tag>{file_version(f)}</span></td>"
+                       f"<td class=size>{human_size(f['size_bytes'])}</td>"
+                       f"<td>{dl(f)}</td></tr>")
+        out.append("</table>")
 
-    out.append(render_exposures(field, exposures, base, app_link, multi))
+    out.append(render_exposures(field, exposures, base, app_link, multi,
+                                have_mosaics=bool(images)))
     out.append(render_astrometry(field, files, base,
                                  manifest_built=manifest.get('built')))
 
@@ -1103,7 +1116,152 @@ def published_urls(manifest, superseded=(), categories=None):
     return [f["url"] for f in manifest["files"] if f.get("url") and keep(f)]
 
 
-def render_exposures(field, exposures, base, app_link, multi):
+def _no_mosaic_reason(manifest, exposures):
+    """The sentence that follows "No mosaics in this release."
+
+    Written from what the MANIFEST records rather than from the field name, so
+    it stays true for any field that ships frames before its drizzles: the
+    exposure-only mode is a state a release passes through, not a property of
+    one programme.
+    """
+    if exposures:
+        return ("This release distributes the detector-frame exposures below. "
+                "They are an input to the mosaics, not a by-product of them, so "
+                "they are complete and citable before any mosaic exists; the "
+                "resampled images will be added under a later version.")
+    return ("Nothing resampled onto a sky grid is distributed here. See the "
+            "release README for what this version contains.")
+
+
+#: How each instrument's detector frames were produced, and the ONE Stage-1
+#: option whose setting changes what is in them.  `suppress_one_group=False`
+#: keeps a 1-group ramp fit instead of discarding it, which is the difference
+#: between having and not having the shortest ramps -- the brightest stars,
+#: where later groups saturate.  Read from the code that runs, not from a
+#: header: the JWST metadata records that `ramp_fit` COMPLETED, never the
+#: parameters it completed with, so a reader cannot recover this from the file.
+FRAME_RECIPES = {
+    "NIRCam": ("jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py",
+               "-p &lt;proposal&gt; -d &lt;field&gt; -f &lt;FILTER&gt; -m nrca,nrcb,merged"),
+    "MIRI": ("jwst_gc_pipeline/reduction/PipelineMIRI.py",
+             "-p &lt;proposal&gt; -d &lt;field&gt; -f &lt;FILTER&gt;"),
+    "NIRISS": ("jwst_gc_pipeline/reduction/PipelineRerunNIRISS.py",
+               "-p &lt;proposal&gt; -d &lt;field&gt; -f &lt;FILTER&gt;"),
+}
+
+#: Stage-1 settings this pipeline overrides, quoted as they are passed.  Every
+#: instrument path sets the first one; the others are NIRCam's.
+FRAME_STEP_OPTIONS = (
+    ("ramp_fit", "suppress_one_group=False",
+     "a 1-group ramp is FIT rather than discarded, so the brightest stars "
+     "(whose later groups saturate) keep a measurement instead of a hole. "
+     "Set on every instrument path"),
+    ("refpix", "use_side_ref_pixels=True",
+     "set on every instrument path"),
+)
+
+#: Stated because its absence is easy to assume the other way: the source
+#: carries a comment about turning snowball expansion off, and the call does
+#: not pass it. `jump` therefore runs at the pipeline default for this CRDS
+#: context, `expand_large_events` included.
+FRAME_STEP_DEFAULTS = (
+    "<code>jump</code> runs at its pipeline defaults — in particular "
+    "<code>expand_large_events</code> (snowball expansion) is NOT disabled, "
+    "despite a comment in the source suggesting otherwise."
+)
+
+
+def _frame_recipe(exposures):
+    """What produced these frames: the command, the versions, the settings.
+
+    The versions come from what was STAMPED IN each staged file at staging
+    time, not from the current checkout: this release's frames were reduced
+    over several days as tiles arrived, so there is no single version and
+    saying there is one would be the useful-looking wrong answer.
+    """
+    instruments = sorted({f.get("instrument") for f in exposures} - {None})
+    seen = {}
+    for item in exposures:
+        for key, value in (item.get("provenance") or {}).items():
+            seen.setdefault(key, {}).setdefault(value, 0)
+            seen[key][value] += 1
+    if not seen and not instruments:
+        return ""
+
+    out = ["<details class=recipe><summary><b>How these frames were "
+           "produced</b> — command, versions, and the Stage-1 settings that "
+           "change what is in them</summary>"]
+
+    for instrument in instruments:
+        recipe = FRAME_RECIPES.get(instrument)
+        if recipe is None:
+            continue
+        script, args = recipe
+        out.append(f"<p class=muted><b>{html.escape(instrument)}</b><br>"
+                   f"<code>python {html.escape(script)} {args}</code></p>")
+
+    out.append("<p class=muted>Stage-1 (<code>Detector1Pipeline</code>) is "
+               "re-run from <code>_uncal</code> rather than taken from the "
+               "archive, with these overrides:</p><ul class=muted>")
+    for step, option, why in FRAME_STEP_OPTIONS:
+        out.append(f"<li><code>{html.escape(step)}: {html.escape(option)}</code>"
+                   f" — {html.escape(why)}</li>")
+    out.append("</ul>")
+    out.append(f"<p class=muted>{FRAME_STEP_DEFAULTS}</p>")
+
+    if seen:
+        out.append("<table><tr><th>Keyword</th><th>Value</th>"
+                   "<th>Frames</th></tr>")
+        for key in FRAME_PROVENANCE_ORDER:
+            values = seen.get(key)
+            if not values:
+                continue
+            for i, (value, count) in enumerate(
+                    sorted(values.items(), key=lambda kv: (-kv[1], kv[0]))):
+                label = (f"<code>{html.escape(key)}</code>" if i == 0 else "")
+                out.append(f"<tr><td>{label}</td>"
+                           f"<td><code>{html.escape(value)}</code></td>"
+                           f"<td class=size>{count}</td></tr>")
+        out.append("</table>")
+        out.append("<p class=muted>Every frame carries these in its primary "
+                   "header, so the table is a summary and the file is the "
+                   "authority. More than one <code>GCTAG</code> means the "
+                   "frames were reduced across several pipeline versions as "
+                   "tiles arrived; a <code>-dirty</code> suffix means that run "
+                   "had uncommitted changes in its working tree.</p>")
+    out.append("</details>")
+    return "\n".join(out)
+
+
+#: Provenance keywords in the order a reader wants them: what code, then what
+#: commit, then the JWST pipeline and its reference files.
+FRAME_PROVENANCE_ORDER = ("GCTAG", "GCPIPEV", "CAL_VER", "CRDS_CTX")
+
+
+def _coverage_note(field, exposures):
+    """Which of the field's registered observations this release actually holds.
+
+    A reader given 32 groups has no way to tell a tile that is complete from
+    one that was registered last week and has nothing reduced yet. The registry
+    knows the full list, so the page names what is absent instead of leaving
+    the reader to infer it from a gap in the numbering.
+    """
+    registered = (FIELDS.get(field) or {}).get("observations") or []
+    if not registered:
+        return ""
+    present = {f.get("observation") for f in exposures} - {None}
+    missing = [o for o in registered if o not in present]
+    if not missing:
+        return (f"<p class=muted>All <b>{len(registered)}</b> registered "
+                f"observations of this programme are here.</p>")
+    return (f"<p class=muted><b>{len(present)} of {len(registered)}</b> "
+            f"registered observations are in this release. Absent, with nothing "
+            f"reduced for them when it was staged: "
+            f"{', '.join(html.escape(o) for o in missing)}.</p>")
+
+
+def render_exposures(field, exposures, base, app_link, multi,
+                     have_mosaics=True):
     """The detector-frame exposures section: one row per (observation, filter).
 
     A per-frame row would be unusable -- wd1 ships 696 frames, and a table of
@@ -1125,26 +1283,42 @@ def render_exposures(field, exposures, base, app_link, multi):
         return ""
     out = ["<h2>Detector-frame exposures</h2>"]
     total = sum(f.get("size_bytes") or 0 for f in exposures)
+    # With no mosaics, "the mosaics above" and "the frames behind the matching
+    # mosaic" both describe something that is not on the page. The frames are
+    # then enumerated from the pipeline directories by field/observation/filter,
+    # which is a weaker claim than an association's membership list, and the
+    # page says which claim it is making.
+    if have_mosaics:
+        provenance = ("the mosaics above were drizzled from, in the original "
+                      "detector frame, carrying the full distortion solution and "
+                      "this pipeline's astrometry as it stood before the images "
+                      "were resampled onto a sky grid. Each group holds exactly "
+                      "the frames behind the matching mosaic, taken from the "
+                      "record that mosaic itself carries of what went into it.")
+    else:
+        provenance = ("this programme has on disk, in the original detector "
+                      "frame, carrying the full distortion solution and this "
+                      "pipeline's astrometry. No mosaic has been drizzled from "
+                      "them yet, so they are grouped by observation and filter "
+                      "from the pipeline's own directories rather than from a "
+                      "mosaic's membership list.")
     out.append(
         f"<p class=muted>The <b>{len(exposures)} individual exposures</b> "
-        f"({human_size(total)}) the mosaics above were drizzled from, in the "
-        f"original detector frame, carrying the full distortion solution and this "
-        f"pipeline's astrometry as it stood before the images were resampled onto "
-        f"a sky grid. Each group holds exactly the frames behind the matching "
-        f"mosaic, taken from the record that mosaic itself carries of what went "
-        f"into it. Use these to re-drizzle, re-fit, or chase a per-exposure "
-        f"systematic.</p>")
+        f"({human_size(total)}) {provenance} Use these to re-drizzle, re-fit, or "
+        f"chase a per-exposure systematic.</p>")
+    out.append(_coverage_note(field, exposures))
     out.append(
         "<p class=muted>The last detector-frame product differs by field and "
         "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
         "one was written, otherwise the <code>_destreak</code> / "
         "<code>_align</code> / <code>_cal</code> frame the mosaic was drizzled "
-        "from directly. <b>These are links to the pipeline's own frames, not "
-        "frozen copies</b> -- they cost no extra storage, and they are not in "
-        "<code>CHECKSUMS.sha256</code>. A re-reduction writes a new file rather "
-        "than rewriting these bytes, so a frame here can become an older "
-        "generation than the pipeline now holds. Cite the mosaics and catalogs; "
-        "treat these as a working convenience.</p>")
+        "from directly. These are the pipeline's live products rather than "
+        "frozen copies, so a re-reduction writes a new file beside them and a "
+        "frame here can become an older generation than the pipeline now holds; "
+        "they are not covered by <code>CHECKSUMS.sha256</code>. Each file "
+        "records its own provenance in the keywords below, so a downloaded "
+        "frame can be identified without reference to this page.</p>")
+    out.append(_frame_recipe(exposures))
 
     symlinked = [f for f in exposures if f.get("link_mode") == "symlink"]
     if symlinked:
@@ -1451,6 +1625,23 @@ def render_help():
     return "\n".join(out)
 
 
+def _card_counts(fi):
+    """What a field's index card says it holds.
+
+    "0 images \u00b7 0 catalogs" reads as a broken release rather than as one
+    that ships detector frames while its mosaics are still being drizzled, so
+    the exposure count is named whenever a release has one and the frames are
+    all it has.
+    """
+    n_exp = fi.get("n_exposures") or 0
+    if not fi["n_images"] and not fi["n_catalogs"] and n_exp:
+        return f"{n_exp:,} detector-frame exposures"
+    parts = [f"{fi['n_images']} images", f"{fi['n_catalogs']} catalogs"]
+    if n_exp:
+        parts.append(f"{n_exp:,} exposures")
+    return " \u00b7 ".join(parts)
+
+
 def _field_cards(fields_info):
     out = ["<div class=grid>"]
     for fi in fields_info:
@@ -1459,7 +1650,7 @@ def _field_cards(fields_info):
         out.append(
             f"<a class=card href='{fi['field']}.html'>{thumb}"
             f"<div class=body><b>{html.escape(fi['field'])}</b><br>"
-            f"<span class=muted>{fi['n_images']} images · {fi['n_catalogs']} catalogs · "
+            f"<span class=muted>{_card_counts(fi)} · "
             f"{html.escape(fi['version'])}</span></div></a>")
     out.append("</div>")
     return out
@@ -1851,6 +2042,8 @@ def main(argv=None):
                     "group": manifest.get("group"), "preview": preview_rel,
                     "n_images": sum(1 for f in files if f["category"] == "image"),
                     "n_catalogs": sum(1 for f in files if f["category"] == "catalog"),
+                    "n_exposures": sum(1 for f in files
+                                       if f["category"] == EXPOSURE_CATEGORY),
                 })
                 if manifest.get("group") is None:
                     # only the Galactic Centre group belongs on a CMZ map; the
