@@ -161,3 +161,60 @@ def test_miri_frames_are_reported_as_never_gaining_a_row(mw, tmp_path):
     # without any MIRI the sentence does not appear at all
     plain = mw._offsets_section('gc-treasury', _summary(tmp_path))
     assert 'F770W' not in plain
+
+
+# ---- the classifier behind the counts ----
+@pytest.fixture(scope='module')
+def builder():
+    import sys
+    sys.path.insert(0, _REL)
+    return _load('build_offsets_summary')
+
+
+def _frame(tmp_path, name, filename, filt='F212N', detector='NRCA1'):
+    from astropy.io import fits
+    import numpy as np
+    hdu = fits.PrimaryHDU(np.zeros((2, 2), dtype='float32'))
+    hdu.header['FILENAME'] = filename
+    hdu.header['FILTER'] = filt
+    hdu.header['DETECTOR'] = detector
+    path = tmp_path / name
+    fits.HDUList([hdu, fits.ImageHDU(np.zeros((2, 2), dtype='float32'))]).writeto(path)
+    return str(path)
+
+
+def _table(**over):
+    from astropy.table import Table
+    row = {'Visit': 'jw10678127001', 'Filter': 'F212N', 'Module': 'nrca1',
+           'Exposure': 1, 'Vgroup': '2101',
+           'dra (arcsec)': 0.01, 'ddec (arcsec)': -0.02}
+    row.update(over)
+    return Table([{k: [v] for k, v in row.items()}[k] for k in row],
+                 names=list(row))
+
+
+def test_row_state_classifies_a_miri_frame_as_never_covered(builder, tmp_path):
+    """The page's "198 will never gain a row" sentence keys on this state. A
+    classifier that returns plain `no_row` makes the sentence vanish for the
+    real release while every rendering test still passes, because they write
+    the count into a fixture by hand."""
+    frame = _frame(tmp_path, 'miri.fits',
+                   'jw10678-o132_t001_miri_f770w_2_o132_crf.fits',
+                   filt='F770W', detector='MIRIMAGE')
+    assert builder._row_state(_table(), frame) == 'no_row_not_nircam'
+
+
+def test_row_state_classifies_nircam_frames_by_whether_the_table_has_them(
+        builder, tmp_path):
+    """The NIRCam half matters as much as the MIRI half: a classifier that
+    returned `no_row_not_nircam` for everything would pass a MIRI-only test
+    and report the whole release as permanently uncorrectable."""
+    covered = _frame(tmp_path, 'covered.fits',
+                     'jw10678127001_02101_00001_nrca1_destreak_o127_crf.fits')
+    assert builder._row_state(_table(), covered) == 'has_row'
+
+    # same frame, a table that does not describe it
+    missing = _frame(tmp_path, 'missing.fits',
+                     'jw10678139001_02101_00003_nrcb2_destreak_o139_crf.fits',
+                     detector='NRCB2')
+    assert builder._row_state(_table(), missing) == 'no_row'
