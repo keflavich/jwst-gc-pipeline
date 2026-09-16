@@ -2309,3 +2309,32 @@ def test_no_survey_goes_through_the_cmz_alias():
     urls = [u for _, u, _ in skyview.SURVEYS]
     assert any(u.endswith('/jwst_nir_hips/') for u in urls)
     assert any(u.endswith('/jwst_miri_hips/') for u in urls)
+
+
+def test_the_nircam_imagery_is_the_fixed_cut_build():
+    """The NIRCam layer the monitor always draws is `vminmax`.
+
+    On a page whose subject is tile-to-tile progress, the percentile build
+    stretches each field on its own pixels and renders equal sky as a
+    brightness step at every tile edge -- the artefact most easily mistaken
+    for a real difference between pointings.
+    """
+    from jwst_gc_pipeline.monitoring import skyview
+    assert skyview.TREASURY_NIRCAM_HIPS.endswith(
+        '/jwst_gc_treasury_vminmax_hips/'), skyview.TREASURY_NIRCAM_HIPS
+
+
+def test_no_two_nircam_layers_of_the_same_sky_are_drawn_at_once():
+    """NIRCam rides as an always-on overlay so it survives a switch to DSS.
+    Adding it to SURVEYS as well paints the same sky twice: the overlay wins
+    wherever it has tiles, so the background copy is invisible and decides
+    nothing -- while a reader who picked it believes they are looking at it.
+
+    That is how a `vminmax` background sat under a percentile overlay and
+    showed the percentile stretch. A list-shaped assertion cannot catch it,
+    because both spellings are individually reasonable.
+    """
+    from jwst_gc_pipeline.monitoring import skyview
+    treasury_nircam = [u for _, u, _ in skyview.SURVEYS
+                       if 'jwst_gc_treasury' in u and 'miri' not in u]
+    assert treasury_nircam == [], treasury_nircam
