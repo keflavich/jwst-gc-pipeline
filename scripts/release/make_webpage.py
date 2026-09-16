@@ -1133,6 +1133,111 @@ def _no_mosaic_reason(manifest, exposures):
             "release README for what this version contains.")
 
 
+#: How each instrument's detector frames were produced, and the ONE Stage-1
+#: option whose setting changes what is in them.  `suppress_one_group=False`
+#: keeps a 1-group ramp fit instead of discarding it, which is the difference
+#: between having and not having the shortest ramps -- the brightest stars,
+#: where later groups saturate.  Read from the code that runs, not from a
+#: header: the JWST metadata records that `ramp_fit` COMPLETED, never the
+#: parameters it completed with, so a reader cannot recover this from the file.
+FRAME_RECIPES = {
+    "NIRCam": ("jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py",
+               "-p &lt;proposal&gt; -d &lt;field&gt; -f &lt;FILTER&gt; -m nrca,nrcb,merged"),
+    "MIRI": ("jwst_gc_pipeline/reduction/PipelineMIRI.py",
+             "-p &lt;proposal&gt; -d &lt;field&gt; -f &lt;FILTER&gt;"),
+    "NIRISS": ("jwst_gc_pipeline/reduction/PipelineRerunNIRISS.py",
+               "-p &lt;proposal&gt; -d &lt;field&gt; -f &lt;FILTER&gt;"),
+}
+
+#: Stage-1 settings this pipeline overrides, quoted as they are passed.  Every
+#: instrument path sets the first one; the others are NIRCam's.
+FRAME_STEP_OPTIONS = (
+    ("ramp_fit", "suppress_one_group=False",
+     "a 1-group ramp is FIT rather than discarded, so the brightest stars "
+     "(whose later groups saturate) keep a measurement instead of a hole. "
+     "Set on every instrument path"),
+    ("refpix", "use_side_ref_pixels=True",
+     "set on every instrument path"),
+)
+
+#: Stated because its absence is easy to assume the other way: the source
+#: carries a comment about turning snowball expansion off, and the call does
+#: not pass it. `jump` therefore runs at the pipeline default for this CRDS
+#: context, `expand_large_events` included.
+FRAME_STEP_DEFAULTS = (
+    "<code>jump</code> runs at its pipeline defaults — in particular "
+    "<code>expand_large_events</code> (snowball expansion) is NOT disabled, "
+    "despite a comment in the source suggesting otherwise."
+)
+
+
+def _frame_recipe(exposures):
+    """What produced these frames: the command, the versions, the settings.
+
+    The versions come from what was STAMPED IN each staged file at staging
+    time, not from the current checkout: this release's frames were reduced
+    over several days as tiles arrived, so there is no single version and
+    saying there is one would be the useful-looking wrong answer.
+    """
+    instruments = sorted({f.get("instrument") for f in exposures} - {None})
+    seen = {}
+    for item in exposures:
+        for key, value in (item.get("provenance") or {}).items():
+            seen.setdefault(key, {}).setdefault(value, 0)
+            seen[key][value] += 1
+    if not seen and not instruments:
+        return ""
+
+    out = ["<details class=recipe><summary><b>How these frames were "
+           "produced</b> — command, versions, and the Stage-1 settings that "
+           "change what is in them</summary>"]
+
+    for instrument in instruments:
+        recipe = FRAME_RECIPES.get(instrument)
+        if recipe is None:
+            continue
+        script, args = recipe
+        out.append(f"<p class=muted><b>{html.escape(instrument)}</b><br>"
+                   f"<code>python {html.escape(script)} {args}</code></p>")
+
+    out.append("<p class=muted>Stage-1 (<code>Detector1Pipeline</code>) is "
+               "re-run from <code>_uncal</code> rather than taken from the "
+               "archive, with these overrides:</p><ul class=muted>")
+    for step, option, why in FRAME_STEP_OPTIONS:
+        out.append(f"<li><code>{html.escape(step)}: {html.escape(option)}</code>"
+                   f" — {html.escape(why)}</li>")
+    out.append("</ul>")
+    out.append(f"<p class=muted>{FRAME_STEP_DEFAULTS}</p>")
+
+    if seen:
+        out.append("<table><tr><th>Keyword</th><th>Value</th>"
+                   "<th>Frames</th></tr>")
+        for key in FRAME_PROVENANCE_ORDER:
+            values = seen.get(key)
+            if not values:
+                continue
+            for i, (value, count) in enumerate(
+                    sorted(values.items(), key=lambda kv: (-kv[1], kv[0]))):
+                label = (f"<code>{html.escape(key)}</code>" if i == 0 else "")
+                out.append(f"<tr><td>{label}</td>"
+                           f"<td><code>{html.escape(value)}</code></td>"
+                           f"<td class=size>{count}</td></tr>")
+        out.append("</table>")
+        out.append("<p class=muted>Every frame carries these in its primary "
+                   "header, so the table is a summary and the file is the "
+                   "authority. More than one <code>GCTAG</code> means the "
+                   "frames were reduced across several pipeline versions as "
+                   "tiles arrived; a <code>-dirty</code> suffix means that run "
+                   "had uncommitted changes in its working tree.</p>")
+    out.append("</details>")
+    return "\n".join(out)
+
+
+#: Provenance keywords in the order a reader wants them: what code, then what
+#: commit, then the JWST pipeline and its reference files.
+FRAME_PROVENANCE_ORDER = ("GCTAG", "GCPIPEV", "CAL_VER", "CRDS_CTX")
+
+
 def _coverage_note(field, exposures):
     """Which of the field's registered observations this release actually holds.
 
@@ -1207,12 +1312,13 @@ def render_exposures(field, exposures, base, app_link, multi,
         "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
         "one was written, otherwise the <code>_destreak</code> / "
         "<code>_align</code> / <code>_cal</code> frame the mosaic was drizzled "
-        "from directly. <b>These are links to the pipeline's own frames, not "
-        "frozen copies</b> -- they cost no extra storage, and they are not in "
-        "<code>CHECKSUMS.sha256</code>. A re-reduction writes a new file rather "
-        "than rewriting these bytes, so a frame here can become an older "
-        "generation than the pipeline now holds. Cite the mosaics and catalogs; "
-        "treat these as a working convenience.</p>")
+        "from directly. These are the pipeline's live products rather than "
+        "frozen copies, so a re-reduction writes a new file beside them and a "
+        "frame here can become an older generation than the pipeline now holds; "
+        "they are not covered by <code>CHECKSUMS.sha256</code>. Each file "
+        "records its own provenance in the keywords below, so a downloaded "
+        "frame can be identified without reference to this page.</p>")
+    out.append(_frame_recipe(exposures))
 
     symlinked = [f for f in exposures if f.get("link_mode") == "symlink"]
     if symlinked:
