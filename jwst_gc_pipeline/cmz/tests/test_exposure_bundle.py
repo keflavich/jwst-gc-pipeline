@@ -1837,9 +1837,23 @@ def test_staging_records_the_provenance_the_frames_carry(sr, tmp_path,
     recorded = items[0].get('provenance')
     assert recorded, 'nothing recorded the frame provenance'
 
+    # Named, not read from the constant under test. Taking the expectation
+    # from `sr.FRAME_PROVENANCE_KEYS` means a constant that lists less is
+    # asked for less: narrowing it to ("CAL_VER", "CRDS_CTX") dropped GCTAG
+    # and GCPIPEV from every staged release and every version table with the
+    # suite still green. Those two are the pipeline-identifying pair the
+    # fifteen-distinct-tags reporting rests on.
+    expected = {'GCTAG', 'GCPIPEV', 'CAL_VER', 'CRDS_CTX'}
+    assert set(sr.FRAME_PROVENANCE_KEYS) == expected
     on_disk = fits.getheader(frame, 0)
-    for key in sr.FRAME_PROVENANCE_KEYS:
-        if key in on_disk:
-            assert recorded[key] == str(on_disk[key]).strip(), key
-    # the two the release is identified by are the ones the pipeline stamps
-    assert 'CAL_VER' in recorded and 'CRDS_CTX' in recorded
+    for key in sorted(expected):
+        assert key in recorded, key
+        assert recorded[key] == str(on_disk[key]).strip(), key
+
+
+def test_the_recorded_keys_and_the_rendered_keys_are_the_same_set(sr, mw):
+    """The list lives twice -- `stage_release` records it, `make_webpage`
+    renders it -- and nothing compared them. Narrowing either alone drops rows
+    from the version table silently, since the renderer only shows keys it
+    knows and the recorder only writes keys it lists."""
+    assert set(sr.FRAME_PROVENANCE_KEYS) == set(mw.FRAME_PROVENANCE_ORDER)
