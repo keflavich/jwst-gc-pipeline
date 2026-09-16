@@ -119,14 +119,36 @@ def test_both_serving_destinations_are_covered():
     assert ph.WEB_HOST
 
 
-def test_the_three_treasury_layers_are_registered():
+def test_every_published_layer_is_registered_explicitly():
+    """The list is a diff, never a glob -- adding a public layer is a decision.
+
+    The CMZ overview coadds are here for a different reason from the treasury
+    ones: they are BUILT in the docroot, so their local step is a no-op and
+    what they need is the second destination. starformation had no scheduled
+    path to them at all, and its `jwst_nir_hips` fell 14 months behind.
+    """
     assert set(ph.LAYERS) == {
         'jwst_gc_treasury_hips',
         'jwst_gc_treasury_miri_hips',
         'jwst_gc_treasury_miri_bgmatch_hips',
+        'jwst_gc_treasury_vminmax_hips',
+        'jwst_gc_treasury_log_hips',
+        'jwst_nir_hips',
+        'jwst_miri_hips',
     }
     for name, src in ph.LAYERS.items():
         assert src.endswith('/' + name), (name, src)
+
+
+def test_a_docroot_built_layer_does_not_copy_over_itself():
+    """For the CMZ coadds the source IS the docroot copy, so the local publish
+    must be a no-op rather than an rm -rf and a re-copy of a tree onto itself.
+    `needs_publish` comparing a properties file against itself is what makes
+    that safe, so it is asserted rather than assumed."""
+    for name in ('jwst_nir_hips', 'jwst_miri_hips'):
+        assert ph.LAYERS[name] == f'{ph.DOCROOT}/{name}'
+    same = 'hips_release_date = 2026-09-15T20:15Z\n'
+    assert not ph.needs_publish(same, same)
 
 
 def test_an_unknown_layer_name_is_an_error_not_a_silent_no_op(capsys):
@@ -145,3 +167,119 @@ def test_only_tile_files_are_counted():
     # so any consistent rule works.
     assert ph.count_tiles(lambda root: iter(tree), '/r') == 3
     assert ph.count_tiles(lambda root: iter([('/r', [], [])]), '/r') == 0
+
+
+def test_a_layer_mid_rebuild_is_refused_rather_than_shipped_partial():
+    """A coadd being rebuilt has no `properties` until the build finishes, and
+    the tree on disk at that moment is a strict subset of the right one.
+
+    This is not hypothetical: a manual --coadd raced the hourly cron on
+    2026-09-15 and left jwst_gc_treasury_hips at 2,007 of 11,426 tiles with a
+    zero exit status. `needs_publish` says yes (unknown means yes, so a layer
+    never silently stops updating), and `verify` is what stops it.
+    """
+    assert ph.needs_publish(None, 'hips_release_date = 2026-09-15T12:21Z\n')
+    assert ph.verify(None, True, 8535, 8535) == 'no readable properties'
+    # and a tree that grew under the rsync is caught by the count, not waved
+    # through because rsync exited 0
+    assert ph.verify('hips_release_date = 2026-09-15T20:12Z\n', True,
+                     2007, 11426) == 'tile count 2007 != source 11426'
+
+
+@pytest.mark.parametrize('where', ['docroot', 'remote'])
+def test_a_failed_transfer_says_so_and_leaves_no_staging(where, tmp_path,
+                                                         capsys, monkeypatch):
+    """A publish that moved no bytes must not look like one with nothing to do.
+
+    Measured on 2026-09-15: an rsync of 11,430 tiles was killed by a caller's
+    `timeout`, and the run printed only its docroot line and exited 0.
+    starformation stayed eight hours behind with a 1.2 GB partial `.new` beside
+    the live layer, and the only way to notice was to fetch the served
+    properties by hand.
+
+    Both call sites, because the docroot one is not the milder case: its
+    staging path is `dst + '.new'` INSIDE the directory the host serves, so a
+    killed rsync leaves a partial pyramid next to the live layer on the machine
+    publishing it.
+    """
+    src = tmp_path / 'src'
+    (src / 'Norder3').mkdir(parents=True)
+    (src / 'properties').write_text('hips_release_date = 2026-09-15T20:12Z\n')
+    (src / 'Norder3' / 'Npix1.png').write_bytes(b'x')
+
+    def fake_run(cmd, dry=False):
+        return 124 if cmd[0] == 'rsync' else 0        # 124 = timeout's rc
+
+    monkeypatch.setattr(ph, '_run', fake_run)
+    removed = []
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: removed.append(cmd) or 0)
+
+    if where == 'remote':
+        monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+        rc = ph.publish_remote('zz_layer', str(src), host='zz_host',
+                               web_dir='/zz')
+        stage = '/zz/zz_layer.new'
+    else:
+        monkeypatch.setattr(ph, 'DOCROOT', str(tmp_path / 'docroot'))
+        monkeypatch.setattr(ph, '_read_local', lambda path: (
+            None if 'docroot' in path else (src / 'properties').read_text()))
+        rc = ph.publish_local('zz_layer', str(src))
+        stage = str(tmp_path / 'docroot' / 'zz_layer.new')
+
+    assert rc == 124
+    err = capsys.readouterr().err
+    assert 'TRANSFER FAILED' in err and 'rc=124' in err
+    assert 'live layer untouched' in err
+    # the partial staging tree is removed rather than left to be mistaken for
+    # progress by the next person who looks
+    assert any(stage in ' '.join(c) and 'rm' in ' '.join(c)
+               for c in removed), removed
+    # and nothing was swapped
+    assert not any('mv ' in ' '.join(c) for c in removed), removed
+
+
+@pytest.mark.parametrize('where', ['docroot', 'remote'])
+def test_a_pre_clean_failure_is_named_as_itself(where, tmp_path, capsys,
+                                                monkeypatch):
+    """`rc = _run(rm) or _run(rsync)` called a failed pre-clean a failed
+    TRANSFER. The two want different words -- one says the destination could
+    not be cleared, the other that the bytes did not arrive -- and someone
+    debugging the first while being told the second loses real time.
+
+    Asserted behaviourally. The version of this test that read
+    `inspect.getsource` and checked two literal forms were absent passed
+    happily on a recombination that kept the phrase in a comment and moved the
+    `or` to the next line: it caught the edit it was written against rather
+    than the behaviour. What the source could not express is the last
+    assertion here -- that the transfer never ran at all.
+    """
+    src = tmp_path / 'src'
+    (src / 'Norder3').mkdir(parents=True)
+    (src / 'properties').write_text('hips_release_date = 2026-09-15T20:12Z\n')
+    (src / 'Norder3' / 'Npix1.png').write_bytes(b'x')
+
+    ran = []
+
+    def fake_run(cmd, dry=False):
+        ran.append(cmd)
+        return 1 if ('rm' in cmd[0] or 'rm -rf' in ' '.join(cmd)) else 0
+
+    monkeypatch.setattr(ph, '_run', fake_run)
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: 0)
+
+    if where == 'remote':
+        monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+        rc = ph.publish_remote('zz_layer', str(src), host='zz_host',
+                               web_dir='/zz')
+    else:
+        monkeypatch.setattr(ph, 'DOCROOT', str(tmp_path / 'docroot'))
+        monkeypatch.setattr(ph, '_read_local', lambda path: (
+            None if 'docroot' in path else (src / 'properties').read_text()))
+        rc = ph.publish_local('zz_layer', str(src))
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert 'could not clear the staging path' in err
+    assert 'TRANSFER FAILED' not in err
+    # the thing the source-reading version could not say
+    assert not any(c[0] == 'rsync' for c in ran), ran

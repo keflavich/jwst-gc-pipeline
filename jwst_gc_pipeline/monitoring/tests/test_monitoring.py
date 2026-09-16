@@ -2293,3 +2293,19 @@ def test_aladin_container_can_report_its_height():
     build = body.index("A.aladin('#gcm-aladin'")
     frame = body.index('requestAnimationFrame')
     assert reveal < frame < build, 'construction must wait a frame after reveal'
+
+
+def test_no_survey_goes_through_the_cmz_alias():
+    """`jwst_cmz_hips` is a symlink that exists only in the data.rc docroot.
+
+    Every SURVEYS URL here points at starformation, where that name has never
+    existed, so the layer 404s -- and Aladin draws a 404 HiPS as nothing at all,
+    with no error in the UI. A background that silently does not render is
+    indistinguishable from one the user has not zoomed into yet.
+    """
+    from jwst_gc_pipeline.monitoring import skyview
+    assert not any('jwst_cmz_hips' in url for _, url, _ in skyview.SURVEYS)
+    # and the layers it stood for are both offered, under their own bands
+    urls = [u for _, u, _ in skyview.SURVEYS]
+    assert any(u.endswith('/jwst_nir_hips/') for u in urls)
+    assert any(u.endswith('/jwst_miri_hips/') for u in urls)
