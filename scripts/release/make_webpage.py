@@ -1157,7 +1157,7 @@ FRAME_STEP_OPTIONS = (
      "(whose later groups saturate) keep a measurement instead of a hole. "
      "Set on every instrument path"),
     ("refpix", "use_side_ref_pixels=True",
-     "NIRCam and MIRI"),
+     "set on every instrument path"),
 )
 
 #: Stated because its absence is easy to assume the other way: the source

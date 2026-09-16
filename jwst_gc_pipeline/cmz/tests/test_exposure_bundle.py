@@ -1785,4 +1785,61 @@ def test_the_ramp_setting_on_the_page_is_the_one_the_pipeline_passes():
                  'PipelineRerunNIRISS.py'):
         path = os.path.join(root, 'jwst_gc_pipeline', 'reduction', name)
         src = open(path).read()
-        assert re.search(r"'suppress_one_group'\s*:\s*False", src), name
+        # quote-agnostic: the neighbouring "refpix" key is already written
+        # both ways in the same dict literal
+        assert re.search(r"""["']suppress_one_group["']\s*:\s*False""", src), name
+        assert re.search(r"""["']refpix["']\s*:\s*\{\s*["']use_side_ref_pixels""",
+                         src), name
+        # The page says `expand_large_events` is NOT disabled despite a source
+        # comment saying it should be.  If someone acts on that comment, this
+        # fails rather than the page keeping a claim that has quietly become
+        # false -- the page claim with the least chance of being noticed.
+        assert 'expand_large_events' not in re.sub(r'#[^\n]*', '', src), name
+
+
+def test_staging_records_the_provenance_the_frames_carry(sr, tmp_path,
+                                                         monkeypatch):
+    """The page renders what the MANIFEST holds, so the rendering tests pass
+    whether or not anything ever recorded it.
+
+    Dropping `"provenance": frame_provenance(path)` from `_exposures_from_disk`
+    leaves every page test green and ships a release whose version table is
+    silently absent. This is the assertion that fails instead.
+
+    Compared against what the file says rather than against literals: the
+    GCTAG/GCPIPEV cards are stamped at WRITE time by
+    `jwst_gc_pipeline.provenance`, so a fixture that writes them reads back the
+    current checkout's values, not the ones it typed. Asserting equality with
+    `fits.getheader` makes this "recorded what the file says" rather than
+    "recorded what I typed twice".
+    """
+    from astropy.io import fits
+    import numpy as np
+
+    data_dir = tmp_path / 'field'
+    pipeline = data_dir / 'F212N' / 'pipeline'
+    pipeline.mkdir(parents=True)
+    frame = pipeline / 'jw12345001001_02101_00001_nrca1_destreak_o001_crf.fits'
+    hdu = fits.PrimaryHDU(np.zeros((2, 2), dtype='float32'))
+    hdu.header['CAL_VER'] = '1.21.0.dev314+g61bd2fe47'
+    hdu.header['CRDS_CTX'] = 'jwst_1596.pmap'
+    fits.HDUList([hdu]).writeto(frame)
+
+    monkeypatch.setitem(sr.FIELDS, 'zz_prov', {
+        'data_dir': data_dir, 'proposal_prefix': 'jw12345',
+        'observations': ['o001'],
+    })
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path)
+
+    items = sr._exposures_from_disk('zz_prov', 'v9-test',
+                                    tmp_path / 'v9-test' / 'zz_prov')
+    assert len(items) == 1, items
+    recorded = items[0].get('provenance')
+    assert recorded, 'nothing recorded the frame provenance'
+
+    on_disk = fits.getheader(frame, 0)
+    for key in sr.FRAME_PROVENANCE_KEYS:
+        if key in on_disk:
+            assert recorded[key] == str(on_disk[key]).strip(), key
+    # the two the release is identified by are the ones the pipeline stamps
+    assert 'CAL_VER' in recorded and 'CRDS_CTX' in recorded
