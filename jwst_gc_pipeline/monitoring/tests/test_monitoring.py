@@ -1328,25 +1328,46 @@ def test_a_wildcard_field_is_probeable_once_an_observation_is_named(tmp_path,
     assert got['job_name'].startswith('gc-treasury10678-o042-cut')
 
 
+def _unregistered_treasury_obsid():
+    """An obsid that 10678 resolves no reference catalog for, asked of the
+    registry rather than written down here.
+
+    Naming a real tile is a trap.  This test used to hardcode o042, and on the
+    day o042 was registered the refusal it pins stopped happening -- so it
+    failed for a reason that had nothing to do with the guard it covers.  What
+    the test means is "a tile with no catalog is refused", not "o042 is
+    refused".  10678 has 139 tiles, so the 900 block stays unregistered.
+    """
+    for n in range(900, 1000):
+        obsid = f'{n:03d}'
+        try:
+            _fields.reference_catalog_path('10678', obsid)
+        except _fields.FieldRegistryError:
+            return obsid
+    raise AssertionError('every 9xx obsid resolves a reference catalog; '
+                         'this test needs one that does not')
+
+
 def test_a_treasury_tile_without_a_reference_catalog_is_refused_by_name(
         tmp_path, monkeypatch):
-    """10678 registers no reference catalog on purpose: a single CMZ-wide file
+    """10678 registers its reference catalogs per tile: a single CMZ-wide file
     would be the wrong sky for all but a handful of its 139 tiles.  Planning a
     reduction against an unresolved reference has to stop, and the message has
     to name the tile the operator must register."""
+    obsid = _unregistered_treasury_obsid()
     d = tmp_path / 'F212N' / 'pipeline'
     for exp in range(2):
-        _touch(str(d / f'jw10678042001_02101_0000{exp}_nrca1'
-                      f'_destreak_o042_crf.fits'))
+        _touch(str(d / f'jw10678{obsid}001_02101_0000{exp}_nrca1'
+                      f'_destreak_o{obsid}_crf.fits'))
     monkeypatch.setattr(scan, 'basepath', lambda *a, **k: str(tmp_path))
     monkeypatch.setattr(probe, 'choose_center',
                         lambda *a, **k: (266.5, -28.7, 'frame', 2))
     scan.clear_cache()
-    got = probe.plan_probe('gc-treasury', obsid='042')
+    got = probe.plan_probe('gc-treasury', obsid=obsid)
     assert 'error' in got, got
     # the wildcard still resolved -- the refusal is about the reference, and it
     # names the tile and the registry block to add
-    assert '10678/o042' in got['error'], got['error']
+    assert f'10678/o{obsid}' in got['error'], got['error']
     assert 'reference catalog' in got['error'], got['error']
     assert 'reference_catalog:' in got['error'], got['error']
 
