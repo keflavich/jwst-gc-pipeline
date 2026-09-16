@@ -120,3 +120,44 @@ def test_the_table_is_linked_through_globus_not_a_site_path(mw, tmp_path):
     plain = mw._offsets_section('gc-treasury', _summary(tmp_path), {'files': []})
     assert 'Offsets_JWST_Brick10678_consensus.csv' in plain
     assert 'href=' not in plain.split('is the authority')[0].split('<h2>')[-1]
+
+
+def test_the_recipe_survives_an_association_style_filename(mw, tmp_path):
+    """Every MIRI frame in the release carries
+    `jw10678-o132_t001_miri_f770w_2_o132_crf.fits` as its FILENAME, not the
+    per-exposure form. `int(parts[2])` on that raises ValueError, so a user
+    running this over their download hit an unhandled traceback on 198 of
+    2,178 files -- about one in eleven.
+
+    The right answer for them is "no row": this table is NIRCam-only.
+    """
+    recipe = mw._OFFSETS_RECIPE
+    assert "parts[2].isdigit()" in recipe
+    guard = recipe.split("parts[2].isdigit()")[1].split('\n\n')[0]
+    assert 'return None' in guard
+
+    # the guard precedes the int() that would raise
+    assert recipe.index("parts[2].isdigit()") < recipe.index("exposure=int(parts[2])")
+
+    ns = {}
+    exec(recipe.replace(
+        "Table.read('Offsets_JWST_Brick10678_consensus.csv')",
+        "type('T', (), {})()"), ns)
+    assert 'owed' in ns
+
+
+def test_miri_frames_are_reported_as_never_gaining_a_row(mw, tmp_path):
+    """"1,140 have no row yet" promises a correction that is not coming for
+    198 of them. A NIRCam frame gains a row when the stages reach it; a MIRI
+    frame never will."""
+    summary = _summary(tmp_path)
+    data = json.loads((summary / 'offsets_summary.json').read_text())
+    data['frames']['totals']['no_row_not_nircam'] = 198
+    (summary / 'offsets_summary.json').write_text(json.dumps(data))
+    html = mw._offsets_section('gc-treasury', summary)
+    assert '198' in html
+    assert 'never' in html and 'F770W' in html
+
+    # without any MIRI the sentence does not appear at all
+    plain = mw._offsets_section('gc-treasury', _summary(tmp_path))
+    assert 'F770W' not in plain

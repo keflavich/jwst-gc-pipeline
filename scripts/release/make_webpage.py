@@ -1328,14 +1328,22 @@ def _offsets_section(field, release_dir, manifest=None):
 
     has_row = int(frames.get("has_row", 0))
     no_row = int(frames.get("no_row", 0))
+    miri = int(frames.get("no_row_not_nircam", 0))
     if has_row or no_row:
+        # MIRI is its own sentence, not a footnote on "not measured yet":
+        # a NIRCam frame without a row gains one when the merge stages reach
+        # it, and a MIRI frame never will, because this table is NIRCam-only.
+        never = (f" The {miri:,} MIRI (F770W) frames are a different case: "
+                 f"this table covers F212N and F480M only, so they will never "
+                 f"gain a row and nothing here applies to them."
+                 if miri else "")
         out.append(
             f"<p class=muted><b>Coverage.</b> {has_row:,} of the "
             f"{has_row + no_row:,} frames have a row in today's table; "
-            f"{no_row:,} are not measured yet and should be left alone rather "
-            f"than given a neighbouring exposure's shift. The merge stages "
-            f"fill these in as they go, which is why this page is refreshed "
-            f"daily.</p>")
+            f"{no_row:,} do not, and should be left alone rather than given a "
+            f"neighbouring exposure's shift. The merge stages fill these in as "
+            f"they measure, which is why this page is refreshed daily.{never}"
+            f"</p>")
 
     out.append("<h3>How to apply it</h3>")
     out.append(
@@ -1407,6 +1415,12 @@ def owed(fn):
     \"\"\"(dra, ddec) this frame still needs, arcsec, or None if no row yet.\"\"\"
     hdr0, hdr1 = fits.getheader(fn, 0), fits.getheader(fn, 1)
     parts = hdr0['FILENAME'].split('_')   # jw10678127001_02101_00001_nrca1_...
+    if len(parts) < 4 or not parts[2].isdigit():
+        # An association-style FILENAME (jw10678-o132_t001_miri_f770w_2_...),
+        # which every MIRI frame in this release carries. The table is
+        # NIRCam-only, so there is nothing to look up -- and these never gain
+        # a row, unlike a NIRCam frame that is merely unmeasured.
+        return None
     match = locked_row_match(tbl, visit=parts[0], exposure=int(parts[2]),
                              filtername=hdr0['FILTER'],
                              module=hdr0['DETECTOR'].lower(),

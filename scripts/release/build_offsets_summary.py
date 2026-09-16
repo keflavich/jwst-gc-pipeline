@@ -28,20 +28,30 @@ DEFAULT_TABLE = ('/orange/adamginsburg/jwst/gc-treasury/offsets/'
                  'Offsets_JWST_Brick10678_consensus.csv')
 
 
-def _has_row(tbl, path):
-    """True if the offsets table describes this exposure."""
+def _row_state(tbl, path):
+    """``'has_row'`` / ``'no_row'`` / ``'no_row_not_nircam'`` for one frame.
+
+    The third is its own answer rather than a flavour of the second. A NIRCam
+    frame with no row gains one when the merge stages reach it; a MIRI frame
+    never will, because this table is NIRCam-only. A page that lumps them
+    together promises 198 frames a correction that is not coming.
+    """
     from astropy.io import fits
     from jwst_gc_pipeline.reduction.unified_alignment import locked_row_match
     try:
         hdr = fits.getheader(path, 0)
         parts = hdr['FILENAME'].split('_')
+        if len(parts) < 4 or not parts[2].isdigit():
+            # Association-style FILENAME (jw10678-o132_t001_miri_f770w_2_...),
+            # which is what every MIRI frame here carries.
+            return 'no_row_not_nircam'
         match = locked_row_match(tbl, visit=parts[0], exposure=int(parts[2]),
                                  filtername=hdr['FILTER'],
                                  module=hdr['DETECTOR'].lower(),
                                  vgroup=parts[1])
     except (OSError, KeyError, IndexError, ValueError):
-        return False
-    return bool(match.sum() == 1)
+        return 'no_row'
+    return 'has_row' if match.sum() == 1 else 'no_row'
 
 
 def scan_frames(exposures_dir, tbl=None):
@@ -76,7 +86,14 @@ def scan_frames(exposures_dir, tbl=None):
                 # pipeline's own matcher rather than a private lookup: the
                 # narrowing has cases (Vgroup always, Module/Exposure only when
                 # they disambiguate) that a second implementation gets wrong.
-                per_obs[obs]['has_row' if _has_row(tbl, path) else 'no_row'] += 1
+                state = _row_state(tbl, path)
+                per_obs[obs][state] += 1
+                if state == 'no_row_not_nircam':
+                    # Counted as no_row too, so has_row + no_row still covers
+                    # every frame; the finer key says WHY, and the page needs
+                    # the difference: a NIRCam frame without a row gains one
+                    # when the stages reach it, a MIRI frame never does.
+                    per_obs[obs]['no_row'] += 1
     totals = collections.Counter()
     for counts in per_obs.values():
         totals.update(counts)
@@ -167,7 +184,9 @@ def main(argv=None):
     print(f'frames: {totals.get("corrected", 0)} already corrected, '
           f'{totals.get("uncorrected", 0)} not; '
           f'{totals.get("has_row", 0)} have a table row, '
-          f'{totals.get("no_row", 0)} not measured yet')
+          f'{totals.get("no_row", 0)} not ('
+          f'{totals.get("no_row_not_nircam", 0)} of those are MIRI, which this '
+          f'NIRCam-only table will never describe)')
     print(f'wrote {out}')
     return 0
 
