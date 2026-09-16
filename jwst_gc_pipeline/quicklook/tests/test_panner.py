@@ -3,6 +3,8 @@ import importlib.util
 import json
 import math
 import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -175,10 +177,53 @@ def test_a_tour_with_nothing_to_pan_is_refused_before_it_is_written(build,
     assert not (out / panner.PAGE_FILE).exists()
 
 
-def test_the_skip_loop_cannot_spin_forever():
-    """The page is the second line of defence for a hand-edited tour: an
-    unbounded `while (ends[0].jump)` freezes the tab with nothing logged."""
-    script = panner._SCRIPT
-    assert 'while (ends[0].jump)' not in script
-    assert script.count('guard < TOUR.stops.length') >= 1
-    assert script.count('g2 < TOUR.stops.length') >= 1
+NODE_HARNESS = r"""
+// Enough of a browser for step() to run: the script's three globals, plus a
+// self-returning `chain` so the trailing fetch(...).then(...).catch(...) is
+// syntactically whole without doing anything.
+var calls = 0;
+var chain = {then: function () { return chain; },
+             catch: function () { return chain; }};
+globalThis.fetch = function () { return chain; };
+globalThis.document = {getElementById: function () {
+  return {addEventListener: function () {}, textContent: '', innerHTML: '',
+          classList: {toggle: function () {}}};
+}};
+globalThis.requestAnimationFrame = function () {};      // step() re-arms; ignore
+globalThis.A = {init: chain};
+var DATA_URL = 'tour.json';   // the page defines this beside the script
+
+__SCRIPT__
+
+// Every stop a cut: the state the builder now refuses to write, and the one
+// the page must survive if a tour file is hand-edited.
+TOUR = {survey: 'x', fov: 0.01, rate: 2,
+        stops: [{ra: 0, dec: 0, label: 'a', jump: true},
+                {ra: 0.1, dec: 0, label: 'b', jump: true},
+                {ra: 0.2, dec: 0, label: 'c', jump: true}]};
+aladin = {gotoRaDec: function () { calls++; }};
+playing = true;
+last = 0;
+step(1000);                       // must RETURN, not spin
+console.log('returned');
+"""
+
+
+def test_an_all_cut_tour_does_not_hang_the_page(tmp_path):
+    """The page's skip loop advances until it finds a leg to pan. With every
+    stop flagged there is none, and an unbounded loop spins inside
+    requestAnimationFrame -- a frozen tab with nothing in the console.
+
+    Run rather than read: the version of this test that asserted the ABSENCE
+    of `while (ends[0].jump)` passed on `while (ends[0].jump && true)` with the
+    bound gone and the explanatory text surviving in a comment.
+    """
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not available')
+    script = tmp_path / 'harness.js'
+    script.write_text(NODE_HARNESS.replace('__SCRIPT__', panner._SCRIPT))
+    done = subprocess.run([node, str(script)], capture_output=True, text=True,
+                          timeout=20)
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert 'returned' in done.stdout
