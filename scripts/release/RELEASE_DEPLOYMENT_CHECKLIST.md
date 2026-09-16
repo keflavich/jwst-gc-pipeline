@@ -298,6 +298,285 @@ Two consequences for a release:
     staged field with `stage_release.py --check-exposures --field <field>`,
     which also reports frames whose source has been rewritten since staging.
 
+## ⛔ 5b. HiPS layers current AND astrometrically correct (BLOCKING for 10678)
+
+**Program 10678's release includes its HiPS layers.** They are part of the
+deliverable, not a by-product of it:
+
+    https://data.rc.ufl.edu/pub/adamginsburg/avm_images/jwst_gc_treasury_hips/
+    https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_hips/
+
+Those are the SERVED copies, on the two hosts the viewers read
+(`/orange/adamginsburg/web/public/avm_images/` behind data.rc, and
+starformation's `htdocs/avm_images/`). Check them, and nothing else: the build
+tree under `.../gc-treasury/pngs/` is not the deliverable and returns **401**
+to anyone who follows it, so a gate written against it fails on a correct
+deployment and passes on none. What a reader needs to confirm is what the
+public can fetch, which is only ever the pair above.
+
+### Current
+
+`python scripts/monitoring/publish_hips_layers.py --dry-run` compares
+`hips_release_date` in each `properties` against both destinations and says
+what it would republish. "up to date" on both lines is the pass.
+
+Builds happen and publishing does not: as of 2026-09-14 nothing in either
+treasury cron path calls the publisher, so the served layers lag the builds by
+hours as a steady state. Do not assume a fresh build is a fresh layer, and do
+not read the build directory as evidence about what is served.
+
+### Accurate — a separate question, and the one that bites
+
+**Release date and tile count are LIVENESS checks. They say nothing about
+position.** Both were green on 2026-09-14 while every treasury tile sat 1.26″
+off the sky.
+
+Two independent astrometric caveats apply to these layers. Fixing either does
+nothing for the other, so check both:
+
+1. **Source frame.** The treasury mosaics sit on the raw `assign_wcs` solution
+   with no measured tie to VIRAC2/Gaia (item 1 above). Both viewers say so.
+   This is a property of the input.
+2. **Publishing chain.** `save_rgb` reverses both pixel axes (`flip=-1` then
+   `ROTATE_180`) and `reproject` undoes only one, so a WCS-aware reader
+   reconstructs a 180° rotation of the input — while the callers embedded the
+   *unrotated* FITS WCS. pyavm's Scale+Rotation round-trip returns the negated
+   CD on its own, so orientation and scale come out right and CRPIX is the only
+   thing wrong: a pure translation of `|N + 1 - 2*CRPIX|` pixels per axis. The
+   FITS were fine (~50 mas); the HiPS were not.
+
+   Measured 2026-09-14 (avm-hips), current → corrected AVM: o112 NIRCam
+   1.258″→0.000″, o127 NIRCam 1.255″→0.001″, o138 NIRCam 1.275″→0.031″,
+   o127 MIRI 0.417″→0.002″, o138 MIRI 0.414″→0.002″. Sampling the *published*
+   tiles gave 1.061″ (o127) and 1.055″ (o138), so it reached the served
+   product. Fixed in `keflavich/jwst_scripts#11` (`avm_for_saved_png`);
+   rebuild in progress as of 2026-09-14.
+
+**The cheap check, and the limit on it.** Read `Spatial.ReferencePixel` from
+the PNG's AVM and compare with the source FITS `CRPIX`:
+
+* equal to `CRPIX` → raw form;
+* equal to `NAXIS + 1 - CRPIX` → reflected form.
+
+⚠ **This is only decisive for layers built through ONE known code path.** It
+tells you which AVM *form* is embedded, not whether that form matches the PNG's
+pixel orientation, and those are independent: a PNG whose pixels are rotated
+180° *needs* the reflected reference pixel, one whose pixels are not rotated
+needs the raw one, and both are correct.
+
+It is valid for the **GC Treasury** layers, which all come from
+`jwst_scripts/scripts/gc_treasury_rgb_images.py` with `flip=-1` and `ROTATE_180`, so the pixel
+orientation is fixed and the reference pixel alone settles it. It is **not**
+valid for the older CMZ layers, hand-built by many scripts over years. Using it
+there produced a confident 105″ error report for SgrA MIRI that measurement
+then disproved — both SgrA layers are correctly placed, written by different
+paths, each internally consistent.
+
+Run it over every PNG feeding a layer, not a sample: on 2026-09-14 the treasury
+build directory was *mixed* (2 of 20 corrected), and on 2026-09-15 it still was
+(NIRCam 14 corrected / 18 not; MIRI 14 / 20) because the 51-task fix array had
+been queued ~19 h on `Priority` and never started. A mixed input set produces a
+mosaic wrong in patches — and unlike a uniform offset, it cannot be corrected
+by a single shift afterwards. `publish_hips_layers.py`'s verification
+(properties parses, Norder3 present, tile count matches) catches none of this.
+
+**The general test is a content comparison**: reproject the PNG through its
+embedded AVM onto the source grid and cross-correlate. Two conditions on it,
+both of which produced false clean results in practice:
+
+* **Require a correlation floor.** A cutout on blank sky returns a tidy-looking
+  `offset 0.033″` at `r = 0.00`. Below about `r = 0.35` there is no
+  measurement, only a number. Report `r` beside every offset.
+* **Place the cutout on the data, not the frame centre.** These mosaics are
+  mostly empty — the SgrA grid is 12.4% valid — so a centre cutout is usually
+  blank, which is how the floor above gets exercised.
+
+For a release, prefer a measured offset with its correlation over any proxy.
+
+### Complete — a third question, separate from both
+
+A layer can be current, astrometrically correct, and still **missing tiles**: a
+pointing whose L3 landed but whose RGB was never rendered simply is not in the
+mosaic, and nothing in `properties` says so. Compare the layer's contents
+against the registered observations rather than against its own last build.
+
+Known gaps as of 2026-09-14 (avm-hips):
+
+| layer | observed but never rendered |
+|---|---|
+| `jwst_gc_treasury_hips` (NIRCam) | o105, o106, o107 |
+| `jwst_gc_treasury_miri_hips` | o106, o107, o108 |
+| `jwst_gc_treasury_miri_bgmatch_hips` | o106–o109, o111–o113, o116–o118, o126 |
+
+The NIRCam and plain-MIRI gaps are queued. The **bgmatch layer covers fewer
+fields than the plain MIRI layer by construction** and will keep doing so:
+background matching needs per-field offsets from `MIRI_MATCH_JSON`, and
+extending it needs a `--miri-match` re-run that has not been authorised.
+
+    offsets present: o127 o128 o129 o130 o131 o132 o133 o134 o135 o137 o138 o139
+    offsets missing: o106 o107 o108 o109 o111 o112 o113 o116 o117 o118 o126
+
+Treat bgmatch as a comparison layer, not as MIRI coverage.
+
+**Until 2026-09-14 that gap did not present as a gap.** `miri_needs_build`
+checked only that `MIRI_MATCH_JSON` existed, not that it carried an offset for
+the field being built, while `build_miri_obs` raises for any field missing from
+it. So all 11 uncovered fields reported "no MIRI png yet", were built, and
+landed as FAILED entries on every hourly tick — a recurring build error rather
+than missing input, which is the sort of thing that gets tuned out. They now
+report `NOMATCH` and are excluded from both the build loop and the pending
+report (`jwst_scripts#13`). A coverage gap that reports itself as a build
+failure will not be found by looking at build failures.
+
+### Five silent-failure mechanisms to know about
+
+Each cost real time or coverage this week, and none of them raises anything.
+
+1. **A held lock starves the inventory.** The builder takes `.auto.lock` so the
+   cron cannot re-coadd mid-rebuild. `cmd_auto` hits the held lock, prints one
+   line and returns **before the inventory loop runs** — so nothing is built and
+   nothing is listed. The defect was never in `needs_build`, which would have
+   answered correctly; it was that nothing called it. o105/o106/o107 sat
+   unrendered for hours this way while a 4-hour rebuild held the lock.
+   `cmd_auto` now names the lock holder and lists what an unblocked tick would
+   build:
+
+       another run holds the lock (263 min old); exiting
+         .auto.lock says: 549716 avm-astrometry-rebuild 2026-09-14T13:35:57
+         WAITING ON THE LOCK: 3 item(s)
+           o105 NIRCam -- no RGB yet
+
+2. **A missing input reported as a build failure** — the `MIRI_MATCH_JSON` case
+   above.
+
+3. **A coadd inherits its first input's release date.** `coadd_hips` writes
+   `reference_properties = all_properties[0]` verbatim, and new observations
+   sort last, so a full rebuild advertises the date of its OLDEST member and
+   reports "unchanged". On 2026-09-15 the corrected MIRI coadd — every field
+   rebuilt, measured at 0.000″ — carried the date already published, and
+   `publish_hips_layers.py` said "up to date" about a tree it had never
+   copied. Fixed upstream by stamping the coadd (`jwst_scripts#14`);
+   `publish_hips_layers.py --force` exists for the general case of a date that
+   is wrong for any reason.
+
+   Note the symmetry with the cron recoadd above: one puts a fresh date on
+   stale content, the other a stale date on fresh content. **A date gate is
+   blind in both directions**, which is why the accuracy check is a measured
+   offset and not a timestamp.
+
+   Stamping a layer changes no tiles, but the SERVED copy keeps advertising
+   the old date until it is republished — so stamp, then publish, or the fix
+   stops one hop short of the reader.
+
+   ⚠ **Do not generalise this to "rebuilt HiPS keep stale dates".** It is
+   specific to `coadd_hips`. A layer built directly through
+   `reproject_to_hips` — the catalogue-derived overlays, for instance — writes
+   fresh properties and advances its date correctly (verified 2026-09-15:
+   overlays rebuilt to `11:09Z` unprompted while the coadd needed stamping).
+   The wrong generalisation sends the next person looking in the wrong place.
+
+   **A shrinking selection over a growing sample is not necessarily a bug.**
+   The same rebuild took matched sources 805,136 → 813,659 while the
+   ultra-red count went 333 → 330. Better-vetted inputs drop marginal
+   detections, and an extreme-colour cut is exactly where mismatches
+   concentrate, so the tail should shrink slightly as the catalogue improves.
+   Say so in the release note; "sample grew, selection shrank" reads as a
+   defect otherwise.
+
+4. **An optimisation that is "obviously harmless" to a measurement feeding a
+   correction.** Block-averaging frames 8× before measuring pairwise
+   background offsets looked free — a background offset is large-scale and
+   should survive binning — and produced plausible numbers. Validated against
+   unbinned values from the same code, it shifted every pair by about **−0.6,
+   the same size as the offsets being solved for**, and would have corrupted
+   every tile's correction while reading as a 64× speedup.
+
+   The cause is **unconfirmed** and deliberately recorded as such: footprint
+   edges via `np.nanmean` over partly-blank blocks was disproved by strict NaN
+   propagation, and a noise/sigma-clipping explanation is plausible and
+   untested. A recorded guess is how the next person gets misled. What IS
+   established: the harness reproduces unbinned values at factor 1 to −0.0000,
+   so the bias is a property of the binning and not of the validation.
+
+   `BG_MATCH_BIN = 1`, with the measured pairs in the comment and an
+   instruction not to re-enable without re-running that comparison.
+
+   **Shipped in `keflavich/jwst_scripts` main (via #17), NOT in the checkout
+   the cron runs.** Verified 2026-09-15: `origin/main` carries
+   `BG_MATCH_BIN = 1` at line 548, four occurrences; the deployed
+   `/orange/adamginsburg/jwst/jwst_scripts/` sits at an older merge and its
+   copy of the script contains the name zero times, while
+   `30 * * * * .../jwst_scripts/scripts/gc_treasury_cron.sh` runs from that
+   checkout every hour. The guard exists and the running deployment does not
+   have it; pulling that checkout is what closes the gap. Check the deployed
+   file rather than the repo before relying on this. The
+   transferable rule: **any shortcut in a measurement that feeds a correction
+   needs comparison against unshortcut values before it ships**, and the
+   comparison has to be checked against itself at the identity setting.
+
+5. **A rebuild that is not queued but stalled, with nothing saying so.** A job
+   behind a few hundred of the same user's own jobs in a burst QOS does not
+   start, and `Reason=Priority` reads identically at minute one and at hour
+   nineteen. The 51-task treasury AVM fix sat 19 h that way while
+   `hpg-default` had 111 idle nodes.
+
+   The cause is backfill scope, not load: `SchedulerParameters` carries
+   `bf_max_job_user=100`, backfill only tests a user's first 100 jobs, and
+   these ranked 111–115 behind 348 of the same account's pending jobs. **The
+   distinguishing check is rank versus `bf_max_job_user`** (`sprio` plus
+   `scontrol show config | grep bf_max_job_user`), not elapsed pending time.
+
+   Resubmitting makes it worse — priority here is largely age, so a new
+   submission restarts at zero. The ways out are to clear or hold enough of the
+   user's own pending jobs to bring the rebuild inside the window, to run the
+   work outside SLURM where it is small enough (the MIRI layers are 10 s each;
+   the NIRCam ones ~63 min single-core, which is not), or a QOS decision, which
+   belongs to the account owner.
+
+   For a release this matters because "the fix is queued" and "the fix is not
+   going to run" look the same from the outside, and only the second one means
+   the shipped layer stays wrong.
+
+### When the default rendering flavour changes
+
+A layer can be current, correct and complete and still look wrong to someone
+who knew the previous one. `jwst_gc_treasury_vminmax_hips` renders every image
+with **one fixed pair of cuts, `vmin = -0.5`, `vmax = 100 MJy/sr`**, rather than
+per-image percentiles, so brightness is comparable between tiles — which is the
+point of it, and why it becomes the default.
+
+`vmax` sits **below the 99th percentile in both filters**: about **3.4% of
+F480M and 1.5% of F212N pixels saturate**. That is intended and was approved on
+the numbers, not an oversight. It does mean the default layer clips bright
+regions harder than the percentile layer it replaces, so **say so in the
+release note** — otherwise the first person to compare them reports it as a
+regression, and the second one "fixes" it.
+
+Keep the percentile layer published alongside rather than replacing it: it is
+the comparison that makes the clipping legible.
+
+Switching the default is **three** changes, not one, and doing only the first
+adds a layer nobody selects:
+
+1. `field_overview.SURVEYS` — the release index's survey list;
+2. `skyview.SURVEYS` — the monitor's background list;
+3. the monitor's default-background constant, which pins a layer **by name**.
+
+### Ownership
+
+The treasury HiPS builds belong to the **avm-hips** session; it publishes them
+after verifying served tiles against the source mosaics. Do not publish these
+layers from the release side, and do not re-coadd them while a rebuild array is
+running — a re-coadd mid-array mixes corrected and uncorrected inputs.
+
+Auto-publishing on an mtime gate is **not** wired in, deliberately: it would
+have shipped the 1.26″-off tree automatically the day the bug was found. The
+duplicated treasury cron (`0 * * * *` building directly, `30 * * * *` running
+the wrapper, two interpreters) wants reconciling before anything else is hung
+off it.
+
+---
+
 ## 6. Publishing the site (do not hand-write the rsync)
 - Deploy with `scripts/release/deploy_site.sh` (`--dry-run` first). The docroot
   `htdocs/jwst-gc/` is shared: the release pages are ours, `monitor/` belongs to

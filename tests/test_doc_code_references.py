@@ -78,6 +78,12 @@ def _resolves_in_paper(path):
 
 
 _FOREIGN_PREFIXES = ('brick2221/', 'jwst_rgb/', 'peppar/',
+                     # keflavich/jwst_scripts: the RGB/HiPS build scripts
+                     # this campaign runs but does not host.  The HiPS
+                     # checklist has to name them, and naming them without
+                     # the repo is how a reader goes looking here for a file
+                     # that was never here.
+                     'jwst_scripts/',
                      'jwst/', 'stdatamodels/',
                      'stcal/', 'gwcs/', 'stpsf/', 'photutils/', 'astropy/',
                      'crowdsource/', 'poppy/', 'synphot/', 'asdf/', 'drizzle/',
