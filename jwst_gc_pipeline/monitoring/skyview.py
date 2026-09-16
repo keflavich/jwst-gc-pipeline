@@ -137,25 +137,24 @@ RGPS_COMPONENTS = (
 #: seeing both at once is the point.  NIRCam is therefore NOT in this list --
 #: it is `TREASURY_NIRCAM_HIPS` below, always in front of whatever background
 #: is selected, so switching to DSS still leaves the survey's own data visible.
+#: `vminmax`, not the percentile build.  Fixed asinh cuts (-0.5 to 100
+#: MJy/sr) mean one surface brightness is one colour across the mosaic; the
+#: percentile build stretches each field on its own pixels, which on a page
+#: whose subject is tile-to-tile progress renders equal sky as a brightness
+#: step at every tile edge -- the artefact most easily mistaken for a real
+#: difference between pointings.  Its cost is the top end: vmax=100 saturates
+#: about 3.4% of F480M and 1.5% of F212N pixels.
 TREASURY_NIRCAM_HIPS = (
-    'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_hips/')
+    'https://starformation.astro.ufl.edu/avm_images/'
+    'jwst_gc_treasury_vminmax_hips/')
 
 SURVEYS = (
-    # First, so it is the default background (`SURVEYS[0]`): this is the
-    # programme the monitor is about, in the band pair it is defined by, and
-    # the tile outlines drawn over it are NIRCam tiles.  The MIRI layer that
-    # used to lead covers the parallels rather than the pointings.
-    #
-    # `vminmax` rather than the percentile build: fixed asinh cuts (-0.5 to
-    # 100 MJy/sr), so one surface brightness is one colour across the whole
-    # mosaic.  The percentile build stretches each field on its own pixels,
-    # which on a page whose subject is tile-to-tile progress renders equal sky
-    # as a brightness step at every tile edge.  Its cost is the top end:
-    # vmax=100 saturates about 3.4% of F480M and 1.5% of F212N pixels.
-    ('JWST Treasury NIRCam',
-     'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_vminmax_hips/',
-     'program 10678 F212N + F480M as observed so far — R=F480M, G=mean, '
-     'B=F212N, on fixed cuts so tiles are comparable to each other'),
+    # NIRCam is deliberately NOT here -- see TREASURY_NIRCAM_HIPS above. It is
+    # drawn as an always-on overlay instead, so switching the background to
+    # DSS or 2MASS still leaves the survey's own data visible. Adding it here
+    # as well would paint the same sky twice, and the overlay wins wherever it
+    # has tiles, so the background copy would be invisible AND would decide
+    # nothing.
     ('JWST Treasury MIRI',
      'https://starformation.astro.ufl.edu/avm_images/jwst_gc_treasury_miri_hips/',
      'program 10678 F770W parallels as observed so far — zoom in to a tile; '
