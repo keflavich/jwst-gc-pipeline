@@ -2309,3 +2309,21 @@ def test_no_survey_goes_through_the_cmz_alias():
     urls = [u for _, u, _ in skyview.SURVEYS]
     assert any(u.endswith('/jwst_nir_hips/') for u in urls)
     assert any(u.endswith('/jwst_miri_hips/') for u in urls)
+
+
+def test_the_treasury_nircam_layer_is_the_default_background():
+    """The monitor is about 10678's NIRCam pointings, and the tile outlines it
+    draws are NIRCam tiles; the MIRI layer that used to lead covers the
+    parallels instead. The fixed-cut build is the one that belongs here: on a
+    page whose subject is tile-to-tile progress, a per-field stretch renders
+    equal sky as a brightness step at every tile edge.
+    """
+    from jwst_gc_pipeline.monitoring import skyview
+    name, url, _ = skyview.SURVEYS[0]
+    assert url.endswith('/jwst_gc_treasury_vminmax_hips/'), url
+    assert 'NIRCam' in name
+    # the percentile build is not offered here at all -- two NIRCam layers of
+    # the same sky differing only in stretch is a choice this page does not
+    # need to put in front of anyone
+    assert not any(u.endswith('/jwst_gc_treasury_hips/')
+                   for _, u, _ in skyview.SURVEYS)
