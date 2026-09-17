@@ -67,6 +67,29 @@ def test_every_heading_on_a_real_page_is_anchored(mw, tmp_path):
     assert missing == [], missing
 
 
+def test_every_renderer_anchors_its_headings(mw):
+    """Three pages call `anchor_headings`, and one test that builds only the
+    index holds one of them: dropping the call from `render_field_page` or
+    from `render_help` left every test green while two thirds of the site lost
+    its anchors.
+    """
+    manifest = {'field': 'gc-treasury', 'version': 'v1.8-2026.09',
+                'group': None, 'release_path': '/releases/v1.8/gc-treasury',
+                'built': '2026-09-17T12:00:00', 'mode': 'copy',
+                'globus_collection_id': 'x',
+                'globus_https_base': 'https://example.invalid', 'files': []}
+    pages = {
+        'field': mw.render_field_page('gc-treasury', manifest, ''),
+        'help': mw.render_help(),
+        'index': mw.render_index([], quicklooks=mw.QUICKLOOKS),
+    }
+    for name, page in pages.items():
+        headings = re.findall(r'<h[1-6]([^>]*)>', page)
+        assert headings, f'{name} has headings'
+        missing = [h for h in headings if not re.search(r'\bid\s*=', h)]
+        assert missing == [], (name, missing)
+
+
 def test_a_heading_with_no_word_characters_still_gets_an_id(mw):
     """An id is required to be non-empty; `<h2>&mdash;</h2>` would otherwise
     produce `id=""`, which is invalid and unlinkable."""

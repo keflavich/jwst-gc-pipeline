@@ -19,6 +19,7 @@ import collections
 import json
 import os
 import shutil
+import re
 import sys
 import warnings
 
@@ -59,6 +60,28 @@ def _row_state(tbl, path):
     return 'has_row' if match.sum() == 1 else 'no_row'
 
 
+#: `o123`, as the release stages its directories.
+_OBS_DIR_RE = re.compile(r'^o\d+$')
+
+
+def _obs_of_path(path, exposures_dir):
+    """The observation a staged frame belongs to, from its path.
+
+    NIRCam stages as ``exposures/o127/F212N/`` and MIRI as
+    ``exposures/MIRI/o132/F770W/``, so the first path segment is the
+    observation for one instrument and the instrument name for the other.
+    Taking the first segment reported every MIRI frame under an observation
+    called ``MIRI``, which matches no row in the offsets table and no
+    observation in the release: the frames counted, and then had no
+    denominator to be counted against.
+    """
+    parts = os.path.relpath(path, exposures_dir).split(os.sep)
+    for part in parts[:-1]:
+        if _OBS_DIR_RE.match(part):
+            return part
+    return parts[0]
+
+
 def scan_frames(exposures_dir, tbl=None):
     """``(per_obs, totals)`` -- how many frames already carry a baked shift.
 
@@ -75,7 +98,7 @@ def scan_frames(exposures_dir, tbl=None):
             if not name.endswith('.fits'):
                 continue
             path = os.path.join(root, name)
-            obs = os.path.relpath(path, exposures_dir).split(os.sep)[0]
+            obs = _obs_of_path(path, exposures_dir)
             try:
                 header = fits.getheader(path, 1)
             except (OSError, IndexError, ValueError) as err:
@@ -129,6 +152,10 @@ def summarise_table(path, frames=None):
 
     tbl = Table.read(path)
     frames = frames or {}
+    # The offsets table covers the PROGRAMME; a release stages part of it. An
+    # observation with no staged frames gets no denominator, and saying so is
+    # different from reporting it as zero coverage.
+    staged_obs = {obs for obs, _filt in frames}
     have_source = 'prov_source' in tbl.colnames
 
     def obs_of(visit):
@@ -151,12 +178,16 @@ def summarise_table(path, frames=None):
         scatter = resid.get(key, [])
         entry = {'observation': obs, 'filter': filt,
                  'n_exposure_rows': len(scatter),
-                 'n_frames': frames.get(key)}
+                 'n_frames': frames.get(key),
+                 'in_release': (obs in staged_obs) if staged_obs else None}
         if len(scatter) >= MIN_ROWS_FOR_RMS:
             dra = np.array([s[0] for s in scatter])
             ddec = np.array([s[1] for s in scatter])
+            # ddof=1: these are a SAMPLE of the frames of one visit, and at
+            # the three-row floor the population form reads ~18% low -- in the
+            # direction the floor exists to guard against.
             entry['residual_rms_mas'] = float(
-                np.hypot(np.std(dra), np.std(ddec)) * 1000)
+                np.hypot(np.std(dra, ddof=1), np.std(ddec, ddof=1)) * 1000)
         if key in bulk:
             dra, ddec, source = bulk[key]
             entry.update({

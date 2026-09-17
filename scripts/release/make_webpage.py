@@ -1328,6 +1328,16 @@ _SORTABLE_SCRIPT = """<script>
   function key(cell, kind) {
     var text = (cell.textContent || '').trim();
     if (kind === 'obs') { return parseInt(text.replace(/^o/, ''), 10); }
+    if (kind === 'frac') {
+      // `35 / 48` is a fraction, and parseFloat reads it as 35. Sorted that
+      // way a complete `12 / 12` ranks below a three-quarters-done `35 / 48`,
+      // on the column that exists to show how complete each one is.
+      var parts = text.split('/');
+      if (parts.length !== 2) { return null; }
+      var total = parseFloat(parts[1]);
+      if (!(total > 0)) { return null; }
+      return parseFloat(parts[0]) / total;
+    }
     if (kind === 'num') {
       // An empty cell is "not measured", not zero: it sorts to the end either
       // way rather than into the middle of the real values.
@@ -1379,7 +1389,40 @@ def _coverage_cell(row):
     """
     n = row.get('n_exposure_rows', 0)
     total = row.get('n_frames')
-    return f'{n} / {total}' if total else str(n)
+    if total:
+        return f'{n} / {total}'
+    if row.get('in_release') is False:
+        # The table covers the programme; this release stages part of it. "0"
+        # would read as "measured nothing", which is a claim about the
+        # measurement rather than about what is in the download.
+        return 'not in this release'
+    return str(n)
+
+
+#: How each bulk tie was measured, in the words the table writes, mapped to
+#: what fits in a column. The two are different measurements at different
+#: scales -- the m2 tie is a per-visit consensus against the reference
+#: catalogue (tens to hundreds of mas), the histogram one is a whole-mosaic
+#: cross-correlation that found o040 and o041 metres off the plan (arcseconds).
+#: Pooling them was this section's original defect; showing them without
+#: saying which is which is the same defect one step quieter.
+_SOURCE_LABELS = {
+    'm2 consensus->reference': 'm2 tie',
+    'consensus->reference': 'm2 tie',
+    'offset-histogram swept+confirmed vs VIRAC2 (i2d mosaic)':
+        'histogram vs VIRAC2 (mosaic)',
+}
+
+
+def _source_label(source):
+    """A short name for a measurement method, or the raw string.
+
+    Unknown sources are shown verbatim rather than mapped to a default: a new
+    provenance appearing in the table is exactly the case where a reader needs
+    to see it, and a fallback label hides it behind a familiar one.
+    """
+    source = (source or '').strip()
+    return _SOURCE_LABELS.get(source, source or 'unstated')
 
 
 def _offsets_section(field, release_dir, manifest=None):
@@ -1492,13 +1535,23 @@ def _offsets_section(field, release_dir, manifest=None):
         out.append(
             "<p class=muted>This is the BULK TIE: how far the visit's whole "
             "pointing sits from the reference frame, which is what "
-            "&ldquo;how wrong is the astrometry&rdquo; means. It is "
-            "<b>tens to hundreds of milliarcseconds</b>. Do not confuse it "
+            "&ldquo;how wrong is the astrometry&rdquo; means. Most are tens to "
+            "hundreds of milliarcseconds; a few are arcseconds, and those are "
+            "the ones to look at first. Do not confuse it "
             "with the per-exposure rows in the same table, which are "
             "residuals about each visit's own consensus and are a few mas: "
             "those describe how well the frames of one visit agree with each "
             "other, and say nothing about where that visit sits on the sky. "
             "The rightmost column gives that scatter separately.</p>")
+        out.append(
+            "<p class=muted><b>Two measurements, named per row.</b> "
+            "<code>m2 tie</code> is the per-visit consensus measured against "
+            "the reference catalogue. <code>histogram vs VIRAC2 (mosaic)</code> "
+            "is a swept, window-confirmed cross-correlation of the whole "
+            "mosaic, which is how the arcsecond-scale displacements were "
+            "found. They answer the same question at different scales and are "
+            "shown in one table on purpose; they are never pooled into one "
+            "number, which is what this table used to do.</p>")
         out.append(
             "<p class=muted><b>Coverage is partial and uneven.</b> Every "
             "F212N observation has 48 frames (8 detectors &times; 6 exposures) "
@@ -1518,7 +1571,8 @@ def _offsets_section(field, release_dir, manifest=None):
                    "<th data-sort=num>&Delta;RA (mas)</th>"
                    "<th data-sort=num>&Delta;Dec (mas)</th>"
                    "<th data-sort=num>Total (mas)</th>"
-                   "<th data-sort=num>Frames measured</th>"
+                   "<th data-sort=text>Source</th>"
+                   "<th data-sort=frac>Frames measured</th>"
                    "<th data-sort=num>Frame-to-frame RMS (mas)</th>"
                    "</tr></thead><tbody>")
         for row in sorted(measured, key=lambda r: -r['total_mas']):
@@ -1529,6 +1583,7 @@ def _offsets_section(field, release_dir, manifest=None):
                 f"<td class=size>{row['dra_arcsec'] * 1000:+.1f}</td>"
                 f"<td class=size>{row['ddec_arcsec'] * 1000:+.1f}</td>"
                 f"<td class=size><b>{row['total_mas']:.0f}</b></td>"
+                f"<td>{html.escape(_source_label(row.get('source')))}</td>"
                 f"<td class=size>{_coverage_cell(row)}</td>"
                 f"<td class=size>{'' if rms is None else f'{rms:.1f}'}</td>"
                 f"</tr>")
