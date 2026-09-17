@@ -55,23 +55,29 @@ def _record(passed=True, failures=(), corrections=(), blocking=()):
                 record_path='/x/rec.json')
 
 
-def _run(tmp_path, monkeypatch, record, warn_only=False, filt='F200W'):
+def _run(tmp_path, monkeypatch, record, warn_only=False, filt='F200W',
+         stage='m2'):
     """Call the real caller with a canned checkpoint record.
 
     Only `run_visit_checkpoint` and the reference-catalog load are stubbed --
     everything from the per-frame glob through the decision is the shipping
     code path.
+
+    `stage` selects which enforcement policy the decision runs under:
+    `frozen_failure_is_deferred` defers at a FROZEN stage ('m3'...) and never
+    at a CORRECTION_STAGES one ('m2'), so a test about the deferred branch has
+    to be able to ask for the other half.
     """
     from jwst_gc_pipeline.photometry import cataloging
 
     cut_bp = str(tmp_path)
     d = tmp_path / filt.upper()
     d.mkdir(parents=True)
-    (d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_m2_'
+    (d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_{stage}_'
          f'daophot_basic.fits').write_bytes(b'')
     tbl = Table({'x': [1.0]})
-    tbl.write(str(d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_m2_'
-                      f'daophot_basic.fits'), overwrite=True)
+    tbl.write(str(d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_'
+                      f'{stage}_daophot_basic.fits'), overwrite=True)
 
     # `run_visit_checkpoint` is imported inside the function, so patch it at
     # the source module.  A pre-populated refcat cache skips the catalog load.
@@ -83,7 +89,7 @@ def _run(tmp_path, monkeypatch, record, warn_only=False, filt='F200W'):
     options = types.SimpleNamespace(field='004', proposal_id='1182',
                                     target='brick')
     return cataloging._run_astrometry_stage_checkpoint(
-        'm2', 'nrca', filt, cut_bp, cut_bp, '1182', options,
+        stage, 'nrca', filt, cut_bp, cut_bp, '1182', options,
         {'refcat': {'all': None, 'sparse': None}}, context='test')
 
 
@@ -179,6 +185,100 @@ def test_the_hatch_it_names_is_one_the_code_reads(tmp_path, monkeypatch,
             f'{name} is printed as the escape hatch but does not make a '
             f'measured-and-refused record pass')
         monkeypatch.delenv(name)
+
+
+def test_a_refused_record_does_NOT_then_announce_a_PASS(tmp_path, monkeypatch,
+                                                        capsys):
+    """The o135 shape (#871): refused, zero corrections, and the very next line
+    called it a pass.
+
+    `corrections` is empty precisely BECAUSE the tie was refused -- a tie m2
+    declines to apply is a tie m2 does not write -- so the branch that
+    announces a clean checkpoint fired on the refused one too, and its PASS was
+    the last word in the log.  gc-treasury o135 m12 finalize 41922332
+    (2026-09-13) printed, for F212N/merged:
+
+        ASTROM CHECKPOINT [m2]: NOT A PASS -- 1 item(s) were MEASURED and
+          refused ... consensus->reference offset 62.45 mas
+        astrom checkpoint [m2] F212N/merged: NOT A PASS -- 1 item(s) ...
+        astrom checkpoint [m2] F212N/merged: PASS (no correction implied)
+
+    The finalize exited 0 and m3 froze the 62 mas in.
+    """
+    rec = _record(passed=False, corrections=[], blocking=[
+        'gc-treasury F212N/merged F212N visit 1 [m2]: consensus->reference '
+        'offset 62.45 mas but the tie is not trustworthy -- NOT applying'])
+    _run(tmp_path, monkeypatch, rec)          # still not fatal (#312/#341)
+    out = capsys.readouterr().out
+    assert 'MEASURED and REFUSED' in out
+    assert 'PASS (no correction implied)' not in out, (
+        'a refused record announced itself as a pass three lines after being '
+        'refused, and the PASS was what the operator and the retie loop read')
+    assert 'NOT a pass' in out
+
+
+def test_a_warn_only_demotion_does_NOT_then_announce_a_PASS(tmp_path,
+                                                            monkeypatch,
+                                                            capsys):
+    """ASTROM_CHECKPOINT_WARN_ONLY=1 asks the chain to CONTINUE past a
+    failure.  It does not turn the failure into a pass, and the demoted record
+    reaches the corrections short-circuit with an empty list like any other."""
+    rec = _record(passed=False, failures=['duplicate exposure identity'])
+    _run(tmp_path, monkeypatch, rec, warn_only=True)
+    out = capsys.readouterr().out
+    assert 'WARN_ONLY=1 -- continuing' in out
+    assert 'PASS (no correction implied)' not in out
+
+
+def test_a_DEFERRED_frozen_failure_does_NOT_then_announce_a_PASS(
+        tmp_path, monkeypatch, capsys):
+    """The deferral says "the release gate refuses this field" and continues.
+    Printing PASS after that sentence contradicts it in the same log."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        CHECKPOINT_ENFORCE_ENV, ENFORCE_AT_RELEASE)
+    monkeypatch.setenv(CHECKPOINT_ENFORCE_ENV, ENFORCE_AT_RELEASE)
+    rec = _record(passed=False, failures=['consensus->reference MOVED 62 mas'])
+    _run(tmp_path, monkeypatch, rec, stage='m3')      # frozen -> deferred
+    out = capsys.readouterr().out
+    assert 'the release gate refuses this field' in out
+    assert 'PASS (no correction implied)' not in out
+
+
+def test_the_opt_in_hatch_still_produces_a_real_PASS(tmp_path, monkeypatch,
+                                                     capsys):
+    """ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1 is the documented way to proceed
+    past a measured-and-refused item.  It works upstream -- `_checkpoint_passed`
+    returns True, so the record arrives here with passed=True -- and such a
+    record must still read as a pass.  Narrowing the PASS line must not take
+    the hatch away."""
+    monkeypatch.setenv(ALLOW_UNVERIFIED_ENV, '1')
+    rec = _record(passed=True, blocking=['the operator accepted this one'])
+    _run(tmp_path, monkeypatch, rec)
+    assert 'PASS (no correction implied)' in capsys.readouterr().out
+
+
+def test_the_PASS_line_is_gated_on_the_record_not_on_list_length():
+    """Source guard: the corrections short-circuit must consult the verdict.
+
+    Reverting to a bare `if not corrections: print(PASS)` restores #871, and
+    every behavioural test above would still pass if the gate were moved to
+    somewhere that does not run for the deferred branch.
+
+    Anchored on the f-string that BUILDS the line (`{module}: PASS `), not on
+    the rendered text: the comment above it quotes the o135 log verbatim, so
+    the rendered form appears earlier in the source and matching that would
+    measure the comment instead of the code.
+    """
+    import inspect
+
+    from jwst_gc_pipeline.photometry import cataloging
+    src = inspect.getsource(cataloging._run_astrometry_stage_checkpoint)
+    corr_at = src.index("corrections = record.get('corrections')")
+    tail = src[corr_at:]
+    pass_at = tail.index('{module}: PASS ')
+    assert "record.get('passed') is False" in tail[:pass_at], (
+        'the PASS line is reached without re-reading the verdict, so a '
+        'passed=false record with zero corrections announces a pass again')
 
 
 def test_failures_WIN_when_both_lists_are_populated(tmp_path, monkeypatch):

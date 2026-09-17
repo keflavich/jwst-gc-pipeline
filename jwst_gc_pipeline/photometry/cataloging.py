@@ -4981,8 +4981,39 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
 
     corrections = record.get('corrections') or []
     if not corrections:
-        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS "
-              f"(no correction implied)", flush=True)
+        # "no correction implied" is a verdict on the RECORD, not on the length
+        # of one list.  Every branch above that lets the run CONTINUE after
+        # declining to pass -- the measured-and-refused one, a `warn_only`
+        # demotion, a `frozen_failure_is_deferred` deferral -- falls through to
+        # here, and each of them leaves `corrections` EMPTY by construction: a
+        # tie m2 refused is a tie m2 did not write.  So the branch that exists
+        # to announce a clean checkpoint announced the refused ones too, three
+        # lines after refusing them, and its PASS was the last word in the log.
+        #
+        # gc-treasury o135, m12 finalize 41922332 (2026-09-13), F212N/merged:
+        #
+        #   ASTROM CHECKPOINT [m2]: NOT A PASS -- 1 item(s) were MEASURED and
+        #     refused ... consensus->reference offset 62.45 mas
+        #   astrom checkpoint [m2] F212N/merged: NOT A PASS -- 1 item(s) ...
+        #   astrom checkpoint [m2] F212N/merged: PASS (no correction implied)
+        #
+        # The finalize exited 0, m3 started, and the 62 mas was frozen into a
+        # solution no later stage can correct (issue #871).  Its sibling F480M
+        # never printed the PASS line, only because it happened to carry two
+        # sub-floor corrections -- which is not a difference in astrometry.
+        #
+        # This does not decide whether a refused bulk tie should STOP the
+        # chain: #312/#341 made that non-fatal deliberately, the record already
+        # carries passed=false, and the release gate reads it.  It decides only
+        # that the log must not call it a pass.
+        if _failures or record.get('passed') is False:
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                  f"no correction to apply, and this record is NOT a pass "
+                  f"(see above) -- nothing here clears it.\n"
+                  f"  record: {record.get('record_path')}", flush=True)
+        else:
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS "
+                  f"(no correction implied)", flush=True)
         return
 
     _field = str(getattr(options, 'field', ''))
