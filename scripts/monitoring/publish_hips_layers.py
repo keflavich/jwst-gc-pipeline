@@ -48,6 +48,8 @@ import re
 import shlex
 import subprocess
 import sys
+import time
+import contextlib
 
 #: Layers to distribute, and where each is BUILT.  Explicit on purpose -- see 1.
 BUILD_ROOT = '/orange/adamginsburg/jwst/gc-treasury/pngs'
@@ -176,6 +178,113 @@ def _read_remote(host, path):
     return done.stdout if done.returncode == 0 else None
 
 
+# --- the build lock ----------------------------------------------------------
+# `gc_treasury_rgb_images.py` (keflavich/jwst_scripts) rebuilds these coadds
+# hourly and holds `<BUILD_ROOT>/.auto.lock` while it writes.  A publish that
+# ignores it copies a tree being rewritten underneath it: on 2026-09-16 an
+# rsync of 12,707 vminmax tiles died with `Stale file handle (116)` partway
+# through, because the cron replaced the files it was reading.
+#
+# So the publisher takes the same lock.  Know what that costs the builder,
+# because the two sides behave differently when blocked: `coadd_lock` (the
+# manual --coadd path) WAITS, but `cmd_auto` -- the hourly job -- prints
+# "another run holds the lock" and EXITS (gc_treasury_rgb_images.py:1066).  So
+# a publish holding the lock does not delay a rebuild by the length of a
+# transfer; it makes that tick do nothing, and the rebuild happens the next
+# hour.  At hourly cadence against a ~30 min copy the practical difference is
+# small, but "skipped" and "late" are not the same claim and the next person
+# reasoning about contention needs the accurate one.
+#
+# The trade is still the right way round: the tick it costs is one that would
+# otherwise have raced the copy, and a rebuild is idempotent -- nothing is lost
+# by doing it an hour later.  What is lost by racing is a published tree that
+# changed while it was being read.
+#
+# The protocol is COPIED from that script rather than invented, because a lock
+# only works if both sides implement it the same way: same path, O_CREAT|O_EXCL
+# (not exists-then-create, which lets two arrivals both proceed), the same
+# `pid timestamp what` line, the same 6 h staleness takeover, and release in a
+# `finally` so a crash does not starve the schedule.
+LOCK_FILE = '.auto.lock'
+#: A publish is minutes-to-an-hour; a rebuild is hours.  Waiting longer than
+#: this means the next scheduled publish will do the job anyway.
+LOCK_WAIT_S = int(os.environ.get('HIPS_PUBLISH_LOCK_WAIT_S', 2 * 3600))
+#: Matches the builder's own takeover threshold.  A shorter one here would let
+#: the publisher steal a lock from a rebuild that is merely slow.
+LOCK_STALE_S = 6 * 3600
+
+
+def lock_path(src):
+    """The build lock guarding ``src``, or None if nothing builds it.
+
+    Only the trees built by the hourly job are guarded. The CMZ overview
+    coadds are rebuilt in the docroot by a different script that does not take
+    this lock, so claiming it for them would block the treasury rebuild while
+    protecting nothing.
+    """
+    if os.path.dirname(os.path.normpath(src)) != os.path.normpath(BUILD_ROOT):
+        return None
+    return os.path.join(BUILD_ROOT, LOCK_FILE)
+
+
+@contextlib.contextmanager
+def build_lock(src, what, wait_s=None, poll=30, dry=False):
+    """Hold the build lock for the duration, or wait for whoever has it."""
+    path = lock_path(src)
+    if path is None or dry:
+        yield True
+        return
+    wait_s = LOCK_WAIT_S if wait_s is None else wait_s
+    waited = 0
+    while os.path.exists(path):
+        age = time.time() - os.path.getmtime(path)
+        if age > LOCK_STALE_S:
+            print(f'  stale build lock ({age / 3600:.1f} h); taking it')
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            break
+        if waited == 0:
+            try:
+                holder = open(path).read().strip()
+            except OSError:
+                holder = 'unreadable'
+            print(f'  waiting for the build lock ({age / 60:.0f} min old; '
+                  f'{holder}) before {what}', flush=True)
+        if waited >= wait_s:
+            print(f'  build lock still held after {waited // 60} min; '
+                  f'skipping {what} -- the next run will publish it',
+                  file=sys.stderr)
+            yield False
+            return
+        time.sleep(poll)
+        waited += poll
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, f"{os.getpid()} "
+                         f"{time.strftime('%Y-%m-%dT%H:%M:%S')} "
+                         f"{what}\n".encode())
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        # taken between the last look and now
+        print(f'  build lock was taken while we waited; skipping {what}',
+              file=sys.stderr)
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        # In a finally, like the builder's: the other half of this lock's
+        # history is runs that left the file behind and starved the schedule.
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 def publish_local(name, src, dry=False, force=False):
     """Docroot copy (what data.rc serves), staged and swapped."""
     dst = os.path.join(DOCROOT, name)
@@ -280,6 +389,9 @@ def main(argv=None):
     ap.add_argument('--layer', action='append',
                     help='publish only this layer (repeatable); default all')
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--no-wait', action='store_true',
+                    help='do not wait for the build lock: skip any layer that '
+                         'is being rebuilt right now, and say so')
     ap.add_argument('--skip-remote', action='store_true',
                     help='docroot only (no ssh; for a host without web access)')
     ap.add_argument('--force', action='store_true',
@@ -304,10 +416,19 @@ def main(argv=None):
             print(f'  source missing: {src}', file=sys.stderr)
             rc = rc or 1
             continue
-        rc = publish_local(name, src, dry=args.dry_run, force=args.force) or rc
-        if not args.skip_remote:
-            rc = publish_remote(name, src, dry=args.dry_run,
-                                force=args.force) or rc
+        # Per LAYER, not for the whole run: a five-layer publish holding the
+        # lock end to end would block rebuilds for hours, and a layer rebuilt
+        # while a LATER one is being copied is simply newer next time.
+        with build_lock(src, f'publishing {name}', dry=args.dry_run,
+                        wait_s=0 if args.no_wait else None) as held:
+            if not held:
+                rc = rc or 1
+                continue
+            rc = publish_local(name, src, dry=args.dry_run,
+                               force=args.force) or rc
+            if not args.skip_remote:
+                rc = publish_remote(name, src, dry=args.dry_run,
+                                    force=args.force) or rc
     return rc
 
 
