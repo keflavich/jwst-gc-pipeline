@@ -101,34 +101,61 @@ def scan_frames(exposures_dir, tbl=None):
 
 
 def summarise_table(path):
-    """Per-(observation, filter) medians, plus the table's own provenance."""
+    """Split the table into the two quantities it holds, which are not the same
+    measurement and must never be pooled.
+
+    * ``m2 consensus->reference`` rows (``Module='all'``, ``Exposure=-1``) are
+      the BULK TIE: how far the visit's whole pointing sits from the reference
+      frame. This is "the offset" -- what a user asking how wrong the
+      astrometry is wants. 70 to 500 mas here.
+    * ``m2 visit-consensus`` rows (one per detector per exposure) are RESIDUALS
+      about that visit consensus: frame-to-frame scatter, a few mas.
+
+    Taking a median over both reports ~5 mas, because the 878 residuals swamp
+    the 20 bulk rows -- a number two orders of magnitude below the real offset,
+    on a page telling people how to correct their astrometry. That is what this
+    function did until 2026-09-17.
+    """
     import numpy as np
     from astropy.table import Table
 
     tbl = Table.read(path)
-    rows = []
-    # `Visit` is jw<prop><obs><vis>; the observation is the tile number the
-    # rest of the release is keyed on.
-    by = collections.defaultdict(list)
+    have_source = 'prov_source' in tbl.colnames
+
+    def obs_of(visit):
+        visit = str(visit)
+        return f'o{visit[7:10]}' if len(visit) >= 10 else visit
+
+    bulk, resid = {}, collections.defaultdict(list)
     for row in tbl:
-        visit = str(row['Visit'])
-        obs = f'o{visit[7:10]}' if len(visit) >= 10 else visit
-        by[(obs, str(row['Filter']))].append(
-            (float(row['dra (arcsec)']), float(row['ddec (arcsec)']),
-             str(row['prov_stage']) if 'prov_stage' in tbl.colnames else ''))
-    for (obs, filt), vals in sorted(by.items()):
-        dra = np.array([v[0] for v in vals])
-        ddec = np.array([v[1] for v in vals])
-        stages = sorted({v[2] for v in vals if v[2]})
-        rows.append({
-            'observation': obs, 'filter': filt, 'n': len(vals),
-            'dra_median_arcsec': float(np.median(dra)),
-            'ddec_median_arcsec': float(np.median(ddec)),
-            'dra_span_mas': float((dra.max() - dra.min()) * 1000),
-            'ddec_span_mas': float((ddec.max() - ddec.min()) * 1000),
-            'stages': stages,
-        })
-    return rows, len(tbl)
+        key = (obs_of(row['Visit']), str(row['Filter']))
+        source = str(row['prov_source']) if have_source else ''
+        dra, ddec = float(row['dra (arcsec)']), float(row['ddec (arcsec)'])
+        if source == 'm2 consensus->reference' or str(row['Module']) == 'all':
+            bulk[key] = (dra, ddec, source)
+        else:
+            resid[key].append((dra, ddec))
+
+    rows = []
+    for key in sorted(set(bulk) | set(resid)):
+        obs, filt = key
+        scatter = resid.get(key, [])
+        entry = {'observation': obs, 'filter': filt,
+                 'n_exposure_rows': len(scatter)}
+        if scatter:
+            dra = np.array([s[0] for s in scatter])
+            ddec = np.array([s[1] for s in scatter])
+            entry['residual_rms_mas'] = float(
+                np.hypot(np.std(dra), np.std(ddec)) * 1000)
+        if key in bulk:
+            dra, ddec, source = bulk[key]
+            entry.update({
+                'dra_arcsec': dra, 'ddec_arcsec': ddec,
+                'total_mas': float(np.hypot(dra, ddec) * 1000),
+                'source': source or 'consensus->reference'})
+        rows.append(entry)
+    measured = sum(1 for r in rows if 'total_mas' in r)
+    return rows, len(tbl), measured
 
 
 def main(argv=None):
@@ -158,7 +185,7 @@ def main(argv=None):
 
     from astropy.table import Table
     tbl = Table.read(staged)
-    rows, n_rows = summarise_table(staged)
+    rows, n_rows, n_measured = summarise_table(staged)
     per_obs, totals, unreadable = scan_frames(
         os.path.join(release, 'exposures'), tbl=tbl)
     if unreadable:
@@ -174,13 +201,16 @@ def main(argv=None):
             os.path.getmtime(staged),
             __import__('datetime').timezone.utc).strftime('%Y-%m-%dT%H:%MZ'),
         'per_filter': rows,
+        'n_measured_ties': n_measured,
         'frames': {'totals': totals, 'per_obs': per_obs,
                    'unreadable': len(unreadable)},
     }
     out = os.path.join(release, SUMMARY_FILE)
     with open(out, 'w') as fh:
         json.dump(summary, fh, indent=1)
-    print(f'{n_rows} offset rows over {len(rows)} (observation, filter) pairs')
+    print(f'{n_rows} offset rows over {len(rows)} (observation, filter) pairs; '
+          f'{n_measured} have a measured tie to the reference frame, '
+          f'{len(rows) - n_measured} have only per-exposure residuals')
     print(f'frames: {totals.get("corrected", 0)} already corrected, '
           f'{totals.get("uncorrected", 0)} not; '
           f'{totals.get("has_row", 0)} have a table row, '

@@ -30,11 +30,14 @@ def _summary(tmp_path, **over):
     data = {
         'table_file': 'Offsets_JWST_Brick10678_consensus.csv',
         'table_rows': 898, 'table_mtime': '2026-09-16T11:43Z',
-        'per_filter': [{'observation': 'o127', 'filter': 'F212N', 'n': 18,
-                        'dra_median_arcsec': -0.0312,
-                        'ddec_median_arcsec': 0.0455,
-                        'dra_span_mas': 31.0, 'ddec_span_mas': 12.0,
-                        'stages': ['m2']}],
+        'per_filter': [
+            {'observation': 'o139', 'filter': 'F212N', 'n_exposure_rows': 30,
+             'dra_arcsec': -0.4691, 'ddec_arcsec': -0.1615,
+             'total_mas': 496.0, 'residual_rms_mas': 5.2,
+             'source': 'm2 consensus->reference'},
+            {'observation': 'o127', 'filter': 'F212N', 'n_exposure_rows': 35,
+             'residual_rms_mas': 5.6},
+        ],
         'frames': {'totals': {'corrected': 1340, 'uncorrected': 838,
                               'has_row': 1038, 'no_row': 1140},
                    'per_obs': {}, 'unreadable': 0},
@@ -218,3 +221,32 @@ def test_row_state_classifies_nircam_frames_by_whether_the_table_has_them(
                      'jw10678139001_02101_00003_nrcb2_destreak_o139_crf.fits',
                      detector='NRCB2')
     assert builder._row_state(_table(), missing) == 'no_row'
+
+
+def test_the_table_reports_the_bulk_tie_not_the_frame_scatter(mw, tmp_path):
+    """The table pooled two different measurements and took a median over both.
+
+    `m2 consensus->reference` rows (20 of them) are the bulk tie: how far a
+    visit's whole pointing sits from the reference frame, 70-500 mas.
+    `m2 visit-consensus` rows (878) are residuals about that consensus, a few
+    mas. A median over both reports ~5 mas, swamped by the residuals -- two
+    orders of magnitude below the real offset, on a page telling people how to
+    correct their astrometry.
+    """
+    html = mw._offsets_section('gc-treasury', _summary(tmp_path))
+    assert 'BULK TIE' in html
+    assert '496' in html, 'the real offset must be the number shown'
+    assert '5.2' in html, 'the frame-to-frame scatter is reported separately'
+    # and never as one pooled number
+    assert 'Median offset per observation' not in html
+
+
+def test_a_pair_with_no_measured_tie_is_called_out_not_shown_as_small(mw,
+                                                                     tmp_path):
+    """17 of 32 visits have no tie to the reference frame at all. Showing them
+    a median of their residuals says "your astrometry is good to 5 mas" about
+    a pointing whose error has never been measured."""
+    html = mw._offsets_section('gc-treasury', _summary(tmp_path))
+    assert 'No measured tie yet' in html
+    assert 'o127' in html
+    assert 'unknown rather' in html

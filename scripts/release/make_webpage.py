@@ -1372,28 +1372,47 @@ def _offsets_section(field, release_dir, manifest=None):
         "at &delta; = &minus;29&deg; is 0.87 of it.</p>")
 
     if rows:
-        out.append("<h3>Median offset per observation and filter</h3>")
-        out.append("<table><tr><th>Obs</th><th>Filter</th><th>Rows</th>"
-                   "<th>&Delta;RA (\u2033)</th><th>&Delta;Dec (\u2033)</th>"
-                   "<th>Spread (mas)</th><th>Stage</th></tr>")
-        for row in rows:
-            spread = max(row["dra_span_mas"], row["ddec_span_mas"])
+        measured = [r for r in rows if 'total_mas' in r]
+        pending = [r for r in rows if 'total_mas' not in r]
+        out.append("<h3>Offset to the reference frame, per observation and "
+                   "filter</h3>")
+        out.append(
+            "<p class=muted>This is the BULK TIE: how far the visit's whole "
+            "pointing sits from the reference frame, which is what "
+            "&ldquo;how wrong is the astrometry&rdquo; means. It is "
+            "<b>tens to hundreds of milliarcseconds</b>. Do not confuse it "
+            "with the per-exposure rows in the same table, which are "
+            "residuals about each visit's own consensus and are a few mas: "
+            "those describe how well the frames of one visit agree with each "
+            "other, and say nothing about where that visit sits on the sky. "
+            "The rightmost column gives that scatter separately.</p>")
+        out.append("<table><tr><th>Obs</th><th>Filter</th>"
+                   "<th>&Delta;RA (mas)</th><th>&Delta;Dec (mas)</th>"
+                   "<th>Total (mas)</th><th>Exposure rows</th>"
+                   "<th>Frame-to-frame RMS (mas)</th></tr>")
+        for row in sorted(measured, key=lambda r: -r['total_mas']):
+            rms = row.get('residual_rms_mas')
             out.append(
                 f"<tr><td>{html.escape(row['observation'])}</td>"
                 f"<td>{html.escape(row['filter'])}</td>"
-                f"<td class=size>{row['n']}</td>"
-                f"<td class=size>{row['dra_median_arcsec']:+.4f}</td>"
-                f"<td class=size>{row['ddec_median_arcsec']:+.4f}</td>"
-                f"<td class=size>{spread:.0f}</td>"
-                f"<td><span class=tag>{html.escape(', '.join(row['stages']))}"
-                f"</span></td></tr>")
+                f"<td class=size>{row['dra_arcsec'] * 1000:+.1f}</td>"
+                f"<td class=size>{row['ddec_arcsec'] * 1000:+.1f}</td>"
+                f"<td class=size><b>{row['total_mas']:.0f}</b></td>"
+                f"<td class=size>{row['n_exposure_rows']}</td>"
+                f"<td class=size>{'' if rms is None else f'{rms:.1f}'}</td>"
+                f"</tr>")
         out.append("</table>")
-        out.append(
-            "<p class=muted>Spread is the full range across the rows behind "
-            "each median, so it is per-exposure jitter within that "
-            "observation and filter rather than an uncertainty on the median. "
-            "A large one means the exposures disagree and the median is the "
-            "visit-level tie, not a value every exposure shares.</p>")
+        if pending:
+            names = ', '.join(sorted({r['observation'] for r in pending}))
+            out.append(
+                f"<p class=warn><b>No measured tie yet for "
+                f"{len(pending)} (observation, filter) pair(s):</b> "
+                f"{html.escape(names)}. These have per-exposure residuals only "
+                f"&mdash; their frames agree with each other, and how far that "
+                f"agreement sits from the sky has not been measured. Their "
+                f"astrometry is the raw <code>assign_wcs</code> pointing, not "
+                f"a corrected one, and the size of the error is unknown rather "
+                f"than small.</p>")
     return "\n".join(out)
 
 
