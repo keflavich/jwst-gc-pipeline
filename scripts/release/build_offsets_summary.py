@@ -23,6 +23,11 @@ import sys
 import warnings
 
 SUMMARY_FILE = 'offsets_summary.json'
+
+#: Below this, a scatter is not a scatter. o114 F212N has ONE per-exposure row,
+#: whose standard deviation is 0.0 -- which the page rendered as "0.0 mas
+#: frame-to-frame", i.e. perfect agreement, from a single measurement.
+MIN_ROWS_FOR_RMS = 3
 DEFAULT_RELEASE = '/orange/adamginsburg/jwst/releases/v1.8-2026.09/gc-treasury'
 DEFAULT_TABLE = ('/orange/adamginsburg/jwst/gc-treasury/offsets/'
                  'Offsets_JWST_Brick10678_consensus.csv')
@@ -63,6 +68,7 @@ def scan_frames(exposures_dir, tbl=None):
     """
     from astropy.io import fits
     per_obs = collections.defaultdict(lambda: collections.Counter())
+    per_key = {}
     unreadable = []
     for root, _, names in os.walk(exposures_dir):
         for name in sorted(names):
@@ -79,6 +85,8 @@ def scan_frames(exposures_dir, tbl=None):
             dec = header.get('DEOFFSET')
             baked = bool((ra not in (None, 0.0)) or (dec not in (None, 0.0)))
             per_obs[obs]['corrected' if baked else 'uncorrected'] += 1
+            filt = os.path.basename(os.path.dirname(path))
+            per_key[(obs, filt)] = per_key.get((obs, filt), 0) + 1
             if tbl is not None:
                 # Does the table have a row for this exposure YET? The merge
                 # stages fill these in as they measure, so a release routinely
@@ -97,10 +105,10 @@ def scan_frames(exposures_dir, tbl=None):
     totals = collections.Counter()
     for counts in per_obs.values():
         totals.update(counts)
-    return dict(per_obs), dict(totals), unreadable
+    return dict(per_obs), dict(totals), unreadable, per_key
 
 
-def summarise_table(path):
+def summarise_table(path, frames=None):
     """Split the table into the two quantities it holds, which are not the same
     measurement and must never be pooled.
 
@@ -120,6 +128,7 @@ def summarise_table(path):
     from astropy.table import Table
 
     tbl = Table.read(path)
+    frames = frames or {}
     have_source = 'prov_source' in tbl.colnames
 
     def obs_of(visit):
@@ -141,8 +150,9 @@ def summarise_table(path):
         obs, filt = key
         scatter = resid.get(key, [])
         entry = {'observation': obs, 'filter': filt,
-                 'n_exposure_rows': len(scatter)}
-        if scatter:
+                 'n_exposure_rows': len(scatter),
+                 'n_frames': frames.get(key)}
+        if len(scatter) >= MIN_ROWS_FOR_RMS:
             dra = np.array([s[0] for s in scatter])
             ddec = np.array([s[1] for s in scatter])
             entry['residual_rms_mas'] = float(
@@ -185,9 +195,9 @@ def main(argv=None):
 
     from astropy.table import Table
     tbl = Table.read(staged)
-    rows, n_rows, n_measured = summarise_table(staged)
-    per_obs, totals, unreadable = scan_frames(
+    per_obs, totals, unreadable, per_key = scan_frames(
         os.path.join(release, 'exposures'), tbl=tbl)
+    rows, n_rows, n_measured = summarise_table(staged, frames=per_key)
     if unreadable:
         print(f'WARNING: {len(unreadable)} frame(s) could not be read for their '
               f'applied-shift state; they are counted in neither column:')

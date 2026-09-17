@@ -1368,6 +1368,20 @@ _SORTABLE_SCRIPT = """<script>
 </script>"""
 
 
+def _coverage_cell(row):
+    """``35 / 48`` -- rows against frames, not a bare row count.
+
+    Every F212N observation has exactly 48 frames and every F480M 12, so a
+    varying row count is not a property of the observation: it is how much of
+    it this table describes, 2% to 92% across the survey. A fraction reads as
+    incomplete coverage; a bare count reads as something the field did
+    differently.
+    """
+    n = row.get('n_exposure_rows', 0)
+    total = row.get('n_frames')
+    return f'{n} / {total}' if total else str(n)
+
+
 def _offsets_section(field, release_dir, manifest=None):
     """The astrometric offsets table, and how to apply what is still owed.
 
@@ -1486,6 +1500,15 @@ def _offsets_section(field, release_dir, manifest=None):
             "other, and say nothing about where that visit sits on the sky. "
             "The rightmost column gives that scatter separately.</p>")
         out.append(
+            "<p class=muted><b>Coverage is partial and uneven.</b> Every "
+            "F212N observation has 48 frames (8 detectors &times; 6 exposures) "
+            "and every F480M has 12, but the table describes between 2% and "
+            "92% of them depending on the observation &mdash; 52% overall. "
+            "That reflects how many measurement passes have run and which "
+            "frames each covered, not anything that differs between the "
+            "fields. The frame-to-frame RMS is blank below three rows, where "
+            "a standard deviation is not a scatter.</p>")
+        out.append(
             "<p class=muted>Click a column to sort; click again to reverse. "
             "The default is worst offset first, because that is the order the "
             "question &ldquo;which fields are wrong&rdquo; is asked in, but "
@@ -1495,7 +1518,7 @@ def _offsets_section(field, release_dir, manifest=None):
                    "<th data-sort=num>&Delta;RA (mas)</th>"
                    "<th data-sort=num>&Delta;Dec (mas)</th>"
                    "<th data-sort=num>Total (mas)</th>"
-                   "<th data-sort=num>Exposure rows</th>"
+                   "<th data-sort=num>Frames measured</th>"
                    "<th data-sort=num>Frame-to-frame RMS (mas)</th>"
                    "</tr></thead><tbody>")
         for row in sorted(measured, key=lambda r: -r['total_mas']):
@@ -1506,7 +1529,7 @@ def _offsets_section(field, release_dir, manifest=None):
                 f"<td class=size>{row['dra_arcsec'] * 1000:+.1f}</td>"
                 f"<td class=size>{row['ddec_arcsec'] * 1000:+.1f}</td>"
                 f"<td class=size><b>{row['total_mas']:.0f}</b></td>"
-                f"<td class=size>{row['n_exposure_rows']}</td>"
+                f"<td class=size>{_coverage_cell(row)}</td>"
                 f"<td class=size>{'' if rms is None else f'{rms:.1f}'}</td>"
                 f"</tr>")
         out.append("</tbody></table>")

@@ -333,3 +333,96 @@ def test_sorting_a_number_column_keeps_unmeasured_rows_at_the_end(mw, tmp_path):
     desc, asc = _sort(mw, tmp_path, 4)
     assert desc[0] == 'o139' and desc[-1] == 'o127', desc
     assert asc[-1] == 'o127', asc
+
+
+
+# ---- coverage: rows against frames ----
+def _csv(tmp_path, rows):
+    """A minimal offsets table on disk, in the columns `summarise_table` reads."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    head = ('Visit,Filter,Module,Exposure,Vgroup,dra (arcsec),ddec (arcsec),'
+            'prov_source')
+    body = '\n'.join(','.join(str(c) for c in r) for r in rows)
+    path = tmp_path / 'offsets.csv'
+    path.write_text(f'{head}\n{body}\n')
+    return str(path)
+
+
+def _resid(exposure, dra=0.001, ddec=-0.002):
+    return ('jw10678114001', 'F212N', 'nrca1', exposure, 2101, dra, ddec,
+            'm2 visit-consensus')
+
+
+def test_a_scatter_of_fewer_than_three_rows_is_not_reported(builder, tmp_path):
+    """o114 F212N has ONE per-exposure row. `np.std` of one value is 0.0, and
+    the page rendered that as "0.0 mas frame-to-frame" -- perfect agreement
+    between frames, from a single measurement, on the observation with the
+    least evidence behind it. Two rows are no better: their std is half their
+    separation whatever the real scatter is.
+    """
+    def rms(n):
+        rows = [_resid(i + 1, dra=0.001 * (i + 1)) for i in range(n)]
+        out, _, _ = builder.summarise_table(_csv(tmp_path / str(n), rows))
+        assert len(out) == 1
+        return out[0].get('residual_rms_mas')
+
+    assert rms(1) is None
+    assert rms(2) is None
+    assert rms(3) is not None and rms(3) > 0
+
+
+def test_the_row_count_is_reported_against_the_frames_it_covers(builder,
+                                                                tmp_path):
+    """The count varies 1 to 44 between observations that hold exactly the
+    same 48 frames, so a bare count reads as something the field did
+    differently. It is coverage: how much of the observation this table
+    describes yet."""
+    rows = [_resid(i + 1) for i in range(3)]
+    out, _, _ = builder.summarise_table(
+        _csv(tmp_path / 'cov', rows), frames={('o114', 'F212N'): 48})
+    assert out[0]['n_exposure_rows'] == 3
+    assert out[0]['n_frames'] == 48
+
+    # and a key the frame scan never saw stays None rather than borrowing one
+    plain, _, _ = builder.summarise_table(
+        _csv(tmp_path / 'cov2', rows), frames={('o139', 'F212N'): 48})
+    assert plain[0]['n_frames'] is None
+
+
+def test_the_frame_scan_counts_frames_per_observation_and_filter(builder,
+                                                                 tmp_path):
+    """The denominator comes from the release tree, staged as
+    `exposures/<obs>/<FILTER>/`. Keyed on anything else it never matches the
+    table's (observation, filter) and every cell silently falls back to the
+    bare count this column was rewritten to remove.
+    """
+    for obs, filt, n in (('o114', 'F212N', 3), ('o114', 'F480M', 2),
+                         ('o139', 'F212N', 1)):
+        d = tmp_path / 'exposures' / obs / filt
+        d.mkdir(parents=True)
+        for i in range(n):
+            _frame(d, f'f{i}.fits',
+                   f'jw10678{obs[1:]}001_02101_0000{i}_nrca1_destreak_crf.fits',
+                   filt=filt)
+    _, _, _, per_key = builder.scan_frames(str(tmp_path / 'exposures'))
+    assert per_key == {('o114', 'F212N'): 3, ('o114', 'F480M'): 2,
+                       ('o139', 'F212N'): 1}
+
+
+def test_the_table_cell_shows_the_fraction_of_frames_measured(mw, tmp_path):
+    """`30` and `48` in separate places on the page is not the same as `30 /
+    48` in the cell: the reader compares the cell against its neighbours,
+    which is exactly the comparison that misled."""
+    summary = _summary(tmp_path)
+    data = json.loads((summary / 'offsets_summary.json').read_text())
+    for row in data['per_filter']:
+        row['n_frames'] = 48
+    (summary / 'offsets_summary.json').write_text(json.dumps(data))
+    html = mw._offsets_section('gc-treasury', summary)
+    assert '30 / 48' in html
+    assert 'Frames measured' in html
+
+    # without a denominator it shows the count rather than inventing one
+    plain = mw._offsets_section('gc-treasury', _summary(tmp_path))
+    assert '/ 48' not in plain
+    assert '<td class=size>30</td>' in plain
