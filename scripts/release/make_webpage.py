@@ -619,7 +619,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
                       diagrams=(),
                       superseded=(), reasons=None, curated=(),
-                      curated_prov=(), preview_from_curated=False):
+                      curated_prov=(), preview_from_curated=False,
+                      release_dir=None):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -1085,6 +1086,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     out.append(render_exposures(field, exposures, base, app_link, multi,
                                 have_mosaics=bool(images)))
+    if release_dir:
+        out.append(_offsets_section(field, release_dir, manifest))
     out.append(render_astrometry(field, files, base,
                                  manifest_built=manifest.get('built')))
 
@@ -1258,6 +1261,199 @@ def _coverage_note(field, exposures):
             f"registered observations are in this release. Absent, with nothing "
             f"reduced for them when it was staged: "
             f"{', '.join(html.escape(o) for o in missing)}.</p>")
+
+
+#: Written beside the release by `scripts/release/build_offsets_summary.py`,
+#: refreshed daily. Absent on a release that has never had it built, and the
+#: section is then skipped rather than guessed at.
+OFFSETS_SUMMARY_FILE = "offsets_summary.json"
+
+
+def _offsets_section(field, release_dir, manifest=None):
+    """The astrometric offsets table, and how to apply what is still owed.
+
+    The hard part is not the arithmetic, it is that the released frames are in
+    TWO states. `fix_alignment` bakes each applied shift into `RAOFFSET` /
+    `DEOFFSET` in extension 1 and is idempotent on a frame that has one, so a
+    release cut while the pipeline was mid-pass holds corrected and
+    uncorrected frames side by side. Applying the table to all of them
+    double-corrects the ones already done -- by their full shift, which is the
+    largest error available to make here.
+    """
+    path = Path(release_dir) / OFFSETS_SUMMARY_FILE
+    if not path.is_file():
+        return ""
+    try:
+        summary = json.loads(path.read_text())
+    except (OSError, ValueError) as err:
+        print(f"  {field}: WARNING offsets summary unreadable ({err})")
+        return ""
+
+    frames = summary.get("frames", {}).get("totals", {})
+    corrected = int(frames.get("corrected", 0))
+    uncorrected = int(frames.get("uncorrected", 0))
+    table = html.escape(summary.get("table_file", ""))
+    rows = summary.get("per_filter", [])
+
+    # The release tree is NOT web-served; every file on this page is reached
+    # through its Globus HTTPS URL, and the manifest is where those live. A
+    # site-relative path here 404s -- which is what the first version did.
+    href = ""
+    for item in (manifest or {}).get("files", []):
+        if item.get("kind") == "offsets_table" and item.get("url"):
+            href = item["url"]
+            break
+
+    out = ["<h2>Astrometric offsets</h2>"]
+    out.append(
+        f"<p class=muted>The correction from each exposure's <code>assign_wcs</code> "
+        f"pointing to this pipeline's reference frame, "
+        f"<b>{summary.get('table_rows', 0)} rows</b> over "
+        f"{len(rows)} (observation, filter) pairs, measured "
+        f"{html.escape(str(summary.get('table_mtime', 'unknown')))}. "
+        + (f"<a href='{html.escape(href)}'>{table}</a> is the table itself and "
+           if href else f"<code>{table}</code> in the release is ")
+        + f"is the authority; the summary below is medians. "
+        f"It is <b>re-measured as the merge stages advance and refreshed here "
+        f"daily</b>, so a copy taken last week is not the current answer.</p>")
+
+    out.append(
+        f"<p class=warn><b>Do not apply this table blindly.</b> "
+        f"{corrected:,} of the {corrected + uncorrected:,} released frames "
+        f"ALREADY carry a correction, baked into <code>RAOFFSET</code> and "
+        f"<code>DEOFFSET</code> in extension 1; {uncorrected:,} carry none "
+        f"(both keywords 0.0). Applying the table to a frame that already has "
+        f"one double-corrects it. What each frame still owes is the table "
+        f"value MINUS what its header records.</p>")
+
+    has_row = int(frames.get("has_row", 0))
+    no_row = int(frames.get("no_row", 0))
+    miri = int(frames.get("no_row_not_nircam", 0))
+    if has_row or no_row:
+        # MIRI is its own sentence, not a footnote on "not measured yet":
+        # a NIRCam frame without a row gains one when the merge stages reach
+        # it, and a MIRI frame never will, because this table is NIRCam-only.
+        never = (f" The {miri:,} MIRI (F770W) frames are a different case: "
+                 f"this table covers F212N and F480M only, so they will never "
+                 f"gain a row and nothing here applies to them."
+                 if miri else "")
+        out.append(
+            f"<p class=muted><b>Coverage.</b> {has_row:,} of the "
+            f"{has_row + no_row:,} frames have a row in today's table; "
+            f"{no_row:,} do not, and should be left alone rather than given a "
+            f"neighbouring exposure's shift. The merge stages fill these in as "
+            f"they measure, which is why this page is refreshed daily.{never}"
+            f"</p>")
+
+    out.append("<h3>How to apply it</h3>")
+    out.append(
+        "<pre><code>" + html.escape(_OFFSETS_RECIPE) + "</code></pre>")
+    out.append(
+        "<p class=muted><b>Use the pipeline's own row matcher, not your own.</b> "
+        "Selecting the row for an exposure is not a plain four-column lookup: "
+        "<code>Exposure</code> and <code>Module</code> narrow only when more "
+        "than one row still matches (a per-visit table has one row and no "
+        "usable exposure number), <code>Module</code> matches either "
+        "<code>nrcb3</code> or <code>nrcb</code>, and <code>Vgroup</code> "
+        "narrows ALWAYS -- a visit can dither across disjoint sky tiles with "
+        "the exposure number restarting in each, so (visit, exposure) alone "
+        "can name a different pointing's shift and match exactly one row while "
+        "doing it. <code>locked_row_match</code> is the same function the "
+        "pipeline uses.</p>")
+    out.append(
+        "<p class=muted>The shift belongs on the <b>GWCS</b> in the ASDF "
+        "extension, which is what <code>resample</code> reads and what "
+        "<code>jwst.tweakreg.utils.adjust_wcs</code> edits. Shifting "
+        "<code>CRVAL</code> in the FITS header instead moves a low-order "
+        "approximation of that WCS and leaves the GWCS untouched, so the "
+        "frame then carries two answers and the pipeline uses the one you did "
+        "not change. <code>dra</code> is a coordinate difference in RA, not an "
+        "on-sky angle: on-sky it is <code>dra &times; cos(dec)</code>, which "
+        "at &delta; = &minus;29&deg; is 0.87 of it.</p>")
+
+    if rows:
+        out.append("<h3>Median offset per observation and filter</h3>")
+        out.append("<table><tr><th>Obs</th><th>Filter</th><th>Rows</th>"
+                   "<th>&Delta;RA (\u2033)</th><th>&Delta;Dec (\u2033)</th>"
+                   "<th>Spread (mas)</th><th>Stage</th></tr>")
+        for row in rows:
+            spread = max(row["dra_span_mas"], row["ddec_span_mas"])
+            out.append(
+                f"<tr><td>{html.escape(row['observation'])}</td>"
+                f"<td>{html.escape(row['filter'])}</td>"
+                f"<td class=size>{row['n']}</td>"
+                f"<td class=size>{row['dra_median_arcsec']:+.4f}</td>"
+                f"<td class=size>{row['ddec_median_arcsec']:+.4f}</td>"
+                f"<td class=size>{spread:.0f}</td>"
+                f"<td><span class=tag>{html.escape(', '.join(row['stages']))}"
+                f"</span></td></tr>")
+        out.append("</table>")
+        out.append(
+            "<p class=muted>Spread is the full range across the rows behind "
+            "each median, so it is per-exposure jitter within that "
+            "observation and filter rather than an uncertainty on the median. "
+            "A large one means the exposures disagree and the median is the "
+            "visit-level tie, not a value every exposure shares.</p>")
+    return "\n".join(out)
+
+
+#: Kept as a literal rather than built from the summary: it is meant to be
+#: copied, and a recipe assembled from values the reader cannot see is one they
+#: cannot check.
+_OFFSETS_RECIPE = """\
+# pip install git+https://github.com/keflavich/jwst-gc-pipeline
+import astropy.units as u
+from astropy.io import fits
+from astropy.table import Table
+from stdatamodels.jwst import datamodels
+from jwst.tweakreg.utils import adjust_wcs
+from jwst_gc_pipeline.reduction.unified_alignment import locked_row_match
+
+tbl = Table.read('Offsets_JWST_Brick10678_consensus.csv')
+
+def owed(fn):
+    \"\"\"(dra, ddec) this frame still needs, arcsec, or None if no row yet.\"\"\"
+    hdr0, hdr1 = fits.getheader(fn, 0), fits.getheader(fn, 1)
+    parts = hdr0['FILENAME'].split('_')   # jw10678127001_02101_00001_nrca1_...
+    if len(parts) < 4 or not parts[2].isdigit():
+        # An association-style FILENAME (jw10678-o132_t001_miri_f770w_2_...),
+        # which every MIRI frame in this release carries. The table is
+        # NIRCam-only, so there is nothing to look up -- and these never gain
+        # a row, unlike a NIRCam frame that is merely unmeasured.
+        return None
+    match = locked_row_match(tbl, visit=parts[0], exposure=int(parts[2]),
+                             filtername=hdr0['FILTER'],
+                             module=hdr0['DETECTOR'].lower(),
+                             vgroup=parts[1])   # '02101' -> Vgroup 2101
+    if match.sum() == 0:
+        return None                       # not measured yet; leave it alone
+    if match.sum() > 1:
+        raise SystemExit(f'{fn}: {match.sum()} rows match, refusing to guess')
+    row = tbl[match][0]
+    total_ra = float(row['dra (arcsec)'])          # what it SHOULD carry
+    total_dec = float(row['ddec (arcsec)'])
+    have_ra = float(hdr1.get('RAOFFSET', 0.0) or 0.0)    # what it does carry
+    have_dec = float(hdr1.get('DEOFFSET', 0.0) or 0.0)
+    return total_ra - have_ra, total_dec - have_dec, total_ra, total_dec
+
+def apply_offsets(fn):
+    got = owed(fn)
+    if got is None:
+        return 'no row yet'
+    dra, ddec, total_ra, total_dec = got
+    if abs(dra) < 1e-6 and abs(ddec) < 1e-6:
+        return 'up to date'
+    with datamodels.open(fn) as model:
+        # The GWCS in the ASDF extension, which is what `resample` reads.
+        model.meta.wcs = adjust_wcs(model.meta.wcs, delta_ra=dra * u.arcsec,
+                                    delta_dec=ddec * u.arcsec)
+        model.save(fn)
+    # Record the TOTAL now carried, not the delta just applied, so re-running
+    # this is a no-op rather than a second correction.
+    fits.setval(fn, 'RAOFFSET', value=total_ra, ext=1)
+    fits.setval(fn, 'DEOFFSET', value=total_dec, ext=1)
+    return f'applied {dra*1000:+.1f}, {ddec*1000:+.1f} mas'
+"""
 
 
 def render_exposures(field, exposures, base, app_link, multi,
@@ -2033,7 +2229,14 @@ def main(argv=None):
                                      all_versions=versions,
                                      preview_version=preview_version,
                                      previews=preview_items,
-                                     diagrams=diagram_items)
+                                     diagrams=diagram_items,
+                                     # only the CURRENT version's page: the
+                                     # offsets are re-measured continuously, so
+                                     # a frozen older page must not carry
+                                     # today's table as if it described it
+                                     release_dir=(field_release_dir(
+                                         field, v, args.release_root)
+                                         if v == latest else None))
             fname = f"{field}.html" if v == latest else f"{field}.{v}.html"
             (out_dir / fname).write_text(page)
             if v == latest:
