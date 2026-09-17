@@ -526,13 +526,32 @@ fields:
           nircam: ['001']
         filters: [f090w, f187n, f200w, f277w, f335m, f470n]
       '7213':
+        # o002 is the MIRI half of 7213 -- NGC6334_I_N-MIRI, five bands over the
+        # SAME pointing as the NIRCam o001 (both 260.22652 -35.76687), 250 uncal
+        # exposures across visits 001-007.  It shares o001's reference catalog
+        # because it shares o001's sky: the MIRI pointing sits 0.96' from that
+        # catalog's centre, well inside its 8.15' extent, with 1697 reference
+        # sources within 3'.
+        #
+        # nvisits goes 2 -> 7 for the MIRI visit range.  The scan walks
+        # 001..nvisits for EVERY observation, so leaving it at 2 would silently
+        # drop visits 003-007 -- 175 of o002's 250 exposures (the cloudef
+        # failure, #853).  Scanning past the end is harmless; stopping short is
+        # not.
+        #
+        # o003 is NOT registered: it is the same five bands at 260.32261
+        # -35.68099, a separate offset pointing with 2 exposures per band, not
+        # NGC 6334I.
         reference_catalog:
           '001': catalogs/gaia_virac2_refcat_epoch2026.30.fits
-        nvisits: 2
+          '002': catalogs/gaia_virac2_refcat_epoch2026.30.fits
+        nvisits: 7
         reference_frame: VIRAC2
         obsids:
           nircam: ['001']
-        filters: [f115w, f162m, f182m, f200w, f356w, f405n, f444w, f470n]
+          miri: ['002']
+        filters: [f115w, f162m, f182m, f200w, f356w, f405n, f444w, f470n,
+                  f770w, f1000w, f1500w, f2100w, f2550w]
 
   ngc6397:
     root: orange
