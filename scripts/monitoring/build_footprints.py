@@ -364,6 +364,30 @@ def dither_half_extent(dither):
     return DITHER_HALF_EXTENT.get(key)
 
 
+#: Which SIAF an aperture name belongs to.  Inferred from the prefix rather
+#: than passed in, because callers hold a flat list of apertures across
+#: instruments -- projecting them through one attitude is the whole point.
+#: Longest prefix first: `MIRIM` before `MIRI`.
+_APERTURE_INSTRUMENT = (
+    ('NRC', 'NIRCam'), ('NRS', 'NIRSpec'), ('NIS', 'NIRISS'),
+    ('FGS', 'FGS'), ('MIRIM', 'MIRI'), ('MIRI', 'MIRI'),
+)
+
+
+def aperture_instrument(name):
+    """The SIAF instrument for an aperture name.
+
+    An unknown prefix raises rather than defaulting. The previous form was
+    ``'NIRCam' if name.startswith('NRC') else 'MIRI'``, which silently sends
+    `FGS1_FULL` to the MIRI SIAF -- a KeyError several frames later with
+    nothing pointing at the cause.
+    """
+    for prefix, instrument in _APERTURE_INSTRUMENT:
+        if name.startswith(prefix):
+            return instrument
+    raise ValueError(f'no SIAF known for aperture {name!r}')
+
+
 def dithered_bbox(ra, dec, pa_v3, apertures, anchor, half_extent,
                   siaf_cache={}):
     """One sky polygon: the area the pointing covers across its whole dither.
@@ -377,7 +401,7 @@ def dithered_bbox(ra, dec, pa_v3, apertures, anchor, half_extent,
     import pysiaf
     from pysiaf.utils import rotations
 
-    anchor_inst = 'NIRCam' if anchor.startswith('NRC') else 'MIRI'
+    anchor_inst = aperture_instrument(anchor)
     if anchor_inst not in siaf_cache:
         siaf_cache[anchor_inst] = pysiaf.Siaf(anchor_inst)
     anchor_ap = siaf_cache[anchor_inst][anchor]
@@ -386,7 +410,7 @@ def dithered_bbox(ra, dec, pa_v3, apertures, anchor, half_extent,
 
     xs, ys = [], []
     for name in apertures:
-        inst = 'NIRCam' if name.startswith('NRC') else 'MIRI'
+        inst = aperture_instrument(name)
         if inst not in siaf_cache:
             siaf_cache[inst] = pysiaf.Siaf(inst)
         ap = siaf_cache[inst][name]
@@ -417,7 +441,7 @@ def aperture_polygons(ra, dec, pa_v3, apertures, anchor, siaf_cache={}):
     from pysiaf.utils import rotations
 
     out = {}
-    anchor_inst = 'NIRCam' if anchor.startswith('NRC') else 'MIRI'
+    anchor_inst = aperture_instrument(anchor)
     if anchor_inst not in siaf_cache:
         siaf_cache[anchor_inst] = pysiaf.Siaf(anchor_inst)
     anchor_ap = siaf_cache[anchor_inst][anchor]
@@ -425,7 +449,7 @@ def aperture_polygons(ra, dec, pa_v3, apertures, anchor, siaf_cache={}):
                                   ra, dec, pa_v3)
 
     for name in apertures:
-        inst = 'NIRCam' if name.startswith('NRC') else 'MIRI'
+        inst = aperture_instrument(name)
         if inst not in siaf_cache:
             siaf_cache[inst] = pysiaf.Siaf(inst)
         ap = siaf_cache[inst][name]
