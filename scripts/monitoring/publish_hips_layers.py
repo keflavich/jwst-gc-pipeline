@@ -53,6 +53,9 @@ import contextlib
 
 #: Layers to distribute, and where each is BUILT.  Explicit on purpose -- see 1.
 BUILD_ROOT = '/orange/adamginsburg/jwst/gc-treasury/pngs'
+#: Where the RGB mosaic HiPS are built -- a different tree from the per-filter
+#: quicklook pngs, and reprojected by astropy rather than by the RGB builder.
+MOSAIC_BUILD = '/orange/adamginsburg/jwst/gc-treasury/mosaics'
 #: Where the CMZ overview coadds are built, which is the docroot itself.
 DOCROOT_BUILD = '/orange/adamginsburg/web/public/avm_images'
 LAYERS = {
@@ -70,6 +73,13 @@ LAYERS = {
     'jwst_gc_treasury_vminmax_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_vminmax_hips',
     'jwst_gc_treasury_log_hips': f'{BUILD_ROOT}/jwst_gc_treasury_log_hips',
+    # The three-band colour composite: F770W red, F480M green, F212N blue, so
+    # it covers only where MIRI and NIRCam both observed. Published off by
+    # default in the viewer -- it is a different projection (galactic frame,
+    # astropy/reproject) from the single-band layers and covers less sky, so
+    # it is a thing to turn on rather than a background to work against.
+    'gctreasury_mosaic_RGB_770-480-212_hips':
+        f'{MOSAIC_BUILD}/gctreasury_mosaic_RGB_770-480-212_hips',
     # The CMZ overview coadds are rebuilt IN PLACE in the docroot by
     # `rebuild_jwst_cmz_hips.py`, so for these the docroot is the build
     # location and the local step is a no-op by construction: `needs_publish`

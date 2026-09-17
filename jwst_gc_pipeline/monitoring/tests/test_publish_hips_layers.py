@@ -126,6 +126,10 @@ def test_every_published_layer_is_registered_explicitly():
     ones: they are BUILT in the docroot, so their local step is a no-op and
     what they need is the second destination. starformation had no scheduled
     path to them at all, and its `jwst_nir_hips` fell 14 months behind.
+
+    The RGB composite is built in a third tree again (`mosaics/`, by
+    astropy/reproject rather than by the quicklook builder), which is why the
+    source path is registered per layer rather than derived from one root.
     """
     assert set(ph.LAYERS) == {
         'jwst_gc_treasury_hips',
@@ -133,6 +137,7 @@ def test_every_published_layer_is_registered_explicitly():
         'jwst_gc_treasury_miri_bgmatch_hips',
         'jwst_gc_treasury_vminmax_hips',
         'jwst_gc_treasury_log_hips',
+        'gctreasury_mosaic_RGB_770-480-212_hips',
         'jwst_nir_hips',
         'jwst_miri_hips',
     }
