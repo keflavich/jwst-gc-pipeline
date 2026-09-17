@@ -426,3 +426,43 @@ def test_a_stale_lock_is_taken_over_at_the_builders_own_threshold(tmp_path,
     with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
         assert held
     assert ph.LOCK_STALE_S == 6 * 3600
+
+
+def test_the_lock_claim_is_exclusive(tmp_path, monkeypatch, capsys):
+    """`O_CREAT|O_EXCL`, not `O_CREAT`. The wait loop cannot cover a lock that
+    appears between the last look and the claim, so exclusivity is what closes
+    that window -- and it is the property the commit message leads with while
+    nothing held it. The builder pinned the same thing on its side
+    (jwst_scripts#19); the copy brought the code and not the test.
+
+    Asserting the holder's bytes SURVIVE is what separates "raised and skipped"
+    from "raised and clobbered": a non-exclusive claim truncates the file, so
+    the other side's pid is gone even though both processes think they hold it.
+    """
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    lock = tmp_path / '.auto.lock'
+    holder = '999999 2026-09-17T05:00:00 rebuilding o139\n'
+
+    real_sleep = ph.time.sleep
+
+    def appear(sec):
+        # the builder claims it while we are waiting our turn
+        lock.write_text(holder)
+        real_sleep(0)
+
+    # first look: free. then it appears, and the claim must lose.
+    monkeypatch.setattr(ph.time, 'sleep', appear)
+    original_open = ph.os.open
+    state = {'n': 0}
+
+    def racing_open(path, flags, mode=0o777):
+        if state['n'] == 0:
+            state['n'] = 1
+            lock.write_text(holder)        # appears between look and claim
+        return original_open(path, flags, mode)
+
+    monkeypatch.setattr(ph.os, 'open', racing_open)
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing zz') as held:
+        assert held is False, 'a taken lock must not be claimed twice'
+    assert lock.read_text() == holder, 'the holder was clobbered'
+    assert 'taken while we waited' in capsys.readouterr().err

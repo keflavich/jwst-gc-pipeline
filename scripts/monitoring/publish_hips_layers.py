@@ -185,11 +185,20 @@ def _read_remote(host, path):
 # rsync of 12,707 vminmax tiles died with `Stale file handle (116)` partway
 # through, because the cron replaced the files it was reading.
 #
-# So the publisher takes the same lock, blocking a rebuild for the duration of
-# a copy.  That is a deliberate trade -- an hourly rebuild waits up to the
-# length of one transfer -- made because the alternative is publishing a tree
-# that changed while it was being read, and the tick it delays is one it would
-# otherwise have raced.
+# So the publisher takes the same lock.  Know what that costs the builder,
+# because the two sides behave differently when blocked: `coadd_lock` (the
+# manual --coadd path) WAITS, but `cmd_auto` -- the hourly job -- prints
+# "another run holds the lock" and EXITS (gc_treasury_rgb_images.py:1066).  So
+# a publish holding the lock does not delay a rebuild by the length of a
+# transfer; it makes that tick do nothing, and the rebuild happens the next
+# hour.  At hourly cadence against a ~30 min copy the practical difference is
+# small, but "skipped" and "late" are not the same claim and the next person
+# reasoning about contention needs the accurate one.
+#
+# The trade is still the right way round: the tick it costs is one that would
+# otherwise have raced the copy, and a rebuild is idempotent -- nothing is lost
+# by doing it an hour later.  What is lost by racing is a published tree that
+# changed while it was being read.
 #
 # The protocol is COPIED from that script rather than invented, because a lock
 # only works if both sides implement it the same way: same path, O_CREAT|O_EXCL
