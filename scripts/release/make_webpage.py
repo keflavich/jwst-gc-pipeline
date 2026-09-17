@@ -615,6 +615,50 @@ def withheld_reason(pointing, bands, withheld_obs=(), withheld_bands=(),
     return None
 
 
+#: Heading anchors.  Applied to the finished page rather than at each
+#: `out.append("<h2>...")` -- there are ~20 of those across three renderers,
+#: and a helper each one has to remember to call is a helper half of them will
+#: not.  Post-processing the page catches every heading, including the ones
+#: added later by someone who never reads this comment.
+_HEADING_RE = re.compile(r'<(h[1-6])([^>]*)>(.*?)</\1>', re.S | re.I)
+_TAG_RE = re.compile(r'<[^>]+>')
+_SLUG_STRIP = re.compile(r'[^a-z0-9]+')
+
+
+def heading_slug(text):
+    """A stable, readable id from heading text.
+
+    Derived from the words rather than from a counter, so a link keeps working
+    when a heading moves and breaks when its subject changes -- which is the
+    behaviour someone pasting a link into an email wants.
+    """
+    plain = html.unescape(_TAG_RE.sub(' ', text))
+    slug = _SLUG_STRIP.sub('-', plain.lower()).strip('-')
+    return slug or 'section'
+
+
+def anchor_headings(page):
+    """Give every heading an ``id``, leaving any it already has alone.
+
+    Duplicates get ``-2``, ``-3``: two headings can legitimately read the same
+    (every field page has "Catalogs"), and an id that silently collides sends
+    the reader to whichever came first.
+    """
+    seen = {}
+
+    def add_id(match):
+        tag, attrs, inner = match.groups()
+        if re.search(r'\bid\s*=', attrs, re.I):
+            return match.group(0)
+        slug = heading_slug(inner)
+        seen[slug] = seen.get(slug, 0) + 1
+        if seen[slug] > 1:
+            slug = f'{slug}-{seen[slug]}'
+        return f'<{tag}{attrs} id="{slug}">{inner}</{tag}>'
+
+    return _HEADING_RE.sub(add_id, page)
+
+
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
                       diagrams=(),
@@ -1094,7 +1138,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
-    return "\n".join(out)
+    return anchor_headings("\n".join(out))
 
 
 def published_urls(manifest, superseded=(), categories=None):
@@ -1902,7 +1946,7 @@ def render_help():
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
-    return "\n".join(out)
+    return anchor_headings("\n".join(out))
 
 
 def _card_counts(fi):
@@ -2075,7 +2119,7 @@ def render_index(fields_info, overview_html="", quicklooks=QUICKLOOKS):
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
-    return "\n".join(out)
+    return anchor_headings("\n".join(out))
 
 
 def main(argv=None):
