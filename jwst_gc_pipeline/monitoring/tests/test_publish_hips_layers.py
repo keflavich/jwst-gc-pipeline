@@ -351,3 +351,78 @@ def test_force_still_verifies_before_swapping():
         body = inspect.getsource(fn)
         assert 'verify(' in body, fn.__name__
         assert '.new' in body, fn.__name__
+
+
+# ---- the build lock ----
+def test_only_the_layers_the_hourly_job_builds_are_guarded():
+    """Claiming the lock for a CMZ overview coadd would block the treasury
+    rebuild while protecting nothing: those are rebuilt in the docroot by a
+    different script that does not take this lock."""
+    assert ph.lock_path(ph.LAYERS['jwst_gc_treasury_vminmax_hips']) == \
+        f'{ph.BUILD_ROOT}/.auto.lock'
+    assert ph.lock_path(ph.LAYERS['jwst_nir_hips']) is None
+
+
+def test_a_publish_waits_for_a_held_lock_and_then_takes_it(tmp_path,
+                                                           monkeypatch):
+    """The lock is what stops an rsync reading a tree being rewritten: on
+    2026-09-16 a 12,707-tile transfer died with `Stale file handle` partway
+    through because the cron replaced the files underneath it."""
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    src = str(tmp_path / 'zz_layer')
+    lock = tmp_path / '.auto.lock'
+    lock.write_text('999999 2026-09-16T08:35:03 rebuilding\n')
+
+    slept = []
+
+    def fake_sleep(sec):
+        slept.append(sec)
+        lock.unlink()                      # the builder finishes while we wait
+
+    monkeypatch.setattr(ph.time, 'sleep', fake_sleep)
+    with ph.build_lock(src, 'publishing zz_layer', poll=5) as held:
+        assert held
+        assert lock.exists(), 'the lock must be HELD during the copy'
+        holder = lock.read_text().split()
+        assert holder[0] == str(os.getpid())
+    assert slept == [5]
+    assert not lock.exists(), 'released in a finally, or the schedule starves'
+
+
+def test_the_lock_is_released_even_when_the_publish_raises(tmp_path,
+                                                           monkeypatch):
+    """The other half of this lock's history is runs that left the file behind."""
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    lock = tmp_path / '.auto.lock'
+    with pytest.raises(RuntimeError):
+        with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing'):
+            assert lock.exists()
+            raise RuntimeError('rsync blew up')
+    assert not lock.exists()
+
+
+def test_no_wait_skips_a_layer_being_rebuilt_rather_than_blocking(tmp_path,
+                                                                  monkeypatch,
+                                                                  capsys):
+    """Skipping is reported, not silent: a publish that quietly does nothing is
+    the failure mode this tool has hit four times."""
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    (tmp_path / '.auto.lock').write_text('999999 2026-09-16T08:35:03 rebuild\n')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing zz', wait_s=0) as held:
+        assert held is False
+    err = capsys.readouterr().err
+    assert 'skipping' in err
+
+
+def test_a_stale_lock_is_taken_over_at_the_builders_own_threshold(tmp_path,
+                                                                  monkeypatch):
+    """Matches `gc_treasury_rgb_images.coadd_lock`: a shorter threshold here
+    would let the publisher steal the lock from a rebuild that is merely slow,
+    which is the race the lock exists to prevent, wearing the other hat."""
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    lock = tmp_path / '.auto.lock'
+    lock.write_text('999999 old\n')
+    os.utime(lock, (0, ph.time.time() - ph.LOCK_STALE_S - 60))
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
+        assert held
+    assert ph.LOCK_STALE_S == 6 * 3600
