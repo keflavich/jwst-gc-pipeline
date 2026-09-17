@@ -91,3 +91,75 @@ def test_the_attitude_follows_the_position_angle(bf):
     moved = max(abs(a[0] - b[0]) + abs(a[1] - b[1])
                 for a, b in zip(at87, at97))
     assert moved > 1e-3, moved
+
+
+# ---- the builder's own decisions ----
+@pytest.fixture(scope='module')
+def bfp():
+    import sys
+    sys.path.insert(0, _SCRIPTS)
+    return _load('build_focal_plane')
+
+
+def _run(bfp, tmp_path, observed, default_pa=87.0):
+    import argparse
+    src = tmp_path / 'footprints.json'
+    doc = {'observed': observed, 'planned': []}
+    if default_pa is not None:
+        doc['pa_v3'] = default_pa
+    src.write_text(json.dumps(doc))
+    out = tmp_path / 'fp.json'
+    bfp.build(argparse.Namespace(footprints=str(src), out=str(out),
+                                 anchor='NRCALL_FULL', programme='10678'))
+    return json.loads(out.read_text())
+
+
+@pytest.mark.filterwarnings('ignore')
+def test_each_pointing_is_drawn_at_its_own_position_angle(bfp, tmp_path):
+    """The feature's headline claim. Two pointings at the SAME sky position
+    with DIFFERENT PA_V3 is the smallest input that separates "used the
+    attitude" from "drew a box": ignore the per-pointing angle and both come
+    out identical, which on a survey at one nominal PA looks entirely right.
+    """
+    pytest.importorskip('pysiaf')
+    doc = _run(bfp, tmp_path, [
+        {'number': '1', 'target': 'GC_1', 'ra': 266.5, 'dec': -28.7,
+         'pa_v3': 87.0},
+        {'number': '2', 'target': 'GC_2', 'ra': 266.5, 'dec': -28.7,
+         'pa_v3': 117.0},
+    ])
+    first, second = doc['pointings']
+    assert (first['pa_v3'], second['pa_v3']) == (87.0, 117.0)
+
+    def nircam(entry):
+        return [s for s in entry['shapes'] if s['label'] == 'NIRCam'][0]['polys'][0]
+
+    moved = max(abs(a[0] - b[0]) + abs(a[1] - b[1])
+                for a, b in zip(nircam(first), nircam(second)))
+    assert moved > 1e-3, moved
+
+
+@pytest.mark.filterwarnings('ignore')
+def test_a_pointing_with_no_attitude_is_skipped_not_guessed(bfp, tmp_path):
+    """Without an angle there is no footprint. Falling back to a default would
+    draw the whole observatory somewhere it never pointed, and it would look
+    like every other entry in the dropdown."""
+    pytest.importorskip('pysiaf')
+    doc = _run(bfp, tmp_path, [
+        {'number': '1', 'target': 'GC_1', 'ra': 266.5, 'dec': -28.7},
+        {'number': '2', 'target': 'GC_2', 'ra': 266.6, 'dec': -28.7,
+         'pa_v3': 87.0},
+    ], default_pa=None)
+    assert [p['id'] for p in doc['pointings']] == ['o002']
+
+
+@pytest.mark.filterwarnings('ignore')
+def test_the_programme_default_angle_is_used_when_a_pointing_lacks_one(
+        bfp, tmp_path):
+    """The programme's nominal PA is a real answer for a pointing that has no
+    angle of its own; only the absence of BOTH is unanswerable."""
+    pytest.importorskip('pysiaf')
+    doc = _run(bfp, tmp_path, [
+        {'number': '1', 'target': 'GC_1', 'ra': 266.5, 'dec': -28.7},
+    ], default_pa=87.0)
+    assert [p['pa_v3'] for p in doc['pointings']] == [87.0]
