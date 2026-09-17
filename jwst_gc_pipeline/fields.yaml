@@ -487,6 +487,50 @@ fields:
           miri: ['001', '003', '004', '005', '016']
         filters: [f560w, f770w, f1000w, f1280w, f1500w]
 
+  # gc9257 -- NIRCam + NIRISS imaging of the nuclear star cluster from program
+  # 9257 (PI Tuan Do), target NSC_CENTRAL.  ONE observation, o001, delivered
+  # 2025-09-10 (epoch 2025.691), all products PUBLIC, level-3 associations
+  # published (three image3 asn, one per band), so it is reducible as delivered.
+  #
+  # Do NOT confuse this with HST program 9257 (WFPC2 calibration, PI Mack,
+  # targets HD14069/HD2222): a bare proposal_id='9257' MAST query returns both,
+  # and only the JWST half is this pipeline's business.
+  #
+  # THREE VISITS (001/002/003).  nvisits is the MAX visit id and the scan walks
+  # 001..nvisits for EVERY observation, so 3 is required -- at 1 it would drop
+  # two thirds of the exposures the way cloudef did (#853).
+  #
+  # Footprint centres measured from the MAST s_region polygons (2026-09-17),
+  # NOT from s_ra/s_dec, which report the TARGET position (266.416833
+  # -29.007894) identically for all three bands and so hide the fact that these
+  # are three different pointings -- NIRISS sits ~6' NW of the NIRCam field:
+  #
+  #     band             centre                    radius   uncal
+  #     F212N  (NIRCam)  266.406227  -29.008725     4.75'     576
+  #     F480M  (NIRCam)  266.412207  -29.016118     4.51'     144
+  #     F140M  (NIRISS)  266.344774  -28.933504     3.60'      72
+  #
+  # One obsid means one reference catalog, so it has to span all three
+  # footprints; the catalog below is built on a cone covering NIRCam and NIRISS
+  # together rather than on either band alone.
+  #
+  # NIRISS has no offsets-table correction channel (PR #832 opened MIRI's;
+  # NIRISS still has none), so F140M reduces at its dispatched frame and only
+  # the NIRCam bands can be table-corrected.
+  gc9257:
+    root: orange
+    observations:
+      '9257':
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2025.69_o001.fits
+        nvisits: 3
+        reference_frame: VIRAC2
+        obsids:
+          nircam: ['001']
+          niriss: ['001']
+        filters: [f212n, f480m]
+        niriss_filters: [f140m]
+
   m4:
     root: orange
     observations:

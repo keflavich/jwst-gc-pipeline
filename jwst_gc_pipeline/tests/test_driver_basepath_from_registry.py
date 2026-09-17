@@ -127,6 +127,9 @@ EXPECTED_ROOTS = {
     # 1266 (Garcia Marin, the imaging alongside an IFU program) and 3571
     # (Yusef-Zadeh, five CMZ tiles).  Both on orange with the other GC fields.
     'gc1266': 'orange', 'gc3571': 'orange',
+    # gc9257 (Do), the nuclear star cluster, registered 2026-09-17.  On orange
+    # with the other GC fields.
+    'gc9257': 'orange',
 }
 
 
