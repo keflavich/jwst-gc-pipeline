@@ -1269,6 +1269,61 @@ def _coverage_note(field, exposures):
 OFFSETS_SUMMARY_FILE = "offsets_summary.json"
 
 
+#: Sorting for the offsets table.  Vanilla DOM rather than a library: the page
+#: loads no JS today and one table does not justify starting.
+#:
+#: `obs` is its own comparator because `o98` and `o139` sort wrongly as text
+#: and `o098` is not what the release calls them -- the number is what a reader
+#: means by "sorted by obs".
+_SORTABLE_SCRIPT = """<script>
+(function () {
+  var table = document.getElementById('offsets-table');
+  if (!table) { return; }
+  var body = table.tBodies[0];
+
+  function key(cell, kind) {
+    var text = (cell.textContent || '').trim();
+    if (kind === 'obs') { return parseInt(text.replace(/^o/, ''), 10); }
+    if (kind === 'num') {
+      // An empty cell is "not measured", not zero: it sorts to the end either
+      // way rather than into the middle of the real values.
+      if (text === '') { return null; }
+      return parseFloat(text.replace('+', ''));
+    }
+    return text.toLowerCase();
+  }
+
+  Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
+    var kind = th.dataset.sort;
+    if (!kind) { return; }
+    th.style.cursor = 'pointer';
+    th.title = 'sort by ' + th.textContent.trim();
+    th.addEventListener('click', function () {
+      var desc = th.dataset.dir !== 'desc';
+      Array.prototype.forEach.call(table.tHead.rows[0].cells, function (o) {
+        delete o.dataset.dir;
+        o.textContent = o.textContent.replace(/ [\u25b2\u25bc]$/, '');
+      });
+      th.dataset.dir = desc ? 'desc' : 'asc';
+      th.textContent = th.textContent + (desc ? ' \u25bc' : ' \u25b2');
+
+      var rows = Array.prototype.slice.call(body.rows);
+      rows.sort(function (a, b) {
+        var x = key(a.cells[i], kind), y = key(b.cells[i], kind);
+        if (x === null && y === null) { return 0; }
+        if (x === null) { return 1; }          // blanks last, both directions
+        if (y === null) { return -1; }
+        if (x < y) { return desc ? 1 : -1; }
+        if (x > y) { return desc ? -1 : 1; }
+        return 0;
+      });
+      rows.forEach(function (r) { body.appendChild(r); });
+    });
+  });
+})();
+</script>"""
+
+
 def _offsets_section(field, release_dir, manifest=None):
     """The astrometric offsets table, and how to apply what is still owed.
 
@@ -1386,10 +1441,19 @@ def _offsets_section(field, release_dir, manifest=None):
             "those describe how well the frames of one visit agree with each "
             "other, and say nothing about where that visit sits on the sky. "
             "The rightmost column gives that scatter separately.</p>")
-        out.append("<table><tr><th>Obs</th><th>Filter</th>"
-                   "<th>&Delta;RA (mas)</th><th>&Delta;Dec (mas)</th>"
-                   "<th>Total (mas)</th><th>Exposure rows</th>"
-                   "<th>Frame-to-frame RMS (mas)</th></tr>")
+        out.append(
+            "<p class=muted>Click a column to sort; click again to reverse. "
+            "The default is worst offset first, because that is the order the "
+            "question &ldquo;which fields are wrong&rdquo; is asked in, but "
+            "<b>Obs</b> gives the survey order.</p>")
+        out.append("<table class=sortable id=offsets-table><thead><tr>"
+                   "<th data-sort=obs>Obs</th><th data-sort=text>Filter</th>"
+                   "<th data-sort=num>&Delta;RA (mas)</th>"
+                   "<th data-sort=num>&Delta;Dec (mas)</th>"
+                   "<th data-sort=num>Total (mas)</th>"
+                   "<th data-sort=num>Exposure rows</th>"
+                   "<th data-sort=num>Frame-to-frame RMS (mas)</th>"
+                   "</tr></thead><tbody>")
         for row in sorted(measured, key=lambda r: -r['total_mas']):
             rms = row.get('residual_rms_mas')
             out.append(
@@ -1401,7 +1465,8 @@ def _offsets_section(field, release_dir, manifest=None):
                 f"<td class=size>{row['n_exposure_rows']}</td>"
                 f"<td class=size>{'' if rms is None else f'{rms:.1f}'}</td>"
                 f"</tr>")
-        out.append("</table>")
+        out.append("</tbody></table>")
+        out.append(_SORTABLE_SCRIPT)
         if pending:
             names = ', '.join(sorted({r['observation'] for r in pending}))
             out.append(

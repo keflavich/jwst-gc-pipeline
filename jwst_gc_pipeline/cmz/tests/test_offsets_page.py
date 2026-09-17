@@ -250,3 +250,86 @@ def test_a_pair_with_no_measured_tie_is_called_out_not_shown_as_small(mw,
     assert 'No measured tie yet' in html
     assert 'o127' in html
     assert 'unknown rather' in html
+
+
+# ---- sorting ----
+SORT_HARNESS = r"""
+// Minimal DOM: enough for the sorter to run. jsdom is not installed and this
+// needs three behaviours, not a browser.
+function makeCell(text) {
+  return {textContent: text, dataset: {}, style: {}};
+}
+function makeRow(cells) { return {cells: cells.map(makeCell)}; }
+
+const ROWS = [
+  ['o139', 'F212N', '-469.1', '-161.5', '496', '30', '5.2'],
+  ['o098', 'F212N',  '-34.0', '-247.3', '250', '38', '4.1'],
+  ['o127', 'F212N',       '',       '',    '',  '35', '5.6'],
+  ['o112', 'F480M',  '-60.6',  '-38.9',  '72', '12', '3.3'],
+].map(makeRow);
+
+const handlers = {};
+const head = {rows: [{cells: __HEADERS__.map(function (h, i) {
+  const th = makeCell(h.label);
+  th.dataset.sort = h.kind;
+  th.addEventListener = function (_, fn) { handlers[i] = fn; };
+  return th;
+})}]};
+const body = {rows: ROWS.slice(), appendChild: function (r) {
+  const at = body.rows.indexOf(r);
+  if (at !== -1) { body.rows.splice(at, 1); }
+  body.rows.push(r);
+}};
+globalThis.document = {getElementById: function () {
+  return {tBodies: [body], tHead: head};
+}};
+
+__SCRIPT__
+
+function order() { return body.rows.map(function (r) { return r.cells[0].textContent; }); }
+handlers[__COL__]();
+console.log(JSON.stringify(order()));
+handlers[__COL__]();
+console.log(JSON.stringify(order()));
+"""
+
+
+def _sort(mw, tmp_path, column):
+    import re as _re
+    import shutil
+    import subprocess
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not available')
+    inner = _re.search(r'<script>(.*)</script>', mw._SORTABLE_SCRIPT, _re.S).group(1)
+    headers = ('[{label:"Obs",kind:"obs"},{label:"Filter",kind:"text"},'
+               '{label:"dRA",kind:"num"},{label:"dDec",kind:"num"},'
+               '{label:"Total",kind:"num"},{label:"Rows",kind:"num"},'
+               '{label:"RMS",kind:"num"}]')
+    js = (SORT_HARNESS.replace('__SCRIPT__', inner)
+                      .replace('__HEADERS__', headers)
+                      .replace('__COL__', str(column)))
+    path = tmp_path / f'sort{column}.js'
+    path.write_text(js)
+    done = subprocess.run([node, str(path)], capture_output=True, text=True,
+                          timeout=20)
+    assert done.returncode == 0, done.stderr[-1500:]
+    return [json.loads(line) for line in done.stdout.strip().split('\n')]
+
+
+def test_the_table_sorts_by_observation_number_not_by_text(mw, tmp_path):
+    """"Sorted by obs" means the number. As text `o098` sorts before `o112`
+    only by accident of zero-padding, and the release calls them o98 and o112
+    in prose -- a text sort puts o98 after o139 the moment the padding goes."""
+    first, second = _sort(mw, tmp_path, 0)
+    assert first == ['o139', 'o127', 'o112', 'o098'], first
+    assert second == ['o098', 'o112', 'o127', 'o139'], second
+
+
+def test_sorting_a_number_column_keeps_unmeasured_rows_at_the_end(mw, tmp_path):
+    """An empty cell is "not measured", not zero. Sorted as zero it lands in
+    the middle of the real offsets and reads as a small one -- the same
+    confusion this table was rewritten to remove."""
+    desc, asc = _sort(mw, tmp_path, 4)
+    assert desc[0] == 'o139' and desc[-1] == 'o127', desc
+    assert asc[-1] == 'o127', asc
