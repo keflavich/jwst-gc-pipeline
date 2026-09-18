@@ -60,20 +60,17 @@ def test_affine_tie_recovers_a_known_distortion():
     ref_sc = _sc_from_xy(rx, ry)
     _, diag = affine_tie(src_sc, mag, ref_sc, mag, magcut=0, match_radius=1.0)
 
-    # All 1500 matched correctly (n_match == n here). n_kept is well below
-    # that even with NO real outliers in this synthetic field -- the
-    # iterative clip's threshold (nsigma * std of the CURRENT kept subset)
-    # tightens each of its 3 rounds rather than converging to the true noise
-    # floor, so it over-rejects good points on clean data. That is a real,
-    # separate robustness property of affine_tie's clipping worth improving,
-    # but it does not corrupt the fitted coefficients (checked below) -- the
-    # points it drops are a random subsample of the good matches, not a
-    # biased one. Floor here is deliberately loose; it exists to catch a
-    # total collapse (the n_kept==0 bug this test caught before the A_true
-    # units mistake in an earlier draft of this test was fixed), not to
-    # pin the exact clipping behavior.
+    # All 1500 matched correctly (n_match == n here), and with NO real
+    # outliers in this synthetic field, the robust (median+MAD) clip should
+    # keep nearly all of them. This is a regression guard for a real bug this
+    # test caught: the original plain-std clip (nsigma * std of the
+    # shrinking "keep" subset, re-evaluated each of 3 rounds) kept only
+    # ~40% here despite every match being genuinely good -- classic
+    # iterative sigma-clip bias. Coefficients came out correct either way
+    # (checked below), but n_kept/n_match is a real quality diagnostic
+    # elsewhere in this codebase and was badly underestimating it.
     assert diag['n_match'] == n
-    assert diag['n_kept'] > 0.3 * n
+    assert diag['n_kept'] > 0.95 * n
     A, B = np.array(diag['A']), np.array(diag['B'])
     # offset terms: mas-level tolerance; linear terms: per-arcsec, so need
     # tighter relative tolerance to mean the same absolute precision over the

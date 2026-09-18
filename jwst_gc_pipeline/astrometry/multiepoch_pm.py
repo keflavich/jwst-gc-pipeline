@@ -33,6 +33,32 @@ def tangent_xy(sc, center):
     return dra, ddec
 
 
+def _robust_clip_keep(s, nsigma):
+    """Robust sigma-clip mask for a residual magnitude array ``s`` (e.g. a 2D
+    hypot of position residuals, which is Rayleigh- not Gaussian-distributed).
+
+    Uses median + MAD (scaled to a Gaussian-equivalent sigma) instead of
+    ``np.std`` of an already-clipped subset. The plain-std version used here
+    previously (``keep = s < nsigma * np.std(s[keep])``, re-evaluated each
+    iteration on the shrinking ``keep``) is the classic sigma-clip bias: each
+    round's std is estimated from an already-tightened sample, so the
+    threshold keeps shrinking past the true noise floor. Caught by a
+    synthetic-field test in astrometry/tests/test_multiepoch_pm.py that had
+    ZERO real outliers: only ~40% were kept despite 100% correct matches and
+    correctly-recovered fit coefficients (the dropped points were a random,
+    not biased, subsample -- this affects retained sample size/statistics,
+    not correctness of what's fit on the survivors). MAD is far more
+    resistant to this because it doesn't collapse under repeated re-
+    application to an already-good sample the way std of a shrinking
+    subset does.
+    """
+    med = np.median(s)
+    mad = np.median(np.abs(s - med)) * 1.4826  # -> Gaussian-equivalent sigma
+    if mad == 0:
+        return s <= med
+    return s < med + nsigma * mad
+
+
 def load_jwst_m7(path, ref_filter='f200w'):
     """Load a per-obs m7 cross-band catalog -> dict with sky + errors + mag + epoch."""
     t = Table.read(path)
@@ -115,7 +141,7 @@ def shift_gns_to_virac(gns, virac, to_epoch, match_radius=0.2, magcut=15.0, nite
         rx = dx - (A[0] + A[1] * gx + A[2] * gy)
         ry = dy - (B[0] + B[1] * gx + B[2] * gy)
         s = np.hypot(rx, ry)
-        keep = s < nsigma * np.std(s[keep])
+        keep = _robust_clip_keep(s, nsigma)
     # apply to all GNS
     allx, ally = tangent_xy(gns['sc'], center)
     cdx = A[0] + A[1] * allx + A[2] * ally
@@ -155,7 +181,7 @@ def shift_to_virac_frame(cat, virac, to_epoch, match_radius=0.2, magcut=15.0, ni
         B, *_ = np.linalg.lstsq(Mm, dy[keep], rcond=None)
         rx = dx - (A[0] + A[1] * cx + A[2] * cy)
         ry = dy - (B[0] + B[1] * cx + B[2] * cy)
-        keep = np.hypot(rx, ry) < nsigma * np.std(np.hypot(rx, ry)[keep])
+        keep = _robust_clip_keep(np.hypot(rx, ry), nsigma)
     allx, ally = tangent_xy(cat['sc'], center)
     new_ra = cat['sc'].ra.deg + ((A[0] + A[1] * allx + A[2] * ally) / 3600.0) / np.cos(center.dec.rad)
     new_de = cat['sc'].dec.deg + ((B[0] + B[1] * allx + B[2] * ally) / 3600.0)
@@ -281,7 +307,7 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
         resx = dx - (A[0] + A[1] * sx + A[2] * sy)
         resy = dy - (B[0] + B[1] * sx + B[2] * sy)
         s = np.hypot(resx, resy)
-        keep = s < nsigma * np.std(s[keep])
+        keep = _robust_clip_keep(s, nsigma)
     allx, ally = tangent_xy(src_sc, center)
     cdx = A[0] + A[1] * allx + A[2] * ally
     cdy = B[0] + B[1] * allx + B[2] * ally
