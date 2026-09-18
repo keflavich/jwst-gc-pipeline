@@ -66,6 +66,21 @@ def _fmt_delta(seconds):
     return f'{text} ago' if past else f'in {text}'
 
 
+def _when_cell(when, delta):
+    """The gap to a visit, kept current by the browser.
+
+    A schedule is the one table where a stale relative time is actively
+    misleading: "in 2 h" rendered at build time still says "in 2 h" after the
+    visit has run.  The server's text is the no-JavaScript answer;
+    `data-epoch` is what the page's own updater recomputes from, and the style
+    tells it to use this table's wording rather than the compact one.
+    """
+    if delta is None or when is None:
+        return '—'
+    return (f'<span class="gcm-ago" data-epoch="{int(when.timestamp())}" '
+            f'data-style="delta">{esc(_fmt_delta(delta))}</span>')
+
+
 def observed_observations(entries, program):
     """``{observation number}`` the archive scan already knows for ``program``.
 
@@ -144,7 +159,7 @@ def _row(visit, now, on_disk, program):
   <td class="gcm-mono">{esc(visit.get('visit_id'))}</td>
   <td class="gcm-mono">{esc(visit.get('target') or '—')}</td>
   <td class="gcm-mono">{esc(_fmt_dt(when))}</td>
-  <td class="gcm-mono">{esc(_fmt_delta(delta)) if delta is not None else '—'}</td>
+  <td class="gcm-mono">{_when_cell(when, delta)}</td>
   <td class="gcm-mono">{f'{dur // 60} m' if dur else '—'}</td>
   <td>{esc(visit.get('instrument') or '—')}
       {f'<span class="gcm-sch-par">+ {esc(parallels)}</span>' if parallels else ''}</td>

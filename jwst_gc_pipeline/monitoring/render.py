@@ -80,6 +80,21 @@ def ago(mtime, now=None):
     return f'{int(delta)}s ago'
 
 
+def ago_html(mtime, style='ago'):
+    """`ago()`, wrapped so the browser can keep it current.
+
+    The page is rebuilt hourly and then sits in a tab.  "3h ago" rendered at
+    build time still reads "3h ago" the next morning, which is the one thing a
+    relative time must not do -- an absolute timestamp at least cannot mislead
+    about how old it is.  The text is the server's answer and stays correct
+    with JavaScript off; `data-epoch` lets the client recompute it.
+    """
+    if not mtime:
+        return esc(ago(mtime))
+    return (f'<span class="gcm-ago" data-epoch="{int(mtime)}" '
+            f'data-style="{esc(style)}">{esc(ago(mtime))}</span>')
+
+
 def num(value):
     return '—' if value is None else f'{value:,}'
 
@@ -508,7 +523,7 @@ def _card(entry, href=None):
   <div class="gcm-card-top">
     <span class="gcm-card-name">{esc(run['target'])}</span>
     <span class="gcm-card-obs">{esc(run['proposal'])}/o{esc(run['obsid'])}</span>
-    <span class="gcm-card-when">{esc(ago(newest))}</span>
+    <span class="gcm-card-when">{ago_html(newest)}</span>
   </div>
   {_ladder_html(run)}
   <div class="gcm-chips">{_severity_chip(tally)}{job_chip}</div>
@@ -773,7 +788,7 @@ def _cutouts_block(cutouts):
 <td class="filt">{esc(cut['target'])}</td><td class="filt">{esc(cut['label'])}</td>
 <td class="n">{num(cut['n_frames'])}</td><td class="n">{num(cut['n_catalogs'])}</td>
 <td class="z" style="white-space:normal">{esc(filters)}</td>
-<td class="z">{esc(ago(cut['mtime']))}</td>
+<td class="z">{ago_html(cut['mtime'])}</td>
 <td style="white-space:normal">{''.join(flags)}</td></tr>""")
     return f"""
 <section class="gcm-sec"><h2>Cutout runs</h2>
@@ -892,6 +907,60 @@ def _field_section(entry, show_skip=False, figure_base='figures',
 # --------------------------------------------------------------------------
 
 _JS = """
+(function () {
+  // Relative times, kept current in the browser. The page is rebuilt hourly
+  // and then left open; without this every "3 h ago" on screen is the age at
+  // BUILD time, which is wrong by however long the tab has been sitting there.
+  // The server's text is the no-JavaScript answer and is replaced only once a
+  // real epoch is read back out of the element.
+  function fmtAgo(delta) {
+    if (delta < 0) { return 'just now'; }
+    var units = [[86400, 'd'], [3600, 'h'], [60, 'm']];
+    for (var i = 0; i < units.length; i++) {
+      if (delta >= units[i][0]) {
+        return Math.floor(delta / units[i][0]) + units[i][1] + ' ago';
+      }
+    }
+    return Math.floor(delta) + 's ago';
+  }
+  function fmtDelta(delta) {
+    // `in 2 d 4 h` / `4 h 12 m ago` -- the schedule's own wording, because a
+    // second format for the same quantity reads as a second quantity.
+    var past = delta >= 0;
+    var s = Math.floor(Math.abs(delta));
+    var d = Math.floor(s / 86400); s -= d * 86400;
+    var h = Math.floor(s / 3600); s -= h * 3600;
+    var m = Math.floor(s / 60);
+    var text = d ? (d + ' d ' + h + ' h') : (h ? (h + ' h ' + m + ' m')
+                                               : (m + ' m'));
+    return past ? text + ' ago' : 'in ' + text;
+  }
+  function refresh() {
+    var now = Date.now() / 1000;
+    var cells = document.querySelectorAll('.gcm-ago[data-epoch]');
+    Array.prototype.forEach.call(cells, function (el) {
+      var epoch = parseFloat(el.getAttribute('data-epoch'));
+      if (!isFinite(epoch)) { return; }
+      var delta = now - epoch;
+      el.textContent = el.getAttribute('data-style') === 'delta'
+        ? fmtDelta(delta) : fmtAgo(delta);
+      if (!el.title) {
+        el.title = new Date(epoch * 1000).toISOString().replace('T', ' ')
+                     .slice(0, 16) + 'Z';
+      }
+    });
+  }
+  refresh();
+  setInterval(refresh, 30000);
+  // Browsers throttle background timers and freeze them outright in a tab
+  // that has been hidden for minutes, so the 30 s tick is not something a
+  // restored tab can be assumed to have been running. This repaints on the
+  // way back in, before anything is read.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { refresh(); }
+  });
+})();
+
 (function () {
   var root = document.documentElement;
   var btn = document.getElementById('gcm-theme');
