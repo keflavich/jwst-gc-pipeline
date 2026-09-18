@@ -235,17 +235,33 @@ def build_pm_catalog(jwst, virac, gns, match_radius=0.3, require_jwst=True):
 
 def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
                niter=3, nsigma=3.0):
-    """Iterative sigma-clipped affine tie: shift+rotate+scale src onto ref's frame.
+    """Iterative sigma-clipped affine tie: fit a full 6-parameter linear map
+    (dx = A0 + A1*x + A2*y, dy = B0 + B1*x + B2*y) from src onto ref's frame.
 
     Generalizes shift_to_virac_frame/shift_gns_to_virac to two plain catalogs
     with no external pm prior -- e.g. two independent JWST epochs of the same
     field, where neither side has a trustworthy proper-motion catalog to
-    propagate first.  A translation-only tie leaves any relative rotation or
-    plate-scale difference between the two pipelines' astrometric solutions
-    in the residual, which then reads as a spurious COHERENT proper motion
-    across the whole field (see brick-1182-astrometry-bug: ~20 mas inter-
-    module residuals alone are ~3 mas/yr of spurious PM over a ~7 yr JWST
-    baseline, worse over a ~2 yr one). The affine fit removes that.
+    propagate first.  A translation-only tie leaves any relative rotation,
+    plate-scale, or SHEAR difference between the two pipelines' astrometric
+    solutions in the residual, which then reads as a spurious COHERENT
+    proper motion across the whole field (see brick-1182-astrometry-bug: ~20
+    mas inter-module residuals alone are ~3 mas/yr of spurious PM over a ~7
+    yr JWST baseline, worse over a ~2 yr one). The full linear fit (not just
+    shift+rotate+scale) removes all of that.
+
+    CAVEAT -- this makes the output frame RELATIVE, not absolute: a genuine
+    bulk/rotation/shear velocity field is *also* linear to first order across
+    a field of a few arcmin (Galactic rotation, bulge streaming, NSC
+    rotation), and this fit cannot distinguish that from a plate-scale/shear
+    error in the astrometric solution -- it removes both by construction.
+    Downstream proper motions from a tie built this way are relative to the
+    mean motion + mean shear of whichever stars were used for the tie (the
+    ``magcut`` bright/compact sample here), not an absolute frame. A rotation
+    curve measured from PMs tied this way will read closer to zero than it
+    should, with no warning baked into the numbers alone -- callers that need
+    an absolute measurement must look at the returned coefficients (A, B in
+    the diagnostics dict) to see how much was removed, and add it back if the
+    physical signal of interest is on that same linear scale.
     """
     center = SkyCoord(np.median(src_sc.ra), np.median(src_sc.dec))
     sb = src_mag < magcut
@@ -273,7 +289,14 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
     new_de = src_sc.dec.deg + (cdy / 3600.0)
     diag = dict(n_match=int(ok.sum()), n_kept=int(keep.sum()),
                 med_dx_mas=float(np.median(dx) * 1e3), med_dy_mas=float(np.median(dy) * 1e3),
-                rms_resid_mas=float(np.std(np.hypot(resx, resy)[keep]) * 1e3))
+                rms_resid_mas=float(np.std(np.hypot(resx, resy)[keep]) * 1e3),
+                # dx = A0 + A1*x + A2*y (arcsec, arcsec/arcsec); dy likewise
+                # with B. Keep these numeric (not just the summary stats
+                # above) so a later reader can reconstruct exactly how much
+                # linear motion/shear this tie removed -- see the "makes the
+                # frame relative" caveat in this function's docstring.
+                A=[float(v) for v in A], B=[float(v) for v in B],
+                center_ra_deg=float(center.ra.deg), center_dec_deg=float(center.dec.deg))
     return SkyCoord(new_ra * u.deg, new_de * u.deg), diag
 
 

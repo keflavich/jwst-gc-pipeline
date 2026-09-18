@@ -7,11 +7,21 @@ photometry exists over that footprint.
 
 Unlike build_multiepoch_pm.py (JWST x GNS x VIRAC2, VIRAC2 defines the
 reference frame and supplies a pm PRIOR for matching), neither epoch here has
-an independent proper-motion catalog. The frame tie is therefore an affine
-fit (offset + rotation/plate-scale; multiepoch_pm.affine_tie), not a
-pm-propagated match -- a translation-only tie leaves any relative rotation or
-plate-scale difference between the two epochs' astrometric solutions in the
-residual, which reads as a spurious COHERENT proper motion across the field.
+an independent proper-motion catalog. The frame tie is therefore a full
+6-parameter affine fit (multiepoch_pm.affine_tie), not a pm-propagated match
+-- a translation-only tie leaves any relative rotation, plate-scale, or shear
+difference between the two epochs' astrometric solutions in the residual,
+which reads as a spurious COHERENT proper motion across the field.
+
+CAVEAT this shares with affine_tie (see its docstring): a real bulk/rotation/
+shear velocity field is ALSO linear to first order across a few arcmin, so
+the tie cannot distinguish real coherent motion from a plate-scale/shear
+astrometric error and removes both by construction. The output pm_ra/pm_dec
+here are RELATIVE to the mean motion + mean shear of the tie's own bright/
+compact matching sample, not an absolute frame -- e.g. a rotation curve or
+bulk streaming measurement from this catalog will read artificially close to
+zero. The fitted per-observation tie coefficients (A, B) are stored in
+pm.meta['tie_diag_json'] precisely so this can be checked/undone later.
 
 Example:
     python -m jwst_gc_pipeline.astrometry.build_treasury_pm \\
@@ -22,6 +32,7 @@ Example:
         --out /orange/.../sgrb2/astrometry_diag/pm_flystar/pm_sgrb2_treasury_f212n.fits
 """
 import argparse
+import json
 import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord, concatenate
@@ -148,7 +159,15 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
               f'(from {len(ref_paths)} independently-tied observations)')
     pm = M.build_pm_catalog_2epoch(src, ref, match_radius=match_radius)
     pm.meta['filter'] = filt
-    pm.meta['tie_diag'] = str(diags)
+    pm.meta['frame'] = ('relative: mean motion + mean shear of the affine tie\'s own '
+                        'bright/compact matching sample subtracted per observation; '
+                        'NOT an absolute frame -- see build_treasury_pm module docstring')
+    # Per-observation fitted tie coefficients (A, B: dx/dy = A0/B0 + A1/B1*x +
+    # A2/B2*y, arcsec) plus match/residual diagnostics -- numerically usable
+    # (json.loads this), not just a log string, so a later reader can see
+    # exactly how much linear motion/shear each tie removed and add it back
+    # if needed.
+    pm.meta['tie_diag_json'] = json.dumps(diags)
     pm.write(out_path, overwrite=True)
     ntrust = int(pm['trustworthy'].sum())
     if verbose:
