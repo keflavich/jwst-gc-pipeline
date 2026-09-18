@@ -59,16 +59,17 @@ def _offset(dra_mas, ddec_mas, ok=True, swept=False):
                 window_arcsec=3.0, dra_err=0.0008, ddec_err=0.0008)
 
 
-def _region_map(worst_mas, clean, n_flagged):
+def _region_map(worst_mas, clean, n_flagged, n_uncovered=0):
     return dict(clean=clean, measurable=True, n_cells=25, n_measured=25,
-                n_flagged=n_flagged, n_uncovered=0, uncovered_cells=[],
+                n_flagged=n_flagged, n_uncovered=n_uncovered,
+                uncovered_cells=[{'by': 'tight-pairs'}] * n_uncovered,
                 worst_off_mas=worst_mas, worst_sig_off_mas=worst_mas,
                 n_pairs=4000, cells=[],
                 reason=f'{n_flagged} region cell(s) above 15.0 mas at 3.0-sigma')
 
 
 def _tie(monkeypatch, bulk_mas, worst_mas, clean=False, n_flagged=6,
-         region_measurable=True, grid_clean=True):
+         region_measurable=True, grid_clean=True, n_uncovered=0):
     """Run the REAL decision over canned estimator output."""
     dra, ddec = bulk_mas
     monkeypatch.setattr(vc, 'measure_offset',
@@ -77,7 +78,7 @@ def _tie(monkeypatch, bulk_mas, worst_mas, clean=False, n_flagged=6,
                         lambda *a, **k: dict(clean=grid_clean, n_total=4,
                                              worst_off_mas=worst_mas, cells=[]))
     if region_measurable:
-        rm = _region_map(worst_mas, clean, n_flagged)
+        rm = _region_map(worst_mas, clean, n_flagged, n_uncovered)
     else:
         rm = dict(clean=False, measurable=False, n_cells=0, n_measured=0,
                   n_flagged=0, worst_off_mas=float('nan'), cells=[])
@@ -144,6 +145,38 @@ def test_a_clean_map_does_not_need_the_exemption(monkeypatch):
     assert r['per_tile_ok'] is True
     assert r['per_tile_bulk_dominant_exempt'] is False
     assert r['apply_ok'] is True
+
+
+def test_a_coverage_only_dirty_map_is_still_refused(monkeypatch):
+    """The exemption may overrule the RESIDUAL arm and only that one.
+
+    ``clean`` is ``not flagged and not uncovered``, and the two arms catch
+    opposite failures.  A region displaced BEYOND the match radius keeps its
+    sources, loses its pairs, and contributes no cell at all -- it lands in
+    ``n_uncovered`` and never reaches ``worst_off_mas``, which is a max over
+    MEASURED cells.  So its signature is a SMALL numerator, which is exactly
+    what this exemption looks for, and brick-1182 v001's ~20" half-mosaic would
+    have sailed through on a ratio near zero (PR #924 review).
+
+    The ratio is still RECORDED here -- a refusal should say how the residuals
+    compared to the bulk even when coverage was what blocked.
+    """
+    r = _tie(monkeypatch, (-61.66, -9.91), 4.0, n_flagged=0, n_uncovered=3)
+    assert r['per_tile_ok'] is False
+    assert r['region_bulk_dominance_ratio'] < REGION_BULK_DOMINANCE_RATIO, (
+        'fixture must look bulk-dominant on the residual arm to be a test')
+    assert r['per_tile_bulk_dominant_exempt'] is False, (
+        'a coverage-dirty map was exempted on a residual-arm ratio'
+    )
+    assert r['apply_ok'] is False
+
+
+def test_a_map_dirty_on_BOTH_arms_is_still_refused(monkeypatch):
+    """Flagged cells within the bound do not buy a pass while coverage is also
+    dirty -- the arms are independent, so clearing one is not clearing both."""
+    r = _tie(monkeypatch, (-61.66, -9.91), 25.29, n_flagged=6, n_uncovered=2)
+    assert r['per_tile_bulk_dominant_exempt'] is False
+    assert r['apply_ok'] is False
 
 
 def test_the_exemption_does_not_reach_the_histogram_grid(monkeypatch):

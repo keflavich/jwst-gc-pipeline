@@ -208,22 +208,31 @@ REFERENCE_CROSSCHECK_GROSS_MAS = 100.0
 #: question for deciding whether to APPLY a rigid shift, because it does not
 #: know how big the shift is.  A rigid shift by a correctly measured bulk moves
 #: every cell by the same vector, so it leaves the spatial structure exactly
-#: where it was and takes the bulk out from under it -- the per-cell error goes
-#: from hypot(bulk, structure) to structure.  That is an improvement for ANY
-#: structure amplitude.  Refusing cannot make the field flatter; it only keeps
-#: the bulk.
+#: where it was and takes the bulk out from under it: in AGGREGATE the per-cell
+#: error goes from hypot(bulk, structure) to structure.
 #:
-#: The case the veto exists for is different, and the ratio is what separates
-#: them: a SEAM, where one region is displaced and the measured "bulk" is an
-#: average over displaced and undisplaced parts.  Applying that average moves
-#: the good part wrong.  A seam's worst cell is comparable to, or larger than,
-#: the bulk it produces -- half a field displaced by D reads bulk ~D/2 and a
-#: worst cell ~D/2 (ratio ~1); a quarter displaced reads ~D/4 against ~3D/4
-#: (ratio ~3); a small displaced patch drives the bulk toward 0 and the ratio
-#: up without bound.  brick-1182 F200W's ~90 mas strip sits on a sub-mas bulk,
-#: and the synthetic half-mosaic in test_reference_tie_unswept_sparse_alias.py
-#: reads a 2500 mas worst cell against a sub-mas bulk.  Both are ratios in the
-#: hundreds.
+#: Per cell that is not automatic, and the ratio is what makes the trade
+#: favourable rather than the aggregate argument (PR #924 review).  A cell whose
+#: true offset is zero goes from 0 to |bulk| -- and that cell is the undisplaced
+#: half of a seam, which is precisely the case the veto exists for.  Bounding
+#: the worst cell at half the bulk bounds that harm at 0.5*bulk while the
+#: typical cell gains ~bulk, so the shift is worth making; unbounded, it is not.
+#:
+#: What the bound excludes: a SEAM, where one region is displaced and the
+#: measured "bulk" is a median over displaced and undisplaced parts.  Take a
+#: two-level seam, fraction f of the field displaced by D.  The adopted bulk is
+#: a MEDIAN (`local_residual_map`, and the map's own is np.median at
+#: astrometry_offsets.py:1261), not a mean, so it does not slide with f -- it
+#: sits at 0 for f < 0.5 and at D for f > 0.5, while the worst cell residual is
+#: D either way.  The ratio is therefore D/0 -> unbounded below f = 0.5 and
+#: pins at exactly 1.00 above it.  It never approaches 0.5 at any f, so no pure
+#: two-level seam can pass this bound -- a stronger statement than a
+#: displaced-fraction threshold, and the reason not to quote one.
+#:
+#: Real examples land where that predicts: brick-1182 F200W's ~90 mas strip sits
+#: on a sub-mas bulk, and the synthetic half-mosaic in
+#: test_reference_tie_unswept_sparse_alias.py reads a 2500 mas worst cell
+#: against a sub-mas bulk.  Both are ratios in the hundreds.
 #:
 #: Measured on the gc-treasury tiles this was written for (issue #921), where
 #: the bulk is real, rigid and reference-independent -- Gaia-only sees 65.8 mas
@@ -233,9 +242,9 @@ REFERENCE_CROSSCHECK_GROSS_MAS = 100.0
 #:     o135 F480M  23.6 / 67.9 = 0.35      o129 F212N  20.1 / 59.7 = 0.34
 #:     o130 F212N  23.4 / 74.4 = 0.31      o132 F212N  20.2 / 69.9 = 0.29
 #:
-#: 0.5 admits those with margin and still requires a seam to displace more than
-#: two thirds of the field before it could pass -- at which point the displaced
-#: part is the majority and the measured bulk is closer to right than wrong.
+#: 0.5 admits those with margin, and sits a factor of two below the 1.00 a
+#: two-level seam pins at -- see above for why that pin is exact rather than a
+#: function of the displaced fraction.
 #:
 #: The empirical check is the tiles that DID receive their bulk: they carried
 #: the same structure, were shifted rigidly, and now read 8-12 mas instead of
@@ -1920,6 +1929,17 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # peak -- clean cannot tell a noise cell from a seam cell, issues #392/#775 --
     # and a ratio built on that would exempt on noise.  A dirty GRID keeps
     # vetoing exactly as before.
+    #
+    # Confined to the RESIDUAL arm as well, which the ratio alone does not do.
+    # `clean` is `not flagged and not uncovered`, and those two arms catch
+    # opposite failures: a seam INSIDE the match radius shows up as a large
+    # cell residual, and a region displaced BEYOND it keeps its sources, loses
+    # its pairs, and contributes NO cell -- it lands in `n_uncovered` and never
+    # reaches `worst_off_mas`, which is a max over MEASURED cells.  So the
+    # coverage arm's signature is a SMALL numerator, which is exactly what this
+    # exemption looks for: brick-1182 v001's ~20" half-mosaic would sail
+    # through on a ratio near zero.  The ratio speaks only about residuals, so
+    # it may only overrule residuals (PR #924 review).
     region_bulk_dominance_ratio = None
     if (per_tile_source == "same-star-region" and not per_tile_ok
             and bulk is not None and per_tile_same_star is not None):
@@ -1928,9 +1948,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         if (_bulk_mas >= REGION_BULK_DOMINANCE_MIN_BULK_MAS
                 and _worst is not None and np.isfinite(_worst)):
             region_bulk_dominance_ratio = float(_worst) / _bulk_mas
+    # Recorded, not folded into the ratio: a refusal should still report how the
+    # residuals compared to the bulk even when it was coverage that blocked.
+    region_uncovered = int((per_tile_same_star or {}).get("n_uncovered") or 0)
     per_tile_bulk_dominant_exempt = bool(
         region_bulk_dominance_ratio is not None
-        and region_bulk_dominance_ratio <= REGION_BULK_DOMINANCE_RATIO)
+        and region_bulk_dominance_ratio <= REGION_BULK_DOMINANCE_RATIO
+        and not region_uncovered)
 
     apply_ok = bool(res_a is not None and res_a.get("ok")
                     and (per_tile_ok or per_tile_unmeasurable_exempt
