@@ -55,23 +55,29 @@ def _record(passed=True, failures=(), corrections=(), blocking=()):
                 record_path='/x/rec.json')
 
 
-def _run(tmp_path, monkeypatch, record, warn_only=False, filt='F200W'):
+def _run(tmp_path, monkeypatch, record, warn_only=False, filt='F200W',
+         stage='m2'):
     """Call the real caller with a canned checkpoint record.
 
     Only `run_visit_checkpoint` and the reference-catalog load are stubbed --
     everything from the per-frame glob through the decision is the shipping
     code path.
+
+    `stage` selects which enforcement policy the decision runs under:
+    `frozen_failure_is_deferred` defers at a FROZEN stage ('m3'...) and never
+    at a CORRECTION_STAGES one ('m2'), so a test about the deferred branch has
+    to be able to ask for the other half.
     """
     from jwst_gc_pipeline.photometry import cataloging
 
     cut_bp = str(tmp_path)
     d = tmp_path / filt.upper()
     d.mkdir(parents=True)
-    (d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_m2_'
+    (d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_{stage}_'
          f'daophot_basic.fits').write_bytes(b'')
     tbl = Table({'x': [1.0]})
-    tbl.write(str(d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_m2_'
-                      f'daophot_basic.fits'), overwrite=True)
+    tbl.write(str(d / f'{filt.lower()}_nrca1_visit001_vgroup02201_exp00001_'
+                      f'{stage}_daophot_basic.fits'), overwrite=True)
 
     # `run_visit_checkpoint` is imported inside the function, so patch it at
     # the source module.  A pre-populated refcat cache skips the catalog load.
@@ -83,7 +89,7 @@ def _run(tmp_path, monkeypatch, record, warn_only=False, filt='F200W'):
     options = types.SimpleNamespace(field='004', proposal_id='1182',
                                     target='brick')
     return cataloging._run_astrometry_stage_checkpoint(
-        'm2', 'nrca', filt, cut_bp, cut_bp, '1182', options,
+        stage, 'nrca', filt, cut_bp, cut_bp, '1182', options,
         {'refcat': {'all': None, 'sparse': None}}, context='test')
 
 
@@ -179,6 +185,204 @@ def test_the_hatch_it_names_is_one_the_code_reads(tmp_path, monkeypatch,
             f'{name} is printed as the escape hatch but does not make a '
             f'measured-and-refused record pass')
         monkeypatch.delenv(name)
+
+
+def test_a_refused_record_does_NOT_then_announce_a_PASS(tmp_path, monkeypatch,
+                                                        capsys):
+    """The o135 shape (#871): refused, zero corrections, and the very next line
+    called it a pass.
+
+    `corrections` is empty precisely BECAUSE the tie was refused -- a tie m2
+    declines to apply is a tie m2 does not write -- so the branch that
+    announces a clean checkpoint fired on the refused one too, and its PASS was
+    the last word in the log.  gc-treasury o135 m12 finalize 41922332
+    (2026-09-13) printed, for F212N/merged:
+
+        ASTROM CHECKPOINT [m2]: NOT A PASS -- 1 item(s) were MEASURED and
+          refused ... consensus->reference offset 62.45 mas
+        astrom checkpoint [m2] F212N/merged: NOT A PASS -- 1 item(s) ...
+        astrom checkpoint [m2] F212N/merged: PASS (no correction implied)
+
+    The finalize exited 0 and m3 froze the 62 mas in.
+    """
+    rec = _record(passed=False, corrections=[], blocking=[
+        'gc-treasury F212N/merged F212N visit 1 [m2]: consensus->reference '
+        'offset 62.45 mas but the tie is not trustworthy -- NOT applying'])
+    _run(tmp_path, monkeypatch, rec)          # still not fatal (#312/#341)
+    out = capsys.readouterr().out
+    assert 'MEASURED and REFUSED' in out
+    assert 'PASS (no correction implied)' not in out, (
+        'a refused record announced itself as a pass three lines after being '
+        'refused, and the PASS was what the operator and the retie loop read')
+    assert 'NOT a pass' in out
+
+
+def test_a_refused_record_with_SUB_FLOOR_corrections_does_NOT_announce_a_PASS(
+        tmp_path, monkeypatch, capsys):
+    """The OTHER half of #871: the same refusal, routed to the other PASS line.
+
+    Zero corrections is not the only list length that is not a verdict.  A
+    record holding only sub-floor per-exposure residuals returns early at the
+    floor branch, which announced `PASS with N sub-floor residual(s)` with no
+    more reference to `passed` than the empty case had.
+
+    This is o135's F480M, which took that branch on all three modules while its
+    consensus->reference tie sat refused at 67.91 mas -- same job 41922332,
+    lines 841-844, record checkpoint_m2_F480M_o135_20260913T112130Z.json:
+
+        passed False   failures 0   corrections 2   unverified_blocking 1
+
+    F212N (corrections 0) and F480M (corrections 2) differ only in which PASS
+    line they reached.  Gating one and not the other fixes three of the six
+    instances in that log.
+    """
+    monkeypatch.setenv('ASTROM_M2_CORRECTION_FLOOR_MAS', '4.0')
+    sub_floor = [dict(source='m2 per-exposure', exposure=1,
+                      dra_onsky_mas=0.8, ddec_onsky_mas=-1.1),
+                 dict(source='m2 per-exposure', exposure=2,
+                      dra_onsky_mas=-1.3, ddec_onsky_mas=0.6)]
+    rec = _record(passed=False, corrections=sub_floor, blocking=[
+        'gc-treasury F480M/nrca F480M visit 1 [m2]: consensus->reference '
+        'offset 67.91 mas but the tie is not trustworthy -- NOT applying'])
+    _run(tmp_path, monkeypatch, rec, filt='F480M')
+    out = capsys.readouterr().out
+    assert 'MEASURED and REFUSED' in out
+    assert 'PASS with' not in out, (
+        'a refused record announced a sub-floor PASS -- the o135 F480M shape'
+    )
+    assert 'NOT a pass' in out
+    assert 'sub-floor residual(s)' in out, (
+        'the sub-floor count still has to be reported; only the verdict changes'
+    )
+
+
+def test_SUB_FLOOR_corrections_on_a_CLEAN_record_are_still_a_pass(
+        tmp_path, monkeypatch, capsys):
+    """The floor branch's ordinary case must survive the gate: a checkpoint
+    that measured everything, found only sub-floor residuals and refused
+    nothing still passes, and still says so."""
+    monkeypatch.setenv('ASTROM_M2_CORRECTION_FLOOR_MAS', '4.0')
+    rec = _record(corrections=[dict(source='m2 per-exposure', exposure=1,
+                                    dra_onsky_mas=0.8, ddec_onsky_mas=-1.1)])
+    _run(tmp_path, monkeypatch, rec, filt='F480M')
+    assert 'PASS with 1 sub-floor residual(s)' in capsys.readouterr().out
+
+
+def test_a_warn_only_demotion_does_NOT_then_announce_a_PASS(tmp_path,
+                                                            monkeypatch,
+                                                            capsys):
+    """ASTROM_CHECKPOINT_WARN_ONLY=1 asks the chain to CONTINUE past a
+    failure.  It does not turn the failure into a pass, and the demoted record
+    reaches the corrections short-circuit with an empty list like any other."""
+    rec = _record(passed=False, failures=['duplicate exposure identity'])
+    _run(tmp_path, monkeypatch, rec, warn_only=True)
+    out = capsys.readouterr().out
+    assert 'WARN_ONLY=1 -- continuing' in out
+    assert 'PASS (no correction implied)' not in out
+
+
+def test_a_demoted_failure_with_NO_passed_key_does_NOT_announce_a_PASS(
+        tmp_path, monkeypatch, capsys):
+    """Pins the `_failures` half of the verdict, which `passed` cannot cover.
+
+    `_checkpoint_passed` returns False for any non-empty failures list before
+    it looks at anything else, so a record built by `run_visit_checkpoint`
+    cannot carry failures and `passed=True` -- which makes `_failures` look
+    redundant beside the `passed` test, and it is, for that record.
+
+    It is not redundant for a record whose `passed` key is ABSENT.
+    `record.get('passed') is False` reads a missing key as not-false, so the
+    verdict would come out "this passed" on a record holding failures -- the
+    fail-open this file exists to close.  That shape is already constructed
+    here (`test_failures_alone_are_enough_even_if_passed_is_missing` pops the
+    key, for records predating the field), but it raises before reaching the
+    corrections short-circuit, so nothing exercised the clause at the gate:
+    deleting `_failures or` left the whole file green.
+
+    Under `warn_only` the same record is demoted and DOES reach it.
+    """
+    rec = _record(failures=['duplicate exposure identity'])
+    rec.pop('passed')
+    _run(tmp_path, monkeypatch, rec, warn_only=True)
+    out = capsys.readouterr().out
+    assert 'WARN_ONLY=1 -- continuing' in out
+    assert 'PASS (no correction implied)' not in out, (
+        'a record with failures and no `passed` key announced a pass'
+    )
+    assert 'NOT a pass' in out
+
+
+def test_a_DEFERRED_frozen_failure_does_NOT_then_announce_a_PASS(
+        tmp_path, monkeypatch, capsys):
+    """The deferral says "the release gate refuses this field" and continues.
+    Printing PASS after that sentence contradicts it in the same log."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        CHECKPOINT_ENFORCE_ENV, ENFORCE_AT_RELEASE)
+    monkeypatch.setenv(CHECKPOINT_ENFORCE_ENV, ENFORCE_AT_RELEASE)
+    rec = _record(passed=False, failures=['consensus->reference MOVED 62 mas'])
+    _run(tmp_path, monkeypatch, rec, stage='m3')      # frozen -> deferred
+    out = capsys.readouterr().out
+    assert 'the release gate refuses this field' in out
+    assert 'PASS (no correction implied)' not in out
+
+
+def test_the_opt_in_hatch_still_produces_a_real_PASS(tmp_path, monkeypatch,
+                                                     capsys):
+    """ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1 is the documented way to proceed
+    past a measured-and-refused item.  It works upstream -- `_checkpoint_passed`
+    returns True, so the record arrives here with passed=True -- and such a
+    record must still read as a pass.  Narrowing the PASS line must not take
+    the hatch away."""
+    monkeypatch.setenv(ALLOW_UNVERIFIED_ENV, '1')
+    rec = _record(passed=True, blocking=['the operator accepted this one'])
+    _run(tmp_path, monkeypatch, rec)
+    assert 'PASS (no correction implied)' in capsys.readouterr().out
+
+
+def test_EVERY_early_PASS_line_is_gated_on_the_record_not_on_list_length():
+    """Source guard: both early-return announcements must consult the verdict.
+
+    The first version of this fix gated the empty-corrections line only, and
+    every behavioural test passed while the sub-floor line three screens down
+    still announced a PASS on the same refused record.  A guard that pins one
+    site would have let that ship, so this counts them: a new early PASS added
+    later must be gated too, or this fails.
+
+    Anchored on the f-strings that BUILD the lines (`{module}: PASS`), not on
+    the rendered text: the comment above them quotes the o135 log verbatim, so
+    the rendered form appears earlier in the source and matching it would
+    measure the comment instead of the code.
+    """
+    import inspect
+
+    from jwst_gc_pipeline.photometry import cataloging
+    src = inspect.getsource(cataloging._run_astrometry_stage_checkpoint)
+    corr_at = src.index("corrections = record.get('corrections')")
+    tail = src[corr_at:]
+
+    verdict_at = tail.index('_not_a_pass =')
+    assert "record.get('passed') is False" in tail[:tail.index('\n', verdict_at)], (
+        'the verdict must come from the record, not from a list length')
+
+    pass_sites = [i for i in range(len(tail))
+                  if tail.startswith('{module}: PASS', i)]
+    assert len(pass_sites) == 2, (
+        f'expected the two early PASS announcements, found {len(pass_sites)}; '
+        f'a new one has to be gated on `_not_a_pass` as well')
+    for site in pass_sites:
+        assert verdict_at < site, 'the verdict is read after a PASS is printed'
+
+    # One gate PER site, counted -- not merely "a gate appears somewhere
+    # before this line".  Neutering the second `if _not_a_pass:` to `if False:`
+    # leaves the first one sitting in the span before both sites, so a
+    # containment test still passes on a tree where the sub-floor line
+    # announces a PASS on a refused record.  Verified: that mutation kills
+    # test_a_refused_record_with_SUB_FLOOR_corrections_does_NOT_announce_a_PASS
+    # and, before this count was added, left this guard green.
+    assert tail.count('if _not_a_pass:') == len(pass_sites), (
+        f"{tail.count('if _not_a_pass:')} verdict gate(s) for "
+        f"{len(pass_sites)} early PASS line(s) -- each one needs its own, or a "
+        f"refused record announces a pass again (#871)")
 
 
 def test_failures_WIN_when_both_lists_are_populated(tmp_path, monkeypatch):
