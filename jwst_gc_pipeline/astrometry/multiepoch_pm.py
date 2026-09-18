@@ -231,3 +231,126 @@ def build_pm_catalog(jwst, virac, gns, match_radius=0.3, require_jwst=True):
     out.meta['epochs'] = epochs
     out.meta['frame'] = 'VIRAC2 / Gaia DR3'
     return out
+
+
+def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
+               niter=3, nsigma=3.0):
+    """Iterative sigma-clipped affine tie: shift+rotate+scale src onto ref's frame.
+
+    Generalizes shift_to_virac_frame/shift_gns_to_virac to two plain catalogs
+    with no external pm prior -- e.g. two independent JWST epochs of the same
+    field, where neither side has a trustworthy proper-motion catalog to
+    propagate first.  A translation-only tie leaves any relative rotation or
+    plate-scale difference between the two pipelines' astrometric solutions
+    in the residual, which then reads as a spurious COHERENT proper motion
+    across the whole field (see brick-1182-astrometry-bug: ~20 mas inter-
+    module residuals alone are ~3 mas/yr of spurious PM over a ~7 yr JWST
+    baseline, worse over a ~2 yr one). The affine fit removes that.
+    """
+    center = SkyCoord(np.median(src_sc.ra), np.median(src_sc.dec))
+    sb = src_mag < magcut
+    rb = ref_mag < magcut
+    ssc, rsc = src_sc[sb], ref_sc[rb]
+    idx, sep, _ = ssc.match_to_catalog_sky(rsc)
+    ok = sep < match_radius * u.arcsec
+    sx, sy = tangent_xy(ssc[ok], center)
+    rx, ry = tangent_xy(rsc[idx[ok]], center)
+    dx, dy = rx - sx, ry - sy
+    keep = np.ones(len(sx), bool)
+    A = B = None
+    for _ in range(niter):
+        Mm = np.column_stack([np.ones(keep.sum()), sx[keep], sy[keep]])
+        A, *_ = np.linalg.lstsq(Mm, dx[keep], rcond=None)
+        B, *_ = np.linalg.lstsq(Mm, dy[keep], rcond=None)
+        resx = dx - (A[0] + A[1] * sx + A[2] * sy)
+        resy = dy - (B[0] + B[1] * sx + B[2] * sy)
+        s = np.hypot(resx, resy)
+        keep = s < nsigma * np.std(s[keep])
+    allx, ally = tangent_xy(src_sc, center)
+    cdx = A[0] + A[1] * allx + A[2] * ally
+    cdy = B[0] + B[1] * allx + B[2] * ally
+    new_ra = src_sc.ra.deg + (cdx / 3600.0) / np.cos(center.dec.rad)
+    new_de = src_sc.dec.deg + (cdy / 3600.0)
+    diag = dict(n_match=int(ok.sum()), n_kept=int(keep.sum()),
+                med_dx_mas=float(np.median(dx) * 1e3), med_dy_mas=float(np.median(dy) * 1e3),
+                rms_resid_mas=float(np.std(np.hypot(resx, resy)[keep]) * 1e3))
+    return SkyCoord(new_ra * u.deg, new_de * u.deg), diag
+
+
+def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
+                            flux_ratio_cap=0.10, isolation_radius=None):
+    """2-epoch flystar PM fit between two plain catalogs (e.g. two independent
+    JWST epochs), after ``ref``'s coords have already been affine-tied onto
+    ``src`` (or vice versa) with :func:`affine_tie`.
+
+    ``src``/``ref`` are dicts with sc/ex/ey/mag/flux/epoch (flux optional --
+    needed only for the isolation/"trustworthy" cut).  Master list = src.
+    Mirrors build_pm_catalog's mutual-NN matching + isolation filter, minus
+    the pm-prior propagation step (neither epoch has one here).
+    """
+    from flystar.startables import StarTable
+    from astropy.coordinates import search_around_sky
+    center = SkyCoord(np.median(src['sc'].ra), np.median(src['sc'].dec))
+    idx, sep, _ = src['sc'].match_to_catalog_sky(ref['sc'])
+    idx_b, _, _ = ref['sc'].match_to_catalog_sky(src['sc'])
+    mutual = idx_b[idx] == np.arange(src['n'])
+    matched = (sep < match_radius * u.arcsec) & mutual
+
+    sx, sy = tangent_xy(src['sc'], center)
+    rx, ry = tangent_xy(ref['sc'][idx], center)
+    n = src['n']
+    X = np.full((n, 2), np.nan); Y = np.full((n, 2), np.nan)
+    XE = np.full((n, 2), np.nan); YE = np.full((n, 2), np.nan); Mg = np.full((n, 2), np.nan)
+    X[:, 0], Y[:, 0], XE[:, 0], YE[:, 0], Mg[:, 0] = sx, sy, src['ex'], src['ey'], src['mag']
+    X[matched, 1] = rx[matched]; Y[matched, 1] = ry[matched]
+    XE[matched, 1] = ref['ex'][idx][matched]; YE[matched, 1] = ref['ey'][idx][matched]
+    Mg[matched, 1] = ref['mag'][idx][matched]
+    sel = matched.copy()
+    name = np.array([f's{i}' for i in np.where(sel)[0]])
+    st = StarTable(name=name, x=X[sel], y=Y[sel], m=Mg[sel], xe=XE[sel], ye=YE[sel],
+                   LIST_TIMES=[float(src['epoch']), float(ref['epoch'])], ref_list=0)
+    st.fit_velocities(use_scipy=True, show_progress=False, mask_val=np.nan)
+
+    dt = ref['epoch'] - src['epoch']
+    out = Table()
+    out['ra0'] = center.ra.deg + (st['x0'] / 3600.0) / np.cos(center.dec.rad)
+    out['dec0'] = center.dec.deg + (st['y0'] / 3600.0)
+    out['pm_ra'] = st['vx'] * 1e3
+    out['pm_dec'] = st['vy'] * 1e3
+    out['pm_tot'] = np.hypot(out['pm_ra'], out['pm_dec'])
+    selidx = np.where(sel)[0]
+    # Formal position errors (src/ref per-frame scatter), NOT the flystar fit
+    # covariance: with exactly 2 epochs the fit is an exact line through 2
+    # points, so its own formal error collapses toward zero regardless of how
+    # noisy the input positions were.  This is the quantity fit_velocities'
+    # own vxe/vye badly underestimate in the 2-epoch case.
+    out['pm_ra_err'] = np.hypot(src['ex'][selidx], ref['ex'][idx][selidx]) * 1e3 / abs(dt)
+    out['pm_dec_err'] = np.hypot(src['ey'][selidx], ref['ey'][idx][selidx]) * 1e3 / abs(dt)
+    out['mag_src'] = src['mag'][selidx]
+
+    good_err = (np.isfinite(out['pm_ra_err']) & np.isfinite(out['pm_dec_err']) &
+                (out['pm_ra_err'] < err_cap_mas) & (out['pm_dec_err'] < err_cap_mas))
+    trust = good_err.copy()
+    if 'flux' in src and 'flux' in ref:
+        beam = isolation_radius if isolation_radius is not None else match_radius
+        prim_ridx = idx[selidx]
+        prim_flux = ref['flux'][prim_ridx]
+        si, ri, _, _ = search_around_sky(src['sc'][sel], ref['sc'], beam * 3 * u.arcsec)
+        comp_flux = np.zeros(int(sel.sum()))
+        for gg, bb in zip(si, ri):
+            if bb == prim_ridx[gg]:
+                continue
+            if ref['flux'][bb] > comp_flux[gg]:
+                comp_flux[gg] = ref['flux'][bb]
+        frac = np.where(prim_flux > 0, comp_flux / prim_flux, np.nan)
+        ss_i, _, _, _ = search_around_sky(src['sc'][sel], src['sc'], beam * 3 * u.arcsec)
+        n_src_near = np.bincount(ss_i, minlength=int(sel.sum()))
+        dominant = (frac < flux_ratio_cap) & (n_src_near == 1)
+        out['comp_flux_ratio'] = frac
+        out['n_src_within_beam'] = n_src_near
+        out['dominant'] = dominant
+        trust = trust & dominant
+    out['trustworthy'] = trust
+    out.meta['epochs'] = [float(src['epoch']), float(ref['epoch'])]
+    out.meta['baseline_yr'] = float(dt)
+    return out
