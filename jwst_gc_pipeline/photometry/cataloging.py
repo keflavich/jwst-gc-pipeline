@@ -4980,37 +4980,56 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             raise AstrometryCheckpointFailedError(msg)
 
     corrections = record.get('corrections') or []
+
+    # Whether this checkpoint PASSED is a property of the RECORD.  Both of the
+    # early-return announcements below read the `corrections` list instead --
+    # one for being empty, one for holding only sub-floor residuals -- and
+    # neither length is a verdict.  Every branch above that lets the run
+    # CONTINUE after declining to pass (the measured-and-refused one, a
+    # `warn_only` demotion, a `frozen_failure_is_deferred` deferral) falls
+    # through to them, so both announced a PASS on records that had just been
+    # refused, and that PASS was the last word in the log.
+    #
+    # gc-treasury o135, m12 finalize 41922332 (2026-09-13) printed BOTH, three
+    # times each -- F212N on nrca/nrcb/merged and F480M on nrca/nrcb/merged:
+    #
+    #   ASTROM CHECKPOINT [m2]: NOT A PASS -- 1 item(s) were MEASURED and
+    #     refused ... consensus->reference offset 62.45 mas
+    #   astrom checkpoint [m2] F212N/merged: NOT A PASS -- 1 item(s) ...
+    #   astrom checkpoint [m2] F212N/merged: PASS (no correction implied)
+    #
+    #   ... F480M ... consensus->reference offset 67.91 mas ... NOT applying
+    #   astrom checkpoint [m2] F480M/nrca: NOT A PASS -- 1 item(s) ...
+    #   astrom checkpoint [m2] F480M/nrca: PASS with 2 sub-floor residual(s)
+    #
+    # The two filters differ only in whether the record carried corrections
+    # (F212N 0, F480M 2), which routed them to different PASS lines; the
+    # refusal, and the 62/68 mas behind it, are the same.  The finalize exited
+    # 0, m3 started, and the offset is frozen into a solution no later stage
+    # can correct (issue #871).
+    #
+    # This does not decide whether a refused bulk tie should STOP the chain:
+    # #312/#341 made that non-fatal deliberately, the record already carries
+    # passed=false, and the release gate reads it.  It decides only that the
+    # log must not call it a pass.
+    #
+    # `_failures` is belt-and-braces beside the `passed` test, not a second
+    # condition: `_checkpoint_passed` returns False for any non-empty failures
+    # list before it looks at anything else, so a record from
+    # `run_visit_checkpoint` cannot have both.  It costs nothing and it keeps
+    # the verdict right for a record whose `passed` key is absent -- the shape
+    # this module's own tests construct, and the fail-open they exist to close.
+    _not_a_pass = bool(_failures) or record.get('passed') is False
+
+    def _no_pass_line(what):
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+              f"{what}, and this record is NOT a pass (see above) -- "
+              f"nothing here clears it.\n"
+              f"  record: {record.get('record_path')}", flush=True)
+
     if not corrections:
-        # "no correction implied" is a verdict on the RECORD, not on the length
-        # of one list.  Every branch above that lets the run CONTINUE after
-        # declining to pass -- the measured-and-refused one, a `warn_only`
-        # demotion, a `frozen_failure_is_deferred` deferral -- falls through to
-        # here, and each of them leaves `corrections` EMPTY by construction: a
-        # tie m2 refused is a tie m2 did not write.  So the branch that exists
-        # to announce a clean checkpoint announced the refused ones too, three
-        # lines after refusing them, and its PASS was the last word in the log.
-        #
-        # gc-treasury o135, m12 finalize 41922332 (2026-09-13), F212N/merged:
-        #
-        #   ASTROM CHECKPOINT [m2]: NOT A PASS -- 1 item(s) were MEASURED and
-        #     refused ... consensus->reference offset 62.45 mas
-        #   astrom checkpoint [m2] F212N/merged: NOT A PASS -- 1 item(s) ...
-        #   astrom checkpoint [m2] F212N/merged: PASS (no correction implied)
-        #
-        # The finalize exited 0, m3 started, and the 62 mas was frozen into a
-        # solution no later stage can correct (issue #871).  Its sibling F480M
-        # never printed the PASS line, only because it happened to carry two
-        # sub-floor corrections -- which is not a difference in astrometry.
-        #
-        # This does not decide whether a refused bulk tie should STOP the
-        # chain: #312/#341 made that non-fatal deliberately, the record already
-        # carries passed=false, and the release gate reads it.  It decides only
-        # that the log must not call it a pass.
-        if _failures or record.get('passed') is False:
-            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
-                  f"no correction to apply, and this record is NOT a pass "
-                  f"(see above) -- nothing here clears it.\n"
-                  f"  record: {record.get('record_path')}", flush=True)
+        if _not_a_pass:
+            _no_pass_line("no correction to apply")
         else:
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS "
                   f"(no correction implied)", flush=True)
@@ -5094,11 +5113,21 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         actionable = _floor_actionable_corrections(
             corrections, floor_mas, f"{merge_label}] {filt}/{module}")
         if not actionable:
-            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS with "
-                  f"{len(corrections)} sub-floor residual(s) "
-                  f"(< {floor_mas} mas; floor source={floor_source}) -- "
-                  f"recorded in {record.get('record_path')}, not actionable in "
-                  f"the module-locked offsets table", flush=True)
+            # Same verdict test as the empty-corrections return above: a
+            # sub-floor residual list is no more a pass than an empty one.
+            # This is the line o135's F480M reached on all three modules while
+            # its 67.91 mas consensus->reference tie sat refused.
+            if _not_a_pass:
+                _no_pass_line(f"{len(corrections)} sub-floor residual(s) "
+                              f"(< {floor_mas} mas; floor "
+                              f"source={floor_source}), nothing actionable in "
+                              f"the module-locked offsets table")
+            else:
+                print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS with "
+                      f"{len(corrections)} sub-floor residual(s) "
+                      f"(< {floor_mas} mas; floor source={floor_source}) -- "
+                      f"recorded in {record.get('record_path')}, not actionable in "
+                      f"the module-locked offsets table", flush=True)
             return
         corrections = actionable
 

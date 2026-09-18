@@ -217,6 +217,57 @@ def test_a_refused_record_does_NOT_then_announce_a_PASS(tmp_path, monkeypatch,
     assert 'NOT a pass' in out
 
 
+def test_a_refused_record_with_SUB_FLOOR_corrections_does_NOT_announce_a_PASS(
+        tmp_path, monkeypatch, capsys):
+    """The OTHER half of #871: the same refusal, routed to the other PASS line.
+
+    Zero corrections is not the only list length that is not a verdict.  A
+    record holding only sub-floor per-exposure residuals returns early at the
+    floor branch, which announced `PASS with N sub-floor residual(s)` with no
+    more reference to `passed` than the empty case had.
+
+    This is o135's F480M, which took that branch on all three modules while its
+    consensus->reference tie sat refused at 67.91 mas -- same job 41922332,
+    lines 841-844, record checkpoint_m2_F480M_o135_20260913T112130Z.json:
+
+        passed False   failures 0   corrections 2   unverified_blocking 1
+
+    F212N (corrections 0) and F480M (corrections 2) differ only in which PASS
+    line they reached.  Gating one and not the other fixes three of the six
+    instances in that log.
+    """
+    monkeypatch.setenv('ASTROM_M2_CORRECTION_FLOOR_MAS', '4.0')
+    sub_floor = [dict(source='m2 per-exposure', exposure=1,
+                      dra_onsky_mas=0.8, ddec_onsky_mas=-1.1),
+                 dict(source='m2 per-exposure', exposure=2,
+                      dra_onsky_mas=-1.3, ddec_onsky_mas=0.6)]
+    rec = _record(passed=False, corrections=sub_floor, blocking=[
+        'gc-treasury F480M/nrca F480M visit 1 [m2]: consensus->reference '
+        'offset 67.91 mas but the tie is not trustworthy -- NOT applying'])
+    _run(tmp_path, monkeypatch, rec, filt='F480M')
+    out = capsys.readouterr().out
+    assert 'MEASURED and REFUSED' in out
+    assert 'PASS with' not in out, (
+        'a refused record announced a sub-floor PASS -- the o135 F480M shape'
+    )
+    assert 'NOT a pass' in out
+    assert 'sub-floor residual(s)' in out, (
+        'the sub-floor count still has to be reported; only the verdict changes'
+    )
+
+
+def test_SUB_FLOOR_corrections_on_a_CLEAN_record_are_still_a_pass(
+        tmp_path, monkeypatch, capsys):
+    """The floor branch's ordinary case must survive the gate: a checkpoint
+    that measured everything, found only sub-floor residuals and refused
+    nothing still passes, and still says so."""
+    monkeypatch.setenv('ASTROM_M2_CORRECTION_FLOOR_MAS', '4.0')
+    rec = _record(corrections=[dict(source='m2 per-exposure', exposure=1,
+                                    dra_onsky_mas=0.8, ddec_onsky_mas=-1.1)])
+    _run(tmp_path, monkeypatch, rec, filt='F480M')
+    assert 'PASS with 1 sub-floor residual(s)' in capsys.readouterr().out
+
+
 def test_a_warn_only_demotion_does_NOT_then_announce_a_PASS(tmp_path,
                                                             monkeypatch,
                                                             capsys):
@@ -257,16 +308,18 @@ def test_the_opt_in_hatch_still_produces_a_real_PASS(tmp_path, monkeypatch,
     assert 'PASS (no correction implied)' in capsys.readouterr().out
 
 
-def test_the_PASS_line_is_gated_on_the_record_not_on_list_length():
-    """Source guard: the corrections short-circuit must consult the verdict.
+def test_EVERY_early_PASS_line_is_gated_on_the_record_not_on_list_length():
+    """Source guard: both early-return announcements must consult the verdict.
 
-    Reverting to a bare `if not corrections: print(PASS)` restores #871, and
-    every behavioural test above would still pass if the gate were moved to
-    somewhere that does not run for the deferred branch.
+    The first version of this fix gated the empty-corrections line only, and
+    every behavioural test passed while the sub-floor line three screens down
+    still announced a PASS on the same refused record.  A guard that pins one
+    site would have let that ship, so this counts them: a new early PASS added
+    later must be gated too, or this fails.
 
-    Anchored on the f-string that BUILDS the line (`{module}: PASS `), not on
-    the rendered text: the comment above it quotes the o135 log verbatim, so
-    the rendered form appears earlier in the source and matching that would
+    Anchored on the f-strings that BUILD the lines (`{module}: PASS`), not on
+    the rendered text: the comment above them quotes the o135 log verbatim, so
+    the rendered form appears earlier in the source and matching it would
     measure the comment instead of the code.
     """
     import inspect
@@ -275,10 +328,30 @@ def test_the_PASS_line_is_gated_on_the_record_not_on_list_length():
     src = inspect.getsource(cataloging._run_astrometry_stage_checkpoint)
     corr_at = src.index("corrections = record.get('corrections')")
     tail = src[corr_at:]
-    pass_at = tail.index('{module}: PASS ')
-    assert "record.get('passed') is False" in tail[:pass_at], (
-        'the PASS line is reached without re-reading the verdict, so a '
-        'passed=false record with zero corrections announces a pass again')
+
+    verdict_at = tail.index('_not_a_pass =')
+    assert "record.get('passed') is False" in tail[:tail.index('\n', verdict_at)], (
+        'the verdict must come from the record, not from a list length')
+
+    pass_sites = [i for i in range(len(tail))
+                  if tail.startswith('{module}: PASS', i)]
+    assert len(pass_sites) == 2, (
+        f'expected the two early PASS announcements, found {len(pass_sites)}; '
+        f'a new one has to be gated on `_not_a_pass` as well')
+    for site in pass_sites:
+        assert verdict_at < site, 'the verdict is read after a PASS is printed'
+
+    # One gate PER site, counted -- not merely "a gate appears somewhere
+    # before this line".  Neutering the second `if _not_a_pass:` to `if False:`
+    # leaves the first one sitting in the span before both sites, so a
+    # containment test still passes on a tree where the sub-floor line
+    # announces a PASS on a refused record.  Verified: that mutation kills
+    # test_a_refused_record_with_SUB_FLOOR_corrections_does_NOT_announce_a_PASS
+    # and, before this count was added, left this guard green.
+    assert tail.count('if _not_a_pass:') == len(pass_sites), (
+        f"{tail.count('if _not_a_pass:')} verdict gate(s) for "
+        f"{len(pass_sites)} early PASS line(s) -- each one needs its own, or a "
+        f"refused record announces a pass again (#871)")
 
 
 def test_failures_WIN_when_both_lists_are_populated(tmp_path, monkeypatch):
