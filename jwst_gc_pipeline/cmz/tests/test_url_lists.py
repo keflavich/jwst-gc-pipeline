@@ -144,13 +144,15 @@ def test_the_omission_is_declared_beside_the_lists(mw):
     assert mw._omitted_from_lists(clean) == ''
 
 
-def test_the_symlink_premise_is_one_switch_with_its_evidence_written_down(mw):
-    """The exclusion rests on a claim this repo has not measured: the page has
-    always said a single symlinked frame URL 404s, while `globus ls` shows the
-    collection following those symlinks. It cannot be settled anonymously --
-    the readable releases have no symlinks and the symlinked ones are not
-    readable -- so the reading is a named constant, and flipping it restores
-    every URL rather than requiring the code to be re-argued."""
+def test_the_symlink_exclusion_is_one_switch(mw):
+    """Measured 2026-09-18 with an HTTPS-scoped token, two paths in the same
+    release under one ACL: `brick/exposures/.../crf.fits` (symlink) 404s and
+    `brick/MANIFEST.json` (regular) 200s, so only the link mode varies. The
+    transfer API is the other way round -- `globus ls` follows them -- which
+    is why those frames go to `globus transfer` instead.
+
+    It stays one constant so a reconfigured collection is a one-line change
+    rather than an argument reconstructed from the diff."""
     assert mw.HTTPS_SERVES_SYMLINKS is False
 
     manifest = {'files': [_frame('o004', 'F115W', 'a.fits',

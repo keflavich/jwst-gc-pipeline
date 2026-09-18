@@ -1147,32 +1147,25 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
 
 #: Does the Globus HTTPS data plane serve a symlink that points out of the
-#: release tree?  UNVERIFIED, and the two things that bear on it disagree.
+#: release tree?  MEASURED 2026-09-18: no.  With an HTTPS-scoped token for the
+#: collection, two paths in the SAME release under the same ACL and owner:
 #:
-#: Against: the exposures notice on every field page has said since it was
-#: written that a browser or `wget` on a single symlinked frame returns 404,
-#: and the page has rendered those names unlinked on that basis.
+#:     brick/exposures/F405N/...nrcalong_destreak_o001_crf.fits  symlink -> 404
+#:     brick/MANIFEST.json                                       regular -> 200
 #:
-#: For: `globus ls --long` on a symlinked brick directory returns
-#: `File Type: file` with the target's real size and mtime, so the COLLECTION
-#: follows the symlink; with follow_symlinks off, GCS reports invalid_symlink
-#: or omits the entry.  HTTPS is a separate service but shares that config.
+#: Only the link mode varies, so this is not the directory ACL that explains
+#: the 307 an anonymous fetch gets from brick (a brick HARDLINK 307s too).
 #:
-#: It cannot be settled anonymously: the anonymously-readable releases
-#: (gc-treasury, arches) contain no symlinks and the symlinked ones (brick,
-#: cloudc, sickle) are not anonymously readable, so an unauthenticated fetch
-#: changes field and link mode together.  The measurement that settles it
-#: needs an interactive consent a human has to grant:
+#: The transfer API behaves differently, and both readings were right about
+#: their own service: `globus ls --long` on the same directory reports
+#: `File Type: file` with the target's size, so the COLLECTION follows these
+#: symlinks while the HTTPS data plane refuses them.  That is why the page
+#: sends those frames to `globus transfer --recursive` and leaves them out of
+#: the URL lists.
 #:
-#:     globus session consent \
-#:       'https://auth.globus.org/scopes/<collection>/https'
-#:     curl -I -H "Authorization: Bearer $TOKEN" <a brick symlink URL>
-#:     curl -I -H "Authorization: Bearer $TOKEN" <a brick hardlink URL>
-#:
-#: 404 on the first and 200 on the second confirms it; two 200s mean this is
-#: False and the lists should carry all 2,400 of those URLs.  Until then the
-#: cautious reading stands, because it is the one the page already publishes
-#: -- and the omission is declared beside the lists rather than silent.
+#: Flipping this to True restores those URLs everywhere they are used -- the
+#: whole-field lists, the per-group files and the row rendering -- if the
+#: collection is ever reconfigured to serve them.
 HTTPS_SERVES_SYMLINKS = False
 
 
