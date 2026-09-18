@@ -615,6 +615,50 @@ def withheld_reason(pointing, bands, withheld_obs=(), withheld_bands=(),
     return None
 
 
+#: Heading anchors.  Applied to the finished page rather than at each
+#: `out.append("<h2>...")` -- there are ~20 of those across three renderers,
+#: and a helper each one has to remember to call is a helper half of them will
+#: not.  Post-processing the page catches every heading, including the ones
+#: added later by someone who never reads this comment.
+_HEADING_RE = re.compile(r'<(h[1-6])([^>]*)>(.*?)</\1>', re.S | re.I)
+_TAG_RE = re.compile(r'<[^>]+>')
+_SLUG_STRIP = re.compile(r'[^a-z0-9]+')
+
+
+def heading_slug(text):
+    """A stable, readable id from heading text.
+
+    Derived from the words rather than from a counter, so a link keeps working
+    when a heading moves and breaks when its subject changes -- which is the
+    behaviour someone pasting a link into an email wants.
+    """
+    plain = html.unescape(_TAG_RE.sub(' ', text))
+    slug = _SLUG_STRIP.sub('-', plain.lower()).strip('-')
+    return slug or 'section'
+
+
+def anchor_headings(page):
+    """Give every heading an ``id``, leaving any it already has alone.
+
+    Duplicates get ``-2``, ``-3``: two headings can legitimately read the same
+    (every field page has "Catalogs"), and an id that silently collides sends
+    the reader to whichever came first.
+    """
+    seen = {}
+
+    def add_id(match):
+        tag, attrs, inner = match.groups()
+        if re.search(r'\bid\s*=', attrs, re.I):
+            return match.group(0)
+        slug = heading_slug(inner)
+        seen[slug] = seen.get(slug, 0) + 1
+        if seen[slug] > 1:
+            slug = f'{slug}-{seen[slug]}'
+        return f'<{tag}{attrs} id="{slug}">{inner}</{tag}>'
+
+    return _HEADING_RE.sub(add_id, page)
+
+
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
                       diagrams=(),
@@ -1094,7 +1138,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
-    return "\n".join(out)
+    return anchor_headings("\n".join(out))
 
 
 def published_urls(manifest, superseded=(), categories=None):
@@ -1269,6 +1313,118 @@ def _coverage_note(field, exposures):
 OFFSETS_SUMMARY_FILE = "offsets_summary.json"
 
 
+#: Sorting for the offsets table.  Vanilla DOM rather than a library: the page
+#: loads no JS today and one table does not justify starting.
+#:
+#: `obs` is its own comparator because `o98` and `o139` sort wrongly as text
+#: and `o098` is not what the release calls them -- the number is what a reader
+#: means by "sorted by obs".
+_SORTABLE_SCRIPT = """<script>
+(function () {
+  var table = document.getElementById('offsets-table');
+  if (!table) { return; }
+  var body = table.tBodies[0];
+
+  function key(cell, kind) {
+    var text = (cell.textContent || '').trim();
+    if (kind === 'obs') { return parseInt(text.replace(/^o/, ''), 10); }
+    if (kind === 'frac') {
+      // `35 / 48` is a fraction, and parseFloat reads it as 35. Sorted that
+      // way a complete `12 / 12` ranks below a three-quarters-done `35 / 48`,
+      // on the column that exists to show how complete each one is.
+      var parts = text.split('/');
+      if (parts.length !== 2) { return null; }
+      var total = parseFloat(parts[1]);
+      if (!(total > 0)) { return null; }
+      return parseFloat(parts[0]) / total;
+    }
+    if (kind === 'num') {
+      // An empty cell is "not measured", not zero: it sorts to the end either
+      // way rather than into the middle of the real values.
+      if (text === '') { return null; }
+      return parseFloat(text.replace('+', ''));
+    }
+    return text.toLowerCase();
+  }
+
+  Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
+    var kind = th.dataset.sort;
+    if (!kind) { return; }
+    th.style.cursor = 'pointer';
+    th.title = 'sort by ' + th.textContent.trim();
+    th.addEventListener('click', function () {
+      var desc = th.dataset.dir !== 'desc';
+      Array.prototype.forEach.call(table.tHead.rows[0].cells, function (o) {
+        delete o.dataset.dir;
+        o.textContent = o.textContent.replace(/ [\u25b2\u25bc]$/, '');
+      });
+      th.dataset.dir = desc ? 'desc' : 'asc';
+      th.textContent = th.textContent + (desc ? ' \u25bc' : ' \u25b2');
+
+      var rows = Array.prototype.slice.call(body.rows);
+      rows.sort(function (a, b) {
+        var x = key(a.cells[i], kind), y = key(b.cells[i], kind);
+        if (x === null && y === null) { return 0; }
+        if (x === null) { return 1; }          // blanks last, both directions
+        if (y === null) { return -1; }
+        if (x < y) { return desc ? 1 : -1; }
+        if (x > y) { return desc ? -1 : 1; }
+        return 0;
+      });
+      rows.forEach(function (r) { body.appendChild(r); });
+    });
+  });
+})();
+</script>"""
+
+
+def _coverage_cell(row):
+    """``35 / 48`` -- rows against frames, not a bare row count.
+
+    Every F212N observation has exactly 48 frames and every F480M 12, so a
+    varying row count is not a property of the observation: it is how much of
+    it this table describes, 2% to 92% across the survey. A fraction reads as
+    incomplete coverage; a bare count reads as something the field did
+    differently.
+    """
+    n = row.get('n_exposure_rows', 0)
+    total = row.get('n_frames')
+    if total:
+        return f'{n} / {total}'
+    if row.get('in_release') is False:
+        # The table covers the programme; this release stages part of it. "0"
+        # would read as "measured nothing", which is a claim about the
+        # measurement rather than about what is in the download.
+        return 'not in this release'
+    return str(n)
+
+
+#: How each bulk tie was measured, in the words the table writes, mapped to
+#: what fits in a column. The two are different measurements at different
+#: scales -- the m2 tie is a per-visit consensus against the reference
+#: catalogue (tens to hundreds of mas), the histogram one is a whole-mosaic
+#: cross-correlation that found o040 and o041 metres off the plan (arcseconds).
+#: Pooling them was this section's original defect; showing them without
+#: saying which is which is the same defect one step quieter.
+_SOURCE_LABELS = {
+    'm2 consensus->reference': 'm2 tie',
+    'consensus->reference': 'm2 tie',
+    'offset-histogram swept+confirmed vs VIRAC2 (i2d mosaic)':
+        'histogram vs VIRAC2 (mosaic)',
+}
+
+
+def _source_label(source):
+    """A short name for a measurement method, or the raw string.
+
+    Unknown sources are shown verbatim rather than mapped to a default: a new
+    provenance appearing in the table is exactly the case where a reader needs
+    to see it, and a fallback label hides it behind a familiar one.
+    """
+    source = (source or '').strip()
+    return _SOURCE_LABELS.get(source, source or 'unstated')
+
+
 def _offsets_section(field, release_dir, manifest=None):
     """The astrometric offsets table, and how to apply what is still owed.
 
@@ -1372,28 +1528,78 @@ def _offsets_section(field, release_dir, manifest=None):
         "at &delta; = &minus;29&deg; is 0.87 of it.</p>")
 
     if rows:
-        out.append("<h3>Median offset per observation and filter</h3>")
-        out.append("<table><tr><th>Obs</th><th>Filter</th><th>Rows</th>"
-                   "<th>&Delta;RA (\u2033)</th><th>&Delta;Dec (\u2033)</th>"
-                   "<th>Spread (mas)</th><th>Stage</th></tr>")
-        for row in rows:
-            spread = max(row["dra_span_mas"], row["ddec_span_mas"])
+        measured = [r for r in rows if 'total_mas' in r]
+        pending = [r for r in rows if 'total_mas' not in r]
+        out.append("<h3>Offset to the reference frame, per observation and "
+                   "filter</h3>")
+        out.append(
+            "<p class=muted>This is the BULK TIE: how far the visit's whole "
+            "pointing sits from the reference frame, which is what "
+            "&ldquo;how wrong is the astrometry&rdquo; means. Most are tens to "
+            "hundreds of milliarcseconds; a few are arcseconds, and those are "
+            "the ones to look at first. Do not confuse it "
+            "with the per-exposure rows in the same table, which are "
+            "residuals about each visit's own consensus and are a few mas: "
+            "those describe how well the frames of one visit agree with each "
+            "other, and say nothing about where that visit sits on the sky. "
+            "The rightmost column gives that scatter separately.</p>")
+        out.append(
+            "<p class=muted><b>Two measurements, named per row.</b> "
+            "<code>m2 tie</code> is the per-visit consensus measured against "
+            "the reference catalogue. <code>histogram vs VIRAC2 (mosaic)</code> "
+            "is a swept, window-confirmed cross-correlation of the whole "
+            "mosaic, which is how the arcsecond-scale displacements were "
+            "found. They answer the same question at different scales and are "
+            "shown in one table on purpose; they are never pooled into one "
+            "number, which is what this table used to do.</p>")
+        out.append(
+            "<p class=muted><b>Coverage is partial and uneven.</b> Every "
+            "F212N observation has 48 frames (8 detectors &times; 6 exposures) "
+            "and every F480M has 12, but the table describes between 2% and "
+            "92% of them depending on the observation &mdash; 52% overall. "
+            "That reflects how many measurement passes have run and which "
+            "frames each covered, not anything that differs between the "
+            "fields. The frame-to-frame RMS is blank below three rows, where "
+            "a standard deviation is not a scatter.</p>")
+        out.append(
+            "<p class=muted>Click a column to sort; click again to reverse. "
+            "The default is worst offset first, because that is the order the "
+            "question &ldquo;which fields are wrong&rdquo; is asked in, but "
+            "<b>Obs</b> gives the survey order.</p>")
+        out.append("<table class=sortable id=offsets-table><thead><tr>"
+                   "<th data-sort=obs>Obs</th><th data-sort=text>Filter</th>"
+                   "<th data-sort=num>&Delta;RA (mas)</th>"
+                   "<th data-sort=num>&Delta;Dec (mas)</th>"
+                   "<th data-sort=num>Total (mas)</th>"
+                   "<th data-sort=text>Source</th>"
+                   "<th data-sort=frac>Frames measured</th>"
+                   "<th data-sort=num>Frame-to-frame RMS (mas)</th>"
+                   "</tr></thead><tbody>")
+        for row in sorted(measured, key=lambda r: -r['total_mas']):
+            rms = row.get('residual_rms_mas')
             out.append(
                 f"<tr><td>{html.escape(row['observation'])}</td>"
                 f"<td>{html.escape(row['filter'])}</td>"
-                f"<td class=size>{row['n']}</td>"
-                f"<td class=size>{row['dra_median_arcsec']:+.4f}</td>"
-                f"<td class=size>{row['ddec_median_arcsec']:+.4f}</td>"
-                f"<td class=size>{spread:.0f}</td>"
-                f"<td><span class=tag>{html.escape(', '.join(row['stages']))}"
-                f"</span></td></tr>")
-        out.append("</table>")
-        out.append(
-            "<p class=muted>Spread is the full range across the rows behind "
-            "each median, so it is per-exposure jitter within that "
-            "observation and filter rather than an uncertainty on the median. "
-            "A large one means the exposures disagree and the median is the "
-            "visit-level tie, not a value every exposure shares.</p>")
+                f"<td class=size>{row['dra_arcsec'] * 1000:+.1f}</td>"
+                f"<td class=size>{row['ddec_arcsec'] * 1000:+.1f}</td>"
+                f"<td class=size><b>{row['total_mas']:.0f}</b></td>"
+                f"<td>{html.escape(_source_label(row.get('source')))}</td>"
+                f"<td class=size>{_coverage_cell(row)}</td>"
+                f"<td class=size>{'' if rms is None else f'{rms:.1f}'}</td>"
+                f"</tr>")
+        out.append("</tbody></table>")
+        out.append(_SORTABLE_SCRIPT)
+        if pending:
+            names = ', '.join(sorted({r['observation'] for r in pending}))
+            out.append(
+                f"<p class=warn><b>No measured tie yet for "
+                f"{len(pending)} (observation, filter) pair(s):</b> "
+                f"{html.escape(names)}. These have per-exposure residuals only "
+                f"&mdash; their frames agree with each other, and how far that "
+                f"agreement sits from the sky has not been measured. Their "
+                f"astrometry is the raw <code>assign_wcs</code> pointing, not "
+                f"a corrected one, and the size of the error is unknown rather "
+                f"than small.</p>")
     return "\n".join(out)
 
 
@@ -1818,7 +2024,7 @@ def render_help():
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
-    return "\n".join(out)
+    return anchor_headings("\n".join(out))
 
 
 def _card_counts(fi):
@@ -1991,7 +2197,7 @@ def render_index(fields_info, overview_html="", quicklooks=QUICKLOOKS):
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
-    return "\n".join(out)
+    return anchor_headings("\n".join(out))
 
 
 def main(argv=None):
