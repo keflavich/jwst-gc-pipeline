@@ -952,8 +952,10 @@ _JS = """
   }
   refresh();
   setInterval(refresh, 30000);
-  // A tab restored after hours asleep would otherwise show its last painted
-  // value until the next tick.
+  // Browsers throttle background timers and freeze them outright in a tab
+  // that has been hidden for minutes, so the 30 s tick is not something a
+  // restored tab can be assumed to have been running. This repaints on the
+  // way back in, before anything is read.
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) { refresh(); }
   });

@@ -81,13 +81,18 @@ __SCRIPT__
 function state() { return els.map(function (e) { return e.textContent; }); }
 console.log(JSON.stringify(state()));
 NOW += __ADVANCE__;
-TIMERS.forEach(function (fn) { fn(); });
+if (__WAKE__) {
+  // The tab was hidden, so the interval did not run; only the wake-up does.
+  if (VISIBILITY) { VISIBILITY(); }
+} else {
+  TIMERS.forEach(function (fn) { fn(); });
+}
 console.log(JSON.stringify(state()));
 console.log(JSON.stringify(els.map(function (e) { return e.title; })));
 """
 
 
-def _run(tmp_path, cells, now, advance):
+def _run(tmp_path, cells, now, advance, wake=False):
     node = shutil.which('node')
     if node is None:
         pytest.skip('node is not available')
@@ -97,7 +102,8 @@ def _run(tmp_path, cells, now, advance):
     js = (HARNESS.replace('__SCRIPT__', script.group(0))
                  .replace('__CELLS__', json.dumps(cells))
                  .replace('__NOW__', str(now))
-                 .replace('__ADVANCE__', str(advance)))
+                 .replace('__ADVANCE__', str(advance))
+                 .replace('__WAKE__', 'true' if wake else 'false'))
     path = tmp_path / 'live.js'
     path.write_text(js)
     done = subprocess.run([node, str(path)], capture_output=True, text=True,
@@ -148,3 +154,18 @@ def test_a_cell_with_an_unreadable_epoch_is_left_alone(tmp_path):
                                          'data-style': 'ago'}}]
     first, after, _titles = _run(tmp_path, cells, now, 3600)
     assert first == ['never'] and after == ['never']
+
+
+def test_a_tab_coming_back_from_hidden_repaints_before_it_is_read(tmp_path):
+    """Browsers throttle background timers and freeze them in a tab hidden for
+    minutes, so the 30 s tick cannot be assumed to have run while it was away.
+    This drives ONLY the visibilitychange handler -- no interval fires -- so
+    dropping the listener leaves the cell showing the age it had when the tab
+    was backgrounded.
+    """
+    now = 1_758_000_000
+    cells = [{'text': '2h ago', 'attrs': {'data-epoch': str(now - 7200),
+                                          'data-style': 'ago'}}]
+    first, after, _titles = _run(tmp_path, cells, now, 6 * 3600, wake=True)
+    assert first == ['2h ago']
+    assert after == ['8h ago'], after
