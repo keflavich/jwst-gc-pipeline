@@ -19,7 +19,13 @@ def build_for_field(m7_path, virac_path, gns_path, out_path,
     jwst = M.load_jwst_m7(m7_path, ref_filter=ref_filter)
     virac = M.load_ref(virac_path, 'virac')
     gns = M.load_ref(gns_path, 'gns')
-    # restrict the (large, region-wide) reference catalogs to this field's footprint
+    # restrict the (large, region-wide) reference catalogs to this field's
+    # footprint. pm['virac_idx'] (set in build_pm_catalog below) indexes THIS
+    # restricted array, not the full one load_ref would give back on a
+    # second call -- _validate_vs_virac must be handed this same object, or
+    # every row compares against an unrelated star (found by a re-review:
+    # 0% agreement on a synthetic check, since nothing keeps the restricted
+    # index in bounds of the full array from looking valid).
     virac = M.restrict(virac, jwst['sc'])
     gns = M.restrict(gns, jwst['sc'])
     if verbose:
@@ -46,25 +52,32 @@ def build_for_field(m7_path, virac_path, gns_path, out_path,
         print(f"  PM: {int(g.sum())} stars ({n3} 3-epoch); "
               f"pm_tot med={np.nanmedian(pm['pm_tot'][g]):.1f} mas/yr -> {out_path}",
               flush=True)
-    return pm
+    return pm, virac
 
 
-def _validate_vs_virac(pm, virac_path):
+def _validate_vs_virac(pm, virac):
     """Quick sanity: our PM vs VIRAC2's own pm for the same stars.
 
-    ``pm['virac_idx']`` is the exact VIRAC row each fit came from (build_pm_
-    catalog's master list IS VIRAC's rows; 'v{i}' names it) -- so this looks
-    VIRAC's own pmRA/pmDE up by that index directly rather than re-finding
-    the row with a nearest-neighbour sky match. A NN-match-then-median here
-    would be the flagged dense-NN-median pattern (ASTROMETRY RULE #1) for no
-    reason: the association is already exact, and re-deriving it
-    approximately by position can only make it worse, not more robust --
-    a naive tight-radius rematch is exactly the shape that "confirms
-    agreement it never established" when something upstream is wrong.
+    ``virac`` MUST be the same (restrict()-ed) dict build_pm_catalog was
+    called with, not a fresh M.load_ref(path, 'virac') -- pm['virac_idx'] is
+    an index into THAT array (build_pm_catalog's master list IS VIRAC's
+    rows, restricted to the field footprint; 'v{i}' names which one), and
+    the full unrestricted catalog has different rows at the same indices.
+    Caught by a second review: re-loading from the path here silently
+    compared every star against an unrelated one (0% agreement on a
+    synthetic check) with nothing to raise, since a restricted-array index
+    is always in bounds of the larger full array too.
+
+    Looking VIRAC's own pmRA/pmDE up by this index directly, rather than
+    re-finding the row with a nearest-neighbour sky match, also means there
+    is no dense-NN-median pattern here at all (ASTROMETRY RULE #1): the
+    association is already exact, and re-deriving it approximately by
+    position can only make it worse -- a naive tight-radius rematch is
+    exactly the shape that "confirms agreement it never established" when
+    something upstream is wrong.
     """
-    vir = M.load_ref(virac_path, 'virac')
     g = np.isfinite(pm['pm_ra'])
-    vra, vde = vir['pmra'][pm['virac_idx']], vir['pmde'][pm['virac_idx']]
+    vra, vde = virac['pmra'][pm['virac_idx']], virac['pmde'][pm['virac_idx']]
     m = g & np.isfinite(vra)
     dra = pm['pm_ra'][m] - vra[m]
     dde = pm['pm_dec'][m] - vde[m]
@@ -84,10 +97,10 @@ def main():
     ap.add_argument('--validate', action='store_true',
                     help='print PM-vs-VIRAC2 sanity stats')
     args = ap.parse_args()
-    pm = build_for_field(args.m7, args.virac, args.gns, args.out,
-                         ref_filter=args.ref_filter, match_radius=args.match_radius)
+    pm, virac = build_for_field(args.m7, args.virac, args.gns, args.out,
+                                ref_filter=args.ref_filter, match_radius=args.match_radius)
     if args.validate:
-        print("  validate vs VIRAC2:", _validate_vs_virac(pm, args.virac), flush=True)
+        print("  validate vs VIRAC2:", _validate_vs_virac(pm, virac), flush=True)
 
 
 if __name__ == '__main__':
