@@ -73,7 +73,7 @@ def test_a_star_that_guided_several_visits_lists_all_of_them(gs, tmp_path):
     doc = gs.to_document(per_star, per_visit)
 
     assert doc['n'] == 1
-    assert doc['sources'][0]['observations'] == 'o114 o120'
+    assert doc['sources'][0]['chosen for'] == 'o114 o120'
     assert doc['sources'][0]['visits'] == 2
     # and the inverse lookup names it under BOTH, which is what the focal-plane
     # panel reads
@@ -251,3 +251,179 @@ def test_a_missing_footprints_file_yields_no_unflown_list(gs, tmp_path):
     catalogue is still correct about what DID fly rather than failing to
     build."""
     assert gs.unflown_observations(str(tmp_path / 'nothing.json')) == []
+
+
+# ---- the acquisition ladder, and the visits that never finished it --------
+def test_the_ladder_says_where_a_visit_stopped(gs):
+    """FGS writes one exposure type per rung. `FGS_FINEGUIDE` present means the
+    visit guided; its absence is the failure, and the highest rung reached says
+    whether the star was never identified, never acquired, or acquired and then
+    lost."""
+    guided = gs.visit_outcome({'FGS_ID-IMAGE', 'FGS_ID-STACK', 'FGS_ACQ1',
+                               'FGS_ACQ2', 'FGS_TRACK', 'FGS_FINEGUIDE'})
+    assert guided == ('fine guide', 'guided')
+
+    assert gs.visit_outcome({'FGS_ID-IMAGE', 'FGS_ID-STACK'}) == \
+        ('identification', 'failed at identification')
+    assert gs.visit_outcome({'FGS_ID-STACK', 'FGS_ACQ1', 'FGS_ACQ2'}) == \
+        ('acquisition', 'failed at acquisition')
+    assert gs.visit_outcome({'FGS_ID-STACK', 'FGS_ACQ1', 'FGS_TRACK'}) == \
+        ('track', 'failed at track')
+    assert gs.visit_outcome(set()) == (None, 'no guide-star exposures')
+
+
+def test_the_rungs_are_ordered_not_merely_listed(gs):
+    """The outcome is the HIGHEST rung present, so the order of `LADDER` is
+    load-bearing. Sorting it alphabetically puts FGS_TRACK above
+    FGS_FINEGUIDE and reports a guided visit as having failed at track."""
+    assert gs.LADDER.index('FGS_ACQ1') < gs.LADDER.index('FGS_TRACK')
+    assert gs.LADDER.index('FGS_TRACK') < gs.LADDER.index('FGS_FINEGUIDE')
+    assert gs.LADDER[-1] == 'FGS_FINEGUIDE'
+    # a set arriving in any order gives the same answer
+    rungs = {'FGS_FINEGUIDE', 'FGS_ID-IMAGE', 'FGS_TRACK'}
+    assert gs.visit_outcome(rungs)[1] == 'guided'
+
+
+def _visit(obs='104', visit='10678104001', stars=('S8DHZ0P44I',), stages=(),
+           acq=None):
+    """One visit's rows. `acq` defaults to what the ladder implies -- a visit
+    that reached fine guide reports a SUCCESSFUL acquisition -- so a test that
+    does not care about GSACSTAT is not silently writing a contradiction."""
+    if acq is None:
+        acq = ({'SUCCESSFUL'} if 'FGS_FINEGUIDE' in stages
+               else {'UNSUCCESSFUL'})
+    return {visit: {'visit': visit, 'observation': f'o{int(obs):03d}',
+                    'stars': {s: 2 for s in stars}, 'stages': set(stages),
+                    'acq_status': set(acq)}}
+
+
+def test_a_star_that_failed_one_visit_and_guided_another_carries_both(gs):
+    """S8DM352124 was chosen for o098, which guided, and for o099, which never
+    identified it. Marking the star failed outright would say the star is bad;
+    marking it guided would hide the failure. It is the (star, visit) pair that
+    failed."""
+    per_star = {'S8DM352124': {'obs': {'o098', 'o099'}, 'visits': set(),
+                               'orders': {1}, 'frames': 6, 'instruments': set(),
+                               'ra': 266.5, 'dec': -28.6}}
+    per_visit = {}
+    per_visit.update(_visit('098', '10678098001', ('S8DM352124',),
+                            ('FGS_ID-IMAGE', 'FGS_ACQ1', 'FGS_ACQ2',
+                             'FGS_TRACK', 'FGS_FINEGUIDE')))
+    per_visit.update(_visit('099', '10678099001', ('S8DM352124',),
+                            ('FGS_ID-IMAGE', 'FGS_ID-STACK')))
+    gs.annotate_outcomes(per_star, per_visit)
+
+    star = per_star['S8DM352124']
+    assert star['failed_obs'] == {'o099'}
+    assert star['outcome'] == 'failed at identification'
+
+    doc = gs.to_document(per_star, per_visit)
+    source = doc['sources'][0]
+    assert source['failed observations'] == 'o099'
+    assert source['chosen for'] == 'o098 o099'
+    assert doc['n_failed'] == 1
+    assert doc['failed_visits'] == ['10678099001']
+    # and the per-observation lookup says which of the two it was
+    assert doc['by_obs']['o099'][0]['outcome'] == 'failed at identification'
+    assert doc['by_obs']['o098'][0]['outcome'] == 'guided'
+
+
+def test_a_failure_outcome_is_not_overwritten_by_a_later_success(gs):
+    """`setdefault` on the success path and assignment on the failure path is
+    the asymmetry that keeps this true whatever order the visits arrive in.
+    Reversed, a star that failed o110 and guided o111 would read 'guided' and
+    drop out of the red layer."""
+    per_star = {'X': {'obs': {'o110', 'o111'}, 'visits': set(), 'orders': {1},
+                      'frames': 4, 'instruments': set(),
+                      'ra': 1.0, 'dec': 2.0}}
+    per_visit = {}
+    per_visit.update(_visit('110', 'v110', ('X',),
+                            ('FGS_ID-STACK', 'FGS_ACQ1')))
+    per_visit.update(_visit('111', 'v111', ('X',),
+                            ('FGS_ID-STACK', 'FGS_ACQ1', 'FGS_ACQ2',
+                             'FGS_TRACK', 'FGS_FINEGUIDE')))
+    gs.annotate_outcomes(per_star, per_visit)
+    assert per_star['X']['outcome'] == 'failed at acquisition'
+    assert per_star['X']['failed_obs'] == {'o110'}
+
+
+# ---- GSACSTAT: the evidence the ladder alone does not have ----------------
+def test_a_failure_is_asserted_by_gsacstat_not_only_inferred_from_absence(gs):
+    """The ladder reads failure from a MISSING `FGS_FINEGUIDE`, so a truncated
+    query or a file absent from the archive reports a guided visit as failed
+    at track. `GSACSTAT` is the positive evidence: over 10678 the seven failed
+    visits carry `UNSUCCESSFUL` and nothing else, and all 38 guided ones carry
+    at least one `SUCCESSFUL`.
+    """
+    failed = ('FGS_ID-IMAGE', 'FGS_ID-STACK', 'FGS_ACQ1')
+    assert gs.visit_outcome(failed, ('UNSUCCESSFUL',)) == \
+        ('acquisition', 'failed at acquisition')
+
+    guided = failed + ('FGS_ACQ2', 'FGS_TRACK', 'FGS_FINEGUIDE')
+    assert gs.visit_outcome(guided, ('SUCCESSFUL', 'UNSUCCESSFUL')) == \
+        ('fine guide', 'guided')
+
+
+def test_the_two_sources_disagreeing_is_said_rather_than_rounded(gs):
+    """A SUCCESSFUL acquisition with no fine guide is the shape a truncated
+    query takes. Filing it as "failed at track" -- what the ladder alone does
+    -- turns a gap in the evidence into a claim about the telescope."""
+    reached, outcome = gs.visit_outcome(
+        ('FGS_ID-STACK', 'FGS_ACQ1', 'FGS_ACQ2', 'FGS_TRACK'), ('SUCCESSFUL',))
+    assert reached == 'track'
+    assert outcome == 'acquisition reported SUCCESSFUL, no fine guide (track)'
+    assert not outcome.startswith('failed')
+
+    # the mirror case: fine guide with nothing reporting success
+    _r, other = gs.visit_outcome(
+        ('FGS_ID-STACK', 'FGS_ACQ1', 'FGS_FINEGUIDE'), ('UNSUCCESSFUL',))
+    assert other == 'fine guide reached, no acquisition reported SUCCESSFUL'
+    assert other != 'guided'
+
+
+def test_without_gsacstat_the_verdict_is_the_same_and_says_what_it_rests_on(gs):
+    """`--source frames` has no GSACSTAT at all. The wording of the outcome is
+    the ladder's either way -- it is read by people and by the viewer's layers
+    -- so the provenance rides on the visit instead."""
+    assert gs.visit_outcome(('FGS_ID-STACK', 'FGS_ACQ1')) == \
+        ('acquisition', 'failed at acquisition')
+
+    per_star = {'X': {'obs': {'o104'}, 'visits': set(), 'orders': {1},
+                      'frames': 2, 'instruments': set(), 'ra': 1.0, 'dec': 2.0}}
+    per_visit = _visit('104', 'v104', ('X',), ('FGS_ID-STACK', 'FGS_ACQ1'),
+                       acq=())
+    gs.annotate_outcomes(per_star, per_visit)
+    assert per_visit['v104']['evidence'] == 'ladder only'
+
+    with_status = _visit('104', 'v104', ('X',), ('FGS_ID-STACK', 'FGS_ACQ1'))
+    gs.annotate_outcomes(per_star, with_status)
+    assert with_status['v104']['evidence'] == 'ladder+gsacstat'
+
+
+def test_the_document_carries_the_status_it_was_decided_from(gs):
+    """An unread corroborator is worse than none when the claim cites it: the
+    rows that decided the verdict reach the reader."""
+    per_star = {'X': {'obs': {'o136'}, 'visits': set(), 'orders': {1},
+                      'frames': 4, 'instruments': set(), 'ra': 1.0, 'dec': 2.0}}
+    per_visit = _visit('136', 'v136', ('X',),
+                       ('FGS_ID-STACK', 'FGS_ACQ1', 'FGS_TRACK'))
+    gs.annotate_outcomes(per_star, per_visit)
+    doc = gs.to_document(per_star, per_visit)
+
+    assert doc['by_obs']['o136'][0]['acq_status'] == ['UNSUCCESSFUL']
+    assert doc['by_obs']['o136'][0]['evidence'] == 'ladder+gsacstat'
+    assert doc['sources'][0]['acquisition status'] == 'UNSUCCESSFUL'
+
+
+def test_a_contested_visit_is_listed_apart_from_the_failures(gs):
+    """It is neither guided nor failed. Counting it as either is the rounding
+    the outcome string exists to avoid."""
+    per_star = {'X': {'obs': {'o104'}, 'visits': set(), 'orders': {1},
+                      'frames': 2, 'instruments': set(), 'ra': 1.0, 'dec': 2.0}}
+    per_visit = _visit('104', 'v104', ('X',),
+                       ('FGS_ID-STACK', 'FGS_ACQ1', 'FGS_TRACK'),
+                       acq=('SUCCESSFUL',))
+    gs.annotate_outcomes(per_star, per_visit)
+    doc = gs.to_document(per_star, per_visit)
+    assert doc['contested_visits'] == ['v104']
+    assert doc['failed_visits'] == []
