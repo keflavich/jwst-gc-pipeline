@@ -138,6 +138,10 @@ code { background:#0b0f14; padding:.1rem .35rem; border-radius:4px; font-size:.8
 .btn:hover { text-decoration:none; filter:brightness(1.1); }
 .btn.secondary { background:#21262d; color:var(--fg); border:1px solid var(--border); }
 .btn.small { padding:.25rem .7rem; font-size:.82rem; font-weight:500; }
+/* The URL list beside a bundle button is the same action for a different
+   tool, so it reads as a sibling rather than a second primary call. */
+.btn.ghost { background:transparent; color:var(--accent);
+             border:1px solid var(--accent); }
 /* Per-exposure link lists. A field ships up to ~700 frames, so the individual
    links are collapsed by default and wrap into columns when opened -- the row
    above them (count, size, bundle button) is what most readers need. */
@@ -1055,6 +1059,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         + "<div class=muted style='margin-top:.5rem'>URL lists: "
         + " · ".join(txt_links)
         + " &nbsp;|&nbsp; <a href='download_help.html'>how to download / authenticate</a>"
+        + _omitted_from_lists(manifest)
         + "</div></div>")
 
     obs_col = "<th>Obs</th>" if multi else ""
@@ -1141,7 +1146,39 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     return anchor_headings("\n".join(out))
 
 
-def published_urls(manifest, superseded=(), categories=None):
+#: Does the Globus HTTPS data plane serve a symlink that points out of the
+#: release tree?  MEASURED 2026-09-18: no.  With an HTTPS-scoped token for the
+#: collection, two paths in the SAME release under the same ACL and owner:
+#:
+#:     brick/exposures/F405N/...nrcalong_destreak_o001_crf.fits  symlink -> 404
+#:     brick/MANIFEST.json                                       regular -> 200
+#:
+#: Only the link mode varies.  What made the earlier ANONYMOUS attempt useless
+#: was the ACL, not the absence of a comparison: brick is not anonymously
+#: readable, so every brick path 307s to a login whatever it is -- its regular
+#: `images/*_i2d.fits` entries included.  The token is what made the test
+#: possible; staying inside one field is what makes it clean.
+#:
+#: (brick's published set is 1,200 `symlink` and 45 `link_mode: None`
+#: regular files, and no `hardlink` at all.  `hardlink` is a third distinct
+#: value -- 3,710 entries across the other releases -- so do not go looking
+#: for brick's.)
+#:
+#: The transfer API behaves differently, and both readings were right about
+#: their own service: `globus ls --long` on the same directory reports
+#: `File Type: file` with the target's size, so the COLLECTION follows these
+#: symlinks while the HTTPS data plane refuses them.  That is why the page
+#: sends those frames to `globus transfer --recursive` and leaves them out of
+#: the URL lists.
+#:
+#: Flipping this to True restores those URLs everywhere they are used -- the
+#: whole-field lists, the per-group files and the row rendering -- if the
+#: collection is ever reconfigured to serve them.
+HTTPS_SERVES_SYMLINKS = False
+
+
+def published_urls(manifest, superseded=(), categories=None,
+                   servable_only=True):
     """Download URLs for the files this release actually publishes.
 
     The ``<field>_*.txt`` lists must withhold exactly what the page withholds.
@@ -1152,15 +1189,81 @@ def published_urls(manifest, superseded=(), categories=None):
 
     Exposures follow their parent mosaic here for the same reason they do on the
     page: the withdrawn astrometric solution is baked into the frames.
+
+    They also drop the frames whose URL does not resolve.  A symlinked frame
+    points out of the release tree, the Globus HTTPS data plane refuses it, and
+    the page renders its name unlinked and says so in a notice -- while the
+    same URL sat in `<field>_files.txt` for a `wget -i` that never sees the
+    notice and gets a 404 per frame.  2,400 of the 6,498 published entries are
+    symlinks.  `servable_only=False` returns the full set for a caller that
+    wants every published path rather than every fetchable one.
     """
     superseded = set(superseded or ())
 
     def keep(entry):
         return (entry.get("dest") not in superseded
                 and (entry.get("parent_dest") or "") not in superseded
-                and (categories is None or entry.get("category") in categories))
+                and (categories is None or entry.get("category") in categories)
+                and not (servable_only and not HTTPS_SERVES_SYMLINKS
+                         and entry.get("link_mode") == "symlink"))
 
     return [f["url"] for f in manifest["files"] if f.get("url") and keep(f)]
+
+
+def _omitted_from_lists(manifest):
+    """Say how many files the URL lists leave out, and why.
+
+    A list that silently omits files is its own kind of wrong.  There is no
+    way to mark them INSIDE the list -- `wget -i` has no comment syntax and
+    fetches a `#` line as a URL -- so the count is declared beside the link
+    instead.
+    """
+    if HTTPS_SERVES_SYMLINKS:
+        return ""
+    n = sum(1 for f in manifest.get("files", ())
+            if f.get("url") and f.get("link_mode") == "symlink")
+    if not n:
+        return ""
+    return (f"<br>{n:,} symlinked frame(s) are left out of these lists: they "
+            f"live on another filesystem and the HTTPS route is not expected "
+            f"to serve them. Take those with the bundle button or "
+            f"<code>globus transfer --recursive</code>, which follow them.")
+
+
+def group_url_file(field, obs, filt):
+    """Name of the URL list for one (observation, filter) group of frames.
+
+    One function so the link on the page and the file on disk cannot drift:
+    a link to a list that was never written is a 404, and a list nothing links
+    to is dead weight.
+    """
+    parts = [field, "exposures"]
+    if obs:
+        parts.append(str(obs))
+    parts.append(str(filt))
+    slug = "_".join(re.sub(r"[^A-Za-z0-9.-]+", "-", p).strip("-") for p in parts)
+    return f"{slug}.txt"
+
+
+def exposure_group_urls(field, exposures, superseded=()):
+    """``{filename: [url, ...]}`` -- the per-group lists this page links to.
+
+    Grouped exactly as `render_exposures` groups its rows, from the same
+    manifest entries, so the list behind a row holds that row's frames.
+    """
+    superseded = set(superseded or ())
+    out = {}
+    for f in exposures:
+        if f.get("dest") in superseded or (f.get("parent_dest") or "") in superseded:
+            continue
+        if not f.get("url"):
+            continue
+        if f.get("link_mode") == "symlink" and not HTTPS_SERVES_SYMLINKS:
+            continue
+        name = group_url_file(field, f.get("observation") or "",
+                              f.get("filter") or "?")
+        out.setdefault(name, []).append(f["url"])
+    return {k: sorted(v) for k, v in out.items()}
 
 
 def _no_mosaic_reason(manifest, exposures):
@@ -1762,12 +1865,26 @@ def render_exposures(field, exposures, base, app_link, multi,
              if f.get("url") and f.get("link_mode") != "symlink"
              else f"<span class=muted>{html.escape(Path(f['dest']).name)}</span>")
             for f in rows)
+        # The list beside the button is the same group, for the people who
+        # cannot use the button: it opens the Globus web file manager, which
+        # is a browser and cannot be driven from a terminal.
+        servable = [f for f in rows
+                    if f.get("url") and (HTTPS_SERVES_SYMLINKS
+                                         or f.get("link_mode") != "symlink")]
+        if servable:
+            list_name = group_url_file(field, obs, filt)
+            urls_cell = (f" <a class='btn small ghost' "
+                         f"href='{html.escape(list_name)}'>URLs</a>")
+        else:
+            urls_cell = (" <span class=muted title='these frames are symlinks; "
+                         "their per-file URLs do not resolve'>transfer only</span>")
         out.append(
             f"<tr>{obs_cell}<td><b>{html.escape(filt)}</b></td>"
             f"<td>{len(rows)}</td>"
             f"<td class=size>{human_size(size)}</td>"
             f"<td><span class=tag>{html.escape(', '.join(suffixes))}</span></td>"
-            f"<td>{app_link(f'{base}/{subpath}', 'bundle', cls='btn small')}</td></tr>")
+            f"<td>{app_link(f'{base}/{subpath}', 'bundle', cls='btn small')}"
+            f"{urls_cell}</td></tr>")
         if links:
             out.append(
                 f"<tr><td colspan={6 if multi else 5}>"
@@ -2003,6 +2120,40 @@ def render_help():
                "<code>exposures/&lt;FILTER&gt;/</code>) to the source path above "
                "to take just those.</p>")
 
+    out.append("<h2>Can the <b>bundle</b> buttons be used from a terminal?</h2>")
+    out.append(
+        "<p><b>No &mdash; and there is nothing to unpack.</b> Every "
+        "<b>Everything</b> / <b>bundle</b> button is a link into "
+        "<code>app.globus.org/file-manager</code>, the Globus <i>web</i> file "
+        "manager: it opens a browser, signs you in, and shows that folder with "
+        "the transfer already aimed at it. Pasted into <code>wget</code> or "
+        "<code>curl</code> it fetches the file manager's HTML, not data. The "
+        "buttons package nothing, and this site ships no tarballs &mdash; one "
+        "field-filter of frames is ~20&nbsp;GB and the release is several "
+        "hundred GB, so a pre-built archive would duplicate data that is "
+        "hardlinked precisely so it is not duplicated.</p>")
+    out.append(
+        "<p><b>A button&rsquo;s exact equivalent is the <code>globus</code> "
+        "command above.</b> The two values it needs are in the button&rsquo;s "
+        "own link: <code>origin_id</code> is the collection and "
+        "<code>origin_path</code> the folder. Copy them out of any button on "
+        "this site (right-click &rarr; copy link) and hand them to "
+        "<a href='#command-line-with-globus-recommended-one-tool-no-token'>"
+        "<code>globus transfer --recursive</code></a>. Same service, same "
+        "resumable transfer, no browser after the one-time login &mdash; and it "
+        "follows the symlinked frames that HTTPS cannot serve.</p>")
+    out.append(
+        "<p><b>No Globus collection? Use the URL lists.</b> Beside every bundle "
+        "button is a <b>URLs</b> link: one URL per line for exactly that group, "
+        "for <code>wget -i</code> or <code>curl</code>. Whole-field lists "
+        "(<code>_files.txt</code>, <code>_images.txt</code>, "
+        "<code>_catalogs.txt</code>, <code>_exposures.txt</code>) sit under "
+        "<b>Bulk download</b> on each field page. This route needs a bearer "
+        "token (<a href='#no-globus-collection-at-your-destination-wget-curl'>"
+        "below</a>), is not resumable within a file, and cannot fetch symlinked "
+        "frames: those groups show <i>transfer only</i> instead of a list, and "
+        "are left out of the lists rather than shipped as links that 404.</p>")
+
     out.append("<h2>No Globus collection at your destination? <code>wget</code> / <code>curl</code></h2>")
     out.append("<p>Only needed if you cannot use a Globus collection as the destination "
                "(e.g. pulling straight onto a plain web server). <code>wget</code> "
@@ -2017,8 +2168,10 @@ def render_help():
     out.append("<p>Save <a href='get_globus_token_helper.txt' download='get_globus_token.py'>"
                "get_globus_token.py</a> (or copy it below). Token is valid ~48 h; re-run "
                "for a fresh one. Each field page links <code>_files.txt</code> / "
-               "<code>_images.txt</code> / <code>_catalogs.txt</code> URL lists for "
-               "<code>wget -i</code>.</p>")
+               "<code>_images.txt</code> / <code>_catalogs.txt</code> / "
+               "<code>_exposures.txt</code> URL lists for <code>wget -i</code>, "
+               "and each exposure group links a list of its own beside its "
+               "bundle button.</p>")
     out.append("<pre><code>" + html.escape(TOKEN_HELPER) + "</code></pre>")
 
     out.append("</main>")
@@ -2454,6 +2607,13 @@ def main(argv=None):
                 write_urls("images", {"image"})
                 write_urls("catalogs", {"catalog"})
                 write_urls("exposures", {EXPOSURE_CATEGORY})
+                # One list per (observation, filter) group, beside that group's
+                # bundle button.
+                exposure_files = [f for f in manifest["files"]
+                                  if f.get("category") == EXPOSURE_CATEGORY]
+                for name, urls in exposure_group_urls(
+                        field, exposure_files, stale_files).items():
+                    (out_dir / name).write_text("\n".join(urls) + "\n")
                 files = manifest["files"]
                 fields_info.append({
                     "field": field, "version": manifest["version"],
