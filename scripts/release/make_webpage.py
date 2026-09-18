@@ -1153,8 +1153,16 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 #:     brick/exposures/F405N/...nrcalong_destreak_o001_crf.fits  symlink -> 404
 #:     brick/MANIFEST.json                                       regular -> 200
 #:
-#: Only the link mode varies, so this is not the directory ACL that explains
-#: the 307 an anonymous fetch gets from brick (a brick HARDLINK 307s too).
+#: Only the link mode varies.  What made the earlier ANONYMOUS attempt useless
+#: was the ACL, not the absence of a comparison: brick is not anonymously
+#: readable, so every brick path 307s to a login whatever it is -- its regular
+#: `images/*_i2d.fits` entries included.  The token is what made the test
+#: possible; staying inside one field is what makes it clean.
+#:
+#: (brick's published set is 1,200 `symlink` and 45 `link_mode: None`
+#: regular files, and no `hardlink` at all.  `hardlink` is a third distinct
+#: value -- 3,710 entries across the other releases -- so do not go looking
+#: for brick's.)
 #:
 #: The transfer API behaves differently, and both readings were right about
 #: their own service: `globus ls --long` on the same directory reports

@@ -147,9 +147,11 @@ def test_the_omission_is_declared_beside_the_lists(mw):
 def test_the_symlink_exclusion_is_one_switch(mw):
     """Measured 2026-09-18 with an HTTPS-scoped token, two paths in the same
     release under one ACL: `brick/exposures/.../crf.fits` (symlink) 404s and
-    `brick/MANIFEST.json` (regular) 200s, so only the link mode varies. The
-    transfer API is the other way round -- `globus ls` follows them -- which
-    is why those frames go to `globus transfer` instead.
+    `brick/MANIFEST.json` (a regular file, `link_mode: None`) 200s, so only
+    the link mode varies. The transfer API is the other way round --
+    `globus ls` follows them -- which is why those frames go to
+    `globus transfer` instead. Anonymously the same pair is untestable: brick
+    is not anonymously readable, so every path in it 307s to a login.
 
     It stays one constant so a reconfigured collection is a one-line change
     rather than an argument reconstructed from the diff."""
