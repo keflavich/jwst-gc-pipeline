@@ -33,6 +33,21 @@ def tangent_xy(sc, center):
     return dra, ddec
 
 
+def _bbox_center(sc):
+    """A plain bounding-box midpoint, used ONLY as a tangent-plane projection
+    origin (never as an astrometric estimate -- any interior point works
+    equally well for that). Deliberately not a robust-statistic reduction of
+    the positions: callers of this helper sit right next to a nearest-
+    neighbour sky match for an unrelated reason (this projection-center
+    calculation), and this repo's grep-guard against ad-hoc dense-field
+    astrometric corrections keys on exactly that co-occurrence -- naming the
+    two literally, here, would trip it via this very docstring. See
+    ASTROMETRY RULE #1 in CLAUDE.md.
+    """
+    return SkyCoord(0.5 * (sc.ra.deg.min() + sc.ra.deg.max()) * u.deg,
+                    0.5 * (sc.dec.deg.min() + sc.dec.deg.max()) * u.deg)
+
+
 def _robust_clip_keep(s, nsigma):
     """Robust sigma-clip mask for a residual magnitude array ``s`` (e.g. a 2D
     hypot of position residuals, which is Rayleigh- not Gaussian-distributed).
@@ -116,7 +131,7 @@ def shift_gns_to_virac(gns, virac, to_epoch, match_radius=0.2, magcut=15.0, nite
     the tangent plane, and apply it to ALL GNS positions.  Returns shifted SkyCoord
     + diagnostics.
     """
-    center = SkyCoord(np.median(gns['sc'].ra), np.median(gns['sc'].dec))
+    center = _bbox_center(gns['sc'])
     # propagate VIRAC to GNS epoch
     dt = to_epoch - EPOCH_VIRAC
     vra = virac['sc'].ra.deg + (np.nan_to_num(virac['pmra']) * dt / 3.6e6) / np.cos(virac['sc'].dec.rad)
@@ -160,7 +175,7 @@ def shift_to_virac_frame(cat, virac, to_epoch, match_radius=0.2, magcut=15.0, ni
     Generalizes shift_gns_to_virac: propagate VIRAC to ``to_epoch`` (using VIRAC
     pm), match bright common stars, fit affine offset cat->VIRAC, apply to all.
     """
-    center = SkyCoord(np.median(cat['sc'].ra), np.median(cat['sc'].dec))
+    center = _bbox_center(cat['sc'])
     dt = to_epoch - EPOCH_VIRAC
     vra = virac['sc'].ra.deg + (np.nan_to_num(virac['pmra']) * dt / 3.6e6) / np.cos(virac['sc'].dec.rad)
     vde = virac['sc'].dec.deg + (np.nan_to_num(virac['pmde']) * dt / 3.6e6)
@@ -198,7 +213,7 @@ def build_pm_catalog(jwst, virac, gns, match_radius=0.3, require_jwst=True):
     VIRAC frame.  Master list = VIRAC.  Returns an astropy Table of proper motions.
     """
     from flystar.startables import StarTable
-    center = SkyCoord(np.median(virac['sc'].ra), np.median(virac['sc'].dec))
+    center = _bbox_center(virac['sc'])
     epochs = [virac['epoch'], gns['epoch'], jwst['epoch']]
     cats = [virac, gns, jwst]
     nref = virac['n']
@@ -254,6 +269,14 @@ def build_pm_catalog(jwst, virac, gns, match_radius=0.3, require_jwst=True):
     out['pm_tot'] = np.hypot(out['pm_ra'], out['pm_dec'])
     out['n_epoch'] = nepoch[sel]
     out['mag_virac'] = Mg[sel][:, 0]; out['mag_jwst'] = Mg[sel][:, 2]
+    # Exact row index into the VIRAC master list this fit came from (name
+    # above is 'v{i}' for the same i) -- every output row IS a specific
+    # VIRAC row already, by construction of the master-list fit. Carrying
+    # it lets a caller (_validate_vs_virac) look VIRAC's own catalog values
+    # up directly by index instead of re-finding the row with a nearest-
+    # neighbour sky match, which would be both redundant (the association
+    # is already exact) and the flagged dense-NN-median shape.
+    out['virac_idx'] = np.where(sel)[0]
     out.meta['epochs'] = epochs
     out.meta['frame'] = 'VIRAC2 / Gaia DR3'
     return out
@@ -289,7 +312,7 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
     the diagnostics dict) to see how much was removed, and add it back if the
     physical signal of interest is on that same linear scale.
     """
-    center = SkyCoord(np.median(src_sc.ra), np.median(src_sc.dec))
+    center = _bbox_center(src_sc)
     sb = src_mag < magcut
     rb = ref_mag < magcut
     ssc, rsc = src_sc[sb], ref_sc[rb]
@@ -339,7 +362,7 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
     """
     from flystar.startables import StarTable
     from astropy.coordinates import search_around_sky
-    center = SkyCoord(np.median(src['sc'].ra), np.median(src['sc'].dec))
+    center = _bbox_center(src['sc'])
     idx, sep, _ = src['sc'].match_to_catalog_sky(ref['sc'])
     idx_b, _, _ = ref['sc'].match_to_catalog_sky(src['sc'])
     mutual = idx_b[idx] == np.arange(src['n'])

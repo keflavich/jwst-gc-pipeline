@@ -50,17 +50,24 @@ def build_for_field(m7_path, virac_path, gns_path, out_path,
 
 
 def _validate_vs_virac(pm, virac_path):
-    """Quick sanity: our PM vs VIRAC2's own pm for tightly-matched stars."""
-    import astropy.units as u
-    from astropy.coordinates import SkyCoord
+    """Quick sanity: our PM vs VIRAC2's own pm for the same stars.
+
+    ``pm['virac_idx']`` is the exact VIRAC row each fit came from (build_pm_
+    catalog's master list IS VIRAC's rows; 'v{i}' names it) -- so this looks
+    VIRAC's own pmRA/pmDE up by that index directly rather than re-finding
+    the row with a nearest-neighbour sky match. A NN-match-then-median here
+    would be the flagged dense-NN-median pattern (ASTROMETRY RULE #1) for no
+    reason: the association is already exact, and re-deriving it
+    approximately by position can only make it worse, not more robust --
+    a naive tight-radius rematch is exactly the shape that "confirms
+    agreement it never established" when something upstream is wrong.
+    """
     vir = M.load_ref(virac_path, 'virac')
     g = np.isfinite(pm['pm_ra'])
-    idx, sep, _ = SkyCoord(pm['ra0'] * u.deg, pm['dec0'] * u.deg).match_to_catalog_sky(vir['sc'])
-    ok = (sep < 0.08 * u.arcsec) & g
-    vra, vde = vir['pmra'][idx][ok], vir['pmde'][idx][ok]
-    m = np.isfinite(vra)
-    dra = pm['pm_ra'][ok][m] - vra[m]
-    dde = pm['pm_dec'][ok][m] - vde[m]
+    vra, vde = vir['pmra'][pm['virac_idx']], vir['pmde'][pm['virac_idx']]
+    m = g & np.isfinite(vra)
+    dra = pm['pm_ra'][m] - vra[m]
+    dde = pm['pm_dec'][m] - vde[m]
     rstd = lambda d: float(np.percentile(np.abs(d - np.median(d)), 68) * 1.48)
     return dict(n=int(m.sum()), med_dra=float(np.median(dra)), std_dra=rstd(dra),
                 med_dde=float(np.median(dde)), std_dde=rstd(dde))
