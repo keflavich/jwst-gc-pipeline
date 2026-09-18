@@ -253,21 +253,49 @@ def scan_mast(programme='10678', token=None):
     return dict(per_star), per_visit, problems
 
 
-def visit_outcome(stages):
+def visit_outcome(stages, acq_status=()):
     """``(reached, outcome)`` -- how far up the acquisition ladder a visit got.
 
-    `FGS_FINEGUIDE` present means the visit guided and took science data.  Its
-    absence is the failure, and the highest rung that IS present says where it
-    stopped: identification, acquisition, or track.
+    `FGS_FINEGUIDE` present means the visit guided and took science data, and
+    the highest rung present otherwise says where it stopped: identification,
+    acquisition, or track.
+
+    THE LADDER ALONE INFERS FAILURE FROM ABSENCE, which is the reading that
+    breaks if a query is ever truncated or a file is missing from the archive:
+    a guided visit whose `gs-fineguide` rows did not come back is reported as
+    having failed at track.  `GSACSTAT` is the positive evidence the ladder
+    lacks, and over 10678 it separates the two sets outright:
+
+        the 7 failed visits   GSACSTAT = {'UNSUCCESSFUL'} and nothing else
+        the 38 guided visits  at least one SUCCESSFUL (9 also carry an
+                              UNSUCCESSFUL -- an early attempt, then a good one)
+
+    So a failure is asserted -- no row reports success -- rather than merely
+    not found.  When the two disagree (a SUCCESSFUL acquisition with no fine
+    guide) that is said out loud instead of being filed as a track failure,
+    because a contradiction between two sources is the one thing neither of
+    them can be trusted to summarise.  `acq_status` empty means it was not
+    collected, and then this falls back to the ladder and labels the reading.
     """
     present = [rung for rung in LADDER if rung in stages]
+    status = {str(s).strip().upper() for s in acq_status if s}
     if not present:
         return None, 'no guide-star exposures'
     top = present[-1]
     where = STOPPED_AT[top]
-    if top == 'FGS_FINEGUIDE':
-        return where, 'guided'
-    return where, f'failed at {where}'
+    guided = top == 'FGS_FINEGUIDE'
+    succeeded = 'SUCCESSFUL' in status
+    if not status:
+        # Ladder only. The verdict is the same wording, and `evidence` on the
+        # visit says it rests on one source -- the outcome string is read by
+        # people and by the viewer's layers, so it is not the place to encode
+        # provenance.
+        return where, ('guided' if guided else f'failed at {where}')
+    if guided == succeeded:
+        return where, 'guided' if guided else f'failed at {where}'
+    if guided:
+        return where, 'fine guide reached, no acquisition reported SUCCESSFUL'
+    return where, f'acquisition reported SUCCESSFUL, no fine guide ({where})'
 
 
 def unflown_observations(footprints_path):
@@ -311,12 +339,22 @@ def annotate_outcomes(per_star, per_visit):
     as having guided there.
     """
     for entry in per_visit.values():
-        reached, outcome = visit_outcome(entry.get('stages', ()))
+        status = entry.get('acq_status', ())
+        reached, outcome = visit_outcome(entry.get('stages', ()), status)
         entry['reached'], entry['outcome'] = reached, outcome
+        # Which sources the verdict rests on. `ladder only` is the frames
+        # path, where GSACSTAT is not available at all -- the same verdict,
+        # inferred from absence rather than asserted.
+        entry['evidence'] = 'ladder+gsacstat' if status else 'ladder only'
         for gsid in entry['stars']:
             star = per_star.get(gsid)
             if star is None:
                 continue
+            # The star carries the acquisition statuses of the visits it was
+            # used in, so the evidence travels with the marker a reader
+            # clicks rather than living only on the visit record.
+            if status:
+                star.setdefault('acq_status', set()).update(status)
             if outcome.startswith('failed'):
                 star.setdefault('failed_obs', set()).add(entry['observation'])
                 star['outcome'] = outcome
@@ -350,6 +388,7 @@ def to_document(per_star, per_visit, programme='10678', unflown=()):
             # one star with two outcomes, so both are carried.
             'outcome': star.get('outcome', ''),
             'stopped at': star.get('stopped_at', ''),
+            'acquisition status': ','.join(sorted(star.get('acq_status', ()))),
             'failed observations': ' '.join(sorted(star.get('failed_obs', ()))),
             # A star acquired at order > 1 is one the observatory fell through
             # to: at least one earlier candidate failed to acquire. That is the
@@ -380,9 +419,19 @@ def to_document(per_star, per_visit, programme='10678', unflown=()):
                  # exposure: the attitude the visit was actually held at, as
                  # opposed to the planned PA the focal-plane overlay draws.
                  'pa_v3': entry.get('pa_v3_guidestar'),
-                 'outcome': outcome, 'stopped_at': reached})
+                 'outcome': outcome, 'stopped_at': reached,
+                 # The corroborating evidence, carried rather than consumed
+                 # and discarded: a reader checking the outcome should see
+                 # what it was decided from.
+                 'acq_status': sorted(entry.get('acq_status', ())),
+                 'evidence': entry.get('evidence', '')})
     failed_visits = sorted(v for v, e in per_visit.items()
                            if e.get('outcome', '').startswith('failed'))
+    # A visit whose two sources disagree is neither guided nor failed, and is
+    # listed separately rather than being rounded into whichever set is
+    # nearer.
+    contested = sorted(v for v, e in per_visit.items()
+                       if ', no ' in e.get('outcome', ''))
     return {
         'name': f'JWST {programme} guide stars',
         'programme': programme,
@@ -393,6 +442,7 @@ def to_document(per_star, per_visit, programme='10678', unflown=()):
         'by_obs': dict(by_obs),
         'unflown': list(unflown),
         'failed_visits': failed_visits,
+        'contested_visits': contested,
     }
 
 
@@ -439,6 +489,14 @@ def main(argv=None):
           f"{doc['n_fallback']} were not the first candidate")
     failed = [v for v, e in sorted(per_visit.items())
               if e.get('outcome', '').startswith('failed')]
+    contested = [v for v, e in sorted(per_visit.items())
+                 if ', no ' in e.get('outcome', '')]
+    if contested:
+        print(f'  {len(contested)} visit(s) where the exposure ladder and '
+              f'GSACSTAT disagree:')
+        for visit in contested:
+            print(f"    {per_visit[visit]['observation']} {visit}: "
+                  f"{per_visit[visit]['outcome']}")
     if failed:
         print(f'  {len(failed)} visit(s) never reached fine guide:')
         for visit in failed:
