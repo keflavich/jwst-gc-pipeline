@@ -52,11 +52,16 @@ def observed_attitude(exposures_dir):
     planned angle the NIRCam boxes are visibly rotated and the parallels, which
     sit 8 to 15 arcmin off the anchor, are displaced by arcminutes.
 
-    Read per observation from extension 1 of one frame: ``RA_REF``/``DEC_REF``
-    are that aperture's reference point on the sky and ``PA_V3`` the telescope
-    roll, which is exactly the triple `aperture_polygons` needs, with the
-    frame's own ``APERNAME`` as the anchor.  Reconstructing NRCA1_FULL and
-    NRCB4_FULL this way lands within 0.2-0.3" of the same frame's GWCS corners.
+    Read per observation, from BOTH headers of one frame -- which is the
+    non-obvious part.  ``PA_V3``, ``RA_REF`` and ``DEC_REF`` live in extension
+    1 and ``APERNAME`` only in extension 0, so a scan that takes all four from
+    either header alone silently gets ``None`` for the ones that are not
+    there.  Together they are the triple `aperture_polygons` needs plus the
+    anchor it needs it in: ``RA_REF``/``DEC_REF`` is that aperture's reference
+    point on the sky and ``PA_V3`` the telescope roll.
+
+    Reconstructing NRCA1_FULL and NRCB4_FULL this way lands within 0.2-0.3" of
+    the same frame's GWCS corners.
     """
     from astropy.io import fits
 
@@ -105,7 +110,13 @@ def build(args):
         data = json.load(fh)
     default_pa = data.get('pa_v3')
 
-    flown = observed_attitude(args.exposures) if args.exposures else {}
+    # `getattr`, because `build` is called with hand-built argument objects as
+    # well as with argparse's: three existing tests construct a Namespace with
+    # the four fields this function needed before, and reading a fifth one off
+    # it directly turned a new option into an AttributeError for every such
+    # caller. argparse supplies the default; everyone else gets "no frames".
+    exposures = getattr(args, 'exposures', None)
+    flown = observed_attitude(exposures) if exposures else {}
     if flown:
         spread = max(r['pa_v3_spread_deg'] for r in flown.values())
         print(f'{len(flown)} observation(s) carry an as-flown attitude '

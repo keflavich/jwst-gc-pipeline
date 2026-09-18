@@ -111,3 +111,32 @@ def test_an_observation_with_no_frames_keeps_the_planned_attitude(fp, tmp_path,
     assert by_id['o150']['attitude'] == 'planned'
     assert by_id['o150']['pa_v3'] == pytest.approx(87.0)
     assert doc['n_as_flown'] == 1
+
+
+def test_build_still_runs_with_the_argument_set_it_had_before(fp, tmp_path):
+    """`build` is called with hand-built argument objects as well as with
+    argparse's, and three existing tests construct one carrying only the four
+    fields it needed before this option existed. Reading `args.exposures`
+    directly turned a new optional argument into an AttributeError for every
+    such caller -- a change to the callable contract, dressed as a default."""
+    footprints = tmp_path / 'footprints.json'
+    footprints.write_text(json.dumps({
+        'pa_v3': 87.0,
+        'observed': [{'number': 114, 'ra': 266.834, 'dec': -28.597,
+                      'target': 'GC_114', 'status': 'Archived'}],
+        'planned': [],
+    }))
+
+    class Before:
+        """Exactly the fields `build` took before `--exposures`."""
+        def __init__(self, footprints, out):
+            self.footprints = footprints
+            self.out = out
+            self.anchor = 'NRCALL_FULL'
+            self.programme = '10678'
+
+    fp.build(Before(str(footprints), str(tmp_path / 'out.json')))
+    doc = json.loads((tmp_path / 'out.json').read_text())
+    assert doc['n_as_flown'] == 0
+    assert doc['pointings'][0]['attitude'] == 'planned'
+    assert doc['pointings'][0]['pa_v3'] == pytest.approx(87.0)
