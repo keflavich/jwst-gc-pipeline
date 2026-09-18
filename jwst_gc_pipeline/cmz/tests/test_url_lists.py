@@ -126,3 +126,41 @@ def test_the_help_says_the_bundle_button_is_not_a_command_line_tool(mw):
     assert '#command-line-with-globus-recommended-one-tool-no-token' in page
     section = page.split('Can the <b>bundle</b>')[1].split('<h2')[0]
     assert '<pre>' not in section
+
+
+def test_the_omission_is_declared_beside_the_lists(mw):
+    """`wget -i` has no comment syntax -- it fetches a `#` line as a URL -- so
+    an omitted file cannot be marked inside the list. The count goes beside
+    the link instead, because a list that silently drops files is its own kind
+    of wrong."""
+    manifest = {'files': [_frame('o004', 'F115W', f'{i}.fits',
+                                 link_mode='symlink') for i in range(3)]}
+    note = mw._omitted_from_lists(manifest)
+    assert '3 symlinked frame(s) are left out' in note
+    assert 'globus transfer --recursive' in note
+
+    # a field with nothing omitted says nothing
+    clean = {'files': [_frame('o127', 'F212N', 'a.fits')]}
+    assert mw._omitted_from_lists(clean) == ''
+
+
+def test_the_symlink_premise_is_one_switch_with_its_evidence_written_down(mw):
+    """The exclusion rests on a claim this repo has not measured: the page has
+    always said a single symlinked frame URL 404s, while `globus ls` shows the
+    collection following those symlinks. It cannot be settled anonymously --
+    the readable releases have no symlinks and the symlinked ones are not
+    readable -- so the reading is a named constant, and flipping it restores
+    every URL rather than requiring the code to be re-argued."""
+    assert mw.HTTPS_SERVES_SYMLINKS is False
+
+    manifest = {'files': [_frame('o004', 'F115W', 'a.fits',
+                                 link_mode='symlink')]}
+    assert mw.published_urls(manifest) == []
+
+    mw.HTTPS_SERVES_SYMLINKS = True
+    try:
+        assert len(mw.published_urls(manifest)) == 1
+        assert mw.exposure_group_urls('brick', manifest['files'])
+        assert mw._omitted_from_lists(manifest) == ''
+    finally:
+        mw.HTTPS_SERVES_SYMLINKS = False

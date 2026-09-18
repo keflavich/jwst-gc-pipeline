@@ -1059,6 +1059,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         + "<div class=muted style='margin-top:.5rem'>URL lists: "
         + " · ".join(txt_links)
         + " &nbsp;|&nbsp; <a href='download_help.html'>how to download / authenticate</a>"
+        + _omitted_from_lists(manifest)
         + "</div></div>")
 
     obs_col = "<th>Obs</th>" if multi else ""
@@ -1145,6 +1146,36 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     return anchor_headings("\n".join(out))
 
 
+#: Does the Globus HTTPS data plane serve a symlink that points out of the
+#: release tree?  UNVERIFIED, and the two things that bear on it disagree.
+#:
+#: Against: the exposures notice on every field page has said since it was
+#: written that a browser or `wget` on a single symlinked frame returns 404,
+#: and the page has rendered those names unlinked on that basis.
+#:
+#: For: `globus ls --long` on a symlinked brick directory returns
+#: `File Type: file` with the target's real size and mtime, so the COLLECTION
+#: follows the symlink; with follow_symlinks off, GCS reports invalid_symlink
+#: or omits the entry.  HTTPS is a separate service but shares that config.
+#:
+#: It cannot be settled anonymously: the anonymously-readable releases
+#: (gc-treasury, arches) contain no symlinks and the symlinked ones (brick,
+#: cloudc, sickle) are not anonymously readable, so an unauthenticated fetch
+#: changes field and link mode together.  The measurement that settles it
+#: needs an interactive consent a human has to grant:
+#:
+#:     globus session consent \
+#:       'https://auth.globus.org/scopes/<collection>/https'
+#:     curl -I -H "Authorization: Bearer $TOKEN" <a brick symlink URL>
+#:     curl -I -H "Authorization: Bearer $TOKEN" <a brick hardlink URL>
+#:
+#: 404 on the first and 200 on the second confirms it; two 200s mean this is
+#: False and the lists should carry all 2,400 of those URLs.  Until then the
+#: cautious reading stands, because it is the one the page already publishes
+#: -- and the omission is declared beside the lists rather than silent.
+HTTPS_SERVES_SYMLINKS = False
+
+
 def published_urls(manifest, superseded=(), categories=None,
                    servable_only=True):
     """Download URLs for the files this release actually publishes.
@@ -1172,10 +1203,30 @@ def published_urls(manifest, superseded=(), categories=None,
         return (entry.get("dest") not in superseded
                 and (entry.get("parent_dest") or "") not in superseded
                 and (categories is None or entry.get("category") in categories)
-                and not (servable_only
+                and not (servable_only and not HTTPS_SERVES_SYMLINKS
                          and entry.get("link_mode") == "symlink"))
 
     return [f["url"] for f in manifest["files"] if f.get("url") and keep(f)]
+
+
+def _omitted_from_lists(manifest):
+    """Say how many files the URL lists leave out, and why.
+
+    A list that silently omits files is its own kind of wrong.  There is no
+    way to mark them INSIDE the list -- `wget -i` has no comment syntax and
+    fetches a `#` line as a URL -- so the count is declared beside the link
+    instead.
+    """
+    if HTTPS_SERVES_SYMLINKS:
+        return ""
+    n = sum(1 for f in manifest.get("files", ())
+            if f.get("url") and f.get("link_mode") == "symlink")
+    if not n:
+        return ""
+    return (f"<br>{n:,} symlinked frame(s) are left out of these lists: they "
+            f"live on another filesystem and the HTTPS route is not expected "
+            f"to serve them. Take those with the bundle button or "
+            f"<code>globus transfer --recursive</code>, which follow them.")
 
 
 def group_url_file(field, obs, filt):
@@ -1204,7 +1255,9 @@ def exposure_group_urls(field, exposures, superseded=()):
     for f in exposures:
         if f.get("dest") in superseded or (f.get("parent_dest") or "") in superseded:
             continue
-        if not f.get("url") or f.get("link_mode") == "symlink":
+        if not f.get("url"):
+            continue
+        if f.get("link_mode") == "symlink" and not HTTPS_SERVES_SYMLINKS:
             continue
         name = group_url_file(field, f.get("observation") or "",
                               f.get("filter") or "?")
@@ -1815,7 +1868,8 @@ def render_exposures(field, exposures, base, app_link, multi,
         # cannot use the button: it opens the Globus web file manager, which
         # is a browser and cannot be driven from a terminal.
         servable = [f for f in rows
-                    if f.get("url") and f.get("link_mode") != "symlink"]
+                    if f.get("url") and (HTTPS_SERVES_SYMLINKS
+                                         or f.get("link_mode") != "symlink")]
         if servable:
             list_name = group_url_file(field, obs, filt)
             urls_cell = (f" <a class='btn small ghost' "
