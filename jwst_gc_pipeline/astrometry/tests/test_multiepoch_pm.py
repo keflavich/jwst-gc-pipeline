@@ -7,12 +7,11 @@ stands in for ``ref``. This is what the review on PR #140 flagged as
 missing -- 834 lines with no coverage.
 """
 import numpy as np
+import pytest
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-from jwst_gc_pipeline.astrometry.multiepoch_pm import (
-    tangent_xy, affine_tie, build_pm_catalog_2epoch,
-)
+from jwst_gc_pipeline.astrometry.multiepoch_pm import affine_tie, build_pm_catalog_2epoch
 
 CENTER = SkyCoord(266.5 * u.deg, -28.5 * u.deg)
 RNG = np.random.default_rng(20260918)
@@ -85,6 +84,7 @@ def test_per_star_pm_survives_the_tie():
     """A random, star-specific (non-linear-in-position) proper motion is NOT
     a linear function of position, so it must survive the affine tie and
     come out of build_pm_catalog_2epoch close to its injected value."""
+    pytest.importorskip('flystar')  # build_pm_catalog_2epoch imports it lazily
     n = 3000
     # Sparse enough that no two of the n random positions land within
     # match_radius of each other by chance -- crowding collisions would drop
@@ -127,6 +127,7 @@ def test_affine_tie_absorbs_a_coherent_linear_velocity_field():
     a BULK/rotational proper motion is linear in position to first order, so
     the tie removes it (by construction) same as a real plate-scale error --
     the catalog it feeds is relative, not absolute."""
+    pytest.importorskip('flystar')  # build_pm_catalog_2epoch imports it lazily
     n = 3000
     sx, sy, mag = _random_field(n)
     dt = 2.0
