@@ -5016,9 +5016,14 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # `_failures` is belt-and-braces beside the `passed` test, not a second
     # condition: `_checkpoint_passed` returns False for any non-empty failures
     # list before it looks at anything else, so a record from
-    # `run_visit_checkpoint` cannot have both.  It costs nothing and it keeps
-    # the verdict right for a record whose `passed` key is absent -- the shape
-    # this module's own tests construct, and the fail-open they exist to close.
+    # `run_visit_checkpoint` cannot have both.
+    #
+    # It earns its place on a record whose `passed` key is ABSENT (records
+    # predating the field).  `record.get('passed') is False` reads a missing
+    # key as not-false, so without `_failures` the verdict comes out "passed"
+    # on a record holding failures.  Such a record normally raises above; under
+    # `warn_only` it is demoted and reaches here, which is the case
+    # test_a_demoted_failure_with_NO_passed_key_does_NOT_announce_a_PASS pins.
     _not_a_pass = bool(_failures) or record.get('passed') is False
 
     def _no_pass_line(what):

@@ -281,6 +281,37 @@ def test_a_warn_only_demotion_does_NOT_then_announce_a_PASS(tmp_path,
     assert 'PASS (no correction implied)' not in out
 
 
+def test_a_demoted_failure_with_NO_passed_key_does_NOT_announce_a_PASS(
+        tmp_path, monkeypatch, capsys):
+    """Pins the `_failures` half of the verdict, which `passed` cannot cover.
+
+    `_checkpoint_passed` returns False for any non-empty failures list before
+    it looks at anything else, so a record built by `run_visit_checkpoint`
+    cannot carry failures and `passed=True` -- which makes `_failures` look
+    redundant beside the `passed` test, and it is, for that record.
+
+    It is not redundant for a record whose `passed` key is ABSENT.
+    `record.get('passed') is False` reads a missing key as not-false, so the
+    verdict would come out "this passed" on a record holding failures -- the
+    fail-open this file exists to close.  That shape is already constructed
+    here (`test_failures_alone_are_enough_even_if_passed_is_missing` pops the
+    key, for records predating the field), but it raises before reaching the
+    corrections short-circuit, so nothing exercised the clause at the gate:
+    deleting `_failures or` left the whole file green.
+
+    Under `warn_only` the same record is demoted and DOES reach it.
+    """
+    rec = _record(failures=['duplicate exposure identity'])
+    rec.pop('passed')
+    _run(tmp_path, monkeypatch, rec, warn_only=True)
+    out = capsys.readouterr().out
+    assert 'WARN_ONLY=1 -- continuing' in out
+    assert 'PASS (no correction implied)' not in out, (
+        'a record with failures and no `passed` key announced a pass'
+    )
+    assert 'NOT a pass' in out
+
+
 def test_a_DEFERRED_frozen_failure_does_NOT_then_announce_a_PASS(
         tmp_path, monkeypatch, capsys):
     """The deferral says "the release gate refuses this field" and continues.
