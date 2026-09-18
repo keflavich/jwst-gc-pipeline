@@ -55,6 +55,25 @@ DEFAULT_OUT = ('/orange/adamginsburg/jwst/htdocs_staging/'
 #: observation is the case this file cannot speak to on its own: it has no
 #: frames, so the scan below never sees it.
 DEFAULT_FOOTPRINTS = '/orange/adamginsburg/jwst/monitor/footprints.json'
+#: MAST's JWST keyword service for GUIDE-STAR exposures.  This is the source
+#: that covers the visits which produced no science data: FGS wrote `gs-id`,
+#: `gs-acq1/2` and `gs-track` files for every visit that was ATTEMPTED, whether
+#: or not it ever reached fine guide, and they are indexed here even when the
+#: visit has no science observation in MAST at all.
+GUIDESTAR_SERVICE = 'Mast.Jwst.Filtered.GuideStar'
+
+#: The exposure types FGS writes, in the order the acquisition ladder climbs.
+#: How far a visit got is what the ladder says: ID identifies the star field,
+#: ACQ1/ACQ2 centre the star, TRACK follows it, FINEGUIDE is the science-grade
+#: lock.  A visit with no FINEGUIDE took no science data.
+LADDER = ('FGS_ID-IMAGE', 'FGS_ID-STACK', 'FGS_ACQ1', 'FGS_ACQ2',
+          'FGS_TRACK', 'FGS_FINEGUIDE')
+#: Where the ladder stopped, named for a reader rather than for the pipeline.
+STOPPED_AT = {
+    'FGS_ID-IMAGE': 'identification', 'FGS_ID-STACK': 'identification',
+    'FGS_ACQ1': 'acquisition', 'FGS_ACQ2': 'acquisition',
+    'FGS_TRACK': 'track', 'FGS_FINEGUIDE': 'fine guide',
+}
 
 #: Header keys read from extension 0. Missing ones are reported, never guessed.
 GS_KEYS = ('GDSTARID', 'GS_RA', 'GS_DEC', 'GS_MAG', 'GS_ORDER', 'GS_V3_PA',
@@ -169,6 +188,88 @@ def _sig(value, digits=3):
     return round(value, -int(floor(log10(abs(value)))) + (digits - 1))
 
 
+def scan_mast(programme='10678', token=None):
+    """``(per_star, per_visit, problems)`` from MAST's guide-star exposures.
+
+    Reads the FGS exposures themselves rather than the science headers, which
+    is the difference that matters: a visit whose guide star never acquired
+    took no science data, so it appears in no science header and in no
+    delivered frame -- but FGS still wrote its `gs-id` and `gs-acq` files, and
+    they carry `GDSTARID`, the position, the magnitude, the ID order, and
+    `GSACSTAT`.  That is where the seven Treasury observations that were never
+    taken have been the whole time.
+    """
+    import collections as _c
+    from astroquery.mast import Mast, Observations
+
+    if token:
+        Observations.login(token=token, store_token=False)
+    table = Mast.service_request(GUIDESTAR_SERVICE, {
+        'columns': '*',
+        'filters': [{'paramName': 'program', 'values': [str(programme)]}]})
+
+    per_star = _c.defaultdict(lambda: {'visits': set(), 'obs': set(),
+                                       'frames': 0, 'orders': set(),
+                                       'instruments': set(), 'stages': set(),
+                                       'acq_status': set()})
+    per_visit = {}
+    problems = []
+    for row in table:
+        gsid = str(row['gdstarid'] or '').strip()
+        ra, dec = row['gs_ra'], row['gs_dec']
+        if not gsid or ra is None or dec is None:
+            problems.append(f"{row['fileName']}: no GDSTARID/GS_RA/GS_DEC")
+            continue
+        obs = f"o{int(row['observtn']):03d}"
+        visit = f"{programme}{int(row['observtn']):03d}{int(row['visit']):03d}"
+        exp_type = str(row['exp_type'] or '')
+        star = per_star[gsid]
+        star['frames'] += 1
+        star['ra'], star['dec'] = float(ra), float(dec)
+        star['obs'].add(obs)
+        star['visits'].add(visit)
+        star['stages'].add(exp_type)
+        star['instruments'].add('FGS')
+        if row['gs_order'] is not None:
+            star['orders'].add(int(row['gs_order']))
+        if row['gsacstat']:
+            star['acq_status'].add(str(row['gsacstat']))
+        for key, col in (('gs_mag', 'gs_mag'), ('gs_ura', 'gs_ura'),
+                         ('gs_udec', 'gs_udec'), ('gsc_ver', 'gsc_ver'),
+                         ('gs_mura', 'gs_mura'), ('gs_mudec', 'gs_mudec'),
+                         ('gs_epoch', 'gs_epoch')):
+            if row[col] is not None:
+                star[key] = row[col]
+
+        entry = per_visit.setdefault(visit, {
+            'visit': visit, 'observation': obs, 'stars': {}, 'stages': set(),
+            'acq_status': set()})
+        entry['stars'][gsid] = entry['stars'].get(gsid, 0) + 1
+        entry['stages'].add(exp_type)
+        if row['gsacstat']:
+            entry['acq_status'].add(str(row['gsacstat']))
+        if row['gs_v3_pa'] is not None:
+            entry['pa_v3_guidestar'] = float(row['gs_v3_pa'])
+    return dict(per_star), per_visit, problems
+
+
+def visit_outcome(stages):
+    """``(reached, outcome)`` -- how far up the acquisition ladder a visit got.
+
+    `FGS_FINEGUIDE` present means the visit guided and took science data.  Its
+    absence is the failure, and the highest rung that IS present says where it
+    stopped: identification, acquisition, or track.
+    """
+    present = [rung for rung in LADDER if rung in stages]
+    if not present:
+        return None, 'no guide-star exposures'
+    top = present[-1]
+    where = STOPPED_AT[top]
+    if top == 'FGS_FINEGUIDE':
+        return where, 'guided'
+    return where, f'failed at {where}'
+
+
 def unflown_observations(footprints_path):
     """Observations the plan holds and the telescope never took.
 
@@ -200,6 +301,31 @@ def unflown_observations(footprints_path):
     return sorted(out, key=lambda e: e['observation'])
 
 
+def annotate_outcomes(per_star, per_visit):
+    """Write each visit's ladder outcome onto the visit and onto its stars.
+
+    A star is red on the viewer when a visit it was chosen for never reached
+    fine guide.  That is a property of the (star, visit) pair rather than of
+    the star, so the star carries the list of observations where it failed and
+    the outcome of the last one -- and a star that guided elsewhere still shows
+    as having guided there.
+    """
+    for entry in per_visit.values():
+        reached, outcome = visit_outcome(entry.get('stages', ()))
+        entry['reached'], entry['outcome'] = reached, outcome
+        for gsid in entry['stars']:
+            star = per_star.get(gsid)
+            if star is None:
+                continue
+            if outcome.startswith('failed'):
+                star.setdefault('failed_obs', set()).add(entry['observation'])
+                star['outcome'] = outcome
+                star['stopped_at'] = reached
+            else:
+                star.setdefault('outcome', outcome)
+                star.setdefault('stopped_at', reached)
+
+
 def to_document(per_star, per_visit, programme='10678', unflown=()):
     """The viewer's JSON: a catalogue plus the two inverse lookups."""
     sources = []
@@ -219,12 +345,20 @@ def to_document(per_star, per_visit, programme='10678', unflown=()):
             'GS_UDEC': _sig(star.get('gs_udec')),
             # `2` here means FGS fell through to the second candidate.
             'ID order': ','.join(str(o) for o in sorted(star['orders'])),
+            # How far the ladder got with THIS star, and for which
+            # observations. A star that guided one visit and failed another is
+            # one star with two outcomes, so both are carried.
+            'outcome': star.get('outcome', ''),
+            'stopped at': star.get('stopped_at', ''),
+            'failed observations': ' '.join(sorted(star.get('failed_obs', ()))),
             # A star acquired at order > 1 is one the observatory fell through
             # to: at least one earlier candidate failed to acquire. That is the
             # only failure the delivered data records, and it is drawn in its
             # own colour.
             'fallback': max(star['orders']) > 1 if star['orders'] else False,
-            'observations': ' '.join(sorted(star['obs'])),
+            # Every observation this star was CHOSEN for, which is not the
+            # same as the ones it guided: a failed visit chose it too.
+            'chosen for': ' '.join(sorted(star['obs'])),
             # The label the viewer prints beside the marker: the observation
             # numbers this star guided, without the `o` that repeats 34 times.
             'label': ' '.join(sorted(o.lstrip('o').lstrip('0') or '0'
@@ -236,6 +370,7 @@ def to_document(per_star, per_visit, programme='10678', unflown=()):
     by_obs = collections.defaultdict(list)
     for visit in sorted(per_visit):
         entry = per_visit[visit]
+        reached, outcome = (entry.get('reached'), entry.get('outcome', ''))
         for gsid, frames in sorted(entry['stars'].items()):
             by_obs[entry['observation']].append(
                 {'visit': visit, 'guide_star': gsid, 'frames': frames,
@@ -244,15 +379,20 @@ def to_document(per_star, per_visit, programme='10678', unflown=()):
                  # The V3 position angle OF THE GUIDE STAR for the science
                  # exposure: the attitude the visit was actually held at, as
                  # opposed to the planned PA the focal-plane overlay draws.
-                 'pa_v3': entry.get('pa_v3_guidestar')})
+                 'pa_v3': entry.get('pa_v3_guidestar'),
+                 'outcome': outcome, 'stopped_at': reached})
+    failed_visits = sorted(v for v, e in per_visit.items()
+                           if e.get('outcome', '').startswith('failed'))
     return {
         'name': f'JWST {programme} guide stars',
         'programme': programme,
         'n': len(sources),
         'n_fallback': sum(1 for s in sources if s['fallback']),
+        'n_failed': sum(1 for s in sources if s['failed observations']),
         'sources': sources,
         'by_obs': dict(by_obs),
         'unflown': list(unflown),
+        'failed_visits': failed_visits,
     }
 
 
@@ -260,17 +400,32 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--exposures', default=DEFAULT_EXPOSURES)
+    ap.add_argument('--source', choices=('mast', 'frames'), default='mast',
+                    help='mast reads the FGS guide-star exposures, which cover '
+                         'the visits that produced no science data; frames '
+                         'reads the delivered science headers, which cannot')
+    ap.add_argument('--token', default=os.environ.get('MAST_API_TOKEN'),
+                    help='MAST token; the guide-star exposures of a proprietary '
+                         'programme are not public')
     ap.add_argument('--footprints', default=DEFAULT_FOOTPRINTS,
                     help='where the observation statuses come from')
     ap.add_argument('--out', default=DEFAULT_OUT)
     ap.add_argument('--programme', default='10678')
     args = ap.parse_args(argv)
 
-    if not os.path.isdir(args.exposures):
-        raise SystemExit(f'no exposures tree at {args.exposures}')
-    per_star, per_visit, missing = scan(args.exposures)
-    if not per_star:
-        raise SystemExit(f'no frame under {args.exposures} records a guide star')
+    if args.source == 'mast':
+        per_star, per_visit, missing = scan_mast(args.programme, args.token)
+        if not per_star:
+            raise SystemExit(f'MAST returned no guide-star exposure for '
+                             f'programme {args.programme}')
+    else:
+        if not os.path.isdir(args.exposures):
+            raise SystemExit(f'no exposures tree at {args.exposures}')
+        per_star, per_visit, missing = scan(args.exposures)
+        if not per_star:
+            raise SystemExit(f'no frame under {args.exposures} records a '
+                             f'guide star')
+    annotate_outcomes(per_star, per_visit)
     unflown = unflown_observations(args.footprints)
     doc = to_document(per_star, per_visit, args.programme, unflown)
 
@@ -279,13 +434,22 @@ def main(argv=None):
         json.dump(doc, fh, separators=(',', ':'))
     reused = sum(1 for s in doc['sources'] if s['visits'] > 1)
     print(f"{doc['n']} guide stars over {len(per_visit)} visits "
-          f"-> {args.out}")
+          f"({args.source}) -> {args.out}")
     print(f"  {reused} guided more than one visit; "
           f"{doc['n_fallback']} were not the first candidate")
+    failed = [v for v, e in sorted(per_visit.items())
+              if e.get('outcome', '').startswith('failed')]
+    if failed:
+        print(f'  {len(failed)} visit(s) never reached fine guide:')
+        for visit in failed:
+            entry = per_visit[visit]
+            stars = ', '.join(sorted(entry['stars']))
+            print(f"    {entry['observation']} {visit}: {entry['outcome']}"
+                  f" ({stars})")
     if unflown:
         names = ', '.join(e['observation'] for e in unflown)
-        print(f'  {len(unflown)} observation(s) never flown, so no guide star '
-              f'was ever recorded for them: {names}')
+        print(f'  {len(unflown)} observation(s) the plan lists as not flown: '
+              f'{names}')
     if missing:
         print(f'  {len(missing)} frame(s) record no guide star:')
         for line in missing[:5]:
