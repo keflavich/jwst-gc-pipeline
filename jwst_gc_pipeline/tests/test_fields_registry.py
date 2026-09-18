@@ -139,7 +139,12 @@ def test_project_obsnum_matches_apart_from_the_listed_changes():
               'g054': {'9438': '004'},
               'g007': {'9438': '005'},
               'crowded_l3': {'9438': '006'},
-              'crowded_l20': {'9438': '007'}}
+              'crowded_l20': {'9438': '007'},
+              # gc9257 joined 2026-09-17: NSC_CENTRAL (PI Do), the single
+              # observation 001, NIRCam F212N+F480M plus a NIRISS F140M
+              # pointing.  Listed here for the same reason as the 9438 block
+              # above -- it post-dates the dictionary this snapshot froze.
+              'gc9257': {'9257': '001'}}
     view = F.project_obsnum()
     for target, per_proposal in todays.items():
         for proposal, obsid in per_proposal.items():
@@ -895,7 +900,13 @@ def test_every_preexisting_proposal_maps_exactly_as_before():
     # 002, five bands over the same pointing as the NIRCam 001 that was already
     # in the snapshot.  Only the miri pairing is new -- ('7213', 'nircam') is
     # unchanged above.
+    #
+    # 9257 joined 2026-09-17: NSC_CENTRAL (PI Do), one observation carrying
+    # NIRCam F212N+F480M and a NIRISS F140M pointing ~6' away, so it adds BOTH
+    # a nircam and a niriss pairing.  It post-dates the snapshot like the rest
+    # of this list.
     assert new == {('10678', 'nircam'), ('10678', 'miri'),
                    ('9438', 'nircam'),
                    ('1266', 'miri'), ('3571', 'miri'),
-                   ('7213', 'miri')}, sorted(new)
+                   ('7213', 'miri'),
+                   ('9257', 'nircam'), ('9257', 'niriss')}, sorted(new)

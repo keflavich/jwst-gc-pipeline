@@ -744,6 +744,30 @@ ALIGNMENT_CONFIG = (
                'the F560W anchor and (since PR #832) the write channel, exactly as gc1266 '
                'above.'),
     ),
+    # gc9257 -- NIRCam + NIRISS imaging of the nuclear star cluster (program
+    # 9257, PI Do, target NSC_CENTRAL), one observation delivered 2025-09-10.
+    # Registered 2026-09-17 with the field itself, BEFORE the first reduce, for
+    # the reason the 10678 entry above spells out: a field absent from this
+    # table reduces "successfully" at the raw assign_wcs frame while the m2
+    # checkpoint writes corrections into an offsets table nothing reads, which
+    # is how 1939/sgra shipped ~14.8" off with every internal gate green.
+    FieldAlignment(
+        proposal='9257', fields=('001',),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F212N',
+        notes=('gc9257. Galactic Centre, so Gaia defines the absolute frame and '
+               'VIRAC2 is the reference catalog, per the GC rule. Consensus '
+               'rather than locked because nothing has been measured for 9257 '
+               'yet -- the m2 checkpoint creates '
+               'offsets/Offsets_JWST_Brick9257_consensus.csv on the first '
+               'reduce. F212N is the anchor: it is the shorter of the two '
+               'NIRCam bands and the one consensus_catalog.reference_filter '
+               'ranks first for this list, and at 2.12 um it is the closest to '
+               "VIRAC2's Ks. The NIRISS F140M half reduces at its dispatched "
+               'frame either way -- NIRISS has no offsets-table write channel '
+               '(PR #832 opened MIRI\'s; NIRISS still has none), so only the '
+               'two NIRCam bands are table-correctable here.'),
+    ),
 )
 
 
