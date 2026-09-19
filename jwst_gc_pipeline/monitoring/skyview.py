@@ -336,6 +336,12 @@ CSS = """
                  border-bottom: 1px solid rgba(255,255,255,.1);
                  font-family: var(--mono); }
 .gcm-sky-sec { padding: 6px 9px; border-bottom: 1px solid rgba(255,255,255,.07); }
+/* The not-yet-observed statuses: a count that opens into its tile numbers.
+   Folded by default because 59 numbers with no date between them is a wall,
+   and open-able because a bare count is the one form in which an observation
+   appears nowhere on the page at all. */
+.gcm-sky-more { margin-top: 4px; }
+.gcm-sky-more > summary { cursor: pointer; }
 /* Every section is a <details>, so each one can be folded away.  The panel had
    grown to seven stacked blocks and covered a third of the map on a laptop;
    native <details> gets the fold, the keyboard and the disclosure triangle for
@@ -1201,12 +1207,30 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
         # The tail is what is NOT above it.  Excluding only 'executed' listed
         # Archived and Collecting again underneath, so the same three tiles were
         # counted twice on one line and 12 + 3 + 2 did not add up to anything.
-        rest = ', '.join('%s %d' % (k, v) for k, v in sorted(status_counts.items())
-                         if not _has_run(k)
-                         and k.strip().lower() not in ('skipped', 'scheduled'))
-        if rest:
-            ledger_rows.append('<div class="gcm-sky-lab" style="margin-top:4px">'
-                               '%s</div>' % _esc(rest))
+        #
+        # These used to be bare counts, on the reasoning that 59 numbers with
+        # no date between them is a wall.  But a bare count is the one form in
+        # which an observation appears NOWHERE: o062 is GC_62, status
+        # Implementation, and it had no card (no data), no schedule row (not
+        # scheduled) and no name here -- so "is o062 in this survey at all"
+        # had no answer on the page.  Collapsed behind a <details>, the numbers
+        # cost nothing until asked for and every observation is findable.
+        tail = [(k, v) for k, v in sorted(status_counts.items())
+                if not _has_run(k)
+                and k.strip().lower() not in ('skipped', 'scheduled')]
+        for label, count in tail:
+            tiles_here = _by_status(label.strip().lower())
+            if tiles_here:
+                ledger_rows.append(
+                    '<details class="gcm-sky-more"><summary class="gcm-sky-lab">'
+                    '%s %d</summary><div class="gcm-sky-stat">%s</div></details>'
+                    % (_esc(label), count, _tile_links(tiles_here, 'pl')))
+            else:
+                # Counted by the status table but not present as a tile we can
+                # name -- report the count rather than inventing a list.
+                ledger_rows.append(
+                    '<div class="gcm-sky-lab" style="margin-top:4px">%s %d</div>'
+                    % (_esc(label), count))
         ledger = ('<details class="gcm-sky-sec" id="gcm-sky-exec" open>'
                   '<summary class="gcm-sky-lab">Execution</summary>'
                   '<div class="gcm-sky-stat">%s</div></details>'

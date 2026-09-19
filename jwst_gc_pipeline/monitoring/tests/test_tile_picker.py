@@ -174,14 +174,25 @@ def test_the_execution_section_is_the_roster_the_dropdown_used_to_be():
         assert 'data-goto="%s"' % n in ledger
 
 
-def test_flight_ready_stays_a_count_and_not_a_wall_of_numbers():
-    """64 numbers with no date between them, none findable by anything but the
-    number itself."""
+def test_flight_ready_is_a_count_that_opens_into_its_numbers():
+    """This used to assert the numbers were ABSENT, on the reasoning that 64 of
+    them with no date between them is a wall.
+
+    The wall is real, but a bare count turned out to be the one form in which
+    an observation appears NOWHERE on the page: o062 is GC_62, status
+    Implementation, and it had no card (no data), no schedule row (not
+    scheduled) and no name here -- so "is o062 in this survey at all" had no
+    answer.  Folded behind a <details> the numbers cost nothing until they are
+    asked for, so the count still leads and the wall still does not stand up
+    by itself.
+    """
     html = _section(_footprints({'1': 'Executed', '2': 'Flight Ready',
                                  '3': 'Flight Ready'}, n=4))
     ledger = _ledger(html)
     assert 'Flight Ready 2' in ledger
-    assert 'data-goto="2"' not in ledger
+    assert 'data-goto="2"' in ledger
+    # Collapsed: in the document, not painted until opened.
+    assert '<details class="gcm-sky-more">' in ledger
 
 
 def test_every_listed_tile_is_selectable_by_number():
