@@ -540,13 +540,19 @@ def _catalog_phase_patterns(catdir, filt):
     return out
 
 
-def _catalog_stages(base, filt, ambiguous):
+def _catalog_stages(base, filt, ambiguous, proposal=None, obsid=None):
     """Per-filter cataloging rows m12..m7 for one filter.
 
     ``ambiguous`` marks the rows as unattributable: the pipeline writes these
     names without an observation token, so where the SAME filter belongs to more
     than one observation of the field the file on disk is whichever observation
     ran last.
+
+    The satstar row counts the cache the merge reads for this observation:
+    ``{filt}_oNNN_consolidated_satstar_catalog.fits`` where the satstar channel
+    is observation-scoped (``merge_catalogs.satstar_obs_scope``), else the
+    unscoped name.  A program-wide file left from before scoping is not counted
+    for a scoped observation, because nothing reads it.
     """
     import fnmatch
     catdir = os.path.join(base, 'catalogs')
@@ -559,9 +565,23 @@ def _catalog_stages(base, filt, ambiguous):
             got['scope'] = 'ambiguous'
         rows[phase] = got
     # saturated-star products are a separate track that gates m12
-    satname = f'{filt.lower()}_consolidated_satstar_catalog.fits'
+    satname = f'{filt.lower()}{_satstar_scope(proposal, obsid)}_consolidated_satstar_catalog.fits'
     rows['satstar'] = count_matching(entries, lambda n: n == satname)
     return rows
+
+
+def _satstar_scope(proposal, obsid):
+    """The merge's satstar cache token for one observation, or ``''``.
+
+    Mirrors ``merge_catalogs.satstar_obs_scope`` (the naming rule lives in
+    ``naming.perframe_obs_token``) without importing the merge module.  A
+    wildcard or missing ``obsid`` names no single observation, so it is ``''``.
+    """
+    if proposal in (None, '') or obsid in (None, '', '*'):
+        return ''
+    from ..photometry.naming import perframe_obs_token
+    tok = perframe_obs_token(proposal, obsid)
+    return tok if tok.startswith('_o') else ''
 
 
 def satstar_frames(base, filt, proposal, obsid):
@@ -1013,7 +1033,8 @@ def scan_observation(target, proposal, obsid, instrument='nircam',
     headers = {}
     for filt in use:
         row = _reduction_stages(base, filt, proposal, obsid)
-        row.update(_catalog_stages(base, filt, filt.upper() in ambiguous_filters))
+        row.update(_catalog_stages(base, filt, filt.upper() in ambiguous_filters,
+                                   proposal, obsid))
         row['satstar_frames'] = satstar_frames(base, filt, proposal, obsid)
         per_filter[filt] = row
         if with_headers and row.get('reduced', {}).get('n'):
