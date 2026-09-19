@@ -501,13 +501,39 @@ def _severity_chip(tally):
     return ''.join(parts)
 
 
-def _card(entry, href=None):
+def card_labels(entries):
+    """``{id(entry): label}`` -- the name each card shows.
+
+    A field with one observation is named by its field name.  A field with
+    SEVERAL gets the observation appended, because otherwise every one of its
+    cards carries the same label: 10678 renders 45 cards reading `gc-treasury`,
+    in a grid whose whole job is telling them apart.  The observation was
+    already on the card, in the smaller `proposal/oNNN` chip beside the name,
+    but that is not what a reader scans a grid by.
+    """
+    seen = {}
+    for entry in entries:
+        seen.setdefault(str((entry.get('run') or {}).get('target')), []).append(entry)
+    labels = {}
+    for target, group in seen.items():
+        for entry in group:
+            obsid = (entry.get('run') or {}).get('obsid')
+            labels[id(entry)] = (f'{target}-{obsid}'
+                                 if len(group) > 1 and obsid else target)
+    return labels
+
+
+def _card(entry, href=None, label=None):
     """One overview card.
 
     ``href`` is where the card's detail lives.  On the front page that is
     another *document* (``fields/<target>.html``), not an anchor on the same
     one: carrying every field's detail on the overview page is what made it a
     2 MB scroll that had to be fully parsed before the first card appeared.
+
+    ``label`` is the display name; it defaults to the bare field name, which is
+    right for a single-observation field and ambiguous for any other -- see
+    `card_labels`.
     """
     run = entry['run']
     tally = entry['tally']
@@ -521,7 +547,7 @@ def _card(entry, href=None):
     return f"""
 <a class="gcm-card sev-{esc(worst)}" href="{esc(href or ('#' + anchor))}">
   <div class="gcm-card-top">
-    <span class="gcm-card-name">{esc(run['target'])}</span>
+    <span class="gcm-card-name">{esc(label or run['target'])}</span>
     <span class="gcm-card-obs">{esc(run['proposal'])}/o{esc(run['obsid'])}</span>
     <span class="gcm-card-when">{ago_html(newest)}</span>
   </div>
@@ -1016,18 +1042,14 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
     n_jobs = sum(len([j for j in (e.get('jobs') or [])
                       if j.get('state') in ('RUNNING', 'PENDING')]) for e in entries)
 
-    cards = ''.join(_card(e, detail_href(e) if detail_href else None)
+    labels = card_labels(entries)
+    cards = ''.join(_card(e, detail_href(e) if detail_href else None,
+                          label=labels.get(id(e)))
                     for e in entries)
     details = ''.join(_field_section(e, show_skip, figure_base, home_href,
                                      asset_prefix)
                       for e in entries) if include_detail else ''
 
-    unattr = ''
-    if unattributed_jobs:
-        names = ', '.join(sorted({j['name'] for j in unattributed_jobs}))
-        unattr = (f'<p class="gcm-note">{len(unattributed_jobs)} queued job(s) could '
-                  f'not be attributed to a registered field: <code>{esc(names)}</code>. '
-                  f'They are listed here rather than folded into a field\'s count.</p>')
 
     sky = (skyview.section(footprints, roman,
                            aladin_src=asset_prefix + skyview.ALADIN_LOCAL,
@@ -1073,7 +1095,6 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
 ladder in run order — reduction (unc·cal·red·i2d) then cataloging
 (m12→m8). Solid = every filter has it, pale = some do, STRIPED = it exists but predates an earlier stage, so it was built from inputs that have since been regenerated, hatched = the product
 name cannot be attributed to this observation. {card_note}</p>
-{unattr}
 <div class="gcm-grid">{cards}</div></section>
 
 {_cutouts_block(cutouts)}
