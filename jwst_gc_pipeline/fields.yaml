@@ -255,7 +255,12 @@ fields:
           '060': catalogs/gaia_virac2_refcat_epoch2026.71_o060.fits
           '061': catalogs/gaia_virac2_refcat_epoch2026.71_o061.fits
           '063': catalogs/gaia_virac2_refcat_epoch2026.71_o063.fits
+          '064': catalogs/gaia_virac2_refcat_epoch2026.71_o064.fits
+          '065': catalogs/gaia_virac2_refcat_epoch2026.71_o065.fits
+          '066': catalogs/gaia_virac2_refcat_epoch2026.71_o066.fits
           '067': catalogs/gaia_virac2_refcat_epoch2026.71_o067.fits
+          '068': catalogs/gaia_virac2_refcat_epoch2026.71_o068.fits
+          '069': catalogs/gaia_virac2_refcat_epoch2026.71_o069.fits
           '098': catalogs/gaia_virac2_refcat_epoch2026.70_o098.fits
           '100': catalogs/gaia_virac2_refcat_epoch2026.70_o100.fits
           '102': catalogs/gaia_virac2_refcat_epoch2026.70_o102.fits
