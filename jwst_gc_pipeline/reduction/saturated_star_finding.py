@@ -3840,7 +3840,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # VAR_POISSON both NaN), so neither the data nor the variance can tell a
         # real saturated core from the any-group over-flag -- but the fit can.
         # 0.5x margin for wing-fit scatter on borderline saturation.  Rejects
-        # fall through to the daophot channel, which had them right all along.
+        # are handed to the daophot channel: they are persisted to
+        # *_satstar_rejected.fits with reject_reason='implied_peak_gate', and
+        # cataloging._gate_reject_handoff_xy exempts the daophot fit at that
+        # position from the near-saturation filter (their cores still carry
+        # any-group SATURATED DQ, which used to delete the fit -- #925).
         # MIRI and forced sources are excluded.
         if (not _is_miri and not forced_source
                 and result is not None and _sev_floor and _sev_floor > 0):
