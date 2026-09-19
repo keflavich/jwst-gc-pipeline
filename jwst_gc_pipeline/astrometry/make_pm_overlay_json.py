@@ -19,7 +19,8 @@ import json
 from astropy.table import Table
 
 
-def make_overlay_json(pm_fits, out_path, name, mag_key='mag_instr', verbose=True):
+def make_overlay_json(pm_fits, out_path, name, mag_key='mag_instr',
+                      mag_col='mag_src', verbose=True):
     t = Table.read(pm_fits)
     t = t[t['trustworthy']]
     if verbose:
@@ -33,7 +34,7 @@ def make_overlay_json(pm_fits, out_path, name, mag_key='mag_instr', verbose=True
             'pm_tot': round(float(row['pm_tot']), 3),
             'pm_ra_err': round(float(row['pm_ra_err']), 3),
             'pm_dec_err': round(float(row['pm_dec_err']), 3),
-            mag_key: round(float(row['mag_src']), 2),
+            mag_key: round(float(row[mag_col]), 2),
         }
         for row in t
     ]
@@ -48,7 +49,11 @@ def make_overlay_json(pm_fits, out_path, name, mag_key='mag_instr', verbose=True
         'sources': sources,
     }
     with open(out_path, 'w') as f:
-        json.dump(doc, f)
+        # allow_nan=False: a non-finite value would otherwise emit a bare
+        # NaN/Infinity token that JSON.parse rejects, taking out the whole
+        # overlay for one bad source instead of failing here, at build time,
+        # where it can be traced back to which row produced it.
+        json.dump(doc, f, allow_nan=False)
     if verbose:
         print('wrote', out_path)
     return doc
@@ -60,11 +65,16 @@ def main():
     ap.add_argument('--pm-fits', required=True, help='build_treasury_pm output FITS')
     ap.add_argument('--out', required=True, help='output JSON path')
     ap.add_argument('--name', required=True, help='overlay display name')
+    ap.add_argument('--mag-col', default='mag_src',
+                    help="input FITS column to read the instrumental "
+                         "magnitude from (build_treasury_pm always names it "
+                         "mag_src; a differently-shaped PM catalog could not)")
     ap.add_argument('--mag-key', default='mag_instr',
                     help="JSON property name for the source's instrumental "
                          "magnitude, e.g. mag_f212n_instr")
     args = ap.parse_args()
-    make_overlay_json(args.pm_fits, args.out, args.name, mag_key=args.mag_key)
+    make_overlay_json(args.pm_fits, args.out, args.name,
+                      mag_key=args.mag_key, mag_col=args.mag_col)
 
 
 if __name__ == '__main__':
