@@ -9,9 +9,12 @@ against how many produced a satstar row:
   more than one exposure, so the gap is a threshold the star straddles rather
   than the edge of the dither pattern.
 
-The gate-rejected fits already on disk are NOT a way to fill it: their positions
-sit 27 mas (`implied_peak_gate`) and 223 mas (`fit_quality_gate`) from the
-accepted ensemble mean, against 2.27 mas for the accepted per-exposure fits.
+The gate-rejected fits already on disk are NOT a way to fill it.  Their
+positions sit 27.17 mas (`implied_peak_gate`) and 223.44 mas
+(`fit_quality_gate`) from the accepted ensemble mean, against 2.27 mas for the
+accepted per-exposure fits: folding a 27 mas population into a 2.27 mas ensemble
+degrades the mean it is meant to improve, which is reason enough on its own.
+
 Hence forced measurement, and hence position-only -- the forced rows are a
 position measurement of a star this exposure did not see saturated, so their
 flux must never reach the catalog.
@@ -202,9 +205,79 @@ def test_sibling_seeding_is_plumbed_end_to_end():
         __import__('jwst_gc_pipeline.photometry.cataloging',
                    fromlist=['cataloging']).__file__).read()
     assert 'sibling_sky=_sibling_sky,' in cat_src
-    # seeds must come from stars something saw saturated, or the forced
-    # population grows from its own forced measurements each iteration
-    assert "_st = _st[~np.asarray(_st['position_only'], dtype=bool)]" in cat_src
+    # the selection itself is exercised behaviourally below, against real files
+    assert 'satstar_sibling_seed_positions(filtername, basepath)' in cat_src
+
+
+# --------------------------------------------------------------------------
+# what the seed list is allowed to contain
+#
+# This is the property that bounds the whole mechanism.  A position-only row is
+# itself a forced measurement, so seeding from one would let the forced
+# population feed on its own output; the finder re-runs at every m-token, so it
+# would compound six times per pass.  Seeding only from real saturation
+# detections makes the seed list a fixed point.
+# --------------------------------------------------------------------------
+
+def _write_consolidated(tmp_path, filt, n_real, n_position_only):
+    d = tmp_path / 'catalogs'
+    d.mkdir(parents=True, exist_ok=True)
+    n = n_real + n_position_only
+    t = Table()
+    t['skycoord_fit'] = SkyCoord(
+        (RA0 + np.arange(n) * 1e-4) * u.deg,
+        np.full(n, DEC0) * u.deg, frame='icrs')
+    t['flux_fit'] = np.full(n, 1.0e4)
+    t['position_only'] = np.array([False] * n_real + [True] * n_position_only)
+    t.write(d / f'{filt.lower()}_consolidated_satstar_catalog.fits',
+            overwrite=True)
+    return str(tmp_path)
+
+
+def test_seed_list_excludes_position_only_stars(tmp_path):
+    base = _write_consolidated(tmp_path, 'F480M', n_real=3, n_position_only=5)
+    seeds = mc.satstar_sibling_seed_positions('F480M', base)
+    assert seeds is not None
+    # the five forced-only stars must not seed the next iteration
+    assert len(seeds) == 3
+
+
+def test_seed_list_is_a_fixed_point_across_iterations(tmp_path):
+    # feeding the previous iteration's seeds back in must not grow the list
+    base = _write_consolidated(tmp_path, 'F480M', n_real=4, n_position_only=9)
+    first = mc.satstar_sibling_seed_positions('F480M', base)
+    second = mc.satstar_sibling_seed_positions('F480M', base)
+    assert len(first) == len(second) == 4
+
+
+def test_no_seeds_when_nothing_was_ever_seen_saturated(tmp_path):
+    base = _write_consolidated(tmp_path, 'F480M', n_real=0, n_position_only=6)
+    assert mc.satstar_sibling_seed_positions('F480M', base) is None
+
+
+def test_no_seeds_on_a_bands_first_pass(tmp_path):
+    (tmp_path / 'catalogs').mkdir(parents=True, exist_ok=True)
+    assert mc.satstar_sibling_seed_positions('F480M', str(tmp_path)) is None
+
+
+def test_legacy_catalog_without_the_column_seeds_everything(tmp_path):
+    # a consolidated catalog written before #928 has no position_only column;
+    # every row in it is a real saturation detection by construction
+    d = tmp_path / 'catalogs'
+    d.mkdir(parents=True, exist_ok=True)
+    t = Table()
+    t['skycoord_fit'] = SkyCoord((RA0 + np.arange(5) * 1e-4) * u.deg,
+                                 np.full(5, DEC0) * u.deg, frame='icrs')
+    t.write(d / 'f480m_consolidated_satstar_catalog.fits', overwrite=True)
+    seeds = mc.satstar_sibling_seed_positions('F480M', str(tmp_path))
+    assert seeds is not None and len(seeds) == 5
+
+
+def test_seed_positions_are_the_catalog_positions(tmp_path):
+    base = _write_consolidated(tmp_path, 'F480M', n_real=2, n_position_only=1)
+    seeds = mc.satstar_sibling_seed_positions('F480M', base)
+    assert seeds.ra.deg[0] == pytest.approx(RA0, abs=1e-9)
+    assert seeds.ra.deg[1] == pytest.approx(RA0 + 1e-4, abs=1e-9)
 
 
 def test_position_only_is_computed_from_the_group_not_the_kept_row():

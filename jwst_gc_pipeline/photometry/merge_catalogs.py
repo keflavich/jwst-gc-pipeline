@@ -2858,6 +2858,51 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     return out
 
 
+def satstar_sibling_seed_positions(filtername, basepath, verbose=True):
+    """Positions to seed this band's satstar fits at in EVERY exposure (#925).
+
+    The band's own consolidated catalog, restricted to stars some exposure DID
+    see saturated.  That restriction is the bound on the whole mechanism: a
+    position-only row is itself a forced measurement, so seeding from one would
+    let the forced population feed on its own output and grow without limit
+    across iterations (the pipeline re-runs the finder at every m-token, so
+    this would compound six times per pass).  Seeding only from real saturation
+    detections makes the seed list a fixed point.
+
+    Returns ``None`` when there is nothing to seed from -- no consolidated
+    catalog yet (a band's first pass), an empty one, or one whose every row is
+    position-only.  Callers treat that as "seeding skipped", not an error.
+    """
+    path = (f'{basepath}/catalogs/'
+            f'{str(filtername).lower()}_consolidated_satstar_catalog.fits')
+    if not os.path.exists(path):
+        if verbose:
+            print(f"sibling-exposure satstar seeds: no consolidated "
+                  f"{filtername} catalog at {path} (first pass?); seeding "
+                  f"skipped", flush=True)
+        return None
+    tbl = Table.read(path)
+    if len(tbl) == 0 or 'skycoord_fit' not in tbl.colnames:
+        if verbose:
+            print(f"sibling-exposure satstar seeds: {os.path.basename(path)} "
+                  f"has no usable rows; seeding skipped", flush=True)
+        return None
+    n_all = len(tbl)
+    if 'position_only' in tbl.colnames:
+        tbl = tbl[~np.asarray(tbl['position_only'], dtype=bool)]
+    if len(tbl) == 0:
+        if verbose:
+            print(f"sibling-exposure satstar seeds: all {n_all} row(s) of "
+                  f"{os.path.basename(path)} are position-only (no exposure "
+                  f"saw any of them saturated); seeding skipped", flush=True)
+        return None
+    if verbose:
+        print(f"sibling-exposure satstar seeds: {len(tbl)} of {n_all} "
+              f"position(s) from {os.path.basename(path)} "
+              f"({n_all - len(tbl)} position-only row(s) excluded)", flush=True)
+    return SkyCoord(tbl['skycoord_fit'])
+
+
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
     one row (the brightest), so downstream merging doesn't duplicate them.
@@ -3025,6 +3070,15 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
     # a star this exposure did not see saturated, and the representative row is
     # what supplies flux_fit downstream.  lexsort's LAST key is primary, so this
     # is "real rows first, brightest within each class".
+    #
+    # INVARIANT, and the reason _attach_satstar_ensemble does NOT read
+    # position_only off the kept row: this ordering is the only thing that makes
+    # the representative non-position-only whenever the group has a real member.
+    # Change the sort key and a representative-inherited flag would silently
+    # invert 200 lines away, with every end-to-end test still green -- which is
+    # exactly what happened to a mutation of that computation.  The ensemble
+    # recomputes the flag from the whole group so the two are independent; see
+    # test_position_only_is_computed_from_the_group_not_the_kept_row.
     _pos_only_local = (
         np.asarray(tbl['position_only'], dtype=bool)[fin_idx]
         if 'position_only' in tbl.colnames

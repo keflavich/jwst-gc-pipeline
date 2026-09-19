@@ -1979,26 +1979,11 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # and the first pass of a band simply has nothing to seed from.
     _sibling_sky = None
     if bool(getattr(options, 'satstar_sibling_seed', False)):
-        from astropy.coordinates import SkyCoord
-        _sc_file = (f'{basepath}/catalogs/'
-                    f'{filtername.lower()}_consolidated_satstar_catalog.fits')
-        if os.path.exists(_sc_file):
-            _st = Table.read(_sc_file)
-            if len(_st) and 'skycoord_fit' in _st.colnames:
-                # Seed only from stars some exposure DID see saturated; seeding
-                # from a position-only row would let the population grow from
-                # its own forced measurements iteration after iteration.
-                if 'position_only' in _st.colnames:
-                    _st = _st[~np.asarray(_st['position_only'], dtype=bool)]
-                if len(_st):
-                    _sibling_sky = SkyCoord(_st['skycoord_fit'])
-                    print(f"[manual] sibling-exposure satstar seeds: "
-                          f"{len(_sibling_sky)} position(s) from "
-                          f"{os.path.basename(_sc_file)}", flush=True)
-        if _sibling_sky is None:
-            print(f"[manual] sibling-exposure satstar seeds: no consolidated "
-                  f"{filtername} catalog yet (first pass?); seeding skipped",
-                  flush=True)
+        from jwst_gc_pipeline.photometry.merge_catalogs import (
+            satstar_sibling_seed_positions)
+        # Selection (and the position-only exclusion that bounds it) lives in
+        # merge_catalogs so it is testable without a pipeline run.
+        _sibling_sky = satstar_sibling_seed_positions(filtername, basepath)
     # LOCK the per-frame satstar position to its stable data-refined seed (flux-
     # only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
     # positions into ~0.25" clusters -> the coadded per-frame satstar model
