@@ -8,7 +8,10 @@ Delivered o132 evidence the tests here pin:
   F212N ``replaced_saturated`` rows, and 0.0% of the rest, because the append
   path filled every missing column with ``np.ones(n) * np.nan`` regardless of
   the target dtype.
-* ``std_ra`` is NaN for 99.9% / 98.2% of the same rows, though the per-exposure
+* ``std_ra`` is NaN for 99.9% / 98.2% of the same rows against 77.9% / 25.4%
+  for the rest (all rows of
+  ``basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o132.fits``,
+  295201 of them), though the per-exposure
   satstar fits behind them repeat to 3 mas (F480M, median 4 exposures of 12) and
   1 mas (F212N, median 3 of 48) -- measured, then discarded by the
   brightest-first dedup.
@@ -241,7 +244,10 @@ def test_appended_rows_take_counts_from_the_ensemble():
     toadd['flux'] = np.array([9.0])
     toadd['n_frames_fit'] = np.array([4], dtype=np.int32)
     toadd['n_meas_fit'] = np.array([24], dtype=np.int32)
-    toadd['std_ra_fit'] = np.array([3.0e-7])
+    toadd['std_ra_fit'] = np.array([2.6e-7])
+    # std_ra is fed the COORDINATE-convention column (see the RA-convention
+    # tests below); std_ra_fit is the on-sky angle and goes to satstar_std_ra
+    toadd['std_ra_coord_fit'] = np.array([3.0e-7])
     toadd['std_dec_fit'] = np.array([4.0e-7])
 
     mc._fill_satstar_added_columns(toadd, cat)
@@ -317,3 +323,56 @@ def test_dedup_algorithm_token_was_bumped():
 def test_every_mapped_column_names_a_real_ensemble_column():
     for src_col in mc._SATSTAR_ASTROMETRY_FROM_ENSEMBLE.values():
         assert src_col in mc.SATSTAR_ENSEMBLE_COLUMNS
+
+
+# --------------------------------------------------------------------------
+# RA convention (reviewer finding on #926)
+# --------------------------------------------------------------------------
+
+def test_std_ra_fit_is_an_on_sky_angle():
+    # exposures offset by +-d in TRUE ANGLE on the sky; _rows already divides
+    # by cos(dec) when building RA, so this is the angular scatter
+    d = 10.0
+    offs = [(-d, 0.0), (-d, 0.0), (d, 0.0), (d, 0.0)]
+    out = mc._dedup_satstar_catalog(_table(*_rows(offs, 4)))
+    got = float(out['std_ra_fit'][0]) * 3.6e6
+    assert got == pytest.approx(d * np.sqrt(4.0 / 3.0), rel=1e-3)
+
+
+def test_std_ra_coord_fit_is_the_coordinate_convention():
+    # combine_singleframe's std_ra is the scatter of the RA COORDINATE with no
+    # cos(dec) factor, so the column fed from here has to match it or one
+    # column holds two conventions
+    d = 10.0
+    offs = [(-d, 0.0), (-d, 0.0), (d, 0.0), (d, 0.0)]
+    out = mc._dedup_satstar_catalog(_table(*_rows(offs, 4)))
+    on_sky = float(out['std_ra_fit'][0])
+    coord = float(out['std_ra_coord_fit'][0])
+    assert coord == pytest.approx(on_sky / np.cos(np.radians(DEC0)), rel=1e-6)
+    assert coord > on_sky          # cos(dec) < 1 at this declination
+
+
+def test_std_ra_is_filled_in_the_coordinate_convention_not_the_on_sky_one():
+    # the mapping must reach for std_ra_coord_fit; feeding std_ra_fit would put
+    # a 12.5% smaller number in std_ra at dec -28.9 than a daophot row carries
+    # for the same true scatter
+    assert mc._SATSTAR_ASTROMETRY_FROM_ENSEMBLE['std_ra'] == 'std_ra_coord_fit'
+    assert mc._SATSTAR_ASTROMETRY_FROM_ENSEMBLE['satstar_std_ra'] == 'std_ra_fit'
+
+    cat = Table()
+    cat['std_ra'] = np.array([1.0e-7])
+    cat['satstar_std_ra'] = np.array([1.0e-7])
+    toadd = Table()
+    toadd['std_ra_fit'] = np.array([2.0e-7])
+    toadd['std_ra_coord_fit'] = np.array([3.0e-7])
+    mc._fill_satstar_added_columns(toadd, cat)
+    assert float(toadd['std_ra'][0]) == pytest.approx(3.0e-7)
+    assert float(toadd['satstar_std_ra'][0]) == pytest.approx(2.0e-7)
+
+
+def test_dec_column_carries_no_cos_factor_in_either_convention():
+    # only RA has the ambiguity; a mutation adding cos(dec) to dec must fail
+    offs = [(0.0, -10.0), (0.0, -10.0), (0.0, 10.0), (0.0, 10.0)]
+    out = mc._dedup_satstar_catalog(_table(*_rows(offs, 4)))
+    got = float(out['std_dec_fit'][0]) * 3.6e6
+    assert got == pytest.approx(10.0 * np.sqrt(4.0 / 3.0), rel=1e-3)

@@ -2670,7 +2670,8 @@ def load_rejected_satstar_catalog(filtername, target='brick',
 #: :func:`_attach_satstar_ensemble`.  ``replace_saturated`` maps these onto the
 #: merged catalog's own astrometry schema, so keep the two in step.
 SATSTAR_ENSEMBLE_COLUMNS = ('n_frames_fit', 'n_meas_fit', 'std_ra_fit',
-                            'std_dec_fit', 'flux_med_fit', 'std_flux_fit')
+                            'std_ra_coord_fit', 'std_dec_fit', 'flux_med_fit',
+                            'std_flux_fit')
 
 
 def _satstar_use_ensemble_position():
@@ -2794,6 +2795,21 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     out['n_frames_fit'] = n_frames
     out['n_meas_fit'] = n_meas
     out['std_ra_fit'] = std_ra
+    # SAME QUANTITY, COORDINATE-RA CONVENTION.  ``std_ra_fit`` above is a true
+    # angle on the sky (the cos(dec) factor is in d_ra).  The merged catalog's
+    # own ``std_ra``, written by combine_singleframe, is the scatter of the RA
+    # COORDINATE with no cos(dec) -- see the nanaverage of (arr_ra - avg_ra)**2
+    # there.  Writing the on-sky value into that column would make one column
+    # hold two conventions, and the seam would fall exactly on the bright/faint
+    # boundary this change repairs: at dec -28.9 (cos 0.8755) the same 2.00 mas
+    # true scatter reads 2.285 on a daophot row and 2.000 on a satstar row, so a
+    # cut at hypot(std_ra, std_dec) <= 3 mas would reject a daophot row and keep
+    # a satstar row of identical quality.  So feed ``std_ra`` this
+    # coordinate-convention value and keep the on-sky one in ``satstar_std_ra``.
+    with np.errstate(invalid='ignore', divide='ignore'):
+        _cosd = np.cos(np.radians(mean_dec))
+        out['std_ra_coord_fit'] = np.where(np.abs(_cosd) > 1e-12,
+                                           std_ra / _cosd, np.nan)
     out['std_dec_fit'] = std_dec
     out['flux_med_fit'] = mean_flux
     out['std_flux_fit'] = std_flux
@@ -3135,12 +3151,22 @@ def _faint_replacement_veto(catflux, satflux, factor=0.8):
 #: it and there is nothing to overwrite), and it never passes through the
 #: cross-exposure combine that writes these columns for daophot rows.  Before
 #: #925 the append filled them with float NaN regardless of dtype, which puts
-#: INT32_MIN in the int32 count columns: o132 delivered 99.8% of F480M and
-#: 97.0% of F212N substituted rows with no position scatter and no match count.
+#: INT32_MIN in the int32 count columns: in o132's m8 merged catalog 99.8% of
+#: F480M and 97.0% of F212N substituted rows carry INT32_MIN in nmatch_good
+#: against 0.0% of every other row, and 99.9% / 98.2% carry a NaN std_ra
+#: against 77.9% / 25.4%.
 _SATSTAR_ASTROMETRY_FROM_ENSEMBLE = {
+    # NOTE both counts come from the same source, so a substituted row always
+    # reads nmatch_good == nmatch.  The satstar channel has no per-exposure
+    # sigma-clip to disagree with (combine_singleframe's nmatch_good is nmatch
+    # minus its flux/position clip), so there is nothing to subtract -- but a
+    # downstream nmatch_good/nmatch ratio therefore reads exactly 1.0 on the
+    # bright end and less elsewhere, which is a property of the channel and not
+    # of the stars.
     'nmatch': 'n_frames_fit',
     'nmatch_good': 'n_frames_fit',
-    'std_ra': 'std_ra_fit',
+    # coordinate-RA, to match combine_singleframe's own std_ra convention
+    'std_ra': 'std_ra_coord_fit',
     'std_dec': 'std_dec_fit',
     # the always-present mirrors written for matched rows just above the
     # branch; appended rows get them here so both paths agree
