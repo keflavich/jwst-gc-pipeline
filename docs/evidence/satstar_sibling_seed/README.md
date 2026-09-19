@@ -1,8 +1,24 @@
 # Sibling-exposure seeding: the evidence
 
 Backing measurements for issue #925 item 3 and PR #928. All from the delivered
-`jw10678-o132` products; `make_figures.py` regenerates every panel and reads
-nothing it does not also cite.
+`jw10678-o132` products.
+
+**Why no plotting script is committed here.** The script that made these panels
+pairs `match_to_catalog_sky` with `np.median` of the resulting positional
+offsets, which is exactly the shape
+`test_no_adhoc_nn_median_astrometry` forbids — the pattern behind the
+brick-1182 / prop-2221 4″ errors. Clearing it would have required an `ALLOWLIST`
+entry, and the justification available to it is weaker than the existing
+precedents: `build_aperture_correction_table` medians flux ratios and
+`measure_offsets` is protected by a runtime sparsity assertion, whereas this
+script really does median positional offsets. No astrometric correction is
+derived from it and nothing downstream reads it, but a diagnostic figure is a
+poor reason to widen a rule that exists because this pattern kept recurring —
+so the panels ship without it, matching `docs/evidence/satstar_fit_footprint/`.
+
+Every number below states the measurement that produced it, and §2 records the
+sparsity control (random positions over the same footprint land 207 mas from the
+nearest star) that is the condition the rule cares about.
 
 ## 1. The gap — `coverage_gap.png`
 
