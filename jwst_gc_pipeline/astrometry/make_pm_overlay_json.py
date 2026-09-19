@@ -16,6 +16,7 @@ Example:
 """
 import argparse
 import json
+import os
 from astropy.table import Table
 
 
@@ -48,12 +49,20 @@ def make_overlay_json(pm_fits, out_path, name, mag_key='mag_instr',
         },
         'sources': sources,
     }
-    with open(out_path, 'w') as f:
-        # allow_nan=False: a non-finite value would otherwise emit a bare
-        # NaN/Infinity token that JSON.parse rejects, taking out the whole
-        # overlay for one bad source instead of failing here, at build time,
-        # where it can be traced back to which row produced it.
-        json.dump(doc, f, allow_nan=False)
+    # allow_nan=False: a non-finite value would otherwise emit a bare
+    # NaN/Infinity token that JSON.parse rejects, taking out the whole
+    # overlay for one bad source instead of failing here, at build time,
+    # where it can be traced back to which row produced it. Serialize to a
+    # string FIRST so that raise happens before anything is touched on disk
+    # -- writing straight into out_path with 'w' truncates immediately, so a
+    # NaN partway through would leave a truncated fragment at the live
+    # overlay's path instead of failing cleanly, replacing a working file
+    # with a broken one exactly as noisily as it was trying not to.
+    payload = json.dumps(doc, allow_nan=False)
+    tmp_path = out_path + '.tmp'
+    with open(tmp_path, 'w') as f:
+        f.write(payload)
+    os.replace(tmp_path, out_path)
     if verbose:
         print('wrote', out_path)
     return doc
