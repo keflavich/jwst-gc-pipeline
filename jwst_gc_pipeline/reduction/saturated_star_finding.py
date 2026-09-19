@@ -431,7 +431,8 @@ def _resolve_satstar_severity_floor(filtername, explicit=None):
 def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                          spike_merge_gap=0, spike_merge_ratio=3.0,
                          sat_data_floor=0.0, severity_floor=0.0,
-                         partner_xy=None, partner_frac=0.25):
+                         partner_xy=None, partner_frac=0.25,
+                         sibling_xy=None, sibling_radius_px=None):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -737,6 +738,54 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                   f"(data > {partner_frac:g} x {severity_floor:g}) "
                   f"-> nsources={nsource}", flush=True)
 
+    # SIBLING-EXPOSURE SEEDING (#925 item 3): positions where the SAME star in
+    # the SAME band was measured in OTHER exposures of this observation.
+    #
+    # o132: 15.3% (F480M) / 14.7% (F212N) of star-exposures are covered by an
+    # exposure that produced no satstar row there, and roughly 70% of the
+    # single-measurement stars are covered by more than one exposure.  Those
+    # stars therefore have no position scatter and no averaging, purely because
+    # this exposure's DQ/severity state fell the other side of a threshold that
+    # the star straddles.
+    #
+    # Unlike every seeding block above, this one applies NO amplitude
+    # threshold.  The whole point is the exposure where the star is NOT
+    # saturated: requiring a bright pixel here would re-impose the condition
+    # that created the gap.  Seeding without an amplitude test means the
+    # component often has no suppressed core at all, so the amplitude-derived
+    # mask comes out empty and the "wing fit" degrades to an ordinary PSF fit
+    # -- which is the correct measurement for an unsaturated star, and is why
+    # these rows are POSITION-ONLY: they join the position ensemble and are
+    # barred from the flux (see position_only in the output table).
+    if sibling_xy is not None and len(sibling_xy):
+        _sib_r = (int(sibling_radius_px) if sibling_radius_px is not None
+                  else int(os.environ.get('SATSTAR_SIBLING_SEED_RADIUS_PX', 3)))
+        sci_ps = np.asarray(fitsdata['SCI'].data, dtype=float)
+        _ny, _nx = sci_ps.shape
+        _yy, _xx = np.ogrid[-_sib_r:_sib_r + 1, -_sib_r:_sib_r + 1]
+        _disc = (_xx**2 + _yy**2) <= _sib_r**2
+        _smask = np.zeros_like(saturated)
+        _n_sib = 0
+        for _px, _py in sibling_xy:
+            _ix, _iy = int(round(float(_px))), int(round(float(_py)))
+            if not (0 <= _iy < _ny and 0 <= _ix < _nx):
+                continue
+            _y0, _y1 = max(_iy - _sib_r, 0), min(_iy + _sib_r + 1, _ny)
+            _x0, _x1 = max(_ix - _sib_r, 0), min(_ix + _sib_r + 1, _nx)
+            _sub = _disc[_y0 - (_iy - _sib_r):_y1 - (_iy - _sib_r),
+                         _x0 - (_ix - _sib_r):_x1 - (_ix - _sib_r)]
+            _new = _sub & (~saturated[_y0:_y1, _x0:_x1])
+            if _new.any():
+                _smask[_y0:_y1, _x0:_x1] |= _new
+                _n_sib += 1
+        if _smask.any():
+            saturated = saturated | _smask
+            _kind_img[_smask & (_kind_img == 0)] = 5
+            sources, nsource = label(saturated)
+            print(f"Saturated starfinding: sibling-exposure seeding added "
+                  f"{_n_sib} position-only seed(s) at r={_sib_r} px "
+                  f"-> nsources={nsource}", flush=True)
+
     if nsource == 0:
         # Nothing DQ-flagged and nothing seeded: empty result (the logic
         # below cannot take an empty label set).
@@ -783,7 +832,12 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     coms = center_of_mass(saturated, labels=sources, index=np.arange(nsource)+1)
 
     # Resolve per-component seed provenance (min nonzero kind -> DQ wins).
-    _kind_names = {1: 'dqsat', 2: 'peak', 3: 'subfloor', 4: 'partner'}
+    # min nonzero kind wins, so a sibling seed that lands on a component this
+    # exposure ALSO saw as saturated reports the stronger provenance and keeps
+    # its flux; 'sibling' means the sibling evidence is the only reason this
+    # component exists here, which is exactly the position-only case.
+    _kind_names = {1: 'dqsat', 2: 'peak', 3: 'subfloor', 4: 'partner',
+                   5: 'sibling'}
     if nsource:
         _kmin = ndimage.minimum(
             np.where(_kind_img > 0, _kind_img, np.uint8(255)),
@@ -1907,7 +1961,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None,
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, sibling_sky=None,
                         adaptive_fit_shape=False, adaptive_fit_scale=2.83, adaptive_fit_margin=17.0, adaptive_fit_min=21):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -2057,19 +2111,37 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _sev_floor = _resolve_satstar_severity_floor(header.get('FILTER', ''),
                                                  explicit=satstar_severity_floor)
     _partner_xy = None
-    if partner_sky is not None and len(partner_sky):
+    _sibling_xy = None
+    if ((partner_sky is not None and len(partner_sky))
+            or (sibling_sky is not None and len(sibling_sky))):
         try:
             _pw = frame_wcs(fitsdata)
-            _pxs, _pys = _pw.world_to_pixel(partner_sky)
-            _partner_xy = list(zip(np.atleast_1d(_pxs), np.atleast_1d(_pys)))
         except Exception as _pex:
-            print(f"WARNING: partner-seed WCS conversion failed: "
+            print(f"WARNING: seed WCS unavailable: "
                   f"{type(_pex).__name__}: {_pex}", flush=True)
+            _pw = None
+        if _pw is not None:
+            if partner_sky is not None and len(partner_sky):
+                try:
+                    _pxs, _pys = _pw.world_to_pixel(partner_sky)
+                    _partner_xy = list(zip(np.atleast_1d(_pxs),
+                                           np.atleast_1d(_pys)))
+                except Exception as _pex:
+                    print(f"WARNING: partner-seed WCS conversion failed: "
+                          f"{type(_pex).__name__}: {_pex}", flush=True)
+            if sibling_sky is not None and len(sibling_sky):
+                try:
+                    _sxs, _sys = _pw.world_to_pixel(sibling_sky)
+                    _sibling_xy = list(zip(np.atleast_1d(_sxs),
+                                           np.atleast_1d(_sys)))
+                except Exception as _sex:
+                    print(f"WARNING: sibling-seed WCS conversion failed: "
+                          f"{type(_sex).__name__}: {_sex}", flush=True)
     saturated, sources, coms, _seed_kinds = find_saturated_stars(
         fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
         sat_data_floor=_sat_floor, severity_floor=_sev_floor,
-        partner_xy=_partner_xy)
+        partner_xy=_partner_xy, sibling_xy=_sibling_xy)
 
     # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
     #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
@@ -2462,6 +2534,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         src_label = src['label']
         forced_source = src['forced']
         _seed_kind = src.get('seed_kind', 'forced' if src.get('forced') else 'dqsat')
+        # A sibling-seeded component exists only because OTHER exposures of this
+        # band measured a star here; this exposure saw nothing saturated (a
+        # component this exposure did see keeps the stronger seed kind, since
+        # the minimum nonzero kind wins).  Its position is the measurement we
+        # want, its flux is a wing fit of a star that is not saturated here.
+        _position_only = (_seed_kind == 'sibling')
         _reject_reason = ''
         _implied_diag = np.nan
         _obs_pk_diag = np.nan
@@ -3792,13 +3870,24 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     and np.isfinite(_implied) and _implied < 0.5 * float(_sev_floor)
                     and not (np.isfinite(_obs_pk)
                              and _obs_pk >= 0.5 * float(_sev_floor))):
-                print(f"Satstar severity gate: REJECT fitted 'satstar' whose "
-                      f"model peak {_implied:.0f} MJy/sr cannot reach the "
-                      f"{_sev_floor:g} saturation level (flux_fit={flux:.3g}; "
-                      f"over-flagged unsaturated star -> daophot channel)",
-                      flush=True)
-                accept_source = False
-                _reject_reason = 'implied_peak_gate'
+                if _position_only:
+                    # A sibling seed is EXPECTED to fail this gate: it exists
+                    # precisely because this exposure did not see the star
+                    # saturated.  Rejecting it would throw away the position
+                    # measurement it was created to provide, and keeping its
+                    # flux would be the over-substitution the gate guards
+                    # against -- so keep the row and bar it from the flux.
+                    _vprint(f"Satstar severity gate: sibling-seeded source "
+                            f"kept POSITION-ONLY (model peak {_implied:.0f} "
+                            f"< {_sev_floor:g}; flux barred)")
+                else:
+                    print(f"Satstar severity gate: REJECT fitted 'satstar' whose "
+                          f"model peak {_implied:.0f} MJy/sr cannot reach the "
+                          f"{_sev_floor:g} saturation level (flux_fit={flux:.3g}; "
+                          f"over-flagged unsaturated star -> daophot channel)",
+                          flush=True)
+                    accept_source = False
+                    _reject_reason = 'implied_peak_gate'
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)
@@ -4003,6 +4092,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # Gate-diagnostic columns (persisted for the strip-taper analysis
             # and the pair-consistency merge logic; NaN where not computed).
             result['seed_kind'] = str(_seed_kind)
+            # POSITION-ONLY (#925 item 3): this row's position joins the
+            # cross-exposure ensemble; its flux never reaches the catalog.
+            # merge_catalogs keeps such a row out of flux_med_fit/std_flux_fit,
+            # out of the dedup representative, and out of replace_saturated.
+            result['position_only'] = bool(_position_only)
             result['sat_severity_floor'] = (float(_sev_floor)
                                             if _sev_floor else np.nan)
             result['satstar_implied_peak'] = _implied_diag

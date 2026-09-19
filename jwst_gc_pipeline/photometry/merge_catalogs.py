@@ -2736,6 +2736,14 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     dec = np.asarray(coords.dec.deg, dtype=float)
     flux = (np.asarray(tbl['flux_fit'], dtype=float)[orig]
             if 'flux_fit' in tbl.colnames else np.full(len(orig), np.nan))
+    # POSITION-ONLY rows (sibling-exposure seeds, #925 item 3) are a measurement
+    # of WHERE the star is in an exposure that did not see it saturated.  They
+    # count toward the position ensemble and are barred from the flux, so the
+    # flux reductions below never see them.
+    pos_only = (np.asarray(tbl['position_only'], dtype=bool)[orig]
+                if 'position_only' in tbl.colnames
+                else np.zeros(len(orig), dtype=bool))
+    flux = np.where(pos_only, np.nan, flux)
 
     # ---- level 1: one measurement per (star, exposure) ----
     _, exp_id = np.unique(expkey, return_inverse=True)
@@ -2813,6 +2821,17 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     out['std_dec_fit'] = std_dec
     out['flux_med_fit'] = mean_flux
     out['std_flux_fit'] = std_flux
+    # exposures that measured a usable FLUX, which is <= n_frames_fit whenever
+    # sibling seeds contributed position-only rows
+    out['n_frames_flux_fit'] = np.asarray(n_flux, dtype=np.int32)
+    # A star EVERY exposure saw as position-only was never seen saturated
+    # anywhere in this band, so it has no business in the substitution channel
+    # at all; replace_saturated drops these.  Recomputed from the group rather
+    # than inherited from the representative row, so it does not depend on the
+    # dedup's ordering.
+    n_real = np.bincount(grp, weights=(~pos_only).astype(float),
+                         minlength=n_out)
+    out['position_only'] = n_real < 1
 
     if _satstar_use_ensemble_position():
         old = out['skycoord_fit']
@@ -3001,7 +3020,16 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
     owner = np.full(len(fin_idx), -1, dtype=np.int64)
     kept_local = []
     n_reject_rows = 0
-    for i in np.argsort(-fl):                # brightest first
+    # Brightest first, but a POSITION-ONLY row (sibling-exposure seed, #925
+    # item 3) never claims a group ahead of a real one: it carries a wing fit of
+    # a star this exposure did not see saturated, and the representative row is
+    # what supplies flux_fit downstream.  lexsort's LAST key is primary, so this
+    # is "real rows first, brightest within each class".
+    _pos_only_local = (
+        np.asarray(tbl['position_only'], dtype=bool)[fin_idx]
+        if 'position_only' in tbl.colnames
+        else np.zeros(len(fin_idx), dtype=bool))
+    for i in np.lexsort((-fl, _pos_only_local)):
         if suppressed[i]:
             continue
         R_i = merge_r[i]
@@ -3045,6 +3073,12 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
         print(f"No saturated star catalog found for {filtername}")
         cat.add_column(np.zeros(len(cat), dtype='bool'), name=f'near_saturated_{filtername}')
         return
+    # A star no exposure saw as saturated does not contaminate its neighbours,
+    # so position-only rows (#925 item 3) must not widen this flag either.
+    if 'position_only' in satstar_cat.colnames:
+        _po = np.asarray(satstar_cat['position_only'], dtype=bool)
+        if _po.any():
+            satstar_cat = satstar_cat[~_po]
     satstar_coords = satstar_cat['skycoord_fit']
 
     cat_coords = cat['skycoord']
@@ -3251,6 +3285,20 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         return
 
     print(f"Loaded saturated star catalog for {filtername} with {len(satstar_cat)} rows")
+
+    # POSITION-ONLY stars (#925 item 3): every exposure that measured this star
+    # did so from a sibling seed, so NO exposure of this band saw it saturated.
+    # It has ordinary daophot photometry and must not be substituted or
+    # appended -- its rows exist to give genuinely saturated neighbours their
+    # cross-exposure scatter, not to enter the catalog themselves.
+    if 'position_only' in satstar_cat.colnames:
+        _po = np.asarray(satstar_cat['position_only'], dtype=bool)
+        if _po.any():
+            print(f"  replace_saturated: dropping {int(_po.sum())} of "
+                  f"{len(satstar_cat)} consolidated row(s) seen as saturated in "
+                  f"no exposure (position-only)", flush=True)
+            satstar_cat = satstar_cat[~_po]
+
     satstar_coords = satstar_cat['skycoord_fit']
 
     cat_coords = cat['skycoord']

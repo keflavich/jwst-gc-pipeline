@@ -1963,6 +1963,42 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                 print(f"[manual] partner-band satstar seeds: no {_partner} "
                       f"satstar catalogs found yet (first pass?); seeding "
                       f"skipped", flush=True)
+    # SIBLING-EXPOSURE SEEDS (#925 item 3, --satstar-sibling-seed): the SAME
+    # band's consolidated satstar positions, so an exposure that saw this star
+    # below its saturation threshold still measures it and the star gets a real
+    # cross-exposure position scatter.  o132: 15.3% (F480M) / 14.7% (F212N) of
+    # star-exposures are covered by an exposure that produced no row, and ~70%
+    # of the single-measurement stars are covered by more than one exposure.
+    #
+    # Rows produced this way are POSITION-ONLY: they join the position ensemble
+    # and are barred from flux_fit, the dedup representative and
+    # replace_saturated, so this cannot add photometry to the catalog.
+    #
+    # Seeds come from the PREVIOUS iteration's consolidated catalog (the
+    # pipeline re-runs the finder at every m-token), so no extra pass is needed
+    # and the first pass of a band simply has nothing to seed from.
+    _sibling_sky = None
+    if bool(getattr(options, 'satstar_sibling_seed', False)):
+        from astropy.coordinates import SkyCoord
+        _sc_file = (f'{basepath}/catalogs/'
+                    f'{filtername.lower()}_consolidated_satstar_catalog.fits')
+        if os.path.exists(_sc_file):
+            _st = Table.read(_sc_file)
+            if len(_st) and 'skycoord_fit' in _st.colnames:
+                # Seed only from stars some exposure DID see saturated; seeding
+                # from a position-only row would let the population grow from
+                # its own forced measurements iteration after iteration.
+                if 'position_only' in _st.colnames:
+                    _st = _st[~np.asarray(_st['position_only'], dtype=bool)]
+                if len(_st):
+                    _sibling_sky = SkyCoord(_st['skycoord_fit'])
+                    print(f"[manual] sibling-exposure satstar seeds: "
+                          f"{len(_sibling_sky)} position(s) from "
+                          f"{os.path.basename(_sc_file)}", flush=True)
+        if _sibling_sky is None:
+            print(f"[manual] sibling-exposure satstar seeds: no consolidated "
+                  f"{filtername} catalog yet (first pass?); seeding skipped",
+                  flush=True)
     # LOCK the per-frame satstar position to its stable data-refined seed (flux-
     # only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
     # positions into ~0.25" clusters -> the coadded per-frame satstar model
@@ -1995,6 +2031,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # has no sibling _ramp.fits ZEROFRAME.  See gc2211-zeroframe-satcore-deblend.
         deblend_with_zeroframe=bool(getattr(options, 'deblend_satstars', False)),
         partner_sky=_partner_sky,
+        sibling_sky=_sibling_sky,
         # Saturated-core recovery signature: the satstar CATALOG is cached
         # skip-if-exists, but --satstar-zeroframe-recover / --satstar-ramp-recover
         # change the FIT (they de-saturate the core data before the wing fit).
