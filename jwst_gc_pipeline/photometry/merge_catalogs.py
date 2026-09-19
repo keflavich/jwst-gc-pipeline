@@ -860,6 +860,50 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print(f"  Phase 2 [{_ci}] column {key!r}: DONE (std {time.time()-_t_mean:.1f}s, "
               f"total {time.time()-_t0:.1f}s)", flush=True)
 
+    # --- overshoot forced refit: carry the per-frame flag to the source ---
+    # ``forced_refit`` marks a fit redone because a brighter neighbour's model
+    # overshot this source (``cataloging.py``, the 1.2x overshoot pass).  Those
+    # magnitudes carry a measured bias: injected stars 4-14 px from a bright
+    # neighbour come back 0.31/0.44/0.76 mag too BRIGHT at 14.5-15.5, 15.5-16.5
+    # and 16.5-17.5 on refit rows, against 0.01-0.05 mag on rows the refit left
+    # alone and +0.002 mag for isolated stars (#932, measured on o132 F480M).
+    # Phase 2's inverse-variance mean is the wrong summary for a flag, so the
+    # fraction is counted over the frames that contributed a row -- unweighted,
+    # so it reads as "how much of this magnitude came from the refit".  Without
+    # it the merged catalog has no way to isolate the affected rows: the
+    # per-frame position scatter cannot show them either (see std_ra/std_dec
+    # above), and the flag existed only per frame before #931.
+    if any('forced_refit' in _t.colnames for _t in tbls):
+        _fr = np.zeros((n_src, n_tbl), dtype=bool)
+        _fr_seen = np.zeros((n_src, n_tbl), dtype=bool)
+        for ii, tbl in enumerate(tbls):
+            if 'forced_refit' not in tbl.colnames:
+                continue
+            keep = saved_keep[ii]
+            mi = saved_match_inds[ii]
+            _fr[mi[keep], ii] = np.asarray(tbl['forced_refit'], dtype=bool)[keep]
+            _fr_seen[mi[keep], ii] = True
+        _n_forced = _fr.sum(axis=1)
+        _n_seen = _fr_seen.sum(axis=1)
+        newtbl['forced_refit_nframes'] = _n_forced.astype('int16')
+        newtbl['forced_refit_frac'] = np.where(
+            _n_seen > 0, _n_forced / np.maximum(_n_seen, 1), np.nan).astype('float32')
+        newtbl.meta['forced_refit_frac'] = (
+            'fraction of the frames contributing to this source whose fit came '
+            'from the overshoot forced refit; those fluxes read too bright '
+            '(#932).  The denominator counts only frames whose catalog carries '
+            'the flag: a frame from a run predating it recorded no refits, so '
+            'counting it as "not refit" would dilute the fraction and understate '
+            'the contamination.  NaN when no contributing frame carried it.')
+        newtbl.meta['forced_refit_nframes'] = (
+            'number of contributing frames whose fit came from the overshoot '
+            'forced refit')
+        print(f"forced_refit: {int((_n_forced > 0).sum())} of {n_src} source(s) "
+              f"have >=1 forced-refit frame; "
+              f"{int((_fr_seen.sum(axis=1) > 0).sum())} source(s) have the flag "
+              f"on at least one frame", flush=True)
+        del _fr, _fr_seen
+
     # --- residual-footprint background: dedicated inverse-variance combine ---
     # Sigma-clipped across frames, weighted by npix/rms**2 (the inverse variance
     # of each footprint's MEAN), not by flux error.  See
@@ -1702,6 +1746,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                 'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                 'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
                 'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
+                'forced_refit_frac', 'forced_refit_nframes',
                 f'{flux_error_colname}_prop'):
         if key in merged_exposure_table.colnames:
             minimal_version[key.split("_avg")[0]] = merged_exposure_table[key]
