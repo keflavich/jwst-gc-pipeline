@@ -5,7 +5,7 @@ per-exposure satstar catalogs sit in the same ``{FILTER}/pipeline`` directory.
 ``load_satstar_catalog`` globbed all of them for every tile's merge, and
 ``replace_saturated`` appends each unmatched satstar as a new row, so a tile's
 merged catalog carried the whole program's saturated stars.  Measured on o132
-m8: F480M 11.5-12.0 had 3,604 rows outside the tile against 350 inside, and
+m8: F480M 11.5-12.0 had 3,830 rows outside the tile's exposures against 124 inside, and
 36-49% of every tile's rows were other tiles' stars.
 
 These tests pin the fix: a scoped merge reads only its own observation's
@@ -370,3 +370,40 @@ def test_cross_band_merge_forwards_the_scope(tmp_path, monkeypatch):
     assert calls['satstar_field'] == '001'
     assert MC.satstar_obs_scope(calls['satstar_proposal_id'],
                                 calls['satstar_field']) == '_o001'
+
+
+def _write_seed_cache(path, ra):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    Table({'skycoord_fit': SkyCoord([ra] * u.deg, [DEC0] * u.deg)}).write(path)
+
+
+def test_sibling_seed_reads_the_observations_own_cache(tmp_path):
+    """The opt-in sibling-exposure seed (``--satstar-sibling-seed``) reads the
+    consolidated cache.  A scoped merge writes ``{filt}_oNNN_...``, so the seed
+    must read that name; the unscoped (program-wide) file on a shared tree is
+    other tiles' stars.  Unscoped callers read the unchanged name."""
+    base = str(tmp_path)
+    _write_seed_cache(MC.consolidated_satstar_cache_path(base, 'F480M'), RA0)
+    _write_seed_cache(MC.consolidated_satstar_cache_path(base, 'F480M', '_o132'),
+                      RA0 + 0.01)
+    scoped = MC.satstar_sibling_seed_positions('F480M', base, verbose=False,
+                                               proposal_id='10678', field='132')
+    assert scoped.ra.deg[0] == pytest.approx(RA0 + 0.01)
+    unscoped = MC.satstar_sibling_seed_positions('F480M', base, verbose=False)
+    assert unscoped.ra.deg[0] == pytest.approx(RA0)
+    single = MC.satstar_sibling_seed_positions('F480M', base, verbose=False,
+                                               proposal_id='2221', field='001')
+    assert single.ra.deg[0] == pytest.approx(RA0)
+
+
+def test_partner_seed_reader_is_scoped():
+    """The partner-band seed in ``_prepare_frame_for_photometry`` resolves its
+    cache through the scoped helpers (a source check: the reader sits in the
+    middle of the frame-preparation function)."""
+    import inspect
+
+    from jwst_gc_pipeline.photometry import cataloging as C
+    src = inspect.getsource(C._prepare_frame_for_photometry)
+    assert "_partner}_consolidated_satstar_catalog.fits" not in src
+    assert 'consolidated_satstar_cache_path(basepath, _partner, _pscope)' in src
+    assert 'satstar_sibling_seed_positions(\n            filtername, basepath, proposal_id=proposal_id, field=field)' in src

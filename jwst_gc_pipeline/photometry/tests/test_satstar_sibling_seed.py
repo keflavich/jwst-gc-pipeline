@@ -206,7 +206,10 @@ def test_sibling_seeding_is_plumbed_end_to_end():
                    fromlist=['cataloging']).__file__).read()
     assert 'sibling_sky=_sibling_sky,' in cat_src
     # the selection itself is exercised behaviourally below, against real files
-    assert 'satstar_sibling_seed_positions(filtername, basepath)' in cat_src
+    # observation-scoped on a shared tree (#925 fix 1)
+    assert ('satstar_sibling_seed_positions(\n'
+            '            filtername, basepath, proposal_id=proposal_id, '
+            'field=field)') in cat_src
 
 
 # --------------------------------------------------------------------------

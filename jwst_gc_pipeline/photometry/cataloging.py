@@ -2105,11 +2105,19 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             _pmap[_b] = _a
         _partner = _pmap.get(filtername.lower())
         if _partner:
-            _pc = (f'{basepath}/catalogs/'
-                   f'{_partner}_consolidated_satstar_catalog.fits')
+            from jwst_gc_pipeline.photometry.merge_catalogs import (
+                consolidated_satstar_cache_path, satstar_catalog_in_observation,
+                satstar_obs_scope)
+            # Observation-scoped on a tree shared by several observations
+            # (#925); unscoped fields read the same paths as before.
+            _pscope = satstar_obs_scope(proposal_id, field)
+            _pc = consolidated_satstar_cache_path(basepath, _partner, _pscope)
             _pfiles = ([_pc] if os.path.exists(_pc) else
                        sorted(glob.glob(f'{basepath}/{_partner.upper()}/'
                                         f'pipeline/*_m*_satstar_catalog.fits')))
+            if _pscope and _pfiles != [_pc]:
+                _pfiles = [f for f in _pfiles if satstar_catalog_in_observation(
+                    f, proposal_id, _pscope)]
             _parts = []
             for _pf in _pfiles:
                 try:
@@ -2149,7 +2157,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             satstar_sibling_seed_positions)
         # Selection (and the position-only exclusion that bounds it) lives in
         # merge_catalogs so it is testable without a pipeline run.
-        _sibling_sky = satstar_sibling_seed_positions(filtername, basepath)
+        _sibling_sky = satstar_sibling_seed_positions(
+            filtername, basepath, proposal_id=proposal_id, field=field)
     # LOCK the per-frame satstar position to its stable data-refined seed (flux-
     # only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
     # positions into ~0.25" clusters -> the coadded per-frame satstar model

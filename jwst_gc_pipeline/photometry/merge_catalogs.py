@@ -2331,7 +2331,7 @@ def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
 # EVERY observation's per-exposure satstar catalogs to every observation's merge,
 # and replace_saturated appends each unmatched satstar as a new row.  Measured on
 # gc-treasury o132 m8: 36-49% of every tile's rows were other tiles' saturated
-# stars (F480M 11.5-12.0: 3,604 rows outside o132's footprint vs 350 inside).
+# stars (F480M 11.5-12.0: 3,830 rows outside the union of o132's exposures vs 124 inside).
 # The rule for which trees are shared is the per-frame token's rule
 # (naming.perframe_obs_token): an observation whose per-frame catalogs carry
 # ``_o{obs}`` shares its tree with other observations, so its satstar catalogs
@@ -3164,7 +3164,8 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     return out
 
 
-def satstar_sibling_seed_positions(filtername, basepath, verbose=True):
+def satstar_sibling_seed_positions(filtername, basepath, verbose=True,
+                                   proposal_id=None, field=None):
     """Positions to seed this band's satstar fits at in EVERY exposure (#925).
 
     The band's own consolidated catalog, restricted to stars some exposure DID
@@ -3178,9 +3179,13 @@ def satstar_sibling_seed_positions(filtername, basepath, verbose=True):
     Returns ``None`` when there is nothing to seed from -- no consolidated
     catalog yet (a band's first pass), an empty one, or one whose every row is
     position-only.  Callers treat that as "seeding skipped", not an error.
+
+    ``proposal_id``/``field`` select the observation's own consolidated cache
+    on a tree shared by several observations (see ``satstar_obs_scope``);
+    omitted, the unscoped cache is read as before.
     """
-    path = (f'{basepath}/catalogs/'
-            f'{str(filtername).lower()}_consolidated_satstar_catalog.fits')
+    path = consolidated_satstar_cache_path(
+        basepath, str(filtername), satstar_obs_scope(proposal_id, field))
     if not os.path.exists(path):
         if verbose:
             print(f"sibling-exposure satstar seeds: no consolidated "
