@@ -1,0 +1,107 @@
+"""
+Driver: build a JWST x GNS x VIRAC2 proper-motion catalog for one JWST m7 field.
+
+Example:
+    python -m jwst_gc_pipeline.astrometry.build_multiepoch_pm \
+        --m7 /orange/.../catalogs/basic_..._m7_o023.fits \
+        --virac /orange/.../refcat/virac2_gc2211.fits \
+        --gns   /orange/.../refcat/gns_gc2211.fits \
+        --out   /orange/.../catalogs/pm_o023_jwst_gns_virac.fits
+"""
+import argparse
+import numpy as np
+from . import multiepoch_pm as M
+
+
+def build_for_field(m7_path, virac_path, gns_path, out_path,
+                    ref_filter='f200w', match_radius=0.12, require_jwst=True,
+                    verbose=True):
+    jwst = M.load_jwst_m7(m7_path, ref_filter=ref_filter)
+    virac = M.load_ref(virac_path, 'virac')
+    gns = M.load_ref(gns_path, 'gns')
+    # restrict the (large, region-wide) reference catalogs to this field's
+    # footprint. pm['virac_idx'] (set in build_pm_catalog below) indexes THIS
+    # restricted array, not the full one load_ref would give back on a
+    # second call -- _validate_vs_virac must be handed this same object, or
+    # every row compares against an unrelated star (found by a re-review:
+    # 0% agreement on a synthetic check, since nothing keeps the restricted
+    # index in bounds of the full array from looking valid).
+    virac = M.restrict(virac, jwst['sc'])
+    gns = M.restrict(gns, jwst['sc'])
+    if verbose:
+        print(f"  JWST n={jwst['n']} (epoch {jwst['epoch']:.2f})  "
+              f"VIRAC2 n={virac['n']}  GNS n={gns['n']}", flush=True)
+    # put GNS + JWST on the VIRAC2/Gaia frame
+    gsc, gd = M.shift_to_virac_frame(gns, virac, M.EPOCH_GNS)
+    gns['sc'] = gsc
+    jsc, jd = M.shift_to_virac_frame(jwst, virac, jwst['epoch'])
+    jwst['sc'] = jsc
+    if verbose:
+        print(f"  GNS->VIRAC: {gd['n_kept']} stars, dDec={gd['med_dy_mas']:.1f} mas, "
+              f"resid={gd['rms_resid_mas']:.1f} mas", flush=True)
+        print(f"  JWST->VIRAC: {jd['n_kept']} stars, dDec={jd['med_dy_mas']:.1f} mas, "
+              f"resid={jd['rms_resid_mas']:.1f} mas", flush=True)
+    pm = M.build_pm_catalog(jwst, virac, gns, match_radius=match_radius,
+                            require_jwst=require_jwst)
+    pm.meta['m7_catalog'] = m7_path
+    pm.meta['ref_filter'] = ref_filter
+    pm.write(out_path, overwrite=True)
+    g = np.isfinite(pm['pm_ra']) & np.isfinite(pm['pm_dec'])
+    if verbose:
+        n3 = int(((pm['n_epoch'] == 3) & g).sum())
+        print(f"  PM: {int(g.sum())} stars ({n3} 3-epoch); "
+              f"pm_tot med={np.nanmedian(pm['pm_tot'][g]):.1f} mas/yr -> {out_path}",
+              flush=True)
+    return pm, virac
+
+
+def _validate_vs_virac(pm, virac):
+    """Quick sanity: our PM vs VIRAC2's own pm for the same stars.
+
+    ``virac`` MUST be the same (restrict()-ed) dict build_pm_catalog was
+    called with, not a fresh M.load_ref(path, 'virac') -- pm['virac_idx'] is
+    an index into THAT array (build_pm_catalog's master list IS VIRAC's
+    rows, restricted to the field footprint; 'v{i}' names which one), and
+    the full unrestricted catalog has different rows at the same indices.
+    Caught by a second review: re-loading from the path here silently
+    compared every star against an unrelated one (0% agreement on a
+    synthetic check) with nothing to raise, since a restricted-array index
+    is always in bounds of the larger full array too.
+
+    Looking VIRAC's own pmRA/pmDE up by this index directly, rather than
+    re-finding the row with a nearest-neighbour sky match, also means there
+    is no dense-NN-median pattern here at all (ASTROMETRY RULE #1): the
+    association is already exact, and re-deriving it approximately by
+    position can only make it worse -- a naive tight-radius rematch is
+    exactly the shape that "confirms agreement it never established" when
+    something upstream is wrong.
+    """
+    g = np.isfinite(pm['pm_ra'])
+    vra, vde = virac['pmra'][pm['virac_idx']], virac['pmde'][pm['virac_idx']]
+    m = g & np.isfinite(vra)
+    dra = pm['pm_ra'][m] - vra[m]
+    dde = pm['pm_dec'][m] - vde[m]
+    rstd = lambda d: float(np.percentile(np.abs(d - np.median(d)), 68) * 1.48)
+    return dict(n=int(m.sum()), med_dra=float(np.median(dra)), std_dra=rstd(dra),
+                med_dde=float(np.median(dde)), std_dde=rstd(dde))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--m7', required=True, help='JWST per-obs m7 cross-band catalog')
+    ap.add_argument('--virac', required=True)
+    ap.add_argument('--gns', required=True)
+    ap.add_argument('--out', required=True)
+    ap.add_argument('--ref-filter', default='f200w')
+    ap.add_argument('--match-radius', type=float, default=0.12)
+    ap.add_argument('--validate', action='store_true',
+                    help='print PM-vs-VIRAC2 sanity stats')
+    args = ap.parse_args()
+    pm, virac = build_for_field(args.m7, args.virac, args.gns, args.out,
+                                ref_filter=args.ref_filter, match_radius=args.match_radius)
+    if args.validate:
+        print("  validate vs VIRAC2:", _validate_vs_virac(pm, virac), flush=True)
+
+
+if __name__ == '__main__':
+    main()
