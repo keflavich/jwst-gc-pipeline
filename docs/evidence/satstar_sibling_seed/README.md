@@ -16,9 +16,35 @@ derived from it and nothing downstream reads it, but a diagnostic figure is a
 poor reason to widen a rule that exists because this pattern kept recurring —
 so the panels ship without it, matching `docs/evidence/satstar_fit_footprint/`.
 
-Every number below states the measurement that produced it, and §2 records the
-sparsity control (random positions over the same footprint land 207 mas from the
-nearest star) that is the condition the rule cares about.
+Note for anyone revisiting that choice: the measurement below shows the F480M
+reference is sparse by the guard's own test (5.017″ against a 3.0″ threshold),
+so an `ALLOWLIST` entry here would have rested on the same footing as
+`measure_offsets` — legitimate because the reference is sparse — rather than on
+the weaker ground assumed when the script was dropped. The entry would still
+need human review, and the panels do not need the script to be read; the
+regenerability trade is open rather than settled.
+
+Every number below states the measurement that produced it.
+
+On whether the analysis itself was sound: the guard's criterion is the
+REFERENCE catalog's own median nearest-neighbour spacing
+(`match_to_catalog_sky(nthneighbor=2)`), against `max(3", 3 x match_radius)` =
+3.0" here. Measured on the consolidated satstar catalogs for `o132`:
+
+| filter | n | own median NN spacing | vs 3.0" threshold |
+|---|---|---|---|
+| F480M | 435 | **5.017″** | sparse — the rule does not fire |
+| F212N | 4014 | 1.632″ | dense |
+
+Every offset measurement in §2 and §3 is F480M-only, where the reference is
+sparse by the rule's own test with room to spare. The F212N panels in §1 involve
+no matching at all — coverage is a WCS footprint test — so nothing here medians
+offsets against the dense catalog.
+
+The 207 mas figure quoted in §2 is a different statistic: the distance from a
+RANDOM position to the nearest star, i.e. the chance-coincidence scale that lets
+a reader judge which offsets could be accidental. It is not a sparsity test and
+should not be read as one.
 
 ## 1. The gap — `coverage_gap.png`
 
@@ -59,6 +85,12 @@ Offset of each per-exposure fit from its own star's accepted-only ensemble mean:
 | `implied_peak_gate` rejections | 720 | 27.17 mas | 78.19 | 240.78 |
 | `fit_quality_gate` rejections | 774 | 223.44 mas | 243.16 | 283.74 |
 | random positions, same footprint | — | 207.0 mas | 271.2 | 296.6 |
+
+The last row is the **chance-coincidence scale**, not a sparsity test (see the
+note at the top): a random position lands 207 mas from the nearest star, so an
+offset near that value could be an accidental pairing while one at 2.27 mas
+could not. The reference's own NN spacing — the quantity the rule tests — is
+5.017″ for F480M.
 
 Twelve times worse for the most defensible class. Folding a 27 mas population
 into a 2.27 mas ensemble degrades the mean it is meant to improve — sufficient
