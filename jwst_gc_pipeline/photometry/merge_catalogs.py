@@ -2233,6 +2233,45 @@ def _ensure_satstar_aperture_photometry(cat, filtername, target, basepath,
 _SATSTAR_STALE_SKY_REPORT_MAS = 5.0
 
 
+_SATSTAR_EXPKEY_RE = re.compile(r'^(jw\d+_\d+_\d+_[A-Za-z0-9]+)')
+_SATSTAR_ITER_RE = re.compile(r'_(m\d+)_satstar_catalog\.fits$')
+
+#: Name of the per-row exposure key added at consolidation time.
+_SATSTAR_EXPKEY_COL = 'satstar_expkey'
+#: Name of the per-row pipeline-iteration token added at consolidation time.
+_SATSTAR_ITER_COL = 'satstar_itertoken'
+
+
+def satstar_exposure_key(filename):
+    """Exposure identity of one per-exposure satstar catalog.
+
+    ``jw10678132001_02101_00001_nrcalong_destreak_o132_crf_m12_satstar_catalog.fits``
+    -> ``jw10678132001_02101_00001_nrcalong``: observation + visit group +
+    exposure number + detector, which is exactly one image.
+
+    The same exposure also contributes one catalog per pipeline ITERATION
+    (``_m3``/``_m4``/.../``_m12``).  Those are re-fits of the same pixels, not
+    independent samples of the star, so :func:`_dedup_satstar_catalog` collapses
+    each exposure's iterations to one measurement before averaging across
+    exposures -- that is what makes the reported N a count of IMAGES.
+
+    Falls back to the basename with the iteration token stripped when the name
+    does not follow the JWST convention (cutout runs, hand-made products); that
+    still separates exposures as long as they have distinct filenames.
+    """
+    base = os.path.basename(str(filename))
+    match = _SATSTAR_EXPKEY_RE.match(base)
+    if match is not None:
+        return match.group(1)
+    return _SATSTAR_ITER_RE.sub('', base)
+
+
+def satstar_iteration_token(filename):
+    """``m3``/``m12``/... for one per-exposure satstar catalog, else ``''``."""
+    match = _SATSTAR_ITER_RE.search(os.path.basename(str(filename)))
+    return match.group(1) if match is not None else ''
+
+
 def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
     """Read one per-exposure satstar catalog with its sky columns re-projected
     through its frame's CURRENT GWCS.
@@ -2249,6 +2288,12 @@ def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
     the frame WCS is read once per frame, not once per catalog.
     """
     tbl = Table.read(filename)
+    # Provenance for the ensemble statistics: which IMAGE this row was measured
+    # in, and which pipeline iteration produced it.  Stamped here (the only
+    # place that still knows the filename) and consumed by
+    # _dedup_satstar_catalog, which otherwise sees a filename-free vstack.
+    tbl[_SATSTAR_EXPKEY_COL] = np.full(len(tbl), satstar_exposure_key(filename))
+    tbl[_SATSTAR_ITER_COL] = np.full(len(tbl), satstar_iteration_token(filename))
     frame = frame_path_for_satstar_catalog(filename)
     if frame is None:
         refresh_satstar_skycoords(tbl, catalog_path=filename)
@@ -2457,7 +2502,8 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp4'  # fp4: sky columns re-projected onto the current GWCS (#193)
+_SATSTAR_DEDUP_ALG = 'fp5'  # fp5: per-exposure ensemble statistics on the kept row (#925)
+#                              fp4: sky columns re-projected onto the current GWCS (#193)
 
 
 # Wide second-chance radius for matching a fitted satstar to its daophot row
@@ -2620,6 +2666,179 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     return out
 
 
+#: Ensemble columns added to the consolidated satstar catalog by
+#: :func:`_attach_satstar_ensemble`.  ``replace_saturated`` maps these onto the
+#: merged catalog's own astrometry schema, so keep the two in step.
+SATSTAR_ENSEMBLE_COLUMNS = ('n_frames_fit', 'n_meas_fit', 'std_ra_fit',
+                            'std_ra_coord_fit', 'std_dec_fit', 'flux_med_fit',
+                            'std_flux_fit')
+
+
+def _satstar_use_ensemble_position():
+    """Adopt the across-exposure mean position for the consolidated row.
+
+    On by default; ``SATSTAR_ENSEMBLE_POSITION=0`` keeps the brightest-frame
+    position (the pre-#925 behaviour) for bisecting.
+    """
+    return bool(int(os.environ.get('SATSTAR_ENSEMBLE_POSITION', 1)))
+
+
+def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
+    """Summarise each star's per-exposure satstar fits onto its kept row.
+
+    ``_dedup_satstar_catalog`` keeps one row per physical star and drops the
+    rest.  The dropped rows are that star measured in the OTHER exposures --
+    o132 F480M has a median of 4 per star across 12 exposures, repeating to
+    3 mas, and F212N 3 across 48 repeating to 1 mas -- so discarding them threw
+    away both a sqrt(N) position improvement and the only scatter estimate the
+    bright end of the catalog could ever have.  Issue #925: every substituted
+    row in the delivered m8 catalogs carries ``std_ra`` NaN and ``nmatch_good``
+    INT32_MIN because nothing upstream ever computed them.
+
+    Two-level reduction, because the per-exposure catalogs are globbed across
+    pipeline ITERATIONS as well as exposures (``_m3``.. ``_m12``, a median of 6
+    per star): collapse each exposure's iterations to one measurement first,
+    then average across exposures.  N therefore counts IMAGES, and the reported
+    scatter is between images rather than between re-fits of the same pixels.
+
+    Adds ``n_frames_fit``, ``n_meas_fit``, ``std_ra_fit``/``std_dec_fit``
+    (degrees, ddof=1, NaN below two exposures), and ``flux_med_fit`` /
+    ``std_flux_fit``.  ``flux_fit`` is deliberately LEFT ALONE: the
+    brightest-of-N flux is a photometric-continuity question (#925 items 4-5)
+    handled separately, and this function's job is to publish the ensemble it
+    needs, not to change photometry under it.
+    """
+    n_out = len(out)
+    if n_out == 0:
+        return out
+
+    grp_of_local = np.full(len(fin_idx), -1, dtype=np.int64)
+    has_owner = owner >= 0
+    if has_owner.any():
+        # owner is in fin_idx-local space; map keeper -> row number in `out`
+        grp_of_local[has_owner] = np.searchsorted(kept_sorted,
+                                                  fin_idx[owner[has_owner]])
+    member = np.where(grp_of_local >= 0)[0]
+    if len(member) == 0:
+        return out
+    grp = grp_of_local[member]
+    orig = fin_idx[member]
+
+    if _SATSTAR_EXPKEY_COL in tbl.colnames:
+        expkey = np.asarray(tbl[_SATSTAR_EXPKEY_COL], dtype=str)[orig]
+    else:
+        # Legacy input with no provenance stamp: every row is its own
+        # exposure.  N is then an upper bound, which is why the stamp exists.
+        expkey = orig.astype(str)
+
+    coords = tbl['skycoord_fit'][orig]
+    ra = np.asarray(coords.ra.deg, dtype=float)
+    dec = np.asarray(coords.dec.deg, dtype=float)
+    flux = (np.asarray(tbl['flux_fit'], dtype=float)[orig]
+            if 'flux_fit' in tbl.colnames else np.full(len(orig), np.nan))
+
+    # ---- level 1: one measurement per (star, exposure) ----
+    _, exp_id = np.unique(expkey, return_inverse=True)
+    exp_id = np.ravel(exp_id).astype(np.int64)
+    # Scalar composite key rather than np.unique(..., axis=1): the axis form's
+    # inverse shape has changed across numpy versions, and this is both stable
+    # and cheaper.
+    _, per_exp = np.unique(grp * (exp_id.max() + 1) + exp_id,
+                           return_inverse=True)
+    per_exp = np.ravel(per_exp).astype(np.int64)
+    n_exp_rows = int(per_exp.max()) + 1
+    exp_grp = np.zeros(n_exp_rows, dtype=np.int64)
+    exp_grp[per_exp] = grp
+    exp_n = np.bincount(per_exp, minlength=n_exp_rows).astype(float)
+    exp_ra = np.bincount(per_exp, weights=ra, minlength=n_exp_rows) / exp_n
+    exp_dec = np.bincount(per_exp, weights=dec, minlength=n_exp_rows) / exp_n
+    _fl_ok = np.isfinite(flux)
+    exp_fn = np.bincount(per_exp, weights=_fl_ok.astype(float),
+                         minlength=n_exp_rows)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        exp_flux = np.where(
+            exp_fn > 0,
+            np.bincount(per_exp, weights=np.where(_fl_ok, flux, 0.0),
+                        minlength=n_exp_rows) / np.where(exp_fn > 0, exp_fn, 1.0),
+            np.nan)
+
+    # ---- level 2: across exposures ----
+    n_frames = np.bincount(exp_grp, minlength=n_out).astype(np.int32)
+    n_meas = np.bincount(grp, minlength=n_out).astype(np.int32)
+    inv_n = 1.0 / np.maximum(n_frames, 1)
+    mean_ra = np.bincount(exp_grp, weights=exp_ra, minlength=n_out) * inv_n
+    mean_dec = np.bincount(exp_grp, weights=exp_dec, minlength=n_out) * inv_n
+    # ddof=1 sample std, computed as sum of squared deviations about the mean
+    # so it never depends on the group ordering
+    d_ra = (exp_ra - mean_ra[exp_grp]) * np.cos(np.radians(exp_dec))
+    d_dec = exp_dec - mean_dec[exp_grp]
+    ss_ra = np.bincount(exp_grp, weights=d_ra**2, minlength=n_out)
+    ss_dec = np.bincount(exp_grp, weights=d_dec**2, minlength=n_out)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        denom = np.where(n_frames > 1, n_frames - 1, np.nan)
+        std_ra = np.sqrt(ss_ra / denom)
+        std_dec = np.sqrt(ss_dec / denom)
+
+    _ok = np.isfinite(exp_flux)
+    n_flux = np.bincount(exp_grp, weights=_ok.astype(float), minlength=n_out)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        mean_flux = np.where(
+            n_flux > 0,
+            np.bincount(exp_grp, weights=np.where(_ok, exp_flux, 0.0),
+                        minlength=n_out) / np.where(n_flux > 0, n_flux, 1.0),
+            np.nan)
+        d_flux = np.where(_ok, exp_flux - mean_flux[exp_grp], 0.0)
+        std_flux = np.sqrt(np.bincount(exp_grp, weights=d_flux**2,
+                                       minlength=n_out)
+                           / np.where(n_flux > 1, n_flux - 1, np.nan))
+
+    out['n_frames_fit'] = n_frames
+    out['n_meas_fit'] = n_meas
+    out['std_ra_fit'] = std_ra
+    # SAME QUANTITY, COORDINATE-RA CONVENTION.  ``std_ra_fit`` above is a true
+    # angle on the sky (the cos(dec) factor is in d_ra).  The merged catalog's
+    # own ``std_ra``, written by combine_singleframe, is the scatter of the RA
+    # COORDINATE with no cos(dec) -- see the nanaverage of (arr_ra - avg_ra)**2
+    # there.  Writing the on-sky value into that column would make one column
+    # hold two conventions, and the seam would fall exactly on the bright/faint
+    # boundary this change repairs: at dec -28.9 (cos 0.8755) the same 2.00 mas
+    # true scatter reads 2.285 on a daophot row and 2.000 on a satstar row, so a
+    # cut at hypot(std_ra, std_dec) <= 3 mas would reject a daophot row and keep
+    # a satstar row of identical quality.  So feed ``std_ra`` this
+    # coordinate-convention value and keep the on-sky one in ``satstar_std_ra``.
+    with np.errstate(invalid='ignore', divide='ignore'):
+        _cosd = np.cos(np.radians(mean_dec))
+        out['std_ra_coord_fit'] = np.where(np.abs(_cosd) > 1e-12,
+                                           std_ra / _cosd, np.nan)
+    out['std_dec_fit'] = std_dec
+    out['flux_med_fit'] = mean_flux
+    out['std_flux_fit'] = std_flux
+
+    if _satstar_use_ensemble_position():
+        old = out['skycoord_fit']
+        out['skycoord_repr_fit'] = old
+        moved = np.isfinite(mean_ra) & np.isfinite(mean_dec) & (n_frames > 0)
+        new_ra = np.where(moved, mean_ra, old.ra.deg)
+        new_dec = np.where(moved, mean_dec, old.dec.deg)
+        shift_mas = np.hypot((new_ra - old.ra.deg)
+                             * np.cos(np.radians(old.dec.deg)),
+                             new_dec - old.dec.deg) * 3.6e6
+        out['skycoord_fit'] = SkyCoord(new_ra * u.deg, new_dec * u.deg,
+                                       frame=old.frame.name)
+        # The pixel columns (x_fit/y_fit/xcentroid/ycentroid) stay the
+        # representative exposure's: they are detector-frame and no single
+        # detector pixel represents an average over exposures.  Sky is the
+        # ensemble's, pixels are one exposure's, and they now differ by the
+        # shift reported here.
+        _mm = shift_mas[np.isfinite(shift_mas)]
+        if len(_mm):
+            print(f"  satstar ensemble: {int((n_frames > 1).sum())}/{n_out} "
+                  f"stars measured in >1 exposure (median N={int(np.median(n_frames))}); "
+                  f"adopted mean position, median shift {np.median(_mm):.1f} mas, "
+                  f"p95 {np.percentile(_mm, 95):.1f} mas", flush=True)
+    return out
+
+
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
     one row (the brightest), so downstream merging doesn't duplicate them.
@@ -2774,6 +2993,12 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
             nbrs[a].append((int(b), float(s)))
 
     suppressed = np.zeros(len(fin_idx), dtype=bool)
+    # Which kept row each absorbed row belongs to.  -1 = not in any group
+    # (only the big-footprint reject leaves rows here).  The absorbed rows are
+    # the SAME STAR measured in other exposures, so this is the ensemble the
+    # statistics below are computed over; before issue #925 they were dropped
+    # without ever being looked at.
+    owner = np.full(len(fin_idx), -1, dtype=np.int64)
     kept_local = []
     n_reject_rows = 0
     for i in np.argsort(-fl):                # brightest first
@@ -2793,11 +3018,13 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
                 n_reject_rows += len(pg)
                 continue
         kept_local.append(i)
+        owner[i] = i
         for (b, s) in nbrs[i]:              # absorb same-position dups + same-component nbrs
             if suppressed[b]:
                 continue
             if s <= base_as or (s <= R_i and _same_component(i, b, s)):
                 suppressed[b] = True
+                owner[b] = i
         suppressed[i] = True
     kept = fin_idx[kept_local]
     n_drop = int(finite.sum()) - len(kept)
@@ -2806,7 +3033,8 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
               f"(merged {n_drop - n_reject_rows} per-frame duplicates within "
               f"footprint radius; rejected {n_reject_rows} big-footprint "
               f"extended-emission pile rows)")
-    return tbl[np.sort(kept)]
+    out = tbl[np.sort(kept)]
+    return _attach_satstar_ensemble(out, tbl, fin_idx, owner, np.sort(kept))
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
@@ -2916,6 +3144,87 @@ def _faint_replacement_veto(catflux, satflux, factor=0.8):
     satflux = np.asarray(satflux, dtype=float)
     return (np.isfinite(catflux) & np.isfinite(satflux)
             & (satflux < factor * catflux))
+
+#: Merged-catalog astrometry column <- consolidated-satstar ensemble column.
+#: A satstar row appended by ``replace_saturated`` is usually the star's ONLY
+#: row in the catalog (its core is blanked in the crf, so daophot never detects
+#: it and there is nothing to overwrite), and it never passes through the
+#: cross-exposure combine that writes these columns for daophot rows.  Before
+#: #925 the append filled them with float NaN regardless of dtype, which puts
+#: INT32_MIN in the int32 count columns: in o132's m8 merged catalog 99.8% of
+#: F480M and 97.0% of F212N substituted rows carry INT32_MIN in nmatch_good
+#: against 0.0% of every other row, and 99.9% / 98.2% carry a NaN std_ra
+#: against 77.9% / 25.4%.
+_SATSTAR_ASTROMETRY_FROM_ENSEMBLE = {
+    # NOTE both counts come from the same source, so a substituted row always
+    # reads nmatch_good == nmatch.  The satstar channel has no per-exposure
+    # sigma-clip to disagree with (combine_singleframe's nmatch_good is nmatch
+    # minus its flux/position clip), so there is nothing to subtract -- but a
+    # downstream nmatch_good/nmatch ratio therefore reads exactly 1.0 on the
+    # bright end and less elsewhere, which is a property of the channel and not
+    # of the stars.
+    'nmatch': 'n_frames_fit',
+    'nmatch_good': 'n_frames_fit',
+    # coordinate-RA, to match combine_singleframe's own std_ra convention
+    'std_ra': 'std_ra_coord_fit',
+    'std_dec': 'std_dec_fit',
+    # the always-present mirrors written for matched rows just above the
+    # branch; appended rows get them here so both paths agree
+    'satstar_nframes': 'n_frames_fit',
+    'satstar_nmeas': 'n_meas_fit',
+    'satstar_std_ra': 'std_ra_fit',
+    'satstar_std_dec': 'std_dec_fit',
+}
+
+
+def _blank_for_dtype(dtype, length):
+    """Neutral fill for a column of ``dtype``: NaN floats, zero counts, False
+    flags, empty strings.  ``np.nan`` cast into an integer column is where
+    INT32_MIN came from, so the dtype has to be consulted."""
+    kind = np.dtype(dtype).kind
+    if kind == 'f':
+        return np.full(length, np.nan, dtype=dtype)
+    if kind in 'iu':
+        return np.zeros(length, dtype=dtype)
+    if kind == 'b':
+        return np.zeros(length, dtype=bool)
+    if kind in 'SU':
+        return np.full(length, '', dtype=dtype)
+    return np.full(length, np.nan)
+
+
+def _fill_satstar_added_columns(satstar_toadd, cat):
+    """Give appended satstar rows every column ``cat`` has.
+
+    Columns with a real satstar equivalent (``_SATSTAR_ASTROMETRY_FROM_ENSEMBLE``)
+    are filled from the ensemble statistics the consolidation measured; the rest
+    get a dtype-appropriate blank.  Mutates ``satstar_toadd`` in place.
+    """
+    n = len(satstar_toadd)
+    n_mapped = 0
+    for colname in cat.colnames:
+        if colname in satstar_toadd.colnames:
+            continue
+        target_dtype = cat[colname].dtype
+        src = _SATSTAR_ASTROMETRY_FROM_ENSEMBLE.get(colname)
+        if src is not None and src in satstar_toadd.colnames:
+            vals = np.asarray(satstar_toadd[src])
+            if np.dtype(target_dtype).kind in 'iu':
+                # n_frames_fit is already a count; guard the cast against NaN
+                vals = np.nan_to_num(np.asarray(vals, dtype=float),
+                                     nan=0.0).astype(target_dtype)
+            else:
+                vals = np.asarray(vals, dtype=target_dtype)
+            satstar_toadd.add_column(vals, name=colname)
+            n_mapped += 1
+        else:
+            satstar_toadd.add_column(_blank_for_dtype(target_dtype, n),
+                                     name=colname)
+    if n and n_mapped:
+        print(f"  replace_saturated: {n} appended satstar row(s) carry "
+              f"{n_mapped} astrometry column(s) from their per-exposure "
+              f"ensemble instead of a NaN fill", flush=True)
+
 
 def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
@@ -3140,6 +3449,24 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             cat['satstar_match_sep'] = np.full(len(cat), np.nan)
         cat['satstar_match_sep'][idx_cat] = _presep
 
+    # Unambiguous per-row record of the satstar ensemble, on EVERY substituted
+    # row rather than only the appended ones.  A row that overwrote a daophot
+    # detection keeps that detection's nmatch/std_ra, which now describe a
+    # position the row no longer holds; these columns describe the position it
+    # does hold.  Zero / NaN on rows with no satstar.
+    _ens_targets = (('satstar_nframes', 'n_frames_fit', np.int32, 0),
+                    ('satstar_nmeas', 'n_meas_fit', np.int32, 0),
+                    ('satstar_std_ra', 'std_ra_fit', float, np.nan),
+                    ('satstar_std_dec', 'std_dec_fit', float, np.nan))
+    for _cname, _sname, _dt, _blank in _ens_targets:
+        if _cname not in cat.colnames:
+            cat[_cname] = np.full(len(cat), _blank, dtype=_dt)
+        if _sname in satstar_cat.colnames and len(idx_cat):
+            _v = np.asarray(satstar_cat[_sname], dtype=float)[idx_sat]
+            if np.dtype(_dt).kind in 'iu':
+                _v = np.nan_to_num(_v, nan=0.0)
+            cat[_cname][idx_cat] = _v.astype(_dt)
+
     if 'flux' in cat.colnames:
         if 'dflux' in cat.colnames:
             cat_fluxerr_col = 'dflux'
@@ -3193,9 +3520,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd.rename_column(xerr_colname, 'dx')
             satstar_toadd.rename_column(yerr_colname, 'dy')
 
-        for colname in cat.colnames:
-            if colname not in satstar_toadd.colnames:
-                satstar_toadd.add_column(np.ones(len(satstar_toadd)) * np.nan, name=colname)
+        _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:
                 satstar_toadd.remove_column(colname)
@@ -3237,9 +3562,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
             satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
 
-        for colname in cat.colnames:
-            if colname not in satstar_toadd.colnames:
-                satstar_toadd.add_column(np.ones(len(satstar_toadd))*np.nan, name=colname)
+        _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:
                 satstar_toadd.remove_column(colname)
