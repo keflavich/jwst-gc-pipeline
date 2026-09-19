@@ -1872,6 +1872,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  seed_gate_image=None, seed_gate_wcs=None,
                                  deblend_with_zeroframe=False,
                                  partner_sky=None,
+                                 sibling_sky=None,
                                  recovery_signature=None):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
@@ -1954,6 +1955,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             filename, path_prefix=path_prefix,
             use_merged_psf_for_merged=use_merged_psf_for_merged,
             recovery_signature=recovery_signature, partner_sky=partner_sky,
+            sibling_sky=sibling_sky,
             outside_star_pixels=outside_star_pixels,
             outside_star_fit_box=outside_star_fit_box,
             forced_grid_search_radius=forced_grid_search_radius,
@@ -1987,7 +1989,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            seed_gate_image=seed_gate_image,
                            seed_gate_wcs=seed_gate_wcs,
                            deblend_with_zeroframe=deblend_with_zeroframe,
-                           partner_sky=partner_sky)
+                           partner_sky=partner_sky,
+                           sibling_sky=sibling_sky)
     for _fresh in (extended_filename, satstar_filename):
         if os.path.exists(_fresh) and _content_key is not None:
             # Stamp what this fit was run from, so a later phase can tell
@@ -4412,6 +4415,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            "was accepted as a satstar in the near-degenerate "
                            "PARTNER band (pair-consistent substitution, Phase "
                            "A1). Default off = unchanged behavior.")
+    parser.add_option("--satstar-sibling-seed", dest="satstar_sibling_seed",
+                      action="store_true", default=False,
+                      help="Seed satstar fits at the SAME band's consolidated "
+                           "satstar positions, so an exposure that saw a star "
+                           "below its saturation threshold still measures it "
+                           "and the star gets a cross-exposure position "
+                           "scatter (issue #925). Rows produced this way are "
+                           "position-only: they never supply flux. Default "
+                           "off = unchanged behavior.")
     parser.add_option("--deblend-satstars", dest="deblend_satstars",
                     default=False, action='store_true',
                     help=("ZEROFRAME-deblend merged saturated cores: in crowded GC "

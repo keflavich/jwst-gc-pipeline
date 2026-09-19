@@ -150,6 +150,7 @@ def _psf_grid_candidates(path_prefix, header, use_merged_psf_for_merged):
 
 def satstar_content_key(filename, *, path_prefix, use_merged_psf_for_merged=False,
                         recovery_signature=None, partner_sky=None,
+                        sibling_sky=None,
                         outside_star_pixels=None, outside_star_fit_box=512,
                         forced_grid_search_radius=5, flux_overrides=None,
                         flux_drops=None, oversub_clamp_percentile=10.0,
@@ -191,6 +192,17 @@ def satstar_content_key(filename, *, path_prefix, use_merged_psf_for_merged=Fals
         h.update(f'partner:{len(partner_sky)}'.encode())
         _feed_array(h, np.asarray(partner_sky.ra.deg, dtype=float))
         _feed_array(h, np.asarray(partner_sky.dec.deg, dtype=float))
+
+    # Sibling-exposure seeds (#925 item 3): like partner seeds, these are a real
+    # inter-phase input difference -- absent on the first pass of a band, present
+    # once that band has a consolidated catalog to seed from -- so a cached fit
+    # made without them must not be adopted by a run that has them.
+    if sibling_sky is None:
+        h.update(b'sibling:none')
+    else:
+        h.update(f'sibling:{len(sibling_sky)}'.encode())
+        _feed_array(h, np.asarray(sibling_sky.ra.deg, dtype=float))
+        _feed_array(h, np.asarray(sibling_sky.dec.deg, dtype=float))
 
     _feed_array(h, seed_gate_image)
 
