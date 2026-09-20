@@ -104,6 +104,82 @@ def _resolve_head(head, targets=None):
     return None, head
 
 
+#: What follows a registered field name (and its optional proposal id).  Split
+#: out from the head patterns because the head can no longer be found by a
+#: regex alone -- see `_split_registered_prefix`.
+_REST_FULL = re.compile(
+    r'^-o(?P<obsid>\d+)-(?P<stage>[a-z0-9]+)'
+    r'(?:-(?P<filter>[Ff]\d{3,4}[A-Za-z0-9]*))?')
+_REST_NOPROP = re.compile(
+    r'^-(?P<obsid>\d{3})-(?P<stage>[a-z0-9]+)'
+    r'(?:-(?P<filter>[Ff]\d{3,4}[A-Za-z0-9]*))?')
+_REST_LOOSE = re.compile(r'^-(?P<stage>.+)$')
+
+#: A proposal id sitting immediately after the field name: `gc-treasury10678`.
+_PROPOSAL_HEAD_RE = re.compile(r'^(\d{4,5})')
+
+
+def _split_registered_prefix(text, targets):
+    """``'gc-treasury10678-o040-m4-finalize'`` -> ``('gc-treasury', '10678', '-o040-m4-finalize')``.
+
+    The head used to be found by a regex (``[a-z][a-z0-9_]*``) and only then
+    matched against the registry.  That character class has no hyphen, so a
+    field whose NAME contains one could never be recovered: on
+    ``gc-treasury10678-o040-m4-finalize`` the head matched ``gc``, which is not
+    a registered field, every shape fell through, and the job was reported as
+    unattributable -- which is how all 292 of 10678's queued jobs came to be
+    listed by name on a public page.  Widening the class to allow a hyphen does
+    not fix it either: the head would then swallow ``-o040`` and the stage with
+    it.
+
+    So the registry leads.  The longest registered name that prefixes the job
+    name wins and the remainder is parsed as the suffix -- the same
+    longest-first rule ``_resolve_head`` already applied, moved ahead of the
+    shape match instead of behind it.  Returns ``(None, '', text)`` when no
+    registered name prefixes the text.
+    """
+    for name in targets:                      # longest-first: sgrb2 before sgrb
+        # Two spellings, because the submitters disagree with the registry:
+        # `gc-treasury10678-o040-m4-finalize` keeps the field's hyphen and
+        # `gctreasury10678-o061-reduce` drops it, and both are 10678 jobs that
+        # were being reported as belonging to no field.  Matching the
+        # de-hyphenated form as well costs nothing for a name that has no
+        # hyphen, where the two spellings are the same string.
+        for spelling in (name, name.replace('-', '')):
+            if not text.startswith(spelling):
+                continue
+            rest = text[len(spelling):]
+            got = _PROPOSAL_HEAD_RE.match(rest)
+            if got:
+                return name, got.group(1), rest[got.end():]
+            # With no proposal id the name has to END here rather than merely
+            # start here, or `sgrb` would claim `sgrbfoo-o001-...`.  The
+            # remainder parser rejects that one too (it requires a leading
+            # separator), so this is the second of two guards -- kept because
+            # it is what makes THIS function correct on its own, rather than
+            # correct only in the company of its caller.
+            if rest == '' or rest[0] in '-_':
+                return name, '', rest
+    return None, '', text
+
+
+def _parse_rest(rest):
+    """The obsid/stage/filter fields of whatever follows the field name."""
+    if rest == '':
+        return {'obsid': None, 'stage': None, 'filter': None,
+                'name_kind': 'bare'}
+    for kind, rx in (('full', _REST_FULL), ('noprop', _REST_NOPROP),
+                     ('loose', _REST_LOOSE)):
+        m = rx.match(rest)
+        if not m:
+            continue
+        got = m.groupdict()
+        return {'obsid': got.get('obsid'), 'stage': got.get('stage'),
+                'filter': (got.get('filter') or '').upper() or None,
+                'name_kind': kind}
+    return None
+
+
 def parse_job_name(name, targets=None):
     """``'brick2221-o001-m12-fanout' -> {'target': 'brick', 'proposal': '2221',
     'obsid': '001', 'stage': 'm12', 'filter': None, 'name_kind': 'full'}``.
@@ -115,6 +191,19 @@ def parse_job_name(name, targets=None):
     observation is running.
     """
     text = str(name)
+    if targets is None:
+        global _TARGETS_CACHE
+        if _TARGETS_CACHE is None:
+            _TARGETS_CACHE = known_targets()
+        targets = _TARGETS_CACHE
+    # Registry first, so a field name containing a hyphen is recoverable at
+    # all.  The shape patterns below stay for what this cannot reach: `pf_...`,
+    # and any name whose head is not a registered field.
+    target, proposal, rest = _split_registered_prefix(text, targets)
+    if target is not None:
+        got = _parse_rest(rest)
+        if got is not None:
+            return {'target': target, 'proposal': proposal or None, **got}
     for kind, rx in (('full', _NAME_FULL), ('noprop', _NAME_NOPROP),
                      ('pf', _NAME_PF), ('loose', _NAME_LOOSE)):
         m = rx.match(text)
