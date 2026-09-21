@@ -273,6 +273,7 @@ fields:
           '079': catalogs/gaia_virac2_refcat_epoch2026.72_o079.fits
           '080': catalogs/gaia_virac2_refcat_epoch2026.72_o080.fits
           '081': catalogs/gaia_virac2_refcat_epoch2026.72_o081.fits
+          '082': catalogs/gaia_virac2_refcat_epoch2026.72_o082.fits
           '098': catalogs/gaia_virac2_refcat_epoch2026.70_o098.fits
           '100': catalogs/gaia_virac2_refcat_epoch2026.70_o100.fits
           '102': catalogs/gaia_virac2_refcat_epoch2026.70_o102.fits
