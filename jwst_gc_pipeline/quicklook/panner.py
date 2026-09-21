@@ -52,17 +52,25 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
 .where { color:var(--muted); margin-left:auto; text-align:right;
   font-variant-numeric:tabular-nums; }
 .where b { color:var(--fg); }
-.head { position:absolute; top:0; left:0; right:0; z-index:5;
-  padding:.55rem .9rem; background:linear-gradient(rgba(5,7,12,.85),transparent);
-  color:var(--muted); }
-.head a { color:var(--accent); }
-.head b { color:var(--fg); }
+.pick { display:flex; align-items:center; gap:.35rem; color:var(--muted); }
+/* The caption used to be a banner across the top of the viewer, where it sat
+   over Aladin's own fullscreen button and coordinate readout -- both of which
+   live in the top corners and cannot be moved.  It rides the control bar
+   instead, on its own row so it never crowds the buttons. */
+.note { flex:1 0 100%; color:var(--muted); font-size:.92em; }
+.note a { color:var(--accent); }
+.note b { color:var(--fg); }
 @media (max-width:640px) { .where { margin-left:0; text-align:left; } }
 """
 
 _SCRIPT = r"""
 var TOUR = null, aladin = null, playing = true, rate = 1.0;
 var leg = 0, along = 0, last = null;
+
+function esc(text) {
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 function fmt(deg, isRa) {
   var v = isRa ? deg / 15 : Math.abs(deg);
@@ -102,6 +110,57 @@ function sep(a, b) {
   var u = unit(a[0], a[1]), w = unit(b[0], b[1]);
   var dot = Math.max(-1, Math.min(1, u[0] * w[0] + u[1] * w[1] + u[2] * w[2]));
   return Math.acos(dot) * 180 / Math.PI * 3600;        // arcsec
+}
+
+// The tour is ordered by position on the sky, which is the right order to pan
+// in and the wrong one to pick from: the menu is sorted by field so a reader
+// looking for o127 finds it where they expect.  The VALUE stays the tour index,
+// so selecting a field is the same operation the skip button performs.
+function fillFields() {
+  var box = document.getElementById('field');
+  var order = [];
+  for (var i = 0; i < TOUR.stops.length; i++) { order.push(i); }
+  order.sort(function (a, b) {
+    var x = TOUR.stops[a], y = TOUR.stops[b];
+    return String(x.id) < String(y.id) ? -1 : (String(x.id) > String(y.id) ? 1 : 0);
+  });
+  var html = '';
+  for (var k = 0; k < order.length; k++) {
+    var s = TOUR.stops[order[k]];
+    var name = (s.label && s.label !== s.id) ? s.label + ' \u00b7 ' + s.id
+                                             : (s.label || s.id);
+    html += '<option value="' + order[k] + '">' + esc(name) + '</option>';
+  }
+  box.innerHTML = html;
+}
+
+function setPlaying(on) {
+  playing = on;
+  document.getElementById('play').textContent = playing ? '\u23f8 Pause'
+                                                        : '\u25b6 Play';
+}
+
+function showWhere(stop, ra, dec) {
+  document.getElementById('where').innerHTML =
+    fmt(ra, true) + ' ' + fmt(dec, false);
+  var box = document.getElementById('field');
+  // Not while the menu is open: rewriting `value` under a reader who is
+  // choosing moves the highlight out from under them.
+  if (box && box !== document.activeElement) {
+    box.value = String(TOUR.stops.indexOf(stop));
+  }
+}
+
+function goToStop(i) {
+  leg = i;
+  along = 0;
+  var s = TOUR.stops[i];
+  if (aladin) { aladin.gotoRaDec(s.ra, s.dec); }
+  showWhere(s, s.ra, s.dec);
+  // The leg out of a cut stop is crossed instantly rather than panned, so
+  // playing on would slide the view off the field that was just asked for
+  // within a frame or two.  Hold there; the play button says so.
+  if (s.jump) { setPlaying(false); }
 }
 
 function legPoints(i) {
@@ -149,12 +208,11 @@ function step(now) {
   }
   var p = slerp([ends[0].ra, ends[0].dec], [ends[1].ra, ends[1].dec], along);
   aladin.gotoRaDec(p[0], p[1]);
-  var near = along < 0.5 ? ends[0] : ends[1];
-  document.getElementById('where').innerHTML =
-    '<b>' + near.label + '</b> &mdash; ' + fmt(p[0], true) + ' ' + fmt(p[1], false);
+  showWhere(along < 0.5 ? ends[0] : ends[1], p[0], p[1]);
 }
 
 function boot() {
+  fillFields();
   A.init.then(function () {
     aladin = A.aladin('#sky', {survey: TOUR.survey, fov: TOUR.fov,
                                target: TOUR.stops[0].ra + ' ' + TOUR.stops[0].dec,
@@ -171,8 +229,10 @@ function boot() {
 }
 
 document.getElementById('play').addEventListener('click', function () {
-  playing = !playing;
-  this.textContent = playing ? '⏸ Pause' : '▶ Play';
+  setPlaying(!playing);
+});
+document.getElementById('field').addEventListener('change', function () {
+  goToStop(parseInt(this.value, 10));
 });
 document.getElementById('rate').addEventListener('change', function () {
   rate = parseFloat(this.value);
@@ -203,12 +263,11 @@ def render_page(data_url=DATA_FILE):
 <style>{CSS}</style>
 </head><body>
 <div id=sky></div>
-<div class=head>Programme 10678, <b>F212N + F480M</b> at full resolution —
-  drifting across the tiles that have imagery.
-  <a href="index.html">back to the release</a></div>
 <div class=bar>
   <button id=play>&#9208; Pause</button>
   <button id=skip>&#9197; Next tile</button>
+  <label class=pick for=field>field
+    <select id=field title="jump to a field"></select></label>
   <select id=rate title="pan rate">
     <option value="0.5">0.5&times;</option>
     <option value="1" selected>1&times;</option>
@@ -216,6 +275,9 @@ def render_page(data_url=DATA_FILE):
     <option value="4">4&times;</option>
   </select>
   <span class=where id=where>loading the tour&hellip;</span>
+  <span class=note>Programme 10678, <b>F212N + F480M</b> at full resolution &mdash;
+    drifting across the tiles that have imagery.
+    <a href="index.html">back to the release</a></span>
 </div>
 <script src="{ALADIN_JS}" charset=utf-8></script>
 <script>

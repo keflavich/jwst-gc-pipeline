@@ -3,6 +3,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 
@@ -227,3 +228,161 @@ def test_an_all_cut_tour_does_not_hang_the_page(tmp_path):
                           timeout=20)
     assert done.returncode == 0, done.stderr[-2000:]
     assert 'returned' in done.stdout
+
+
+def test_nothing_is_painted_over_the_viewer_controls():
+    """The caption used to be a banner pinned to the top of the viewer.
+
+    Aladin puts its fullscreen button and its coordinate readout in the top
+    corners and offers no way to move them, so an overlay anchored to `top:0`
+    covers controls the reader needs.  The rule is structural rather than a
+    check for the old class name: any overlay the page adds belongs at the
+    bottom, with the buttons.
+    """
+    blocks = re.findall(r'([^{}]+)\{([^{}]*)\}', panner.CSS)
+    overlays = [(sel.strip(), body) for sel, body in blocks
+                if 'position:absolute' in body.replace(' ', '')]
+    assert overlays, 'no absolutely-positioned rule at all -- CSS restructured?'
+    for sel, body in overlays:
+        flat = body.replace(' ', '').replace('\n', '')
+        if sel == '#sky':
+            continue                      # the viewer itself, under everything
+        assert 'bottom:0' in flat, f'{sel} is not anchored to the bottom'
+        assert 'top:0' not in flat, f'{sel} still reaches the top of the viewer'
+
+
+def test_the_caption_rides_the_control_bar():
+    page = panner.render_page()
+    bar = page[page.index('<div class=bar>'):]
+    bar = bar[:bar.index('<script')]
+    assert 'back to the release' in bar
+    assert 'F212N + F480M' in bar
+    assert 'class=head' not in page
+    # the field menu the script fills lives there too, beside pause and skip
+    assert '<select id=field' in bar
+
+
+DOM_HARNESS = r"""
+// A document that keeps its elements, so what the script writes into them can
+// be read back and a change event can be fired at the one the reader uses.
+var els = {}, gotos = [];
+function el(id) {
+  if (!els[id]) {
+    els[id] = {id: id, innerHTML: '', textContent: '', value: '', on: {},
+               addEventListener: function (ev, fn) { this.on[ev] = fn; },
+               classList: {toggle: function () {}}};
+  }
+  return els[id];
+}
+var chain = {then: function () { return chain; },
+             catch: function () { return chain; }};
+globalThis.fetch = function () { return chain; };
+globalThis.document = {getElementById: el, activeElement: null};
+globalThis.requestAnimationFrame = function () {};
+globalThis.A = {init: chain};
+var DATA_URL = 'tour.json';
+
+__SCRIPT__
+
+TOUR = {survey: 'x', fov: 0.01, rate: 2, stops: [
+  {id: 'o128', label: 'GC_128', ra: 266.52, dec: -28.70, jump: false},
+  {id: 'o040', label: 'GC_40', ra: 266.39, dec: -29.15, jump: true},
+  {id: 'o127', label: 'GC_127', ra: 266.50, dec: -28.70, jump: false}]};
+aladin = {gotoRaDec: function (ra, dec) { gotos.push([ra, dec]); }};
+fillFields();
+console.log(JSON.stringify({options: els.field.innerHTML}));
+
+__BODY__
+"""
+
+
+def _dom(tmp_path, body):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not available')
+    script = tmp_path / 'dom.js'
+    script.write_text(DOM_HARNESS.replace('__SCRIPT__', panner._SCRIPT)
+                      .replace('__BODY__', body))
+    done = subprocess.run([node, str(script)], capture_output=True, text=True,
+                          timeout=20)
+    assert done.returncode == 0, done.stderr[-2000:]
+    return [json.loads(line) for line in done.stdout.strip().splitlines()]
+
+
+def test_the_field_menu_lists_every_stop(tmp_path):
+    """37 fields and no way to reach a named one: the tour visits them in the
+    order it pans, so finding o127 meant waiting for it or clicking skip until
+    it came round."""
+    out = _dom(tmp_path, "console.log(JSON.stringify({done: true}));")
+    options = out[0]['options']
+    assert options.count('<option') == 3
+    for name in ('GC_127', 'GC_128', 'GC_40'):
+        assert name in options
+    # sorted by field id, not by the tour's spatial order (o128, o040, o127)
+    assert options.index('GC_40') < options.index('GC_127') < options.index('GC_128')
+
+
+def test_choosing_a_field_moves_the_pan_to_it(tmp_path):
+    """The value carries the TOUR index, so a selection is the same operation
+    the skip button performs -- picking o127 must leave the pan mid-tour at
+    o127, not merely recentre the viewer while the leg counter says otherwise.
+    """
+    out = _dom(tmp_path, """
+      var idx = /value="(\\d+)">GC_127/.exec(els.field.innerHTML)[1];
+      els.field.value = idx;
+      els.field.on.change.call(els.field);
+      console.log(JSON.stringify({idx: Number(idx), leg: leg, along: along,
+                                  went: gotos[gotos.length - 1],
+                                  playing: playing}));
+    """)
+    got = out[1]
+    assert got['leg'] == got['idx'] == 2
+    assert got['along'] == 0
+    assert got['went'] == [266.50, -28.70]
+    assert got['playing'] is True
+
+
+def test_choosing_a_cut_field_holds_there(tmp_path):
+    """o040 sits ~55' from the rest and the leg out of it is a cut, crossed
+    instantly.  Left playing, the view would slide off the field the reader
+    just asked for inside a couple of frames, which reads as the menu not
+    working."""
+    out = _dom(tmp_path, """
+      var idx = /value="(\\d+)">GC_40/.exec(els.field.innerHTML)[1];
+      els.field.value = idx;
+      els.field.on.change.call(els.field);
+      console.log(JSON.stringify({playing: playing, leg: leg,
+                                  went: gotos[gotos.length - 1],
+                                  play_label: els.play.textContent}));
+    """)
+    got = out[1]
+    assert got['playing'] is False, 'the pan left the field that was chosen'
+    assert got['went'] == [266.39, -29.15]
+    assert 'Play' in got['play_label'], 'the button still offers to pause'
+
+
+def test_the_menu_follows_the_pan(tmp_path):
+    """Read as well as write: a menu that shows o040 while the view is over
+    o127 is worse than none."""
+    out = _dom(tmp_path, """
+      playing = true; leg = 0; along = 0; last = 0;
+      step(1000);
+      console.log(JSON.stringify({value: els.field.value,
+                                  where: els.where.innerHTML}));
+    """)
+    got = out[1]
+    assert got['value'] == '0', 'the menu did not track the leg being panned'
+    assert 'h' in got['where'] and '"' in got['where']
+
+
+def test_the_menu_is_not_rewritten_while_it_is_open(tmp_path):
+    """Setting `value` under a reader who is choosing moves the highlight out
+    from under them."""
+    out = _dom(tmp_path, """
+      els.field.value = '2';
+      document.activeElement = els.field;
+      playing = true; leg = 0; along = 0; last = 0;
+      step(1000);
+      console.log(JSON.stringify({value: els.field.value}));
+    """)
+    assert out[1]['value'] == '2'
