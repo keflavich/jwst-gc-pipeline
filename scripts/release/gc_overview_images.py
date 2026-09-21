@@ -84,6 +84,10 @@ LAYERS = {
         'gc_treasury_overview_rgb_770-480-212'),
 }
 
+#: The grid every layer is rendered on, written once beside the PNGs so a
+#: reader can put a coordinate on a pixel.
+WCS_NAME = 'gc_treasury_overview.wcs'
+
 #: Arcminutes of blank sky kept outside the footprint on every side, so the
 #: outermost tiles are not flush against the frame edge.
 DEFAULT_MARGIN_ARCMIN = 1.0
@@ -283,7 +287,7 @@ def main(argv=None):
 
     header = wcs.to_header()
     header['NAXIS1'], header['NAXIS2'] = shape[1], shape[0]
-    wcs_path = os.path.join(args.out_dir, 'gc_treasury_overview.wcs')
+    wcs_path = os.path.join(args.out_dir, WCS_NAME)
     header.totextfile(wcs_path, overwrite=True)
     print(f'  wrote {wcs_path} (the grid every layer shares)')
     if args.publish and written:
@@ -295,6 +299,12 @@ def main(argv=None):
 DOCROOT = '/orange/adamginsburg/web/public/avm_images'
 REMOTE = ('starformation:/h/cnswww-starformation.astro/'
           'starformation.astro.ufl.edu/htdocs/avm_images')
+
+
+def published_names():
+    """Every file a full run writes: one PNG per registered layer, plus the
+    shared WCS.  This is the publish list -- see `publish`."""
+    return sorted([f'{base}.png' for _, base in LAYERS.values()] + [WCS_NAME])
 
 
 def publish(out_dir, dry=False):
@@ -309,8 +319,17 @@ def publish(out_dir, dry=False):
     anywhere near it.
     """
     import subprocess
-    names = sorted(n for n in os.listdir(out_dir)
-                   if n.startswith('gc_treasury_overview'))
+    wanted = set(published_names())
+    present = set(os.listdir(out_dir))
+    names = sorted(wanted & present)
+    # Named from LAYERS rather than globbed: a glob ships whatever
+    # `gc_treasury_overview*` happens to sit in out_dir, so a basename that was
+    # renamed or retired keeps being published from an old run's leftovers and,
+    # with no --delete, stays on both servers forever.  Say what was skipped
+    # instead of silently carrying it.
+    for stray in sorted(n for n in present - wanted
+                        if n.startswith('gc_treasury_overview')):
+        print(f'  not publishing {stray}: no registered layer writes it')
     if not names:
         print('  nothing to publish')
         return

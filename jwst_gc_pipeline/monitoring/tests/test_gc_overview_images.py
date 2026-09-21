@@ -185,3 +185,111 @@ def test_publish_names_only_the_overviews(tmp_path, monkeypatch):
         joined = ' '.join(cmd)
         assert 'somebody_elses_file' not in joined
         assert 'gc_treasury_overview_vminmax.png' in joined
+
+
+def _stub_tiles(monkeypatch, tmp_path):
+    """Enough of a HiPS for `render` to have inputs; the coadd itself is stubbed."""
+    tile = tmp_path / 'Npix0.png'
+    tile.write_bytes(b'not read -- read_tile is stubbed too')
+    monkeypatch.setattr(G, 'tile_path', lambda *a, **k: str(tile))
+    monkeypatch.setattr(G, 'read_tile', lambda path: np.full((8, 8, 3), 7.0))
+
+
+def _coadd_returning(coverage_plane):
+    """A `reproject_and_coadd` whose COLOUR is finite everywhere and whose
+    fourth plane says otherwise -- the disagreement the real bug hid behind."""
+    calls = []
+
+    def fake_coadd(arrays, wcs_out, shape_out=None, **kw):
+        calls.append(len(arrays))
+        channel = len(calls) - 1
+        if channel < 3:
+            return np.full(shape_out, 200.0), None
+        return coverage_plane(shape_out), None
+
+    return fake_coadd
+
+
+def test_coverage_comes_from_the_fourth_plane_not_from_the_colour(tmp_path,
+                                                                  monkeypatch):
+    """The bug at the point it happened: DERIVING coverage from the coadded
+    colour.
+
+    `reproject_adaptive` returns 0.0, not NaN, where no input covered a pixel,
+    so `np.isfinite(rgb).any(axis=-1)` reads True over the whole frame and the
+    first rendering called a two-thirds-empty mosaic "100.0% covered".  Here
+    the colour is finite everywhere and only the fourth plane knows the left
+    half was never observed, so any code that consults the colour -- or that
+    forces the plane opaque -- reports coverage the data does not have.
+    """
+    _stub_tiles(monkeypatch, tmp_path)
+
+    def left_half_blank(shape_out):
+        plane = np.ones(shape_out)
+        plane[:, :shape_out[1] // 2] = 0.0
+        return plane
+
+    monkeypatch.setattr(G, 'reproject_and_coadd',
+                        _coadd_returning(left_half_blank))
+    wcs, shape, _ = G.target_wcs((-0.1, 0.1, -0.05, 0.05), width=32,
+                                 margin_deg=0.0)
+    rgb, covered, n_tiles, _ = G.render('/nowhere', wcs, shape, level=3)
+
+    assert n_tiles, 'the stub produced no inputs, so nothing was exercised'
+    assert np.isfinite(rgb).all(), 'the colour must NOT distinguish the halves'
+    half = shape[1] // 2
+    assert not covered[:, :half].any(), 'unobserved sky reported as covered'
+    assert covered[:, half:].all()
+
+
+def test_an_edge_pixel_needs_half_a_tile_to_count_as_observed(tmp_path,
+                                                              monkeypatch):
+    """The plane is kernel-averaged, so an edge pixel arrives fractional.
+    Below half, the pixel is mostly the blank side of a HiPS border tile."""
+    _stub_tiles(monkeypatch, tmp_path)
+
+    def graded(shape_out):
+        plane = np.zeros(shape_out)
+        plane[0, :4] = [0.0, 0.49, 0.5, 1.0]
+        return plane
+
+    monkeypatch.setattr(G, 'reproject_and_coadd', _coadd_returning(graded))
+    wcs, shape, _ = G.target_wcs((-0.1, 0.1, -0.05, 0.05), width=32,
+                                 margin_deg=0.0)
+    _, covered, _, _ = G.render('/nowhere', wcs, shape, level=3)
+    assert list(covered[0, :4]) == [False, False, True, True]
+
+
+def test_a_retired_overview_name_is_not_published_from_leftovers(tmp_path,
+                                                                 monkeypatch,
+                                                                 capsys):
+    """The publish list is the LAYERS registry, not a glob of out_dir.
+
+    Globbing ships whatever `gc_treasury_overview*` is lying around, so a
+    basename that was renamed or retired keeps going out from an old run's
+    leftovers -- and with no `--delete` (correctly, the docroot is shared) it
+    then stays on both servers indefinitely.
+    """
+    for name in G.published_names():
+        (tmp_path / name).write_bytes(b'x')
+    (tmp_path / 'gc_treasury_overview_oldname.png').write_bytes(b'x')
+
+    calls = []
+    import subprocess
+    monkeypatch.setattr(subprocess, 'run', lambda cmd, **kw: calls.append(cmd))
+    G.publish(str(tmp_path), dry=False)
+
+    assert calls, 'nothing was published'
+    for cmd in calls:
+        assert 'gc_treasury_overview_oldname.png' not in ' '.join(cmd)
+    assert 'not publishing gc_treasury_overview_oldname.png' in \
+        capsys.readouterr().out, 'a skipped file must be reported, not silent'
+
+
+def test_every_registered_layer_is_on_the_publish_list():
+    """A new layer that renders and is never published is the other half of the
+    same mistake."""
+    names = G.published_names()
+    for _, base in G.LAYERS.values():
+        assert f'{base}.png' in names
+    assert G.WCS_NAME in names
