@@ -217,11 +217,34 @@ def _read_remote(host, path):
 # `finally` so a crash does not starve the schedule.
 LOCK_FILE = '.auto.lock'
 #: A publish is minutes-to-an-hour; a rebuild is hours.  Waiting longer than
-#: this means the next scheduled publish will do the job anyway.
+#: this means the next scheduled publish will do the job anyway.  It is the
+#: budget for the whole RUN, not for each layer: see `WaitBudget`.
 LOCK_WAIT_S = int(os.environ.get('HIPS_PUBLISH_LOCK_WAIT_S', 2 * 3600))
 #: Matches the builder's own takeover threshold.  A shorter one here would let
 #: the publisher steal a lock from a rebuild that is merely slow.
 LOCK_STALE_S = 6 * 3600
+
+
+class WaitBudget:
+    """How long one RUN may spend waiting on the build lock, in total.
+
+    Per layer, the wait multiplies by the layer count.  Measured 2026-09-21
+    with eight registered layers and a 30 min per-layer wait against a rebuild
+    that held the lock for 4 h: the run waited 30 min on each of the first four
+    layers and published none of them, and because the cron line serialises
+    with `flock -n`, every hourly fire inside that window was a no-op.  A run
+    that gives up after its budget leaves the next hour free to try again,
+    which is the property the schedule is built on.
+
+    Time spent HOLDING the lock (the copy itself) is productive and is not
+    charged; only time spent waiting for someone else is.
+    """
+
+    def __init__(self, seconds):
+        self.remaining = max(0, int(seconds))
+
+    def spend(self, seconds):
+        self.remaining = max(0, self.remaining - int(seconds))
 
 
 def lock_path(src):
@@ -238,13 +261,20 @@ def lock_path(src):
 
 
 @contextlib.contextmanager
-def build_lock(src, what, wait_s=None, poll=30, dry=False):
-    """Hold the build lock for the duration, or wait for whoever has it."""
+def build_lock(src, what, wait_s=None, budget=None, poll=30, dry=False):
+    """Hold the build lock for the duration, or wait for whoever has it.
+
+    `budget`, when given, is a `WaitBudget` shared by every layer in the run:
+    the wait here is capped by what is left of it, and whatever this call
+    waits is deducted, so a contended run stops after one budget rather than
+    one budget per layer.
+    """
     path = lock_path(src)
     if path is None or dry:
         yield True
         return
-    wait_s = LOCK_WAIT_S if wait_s is None else wait_s
+    if wait_s is None:
+        wait_s = LOCK_WAIT_S if budget is None else budget.remaining
     waited = 0
     while os.path.exists(path):
         age = time.time() - os.path.getmtime(path)
@@ -263,6 +293,8 @@ def build_lock(src, what, wait_s=None, poll=30, dry=False):
             print(f'  waiting for the build lock ({age / 60:.0f} min old; '
                   f'{holder}) before {what}', flush=True)
         if waited >= wait_s:
+            if budget is not None:
+                budget.spend(waited)
             print(f'  build lock still held after {waited // 60} min; '
                   f'skipping {what} -- the next run will publish it',
                   file=sys.stderr)
@@ -270,6 +302,8 @@ def build_lock(src, what, wait_s=None, poll=30, dry=False):
             return
         time.sleep(poll)
         waited += poll
+    if budget is not None:
+        budget.spend(waited)
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         try:
@@ -419,6 +453,7 @@ def main(argv=None):
         ap.error(f'unknown layer(s): {", ".join(bad)}; known: {", ".join(sorted(LAYERS))}')
 
     rc = 0
+    waiting = WaitBudget(LOCK_WAIT_S)
     for name in names:
         src = LAYERS[name]
         print(f'{name}:', flush=True)
@@ -426,10 +461,13 @@ def main(argv=None):
             print(f'  source missing: {src}', file=sys.stderr)
             rc = rc or 1
             continue
-        # Per LAYER, not for the whole run: a five-layer publish holding the
-        # lock end to end would block rebuilds for hours, and a layer rebuilt
-        # while a LATER one is being copied is simply newer next time.
+        # The lock is taken per LAYER -- a whole-run hold would block rebuilds
+        # for hours, and a layer rebuilt while a LATER one is being copied is
+        # simply newer next time.  The WAIT, though, is one budget for the run
+        # (`waiting`): per layer it multiplied by the layer count and ran past
+        # the next scheduled fire.
         with build_lock(src, f'publishing {name}', dry=args.dry_run,
+                        budget=waiting,
                         wait_s=0 if args.no_wait else None) as held:
             if not held:
                 rc = rc or 1
