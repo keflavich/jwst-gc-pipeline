@@ -471,3 +471,71 @@ def test_the_lock_claim_is_exclusive(tmp_path, monkeypatch, capsys):
         assert held is False, 'a taken lock must not be claimed twice'
     assert lock.read_text() == holder, 'the holder was clobbered'
     assert 'taken while we waited' in capsys.readouterr().err
+
+
+def test_a_layers_wait_is_deducted_from_the_runs_budget(tmp_path, monkeypatch):
+    """The wait is one budget for the RUN.
+
+    Per layer it multiplied by the layer count: eight layers at 30 min each is
+    a four-hour run, and the cron line serialises with `flock -n`, so every
+    hourly fire inside that window did nothing at all.
+    """
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    (tmp_path / '.auto.lock').write_text('999999 2026-09-20T18:36:33 --auto\n')
+    monkeypatch.setattr(ph.time, 'sleep', lambda sec: None)
+
+    budget = ph.WaitBudget(60)
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing zz',
+                       budget=budget, poll=10) as held:
+        assert held is False
+    assert budget.remaining == 0, 'the first layer spent the whole budget'
+
+
+def test_a_later_layer_does_not_get_a_fresh_wait(tmp_path, monkeypatch, capsys):
+    """Two layers, one held lock: the second must not restart the clock."""
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    (tmp_path / '.auto.lock').write_text('999999 2026-09-20T18:36:33 --auto\n')
+    slept = []
+    monkeypatch.setattr(ph.time, 'sleep', lambda sec: slept.append(sec))
+    for name in ('aa_layer', 'zz_layer'):
+        monkeypatch.setattr(ph, 'LAYERS', dict(ph.LAYERS))
+        ph.LAYERS[name] = str(tmp_path / name)
+        os.makedirs(tmp_path / name, exist_ok=True)
+
+    monkeypatch.setattr(ph, 'LOCK_WAIT_S', 120)
+    rc = ph.main(['--layer', 'aa_layer', '--layer', 'zz_layer'])
+
+    assert rc != 0, 'a skipped layer is reported, not called a success'
+    assert sum(slept) <= 120, f'the run waited {sum(slept)} s on a 120 s budget'
+    err = capsys.readouterr().err
+    assert err.count('skipping') == 2, 'both layers must be reported skipped'
+
+
+def test_holding_the_lock_is_not_charged_to_the_budget(tmp_path, monkeypatch):
+    """Only time spent waiting for someone ELSE is spent.  Charging the copy
+    would make a slow publish shrink the next layer's patience for no reason.
+    """
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    budget = ph.WaitBudget(300)
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing zz',
+                       budget=budget) as held:
+        assert held
+    assert budget.remaining == 300
+
+
+def test_an_uncontended_run_keeps_its_budget_for_the_layer_that_needs_it(
+        tmp_path, monkeypatch):
+    """A lock that clears while we wait costs only what it actually cost."""
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    lock = tmp_path / '.auto.lock'
+    lock.write_text('999999 2026-09-20T18:36:33 --auto\n')
+    budget = ph.WaitBudget(600)
+
+    def fake_sleep(sec):
+        lock.unlink()                       # the builder finishes while we wait
+
+    monkeypatch.setattr(ph.time, 'sleep', fake_sleep)
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing zz',
+                       budget=budget, poll=30) as held:
+        assert held
+    assert budget.remaining == 570
