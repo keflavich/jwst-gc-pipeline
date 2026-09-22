@@ -99,3 +99,40 @@ def test_aperture_cli_unscoped_field_unchanged(tmp_path):
     _touch(tmp_path / 'catalogs' / 'f182m_consolidated_satstar_catalog.fits')
     assert ap._default_satstar_cache(str(tmp_path), 'F182M') == (
         consolidated_satstar_cache_path(str(tmp_path), 'F182M'))
+
+
+def _write_rej(path, ra_deg):
+    from astropy.coordinates import SkyCoord
+    from astropy.table import Table
+    import astropy.units as u
+    t = Table()
+    t['skycoord_fit'] = SkyCoord([ra_deg, ra_deg] * u.deg, [0.0, 0.0] * u.deg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    t.write(str(path), overwrite=True)
+
+
+def test_rejected_loader_scopes_to_observation(tmp_path):
+    """The gate-rejected channel is obs-scoped like the accepted one (#931
+    follow-up): a scoped merge reads only its own observation's rejected files,
+    not sibling observations' on the shared tree."""
+    from astropy.coordinates import SkyCoord
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+    assert MC.satstar_obs_scope('10678', '132')          # guards the premise
+    pipe = tmp_path / 'F480M' / 'pipeline'
+    _write_rej(pipe / 'jw10678132001_x_m8_satstar_rejected.fits', 10.0)
+    _write_rej(pipe / 'jw10678127001_x_m8_satstar_rejected.fits', 20.0)
+    out = MC.load_rejected_satstar_catalog('F480M', basepath=str(tmp_path),
+                                           proposal_id='10678', field='132')
+    assert out is not None and len(out) == 2
+    assert {round(r) for r in SkyCoord(out['skycoord_fit']).ra.deg} == {10}
+
+
+def test_rejected_loader_unscoped_pools_all(tmp_path):
+    """Without a scope (single-observation field, or omitted) every rejected
+    file for the band is pooled -- unchanged behaviour."""
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+    pipe = tmp_path / 'F480M' / 'pipeline'
+    _write_rej(pipe / 'jw10678132001_x_m8_satstar_rejected.fits', 10.0)
+    _write_rej(pipe / 'jw10678127001_x_m8_satstar_rejected.fits', 20.0)
+    both = MC.load_rejected_satstar_catalog('F480M', basepath=str(tmp_path))
+    assert both is not None and len(both) == 4
