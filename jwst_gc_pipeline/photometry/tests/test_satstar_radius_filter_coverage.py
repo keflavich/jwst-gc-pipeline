@@ -126,7 +126,7 @@ def test_an_unknown_filter_says_how_to_fix_it():
     cat = Table({'skycoord': SkyCoord([266.0] * u.deg, [-28.9] * u.deg)})
     sat = Table({'skycoord_fit': SkyCoord([266.0] * u.deg, [-28.9] * u.deg)})
 
-    def _fake_load(filtername, target=None, basepath=None):
+    def _fake_load(filtername, target=None, basepath=None, **scope):
         return sat
 
     orig = MC.load_satstar_catalog

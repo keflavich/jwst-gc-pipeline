@@ -668,6 +668,30 @@ def write_aperture_correction_table(tbl, filtername, target, basepath,
     return path
 
 
+def _default_satstar_cache(basepath, filtername, obs=None):
+    """The consolidated satstar cache the CLI reads when no --catalog is given.
+
+    Where the satstar channel is observation-scoped (#925) the catalogs
+    directory holds ``{filt}_oNNN_consolidated_satstar_catalog.fits`` per
+    observation, and any unscoped file beside them is a stale program-wide
+    pool.  Reading it would mix every observation's stars, so an unqualified
+    request raises instead.
+    """
+    filt = filtername.lower()
+    catdir = f'{basepath}/catalogs'
+    if obs:
+        tok = obs if str(obs).startswith('o') else f'o{int(obs):03d}'
+        return f'{catdir}/{filt}_{tok}_consolidated_satstar_catalog.fits'
+    scoped = sorted(glob.glob(
+        f'{catdir}/{filt}_o[0-9][0-9][0-9]_consolidated_satstar_catalog.fits'))
+    if scoped:
+        raise ValueError(
+            f'{catdir} holds {len(scoped)} per-observation satstar caches for '
+            f'{filtername} (e.g. {os.path.basename(scoped[0])}); pass --obs '
+            f'or --catalog.')
+    return f'{catdir}/{filt}_consolidated_satstar_catalog.fits'
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(
@@ -678,6 +702,10 @@ def main():
     ap.add_argument('--basepath', default=None)
     ap.add_argument('--catalog', default=None,
                     help='satstar catalog (default: consolidated for target/filter)')
+    ap.add_argument('--obs', default=None,
+                    help="observation token for an observation-scoped satstar "
+                         "cache, e.g. 'o132' (required when the catalogs "
+                         "directory holds per-observation caches)")
     ap.add_argument('--out', default=None, help='write augmented catalog here')
     ap.add_argument('--apcorr', action='store_true',
                     help='also build+write the aperture-correction table')
@@ -687,8 +715,8 @@ def main():
     if args.catalog:
         cat = Table.read(args.catalog)
     else:
-        cat = Table.read(f'{basepath}/catalogs/'
-                         f'{args.filtername.lower()}_consolidated_satstar_catalog.fits')
+        cat = Table.read(_default_satstar_cache(basepath, args.filtername,
+                                                args.obs))
     cat = add_aperture_photometry(cat, args.filtername, args.target, basepath)
     if args.out:
         cat.write(args.out, overwrite=True)

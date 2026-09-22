@@ -8,7 +8,9 @@ re-run on the fixed code would silently reuse the contaminated results:
 
   * per-exposure ``*_m*_satstar_catalog.fits`` next to each frame
     (``load_or_make_satstar_catalog`` loads instead of re-fitting), and
-  * ``catalogs/<filter>_consolidated_satstar_catalog.fits``.
+  * ``catalogs/<filter>_consolidated_satstar_catalog.fits``, and the
+    per-observation ``catalogs/<filter>_oNNN_consolidated_satstar_catalog.fits``
+    written where the satstar channel is observation-scoped (#925).
 
 This renames both to ``<name>_preseveritygate`` (recoverable, un-globbable).
 Run per field+filter AFTER the severity-gate code is deployed and BEFORE the
@@ -29,7 +31,8 @@ def purge(basepath, field, filters, execute=False):
     n = 0
     for filt in filters:
         pats = [f'{basepath}/{field}/{filt.upper()}/pipeline/*satstar_catalog*.fits',
-                f'{basepath}/{field}/catalogs/{filt.lower()}_consolidated_satstar_catalog.fits']
+                f'{basepath}/{field}/catalogs/{filt.lower()}_consolidated_satstar_catalog.fits',
+                f'{basepath}/{field}/catalogs/{filt.lower()}_o[0-9][0-9][0-9]_consolidated_satstar_catalog.fits']
         for pat in pats:
             for f in sorted(glob.glob(pat)):
                 if f.endswith(SUFFIX) or SUFFIX in f:

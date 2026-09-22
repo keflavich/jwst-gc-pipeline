@@ -1385,7 +1385,8 @@ def _protect_mask(x, y, protect_xy, protect_radius_pix):
 
 def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                             label, max_log_rows=50,
-                            protect_xy=None, protect_radius_pix=0.0):
+                            protect_xy=None, protect_radius_pix=0.0,
+                            handoff_xy=None, handoff_radius_pix=0.0):
     """Drop fits from ``phot_obj.results`` whose center is within
     ``max_sat_dist_pix`` pixels of any SATURATED-DQ pixel and keep the
     PSFPhotometry object's state consistent.
@@ -1398,6 +1399,20 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
     different table, so this filter does not touch it.
 
     A no-op when ``dq`` is None or has no SATURATED pixels.
+
+    Parameters
+    ----------
+    protect_xy, protect_radius_pix : array-like (N, 2), float
+        Coadd-confirmed seed positions (extended-emission targets) exempt
+        from the drop.
+    handoff_xy, handoff_radius_pix : array-like (N, 2), float
+        Frame-pixel positions of stars the satstar channel fitted and then
+        REJECTED at its post-fit implied-peak gate (#925).  The gate hands
+        such a star back to this channel, so a fit within
+        ``handoff_radius_pix`` of one is exempt from the drop.  Only the
+        star's own fitted position is exempt; a fit farther away (a spike or
+        wing detection) is still vetoed.  ``None`` (the default) leaves the
+        behaviour unchanged.
     """
     if dq is None:
         return 0
@@ -1435,6 +1450,15 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
             drop = drop & ~prot
             print(f"Saturation-proximity filter ({label}): protected {n_prot} "
                   f"coadd-confirmed seeds from drop", flush=True)
+    if drop.any() and handoff_xy is not None and handoff_radius_pix > 0:
+        hand = _protect_mask(x, y, handoff_xy, handoff_radius_pix)
+        n_hand = int(np.sum(drop & hand))
+        if n_hand:
+            drop = drop & ~hand
+            print(f"Saturation-proximity filter ({label}): kept {n_hand} "
+                  f"fit(s) at satstar implied-peak-gate rejects "
+                  f"(r={handoff_radius_pix:.2f}px; the gate hands these "
+                  f"stars to daophot)", flush=True)
     n_drop = int(np.sum(drop))
     if n_drop == 0:
         return 0
@@ -1501,6 +1525,8 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                 # in the per-iteration snapshots, otherwise make_model_image()
                 # omits it (model loses the star, residual keeps it).
                 sub_drop &= ~_protect_mask(sx, sy, protect_xy, protect_radius_pix)
+            if sub_drop.any() and handoff_xy is not None and handoff_radius_pix > 0:
+                sub_drop &= ~_protect_mask(sx, sy, handoff_xy, handoff_radius_pix)
             sub_keep = ~sub_drop
             if sub_drop.any():
                 fr.results = sub[sub_keep]

@@ -262,6 +262,162 @@ def _filter_or_flag_model_overshoot(phot_obj, modsky, data, *,
 # ---------------------------------------------------------------------------
 # Atomic single-pass fit + post-fit cleanup
 # ---------------------------------------------------------------------------
+def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
+                            label='', accepted_excl_fwhm=1.5):
+    """Frame-pixel positions the satstar implied-peak gate handed to daophot.
+
+    ``get_saturated_stars`` persists every post-fit reject to
+    ``*_satstar_rejected.fits`` with a ``reject_reason``.  Only
+    ``'implied_peak_gate'`` rejects are handed off: the gate located and fitted
+    the star and judged it too faint to be saturated, so the star belongs to
+    the daophot channel.  ``'fit_quality_gate'`` rejects (garbage or unconstrained
+    fits, including spurious candidates) are not.
+
+    Positions are the reject's own ``xcentroid``/``ycentroid`` -- frame pixels of
+    the very file the satstar fit ran on, so they are immune to a later WCS
+    update (the cached satstar catalog is re-projected on the sky; pixels need
+    no re-projection).  A reject within ``accepted_excl_fwhm`` FWHM of an
+    ACCEPTED satstar is dropped from the hand-off: that position is the
+    accepted star's (model-subtracted) core, where a daophot fit would
+    double-count it.
+
+    Parameters
+    ----------
+    rejected_path : str or None
+        Path of this frame and phase's ``*_satstar_rejected.fits``.
+    satstar_table : `~astropy.table.Table` or None
+        The frame's accepted satstar catalog.
+    fwhm_pix : float
+        PSF FWHM in pixels.
+    label : str
+        Log prefix.
+    accepted_excl_fwhm : float
+        Exclusion radius around accepted satstars, in FWHM.
+
+    Returns
+    -------
+    xy : `~numpy.ndarray` (N, 2) or None
+        Hand-off positions; None when there are none (the filter is then
+        unchanged).
+    radius_pix : float
+        Exemption radius, ``max(1.0, 0.5 * fwhm_pix)``: the daophot fit of
+        the handed-off star converges on the same core, while a wing or spike
+        detection lies farther out.
+    """
+    radius_pix = max(1.0, 0.5 * float(fwhm_pix))
+    if not rejected_path or not os.path.exists(rejected_path):
+        return None, 0.0
+    try:
+        rej = Table.read(rejected_path)
+    except (OSError, ValueError, IORegistryError) as exc:
+        print(f"[{label}] gate-reject hand-off skipped: unreadable "
+              f"{os.path.basename(rejected_path)} ({exc})", flush=True)
+        return None, 0.0
+    need = ('reject_reason', 'xcentroid', 'ycentroid')
+    if len(rej) == 0 or any(c not in rej.colnames for c in need):
+        return None, 0.0
+    reason = np.asarray(rej['reject_reason']).astype(str)
+    xr = np.asarray(rej['xcentroid'], dtype=float)
+    yr = np.asarray(rej['ycentroid'], dtype=float)
+    keep = (reason == 'implied_peak_gate') & np.isfinite(xr) & np.isfinite(yr)
+    if not keep.any():
+        return None, 0.0
+    xy = np.column_stack([xr[keep], yr[keep]])
+    n_near_acc = 0
+    if (satstar_table is not None and len(satstar_table)
+            and 'xcentroid' in satstar_table.colnames
+            and 'ycentroid' in satstar_table.colnames):
+        xa = np.asarray(satstar_table['xcentroid'], dtype=float)
+        ya = np.asarray(satstar_table['ycentroid'], dtype=float)
+        ok = np.isfinite(xa) & np.isfinite(ya)
+        if ok.any():
+            near_acc = _L._protect_mask(
+                xy[:, 0], xy[:, 1], np.column_stack([xa[ok], ya[ok]]),
+                accepted_excl_fwhm * float(fwhm_pix))
+            n_near_acc = int(near_acc.sum())
+            xy = xy[~near_acc]
+    print(f"[{label}] gate-reject hand-off: {len(xy)} implied-peak-gate "
+          f"reject(s) exempt from the near-saturation filter "
+          f"(r={radius_pix:.2f}px; {n_near_acc} dropped as within "
+          f"{accepted_excl_fwhm:g} FWHM of an accepted satstar)", flush=True)
+    if len(xy) == 0:
+        return None, 0.0
+    return xy, radius_pix
+
+
+def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
+                            fwhm_pix, *, radius_fwhm=3.0):
+    """Late-group SATURATED pixels of handed-off stars that the fit may use.
+
+    Selects the SATURATED connected components that touch a hand-off position
+    (the 3x3 pixels around it), limited to ``radius_fwhm`` FWHM from that
+    position, and keeps only pixels whose rate is valid: finite, not flagged
+    ``bad`` by ``get_uncertainty`` and not ``DO_NOT_USE`` (truly-lost
+    saturation, #567).  A component holding an ACCEPTED satstar's centre is
+    skipped, so an accepted star's core stays masked and model-filled.
+
+    Parameters
+    ----------
+    dqarr : `~numpy.ndarray`
+        Frame DQ array.
+    data : `~numpy.ndarray`
+        Frame SCI data.
+    bad : `~numpy.ndarray` of bool
+        ``get_uncertainty`` bad-pixel mask.
+    handoff_xy : `~numpy.ndarray` (N, 2)
+        Hand-off positions (frame pixels).
+    satstar_table : `~astropy.table.Table` or None
+        Accepted satstars (``xcentroid``/``ycentroid``).
+    fwhm_pix : float
+        PSF FWHM in pixels.
+    radius_fwhm : float
+        Radius cap, in FWHM.
+
+    Returns
+    -------
+    restore : `~numpy.ndarray` of bool
+        Pixels to unmask for the fit and to leave out of the satstar fill.
+    """
+    from scipy import ndimage as _ndi
+    sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+    restore = np.zeros(sat.shape, dtype=bool)
+    if not sat.any() or handoff_xy is None or len(handoff_xy) == 0:
+        return restore
+    lab, _ = _ndi.label(sat)
+    ny, nx = sat.shape
+
+    def _labels_at(xs, ys, half):
+        out = set()
+        for xc, yc in zip(np.rint(xs).astype(int), np.rint(ys).astype(int)):
+            y0, y1 = max(yc - half, 0), min(yc + half + 1, ny)
+            x0, x1 = max(xc - half, 0), min(xc + half + 1, nx)
+            if y1 > y0 and x1 > x0:
+                out.update(np.unique(lab[y0:y1, x0:x1]).tolist())
+        out.discard(0)
+        return out
+
+    hx = np.asarray(handoff_xy[:, 0], dtype=float)
+    hy = np.asarray(handoff_xy[:, 1], dtype=float)
+    labels = _labels_at(hx, hy, 1)
+    if (satstar_table is not None and len(satstar_table)
+            and 'xcentroid' in satstar_table.colnames
+            and 'ycentroid' in satstar_table.colnames):
+        xa = np.asarray(satstar_table['xcentroid'], dtype=float)
+        ya = np.asarray(satstar_table['ycentroid'], dtype=float)
+        ok = np.isfinite(xa) & np.isfinite(ya)
+        labels -= _labels_at(xa[ok], ya[ok], 0)
+    if not labels:
+        return restore
+    comp = np.isin(lab, sorted(labels))
+    yy, xx = np.nonzero(comp)
+    near = _L._protect_mask(xx, yy, np.column_stack([hx, hy]),
+                            radius_fwhm * float(fwhm_pix))
+    restore[yy[near], xx[near]] = True
+    valid = (np.isfinite(data) & ~np.asarray(bad, dtype=bool)
+             & ((dqarr & _L.dqflags.pixel['DO_NOT_USE']) == 0))
+    return restore & valid
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -275,13 +431,18 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       near_sat_dist_pix=1.0,
                       miri_prominence_snr=0.0, prominence_bg_box=0,
                       prominence_data_i2d=None, prominence_ww_i2d=None,
-                      frame_ww=None, protect_xy=None, protect_radius_pix=0.0):
+                      frame_ww=None, protect_xy=None, protect_radius_pix=0.0,
+                      handoff_xy=None, handoff_radius_pix=0.0):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
       dedup (1.0 px, qfit tiebreak) -> near-saturation filter ->
       satstar-wing rejection -> model/data-peak overshoot QC ->
       render model image.
+
+    ``handoff_xy``/``handoff_radius_pix`` exempt fits at the satstar channel's
+    implied-peak-gate rejects from the near-saturation filter ONLY (see
+    ``_gate_reject_handoff_xy``); ``None`` leaves the chain unchanged.
 
     Returns ``(result_table, modsky, phot_obj)``.  Does no file I/O.
     """
@@ -349,7 +510,9 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     # --- near-saturation + satstar-wing rejection ---
     _filter_near_saturation(phot, dq, max_sat_dist_pix=near_sat_dist_pix,
                             label=label, protect_xy=protect_xy,
-                            protect_radius_pix=protect_radius_pix)
+                            protect_radius_pix=protect_radius_pix,
+                            handoff_xy=handoff_xy,
+                            handoff_radius_pix=handoff_radius_pix)
     _filter_satstar_artifacts(phot, satstar_model_subtracted, err,
                               sig_K=float(options.satstar_artifact_sigK),
                               ratio_cut=float(options.satstar_artifact_ratio),
@@ -582,7 +745,10 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     # bkg-subtracted data peak.  drop_ratio=5 is safely above any real star
     # (model_peak ~ data_peak, ratio ~1) or refit-/cap-corrected fit; saturated
     # cores are already removed by the near-saturation + satstar-wing filters
-    # upstream, so they do not reach here.
+    # upstream, so they do not reach here.  The exception is a star handed off
+    # by the satstar implied-peak gate: it reaches here with its measured
+    # (late-group, valid-rate) core restored in ``data`` by
+    # _prepare_frame_for_photometry, so its ratio is ~1 like any other star.
     if (overshoot_drop_ratio and overshoot_drop_ratio > 0
             and len(phot.results)):
         modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
@@ -1939,11 +2105,19 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             _pmap[_b] = _a
         _partner = _pmap.get(filtername.lower())
         if _partner:
-            _pc = (f'{basepath}/catalogs/'
-                   f'{_partner}_consolidated_satstar_catalog.fits')
+            from jwst_gc_pipeline.photometry.merge_catalogs import (
+                consolidated_satstar_cache_path, satstar_catalog_in_observation,
+                satstar_obs_scope)
+            # Observation-scoped on a tree shared by several observations
+            # (#925); unscoped fields read the same paths as before.
+            _pscope = satstar_obs_scope(proposal_id, field)
+            _pc = consolidated_satstar_cache_path(basepath, _partner, _pscope)
             _pfiles = ([_pc] if os.path.exists(_pc) else
                        sorted(glob.glob(f'{basepath}/{_partner.upper()}/'
                                         f'pipeline/*_m*_satstar_catalog.fits')))
+            if _pscope and _pfiles != [_pc]:
+                _pfiles = [f for f in _pfiles if satstar_catalog_in_observation(
+                    f, proposal_id, _pscope)]
             _parts = []
             for _pf in _pfiles:
                 try:
@@ -1983,7 +2157,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             satstar_sibling_seed_positions)
         # Selection (and the position-only exclusion that bounds it) lives in
         # merge_catalogs so it is testable without a pipeline run.
-        _sibling_sky = satstar_sibling_seed_positions(filtername, basepath)
+        _sibling_sky = satstar_sibling_seed_positions(
+            filtername, basepath, proposal_id=proposal_id, field=field)
     # LOCK the per-frame satstar position to its stable data-refined seed (flux-
     # only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
     # positions into ~0.25" clusters -> the coadded per-frame satstar model
@@ -2027,6 +2202,32 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # left the m8 satstar mags byte-identical because the 07-25 caches were
         # reused.)
         recovery_signature=_satstar_recovery_signature(options))
+    satstar_rejected_path = filename.replace(
+        '.fits', f'{satstar_file_suffix}_satstar_rejected.fits')
+    # Satstar implied-peak-gate hand-off (#925), NIRCam, all targets: the gate
+    # judged these stars unsaturated and handed them to daophot, but their
+    # cores carry any-group SATURATED DQ.  Those late-group pixels have a valid
+    # rate (finite SCI/ERR, no DO_NOT_USE), yet the fit mask and the satstar
+    # fill below treat them as lost -- gc-treasury F480M rejects have 12-65 px
+    # SAT cores, larger than the 5x5 daophot fit box, so the fit had no pixels
+    # and the core data were overwritten with the (zero) satstar model.  Give
+    # those pixels back to the fit, only around handed-off stars.
+    handoff_xy, handoff_radius = None, 0.0
+    handoff_restore = None
+    if dqarr is not None and 'miri' not in inst_token:
+        handoff_xy, handoff_radius = _gate_reject_handoff_xy(
+            satstar_rejected_path, satstar_table, fwhm_pix, label='manual')
+        if handoff_xy is not None:
+            handoff_restore = _handoff_restore_pixels(
+                dqarr, data, bad, handoff_xy, satstar_table, fwhm_pix)
+            n_restore = int(handoff_restore.sum())
+            if n_restore:
+                mask = mask & ~handoff_restore
+                print(f"[manual] gate-reject hand-off: returned {n_restore} "
+                      f"late-group SATURATED pixel(s) with a valid rate to the "
+                      f"fit around {len(handoff_xy)} star(s)", flush=True)
+            else:
+                handoff_restore = None
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):
@@ -2041,6 +2242,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                 finite_model = np.where(np.isfinite(sm), sm, 0.0)
                 if dqarr is not None:
                     was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+                    if handoff_restore is not None:
+                        # keep the handed-off stars' measured cores
+                        was_sat = was_sat & ~handoff_restore
                     nan_replaced_data = _fill_saturated_pixels(
                         filename, data, dqarr, was_sat, finite_model,
                         nan_replaced_data, options)
@@ -2058,6 +2262,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         dqarr=dqarr, mask=mask, nan_replaced_data=nan_replaced_data,
         dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
+        satstar_rejected_path=satstar_rejected_path,
+        handoff_xy=handoff_xy, handoff_radius=handoff_radius,
         original_data=original_data, background_map=background_map,
         bkg_basis=bkg_basis,
         out_basepath=out_basepath, filename=filename,
@@ -2322,6 +2528,22 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             print(f"[{manual_phase}] seed-protection setup skipped: {_pex}",
                   flush=True)
 
+    # Satstar implied-peak-gate hand-off (#925), ALL targets.  The post-fit
+    # severity gate in get_saturated_stars rejects a fitted "satstar" whose
+    # model cannot reach its filter's saturation level and hands the star to
+    # this channel -- but its core still carries (any-group) SATURATED DQ, so
+    # the near-saturation filter below used to delete the daophot fit and the
+    # star vanished from both channels (gc-treasury o132 F480M: 403 stars at
+    # 12.0-12.9).  Exempt fits within a small radius of the REJECTED satstar's
+    # fitted position from that one filter.  Spike/wing detections farther
+    # from the fitted centre are still vetoed; accepted satstars and
+    # fit-quality rejects are never handed off.  NIRCam only: MIRI skips the
+    # implied-peak gate.
+    # Positions and pixel restoration are set up in
+    # _prepare_frame_for_photometry.
+    _handoff_xy = None if _is_miri else getattr(ctx, 'handoff_xy', None)
+    _handoff_radius = getattr(ctx, 'handoff_radius', 0.0)
+
     def _pass(seed, label, prom_snr=None):
         # prom_snr: per-pass prominence-reject threshold.  None -> default
         # (MIRI uses miri_prominence_snr; NIRCam 0=off).  The ext-NIRCam m12/m3+
@@ -2348,7 +2570,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             prominence_bg_box=0,
             prominence_data_i2d=_prom_i2d, prominence_ww_i2d=_prom_ww_i2d,
             frame_ww=ctx.ww, protect_xy=_protect_xy,
-            protect_radius_pix=_protect_radius)
+            protect_radius_pix=_protect_radius,
+            handoff_xy=_handoff_xy, handoff_radius_pix=_handoff_radius)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(

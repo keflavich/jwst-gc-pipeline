@@ -860,6 +860,50 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print(f"  Phase 2 [{_ci}] column {key!r}: DONE (std {time.time()-_t_mean:.1f}s, "
               f"total {time.time()-_t0:.1f}s)", flush=True)
 
+    # --- overshoot forced refit: carry the per-frame flag to the source ---
+    # ``forced_refit`` marks a fit redone because a brighter neighbour's model
+    # overshot this source (``cataloging.py``, the 1.2x overshoot pass).  Those
+    # magnitudes carry a measured bias: injected stars 4-14 px from a bright
+    # neighbour come back 0.31/0.44/0.76 mag too BRIGHT at 14.5-15.5, 15.5-16.5
+    # and 16.5-17.5 on refit rows, against 0.01-0.05 mag on rows the refit left
+    # alone and +0.002 mag for isolated stars (#932, measured on o132 F480M).
+    # Phase 2's inverse-variance mean is the wrong summary for a flag, so the
+    # fraction is counted over the frames that contributed a row -- unweighted,
+    # so it reads as "how much of this magnitude came from the refit".  Without
+    # it the merged catalog has no way to isolate the affected rows: the
+    # per-frame position scatter cannot show them either (see std_ra/std_dec
+    # above), and the flag existed only per frame before #931.
+    if any('forced_refit' in _t.colnames for _t in tbls):
+        _fr = np.zeros((n_src, n_tbl), dtype=bool)
+        _fr_seen = np.zeros((n_src, n_tbl), dtype=bool)
+        for ii, tbl in enumerate(tbls):
+            if 'forced_refit' not in tbl.colnames:
+                continue
+            keep = saved_keep[ii]
+            mi = saved_match_inds[ii]
+            _fr[mi[keep], ii] = np.asarray(tbl['forced_refit'], dtype=bool)[keep]
+            _fr_seen[mi[keep], ii] = True
+        _n_forced = _fr.sum(axis=1)
+        _n_seen = _fr_seen.sum(axis=1)
+        newtbl['forced_refit_nframes'] = _n_forced.astype('int16')
+        newtbl['forced_refit_frac'] = np.where(
+            _n_seen > 0, _n_forced / np.maximum(_n_seen, 1), np.nan).astype('float32')
+        newtbl.meta['forced_refit_frac'] = (
+            'fraction of the frames contributing to this source whose fit came '
+            'from the overshoot forced refit; those fluxes read too bright '
+            '(#932).  The denominator counts only frames whose catalog carries '
+            'the flag: a frame from a run predating it recorded no refits, so '
+            'counting it as "not refit" would dilute the fraction and understate '
+            'the contamination.  NaN when no contributing frame carried it.')
+        newtbl.meta['forced_refit_nframes'] = (
+            'number of contributing frames whose fit came from the overshoot '
+            'forced refit')
+        print(f"forced_refit: {int((_n_forced > 0).sum())} of {n_src} source(s) "
+              f"have >=1 forced-refit frame; "
+              f"{int((_fr_seen.sum(axis=1) > 0).sum())} source(s) have the flag "
+              f"on at least one frame", flush=True)
+        del _fr, _fr_seen
+
     # --- residual-footprint background: dedicated inverse-variance combine ---
     # Sigma-clipped across frames, weighted by npix/rms**2 (the inverse variance
     # of each footprint's MEAN), not by flux error.  See
@@ -1190,7 +1234,8 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    iteration_label=None,
                    resbgsub=False,
                    obs_suffix='',
-                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                   satstar_proposal_id=None, satstar_field=None):
     print(f'Starting merge catalogs: catalog_type: {catalog_type} module: {module} target: {target}', flush=True)
 
     if iteration_label in (None, ''):
@@ -1254,9 +1299,11 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
         for tbl in tqdm(tbls, desc='Table Loop'):
             t0 = time.time()
             wl = tbl.meta['filter']
-            flag_near_saturated(tbl, filtername=wl, target=target, basepath=basepath)
+            flag_near_saturated(tbl, filtername=wl, target=target, basepath=basepath,
+                                proposal_id=satstar_proposal_id, field=satstar_field)
             # replace_saturated adds more rows
-            replace_saturated(tbl, filtername=wl, target=target, basepath=basepath)
+            replace_saturated(tbl, filtername=wl, target=target, basepath=basepath,
+                              proposal_id=satstar_proposal_id, field=satstar_field)
 
             crds = tbl['skycoord']
             matches, sep, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
@@ -1699,6 +1746,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                 'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                 'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
                 'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
+                'forced_refit_frac', 'forced_refit_nframes',
                 f'{flux_error_colname}_prop'):
         if key in merged_exposure_table.colnames:
             minimal_version[key.split("_avg")[0]] = merged_exposure_table[key]
@@ -1715,7 +1763,8 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # -- so fwhm_basepath no longer constrains where this can run.)
     if do_replace_saturated:
         replace_saturated(minimal_table, filtername=filtername, target=target,
-                          fwhm_basepath=fwhm_basepath, basepath=basepath)
+                          fwhm_basepath=fwhm_basepath, basepath=basepath,
+                          proposal_id=progid, field=field)
 
     reject = np.isnan(minimal_table['skycoord'].ra) | np.isnan(minimal_table['skycoord'].dec)
     if np.any(reject):
@@ -1979,6 +2028,15 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                     break
     if _perobs_merged_tok:
         _obssuf = _perobs_merged_tok
+    # The proposal that scopes the satstar channel (#925), resolved the same
+    # way: the running proposal when named, else the registry entry whose
+    # per-frame products are observation-tokened for this field.
+    _satstar_prop = progid
+    if field not in (None, '') and progid in (None, ''):
+        for _p in map(str, _obs_filters_for(target) or ()):
+            if satstar_obs_scope(_p, field):
+                _satstar_prop = _p
+                break
     _mtk = f'{_perobs_merged_tok}_' if _perobs_merged_tok else ''
     vetted_tok = ('_vetted' if _perobs_merged_tok else f'{_obssuf}_vetted') if vetted else ''
 
@@ -2156,6 +2214,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                          epsf=epsf, target=target, blur=blur, indivexp=indivexp,
                          iteration_label=iteration_label,
                          obs_suffix=_obssuf,
+                         satstar_proposal_id=_satstar_prop,
+                         satstar_field=field,
                          basepath=basepath)
     if ref_filter is not None:
         _merge_kwargs['ref_filter'] = ref_filter
@@ -2310,9 +2370,276 @@ def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
     return tbl
 
 
+# --- observation scoping of the satstar channel (#925) --------------------
+# A tree that holds several observations' frames under one {FILTER}/pipeline
+# directory (gc-treasury: 139 tiles; m4: two pointings 174" apart) used to hand
+# EVERY observation's per-exposure satstar catalogs to every observation's merge,
+# and replace_saturated appends each unmatched satstar as a new row.  Measured on
+# gc-treasury o132 m8: 36-49% of every tile's rows were other tiles' saturated
+# stars (F480M 11.5-12.0: 3,830 rows outside the union of o132's exposures vs 124 inside).
+# The rule for which trees are shared is the per-frame token's rule
+# (naming.perframe_obs_token): an observation whose per-frame catalogs carry
+# ``_o{obs}`` shares its tree with other observations, so its satstar catalogs
+# must be scoped the same way.  Everything else (brick, cloudef, w51, ...)
+# resolves to no scope and takes the unchanged code path.
+
+#: ``jw<PPPPP><OOO><VVV>_...`` -- the proposal and observation of an exposure,
+#: set by the observatory, so it holds for every per-exposure satstar name.
+_SATSTAR_JW_OBS_RE = re.compile(r'^jw(\d{5})(\d{3})\d{3}_')
+
+#: A row this far outside every exposure of its observation is not that
+#: observation's star.  Generous on purpose: a saturated star at a detector
+#: edge can be fit with its centroid a few pixels off the array, and the rows
+#: the guard exists for sit arcminutes away (another tile).
+SATSTAR_FOOTPRINT_MARGIN_ARCSEC = 1.0
+
+#: Points sampled along each detector edge to trace a frame's footprint through
+#: its GWCS (the edges of a distorted detector are not straight on the sky).
+_SATSTAR_FOOTPRINT_EDGE_SAMPLES = 16
+
+
+class SatstarFootprintError(RuntimeError):
+    """The footprint of an observation's exposures could not be built, so the
+    out-of-footprint guard cannot run.  Raised rather than skipping the guard:
+    a silently unguarded merge is the failure mode the guard exists to stop."""
+
+
+def satstar_obs_scope(proposal_id, field):
+    """Observation token that scopes the satstar channel, or ``''``.
+
+    ``'_o132'`` when this observation's per-frame products share their tree
+    with other observations (``naming.perframe_obs_token`` returns an ``_o``
+    token: ``MULTIOBS_PROPOSALS`` and ``PER_OBS_PERFRAME_FIELDS``), else
+    ``''``.  ``''`` means "not scoped": the loader globs and caches exactly as
+    before.
+
+    Parameters
+    ----------
+    proposal_id : str or int or None
+        The proposal whose observation is being merged.
+    field : str or None
+        The observation number (``'132'``, ``'2'``, ``'002'`` ...).
+
+    Returns
+    -------
+    str
+        ``'_o{obs:03d}'`` or ``''``.
+    """
+    if proposal_id in (None, '') or field in (None, ''):
+        return ''
+    tok = perframe_obs_token(proposal_id, field)
+    return tok if tok.startswith('_o') else ''
+
+
+def satstar_catalog_in_observation(path, proposal_id, obs_scope):
+    """Whether a per-exposure satstar catalog belongs to the scoped observation.
+
+    Read from the observatory's exposure name (``jw<PPPPP><OOO><VVV>_``), which
+    every per-exposure product carries; a name without that prefix (a cutout
+    or hand-made product) is accepted only if it carries the pipeline's own
+    ``{obs_scope}_`` token.
+
+    Parameters
+    ----------
+    path : str
+        A per-exposure satstar catalog path.
+    proposal_id : str or int
+        The proposal being merged.
+    obs_scope : str
+        The token from :func:`satstar_obs_scope` (non-empty).
+
+    Returns
+    -------
+    bool
+    """
+    base = os.path.basename(str(path))
+    obs = obs_scope[2:]
+    match = _SATSTAR_JW_OBS_RE.match(base)
+    if match is not None:
+        return (int(match.group(1)) == int(proposal_id)
+                and match.group(2) == obs)
+    return f'{obs_scope}_' in base
+
+
+def consolidated_satstar_cache_path(basepath, filtername, obs_scope=''):
+    """Path of the consolidated (deduplicated) satstar catalog cache.
+
+    ``{basepath}/catalogs/{filter}_consolidated_satstar_catalog.fits`` when
+    unscoped (unchanged), ``{filter}{obs_scope}_consolidated_satstar_catalog
+    .fits`` when scoped, so two observations of one tree never share a cache.
+
+    Parameters
+    ----------
+    basepath : str
+    filtername : str
+    obs_scope : str, optional
+        From :func:`satstar_obs_scope`.
+
+    Returns
+    -------
+    str
+    """
+    return (f'{basepath}/catalogs/'
+            f'{filtername.lower()}{obs_scope}_consolidated_satstar_catalog.fits')
+
+
+def _footprint_frame_wcs(frame):
+    """The frame's GWCS-backed WCS; raises ``ValueError`` if it has none."""
+    return frame_wcs(frame, require_gwcs=True)
+
+
+def _frame_footprint_polygon(frame):
+    """Sky polygon (ra, dec in deg) tracing one exposure's detector edge.
+
+    Built from the frame's GWCS FORWARD transform along the pixel-centre
+    boundary.  The GWCS is required: the FITS/SIP approximation extrapolates
+    badly away from the array, which is where the rows this guards against sit.
+    """
+    try:
+        ww = _footprint_frame_wcs(frame)
+        header = fits.getheader(frame, 'SCI')
+    except (OSError, KeyError, ValueError) as err:
+        raise SatstarFootprintError(
+            f'cannot build the footprint of {frame}: '
+            f'{type(err).__name__}: {err}') from err
+    nx, ny = int(header['NAXIS1']), int(header['NAXIS2'])
+    t = np.linspace(0.0, 1.0, _SATSTAR_FOOTPRINT_EDGE_SAMPLES, endpoint=False)
+    xs = np.concatenate([t * (nx - 1), np.full_like(t, nx - 1.0),
+                         (1 - t) * (nx - 1), np.zeros_like(t)])
+    ys = np.concatenate([np.zeros_like(t), t * (ny - 1),
+                         np.full_like(t, ny - 1.0), (1 - t) * (ny - 1)])
+    ra, dec = ww.all_pix2world(xs, ys, 0)
+    ra, dec = np.asarray(ra, float), np.asarray(dec, float)
+    if not (np.all(np.isfinite(ra)) and np.all(np.isfinite(dec))):
+        raise SatstarFootprintError(
+            f'the GWCS of {frame} returned non-finite sky on its own detector '
+            f'edge; cannot build its footprint')
+    return ra, dec
+
+
+def _points_in_polygon(px, py, vx, vy):
+    """Even-odd ray-casting point-in-polygon test (vectorised over points)."""
+    inside = np.zeros(px.shape, dtype=bool)
+    n = len(vx)
+    for i in range(n):
+        j = i - 1
+        xi, yi, xj, yj = vx[i], vy[i], vx[j], vy[j]
+        crosses = (yi > py) != (yj > py)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            xint = (xj - xi) * (py - yi) / (yj - yi) + xi
+        inside ^= crosses & (px < xint)
+    return inside
+
+
+def _distance_to_polygon(px, py, vx, vy):
+    """Minimum distance from each point to the polygon's edges."""
+    best = np.full(px.shape, np.inf)
+    for i in range(len(vx)):
+        j = i - 1
+        ax, ay, bx, by = vx[j], vy[j], vx[i], vy[i]
+        dx, dy = bx - ax, by - ay
+        len2 = dx * dx + dy * dy
+        if len2 == 0:
+            d = np.hypot(px - ax, py - ay)
+        else:
+            s = np.clip(((px - ax) * dx + (py - ay) * dy) / len2, 0.0, 1.0)
+            d = np.hypot(px - (ax + s * dx), py - (ay + s * dy))
+        best = np.minimum(best, d)
+    return best
+
+
+def satstar_in_observation_footprint(skycoord, catalog_paths,
+                                     margin_arcsec=SATSTAR_FOOTPRINT_MARGIN_ARCSEC):
+    """Mask of positions inside the union of an observation's exposures.
+
+    The footprint is the union over the exposures behind ``catalog_paths``
+    (each per-exposure satstar catalog's own frame, via
+    ``frame_path_for_satstar_catalog``), each traced through its GWCS and
+    grown by ``margin_arcsec``.  Non-finite positions are outside.
+
+    Parameters
+    ----------
+    skycoord : `~astropy.coordinates.SkyCoord`
+        Positions to test.
+    catalog_paths : sequence of str
+        The observation's per-exposure satstar catalogs.
+    margin_arcsec : float, optional
+        Tolerance outside a detector edge.
+
+    Returns
+    -------
+    numpy.ndarray of bool
+
+    Raises
+    ------
+    SatstarFootprintError
+        If no catalog is given, a catalog's frame is not on disk, or a frame
+        has no usable GWCS.  The guard never degrades to "keep everything".
+    """
+    frames = []
+    for cat in catalog_paths:
+        frame = frame_path_for_satstar_catalog(cat)
+        if frame is None:
+            raise SatstarFootprintError(
+                f'no frame on disk for satstar catalog {cat}; cannot build '
+                f'the observation footprint')
+        frames.append(frame)
+    frames = sorted(set(frames))
+    if not frames:
+        raise SatstarFootprintError('no exposures to build a footprint from')
+    sc = SkyCoord(skycoord)
+    ra = np.atleast_1d(np.asarray(sc.icrs.ra.deg, float))
+    dec = np.atleast_1d(np.asarray(sc.icrs.dec.deg, float))
+    finite = np.isfinite(ra) & np.isfinite(dec)
+    polys = [_frame_footprint_polygon(fr) for fr in frames]
+    # Local tangent-plane (arcsec) about the footprint centre; exact enough at
+    # the arcminute scale of one observation, and a gnomonic projection keeps
+    # the great-circle detector edges straight.
+    allra = np.concatenate([p[0] for p in polys])
+    alldec = np.concatenate([p[1] for p in polys])
+    centre = SkyCoord(np.median(allra) * u.deg, np.median(alldec) * u.deg)
+    off_frame = centre.skyoffset_frame()
+
+    def _plane(r, d):
+        o = SkyCoord(r * u.deg, d * u.deg).transform_to(off_frame)
+        return (np.asarray(o.lon.to_value(u.arcsec), float),
+                np.asarray(o.lat.to_value(u.arcsec), float))
+
+    inside = np.zeros(len(ra), dtype=bool)
+    if not finite.any():
+        return inside
+    px, py = _plane(ra[finite], dec[finite])
+    hit = np.zeros(len(px), dtype=bool)
+    planes = [_plane(r, d) for r, d in polys]
+    for vx, vy in planes:
+        hit |= _points_in_polygon(px, py, vx, vy)
+    if margin_arcsec > 0 and not hit.all():
+        miss = ~hit
+        for vx, vy in planes:
+            near = _distance_to_polygon(px[miss], py[miss], vx, vy) <= margin_arcsec
+            idx = np.where(miss)[0][near]
+            hit[idx] = True
+            miss[idx] = False
+            if not miss.any():
+                break
+    inside[np.where(finite)[0]] = hit
+    return inside
+
+
 def load_satstar_catalog(filtername, target='brick',
-                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                         proposal_id=None, field=None):
+    """Consolidated saturated-star catalog for one filter.
+
+    ``proposal_id``/``field`` name the observation being merged.  When that
+    observation shares its tree with others (:func:`satstar_obs_scope` is
+    non-empty: gc-treasury tiles, m4's two pointings), only its own
+    per-exposure catalogs are read, the cache is named per observation, and a
+    row outside the union of its exposures' footprints is dropped (#925).
+    Otherwise -- and whenever they are omitted -- behaviour is unchanged.
+    """
     proj = _project_for_target_filter(target, filtername)
+    obs_scope = satstar_obs_scope(proposal_id, field)
     # Targets that span multiple observations within one proposal (e.g.
     # gc2211 has obs 023/028/046/049/050) don't have a single primary
     # i2d satstar; fall back to globbing the per-exposure satstar
@@ -2322,8 +2649,13 @@ def load_satstar_catalog(filtername, target='brick',
     # the per-exposure fallback below.
     if (_inst_token(filtername) == 'nircam'
             and target in project_obsnum and proj in project_obsnum[target]):
+        # A scoped observation reads ITS OWN primary, never the registry's
+        # (a wildcard for gc-treasury, and o002 only for m4 -- so an m4 o003
+        # merge would otherwise take o002's product).
+        _primary_obs = (obs_scope[2:] if obs_scope
+                        else project_obsnum[target][proj])
         primary = (f'{basepath}/{filtername.upper()}/pipeline/'
-                   f'{jw_prefix(proj)}-o{project_obsnum[target][proj]}'
+                   f'{jw_prefix(proj)}-o{_primary_obs}'
                    f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
         # project_obsnum may hold a glob wildcard for multi-obs targets
         # (sickle/cloudef/gc2211), so resolve via glob rather than exists().
@@ -2348,14 +2680,17 @@ def load_satstar_catalog(filtername, target='brick',
     # phantoms, ~2600 rows each) -- which ballooned the consolidated satstar
     # catalog ~40x (38764 vs ~150 real) and corrupted the daophot merge via
     # near-sat flagging.  See project_miri_partialsat_divot.
-    # TODO(#416): NOT obs-scoped.  All of a program's observations share this
-    # one {FILTER}/pipeline directory, so an obs-scoped merged catalog still
-    # takes every observation's saturated stars through here, and the
-    # consolidated cache below is written under one name per filter.  The
-    # per-exposure names DO carry the token (`..._o{obs}_crf_..._m<N>_
-    # satstar_catalog.fits`), so this is scopable once the #416 layout decision
-    # says whether tiles share a tree at all.
+    # Observation scoping (#925): a tree shared by several observations holds
+    # all of their per-exposure satstar catalogs in this one directory, so a
+    # scoped merge keeps only its own observation's (see satstar_obs_scope).
     _all_sat = sorted(glob.glob(f'{basepath}/{filtername.upper()}/pipeline/*satstar_catalog.fits'))
+    if obs_scope:
+        _n_pooled = len(_all_sat)
+        _all_sat = [f for f in _all_sat
+                    if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
+        print(f"load_satstar_catalog: scoped to {jw_prefix(proposal_id)}"
+              f"{obs_scope}: {len(_all_sat)} of {_n_pooled} satstar file(s) "
+              f"for {filtername} belong to this observation", flush=True)
     _tok = re.compile(r'_m\d+_satstar_catalog\.fits$')
     fallback = [f for f in _all_sat if _tok.search(os.path.basename(f))]
     _n_excluded = len(_all_sat) - len(fallback)
@@ -2390,8 +2725,7 @@ def load_satstar_catalog(filtername, target='brick',
     # the satstar catalogs, which a frame regeneration or re-alignment does not
     # touch, so without it the cache goes stale again the next time the offsets
     # table is corrected (issue #193).
-    cache = (f'{basepath}/catalogs/'
-             f'{filtername.lower()}_consolidated_satstar_catalog.fits')
+    cache = consolidated_satstar_cache_path(basepath, filtername, obs_scope)
     try:
         newest_src = max(os.path.getmtime(fn) for fn in fallback)
         if os.path.exists(cache) and os.path.getmtime(cache) >= newest_src:
@@ -2420,6 +2754,7 @@ def load_satstar_catalog(filtername, target='brick',
             # level up -- see satstar_frame_state_signature.
             _fsig = satstar_frame_state_signature(fallback)
             if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
+                    and str(cached.meta.get('SATOBSSC', '')) == obs_scope
                     and abs(_rcache - _rcur) < 1e-6
                     and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG
                     and str(cached.meta.get('SATFRMSG', '')) == _fsig):
@@ -2459,6 +2794,18 @@ def load_satstar_catalog(filtername, target='brick',
                   for fn in fallback]
     del _wcs_cache
     combined = table.vstack(sat_tables, metadata_conflicts='silent')
+    if obs_scope:
+        # Footprint guard (#925): a scoped observation's catalog never carries
+        # a row outside the union of its own exposures.  Applied BEFORE dedup
+        # so a foreign row can never become a kept representative.  Raises
+        # SatstarFootprintError if the footprint cannot be built.
+        _infp = satstar_in_observation_footprint(combined['skycoord_fit'], fallback)
+        if (~_infp).any():
+            print(f"load_satstar_catalog: footprint guard dropped "
+                  f"{int((~_infp).sum())} of {len(combined)} {filtername} "
+                  f"satstar row(s) outside the {obs_scope} exposures "
+                  f"(margin {SATSTAR_FOOTPRINT_MARGIN_ARCSEC}\")", flush=True)
+        combined = combined[_infp]
     # The fallback globs the PER-EXPOSURE satstar catalogs, so the same physical
     # saturated star appears once per frame it was fit in.  Without dedup,
     # replace_saturated() add_row()s each copy -> the merged catalog gets N
@@ -2484,6 +2831,10 @@ def load_satstar_catalog(filtername, target='brick',
     # ...and the state of the frames those positions were re-projected onto, so
     # the next read rebuilds when a frame has since moved (issue #193).
     deduped.meta['SATFRMSG'] = _frame_sig
+    if obs_scope:
+        # Only scoped caches carry the key, so an unscoped cache is written
+        # exactly as before; a scoped read requires it to match.
+        deduped.meta['SATOBSSC'] = obs_scope
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         # write to a temp sibling + atomic rename so a concurrent reader never
@@ -2858,7 +3209,8 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     return out
 
 
-def satstar_sibling_seed_positions(filtername, basepath, verbose=True):
+def satstar_sibling_seed_positions(filtername, basepath, verbose=True,
+                                   proposal_id=None, field=None):
     """Positions to seed this band's satstar fits at in EVERY exposure (#925).
 
     The band's own consolidated catalog, restricted to stars some exposure DID
@@ -2872,9 +3224,13 @@ def satstar_sibling_seed_positions(filtername, basepath, verbose=True):
     Returns ``None`` when there is nothing to seed from -- no consolidated
     catalog yet (a band's first pass), an empty one, or one whose every row is
     position-only.  Callers treat that as "seeding skipped", not an error.
+
+    ``proposal_id``/``field`` select the observation's own consolidated cache
+    on a tree shared by several observations (see ``satstar_obs_scope``);
+    omitted, the unscoped cache is read as before.
     """
-    path = (f'{basepath}/catalogs/'
-            f'{str(filtername).lower()}_consolidated_satstar_catalog.fits')
+    path = consolidated_satstar_cache_path(
+        basepath, str(filtername), satstar_obs_scope(proposal_id, field))
     if not os.path.exists(path):
         if verbose:
             print(f"sibling-exposure satstar seeds: no consolidated "
@@ -3120,9 +3476,11 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
-                        basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                        basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                        proposal_id=None, field=None):
     print(f"Flagging near saturated stars for filter {filtername}")
-    satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath)
+    satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath,
+                                       proposal_id=proposal_id, field=field)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}")
         cat.add_column(np.zeros(len(cat), dtype='bool'), name=f'near_saturated_{filtername}')
@@ -3316,12 +3674,15 @@ def _fill_satstar_added_columns(satstar_toadd, cat):
 
 def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
-                      basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                      basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                      proposal_id=None, field=None):
     # ``basepath`` locates the satstar catalogs (the cutout's own, for cutout
     # runs).  ``fwhm_basepath`` is unused (the fwhm_table.ecsv read it located
     # was dead compute and has been removed); retained for signature
-    # compatibility with existing callers.
-    satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath)
+    # compatibility with existing callers.  ``proposal_id``/``field`` scope the
+    # satstar catalog to the observation being merged (load_satstar_catalog).
+    satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath,
+                                       proposal_id=proposal_id, field=field)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}; skipping replacement")
         if 'replaced_saturated' not in cat.colnames:
