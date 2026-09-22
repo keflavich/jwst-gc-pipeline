@@ -26,12 +26,14 @@ THREE THINGS IT DOES DELIBERATELY
    mtime gate republishes forever.  Nothing to do is the common case and costs
    two small reads.
 
-3. **Staged, per layer.**  rsync into ``<name>.new``, verify it independently
-   (properties parses, Norder3 present, tile count matches the source), then
-   swap: old aside, new in, old deleted.  A partial tree is never reachable and
-   a failed transfer leaves the live layer untouched.  There is no ``--delete``
-   anywhere outside a single layer's own directory: the docroot holds other
-   people's layers.
+3. **Staged, per layer.**  Seed ``<name>.new`` from the live layer with
+   ``cp -al`` (hardlinks, no space), rsync the source over it, verify it
+   independently (properties parses, Norder3 present, tile count matches the
+   source), then swap: old aside, new in, old deleted.  A partial tree is never
+   reachable and a failed transfer leaves the live layer untouched.  ``--delete``
+   is what makes the seeded tree equal the source rather than the union of both,
+   and it is confined to that one ``<name>.new`` directory -- never a docroot,
+   which holds other people's layers.
 
 BOTH DESTINATIONS
 -----------------
@@ -329,6 +331,29 @@ def build_lock(src, what, wait_s=None, budget=None, poll=30, dry=False):
             pass
 
 
+#: Why both publish paths hardlink-seed their staging tree.
+#:
+#: Each destination is staged as `<name>.new` and swapped in, so a viewer never
+#: sees a partial pyramid.  Building that stage as a fresh copy needs room for
+#: a SECOND copy of the layer while it transfers, and the treasury NIRCam
+#: layers are ~7 GB each.  starformation is at 194 G of a 200 G quota, so on
+#: 2026-09-22 all three failed:
+#:
+#:     rsync: close failed on ".../jwst_gc_treasury_vminmax_hips.new/..."
+#:            Disk quota exceeded (122)
+#:     jwst_gc_treasury_vminmax_hips starformation: TRANSFER FAILED rc=11
+#:
+#: The small MIRI layers went through, so the log read as a partial success and
+#: the three big layers silently stayed days behind what the docroot served.
+#:
+#: `cp -al` seeds the stage from the live layer at zero space cost, and rsync
+#: then replaces only what changed -- a new tile appended to a coadd, not all
+#: 21714 of them.  rsync writes each update through a temp file and renames it,
+#: so the live layer's own inodes are never written through the shared link.
+#: `--delete` is what makes the seeded tree equal to the source rather than the
+#: union of both, and it is confined to the `.new` path this code creates.
+
+
 def publish_local(name, src, dry=False, force=False):
     """Docroot copy (what data.rc serves), staged and swapped."""
     dst = os.path.join(DOCROOT, name)
@@ -344,7 +369,17 @@ def publish_local(name, src, dry=False, force=False):
         print(f'  {name} docroot: could not clear the staging path rc={rc} -- '
               f'nothing transferred, live layer untouched', file=sys.stderr)
         return rc
-    rc = _run(['rsync', '-a', src + '/', stage + '/'], dry)
+    if os.path.isdir(dst):
+        # Seed the staging tree from the live one by HARDLINK, so staging
+        # costs the DELTA rather than a second full copy.  See the note above
+        # publish_local.
+        rc = _run(['cp', '-al', dst, stage], dry)
+        if rc and not dry:
+            print(f'  {name} docroot: could not seed the staging path rc={rc} '
+                  f'-- nothing transferred, live layer untouched',
+                  file=sys.stderr)
+            return rc
+    rc = _run(['rsync', '-a', '--delete', src + '/', stage + '/'], dry)
     if rc and not dry:
         subprocess.call(['rm', '-rf', stage])
         print(f'  {name} docroot: TRANSFER FAILED rc={rc} -- live layer '
@@ -380,12 +415,18 @@ def publish_remote(name, src, dry=False, host=WEB_HOST, web_dir=WEB_DIR,
         return 0
     stage = dst + '.new'
     expect = count_tiles(os.walk, src)
-    rc = _run(['ssh', host, f'rm -rf {shlex.quote(stage)}'], dry)
+    # Clear the staging path and seed it from the live layer by HARDLINK, so
+    # staging costs the DELTA rather than a second full copy (see the note
+    # above publish_local).
+    rc = _run(['ssh', host,
+               f'rm -rf {shlex.quote(stage)}; '
+               f'if [ -d {shlex.quote(dst)} ]; then '
+               f'cp -al {shlex.quote(dst)} {shlex.quote(stage)}; fi'], dry)
     if rc and not dry:
         print(f'  {name} {host}: could not clear the staging path rc={rc} -- '
               f'nothing transferred, live layer untouched', file=sys.stderr)
         return rc
-    rc = _run(['rsync', '-az', src + '/', f'{host}:{stage}/'], dry)
+    rc = _run(['rsync', '-az', '--delete', src + '/', f'{host}:{stage}/'], dry)
     if rc and not dry:
         # A failed transfer used to return here having printed NOTHING, so a
         # publish that moved no bytes was indistinguishable from one that had
