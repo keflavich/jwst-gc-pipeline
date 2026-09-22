@@ -539,3 +539,136 @@ def test_an_uncontended_run_keeps_its_budget_for_the_layer_that_needs_it(
                        budget=budget, poll=30) as held:
         assert held
     assert budget.remaining == 570
+
+
+# --- staging must not need a second copy of the layer ----------------------
+#
+# 2026-09-22: starformation hit its 200 G quota and all three treasury NIRCam
+# layers (~7 GB each) failed with `Disk quota exceeded (122)` while the small
+# MIRI ones went through, so the run read as a partial success and the big
+# layers stayed days behind the docroot.  Staging as a fresh copy needs room
+# for the layer twice; seeding it from the live tree by hardlink needs room
+# for the delta.
+
+class _Probe:
+    """What the remote verify step reads back: Norder3 present, one tile, the
+    source's own properties -- i.e. a staging tree that passes verify()."""
+    stdout = 'yes\n1\nhips_release_date = 2026-09-22T10:00Z\n'
+    returncode = 0
+
+
+def _src_layer(tmp_path):
+    src = tmp_path / 'src'
+    (src / 'Norder3').mkdir(parents=True)
+    (src / 'properties').write_text('hips_release_date = 2026-09-22T10:00Z\n')
+    (src / 'Norder3' / 'Npix1.png').write_bytes(b'x')
+    return src
+
+
+def _record_runs(monkeypatch):
+    runs = []
+
+    def fake_run(cmd, dry=False):
+        runs.append(cmd)
+        return 0
+
+    monkeypatch.setattr(ph, '_run', fake_run)
+    return runs
+
+
+@pytest.mark.parametrize('where', ['docroot', 'remote'])
+def test_staging_is_seeded_from_the_live_layer_by_hardlink(where, tmp_path,
+                                                           monkeypatch):
+    """A fresh staging copy needs the layer's space twice; cp -al needs none."""
+    src = _src_layer(tmp_path)
+    runs = _record_runs(monkeypatch)
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: 0)
+    monkeypatch.setattr(ph.subprocess, 'run', lambda *a, **k: _Probe())
+
+    if where == 'remote':
+        monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+        ph.publish_remote('zz_layer', str(src), host='zz_host', web_dir='/zz')
+        seed = [c for c in runs if c[0] == 'ssh' and 'cp -al' in c[-1]]
+        assert seed, runs
+        assert '/zz/zz_layer.new' in seed[0][-1] and '/zz/zz_layer' in seed[0][-1]
+        # only when there IS a live layer to seed from
+        assert 'if [ -d' in seed[0][-1]
+    else:
+        docroot = tmp_path / 'docroot'
+        live = docroot / 'zz_layer'
+        (live / 'Norder3').mkdir(parents=True)
+        monkeypatch.setattr(ph, 'DOCROOT', str(docroot))
+        monkeypatch.setattr(ph, '_read_local', lambda path: (
+            None if 'docroot' in path else (src / 'properties').read_text()))
+        ph.publish_local('zz_layer', str(src))
+        assert ['cp', '-al', str(live), str(live) + '.new'] in runs, runs
+
+
+@pytest.mark.parametrize('where', ['docroot', 'remote'])
+def test_the_seeded_stage_is_made_equal_to_the_source(where, tmp_path,
+                                                      monkeypatch):
+    """Seeding without --delete leaves the UNION of old and new.
+
+    A retired tile would survive in the published tree forever, and the tile
+    count the verify step gates on would never match the source again.
+    """
+    src = _src_layer(tmp_path)
+    runs = _record_runs(monkeypatch)
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: 0)
+    monkeypatch.setattr(ph.subprocess, 'run', lambda *a, **k: _Probe())
+
+    if where == 'remote':
+        monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+        ph.publish_remote('zz_layer', str(src), host='zz_host', web_dir='/zz')
+    else:
+        monkeypatch.setattr(ph, 'DOCROOT', str(tmp_path / 'docroot'))
+        monkeypatch.setattr(ph, '_read_local', lambda path: (
+            None if 'docroot' in path else (src / 'properties').read_text()))
+        ph.publish_local('zz_layer', str(src))
+
+    rsyncs = [c for c in runs if c[0] == 'rsync']
+    assert rsyncs, runs
+    for c in rsyncs:
+        assert '--delete' in c, c
+        # ...and only ever pointed at a staging path this code created
+        assert c[-1].rstrip('/').endswith('.new'), c
+
+
+@pytest.mark.parametrize('where', ['docroot', 'remote'])
+def test_the_hardlinked_live_tiles_are_never_written_through(where, tmp_path,
+                                                             monkeypatch):
+    """Hardlink seeding shares inodes with the LIVE layer.
+
+    rsync's default is a temp file plus rename, which breaks the link for the
+    file it replaces and leaves the live one alone.  --inplace (or --append)
+    would write through the shared inode and corrupt the layer being served.
+    """
+    src = _src_layer(tmp_path)
+    runs = _record_runs(monkeypatch)
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: 0)
+    monkeypatch.setattr(ph.subprocess, 'run', lambda *a, **k: _Probe())
+
+    if where == 'remote':
+        monkeypatch.setattr(ph, '_read_remote', lambda *a: None)
+        ph.publish_remote('zz_layer', str(src), host='zz_host', web_dir='/zz')
+    else:
+        monkeypatch.setattr(ph, 'DOCROOT', str(tmp_path / 'docroot'))
+        monkeypatch.setattr(ph, '_read_local', lambda path: (
+            None if 'docroot' in path else (src / 'properties').read_text()))
+        ph.publish_local('zz_layer', str(src))
+
+    for c in (c for c in runs if c[0] == 'rsync'):
+        assert '--inplace' not in c and '--append' not in c, c
+
+
+def test_a_first_publish_has_no_live_layer_to_seed_from(tmp_path, monkeypatch):
+    """cp -al of a missing source is an error; the docroot path must not run it."""
+    src = _src_layer(tmp_path)
+    runs = _record_runs(monkeypatch)
+    monkeypatch.setattr(ph.subprocess, 'call', lambda cmd: 0)
+    monkeypatch.setattr(ph, 'DOCROOT', str(tmp_path / 'docroot'))
+    monkeypatch.setattr(ph, '_read_local', lambda path: (
+        None if 'docroot' in path else (src / 'properties').read_text()))
+    ph.publish_local('zz_layer', str(src))
+    assert not [c for c in runs if c[0] == 'cp'], runs
+    assert [c for c in runs if c[0] == 'rsync'], runs
