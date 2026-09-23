@@ -95,25 +95,29 @@ _AK_COEFF = {'f150w': 2.054, 'f200w': 1.167, 'f277w': 0.607, 'f212n': 1.043, 'f3
 
 
 def _aks_from_jwst(c, m7_path, blue, red, color_intrinsic, match_radius):
-    import astropy.units as u
     from astropy.coordinates import SkyCoord
+    from jwst_gc_pipeline.astrometry.multiepoch_pm import _unique_nearest_pairs
     m7 = Table.read(m7_path)
     filt = [cn[len('mag_ab_'):] for cn in m7.colnames
             if cn.startswith('mag_ab_') and cn[len('mag_ab_'):] in _AK_COEFF]
     filt = sorted(filt, key=lambda f: -_AK_COEFF[f])
     blue = blue or filt[0]; red = red or filt[-1]
     msc = SkyCoord(m7['skycoord_ref'])
-    idx, sep, _ = c.match_to_catalog_sky(msc)
-    mb = np.asarray(m7[f'mag_ab_{blue}'], float)[idx]
-    mr = np.asarray(m7[f'mag_ab_{red}'], float)[idx]
+    ia, ib = _unique_nearest_pairs(c, msc, match_radius)
+    mb = np.full(len(c), np.nan); mr = np.full(len(c), np.nan)
+    mb[ia] = np.asarray(m7[f'mag_ab_{blue}'], float)[ib]
+    mr[ia] = np.asarray(m7[f'mag_ab_{red}'], float)[ib]
     color = mb - mr
     # bright PM stars saturate in JWST -> reject saturated / bad photometry
-    base = (sep < match_radius * u.arcsec) & np.isfinite(color)
+    base = np.zeros(len(c), dtype=bool); base[ia] = True
+    base &= np.isfinite(color)
     base &= (mb > 13) & (mb < 24) & (mr > 13) & (mr < 24)
     for f in (blue, red):
         sat = f'is_saturated_{f}'
         if sat in m7.colnames:
-            base &= ~np.asarray(m7[sat], bool)[idx]
+            satcol = np.zeros(len(c), dtype=bool)
+            satcol[ia] = np.asarray(m7[sat], bool)[ib]
+            base &= ~satcol
     clo, chi = np.nanpercentile(color[base], [2, 98]); base &= (color > clo) & (color < chi)
     ci = float(np.nanpercentile(color[base], 5)) if color_intrinsic is None else color_intrinsic
     aks = (color - ci) / (_AK_COEFF[blue] - _AK_COEFF[red])
@@ -123,12 +127,15 @@ def _aks_from_jwst(c, m7_path, blue, red, color_intrinsic, match_radius):
 def _aks_from_gns(c, gns_path, match_radius, ehk_intrinsic=0.10, aks_per_ehk=1.328):
     import astropy.units as u
     from astropy.coordinates import SkyCoord
+    from jwst_gc_pipeline.astrometry.multiepoch_pm import _unique_nearest_pairs
     gns = Table.read(gns_path)
     gsc = SkyCoord(np.asarray(gns['RAJ2000'], float) * u.deg, np.asarray(gns['DEJ2000'], float) * u.deg)
-    idx, sep, _ = c.match_to_catalog_sky(gsc)
-    hk = np.asarray(gns['Hmag'], float)[idx] - np.asarray(gns['Ksmag'], float)[idx]
+    ia, ib = _unique_nearest_pairs(c, gsc, match_radius)
+    hk = np.full(len(c), np.nan)
+    hk[ia] = np.asarray(gns['Hmag'], float)[ib] - np.asarray(gns['Ksmag'], float)[ib]
     aks = aks_per_ehk * (hk - ehk_intrinsic)
-    base = (sep < match_radius * u.arcsec) & np.isfinite(aks)
+    base = np.zeros(len(c), dtype=bool); base[ia] = True
+    base &= np.isfinite(aks)
     return aks, base, 'GNS H-Ks'
 
 
