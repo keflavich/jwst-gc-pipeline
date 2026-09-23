@@ -35,7 +35,7 @@ import argparse
 import json
 import numpy as np
 from astropy.table import Table
-from astropy.coordinates import SkyCoord, concatenate
+from astropy.coordinates import SkyCoord, concatenate, search_around_sky
 import astropy.units as u
 
 from . import multiepoch_pm as M
@@ -122,13 +122,32 @@ def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05):
 
 
 def _dedup_mask(sc, radius):
-    """Boolean mask keeping one row per group of mutually-within-``radius``
-    (arcsec) positions in ``sc`` -- the lowest-indexed row of each group."""
-    keep = np.ones(len(sc), bool)
-    idx, sep, _ = sc.match_to_catalog_sky(sc, nthneighbor=2)
-    dup = (sep < radius * u.arcsec) & (idx > np.arange(len(sc)))
-    keep[idx[dup]] = False
-    return keep
+    """Boolean mask keeping one row per CONNECTED COMPONENT of positions in
+    ``sc`` within ``radius`` (arcsec) of each other -- the lowest-indexed
+    row of each component.
+
+    A single-nearest-neighbour version of this (each row paired only with
+    its own closest other row) can leave two rows of the same 3+-row group
+    both marked "not a duplicate of the other": on a near-collinear chain
+    A-B-C with ~30 mas steps, A's nearest is B and B's nearest is A (a
+    mutual pair, so B is dropped), but C's nearest is B, an ALREADY-DROPPED
+    row that never gets checked against A -- C survives even though it is
+    well within radius of A transitively through B. Using
+    search_around_sky (returns every pair within radius, not just each
+    row's single closest) plus connected components -- every row within one
+    component's radius chain collapses to a single kept row regardless of
+    chain length, not just direct pairs.
+    """
+    n = len(sc)
+    i, j, _, _ = search_around_sky(sc, sc, radius * u.arcsec)
+    edges = i != j
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    graph = coo_matrix((np.ones(edges.sum()), (i[edges], j[edges])), shape=(n, n))
+    _, labels = connected_components(graph, directed=False)
+    comp_min_idx = np.full(labels.max() + 1, n, dtype=int)
+    np.minimum.at(comp_min_idx, labels, np.arange(n))
+    return np.arange(n) == comp_min_idx[labels]
 
 
 def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
@@ -165,12 +184,25 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
     if tie_magcut is None:
         tie_magcut = float(np.percentile(src['mag'], tie_bright_percentile))
         if verbose:
-            print(f'  tie_magcut (bright {tie_bright_percentile:g}% of src): {tie_magcut:.2f}')
+            n_cut = int((src['mag'] < tie_magcut).sum())
+            print(f'  tie_magcut (bright {tie_bright_percentile:g}% of src): '
+                  f'{tie_magcut:.2f} -- {n_cut:,}/{src["n"]:,} src stars pass '
+                  f'({100 * n_cut / src["n"]:.1f}%, vs {tie_bright_percentile:g}% '
+                  f'intended -- ties are matched to REF separately per observation, '
+                  f'so this is src-side selectivity only, not the eventual tie sample size)')
     tied, diags = [], []
     for i, p in enumerate(ref_paths):
         cat = _load_one(p, filt, ref_epoch, sn_cut, i)
+        n_ref_cut = int((cat['mag'] < tie_magcut).sum())
         sc_tied, diag = M.affine_tie(cat['sc'], cat['mag'], src['sc'], src['mag'],
                                      magcut=tie_magcut, match_radius=0.3)
+        if verbose:
+            print(f'  ref[{i}] {p.split("/")[-1]}: {n_ref_cut:,}/{cat["n"]:,} '
+                  f'pass the magcut ({100 * n_ref_cut / cat["n"]:.1f}%) -- '
+                  f'diag["n_match"]={diag["n_match"]:,} is the count AFTER '
+                  f'this cut and the 0.3" match radius both apply, so it is '
+                  f'not directly comparable to an uncut n_match without '
+                  f'rerunning affine_tie with magcut=inf.')
         cat['sc'] = sc_tied
         tied.append(cat)
         diags.append(diag)
