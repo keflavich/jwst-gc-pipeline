@@ -2980,7 +2980,8 @@ def apply_pooled_wingcal(satstar_cat, filtername,
 
 
 def load_rejected_satstar_catalog(filtername, target='brick',
-                                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                                  proposal_id=None, field=None):
     """Table of gate-REJECTED satstar candidates for this band.
 
     The satstar channel (Phase A2, *_satstar_rejected.fits) records candidates
@@ -2989,9 +2990,29 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     'gate-taper' population, individually 0.2-0.4 mag too faint).  The merge
     flags matching rows so color users can exclude them.  Returns None when no
     rejected files exist (pre-A2 products: behavior unchanged).
+
+    ``proposal_id``/``field`` obs-scope the rejected channel exactly as
+    :func:`load_satstar_catalog` scopes the accepted one: on a tree shared by
+    several observations (:func:`satstar_obs_scope` non-empty: gc-treasury
+    tiles, m4's two pointings) only this observation's rejected files are read.
+    Without them -- and whenever the observation is not on a shared tree --
+    behaviour is unchanged (all rejected files for the band).
     """
     _all = sorted(glob.glob(
         f'{basepath}/{filtername.upper()}/pipeline/*satstar_rejected.fits'))
+    # Observation scoping (#925/#931): a tree shared by several observations
+    # holds every observation's rejected files in this one directory, so a
+    # scoped merge must keep only its own -- the accepted channel already does
+    # this in load_satstar_catalog.  Without it a sibling observation's
+    # gate-rejected candidates flag gate-taper on this observation's rows.
+    obs_scope = satstar_obs_scope(proposal_id, field)
+    if obs_scope:
+        _n_pooled = len(_all)
+        _all = [f for f in _all
+                if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
+        print(f"load_rejected_satstar_catalog: scoped to {jw_prefix(proposal_id)}"
+              f"{obs_scope}: {len(_all)} of {_n_pooled} rejected file(s) for "
+              f"{filtername} belong to this observation", flush=True)
     _tok = re.compile(r'_m\d+_satstar_rejected\.fits$')
     files = [f for f in _all if _tok.search(os.path.basename(f))]
     # per-frame demo/adhoc tags (e.g. _stripDEMO_) lack the _m<N> token; accept
@@ -4070,7 +4091,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     _clip_corr_mag = np.full(len(cat), np.nan)
     try:
         _rej_tab = load_rejected_satstar_catalog(filtername, target=target,
-                                                 basepath=basepath)
+                                                 basepath=basepath,
+                                                 proposal_id=proposal_id,
+                                                 field=field)
     except Exception as _rej_err:
         print(f"WARNING: rejected-satstar load failed for {filtername}: "
               f"{type(_rej_err).__name__}: {_rej_err}")
