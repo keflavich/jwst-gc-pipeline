@@ -8,7 +8,7 @@ missing -- 834 lines with no coverage.
 """
 import numpy as np
 import pytest
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, concatenate
 import astropy.units as u
 
 from jwst_gc_pipeline.astrometry.multiepoch_pm import affine_tie, build_pm_catalog_2epoch
@@ -156,3 +156,47 @@ def test_affine_tie_absorbs_a_coherent_linear_velocity_field():
     # The whole point: after the tie, almost none of a purely linear/coherent
     # field is left -- recovered amplitude is a small fraction of injected.
     assert recovered_amplitude < 0.1 * injected_amplitude
+
+
+def test_isolation_survives_duplicate_observation_concatenation():
+    """build_treasury_pm's normal ref is a concatenation of several
+    independently-tied observations of the SAME field (see
+    load_and_tie_ref_catalogs), so a star's true counterpart appears in ref
+    once per observation that detected it, at very nearly the same position
+    each time. Before the same_star_radius guard, those re-detections of the
+    star ITSELF looked like a bright competing neighbor (comp_flux_ratio~1),
+    and the isolation cut rejected essentially everything -- 100% on real
+    Arches/Quintuplet data, the case this test reconstructs synthetically.
+    """
+    pytest.importorskip('flystar')
+    n = 800
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=300.0)
+    dt = 2.0
+    pm_ra_true = RNG.normal(0, 4.0, n)
+    pm_dec_true = RNG.normal(0, 4.0, n)
+    rx = sx + pm_ra_true * dt / 1000.0
+    ry = sy + pm_dec_true * dt / 1000.0
+
+    src_sc = _sc_from_xy(sx, sy)
+    src = dict(sc=src_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+              mag=mag, flux=10 ** (-0.4 * mag), epoch=2024.0, n=n)
+
+    # Two "observations" of the SAME ref positions, each with its own tiny
+    # centroid noise (a few tenths of a mas) -- exactly what
+    # load_and_tie_ref_catalogs hands to build_pm_catalog_2epoch after tying
+    # each observation independently.
+    noise = 0.0002  # arcsec
+    rx1 = rx + RNG.normal(0, noise, n); ry1 = ry + RNG.normal(0, noise, n)
+    rx2 = rx + RNG.normal(0, noise, n); ry2 = ry + RNG.normal(0, noise, n)
+    ref_sc = concatenate([_sc_from_xy(rx1, ry1), _sc_from_xy(rx2, ry2)])
+    ref_flux = np.concatenate([10 ** (-0.4 * mag), 10 ** (-0.4 * mag)])
+    ref_mag = np.concatenate([mag, mag])
+    ref = dict(sc=ref_sc, ex=np.full(2 * n, 0.003), ey=np.full(2 * n, 0.003),
+              mag=ref_mag, flux=ref_flux, epoch=2024.0 + dt, n=2 * n)
+
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=1.0, err_cap_mas=1e6)
+    assert len(pm) >= 0.95 * n
+    # This is the regression: without the same_star_radius guard, dominant
+    # (and therefore trustworthy) is 0 here, same as it was on real data.
+    assert pm['dominant'].sum() > 0.9 * len(pm)
+    assert pm['trustworthy'].sum() > 0.9 * len(pm)

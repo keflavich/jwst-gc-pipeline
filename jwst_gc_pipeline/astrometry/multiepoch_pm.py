@@ -335,7 +335,8 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
 
 
 def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
-                            flux_ratio_cap=0.10, isolation_radius=None):
+                            flux_ratio_cap=0.10, isolation_radius=None,
+                            same_star_radius=0.05):
     """2-epoch flystar PM fit between two plain catalogs (e.g. two independent
     JWST epochs), after ``ref``'s coords have already been affine-tied onto
     ``src`` (or vice versa) with :func:`affine_tie`.
@@ -344,6 +345,22 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
     needed only for the isolation/"trustworthy" cut).  Master list = src.
     Mirrors build_pm_catalog's mutual-NN matching + isolation filter, minus
     the pm-prior propagation step (neither epoch has one here).
+
+    ``same_star_radius`` guards the isolation check against ``ref`` being a
+    concatenation of several independently-tied observations of the SAME
+    field (build_treasury_pm's normal case): every matched star's true
+    counterpart then appears in ``ref`` once per observation that detected
+    it, at (very nearly) the same position each time. Without this guard,
+    those re-detections of the star ITSELF look like a bright "competing"
+    neighbor at comp_flux_ratio~1, and the isolation cut used to derive
+    'trustworthy' rejects nearly everything regardless of real crowding --
+    on Arches/Quintuplet this rejected 100% of otherwise-good matches
+    (comp_flux_ratio pinned at ~1.0 for essentially every star) before this
+    guard was added. Sgr B2/Cloud e/f were affected too, just not to 100%,
+    since not every star there was independently re-detected in all of the
+    tied observations. Any ``ref`` candidate within this radius of the
+    primary match's own position is treated as the same star, not a
+    competitor.
     """
     from flystar.startables import StarTable
     from astropy.coordinates import search_around_sky
@@ -393,9 +410,13 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
         prim_ridx = idx[selidx]
         prim_flux = ref['flux'][prim_ridx]
         si, ri, _, _ = search_around_sky(src['sc'][sel], ref['sc'], beam * 3 * u.arcsec)
+        # Exclude candidates positionally coincident with the primary
+        # match itself (same star, different tied observation -- see
+        # same_star_radius above), not just the exact same row index.
+        same_star = ref['sc'][ri].separation(ref['sc'][prim_ridx[si]]) < same_star_radius * u.arcsec
         comp_flux = np.zeros(int(sel.sum()))
-        for gg, bb in zip(si, ri):
-            if bb == prim_ridx[gg]:
+        for gg, bb, skip in zip(si, ri, same_star):
+            if skip:
                 continue
             if ref['flux'][bb] > comp_flux[gg]:
                 comp_flux[gg] = ref['flux'][bb]
