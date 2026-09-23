@@ -90,24 +90,50 @@ def _load_one(path, filt, epoch, sn_cut, obs_index):
                 epoch=epoch, n=int(ok.sum()), obs_index=obs_index)
 
 
-def load_filter_catalog(paths, filt, epoch, sn_cut=5.0):
+def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05):
     """Load one or more per-obs/per-field catalogs, keep one filter's usable
     (S/N > sn_cut) sources, concatenate. Works for both the bare-column
     single-filter vetted catalogs (skycoord/flux/...) and the suffixed
-    multi-filter merged catalogs (skycoord_f212n/flux_f212n/...)."""
+    multi-filter merged catalogs (skycoord_f212n/flux_f212n/...).
+
+    This is only ever called for ``src`` (a single-epoch field), which
+    normally means a single path -- but the CLI accepts more than one, and
+    if those ever cover overlapping sky (as opposed to ``ref``'s deliberate
+    multi-observation concatenation, which is untangled downstream by
+    build_pm_catalog_2epoch's same_star_radius), the same star would get one
+    row per path here with nothing to merge them back down, inflating
+    matched/trustworthy counts with duplicate PM rows for one physical star.
+    Source-association dedup here, not a correction -- no reduce derived
+    from the match, just which duplicate rows are kept.
+    """
     cats = [_load_one(p, filt, epoch, sn_cut, i) for i, p in enumerate(paths)]
     sc = concatenate([c['sc'] for c in cats]) if len(cats) > 1 else cats[0]['sc']
     obs_index = np.concatenate([np.full(c['n'], c['obs_index']) for c in cats])
-    return dict(sc=sc,
-                ex=np.concatenate([c['ex'] for c in cats]),
-                ey=np.concatenate([c['ey'] for c in cats]),
-                flux=np.concatenate([c['flux'] for c in cats]),
-                mag=np.concatenate([c['mag'] for c in cats]),
-                epoch=epoch, n=int(sum(c['n'] for c in cats)), obs_index=obs_index)
+    ex = np.concatenate([c['ex'] for c in cats])
+    ey = np.concatenate([c['ey'] for c in cats])
+    flux = np.concatenate([c['flux'] for c in cats])
+    mag = np.concatenate([c['mag'] for c in cats])
+    if len(cats) > 1:
+        keep = _dedup_mask(sc, dedup_radius)
+        sc, ex, ey, flux, mag, obs_index = (
+            sc[keep], ex[keep], ey[keep], flux[keep], mag[keep], obs_index[keep])
+    return dict(sc=sc, ex=ex, ey=ey, flux=flux, mag=mag,
+               epoch=epoch, n=int(len(sc)), obs_index=obs_index)
+
+
+def _dedup_mask(sc, radius):
+    """Boolean mask keeping one row per group of mutually-within-``radius``
+    (arcsec) positions in ``sc`` -- the lowest-indexed row of each group."""
+    keep = np.ones(len(sc), bool)
+    idx, sep, _ = sc.match_to_catalog_sky(sc, nthneighbor=2)
+    dup = (sep < radius * u.arcsec) & (idx > np.arange(len(sc)))
+    keep[idx[dup]] = False
+    return keep
 
 
 def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
-                              tie_magcut=15.0, verbose=True):
+                              tie_magcut=None, tie_bright_percentile=20.0,
+                              verbose=True):
     """Load each ref path SEPARATELY and affine-tie it onto src's frame
     BEFORE combining.
 
@@ -122,7 +148,24 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
     nearest-neighbor match at a given position) spurious proper motion.
     Tying each observation independently removes this before it can leak
     into the PM fit.
+
+    ``tie_magcut=None`` (the default) derives an ABSOLUTE cutoff from
+    ``src``'s own magnitude distribution (its ``tie_bright_percentile``,
+    i.e. the brightest 20% by default) rather than using a fixed literal
+    value. affine_tie's own default (magcut=15) assumes a calibrated
+    Vega/AB-like scale, as VIRAC/GNS use -- but mag_src/mag here is
+    -2.5*log10(flux) of this pipeline's raw instrumental flux, which runs
+    roughly -21 to -3 for GC Treasury (found by checking why a coherent
+    ~6 mas/yr DEC bias in Cloud c's trustworthy PMs grew monotonically with
+    faintness: ``mag < 15`` was true for EVERY star, so the tie's supposedly
+    "bright, well-measured" calibration sample was silently the ENTIRE
+    matched population, uncurated, for every field measured this way so
+    far). An explicit ``tie_magcut`` still overrides this when given.
     """
+    if tie_magcut is None:
+        tie_magcut = float(np.percentile(src['mag'], tie_bright_percentile))
+        if verbose:
+            print(f'  tie_magcut (bright {tie_bright_percentile:g}% of src): {tie_magcut:.2f}')
     tied, diags = [], []
     for i, p in enumerate(ref_paths):
         cat = _load_one(p, filt, ref_epoch, sn_cut, i)
@@ -148,7 +191,7 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
 
 
 def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
-         match_radius=0.15, tie_magcut=15.0, verbose=True):
+         match_radius=0.15, tie_magcut=None, isolation_radius=None, verbose=True):
     src = load_filter_catalog(src_paths, filt, src_epoch)
     if verbose:
         print(f'  src ({filt}, epoch {src_epoch:.3f}) usable: {src["n"]:,}')
@@ -157,7 +200,20 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     if verbose:
         print(f'  ref ({filt}, epoch {ref_epoch:.3f}) usable: {ref["n"]:,} '
               f'(from {len(ref_paths)} independently-tied observations)')
-    pm = M.build_pm_catalog_2epoch(src, ref, match_radius=match_radius)
+        # same_star_radius (build_pm_catalog_2epoch's default 0.05" = 50 mas)
+        # assumes a tied observation's own residual scatter is well below
+        # that, so a re-detection of the SAME star lands within it. A tie
+        # whose resid_mas approaches 50 mas can't reliably tell "same star,
+        # noisy" from "different, close star" at that radius either way.
+        for i, d in enumerate(diags):
+            if d['rms_resid_mas'] > 25.0:
+                print(f'  WARNING: ref[{i}] tie resid {d["rms_resid_mas"]:.1f} mas is '
+                      f'within 2x the same_star_radius (50 mas) build_pm_catalog_2epoch '
+                      f'uses to tell a re-detection of the same star from a real close '
+                      f'neighbor -- isolation-cut results here are less trustworthy than '
+                      f'the trustworthy flag alone suggests.')
+    pm = M.build_pm_catalog_2epoch(src, ref, match_radius=match_radius,
+                                   isolation_radius=isolation_radius)
     pm.meta['filter'] = filt
     pm.meta['frame'] = ('relative: mean motion + mean shear of the affine tie\'s own '
                         'bright/compact matching sample subtracted per observation; '
@@ -192,9 +248,15 @@ def main():
     ap.add_argument('--filter', required=True, help='filter, e.g. f212n')
     ap.add_argument('--out', required=True)
     ap.add_argument('--match-radius', type=float, default=0.15)
+    ap.add_argument('--isolation-radius', type=float, default=None,
+                    help='beam (x3) for the trustworthy isolation check; '
+                         'defaults to --match-radius. Widen this for a src '
+                         'field with real sub-arcsec structure (e.g. a dense '
+                         'cluster core) where match_radius alone is too small '
+                         'to catch a blended-but-undetected companion.')
     args = ap.parse_args()
     build(args.src, args.ref, args.filter, args.src_epoch, args.ref_epoch, args.out,
-         match_radius=args.match_radius)
+         match_radius=args.match_radius, isolation_radius=args.isolation_radius)
 
 
 if __name__ == '__main__':
