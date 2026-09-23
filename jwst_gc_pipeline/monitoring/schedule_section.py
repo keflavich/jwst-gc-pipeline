@@ -29,6 +29,8 @@ page cannot actually establish.
 import datetime
 import html
 
+from .fold import fold as _fold
+
 from . import schedule as _schedule
 from .skyview import mast_url as _mast_url
 
@@ -230,7 +232,7 @@ def section(sched, entries=(), now=None):
                      f'published schedule yet, or its weeks are outside the '
                      f'window this reads.')
         return f"""<section class="gcm-sec" id="schedule"><h2>Scheduled — program {esc(program)}</h2>
-<p class="gcm-note">{claim} {prov}.</p></section>"""
+{_fold(f'<p class="gcm-note">{claim} {prov}.</p>', 'why this panel is empty')}</section>"""
 
     nxt = summary['next']
     if nxt is not None:
@@ -253,8 +255,9 @@ def section(sched, entries=(), now=None):
             continue
         rows.append(_row(visit, now, on_disk, program))
         n_upcoming_shown += 1 if upcoming else 0
-    more = (f'<p class="gcm-note">{hidden} further scheduled visit(s) not shown; '
-            f'the full list is in <code>schedule.json</code>.</p>' if hidden else '')
+    more = (_fold(f'<p class="gcm-note">{hidden} further scheduled visit(s) '
+                  f'not shown; the full list is in <code>schedule.json</code>.</p>',
+                  'visits not shown') if hidden else '')
 
     return f"""<style>{CSS}</style>
 <section class="gcm-sec" id="schedule"><h2>Scheduled — program {esc(program)}</h2>
@@ -267,6 +270,7 @@ def section(sched, entries=(), now=None):
     <span class="gcm-tally is-ok"><b>{summary['n_past']}</b> elapsed</span>
   </div>
 </div>
+<details class="gcm-fold"><summary>about this program and schedule</summary>
 <p class="gcm-note">JWST program {esc(program)} is the <strong>Galactic Center
 Treasury</strong> survey; each row is one scheduled <em>visit</em> — a single
 telescope pointing — and <em>tiles</em> such as <code>GC_1</code> are the survey's
@@ -277,7 +281,7 @@ same time. <em>dur</em> is the visit's planned length.</p>
 <strong>plan</strong> — STScI's own note is that executed observations can
 differ from those scheduled. Nothing here is evidence that an observation
 happened; “on disk” means this monitor has scanned data for that observation
-number, and “not seen” means only that it has not. {prov}.</p>
+number, and “not seen” means only that it has not. {prov}.</p></details>
 <div class="gcm-sch-wrap"><table class="gcm-sch-table">
 <thead><tr><th>visit</th><th>target</th><th>start (UTC)</th><th>when</th>
 <th>dur</th><th>instrument</th><th>state</th></tr></thead>

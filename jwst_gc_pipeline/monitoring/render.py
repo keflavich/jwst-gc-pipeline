@@ -26,6 +26,7 @@ import time
 
 from . import schedule_section as _schedule_section
 from . import skyview
+from .fold import CSS as _FOLD_CSS, fold as _fold
 
 # --------------------------------------------------------------------------
 # Wavelength -> hue, so a filter chip is tinted by what it actually observes.
@@ -359,7 +360,7 @@ a.gcm-back:hover { text-decoration: underline; }
 .gcm-figs ul { margin: .2rem 0 0; padding-left: 1.1rem; font-size: .78rem; }
 .gcm-figs a { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .gcm * { transition: none !important; } }
-""" + skyview.CSS
+""" + skyview.CSS + _FOLD_CSS
 
 
 # --------------------------------------------------------------------------
@@ -579,10 +580,11 @@ def _stage_table(run):
 <div class="gcm-scroll"><table class="gcm-t">
 <thead><tr><th>filter</th>{head}<th>reduced&nbsp;as</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
+<details class="gcm-fold"><summary>what * means</summary>
 <p class="gcm-note" style="margin:.4rem 0 0;font-size:.74rem">
   <code>*</code> = the product name carries no <code>_o&lt;obs&gt;</code> token and this
   field has more than one observation, so the count cannot be attributed to
-  {esc(run['proposal'])}/o{esc(run['obsid'])}.</p>"""
+  {esc(run['proposal'])}/o{esc(run['obsid'])}.</p></details>"""
 
 
 def _astrometry_table(run):
@@ -620,13 +622,14 @@ def _astrometry_table(run):
 <th>tiles ok</th><th>worst tile (mas)</th><th>cell</th>
 <th>checkpoint</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
+<details class="gcm-fold"><summary>about “tiles ok”</summary>
 <p class="gcm-note" style="margin:.4rem 0 0;font-size:.74rem">
   <b>“tiles ok” is not a tolerance.</b> <code>measure_offset_grid</code> runs with no
   <code>max_off_mas</code>, and <code>astrometry_offsets</code> sets
   <code>off_ok=True</code> whenever that is <code>None</code> — so N/N counts tiles
   whose offset histogram had a coherent <em>peak</em>, however large the offset.
   The column that carries the gate is <b>worst tile</b>, against
-  {LOCAL_CELL_TOL_MAS:g} mas.</p>"""
+  {LOCAL_CELL_TOL_MAS:g} mas.</p></details>"""
 
 
 def _provenance_block(run):
@@ -664,8 +667,9 @@ def _evidence_table(rows):
         '<tr>' + ''.join(f'<td class="n">{_fmt_cell(c)}</td>' for c in row) + '</tr>'
         for row in rows['data'])
     total, shown = rows.get('total', len(rows['data'])), len(rows['data'])
-    more = (f'<p class="gcm-note" style="margin:.3rem 0 0;font-size:.72rem">'
-            f'showing {shown} of {total}</p>' if total > shown else '')
+    more = (_fold(f'<p class="gcm-note" style="margin:.3rem 0 0;'
+                  f'font-size:.72rem">showing {shown} of {total}</p>',
+                  'rows not shown') if total > shown else '')
     return (f'<div class="gcm-scroll"><table class="gcm-t"><thead><tr>{head}</tr>'
             f'</thead><tbody>{body}</tbody></table></div>{more}')
 
@@ -818,13 +822,14 @@ def _cutouts_block(cutouts):
 <td style="white-space:normal">{''.join(flags)}</td></tr>""")
     return f"""
 <section class="gcm-sec"><h2>Cutout runs</h2>
+<details class="gcm-fold"><summary>about this table</summary>
 <p class="gcm-note">Every cutout run on disk: the shared
 <code>monitor5as</code> probes plus the hand-made experiment cutouts. A cutout run
 stops after m6 — m7 and m8 need more than one filter — so "catalogs" here counts
 per-filter products only. These rows also flag <em>zero-byte</em> products and
 orphan <code>tmp*</code> files: a write that died mid-flight leaves both, and a
 count-based ladder reads
-them as finished work.</p>
+them as finished work.</p></details>
 <div class="gcm-scroll"><table class="gcm-t">
 <thead><tr><th>field</th><th>label</th><th>frames</th><th>catalogs</th>
 <th>filters</th><th>touched</th><th>flags</th></tr></thead>
@@ -883,6 +888,7 @@ def _paper_block(summary):
                           if k != 'table') or 'none recorded'
     generated = summary.get('generated') or '?'
     return f"""
+<details class="gcm-fold"><summary>where these numbers come from</summary>
 <p class="gcm-note" style="margin:.2rem 0 .5rem">
   From <code>{esc(os.path.basename(summary.get('postrecat_dir') or ''))}/summary.json</code>,
   written {esc(str(generated)[:16])} by the paper's own
@@ -890,14 +896,15 @@ def _paper_block(summary):
   mode flip &gt; {flip_tol:g} mas, degenerate-pair drift ≥ {gates['continuity_tol_mag']:g} mag)
   are applied there, with the
   sanctioned window-swept offset histogram over the full vetted catalogs —
-  nothing on this page recomputes them.</p>
+  nothing on this page recomputes them.</p></details>
 <div class="gcm-scroll"><table class="gcm-t">
 <thead><tr><th>program/band</th><th>vs VIRAC p60 (mas)</th><th>p90 (mas)</th>
 <th>contrast</th><th>mode flip (mas)</th><th>vs anchor (mas)</th>
 <th>catalog written</th><th>flags</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
+<details class="gcm-fold"><summary>photometric certifiers</summary>
 <p class="gcm-note" style="margin:.4rem 0 0;font-size:.74rem">
-  Photometric certifiers: {cert_bits}.</p>"""
+  Photometric certifiers: {cert_bits}.</p></details>"""
 
 
 def _field_section(entry, show_skip=False, figure_base='figures',
@@ -1091,10 +1098,11 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
 {sched_sec}
 
 <section class="gcm-sec" id="overview"><h2>Overview</h2>
+<details class="gcm-fold"><summary>how to read the cards</summary>
 <p class="gcm-note">One card per registered observation. The bar is the stage
 ladder in run order — reduction (unc·cal·red·i2d) then cataloging
 (m12→m8). Solid = every filter has it, pale = some do, STRIPED = it exists but predates an earlier stage, so it was built from inputs that have since been regenerated, hatched = the product
-name cannot be attributed to this observation. {card_note}</p>
+name cannot be attributed to this observation. {card_note}</p></details>
 <div class="gcm-grid">{cards}</div></section>
 
 {_cutouts_block(cutouts)}

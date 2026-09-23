@@ -1309,6 +1309,7 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
 
     return f"""
 <section class="gcm-sec gcm-sky" id="skyview"><h2>Sky view — survey footprints</h2>
+<details class="gcm-fold"><summary>about these footprints</summary>
 <p class="gcm-note">Program {_esc(footprints.get('program'))},
 <em>{_esc(footprints.get('title'))}</em>: {n_planned} planned pointings, NIRCam
 prime with MIRI as a coordinated parallel. The MIRI parallel sits ~7.5′ from the
@@ -1317,7 +1318,7 @@ prime and so covers <em>different sky</em>, which is why it is drawn separately.
 request the 180° flip, so these positions are <em>indicative</em>: across the
 allowed range alone the MIRI parallel moves ~125″, about the width of a NIRCam
 module, and a flip moves it ~15′.{dither_note} <strong>{n_observed}</strong>
-pointings observed so far, from {status_note}.</p>
+pointings observed so far, from {status_note}.</p></details>
 
 <div class="gcm-sky-wrap">
   <div id="gcm-aladin" class="gcm-sky-off"></div>
@@ -1399,9 +1400,11 @@ pointings observed so far, from {status_note}.</p>
   </div>
 </div>
 
+<details class="gcm-fold"><summary>how to use the map</summary>
 <p class="gcm-sky-foot">{axes_note}; {grid_note}. Hover a pointing for its
 target and filters. Drag to pan; click the map, then scroll to zoom. The
-interactive view adds sky imagery you can pan across.
+interactive view adds sky imagery you can pan across.</p></details>
+<p class="gcm-sky-foot">
 <button class="gcm-sky-load" id="gcm-sky-reset" type="button">reset view</button>
 <button class="gcm-sky-load" id="gcm-sky-load" type="button">load interactive view</button>
 <span class="gcm-sky-note" id="gcm-sky-note"></span></p>
