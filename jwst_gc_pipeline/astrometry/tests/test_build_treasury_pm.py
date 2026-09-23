@@ -43,10 +43,17 @@ def test_dedup_collapses_a_simple_duplicate_pair():
 
 
 def test_dedup_collapses_a_transitive_chain_not_directly_within_radius():
-    """A-B and B-C are each within radius, but A-C is NOT directly (the
-    exact bug this test pins): a single-nearest-neighbour dedup can leave
-    BOTH A and C marked "kept" since neither's own single nearest neighbour
-    check catches the other. Connected components must not."""
+    """A-B and B-C are each within radius, but A-C is NOT directly.
+
+    NOTE: the old single-nearest-neighbour `_dedup_mask` happens to pass
+    this particular case too -- whether it does depends on which of A/C
+    scipy's KDTree resolves as B's nearest neighbour in a tie, which is
+    platform/version-dependent, not something this test controls. It is
+    kept as a basic correctness check of connected-components dedup, but
+    it does NOT by itself distinguish the fix from the old code -- see
+    test_dedup_collapses_more_than_two_coincident_duplicates below for the
+    case that actually does (pr-reviewer caught this: restoring the old
+    _dedup_mask still passed this test)."""
     a = _sc_at(CENTER, 0, 0)
     b = _sc_at(CENTER, 30, 0)
     c = _sc_at(CENTER, 60, 0)
@@ -57,6 +64,22 @@ def test_dedup_collapses_a_transitive_chain_not_directly_within_radius():
     keep = _dedup_mask(sc, 0.05)
     assert keep.sum() == 1
     assert keep[0]  # lowest index of the component survives
+
+
+def test_dedup_collapses_more_than_two_coincident_duplicates():
+    """4 rows at the exact same position (e.g. a literal duplicate-row
+    merge artifact). A single-nearest-neighbour dedup can only ever mark
+    ONE row per NN relationship as a duplicate of another; with 3+ rows
+    tied at zero separation it can leave more than one "kept" depending on
+    tie resolution -- unlike the A-B-C chain above, this is not
+    tie-order-lucky: connected components collapsing an n>2 group to 1
+    survivor is the actual behaviour the rewrite guarantees and the old
+    code does not."""
+    pts = [_sc_at(CENTER, 0, 0) for _ in range(4)]
+    sc = SkyCoord([p.ra.deg for p in pts] * u.deg, [p.dec.deg for p in pts] * u.deg)
+    keep = _dedup_mask(sc, 0.05)
+    assert keep.sum() == 1
+    assert keep[0]
 
 
 def test_dedup_handles_two_separate_groups_independently():
