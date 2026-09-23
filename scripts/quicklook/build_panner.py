@@ -28,6 +28,12 @@ DEFAULT_HIPS_DIR = '/orange/adamginsburg/jwst/gc-treasury/pngs'
 DEFAULT_FOOTPRINTS = '/orange/adamginsburg/jwst/monitor/footprints.json'
 DEFAULT_OUT = '/orange/adamginsburg/jwst/releases/site'
 
+#: Pointings the tour never visits, even with a rendered layer.  o138 and
+#: o139 are the same pair the survey mosaics leave out (EXCLUDE in the
+#: gc-treasury mosaics recipe); the maintainer asked for the panner to skip
+#: them too.
+DEFAULT_EXCLUDE = ('o138', 'o139')
+
 #: Per-field layers of the flavour the coadd is made of.
 _LAYER = re.compile(r'^GCTreasury_o(?P<obs>\d{3})_RGB_480-mean-212_vminmax_hips$')
 
@@ -90,6 +96,10 @@ def build(args):
     wanted = layers_in_the_coadd(args.hips_dir)
     if not wanted:
         raise SystemExit(f'no vminmax per-field layers under {args.hips_dir}')
+    excluded = sorted(wanted & set(args.exclude))
+    if excluded:
+        print(f'excluded from the tour: {", ".join(excluded)}')
+    wanted -= set(args.exclude)
     found = centres(args.footprints, wanted)
     missing = sorted(wanted - set(found))
     if missing:
@@ -156,6 +166,9 @@ def main(argv=None):
                     help='degrees across the viewport')
     ap.add_argument('--rate', type=float, default=panner.DEFAULT_RATE,
                     help='arcsec of sky per second')
+    ap.add_argument('--exclude', nargs='*', default=list(DEFAULT_EXCLUDE),
+                    help='pointings (e.g. o138) left off the tour; pass '
+                         'with no values to visit every rendered layer')
     ap.add_argument('--max-leg', type=float, default=5.0,
                     help='arcmin; a longer gap is cut across rather than panned')
     return build(ap.parse_args(argv))

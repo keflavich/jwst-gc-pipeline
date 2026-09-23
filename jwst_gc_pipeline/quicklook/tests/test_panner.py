@@ -386,3 +386,30 @@ def test_the_menu_is_not_rewritten_while_it_is_open(tmp_path):
       console.log(JSON.stringify({value: els.field.value}));
     """)
     assert out[1]['value'] == '2'
+
+
+def test_o138_and_o139_are_left_off_the_tour_by_default(build, tmp_path,
+                                                        capsys):
+    """The maintainer asked for the panner to skip o138 and o139, the same
+    pair the survey mosaics exclude.  They are rendered, so only the exclude
+    list keeps them off; ``--exclude`` with no values restores them."""
+    hips = tmp_path / 'pngs'
+    _layers(hips, ['127', '128', '138', '139'])
+    fp = tmp_path / 'footprints.json'
+    _footprints(fp, [{'number': n, 'target': f'GC_{n}',
+                      'ra': 266.5 + i * 0.01, 'dec': -28.7}
+                     for i, n in enumerate(('127', '128', '138', '139'))])
+
+    out = tmp_path / 'site'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(out)])
+    tour = json.loads((out / panner.DATA_FILE).read_text())
+    assert sorted(s['id'] for s in tour['stops']) == ['o127', 'o128']
+    assert 'excluded from the tour: o138, o139' in capsys.readouterr().out
+
+    everything = tmp_path / 'all'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(everything), '--exclude'])
+    tour = json.loads((everything / panner.DATA_FILE).read_text())
+    assert sorted(s['id'] for s in tour['stops']) == ['o127', 'o128',
+                                                       'o138', 'o139']
