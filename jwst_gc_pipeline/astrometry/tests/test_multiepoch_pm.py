@@ -234,6 +234,42 @@ def test_affine_tie_refuses_literal_duplicate_row_contamination():
         affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
 
 
+def test_affine_tie_duplicate_check_requires_flux_agreement_too():
+    """pr-reviewer, PR #959 round 2: every duplicate-row test so far paired
+    coincident POSITION with coincident FLUX together, so the dmag half of
+    the check was never independently exercised -- dropping it entirely
+    still left every test passing. Same setup as the majority-contamination
+    test above (60% of pairs land at exactly zero separation after the tie),
+    but this time those coincident pairs have a deliberately large flux
+    mismatch: position agreement alone is not the #958 signature, since a
+    real star can legitimately sit near its formal position by chance while
+    being a completely different, unrelated source in the other catalog. It
+    must NOT be flagged.
+    """
+    n = 1000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=200.0)
+    A_true = np.array([0.05, 0.0001, -0.0001])
+    B_true = np.array([-0.03, 0.00008, -0.00012])
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+
+    n_coincident = int(0.6 * n)
+    coincident_idx = RNG.choice(n, n_coincident, replace=False)
+    rx[coincident_idx] = sx[coincident_idx]
+    ry[coincident_idx] = sy[coincident_idx]
+    # Same position, but NOT the same flux -- a literal duplicate row would
+    # have copied this too; a merely-coincident position would not.
+    rmag[coincident_idx] = mag[coincident_idx] + 2.0
+
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    _, diag = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+    assert diag['dup_row_suspect_fraction'] < 0.02
+
+
 def test_affine_tie_refuses_minority_duplicate_row_contamination():
     """pr-reviewer PR #140 round 7: the majority-contamination test above
     cannot tell "resid_mas reads near zero because duplicates DOMINATE the

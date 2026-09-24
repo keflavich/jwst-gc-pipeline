@@ -233,3 +233,41 @@ def test_load_and_tie_ref_catalogs_warns_on_ref_vs_ref_duplication(tmp_path, cap
     assert 'jwst-gc-pipeline#958' in out
     assert diags[0]['ref_dup_fraction_max'] > 0.9
     assert diags[1]['ref_dup_fraction_max'] > 0.9
+
+
+def test_load_and_tie_ref_catalogs_ties_at_the_offset_that_broke_the_old_radius(tmp_path):
+    """pr-reviewer, PR #959 round 2: the radius fix (build_treasury_pm.py's
+    own call site widened 0.3->1.0; affine_tie's function default is
+    untouched) was pinned only by a test that calls affine_tie DIRECTLY with
+    an explicit match_radius -- reverting the production call site back to
+    0.3 left every existing test green, since none of them exercised
+    load_and_tie_ref_catalogs itself at an offset that size. This does:
+    a ~150 mas ref offset (the real Sgr B2 case, rounded up) must tie
+    successfully through load_and_tie_ref_catalogs, not just through
+    affine_tie called with the radius spelled out by the test.
+    """
+    rng = np.random.default_rng(15)
+    n = 500
+    dra = rng.uniform(-60, 60, n)
+    ddec = rng.uniform(-60, 60, n)
+    sc = SkyCoord((CENTER.ra.deg + dra / 3600) * u.deg,
+                 (CENTER.dec.deg + ddec / 3600) * u.deg)
+    flux = rng.uniform(1e-8, 1e-6, n)
+    mag = -2.5 * np.log10(flux)
+    src = dict(sc=sc, mag=mag, n=n)
+
+    offset_mas = 150.0
+    ref_dra = dra + offset_mas / 1000.0 + rng.normal(0, 0.005, n)
+    ref_ddec = ddec + rng.normal(0, 0.005, n)
+    ref_sc = SkyCoord((CENTER.ra.deg + ref_dra / 3600) * u.deg,
+                      (CENTER.dec.deg + ref_ddec / 3600) * u.deg)
+    ref_flux = flux * (1.0 + rng.normal(0, 0.01, n))
+    ref_path = tmp_path / 'ref.fits'
+    _write_ref_fits(ref_path, ref_sc, ref_flux)
+
+    # No pytest.raises here -- this must SUCCEED at the production radius.
+    # It fails loudly (an unhandled TieNotVerifiedError) if a future edit
+    # reverts build_treasury_pm.py's call site back toward 0.3".
+    ref, diags = load_and_tie_ref_catalogs([str(ref_path)], 'f212n', 2026.0, src,
+                                           tie_magcut=None, tie_bright_percentile=20.0)
+    assert diags[0]['n_kept'] > 0.5 * diags[0]['n_match']

@@ -152,14 +152,21 @@ def _dedup_mask(sc, radius):
 
 #: A ref-vs-ref duplicate fraction above this is reported loudly. Not a hard
 #: gate: jwst-gc-pipeline#958's OWN measured fractions for Sgr B2 (29-44%)
-#: and Cloud e/f (30-35%) sit above this too, and those two fields' output
-#: proper motions read consistent with their formal errors (pr-reviewer,
-#: PR #959 review) -- so duplicate-row fraction ALONE is not yet established
-#: as the thing that breaks a fit; the tie's own residual (rms_resid_mas,
-#: already gated at >25 mas below) is what actually correlates with the
-#: fields (Arches/Quintuplet/Brick/Cloud c) whose trustworthy PM scatter
-#: comes out 6-7x their formal error. Reported so it CAN be correlated by a
-#: human reader, not treated as sufficient on its own to refuse a tie.
+#: and Cloud e/f (30-35%) sit above this too, yet those two fields' PM
+#: scatter is only 1.3-1.5x (Sgr B2) and 3.4-4x (Cloud e/f) their formal
+#: errors -- roughly matching the ~2.6 mas/yr intrinsic field-star velocity
+#: dispersion expected in this region, the better reference point than
+#: formal error alone (pr-reviewer, PR #959 round 2 review). So duplicate-
+#: row fraction ALONE is not established as the thing that breaks a fit.
+#: What pr-reviewer's per-cell analysis (same review) found INSTEAD tracks
+#: the affected fields (Arches/Quintuplet/Brick/Cloud c, whose PM scatter
+#: is several times formal error even after accounting for real field-star
+#: dispersion): the excess is SPATIALLY COHERENT and present in bright AND
+#: faint stars alike -- a patch-wise frame-tie residual, not centroid noise
+#: or duplication by itself, and it tracks each field's own tie rms_resid_
+#: mas (a print WARNING below when it exceeds 25 mas, not a gate). Reported
+#: here so a human reader CAN correlate ref_dup_fraction_max against that
+#: residual and the per-cell map, not treated as sufficient on its own.
 REF_DUP_WARN_FRACTION = 0.05
 REF_DUP_SEP_MAS = 1.0
 REF_DUP_DMAG = 1.0e-4
