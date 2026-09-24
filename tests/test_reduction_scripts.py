@@ -1575,6 +1575,8 @@ def test_checkpoint_cli_drops_subfloor_and_keeps_the_bulk_tie(tmp_path, monkeypa
     monkeypatch.setattr(m, 'load_reference_catalog', lambda *a, **k: object())
     monkeypatch.setattr(m, 'Table', type('T', (), {'read': staticmethod(
         lambda *a, **k: object())}))
+    # the stub tables carry no frame, so no satstar catalog to find (#957)
+    monkeypatch.setattr(m, 'load_exposure_satstars', lambda *a, **k: {})
 
     rc = m.main(['--stage', 'm2', '--filter', 'F182M',
                  '--catalog-glob', str(base / '*_m2_daophot_basic.fits'),

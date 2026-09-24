@@ -53,6 +53,7 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
 from jwst_gc_pipeline.photometry.cataloging import _floor_actionable_corrections
 from jwst_gc_pipeline.photometry.m2_correction_floors import m2_correction_floor
 from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
+from jwst_gc_pipeline.photometry.satstar_consensus import load_exposure_satstars
 from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
 
 
@@ -200,8 +201,6 @@ def main(argv=None):
     print(f"loaded {len(tables)} per-frame catalogs", flush=True)
     satstars = None
     if not args.no_satstars:
-        from jwst_gc_pipeline.photometry.satstar_consensus import (
-            load_exposure_satstars)
         satstars = load_exposure_satstars(tables, args.stage)
         print(f"satstar catalogs for {len(satstars)} of {len(tables)} "
               f"exposure(s)", flush=True)
