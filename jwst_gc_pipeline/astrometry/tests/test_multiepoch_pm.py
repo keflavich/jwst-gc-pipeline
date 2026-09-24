@@ -11,7 +11,8 @@ import pytest
 from astropy.coordinates import SkyCoord, concatenate
 import astropy.units as u
 
-from jwst_gc_pipeline.astrometry.multiepoch_pm import affine_tie, build_pm_catalog_2epoch
+from jwst_gc_pipeline.astrometry.multiepoch_pm import (
+    affine_tie, build_pm_catalog_2epoch, TieNotVerifiedError)
 
 CENTER = SkyCoord(266.5 * u.deg, -28.5 * u.deg)
 RNG = np.random.default_rng(20260918)
@@ -140,14 +141,25 @@ def test_affine_tie_absorbs_a_coherent_linear_velocity_field():
     pm_dec_true = omega * sx * 1000.0   # mas/yr, linear in x
     rx = sx + pm_ra_true * dt / 1000.0
     ry = sy + pm_dec_true * dt / 1000.0
+    # Positions stay EXACTLY noise-free on purpose -- the point of this test
+    # is that a purely linear field is fully degenerate with the affine
+    # model and gets absorbed to numerical precision. Only flux gets
+    # realistic between-epoch noise (as any two independent reductions
+    # would have): without it every pair's magnitude is bit-identical by
+    # construction (same `mag` array reused), which would look exactly like
+    # jwst-gc-pipeline#958's literal duplicate-row contamination to
+    # affine_tie's duplicate-row check even though nothing here is
+    # duplicated -- see test_affine_tie_refuses_literal_duplicate_row_contamination.
+    ref_mag = mag + RNG.normal(0, 0.01, n)
 
     src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
-    ref_sc_tied, diag = affine_tie(ref_sc, mag, src_sc, mag, magcut=0, match_radius=1.0)
+    ref_sc_tied, diag = affine_tie(ref_sc, ref_mag, src_sc, mag, magcut=0, match_radius=1.0)
+    assert diag['dup_row_suspect_fraction'] < 0.02
 
     src = dict(sc=src_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
               mag=mag, flux=10 ** (-0.4 * mag), epoch=2024.0, n=n)
     ref = dict(sc=ref_sc_tied, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
-              mag=mag, flux=10 ** (-0.4 * mag), epoch=2024.0 + dt, n=n)
+              mag=ref_mag, flux=10 ** (-0.4 * ref_mag), epoch=2024.0 + dt, n=n)
     pm = build_pm_catalog_2epoch(src, ref, match_radius=1.0, err_cap_mas=1e6)
 
     injected_amplitude = np.median(np.hypot(pm_ra_true, pm_dec_true))
@@ -156,6 +168,63 @@ def test_affine_tie_absorbs_a_coherent_linear_velocity_field():
     # The whole point: after the tie, almost none of a purely linear/coherent
     # field is left -- recovered amplitude is a small fraction of injected.
     assert recovered_amplitude < 0.1 * injected_amplitude
+
+
+def test_affine_tie_refuses_literal_duplicate_row_contamination():
+    """jwst-gc-pipeline#958: nominally-independent GC Treasury observations
+    turned out to share 30-62% bit-identical rows (same RA/Dec to <1 mas,
+    same flux) -- a translation-only coherence check (measure_offset) cannot
+    catch this, since duplicated rows pile up at the SAME true offset and
+    satisfy it trivially. affine_tie must refuse instead of silently tying
+    to a contaminated reference.
+
+    Mixed sample: a MINORITY of pairs are genuinely independent (real
+    per-star centroid + flux noise, correctly recovered by the affine fit,
+    landing at the noise floor -- not exactly zero); a MAJORITY are literal
+    copies (same position AND same flux, landing at exactly zero) -- the
+    #958 signature.
+    """
+    n = 1000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=200.0)
+    A_true = np.array([0.05, 0.0001, -0.0001])
+    B_true = np.array([-0.03, 0.00008, -0.00012])
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001  # 1 mas, same floor used elsewhere in this file
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)  # realistic between-epoch flux noise
+
+    n_dup = int(0.6 * n)
+    dup_idx = RNG.choice(n, n_dup, replace=False)
+    rx[dup_idx] = sx[dup_idx]
+    ry[dup_idx] = sy[dup_idx]
+    rmag[dup_idx] = mag[dup_idx]
+
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    with pytest.raises(TieNotVerifiedError, match="duplicate-row"):
+        affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+
+
+def test_affine_tie_tolerates_ordinary_noisy_agreement():
+    """Regression guard for the duplicate-row check itself: real per-star
+    noise (no injected duplicates at all) must NOT trip it, even though a
+    Rayleigh-distributed residual occasionally lands close to zero by
+    chance. This is exactly the existing recovers-a-known-distortion fixture
+    with no duplication injected."""
+    n = 1500
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=400.0)
+    A_true = np.array([0.150, 0.00030, -0.00040])
+    B_true = np.array([-0.080, 0.00025, -0.00020])
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    _, diag = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+    assert diag['dup_row_suspect_fraction'] < 0.02
 
 
 def test_isolation_survives_duplicate_observation_concatenation():

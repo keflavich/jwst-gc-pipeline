@@ -127,8 +127,22 @@ def test_adaptive_tie_magcut_derives_from_src_not_a_literal_15(tmp_path, capsys)
     mag = -2.5 * np.log10(flux)
     src = dict(sc=sc, mag=mag, n=n)
 
+    # ref is a SEPARATE (synthetic) observation of the same field, not a
+    # literal copy of src: small positional (few-mas) and flux (~1%) offsets,
+    # well inside affine_tie's match radius. Without these, ref is bit-
+    # identical to src -- position AND flux -- which is exactly the
+    # jwst-gc-pipeline#958 duplicate-row signature affine_tie's own
+    # duplicate-row check now (correctly) refuses to tie; this test is about
+    # tie_magcut selectivity, not about that check, so it must not
+    # accidentally exercise it.
+    ref_dra = dra + rng.normal(0, 0.005, n)   # dra/ddec are arcsec; 5 mas noise
+    ref_ddec = ddec + rng.normal(0, 0.005, n)
+    ref_sc = SkyCoord((CENTER.ra.deg + ref_dra / 3600) * u.deg,
+                      (CENTER.dec.deg + ref_ddec / 3600) * u.deg)
+    ref_flux = flux * (1.0 + rng.normal(0, 0.01, n))
+
     ref_path = tmp_path / 'ref.fits'
-    _write_ref_fits(ref_path, sc, flux)
+    _write_ref_fits(ref_path, ref_sc, ref_flux)
 
     ref, diags = load_and_tie_ref_catalogs([str(ref_path)], 'f212n', 2026.0, src,
                                            tie_magcut=None, tie_bright_percentile=20.0)

@@ -55,6 +55,26 @@ EPOCH_VIRAC = 2014.0      # VIRAC2 / VVV (II/387), Gaia-DR3 frame
 EPOCH_GNS = 2015.5        # GALACTICNUCLEUS central (J/A+A/653/A133), approx
 # JWST epoch read per-catalog from MJD-AVG (gc2211 o023 = 2023.70)
 
+# A matched pair this close AND this flux-identical after a verified bulk
+# tie is not "excellent agreement" -- two genuinely independent epochs of a
+# real star essentially never coincide to native-pixel precision AND exact
+# flux. It is the literal duplicate-row contamination jwst-gc-pipeline#958
+# found across nominally-independent GC Treasury observations (54-62% of
+# rows bit-identical in RA/Dec and flux). A few percent is well below that
+# and well above the coincidence rate expected of real data (pr-reviewer
+# PR #140 round 5 review); measure_offset's own coherence check cannot catch
+# this on its own, since duplicated rows pile up at the SAME true offset and
+# satisfy translational coherence trivially.
+_DUP_ROW_FRACTION_LIMIT = 0.02
+# Deliberately far tighter than any real (or synthetic-test) per-star
+# centroid noise floor (this pipeline's own formal errors run ~1-2 mas; a
+# literal duplicate row lands here at floating-point precision, effectively
+# 0). A genuinely noisy real pair landing this close by chance is rare
+# enough not to force the false-positive rate anywhere near
+# _DUP_ROW_FRACTION_LIMIT even for a whole matched sample.
+_DUP_ROW_SEP_MAS = 0.1
+_DUP_ROW_DMAG = 1.0e-4
+
 # local_residual_map bins matched pairs into a spatial grid; a cell size far
 # bigger than any field this module handles collapses that grid to effectively
 # one bin, so what we get back is its verified, deduplicated PAIR LIST
@@ -92,16 +112,14 @@ def tangent_xy(sc, center):
 def _field_center(sc):
     """Tangent-plane projection center: the median RA/Dec of ``sc``.
 
-    Factored out of every per-star-matching function in this module on
-    purpose: ASTROMETRY RULE #1's grep-guard cannot tell "picking a
-    projection center for a tangent-plane fit" from "computing a bulk
-    NN-median astrometric correction" from source text alone -- it only sees
-    a nearest-neighbor match and a ``np.median`` call in the same function.
-    Before this split, ``build_pm_catalog`` and ``build_pm_catalog_2epoch``
-    tripped the guard for exactly this reason despite never using a median to
-    compute any correction; isolating the (harmless, unrelated) median here
-    means the guard is only ever tripped by an actual match+reduce pairing
-    again, not by this bookkeeping choice sitting nearby it.
+    This is bookkeeping for the tangent-plane projection, not an astrometric
+    correction -- picking WHERE to center the (x, y) coordinate system a fit
+    is expressed in has no bearing on what that fit computes. The five
+    functions in this module that need a projection center (``build_pm_
+    catalog``, ``build_pm_catalog_2epoch``, ``affine_tie``, ``shift_to_virac_
+    frame``/``shift_gns_to_virac`` via ``affine_tie``) used to each compute
+    it inline, identically; pulling the one-line calculation out here once
+    is the ordinary DRY fix for five copies of the same thing.
     """
     return SkyCoord(np.median(sc.ra), np.median(sc.dec))
 
@@ -148,6 +166,18 @@ def _unique_nearest_pairs(a_sc, b_sc, radius_arcsec):
     ``build_treasury_pm._dedup_mask`` uses for duplicate-row collapsing
     (jwst-gc-pipeline PR #140 review) -- reused here rather than
     reimplemented differently a third time.
+
+    This is a DIFFERENT criterion from mutual-nearest-neighbor (each side's
+    own nearest neighbor is the other), not a strictly better one: it drops
+    ALL claimants of a contested ``b`` -- including a clean, unambiguous pair
+    that merely happens to share a competitor -- and it accepts some
+    genuinely non-mutual pairs mutual-NN would reject. Measured on a
+    synthetic field at 3 stars/arcsec^2 (pr-reviewer, PR #140 round 5): this
+    recovers 93.8% of true pairs at a 0.75% false-pair rate, vs mutual-NN's
+    98.8% / 1.12%. Lower completeness, lower contamination -- an acceptable
+    trade for a tie-fitting sample (bad pairs corrupt the fit; a somewhat
+    smaller clean sample does not), but not a free upgrade, and not the
+    right choice everywhere.
 
     Returns
     -------
@@ -218,7 +248,7 @@ def restrict(cat, footprint_sc, pad_arcsec=5.0):
 
 
 def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
-              maxsep=3.0, min_pairs=10, nsigma=3.0):
+              maxsep=3.0, min_pairs=30, nsigma=3.0):
     """Verified affine tie: fit a full 6-parameter linear map
     (dx = A0 + A1*x + A2*y, dy = B0 + B1*x + B2*y) from src onto ref's frame.
 
@@ -260,13 +290,29 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
     the diagnostics dict) to see how much was removed, and add it back if the
     physical signal of interest is on that same linear scale.
 
+    KNOWN LIMITATION (pr-reviewer PR #140 round 5): pairs are found ONCE,
+    before the affine fit, and never re-paired against the fitted plane. A
+    star near the field edge under a large enough rotation/scale term could
+    have its true counterpart pushed outside ``match_radius`` at the time of
+    pairing even though the FITTED solution would place it correctly --
+    dropping it from the fit rather than mis-fitting it. Unlikely to matter
+    for JWST<->VIRAC/JWST<->JWST ties (the rotation/scale terms measured on
+    real GC data so far are small), but a field with a genuinely large
+    relative rotation could lose edge stars this way.
+
     Raises
     ------
     TieNotVerifiedError
         No coherent bulk tie between the magcut-selected samples (widen
-        ``magcut``, check the input WCS, or pass a larger ``maxsep``), or a
+        ``magcut``, check the input WCS, or pass a larger ``maxsep``); a
         bulk tie was found but fewer than ``min_pairs`` unambiguous same-star
-        pairs survived to fit the affine plane from.
+        pairs survived to fit the affine plane from; or more than
+        ``_DUP_ROW_FRACTION_LIMIT`` of the matched pairs are BOTH
+        positionally coincident and flux-identical after the verified bulk
+        tie -- the signature of literal duplicate-row contamination between
+        src and ref (jwst-gc-pipeline#958), which a translation-only
+        coherence check cannot detect on its own (duplicated rows pile up at
+        the same true offset and satisfy it trivially).
     """
     center = _field_center(src_sc)
     sb = src_mag < magcut
@@ -305,6 +351,30 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
             f"same-star pairs survived at match_radius={match_radius:g}\" -- too few "
             f"(need >= {min_pairs}) to fit a tie.")
 
+    # A verified translational tie (measure_offset) cannot by itself rule out
+    # literal duplicate-row contamination between src and ref: duplicated
+    # rows pile up at the SAME true offset and satisfy translational
+    # coherence trivially, often with an inflated contrast (see
+    # jwst-gc-pipeline#958 -- pr-reviewer PR #140 round 5). Check directly:
+    # a matched pair this close AND this flux-identical after the bulk tie
+    # is the fingerprint of a literal duplicate detection, not two
+    # independent measurements of the same star.
+    smag_b, rmag_b = src_mag[sb], ref_mag[rb]
+    resid_mas = rmap['pairs']['resid_mas']
+    dmag = np.abs(smag_b[ia] - rmag_b[ib])
+    dup_suspect = (resid_mas < _DUP_ROW_SEP_MAS) & (dmag < _DUP_ROW_DMAG)
+    frac_dup = float(dup_suspect.sum()) / len(ia)
+    if frac_dup > _DUP_ROW_FRACTION_LIMIT:
+        raise TieNotVerifiedError(
+            f"affine_tie: {100 * frac_dup:.1f}% of {len(ia)} matched pairs are "
+            f"positionally coincident (<{_DUP_ROW_SEP_MAS:g} mas tie residual) AND "
+            f"flux-identical (|dmag|<{_DUP_ROW_DMAG:g}) -- the signature of literal "
+            "duplicate-row contamination between src and ref (see "
+            "jwst-gc-pipeline#958: nominally-independent observations sharing "
+            "bit-identical detections), not real astrometric agreement. Investigate "
+            "the input catalogs (row-level RA/Dec/flux comparison) before trusting "
+            "this tie.")
+
     sx, sy = tangent_xy(ssc[ia], center)
     rx, ry = tangent_xy(rsc[ib], center)
     dx, dy = rx - sx, ry - sy
@@ -337,12 +407,15 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
                 center_ra_deg=float(center.ra.deg), center_dec_deg=float(center.dec.deg),
                 global_tie_off_mas=float(global_res['off']),
                 global_tie_contrast=float(global_res['contrast']),
-                global_tie_window_arcsec=float(global_res['window_arcsec']))
+                global_tie_window_arcsec=float(global_res['window_arcsec']),
+                # monitoring for the jwst-gc-pipeline#958-class failure even
+                # below the raise threshold -- see _DUP_ROW_FRACTION_LIMIT
+                dup_row_suspect_fraction=frac_dup)
     return SkyCoord(new_ra * u.deg, new_de * u.deg), diag
 
 
 def shift_to_virac_frame(cat, virac, to_epoch, match_radius=0.2, magcut=15.0,
-                         maxsep=3.0, min_pairs=10, nsigma=3.0):
+                         maxsep=3.0, min_pairs=30, nsigma=3.0):
     """Bulk affine frame-shift any catalog onto the VIRAC2/Gaia frame.
 
     Propagate VIRAC to ``to_epoch`` (using VIRAC's own pm) so the match is
