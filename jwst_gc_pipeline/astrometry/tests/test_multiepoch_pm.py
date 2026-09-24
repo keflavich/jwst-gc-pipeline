@@ -206,6 +206,40 @@ def test_affine_tie_refuses_literal_duplicate_row_contamination():
         affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
 
 
+def test_affine_tie_refuses_minority_duplicate_row_contamination():
+    """pr-reviewer PR #140 round 7: the majority-contamination test above
+    cannot tell "resid_mas reads near zero because duplicates DOMINATE the
+    global bulk estimate" from "resid_mas reads near zero because a
+    duplicate's raw separation is zero regardless of the bulk offset" -- only
+    the second is the actual invariant a literal duplicate row has. Under a
+    real, small, non-zero bulk tie, a MINORITY of duplicates sits at
+    resid_mas ~= -(the real offset) after that offset is subtracted, not
+    near zero at all -- checked directly against real o105-vs-o108 data,
+    5-30% synthetic duplicate fractions under a 2-5 mas real offset read
+    frac_dup=0.000 and did not raise before this test was added. Checking
+    RAW (pre-bulk-correction) separation as well as the post-tie residual is
+    what catches this case.
+    """
+    n = 1000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=200.0)
+    real_dx, real_dy = 0.003, -0.002  # a few mas -- small on purpose
+    noise = 0.001
+    rx = sx + real_dx + RNG.normal(0, noise, n)
+    ry = sy + real_dy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+
+    n_dup = int(0.3 * n)
+    dup_idx = RNG.choice(n, n_dup, replace=False)
+    # Literal copies: NO bulk offset applied, unlike the other 70%.
+    rx[dup_idx] = sx[dup_idx]
+    ry[dup_idx] = sy[dup_idx]
+    rmag[dup_idx] = mag[dup_idx]
+
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    with pytest.raises(TieNotVerifiedError, match="duplicate-row"):
+        affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+
+
 def test_affine_tie_tolerates_ordinary_noisy_agreement():
     """Regression guard for the duplicate-row check itself: real per-star
     noise (no injected duplicates at all) must NOT trip it, even though a

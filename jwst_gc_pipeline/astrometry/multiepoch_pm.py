@@ -356,20 +356,37 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
     # rows pile up at the SAME true offset and satisfy translational
     # coherence trivially, often with an inflated contrast (see
     # jwst-gc-pipeline#958 -- pr-reviewer PR #140 round 5). Check directly:
-    # a matched pair this close AND this flux-identical after the bulk tie
-    # is the fingerprint of a literal duplicate detection, not two
-    # independent measurements of the same star.
+    # a matched pair this close AND this flux-identical is the fingerprint of
+    # a literal duplicate detection, not two independent measurements of the
+    # same star.
+    #
+    # Two separation measures, either one enough (pr-reviewer PR #140 round
+    # 7): ``resid_mas`` is separation AFTER subtracting the GLOBAL bulk
+    # offset estimate, which only reads near-zero for a duplicate pair when
+    # duplicates are common enough to dominate that estimate -- a MINORITY of
+    # duplicates under a real few-mas tie sits at resid_mas ~= -(the real
+    # offset), not near zero, and was missed entirely (measured on real
+    # o105-vs-o108 data the majority-contamination case DID raise, but a
+    # synthetic 5-30% duplicate fraction under a small real offset did not,
+    # frac reported 0.000 against a true raw-frame fraction of 0.05-0.32).
+    # ``raw_sep_mas`` -- separation BEFORE any bulk-offset correction -- is
+    # what actually reads near-zero for a literal duplicate regardless of the
+    # real tie's size, since a copied row carries no offset from its source
+    # at all. Checking both catches the majority- and minority-contamination
+    # cases alike.
     smag_b, rmag_b = src_mag[sb], ref_mag[rb]
     resid_mas = rmap['pairs']['resid_mas']
+    raw_sep_mas = ssc[ia].separation(rsc[ib]).to(u.mas).value
     dmag = np.abs(smag_b[ia] - rmag_b[ib])
-    dup_suspect = (resid_mas < _DUP_ROW_SEP_MAS) & (dmag < _DUP_ROW_DMAG)
+    dup_suspect = (dmag < _DUP_ROW_DMAG) & (
+        (resid_mas < _DUP_ROW_SEP_MAS) | (raw_sep_mas < _DUP_ROW_SEP_MAS))
     frac_dup = float(dup_suspect.sum()) / len(ia)
     if frac_dup > _DUP_ROW_FRACTION_LIMIT:
         raise TieNotVerifiedError(
             f"affine_tie: {100 * frac_dup:.1f}% of {len(ia)} matched pairs are "
-            f"positionally coincident (<{_DUP_ROW_SEP_MAS:g} mas tie residual) AND "
-            f"flux-identical (|dmag|<{_DUP_ROW_DMAG:g}) -- the signature of literal "
-            "duplicate-row contamination between src and ref (see "
+            f"positionally coincident (<{_DUP_ROW_SEP_MAS:g} mas, raw OR post-tie "
+            f"residual) AND flux-identical (|dmag|<{_DUP_ROW_DMAG:g}) -- the signature "
+            "of literal duplicate-row contamination between src and ref (see "
             "jwst-gc-pipeline#958: nominally-independent observations sharing "
             "bit-identical detections), not real astrometric agreement. Investigate "
             "the input catalogs (row-level RA/Dec/flux comparison) before trusting "
