@@ -110,6 +110,15 @@ def main(argv=None):
                         "wing-fit substitution class). Exit 1 on a flagged bin "
                         "or a significant slope.")
     p.add_argument("--brightness-tol-mas", type=float, default=5.0)
+    p.add_argument("--no-satstars", action="store_true",
+                   help="do not add the exposures' repeatable satstar fits "
+                        "(>= 2 exposures within 0.1\", rms <= 5 mas) to the "
+                        "reference-tie consensus (issue #957).  The pipeline "
+                        "adds them unless ASTROM_SATSTAR_CONSENSUS=0.")
+    p.add_argument("--keep-reference-blends", action="store_true",
+                   help="keep the dense references the exposures resolve into "
+                        "a binary or group (issue #957); by default they are "
+                        "dropped from the reference tie.")
     args = p.parse_args(argv)
 
     if args.seed and args.pool:
@@ -190,10 +199,19 @@ def main(argv=None):
         p.error("no per-frame catalogs matched --catalog-glob")
     tables = [Table.read(fn) for fn in sorted(set(paths))]
     print(f"loaded {len(tables)} per-frame catalogs", flush=True)
+    satstars = None
+    if not args.no_satstars:
+        from jwst_gc_pipeline.photometry.satstar_consensus import (
+            load_exposure_satstars)
+        satstars = load_exposure_satstars(tables, args.stage)
+        print(f"satstar catalogs for {len(satstars)} of {len(tables)} "
+              f"exposure(s)", flush=True)
 
     record = run_visit_checkpoint(
         tables, args.stage, refcat=refcat, filtername=args.filtername,
         basepath=args.basepath, record_dir=args.record_dir, context="cli",
+        satstars_by_exposure=satstars,
+        exclude_reference_blends=not args.keep_reference_blends,
         obs_token=consensus_obs_token(args.proposal_id, args.obsid))
 
     corrections = record["corrections"]

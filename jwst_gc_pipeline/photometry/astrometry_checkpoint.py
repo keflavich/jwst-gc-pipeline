@@ -63,6 +63,8 @@ import numpy as np
 from astropy import units as u
 from astropy.table import Table
 
+from .reference_blends import blended_reference_mask
+from .satstar_consensus import consensus_with_satstars
 from .visit_consensus import (
     EXPOSURE_CONSENSUS_TOL_MAS, DETECTOR_ANTISYMMETRY_MIN_MAS,
     MODULE_ANTISYMMETRY_MIN_MAS,
@@ -3949,9 +3951,50 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
     return (ties["m2"], ties["stage"]), info
 
 
+#: Largest pre-tie (mas) at which the blend test runs.  The test centres its
+#: primary search (0.3") on the tie-corrected reference, so it needs the tie
+#: known to well under that radius.
+BLEND_TEST_MAX_TIE_MAS = 100.0
+
+
+def _exclude_blended_references(consensus_coords, refcat, exposure_tables, context):
+    """``(refcat_for_tie, summary)`` with JWST-resolved blends removed from
+    the DENSE reference (``all``/``mag``).  The sparse Gaia set is left alone:
+    it is a separate cross-check and its stars are isolated by construction.
+    Returns the refcat unchanged, with a summary saying why, when there is no
+    verified small pre-tie to centre the test on."""
+    pre = measure_offset(consensus_coords, refcat["all"], sweep=True,
+                         confirm_windows=True, context=f"{context} blend pre-tie")
+    if (pre is None or not pre.get("ok") or pre.get("swept")
+            or not np.isfinite(pre["off"]) or pre["off"] > BLEND_TEST_MAX_TIE_MAS):
+        return refcat, dict(run=False, reason="no verified pre-tie under "
+                                              f"{BLEND_TEST_MAX_TIE_MAS:.0f} mas")
+    cats = []
+    for tbl in exposure_tables:
+        fluxcol = next((c for c in ("flux_fit", "flux") if c in tbl.colnames), None)
+        if fluxcol is None:
+            continue
+        cats.append((catalog_coords(tbl), np.asarray(tbl[fluxcol], float)))
+    mask, info = blended_reference_mask(refcat["all"], cats,
+                                        dra_mas=pre["dra"], ddec_mas=pre["ddec"])
+    info.update(run=True, pre_tie_dra_mas=float(pre["dra"]),
+                pre_tie_ddec_mas=float(pre["ddec"]))
+    print(f"astrom checkpoint {context}: excluding {info['n_excluded']} of "
+          f"{info['n_seen']} reference(s) the exposures resolve into a binary "
+          f"or group", flush=True)
+    if not mask.any():
+        return refcat, info
+    out = dict(refcat)
+    out["all"] = refcat["all"][~mask]
+    if refcat.get("mag") is not None:
+        out["mag"] = np.asarray(refcat["mag"])[~mask]
+    return out, info
+
+
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
-                         consensus_kwargs=None, obs_token="", target=None):
+                         consensus_kwargs=None, obs_token="", target=None,
+                         satstars_by_exposure=None, exclude_reference_blends=True):
     """Run the per-(visit, filter) consensus checkpoint over per-frame catalogs.
 
     Parameters
@@ -3973,6 +4016,18 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         share a target directory across proposals or obsids (ngc6334 6778/7213,
         cloudef 2092 obs 002/005) MUST pass it or the second run overwrites the
         first field's reference catalog.
+    satstars_by_exposure : dict or None
+        ``{exposure_key: SkyCoord}`` of per-exposure satstar fits
+        (``satstar_consensus.load_exposure_satstars``).  The repeatable ones
+        (>= 2 exposures within 0.1", rms <= 5 mas) are added to the consensus
+        used for the REFERENCE TIE only (issue #957): a saturated star has no
+        daophot row, and without it its VIRAC2 counterpart pairs with a
+        neighbour.  The per-exposure-vs-consensus check does not see them.
+    exclude_reference_blends : bool
+        Drop the dense references that the exposures resolve into a binary or
+        a group (``reference_blends.blended_reference_mask``) before the
+        reference tie (issue #957).  Needs a verified, un-swept pre-tie; skipped
+        otherwise.
 
     Returns
     -------
@@ -4347,11 +4402,25 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # Populated only when the raw frozen-stage comparison exceeded
         # tolerance and the m2 baseline was re-measured on the shared stars.
         symmetric_baseline = None
+        tie_coords, tie_mag, satstar_summary = cons["coords"], cons.get("mag"), None
+        if satstars_by_exposure:
+            tie_coords, tie_mag, satstar_summary = consensus_with_satstars(
+                cons, tables, satstars_by_exposure)
+            print(f"astrom checkpoint [{stage}] {vctx}: +{satstar_summary['n_added']} "
+                  f"repeatable satstar(s) in the reference-tie consensus "
+                  f"({satstar_summary['n_repeatable']} repeatable of "
+                  f"{satstar_summary['n_groups_multi_exposure']} multi-exposure, "
+                  f"{satstar_summary['n_rejected_rms']} over "
+                  f"{satstar_summary['max_rms_mas']} mas rms)", flush=True)
+        tie_refcat, blend_summary = refcat, None
+        if refcat is not None and exclude_reference_blends:
+            tie_refcat, blend_summary = _exclude_blended_references(
+                tie_coords, refcat, tables, vctx)
         if refcat is not None:
             ref_tie = measure_reference_tie(
-                cons["coords"], refcat["all"], refcat["sparse"],
-                filtername=filt, consensus_mag=cons.get("mag"),
-                ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
+                tie_coords, tie_refcat["all"], tie_refcat["sparse"],
+                filtername=filt, consensus_mag=tie_mag,
+                ref_mag=tie_refcat.get("mag"), dense=tie_refcat.get("dense", True),
                 context=vctx)
             off = ref_tie["off_mas"]
             # ACTIONABLE = the current measurement is large enough to be worth
@@ -4596,6 +4665,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 # per-exposure `H.argmax()` measured against it may have locked
                 # onto the wrong mode.  Diagnostic only -- it gates nothing.
                 duplication=cons.get("duplication"),
+                # Satstars added to the REFERENCE-TIE star set only (#957);
+                # n_stars above counts the daophot consensus alone.
+                satstars=satstar_summary,
+                # References JWST resolves into a binary/group, dropped from
+                # the reference tie (#957); None = test not run.
+                reference_blends=blend_summary,
                 consensus_ok=cons["consensus_ok"],
                 skipped=[list(k) for k in cons["skipped"]],
                 # The POPULATION change, recorded whether or not the same-star
