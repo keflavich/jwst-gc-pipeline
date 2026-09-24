@@ -57,6 +57,12 @@ docs = [
     "sphinx",
     "sphinx-automodapi",
 ]
+# multi-epoch proper-motion fitting (jwst_gc_pipeline/astrometry/). Not on
+# PyPI; not installed in CI, so the tests that need it
+# (astrometry/tests/test_multiepoch_pm.py) importorskip it rather than fail.
+astrometry = [
+    "flystar @ git+https://github.com/MovingUniverseLab/flystar.git",
+]
 
 [project.urls]
 Homepage = "https://github.com/keflavich/jwst-gc-pipeline"
