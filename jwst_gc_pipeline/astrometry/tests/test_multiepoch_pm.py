@@ -170,6 +170,34 @@ def test_affine_tie_absorbs_a_coherent_linear_velocity_field():
     assert recovered_amplitude < 0.1 * injected_amplitude
 
 
+def test_affine_tie_at_1_0_radius_handles_the_offset_that_broke_at_0_3(): # noqa: E501
+    """jwst-gc-pipeline PR #959: build_treasury_pm.py's tie-fitting call to
+    affine_tie used match_radius=0.3" until a real Sgr B2 per-observation
+    guide-star-lock offset of ~134 mas exceeded the verified-tie safety
+    margin local_residual_map enforces (offset must be well inside
+    match_radius -- specifically < match_radius/3, so per-star pairing
+    stays unambiguous). Pin the fix directly with a ~150 mas offset:
+    comfortably above the OLD radius's 100 mas floor (so it must still
+    raise there, a regression guard against a future radius change quietly
+    stopping this test from exercising the actual failure) and comfortably
+    below the NEW radius's 333 mas floor (so it must succeed there).
+    """
+    n = 1200
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=200.0)
+    offset_arcsec = 0.150  # ~134 mas real Sgr B2 offset, rounded up
+    noise = 0.001
+    rx = sx + offset_arcsec + RNG.normal(0, noise, n)
+    ry = sy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+
+    with pytest.raises(TieNotVerifiedError):
+        affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=0.3)
+
+    _, diag = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+    assert abs(diag['A'][0] - offset_arcsec) < 0.005
+
+
 def test_affine_tie_refuses_literal_duplicate_row_contamination():
     """jwst-gc-pipeline#958: nominally-independent GC Treasury observations
     turned out to share 30-62% bit-identical rows (same RA/Dec to <1 mas,

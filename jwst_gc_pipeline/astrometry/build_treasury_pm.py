@@ -150,6 +150,44 @@ def _dedup_mask(sc, radius):
     return np.arange(n) == comp_min_idx[labels]
 
 
+#: A ref-vs-ref duplicate fraction above this is reported loudly. Not a hard
+#: gate: jwst-gc-pipeline#958's OWN measured fractions for Sgr B2 (29-44%)
+#: and Cloud e/f (30-35%) sit above this too, and those two fields' output
+#: proper motions read consistent with their formal errors (pr-reviewer,
+#: PR #959 review) -- so duplicate-row fraction ALONE is not yet established
+#: as the thing that breaks a fit; the tie's own residual (rms_resid_mas,
+#: already gated at >25 mas below) is what actually correlates with the
+#: fields (Arches/Quintuplet/Brick/Cloud c) whose trustworthy PM scatter
+#: comes out 6-7x their formal error. Reported so it CAN be correlated by a
+#: human reader, not treated as sufficient on its own to refuse a tie.
+REF_DUP_WARN_FRACTION = 0.05
+REF_DUP_SEP_MAS = 1.0
+REF_DUP_DMAG = 1.0e-4
+
+
+def _ref_pair_duplicate_fraction(cat_a, cat_b, sep_mas=REF_DUP_SEP_MAS,
+                                 dmag=REF_DUP_DMAG):
+    """Fraction of ``cat_a``'s rows that are a literal duplicate (position
+    within ``sep_mas``, flux within ``dmag``) of some row in ``cat_b``.
+
+    This checks the jwst-gc-pipeline#958 signature DIRECTLY, ref-vs-ref,
+    rather than inferring it from src-ref matching. affine_tie's own
+    duplicate-row gate (multiepoch_pm.py) cannot see this class of
+    contamination at all: each call only ever compares src to ONE ref file,
+    never two ref files to each other, so o105 and o108 sharing bit-
+    identical rows is invisible to it (both ties can independently read
+    dup_row_suspect_fraction=0.0 while o105 and o108 are >50% identical to
+    each other -- caught by pr-reviewer, PR #959 review, after an earlier
+    claim in this codebase's own history that the src-ref gate would catch
+    this was wrong).
+    """
+    ia, ib, _, _ = search_around_sky(cat_a['sc'], cat_b['sc'], sep_mas * u.mas)
+    if len(ia) == 0:
+        return 0.0
+    dup = np.abs(cat_a['mag'][ia] - cat_b['mag'][ib]) < dmag
+    return len(set(ia[dup].tolist())) / cat_a['n']
+
+
 def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                               tie_magcut=None, tie_bright_percentile=20.0,
                               verbose=True):
@@ -190,9 +228,29 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                   f'({100 * n_cut / src["n"]:.1f}%, vs {tie_bright_percentile:g}% '
                   f'intended -- ties are matched to REF separately per observation, '
                   f'so this is src-side selectivity only, not the eventual tie sample size)')
+    cats = [_load_one(p, filt, ref_epoch, sn_cut, i) for i, p in enumerate(ref_paths)]
+    ref_dup_fractions = {}
+    if len(cats) > 1:
+        for a in range(len(cats)):
+            for b in range(len(cats)):
+                if a == b:
+                    continue
+                frac = _ref_pair_duplicate_fraction(cats[a], cats[b])
+                ref_dup_fractions[(a, b)] = frac
+                if frac > REF_DUP_WARN_FRACTION:
+                    print(f'  WARNING: ref[{a}] ({ref_paths[a].split("/")[-1]}) shares '
+                          f'{100 * frac:.1f}% bit-identical rows with ref[{b}] '
+                          f'({ref_paths[b].split("/")[-1]}) -- the jwst-gc-pipeline#958 '
+                          f'signature (nominally-independent observations sharing '
+                          f'detections, not independent epochs to the degree assumed). '
+                          f'Weigh this against ref[{a}]\'s own tie residual below -- '
+                          f'high duplication AND high residual together is the '
+                          f'combination seen on fields whose trustworthy PM scatter '
+                          f'came out several times their formal error.')
+
     tied, diags = [], []
     for i, p in enumerate(ref_paths):
-        cat = _load_one(p, filt, ref_epoch, sn_cut, i)
+        cat = cats[i]
         n_ref_cut = int((cat['mag'] < tie_magcut).sum())
         # match_radius here is the TIE-FITTING search radius for the bright/
         # compact magcut sample, not the final PM match radius (that is the
@@ -218,6 +276,13 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                   f'rerunning affine_tie with magcut=inf.')
         cat['sc'] = sc_tied
         tied.append(cat)
+        # worst ref-vs-ref duplicate fraction involving this observation, in
+        # either direction -- numerically usable diagnostic, not just the
+        # printed warning above, so a later reader can correlate it against
+        # rms_resid_mas without re-running the check.
+        diag['ref_dup_fraction_max'] = max(
+            [v for (a, b), v in ref_dup_fractions.items() if a == i or b == i],
+            default=0.0)
         diags.append(diag)
         if verbose:
             print(f'  ref[{i}] {p.split("/")[-1]}: affine tie '
