@@ -194,13 +194,26 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
     for i, p in enumerate(ref_paths):
         cat = _load_one(p, filt, ref_epoch, sn_cut, i)
         n_ref_cut = int((cat['mag'] < tie_magcut).sum())
+        # match_radius here is the TIE-FITTING search radius for the bright/
+        # compact magcut sample, not the final PM match radius (that is the
+        # caller's own --match-radius, applied later in build_pm_catalog_
+        # 2epoch). It must satisfy affine_tie's own verified-tie requirement
+        # (global offset << match_radius, enforced by
+        # astrometry_offsets.local_residual_map) with margin for the largest
+        # real per-observation guide-star-lock offset seen on real data --
+        # Sgr B2's o127/o129/o132/o135 ties run up to ~140 mas (previously
+        # this raised TieNotVerifiedError at the old 0.3" radius, whose 100
+        # mas safety floor a 134 mas real offset exceeded). 1.0" leaves ample
+        # margin above that; the dedup/uniqueness rejection in
+        # _unique_nearest_pairs / local_residual_map (not radius alone) is
+        # what keeps a wider search from admitting an ambiguous pair.
         sc_tied, diag = M.affine_tie(cat['sc'], cat['mag'], src['sc'], src['mag'],
-                                     magcut=tie_magcut, match_radius=0.3)
+                                     magcut=tie_magcut, match_radius=1.0)
         if verbose:
             print(f'  ref[{i}] {p.split("/")[-1]}: {n_ref_cut:,}/{cat["n"]:,} '
                   f'pass the magcut ({100 * n_ref_cut / cat["n"]:.1f}%) -- '
                   f'diag["n_match"]={diag["n_match"]:,} is the count AFTER '
-                  f'this cut and the 0.3" match radius both apply, so it is '
+                  f'this cut and the tie match radius both apply, so it is '
                   f'not directly comparable to an uncut n_match without '
                   f'rerunning affine_tie with magcut=inf.')
         cat['sc'] = sc_tied
