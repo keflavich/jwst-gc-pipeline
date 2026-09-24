@@ -593,6 +593,106 @@ def test_frozen_stage_stable_tie_no_regression(tmp_path, monkeypatch):
     assert rec["failures"] == []
 
 
+_SAT_KEY = ("001", 1, "nrca1", "F212N", "02101")
+_SAT_SUMMARY = dict(n_added=3, n_repeatable=3, n_groups_multi_exposure=3,
+                    n_rejected_rms=0, max_rms_mas=5.0)
+
+
+def _spy_population(monkeypatch):
+    """Record whether the satstar and blend paths ran; both pass through."""
+    calls = dict(satstars=0, blends=0)
+
+    def _sat(cons, tables, sat):
+        calls["satstars"] += 1
+        return cons["coords"], cons.get("mag"), dict(_SAT_SUMMARY)
+
+    def _blend(coords, refcat, tables, context):
+        calls["blends"] += 1
+        return refcat, dict(run=True, n_seen=10, n_excluded=2)
+    monkeypatch.setattr(_ac, "consensus_with_satstars", _sat)
+    monkeypatch.setattr(_ac, "_exclude_blended_references", _blend)
+    return calls
+
+
+def _population_refcat():
+    # measure_reference_tie is patched; the blend path only needs `all` set.
+    return dict(all=SkyCoord(ra=[RA0] * u.deg, dec=[DEC0] * u.deg),
+                sparse=None, mag=None)
+
+
+def _add_population_to_m2_record(record_dir, satstars, blends, filt="F212N"):
+    path = os.path.join(record_dir, f"checkpoint_m2_{filt}_latest.json")
+    with open(path) as fh:
+        rec = json.load(fh)
+    rec["visits"][0]["consensus"] = dict(
+        satstars=dict(_SAT_SUMMARY) if satstars else None,
+        reference_blends=dict(run=True, n_seen=10, n_excluded=2) if blends else None)
+    with open(path, "w") as fh:
+        json.dump(rec, fh)
+
+
+def test_m2_adds_satstars_and_records_them(tmp_path, monkeypatch):
+    """#957: at the correcting stage the satstars reach the reference tie and
+    the visit record carries their summary; the blend cut runs when asked."""
+    _patch_consensus_and_tie(monkeypatch, dra_now=0.5, ddec_now=0.0)
+    calls = _spy_population(monkeypatch)
+    sat = {_SAT_KEY: SkyCoord(ra=[RA0] * u.deg, dec=[DEC0] * u.deg)}
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m2",
+                               refcat=_population_refcat(), filtername="F212N",
+                               record_dir=str(tmp_path), context="test",
+                               satstars_by_exposure=sat,
+                               exclude_reference_blends=True)
+    assert calls == dict(satstars=1, blends=1)
+    cons = rec["visits"][0]["consensus"]
+    assert cons["satstars"]["n_added"] == 3
+    assert cons["reference_blends"]["n_excluded"] == 2
+
+
+def test_m2_blend_cut_is_opt_in(tmp_path, monkeypatch):
+    _patch_consensus_and_tie(monkeypatch, dra_now=0.5, ddec_now=0.0)
+    calls = _spy_population(monkeypatch)
+    run_visit_checkpoint([_tiny_visit_table()], "m2", refcat=_population_refcat(),
+                         filtername="F212N", record_dir=str(tmp_path),
+                         context="test")
+    assert calls["blends"] == 0
+
+
+@pytest.mark.parametrize("m2_sat,m2_blend", [(False, False), (True, False),
+                                             (False, True), (True, True)])
+def test_frozen_stage_follows_the_m2_population(tmp_path, monkeypatch,
+                                                m2_sat, m2_blend):
+    """#957: a frozen stage measures the tie on the population its m2 record
+    used -- satstars and the blend cut exactly when m2 used them, whatever it
+    is asked for -- so the population change never reads as movement.  A
+    record written before #957 has neither summary and reads (False, False)."""
+    _write_m2_baseline(str(tmp_path), 10.0, 0.0)
+    if m2_sat or m2_blend:
+        _add_population_to_m2_record(str(tmp_path), m2_sat, m2_blend)
+    _patch_consensus_and_tie(monkeypatch, dra_now=10.0, ddec_now=0.0)
+    calls = _spy_population(monkeypatch)
+    sat = {_SAT_KEY: SkyCoord(ra=[RA0] * u.deg, dec=[DEC0] * u.deg)}
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3",
+                               refcat=_population_refcat(), filtername="F212N",
+                               record_dir=str(tmp_path), context="test",
+                               satstars_by_exposure=sat,
+                               exclude_reference_blends=not m2_blend)
+    assert rec["passed"]
+    assert calls == dict(satstars=int(m2_sat), blends=int(m2_blend))
+
+
+@pytest.mark.parametrize("pre_off,runs", [(50.0, True), (150.0, False)])
+def test_blend_cut_needs_a_pre_tie_under_100_mas(monkeypatch, pre_off, runs):
+    """The blend test centres a 0.3" primary search on the tie-corrected
+    reference, so it refuses to run on a pre-tie over BLEND_TEST_MAX_TIE_MAS."""
+    def _fake_offset(a, b, **kw):
+        return dict(ok=True, swept=False, off=pre_off, dra=pre_off, ddec=0.0)
+    monkeypatch.setattr(_ac, "measure_offset", _fake_offset)
+    ref = SkyCoord(ra=[RA0] * u.deg, dec=[DEC0] * u.deg)
+    _, summary = _ac._exclude_blended_references(
+        ref, dict(all=ref, sparse=None, mag=None), [_tiny_visit_table()], "test")
+    assert summary["run"] is runs
+
+
 def test_frozen_stage_moved_tie_raises(tmp_path, monkeypatch):
     """m2 froze the tie at (10, 0); the solution then MOVED to (20, 0) ->
     delta 10 > tol -> AstrometryRegressionError (the real regression)."""

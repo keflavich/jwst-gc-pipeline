@@ -5102,10 +5102,30 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             proposal_id=getattr(options, 'proposal_id', None))
     refcat = refcat_cache['refcat']
 
+    # Saturated stars have no per-frame daophot row; their repeatable satstar
+    # fits join the reference-tie consensus (#957).  At a frozen stage
+    # run_visit_checkpoint uses them only when the m2 record did.
+    # ASTROM_SATSTAR_CONSENSUS=0 turns that off (for comparing against a record
+    # made before it existed).
+    satstars = None
+    if os.environ.get('ASTROM_SATSTAR_CONSENSUS', '1') != '0':
+        from jwst_gc_pipeline.photometry.satstar_consensus import (
+            load_exposure_satstars)
+        satstars = load_exposure_satstars(tables, merge_label)
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: satstar "
+              f"catalogs for {len(satstars)} of {len(tables)} exposure(s)",
+              flush=True)
+
     warn_only = os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1'
     try:
         record = run_visit_checkpoint(
             tables, merge_label, refcat=refcat, filtername=filt,
+            satstars_by_exposure=satstars,
+            # JWST-resolved binaries/groups out of the dense reference (#957);
+            # opt-in with ASTROM_REFERENCE_BLENDS=1 at m2.  A frozen stage
+            # follows its m2 record regardless.
+            exclude_reference_blends=(
+                os.environ.get('ASTROM_REFERENCE_BLENDS', '0') == '1'),
             basepath=cut_bp, context=context or f"{filt}/{module}",
             target=getattr(options, 'target', None),
             # ngc6334's two proposals and cloudef's two obsids share a target
