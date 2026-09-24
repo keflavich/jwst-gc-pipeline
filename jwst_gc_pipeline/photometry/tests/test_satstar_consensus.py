@@ -166,3 +166,14 @@ def test_blend_test_removes_the_tie_first():
     assert blended_reference_mask(ref, [(jw, flux)])[1]["n_seen"] == 0
     mask, info = blended_reference_mask(ref, [(jw, flux)], dra_mas=400.0)
     assert info["n_seen"] == 1 and mask[0]
+
+
+def test_outside_fov_seed_rows_are_dropped():
+    # a seed-derived position repeats trivially; it must not enter the consensus
+    from jwst_gc_pipeline.photometry.satstar_consensus import _satstar_coords
+    t = Table()
+    t["skycoord_fit"] = _at([0.0, 1000.0], [0.0, 0.0])
+    t["outside_fov_seed"] = [False, True]
+    out = _satstar_coords(t)
+    assert len(out) == 1
+    assert _sep_mas(out[0], _at([0.0], [0.0])[0]) < 0.01

@@ -3951,6 +3951,30 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
     return (ties["m2"], ties["stage"]), info
 
 
+def _m2_tie_population(record_dir, filtername, visit, obs_token=""):
+    """``(used_satstars, used_blend_cut)`` for this (filter, visit)'s m2 tie.
+
+    A frozen stage must measure its reference tie on the same star population
+    m2 froze, or the population change reads as movement (#957: adding
+    satstars moves o040 F212N's tie 3.57 -> 2.54 mas, half the stage budget).
+    Records written before #957 carry neither summary and read (False, False).
+    """
+    path = _m2_record_path(record_dir, filtername, obs_token)
+    if path is None:
+        return False, False
+    with open(path) as fh:
+        rec = json.load(fh)
+    for v in rec.get("visits", []):
+        if not _visit_entry_matches(v, visit, filtername):
+            continue
+        cons = v.get("consensus") or {}
+        sat = cons.get("satstars") or {}
+        blends = cons.get("reference_blends") or {}
+        return (int(sat.get("n_added", 0) or 0) > 0,
+                bool(blends.get("run")) and int(blends.get("n_excluded", 0) or 0) > 0)
+    return False, False
+
+
 #: Largest pre-tie (mas) at which the blend test runs.  The test centres its
 #: primary search (0.3") on the tie-corrected reference, so it needs the tie
 #: known to well under that radius.
@@ -4030,7 +4054,10 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         otherwise.  Off by default: on o040 F212N it drops 41% of the VIRAC2
         references and leaves the region-map verdict where it was.
 
-    Both apply at a correcting stage only (``CORRECTION_STAGES``).
+    At a correcting stage (``CORRECTION_STAGES``) these arguments decide.  A
+    frozen stage uses satstars / the blend cut exactly when its m2 record did
+    (``consensus.satstars.n_added`` / ``consensus.reference_blends``), so its
+    tie is compared on the same star population.
 
     Returns
     -------
@@ -4405,12 +4432,22 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # Populated only when the raw frozen-stage comparison exceeded
         # tolerance and the m2 baseline was re-measured on the shared stars.
         symmetric_baseline = None
-        # Only the correcting stage widens the tie population.  A frozen stage
-        # is compared against the m2 tie, and records written before #957 were
-        # measured on daophot stars alone: adding satstars here would report
-        # the population change as movement (o040 F212N: 3.57 -> 2.54 mas).
+        # A frozen stage measures the tie on the population its m2 record
+        # used: records written before #957 were measured on daophot stars
+        # alone, later ones may carry satstars and the blend cut.  Mixing the
+        # two reports the population change as movement (o040 F212N:
+        # 3.57 -> 2.54 mas).
+        if correcting:
+            use_satstars, use_blends = True, exclude_reference_blends
+        else:
+            use_satstars, use_blends = _m2_tie_population(
+                record_dir, filt, visit, obs_token)
+            if use_satstars and not satstars_by_exposure:
+                print(f"astrom checkpoint [{stage}] {vctx}: WARNING the m2 tie "
+                      f"used satstars but none were passed to this stage; the "
+                      f"frozen comparison mixes populations", flush=True)
         tie_coords, tie_mag, satstar_summary = cons["coords"], cons.get("mag"), None
-        if satstars_by_exposure and correcting:
+        if satstars_by_exposure and use_satstars:
             tie_coords, tie_mag, satstar_summary = consensus_with_satstars(
                 cons, tables, satstars_by_exposure)
             print(f"astrom checkpoint [{stage}] {vctx}: +{satstar_summary['n_added']} "
@@ -4420,7 +4457,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                   f"{satstar_summary['n_rejected_rms']} over "
                   f"{satstar_summary['max_rms_mas']} mas rms)", flush=True)
         tie_refcat, blend_summary = refcat, None
-        if (refcat is not None and exclude_reference_blends and correcting
+        if (refcat is not None and use_blends
                 and refcat.get("all") is not None):
             tie_refcat, blend_summary = _exclude_blended_references(
                 tie_coords, refcat, tables, vctx)

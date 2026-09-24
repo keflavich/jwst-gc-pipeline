@@ -9,8 +9,9 @@ those wrong pairs refuse the same-star region map.  On gc-treasury o040 F212N,
 after it.
 
 The satstar fit of that star exists per exposure (``*_satstar_catalog.fits``)
-and repeats between exposures to ~1.6 mas rms (p50; p90 2.7 mas on o040
-F212N).  This module lets such a fit into the consensus when:
+and repeats between exposures: on o040 F212N (m12 catalogs, 5824 groups
+seen in >= 2 exposures) the median rms about the group mean is 0.76 mas.
+This module lets such a fit into the consensus when:
 
 * it appears in at least ``SATSTAR_CONSENSUS_MIN_EXPOSURES`` (2) exposures
   within ``SATSTAR_CONSENSUS_MATCH_ARCSEC`` (0.1") of each other, and
@@ -78,11 +79,18 @@ def satstar_catalog_path(exposure_table, stage):
 
 
 def _satstar_coords(tbl):
-    """Finite satstar fit positions of one per-exposure satstar catalog."""
+    """Finite satstar fit positions of one per-exposure satstar catalog.
+
+    Rows seeded from outside the frame (``outside_fov_seed``) are dropped:
+    their position comes from the seed, so it would repeat between exposures
+    trivially and pass the rms cut without measuring anything.
+    """
     if "skycoord_fit" not in tbl.colnames:
         return SkyCoord([] * u.deg, [] * u.deg)
     sc = SkyCoord(tbl["skycoord_fit"]).icrs
     ok = np.isfinite(sc.ra.deg) & np.isfinite(sc.dec.deg)
+    if "outside_fov_seed" in tbl.colnames:
+        ok &= ~np.asarray(tbl["outside_fov_seed"], bool)
     return sc[ok]
 
 
