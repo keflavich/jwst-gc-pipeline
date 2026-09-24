@@ -5103,10 +5103,13 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     refcat = refcat_cache['refcat']
 
     # Saturated stars have no per-frame daophot row; their repeatable satstar
-    # fits join the reference-tie consensus (#957).  ASTROM_SATSTAR_CONSENSUS=0
-    # turns that off (for comparing against a record made before it existed).
+    # fits join the reference-tie consensus (#957) at the correcting stage;
+    # run_visit_checkpoint ignores them at a frozen one.
+    # ASTROM_SATSTAR_CONSENSUS=0 turns that off (for comparing against a record
+    # made before it existed).
     satstars = None
-    if os.environ.get('ASTROM_SATSTAR_CONSENSUS', '1') != '0':
+    if (merge_label in CORRECTION_STAGES
+            and os.environ.get('ASTROM_SATSTAR_CONSENSUS', '1') != '0'):
         from jwst_gc_pipeline.photometry.satstar_consensus import (
             load_exposure_satstars)
         satstars = load_exposure_satstars(tables, merge_label)
@@ -5120,9 +5123,9 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             tables, merge_label, refcat=refcat, filtername=filt,
             satstars_by_exposure=satstars,
             # JWST-resolved binaries/groups out of the dense reference (#957);
-            # ASTROM_REFERENCE_BLENDS=0 keeps them.
+            # opt-in with ASTROM_REFERENCE_BLENDS=1.
             exclude_reference_blends=(
-                os.environ.get('ASTROM_REFERENCE_BLENDS', '1') != '0'),
+                os.environ.get('ASTROM_REFERENCE_BLENDS', '0') == '1'),
             basepath=cut_bp, context=context or f"{filt}/{module}",
             target=getattr(options, 'target', None),
             # ngc6334's two proposals and cloudef's two obsids share a target

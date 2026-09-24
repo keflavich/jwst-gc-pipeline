@@ -3994,7 +3994,7 @@ def _exclude_blended_references(consensus_coords, refcat, exposure_tables, conte
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
                          consensus_kwargs=None, obs_token="", target=None,
-                         satstars_by_exposure=None, exclude_reference_blends=True):
+                         satstars_by_exposure=None, exclude_reference_blends=False):
     """Run the per-(visit, filter) consensus checkpoint over per-frame catalogs.
 
     Parameters
@@ -4027,7 +4027,10 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         Drop the dense references that the exposures resolve into a binary or
         a group (``reference_blends.blended_reference_mask``) before the
         reference tie (issue #957).  Needs a verified, un-swept pre-tie; skipped
-        otherwise.
+        otherwise.  Off by default: on o040 F212N it drops 41% of the VIRAC2
+        references and leaves the region-map verdict where it was.
+
+    Both apply at a correcting stage only (``CORRECTION_STAGES``).
 
     Returns
     -------
@@ -4402,8 +4405,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # Populated only when the raw frozen-stage comparison exceeded
         # tolerance and the m2 baseline was re-measured on the shared stars.
         symmetric_baseline = None
+        # Only the correcting stage widens the tie population.  A frozen stage
+        # is compared against the m2 tie, and records written before #957 were
+        # measured on daophot stars alone: adding satstars here would report
+        # the population change as movement (o040 F212N: 3.57 -> 2.54 mas).
         tie_coords, tie_mag, satstar_summary = cons["coords"], cons.get("mag"), None
-        if satstars_by_exposure:
+        if satstars_by_exposure and correcting:
             tie_coords, tie_mag, satstar_summary = consensus_with_satstars(
                 cons, tables, satstars_by_exposure)
             print(f"astrom checkpoint [{stage}] {vctx}: +{satstar_summary['n_added']} "
@@ -4413,7 +4420,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                   f"{satstar_summary['n_rejected_rms']} over "
                   f"{satstar_summary['max_rms_mas']} mas rms)", flush=True)
         tie_refcat, blend_summary = refcat, None
-        if refcat is not None and exclude_reference_blends:
+        if (refcat is not None and exclude_reference_blends and correcting
+                and refcat.get("all") is not None):
             tie_refcat, blend_summary = _exclude_blended_references(
                 tie_coords, refcat, tables, vctx)
         if refcat is not None:

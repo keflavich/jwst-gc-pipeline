@@ -593,6 +593,27 @@ def test_frozen_stage_stable_tie_no_regression(tmp_path, monkeypatch):
     assert rec["failures"] == []
 
 
+def test_frozen_stage_ignores_satstars_and_blends(tmp_path, monkeypatch):
+    """#957: satstars and the blend cut widen or thin the tie population at
+    the correcting stage only.  A frozen stage compares against an m2 tie that
+    may predate them, so using them there would report the population change
+    as movement."""
+    _write_m2_baseline(str(tmp_path), 10.0, 0.0)
+    _patch_consensus_and_tie(monkeypatch, dra_now=10.0, ddec_now=0.0)
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("called at a frozen stage")
+    monkeypatch.setattr(_ac, "consensus_with_satstars", _must_not_run)
+    monkeypatch.setattr(_ac, "_exclude_blended_references", _must_not_run)
+    sat = {("001", 1, "nrca1", "F212N", "02101"):
+           SkyCoord(ra=[RA0] * u.deg, dec=[DEC0] * u.deg)}
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test", satstars_by_exposure=sat,
+                               exclude_reference_blends=True)
+    assert rec["passed"]
+
+
 def test_frozen_stage_moved_tie_raises(tmp_path, monkeypatch):
     """m2 froze the tie at (10, 0); the solution then MOVED to (20, 0) ->
     delta 10 > tol -> AstrometryRegressionError (the real regression)."""
