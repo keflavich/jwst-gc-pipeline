@@ -136,6 +136,17 @@ def test_ref_pair_duplicate_fraction_zero_for_independent_catalogs():
     assert _ref_pair_duplicate_fraction(cat_a, cat_b) == 0.0
 
 
+def test_ref_pair_duplicate_fraction_requires_flux_agreement_too():
+    """pr-reviewer, PR #959 round 3: the new dmag test added for affine_tie's
+    duplicate-row check covers multiepoch_pm.py's own copy of this logic,
+    not _ref_pair_duplicate_fraction's separate implementation here -- same
+    positions with a large flux mismatch must not read as a duplicate."""
+    rng = np.random.default_rng(16)
+    cat_a, _, _ = _random_cat(rng, 200)
+    cat_b = dict(sc=cat_a['sc'], mag=cat_a['mag'] + 1.0, n=cat_a['n'])
+    assert _ref_pair_duplicate_fraction(cat_a, cat_b) == 0.0
+
+
 def _write_ref_fits(path, sc, flux):
     t = Table()
     t['skycoord'] = sc
