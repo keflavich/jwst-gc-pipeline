@@ -33,6 +33,8 @@ import json
 import math
 import os
 
+from jwst_gc_pipeline.aladin_controls import aladin_controls_js
+
 #: The survey's own imagery, first; the rest are context.  Same list the monitor
 #: uses, so a reader recognises the two pages as one survey.
 #:
@@ -585,7 +587,10 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     var aladin = A.aladin(host, {{
       survey: data.surveys[0].id, projection: 'AIT', cooFrame: 'galactic',
       target: '0 +0', fov: 1.8, showReticle: false,
-      showCooGrid: true, showFullscreenControl: false
+      showCooGrid: true,
+      // every Aladin control on, from jwst_gc_pipeline.aladin_controls -- the grid
+      // colour is set under Settings > Grid
+      {aladin_controls_js()}
     }});
     // Verification is only possible where the view can be READ back.  The
     // setter is feature-detected, so an Aladin without `getBaseImageLayer` is

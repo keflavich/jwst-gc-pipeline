@@ -22,6 +22,8 @@ exposes.
 import html
 import json
 
+from ..aladin_controls import ALADIN_CONTROLS
+
 #: Aladin Lite v3, the same build the other viewers on this site load.
 ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
 
@@ -182,6 +184,7 @@ def render(data, data_href=DATA_FILE,
 const DATA_URL = {json.dumps(data_href)};
 const HIPS = {json.dumps([{'id': i, 'url': u, 'name': n} for i, u, n in HIPS_LAYERS])};
 const BASE_SURVEY = {json.dumps(BASE_SURVEY)};
+const ALADIN_CONTROLS = {json.dumps(ALADIN_CONTROLS)};
 {_SCRIPT}
 </script>
 </body>
@@ -430,10 +433,10 @@ function boot() {
   buildTable();
   drawCMD(null);
   A.init.then(function () {
-    aladin = A.aladin('#sky', {survey: BASE_SURVEY, target: '0 0', fov: 2.0,
-                               cooFrame: 'galactic', showCooGridControl: true,
-                               showLayersControl: true, showFullscreenControl: true,
-                               showProjectionControl: false});
+    // Every Aladin control on (jwst_gc_pipeline.aladin_controls): the grid
+    // colour is set under Settings > Grid.
+    aladin = A.aladin('#sky', Object.assign({}, ALADIN_CONTROLS, {
+      survey: BASE_SURVEY, target: '0 0', fov: 2.0, cooFrame: 'galactic'}));
     HIPS.forEach(function (L) {
       var h = (typeof A.HiPS === 'function') ? A.HiPS(L.url, {name: L.name, imgFormat: 'png'})
                                              : A.imageHiPS(L.url, {name: L.name});

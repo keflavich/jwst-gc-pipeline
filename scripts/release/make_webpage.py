@@ -34,6 +34,7 @@ import make_preview_rgb
 import preview_plan
 from stage_release import FIELDS, field_release_dir
 import astrometry_provenance
+from jwst_gc_pipeline.aladin_controls import aladin_controls_js
 
 # Display label per group folder (None = Galactic Center, the default survey).
 GROUP_LABEL = {
@@ -2067,7 +2068,8 @@ def render_cmz_explorer(hips_url, cat_hips_url=None, moc_url=None,
     out.append(
         "<script>A.init.then(() => {"
         f"const aladin = A.aladin('#aladin-lite-div', {{cooFrame:'galactic', "
-        f"fov:1.0, target:'{target}', showCooGrid:false}});"
+        f"fov:1.0, target:'{target}', showCooGrid:false, "
+        f"{aladin_controls_js()}}});"
         f"aladin.setImageSurvey(aladin.createImageSurvey('cmz-color',"
         f"'CMZ two-color','{hips_url}','galactic',9,{{imgFormat:'png'}}));"
         f"{js_cat}{js_moc}"
