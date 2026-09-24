@@ -170,6 +170,34 @@ def test_affine_tie_absorbs_a_coherent_linear_velocity_field():
     assert recovered_amplitude < 0.1 * injected_amplitude
 
 
+def test_affine_tie_at_1_0_radius_handles_the_offset_that_broke_at_0_3(): # noqa: E501
+    """jwst-gc-pipeline PR #959: build_treasury_pm.py's tie-fitting call to
+    affine_tie used match_radius=0.3" until a real Sgr B2 per-observation
+    guide-star-lock offset of ~134 mas exceeded the verified-tie safety
+    margin local_residual_map enforces (offset must be well inside
+    match_radius -- specifically < match_radius/3, so per-star pairing
+    stays unambiguous). Pin the fix directly with a ~150 mas offset:
+    comfortably above the OLD radius's 100 mas floor (so it must still
+    raise there, a regression guard against a future radius change quietly
+    stopping this test from exercising the actual failure) and comfortably
+    below the NEW radius's 333 mas floor (so it must succeed there).
+    """
+    n = 1200
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=200.0)
+    offset_arcsec = 0.150  # ~134 mas real Sgr B2 offset, rounded up
+    noise = 0.001
+    rx = sx + offset_arcsec + RNG.normal(0, noise, n)
+    ry = sy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+
+    with pytest.raises(TieNotVerifiedError):
+        affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=0.3)
+
+    _, diag = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+    assert abs(diag['A'][0] - offset_arcsec) < 0.005
+
+
 def test_affine_tie_refuses_literal_duplicate_row_contamination():
     """jwst-gc-pipeline#958: nominally-independent GC Treasury observations
     turned out to share 30-62% bit-identical rows (same RA/Dec to <1 mas,
@@ -204,6 +232,42 @@ def test_affine_tie_refuses_literal_duplicate_row_contamination():
     src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
     with pytest.raises(TieNotVerifiedError, match="duplicate-row"):
         affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+
+
+def test_affine_tie_duplicate_check_requires_flux_agreement_too():
+    """pr-reviewer, PR #959 round 2: every duplicate-row test so far paired
+    coincident POSITION with coincident FLUX together, so the dmag half of
+    the check was never independently exercised -- dropping it entirely
+    still left every test passing. Same setup as the majority-contamination
+    test above (60% of pairs land at exactly zero separation after the tie),
+    but this time those coincident pairs have a deliberately large flux
+    mismatch: position agreement alone is not the #958 signature, since a
+    real star can legitimately sit near its formal position by chance while
+    being a completely different, unrelated source in the other catalog. It
+    must NOT be flagged.
+    """
+    n = 1000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=200.0)
+    A_true = np.array([0.05, 0.0001, -0.0001])
+    B_true = np.array([-0.03, 0.00008, -0.00012])
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+
+    n_coincident = int(0.6 * n)
+    coincident_idx = RNG.choice(n, n_coincident, replace=False)
+    rx[coincident_idx] = sx[coincident_idx]
+    ry[coincident_idx] = sy[coincident_idx]
+    # Same position, but NOT the same flux -- a literal duplicate row would
+    # have copied this too; a merely-coincident position would not.
+    rmag[coincident_idx] = mag[coincident_idx] + 2.0
+
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    _, diag = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0)
+    assert diag['dup_row_suspect_fraction'] < 0.02
 
 
 def test_affine_tie_refuses_minority_duplicate_row_contamination():
