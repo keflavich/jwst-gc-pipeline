@@ -44,6 +44,7 @@ import math
 import os
 
 from .. import jsgeom
+from ..aladin_controls import aladin_controls_js
 
 #: Where a copy of Aladin Lite is hardlinked from when publishing.  Same origin
 #: as the page, so no third-party CDN is involved.
@@ -1984,7 +1985,8 @@ interactive view adds sky imagery you can pan across.</p></details>
       // triggered this load arrives as 2MASS rather than as the default.
       aladin = A.aladin('#gcm-aladin', {{
         survey: wanted || {json.dumps(SURVEYS[0][1])},
-        target: '0 0', fov: 1.6, cooFrame: 'galactic'
+        target: '0 0', fov: 1.6, cooFrame: 'galactic',
+        {aladin_controls_js()}
       }});
       if (wanted && wanted.indexOf('http') === 0) {{
         // A HiPS given by URL has to be built, not named.

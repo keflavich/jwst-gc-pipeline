@@ -13,6 +13,8 @@ coadd was built from, not from the observing schedule.
 """
 import json
 
+from ..aladin_controls import ALADIN_CONTROLS
+
 ALADIN_CSS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.css'
 ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
 
@@ -214,13 +216,11 @@ function step(now) {
 function boot() {
   fillFields();
   A.init.then(function () {
-    aladin = A.aladin('#sky', {survey: TOUR.survey, fov: TOUR.fov,
-                               target: TOUR.stops[0].ra + ' ' + TOUR.stops[0].dec,
-                               cooFrame: 'icrs', showLayersControl: false,
-                               showFullscreenControl: true,
-                               showCooGridControl: false,
-                               showProjectionControl: false,
-                               showZoomControl: false, showGotoControl: false});
+    // Every Aladin control on (jwst_gc_pipeline.aladin_controls), as on the
+    // other viewers; each is one toolbar icon until opened.
+    aladin = A.aladin('#sky', Object.assign({}, ALADIN_CONTROLS, {
+      survey: TOUR.survey, fov: TOUR.fov,
+      target: TOUR.stops[0].ra + ' ' + TOUR.stops[0].dec, cooFrame: 'icrs'}));
     requestAnimationFrame(step);
   }).catch(function (err) {
     document.getElementById('where').textContent =
@@ -282,6 +282,7 @@ def render_page(data_url=DATA_FILE):
 <script src="{ALADIN_JS}" charset=utf-8></script>
 <script>
 const DATA_URL = {json.dumps(data_url)};
+const ALADIN_CONTROLS = {json.dumps(ALADIN_CONTROLS)};
 {_SCRIPT}
 </script>
 </body></html>
