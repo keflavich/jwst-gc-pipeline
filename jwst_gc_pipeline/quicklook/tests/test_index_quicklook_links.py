@@ -113,7 +113,7 @@ def test_main_adds_the_card_once_the_explorer_is_there(tmp_path):
     (out / 'cmd_explorer.html').write_text('<!doctype html><title>x</title>')
     html = _run_main(out, _empty_release(tmp_path))
     assert "href='cmd_explorer.html'" in html
-    assert html.count('Colour-magnitude explorer') == 1
+    assert html.count('Color-magnitude explorer') == 1
 
 
 def test_the_panner_card_is_gated_on_the_page_existing(tmp_path, monkeypatch):

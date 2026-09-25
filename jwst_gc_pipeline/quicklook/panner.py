@@ -184,7 +184,7 @@ function step(now) {
   // sky rather than a view of the data.
   // Bounded: an all-cut tour would spin here forever inside
   // requestAnimationFrame and freeze the tab with nothing in the console. The
-  // builder refuses to write one, and this is the second line of defence for a
+  // builder refuses to write one, and this is the second line of defense for a
   // hand-edited tour file.
   for (var guard = 0; ends[0].jump && guard < TOUR.stops.length; guard++) {
     leg = (leg + 1) % TOUR.stops.length;
@@ -275,7 +275,7 @@ def render_page(data_url=DATA_FILE):
     <option value="4">4&times;</option>
   </select>
   <span class=where id=where>loading the tour&hellip;</span>
-  <span class=note>Programme 10678, <b>F212N + F480M</b> at full resolution &mdash;
+  <span class=note>Program 10678, <b>F212N + F480M</b> at full resolution &mdash;
     drifting across the tiles that have imagery.
     <a href="index.html">back to the release</a></span>
 </div>
