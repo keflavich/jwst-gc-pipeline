@@ -259,6 +259,61 @@ REGION_BULK_DOMINANCE_RATIO = 0.5
 #: floor keeps the exemption speaking only about ties large enough to matter.
 REGION_BULK_DOMINANCE_MIN_BULK_MAS = 20.0
 
+#: Item 2 of issue #965: a SMALL, well-measured bulk with only a handful of
+#: flagged region cells is recorded, not blocked.  REGION_BULK_DOMINANCE_RATIO
+#: above only engages once the bulk is >= 20 mas (`REGION_BULK_DOMINANCE_MIN_
+#: BULK_MAS`), which leaves a genuinely small bulk (o075/o080/o084/o087: 4.1-8.1
+#: mas) with no exemption at all -- so a region map flagged purely by VIRAC2's
+#: own per-star noise (9-16 mas median cell residual even on a clean frame,
+#: #965) refuses a tie the exposures themselves agree on to <=6.4 mas.  This
+#: exemption is about CONFIDENCE in the bulk, not its SIZE: when the same-star
+#: refinement measured that bulk to sigma <= this tolerance, and at most this
+#: fraction of the region's cells are flagged, the map is recorded as a
+#: diagnostic rather than treated as a reason to withhold a well-measured
+#: correction.  It never overrides an UNCOVERED cell (a region displaced beyond
+#: the match radius, brick-1182 v001's class) -- that failure mode has nothing
+#: to do with reference noise and must keep blocking regardless of how small or
+#: well-measured the bulk is.
+REGION_SMALL_BULK_SIGMA_TOL_MAS = 2.0
+
+#: See REGION_SMALL_BULK_SIGMA_TOL_MAS.  Calibrated against the live
+#: `checkpoint_m2_*.json` history (127 measurable same-star region records,
+#: 2026-09-25): combined with the item-3 adaptive tolerance
+#: (`REGION_TOL_K`/`REGION_TOL_FLOOR_MAS`), a 2.0 mas sigma bar and a 10%
+#: flagged-cell bar together clear 11 of the 13 records the adaptive tolerance
+#: alone could not, leaving only a record at same-star sigma 2.13 mas (just
+#: over this bar) and a genuine uncovered-cell coverage failure (which this
+#: exemption cannot touch) still blocked.
+REGION_SMALL_BULK_MAX_FLAGGED_FRACTION = 0.10
+
+#: Cap on the worst SIGNIFICANT region cell (`worst_sig_off_mas`, not the
+#: unconditional `worst_off_mas`, which also counts low-N cells too noisy to be
+#: distinguishable from zero) for which the item-2 exemption above may still
+#: apply.  Neither REGION_SMALL_BULK_SIGMA_TOL_MAS nor
+#: REGION_SMALL_BULK_MAX_FLAGGED_FRACTION looks at the SIZE of an individual
+#: flagged cell: a 90 mas or 250 mas seam confined to <=10% of a tile's cells,
+#: with a bulk that still measures precisely (sigma <= 2 mas because the seam is
+#: a small minority of the stars), passed both bars with `apply_ok=True` and no
+#: record of how large the flagged cell actually was -- exactly the brick-1182
+#: F200W seam shape (issue #968 review). This cap closes that gap.
+#:
+#: Chosen from a live-data replay of every `checkpoint_m2_*.json` under
+#: `/orange/adamginsburg/jwst/gc-treasury/astrometry_checkpoints/` (2026-09-25):
+#: of 50 unique tile/filter records passing the sigma and flagged-fraction bars,
+#: `worst_sig_off_mas` reads (mas, highest first) 57.35 (o084 F212N, n=46 in
+#: that cell), then 44.15 (o100), 40.01 (o111), 33.12 (o065), <=30.54 for
+#: everything else -- a single outlier (o084) sits 13 mas above the rest of the
+#: population, which itself tops out at 44.15.  50.0 mas splits that gap:
+#: comfortably above every other tile (5.85 mas of margin over o100) and below
+#: the o084 outlier (7.35 mas of margin under it).
+#:
+#: o084 (57.35 mas) is therefore reported, not silently kept, deliberately: at
+#: this cap it FAILS the exemption and stays blocking, unlike o075 (worst_sig
+#: 22.98), o080 (25.84) and o087 (23.54), which remain comfortably exempt. A
+#: single 46-star cell reading 57 mas is exactly the kind of localized residual
+#: this cap exists to keep BLOCKING rather than recording and moving on.
+REGION_SMALL_BULK_WORST_SIG_CAP_MAS = 50.0
+
 #: When the SPARSE arbiter is itself noise, judged against the DENSE peak it is
 #: meant to arbitrate.  A sparse tie can be internally self-consistent -- `ok`,
 #: `window_consistent`, not alias-rejected -- and still be a coincidence: Gaia is
@@ -1956,9 +2011,68 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         and region_bulk_dominance_ratio <= REGION_BULK_DOMINANCE_RATIO
         and not region_uncovered)
 
+    # Item 2 of issue #965: a SMALL, well-measured bulk with only a handful of
+    # flagged cells is recorded and applied, not refused.  See
+    # REGION_SMALL_BULK_SIGMA_TOL_MAS above for why this is a separate
+    # exemption from the dominance ratio (that one requires a >= 20 mas bulk;
+    # this one is about CONFIDENCE, not size) and for the calibration.  Like
+    # the dominance exemption, it is confined to the same-star RESIDUAL arm and
+    # never overrides an uncovered cell.
+    region_n_measured = int((per_tile_same_star or {}).get("n_measured") or 0)
+    region_n_flagged = int((per_tile_same_star or {}).get("n_flagged") or 0)
+    region_flagged_fraction = (float(region_n_flagged) / region_n_measured
+                               if region_n_measured > 0 else float("nan"))
+    same_star_sigma_mas = (float(np.hypot(same_star["dra_err"], same_star["ddec_err"]))
+                           if same_star is not None else float("nan"))
+    # `worst_sig_off_mas` -- the worst STATISTICALLY SIGNIFICANT cell, not the
+    # unconditional `worst_off_mas` -- so a low-N cell too noisy to be told apart
+    # from zero cannot itself defeat the exemption; see
+    # REGION_SMALL_BULK_WORST_SIG_CAP_MAS for why this size cap exists at all
+    # (issue #968 review: neither the sigma nor the flagged-fraction bar above
+    # looks at how large one flagged cell actually is).
+    region_worst_sig_off_mas = (per_tile_same_star or {}).get("worst_sig_off_mas")
+    region_worst_sig_within_cap = bool(
+        region_worst_sig_off_mas is not None
+        and np.isfinite(region_worst_sig_off_mas)
+        and region_worst_sig_off_mas <= REGION_SMALL_BULK_WORST_SIG_CAP_MAS)
+    per_tile_small_bulk_exempt = bool(
+        per_tile_source == "same-star-region" and not per_tile_ok
+        and not region_uncovered and region_n_measured > 0
+        and np.isfinite(same_star_sigma_mas)
+        and same_star_sigma_mas <= REGION_SMALL_BULK_SIGMA_TOL_MAS
+        and region_flagged_fraction <= REGION_SMALL_BULK_MAX_FLAGGED_FRACTION
+        and region_worst_sig_within_cap)
+    # `region_map` names the verdict this checkpoint recorded for the region
+    # map alone, independent of what gated `apply_ok` overall -- the release
+    # gate (check_astrometry_checkpoints.py) re-derives and re-checks this same
+    # verdict from the numbers below rather than trusting the stored status.
+    if per_tile_source != "same-star-region":
+        region_map_status = "not_applicable"
+    elif per_tile_ok:
+        region_map_status = "clean"
+    elif per_tile_small_bulk_exempt:
+        region_map_status = "recorded_nonblocking"
+    else:
+        region_map_status = "blocking"
+    region_map = dict(
+        status=region_map_status,
+        demoted=bool(per_tile_small_bulk_exempt),
+        n_flagged=region_n_flagged, n_measured=region_n_measured,
+        n_uncovered=region_uncovered,
+        flagged_fraction=region_flagged_fraction,
+        same_star_sigma_mas=same_star_sigma_mas,
+        sigma_tol_mas=REGION_SMALL_BULK_SIGMA_TOL_MAS,
+        max_flagged_fraction=REGION_SMALL_BULK_MAX_FLAGGED_FRACTION,
+        worst_sig_off_mas=region_worst_sig_off_mas,
+        worst_sig_off_cap_mas=REGION_SMALL_BULK_WORST_SIG_CAP_MAS,
+        tol_mas=(per_tile_same_star or {}).get("tol_mas"),
+        tol_k=(per_tile_same_star or {}).get("tol_k"),
+        tol_floor_mas=(per_tile_same_star or {}).get("tol_floor_mas"))
+
     apply_ok = bool(res_a is not None and res_a.get("ok")
                     and (per_tile_ok or per_tile_unmeasurable_exempt
-                         or per_tile_bulk_dominant_exempt)
+                         or per_tile_bulk_dominant_exempt
+                         or per_tile_small_bulk_exempt)
                     and cross_gross_ok)
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
                cross_reference_gross_ok=cross_gross_ok,
@@ -1982,6 +2096,15 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                per_tile_bulk_dominant_exempt=per_tile_bulk_dominant_exempt,
                region_bulk_dominance_ratio=region_bulk_dominance_ratio,
                region_bulk_dominance_tol=REGION_BULK_DOMINANCE_RATIO,
+               # Item 2 of issue #965: WHY it passed (or did not), same
+               # reasoning as the two flags above -- an apply_ok that used this
+               # exemption, or a refusal this exemption could not reach (an
+               # uncovered cell, or a bulk not measured precisely enough), must
+               # both be readable after the fact.  `region_map` is the single
+               # place that records the verdict; the release gate re-derives it
+               # rather than trusting the stored `status` string.
+               per_tile_small_bulk_exempt=per_tile_small_bulk_exempt,
+               region_map=region_map,
                cross_reference_sparse_noise_vs_dense=sparse_noise_vs_dense,
                per_tile_same_star=per_tile_same_star,
                per_tile_source=per_tile_source, reference_dense=bool(dense),

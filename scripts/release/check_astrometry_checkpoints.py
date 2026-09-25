@@ -34,7 +34,10 @@ Exit codes, matching the sibling gates in this directory:
 
     0  every checkpoint record in scope passed, on the current products
     1  at least one record has ``passed: false``, or a correcting-stage record
-       holds corrections nothing applied -- REFUSE
+       holds corrections nothing applied, or a same-star region-map demotion
+       (issue #965 item 2, ``reference_tie.region_map.status ==
+       "recorded_nonblocking"``) does not check out against this gate's own
+       sigma/flagged-fraction/worst-significant-cell thresholds -- REFUSE
     2  records exist but could not be read -- REFUSE (fail closed)
     3  the frozen stages have no verdict on the CURRENT products -- REFUSE
        (fail closed).  Either there are no records at all, or every frozen
@@ -58,6 +61,9 @@ import sys
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     REFERENCE_TIE_SOURCE_SUFFIX, parse_record_name)
+from jwst_gc_pipeline.photometry.visit_consensus import (
+    REGION_SMALL_BULK_MAX_FLAGGED_FRACTION, REGION_SMALL_BULK_SIGMA_TOL_MAS,
+    REGION_SMALL_BULK_WORST_SIG_CAP_MAS)
 
 BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
                       os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst"))
@@ -255,6 +261,86 @@ def _unapplied_correcting(current, by_key, overall):
             for path, gov in sorted(governing.items())]
 
 
+def _region_map_findings(rec):
+    """``[(visit, status, verified, detail)]`` from an m2/m12 record's per-visit
+    ``reference_tie.region_map`` (issue #965 item 2).
+
+    ``recorded_nonblocking`` is a claim the record makes about ITS OWN numbers
+    -- flagged fraction, same-star sigma, worst significant cell, no uncovered
+    cell -- and this gate RE-DERIVES the claim from those numbers rather than
+    trusting the stored string, exactly as the module docstring for
+    ``region_map`` promises.  A stale record, a hand-edit, or a future change
+    to the thresholds that is not reflected in a re-run all show up here as a
+    demotion that does not check out, and ``verified`` is ``False`` for it --
+    the caller refuses.  The thresholds themselves are read from THIS gate's
+    own imported ``visit_consensus`` constants, not from the record's stored
+    ``sigma_tol_mas`` / ``max_flagged_fraction`` / ``worst_sig_off_cap_mas``:
+    a record whose stored threshold has drifted from the constant that
+    produced it (a hand-edit, or code that shipped a tighter bar after the
+    record was written) is exactly the case re-deriving is for, and trusting
+    the record's own copy of the threshold would silently wave it through.
+    The record's stored thresholds are still read and reported in ``detail``
+    for provenance, and a mismatch against the live constant is called out.
+
+    ``clean`` and ``not_applicable`` are not findings -- there is nothing to
+    verify -- and are left out.  ``blocking`` is reported for visibility but
+    is not itself a new refusal: an m2/m12 record that reached disk still
+    carrying a blocking region map is already covered by the existing
+    corrections/override machinery (m2 raises in place by default; a
+    continued run shows up as CORRECTIONS NEVER APPLIED or OVERRIDDEN above).
+    """
+    out = []
+    for v in rec.get("visits", []):
+        rm = ((v.get("reference_tie") or {}).get("region_map") or {})
+        status = rm.get("status")
+        if not status or status in ("not_applicable", "clean"):
+            continue
+        visit = v.get("visit")
+        if status == "recorded_nonblocking":
+            n_measured = _as_float(rm.get("n_measured"))
+            n_flagged = _as_float(rm.get("n_flagged"))
+            frac = (n_flagged / n_measured
+                    if n_measured and n_measured > 0 and n_flagged is not None
+                    else None)
+            sigma = _as_float(rm.get("same_star_sigma_mas"))
+            worst_sig = _as_float(rm.get("worst_sig_off_mas"))
+            n_uncovered = rm.get("n_uncovered")
+            # Live constants, not the record's own stored copies -- see the
+            # docstring above.
+            sigma_tol = REGION_SMALL_BULK_SIGMA_TOL_MAS
+            max_frac = REGION_SMALL_BULK_MAX_FLAGGED_FRACTION
+            worst_sig_cap = REGION_SMALL_BULK_WORST_SIG_CAP_MAS
+            verified = bool(
+                n_uncovered == 0 and frac is not None and frac <= max_frac
+                and sigma is not None and sigma <= sigma_tol
+                and worst_sig is not None and worst_sig <= worst_sig_cap)
+            stale_note = ""
+            recorded_sigma_tol = _as_float(rm.get("sigma_tol_mas"))
+            recorded_max_frac = _as_float(rm.get("max_flagged_fraction"))
+            recorded_worst_cap = _as_float(rm.get("worst_sig_off_cap_mas"))
+            if (recorded_sigma_tol is not None and recorded_sigma_tol != sigma_tol
+                    or recorded_max_frac is not None and recorded_max_frac != max_frac
+                    or recorded_worst_cap is not None and recorded_worst_cap != worst_sig_cap):
+                stale_note = (
+                    f", STALE THRESHOLDS recorded (sigma_tol={recorded_sigma_tol}, "
+                    f"max_frac={recorded_max_frac}, worst_sig_cap={recorded_worst_cap} "
+                    f"vs live {sigma_tol}/{max_frac}/{worst_sig_cap})")
+            detail = (f"n_flagged={rm.get('n_flagged')}/{rm.get('n_measured')} "
+                      f"({'n/a' if frac is None else f'{frac:.1%}'} <= "
+                      f"{max_frac}), sigma={sigma} mas (<= {sigma_tol}), "
+                      f"worst_sig_off={worst_sig} mas (<= {worst_sig_cap}), "
+                      f"n_uncovered={n_uncovered}{stale_note}")
+            out.append((visit, status, verified, detail))
+        elif status == "blocking":
+            detail = (f"n_flagged={rm.get('n_flagged')}/{rm.get('n_measured')}, "
+                      f"n_uncovered={rm.get('n_uncovered')}")
+            out.append((visit, status, None, detail))
+        else:
+            out.append((visit, status, False,
+                        f"unrecognized region_map status {status!r}"))
+    return out
+
+
 def _stale_against(info, rec, by_key, overall):
     """The m2 date this frozen record is older than, or ``""`` if it is current.
 
@@ -426,6 +512,30 @@ def main(argv=None):
     unapplied = _unapplied_correcting(current, correcting_by_key,
                                       correcting_overall)
 
+    # Item 2 of issue #965: report and re-verify every same-bulk region-map
+    # demotion recorded on the NEWEST correcting-stage record per (filter,
+    # obs) -- the same set `_unapplied_correcting` grades corrections
+    # against, deduplicated by path since one record can be `overall` and
+    # also the newest for its own (filter, obs).
+    _region_records, _seen = [], set()
+    for entry in list(correcting_by_key.values()) + (
+            [correcting_overall] if correcting_overall is not None else []):
+        if entry is None or entry[0] in _seen:
+            continue
+        _seen.add(entry[0])
+        _region_records.append(entry)
+    region_unverified = []
+    region_demoted_verified = []
+    region_blocking = []
+    for path, info, rec in _region_records:
+        for visit, status, verified, detail in _region_map_findings(rec):
+            if status == "recorded_nonblocking" and verified:
+                region_demoted_verified.append((path, info, rec, visit, detail))
+            elif status == "blocking":
+                region_blocking.append((path, info, rec, visit, detail))
+            else:
+                region_unverified.append((path, info, rec, visit, status, detail))
+
     n_frozen = len(current) + len(stale)
     # Summary FIRST.  It goes to stdout and the verdict goes to stderr, so on a
     # terminal the two interleave by order of printing -- and a verdict that
@@ -434,8 +544,29 @@ def main(argv=None):
           f"frozen stage ({len(stale)} superseded), {len(failed)} FAILED"
           + (f", {len(answered)} answered by a later stage" if answered else "")
           + (f", {len(unapplied)} m2 record(s) with corrections nothing applied"
-             if unapplied else ""))
+             if unapplied else "")
+          + (f", {len(region_demoted_verified)} region-map demotion(s) "
+             f"verified" if region_demoted_verified else "")
+          + (f", {len(region_unverified)} region-map demotion(s) UNVERIFIED"
+             if region_unverified else ""))
     sys.stdout.flush()
+    for path, info, rec, visit, detail in region_demoted_verified:
+        print(f"REGION MAP DEMOTED (verified) {_who(info)} visit {visit}  "
+              f"({os.path.basename(path)}, {rec.get('date')}): {detail} -- "
+              f"the same-star spatial gate was dirty but the bulk correction "
+              f"was recorded and APPLIED per issue #965 item 2.  Non-blocking.")
+    for path, info, rec, visit, status, detail in region_unverified:
+        print(f"\nREGION MAP DEMOTION UNVERIFIED {_who(info)} visit {visit}  "
+              f"({os.path.basename(path)}, {rec.get('date')}, status={status}): "
+              f"{detail}")
+        print(f"    the record claims a non-blocking demotion that its own "
+              f"numbers do not support (or reports a status this gate does "
+              f"not recognize) -- re-run m2 for this visit rather than "
+              f"shipping on an unverifiable claim.")
+    for path, info, rec, visit, detail in region_blocking:
+        print(f"REGION MAP BLOCKING {_who(info)} visit {visit}  "
+              f"({os.path.basename(path)}, {rec.get('date')}): {detail} -- "
+              f"already covered by the corrections/override checks above.")
     for path, info, rec, (_lp, li, lr) in answered:
         who = _who(info)
         print(f"ANSWERED BY A LATER STAGE {who}: recorded FAILED "
@@ -557,6 +688,15 @@ def main(argv=None):
               f"(scripts/reduction/apply_m2_checkpoint_corrections.py), "
               f"REGENERATE the affected frames from _cal, and re-run cataloging "
               f"from m2 so a post-regeneration record exists.", file=sys.stderr)
+    if region_unverified:
+        print(f"\nREFUSING TO STAGE '{args.field}': {len(region_unverified)} "
+              f"same-star region-map demotion(s) (issue #965 item 2) do not "
+              f"check out against their own recorded numbers, or report a "
+              f"status this gate does not recognize.  A field ships on a "
+              f"'recorded_nonblocking' region map only when this gate can "
+              f"independently confirm the sigma and flagged-fraction "
+              f"thresholds from the record -- re-run m2 for the visit(s) "
+              f"named above.", file=sys.stderr)
     # A field whose CORRECTING stage never ran at all.  The frozen stages ask
     # only "has the solution moved since the m2 freeze"; with no m1/m2/m12
     # record there is no freeze, so a clean frozen sweep certifies that nothing
@@ -580,7 +720,7 @@ def main(argv=None):
               f"from m2 so the field's solution is verified before the frozen "
               f"stages certify it.", file=sys.stderr)
         return 1
-    if failed or unapplied:
+    if failed or unapplied or region_unverified:
         return 1
     return 0
 

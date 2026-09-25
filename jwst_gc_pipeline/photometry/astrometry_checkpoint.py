@@ -3770,10 +3770,15 @@ def _spatial_gate_detail(tie):
                 "[Gaia-only ref: per-tile map is noise, not gating]")
     if tie.get("per_tile_source") == "same-star-region":
         reg = tie.get("per_tile_same_star") or {}
+        rm = tie.get("region_map") or {}
+        tol = reg.get("tol_mas")
+        tol_str = (f", tol={tol:.1f} mas [{reg.get('tol_source')}]"
+                  if tol is not None and np.isfinite(tol) else "")
         return (f"same-star region map clean={reg.get('clean')} "
+                f"status={rm.get('status')} "
                 f"({reg.get('n_cells')} cells, {reg.get('n_flagged')} flagged, "
                 f"{reg.get('n_uncovered')} uncovered, "
-                f"{reg.get('n_skipped')} unchecked)")
+                f"{reg.get('n_skipped')} unchecked{tol_str})")
     return f"per-tile histogram grid clean={(tie.get('per_tile') or {}).get('clean')}"
 
 

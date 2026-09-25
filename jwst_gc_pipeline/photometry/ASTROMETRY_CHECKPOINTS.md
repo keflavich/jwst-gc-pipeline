@@ -406,10 +406,64 @@ than five independent checks would be.
   record says which one gated:
   * `same-star-region` — `same_star_region_map`, used whenever A′ verified the tie
     is small enough for unambiguous pairing.  Per ~45″ region it tests the median
-    pair residual (bulk removed) against 15 mas at 3σ, **and** the region's match
-    COVERAGE, so both seam classes are covered: one inside the match radius
+    pair residual (bulk removed) against a tolerance at 3σ, **and** the region's
+    match COVERAGE, so both seam classes are covered: one inside the match radius
     (brick-1182 F200W's ~90 mas strip) and one beyond it (brick-1182 v001's ~20″
     half-mosaic, which keeps its sources and loses its pairs).
+
+    **Residual tolerance is ADAPTIVE, not a fixed 15 mas (issue #965 item 3).**
+    VIRAC2's own per-star scatter (~40 mas) plus 12.7 yr of proper-motion
+    propagation gives every 45″ cell a median residual of 9-16 mas and a 90th
+    percentile of 16-38 mas even on a perfectly registered frame — five
+    gc-treasury tiles (o075/o077/o080/o084/o087) stopped at m2 on exactly this
+    noise while their exposures agreed to ≤6.4 mas. `same_star_region_map`
+    (`tol_mas=None`, the default) now sets the tolerance from THIS TILE'S OWN
+    cell-to-cell spread: `max(REGION_TOL_FLOOR_MAS, REGION_TOL_K * mad)`, where
+    `mad` is the 1.4826-scaled median absolute deviation of the tile's own
+    bulk-removed `resid_off_mas` — robust to the 1-2 outlier cells a seam or a
+    noisy tile contributes (MAD's breakdown point is 50% of the cells), so a
+    seam does not inflate the threshold meant to catch it. `REGION_TOL_K = 3.0`,
+    `REGION_TOL_FLOOR_MAS = 30.0` mas were calibrated by replaying every
+    measurable `per_tile_same_star` record in the live `checkpoint_m2_*.json`
+    history (127 tile/filter/visit records, 2026-09-25): of 115 that fail the
+    old fixed-15-mas rule, this tolerance alone clears 102, the item-2 exemption
+    below accounts for 11 more, and the 2 that remain are a borderline
+    same-star sigma (2.13 mas, just over the item-2 bar) and a genuine
+    uncovered-cell coverage failure (untouched by this tolerance). Raising the
+    tolerance can only clear flags, never add them, so no record that passed
+    the old fixed rule newly fails. The applied value, its source
+    (`"adaptive"`/`"fixed"`), and the measured `cell_resid_mad_mas`/
+    `cell_resid_median_mas` are recorded on every `per_tile_same_star` map.
+
+    **A small, well-measured bulk with few flagged cells is RECORDED, not
+    BLOCKED (issue #965 item 2).** A separate, ratio-based exemption
+    (`REGION_BULK_DOMINANCE_RATIO`, issue #921) already lets a dirty region map
+    through when the bulk DOMINATES the worst cell, but only engages once the
+    bulk is ≥ 20 mas, so a genuinely small bulk (o075/o080/
+    o084/o087: 4.1-8.1 mas, 2026-09-25) had no exemption at all even when the
+    same-star refinement measured it to ±1.6-1.9 mas, with 1-2 of 26-28 cells
+    (3.6-7.1%) over the adaptive tolerance. When the same-star bulk sigma is
+    ≤ `REGION_SMALL_BULK_SIGMA_TOL_MAS` (2.0 mas) and at most
+    `REGION_SMALL_BULK_MAX_FLAGGED_FRACTION` (10%) of the region's cells are
+    flagged, and no cell is UNCOVERED (a coverage failure never gets this
+    exemption, regardless of the bulk's precision — see below), the tie's
+    `apply_ok` is TRUE and the bulk correction is applied; the region map's own
+    verdict is written to `reference_tie.region_map.status =
+    "recorded_nonblocking"` rather than `"blocking"`, alongside the thresholds
+    used and the measured sigma/flagged-fraction, so the map stays visible as a
+    diagnostic. `_spatial_gate_detail` prints it at every call site (CORRECT,
+    the sign-off rejection, and `unverified_blocking`), and the release gate
+    (`check_astrometry_checkpoints.py`) RE-DERIVES the demotion from the
+    record's own `n_flagged`/`n_measured`/`same_star_sigma_mas`/`n_uncovered`
+    rather than trusting the stored `status` string: a `"recorded_nonblocking"`
+    that checks out prints as a non-blocking `REGION MAP DEMOTED (verified)`
+    line, and one that does not (a stale record, a hand-edit, or a number that
+    slipped past the exemption) prints `REGION MAP DEMOTION UNVERIFIED` and
+    REFUSES the release. The coverage arm is deliberately EXCLUDED from this
+    exemption: an uncovered
+    cell means a region was displaced past the match radius (brick-1182 v001's
+    class), which has nothing to do with reference noise and must keep
+    blocking no matter how precisely the bulk elsewhere is measured.
 
     Coverage is counted three ways, because the plain "pairs inside the 0.3″
     match radius per source" count misses a displaced region twice over (both
