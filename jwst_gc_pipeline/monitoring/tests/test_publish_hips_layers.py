@@ -138,6 +138,10 @@ def test_every_published_layer_is_registered_explicitly():
         'jwst_gc_treasury_vminmax_hips',
         'jwst_gc_treasury_log_hips',
         'gctreasury_mosaic_RGB_770-480-212_hips',
+        'jwst_gc_treasury_residual_vminmax_hips',
+        'jwst_gc_treasury_residual_log_hips',
+        'jwst_gc_treasury_miri_residual_hips',
+        'gctreasury_mosaic_RGB_770-480-212_residual_hips',
         'jwst_nir_hips',
         'jwst_miri_hips',
     }
@@ -366,6 +370,9 @@ def test_only_the_layers_the_hourly_job_builds_are_guarded():
     assert ph.lock_path(ph.LAYERS['jwst_gc_treasury_vminmax_hips']) == \
         f'{ph.BUILD_ROOT}/.auto.lock'
     assert ph.lock_path(ph.LAYERS['jwst_nir_hips']) is None
+    # the residual coadds are written by the same hourly job
+    assert ph.lock_path(ph.LAYERS['jwst_gc_treasury_residual_vminmax_hips']) == \
+        f'{ph.BUILD_ROOT}/.auto.lock'
 
 
 def test_a_publish_waits_for_a_held_lock_and_then_takes_it(tmp_path,
