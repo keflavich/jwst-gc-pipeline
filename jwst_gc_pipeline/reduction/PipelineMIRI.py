@@ -555,6 +555,7 @@ def main(filtername, Observations=None, regionname='brick',
         asn_data['products'][0]['name'] = f'{jw_prefix(proposal_id)}-o{field}_t001_miri_{filtername.lower()}'
         asn_data['products'][0]['members'] = [row for row in asn_data['products'][0]['members']]
 
+        _member_shifts = []
         for member in asn_data['products'][0]['members']:
             print(f"Running  maybe alignment on {member}")
             fname = member['expname']
@@ -582,12 +583,13 @@ def main(filtername, Observations=None, regionname='brick',
             # with MIRI_TRIM_EAST=MIRI_TRIM_WEST=MIRI_TRIM_ROWS=0.
             _edge_trim_dq(align_name)
 
-            fix_alignment(member['expname'], proposal_id=proposal_id,
-                          field=field, basepath=basepath,
-                          regionname=regionname,
-                          filtername=filtername,
-                          use_average=use_average,
-                          visit=fname[10:13])
+            _member_shifts.append(
+                fix_alignment(member['expname'], proposal_id=proposal_id,
+                              field=field, basepath=basepath,
+                              regionname=regionname,
+                              filtername=filtername,
+                              use_average=use_average,
+                              visit=fname[10:13]))
 
         asn_file_each = asn_file
         with open(asn_file_each, 'w') as fh:
@@ -603,6 +605,24 @@ def main(filtername, Observations=None, regionname='brick',
         tweakreg_parameters['abs_fitgeometry'] = 'shift'
 
         abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field, explicit_refcat=reference_catalog)
+        # A field whose MIRI bulk is INHERITED from a NIRCam band of the same
+        # visit (alignment_config.InheritedBulk; 10678) is already on the
+        # absolute frame after fix_alignment.  An absolute tweakreg fit on top
+        # can only swap that tie for MIRI's own, which on 10678 left 16 tiles
+        # unmoved and scattered o113's frames by 136 mas.  Only the relative
+        # frame-to-frame fit runs then.  If any frame's visit has NO donor
+        # rows at all (NIRCam not yet checkpointed), the whole association
+        # keeps the absolute fit.
+        from jwst_gc_pipeline.reduction.alignment_config import inherited_bulk
+        from jwst_gc_pipeline.reduction.unified_alignment import (
+            inherited_abs_tie_complete)
+        _inh = inherited_bulk(proposal_id, field, 'mirimage')
+        if abs_refcat is not None and inherited_abs_tie_complete(
+                _inh, _member_shifts):
+            print(f"Absolute tweakreg OFF: every frame inherited its bulk from "
+                  f"{sorted({sh.inherited_from for sh in _member_shifts})} "
+                  f"(alignment_config.InheritedBulk); relative alignment only")
+            abs_refcat = None
         if abs_refcat is not None:
             reftbl = Table.read(abs_refcat)
             reftbl.meta['name'] = 'Reference Astrometric Catalog'
@@ -874,9 +894,13 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
             _sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
         align_fits[1].header['RAOFFSET'] = rashift.value
         align_fits[1].header['DEOFFSET'] = decshift.value
+        from jwst_gc_pipeline.reduction.unified_alignment import (
+            inherited_header_cards)
+        align_fits[1].header.update(inherited_header_cards(_shift))
         align_fits.writeto(fn, overwrite=True)
         assert 'RAOFFSET' in fits.getheader(fn, ext=1)
     check_wcs(fn)
+    return _shift
 
 
 if __name__ == "__main__":

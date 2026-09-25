@@ -158,6 +158,16 @@ class AlignmentShift:
     prov_stage: str = ''
     #: This frame's WCS-generation stamp, when it was read.
     frame_generation: Optional[dict] = None
+    #: Donor band whose per-visit BULK this frame inherited
+    #: (``alignment_config.InheritedBulk``), or ``''`` when the bulk was this
+    #: band's own.  The MIRI reducer keys its absolute-tweakreg decision on it.
+    inherited_from: str = ''
+    #: The donor's BULK sentinel row as read from the table (coordinate-RA
+    #: arcsec, arcsec), before the differential; ``None`` when the donor has
+    #: rows for the visit but no BULK row, or nothing was inherited.  Written
+    #: to the frame header so stale inheriting frames can be found by diffing
+    #: headers against the table.
+    donor_bulk: Optional[tuple] = None
 
     @property
     def total_ra(self) -> float:
@@ -208,6 +218,10 @@ def resolve_shift(fn, proposal_id, field, filtername, module, basepath,
         return _shift_from_recorded_bulk(fn, cfg, basepath, proposal_id,
                                          filtername, module)
     if cfg.source == TABLE_CONSENSUS:
+        if module in cfg.inherit_bulk:
+            return _shift_from_inherited(fn, cfg, cfg.inherit_bulk[module],
+                                         basepath, proposal_id, filtername,
+                                         module)
         return _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername,
                                      module)
     if cfg.source == TABLE_LOCKED:
@@ -318,6 +332,144 @@ def _read_consensus(tblfn, fn, filtername):
     if 'prov_stage' in tbl.colnames and nb == 1:
         prov_stage = str(tbl[sel]['prov_stage'][0])
     return bulk_ra, bulk_dec, total_ra, total_dec, prov_stage
+
+
+def _donor_bulk(tbl, visit, inh):
+    """The donor band's BULK tie for ``visit``.
+
+    Returns ``(filter, dra_coord_arcsec, ddec_arcsec, dec_deg, has_bulk)``,
+    or ``None``
+    when no donor band has ANY row for the visit (its checkpoint has not run).
+
+    A donor band that has rows for the visit but no BULK sentinel row
+    contributes a zero bulk: its consensus->reference tie was not written
+    (inside tolerance, or refused), so its served frame carries no bulk, and
+    the inheriting band follows that frame.  The first band in
+    ``donor_filters`` with any row wins.
+
+    ``dec_deg`` is the bulk row's ``prov_dec_deg`` when recorded, else the
+    entry's ``dec_ref_deg``: it converts the on-sky differential to the
+    coordinate convention at the visit's own declination.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        BULK_EXPOSURE, BULK_MODULE,
+    )
+    for donor in inh.donor_filters:
+        vf = (tbl['Visit'] == visit) & (tbl['Filter'] == donor)
+        if not vf.any():
+            continue
+        sel = vf & (tbl['Exposure'] == BULK_EXPOSURE) & (tbl['Module'] == BULK_MODULE)
+        nb = int(sel.sum())
+        if nb > 1:
+            raise ValueError(f"donor {donor} BULK match={nb} for visit={visit}; "
+                             f"expected <=1 row")
+        if nb == 0:
+            return donor, 0.0, 0.0, inh.dec_ref_deg, False
+        row = tbl[sel]
+        dec = inh.dec_ref_deg
+        if 'prov_dec_deg' in tbl.colnames:
+            val = float(row['prov_dec_deg'][0])
+            if np.isfinite(val):
+                dec = val
+        return (donor, float(row['dra (arcsec)'][0]),
+                float(row['ddec (arcsec)'][0]), dec, True)
+    return None
+
+
+def _shift_from_inherited(fn, cfg, inh, basepath, proposal_id, filtername,
+                          module):
+    """BULK borrowed from a donor band of the same visit, plus this band's own
+    consensus rows summed on top as residuals.
+
+    The inheriting band lands on the donor's SERVED frame, whatever tie that
+    frame carries -- including none, when the donor's tie was refused (10678
+    o077/o105/o109/o116: F212N sits 50-75 mas off VIRAC2 there, #957).  That
+    keeps multi-band composites registered, and the inheriting band follows
+    the donor's tie on its next regeneration once the donor is fixed.
+
+    A visit with no donor rows at all inherits nothing (``inherited_from ==
+    ''``): the frame gets this band's own consensus rows only, and the reducer
+    keeps its own absolute tie for it.
+    """
+    tblfn = (f'{basepath}/offsets/'
+             f'Offsets_JWST_Brick{proposal_id}_consensus.csv')
+    if not os.path.exists(tblfn):
+        print(f"[inherit] no table {tblfn} yet; leaving "
+              f"{os.path.basename(fn)} at frame (0,0)")
+        return AlignmentShift(source=TABLE_CONSENSUS,
+                              reference_frame=cfg.reference_frame,
+                              prov_table=os.path.basename(tblfn),
+                              table_present=False, prov_stage='NO_TABLE')
+
+    # this band's own rows: residuals measured on frames that already carry
+    # the inherited bulk, so they SUM (RECORDED_BULK + consensus_jitter
+    # semantics)
+    own_bulk_ra, own_bulk_dec, own_ra, own_dec, prov_stage = _read_consensus(
+        tblfn, fn, filtername)
+
+    tbl = Table.read(tblfn)
+    visit = os.path.basename(fn).split('_')[0]
+    donor = _donor_bulk(tbl, visit, inh)
+    if donor is None:
+        print(f"[inherit] WARNING {os.path.basename(fn)}: no "
+              f"{'/'.join(inh.donor_filters)} rows at all for {visit} (donor "
+              f"not checkpointed); inheriting nothing, own {filtername} rows "
+              f"only ({own_ra:+.4f}, {own_dec:+.4f})\"", flush=True)
+        return AlignmentShift(bulk_ra=own_bulk_ra, bulk_dec=own_bulk_dec,
+                              jitter_ra=own_ra - own_bulk_ra,
+                              jitter_dec=own_dec - own_bulk_dec,
+                              source=TABLE_CONSENSUS,
+                              reference_frame=cfg.reference_frame,
+                              prov_table=os.path.basename(tblfn),
+                              prov_stage=prov_stage)
+
+    dfilt, dra, ddec, dec, has_bulk = donor
+    diff_ra_mas, diff_dec_mas = inh.differential[dfilt]
+    bulk_ra = dra + diff_ra_mas / 1e3 / np.cos(np.deg2rad(dec))
+    bulk_dec = ddec + diff_dec_mas / 1e3
+    print(f"[inherit] {os.path.basename(fn)}: {dfilt} bulk ({dra:+.4f}, "
+          f"{ddec:+.4f})\" + differential ({diff_ra_mas:+.1f}, "
+          f"{diff_dec_mas:+.1f}) mas on-sky at dec {dec:.3f}; own {filtername} "
+          f"rows ({own_ra:+.4f}, {own_dec:+.4f})\"", flush=True)
+    return AlignmentShift(bulk_ra=bulk_ra, bulk_dec=bulk_dec,
+                          jitter_ra=own_ra, jitter_dec=own_dec,
+                          source=TABLE_CONSENSUS,
+                          reference_frame=cfg.reference_frame,
+                          prov_table=os.path.basename(tblfn),
+                          prov_stage=prov_stage or f'inherited:{dfilt}',
+                          inherited_from=dfilt,
+                          donor_bulk=(dra, ddec) if has_bulk else None)
+
+
+def inherited_abs_tie_complete(inh, shifts):
+    """True when the reducer should turn absolute tweakreg OFF: the module
+    inherits its bulk (``inh`` from ``alignment_config.inherited_bulk``), its
+    entry asks for that, and EVERY association member's shift was inherited.
+
+    One frame without a donor (its visit's donor band not checkpointed yet)
+    keeps the absolute fit for the whole association: the frames are fit
+    together, and that frame has no other tie.
+    """
+    if inh is None or not inh.disable_abs_tweakreg or not shifts:
+        return False
+    return all(sh is not None and bool(sh.inherited_from) for sh in shifts)
+
+
+def inherited_header_cards(shift):
+    """FITS cards recording what bulk ``shift`` inherited, so a later donor
+    re-tie shows up as a header-vs-table difference.  FITS headers cannot hold
+    NaN, hence the ALIGNBLK flag for "no donor BULK row"."""
+    db = shift.donor_bulk
+    return {
+        'ALIGNINH': (shift.inherited_from or 'none',
+                     'band whose visit bulk tie this frame inherited'),
+        'ALIGNBLK': (db is not None,
+                     'donor BULK row inherited (F: none/zero bulk)'),
+        'ALIGNDRA': (db[0] if db is not None else 0.0,
+                     '[arcsec, coord RA] donor BULK dra inherited'),
+        'ALIGNDDE': (db[1] if db is not None else 0.0,
+                     '[arcsec] donor BULK ddec inherited'),
+    }
 
 
 def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
