@@ -141,7 +141,6 @@ def test_every_published_layer_is_registered_explicitly():
         'jwst_gc_treasury_residual_vminmax_hips',
         'jwst_gc_treasury_residual_log_hips',
         'jwst_gc_treasury_miri_residual_hips',
-        'gctreasury_mosaic_RGB_770-480-212_residual_hips',
         'jwst_nir_hips',
         'jwst_miri_hips',
     }

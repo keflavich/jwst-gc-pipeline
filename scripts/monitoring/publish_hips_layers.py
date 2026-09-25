@@ -87,17 +87,16 @@ LAYERS = {
     # The quicklook builder renders a tile once its chain reaches the final
     # residual stage (resbgsub_m7 NIRCam, resbgsub_m6 MIRI), with the same
     # cuts as the image flavour so the two can be toggled on the same sky;
-    # pct and bgmatch have no residual twin.  The RGB composite's F770W
-    # residual covers only the MIRI tiles whose chains have finished, so it
-    # covers less sky than its image twin until the rest catch up.
+    # pct and bgmatch have no residual twin.  The RGB composite
+    # (gctreasury_mosaic_RGB_770-480-212_residual_hips) is NOT registered:
+    # only five MIRI tiles have residuals yet and the NIRCam residuals do not
+    # cover them, so it renders as F770W alone.
     'jwst_gc_treasury_residual_vminmax_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_residual_vminmax_hips',
     'jwst_gc_treasury_residual_log_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_residual_log_hips',
     'jwst_gc_treasury_miri_residual_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_miri_residual_hips',
-    'gctreasury_mosaic_RGB_770-480-212_residual_hips':
-        f'{MOSAIC_BUILD}/gctreasury_mosaic_RGB_770-480-212_residual_hips',
     # The CMZ overview coadds are rebuilt IN PLACE in the docroot by
     # `rebuild_jwst_cmz_hips.py`, so for these the docroot is the build
     # location and the local step is a no-op by construction: `needs_publish`
