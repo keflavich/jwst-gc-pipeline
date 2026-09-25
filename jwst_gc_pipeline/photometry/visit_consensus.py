@@ -286,6 +286,34 @@ REGION_SMALL_BULK_SIGMA_TOL_MAS = 2.0
 #: exemption cannot touch) still blocked.
 REGION_SMALL_BULK_MAX_FLAGGED_FRACTION = 0.10
 
+#: Cap on the worst SIGNIFICANT region cell (`worst_sig_off_mas`, not the
+#: unconditional `worst_off_mas`, which also counts low-N cells too noisy to be
+#: distinguishable from zero) for which the item-2 exemption above may still
+#: apply.  Neither REGION_SMALL_BULK_SIGMA_TOL_MAS nor
+#: REGION_SMALL_BULK_MAX_FLAGGED_FRACTION looks at the SIZE of an individual
+#: flagged cell: a 90 mas or 250 mas seam confined to <=10% of a tile's cells,
+#: with a bulk that still measures precisely (sigma <= 2 mas because the seam is
+#: a small minority of the stars), passed both bars with `apply_ok=True` and no
+#: record of how large the flagged cell actually was -- exactly the brick-1182
+#: F200W seam shape (issue #968 review). This cap closes that gap.
+#:
+#: Chosen from a live-data replay of every `checkpoint_m2_*.json` under
+#: `/orange/adamginsburg/jwst/gc-treasury/astrometry_checkpoints/` (2026-09-25):
+#: of 50 unique tile/filter records passing the sigma and flagged-fraction bars,
+#: `worst_sig_off_mas` reads (mas, highest first) 57.35 (o084 F212N, n=46 in
+#: that cell), then 44.15 (o100), 40.01 (o111), 33.12 (o065), <=30.54 for
+#: everything else -- a single outlier (o084) sits 13 mas above the rest of the
+#: population, which itself tops out at 44.15.  50.0 mas splits that gap:
+#: comfortably above every other tile (5.85 mas of margin over o100) and below
+#: the o084 outlier (7.35 mas of margin under it).
+#:
+#: o084 (57.35 mas) is therefore reported, not silently kept, deliberately: at
+#: this cap it FAILS the exemption and stays blocking, unlike o075 (worst_sig
+#: 22.98), o080 (25.84) and o087 (23.54), which remain comfortably exempt. A
+#: single 46-star cell reading 57 mas is exactly the kind of localized residual
+#: this cap exists to keep BLOCKING rather than recording and moving on.
+REGION_SMALL_BULK_WORST_SIG_CAP_MAS = 50.0
+
 #: When the SPARSE arbiter is itself noise, judged against the DENSE peak it is
 #: meant to arbitrate.  A sparse tie can be internally self-consistent -- `ok`,
 #: `window_consistent`, not alias-rejected -- and still be a coincidence: Gaia is
@@ -1996,12 +2024,24 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                                if region_n_measured > 0 else float("nan"))
     same_star_sigma_mas = (float(np.hypot(same_star["dra_err"], same_star["ddec_err"]))
                            if same_star is not None else float("nan"))
+    # `worst_sig_off_mas` -- the worst STATISTICALLY SIGNIFICANT cell, not the
+    # unconditional `worst_off_mas` -- so a low-N cell too noisy to be told apart
+    # from zero cannot itself defeat the exemption; see
+    # REGION_SMALL_BULK_WORST_SIG_CAP_MAS for why this size cap exists at all
+    # (issue #968 review: neither the sigma nor the flagged-fraction bar above
+    # looks at how large one flagged cell actually is).
+    region_worst_sig_off_mas = (per_tile_same_star or {}).get("worst_sig_off_mas")
+    region_worst_sig_within_cap = bool(
+        region_worst_sig_off_mas is not None
+        and np.isfinite(region_worst_sig_off_mas)
+        and region_worst_sig_off_mas <= REGION_SMALL_BULK_WORST_SIG_CAP_MAS)
     per_tile_small_bulk_exempt = bool(
         per_tile_source == "same-star-region" and not per_tile_ok
         and not region_uncovered and region_n_measured > 0
         and np.isfinite(same_star_sigma_mas)
         and same_star_sigma_mas <= REGION_SMALL_BULK_SIGMA_TOL_MAS
-        and region_flagged_fraction <= REGION_SMALL_BULK_MAX_FLAGGED_FRACTION)
+        and region_flagged_fraction <= REGION_SMALL_BULK_MAX_FLAGGED_FRACTION
+        and region_worst_sig_within_cap)
     # `region_map` names the verdict this checkpoint recorded for the region
     # map alone, independent of what gated `apply_ok` overall -- the release
     # gate (check_astrometry_checkpoints.py) re-derives and re-checks this same
@@ -2023,6 +2063,8 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         same_star_sigma_mas=same_star_sigma_mas,
         sigma_tol_mas=REGION_SMALL_BULK_SIGMA_TOL_MAS,
         max_flagged_fraction=REGION_SMALL_BULK_MAX_FLAGGED_FRACTION,
+        worst_sig_off_mas=region_worst_sig_off_mas,
+        worst_sig_off_cap_mas=REGION_SMALL_BULK_WORST_SIG_CAP_MAS,
         tol_mas=(per_tile_same_star or {}).get("tol_mas"),
         tol_k=(per_tile_same_star or {}).get("tol_k"),
         tol_floor_mas=(per_tile_same_star or {}).get("tol_floor_mas"))

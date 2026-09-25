@@ -366,7 +366,16 @@ def test_the_summary_is_printed_before_the_verdict_that_cites_it(tmp_path):
            '2026-08-16T00:00:00Z')
     _dated(tmp_path, 'checkpoint_m3_F212N_latest.json', True,
            '2026-08-02T00:00:00Z')
-    env = dict(os.environ, GC_BASEPATH_OVERRIDE=str(tmp_path))
+    # Prepend this WORKTREE's root to PYTHONPATH: an editable install resolves
+    # `import jwst_gc_pipeline` to wherever it was `pip install -e`'d (usually
+    # the main checkout), not this worktree, so a bare subprocess would import
+    # the gate script's own `jwst_gc_pipeline.photometry.visit_consensus`
+    # import from the wrong tree (memory: worktree-script-imports-main-checkout).
+    _repo_root = str(_GATE.parents[2])
+    _pythonpath = os.pathsep.join(
+        p for p in (_repo_root, os.environ.get('PYTHONPATH')) if p)
+    env = dict(os.environ, GC_BASEPATH_OVERRIDE=str(tmp_path),
+              PYTHONPATH=_pythonpath)
     r = subprocess.run([_sys.executable, str(_GATE), '--field', 'fld'],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        text=True, env=env, stdin=subprocess.DEVNULL)
@@ -755,10 +764,12 @@ def test_a_correcting_record_alone_is_not_certified_as_a_pass(gate, tmp_path):
 # ---------------------------------------------------------------------------
 
 def _region_map(status, n_measured=26, n_flagged=1, n_uncovered=0,
-                sigma=1.77, sigma_tol=2.0, max_frac=0.10):
+                sigma=1.77, sigma_tol=2.0, max_frac=0.10,
+                worst_sig=22.98, worst_sig_cap=50.0):
     return dict(status=status, n_measured=n_measured, n_flagged=n_flagged,
                n_uncovered=n_uncovered, same_star_sigma_mas=sigma,
-               sigma_tol_mas=sigma_tol, max_flagged_fraction=max_frac)
+               sigma_tol_mas=sigma_tol, max_flagged_fraction=max_frac,
+               worst_sig_off_mas=worst_sig, worst_sig_off_cap_mas=worst_sig_cap)
 
 
 def _visit_with_region(visit, region_map):
@@ -863,3 +874,73 @@ def test_an_unrecognized_region_map_status_is_treated_as_unverified(
     _dated(tmp_path, 'checkpoint_m3_F212N_o996_latest.json', True,
           '2026-09-21T00:00:00Z')
     assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_worst_cell_over_the_cap_defeats_the_demotion(gate, tmp_path,
+                                                          capsys):
+    """o084, live (issue #968 review): sigma (1.61 mas) and flagged fraction
+    (1/28) both clear their own bars, same as o075/o080/o087, but the worst
+    SIGNIFICANT cell reads 57.35 mas (46 stars) -- over
+    REGION_SMALL_BULK_WORST_SIG_CAP_MAS (50.0). A record that still claims
+    ``recorded_nonblocking`` for it does not check out, and the gate refuses
+    rather than printing 'verified' and exiting 0."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o084_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('recorded_nonblocking', n_measured=28,
+                                       sigma=1.61, worst_sig=57.35))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o084_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+    both = capsys.readouterr()
+    assert 'REGION MAP DEMOTION UNVERIFIED' in both.out, both.out
+    assert 'worst_sig_off=57.35' in both.out, both.out
+
+
+def test_a_90_mas_seam_in_a_small_minority_of_cells_is_refused_at_the_gate(
+        gate, tmp_path, capsys):
+    """The reviewer's exact counter-example, replayed at the gate level: a
+    90 mas seam confined to 1/26 cells, sigma 1.77 mas -- both legacy bars
+    clear, but the stored claim must not check out against the worst-cell
+    cap."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o995_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('recorded_nonblocking', worst_sig=90.0))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o995_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+    assert 'REGION MAP DEMOTION UNVERIFIED' in capsys.readouterr().out
+
+
+def test_a_verified_demotion_reports_the_worst_cell_below_the_cap(
+        gate, tmp_path, capsys):
+    """A genuinely clean demotion's report line now also names the worst
+    significant cell and its cap, not just sigma and flagged fraction."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o075_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(1, _region_map('recorded_nonblocking'))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o075_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'worst_sig_off=22.98' in out, out
+    assert '<= 50.0' in out, out
+
+
+def test_a_stale_recorded_threshold_is_called_out(gate, tmp_path, capsys):
+    """The gate re-derives from ITS OWN constants, not the record's stored
+    copies -- so a record whose stored threshold has drifted from the live
+    constant (a hand-edit, or an older run predating a tightened bar) is
+    flagged rather than silently trusted, even when the live numbers still
+    verify clean."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o994_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('recorded_nonblocking',
+                                       worst_sig_cap=999.0))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o994_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'STALE THRESHOLDS' in out, out

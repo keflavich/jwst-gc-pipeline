@@ -1194,9 +1194,17 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     * RESIDUAL -- each cell's median pair residual, with the map's own median
       removed (the bulk is the tie's job, not the map's), against ``tol_mas``
       AND ``nsigma`` times its standard error.  This catches a seam INSIDE the
-      match radius: brick-1182 F200W's ~90 mas visit-001 strip is 3x even the
-      widest tolerance this function will adopt on its own (see ``tol_mas``
-      below).
+      match radius: brick-1182 F200W's ~90 mas visit-001 strip is 3x the
+      adaptive tolerance's FLOOR (30 mas, see ``tol_mas`` below) and, as of a
+      live-fleet replay (2026-09-25), 3x every adaptive tolerance actually
+      measured across 131 gc-treasury tile/filter records -- none of which
+      exceeded the floor. The adaptive tolerance has no fixed ceiling of its
+      own (``tol_k * cell_resid_mad`` can in principle grow with a tile's own
+      spread), so this is an empirical bound over the fleet measured so far,
+      not a mathematical guarantee; a single-cell size cap independent of this
+      tolerance is enforced separately at the item-2 exemption (see
+      ``REGION_SMALL_BULK_WORST_SIG_CAP_MAS`` in ``visit_consensus.py``, issue
+      #968 review).
     * COVERAGE -- a cell that holds sources but almost none of the matched
       pairs its source count predicts.  A region displaced BEYOND the match
       radius (brick-1182 v001, ~20") keeps every source and loses its own

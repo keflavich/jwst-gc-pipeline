@@ -36,8 +36,8 @@ Exit codes, matching the sibling gates in this directory:
     1  at least one record has ``passed: false``, or a correcting-stage record
        holds corrections nothing applied, or a same-star region-map demotion
        (issue #965 item 2, ``reference_tie.region_map.status ==
-       "recorded_nonblocking"``) does not check out against its own recorded
-       sigma/flagged-fraction numbers -- REFUSE
+       "recorded_nonblocking"``) does not check out against this gate's own
+       sigma/flagged-fraction/worst-significant-cell thresholds -- REFUSE
     2  records exist but could not be read -- REFUSE (fail closed)
     3  the frozen stages have no verdict on the CURRENT products -- REFUSE
        (fail closed).  Either there are no records at all, or every frozen
@@ -61,6 +61,9 @@ import sys
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     REFERENCE_TIE_SOURCE_SUFFIX, parse_record_name)
+from jwst_gc_pipeline.photometry.visit_consensus import (
+    REGION_SMALL_BULK_MAX_FLAGGED_FRACTION, REGION_SMALL_BULK_SIGMA_TOL_MAS,
+    REGION_SMALL_BULK_WORST_SIG_CAP_MAS)
 
 BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
                       os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst"))
@@ -263,15 +266,21 @@ def _region_map_findings(rec):
     ``reference_tie.region_map`` (issue #965 item 2).
 
     ``recorded_nonblocking`` is a claim the record makes about ITS OWN numbers
-    -- flagged fraction, same-star sigma, no uncovered cell -- and this gate
-    RE-DERIVES the claim from those numbers rather than trusting the stored
-    string, exactly as the module docstring for ``region_map`` promises.  A
-    stale record, a hand-edit, or a future change to the two thresholds that
-    is not reflected in a re-run all show up here as a demotion that does not
-    check out, and ``verified`` is ``False`` for it -- the caller refuses.  The
-    thresholds themselves are read from the record's own ``sigma_tol_mas`` /
-    ``max_flagged_fraction`` rather than the constants in ``visit_consensus``,
-    so this checks what actually applied on the run that produced the record.
+    -- flagged fraction, same-star sigma, worst significant cell, no uncovered
+    cell -- and this gate RE-DERIVES the claim from those numbers rather than
+    trusting the stored string, exactly as the module docstring for
+    ``region_map`` promises.  A stale record, a hand-edit, or a future change
+    to the thresholds that is not reflected in a re-run all show up here as a
+    demotion that does not check out, and ``verified`` is ``False`` for it --
+    the caller refuses.  The thresholds themselves are read from THIS gate's
+    own imported ``visit_consensus`` constants, not from the record's stored
+    ``sigma_tol_mas`` / ``max_flagged_fraction`` / ``worst_sig_off_cap_mas``:
+    a record whose stored threshold has drifted from the constant that
+    produced it (a hand-edit, or code that shipped a tighter bar after the
+    record was written) is exactly the case re-deriving is for, and trusting
+    the record's own copy of the threshold would silently wave it through.
+    The record's stored thresholds are still read and reported in ``detail``
+    for provenance, and a mismatch against the live constant is called out.
 
     ``clean`` and ``not_applicable`` are not findings -- there is nothing to
     verify -- and are left out.  ``blocking`` is reported for visibility but
@@ -294,17 +303,33 @@ def _region_map_findings(rec):
                     if n_measured and n_measured > 0 and n_flagged is not None
                     else None)
             sigma = _as_float(rm.get("same_star_sigma_mas"))
-            sigma_tol = _as_float(rm.get("sigma_tol_mas"))
-            max_frac = _as_float(rm.get("max_flagged_fraction"))
+            worst_sig = _as_float(rm.get("worst_sig_off_mas"))
             n_uncovered = rm.get("n_uncovered")
+            # Live constants, not the record's own stored copies -- see the
+            # docstring above.
+            sigma_tol = REGION_SMALL_BULK_SIGMA_TOL_MAS
+            max_frac = REGION_SMALL_BULK_MAX_FLAGGED_FRACTION
+            worst_sig_cap = REGION_SMALL_BULK_WORST_SIG_CAP_MAS
             verified = bool(
-                n_uncovered == 0 and frac is not None and max_frac is not None
-                and frac <= max_frac and sigma is not None
-                and sigma_tol is not None and sigma <= sigma_tol)
+                n_uncovered == 0 and frac is not None and frac <= max_frac
+                and sigma is not None and sigma <= sigma_tol
+                and worst_sig is not None and worst_sig <= worst_sig_cap)
+            stale_note = ""
+            recorded_sigma_tol = _as_float(rm.get("sigma_tol_mas"))
+            recorded_max_frac = _as_float(rm.get("max_flagged_fraction"))
+            recorded_worst_cap = _as_float(rm.get("worst_sig_off_cap_mas"))
+            if (recorded_sigma_tol is not None and recorded_sigma_tol != sigma_tol
+                    or recorded_max_frac is not None and recorded_max_frac != max_frac
+                    or recorded_worst_cap is not None and recorded_worst_cap != worst_sig_cap):
+                stale_note = (
+                    f", STALE THRESHOLDS recorded (sigma_tol={recorded_sigma_tol}, "
+                    f"max_frac={recorded_max_frac}, worst_sig_cap={recorded_worst_cap} "
+                    f"vs live {sigma_tol}/{max_frac}/{worst_sig_cap})")
             detail = (f"n_flagged={rm.get('n_flagged')}/{rm.get('n_measured')} "
                       f"({'n/a' if frac is None else f'{frac:.1%}'} <= "
                       f"{max_frac}), sigma={sigma} mas (<= {sigma_tol}), "
-                      f"n_uncovered={n_uncovered}")
+                      f"worst_sig_off={worst_sig} mas (<= {worst_sig_cap}), "
+                      f"n_uncovered={n_uncovered}{stale_note}")
             out.append((visit, status, verified, detail))
         elif status == "blocking":
             detail = (f"n_flagged={rm.get('n_flagged')}/{rm.get('n_measured')}, "
