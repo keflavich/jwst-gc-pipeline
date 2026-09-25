@@ -162,6 +162,12 @@ class AlignmentShift:
     #: (``alignment_config.InheritedBulk``), or ``''`` when the bulk was this
     #: band's own.  The MIRI reducer keys its absolute-tweakreg decision on it.
     inherited_from: str = ''
+    #: The donor's BULK sentinel row as read from the table (coordinate-RA
+    #: arcsec, arcsec), before the differential; ``None`` when the donor has
+    #: rows for the visit but no BULK row, or nothing was inherited.  Written
+    #: to the frame header so stale inheriting frames can be found by diffing
+    #: headers against the table.
+    donor_bulk: Optional[tuple] = None
 
     @property
     def total_ra(self) -> float:
@@ -331,7 +337,8 @@ def _read_consensus(tblfn, fn, filtername):
 def _donor_bulk(tbl, visit, inh):
     """The donor band's BULK tie for ``visit``.
 
-    Returns ``(filter, dra_coord_arcsec, ddec_arcsec, dec_deg)``, or ``None``
+    Returns ``(filter, dra_coord_arcsec, ddec_arcsec, dec_deg, has_bulk)``,
+    or ``None``
     when no donor band has ANY row for the visit (its checkpoint has not run).
 
     A donor band that has rows for the visit but no BULK sentinel row
@@ -357,7 +364,7 @@ def _donor_bulk(tbl, visit, inh):
             raise ValueError(f"donor {donor} BULK match={nb} for visit={visit}; "
                              f"expected <=1 row")
         if nb == 0:
-            return donor, 0.0, 0.0, inh.dec_ref_deg
+            return donor, 0.0, 0.0, inh.dec_ref_deg, False
         row = tbl[sel]
         dec = inh.dec_ref_deg
         if 'prov_dec_deg' in tbl.colnames:
@@ -365,7 +372,7 @@ def _donor_bulk(tbl, visit, inh):
             if np.isfinite(val):
                 dec = val
         return (donor, float(row['dra (arcsec)'][0]),
-                float(row['ddec (arcsec)'][0]), dec)
+                float(row['ddec (arcsec)'][0]), dec, True)
     return None
 
 
@@ -416,7 +423,7 @@ def _shift_from_inherited(fn, cfg, inh, basepath, proposal_id, filtername,
                               prov_table=os.path.basename(tblfn),
                               prov_stage=prov_stage)
 
-    dfilt, dra, ddec, dec = donor
+    dfilt, dra, ddec, dec, has_bulk = donor
     diff_ra_mas, diff_dec_mas = inh.differential[dfilt]
     bulk_ra = dra + diff_ra_mas / 1e3 / np.cos(np.deg2rad(dec))
     bulk_dec = ddec + diff_dec_mas / 1e3
@@ -430,7 +437,8 @@ def _shift_from_inherited(fn, cfg, inh, basepath, proposal_id, filtername,
                           reference_frame=cfg.reference_frame,
                           prov_table=os.path.basename(tblfn),
                           prov_stage=prov_stage or f'inherited:{dfilt}',
-                          inherited_from=dfilt)
+                          inherited_from=dfilt,
+                          donor_bulk=(dra, ddec) if has_bulk else None)
 
 
 def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):

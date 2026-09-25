@@ -897,6 +897,18 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
         align_fits[1].header['ALIGNINH'] = (
             _shift.inherited_from or 'none',
             'band whose visit bulk tie this frame inherited')
+        # the donor BULK row as applied, so a later donor re-tie shows up as
+        # a header-vs-table difference (FITS headers cannot hold NaN, hence
+        # the ALIGNBLK flag)
+        _db = _shift.donor_bulk
+        align_fits[1].header['ALIGNBLK'] = (
+            _db is not None, 'donor BULK row inherited (F: none/zero bulk)')
+        align_fits[1].header['ALIGNDRA'] = (
+            _db[0] if _db is not None else 0.0,
+            '[arcsec, coord RA] donor BULK dra inherited')
+        align_fits[1].header['ALIGNDDE'] = (
+            _db[1] if _db is not None else 0.0,
+            '[arcsec] donor BULK ddec inherited')
         align_fits.writeto(fn, overwrite=True)
         assert 'RAOFFSET' in fits.getheader(fn, ext=1)
     check_wcs(fn)

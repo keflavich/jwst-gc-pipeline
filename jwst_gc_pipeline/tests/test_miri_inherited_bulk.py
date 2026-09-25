@@ -60,6 +60,7 @@ def test_f212n_bulk_plus_differential_is_applied(tmp_path):
     sh = resolve_shift(FN, PROP, '040', 'F770W', 'mirimage', bp)
     ra, dec = _expected(-4.4865, -19.9146, 'F212N', -28.5)
     assert sh.inherited_from == 'F212N'
+    assert sh.donor_bulk == pytest.approx((-4.4865, -19.9146))
     assert sh.total_ra == pytest.approx(ra)
     assert sh.total_dec == pytest.approx(dec)
 
@@ -108,6 +109,7 @@ def test_donor_rows_without_bulk_give_the_differential_only(tmp_path):
     sh = resolve_shift(FN, PROP, '040', 'F770W', 'mirimage', bp)
     ra, dec = _expected(0.0, 0.0, 'F212N', _inh().dec_ref_deg)
     assert sh.inherited_from == 'F212N'
+    assert sh.donor_bulk is None
     assert (sh.total_ra, sh.total_dec) == pytest.approx((ra, dec))
 
 
@@ -142,3 +144,5 @@ def test_the_miri_reducer_drops_abs_tweakreg_only_when_every_frame_inherited():
     assert '_member_shifts.append(' in src
     assert 'and all(sh is not None and sh.inherited_from' in src
     assert 'return _shift' in src
+    for key in ('ALIGNINH', 'ALIGNBLK', 'ALIGNDRA', 'ALIGNDDE'):
+        assert f"header['{key}']" in src
