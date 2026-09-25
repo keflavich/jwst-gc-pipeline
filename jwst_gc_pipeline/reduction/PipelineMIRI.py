@@ -614,11 +614,11 @@ def main(filtername, Observations=None, regionname='brick',
         # rows at all (NIRCam not yet checkpointed), the whole association
         # keeps the absolute fit.
         from jwst_gc_pipeline.reduction.alignment_config import inherited_bulk
+        from jwst_gc_pipeline.reduction.unified_alignment import (
+            inherited_abs_tie_complete)
         _inh = inherited_bulk(proposal_id, field, 'mirimage')
-        if (abs_refcat is not None and _inh is not None
-                and _inh.disable_abs_tweakreg and _member_shifts
-                and all(sh is not None and sh.inherited_from
-                        for sh in _member_shifts)):
+        if abs_refcat is not None and inherited_abs_tie_complete(
+                _inh, _member_shifts):
             print(f"Absolute tweakreg OFF: every frame inherited its bulk from "
                   f"{sorted({sh.inherited_from for sh in _member_shifts})} "
                   f"(alignment_config.InheritedBulk); relative alignment only")
@@ -894,21 +894,9 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
             _sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
         align_fits[1].header['RAOFFSET'] = rashift.value
         align_fits[1].header['DEOFFSET'] = decshift.value
-        align_fits[1].header['ALIGNINH'] = (
-            _shift.inherited_from or 'none',
-            'band whose visit bulk tie this frame inherited')
-        # the donor BULK row as applied, so a later donor re-tie shows up as
-        # a header-vs-table difference (FITS headers cannot hold NaN, hence
-        # the ALIGNBLK flag)
-        _db = _shift.donor_bulk
-        align_fits[1].header['ALIGNBLK'] = (
-            _db is not None, 'donor BULK row inherited (F: none/zero bulk)')
-        align_fits[1].header['ALIGNDRA'] = (
-            _db[0] if _db is not None else 0.0,
-            '[arcsec, coord RA] donor BULK dra inherited')
-        align_fits[1].header['ALIGNDDE'] = (
-            _db[1] if _db is not None else 0.0,
-            '[arcsec] donor BULK ddec inherited')
+        from jwst_gc_pipeline.reduction.unified_alignment import (
+            inherited_header_cards)
+        align_fits[1].header.update(inherited_header_cards(_shift))
         align_fits.writeto(fn, overwrite=True)
         assert 'RAOFFSET' in fits.getheader(fn, ext=1)
     check_wcs(fn)

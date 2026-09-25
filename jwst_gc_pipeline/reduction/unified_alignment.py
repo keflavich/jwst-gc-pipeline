@@ -441,6 +441,37 @@ def _shift_from_inherited(fn, cfg, inh, basepath, proposal_id, filtername,
                           donor_bulk=(dra, ddec) if has_bulk else None)
 
 
+def inherited_abs_tie_complete(inh, shifts):
+    """True when the reducer should turn absolute tweakreg OFF: the module
+    inherits its bulk (``inh`` from ``alignment_config.inherited_bulk``), its
+    entry asks for that, and EVERY association member's shift was inherited.
+
+    One frame without a donor (its visit's donor band not checkpointed yet)
+    keeps the absolute fit for the whole association: the frames are fit
+    together, and that frame has no other tie.
+    """
+    if inh is None or not inh.disable_abs_tweakreg or not shifts:
+        return False
+    return all(sh is not None and bool(sh.inherited_from) for sh in shifts)
+
+
+def inherited_header_cards(shift):
+    """FITS cards recording what bulk ``shift`` inherited, so a later donor
+    re-tie shows up as a header-vs-table difference.  FITS headers cannot hold
+    NaN, hence the ALIGNBLK flag for "no donor BULK row"."""
+    db = shift.donor_bulk
+    return {
+        'ALIGNINH': (shift.inherited_from or 'none',
+                     'band whose visit bulk tie this frame inherited'),
+        'ALIGNBLK': (db is not None,
+                     'donor BULK row inherited (F: none/zero bulk)'),
+        'ALIGNDRA': (db[0] if db is not None else 0.0,
+                     '[arcsec, coord RA] donor BULK dra inherited'),
+        'ALIGNDDE': (db[1] if db is not None else 0.0,
+                     '[arcsec] donor BULK ddec inherited'),
+    }
+
+
 def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
     """Consensus table: BULK sentinel row + sparse per-exposure JITTER rows."""
     tblfn = (f'{basepath}/offsets/'

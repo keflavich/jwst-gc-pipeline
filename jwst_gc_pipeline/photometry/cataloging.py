@@ -3942,6 +3942,27 @@ def _instrument_for_merge(module, filtername=None):
     return _L._instrument_from_filter(filtername).lower()
 
 
+def _drop_inherited_bulk_corrections(corrections, proposal_id, field, module,
+                                     instrument, label):
+    """Remove per-visit BULK corrections for a module that inherits its bulk
+    (``alignment_config.inherited_bulk``); see the call site."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _is_bulk_correction)
+    from jwst_gc_pipeline.reduction.alignment_config import inherited_bulk
+    inh_module = 'mirimage' if instrument == 'miri' else module
+    if inherited_bulk(proposal_id, field, inh_module) is None:
+        return corrections
+    kept = [c for c in corrections if not _is_bulk_correction(c)]
+    for c in corrections:
+        if _is_bulk_correction(c):
+            print(f"astrom checkpoint [{label}: DROPPED bulk correction for "
+                  f"visit {c.get('visit')} ({c.get('dra_onsky_mas')}, "
+                  f"{c.get('ddec_onsky_mas')}) mas on-sky: "
+                  f"{inh_module} inherits its bulk "
+                  f"(alignment_config.InheritedBulk)", flush=True)
+    return kept
+
+
 def _astrom_offsets_channel(proposal_id, field, instrument=None):
     """Which offsets table THIS field is aligned from, per ``alignment_config``.
 
@@ -5316,6 +5337,19 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     _instrument = _instrument_for_merge(module, filt)
     _channel = _astrom_offsets_channel(proposal_id, _field,
                                        instrument=_instrument)
+
+    # A module whose per-visit BULK is inherited from a donor band
+    # (alignment_config.InheritedBulk: 10678 MIRI <- F212N) must not get a
+    # bulk row of its own.  It would SUM on top of the inherited bulk and pull
+    # the band off the donor's served frame -- on 10678's refused-tie visits,
+    # by 60-300 mas.  Per-exposure residuals still apply.
+    corrections = _drop_inherited_bulk_corrections(
+        corrections, proposal_id, _field, module, _instrument,
+        f"{merge_label}] {filt}/{module}")
+    if not corrections:
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: no "
+              f"correction left after dropping inherited-bulk rows", flush=True)
+        return
 
     # POOL to the target table's granularity BEFORE the floor and before the
     # apply.  The visit consensus emits one correction per DETECTOR

@@ -138,11 +138,112 @@ def test_nircam_frames_are_unchanged(tmp_path):
     assert (sh.total_ra, sh.total_dec) == pytest.approx((-4.4865, -19.9146))
 
 
-def test_the_miri_reducer_drops_abs_tweakreg_only_when_every_frame_inherited():
+def test_the_miri_reducer_collects_member_shifts():
     from pathlib import Path
     src = (Path(AC.__file__).resolve().parent / 'PipelineMIRI.py').read_text()
     assert '_member_shifts.append(' in src
-    assert 'and all(sh is not None and sh.inherited_from' in src
     assert 'return _shift' in src
-    for key in ('ALIGNINH', 'ALIGNBLK', 'ALIGNDRA', 'ALIGNDDE'):
-        assert f"header['{key}']" in src
+
+
+# --- review follow-ups (#964) -------------------------------------------------
+
+from jwst_gc_pipeline.reduction.unified_alignment import (  # noqa: E402
+    AlignmentShift, inherited_abs_tie_complete, inherited_header_cards)
+
+
+def _sh(inh_from):
+    return AlignmentShift(inherited_from=inh_from)
+
+
+@pytest.mark.parametrize('shifts, expected', [
+    ([_sh('F212N'), _sh('F212N')], True),
+    ([_sh('F212N'), _sh('')], False),      # one visit's donor not checkpointed
+    ([_sh('F212N'), None], False),         # fix_alignment skipped a frame
+    ([], False),
+])
+def test_abs_tweakreg_gate(shifts, expected):
+    assert inherited_abs_tie_complete(_inh(), shifts) is expected
+
+
+def test_abs_tweakreg_gate_needs_an_inheriting_entry():
+    assert not inherited_abs_tie_complete(None, [_sh('F212N')])
+    from dataclasses import replace
+    assert not inherited_abs_tie_complete(
+        replace(_inh(), disable_abs_tweakreg=False), [_sh('F212N')])
+
+
+def test_the_miri_reducer_uses_the_tested_gate():
+    from pathlib import Path
+    src = (Path(AC.__file__).resolve().parent / 'PipelineMIRI.py').read_text()
+    assert 'inherited_abs_tie_complete(\n                _inh, _member_shifts)' in src
+    assert 'abs_refcat = None' in src
+    assert 'header.update(inherited_header_cards(_shift))' in src
+
+
+def test_header_cards_with_a_donor_bulk():
+    cards = inherited_header_cards(AlignmentShift(inherited_from='F212N',
+                                                  donor_bulk=(-4.4865, -19.9146)))
+    assert cards['ALIGNINH'][0] == 'F212N'
+    assert cards['ALIGNBLK'][0] is True
+    assert (cards['ALIGNDRA'][0], cards['ALIGNDDE'][0]) == (-4.4865, -19.9146)
+
+
+def test_header_cards_without_a_donor_bulk():
+    cards = inherited_header_cards(AlignmentShift(inherited_from='F212N'))
+    assert cards['ALIGNBLK'][0] is False
+    assert (cards['ALIGNDRA'][0], cards['ALIGNDDE'][0]) == (0.0, 0.0)
+    assert inherited_header_cards(AlignmentShift())['ALIGNINH'][0] == 'none'
+
+
+@pytest.mark.parametrize('module, exposure', [('all', 1), ('nrca1', -1)])
+def test_only_the_all_minus1_row_is_a_donor_bulk(tmp_path, module, exposure):
+    """Module='all' with a real exposure, or Exposure=-1 on a detector, is
+    not the BULK sentinel: the donor has rows but no bulk."""
+    bp = _write(tmp_path, [_row('F212N', module, exposure, 3.0, 3.0)])
+    sh = resolve_shift(FN, PROP, '040', 'F770W', 'mirimage', bp)
+    assert sh.inherited_from == 'F212N'
+    assert sh.donor_bulk is None
+    ra, dec = _expected(0.0, 0.0, 'F212N', _inh().dec_ref_deg)
+    assert (sh.total_ra, sh.total_dec) == pytest.approx((ra, dec))
+
+
+def _bulk_corr(visit='jw10678040001'):
+    return dict(visit=visit, exposure=None, module=None, filtername='F770W',
+                vgroup='', dra_onsky_mas=60.0, ddec_onsky_mas=40.0,
+                dec_deg=-28.8, source='m2 tie')
+
+
+def _exp_corr():
+    return dict(visit='jw10678040001', exposure=1, module='mirimage',
+                filtername='F770W', vgroup='', dra_onsky_mas=3.0,
+                ddec_onsky_mas=-2.0, dec_deg=-28.8, source='m2')
+
+
+@pytest.mark.parametrize('module', ['mirimage', 'merged', 'nrcb'])
+def test_m2_checkpoint_drops_miri_bulk_rows_on_an_inheriting_field(module):
+    """A MIRI m2 bulk row vs VIRAC2 would sum on top of the inherited F212N
+    bulk and pull refused-tie visits off the F212N frame (#964 review)."""
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _drop_inherited_bulk_corrections)
+    kept = _drop_inherited_bulk_corrections(
+        [_bulk_corr(), _exp_corr()], PROP, '040', module, 'miri', 'test')
+    assert kept == [_exp_corr()]
+
+
+def test_m2_checkpoint_keeps_bulk_rows_where_nothing_is_inherited():
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _drop_inherited_bulk_corrections)
+    corrs = [_bulk_corr(), _exp_corr()]
+    assert _drop_inherited_bulk_corrections(
+        corrs, PROP, '040', 'nrca1', 'nircam', 'test') == corrs
+    assert _drop_inherited_bulk_corrections(
+        corrs, '2221', '001', 'mirimage', 'miri', 'test') == corrs
+
+
+def test_m2_checkpoint_calls_the_guard_before_writing():
+    from pathlib import Path
+    src = (Path(AC.__file__).resolve().parents[1] / 'photometry'
+           / 'cataloging.py').read_text()
+    i_guard = src.index('corrections = _drop_inherited_bulk_corrections(')
+    i_write = src.index('seed_offsets_table_from_consensus(\n')
+    assert i_guard < i_write
