@@ -362,7 +362,7 @@ CSS = """
 .gcm-sky-sec > summary:hover::before { color: #9fb4bc; }
 .gcm-sky-sec > summary:focus-visible { outline: 2px solid var(--accent);
                                        outline-offset: 1px; }
-/* The selected tile.  `!important` because the colour and stroke-width are set
+/* The selected tile.  `!important` because the color and stroke-width are set
    as PRESENTATION ATTRIBUTES on the parent <g> (see `_layer`), and a class
    rule loses to those unless it is marked -- the highlight silently did
    nothing without it. */
@@ -1432,7 +1432,7 @@ interactive view adds sky imagery you can pan across.</p></details>
   var RGPS_KEYS = {json.dumps({lid: key for key, lid, _c, _l in RGPS_COMPONENTS})};
 
   // Which static <g> each toggle owns.  `observed` owns two, because the
-  // observed layer draws both instruments in one colour.
+  // observed layer draws both instruments in one color.
   var STATIC_GROUPS = {{
     nircam: ['stat-nircam'], miri: ['stat-miri'],
     observed: ['stat-obs-nircam', 'stat-obs-miri'],
@@ -1581,7 +1581,7 @@ interactive view adds sky imagery you can pan across.</p></details>
   // on the map had no way to learn which observation it was.
   //
   // Highlighting is done by CLASS on the static <g data-obs>, not by rewriting
-  // colours: the layer toggles own the colours, and a selection that set them
+  // colors: the layer toggles own the colors, and a selection that set them
   // directly would fight the toggles and win, leaving a tile lit after its
   // layer was switched off.
   var selected = '';
@@ -1601,7 +1601,7 @@ interactive view adds sky imagery you can pan across.</p></details>
         var mine = selected && groups[i].getAttribute('data-obs') === selected;
         groups[i].classList.toggle('gcm-tile-hi', !!mine);
         // Dim the rest rather than hiding them: on a 139-tile mosaic the point
-        // of picking one is to see WHERE it sits, which needs its neighbours.
+        // of picking one is to see WHERE it sits, which needs its neighbors.
         groups[i].classList.toggle('gcm-tile-dim', !!selected && !mine);
       }}
     }}
@@ -1652,7 +1652,7 @@ interactive view adds sky imagery you can pan across.</p></details>
     if (aladin && t.ra !== null && t.dec !== null) {{
       aladin.gotoRaDec(t.ra, t.dec);
     }} else if (svg && t.ra !== null) {{
-      // Static map: centre the viewBox on the tile's own drawn bbox, which is
+      // Static map: center the viewBox on the tile's own drawn bbox, which is
       // in SVG user units -- the sky coordinates cannot be used directly here.
       var g = svg.querySelector('g[data-obs="' + CSS.escape(selected) + '"]');
       if (g && g.getBBox) {{
@@ -1971,7 +1971,7 @@ interactive view adds sky imagery you can pan across.</p></details>
 
   function start(fp) {{
     // Aladin measures its container at init, so it has to be visible first --
-    // initialising into a display:none div yields a 0x0 canvas.  The map stays
+    // initializing into a display:none div yields a 0x0 canvas.  The map stays
     // up underneath and is hidden only once there is a working view to replace
     // it with, so no failure between here and there can empty the panel.
     if (aladinDiv) {{ aladinDiv.classList.remove('gcm-sky-off'); }}
@@ -2035,7 +2035,7 @@ interactive view adds sky imagery you can pan across.</p></details>
       (fp.planned || []).forEach(function (p) {{
         remember(p);
         // Same three-way split the static map makes, and by the same rule: an
-        // unrecognised or absent status falls through to the plain planned
+        // unrecognized or absent status falls through to the plain planned
         // layers, so a footprint file built before statuses existed draws
         // exactly as it used to.
         var st = String(p.status || '').trim().toLowerCase();
@@ -2059,12 +2059,12 @@ interactive view adds sky imagery you can pan across.</p></details>
 
       // Map -> number, interactive view.  Aladin's own object-hover events are
       // not relied on: which of them a given v3 build exposes varies, and the
-      // footprints are plain polygons rather than catalogue sources.  Instead
+      // footprints are plain polygons rather than catalog sources.  Instead
       // the tile outlines are projected with world2pix and the click point is
       // tested against them -- a few hundred vertices for one click.
       //
       // The smallest matching tile wins.  Where a NIRCam footprint overlaps a
-      // neighbour, picking the first match would always return the same one.
+      // neighbor, picking the first match would always return the same one.
       if (aladinDiv) {{
         var aladinWasDragged = dragDetector(aladinDiv);
         aladinDiv.addEventListener('click', function (ev) {{

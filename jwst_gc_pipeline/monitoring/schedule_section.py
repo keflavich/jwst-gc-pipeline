@@ -184,8 +184,8 @@ CSS = """
 .gcm-sch-badge.is-sched { color: var(--accent); border-color: var(--accent); }
 .gcm-sch-badge.is-ok { color: var(--ok); border-color: var(--ok); }
 .gcm-sch-badge.is-wait { color: var(--warn); border-color: var(--warn); }
-/* The badge is the archive link.  No underline and no link colour: it already
-   reads as a control, and recolouring it would destroy the state it encodes. */
+/* The badge is the archive link.  No underline and no link color: it already
+   reads as a control, and recoloring it would destroy the state it encodes. */
 .gcm-sch-mast { text-decoration: none; }
 .gcm-sch-mast:hover .gcm-sch-badge { background: rgba(255,255,255,.09); }
 .gcm-sch-mast:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

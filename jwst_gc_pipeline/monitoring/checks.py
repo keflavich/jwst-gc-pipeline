@@ -163,7 +163,7 @@ def check_astrometry(run):
                     'That happens where tokened and untokened catalogs sit in '
                     'one directory, or where grouped-fit (`_group_`) or stale '
                     'module-level variants sit alongside the per-detector '
-                    'ones. Re-catalog the filter at m2, or retokenise the '
+                    'ones. Re-catalog the filter at m2, or retokenize the '
                     'untokened catalogs, then re-run the checkpoint.'),
                 evidence={
                     'rows': {
@@ -313,7 +313,7 @@ def check_astrometry(run):
                            if on_edge else
                            '. They are not confined to the edge, so this is an '
                            'interior residual: a distortion or per-detector '
-                           'alignment problem, not a coverage artefact.')
+                           'alignment problem, not a coverage artifact.')
                         + f' The bulk tie for this visit is '
                         + (f'{visit["tie_off_mas"]:.2f} mas'
                            if visit.get('tie_off_mas') is not None else 'unrecorded')
@@ -486,7 +486,7 @@ def check_products(run):
                 f'unreduced-{filt}', 'fail',
                 f'{filt}: {crf} crf frames but no destreak_/align_ working copies',
                 'Cataloging reads the reduced working copy named by --each-suffix. '
-                'A filter that never got one is catalogued against a suffix that '
+                'A filter that never got one is cataloged against a suffix that '
                 'matches nothing -- the wd1 F150W failure mode.',
                 value=0, threshold=crf, source=f'{filt}/pipeline/*_crf.fits',
                 cause=(
@@ -835,7 +835,7 @@ def check_paper(run, paper_summary):
         out.append(_verdict(
             'paper-problem-other', 'info',
             f'{other} further paper-validation problem(s) belong to the field\'s '
-            f'other programme(s), not to {program}',
+            f'other program(s), not to {program}',
             source=src))
 
     freshness = [r for r in (paper_summary.get('freshness') or [])
