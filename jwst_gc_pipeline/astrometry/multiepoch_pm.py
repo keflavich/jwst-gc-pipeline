@@ -247,8 +247,64 @@ def restrict(cat, footprint_sc, pad_arcsec=5.0):
     return out
 
 
+def _build_local_correction_grid(sx, sy, resx, resy, cell_arcsec, min_stars):
+    """Median (resx, resy) binned into square ``cell_arcsec`` cells over the
+    tangent-plane footprint of (sx, sy). A cell reports a value only with
+    ``>= min_stars`` matched pairs in it; other cells are left NaN, so
+    :func:`_apply_local_correction_grid` falls back to zero (pure global
+    affine) there rather than extrapolate from a neighbor.
+
+    This is the LOCAL half of the tie (see ``local_correction`` in
+    :func:`affine_tie`): after the global 6-parameter affine removes the
+    field-wide linear trend, a real GC field can still carry a spatially-
+    coherent residual the affine cannot represent by construction -- a sharp
+    module/tile-boundary discontinuity, or a smoother higher-order
+    distortion -- which otherwise reads as several mas/yr of spurious,
+    spatially-structured proper motion (Cloud c: a ~14 mas/yr jump in pm_dec
+    across one ~30" field-edge strip, confirmed via a per-cell median-PM
+    map, pr-reviewer PR #959 review). Binning the ALREADY-matched, ALREADY-
+    verified pairs' own post-affine residuals and re-applying their per-cell
+    median is the same "detect global, refine local" architecture the rest
+    of this tie already uses (``astrometry_offsets.local_residual_map``),
+    used here as a correction rather than a diagnostic.
+    """
+    x0, x1 = float(sx.min()), float(sx.max())
+    y0, y1 = float(sy.min()), float(sy.max())
+    nx = max(int(np.ceil((x1 - x0) / cell_arcsec)), 1)
+    ny = max(int(np.ceil((y1 - y0) / cell_arcsec)), 1)
+    ix = np.clip(((sx - x0) / cell_arcsec).astype(int), 0, nx - 1)
+    iy = np.clip(((sy - y0) / cell_arcsec).astype(int), 0, ny - 1)
+    grid_dx = np.full((ny, nx), np.nan)
+    grid_dy = np.full((ny, nx), np.nan)
+    n_valid = 0
+    for cy in range(ny):
+        for cx in range(nx):
+            m = (ix == cx) & (iy == cy)
+            if int(m.sum()) >= min_stars:
+                grid_dx[cy, cx] = np.median(resx[m])
+                grid_dy[cy, cx] = np.median(resy[m])
+                n_valid += 1
+    return dict(x0=x0, y0=y0, cell_arcsec=float(cell_arcsec), nx=int(nx), ny=int(ny),
+               dx=grid_dx, dy=grid_dy, n_valid_cells=int(n_valid), n_cells=int(nx * ny))
+
+
+def _apply_local_correction_grid(x, y, grid):
+    """Nearest-cell lookup of a local correction grid at (x, y) -- NOT
+    interpolated: a genuine module/tile-boundary discontinuity should stay
+    sharp, not get smeared across neighboring cells by interpolation. A cell
+    with no measurable correction (see :func:`_build_local_correction_grid`)
+    contributes 0, falling back to the pure affine there.
+    """
+    ix = np.clip(((np.asarray(x) - grid['x0']) / grid['cell_arcsec']).astype(int), 0, grid['nx'] - 1)
+    iy = np.clip(((np.asarray(y) - grid['y0']) / grid['cell_arcsec']).astype(int), 0, grid['ny'] - 1)
+    dx = grid['dx'][iy, ix]
+    dy = grid['dy'][iy, ix]
+    return np.where(np.isfinite(dx), dx, 0.0), np.where(np.isfinite(dy), dy, 0.0)
+
+
 def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
-              maxsep=3.0, min_pairs=30, nsigma=3.0):
+              maxsep=3.0, min_pairs=30, nsigma=3.0, local_correction=True,
+              local_cell_arcsec=30.0, local_min_stars=15):
     """Verified affine tie: fit a full 6-parameter linear map
     (dx = A0 + A1*x + A2*y, dy = B0 + B1*x + B2*y) from src onto ref's frame.
 
@@ -289,6 +345,34 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
     an absolute measurement must look at the returned coefficients (A, B in
     the diagnostics dict) to see how much was removed, and add it back if the
     physical signal of interest is on that same linear scale.
+
+    LOCAL CORRECTION (``local_correction=True``, the default): a single
+    global affine cannot represent a spatially-DISCONTINUOUS residual
+    (a module/tile-boundary seam) or a higher-order (non-linear) distortion
+    -- both were found on real data (pr-reviewer's per-cell PM-variance
+    analysis, PR #959 review, found the excess scatter on Arches/Quintuplet/
+    Brick/Cloud c was spatially COHERENT and present in bright and faint
+    stars alike, not centroid noise; a follow-up per-cell median-PM map on
+    Cloud c pinned it further -- a ~14 mas/yr discontinuity across one ~30"
+    field-edge strip, plus a smoother few-mas/yr gradient across the rest of
+    the field). After the global affine converges, the SAME verified,
+    deduplicated matched pairs are binned into ``local_cell_arcsec`` cells
+    (default 30", matched to the discontinuity scale found on real data) and
+    each cell's median residual is looked up (nearest-cell, not
+    interpolated -- a real discontinuity should stay sharp) and added on top
+    of the affine correction for every star in that cell. A cell needs
+    ``local_min_stars`` (default 15) matched pairs to contribute; below that
+    it corrects nothing there, falling back to the pure affine.
+
+    This is a STRONGER version of the "makes the frame relative" caveat
+    above: real coherent motion at scales SMALLER than ``local_cell_arcsec``
+    (e.g. a genuine kinematic substructure the size of one cell) is now also
+    absorbed and zeroed out, not just field-wide rotation/shear. The full
+    correction grid (cell edges + per-cell dx/dy) is recorded in the
+    diagnostics dict specifically so this is reversible and auditable later,
+    the same reason the global A/B coefficients are recorded. Set
+    ``local_correction=False`` to recover the pre-existing global-affine-only
+    behavior exactly.
 
     KNOWN LIMITATION (pr-reviewer PR #140 round 5): pairs are found ONCE,
     before the affine fit, and never re-paired against the fitted plane. A
@@ -404,17 +488,44 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
         resx = dx - (A[0] + A[1] * sx + A[2] * sy)
         resy = dy - (B[0] + B[1] * sx + B[2] * sy)
         keep = _robust_clip_keep(np.hypot(resx, resy), nsigma)
+    rms_resid_mas_global = float(np.std(np.hypot(resx, resy)[keep]) * 1e3)
+
+    # LOCAL correction (see docstring): bin the same verified pairs' post-
+    # affine residuals into cells and re-apply the per-cell median on top of
+    # the global affine. Needs enough kept pairs that even a handful of cells
+    # can each clear local_min_stars -- below that, skip it silently rather
+    # than build a grid that is mostly empty.
+    local_grid = None
+    if local_correction and int(keep.sum()) >= 4 * local_min_stars:
+        local_grid = _build_local_correction_grid(
+            sx[keep], sy[keep], resx[keep], resy[keep],
+            cell_arcsec=local_cell_arcsec, min_stars=local_min_stars)
+        if local_grid['n_valid_cells'] == 0:
+            local_grid = None
 
     allx, ally = tangent_xy(src_sc, center)
     cdx = A[0] + A[1] * allx + A[2] * ally
     cdy = B[0] + B[1] * allx + B[2] * ally
+    if local_grid is not None:
+        loc_allx, loc_ally = _apply_local_correction_grid(allx, ally, local_grid)
+        cdx = cdx + loc_allx
+        cdy = cdy + loc_ally
+        # residual AFTER the local correction too, on the same kept matched
+        # pairs, so rms_resid_mas reflects what actually ships.
+        loc_sx, loc_sy = _apply_local_correction_grid(sx, sy, local_grid)
+        resx_final = resx - loc_sx
+        resy_final = resy - loc_sy
+        rms_resid_mas = float(np.std(np.hypot(resx_final, resy_final)[keep]) * 1e3)
+    else:
+        rms_resid_mas = rms_resid_mas_global
     new_ra = src_sc.ra.deg + (cdx / 3600.0) / np.cos(center.dec.rad)
     new_de = src_sc.dec.deg + (cdy / 3600.0)
     diag = dict(n_match=int(len(ia)), n_kept=int(keep.sum()),
                 # the verified density-immune bulk offset, not a raw NN-median
                 # of the (potentially ambiguous) matched-pair separations
                 med_dx_mas=float(global_res['dra']), med_dy_mas=float(global_res['ddec']),
-                rms_resid_mas=float(np.std(np.hypot(resx, resy)[keep]) * 1e3),
+                rms_resid_mas=rms_resid_mas,
+                rms_resid_mas_before_local=rms_resid_mas_global,
                 # dx = A0 + A1*x + A2*y (arcsec, arcsec/arcsec); dy likewise
                 # with B. Keep these numeric (not just the summary stats
                 # above) so a later reader can reconstruct exactly how much
@@ -427,12 +538,32 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
                 global_tie_window_arcsec=float(global_res['window_arcsec']),
                 # monitoring for the jwst-gc-pipeline#958-class failure even
                 # below the raise threshold -- see _DUP_ROW_FRACTION_LIMIT
-                dup_row_suspect_fraction=frac_dup)
+                dup_row_suspect_fraction=frac_dup,
+                # full local-correction grid, so it is reversible/auditable
+                # the same way A/B are -- see the LOCAL CORRECTION docstring
+                # section. None (not applied) when too few pairs or every
+                # cell fell below local_min_stars.
+                local_correction=(None if local_grid is None else dict(
+                    x0=local_grid['x0'], y0=local_grid['y0'],
+                    cell_arcsec=local_grid['cell_arcsec'],
+                    nx=local_grid['nx'], ny=local_grid['ny'],
+                    n_valid_cells=local_grid['n_valid_cells'],
+                    n_cells=local_grid['n_cells'],
+                    # NaN (unmeasured) cells -> None, so this round-trips
+                    # through json.dumps(..., allow_nan=False) elsewhere in
+                    # the pipeline (make_pm_overlay_json.py) without needing
+                    # its own special-casing.
+                    dx_mas=[[None if not np.isfinite(v) else float(v * 1e3) for v in row]
+                            for row in local_grid['dx']],
+                    dy_mas=[[None if not np.isfinite(v) else float(v * 1e3) for v in row]
+                            for row in local_grid['dy']])))
     return SkyCoord(new_ra * u.deg, new_de * u.deg), diag
 
 
 def shift_to_virac_frame(cat, virac, to_epoch, match_radius=0.2, magcut=15.0,
-                         maxsep=3.0, min_pairs=30, nsigma=3.0):
+                         maxsep=3.0, min_pairs=30, nsigma=3.0,
+                         local_correction=True, local_cell_arcsec=30.0,
+                         local_min_stars=15):
     """Bulk affine frame-shift any catalog onto the VIRAC2/Gaia frame.
 
     Propagate VIRAC to ``to_epoch`` (using VIRAC's own pm) so the match is
@@ -453,7 +584,10 @@ def shift_to_virac_frame(cat, virac, to_epoch, match_radius=0.2, magcut=15.0,
     vsc = SkyCoord(vra * u.deg, vde * u.deg)
     return affine_tie(cat['sc'], cat['mag'], vsc, virac['mag'], magcut=magcut,
                       match_radius=match_radius, maxsep=maxsep,
-                      min_pairs=min_pairs, nsigma=nsigma)
+                      min_pairs=min_pairs, nsigma=nsigma,
+                      local_correction=local_correction,
+                      local_cell_arcsec=local_cell_arcsec,
+                      local_min_stars=local_min_stars)
 
 
 def shift_gns_to_virac(gns, virac, to_epoch, **kwargs):

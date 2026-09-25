@@ -367,3 +367,70 @@ def test_isolation_survives_duplicate_observation_concatenation():
     # (and therefore trustworthy) is 0 here, same as it was on real data.
     assert pm['dominant'].sum() > 0.9 * len(pm)
     assert pm['trustworthy'].sum() > 0.9 * len(pm)
+
+
+def test_affine_tie_local_correction_removes_a_module_seam():
+    """pr-reviewer's per-cell PM-variance analysis (PR #959 review) found the
+    excess scatter on Arches/Quintuplet/Brick/Cloud c is spatially COHERENT,
+    not centroid noise; a follow-up per-cell median-PM map on real Cloud c
+    data pinned a ~14 mas/yr DISCONTINUITY across one ~30" field-edge strip --
+    a step function a global 6-parameter affine cannot represent by
+    construction (it only fits a smooth linear plane). Inject the same
+    signature synthetically (a real small affine trend PLUS a sharp step in
+    dx at x=0, like a small relative offset between two NIRCam modules) and
+    confirm the LOCAL correction, not the global affine alone, removes it.
+    """
+    n = 4000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=90.0)
+    A_true = np.array([0.02, 0.0001, -0.0001])
+    B_true = np.array([-0.01, 0.00005, 0.0001])
+    step_dx_mas = 15.0  # a discrete jump, not a linear trend
+    step = np.where(sx > 0, step_dx_mas / 1000.0, 0.0)
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy + step
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+
+    _, diag_local = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0,
+                               local_correction=True, local_cell_arcsec=30.0,
+                               local_min_stars=15)
+    _, diag_global = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0,
+                                local_correction=False)
+
+    assert diag_global['local_correction'] is None
+    assert diag_local['local_correction'] is not None
+    assert diag_local['local_correction']['n_valid_cells'] > 0
+    # The global-only fit cannot represent the step. Its 3-sigma clip loop
+    # rejects most of the offset half-field as "outliers" rather than fitting
+    # it, so the surviving residual undershoots the naive half-step estimate
+    # (measured: 2.08 mas vs a 0.63 mas no-step noise floor) -- still a clear,
+    # reproducible excess over the floor. The local correction should bring
+    # the residual down close to that noise floor.
+    assert diag_global['rms_resid_mas'] > 1.5
+    assert diag_local['rms_resid_mas'] < 0.5 * diag_global['rms_resid_mas']
+    assert diag_local['rms_resid_mas'] < 2.0
+
+
+def test_affine_tie_local_correction_false_matches_pre_feature_behavior():
+    """local_correction=False must reproduce the pre-existing global-affine-
+    only behavior exactly (regression pin for the opt-out) -- same fixture as
+    test_affine_tie_recovers_a_known_distortion."""
+    n = 1500
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=400.0)
+    A_true = np.array([0.150, 0.00030, -0.00040])
+    B_true = np.array([-0.080, 0.00025, -0.00020])
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    _, diag = affine_tie(src_sc, mag, ref_sc, mag, magcut=0, match_radius=1.0,
+                         local_correction=False)
+    assert diag['local_correction'] is None
+    assert diag['rms_resid_mas'] == diag['rms_resid_mas_before_local']
+    A, B = np.array(diag['A']), np.array(diag['B'])
+    assert abs(A[0] - A_true[0]) < 0.002 and abs(B[0] - B_true[0]) < 0.002
