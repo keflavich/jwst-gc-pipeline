@@ -578,13 +578,14 @@ def test_every_ramp_is_fit_without_suppressing_the_first_group():
 
 def test_both_stages_are_told_to_save_their_results_where_the_run_wants_them():
     """A stage whose results are not written leaves the next stage reading
-    whatever the last run left on disk."""
+    whatever the last run left on disk.  The jump and ramp_fit STEP outputs
+    (_jump, _0/_1_ramp_fit) have no downstream reader and are not saved."""
     run = run_stage12(ALL_NIRCAM, output_dir='/somewhere/F212N')
     for _, kwargs in run.detector1:
         assert kwargs['save_results'] is True
         assert kwargs['output_dir'] == '/somewhere/F212N'
-        assert kwargs['steps']['ramp_fit']['save_results'] is True
-        assert kwargs['steps']['jump']['save_results'] is True
+        assert not kwargs['steps']['ramp_fit'].get('save_results')
+        assert not kwargs['steps'].get('jump', {}).get('save_results')
     for _, kwargs in run.image2:
         assert kwargs['save_results'] is True
         assert kwargs['output_dir'] == '/somewhere/F212N'
