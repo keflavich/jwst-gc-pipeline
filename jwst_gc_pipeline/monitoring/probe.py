@@ -158,7 +158,7 @@ def choose_center(base, filt, each_suffix, proposal=None, obsid=None, n_sample=1
             continue
         candidates.append((path, sky))
     if not candidates:
-        raise ProbeError(f'no frame centre could be projected for {filt}')
+        raise ProbeError(f'no frame center could be projected for {filt}')
 
     best = None
     for path, sky in candidates:

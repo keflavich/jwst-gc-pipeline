@@ -113,7 +113,7 @@ WRITEUP_FIGURES = {
     'D5': ('D5_photometry_quality', 'fit quality'),
     'D6': ('D6_background_distributions', 'background distributions'),
     'D7': ('D7_background_spatial', 'background, spatial'),
-    'D8': ('D8_color_diagrams', 'colour diagrams'),
+    'D8': ('D8_color_diagrams', 'color diagrams'),
 }
 
 #: Which writeup figure answers which finding.  Matched against the check name,

@@ -304,7 +304,7 @@ def color_diagrams(inv, outdir, max_sources=300000):
             ax.invert_yaxis()
             ax.set_xlabel(f'{_b.upper()} $-$ {_r.upper()} (Vega)')
             ax.set_ylabel(f'{_r.upper()} (Vega)')
-            ax.set_title('colour--magnitude')
+            ax.set_title('color--magnitude')
             good = np.isfinite(color)
             stats['cmd'] = dict(bands=[_b, _r], n=int(good.sum()),
                                 median_color=float(np.nanmedian(color)))
@@ -317,11 +317,11 @@ def color_diagrams(inv, outdir, max_sources=300000):
                               *style.robust_range(c2, 1, 99)))
             ax.set_xlabel(f'{b1.upper()} $-$ {r1.upper()}')
             ax.set_ylabel(f'{b2.upper()} $-$ {r2.upper()}')
-            ax.set_title('colour--colour')
+            ax.set_title('color--color')
             stats['ccd'] = dict(bands=[b1, r1, b2, r2],
                                 n=int(np.isfinite(c1 * c2).sum()))
 
-    fig.suptitle(f'{inv.name}: colour diagrams '
+    fig.suptitle(f'{inv.name}: color diagrams '
                  f'(m{inv.crossband_stage} cross-band merge)', fontsize=10,
                  y=1.005)
     fig.tight_layout()

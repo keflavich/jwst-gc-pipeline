@@ -747,8 +747,8 @@ def _evidence_block(v, figure_base='figures', asset_prefix=''):
     if ev.get('quiver'):
         drawings.append(
             f'<figure class="gcm-draw">{ev["quiver"]}'
-            f'<figcaption>Per-exposure offset vectors, coloured by detector. '
-            f'Solid = flagged misaligned. One colour pointing away means one '
+            f'<figcaption>Per-exposure offset vectors, colored by detector. '
+            f'Solid = flagged misaligned. One color pointing away means one '
             f'detector; everything fanning out means the frame moved.'
             f'</figcaption></figure>')
     if ev.get('detector_tally'):
