@@ -92,7 +92,7 @@ PAGE_FILE = 'cmd_explorer.html'
 
 
 def render(data, data_href=DATA_FILE,
-           title='JWST GC colour-magnitude explorer'):
+           title='JWST GC color-magnitude explorer'):
     """The page.  ``data`` is only read for the summary line rendered server-side;
     the drawing all happens from ``data_href`` in the browser."""
     fields = data['fields']
@@ -109,11 +109,11 @@ def render(data, data_href=DATA_FILE,
             f"<b>{html.escape(k)}</b> &mdash; {', '.join(html.escape(i) for i in v)}"
             for k, v in sorted(lineages.items()))
         mixed_html = (
-            f"<div class='warn'><b>Mixed reductions.</b> The pooled grey "
+            f"<div class='warn'><b>Mixed reductions.</b> The pooled gray "
             f"diagram combines fields from more than one reduction chain: "
             f"{rows}. <code>resbgsub</code> is residual-background-subtracted "
             f"&mdash; a different reduction, not a later pass &mdash; so a "
-            f"colour offset between those fields and the rest would be a "
+            f"color offset between those fields and the rest would be a "
             f"property of the processing, not of the sky.</div>")
 
     partial = [f for f in fields if f.get('partial')]
@@ -134,7 +134,7 @@ def render(data, data_href=DATA_FILE,
                           for o, b in sorted(waiting.items()))
         waiting_html = (f"<div class='warn'><b>Waiting on a band:</b> {items}. "
                         f"These pointings have one filter reduced and not the "
-                        f"other, so they carry no colour yet.</div>")
+                        f"other, so they carry no color yet.</div>")
 
     return f"""<!doctype html>
 <html lang=en>
@@ -150,8 +150,8 @@ def render(data, data_href=DATA_FILE,
   <div id=side>
     <h1>{html.escape(blue)} &minus; {html.escape(red)} by pointing</h1>
     <p class=sub>Hover a footprint on the sky (or a row below) to see that
-      pointing's colour-magnitude diagram in <b>viridis</b> over the whole
-      sample in <b>grey</b>. Click to pin it.</p>
+      pointing's color-magnitude diagram in <b>viridis</b> over the whole
+      sample in <b>gray</b>. Click to pin it.</p>
 
     <canvas id=cmd width=760 height=860></canvas>
     <p id=cmdlabel class=muted>Whole sample: {nstars:,} stars matched in both
@@ -217,7 +217,7 @@ function ramp(t) {
                   Math.round(a[2] + f * (b[2] - a[2])) + ')';
 }
 
-// The selection colour, one value for the map outline and the ledger row.
+// The selection color, one value for the map outline and the ledger row.
 var HILITE = '#f0b429';
 
 function grey(t) {
@@ -241,9 +241,9 @@ function plotBox() {
           w: cmdEl.width - PAD.l - PAD.r, h: cmdEl.height - PAD.t - PAD.b};
 }
 
-// Normalised (u, v) -> canvas pixels.  The magnitude axis is INVERTED: v = 0
+// Normalized (u, v) -> canvas pixels.  The magnitude axis is INVERTED: v = 0
 // is ymin, the brightest magnitude, and it goes at the TOP, which is how a
-// colour-magnitude diagram is read.  Every y here follows that convention --
+// color-magnitude diagram is read.  Every y here follows that convention --
 // the tick labels below use the same expression, so the two cannot disagree.
 function toPix(u, v) {
   var b = plotBox();
@@ -252,7 +252,7 @@ function toPix(u, v) {
 
 function hexPath(ctx, cx, cy, rx, ry) {
   // Pointy-top hexagon, drawn with separate x/y radii: the grid is regular in
-  // NORMALISED space, and the box it is drawn into is not square, so a single
+  // NORMALIZED space, and the box it is drawn into is not square, so a single
   // radius would leave gaps along one axis.
   ctx.beginPath();
   for (var k = 0; k < 6; k++) {
@@ -265,7 +265,7 @@ function hexPath(ctx, cx, cy, rx, ry) {
 
 function drawCells(ctx, cells, max, colour) {
   var g = DATA.grid, R = g.radius, b = plotBox();
-  // The hexagon's own half-width/half-height in normalised units, scaled into
+  // The hexagon's own half-width/half-height in normalized units, scaled into
   // the box independently on each axis.
   var rx = R * b.w * 1.08, ry = R * b.h * 1.08;
   for (var i = 0; i < cells.length; i++) {
@@ -423,7 +423,7 @@ function drawFootprints() {
   DATA.fields.forEach(function (f) {
     f.polys.forEach(function (poly) { footOv.add(A.polygon(poly)); });
   });
-  // Added after, so the selected tile's outline draws over its neighbours
+  // Added after, so the selected tile's outline draws over its neighbors
   // where two footprints share an edge.
   hiOv = A.graphicOverlay({color: HILITE, lineWidth: 3, name: 'Selected tile'});
   aladin.addOverlay(hiOv);
@@ -434,7 +434,7 @@ function boot() {
   drawCMD(null);
   A.init.then(function () {
     // Every Aladin control on (jwst_gc_pipeline.aladin_controls): the grid
-    // colour is set under Settings > Grid.
+    // color is set under Settings > Grid.
     aladin = A.aladin('#sky', Object.assign({}, ALADIN_CONTROLS, {
       survey: BASE_SURVEY, target: '0 0', fov: 2.0, cooFrame: 'galactic'}));
     HIPS.forEach(function (L) {
@@ -463,7 +463,7 @@ function boot() {
     });
     statusEl.textContent = DATA.fields.length + ' pointings drawn.';
   }).catch(function (err) {
-    statusEl.textContent = 'Aladin Lite failed to initialise: ' + err +
+    statusEl.textContent = 'Aladin Lite failed to initialize: ' + err +
       ' -- the diagram on the right still works.';
   });
 }

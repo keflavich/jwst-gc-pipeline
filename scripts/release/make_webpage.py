@@ -111,7 +111,7 @@ h2 { border-bottom:1px solid var(--border); padding-bottom:.3rem; margin-top:2re
         overflow:hidden; }
 /* fixed thumbnail aspect so the grid stays aligned whatever shape the field
    is -- `contain` letterboxes (against the black background) rather than
-   cropping, because a portrait field's cluster is not necessarily centred. */
+   cropping, because a portrait field's cluster is not necessarily centered. */
 .card img { width:100%; display:block; background:#000;
             aspect-ratio:2/1; object-fit:contain; }
 .card .body { padding:.8rem 1rem; }
@@ -857,7 +857,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     multi = any(f.get("observation") for f in files)
 
     if curated:
-        out.append("<p class=muted>Curated colour images -- the published "
+        out.append("<p class=muted>Curated color images -- the published "
                    "renders. Tuned stretches, channels chosen far apart, and "
                    "each program combined with itself.</p>")
         # Provenance per published render, keyed on the asset filename.  These
@@ -929,7 +929,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                        "combinations that every released band appears in at least "
                        f"one.{html.escape(provenance)}</p>")
         if len(previews) > 1:
-            out.append(f"<p class=muted>{len(previews)} colour previews: one per "
+            out.append(f"<p class=muted>{len(previews)} color previews: one per "
                        f"pointing, and enough wavelength combinations that every "
                        f"band below appears in at least one."
                        f"{html.escape(provenance)}</p>")
@@ -969,8 +969,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         out.append("<div class=previews>")
         for rel, info in diagrams:
             obs = info.get("observation")
-            kind = ('colour-colour' if info.get("kind") == 'ccd'
-                    else 'colour-magnitude')
+            kind = ('color-color' if info.get("kind") == 'ccd'
+                    else 'color-magnitude')
             cap = "%s%s - %s vs %s" % (
                 kind, f" ({obs})" if obs else "",
                 info.get("ylabel", "?"), info.get("xlabel", "?"))
@@ -980,11 +980,11 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
             # reader cannot tell which release's photometry this is.
             cat_version = info.get("version")
             note = ("S/N &gt; %g in every band shown, and a measurement in all "
-                    "%d - %s of %s catalogue sources. Vega magnitudes.%s"
+                    "%d - %s of %s catalog sources. Vega magnitudes.%s"
                     % (info.get("snr_min", 10),
                        len(set(info.get("bands") or ())),
                        f'{info.get("n", 0):,}', f'{info.get("n_total", 0):,}',
-                       (" Catalogue from %s." % html.escape(str(cat_version)))
+                       (" Catalog from %s." % html.escape(str(cat_version)))
                        if cat_version else ""))
             out.append(f"<figure><img class=preview src='{html.escape(rel)}' "
                        f"loading=lazy alt='{html.escape(field)} {html.escape(cap)}'>"
@@ -1404,7 +1404,7 @@ def _coverage_note(field, exposures):
     missing = [o for o in registered if o not in present]
     if not missing:
         return (f"<p class=muted>All <b>{len(registered)}</b> registered "
-                f"observations of this programme are here.</p>")
+                f"observations of this program are here.</p>")
     return (f"<p class=muted><b>{len(present)} of {len(registered)}</b> "
             f"registered observations are in this release. Absent, with nothing "
             f"reduced for them when it was staged: "
@@ -1601,7 +1601,7 @@ def _offsets_section(field, release_dir, manifest=None):
             f"<p class=muted><b>Coverage.</b> {has_row:,} of the "
             f"{has_row + no_row:,} frames have a row in today's table; "
             f"{no_row:,} do not, and should be left alone rather than given a "
-            f"neighbouring exposure's shift. The merge stages fill these in as "
+            f"neighboring exposure's shift. The merge stages fill these in as "
             f"they measure, which is why this page is refreshed daily.{never}"
             f"</p>")
 
@@ -1650,7 +1650,7 @@ def _offsets_section(field, release_dir, manifest=None):
         out.append(
             "<p class=muted><b>Two measurements, named per row.</b> "
             "<code>m2 tie</code> is the per-visit consensus measured against "
-            "the reference catalogue. <code>histogram vs VIRAC2 (mosaic)</code> "
+            "the reference catalog. <code>histogram vs VIRAC2 (mosaic)</code> "
             "is a swept, window-confirmed cross-correlation of the whole "
             "mosaic, which is how the arcsecond-scale displacements were "
             "found. They answer the same question at different scales and are "
@@ -1802,7 +1802,7 @@ def render_exposures(field, exposures, base, app_link, multi,
                       "the frames behind the matching mosaic, taken from the "
                       "record that mosaic itself carries of what went into it.")
     else:
-        provenance = ("this programme has on disk, in the original detector "
+        provenance = ("this program has on disk, in the original detector "
                       "frame, carrying the full distortion solution and this "
                       "pipeline's astrometry. No mosaic has been drizzled from "
                       "them yet, so they are grouped by observation and filter "
@@ -2275,7 +2275,7 @@ def resolve_overview_geoms(roster, rebuilt, fresh, cached, read_from_disk):
 #: broken everywhere else -- so it is named absolutely.
 QUICKLOOKS = (
     ("monitor/", "Observing monitor",
-     "Programme 10678 tile by tile: what has executed, what is scheduled, "
+     "Program 10678 tile by tile: what has executed, what is scheduled, "
      "what was skipped, over the survey's own imagery."),
     ("https://starformation.astro.ufl.edu/avm_images/jwst_gc_aladin.html",
      "HiPS sky viewer",
@@ -2288,7 +2288,7 @@ QUICKLOOKS = (
 #: catalogs, and a card pointing at a 404 is worse than no card.
 CMD_VIEWER_FILE = "cmd_explorer.html"
 CMD_VIEWER_CARD = (
-    CMD_VIEWER_FILE, "Colour-magnitude explorer",
+    CMD_VIEWER_FILE, "Color-magnitude explorer",
     "Per-pointing footprints over the sky, with the F212N vs F212N-F480M "
     "diagram for the whole sample and for whichever pointing is under the "
     "cursor.")
