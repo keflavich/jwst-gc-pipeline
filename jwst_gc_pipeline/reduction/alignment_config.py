@@ -80,6 +80,7 @@ __all__ = [
     'ALIGNMENT_CONFIG', 'offsets_channel', 'offsets_table_path',
     'CHANNEL_LOCKED', 'CHANNEL_CONSENSUS', 'CHANNEL_NONE',
     'TABLE_DRIVEN_INSTRUMENTS', 'instrument_has_table_channel',
+    'InheritedBulk', 'inherited_bulk',
 ]
 
 #: Wildcard for a ``recorded_bulk`` key component (matches any visit / filter).
@@ -121,6 +122,49 @@ class BulkEntry:
 
 
 @dataclass(frozen=True)
+class InheritedBulk:
+    """A per-visit BULK tie borrowed from another band of the same visit.
+
+    Used where one instrument cannot be tied to the reference catalog on its
+    own but observes in parallel with one that can: every 10678 visit takes
+    NIRCam F212N/F480M and MIRI F770W together, on one guide star, so the
+    visit's pointing error is shared.  The MIRI frame receives the donor
+    band's consensus BULK row plus a fixed instrument ``differential``.
+
+    Only the donor's BULK sentinel is inherited -- never its per-exposure
+    jitter rows.  Those are sparse per-DETECTOR rows (one NIRCam detector's
+    exposure 3, say), and averaging them onto a different instrument
+    over-weights one detector.
+
+    ``donor_filters`` is an ordered preference: the first band with ANY row
+    for the visit is the donor.  The inheriting band follows the donor's
+    served frame: a donor with rows but no BULK row (its tie inside tolerance,
+    or refused) contributes a zero bulk and only the differential applies.  A
+    visit with no donor rows at all (donor not yet checkpointed) inherits
+    nothing, and the reducer keeps its own absolute tie for it.
+
+    ``differential`` is (dRA, dDec) ON-SKY milliarcsec, keyed by donor filter:
+    what remains between this instrument's raw frame and the donor's corrected
+    one.  The RA term is converted to the coordinate convention with
+    ``cos(dec_ref_deg)``.
+
+    STALENESS: a donor bulk row that changes after this instrument was reduced
+    leaves the reduced frames on the old tie.  ``warn_or_raise_if_stale``
+    catches it on a re-run; nothing triggers the re-run.
+    """
+
+    donor_filters: Tuple[str, ...]
+    differential: Dict[str, Tuple[float, float]]
+    dec_ref_deg: float
+    #: Skip tweakreg's ABSOLUTE fit to the reference catalog for this
+    #: instrument (the relative frame-to-frame fit still runs).  The inherited
+    #: tie IS the absolute tie; an absolute fit on top can only replace it
+    #: with this instrument's own, less reliable one.
+    disable_abs_tweakreg: bool = True
+    notes: str = ''
+
+
+@dataclass(frozen=True)
 class FieldAlignment:
     """How one (proposal, observation) is aligned."""
 
@@ -156,6 +200,11 @@ class FieldAlignment:
     #: gives the best-measured consensus.  Usually F212N / F210M / F200W -- bright,
     #: uncrowded enough to centroid well, and present in most GC programs.
     reference_filter: Optional[str] = None
+    #: ``{module: InheritedBulk}`` -- modules (``'mirimage'``) whose per-visit
+    #: bulk is borrowed from another band's consensus row instead of measured
+    #: on their own frames.  Their own table rows still SUM on top, as
+    #: residuals.  ``TABLE_CONSENSUS`` only.
+    inherit_bulk: Dict[str, InheritedBulk] = _dc_field(default_factory=dict)
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -327,6 +376,39 @@ ALIGNMENT_CONFIG = (
                'coordinates, offsets/Offsets_JWST_Brick10678_consensus.csv, '
                'does not exist yet: the m2 checkpoint creates it and updates '
                'it in place on the first reduce.'),
+        inherit_bulk={
+            'mirimage': InheritedBulk(
+                donor_filters=('F212N',),
+                differential={'F212N': (81.7, 43.6)},
+                dec_ref_deg=-28.79,
+                notes=('MIRI F770W is the parallel of every NIRCam visit (one '
+                       'guide star), and its own tie to VIRAC2 is unreliable: '
+                       'tweakreg (0.4" abs_searchrad) cannot reach the 5-20" '
+                       'visit errors (o040 20.1", o100 10.5", o041 5.5"; '
+                       '#956) and left 16 tiles unmoved.  Measured '
+                       '2026-09-24 over the 66 F770W tiles: MIRI raw '
+                       'pointing error = (crf - cal GWCS shift at the '
+                       'detector centre, median of 6 frames) + (tile i2d -> '
+                       'Gaia+VIRAC2 swept offset histogram).  Minus the donor '
+                       'BULK row (on-sky, at the row\'s prov_dec_deg) that '
+                       'leaves a common term: F212N (+81.7, +43.6) mas, N=52, '
+                       'per-axis sigma (9.1, 5.6), error of the median ~(1.6, '
+                       '1.0); F480M (+83.2, +41.2), N=43, sigma (7.8, 4.7).  '
+                       'After removing it the per-visit residual is median '
+                       '8.0 mas, p90 14.7, max 27.4 (F212N).  It includes a '
+                       '(+49.4, -0.3) mas term that the NIRCam crf WCS '
+                       'carries relative to its cal and that is not in the '
+                       'table; against the raw NIRCam frame the MIRI-NIRCam '
+                       'differential is ~(+33, +43) mas.  The o040/o041/o100 '
+                       'visits fall on the same common term to <20 mas.  '
+                       'F212N ONLY (maintainer: MIRI inherits from F212N '
+                       'until a MIRI-only reference exists): MIRI then '
+                       'registers to the served F212N frame even where that '
+                       'frame\'s VIRAC2 tie was refused (o063 o077 o105 o109 '
+                       'o111 o113 o116, #957); an F480M fallback would put '
+                       'MIRI on VIRAC2 there but up to ~225 mas off F212N '
+                       '(o063).')),
+        },
     ),
     FieldAlignment(
         proposal='5365', fields=None,
@@ -908,6 +990,14 @@ def offsets_channel(proposal_id, field, instrument=None):
         # bulk is a constant; only the per-exposure term is table-driven
         return CHANNEL_CONSENSUS if cfg.consensus_jitter else CHANNEL_NONE
     return CHANNEL_NONE
+
+
+def inherited_bulk(proposal_id, field, module):
+    """The :class:`InheritedBulk` for ``module`` in this field, or ``None``."""
+    cfg = resolve(str(proposal_id), str(field) if field is not None else None)
+    if cfg is None or cfg.source != TABLE_CONSENSUS:
+        return None
+    return cfg.inherit_bulk.get(module)
 
 
 def reference_catalog_required(proposal_id, field):
