@@ -536,7 +536,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   function teardown() {{
     // Whatever went wrong, the static SVG must be visible and clickable again.
     // `host` is position:absolute;inset:0 over the map, so leaving it behind
-    // covers every field link with an opaque, half-initialised panel -- while
+    // covers every field link with an opaque, half-initialized panel -- while
     // the status line claims the map is unaffected.
     if (host && host.parentNode) {{ host.parentNode.removeChild(host); }}
     host = null;
@@ -582,14 +582,14 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     // Target is read in the DISPLAY frame, which cooFrame sets to galactic,
     // so a bare pair is l/b.  Prefixing the frame name did NOT parse as a
     // coordinate pair: Aladin took it for an object name, found nothing, and
-    // kept the AIT default view -- centred on the anti-centre, so the map
-    // opened at l=180 every time instead of on the Galactic centre.
+    // kept the AIT default view -- centered on the anti-center, so the map
+    // opened at l=180 every time instead of on the Galactic center.
     var aladin = A.aladin(host, {{
       survey: data.surveys[0].id, projection: 'AIT', cooFrame: 'galactic',
       target: '0 +0', fov: 1.8, showReticle: false,
       showCooGrid: true,
       // every Aladin control on, from jwst_gc_pipeline.aladin_controls -- the grid
-      // colour is set under Settings > Grid
+      // color is set under Settings > Grid
       {aladin_controls_js()}
     }});
     // Verification is only possible where the view can be READ back.  The
@@ -658,7 +658,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     var cat = A.catalog({{name: 'released fields', sourceSize: 14, onClick: 'showPopup'}});
     aladin.addCatalog(cat);
     // Kept so one control can hide them all.  Each field has its OWN overlay
-    // (one per field is what gives each its colour and name in Aladin's own
+    // (one per field is what gives each its color and name in Aladin's own
     // layer list), so there is no single object to toggle.
     var fieldOverlays = [];
     data.fields.forEach(function (f) {{
@@ -706,7 +706,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     }}
 
     // the background switcher: without it the other entries in SURVEYS are
-    // serialised into the page and never reachable
+    // serialized into the page and never reachable
     if (surveyBar) {{
       surveyBar.innerHTML = '';
       surveyBar.hidden = false;
@@ -813,7 +813,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
       // A.init is documented as a promise, but this script is fetched from a
       // third party: if it is absent, or truthy-but-not-thenable, `A.init.then`
       // throws SYNCHRONOUSLY here -- outside any catch -- and the button stays
-      // disabled on "loading..." forever. Promise.resolve normalises it and the
+      // disabled on "loading..." forever. Promise.resolve normalizes it and the
       // try/catch covers a throw from A itself.
       try {{
         Promise.resolve(A && A.init).then(build).catch(function (err) {{
