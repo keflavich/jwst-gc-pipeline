@@ -93,7 +93,42 @@ def test_seam_inside_the_match_radius_is_flagged():
     assert m["n_flagged"] >= 1, m
     assert m["clean"] is False
     assert m["worst_off_mas"] > 60.0, m
+    assert "above 30.0 mas (adaptive tolerance)" in m["reason"], m["reason"]
+
+
+def test_explicit_tol_mas_keeps_the_old_fixed_behaviour():
+    """issue #965 item 3: ``tol_mas=None`` is the new default, but a caller
+    that still passes a fixed number gets exactly the old gate back -- the
+    same seam, at the same literal 15 mas wording that predates the adaptive
+    tolerance."""
+    x, y, ref = _field()
+    strip = y > 40.0
+    y = y.copy()
+    y[strip] += 90.0 / 1000.0
+    a = _sky(x, y)
+    m = same_star_region_map(a, ref, _tie(a, ref), context="seam-fixed",
+                             tol_mas=15.0)
+    assert m["measurable"] is True, m["reason"]
+    assert m["tol_mas"] == 15.0
+    assert m["tol_source"] == "fixed"
+    assert m["n_flagged"] >= 1, m
     assert "above 15.0 mas" in m["reason"], m["reason"]
+
+
+def test_adaptive_tolerance_is_reported_on_a_clean_field():
+    """The adaptive tolerance and the spread it was computed from are always
+    on the return dict, not only when something was flagged -- a clean
+    record still has to show what threshold it cleared."""
+    x, y, ref = _field()
+    a = _sky(x, y)
+    m = same_star_region_map(a, ref, _tie(a, ref), context="clean-adaptive")
+    assert m["measurable"] is True, m["reason"]
+    assert m["clean"] is True, m["reason"]
+    assert m["tol_source"] == "adaptive"
+    assert np.isfinite(m["tol_mas"])
+    assert m["tol_mas"] >= m["tol_floor_mas"]
+    assert np.isfinite(m["cell_resid_mad_mas"])
+    assert np.isfinite(m["cell_resid_median_mas"])
 
 
 def test_region_displaced_beyond_the_match_radius_is_reported_uncovered():

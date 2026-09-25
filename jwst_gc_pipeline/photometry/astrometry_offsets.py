@@ -1077,6 +1077,36 @@ REGION_COVERAGE_FRACTION = 0.3
 #: tight-pair rate against 86% of its all-pair rate.
 REGION_TIGHT_PAIR_MAS = 50.0
 
+#: Region-map RESIDUAL tolerance (issue #965 item 3).  A FIXED 15 mas over-flags
+#: the gc-treasury tiles: VIRAC2 per-star scatter (~40 mas) plus 12.7 yr of
+#: proper-motion propagation gives every 45" cell a median residual of 9-16 mas
+#: and a 90th percentile of 16-38 mas even with a perfectly registered JWST
+#: frame (o075/o077/o080/o084/o087, #965) -- so a fixed 15 mas bar flags normal
+#: reference noise, not a defect.  ``tol_mas=None`` (the default) instead reads
+#: the tolerance off the TILE'S OWN cell-to-cell spread: ``max(tol_floor_mas,
+#: tol_k * mad)``, where ``mad`` is the robust (MAD, scaled by 1.4826) spread of
+#: that tile's ``resid_off_mas`` (bulk already removed).  A robust spread stays
+#: representative even with 1-2 flagged cells in it (MAD has a 50% breakdown
+#: point), so a genuine seam does not inflate its own detection threshold away
+#: -- checked against the region JSON dumps of #965 (1-2 outlier cells per
+#: tile) and a synthetic brick-1182-style ~90 mas strip (up to 40% of a tile's
+#: cells) in ``test_same_star_region_map.py``.
+#:
+#: k=3 (matching the existing ``nsigma``) and floor=30 mas were picked by
+#: replaying every measurable ``per_tile_same_star`` cell set in the live
+#: ``checkpoint_m2_*.json`` history (127 tile/filter/visit records, 2026-09-25):
+#: of the 115 that fail the fixed 15 mas rule, floor=30/k=3 clears 102 by the
+#: residual tolerance alone, the item-2 bulk-sigma/flagged-fraction demotion
+#: below accounts for another 11, and the 2 that remain either sit at
+#: same-star bulk sigma 2.13 mas (just over the item-2 sigma bar) or carry a
+#: genuine uncovered cell (the coverage arm, untouched by this tolerance,
+#: correctly keeps blocking).  No record that passed the fixed 15 mas rule
+#: newly fails a higher tolerance, since raising ``tol_mas`` can only clear
+#: flags, never add them.  30 mas also matches the issue's own "~30-40 mas"
+#: suggestion and stays well under a brick-1182-class ~90 mas seam.
+REGION_TOL_K = 3.0
+REGION_TOL_FLOOR_MAS = 30.0
+
 
 def _cell_counts(ix, iy):
     """``{(ix, iy): count}`` for a pair of integer cell-index arrays."""
@@ -1139,7 +1169,8 @@ def _region_coverage_scan(keys, n_src, got_by_cell, rate, min_stars,
 def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_ARCSEC,
                          min_stars=DEFAULT_REGION_MIN_STARS,
                          min_cells=DEFAULT_REGION_MIN_CELLS,
-                         match_radius=0.3 * u.arcsec, tol_mas=15.0, nsigma=3.0,
+                         match_radius=0.3 * u.arcsec, tol_mas=None, nsigma=3.0,
+                         tol_k=REGION_TOL_K, tol_floor_mas=REGION_TOL_FLOOR_MAS,
                          coverage_fraction=REGION_COVERAGE_FRACTION,
                          tight_pair_mas=REGION_TIGHT_PAIR_MAS, context=""):
     """Per-REGION seam map from SAME-STAR matched pairs, bulk removed.
@@ -1163,8 +1194,9 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     * RESIDUAL -- each cell's median pair residual, with the map's own median
       removed (the bulk is the tie's job, not the map's), against ``tol_mas``
       AND ``nsigma`` times its standard error.  This catches a seam INSIDE the
-      match radius: brick-1182 F200W's ~90 mas visit-001 strip is 6x this
-      tolerance.
+      match radius: brick-1182 F200W's ~90 mas visit-001 strip is 3x even the
+      widest tolerance this function will adopt on its own (see ``tol_mas``
+      below).
     * COVERAGE -- a cell that holds sources but almost none of the matched
       pairs its source count predicts.  A region displaced BEYOND the match
       radius (brick-1182 v001, ~20") keeps every source and loses its own
@@ -1209,6 +1241,24 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     caller that cannot satisfy them has no business using a matched-pair
     statistic at all.
 
+    Parameters
+    ----------
+    tol_mas : float or None
+        RESIDUAL-arm tolerance (mas).  ``None`` (the default, issue #965 item
+        3) sets it ADAPTIVELY from this tile's own cell-to-cell spread:
+        ``max(tol_floor_mas, tol_k * mad)``, where ``mad`` is the 1.4826-scaled
+        median absolute deviation of every measured cell's bulk-removed
+        ``resid_off_mas`` (a fixed 15 mas over-flags VIRAC2's own ~9-16 mas
+        median cell scatter; see ``REGION_TOL_K``/``REGION_TOL_FLOOR_MAS``).
+        Pass an explicit float to keep the old fixed-tolerance behaviour (e.g.
+        a test that wants a known threshold).  The value actually used is
+        always reported back as ``tol_mas`` in the return dict, along with
+        ``tol_source`` (``"adaptive"``/``"fixed"``) and the measured
+        ``cell_resid_mad_mas``/``cell_resid_median_mas``.
+    tol_k, tol_floor_mas : float
+        The multiplier and floor used to build the adaptive tolerance (ignored
+        when ``tol_mas`` is given explicitly).
+
     Returns
     -------
     dict
@@ -1216,13 +1266,15 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         uncovered_cells, n_skipped, skipped_expected_pairs, n_pairs,
         n_tight_pairs, coverage_rate_all, coverage_rate_tight,
         tight_pair_mas, worst_off_mas, worst_sig_off_mas, bulk_dra_mas,
-        bulk_ddec_mas, measurable, clean, reason)``.
+        bulk_ddec_mas, measurable, clean, reason, tol_mas, tol_source, tol_k,
+        tol_floor_mas, cell_resid_mad_mas, cell_resid_median_mas)``.
         Each entry of ``uncovered_cells`` carries ``by`` (``"tight-pairs"`` /
         ``"all-pairs"``) and either ``ix``/``iy`` or, for a group, ``cells``.
         ``measurable`` is False when fewer than ``min_cells`` cells could be
         measured -- the caller must then fall back rather than read ``clean``,
         which is False in that case for the same reason an unverifiable check
-        never passes.
+        never passes.  When not ``measurable``, ``tol_mas``/``cell_resid_*``
+        are ``nan``: there were too few cells to measure a spread from.
     """
     lrm = local_residual_map(a, b, global_result, cell_arcsec=cell_arcsec,
                              match_radius=match_radius, min_stars=min_stars,
@@ -1239,8 +1291,17 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                 coverage_rate_tight=float(tight_sel.sum()) / n_a_total,
                 tight_pair_mas=float(tight_pair_mas),
                 bulk_dra_mas=float("nan"), bulk_ddec_mas=float("nan"),
-                cell_arcsec=float(cell_arcsec), tol_mas=float(tol_mas),
-                nsigma=float(nsigma))
+                cell_arcsec=float(cell_arcsec), nsigma=float(nsigma),
+                tol_k=float(tol_k), tol_floor_mas=float(tol_floor_mas),
+                # Adaptive mode (tol_mas=None) cannot know the tolerance until
+                # the cells' own spread is measured below; fixed mode already
+                # knows it.  The `len(cells) < min_cells` branch returns before
+                # that measurement runs, so adaptive stays nan there -- an
+                # unmeasurable map reports no tolerance, matching `measurable`.
+                tol_mas=(float(tol_mas) if tol_mas is not None else float("nan")),
+                tol_source=("fixed" if tol_mas is not None else "adaptive"),
+                cell_resid_mad_mas=float("nan"),
+                cell_resid_median_mas=float("nan"))
     if len(cells) < min_cells:
         return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                     n_flagged=0, n_uncovered=0, uncovered_cells=[],
@@ -1260,14 +1321,32 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     # up as the SAME offset in every cell and flag the whole map at once.
     bulk = np.median(d, axis=0)
     resid = d - bulk
-    for c, (rdra, rddec) in zip(cells, resid):
+    off_all = np.hypot(resid[:, 0], resid[:, 1])
+    # ADAPTIVE tolerance (issue #965 item 3): read off THIS tile's own cell
+    # spread rather than a fixed 15 mas that VIRAC2's own per-star scatter
+    # (~40 mas, plus 12.7 yr of proper-motion propagation) already exceeds in a
+    # normal 45" cell.  MAD is used because it stays representative with the
+    # 1-2 outlier cells a real seam or a genuinely noisy tile contributes (its
+    # breakdown point is 50% of the cells) -- so a seam does not inflate the
+    # very threshold meant to catch it (see REGION_TOL_K/REGION_TOL_FLOOR_MAS
+    # and test_same_star_region_map.py for the calibration against both the
+    # live checkpoint history and a synthetic seam).
+    cell_resid_median = float(np.median(off_all))
+    cell_resid_mad = float(np.median(np.abs(off_all - cell_resid_median)) * 1.4826)
+    if tol_mas is None:
+        tol_used = float(max(tol_floor_mas, tol_k * cell_resid_mad))
+        tol_source = "adaptive"
+    else:
+        tol_used = float(tol_mas)
+        tol_source = "fixed"
+    for c, (rdra, rddec), off in zip(cells, resid, off_all):
         sem = float(np.hypot(c["dra_sem"], c["ddec_sem"]))
-        off = float(np.hypot(rdra, rddec))
+        off = float(off)
         c["resid_dra_mas"] = float(rdra)
         c["resid_ddec_mas"] = float(rddec)
         c["resid_off_mas"] = off
         c["significant"] = bool(sem > 0 and off > nsigma * sem)
-        c["flagged"] = bool(off > tol_mas and c["significant"])
+        c["flagged"] = bool(off > tol_used and c["significant"])
 
     # --- coverage: sources present, matched pairs missing ---------------------
     # Rebuild local_residual_map's own cell grid (it anchors on the minimum
@@ -1364,8 +1443,9 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     worst = max((c["resid_off_mas"] for c in cells), default=float("nan"))
     reason = None
     if flagged:
-        reason = (f"{len(flagged)} region cell(s) above {tol_mas} mas at "
-                  f"{nsigma}-sigma (worst {worst:.1f} mas)")
+        reason = (f"{len(flagged)} region cell(s) above {tol_used:.1f} mas "
+                  f"({tol_source} tolerance) at {nsigma}-sigma "
+                  f"(worst {worst:.1f} mas)")
     elif uncovered:
         by = sorted({c["by"] for c in uncovered})
         reason = (f"{len(uncovered)} region cell(s)/group(s) hold sources but "
@@ -1374,7 +1454,10 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                   f"-- a region displaced beyond the {match_radius} match "
                   f"radius looks exactly like this, and against a dense "
                   f"reference it keeps CHANCE pairs while losing the tight ones")
-    base.update(bulk_dra_mas=float(bulk[0]), bulk_ddec_mas=float(bulk[1]))
+    base.update(bulk_dra_mas=float(bulk[0]), bulk_ddec_mas=float(bulk[1]),
+               tol_mas=tol_used, tol_source=tol_source,
+               cell_resid_mad_mas=cell_resid_mad,
+               cell_resid_median_mas=cell_resid_median)
     return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                 n_flagged=len(flagged), n_uncovered=len(uncovered),
                 uncovered_cells=uncovered, worst_off_mas=worst,

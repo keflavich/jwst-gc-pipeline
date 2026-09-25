@@ -748,3 +748,118 @@ def test_a_correcting_record_alone_is_not_certified_as_a_pass(gate, tmp_path):
     """m2 ran, the frozen stages did not: still rc=3, not the new refusal."""
     _write_correcting(tmp_path)
     assert gate.main(['--field', 'fld']) == 3
+
+
+# ---------------------------------------------------------------------------
+# same-star region-map demotion, re-verified at the gate (issue #965 item 2)
+# ---------------------------------------------------------------------------
+
+def _region_map(status, n_measured=26, n_flagged=1, n_uncovered=0,
+                sigma=1.77, sigma_tol=2.0, max_frac=0.10):
+    return dict(status=status, n_measured=n_measured, n_flagged=n_flagged,
+               n_uncovered=n_uncovered, same_star_sigma_mas=sigma,
+               sigma_tol_mas=sigma_tol, max_flagged_fraction=max_frac)
+
+
+def _visit_with_region(visit, region_map):
+    return dict(visit=visit, reference_tie=dict(region_map=region_map))
+
+
+def _m2_with_visits(tmp_path, name, date, visits, passed=True):
+    """A correcting-stage record carrying per-visit ``reference_tie`` blocks."""
+    d = tmp_path / 'fld' / 'astrometry_checkpoints'
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps(dict(
+        stage='m2', passed=passed, correcting=True, failures=[],
+        unverified_blocking=[], date=date, corrections=[],
+        tolerances=dict(correction_floor_mas=0.0,
+                        correction_floor_source='default'),
+        visits=visits)))
+    return d / name
+
+
+def test_a_verified_region_map_demotion_does_not_refuse(gate, tmp_path, capsys):
+    """o075, live: a 7.5 mas bulk measured to +/-1.77 mas with 1/26 cells over
+    the adaptive tolerance.  A demotion that checks out against its own
+    recorded numbers is non-blocking and reported, not refused."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o075_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(1, _region_map('recorded_nonblocking'))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o075_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'REGION MAP DEMOTED (verified)' in out, out
+    assert 'm2/F212N/o075' in out, out
+
+
+def test_an_unverified_region_map_demotion_refuses(gate, tmp_path, capsys):
+    """The claim does not check out against the record's own numbers -- here
+    the flagged fraction (5/26 = 19.2%) exceeds the recorded 10% bar -- so the
+    gate does not take the stored ``status`` string on faith."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o999_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('recorded_nonblocking', n_flagged=5))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o999_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+    both = capsys.readouterr()
+    assert 'REGION MAP DEMOTION UNVERIFIED' in both.out, both.out
+    assert 'same-star region-map demotion' in both.err, both.err
+
+
+def test_an_uncovered_cell_defeats_the_demotion_even_with_a_clean_sigma(
+        gate, tmp_path):
+    """A cell with no matched pair at all is never absorbed into the
+    exemption, no matter how precise the bulk reads -- coverage failures stay
+    gross-displacement gates."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o998_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('recorded_nonblocking', n_uncovered=1))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o998_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_blocking_region_map_is_reported_but_not_a_new_refusal(gate,
+                                                                  tmp_path,
+                                                                  capsys):
+    """``status: blocking`` reaching disk means m2 already raised (or was
+    overridden) on it -- that machinery is covered elsewhere.  This gate only
+    surfaces it for visibility; it must not double-refuse."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o997_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(1, _region_map('blocking'))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o997_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    assert 'REGION MAP BLOCKING' in capsys.readouterr().out
+
+
+def test_clean_and_not_applicable_region_maps_are_silent(gate, tmp_path,
+                                                          capsys):
+    """The ordinary case -- most fields never trip item 2 at all -- must not
+    grow a spurious line in the report."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o001_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(1, _region_map('clean')),
+                     _visit_with_region(2, _region_map('not_applicable'))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o001_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'REGION MAP' not in out, out
+
+
+def test_an_unrecognized_region_map_status_is_treated_as_unverified(
+        gate, tmp_path):
+    """A status string this gate does not know is not silently trusted -- a
+    future third state must be reviewed here before it can ship quietly."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o996_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(1, _region_map('some_future_status'))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o996_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
