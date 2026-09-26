@@ -40,6 +40,28 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord, search_around_sky
 from scipy.spatial import cKDTree
 
+from jwst_gc_pipeline.photometry.reference_uncertainty import (
+    weighted_median, inverse_variance_weights, weights_with_unknown_fallback)
+
+
+#: Default predicted-reference-sigma cap (mas) for the ``sigma_b_mas`` cut in
+#: ``local_residual_map``/``same_star_region_map`` (issue #965 item 1).  Chosen
+#: from the measured VIRAC2 sigma_pred distribution over the o077 gc-treasury
+#: footprint (545352 stars, dt=12.72 yr to epoch 2026.72): 10/25/50/75/90/95/99
+#: pct = 12.7/20.3/34.1/61.2/97.4/122.8/177.4 mas.  The proper-motion
+#: propagation term dominates (median 24.7 mas) over the raw position term
+#: (median 3.3 mas) at this 12.7 yr baseline, so MOST VIRAC2 stars already
+#: carry a predicted uncertainty comparable to or larger than the 15 mas
+#: region-map tolerance -- which is why 1-2 of ~27 cells in #965's five tiles
+#: flag on the reference's own scatter with no JWST-side defect.  100 mas sits
+#: at the 90th percentile: it removes the worst ~10% of stars (dominated by
+#: large per-star PM errors) while keeping the bulk of the sample, and matches
+#: the independent ~100 mas wrong-pair-separation cut #957 proposed for the
+#: same region map.  Pairs with UNKNOWN sigma (old refcat with no sigma
+#: column, or a source with no error columns) are never cut by this default --
+#: only a MEASURED sigma over the cap removes a pair.
+DEFAULT_SIGMA_CAP_MAS = 100.0
+
 
 # Contrast (peak bin / median of the OCCUPIED bins of the pair-offset
 # histogram) below this = NO coherent tie (scattered pairs), i.e. the two
@@ -871,7 +893,8 @@ class GlobalTieNotVerifiedError(RuntimeError):
 
 def local_residual_map(a, b, global_result, cell_arcsec=2.0,
                        match_radius=0.3 * u.arcsec, min_stars=10,
-                       tol_mas=15.0, nsigma=3.0, context="", return_pairs=False):
+                       tol_mas=15.0, nsigma=3.0, context="", return_pairs=False,
+                       sigma_b_mas=None, sigma_cap_mas=None):
     """Fine-scale (default 2"x2" cell) residual-offset map from matched pairs,
     AFTER a verified global tie.  This is the sanctioned "histogram refinement"
     class of measurement: the coarse offset is measured first with the
@@ -913,6 +936,33 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         that kept only CHANCE matches is told from one that kept its own stars
         (issue #610 review); a caller that re-matched to get them would be
         re-running the pairing this function already did, on its own rules.
+    sigma_b_mas : array-like or None
+        Per-star PREDICTED reference-position sigma (mas), aligned to ``b``
+        (issue #965 item 1, following #957).  ``None`` (default) reproduces
+        today's behaviour exactly -- an old refcat with no sigma column loads
+        and gates the same as before, with a logged note at the load site
+        (``visit_consensus.load_reference_catalog``), not here.  When given:
+
+        * a pair whose ``sigma_b_mas`` EXCEEDS ``sigma_cap_mas`` is DROPPED
+          before it can enter a cell's ``n`` or its statistic -- a star VIRAC2
+          itself cannot place better than the cap is not evidence the JWST
+          frame is off by that much;
+        * a pair with UNKNOWN (NaN) sigma is KEPT (never cut solely for
+          lacking a sigma -- this is what makes the cut safe on a refcat with
+          a partial sigma column, e.g. a Gaia leg queried before it carried
+          error columns);
+        * the per-cell ``dra_mas``/``ddec_mas`` become the INVERSE-VARIANCE
+          WEIGHTED median of the surviving pairs
+          (``reference_uncertainty.weighted_median`` /
+          ``weights_with_unknown_fallback``) instead of the plain median --
+          still a robust (order) statistic, per CLAUDE.md's ban on a
+          mean/median NN estimator, just one that trusts a well-measured
+          VIRAC2 star more than a poorly-measured one.  An unknown-sigma pair
+          gets the MEDIAN weight of the cell's known-sigma pairs rather than
+          zero, so it still contributes rather than silently vanishing.
+    sigma_cap_mas : float or None
+        The cut threshold (mas).  ``None`` (default, only meaningful when
+        ``sigma_b_mas`` is given) uses ``DEFAULT_SIGMA_CAP_MAS``.
 
     Returns
     -------
@@ -920,10 +970,20 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         ``dict(cells=[...], n_cells, n_measured, n_pairs, n_flagged,
         worst_off_mas, worst_sig_off_mas, clean)``, plus ``reason`` on an empty
         map and ``pairs`` when ``return_pairs``.  ``n_pairs`` is the number of
-        UNAMBIGUOUS matched pairs the map was built from.  Each cell:
+        UNAMBIGUOUS matched pairs the map was built from (after the sigma cut,
+        when one was applied).  Each cell:
         ``dict(ra0, dec0, ix, iy, n, dra_mas, ddec_mas, dra_sem, ddec_sem,
-        off_mas, significant, flagged)``.  ``clean`` is True when no cell is
-        flagged AND at least one cell was measurable.
+        off_mas, significant, flagged, n_cut)``.  ``clean`` is True when no
+        cell is flagged AND at least one cell was measurable.  ``n_cut`` is 0
+        unless ``sigma_b_mas`` is given, in which case it is the number of
+        pairs in that specific cell dropped by the sigma cap (a cell can drop
+        below ``min_stars`` and disappear from ``cells`` entirely -- that cell's
+        cut pairs are counted only in the top-level ``n_sigma_cut``, not per
+        surviving cell).  Top level also carries ``sigma_cap_mas`` (the
+        cap actually used, ``None`` when no sigma was supplied),
+        ``n_sigma_cut`` (total pairs dropped) and ``n_sigma_unknown`` (pairs
+        kept with unknown sigma), so a caller (the checkpoint record) can show
+        how much of the map the cut touched.
 
         ``off_mas`` is the canonical per-cell offset key, the same one
         ``measure_offset_grid`` cells now carry (issue #267), so one reader can
@@ -1011,14 +1071,40 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     ix = np.floor((ra_deg - r0) / cell_deg_ra).astype(int)
     iy = np.floor((dec_deg - d0) / cell_deg_dec).astype(int)
 
+    # Predicted-reference-sigma cut/weight (issue #965 item 1).  `None` keeps
+    # every downstream array/branch byte-identical to the pre-#965 code path --
+    # `keep` is all-True and `pair_sigma` stays `None`, so the per-cell
+    # statistic below takes the plain-median branch exactly as before.
+    if sigma_b_mas is None:
+        pair_sigma = None
+        over_cap = np.zeros(len(ib_n), dtype=bool)
+        cap_used = None
+    else:
+        pair_sigma = np.asarray(sigma_b_mas, dtype=float)[ib_n]
+        cap_used = float(DEFAULT_SIGMA_CAP_MAS if sigma_cap_mas is None
+                        else sigma_cap_mas)
+        # A pair with UNKNOWN sigma is never cut on that basis alone -- only a
+        # MEASURED sigma over the cap removes it (see the parameter docstring).
+        over_cap = np.isfinite(pair_sigma) & (pair_sigma > cap_used)
+    keep = ~over_cap
+    n_sigma_cut = int(over_cap.sum())
+    n_sigma_unknown = int((~np.isfinite(pair_sigma)).sum()) if pair_sigma is not None else 0
+
     cells = []
     for (cx, cy) in sorted(set(zip(ix.tolist(), iy.tolist()))):
-        sel = (ix == cx) & (iy == cy)
+        sel_all = (ix == cx) & (iy == cy)
+        sel = sel_all & keep
         n = int(sel.sum())
+        n_cut_cell = int((sel_all & over_cap).sum())
         if n < min_stars:
             continue
-        cdra = float(np.median(dra[sel]))
-        cddec = float(np.median(ddec[sel]))
+        if pair_sigma is None:
+            cdra = float(np.median(dra[sel]))
+            cddec = float(np.median(ddec[sel]))
+        else:
+            w = weights_with_unknown_fallback(pair_sigma[sel])
+            cdra = weighted_median(dra[sel], w)
+            cddec = weighted_median(ddec[sel], w)
         mad_scale = 1.4826 / np.sqrt(n)
         dra_sem = float(np.median(np.abs(dra[sel] - cdra)) * mad_scale)
         ddec_sem = float(np.median(np.abs(ddec[sel] - cddec)) * mad_scale)
@@ -1029,11 +1115,14 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
             ra0=r0 + (cx + 0.5) * cell_deg_ra, dec0=d0 + (cy + 0.5) * cell_deg_dec,
             ix=int(cx), iy=int(cy), n=n, dra_mas=cdra, ddec_mas=cddec,
             dra_sem=dra_sem, ddec_sem=ddec_sem, off_mas=off,
-            significant=significant, flagged=bool(off > tol_mas and significant)))
+            significant=significant, flagged=bool(off > tol_mas and significant),
+            n_cut=n_cut_cell))
     flagged = [c for c in cells if c["flagged"]]
     sig = [c for c in cells if c["significant"]]
     out = dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
-               n_pairs=int(len(ia_n)), n_flagged=len(flagged),
+               n_pairs=int(keep.sum()), n_flagged=len(flagged),
+               sigma_cap_mas=cap_used, n_sigma_cut=n_sigma_cut,
+               n_sigma_unknown=n_sigma_unknown,
                reason=(None if cells else
                        f"every cell held fewer than min_stars={min_stars} "
                        f"of the {len(ia_n)} unambiguous pair(s)"),
@@ -1044,8 +1133,20 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         # `resid_mas` is the pair separation AFTER the verified global tie is
         # removed -- the distance from where this star should be, not from
         # where the frame happens to sit.
-        out["pairs"] = dict(ia=ia_n, ib=ib_n, ix=ix, iy=iy,
-                            resid_mas=np.hypot(dra, ddec))
+        #
+        # Filtered by `keep` (issue #965 follow-up, "hidden seam"): a caller
+        # such as `same_star_region_map`'s coverage arm counts matched pairs
+        # PER CELL against the source catalog to decide whether a cell is
+        # "covered".  If this returned the pre-sigma-cut pair set, a cell the
+        # cut empties below `min_stars` (and which therefore silently drops
+        # out of `cells` above) would still show its full PRE-cut pair count
+        # here and read as fully covered -- the cell does not get flagged, it
+        # just vanishes from the verdict, and the field can read `clean=True`
+        # with a real seam hiding inside the emptied cell.  `keep` is
+        # all-True when `sigma_b_mas=None`, so this is a no-op for every
+        # caller that does not pass a sigma cut.
+        out["pairs"] = dict(ia=ia_n[keep], ib=ib_n[keep], ix=ix[keep], iy=iy[keep],
+                            resid_mas=np.hypot(dra, ddec)[keep])
     return out
 
 
@@ -1172,8 +1273,15 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                          match_radius=0.3 * u.arcsec, tol_mas=None, nsigma=3.0,
                          tol_k=REGION_TOL_K, tol_floor_mas=REGION_TOL_FLOOR_MAS,
                          coverage_fraction=REGION_COVERAGE_FRACTION,
-                         tight_pair_mas=REGION_TIGHT_PAIR_MAS, context=""):
+                         tight_pair_mas=REGION_TIGHT_PAIR_MAS, context="",
+                         sigma_b_mas=None, sigma_cap_mas=None):
     """Per-REGION seam map from SAME-STAR matched pairs, bulk removed.
+
+    ``sigma_b_mas`` / ``sigma_cap_mas`` (issue #965 item 1): per-star predicted
+    reference sigma for ``b``, aligned index-for-index with ``b``, and the cap
+    (mas) above which a pair is cut before its cell is formed.  Passed straight
+    through to :func:`local_residual_map`; see its docstring for the cut/weight
+    rule.  ``None`` (default) reproduces the pre-#965 behaviour exactly.
 
     The spatial check ``measure_offset_grid`` is meant to be, measured with the
     estimator CLAUDE.md prescribes for a DENSE reference.  A per-tile histogram
@@ -1275,7 +1383,12 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         n_tight_pairs, coverage_rate_all, coverage_rate_tight,
         tight_pair_mas, worst_off_mas, worst_sig_off_mas, bulk_dra_mas,
         bulk_ddec_mas, measurable, clean, reason, tol_mas, tol_source, tol_k,
-        tol_floor_mas, cell_resid_mad_mas, cell_resid_median_mas)``.
+        tol_floor_mas, cell_resid_mad_mas, cell_resid_median_mas, sigma_cap_mas,
+        n_sigma_cut, n_sigma_unknown)``.  The last three (issue #965 item 1)
+        pass through from ``local_residual_map``: the cap actually used
+        (``None`` when ``sigma_b_mas`` was not given), the total pairs it
+        dropped, and the total kept pairs whose sigma was unknown -- so the
+        checkpoint record can show how much of the map the cut touched.
         Each entry of ``uncovered_cells`` carries ``by`` (``"tight-pairs"`` /
         ``"all-pairs"``) and either ``ix``/``iy`` or, for a group, ``cells``.
         ``measurable`` is False when fewer than ``min_cells`` cells could be
@@ -1287,7 +1400,8 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     lrm = local_residual_map(a, b, global_result, cell_arcsec=cell_arcsec,
                              match_radius=match_radius, min_stars=min_stars,
                              tol_mas=float("inf"), nsigma=nsigma,
-                             context=f"{context} region map", return_pairs=True)
+                             context=f"{context} region map", return_pairs=True,
+                             sigma_b_mas=sigma_b_mas, sigma_cap_mas=sigma_cap_mas)
     cells = list(lrm.get("cells") or [])
     pairs = lrm.get("pairs") or {}
     pair_sep_mas = np.asarray(pairs.get("resid_mas", []), dtype=float)
@@ -1309,7 +1423,10 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                 tol_mas=(float(tol_mas) if tol_mas is not None else float("nan")),
                 tol_source=("fixed" if tol_mas is not None else "adaptive"),
                 cell_resid_mad_mas=float("nan"),
-                cell_resid_median_mas=float("nan"))
+                cell_resid_median_mas=float("nan"),
+                sigma_cap_mas=lrm.get("sigma_cap_mas"),
+                n_sigma_cut=int(lrm.get("n_sigma_cut", 0)),
+                n_sigma_unknown=int(lrm.get("n_sigma_unknown", 0)))
     if len(cells) < min_cells:
         return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                     n_flagged=0, n_uncovered=0, uncovered_cells=[],
