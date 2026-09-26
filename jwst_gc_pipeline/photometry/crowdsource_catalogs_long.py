@@ -592,6 +592,7 @@ from crowdsource.crowdsource_base import fit_im
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
     remove_saturated_stars, correct_dq_first_group_saturation,
+    satstar_fit_switch_signature,
     # `cataloging._prepare_frame_for_photometry` reaches BOTH DQ helpers through
     # this module -- `_L.correct_dq_first_group_saturation(...)` and then
     # `_L.truly_lost_saturated_mask(...)` on the very next line.  Only the first
@@ -1920,6 +1921,16 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     if flux_overrides or flux_drops:
         overwrite = True
 
+    # The environment switches that change the fit (ZEROFRAME R-curve guard,
+    # keep-finite, observed peak from the crf, local-qfit gate; issue #972)
+    # are keyed the same way, under their own stamp.  '' means "fits as the
+    # code did before those switches", which is also how an unstamped catalog
+    # reads -- so a frame the switches cannot change keeps its cache.
+    fit_switch_signature = (
+        satstar_fit_switch_signature(
+            filename, deblend_with_zeroframe=deblend_with_zeroframe)
+        if recovery_signature is not None else None)
+
     def _cache_ok(tbl):
         # A cached satstar catalog is valid only if it was built with the SAME
         # saturated-core recovery config as this run.  --satstar-*-recover change
@@ -1932,7 +1943,15 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         if recovery_signature is None:
             return True
         cached_sig = str(tbl.meta.get('SATRECOV', '')) or "off"
-        return cached_sig == str(recovery_signature)
+        if cached_sig != str(recovery_signature):
+            return False
+        return str(tbl.meta.get('SATFITSW', '')) == fit_switch_signature
+
+    def _config_mismatch(tbl):
+        return (f"recovery config {tbl.meta.get('SATRECOV', '')!r} != "
+                f"{recovery_signature!r} or fit switches "
+                f"{str(tbl.meta.get('SATFITSW', ''))!r} != "
+                f"{fit_switch_signature!r}")
 
     def _on_current_frame(tbl, cache_name):
         """Re-project a cache HIT onto the frame's current GWCS.
@@ -1957,8 +1976,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         if _cache_ok(_c):
             return _on_current_frame(_c, extended_filename)
         print(f"Rebuilding satstar catalog: {os.path.basename(extended_filename)} "
-              f"recovery config {_c.meta.get('SATRECOV', '')!r} != "
-              f"{recovery_signature!r}", flush=True)
+              f"{_config_mismatch(_c)}", flush=True)
         overwrite = True
     satstar_filename = filename.replace('.fits', f'{file_suffix}_satstar_catalog.fits')
     if os.path.exists(satstar_filename) and not overwrite:
@@ -1966,8 +1984,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         if _cache_ok(_c):
             return _on_current_frame(_c, satstar_filename)
         print(f"Rebuilding satstar catalog: {os.path.basename(satstar_filename)} "
-              f"recovery config {_c.meta.get('SATRECOV', '')!r} != "
-              f"{recovery_signature!r}", flush=True)
+              f"{_config_mismatch(_c)}", flush=True)
         overwrite = True
 
     # No catalog under THIS phase's suffix.  Another phase may nonetheless have
@@ -1988,7 +2005,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             flux_overrides=flux_overrides, flux_drops=flux_drops,
             oversub_clamp_percentile=oversub_clamp_percentile,
             seed_gate_image=seed_gate_image,
-            deblend_with_zeroframe=deblend_with_zeroframe)
+            deblend_with_zeroframe=deblend_with_zeroframe,
+            fit_switch_signature=fit_switch_signature)
         _donor = (None if overwrite else
                   _satstar_cache.find_reusable_satstar_catalog(
                       filename, file_suffix, _content_key))
@@ -2004,6 +2022,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
 
     remove_saturated_stars(filename, overwrite=overwrite, path_prefix=path_prefix,
                            recovery_signature=recovery_signature,
+                           fit_switch_signature=fit_switch_signature,
                            use_merged_psf_for_merged=use_merged_psf_for_merged,
                            outside_star_pixels=outside_star_pixels,
                            outside_star_fit_box=outside_star_fit_box,

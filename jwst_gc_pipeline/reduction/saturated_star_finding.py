@@ -849,6 +849,120 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     return saturated, sources, coms, seed_kinds
 
 
+_ENV_SWITCH_ON = ('1', 'true', 'yes', 'on')
+_ENV_SWITCH_OFF = ('0', 'false', 'no', 'off')
+
+
+def _env_switch(name, default, env=None):
+    """Read an on/off environment switch.  Unset or blank -> ``default``;
+    ``1/true/yes/on`` and ``0/false/no/off`` (any case, surrounding whitespace
+    ignored) -> on / off.  Any other value raises ``ValueError`` naming the
+    variable, the same convention as the daophot hand-off switches
+    (``cataloging._handoff_env_flag``): these switches change the fit and the
+    satstar cache key, so a typo must not be read silently as either state."""
+    env = os.environ if env is None else env
+    raw = env.get(name)
+    if raw is None or not str(raw).strip():
+        return bool(default)
+    val = str(raw).strip().lower()
+    if val in _ENV_SWITCH_ON:
+        return True
+    if val in _ENV_SWITCH_OFF:
+        return False
+    raise ValueError(
+        f"{name}={raw!r} is not a recognised on/off value; use one of "
+        f"{'/'.join(_ENV_SWITCH_ON)} or {'/'.join(_ENV_SWITCH_OFF)} "
+        f"(case-insensitive), or leave it unset for the default "
+        f"({'on' if default else 'off'})")
+
+
+def _zeroframe_fit_enabled(env=None):
+    """``SATSTAR_ZEROFRAME_FIT`` (default ON): anchor the satstar fit on the
+    ramp first read wherever a sibling ``_ramp.fits`` exists.
+
+    Parsed by ``_env_switch`` like the #972 switches.  The earlier reader
+    turned the anchor off only for ``0``/``false``/``False``, so ``off``,
+    ``no`` or ``FALSE`` left it ON; it also feeds the satstar cache key
+    (``satstar_fit_switch_signature``), so a misread value keyed the cache on
+    the wrong state as well."""
+    return _env_switch('SATSTAR_ZEROFRAME_FIT', True, env)
+
+
+def satstar_fit_switches(env=None):
+    """The environment switches that change the ZEROFRAME fit anchor and the
+    satstar fit-quality gate (issue #972).  One reader for the fitter and for
+    the cache signature (``satstar_fit_switch_signature``), so the two cannot
+    drift apart.
+
+    * ``SATSTAR_ZF_RCURVE_GUARD`` (default ON) and ``SATSTAR_ZF_RCURVE_MAXSTEP``
+      (1.3): truncate the R(g0) calibration curve at the first bin-to-bin
+      change larger than MAXSTEP, up or down (see
+      ``zeroframe_recover_saturated``).
+    * ``SATSTAR_ZF_KEEP_FINITE`` (default OFF): SATURATED pixels with a finite,
+      nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
+    * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
+      observed-peak second chance reads the crf values, not the rewrite.
+    * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
+      (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
+      (1.0): qfit over the disk r < R around the fit ('qfit_local' column),
+      used by the NIRCam fit-quality gate in place of the box qfit when the
+      gate is on.
+    """
+    env = os.environ if env is None else env
+    qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
+    qloc_r = float(env.get('SATSTAR_QFIT_LOCAL_R', '') or (10.0 if qloc_gate else 0.0))
+    return {
+        'rcurve_guard': _env_switch('SATSTAR_ZF_RCURVE_GUARD', True, env),
+        'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
+        'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
+        'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
+        'qfit_local_gate': qloc_gate and qloc_r > 0,
+        'qfit_local_r': qloc_r,
+        'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 1.0),
+    }
+
+
+def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
+                                 env=None):
+    """Cache key for the ``satstar_fit_switches`` of one frame.
+
+    Stamped into the per-exposure satstar catalog (meta ``SATFITSW``) beside
+    the options-driven ``SATRECOV``, and compared when that cache is reused, so
+    a catalog fitted under different switches is refit rather than silently
+    returned.  It is ``''`` for every configuration that fits exactly as the
+    code did before these switches existed; an unstamped (older) catalog reads
+    as ``''`` too, so it stays valid wherever the switches cannot change the
+    fit.
+
+    The ZEROFRAME switches only act when the fit anchor runs, i.e. when
+    ``remove_saturated_stars`` will load a first read: a sibling ``_ramp.fits``
+    exists and ``SATSTAR_ZEROFRAME_FIT`` is on (or the deblend asks for the
+    ZEROFRAME).  Frames without one keep ``''`` for that part.  The R-curve
+    guard is ON by default, so a frame with a ramp gets a non-empty key by
+    default and its older catalog is refit once.
+    """
+    sw = satstar_fit_switches(env)
+    parts = []
+    anchor_runs = ((_zeroframe_fit_enabled(env) or deblend_with_zeroframe)
+                   and _find_ramp_for(filename) is not None)
+    if anchor_runs:
+        zf = ''
+        if sw['rcurve_guard']:
+            zf += f"g{sw['rcurve_maxstep']:g}"
+        if sw['keep_finite']:
+            zf += 'k'
+        if sw['obs_pk_from_crf']:
+            zf += 'o'
+        if zf:
+            parts.append('zf' + zf)
+    if sw['qfit_local_r'] > 0:
+        ql = f"ql{sw['qfit_local_r']:g}"
+        if sw['qfit_local_gate']:
+            ql += f"g{sw['qfit_local_max']:g}"
+        parts.append(ql)
+    return '_'.join(parts)
+
+
 def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                                 g0_sat_frac=0.9, sat_dilate=3, infl_tol=0.10,
                                 R=None):
@@ -880,6 +994,14 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     the search region is the SATURATED mask dilated by ``sat_dilate``; within the
     (non-DQ-flagged) dilation buffer a pixel is only rewritten if it is actually
     inflated (cal > R*group0*(1+infl_tol)), leaving clean pixels untouched.
+
+    The R(g0) curve is truncated at the first bin-to-bin step, up or down,
+    larger than ``SATSTAR_ZF_RCURVE_MAXSTEP`` (``SATSTAR_ZF_RCURVE_GUARD``,
+    default ON).
+    Every measured curve is logged (faint-bin R, bright-end R, R used), with a
+    WARNING when the R used at the bright end is below half the faint-bin R.
+    ``SATSTAR_ZF_KEEP_FINITE`` (default OFF) leaves SATURATED pixels that have
+    a valid ramp-fit rate alone.  See ``satstar_fit_switches``.
 
     Parameters
     ----------
@@ -939,6 +1061,17 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     else:
         ceiling = np.inf
     g0_clean = g0_finite & (group0 > 0) & (group0 < ceiling)
+    _sw = satstar_fit_switches()
+    # SATSTAR_ZF_KEEP_FINITE (default OFF): a SATURATED pixel with a finite,
+    # nonzero SCI and no DO_NOT_USE was measured from its pre-saturation
+    # groups (the crf SATURATED bit is any-group), so it is data, not a
+    # clipped value.  Keep it: neither rewritten with R*group0 nor masked.
+    # SAT&DO_NOT_USE pixels (SCI zeroed upstream) are still recovered.
+    if _sw['keep_finite'] and dq is not None:
+        _keep = (sat & np.isfinite(data) & (data != 0)
+                 & ((dq & dqflags.pixel['DO_NOT_USE']) == 0))
+    else:
+        _keep = None
     _Rcurve = None
     if R is None or not np.isfinite(R):
         # cal/group0 DRIFTS ~25% from faint to bright pixels even after the
@@ -951,6 +1084,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         # (binned medians in log g0, interpolated per rim pixel).
         good = ((~sat) & np.isfinite(data) & g0_finite & (data > 0)
                 & (group0 > R_g0_min) & (group0 < ceiling))
+        _guard_on = _sw['rcurve_guard']
         R = np.nan
         if int(good.sum()) >= 50:
             _g = group0[good]
@@ -962,11 +1096,73 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                 if int(_inb.sum()) >= 20:
                     _ctr.append(np.sqrt(_edges[_k] * _edges[_k + 1]))
                     _med.append(float(np.nanmedian(_r[_inb])))
+            _raw_ctr, _raw_med = list(_ctr), list(_med)
+            # R-curve guard (SATSTAR_ZF_RCURVE_GUARD, default ON; issue #972):
+            # above the brightest genuinely unsaturated pixel the "good" set
+            # holds only offset/hot/jump pixels (large group-0 pedestal, tiny
+            # cal), so cal/group0 collapses by ~100x.  gc-treasury F480M
+            # (BRIGHT2, NGROUPS=4): star pixels stop at g0 ~11-13.5k DN, the
+            # top three bins hold 36-58 JUMP/hot pixels at R ~0.0005 against
+            # R ~0.08 below, and every weakly saturated core was rewritten to
+            # ~3% of its rate.  The real drift is gradual (~25% over the whole
+            # range), so truncate the curve at the first bin that departs from
+            # the previous one by more than SATSTAR_ZF_RCURVE_MAXSTEP in
+            # either direction (np.interp then extrapolates flat from the last
+            # trustworthy bin).  Upward too: on the o111 F480M (6 frames) and
+            # F212N nrcb2/nrcb3 (7 frames) curves the largest bin-to-bin rise
+            # in the kept, star-pixel part is 1.008x (the largest drop is
+            # 1.18x, F480M bin 3->4); rises above 1.3x occur only between
+            # junk bins (up to 1.54x), and a hot bin would otherwise set a
+            # bright-end R several times too high.
+            if len(_ctr) >= 2 and _guard_on:
+                _maxstep = _sw['rcurve_maxstep']
+                _kept = 1
+                for _k in range(1, len(_med)):
+                    _a, _b = _med[_k - 1], _med[_k]
+                    if not (_a > 0 and _b > 0
+                            and max(_a / _b, _b / _a) <= _maxstep):
+                        break
+                    _kept += 1
+                if _kept < len(_med):
+                    print(f"[zeroframe R-curve guard] truncated R(g0) curve at "
+                          f"bin {_kept}/{len(_med)} (g0<{_ctr[_kept-1]:.0f} DN): "
+                          f"R {_med[_kept-1]:.4g} -> next {_med[_kept]:.4g} "
+                          f"rejected", flush=True)
+                _ctr, _med = _ctr[:_kept], _med[:_kept]
             if len(_ctr) >= 2:
                 _Rcurve = (np.array(_ctr), np.array(_med))
                 R = float(_med[-1])   # bright-end value, for logging/back-compat
+            elif len(_ctr) == 1 and _guard_on:
+                # One surviving bin: use it.  The median of every calibration
+                # pixel would re-admit the junk bins the guard just rejected.
+                R = float(_med[0])
             else:
                 R = float(np.nanmedian(_r))
+            # Per-frame R(g0) diagnostic (all settings; logging only).  A
+            # healthy curve drifts ~25% from faint to bright; a bright end
+            # below half the faint end means the top bins are not star pixels
+            # and the anchor would rewrite saturated cores to a few % of the
+            # true rate (F480M: R 0.0005 vs ~0.08).
+            if _raw_med:
+                _rf, _rb = _raw_med[0], _raw_med[-1]
+                _ratio = _rb / _rf if _rf > 0 else np.nan
+                _used_ratio = (R / _rf) if (_rf > 0 and np.isfinite(R)) else np.nan
+                print(f"[zeroframe R-curve] {len(_raw_med)} bin(s) from "
+                      f"{int(good.sum())} px: R_faint={_rf:.4g} "
+                      f"(g0~{_raw_ctr[0]:.0f}) R_bright={_rb:.4g} "
+                      f"(g0~{_raw_ctr[-1]:.0f}) R_bright/R_faint={_ratio:.3g}; "
+                      f"R used at bright end={R:.4g} "
+                      f"(used/R_faint={_used_ratio:.3g}, guard="
+                      f"{'on' if _guard_on else 'off'})", flush=True)
+                if np.isfinite(_used_ratio) and _used_ratio < 0.5:
+                    _hint = ("even with the step guard on" if _guard_on else
+                             "SATSTAR_ZF_RCURVE_GUARD is off; the default "
+                             "guard truncates it")
+                    print(f"WARNING [zeroframe R-curve] bright-end R used for "
+                          f"the rim rewrite is {_used_ratio:.3g}x the faint-bin "
+                          f"R (< 0.5): the R(g0) curve looks collapsed; "
+                          f"saturated cores will be rewritten far below their "
+                          f"true rate ({_hint})", flush=True)
     recovered = np.array(data, dtype=float, copy=True)
     rim_mask = np.zeros(shp, dtype=bool)
     if np.isfinite(R):
@@ -983,9 +1179,100 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
             sat_buf & ~sat & g0_clean & np.isfinite(data)
             & (group0 > R_g0_min)
             & (data > recov_val * (1.0 + infl_tol)))
+        if _keep is not None:
+            rim_mask = rim_mask & ~_keep
         recovered[rim_mask] = recov_val[rim_mask]
     deep_core_mask = sat_buf & ~g0_clean
+    if _keep is not None:
+        deep_core_mask = deep_core_mask & ~_keep
     return recovered, rim_mask, deep_core_mask, R
+
+
+def zeroframe_fit_anchor(data, dq, zeroframe):
+    """Apply the ZEROFRAME fit anchor for ``get_saturated_stars``.
+
+    Returns ``(data, zf_deep_core, rim, rewrite_delta)``:
+
+    * ``data``: the frame with the rim rewritten (the input when nothing was);
+    * ``zf_deep_core``: the fit mask to use in place of the any-group SATURATED
+      blob, or ``None`` to keep the blob (no usable R, nothing recovered);
+    * ``rim``: the rewritten pixels;
+    * ``rewrite_delta``: rewrite minus crf at the rim (0 elsewhere) when
+      ``SATSTAR_OBS_PK_FROM_CRF`` is on, else ``None``.  It lets the
+      observed-peak second chance read the UNREWRITTEN crf values while keeping
+      ``data_working``'s neighbour-model subtraction.
+
+    Under ``SATSTAR_ZF_KEEP_FINITE`` the rim can be empty with a usable R:
+    every SATURATED pixel below the group-0 ceiling kept its ramp-fit rate.
+    The deep-core mask is still the right fit mask then; falling back to the
+    blob would mask exactly the pixels KEEP_FINITE keeps (a 45-px blob fully
+    masked instead of its 9 deep-core pixels in the test scene).
+    """
+    rec, rim, deep, R = zeroframe_recover_saturated(data, dq, zeroframe)
+    if not np.isfinite(R):
+        return data, None, rim, None
+    sw = satstar_fit_switches()
+    if rim.any():
+        print(f"satstar ZEROFRAME fit-anchor: recovered {int(rim.sum())} "
+              f"rim/core pixels from group-0 (R={R:.4g}); "
+              f"{int(deep.sum())} deep-core pixels remain masked",
+              flush=True)
+        delta = None
+        if sw['obs_pk_from_crf']:
+            delta = np.where(rim, np.asarray(rec, dtype=float)
+                             - np.asarray(data, dtype=float), 0.0)
+        return rec, deep, rim, delta
+    if sw['keep_finite']:
+        print(f"satstar ZEROFRAME fit-anchor: no rim pixel to rewrite "
+              f"(SATSTAR_ZF_KEEP_FINITE kept them, R={R:.4g}); masking the "
+              f"{int(deep.sum())} deep-core pixels only", flush=True)
+        return data, deep, rim, None
+    return data, None, rim, None
+
+
+def satstar_observed_peak(cutout, mask, rewrite_delta=None):
+    """Brightest unmasked pixel of a satstar cutout (the implied-peak gate's
+    observed-peak second chance).  ``rewrite_delta`` (the matching cutout of
+    ``zeroframe_fit_anchor``'s delta) is subtracted first, so the peak is read
+    from the crf values rather than from the ZEROFRAME rewrite, which a
+    collapsed R(g0) curve drives to ~3% of the true rate.  NaN when no pixel
+    is usable."""
+    src = cutout if rewrite_delta is None else cutout - rewrite_delta
+    try:
+        return float(np.nanmax(np.where(mask, np.nan, src)))
+    except (ValueError, TypeError):
+        return np.nan
+
+
+def satstar_local_qfit(cutout, model_image, mask, r2, radius, local_bkg, flux):
+    """qfit over the unmasked disk ``r2 < radius**2`` around the fit.
+
+    photutils' qfit is sum|resid| over the WHOLE fit box (81x81 = 6561 px)
+    divided by this source's flux, so for a faint satstar the residuals of
+    NEIGHBOURS 20-50 px away (earlier-fitted bright satstars, unmodelled
+    stars) dominate it -- the same failure the ssr_ratio gate was localized
+    for (2026-06-08).  NaN when the disk has no usable pixel or the flux is
+    not positive."""
+    if not (radius > 0 and np.isfinite(flux) and flux > 0):
+        return np.nan
+    loc = (r2 < radius ** 2) & (~mask) & np.isfinite(cutout)
+    if not loc.any():
+        return np.nan
+    return float(np.abs((cutout - local_bkg - model_image)[loc]).sum() / flux)
+
+
+def satstar_qfit_for_gate(qfit, qfit_local, qfit_max_keep, *, is_miri,
+                          forced_source, switches=None):
+    """The (qfit, limit) pair the fit-quality gate should use.
+
+    ``SATSTAR_QFIT_LOCAL_GATE`` on: a NIRCam, non-forced fit with a finite
+    ``qfit_local`` is judged on it against ``SATSTAR_QFIT_LOCAL_MAX``.
+    Otherwise the box qfit against ``qfit_max_keep``, as before."""
+    sw = satstar_fit_switches() if switches is None else switches
+    if (sw['qfit_local_gate'] and not is_miri and not forced_source
+            and np.isfinite(qfit_local)):
+        return qfit_local, sw['qfit_local_max']
+    return qfit, qfit_max_keep
 
 
 def ramp_slope_map(ramp_sci, ramp_groupdq=None, *, ceiling=None,
@@ -2337,18 +2624,22 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # fit mask below.  No zeroframe (or no usable R) -> zf_deep_core = None,
     # behaviour unchanged.
     zf_deep_core = None
+    # rewrite - crf at the ZEROFRAME-rewritten pixels (0 elsewhere) when
+    # SATSTAR_OBS_PK_FROM_CRF is on; see zeroframe_fit_anchor.
+    _zf_rewrite_delta = None
     if zeroframe is not None:
         _dqarr_zf = (fitsdata['DQ'].data
                      if 'DQ' in [h.name for h in fitsdata] else None)
-        _rec, _rim, _deep, _R = zeroframe_recover_saturated(
+        data, zf_deep_core, _rim, _zf_rewrite_delta = zeroframe_fit_anchor(
             data, _dqarr_zf, zeroframe)
-        if np.isfinite(_R) and _rim.any():
-            print(f"satstar ZEROFRAME fit-anchor: recovered {int(_rim.sum())} "
-                  f"rim/core pixels from group-0 (R={_R:.4g}); "
-                  f"{int(_deep.sum())} deep-core pixels remain masked",
-                  flush=True)
-            data = _rec
-            zf_deep_core = _deep
+
+    # Fit-quality switches (issue #972), read once per frame.
+    _fit_switches = satstar_fit_switches()
+    if (_env_switch('SATSTAR_QFIT_LOCAL_GATE', False)
+            and not _fit_switches['qfit_local_gate']):
+        print("WARNING satstar: SATSTAR_QFIT_LOCAL_GATE is on but "
+              "SATSTAR_QFIT_LOCAL_R <= 0; the fit-quality gate keeps the box "
+              "qfit", flush=True)
 
     # Working copy of the data that gets per-source PSF models subtracted
     # after each accepted fit, so subsequent fits see a cleaner field.
@@ -3749,6 +4040,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         result['sidelobe_resid_sigma'] = [sidelobe_resid_sigma] * len(result)
         result['ssr_ratio'] = [ssr_ratio] * len(result)
 
+        # LOCAL qfit (see satstar_local_qfit).  Computed, and written as the
+        # diagnostic column 'qfit_local', only when SATSTAR_QFIT_LOCAL_R > 0 or
+        # SATSTAR_QFIT_LOCAL_GATE is on (R then defaults to 10 px), so the
+        # default catalog schema is unchanged.
+        _qloc_r = _fit_switches['qfit_local_r']
+        qfit_local = float('nan')
+        if _qloc_r > 0 and len(result) > 0:
+            _lb = (float(np.atleast_1d(result['local_bkg'])[0])
+                   if 'local_bkg' in result.colnames else 0.0)
+            _fl = float(np.atleast_1d(result['flux_fit'])[0])
+            qfit_local = satstar_local_qfit(cutout, model_image, mask, _r2_c,
+                                            _qloc_r, _lb, _fl)
+            result['qfit_local'] = [qfit_local] * len(result)
+
         threshold_image = np.zeros_like(cutout)
 
         #count the number of pixels above local background in the model_image
@@ -3825,11 +4130,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # low-confidence fits, since it was deleting real bright stars.  MIRI's
         # thresholds are looser throughout (snr 2, qfit 15, sidelobe -40).
         # See accept_satstar_fit.
+        # SATSTAR_QFIT_LOCAL_GATE: judge NIRCam in-FOV fits on qfit_local.
+        _qfit_gate, _qfit_gate_max = satstar_qfit_for_gate(
+            qfit, qfit_local, _qfit_max_keep, is_miri=_is_miri,
+            forced_source=forced_source, switches=_fit_switches)
         accept_source = accept_satstar_fit(
             result_is_none=(result is None), fluxerr=fluxerr, snr=snr,
-            flux=flux, qfit=qfit, sidelobe_resid_sigma=sidelobe_resid_sigma,
+            flux=flux, qfit=_qfit_gate, sidelobe_resid_sigma=sidelobe_resid_sigma,
             ssr_ratio=ssr_ratio, is_miri=_is_miri,
-            qfit_max_keep=_qfit_max_keep, sidelobe_min_keep=_sidelobe_min_keep,
+            qfit_max_keep=_qfit_gate_max, sidelobe_min_keep=_sidelobe_min_keep,
             ssr_ratio_max_keep=_ssr_ratio_max_keep, snr_min_keep=_snr_min_keep)
         if not accept_source:
             _reject_reason = 'fit_quality_gate'
@@ -3864,10 +4173,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # the observed unmasked peak to fall below the threshold before
             # rejecting.  Fakes stay rejected (their observed peaks are far
             # below the floor by construction).
-            try:
-                _obs_pk = float(np.nanmax(np.where(mask, np.nan, cutout)))
-            except (ValueError, TypeError):
-                _obs_pk = np.nan
+            # SATSTAR_OBS_PK_FROM_CRF: read the observed peak from the crf
+            # values, not from the ZEROFRAME rewrite (R*group0).
+            _obs_pk = satstar_observed_peak(
+                cutout, mask,
+                None if _zf_rewrite_delta is None
+                else _zf_rewrite_delta[y0:y1, x0:x1])
             _implied_diag = _implied
             _obs_pk_diag = _obs_pk
             if (accept_source
@@ -4642,7 +4953,8 @@ def _find_zeroframe_for(filename):
 
 def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
                            file_suffix='', deblend_with_zeroframe=False,
-                           recovery_signature=None, **kwargs):
+                           recovery_signature=None, fit_switch_signature=None,
+                           **kwargs):
     """
     ``file_suffix`` is inserted into the output filenames *before* the
     ``_satstar_{catalog,model,residual}`` suffix so that concurrent runs
@@ -4650,6 +4962,10 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     ``--iteration-label=iter2``) write to distinct files and do not race
     on ``os.remove`` during ``overwrite=True``.  Pass an empty string
     (default) to preserve the pre-existing filename scheme.
+
+    ``recovery_signature`` and ``fit_switch_signature`` are stamped into the
+    catalog meta (``SATRECOV`` / ``SATFITSW``) for the cache check in
+    ``load_or_make_satstar_catalog``.
     """
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
@@ -4694,7 +5010,7 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     #    0.5-3.6 mag wing-extrapolation deficit for marginally saturated stars
     #    (the CMD saturation-boundary jog/gap).
     #  * DEBLEND seeding (opt-in via deblend_with_zeroframe, experimental).
-    _zf_fit_on = os.environ.get('SATSTAR_ZEROFRAME_FIT', '1') not in ('0', 'false', 'False')
+    _zf_fit_on = _zeroframe_fit_enabled()
     if kwargs.get('zeroframe') is None and (_zf_fit_on or deblend_with_zeroframe):
         zf = _find_zeroframe_for(filename)
         if zf is not None:
@@ -4711,6 +5027,10 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         # reuses a stale catalog.
         if recovery_signature is not None:
             satstar_table.meta['SATRECOV'] = str(recovery_signature)
+        # Same for the env fit switches (satstar_fit_switch_signature).  An
+        # empty signature is left unstamped: it reads back as '' anyway.
+        if fit_switch_signature:
+            satstar_table.meta['SATFITSW'] = str(fit_switch_signature)
         print("Finished get_saturated_stars", flush=True)
 
         satstar_catalog_filename = filename.replace(".fits", f'{file_suffix}_satstar_catalog.fits')
