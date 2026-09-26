@@ -25,7 +25,8 @@ import warnings
 import numpy as np
 from astropy.io import fits
 from astropy.nddata import block_reduce
-from astropy.wcs import WCS
+
+from jwst_gc_pipeline.frame_wcs import FrameWCS, frame_wcs
 
 __all__ = ['pairwise_sky_levels', 'write_skylist', 'DNU_BIT']
 
@@ -36,11 +37,12 @@ DNU_BIT = 1
 
 
 def _load(fn):
+    """SCI with DO_NOT_USE -> NaN, plus the frame's GWCS-backed WCS."""
     with fits.open(fn) as hdul:
         data = hdul['SCI'].data.astype(float)
         data[(hdul['DQ'].data & DNU_BIT) > 0] = np.nan
-        wcs = WCS(hdul['SCI'].header)
-    return data, wcs
+        ww = frame_wcs(hdul)
+    return data, ww
 
 
 def _bin(grid, bin_factor):
@@ -65,8 +67,8 @@ def pairwise_sky_levels(files, bin_factor=4, min_overlap=200):
     bin_factor : int
         Block size for a nanmedian binning of the REPROJECTED grids, which
         also suppresses stars.  Binning happens after reprojection because
-        a step-sliced ``astropy.wcs.WCS`` does not carry SIP distortion
-        correctly: binning first misregistered o078's frames by enough to
+        a sliced frame WCS drops to the SIP approximation and slicing did
+        not carry that distortion correctly: binning first misregistered o078's frames by enough to
         read 200 MJy/sr differences off real structure.
     min_overlap : int
         Minimum number of binned pixels for a pair to enter the solve.
@@ -89,11 +91,16 @@ def pairwise_sky_levels(files, bin_factor=4, min_overlap=200):
     n = len(frames)
     if n < 2:
         return np.zeros(n), []
-    wcs_out, shape_out = find_optimal_celestial_wcs(frames)
-    grids = [_bin(reproject_interp(fr, wcs_out, shape_out=shape_out,
-                                   roundtrip_coords=False)[0],
+    # the output grid only needs the footprints, so the FITS WCS will do; the
+    # pixels themselves are mapped through each frame's GWCS
+    wcs_out, shape_out = find_optimal_celestial_wcs(
+        [(d, w.fits_wcs if isinstance(w, FrameWCS) else w) for d, w in frames])
+    grids = [_bin(reproject_interp(
+                      (d, w.gwcs if isinstance(w, FrameWCS) else w),
+                      wcs_out, shape_out=shape_out,
+                      roundtrip_coords=False)[0],
                   bin_factor)
-             for fr in frames]
+             for d, w in frames]
 
     rows = []
     for i in range(n):
