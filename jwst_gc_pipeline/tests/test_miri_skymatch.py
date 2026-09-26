@@ -115,6 +115,34 @@ def test_dnu_block_inside_overlap_is_ignored(tmp_path):
     np.testing.assert_allclose(levels, [0.0, -7.0], atol=0.5)
 
 
+def test_pixels_map_through_gwcs_and_grid_uses_fits_wcs(tmp_path, monkeypatch):
+    """Pin the FrameWCS dispatch: pixels go through .gwcs, only the output grid
+    comes from .fits_wcs.  Here .gwcs is the true WCS and .fits_wcs is shifted
+    by a different amount per frame, so reprojecting through .fits_wcs would
+    misregister the 130 MJy/sr cloud/nebula edge and wreck the levels."""
+    import copy
+
+    from jwst_gc_pipeline import frame_wcs as fw
+    from jwst_gc_pipeline.reduction import miri_skymatch
+
+    sky = _scene()
+    offsets = [0.0, -7.0, 12.0]
+    files = [_write_frame(tmp_path / f'f{k}.fits', sky, x0, off, 0.02, seed=k)
+             for k, (x0, off) in enumerate(zip((40, 100, 150), offsets))]
+    shift = {f: 60.0 * k for k, f in enumerate(files)}
+
+    def fake_frame_wcs(hdul):
+        true = WCS(hdul['SCI'].header)
+        wrong = copy.deepcopy(true)
+        wrong.wcs.crpix[0] += shift[hdul.filename()]
+        return fw.FrameWCS(true, wrong, filename=hdul.filename())
+
+    monkeypatch.setattr(miri_skymatch, 'frame_wcs', fake_frame_wcs)
+    levels, _ = pairwise_sky_levels(files, bin_factor=2, min_overlap=50)
+    np.testing.assert_allclose(levels, np.array(offsets) - max(offsets),
+                               atol=0.5)
+
+
 def test_skylist_rows_match_jwst_stem_convention(tmp_path):
     from jwst.lib.suffix import remove_suffix
     files = ['/x/y/jw10678078001_02201_00001_mirimage_align.fits',
