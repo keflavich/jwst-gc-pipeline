@@ -262,16 +262,65 @@ def _filter_or_flag_model_overshoot(phot_obj, modsky, data, *,
 # ---------------------------------------------------------------------------
 # Atomic single-pass fit + post-fit cleanup
 # ---------------------------------------------------------------------------
+_HANDOFF_ENV_TRUE = ('1', 'true', 'yes', 'on')
+_HANDOFF_ENV_FALSE = ('0', 'false', 'no', 'off')
+
+
+def _handoff_env_flag(name, default):
+    """On/off env switch of the satstar -> daophot hand-off.
+
+    Unset or blank gives ``default``.  ``1/true/yes/on`` and
+    ``0/false/no/off`` are accepted in any case, surrounding whitespace
+    ignored.  Any other value raises ``ValueError`` naming the variable: these
+    switches decide which channel measures a star, so a typo must not be read
+    silently as either state (``int()`` used to raise a bare
+    ``invalid literal for int()`` on ``true``/``yes``).
+
+    Parameters
+    ----------
+    name : str
+        Environment variable.
+    default : bool
+        Value when the variable is unset or blank.
+
+    Returns
+    -------
+    bool
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return bool(default)
+    val = raw.strip().lower()
+    if val in _HANDOFF_ENV_TRUE:
+        return True
+    if val in _HANDOFF_ENV_FALSE:
+        return False
+    raise ValueError(
+        f"{name}={raw!r} is not a recognised on/off value; use one of "
+        f"{'/'.join(_HANDOFF_ENV_TRUE)} or {'/'.join(_HANDOFF_ENV_FALSE)} "
+        f"(case-insensitive), or leave it unset for the default "
+        f"({'on' if default else 'off'})")
+
+
 def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
                             label='', accepted_excl_fwhm=1.5):
     """Frame-pixel positions the satstar implied-peak gate handed to daophot.
 
     ``get_saturated_stars`` persists every post-fit reject to
-    ``*_satstar_rejected.fits`` with a ``reject_reason``.  Only
+    ``*_satstar_rejected.fits`` with a ``reject_reason``.
     ``'implied_peak_gate'`` rejects are handed off: the gate located and fitted
     the star and judged it too faint to be saturated, so the star belongs to
-    the daophot channel.  ``'fit_quality_gate'`` rejects (garbage or unconstrained
-    fits, including spurious candidates) are not.
+    the daophot channel.  A ``'fit_quality_gate'`` reject is handed off only
+    when its recorded ``satstar_implied_peak`` is below half its
+    ``sat_severity_floor`` and its ``satstar_observed_peak`` is not at or above
+    it -- the implied-peak test, which the satstar gate skips for fits that
+    failed ``accept_satstar_fit`` -- and its ``flux_fit`` and implied peak are
+    both positive.  Other fit-quality rejects (garbage or unconstrained fits,
+    including spurious candidates) are not handed off, and tables without the
+    peak columns behave as before.  Env
+    ``DAOPHOT_HANDOFF_FAINT_FIT_QUALITY=0`` (default on; parsed by
+    ``_handoff_env_flag``) restricts the hand-off to implied-peak-gate
+    rejects.
 
     Positions are the reject's own ``xcentroid``/``ycentroid`` -- frame pixels of
     the very file the satstar fit ran on, so they are immune to a later WCS
@@ -305,6 +354,9 @@ def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
         detection lies farther out.
     """
     radius_pix = max(1.0, 0.5 * float(fwhm_pix))
+    # Parsed before any early return, so a malformed value fails on every
+    # frame, not only on frames that happen to have a rejected table.
+    faint_fq_on = _handoff_env_flag('DAOPHOT_HANDOFF_FAINT_FIT_QUALITY', True)
     if not rejected_path or not os.path.exists(rejected_path):
         return None, 0.0
     try:
@@ -319,9 +371,47 @@ def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
     reason = np.asarray(rej['reject_reason']).astype(str)
     xr = np.asarray(rej['xcentroid'], dtype=float)
     yr = np.asarray(rej['ycentroid'], dtype=float)
-    keep = (reason == 'implied_peak_gate') & np.isfinite(xr) & np.isfinite(yr)
+    handed = reason == 'implied_peak_gate'
+    # A fit_quality_gate reject never reaches the implied-peak test (the gate
+    # only runs on fits that passed accept_satstar_fit), but the rejected table
+    # still records both peaks.  When they say the star cannot be saturated --
+    # the same test the implied-peak gate applies -- the star belongs to the
+    # daophot channel just like an implied-peak reject.  Without this, a weakly
+    # saturated star whose satstar wing fit scores qfit > 5 is dropped by the
+    # satstar channel AND loses its daophot fit: its whole 5x5 fit box sits in
+    # the any-group SATURATED disc (jump-step snowball expansion makes it
+    # ~45 px), so the fit is fully masked and returns NaN
+    # (gc-treasury o111 F480M: 105 fit_quality_gate rejects on one frame).
+    # Env DAOPHOT_HANDOFF_FAINT_FIT_QUALITY=0 turns this extension off
+    # (implied-peak-gate rejects only, the pre-extension behaviour).
+    n_fq = 0
+    peak_cols = ('satstar_implied_peak', 'satstar_observed_peak',
+                 'sat_severity_floor')
+    if faint_fq_on and all(c in rej.colnames for c in peak_cols):
+        half = 0.5 * np.asarray(rej['sat_severity_floor'], dtype=float)
+        imp = np.asarray(rej['satstar_implied_peak'], dtype=float)
+        obs = np.asarray(rej['satstar_observed_peak'], dtype=float)
+        # Positivity guard: a fit with flux <= 0 or implied peak <= 0 is an
+        # unconstrained wing fit, not evidence of a faint star; "implied peak
+        # below half the floor" is then trivially true (o111 F480M: 274 of the
+        # 1265 fit-quality rejects meeting the peak test had flux <= 0 or
+        # implied peak <= 0).
+        positive = np.isfinite(imp) & (imp > 0)
+        if 'flux_fit' in rej.colnames:
+            flux = np.asarray(rej['flux_fit'], dtype=float)
+            positive &= np.isfinite(flux) & (flux > 0)
+        faint_fq = ((reason == 'fit_quality_gate') & (half > 0)
+                    & positive & (imp < half)
+                    & ~(np.isfinite(obs) & (obs >= half)))
+        n_fq = int(faint_fq.sum())
+        handed = handed | faint_fq
+    keep = handed & np.isfinite(xr) & np.isfinite(yr)
     if not keep.any():
         return None, 0.0
+    if n_fq:
+        print(f"[{label}] gate-reject hand-off: {n_fq} fit-quality reject(s) "
+              f"whose implied and observed peaks are below half the "
+              f"saturation floor are handed off too", flush=True)
     xy = np.column_stack([xr[keep], yr[keep]])
     n_near_acc = 0
     if (satstar_table is not None and len(satstar_table)
@@ -336,13 +426,189 @@ def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
                 accepted_excl_fwhm * float(fwhm_pix))
             n_near_acc = int(near_acc.sum())
             xy = xy[~near_acc]
-    print(f"[{label}] gate-reject hand-off: {len(xy)} implied-peak-gate "
-          f"reject(s) exempt from the near-saturation filter "
+    print(f"[{label}] gate-reject hand-off: {len(xy)} gate "
+          f"reject(s) ({n_fq} of them faint fit-quality) exempt from the "
+          f"near-saturation filter "
           f"(r={radius_pix:.2f}px; {n_near_acc} dropped as within "
           f"{accepted_excl_fwhm:g} FWHM of an accepted satstar)", flush=True)
     if len(xy) == 0:
         return None, 0.0
     return xy, radius_pix
+
+
+def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
+                                 sci=None, data_floor=0.0,
+                                 label='', accepted_excl_fwhm=1.5):
+    """Centroids of SATURATED components the satstar channel did not accept.
+
+    The gate-reject hand-off only sees stars that reached the satstar FIT.  A
+    weakly saturated star can leave the satstar channel earlier -- the
+    pre-fit severity gate in ``find_saturated_stars`` drops a component with
+    no NaN-variance core whose data peak is below the saturation floor, and
+    records nothing -- and its any-group SATURATED core is then masked out of
+    the daophot fit (NaN fit, or a fit deleted by the near-saturation filter).
+    gc-treasury o111 F480M exp00003 nrcblong: 113 such pre-fit drops; 106 of
+    the 146 bright non-accepted SATURATED components left >50% unsubtracted in
+    the residual had no satstar row.
+
+    Handing off every component that does not hold an accepted satstar makes
+    the daophot channel responsible for all of them.  Positions within
+    ``accepted_excl_fwhm`` FWHM of an accepted satstar are dropped here, and
+    ``_handoff_restore_pixels`` also skips any component holding an accepted
+    centre, so accepted cores stay masked and model-filled.
+
+    With ``sci``, a component with no finite ``sci`` pixel is never handed
+    off, whatever ``data_floor`` is: ``_handoff_restore_pixels`` has nothing
+    to give back to the fit there, and the position would only gain the
+    near-saturation exemption (o111 F480M with no floor: 477 of 3371 handed
+    components had no finite pixel).  With ``data_floor > 0`` as well, a
+    component is handed off only when its brightest finite ``sci`` pixel is
+    at or above ``data_floor``, below which a SATURATED flag is taken to be
+    spurious (persistence, JUMP mis-tag, bad pixel) rather than a star.  The
+    frame preparation takes the floor from ``_daophot_handoff_data_floor``
+    (default 0), not from the satstar finder's ``_SATSTAR_DATA_FLOOR``.
+
+    Parameters
+    ----------
+    dqarr : `~numpy.ndarray`
+        Frame DQ array.
+    satstar_table : `~astropy.table.Table` or None
+        Accepted satstars (``xcentroid``/``ycentroid``).
+    fwhm_pix : float
+        PSF FWHM in pixels.
+    sci : `~numpy.ndarray` or None
+        Frame SCI data (same shape as ``dqarr``), used for the finite-pixel
+        test and the data floor; None skips both.
+    data_floor : float
+        Minimum in-component finite ``sci`` maximum; 0 disables the floor.
+    label : str
+        Log prefix.
+    accepted_excl_fwhm : float
+        Exclusion radius around accepted satstars, in FWHM.
+
+    Returns
+    -------
+    xy : `~numpy.ndarray` (N, 2) or None
+        Component centres of mass (x, y), frame pixels; None when there are
+        none.
+    """
+    from scipy import ndimage as _ndi
+    if dqarr is None:
+        return None
+    sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+    if not sat.any():
+        return None
+    lab, n = _ndi.label(sat)
+    idx = np.arange(1, n + 1)
+    com = np.asarray(_ndi.center_of_mass(sat, lab, idx),
+                     dtype=float).reshape(-1, 2)
+    xy = com[:, ::-1]
+    floor_txt = ''
+    if sci is not None:
+        sci_f = np.asarray(sci, dtype=float)
+        # brightest finite pixel per component; -inf where it has none
+        cmax = np.asarray(_ndi.maximum(
+            np.where(np.isfinite(sci_f), sci_f, -np.inf), labels=lab,
+            index=idx), dtype=float).reshape(-1)
+        keep = np.isfinite(cmax)
+        floor_txt = f"{int((~keep).sum())} with no finite pixel, "
+        if data_floor is not None and float(data_floor) > 0:
+            above = keep & (cmax >= float(data_floor))
+            floor_txt += (f"{int((keep & ~above).sum())} below the "
+                          f"{float(data_floor):g} data floor, ")
+            keep = above
+        xy = xy[keep]
+    n_near_acc = 0
+    if (len(xy) and satstar_table is not None and len(satstar_table)
+            and 'xcentroid' in satstar_table.colnames
+            and 'ycentroid' in satstar_table.colnames):
+        xa = np.asarray(satstar_table['xcentroid'], dtype=float)
+        ya = np.asarray(satstar_table['ycentroid'], dtype=float)
+        ok = np.isfinite(xa) & np.isfinite(ya)
+        if ok.any():
+            near_acc = _L._protect_mask(
+                xy[:, 0], xy[:, 1], np.column_stack([xa[ok], ya[ok]]),
+                accepted_excl_fwhm * float(fwhm_pix))
+            n_near_acc = int(near_acc.sum())
+            xy = xy[~near_acc]
+    print(f"[{label}] unaccepted-SATURATED hand-off: {len(xy)} of {n} "
+          f"SATURATED component(s) handed to daophot ({floor_txt}"
+          f"{n_near_acc} dropped as within {accepted_excl_fwhm:g} FWHM of an "
+          f"accepted satstar)", flush=True)
+    if len(xy) == 0:
+        return None
+    return xy
+
+
+def _daophot_handoff_data_floor():
+    """Data floor for the unaccepted-SATURATED daophot hand-off (MJy/sr).
+
+    Env ``DAOPHOT_HANDOFF_DATA_FLOOR``; unset or blank gives 0 (no floor).
+    It is independent of the satstar finder's floor (env
+    ``SATSTAR_DATA_FLOOR`` / per-filter ``_SATSTAR_DATA_FLOOR``), which it
+    does not read and does not change.  Inheriting the finder's 1000 MJy/sr
+    F480M floor failed on gc-treasury o111 F480M: 34-48 bright weakly
+    saturated stars per frame peak at 710-990 MJy/sr and stayed unsubtracted
+    (31-40 bright non-accepted SATURATED components per frame left >50%
+    unsubtracted, against 3-10 with no floor).
+
+    Returns
+    -------
+    float
+        The floor; 0 disables it.
+
+    Raises
+    ------
+    ValueError
+        The value is not a finite number >= 0.
+    """
+    raw = os.environ.get('DAOPHOT_HANDOFF_DATA_FLOOR', '')
+    if not raw.strip():
+        return 0.0
+    try:
+        floor = float(raw)
+    except ValueError:
+        floor = np.nan
+    if not (np.isfinite(floor) and floor >= 0):
+        raise ValueError(
+            f"DAOPHOT_HANDOFF_DATA_FLOOR={raw!r} is not a finite number >= 0 "
+            f"(MJy/sr; 0 or unset disables the hand-off data floor)")
+    return floor
+
+
+def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
+                        data_floor=None, label='manual'):
+    """Every position handed from the satstar channel to daophot on a frame.
+
+    The gate-reject hand-off (``_gate_reject_handoff_xy``: implied-peak-gate
+    rejects plus faint fit-quality rejects) and, when env
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` is on (default off; parsed by
+    ``_handoff_env_flag``), every SATURATED component without an accepted
+    satstar that has a finite ``sci`` pixel reaching ``data_floor``
+    (``_unaccepted_sat_component_xy``).  ``data_floor=None`` reads it from
+    ``_daophot_handoff_data_floor``, and only when the component hand-off is
+    on, so the floor variable is never parsed on the default path.
+
+    Returns
+    -------
+    xy : `~numpy.ndarray` (N, 2) or None
+        Hand-off positions (frame pixels).
+    radius_pix : float
+        Near-saturation exemption radius (0.0 when ``xy`` is None).
+    """
+    handoff_xy, handoff_radius = _gate_reject_handoff_xy(
+        rejected_path, satstar_table, fwhm_pix, label=label)
+    if _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT', False):
+        if data_floor is None:
+            data_floor = _daophot_handoff_data_floor()
+        comp_xy = _unaccepted_sat_component_xy(
+            dqarr, satstar_table, fwhm_pix, sci=sci, data_floor=data_floor,
+            label=label)
+        if comp_xy is not None:
+            handoff_xy = (comp_xy if handoff_xy is None
+                          else np.vstack([handoff_xy, comp_xy]))
+            handoff_radius = max(1.0, 0.5 * float(fwhm_pix))
+    return handoff_xy, handoff_radius
 
 
 def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
@@ -788,10 +1054,15 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     # bounded LevMar group fit respects flux.min=0; this ban is the final safety
     # net (e.g. an exact-0 clamp lands here) so non-positives never enter the
     # catalog or the seed.
+    # NaN flux is a different failure from flux <= 0: the fit had no usable
+    # pixels (e.g. a 5x5 box fully inside a masked SATURATED core), so the two
+    # are counted separately in the log.
     res = phot.results
-    fpos = np.asarray(res['flux_fit'], dtype=float) > 0
+    _flux = np.asarray(res['flux_fit'], dtype=float)
+    fpos = _flux > 0
     n_neg = int(len(fpos) - np.sum(fpos))
     if n_neg > 0:
+        n_nan = int(np.sum(~np.isfinite(_flux)))
         phot.results = res[fpos]
         if (phot.init_params is not None
                 and len(phot.init_params) == len(fpos)):
@@ -799,8 +1070,9 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         phot.__dict__.pop('_model_image_params', None)
         modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
                                    include_local_bkg=False)
-        print(f"[{label}] dropped {n_neg} non-positive-flux (negative-peak) "
-              f"sources", flush=True)
+        print(f"[{label}] dropped {n_neg} non-positive-flux sources: "
+              f"{n_neg - n_nan} with flux <= 0 (negative-peak), {n_nan} with "
+              f"non-finite flux (fit had no usable pixels)", flush=True)
 
     return phot.results, modsky, phot
 
@@ -2215,8 +2487,16 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     handoff_xy, handoff_radius = None, 0.0
     handoff_restore = None
     if dqarr is not None and 'miri' not in inst_token:
-        handoff_xy, handoff_radius = _gate_reject_handoff_xy(
-            satstar_rejected_path, satstar_table, fwhm_pix, label='manual')
+        # Opt-in (env DAOPHOT_HANDOFF_UNACCEPTED_SAT=1): also hand off EVERY
+        # SATURATED component without an accepted satstar, including the ones
+        # the pre-fit severity gate dropped before any rejected-table row was
+        # written (see _unaccepted_sat_component_xy).  Components with no
+        # finite raw-SCI pixel are left alone, and so are components below
+        # the hand-off's own data floor (env DAOPHOT_HANDOFF_DATA_FLOOR,
+        # default 0; the satstar finder's SATSTAR_DATA_FLOOR is not used).
+        handoff_xy, handoff_radius = _daophot_handoff_xy(
+            dqarr, original_data, satstar_table, satstar_rejected_path,
+            fwhm_pix, label='manual')
         if handoff_xy is not None:
             handoff_restore = _handoff_restore_pixels(
                 dqarr, data, bad, handoff_xy, satstar_table, fwhm_pix)
