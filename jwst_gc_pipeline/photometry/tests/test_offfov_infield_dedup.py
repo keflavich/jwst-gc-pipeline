@@ -17,14 +17,20 @@ These tests pin:
 * without a readable data i2d the collapse falls back to all rows, as before;
 * an empty co-fit list keeps every in-field row (with a WARNING) instead of
   collapsing every close pair;
-* the co-fit test is pairwise: a co-fit pair can still collapse onto a
-  better-supported third row between them (current behaviour, documented);
+* every collapsed set is a clique: all its pairs are within the radius and
+  never co-fit, so two rows fit side by side never share a keeper, even
+  through a better-supported row between them (A-B-C chain, midpoint blend);
+  sets grow from the nearest link, and support only picks the survivor;
 * ``_infield_dedup_settings`` (the ``SATSTAR_INFIELD_DEDUP`` parsing that
   ``run_manual_pipeline`` calls): NIRCam defaults to 'cofit', MIRI and NIRISS
-  keep the legacy collapse, and the extended-emission targets keep their
-  off-FOV-only path in every mode, with the same kept rows as before.
+  keep the legacy collapse, a NIRISS ``INSTRUME`` header beats a
+  NIRCam-shaped module token, and the extended-emission targets keep their
+  off-FOV-only path in every mode, with the same kept rows as before;
+* a bad ``SATSTAR_INFIELD_DEDUP*`` value stops ``run_manual_pipeline`` at
+  entry.
 """
 import inspect
+import types
 
 import numpy as np
 import pytest
@@ -210,22 +216,117 @@ def test_empty_cofit_list_keeps_infield_rows_with_a_warning(tmp_path, capsys, ru
     assert 'WARNING' in log and "falls back to 'none'" in log
 
 
-def test_cofit_pair_can_collapse_to_a_better_supported_midpoint():
+def test_cofit_pair_never_shares_one_keeper_midpoint():
     # A and B (0.6" apart) are fit side by side in one exposure; a blended fit
-    # at their midpoint C is the only fit in three others.  The co-fit test is
-    # pairwise, so A-C and B-C are "never co-fit" links and the greedy keep
-    # order decides: C (support 3) survives and BOTH co-fit members are
-    # dropped.  This pins current behaviour (the legacy FoF collapses the
-    # same three rows); it is documented in _never_cofit_duplicates.
-    A, B, M = (0.0, 0.0), (0.6, 0.0), (0.3, 0.0)
+    # M between them is the only fit in three others.  A-M is the nearest
+    # link, so A and M form a set and M (support 3) is kept; B is co-fit with
+    # A, so it cannot join that set and is kept.  Before the clique guard
+    # both A and B were dropped in favour of M; the legacy FoF keeps one row.
+    # The rows kept here are a blend plus one component (documented in
+    # _never_cofit_duplicates).
+    A, B, M = (0.0, 0.0), (0.6, 0.0), (0.28, 0.0)
     runs = [_sky([A, B]), _sky([M]), _sky([M]), _sky([M])]
-    drop = C._never_cofit_duplicates(_sky([A, B, M]), [1, 1, 3],
-                                     [5e4, 4e4, 9e4], runs)
-    assert drop.tolist() == [True, True, False]
+    drop, keeper = C._never_cofit_duplicates(
+        _sky([A, B, M]), [1, 1, 3], [5e4, 4e4, 9e4], runs, return_keeper=True)
+    assert drop.tolist() == [True, False, False]
+    assert keeper.tolist() == [2, 1, 2]
     # with A and B better supported, the midpoint row is the one dropped
     drop = C._never_cofit_duplicates(_sky([A, B, M]), [3, 3, 1],
                                      [5e4, 4e4, 9e4], runs)
     assert drop.tolist() == [False, False, True]
+
+
+# A-B-C chain (review of #975): A-B (0.75") and B-C (0.85") within the 1.0"
+# radius, A-C (1.6") not.  B sits a little nearer A so the nearest link is
+# not a floating-point tie.
+_CA, _CB, _CC = (0.0, 0.0), (0.75, 0.0), (1.6, 0.0)
+_CHAIN_FLUX = [5e4, 4e4, 3e4]
+
+
+@pytest.mark.parametrize('runs, support, want_drop', [
+    # no run fits any two; B best.  A-B (nearest link) form a set kept as B;
+    # C is 1.6" from A, so it cannot join that set and is kept (before the
+    # guard: B only)
+    ([[_CA], [_CB], [_CC]], [1, 3, 1], [True, False, False]),
+    # A and C fit side by side, B best: C is co-fit with A, which is in B's
+    # set, so C is kept (before the guard: B only)
+    ([[_CA, _CC], [_CB], [_CB]], [1, 3, 1], [True, False, False]),
+    # no co-fits, A best: the {A, B} set keeps A; C stays on its own
+    ([[_CA], [_CB], [_CC]], [3, 1, 1], [False, True, False]),
+    # all three co-fit: nothing is linked
+    ([[_CA, _CB, _CC]], [1, 3, 1], [False, False, False]),
+    # A-B co-fit, B-C never, B best: A kept on its own, C joins B
+    ([[_CA, _CB], [_CC]], [1, 3, 1], [False, False, True]),
+    # A and C co-fit, B has lower support: the {A, B} set keeps A
+    ([[_CA, _CC], [_CB]], [2, 1, 2], [False, True, False]),
+], ids=['never-cofit-B-best', 'A-C-cofit-B-best', 'never-cofit-A-best',
+        'all-cofit', 'A-B-cofit-B-best', 'A-C-cofit-B-worst'])
+def test_chain_collapses_only_directly_linked_rows(runs, support, want_drop):
+    drop, keeper = C._never_cofit_duplicates(
+        _sky([_CA, _CB, _CC]), support, _CHAIN_FLUX,
+        [_sky(r) for r in runs], return_keeper=True)
+    assert drop.tolist() == want_drop
+    # A and C (1.6" apart) never end in one set
+    assert keeper[0] != keeper[2]
+
+
+def test_sets_grow_from_the_nearest_link_not_the_support_order():
+    # The geometry of one o111 F212N m6 set (#975 review): a bright star S
+    # (6 frames), a duplicate fit D 0.2" from it (2 frames), and a fainter
+    # star T 0.7" on the other side (3 frames) that one run fits side by side
+    # with D (0.89" apart).  S-D is the nearest link, so D joins S; T is
+    # co-fit with D and stays.  Taking rows in support order instead would
+    # put T in S's set first and keep the 0.2" duplicate D.
+    S, D, T = (0.0, 0.0), (-0.2, 0.0), (0.69, 0.0)
+    runs = [_sky([D, T]), _sky([S]), _sky([S]), _sky([S]), _sky([T])]
+    drop, keeper = C._never_cofit_duplicates(
+        _sky([S, D, T]), [6, 2, 3], [1.17e6, 5.0e5, 6.7e4], runs,
+        return_keeper=True)
+    assert drop.tolist() == [False, True, False]
+    assert keeper.tolist() == [0, 0, 2]
+
+
+def _brute_cofit(sc, runs, a, b, match_arcsec=0.1):
+    """Independent co-fit check for rows a, b (the definition in
+    _never_cofit_duplicates, written out per run)."""
+    r = min(match_arcsec, 0.5 * sc[a].separation(sc[b]).arcsec)
+    for pos in runs:
+        da = sc[a].separation(pos).arcsec
+        db = sc[b].separation(pos).arcsec
+        if (da.min() < r and db.min() < r
+                and int(np.argmin(da)) != int(np.argmin(db))):
+            return True
+    return False
+
+
+@pytest.mark.parametrize('seed', range(12))
+def test_every_collapsed_set_is_within_radius_and_never_cofit(seed):
+    # Random rows in a 2.5" box, random runs that fit a random subset of them
+    # with small jitter.  Whatever the keep order, every set a keeper absorbs
+    # has ALL its pairs within the radius and never co-fit, and every
+    # keeper is itself kept.
+    rng = np.random.default_rng(seed)
+    n, dedup = 9, 1.0
+    offs = rng.uniform(0, 2.5, size=(n, 2))
+    sc = _sky(offs)
+    runs = []
+    for _ in range(6):
+        pick = rng.random(n) < 0.5
+        if pick.any():
+            runs.append(_sky(offs[pick] + rng.normal(0, 0.01, (pick.sum(), 2))))
+    support = rng.integers(1, 6, n)
+    flux = rng.uniform(1e4, 1e5, n)
+    drop, keeper = C._never_cofit_duplicates(sc, support, flux, runs,
+                                             dedup_arcsec=dedup,
+                                             return_keeper=True)
+    assert np.array_equal(drop, keeper != np.arange(n))
+    assert not drop[keeper].any()
+    for j in np.unique(keeper):
+        grp = np.where(keeper == j)[0]
+        for ia, a in enumerate(grp):
+            for b in grp[ia + 1:]:
+                assert sc[a].separation(sc[b]).arcsec <= dedup, (seed, a, b)
+                assert not _brute_cofit(sc, runs, a, b), (seed, a, b)
 
 
 # ---- SATSTAR_INFIELD_DEDUP parsing (run_manual_pipeline's call site) -------
@@ -273,6 +374,48 @@ def test_invalid_infield_dedup_value_raises(clean_env, env, value):
         C._infield_dedup_settings('gc-treasury', module, filt)
 
 
+def test_validate_infield_dedup_env_returns_the_defaults(clean_env):
+    assert C._validate_infield_dedup_env() == {
+        'SATSTAR_INFIELD_DEDUP': 'cofit',
+        'SATSTAR_INFIELD_DEDUP_MIRI': 'legacy',
+        'SATSTAR_INFIELD_DEDUP_NIRISS': 'legacy'}
+    clean_env.setenv('SATSTAR_INFIELD_DEDUP_NIRISS', ' None ')
+    assert C._validate_infield_dedup_env()['SATSTAR_INFIELD_DEDUP_NIRISS'] == 'none'
+
+
+class _ReachedFirstStep(Exception):
+    pass
+
+
+@pytest.mark.parametrize('env', ['SATSTAR_INFIELD_DEDUP',
+                                 'SATSTAR_INFIELD_DEDUP_MIRI',
+                                 'SATSTAR_INFIELD_DEDUP_NIRISS'])
+def test_bad_value_stops_run_manual_pipeline_at_entry(clean_env, env):
+    # A bad value of ANY of the three variables must stop the run before its
+    # first real step (the cutout basepath, ahead of the frame preflight and
+    # every phase), not at the first post-merge cleanup.  On a NIRCam run
+    # that includes the MIRI/NIRISS variables: the instrument is only known
+    # per merge.
+    reached = []
+
+    def _first_step(*args, **kwargs):
+        reached.append(True)
+        raise _ReachedFirstStep
+
+    clean_env.setattr(C._L, '_cutout_out_basepath', _first_step)
+    args = (types.SimpleNamespace(), ['nrcb'], ['F480M'],
+            {'10678': {'gc-treasury': 1}}, '10678', 'gc-treasury', '111',
+            '/nonexistent-basepath', {}, {})
+    clean_env.setenv(env, 'none')                 # valid: reaches the first step
+    with pytest.raises(_ReachedFirstStep):
+        C.run_manual_pipeline(*args)
+    reached.clear()
+    clean_env.setenv(env, 'cofti')
+    with pytest.raises(ValueError, match=rf'^{env}='):
+        C.run_manual_pipeline(*args)
+    assert reached == []
+
+
 @pytest.mark.parametrize('module, filt', [('mirimage', 'F770W'),
                                           ('merged', 'F770W'),
                                           ('nrcb', 'F1130W')])
@@ -296,6 +439,64 @@ def test_niriss_keeps_the_legacy_collapse_by_default(clean_env):
     clean_env.setenv('GC_INSTRUMENT_OVERRIDE', 'NIRISS')
     assert C._infield_dedup_settings('sgrc', 'merged', 'F200W')[1] == (
         'SATSTAR_INFIELD_DEDUP_NIRISS')
+
+
+@pytest.mark.parametrize('module', ['nrcb', 'nrca', 'merged', 'nrcalong'])
+def test_niriss_header_beats_a_nircam_shaped_module_token(clean_env, module):
+    # A NIRISS run with a NIRCam-shaped module token and no
+    # GC_INSTRUMENT_OVERRIDE reads as NIRCam from the token and filter alone
+    # (F200W is a NIRCam name too).  Its INSTRUME header puts it on the
+    # NIRISS switch, whose default is the legacy collapse.
+    assert C._infield_dedup_settings('sgrc', module, 'F200W')[:2] == (
+        'cofit', 'SATSTAR_INFIELD_DEDUP')          # no header: the known limit
+    want = ('legacy', 'SATSTAR_INFIELD_DEDUP_NIRISS', False, False)
+    for hdr in ('NIRISS', 'niriss', ' NIRISS '):
+        assert C._infield_dedup_settings(
+            'sgrc', module, 'F200W', header_instrument=hdr) == want
+    # the NIRCam switch does not reach it
+    clean_env.setenv('SATSTAR_INFIELD_DEDUP', 'cofit')
+    assert C._infield_dedup_settings(
+        'sgrc', module, 'F200W', header_instrument='NIRISS') == want
+
+
+@pytest.mark.parametrize('module, filt, header, want_env', [
+    ('merged', 'F480M', 'NIRCAM', 'SATSTAR_INFIELD_DEDUP'),
+    ('merged', 'F480M', None, 'SATSTAR_INFIELD_DEDUP'),
+    ('merged', 'F480M', 'MIRI', 'SATSTAR_INFIELD_DEDUP_MIRI'),
+    # a NIRCam header does not override a non-NIRCam token or filter
+    ('nis', 'F200W', 'NIRCAM', 'SATSTAR_INFIELD_DEDUP_NIRISS'),
+    ('merged', 'F770W', 'NIRCAM', 'SATSTAR_INFIELD_DEDUP_MIRI'),
+    # an unrecognised INSTRUME falls back to the name signals
+    ('merged', 'F480M', 'NIRSPEC', 'SATSTAR_INFIELD_DEDUP'),
+])
+def test_nircam_path_needs_every_signal_to_say_nircam(clean_env, module, filt,
+                                                       header, want_env):
+    assert C._infield_dedup_settings(
+        'gc-treasury', module, filt, header_instrument=header)[1] == want_env
+
+
+def _fits_with_instrume(path, instrume):
+    hdr = fits.Header()
+    if instrume is not None:
+        hdr['INSTRUME'] = instrume
+    fits.HDUList([fits.PrimaryHDU(header=hdr)]).writeto(path)
+    return str(path)
+
+
+def test_instrument_from_headers_reads_the_first_available_header(tmp_path,
+                                                                   capsys):
+    missing = str(tmp_path / 'no_data_i2d.fits')
+    blank = _fits_with_instrume(tmp_path / 'blank.fits', None)
+    broken = tmp_path / 'broken.fits'
+    broken.write_bytes(b'not a fits file' * 10)
+    frame = _fits_with_instrume(tmp_path / 'jw_nis_crf.fits', 'NIRISS')
+    assert C._instrument_from_headers(
+        [missing, None, blank, str(broken), frame]) == 'niriss'
+    assert 'broken.fits' in capsys.readouterr().out
+    i2d = _fits_with_instrume(tmp_path / 'data_i2d.fits', 'NIRCAM')
+    assert C._instrument_from_headers([i2d, frame]) == 'nircam'
+    assert C._instrument_from_headers([missing, blank]) is None
+    assert C._instrument_from_headers([]) is None
 
 
 def test_miri_default_reproduces_the_legacy_kept_rows(clean_env, tmp_path):
@@ -361,7 +562,13 @@ def test_run_manual_pipeline_routes_the_cleanup_through_the_settings():
     # takes both arguments from _infield_dedup_settings and that no second
     # parse of the env var sits next to it.
     src = inspect.getsource(C.run_manual_pipeline)
-    assert '_infield_dedup_settings(target, module, filt)' in src
+    flat = ' '.join(src.split())
+    assert ('_infield_dedup_settings( target, module, filt, '
+            'header_instrument=_hdr_instrument)') in flat
+    # the header comes from this merge's data i2d, then its first frame
+    assert ('_hdr_instrument = _instrument_from_headers( '
+            '[_data_i2d_path(module, filt)] + '
+            'list(frame_cache.get((module, filt), []))[:1])') in flat
     start = src.index('_clean_offfov_dups_and_offfield(')
     call = src[start:src.index('cofit_positions=', start) + 40]
     assert 'dedup_offfov_only=_offfov_only' in call

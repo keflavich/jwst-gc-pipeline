@@ -11,11 +11,20 @@ was subtracted by neither channel.
 The default (MERGEDCAT_SATSTAR_COVER unset) keeps the model-threshold rule;
 ``accepted`` is opt-in and never applies to MIRI.
 """
+import os
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from astropy.io import fits
+from astropy.nddata import NDData
 from astropy.table import Table
+from astropy.wcs import WCS
+from photutils.psf import GriddedPSFModel
 
+import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as ccl
+import jwst_gc_pipeline.reduction.filtering as filtering
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     _load_frame_satstar_cover,
     _mergedcat_satstar_cover_mode,
@@ -23,6 +32,7 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     _satstar_render_covered,
     _uncovered_satstar_rows,
 )
+from jwst_gc_pipeline.photometry.naming import _inst_token, frame_identity
 
 
 def _model_with_star(shape=(80, 80), x0=20.0, y0=20.0, amp=5.0e4, sigma=1.1):
@@ -331,3 +341,199 @@ def test_model_nans_become_zero(tmp_path):
     fits.PrimaryHDU(m).writeto(p['satstar_model'])
     sm, _ = _load_frame_satstar_cover(frame, SFX, 'model')
     assert sm[0, 0] == 0.0 and np.isfinite(sm).all()
+
+
+# --- end to end through build_mergedcat_residuals ---------------------------
+# One synthetic NIRCam frame, rendered by the real build_mergedcat_residuals.
+# Only the PSF-grid builder, the OPD preflight, the FWHM table lookup, the
+# JWST-datamodel writer and the resample are replaced; the satstar model and
+# catalog, the raw per-frame products and the merged catalog are real files.
+#
+#   A  saturated; this frame's satstar pass ACCEPTED it: it is in the satstar
+#      model (subtracted from the render base) and in the satstar catalog.
+#   B  replaced_saturated merged row (another frame accepted it); this frame's
+#      satstar pass rejected it, so it is in the base, and it sits on A's
+#      satstar-model wing (7x7 max > 10), 6 px from A.
+#   C  an ordinary merged row.
+#
+# Under ``accepted`` the render must subtract B with the catalog PSF and leave
+# A to the satstar model; under ``model`` A's wing marks B covered and B stays
+# in the residual.  A render whose call site dropped ``acc_xy`` (or the cover
+# radius) behaves like ``model`` and fails the ``accepted`` case.
+
+E2E_SHAPE = (64, 64)
+E2E_FWHM_PIX = 2.574                      # F480M; 1.5 FWHM = 3.86 px
+E2E_A, E2E_B, E2E_C = (24.0, 30.0), (30.0, 30.0), (48.0, 12.0)
+E2E_FLUX = {'A': 1.0e6, 'B': 3.0e4, 'C': 2.0e4}
+E2E_PID, E2E_FIELD, E2E_ITER, E2E_SATLABEL = '1234', '001', 'm7', 'm6'
+
+
+def _e2e_grid():
+    sigma = E2E_FWHM_PIX / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    yy, xx = np.mgrid[-12:13, -12:13]
+    psf = np.exp(-0.5 * (xx ** 2 + yy ** 2) / sigma ** 2)
+    psf /= psf.sum()
+    ny, nx = E2E_SHAPE
+    xy = [(0, 0), (nx - 1, 0), (0, ny - 1), (nx - 1, ny - 1)]
+    return GriddedPSFModel(NDData(np.stack([psf] * len(xy)),
+                                  meta={'grid_xypos': xy, 'oversampling': 1}))
+
+
+def _e2e_wcs():
+    ww = WCS(naxis=2)
+    ww.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    ww.wcs.crval = [266.5, -28.9]
+    ww.wcs.crpix = [32.5, 32.5]
+    ww.wcs.cdelt = [-0.063 / 3600, 0.063 / 3600]
+    return ww
+
+
+def _e2e_options():
+    return SimpleNamespace(cutout_region='', each_exposure=True, blur=False,
+                           target='e2e', desaturated=False, epsf=False,
+                           group=False, iteration_label=E2E_ITER, bgsub=False,
+                           use_iter3_residual_bg=False,
+                           mergedcat_render_threads=1)
+
+
+def _e2e_setup(tmp_path, grid):
+    """Write the frame, its raw basic residual/model, its m6 satstar model and
+    catalog, and the merged catalog.  Returns (frame, merged_cat_path)."""
+    pipeline_dir = tmp_path / 'F480M' / 'pipeline'
+    pipeline_dir.mkdir(parents=True)
+    ww = _e2e_wcs()
+    frame = str(pipeline_dir / 'jw01234001001_02101_00001_nrcblong_crf.fits')
+    phdr = fits.Header({'INSTRUME': 'NIRCAM', 'TELESCOP': 'JWST',
+                        'DATE-OBS': '2023-04-01', 'FILTER': 'F480M'})
+    fits.HDUList([fits.PrimaryHDU(header=phdr),
+                  fits.ImageHDU(np.zeros(E2E_SHAPE, 'float32'),
+                                header=ww.to_header(), name='SCI'),
+                  fits.ImageHDU(np.ones(E2E_SHAPE, 'float32'), name='ERR'),
+                  ]).writeto(frame)
+
+    # render base = data - satstar model: A is gone, B and C are in it
+    base = ccl._render_model_from_table(
+        Table({'x_fit': [E2E_B[0], E2E_C[0]], 'y_fit': [E2E_B[1], E2E_C[1]],
+               'flux_fit': [E2E_FLUX['B'], E2E_FLUX['C']]}),
+        grid, E2E_SHAPE, (21, 21))
+    options = _e2e_options()
+    visit, vgroup, exposure, det = frame_identity(frame, field=E2E_FIELD)
+    tokens = ccl._predict_output_tokens(options, visit, vgroup, exposure, E2E_ITER)
+    stem = (f'{pipeline_dir}/{jw_prefix(E2E_PID)}-o{E2E_FIELD}_t001_'
+            f'{_inst_token("F480M")}_clear-f480m-{det}{"".join(tokens)}'
+            f'_daophot_basic')
+    for suffix, data in (('residual', base), ('model', np.zeros(E2E_SHAPE))):
+        fits.HDUList([fits.PrimaryHDU(),
+                      fits.ImageHDU(np.asarray(data, 'float32'),
+                                    header=ww.to_header(), name='SCI'),
+                      ]).writeto(f'{stem}_{suffix}.fits')
+
+    sfx = f'_{E2E_SATLABEL}'
+    fits.PrimaryHDU(_model_with_star(E2E_SHAPE, *E2E_A).astype('float32')).writeto(
+        frame.replace('.fits', f'{sfx}_satstar_model.fits'))
+    _write_catalog(frame.replace('.fits', f'{sfx}_satstar_catalog.fits'), [E2E_A])
+
+    sky = ww.pixel_to_world([E2E_A[0], E2E_B[0], E2E_C[0]],
+                            [E2E_A[1], E2E_B[1], E2E_C[1]])
+    merged = str(tmp_path / 'merged_f480m_m7.fits')
+    Table({'ra': sky.ra.deg, 'dec': sky.dec.deg,
+           'flux_fit': [E2E_FLUX['A'], E2E_FLUX['B'], E2E_FLUX['C']],
+           'replaced_saturated': [True, True, False]}).write(merged)
+    return frame, merged
+
+
+def _run_e2e(tmp_path, monkeypatch, cover_mode):
+    """Run build_mergedcat_residuals on the synthetic frame.  Returns
+    (rendered positions per _render_model_from_table call, residual, model)."""
+    for var in ('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', 'MERGE_RENDER_PSF_SHAPE',
+                'MERGE_RENDER_FWHM_MULT', 'MERGE_SATSTAR_RENDER_CAP',
+                'GC_INSTRUMENT_OVERRIDE'):
+        monkeypatch.delenv(var, raising=False)
+    if cover_mode is None:
+        monkeypatch.delenv('MERGEDCAT_SATSTAR_COVER', raising=False)
+    else:
+        monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', cover_mode)
+    grid = _e2e_grid()
+    frame, merged = _e2e_setup(tmp_path, grid)
+
+    monkeypatch.setattr(ccl.psf_preflight, 'preflight_psf_data',
+                        lambda *a, **k: None)
+    monkeypatch.setattr(ccl, 'get_psf_model', lambda *a, **k: (grid, None))
+    monkeypatch.setattr(filtering, 'get_fwhm',
+                        lambda hdr, *a, **k: (0.164, E2E_FWHM_PIX))
+    saved = {}
+
+    def _save(input_filename, output_filename, data, clear_dq=False):
+        saved[output_filename] = np.array(data, dtype=float)
+    monkeypatch.setattr(ccl, 'save_residual_datamodel', _save)
+    monkeypatch.setattr(ccl, '_resample_to_i2d',
+                        lambda files, pdir, name, **k: os.path.join(pdir, f'{name}_i2d.fits'))
+    calls = []
+    _real_render = ccl._render_model_from_table
+
+    def _spy(table, psf_model, shape, psf_shape):
+        calls.append(sorted((round(float(x), 3), round(float(y), 3))
+                            for x, y in zip(table['x_fit'], table['y_fit'])))
+        return _real_render(table, psf_model, shape, psf_shape)
+    monkeypatch.setattr(ccl, '_render_model_from_table', _spy)
+
+    out = ccl.build_mergedcat_residuals(
+        str(tmp_path), str(tmp_path), merged, 'F480M', E2E_PID, E2E_FIELD,
+        'nrcb', _e2e_options(), [frame], E2E_ITER, ['basic'],
+        satstar_label=E2E_SATLABEL, write_model_i2d=False)
+    assert list(out) == ['basic']
+    resid = [v for k, v in saved.items() if k.endswith('_mergedcat_residual.fits')]
+    model = [v for k, v in saved.items() if k.endswith('_mergedcat_model.fits')]
+    assert len(resid) == 1 and len(model) == 1
+    return calls, resid[0], model[0]
+
+
+def _peak_px(xy):
+    return int(round(xy[1])), int(round(xy[0]))
+
+
+def _b_peak():
+    """B's rendered peak pixel (the catalog PSF at B's integer position)."""
+    zero = np.zeros((1, 1))
+    return E2E_FLUX['B'] * float(_e2e_grid().evaluate(zero, zero, 1.0, 0.0, 0.0)[0, 0])
+
+
+@pytest.mark.filterwarnings(
+    'ignore::jwst_gc_pipeline.frame_wcs.MissingGwcsWarning')
+def test_e2e_accepted_renders_the_rejected_star_and_leaves_the_accepted_one_to_the_model(
+        tmp_path, monkeypatch, capsys):
+    calls, resid, model = _run_e2e(tmp_path, monkeypatch, 'accepted')
+    b_peak = _b_peak()
+    # catalog-PSF renders: C (ordinary row), then B (the uncovered satstar
+    # group); A never, since this frame's satstar model subtracts it
+    assert calls == [[E2E_C], [E2E_B]]
+    # B and C are subtracted once, A is not subtracted a second time
+    assert np.abs(resid).max() < 1e-4 * b_peak
+    # model i2d: A comes from the satstar model, B from the catalog PSF
+    sm = _model_with_star(E2E_SHAPE, *E2E_A)
+    assert model[_peak_px(E2E_A)] == pytest.approx(sm[_peak_px(E2E_A)], rel=1e-5)
+    assert (model[_peak_px(E2E_B)] - sm[_peak_px(E2E_B)]
+            == pytest.approx(b_peak, rel=1e-4))
+    out = capsys.readouterr().out
+    assert 'satstar cover test = accepted (accepted fit of the frame within 3.86 px)' in out
+    assert ('rendering 1 saturated stars NOT covered by this frame\'s satstar '
+            'model' in out)
+    assert '1 of them sit on satstar-model flux > 10' in out
+
+
+@pytest.mark.filterwarnings(
+    'ignore::jwst_gc_pipeline.frame_wcs.MissingGwcsWarning')
+@pytest.mark.parametrize('cover_mode', [None, 'model'])
+def test_e2e_model_rule_leaves_the_neighbour_wing_star_in_the_residual(
+        tmp_path, monkeypatch, capsys, cover_mode):
+    """The default (and explicit ``model``) render keeps the old rule: A's
+    wing covers B, so neither channel subtracts B in this frame."""
+    calls, resid, model = _run_e2e(tmp_path, monkeypatch, cover_mode)
+    b_peak = _b_peak()
+    assert calls == [[E2E_C]]
+    assert resid[_peak_px(E2E_B)] == pytest.approx(b_peak, rel=1e-4)
+    assert np.abs(resid[_peak_px(E2E_C)]) < 1e-4 * b_peak
+    assert np.abs(resid[_peak_px(E2E_A)]) < 1e-2 * b_peak
+    out = capsys.readouterr().out
+    assert 'satstar cover test = model' in out
+    assert 'NOT covered by this frame' not in out
