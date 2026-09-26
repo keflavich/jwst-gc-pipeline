@@ -665,6 +665,33 @@ def main(filtername, Observations=None, regionname='brick',
                            'subtract': True,
                            'skymethod': 'match',
                            'match_down': False}
+        # skymethod='match' estimates each frame's sky separately inside an
+        # overlap; in half-dark-cloud/half-nebula fields (10678 o078, o114,
+        # o071, o066) those estimates land on different peaks of the bimodal
+        # pixel distribution and skymatch applied up to 130 MJy/sr between
+        # frames that agree to <2 MJy/sr.  outlier_detection then flagged
+        # 41-65% of pixels -> black patches in the mosaics.  Default: per-frame
+        # levels from pixel-wise frame differences (miri_skymatch), passed as
+        # skymethod='user'.  MIRI_SKYMATCH=match restores the jwst estimator.
+        if (not marshall_tuning
+                and os.getenv('MIRI_SKYMATCH', 'pairwise') == 'pairwise'
+                and len(asn_data['products'][0]['members']) > 1):
+            from jwst_gc_pipeline.reduction.miri_skymatch import (
+                pairwise_sky_levels, write_skylist)
+            _asn_dir = os.path.dirname(os.path.abspath(asn_file_each))
+            _sky_files = [os.path.join(_asn_dir, m['expname'])
+                          for m in asn_data['products'][0]['members']]
+            _levels, _pairs = pairwise_sky_levels(_sky_files)
+            _skylist = asn_file_each.replace('_asn.json', '_skylist.txt')
+            write_skylist(_sky_files, _levels, _skylist)
+            print(f"Pairwise sky levels ({len(_pairs)} overlapping pairs, "
+                  f"max |resid| "
+                  f"{max((abs(p[4]) for p in _pairs), default=0):.2f}): "
+                  f"{np.round(_levels, 2).tolist()} -> {_skylist}")
+            skymatch_params = {'save_results': True,
+                               'subtract': True,
+                               'skymethod': 'user',
+                               'skylist': _skylist}
         outlier_params = {'snr': '30.0 25.0',
                           'good_bits': "SATURATED, JUMP_DET"}
         if marshall_tuning:
