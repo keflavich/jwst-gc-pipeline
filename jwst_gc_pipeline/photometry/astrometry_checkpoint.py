@@ -81,7 +81,8 @@ from .visit_consensus import (
     # found the same way the restriction that created it was.
     _mutual_match_mask,
 )
-from .astrometry_offsets import measure_offset, local_residual_map
+from .astrometry_offsets import (measure_offset, local_residual_map,
+                                 DEFAULT_SIGMA_CAP_MAS)
 from .consensus_catalog import (pool_visit_consensi,
                                  write_filter_consensus)
 from ..atomic_io import atomic_write, keep_a_copy, locked
@@ -539,7 +540,11 @@ def _sigma_cut_kwargs(refcat):
     if not ref_sigma_cut_enabled() or refcat is None:
         return dict(ref_sigma_pred_mas=None, ref_sigma_cap_mas=None)
     cap_raw = os.environ.get(REF_SIGMA_CAP_ENV, "").strip()
-    cap = float(cap_raw) if cap_raw else None
+    # `_positive_env_float` validates (positive, finite, a real number) the
+    # same way every other operator-facing knob in this module does; the
+    # `DEFAULT_SIGMA_CAP_MAS` passed as its `default` is never returned here,
+    # since this branch only runs when `cap_raw` is non-empty.
+    cap = _positive_env_float(REF_SIGMA_CAP_ENV, DEFAULT_SIGMA_CAP_MAS) if cap_raw else None
     return dict(ref_sigma_pred_mas=refcat.get("sigma_pred_mas"),
                ref_sigma_cap_mas=cap)
 

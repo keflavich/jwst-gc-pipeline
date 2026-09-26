@@ -74,6 +74,21 @@ def test_weighted_median_recovers_plain_median_with_equal_weights():
     assert np.isclose(weighted_median(v, w), np.median(v))
 
 
+def test_weighted_median_even_count_tie_break_matches_np_median():
+    """Blocker (round 3): the odd-count test above never lands the cumulative
+    weight exactly on the half-total boundary, so it cannot see the even-count
+    tie-break at all -- that boundary case "currently survives disabling"
+    (removing the ``np.isclose(cum[idx], half)`` branch and always returning
+    the lower straddling value passed the rest of the suite).  Two equally
+    weighted values must average, exactly like ``np.median`` averages the two
+    middle elements of an even-length array: not the lower value 0.0 an
+    unbroken "first index reaching half" rule would return.
+    """
+    assert weighted_median(np.array([0.0, 10.0]), np.array([1.0, 1.0])) == 5.0
+    assert weighted_median(np.array([0.0, 10.0]), np.array([1.0, 1.0])) == \
+        np.median(np.array([0.0, 10.0]))
+
+
 def test_weighted_median_downweights_high_sigma_outlier():
     # four good stars near 0, one wild outlier with a huge sigma (tiny weight)
     v = np.array([0.5, -0.5, 1.0, -1.0, 500.0])

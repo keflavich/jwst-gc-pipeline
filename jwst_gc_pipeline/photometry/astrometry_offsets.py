@@ -1241,7 +1241,8 @@ def _connected_cells(entries):
 
 def _region_coverage_scan(keys, n_src, got_by_cell, rate, min_stars,
                           coverage_fraction, by):
-    """Split source cells into UNCOVERED / STARVED / TESTABLE for one pair count.
+    """Split source cells into UNCOVERED / STARVED / TESTABLE / DROPPED for one
+    pair count.
 
     ``rate`` is the field's OWN pairs-per-source for the statistic named by
     ``by``, so the test is always relative to what this field/reference pair
@@ -1252,8 +1253,22 @@ def _region_coverage_scan(keys, n_src, got_by_cell, rate, min_stars,
     judged on its own; it is returned as STARVED when it also lost the pairs it
     did predict, so the caller can test a contiguous GROUP of such cells against
     the same bar (a 20" displacement never fills a 45" cell -- #667 review).
+
+    DROPPED (issue #965 follow-up review, round 3) is the fourth case a cell can
+    land in: ``expected >= min_stars`` (there is no reason to doubt this cell
+    could be judged) and it is not "lost" by the ``coverage_fraction`` bar
+    (``got > coverage_fraction * expected`` -- most of the predicted pairs are
+    actually there), but ``got`` itself still falls short of ``min_stars``, so
+    ``local_residual_map`` never turned it into a residual cell.  Before this
+    fix such a cell fell through every bucket above: not UNCOVERED (it was not
+    "lost" enough), not STARVED/TESTABLE (``expected`` was never below
+    ``min_stars``) -- it simply vanished from the verdict, the same silent-drop
+    class as the o084 hidden-seam bug this map's ``sigma_b_mas`` cut can now
+    trigger directly: cutting even a modest fraction of a cell's pairs can push
+    a cell from "just above ``min_stars``" to "just below" while leaving
+    ``coverage_fraction * expected`` easily cleared.
     """
-    uncovered, starved, untestable = [], [], []
+    uncovered, starved, untestable, dropped = [], [], [], []
     for (kx, ky), n_a in zip(keys, n_src):
         expected = float(n_a) * rate
         got = int(got_by_cell.get((int(kx), int(ky)), 0))
@@ -1264,7 +1279,9 @@ def _region_coverage_scan(keys, n_src, got_by_cell, rate, min_stars,
             (starved if lost else untestable).append(entry)
         elif lost:
             uncovered.append(entry)
-    return uncovered, starved, untestable
+        elif got < min_stars:
+            dropped.append(entry)
+    return uncovered, starved, untestable, dropped
 
 
 def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_ARCSEC,
@@ -1351,6 +1368,17 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
       Whole-field displacement never reaches this map at all: ``global_result``
       must already be a verified small tie.
 
+      ``skipped`` also carries a cell that had PLENTY of predicted pairs
+      (``expected >= min_stars``) and was not "lost" by the coverage_fraction
+      bar, but whose actual ``got`` pairs still fell short of ``min_stars`` --
+      most often because ``sigma_b_mas`` cut enough of them.  Before this fix
+      such a cell fell through every bucket silently (not uncovered, not
+      starved/untestable, not in ``cells``) -- the same silent-drop class as
+      the hidden-seam bug, from the opposite direction (the cell VANISHES
+      rather than reading falsely clean).  Tagged ``reason="dropped_by_cut"``
+      and counted separately in ``n_dropped_by_cut`` so it is distinguishable
+      from an ordinary too-sparse-to-test skip.
+
     ``global_result`` is a ``measure_offset`` result and carries the same
     preconditions as :func:`local_residual_map` (ok, not swept, offset well
     inside the match radius) -- ``GlobalTieNotVerifiedError`` propagates, and a
@@ -1379,7 +1407,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     -------
     dict
         ``dict(cells, n_cells, n_measured, n_flagged, n_uncovered,
-        uncovered_cells, n_skipped, skipped_expected_pairs, n_pairs,
+        uncovered_cells, n_skipped, n_dropped_by_cut, skipped_expected_pairs, n_pairs,
         n_tight_pairs, coverage_rate_all, coverage_rate_tight,
         tight_pair_mas, worst_off_mas, worst_sig_off_mas, bulk_dra_mas,
         bulk_ddec_mas, measurable, clean, reason, tol_mas, tol_source, tol_k,
@@ -1430,7 +1458,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     if len(cells) < min_cells:
         return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                     n_flagged=0, n_uncovered=0, uncovered_cells=[],
-                    n_skipped=0, skipped_expected_pairs=0.0,
+                    n_skipped=0, n_dropped_by_cut=0, skipped_expected_pairs=0.0,
                     worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
                     measurable=False, clean=False,
                     reason=(lrm.get("reason") or
@@ -1520,10 +1548,10 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     # SPARSE reference, where the region keeps nothing.  A cell that neither
     # arm can predict `min_stars` pairs for got no verdict at all and is
     # reported in `n_skipped`.
-    unc_tight, starved_tight, _untestable_tight = _region_coverage_scan(
+    unc_tight, starved_tight, _untestable_tight, dropped_tight = _region_coverage_scan(
         keys, n_src, got_tight, rate_tight, min_stars, coverage_fraction,
         "tight-pairs")
-    unc_all, starved_all, untestable_all = _region_coverage_scan(
+    unc_all, starved_all, untestable_all, dropped_all = _region_coverage_scan(
         keys, n_src, got_all, rate_all, min_stars, coverage_fraction,
         "all-pairs")
     uncovered, seen = [], set()
@@ -1553,6 +1581,21 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
             uncovered.append(dict(cells=group, n_cells=len(group), by=comp[0]["by"],
                                   n_sources=int(sum(c["n_sources"] for c in comp)),
                                   n_pairs=got_sum, expected_pairs=exp_sum))
+    # DROPPED (round 3 follow-up): `expected >= min_stars` and not "lost" by
+    # the coverage_fraction bar, but `got` itself still falls short of
+    # `min_stars` -- the cell that used to fall through every bucket above
+    # (see `_region_coverage_scan`'s docstring).  Deduped the same way as
+    # `uncovered` (tight arm first), and explicitly reasoned so it reads as
+    # "checked, but the cut removed too much to measure" rather than as an
+    # ordinary too-sparse-to-test skip.
+    dropped, seen_dropped = [], set()
+    for entry in dropped_tight + dropped_all:
+        key = (entry["ix"], entry["iy"])
+        if key not in seen_dropped:
+            seen_dropped.add(key)
+            entry = dict(entry, reason="dropped_by_cut")
+            dropped.append(entry)
+
     # Cells no arm could judge: too few sources for either rate to predict
     # `min_stars` pairs, and not lost enough to enter a starved group.  Named,
     # because `clean=True` over a field with silently skipped cells is not the
@@ -1561,7 +1604,12 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     # pairs for is beyond the tight arm too.)
     judged = {(c["ix"], c["iy"]) for c in unc_tight + unc_all}
     judged |= {(c["ix"], c["iy"]) for c in starved_tight + starved_all}
+    judged |= {(c["ix"], c["iy"]) for c in dropped}
     skipped = [c for c in untestable_all if (c["ix"], c["iy"]) not in judged]
+    for c in skipped:
+        c.setdefault("reason", "too_few_sources_to_predict_min_stars")
+    n_dropped_by_cut = len(dropped)
+    skipped = skipped + dropped
 
     flagged = [c for c in cells if c["flagged"]]
     sig = [c for c in cells if c["significant"]]
@@ -1587,6 +1635,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                 n_flagged=len(flagged), n_uncovered=len(uncovered),
                 uncovered_cells=uncovered, worst_off_mas=worst,
                 n_skipped=len(skipped),
+                n_dropped_by_cut=n_dropped_by_cut,
                 skipped_expected_pairs=float(sum(c["expected_pairs"]
                                                  for c in skipped)),
                 worst_sig_off_mas=max((c["resid_off_mas"] for c in sig),

@@ -14,7 +14,7 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    local_residual_map, DEFAULT_SIGMA_CAP_MAS)
+    local_residual_map, same_star_region_map, DEFAULT_SIGMA_CAP_MAS)
 
 RA0, DEC0 = 266.60, -28.50
 COSD = float(np.cos(np.radians(DEC0)))
@@ -164,6 +164,57 @@ def test_n_pairs_reports_the_post_cut_count_not_the_pre_cut_total():
     assert out["n_sigma_cut"] == 8, out
     assert out["n_pairs"] == 12, out       # NOT 20: the pre-cut total
     assert out["n_pairs"] == n - out["n_sigma_cut"], out
+
+
+def test_a_cell_dropped_below_min_stars_by_the_cut_is_reported_not_silently_lost():
+    """Round-3 follow-up review, blocker 2: a cell whose SOURCE count predicts
+    plenty of pairs (``expected >= min_stars``) and which is not "lost" by the
+    ``coverage_fraction`` bar (``got > coverage_fraction * expected``) but whose
+    actual matched-pair count still falls short of ``min_stars`` used to fall
+    through EVERY bucket in ``same_star_region_map``'s coverage scan: not
+    ``uncovered`` (not lost enough), not ``starved``/``untestable`` (its
+    ``expected`` was never below ``min_stars``), and it can't become a
+    residual ``cells`` entry either (too few surviving pairs) -- it simply
+    vanished from the verdict.  This is the same silent-drop class as the
+    hidden-seam bug, and the sigma cut widens it directly: cutting enough of
+    one cell's pairs pushes it from "well above min_stars" to "just below"
+    while its coverage fraction stays comfortably clear.
+
+    Four cells (ix=0..3) get 80 well-measured, un-cut pairs each (``cells``
+    entries).  A fifth (ix=4) has 100 sources but 65 of its 100 pairs carry a
+    sigma over the cap and are cut, leaving 35 -- above the coverage_fraction
+    floor (~25) but below ``min_stars`` (40).  It must be reported via
+    ``n_dropped_by_cut``/``n_skipped``, not silently dropped.
+    """
+    rng = np.random.RandomState(11)
+    cell = 100.0
+    xs, ys, sigmas = [], [], []
+    for ix in range(4):
+        n = 80
+        xs.append(ix * cell + rng.uniform(-40, 40, n))
+        ys.append(rng.uniform(-40, 40, n))
+        sigmas.append(np.full(n, 10.0))
+    n_t = 100
+    xs.append(4 * cell + rng.uniform(-40, 40, n_t))
+    ys.append(rng.uniform(-40, 40, n_t))
+    sigmas.append(np.concatenate([np.full(65, 150.0), np.full(35, 10.0)]))
+
+    x = np.concatenate(xs)
+    y = np.concatenate(ys)
+    sigma = np.concatenate(sigmas)
+    dra_noise = rng.randn(len(x)) * 5.0 / 1000.0
+    ddec_noise = rng.randn(len(x)) * 5.0 / 1000.0
+    a = _sky(x, y)
+    b = _sky(x + dra_noise, y + ddec_noise)
+
+    m = same_star_region_map(a, b, _tie(), cell_arcsec=cell, min_stars=40,
+                             min_cells=1, sigma_b_mas=sigma,
+                             context="dropped-by-cut")
+    assert m["n_cells"] == 4, m           # the target cell never becomes a `cells` entry
+    assert m["n_dropped_by_cut"] == 1, m  # ...but it must be counted explicitly
+    assert m["n_skipped"] >= 1, m         # ...and show up in the skipped total
+    assert m["n_sigma_cut"] == 65, m
+    assert m["n_uncovered"] == 0, m       # it is NOT "lost" -- that would be a different bug
 
 
 def test_returned_pairs_are_filtered_by_the_sigma_cut():
