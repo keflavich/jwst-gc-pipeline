@@ -3422,6 +3422,24 @@ def _mergedcat_satstar_cover_mode(filtername=None):
     return mode
 
 
+def _mergedcat_satstar_cover_radius_fwhm():
+    """``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM``: the ``accepted`` cover radius
+    in FWHM.  Unset or blank gives 1.5, like the empty-means-default rule of
+    ``MERGEDCAT_SATSTAR_COVER``; a value that is not a finite number > 0
+    raises ``ValueError`` (0, negative or NaN would silently cover nothing)."""
+    raw = os.environ.get('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', '')
+    if not raw.strip():
+        return 1.5
+    try:
+        radius = float(raw)
+    except ValueError:
+        radius = np.nan
+    if not (np.isfinite(radius) and radius > 0):
+        raise ValueError(f"MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM={raw!r}: "
+                         f"expected a finite number > 0")
+    return radius
+
+
 def _load_frame_satstar_cover(fitter_in, sat_suffix, cover_mode):
     """The satstar model subtracted from one frame's render base and, under
     ``cover_mode == 'accepted'``, the accepted-fit positions of the SAME
@@ -3677,7 +3695,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     _cover_mode = _mergedcat_satstar_cover_mode(filtername)
     _cover_radius_px = None
     if _cover_mode == 'accepted':
-        _cover_radius_px = (float(os.environ.get('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', 1.5))
+        _cover_radius_px = (_mergedcat_satstar_cover_radius_fwhm()
                             * float(_fwhm_pix if _fwhm_pix else 2.0))
     print(f"mergedcat: satstar cover test = {_cover_mode}"
           + (f" (accepted fit of the frame within {_cover_radius_px:.2f} px)"

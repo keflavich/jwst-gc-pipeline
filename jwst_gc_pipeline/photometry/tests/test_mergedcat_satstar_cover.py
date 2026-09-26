@@ -19,6 +19,7 @@ from astropy.table import Table
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     _load_frame_satstar_cover,
     _mergedcat_satstar_cover_mode,
+    _mergedcat_satstar_cover_radius_fwhm,
     _satstar_render_covered,
     _uncovered_satstar_rows,
 )
@@ -106,6 +107,22 @@ def test_miri_gate_still_rejects_a_malformed_value(monkeypatch):
     monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', 'acepted')
     with pytest.raises(ValueError):
         _mergedcat_satstar_cover_mode('F770W')
+
+
+def test_cover_radius_env(monkeypatch):
+    monkeypatch.delenv('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', raising=False)
+    assert _mergedcat_satstar_cover_radius_fwhm() == 1.5
+    monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', ' ')
+    assert _mergedcat_satstar_cover_radius_fwhm() == 1.5   # blank = default
+    monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', '2.25')
+    assert _mergedcat_satstar_cover_radius_fwhm() == 2.25
+
+
+@pytest.mark.parametrize('value', ['wide', '0', '-1', 'nan', 'inf'])
+def test_cover_radius_rejects_a_value_that_covers_nothing(monkeypatch, value):
+    monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', value)
+    with pytest.raises(ValueError, match='MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM'):
+        _mergedcat_satstar_cover_radius_fwhm()
 
 
 # --- the render's row selection ---------------------------------------------
