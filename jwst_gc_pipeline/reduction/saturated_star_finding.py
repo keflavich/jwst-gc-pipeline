@@ -878,9 +878,14 @@ def _env_switch(name, default, env=None):
 
 def _zeroframe_fit_enabled(env=None):
     """``SATSTAR_ZEROFRAME_FIT`` (default ON): anchor the satstar fit on the
-    ramp first read wherever a sibling ``_ramp.fits`` exists."""
-    env = os.environ if env is None else env
-    return env.get('SATSTAR_ZEROFRAME_FIT', '1') not in ('0', 'false', 'False')
+    ramp first read wherever a sibling ``_ramp.fits`` exists.
+
+    Parsed by ``_env_switch`` like the #972 switches.  The earlier reader
+    turned the anchor off only for ``0``/``false``/``False``, so ``off``,
+    ``no`` or ``FALSE`` left it ON; it also feeds the satstar cache key
+    (``satstar_fit_switch_signature``), so a misread value keyed the cache on
+    the wrong state as well."""
+    return _env_switch('SATSTAR_ZEROFRAME_FIT', True, env)
 
 
 def satstar_fit_switches(env=None):
@@ -891,7 +896,8 @@ def satstar_fit_switches(env=None):
 
     * ``SATSTAR_ZF_RCURVE_GUARD`` (default ON) and ``SATSTAR_ZF_RCURVE_MAXSTEP``
       (1.3): truncate the R(g0) calibration curve at the first bin-to-bin
-      change larger than MAXSTEP (see ``zeroframe_recover_saturated``).
+      change larger than MAXSTEP, up or down (see
+      ``zeroframe_recover_saturated``).
     * ``SATSTAR_ZF_KEEP_FINITE`` (default OFF): SATURATED pixels with a finite,
       nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
@@ -989,8 +995,9 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     (non-DQ-flagged) dilation buffer a pixel is only rewritten if it is actually
     inflated (cal > R*group0*(1+infl_tol)), leaving clean pixels untouched.
 
-    The R(g0) curve is truncated at the first bin-to-bin step larger than
-    ``SATSTAR_ZF_RCURVE_MAXSTEP`` (``SATSTAR_ZF_RCURVE_GUARD``, default ON).
+    The R(g0) curve is truncated at the first bin-to-bin step, up or down,
+    larger than ``SATSTAR_ZF_RCURVE_MAXSTEP`` (``SATSTAR_ZF_RCURVE_GUARD``,
+    default ON).
     Every measured curve is logged (faint-bin R, bright-end R, R used), with a
     WARNING when the R used at the bright end is below half the faint-bin R.
     ``SATSTAR_ZF_KEEP_FINITE`` (default OFF) leaves SATURATED pixels that have
@@ -1101,7 +1108,12 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
             # range), so truncate the curve at the first bin that departs from
             # the previous one by more than SATSTAR_ZF_RCURVE_MAXSTEP in
             # either direction (np.interp then extrapolates flat from the last
-            # trustworthy bin).
+            # trustworthy bin).  Upward too: on the o111 F480M (6 frames) and
+            # F212N nrcb2/nrcb3 (7 frames) curves the largest bin-to-bin rise
+            # in the kept, star-pixel part is 1.008x (the largest drop is
+            # 1.18x, F480M bin 3->4); rises above 1.3x occur only between
+            # junk bins (up to 1.54x), and a hot bin would otherwise set a
+            # bright-end R several times too high.
             if len(_ctr) >= 2 and _guard_on:
                 _maxstep = _sw['rcurve_maxstep']
                 _kept = 1

@@ -116,6 +116,51 @@ def test_signature_follows_whether_the_anchor_runs(tmp_path, monkeypatch):
         fn, deblend_with_zeroframe=True) == 'zfg1.3'
 
 
+@pytest.mark.parametrize('value, on', [
+    ('0', False), ('false', False), ('False', False), ('FALSE', False),
+    ('off', False), ('no', False), (' Off ', False), ('1', True),
+    ('true', True), ('on', True), ('YES', True), ('', True), ('  ', True)])
+def test_zeroframe_fit_switch_spellings(tmp_path, monkeypatch, value, on):
+    """SATSTAR_ZEROFRAME_FIT is parsed like the #972 switches.  Before, only
+    0/false/False turned it off, so 'off', 'no' and 'FALSE' left the anchor
+    ON and keyed the cache as if it were on (pre-existing, found in review)."""
+    fn = _frame(tmp_path, with_ramp=True)
+    monkeypatch.setenv('SATSTAR_ZEROFRAME_FIT', value)
+    assert SSF._zeroframe_fit_enabled() is on
+    assert satstar_fit_switch_signature(fn) == ('zfg1.3' if on else '')
+
+
+def test_zeroframe_fit_switch_typo_raises(tmp_path, monkeypatch):
+    fn = _frame(tmp_path, with_ramp=True)
+    monkeypatch.setenv('SATSTAR_ZEROFRAME_FIT', 'of')
+    with pytest.raises(ValueError, match='SATSTAR_ZEROFRAME_FIT'):
+        satstar_fit_switch_signature(fn)
+
+
+@pytest.mark.parametrize('value, loads', [
+    (None, True), ('1', True), ('off', False), ('no', False), ('FALSE', False)])
+def test_remove_saturated_stars_honours_zeroframe_fit_off(tmp_path, monkeypatch,
+                                                         value, loads):
+    """The writer reads the same switch: with it off, no first read is handed
+    to the fitter."""
+    fn = _frame(tmp_path, with_ramp=False)
+    for attr in ('satstar_wingcal_measurements', 'satstar_rejected',
+                 'satstar_model', 'satstar_resid', 'satstar_flagimg'):
+        monkeypatch.delattr(builtins, attr, raising=False)
+    if value is not None:
+        monkeypatch.setenv('SATSTAR_ZEROFRAME_FIT', value)
+    seen = {}
+    monkeypatch.setattr(SSF, '_find_zeroframe_for',
+                        lambda filename: np.ones((8, 8)))
+
+    def _fit(fh, **kw):
+        seen.update(kw)
+        return Table({'flux_fit': [1.0]})
+    monkeypatch.setattr(SSF, 'get_saturated_stars', _fit)
+    SSF.remove_saturated_stars(fn, recovery_signature='off')
+    assert ('zeroframe' in seen) is loads
+
+
 def test_signature_keys_the_local_qfit_with_or_without_a_ramp(tmp_path,
                                                               monkeypatch):
     fn = _frame(tmp_path, with_ramp=False)

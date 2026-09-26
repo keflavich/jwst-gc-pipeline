@@ -45,11 +45,11 @@ def _edges(ceiling=0.9 * 48000.0):
 
 
 def _scene(real_bins=range(5), junk_bins=(5, 6, 7), junk_dq=JUMPBIT,
-           n_per_bin=30):
+           n_per_bin=30, r_junk=R_JUNK):
     """Dark frame, one saturated star (core at the group-0 rail, SAT rim at
     g0=25000 inside bin 6), n_per_bin real calibration pixels (R_TRUE) in each
-    of ``real_bins`` and n_per_bin junk pixels (R_JUNK, DQ=junk_dq) in each of
-    ``junk_bins``."""
+    of ``real_bins`` and n_per_bin junk pixels (``r_junk``, DQ=junk_dq) in each
+    of ``junk_bins``."""
     ny, nx = 160, 160
     rng = np.random.default_rng(3)
     g0 = rng.normal(10, 3, (ny, nx))
@@ -66,7 +66,7 @@ def _scene(real_bins=range(5), junk_bins=(5, 6, 7), junk_dq=JUMPBIT,
             data[row, cols] = vals * R_TRUE
         elif k in junk_bins:
             g0[row, cols] = vals
-            data[row, cols] = vals * R_JUNK
+            data[row, cols] = vals * r_junk
             dq[row, cols] = junk_dq
     yy, xx = np.mgrid[0:ny, 0:nx]
     rr = np.hypot(xx - 60, yy - 60)
@@ -154,6 +154,35 @@ def test_step_guard_catches_unflagged_junk():
     data, dq, g0, core, rim = _scene(junk_dq=0)
     _, _, _, R = zeroframe_recover_saturated(data, dq, g0)
     assert abs(R / R_TRUE - 1) < 0.02
+
+
+@pytest.mark.parametrize('junk_dq', [JUMPBIT, 0])
+def test_step_guard_catches_an_upward_hot_bin(junk_dq, capsys):
+    """The guard truncates on a RISE as well as a drop.  One hot bin (bin 5,
+    R = 10x R_TRUE; bins 6-7 empty) above five real bins: without the upward
+    check the curve's last bin sets the bright-end R and the rim (g0=25000,
+    beyond bin 5) is rewritten 10x too high.  On the o111 F480M and F212N
+    curves the largest rise inside the kept star-pixel bins is 1.008x."""
+    data, dq, g0, core, rim = _scene(junk_bins=(5,), junk_dq=junk_dq,
+                                     r_junk=10 * R_TRUE)
+    rec, rim_mask, deep, R = zeroframe_recover_saturated(data, dq, g0)
+    out = capsys.readouterr().out
+    assert abs(R / R_TRUE - 1) < 0.02
+    assert rim_mask[rim].all()
+    assert np.allclose(rec[rim], R_TRUE * 25000.0, rtol=0.02)
+    assert 'truncated R(g0) curve at bin 5/6' in out
+
+
+@pytest.mark.parametrize('factor, truncated', [
+    (1.25, False), (1 / 1.25, False), (1.35, True), (1 / 1.35, True)])
+def test_step_threshold_is_the_same_up_and_down(factor, truncated):
+    """MAXSTEP (1.3) applies symmetrically: a last bin at 1.25x or 1/1.25x
+    the one before it is kept, 1.35x or 1/1.35x is cut."""
+    data, dq, g0, core, rim = _scene(junk_bins=(5,), junk_dq=0,
+                                     r_junk=factor * R_TRUE)
+    _, _, _, R = zeroframe_recover_saturated(data, dq, g0)
+    expected = R_TRUE if truncated else factor * R_TRUE
+    assert abs(R / expected - 1) < 0.02
 
 
 def test_maxstep_is_configurable(monkeypatch):
