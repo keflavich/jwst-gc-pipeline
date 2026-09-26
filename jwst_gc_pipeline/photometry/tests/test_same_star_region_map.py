@@ -25,7 +25,7 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    measure_offset, same_star_region_map)
+    measure_offset, same_star_region_map, DEFAULT_REGION_CELL_ARCSEC)
 from jwst_gc_pipeline.photometry import visit_consensus as _vc
 from jwst_gc_pipeline.photometry.visit_consensus import measure_reference_tie
 
@@ -309,3 +309,104 @@ def test_reference_tie_falls_back_to_the_histogram_grid_when_regions_are_starved
     assert tie["per_tile_source"] == "histogram-grid"
     assert tie["per_tile_ok"] is False
     assert tie["apply_ok"] is False
+
+
+def test_hidden_seam_the_sigma_cut_must_not_erase_a_flagged_cell():
+    """issue #965 follow-up review, blocker 3 ("hidden seams", BLOCKING).
+
+    A synthetic 3x3 grid, 80 matched pairs per 45" cell.  The CENTER cell is
+    shifted 40 mas in RA (well inside the 0.3" match radius, well above the
+    adaptive tolerance floor) and its reference stars carry an inflated
+    predicted sigma (120 mas, over the 100 mas default cap); every other cell
+    is unshifted with a low sigma (10 mas, never cut).
+
+    Without the sigma cut, the shifted cell is flagged and the field is not
+    clean -- this is the region map doing its ordinary job.
+
+    With the cut ON, the shifted cell's 80 pairs lose the ones whose sigma
+    exceeds the cap, its surviving pair count drops under
+    ``DEFAULT_REGION_MIN_STARS`` (40), and the cell falls out of ``cells``.
+    Before the ``local_residual_map`` "return_pairs" fix, the coverage arm
+    also counted from the PRE-cut pair set, so the emptied cell still read as
+    fully covered and the seam disappeared from the verdict entirely
+    (``clean=True``) -- this is the exact way the previous "o084 resolved"
+    reading came about: the cell was dropped by the cut, not fixed.  The
+    fixed code must show the shifted cell as uncovered (or keep it flagged);
+    it must never let a sigma-cut-emptied seam read as clean.
+    """
+    cell = float(DEFAULT_REGION_CELL_ARCSEC)
+    n_per_cell = 80
+    rng = np.random.RandomState(7)
+    tie_mas = (12.0, -6.0)
+    shift_cell = (1, 1)   # center of the 3x3 grid (ix, iy) in {0, 1, 2}
+    x_common, y_common, x_ref, y_ref, sigma_ref = [], [], [], [], []
+    for cx in range(3):
+        for cy in range(3):
+            x0 = (cx - 1) * cell
+            y0 = (cy - 1) * cell
+            x = x0 + (rng.rand(n_per_cell) - 0.5) * (cell * 0.6)
+            y = y0 + (rng.rand(n_per_cell) - 0.5) * (cell * 0.6)
+            if (cx, cy) == shift_cell:
+                rx = x + rng.randn(n_per_cell) * 5.0 / 1000.0 + 40.0 / 1000.0
+                ry = y + rng.randn(n_per_cell) * 5.0 / 1000.0
+                sig = np.full(n_per_cell, 120.0)
+            else:
+                rx = x + rng.randn(n_per_cell) * 5.0 / 1000.0
+                ry = y + rng.randn(n_per_cell) * 5.0 / 1000.0
+                sig = np.full(n_per_cell, 10.0)
+            x_common.append(x); y_common.append(y)
+            x_ref.append(rx); y_ref.append(ry)
+            sigma_ref.append(sig)
+    x = np.concatenate(x_common); y = np.concatenate(y_common)
+    rx = np.concatenate(x_ref); ry = np.concatenate(y_ref)
+    sigma_ref = np.concatenate(sigma_ref)
+    a = _sky(x - tie_mas[0] / 1000.0, y - tie_mas[1] / 1000.0)
+    ref = _sky(rx, ry)
+    gr = _tie(a, ref)
+
+    m_off = same_star_region_map(a, ref, gr, cell_arcsec=cell,
+                                 context="hidden-seam-off")
+    assert m_off["measurable"] is True, m_off["reason"]
+    assert m_off["n_cells"] == 9, m_off
+    assert m_off["clean"] is False, m_off
+    assert m_off["n_flagged"] >= 1, m_off
+
+    m_on = same_star_region_map(a, ref, gr, cell_arcsec=cell,
+                                sigma_b_mas=sigma_ref, context="hidden-seam-on")
+    assert m_on["n_sigma_cut"] > 0, m_on
+    # The cut must actually empty the shifted cell in this synthetic case --
+    # otherwise this test would not be exercising the hidden-seam path at all.
+    assert m_on["n_cells"] == 8, m_on
+    # The seam must not vanish from the verdict: it must read as uncovered (or
+    # stay flagged), and the field must never read clean.
+    assert m_on["clean"] is False, m_on
+    assert (m_on["n_uncovered"] >= 1 or m_on["n_flagged"] >= 1), m_on
+
+
+def test_measure_reference_tie_passes_sigma_through_to_the_region_map(monkeypatch):
+    """Mutant (d), issue #965 follow-up review: if ``measure_reference_tie``'s
+    ``sigma_b_mas=ref_sigma_pred_mas`` pass-through to ``same_star_region_map``
+    were replaced by ``None``, the region map would silently ignore a refcat's
+    sigma column even when the caller supplied one -- no exception, no wrong
+    answer visible without instrumentation.  Spy on the REAL call (delegate to
+    it, just record what it was given) rather than replacing its behaviour.
+    """
+    x, y, ref = _field()
+    a = _sky(x, y)
+    real_map = same_star_region_map
+    calls = []
+
+    def _spy(*args, **kwargs):
+        calls.append(kwargs.get("sigma_b_mas"))
+        return real_map(*args, **kwargs)
+
+    monkeypatch.setattr(_vc, "same_star_region_map", _spy)
+    sigma = np.full(len(ref), 15.0)
+    tie = measure_reference_tie(a, ref, ref[::40], dense=True,
+                                ref_sigma_pred_mas=sigma,
+                                context="sigma-passthrough")
+    assert len(calls) == 1
+    assert calls[0] is not None
+    np.testing.assert_array_equal(calls[0], sigma)
+    assert tie["per_tile_same_star"] is not None
+    assert tie["per_tile_same_star"]["sigma_cap_mas"] is not None

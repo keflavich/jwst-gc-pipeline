@@ -79,10 +79,17 @@ def sigma_pred_mas(sigma_pos_ra_mas, sigma_pos_dec_mas,
 
 def weighted_median(values, weights):
     """A robust weighted median: the value at which the cumulative weight
-    first reaches half the total.  Falls back to the plain median when every
-    weight is non-finite or non-positive (so a caller can pass an
-    all-NaN-sigma weight array -- the "no per-star sigma known" case -- and
-    get today's unweighted behaviour rather than a crash or a silent NaN).
+    first reaches half the total, with a plain-median TIE-BREAK when it lands
+    EXACTLY on that boundary -- average the two straddling values, the way
+    ``np.median`` averages the two middle elements of an even-length array.
+    Uniform weights therefore reproduce ``np.median`` exactly for both odd and
+    even counts: ``weighted_median([0, 10], [1, 1]) == 5.0``, not the lower
+    value 0.0 an unbroken "first index reaching half" rule would return.
+
+    Falls back to the plain median when every weight is non-finite or
+    non-positive (so a caller can pass an all-NaN-sigma weight array -- the
+    "no per-star sigma known" case -- and get today's unweighted behaviour
+    rather than a crash or a silent NaN).
 
     Not a NN-median astrometric measurement: this operates on residuals a
     sanctioned matched-pair estimator already produced, not on raw
@@ -97,9 +104,12 @@ def weighted_median(values, weights):
     order = np.argsort(v)
     v, w = v[order], w[order]
     cum = np.cumsum(w)
-    half = 0.5 * cum[-1]
+    total = cum[-1]
+    half = 0.5 * total
     idx = int(np.searchsorted(cum, half))
     idx = min(idx, len(v) - 1)
+    if idx + 1 < len(v) and np.isclose(cum[idx], half, rtol=1e-9, atol=1e-9 * total):
+        return float(0.5 * (v[idx] + v[idx + 1]))
     return float(v[idx])
 
 

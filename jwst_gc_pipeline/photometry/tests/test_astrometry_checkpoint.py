@@ -693,6 +693,39 @@ def test_blend_cut_needs_a_pre_tie_under_100_mas(monkeypatch, pre_off, runs):
     assert summary["run"] is runs
 
 
+def test_exclude_blended_references_keeps_sigma_row_aligned(monkeypatch):
+    """Mutant (a), issue #965 follow-up review: if the ``sigma_pred_mas``
+    subset in ``_exclude_blended_references`` were replaced by a no-op
+    (``pass``), the returned sigma array would stay the FULL pre-exclusion
+    array while ``out["all"]`` shrank -- every row after the first exclusion
+    would then read some OTHER star's sigma.  Build a refcat of 4 distinct
+    reference stars with distinct, identifiable sigma values, exclude a row
+    that PRECEDES two later rows, and assert each later row keeps its OWN
+    sigma rather than its neighbour's.
+    """
+    ref_coords = SkyCoord(ra=[RA0, RA0 + 1e-4, RA0 + 2e-4, RA0 + 3e-4] * u.deg,
+                          dec=[DEC0] * 4 * u.deg, frame="icrs")
+    sigma = np.array([11.0, 22.0, 33.0, 44.0])   # distinct, identifiable per-row
+
+    def _fake_offset(a, b, **kw):
+        return dict(ok=True, swept=False, off=5.0, dra=1.0, ddec=1.0)
+
+    def _fake_mask(ref_all, cats, dra_mas, ddec_mas):
+        # exclude row 1 -- a row that PRECEDES rows 2 and 3
+        mask = np.array([False, True, False, False])
+        return mask, dict(n_seen=4, n_excluded=1)
+
+    monkeypatch.setattr(_ac, "measure_offset", _fake_offset)
+    monkeypatch.setattr(_ac, "blended_reference_mask", _fake_mask)
+    refcat = dict(all=ref_coords, mag=None, sigma_pred_mas=sigma, sparse=None)
+    out, info = _ac._exclude_blended_references(
+        ref_coords, refcat, [_tiny_visit_table()], "test")
+    assert info["run"] is True and info["n_excluded"] == 1
+    assert len(out["all"]) == 3
+    assert len(out["sigma_pred_mas"]) == 3
+    assert list(out["sigma_pred_mas"]) == [11.0, 33.0, 44.0]
+
+
 def test_frozen_stage_moved_tie_raises(tmp_path, monkeypatch):
     """m2 froze the tie at (10, 0); the solution then MOVED to (20, 0) ->
     delta 10 > tol -> AstrometryRegressionError (the real regression)."""

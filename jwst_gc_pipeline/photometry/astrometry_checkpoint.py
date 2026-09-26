@@ -505,6 +505,45 @@ def _positive_env_float(name, default):
     return val
 
 
+#: Opt-in gate (issue #965 follow-up review): the predicted-reference-sigma
+#: cut/weight (``ref_sigma_pred_mas`` / ``ref_sigma_cap_mas`` on
+#: ``measure_reference_tie``) is OFF by default for every checkpoint tie, even
+#: when the refcat carries a ``sigma_pred_mas`` column.  Measured on o075,
+#: o077 and o087 (2026-09, see the PR body's per-tile table), turning it on
+#: moves the worst-cell reading -- sometimes down, sometimes up, and on o084 by
+#: emptying the flagged cell below ``min_stars`` rather than fixing it, which
+#: is a regression the checkpoint gate must not adopt silently.  Turning this
+#: on is the maintainer's decision, made explicitly per-run, not a new
+#: default: set ``REF_SIGMA_CUT_ENABLE=1``.  Named and tested like
+#: ``ALLOW_UNVERIFIED_ENV``/``WARN_ONLY_ENV`` above.
+REF_SIGMA_CUT_ENV = "REF_SIGMA_CUT_ENABLE"
+#: Optional override of the sigma cap (mas) applied when the cut is enabled;
+#: unset keeps ``astrometry_offsets.DEFAULT_SIGMA_CAP_MAS``.
+REF_SIGMA_CAP_ENV = "REF_SIGMA_CAP_MAS"
+
+
+def ref_sigma_cut_enabled():
+    """Whether the predicted-reference-sigma cut/weight is turned on for this run."""
+    return _env_flag(REF_SIGMA_CUT_ENV)
+
+
+def _sigma_cut_kwargs(refcat):
+    """``measure_reference_tie`` kwargs for the predicted-reference-sigma cut.
+
+    OFF by default (``ref_sigma_cut_enabled()`` false): returns
+    ``ref_sigma_pred_mas=None, ref_sigma_cap_mas=None`` unconditionally, so a
+    refcat's ``sigma_pred_mas`` column changes nothing about the tie unless an
+    operator opts in -- byte-for-byte the pre-#965 call at every one of this
+    module's ``measure_reference_tie`` call sites.
+    """
+    if not ref_sigma_cut_enabled() or refcat is None:
+        return dict(ref_sigma_pred_mas=None, ref_sigma_cap_mas=None)
+    cap_raw = os.environ.get(REF_SIGMA_CAP_ENV, "").strip()
+    cap = float(cap_raw) if cap_raw else None
+    return dict(ref_sigma_pred_mas=refcat.get("sigma_pred_mas"),
+               ref_sigma_cap_mas=cap)
+
+
 def _is_bulk_correction(corr):
     """A per-visit bulk consensus->reference tie carries no exposure AND no
     module (see BULK_EXPOSURE / BULK_MODULE); anything else is per-exposure."""
@@ -3936,7 +3975,7 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
             filtername=filtername,
             consensus_mag=(np.asarray(mag)[keep] if mag is not None else None),
             ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
-            ref_sigma_pred_mas=refcat.get("sigma_pred_mas"),
+            **_sigma_cut_kwargs(refcat),
             context=f"{context} [{label} re-measured on shared stars]")
         if not _tie_signed_off(tie, label, info):
             return None, info
@@ -4477,7 +4516,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 tie_coords, tie_refcat["all"], tie_refcat["sparse"],
                 filtername=filt, consensus_mag=tie_mag,
                 ref_mag=tie_refcat.get("mag"), dense=tie_refcat.get("dense", True),
-                ref_sigma_pred_mas=tie_refcat.get("sigma_pred_mas"),
+                **_sigma_cut_kwargs(tie_refcat),
                 context=vctx)
             off = ref_tie["off_mas"]
             # ACTIONABLE = the current measurement is large enough to be worth
@@ -4969,7 +5008,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
             anchor_coords, refcat["all"], refcat["sparse"],
             filtername=anchor_filter, ref_mag=refcat.get("mag"),
             dense=refcat.get("dense", True),
-            ref_sigma_pred_mas=refcat.get("sigma_pred_mas"),
+            **_sigma_cut_kwargs(refcat),
             context=f"{context} anchor {anchor_filter}")
 
     filters = []

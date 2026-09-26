@@ -147,4 +147,41 @@ def test_a_cell_can_drop_below_min_stars_after_the_cut():
                              min_stars=5, tol_mas=float("inf"),
                              sigma_b_mas=sigma)
     assert cut["n_cells"] == 0, cut       # 4 kept < min_stars=5: cell vanishes
-    assert cut["n_sigma_cut"] == 4, cut
+
+
+def test_n_pairs_reports_the_post_cut_count_not_the_pre_cut_total():
+    """Mutant: ``n_pairs`` silently reporting ``len(ib_n)`` (every unambiguous
+    pair, before the sigma cut) rather than ``keep.sum()`` (what actually fed a
+    cell's statistic) would pass every other test in this file -- none of them
+    reads ``n_pairs`` on a run where the cut removes some but not all pairs.
+    """
+    n = 20
+    dra = np.zeros(n)
+    sigma = np.where(np.arange(n) < 8, 200.0, 10.0)  # 8 over cap, 12 under
+    out = local_residual_map(*_field(dra), _tie(), cell_arcsec=100.0,
+                             min_stars=5, tol_mas=float("inf"),
+                             sigma_b_mas=sigma)
+    assert out["n_sigma_cut"] == 8, out
+    assert out["n_pairs"] == 12, out       # NOT 20: the pre-cut total
+    assert out["n_pairs"] == n - out["n_sigma_cut"], out
+
+
+def test_returned_pairs_are_filtered_by_the_sigma_cut():
+    """Mutant / hidden-seam regression (issue #965 follow-up review): a caller
+    such as ``same_star_region_map``'s coverage arm reads ``out["pairs"]`` to
+    count matched pairs PER CELL.  If that array were the PRE-cut pair set, a
+    cell the cut empties below ``min_stars`` would still show its full
+    pre-cut pair count here and never read as uncovered -- the seam this cell
+    might hide would simply vanish from the verdict.  Every one of the five
+    arrays in ``out["pairs"]`` must be trimmed to the SAME kept pairs as the
+    cell statistics, and their length must equal ``n_pairs``.
+    """
+    n = 20
+    dra = np.zeros(n)
+    sigma = np.where(np.arange(n) < 8, 200.0, 10.0)  # 8 over cap, 12 under
+    out = local_residual_map(*_field(dra), _tie(), cell_arcsec=100.0,
+                             min_stars=5, tol_mas=float("inf"),
+                             sigma_b_mas=sigma, return_pairs=True)
+    pairs = out["pairs"]
+    for key in ("ia", "ib", "ix", "iy", "resid_mas"):
+        assert len(pairs[key]) == out["n_pairs"] == 12, (key, out)

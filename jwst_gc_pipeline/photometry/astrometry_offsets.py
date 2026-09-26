@@ -1133,8 +1133,20 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         # `resid_mas` is the pair separation AFTER the verified global tie is
         # removed -- the distance from where this star should be, not from
         # where the frame happens to sit.
-        out["pairs"] = dict(ia=ia_n, ib=ib_n, ix=ix, iy=iy,
-                            resid_mas=np.hypot(dra, ddec))
+        #
+        # Filtered by `keep` (issue #965 follow-up, "hidden seam"): a caller
+        # such as `same_star_region_map`'s coverage arm counts matched pairs
+        # PER CELL against the source catalog to decide whether a cell is
+        # "covered".  If this returned the pre-sigma-cut pair set, a cell the
+        # cut empties below `min_stars` (and which therefore silently drops
+        # out of `cells` above) would still show its full PRE-cut pair count
+        # here and read as fully covered -- the cell does not get flagged, it
+        # just vanishes from the verdict, and the field can read `clean=True`
+        # with a real seam hiding inside the emptied cell.  `keep` is
+        # all-True when `sigma_b_mas=None`, so this is a no-op for every
+        # caller that does not pass a sigma cut.
+        out["pairs"] = dict(ia=ia_n[keep], ib=ib_n[keep], ix=ix[keep], iy=iy[keep],
+                            resid_mas=np.hypot(dra, ddec)[keep])
     return out
 
 
