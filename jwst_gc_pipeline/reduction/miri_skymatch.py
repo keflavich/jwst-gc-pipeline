@@ -20,6 +20,7 @@ cancels.  The per-frame levels come from a least-squares solve over all
 overlapping pairs and go to skymatch as ``skymethod='user'``.
 """
 import os
+import warnings
 
 import numpy as np
 from astropy.io import fits
@@ -47,7 +48,10 @@ def _bin(grid, bin_factor):
         return grid
     ny = grid.shape[0] // bin_factor * bin_factor
     nx = grid.shape[1] // bin_factor * bin_factor
-    return block_reduce(grid[:ny, :nx], bin_factor, func=np.nanmedian)
+    with warnings.catch_warnings():
+        # bins entirely off-footprint or DNU are expected to be all-NaN
+        warnings.filterwarnings('ignore', 'All-NaN slice', RuntimeWarning)
+        return block_reduce(grid[:ny, :nx], bin_factor, func=np.nanmedian)
 
 
 def pairwise_sky_levels(files, bin_factor=4, min_overlap=200):
@@ -72,7 +76,9 @@ def pairwise_sky_levels(files, bin_factor=4, min_overlap=200):
     levels : ndarray
         One level per file, in skymatch's ``match_down=False`` convention:
         the highest is 0 and the rest are <= 0, so subtracting them raises
-        the fainter frames to the brightest.
+        the fainter frames to the brightest.  Each group of frames connected
+        by overlaps is zeroed separately (with a warning when there is more
+        than one); a frame that overlaps nothing gets 0.
     pairs : list of tuple
         ``(i, j, npix, median(frame_i - frame_j), post-solve residual)``.
     """
@@ -100,18 +106,47 @@ def pairwise_sky_levels(files, bin_factor=4, min_overlap=200):
     if not rows:
         return np.zeros(n), []
 
-    # x_i - x_j = d_ij, weighted by sqrt(npix), plus sum(x) = 0 to pin the
-    # otherwise free additive constant
-    A = np.zeros((len(rows) + 1, n))
-    y = np.zeros(len(rows) + 1)
-    w = np.ones(len(rows) + 1)
-    for k, (i, j, npix, d) in enumerate(rows):
-        A[k, i], A[k, j], y[k], w[k] = 1.0, -1.0, d, np.sqrt(npix)
-    A[-1, :] = 1.0
-    w[-1] = w[:-1].max()
-    x, *_ = np.linalg.lstsq(A * w[:, None], y * w, rcond=None)
-    resid = y[:-1] - A[:-1] @ x
-    levels = x - x.max()
+    # Frames linked by overlaps form connected components.  Offsets between
+    # components are unconstrained, so each component is solved and zeroed on
+    # its own; an isolated frame gets level 0.
+    parent = list(range(n))
+
+    def root(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for i, j, _, _ in rows:
+        parent[root(i)] = root(j)
+    components = {}
+    for k in range(n):
+        components.setdefault(root(k), []).append(k)
+    if len(components) > 1:
+        warnings.warn(f"{len(components)} disconnected overlap groups among "
+                      f"{n} frames; sky levels are zeroed per group",
+                      UserWarning)
+
+    levels = np.zeros(n)
+    resid = np.zeros(len(rows))
+    for members in components.values():
+        if len(members) < 2:
+            continue
+        col = {k: c for c, k in enumerate(members)}
+        krows = [k for k, (i, _, _, _) in enumerate(rows) if i in col]
+        # x_i - x_j = d_ij, weighted by sqrt(npix), plus sum(x) = 0 to pin
+        # the otherwise free additive constant
+        A = np.zeros((len(krows) + 1, len(members)))
+        y = np.zeros(len(krows) + 1)
+        w = np.ones(len(krows) + 1)
+        for r, k in enumerate(krows):
+            i, j, npix, d = rows[k]
+            A[r, col[i]], A[r, col[j]], y[r], w[r] = 1.0, -1.0, d, np.sqrt(npix)
+        A[-1, :] = 1.0
+        w[-1] = w[:-1].max()
+        x, *_ = np.linalg.lstsq(A * w[:, None], y * w, rcond=None)
+        resid[krows] = y[:-1] - A[:-1] @ x
+        levels[members] = x - x.max()
     pairs = [(i, j, npix, d, float(r))
              for (i, j, npix, d), r in zip(rows, resid)]
     return levels, pairs

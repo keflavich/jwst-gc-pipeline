@@ -33,13 +33,16 @@ def _scene():
     return sky
 
 
-def _write_frame(path, sky, x0, offset, bad_frac, seed, width=200):
+def _write_frame(path, sky, x0, offset, bad_frac, seed, width=200,
+                 dnu_block=None):
     """Cut a width-wide frame starting at sky column x0, add a sky offset and
     DNU-flag a random pixel subset (differing masks between frames)."""
     rng = np.random.default_rng(seed)
     data = sky[:, x0:x0 + width] + offset + rng.normal(0, 0.5, (SKY_NY, width))
     dq = np.zeros(data.shape, dtype=np.uint32)
     dq[rng.random(data.shape) < bad_frac] = DNU_BIT
+    if dnu_block is not None:
+        dq[dnu_block] = DNU_BIT
     # masked pixels carry garbage, which must be ignored
     data[dq > 0] = 1e4
     w = WCS(naxis=2)
@@ -78,6 +81,38 @@ def test_disjoint_frames_get_zero_levels(tmp_path):
     levels, pairs = pairwise_sky_levels(files, bin_factor=2, min_overlap=50)
     assert pairs == []
     np.testing.assert_array_equal(levels, 0.0)
+
+
+def test_disconnected_groups_are_zeroed_separately(tmp_path):
+    sky = _scene()
+    # (a, b) overlap each other and nothing else; so do (c, d); e is alone
+    spec = [(0, 0.0), (40, -7.0), (250, 5.0), (290, 11.0)]
+    files = [_write_frame(tmp_path / f'g{k}.fits', sky, x0, off, 0.0, k,
+                          width=70) for k, (x0, off) in enumerate(spec)]
+    with pytest.warns(UserWarning, match='disconnected'):
+        levels, pairs = pairwise_sky_levels(files, bin_factor=2,
+                                            min_overlap=20)
+    assert len(pairs) == 2
+    np.testing.assert_allclose(levels, [0.0, -7.0, -6.0, 0.0], atol=0.5)
+
+    files.append(_write_frame(tmp_path / 'lone.fits', sky, 150, 40.0, 0.0, 9,
+                              width=30))
+    with pytest.warns(UserWarning, match='disconnected'):
+        levels, _ = pairwise_sky_levels(files[:2] + files[4:], bin_factor=2,
+                                        min_overlap=20)
+    np.testing.assert_allclose(levels, [0.0, -7.0, 0.0], atol=0.5)
+
+
+def test_dnu_block_inside_overlap_is_ignored(tmp_path):
+    sky = _scene()
+    # frame b carries garbage (1e4) in a solid DNU block inside the overlap;
+    # without the mask the pair median would be dominated by it
+    block = (slice(0, 150), slice(0, 100))
+    files = [_write_frame(tmp_path / 'a.fits', sky, 40, 0.0, 0.0, 1),
+             _write_frame(tmp_path / 'b.fits', sky, 100, -7.0, 0.0, 2,
+                          dnu_block=block)]
+    levels, _ = pairwise_sky_levels(files, bin_factor=2, min_overlap=50)
+    np.testing.assert_allclose(levels, [0.0, -7.0], atol=0.5)
 
 
 def test_skylist_rows_match_jwst_stem_convention(tmp_path):
