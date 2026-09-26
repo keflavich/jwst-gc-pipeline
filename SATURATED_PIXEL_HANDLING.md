@@ -379,11 +379,15 @@ these flag sets would remove the footgun of setting them individually.)*
   an off-FOV star scatter wider than the 0.15″ dedup). In-field rows follow
   `_infield_dedup_settings`: NIRCam reads `SATSTAR_INFIELD_DEDUP` — `cofit`
   (default; collapse only rows that no per-exposure satstar run fit side by side,
-  `_never_cofit_duplicates`), `none` (keep all), or `legacy` (1.0″
+  `_never_cofit_duplicates`; every collapsed set has all its pairs within 1.0″
+  and never co-fit), `none` (keep all), or `legacy` (1.0″
   friends-of-friends over every row, which deleted distinct stars, #972). MIRI and
   NIRISS read `SATSTAR_INFIELD_DEDUP_MIRI` / `SATSTAR_INFIELD_DEDUP_NIRISS`
-  (default `legacy`; the co-fit rule is unvalidated there). The
-  extended-emission targets always collapse off-FOV rows only.
+  (default `legacy`; the co-fit rule is unvalidated there). The instrument is
+  the data i2d's (or first frame's) `INSTRUME` header when that says MIRI or
+  NIRISS, else the module token / `GC_INSTRUMENT_OVERRIDE` / filter name.
+  `run_manual_pipeline` rejects a bad value of any of the three variables at
+  entry. The extended-emission targets always collapse off-FOV rows only.
 - **Products**: `*_satstar_{catalog,model,residual,flags}.fits`. The flags image
   is a uint8 bitmask — bit 1 partly saturated (recoverable), bit 2 totally
   saturated (NaN-variance core), bit 4 included in an accepted satstar fit.
