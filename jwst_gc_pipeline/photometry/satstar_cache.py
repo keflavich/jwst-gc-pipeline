@@ -155,7 +155,7 @@ def satstar_content_key(filename, *, path_prefix, use_merged_psf_for_merged=Fals
                         forced_grid_search_radius=5, flux_overrides=None,
                         flux_drops=None, oversub_clamp_percentile=10.0,
                         seed_gate_image=None, deblend_with_zeroframe=False,
-                        env=None):
+                        env=None, fit_switch_signature=None):
     """Digest of everything that determines this frame's satstar fit.
 
     Two runs with the same key would run the identical fitter over the identical
@@ -221,6 +221,14 @@ def satstar_content_key(filename, *, path_prefix, use_merged_psf_for_merged=Fals
 
     for name, value in keyed_env(env):
         h.update(f'env:{name}={value};'.encode())
+
+    # The env keying above sees a switch only when it is SET, so a changed
+    # DEFAULT (the ZEROFRAME R-curve guard became default-on, issue #972) is
+    # invisible to it.  ``satstar_fit_switch_signature`` resolves the
+    # defaults; it is '' for configurations that fit as before, and only a
+    # non-empty value is fed so every existing key stays valid.
+    if fit_switch_signature:
+        h.update(f'fit_switches={fit_switch_signature!r};'.encode())
 
     return h.hexdigest()
 

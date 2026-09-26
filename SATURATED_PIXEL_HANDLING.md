@@ -472,6 +472,10 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_COMPONENT_OVERLAP_FRAC` / `…_MIN_PX` | (see code) / 250 | merge overlapping saturated components |
 | `SATSTAR_WINGCAL` | 1 | wing self-calibration (`apply_wing_selfcal`) |
 | `SATSTAR_ZEROFRAME_FIT` | 1 | fit using the ZEROFRAME where available |
+| `SATSTAR_ZF_RCURVE_GUARD` / `…_MAXSTEP` | 1 (**on**) / 1.3 | truncate the ZEROFRAME R(g0) curve at the first bin-to-bin step larger than MAXSTEP; 0 restores the untruncated curve, which collapses on F480M (#972) |
+| `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
+| `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
+| `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 1.0 | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits are judged on it |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
 | `SATSTAR_REPLACE_RADIUS_ARCSEC` | (see code) | satstar→daophot replacement radius |
@@ -482,6 +486,11 @@ consolidated catalog silently goes stale again the next time a frame moves.
 The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table above
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
+
+The four `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows are read
+by `satstar_fit_switches`, and the per-exposure satstar cache is keyed on them
+(meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
+one refits the cached catalogs it affects.
 
 ---
 
