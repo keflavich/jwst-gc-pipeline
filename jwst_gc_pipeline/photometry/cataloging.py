@@ -3701,7 +3701,8 @@ def _run_one_frame_manual(args):
 
 
 def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
-                            dedup_arcsec=1.0, match_arcsec=0.1):
+                            dedup_arcsec=1.0, match_arcsec=0.1,
+                            return_keeper=False):
     """Which in-field satstar rows are same-star duplicates of a better row.
 
     Two ``replaced_saturated`` rows within ``dedup_arcsec`` are treated as ONE
@@ -3710,21 +3711,40 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
     frame at one phase), at most one of the two has a fit within
     ``min(match_arcsec, sep/2)``.  A star whose truncated fit at a detector
     edge lands 0.2-0.8" from its proper fit in the other frames has no such
-    frame and is collapsed.
+    frame and is collapsed.  Such a pair is a LINK.
 
-    Survivors are chosen greedily by per-exposure support (``support``, e.g.
-    ``satstar_nframes``) and then flux, so the best-measured member of a
-    duplicate set is the one kept -- not the member nearest the median flux,
-    which in a two-member set is simply the first row.
+    Duplicate sets are built by complete linkage, nearest link first: links
+    are taken in order of increasing separation, and two sets merge only
+    when EVERY pair across them is a link.  So every set is a clique of
+    links: no two of its rows were ever fit side by side, and no two are
+    more than ``dedup_arcsec`` apart.  Each set then keeps one row, chosen by
+    per-exposure support (``support``, e.g. ``satstar_nframes``) and then
+    flux, so the best-measured member is the one kept -- not the member
+    nearest the median flux, which in a two-member set is simply the first
+    row.  Support decides only the survivor, never which rows share a set.
 
-    The co-fit test is PAIRWISE: two rows that one run fits side by side are
-    never collapsed onto each other, but both can still be dropped in favour
-    of a third row that lies within ``dedup_arcsec`` of each, is never co-fit
-    with either, and has more support.  Example: two stars 0.6" apart that
-    one exposure resolves, plus a blended fit at their midpoint in three
-    other exposures, collapse to the midpoint row
-    (``test_cofit_pair_can_collapse_to_a_better_supported_midpoint``).  The
-    legacy 1.0" friends-of-friends collapses that case too.
+    Worked cases (A at 0", B at 0.75", C at 1.6"; A-B and B-C within 1.0",
+    A-C not; B has the most support):
+
+    * A and C fit side by side in one run: A-B is the nearest link, so A and
+      B form a set; C is co-fit with A, cannot join it, and is kept.  B and
+      C remain.
+    * No run fits any two of them: the same sets, B and C remain.  A and C
+      were never compared (they are 1.6" apart), so they share no set.
+    * A, B and C co-fit with each other: nothing is linked, all three kept.
+
+    Growing sets in support order instead of by separation goes wrong on
+    o111 F212N m6 (#975 review): a row 0.7" from a bright star, co-fit with
+    a duplicate fit 0.2" from the star, would join the star's set first,
+    keeping the 0.2" duplicate and dropping the co-fit star.  Nearest link
+    first puts the duplicate with the star and keeps the co-fit star.
+
+    A blended fit at the midpoint of two stars that one run resolves (A, B
+    0.6" apart and co-fit; M between them with more support) keeps M and
+    whichever of A/B is farther from M: the rows that remain are a blend
+    plus one of its components, so that component's flux is counted twice
+    in that area.  The legacy 1.0" friends-of-friends keeps a single row
+    there.
 
     With no runs at all every pair within ``dedup_arcsec`` counts as never
     co-fit, which is the legacy collapse; :func:`_clean_offfov_dups_and_offfield`
@@ -3741,22 +3761,26 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
         One entry per per-exposure satstar run (accepted + rejected rows).
     dedup_arcsec, match_arcsec : float
         Pair radius and per-exposure match radius (arcsec).
+    return_keeper : bool
+        Also return, per row, the index of the kept row whose set it joined
+        (its own index when kept).
 
     Returns
     -------
     ndarray of bool
-        True for rows to drop.
+        True for rows to drop.  With ``return_keeper``, ``(drop, keeper)``.
     """
     from astropy.coordinates import search_around_sky
     n = len(sc)
     drop = np.zeros(n, bool)
+    keeper = np.arange(n)
     if n < 2:
-        return drop
+        return (drop, keeper) if return_keeper else drop
     i1, i2, sep, _ = search_around_sky(sc, sc, dedup_arcsec * u.arcsec)
     pair = i1 < i2
     i1, i2, sep = i1[pair], i2[pair], sep.arcsec[pair]
     if len(i1) == 0:
-        return drop
+        return (drop, keeper) if return_keeper else drop
     involved = np.unique(np.concatenate([i1, i2]))
     sc_inv = sc[involved]
     slot = np.full(n, -1)
@@ -3772,17 +3796,39 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
         cofit |= ((d[a] < r_pair) & (d[b] < r_pair) & (idx[a] != idx[b]))
     links = {}
     for a, b in zip(i1[~cofit], i2[~cofit]):
-        links.setdefault(int(a), []).append(int(b))
-        links.setdefault(int(b), []).append(int(a))
+        links.setdefault(int(a), set()).add(int(b))
+        links.setdefault(int(b), set()).add(int(a))
+    # complete linkage, nearest link first: merge two sets only when every
+    # pair across them is a link (within the radius and never co-fit)
+    root = {}                       # row -> parent row; absent = its own root
+    members = {}                    # root -> rows of its set (size > 1 only)
+
+    def _root(a):
+        while a in root:
+            a = root[a]
+        return a
+
+    for p in np.argsort(sep, kind='stable'):
+        if cofit[p]:
+            continue
+        ra, rb = _root(int(i1[p])), _root(int(i2[p]))
+        if ra == rb:
+            continue
+        ma, mb = members.get(ra, [ra]), members.get(rb, [rb])
+        if all(y in links[x] for x in ma for y in mb):
+            root[rb] = ra
+            members[ra] = ma + mb
+            members.pop(rb, None)
     sup = np.nan_to_num(np.asarray(support, dtype=float), nan=-np.inf)
     fl = np.nan_to_num(np.asarray(flux, dtype=float), nan=-np.inf)
-    kept = np.zeros(n, bool)
-    for k in np.lexsort((-fl, -sup)):
-        if any(kept[j] for j in links.get(int(k), ())):
-            drop[k] = True
-        else:
-            kept[k] = True
-    return drop
+    rank = np.empty(n, int)
+    rank[np.lexsort((-fl, -sup))] = np.arange(n)
+    for grp in members.values():
+        best = min(grp, key=rank.__getitem__)
+        for m in grp:
+            keeper[m] = best
+    drop = keeper != np.arange(n)
+    return (drop, keeper) if return_keeper else drop
 
 
 def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None):
@@ -3997,8 +4043,61 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
 #: :func:`_infield_dedup_settings`.
 _INFIELD_DEDUP_MODES = ('cofit', 'none', 'legacy')
 
+#: instrument -> (env var, default mode) for :func:`_infield_dedup_settings`.
+_INFIELD_DEDUP_ENVS = {'nircam': ('SATSTAR_INFIELD_DEDUP', 'cofit'),
+                       'miri': ('SATSTAR_INFIELD_DEDUP_MIRI', 'legacy'),
+                       'niriss': ('SATSTAR_INFIELD_DEDUP_NIRISS', 'legacy')}
 
-def _infield_dedup_settings(target, module, filt):
+
+def _infield_dedup_mode(env_name, default):
+    """Parse one ``SATSTAR_INFIELD_DEDUP*`` variable: empty -> ``default``,
+    case- and whitespace-insensitive, anything outside
+    ``_INFIELD_DEDUP_MODES`` raises ``ValueError``."""
+    mode = os.environ.get(env_name, '').strip().lower() or default
+    if mode not in _INFIELD_DEDUP_MODES:
+        raise ValueError(f"{env_name}={mode!r}; expected one of "
+                         f"{', '.join(repr(m) for m in _INFIELD_DEDUP_MODES)}")
+    return mode
+
+
+def _validate_infield_dedup_env():
+    """Parse every ``SATSTAR_INFIELD_DEDUP*`` variable, before any work.
+
+    :func:`_infield_dedup_settings` is first called at the post-merge cleanup,
+    after a phase's per-frame fits have run; ``run_manual_pipeline`` calls
+    this at entry so a bad value stops the run there instead.  All three
+    variables are checked, whichever instrument the run turns out to be,
+    because the instrument is only known per merge.  Returns
+    ``{env_name: mode}``.
+    """
+    return {env: _infield_dedup_mode(env, default)
+            for env, default in _INFIELD_DEDUP_ENVS.values()}
+
+
+def _instrument_from_headers(paths):
+    """Lowercase ``INSTRUME`` of the first primary header among ``paths``
+    that is readable and carries one, else None.
+
+    Used by :func:`_infield_dedup_settings`: the data i2d and the frames are
+    JWST products whose primary header names the instrument, which is the one
+    signal that tells NIRISS from NIRCam without ``GC_INSTRUMENT_OVERRIDE``
+    (their module tokens and filter names can coincide).
+    """
+    for path in paths:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            val = fits.getheader(path, 0).get('INSTRUME')
+        except (OSError, ValueError) as ex:
+            print(f"  instrument header unreadable in {os.path.basename(path)}: "
+                  f"{type(ex).__name__}: {ex}", flush=True)
+            continue
+        if val:
+            return str(val).strip().lower()
+    return None
+
+
+def _infield_dedup_settings(target, module, filt, header_instrument=None):
     """How the post-merge off-FOV cleanup treats IN-FIELD satstar rows.
 
     Returns ``(mode, env_name, dedup_offfov_only, use_cofit)`` for
@@ -4015,23 +4114,31 @@ def _infield_dedup_settings(target, module, filt):
     NIRISS read ``SATSTAR_INFIELD_DEDUP_MIRI`` / ``SATSTAR_INFIELD_DEDUP_NIRISS``
     (default ``'legacy'``, the behaviour before these switches): the co-fit
     rule was validated on NIRCam F480M/F212N only, and on gc-treasury F770W
-    o132 m6 it restores 5 rows the legacy collapse removes, unchecked.  The
-    instrument comes from :func:`_instrument_for_merge`.  An empty value means
-    the default; any other value outside ``_INFIELD_DEDUP_MODES`` raises.
+    o132 m6 it restores 5 rows the legacy collapse removes, unchecked.  An
+    empty value means the default; any other value outside
+    ``_INFIELD_DEDUP_MODES`` raises.
+
+    The instrument is ``header_instrument`` (the data's own ``INSTRUME``,
+    :func:`_instrument_from_headers`) when that names MIRI or NIRISS, and
+    otherwise :func:`_instrument_for_merge` (module token, then
+    ``GC_INSTRUMENT_OVERRIDE``, then the MIRI filter set).  The NIRCam path,
+    and with it the ``'cofit'`` default, is taken only when every available
+    signal says NIRCam.  A NIRISS run with a NIRCam-shaped module token
+    (``nrcb``, ``merged``) and no override is caught by its header; it still
+    reads as NIRCam only when no header could be read.
 
     The extended-emission targets (``_EXTENDED_EMISSION_TARGETS``) always get
     ``dedup_offfov_only=True`` with no co-fit positions, whatever the mode:
     the path they ran before these switches existed.
     """
     instrument = _instrument_for_merge(module, filt)
-    if instrument == 'nircam':
-        env_name, default = 'SATSTAR_INFIELD_DEDUP', 'cofit'
-    else:
-        env_name, default = f'SATSTAR_INFIELD_DEDUP_{instrument.upper()}', 'legacy'
-    mode = os.environ.get(env_name, '').strip().lower() or default
-    if mode not in _INFIELD_DEDUP_MODES:
-        raise ValueError(f"{env_name}={mode!r}; expected one of "
-                         f"{', '.join(repr(m) for m in _INFIELD_DEDUP_MODES)}")
+    header = (str(header_instrument).strip().lower()
+              if header_instrument else None)
+    if header in ('miri', 'niriss'):
+        instrument = header
+    env_name, default = _INFIELD_DEDUP_ENVS.get(
+        instrument, (f'SATSTAR_INFIELD_DEDUP_{instrument.upper()}', 'legacy'))
+    mode = _infield_dedup_mode(env_name, default)
     if str(target).lower() in _EXTENDED_EMISSION_TARGETS:
         return mode, env_name, True, False
     return mode, env_name, mode != 'legacy', mode == 'cofit'
@@ -6541,6 +6648,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     from astropy.coordinates import SkyCoord
     from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
 
+    # A bad SATSTAR_INFIELD_DEDUP* value would otherwise raise only at the
+    # first post-merge cleanup, after that phase's per-frame fits have run.
+    _validate_infield_dedup_env()
+
     cut_bp = _L._cutout_out_basepath(basepath, options)
     os.makedirs(os.path.join(cut_bp, 'catalogs'), exist_ok=True)
     pupil = 'clear'
@@ -7688,8 +7799,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # the old collapse unless SATSTAR_INFIELD_DEDUP_<INSTRUMENT>
                 # says otherwise, and the extended-emission targets (W51 IRS2)
                 # keep their off-FOV-only path.  See _infield_dedup_settings.
+                # The instrument is also read from the data i2d / first
+                # frame's INSTRUME, so a NIRISS run with a NIRCam-shaped
+                # module token and no GC_INSTRUMENT_OVERRIDE is not NIRCam.
+                _hdr_instrument = _instrument_from_headers(
+                    [_data_i2d_path(module, filt)]
+                    + list(frame_cache.get((module, filt), []))[:1])
                 (_infield_mode, _infield_env, _offfov_only,
-                 _want_cofit) = _infield_dedup_settings(target, module, filt)
+                 _want_cofit) = _infield_dedup_settings(
+                    target, module, filt, header_instrument=_hdr_instrument)
                 _cofit = None
                 if _want_cofit:
                     _cofit = _satstar_cofit_positions(
