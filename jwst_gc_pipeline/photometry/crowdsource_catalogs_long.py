@@ -3393,6 +3393,199 @@ def _run_frame_renders(overlapping_frames, render_fn, n_threads):
     return [render_fn(orig) for orig in overlapping_frames]
 
 
+def _mergedcat_satstar_cover_mode(filtername=None):
+    """``MERGEDCAT_SATSTAR_COVER``: how build_mergedcat_residuals decides that a
+    frame's satstar model already subtracts a replaced_saturated merged row.
+
+    ``model`` (default, unset or empty): the model-threshold test alone, i.e.
+    the frame's satstar model exceeds the cover threshold in the 7x7 box at the
+    row (the rule in use before this switch existed).
+
+    ``accepted`` (opt-in): the model-threshold test AND an accepted fit in the
+    frame's own satstar catalog within ``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM``
+    (default 1.5, the radius the daophot hand-off uses to leave a SATURATED
+    component to an accepted satstar) FWHM of the row.  Use it together with
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1``: that hand-off is what fits the stars
+    the frame's satstar pass rejected, and this rule is what renders them in
+    the merged-catalog residual instead of leaving them to a neighbour's wing.
+
+    MIRI always gets ``model`` (``filtername`` given): the daophot hand-off
+    skips MIRI, MIRI renders uncovered satstars through its own flat-top path,
+    and the ``accepted`` rule was measured on NIRCam F480M/F212N only.
+    """
+    mode = (os.environ.get('MERGEDCAT_SATSTAR_COVER', '') or 'model').strip().lower()
+    if mode not in ('accepted', 'model'):
+        raise ValueError(f"MERGEDCAT_SATSTAR_COVER={mode!r}: expected 'accepted' or 'model'")
+    if (mode == 'accepted' and filtername is not None
+            and _instrument_from_filter(filtername) == 'MIRI'):
+        return 'model'
+    return mode
+
+
+def _mergedcat_satstar_cover_radius_fwhm():
+    """``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM``: the ``accepted`` cover radius
+    in FWHM.  Unset or blank gives 1.5, like the empty-means-default rule of
+    ``MERGEDCAT_SATSTAR_COVER``; a value that is not a finite number > 0
+    raises ``ValueError`` (0, negative or NaN would silently cover nothing)."""
+    raw = os.environ.get('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', '')
+    if not raw.strip():
+        return 1.5
+    try:
+        radius = float(raw)
+    except ValueError:
+        radius = np.nan
+    if not (np.isfinite(radius) and radius > 0):
+        raise ValueError(f"MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM={raw!r}: "
+                         f"expected a finite number > 0")
+    return radius
+
+
+def _load_frame_satstar_cover(fitter_in, sat_suffix, cover_mode):
+    """The satstar model subtracted from one frame's render base and, under
+    ``cover_mode == 'accepted'``, the accepted-fit positions of the SAME
+    satstar pass.  Returns ``(satstar_sm, acc_xy)``.
+
+    Model: ``<frame><sfx>_extended_satstar_model.fits`` when it exists, else
+    ``<frame><sfx>_satstar_model.fits`` (the precedence
+    ``_prepare_frame_for_photometry`` uses when it subtracts the model).  An
+    existing but unreadable model is logged and not replaced by the other one.
+
+    Catalog: the one written with that model.  The extended catalog adds forced
+    fits at stars saturated in OTHER frames; reading the plain catalog next to
+    the extended model would mark those stars uncovered and render them on top
+    of the model.  So the extended model reads only
+    ``_extended_satstar_catalog.fits`` and the plain model only
+    ``_satstar_catalog.fits``.  A missing or unreadable catalog, or one without
+    ``xcentroid``/``ycentroid``, gives ``acc_xy=None``: that frame falls back
+    to the model-threshold test.  ``cover_mode == 'model'`` reads no catalog.
+    """
+    satstar_sm = None
+    acc_xy = None
+    model_path = None
+    for _smp in (fitter_in.replace('.fits', f'{sat_suffix}_extended_satstar_model.fits'),
+                 fitter_in.replace('.fits', f'{sat_suffix}_satstar_model.fits')):
+        if os.path.exists(_smp):
+            try:
+                _sm = fits.getdata(_smp).astype('float32')
+                satstar_sm = np.where(np.isfinite(_sm), _sm, 0.0)
+                model_path = _smp
+            except (OSError, ValueError) as _ex:
+                print(f"mergedcat: could not read satstar model {_smp}: {_ex}",
+                      flush=True)
+            break
+    if satstar_sm is None or cover_mode != 'accepted':
+        return satstar_sm, acc_xy
+    # accepted satstar fits of THIS frame (detector pixels on the model grid)
+    _scp = model_path[:-len('_satstar_model.fits')] + '_satstar_catalog.fits'
+    if not os.path.exists(_scp):
+        print(f"mergedcat: no {os.path.basename(_scp)} next to "
+              f"{os.path.basename(model_path)}; model-threshold cover test for "
+              f"this frame", flush=True)
+        return satstar_sm, acc_xy
+    try:
+        _sct = Table.read(_scp, format='fits')
+    except (OSError, ValueError) as _ex:
+        print(f"mergedcat: could not read satstar catalog {_scp}: {_ex}; "
+              f"model-threshold cover test for this frame", flush=True)
+        return satstar_sm, acc_xy
+    if 'xcentroid' in _sct.colnames and 'ycentroid' in _sct.colnames:
+        acc_xy = np.c_[np.asarray(_sct['xcentroid'], dtype=float),
+                       np.asarray(_sct['ycentroid'], dtype=float)]
+    else:
+        print(f"mergedcat: {os.path.basename(_scp)} has no xcentroid/ycentroid; "
+              f"model-threshold cover test for this frame", flush=True)
+    return satstar_sm, acc_xy
+
+
+def _satstar_render_covered(sx, sy, satstar_sm, cover_thresh=10.0, acc_xy=None,
+                            cover_radius_px=None, frame_shape=None):
+    """Per-frame 'covered' flags for replaced_saturated merged rows.
+
+    A covered row is left to the frame's satstar model (already subtracted from
+    the render base); an uncovered row is rendered from the merged catalog.
+    Exactly one of the two must subtract each star in each frame.
+
+    The model-threshold test alone (``acc_xy is None``) reads a covered flag
+    from ANY satstar model flux above ``cover_thresh`` in the 7x7 box, so the
+    wing of a bright accepted NEIGHBOUR marks a star covered in a frame whose
+    satstar pass rejected it and whose daophot hand-off fitted it instead.
+    Neither channel then subtracts it (o111 F480M m6 with the unaccepted-
+    SATURATED hand-off: 60 of 79 per-frame components that kept >50% of their
+    flux had a replaced_saturated vetted row, no accepted satstar within 2 px,
+    and a neighbour-wing model of ~10-130 at the position).  With ``acc_xy``
+    (the frame's accepted satstar positions, detector pixels) and
+    ``cover_radius_px``, a row is covered only when an accepted fit also lies
+    within that radius.
+
+    ``sx``/``sy`` are the rows' pixel positions on the satstar-model grid.
+    ``frame_shape`` (ny, nx) bounds the rounded position (default: the model's
+    shape); the render passes the frame's own shape, as the per-row loop this
+    replaced did.  Returns a boolean array.  No model -> nothing covered.
+    """
+    sx = np.atleast_1d(np.asarray(sx, dtype=float))
+    sy = np.atleast_1d(np.asarray(sy, dtype=float))
+    covered = np.zeros(len(sx), dtype=bool)
+    if satstar_sm is None or len(sx) == 0:
+        return covered
+    ny, nx = satstar_sm.shape if frame_shape is None else frame_shape
+    for k in range(len(sx)):
+        if not (np.isfinite(sx[k]) and np.isfinite(sy[k])):
+            continue
+        xi, yi = int(round(sx[k])), int(round(sy[k]))
+        if 0 <= xi < nx and 0 <= yi < ny:
+            sub = satstar_sm[max(0, yi - 3):yi + 4, max(0, xi - 3):xi + 4]
+            covered[k] = bool(np.isfinite(sub).any()
+                              and np.nanmax(sub) > cover_thresh)
+    if acc_xy is not None and cover_radius_px is not None:
+        acc_xy = np.asarray(acc_xy, dtype=float).reshape(-1, 2)
+        acc_xy = acc_xy[np.all(np.isfinite(acc_xy), axis=1)]
+        if len(acc_xy) == 0:
+            covered[:] = False
+        else:
+            fin = np.isfinite(sx) & np.isfinite(sy)
+            dist = np.full(len(sx), np.inf)
+            if fin.any():
+                dist[fin] = cKDTree(acc_xy).query(np.c_[sx[fin], sy[fin]])[0]
+            covered &= dist <= float(cover_radius_px)
+    return covered
+
+
+def _uncovered_satstar_rows(sxx, syy, sat_flux, satstar_sm, cover_thresh,
+                            shape, half_w, half_h, acc_xy=None,
+                            cover_radius_px=None):
+    """Indices of the replaced_saturated rows one frame must render itself.
+
+    A row is a candidate when its position and flux are finite and its render
+    stamp touches the frame; a candidate is rendered unless
+    ``_satstar_render_covered`` leaves it to the frame's satstar model.  With
+    ``acc_xy=None`` this is the model-threshold rule alone.  ``shape`` is the
+    frame's (ny, nx); ``half_w``/``half_h`` are the render stamp half-sizes.
+
+    Returns ``(render_idx, n_wing)``: indices into ``sxx``, and the number of
+    rendered rows that the model-threshold test alone would have called
+    covered (a neighbour's wing with no accepted fit of this frame nearby).
+    """
+    sxx = np.asarray(sxx, dtype=float)
+    syy = np.asarray(syy, dtype=float)
+    sat_flux = np.asarray(sat_flux, dtype=float)
+    ny, nx = shape
+    cand = (np.isfinite(sxx) & np.isfinite(syy) & np.isfinite(sat_flux)
+            & (sxx > -half_w) & (sxx < nx + half_w)
+            & (syy > -half_h) & (syy < ny + half_h))
+    cov_model = _satstar_render_covered(sxx[cand], syy[cand], satstar_sm,
+                                        cover_thresh, frame_shape=shape)
+    if acc_xy is not None:
+        cov = _satstar_render_covered(sxx[cand], syy[cand], satstar_sm,
+                                      cover_thresh, acc_xy=acc_xy,
+                                      cover_radius_px=cover_radius_px,
+                                      frame_shape=shape)
+    else:
+        cov = cov_model
+    render_idx = np.where(cand)[0][~cov]
+    n_wing = int(np.sum(cov_model & ~cov))
+    return render_idx, n_wing
+
+
 def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               proposal_id, field, module, options,
                               overlapping_frames, iteration_label, kinds,
@@ -3498,6 +3691,17 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # back into the MODEL mosaic for display (never the residual).
     sat_suffix = (_bgsub_token(options) + _iteration_token(satstar_label)
                   if satstar_label is not None else None)
+    # per-frame cover test for replaced_saturated rows (_satstar_render_covered)
+    _cover_mode = _mergedcat_satstar_cover_mode(filtername)
+    _cover_radius_px = None
+    if _cover_mode == 'accepted':
+        _cover_radius_px = (_mergedcat_satstar_cover_radius_fwhm()
+                            * float(_fwhm_pix if _fwhm_pix else 2.0))
+    print(f"mergedcat: satstar cover test = {_cover_mode}"
+          + (f" (accepted fit of the frame within {_cover_radius_px:.2f} px)"
+             if _cover_mode == 'accepted' else '')
+          + (f" (MERGEDCAT_SATSTAR_COVER=accepted is NIRCam-only; {filtername} is MIRI)"
+             if _cover_mode != _mergedcat_satstar_cover_mode() else ''), flush=True)
 
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
@@ -3522,6 +3726,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         # crop for cutout runs, the original frame full-frame), same pixel grid
         # as the per-frame residual/model
         satstar_sm = None
+        acc_xy = None
         if sat_suffix is not None:
             if getattr(options, 'cutout_region', ''):
                 _fitter_in = os.path.join(
@@ -3529,16 +3734,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                         '.fits', f"_cutout_{_cutout_label_for(options)}.fits"))
             else:
                 _fitter_in = orig
-            for _smp in (_fitter_in.replace('.fits', f'{sat_suffix}_extended_satstar_model.fits'),
-                         _fitter_in.replace('.fits', f'{sat_suffix}_satstar_model.fits')):
-                if os.path.exists(_smp):
-                    try:
-                        _sm = fits.getdata(_smp).astype('float32')
-                        satstar_sm = np.where(np.isfinite(_sm), _sm, 0.0)
-                    except (OSError, ValueError) as _ex:
-                        print(f"mergedcat: could not read satstar model {_smp}: {_ex}",
-                              flush=True)
-                    break
+            # under 'accepted', acc_xy = this frame's accepted satstar fits: a
+            # replaced_saturated row counts as covered only where the frame's
+            # own satstar pass fitted it (_satstar_render_covered)
+            satstar_sm, acc_xy = _load_frame_satstar_cover(
+                _fitter_in, sat_suffix, _cover_mode)
         # re-origin the spatially-varying PSF grid to cutout pixel coords
         shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
         rg = type(grid)(_NDData(np.asarray(grid.data),
@@ -3627,27 +3827,24 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             srx, sry, srf = [], [], []
             if len(sat_sc):
                 sxx, syy = ww.world_to_pixel(sat_sc)
-                for k in range(len(sat_sc)):
-                    sx, sy, sf = float(sxx[k]), float(syy[k]), float(sat_flux[k])
-                    if not (np.isfinite(sx) and np.isfinite(sy) and np.isfinite(sf)):
-                        continue
-                    if not (-half_w < sx < nx + half_w and -half_h < sy < ny + half_h):
-                        continue
-                    covered = False
-                    if satstar_sm is not None:
-                        xi, yi = int(round(sx)), int(round(sy))
-                        if 0 <= xi < nx and 0 <= yi < ny:
-                            sub = satstar_sm[max(0, yi - 3):yi + 4,
-                                             max(0, xi - 3):xi + 4]
-                            covered = (np.isfinite(sub).any()
-                                       and np.nanmax(sub) > satstar_cover_thresh)
-                    if not covered:
-                        srx.append(sx); sry.append(sy); srf.append(sf)
+                sxx = np.asarray(sxx, dtype=float)
+                syy = np.asarray(syy, dtype=float)
+                _ri, n_wing = _uncovered_satstar_rows(
+                    sxx, syy, sat_flux, satstar_sm, satstar_cover_thresh,
+                    (ny, nx), half_w, half_h, acc_xy=acc_xy,
+                    cover_radius_px=_cover_radius_px)
+                for k in _ri:
+                    srx.append(float(sxx[k])); sry.append(float(syy[k]))
+                    srf.append(float(sat_flux[k]))
                 if srx:
                     print(f"mergedcat {kind} {os.path.basename(orig)}: rendering "
                           f"{len(srx)} saturated stars NOT covered by this "
                           f"frame's satstar model (would otherwise stay in the "
-                          f"residual)", flush=True)
+                          f"residual)"
+                          + (f"; {n_wing} of them sit on satstar-model flux > "
+                             f"{satstar_cover_thresh:g} with no accepted fit of "
+                             f"this frame within {_cover_radius_px:.1f} px "
+                             f"(neighbour wing)" if n_wing else ''), flush=True)
             tbl = Table({'x_fit': np.asarray(rx, dtype=float),
                          'y_fit': np.asarray(ry, dtype=float),
                          'flux_fit': np.asarray(rf, dtype=float)})
