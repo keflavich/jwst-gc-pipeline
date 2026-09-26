@@ -85,6 +85,9 @@ from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.astrometry_utils import farr, prop
+from jwst_gc_pipeline.photometry.reference_uncertainty import (
+    sigma_pred_mas, SIGMA_PRED_COLUMN, SIGMA_POS_RA_COLUMN, SIGMA_POS_DEC_COLUMN,
+    SIGMA_PM_RA_COLUMN, SIGMA_PM_DEC_COLUMN)
 
 GAIA_EPOCH = 2016.0    # Gaia DR3 reference epoch
 VIRAC2_EPOCH = 2014.0  # VIRAC2 reference epoch (Smith+2025 II/387: fixed at 2014.0)
@@ -262,10 +265,23 @@ def wall_clock_bound(seconds, what, repeat=5.0):
         signal.signal(signal.SIGALRM, previous)
 
 
+#: II/387 (VIRAC2, Smith+2025) columns carrying the per-star position and
+#: proper-motion UNCERTAINTY (mas / mas yr^-1), queried alongside the position
+#: and PM themselves so ``build_refcat_table`` can propagate a predicted
+#: reference-position sigma to the observation epoch (issue #965 item 1,
+#: following #957: the m2 same-star region map flags 45" cells at a tolerance
+#: the reference's own per-star scatter can reach on its own, with no way to
+#: tell a well-measured VIRAC2 star from a poorly-measured one).  Verified by
+#: cone query against II/387/virac2 metadata (``Vizier(columns=['**'])``):
+#: ``e_RAJ2000``/``e_DEJ2000`` are in mas, ``e_pmRA``/``e_pmDE`` in mas/yr.
+VIRAC2_SIGMA_COLUMNS = ['e_RAJ2000', 'e_DEJ2000', 'e_pmRA', 'e_pmDE']
+
+
 def query_virac2(ra, dec, radius):
     from astroquery.vizier import Vizier
     Vizier.ROW_LIMIT = -1
-    Vizier.columns = ['RAJ2000', 'DEJ2000', 'pmRA', 'pmDE', 'Jmag', 'Hmag', 'Ksmag']
+    Vizier.columns = (['RAJ2000', 'DEJ2000', 'pmRA', 'pmDE', 'Jmag', 'Hmag', 'Ksmag']
+                      + VIRAC2_SIGMA_COLUMNS)
     res = Vizier.query_region(SkyCoord(ra * u.deg, dec * u.deg), radius=radius * u.deg,
                               catalog='II/387/virac2')
     if not res:
@@ -283,7 +299,12 @@ def _query_gaia_vizier(ra, dec, radius):
     """
     from astroquery.vizier import Vizier
     Vizier.ROW_LIMIT = -1
-    Vizier.columns = ['RA_ICRS', 'DE_ICRS', 'pmRA', 'pmDE', 'Gmag']
+    # e_RA_ICRS/e_DE_ICRS (mas) and e_pmRA/e_pmDE (mas/yr) verified present on
+    # I/355/gaiadr3 by cone-query metadata (issue #965 item 1); carried through
+    # under ESA-TAP-style names so build_refcat_table need not know which Gaia
+    # backend answered.
+    Vizier.columns = ['RA_ICRS', 'DE_ICRS', 'pmRA', 'pmDE', 'Gmag',
+                      'e_RA_ICRS', 'e_DE_ICRS', 'e_pmRA', 'e_pmDE']
     res = Vizier.query_region(SkyCoord(ra * u.deg, dec * u.deg), radius=radius * u.deg,
                               catalog='I/355/gaiadr3')
     if not res:
@@ -292,12 +313,15 @@ def _query_gaia_vizier(ra, dec, radius):
     t.rename_column('RA_ICRS', 'ra'); t.rename_column('DE_ICRS', 'dec')
     t.rename_column('pmRA', 'pmra'); t.rename_column('pmDE', 'pmdec')
     t.rename_column('Gmag', 'phot_g_mean_mag')
+    t.rename_column('e_RA_ICRS', 'ra_error'); t.rename_column('e_DE_ICRS', 'dec_error')
+    t.rename_column('e_pmRA', 'pmra_error'); t.rename_column('e_pmDE', 'pmdec_error')
     return t
 
 
 def gaia_adql(ra, dec, radius, top=GAIA_ADQL_TOP):
     """The cone query, carrying its own ``TOP`` so astroquery cannot inject 2000."""
-    return (f"SELECT TOP {int(top)} ra,dec,pmra,pmdec,phot_g_mean_mag,ref_epoch "
+    return (f"SELECT TOP {int(top)} ra,dec,pmra,pmdec,phot_g_mean_mag,ref_epoch,"
+            "ra_error,dec_error,pmra_error,pmdec_error "
             "FROM gaiadr3.gaia_source "
             f"WHERE CONTAINS(POINT('ICRS',ra,dec),CIRCLE('ICRS',{ra},{dec},{radius}))=1")
 
@@ -532,23 +556,60 @@ def build_refcat_table(gaia_table, gaia_src, virac_table, epoch, radius,
     ``None`` (no Gaia backend answered), in which case every VIRAC2 row is kept
     and ``NGAIA`` is 0.
     """
+    dt_gaia = epoch - GAIA_EPOCH
+    dt_virac = epoch - VIRAC2_EPOCH
+
+    def _sigma_columns(tbl, ra_err_col, dec_err_col, pmra_err_col, pmdec_err_col,
+                       dt_yr, label):
+        """``(sigma_pos_ra, sigma_pos_dec, sigma_pm_ra, sigma_pm_dec,
+        sigma_pred)`` mas / mas-yr^-1 arrays aligned to ``tbl``, or all-NaN with
+        a printed note when the query result carries none of the four columns
+        (e.g. an older cached query result, or a Gaia backend that changed its
+        schema) -- a MISSING sigma must never be mistaken for a KNOWN-zero one,
+        so it is NaN, not 0, and every consumer that gates or weights on it
+        (``same_star_region_map``) already treats NaN as "unknown -- keep the
+        pair, current behaviour" rather than as "perfectly known".
+        """
+        cols = (ra_err_col, dec_err_col, pmra_err_col, pmdec_err_col)
+        if not all(c in tbl.colnames for c in cols):
+            missing = [c for c in cols if c not in tbl.colnames]
+            print(f"  NOTE: {label} query result is missing {missing} -- "
+                  f"sigma_pred_mas will be NaN for these {len(tbl)} row(s) "
+                  f"(pre-#965 refcat build, or a backend/schema change)")
+            nan = np.full(len(tbl), np.nan)
+            return nan, nan.copy(), nan.copy(), nan.copy(), nan.copy()
+        s_pos_ra = farr(tbl[ra_err_col])
+        s_pos_dec = farr(tbl[dec_err_col])
+        s_pm_ra = farr(tbl[pmra_err_col])
+        s_pm_dec = farr(tbl[pmdec_err_col])
+        s_pred = sigma_pred_mas(s_pos_ra, s_pos_dec, s_pm_ra, s_pm_dec, dt_yr)
+        return s_pos_ra, s_pos_dec, s_pm_ra, s_pm_dec, s_pred
+
     if gaia_table is None:
         gaia_sc = SkyCoord([], [], unit=u.deg, frame='icrs')
         gaia_mag = np.zeros(0, dtype=float)
+        gaia_sigma = tuple(np.zeros(0, dtype=float) for _ in range(5))
     else:
         g = gaia_table
         gra, gdec = prop(farr(g['ra']), farr(g['dec']),
-                         farr(g['pmra']), farr(g['pmdec']), epoch - GAIA_EPOCH)
+                         farr(g['pmra']), farr(g['pmdec']), dt_gaia)
         gfin = np.isfinite(gra) & np.isfinite(gdec)
         gaia_sc = SkyCoord(gra[gfin] * u.deg, gdec[gfin] * u.deg)
         gaia_mag = farr(g['phot_g_mean_mag'])[gfin]
+        gaia_sigma_full = _sigma_columns(
+            g, 'ra_error', 'dec_error', 'pmra_error', 'pmdec_error',
+            dt_gaia, 'Gaia DR3')
+        gaia_sigma = tuple(np.asarray(s)[gfin] for s in gaia_sigma_full)
 
     v = virac_table
     vra, vdec = prop(farr(v['RAJ2000']), farr(v['DEJ2000']),
-                     farr(v['pmRA']), farr(v['pmDE']), epoch - VIRAC2_EPOCH)
+                     farr(v['pmRA']), farr(v['pmDE']), dt_virac)
     vfin = np.isfinite(vra) & np.isfinite(vdec)
     virac_sc = SkyCoord(vra[vfin] * u.deg, vdec[vfin] * u.deg)
     vJ = farr(v['Jmag'])[vfin]
+    virac_sigma_full = _sigma_columns(
+        v, 'e_RAJ2000', 'e_DEJ2000', 'e_pmRA', 'e_pmDE', dt_virac, 'VIRAC2')
+    virac_sigma = tuple(np.asarray(s)[vfin] for s in virac_sigma_full)
 
     # Coverage floor BEFORE anything is written (issue #415 gap 4).  Counts the
     # sources that survive the finite-position masks -- the rows a tie can be
@@ -570,6 +631,14 @@ def build_refcat_table(gaia_table, gaia_src, virac_table, epoch, radius,
     print(f"Gaia DR3: {len(gaia_sc)} sources; VIRAC2 fill (no Gaia <0.3\"): "
           f"{fill.sum()} of {vfin.sum()}")
 
+    def _add_sigma_columns(tbl, sigma_tuple):
+        (s_pos_ra, s_pos_dec, s_pm_ra, s_pm_dec, s_pred) = sigma_tuple
+        tbl[SIGMA_POS_RA_COLUMN] = s_pos_ra
+        tbl[SIGMA_POS_DEC_COLUMN] = s_pos_dec
+        tbl[SIGMA_PM_RA_COLUMN] = s_pm_ra
+        tbl[SIGMA_PM_DEC_COLUMN] = s_pm_dec
+        tbl[SIGMA_PRED_COLUMN] = s_pred
+
     parts = []
     if len(gaia_sc):
         rows_gaia = Table()
@@ -577,6 +646,7 @@ def build_refcat_table(gaia_table, gaia_src, virac_table, epoch, radius,
         rows_gaia['DEC'] = gaia_sc.dec.deg
         rows_gaia['source'] = np.full(len(gaia_sc), 'GaiaDR3', dtype='U8')
         rows_gaia['refmag'] = gaia_mag
+        _add_sigma_columns(rows_gaia, gaia_sigma)
         parts.append(rows_gaia)
 
     rows_v = Table()
@@ -584,16 +654,22 @@ def build_refcat_table(gaia_table, gaia_src, virac_table, epoch, radius,
     rows_v['DEC'] = virac_sc.dec.deg[fill]
     rows_v['source'] = np.full(int(fill.sum()), 'VIRAC2', dtype='U8')
     rows_v['refmag'] = vJ[fill]
+    _add_sigma_columns(rows_v, tuple(np.asarray(s)[fill] for s in virac_sigma))
     parts.append(rows_v)
 
     ref = vstack(parts) if len(parts) > 1 else parts[0]
     ref['skycoord'] = SkyCoord(ref['RA'] * u.deg, ref['DEC'] * u.deg)
-    ref.meta['VERSION'] = 'gaia_dr3+virac2_fill'
+    ref.meta['VERSION'] = 'gaia_dr3+virac2_fill+sigma'
     ref.meta['FRAME'] = 'Gaia DR3 (ICRS); VIRAC2 (II/387) tied to Gaia DR3 ~5 mas'
     ref.meta['EPOCH'] = epoch
     ref.meta['V2EPOCH'] = VIRAC2_EPOCH
     ref.meta['GAEPOCH'] = GAIA_EPOCH
     ref.meta['REFDENS'] = density
+    ref.meta['SIGMACOL'] = (f'{SIGMA_PRED_COLUMN} = sqrt(sigma_pos^2 + '
+                            f'(dt*sigma_pm)^2) per axis, RA/Dec combined in '
+                            f'quadrature; dt = epoch - source epoch (VIRAC2 '
+                            f'{VIRAC2_EPOCH}, Gaia {GAIA_EPOCH}); NaN where the '
+                            f'query result carried no error columns')
     # Provenance for the Gaia leg.  Without these a capped file was
     # indistinguishable from a good one except by its round row count -- which is
     # why the o134/o135 cap had to be INFERRED rather than read (issue #856), and

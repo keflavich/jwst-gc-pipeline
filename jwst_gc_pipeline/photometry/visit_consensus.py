@@ -34,6 +34,7 @@ from .astrometry_offsets import (
     local_residual_map, same_star_region_map, GlobalTieNotVerifiedError,
     KDTreeReference, _unit_xyz, _chord,
 )
+from .reference_uncertainty import SIGMA_PRED_COLUMN
 
 # An exposure whose bulk offset from the visit consensus exceeds this is
 # MISALIGNED: its im0 (first-pass) alignment must be replaced.
@@ -1628,9 +1629,19 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                           filtername=None, consensus_mag=None, ref_mag=None,
                           agree_tol_mas=REFERENCE_AGREE_TOL_MAS,
                           gross_tol_mas=REFERENCE_CROSSCHECK_GROSS_MAS,
-                          grid_nx=6, grid_ny=6, dense=True, context=""):
+                          grid_nx=6, grid_ny=6, dense=True, context="",
+                          ref_sigma_pred_mas=None, ref_sigma_cap_mas=None):
     """Tie the visit consensus to the absolute reference with MULTIPLE
     independent checks.  No single number signs off (CLAUDE.md).
+
+    ``ref_sigma_pred_mas`` (issue #965 item 1): per-star predicted reference
+    position uncertainty, row-aligned with ``ref_coords_all``
+    (``load_reference_catalog(...)['sigma_pred_mas']``).  ``None`` (the
+    default, and what an old refcat with no sigma column gives) reproduces the
+    pre-#965 same-star region map exactly.  ``ref_sigma_cap_mas`` overrides
+    ``astrometry_offsets.DEFAULT_SIGMA_CAP_MAS`` when given.  Both are only
+    used by the same-star per-region check (D); they play no part in the
+    dense/sparse histogram checks (A, B) or the flux-matched check (E).
 
     The reference catalog is VIRAC2-full (check A, density-immune histogram).
     Gaia-only (check B/C) is a SPARSE cross-check, NOT the reference catalog: in
@@ -1931,7 +1942,9 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
             per_tile_same_star = same_star_region_map(
                 consensus_coords, ref_coords_all, res_a,
                 match_radius=SAMESTAR_MATCH_RADIUS,
-                context=f"{context} per-region")
+                context=f"{context} per-region",
+                sigma_b_mas=ref_sigma_pred_mas,
+                sigma_cap_mas=ref_sigma_cap_mas)
         except GlobalTieNotVerifiedError:
             per_tile_same_star = None
     # `per_tile_measurable` separates "the grid was measured and is dirty" from
@@ -2125,7 +2138,16 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
 
 def load_reference_catalog(path):
     """Load a gaia+virac2 seed refcat (build_gaia_virac2_refcat_byquery.py output) and
-    split it into the full (dense) and Gaia-only (sparse) SkyCoord sets."""
+    split it into the full (dense) and Gaia-only (sparse) SkyCoord sets.
+
+    ``sigma_pred_mas`` (issue #965 item 1): the per-star predicted reference
+    position uncertainty (see ``reference_uncertainty.sigma_pred_mas``),
+    row-aligned with ``all``.  A refcat built before this column existed loads
+    exactly as before -- ``None`` here, and every consumer that takes a
+    ``sigma_b_mas`` argument treats ``None`` as "reproduce today's unweighted,
+    uncut behaviour" -- with a printed note rather than a crash or a silent
+    all-NaN column.
+    """
     ref = Table.read(path)
     if "skycoord" in ref.colnames:
         coords = SkyCoord(ref["skycoord"]).icrs
@@ -2145,4 +2167,12 @@ def load_reference_catalog(path):
         sparse = coords
         dense = False   # Gaia-only refcat (no VIRAC2 dense component)
     mag = np.asarray(ref["refmag"], dtype=float) if "refmag" in ref.colnames else None
-    return dict(all=coords, sparse=sparse, mag=mag, table=ref, dense=dense)
+    if SIGMA_PRED_COLUMN in ref.colnames:
+        sigma_pred_mas = np.asarray(ref[SIGMA_PRED_COLUMN], dtype=float)
+    else:
+        sigma_pred_mas = None
+        print(f"load_reference_catalog: {path} has no '{SIGMA_PRED_COLUMN}' "
+              f"column (built before issue #965 item 1) -- the m2 region map "
+              f"will run its pre-#965 unweighted, uncut statistic")
+    return dict(all=coords, sparse=sparse, mag=mag, table=ref, dense=dense,
+               sigma_pred_mas=sigma_pred_mas)

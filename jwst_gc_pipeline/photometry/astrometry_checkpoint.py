@@ -3936,6 +3936,7 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
             filtername=filtername,
             consensus_mag=(np.asarray(mag)[keep] if mag is not None else None),
             ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
+            ref_sigma_pred_mas=refcat.get("sigma_pred_mas"),
             context=f"{context} [{label} re-measured on shared stars]")
         if not _tie_signed_off(tie, label, info):
             return None, info
@@ -4017,6 +4018,11 @@ def _exclude_blended_references(consensus_coords, refcat, exposure_tables, conte
     out["all"] = refcat["all"][~mask]
     if refcat.get("mag") is not None:
         out["mag"] = np.asarray(refcat["mag"])[~mask]
+    # sigma_pred_mas is row-aligned with "all" (issue #965 item 1) -- it must
+    # be excluded by the same mask or a later same-star region-map call reads
+    # the WRONG star's predicted sigma for every row after the first exclusion.
+    if refcat.get("sigma_pred_mas") is not None:
+        out["sigma_pred_mas"] = np.asarray(refcat["sigma_pred_mas"])[~mask]
     return out, info
 
 
@@ -4471,6 +4477,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 tie_coords, tie_refcat["all"], tie_refcat["sparse"],
                 filtername=filt, consensus_mag=tie_mag,
                 ref_mag=tie_refcat.get("mag"), dense=tie_refcat.get("dense", True),
+                ref_sigma_pred_mas=tie_refcat.get("sigma_pred_mas"),
                 context=vctx)
             off = ref_tie["off_mas"]
             # ACTIONABLE = the current measurement is large enough to be worth
@@ -4962,6 +4969,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
             anchor_coords, refcat["all"], refcat["sparse"],
             filtername=anchor_filter, ref_mag=refcat.get("mag"),
             dense=refcat.get("dense", True),
+            ref_sigma_pred_mas=refcat.get("sigma_pred_mas"),
             context=f"{context} anchor {anchor_filter}")
 
     filters = []
