@@ -113,11 +113,28 @@ def test_guard_off_keeps_the_collapse_and_warns(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize('value, on', [
-    ('0', False), ('false', False), ('OFF', False), ('no', False), ('', False),
-    ('1', True), ('true', True), ('yes', True)])
+    ('0', False), ('false', False), ('OFF', False), ('no', False),
+    (' off ', False), ('1', True), ('true', True), ('yes', True), ('On', True),
+    ('', True), ('  ', True)])
 def test_guard_switch_spellings(monkeypatch, value, on):
+    """A blank value means the default (ON for the guard), as for the daophot
+    hand-off, in-field dedup and mergedcat cover switches of #972."""
     monkeypatch.setenv('SATSTAR_ZF_RCURVE_GUARD', value)
     assert satstar_fit_switches()['rcurve_guard'] is on
+
+
+@pytest.mark.parametrize('name, key', [
+    ('SATSTAR_ZF_RCURVE_GUARD', 'rcurve_guard'),
+    ('SATSTAR_ZF_KEEP_FINITE', 'keep_finite'),
+    ('SATSTAR_OBS_PK_FROM_CRF', 'obs_pk_from_crf'),
+    ('SATSTAR_QFIT_LOCAL_GATE', 'qfit_local_gate')])
+def test_switch_blank_is_default_and_typo_raises(monkeypatch, name, key):
+    default = satstar_fit_switches()[key]
+    monkeypatch.setenv(name, '')
+    assert satstar_fit_switches()[key] is default
+    monkeypatch.setenv(name, 'ture')
+    with pytest.raises(ValueError, match=name):
+        satstar_fit_switches()
 
 
 def test_rcurve_dq0_option_is_not_read(monkeypatch):

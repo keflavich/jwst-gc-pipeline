@@ -490,7 +490,9 @@ and `…'MIRI` is the authoritative list.
 The four `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows are read
 by `satstar_fit_switches`, and the per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
-one refits the cached catalogs it affects.
+one refits the cached catalogs it affects. Their on/off values follow the
+daophot hand-off convention: unset or blank gives the default, `1/true/yes/on`
+and `0/false/no/off` are accepted in any case, and any other value raises.
 
 ---
 

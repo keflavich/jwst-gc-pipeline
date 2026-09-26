@@ -849,15 +849,31 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     return saturated, sources, coms, seed_kinds
 
 
+_ENV_SWITCH_ON = ('1', 'true', 'yes', 'on')
+_ENV_SWITCH_OFF = ('0', 'false', 'no', 'off')
+
+
 def _env_switch(name, default, env=None):
-    """Read an on/off environment switch.  Unset -> ``default``; ``''``,
-    ``0``, ``false``, ``no`` and ``off`` (any case) -> off; anything else ->
-    on."""
+    """Read an on/off environment switch.  Unset or blank -> ``default``;
+    ``1/true/yes/on`` and ``0/false/no/off`` (any case, surrounding whitespace
+    ignored) -> on / off.  Any other value raises ``ValueError`` naming the
+    variable, the same convention as the daophot hand-off switches
+    (``cataloging._handoff_env_flag``): these switches change the fit and the
+    satstar cache key, so a typo must not be read silently as either state."""
     env = os.environ if env is None else env
     raw = env.get(name)
-    if raw is None:
+    if raw is None or not str(raw).strip():
         return bool(default)
-    return str(raw).strip().lower() not in ('', '0', 'false', 'no', 'off')
+    val = str(raw).strip().lower()
+    if val in _ENV_SWITCH_ON:
+        return True
+    if val in _ENV_SWITCH_OFF:
+        return False
+    raise ValueError(
+        f"{name}={raw!r} is not a recognised on/off value; use one of "
+        f"{'/'.join(_ENV_SWITCH_ON)} or {'/'.join(_ENV_SWITCH_OFF)} "
+        f"(case-insensitive), or leave it unset for the default "
+        f"({'on' if default else 'off'})")
 
 
 def _zeroframe_fit_enabled(env=None):
