@@ -303,7 +303,7 @@ def _apply_local_correction_grid(x, y, grid):
 
 
 def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
-              maxsep=3.0, min_pairs=30, nsigma=3.0, local_correction=True,
+              maxsep=3.0, min_pairs=30, nsigma=3.0, local_correction=False,
               local_cell_arcsec=30.0, local_min_stars=15):
     """Verified affine tie: fit a full 6-parameter linear map
     (dx = A0 + A1*x + A2*y, dy = B0 + B1*x + B2*y) from src onto ref's frame.
@@ -346,33 +346,77 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
     the diagnostics dict) to see how much was removed, and add it back if the
     physical signal of interest is on that same linear scale.
 
-    LOCAL CORRECTION (``local_correction=True``, the default): a single
-    global affine cannot represent a spatially-DISCONTINUOUS residual
-    (a module/tile-boundary seam) or a higher-order (non-linear) distortion
-    -- both were found on real data (pr-reviewer's per-cell PM-variance
+    LOCAL CORRECTION (``local_correction=False`` by DEFAULT -- opt-in only,
+    NOT recommended for production use yet, see below): a single global
+    affine cannot represent a spatially-DISCONTINUOUS residual (a module/
+    tile-boundary seam) or a higher-order (non-linear) distortion -- both
+    looked plausible on real data (pr-reviewer's per-cell PM-variance
     analysis, PR #959 review, found the excess scatter on Arches/Quintuplet/
     Brick/Cloud c was spatially COHERENT and present in bright and faint
     stars alike, not centroid noise; a follow-up per-cell median-PM map on
     Cloud c pinned it further -- a ~14 mas/yr discontinuity across one ~30"
     field-edge strip, plus a smoother few-mas/yr gradient across the rest of
-    the field). After the global affine converges, the SAME verified,
-    deduplicated matched pairs are binned into ``local_cell_arcsec`` cells
-    (default 30", matched to the discontinuity scale found on real data) and
-    each cell's median residual is looked up (nearest-cell, not
-    interpolated -- a real discontinuity should stay sharp) and added on top
-    of the affine correction for every star in that cell. A cell needs
-    ``local_min_stars`` (default 15) matched pairs to contribute; below that
-    it corrects nothing there, falling back to the pure affine.
+    the field). When enabled, after the global affine converges, the SAME
+    verified, deduplicated matched pairs are binned into ``local_cell_arcsec``
+    cells (default 30") and each cell's median residual is looked up
+    (nearest-cell, not interpolated -- a real discontinuity should stay
+    sharp) and added on top of the affine correction for every star in that
+    cell. A cell needs ``local_min_stars`` (default 15) matched pairs to
+    contribute; below that it corrects nothing there, falling back to the
+    pure affine.
 
-    This is a STRONGER version of the "makes the frame relative" caveat
-    above: real coherent motion at scales SMALLER than ``local_cell_arcsec``
-    (e.g. a genuine kinematic substructure the size of one cell) is now also
-    absorbed and zeroed out, not just field-wide rotation/shear. The full
+    TWO SEPARATE PROBLEMS FOUND BY pr-reviewer'S PR #969 REVIEW, both
+    confirmed independently, are why this defaults OFF rather than on:
+
+    (1) STRUCTURAL: this method cannot distinguish a real spatially-coherent
+    PM signal from a frame-tie residual -- both look identical (a smooth-ish
+    per-cell offset) to a per-cell median. A real cluster whose bulk motion
+    differs from the surrounding field (e.g. Arches, Quintuplet -- each
+    fills roughly one ``local_cell_arcsec`` cell) has that motion ZEROED,
+    not corrected, if it happens to sit inside one cell. There is no way to
+    fix this with a smarter free grid; it is inherent to correcting on
+    scales the astrophysical signal itself can occupy. pr-reviewer's
+    suggestion, not yet implemented: tie the correction to KNOWN physical
+    boundaries (module/tile edges from the instrument geometry) instead of
+    an arbitrary spatial bin, so it can only remove offsets at scales no
+    real per-star signal should coincide with. This is a logical property of
+    median-cell-subtraction, true by construction, so it is not pinned by a
+    dedicated synthetic test the way (2) below is -- a synthetic attempt to
+    demonstrate it directly ran into the pre-existing sigma-clip loop (and,
+    at high cluster density, the verified-tie's own ambiguous-pair
+    rejection) rejecting the injected cluster before the local correction
+    ever saw it, at a rate too sensitive to the exact noise draw to pin
+    reliably (checked directly: the same injected signal was fully erased
+    in one random realization and left untouched in the next seven, for the
+    same physical parameters). That sensitivity does not make the concern
+    synthetic, though -- pr-reviewer's finding was against REAL Arches/
+    Quintuplet data, not a toy.
+
+    (2) STATISTICAL: the in-sample RMS improvement this feature was
+    validated with (the synthetic module-seam test in this file) measures
+    the correction on the SAME pairs used to build the grid, which will
+    always look good regardless of whether the grid is fitting real
+    structure or per-cell median SAMPLING NOISE. A held-out check (confirmed
+    independently, not just by the reviewer) on a PURE-NOISE field (no real
+    seam, no real signal at all) found the correction makes held-out
+    residuals WORSE, not better -- e.g. 1.93->2.02 mas at 40 stars/cell,
+    1.95->1.97 mas at 160 stars/cell -- because a cell's median of pure
+    noise is itself a noisy estimate (~noise/sqrt(n_per_cell)) that this
+    method then bakes in as a "correction" applied to every star in that
+    cell, new stars included. At the ``local_min_stars=15`` floor this is
+    roughly a coherent-looking few-mas fake offset per cell, applied on TOP
+    of any real signal. This is why the per-cell grid is recorded in the
+    diagnostics dict (so it is auditable) rather than silently trusted, and
+    why enabling this currently requires a caller to hold out data and
+    check the effect themselves -- this function does not do that for you.
+
+    Given (1) and (2), ``local_correction=True`` should be treated as an
+    experimental, NOT production-validated option pending a redesign (a
+    physically-motivated grid per (1), and a held-out/cross-validated metric
+    per (2)) -- not as a general-purpose fix for excess PM scatter. The full
     correction grid (cell edges + per-cell dx/dy) is recorded in the
-    diagnostics dict specifically so this is reversible and auditable later,
-    the same reason the global A/B coefficients are recorded. Set
-    ``local_correction=False`` to recover the pre-existing global-affine-only
-    behavior exactly.
+    diagnostics dict specifically so any use of this option is reversible
+    and auditable, the same reason the global A/B coefficients are recorded.
 
     KNOWN LIMITATION (pr-reviewer PR #140 round 5): pairs are found ONCE,
     before the affine fit, and never re-paired against the fitted plane. A
@@ -562,7 +606,7 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
 
 def shift_to_virac_frame(cat, virac, to_epoch, match_radius=0.2, magcut=15.0,
                          maxsep=3.0, min_pairs=30, nsigma=3.0,
-                         local_correction=True, local_cell_arcsec=30.0,
+                         local_correction=False, local_cell_arcsec=30.0,
                          local_min_stars=15):
     """Bulk affine frame-shift any catalog onto the VIRAC2/Gaia frame.
 
