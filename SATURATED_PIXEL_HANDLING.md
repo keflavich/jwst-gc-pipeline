@@ -374,6 +374,16 @@ these flag sets would remove the footgun of setting them individually.)*
   are consolidated and deduped (~0.15″, keep brightest), then merged into the
   daophot catalog; satstar-only rows are marked **`replaced_saturated=True`**
   (per-filter `replaced_saturated_{FILTER}` in cross-filter merges).
+- **Post-merge off-FOV cleanup** (`_clean_offfov_dups_and_offfield`): off-FOV
+  `replaced_saturated` rows within 1.0″ collapse to one row (the per-frame fits of
+  an off-FOV star scatter wider than the 0.15″ dedup). In-field rows follow
+  `_infield_dedup_settings`: NIRCam reads `SATSTAR_INFIELD_DEDUP` — `cofit`
+  (default; collapse only rows that no per-exposure satstar run fit side by side,
+  `_never_cofit_duplicates`), `none` (keep all), or `legacy` (1.0″
+  friends-of-friends over every row, which deleted distinct stars, #972). MIRI and
+  NIRISS read `SATSTAR_INFIELD_DEDUP_MIRI` / `SATSTAR_INFIELD_DEDUP_NIRISS`
+  (default `legacy`; the co-fit rule is unvalidated there). The
+  extended-emission targets always collapse off-FOV rows only.
 - **Products**: `*_satstar_{catalog,model,residual,flags}.fits`. The flags image
   is a uint8 bitmask — bit 1 partly saturated (recoverable), bit 2 totally
   saturated (NaN-variance core), bit 4 included in an accepted satstar fit.

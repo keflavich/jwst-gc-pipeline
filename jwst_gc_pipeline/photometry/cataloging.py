@@ -3400,9 +3400,150 @@ def _run_one_frame_manual(args):
                     f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
 
 
+def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
+                            dedup_arcsec=1.0, match_arcsec=0.1):
+    """Which in-field satstar rows are same-star duplicates of a better row.
+
+    Two ``replaced_saturated`` rows within ``dedup_arcsec`` are treated as ONE
+    star only when no single per-exposure satstar run ever fit both: in every
+    run in ``cofit_positions`` (the accepted AND gate-rejected fits of one
+    frame at one phase), at most one of the two has a fit within
+    ``min(match_arcsec, sep/2)``.  A star whose truncated fit at a detector
+    edge lands 0.2-0.8" from its proper fit in the other frames has no such
+    frame and is collapsed.
+
+    Survivors are chosen greedily by per-exposure support (``support``, e.g.
+    ``satstar_nframes``) and then flux, so the best-measured member of a
+    duplicate set is the one kept -- not the member nearest the median flux,
+    which in a two-member set is simply the first row.
+
+    The co-fit test is PAIRWISE: two rows that one run fits side by side are
+    never collapsed onto each other, but both can still be dropped in favour
+    of a third row that lies within ``dedup_arcsec`` of each, is never co-fit
+    with either, and has more support.  Example: two stars 0.6" apart that
+    one exposure resolves, plus a blended fit at their midpoint in three
+    other exposures, collapse to the midpoint row
+    (``test_cofit_pair_can_collapse_to_a_better_supported_midpoint``).  The
+    legacy 1.0" friends-of-friends collapses that case too.
+
+    With no runs at all every pair within ``dedup_arcsec`` counts as never
+    co-fit, which is the legacy collapse; :func:`_clean_offfov_dups_and_offfield`
+    therefore keeps every in-field row when ``cofit_positions`` holds no
+    positions.
+
+    Parameters
+    ----------
+    sc : SkyCoord
+        Positions of the candidate (in-field ``replaced_saturated``) rows.
+    support, flux : array-like
+        Per-row support count and flux; NaN sorts last.
+    cofit_positions : list of SkyCoord
+        One entry per per-exposure satstar run (accepted + rejected rows).
+    dedup_arcsec, match_arcsec : float
+        Pair radius and per-exposure match radius (arcsec).
+
+    Returns
+    -------
+    ndarray of bool
+        True for rows to drop.
+    """
+    from astropy.coordinates import search_around_sky
+    n = len(sc)
+    drop = np.zeros(n, bool)
+    if n < 2:
+        return drop
+    i1, i2, sep, _ = search_around_sky(sc, sc, dedup_arcsec * u.arcsec)
+    pair = i1 < i2
+    i1, i2, sep = i1[pair], i2[pair], sep.arcsec[pair]
+    if len(i1) == 0:
+        return drop
+    involved = np.unique(np.concatenate([i1, i2]))
+    sc_inv = sc[involved]
+    slot = np.full(n, -1)
+    slot[involved] = np.arange(len(involved))
+    r_pair = np.minimum(float(match_arcsec), 0.5 * sep)
+    cofit = np.zeros(len(i1), bool)
+    for pos in cofit_positions:
+        if pos is None or len(pos) == 0:
+            continue
+        idx, d2d, _ = sc_inv.match_to_catalog_sky(pos)
+        d = d2d.arcsec
+        a, b = slot[i1], slot[i2]
+        cofit |= ((d[a] < r_pair) & (d[b] < r_pair) & (idx[a] != idx[b]))
+    links = {}
+    for a, b in zip(i1[~cofit], i2[~cofit]):
+        links.setdefault(int(a), []).append(int(b))
+        links.setdefault(int(b), []).append(int(a))
+    sup = np.nan_to_num(np.asarray(support, dtype=float), nan=-np.inf)
+    fl = np.nan_to_num(np.asarray(flux, dtype=float), nan=-np.inf)
+    kept = np.zeros(n, bool)
+    for k in np.lexsort((-fl, -sup)):
+        if any(kept[j] for j in links.get(int(k), ())):
+            drop[k] = True
+        else:
+            kept[k] = True
+    return drop
+
+
+def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None):
+    """Per-exposure satstar fit positions for :func:`_never_cofit_duplicates`.
+
+    One SkyCoord per per-exposure satstar run: the accepted
+    (``*_m<N>_satstar_catalog.fits``) and gate-rejected
+    (``*_m<N>_satstar_rejected.fits``) rows of the same frame and phase,
+    re-projected through the frame's current WCS the way the consolidated
+    catalog is.  On a tree shared by several observations only this
+    observation's files are read (same scoping as ``load_satstar_catalog``).
+    """
+    from jwst_gc_pipeline.photometry.merge_catalogs import (
+        satstar_obs_scope, satstar_catalog_in_observation)
+    from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
+        frame_path_for_satstar_catalog, refresh_satstar_skycoords)
+    tail = re.compile(r'_satstar_(catalog|rejected)\.fits$')
+    phase_tail = re.compile(r'_m\d+_satstar_(catalog|rejected)\.fits$')
+    files = sorted(glob.glob(os.path.join(pipeline_dir, '*_satstar_catalog.fits'))
+                   + glob.glob(os.path.join(pipeline_dir, '*_satstar_rejected.fits')))
+    files = [f for f in files if phase_tail.search(os.path.basename(f))]
+    obs_scope = satstar_obs_scope(proposal_id, field)
+    if obs_scope:
+        files = [f for f in files
+                 if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
+    runs = {}
+    wcs_cache = {}
+    n_stale = 0
+    for fn in files:
+        tbl = Table.read(fn)
+        if len(tbl) == 0 or 'skycoord_fit' not in tbl.colnames:
+            continue
+        # The frame is found from the ACCEPTED catalog's name (the rejected
+        # file of the same run has the same stem), so both are re-projected
+        # through the frame's current WCS; frame_path_for_satstar_catalog only
+        # parses the *_satstar_catalog.fits tail.
+        frame = frame_path_for_satstar_catalog(tail.sub('_satstar_catalog.fits', fn))
+        if frame is not None:
+            if frame not in wcs_cache:
+                wcs_cache[frame] = frame_wcs(frame)
+            tbl, _shift = refresh_satstar_skycoords(tbl, wcs=wcs_cache[frame],
+                                                    catalog_path=fn)
+        else:
+            n_stale += 1
+        pos = SkyCoord(tbl['skycoord_fit'])
+        ok = np.isfinite(pos.ra.deg) & np.isfinite(pos.dec.deg)
+        if ok.any():
+            runs.setdefault(tail.sub('', fn), []).append(pos[ok])
+    if n_stale:
+        print(f"  satstar co-fit positions: {n_stale} of {len(files)} per-exposure "
+              f"satstar file(s) have no frame on disk; their stored sky positions "
+              f"are used", flush=True)
+    from astropy.coordinates import concatenate as _sc_concat
+    return [(_sc_concat(v) if len(v) > 1 else v[0]) for v in runs.values()]
+
+
 def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
                                     dedup_arcsec=1.0, fov_pad_psf=5.0,
-                                    dedup_offfov_only=False):
+                                    dedup_offfov_only=True,
+                                    cofit_positions=None,
+                                    cofit_match_arcsec=0.1):
     """Post-merge cleanup of off-FOV satstar artifacts (per-filter merged catalog).
 
     A) Collapse ``replaced_saturated`` rows clustering within ``dedup_arcsec`` to a
@@ -3410,6 +3551,17 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
        fit PER FRAME and the (degenerate) positions scatter wider than the 0.15"
        satstar dedup, leaving many rows at one physical location -- the catalog
        must have exactly ONE entry per off-FOV star (sickle F480M m7 had 12).
+       With ``dedup_offfov_only`` (the default) and a readable FOV, only
+       OFF-FOV rows are collapsed this way.  In-field rows are left alone, or,
+       when ``cofit_positions`` is given, collapsed only where no per-exposure
+       satstar run ever fit two of them side by side
+       (:func:`_never_cofit_duplicates`).  A ``cofit_positions`` that holds
+       no positions (no per-exposure satstar file was found) keeps every
+       in-field row and prints a WARNING, because an empty list would make
+       every close pair count as never co-fit.  ``dedup_offfov_only=False``
+       restores the 1.0" friends-of-friends over every row, which drops
+       distinct in-field stars (#12 of missed_satstars_20260925: 0.71" from
+       #11, the two fit separately in 5 of 6 frames).
     B) Drop NON-satstar rows projecting > ``fov_pad_psf`` PSF widths OUTSIDE this
        filter's data FOV.  These are m7 cross-band-seed artifacts: the shared
        seed unions positions from ALL filters, so positions covered only by other
@@ -3470,10 +3622,44 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
     # this way).  When ``dedup_offfov_only`` and we have an FOV, restrict the
     # collapse to off-FOV rows; in-field replaced_saturated rows (already deduped
     # at 0.15" in satstar consolidation) are left untouched.
+    n_infield = 0
     if rs.any() and fcol is not None:
         elig = rs.copy()
         if dedup_offfov_only and have_fov:
             elig &= outside
+            n_runs = (0 if cofit_positions is None else
+                      sum(1 for p in cofit_positions
+                          if p is not None and len(p) > 0))
+            if cofit_positions is not None and n_runs == 0:
+                # No per-exposure run -> every close pair would read as
+                # "never co-fit" and collapse like the legacy FoF.  Keep the
+                # in-field rows instead ('none').
+                print("  WARNING: satstar in-field dedup: no per-exposure "
+                      "satstar positions were found, so co-fits cannot be "
+                      "checked; keeping all "
+                      f"{int((rs & ~outside).sum())} in-field "
+                      "replaced_saturated row(s) (the 'cofit' in-field mode "
+                      "falls back to 'none')", flush=True)
+            elif cofit_positions is not None:
+                inf_idx = np.where(rs & ~outside)[0]
+                _sup = (np.asarray(merged['satstar_nframes'], dtype=float)[inf_idx]
+                        if 'satstar_nframes' in merged.colnames
+                        else np.ones(len(inf_idx)))
+                _inf_drop = _never_cofit_duplicates(
+                    sc[inf_idx], _sup,
+                    np.asarray(merged[fcol], dtype=float)[inf_idx],
+                    cofit_positions, dedup_arcsec=dedup_arcsec,
+                    match_arcsec=cofit_match_arcsec)
+                drop[inf_idx[_inf_drop]] = True
+                n_infield = int(_inf_drop.sum())
+                print(f"  satstar in-field dedup: {n_infield} of {len(inf_idx)} "
+                      f"in-field replaced_saturated row(s) collapsed (never "
+                      f"co-fit in any of {n_runs} per-exposure "
+                      f"satstar runs within {dedup_arcsec}\")", flush=True)
+        elif dedup_offfov_only:
+            print("  off-FOV cleanup: no readable data i2d, so in-field and "
+                  "off-FOV satstar rows cannot be told apart; collapsing ALL "
+                  f"replaced_saturated rows within {dedup_arcsec}\"", flush=True)
         sat_idx = np.where(elig)[0]
         ssc = sc[sat_idx]
         i1, i2, _, _ = search_around_sky(ssc, ssc, dedup_arcsec * u.arcsec)
@@ -3505,6 +3691,50 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
         drop |= offfield
         n_off = int(offfield.sum())
     return merged[~drop], n_dedup, n_off
+
+
+#: Values of ``SATSTAR_INFIELD_DEDUP`` and its per-instrument variants; see
+#: :func:`_infield_dedup_settings`.
+_INFIELD_DEDUP_MODES = ('cofit', 'none', 'legacy')
+
+
+def _infield_dedup_settings(target, module, filt):
+    """How the post-merge off-FOV cleanup treats IN-FIELD satstar rows.
+
+    Returns ``(mode, env_name, dedup_offfov_only, use_cofit)`` for
+    :func:`_clean_offfov_dups_and_offfield`.  The modes:
+
+    * ``'cofit'``  -- collapse only in-field rows that no per-exposure satstar
+      run ever fit side by side (:func:`_never_cofit_duplicates`), keeping the
+      best-supported member.
+    * ``'none'``   -- keep every in-field row.
+    * ``'legacy'`` -- the 1.0" friends-of-friends over every
+      ``replaced_saturated`` row, which deletes distinct in-field stars.
+
+    NIRCam reads ``SATSTAR_INFIELD_DEDUP`` (default ``'cofit'``).  MIRI and
+    NIRISS read ``SATSTAR_INFIELD_DEDUP_MIRI`` / ``SATSTAR_INFIELD_DEDUP_NIRISS``
+    (default ``'legacy'``, the behaviour before these switches): the co-fit
+    rule was validated on NIRCam F480M/F212N only, and on gc-treasury F770W
+    o132 m6 it restores 5 rows the legacy collapse removes, unchecked.  The
+    instrument comes from :func:`_instrument_for_merge`.  An empty value means
+    the default; any other value outside ``_INFIELD_DEDUP_MODES`` raises.
+
+    The extended-emission targets (``_EXTENDED_EMISSION_TARGETS``) always get
+    ``dedup_offfov_only=True`` with no co-fit positions, whatever the mode:
+    the path they ran before these switches existed.
+    """
+    instrument = _instrument_for_merge(module, filt)
+    if instrument == 'nircam':
+        env_name, default = 'SATSTAR_INFIELD_DEDUP', 'cofit'
+    else:
+        env_name, default = f'SATSTAR_INFIELD_DEDUP_{instrument.upper()}', 'legacy'
+    mode = os.environ.get(env_name, '').strip().lower() or default
+    if mode not in _INFIELD_DEDUP_MODES:
+        raise ValueError(f"{env_name}={mode!r}; expected one of "
+                         f"{', '.join(repr(m) for m in _INFIELD_DEDUP_MODES)}")
+    if str(target).lower() in _EXTENDED_EMISSION_TARGETS:
+        return mode, env_name, True, False
+    return mode, env_name, mode != 'legacy', mode == 'cofit'
 
 
 def _gc_perframe_images(cut_bp, proposal_id, field, filt, phase, phases):
@@ -7148,14 +7378,35 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # outside this filter's FOV (m7 cross-band-seed unions all
                 # filters' positions -> off-this-FOV garbage).  See
                 # _clean_offfov_dups_and_offfield.
+                #
+                # Over in-field rows the 1.0" collapse deleted distinct stars:
+                # 8 F480M and ~1450 F212N rows per module in gc-treasury o111
+                # m6 (missed_satstars_20260925 #12, 0.71" from #11).  NIRCam
+                # now collapses in-field rows only where no per-exposure
+                # satstar run ever fit them side by side
+                # (SATSTAR_INFIELD_DEDUP, default 'cofit').  MIRI/NIRISS keep
+                # the old collapse unless SATSTAR_INFIELD_DEDUP_<INSTRUMENT>
+                # says otherwise, and the extended-emission targets (W51 IRS2)
+                # keep their off-FOV-only path.  See _infield_dedup_settings.
+                (_infield_mode, _infield_env, _offfov_only,
+                 _want_cofit) = _infield_dedup_settings(target, module, filt)
+                _cofit = None
+                if _want_cofit:
+                    _cofit = _satstar_cofit_positions(
+                        os.path.join(cut_bp, filt, 'pipeline'),
+                        proposal_id=proposal_id, field=field)
+                _ext_note = ('; extended-emission target, off-FOV rows only'
+                             if str(target).lower() in _EXTENDED_EMISSION_TARGETS
+                             else '')
+                print(f"manual [{phase}] {filt}/{module}: satstar in-field "
+                      f"dedup mode {_infield_mode!r} ({_infield_env}{_ext_note})",
+                      flush=True)
                 merged, _ndup, _noff = _clean_offfov_dups_and_offfield(
                     merged, filt, _data_i2d_path(module, filt), basepath,
                     dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
                     fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)),
-                    # In dense saturated regions (W51 IRS2) the 1.0" satstar
-                    # dedup collapses DISTINCT in-field stars; restrict it to
-                    # off-FOV rows for the extended-emission/crowded fields.
-                    dedup_offfov_only=(str(target).lower() in _EXTENDED_EMISSION_TARGETS))
+                    dedup_offfov_only=_offfov_only,
+                    cofit_positions=_cofit)
                 if _ndup or _noff:
                     print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
                           f"removed {_ndup} duplicate satstar row(s) + {_noff} "
