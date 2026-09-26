@@ -468,6 +468,21 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
     frame preparation takes the floor from ``_daophot_handoff_data_floor``
     (default 0), not from the satstar finder's ``_SATSTAR_DATA_FLOOR``.
 
+    Validation scope: this hand-off (env ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1``)
+    with the default floor of 0 is validated only on gc-treasury F480M (o111
+    nrcblong exp1-6 per frame, and the 12-frame o111 m6 end-to-end run of
+    #972).  Enable it per field, not globally.  Two measured cases where it
+    has not been validated:
+
+    * W51 F480M (12 production frames, selection only, no fitting run): 134.7
+      components per frame lie more than 1.5 FWHM from an accepted satstar;
+      41.5 of them have no finite SCI pixel and are skipped here, leaving
+      93.2 per frame to hand off, 39.5 of them with a finite maximum below
+      300 MJy/sr.
+    * F212N (o111 nrcb3 exp1-6): single-exposure cosmic-ray and snowball
+      SATURATED transients are handed off and fitted (6 of 8).  They are
+      bright, so no data floor removes them; this needs a transient guard.
+
     Parameters
     ----------
     dqarr : `~numpy.ndarray`
@@ -550,7 +565,9 @@ def _daophot_handoff_data_floor():
     F480M floor failed on gc-treasury o111 F480M: 34-48 bright weakly
     saturated stars per frame peak at 710-990 MJy/sr and stayed unsubtracted
     (31-40 bright non-accepted SATURATED components per frame left >50%
-    unsubtracted, against 3-10 with no floor).
+    unsubtracted, against 3-10 with no floor).  The default of 0 is
+    validated only for gc-treasury F480M; see the validation scope in
+    ``_unaccepted_sat_component_xy`` before enabling the hand-off elsewhere.
 
     Returns
     -------
@@ -587,7 +604,9 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     satstar that has a finite ``sci`` pixel reaching ``data_floor``
     (``_unaccepted_sat_component_xy``).  ``data_floor=None`` reads it from
     ``_daophot_handoff_data_floor``, and only when the component hand-off is
-    on, so the floor variable is never parsed on the default path.
+    on, so the floor variable is never parsed on the default path.  The
+    component hand-off is validated only for gc-treasury F480M (see
+    ``_unaccepted_sat_component_xy``).
 
     Returns
     -------
@@ -2494,6 +2513,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # finite raw-SCI pixel are left alone, and so are components below
         # the hand-off's own data floor (env DAOPHOT_HANDOFF_DATA_FLOOR,
         # default 0; the satstar finder's SATSTAR_DATA_FLOOR is not used).
+        # Validated only for gc-treasury F480M; enable it per field.
         handoff_xy, handoff_radius = _daophot_handoff_xy(
             dqarr, original_data, satstar_table, satstar_rejected_path,
             fwhm_pix, label='manual')
