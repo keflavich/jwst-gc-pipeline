@@ -194,6 +194,56 @@ def test_a_layer_mid_rebuild_is_refused_rather_than_shipped_partial():
                      2007, 11426) == 'tile count 2007 != source 11426'
 
 
+def test_a_source_without_properties_is_refused_before_staging_or_locking(
+        tmp_path, monkeypatch, capsys):
+    """`verify` refuses such a tree every time, so staging it is pure cost.
+
+    On 2026-09-27 a wall-killed rebuild left the star-subtracted vminmax coadd
+    with no `properties`.  Each publish run then seeded and rsynced the partial
+    tree to the docroot and to starformation, 15+ min per host, only for
+    `verify` to throw it away -- holding the build lock the whole time, while
+    the hourly build that would have finished the layer found it held and
+    exited.  The refusal must still be reported: a skipped layer is rc != 0
+    with its reason on stderr, the same as a refused one.
+    """
+    built = tmp_path / 'aa_layer'
+    built.mkdir()
+    (built / 'properties').write_text(SAME)
+    stranded = tmp_path / 'zz_layer'
+    (stranded / 'Norder3').mkdir(parents=True)
+    (stranded / 'Norder3' / 'Npix1.png').write_bytes(b'x')
+    monkeypatch.setattr(ph, 'LAYERS', {'aa_layer': str(built),
+                                       'zz_layer': str(stranded)})
+    calls = []
+    monkeypatch.setattr(ph, 'publish_local',
+                        lambda name, src, dry=False, force=False:
+                        calls.append(('local', name)) and 0 or 0)
+    monkeypatch.setattr(ph, 'publish_remote',
+                        lambda name, src, dry=False, force=False:
+                        calls.append(('remote', name)) and 0 or 0)
+    locked = []
+    real_lock = ph.build_lock
+
+    def spy_lock(src, what, **kw):
+        locked.append(what)
+        return real_lock(src, what, **kw)
+
+    monkeypatch.setattr(ph, 'build_lock', spy_lock)
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+
+    # --force bypasses the date gate only; it cannot make this tree publishable
+    for argv in ([], ['--force']):
+        calls.clear()
+        locked.clear()
+        rc = ph.main(argv)
+        assert rc != 0, 'a refused layer is reported, not called a success'
+        assert calls == [('local', 'aa_layer'), ('remote', 'aa_layer')], calls
+        assert locked == ['publishing aa_layer'], locked
+        err = capsys.readouterr().err
+        assert 'zz_layer: source has no readable properties' in err
+        assert 'not staged' in err
+
+
 @pytest.mark.parametrize('where', ['docroot', 'remote'])
 def test_a_failed_transfer_says_so_and_leaves_no_staging(where, tmp_path,
                                                          capsys, monkeypatch):
@@ -333,6 +383,7 @@ def test_force_reaches_both_destinations(tmp_path, monkeypatch):
     """
     layer = tmp_path / 'zz_layer'
     layer.mkdir()
+    (layer / 'properties').write_text(SAME)
     monkeypatch.setattr(ph, 'LAYERS', {'zz_layer': str(layer)})
     seen = {}
     monkeypatch.setattr(ph, 'publish_local',
@@ -510,6 +561,7 @@ def test_a_later_layer_does_not_get_a_fresh_wait(tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(ph, 'LAYERS', dict(ph.LAYERS))
         ph.LAYERS[name] = str(tmp_path / name)
         os.makedirs(tmp_path / name, exist_ok=True)
+        (tmp_path / name / 'properties').write_text(SAME)
 
     monkeypatch.setattr(ph, 'LOCK_WAIT_S', 120)
     rc = ph.main(['--layer', 'aa_layer', '--layer', 'zz_layer'])

@@ -517,6 +517,21 @@ def main(argv=None):
             print(f'  source missing: {src}', file=sys.stderr)
             rc = rc or 1
             continue
+        # A source with no readable properties is mid-rebuild, or was left
+        # half-built by a killed build.  `verify` refuses such a staged copy
+        # every time, so staging it only moves a partial pyramid to both hosts
+        # and holds the build lock for nothing -- and the build that would
+        # finish the layer is the one waiting on that lock.  On 2026-09-27 a
+        # wall-killed rebuild left jwst_gc_treasury_residual_vminmax_hips like
+        # this, and each publish run spent 15+ min per host staging it.  Skip
+        # it loudly and before the lock; `needs_publish` still says yes for an
+        # unknown source, so this is a refusal on stderr, never a quiet no-op.
+        if release_date(_read_local(os.path.join(src, 'properties'))) is None:
+            print(f'  {name}: source has no readable properties (mid-rebuild, '
+                  f'or left half-built by a killed build) -- not staged, both '
+                  f'live copies untouched', file=sys.stderr)
+            rc = rc or 1
+            continue
         # The lock is taken per LAYER -- a whole-run hold would block rebuilds
         # for hours, and a layer rebuilt while a LATER one is being copied is
         # simply newer next time.  The WAIT, though, is one budget for the run
