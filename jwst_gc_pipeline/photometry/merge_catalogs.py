@@ -60,6 +60,9 @@ from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
+from jwst_gc_pipeline.photometry.satstar_phase_selection import (
+    format_phase_report, satstar_phase_selection_signature,
+    select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
@@ -1299,11 +1302,15 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
         for tbl in tqdm(tbls, desc='Table Loop'):
             t0 = time.time()
             wl = tbl.meta['filter']
+            # phase=iteration_label: the cross-band merge of phase P reads each
+            # exposure's phase-P satstar catalog, not every phase on disk.
             flag_near_saturated(tbl, filtername=wl, target=target, basepath=basepath,
-                                proposal_id=satstar_proposal_id, field=satstar_field)
+                                proposal_id=satstar_proposal_id, field=satstar_field,
+                                phase=iteration_label)
             # replace_saturated adds more rows
             replace_saturated(tbl, filtername=wl, target=target, basepath=basepath,
-                              proposal_id=satstar_proposal_id, field=satstar_field)
+                              proposal_id=satstar_proposal_id, field=satstar_field,
+                              phase=iteration_label)
 
             crds = tbl['skycoord']
             matches, sep, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
@@ -1764,7 +1771,8 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     if do_replace_saturated:
         replace_saturated(minimal_table, filtername=filtername, target=target,
                           fwhm_basepath=fwhm_basepath, basepath=basepath,
-                          proposal_id=progid, field=field)
+                          proposal_id=progid, field=field,
+                          phase=iteration_label)
 
     reject = np.isnan(minimal_table['skycoord'].ra) | np.isnan(minimal_table['skycoord'].dec)
     if np.any(reject):
@@ -2309,11 +2317,13 @@ def satstar_exposure_key(filename):
     -> ``jw10678132001_02101_00001_nrcalong``: observation + visit group +
     exposure number + detector, which is exactly one image.
 
-    The same exposure also contributes one catalog per pipeline ITERATION
-    (``_m3``/``_m4``/.../``_m12``).  Those are re-fits of the same pixels, not
-    independent samples of the star, so :func:`_dedup_satstar_catalog` collapses
-    each exposure's iterations to one measurement before averaging across
-    exposures -- that is what makes the reported N a count of IMAGES.
+    The pipeline directory also holds one catalog per ITERATION of the same
+    exposure (``_m12``/``_m3``/.../``_m7``).  Those are re-fits of the same
+    pixels, not independent samples of the star.  :func:`load_satstar_catalog`
+    reads one of them per exposure (``satstar_phase_selection``), and
+    :func:`_dedup_satstar_catalog` still collapses each exposure to one
+    measurement before averaging across exposures, so the reported N is a
+    count of IMAGES either way (including under ``SATSTAR_POOL_PHASES=all``).
 
     Falls back to the basename with the iteration token stripped when the name
     does not follow the JWST convention (cutout runs, hand-made products); that
@@ -2628,7 +2638,7 @@ def satstar_in_observation_footprint(skycoord, catalog_paths,
 
 def load_satstar_catalog(filtername, target='brick',
                          basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                         proposal_id=None, field=None):
+                         proposal_id=None, field=None, phase=None):
     """Consolidated saturated-star catalog for one filter.
 
     ``proposal_id``/``field`` name the observation being merged.  When that
@@ -2637,6 +2647,14 @@ def load_satstar_catalog(filtername, target='brick',
     per-exposure catalogs are read, the cache is named per observation, and a
     row outside the union of its exposures' footprints is dropped (#925).
     Otherwise -- and whenever they are omitted -- behaviour is unchanged.
+
+    ``phase`` is the cataloging phase being merged (the merge's iteration
+    label: ``'m7'``, ``'m2'`` for the first phase, ...).  Each exposure
+    contributes ONE phase's per-exposure catalog: that phase's, or its latest
+    earlier one when it has none; never a later phase's.  Omitted (or a label
+    that names no phase), each exposure's latest phase is read.  See
+    :mod:`~jwst_gc_pipeline.photometry.satstar_phase_selection`;
+    ``SATSTAR_POOL_PHASES=all`` restores the pre-fix pooling of every phase.
     """
     proj = _project_for_target_filter(target, filtername)
     obs_scope = satstar_obs_scope(proposal_id, field)
@@ -2706,6 +2724,22 @@ def load_satstar_catalog(filtername, target='brick',
         else:
             print(f"No saturated star catalog files found for {filtername} in {basepath}/{filtername.upper()}/pipeline")
         return None
+    # One cataloging phase per exposure.  Every phase re-fits every exposure and
+    # leaves its catalog behind, so the directory holds one per phase, each from
+    # whichever code last wrote that phase; pooling them let the brightest-first
+    # dedup keep a STALE phase's fit (o111 F480M m7 re-run: 387 of 1120 rows kept
+    # an old m12 fit, +2.5% median / +7.4% p90 in flux).  See
+    # satstar_phase_selection.
+    fallback, _phase_report = select_satstar_phase_files(fallback, phase=phase)
+    print(f"load_satstar_catalog: {filtername}: "
+          f"{format_phase_report(_phase_report)}", flush=True)
+    if len(fallback) == 0:
+        print(f"WARNING: no {filtername} satstar catalog at or before phase "
+              f"{phase!r} in {basepath}/{filtername.upper()}/pipeline; the "
+              f"later-phase files there are left over from a previous run, so "
+              f"treating as no satstar catalog")
+        return None
+    _phase_sig = satstar_phase_selection_signature(fallback)
 
     # Consolidated per-filter satstar cache.  Building the deduped catalog from
     # the ~1000-1400 per-exposure satstar FITS (read + vstack + dedup) is the
@@ -2724,7 +2758,10 @@ def load_satstar_catalog(filtername, target='brick',
     # is what makes the sky positions durable: everything else is a property of
     # the satstar catalogs, which a frame regeneration or re-alignment does not
     # touch, so without it the cache goes stale again the next time the offsets
-    # table is corrected (issue #193).
+    # table is corrected (issue #193).  It is also keyed on WHICH per-exposure
+    # catalogs were read (SATPHSEL, the one-phase-per-exposure selection above):
+    # a cache written before that selection pooled every phase, and a phase-m4
+    # merge must not be served a cache built from the m7 catalogs.
     cache = consolidated_satstar_cache_path(basepath, filtername, obs_scope)
     try:
         newest_src = max(os.path.getmtime(fn) for fn in fallback)
@@ -2757,13 +2794,19 @@ def load_satstar_catalog(filtername, target='brick',
                     and str(cached.meta.get('SATOBSSC', '')) == obs_scope
                     and abs(_rcache - _rcur) < 1e-6
                     and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG
-                    and str(cached.meta.get('SATFRMSG', '')) == _fsig):
+                    and str(cached.meta.get('SATFRMSG', '')) == _fsig
+                    and str(cached.meta.get('SATPHSEL', '')) == _phase_sig):
                 print(f"Using consolidated satstar catalog {cache} "
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
                       f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG}, "
-                      f"frame state {_fsig})")
+                      f"frame state {_fsig}, phase selection {_phase_sig})")
                 return _ensure_satstar_aperture_photometry(
                     cached, filtername, target, basepath, cache_path=cache)
+            if str(cached.meta.get('SATPHSEL', '')) != _phase_sig:
+                print(f"Rebuilding satstar cache {cache}: built from a different "
+                      f"set of per-exposure catalogs -- phase selection "
+                      f"{cached.meta.get('SATPHSEL', 'unrecorded (every phase pooled)')!r}"
+                      f" -> {_phase_sig!r}")
             if str(cached.meta.get('SATDDALG', '')) != _SATSTAR_DEDUP_ALG:
                 print(f"Rebuilding satstar cache {cache}: dedup algorithm changed "
                       f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_SATSTAR_DEDUP_ALG!r}")
@@ -2831,6 +2874,10 @@ def load_satstar_catalog(filtername, target='brick',
     # ...and the state of the frames those positions were re-projected onto, so
     # the next read rebuilds when a frame has since moved (issue #193).
     deduped.meta['SATFRMSG'] = _frame_sig
+    # ...and which per-exposure catalogs (one phase per exposure) it was built
+    # from, so a cache from a different selection -- or from the pre-selection
+    # pooled read, which carries no key -- is rebuilt.
+    deduped.meta['SATPHSEL'] = _phase_sig
     if obs_scope:
         # Only scoped caches carry the key, so an unscoped cache is written
         # exactly as before; a scoped read requires it to match.
@@ -2981,7 +3028,7 @@ def apply_pooled_wingcal(satstar_cat, filtername,
 
 def load_rejected_satstar_catalog(filtername, target='brick',
                                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                                  proposal_id=None, field=None):
+                                  proposal_id=None, field=None, phase=None):
     """Table of gate-REJECTED satstar candidates for this band.
 
     The satstar channel (Phase A2, *_satstar_rejected.fits) records candidates
@@ -2996,7 +3043,15 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     several observations (:func:`satstar_obs_scope` non-empty: gc-treasury
     tiles, m4's two pointings) only this observation's rejected files are read.
     Without them -- and whenever the observation is not on a shared tree --
-    behaviour is unchanged (all rejected files for the band).
+    every observation's rejected files for the band are read.
+
+    ``phase`` selects the run the same way :func:`load_satstar_catalog` does:
+    each exposure keeps only the rejected file written beside the accepted
+    catalog chosen for it (same frame, background token and phase), so a
+    stale phase's gate rejections -- whose wing-fit flux the gray-zone clip
+    correction in :func:`replace_saturated` can adopt -- no longer reach the
+    merge.  An exposure with no accepted catalog keeps its own latest rejected
+    phase at or before ``phase``.
     """
     _all = sorted(glob.glob(
         f'{basepath}/{filtername.upper()}/pipeline/*satstar_rejected.fits'))
@@ -3015,6 +3070,24 @@ def load_rejected_satstar_catalog(filtername, target='brick',
               f"{filtername} belong to this observation", flush=True)
     _tok = re.compile(r'_m\d+_satstar_rejected\.fits$')
     files = [f for f in _all if _tok.search(os.path.basename(f))]
+    if files:
+        # One phase per exposure, following the accepted channel's choice
+        # (see load_satstar_catalog and satstar_phase_selection).
+        _acc_tok = re.compile(r'_m\d+_satstar_catalog\.fits$')
+        _acc = [f for f in glob.glob(f'{basepath}/{filtername.upper()}/pipeline/'
+                                     f'*satstar_catalog.fits')
+                if _acc_tok.search(os.path.basename(f))]
+        if obs_scope:
+            _acc = [f for f in _acc
+                    if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
+        _chosen, _ = select_satstar_phase_files(_acc, phase=phase)
+        files, _rej_report = select_rejected_for_catalogs(files, _chosen,
+                                                          phase=phase)
+        print(f"load_rejected_satstar_catalog: {filtername}: "
+              f"{format_phase_report(_rej_report, what='rejected-satstar')}",
+              flush=True)
+        if not files:
+            return None
     # per-frame demo/adhoc tags (e.g. _stripDEMO_) lack the _m<N> token; accept
     # any suffix as long as the file is a sibling of an accepted catalog.
     if not files:
@@ -3067,11 +3140,13 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     row in the delivered m8 catalogs carries ``std_ra`` NaN and ``nmatch_good``
     INT32_MIN because nothing upstream ever computed them.
 
-    Two-level reduction, because the per-exposure catalogs are globbed across
-    pipeline ITERATIONS as well as exposures (``_m3``.. ``_m12``, a median of 6
-    per star): collapse each exposure's iterations to one measurement first,
-    then average across exposures.  N therefore counts IMAGES, and the reported
-    scatter is between images rather than between re-fits of the same pixels.
+    Two-level reduction: collapse each exposure's rows to one measurement
+    first, then average across exposures.  N therefore counts IMAGES, and the
+    reported scatter is between images rather than between re-fits of the same
+    pixels.  The loader used to pool every pipeline ITERATION of an exposure
+    (``_m12``.. ``_m7``, a median of 6 per star); it now reads one per exposure
+    (``satstar_phase_selection``), and level 1 keeps N a count of images when
+    ``SATSTAR_POOL_PHASES=all`` restores the pooled read.
 
     Adds ``n_frames_fit``, ``n_meas_fit``, ``std_ra_fit``/``std_dec_fit``
     (degrees, ddof=1, NaN below two exposures), and ``flux_med_fit`` /
@@ -3498,10 +3573,13 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                        proposal_id=None, field=None):
+                        proposal_id=None, field=None, phase=None):
+    # ``phase``: the cataloging phase being merged, so each exposure's satstar
+    # catalog is that phase's (load_satstar_catalog).
     print(f"Flagging near saturated stars for filter {filtername}")
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath,
-                                       proposal_id=proposal_id, field=field)
+                                       proposal_id=proposal_id, field=field,
+                                       phase=phase)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}")
         cat.add_column(np.zeros(len(cat), dtype='bool'), name=f'near_saturated_{filtername}')
@@ -3696,14 +3774,17 @@ def _fill_satstar_added_columns(satstar_toadd, cat):
 def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                      proposal_id=None, field=None):
+                      proposal_id=None, field=None, phase=None):
     # ``basepath`` locates the satstar catalogs (the cutout's own, for cutout
     # runs).  ``fwhm_basepath`` is unused (the fwhm_table.ecsv read it located
     # was dead compute and has been removed); retained for signature
     # compatibility with existing callers.  ``proposal_id``/``field`` scope the
     # satstar catalog to the observation being merged (load_satstar_catalog).
+    # ``phase`` is the cataloging phase being merged: each exposure contributes
+    # that phase's satstar catalog, not the brightest of every phase on disk.
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath,
-                                       proposal_id=proposal_id, field=field)
+                                       proposal_id=proposal_id, field=field,
+                                       phase=phase)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}; skipping replacement")
         if 'replaced_saturated' not in cat.colnames:
@@ -4093,7 +4174,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         _rej_tab = load_rejected_satstar_catalog(filtername, target=target,
                                                  basepath=basepath,
                                                  proposal_id=proposal_id,
-                                                 field=field)
+                                                 field=field, phase=phase)
     except Exception as _rej_err:
         print(f"WARNING: rejected-satstar load failed for {filtername}: "
               f"{type(_rej_err).__name__}: {_rej_err}")
