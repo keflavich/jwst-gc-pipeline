@@ -609,19 +609,27 @@ def main(filtername, Observations=None, regionname='brick',
         # visit (alignment_config.InheritedBulk; 10678) is already on the
         # absolute frame after fix_alignment.  An absolute tweakreg fit on top
         # can only swap that tie for MIRI's own, which on 10678 left 16 tiles
-        # unmoved and scattered o113's frames by 136 mas.  Only the relative
-        # frame-to-frame fit runs then.  If any frame's visit has NO donor
-        # rows at all (NIRCam not yet checkpointed), the whole association
-        # keeps the absolute fit.
+        # unmoved and scattered o113's frames by 136 mas.  If any frame's visit
+        # has NO donor rows at all (NIRCam not yet checkpointed), the whole
+        # association keeps the absolute fit.
+        #
+        # The RELATIVE fit is skipped too, as on NIRCam, so fix_alignment's
+        # table shift is the only per-frame correction.  Relative tweakreg
+        # re-solves every frame against the first one AFTER fix_alignment and
+        # so cancels any per-exposure row the astrometry checkpoint writes: on
+        # 10678 o078 F770W the exp6 row (+0.83, +3.99) mas changed that frame's
+        # tweakreg shift by exactly (-0.83, -3.99) mas, and m2 read the same
+        # 4.07 mas offset before and after the regen.
         from jwst_gc_pipeline.reduction.alignment_config import inherited_bulk
         from jwst_gc_pipeline.reduction.unified_alignment import (
             inherited_abs_tie_complete)
         _inh = inherited_bulk(proposal_id, field, 'mirimage')
-        if abs_refcat is not None and inherited_abs_tie_complete(
-                _inh, _member_shifts):
-            print(f"Absolute tweakreg OFF: every frame inherited its bulk from "
+        if inherited_abs_tie_complete(_inh, _member_shifts):
+            print(f"TweakRegStep SKIPPED: every frame inherited its bulk from "
                   f"{sorted({sh.inherited_from for sh in _member_shifts})} "
-                  f"(alignment_config.InheritedBulk); relative alignment only")
+                  f"(alignment_config.InheritedBulk); the offsets table is the "
+                  f"only per-frame correction")
+            tweakreg_parameters['skip'] = True
             abs_refcat = None
         if abs_refcat is not None:
             reftbl = Table.read(abs_refcat)
