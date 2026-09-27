@@ -425,3 +425,28 @@ def test_gate_requires_the_seed_kind():
     with pytest.raises(TypeError):
         satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
                               forced_source=False)
+
+
+def test_gate_call_site_passes_the_components_own_seed_kind():
+    """Call-site guard: the helper tests above cannot see the wiring, so
+    passing a constant ``seed_kind='dqsat'`` from get_saturated_stars would
+    leave them green (and turn the gate back on for every kind).  The call
+    must pass the per-component ``_seed_kind``, which the component loop
+    reads from the record's ``seed_kind``."""
+    import ast
+    import inspect
+    import textwrap
+    from jwst_gc_pipeline.reduction import saturated_star_finding as ssf
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ssf.get_saturated_stars)))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, 'id', None) == 'satstar_qfit_for_gate']
+    assert len(calls) == 1
+    kw = {k.arg: k.value for k in calls[0].keywords}
+    assert isinstance(kw.get('seed_kind'), ast.Name)
+    assert kw['seed_kind'].id == '_seed_kind'
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+               and any(getattr(t, 'id', None) == '_seed_kind'
+                       for t in n.targets)]
+    assert len(assigns) == 1
+    src = ast.unparse(assigns[0].value)
+    assert src.startswith("src.get('seed_kind'"), src

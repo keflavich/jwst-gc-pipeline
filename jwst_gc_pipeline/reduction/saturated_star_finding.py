@@ -1286,7 +1286,14 @@ def satstar_qfit_for_gate(qfit, qfit_local, qfit_max_keep, *, is_miri,
     accepted satstar from 6 to 682 on the two heavy frames, 628 of them next
     to a peak or subfloor seed.  On gc-treasury F480M m7 (12 frames) the gate
     accepted 87 fits the box qfit rejected, 76 of them dqsat, and on gc2211
-    F277W every accepted satstar is dqsat."""
+    F277W every accepted satstar is dqsat.
+
+    A component whose kind is unknown resolves to ``'dqsat'`` upstream (the
+    ``_kind_names`` lookup in ``find_saturated_stars``, the per-record
+    default in the source-record build and in the fit loop), so the gate
+    stays on for it, as it was for every component before.  That is
+    deliberate: the DQ kind is the one the gate was built for, and every
+    amplitude seed is stamped explicitly."""
     sw = satstar_fit_switches() if switches is None else switches
     if (sw['qfit_local_gate'] and not is_miri and not forced_source
             and seed_kind == 'dqsat' and np.isfinite(qfit_local)):
