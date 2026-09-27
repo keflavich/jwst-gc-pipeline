@@ -39,8 +39,10 @@ SURVEY_URL = HIPS_BASE + 'jwst_gc_treasury_vminmax_hips/'
 #: tour's pointings from it.  ``centre`` picks the footprint the stop sits at.
 #: ``coverage`` marks a product that has no per-field layers of its own: its
 #: stops come from ``layers`` and are kept only where the served HiPS has a
-#: tile.  ``note`` replaces the caption's first sentence when the product is
-#: chosen.
+#: tile.  ``overlap`` names a second served HiPS that must also have a tile at
+#: a stop: the composite's MIRI parallels mostly sit off the NIRCam pointings,
+#: and there the composite is its red channel alone.  ``note`` replaces the
+#: caption's first sentence when the product is chosen.
 PRODUCTS = (
     {'key': 'nircam', 'label': 'NIRCam, fixed cuts',
      'hips': 'jwst_gc_treasury_vminmax_hips',
@@ -79,7 +81,8 @@ PRODUCTS = (
     {'key': 'rgb', 'label': 'MIRI + NIRCam (F770W / F480M / F212N)',
      'hips': 'gctreasury_mosaic_RGB_770-480-212_hips',
      'layers': 'MIRI_F770W', 'centre': 'miri', 'coverage': True,
-     'note': 'R = MIRI <b>F770W</b>, G = <b>F480M</b>, B = <b>F212N</b>, '
+     'overlap': 'jwst_gc_treasury_vminmax_hips',
+     'note':'R = MIRI <b>F770W</b>, G = <b>F480M</b>, B = <b>F212N</b>, '
              'where MIRI and NIRCam overlap'},
 )
 
@@ -369,6 +372,13 @@ function setProduct(key) {
       else { aladin.setImageSurvey(layer); }
       aladin.setFoV(next.fov);
     } catch (err) {
+      // Back to the product that was showing, so the menu, the field list,
+      // the caption and the address still describe the layer on screen.
+      TOUR = prev;
+      fillFields();
+      document.getElementById('what').innerHTML = prev.note || esc(prev.label);
+      document.getElementById('product').value = prev.key;
+      remember(prev.key);
       document.getElementById('where').textContent =
         next.label + ' failed to load: ' + err;
       return;

@@ -25,6 +25,15 @@ def build():
     return module
 
 
+@pytest.fixture(autouse=True)
+def _no_served_hips(build, tmp_path, monkeypatch):
+    """The build reads the served coadds' properties; left at its default it
+    would read whatever is in the live web root of the machine running the
+    tests.  A test that wants a served coadd passes --hips-root."""
+    monkeypatch.setattr(build, 'DEFAULT_HIPS_ROOT',
+                        str(tmp_path / 'no-served-hips'))
+
+
 def _layers(root, obsids, flavour='vminmax'):
     for obs in obsids:
         d = root / f'GCTreasury_o{obs}_RGB_480-mean-212_{flavour}_hips'
@@ -504,47 +513,108 @@ def test_single_module_layers_count_as_imagery(build, tmp_path):
     assert sorted(s['id'] for s in starless[0]['stops']) == ['o127', 'o128']
 
 
-def test_the_composite_visits_only_pointings_it_has_tiles_for(build, tmp_path,
-                                                             capsys):
-    """The MIRI + NIRCam composite has no per-field layers, and is rebuilt
-    separately from the coadds, so a MIRI pointing newer than it has no
-    imagery in it.  Its tour keeps a pointing only where the served HiPS has
-    a tile."""
+def _served(root, name, order, positions):
+    """A served HiPS at ``root/name`` with a tile at each (ra, dec)."""
     astropy_healpix = pytest.importorskip('astropy_healpix')
     import astropy.units as u
     from astropy.coordinates import SkyCoord
 
+    d = root / name
+    d.mkdir(parents=True)
+    (d / 'properties').write_text(f'hips_order = {order}\nhips_frame = '
+                                  'galactic\nhips_tile_format = png\n')
+    for ra, dec in positions:
+        at = SkyCoord(ra * u.deg, dec * u.deg).galactic
+        ipix = int(astropy_healpix.lonlat_to_healpix(at.l, at.b, 2 ** order,
+                                                     order='nested'))
+        tile = (d / f'Norder{order}' / f'Dir{ipix // 10000 * 10000}'
+                / f'Npix{ipix}.png')
+        tile.parent.mkdir(parents=True, exist_ok=True)
+        tile.write_bytes(b'x')
+
+
+def _composite_setup(tmp_path, in_rgb, under_nircam):
+    """Three MIRI pointings 3' apart, so each is on its own order-12 tile
+    (~0.9'); the composite has tiles at ``in_rgb`` and the NIRCam coadd at
+    ``under_nircam`` (indices into the three)."""
     hips = tmp_path / 'pngs'
     _layers(hips, ['127', '128', '129'])
     _miri_layers(hips, ['127', '128', '129'])
-    # 3' apart, so each pointing is on a different order-12 tile (~0.9')
     entries = [_with_miri(n, i, step=0.05)
                for i, n in enumerate(('127', '128', '129'))]
     fp = tmp_path / 'footprints.json'
     _footprints(fp, entries)
-
+    miri = [(266.5 + i * 0.05, -28.7 + 7 / 60) for i in range(3)]
     root = tmp_path / 'avm'
-    rgb = root / 'gctreasury_mosaic_RGB_770-480-212_hips'
-    rgb.mkdir(parents=True)
-    (rgb / 'properties').write_text('hips_order = 12\nhips_frame = galactic\n'
-                                    'hips_tile_format = png\n')
-    for entry in entries[:2]:                     # o129 is not in it
-        ra = 266.5 + entries.index(entry) * 0.05
-        at = SkyCoord(ra * u.deg, (-28.7 + 7 / 60) * u.deg).galactic
-        ipix = int(astropy_healpix.lonlat_to_healpix(at.l, at.b, 2 ** 12,
-                                                     order='nested'))
-        tile = rgb / 'Norder12' / f'Dir{ipix // 10000 * 10000}' / f'Npix{ipix}.png'
-        tile.parent.mkdir(parents=True, exist_ok=True)
-        tile.write_bytes(b'x')
+    _served(root, 'gctreasury_mosaic_RGB_770-480-212_hips', 12,
+            [miri[i] for i in in_rgb])
+    _served(root, 'jwst_gc_treasury_vminmax_hips', 14,
+            [miri[i] for i in under_nircam])
+    return hips, fp, root
 
+
+def _composite_stops(build, tmp_path, hips, fp, root):
     out = tmp_path / 'site'
     build.main(['--hips-dir', str(hips), '--footprints', str(fp),
                 '--out', str(out), '--hips-root', str(root),
                 '--products', 'nircam', 'rgb'])
     data = json.loads((out / panner.DATA_FILE).read_text())
     composite = [p for p in data['products'] if p['key'] == 'rgb'][0]
-    assert sorted(s['id'] for s in composite['stops']) == ['o127', 'o128']
+    return sorted(s['id'] for s in composite['stops'])
+
+
+def test_the_composite_visits_only_pointings_it_has_tiles_for(build, tmp_path,
+                                                             capsys):
+    """The MIRI + NIRCam composite has no per-field layers, and is rebuilt
+    separately from the coadds, so a MIRI pointing newer than it has no
+    imagery in it.  Its tour keeps a pointing only where the served HiPS has
+    a tile."""
+    hips, fp, root = _composite_setup(tmp_path, in_rgb=[0, 1],
+                                      under_nircam=[0, 1, 2])
+    assert _composite_stops(build, tmp_path, hips, fp, root) == ['o127', 'o128']
     assert 'o129' in capsys.readouterr().out
+
+
+def test_the_composite_skips_parallels_with_no_nircam_under_them(build,
+                                                                tmp_path,
+                                                                capsys):
+    """A MIRI parallel sits several arcminutes off its own NIRCam pointing,
+    and where no other pointing's NIRCam covers it the composite shows its
+    red channel alone.  On the served build of 2026-09-27 that was 33 of the
+    64 stops."""
+    hips, fp, root = _composite_setup(tmp_path, in_rgb=[0, 1, 2],
+                                      under_nircam=[1])
+    assert _composite_stops(build, tmp_path, hips, fp, root) == ['o128']
+    out = capsys.readouterr().out
+    assert 'nothing from jwst_gc_treasury_vminmax_hips under 2' in out
+    assert 'o127, o129' in out
+
+
+def test_the_zoom_follows_the_coadds_own_order(build, tmp_path):
+    """The page shows the coadd, so a coadd built coarser than its per-field
+    layers must be opened at its own order: Aladin asked for tiles deeper
+    than a layer has can show nothing at all."""
+    hips = tmp_path / 'pngs'
+    _layers(hips, ['127', '128'])                 # per-field layers: order 14
+    fp = tmp_path / 'footprints.json'
+    _footprints(fp, [_with_miri(n, i) for i, n in enumerate(('127', '128'))])
+    root = tmp_path / 'avm'
+    (root / 'jwst_gc_treasury_vminmax_hips').mkdir(parents=True)
+    (root / 'jwst_gc_treasury_vminmax_hips' / 'properties').write_text(
+        'hips_order = 13\n')
+    out = tmp_path / 'site'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(out), '--hips-root', str(root),
+                '--products', 'nircam'])
+    data = json.loads((out / panner.DATA_FILE).read_text())
+    assert data['fov'] == pytest.approx(2 * panner.DEFAULT_FOV)
+
+    # no coadd on this disk: the per-field order stands in
+    out = tmp_path / 'site2'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(out), '--products', 'nircam'])
+    data = json.loads((out / panner.DATA_FILE).read_text())
+    assert data['fov'] == pytest.approx(panner.DEFAULT_FOV)
 
 
 def test_every_served_product_is_on_the_menu():
@@ -647,3 +717,26 @@ def test_a_tour_file_from_before_the_menu_still_pans(tmp_path):
                                   hidden: els.productpick.hidden}));
     """)
     assert out[1] == {'n': 1, 'survey': 'u/n/', 'hidden': True}
+
+
+def test_a_layer_that_fails_to_load_leaves_the_page_on_the_old_one(tmp_path):
+    """If Aladin refuses the new layer the old one stays on screen, so the
+    menu, the field list, and the caption must go back to describing it."""
+    out = _dom(tmp_path, PRODUCT_BODY + """
+      A.HiPS = function () { throw new Error('no such survey'); };
+      els.product.value = 'miri';
+      els.product.on.change.call(els.product);
+      console.log(JSON.stringify({key: TOUR.key, sets: sets,
+                                  product: els.product.value,
+                                  fields: els.field.innerHTML,
+                                  what: els.what.innerHTML,
+                                  where: els.where.textContent}));
+    """)
+    got = out[1]
+    assert got['key'] == 'nircam'
+    assert got['sets'] == []
+    assert got['product'] == 'nircam'
+    assert got['fields'].count('<option') == 3
+    assert got['what'] == 'N'
+    assert 'MIRI F770W failed to load' in got['where']
+    assert 'no such survey' in got['where']

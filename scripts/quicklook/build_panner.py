@@ -101,6 +101,16 @@ def hips_order(hips_dir, family, default=panner.DEFAULT_ORDER):
     return default
 
 
+def coadd_order(hips_root, hips):
+    """The served coadd's own HiPS order, or None if it is not under
+    ``hips_root``."""
+    path = os.path.join(hips_root, hips, 'properties')
+    if not os.path.isfile(path):
+        return None
+    order = read_properties(path).get('hips_order')
+    return None if order is None else int(order)
+
+
 def _polygon_centre(value):
     """Mean direction of a footprint's vertices, or None.
 
@@ -218,7 +228,13 @@ def product_tour(product, args, survey):
         # is imagery the tour cannot reach, which is worth knowing.
         print(f'{key}: note: {len(missing)} layer(s) have no footprint centre '
               f'and are not on the tour: {", ".join(missing)}')
-    order = hips_order(args.hips_dir, family)
+    # The page shows the coadd, so the coadd's order sets the zoom: one built
+    # coarser than its per-field layers would otherwise be opened deeper than
+    # it has tiles.  The per-field order stands in when the coadd is not on
+    # this disk.
+    order = coadd_order(args.hips_root, product['hips'])
+    if order is None:
+        order = hips_order(args.hips_dir, family)
     if product.get('coverage'):
         has_tile = tile_checker(os.path.join(args.hips_root, product['hips']))
         order = has_tile.order
@@ -228,6 +244,16 @@ def product_tour(product, args, survey):
             print(f'{key}: no imagery at {len(bare)} pointing(s), left off '
                   f'its tour: {", ".join(bare)}')
         for k in bare:
+            del found[k]
+    if product.get('overlap'):
+        under = tile_checker(os.path.join(args.hips_root, product['overlap']))
+        alone = sorted(k for k, stop in found.items()
+                       if not under(stop['ra'], stop['dec']))
+        if alone:
+            print(f'{key}: nothing from {product["overlap"]} under '
+                  f'{len(alone)} pointing(s), left off its tour: '
+                  f'{", ".join(alone)}')
+        for k in alone:
             del found[k]
     if not found:
         raise NoTour('no pointing has both a rendered layer and a centre')
