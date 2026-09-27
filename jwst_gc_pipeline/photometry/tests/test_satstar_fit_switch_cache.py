@@ -165,9 +165,9 @@ def test_signature_keys_the_local_qfit_with_or_without_a_ramp(tmp_path,
                                                               monkeypatch):
     fn = _frame(tmp_path, with_ramp=False)
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
-    assert satstar_fit_switch_signature(fn) == 'ql10g1'
+    assert satstar_fit_switch_signature(fn) == 'ql10g1d'
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
-    assert satstar_fit_switch_signature(fn) == 'ql10g0.8'
+    assert satstar_fit_switch_signature(fn) == 'ql10g0.8d'
     monkeypatch.delenv('SATSTAR_QFIT_LOCAL_GATE')
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_R', '12')
     assert satstar_fit_switch_signature(fn) == 'ql12'      # column only
@@ -231,6 +231,23 @@ def test_local_qfit_gate_refits_even_without_a_ramp(tmp_path, monkeypatch):
     _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'))
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
     calls = _counting_fit(monkeypatch)
+    _load(fn, tmp_path)
+    assert calls['n'] == 1
+
+
+def test_catalog_from_the_every_kind_local_gate_is_refit(tmp_path,
+                                                        monkeypatch):
+    """A catalog stamped 'ql10g1' was fitted when the local gate judged every
+    seed kind; the gate now judges dqsat components only, so it is refit, and
+    the new stamp is reused afterwards."""
+    fn = _frame(tmp_path, with_ramp=False)
+    _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'),
+                 satfitsw='ql10g1')
+    monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
+    calls = _counting_fit(monkeypatch)
+    _load(fn, tmp_path)
+    assert calls['n'] == 1
+    assert calls['fit_switch_signature'] == ['ql10g1d']
     _load(fn, tmp_path)
     assert calls['n'] == 1
 

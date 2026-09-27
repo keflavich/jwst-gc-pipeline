@@ -389,14 +389,39 @@ def test_qfit_local_switch_defaults(monkeypatch):
 
 
 def test_gate_uses_box_qfit_unless_the_local_gate_is_on(monkeypatch):
-    kw = dict(is_miri=False, forced_source=False)
+    kw = dict(is_miri=False, forced_source=False, seed_kind='dqsat')
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, **kw) == (7.0, 5.0)
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, **kw) == (0.2, 0.8)
     # MIRI, forced sources and a NaN local qfit keep the box qfit
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=True,
-                                 forced_source=False) == (7.0, 5.0)
+                                 forced_source=False,
+                                 seed_kind='dqsat') == (7.0, 5.0)
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
-                                 forced_source=True) == (7.0, 5.0)
+                                 forced_source=True,
+                                 seed_kind='dqsat') == (7.0, 5.0)
     assert satstar_qfit_for_gate(7.0, np.nan, 5.0, **kw) == (7.0, 5.0)
+
+
+@pytest.mark.parametrize('seed_kind', ['peak', 'subfloor', 'partner',
+                                       'sibling', 'forced'])
+def test_local_gate_judges_only_dqsat_components(monkeypatch, seed_kind):
+    """The amplitude-seeded kinds carry no SATURATED flag; where the severity
+    floor sits below the saturation onset many are unsaturated stars, which
+    the local qfit accepts (sgra F405N: 5219 of 7011 added accepts were peak
+    or subfloor seeds).  They keep the box qfit with the gate on."""
+    monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
+    monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
+    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
+                                 forced_source=False,
+                                 seed_kind=seed_kind) == (7.0, 5.0)
+    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
+                                 forced_source=False,
+                                 seed_kind='dqsat') == (0.2, 0.8)
+
+
+def test_gate_requires_the_seed_kind():
+    with pytest.raises(TypeError):
+        satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
+                              forced_source=False)
