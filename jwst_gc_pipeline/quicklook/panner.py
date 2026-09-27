@@ -18,17 +18,80 @@ from ..aladin_controls import ALADIN_CONTROLS
 ALADIN_CSS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.css'
 ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
 
+HIPS_BASE = 'https://starformation.astro.ufl.edu/avm_images/'
+
 #: The layer this page exists to show, and the one Adam made the default
 #: everywhere else: fixed cuts, so a given surface brightness is the same
 #: colour in every field.  A per-field stretch would make the pan read as
 #: brightness steps at every tile edge.
-SURVEY_URL = ('https://starformation.astro.ufl.edu/avm_images/'
-              'jwst_gc_treasury_vminmax_hips/')
+SURVEY_URL = HIPS_BASE + 'jwst_gc_treasury_vminmax_hips/'
+
+#: The products the page can switch between, in menu order; the first is the
+#: default.  Each one gets its own tour, because the products do not cover the
+#: same sky: MIRI is a parallel that lands several arcminutes from the NIRCam
+#: pointing it rode along with, the stars-subtracted layers exist only for the
+#: tiles whose catalogs are finished, and the three-colour composite exists
+#: only where MIRI and NIRCam overlap.  Panning a MIRI layer along the NIRCam
+#: tour would show blank sky most of the way.
+#:
+#: ``layers`` names the per-field layer family the coadd is built from (the
+#: part between ``GCTreasury_oNNN_`` and ``_hips``); the builder reads the
+#: tour's pointings from it.  ``centre`` picks the footprint the stop sits at.
+#: ``coverage`` marks a product that has no per-field layers of its own: its
+#: stops come from ``layers`` and are kept only where the served HiPS has a
+#: tile.  ``note`` replaces the caption's first sentence when the product is
+#: chosen.
+PRODUCTS = (
+    {'key': 'nircam', 'label': 'NIRCam, fixed cuts',
+     'hips': 'jwst_gc_treasury_vminmax_hips',
+     'layers': 'RGB_480-mean-212_vminmax', 'centre': 'nircam',
+     'note': 'NIRCam <b>F212N + F480M</b>, one set of cuts for every field'},
+    {'key': 'nircam-field', 'label': 'NIRCam, per-field stretch',
+     'hips': 'jwst_gc_treasury_hips',
+     'layers': 'RGB_480-mean-212', 'centre': 'nircam',
+     'note': 'NIRCam <b>F212N + F480M</b>, each field on its own percentiles'},
+    {'key': 'nircam-log', 'label': 'NIRCam, log stretch',
+     'hips': 'jwst_gc_treasury_log_hips',
+     'layers': 'RGB_480-mean-212_log', 'centre': 'nircam',
+     'note': 'NIRCam <b>F212N + F480M</b>, log stretch'},
+    {'key': 'nircam-starless', 'label': 'NIRCam, stars subtracted',
+     'hips': 'jwst_gc_treasury_residual_vminmax_hips',
+     'layers': 'RGB_480-mean-212_residual_vminmax', 'centre': 'nircam',
+     'note': 'NIRCam <b>F212N + F480M</b> with the fitted stars subtracted, '
+             'fixed cuts'},
+    {'key': 'nircam-starless-log', 'label': 'NIRCam, stars subtracted (log)',
+     'hips': 'jwst_gc_treasury_residual_log_hips',
+     'layers': 'RGB_480-mean-212_residual_log', 'centre': 'nircam',
+     'note': 'NIRCam <b>F212N + F480M</b> with the fitted stars subtracted, '
+             'log stretch'},
+    {'key': 'miri', 'label': 'MIRI F770W',
+     'hips': 'jwst_gc_treasury_miri_hips',
+     'layers': 'MIRI_F770W', 'centre': 'miri',
+     'note': 'MIRI <b>F770W</b> parallels'},
+    {'key': 'miri-bgmatch', 'label': 'MIRI F770W, background-matched',
+     'hips': 'jwst_gc_treasury_miri_bgmatch_hips',
+     'layers': 'MIRI_F770W_bgmatch', 'centre': 'miri',
+     'note': 'MIRI <b>F770W</b> parallels, backgrounds matched across fields'},
+    {'key': 'miri-starless', 'label': 'MIRI F770W, stars subtracted',
+     'hips': 'jwst_gc_treasury_miri_residual_hips',
+     'layers': 'MIRI_F770W_residual', 'centre': 'miri',
+     'note': 'MIRI <b>F770W</b> with the fitted stars subtracted'},
+    {'key': 'rgb', 'label': 'MIRI + NIRCam (F770W / F480M / F212N)',
+     'hips': 'gctreasury_mosaic_RGB_770-480-212_hips',
+     'layers': 'MIRI_F770W', 'centre': 'miri', 'coverage': True,
+     'note': 'R = MIRI <b>F770W</b>, G = <b>F480M</b>, B = <b>F212N</b>, '
+             'where MIRI and NIRCam overlap'},
+)
 
 #: Degrees across the viewport.  The HiPS is order 14, so its pixels are about
 #: 0.019", and 0.008 deg (~29") is a little under 1:1 on a 1500 px window --
 #: full zoom without magnifying past the data.
 DEFAULT_FOV = 0.008
+
+#: The HiPS order DEFAULT_FOV is chosen for.  MIRI and the three-colour
+#: composite are order 12, pixels four times coarser, and the same fov would
+#: magnify them fourfold -- interpolation passed off as detail.
+DEFAULT_ORDER = 14
 
 #: Arcseconds per second of wall clock.  At 2"/s a NIRCam tile (~2.2') takes
 #: about a minute to cross, and the whole survey a little over half an hour.
@@ -36,6 +99,12 @@ DEFAULT_RATE = 2.0
 
 PAGE_FILE = 'slow_panner.html'
 DATA_FILE = 'slow_panner_tour.json'
+
+
+def fov_for_order(order, fov=DEFAULT_FOV):
+    """The fov that shows a HiPS of ``order`` at the scale ``fov`` shows an
+    order-DEFAULT_ORDER one: each order down doubles the pixel size."""
+    return fov * 2 ** (DEFAULT_ORDER - int(order))
 
 CSS = """
 :root { --bg:#05070c; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; }
@@ -55,6 +124,8 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
   font-variant-numeric:tabular-nums; }
 .where b { color:var(--fg); }
 .pick { display:flex; align-items:center; gap:.35rem; color:var(--muted); }
+/* display:flex outranks the user agent's [hidden] rule. */
+.pick[hidden] { display:none; }
 /* The caption used to be a banner across the top of the viewer, where it sat
    over Aladin's own fullscreen button and coordinate readout -- both of which
    live in the top corners and cannot be moved.  It rides the control bar
@@ -66,8 +137,10 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
 """
 
 _SCRIPT = r"""
-var TOUR = null, aladin = null, playing = true, rate = 1.0;
-var leg = 0, along = 0, last = null;
+// TOUR is the product on screen -- its survey, fov, rate and stops -- and
+// PRODUCTS every product in the tour file, TOUR among them.
+var TOUR = null, PRODUCTS = [], aladin = null, playing = true, rate = 1.0;
+var leg = 0, along = 0, last = null, here = null;
 
 function esc(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -143,6 +216,7 @@ function setPlaying(on) {
 }
 
 function showWhere(stop, ra, dec) {
+  here = [ra, dec];
   document.getElementById('where').innerHTML =
     fmt(ra, true) + ' ' + fmt(dec, false);
   var box = document.getElementById('field');
@@ -213,7 +287,107 @@ function step(now) {
   showWhere(along < 0.5 ? ends[0] : ends[1], p[0], p[1]);
 }
 
+// A tour file written before the product menu existed is one product: the
+// file itself.  The page and the tour are deployed separately, so either can
+// be the newer of the two for a while.
+function productsOf(d) {
+  if (d.products && d.products.length) { return d.products; }
+  return [{key: 'nircam', label: 'NIRCam', survey: d.survey, fov: d.fov,
+           rate: d.rate, stops: d.stops}];
+}
+
+function findProduct(key) {
+  for (var i = 0; i < PRODUCTS.length; i++) {
+    if (PRODUCTS[i].key === key) { return PRODUCTS[i]; }
+  }
+  return null;
+}
+
+// ?product=miri opens on that product, and choosing one rewrites the address
+// to match, so a view can be linked and survives a reload.
+function wantedProduct() {
+  if (typeof location === 'undefined') { return null; }
+  return new URLSearchParams(location.search).get('product');
+}
+
+function remember(key) {
+  if (typeof location === 'undefined' || typeof history === 'undefined' ||
+      !history.replaceState) { return; }
+  var params = new URLSearchParams(location.search);
+  params.set('product', key);
+  history.replaceState(null, '', location.pathname + '?' + params.toString() +
+                                 location.hash);
+}
+
+function fillProducts() {
+  var box = document.getElementById('product');
+  var html = '';
+  for (var i = 0; i < PRODUCTS.length; i++) {
+    html += '<option value="' + esc(PRODUCTS[i].key) + '">' +
+            esc(PRODUCTS[i].label) + '</option>';
+  }
+  box.innerHTML = html;
+  box.value = TOUR.key;
+  // One product leaves nothing to choose between.
+  document.getElementById('productpick').hidden = PRODUCTS.length < 2;
+}
+
+// A layer given by URL has to be built, not named: a bare URL string is taken
+// as a survey id by some builds of Aladin Lite v3 and does nothing.
+function makeHiPS(p) {
+  var opts = {name: p.label, imgFormat: 'png'};
+  return (typeof A.HiPS === 'function') ? A.HiPS(p.survey, opts)
+                                        : A.imageHiPS(p.survey, opts);
+}
+
+function stopIds(t) {
+  return t.stops.map(function (s) { return s.id; }).join(' ');
+}
+
+function nearestStop(pos) {
+  if (!pos) { return 0; }
+  var best = 0, bestSep = Infinity;
+  for (var i = 0; i < TOUR.stops.length; i++) {
+    var d = sep(pos, [TOUR.stops[i].ra, TOUR.stops[i].dec]);
+    if (d < bestSep) { bestSep = d; best = i; }
+  }
+  return best;
+}
+
+function setProduct(key) {
+  var next = findProduct(key);
+  if (!next || next === TOUR) { return; }
+  var prev = TOUR;
+  TOUR = next;
+  fillFields();
+  document.getElementById('what').innerHTML = next.note || esc(next.label);
+  remember(key);
+  if (aladin) {
+    try {
+      var layer = makeHiPS(next);
+      if (aladin.setBaseImageLayer) { aladin.setBaseImageLayer(layer); }
+      else { aladin.setImageSurvey(layer); }
+      aladin.setFoV(next.fov);
+    } catch (err) {
+      document.getElementById('where').textContent =
+        next.label + ' failed to load: ' + err;
+      return;
+    }
+  }
+  // The NIRCam stretches are built from the same tiles, so their tours are
+  // the same tour and the pan carries on from where it is.  Any other product
+  // covers different sky; the pan moves to its tile nearest the current view
+  // instead of back to the start of its tour.
+  if (prev && stopIds(prev) === stopIds(next)) {
+    var box = document.getElementById('field');
+    box.value = String(along < 0.5 ? leg : (leg + 1) % TOUR.stops.length);
+    return;
+  }
+  goToStop(nearestStop(here));
+}
+
 function boot() {
+  fillProducts();
   fillFields();
   A.init.then(function () {
     // Every Aladin control on (jwst_gc_pipeline.aladin_controls), as on the
@@ -240,11 +414,21 @@ document.getElementById('rate').addEventListener('change', function () {
 document.getElementById('skip').addEventListener('click', function () {
   leg = (leg + 1) % TOUR.stops.length; along = 0;
 });
+document.getElementById('product').addEventListener('change', function () {
+  setProduct(this.value);
+});
 
 fetch(DATA_URL, {cache: 'no-cache'})
   .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); }
                        return r.json(); })
-  .then(function (d) { TOUR = d; boot(); })
+  .then(function (d) {
+    PRODUCTS = productsOf(d);
+    TOUR = findProduct(wantedProduct()) || PRODUCTS[0];
+    if (TOUR.key !== PRODUCTS[0].key) {
+      document.getElementById('what').innerHTML = TOUR.note || esc(TOUR.label);
+    }
+    boot();
+  })
   .catch(function (err) {
     document.getElementById('where').textContent =
       'could not load the tour: ' + err;
@@ -266,6 +450,8 @@ def render_page(data_url=DATA_FILE):
 <div class=bar>
   <button id=play>&#9208; Pause</button>
   <button id=skip>&#9197; Next tile</button>
+  <label class=pick for=product id=productpick>product
+    <select id=product title="switch product"></select></label>
   <label class=pick for=field>field
     <select id=field title="jump to a field"></select></label>
   <select id=rate title="pan rate">
@@ -275,8 +461,8 @@ def render_page(data_url=DATA_FILE):
     <option value="4">4&times;</option>
   </select>
   <span class=where id=where>loading the tour&hellip;</span>
-  <span class=note>Program 10678, <b>F212N + F480M</b> at full resolution &mdash;
-    drifting across the tiles that have imagery.
+  <span class=note>Program 10678: <span id=what>{PRODUCTS[0]['note']}</span>,
+    at full resolution, drifting across the tiles that have imagery.
     <a href="index.html">back to the release</a></span>
 </div>
 <script src="{ALADIN_JS}" charset=utf-8></script>

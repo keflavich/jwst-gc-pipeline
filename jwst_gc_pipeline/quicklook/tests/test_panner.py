@@ -413,3 +413,237 @@ def test_o138_and_o139_are_left_off_the_tour_by_default(build, tmp_path,
     tour = json.loads((everything / panner.DATA_FILE).read_text())
     assert sorted(s['id'] for s in tour['stops']) == ['o127', 'o128',
                                                        'o138', 'o139']
+
+
+def _miri_layers(root, obsids, family='MIRI_F770W'):
+    for obs in obsids:
+        d = root / f'GCTreasury_o{obs}_{family}_hips'
+        d.mkdir(parents=True)
+        (d / 'properties').write_text('hips_order = 12\n')
+
+
+def _square(ra, dec, half=0.02):
+    return json.dumps([[[ra - half, dec - half], [ra - half, dec + half],
+                        [ra + half, dec + half], [ra + half, dec - half]]])
+
+
+def _with_miri(n, i, step=0.01):
+    """A footprint entry whose MIRI parallel sits 7' north of the pointing,
+    as the real ones sit several arcminutes from theirs."""
+    ra, dec = 266.5 + i * step, -28.7
+    return {'number': n, 'target': f'GC_{n}', 'ra': ra, 'dec': dec,
+            'miri': _square(ra, dec + 7 / 60)}
+
+
+def test_every_product_gets_its_own_tour(build, tmp_path):
+    """MIRI is a parallel several arcminutes from its NIRCam pointing, so
+    panning the MIRI layer along the NIRCam tour would show blank sky most of
+    the way.  Each product's stops come from its own layers and footprint."""
+    hips = tmp_path / 'pngs'
+    _layers(hips, ['127', '128', '129'])
+    _miri_layers(hips, ['127', '128'])
+    fp = tmp_path / 'footprints.json'
+    _footprints(fp, [_with_miri(n, i)
+                     for i, n in enumerate(('127', '128', '129'))])
+    out = tmp_path / 'site'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(out), '--products', 'nircam', 'miri'])
+    data = json.loads((out / panner.DATA_FILE).read_text())
+    by_key = {p['key']: p for p in data['products']}
+    assert list(by_key) == ['nircam', 'miri']
+
+    nircam, miri = by_key['nircam'], by_key['miri']
+    assert sorted(s['id'] for s in miri['stops']) == ['o127', 'o128']
+    for stop in miri['stops']:
+        # the mean vertex direction of a square, a few mas off its middle
+        assert stop['dec'] == pytest.approx(-28.7 + 7 / 60, abs=1e-4)
+    assert miri['survey'].endswith('/jwst_gc_treasury_miri_hips/')
+    # order 12 is shown 4x wider than order 14, and panned 4x faster, so the
+    # sky crosses the screen at the same speed
+    assert miri['fov'] == pytest.approx(4 * nircam['fov'])
+    assert miri['rate'] / miri['fov'] == pytest.approx(
+        nircam['rate'] / nircam['fov'])
+
+    # the top level is the default product, which is what a page written
+    # before the menu existed reads
+    assert data['survey'] == nircam['survey'] == panner.SURVEY_URL
+    assert data['stops'] == nircam['stops']
+    assert data['fov'] == nircam['fov']
+
+
+def test_a_product_with_nothing_to_show_is_left_off_the_menu(build, tmp_path,
+                                                            capsys):
+    hips = tmp_path / 'pngs'
+    _layers(hips, ['127', '128'])
+    fp = tmp_path / 'footprints.json'
+    _footprints(fp, [_with_miri(n, i) for i, n in enumerate(('127', '128'))])
+    out = tmp_path / 'site'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(out), '--products', 'nircam', 'miri'])
+    data = json.loads((out / panner.DATA_FILE).read_text())
+    assert [p['key'] for p in data['products']] == ['nircam']
+    assert 'miri: left off the menu' in capsys.readouterr().out
+
+
+def test_single_module_layers_count_as_imagery(build, tmp_path):
+    """A tile with one module finished is rendered as
+    GCTreasury_o063_nrca_... and is in the coadd like any other."""
+    hips = tmp_path / 'pngs'
+    _layers(hips, ['127'], flavour='residual_vminmax')
+    d = hips / 'GCTreasury_o128_nrca_RGB_480-mean-212_residual_vminmax_hips'
+    d.mkdir(parents=True)
+    (d / 'properties').write_text('hips_order = 14\n')
+    _layers(hips, ['127', '128'])
+    fp = tmp_path / 'footprints.json'
+    _footprints(fp, [_with_miri(n, i) for i, n in enumerate(('127', '128'))])
+    out = tmp_path / 'site'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(out), '--products', 'nircam', 'nircam-starless'])
+    data = json.loads((out / panner.DATA_FILE).read_text())
+    starless = [p for p in data['products'] if p['key'] == 'nircam-starless']
+    assert sorted(s['id'] for s in starless[0]['stops']) == ['o127', 'o128']
+
+
+def test_the_composite_visits_only_pointings_it_has_tiles_for(build, tmp_path,
+                                                             capsys):
+    """The MIRI + NIRCam composite has no per-field layers, and is rebuilt
+    separately from the coadds, so a MIRI pointing newer than it has no
+    imagery in it.  Its tour keeps a pointing only where the served HiPS has
+    a tile."""
+    astropy_healpix = pytest.importorskip('astropy_healpix')
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+
+    hips = tmp_path / 'pngs'
+    _layers(hips, ['127', '128', '129'])
+    _miri_layers(hips, ['127', '128', '129'])
+    # 3' apart, so each pointing is on a different order-12 tile (~0.9')
+    entries = [_with_miri(n, i, step=0.05)
+               for i, n in enumerate(('127', '128', '129'))]
+    fp = tmp_path / 'footprints.json'
+    _footprints(fp, entries)
+
+    root = tmp_path / 'avm'
+    rgb = root / 'gctreasury_mosaic_RGB_770-480-212_hips'
+    rgb.mkdir(parents=True)
+    (rgb / 'properties').write_text('hips_order = 12\nhips_frame = galactic\n'
+                                    'hips_tile_format = png\n')
+    for entry in entries[:2]:                     # o129 is not in it
+        ra = 266.5 + entries.index(entry) * 0.05
+        at = SkyCoord(ra * u.deg, (-28.7 + 7 / 60) * u.deg).galactic
+        ipix = int(astropy_healpix.lonlat_to_healpix(at.l, at.b, 2 ** 12,
+                                                     order='nested'))
+        tile = rgb / 'Norder12' / f'Dir{ipix // 10000 * 10000}' / f'Npix{ipix}.png'
+        tile.parent.mkdir(parents=True, exist_ok=True)
+        tile.write_bytes(b'x')
+
+    out = tmp_path / 'site'
+    build.main(['--hips-dir', str(hips), '--footprints', str(fp),
+                '--out', str(out), '--hips-root', str(root),
+                '--products', 'nircam', 'rgb'])
+    data = json.loads((out / panner.DATA_FILE).read_text())
+    composite = [p for p in data['products'] if p['key'] == 'rgb'][0]
+    assert sorted(s['id'] for s in composite['stops']) == ['o127', 'o128']
+    assert 'o129' in capsys.readouterr().out
+
+
+def test_every_served_product_is_on_the_menu():
+    """The request was for the stars-subtracted layers, the MIRI layers, the
+    MIRI + NIRCam composite and each stretch; the fixed-cut NIRCam layer
+    stays the default."""
+    keys = [p['key'] for p in panner.PRODUCTS]
+    assert keys[0] == 'nircam'
+    assert panner.HIPS_BASE + panner.PRODUCTS[0]['hips'] + '/' == panner.SURVEY_URL
+    assert len(set(keys)) == len(keys)
+    hips = {p['hips'] for p in panner.PRODUCTS}
+    for wanted in ('jwst_gc_treasury_hips', 'jwst_gc_treasury_log_hips',
+                   'jwst_gc_treasury_residual_vminmax_hips',
+                   'jwst_gc_treasury_residual_log_hips',
+                   'jwst_gc_treasury_miri_hips',
+                   'jwst_gc_treasury_miri_bgmatch_hips',
+                   'jwst_gc_treasury_miri_residual_hips',
+                   'gctreasury_mosaic_RGB_770-480-212_hips'):
+        assert wanted in hips
+    page = panner.render_page()
+    bar = page[page.index('<div class=bar>'):page.index('<script')]
+    assert '<select id=product' in bar
+
+
+PRODUCT_BODY = r"""
+var sets = [], fovs = [];
+A.HiPS = function (url, opts) { return {url: url, name: opts.name}; };
+aladin.setBaseImageLayer = function (layer) { sets.push(layer.url); };
+aladin.setFoV = function (fov) { fovs.push(fov); };
+var nircamStops = TOUR.stops;
+PRODUCTS = [
+  {key: 'nircam', label: 'NIRCam, fixed cuts', note: 'N', survey: 'u/n/',
+   fov: 0.01, rate: 2, stops: nircamStops},
+  {key: 'nircam-log', label: 'NIRCam, log', note: 'L', survey: 'u/l/',
+   fov: 0.01, rate: 2, stops: nircamStops.map(function (s) {
+     return Object.assign({}, s); })},
+  {key: 'miri', label: 'MIRI F770W', note: 'M', survey: 'u/m/', fov: 0.04,
+   rate: 8, stops: [
+     {id: 'o040', label: 'GC_40', ra: 266.40, dec: -29.05, jump: false},
+     {id: 'o127', label: 'GC_127', ra: 266.51, dec: -28.58, jump: false}]}];
+TOUR = PRODUCTS[0];
+fillProducts();
+"""
+
+
+def test_choosing_a_product_swaps_the_layer_and_the_tour(tmp_path):
+    """MIRI covers different sky from NIRCam: the menu has to change the
+    layer, the zoom, and the stops together, and land on the MIRI tile
+    nearest the view rather than back at the start of the tour."""
+    out = _dom(tmp_path, PRODUCT_BODY + """
+      here = [266.50, -28.60];                  // over o127's MIRI parallel
+      els.product.value = 'miri';
+      els.product.on.change.call(els.product);
+      console.log(JSON.stringify({key: TOUR.key, sets: sets, fovs: fovs,
+                                  leg: leg, went: gotos[gotos.length - 1],
+                                  fields: els.field.innerHTML,
+                                  what: els.what.innerHTML,
+                                  products: els.product.innerHTML,
+                                  hidden: els.productpick.hidden}));
+    """)
+    got = out[1]
+    assert got['products'].count('<option') == 3
+    assert got['hidden'] is False
+    assert got['key'] == 'miri'
+    assert got['sets'] == ['u/m/']
+    assert got['fovs'] == [0.04]
+    assert got['leg'] == 1, 'did not land on the MIRI tile nearest the view'
+    assert got['went'] == [266.51, -28.58]
+    assert got['fields'].count('<option') == 2
+    assert got['what'] == 'M'
+
+
+def test_changing_the_stretch_keeps_the_pan_where_it_is(tmp_path):
+    """The NIRCam stretches are the same tiles, so switching between them is a
+    change of look: the view must not jump back to a tile centre."""
+    out = _dom(tmp_path, PRODUCT_BODY + """
+      leg = 2; along = 0.3; var before = gotos.length;
+      els.product.value = 'nircam-log';
+      els.product.on.change.call(els.product);
+      console.log(JSON.stringify({key: TOUR.key, sets: sets, leg: leg,
+                                  along: along, moved: gotos.length - before,
+                                  field: els.field.value}));
+    """)
+    got = out[1]
+    assert got['key'] == 'nircam-log'
+    assert got['sets'] == ['u/l/']
+    assert (got['leg'], got['along'], got['moved']) == (2, 0.3, 0)
+    assert got['field'] == '2'
+
+
+def test_a_tour_file_from_before_the_menu_still_pans(tmp_path):
+    """The page and the tour file are deployed separately; a new page reading
+    an old file must still work, with nothing to choose between."""
+    out = _dom(tmp_path, """
+      PRODUCTS = productsOf({survey: 'u/n/', fov: 0.01, rate: 2,
+                             stops: TOUR.stops});
+      TOUR = PRODUCTS[0];
+      fillProducts();
+      console.log(JSON.stringify({n: PRODUCTS.length, survey: TOUR.survey,
+                                  hidden: els.productpick.hidden}));
+    """)
+    assert out[1] == {'n': 1, 'survey': 'u/n/', 'hidden': True}
