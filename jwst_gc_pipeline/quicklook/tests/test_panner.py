@@ -721,8 +721,13 @@ def test_a_tour_file_from_before_the_menu_still_pans(tmp_path):
 
 def test_a_layer_that_fails_to_load_leaves_the_page_on_the_old_one(tmp_path):
     """If Aladin refuses the new layer the old one stays on screen, so the
-    menu, the field list, and the caption must go back to describing it."""
+    menu, the field list, the caption, and the page address must go back to
+    describing it."""
     out = _dom(tmp_path, PRODUCT_BODY + """
+      globalThis.location = {search: '?product=nircam', pathname: '/p.html',
+                             hash: ''};
+      globalThis.history = {replaceState: function (s, t, url) {
+        location.search = url.slice(url.indexOf('?')); }};
       A.HiPS = function () { throw new Error('no such survey'); };
       els.product.value = 'miri';
       els.product.on.change.call(els.product);
@@ -730,10 +735,12 @@ def test_a_layer_that_fails_to_load_leaves_the_page_on_the_old_one(tmp_path):
                                   product: els.product.value,
                                   fields: els.field.innerHTML,
                                   what: els.what.innerHTML,
-                                  where: els.where.textContent}));
+                                  where: els.where.textContent,
+                                  address: location.search}));
     """)
     got = out[1]
     assert got['key'] == 'nircam'
+    assert got['address'] == '?product=nircam'
     assert got['sets'] == []
     assert got['product'] == 'nircam'
     assert got['fields'].count('<option') == 3
