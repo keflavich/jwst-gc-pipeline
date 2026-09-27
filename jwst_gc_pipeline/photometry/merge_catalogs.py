@@ -3146,7 +3146,11 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     pixels.  The loader used to pool every pipeline ITERATION of an exposure
     (``_m12``.. ``_m7``, a median of 6 per star); it now reads one per exposure
     (``satstar_phase_selection``), and level 1 keeps N a count of images when
-    ``SATSTAR_POOL_PHASES=all`` restores the pooled read.
+    ``SATSTAR_POOL_PHASES=all`` restores the pooled read.  ``n_meas_fit``
+    therefore DROPS when an existing catalog is re-merged: it used to count
+    every phase's re-fit of an exposure (5-8 copies of the same pixels) and now
+    counts about one measurement per exposure and detector in the chosen phase.
+    Compare it across catalog versions only with that in mind.
 
     Adds ``n_frames_fit``, ``n_meas_fit``, ``std_ra_fit``/``std_dec_fit``
     (degrees, ddof=1, NaN below two exposures), and ``flux_med_fit`` /

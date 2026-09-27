@@ -224,16 +224,35 @@ def test_a_label_that_names_no_phase_reads_the_latest(names):
             == SPS.select_satstar_phase_files(names.values())[0])
 
 
-def test_same_phase_tie_goes_to_the_newest_file(tmp_path, clean_env):
+@pytest.mark.parametrize('newer', ['align', 'destreak'])
+def test_same_phase_tie_goes_to_the_newest_file(tmp_path, clean_env, newer):
     """Two frame variants (``_align_`` / ``_destreak_``) of one exposure, both
-    fit at m6: the most recently written fit is the current run's."""
-    old = _touch(tmp_path / ('jw05365001001_09101_00001_nrcalong_align_o001_crf'
-                             '_resbgsub_m6_satstar_catalog.fits'), 1000)
-    new = _touch(tmp_path / ('jw05365001001_09101_00001_nrcalong_destreak_o001'
-                             '_crf_resbgsub_m6_satstar_catalog.fits'), 10)
+    fit at m6: the most recently written fit is the current run's.  Both age
+    orders are checked, so the result cannot come from the name tie-break
+    ('destreak' sorts after 'align') instead of the mtime."""
+    paths = {
+        'align': tmp_path / ('jw05365001001_09101_00001_nrcalong_align_o001_crf'
+                             '_resbgsub_m6_satstar_catalog.fits'),
+        'destreak': tmp_path / ('jw05365001001_09101_00001_nrcalong_destreak_o001'
+                                '_crf_resbgsub_m6_satstar_catalog.fits'),
+    }
+    older = 'destreak' if newer == 'align' else 'align'
+    new = _touch(paths[newer], 10)
+    old = _touch(paths[older], 1000)
     sel, rep = SPS.select_satstar_phase_files([old, new], phase='m6')
     assert sel == [new]
     assert dict(rep['superseded']) == {'m6': 1}
+    assert rep['tie_losers'] == [(os.path.basename(new), os.path.basename(old))]
+    line = SPS.format_phase_report(rep)
+    assert '1 same-phase tie(s) went to the newer file' in line
+    assert f'{os.path.basename(new)} over {os.path.basename(old)}' in line
+
+
+def test_a_superseded_earlier_phase_is_not_a_tie(names):
+    """Only same-phase losers are named; an earlier phase is plain superseded."""
+    _, rep = SPS.select_satstar_phase_files(names.values(), phase='m4')
+    assert rep['tie_losers'] == []
+    assert 'same-phase tie' not in SPS.format_phase_report(rep)
 
 
 def test_pool_all_env_restores_the_pooled_read(names, monkeypatch):

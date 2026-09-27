@@ -172,7 +172,8 @@ def select_satstar_phase_files(paths, phase=None):
     paths = sorted(str(p) for p in paths)
     rank_req = satstar_phase_rank(phase)
     report = {'mode': 'one', 'phase': phase, 'rank': rank_req,
-              'used': Counter(), 'superseded': Counter(), 'ahead': Counter()}
+              'used': Counter(), 'superseded': Counter(), 'ahead': Counter(),
+              'tie_losers': []}
     if pool_all_phases():
         report['mode'] = 'all'
         report['used'].update(satstar_file_phase_token(p) for p in paths)
@@ -198,6 +199,12 @@ def select_satstar_phase_files(paths, phase=None):
         for item in eligible:
             if item is not best:
                 report['superseded'][item[3]] += 1
+                if item[0] == best[0]:
+                    # Same phase, another frame variant or background token:
+                    # the newer file won.  Name the loser so a surprising
+                    # choice can be traced from the log.
+                    report['tie_losers'].append(
+                        (os.path.basename(best[2]), os.path.basename(item[2])))
     return sorted(selected), report
 
 
@@ -237,7 +244,8 @@ def select_rejected_for_catalogs(rejected_paths, chosen_catalogs, phase=None):
     rank_req = satstar_phase_rank(phase)
     selected, orphans = [], []
     report = {'mode': 'one', 'phase': phase, 'rank': rank_req,
-              'used': Counter(), 'superseded': Counter(), 'ahead': Counter()}
+              'used': Counter(), 'superseded': Counter(), 'ahead': Counter(),
+              'tie_losers': []}
     for path in rejected_paths:
         if satstar_phase_group_key(path) not in covered:
             orphans.append(path)
@@ -256,6 +264,7 @@ def select_rejected_for_catalogs(rejected_paths, chosen_catalogs, phase=None):
         selected.extend(extra)
         for key in ('used', 'superseded', 'ahead'):
             report[key].update(sub[key])
+        report['tie_losers'].extend(sub['tie_losers'])
     return sorted(selected), report
 
 
@@ -293,8 +302,15 @@ def format_phase_report(report, what='satstar catalog'):
                 f"phase; latest per exposure)")
     else:
         head = "one phase per exposure (latest per exposure)"
-    return (f"{head}: using {n_used} {what} file(s) [{_fmt(report['used'])}]; "
+    line = (f"{head}: using {n_used} {what} file(s) [{_fmt(report['used'])}]; "
             f"excluded {sum(report['superseded'].values())} superseded "
             f"[{_fmt(report['superseded'])}] and "
             f"{sum(report['ahead'].values())} from a later phase "
             f"[{_fmt(report['ahead'])}]")
+    losers = report.get('tie_losers') or []
+    if losers:
+        shown = '; '.join(f'{win} over {lose}' for win, lose in losers[:3])
+        more = f' (+{len(losers) - 3} more)' if len(losers) > 3 else ''
+        line += (f"; {len(losers)} same-phase tie(s) went to the newer file: "
+                 f"{shown}{more}")
+    return line
