@@ -220,7 +220,8 @@ def test_replace_saturated_appends_only_this_observations_stars(two_obs_tree,
 def test_merge_entry_points_forward_the_scope(func, monkeypatch):
     seen = {}
 
-    def _fake(filtername, target='brick', basepath='', proposal_id=None, field=None):
+    def _fake(filtername, target='brick', basepath='', proposal_id=None, field=None,
+              phase=None):
         seen.update(proposal_id=proposal_id, field=field)
         return None
     monkeypatch.setattr(MC, 'load_satstar_catalog', _fake)
