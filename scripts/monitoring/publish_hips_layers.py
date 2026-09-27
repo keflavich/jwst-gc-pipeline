@@ -97,6 +97,12 @@ LAYERS = {
         f'{BUILD_ROOT}/jwst_gc_treasury_residual_log_hips',
     'jwst_gc_treasury_miri_residual_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_miri_residual_hips',
+    # Single-filter grey versions of the NIRCam residual layer, one per band,
+    # with the same fixed cuts (asinh -0.5..100 MJy/sr).
+    'jwst_gc_treasury_f212n_residual_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_f212n_residual_hips',
+    'jwst_gc_treasury_f480m_residual_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_f480m_residual_hips',
     # The CMZ overview coadds are rebuilt IN PLACE in the docroot by
     # `rebuild_jwst_cmz_hips.py`, so for these the docroot is the build
     # location and the local step is a no-op by construction: `needs_publish`
