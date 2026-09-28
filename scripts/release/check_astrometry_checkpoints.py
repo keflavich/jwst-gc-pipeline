@@ -282,20 +282,40 @@ def _region_map_findings(rec):
     The record's stored thresholds are still read and reported in ``detail``
     for provenance, and a mismatch against the live constant is called out.
 
-    ``clean`` and ``not_applicable`` are not findings -- there is nothing to
-    verify -- and are left out.  ``blocking`` is reported for visibility but
-    is not itself a new refusal: an m2/m12 record that reached disk still
-    carrying a blocking region map is already covered by the existing
-    corrections/override machinery (m2 raises in place by default; a
-    continued run shows up as CORRECTIONS NEVER APPLIED or OVERRIDDEN above).
+    ``not_applicable`` is not a finding -- there is no region map at all -- and
+    is left out.  ``blocking`` is reported for visibility but is not itself a
+    new refusal: an m2/m12 record that reached disk still carrying a blocking
+    region map is already covered by the existing corrections/override
+    machinery (m2 raises in place by default; a continued run shows up as
+    CORRECTIONS NEVER APPLIED or OVERRIDDEN above).
+
+    ``clean`` normally has nothing further to verify and is left out too, but
+    is still reported, ``verified=None``, when the tile's grid carries a
+    LOW-COVERAGE cell (issue #984: ``n_low_coverage`` > 0, or the grid could
+    not be footprint-aligned at all, ``grid_aligned=False``) -- purely
+    informational, since a low-coverage cell never relaxes or fails the gate
+    on its own, but a tile that still has one after the fix is worth a human
+    look (a genuinely partial corner of an irregular footprint, or a
+    fallback that never got a rotation fit).
     """
     out = []
     for v in rec.get("visits", []):
         rm = ((v.get("reference_tie") or {}).get("region_map") or {})
         status = rm.get("status")
-        if not status or status in ("not_applicable", "clean"):
+        if not status or status == "not_applicable":
             continue
         visit = v.get("visit")
+        n_low_cov = rm.get("n_low_coverage") or 0
+        grid_aligned = rm.get("grid_aligned")
+        low_cov_note = ""
+        if n_low_cov or grid_aligned is False:
+            low_cov_note = (f", low_coverage_cells={n_low_cov}, "
+                            f"grid_aligned={grid_aligned}")
+        if status == "clean":
+            if low_cov_note:
+                out.append((visit, status, None,
+                           f"grid geometry note{low_cov_note}"))
+            continue
         if status == "recorded_nonblocking":
             n_measured = _as_float(rm.get("n_measured"))
             n_flagged = _as_float(rm.get("n_flagged"))
@@ -329,11 +349,11 @@ def _region_map_findings(rec):
                       f"({'n/a' if frac is None else f'{frac:.1%}'} <= "
                       f"{max_frac}), sigma={sigma} mas (<= {sigma_tol}), "
                       f"worst_sig_off={worst_sig} mas (<= {worst_sig_cap}), "
-                      f"n_uncovered={n_uncovered}{stale_note}")
+                      f"n_uncovered={n_uncovered}{stale_note}{low_cov_note}")
             out.append((visit, status, verified, detail))
         elif status == "blocking":
             detail = (f"n_flagged={rm.get('n_flagged')}/{rm.get('n_measured')}, "
-                      f"n_uncovered={rm.get('n_uncovered')}")
+                      f"n_uncovered={rm.get('n_uncovered')}{low_cov_note}")
             out.append((visit, status, None, detail))
         else:
             out.append((visit, status, False,
