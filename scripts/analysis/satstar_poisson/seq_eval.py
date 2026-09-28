@@ -12,7 +12,7 @@ dithers at the pattern node).  Per radial bin it reports the robust sigma(chi)
 that excess as a fraction of the star's local intensity,
     f_ex = sqrt(sigma^2 - 1) * median(sigma_tot) / median(pred - bkg),
 bkg being the off-spike scene level at r = 350-450 px (brightness.py).
-Writes <outdir>/fig11_brightness_sequence.png and brightness_sequence.json."""
+Writes <outdir>/fig11_brightness_sequence.png and ./brightness_sequence.json."""
 import sys, os, glob, json, warnings
 import numpy as np
 import matplotlib
