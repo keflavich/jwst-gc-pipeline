@@ -83,6 +83,15 @@ class QE:
             # halo centred on a detector position of this exposure
             dx = (pix % n)-hx; dy = (pix//n)-hy
             blocks.append(halo_basis(dx.astype(float), dy.astype(float), rmin=6. if rmax < 400 else 20., rmax=rmax, nknot=10 if rmax < 400 else nknot, mmax=mm))
+        if int(os.environ.get('ROWCOL', 0)):
+            # 1/f striping: an offset per (row, amplifier) and per column; the first of each
+            # family is dropped (degenerate with the pedestal c)
+            xdet = pix % n + ex.X0; row = pix//n; amp = np.clip(xdet//512, 0, 3)
+            ra = row*4+amp; ura, ira = np.unique(ra, return_inverse=True)
+            uc, ic = np.unique(pix % n, return_inverse=True)
+            R = sp.csc_matrix((np.ones(len(pix)), (np.arange(len(pix)), ira)), shape=(len(pix), len(ura)))[:, 1:]
+            C = sp.csc_matrix((np.ones(len(pix)), (np.arange(len(pix)), ic)), shape=(len(pix), len(uc)))[:, 1:]
+            blocks += [R, C]
         self.B = sp.hstack(blocks, format='csc')
         self.h = np.zeros(self.B.shape[1])
 

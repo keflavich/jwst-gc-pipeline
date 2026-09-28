@@ -102,7 +102,9 @@ Each iteration and what it bought (robust σ(χ), all held-out pixels of dither 
 | + per-exposure smooth star halo, converged CG | 1.48 | 3.5 |
 | + cubic distortion, PSF-width kernel, secondary halos | 1.42 | 3.47 |
 | + learned variable template (rank 2) | 1.43 | 3.44 |
-| band limit 0.45 → 0.5 cycles/px | – | 3.49 |
+| band limit 0.45 → 0.5 cycles/px (600 px crop) | – | 3.49 |
+| super-resolved Q: 0.5 px grid, band 0.75 cycles/px (600 px crop) | – | 3.67 |
+| + per-exposure row(×amp)/column offsets for 1/f (`ROWCOL=1`) | 1.41 | 3.45 |
 
 ### What limits the inner halo: evidence
 
@@ -148,6 +150,7 @@ Each iteration and what it bought (robust σ(χ), all held-out pixels of dither 
    | brighter-fatter effect | the δQ ∝ ∇·(Q∇K∗Q) regression gains nothing |
    | detector-fixed flat errors | cross-dither correlation of relative residuals at the same detector pixel is only +0.08–0.10 |
    | a shared low-rank template | the SVD of the six in-sample residual maps is full-rank (70, 18, 12, 11, 7, 4 × noise) |
+   | aliasing of power above the optical cutoff | a single exposure does carry power at 0.45–0.5 cycles/px near the star, but neither a 0.5 band limit nor a super-resolved pattern (0.5 px grid, band 0.75, de-aliased by the dithers' sub-pixel phases) predicts the held-out dither any better |
 7. **Other stars do not predict it.** A spike-normalised halo index varies from
    dither to dither for all 8 bright NRCB5 stars in other visits. The pattern
    partly follows the dither x-offset: fine-structure deviations of the target
@@ -168,9 +171,10 @@ equals Poisson noise for a star ~10× fainter than this one at the same radius.
 ## 4. The outer-wing / far-field floor (σ(χ) ≈ 1.1–1.3), not saturated-star PSF
 
 - **Pixels more than 10 px from any field star, r>300:** σ(χ)=1.095. Row and
-  column means of χ scatter 2× more than independent noise allows, which is 1/f
-  striping. A per-exposure row/column offset term would remove it; it is not yet
-  in the nuisance model.
+  column means of χ scatter 2× more than independent noise allows, but
+  per-exposure row(×amplifier) and column offsets (`ROWCOL=1`) change nothing
+  (r=300–500 px: 1.224 → 1.226). So this is not 1/f striping; it is coherent
+  residual from stars that the rows and columns cross.
 - **Within 6 px of field stars:** σ(χ)=1.4–1.55. The field-star PSF core varies
   slightly between the six detector positions.
 - **Detector-fixed flat residuals:** correlation +0.08–0.10 across dithers at the
@@ -179,8 +183,12 @@ equals Poisson noise for a star ~10× fainter than this one at the same radius.
 
 ## 5. Next steps
 
-1. Add per-exposure row/column (1/f) offsets and self-calibrated flat
-   corrections. That should bring the outer wing and far field to σ(χ)≈1.0.
+1. Replace the static field-star content of Q with explicit point sources
+   rendered through a detector-position-dependent PSF library, Anderson-style,
+   built from the thousands of NRCB5 F480M stars across all 10678 exposures.
+   Add a flat self-calibration on top. The far-field and outer-wing excess
+   (σ(χ)≈1.1–1.3) is field-star PSF variation between detector positions plus a
+   ~10% detector-fixed part, which is what these two address.
 2. Run `patternfit.py` on the next-brightest stars (obs 116/069/126, 2–5×
    fainter) to measure where along the brightness sequence the inner halo
    becomes Poisson-limited. The scaling above predicts ≲10× fainter.
@@ -188,9 +196,6 @@ equals Poisson noise for a star ~10× fainter than this one at the same radius.
    NIRCam LW pupil stop, polychromatic, phase retrieval) with per-exposure
    low-order pupil-shear/WFE modes fitted to each exposure's own wings. That is
    the only route left that can predict the per-dither halo.
-4. A super-resolved Q (0.5 px grid, band to 0.75 cycles/px) tests whether
-   aliased above-cutout power contributes. A single exposure does carry
-   significant power at 0.45–0.5 cycles/px near the star.
 
 ## 6. Files
 
@@ -203,6 +208,7 @@ equals Poisson noise for a star ~10× fainter than this one at the same radius.
 | `halobasis.py` | star-centred log-r B-spline × Fourier basis |
 | `patternfit.py` | static pattern + per-exposure nuisance, joint fit and LOO (main model) |
 | `patternfit_rank2.py` | + learned variable template with smooth per-exposure amplitude |
+| `loo_crop.py` | LOO on a crop, for band-limit / super-resolution (`KMAX`, `QH`, `QN`) tests |
 | `evaluate_loo.py` | χ statistics by DQ class, radius and model brightness |
 | `diagnostics.py` | distortion, dither-ratio, raw-ramp, integration and halo-index tests |
 | `make_figures.py` | the figures above |
