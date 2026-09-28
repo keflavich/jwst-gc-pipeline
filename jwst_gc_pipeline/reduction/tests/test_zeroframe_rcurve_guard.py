@@ -478,6 +478,23 @@ def test_severity_dropped_sat_component_still_counts_as_saturated():
                    'C': ('dqsat', True)}
 
 
+def test_component_sat_dq_reads_only_the_components_own_pixels():
+    """A peak/subfloor component beside a saturated star shares its bounding
+    box; the SAT pixels of the neighbour (label 2) inside label 1's bbox must
+    not count for label 1 (review mutant N3: reading the whole bbox)."""
+    from scipy import ndimage
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        component_carries_saturated_dq)
+    sources = np.zeros((20, 20), dtype=int)
+    sources[2:12, 2:12] = 1
+    sources[5:9, 5:9] = 2          # label 2 sits inside label 1's bbox
+    dq = np.zeros((20, 20), dtype=np.uint32)
+    dq[6:8, 6:8] = dqflags.pixel['SATURATED']
+    slices = ndimage.find_objects(sources)
+    assert component_carries_saturated_dq(dq, sources, 1, slices[0]) is False
+    assert component_carries_saturated_dq(dq, sources, 2, slices[1]) is True
+
+
 def test_component_carries_saturated_dq_without_pixels():
     from jwst_gc_pipeline.reduction.saturated_star_finding import (
         component_carries_saturated_dq)
