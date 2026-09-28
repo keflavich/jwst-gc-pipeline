@@ -324,11 +324,16 @@ def _write_crf(path, with_truly_lost=False):
     return img
 
 
-def _prep_options():
+#: A target outside C._DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS, for the tests
+#: of the default-off component hand-off.
+NO_DEFAULT_TARGET = 'arches'
+
+
+def _prep_options(target='gc-treasury'):
     return types.SimpleNamespace(
         desaturated=False, epsf=False, blur=False, group=False, cutout_region='',
         bgsub=False, use_iter3_residual_bg=False, each_exposure=True,
-        target='gc-treasury', max_group_size='unlimited',
+        target=target, max_group_size='unlimited',
         fit_satstar_outside_fov=False, satstar_partner_seed=False,
         satstar_zeroframe_recover=False, satstar_ramp_recover=False,
         deblend_satstars=False, satstar_artifact_sigK=3.0,
@@ -336,7 +341,7 @@ def _prep_options():
 
 
 def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
-             with_truly_lost=False, peaks=None):
+             with_truly_lost=False, peaks=None, target='gc-treasury'):
     from astropy.io import fits
     for k, v in (('NIRCAM_SATSTAR_TIGHT_BOUND', '0'),
                  ('SATSTAR_COMPONENT_OVERLAP_FRAC', '0'),
@@ -359,7 +364,7 @@ def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
     monkeypatch.setattr(L, 'load_or_make_satstar_catalog',
                         lambda *a, **k: None)
     ctx = C._prepare_frame_for_photometry(
-        _prep_options(), 'F480M', 'nrcalong', '132', str(tmp_path), fn,
+        _prep_options(target), 'F480M', 'nrcalong', '132', str(tmp_path), fn,
         '10678', exposurenumber=4, visit_id=1, vgroup_id='02101',
         bg_boxsizes=None, use_webbpsf=True, pupil='clear', resbg_path=None,
         satstar_label='m7')
@@ -417,8 +422,12 @@ def test_prepare_returns_valid_rate_core_to_the_fit(tmp_path, monkeypatch):
 def test_prepare_without_implied_peak_reject_keeps_core_masked(tmp_path,
                                                                monkeypatch):
     """A fit-quality reject is not handed off: the frame is prepared exactly as
-    before (core masked and model-filled), and the star has no daophot row."""
-    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate')
+    before (core masked and model-filled), and the star has no daophot row.
+    The component hand-off would give the core back, so it runs on a target
+    where that is off by default."""
+    monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate',
+                      target=NO_DEFAULT_TARGET)
     assert ctx.handoff_xy is None
     core = np.zeros(SHAPE, bool)
     core[47:54, 37:44] = True
@@ -547,9 +556,47 @@ def test_prepare_hands_off_unaccepted_sat_component_when_enabled(tmp_path,
 
 
 def test_prepare_component_handoff_off_by_default(tmp_path, monkeypatch):
+    assert NO_DEFAULT_TARGET not in C._DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS
+    monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate',
+                      target=NO_DEFAULT_TARGET)
+    assert ctx.handoff_xy is None
+
+
+def test_prepare_component_handoff_on_by_default_for_gc_treasury(
+        tmp_path, monkeypatch):
+    """gc-treasury is in _DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS: with the
+    variable unset, the SATURATED component without an accepted satstar is
+    handed off and its valid-rate core goes back to the fit."""
     monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
     ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate')
+    assert ctx.handoff_xy is not None
+    core = np.zeros(SHAPE, bool)
+    core[47:54, 37:44] = True
+    assert not ctx.mask[core].any()
+
+
+@pytest.mark.parametrize('raw', ['0', 'off', 'FALSE'])
+def test_export_off_overrides_the_target_default(tmp_path, monkeypatch, raw):
+    monkeypatch.setenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raw)
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate')
     assert ctx.handoff_xy is None
+
+
+def test_export_on_enables_the_handoff_for_any_target(tmp_path, monkeypatch):
+    monkeypatch.setenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', '1')
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate',
+                      target=NO_DEFAULT_TARGET)
+    assert ctx.handoff_xy is not None
+
+
+@pytest.mark.parametrize('target, expected', [
+    ('gc-treasury', True), ('GC-Treasury', True), ('brick', False),
+    ('w51', False), ('', False), (None, False)])
+def test_unaccepted_sat_handoff_default(target, expected):
+    opts = (types.SimpleNamespace() if target is None
+            else types.SimpleNamespace(target=target))
+    assert C._unaccepted_sat_handoff_default(opts) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +799,7 @@ def test_prepare_ignores_malformed_floor_when_component_handoff_off(
         tmp_path, monkeypatch):
     monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
     monkeypatch.setenv('DAOPHOT_HANDOFF_DATA_FLOOR', 'not-a-number')
-    ctx, _ = _prepare(tmp_path, monkeypatch)
+    ctx, _ = _prepare(tmp_path, monkeypatch, target=NO_DEFAULT_TARGET)
     assert ctx.handoff_xy is not None     # the implied-peak-gate reject
 
 
@@ -864,7 +911,8 @@ def test_flux_ban_logs_nan_fits_separately(tmp_path, monkeypatch, capsys):
     """A fully masked fit box gives NaN flux; the ban's log line says so."""
     # the core must stay masked for the fit to be NaN: no component hand-off
     monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
-    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate')
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate',
+                      target=NO_DEFAULT_TARGET)
     capsys.readouterr()
     _ctx_pass(ctx, handoff=False)
     out = capsys.readouterr().out
