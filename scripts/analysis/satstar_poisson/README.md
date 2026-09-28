@@ -369,8 +369,18 @@ e1 it matches the k45 crop to ±0.3).
 
   So the linearised physics is sensitive and robust to a wrong static
   wavefront. The real between-spike change is simply not in its span.
-- **Control** (pupil rotated by 15°, and an empirical per-exposure MTF
-  polynomial applied to Q): CONTROL_RESULTS
+- **Controls** (e1, e5): the same families built on a pupil rotated by 15°,
+  i.e. physically shaped maps whose spikes do not line up with the star's, and
+  an empirical per-exposure detector-MTF polynomial (12 terms) applied to Q.
+  - On the spikes the rotated-pupil modes gain nothing: 5.27/5.96 against a
+    baseline of 5.26/5.94 at spike 80–120. So the on-spike gain of the real
+    modes is specific to this star's optics.
+  - Between the spikes they gain as much as the real modes: e5 50–80 goes to
+    5.57 (control) against 5.51 (real), and e5 80–120 to 3.34 against 3.25.
+    The 30–50 bin moves by similar amounts (e1: 7.90–7.98 control against
+    7.54–7.79 real). The between-spike "gain" is therefore the generic effect
+    of adding free λ/D-structured maps, not physics.
+  - The MTF polynomial gains nothing (≤1%).
 
 ### 7.4 Conclusion
 
