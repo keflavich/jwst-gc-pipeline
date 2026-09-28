@@ -490,6 +490,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 1.0 | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits are judged on it |
+| `DAOPHOT_HANDOFF_UNACCEPTED_SAT` / `DAOPHOT_HANDOFF_DATA_FLOOR` | on for the targets in `_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS` (gc-treasury), off elsewhere; an export wins / 0 | NIRCam only: hand every SATURATED component without an accepted satstar to daophot and return its valid-rate late-group pixels to the fit; recorded per frame as catalog header `HNDOFFSA` |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
 | `SATSTAR_REPLACE_RADIUS_ARCSEC` | (see code) | satstar→daophot replacement radius |

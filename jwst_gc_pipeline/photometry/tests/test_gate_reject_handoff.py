@@ -590,6 +590,48 @@ def test_export_on_enables_the_handoff_for_any_target(tmp_path, monkeypatch):
     assert ctx.handoff_xy is not None
 
 
+def test_gc_treasury_default_never_hands_off_on_miri(tmp_path, monkeypatch):
+    """gc-treasury takes MIRI F770W in parallel; the target default must not
+    reach it.  The NIRCam-only guard on the hand-off block is what stops it
+    (review mutant P6), so drive the frame preparation with a MIRI
+    instrument and the variable unset."""
+    monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    _orig = L.load_data
+
+    def _as_miri(filename):
+        out = list(_orig(filename))
+        out[5] = 'MIRI'
+        return tuple(out)
+    monkeypatch.setattr(L, 'load_data', _as_miri)
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate')
+    assert ctx.inst_token == 'miri'
+    assert ctx.handoff_xy is None
+    assert ctx.handoff_unaccepted_sat is False
+
+
+@pytest.mark.parametrize('target, env, expected', [
+    ('gc-treasury', None, True), (NO_DEFAULT_TARGET, None, False),
+    ('gc-treasury', '0', False), (NO_DEFAULT_TARGET, '1', True)])
+def test_prepare_records_the_resolved_handoff_state(tmp_path, monkeypatch,
+                                                    target, env, expected):
+    """The resolved switch rides on the frame context and is written to the
+    per-frame catalog header (HNDOFFSA) by _save_manual_pass."""
+    if env is None:
+        monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    else:
+        monkeypatch.setenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', env)
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate',
+                      target=target)
+    assert ctx.handoff_unaccepted_sat is expected
+
+
+def test_save_manual_pass_writes_hndoffsa():
+    import inspect
+    src = inspect.getsource(C._save_manual_pass)
+    assert "result.meta['HNDOFFSA']" in src
+    assert "getattr(ctx, 'handoff_unaccepted_sat', False)" in src
+
+
 @pytest.mark.parametrize('target, expected', [
     ('gc-treasury', True), ('GC-Treasury', True), ('brick', False),
     ('w51', False), ('', False), (None, False)])

@@ -2534,7 +2534,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # those pixels back to the fit, only around handed-off stars.
     handoff_xy, handoff_radius = None, 0.0
     handoff_restore = None
+    # resolved DAOPHOT_HANDOFF_UNACCEPTED_SAT for this frame, recorded in the
+    # per-frame catalog header (HNDOFFSA); MIRI never hands off
+    handoff_unaccepted_sat = False
     if dqarr is not None and 'miri' not in inst_token:
+        _unacc_default = _unaccepted_sat_handoff_default(options)
+        handoff_unaccepted_sat = _handoff_env_flag(
+            'DAOPHOT_HANDOFF_UNACCEPTED_SAT', _unacc_default)
         # DAOPHOT_HANDOFF_UNACCEPTED_SAT (default on for the targets in
         # _DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS, off elsewhere; an export
         # wins): also hand off EVERY SATURATED component without an accepted
@@ -2547,7 +2553,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         handoff_xy, handoff_radius = _daophot_handoff_xy(
             dqarr, original_data, satstar_table, satstar_rejected_path,
             fwhm_pix,
-            unaccepted_sat_default=_unaccepted_sat_handoff_default(options),
+            unaccepted_sat_default=_unacc_default,
             label='manual')
         if handoff_xy is not None:
             handoff_restore = _handoff_restore_pixels(
@@ -2596,6 +2602,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
         handoff_xy=handoff_xy, handoff_radius=handoff_radius,
+        handoff_unaccepted_sat=handoff_unaccepted_sat,
         original_data=original_data, background_map=background_map,
         bkg_basis=bkg_basis,
         out_basepath=out_basepath, filename=filename,
@@ -2685,6 +2692,10 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
                     else ctx.original_data - ctx.satstar_model_subtracted)
     _residual_for_bkg = _resbkg_base - modsky
     _attach_residual_background(result, _residual_for_bkg, ctx, options, label=iteration_label)
+    # provenance: gc-treasury hands unaccepted SATURATED components to daophot
+    # by default, so its trees can hold catalogs from both regimes
+    result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
+                               'unaccepted SATURATED comps handed to daophot')
 
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
