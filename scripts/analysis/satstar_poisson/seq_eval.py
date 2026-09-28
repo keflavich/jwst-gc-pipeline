@@ -12,7 +12,7 @@ dithers at the pattern node).  Per radial bin it reports the robust sigma(chi)
 that excess as a fraction of the star's local intensity,
     f_ex = sqrt(sigma^2 - 1) * median(sigma_tot) / median(pred - bkg),
 bkg being the off-spike scene level at r = 350-450 px (brightness.py).
-Writes <outdir>/fig11_brightness_sequence.png and ./brightness_sequence.json."""
+Writes <outdir>/fig13_brightness_sequence.png and ./brightness_sequence.json."""
 import sys, os, glob, json, warnings
 import numpy as np
 import matplotlib
@@ -121,5 +121,5 @@ if __name__ == '__main__':
     ax[3].set_yticks([1, 1.5, 2, 3, 5, 8]); ax[3].set_yticklabels(['1', '1.5', '2', '3', '5', '8'])
     ax[3].set_xlabel('local star intensity, prediction - scene level [MJy/sr]'); ax[3].set_ylabel(r'robust $\sigma(\chi)$')
     ax[3].set_title(r'$\sigma(\chi)$ vs local intensity, r = 30-200 px')
-    plt.tight_layout(); plt.savefig(f'{outdir}/fig11_brightness_sequence.png', dpi=75); plt.close()
-    print('wrote', f'{outdir}/fig11_brightness_sequence.png')
+    plt.tight_layout(); plt.savefig(f'{outdir}/fig13_brightness_sequence.png', dpi=75); plt.close()
+    print('wrote', f'{outdir}/fig13_brightness_sequence.png')

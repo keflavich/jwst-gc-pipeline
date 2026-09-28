@@ -188,7 +188,7 @@ Poisson noise where the halo falls below ~10 MJy/sr above the scene.
 
 ## 5. Brightness sequence: where the inner halo becomes Poisson-limited (issue #995)
 
-![brightness sequence](../../../docs/evidence/satstar_poisson/fig11_brightness_sequence.png)
+![brightness sequence](../../../docs/evidence/satstar_poisson/fig13_brightness_sequence.png)
 
 The same LOO test (`loo_crop.py`, crop ±300 px, `QN=640 KMAX=0.45`, held-out
 dithers 1 and 3, all other dithers as training) was run on the target and on six
