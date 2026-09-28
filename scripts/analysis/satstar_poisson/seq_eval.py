@@ -1,4 +1,4 @@
-"""Brightness sequence (README §7): LOO chi statistics for each star, from loo_crop.py outputs.
+"""Brightness sequence (README §5): LOO chi statistics for each star, from loo_crop.py outputs.
 
     python seq_eval.py <outdir> <tag-template> <prefix> [<prefix> ...]
 e.g. python seq_eval.py figures bs_{p} tgt trn_116 trn_069 ...   (needs brightness.json;

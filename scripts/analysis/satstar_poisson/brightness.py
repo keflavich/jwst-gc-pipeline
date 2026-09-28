@@ -1,4 +1,4 @@
-"""Relative brightness of the saturated stars used in the brightness sequence (README §7).
+"""Relative brightness of the saturated stars used in the brightness sequence (README §5).
 
 F/F_target is the ratio of the star's halo radial profile to the target's, in off-spike
 annuli (> 8 deg from every diffraction spike) at r = 40-85 px, background-subtracted
