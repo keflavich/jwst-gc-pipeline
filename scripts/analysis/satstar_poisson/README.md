@@ -14,6 +14,10 @@ with Poisson noise**, with the claim tested **out of sample**.
   halo. It is real in the raw ramps, happens only in the LW channel, stays fixed
   within an exposure, and has PSF-scale (λ/D) structure. No model built from
   the other dithers can predict it (§3).
+- **Brightness sequence (§5):** the same ≈5% relative halo error is present in
+  six fainter saturated stars (F/F_target = 0.5 → 0.064). The residual is
+  Poisson-limited only where the star's halo is below ~10 MJy/sr above the
+  scene: beyond ≈80 px (5″) for a star 10× fainter, ≈60 px for 16× fainter.
 
 This directory holds the tooling, the diagnostics that isolate the floor, and
 the numbers. Nothing here is wired into the pipeline yet.
@@ -25,7 +29,7 @@ the numbers. Nothing here is wired into the pipeline yet.
 | star | RA 266.5090307, Dec −28.9565882 (obs 061, NRCB5) |
 | filter | F480M, BRIGHT2, 4 groups × 2 integrations, 172 s, FULLBOX 6-point dither |
 | saturation | 11 188 px carry the any-group SATURATED flag (a 160×128 px ellipse); 2 504 px are lost (NaN) |
-| brightness | brightest isolated star in the 136 public 10678 LW first dithers (`scan`, §6) |
+| brightness | brightest isolated star in the 136 public 10678 LW first dithers (`scan`, §7) |
 
 MAST (`mast.stsci.edu`) is not reachable from the sandbox. The same public
 products come from the AWS open-data mirror via `s3data.py`
@@ -189,8 +193,9 @@ per-exposure PSF would have to come from a physical optics model with
 per-exposure pupil or wavefront modes (phase retrieval on the star's own wings),
 or from dither patterns that revisit the same field position.
 
-**The limitation is specific to the brightest stars.** A 4–5% relative excess
-equals Poisson noise for a star ~10× fainter than this one at the same radius.
+**The limitation is not specific to the brightest stars.** The same ≈5% relative
+excess is found for stars down to 1/16 of this one's flux (§5); it equals
+Poisson noise where the halo falls below ~10 MJy/sr above the scene.
 
 ## 4. The outer-wing / far-field floor (σ(χ) ≈ 1.1–1.3), not saturated-star PSF
 
@@ -210,7 +215,87 @@ equals Poisson noise for a star ~10× fainter than this one at the same radius.
 Fig 10: the far-field floor: σ(χ) at r > 300 px sits on field-star cores, and
 the detector-fixed component is weak.
 
-## 5. Next steps
+## 5. Brightness sequence: where the inner halo becomes Poisson-limited (issue #995)
+
+![brightness sequence](../../../docs/evidence/satstar_poisson/fig11_brightness_sequence.png)
+
+The same LOO test (`loo_crop.py`, crop ±300 px, `QN=640 KMAX=0.45`, held-out
+dithers 1 and 3, all other dithers as training) was run on the target and on six
+fainter saturated NRCB5 F480M stars from other 10678 visits. The noise model is
+unchanged: χ = (data − prediction)/√(VAR_POISSON + VAR_RNOISE + model variance),
+over pixels without SAT(2)/JUMP(4) flags and with ≥3 training dithers at the
+pattern node.
+
+**Brightness** (`brightness.py`): F/F_target is the ratio of the star's
+background-subtracted, off-spike halo profile to the target's, at r = 40–85 px
+(median over dithers, then over four annuli). The inner halo is used because
+there the star dominates the confused scene. The saturated-core size is an
+independent check: it scales as F^0.75 over the whole sequence.
+
+| star (obs) | F/F_t | SAT core [px] | lost core [px] | 30–50 | 50–80 | 80–120 | 120–200 | 200–300 | excess/I at 30–50 / 50–80 / 80–120 | r(σ=1.5) [px] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 061 (target) | 1.00 | 11 223 | 2 179 | 7.8 | 5.2 | 3.2 | 1.72 | 1.30 | 5.4 / 5.0 / 5.5 % | 193 |
+| 116 | 0.50 | 6 364 | 1 346 | 7.2 | 4.6 | 2.4 | 1.36 | 1.12 | 5.1 / 5.4 / 5.7 % | 139 |
+| 069 | 0.50 | 6 304 | 1 275 | 6.7 | 4.5 | 2.1 | 1.47 | 1.32 | 5.1 / 5.4 / 5.8 % | 154 |
+| 126 | 0.45 | 5 608 | 1 167 | 6.7 | 4.4 | 2.7 | 1.47 | 1.16 | 6.0 / 5.8 / 7.0 % | 156 |
+| 078 | 0.23 | 3 716 | 967 | 5.7 | 3.4 | 1.74 | 1.16 | 1.11 | 5.1 / 5.9 / (9.4) % | 114 |
+| 063 | 0.089 | 1 874 | 513 | 3.2 | 1.70 | 1.24 | 1.21 | 1.21 | 4.4 / 5.4 / (7.5) % | 76 |
+| 042 | 0.064 | 1 532 | 435 | 2.6 | 1.40 | 1.22 | 1.15 | 1.12 | 4.5 / 4.7 / 5.0 % | 61 |
+
+Columns 30–50 … 200–300: robust σ(χ) (1.4826·median|χ|) in radial bins [px],
+mean of the two held-out dithers (the two differ by 5–20%;
+`docs/evidence/satstar_poisson/brightness_sequence.json` has each).
+Excess/I = √(σ(χ)²−1) · median σ_tot / median(prediction − scene level): the
+non-Poisson residual as a fraction of the star's local intensity. Values in
+parentheses are bins where the star's intensity is only ~5–8 MJy/sr and the
+excess there is mostly the far-field floor (§4), not the halo. r(σ=1.5): radius
+at which σ(χ) falls to 1.5. obs 042 has only 4 dithers (the star is off the
+detector in 4 and 5); 046 and 070 (2 dithers each, F/F_t = 0.06 and 0.17) were
+not run, because a LOO with a single training dither is not comparable.
+
+**Findings.**
+
+1. **The excess is a fixed fraction of the local halo intensity, ≈5% (4.4–6%),
+   for every star, across a factor 16 in brightness** (fig. panel 3). It is not a
+   peculiarity of the brightest star: every saturated LW star's halo changes
+   between dithers by about the same relative amount.
+2. **σ(χ) is, to first order, a function of the local star intensity alone**
+   (panel 4): ≈1.2 (the far-field floor) below ~5 MJy/sr above the scene, √2
+   (excess = noise) at ~10–15 MJy/sr, 2 at ~20–40, 3 at ~70 MJy/sr, for all
+   stars. With σ_tot ≈ 0.5–0.8 MJy/sr this is just 0.05·I = σ_tot.
+3. **At fixed radius**, the excess/noise ratio therefore scales as ≈√F (panel 2).
+   - r = 80–120 px (5–7.5″): reaches the far-field floor (σ(χ) ≈ 1.2) at
+     F/F_t ≲ 0.1 (obs 063, 042). The "~10× fainter" prediction of §3 holds here.
+   - r = 50–80 px (3–5″): σ(χ) = 1.7 at F/F_t = 0.09 and 1.4 at 0.064. Reaching
+     the floor needs F/F_t ≈ 0.03.
+   - r = 30–50 px (2–3″): still 2.6 at F/F_t = 0.064. Extrapolating √F, the
+     floor needs F/F_t ≲ 0.01.
+4. **The Poisson-limited radius shrinks as r ∝ F^0.4** (r(σ=1.5) = 193 px for
+   the target, 61 px for obs 042), as expected for a halo I ∝ r^−2.5 with a
+   fixed 5% error.
+
+**Conclusion.** No brightness makes the whole halo Poisson-limited. The static
+pattern model leaves a ~5% per-dither halo error for every saturated F480M
+star. The residual is Poisson-limited wherever the star's own halo is below
+~10 MJy/sr above the scene (≈20× the per-pixel noise). For a star 10× fainter
+than the target, that is beyond ≈80 px (5″); for 16× fainter, beyond ≈60 px.
+Inside that radius a better per-exposure PSF (§6, item 3) is needed for every
+saturated star, not only the brightest.
+
+Reproduce (from a directory holding the cutouts; ~35 min per star on 4 cores):
+
+```
+python brightness.py trn_116 trn_069 trn_126 trn_078 trn_063 trn_042    # brightness.json
+for p in tgt trn_116 trn_069 trn_126 trn_078 trn_063 trn_042; do
+  QN=640 KMAX=0.45 python loo_crop.py bs_$p 300 1,3 --prefix $p; done
+python seq_eval.py ../../../docs/evidence/satstar_poisson 'bs_{p}' tgt trn_116 trn_069 trn_126 trn_078 trn_063 trn_042
+```
+The training-star cutouts are `cutout.py` runs at each star's position in
+dither 1, applied to all six dithers of its visit (star detector positions in
+dither 1: 116 (1140,1619), 069 (1187,1391), 126 (196,1814), 078 (1165,469),
+063 (705,1565), 042 (1536,975), 070 (1705,1463), 046 (1707,735)).
+
+## 6. Next steps
 
 1. Replace the static field-star content of Q with explicit point sources
    rendered through a detector-position-dependent PSF library, Anderson-style,
@@ -218,15 +303,15 @@ the detector-fixed component is weak.
    Add a flat self-calibration on top. The far-field and outer-wing excess
    (σ(χ)≈1.1–1.3) is field-star PSF variation between detector positions plus a
    ~10% detector-fixed part, which is what these two address.
-2. Run `patternfit.py` on the next-brightest stars (obs 116/069/126, 2–5×
-   fainter) to measure where along the brightness sequence the inner halo
-   becomes Poisson-limited. The scaling above predicts ≲10× fainter.
+2. (Done, §5.) The brightness sequence shows the ~5% per-dither halo error is
+   common to all saturated F480M stars; the inner halo is Poisson-limited only
+   where the halo is below ~10 MJy/sr above the scene.
 3. For the very brightest stars: build a physical LW PSF model (JWST pupil +
    NIRCam LW pupil stop, polychromatic, phase retrieval) with per-exposure
    low-order pupil-shear/WFE modes fitted to each exposure's own wings. That is
    the only route left that can predict the per-dither halo.
 
-## 6. Files
+## 7. Files
 
 | file | purpose |
 |---|---|
@@ -237,7 +322,9 @@ the detector-fixed component is weak.
 | `halobasis.py` | star-centred log-r B-spline × Fourier basis |
 | `patternfit.py` | static pattern + per-exposure nuisance, joint fit and LOO (main model) |
 | `patternfit_rank2.py` | + learned variable template with smooth per-exposure amplitude |
-| `loo_crop.py` | LOO on a crop, for band-limit / super-resolution (`KMAX`, `QH`, `QN`) tests |
+| `loo_crop.py` | LOO on a crop, for band-limit / super-resolution (`KMAX`, `QH`, `QN`) tests and the brightness sequence (`--prefix`) |
+| `brightness.py` | relative brightness (halo-profile ratio) and saturated-core size of each star |
+| `seq_eval.py` | brightness-sequence χ statistics, excess fraction, fig. 11 |
 | `evaluate_loo.py` | χ statistics by DQ class, radius and model brightness |
 | `diagnostics.py` | distortion, dither-ratio, raw-ramp, integration and halo-index tests |
 | `make_figures.py` | figs 1–4 |
