@@ -175,8 +175,13 @@ def test_abs_tweakreg_gate_needs_an_inheriting_entry():
 def test_the_miri_reducer_uses_the_tested_gate():
     from pathlib import Path
     src = (Path(AC.__file__).resolve().parent / 'PipelineMIRI.py').read_text()
-    assert 'inherited_abs_tie_complete(\n                _inh, _member_shifts)' in src
-    assert 'abs_refcat = None' in src
+    assert 'if inherited_abs_tie_complete(_inh, _member_shifts):' in src
+    gated = src.split('if inherited_abs_tie_complete(_inh, _member_shifts):')[1]
+    gated = gated.split('if abs_refcat is not None:')[0]
+    # the whole TweakRegStep is skipped: relative tweakreg runs after the
+    # table shift and would cancel the per-exposure checkpoint rows
+    assert "tweakreg_parameters['skip'] = True" in gated
+    assert 'abs_refcat = None' in gated
     assert 'header.update(inherited_header_cards(_shift))' in src
 
 

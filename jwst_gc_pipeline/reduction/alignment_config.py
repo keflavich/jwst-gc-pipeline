@@ -156,10 +156,12 @@ class InheritedBulk:
     donor_filters: Tuple[str, ...]
     differential: Dict[str, Tuple[float, float]]
     dec_ref_deg: float
-    #: Skip tweakreg's ABSOLUTE fit to the reference catalog for this
-    #: instrument (the relative frame-to-frame fit still runs).  The inherited
-    #: tie IS the absolute tie; an absolute fit on top can only replace it
-    #: with this instrument's own, less reliable one.
+    #: Skip TweakRegStep for this instrument when every frame inherited.  The
+    #: inherited tie IS the absolute tie; an absolute fit on top can only
+    #: replace it with this instrument's own, less reliable one.  The relative
+    #: frame-to-frame fit is skipped too: it runs after the offsets-table
+    #: shift and would cancel the checkpoint's per-exposure rows.  (The name
+    #: predates skipping the relative fit.)
     disable_abs_tweakreg: bool = True
     notes: str = ''
 
