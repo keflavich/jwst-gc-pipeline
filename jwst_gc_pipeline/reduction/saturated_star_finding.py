@@ -906,7 +906,7 @@ def satstar_fit_switches(env=None):
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (1.0): qfit over the disk r < R around the fit ('qfit_local' column),
       used by the NIRCam fit-quality gate in place of the box qfit when the
-      gate is on, for components seeded from SATURATED DQ only
+      gate is on, for components carrying SATURATED DQ only
       (``satstar_qfit_for_gate``).
     """
     env = os.environ if env is None else env
@@ -959,10 +959,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['qfit_local_r'] > 0:
         ql = f"ql{sw['qfit_local_r']:g}"
         if sw['qfit_local_gate']:
-            # 'd': the gate judges dqsat components only.  A catalog stamped
-            # by the earlier every-kind gate ('...g1') no longer matches and
-            # is refit.
-            ql += f"g{sw['qfit_local_max']:g}d"
+            # 's': the gate judges SATURATED-DQ components only.  A catalog
+            # stamped by the earlier every-component gate ('...g1') no longer
+            # matches and is refit.
+            ql += f"g{sw['qfit_local_max']:g}s"
         parts.append(ql)
     return '_'.join(parts)
 
@@ -1265,38 +1265,56 @@ def satstar_local_qfit(cutout, model_image, mask, r2, radius, local_bkg, flux):
     return float(np.abs((cutout - local_bkg - model_image)[loc]).sum() / flux)
 
 
+def component_carries_saturated_dq(dq, sources, label, comp_slice):
+    """Whether component ``label`` of ``sources`` holds a SATURATED pixel in
+    the frame's own DQ.
+
+    ``sources`` is the label image ``find_saturated_stars`` returns and
+    ``comp_slice`` its ``ndimage.find_objects`` slice for ``label`` (None, or
+    a slice of Nones, for a label with no pixels: False).  The data floor and
+    the severity gate remove SAT components from the finder's mask before the
+    seed kinds are assigned, and the peak / sub-floor seeding can re-seed the
+    same pixels, so a component seeded as ``'subfloor'`` can still carry
+    SATURATED DQ; ``seed_kind`` alone does not tell."""
+    if comp_slice is None or comp_slice[0] is None:
+        return False
+    comp = sources[comp_slice] == label
+    return bool(np.any((np.asarray(dq)[comp_slice][comp]
+                        & dqflags.pixel['SATURATED']) != 0))
+
+
 def satstar_qfit_for_gate(qfit, qfit_local, qfit_max_keep, *, is_miri,
-                          forced_source, seed_kind, switches=None):
+                          forced_source, sat_flagged, switches=None):
     """The (qfit, limit) pair the fit-quality gate should use.
 
-    ``SATSTAR_QFIT_LOCAL_GATE`` on: a NIRCam, non-forced fit of a ``'dqsat'``
-    component (one holding SATURATED DQ pixels) with a finite ``qfit_local``
-    is judged on it against ``SATSTAR_QFIT_LOCAL_MAX``.  Otherwise the box
-    qfit against ``qfit_max_keep``, as before.
+    ``SATSTAR_QFIT_LOCAL_GATE`` on: a NIRCam, non-forced fit of a component
+    that carries SATURATED DQ in the frame's own DQ (``sat_flagged``) with a
+    finite ``qfit_local`` is judged on it against ``SATSTAR_QFIT_LOCAL_MAX``.
+    Otherwise the box qfit against ``qfit_max_keep``, as before.
 
-    The amplitude-seeded kinds (``'peak'``, ``'subfloor'``, ``'partner'``,
-    ``'sibling'``) keep the box qfit.  Those components carry no SATURATED
-    flag, and where the severity floor sits below the filter's saturation
-    onset many of them are unsaturated stars.  A PSF fits an unsaturated star
-    well inside r < R, so the local qfit accepts it, where the box qfit
-    rejected it for the neighbours inside the box.  On sgra F405N (floor
-    2500 MJy/sr, no-NaN SAT onset 8362) the gate on for every kind raised the
-    accepted satstars from 2275 to 9286 over 3 frames, 5219 of the 7011 added
-    being peak or subfloor seeds, and the daophot fits within 1.5 FWHM of an
-    accepted satstar from 6 to 682 on the two heavy frames, 628 of them next
-    to a peak or subfloor seed.  On gc-treasury F480M m7 (12 frames) the gate
-    accepted 87 fits the box qfit rejected, 76 of them dqsat, and on gc2211
-    F277W every accepted satstar is dqsat.
+    A component with no SATURATED pixel at all keeps the box qfit.  Where the
+    severity floor sits below the filter's saturation onset, the peak and
+    sub-floor seeding make many such components out of unsaturated stars.  A
+    PSF fits an unsaturated star well inside r < R, so the local qfit accepts
+    it, where the box qfit rejected it for the neighbours inside the box.  On
+    sgra F405N (floor 2500 MJy/sr, no-NaN SAT onset 8362) the gate on for
+    every component raised the accepted satstars from 2275 to 9286 over 3
+    frames, 5219 of the 7011 added being peak or subfloor seeds, and the
+    daophot fits within 1.5 FWHM of an accepted satstar from 25 to 807.
 
-    A component whose kind is unknown resolves to ``'dqsat'`` upstream (the
-    ``_kind_names`` lookup in ``find_saturated_stars``, the per-record
-    default in the source-record build and in the fit loop), so the gate
-    stays on for it, as it was for every component before.  That is
-    deliberate: the DQ kind is the one the gate was built for, and every
-    amplitude seed is stamped explicitly."""
+    The test reads the DQ, not ``seed_kind``.  The data floor and the
+    severity gate remove SAT components from the finder's mask before the
+    seed kinds are assigned, and the sub-floor seeding re-seeds some of them,
+    so a weakly saturated star can arrive as ``'subfloor'`` with its SAT
+    pixels intact.  A ``seed_kind == 'dqsat'`` test left 36 such stars on
+    cefcf F360M (3 frames) unmeasured; among the non-dqsat stars the
+    every-component gate accepted, all 1640 on cefcf F360M, all 342 on
+    gc-treasury F480M, 3 of 5577 on sgra F405N and 0 of 2990 on gc-treasury
+    F212N carry SATURATED DQ within 2 px of the centroid
+    (``component_carries_saturated_dq`` tests the whole component)."""
     sw = satstar_fit_switches() if switches is None else switches
     if (sw['qfit_local_gate'] and not is_miri and not forced_source
-            and seed_kind == 'dqsat' and np.isfinite(qfit_local)):
+            and sat_flagged and np.isfinite(qfit_local)):
         return qfit_local, sw['qfit_local_max']
     return qfit, qfit_max_keep
 
@@ -2988,8 +3006,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 src_comp_cx = 0.5 * (_sl[1].start + _sl[1].stop - 1)
             else:
                 src_comp_cy = src_comp_cx = np.nan
+            # read by SATSTAR_QFIT_LOCAL_GATE (satstar_qfit_for_gate)
+            _comp_sat_dq = component_carries_saturated_dq(dq, sources,
+                                                          src_label, _sl)
         else:
             src_sat_area = None
+            _comp_sat_dq = False
             src_comp_cy = src_comp_cx = np.nan
 
         # Brightness-dependent mask dilation: scale buffer with saturated area
@@ -4079,6 +4101,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             qfit_local = satstar_local_qfit(cutout, model_image, mask, _r2_c,
                                             _qloc_r, _lb, _fl)
             result['qfit_local'] = [qfit_local] * len(result)
+            result['comp_sat_dq'] = [_comp_sat_dq] * len(result)
 
         threshold_image = np.zeros_like(cutout)
 
@@ -4156,11 +4179,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # low-confidence fits, since it was deleting real bright stars.  MIRI's
         # thresholds are looser throughout (snr 2, qfit 15, sidelobe -40).
         # See accept_satstar_fit.
-        # SATSTAR_QFIT_LOCAL_GATE: judge NIRCam in-FOV fits of dqsat
-        # components on qfit_local (see satstar_qfit_for_gate).
+        # SATSTAR_QFIT_LOCAL_GATE: judge NIRCam in-FOV fits of components
+        # carrying SATURATED DQ on qfit_local (see satstar_qfit_for_gate).
         _qfit_gate, _qfit_gate_max = satstar_qfit_for_gate(
             qfit, qfit_local, _qfit_max_keep, is_miri=_is_miri,
-            forced_source=forced_source, seed_kind=_seed_kind,
+            forced_source=forced_source, sat_flagged=_comp_sat_dq,
             switches=_fit_switches)
         accept_source = accept_satstar_fit(
             result_is_none=(result is None), fluxerr=fluxerr, snr=snr,

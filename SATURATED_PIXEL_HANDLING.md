@@ -489,7 +489,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_RCURVE_GUARD` / `…_MAXSTEP` | 1 (**on**) / 1.3 | truncate the ZEROFRAME R(g0) curve at the first bin-to-bin step larger than MAXSTEP, up or down; 0 restores the untruncated curve, which collapses on F480M (#972) |
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
-| `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 1.0 | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of `dqsat` components (SATURATED DQ present) are judged on it, and the amplitude-seeded kinds (`peak`, `subfloor`, `partner`, `sibling`) keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
+| `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 1.0 | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
 | `SATSTAR_REPLACE_RADIUS_ARCSEC` | (see code) | satstar→daophot replacement radius |

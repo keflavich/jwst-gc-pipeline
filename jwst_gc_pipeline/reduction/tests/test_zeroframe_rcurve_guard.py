@@ -20,6 +20,7 @@ weakly saturated core is rewritten to ~3% of its rate.  Pinned here:
 """
 import numpy as np
 import pytest
+from jwst.datamodels import dqflags
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
     satstar_fit_switches, satstar_local_qfit, satstar_observed_peak,
@@ -389,7 +390,7 @@ def test_qfit_local_switch_defaults(monkeypatch):
 
 
 def test_gate_uses_box_qfit_unless_the_local_gate_is_on(monkeypatch):
-    kw = dict(is_miri=False, forced_source=False, seed_kind='dqsat')
+    kw = dict(is_miri=False, forced_source=False, sat_flagged=True)
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, **kw) == (7.0, 5.0)
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
@@ -397,42 +398,103 @@ def test_gate_uses_box_qfit_unless_the_local_gate_is_on(monkeypatch):
     # MIRI, forced sources and a NaN local qfit keep the box qfit
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=True,
                                  forced_source=False,
-                                 seed_kind='dqsat') == (7.0, 5.0)
+                                 sat_flagged=True) == (7.0, 5.0)
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
                                  forced_source=True,
-                                 seed_kind='dqsat') == (7.0, 5.0)
+                                 sat_flagged=True) == (7.0, 5.0)
     assert satstar_qfit_for_gate(7.0, np.nan, 5.0, **kw) == (7.0, 5.0)
 
 
-@pytest.mark.parametrize('seed_kind', ['peak', 'subfloor', 'partner',
-                                       'sibling', 'forced'])
-def test_local_gate_judges_only_dqsat_components(monkeypatch, seed_kind):
-    """The amplitude-seeded kinds carry no SATURATED flag; where the severity
-    floor sits below the saturation onset many are unsaturated stars, which
-    the local qfit accepts (sgra F405N: 5219 of 7011 added accepts were peak
-    or subfloor seeds).  They keep the box qfit with the gate on."""
+def test_local_gate_judges_only_saturated_dq_components(monkeypatch):
+    """A component with no SATURATED pixel keeps the box qfit with the gate
+    on: where the severity floor sits below the saturation onset, most of
+    them are unsaturated stars, which the local qfit accepts (sgra F405N:
+    5219 of 7011 added accepts were peak or subfloor seeds)."""
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
-    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
-                                 forced_source=False,
-                                 seed_kind=seed_kind) == (7.0, 5.0)
-    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
-                                 forced_source=False,
-                                 seed_kind='dqsat') == (0.2, 0.8)
+    kw = dict(is_miri=False, forced_source=False)
+    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, sat_flagged=False,
+                                 **kw) == (7.0, 5.0)
+    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, sat_flagged=True,
+                                 **kw) == (0.2, 0.8)
 
 
-def test_gate_requires_the_seed_kind():
+def test_gate_requires_sat_flagged():
     with pytest.raises(TypeError):
         satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
                               forced_source=False)
 
 
-def test_gate_call_site_passes_the_components_own_seed_kind():
-    """Call-site guard: the helper tests above cannot see the wiring, so
-    passing a constant ``seed_kind='dqsat'`` from get_saturated_stars would
-    leave them green (and turn the gate back on for every kind).  The call
-    must pass the per-component ``_seed_kind``, which the component loop
-    reads from the record's ``seed_kind``."""
+def _severity_scene():
+    """Three stars on a 5 MJy/sr floor, severity floor 4000:
+
+    * A: SATURATED-flagged core peaking at 3000 (< floor, > 0.35 x floor):
+      the severity gate drops its DQ component and the sub-floor seeding
+      re-seeds it, so it arrives as 'subfloor' with its SAT pixels intact;
+    * B: the same peak with no DQ flag: 'subfloor', no SAT pixel;
+    * C: SATURATED-flagged core at 6000 (> floor): 'dqsat'.
+    """
+    from astropy.io import fits
+    shape = (160, 160)
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+
+    def disk(x, y, r):
+        return (xx - x) ** 2 + (yy - y) ** 2 <= r ** 2
+
+    data = np.full(shape, 5.0)
+    dq = np.zeros(shape, dtype=np.uint32)
+    for (x, y, pk, flagged) in ((40, 40, 3000.0, True),
+                                (110, 40, 3000.0, False),
+                                (75, 110, 6000.0, True)):
+        data[disk(x, y, 3)] = pk
+        if flagged:
+            dq[disk(x, y, 2)] |= dqflags.pixel['SATURATED']
+    hdul = fits.HDUList([
+        fits.PrimaryHDU(),
+        fits.ImageHDU(data=data.astype('float32'), name='SCI'),
+        fits.ImageHDU(data=dq, name='DQ'),
+        fits.ImageHDU(data=np.ones(shape, dtype='float32'),
+                      name='VAR_POISSON')])
+    return hdul, dq
+
+
+def test_severity_dropped_sat_component_still_counts_as_saturated():
+    """The case seed_kind misses: a weakly saturated star whose DQ component
+    the severity gate removed, re-seeded by the sub-floor seeding (cefcf
+    F360M: 36 such stars left unmeasured by a seed_kind == 'dqsat' gate)."""
+    from scipy import ndimage
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        component_carries_saturated_dq, find_saturated_stars)
+    hdul, dq = _severity_scene()
+    _, sources, coms, kinds = find_saturated_stars(hdul, severity_floor=4000.0)
+    slices = ndimage.find_objects(sources)
+    got = {}
+    for lab, (cy, cx) in enumerate(coms, start=1):
+        key = ('A' if cx < 60 and cy < 60 else 'B' if cy < 60 else 'C')
+        got[key] = (kinds[lab - 1],
+                    component_carries_saturated_dq(dq, sources, lab,
+                                                   slices[lab - 1]))
+    assert got == {'A': ('subfloor', True), 'B': ('subfloor', False),
+                   'C': ('dqsat', True)}
+
+
+def test_component_carries_saturated_dq_without_pixels():
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        component_carries_saturated_dq)
+    dq = np.full((4, 4), dqflags.pixel['SATURATED'], dtype=np.uint32)
+    sources = np.zeros((4, 4), dtype=int)
+    assert component_carries_saturated_dq(dq, sources, 1, None) is False
+    assert component_carries_saturated_dq(dq, sources, 1,
+                                          (None, None)) is False
+
+
+def test_gate_call_site_passes_the_components_saturated_dq():
+    """Call-site guard: the helper tests cannot see the wiring, so passing a
+    constant ``sat_flagged=True`` from get_saturated_stars would leave them
+    green (and turn the gate back on for every component).  The call must
+    pass the per-component ``_comp_sat_dq``, computed by
+    component_carries_saturated_dq from the frame DQ and this component's
+    label (False only for forced sources)."""
     import ast
     import inspect
     import textwrap
@@ -442,11 +504,12 @@ def test_gate_call_site_passes_the_components_own_seed_kind():
              and getattr(n.func, 'id', None) == 'satstar_qfit_for_gate']
     assert len(calls) == 1
     kw = {k.arg: k.value for k in calls[0].keywords}
-    assert isinstance(kw.get('seed_kind'), ast.Name)
-    assert kw['seed_kind'].id == '_seed_kind'
-    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
-               and any(getattr(t, 'id', None) == '_seed_kind'
+    assert isinstance(kw.get('sat_flagged'), ast.Name)
+    assert kw['sat_flagged'].id == '_comp_sat_dq'
+    assigns = [ast.unparse(n.value) for n in ast.walk(tree)
+               if isinstance(n, ast.Assign)
+               and any(getattr(t, 'id', None) == '_comp_sat_dq'
                        for t in n.targets)]
-    assert len(assigns) == 1
-    src = ast.unparse(assigns[0].value)
-    assert src.startswith("src.get('seed_kind'"), src
+    assert sorted(assigns) == [
+        'False',
+        'component_carries_saturated_dq(dq, sources, src_label, _sl)']
