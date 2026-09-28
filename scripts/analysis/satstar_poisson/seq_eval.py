@@ -1,7 +1,8 @@
 """Brightness sequence (README §7): LOO chi statistics for each star, from loo_crop.py outputs.
 
     python seq_eval.py <outdir> <tag-template> <prefix> [<prefix> ...]
-e.g. python seq_eval.py figures bs_{p} tgt trn_116 trn_069 ...   (needs brightness.json)
+e.g. python seq_eval.py figures bs_{p} tgt trn_116 trn_069 ...   (needs brightness.json;
+     '<prefix>:<tag>' uses another LOO tag for that star)
 
 For every star (prefix) and held-out dither k in <tag>_e<k>.npz:
     chi = (d - pred) / sqrt(VAR_POISSON + VAR_RNOISE + varQ)
@@ -11,7 +12,7 @@ dithers at the pattern node).  Per radial bin it reports the robust sigma(chi)
 that excess as a fraction of the star's local intensity,
     f_ex = sqrt(sigma^2 - 1) * median(sigma_tot) / median(pred - bkg),
 bkg being the off-spike scene level at r = 350-450 px (brightness.py).
-Writes <outdir>/fig5_brightness_sequence.png and brightness_sequence.json."""
+Writes <outdir>/fig11_brightness_sequence.png and brightness_sequence.json."""
 import sys, os, glob, json, warnings
 import numpy as np
 import matplotlib
@@ -62,8 +63,11 @@ if __name__ == '__main__':
     outdir, tmpl, pres = sys.argv[1], sys.argv[2], sys.argv[3:]
     B = json.load(open('brightness.json'))
     res = {}
+    tags = {}
+    for i, p in enumerate(pres):          # "<prefix>:<tag>" overrides the template for one star
+        p, _, t = p.partition(':'); pres[i] = p; tags[p] = t or tmpl.format(p=p)
     for p in pres:
-        st = star_stats(tmpl.format(p=p), p, B[p]['bkg'])
+        st = star_stats(tags[p], p, B[p]['bkg'])
         if not st:
             print(p, 'no LOO outputs'); continue
         res[p] = dict(F_rel=B[p]['F_rel'], nsat_core=B[p]['nsat_core'], ndith=B[p]['ndith'], loo=st)
@@ -104,6 +108,7 @@ if __name__ == '__main__':
     e0 = np.median([row['bins']['80-120']['excess_over_noise'] for row in res['tgt']['loo']]) if 'tgt' in res else np.nan
     ax[1].loglog(ff, e0*np.sqrt(ff), 'k--', lw=1, label=r'constant fractional excess: $\propto\sqrt{F}$ (80-120)')
     ax[1].axhline(1, color='gray', lw=1)
+    ax[1].axhline(np.sqrt(1.2**2-1), color='gray', lw=1, ls=':', label=r'far-field floor, $\sigma(\chi)$=1.2')
     ax[1].set_xlabel(r'$F/F_{\rm target}$'); ax[1].set_ylabel(r'non-Poisson excess / noise = $\sqrt{\sigma(\chi)^2-1}$'); ax[1].legend(fontsize=8)
     ax[1].set_title('excess relative to the noise')
     ax[2].set_xlabel(r'$F/F_{\rm target}$'); ax[2].set_ylabel('excess / local star intensity [%]'); ax[2].legend(fontsize=8)
@@ -116,5 +121,5 @@ if __name__ == '__main__':
     ax[3].set_yticks([1, 1.5, 2, 3, 5, 8]); ax[3].set_yticklabels(['1', '1.5', '2', '3', '5', '8'])
     ax[3].set_xlabel('local star intensity, prediction - scene level [MJy/sr]'); ax[3].set_ylabel(r'robust $\sigma(\chi)$')
     ax[3].set_title(r'$\sigma(\chi)$ vs local intensity, r = 30-200 px')
-    plt.tight_layout(); plt.savefig(f'{outdir}/fig5_brightness_sequence.png', dpi=75); plt.close()
-    print('wrote', f'{outdir}/fig5_brightness_sequence.png')
+    plt.tight_layout(); plt.savefig(f'{outdir}/fig11_brightness_sequence.png', dpi=75); plt.close()
+    print('wrote', f'{outdir}/fig11_brightness_sequence.png')
