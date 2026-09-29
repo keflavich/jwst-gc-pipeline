@@ -55,7 +55,9 @@ value for every frame (for tests / a global-constant run).
 Enable with ``ROLL_CORRECTION=1``.  Applied in ``fix_alignment`` after the
 DVA and placement corrections and BEFORE the reference shift.  Idempotent
 via the ``ROLLCORR`` marker; a ``ROLLPEND`` flag makes a crash between the
-GWCS write and the marker write fail loud instead of double-rotating.
+GWCS write and the marker write fail loud instead of double-rotating.  A frame
+that already carries a reference shift (``RAOFFSET``) without ``ROLLCORR`` is
+refused before anything is written: the roll must precede the shift.
 
 WARNING: enabling this on an already-processed field invalidates the
 consensus / VIRAC2locked offsets tables solved against the unrotated frames
@@ -81,9 +83,11 @@ PENDING = 'ROLLPEND'
 TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'roll_corrections.csv')
 
 # NRCALL_FULL reference point (SIAF PRD, arcsec).  Used only as the rotation
-# pivot: an arcsec-level error in it moves the pivot, i.e. adds a common rigid
-# shift of (pivot error) x (delta_roll in rad) ~ 1e-4 mas, which the reference
-# tie absorbs.
+# pivot.  Moving the pivot by d adds a common rigid shift of d x delta_roll(rad)
+# to every detector of the exposure: ~0.1 mas per arcsec of pivot offset at a
+# 20" roll (1" x 20/206265).  The per-exposure reference shift absorbs that
+# rigid term, so the pivot choice leaves the delivered astrometry unchanged
+# once the offsets tables are rebuilt.
 NRCALL_V2_ARCSEC = -1.957302
 NRCALL_V3_ARCSEC = -492.89529
 
@@ -105,8 +109,12 @@ def resolve_roll_arcsec(program, observation, visit='*', table=TABLE):
         return float(env)
     if not os.path.exists(table):
         return None
-    prog = str(int(str(program).lstrip('jw') or 0))
+    if program is None or observation is None or str(program).strip() in ('', '*'):
+        return None
+    prog = str(int(str(program).strip().lstrip('jw') or 0))
     obs = _norm_obs(observation)
+    if visit is None or str(visit).strip() == '':
+        visit = '*'
     vis = _norm_obs(visit) if str(visit).strip() != '*' else '*'
     best, best_rank = None, None
     with open(table) as fh:
@@ -224,6 +232,16 @@ def apply_roll_correction(fn, delta_roll_arcsec=None, verbose=True):
             print(f"roll correction skipped for {fn}: already applied "
                   f"({hdr.get('ROLLARC')} arcsec)")
         return None
+    if 'RAOFFSET' in hdr:
+        # fix_alignment's own already-aligned guard runs AFTER this hook.  Rolling a
+        # frame that already carries a baked reference shift would change its base
+        # fiducial under that shift; the stale-base check would then refuse the
+        # shift and leave the file half-processed.  Refuse before writing anything.
+        raise RuntimeError(
+            f"{fn}: frame already carries a reference shift (RAOFFSET="
+            f"{hdr['RAOFFSET']}) but no {MARKER}; the roll must be applied before "
+            f"the shift. Re-create this frame from its _cal and re-run fix_alignment "
+            f"with ROLL_CORRECTION=1.")
     if hdr.get(PENDING):
         raise RuntimeError(
             f"{fn}: pending roll-correction marker without completion marker -- a "

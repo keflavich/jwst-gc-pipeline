@@ -122,3 +122,112 @@ def test_gwcs_rotation_about_common_pivot():
     assert worst < 0.05
     with pytest.raises(RuntimeError):
         rc.verify_rotation(w0, w1, m.data.shape, piv, -20.0, tol_mas=0.05)
+
+
+# --------------------------------------------------------------------------
+# End-to-end: apply_roll_correction on a synthetic NIRCam-like frame on disk.
+# The GWCS carries the same v2v3 -> v2v3vacorr -> world (v23tosky) structure
+# assign_wcs builds, so adjust_wcs, the pivot lookup and the SIP sync all run
+# for real; no CRDS or real data needed.
+
+def _synthetic_frame(path, raoffset=None):
+    from astropy import coordinates as coord
+    from astropy import units as u
+    from astropy.modeling import models as M
+    from gwcs import coordinate_frames as cf
+    from gwcs import wcs as gw
+    from jwst.assign_wcs import pointing
+    from jwst.datamodels import ImageModel
+
+    m = ImageModel((64, 64))
+    m.meta.observation.program_number = '10678'
+    m.meta.observation.observation_number = '135'
+    m.meta.observation.visit_number = '001'
+    wi = m.meta.wcsinfo
+    wi.v2_ref, wi.v3_ref, wi.roll_ref = -82.0, -497.0, 90.2
+    wi.ra_ref, wi.dec_ref = 266.85, -28.34
+    wi.v3yangle, wi.vparity = -0.55, -1
+    det2v = ((M.Shift(-32) & M.Shift(-32)) | (M.Scale(0.031) & M.Scale(0.031))
+             | (M.Shift(wi.v2_ref) & M.Shift(wi.v3_ref)))
+    frames = [cf.Frame2D(name=n, axes_order=(0, 1), unit=un) for n, un in
+              (('detector', (u.pix, u.pix)), ('v2v3', (u.arcsec, u.arcsec)),
+               ('v2v3vacorr', (u.arcsec, u.arcsec)))]
+    world = cf.CelestialFrame(reference_frame=coord.ICRS(), name='world')
+    m.meta.wcs = gw.WCS([(frames[0], det2v), (frames[1], M.Identity(2)),
+                         (frames[2], pointing.v23tosky(m)), (world, None)])
+    m.meta.wcs.bounding_box = ((-0.5, 63.5), (-0.5, 63.5))
+    m.save(str(path))
+    if raoffset is not None:
+        with fits.open(path, mode='update') as h:
+            h['SCI'].header['RAOFFSET'] = raoffset
+            h['SCI'].header['DEOFFSET'] = 0.0
+    return str(path)
+
+
+def _sky(fn):
+    from jwst.datamodels import ImageModel
+    yy, xx = np.mgrid[0:64:8, 0:64:8]
+    return ImageModel(fn).meta.wcs(xx.ravel(), yy.ravel())
+
+
+def test_apply_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.delenv("ROLL_CORRECTION_ARCSEC", raising=False)
+    from jwst.datamodels import ImageModel
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    ra0, dec0 = _sky(fn)
+    pivot = rc.nircam_pivot_sky(ImageModel(fn).meta.wcs)
+
+    assert rc.apply_roll_correction(fn, 20.0, verbose=False) == 20.0
+    ra1, dec1 = _sky(fn)
+    rap, decp = rc.rotation_about_pivot(ra0, dec0, pivot[0], pivot[1], 20.0)
+    dev = np.hypot((ra1 - rap) * np.cos(np.radians(dec1)), dec1 - decp) * 3.6e6
+    assert dev.max() < 0.05                                   # mas
+    moved = np.hypot((ra1 - ra0) * np.cos(np.radians(dec1)), dec1 - dec0) * 3.6e6
+    assert moved.min() > 1.0                                  # the frame did move
+
+    h = fits.getheader(fn, ('SCI', 1))
+    assert h[rc.MARKER] is True and h['ROLLARC'] == 20.0 and h[rc.PENDING] is False
+    assert h['SIPGWMAX'] < 0.05
+    # FITS header WCS follows the GWCS
+    from astropy.wcs import WCS
+    s = WCS(h).pixel_to_world_values(np.array([5.0, 50.0]), np.array([7.0, 40.0]))
+    g = ImageModel(fn).meta.wcs(np.array([5.0, 50.0]), np.array([7.0, 40.0]))
+    assert np.allclose(s[0], g[0], atol=1e-7) and np.allclose(s[1], g[1], atol=1e-7)
+
+    # idempotent: second call is a no-op
+    assert rc.apply_roll_correction(fn, 20.0, verbose=False) is None
+    ra2, dec2 = _sky(fn)
+    assert np.array_equal(ra2, ra1) and np.array_equal(dec2, dec1)
+
+
+def test_apply_resolves_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "-5.0")
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    assert rc.apply_roll_correction(fn, verbose=False) == -5.0
+
+
+def test_apply_refuses_shift_aligned_frame(tmp_path):
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits", raoffset=1e-5)
+    before = _sky(fn)
+    with pytest.raises(RuntimeError, match="RAOFFSET"):
+        rc.apply_roll_correction(fn, 20.0, verbose=False)
+    h = fits.getheader(fn, ('SCI', 1))
+    assert rc.MARKER not in h and rc.PENDING not in h         # nothing written
+    after = _sky(fn)
+    assert np.array_equal(before[0], after[0]) and np.array_equal(before[1], after[1])
+
+
+def test_apply_refuses_pending_frame(tmp_path):
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    with fits.open(fn, mode='update') as h:
+        h['SCI'].header[rc.PENDING] = True
+    with pytest.raises(RuntimeError, match="pending"):
+        rc.apply_roll_correction(fn, 20.0, verbose=False)
+
+
+def test_resolve_handles_missing_header_values(monkeypatch):
+    monkeypatch.delenv("ROLL_CORRECTION_ARCSEC", raising=False)
+    assert rc.resolve_roll_arcsec(None, None) is None
+    assert rc.resolve_roll_arcsec(None, '135') is None
+    assert rc.resolve_roll_arcsec('10678', None) is None
+    assert rc.resolve_roll_arcsec('10678', '135', None) == rc.resolve_roll_arcsec('10678', '135', '*')
