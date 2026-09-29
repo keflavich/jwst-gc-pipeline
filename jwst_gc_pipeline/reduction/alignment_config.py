@@ -409,7 +409,13 @@ ALIGNMENT_CONFIG = (
                        'frame\'s VIRAC2 tie was refused (o063 o077 o105 o109 '
                        'o111 o113 o116, #957); an F480M fallback would put '
                        'MIRI on VIRAC2 there but up to ~225 mas off F212N '
-                       '(o063).')),
+                       '(o063).  Since #986 the whole TweakRegStep is '
+                       'skipped on these frames.  F770W per-exposure rows '
+                       'written by m2 before #986 were measured on '
+                       'tweakreg-shifted crf and are invalid on post-#986 '
+                       'frames: remove every F770W row (o071 exp1-6, o078 '
+                       'exp6, o114 exp4-6 as of 2026-09-27) before the first '
+                       'post-#986 regen.')),
         },
     ),
     FieldAlignment(
