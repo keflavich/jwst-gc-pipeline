@@ -2089,6 +2089,39 @@ def _load_ramp_cube(crf_path):
                                           else np.asarray(gdq, dtype=int))
 
 
+def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
+                                field=None, phase=None):
+    """Satstar catalogs of the partner band that ``--satstar-partner-seed`` reads.
+
+    The partner's consolidated catalog when it exists; otherwise its
+    per-exposure accepted catalogs, observation-scoped on a tree shared by
+    several observations (#925), and ONE phase per exposure (#983): the
+    ``phase`` being fit, or the exposure's latest earlier phase, as
+    ``load_satstar_catalog`` reads them.  Reading every phase on disk seeded
+    old runs' positions, including a later phase left from a previous run.
+    """
+    from jwst_gc_pipeline.photometry.merge_catalogs import (
+        consolidated_satstar_cache_path, satstar_catalog_in_observation,
+        satstar_obs_scope)
+    from jwst_gc_pipeline.photometry.satstar_phase_selection import (
+        format_phase_report, select_satstar_phase_files)
+    pscope = satstar_obs_scope(proposal_id, field)
+    consolidated = consolidated_satstar_cache_path(basepath, partner, pscope)
+    if os.path.exists(consolidated):
+        return [consolidated]
+    tok = re.compile(r'_m\d+_satstar_catalog\.fits$')
+    files = [f for f in sorted(glob.glob(
+        f'{basepath}/{partner.upper()}/pipeline/*_m*_satstar_catalog.fits'))
+        if tok.search(os.path.basename(f))]
+    if pscope:
+        files = [f for f in files
+                 if satstar_catalog_in_observation(f, proposal_id, pscope)]
+    files, report = select_satstar_phase_files(files, phase=phase)
+    print(f"[manual] partner-band satstar seeds ({partner}): "
+          f"{format_phase_report(report)}", flush=True)
+    return files
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -2396,24 +2429,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             _pmap[_b] = _a
         _partner = _pmap.get(filtername.lower())
         if _partner:
-            from jwst_gc_pipeline.photometry.merge_catalogs import (
-                consolidated_satstar_cache_path, satstar_catalog_in_observation,
-                satstar_obs_scope)
-            # Observation-scoped on a tree shared by several observations
-            # (#925); unscoped fields read the same paths as before.
-            _pscope = satstar_obs_scope(proposal_id, field)
-            _pc = consolidated_satstar_cache_path(basepath, _partner, _pscope)
-            _pfiles = ([_pc] if os.path.exists(_pc) else
-                       sorted(glob.glob(f'{basepath}/{_partner.upper()}/'
-                                        f'pipeline/*_m*_satstar_catalog.fits')))
-            if _pscope and _pfiles != [_pc]:
-                _pfiles = [f for f in _pfiles if satstar_catalog_in_observation(
-                    f, proposal_id, _pscope)]
+            _pfiles = _partner_satstar_seed_files(
+                basepath, _partner, proposal_id, field, phase=satstar_label)
             _parts = []
             for _pf in _pfiles:
                 try:
                     _pt = Table.read(_pf)
-                except Exception:
+                except (OSError, ValueError) as _perr:
+                    print(f"[manual] partner-band satstar seeds: unreadable "
+                          f"{_pf}: {_perr}", flush=True)
                     continue
                 if len(_pt) and 'skycoord_fit' in _pt.colnames:
                     _parts.append(SkyCoord(_pt['skycoord_fit']))
@@ -3831,7 +3855,8 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
     return (drop, keeper) if return_keeper else drop
 
 
-def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None):
+def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
+                             phase=None):
     """Per-exposure satstar fit positions for :func:`_never_cofit_duplicates`.
 
     One SkyCoord per per-exposure satstar run: the accepted
@@ -3840,9 +3865,18 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None):
     re-projected through the frame's current WCS the way the consolidated
     catalog is.  On a tree shared by several observations only this
     observation's files are read (same scoping as ``load_satstar_catalog``).
+
+    ``phase`` is the merge's iteration label.  Each exposure contributes the
+    same run ``load_satstar_catalog`` reads for it (#983): that phase's
+    catalog, or its latest earlier one, and the rejected file written beside
+    it.  Pooling every phase on disk let an older run's detections decide
+    whether two rows were ever fit side by side.
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         satstar_obs_scope, satstar_catalog_in_observation)
+    from jwst_gc_pipeline.photometry.satstar_phase_selection import (
+        format_phase_report, select_rejected_for_catalogs,
+        select_satstar_phase_files)
     from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
         frame_path_for_satstar_catalog, refresh_satstar_skycoords)
     tail = re.compile(r'_satstar_(catalog|rejected)\.fits$')
@@ -3854,6 +3888,14 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None):
     if obs_scope:
         files = [f for f in files
                  if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
+    accepted, _acc_report = select_satstar_phase_files(
+        [f for f in files if f.endswith('_satstar_catalog.fits')], phase=phase)
+    rejected, _ = select_rejected_for_catalogs(
+        [f for f in files if f.endswith('_satstar_rejected.fits')], accepted,
+        phase=phase)
+    print(f"  satstar co-fit positions: "
+          f"{format_phase_report(_acc_report)}", flush=True)
+    files = sorted(accepted + rejected)
     runs = {}
     wcs_cache = {}
     n_stale = 0
@@ -7812,7 +7854,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 if _want_cofit:
                     _cofit = _satstar_cofit_positions(
                         os.path.join(cut_bp, filt, 'pipeline'),
-                        proposal_id=proposal_id, field=field)
+                        proposal_id=proposal_id, field=field,
+                        phase=merge_label)
                 _ext_note = ('; extended-emission target, off-FOV rows only'
                              if str(target).lower() in _EXTENDED_EMISSION_TARGETS
                              else '')
