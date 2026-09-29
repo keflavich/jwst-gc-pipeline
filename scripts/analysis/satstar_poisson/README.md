@@ -282,7 +282,67 @@ dither 1: 116 (1140,1619), 069 (1187,1391), 126 (196,1814), 078 (1165,469),
    low-order pupil-shear/WFE modes fitted to each exposure's own wings. That is
    the only route left that can predict the per-dither halo.
 
-## 7. Files
+## 7. Program-wide halo calibration: is the per-dither PSF change a function of detector position?
+
+All 808 LW `_cal` frames of 10678 (F480M, 68 visits × 6 dithers × NRCALONG/NRCBLONG,
+one dither pattern, one roll) were searched for saturated stars
+(`halocal_extract.py`: DQ-SAT regions ≥250 px, cutouts + the frame's GWCS). Each
+star was centred by point symmetry of its spikes, linked across exposures, and its
+halo measured in 12 sectors × 12 annuli (`halocal_measure.py`; 16 361 cutouts).
+In-sample pattern fits of the 49 largest and ~190 mid-size stars
+(`halocal_patterns.py`) give per-exposure residual maps on a star-centred grid.
+
+![same position](../../../docs/evidence/satstar_poisson/fig14.png)
+![vs separation](../../../docs/evidence/satstar_poisson/fig16.png)
+![ramps](../../../docs/evidence/satstar_poisson/fig15.png)
+
+| test | result |
+|---|---|
+| smooth halo index vs position, Legendre cubic (`halocal_fit.py`) | removes ≤40% of the excess (A5, r=20–40), 0–14% (B5) |
+| a per-exposure term common to all stars in the exposure | none: it always worsens the CV |
+| detector-fixed multiplicative error, i.e. flat self-calibration (`halocal_flat.py`) | the two halves' maps correlate +0.02–0.04; applying one to the other worsens χ² at every radius |
+| 24 learned modes of the change (`halocal_modes.py`, 3-fold CV by star) | 45 / 38 / 28 / 11% of the excess at r = 15–30 / 30–50 / 50–80 / 80–124, vs 36 / 26 / 16 / 9% for the same modes rotated 15° |
+| **same detector move made by two different stars** (`halocal_samepos.py`, 10 824 quadruples) | see below |
+| brightness dependence at fixed r | none: fractional residual 2–5%, flat within ×1.5 for F = 0.02–1 |
+| raw-ramp shape (`ramp_satedge.py`, `ramp_fig.py`) | the target's halo change is in the first group difference; (g4−g3)/(g2−g1) is the same in all 6 dithers to ±2% |
+| saturated-core area vs halo | bright stars: corr +0.87 (r=20–40), +0.78 (30–80); target: area 1.00 / 1.01 / 0.90 / 0.90 / 1.05 / 0.97 vs halo 1.00 / 1.03 / 0.85 / 0.86 / 1.08 / 0.93 |
+
+**Same position, different star (fig. 14, 16).** A residual map of one exposure
+depends on which other positions entered the star's mean pattern. That dependence
+cancels in the difference of two exposures, D = r_k/a_k − r_i/a_i. If the PSF is a
+function of detector position alone, two stars whose exposures i, k sit on the same
+pixels as the other star's j, l have D_A = D_B up to noise. Normalised by the noise
+ceiling √(f_A f_B), with the anchor exposure excluded:
+
+| r [px] | stars < 20 px apart | same move, 100–300 px apart |
+|---|---|---|
+| 15–30 | 0.58–0.71 | 0.41 |
+| 30–50 | 0.55–0.62 | 0.28 |
+| 50–80 | 0.22–0.38 | 0.12 |
+| 80–124 (between spikes) | 0.05–0.07 | 0.02 |
+| 80–124 (spikes) | 0.18–0.21 | 0.08 |
+
+Inside 50 px (3″) about 60% of the change is shared by a different star at the same
+place. About half of that shared part is still shared 100–300 px away, so it is
+smooth in field position. Beyond 80 px, different stars at the same place show
+different structure.
+
+**Ramps.** The target's halo change is already present in the first group
+difference and is constant through the ramp. The saturated core shrinks and grows
+with it, so the change reaches in to r ≈ 25 px while the spikes stay fixed. It is
+incoming flux, not an accumulating detector effect: not overflow, not growing
+brighter-fatter, not persistence build-up. Separately, whole-detector ramps
+accelerate 3–8 px from clusters saturated in group 1 ((g4−g3)/(g2−g1) up to 3–6 at
+20–40 kDN fill; ≤1.03 beyond 12 px). That is charge overflow from saturated pixels.
+It is confined to within ~8 px of saturated pixels, and at the target it is +5% at
+r ≤ 55 px. Pixels that close to a core should be masked, but they are not the
+source of the halo change.
+
+A first version of the brightness test appeared to show a strong dependence on
+saturation depth. Nine stars with failed pattern fits (in-sample χ² 100–700)
+produced it; they are now excluded (`QCUT`).
+
+## 8. Files
 
 | file | purpose |
 |---|---|
@@ -298,6 +358,18 @@ dither 1: 116 (1140,1619), 069 (1187,1391), 126 (196,1814), 078 (1165,469),
 | `seq_eval.py` | brightness-sequence χ statistics, excess fraction, fig. 11 |
 | `evaluate_loo.py` | χ statistics by DQ class, radius and model brightness |
 | `diagnostics.py` | distortion, dither-ratio, raw-ramp, integration and halo-index tests |
+| `halocal_extract.py` | program-wide saturated-star cutouts + GWCS from the S3 mirror (§7) |
+| `halocal_measure.py` | symmetry centring, linking, sector/annulus halo measurement (§7) |
+| `halocal_fit.py` | smooth halo change vs position / exposure, cross-validated (§7) |
+| `halocal_patterns.py` | per-star in-sample pattern fits, residual maps for §7 |
+| `halocal_flat.py` | detector-fixed multiplicative error (flat self-cal) test (§7) |
+| `halocal_correlation.py` | halo and residual-map correlation vs dither-1 separation (§7) |
+| `halocal_modes.py` | learned modes of the PSF change, CV with a rotated control (§7) |
+| `halocal_psfcal.py` | Legendre-position × map calibration; star amplitudes (§7) |
+| `halocal_loo.py` | target LOO with a program-wide calibration or learned modes (§7) |
+| `halocal_samepos.py` | same-detector-position, different-star test; brightness test (§7) |
+| `halocal_samepos_fig.py`, `halocal_samepos_summary.py` | figs. 14, 16 |
+| `ramp_satedge.py`, `ramp_fig.py` | raw-ramp shape vs distance to saturated pixels; fig. 15 |
 | `make_figures.py` | the figures above |
 
 Reproduce (about 1 h on 4 cores):

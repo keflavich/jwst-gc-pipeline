@@ -4,10 +4,13 @@ p is an (N,N) real array of samples at integer ideal-pixel offsets q = j - N//2.
 P(q) is the unique band-limited (periodic-sinc) interpolant, Nyquist row/col
 zeroed so the interpolant is real.
 """
+import os
 import numpy as np, finufft
 
-NTHREADS = 4
-EPS = 1e-9
+# NUFFT_THREADS=1 when running several fits in parallel (oversubscribed finufft threads
+# are ~4x slower); NUFFT_EPS=1e-6 is ample for residual maps (halocal_patterns.py)
+NTHREADS = int(os.environ.get('NUFFT_THREADS', 4))
+EPS = float(os.environ.get('NUFFT_EPS', 1e-9))
 # optical band limit: D_circ/lambda_min at F480M blue edge (6.6 m, 4.63 um) in cycles per
 # 0.0629" ideal pixel = 0.4345.  Everything above is unphysical noise.
 import os
