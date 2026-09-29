@@ -619,7 +619,12 @@ def main(filtername, Observations=None, regionname='brick',
         # so cancels any per-exposure row the astrometry checkpoint writes: on
         # 10678 o078 F770W the exp6 row (+0.83, +3.99) mas changed that frame's
         # tweakreg shift by exactly (-0.83, -3.99) mas, and m2 read the same
-        # 4.07 mas offset before and after the regen.
+        # 4.07 mas offset before and after the regen.  Without the relative
+        # fit, a frame with no per-exposure row yet sits on the visit bulk
+        # alone, so a first-pass i2d carries the dither-to-dither pointing
+        # scatter (<=7 mas on o078) until m2 writes rows and the tile is
+        # regenerated.  That is expected; do not re-enable relative tweakreg
+        # to remove it.
         from jwst_gc_pipeline.reduction.alignment_config import inherited_bulk
         from jwst_gc_pipeline.reduction.unified_alignment import (
             inherited_abs_tie_complete)
