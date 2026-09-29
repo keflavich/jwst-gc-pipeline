@@ -268,10 +268,6 @@ def test_frame_wcs_passes_through_an_existing_wcs(frame):
     assert frame_wcs(ww.fits_wcs) is ww.fits_wcs
 
 
-if __name__ == '__main__':
-    raise SystemExit(pytest.main([__file__, '-v']))
-
-
 def _write_datamodel_with_gwcs(path):
     """A real stdatamodels product with a GWCS, as the pipeline writes one."""
     dm = pytest.importorskip('stdatamodels.jwst.datamodels')
@@ -342,3 +338,7 @@ def test_an_in_memory_hdulist_with_a_gwcs_raises_instead_of_using_sip(tmp_path):
         copy = fits.HDUList([h.copy() for h in hdul])      # no filename
     with pytest.raises(GwcsReadError, match='no filename'):
         frame_wcs(copy)
+
+
+if __name__ == '__main__':
+    raise SystemExit(pytest.main([__file__, '-v']))

@@ -44,7 +44,7 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 from .filtering import get_filtername, get_fwhm
 from ..photometry.psf_paths import legacy_merged_psf_grid_name_from_header
-from ..frame_wcs import frame_wcs, gwcs_from_file
+from ..frame_wcs import GwcsReadError, frame_wcs, gwcs_from_file
 from .fits_wcs_sync import sync_header_to_gwcs
 import requests
 import urllib3
@@ -2447,6 +2447,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             or (sibling_sky is not None and len(sibling_sky))):
         try:
             _pw = frame_wcs(fitsdata)
+        except GwcsReadError:
+            # the frame HAS a GWCS that cannot be read: never degrade silently
+            raise
         except Exception as _pex:
             print(f"WARNING: seed WCS unavailable: "
                   f"{type(_pex).__name__}: {_pex}", flush=True)

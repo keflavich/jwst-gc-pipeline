@@ -41,29 +41,29 @@ def load_frame_wcs(cal_file, prefer_gwcs=True):
     """The frame's existing sky solution: gwcs if loadable, else SCI FITS WCS.
 
     Returns ``(wcs_like, primary_header)`` where ``wcs_like`` has an APE-14
-    ``pixel_to_world(x, y)`` (0-based).  The FITS-SIP fallback in cal/crf
-    headers is the pipeline's own fit to the gwcs (sub-mas over the detector),
-    adequate for anchoring.
+    ``pixel_to_world(x, y)`` (0-based).  The GWCS is read with
+    :func:`jwst_gc_pipeline.frame_wcs.gwcs_from_file`, so a product whose GWCS
+    exists but cannot be read raises ``GwcsReadError``.  The FITS-SIP fallback
+    is used only for a product with no GWCS (or ``prefer_gwcs=False``).
     """
     from astropy.io import fits
 
     with fits.open(cal_file) as hdul:
         header = hdul[0].header.copy()
     if prefer_gwcs:
-        try:
-            from stdatamodels.jwst import datamodels
-            with datamodels.open(cal_file) as model:
-                gw = model.meta.wcs
-            if gw is not None:
-                return gw, header
-        except (ImportError, ValueError, AttributeError, OSError) as err:
-            import warnings
-            warnings.warn(f"gwcs unavailable for {cal_file} ({err}); "
-                          f"falling back to SCI FITS-SIP WCS", UserWarning,
-                          stacklevel=2)
+        # Same reader and policy as frame_wcs: a GWCS that exists but cannot be
+        # read raises GwcsReadError; only a product with no GWCS falls back.
+        from ..frame_wcs import gwcs_from_file
+        gw = gwcs_from_file(cal_file)
+        if gw is not None:
+            return gw, header
+        import warnings
+        warnings.warn(f"no GWCS in {cal_file}; falling back to the SCI "
+                      f"FITS-SIP WCS", UserWarning, stacklevel=2)
     from astropy.wcs import WCS
     with fits.open(cal_file) as hdul:
-        w = WCS(hdul['SCI'].header)
+        # relax=True: without it a header whose CTYPE lost -SIP drops A_*/B_*
+        w = WCS(hdul['SCI'].header, relax=True)
     return w, header
 
 

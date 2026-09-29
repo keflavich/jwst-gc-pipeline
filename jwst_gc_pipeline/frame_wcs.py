@@ -422,9 +422,10 @@ def frame_wcs(source, ext='SCI', *, require_gwcs=False, warn_missing=True):
     ``astropy.wcs.WCS`` read with ``relax=True`` -- but only for a product that
     has NO GWCS (no ``ASDF`` extension, or ``meta.wcs`` unset), with a
     :class:`MissingGwcsWarning`.  A product whose GWCS exists but cannot be
-    read raises :class:`GwcsReadError`; it is never silently replaced by SIP.  Set ``require_gwcs=True`` to
-    raise instead of falling back -- appropriate for astrometric gates, where
-    silently dropping to a 5-8 mas approximation defeats the measurement.
+    read raises :class:`GwcsReadError`; it is never silently replaced by SIP.
+    Set ``require_gwcs=True`` to raise instead of falling back even then --
+    appropriate for astrometric gates, where silently dropping to a 5-8 mas
+    approximation defeats the measurement.
     """
     if isinstance(source, (FrameWCS, astropy_wcs.WCS)):
         return source
