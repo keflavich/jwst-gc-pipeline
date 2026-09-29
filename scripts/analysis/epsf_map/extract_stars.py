@@ -40,7 +40,7 @@ DQ_DNU, DQ_SAT = 1, 2
 
 CHANNEL = {
     'LW': dict(r_core=12, r_wing=30, snr_min=40., n_wing=80, snr_wing=150.),
-    'SW': dict(r_core=12, r_wing=40, snr_min=40., n_wing=80, snr_wing=150.),
+    'SW': dict(r_core=12, r_wing=40, snr_min=40., n_wing=80, snr_wing=90.),
 }
 
 

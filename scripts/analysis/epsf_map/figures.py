@@ -23,6 +23,7 @@ import epsf  # noqa: E402
 from analyze_detector import bin_map, poly_smooth  # noqa: E402
 
 CD, CS = '#1f5fbf', '#e07b00'   # data, STPSF
+plt.rcParams.update({'axes.titlesize': 9.5, 'axes.labelsize': 9})
 DPI = 90
 
 
@@ -91,10 +92,10 @@ def main():
     plt.colorbar(h, ax=ax[1, :2], shrink=0.8)
     dc = (P1 - Scc) / P1.max()
     h = ax[1, 2].imshow(dc, vmin=-0.03, vmax=0.03, cmap='RdBu_r', origin='lower', extent=ext)
-    ax[1, 2].set_title(f'(data - STPSF)/peak, core; max |d|={np.abs(dc).max():.3f}')
+    ax[1, 2].set_title(f'(data - STPSF)/peak, core\nmax |d| = {np.abs(dc).max():.3f}')
     rel = np.where(Scc > 1e-3 * Scc.max(), P1 / Scc - 1, np.nan)
     h2 = ax[1, 3].imshow(rel, vmin=-0.3, vmax=0.3, cmap='RdBu_r', origin='lower', extent=ext)
-    ax[1, 3].set_title('data / STPSF - 1 (where STPSF > 1e-3 peak)')
+    ax[1, 3].set_title('data / STPSF - 1\n(where STPSF > 1e-3 of peak)')
     plt.colorbar(h, ax=ax[1, 2], shrink=0.8); plt.colorbar(h2, ax=ax[1, 3], shrink=0.8)
     for x in ax.ravel():
         x.set_xlabel('dx [px]'); x.set_ylabel('dy [px]')
@@ -106,7 +107,7 @@ def main():
     summ['core_rms_diff_over_peak_r<3'] = float(np.sqrt(np.mean(dc[g.ur <= 3] ** 2)))
 
     # ------------------------------------------------ fig 2: profiles, EE
-    fig, ax = plt.subplots(1, 4, figsize=(19, 4.6))
+    fig, ax = plt.subplots(1, 5, figsize=(24, 4.6))
     rb = np.concatenate([np.arange(0, 3, 0.25), np.arange(3, 10, 0.5), np.arange(10, Rw + 0.1, 1.0)])
     rc = 0.5 * (rb[1:] + rb[:-1])
     pd = epsf.radial_profile(Pw, gw, rb); ps = epsf.radial_profile(Swc, gw, rb)
@@ -142,7 +143,30 @@ def main():
     ax[3].fill_between(radii, eed - ees - np.abs(eea - eeb) / 2, eed - ees + np.abs(eea - eeb) / 2, color=CD, alpha=0.25)
     ax[3].axhline(0, color='gray', lw=1)
     ax[3].set_xlabel('r [px]'); ax[3].set_ylabel('EE(data) - EE(STPSF)'); ax[3].set_title('EE difference')
-    fig.suptitle(f'{a.label}: radial profile and encircled energy, data vs STPSF (both normalised to the flux within r = 10 px)')
+    # diffraction spikes: azimuthal profile in an annulus
+    r0s, r1s = 8, min(20, Rw - 2)
+    th = np.degrees(np.arctan2(gw.uy, gw.ux)) % 360
+    tb = np.arange(0, 361, 3)
+    annm = (gw.ur > r0s) & (gw.ur < r1s)
+    ad = np.array([Pw[annm & (th >= a0) & (th < a1)].mean() for a0, a1 in zip(tb[:-1], tb[1:])])
+    as_ = np.array([Swc[annm & (th >= a0) & (th < a1)].mean() for a0, a1 in zip(tb[:-1], tb[1:])])
+    tc = 0.5 * (tb[1:] + tb[:-1])
+    ax[4].plot(tc, ad, color=CD, lw=1.5, label='data')
+    ax[4].plot(tc, as_, color=CS, lw=1.5, label='STPSF')
+    ax[4].axhline(0, color='gray', lw=1)
+    ax[4].set_xlabel('position angle on the detector [deg]'); ax[4].set_ylabel('mean ePSF per px')
+    ax[4].set_title(f'spikes: azimuthal profile, {r0s}-{r1s} px'); ax[4].legend()
+    spk = as_ > np.percentile(as_, 85)
+    summ['spike_ratio_data_over_stpsf'] = float(np.mean(ad[spk]) / np.mean(as_[spk]))
+    summ['interspike_ratio_data_over_stpsf'] = float(np.mean(ad[~spk]) / np.mean(as_[~spk]))
+    # spike light ABOVE the inter-spike level: immune to an additive (confusion / background) bias
+    summ['spike_excess_ratio_data_over_stpsf'] = float((np.mean(ad[spk]) - np.mean(ad[~spk])) / (np.mean(as_[spk]) - np.mean(as_[~spk])))
+    ada, adb = [np.array([P_[annm & (th >= a0) & (th < a1)].mean() for a0, a1 in zip(tb[:-1], tb[1:])]) for P_ in (Pwa, Pwb)]
+    summ['spike_excess_ratio_splithalf_diff'] = float(abs(((np.mean(ada[spk]) - np.mean(ada[~spk])) - (np.mean(adb[spk]) - np.mean(adb[~spk])))
+                                                            / (np.mean(as_[spk]) - np.mean(as_[~spk]))) / 2)
+    summ['spike_contrast_data'] = float(np.mean(ad[spk]) / np.mean(ad[~spk]))
+    summ['spike_contrast_stpsf'] = float(np.mean(as_[spk]) / np.mean(as_[~spk]))
+    fig.suptitle(f'{a.label}: radial profile, encircled energy and spikes, data vs STPSF (both normalised to the flux within r = 10 px)')
     fn = f'{a.prefix}{n}.png'; fig.savefig(fn, dpi=DPI, bbox_inches='tight'); plt.close(fig); out.append(fn); n += 1
     for rr in (1, 2, 3, 5):
         summ[f'EE{rr}_data'] = float(np.interp(rr, radii, eed)); summ[f'EE{rr}_stpsf'] = float(np.interp(rr, radii, ees))
