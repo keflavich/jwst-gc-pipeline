@@ -3185,8 +3185,12 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     # exists; the rejected candidates then come from that same product's
     # rejected file (or there are none), never from per-exposure runs the
     # accepted channel did not read (#983).
-    _primary = _primary_satstar_catalog_path(filtername, target, basepath,
-                                             proposal_id, field)
+    try:
+        _primary = _primary_satstar_catalog_path(filtername, target, basepath,
+                                                 proposal_id, field)
+    except KeyError:
+        # A filter the target's registry does not list has no primary product.
+        _primary = None
     if _primary is not None:
         _prej = _primary.replace('_satstar_catalog.fits', '_satstar_rejected.fits')
         if not os.path.exists(_prej):
