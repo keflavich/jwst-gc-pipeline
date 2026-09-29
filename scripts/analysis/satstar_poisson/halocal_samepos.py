@@ -68,6 +68,28 @@ def rho_accumulate(acc, P):
     acc[..., 3] += np.bincount(cell, minlength=nc*nr*nh).reshape(nc, nr, nh)
 
 
+NBRMASK = float(os.environ.get('NBRMASK', 0))   # >0: mask field stars in the static pattern, radius NBRMASK px
+NBRSIG = 6.0
+
+
+def neighbour_mask(Q, N):
+    """Field stars on the star-centred grid: compact peaks of the static pattern Q
+    (Q minus an 11-px median filter above NBRSIG robust sigma), dilated to NBRMASK px."""
+    from scipy import ndimage
+    c = N//2
+    Qc = Q[c-RC:c+RC+1, c-RC:c+RC+1]
+    hp = Qc-ndimage.median_filter(Qc, 11)
+    # robust sigma per 4-px ring: the PSF's own speckle/ring structure sets the
+    # scale at small r, so only peaks well above it count as field stars
+    ring = (RR//4).astype(int)
+    sig = np.zeros(ring.max()+1)
+    for k in range(ring.max()+1):
+        v = hp[ring == k]
+        sig[k] = 1.4826*np.median(np.abs(v-np.median(v))) if v.size else np.inf
+    pk = (hp > NBRSIG*sig[ring]) & (ndimage.maximum_filter(hp, 5) == hp) & (RR >= 12)
+    return ndimage.binary_dilation(pk, structure=RR <= NBRMASK) if pk.any() else pk
+
+
 def load_star(fn, z, F, acc):
     p = np.load(fn)
     N = int(p['N']); Q = p['Q'].astype(float)
@@ -105,6 +127,9 @@ def load_star(fn, z, F, acc):
         rho_accumulate(acc, np.stack([rad[g], np.full(g.sum(), F) if RHO_MODE == 'F' else I[g]/Iedge, r[g]**2, 1/w[g], I[g]**2, spk], 1))
         Im[e].flat[idx] = I[m]
     ex = z['expnum'][rows]; ob = z['obs'][rows]
+    if NBRMASK > 0:
+        nm = neighbour_mask(Q, N)
+        mp[:, nm] = np.nan; vr[:, nm] = np.nan
     return dict(fn=os.path.basename(fn), F=F, pos=p['pos'].astype(float), ex=ex, obs=int(ob[0]),
                 m=mp, v=vr, I=np.nanmean(Im, 0), a=np.array([float(p[f'e{e}_a']) for e in range(ne)]),
                 nsat=p['nsat'] if 'nsat' in p.files else None)
