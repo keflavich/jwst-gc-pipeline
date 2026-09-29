@@ -61,7 +61,7 @@ from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
-    format_phase_report, satstar_phase_selection_signature,
+    format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
@@ -2636,6 +2636,41 @@ def satstar_in_observation_footprint(skycoord, catalog_paths,
     return inside
 
 
+def _primary_satstar_catalog_path(filtername, target, basepath,
+                                  proposal_id=None, field=None):
+    """The NIRCam ``merged_i2d`` satstar catalog a merge reads, or ``None``.
+
+    When this single-file "primary" product exists, ``load_satstar_catalog``
+    reads it in place of the per-exposure catalogs, and
+    ``load_rejected_satstar_catalog`` reads its sibling rejected file, so
+    the two channels always come from the same product (#983).
+
+    Targets that span multiple observations within one proposal (e.g.
+    gc2211 has obs 023/028/046/049/050) don't have a single primary i2d
+    satstar; they use the per-exposure catalogs in the pipeline directory.
+    The primary product only exists for NIRCam (the
+    ``*_nircam_clear-<filt>-merged_i2d`` naming); MIRI runs always use the
+    per-exposure catalogs.
+    """
+    proj = _project_for_target_filter(target, filtername)
+    if not (_inst_token(filtername) == 'nircam'
+            and target in project_obsnum and proj in project_obsnum[target]):
+        return None
+    obs_scope = satstar_obs_scope(proposal_id, field)
+    # A scoped observation reads ITS OWN primary, never the registry's
+    # (a wildcard for gc-treasury, and o002 only for m4 -- so an m4 o003
+    # merge would otherwise take o002's product).
+    _primary_obs = (obs_scope[2:] if obs_scope
+                    else project_obsnum[target][proj])
+    primary = (f'{basepath}/{filtername.upper()}/pipeline/'
+               f'{jw_prefix(proj)}-o{_primary_obs}'
+               f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
+    # project_obsnum may hold a glob wildcard for multi-obs targets
+    # (sickle/cloudef/gc2211), so resolve via glob rather than exists().
+    matches = sorted(glob.glob(primary))
+    return matches[0] if len(matches) == 1 else None
+
+
 def load_satstar_catalog(filtername, target='brick',
                          basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
                          proposal_id=None, field=None, phase=None):
@@ -2656,39 +2691,20 @@ def load_satstar_catalog(filtername, target='brick',
     :mod:`~jwst_gc_pipeline.photometry.satstar_phase_selection`;
     ``SATSTAR_POOL_PHASES=all`` restores the pre-fix pooling of every phase.
     """
-    proj = _project_for_target_filter(target, filtername)
     obs_scope = satstar_obs_scope(proposal_id, field)
-    # Targets that span multiple observations within one proposal (e.g.
-    # gc2211 has obs 023/028/046/049/050) don't have a single primary
-    # i2d satstar; fall back to globbing the per-exposure satstar
-    # catalogs in the pipeline directory.
-    # The single-file "primary" satstar product only exists for NIRCam
-    # (the *_nircam_clear-<filt>-merged_i2d naming); MIRI runs always use
-    # the per-exposure fallback below.
-    if (_inst_token(filtername) == 'nircam'
-            and target in project_obsnum and proj in project_obsnum[target]):
-        # A scoped observation reads ITS OWN primary, never the registry's
-        # (a wildcard for gc-treasury, and o002 only for m4 -- so an m4 o003
-        # merge would otherwise take o002's product).
-        _primary_obs = (obs_scope[2:] if obs_scope
-                        else project_obsnum[target][proj])
-        primary = (f'{basepath}/{filtername.upper()}/pipeline/'
-                   f'{jw_prefix(proj)}-o{_primary_obs}'
-                   f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
-        # project_obsnum may hold a glob wildcard for multi-obs targets
-        # (sickle/cloudef/gc2211), so resolve via glob rather than exists().
-        primary_matches = sorted(glob.glob(primary))
-        if len(primary_matches) == 1:
-            print(f"Using saturated star catalog {primary_matches[0]}")
-            _cat = apply_pooled_wingcal(Table.read(primary_matches[0]),
-                                        filtername, basepath=basepath)
-            # cache_path=None: NEVER rewrite the raw pipeline satstar product on
-            # a read path.  Persisting the wingcal-divided flux_fit would make the
-            # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
-            # wingcal_pooled provenance flag.  Aperture columns are added in
-            # memory here (recomputed each read for this branch).
-            return _ensure_satstar_aperture_photometry(
-                _cat, filtername, target, basepath, cache_path=None)
+    _primary = _primary_satstar_catalog_path(filtername, target, basepath,
+                                             proposal_id, field)
+    if _primary is not None:
+        print(f"Using saturated star catalog {_primary}")
+        _cat = apply_pooled_wingcal(Table.read(_primary), filtername,
+                                    basepath=basepath, phase=phase)
+        # cache_path=None: NEVER rewrite the raw pipeline satstar product on
+        # a read path.  Persisting the wingcal-divided flux_fit would make the
+        # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
+        # wingcal_pooled provenance flag.  Aperture columns are added in
+        # memory here (recomputed each read for this branch).
+        return _ensure_satstar_aperture_photometry(
+            _cat, filtername, target, basepath, cache_path=None)
 
     # Require an ITERATION TOKEN (_m12/_m3.../_m7) in the satstar filename.  The
     # current pipeline always writes one (..._crf[_resbgsub]_m<N>_satstar_catalog).
@@ -2860,7 +2876,8 @@ def load_satstar_catalog(filtername, target='brick',
     # self-cal was skipped (ratio exactly 1.0) get the cross-frame pooled
     # C(r).  Applied post-dedup, pre-cache, so the cache holds calibrated
     # fluxes with wingcal_pooled provenance.
-    deduped = apply_pooled_wingcal(deduped, filtername, basepath=basepath)
+    deduped = apply_pooled_wingcal(deduped, filtername, basepath=basepath,
+                                   phase=phase)
     # Aperture photometry from the i2d mosaic (added by default; see
     # _ensure_satstar_aperture_photometry).  Done pre-cache so the cache holds
     # the aperture columns; cache_path=None here (the cache is written below).
@@ -2937,8 +2954,51 @@ def _satstar_dedup_radius():
     return float(os.environ.get('SATSTAR_DEDUP_ARCSEC', 0.15)) * u.arcsec
 
 
+def _wingcal_phase_token(phase):
+    """Phase token of a pooled wing-calibration table built for one phase.
+
+    The first phase (``m1``/``m2``/``m12``, rank 2) is named ``m12`` like its
+    per-exposure products; a label that names no phase gives ``''``.
+    """
+    rank = satstar_phase_rank(phase)
+    if rank is None:
+        return ''
+    return 'm12' if rank == 2 else f'm{rank}'
+
+
+def pooled_wingcal_path(basepath, filtername, phase=None):
+    """Where the pooled C(r) table for ``filtername`` (and ``phase``) lives.
+
+    One file per phase, so merges of different observations running at
+    different phases on a shared tree do not overwrite each other's table.
+    ``phase`` that names no phase keeps the historical name.
+    """
+    tok = _wingcal_phase_token(phase)
+    suffix = f'_{tok}' if tok else ''
+    return f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal{suffix}.ecsv'
+
+
+def select_wingcal_calibrator_files(filtername, basepath, phase=None):
+    """The per-exposure ``*_m<N>_wingcal_calibrators.fits`` a pool reads.
+
+    One phase per exposure (#983), by the rule ``load_satstar_catalog`` uses
+    for the satstar catalogs: ``phase``'s file, else the exposure's latest
+    earlier one, never a later one.  Every observation on the tree is read (a
+    band's calibrators share its PSF grid).  Files without a phase token are
+    left out, as the satstar readers leave them out.
+
+    Returns ``(files, report)`` as
+    :func:`~jwst_gc_pipeline.photometry.satstar_phase_selection.select_satstar_phase_files`.
+    """
+    _tok = re.compile(r'_m\d+_wingcal_calibrators\.fits$')
+    files = [f for f in sorted(glob.glob(
+        f'{basepath}/{filtername.upper()}/pipeline/*_wingcal_calibrators.fits'))
+        if _tok.search(os.path.basename(f))]
+    return select_satstar_phase_files(files, phase=phase)
+
+
 def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                         write=True):
+                         write=True, phase=None, files=None):
     """Pool per-frame wing-selfcal calibrator measurements into a per-band
     C(r) table (Phase B1).
 
@@ -2950,16 +3010,26 @@ def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/j
     frames of a band: per rmask bucket, the n-weighted mean ratio.  Same PSF
     grid within a band+detector, so the per-frame-vs-static objection (H9,
     epoch-specific grid defects) does not apply within the pool.
+
+    Each exposure contributes ONE phase's calibrator file
+    (:func:`select_wingcal_calibrator_files`).  The table records the
+    selection's signature (``WCALSEL``) so :func:`load_pooled_wingcal` can
+    tell when it was built from a different set of files.  ``files``
+    overrides the selection (the caller has already made it).
     """
-    files = sorted(glob.glob(
-        f'{basepath}/{filtername.upper()}/pipeline/*_wingcal_calibrators.fits'))
+    if files is None:
+        files, _report = select_wingcal_calibrator_files(
+            filtername, basepath, phase=phase)
+        print(f"build_pooled_wingcal: {filtername}: "
+              f"{format_phase_report(_report, what='wingcal-calibrator')}",
+              flush=True)
     if not files:
         return None
     rows = []
     for f in files:
         try:
             tt = Table.read(f)
-        except Exception as err:
+        except (OSError, ValueError) as err:
             print(f"WARNING: unreadable wingcal-calibrator file {f}: {err}")
             continue
         for row in tt:
@@ -2976,29 +3046,82 @@ def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/j
     pooled = Table(rows=out_rows,
                    names=['rmask_px', 'ratio', 'n_stars_total', 'n_frames'])
     pooled.meta['band'] = filtername.lower()
+    pooled.meta['WCALSEL'] = satstar_phase_selection_signature(files)
+    pooled.meta['WCALPHS'] = _wingcal_phase_token(phase)
+    pooled.meta['NWCALSRC'] = len(files)
     if write:
-        outfn = f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal.ecsv'
-        pooled.write(outfn, format='ascii.ecsv', overwrite=True)
-        print(f"build_pooled_wingcal: {filtername} pooled C(r) from "
-              f"{len(files)} frame file(s) -> {outfn}")
+        outfn = pooled_wingcal_path(basepath, filtername, phase)
+        try:
+            os.makedirs(os.path.dirname(outfn), exist_ok=True)
+            # temp sibling + atomic rename: merges of several observations
+            # share this file and may rebuild it concurrently.
+            tmp = f'{outfn}.tmp{os.getpid()}'
+            pooled.write(tmp, format='ascii.ecsv', overwrite=True)
+            os.replace(tmp, outfn)
+            print(f"build_pooled_wingcal: {filtername} pooled C(r) from "
+                  f"{len(files)} frame file(s) -> {outfn}")
+        except OSError as err:
+            print(f"Could not write pooled wingcal table {outfn}: {err}")
     return pooled
 
 
+def load_pooled_wingcal(filtername, basepath, phase=None):
+    """The pooled C(r) table, rebuilt when its inputs changed.
+
+    The table on disk is reused only when it was built from exactly the
+    calibrator files the current selection picks (``WCALSEL``) and is at
+    least as new as each of them.  Before #983 the table was written once and
+    never rebuilt, so it kept whatever phases and code version first built it;
+    a table with no ``WCALSEL`` (written before this check) is rebuilt.  A
+    refit with changed satstar code rewrites the calibrator files, and their
+    newer mtimes trigger the rebuild.
+    """
+    files, report = select_wingcal_calibrator_files(filtername, basepath,
+                                                    phase=phase)
+    pooled_fn = pooled_wingcal_path(basepath, filtername, phase)
+    if not files:
+        # No calibrator file to rebuild from (a tree whose per-frame products
+        # were cleaned up): a table already on disk is all there is.
+        if os.path.exists(pooled_fn):
+            print(f"load_pooled_wingcal: no {filtername} calibrator files; "
+                  f"using the existing table {pooled_fn} as written")
+            return Table.read(pooled_fn, format='ascii.ecsv')
+        return None
+    sig = satstar_phase_selection_signature(files)
+    try:
+        if os.path.exists(pooled_fn):
+            newest = max(os.path.getmtime(f) for f in files)
+            if os.path.getmtime(pooled_fn) >= newest:
+                pooled = Table.read(pooled_fn, format='ascii.ecsv')
+                if str(pooled.meta.get('WCALSEL', '')) == sig:
+                    return pooled
+                print(f"Rebuilding pooled wingcal {pooled_fn}: built from a "
+                      f"different set of calibrator files "
+                      f"({pooled.meta.get('WCALSEL', 'unrecorded')!r} -> {sig!r})")
+            else:
+                print(f"Rebuilding pooled wingcal {pooled_fn}: a calibrator "
+                      f"file is newer than the table")
+    except OSError as err:
+        print(f"Rebuilding pooled wingcal {pooled_fn}: {err}")
+    print(f"build_pooled_wingcal: {filtername}: "
+          f"{format_phase_report(report, what='wingcal-calibrator')}", flush=True)
+    return build_pooled_wingcal(filtername, basepath=basepath, write=True,
+                                phase=phase, files=files)
+
+
 def apply_pooled_wingcal(satstar_cat, filtername,
-                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                         phase=None):
     """Apply the pooled C(r) to satstar rows whose per-frame self-cal was
     SKIPPED (wingcal_ratio == 1.0 exactly; real per-frame ratios are never
     exactly 1).  Catalog-flux-only, like the per-frame calibration; adds
     wingcal_pooled (bool) and updates wingcal_ratio.  No pooled table and no
-    calibrator files -> unchanged."""
+    calibrator files -> unchanged.  ``phase`` is the merge's iteration label;
+    see :func:`load_pooled_wingcal`."""
     if (satstar_cat is None or 'wingcal_ratio' not in satstar_cat.colnames
             or 'wingcal_rmask' not in satstar_cat.colnames):
         return satstar_cat
-    pooled_fn = f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal.ecsv'
-    if os.path.exists(pooled_fn):
-        pooled = Table.read(pooled_fn)
-    else:
-        pooled = build_pooled_wingcal(filtername, basepath=basepath, write=True)
+    pooled = load_pooled_wingcal(filtername, basepath, phase=phase)
     satstar_cat['wingcal_pooled'] = np.zeros(len(satstar_cat), dtype=bool)
     if pooled is None or len(pooled) == 0:
         return satstar_cat
@@ -3052,7 +3175,31 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     correction in :func:`replace_saturated` can adopt -- no longer reach the
     merge.  An exposure with no accepted catalog keeps its own latest rejected
     phase at or before ``phase``.
+
+    When the NIRCam ``merged_i2d`` primary satstar catalog exists
+    (:func:`_primary_satstar_catalog_path`), the accepted channel reads it
+    and nothing else, so this reads only its sibling
+    ``..._satstar_rejected.fits`` (``None`` when it has none).
     """
+    # The accepted channel reads the NIRCam merged_i2d primary catalog when it
+    # exists; the rejected candidates then come from that same product's
+    # rejected file (or there are none), never from per-exposure runs the
+    # accepted channel did not read (#983).
+    _primary = _primary_satstar_catalog_path(filtername, target, basepath,
+                                             proposal_id, field)
+    if _primary is not None:
+        _prej = _primary.replace('_satstar_catalog.fits', '_satstar_rejected.fits')
+        if not os.path.exists(_prej):
+            print(f"load_rejected_satstar_catalog: {filtername}: the accepted "
+                  f"channel reads {os.path.basename(_primary)}, which has no "
+                  f"rejected file; no gate-rejected candidates", flush=True)
+            return None
+        tt = Table.read(_prej)
+        if not len(tt) or 'skycoord_fit' not in tt.colnames:
+            return None
+        print(f"load_rejected_satstar_catalog: {len(tt)} gate-rejected "
+              f"candidate row(s) for {filtername} from {_prej}")
+        return tt
     _all = sorted(glob.glob(
         f'{basepath}/{filtername.upper()}/pipeline/*satstar_rejected.fits'))
     # Observation scoping (#925/#931): a tree shared by several observations

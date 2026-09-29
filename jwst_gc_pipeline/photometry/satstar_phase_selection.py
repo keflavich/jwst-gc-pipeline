@@ -51,13 +51,18 @@ _FIRST_PHASE_RANK = 2
 #: ``'_m7'``, ``'resbgsub_m7'``.
 _PHASE_LABEL_RE = re.compile(r'(?:^|_)(m\d+)$')
 
-#: The phase token of a per-exposure satstar catalog or rejected file.
-_PHASE_FILE_RE = re.compile(r'_(m\d+)_satstar_(?:catalog|rejected)\.fits$')
+#: The per-exposure products one satstar fit writes that a later reader pools
+#: across exposures: the accepted catalog, the gate-rejected candidates, and
+#: the wing self-calibration measurements (``build_pooled_wingcal``).
+_PHASE_PRODUCT = r'(?:satstar_(?:catalog|rejected)|wingcal_calibrators)\.fits$'
+
+#: The phase token of a per-exposure satstar product.
+_PHASE_FILE_RE = re.compile(r'_(m\d+)_' + _PHASE_PRODUCT)
 
 #: Everything after the frame stem of a per-exposure satstar product: the
 #: background-subtraction token(s) and the phase token.
 _PHASE_TAIL_RE = re.compile(
-    r'(?:_bgsub)?(?:_resbgsub)?_m\d+_satstar_(?:catalog|rejected)\.fits$')
+    r'(?:_bgsub)?(?:_resbgsub)?_m\d+_' + _PHASE_PRODUCT)
 
 #: Observation + visit group + exposure + detector: one image.  The same rule
 #: as ``merge_catalogs.satstar_exposure_key`` (a test pins the two together).
@@ -141,8 +146,10 @@ def select_satstar_phase_files(paths, phase=None):
     ----------
     paths : sequence of str
         Per-exposure ``*_m<N>_satstar_catalog.fits`` (or
-        ``*_m<N>_satstar_rejected.fits``) paths, already observation-scoped
-        and filtered to those carrying a phase token.
+        ``*_m<N>_satstar_rejected.fits``, or
+        ``*_m<N>_wingcal_calibrators.fits``) paths of ONE product type,
+        already observation-scoped where the caller scopes, and filtered to
+        those carrying a phase token.
     phase : str, optional
         The phase being merged, as the merge's iteration label (``'m7'``,
         ``'m2'`` for the first phase, ``'resbgsub_m6'`` ...).  Each exposure
