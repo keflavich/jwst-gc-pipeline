@@ -312,6 +312,7 @@ def build_models_for_field(field_name, table=ROLL_TABLE, footprint_cache=None,
         with open(footprint_cache) as fh:
             cache = json.load(fh)
     models = {}
+    dirty = False
     for (prog, obs), rs in grouped.items():
         ck = f"{prog}-{obs}"
         if ck in cache:
@@ -319,6 +320,7 @@ def build_models_for_field(field_name, table=ROLL_TABLE, footprint_cache=None,
         else:
             fp = visit_footprints(basepath, prog, obs)
             cache[ck] = {v: [p.tolist() for p in polys] for v, polys in fp.items()}
+            dirty = True
         explicit = {r['visit']: r for r in rs if r['visit'] != '*'}
         wild = [r for r in rs if r['visit'] == '*']
         visits_on_disk = sorted(fp) or sorted(explicit) or ['001']
@@ -338,10 +340,14 @@ def build_models_for_field(field_name, table=ROLL_TABLE, footprint_cache=None,
             vrs.append(VisitRoll(prog, obs, vis, r['roll_arcsec'], pra, pde, src, polys))
         if vrs:
             models[(prog, obs)] = vrs     # PointingModel built per catalog (pivot fallback)
-    if footprint_cache:
-        os.makedirs(os.path.dirname(footprint_cache), exist_ok=True)
-        with open(footprint_cache, 'w') as fh:
+    if footprint_cache and dirty:
+        # atomic, and only when new footprints were measured: concurrent
+        # per-tile jobs share one cache and must never see a half-written file
+        os.makedirs(os.path.dirname(os.path.abspath(footprint_cache)), exist_ok=True)
+        tmp = f"{footprint_cache}.{os.getpid()}.tmp"
+        with open(tmp, 'w') as fh:
             json.dump(cache, fh)
+        os.replace(tmp, footprint_cache)
     return models
 
 
@@ -952,7 +958,17 @@ def main(argv=None):
     ap.add_argument('--manifest', help='write a JSON manifest here')
     ap.add_argument('--overwrite-output', action='store_true')
     ap.add_argument('--table', default=ROLL_TABLE)
+    ap.add_argument('--stages', help='comma list of m-stages to include, e.g. 7,8 '
+                                     '(matched as _m<N> in the basename)')
+    ap.add_argument('--obs', help='comma list of 3-digit observation ids; only catalogs whose '
+                                  'basename carries one of these _o tokens (tiled programs)')
+    ap.add_argument('--formats', default='fits,ecsv',
+                    help='comma list of file extensions to include (default fits,ecsv)')
     args = ap.parse_args(argv)
+    stage_re = (re.compile(r'_m(?:' + '|'.join(args.stages.split(',')) + r')(?![0-9])')
+                if args.stages else None)
+    obs_set = set(args.obs.split(',')) if args.obs else None
+    exts = tuple('.' + e.strip().lower() for e in args.formats.split(','))
 
     if os.environ.get('ROLL_CORRECTION_ARCSEC') not in (None, ''):
         ap.error('ROLL_CORRECTION_ARCSEC is set; the catalog correction reads the per-visit '
@@ -964,8 +980,8 @@ def main(argv=None):
     for fname in field_list:
         base = fields.fields_basepath(fname).rstrip('/')
         fcache = args.footprint_cache or None
-        only_obs = None
-        if args.file:
+        only_obs = obs_set
+        if args.file and obs_set is None:
             toks = [_OBS_RE.search(os.path.basename(p).lower()) for p in args.file]
             if all(toks):
                 only_obs = {o for t in toks for o in t.group(1).split('-')}
@@ -974,6 +990,20 @@ def main(argv=None):
         out_dir = args.out_dir or os.path.join(base, OUT_SUBDIR, args.tag)
         listing = ({'catalogs': args.file} if args.file else
                    enumerate_field(fname, include_perframe=args.include_perframe))
+
+        def _keep(p):
+            b = os.path.basename(p).lower()
+            if not b.endswith(exts):
+                return False
+            if stage_re is not None and not stage_re.search(b):
+                return False
+            if obs_set is not None:
+                mo = _OBS_RE.search(b)
+                if mo is None or not set(mo.group(1).split('-')) & obs_set:
+                    return False
+            return True
+        if stage_re is not None or obs_set is not None or args.formats != 'fits,ecsv':
+            listing = {k: [p for p in v if _keep(p)] for k, v in listing.items()}
         frec = dict(models={f"{k[0]}-{k[1]}": [dict(visit=v.visit, roll=v.roll_arcsec,
                                                     pivot=[v.pivot_ra, v.pivot_dec],
                                                     pivot_source=v.pivot_source,
