@@ -7,7 +7,8 @@ import sys, warnings
 import numpy as np
 from scipy import ndimage
 from astropy.io import fits
-warnings.simplefilter('ignore')
+# nan-heavy medians/ratios on masked pixels; other warnings (GWCS, I/O) stay visible
+warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 RA, DEC = 266.5090306896523, -28.95658817641266         # the 10678 obs-061 target
 CAL = '../data/jw10678061001_02101_{i:05d}_{det}_{suf}.fits'

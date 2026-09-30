@@ -45,7 +45,9 @@ the data.
    therefore cannot be shared between dithers.
 2. **Band-limited representation.** F480M is Nyquist-sampled: the optical cutoff
    at 4.63 µm is D/λ = 0.435 cycles per 0.063″ pixel. The model lives on a grid
-   in the ideal (V2V3) frame, as Fourier coefficients inside |k| ≤ 0.45. It is
+   in the ideal (V2V3) frame, as Fourier coefficients inside |k| ≤ 0.45 (a small
+   margin above 0.435 so the hard cut on the discrete frequency grid never clips
+   the physical band; `bandpsf.py`). It is
    evaluated exactly at every distorted pixel position with a type-2 NUFFT
    (`bandpsf.py`, finufft), and the adjoint is exact (dot-test in `bandpsf.py`).
 3. **Why not "PSF + fitted neighbours".** In F480M the Galactic Center is
@@ -67,18 +69,26 @@ the data.
    - smooth halos around the target and the 4 brightest other saturated stars
      (B-splines in log r × Fourier m≤4).
 
-   Only this nuisance (~250 parameters) is refitted on the held-out dither, so
-   **leave-one-dither-out (LOO) is a true out-of-sample prediction**. The
+   Only this nuisance is refitted on the held-out dither, so
+   **leave-one-dither-out (LOO) is a true out-of-sample prediction**. With the
+   defaults that is up to **411 parameters** in `patternfit.py` (target halo
+   16 radial × 9 angular = 144; up to 4 secondary halos × 60 = 240; flux,
+   pedestal, gradient, distortion and width = 27) and up to **291** in
+   `loo_crop.py` (`nsec=2`). `ROWCOL=1` adds one offset per row × amplifier and
+   per column. The
    residual is normalised by √(VAR_POISSON + VAR_RNOISE + model variance).
 5. **Cost.** 4 cores, ~10–25 min per held-out dither. `patternfit_rank2.py` adds
    a learned variable template H × smooth per-exposure amplitude.
 
 ## 3. Results
 
-![LOO](figures/fig1_loo_dither1.png)
-![chi vs r](figures/fig2_chi_vs_radius.png)
+![LOO](../../../docs/evidence/satstar_poisson/fig1_loo_dither1.png)
+![chi vs r](../../../docs/evidence/satstar_poisson/fig2_chi_vs_radius.png)
 
-Robust σ(χ), leave-one-dither-out, pixels without SAT/JUMP flags:
+Robust σ(χ), leave-one-dither-out, pixels without SAT/JUMP flags. The table
+uses the centred estimator 1.4826·median|χ − median χ| (`evaluate_loo.py`). The
+per-run lines printed by `patternfit.py` / `loo_crop.py`, and fig 2, use the
+uncentred 1.4826·median|χ|; the two are equal when median χ = 0.
 
 | r [px] | dither 1 | dither 2 | dither 3 | dither 5 |
 |---|---|---|---|---|
@@ -106,10 +116,16 @@ Each iteration and what it bought (robust σ(χ), all held-out pixels of dither 
 | super-resolved Q: 0.5 px grid, band 0.75 cycles/px (600 px crop) | – | 3.67 |
 | + per-exposure row(×amp)/column offsets for 1/f (`ROWCOL=1`) | 1.41 | 3.45 |
 
+![model variants](../../../docs/evidence/satstar_poisson/fig9_model_variants.png)
+
+Fig 9: robust σ(χ) of held-out dither 1 for the model iterations above (all
+pixels and r 80–120 px), and the gain from extra per-exposure terms fitted post
+hoc to the held-out residual.
+
 ### What limits the inner halo: evidence
 
-![ratio](figures/fig3_dither_ratio.png)
-![diag](figures/fig4_diagnostics.png)
+![ratio](../../../docs/evidence/satstar_poisson/fig3_dither_ratio.png)
+![diag](../../../docs/evidence/satstar_poisson/fig4_diagnostics.png)
 
 1. **The star's halo flux changes between dithers; its spikes do not.** Dither
    ratios on the same sky, using exact GWCS resampling (fig 3), are
@@ -126,16 +142,22 @@ Each iteration and what it bought (robust σ(χ), all held-out pixels of dither 
    The diffraction spikes stay at ratio ≈1.
 2. **It is in the raw data.** The `_uncal` group differences at r=45–70 px are
    4236 / 4390 / 3616 / 3620 / 4614 / 3988 DN per group for dithers 1–6, while
-   the far field stays at ~430 (fig 4a).
+   the far field stays at ~430 (fig 4a, fig 6).
+
+   ![raw ramps](../../../docs/evidence/satstar_poisson/fig6_raw_ramps_ints_persistence.png)
 3. **It is constant within an exposure.** int2/int1 is 1.000 ± 0.0005 at r>70.
    The LOO residuals of the two integrations correlate at 0.97 at r=50–80
-   (fig 4b), while int1−int2 is pure noise (σ(χ)=0.88).
+   (fig 4b, fig 6), while int1−int2 is pure noise (σ(χ)=0.88).
 4. **It is LW-only.** The simultaneous F212N (NRCB1) halo of the same star is
    stable to a few per cent across the same dithers. Telescope wavefront changes
-   would show up more strongly at 2 µm, not less.
+   would show up more strongly at 2 µm, not less (fig 5).
+
+   ![LW vs SW](../../../docs/evidence/satstar_poisson/fig5_lw_vs_sw_ratio.png)
 5. **It has PSF-scale structure.** Residual autocorrelation is 0.68 / 0.40 / 0.27
    / 0.10 at lags 1 / 2 / 3 / 5 px. It is neither white per-pixel noise nor a
-   smooth field.
+   smooth field (fig 8).
+
+   ![residual structure](../../../docs/evidence/satstar_poisson/fig8_residual_structure.png)
 6. **Ruled out, each with a direct test:**
 
    | candidate | test and result |
@@ -156,7 +178,9 @@ Each iteration and what it bought (robust σ(χ), all held-out pixels of dither 
    partly follows the dither x-offset: fine-structure deviations of the target
    and of the obs-116 star (½ the flux) correlate at ≈+0.1 for the same x-offset
    and ≈−0.1 for the opposite. That is a weak shared field-dependent component;
-   90% is star- and exposure-specific.
+   90% is star- and exposure-specific (fig 7).
+
+   ![halo index](../../../docs/evidence/satstar_poisson/fig7_halo_index.png)
 
 **Interpretation.** For this star, the LW halo at 3–10″ is, per exposure, a
 different realisation at the 4–5% level of local intensity. Nothing in the other
@@ -180,6 +204,11 @@ equals Poisson noise for a star ~10× fainter than this one at the same radius.
 - **Detector-fixed flat residuals:** correlation +0.08–0.10 across dithers at the
   same pixel. Flat self-calibration over the program's many LW exposures would
   address this.
+
+![far field](../../../docs/evidence/satstar_poisson/fig10_farfield.png)
+
+Fig 10: the far-field floor: σ(χ) at r > 300 px sits on field-star cores, and
+the detector-fixed component is weak.
 
 ## 5. Next steps
 
@@ -212,20 +241,34 @@ equals Poisson noise for a star ~10× fainter than this one at the same radius.
 | `loo_crop.py` | LOO on a crop, for band-limit / super-resolution (`KMAX`, `QH`, `QN`) tests |
 | `evaluate_loo.py` | χ statistics by DQ class, radius and model brightness |
 | `diagnostics.py` | distortion, dither-ratio, raw-ramp, integration and halo-index tests |
-| `make_figures.py` | the figures above |
+| `make_figures.py` | figs 1–4 |
+| `make_evidence_figures.py` | figs 5–10 (also needs the other-star `trn_*` cutouts; see the brightness-sequence work) |
 | `physpsf.py` | physical-optics JWST + NIRCam LW PSF on the pattern grid, exact adjoint and forward derivatives (§7) |
 | `physfit.py` | pupil geometry fit and OPD phase retrieval against Q (§7) |
 | `physloo.py` | per-exposure physical modes fitted to the held-out LOO residual; injection and control tests (§7) |
 | `make_physfigs.py` | figures 11–12 (§7) |
 
-Reproduce (about 1 h on 4 cores):
+Reproduce (about 1 h on 4 cores). Run every step from this directory, with the
+package importable (`pip install -e .` from the repo root, or `PYTHONPATH`). The
+NUFFT library is an extra dependency: `pip install finufft`.
 
 ```
-python s3data.py 10678 061 nrcblong cal uncal rate rateints     # into ../data
+# 1. data -> ../data (cal, uncal, rate, rateints for the 6 dithers)
+python s3data.py --outdir ../data 10678 061 nrcblong cal uncal rate rateints
+# 2. cutouts from step 1 -> tgt_e1.npz ... tgt_e6.npz
 python cutout.py 266.5090306896523 -28.95658817641266 512 tgt ../data/jw10678061001_02101_0000{1..6}_nrcblong_cal.fits
+# 3. fit from step 2 -> Q_q3.npy, q3_e{1,2,3,5}.npz.  QSTART unset = cold start from Q=0;
+#    QSTART=<file.npy> warm-starts from an earlier Q_<tag>.npy and must exist.
 NJOINT=3 LOO=1,2,3,5 python patternfit.py q3
-python evaluate_loo.py 1 q3 ; python make_figures.py figures
+# 4. statistics and figs 1-4 from steps 1-3
+python evaluate_loo.py 1 q3
+mkdir -p figures && python make_figures.py figures
 ```
+
+`patternfit_rank2.py` warm-starts from `Q_q3.npy` (step 3). The numbers in §3
+came from a chain of warm-started runs (`QSTART` = the previous run's Q). The
+cold-start recipe above has not been rerun end to end, so small differences
+from the §3 table are possible.
 
 ## 7. Physical-optics PSF with per-exposure pupil/wavefront modes (issue #994)
 

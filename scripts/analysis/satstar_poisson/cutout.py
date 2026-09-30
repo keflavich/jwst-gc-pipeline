@@ -1,8 +1,7 @@
 """Cut out a star-centred region from a NIRCam _cal and attach per-pixel V2V3 coordinates
 from the GWCS (never the SIP header -- CLAUDE.md astrometry rule #2)."""
-import numpy as np, warnings, sys
+import numpy as np, sys
 import stdatamodels.jwst.datamodels as dm
-warnings.simplefilter('ignore')
 
 def prep(calfile, ra, dec, hw, out):
     m = dm.open(calfile)

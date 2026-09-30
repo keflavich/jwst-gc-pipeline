@@ -10,6 +10,11 @@ NTHREADS = 4
 EPS = 1e-9
 # optical band limit: D_circ/lambda_min at F480M blue edge (6.6 m, 4.63 um) in cycles per
 # 0.0629" ideal pixel = 0.4345.  Everything above is unphysical noise.
+# The default KMAX=0.45 sits ~3.5% above that limit on purpose: the band mask is a hard cut on
+# the discrete frequency grid (spacing 1/N), so a small margin guarantees the physical
+# annulus just inside 0.4345 is never clipped.  The extra 0.4345-0.45 annulus carries only
+# noise, which the proximal/Tikhonov term damps.  All README numbers use 0.45, and a 0.5 limit
+# changed nothing (README section 3), so the margin does not affect the results.
 import os
 KMAX = float(os.environ.get("KMAX", 0.45))
 
