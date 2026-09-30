@@ -305,7 +305,7 @@ injection test shows the fit would have found a low-order change of that size.
 
 ### 7.2 Static fit against Q (`physfit.py`)
 
-![static](figures/fig11_physpsf_static.png)
+![static](../../../docs/evidence/satstar_poisson/fig11_physpsf_static.png)
 
 - **Geometry** (`physfit.py geometry`). Coordinate descent on the correlation
   of high-passed Q with the high-passed geometric (OPD = 0) model, on the
@@ -382,7 +382,7 @@ e1 it matches the k45 crop to ±0.3).
 | e5 | baseline | 6.51 | 5.65 | 3.37 | 1.83 | 1.39 | 5.94 | 3.31 | 2.30 |
 | e5 | + ALL 108 | 6.99 | 5.51 | 3.25 | 1.81 | 1.39 | 5.02 | 2.96 | 2.21 |
 
-![modes](figures/fig12_physpsf_modes.png)
+![modes](../../../docs/evidence/satstar_poisson/fig12_physpsf_modes.png)
 
 - **On the spikes the per-exposure WFE is real.** Zernike and segment modes
   cut the on-spike σ(χ) by 4–25% at r=80–120 and by 5–11% at r=120–200, for
@@ -431,7 +431,8 @@ The per-dither inner-halo change of §3 is not a low-order physical change of
 the pupil or wavefront:
 
 - neither Zernike WFE up to n=6, nor segment piston/tip/tilt;
-- nor LW pupil-stop shear or vignetting, nor a hard stop;
+- nor LW pupil-stop shear or vignetting, nor changes of the radius or shear of a
+  rim stop (a stop-vs-no-stop column was not tested);
 - nor pupil magnification or rotation, nor a spectral tilt.
 
 These predict the small per-exposure change of the diffraction *spikes*, but
@@ -459,7 +460,7 @@ Reproduce, in the working directory of §6, about 1.5 h on 4 cores:
 ```
 python physfit.py weights
 python physfit.py geometry Q_q3.npy geo2                         # static geometry
-for k in 1 2 3 5; do OUT=g2 python physloo.py geo2.npz q3 $k zern4,zern6,seg,ampz3,stop,geomd; done
+for k in 1 2 3 5; do OUT=g2 python physloo.py geo2.npz q3 $k zern4,zern6,seg,ampz3,stop,geomd > loo_g2_e$k.log; done
 OUT=inj INJECT=zern4:20 INJ_OPD=30 python physloo.py geo2.npz q3 1 zern4,seg    # injection test
 OUT=ctl CONTROL_ROT=15 MTFQ=Q_q3.npy python physloo.py geo2.npz q3 1 zern4,seg  # controls
 python make_physfigs.py geo2.npz figures loo_g2_e*.log

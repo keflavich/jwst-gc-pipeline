@@ -320,9 +320,14 @@ if __name__ == '__main__':
         sys.exit()
     Qf, out = sys.argv[2], sys.argv[3]
     Q = np.load(Qf); z = np.load('wq.npz')
+    # SRC: hand-set starting source positions for the `static` phase retrieval, in Q-grid px
+    # from the grid centre (first = the target); geom_step refines them.  The retrieval is
+    # kept for reference only and is not in the README recipe (it does not converge).
     src = [tuple(map(float, p.split(','))) for p in os.environ.get('SRC', '-4,0;9.5,0').split(';')]
     sf = StaticFit(Q, z['wqc'], z['cnt'], J1, geom=dict(rot=float(os.environ.get('ROT0', 0.0))), sources=src)
     x = random_opd(G, sf.ps.half, rms_nm=float(os.environ.get('RMS0', 20)))
+    # hand-set initial total source flux in Q units, used only to form the first weights; the
+    # fluxes are re-solved by variable projection in refresh_weights/loss_grad
     sf.a = 1.4e8; sf.f = np.full(sf.S, sf.a/sf.S)
     sf.refresh_weights(x*1e-9, robust=False, remask=False)
     chi_table(sf, x*1e-9, 'init')

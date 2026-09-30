@@ -17,11 +17,16 @@ iteratively reweighted least squares.  The mode families:
     shear     shift of the whole static OPD relative to the pupil amplitude (2)
     shearhp   shift of the high-pass (>6 cycles/pupil) OPD only (2)   out-of-pupil screen
     hpscale   scale of the high-pass OPD (1)
+              (shear/shearhp/hpscale need a non-zero static OPD, i.e. a phase-retrieved
+              static; about the geometry-only static of the README, OPD = 0, they are
+              identically zero and physloo.py raises)
     ampz<n>   pupil transmission Zernikes n=1..<n> (vignetting, apodisation)
     stop      edge of a circular stop at the pupil rim: radius and shear (3)
 
 Control: the same families built on a random OPD with the same power spectrum
 (CONTROL=1), i.e. physically-shaped maps that know nothing about this star's field.
+CONTROL=1 also needs a non-zero static OPD (it raises otherwise); the README's control is
+CONTROL_ROT (families built on a rotated pupil), which works about OPD = 0.
 
     python physloo.py <static.npz> <looTag> <k> <families, e.g. zern6,seg,shear>
 """
@@ -63,6 +68,12 @@ def grid_grad(ps, o):
 
 def mode_images(ps, opd, fams):
     """list of (name, dI) for the requested families at the static OPD"""
+    inert = [f for f in fams if f in ('shear', 'shearhp', 'hpscale')]
+    if inert and not np.any(highpass(ps, opd) if inert != ['shear'] else opd):
+        # these families act on (the high-pass part of) the static OPD; about a geometry-only
+        # static (OPD = 0, e.g. geo2.npz from `physfit.py geometry`) they are identically zero
+        raise ValueError(f'mode families {inert} are identically zero for this static OPD '
+                         '(OPD = 0 or no high-pass content); they need a phase-retrieved static')
     I, E = ps.intensity(opd, return_fields=True)
     out = []
     X, Y = ps.grid_xy()
@@ -168,7 +179,11 @@ if __name__ == '__main__':
     if os.environ.get('GEO'):
         opd = opd*0
     if int(os.environ.get('CONTROL', 0)):
-        rng_opd = random_opd(ps.G, ps.half, rms_nm=np.std(highpass(ps, opd))*1e9, seed=int(os.environ.get('SEED', 1)))*1e-9
+        rms_nm = np.std(highpass(ps, opd))*1e9
+        if not rms_nm > 0:
+            raise ValueError('CONTROL=1 draws a random screen with the rms of the high-pass static '
+                             'OPD, which is 0 here (geometry-only static); use CONTROL_ROT instead')
+        rng_opd = random_opd(ps.G, ps.half, rms_nm=rms_nm, seed=int(os.environ.get('SEED', 1)))*1e-9
         opd = rng_opd
     ex = Exposure(files[k-1], J1)
     e = QE(ex, [(ex.xt0, ex.yt0, 720., 4)]+secondary_centres(ex, 4))
