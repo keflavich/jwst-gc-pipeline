@@ -7,6 +7,8 @@ public bucket serves the same files over plain HTTPS:
 import os, subprocess, sys, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
 
+from jwst_gc_pipeline.mast_names import jw_prefix
+
 BASE = 'https://stpubdata.s3.amazonaws.com'
 NS = {'s': 'http://s3.amazonaws.com/doc/2006-03-01/'}
 
@@ -35,7 +37,8 @@ def fetch(key, outdir='.'):
 
 
 def fetch_obs(program, obs, detector, suffix, dithers=range(1, 7), outdir='.', visit='001', seq='02101'):
-    return [fetch(f'jwst/public/jw{program}/jw{program}{obs}{visit}/jw{program}{obs}{visit}_{seq}_{i:05d}_{detector}_{suffix}.fits', outdir)
+    jw = jw_prefix(program)
+    return [fetch(f'jwst/public/{jw}/{jw}{obs}{visit}/{jw}{obs}{visit}_{seq}_{i:05d}_{detector}_{suffix}.fits', outdir)
             for i in dithers]
 
 
