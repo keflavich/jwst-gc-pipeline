@@ -14,7 +14,8 @@ the halos and spikes of super-saturated stars (issue #993).
 | 1 | `run_extract.py` → `extract_stars.py` | stream every `_cal` frame (download → measure → delete), select stars, cut stamps |
 | 2 | `stpsf_models.py` | STPSF on a 5x5 grid of detector positions per detector |
 | 3 | `analyze_detector.py` (+ `epsf.py`, `catalog.py`) | wing + core ePSF, spatial grid with cross-validation, shape maps, per-star table |
-| 4 | `figures.py` | figures and a JSON summary |
+| 4 | `figures.py` | figures and a JSON summary (one detector) |
+| 5 | `sw_summary.py` | combined figures + JSON for several detectors (the 8 SW detectors, focal-plane layout) |
 
 ```
 S=$SCRATCH/epsfmap
@@ -22,6 +23,8 @@ OMP_NUM_THREADS=1 python run_extract.py --detector nrcblong --scratch $S --worke
 OMP_NUM_THREADS=1 python stpsf_models.py --detector NRCB5 --filter F480M --fov 65 --out $S/stpsf_NRCB5_F480M.npz
 OMP_NUM_THREADS=1 python analyze_detector.py --detector nrcblong --scratch $S --stpsf $S/stpsf_NRCB5_F480M.npz --out $S/result_nrcblong.npz
 python figures.py --result $S/result_nrcblong.npz --stars $S/result_nrcblong_stars.npz --label "NRCBLONG F480M" --prefix out/epsf
+# SW (F212N): run_extract.py --every 3 (every 3rd observation), then per detector as above, then
+python sw_summary.py --scratch $S --dets nrca1,nrca2,nrca3,nrca4,nrcb1,nrcb2,nrcb3,nrcb4 --prefix out/sw
 ```
 
 `run_extract.py` needs two STPSF detector-frame PSFs in `$S` as neighbour templates
