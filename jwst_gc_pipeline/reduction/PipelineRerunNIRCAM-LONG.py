@@ -1452,6 +1452,17 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             apply_placement_correction)
         apply_placement_correction(fn)
 
+    if os.environ.get('ROLL_CORRECTION', '0') == '1':
+        # Rigid field rotation (attitude roll error) measured against VIRAC2
+        # and Gaia DR3 in JWST-GC/data-qa#346.  OPT-IN: rotates every
+        # detector about the NIRCam field centre by the roll resolved from
+        # roll_corrections.csv (or ROLL_CORRECTION_ARCSEC).  Applied BEFORE the
+        # reference shift.  Frames change their base fiducial by up to tens
+        # of mas, so offsets tables solved on unrotated frames fail the base
+        # check and must be rebuilt (see roll_correction.py).
+        from jwst_gc_pipeline.reduction.roll_correction import apply_roll_correction
+        apply_roll_correction(fn)
+
     mod = ImageModel(fn)
     if proposal_id is None:
         # Read the proposal out of the frame's own PROGRAM header, which
