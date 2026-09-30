@@ -7,7 +7,7 @@ change core width between dithers in step with its halo.
 Per _cal frame: isolated local maxima (S/N > NSIG, nothing flagged within 4 px, no
 peak above 10% of it within 8 px), each fitted on 9x9 px by an elliptical-free
 circular Gaussian + constant; sigma is the width.  Sky positions from the GWCS
-(meta.wcs), for matching the same star across dithers.
+(frame_wcs, require_gwcs=True), for matching the same star across dithers.
 
     python focus_unsat.py <out.npz> <cal> [<cal> ...]
 """
@@ -16,7 +16,8 @@ import numpy as np
 from astropy.io import fits
 from scipy import ndimage
 from scipy.optimize import least_squares
-import stdatamodels.jwst.datamodels as dm
+
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 
 NSIG = 50
 H = 4
@@ -55,10 +56,8 @@ def measure(fn):
             continue
         out.append((x+p[1], y+p[2], p[3], p[0], snr[y, x]))
     out = np.array(out)
-    # GWCS (meta.wcs), not the SIP header.  frame_wcs() would be the helper, but its
-    # datamodels.open(..., memmap=False) raises TypeError on current stdatamodels
-    with dm.open(fn) as m:
-        ra, dec = m.meta.wcs(out[:, 0], out[:, 1])
+    # GWCS, never the SIP header (CLAUDE.md astrometry rule #2)
+    ra, dec = frame_wcs(fn, require_gwcs=True).pixel_to_world_values(out[:, 0], out[:, 1])
     return np.c_[out, ra, dec]
 
 
