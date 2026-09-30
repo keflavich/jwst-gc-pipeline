@@ -43,7 +43,12 @@ def fetch_obs(program, obs, detector, suffix, dithers=range(1, 7), outdir='.', v
 
 
 if __name__ == '__main__':
-    # python s3data.py 10678 061 nrcblong cal uncal rateints
-    prog, obs, det = sys.argv[1:4]
-    for suf in sys.argv[4:]:
-        print(fetch_obs(prog, obs, det, suf))
+    # python s3data.py [--outdir DIR] 10678 061 nrcblong cal uncal rateints
+    args = sys.argv[1:]
+    outdir = '.'
+    if args[:1] == ['--outdir']:
+        outdir = args[1]; args = args[2:]
+        os.makedirs(outdir, exist_ok=True)
+    prog, obs, det = args[:3]
+    for suf in args[3:]:
+        print(fetch_obs(prog, obs, det, suf, outdir=outdir))

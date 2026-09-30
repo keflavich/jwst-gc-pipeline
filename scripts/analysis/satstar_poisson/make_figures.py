@@ -9,7 +9,8 @@ from scipy import ndimage
 from astropy.io import fits
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from exposure import Exposure
-warnings.simplefilter('ignore')
+# nan-heavy medians/ratios on masked pixels; other warnings (GWCS, I/O) stay visible
+warnings.filterwarnings('ignore', category=RuntimeWarning)
 out = sys.argv[1]
 RA, DEC = 266.5090306896523, -28.95658817641266
 J1 = np.load('tgt_e1.npz')['J']

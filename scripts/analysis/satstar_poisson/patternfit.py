@@ -19,8 +19,17 @@ vary per exposure.  See README.md.
 Usage (in a directory holding tgt_e{1..6}.npz from cutout.py):
     [QSTART=<initial Q .npy>] NJOINT=3 LOO=1,2,3,4,5,6 python patternfit.py <tag>
 writes Q_<tag>.npy and <tag>_e<k>.npz (LOO prediction, coverage, model variance, halo).
+QSTART unset: cold start (Q solved from zero, as in loo_crop.py).  QSTART set: warm start
+from that file, which must exist (a missing file is an error, never a silent cold start).
+
+Free parameters refitted per exposure (and so on the held-out dither), with the defaults:
+  target halo 16 radial x 9 angular = 144, up to nsec=4 secondary halos x 12 x 5 = 240,
+  flux/pedestal/gradient 4 + distortion 20 + width 3 = 27;  total up to 411
+  (fewer if fewer than 4 secondaries are found; ROWCOL=1 adds one offset per row x amp and
+  per column).  loo_crop.py uses nsec=2: up to 291.
 Env: QN (grid size, default 1152), QH (grid spacing in px, default 1; <1 = super-resolved),
-KMAX (band limit in cycles/px, default 0.45), QMASK (none|sat|satjump).
+KMAX (band limit in cycles/px, default 0.45; see bandpsf.py for the margin over the
+0.4345 optical limit), QMASK (none|sat|satjump).
 """
 import numpy as np, time, sys, os, pickle
 import scipy.sparse as sp
@@ -229,7 +238,19 @@ if __name__ == '__main__':
     J1 = np.load('tgt_e1.npz')['J']
     exps = build('tgt', [f'tgt_e{i}.npz' for i in range(1, 7)], J1)
     wt = np.median(np.concatenate([e.w for e in exps])); lam = 1e-4*wt
-    Qp = np.load(os.environ.get('QSTART', 'Q_q2.npy'))
+    qstart = os.environ.get('QSTART')
+    if qstart is None:
+        # cold start (as loo_crop.py): solve Q from zero with the default nuisance
+        # (a=1, c=g=0, no distortion/width/halo); the NJOINT joint iterations then refine both.
+        print('QSTART unset: cold start of Q from zero', flush=True)
+        Qp = solve_Q(exps, lam, Q0=None, maxiter=80, nprox=3)
+    elif not os.path.exists(qstart):
+        raise FileNotFoundError(f'QSTART={qstart!r} does not exist; unset QSTART for a cold start '
+                                'or point it at a Q_<tag>.npy written by an earlier patternfit.py run')
+    else:
+        Qp = np.load(qstart)
+        if Qp.shape != (N, N):
+            raise ValueError(f'QSTART {qstart!r} has shape {Qp.shape}, expected ({N}, {N}) for QN={N}')
     for it in range(int(os.environ.get('NJOINT', 3))):
         t0 = time.time()
         for k, e in enumerate(exps):
