@@ -219,6 +219,9 @@ the detector-fixed component is weak.
 
 ![brightness sequence](../../../docs/evidence/satstar_poisson/fig13_brightness_sequence.png)
 
+Fig 13: only dithers 1 and 3 are held out per star, so each star's spread in the
+figure is a two-point range.
+
 The same LOO test (`loo_crop.py`, crop ±300 px, `QN=640 KMAX=0.45`, held-out
 dithers 1 and 3, all other dithers as training) was run on the target and on six
 fainter saturated NRCB5 F480M stars from other 10678 visits. The noise model is
@@ -246,17 +249,24 @@ Columns 30–50 … 200–300: robust σ(χ) (1.4826·median|χ|) in radial bins
 mean of the two held-out dithers (the two differ by 5–20%;
 `docs/evidence/satstar_poisson/brightness_sequence.json` has each).
 Excess/I = √(σ(χ)²−1) · median σ_tot / median(prediction − scene level): the
-non-Poisson residual as a fraction of the star's local intensity. Values in
+non-Poisson residual as a fraction of the star's local intensity. The
+prediction includes neighbours and confusion above the off-spike scene level
+(r = 350–450 px), so for the faintest stars I is somewhat overestimated and
+Excess/I biased low. Values in
 parentheses are bins where the star's intensity is only ~5–8 MJy/sr and the
 excess there is mostly the far-field floor (§4), not the halo. r(σ=1.5): radius
 at which σ(χ) falls to 1.5. obs 042 has only 4 dithers (the star is off the
 detector in 4 and 5); 046 and 070 (2 dithers each, F/F_t = 0.06 and 0.17) were
-not run, because a LOO with a single training dither is not comparable.
+not run, because a LOO with a single training dither is not comparable: no
+pattern node can reach the `MINCOV=3` training-dither coverage cut.
 
 **Findings.**
 
-1. **The excess is a fixed fraction of the local halo intensity, ≈5% (4.4–6%),
-   for every star, across a factor 16 in brightness** (fig. panel 3). It is not a
+1. **In the 30–80 px bins, the excess is a fixed fraction of the local halo
+   intensity, ≈5% (4.4–6%), for every star, across a factor 16 in brightness**
+   (fig. panel 3). Beyond ~80 px the fainter stars sit at the §4 far-field floor
+   (σ(χ) ≈ 1.2), so their excess fraction there measures that floor, not the
+   halo, and the claim is restricted to 30–80 px. It is not a
    peculiarity of the brightest star: every saturated LW star's halo changes
    between dithers by about the same relative amount.
 2. **σ(χ) is, to first order, a function of the local star intensity alone**
@@ -282,18 +292,38 @@ than the target, that is beyond ≈80 px (5″); for 16× fainter, beyond ≈60 
 Inside that radius a better per-exposure PSF (§6, item 3) is needed for every
 saturated star, not only the brightest.
 
-Reproduce (from a directory holding the cutouts; ~35 min per star on 4 cores):
+Reproduce (from this directory, after §7's steps 1–2 for the target;
+~35 min per star on 4 cores):
 
 ```
+for o in 116 069 126 078 063 042; do python s3data.py --outdir ../data 10678 $o nrcblong cal; done
+python training_cutouts.py ../data                                       # -> trn_<obs>_e<d>.npz
 python brightness.py trn_116 trn_069 trn_126 trn_078 trn_063 trn_042    # brightness.json
 for p in tgt trn_116 trn_069 trn_126 trn_078 trn_063 trn_042; do
   QN=640 KMAX=0.45 python loo_crop.py bs_$p 300 1,3 --prefix $p; done
 python seq_eval.py ../../../docs/evidence/satstar_poisson 'bs_{p}' tgt trn_116 trn_069 trn_126 trn_078 trn_063 trn_042
 ```
-The training-star cutouts are `cutout.py` runs at each star's position in
-dither 1, applied to all six dithers of its visit (star detector positions in
-dither 1: 116 (1140,1619), 069 (1187,1391), 126 (196,1814), 078 (1165,469),
-063 (705,1565), 042 (1536,975), 070 (1705,1463), 046 (1707,735)).
+`training_cutouts.py` runs `cutout.prep` (half-width 512) at each star's RA/Dec
+on every dither of its visit that contains the star. The RA/Dec are the GWCS
+world coordinates of the star's dither-1 NRCBLONG position; they round-trip
+through the GWCS inverse to < 0.001 px, and reproduce the cutouts used here
+(identical pixel data; star position within 0.0015 px, checked on obs 042).
+
+| obs | RA [deg] | Dec [deg] | dither-1 (x, y) | dithers with the star |
+|---|---|---|---|---|
+| 116 | 266.7874176 | −28.4989889 | (1140, 1619) | 1–6 |
+| 069 | 266.5180850 | −28.8803394 | (1187, 1391) | 1–6 |
+| 126 | 266.9368967 | −28.4434759 | (196, 1814) | 1–6 |
+| 078 | 266.4671392 | −28.7884783 | (1165, 469) | 1–6 |
+| 063 | 266.4482998 | −28.9244746 | (705, 1565) | 1–6 |
+| 042 | 266.3223522 | −29.0735319 | (1536, 975) | 1, 2, 3, 6 |
+| 070 | 266.4843813 | −28.8525569 | (1705, 1463) | 1, 2 |
+| 046 | 266.4615126 | −29.0724150 | (1707, 735) | 1, 2 |
+
+The target's rerun here (`loo_crop.py`: crop ±300 px, `nsec=2`, `QN=640`, cold
+start) is a different configuration from §3's `patternfit.py` table (full
+1024² cutout, `nsec=4`, warm start). Its 80–120 px values (e1 3.49, e3 2.85)
+fall inside §3's 2.9–3.5 range, but they are not the same run.
 
 ## 6. Next steps
 
@@ -324,11 +354,12 @@ dither 1: 116 (1140,1619), 069 (1187,1391), 126 (196,1814), 078 (1165,469),
 | `patternfit_rank2.py` | + learned variable template with smooth per-exposure amplitude |
 | `loo_crop.py` | LOO on a crop, for band-limit / super-resolution (`KMAX`, `QH`, `QN`) tests and the brightness sequence (`--prefix`) |
 | `brightness.py` | relative brightness (halo-profile ratio) and saturated-core size of each star |
-| `seq_eval.py` | brightness-sequence χ statistics, excess fraction, fig. 11 |
+| `training_cutouts.py` | the brightness-sequence star cutouts (RA/Dec table, runs `cutout.prep` per dither) |
+| `seq_eval.py` | brightness-sequence χ statistics, excess fraction, fig 13 |
 | `evaluate_loo.py` | χ statistics by DQ class, radius and model brightness |
 | `diagnostics.py` | distortion, dither-ratio, raw-ramp, integration and halo-index tests |
 | `make_figures.py` | figs 1–4 |
-| `make_evidence_figures.py` | figs 5–10 (also needs the other-star `trn_*` cutouts; see the brightness-sequence work) |
+| `make_evidence_figures.py` | figs 5–10 (also needs the other-star `trn_*` cutouts of §5) |
 
 Reproduce (about 1 h on 4 cores). Run every step from this directory, with the
 package importable (`pip install -e .` from the repo root, or `PYTHONPATH`). The

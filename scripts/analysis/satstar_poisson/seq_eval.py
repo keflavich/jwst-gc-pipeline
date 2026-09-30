@@ -20,7 +20,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from exposure import Exposure
-warnings.simplefilter('ignore')
+# nan-heavy medians on masked bins; other warnings stay visible
+warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 BINS = [(30, 50), (50, 80), (80, 120), (120, 200), (200, 300)]
 FINE = np.array([30, 40, 50, 65, 80, 100, 120, 150, 200, 250, 300])
@@ -30,6 +31,7 @@ LABEL = {'tgt': 'obs 061 (target)'}
 
 
 def rs(c):
+    # uncentred robust sigma, 1.4826 median|chi| (as patternfit.py / loo_crop.py)
     return 1.4826*np.median(np.abs(c)) if len(c) > 50 else np.nan
 
 
@@ -41,7 +43,12 @@ def star_stats(tag, prefix, bkg):
         ex = Exposure(f'{prefix}_e{k}.npz', J1); z = np.load(fn)
         vt = ex.var+z['varQ']
         chi = (ex.d-z['pred'])/np.sqrt(vt)
-        cov = z['cov'] if 'cov' in z else np.full(chi.shape, 99.)
+        if 'cov' in z:
+            cov = z['cov']
+        else:
+            warnings.warn(f'{fn} has no training-coverage map (older loo_crop.py output): the '
+                          f'MINCOV={MINCOV} coverage cut is NOT applied for this dither', UserWarning)
+            cov = np.full(chi.shape, np.inf)
         cl = ex.good & np.isfinite(chi) & (cov >= MINCOV) & ((ex.dq & 6) == 0)
         yy, xx = np.mgrid[:ex.n, :ex.n]; r = np.hypot(xx-ex.xt0, yy-ex.yt0)
         row = dict(dither=k, bins={})
