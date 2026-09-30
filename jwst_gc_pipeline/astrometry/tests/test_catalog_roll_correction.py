@@ -181,17 +181,55 @@ def test_refusals(tmp_path, treasury_models):
                             treasury_models)
 
 
-def test_refuses_catalog_from_image_rolled_frames(tmp_path, treasury_models):
-    frame = tmp_path / 'jw10678135001_02101_00001_nrca1_destreak_o135_crf.fits'
-    sci = fits.ImageHDU(np.zeros((2, 2)), name='SCI')
-    sci.header['ROLLCORR'] = True
-    fits.HDUList([fits.PrimaryHDU(), sci]).writeto(frame)
+def test_refuses_catalog_with_own_rollcorr_stamp(tmp_path, treasury_models):
     ra, dec = _grid(5)
     src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'
-    _write_perband(src, ra, dec, extra_hdr={'FILENAME': str(frame)})
+    _write_perband(src, ra, dec, extra_hdr={'ROLLCORR': True})
     with pytest.raises(crc.RollCatalogError, match='image-level'):
         crc.correct_catalog(str(src), str(tmp_path / 'o' / src.name), 'gc-treasury',
                             treasury_models)
+
+
+@pytest.mark.parametrize('catalog_after_rotation', [True, False])
+def test_born_rotated_by_frame_state_and_mtime(tmp_path, treasury_models,
+                                               catalog_after_rotation):
+    """Frames rotated at the image level: a catalog written AFTER the rotation
+    is refused (born rotated); one written BEFORE it is corrected."""
+    import copy
+    ra, dec = _grid(5)
+    src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'
+    _write_perband(src, ra, dec)
+    mt = os.path.getmtime(src)
+    models = copy.deepcopy(treasury_models)
+    for vrs in models.values():
+        for v in vrs:
+            v.frame_roll = dict(n_checked=8, n_rolled=8, modes=['posthoc-visit-pivot'],
+                                first_epoch=mt - 60 if catalog_after_rotation else mt + 60)
+    out = tmp_path / 'o' / src.name
+    if catalog_after_rotation:
+        with pytest.raises(crc.RollCatalogError, match='written after the frames'):
+            crc.correct_catalog(str(src), str(out), 'gc-treasury', models)
+    else:
+        crc.correct_catalog(str(src), str(out), 'gc-treasury', models)
+        assert out.exists()
+
+
+def test_frame_roll_state_reads_sampled_crf(tmp_path):
+    pdir = tmp_path / 'F212N' / 'pipeline'
+    pdir.mkdir(parents=True)
+    for i in range(3):
+        sci = fits.ImageHDU(np.zeros((2, 2)), name='SCI')
+        if i < 2:
+            sci.header['ROLLCORR'] = True
+            sci.header['ROLLMODE'] = 'posthoc-visit-pivot'
+            sci.header['ROLLDATE'] = f'2026-10-0{i + 1}T00:00:00Z'
+        fits.HDUList([fits.PrimaryHDU(), sci]).writeto(
+            pdir / f'jw10678135001_02101_0000{i + 1}_nrca1_destreak_o135_crf.fits')
+    st = crc.frame_roll_state(str(tmp_path), '10678', '135')
+    assert st['n_checked'] == 3 and st['n_rolled'] == 2
+    assert st['first_epoch'] == 1790812800      # 2026-10-01T00:00:00Z
+    assert st['modes'] == ['posthoc-visit-pivot']
+    assert crc.frame_roll_state(str(tmp_path), '10678', '999')['n_rolled'] == 0
 
 
 def test_miri_skipped_by_default(tmp_path, treasury_models):

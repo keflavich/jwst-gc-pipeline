@@ -14,9 +14,12 @@ It is valid only under conditions this module checks or records:
 * The data-qa#346 rotation was measured on m3 per-exposure catalogs built from
   frames that ALREADY carried the offsets-table translation.  So the table value
   is the rotation LEFT OVER after the translation tie.  Rotating a catalog from
-  the same generation is therefore not a double correction.  A catalog whose
-  frames were rolled at the image level (``ROLLCORR`` in the frame header) is
-  refused.
+  the same generation is therefore not a double correction.  A catalog fit on
+  frames that were rolled at the image level is refused: its own header carries
+  ``ROLLCORR`` (per-frame catalogs), or it was written after the observation's
+  frames were rotated (``frame_roll_state``: sampled crf ``ROLLCORR`` +
+  ``ROLLDATE`` vs the catalog mtime).  Catalogs older than the image step are
+  corrected normally.
 * The m2 bulk tie is a translation fitted over the matched stars of each visit.
   A rotation about the centroid of those stars leaves that tie unchanged to
   first order, so the pivot here is the COVERAGE CENTROID of the visit's frames
@@ -122,6 +125,9 @@ class VisitRoll:
     pivot_dec: float = np.nan
     pivot_source: str = 'none'
     footprints: list = dc_field(default_factory=list)   # list of (N,2) [ra, dec] deg
+    # image-level roll state of this observation's frames (frame_roll_state);
+    # read fresh on every run, never cached
+    frame_roll: dict = dc_field(default_factory=dict)
 
     @property
     def key(self):
@@ -285,6 +291,44 @@ def visit_footprints(basepath, program, observation, max_frames_per_visit=400):
     return by_visit
 
 
+def frame_roll_state(basepath, program, observation, sample=8):
+    """Image-level roll state of one observation's aligned frames.
+
+    Reads the SCI header of up to ``sample`` evenly spaced crf frames (the
+    image step rotates whole observations at once, so a sample represents
+    the observation).  Returns dict(n_checked, n_rolled, first_epoch,
+    modes): ``first_epoch`` is the earliest time [unix s] a sampled frame
+    was rotated -- its ``ROLLDATE`` or, for a frame rotated in-pipeline by
+    ``roll_correction.apply_roll_correction`` (no ``ROLLDATE``), its mtime.
+    A catalog written after ``first_epoch`` was fit on rotated frames.
+    """
+    import calendar
+    pat = os.path.join(basepath, '*', 'pipeline',
+                       f"jw{int(program):05d}{observation}[0-9][0-9][0-9]_*_nrc*_crf.fits")
+    files = sorted(glob.glob(pat))
+    if len(files) > sample:
+        files = [files[i] for i in np.linspace(0, len(files) - 1, sample).astype(int)]
+    n_rolled = 0
+    epochs = []
+    modes = set()
+    for f in files:
+        try:
+            hdr = fits.getheader(f, ext=('SCI', 1))
+        except (OSError, KeyError):
+            continue
+        if not hdr.get('ROLLCORR'):
+            continue
+        n_rolled += 1
+        modes.add(str(hdr.get('ROLLMODE', 'pre-shift (roll_correction.py)')))
+        d = hdr.get('ROLLDATE')
+        if d:
+            epochs.append(calendar.timegm(time.strptime(d, '%Y-%m-%dT%H:%M:%SZ')))
+        else:
+            epochs.append(os.path.getmtime(f))
+    return dict(n_checked=len(files), n_rolled=n_rolled,
+                first_epoch=min(epochs) if epochs else None, modes=sorted(modes))
+
+
 def build_models_for_field(field_name, table=ROLL_TABLE, footprint_cache=None,
                            basepath=None, only_obs=None):
     """{(program, obs): [VisitRoll]} for every NIRCam roll-table row of a field.
@@ -339,6 +383,9 @@ def build_models_for_field(field_name, table=ROLL_TABLE, footprint_cache=None,
                 src = 'none (no frames on disk; falls back to catalog centroid)'
             vrs.append(VisitRoll(prog, obs, vis, r['roll_arcsec'], pra, pde, src, polys))
         if vrs:
+            state = frame_roll_state(basepath, prog, obs)
+            for v in vrs:
+                v.frame_roll = state
             models[(prog, obs)] = vrs     # PointingModel built per catalog (pivot fallback)
     if footprint_cache and dirty:
         # atomic, and only when new footprints were measured: concurrent
@@ -573,24 +620,28 @@ def code_version():
             return 'unknown'
 
 
-def _already_rolled_frames(headers):
-    """Frame paths named in catalog headers whose SCI header has ROLLCORR."""
-    hits = []
+def _born_rotated(path, headers, keys, models):
+    """Reason string if ``path`` was fit on image-level roll-corrected frames.
+
+    Two signals: the catalog's own header carries ``ROLLCORR`` (stamped at
+    fit time from the frame), or the observation's frames were rotated
+    BEFORE the catalog was written (``frame_roll_state``).  A catalog older
+    than every rotation is a pre-rotation catalog and is corrected normally.
+    """
     for h in headers:
-        for k, v in h.items():
-            if not isinstance(v, str) or not v.endswith(('_crf.fits', '_cal.fits')):
-                continue
-            if not (k == 'FILENAME' or k.endswith(('FILE', 'FN0'))):
-                continue
-            if os.path.exists(v):
-                try:
-                    if 'ROLLCORR' in fits.getheader(v, ext=('SCI', 1)):
-                        hits.append(v)
-                except (OSError, KeyError):
-                    continue
-            if len(hits) >= 1:
-                return hits
-    return hits
+        if h.get('ROLLCORR'):
+            return ('catalog was fit on image-level roll-corrected frames '
+                    '(ROLLCORR in its own header)')
+    mtime = os.path.getmtime(path)
+    for key in keys:
+        for v in models.get(key, []):
+            st = v.frame_roll or {}
+            if st.get('n_rolled') and st.get('first_epoch') is not None \
+                    and mtime >= st['first_epoch']:
+                return (f"catalog written after the frames of {key[0]}-{key[1]} were "
+                        f"image-level roll-corrected ({st['n_rolled']}/{st['n_checked']} "
+                        f"sampled frames, {','.join(st['modes'])})")
+    return None
 
 
 def _pivot_models(vrs, ra_all, dec_all):
@@ -602,7 +653,8 @@ def _pivot_models(vrs, ra_all, dec_all):
             pra, pde = _mean_sky(ra_all[g][::max(1, g.sum() // 200000)],
                                  dec_all[g][::max(1, g.sum() // 200000)])
             v = VisitRoll(v.program, v.observation, v.visit, v.roll_arcsec, pra, pde,
-                          'catalog row centroid (no frames on disk)', v.footprints)
+                          'catalog row centroid (no frames on disk)', v.footprints,
+                          v.frame_roll)
         fixed.append(v)
     return PointingModel(fixed)
 
@@ -660,11 +712,12 @@ def plan_catalog(path, field_name, models, include_miri=False, include_legacy=Fa
         assigned.append((ra_c, dec_c, key))
     if not assigned:
         return dict(status='skipped-miri', kind=kind)
-    if headers:
-        rolled = _already_rolled_frames(headers)
-        if rolled:
-            return dict(status='refused', kind=kind,
-                        reason=f'source frame already image-level roll-corrected: {rolled[0]}')
+    keys = {k for _r, _d, k in assigned if k[0] != 'per-row'}
+    if any(k[0] == 'per-row' for _r, _d, k in assigned):
+        keys |= set(models)
+    born = _born_rotated(path, headers, keys, models)
+    if born:
+        return dict(status='refused', kind=kind, reason=f'image-level roll-corrected: {born}')
     return dict(status='apply', kind=kind, pairs=assigned)
 
 
