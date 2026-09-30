@@ -18,6 +18,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from jwst_gc_pipeline.mast_names import jw_prefix
+
 BASE = 'https://stpubdata.s3.amazonaws.com'
 NS = {'s': 'http://s3.amazonaws.com/doc/2006-03-01/'}
 
@@ -68,7 +70,7 @@ def program_cal_keys(program, detectors, cachefile):
     if os.path.exists(cachefile):
         with open(cachefile) as f:
             return [tuple(x) for x in json.load(f)]
-    allk = list_keys(f'jwst/public/jw{program}/')
+    allk = list_keys(f'jwst/public/{jw_prefix(program)}/')
     keys = [(k, s) for k, s in allk
             if k.endswith('_cal.fits') and any(f'_{d}_cal' in k for d in detectors)]
     with open(cachefile, 'w') as f:
