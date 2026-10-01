@@ -114,4 +114,6 @@ Extended-emission handling auto-engages on those targets (`--extended-emission` 
 `--no-extended-emission` to force). Grouping and frame-0 recovery are opt-in
 everywhere; cross-band confirmation is the DEFAULT
 (`--manual-crossband-seed-min-filters=2`). On the extended-emission targets a
-prominence gate also auto-engages at 3.0 (`--manual-ext-prom-min=-1` = AUTO).
+prominence gate also auto-engages at 3.0 (`--manual-ext-prom-min=-1` = AUTO);
+sources with qfit ≤ 0.2 and merged S/N ≥ 30 pass it at prominence ≥ 2.0
+(`--manual-ext-prom-exempt-qfit=0` removes the exemption).

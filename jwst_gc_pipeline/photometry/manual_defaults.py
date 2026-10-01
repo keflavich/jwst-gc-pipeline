@@ -54,6 +54,10 @@ MANUAL_DEFAULTS = {
     # admits knots at low prominence).  0 = no guard.
     'manual_ext_qfit_snr_prom_min': 3.0,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
+    # exemption from that floor for tight, bright fits (0 = off)
+    'manual_ext_prom_exempt_qfit': 0.2,
+    'manual_ext_prom_exempt_snr': 30.0,
+    'manual_ext_prom_exempt_prom_min': 2.0,
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_local_snr_min': 5.0,
     'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
