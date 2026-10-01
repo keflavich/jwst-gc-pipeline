@@ -331,6 +331,7 @@ still run after m6.
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-star-prom-min` | 5.0 | 5.0 | 5.0 | 5.0 |
 | `--manual-ext-star-prom-robust-min` | −1.0 = **AUTO** | 8.0 | **0** (off) | 8.0 (0 on an extended-emission target) |
+| `--manual-ext-star-prom-robust-conc` | 0.6 | 0.6 | (robust branch off) | 0.6 |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
@@ -496,6 +497,7 @@ control is the default.
 | `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg (where no data-i2d prominence is measured) |
 | `--manual-ext-star-prom-min` | 5.0 | …or data-i2d prominence ≥ this (replaces the peak-SB test; 0 restores it) |
 | `--manual-ext-star-prom-robust-min` | −1 (AUTO) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; AUTO = 8 on star-dominated fields, off on extended-emission targets; 0 = off |
+| `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |

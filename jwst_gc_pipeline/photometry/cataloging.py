@@ -1372,10 +1372,59 @@ def _emission_keep_miri(prominence, min_prominence):
     return np.isfinite(prominence) & (prominence >= min_prominence)
 
 
+def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
+                        r_noise=(4.0, 10.0)):
+    """PSF-core flux above the local level, and its noise, at each position.
+
+    core  = sum(data, r <= r_core) - npix_core * median(data, r_ring[0] <= r <= r_ring[1])
+    sigma = s * sqrt(npix_core * (1 + npix_core / npix_ring)), with s the
+            lower-half MAD of the r_noise annulus (the prominence_robust
+            spread), so structure noise enters as well as pixel noise.
+
+    Positions within r_noise[1] px of the image edge, or with fewer than 10
+    finite annulus pixels, get NaN.  Returns (core, sigma).
+    """
+    n = len(xpix)
+    core = np.full(n, np.nan, dtype=float)
+    sigma = np.full(n, np.nan, dtype=float)
+    ny, nx = data.shape
+    h = int(np.ceil(r_noise[1]))
+    yo, xo = np.mgrid[-h:h + 1, -h:h + 1]
+    r0 = np.hypot(xo, yo)
+    noise_mask = (r0 >= r_noise[0]) & (r0 <= r_noise[1])
+    for i in range(n):
+        if not (np.isfinite(xpix[i]) and np.isfinite(ypix[i])):
+            continue
+        ix, iy = int(round(float(xpix[i]))), int(round(float(ypix[i])))
+        if not (h <= ix < nx - h and h <= iy < ny - h):
+            continue
+        st = data[iy - h:iy + h + 1, ix - h:ix + h + 1]
+        r = np.hypot(xo - (xpix[i] - ix), yo - (ypix[i] - iy))
+        cm = r <= r_core
+        rm = (r >= r_ring[0]) & (r <= r_ring[1])
+        ring = st[rm]
+        ring = ring[np.isfinite(ring)]
+        ann = st[noise_mask]
+        ann = ann[np.isfinite(ann)]
+        if ring.size < 5 or ann.size < 10 or not np.all(np.isfinite(st[cm])):
+            continue
+        low = ann[ann <= np.median(ann)]
+        spread = 1.4826 * np.median(np.abs(low - np.median(low)))
+        if not spread > 0:
+            continue
+        ncore = int(cm.sum())
+        core[i] = float(np.sum(st[cm])) - ncore * float(np.median(ring))
+        sigma[i] = spread * np.sqrt(ncore * (1.0 + ncore / ring.size))
+    return core, sigma
+
+
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               star_prom_min=0.0,
                               star_prom_robust_min=0.0,
+                              star_prom_robust_conc=0.0,
+                              star_prom_robust_conc_snr=5.0,
+                              conc_ref_min_n=5,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
@@ -1407,6 +1456,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     ``prominence >= star_prom_min`` (OR, with ``star_prom_robust_min > 0``,
     ``prominence_robust >= star_prom_robust_min``) wherever the data-i2d
     prominence is measured (peak_SB stays the test where it is not).
+    With ``star_prom_robust_conc > 0`` the robust branch also needs a
+    PSF-concentrated core (see the block comment at the branch).
     AND (not model_overshoot, if that column exists and drop_overshoot).
 
     SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
@@ -1584,7 +1635,59 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         _has_prom = np.isfinite(prominence)
         _prom_ok = prominence >= float(star_prom_min)
         if star_prom_robust_min > 0:
-            _prom_ok = _prom_ok | (prominence_robust >= float(star_prom_robust_min))
+            _rob_ok = prominence_robust >= float(star_prom_robust_min)
+            # CONCENTRATION guard on the robust branch.  Next to a bright star
+            # the 25th-percentile annulus floor reads the dark side of the
+            # star's wing, so a fit to a bump in the wing (PSF mismatch) reads
+            # a high robust prominence at a low plain prominence.  Such a fit
+            # takes flux from the neighbour's wing: its flux is not
+            # concentrated in the core like a PSF, and the residual core is
+            # over-subtracted.  Sgr B2 reference field (F187N, fix stack, no
+            # injections): of 48 sources with residual core matched-filter
+            # S/N < -7, 26 sit at prominence < 5 (robust median 13.5, F212N
+            # counterpart rate about half that of real stars at the same S/N).
+            # concentration = (core / flux) / median(core / flux of prominence
+            # >= 10, flags == 0 sources) [_core_concentration]; the branch
+            # refuses a source at concentration < star_prom_robust_conc whose
+            # core deficit (C_ref * flux - core) / sigma exceeds
+            # star_prom_robust_conc_snr.  At 0.6 / 5 on the reference fields
+            # (prominence < 5 sources): Sgr B2 refuses 14 of 26 over-subtracted
+            # sources and none of 7 injected stars or 120 well-subtracted
+            # sources; the superdense field (NSC) none of 13 injected stars;
+            # the dark field (Brick) 7 of 10 over-subtracted, none of 7
+            # injected.  Fewer than conc_ref_min_n calibration sources turns
+            # the guard off.
+            if (star_prom_robust_conc > 0 and xx is not None
+                    and 'flux' in t.colnames):
+                _flux = np.asarray(t['flux'], dtype=float)
+                _core, _csig = _core_concentration(
+                    data_i2d_image, np.asarray(xx, dtype=float),
+                    np.asarray(yy, dtype=float))
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    _conc = _core / _flux
+                _cal = (np.isfinite(_conc) & (_flux > 0)
+                        & np.isfinite(prominence) & (prominence >= 10)
+                        & ((flg == 0) | ~np.isfinite(flg)))
+                if int(_cal.sum()) >= int(conc_ref_min_n):
+                    _cref = float(np.median(_conc[_cal]))
+                    concentration = _conc / _cref
+                    t['core_concentration'] = concentration
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        _deficit = (_cref * _flux - _core) / _csig
+                    _diffuse = ((concentration < float(star_prom_robust_conc))
+                                & (_deficit > float(star_prom_robust_conc_snr)))
+                    _n_conc = int(np.sum(_has_prom & ~_prom_ok & _rob_ok & _diffuse))
+                    _rob_ok = _rob_ok & ~_diffuse
+                    print(f"[{label}] robust-prominence concentration guard: "
+                          f"C_ref {_cref:.3g} from {int(_cal.sum())} source(s); "
+                          f"refused {_n_conc} source(s) at core concentration < "
+                          f"{star_prom_robust_conc:g} x C_ref (deficit > "
+                          f"{star_prom_robust_conc_snr:g} sigma)", flush=True)
+                else:
+                    print(f"[{label}] robust-prominence concentration guard off: "
+                          f"{int(_cal.sum())} calibration source(s) < "
+                          f"{int(conc_ref_min_n)}", flush=True)
+            _prom_ok = _prom_ok | _rob_ok
         _peak_branch = np.where(_has_prom, _prom_ok, _peak_branch)
     star_like = (
         (qf <= qfit_max)
@@ -8237,6 +8340,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
                     star_prom_robust_min=_auto_star_prom_robust_min(
                         mopt(opts_phase, 'manual_ext_star_prom_robust_min'), opts_phase),
+                    star_prom_robust_conc=float(mopt(opts_phase, 'manual_ext_star_prom_robust_conc')),
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
