@@ -211,6 +211,7 @@ from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     assert_no_foreign_observation_overwrite, foreign_observation_conflict,
 )
+from jwst_gc_pipeline.photometry.epsf_hybrid import maybe_apply_epsf_core
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -2585,6 +2586,12 @@ def get_psf_model(filtername, proposal_id, field,
                             f"Failed to download PSF after {ntries} attempts; "
                             f"last error: {type(ex).__name__}: {ex}") from ex
                     time.sleep(min(2 ** ntries, 30))
+
+        # Opt-in hybrid PSF: empirical ePSF core inside 10 px, this STPSF grid
+        # outside 12 px (photometry/epsf_hybrid.py, issue #1007).  A no-op --
+        # the same grid object -- unless PSF_EPSF_CORE_DIR is set.
+        if instrument == 'NIRCam':
+            grid = maybe_apply_epsf_core(grid, _cache_detector, filtername)
 
         if use_grid:
             # to_griddedpsfmodel returns a LIST (one grid per detector) for

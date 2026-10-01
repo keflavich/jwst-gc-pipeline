@@ -1,0 +1,54 @@
+{
+ "frame": "o081_nrcblong.npz",
+ "grid": "nircam_nrcb5_f480m_fovp101_samp2_npsf16.fits",
+ "n_stars": 1663,
+ "centroid_shift_max_mpix": 27.351083020364182,
+ "stpsf": {
+  "annular_chi2_median_all": [
+   17.536539416869978,
+   28.64295572697975,
+   128.14237314240907,
+   222.1458181126802
+  ],
+  "annular_chi2_median_top20": [
+   56.340014557724196,
+   37.72802069112622,
+   144.28238807000784,
+   233.9502870504106
+  ],
+  "stack_rms_r8_top20": 0.0008810247561951497,
+  "aperture_data_over_model_r8_median_top20": 1.0903308930014206,
+  "aperture_data_over_model_r8_median_all": 1.1341835387011974
+ },
+ "hybrid": {
+  "annular_chi2_median_all": [
+   10.564073864574398,
+   24.729868446097754,
+   107.78925882658868,
+   222.3711014138451
+  ],
+  "annular_chi2_median_top20": [
+   32.755810215529806,
+   27.06949774483751,
+   109.47469061014809,
+   237.31840347575664
+  ],
+  "stack_rms_r8_top20": 0.0007353016433265764,
+  "aperture_data_over_model_r8_median_top20": 1.0737311386399069,
+  "aperture_data_over_model_r8_median_all": 1.1123836450040576
+ },
+ "flux_ratio_hybrid_over_stpsf": {
+  "median": 1.0171027989456247,
+  "median_top20": 1.0163158630218159,
+  "p16_84": [
+   1.012268253651343,
+   1.0204014334300553
+  ]
+ },
+ "dpos_hybrid_minus_stpsf_mpix": {
+  "dx_median": -3.133144257844833,
+  "dy_median": -0.10558451600672925,
+  "dx_median_top20": -4.628892910318427,
+  "dy_median_top20": 0.4784330712936935
+ }
+}
