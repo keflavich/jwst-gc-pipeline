@@ -297,7 +297,8 @@ for a plain single-filter NIRCam field with no tuning flags.
 | **post-fit** | overshoot ratio / action | 1.2 / refit |
 | | negative-flux | banned |
 | **vetting** | qfit_max / noise term k | 0.2 / 5.0 (qfit ≤ sqrt(0.2² + (5/S/N)²)) |
-| | peak-over-bkg | 20 |
+| | peak-over-bkg | 20 (only where prominence is unmeasured) |
+| | star-prominence keep | 5.0 (or neighbour-robust prominence ≥ 8.0) |
 | | local-S/N min | 5.0 (on flux / flux_err_prop, the merged-flux S/N) |
 | | bright-isolated keep (snr / qfit) | ≥20 / <0.4 |
 | | prominence gate | 0 (off; MIRI only) |
@@ -342,6 +343,9 @@ still run after m6.
 | `--manual-ext-qfit-snr-k` | 5.0 | 5.0 | 5.0 | (unused: MIRI vets on prominence) |
 | `--manual-ext-qfit-snr-prom-min` | 3.0 | 3.0 | 3.0 | (unused) |
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
+| `--manual-ext-star-prom-min` | 5.0 | 5.0 | 5.0 | 5.0 |
+| `--manual-ext-star-prom-robust-min` | −1.0 = **AUTO** | 8.0 | **0** (off) | 8.0 (0 on an extended-emission target) |
+| `--manual-ext-star-prom-robust-conc` | 0.6 | 0.6 | (robust branch off) | 0.6 |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-floor-per-frame` (`manual_ext_snr_floor_propagated`) | `True` | on | on | on |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
@@ -509,7 +513,10 @@ control is the default.
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
 | `--manual-ext-qfit-snr-k` | 5.0 | …widened by the pixel-noise term: qfit ≤ sqrt(qfit_max² + (k/S/N)²); 0 = flat cut |
 | `--manual-ext-qfit-snr-prom-min` | 3.0 | …where the data-i2d prominence is ≥ this (unmeasured → flat cut); 0 = no guard |
-| `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg |
+| `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg (where no data-i2d prominence is measured) |
+| `--manual-ext-star-prom-min` | 5.0 | …or data-i2d prominence ≥ this (replaces the peak-SB test; 0 restores it) |
+| `--manual-ext-star-prom-robust-min` | −1 (AUTO) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; AUTO = 8 on star-dominated fields, off on extended-emission targets; 0 = off |
+| `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
 | `--manual-ext-snr-floor-per-frame` | (propagated) | put the vetting S/N floors on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch) |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |

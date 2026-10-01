@@ -59,6 +59,9 @@ MANUAL_DEFAULTS = {
     'manual_ext_prom_exempt_snr': 30.0,
     'manual_ext_prom_exempt_prom_min': 2.0,
     'manual_ext_peak_over_bkg': 20.0,
+    'manual_ext_star_prom_min': 5.0,   # replaces the peakSB branch (>0)
+    'manual_ext_star_prom_robust_min': -1.0,  # OR neighbour-robust prominence; -1 = AUTO (8, off on ext-emission)
+    'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
     'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,

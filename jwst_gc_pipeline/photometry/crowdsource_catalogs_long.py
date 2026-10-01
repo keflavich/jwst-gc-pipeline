@@ -4403,7 +4403,33 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help="Lower prominence floor that applies to exempt sources (default 2.0).")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
-                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")
+                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).  "
+                         "Only used where the data-i2d prominence is not measured "
+                         "when --manual-ext-star-prom-min > 0.")
+    parser.add_option("--manual-ext-star-prom-min", dest="manual_ext_star_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_min'],
+                    help="Extended-emission vetting: the bright-star keep branch is "
+                         "data-i2d prominence >= this (rise above the local annulus "
+                         "in annulus-MAD units) in place of peak-SB > "
+                         "--manual-ext-peak-over-bkg x local bkg, whose local_bkg "
+                         "scatters about zero on background-subtracted frames.  "
+                         "0 = the peak-SB test (default 5).")
+    parser.add_option("--manual-ext-star-prom-robust-min", dest="manual_ext_star_prom_robust_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_min'],
+                    help="With --manual-ext-star-prom-min > 0, also keep a source whose "
+                         "neighbour-robust prominence (25th-percentile annulus floor, "
+                         "lower-half MAD) is >= this; neighbours' PSF wings inflate the "
+                         "plain annulus MAD in crowded fields.  < 0 (default) = AUTO: 8 "
+                         "on star-dominated fields, off on extended-emission targets, "
+                         "where the 25th-percentile floor reads the dark sides of a "
+                         "filament; 0 = off.")
+    parser.add_option("--manual-ext-star-prom-robust-conc", dest="manual_ext_star_prom_robust_conc",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_conc'],
+                    help="The neighbour-robust prominence branch refuses a source whose "
+                         "data-i2d core flux per unit fitted flux is below this "
+                         "fraction of the field median for prominent stars (core "
+                         "deficit > 5 sigma): a fit to a bump in a bright star's PSF "
+                         "wing.  Default 0.6; 0 = off.")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
