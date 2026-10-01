@@ -49,6 +49,17 @@ fields:
     dec: -29.0074
     thresholds: {}
 
+  dense_bright:
+    environment: high stellar density on bright, structured background (Sgr B2 envelope)
+    target: sgrb2
+    proposal: '5365'
+    obsid: '001'
+    each_suffix: destreak_o001_crf
+    filters: [F187N, F212N]
+    ra: 266.8368013
+    dec: -28.4268384
+    thresholds: {}
+
   bright_modest:
     environment: modest stellar density on bright, filamentary Paschen-alpha emission (W51)
     target: w51
