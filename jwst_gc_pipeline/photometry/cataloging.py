@@ -1864,6 +1864,26 @@ def _is_extended_emission(options):
     return str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
 
 
+def _auto_seed_round_loose_max(value, options):
+    """Resolve ``--manual-seed-round-loose-max``.  ``value < 0`` (the default)
+    is AUTO: 0.8 on star-dominated fields and 0 (loose-roundness seeds off) on
+    an extended-emission target (:func:`_is_extended_emission`); ``value >= 0``
+    is used verbatim.
+
+    On a nebular field the residual co-add's knots and filament points are
+    elongated and pass the prominence test once the residual background is
+    subtracted: W51 F187N reference field (3 seeds), phases m5-m7, 60-70
+    detections per phase with roundness in (0.5, 0.8], 25-29 of them at
+    prominence >= 5.  Against the tight cut alone this recovered one more of
+    48 injected stars and doubled the positive residual excess (0.55 -> 1.11
+    peaks per arcsec^2).
+    """
+    value = float(value)
+    if value >= 0:
+        return value
+    return 0.0 if _is_extended_emission(options) else 0.8
+
+
 def _resolve_each_suffix(options, filtername):
     """Per-filter input per-exposure-crf suffix.
 
@@ -7570,7 +7590,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
-                        _sround_loose = float(mopt(opts_phase, 'manual_seed_round_loose_max'))
+                        _sround_loose = _auto_seed_round_loose_max(
+                            mopt(opts_phase, 'manual_seed_round_loose_max'), opts_phase)
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
