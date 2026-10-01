@@ -47,6 +47,13 @@ fields:
     filters: [F212N, F405N]
     ra: 266.4219
     dec: -29.0074
+    # Confusion sets the noise here: the clean run's residual - background
+    # scatter is 5.9x the ERR array (0.3-0.9x in the other fields) and the
+    # faintest 5% of the catalog sit at ERR-based S/N ~90.  Over the default
+    # 5-80 every injected star is below detection in every variant, so this
+    # field injects 8x brighter.
+    snr_range: [40, 640]
+    snr_bins: [40, 80, 160, 320, 640]
     thresholds: {}
 
   dense_bright:
