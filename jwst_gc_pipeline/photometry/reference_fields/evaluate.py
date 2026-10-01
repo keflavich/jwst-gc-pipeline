@@ -25,6 +25,16 @@ detection or the residual):
     ``excess_excl_pix`` from every catalog source.  Noise and symmetric
     structure cancel between the signs; faint stars left in the residual do not.
 
+``oversubtracted``  (clean run)
+    Catalog sources whose residual core is over-subtracted, per arcsec^2: the
+    minimum of the matched-filter S/N map in the 3x3 px box at the source is
+    below ``-oversub_snr``.  ``residual_excess`` excludes the region around
+    every catalog source, so a fit that takes flux from a bright neighbour's
+    PSF wing (or from extended emission) lowers the positive count and leaves
+    its negative core unseen; this metric counts those fits.  Blended real
+    stars and PSF-model mismatch at bright stars also contribute, so the
+    threshold is set per field from a baseline.
+
 ``ring_ratio``  (clean run)
     Faint sources found ``ring_pix`` (1.5-4.5 px) from a bright star, over the
     number expected there from the faint sources' mean density.  Real faint
@@ -233,6 +243,17 @@ def residual_excess(snr_map, inner_mask, src_x, src_y, area_as2, *, thresh, excl
     return (npos - nneg) / area_as2, npos, nneg
 
 
+def oversubtracted(snr_map, src_x, src_y, inside, area_as2, *, thresh):
+    """Sources inside the inner box whose 3x3 px residual matched-filter S/N
+    minimum is below ``-thresh``, per arcsec^2.  Returns ``(per_as2, n)``."""
+    mn = ndimage.minimum_filter(snr_map, 3)
+    ix = np.rint(np.asarray(src_x, float)[inside]).astype(int)
+    iy = np.rint(np.asarray(src_y, float)[inside]).astype(int)
+    ok = (ix >= 0) & (iy >= 0) & (ix < snr_map.shape[1]) & (iy < snr_map.shape[0])
+    n = int(np.sum(mn[iy[ok], ix[ok]] < -thresh))
+    return n / area_as2, n
+
+
 def ring_ratio(x, y, flux, snr, inside, *, bright_snr, faint_ratio, ring, area_pix):
     """Faint-near-bright pair count over its uniform-density expectation.
 
@@ -320,6 +341,8 @@ def evaluate_clean(spec, variant, *, rng=None, phase=None):
     snr_map, scale = matched_filter_snr(res, err, fw, inner)
     exc, npos, nneg = residual_excess(snr_map, inner, x, y, fr.area_as2,
                                       thresh=spec['excess_snr'], excl_pix=spec['excess_excl_pix'])
+    osub, n_osub = oversubtracted(snr_map, x, y, inside, fr.area_as2,
+                                  thresh=spec['oversub_snr'])
     rr, n_obs, n_exp = ring_ratio(x, y, flux, snr_cat, inside,
                                   bright_snr=spec['ring_bright_snr'],
                                   faint_ratio=spec['ring_faint_ratio'],
@@ -327,7 +350,8 @@ def evaluate_clean(spec, variant, *, rng=None, phase=None):
     out = dict(phase=prod['phase'], n_sources=int(inside.sum()),
                density_per_as2=float(inside.sum() / fr.area_as2),
                residual_excess=float(exc), residual_npos=npos, residual_nneg=nneg,
-               residual_mf_scale=scale, ring_ratio=rr, ring_n_obs=n_obs, ring_n_exp=n_exp)
+               residual_mf_scale=scale, oversubtracted=float(osub), n_oversubtracted=n_osub,
+               ring_ratio=rr, ring_n_obs=n_obs, ring_n_exp=n_exp)
 
     if len(spec['filters']) > 1:
         comp = spec['filters'][1]
@@ -441,6 +465,7 @@ def check(res, thresholds):
             fails.append(f'completeness[{b}] = {frac:.2f} ({k}/{n}) < {fmin}')
     scalar = [('flux_bias_max_mag', lambda r: abs(r.get('flux_bias_mag', np.nan)), 'max'),
               ('residual_excess_max', lambda r: r.get('clean', {}).get('residual_excess', np.nan), 'max'),
+              ('oversubtracted_max', lambda r: r.get('clean', {}).get('oversubtracted', np.nan), 'max'),
               ('ring_ratio_max', lambda r: r.get('clean', {}).get('ring_ratio', np.nan), 'max'),
               ('emission_purity_min', lambda r: r.get('emission_purity', np.nan), 'min'),
               ('labels_recovered_min', lambda r: r.get('clean', {}).get('labels_recovered', np.nan), 'min'),
@@ -491,6 +516,7 @@ def main(argv=None):
         print(f"{name:12s} {a.variant:10s} complete[{comp}] "
               f"bias={res.get('flux_bias_mag', np.nan):+.3f} "
               f"excess={c.get('residual_excess', np.nan):.2f}/as2 "
+              f"oversub={c.get('oversubtracted', np.nan):.2f}/as2 "
               f"ring={c.get('ring_ratio', np.nan):.2f} "
               f"purity={res.get('emission_purity', np.nan):.2f} "
               f"labels={c.get('labels_recovered', np.nan):.2f} "

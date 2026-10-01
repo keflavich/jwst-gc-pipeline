@@ -158,6 +158,26 @@ def test_residual_excess_counts_unsubtracted_not_symmetric():
     assert npos == 1 and nneg == 1 and exc == 0
 
 
+def test_oversubtracted_counts_negative_cores_at_sources():
+    rng = np.random.default_rng(5)
+    shape = (120, 120)
+    img = rng.normal(0, 1, shape)
+    err = np.ones(shape)
+    inner = np.ones(shape, bool)
+    # two over-subtracted fits, one under-subtracted, one clean
+    img -= _gauss(shape, 30, 30, 2.0, 15.0) + _gauss(shape, 90, 30, 2.0, 15.0)
+    img += _gauss(shape, 30, 90, 2.0, 15.0)
+    snr, _ = EV.matched_filter_snr(img, err, 2.0, inner)
+    x = np.array([30.4, 89.6, 30.0, 90.0, 200.0])
+    y = np.array([29.7, 30.3, 90.0, 90.0, 10.0])
+    inside = np.array([True, True, True, True, False])
+    per, n = EV.oversubtracted(snr, x, y, inside, 2.0, thresh=7)
+    assert n == 2 and per == 1.0
+    # the same negative cores, no source on them: not counted (residual_excess's job)
+    per, n = EV.oversubtracted(snr, x[2:], y[2:], inside[2:], 2.0, thresh=7)
+    assert n == 0
+
+
 def test_ring_ratio_uniform_vs_companions():
     rng = np.random.default_rng(3)
     n_b, n_f = 20, 400
@@ -224,6 +244,9 @@ def test_check_thresholds():
     res['clean']['emission_labels_cataloged'] = 2
     assert EV.check(res, {'emission_labels_cataloged_max': 2}) == []
     assert len(EV.check(res, {'emission_labels_cataloged_max': 0})) == 1
+    res['clean']['oversubtracted'] = 3.0
+    assert EV.check(res, {'oversubtracted_max': 3.0}) == []
+    assert len(EV.check(res, {'oversubtracted_max': 2.0})) == 1
     del res['clean']['emission_labels_cataloged']
     assert len(EV.check(res, {'emission_labels_cataloged_max': 0})) == 1   # missing
 
