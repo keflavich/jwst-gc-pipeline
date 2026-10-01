@@ -10,7 +10,9 @@ the residual.  The gate is now qfit <= sqrt(qfit_max^2 + (k/S/N)^2).
 import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
+from astropy.wcs import WCS
 import astropy.units as u
+from scipy.ndimage import gaussian_filter
 
 from jwst_gc_pipeline.photometry.cataloging import _filter_extended_emission
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
@@ -72,5 +74,43 @@ def test_k_zero_is_flat_cut():
     assert np.array_equal(_kept(t, 0.0), q <= 0.2)
 
 
+def _guard_run(prom_min):
+    """S/N-8, qfit-0.45 sources: a star on flat sky, a knot of PSF-scale
+    structure in a bright patch, and a star within 10 px of the edge (no
+    prominence)."""
+    ny = nx = 200
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.crpix = [nx / 2, ny / 2]
+    w.wcs.crval = [266.5, -28.7]
+    w.wcs.cdelt = [-0.063 / 3600, 0.063 / 3600]
+    rng = np.random.default_rng(3)
+    data = rng.normal(0.0, 1.0, (ny, nx))
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    struct = gaussian_filter(rng.normal(0, 1, (ny, nx)), 1.2)
+    data[132:168, 132:168] += 40.0 + (8.0 / np.std(struct)) * struct[132:168, 132:168]
+    for (x, y), amp in [((50, 50), 30.0), ((150, 150), 10.0), ((4, 100), 30.0)]:
+        data += amp * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / 2.0)
+    xy = np.array([(50, 50), (150, 150), (4, 100)], float)
+    t = Table({'id': np.arange(3), 'skycoord': w.pixel_to_world(xy[:, 0], xy[:, 1]),
+               'qfit': np.full(3, 0.45), 'flux': np.full(3, 80.0),
+               'flux_err': np.full(3, 10.0), 'flags': np.zeros(3),
+               'local_bkg': np.zeros(3), 'group_size': np.ones(3)})
+    out = _filter_extended_emission(t, data_i2d_image=data, ww_i2d=w, qfit_max=0.2,
+                                    local_snr_min=5.0, qfit_snr_k=5.0,
+                                    qfit_snr_prom_min=prom_min, sky_clean_keep=False)
+    return set(np.asarray(out['id']).tolist()), t
+
+
+def test_prominence_guard_drops_knot_keeps_star():
+    kept, t = _guard_run(0.0)
+    assert kept == {0, 1, 2}          # unguarded: the knot passes too
+    prom = np.asarray(t['prominence'])
+    assert prom[0] > 10 and prom[1] < 3 and not np.isfinite(prom[2])
+    kept, _ = _guard_run(3.0)
+    assert kept == {0}                # knot low prominence; edge unmeasured -> flat cut
+
+
 def test_pipeline_default_on():
     assert MANUAL_DEFAULTS['manual_ext_qfit_snr_k'] == 5.0
+    assert MANUAL_DEFAULTS['manual_ext_qfit_snr_prom_min'] == 3.0
