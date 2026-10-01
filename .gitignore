@@ -35,5 +35,8 @@ _*.md
 TODO*.md
 NOTES*.md
 
-# figures/evidence graphics live in the Overleaf astrometry-paper project, not this repo
+# PNGs are ignored by default (paper figures live in the Overleaf astrometry-paper
+# project).  Small evidence figures that a README or issue embeds are the exception:
+# they go under docs/evidence/<topic>/ and are force-added (`git add -f`), e.g.
+# docs/evidence/satstar_*/.  Do not remove those tracked PNGs.
 *.png

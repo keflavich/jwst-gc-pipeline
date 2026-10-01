@@ -221,10 +221,11 @@ the detector-fixed component is weak.
 2. Run `patternfit.py` on the next-brightest stars (obs 116/069/126, 2–5×
    fainter) to measure where along the brightness sequence the inner halo
    becomes Poisson-limited. The scaling above predicts ≲10× fainter.
-3. For the very brightest stars: build a physical LW PSF model (JWST pupil +
-   NIRCam LW pupil stop, polychromatic, phase retrieval) with per-exposure
-   low-order pupil-shear/WFE modes fitted to each exposure's own wings. That is
-   the only route left that can predict the per-dither halo.
+3. ~~For the very brightest stars: a physical LW PSF model with per-exposure
+   low-order pupil/WFE modes.~~ Done in §7: low-order physics does **not**
+   predict the per-dither halo. What is left is either a full per-exposure
+   phase retrieval (unconstrained by the saturated core; see §7.4), or an
+   observing strategy that revisits the same field position.
 
 ## 6. Files
 
@@ -242,6 +243,10 @@ the detector-fixed component is weak.
 | `diagnostics.py` | distortion, dither-ratio, raw-ramp, integration and halo-index tests |
 | `make_figures.py` | figs 1–4 |
 | `make_evidence_figures.py` | figs 5–10 (also needs the other-star `trn_*` cutouts; see the brightness-sequence work) |
+| `physpsf.py` | physical-optics JWST + NIRCam LW PSF on the pattern grid, exact adjoint and forward derivatives (§7) |
+| `physfit.py` | pupil geometry fit and OPD phase retrieval against Q (§7) |
+| `physloo.py` | per-exposure physical modes fitted to the held-out LOO residual; injection and control tests (§7) |
+| `make_physfigs.py` | figures 11–12 (§7) |
 
 Reproduce (about 1 h on 4 cores). Run every step from this directory, with the
 package importable (`pip install -e .` from the repo root, or `PYTHONPATH`). The
@@ -264,3 +269,199 @@ mkdir -p figures && python make_figures.py figures
 came from a chain of warm-started runs (`QSTART` = the previous run's Q). The
 cold-start recipe above has not been rerun end to end, so small differences
 from the §3 table are possible.
+
+## 7. Physical-optics PSF with per-exposure pupil/wavefront modes (issue #994)
+
+Hypothesis tested: the dither-to-dither halo change of §3 is a low-dimensional
+physical change of the pupil or wavefront (LW pupil-stop shear or vignetting,
+low-order LW-internal WFE, segment WFE), so that a physical-optics model with a
+few parameters per exposure predicts it.
+
+**Answer: no.** Low-order per-exposure physics absorbs part of the change *on the
+diffraction spikes* (σ(χ) −5…−25% at r=80–120 px), but almost none of the change
+*between* the spikes (−1…−3%), which is where the inner-halo floor is. An
+injection test shows the fit would have found a low-order change of that size.
+
+### 7.1 Model (`physpsf.py`)
+
+- **Pupil.** STPSF pupils could not be downloaded, so the pupil is built
+  geometrically: 18 flat-topped hexagonal segments (1.32 m flat-to-flat,
+  7 mm gaps), a 0.74 m secondary obscuration, one strut along +V3 and two at
+  ±30° from −V3. An optional circular stop with shear, and a linear
+  transmission gradient, are also available. Edges are anti-aliased with a
+  signed distance. The OPD is a 256² map in metres, bilinearly interpolated
+  to each wavelength's samples. The interpolation is a sparse matrix, so its
+  transpose is exact.
+- **Sampling.** The pupil is sampled at u(m) = λ/(C·N)·J1⁻ᵀ·m, where J1 is the
+  GWCS d(V2,V3)/d(x,y) at the star. One FFT of size N=1152 then gives the
+  field *exactly on the pattern grid of `patternfit.py`*, with no resampling.
+- **Band and detector.** 12 wavelengths over 4.63–4.99 µm. The detector
+  response is a pixel box × Gaussian charge diffusion × IPC, band-limited to
+  0.45 cycles/px like Q. Sources are placed with exact Fourier shifts.
+- **Derivatives.** Exact adjoint for the gradient in OPD and amplitude
+  (finite-difference checked, `python physpsf.py`), and forward-mode
+  derivatives (`jvp`) for the mode images.
+- **Cost.** One polychromatic PSF takes 1.4 s on 4 cores.
+
+### 7.2 Static fit against Q (`physfit.py`)
+
+![static](../../../docs/evidence/satstar_poisson/fig11_physpsf_static.png)
+
+- **Geometry** (`physfit.py geometry`). Coordinate descent on the correlation
+  of high-passed Q with the high-passed geometric (OPD = 0) model, on the
+  spikes. Spikes are pure pupil diffraction, so they fix the geometry without
+  any wavefront. Result:
+  - pupil scale 0.985 (plate-scale × pupil-size product), rotation 0.0°,
+    anisotropy 1.000, strut width 0.12 m;
+  - the star is at q = (+2.6, −0.6) px from the catalogue position;
+  - σ_diffusion = 0.3 px.
+
+  The geometric model reproduces the spike structure: its correlation with Q's
+  15-px high-pass is 0.71 on the spikes and 0.62 between them. That includes
+  the characteristic pair of vertical spike lines at x ≈ −4 and +10 px (fig 11,
+  lower left; at first sight this looks like a binary, but it is not one).
+- **The halo between the spikes is not pupil diffraction.** At r = 50–150 px it
+  is 3–10× the geometric diffraction (fig 11, lower middle and right). It is
+  smooth: its fine-structure contrast is 17–23%, most of which is the
+  geometric diffraction pattern. So 70–90% of the light between the spikes,
+  which is exactly the component that changes from dither to dither, is an
+  extended scattered halo with a steep profile (∝ r^−3.3). A perfect-optics
+  pupil model does not contain it.
+- **OPD phase retrieval** (`physfit.py static`) tries to create that halo with
+  mid-frequency WFE. It fails:
+  - From any small random start, L-BFGS grows the OPD to 120–160 nm rms, i.e.
+    it buys the halo with fully developed speckle. Speckle then dominates the
+    residual: relative misfit 0.22–0.28 at r=25–120 px, against 0.14–0.32 for
+    the geometric model plus a smooth star-centred halo.
+  - Neither the gradient penalty nor a Gaussian prior (40–100 nm per node)
+    gives a physical solution.
+  - The core that would constrain the low orders is saturated
+    (r ≲ 30–60 px).
+
+  Because of this, the per-exposure tests below linearise about the geometric
+  pupil (OPD = 0). Q itself, from the other five dithers, carries the true
+  static PSF and scene.
+
+### 7.3 Per-exposure modes on the held-out dither (`physloo.py`)
+
+**Setup.** For each held-out dither k, the residual of the §3 LOO prediction,
+r_k = d_k − pred_k, is fitted as a sum of mode images. Each mode image is
+a_k·K_k·D[∂I/∂θ_j], evaluated at the dither's own distorted positions q_k (with
+its cubic distortion correction and PSF-width kernel). The fit is IRLS, jointly
+with a refit of the dither's smooth nuisance (pedestal, gradient, star-centred
+halo B-splines). The coefficients are fitted **on the held-out dither only**:
+a few dozen parameters against ~500 000 pixels, so this remains out of sample
+for everything static.
+
+**Mode families** (amplitudes as fitted; the physically sensible range was
+checked by injection):
+
+| family | modes | what it represents |
+|---|---|---|
+| `zern4` | 12 | Zernike n=2–4 WFE (defocus, astigmatism, coma, trefoil, spherical, …) |
+| `zern6` | 25 | Zernike n=2–6 |
+| `seg` | 54 | piston/tip/tilt of the 18 segments |
+| `ampz3` | 9 | pupil transmission Zernikes n=1–3: vignetting, apodisation, LW stop shear seen as transmission gradients |
+| `stop` | 3 | a hard circular stop at the pupil corners: radius and shear |
+| `geomd` | 5 | pupil magnification, rotation, strut width, segment size, spectral tilt |
+| `ALL` | 108 | everything together |
+
+**Results.** Robust σ(χ), clean pixels (no SAT/JUMP), bins in r [px]. "spk" is
+within 1.5° of a spike; the other bins are all azimuths. The baseline is the
+§3 LOO prediction with its nuisance refitted (it equals the §3 table, and for
+e1 it matches the k45 crop to ±0.3).
+
+| dither | model | 30–50 | 50–80 | 80–120 | 120–200 | 200–300 | spk 80–120 | spk 120–200 | spk 200–300 |
+|---|---|---|---|---|---|---|---|---|---|
+| e1 | baseline | 8.22 | 5.42 | 3.43 | 1.84 | 1.36 | 5.26 | 3.39 | 2.08 |
+| e1 | + ALL 108 | 7.54 | 5.43 | 3.38 | 1.83 | 1.36 | 5.13 | 3.08 | 2.04 |
+| e2 | baseline | 6.28 | 5.37 | 3.29 | 1.87 | 1.45 | 6.26 | 3.42 | 2.08 |
+| e2 | + ALL 108 | 5.97 | 5.28 | 3.19 | 1.83 | 1.44 | 4.71 | 3.03 | 2.01 |
+| e3 | baseline | 7.69 | 4.75 | 2.85 | 1.58 | 1.25 | 4.36 | 2.68 | 1.82 |
+| e3 | + ALL 108 | 7.04 | 4.70 | 2.80 | 1.57 | 1.24 | 4.13 | 2.55 | 1.79 |
+| e5 | baseline | 6.51 | 5.65 | 3.37 | 1.83 | 1.39 | 5.94 | 3.31 | 2.30 |
+| e5 | + ALL 108 | 6.99 | 5.51 | 3.25 | 1.81 | 1.39 | 5.02 | 2.96 | 2.21 |
+
+![modes](../../../docs/evidence/satstar_poisson/fig12_physpsf_modes.png)
+
+- **On the spikes the per-exposure WFE is real.** Zernike and segment modes
+  cut the on-spike σ(χ) by 4–25% at r=80–120 and by 5–11% at r=120–200, for
+  every dither. The spikes' fine structure (their radial fringes and width)
+  does change a little between exposures, in the way a few-nm low-order WFE
+  change predicts.
+- **Between the spikes, where the floor is, it is not.** At r = 50–80 and
+  80–120 px (all azimuths, dominated by the between-spike halo) the gain is
+  1–3%. The 30–50 bin moves by up to ±8%, but it is a thin, heavily flagged
+  ring next to the saturated core, where tens of free modes can also chase
+  core-edge residuals: e5 gets *worse* with all 108 modes.
+- **Families that do nothing** (<1% in every bin): pupil-transmission modes
+  (vignetting or LW-stop shear), hard-stop radius/shear, and pupil
+  magnification, rotation, strut and segment size and spectral tilt. A
+  sheared or vignetting LW pupil stop is therefore ruled out as the cause of
+  the ±20% halo change. Such a change would have to show up in the edge
+  diffraction, and it does not.
+- **Injection-recovery (dither 1).** A known perturbation was added to the
+  residual, with 0.55× the rms of the real on-spike residual: 15 nm rms
+  random segment piston, or 20 nm rms Zernike n≤4. It was rendered through a
+  "true" PSF whose static OPD differs from the fiducial one by a 30 nm-rms
+  random screen, so it is non-linear and mis-modelled on purpose. The
+  corresponding family removes it completely:
+  - Zernike: spike 80–120 goes 6.16 → 5.31, against 5.30 without injection;
+    spike 120–200 goes 3.89 → 3.10, against 3.10.
+  - Segment: spike 80–120 goes 5.30 → 5.12, against 5.10.
+
+  So the linearised physics is sensitive and robust to a wrong static
+  wavefront. The real between-spike change is simply not in its span.
+- **Controls** (e1, e5): the same families built on a pupil rotated by 15°,
+  i.e. physically shaped maps whose spikes do not line up with the star's, and
+  an empirical per-exposure detector-MTF polynomial (12 terms) applied to Q.
+  - On the spikes the rotated-pupil modes gain nothing: 5.27/5.96 against a
+    baseline of 5.26/5.94 at spike 80–120. So the on-spike gain of the real
+    modes is specific to this star's optics.
+  - Between the spikes they gain as much as the real modes: e5 50–80 goes to
+    5.57 (control) against 5.51 (real), and e5 80–120 to 3.34 against 3.25.
+    The 30–50 bin moves by similar amounts (e1: 7.90–7.98 control against
+    7.54–7.79 real). The between-spike "gain" is therefore the generic effect
+    of adding free λ/D-structured maps, not physics.
+  - The MTF polynomial gains nothing (≤1%).
+
+### 7.4 Conclusion
+
+The per-dither inner-halo change of §3 is not a low-order physical change of
+the pupil or wavefront:
+
+- neither Zernike WFE up to n=6, nor segment piston/tip/tilt;
+- nor LW pupil-stop shear or vignetting, nor changes of the radius or shear of a
+  rim stop (a stop-vs-no-stop column was not tested);
+- nor pupil magnification or rotation, nor a spectral tilt.
+
+These predict the small per-exposure change of the diffraction *spikes*, but
+not the between-spike halo that sets the floor. The physical-optics model shows
+why:
+
+- Between the spikes, 70–90% of the light at r = 3–10″ is **not diffraction by
+  the pupil** at all. It is a smooth scattered halo (∝ r^−3.3), 3–10× the
+  geometric diffraction.
+- It is this component that varies by −20…+8% between dithers, only in LW,
+  constant within an exposure.
+
+That points to wide-angle scatter inside the LW channel (a surface far from a
+pupil, or the detector or its substrate) rather than to a wavefront error.
+Wide-angle scatter can change with field position. A wavefront model with a few
+parameters cannot represent it, and a full per-exposure mid-frequency phase
+retrieval is not constrained, because the core is saturated and the halo carries
+almost no phase information (§7.2). A predictive model would need that
+scattered halo to be calibrated as a function of detector position, from the
+many bright LW stars in the program. Otherwise, the per-exposure halo stays a
+free, unpredictable component for the ≲10 brightest stars.
+
+Reproduce, in the working directory of §6, about 1.5 h on 4 cores:
+
+```
+python physfit.py weights
+python physfit.py geometry Q_q3.npy geo2                         # static geometry
+for k in 1 2 3 5; do OUT=g2 python physloo.py geo2.npz q3 $k zern4,zern6,seg,ampz3,stop,geomd > loo_g2_e$k.log; done
+OUT=inj INJECT=zern4:20 INJ_OPD=30 python physloo.py geo2.npz q3 1 zern4,seg    # injection test
+OUT=ctl CONTROL_ROT=15 MTFQ=Q_q3.npy python physloo.py geo2.npz q3 1 zern4,seg  # controls
+python make_physfigs.py geo2.npz figures loo_g2_e*.log
+```
