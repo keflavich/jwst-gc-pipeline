@@ -23,7 +23,8 @@ the smoothed background removed and share one linear stretch per row
 (+/-``--stretch`` sigma of the current residual), so a star subtracted only
 by the proposed run is a dark point in column 2, absent in column 4 and
 bright in column 5.  Markers: white = in both catalogs, green = proposed
-only, red = current only, yellow + = injected truth (seed > 0).
+only, red = current only, yellow + = injected truth (seed > 0), magenta x =
+hand-labelled emission structure (``emission_labels`` in fields.yaml).
 """
 import argparse
 import os
@@ -39,7 +40,7 @@ from scipy.spatial import cKDTree
 from jwst_gc_pipeline.photometry import reference_fields as RF
 from jwst_gc_pipeline.photometry.reference_fields import evaluate as EV
 
-C_BOTH, C_NEW, C_DROP, C_TRUE = 'white', 'lime', 'red', 'yellow'
+C_BOTH, C_NEW, C_DROP, C_TRUE, C_EMIS = 'white', 'lime', 'red', 'yellow', 'magenta'
 
 
 # ---------------------------------------------------------------------------
@@ -76,28 +77,30 @@ def match_catalogs(sc_a, sc_b, radius_as):
 
 
 def pick_zooms(x_new, y_new, x_drop, y_drop, box, zoom_pix, n):
-    """Up to ``n`` non-overlapping zoom centres (pixels) inside ``box`` =
+    """Up to ``n`` non-overlapping zoom centres (pixels) in ``box`` =
     (x0, x1, y0, y1), ranked by the number of catalog differences they hold.
-    The box centre fills in when there are fewer differences than zooms."""
+    Each zoom is centred on the mean position of the differences it holds (a
+    zoom near the box edge may extend past it).  The box centre fills in when
+    there are no differences."""
     x0, x1, y0, y1 = box
     h = zoom_pix / 2
-    gx = np.arange(x0 + h, x1 - h + 1, max(zoom_pix / 4, 1))
-    gy = np.arange(y0 + h, y1 - h + 1, max(zoom_pix / 4, 1))
-    if len(gx) == 0 or len(gy) == 0:
-        return [((x0 + x1) / 2, (y0 + y1) / 2)]
+    step = max(zoom_pix / 4, 1)
+    gx = np.arange(x0, x1 + 1, step)
+    gy = np.arange(y0, y1 + 1, step)
     px = np.r_[x_new, x_drop]
     py = np.r_[y_new, y_drop]
     cands = []
     for cx in gx:
         for cy in gy:
-            k = int(np.sum((np.abs(px - cx) < h) & (np.abs(py - cy) < h)))
-            cands.append((k, cx, cy))
-    cands.sort(key=lambda c: -c[0])
+            sel = (np.abs(px - cx) < h) & (np.abs(py - cy) < h)
+            if sel.any():
+                mx, my = px[sel].mean(), py[sel].mean()
+                cands.append((int(sel.sum()), np.hypot(mx - cx, my - cy), mx, my))
+    # most differences first; among equals, the window best centred on them
+    cands.sort(key=lambda c: (-c[0], c[1]))
     chosen = []
-    for k, cx, cy in cands:
+    for k, _, cx, cy in cands:
         if len(chosen) >= n:
-            break
-        if k == 0:
             break
         if all(max(abs(cx - a), abs(cy - b)) >= zoom_pix for a, b in chosen):
             chosen.append((cx, cy))
@@ -139,6 +142,9 @@ def _mark(ax, wcs, shape, sc, color, r, kind='o', lw=0.8, alpha=1.0):
         if kind == '+':
             ax.plot([xi - r, xi + r], [yi, yi], color=color, lw=lw, alpha=alpha)
             ax.plot([xi, xi], [yi - r, yi + r], color=color, lw=lw, alpha=alpha)
+        elif kind == 'x':
+            ax.plot([xi - r, xi + r], [yi - r, yi + r], color=color, lw=lw, alpha=alpha)
+            ax.plot([xi - r, xi + r], [yi + r, yi - r], color=color, lw=lw, alpha=alpha)
         elif kind == 's':
             ax.add_patch(Rectangle((xi - r, yi - r), 2 * r, 2 * r, fill=False,
                                    ec=color, lw=lw, alpha=alpha))
@@ -154,12 +160,13 @@ def _cut(img, wcs, center, size_pix):
 
 def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                    n_zoom=4, stretch=5.0, match_radius_as=None, box=None,
-                   truth=None, base_label='current', prop_label='proposed',
-                   extra_text=''):
+                   truth=None, emission=None, base_label='current',
+                   prop_label='proposed', extra_text=''):
     """Write the before/after figure of two runs (``load_run`` dicts).
 
     ``box`` = (x0, x1, y0, y1) on the base data mosaic's pixel grid (default:
-    the whole mosaic less 10 px); ``truth`` = injected positions (SkyCoord).
+    the whole mosaic less 10 px); ``truth`` = injected positions (SkyCoord);
+    ``emission`` = hand-labelled emission structures (SkyCoord).
     Returns a dict of the source counts inside the box.
     """
     import matplotlib
@@ -244,6 +251,9 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                            chr(ord('A') + i), color='cyan', fontsize=8, va='top')
             _mark(ax[0], dw, sh, drop_sc, C_DROP, r_mark, 's', 0.6)
             _mark(ax[2], dw, sh, new_sc, C_NEW, r_mark, 'o', 0.6)
+            if emission is not None:
+                for a in (ax[0], ax[2]):
+                    _mark(a, dw, sh, emission, C_EMIS, r_mark * 0.5, 'x', 0.8)
         else:
             _mark(ax[0], dw, sh, sb[in_p], C_BOTH, r_mark, 'o', 0.5, 0.6)
             _mark(ax[0], dw, sh, drop_sc, C_DROP, r_mark, 's', 1.0)
@@ -259,6 +269,9 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                 for a, w_, shp in ((ax[0], dw, sh), (ax[1], rbw, rb.shape),
                                    (ax[2], dw, sh), (ax[3], rpw, rp.shape)):
                     _mark(a, w_, shp, truth, C_TRUE, r_mark * 0.6, '+', 0.8)
+            if emission is not None:
+                for a, w_, shp in ((ax[0], dw, sh), (ax[2], dw, sh)):
+                    _mark(a, w_, shp, emission, C_EMIS, r_mark * 0.5, 'x', 1.0)
         ax[0].set_ylabel(f'{tag}  ({size * pixas:.1f}")', fontsize=8)
         if r == 0:
             for a, h in zip(ax, heads):
@@ -268,6 +281,7 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                f"proposed-only (green): {counts['n_new']}   "
                f"current-only (red): {counts['n_dropped']}   "
                f"{'injected (yellow +)   ' if truth is not None else ''}"
+               f"{'emission label (magenta x)   ' if emission is not None else ''}"
                f"(match {match_radius_as * 1000:.0f} mas; residual stretch "
                f"+/-{stretch:g} sigma of the current residual per row)")
     if extra_text:
@@ -286,7 +300,8 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
 # ---------------------------------------------------------------------------
 
 def _metrics_text(spec, variant, phase=None):
-    try_keys = ('n_sources', 'residual_excess', 'ring_ratio', 'r_on', 'r_off')
+    try_keys = ('n_sources', 'residual_excess', 'ring_ratio', 'r_on', 'r_off',
+                'labels_recovered', 'emission_labels_cataloged')
     try:
         m = EV.evaluate_clean(spec, variant, phase=phase)
     except FileNotFoundError:
@@ -324,6 +339,10 @@ def field_figure(name, variant, out_dir, *, base='main', seed=0, filt=None,
     if int(seed):
         t = Table.read(RF.injection_table_path(name, seed))
         truth = SkyCoord(t['ra'] * u.deg, t['dec'] * u.deg)
+    emission = None
+    if spec.get('emission_labels'):
+        ek = np.asarray(spec['emission_labels'], float)
+        emission = SkyCoord(ek[:, 0] * u.deg, ek[:, 1] * u.deg)
     text = ''
     if int(seed):
         mb = _completeness_text(spec, base, seed, bprod['phase'])
@@ -339,7 +358,7 @@ def field_figure(name, variant, out_dir, *, base='main', seed=0, filt=None,
     title = (f"{name} [{spec['environment']}] {filt} {bprod['phase']}, "
              f"seed {seed}: {base} vs {variant}")
     counts = compare_figure(b, v, out, title=title, filt=filt, box=box, truth=truth,
-                            base_label=base, prop_label=variant, extra_text=text, **kw)
+                            emission=emission, base_label=base, prop_label=variant, extra_text=text, **kw)
     print(f'{out}: {counts}')
     return out, counts
 

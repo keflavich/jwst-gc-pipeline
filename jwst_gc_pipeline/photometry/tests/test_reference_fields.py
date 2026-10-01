@@ -255,6 +255,11 @@ def test_figure_pick_zooms_ranks_and_separates():
         return np.all((np.abs(xs - c[0]) < 20) & (np.abs(ys - c[1]) < 20))
     assert holds(z[0], xn[:10], yn[:10])        # the bigger cluster first
     assert holds(z[1], xn[10:], yn[10:])
+    # each zoom is centred on the differences it holds, also at the box edge
+    assert np.hypot(z[0][0] - xn[:10].mean(), z[0][1] - yn[:10].mean()) < 1e-6
+    z = FG.pick_zooms(np.array([2.0]), np.array([158.0]), np.array([]), np.array([]),
+                      (0, 160, 0, 160), 40, 4)
+    assert z == [(2.0, 158.0)]
     assert FG.pick_zooms(np.array([]), np.array([]), np.array([]), np.array([]),
                          (0, 160, 0, 160), 40, 4) == [(80.0, 80.0)]
 
