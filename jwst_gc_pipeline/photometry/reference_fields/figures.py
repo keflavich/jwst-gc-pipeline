@@ -267,6 +267,7 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                f"{prop_label}: {counts['n_prop']}   "
                f"proposed-only (green): {counts['n_new']}   "
                f"current-only (red): {counts['n_dropped']}   "
+               f"{'injected (yellow +)   ' if truth is not None else ''}"
                f"(match {match_radius_as * 1000:.0f} mas; residual stretch "
                f"+/-{stretch:g} sigma of the current residual per row)")
     if extra_text:
@@ -294,6 +295,17 @@ def _metrics_text(spec, variant, phase=None):
                      for k in try_keys if k in m)
 
 
+def _completeness_text(spec, variant, seed, phase=None):
+    """Recovered/injected per S/N_true bin of injection run ``seed``."""
+    try:
+        m = EV.evaluate_injected(spec, variant, seed, phase=phase)
+    except FileNotFoundError:
+        return ''
+    comp = EV.completeness_by_bin(np.asarray(m['snr_true']), np.asarray(m['recovered']),
+                                  spec['snr_bins'])
+    return 'recovered by S/N_true ' + ' '.join(f'{b}:{k}/{n}' for b, (n, k, _) in comp.items())
+
+
 def field_figure(name, variant, out_dir, *, base='main', seed=0, filt=None,
                  phase=None, **kw):
     """Figure of one reference field: run ``base`` vs run ``variant`` at
@@ -313,13 +325,18 @@ def field_figure(name, variant, out_dir, *, base='main', seed=0, filt=None,
         t = Table.read(RF.injection_table_path(name, seed))
         truth = SkyCoord(t['ra'] * u.deg, t['dec'] * u.deg)
     text = ''
-    if int(seed) == 0:
+    if int(seed):
+        mb = _completeness_text(spec, base, seed, bprod['phase'])
+        mv = _completeness_text(spec, variant, seed, bprod['phase'])
+        if mb or mv:
+            text = f'{base}: {mb}\n{variant}: {mv}'
+    else:
         mb = _metrics_text(spec, base, bprod['phase'])
         mv = _metrics_text(spec, variant, bprod['phase'])
         if mb or mv:
             text = f'{base}: {mb}\n{variant}: {mv}'
     out = os.path.join(out_dir, f'{name}_{filt.lower()}_{bprod["phase"]}_s{seed}.png')
-    title = (f"{name} ({spec['environment']}) {filt} {bprod['phase']}, "
+    title = (f"{name} [{spec['environment']}] {filt} {bprod['phase']}, "
              f"seed {seed}: {base} vs {variant}")
     counts = compare_figure(b, v, out, title=title, filt=filt, box=box, truth=truth,
                             base_label=base, prop_label=variant, extra_text=text, **kw)
