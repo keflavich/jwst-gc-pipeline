@@ -1439,6 +1439,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm_qfit_max=0.6,
                               nmatch_confirm_maxpos_mas=0.0,
                               ext_prom_min=0.0,
+                              ext_prom_exempt_qfit=0.0,
+                              ext_prom_exempt_snr=30.0,
+                              ext_prom_exempt_prom_min=2.0,
                               sky_clean_keep=True,
                               sky_clean_max_sky_snr=2.0,
                               sky_clean_prom_min=5.0,
@@ -1990,13 +1993,40 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # subtracted saturated cores (broad => low prominence) are never dropped.
     # OFF by default (ext_prom_min<=0); the driver auto-enables it (=3.0) only for
     # extended-emission NIRCam fields, so star-dominated fields are byte-identical.
+    #
+    # Exemption (ext_prom_exempt_qfit > 0): a source that is BOTH a tight PSF
+    # fit (qfit <= ext_prom_exempt_qfit) AND bright (merged S/N >=
+    # ext_prom_exempt_snr) passes at the lower prominence ext_prom_exempt_prom_min.
+    # On a nebular field the 4-10 px annulus MAD is set by emission structure,
+    # so a real bright star reads prominence 2-3: W51 F187N injected stars at
+    # S/N_true 52 and 76 (qfit 0.17, 0.09) sat at prominence 2.55 / 2.71 and
+    # were deleted.  Chance-corrected continuum-match purity of qfit <= 0.2,
+    # prominence 2-3 sources (W51 m6): F187N vs F210M ~1.0 at S/N_prop >= 30
+    # (n=33); F480M vs F410M, the band the floor was tuned on, 0.94-1.00 at
+    # S/N_prop >= 30 (n=583) but 0.38-0.51 at S/N_prop 20-30 (n=40), hence
+    # the S/N 30 requirement.  The emission bumps this gate targets sit at
+    # prominence ~0.9, below the exempt floor.
     if ext_prom_min > 0 and min_prominence <= 0:
         _prom_keep = np.isfinite(prominence) & (prominence >= float(ext_prom_min))
+        _n_exempt = 0
+        if ext_prom_exempt_qfit > 0:
+            with np.errstate(invalid='ignore'):
+                _exempt = (np.isfinite(prominence)
+                           & (prominence >= float(ext_prom_exempt_prom_min))
+                           & np.isfinite(qf) & (qf <= float(ext_prom_exempt_qfit))
+                           & np.isfinite(snr_floor)
+                           & (snr_floor >= float(ext_prom_exempt_snr)))
+            _n_exempt = int(np.sum(keep & _exempt & ~_prom_keep))
+            _prom_keep = _prom_keep | _exempt
         _n_prom = int(np.sum(keep & ~_prom_keep))
         keep = keep & _prom_keep
+        _exempt_msg = (f"; {_n_exempt} kept at prominence >= "
+                       f"{ext_prom_exempt_prom_min:g} with qfit <= "
+                       f"{ext_prom_exempt_qfit:g} and S/N >= {ext_prom_exempt_snr:g}"
+                       if ext_prom_exempt_qfit > 0 else "")
         print(f"[{label}] extended-emission prominence gate: dropped {_n_prom} "
-              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)",
-              flush=True)
+              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)"
+              f"{_exempt_msg}", flush=True)
 
     # model==catalog invariant (user 2026-06-27): every saturated star that was
     # SUBTRACTED into the per-frame model (replaced_saturated) MUST appear in
@@ -8422,6 +8452,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     nmatch_confirm_strong=int(mopt(opts_phase, 'manual_ext_nmatch_confirm_strong')),
                     low_fit_quality_qfit=float(mopt(opts_phase, 'manual_ext_low_fit_quality_qfit')),
                     ext_prom_min=_ext_prom_min,
+                    ext_prom_exempt_qfit=float(mopt(opts_phase, 'manual_ext_prom_exempt_qfit')),
+                    ext_prom_exempt_snr=float(mopt(opts_phase, 'manual_ext_prom_exempt_snr')),
+                    ext_prom_exempt_prom_min=float(mopt(opts_phase, 'manual_ext_prom_exempt_prom_min')),
                     sky_clean_keep=bool(mopt(opts_phase, 'manual_sky_clean_keep')),
                     sky_clean_max_sky_snr=float(mopt(
                         opts_phase, 'manual_sky_clean_max_sky_snr')),
