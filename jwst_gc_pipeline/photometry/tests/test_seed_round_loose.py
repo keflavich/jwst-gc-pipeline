@@ -15,7 +15,10 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
+from types import SimpleNamespace
+
 from jwst_gc_pipeline.photometry.cataloging import (_annulus_prominence,
+                                                   _auto_seed_round_loose_max,
                                                    _build_i2d_augmented_seed)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
@@ -100,5 +103,18 @@ def test_loose_roundness_admits_star_not_knot(tmp_path, loose, star_in):
 
 def test_pipeline_default():
     assert MANUAL_DEFAULTS['manual_seed_round_max'] == 0.5
-    assert MANUAL_DEFAULTS['manual_seed_round_loose_max'] == 0.8
+    assert MANUAL_DEFAULTS['manual_seed_round_loose_max'] == -1.0      # AUTO
     assert MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'] == 5.0
+
+
+def test_auto_loose_off_on_extended_emission():
+    # elongated nebular knots pass the prominence test on W51-like fields, so
+    # AUTO keeps only the tight cut there; an explicit value is used verbatim
+    star = SimpleNamespace(target='brick', extended_emission=None)
+    nebula = SimpleNamespace(target='w51', extended_emission=None)
+    assert _auto_seed_round_loose_max(-1, star) == 0.8
+    assert _auto_seed_round_loose_max(-1, nebula) == 0.0
+    assert _auto_seed_round_loose_max(0.8, nebula) == 0.8
+    assert _auto_seed_round_loose_max(0.0, star) == 0.0
+    forced = SimpleNamespace(target='brick', extended_emission=True)
+    assert _auto_seed_round_loose_max(-1, forced) == 0.0
