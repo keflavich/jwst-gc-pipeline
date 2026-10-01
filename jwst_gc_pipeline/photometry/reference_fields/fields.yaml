@@ -15,7 +15,7 @@ production:                    # inputs of make_injections.py (relative to the t
   satstar: 'catalogs/{filt}_consolidated_satstar_catalog.fits'
 
 # injection (frozen tables under injections/)
-seeds: [1, 2]
+seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]   # 24 stars each: ~60 per S/N bin per field
 n_inject: 24
 snr_range: [5, 80]             # log-uniform ERR-based S/N_true, primary band
 min_sep_pix: 12

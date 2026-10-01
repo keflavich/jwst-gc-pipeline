@@ -8,6 +8,7 @@ on a machine with the data and a finished run.  Select the code under test
 with ``JWST_GC_REFFIELD_VARIANT`` (default ``main``).
 """
 import os
+import subprocess
 
 import numpy as np
 import pytest
@@ -100,6 +101,47 @@ def test_sbatch_command_is_dev_run():
     assert not any(c.startswith('--partition') for c in
                    sbatch_command(_FIELDS[name], 'x', 0, '/wt', cpus=4,
                                   mem='24gb', walltime='01:00:00'))
+    # the job records its provenance before the pipeline starts
+    assert 'write_provenance' in wrap
+    assert wrap.index('write_provenance') < wrap.index('crowdsource_catalogs_long ')
+
+
+def _git(root, *args):
+    subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True)
+
+
+def test_provenance_and_code_differences(tmp_path):
+    """A run records the commit it ran; only pipeline-code changes (not
+    scoring, thresholds or tests) make it stale."""
+    from jwst_gc_pipeline.photometry.reference_fields import run as RUN
+    repo = tmp_path / 'repo'
+    rf = repo / 'jwst_gc_pipeline' / 'photometry' / 'reference_fields'
+    rf.mkdir(parents=True)
+    (repo / 'jwst_gc_pipeline' / 'photometry' / 'tests').mkdir()
+    for f in ('cataloging.py', 'reference_fields/fields.yaml',
+              'reference_fields/evaluate.py', 'tests/test_x.py'):
+        (repo / 'jwst_gc_pipeline' / 'photometry' / f).write_text('a\n')
+    _git(repo, 'init', '-q')
+    _git(repo, 'add', '.')
+    _git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'x')
+
+    rdir = tmp_path / 'ref_x_v_s0'
+    rec = RUN.write_provenance(str(rdir), str(repo), ['python', '-m', 'x'])
+    assert RUN.read_provenance(str(rdir)) == rec
+    assert rec['dirty'] is False and rec['argv'] == ['python', '-m', 'x']
+    assert RUN.read_provenance(str(tmp_path / 'absent')) is None
+    assert RUN.code_differences(rec['commit'], str(repo)) == []
+
+    for f in ('reference_fields/fields.yaml', 'reference_fields/evaluate.py',
+              'tests/test_x.py'):
+        (repo / 'jwst_gc_pipeline' / 'photometry' / f).write_text('b\n')
+    assert RUN.code_differences(rec['commit'], str(repo)) == []
+    (repo / 'jwst_gc_pipeline' / 'photometry' / 'cataloging.py').write_text('b\n')
+    assert RUN.code_differences(rec['commit'], str(repo)) == [
+        'jwst_gc_pipeline/photometry/cataloging.py']
+    assert RUN.write_provenance(str(rdir), str(repo), [])['dirty'] is True
+    with pytest.raises(subprocess.CalledProcessError):
+        RUN.code_differences('0' * 40, str(repo))
 
 
 # ---------------------------------------------------------------------------
@@ -315,20 +357,48 @@ def test_figure_pick_zooms_ranks_and_separates():
 # the reference tests
 # ---------------------------------------------------------------------------
 
-_VARIANT = os.environ.get('JWST_GC_REFFIELD_VARIANT', 'main')
+#: Opt-in: the variant label of finished reference runs of THIS checkout's
+#: code (``reference_fields.run --variant <label>``).  Unset = skipped.
+_VARIANT = os.environ.get('JWST_GC_REFFIELD_VARIANT', '')
 
 
+def _run_problems(spec, variant):
+    """Why the runs of ``variant`` cannot be scored against this checkout
+    (empty list = every run exists and ran this checkout's pipeline code)."""
+    from jwst_gc_pipeline.photometry.reference_fields import run as RUN
+    problems = []
+    for seed in [0] + list(spec['seeds']):
+        rdir = RF.run_dir(spec, variant, seed)
+        prov = RUN.read_provenance(rdir)
+        if prov is None:
+            problems.append(f'seed {seed}: no run, or no {RUN.PROVENANCE}, at {rdir}')
+            continue
+        if prov['dirty']:
+            problems.append(f'seed {seed}: ran with uncommitted pipeline changes')
+        try:
+            diff = RUN.code_differences(prov['commit'])
+        except subprocess.CalledProcessError:
+            problems.append(f"seed {seed}: run commit {prov['commit'][:10]} unknown here")
+            continue
+        if diff:
+            problems.append(f"seed {seed}: ran {prov['commit'][:10]}, whose pipeline "
+                            f"code differs from this checkout ({', '.join(diff[:4])})")
+    return problems
+
+
+@pytest.mark.skipif(not _VARIANT, reason='opt-in: set JWST_GC_REFFIELD_VARIANT to '
+                    'the label of finished reference runs of this checkout')
 @pytest.mark.parametrize('name', sorted(_FIELDS))
 def test_reference_field_passes(name):
-    """The run of the code under test passes the field's fixed thresholds."""
+    """The runs of the code under test pass the field's fixed thresholds.
+
+    Every run (clean + each seed) must exist and must have run this
+    checkout's pipeline code; a missing or stale run fails the test."""
     spec = _FIELDS[name]
-    if not spec['thresholds']:
-        pytest.skip(f'{name}: no thresholds calibrated yet')
-    rdir = RF.run_dir(spec, _VARIANT, 0)
-    if not os.path.isdir(os.path.join(rdir, 'catalogs')):
-        pytest.skip(f'{name}: no {_VARIANT} run at {rdir}')
+    assert spec['thresholds'], f'{name}: no thresholds'
+    problems = _run_problems(spec, _VARIANT)
+    assert not problems, problems
     res = EV.evaluate_field(spec, _VARIANT)
-    if 'clean_missing' in res or 'injected_missing' in res:
-        pytest.skip(f"{name}: incomplete {_VARIANT} run "
-                    f"({res.get('clean_missing') or res.get('injected_missing')})")
+    assert 'clean_missing' not in res and 'injected_missing' not in res, (
+        res.get('clean_missing'), res.get('injected_missing'))
     assert EV.check(res, spec['thresholds']) == []

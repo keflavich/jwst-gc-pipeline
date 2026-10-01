@@ -40,9 +40,11 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy import units as u
 
-#: Half-size of the injected PSF stamp (pixels).  The fitting grids are
-#: fovp101 at oversampling 2, i.e. ~25 detector pixels half-width.
-STAMP_HALF = 25
+#: Half-size of the injected PSF stamp (detector pixels).  The fitting grids
+#: are fovp101: 101 detector pixels across (202 grid pixels at oversampling 2),
+#: so a half-width of 50 holds the whole grid; a 51x51 stamp (half-width 25)
+#: holds 97.4% of an F182M grid PSF's flux.
+STAMP_HALF = 50
 
 
 def flux_column(filtername):
