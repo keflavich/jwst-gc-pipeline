@@ -4393,7 +4393,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help="With --manual-ext-star-prom-min > 0, also keep a source whose "
                          "neighbour-robust prominence (25th-percentile annulus floor, "
                          "lower-half MAD) is >= this; neighbours' PSF wings inflate the "
-                         "plain annulus MAD in crowded fields.  0 = off (default 8).")
+                         "plain annulus MAD in crowded fields.  < 0 (default) = AUTO: 8 "
+                         "on star-dominated fields, off on extended-emission targets, "
+                         "where the 25th-percentile floor reads the dark sides of a "
+                         "filament; 0 = off.")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")

@@ -1576,7 +1576,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # 0.24 and 0.53 for prominence >= 5 alone.  The prominence_robust 6-8 band
     # has purity 0.30-0.37 in both fields (0.43 at 8-10 in Sgr B2), so a
     # threshold of 6 admits more emission than stars there; it rescues ~6 more
-    # crowded faint stars per 124 in the superdense field.
+    # crowded faint stars per 124 in the superdense field.  The pipeline turns
+    # the robust branch off on extended-emission targets
+    # (_auto_star_prom_robust_min), where it admits points along filaments.
     _peak_branch = np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)
     if star_prom_min > 0:
         _has_prom = np.isfinite(prominence)
@@ -1910,6 +1912,28 @@ def _is_extended_emission(options):
     if _opt is not None:
         return bool(_opt)
     return str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
+
+
+def _auto_star_prom_robust_min(value, options):
+    """Resolve ``--manual-ext-star-prom-robust-min``.
+
+    ``value < 0`` (the default) is AUTO: 8 on star-dominated fields and 0 (the
+    neighbour-robust branch off) on an extended-emission target
+    (:func:`_is_extended_emission`); ``value >= 0`` is used verbatim.
+
+    The branch exists for crowding: neighbours' PSF wings raise the annulus MAD
+    and the 25th-percentile floor and lower-half MAD stay near the inter-star
+    sky.  On a narrow nebular filament the same statistics read the dark sides
+    of the filament, so every point along its ridge is prominent.  In the W51
+    reference field (F187N) the branch admitted three fits 2.6 px apart along a
+    filament that shows the same shape in F162M and F140M and has no F360M point
+    source, plus two compact nebular knots, all at prominence 3.3-4.8 and
+    prominence_robust 8.3-14.
+    """
+    value = float(value)
+    if value >= 0:
+        return value
+    return 0.0 if _is_extended_emission(options) else 8.0
 
 
 def _resolve_each_suffix(options, filtername):
@@ -8211,7 +8235,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
                     star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
-                    star_prom_robust_min=float(mopt(opts_phase, 'manual_ext_star_prom_robust_min')),
+                    star_prom_robust_min=_auto_star_prom_robust_min(
+                        mopt(opts_phase, 'manual_ext_star_prom_robust_min'), opts_phase),
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
