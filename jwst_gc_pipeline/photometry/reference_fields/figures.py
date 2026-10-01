@@ -16,7 +16,7 @@
 
 Each figure has an overview row (the whole evaluated box: data with the zoom
 boxes, both residuals, their difference) and one row per zoom of
-``--zoom-arcsec`` (default 2.5") on the places where the two catalogs differ
+``--zoom-arcsec`` (default 1.2") on the places where the two catalogs differ
 most.  Columns: data + current catalog | current residual | data + proposed
 catalog | proposed residual | current - proposed residual.  Residuals have
 the smoothed background removed and share one linear stretch per row
@@ -152,7 +152,7 @@ def _cut(img, wcs, center, size_pix):
     return c.data, c.wcs
 
 
-def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=2.5,
+def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                    n_zoom=4, stretch=5.0, match_radius_as=None, box=None,
                    truth=None, base_label='current', prop_label='proposed',
                    extra_text=''):
@@ -214,7 +214,17 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=2.5,
         rb, rbw = _cut(base['res'], base['rwcs'], cen, size)
         rp, rpw = _cut(prop['res'], prop['rwcs'], cen, size)
         rd = rb - rp if rb.shape == rp.shape else np.full(rb.shape, np.nan)
-        lo, hi = np.nanpercentile(d, [1, 99.7]) if np.isfinite(d).any() else (0, 1)
+        # data stretch from the zoom's sky: median - 3 sigma to median + 40
+        # sigma (robust), so the noise is grey and faint stars visible; a
+        # bright star in one corner of the zoom saturates instead of setting
+        # a stretch under which the faint stars are black
+        if np.isfinite(d).any():
+            _med, _sd = np.nanmedian(d), robust_sigma(d)
+            lo = _med - 3 * _sd
+            hi = min(np.nanpercentile(d, 99.7), _med + 40 * _sd)
+            hi = hi if hi > lo else lo + 1
+        else:
+            lo, hi = 0, 1
         sig = robust_sigma(rb)
         ax = axes[r]
         _show(ax[0], d, lo, hi, 'asinh')
@@ -327,7 +337,7 @@ def main(argv=None):
     p.add_argument('--base-dir', help='explicit current run dir (with --variant-dir)')
     p.add_argument('--variant-dir', help='explicit proposed run dir')
     p.add_argument('--phase', default=None)
-    p.add_argument('--zoom-arcsec', type=float, default=2.5)
+    p.add_argument('--zoom-arcsec', type=float, default=1.2)
     p.add_argument('--n-zoom', type=int, default=4)
     p.add_argument('--stretch', type=float, default=5.0)
     p.add_argument('--out', required=True,
