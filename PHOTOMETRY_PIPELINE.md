@@ -294,7 +294,7 @@ for a plain single-filter NIRCam field with no tuning flags.
 | **vetting** | qfit_max | 0.2 |
 | | peak-over-bkg | 20 (and prominence ≥ 4.0 where measured) |
 | | star-prominence keep | 7.0 (neighbour-robust prominence branch off) |
-| | local-S/N min | 5.0 |
+| | local-S/N min | 5.0 (on flux / flux_err_prop, the merged-flux S/N) |
 | | bright-isolated keep (snr / qfit) | ≥20 / <0.4 |
 | | prominence gate | 0 (off; MIRI only) |
 | **cross-band** | seed dedup / min-filters / snr / qfit | 30 mas / 2 / 5.0 / 0.2 |
@@ -339,6 +339,7 @@ still run after m6.
 | `--manual-ext-star-prom-robust-min` | 0.0 (off; −1 = AUTO) | 0 | 0 | 0 |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | (robust branch off) | (robust branch off) | (robust branch off) |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
+| `--manual-ext-snr-floor-per-frame` (`manual_ext_snr_floor_propagated`) | `True` | on | on | on |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
 | `--manual-ext-qfit-recover-max` | 0.2 | 0.2 (= qfit_max ⇒ **no-op**) | set 0.5 to enable | |
@@ -506,6 +507,7 @@ control is the default.
 | `--manual-ext-star-prom-robust-min` | 0 (off) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; −1 = AUTO (8 on star-dominated fields, off on extended-emission targets) |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
+| `--manual-ext-snr-floor-per-frame` | (propagated) | put the vetting S/N floors on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch) |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
 | `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |
