@@ -1374,6 +1374,7 @@ def _emission_keep_miri(prominence, min_prominence):
 
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
+                              star_prom_min=0.0,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
@@ -1401,6 +1402,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         OR (flags in keep_flags)                  # central-saturation real star
         OR (peak_SB > peak_over_bkg * local_bkg)  # bright real star
     AND (local_snr >= local_snr_min where available)
+    With ``star_prom_min > 0`` the peak_SB branch becomes
+    ``prominence >= star_prom_min`` wherever the data-i2d prominence is
+    measured (peak_SB stays the test where it is not).
     AND (not model_overshoot, if that column exists and drop_overshoot).
 
     SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
@@ -1537,10 +1541,27 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         & np.isfinite(qf) & (qf < qfit_high_keep_max)
         & (gsz <= 1)
     )
+    # BRIGHT-STAR branch.  peak_SB > peak_over_bkg * local_bkg needs
+    # local_bkg > 0, but local_bkg is fit on BACKGROUND-SUBTRACTED frames, so
+    # it scatters about zero and its sign decides the branch (W51 F187N m6:
+    # local_bkg > 0 for 61% of S/N 5-8 sources).  On continuum-confirmed
+    # F187N labels (a Pa-alpha knot has no F182M/F210M counterpart) the branch
+    # does not separate stars from emission: in W51 its admitted and rejected
+    # S/N 5-17 qfit-failing sources have the same purity (0.45 vs 0.48).
+    # star_prom_min > 0 replaces it with the same-image prominence (rise above
+    # the local annulus, in annulus-MAD units), which does separate them
+    # (prominence >= 5: 0.67 vs 0.24 in W51, 0.89 vs 0.52 in Sgr B2).
+    # Sources without a measured prominence (no data_i2d, within 10 px of the
+    # i2d edge) keep the peak_SB test.
+    _peak_branch = np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)
+    if star_prom_min > 0:
+        _has_prom = np.isfinite(prominence)
+        _peak_branch = np.where(_has_prom, prominence >= float(star_prom_min),
+                                _peak_branch)
     star_like = (
         (qf <= qfit_max)
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
-        | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
+        | _peak_branch
         | bright_isolated
     )
     # RECOVER tier (opt-in: qfit_recover_max > qfit_max; NIRCam only).  A real
@@ -1820,7 +1841,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     _struct_msg = (f", struct-prune dropped {n_struct} @x={struct_x},y={struct_y}"
                    if (struct_x or struct_y) else "")
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
-          f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
+          f"(qfit<={qfit_max}, flags in {keep_flags}, "
+          f"{f'prominence>={star_prom_min:g}' if star_prom_min > 0 else f'peakSB>{peak_over_bkg}x bkg'}, "
           f"snr>={local_snr_min}{_struct_msg})",
           flush=True)
     return t[keep]
@@ -8162,6 +8184,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
+                    star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
