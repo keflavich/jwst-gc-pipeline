@@ -41,6 +41,14 @@ MANUAL_DEFAULTS = {
     'manual_iter2_local_snr': 3.0,     # residual / bg-subtracted passes
     # -- extended-emission vetting (_filter_extended_emission)
     'manual_ext_qfit_max': 0.2,
+    # Noise term of the star_like qfit gate: keep qfit <= sqrt(qfit_max^2 +
+    # (k/S/N)^2).  qfit = sum|resid|/flux of a PERFECT PSF fit is ~c/(S/N)
+    # from pixel noise alone (c ~ 3.4 median, ~4.3 at the 90th percentile for
+    # Brick F182M dark-sky stars at S/N 5-10, where qfit played no part in
+    # their selection), so a flat 0.2 is reachable only at S/N >~ 17.  The
+    # term lets a faint star pass when its qfit is what noise gives; sources
+    # admitted by it must still clear manual_ext_local_snr_min.  0 = off.
+    'manual_ext_qfit_snr_k': 5.0,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_local_snr_min': 5.0,

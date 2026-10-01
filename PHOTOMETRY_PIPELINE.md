@@ -238,10 +238,15 @@ the merged catalog is vetted by `_filter_extended_emission`. NIRCam keeps a
 source if it is **star-like**
 
 ```
-star_like = (qfit ≤ 0.2) OR (flags in keep_flags) OR (peakSB > 20 × local_bkg)
-            OR bright_isolated
+star_like = (qfit ≤ sqrt(0.2² + (5/snr)²)) OR (flags in keep_flags)
+            OR (peakSB > 20 × local_bkg) OR bright_isolated
 bright_isolated = (snr ≥ 20) AND (qfit < 0.4) AND (group_size ≤ 1)
 ```
+
+The `5/snr` term (`manual_ext_qfit_snr_k`) is the pixel-noise part of qfit: a
+perfect PSF fit has qfit = Σ|resid|/flux ≈ 3.4/snr, so the flat 0.2 alone
+rejects every real star fainter than S/N ≈ 17. `--manual-ext-qfit-snr-k=0`
+restores the flat cut.
 
 **and** it clears the local-S/N floor (`local_snr_min = 5`) — **or** it is
 qfit-confident (`qfit ≤ manual_ext_qfit_max`, 0.2), which is kept regardless of S/N
@@ -284,7 +289,7 @@ for a plain single-filter NIRCam field with no tuning flags.
 | | max group size | unlimited |
 | **post-fit** | overshoot ratio / action | 1.2 / refit |
 | | negative-flux | banned |
-| **vetting** | qfit_max | 0.2 |
+| **vetting** | qfit_max / noise term k | 0.2 / 5.0 (qfit ≤ sqrt(0.2² + (5/S/N)²)) |
 | | peak-over-bkg | 20 |
 | | local-S/N min | 5.0 |
 | | bright-isolated keep (snr / qfit) | ≥20 / <0.4 |
@@ -325,6 +330,7 @@ still run after m6.
 | `--manual-struct-noise-y` (`struct_y`) | 0.0 | 0.0 (off) | **2.0** (auto) | **8.0** all phases |
 | `--manual-coarse-bg-box` (`coarse_bg_box`) | 0 | 0 (off) | 0 | **51** m12–m4, 0 m5–m6 |
 | `--manual-ext-qfit-max` | 0.2 | 0.2 | 0.2 | **0.4** |
+| `--manual-ext-qfit-snr-k` | 5.0 | 5.0 | 5.0 | (unused: MIRI vets on prominence) |
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
@@ -487,6 +493,7 @@ control is the default.
 | `--manual-overshoot-action` | refit | `flag` \| `drop` \| `refit` (forced photometry at seed) |
 | `--manual-iter2-local-snr` | 3.0 | local-S/N cut for residual-seeded passes |
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
+| `--manual-ext-qfit-snr-k` | 5.0 | …widened by the pixel-noise term: qfit ≤ sqrt(qfit_max² + (k/S/N)²); 0 = flat cut |
 | `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |

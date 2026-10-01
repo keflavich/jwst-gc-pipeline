@@ -4365,6 +4365,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-qfit-max", dest="manual_ext_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_max'],
                     help="Extended-emission vetting: keep sources with qfit <= this (default 0.2).")
+    parser.add_option("--manual-ext-qfit-snr-k", dest="manual_ext_qfit_snr_k",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_snr_k'],
+                    help="Pixel-noise term of the vetting qfit gate: star-like "
+                         "if qfit <= sqrt(qfit_max^2 + (k/S/N)^2) (default 5; a "
+                         "perfect PSF fit has qfit ~3.4/S/N).  Sources admitted by "
+                         "the term must clear --manual-ext-local-snr-min.  0 = the "
+                         "flat qfit <= --manual-ext-qfit-max cut.")
     parser.add_option("--manual-ext-prom-min", dest="manual_ext_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_prom_min'],
                     help="Extended-emission NIRCam vetting: HARD prominence floor on "
