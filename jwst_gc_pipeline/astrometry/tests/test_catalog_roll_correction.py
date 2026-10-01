@@ -165,6 +165,29 @@ def test_correct_catalog_end_to_end(tmp_path, treasury_models):
     assert res['columns'][0]['roundtrip_mas'] < 0.01
 
 
+def test_rows_beyond_footprint_reach_left_unrotated(tmp_path, treasury_models):
+    """A row far outside the pointing (a satstar imported from another
+    observation, gc2211 o028 F277W) keeps its input position."""
+    ra, dec = _grid(5)
+    far_ra, far_dec = _untangent(np.array([0.0]), np.array([1100 / 206264.806]), RA0, DEC0)
+    ra = np.concatenate([ra, far_ra, [np.nan]])
+    dec = np.concatenate([dec, far_dec, [np.nan]])
+    src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'
+    _write_perband(src, ra, dec)
+    out = tmp_path / 'out' / src.name
+    res = crc.correct_catalog(str(src), str(out), 'gc-treasury', treasury_models)
+    d = fits.getdata(out)
+    assert d['skycoord.ra'][-2] == ra[-2] and d['skycoord.dec'][-2] == dec[-2]
+    assert res['columns'][0]['n_beyond_reach'] == 1
+    rmax = 150 * np.sqrt(2)
+    assert res['columns'][0]['max_disp_mas'] == pytest.approx(rmax * 20 / 206264.806 * 1e3, rel=1e-4)
+    assert res['columns'][0]['roundtrip_mas'] < 0.01
+    # a row just outside the footprint (within the margin) is still rotated
+    model = crc.PointingModel([_visit(20.0)])
+    near_ra, near_dec = _untangent(np.array([0.0]), np.array([260 / 206264.806]), RA0, DEC0)
+    assert model.within_reach(near_ra, near_dec)[0]
+
+
 def test_refusals(tmp_path, treasury_models):
     ra, dec = _grid(5)
     src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'

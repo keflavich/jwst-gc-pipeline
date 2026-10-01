@@ -74,6 +74,8 @@ __all__ = ['VisitRoll', 'PointingModel', 'classify_catalog', 'find_position_pair
            'enumerate_field', 'main']
 
 DEFAULT_TAG = 'v1_dataqa346'
+# rows farther than this beyond a pointing's footprint reach are left unrotated
+REACH_MARGIN_ARCSEC = 120.0
 OUT_SUBDIR = 'catalogs_rollcorr'
 MARKER = 'ROLLCCAT'
 MIRI_FILTERS = {'f560w', 'f770w', 'f1000w', 'f1065c', 'f1130w', 'f1140c', 'f1280w',
@@ -171,6 +173,27 @@ class PointingModel:
                 px, py = _tangent(poly[:, 0], poly[:, 1], ra0, dec0)
                 cov[i] |= Path(np.column_stack([px, py])).contains_points(pts)
         return cov
+
+    def within_reach(self, ra, dec, margin_arcsec=REACH_MARGIN_ARCSEC):
+        """Bool mask: rows within ``margin_arcsec`` of some visit's footprint reach.
+
+        A visit's reach is the largest pivot-to-vertex distance of its frame
+        footprints.  A row beyond every visit's reach + margin was not measured
+        in this pointing (e.g. a satstar row imported from another observation)
+        and must not be rotated with this pointing's roll.  Visits without
+        footprints place no limit.
+        """
+        ra = np.asarray(ra, float)
+        dec = np.asarray(dec, float)
+        inside = np.zeros(len(ra), dtype=bool)
+        for v in self.visits:
+            if not v.footprints:
+                return np.ones(len(ra), dtype=bool)
+            reach = max(np.max(np.hypot(*_tangent(p[:, 0], p[:, 1], v.pivot_ra, v.pivot_dec)))
+                        for p in v.footprints) * 206264.806
+            r = np.hypot(*_tangent(ra, dec, v.pivot_ra, v.pivot_dec)) * 206264.806
+            inside |= r <= reach + margin_arcsec
+        return inside
 
     def apply(self, ra, dec):
         ra = np.asarray(ra, float)
@@ -805,6 +828,7 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
             if units.get(c) not in ('', 'deg', 'degree', 'degrees'):
                 raise RollCatalogError(f"{c}: unit {units.get(c)!r} is not degrees")
         ra, dec = get(ra_c), get(dec_c)
+        far_all = np.zeros(len(ra), dtype=bool)
         if isinstance(key, tuple) and key[0] == 'per-row':
             fn = np.char.lower(np.char.strip(np.asarray(
                 data[key[1]] if is_fits else tab[key[1]]).astype(str)))
@@ -818,12 +842,19 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
                     model_cache[k] = _pivot_models(models[k], first_ra, first_dec)
                 sel = fn == band
                 new_ra[sel], new_dec[sel] = model_cache[k].apply(ra[sel], dec[sel])
+                far = sel.copy()
+                far[sel] = ~model_cache[k].within_reach(ra[sel], dec[sel])
+                far_all |= far
             mkeys = sorted({str(k) for k in model_cache})
         else:
             if key not in model_cache:
                 model_cache[key] = _pivot_models(models[key], first_ra, first_dec)
             new_ra, new_dec = model_cache[key].apply(ra, dec)
+            far_all = ~model_cache[key].within_reach(ra, dec)
             mkeys = [str(key)]
+        # rows beyond the pointing's footprint reach keep their input position
+        new_ra[far_all], new_dec[far_all] = ra[far_all], dec[far_all]
+        n_far = int((far_all & np.isfinite(ra) & np.isfinite(dec)).sum())
         disp = np.hypot(((new_ra - ra + 180) % 360 - 180) * np.cos(np.radians(dec)),
                         new_dec - dec) * 3.6e6
         # geometric check: displacement <= |roll| * r(pivot) for every visit used
@@ -839,11 +870,12 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
         roundtrip = None
         if len(model_cache) == 1 and len(next(iter(model_cache.values())).visits) == 1 and fin.any():
             v = next(iter(model_cache.values())).visits[0]
-            rb, db = rotation_about_pivot(new_ra[fin], new_dec[fin], v.pivot_ra, v.pivot_dec,
+            rot = fin & ~far_all
+            rb, db = rotation_about_pivot(new_ra[rot], new_dec[rot], v.pivot_ra, v.pivot_dec,
                                           -v.roll_arcsec)
-            roundtrip = float(np.max(np.hypot(((rb - ra[fin] + 180) % 360 - 180)
-                                              * np.cos(np.radians(dec[fin])),
-                                              db - dec[fin])) * 3.6e6)
+            roundtrip = float(np.max(np.hypot(((rb - ra[rot] + 180) % 360 - 180)
+                                              * np.cos(np.radians(dec[rot])),
+                                              db - dec[rot])) * 3.6e6) if rot.any() else 0.0
             if roundtrip > 0.01:
                 raise RollCatalogError(f"{ra_c}: inverse rotation misses input by {roundtrip:.4f} mas")
         put(ra_c, new_ra)
@@ -851,7 +883,7 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
         results.append(dict(ra=ra_c, dec=dec_c, models=mkeys,
                             max_disp_mas=float(np.nanmax(disp)) if fin.any() else 0.0,
                             median_disp_mas=float(np.nanmedian(disp)) if fin.any() else 0.0,
-                            roundtrip_mas=roundtrip, n=int(fin.sum())))
+                            roundtrip_mas=roundtrip, n=int(fin.sum()), n_beyond_reach=n_far))
 
     # separations between bands now rotated differently must be recomputed
     sep_fixed = []
@@ -893,7 +925,9 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
                           (f'ROLV{n:02d}RA', float(v.pivot_ra), '[deg] pivot RA'),
                           (f'ROLV{n:02d}DE', float(v.pivot_dec), '[deg] pivot Dec')]
     history = [f"rollcorr col {r['ra']}/{r['dec']} models {','.join(r['models'])} "
-               f"max {r['max_disp_mas']:.2f} mas" for r in results]
+               f"max {r['max_disp_mas']:.2f} mas"
+               + (f" ({r['n_beyond_reach']} rows beyond footprint reach left unrotated)"
+                  if r['n_beyond_reach'] else '') for r in results]
     history += [f"rollcorr recomputed {c}" for c in sep_fixed]
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
