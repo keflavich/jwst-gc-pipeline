@@ -33,6 +33,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+from jwst_gc_pipeline.photometry.psf_channel import nircam_channel_safe_psf_kwargs
+
 OPD = 'R2026091802-NRCA1_FP6-1.fits'
 EDGES = np.array([12, 16, 20, 25, 30, 40, 50, 65, 80, 100, 120, 150, 200, 250, 300])
 # o061 saturated-star halo relative to dither 1 (satstar_poisson README §3, fig 3)
@@ -50,7 +52,7 @@ def stpsf_at(x, y, fn):
     nc.detector = 'NRCB5'
     nc.detector_position = (x, y)
     nc.load_wss_opd(OPD, plot=False, verbose=False, use_exact_wss_target_phase=False)
-    p = nc.calc_psf(fov_pixels=801, oversample=2)['DET_DIST'].data
+    p = nc.calc_psf(fov_pixels=801, oversample=2, **nircam_channel_safe_psf_kwargs(nc))['DET_DIST'].data
     np.save(fn, p)
     return p
 
