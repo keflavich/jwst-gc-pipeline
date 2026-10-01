@@ -312,12 +312,12 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                f"{'emission label (magenta x)   ' if emission is not None else ''}"
                + (f"over-subtracted core (orange x): {counts['n_oversub_base']} -> "
                   f"{counts['n_oversub_prop']}   " if 'n_oversub_base' in counts else '')
-               + f"(match {match_radius_as * 1000:.0f} mas; residual stretch "
+               + f"\n(match {match_radius_as * 1000:.0f} mas; residual stretch "
                f"+/-{stretch:g} sigma of the current residual per row)")
     if extra_text:
         summary += '\n' + extra_text
     fig.suptitle(summary, fontsize=8, y=0.995, va='top')
-    fig.tight_layout(rect=(0, 0, 1, (0.975 if not extra_text else 0.96) ** (1 / max(nrow / 5, 1))),
+    fig.tight_layout(rect=(0, 0, 1, (0.97 if not extra_text else 0.955) ** (1 / max(nrow / 5, 1))),
                      h_pad=0.3, w_pad=0.2)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     fig.savefig(out, dpi=130)
