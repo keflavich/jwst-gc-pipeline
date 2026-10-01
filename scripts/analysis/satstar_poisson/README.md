@@ -289,7 +289,7 @@ pattern model leaves a ~5% per-dither halo error for every saturated F480M
 star. The residual is Poisson-limited wherever the star's own halo is below
 ~10 MJy/sr above the scene (≈20× the per-pixel noise). For a star 10× fainter
 than the target, that is beyond ≈80 px (5″); for 16× fainter, beyond ≈60 px.
-Inside that radius a better per-exposure PSF (§6, item 3) is needed for every
+Inside that radius a better per-exposure PSF is needed (§8: low-order optics do not provide it) for every
 saturated star, not only the brightest.
 
 Reproduce (from this directory, after §7's steps 1–2 for the target;
