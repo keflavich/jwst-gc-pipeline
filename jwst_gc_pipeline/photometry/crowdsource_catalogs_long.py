@@ -4377,7 +4377,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "(model==catalog) still overrides it.")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
-                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")
+                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).  "
+                         "Only used where the data-i2d prominence is not measured "
+                         "when --manual-ext-star-prom-min > 0.")
+    parser.add_option("--manual-ext-star-prom-min", dest="manual_ext_star_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_min'],
+                    help="Extended-emission vetting: the bright-star keep branch is "
+                         "data-i2d prominence >= this (rise above the local annulus "
+                         "in annulus-MAD units) in place of peak-SB > "
+                         "--manual-ext-peak-over-bkg x local bkg, whose local_bkg "
+                         "scatters about zero on background-subtracted frames.  "
+                         "0 = the peak-SB test (default 5).")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
