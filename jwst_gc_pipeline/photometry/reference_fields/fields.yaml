@@ -1,0 +1,80 @@
+# Faint-star reference fields (see reference_fields/__init__.py, evaluate.py).
+#
+# Every key outside `fields:` is a default that a field may override.  The
+# thresholds are per field and fixed: a parameter or code change has to pass
+# them all, whatever global defaults it chooses.  Changing a threshold needs
+# the same justification as changing a test's expected value.
+
+size_arcsec: 5.0               # cutout side (the monitor probes' proven size)
+inner_margin_arcsec: 0.6       # injected/evaluated box = cutout minus this per side
+data_root: /orange/adamginsburg/jwst
+modules: merged
+production:                    # inputs of make_injections.py (relative to the target root)
+  data_i2d: '{FILT}/pipeline/*{filt}-merged_data_i2d.fits'
+  vetted: 'catalogs/{filt}_merged*indivexp_merged_resbgsub_m6_dao_basic_vetted.fits'
+  satstar: 'catalogs/{filt}_consolidated_satstar_catalog.fits'
+
+# injection (frozen tables under injections/)
+seeds: [1, 2]
+n_inject: 24
+snr_range: [5, 80]             # log-uniform ERR-based S/N_true, primary band
+min_sep_pix: 12
+satstar_avoid_arcsec: 0.5
+color_radius_arcsec: 30
+
+# metric parameters
+snr_bins: [5, 10, 20, 40, 80]
+match_radius_pix: 1.0
+match_dmag: 0.5
+bias_min_snr: 20
+excess_snr: 7.0
+excess_excl_pix: 4.5
+ring_pix: [1.5, 4.5]
+ring_bright_snr: 100
+ring_faint_ratio: 0.05
+faint_snr: [5, 20]
+confirm_snr: 3.0
+offset_pix: [10, 20]
+label_radius_arcsec: 0.05
+
+fields:
+  superdense:
+    environment: super-high stellar density (nuclear star cluster, 16" E of Sgr A*)
+    target: sgra
+    proposal: '1939'
+    obsid: '001'
+    each_suffix: destreak_o001_crf
+    filters: [F212N, F405N]
+    ra: 266.4219
+    dec: -29.0074
+    thresholds: {}
+
+  bright_modest:
+    environment: modest stellar density on bright, filamentary Paschen-alpha emission (W51)
+    target: w51
+    proposal: '6151'
+    obsid: '001'
+    each_suffix: align_o001_crf
+    filters: [F187N, F210M]
+    ra: 290.91941
+    dec: 14.51839
+    thresholds: {}
+
+  dark:
+    environment: dark cloud, low background (Brick interior; hand-labelled clump of PR 57)
+    target: brick
+    proposal: '2221'
+    obsid: '001'
+    each_suffix: destreak_o001_crf
+    filters: [F182M, F212N]
+    ra: 266.5434
+    dec: -28.7125
+    # fields.yaml registers brick on /blue; that tree is not the brick root
+    # (keflavich/jwst-gc-pipeline#937), so the run is pinned to /orange.
+    env: {GC_BASEPATH_OVERRIDE: /orange/adamginsburg/jwst/brick/}
+    production:
+      data_i2d: '{FILT}/pipeline/jw02221-o001_t001_nircam_clear-{filt}-merged_data_i2d.fits'
+      vetted: 'catalogs/{filt}_merged_o001_indivexp_merged_resbgsub_m6_dao_basic_vetted.fits'
+      satstar: 'catalogs/{filt}_consolidated_satstar_catalog.fits'
+    labels: regions_/jwst_cat_f182m_selected_stars.reg
+    thresholds: {}

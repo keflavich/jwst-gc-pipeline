@@ -24,6 +24,7 @@ with legacy ``iter2/iter3/iter4`` ones.
 The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 (BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
+import functools
 import glob
 
 import numpy as np
@@ -2122,6 +2123,48 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     return files
 
 
+def _reorigin_psf_grid(grid, cx0, cy0):
+    """``grid`` with its ``grid_xypos`` moved into a cutout whose origin is
+    parent pixel ``(cx0, cy0)``, so a cutout fit uses the PSF the full-frame
+    fit would use at the same source positions."""
+    shifted_xy = [(gx - cx0, gy - cy0) for (gx, gy) in grid.grid_xypos]
+    return type(grid)(NDData(np.asarray(grid.data),
+                             meta={'grid_xypos': shifted_xy,
+                                   'oversampling': grid.oversampling}))
+
+
+@functools.lru_cache(maxsize=4)
+def _cached_injection_table(path):
+    from jwst_gc_pipeline.photometry.injection import read_injection_table
+    return read_injection_table(path)
+
+
+def _inject_reference_stars(options, filename, original_filename, filtername,
+                            module, proposal_id, field, basepath, use_webbpsf,
+                            cx0, cy0):
+    """``--inject-stars``: add the injection table's stars to the cutout frame
+    copy ``filename`` (see ``photometry/injection.py``), with the same
+    per-detector PSF grid the fit loads, re-origined to the cutout."""
+    from jwst_gc_pipeline.photometry.injection import (
+        frame_seed, inject_table_into_frame)
+    table = _cached_injection_table(os.path.abspath(options.inject_stars))
+    hdr0 = fits.getheader(filename, 0)
+    grid, _ = _L.get_psf_model(
+        filtername, proposal_id, field, module=module, use_webbpsf=use_webbpsf,
+        use_grid=options.each_exposure, blur=options.blur, target=options.target,
+        obsdate=hdr0['DATE-OBS'], basepath='/blue/adamginsburg/adamginsburg/jwst/',
+        psf_cache_dir=os.path.join(basepath, 'psfs'), instrument=hdr0['INSTRUME'])
+    if cx0 or cy0:
+        grid = _reorigin_psf_grid(grid, cx0, cy0)
+    rng = np.random.default_rng(
+        frame_seed(int(getattr(options, 'inject_seed', 0)), original_filename))
+    n = inject_table_into_frame(filename, table, grid, filtername, rng)
+    print(f"[manual] INJECT: {n} artificial stars from "
+          f"{os.path.basename(options.inject_stars)} -> {os.path.basename(filename)}",
+          flush=True)
+    return n
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -2161,10 +2204,22 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     cutout_label = ''
     out_basepath = basepath
     cx0, cy0 = 0, 0
+    original_filename = filename
     if getattr(options, 'cutout_region', ''):
         cutout_label, filename, out_basepath, cx0, cy0 = _L._prepare_cutout_input(
             filename, basepath, filtername, options)
     cutout_active = bool(cutout_label)
+
+    if getattr(options, 'inject_stars', ''):
+        # Reference-field truth (photometry/injection.py): add the table's stars
+        # to the cropped copy ON DISK, so the cutout data i2d, the residual
+        # mosaics and every phase's fit all see them.
+        if not cutout_active:
+            raise ValueError("--inject-stars rewrites frame pixels; it is only "
+                             "allowed together with --cutout-region")
+        _inject_reference_stars(options, filename, original_filename, filtername,
+                                module, proposal_id, field, basepath,
+                                use_webbpsf, cx0, cy0)
 
     fh, im1, data, wht, err, instrument, telescope, obsdate = _L.load_data(filename)
     inst_token = instrument.lower()
@@ -2252,11 +2307,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         psf_cache_dir=os.path.join(basepath, 'psfs'), instrument=instrument)
     dao_psf_model = grid
     if cutout_active and (cx0 or cy0):
-        shifted_xy = [(gx - cx0, gy - cy0) for (gx, gy) in dao_psf_model.grid_xypos]
-        dao_psf_model = type(dao_psf_model)(NDData(
-            np.asarray(dao_psf_model.data),
-            meta={'grid_xypos': shifted_xy,
-                  'oversampling': dao_psf_model.oversampling}))
+        dao_psf_model = _reorigin_psf_grid(dao_psf_model, cx0, cy0)
         print(f"[manual] CUTOUT: re-origined PSF grid by (-{cx0}, -{cy0})", flush=True)
     dao_psf_model.flux.min = 0
 

@@ -4638,6 +4638,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help="Square cutout size (arcsec) for DS9 point regions / "
                          "fallback.  Default 5.0.",
                     metavar="cutout_size_arcsec")
+    parser.add_option("--inject-stars", dest="inject_stars",
+                    default='',
+                    help=("Artificial-star truth table (ra, dec, "
+                          "flux_jy_<FILTER>) to add to every cutout frame "
+                          "before fitting (photometry/injection.py; the "
+                          "reference-field regression tests).  Requires "
+                          "--cutout-region."),
+                    metavar="inject_stars")
+    parser.add_option("--inject-seed", dest="inject_seed",
+                    default=0, type='int',
+                    help="Seed for the injected stars' photon-noise draw.",
+                    metavar="inject_seed")
     # Fit saturated stars whose centres lie OUTSIDE this frame's FOV (from
     # regions_/saturated_stars_outside_fov[_locked].reg) so their wings are
     # subtracted.  Tri-state: default (None) -> ON for normal runs, OFF for
