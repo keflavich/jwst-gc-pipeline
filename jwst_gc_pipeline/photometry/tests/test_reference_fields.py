@@ -186,6 +186,37 @@ def test_check_thresholds():
     assert len(fails) == 3          # completeness, excess, NaN purity
 
 
+def test_figure_match_catalogs():
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry.reference_fields import figures as FG
+    ra0, dec0 = 266.5, -28.7
+    off = np.array([0.0, 1.0, 2.0]) / 3600
+    a = SkyCoord((ra0 + off) * u.deg, np.full(3, dec0) * u.deg)
+    b = SkyCoord((ra0 + off[[0, 1]] + [0.01 / 3600, 0.2 / 3600]) * u.deg,
+                 np.full(2, dec0) * u.deg)
+    in_b, in_a = FG.match_catalogs(a, b, radius_as=0.05)
+    assert list(in_b) == [True, False, False]
+    assert list(in_a) == [True, False]
+
+
+def test_figure_pick_zooms_ranks_and_separates():
+    from jwst_gc_pipeline.photometry.reference_fields import figures as FG
+    rng = np.random.default_rng(4)
+    # a cluster of 10 differences at (30, 30), 3 at (120, 120), none elsewhere
+    xn = np.r_[30 + rng.uniform(-3, 3, 10), 120 + rng.uniform(-3, 3, 3)]
+    yn = np.r_[30 + rng.uniform(-3, 3, 10), 120 + rng.uniform(-3, 3, 3)]
+    z = FG.pick_zooms(xn, yn, np.array([]), np.array([]), (0, 160, 0, 160), 40, 4)
+    assert len(z) == 2
+
+    def holds(c, xs, ys):
+        return np.all((np.abs(xs - c[0]) < 20) & (np.abs(ys - c[1]) < 20))
+    assert holds(z[0], xn[:10], yn[:10])        # the bigger cluster first
+    assert holds(z[1], xn[10:], yn[10:])
+    assert FG.pick_zooms(np.array([]), np.array([]), np.array([]), np.array([]),
+                         (0, 160, 0, 160), 40, 4) == [(80.0, 80.0)]
+
+
 # ---------------------------------------------------------------------------
 # the reference tests
 # ---------------------------------------------------------------------------
