@@ -4397,6 +4397,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "on star-dominated fields, off on extended-emission targets, "
                          "where the 25th-percentile floor reads the dark sides of a "
                          "filament; 0 = off.")
+    parser.add_option("--manual-ext-star-prom-robust-conc", dest="manual_ext_star_prom_robust_conc",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_conc'],
+                    help="The neighbour-robust prominence branch refuses a source whose "
+                         "data-i2d core flux per unit fitted flux is below this "
+                         "fraction of the field median for prominent stars (core "
+                         "deficit > 5 sigma): a fit to a bump in a bright star's PSF "
+                         "wing.  Default 0.6; 0 = off.")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
