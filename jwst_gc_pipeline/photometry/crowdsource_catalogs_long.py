@@ -4372,6 +4372,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "perfect PSF fit has qfit ~3.4/S/N).  Sources admitted by "
                          "the term must clear --manual-ext-local-snr-min.  0 = the "
                          "flat qfit <= --manual-ext-qfit-max cut.")
+    parser.add_option("--manual-ext-qfit-snr-prom-min", dest="manual_ext_qfit_snr_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_snr_prom_min'],
+                    help="The qfit noise term applies only where the data-i2d "
+                         "prominence is >= this (default 3; unmeasured prominence "
+                         "-> flat cut).  0 = no guard.")
     parser.add_option("--manual-ext-prom-min", dest="manual_ext_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_prom_min'],
                     help="Extended-emission NIRCam vetting: HARD prominence floor on "
