@@ -71,8 +71,9 @@ MANUAL_DEFAULTS = {
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
     # roundness up to +-0.8 admitted where the detection rises above its local
     # structure (annulus prominence >= 5): Brick F182M m7 residual peaks at
-    # S/N > 7 pass +-0.5 at 55%, +-0.8 at 78%.  0 = off (tight cut only).
-    'manual_seed_round_loose_max': 0.8,
+    # S/N > 7 pass +-0.5 at 55%, +-0.8 at 78%.  0 = off (tight cut only);
+    # -1 = AUTO: 0.8, off on extended-emission targets (_auto_seed_round_loose_max).
+    'manual_seed_round_loose_max': -1.0,
     'manual_seed_round_loose_prom_min': 5.0,
     'manual_seed_sharp_lo': 0.4,
     'manual_seed_sharp_hi': 1.2,
