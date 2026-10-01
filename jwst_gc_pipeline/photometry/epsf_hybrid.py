@@ -19,7 +19,9 @@ relies on:
 * **normalisation**: the core is scaled so that its flux inside ``R0`` equals
   the STPSF grid's flux inside ``R0`` at the same position, so total
   normalisation (and hence the zero point / aperture corrections calibrated on
-  STPSF) is unchanged;
+  STPSF) is unchanged.  The match is made separately for each sub-pixel phase
+  of the grid (``_phase_scale``): the empirical cores' native-pixel flux varies
+  with phase by ~1-2%, STPSF's by 0.15-0.4%, and the hybrid keeps STPSF's;
 * **centre**: the core is shifted so that its centroid inside 1.5 px equals the
   STPSF grid's, so fitted positions keep STPSF's astrometric convention.  The
   per-node shifts that took are recorded in the returned grid's ``meta``.
@@ -32,6 +34,20 @@ data never enter its history): clone it and point ``PSF_EPSF_CORE_DIR`` at the
 checkout.  A set directory that has
 no file for the requested detector/filter keeps the STPSF grid and says so.
 
+Provenance.  A hybrid catalog must never be mistaken for, or overwrite, an
+STPSF one (it is ~0.4% / ~1.7-2.4% brighter at F212N / F480M; PR #1009).  So
+with ``PSF_EPSF_CORE_DIR`` set, every catalog / residual filename carries the
+``_hybpsf`` token (:func:`hybrid_psf_token`, appended after ``_epsf`` at every
+site that builds or globs those names, so writers and readers agree), and the
+catalog meta records which model was actually used (:func:`psf_provenance_meta`:
+``PSFMODEL``, the core file and its sha256, R0/R1, the largest centroid shift).
+The token follows the configuration; ``PSFMODEL`` follows what was applied --
+a filter with no core file is ``_hybpsf`` but ``PSFMODEL = STPSF``.
+
+The cores measure program 10678's observing conditions.  A frame from another
+program is refused unless ``PSF_EPSF_ALLOW_OTHER_PROGRAM=1`` (that is an
+extrapolation that needs its own check; see the PR #1009 description).
+
 Units.  photutils evaluates ``flux * interp(data)`` and stpsf's ``psf_grid``
 stores the pixel-integrated PSF times ``oversampling**2``, so a grid's data are
 already "fraction of the flux in a native pixel whose centre is at this
@@ -39,6 +55,7 @@ offset" -- the same quantity as the ePSF core (normalised so that
 ``sum(P[r <= r_norm]) / O**2 == 1``).  The hybrid is therefore built directly
 in data space.
 """
+import hashlib
 import os
 import warnings
 
@@ -49,6 +66,8 @@ from photutils.psf import GriddedPSFModel
 from scipy import ndimage
 
 EPSF_CORE_DIR_ENV = 'PSF_EPSF_CORE_DIR'
+ALLOW_OTHER_PROGRAM_ENV = 'PSF_EPSF_ALLOW_OTHER_PROGRAM'
+HYBRID_TOKEN = '_hybpsf'   # must not contain '_epsf': residual globs match tokens by substring
 R0 = 10.0       # ePSF inside this radius [native px]
 R1 = 12.0       # STPSF outside this radius [native px]
 R_CENTROID = 1.5
@@ -177,10 +196,34 @@ def hybrid_stamp(stpsf_data, origin, oversampling, core, x, y, r0=R0, r1=R1,
     else:
         raise RuntimeError(f'ePSF core centroid did not converge onto STPSF at ({x:.0f}, {y:.0f}): '
                            f'residual {np.hypot(ex, ey):.2e} px')
-    inner = r <= r0
-    k = D[inner].sum() / C[inner].sum()
+    k = _phase_scale(D, C, r <= r0, oy, ox)
     t = np.clip((r - r0) / (r1 - r0), 0.0, 1.0)
     return (1.0 - t) * k * C + t * D, (dx, dy)
+
+
+def _phase_scale(D, C, inner, oy, ox):
+    """Scale of the core onto STPSF inside r0, one value per sub-pixel phase.
+
+    The samples ``[a::oy, b::ox]`` of a pixel-integrated, oversampled PSF are
+    the native-pixel image of a star at one sub-pixel phase, so their sum
+    inside r0 is that star's flux inside r0.  The empirical core's sum varies
+    with phase by ~1-2% (finite phase coverage of the ePSF stars; PR #1009
+    review), STPSF's by 0.15-0.4%.  Matching each phase separately gives the
+    hybrid STPSF's phase dependence -- and STPSF's flux inside r0 at every
+    phase, not just on average.  A non-integer oversampling has no phase
+    classes and falls back to one scale.
+    """
+    if not (float(oy).is_integer() and float(ox).is_integer()):
+        return D[inner].sum() / C[inner].sum()
+    oy, ox = int(oy), int(ox)
+    k = np.empty_like(D)
+    for a in range(oy):
+        for b in range(ox):
+            sel = np.zeros(D.shape, bool)
+            sel[a::oy, b::ox] = True
+            sel &= inner
+            k[a::oy, b::ox] = D[sel].sum() / C[sel].sum()
+    return k
 
 
 def _stpsf_data_at(grid, x, y):
@@ -228,38 +271,126 @@ def grid_detector(grid):
     return str(v).upper() if v else None
 
 
-def maybe_apply_epsf_core(grid, detector, filtername, environ=None):
+# Hybrid grids built in this process, keyed on (core sha256, STPSF grid
+# fingerprint): get_psf_model reloads the STPSF grid on every call, and a
+# samp4 hybrid takes ~5 s to build.
+_HYBRID_CACHE = {}
+# What maybe_apply_epsf_core applied in this process, by (DETECTOR, FILTER):
+# the catalog writer stamps it into the catalog meta (psf_provenance_meta).
+_APPLIED = {}
+
+
+def hybrid_psf_token(environ=None):
+    """``'_hybpsf'`` when ``PSF_EPSF_CORE_DIR`` is set, else ``''``.
+
+    Appended to the ``_epsf`` filename token everywhere, so a hybrid run never
+    writes over (or is globbed as) an STPSF catalog.
+    """
+    env = os.environ if environ is None else environ
+    return HYBRID_TOKEN if env.get(EPSF_CORE_DIR_ENV, '') else ''
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as fh:
+        for block in iter(lambda: fh.read(1 << 20), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _grid_fingerprint(grid):
+    h = hashlib.sha1(np.ascontiguousarray(grid.data).tobytes())
+    h.update(np.asarray(grid.grid_xypos, dtype=float).tobytes())
+    h.update(np.asarray(grid.oversampling, dtype=float).tobytes())
+    return h.hexdigest()
+
+
+def _check_program(core, path, program, env):
+    core_prog = str(core.meta.get('PROGRAM', '') or '')
+    if not (program and core_prog):
+        return
+    progs = {p.strip().lstrip('0') for p in core_prog.split(',')}
+    if str(program).strip().lstrip('0') in progs:
+        return
+    msg = (f'{path} was built from program {core_prog}, not {program}: its core measures '
+           f'{core_prog}\'s jitter / charge diffusion / wavefront epoch')
+    if env.get(ALLOW_OTHER_PROGRAM_ENV, '') == '1':
+        warnings.warn(msg + f' ({ALLOW_OTHER_PROGRAM_ENV}=1: using it anyway)')
+        return
+    raise ValueError(msg + f'; set {ALLOW_OTHER_PROGRAM_ENV}=1 to use it anyway')
+
+
+def maybe_apply_epsf_core(grid, detector, filtername, environ=None, program=None):
     """Return the hybrid grid if ``PSF_EPSF_CORE_DIR`` provides a core for this
     detector/filter; otherwise ``grid`` unchanged (the same object).
 
     ``detector`` is the stpsf detector name (``NRCB5``, ``NRCA1``, ...); None
     takes it from the grid's metadata.  ``grid`` may be a list (the merged-module
     path): each element is handled on its own, by its own metadata.
+    ``program`` (the frame's proposal id), when given, must be one the core was
+    built from (see the module docstring).
     """
     env = os.environ if environ is None else environ
     core_dir = env.get(EPSF_CORE_DIR_ENV, '')
     if not core_dir:
         return grid
     if isinstance(grid, list):
-        return [maybe_apply_epsf_core(g, None, filtername, env) for g in grid]
+        return [maybe_apply_epsf_core(g, None, filtername, env, program) for g in grid]
     detector = detector or grid_detector(grid)
     if detector is None:
         warnings.warn(f'{EPSF_CORE_DIR_ENV} is set but no detector is known for this '
                       f'{filtername} grid; keeping STPSF')
         return grid
+    key = (detector.upper(), filtername.upper())
     path = os.path.join(core_dir, epsf_core_filename(detector, filtername))
     if not os.path.exists(path):
         print(f'{EPSF_CORE_DIR_ENV}={core_dir}: no ePSF core for {detector}/{filtername} '
               f'({os.path.basename(path)}); using the plain STPSF grid', flush=True)
+        _APPLIED.setdefault(key, None)
         return grid
     core = read_epsf_core(path)
     if str(core.meta.get('DETECTOR', detector)).upper() != detector.upper() or \
             str(core.meta.get('FILTER', filtername)).upper() != filtername.upper():
         raise ValueError(f'{path} holds {core.meta.get("DETECTOR")}/{core.meta.get("FILTER")}, '
                          f'not {detector}/{filtername}')
+    _check_program(core, path, program, env)
     core.meta['FILENAME'] = path
-    hyb = make_hybrid_grid(grid, core)
+    sha = _sha256(path)
+    ckey = (sha, _grid_fingerprint(grid))
+    hyb = _HYBRID_CACHE.get(ckey)
+    if hyb is None:
+        hyb = make_hybrid_grid(grid, core)
+        hyb.meta['epsf_core_sha256'] = sha
+        _HYBRID_CACHE[ckey] = hyb
+    _APPLIED[key] = dict(path=path, sha256=sha, program=str(core.meta.get('PROGRAM', '')),
+                         r0=hyb.meta['epsf_r0'], r1=hyb.meta['epsf_r1'],
+                         shift_max_mpix=1e3 * hyb.meta['epsf_centroid_shift_max_px'])
     print(f'Hybrid PSF for {detector}/{filtername}: ePSF core r<{R0:g} px from {path}, '
           f'STPSF wing r>{R1:g} px; core re-centred onto STPSF by <= '
           f'{hyb.meta["epsf_centroid_shift_max_px"]*1e3:.1f} mpix', flush=True)
     return hyb
+
+
+def psf_provenance_meta(filtername, environ=None):
+    """Catalog meta (FITS-length keys) recording the PSF model used for ``filtername``.
+
+    ``PSFMODEL`` is ``'STPSF+EPSFCORE'`` when this process applied a core for
+    the filter, else ``'STPSF'``.  With a core: ``EPSFCORE`` (file name),
+    ``EPSFSHA`` (sha256), ``EPSFPROG``, ``EPSFR0`` / ``EPSFR1`` [px] and
+    ``EPSFSHFT`` (largest core re-centring [mpix]).  ``EPSFDIR`` records a set
+    ``PSF_EPSF_CORE_DIR`` either way.
+    """
+    env = os.environ if environ is None else environ
+    core_dir = env.get(EPSF_CORE_DIR_ENV, '')
+    used = [v for (det, filt), v in sorted(_APPLIED.items())
+            if filt == filtername.upper() and v is not None]
+    meta = {'PSFMODEL': 'STPSF+EPSFCORE' if used else 'STPSF'}
+    if core_dir:
+        meta['EPSFDIR'] = core_dir
+    if used:
+        meta.update(EPSFCORE=','.join(os.path.basename(v['path']) for v in used),
+                    EPSFSHA=','.join(v['sha256'] for v in used),
+                    EPSFPROG=','.join(sorted({v['program'] for v in used})),
+                    EPSFR0=float(used[0]['r0']), EPSFR1=float(used[0]['r1']),
+                    EPSFSHFT=float(max(v['shift_max_mpix'] for v in used)))
+    return meta

@@ -13,7 +13,10 @@ each fitted model over r <= 10 px and compares:
 * flux ratio hybrid / STPSF (normalisation must be preserved);
 * position differences hybrid - STPSF (the astrometric convention must be);
 * data / model summed inside r <= 8 px: which model's fitted flux matches the
-  star's aperture flux (1 = right; isolated stars, so neighbours are small).
+  star's aperture flux (1 = right; isolated stars, so neighbours are small);
+* pixel-phase flux modulation: each model's native-pixel flux inside 10 px for
+  a unit-flux star at 4 x 4 sub-pixel phases (peak-to-peak), and the fitted
+  flux ratio hybrid / STPSF binned in x and y pixel phase.
 
 Writes <out prefix>.json and <out prefix>.png.  The background is the
 fullfield_residual STPSF-fit bilinear background; neighbours are those of
@@ -35,6 +38,16 @@ from jwst_gc_pipeline.photometry.epsf_hybrid import maybe_apply_epsf_core, grid_
 
 A = [(0, 1.5), (1.5, 3), (3, 6), (6, 10)]
 H = 10
+NPHASE = 4
+
+
+def phase_flux(g, xc=1024, yc=1024, r=10, h=50):
+    """Native-pixel flux inside r of a unit-flux star at NPHASE x NPHASE sub-pixel phases."""
+    k = np.arange(-h, h + 1)
+    X, Y = np.meshgrid(k, k)
+    ph = np.arange(NPHASE) / NPHASE
+    return np.array([[g.evaluate(X + xc, Y + yc, 1.0, xc + px, yc + py)[np.hypot(X - px, Y - py) <= r].sum()
+                      for px in ph] for py in ph])
 
 
 def fit(grid, img, err, mask, x, y, f):
@@ -78,8 +91,10 @@ def main():
                 apr[i] = img[s][ap].sum() / m[ap].sum()
         res[name] = dict(x=xf, y=yf, f=ff, C=C, stack=np.asarray(stack), apr=apr)
     top = f0 >= np.percentile(f0, 80)
-    out = dict(frame=zfn, grid=gfn, n_stars=int(len(sel)),
+    out = dict(frame=zfn, grid=gfn, n_stars=int(len(sel)), oversampling=np.atleast_1d(st.oversampling).tolist(),
                centroid_shift_max_mpix=1e3 * hyb.meta['epsf_centroid_shift_max_px'])
+    pf = {name: phase_flux(g) for name, g in (('stpsf', st), ('hybrid', hyb))}
+    out['phase_flux_r10_peak_to_peak_pct'] = {name: float(100 * np.ptp(v) / v.mean()) for name, v in pf.items()}
     for name in res:
         out[name] = dict(annular_chi2_median_all=np.nanmedian(res[name]['C'], 0).tolist(),
                          annular_chi2_median_top20=np.nanmedian(res[name]['C'][top], 0).tolist(),
@@ -94,10 +109,27 @@ def main():
     out['dpos_hybrid_minus_stpsf_mpix'] = dict(dx_median=1e3 * float(np.nanmedian(dx)), dy_median=1e3 * float(np.nanmedian(dy)),
                                                dx_median_top20=1e3 * float(np.nanmedian(dx[top])),
                                                dy_median_top20=1e3 * float(np.nanmedian(dy[top])))
+    pbins = np.linspace(0, 1, NPHASE * 2 + 1)
+    pc = 0.5 * (pbins[1:] + pbins[:-1])
+    xph = np.mod(res['stpsf']['x'] + 0.5, 1)      # 0 = pixel edge, 0.5 = pixel centre
+    yph = np.mod(res['stpsf']['y'] + 0.5, 1)
+    good_fr = np.isfinite(fr) & top
+    fr_ph = {}
+    for ax_name, ph in (('x', xph), ('y', yph)):
+        idx = np.digitize(ph, pbins) - 1
+        fr_ph[ax_name] = [float(np.nanmedian(fr[good_fr & (idx == b)])) if np.any(good_fr & (idx == b)) else None
+                          for b in range(len(pc))]
+    out['flux_ratio_vs_phase_top20'] = dict(phase_bin_centre=pc.tolist(), **fr_ph)
+    # which model's fitted flux is phase-dependent: aperture data / model (r <= 8) vs phase, each model
+    rph = np.hypot(xph - 0.5, yph - 0.5)          # 0 = star on a pixel centre, 0.71 = on a corner
+    rb = np.linspace(0, 0.71, 6)
+    out['aperture_ratio_vs_radial_phase_top20'] = dict(bin_centre=(0.5 * (rb[1:] + rb[:-1])).tolist(), **{
+        name: [float(np.nanmedian(res[name]['apr'][top & (rph >= a) & (rph < b)])) for a, b in zip(rb[:-1], rb[1:])]
+        for name in res})
     json.dump(out, open(outp + '.json', 'w'), indent=1)
     print(json.dumps(out, indent=1))
 
-    fig, ax = plt.subplots(1, 4, figsize=(20, 4.8))
+    fig, ax = plt.subplots(1, 5, figsize=(25, 4.8))
     rc = [0.5 * (a + b) for a, b in A]
     for name, col in (('stpsf', 'k'), ('hybrid', 'C3')):
         ax[0].plot(rc, out[name]['annular_chi2_median_top20'], 'o-', color=col, label=f'{name}, brightest 20%')
@@ -115,6 +147,19 @@ def main():
     ax[3].set_xlim(-60, 60); ax[3].set_ylim(-60, 60); ax[3].axhline(0, color='k', lw=.5); ax[3].axvline(0, color='k', lw=.5)
     ax[3].set_title(f'fitted position difference\nmedian ({out["dpos_hybrid_minus_stpsf_mpix"]["dx_median"]:.1f}, '
                     f'{out["dpos_hybrid_minus_stpsf_mpix"]["dy_median"]:.1f}) mpix; flux ratio {out["flux_ratio_hybrid_over_stpsf"]["median"]:.4f}')
+    for ax_name, mk in (('x', 'o-'), ('y', 's--')):
+        ax[4].plot(pc, [np.nan if v is None else v for v in fr_ph[ax_name]], mk, label=f'{ax_name} phase')
+    ax[4].set_xlabel('pixel phase (0.5 = pixel centre)'); ax[4].set_ylabel('fitted flux hybrid / STPSF, brightest 20%')
+    ax[4].legend(loc='upper left')
+    ap = out['aperture_ratio_vs_radial_phase_top20']
+    a4 = ax[4].twiny()
+    for name, col in (('stpsf', 'k'), ('hybrid', 'C3')):
+        v = np.array(ap[name]); a4.plot(ap['bin_centre'], v / np.nanmean(v) * np.nanmean(fr[top]), ':', color=col, marker='d',
+                                       label=f'{name}: aperture data/model (scaled)')
+    a4.set_xlabel('distance of star from pixel centre [px] (dotted)'); a4.legend(loc='lower right', fontsize=8)
+    pp = out['phase_flux_r10_peak_to_peak_pct']
+    ax[4].set_title(f'model flux r<=10 px over {NPHASE}x{NPHASE} phases, p2p:\n'
+                    f'STPSF {pp["stpsf"]:.2f}%, hybrid {pp["hybrid"]:.2f}%')
     fig.tight_layout(); fig.savefig(outp + '.png', dpi=150)
 
 

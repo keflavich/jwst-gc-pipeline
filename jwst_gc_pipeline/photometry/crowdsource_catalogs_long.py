@@ -211,7 +211,8 @@ from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     assert_no_foreign_observation_overwrite, foreign_observation_conflict,
 )
-from jwst_gc_pipeline.photometry.epsf_hybrid import maybe_apply_epsf_core
+from jwst_gc_pipeline.photometry.epsf_hybrid import (
+    hybrid_psf_token, maybe_apply_epsf_core, psf_provenance_meta)
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -1092,7 +1093,7 @@ def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
         exposure_ = f'_exp{int(exposure_id):05d}'
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = _bgsub_token(options)
-    epsf_ = '_epsf' if options.epsf else ''
+    epsf_ = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur_ = '_blur' if options.blur else ''
     group_ = '_group' if options.group else ''
     if iteration_label is None:
@@ -2208,6 +2209,9 @@ def save_photutils_results(result, ww, filename,
     result.meta['pixscale'] = pixscale.to(u.arcsec).value
     result.meta['pixscale_as'] = pixscale.to(u.arcsec).value
     result.meta['proposal_id'] = options.proposal_id
+    # Which PSF model fitted this catalog (STPSF, or the opt-in ePSF-core hybrid):
+    # the two differ in flux by 0.4-2.4%, so a catalog must say (epsf_hybrid.py).
+    result.meta.update(psf_provenance_meta(filtername))
 
     if 'RAOFFSET' in im1[0].header:
         result.meta['RAOFFSET'] = im1[0].header['RAOFFSET']
@@ -2591,7 +2595,7 @@ def get_psf_model(filtername, proposal_id, field,
         # outside 12 px (photometry/epsf_hybrid.py, issue #1007).  A no-op --
         # the same grid object -- unless PSF_EPSF_CORE_DIR is set.
         if instrument == 'NIRCam':
-            grid = maybe_apply_epsf_core(grid, _cache_detector, filtername)
+            grid = maybe_apply_epsf_core(grid, _cache_detector, filtername, program=proposal_id)
 
         if use_grid:
             # to_griddedpsfmodel returns a LIST (one grid per detector) for
@@ -2659,7 +2663,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     # Mirror _bgsub_token: the iter3-residual-bg run appends _resbgsub after
     # _bgsub so this glob finds the residuals do_photometry_step wrote.
     bgsub_ = ('_bgsub' if bgsub else '') + ('_resbgsub' if resbgsub else '')
-    epsf_ = '_epsf' if epsf else ''
+    epsf_ = ('_epsf' if epsf else '') + hybrid_psf_token()
     blur_ = '_blur' if blur else ''
     group_ = '_group' if group else ''
     iter_ = _iteration_token(iteration_label)
@@ -2693,6 +2697,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         '_bgsub': bgsub,
         '_resbgsub': resbgsub,
         '_epsf': epsf,
+        '_hybpsf': bool(hybrid_psf_token()),
         '_blur': blur,
         '_group': group,
     }
@@ -3229,7 +3234,7 @@ def _build_cutout_model_i2d(cut_bp, filtername, proposal_id, field, module,
     inst_token = _inst_token(filtername)
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
-    epsf = '_epsf' if options.epsf else ''
+    epsf = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur = '_blur' if options.blur else ''
     group = '_group' if options.group else ''
     iter_ = _iteration_token(iteration_label)
@@ -3992,7 +3997,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     bgsub_tok = _bgsub_token(options)
     iter_tok = _iteration_token(iteration_label)
     desat_tok = '_unsatstar' if options.desaturated else ''
-    epsf_tok = '_epsf' if options.epsf else ''
+    epsf_tok = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur_tok = '_blur' if options.blur else ''
     group_tok = '_group' if options.group else ''
     # Land the residual AND model mosaics on the EXACT grid of the _data_i2d so
@@ -4212,7 +4217,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     desat_tok = '_unsatstar' if options.desaturated else ''
     bgsub_tok = _bgsub_token(options)
     blur_tok = '_blur' if options.blur else ''
-    epsf_tok = '_epsf' if options.epsf else ''
+    epsf_tok = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     group_tok = '_group' if options.group else ''
     product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
