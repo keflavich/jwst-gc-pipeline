@@ -269,8 +269,8 @@ def purity_estimate(r_on, r_off, r_real, min_contrast=0.2):
 # evaluation of one (field, variant)
 # ---------------------------------------------------------------------------
 
-def _companion_snr_map(rdir, filt, spec):
-    prod = find_products(rdir, filt)
+def _companion_snr_map(rdir, filt, spec, phase=None):
+    prod = find_products(rdir, filt, phase)
     img, err, wcs, _ = _image(prod['data'])
     if prod['smoothed_bg'] is not None:
         bg = _image(prod['smoothed_bg'])[0]
@@ -282,13 +282,14 @@ def _companion_snr_map(rdir, filt, spec):
     return snr, fr
 
 
-def evaluate_clean(spec, variant, *, rng=None):
+def evaluate_clean(spec, variant, *, rng=None, phase=None):
     """Residual excess, ring ratio, faint-source confirmation rates and label
-    recovery of the clean run of ``spec`` (primary band)."""
+    recovery of the clean run of ``spec`` (primary band) at ``phase`` (default:
+    the last phase present)."""
     rng = rng or np.random.default_rng(0)
     rdir = RF.run_dir(spec, variant, 0)
     prim = spec['filters'][0]
-    prod = find_products(rdir, prim)
+    prod = find_products(rdir, prim, phase)
     res, err, wcs, _ = _image(prod['residual'])
     if prod['smoothed_bg'] is not None:
         res = res - _image(prod['smoothed_bg'])[0]
@@ -313,7 +314,7 @@ def evaluate_clean(spec, variant, *, rng=None):
 
     if len(spec['filters']) > 1:
         comp = spec['filters'][1]
-        cmap, cfr = _companion_snr_map(rdir, comp, spec)
+        cmap, cfr = _companion_snr_map(rdir, comp, spec, phase)
         lo, hi = spec['faint_snr']
         faint = inside & (snr_cat >= lo) & (snr_cat < hi)
         cx, cy = cfr.xy(sc[faint])
@@ -340,13 +341,13 @@ def evaluate_clean(spec, variant, *, rng=None):
     return out
 
 
-def evaluate_injected(spec, variant, seed):
+def evaluate_injected(spec, variant, seed, *, phase=None):
     """Completeness, flux bias and the real-star companion confirmation rate
     of injection run ``seed``."""
     rdir = RF.run_dir(spec, variant, seed)
     prim = spec['filters'][0]
     inj = Table.read(RF.injection_table_path(spec['name'], seed))
-    prod = find_products(rdir, prim)
+    prod = find_products(rdir, prim, phase)
     img, _, wcs, hdr = _image(prod['data'])
     pixar = float(hdr['PIXAR_SR'])
     fr = Frame(spec, wcs, img.shape)
@@ -367,23 +368,23 @@ def evaluate_injected(spec, variant, seed):
     out['dmag'] = dm.tolist()
     if len(spec['filters']) > 1:
         comp = spec['filters'][1]
-        cmap, cfr = _companion_snr_map(rdir, comp, spec)
+        cmap, cfr = _companion_snr_map(rdir, comp, spec, phase)
         cx, cy = cfr.xy(isc[keep])
         out['companion_snr'] = forced_snr_at(cmap, cx, cy).tolist()
     return out
 
 
-def evaluate_field(spec, variant):
+def evaluate_field(spec, variant, *, phase=None):
     """All metrics of one field for one variant (missing runs are skipped)."""
     res = dict(field=spec['name'], variant=variant, environment=spec['environment'])
     try:
-        res['clean'] = evaluate_clean(spec, variant)
+        res['clean'] = evaluate_clean(spec, variant, phase=phase)
     except FileNotFoundError as ex:
         res['clean_missing'] = str(ex)
     injected = []
     for seed in spec['seeds']:
         try:
-            injected.append(evaluate_injected(spec, variant, seed))
+            injected.append(evaluate_injected(spec, variant, seed, phase=phase))
         except FileNotFoundError as ex:
             res.setdefault('injected_missing', []).append(str(ex))
     if injected:
@@ -446,6 +447,8 @@ def main(argv=None):
     p.add_argument('--variant', required=True)
     p.add_argument('--fields', default='')
     p.add_argument('--json', default='')
+    p.add_argument('--phase', default=None,
+                   help='score this phase (default: the last present, m7 else m6)')
     a = p.parse_args(argv)
     _, fields = RF.load_config()
     names = [n for n in a.fields.split(',') if n] or list(fields)
@@ -453,7 +456,7 @@ def main(argv=None):
     nfail = 0
     for name in names:
         spec = fields[name]
-        res = evaluate_field(spec, a.variant)
+        res = evaluate_field(spec, a.variant, phase=a.phase)
         res['failures'] = check(res, spec['thresholds'])
         nfail += len(res['failures'])
         allres[name] = res

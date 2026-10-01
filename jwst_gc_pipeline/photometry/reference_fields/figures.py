@@ -274,10 +274,10 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=2.5,
 # reference-field driver
 # ---------------------------------------------------------------------------
 
-def _metrics_text(spec, variant):
+def _metrics_text(spec, variant, phase=None):
     try_keys = ('n_sources', 'residual_excess', 'ring_ratio', 'r_on', 'r_off')
     try:
-        m = EV.evaluate_clean(spec, variant)
+        m = EV.evaluate_clean(spec, variant, phase=phase)
     except FileNotFoundError:
         return ''
     return ', '.join(f'{k}={m[k]:.3g}' if isinstance(m[k], float) else f'{k}={m[k]}'
@@ -285,14 +285,15 @@ def _metrics_text(spec, variant):
 
 
 def field_figure(name, variant, out_dir, *, base='main', seed=0, filt=None,
-                 **kw):
-    """Figure of one reference field: run ``base`` vs run ``variant``."""
+                 phase=None, **kw):
+    """Figure of one reference field: run ``base`` vs run ``variant`` at
+    ``phase`` (default: the last phase of the ``base`` run)."""
     _, fields = RF.load_config()
     spec = fields[name]
     filt = filt or spec['filters'][0]
     bdir = RF.run_dir(spec, base, seed)
     vdir = RF.run_dir(spec, variant, seed)
-    bprod = EV.find_products(bdir, filt)
+    bprod = EV.find_products(bdir, filt, phase)
     vprod = EV.find_products(vdir, filt, phase=bprod['phase'])
     b, v = load_run(bprod), load_run(vprod)
     fr = EV.Frame(spec, b['wcs'], b['data'].shape)
@@ -303,10 +304,11 @@ def field_figure(name, variant, out_dir, *, base='main', seed=0, filt=None,
         truth = SkyCoord(t['ra'] * u.deg, t['dec'] * u.deg)
     text = ''
     if int(seed) == 0:
-        mb, mv = _metrics_text(spec, base), _metrics_text(spec, variant)
+        mb = _metrics_text(spec, base, bprod['phase'])
+        mv = _metrics_text(spec, variant, bprod['phase'])
         if mb or mv:
             text = f'{base}: {mb}\n{variant}: {mv}'
-    out = os.path.join(out_dir, f'{name}_{filt.lower()}_s{seed}.png')
+    out = os.path.join(out_dir, f'{name}_{filt.lower()}_{bprod["phase"]}_s{seed}.png')
     title = (f"{name} ({spec['environment']}) {filt} {bprod['phase']}, "
              f"seed {seed}: {base} vs {variant}")
     counts = compare_figure(b, v, out, title=title, filt=filt, box=box, truth=truth,
@@ -354,7 +356,7 @@ def main(argv=None):
         for seed in [int(s) for s in a.seeds.split(',') if s]:
             try:
                 field_figure(name, a.variant, a.out, base=a.base, seed=seed,
-                             filt=a.filter, **kw)
+                             filt=a.filter, phase=a.phase, **kw)
             except FileNotFoundError as exc:
                 print(f'{name} s{seed}: skipped ({exc})')
     return 0
