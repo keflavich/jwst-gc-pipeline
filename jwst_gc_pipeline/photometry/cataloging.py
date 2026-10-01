@@ -1374,6 +1374,7 @@ def _emission_keep_miri(prominence, min_prominence):
 
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
+                              qfit_snr_k=0.0,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
@@ -1397,11 +1398,17 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
 
     Keep a source iff it looks like a confident star:
-        (qfit <= qfit_max)
+        (qfit <= sqrt(qfit_max**2 + (qfit_snr_k / snr)**2))
         OR (flags in keep_flags)                  # central-saturation real star
         OR (peak_SB > peak_over_bkg * local_bkg)  # bright real star
     AND (local_snr >= local_snr_min where available)
     AND (not model_overshoot, if that column exists and drop_overshoot).
+
+    The ``qfit_snr_k`` term is the pixel-noise part of qfit: a perfect PSF fit
+    has qfit = sum|resid|/flux ~ c/snr (c ~ 3.4), so the flat ``qfit_max``
+    alone rejects every real star below S/N ~ 17.  ``qfit_snr_k=0`` is the
+    flat cut.  Only ``qfit <= qfit_max`` is ``qfit_confident`` (kept whatever
+    its S/N); a source admitted by the noise term must clear the S/N floor.
 
     SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
     LOCAL EMISSION at a source is consistent with the field's dark-sky floor,
@@ -1537,8 +1544,19 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         & np.isfinite(qf) & (qf < qfit_high_keep_max)
         & (gsz <= 1)
     )
+    # qfit ceiling with the pixel-noise term (see docstring); a non-finite or
+    # non-positive S/N gets the flat qfit_max.
+    qfit_ceiling = np.full(n, float(qfit_max))
+    if qfit_snr_k > 0:
+        _snr_ok = np.isfinite(snr) & (snr > 0)
+        qfit_ceiling[_snr_ok] = np.hypot(float(qfit_max),
+                                         float(qfit_snr_k) / snr[_snr_ok])
+        _n_noise = int(np.sum((qf > qfit_max) & (qf <= qfit_ceiling)))
+        print(f"[{label}] qfit noise term: {_n_noise} source(s) with "
+              f"{qfit_max:g} < qfit <= sqrt({qfit_max:g}^2 + ({qfit_snr_k:g}/S/N)^2)",
+              flush=True)
     star_like = (
-        (qf <= qfit_max)
+        (qf <= qfit_ceiling)
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
         | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
         | bright_isolated
@@ -1820,7 +1838,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     _struct_msg = (f", struct-prune dropped {n_struct} @x={struct_x},y={struct_y}"
                    if (struct_x or struct_y) else "")
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
-          f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
+          f"(qfit<=sqrt({qfit_max}^2+({qfit_snr_k:g}/S/N)^2), flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
           f"snr>={local_snr_min}{_struct_msg})",
           flush=True)
     return t[keep]
@@ -8162,6 +8180,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
+                    qfit_snr_k=float(mopt(opts_phase, 'manual_ext_qfit_snr_k')),
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
