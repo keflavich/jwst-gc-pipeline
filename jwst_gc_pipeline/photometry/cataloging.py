@@ -3267,6 +3267,73 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     return out
 
 
+
+def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module, *,
+                        max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
+                        label=''):
+    """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
+    vetted catalog.
+
+    The cross-band seed keeps only positions confirmed (S/N > 5, qfit < 0.2)
+    in >= 2 filters.  Used ALONE as the m7 seed it drops every source that
+    THIS band's m6 vetting accepted but that is not confirmed in a second band
+    -- a third of the m6 vetted catalog in Brick F182M, Sgr B2 and Sgr A*
+    (126k/378k, 147k/475k, 96k/271k): the faint stars the per-band vetting
+    already accepted.  They then leave the m7 model and reappear in the final
+    residual.  Adding a band's own vetted sources back to ITS OWN seed does
+    not propagate a single-band detection to other bands (the failure the
+    stringent cross-band seed exists to prevent): each filter's seed gains
+    only what that filter's own vetting accepted.
+
+    Seed fluxes: an own-band source keeps its m6 flux; a cross-band position
+    takes the flux of the own-band source within ``max_sep_mas`` (else 1.0,
+    the value ``SeededFinder`` gives a flux-less seed).  Writes
+    ``<crossband seed>_<module>_<filt>_vetted.fits`` (one per shard key, as
+    the per-module own-band catalogs differ) and returns its path (the
+    ``_vetted`` suffix lets ``_build_i2d_augmented_seed`` add residual
+    detections to it).
+    """
+    from astropy.coordinates import SkyCoord
+    xb = Table.read(crossband_seed_path)
+    xsc = xb['skycoord'] if isinstance(xb['skycoord'], SkyCoord) else SkyCoord(xb['skycoord'])
+    own = _L._resolve_seed_skycoords(Table.read(own_vetted_path))
+    if len(own) == 0:
+        print(f"[{label}] m7 band seed: own-band m6 vetted catalog is empty; "
+              f"cross-band seed only", flush=True)
+        return crossband_seed_path
+    osc = own['skycoord'] if isinstance(own['skycoord'], SkyCoord) else SkyCoord(own['skycoord'])
+    oflux = None
+    for _fc in ('flux', 'flux_fit'):
+        if _fc in own.colnames:
+            oflux = np.asarray(own[_fc], dtype=float)
+            break
+    if oflux is None:
+        oflux = np.ones(len(own))
+    good = np.isfinite(oflux) & (oflux > 0)
+    osc, oflux = osc[good], oflux[good]
+
+    xflux = np.ones(len(xsc))
+    own_new = np.ones(len(osc), dtype=bool)
+    if len(osc) and len(xsc):
+        idx, sep, _ = xsc.match_to_catalog_sky(osc)
+        hit = sep.to_value(u.mas) < max_sep_mas
+        xflux[hit] = oflux[idx[hit]]
+        _, sep_o, _ = osc.match_to_catalog_sky(xsc)
+        own_new = sep_o.to_value(u.mas) >= max_sep_mas
+    n_own = int(own_new.sum())
+    out = Table()
+    out['skycoord'] = (SkyCoord([xsc, osc[own_new]]) if n_own and len(xsc)
+                       else (xsc if len(xsc) else osc[own_new]))
+    out['flux'] = np.concatenate([xflux, oflux[own_new]])
+    out['seed_origin'] = np.array(['crossband'] * len(xsc) + ['own_m6'] * n_own)
+    outpath = crossband_seed_path.replace(
+        '.fits', f'_{module}_{filtername.lower()}_vetted.fits')
+    write_table_atomic(out, outpath)
+    print(f"[{label}] m7 band seed: {len(xsc)} cross-band + {n_own} own-band m6 "
+          f"vetted (not within {max_sep_mas:g} mas of a cross-band position) "
+          f"-> {len(out)} ({os.path.basename(outpath)})", flush=True)
+    return outpath
+
 CARTA_EXPORT_COLUMNS = ('flux', 'flux_err', 'qfit', 'cfit', 'flags',
                         'is_saturated', 'replaced_saturated', 'iter_found')
 
@@ -7319,13 +7386,37 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 elif phase == 'm7':
                     prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
                     resbg_path = bg_for_next.get((module, filt))      # bg from m6
+                    # cross-band seed UNION this band's own m6 vetted catalog,
+                    # plus daofind on the m6 residual - m6 bg (as m6 does on
+                    # m5's): see _build_m7_band_seed.  Off -> cross-band only.
+                    if bool(mopt(opts_phase, 'manual_m7_seed_own_band')):
+                        _own = [q for _m, _f, q in crossband_seed_inputs(
+                                    cut_bp, modules, filternames, options)
+                                if _m == module and _f == filt]
+                        if _own:
+                            # NOT vetted_prev: that feeds the resume's seed
+                            # provenance, and this derived file is rewritten
+                            # every run (its inputs, _own and the m6 mosaics,
+                            # are already listed there).
+                            prev_seed = _build_m7_band_seed(
+                                prev_seed, _own[0], filt, module,
+                                max_sep_mas=float(mopt(opts_phase, 'manual_crossband_seed_max_sep_mas')),
+                                label=f'{phase}:{filt}')
+                            det_i2d = resid_i2d_for_next.get((module, filt))  # m6 residual
+                            bg_sub = bg_for_next.get((module, filt))          # minus m6 bg
+                        else:
+                            print(f"manual [m7]: no m6 vetted {filt} catalog for "
+                                  f"the own-band seed; cross-band seed only", flush=True)
 
-                if phase in ('m3', 'm4', 'm5', 'm6'):
+                if phase in ('m3', 'm4', 'm5', 'm6') or (phase == 'm7' and det_i2d):
                     det_i2d = det_i2d or _data_i2d_path(module, filt)  # fallback
+                    # the catalog the i2d detections are added to: the
+                    # previous phase's vetted catalog, or m7's band seed
+                    _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
                         prev_seed = _build_i2d_augmented_seed(
-                            det_i2d, vetted_prev, filt,
+                            det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
                             roundlo=-_sround, roundhi=_sround,
                             sharplo=float(mopt(opts_phase, 'manual_seed_sharp_lo')),
@@ -7359,8 +7450,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             label=f'{phase}:{filt}')
                     except Exception as ex:
                         print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "
-                              f"using {os.path.basename(vetted_prev)}", flush=True)
-                        prev_seed = vetted_prev
+                              f"using {os.path.basename(_aug_base)}", flush=True)
+                        prev_seed = _aug_base
 
                 # SEED PROVENANCE for the fan-out resume.  Everything this phase
                 # fits against that the PREVIOUS phase's finalize wrote.  A

@@ -4779,6 +4779,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
+    parser.add_option('--manual-no-m7-seed-own-band', dest='manual_m7_seed_own_band',
+                      action='store_false',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
+                      help="Seed m7 from the cross-band seed ALONE.  By default each "
+                           "band's m7 seed is the cross-band seed UNION that band's own "
+                           "m6 vetted catalog, plus daofind on its m6 residual - bg "
+                           "mosaic; the cross-band seed alone drops ~1/3 of the m6 "
+                           "vetted sources (the faint stars confirmed in one band).")
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
