@@ -1,0 +1,104 @@
+"""i2d residual seed: detections with roundness beyond the tight +-0.5 cut are
+admitted up to +-0.8 when they rise above their local structure (annulus
+prominence), and rejected when they sit in structure.
+
+A faint star distorted by noise or a neighbour's wing fails +-0.5 (Brick F182M
+m7 residual peaks at S/N > 7: 55% pass +-0.5, 78% pass +-0.8); an emission
+knot is distorted as well, but its annulus is structured, so its prominence
+is low.
+"""
+import os
+
+import numpy as np
+import pytest
+from astropy.io import fits
+from astropy.table import Table
+from astropy.wcs import WCS
+
+from jwst_gc_pipeline.photometry.cataloging import (_annulus_prominence,
+                                                   _build_i2d_augmented_seed)
+from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+
+N = 140
+FWHM = 1.99            # F182M
+
+
+def _wcs():
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.crval = [266.5, -28.8]
+    w.wcs.crpix = [N / 2, N / 2]
+    w.wcs.cdelt = [-0.063 / 3600, 0.063 / 3600]
+    return w
+
+
+def _blob(x0, y0, amp, q=1.0):
+    yy, xx = np.mgrid[0:N, 0:N]
+    s = FWHM / 2.3548
+    return amp * np.exp(-((xx - x0) ** 2 / (2 * (s * q) ** 2) + (yy - y0) ** 2 / (2 * s ** 2)))
+
+
+STAR = (40.0, 40.0)        # elongated (roundness ~0.5-0.7) on flat sky
+KNOT = (100.0, 100.0)      # the same shape inside a patch of emission structure
+
+
+def _image():
+    from scipy.ndimage import gaussian_filter
+    rng = np.random.default_rng(4)
+    img = rng.normal(0, 1, (N, N))
+    img += _blob(*STAR, 20.0, q=1.55)
+    img += _blob(*KNOT, 20.0, q=1.55)
+    # PSF-scale emission structure (rms ~8) in a 36 px box around the knot
+    struct = gaussian_filter(rng.normal(0, 1, (N, N)), 1.2)
+    struct *= 8.0 / np.std(struct)
+    box = np.zeros((N, N))
+    box[82:118, 82:118] = 1
+    img += struct * box
+    return img
+
+
+def _write(tmp_path, img):
+    hdr = _wcs().to_header()
+    det = os.path.join(tmp_path, 'det_i2d.fits')
+    fits.HDUList([fits.PrimaryHDU(),
+                  fits.ImageHDU(img, header=hdr, name='SCI'),
+                  fits.ImageHDU(np.ones_like(img), header=hdr, name='ERR'),
+                  fits.ImageHDU(np.ones_like(img), header=hdr, name='WHT')]).writeto(det)
+    prev = Table({'skycoord': _wcs().pixel_to_world([5.0], [5.0]), 'flux': [100.0]})
+    ppath = os.path.join(tmp_path, 'prev_m5_vetted.fits')
+    prev.write(ppath)
+    return det, ppath
+
+
+def _seed_xy(path):
+    t = Table.read(path)
+    x, y = _wcs().world_to_pixel(t['skycoord'])
+    return np.c_[x, y]
+
+
+def _has(xy, pos, r=1.5):
+    return bool(np.any(np.hypot(xy[:, 0] - pos[0], xy[:, 1] - pos[1]) < r))
+
+
+def test_prominence_flat_vs_structured():
+    img = _image()
+    p = _annulus_prominence(img, np.array([STAR[0], KNOT[0]]), np.array([STAR[1], KNOT[1]]))
+    gate = MANUAL_DEFAULTS["manual_seed_round_loose_prom_min"]
+    assert p[0] > 2 * gate and p[1] < gate
+
+
+@pytest.mark.parametrize('loose, star_in', [(0.0, False), (0.8, True)])
+def test_loose_roundness_admits_star_not_knot(tmp_path, loose, star_in):
+    det, prev = _write(str(tmp_path), _image())
+    out = _build_i2d_augmented_seed(det, prev, 'F182M', local_snr_min=5.0,
+                                    roundlo=-0.5, roundhi=0.5,
+                                    round_loose_max=loose, round_loose_prom_min=5.0)
+    xy = _seed_xy(out)
+    assert _has(xy, STAR) == star_in
+    assert not _has(xy, KNOT)
+
+
+def test_pipeline_default():
+    assert MANUAL_DEFAULTS['manual_seed_round_max'] == 0.5
+    assert MANUAL_DEFAULTS['manual_seed_round_loose_max'] == 0.8
+    assert MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'] == 5.0
