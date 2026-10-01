@@ -176,6 +176,9 @@ def test_oversubtracted_counts_negative_cores_at_sources():
     # the same negative cores, no source on them: not counted (residual_excess's job)
     per, n = EV.oversubtracted(snr, x[2:], y[2:], inside[2:], 2.0, thresh=7)
     assert n == 0
+    # per-source mask: off-map and non-finite positions are False
+    m = EV.oversubtracted_mask(snr, np.r_[x, np.nan], np.r_[y, 5.0], thresh=7)
+    assert m.tolist() == [True, True, False, False, False, False]
 
 
 def test_ring_ratio_uniform_vs_companions():

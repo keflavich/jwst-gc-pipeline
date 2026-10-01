@@ -243,14 +243,25 @@ def residual_excess(snr_map, inner_mask, src_x, src_y, area_as2, *, thresh, excl
     return (npos - nneg) / area_as2, npos, nneg
 
 
+def oversubtracted_mask(snr_map, src_x, src_y, *, thresh):
+    """Per source: is the 3x3 px residual matched-filter S/N minimum at its
+    position below ``-thresh``?  False off the map."""
+    mn = ndimage.minimum_filter(snr_map, 3)
+    x, y = np.asarray(src_x, float), np.asarray(src_y, float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    ix = np.where(ok, np.rint(np.where(ok, x, 0)), -1).astype(int)
+    iy = np.where(ok, np.rint(np.where(ok, y, 0)), -1).astype(int)
+    ok &= (ix >= 0) & (iy >= 0) & (ix < snr_map.shape[1]) & (iy < snr_map.shape[0])
+    out = np.zeros(len(x), bool)
+    out[ok] = mn[iy[ok], ix[ok]] < -thresh
+    return out
+
+
 def oversubtracted(snr_map, src_x, src_y, inside, area_as2, *, thresh):
     """Sources inside the inner box whose 3x3 px residual matched-filter S/N
     minimum is below ``-thresh``, per arcsec^2.  Returns ``(per_as2, n)``."""
-    mn = ndimage.minimum_filter(snr_map, 3)
-    ix = np.rint(np.asarray(src_x, float)[inside]).astype(int)
-    iy = np.rint(np.asarray(src_y, float)[inside]).astype(int)
-    ok = (ix >= 0) & (iy >= 0) & (ix < snr_map.shape[1]) & (iy < snr_map.shape[0])
-    n = int(np.sum(mn[iy[ok], ix[ok]] < -thresh))
+    n = int(np.sum(oversubtracted_mask(snr_map, src_x, src_y, thresh=thresh)
+                   & np.asarray(inside, bool)))
     return n / area_as2, n
 
 

@@ -24,7 +24,9 @@ the smoothed background removed and share one linear stretch per row
 by the proposed run is a dark point in column 2, absent in column 4 and
 bright in column 5.  Markers: white = in both catalogs, green = proposed
 only, red = current only, yellow + = injected truth (seed > 0), magenta x =
-hand-labelled emission structure (``emission_labels`` in fields.yaml).
+hand-labelled emission structure (``emission_labels`` in fields.yaml),
+orange x (residual columns) = a catalog source of that run whose residual
+core is over-subtracted (evaluate.py ``oversubtracted``).
 """
 import argparse
 import os
@@ -41,6 +43,7 @@ from jwst_gc_pipeline.photometry import reference_fields as RF
 from jwst_gc_pipeline.photometry.reference_fields import evaluate as EV
 
 C_BOTH, C_NEW, C_DROP, C_TRUE, C_EMIS = 'white', 'lime', 'red', 'yellow', 'magenta'
+C_OSUB = 'orange'
 
 
 # ---------------------------------------------------------------------------
@@ -50,12 +53,27 @@ C_BOTH, C_NEW, C_DROP, C_TRUE, C_EMIS = 'white', 'lime', 'red', 'yellow', 'magen
 def load_run(prod):
     """Images and catalog of one run's products (``EV.find_products`` dict)."""
     data, _, wcs, _ = EV._image(prod['data'])
-    res, _, rwcs, _ = EV._image(prod['residual'])
+    res, rerr, rwcs, _ = EV._image(prod['residual'])
     if prod.get('smoothed_bg'):
         res = res - EV._image(prod['smoothed_bg'])[0]
     sc, flux, ferr = EV.load_catalog(prod['catalog'])
-    return dict(data=data, wcs=wcs, res=res, rwcs=rwcs, sc=sc,
+    return dict(data=data, wcs=wcs, res=res, rerr=rerr, rwcs=rwcs, sc=sc,
                 snr=flux / ferr, prod=prod)
+
+
+def oversubtracted_sources(run, fwhm, thresh, box=None):
+    """Catalog sources of ``run`` (``load_run`` dict) with an over-subtracted
+    residual core (``EV.oversubtracted_mask``); the matched-filter map is
+    renormalised inside ``box`` (x0, x1, y0, y1 on the residual grid)."""
+    if run.get('rerr') is None:
+        return run['sc'][:0]
+    mask = None
+    if box is not None:
+        mask = np.zeros(run['res'].shape, bool)
+        mask[int(box[2]):int(box[3]) + 1, int(box[0]):int(box[1]) + 1] = True
+    snr, _ = EV.matched_filter_snr(run['res'], run['rerr'], fwhm, mask)
+    x, y = run['rwcs'].world_to_pixel(run['sc'])
+    return run['sc'][EV.oversubtracted_mask(snr, x, y, thresh=thresh)]
 
 
 def match_catalogs(sc_a, sc_b, radius_as):
@@ -161,12 +179,13 @@ def _cut(img, wcs, center, size_pix):
 def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                    n_zoom=4, stretch=5.0, match_radius_as=None, box=None,
                    truth=None, emission=None, base_label='current',
-                   prop_label='proposed', extra_text=''):
+                   prop_label='proposed', extra_text='', oversub_snr=7.0):
     """Write the before/after figure of two runs (``load_run`` dicts).
 
     ``box`` = (x0, x1, y0, y1) on the base data mosaic's pixel grid (default:
     the whole mosaic less 10 px); ``truth`` = injected positions (SkyCoord);
-    ``emission`` = hand-labelled emission structures (SkyCoord).
+    ``emission`` = hand-labelled emission structures (SkyCoord);
+    ``oversub_snr`` > 0 marks each run's over-subtracted sources.
     Returns a dict of the source counts inside the box.
     """
     import matplotlib
@@ -193,6 +212,13 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
     ib, ip = inbox(xb, yb), inbox(xp, yp)
     counts = dict(n_base=int(ib.sum()), n_prop=int(ip.sum()),
                   n_new=int((ip & ~in_b).sum()), n_dropped=int((ib & ~in_p).sum()))
+
+    osub_b = osub_p = base['sc'][:0]
+    if oversub_snr and oversub_snr > 0:
+        osub_b = oversubtracted_sources(base, fw, oversub_snr, box)
+        osub_p = oversubtracted_sources(prop, fw, oversub_snr, box)
+        counts.update(n_oversub_base=int(inbox(*wcs.world_to_pixel(osub_b)).sum()),
+                      n_oversub_prop=int(inbox(*wcs.world_to_pixel(osub_p)).sum()))
 
     zoom_pix = int(round(zoom_arcsec / pixas))
     zooms = pick_zooms(xp[ip & ~in_b], yp[ip & ~in_b], xb[ib & ~in_p], yb[ib & ~in_p],
@@ -265,6 +291,8 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
             _mark(ax[3], rpw, rp.shape, new_sc, C_NEW, r_mark, 'o', 1.0)
             _mark(ax[4], rbw, rb.shape, new_sc, C_NEW, r_mark, 'o', 1.0)
             _mark(ax[4], rbw, rb.shape, drop_sc, C_DROP, r_mark, 's', 1.0)
+            _mark(ax[1], rbw, rb.shape, osub_b, C_OSUB, r_mark * 0.45, 'x', 1.0)
+            _mark(ax[3], rpw, rp.shape, osub_p, C_OSUB, r_mark * 0.45, 'x', 1.0)
             if truth is not None:
                 for a, w_, shp in ((ax[0], dw, sh), (ax[1], rbw, rb.shape),
                                    (ax[2], dw, sh), (ax[3], rpw, rp.shape)):
@@ -282,7 +310,9 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
                f"current-only (red): {counts['n_dropped']}   "
                f"{'injected (yellow +)   ' if truth is not None else ''}"
                f"{'emission label (magenta x)   ' if emission is not None else ''}"
-               f"(match {match_radius_as * 1000:.0f} mas; residual stretch "
+               + (f"over-subtracted core (orange x): {counts['n_oversub_base']} -> "
+                  f"{counts['n_oversub_prop']}   " if 'n_oversub_base' in counts else '')
+               + f"(match {match_radius_as * 1000:.0f} mas; residual stretch "
                f"+/-{stretch:g} sigma of the current residual per row)")
     if extra_text:
         summary += '\n' + extra_text
@@ -300,7 +330,7 @@ def compare_figure(base, prop, out, *, title='', filt='', zoom_arcsec=1.2,
 # ---------------------------------------------------------------------------
 
 def _metrics_text(spec, variant, phase=None):
-    try_keys = ('n_sources', 'residual_excess', 'ring_ratio', 'r_on', 'r_off',
+    try_keys = ('n_sources', 'residual_excess', 'oversubtracted', 'ring_ratio', 'r_on', 'r_off',
                 'labels_recovered', 'emission_labels_cataloged')
     try:
         m = EV.evaluate_clean(spec, variant, phase=phase)
@@ -358,7 +388,8 @@ def field_figure(name, variant, out_dir, *, base='main', seed=0, filt=None,
     title = (f"{name} [{spec['environment']}] {filt} {bprod['phase']}, "
              f"seed {seed}: {base} vs {variant}")
     counts = compare_figure(b, v, out, title=title, filt=filt, box=box, truth=truth,
-                            emission=emission, base_label=base, prop_label=variant, extra_text=text, **kw)
+                            emission=emission, base_label=base, prop_label=variant, extra_text=text,
+                            oversub_snr=kw.pop('oversub_snr', spec['oversub_snr']), **kw)
     print(f'{out}: {counts}')
     return out, counts
 
