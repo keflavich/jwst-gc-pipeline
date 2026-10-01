@@ -66,6 +66,21 @@ def test_run_labels_distinct():
     assert all(lab.startswith('ref_') for lab in labels)
 
 
+def test_sbatch_command_is_dev_run():
+    # a reference run tests untagged code: without GC_ALLOW_DEV the cataloging
+    # production guard stops it before the first stage
+    from jwst_gc_pipeline.photometry.reference_fields.run import sbatch_command
+    name = next(iter(_FIELDS))
+    cmd = sbatch_command(_FIELDS[name], 'x', 0, '/wt', cpus=4, mem='24gb',
+                         walltime='01:00:00', partition='hpg-dev')
+    wrap = next(c for c in cmd if c.startswith('--wrap='))
+    assert 'export GC_ALLOW_DEV=1;' in wrap
+    assert '--partition=hpg-dev' in cmd
+    assert not any(c.startswith('--partition') for c in
+                   sbatch_command(_FIELDS[name], 'x', 0, '/wt', cpus=4,
+                                  mem='24gb', walltime='01:00:00'))
+
+
 # ---------------------------------------------------------------------------
 # metrics
 # ---------------------------------------------------------------------------

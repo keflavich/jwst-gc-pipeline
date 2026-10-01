@@ -15,6 +15,10 @@ run writes ``<basepath>/cutouts/ref_<field>_<variant>_s<seed>/``; an existing
 run directory is removed first unless ``--keep``, because the cutout pipeline
 resumes from whatever it finds there and a variant must not inherit another
 code's intermediate products.
+
+Every run exports ``GC_ALLOW_DEV=1``: a reference run compares code that is not
+(yet) a release, so the cataloging production guard would refuse it, and the
+dev tag it stamps is the correct provenance for these products.
 """
 import argparse
 import os
@@ -51,12 +55,12 @@ def pipeline_command(spec, variant, seed, python=PYTHON, extra_args=()):
 
 
 def sbatch_command(spec, variant, seed, pipe_root, *, cpus, mem, walltime,
-                   python=PYTHON, extra_args=(), env=()):
+                   python=PYTHON, extra_args=(), env=(), partition=''):
     """``sbatch`` argv of one run (job name says field, variant and seed)."""
     label = RF.run_label(spec['name'], variant, seed)
     inner = pipeline_command(spec, variant, seed, python=python,
                              extra_args=list(extra_args) + [f'--parallel-workers={cpus}'])
-    env = list((spec.get('env') or {}).items()) + list(env)
+    env = [('GC_ALLOW_DEV', '1')] + list((spec.get('env') or {}).items()) + list(env)
     exports = ' '.join(f'export {k}={shlex.quote(str(v))};' for k, v in env)
     wrap = (f'export PYTHONPATH={shlex.quote(pipe_root)}:${{PYTHONPATH:-}}; {exports} '
             f'cd {shlex.quote(pipe_root)}; ' + shlex.join(inner))
@@ -64,6 +68,7 @@ def sbatch_command(spec, variant, seed, pipe_root, *, cpus, mem, walltime,
             '--account=astronomy-dept', '--qos=astronomy-dept-b',
             f'--cpus-per-task={cpus}', f'--mem={mem}', f'--time={walltime}',
             '--nodes=1', '--ntasks=1',
+            *([f'--partition={partition}'] if partition else []),
             f'--output={LOG_DIR}/{label}_%j.log', f'--wrap={wrap}']
 
 
@@ -80,6 +85,7 @@ def main(argv=None):
     p.add_argument('--time', default='03:00:00')
     p.add_argument('--extra', default='', help='extra pipeline args (quoted string)')
     p.add_argument('--env', action='append', default=[], help='K=V exported in the job')
+    p.add_argument('--partition', default='', help='sbatch --partition (default: cluster default)')
     p.add_argument('--submit', action='store_true')
     p.add_argument('--keep', action='store_true', help='do not clear an existing run dir')
     a = p.parse_args(argv)
@@ -95,7 +101,8 @@ def main(argv=None):
         for seed in seeds:
             cmd = sbatch_command(spec, a.variant, seed, os.path.abspath(a.pipe_root),
                                  cpus=a.cpus, mem=a.mem, walltime=a.time,
-                                 extra_args=shlex.split(a.extra), env=env)
+                                 extra_args=shlex.split(a.extra), env=env,
+                                 partition=a.partition)
             rdir = RF.run_dir(spec, a.variant, seed)
             if not a.submit:
                 print(shlex.join(cmd))
