@@ -4530,6 +4530,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "neighbour's residual gradient are distorted and fail the "
                          "tight cut (Arches: ~3x more recovered).  Do NOT loosen on "
                          "emission fields (shape is what rejects emission knots).")
+    parser.add_option("--manual-seed-round-loose-max", dest="manual_seed_round_loose_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_max'],
+                    help="Also admit i2d residual-seed detections with roundness up "
+                         "to +-x (default 0.8; 0 = off), but only those whose "
+                         "annulus prominence on the detection image is >= "
+                         "--manual-seed-round-loose-prom-min: a distorted faint "
+                         "star rises above its local structure, an emission ridge "
+                         "knot does not.")
+    parser.add_option("--manual-seed-round-loose-prom-min", dest="manual_seed_round_loose_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'],
+                    help="Prominence floor of the loose-roundness i2d seeds (default 5).")
     parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_lo'],
                     help="DAOStarFinder sharpness lower bound for the residual seed "
