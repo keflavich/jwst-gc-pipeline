@@ -20,7 +20,9 @@ import numpy as np
 from scipy import ndimage
 import matplotlib
 matplotlib.use('Agg')
+DPI = int(os.environ.get('FIG_DPI', 150))  # 150: text legible when the figure is shown at page width
 import matplotlib.pyplot as plt
+plt.rcParams.update({'font.size': 12})
 
 MODELS = [('stpsf', 'STPSF'), ('epsf', 'held-out ePSF')]
 H = 15          # stack half-size [px]
@@ -52,27 +54,28 @@ def stack_fig(z, p, label, out):
             S[m] += np.where(g, z[f'{m}_resid'][s] / z[f'{m}_f'][j], 0)
         N += g
     rr = np.hypot(k[:, None], k[None])
-    fig = plt.figure(figsize=(16, 4.6))
-    gsp = fig.add_gridspec(1, 4, width_ratios=[1, 1, 0.05, 1.25], wspace=0.3)
-    ax = [fig.add_subplot(gsp[0]), fig.add_subplot(gsp[1]), fig.add_subplot(gsp[3])]
+    fig = plt.figure(figsize=(19, 5.2))
+    # an empty spacer column keeps the colorbar label clear of the profile axis
+    gsp = fig.add_gridspec(1, 5, width_ratios=[1, 1, 0.05, 0.42, 1.3], wspace=0.25)
+    ax = [fig.add_subplot(gsp[0]), fig.add_subplot(gsp[1]), fig.add_subplot(gsp[4])]
     cax = fig.add_subplot(gsp[2])
     means = {m: S[m] / np.maximum(N, 1) for m, _ in MODELS}
     v = np.percentile(np.abs(means['stpsf'][rr <= 8]), 99)
     for q, (m, lab) in enumerate(MODELS):
         im = ax[q].imshow(means[m], origin='lower', cmap='RdBu_r', vmin=-v, vmax=v, extent=[-H - .5, H + .5, -H - .5, H + .5])
-        ax[q].set_title(f'{lab}: mean residual / flux\nbrightest 20% of isolated stars (N={len(top)})', fontsize=10)
+        ax[q].set_title(f'{lab}: mean residual / flux\nbrightest 20% of isolated stars (N={len(top)})', fontsize=13)
         ax[q].set_xlabel('px')
-    plt.colorbar(im, cax=cax, label='fraction of stellar flux per pixel')
+    plt.colorbar(im, cax=cax, label='residual / flux per pixel')
     rb = np.arange(0, 12.5, 0.5)
     prof = {}
     for m, lab in MODELS:
         prof[m] = [float(np.mean(means[m][(rr >= a) & (rr < b)])) for a, b in zip(rb[:-1], rb[1:])]
         ax[2].plot(0.5 * (rb[:-1] + rb[1:]), prof[m], 'o-', ms=3, label=lab)
     ax[2].set_yscale('symlog', linthresh=1e-4)
-    ax[2].axhline(0, color='k', lw=.5); ax[2].set_xlabel('radius [px]'); ax[2].set_ylabel('azimuthal mean of (residual / flux)')
-    ax[2].set_title('systematic PSF-shape error (0 = perfect model)', fontsize=10); ax[2].legend()
-    fig.suptitle(f'{label}: what each PSF model leaves behind around bright isolated stars', fontsize=11)
-    fig.savefig(out, dpi=75, bbox_inches='tight'); plt.close(fig)
+    ax[2].axhline(0, color='k', lw=.5); ax[2].set_xlabel('radius [px]'); ax[2].set_ylabel('azimuthal mean residual / flux')
+    ax[2].set_title('systematic PSF-shape error\n(0 = perfect model)', fontsize=13); ax[2].legend()
+    fig.suptitle(f'{label}: what each PSF model leaves behind around bright isolated stars', fontsize=15)
+    fig.savefig(out, dpi=DPI, bbox_inches='tight'); plt.close(fig)
     # summary: rms of the mean pattern within r <= 8 px, as a fraction of peak
     return {m: dict(rms_pattern_r8=float(np.sqrt(np.mean(means[m][rr <= 8] ** 2))), profile=prof[m]) for m, _ in MODELS} | {'n_stack': int(len(top))}
 
@@ -99,7 +102,7 @@ def zoom_fig(z, label, out, near_sat, nzoom=2, W=160):
             picks.append((y0, x0))
         if len(picks) == nzoom:
             break
-    fig, ax = plt.subplots(len(picks), 4, figsize=(17, 4.4 * len(picks)), squeeze=False)
+    fig, ax = plt.subplots(len(picks), 4, figsize=(17, 5.2 * len(picks)), squeeze=False)
     stats = []
     for r, (y0, x0) in enumerate(picks):
         s = np.s_[y0:y0 + W, x0:x0 + W]
@@ -107,22 +110,22 @@ def zoom_fig(z, label, out, near_sat, nzoom=2, W=160):
         d = z['sci'][s] - z['stpsf_bkg'][s]
         dv = np.arcsinh(d / np.nanmedian(e)); lo, hi = np.nanpercentile(dv, [1, 99.7])
         ax[r, 0].imshow(dv, origin='lower', cmap='gray_r', vmin=lo, vmax=hi)
-        ax[r, 0].set_title(f'data - bkg (asinh), x={x0}..{x0+W}, y={y0}..{y0+W}\n(blank in residuals: < 30 px from a saturated core)', fontsize=9)
+        ax[r, 0].set_title(f'data - bkg (asinh), x={x0}..{x0+W}, y={y0}..{y0+W}\n(blank in residuals: < 30 px from a saturated core)', fontsize=12)
         g = g & ~near_sat[s]       # saturated-core surroundings shown blank: not a PSF comparison
         chi = {m: np.where(g, z[f'{m}_resid'][s] / e, np.nan) for m, _ in MODELS}
         for q, (m, lab) in enumerate(MODELS):
             ax[r, 1 + q].imshow(chi[m], origin='lower', cmap='RdBu_r', vmin=-5, vmax=5)
-            ax[r, 1 + q].set_title(f'{lab} residual / ERR (+/-5)\nsum chi^2 = {np.nansum(chi[m]**2):.3g}', fontsize=9)
+            ax[r, 1 + q].set_title(f'{lab} residual / ERR (+/-5)\nsum chi^2 = {np.nansum(chi[m]**2):.3g}', fontsize=12)
         imp = ndimage.gaussian_filter(np.nan_to_num(chi['stpsf'] ** 2 - chi['epsf'] ** 2), 1.0)
         vv = np.percentile(np.abs(imp), 99.5)
         ax[r, 3].imshow(imp, origin='lower', cmap='PuOr_r', vmin=-vv, vmax=vv)
-        ax[r, 3].set_title('chi^2(STPSF) - chi^2(ePSF), smoothed 1 px\norange = ePSF better, purple = STPSF better', fontsize=9)
+        ax[r, 3].set_title('chi^2(STPSF) - chi^2(ePSF), smoothed 1 px\norange = ePSF better, purple = STPSF better', fontsize=12)
         for a in ax[r]:
             a.set_xticks([]); a.set_yticks([])
         stats.append(dict(frac_near_sat=float(near_sat[s].mean()), x0=x0, y0=y0, W=W, chi2_stpsf=float(np.nansum(chi['stpsf'] ** 2)), chi2_epsf=float(np.nansum(chi['epsf'] ** 2)),
                           npix=int(g.sum())))
-    fig.suptitle(f'{label}: zooms with no saturated core (same catalog, per-model refit)', fontsize=11)
-    fig.tight_layout(); fig.savefig(out, dpi=72); plt.close(fig)
+    fig.suptitle(f'{label}: zooms with no saturated core (same catalog, per-model refit)', fontsize=15)
+    fig.tight_layout(); fig.savefig(out, dpi=DPI); plt.close(fig)
     return stats
 
 
@@ -173,10 +176,10 @@ def budget_fig(z, p, label, out, near_sat):
     tot = {m: sum(res[m]) for m, _ in MODELS}
     for q, (m, lab) in enumerate(MODELS):
         ax[0].barh(yb + (0.2 if q == 0 else -0.2), np.array(res[m]) / tot['stpsf'], height=0.38, label=lab)
-    ax[0].set_yticks(yb); ax[0].set_yticklabels([f'{c}\n({100*fp:.0f}% of pixels)' for (c, _), fp in zip(classes, frac_px)], fontsize=8)
+    ax[0].set_yticks(yb); ax[0].set_yticklabels([f'{c}\n({100*fp:.0f}% of pixels)' for (c, _), fp in zip(classes, frac_px)], fontsize=12)
     ax[0].set_xlabel('share of the frame\'s excess chi^2  sum(chi^2 - 1), STPSF total = 1')
     ax[0].set_title(f'where the residual lives: total STPSF {tot["stpsf"]:.3g}, ePSF {tot["epsf"]:.3g} '
-                    f'({100*(1-tot["epsf"]/tot["stpsf"]):.1f}% lower)', fontsize=10)
+                    f'({100*(1-tot["epsf"]/tot["stpsf"]):.1f}% lower)', fontsize=13)
     ax[0].legend(); ax[0].invert_yaxis()
     rc = [0.5 * (a + b) for a, b in A]
     for m, lab in MODELS:
@@ -184,9 +187,9 @@ def budget_fig(z, p, label, out, near_sat):
         ax[1].plot(rc, star[m], 'o' + ls, color='C3', label=f'brightest 20% isolated stars, {lab}')
         ax[1].plot(rc, rand[m], 's' + ls, color='0.4', label=f'random source-free positions, {lab}')
     ax[1].axhline(1, color='k', lw=.5); ax[1].set_yscale('log'); ax[1].set_xlabel('radius [px]'); ax[1].set_ylabel('median chi^2 / pixel')
-    ax[1].set_title('annular chi^2 around stars vs around random positions\n(the environment floor)', fontsize=10); ax[1].legend(fontsize=8)
-    fig.suptitle(f'{label}: residual budget', fontsize=11)
-    fig.tight_layout(); fig.savefig(out, dpi=75); plt.close(fig)
+    ax[1].set_title('annular chi^2 around stars vs around random positions\n(the environment floor)', fontsize=13); ax[1].legend(fontsize=11)
+    fig.suptitle(f'{label}: residual budget', fontsize=15)
+    fig.tight_layout(); fig.savefig(out, dpi=DPI); plt.close(fig)
     return dict(classes=[c for c, _ in classes], frac_pixels=frac_px, excess_chi2=res, annular_star_top20=star, annular_random=rand)
 
 

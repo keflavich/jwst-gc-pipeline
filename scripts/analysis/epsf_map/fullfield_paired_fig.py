@@ -8,12 +8,15 @@ same stretch in units of ERR).
 
     python fullfield_paired_fig.py <out.png> <label>:<o081_det.npz>:<fullfield_paired npz>:<clip sigma> [...]
 """
+import os
 import sys
 
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
+DPI = int(os.environ.get('FIG_DPI', 150))  # 150: text legible when the figure is shown at page width
 import matplotlib.pyplot as plt
+plt.rcParams.update({'font.size': 12})
 
 A = [(0, 1.5), (1.5, 3), (3, 6), (6, 10)]
 PCT = ['0-50%', '50-80%', '80-95%', 'top 5%']
@@ -23,8 +26,8 @@ NG = 5
 def main():
     out = sys.argv[1]
     sets = [a.split(':') for a in sys.argv[2:]]
-    fig = plt.figure(figsize=(17, 5.2 * len(sets)))
-    gs = fig.add_gridspec(len(sets), 1 + NG, width_ratios=[2.2] + [1] * NG, hspace=0.35)
+    fig = plt.figure(figsize=(22, 6.8 * len(sets)))
+    gs = fig.add_gridspec(len(sets), 1 + NG, width_ratios=[2.2] + [1] * NG, hspace=0.42, wspace=0.28)
     for row, (label, fn, pfn, clip) in enumerate(sets):
         clip = float(clip)
         z = np.load(fn); p = np.load(pfn)
@@ -39,9 +42,9 @@ def main():
             ax.plot(rc, E, 'o-', color=col, label=f'{PCT[b]} (N={mm.sum()})')
         ax.axhline(1, color='k', lw=0.5)
         ax.set_yscale('log'); ax.set_xlabel('radius from star [px]'); ax.set_ylabel('median chi^2 / pixel')
-        ax.set_title(f'{label}: dashed = STPSF, solid = held-out ePSF\n'
-                     f'{len(sel)} isolated catalog stars, by flux percentile', fontsize=10)
-        ax.legend(fontsize=8)
+        ax.set_title(f'{label}, {len(sel)} isolated stars\n'
+                     f'dashed = STPSF, solid = held-out ePSF', fontsize=13)
+        ax.legend(fontsize=11, title='flux percentile', title_fontsize=11)
         # gallery: bright isolated stars (top 10%, no masked pixel within 5 px), evenly spread in flux
         cand = []
         for t in np.argsort(f)[::-1][:max(NG, len(f) // 10)]:
@@ -60,16 +63,16 @@ def main():
             a0 = fig.add_subplot(sub[0]); dv = np.arcsinh(d / np.nanmedian(e)); lo, hi = np.nanpercentile(dv, [1, 99.5])
             a0.imshow(dv, origin='lower', cmap='gray_r', vmin=lo, vmax=hi)
             cS, cE = p['C_stpsf'][t], p['C_epsf'][t]
-            a0.set_title(f'+/-{clip:.0f} sigma; x,y={ix},{iy}\nchi2 r<3: S {np.nanmean(cS[:2]):.0f} / E {np.nanmean(cE[:2]):.0f}', fontsize=8)
+            a0.set_title(f'({ix}, {iy})\nchi2(r<3) S {np.nanmean(cS[:2]):.0f} / E {np.nanmean(cE[:2]):.0f}', fontsize=11)
             for k, m in enumerate(['stpsf', 'epsf']):
                 a = fig.add_subplot(sub[1 + k])
                 a.imshow(np.where(gd, z[f'{m}_resid'][s] / e, np.nan), origin='lower', cmap='RdBu_r', vmin=-clip, vmax=clip)
-                a.set_ylabel(m, fontsize=8)
+                a.set_ylabel(f'{m}\n+/-{clip:.0f} sigma', fontsize=11)
             for a in fig.axes[-3:]:
                 a.set_xticks([]); a.set_yticks([])
-    fig.suptitle('o081 dither 1: same frame, same catalog, fluxes + positions refitted per PSF.  '
-                 'Gallery (bright isolated stars, top 10%): data (asinh) / STPSF residual / ePSF residual, colour in units of ERR', fontsize=11)
-    fig.savefig(out, dpi=72, bbox_inches='tight')
+    fig.suptitle('o081 dither 1: same frame, same catalog, fluxes + positions refitted per PSF\n'
+                 'gallery (bright isolated stars, top 10%): data (asinh) / STPSF residual / ePSF residual, in units of ERR', fontsize=15)
+    fig.savefig(out, dpi=DPI, bbox_inches='tight')
 
 
 if __name__ == '__main__':
