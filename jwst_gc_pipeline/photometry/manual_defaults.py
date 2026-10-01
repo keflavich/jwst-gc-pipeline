@@ -80,6 +80,9 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_max_sky_snr': 2.0,
     'manual_sky_clean_prom_min': 5.0,
     'manual_sky_clean_snr_min': 3.0,
+    # local reference tile (arcsec): annulus floor vs the tile's 5th percentile
+    # in i2d-ERR units, OR-ed with the global dark-sky test.  0 = global only.
+    'manual_sky_clean_local_arcsec': 3.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
     'manual_seed_sharp_lo': 0.4,

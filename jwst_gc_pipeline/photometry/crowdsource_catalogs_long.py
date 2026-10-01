@@ -4512,6 +4512,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     dest="manual_sky_clean_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_snr_min'],
                     help="Sky-clean tier: minimum fit S/N (default 3).")
+    parser.add_option("--manual-sky-clean-local-arcsec",
+                    dest="manual_sky_clean_local_arcsec",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_arcsec'],
+                    help="Sky-clean tier: also call a source clean when its "
+                         "deep-i2d annulus floor is within --manual-sky-clean-max-sky-snr "
+                         "i2d ERR of the 5th percentile of its surrounding tile of "
+                         "this size (default 3 arcsec; 0 = global dark-sky "
+                         "reference only).  A smooth bright plateau is clean; "
+                         "PSF-scale emission structure or crowding is not.")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "
