@@ -84,5 +84,43 @@ def test_unmeasured_prominence_keeps_peak_sb_test():
     assert 2 in kept
 
 
+CROWDED = (100, 40)
+
+
+def _run_crowded(star_prom_robust_min):
+    """A faint star with four bright neighbours 7 px away (inside the 4-10 px
+    annulus), next to the star, knot and edge sources of _image()."""
+    data = _image()
+    _gauss(data, *CROWDED, amp=7.0)
+    for a in (0.0, 1.6, 3.1, 4.7):
+        _gauss(data, CROWDED[0] + 7 * np.cos(a), CROWDED[1] + 7 * np.sin(a), amp=60.0)
+    w = _wcs()
+    xy = np.array([STAR, KNOT, EDGE, CROWDED], float)
+    cat = Table({'skycoord': w.pixel_to_world(xy[:, 0], xy[:, 1]),
+                 'qfit': np.full(4, 0.5), 'flags': np.zeros(4),
+                 'local_bkg': np.array([-0.05, 0.05, 0.05, -0.05]),
+                 'flux': np.full(4, 80.0), 'flux_err': np.full(4, 10.0),
+                 'group_size': np.ones(4), 'id': np.arange(4)})
+    out = _filter_extended_emission(cat, data_i2d_image=data, ww_i2d=w,
+                                    star_prom_min=5.0,
+                                    star_prom_robust_min=star_prom_robust_min,
+                                    sky_clean_keep=False, label='test')
+    return set(np.asarray(out['id']).tolist()), cat
+
+
+def test_robust_prominence_keeps_crowded_star_drops_knot():
+    kept, cat = _run_crowded(0.0)
+    prom = np.asarray(cat['prominence'])
+    rob = np.asarray(cat['prominence_robust'])
+    # neighbours' wings inflate the annulus MAD: the crowded star reads
+    # prominence < 5, its robust prominence stays high; the knot reads low on both
+    assert prom[3] < 5 and rob[3] > 9
+    assert prom[1] < 5 and rob[1] < 7
+    assert 3 not in kept and 1 not in kept
+    kept, _ = _run_crowded(8.0)
+    assert {0, 3} <= kept and 1 not in kept
+
+
 def test_pipeline_default_on():
     assert MANUAL_DEFAULTS['manual_ext_star_prom_min'] == 5.0
+    assert MANUAL_DEFAULTS['manual_ext_star_prom_robust_min'] == 8.0

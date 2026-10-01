@@ -4388,6 +4388,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "--manual-ext-peak-over-bkg x local bkg, whose local_bkg "
                          "scatters about zero on background-subtracted frames.  "
                          "0 = the peak-SB test (default 5).")
+    parser.add_option("--manual-ext-star-prom-robust-min", dest="manual_ext_star_prom_robust_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_min'],
+                    help="With --manual-ext-star-prom-min > 0, also keep a source whose "
+                         "neighbour-robust prominence (25th-percentile annulus floor, "
+                         "lower-half MAD) is >= this; neighbours' PSF wings inflate the "
+                         "plain annulus MAD in crowded fields.  0 = off (default 8).")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
