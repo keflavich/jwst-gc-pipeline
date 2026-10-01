@@ -286,7 +286,7 @@ for a plain single-filter NIRCam field with no tuning flags.
 | | negative-flux | banned |
 | **vetting** | qfit_max | 0.2 |
 | | peak-over-bkg | 20 |
-| | local-S/N min | 5.0 |
+| | local-S/N min | 5.0 (on flux / flux_err_prop, the merged-flux S/N) |
 | | bright-isolated keep (snr / qfit) | ≥20 / <0.4 |
 | | prominence gate | 0 (off; MIRI only) |
 | **cross-band** | seed dedup / min-filters / snr / qfit | 30 mas / 2 / 5.0 / 0.2 |
@@ -327,6 +327,7 @@ still run after m6.
 | `--manual-ext-qfit-max` | 0.2 | 0.2 | 0.2 | **0.4** |
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
+| `--manual-ext-snr-floor-per-frame` (`manual_ext_snr_floor_propagated`) | `True` | on | on | on |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
 | `--manual-ext-qfit-recover-max` | 0.2 | 0.2 (= qfit_max ⇒ **no-op**) | set 0.5 to enable | |
@@ -489,6 +490,7 @@ control is the default.
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
 | `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
+| `--manual-ext-snr-floor-per-frame` | (propagated) | put the vetting S/N floors on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch) |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
 | `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |

@@ -1376,6 +1376,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
+                              snr_floor_propagated=False,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
@@ -1409,6 +1410,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     qfit gate (which conflates blend-degraded real stars with emission knots)
     is replaced by prominence + S/N alone.  See the block comment below.
 
+    ``snr_floor_propagated``: the S/N floors (``local_snr_min``,
+    ``sky_clean_snr_min``) use flux / flux_err_prop, the uncertainty of the
+    merged flux, in place of flux / flux_err, the mean per-frame uncertainty
+    (larger by ~sqrt(nmatch)).  Catalogs without flux_err_prop keep flux_err.
+
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
     skipped.  All thresholds are FIRST-PASS (one cutout) and CLI-tunable.
@@ -1441,6 +1447,23 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                    / np.asarray(t['flux_err'], dtype=float))
     else:
         snr = np.full(n, np.inf)
+
+    # S/N for the FLOORS.  A merged catalog's flux is the mean over nmatch
+    # per-frame fits, but its flux_err is the weighted MEAN of the per-frame
+    # errors -- one frame's uncertainty.  The uncertainty of the merged flux is
+    # flux_err_prop = 1/sqrt(sum 1/sigma_i^2) ~ flux_err/sqrt(nmatch) (Brick
+    # F182M m6: median flux_err/flux_err_prop 3.16, median sqrt(nmatch) 3.74),
+    # so a per-frame S/N floor of 5 is a ~5*sqrt(nmatch) floor on the measured
+    # flux: on the dark reference field it removed injected stars up to
+    # S/N_true ~20 in m2-m4.  The qfit noise term and the bright-isolated keep
+    # stay on the per-frame S/N (qfit is itself a per-frame mean).
+    snr_floor = snr
+    if (snr_floor_propagated and 'local_snr' not in t.colnames
+            and 'flux' in t.colnames and 'flux_err_prop' in t.colnames):
+        _fep = np.asarray(t['flux_err_prop'], dtype=float)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            _snr_prop = np.asarray(t['flux'], dtype=float) / _fep
+        snr_floor = np.where(np.isfinite(_snr_prop) & (_fep > 0), _snr_prop, snr)
 
     # peak surface brightness (3x3 box max) AND annulus-MAD PROMINENCE from the
     # data i2d, if provided.  Prominence = (core peak r<1.5) - (median in a
@@ -1639,7 +1662,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # S/N (inflated to ~0 by group-fit covariance degeneracy for close pairs
         # -- see _emission_keep_nircam): a well-fit star must never be dropped
         # from the vetted catalog/residual on a broken uncertainty.
-        keep = _emission_keep_nircam(star_like, snr, local_snr_min,
+        keep = _emission_keep_nircam(star_like, snr_floor, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
 
     # MULTI-FRAME CONFIRMATION keep (Hosek ndet-style; opt-in, nmatch_confirm>0).
@@ -1731,7 +1754,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             sky_clean = np.isfinite(_emiss_snr) & (_emiss_snr <= sky_clean_max_sky_snr)
             _sc_keep = (sky_clean
                         & np.isfinite(prominence) & (prominence >= sky_clean_prom_min)
-                        & np.isfinite(snr) & (snr >= sky_clean_snr_min)
+                        & np.isfinite(snr_floor) & (snr_floor >= sky_clean_snr_min)
                         & ~near_satstar)
             t['local_emission_snr'] = _emiss_snr
             t['sky_clean'] = sky_clean
@@ -1821,7 +1844,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                    if (struct_x or struct_y) else "")
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
           f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
-          f"snr>={local_snr_min}{_struct_msg})",
+          f"snr>={local_snr_min}"
+          f"{' (flux/flux_err_prop)' if snr_floor is not snr else ''}{_struct_msg})",
           flush=True)
     return t[keep]
 
@@ -8072,6 +8096,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
+                    snr_floor_propagated=bool(mopt(opts_phase, 'manual_ext_snr_floor_propagated')),
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
                     qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),

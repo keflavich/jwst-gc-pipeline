@@ -44,6 +44,7 @@ MANUAL_DEFAULTS = {
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_local_snr_min': 5.0,
+    'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
