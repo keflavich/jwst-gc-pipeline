@@ -56,7 +56,13 @@ fields:
     # field injects 8x brighter.
     snr_range: [40, 640]
     snr_bins: [40, 80, 160, 320, 640]
-    thresholds: {}
+    # m7.  The 40-80 bin sits below the confusion floor in every variant
+    # tested (1/11), so it carries no threshold.
+    thresholds:
+      completeness_min: {80-160: 0.3, 160-320: 0.4, 320-640: 0.7}
+      residual_excess_max: 1.5
+      oversubtracted_max: 1.6
+      flux_bias_max_mag: 0.1
 
   dense_bright:
     environment: high stellar density on bright, structured background (Sgr B2 envelope)
@@ -67,7 +73,16 @@ fields:
     filters: [F187N, F212N]
     ra: 266.8368013
     dec: -28.4268384
-    thresholds: {}
+    # m7.  Below S/N 10 nothing tested recovers more than 1/17; the 10-20
+    # and 20-40 floors ask for two and three of the injected stars.
+    # oversubtracted_max catches fits to the PSF wings of bright stars, which
+    # residual_excess cannot see (it scores only the residual away from
+    # catalog sources, so a wing fit lowers it).
+    thresholds:
+      completeness_min: {10-20: 0.15, 20-40: 0.3, 40-80: 0.45}
+      residual_excess_max: 1.2
+      oversubtracted_max: 2.2
+      flux_bias_max_mag: 0.1
 
   bright_modest:
     environment: modest stellar density on bright, filamentary Paschen-alpha emission (W51)
@@ -88,7 +103,16 @@ fields:
       - [290.9194833, 14.5187002]   # knot on a ridge
       - [290.9192206, 14.5186510]   # head of the bright Pa-alpha blob
       - [290.9192243, 14.5185390]   # filament ridge (fits land +-2.6 px along it)
-    thresholds: {}
+    # m7.  Below S/N 40 no tested variant recovers more than 1/30 here (the
+    # nebular structure sets the local noise), so only the 40-80 bin carries a
+    # completeness floor.  emission_labels_cataloged_max is the guard against
+    # fitting nebular knots; residual_excess rewards such fits and stays loose.
+    thresholds:
+      completeness_min: {40-80: 0.6}
+      residual_excess_max: 0.8
+      oversubtracted_max: 0.5
+      emission_labels_cataloged_max: 1
+      flux_bias_max_mag: 0.1
 
   dark:
     environment: dark cloud, low background (Brick interior; hand-labelled clump of PR 57)
@@ -107,4 +131,10 @@ fields:
       vetted: 'catalogs/{filt}_merged_o001_indivexp_merged_resbgsub_m6_dao_basic_vetted.fits'
       satstar: 'catalogs/{filt}_consolidated_satstar_catalog.fits'
     labels: regions_/jwst_cat_f182m_selected_stars.reg
-    thresholds: {}
+    # m7.  labels_recovered_min 0.69 = 23 of the 33 hand-labelled stars.
+    thresholds:
+      completeness_min: {5-10: 0.4, 10-20: 0.85, 20-40: 0.65, 40-80: 0.9}
+      residual_excess_max: 0.6
+      oversubtracted_max: 1.6
+      labels_recovered_min: 0.69
+      flux_bias_max_mag: 0.1

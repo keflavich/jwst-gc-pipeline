@@ -36,6 +36,27 @@ def test_field_spec_complete(name):
     assert spec['size_arcsec'] - 2 * spec['inner_margin_arcsec'] > 1.0
 
 
+_THRESHOLD_KEYS = {'completeness_min', 'flux_bias_max_mag', 'residual_excess_max',
+                   'oversubtracted_max', 'ring_ratio_max', 'emission_purity_min',
+                   'labels_recovered_min', 'emission_labels_cataloged_max'}
+
+
+@pytest.mark.parametrize('name', sorted(_FIELDS))
+def test_thresholds_name_real_metrics(name):
+    """check() skips a misspelt threshold key silently and fails every run on
+    a misspelt S/N bin, so every key must be one check() reads and every
+    completeness bin one of the field's snr_bins."""
+    spec = _FIELDS[name]
+    thr = spec['thresholds']
+    assert set(thr) <= _THRESHOLD_KEYS, set(thr) - _THRESHOLD_KEYS
+    bins = set(EV.completeness_by_bin(np.array([]), np.array([], bool), spec['snr_bins']))
+    assert set(thr.get('completeness_min') or {}) <= bins
+    if 'labels_recovered_min' in thr:
+        assert spec.get('labels')
+    if 'emission_labels_cataloged_max' in thr:
+        assert spec.get('emission_labels')
+
+
 @pytest.mark.parametrize('name', sorted(_FIELDS))
 def test_injection_tables_frozen(name):
     """Every injection seed has its committed table, with a flux column per
