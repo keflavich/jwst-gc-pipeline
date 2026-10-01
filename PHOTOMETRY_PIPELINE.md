@@ -246,7 +246,9 @@ bright_isolated = (snr ≥ 20) AND (qfit < 0.4) AND (group_size ≤ 1)
 The `5/snr` term (`manual_ext_qfit_snr_k`) is the pixel-noise part of qfit: a
 perfect PSF fit has qfit = Σ|resid|/flux ≈ 3.4/snr, so the flat 0.2 alone
 rejects every real star fainter than S/N ≈ 17. `--manual-ext-qfit-snr-k=0`
-restores the flat cut.
+restores the flat cut. The term applies only where the data-i2d prominence
+is ≥ 3 (`manual_ext_qfit_snr_prom_min`), since an emission knot fits badly
+too; a source without a measured prominence gets the flat cut.
 
 **and** it clears the local-S/N floor (`local_snr_min = 5`) — **or** it is
 qfit-confident (`qfit ≤ manual_ext_qfit_max`, 0.2), which is kept regardless of S/N
@@ -331,6 +333,7 @@ still run after m6.
 | `--manual-coarse-bg-box` (`coarse_bg_box`) | 0 | 0 (off) | 0 | **51** m12–m4, 0 m5–m6 |
 | `--manual-ext-qfit-max` | 0.2 | 0.2 | 0.2 | **0.4** |
 | `--manual-ext-qfit-snr-k` | 5.0 | 5.0 | 5.0 | (unused: MIRI vets on prominence) |
+| `--manual-ext-qfit-snr-prom-min` | 3.0 | 3.0 | 3.0 | (unused) |
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-floor-per-frame` (`manual_ext_snr_floor_propagated`) | `True` | on | on | on |
@@ -495,6 +498,7 @@ control is the default.
 | `--manual-iter2-local-snr` | 3.0 | local-S/N cut for residual-seeded passes |
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
 | `--manual-ext-qfit-snr-k` | 5.0 | …widened by the pixel-noise term: qfit ≤ sqrt(qfit_max² + (k/S/N)²); 0 = flat cut |
+| `--manual-ext-qfit-snr-prom-min` | 3.0 | …where the data-i2d prominence is ≥ this (unmeasured → flat cut); 0 = no guard |
 | `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
 | `--manual-ext-snr-floor-per-frame` | (propagated) | put the vetting S/N floors on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch) |

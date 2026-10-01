@@ -1374,7 +1374,7 @@ def _emission_keep_miri(prominence, min_prominence):
 
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
-                              qfit_snr_k=0.0,
+                              qfit_snr_k=0.0, qfit_snr_prom_min=0.0,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_floor_propagated=False,
@@ -1410,6 +1410,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     alone rejects every real star below S/N ~ 17.  ``qfit_snr_k=0`` is the
     flat cut.  Only ``qfit <= qfit_max`` is ``qfit_confident`` (kept whatever
     its S/N); a source admitted by the noise term must clear the S/N floor.
+    With ``qfit_snr_prom_min > 0`` the noise term also needs a data-i2d
+    prominence >= that value; a source without a measured prominence gets the
+    flat cut.
 
     SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
     LOCAL EMISSION at a source is consistent with the field's dark-sky floor,
@@ -1569,9 +1572,14 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     )
     # qfit ceiling with the pixel-noise term (see docstring); a non-finite or
     # non-positive S/N gets the flat qfit_max.
+    # The prominence guard: an emission knot also fits badly, and the noise
+    # term admits it as readily as a faint star.  On continuum-confirmed W51 /
+    # Sgr B2 F187N labels the knots it admits sit at low prominence.
     qfit_ceiling = np.full(n, float(qfit_max))
     if qfit_snr_k > 0:
         _snr_ok = np.isfinite(snr) & (snr > 0)
+        if qfit_snr_prom_min > 0:
+            _snr_ok &= np.isfinite(prominence) & (prominence >= float(qfit_snr_prom_min))
         qfit_ceiling[_snr_ok] = np.hypot(float(qfit_max),
                                          float(qfit_snr_k) / snr[_snr_ok])
         _n_noise = int(np.sum((qf > qfit_max) & (qf <= qfit_ceiling)))
@@ -8112,6 +8120,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
                     qfit_snr_k=float(mopt(opts_phase, 'manual_ext_qfit_snr_k')),
+                    qfit_snr_prom_min=float(mopt(opts_phase, 'manual_ext_qfit_snr_prom_min')),
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),

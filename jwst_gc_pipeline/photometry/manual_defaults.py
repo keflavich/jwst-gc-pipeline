@@ -49,6 +49,10 @@ MANUAL_DEFAULTS = {
     # term lets a faint star pass when its qfit is what noise gives; sources
     # admitted by it must still clear manual_ext_local_snr_min.  0 = off.
     'manual_ext_qfit_snr_k': 5.0,
+    # ...and only where the data-i2d prominence is >= this (an emission knot
+    # also fits badly; on continuum-confirmed F187N labels the noise term
+    # admits knots at low prominence).  0 = no guard.
+    'manual_ext_qfit_snr_prom_min': 3.0,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_local_snr_min': 5.0,
