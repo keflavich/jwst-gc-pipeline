@@ -36,6 +36,7 @@ faint_snr: [5, 20]
 confirm_snr: 3.0
 offset_pix: [10, 20]
 label_radius_arcsec: 0.05
+emission_label_radius_arcsec: 0.1
 
 fields:
   superdense:
@@ -76,6 +77,16 @@ fields:
     filters: [F187N, F210M]
     ra: 290.91941
     dec: 14.51839
+    # Nebular structures in the inner box, marked by eye on F187N stamps
+    # against F162M, F140M, F360M and F210M: each has the same extended shape
+    # in F162M and F140M (scattered light) and no point source in F360M; the
+    # inner box's five stars are point sources in every band.  A catalog source
+    # within emission_label_radius_arcsec of one is a fit to emission.
+    emission_labels:
+      - [290.9199008, 14.5184665]   # compact knot
+      - [290.9194833, 14.5187002]   # knot on a ridge
+      - [290.9192206, 14.5186510]   # head of the bright Pa-alpha blob
+      - [290.9192243, 14.5185390]   # filament ridge (fits land +-2.6 px along it)
     thresholds: {}
 
   dark:

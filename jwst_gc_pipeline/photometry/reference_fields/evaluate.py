@@ -46,6 +46,13 @@ detection or the residual):
 
 ``labels_recovered``  (clean run, fields with a ``labels`` region file)
     Fraction of hand-marked stars matched within ``label_radius_arcsec``.
+
+``emission_labels_cataloged``  (clean run, fields with ``emission_labels``)
+    Number of hand-marked nebular structures (knots, filament ridges) inside
+    the inner box with a catalog source within ``emission_label_radius_arcsec``:
+    sources fit to extended emission.  The labels are positions (RA, Dec) that
+    show the same extended shape in the field's continuum bands and no point
+    source in any band.
 """
 import argparse
 import glob
@@ -247,6 +254,16 @@ def ring_ratio(x, y, flux, snr, inside, *, bright_snr, faint_ratio, ring, area_p
     return (n_obs / n_exp if n_exp > 0 else float('nan')), n_obs, float(n_exp)
 
 
+def n_within(x_lab, y_lab, x_cat, y_cat, radius):
+    """Number of label positions with a catalog source within ``radius``."""
+    if len(x_lab) == 0:
+        return 0
+    if len(x_cat) == 0:
+        return 0
+    d = cKDTree(np.c_[x_cat, y_cat]).query(np.c_[x_lab, y_lab])[0]
+    return int(np.sum(d < radius))
+
+
 def forced_snr_at(snr_map, x, y):
     """Matched-filter S/N at the nearest pixel (NaN off-map)."""
     ix = np.rint(x).astype(int)
@@ -338,6 +355,13 @@ def evaluate_clean(spec, variant, *, rng=None, phase=None):
         d = tree.query(np.c_[lx[lin], ly[lin]])[0] * fr.pixas
         out.update(n_labels=int(lin.sum()),
                    labels_recovered=float(np.mean(d < spec['label_radius_arcsec'])) if lin.any() else float('nan'))
+    if spec.get('emission_labels'):
+        ek = np.asarray(spec['emission_labels'], float)
+        ex, ey = fr.xy(SkyCoord(ek[:, 0] * u.deg, ek[:, 1] * u.deg))
+        ein = fr.inside(ex, ey)
+        out.update(n_emission_labels=int(ein.sum()),
+                   emission_labels_cataloged=n_within(
+                       ex[ein], ey[ein], x, y, spec['emission_label_radius_arcsec'] / fr.pixas))
     return out
 
 
@@ -419,7 +443,9 @@ def check(res, thresholds):
               ('residual_excess_max', lambda r: r.get('clean', {}).get('residual_excess', np.nan), 'max'),
               ('ring_ratio_max', lambda r: r.get('clean', {}).get('ring_ratio', np.nan), 'max'),
               ('emission_purity_min', lambda r: r.get('emission_purity', np.nan), 'min'),
-              ('labels_recovered_min', lambda r: r.get('clean', {}).get('labels_recovered', np.nan), 'min')]
+              ('labels_recovered_min', lambda r: r.get('clean', {}).get('labels_recovered', np.nan), 'min'),
+              ('emission_labels_cataloged_max',
+               lambda r: r.get('clean', {}).get('emission_labels_cataloged', np.nan), 'max')]
     for key, get, kind in scalar:
         if key not in thresholds:
             continue
@@ -468,6 +494,7 @@ def main(argv=None):
               f"ring={c.get('ring_ratio', np.nan):.2f} "
               f"purity={res.get('emission_purity', np.nan):.2f} "
               f"labels={c.get('labels_recovered', np.nan):.2f} "
+              f"knots={c.get('emission_labels_cataloged', '-')}/{c.get('n_emission_labels', '-')} "
               f"-> {'PASS' if not res['failures'] else 'FAIL: ' + '; '.join(res['failures'])}")
     if a.json:
         with open(a.json, 'w') as fh:

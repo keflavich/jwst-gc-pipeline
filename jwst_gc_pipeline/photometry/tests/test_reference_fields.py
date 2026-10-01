@@ -187,6 +187,28 @@ def test_purity_estimate():
     assert np.isnan(EV.purity_estimate(0.3, 0.2, float('nan')))
 
 
+def test_n_within():
+    x_lab, y_lab = np.array([10.0, 50.0, 90.0]), np.array([10.0, 50.0, 90.0])
+    assert EV.n_within(x_lab, y_lab, np.array([11.0, 52.5]), np.array([10.0, 50.0]), 3.0) == 2
+    assert EV.n_within(x_lab, y_lab, np.array([]), np.array([]), 3.0) == 0
+    assert EV.n_within(np.array([]), np.array([]), np.array([1.0]), np.array([1.0]), 3.0) == 0
+
+
+@pytest.mark.parametrize('name', sorted(_FIELDS))
+def test_emission_labels_inside_inner_box(name):
+    spec = _FIELDS[name]
+    if not spec.get('emission_labels'):
+        pytest.skip(f'{name}: no emission labels')
+    ek = np.asarray(spec['emission_labels'], float)
+    half_as = spec['size_arcsec'] / 2 - spec['inner_margin_arcsec']
+    cosd = np.cos(np.deg2rad(spec['dec']))
+    r_as = 3600 * np.hypot((ek[:, 0] - spec['ra']) * cosd, ek[:, 1] - spec['dec'])
+    assert np.all(r_as < half_as)
+    # labels far enough apart that one source cannot count twice
+    sep = 3600 * np.hypot((ek[:, None, 0] - ek[None, :, 0]) * cosd, ek[:, None, 1] - ek[None, :, 1])
+    assert np.all(sep[np.triu_indices(len(ek), 1)] > 2 * spec['emission_label_radius_arcsec'])
+
+
 def test_check_thresholds():
     res = dict(completeness={'5-10': (10, 3, 0.3), '10-20': (10, 9, 0.9)},
                flux_bias_mag=-0.03,
@@ -199,6 +221,11 @@ def test_check_thresholds():
                            'residual_excess_max': 0.2,
                            'emission_purity_min': 0.5})
     assert len(fails) == 3          # completeness, excess, NaN purity
+    res['clean']['emission_labels_cataloged'] = 2
+    assert EV.check(res, {'emission_labels_cataloged_max': 2}) == []
+    assert len(EV.check(res, {'emission_labels_cataloged_max': 0})) == 1
+    del res['clean']['emission_labels_cataloged']
+    assert len(EV.check(res, {'emission_labels_cataloged_max': 0})) == 1   # missing
 
 
 def test_figure_match_catalogs():
