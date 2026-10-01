@@ -283,3 +283,40 @@ def test_in_flight_guard_parses_job_names(monkeypatch):
     # a field-level chain blocks every observation of that (non-treasury) field
     assert irw.is_busy('1182', '004', 'brick', busy, names)
     assert not irw.is_busy('1939', '001', 'sgra', busy, names)
+    # a tokenless 10678 pipeline-stage job blocks every 10678 observation;
+    # the hourly HiPS/cron jobs carry no stage token and block nothing
+    assert not irw.is_busy('10678', '040', 'gc-treasury', busy,
+                           names + ['treasuryhips10678-cron-build'])
+    assert irw.is_busy('10678', '040', 'gc-treasury', busy,
+                       names + ['gc-treasury10678-regen-F480M'])
+    assert irw.is_busy('10678', '040', 'gc-treasury', busy, names + ['gctreasury10678-m7'])
+
+
+def test_refuses_release_symlink_target(tmp_path):
+    live = tmp_path / 'live'
+    live.mkdir()
+    fn = _synthetic_frame(live / 'x_destreak.fits', raoffset=0.0)
+    other = _synthetic_frame(live / 'z_destreak.fits', raoffset=0.0)
+    rel = tmp_path / 'releases' / 'v1' / 'frames'
+    rel.mkdir(parents=True)
+    os.symlink(fn, rel / 'x_destreak.fits')
+    roots = (str(tmp_path / 'releases'),)
+    with pytest.raises(irw.ImageRollError, match='release symlink'):
+        irw._check_writable(str(fn), release_roots=roots)
+    irw._check_writable(str(other), release_roots=roots)
+
+
+def test_refuses_blue_field_path(tmp_path, monkeypatch):
+    from jwst_gc_pipeline.astrometry import catalog_roll_correction as crc
+    fn = _synthetic_frame(tmp_path / 'x_destreak.fits', raoffset=0.0)
+    monkeypatch.setattr(crc, 'BLUE_JWST', str(tmp_path) + '/')
+    with pytest.raises(irw.ImageRollError, match='#937'):
+        irw._check_writable(str(fn), release_roots=())
+
+
+def test_no_queue_check_refused_under_field_roots(tmp_path):
+    from jwst_gc_pipeline.astrometry import catalog_roll_correction as crc
+    for p in (crc.ORANGE_JWST + 'brick/F200W/pipeline/x_i2d.fits',
+              crc.BLUE_JWST + 'brick/F200W/pipeline/x_i2d.fits'):
+        with pytest.raises(SystemExit):
+            irw.main(['--field', 'brick', '--apply', '--no-queue-check', '--file', p])

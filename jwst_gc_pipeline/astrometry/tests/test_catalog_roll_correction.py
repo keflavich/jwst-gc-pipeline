@@ -188,6 +188,53 @@ def test_rows_beyond_footprint_reach_left_unrotated(tmp_path, treasury_models):
     assert model.within_reach(near_ra, near_dec)[0]
 
 
+def test_within_reach_skips_visits_without_footprints():
+    """A footprint-less visit neither widens nor disables the reach limit."""
+    bare = crc.VisitRoll('10678', '135', '002', 20.0, RA0, DEC0, 'test', [])
+    model = crc.PointingModel([_visit(20.0), bare])
+    far_ra, far_dec = _untangent(np.array([0.0]), np.array([1100 / 206264.806]), RA0, DEC0)
+    with pytest.warns(UserWarning, match='1/2 visits'):
+        assert not model.within_reach(far_ra, far_dec)[0]
+    only_bare = crc.PointingModel([bare])
+    assert only_bare.within_reach(far_ra, far_dec)[0]
+
+
+def test_provenance_cards_fit_without_verify_warning(tmp_path, treasury_models):
+    import warnings
+    ra, dec = _grid(5)
+    src = tmp_path / ('f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted_'
+                      'with_a_very_long_descriptive_suffix_20261001.fits')
+    _write_perband(src, ra, dec)
+    out = tmp_path / 'out' / src.name
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', fits.verify.VerifyWarning)
+        crc.correct_catalog(str(src), str(out), 'gc-treasury', treasury_models)
+    h = fits.getheader(out, 1)
+    assert h['ROLLCTAB'].startswith('sha1:')
+    assert len(h['ROLLCIN']) <= 68
+
+
+def test_blue_field_root_refused_and_remapped(tmp_path, monkeypatch):
+    from jwst_gc_pipeline import fields
+    with pytest.raises(crc.RollCatalogError, match='#937'):
+        crc.refuse_blue_write(crc.BLUE_JWST + 'brick/catalogs_rollcorr/x.fits')
+    crc.refuse_blue_write(str(tmp_path / 'x.fits'))
+    blue = tmp_path / 'blue' / 'jwst'
+    orange = tmp_path / 'orange' / 'jwst'
+    (blue / 'brick').mkdir(parents=True)
+    (orange / 'brick').mkdir(parents=True)
+    monkeypatch.setattr(crc, 'BLUE_JWST', str(blue) + '/')
+    monkeypatch.setattr(crc, 'ORANGE_JWST', str(orange) + '/')
+    monkeypatch.setattr(fields, 'fields_basepath', lambda f: str(blue / f) + '/')
+    assert crc.field_root('brick') == str(orange / 'brick')
+    with pytest.raises(crc.RollCatalogError, match='does not exist'):
+        (blue / 'cloudc').mkdir()
+        crc.field_root('cloudc')
+    with pytest.raises(crc.RollCatalogError, match='#937'):
+        crc.correct_catalog(str(tmp_path / 'in.fits'), str(blue / 'brick' / 'o.fits'),
+                            'brick', {})
+
+
 def test_refusals(tmp_path, treasury_models):
     ra, dec = _grid(5)
     src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'

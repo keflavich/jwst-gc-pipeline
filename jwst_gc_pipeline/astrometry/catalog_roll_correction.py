@@ -61,6 +61,7 @@ import re
 import subprocess
 import sys
 import time
+import warnings
 from dataclasses import dataclass, field as dc_field
 
 import numpy as np
@@ -76,6 +77,37 @@ __all__ = ['VisitRoll', 'PointingModel', 'classify_catalog', 'find_position_pair
 DEFAULT_TAG = 'v1_dataqa346'
 # rows farther than this beyond a pointing's footprint reach are left unrotated
 REACH_MARGIN_ARCSEC = 120.0
+# Fields are addressed under /orange; /blue is storage reached through a
+# symlink and is never written directly (jwst-gc-pipeline#937).
+ORANGE_JWST = '/orange/adamginsburg/jwst/'
+BLUE_JWST = '/blue/adamginsburg/adamginsburg/jwst/'
+
+
+def field_root(field_name):
+    """The field's address under ORANGE_JWST.
+
+    The registry still resolves ``brick`` and ``cloudc`` under /blue (#937);
+    those map to the same relative path under /orange, which must exist
+    (``/orange/.../cloudc`` is a symlink to the /blue tree, ``/orange/.../brick``
+    is its own copy of it).
+    """
+    from jwst_gc_pipeline import fields
+    base = os.path.normpath(fields.fields_basepath(field_name))
+    if (base + '/').startswith(BLUE_JWST):
+        alt = os.path.join(ORANGE_JWST, os.path.relpath(base, BLUE_JWST))
+        if not os.path.isdir(alt):
+            raise RollCatalogError(f"{field_name}: registry path {base} is under {BLUE_JWST} "
+                                   f"and {alt} does not exist (#937)")
+        base = alt
+    return base
+
+
+def refuse_blue_write(path):
+    """Raise if ``path``, as addressed, lies under BLUE_JWST (#937)."""
+    if (os.path.abspath(path) + '/').startswith(BLUE_JWST):
+        raise RollCatalogError(f"refusing to write under {BLUE_JWST} (#937): {path}")
+
+
 OUT_SUBDIR = 'catalogs_rollcorr'
 MARKER = 'ROLLCCAT'
 MIRI_FILTERS = {'f560w', 'f770w', 'f1000w', 'f1065c', 'f1130w', 'f1140c', 'f1280w',
@@ -181,14 +213,19 @@ class PointingModel:
         footprints.  A row beyond every visit's reach + margin was not measured
         in this pointing (e.g. a satstar row imported from another observation)
         and must not be rotated with this pointing's roll.  Visits without
-        footprints place no limit.
+        footprints are skipped (with a warning); if no visit has footprints,
+        every row is within reach.
         """
         ra = np.asarray(ra, float)
         dec = np.asarray(dec, float)
+        with_fp = [v for v in self.visits if v.footprints]
+        if not with_fp:
+            return np.ones(len(ra), dtype=bool)
+        if len(with_fp) < len(self.visits):
+            warnings.warn(f"{self.key}: reach limited by {len(with_fp)}/{len(self.visits)} "
+                          "visits; visits without footprints place no limit of their own")
         inside = np.zeros(len(ra), dtype=bool)
-        for v in self.visits:
-            if not v.footprints:
-                return np.ones(len(ra), dtype=bool)
+        for v in with_fp:
             reach = max(np.max(np.hypot(*_tangent(p[:, 0], p[:, 1], v.pivot_ra, v.pivot_dec)))
                         for p in v.footprints) * 206264.806
             r = np.hypot(*_tangent(ra, dec, v.pivot_ra, v.pivot_dec)) * 206264.806
@@ -361,7 +398,7 @@ def build_models_for_field(field_name, table=ROLL_TABLE, footprint_cache=None,
     """
     from jwst_gc_pipeline import fields
     if basepath is None:
-        basepath = fields.fields_basepath(field_name)
+        basepath = field_root(field_name)
     rows = read_roll_table(table)
     grouped = {}
     for r in rows:
@@ -512,13 +549,8 @@ def _program_obs_for_band(field_name, band, obs_token, models):
         if obs_token is not None and obs not in obs_token.split('-'):
             continue
         cands.append((prog, obs))
-    if len(cands) == 1:
-        return cands[0]
-    if len(cands) > 1 and band is not None and obs_token is None:
-        # same band in several observations of one proposal (e.g. 10678 tiles):
-        # only resolvable with an obs token
-        return None
-    return None
+    # several candidates (e.g. one band in many 10678 tiles) need an obs token
+    return cands[0] if len(cands) == 1 else None
 
 
 # ----------------------------------------------------------------------------
@@ -785,6 +817,7 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
     """
     if os.path.abspath(path) == os.path.abspath(out_path):
         raise RollCatalogError(f"refusing to overwrite the input in place: {path}")
+    refuse_blue_write(out_path)
     if os.path.exists(out_path) and not overwrite_output:
         raise RollCatalogError(f"output exists: {out_path} (pass overwrite_output)")
     plan = plan_catalog(path, field_name, models, include_miri=include_miri,
@@ -907,18 +940,18 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
             sep_fixed.append(c)
 
     prov = dict(ROLLCCAT=(True, 'catalog roll correction applied (data-qa#346)'),
-                ROLLCVER=(code_version(), 'catalog_roll_correction code version'),
-                ROLLCTAB=(f"roll_corrections.csv sha1:{table_sha(table)}", 'roll table'),
+                ROLLCVER=(code_version(), 'code version'),
+                ROLLCTAB=(f"sha1:{table_sha(table)}", 'roll_corrections.csv'),
                 ROLLCSRC=('JWST-GC/data-qa#346', 'roll measurement'),
-                ROLLCIN=(os.path.basename(path)[-68:], 'input catalog basename'),
+                ROLLCIN=(os.path.basename(path)[-68:], ''),
                 ROLLCPIV=('visit coverage centroid', 'rotation pivot'),
                 ROLLPIX=('pixel cols refer to UNCORRECTED WCS', 'x/y not rotated'),
                 ROLLCDAT=(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'applied UTC'))
     vis_cards = []
     for i, m in enumerate(model_cache.values()):
         for j, v in enumerate(m.visits):
-            n = len(vis_cards)
-            if n >= 99:
+            n = len(vis_cards) // 4
+            if n > 99:
                 break
             vis_cards += [(f'ROLV{n:02d}ID', v.key, 'program-obs-visit'),
                           (f'ROLV{n:02d}AS', float(v.roll_arcsec), '[arcsec] roll applied +N->E'),
@@ -996,8 +1029,7 @@ class _nullctx:
 def enumerate_field(field_name, include_perframe=False, include_releases=True,
                     release_root='/orange/adamginsburg/jwst/releases'):
     """{class: [paths]} for a field's catalogs (read-only listing)."""
-    from jwst_gc_pipeline import fields
-    base = fields.fields_basepath(field_name).rstrip('/')
+    base = field_root(field_name)
     out = {'catalogs': sorted(p for p in glob.glob(os.path.join(base, 'catalogs', '*'))
                               if os.path.isfile(p))}
     if include_perframe:
@@ -1060,12 +1092,11 @@ def main(argv=None):
     if os.environ.get('ROLL_CORRECTION_ARCSEC') not in (None, ''):
         ap.error('ROLL_CORRECTION_ARCSEC is set; the catalog correction reads the per-visit '
                  'table only. Unset it.')
-    from jwst_gc_pipeline import fields
     field_list = args.field or fields_in_table(args.table)
     manifest = dict(tag=args.tag, table_sha=table_sha(args.table), code=code_version(),
                     fields={})
     for fname in field_list:
-        base = fields.fields_basepath(fname).rstrip('/')
+        base = field_root(fname)
         fcache = args.footprint_cache or None
         only_obs = obs_set
         if args.file and obs_set is None:
@@ -1075,6 +1106,7 @@ def main(argv=None):
         models = build_models_for_field(fname, table=args.table, footprint_cache=fcache,
                                         only_obs=only_obs)
         out_dir = args.out_dir or os.path.join(base, OUT_SUBDIR, args.tag)
+        refuse_blue_write(out_dir)
         listing = ({'catalogs': args.file} if args.file else
                    enumerate_field(fname, include_perframe=args.include_perframe))
 

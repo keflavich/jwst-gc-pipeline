@@ -155,13 +155,34 @@ def in_flight_observations(user=None):
     return busy, names
 
 
+_STAGE_TOKEN_RE = re.compile(r'(?:^|[-_])(?:m\d+|reduce|regen|cat|catalog|align|fanout|finalize)'
+                             r'(?:$|[-_])', re.I)
+
+
+def _tokenless_10678_stage(names):
+    """True if a 10678 pipeline-stage job carries no observation token.
+
+    Such a job (``gc-treasury10678-regen``) may touch any tile, so every
+    10678 observation counts as busy.  Names without a stage token (the
+    hourly HiPS/cron jobs) do not, or the guard would never clear.
+    """
+    for n in names:
+        if '10678' not in n or re.search(r'o\d{3}(?![0-9])', n):
+            continue
+        if _STAGE_TOKEN_RE.search(n):
+            return True
+    return False
+
+
 def is_busy(program, obs, field_name, busy, names):
     """True if a job touches this observation or names this field."""
-    if (str(program).lstrip('0'), obs) in busy or (None, obs) in busy:
+    prog = str(program).lstrip('0')
+    if (prog, obs) in busy or (None, obs) in busy:
         return True
+    if prog == '10678':
+        return _tokenless_10678_stage(names)
     f = field_name.replace('_', '').replace('-', '').lower()
-    return any(f in n.replace('_', '').replace('-', '').lower() for n in names) \
-        and str(program).lstrip('0') != '10678'
+    return any(f in n.replace('_', '').replace('-', '').lower() for n in names)
 
 
 # ----------------------------------------------------------------------------
@@ -204,7 +225,7 @@ def _wcs_backup_hdu(sci_header, fn):
     # the backup belongs to THIS file: destreak copies every HDU of a _cal
     # into the _destreak it writes, and restoring the cal's WCS onto a
     # shifted _destreak would drop its alignment
-    bak['ROLLBKFN'] = (os.path.basename(fn)[:68], 'file this WCS backup was taken from')
+    bak['ROLLBKFN'] = _card(os.path.basename(fn)[:68], 'file this WCS backup was taken from')
     for k, v in sci_header.items():
         if _WCS_KEY_RE.match(k):
             bak[k] = v
@@ -231,17 +252,23 @@ def _rotate_s_region(s_region, pivot, roll_arcsec, fn=None):
     return 'POLYGON ICRS  ' + ' '.join(f'{a:.9f} {b:.9f}' for a, b in zip(r2, d2))
 
 
+def _card(v, c):
+    """(value, comment), dropping a comment that would not fit one 80-char card."""
+    vlen = max(20, len(str(v)) + 2) if isinstance(v, str) else 20
+    return (v, c) if 10 + vlen + 3 + len(c) <= 80 else (v, '')
+
+
 def _stamp(h, roll, pivot, table_sha, visit_key, extra=()):
     h[MARKER] = (True, 'field roll correction applied (data-qa#346)')
     h['ROLLMODE'] = (MODE, 'rotated after alignment about visit pivot')
     h['ROLLARC'] = (float(roll), '[arcsec] roll applied, +N->E')
     h['ROLLPVRA'] = (float(pivot[0]), '[deg] roll pivot RA')
     h['ROLLPVDE'] = (float(pivot[1]), '[deg] roll pivot Dec')
-    h['ROLLVIS'] = (str(visit_key), 'program-obs-visit of the roll')
-    h['ROLLTAB'] = (f'sha1:{table_sha}'[:68], 'roll_corrections.csv')
+    h['ROLLVIS'] = _card(str(visit_key)[:68], 'program-obs-visit of the roll')
+    h['ROLLTAB'] = _card(f'sha1:{table_sha}'[:68], 'roll_corrections.csv')
     h['ROLLDATE'] = (time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'applied UTC')
     for k, v, c in extra:
-        h[k] = (v, c)
+        h[k] = _card(v, c)
     if PENDING in h:
         del h[PENDING]
 
@@ -252,11 +279,39 @@ def _replace_atomically(tmp, fn):
     os.replace(tmp, fn)
 
 
-def _check_writable(fn):
+RELEASE_ROOTS = ('/orange/adamginsburg/jwst/releases',)
+_RELEASE_TARGETS = {}
+
+
+def release_targets(roots=RELEASE_ROOTS):
+    """Realpaths of every symlink under the release trees (built once per roots).
+
+    A release links live pipeline frames; rotating such a target in place
+    would change a published product under its readers.
+    """
+    roots = tuple(roots)
+    if roots not in _RELEASE_TARGETS:
+        out = set()
+        for root in roots:
+            for d, dirs, files in os.walk(root):
+                for n in dirs + files:
+                    q = os.path.join(d, n)
+                    if os.path.islink(q):
+                        out.add(os.path.realpath(q))
+        _RELEASE_TARGETS[roots] = out
+    return _RELEASE_TARGETS[roots]
+
+
+def _check_writable(fn, release_roots=RELEASE_ROOTS):
+    from jwst_gc_pipeline.astrometry.catalog_roll_correction import BLUE_JWST
     if os.path.islink(fn):
         raise ImageRollError(f"{fn}: symlink; refusing (rotate the target instead)")
     if not os.path.isfile(fn):
         raise ImageRollError(f"{fn}: not a regular file")
+    if os.path.abspath(fn).startswith(BLUE_JWST):
+        raise ImageRollError(f"{fn}: under {BLUE_JWST}; address fields via /orange (#937)")
+    if os.path.realpath(fn) in release_targets(release_roots):
+        raise ImageRollError(f"{fn}: target of a release symlink; refusing")
 
 
 # ----------------------------------------------------------------------------
@@ -615,8 +670,8 @@ def enumerate_images(field_name, include_derived=False, filters=None, obs=None):
     ``obs`` (iterable of 3-digit ids) narrows the globs, which matters on
     gc-treasury, whose pipeline directories hold >10^5 files.
     """
-    from jwst_gc_pipeline import fields
-    base = fields.fields_basepath(field_name).rstrip('/')
+    from jwst_gc_pipeline.astrometry.catalog_roll_correction import field_root
+    base = field_root(field_name).rstrip('/')
     out = {}
     pats = ['jw*.fits'] if not obs else \
         [p for o in sorted(obs) for p in (f'jw?????{o}???_*.fits', f'jw?????-o{o}_*.fits')]
@@ -636,7 +691,6 @@ def main(argv=None):
     import argparse
     import json
     from jwst_gc_pipeline.astrometry import catalog_roll_correction as crc
-    from jwst_gc_pipeline import fields
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('--field', required=True)
     mode = ap.add_mutually_exclusive_group(required=True)
@@ -656,17 +710,19 @@ def main(argv=None):
     ap.add_argument('--verify-sample', type=int, default=0,
                     help='dry-run: build+verify the rotated GWCS on N files per kind')
     ap.add_argument('--no-queue-check', action='store_true',
-                    help='skip the squeue in-flight guard (COPIES only; refused on /orange)')
+                    help='skip the squeue in-flight guard (COPIES only; refused under the field roots)')
     args = ap.parse_args(argv)
 
     kinds = set(args.kinds.split(','))
     obs_set = set(args.obs.split(',')) if args.obs else None
     filters = set(f.upper() for f in args.filters.split(',')) if args.filters else None
-    base = fields.fields_basepath(args.field).rstrip('/')
     writing = args.apply or args.restore
+    field_roots = (crc.ORANGE_JWST, crc.BLUE_JWST)
     if writing and args.no_queue_check and (not args.file or any(
-            os.path.realpath(p).startswith('/orange/') for p in args.file)):
-        ap.error('--no-queue-check is only for explicit --file copies outside /orange')
+            q.startswith(field_roots) for p in args.file
+            for q in (os.path.abspath(p), os.path.realpath(p)))):
+        ap.error('--no-queue-check is only for explicit --file copies outside the field roots')
+    base = crc.field_root(args.field).rstrip('/')
     busy_obs, names = (set(), [])
     if writing and not args.no_queue_check:
         busy_obs, names = in_flight_observations()
