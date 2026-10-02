@@ -47,33 +47,72 @@ def spike_position_angles(pa_v3_values, struts=False):
     return np.unique(np.round(out, 6))
 
 
-def collect_pa_v3(basepath, bands):
-    """Unique PA_V3 values (rounded to 0.1 deg) of the cal frames of ``bands``.
+def _cluster_pa(vals, tol=0.5):
+    """Sorted PA values with entries within ``tol`` deg of an earlier one dropped.
 
-    Reads headers only from ``<basepath>/<BAND>/pipeline/*_cal.fits`` (SCI
-    extension, falling back to the primary header), at most the first 50
-    sorted files per band.
+    The comparison is circular, so 359.9 and 0.1 count as neighbours.
+    """
+    out = []
+    for v in sorted(vals):
+        if not any(abs((v - o + 180.0) % 360.0 - 180.0) <= tol for o in out):
+            out.append(v)
+    return np.array(out, dtype=float)
+
+
+def _sample_files(files, per_group=3):
+    """Pick header-read candidates spread over observations.
+
+    Files are grouped by the ``jwPPPPPOOO`` prefix (program + observation);
+    the first ``per_group`` and the last file of each group are read.  A
+    plain "first 50 sorted" read can see only one program of a multi-program
+    field (brick: jw01182 broad bands and jw02221 narrow bands, different
+    rolls).
+    """
+    groups = {}
+    for fn in files:
+        groups.setdefault(os.path.basename(fn)[:11], []).append(fn)
+    pick = []
+    for g in groups.values():
+        pick.extend(g[:per_group])
+        pick.append(g[-1])
+    return sorted(set(pick))
+
+
+def _read_pa_v3(fn):
+    """PA_V3 from the SCI header, else the primary header; None if absent."""
+    v = None
+    try:
+        v = fits.getheader(fn, 'SCI').get('PA_V3')
+    except KeyError:
+        pass
+    if v is None:
+        v = fits.getheader(fn, 0).get('PA_V3')
+    return v
+
+
+def collect_pa_v3(basepath, bands, tol=0.5):
+    """Distinct PA_V3 values (rounded to 0.1 deg) of the cal frames of ``bands``.
+
+    Reads headers only from ``<basepath>/<BAND>/pipeline/*_cal.fits``, sampling
+    each program/observation of each band (see :func:`_sample_files`, at most
+    ``_MAX_FILES_PER_BAND`` files per band) so that every roll of a
+    multi-program field is represented.  Values within ``tol`` deg are merged.
+    Returns an empty array when nothing is found.
     """
     vals = []
     for band in bands:
         files = sorted(glob.glob(os.path.join(
             basepath, str(band).upper(), 'pipeline', '*_cal.fits')))
-        for fn in files[:_MAX_FILES_PER_BAND]:
+        for fn in _sample_files(files)[:_MAX_FILES_PER_BAND]:
             try:
-                v = None
-                try:
-                    v = fits.getheader(fn, 'SCI').get('PA_V3')
-                except KeyError:
-                    pass
-                if v is None:
-                    v = fits.getheader(fn, 0).get('PA_V3')
+                v = _read_pa_v3(fn)
             except (OSError, ValueError):
                 continue
             if v is not None and np.isfinite(float(v)):
                 vals.append(round(float(v), 1))
     if not vals:
         return np.array([], dtype=float)
-    return np.unique(np.array(vals))
+    return _cluster_pa(vals, tol)
 
 
 def _band_list(tbl, bands=None):
@@ -129,8 +168,15 @@ def _project(ra, dec):
 
 
 def _wedge(ra, dec, x, y, cand, par, mmin, spike_pa, wmin_deg, w_phys, rmin, L0, m0,
-           alpha, Lcap, chunk=20000):
-    """Boolean mask over all rows: candidate inside a parent's spike wedge."""
+           alpha, Lcap, adaptive=True, ratio=1.5, nsig=2.0, min_count=3, nseg=2,
+           chunk=20000):
+    """Boolean mask over all rows: candidate inside a parent's spike wedge.
+
+    With ``adaptive`` the on-spike candidates of one (parent, radial segment)
+    are flagged only when their count exceeds the count in control wedges of
+    the same shape rotated by +30 deg:
+    ``N_on >= max(min_count, ratio * N_off + nsig * sqrt(N_off + 1))``.
+    """
     out = np.zeros(len(x), bool)
     if len(par) == 0 or len(cand) == 0 or len(spike_pa) == 0:
         return out
@@ -138,6 +184,10 @@ def _wedge(ra, dec, x, y, cand, par, mmin, spike_pa, wmin_deg, w_phys, rmin, L0,
     tp = cKDTree(xy[par])
     Lpar = np.minimum(Lcap, L0 * 10 ** (-0.4 * alpha * (mmin[par] - m0)))
     rad, decr = np.radians(ra), np.radians(dec)
+    ngrp = len(par) * nseg
+    n_on = np.zeros(ngrp)
+    n_off = np.zeros(ngrp)
+    on_c, on_g = [], []
     for s in range(0, len(cand), chunk):
         c = cand[s:s + chunk]
         tc = cKDTree(xy[c])
@@ -149,7 +199,7 @@ def _wedge(ra, dec, x, y, cand, par, mmin, spike_pa, wmin_deg, w_phys, rmin, L0,
             continue
         cc, pp = c[ic], par[ip]
         keep = cc != pp
-        cc, pp, r = cc[keep], pp[keep], r[keep]
+        cc, pp, ip, r = cc[keep], pp[keep], ip[keep], r[keep]
         # exact spherical PA of candidate seen from parent
         dra = rad[cc] - rad[pp]
         pa = np.degrees(np.arctan2(
@@ -158,45 +208,114 @@ def _wedge(ra, dec, x, y, cand, par, mmin, spike_pa, wmin_deg, w_phys, rmin, L0,
             - np.sin(decr[pp]) * np.cos(decr[cc]) * np.cos(dra))) % 360.0
         ph = np.abs((pa[:, None] - spike_pa[None, :] + 180.0) % 360.0 - 180.0).min(axis=1)
         w = np.maximum(wmin_deg, np.degrees(np.arctan2(w_phys, r)))
-        hit = cc[ph < w]
-        out[hit] = True
+        on = ph < w
+        if not adaptive:
+            out[cc[on]] = True
+            continue
+        phc = np.abs((pa[:, None] - spike_pa[None, :] - 30.0 + 180.0) % 360.0
+                     - 180.0).min(axis=1)
+        off = (phc < w) & ~on
+        seg = np.minimum((r / Lpar[ip] * nseg).astype(int), nseg - 1)
+        g = ip * nseg + seg
+        n_on += np.bincount(g[on], minlength=ngrp)
+        n_off += np.bincount(g[off], minlength=ngrp)
+        on_c.append(cc[on])
+        on_g.append(g[on])
+    if adaptive and on_c:
+        on_c, on_g = np.concatenate(on_c), np.concatenate(on_g)
+        thr = np.maximum(min_count, ratio * n_off + nsig * np.sqrt(n_off + 1.0))
+        good = n_on[on_g] >= thr[on_g]
+        out[on_c[good]] = True
     return out
+
+
+def _crowd(x, y, nreal, dens_r1, dens_n1, dens_r2, dens_n2, contrast, ann):
+    """Single-band rows with a local excess of other single-band rows.
+
+    The expected count within a radius is the n_real==1 surface density in the
+    annulus ``ann`` (arcsec) times the circle area; a row is flagged when its
+    count reaches both the absolute minimum and ``contrast`` times expected.
+    """
+    one = nreal == 1
+    crowd = np.zeros(len(x), bool)
+    if not one.any():
+        return crowd
+    xy = np.c_[x, y]
+    t1 = cKDTree(xy[one])
+    a_in, a_out = ann
+    n_ann = (t1.query_ball_point(xy, a_out, return_length=True)
+             - t1.query_ball_point(xy, a_in, return_length=True))
+    sigma = n_ann / (np.pi * (a_out ** 2 - a_in ** 2))
+    c1 = t1.query_ball_point(xy, dens_r1, return_length=True) - one
+    c2 = t1.query_ball_point(xy, dens_r2, return_length=True) - one
+    e1 = sigma * np.pi * dens_r1 ** 2
+    e2 = sigma * np.pi * dens_r2 ** 2
+    hit = ((c1 >= dens_n1) & (c1 >= contrast * e1)) | ((c2 >= dens_n2) & (c2 >= contrast * e2))
+    return one & hit
 
 
 def flag_spike_artifacts(tbl, pa_v3, *, parent_mag=12.5, parent_min_real=2, max_real=2,
                          wmin_deg=2.0, w_phys_arcsec=0.25, rmin_arcsec=1.5,
                          L0_arcsec=22.0, m0=7.7, alpha=0.67, Lcap_arcsec=40.0,
                          dens_r1=1.5, dens_n1=15, dens_r2=3.0, dens_n2=60,
-                         struts=False, verbose=True):
+                         adaptive=True, ratio=1.5, nsig=2.0, min_count=3, nseg=2,
+                         contrast=2.0, ann=(8.0, 20.0), crowd_near_parent=False,
+                         pa_offset_deg=0.0, struts=False, verbose=True):
     """Flag likely diffraction-spike artifacts.
 
     Returns a dict of boolean arrays ``spike_wedge``, ``single_band_crowd`` and
     ``spike_artifact`` (their OR).  Rows are never dropped.
+
+    ``adaptive`` makes the wedge test compare each parent's on-spike count with
+    rotated control wedges (``ratio``, ``nsig``, ``min_count``; ``nseg`` radial
+    segments per parent) and makes the crowd test a contrast against the local
+    n_real==1 density in the annulus ``ann`` (``contrast``).  With
+    ``crowd_near_parent`` the crowd flag additionally needs a bright parent
+    within its length L.  ``pa_offset_deg`` rotates the spike pattern (used for
+    selectivity controls).
     """
     n = len(tbl)
     nreal, mmin = n_real_bands(tbl)
     ra, dec = _radec(tbl)
     x, y = _project(ra, dec)
     spike_pa = spike_position_angles(pa_v3, struts=struts)
+    with np.errstate(invalid='ignore'):
+        par = np.where((mmin < parent_mag) & (nreal >= parent_min_real))[0]
     if len(spike_pa) == 0:
         if verbose:
             print('spike_flag: no PA_V3 values available; spike_wedge left all False',
                   flush=True)
         wedge = np.zeros(n, bool)
     else:
-        with np.errstate(invalid='ignore'):
-            par = np.where((mmin < parent_mag) & (nreal >= parent_min_real))[0]
         cand = np.where(nreal <= max_real)[0]
-        wedge = _wedge(ra, dec, x, y, cand, par, mmin, spike_pa, wmin_deg,
-                       w_phys_arcsec, rmin_arcsec, L0_arcsec, m0, alpha, Lcap_arcsec)
-    one = nreal == 1
-    crowd = np.zeros(n, bool)
-    if one.any():
-        xy = np.c_[x, y]
-        t1 = cKDTree(xy[one])
-        c1 = t1.query_ball_point(xy, dens_r1, return_length=True) - one
-        c2 = t1.query_ball_point(xy, dens_r2, return_length=True) - one
-        crowd = one & ((c1 >= dens_n1) | (c2 >= dens_n2))
+        wedge = _wedge(ra, dec, x, y, cand, par, mmin, (spike_pa + pa_offset_deg) % 360.0,
+                       wmin_deg, w_phys_arcsec, rmin_arcsec, L0_arcsec, m0, alpha,
+                       Lcap_arcsec, adaptive=adaptive, ratio=ratio, nsig=nsig,
+                       min_count=min_count, nseg=nseg)
+    if adaptive:
+        crowd = _crowd(x, y, nreal, dens_r1, dens_n1, dens_r2, dens_n2, contrast, ann)
+    else:
+        one = nreal == 1
+        crowd = np.zeros(n, bool)
+        if one.any():
+            t1 = cKDTree(np.c_[x, y][one])
+            xy = np.c_[x, y]
+            c1 = t1.query_ball_point(xy, dens_r1, return_length=True) - one
+            c2 = t1.query_ball_point(xy, dens_r2, return_length=True) - one
+            crowd = one & ((c1 >= dens_n1) | (c2 >= dens_n2))
+    if crowd_near_parent and crowd.any():
+        if len(par):
+            Lpar = np.minimum(Lcap_arcsec, L0_arcsec * 10 ** (-0.4 * alpha * (mmin[par] - m0)))
+            tp = cKDTree(np.c_[x, y][par])
+            ci = np.where(crowd)[0]
+            near = np.zeros(n, bool)
+            for j, lst in zip(ci, tp.query_ball_point(np.c_[x, y][ci], Lcap_arcsec)):
+                if lst:
+                    d = np.hypot(x[par[lst]] - x[j], y[par[lst]] - y[j])
+                    near[j] = bool((d < Lpar[lst]).any())
+            crowd &= near
+        else:
+            crowd[:] = False
     return {'spike_wedge': wedge, 'single_band_crowd': crowd,
             'spike_artifact': wedge | crowd}
 

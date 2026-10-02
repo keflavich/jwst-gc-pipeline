@@ -75,13 +75,13 @@ def test_wedge_on_off_spike():
 
 
 def test_multiband_and_far_not_flagged():
-    rows, parent, s0 = _synthetic(r=[10.0])
+    rows, parent, s0 = _synthetic(r=[8.0, 9.0, 10.0, 11.0])
     rows.append((_offset(parent, 12.0, s0), dict(f115w=18, f200w=18, f212n=18)))
     rows.append((_offset(parent, 39.0, s0), dict(f212n=19.0)))  # beyond L
     res = sf.flag_spike_artifacts(_table(rows), [PA_V3])
-    assert res['spike_wedge'][1]
-    assert not res['spike_wedge'][2]
-    assert not res['spike_wedge'][3]
+    assert res['spike_wedge'][1:5].all()
+    assert not res['spike_wedge'][5]
+    assert not res['spike_wedge'][6]
 
 
 def test_density_flag():
@@ -120,3 +120,63 @@ def test_flag_m8_file(tmp_path):
     for c in ('spike_wedge', 'single_band_crowd', 'spike_artifact', 'n_real_bands'):
         assert c in t2.colnames
     assert t2['spike_wedge'].sum() == flags['spike_wedge'].sum() > 0
+
+
+def _random_field(rng, n=3000, half=60.0):
+    c = SkyCoord(RA0 * u.deg, DEC0 * u.deg)
+    r = half * np.sqrt(rng.random(n))
+    pa = 360 * rng.random(n)
+    return [(_offset(c, ri, pai), dict(f212n=19.0)) for ri, pai in zip(r, pa)], c
+
+
+def test_chain_over_background_flagged():
+    rng = np.random.default_rng(3)
+    rows, parent = _random_field(rng, n=150)
+    rows[0] = (parent, dict(f115w=8.0, f200w=7.5, f212n=7.6))
+    s0 = sf.spike_position_angles([PA_V3])[0]
+    chain = [(_offset(parent, ri, s0), dict(f212n=19.0)) for ri in np.arange(4, 20, 0.6)]
+    res = sf.flag_spike_artifacts(_table(rows + chain), [PA_V3])
+    nb = len(rows)
+    assert res['spike_wedge'][nb:].mean() >= 0.8
+    # background rows are only flagged if they happen to sit on a spike
+    assert res['spike_wedge'][:nb].sum() <= 0.05 * nb
+
+
+def test_uniform_field_flags_almost_nothing():
+    rng = np.random.default_rng(4)
+    rows, parent = _random_field(rng, n=3000)
+    rows[0] = (parent, dict(f115w=8.0, f200w=7.5, f212n=7.6))
+    res = sf.flag_spike_artifacts(_table(rows), [PA_V3])
+    assert res['spike_wedge'].sum() <= 0.01 * len(rows)
+    assert res['single_band_crowd'].sum() <= 0.01 * len(rows)
+    # the non-adaptive wedge marks every row on a spike line
+    res0 = sf.flag_spike_artifacts(_table(rows), [PA_V3], adaptive=False)
+    assert res0['spike_wedge'].sum() > res['spike_wedge'].sum()
+
+
+def test_crowd_contrast():
+    rng = np.random.default_rng(5)
+    rows, c = _random_field(rng, n=6000, half=60.0)   # dense uniform field, ~0.5 /arcsec^2
+    clump = [(_offset(c, 0.4 * rng.random() + 0.0, 360 * rng.random()), dict(f212n=19.0))
+             for _ in range(40)]
+    shifted = [(_offset(r[0], 30.0, 0.0), r[1]) for r in clump]  # clump away from centre
+    res = sf.flag_spike_artifacts(_table(rows + shifted), [])
+    nb = len(rows)
+    assert res['single_band_crowd'][nb:].mean() > 0.9
+    assert res['single_band_crowd'][:nb].mean() < 0.02
+    # absolute-count version flags the whole dense field core far more
+    res0 = sf.flag_spike_artifacts(_table(rows + shifted), [], adaptive=False)
+    assert res0['single_band_crowd'][:nb].sum() >= res['single_band_crowd'][:nb].sum()
+
+
+def test_collect_pa_v3_multi_program(tmp_path):
+    d = tmp_path / 'F212N' / 'pipeline'
+    d.mkdir(parents=True)
+    for i, (pre, v) in enumerate([('jw01182004001', 91.0)] * 60 + [('jw02221001001', 89.0)] * 3
+                                 + [('jw02221002001', 275.5)] * 2):
+        h = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(np.zeros((2, 2)), name='SCI')])
+        h['SCI'].header['PA_V3'] = v
+        h.writeto(d / f'{pre}_{i:05d}_nrca1_cal.fits')
+    out = sf.collect_pa_v3(str(tmp_path), ['f212n'])
+    assert np.allclose(out, [89.0, 91.0, 275.5])
+    assert len(sf._cluster_pa([280.0, 280.1, 359.9, 0.1])) == 2
