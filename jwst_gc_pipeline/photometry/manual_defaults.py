@@ -43,6 +43,10 @@ MANUAL_DEFAULTS = {
     'manual_ext_qfit_max': 0.2,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
     'manual_ext_peak_over_bkg': 20.0,
+    'manual_ext_star_prom_min': 7.0,   # keep on data-i2d prominence >= this (OR); 0 = off
+    'manual_ext_star_prom_peak_min': 4.0,  # peakSB branch also needs prominence >= this; 0 = off
+    'manual_ext_star_prom_robust_min': 0.0,  # OR neighbour-robust prominence; 0 = off, -1 = AUTO (8, off on ext-emission)
+    'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
@@ -75,6 +79,12 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_local_max_err': 2.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
+    # opt-in (0 = off): roundness up to +-x admitted where the detection rises
+    # above its local structure (annulus prominence >= 5).  Off by default:
+    # the loose-only seeds concentrate on bright background and on
+    # diffraction-spike position angles (docs/evidence/faint_seed_roundness).
+    'manual_seed_round_loose_max': 0.0,
+    'manual_seed_round_loose_prom_min': 5.0,
     'manual_seed_sharp_lo': 0.4,
     'manual_seed_sharp_hi': 1.2,
     # -- per-pass prominence reject (ext-emission NIRCam; 0 = off)

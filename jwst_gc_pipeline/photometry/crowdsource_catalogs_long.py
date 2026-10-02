@@ -4377,7 +4377,38 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "(model==catalog) still overrides it.")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
-                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")
+                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).  "
+                         "Where the data-i2d prominence is measured the test also needs "
+                         "prominence >= --manual-ext-star-prom-peak-min.")
+    parser.add_option("--manual-ext-star-prom-min", dest="manual_ext_star_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_min'],
+                    help="Extended-emission vetting: keep a source whose data-i2d "
+                         "prominence (rise above the local annulus in annulus-MAD "
+                         "units) is >= this, whatever its peak-SB / local bkg; "
+                         "local_bkg scatters about zero on background-subtracted "
+                         "frames.  0 = off (default 7).")
+    parser.add_option("--manual-ext-star-prom-peak-min", dest="manual_ext_star_prom_peak_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_peak_min'],
+                    help="Extended-emission vetting: the peak-SB keep also needs "
+                         "data-i2d prominence >= this where prominence is measured.  "
+                         "A value >= --manual-ext-star-prom-min leaves the "
+                         "prominence test alone.  0 = off (default 4).")
+    parser.add_option("--manual-ext-star-prom-robust-min", dest="manual_ext_star_prom_robust_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_min'],
+                    help="With --manual-ext-star-prom-min > 0, also keep a source whose "
+                         "neighbour-robust prominence (25th-percentile annulus floor, "
+                         "lower-half MAD) is >= this; neighbours' PSF wings inflate the "
+                         "plain annulus MAD in crowded fields.  0 (default) = off; "
+                         "< 0 = AUTO: 8 on star-dominated fields, off on "
+                         "extended-emission targets, where the 25th-percentile floor "
+                         "reads the dark sides of a filament.")
+    parser.add_option("--manual-ext-star-prom-robust-conc", dest="manual_ext_star_prom_robust_conc",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_conc'],
+                    help="The neighbour-robust prominence branch refuses a source whose "
+                         "data-i2d core flux per unit fitted flux is below this "
+                         "fraction of the field median for prominent stars (core "
+                         "deficit > 5 sigma): a fit to a bump in a bright star's PSF "
+                         "wing.  Default 0.6; 0 = off.")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
@@ -4524,6 +4555,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "neighbour's residual gradient are distorted and fail the "
                          "tight cut (Arches: ~3x more recovered).  Do NOT loosen on "
                          "emission fields (shape is what rejects emission knots).")
+    parser.add_option("--manual-seed-round-loose-max", dest="manual_seed_round_loose_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_max'],
+                    help="Also admit i2d residual-seed detections with roundness up "
+                         "to +-x, but only those whose annulus prominence on the "
+                         "detection image is >= --manual-seed-round-loose-prom-min: "
+                         "a distorted faint star rises above its local structure.  "
+                         "Default 0 = off.  Opt-in per field (0.8 tested): emission "
+                         "knots and diffraction-spike knots also pass the "
+                         "prominence test.")
+    parser.add_option("--manual-seed-round-loose-prom-min", dest="manual_seed_round_loose_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'],
+                    help="Prominence floor of the loose-roundness i2d seeds (default 5).")
     parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_lo'],
                     help="DAOStarFinder sharpness lower bound for the residual seed "
