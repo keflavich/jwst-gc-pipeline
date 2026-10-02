@@ -2229,7 +2229,13 @@ def save_photutils_results(result, ww, filename,
                      ('DVACORR', 'WCSGDVA'), ('ABASERA', 'ABASERA'),
                      ('ABASEDE', 'ABASEDE'), ('ATGTRA', 'ATGTRA'),
                      ('ATGTDE', 'ATGTDE'), ('AOFFCONV', 'AOFFCONV'),
-                     ('APROVTB', 'APROVTB'), ('APROVDT', 'APROVDT')):
+                     ('APROVTB', 'APROVTB'), ('APROVDT', 'APROVDT'),
+                     # image-level roll correction (data-qa#346): a catalog fit
+                     # on rotated frames is born rotated, and the catalog-level
+                     # correction refuses it on this stamp
+                     ('ROLLCORR', 'ROLLCORR'), ('ROLLMODE', 'ROLLMODE'),
+                     ('ROLLARC', 'ROLLARC'), ('ROLLPVRA', 'ROLLPVRA'),
+                     ('ROLLPVDE', 'ROLLPVDE')):
         for _ext in (0, 1):
             if _hk in im1[_ext].header:
                 result.meta[_mk] = im1[_ext].header[_hk]
