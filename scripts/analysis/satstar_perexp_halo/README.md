@@ -84,10 +84,10 @@ comparison.
   - They correlate +0.65 with `a`, so the threshold is lowest where the halo is lowest. A lower threshold saturates *more* pixels, while the core area is *smaller* there.
 - **Already in the raw ramp, so no calibration step causes it.** Step 8 works on the `_uncal` data, before superbias, linearity, dark and flat. The halo is the median group difference D_k at 15–80 px minus its value at 150–250 px; the area counts core pixels at or above the threshold in each group.
   - **Program 10678 (F480M):** 13 observations, the 12 with the most in-band saturated stars plus obs 061.
-    - In-band / out-of-band halo: 0.81, 0.79, 0.75 for D1, D2, D3 (±0.02–0.03, 49 stars).
+    - In-band / out-of-band (`ramp_10678.json` `split_band`): halo 0.81, 0.79, 0.75 for D1, D2, D3 (±0.02–0.03, 49 stars). The exposure-1–2 vs 3–6 comparison for stars whose exposures 1–2 are in the band (`band`) reads 0.80, 0.74, 0.72 (30 stars), with area 0.59 → 0.50.
     - Saturated area: 0.61 at group 0, falling to 0.54 at group 3.
     - Null band at x = 1300–1600: 0.97–1.00.
-    - With the 10678 pattern (+385 px in x per step) a star is in the band almost only in exposures 1–2. The control, stars whose exposures 1–2 are *outside* the band, reads 0.99–1.03, so this is a column effect and not an exposure-order one.
+    - With the 10678 pattern (+385 px in x per step) a star is in the band almost only in exposures 1–2. The control, stars whose exposures 1–2 are *outside* the band, (`control`) reads 0.99–1.03 for the halo and 0.97–0.99 for the area, so this is a column effect and not an exposure-order one.
   - **Program 2221 (F405N / F410M / F466N, 24-point FULLBOX, 2022):** 96 frames, cores ≥20 px.
     - Halo 0.89 ± 0.03 (73 stars); area 0.73–0.75 (113 stars); null band 0.99–1.00.
     - So the effect is present in other LW filters and epochs, weaker for these smaller cores.
