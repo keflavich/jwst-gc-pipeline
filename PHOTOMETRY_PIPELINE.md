@@ -507,8 +507,8 @@ control is the default.
 | `--manual-ext-star-prom-robust-min` | 0 (off) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; −1 = AUTO (8 on star-dominated fields, off on extended-emission targets) |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
-| `--manual-ext-snr-floor-per-frame` | (propagated) | put the vetting S/N floors on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch) |
-| `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
+| `--manual-ext-snr-floor-per-frame` | (propagated) | put the local S/N floor (`--manual-ext-local-snr-min`) on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch); the sky-clean floor is per-frame either way |
+| `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + per-frame S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
 | `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |
 
