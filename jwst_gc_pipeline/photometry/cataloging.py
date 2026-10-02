@@ -4409,6 +4409,18 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
         dedup_merged_catalog(m8_path, out)
         print(f"manual [{label}]: m8 dedup -> {out}", flush=True)
+        # Catalog-level diffraction-spike flag (#1035): adds flag columns to
+        # the dedup file, never removes rows.  Best-effort.
+        if (getattr(options, 'm8_spike_flag', True)
+                and os.environ.get('M8_SPIKE_FLAG', '1') != '0'):
+            try:
+                from jwst_gc_pipeline.photometry.spike_flag import flag_m8_spike_artifacts
+                _bp = getattr(options, 'basepath', None)
+                if not _bp:
+                    _bp = os.path.dirname(os.path.dirname(os.path.abspath(m8_path)))
+                flag_m8_spike_artifacts(out, _bp)
+            except (OSError, KeyError, ValueError) as _sex:
+                print(f"manual [{label}]: m8 spike flag FAILED ({out}): {_sex}", flush=True)
         # PROPOSAL-SCOPED COPY (brick only): the brick 'target' spans TWO proposals that
         # share this generic filename -- jw01182 broadbands (field o004) and jw02221
         # narrows (field o001) -- so their merges CLOBBER each other's m8/m8_dedup. Write

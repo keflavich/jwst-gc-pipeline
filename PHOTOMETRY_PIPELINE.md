@@ -358,6 +358,7 @@ still run after m6.
 | `--manual-crossband-seed-qfit-max` | 0.2 | 0.2 | | |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
+| `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
@@ -414,6 +415,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 - `..._resbgsub_m8<obs>.fits` + `..._resbgsub_m8_dedup.fits` — the **forced-fill**
   sibling of the m7 table; every band's flux is force-fit at the merged position.
   Full-frame only; m7 stays as written.
+  The dedup file also carries diffraction-spike flag columns `spike_wedge`,
+  `single_band_crowd`, `spike_artifact` (bool) and `n_real_bands` (int), added by
+  `photometry/spike_flag.py` (flags only, no rows removed; disable with
+  `--no-m8-spike-flag` or `M8_SPIKE_FLAG=0`).
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).
