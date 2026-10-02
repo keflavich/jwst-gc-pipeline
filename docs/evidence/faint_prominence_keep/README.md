@@ -1,127 +1,223 @@
-# Vetting bright-star branch: prominence, robust prominence, concentration guard
+# Vetting bright-star branch: prominence guard on peak_SB, prominence ≥ 7 keep
 
-The `star_like` peak branch required `peak_SB > 20 × local_bkg`.  `local_bkg`
-is fit on background-subtracted frames and scatters about zero, so its sign
-decides the branch (Brick F182M: faint high-qfit sources kept 92% when
-`local_bkg > 0`, 6% when ≤ 0), and on W51 F187N the admitted and rejected sets
-have the same continuum-match purity (0.45 vs 0.48).  This branch replaces the
-test in four steps (one commit each):
+The `star_like` branch of `_filter_extended_emission` keeps a source when
+`peak_SB > 20 × local_bkg`.  `local_bkg` is fit on background-subtracted
+frames and scatters about zero, so its sign decides the branch (Brick F182M:
+faint high-qfit sources kept 92% when `local_bkg > 0`, 6% when ≤ 0).  This
+branch keeps that test and adds two prominence terms, where prominence is the
+data-i2d annulus prominence (core peak − 4–10 px annulus median, over the
+annulus MAD):
 
-1. data-i2d annulus prominence ≥ 5 (core peak − 4–10 px annulus median, over
-   the annulus MAD);
-2. OR neighbour-robust prominence ≥ 8 (25th-percentile annulus floor,
-   lower-half MAD), because neighbours' wings inflate the plain MAD in crowded
-   fields (superdense: prominence alone dropped 13 of 124 real faint stars);
-3. the robust branch AUTO-off on extended-emission targets, where the dark
-   flanks of a narrow filament make ridge points read robust 8–14;
-4. a concentration guard on the robust branch: a fit whose data-i2d core
-   (r ≤ 1.5 px above the 2.5–4 px ring) per unit fitted flux is below 0.6 of
-   the field's bright-star median, with a core deficit > 5σ, is refused.  Next
-   to a bright star the robust floor reads the dark side of the star's wing,
-   so bumps in the wing (PSF-model mismatch) read high robust prominence.
+1. **Guard on the peak_SB keep** (`--manual-ext-star-prom-peak-min`, new,
+   default 4): a source kept by peak_SB also needs prominence ≥ 4 where
+   prominence is measured.
+2. **Prominence keep** (`--manual-ext-star-prom-min`, default 7): prominence
+   ≥ 7 keeps a source whatever the sign of `local_bkg`.
+3. **Neighbour-robust prominence branch off by default**
+   (`--manual-ext-star-prom-robust-min`, default 0; −1 selects the earlier
+   AUTO).  On the full-field Brick F182M replay the 21,540 sources it adds at
+   robust prominence ≥ 8 match the independent F200W visit at 0.10 of the
+   rate of kept stars of the same flux.  The robust branch and its
+   concentration guard stay available as options; their evidence is in the
+   last section.
 
-Figure layout and metric definitions:
+Figure layout and metric definitions of the reference fields:
 [../faint_reference_fields/README.md](../faint_reference_fields/README.md).
 
-### Dark cloud (Brick, F182M), injection seed 1: `m7seed` → `promconc4` (this branch)
-![](dark_s1.png)
+## Full-field replay (m6 vetting on the production m6 merged catalogs)
 
-8 added, 1 dropped; the seed's S/N 10–20 bin goes 2/6 → 3/6 and 20–40 goes
-5/10 → 6/10.  Rows C and D: injected stars fitted.  Row A: three sources added
-to a compact group; one carries an over-subtracted core (13 → 17 in this
-seed).
+`scripts/vet_variant.py` cuts the vetting call out of the branch's own
+`cataloging.py` and runs it with pipeline-default options on a production m6
+merged catalog; `scripts/sweep_prom2.sbatch` runs guard 3, 4 and 5 (commit
+d29fedb2).  **Realness** of a set of sources is
+`(match − chance) / (expected − chance)`: `match` is the fraction with a
+reference-catalog counterpart within 60 mas, `chance` the same fraction at
+positions shifted by ~2″, and `expected` the match fraction of the #1015
+base-kept sources of the same flux (`scripts/compare.py`,
+`scripts/slices.py`; the matching code is
+`../faint_m7_seed_union/scripts/realness.py`).  A set at realness 1 matches
+like the kept stars of its flux; at 0 it matches at chance.  If the kept
+stars are real, a set below ~0.5 holds more spurious sources than real ones.
 
-### Dark cloud, clean run: `m7seed` → `promconc4`
-![](dark_s0.png)
+References: Brick F182M against F200W from the **independent** 1182/o004
+visit; Sgr B2 F187N and W51 F187N against F182M from the **same visit**,
+which shares the frames' artefacts and reads high.
 
-8 added, 1 dropped; residual excess 1.18 → 0.83 per arcsec², over-subtracted
-16 → 19.  Row C: a faint star beside a brighter one leaves the residual.
-Rows A–B: the added sources around the compact groups refit their
-neighbours, and two existing members end up over-subtracted.
+| field | added | lost, guard 3 | lost, guard 4 (default) | lost, guard 5 |
+|---|---|---|---|---|
+| Brick F182M (base kept 377,837) | 5,577 at 0.81 | 8,259 at 0.20 | 16,809 at 0.28 | 27,218 at 0.37 |
+| Sgr B2 F187N (base kept 408,591) | 9,321 at 0.82 | 10,381 at 0.30 | 22,439 at 0.42 | 36,293 at 0.53 |
+| W51 F187N (base kept 20,041) | 1,338 at 1.19 | 0 | 659 at 0.61 | not run |
 
-### High density on bright background (Sgr B2, F187N), clean run: `m7seed` → `promconc4`
-![](dense_bright_s0.png)
+The additions are the same for every guard (prominence ≥ 7 keep).  Each step
+of the guard drops one band of prominence:
 
-21 added, 3 dropped; residual excess 1.80 → 1.59, over-subtracted 21 → 29.
-Rows A and D: faint stars in the gaps.  Rows B and C: added sources beside
-bright stars, some over-subtracted; these are the cases the guard leaves in.
+| prominence band dropped | Brick | Sgr B2 | W51 |
+|---|---|---|---|
+| < 3 (guard 3) | 8,259 at 0.20 | 10,381 at 0.30 | 0 |
+| 3–4 (guard 3 → 4) | 8,550 at 0.36 | 12,058 at 0.53 | 659 at 0.61 |
+| 4–5 (guard 4 → 5) | 10,409 at 0.52 | 13,854 at 0.72 | — |
 
-### Concentration guard alone (Sgr B2, clean run): `promkeep24` (steps 1–2) → `promconc4` (steps 1–4)
-![](guard_dense_bright_s0.png)
+Guard 4 is the step at which the band dropped on the independent-visit field
+(Brick) is below 0.5; the next band reads 0.52.  On Sgr B2 and W51 the 3–4
+band reads 0.53 and 0.61 against same-visit references, so guard 4 also
+drops real stars there; guard 3 drops none on W51.
 
-15 dropped, 2 added; over-subtracted 40 → 29, residual excess 1.18 → 1.59.
-Row A: without the guard, seven fits form a ring around a bright star, all
-over-subtracted, and the star itself is not cataloged; with the guard the ring
-is gone and the star is fitted (its core is over-subtracted: PSF-model
-mismatch).  Rows B–D: the same pattern around other bright
-stars.
+Slices of the additions with low realness (overlapping):
 
-### Super-high density (NSC, F212N), injection seed 1: `m7seed` → `promconc4`
-![](superdense_s1.png)
+| slice of the added sources | Brick | Sgr B2 | W51 |
+|---|---|---|---|
+| prominence 7–8.5 | 2,883 at 0.68 | 3,241 at 0.89 | 251 at 1.09 |
+| qfit ≥ 1 | 101 at 0.31 | 647 at 0.23 | 74 at 0.06 |
+| per-frame S/N 20–50 | 246 at 0.06 | 1,156 at 0.34 | 34 at 0.22 |
+| per-frame S/N ≥ 50 | 48 at 0.04 | 150 at 0.27 | 7 at 0.37 |
 
-8 added, 7 dropped; the seed's 160–320 bin goes 3/9 → 4/9.  The dropped
-sources (red boxes) are faint fits the prominence test refuses; the
-difference column shows small residual peaks there.
+### Added sources, Brick F182M
+![](full_added_brick.png)
 
-### Robust branch off on W51 (F187N, clean run): `promkeep24` (step 2 active) → `promkeep34` (step 3)
-![](robust_off_bright_modest_s0.png)
+12 additions drawn by distance to the nearest saturated star (`scripts/added_gallery.py`).  Columns:
+data, current residual (#1015 base), proposed residual, F200W from the
+independent visit.  Label colour green = F200W counterpart within 60 mas.
+Most are faint stars between brighter ones that leave the residual when
+added.  The two unmatched S/N > 40 additions (right column, rows 2–3) sit in
+the wing of a bright star 0.6″ and 1.3″ from a saturated star: these are the
+high-S/N, low-realness slice above.
 
-5 dropped, 1 added; hand-labelled emission knots cataloged 4 → 1.  Rows A–B:
-the robust branch had admitted fits on knots and a filament ridge.  The one
-knot still cataloged (row A, green) passes the pre-existing `flags == 1`
-branch; see caveats.
+### Dropped sources, Brick F182M
+![](full_lost_brick.png)
 
-## Metrics (m7)
+9,220 of the 15,392 dropped sources in the F200W footprint lie within 1″ of a
+saturated star (18% with a raw counterpart there, against 29% at 1–2″ and
+24% beyond; raw fractions, not chance-corrected).  The drawn examples split
+into fits on a saturated star's wing or spike pattern (left column, rows 1–2)
+and compact peaks that stay in the proposed residual (right column, rows
+3–6), most of those without an F200W counterpart within 60 mas.
 
-Injection completeness (recovered/injected, seeds 1+2) per injected-S/N bin, clean-run residual metrics, and median flux bias.  Base = fix 4 (`m7seed`); steps 1–2 only = `promkeep24`; this branch = `promconc4`.  The W51 row for this branch is the step-3 run (`promkeep34`): step 4 gates only the robust branch, which step 3 turns off on W51.
+### Added and dropped sources, Sgr B2 F187N
+![](full_added_sgrb2.png)
+![](full_lost_sgrb2.png)
+
+The reference column is F182M from the same visit.  Additions: faint stars
+in gaps and on the filament edges.  Dropped: fits on filaments and on the
+wings of bright stars; several stamps show the dropped position on a
+filament that F182M also shows as extended.  Some dropped positions are
+compact peaks with an F182M counterpart that stay in the proposed residual
+(left column, row 3).
+
+## Reference fields (m7, injection seeds 1–10 + clean run)
+
+All 44 runs of this branch from commit d29fedb2 (clean tree).  Comparison
+`main` → `promv2` (this branch).
+
+### High density on bright background (Sgr B2, F187N), injection seed 1
+![](dense_bright_s1.png)
+
+86 → 97 sources: 11 added, 0 dropped; over-subtracted cores 17 → 18.  Row A:
+faint stars in the gaps between brighter ones are added and leave the
+residual (difference column).  Row B: a source is added at an injected star
+(yellow +), offset from it by more than the 32 mas match radius, so the
+seed's tally does not change.  Row C: a source added beside an injected
+star.  Across the 10 seeds this field adds 9–12 sources per seed and drops
+0–1.
+
+### Dark cloud (Brick, F182M), injection seed 9
+![](dark_s9.png)
+
+65 → 70 sources: 5 added, 0 dropped; injected S/N 20–40 recovered 1/4 →
+3/4; over-subtracted 16 → 17.  Rows A (bottom) and C: added sources at
+injected stars.  Row B: a faint star beside a compact group.  Row A (top):
+an added source whose core is over-subtracted after the refit.  Across the
+10 seeds: 1–5 added and 0–3 dropped per seed.
+
+### Super-high density (NSC, F212N), injection seed 6
+![](superdense_s6.png)
+
+91 → 86 sources: 5 dropped, 0 added; over-subtracted 21 → 20.  The guard
+drops faint fits: row A three in a smooth faint patch with no distinct peak
+in the data, rows B–D single faint fits (row C: the dropped fit had an
+over-subtracted core).  Across the 10 seeds: 0 added and 1–5 dropped
+per seed.
+
+### Modest density on bright emission (W51, F187N), injection seed 3
+![](bright_modest_s3.png)
+
+10 → 7 sources: 3 dropped, 0 added.  Each dropped fit has a negative core on
+smooth emission in the current residual; dropping it flattens the residual.
+Row B: one of them is a hand-labelled emission knot (magenta x).  Across the
+10 seeds: 0 added and 0–3 dropped per seed.
+
+## Metrics (m7, 10 injection seeds)
+
+Injection completeness (recovered/injected, seeds 1–10) per injected-S/N
+bin, clean-run residual metrics, and median flux bias.
 
 **superdense (NSC, F212N)** (phase m7)
 
 | variant | S/N 40-80 | S/N 80-160 | S/N 160-320 | S/N 320-640 | resid excess /as² (+/−) | over-subtracted /as² (n) | labels | bias mag |
 |---|---|---|---|---|---|---|---|---|
-| fix 4 (base) | 1/11 | 5/13 | 5/14 | 8/10 | 1.32 (22/3) | 1.32 (19) | — | 0.018 |
-| steps 1–2 only | 1/11 | 5/13 | 6/14 | 8/10 | 1.39 (24/4) | 1.45 (21) | — | -0.016 |
-| steps 1–4 (this branch) | 1/11 | 5/13 | 6/14 | 8/10 | 1.39 (24/4) | 1.39 (20) | — | -0.009 |
+| main | 1/51 | 6/64 | 18/74 | 26/51 | 1.66 (27/3) | 1.11 (16) | — | -0.025 |
+| promv2 | 1/51 | 5/64 | 18/74 | 26/51 | 1.66 (27/3) | 1.18 (17) | — | -0.009 |
 
 **dense + bright bg (Sgr B2, F187N)** (phase m7)
 
 | variant | S/N 5-10 | S/N 10-20 | S/N 20-40 | S/N 40-80 | resid excess /as² (+/−) | over-subtracted /as² (n) | labels | bias mag |
 |---|---|---|---|---|---|---|---|---|
-| fix 4 (base) | 0/17 | 0/11 | 2/9 | 5/11 | 1.80 (26/0) | 1.45 (21) | — | 0.001 |
-| steps 1–2 only | 0/17 | 0/11 | 3/9 | 7/11 | 1.18 (17/0) | 2.77 (40) | — | -0.025 |
-| steps 1–4 (this branch) | 0/17 | 0/11 | 3/9 | 6/11 | 1.59 (23/0) | 2.01 (29) | — | -0.006 |
+| main | 0/49 | 1/69 | 11/58 | 28/64 | 3.05 (44/0) | 1.18 (17) | — | 0.030 |
+| promv2 | 0/49 | 1/69 | 12/58 | 32/64 | 2.35 (34/0) | 1.25 (18) | — | 0.032 |
 
 **modest density + bright bg (W51, F187N)** (phase m7)
 
 | variant | S/N 5-10 | S/N 10-20 | S/N 20-40 | S/N 40-80 | resid excess /as² (+/−) | over-subtracted /as² (n) | labels | emission knots cataloged | bias mag |
 |---|---|---|---|---|---|---|---|---|---|
-| fix 4 (base) | 0/11 | 0/6 | 0/13 | 11/18 | 0.55 (10/2) | 0.07 (1) | — | 2/4 | 0.138 |
-| steps 1–2 only | 0/11 | 0/6 | 1/13 | 11/18 | 0.28 (6/2) | 0.21 (3) | — | 4/4 | 0.097 |
-| steps 1–4 (this branch) | 0/11 | 0/6 | 0/13 | 9/18 | 0.48 (11/4) | 0.07 (1) | — | 1/4 | -0.041 |
+| main | 0/53 | 1/56 | 5/68 | 32/62 | 0.21 (4/1) | 0.07 (1) | — | 2/4 | -0.145 |
+| promv2 | 0/53 | 0/56 | 3/68 | 31/62 | 0.21 (4/1) | 0.07 (1) | — | 1/4 | -0.147 |
 
 **dark cloud (Brick, F182M)** (phase m7)
 
 | variant | S/N 5-10 | S/N 10-20 | S/N 20-40 | S/N 40-80 | resid excess /as² (+/−) | over-subtracted /as² (n) | labels | bias mag |
 |---|---|---|---|---|---|---|---|---|
-| fix 4 (base) | 0/10 | 4/11 | 9/15 | 11/12 | 1.18 (19/2) | 1.11 (16) | 0.55 | 0.050 |
-| steps 1–2 only | 0/10 | 6/11 | 10/15 | 12/12 | 0.69 (11/1) | 1.52 (22) | 0.55 | 0.050 |
-| steps 1–4 (this branch) | 0/10 | 6/11 | 10/15 | 12/12 | 0.83 (14/2) | 1.32 (19) | 0.55 | 0.050 |
+| main | 0/62 | 12/55 | 37/61 | 45/62 | 1.39 (22/2) | 1.18 (17) | 0.45 | 0.032 |
+| promv2 | 0/62 | 13/55 | 41/61 | 47/62 | 1.25 (20/2) | 1.18 (17) | 0.45 | 0.027 |
+
+Net injected recoveries: dark +7, dense_bright +5, superdense −1, W51 −4.
+The W51 losses are injected stars on emission whose prominence is 3–4: the
+guard drops them together with the emission fits (knots cataloged 2/4 →
+1/4).  The dense_bright and dark rows equal those of #1017 (`qfitsnr7`)
+exactly; the two branches were run from different commits, and I have not
+compared them star by star.
+
+## Neighbour-robust branch and concentration guard (opt-in)
+
+These figures are from the first version of this branch, in which the robust
+branch was on by default.  It is off by default now; the options remain.
+
+### Concentration guard alone (Sgr B2, clean run): `promkeep24` (robust on, no guard) → `promconc4` (robust on, guard)
+![](guard_dense_bright_s0.png)
+
+15 dropped, 2 added; over-subtracted 40 → 29, residual excess 1.18 → 1.59.
+Row A: without the guard, seven fits form a ring around a bright star, all
+over-subtracted, and the star itself is not cataloged; with the guard the
+ring is gone and the star is fitted (its core is over-subtracted: PSF-model
+mismatch).  Rows B–D: the same pattern around other bright stars.
+
+### Robust branch on W51 (F187N, clean run): `promkeep24` (robust on) → `promkeep34` (robust AUTO-off)
+![](robust_off_bright_modest_s0.png)
+
+5 dropped, 1 added; hand-labelled emission knots cataloged 4 → 1.  Rows A–B:
+the robust branch had admitted fits on knots and a filament ridge.
 
 ## Caveats
 
-- The guard does not remove every wing fit: Sgr B2 over-subtracted cores are
-  21 on the base branch, 40 without the guard and 29 with it.  The remaining
-  ones include blended real stars and PSF-model mismatch at bright stars,
-  which this vetting cannot fix.
-- On W51 this branch alone recovers 9 of 18 injected stars at S/N 40–80
-  (base 11): with the robust branch off, a star on nebular structure needs
-  plain prominence ≥ 5.  With all fixes combined W51 recovers 12/18; which
-  of the other fixes restores those stars is not isolated here.
-- The guard turns itself off with fewer than 5 calibration sources
-  (prominence ≥ 10, flags 0), e.g. sparse F405N cutouts.
-- The log's "refused N" counts would-be robust admissions; some of those are
-  kept by another branch (Brick m4: logged 9, net catalog change −2).
+- The guard threshold rests on one field with an independent reference
+  (Brick).  On Sgr B2 and W51 the dropped 3–4 band reads 0.53 and 0.61
+  against same-visit references, which overstate realness by an unknown
+  amount; W51 also loses 4 of 239 injected stars in the reference runs.
+- The additions include small low-realness slices (qfit ≥ 1, S/N ≥ 20) that
+  sit in the wings of bright stars; prominence ≥ 7 does not reject a bump in
+  a bright star's wing.
 - On W51 the remaining cataloged knot passes the `flags in keep_flags = (1,)`
   branch: photutils flag 1 marks one masked pixel in the fit box and the
   branch admits any such fit.  That is pre-existing and left for a separate
   change.
+- The concentration guard (robust branch only) turns itself off with fewer
+  than 5 calibration sources (prominence ≥ 10, flags 0).
