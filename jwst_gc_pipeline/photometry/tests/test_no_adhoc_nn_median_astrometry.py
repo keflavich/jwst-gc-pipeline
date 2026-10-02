@@ -194,6 +194,11 @@ ALLOWLIST = {
     ("jwst_gc_pipeline/astrometry/multiepoch_pm.py", "<unattributed>"),
     # one-off scripts outside the pipeline's astrometric path
     ("scripts/reduction/combine_brick_allband.py", "main"),
+    # PR #1020 evidence script, no astrometry.  seedspike.main: which loose
+    # seeds of run B have no run-C seed within 30 mas (a boolean "dropped by
+    # the spike guard" flag); its reduces are the median of position-angle
+    # histogram counts and the median background rank per population.
+    ("docs/evidence/faint_seed_roundness/scripts/seedspike.py", "main"),
     # :130-137 medians NN matches against a DENSE NIRCam F405N reference and
     # prints "astrometry: median offset" -- the validation-fools-you pattern by
     # name.  PRINT ONLY: nothing reads it and no WCS is written from it.  It

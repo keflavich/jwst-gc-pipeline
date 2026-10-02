@@ -78,6 +78,12 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_snr_min': 3.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
+    # opt-in (0 = off): roundness up to +-x admitted where the detection rises
+    # above its local structure (annulus prominence >= 5).  Off by default:
+    # the loose-only seeds concentrate on bright background and on
+    # diffraction-spike position angles (docs/evidence/faint_seed_roundness).
+    'manual_seed_round_loose_max': 0.0,
+    'manual_seed_round_loose_prom_min': 5.0,
     'manual_seed_sharp_lo': 0.4,
     'manual_seed_sharp_hi': 1.2,
     # -- per-pass prominence reject (ext-emission NIRCam; 0 = off)
