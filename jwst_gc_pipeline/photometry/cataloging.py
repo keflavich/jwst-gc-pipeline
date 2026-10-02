@@ -81,6 +81,7 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
 import os
 import re
 from jwst_gc_pipeline.astrometry_utils import pick_refcat as _au_pick_refcat
+from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
 from jwst_gc_pipeline.photometry.m2_correction_floors import (
     m2_correction_floor)
 import types
@@ -2150,7 +2151,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
 
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = _bgsub_token(options)
-    epsf_ = "_epsf" if options.epsf else ""
+    epsf_ = ("_epsf" if options.epsf else "") + hybrid_psf_token()
     exposure_ = f'_exp{exposurenumber:05d}' if exposurenumber is not None else ''
     visitid_ = f'_visit{int(visit_id):03d}' if visit_id is not None else ''
     vgroupid_, _vgnum = _L.normalize_vgroup_id(vgroup_id)

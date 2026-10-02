@@ -73,6 +73,7 @@ from jwst_gc_pipeline.photometry.naming import (
     perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
+from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
 from jwst_gc_pipeline.photometry.measure_offsets import (
     DenseNNMedianAstrometryError, assert_sparse_reference_for_nn_median)
 # Imported as field_registry: `fields` is a local variable in these
@@ -1248,7 +1249,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
     else:
         iter_token = f'_{iteration_label}'
 
-    epsf_ = "_epsf" if epsf else ""
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
 
     matching_ref_tables = [tb for tb in tbls if tb.meta['filter'] == ref_filter]
@@ -1973,7 +1974,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
     bgsub = _bgsub_token(bgsub, resbgsub)
-    epsf_ = "_epsf" if epsf else ""
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
     if iteration_label in (None, ''):
         iter_token = ''
