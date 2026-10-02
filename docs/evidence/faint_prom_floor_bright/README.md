@@ -26,6 +26,13 @@ the cmax stars; the 68% Jeffreys intervals are in
 [`exempt_bins.txt`](exempt_bins.txt).  Sgr B2 is not an extended-emission
 target; it is the negative control on dense nebular emission.
 
+The S/N_prop bins of these tables and of [`peak_check.txt`](peak_check.txt)
+use the proxy `flux / flux_err × √nmatch`; the vetting code uses
+`flux / flux_err_prop`.  In the W51 F187N region the two agree at the median
+and the proxy is up to 1.21× higher for the top 16%, so the proxy places 32
+region sources at S/N ≥ 40 where `flux_err_prop` places 27 (all 27 are among
+the 32).  The replay below uses the code's definition.
+
 Each cell: purity (matched/n) without the peak requirement → with it.
 
 | field, band / continuum | S/N 20–25 | 25–30 | 30–40 | 40–60 | ≥ 60 |
@@ -139,6 +146,25 @@ The S/N 40 and peak requirements leave the reference-field result of the
 first version unchanged: both injected stars sit at S/N_prop ≥ 40 on a
 data peak.
 
+## Full-field replay on the stack
+
+The m6 vetting of this branch's head, replayed on the production merged
+catalogs, compared row for row with the replay of #1016 on #1018 v2
+([`replay_check.txt`](replay_check.txt)):
+
+| field | #1016 kept | this branch kept | added | lost |
+|---|---|---|---|---|
+| W51 F187N | 21,308 | 21,334 | 26 | 0 |
+| Brick F182M | 387,581 | 387,581 | 0 | 0 |
+
+The 26 W51 additions have qfit ≤ 0.194, prominence 2.06–2.99 and S/N_prop ≥
+47.1, and the vetting log reports the same count ("26 kept at prominence >=
+2 with qfit <= 0.2, S/N >= 40 and a local data_i2d peak").  The region holds
+27 sources at S/N_prop ≥ 40; the 27th was already kept on another path.  The
+Brick is not an extended-emission target, so the floor and its exemption do
+not run there.  On top of #1018 and #1016 this branch changes only the
+exempted sources in these two replays.
+
 ## Caveats
 
 - The W51 reference field fails `emission_labels_cataloged_max` (2 of 4
@@ -161,4 +187,5 @@ Scripts in [`scripts/`](scripts/):
 `build_pl.py` (applies `_filter_extended_emission` to a production m6
 catalog and adds the continuum match), `anal_exempt_bins.py` (the per-bin
 table), `peak_check.py` (the peak fractions), `exempt_gallery.py` (the
-stamps).
+stamps), `replay_exempt.sbatch` and `compare_replay.py` (the full-field
+replay and `replay_check.txt`).
