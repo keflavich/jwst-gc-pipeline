@@ -75,6 +75,8 @@ qfit branch picks up, and one faint star.
 - Unchanged on superdense and W51 at m7, as intended (their tiles have
   large p25 − p5).
 - The local reference is the tile's 5th percentile; a tile that is entirely
-  inside a smooth bright plateau counts as clean.  A smooth plateau cannot
-  imitate a PSF, and the prominence and S/N requirements of the tier still
-  apply.
+  inside a smooth bright plateau counts as clean.  The tier assumes that a
+  smooth plateau does not produce PSF-like peaks; the prominence and S/N
+  requirements of the tier still apply, and the full-frame additions include
+  fits with qfit up to ~1, so this assumption is tested by the realness
+  measurement below rather than by construction.
