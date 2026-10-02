@@ -2785,8 +2785,9 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # purity is protected by the fit + nmatch confirmation, not the shape cut.  The
     # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5) as a
     # blanket cut (loosened everywhere it plants fake stars on nebulosity in
-    # emission fields); detections out to --manual-seed-round-loose-max (0.8) are
-    # admitted only at annulus prominence >= --manual-seed-round-loose-prom-min.
+    # emission fields).  The loose window --manual-seed-round-loose-max (opt-in,
+    # default 0 = off; 0.8 tested) admits detections out to that roundness only
+    # at annulus prominence >= --manual-seed-round-loose-prom-min.
     resid_roundlo = float(mopt(options, 'manual_resid_roundlo'))
     resid_roundhi = float(mopt(options, 'manual_resid_roundhi'))
     resid_sharplo = float(mopt(options, 'manual_resid_sharplo'))
