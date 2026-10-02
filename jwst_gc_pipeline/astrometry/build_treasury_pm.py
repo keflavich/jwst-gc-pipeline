@@ -32,6 +32,7 @@ Example:
         --out /orange/.../sgrb2/astrometry_diag/pm_flystar/pm_sgrb2_treasury_f212n.fits
 """
 import argparse
+import os
 import json
 import numpy as np
 from astropy.table import Table
@@ -343,6 +344,7 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     # exactly how much linear motion/shear each tie removed and add it back
     # if needed.
     pm.meta['tie_diag_json'] = json.dumps(diags)
+    pm.meta['ref_paths_json'] = json.dumps([os.path.basename(q) for q in ref_paths])
     pm.write(out_path, overwrite=True)
     ntrust = int(pm['trustworthy'].sum())
     if verbose:
