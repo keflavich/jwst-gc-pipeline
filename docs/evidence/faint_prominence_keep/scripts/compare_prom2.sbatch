@@ -21,6 +21,6 @@ else
     python slices.py $f prom2 prom2p3 prom2p5
     python propresid.py $f   # i2d ePSF stamp for the galleries' proposed residuals
     mkdir -p gal
-    python added_gallery.py $f prom2 gal/added_${f}_prom2.png 4 added
-    python added_gallery.py $f prom2 gal/lost_${f}_prom2.png 4 lost
+    python added_gallery.py $f prom2 gal/full_added_${f}.png 4 added
+    python added_gallery.py $f prom2 gal/full_lost_${f}.png 4 lost
 fi

@@ -4,9 +4,11 @@ Rows: random added sources (compare.py, out/<field>_<band>_<v>_added_rowid.npy),
 or with kind=lost the base-kept sources the branch drops, two per row, grouped
 by distance to the nearest saturated star (0-1", 1-2", >2").  1" stamps; linear
 stretch from the stamp 10th percentile to the brightest data pixel within
-PEAK_R of the drawn source (the same stretch on both residuals; the reference
-image gets its own local peak), so a faint source sets the stretch rather than
-its brighter neighbours.
+PEAK_R of the drawn source (the reference image gets its own local peak), so a
+faint source sets the stretch rather than its brighter neighbours.  Both
+residuals share one stretch with the floor moved down by RESID_FLOOR x the
+data range, so the background reads grey and an over-subtracted core reads
+white.
 Columns per source:
   data      band data_i2d; cyan dots = base-kept sources (current catalog),
             orange circles = other sources the branch adds (proposed catalog),
@@ -21,11 +23,15 @@ Columns per source:
             image (Sgr B2: F182M, same visit)
 Label colour: reference-catalog counterpart within 60 mas (green) or not (red).
 
-usage: python added_gallery.py <field> <variant> <out.png> [per_bin] [added|lost]
+<variant>@<other>: compare with the replay <other> in place of the #1015 base
+(the 'current' residual is then <other>'s catalog).
+
+usage: python added_gallery.py <field> <variant>[@<other>] <out.png> [per_bin] [added|lost]
 """
 import json
 import os
 import sys
+import textwrap
 import warnings
 
 import numpy as np
@@ -72,11 +78,13 @@ PR = {'snr': '#1016 S/N floor on flux_err_prop', 'qsnr': '#1017 qfit noise term'
       'promr0p10': '#1018 prominence keep >= 10 (robust branch off)',
       'prom2': '#1018 prominence keep >= 7, peak-SB guard 4',
       'prom2p3': '#1018 prominence keep >= 7, peak-SB guard 3',
-      'prom2p5': '#1018 prominence keep >= 7, peak-SB guard 5'}
+      'prom2p5': '#1018 prominence keep >= 7, peak-SB guard 5',
+      'snrp2': '#1016 S/N floor on flux_err_prop (on #1018)'}
 SAT_BINS = ((0, 1), (1, 2), (2, np.inf))
 ABBR = {'prominence_robust': 'rprom', 'core_concentration': 'conc', 'local_structure_snr': 'lstruct'}
 HALF = 0.5     # 1" stamps
 PEAK_R = 0.07  # stretch top = brightest pixel within this radius (arcsec) of the drawn source
+RESID_FLOOR = 0.5  # residual stretch floor = data floor - RESID_FLOOR x (data top - data floor)
 
 
 def load(path):
@@ -97,6 +105,8 @@ def local(img, w, s):
 def main(field, v, out, per_bin=4, kind='added'):
     per_bin = int(per_bin)
     assert kind in ('added', 'lost')
+    v, _, against = v.partition('@')
+    basel = PR[against].split()[0] if against else '#1015 base'
     c = CFG[field]
     band = c['band']
     base = Table.read(f'{HERE}/out/{field}_{band}_seed.fits')
@@ -106,7 +116,13 @@ def main(field, v, out, per_bin=4, kind='added'):
     var = Table.read(f'{HERE}/out/{field}_{band}_{v}.fits')
     assert np.array_equal(np.asarray(var['rowid']), np.asarray(base['rowid']))
     kv = np.asarray(var['kept'], bool)
-    if kind == 'added':
+    if against:
+        t0 = Table.read(f'{HERE}/out/{field}_{band}_{against}.fits')
+        assert np.array_equal(np.asarray(t0['rowid']), np.asarray(base['rowid']))
+        kb = np.asarray(t0['kept'], bool)
+    if kind == 'added' and against:
+        add = np.flatnonzero(kv & ~kb)
+    elif kind == 'added':
         add = np.load(f'{HERE}/out/{field}_{band}_{v}_added_rowid.npy')
         assert np.array_equal(add, np.flatnonzero(kv & ~kb))
     else:
@@ -124,6 +140,8 @@ def main(field, v, out, per_bin=4, kind='added'):
     _, sep, _ = sc_all[add].match_to_catalog_sky(refsc)
     matched = np.zeros(len(base), bool)
     matched[add] = sep.to_value(u.mas) < 60
+    sepmas = np.full(len(base), np.nan)
+    sepmas[add] = sep.to_value(u.mas)
     infp = np.zeros(len(base), bool)
     infp[add] = sep.arcsec < 1.0
     addmask = np.zeros(len(base), bool)
@@ -134,9 +152,9 @@ def main(field, v, out, per_bin=4, kind='added'):
     with open(f'{HERE}/out/{field}_{band}_epsf.json') as fh:
         ecal = json.load(fh)
     # residual of catalog C = production residual - model(C \ prod) + model(prod \ C);
-    # current C = #1015 base (kb), proposed C = branch (kv)
+    # current C = #1015 base or <other> (kb), proposed C = branch (kv)
     diffs = {1: (kb & ~prod, prod & ~kb), 2: (kv & ~prod, prod & ~kv)}
-    img = [('data', load(prov['data_i2d'])), ('current residual (#1015 base)', load(c['resid'])),
+    img = [('data', load(prov['data_i2d'])), (f'current residual ({basel})', load(c['resid'])),
            (f'proposed residual ({PR[v].split()[0]})', load(c['resid'])), (c['reflab'], load(c['refimg']))]
     NI = len(img)
     rng = np.random.default_rng(11)
@@ -183,6 +201,8 @@ def main(field, v, out, per_bin=4, kind='added'):
                     ctr, scale_src = dctr, dcut
                 if np.isfinite(ctr).any():
                     vlo, vhi = np.nanpercentile(scale_src, 10), np.nanmax(ctr)
+                    if j in (1, 2):
+                        vlo = vlo - RESID_FLOOR * (vhi - vlo)
                     ax.imshow(cut.data, origin='lower', cmap='gray_r', vmin=vlo, vmax=max(vhi, vlo + 1e-6))
                 x, y = cut.wcs.world_to_pixel(sc)
                 if j == 0:
@@ -205,22 +225,26 @@ def main(field, v, out, per_bin=4, kind='added'):
             ex = ''.join(f' {ABBR[cn]} {float(var[cn][i]):.1f}' for cn in extra)
             axes[rr, c0].set_ylabel(f'sat {dsat[i]:.1f}"  S/N {snr_f:.1f}/{snr_p:.0f}\nqfit {qf[i]:.2f} prom {pr[i]:.1f}{ex}',
                                     fontsize=7.5, color='green' if matched[i] else 'red')
+            print(f'row {rr + 1} {"left" if k % 2 == 0 else "right"}: rowid {i} sat {dsat[i]:.2f}" '
+                  f'nearest reference {sepmas[i]:.0f} mas, S/N {snr_f:.1f}/{snr_p:.0f}, qfit {qf[i]:.2f}, prom {pr[i]:.1f}')
         r += (len(sel) + 1) // 2
     summ = '; '.join(f'{lo}-{hi:g}" {int(matched[idx].sum())}/{idx.size}'
                      for (lo, hi), idx, _ in picks) + ' matched'
     what = 'adds over' if kind == 'added' else 'drops from'
     circ = 'other added sources' if kind == 'added' else 'other dropped sources'
-    fig.suptitle(f'{field} {band.upper()}: sources {PR[v]} {what} the #1015 base, by distance to the nearest '
-                 f'saturated star.  In the reference footprint: {summ}.\n'
-                 f'1" stamps, linear stretch from the stamp 10th percentile to the brightest data pixel within '
-                 f'{PEAK_R}" of the drawn source (data stretch also on both residuals).  Proposed residual = '
-                 f'current minus catalog flux x effective PSF (stacked from the production model; '
-                 f'held-out isolated stars: scale {ecal["s_iso"]:.2f}, rms mismatch {ecal["frac_rms_iso"]:.0%}).\n'
-                 f'Orange ticks = drawn source; cyan dots = #1015 base-kept; orange circles = {circ}; '
-                 f'red x = saturated star.\n'
-                 f'Label: sat distance, S/N per-frame/propagated, qfit, prominence'
-                 + ''.join(f', {ABBR[cn]}' for cn in extra)
-                 + '; green = reference counterpart within 60 mas, red = none', fontsize=9)
+    lines = [f'{field} {band.upper()}: sources {PR[v]} {what} the {basel} catalog, by distance to the nearest '
+             f'saturated star.  In the reference footprint: {summ}.',
+             f'1" stamps, linear stretch from the stamp 10th percentile to the brightest data pixel within '
+             f'{PEAK_R}" of the drawn source; both residuals share that stretch with the floor lowered by '
+             f'{RESID_FLOOR:g} x the range (grey = background, white = over-subtracted).',
+             f'Proposed residual = current minus catalog flux x effective PSF (stacked from the production model; '
+             f'held-out isolated stars: scale {ecal["s_iso"]:.2f}, rms mismatch {ecal["frac_rms_iso"]:.0%}; '
+             f'random stamps: scale {ecal["s_random"]:.2f}).',
+             f'Orange ticks = drawn source; cyan dots = {basel}-kept; orange circles = {circ}; red x = saturated star.',
+             'Label: sat distance, S/N per-frame/propagated, qfit, prominence'
+             + ''.join(f', {ABBR[cn]}' for cn in extra)
+             + '; green = reference counterpart within 60 mas, red = none']
+    fig.suptitle('\n'.join(textwrap.fill(t, 150) for t in lines), fontsize=9)
     fig.savefig(out, dpi=110)
     plt.close(fig)
     print(out)

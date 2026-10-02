@@ -85,34 +85,66 @@ Slices of the additions with low realness (overlapping):
 ### Added sources, Brick F182M
 ![](full_added_brick.png)
 
-12 additions drawn by distance to the nearest saturated star (`scripts/added_gallery.py`).  Columns:
-data, current residual (#1015 base), proposed residual, F200W from the
-independent visit.  Label colour green = F200W counterpart within 60 mas.
-Most are faint stars between brighter ones that leave the residual when
+12 additions drawn by distance to the nearest saturated star
+(`scripts/added_gallery.py`, 1″ stamps).  Columns: data, current residual
+(#1015 base), proposed residual (each added source subtracted as catalog
+flux × the effective PSF), F200W from the independent visit.  Both residuals
+share one stretch whose floor sits half the data range below the data floor,
+so the background reads grey and an over-subtracted core reads white.  Label
+colour green = F200W counterpart within 60 mas: 4 of the 12 (2–7 mas); for
+the other eight the nearest F200W catalog source is 120–355 mas away.  In all
+12 stamps the compact peak at the tick leaves the residual when the source is
 added.  The two unmatched S/N > 40 additions (right column, rows 2–3) sit in
 the wing of a bright star 0.6″ and 1.3″ from a saturated star: these are the
-high-S/N, low-realness slice above.
+high-S/N, low-realness slice above, and their proposed residual shows a light
+(over-subtracted) pixel beside the tick.  Bottom right: the F200W panel is
+blank (no image data at that position).  The Brick effective PSF is poorly
+calibrated (scale 0.37 on 13 held-out isolated stars, rms mismatch 54%; see
+the figure title), so the depth of each Brick subtraction is approximate.
 
 ### Dropped sources, Brick F182M
 ![](full_lost_brick.png)
 
 9,220 of the 15,392 dropped sources in the F200W footprint lie within 1″ of a
 saturated star (18% with a raw counterpart there, against 29% at 1–2″ and
-24% beyond; raw fractions, not chance-corrected).  The drawn examples split
-into fits on a saturated star's wing or spike pattern (left column, rows 1–2)
-and compact peaks that stay in the proposed residual (right column, rows
-3–6), most of those without an F200W counterpart within 60 mas.
+24% beyond; raw fractions, not chance-corrected).  In this gallery the
+current residual has the dropped source subtracted and the proposed residual
+does not.  All 12 drawn have prominence 2.0–3.9, below guard 4.  Two have an
+F200W counterpart within 60 mas (left column, row 3, 10 mas; right column,
+row 2, 13 mas); for the other ten the nearest F200W catalog source is
+110–327 mas away.  Left column, rows 1, 2 and 6 are fits on the wing or spike
+pattern of a bright star (rows 1–2 within 1″ of a saturated star); in row 6
+the current residual is over-subtracted at the tick and the proposed residual
+is not.  In the other nine stamps a compact peak returns to the proposed
+residual at the tick, the two matched sources included.  These nine show the
+cost of the guard: the Brick sources dropped at guard 4 read realness 0.28
+(table above), so most of them are spurious and some are real stars.
 
 ### Added and dropped sources, Sgr B2 F187N
 ![](full_added_sgrb2.png)
 ![](full_lost_sgrb2.png)
 
-The reference column is F182M from the same visit.  Additions: faint stars
-in gaps and on the filament edges.  Dropped: fits on filaments and on the
-wings of bright stars; several stamps show the dropped position on a
-filament that F182M also shows as extended.  Some dropped positions are
-compact peaks with an F182M counterpart that stay in the proposed residual
-(left column, row 3).
+The reference column is F182M from the same visit; the effective PSF
+reproduces the Sgr B2 model to 7% (scale 1.03).  Additions: 11 of the 12
+drawn have an F182M counterpart within 60 mas (1–35 mas); the twelfth (left
+column, row 3) lies on a filament that F182M shows as extended, with its
+nearest F182M catalog source 258 mas away.  They are faint stars in gaps and
+on filament edges.  The compact peak at the tick leaves the residual in ten
+stamps; in the left column, rows 5 and 6, the peak is blended with a
+neighbour and only partly leaves.  Left column, row 4, and right column,
+row 6, show a light (over-subtracted) pixel at the tick.
+
+Dropped: 3 of the 12 have an F182M counterpart (left column, rows 2–3, and
+right column, row 1; 3–7 mas), and each returns as a compact peak in the
+proposed residual.  Left column, row 1, and right column, row 2, sit 0.28″
+and 0.64″ from saturated stars, in their residual wings.  Left column, rows
+4–5, and right column, rows 4–6, sit on filaments or streaks that F182M also
+shows as extended; several of them leave a faint peak in the proposed
+residual.
+
+`data/gallery_stamps_prom2.txt` lists each drawn source of the four
+galleries with its separation from the nearest reference source (printed by
+`added_gallery.py`).
 
 ## Reference fields (m7, injection seeds 1–10 + clean run)
 
