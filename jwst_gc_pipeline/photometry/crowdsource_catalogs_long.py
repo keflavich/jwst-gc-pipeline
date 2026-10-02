@@ -4779,14 +4779,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
-    parser.add_option('--manual-no-m7-seed-own-band', dest='manual_m7_seed_own_band',
-                      action='store_false',
+    parser.add_option('--manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
+                      action='store_true',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
-                      help="Seed m7 from the cross-band seed ALONE.  By default each "
-                           "band's m7 seed is the cross-band seed UNION that band's own "
-                           "m6 vetted catalog, plus daofind on its m6 residual - bg "
-                           "mosaic; the cross-band seed alone drops ~1/3 of the m6 "
-                           "vetted sources (the faint stars confirmed in one band).")
+                      help="Seed each band's m7 fit from the cross-band seed UNION "
+                           "that band's own m6 vetted catalog, plus daofind on its "
+                           "m6 residual - bg mosaic.  Off by default (cross-band "
+                           "seed alone): the own-band sources this restores are "
+                           "confirmed by an independent visit 0.21x as often as "
+                           "the ones m7 already has.")
+    parser.add_option('--manual-m7-seed-own-band-companion-fwhm',
+                      dest='manual_m7_seed_own_band_companion_fwhm', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
+                      help='With --manual-m7-seed-own-band: own-band sources within '
+                           'this many PSF FWHM of a brighter seed source are not '
+                           'added (PSF-ring fits).  0 disables.  Default 2.5.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '

@@ -1,8 +1,10 @@
-"""m7 seed of one filter = cross-band seed UNION that filter's m6 vetted catalog.
+"""m7 seed of one filter = cross-band seed UNION that filter's m6 vetted catalog
+(opt-in, ``manual_m7_seed_own_band``).
 
-The >=2-filter cross-band seed alone drops every source only ONE band's m6
-vetting accepted (a third of the m6 vetted catalog in Brick F182M); those
-faint stars leave the m7 model and reappear in the final residual.
+The >=2-filter cross-band seed alone leaves out every source only ONE band's
+m6 vetting accepted and m7 does not find again (a third of the m6 vetted
+catalog in Brick F182M).  Own-band sources near a brighter seed source are not
+added (companion cut).
 """
 import os
 import types
@@ -163,7 +165,7 @@ def test_annotate_counts_m7_residual_detections(tmp_path):
     in the one band that detected it)."""
     cut_bp = str(tmp_path)
     os.makedirs(f'{cut_bp}/catalogs')
-    opts = _annot_opts()
+    opts = _annot_opts(manual_m7_seed_own_band=True)
     # m6 vetted F182M: source A only
     Table({'skycoord': _sc([0], [0]), 'flux': [100.0]}).write(
         f'{cut_bp}/catalogs/f182m_merged_indivexp_merged_resbgsub_m6_dao_basic_vetted.fits')
@@ -188,5 +190,35 @@ def test_annotate_counts_m7_residual_detections(tmp_path):
     assert list(Table.read(mp)['independently_detected_f182m']) == [True, False, False]
 
 
-def test_pipeline_default_on():
-    assert MANUAL_DEFAULTS['manual_m7_seed_own_band'] is True
+def test_companion_of_brighter_seed_not_added(tmp_path):
+    """Own-band sources within companion_fwhm FWHM of a brighter seed source
+    are m6 fits in its PSF-mismatch ring (confirmed by an independent visit at
+    the chance rate in Brick F182M; docs/evidence/faint_m7_seed_union) and are
+    not added.  A fainter neighbour does not exclude a brighter source."""
+    xpath = os.path.join(str(tmp_path), 'crossband_seed_manual.fits')
+    Table({'skycoord': _sc([0], [0]), 'n_filt_confirmed': [2]}).write(xpath)
+    opath = os.path.join(str(tmp_path), 'own_m6.fits')
+    # the cross-band star itself (5 mas), faint sources 100 and 300 mas from
+    # it, an own-band-only star at 3000 mas and a faint source 120 mas from it
+    Table({'skycoord': _sc([5, 100, 300, 3000, 3120], [0] * 5),
+           'flux': [100.0, 5.0, 6.0, 80.0, 4.0]}).write(opath)
+    # 2.5 x 0.062" = 155 mas: the 100 mas and 3120 mas sources are left out
+    out = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                         companion_fwhm=2.5, fwhm_arcsec=0.062))
+    assert list(out['flux']) == [100.0, 6.0, 80.0]
+    assert out.meta['NCOMPAN'] == 2
+    # the FWHM defaults to the filter's FWHM-table entry (F182M: 0.062")
+    out_t = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                           companion_fwhm=2.5))
+    assert list(out_t['flux']) == [100.0, 6.0, 80.0]
+    # companion_fwhm=0 disables the cut
+    out0 = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                          companion_fwhm=0))
+    assert list(out0['flux']) == [100.0, 5.0, 6.0, 80.0, 4.0]
+    assert out0.meta['NCOMPAN'] == 0
+
+
+def test_pipeline_defaults():
+    # opt-in; see docs/evidence/faint_m7_seed_union for the full-field realness
+    assert MANUAL_DEFAULTS['manual_m7_seed_own_band'] is False
+    assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'] == 2.5
