@@ -103,6 +103,14 @@ LAYERS = {
         f'{BUILD_ROOT}/jwst_gc_treasury_f212n_residual_hips',
     'jwst_gc_treasury_f480m_residual_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_f480m_residual_hips',
+    # NIRCam-only colour composite, R=F480M G=mean B=F212N, reprojected by
+    # astropy like the 770-480-212 mosaic; it covers all of the NIRCam sky.
+    # The residual twin is built from the same DAOPHOT residual mosaics as
+    # the quicklook residual layers.
+    'gctreasury_mosaic_RGB_480-mean-212_hips':
+        f'{MOSAIC_BUILD}/gctreasury_mosaic_RGB_480-mean-212_hips',
+    'gctreasury_mosaic_RGB_480-mean-212_residual_hips':
+        f'{MOSAIC_BUILD}/gctreasury_mosaic_RGB_480-mean-212_residual_hips',
     # The CMZ overview coadds are rebuilt IN PLACE in the docroot by
     # `rebuild_jwst_cmz_hips.py`, so for these the docroot is the build
     # location and the local step is a no-op by construction: `needs_publish`
