@@ -376,6 +376,14 @@ these flag sets would remove the footgun of setting them individually.)*
   the per-exposure fluxes, `SATSTAR_FLUX_STAT`), then merged into the
   daophot catalog; satstar-only rows are marked **`replaced_saturated=True`**
   (per-filter `replaced_saturated_{FILTER}` in cross-filter merges).
+  The pooled wing calibration (`apply_pooled_wingcal`, for rows whose
+  per-frame self-cal was skipped) is applied to every per-exposure row
+  before the dedup, so the representative and the median see fluxes in one
+  calibration state.  On the wd2 dolphot benchmark (#1032) the median moves
+  9 of 10 saturated bands 0.02–0.12 mag toward dolphot and F150W 0.12 mag
+  away (+0.10 → +0.22 mag fainter than dolphot); the F150W per-exposure fits
+  are biased faint, and the brightest-of-N selection happened to offset part
+  of that.  `SATSTAR_FLUX_STAT=brightest` restores the old statistic.
 - **Post-merge off-FOV cleanup** (`_clean_offfov_dups_and_offfield`): off-FOV
   `replaced_saturated` rows within 1.0″ collapse to one row (the per-frame fits of
   an off-FOV star scatter wider than the 0.15″ dedup). In-field rows follow

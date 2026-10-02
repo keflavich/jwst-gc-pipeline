@@ -58,11 +58,11 @@ def _write_frame(path):
     fits.HDUList([fits.PrimaryHDU(), hdu1]).writeto(path, overwrite=True)
 
 
-def _write_product(frame, tail, stars, kind='catalog'):
+def _write_product(frame, tail, stars, kind='catalog', extra=None):
     """One per-exposure satstar catalog (or rejected file) beside ``frame``.
 
     ``stars`` is a list of ``(x, y, flux)``; ``tail`` the run's file suffix
-    (``'_m12'``, ``'_resbgsub_m7'``)."""
+    (``'_m12'``, ``'_resbgsub_m7'``); ``extra`` further columns by name."""
     x = np.array([s[0] for s in stars], float)
     y = np.array([s[1] for s in stars], float)
     tbl = Table({'xcentroid': x, 'ycentroid': y,
@@ -72,6 +72,8 @@ def _write_product(frame, tail, stars, kind='catalog'):
                  'x_err': np.full(len(x), 0.01), 'y_err': np.full(len(x), 0.01),
                  'qfit': np.full(len(x), 0.1)})
     tbl['skycoord_fit'] = _wcs().pixel_to_world(x, y)
+    for name, values in (extra or {}).items():
+        tbl[name] = np.asarray(values, dtype=float)
     if kind == 'rejected':
         tbl['reject_reason'] = ['implied_peak_gate'] * len(x)
     path = str(frame).replace('.fits', f'{tail}_satstar_{kind}.fits')
@@ -299,6 +301,69 @@ def test_default_flux_is_the_median_of_the_current_fits(phase_tree,
     star = _row_at(_load(phase_tree), STAR_A)
     assert star['flux_fit'] == pytest.approx(4950.0)
     assert star['flux_brightest_fit'] == pytest.approx(5000.0)
+
+
+@pytest.fixture
+def mixed_wingcal_tree(tmp_path, clean_env):
+    """Three exposures whose per-frame wing self-calibration ran in some and
+    was skipped in others (``wingcal_ratio`` 1.0), as on GC F410M.  The
+    pooled C(r) is 1.25, the per-frame ratio where it ran is also 1.25, and
+    every exposure measures the same star, so each star's calibrated flux is
+    1000 in every exposure.
+
+    Star A: the skipped exposure is the brightest raw fit (1250), so it
+    became the representative.  Star B: a calibrated exposure (1300) is the
+    representative and the two skipped ones read 1250 raw.
+    """
+    pdir = tmp_path / 'F182M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    (tmp_path / 'catalogs').mkdir()
+    rows = {1: [(*STAR_A, 1000.0, 1.25), (*STAR_B, 1300.0, 1.25)],
+            2: [(*STAR_A, 1000.0, 1.25), (*STAR_B, 1250.0, 1.0)],
+            3: [(*STAR_A, 1250.0, 1.0), (*STAR_B, 1250.0, 1.0)]}
+    for expo, stars in rows.items():
+        frame = _frame(pdir, expo)
+        _write_product(frame, '_resbgsub_m7', [s[:3] for s in stars],
+                       extra={'wingcal_ratio': [s[3] for s in stars],
+                              'wingcal_rmask': [4.0] * len(stars)})
+        calib = str(frame).replace('.fits',
+                                   '_resbgsub_m7_wingcal_calibrators.fits')
+        Table({'rmask_px': [4], 'ratio_median': [1.25], 'n_stars': [8],
+               'ratio_madstd': [0.02]}).write(calib, overwrite=True)
+    return tmp_path
+
+
+def test_pooled_wingcal_reaches_every_exposure_before_the_median(
+        mixed_wingcal_tree, monkeypatch):
+    """The pooled C(r) is applied to each exposure's row before the dedup, so
+    the median is over calibrated fluxes only.  Applied after the dedup it
+    followed the representative: star A (skipped representative) was divided
+    a second time (median 1000 -> 800) and star B (calibrated representative)
+    kept its skipped members raw (median 1250)."""
+    monkeypatch.delenv('SATSTAR_FLUX_STAT')
+    cat = _load(mixed_wingcal_tree)
+    for xy in (STAR_A, STAR_B):
+        star = _row_at(cat, xy)
+        assert star['flux_fit'] == pytest.approx(1000.0)
+        assert star['flux_median_fit'] == pytest.approx(1000.0)
+        assert star['n_frames_fit'] == 3
+    assert _row_at(cat, STAR_B)['flux_brightest_fit'] == pytest.approx(1300.0)
+
+
+def test_pooled_wingcal_before_the_dedup_with_the_brightest_statistic(
+        mixed_wingcal_tree):
+    """SATSTAR_FLUX_STAT=brightest picks the representative among calibrated
+    fluxes, and a calibrated representative is not divided again."""
+    cat = _load(mixed_wingcal_tree)
+    assert _row_at(cat, STAR_A)['flux_fit'] == pytest.approx(1000.0)
+    assert _row_at(cat, STAR_B)['flux_fit'] == pytest.approx(1300.0)
+
+
+def test_median_flux_keeps_the_fractional_error(phase_tree, monkeypatch):
+    """flux_err scales with the adopted median (10 at 5000 -> 9.9 at 4950)."""
+    monkeypatch.delenv('SATSTAR_FLUX_STAT')
+    star = _row_at(_load(phase_tree), STAR_A)
+    assert star['flux_err'] == pytest.approx(10.0 * 4950.0 / 5000.0)
 
 
 def test_pooled_read_reproduces_the_defect(phase_tree, monkeypatch):

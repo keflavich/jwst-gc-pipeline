@@ -2872,13 +2872,20 @@ def load_satstar_catalog(filtername, target='brick',
     # duplicate rows at one position (sickle cutouts showed a star 3-8x), and
     # the merged-cat residual subtracts it N times.  Collapse to one row per
     # physical star (keep the brightest as representative).
-    deduped = _dedup_satstar_catalog(combined, target=target)
     # Pooled wing-calibration fallback (Phase B1): rows whose per-frame
     # self-cal was skipped (ratio exactly 1.0) get the cross-frame pooled
-    # C(r).  Applied post-dedup, pre-cache, so the cache holds calibrated
-    # fluxes with wingcal_pooled provenance.
-    deduped = apply_pooled_wingcal(deduped, filtername, basepath=basepath,
-                                   phase=phase)
+    # C(r).  Applied to every PER-EXPOSURE row, before the dedup: a star's
+    # exposures can mix per-frame-calibrated and skipped frames (GC F410M
+    # skips 43 of 48), and the dedup's representative and its median over
+    # exposures (_adopt_ensemble_flux) need every member in the calibrated
+    # state.  Applied after the dedup it keyed on the representative alone,
+    # so a skipped representative divided already-calibrated members a second
+    # time and a calibrated one left skipped members raw.  Called once: a
+    # second call resets wingcal_pooled.  Pre-cache, so the cache holds
+    # calibrated fluxes with wingcal_pooled provenance.
+    combined = apply_pooled_wingcal(combined, filtername, basepath=basepath,
+                                    phase=phase)
+    deduped = _dedup_satstar_catalog(combined, target=target)
     # Aperture photometry from the i2d mosaic (added by default; see
     # _ensure_satstar_aperture_photometry).  Done pre-cache so the cache holds
     # the aperture columns; cache_path=None here (the cache is written below).
@@ -3529,8 +3536,11 @@ def _adopt_ensemble_flux(out):
     dedup processes rows brightest-first) is kept as ``flux_brightest_fit``
     in every mode, so both values stay on the row.  Rows without a finite
     median (a single position-only member, a legacy table) keep their
-    representative flux.  ``flux_err`` stays the representative fit's; the
-    between-exposure scatter is ``std_flux_fit``.
+    representative flux.  ``flux_err`` keeps the representative fit's
+    fractional error (scaled by median / representative); the
+    between-exposure scatter is ``std_flux_fit``.  ``load_satstar_catalog``
+    applies the pooled wing calibration to each per-exposure row before the
+    dedup, so the median is taken over fluxes in one calibration state.
     """
     if len(out) == 0 or 'flux_fit' not in out.colnames:
         return out
@@ -3539,8 +3549,13 @@ def _adopt_ensemble_flux(out):
     if _satstar_flux_statistic() != 'median' or 'flux_median_fit' not in out.colnames:
         return out
     med = np.asarray(out['flux_median_fit'], dtype=float)
-    use = np.isfinite(med) & (med > 0)
+    use = np.isfinite(med) & (med > 0) & np.isfinite(rep) & (rep > 0)
     out['flux_fit'] = np.where(use, med, rep)
+    if 'flux_err' in out.colnames:
+        err = np.asarray(out['flux_err'], dtype=float)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            out['flux_err'] = np.where(use, err * med / np.where(use, rep, 1.0),
+                                       err)
     if use.any():
         with np.errstate(invalid='ignore', divide='ignore'):
             dmag = -2.5 * np.log10(rep[use] / med[use])
