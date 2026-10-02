@@ -185,12 +185,16 @@ The qfit 0.2–0.6 additions have qfit × S/N ≈ 1.6 (median), below the
 is large compared with their fit residual.  The union is 1.6% of the Brick
 additions and 2.6% of the Sgr B2 additions.  This branch does not add a rule
 for them; a cut such as qfit × S/N ≥ 3 would need its own reference-field
-runs.
+runs.  Issue #1025 tracks this follow-up.
 
 On W51 the additions are confirmed less often than base-kept stars of the
 same flux at every prominence and S/N (rel 0.54–0.92).  They are 588
 sources, 2.8% of the W51 catalog, on extended emission where the
-same-visit F182M reference also responds to emission structure.
+same-visit F182M reference also responds to emission structure, so their
+real purity may be below 0.73 (at 0.73, about 160 of the 588 are spurious).
+A W51 run that needs the lower false-positive rate can pass
+`--manual-ext-snr-floor-per-frame`, which reproduces the #1018 v2 catalog
+row for row (the `snrp2pf` control above).
 
 ![](added_brick_snrp2.png)
 
