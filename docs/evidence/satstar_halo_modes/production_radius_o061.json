@@ -1,0 +1,25 @@
+{
+ "n_frames": 6,
+ "rmax40.5": {
+  "n_stars": 215,
+  "dither_rms_S_median": 0.12338921040755267,
+  "dither_rms_H_median": 0.13008239431083352,
+  "frac_stars_H_better": 0.4,
+  "ratio_H_over_S_median": 0.9551510198964478,
+  "ratio_H_over_S_p16_p84": [
+   0.8696336953689013,
+   1.074632288057393
+  ]
+ },
+ "rmax60": {
+  "n_stars": 206,
+  "dither_rms_S_median": 0.12427956880767635,
+  "dither_rms_H_median": 0.12420782587937687,
+  "frac_stars_H_better": 0.42718446601941745,
+  "ratio_H_over_S_median": 0.9744396355896,
+  "ratio_H_over_S_p16_p84": [
+   0.864596388741082,
+   1.0849903656516897
+  ]
+ }
+}

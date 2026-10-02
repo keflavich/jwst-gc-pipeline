@@ -52,3 +52,28 @@ comparison.
   - The radial shape is ~80% one mode, and that mode peaks at r ≈ 25–40 px.
   - Two free radial modes per exposure leave a 3–4.5% rms azimuthal mean at r = 20–100 px.
   - At the 30°-sector level 5–9% is left (split-half r = 0.81, against a formal noise that would allow 0.999). That residual is real azimuthal structure, or scene-sampling noise that `He` does not capture.
+
+## Cause of the NRCBLONG x ≈ 400 deficit (#1013 follow-up)
+
+| step | script | output |
+|---|---|---|
+| 6 | `perexp_cause.py` | the deficit and the a-vs-area slope by brightness; the SATURATION reffile threshold maps against f(x) (`cause_*.png`, `cause.json`) |
+| 7 | `perexp_fieldstar_flux.py <prefix> <visit glob>...` | unsaturated field-star aperture flux vs detector x (`fieldstar.*`) |
+| 8 | `perexp_ramp.py measure <rowdir> <saturation reffile> <cal key>...` then `analyze <prefix> <rowdir>` | the halo and the saturated-core area in the RAW ramp (`ramp_10678.*`, `ramp_2221.*`) |
+
+- **Saturated stars only.** The deficit holds at every brightness (−0.14 / −0.18 / −0.20 by tercile), while 5,414 unsaturated field stars are flat in x to ≤1%.
+- **Not the SATURATION reffile.** Its threshold varies <1% rms in x, and the sign would move the core area the other way.
+- **Already in the raw ramp, so no calibration step causes it.** Step 8 works on the `_uncal` data, before superbias, linearity, dark and flat. The halo is the median group difference D_k at 15–80 px minus its value at 150–250 px; the area counts core pixels at or above the threshold in each group.
+  - **Program 10678 (F480M):** 13 observations, the 12 with the most in-band saturated stars plus obs 061.
+    - In-band / out-of-band halo: 0.81, 0.79, 0.75 for D1, D2, D3 (±0.02–0.03, 49 stars).
+    - Saturated area: 0.61 at group 0, falling to 0.54 at group 3.
+    - Null band at x = 1300–1600: 0.97–1.00.
+    - With the 10678 pattern (+385 px in x per step) a star is in the band almost only in exposures 1–2. The control, stars whose exposures 1–2 are *outside* the band, reads 0.99–1.03, so this is a column effect and not an exposure-order one.
+  - **Program 2221 (F405N / F410M / F466N, 24-point FULLBOX, 2022):** 96 frames, cores ≥20 px.
+    - Halo 0.89 ± 0.03 (73 stars); area 0.73–0.75 (113 stars); null band 0.99–1.00.
+    - So the effect is present in other LW filters and epochs, weaker for these smaller cores.
+    - The area uses the 10678 threshold reffile (0115); 2221 frames name 0098. The in/out ratio uses one threshold map for both, so only a spatial difference between the two versions would matter.
+  - **The deficit grows along the ramp** in both the halo (0.81 → 0.75) and the area (0.61 → 0.54). Charge accumulation, not photon arrival, is implicated.
+  - **The flat field** is only ~5% low here (rate/cal), so raw 0.78–0.81 corresponds to the ~0.83–0.85 seen in `cal`.
+- **Not optical.** Unsaturated PSF wings at 4–15 px are flat in x (±4%).
+- **LINEARITY reffile:** not inspected; CRDS is unreachable from this environment. The raw-ramp result makes it moot, because the deficit exists before linearity is applied.
