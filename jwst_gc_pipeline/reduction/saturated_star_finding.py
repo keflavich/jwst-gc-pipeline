@@ -3603,10 +3603,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # two fits.  flux_fit itself is NOT changed.  SATSTAR_HALO_MODES=1.
         # The fit radius defaults to the photutils box half-width (40.5 px at
         # pad=81); SATSTAR_HALO_MODES_RMAX overrides it (the cutout's reach
-        # still limits it).  UNTESTED at the production box: the evidence
-        # (scripts/analysis/satstar_halo_modes) shows the dither-scatter gain
-        # only at r <= 200 px, none at r <= 100, and a core larger than
-        # ~rmax/1.3 leaves no halo range (ratio NaN).
+        # still limits it).  NO GAIN at the production box: on 215
+        # moderately saturated stars (obs 061, production_radius.py) the
+        # dither scatter is 13.0% with the halo modes vs 12.3% without at
+        # r <= 40.5 px; the gain appears only for large cores fitted to
+        # r <= 200 px (scripts/analysis/satstar_halo_modes), and a core
+        # larger than ~rmax/1.3 leaves no halo range (ratio NaN).
         if (int(os.environ.get('SATSTAR_HALO_MODES', 0)) and not _is_miri
                 and not forced_source and len(result)):
             from ..photometry.satstar_halo_modes import satstar_halo_mode_ratios

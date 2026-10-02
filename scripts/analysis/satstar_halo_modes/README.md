@@ -56,14 +56,31 @@ record-only, and `flux_fit` itself is unchanged.
   flux is right only to the extent that STPSF's spikes are, and its residual
   r ≤ 100 vs 200 px drift (~4%) bounds that.
 
-## Production hook: untested at the production box
+## Production hook: no gain at the production radius
 
 `SATSTAR_HALO_MODES=1` fits out to the photutils box half-width (40.5 px at
 `pad=81`) unless `SATSTAR_HALO_MODES_RMAX` overrides it, and the ±`pad` cutout
-still limits it. The evidence above shows a scatter gain only at r ≤ 200 px (none
-at r ≤ 100), and a saturated core wider than ~rmax/1.3 leaves no halo range, so
-the ratio is NaN for such stars — about half of these 7 at the default box. The
-ratio is also applied to a `flux_fit` from photutils' own box and local
-background, while the halo-mode fits use a circle and a constant background.
-Treat `flux_fit_halomodes` as a diagnostic until it has been checked at the
-radius it will be run with.
+still limits it. A saturated core wider than ~rmax/1.3 leaves no halo range, so
+the ratio is NaN for the stars above (about half of these 7 at the default box).
+
+`production_radius.py` checks the stars the hook actually sees: moderately
+saturated ones, with 5–1000 saturated pixels (core radius ~1–18 px). It uses
+every such star in the 6 `_cal` frames of 10678 obs 061 NRCBLONG and refines its
+position on the standard fit's χ². The PSF is STPSF at the nearest node of a
+4×4 grid, and both models are fitted on the same pixels with the hook's knots
+(`satstar_halo_knots`) (`docs/evidence/satstar_halo_modes/production_radius_o061.*`):
+
+| rmax | stars | dither rms, standard | dither rms, halo modes | stars better with halo modes | F_halo / F_standard (16–84%) |
+|---|---|---|---|---|---|
+| 40.5 px | 215 | 12.3% | 13.0% | 40% | 0.955 (0.87–1.07) |
+| 60 px | 206 | 12.4% | 12.4% | 43% | 0.974 (0.86–1.08) |
+
+At the production radius the halo modes do **not** reduce the dither scatter.
+They move each flux by ~10% in either direction, with a −3 to −5% median.
+
+- **What does improve:** only stars with a core of ≳100 saturated pixels trend
+  to the 0.85–0.9 ratio of the large stars above.
+- **The baseline:** the 12% baseline is this simplified fit's (no neighbours,
+  one PSF node), not production's. The comparison is like-for-like.
+- **Recommendation:** leave `SATSTAR_HALO_MODES` off. Use the halo modes only
+  for strongly saturated stars fitted to r ≳ 150–200 px.
