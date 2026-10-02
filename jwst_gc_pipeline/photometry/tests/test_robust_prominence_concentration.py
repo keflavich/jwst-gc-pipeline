@@ -95,3 +95,24 @@ def test_guard_off_without_calibration_stars():
 
 def test_pipeline_default():
     assert MANUAL_DEFAULTS['manual_ext_star_prom_robust_conc'] == 0.6
+
+
+def test_pipeline_defaults_without_data_i2d():
+    """No data i2d (or no skycoord): prominence is NaN everywhere, every
+    source keeps the peak_SB test, and the concentration guard is skipped."""
+    n = 4
+    cat = Table({'id': np.arange(n), 'qfit': np.array([0.05, 0.5, 0.5, 0.5]),
+                 'flags': np.zeros(n), 'local_bkg': np.array([1.0, 1.0, 1.0, -1.0]),
+                 'peak_sb': np.array([5.0, 50.0, 5.0, 50.0]),
+                 'flux': np.full(n, 100.0), 'flux_err': np.full(n, 10.0),
+                 'group_size': np.ones(n)})
+    md = MANUAL_DEFAULTS
+    out = _filter_extended_emission(
+        cat, data_i2d_image=None, ww_i2d=None,
+        star_prom_min=md['manual_ext_star_prom_min'],
+        star_prom_robust_min=8.0,
+        star_prom_robust_conc=md['manual_ext_star_prom_robust_conc'],
+        label='test')
+    assert np.all(np.isnan(np.asarray(cat['prominence'])))
+    assert 'core_concentration' not in cat.colnames
+    assert 0 in set(np.asarray(out['id']).tolist())
