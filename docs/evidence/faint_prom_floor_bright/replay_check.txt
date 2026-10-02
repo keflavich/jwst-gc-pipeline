@@ -1,0 +1,9 @@
+w51 f187n: snrp2 kept 21308, fix8r kept 21334, added 26, lost 0
+  additions: qfit max 0.194, prominence 2.06-2.99, S/N_prop min 47.1; all in region: True
+  region at S/N_prop >= 40: 27 (27 kept, 1 already kept by #1016)
+  region at proxy >= 40: 32 (of which S/N_prop >= 40: 27)
+  proxy / S/N_prop in the region: median 1.000, 16-84% 1.000-1.211
+brick f182m: snrp2 kept 387581, fix8r kept 387581, added 0, lost 0
+  region at S/N_prop >= 40: 108 (108 kept, 108 already kept by #1016)
+  region at proxy >= 40: 144 (of which S/N_prop >= 40: 108)
+  proxy / S/N_prop in the region: median 1.195, 16-84% 1.000-1.581
