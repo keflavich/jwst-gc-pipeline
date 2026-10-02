@@ -4485,7 +4485,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             result['seed_kind'] = str(_seed_kind)
             # POSITION-ONLY (#925 item 3): this row's position joins the
             # cross-exposure ensemble; its flux never reaches the catalog.
-            # merge_catalogs keeps such a row out of flux_med_fit/std_flux_fit,
+            # merge_catalogs keeps such a row out of flux_med_fit,
+            # flux_median_fit (the adopted flux_fit) and std_flux_fit,
             # out of the dedup representative, and out of replace_saturated.
             result['position_only'] = bool(_position_only)
             result['sat_severity_floor'] = (float(_sev_floor)

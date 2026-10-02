@@ -94,6 +94,10 @@ def clean_env(monkeypatch):
     for var in ('SATSTAR_DEDUP_ARCSEC', 'SATSTAR_ENSEMBLE_POSITION',
                 'SATSTAR_FP_USE_ANCHOR'):
         monkeypatch.delenv(var, raising=False)
+    # these tests identify the selected phase by its flux; keep flux_fit on
+    # the representative fit so the median over exposures (#1032) does not
+    # blend the phases being told apart
+    monkeypatch.setenv('SATSTAR_FLUX_STAT', 'brightest')
 
 
 @pytest.fixture
@@ -284,6 +288,17 @@ def test_consolidated_keeps_the_current_fit_not_a_brighter_stale_one(phase_tree)
     # one measurement per exposure: exposure 1's m7, exposure 2's m5
     assert star['n_frames_fit'] == 2 and star['n_meas_fit'] == 2
     assert star['flux_med_fit'] == pytest.approx(4950.0)
+
+
+def test_default_flux_is_the_median_of_the_current_fits(phase_tree,
+                                                       monkeypatch):
+    """Default SATSTAR_FLUX_STAT: the median over exposures of each
+    exposure's current-phase fit (5000 and 4900), with the stale m12 9000
+    excluded by the phase selection."""
+    monkeypatch.delenv('SATSTAR_FLUX_STAT')
+    star = _row_at(_load(phase_tree), STAR_A)
+    assert star['flux_fit'] == pytest.approx(4950.0)
+    assert star['flux_brightest_fit'] == pytest.approx(5000.0)
 
 
 def test_pooled_read_reproduces_the_defect(phase_tree, monkeypatch):

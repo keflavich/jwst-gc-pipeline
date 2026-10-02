@@ -2810,12 +2810,12 @@ def load_satstar_catalog(filtername, target='brick',
             if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
                     and str(cached.meta.get('SATOBSSC', '')) == obs_scope
                     and abs(_rcache - _rcur) < 1e-6
-                    and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG
+                    and str(cached.meta.get('SATDDALG', '')) == _satstar_dedup_alg_tag()
                     and str(cached.meta.get('SATFRMSG', '')) == _fsig
                     and str(cached.meta.get('SATPHSEL', '')) == _phase_sig):
                 print(f"Using consolidated satstar catalog {cache} "
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
-                      f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG}, "
+                      f"dedup radius {_rcur}\", alg {_satstar_dedup_alg_tag()}, "
                       f"frame state {_fsig}, phase selection {_phase_sig})")
                 return _ensure_satstar_aperture_photometry(
                     cached, filtername, target, basepath, cache_path=cache)
@@ -2824,9 +2824,9 @@ def load_satstar_catalog(filtername, target='brick',
                       f"set of per-exposure catalogs -- phase selection "
                       f"{cached.meta.get('SATPHSEL', 'unrecorded (every phase pooled)')!r}"
                       f" -> {_phase_sig!r}")
-            if str(cached.meta.get('SATDDALG', '')) != _SATSTAR_DEDUP_ALG:
+            if str(cached.meta.get('SATDDALG', '')) != _satstar_dedup_alg_tag():
                 print(f"Rebuilding satstar cache {cache}: dedup algorithm changed "
-                      f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_SATSTAR_DEDUP_ALG!r}")
+                      f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_satstar_dedup_alg_tag()!r}")
             if abs(_rcache - _rcur) >= 1e-6:
                 print(f"Rebuilding satstar cache {cache}: dedup radius changed "
                       f"{_rcache}\" -> {_rcur}\"")
@@ -2888,7 +2888,7 @@ def load_satstar_catalog(filtername, target='brick',
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
     deduped.meta['SATDDUPR'] = float(_satstar_dedup_radius().to(u.arcsec).value)
-    deduped.meta['SATDDALG'] = _SATSTAR_DEDUP_ALG
+    deduped.meta['SATDDALG'] = _satstar_dedup_alg_tag()
     # ...and the state of the frames those positions were re-projected onto, so
     # the next read rebuilds when a frame has since moved (issue #193).
     deduped.meta['SATFRMSG'] = _frame_sig
@@ -2918,8 +2918,17 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp5'  # fp5: per-exposure ensemble statistics on the kept row (#925)
+_SATSTAR_DEDUP_ALG = 'fp6'  # fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
+#                              fp5: per-exposure ensemble statistics on the kept row (#925)
 #                              fp4: sky columns re-projected onto the current GWCS (#193)
+
+
+def _satstar_dedup_alg_tag():
+    """Cache key for the consolidated catalog: the algorithm version plus
+    the flux statistic, so toggling ``SATSTAR_FLUX_STAT`` rebuilds the cache
+    instead of serving the other statistic's fluxes."""
+    stat = _satstar_flux_statistic()
+    return _SATSTAR_DEDUP_ALG if stat == 'median' else f'{_SATSTAR_DEDUP_ALG}-{stat}'
 
 
 # Wide second-chance radius for matching a fitted satstar to its daophot row
@@ -3268,7 +3277,7 @@ def load_rejected_satstar_catalog(filtername, target='brick',
 #: merged catalog's own astrometry schema, so keep the two in step.
 SATSTAR_ENSEMBLE_COLUMNS = ('n_frames_fit', 'n_meas_fit', 'std_ra_fit',
                             'std_ra_coord_fit', 'std_dec_fit', 'flux_med_fit',
-                            'std_flux_fit')
+                            'flux_median_fit', 'std_flux_fit')
 
 
 def _satstar_use_ensemble_position():
@@ -3305,11 +3314,11 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     Compare it across catalog versions only with that in mind.
 
     Adds ``n_frames_fit``, ``n_meas_fit``, ``std_ra_fit``/``std_dec_fit``
-    (degrees, ddof=1, NaN below two exposures), and ``flux_med_fit`` /
-    ``std_flux_fit``.  ``flux_fit`` is deliberately LEFT ALONE: the
-    brightest-of-N flux is a photometric-continuity question (#925 items 4-5)
-    handled separately, and this function's job is to publish the ensemble it
-    needs, not to change photometry under it.
+    (degrees, ddof=1, NaN below two exposures), ``flux_med_fit`` (the
+    across-exposure mean), ``flux_median_fit`` and ``std_flux_fit``.
+    ``flux_fit`` is LEFT ALONE here: this function publishes the ensemble,
+    and :func:`_adopt_ensemble_flux` decides which statistic ``flux_fit``
+    carries (``SATSTAR_FLUX_STAT``).
     """
     n_out = len(out)
     if n_out == 0:
@@ -3422,7 +3431,10 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
         out['std_ra_coord_fit'] = np.where(np.abs(_cosd) > 1e-12,
                                            std_ra / _cosd, np.nan)
     out['std_dec_fit'] = std_dec
+    # ``flux_med_fit`` is the across-exposure MEAN (the name predates the
+    # median below and is kept for readers of existing catalogs).
     out['flux_med_fit'] = mean_flux
+    out['flux_median_fit'] = _group_median(exp_flux, exp_grp, n_out)
     out['std_flux_fit'] = std_flux
     # exposures that measured a usable FLUX, which is <= n_frames_fit whenever
     # sibling seeds contributed position-only rows
@@ -3458,6 +3470,86 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
                   f"stars measured in >1 exposure (median N={int(np.median(n_frames))}); "
                   f"adopted mean position, median shift {np.median(_mm):.1f} mas, "
                   f"p95 {np.percentile(_mm, 95):.1f} mas", flush=True)
+    return out
+
+
+def _group_median(values, group, n_groups):
+    """Median of ``values`` within each of ``n_groups`` groups, NaN-skipping.
+
+    ``group[i]`` is the group of ``values[i]``.  Groups with no finite value
+    get NaN.  An even count takes the mean of the two middle values, as
+    ``np.median`` does.
+    """
+    values = np.asarray(values, dtype=float)
+    group = np.asarray(group, dtype=np.int64)
+    out = np.full(n_groups, np.nan)
+    ok = np.isfinite(values)
+    if not ok.any():
+        return out
+    v = values[ok]
+    g = group[ok]
+    order = np.lexsort((v, g))
+    v = v[order]
+    g = g[order]
+    counts = np.bincount(g, minlength=n_groups)
+    starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    has = counts > 0
+    lo = starts[has] + (counts[has] - 1) // 2
+    hi = starts[has] + counts[has] // 2
+    out[has] = 0.5 * (v[lo] + v[hi])
+    return out
+
+
+def _satstar_flux_statistic():
+    """Which per-exposure statistic the consolidated ``flux_fit`` carries.
+
+    ``median`` (default): the median over exposures of each star's
+    per-exposure satstar fluxes (``flux_median_fit``).  ``brightest``: the
+    dedup representative's own flux, i.e. the brightest of the N exposures,
+    which was the only behaviour before this switch existed.
+
+    The brightest of N noisy fits is biased bright by construction, and the
+    bias grows with the scatter between exposures.  In the GC (o132) that
+    scatter is 1.6-2.8%, so brightest - median was only -0.02 to -0.03 mag
+    (#925); on wd2 the per-exposure satstar fits scatter far more and the
+    brightest sits 0.03-0.15 mag above the median.  Set with
+    ``SATSTAR_FLUX_STAT``.
+    """
+    stat = os.environ.get('SATSTAR_FLUX_STAT', 'median').strip().lower()
+    if stat not in ('median', 'brightest'):
+        raise ValueError(f"SATSTAR_FLUX_STAT={stat!r}: expected 'median' or "
+                         f"'brightest'")
+    return stat
+
+
+def _adopt_ensemble_flux(out):
+    """Put the chosen per-exposure statistic into ``flux_fit``.
+
+    The representative row's own flux (the brightest exposure, because the
+    dedup processes rows brightest-first) is kept as ``flux_brightest_fit``
+    in every mode, so both values stay on the row.  Rows without a finite
+    median (a single position-only member, a legacy table) keep their
+    representative flux.  ``flux_err`` stays the representative fit's; the
+    between-exposure scatter is ``std_flux_fit``.
+    """
+    if len(out) == 0 or 'flux_fit' not in out.colnames:
+        return out
+    rep = np.asarray(out['flux_fit'], dtype=float).copy()
+    out['flux_brightest_fit'] = rep
+    if _satstar_flux_statistic() != 'median' or 'flux_median_fit' not in out.colnames:
+        return out
+    med = np.asarray(out['flux_median_fit'], dtype=float)
+    use = np.isfinite(med) & (med > 0)
+    out['flux_fit'] = np.where(use, med, rep)
+    if use.any():
+        with np.errstate(invalid='ignore', divide='ignore'):
+            dmag = -2.5 * np.log10(rep[use] / med[use])
+        dmag = dmag[np.isfinite(dmag)]
+        if len(dmag):
+            print(f"  satstar flux: adopted the per-exposure median for "
+                  f"{int(use.sum())}/{len(out)} stars; brightest - median = "
+                  f"{np.median(dmag):.3f} mag (median), "
+                  f"{np.percentile(dmag, 10):.3f} (p10)", flush=True)
     return out
 
 
@@ -3513,7 +3605,14 @@ def satstar_sibling_seed_positions(filtername, basepath, verbose=True,
 
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
-    one row (the brightest), so downstream merging doesn't duplicate them.
+    one row, so downstream merging doesn't duplicate them.
+
+    The kept row is the brightest member (it anchors the group), but its
+    ``flux_fit`` is replaced by the median over exposures of the group's
+    per-exposure fluxes (:func:`_adopt_ensemble_flux`; ``SATSTAR_FLUX_STAT=
+    brightest`` keeps the representative's own flux).  The brightest of N
+    noisy fits is biased bright: 0.03-0.15 mag on wd2, where the substituted
+    fluxes sat 0.15-0.57 mag above dolphot (#1032).
 
     Greedy brightest-first spatial dedup: process stars in descending flux and
     keep one unless it falls within a merge radius of an already-kept (brighter)
@@ -3724,7 +3823,8 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
               f"footprint radius; rejected {n_reject_rows} big-footprint "
               f"extended-emission pile rows)")
     out = tbl[np.sort(kept)]
-    return _attach_satstar_ensemble(out, tbl, fin_idx, owner, np.sort(kept))
+    out = _attach_satstar_ensemble(out, tbl, fin_idx, owner, np.sort(kept))
+    return _adopt_ensemble_flux(out)
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
