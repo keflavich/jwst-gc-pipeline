@@ -54,5 +54,22 @@ def test_bounds_are_centred_on_the_seed(tree):
         assert all(var in _names(v) for v in _assigned(tree, name)), name
 
 
+# Sky lookups of the star position: flux-drop and flux-override matching
+# (``_wpos_drop``, ``_wpos``), the MIRI coadd-coverage check (``_scov``) and
+# the coadd seed gate (``_skyc``).  These must also use the float centre.
+@pytest.mark.parametrize('name', ['_wpos_drop', '_wpos', '_scov', '_skyc'])
+def test_sky_lookups_do_not_use_the_rounded_centre(tree, name):
+    values = _assigned(tree, name)
+    assert values, name
+    for v in values:
+        assert not _names(v) & {'xcen', 'ycen'}, ast.unparse(v)
+
+
+@pytest.mark.parametrize('name', ['_wpos_drop', '_wpos', '_scov'])
+def test_sky_lookups_use_the_float_centre(tree, name):
+    for v in _assigned(tree, name):
+        assert {'xf', 'yf'} <= _names(v), ast.unparse(v)
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

@@ -2934,7 +2934,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if (_is_miri and seed_gate_image is not None
                     and seed_gate_wcs is not None):
                 try:
-                    _scov = ww.pixel_to_world(xcen, ycen)
+                    _scov = ww.pixel_to_world(xf, yf)
                     _cxg, _cyg = seed_gate_wcs.world_to_pixel(_scov)
                     _cxi, _cyi = int(round(float(_cxg))), int(round(float(_cyg)))
                     _gny2, _gnx2 = seed_gate_image.shape
