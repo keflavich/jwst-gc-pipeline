@@ -22,6 +22,15 @@ MANUAL_DEFAULTS = {
     # convention.
     'manual_residual_background': True,
     'manual_residual_background_box': 3,
+    # -- smoothed-residual background subtracted from every frame in the next
+    # phase (cataloging._build_source_masked_bg).  Median-filter box in i2d px;
+    # 0 = scale with the PSF (7 x FWHM, rounded up to odd: 15-17 px for NIRCam
+    # at native scale).  A 3 px box barely smooths a ~2 px FWHM PSF, so a
+    # faint star missing from the masked catalogs leaves ~2/3 of its flux in
+    # this "background" and its next-phase fit comes out ~1 mag faint (#1039).
+    # Kept at 3 by default until extended-emission fields are checked for
+    # spurious detections on unsubtracted small-scale nebulosity.
+    'manual_residual_bg_median_size': 3,
     # -- fit QC (model/data-peak overshoot; NOTES_star_vs_extended_emission.md)
     'manual_overshoot_ratio': 1.2,
     'manual_overshoot_action': 'refit',

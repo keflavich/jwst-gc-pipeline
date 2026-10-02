@@ -2955,6 +2955,20 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     return res
 
 
+def _resolve_residual_bg_median_size(median_size, fwhm_px, n_fwhm=7.0):
+    """Median-filter box (px) for the smoothed-residual background.
+
+    ``median_size > 0`` is used as given.  ``median_size <= 0`` scales with
+    the PSF: ``n_fwhm * fwhm_px`` rounded up to an odd integer, so a point
+    source missing from the source mask covers a small fraction of the box
+    and the median rejects it (#1039).
+    """
+    if median_size is not None and int(median_size) > 0:
+        return int(median_size)
+    n = max(3, int(np.ceil(n_fwhm * float(fwhm_px))))
+    return n if n % 2 else n + 1
+
+
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
                             mask_radius_fwhm=2.0, median_size=3,
                             extra_source_catalogs=()):
@@ -2970,6 +2984,11 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     interpolating over them makes the bg represent the DIFFUSE background only
     (~0 in a star field, the true extended emission in pillar fields), so it no
     longer feeds the source holes back into the fit.
+
+    ``median_size`` is the median-filter box in i2d px; ``<= 0`` scales it
+    with the PSF (:func:`_resolve_residual_bg_median_size`).  The source mask
+    only covers catalogued sources, so the box must be wide enough for the
+    median to reject an uncatalogued faint star (#1039).
 
     Writes ``<mc_i2d>_..._smoothed_bg_i2d.fits`` (same name the plain smoother
     would produce) and returns its path.
@@ -2994,6 +3013,7 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     pixscale_as = float(np.sqrt(np.abs(np.linalg.det(w.pixel_scale_matrix))) * 3600.0)
     fwhm_px = fwhm_as / pixscale_as
     R = max(2.0, mask_radius_fwhm * fwhm_px)
+    median_size = _resolve_residual_bg_median_size(median_size, fwhm_px)
 
     work = d.copy()
     ny, nx = d.shape
@@ -3054,7 +3074,8 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     out = residual_to_smoothed_bg_i2d(mc_i2d_path)
     _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
     print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
-          f"(masked {n_masked} sources, R={R:.1f}px)", flush=True)
+          f"(masked {n_masked} sources, R={R:.1f}px, median box "
+          f"{median_size}px)", flush=True)
     return out
 
 
@@ -7994,6 +8015,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # source-masked smoothed bg (breaks the bg<-source-hole
                         # feedback loop that drives faint stars negative with
                         # iteration); falls back to the plain smoother on error
+                        _bg_median_size = int(mopt(options, 'manual_residual_bg_median_size'))
                         try:
                             # Also mask the i2d detection seed (coadd-confirmed
                             # point sources), not just this phase's vetted
@@ -8005,13 +8027,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             _seed_for_bg = locals().get('prev_seed')
                             bg_for_next[(module, filt)] = _build_source_masked_bg(
                                 mc_i2d, vetted_path, filt,
-                                median_size=int(getattr(options, 'manual_residual_bg_median_size', 3)),
+                                median_size=_bg_median_size,
                                 extra_source_catalogs=([_seed_for_bg]
                                                        if _seed_for_bg else ()))
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "
                                   f"using plain smoother", flush=True)
-                            bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(mc_i2d)
+                            # the plain smoother has no FWHM: a fixed box is
+                            # passed through, PSF-scaled mode keeps 3 px.
+                            bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(
+                                mc_i2d, median_size=(_bg_median_size
+                                                     if _bg_median_size > 0 else 3))
                         print(f"manual [{phase}]: smoothed bg for next phase = "
                               f"{bg_for_next[(module, filt)]}", flush=True)
                         # Everything the next phase needs is now on disk, so

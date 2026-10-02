@@ -4332,6 +4332,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       type=int,
                       help="footprint size in px for modelsub_bkg (default 3, "
                            "Jay Anderson JWST1PASS convention); forced odd")
+    parser.add_option("--residual-bg-median-size", dest="manual_residual_bg_median_size",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_median_size'],
+                      type=int,
+                      help="median-filter box in i2d px for the source-masked "
+                           "smoothed-residual background subtracted in the next "
+                           "phase (default 3); 0 = 7 x FWHM rounded up to odd")
     parser.add_option("--manual-iterations", dest="manual_iterations",
                     default=True, action='store_true',
                     help=("Use the default PSF photometry pipeline "
