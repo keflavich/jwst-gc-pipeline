@@ -108,6 +108,11 @@ ALLOWLIST = {
     # PR #1016 evidence scripts, no astrometry (same reduces as #1018 above).
     ("docs/evidence/faint_snr_floor_propagated/scripts/compare.py", "main"),
     ("docs/evidence/faint_snr_floor_propagated/scripts/propresid.py", "main"),
+    # PR #1021 evidence script, no astrometry.  Module-level loop: an
+    # in-footprint flag (a continuum source within 1") and the chance rate of
+    # a continuum counterpart within 60 mas at four 1.5"-shifted positions --
+    # means of booleans, realness statistics per S/N bin.
+    ("docs/evidence/faint_prom_floor_bright/scripts/anal_exempt_bins.py", "<module>"),
     # No astrometry: `match_to_catalog_sky(nthneighbor=2)` measures a star's
     # nearest-neighbour SEPARATION, used to SELECT isolated reference stars for
     # the curve of growth; the medians are of FLUX-RATIO (enclosed-energy)
