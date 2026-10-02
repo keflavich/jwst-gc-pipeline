@@ -61,3 +61,38 @@ def test_qfit_confident_exemption_unchanged():
 
 def test_pipeline_default_on():
     assert MANUAL_DEFAULTS['manual_ext_snr_floor_propagated'] is True
+
+
+def _sky_clean_case(flux_err):
+    """A qfit 0.8 (blend-degraded) star on emission-free sky, which only the
+    sky-clean tier can keep; flux_err_prop puts its merged S/N at 10."""
+    from astropy.wcs import WCS
+    rng = np.random.default_rng(3)
+    ny = nx = 300
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.crpix = [nx / 2, ny / 2]
+    w.wcs.crval = [266.5, -28.7]
+    w.wcs.cdelt = [-0.03 / 3600, 0.03 / 3600]
+    data = rng.normal(0.0, 1.0, (ny, nx))
+    data[:, :100] += 25.0                     # emission strip, x < 100
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    data += 30.0 * np.exp(-((xx - 220) ** 2 + (yy - 150) ** 2) / (2 * 1.5 ** 2))
+    t = Table({
+        'id': [0],
+        'skycoord': w.pixel_to_world(np.array([220.0]), np.array([150.0])),
+        'qfit': [0.8], 'flags': [0], 'local_bkg': [0.0], 'group_size': [1],
+        'is_saturated': [False],
+        'flux': [20.0], 'flux_err': [float(flux_err)], 'flux_err_prop': [2.0],
+    })
+    out = _filter_extended_emission(t, data_i2d_image=data, ww_i2d=w, label='test',
+                                    local_snr_min=5.0, snr_floor_propagated=True,
+                                    sky_clean_keep=True, sky_clean_snr_min=3.0)
+    return len(out)
+
+
+def test_sky_clean_floor_stays_per_frame():
+    # per-frame S/N 2 < 3: the tier must not admit it on the merged S/N of 10
+    assert _sky_clean_case(flux_err=10.0) == 0
+    # per-frame S/N 4 >= 3: the tier keeps it (the case discriminates)
+    assert _sky_clean_case(flux_err=5.0) == 1

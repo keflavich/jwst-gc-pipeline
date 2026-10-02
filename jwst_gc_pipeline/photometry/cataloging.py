@@ -1471,10 +1471,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     qfit gate (which conflates blend-degraded real stars with emission knots)
     is replaced by prominence + S/N alone.  See the block comment below.
 
-    ``snr_floor_propagated``: the S/N floors (``local_snr_min``,
-    ``sky_clean_snr_min``) use flux / flux_err_prop, the uncertainty of the
-    merged flux, in place of flux / flux_err, the mean per-frame uncertainty
-    (larger by ~sqrt(nmatch)).  Catalogs without flux_err_prop keep flux_err.
+    ``snr_floor_propagated``: the local S/N floor (``local_snr_min``) uses
+    flux / flux_err_prop, the uncertainty of the merged flux, in place of
+    flux / flux_err, the mean per-frame uncertainty (larger by ~sqrt(nmatch)).
+    Catalogs without flux_err_prop keep flux_err.  The sky-clean floor
+    (``sky_clean_snr_min``) stays on flux / flux_err: that tier ignores qfit,
+    and its threshold was set on the per-frame S/N.
 
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
@@ -1517,7 +1519,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # so a per-frame S/N floor of 5 is a ~5*sqrt(nmatch) floor on the measured
     # flux: on the dark reference field it removed injected stars up to
     # S/N_true ~20 in m2-m4.  The qfit noise term and the bright-isolated keep
-    # stay on the per-frame S/N (qfit is itself a per-frame mean).
+    # stay on the per-frame S/N (qfit is itself a per-frame mean), and so does
+    # the sky-clean floor below (that tier ignores qfit; moving its S/N 3 floor
+    # onto flux_err_prop admits per-frame S/N ~1 fits).
     snr_floor = snr
     if (snr_floor_propagated and 'local_snr' not in t.colnames
             and 'flux' in t.colnames and 'flux_err_prop' in t.colnames):
@@ -1925,7 +1929,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             sky_clean = np.isfinite(_emiss_snr) & (_emiss_snr <= sky_clean_max_sky_snr)
             _sc_keep = (sky_clean
                         & np.isfinite(prominence) & (prominence >= sky_clean_prom_min)
-                        & np.isfinite(snr_floor) & (snr_floor >= sky_clean_snr_min)
+                        & np.isfinite(snr) & (snr >= sky_clean_snr_min)
                         & ~near_satstar)
             t['local_emission_snr'] = _emiss_snr
             t['sky_clean'] = sky_clean
