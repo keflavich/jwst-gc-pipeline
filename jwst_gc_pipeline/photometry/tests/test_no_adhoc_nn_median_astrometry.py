@@ -110,6 +110,13 @@ ALLOWLIST = {
     # the injected reference-field stars).  No position is derived from it.
     ("jwst_gc_pipeline/photometry/reference_fields/make_injections.py",
      "field_color_ratios"),
+    # PR #1015 evidence scripts, no astrometry.  match_fraction: the fraction
+    # of sources with a reference-catalog counterpart within 60 mas, and the
+    # same at randomly shifted positions (the chance rate) -- np.mean of a
+    # boolean, a realness statistic.  seed_gallery.main: a "has a counterpart"
+    # marker for the gallery; its medians are of local source density.
+    ("docs/evidence/faint_m7_seed_union/scripts/realness.py", "match_fraction"),
+    ("docs/evidence/faint_m7_seed_union/scripts/seed_gallery.py", "main"),
     # ---- cross-function splits: the match and the reduce are in DIFFERENT
     # functions, so they cannot be attributed to one and are allowlisted as
     # `<unattributed>`.  These entries are WEAKER than a function-scoped one --
