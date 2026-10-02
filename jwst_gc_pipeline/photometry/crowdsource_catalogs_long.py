@@ -4378,25 +4378,30 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
                     help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).  "
-                         "Only used where the data-i2d prominence is not measured "
-                         "when --manual-ext-star-prom-min > 0.")
+                         "Where the data-i2d prominence is measured the test also needs "
+                         "prominence >= --manual-ext-star-prom-peak-min.")
     parser.add_option("--manual-ext-star-prom-min", dest="manual_ext_star_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_min'],
-                    help="Extended-emission vetting: the bright-star keep branch is "
-                         "data-i2d prominence >= this (rise above the local annulus "
-                         "in annulus-MAD units) in place of peak-SB > "
-                         "--manual-ext-peak-over-bkg x local bkg, whose local_bkg "
-                         "scatters about zero on background-subtracted frames.  "
-                         "0 = the peak-SB test (default 5).")
+                    help="Extended-emission vetting: keep a source whose data-i2d "
+                         "prominence (rise above the local annulus in annulus-MAD "
+                         "units) is >= this, whatever its peak-SB / local bkg; "
+                         "local_bkg scatters about zero on background-subtracted "
+                         "frames.  0 = off (default 7).")
+    parser.add_option("--manual-ext-star-prom-peak-min", dest="manual_ext_star_prom_peak_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_peak_min'],
+                    help="Extended-emission vetting: the peak-SB keep also needs "
+                         "data-i2d prominence >= this where prominence is measured.  "
+                         "A value >= --manual-ext-star-prom-min leaves the "
+                         "prominence test alone.  0 = off (default 4).")
     parser.add_option("--manual-ext-star-prom-robust-min", dest="manual_ext_star_prom_robust_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_min'],
                     help="With --manual-ext-star-prom-min > 0, also keep a source whose "
                          "neighbour-robust prominence (25th-percentile annulus floor, "
                          "lower-half MAD) is >= this; neighbours' PSF wings inflate the "
-                         "plain annulus MAD in crowded fields.  < 0 (default) = AUTO: 8 "
-                         "on star-dominated fields, off on extended-emission targets, "
-                         "where the 25th-percentile floor reads the dark sides of a "
-                         "filament; 0 = off.")
+                         "plain annulus MAD in crowded fields.  0 (default) = off; "
+                         "< 0 = AUTO: 8 on star-dominated fields, off on "
+                         "extended-emission targets, where the 25th-percentile floor "
+                         "reads the dark sides of a filament.")
     parser.add_option("--manual-ext-star-prom-robust-conc", dest="manual_ext_star_prom_robust_conc",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_conc'],
                     help="The neighbour-robust prominence branch refuses a source whose "
