@@ -571,6 +571,34 @@ Turning this flag on for an already-tied field is additive, not corrective:
 run writes an additional correction on top of any VIRAC2-tied bulk already in
 the table.
 
+**Frozen stages (m3-m6) re-resolve the substitution every time, with no
+pinning to the snapshot m2 used.** `resolve_tie_reference` is called fresh at
+every stage (`cataloging._run_astrometry_stage_checkpoint` runs it before
+every `run_visit_checkpoint` call, m2 through m6), never once and cached, so
+F480M's m3 call reads whatever F212N's *latest* `checkpoint_m2_F212N_*`
+record and consensus file are AT THAT TIME, not the ones its own m2 tied to.
+Two cases follow from that:
+
+* **F212N's m2 reruns and has not re-settled** (no new record yet, the new
+  record did not pass with no used override, or it just applied its own
+  consensus-vs-reference correction this pass) while F480M is at a frozen
+  stage: `reference_filter_tie_settled` says so, and F480M's frozen-stage
+  call **raises `ReferenceFilterNotSettledError`**, the same fail-loud
+  refusal as at m2. It does not fall back to comparing against a stale or
+  partial F212N state.
+* **F212N's m2 reruns and DOES re-settle, but rewrites its consensus
+  catalog** (a different exposure list, a few more mas of noise, a corrected
+  bulk that has now been baked in) in between F480M's m2 and F480M's m3-m6:
+  F480M's frozen-stage call gets the NEW consensus file, silently. There is
+  no check that this is the SAME consensus F480M's own m2 used. A
+  stage-stability "shift" measured on an opted-in field's non-reference
+  filter can therefore be the reference filter's consensus moving, not the
+  tied filter's own frame -- indistinguishable from a real regression by the
+  frozen-stage gate alone. Diagnosing one on a `tie_through_reference_filter`
+  field should start by comparing `reference_path` / `reference_record_date`
+  across the filter's own m2 record and the failing frozen stage's
+  `reference_tie` record before concluding the tied filter itself moved.
+
 ## Corrections & provenance
 
 * The offsets table is the ONLY authoring channel (see
