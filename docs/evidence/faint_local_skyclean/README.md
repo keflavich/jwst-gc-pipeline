@@ -51,8 +51,12 @@ All additions have prominence ≥ 5 (the tier's requirement); none lies within
 faint additions (S/N < 5, 63% of them) match as often as base-kept stars of
 the same flux, and the brighter additions read lower (0.73 at S/N 7–10, 0.56
 at S/N ≥ 10, 1,527 sources together).  At realness 0.95 about 5% of the Brick
-additions, roughly 300, are spurious by this measure.  On W51 the weakest
-slices are S/N < 4 (0.57) and qfit ≥ 1 (0.51).  Per-bin values are in
+additions, roughly 300, are spurious by this measure.  The next section
+traces the S/N dependence to proximity to brighter stars.  On W51 the weakest
+slices are S/N < 4 (0.57) and qfit ≥ 1 (0.51); the two overlap (115 of the
+143 and 180 sources inside the reference footprint), and together they hold
+208 in-footprint sources at realness 0.51, about 100 spurious-equivalent or
+10% of the 1,015 W51 additions in the footprint.  Per-bin values are in
 [`data/slices_lsky.json`](data/slices_lsky.json) and the totals in
 `data/compare_<field>.json` (variant `lsky`).
 
@@ -93,6 +97,111 @@ fit sits 1–2 px from a single-pixel spike beside a horizontal streak, and
 the spike stays in both residuals (the white blob below it is the
 over-subtracted core of a #1015 star, present in both).  The tier ignores
 qfit, so it can admit fits next to artefacts of this kind.
+
+## Bright additions sit next to brighter stars (the Brick S/N gradient)
+
+`scripts/lsky_snr_diag.py` splits each per-frame S/N bin of the additions by
+the distance to the nearest brighter #1015 base-kept star (pixels of the
+0.031″ grid) and applies the same split to base-kept stars of the same S/N,
+all inside the reference footprint (`data/lsky_snr_diag_<field>.json`).
+
+- Within 5 px of a brighter star the reference catalog confirms neither set.
+  Brick base-kept stars at 0–5 px read realness −0.00 to 0.14 in each S/N
+  bin (4,743 to 21,528 stars per bin), and the additions there read −0.18 to
+  0.09.
+- The share of Brick additions within 5 px of a brighter star rises with
+  S/N: 20% at S/N < 5 and 5–7, 24% at 7–10, 34% at 10–20 and 70% at ≥ 20
+  (10 sources).  Most of the S/N gradient follows from this.
+- Weighting the base-kept realness by the additions' distance distribution
+  gives the realness expected of the additions at each S/N.  Entries are
+  additions / distance-matched base-kept (ratio, n):
+
+| field | S/N < 5 | S/N 5–10 | S/N ≥ 10 |
+|---|---|---|---|
+| Brick | 1.25 / 1.26 (0.99, 3,013) | 0.78 / 0.97 (0.80, 1,084) | 0.55 / 0.71 (0.77, 602) |
+| Sgr B2 | 1.10 / 1.07 (1.02, 5,183) | 1.05 / 0.99 (1.06, 2,077) | 1.05 / 0.95 (1.11, 1,202) |
+| W51 | 0.78 / 0.95 (0.82, 353) | 1.48 / 1.23 (1.20, 341) | 1.47 / 1.10 (1.33, 292) |
+
+The Brick deficit at S/N ≥ 5 sits at 5–8 px from the brighter star (S/N
+5–10: 0.78 against 1.06 for base-kept stars, 531 additions; S/N ≥ 10: 0.68
+against 0.93, 250 additions).  Beyond 8 px the additions read within 0.2 of
+the base-kept stars in every bin.  At face value the Brick ratios correspond
+to about 355 spurious-equivalent additions at S/N ≥ 5 (1,084 × 0.20 +
+602 × 0.23), 7.5% of the 4,708 Brick additions in the F200W footprint.
+
+### Image test: does the reference image show a source?
+
+The catalog test counts a real star that the vetted reference catalog lacks
+as spurious, and next to brighter stars the vetted catalogs lack many stars
+(the base-kept rows above).  `scripts/img_realness.py` reads the reference
+image instead: it asks whether the lightly smoothed image (Gaussian σ 0.7 px)
+has a local maximum within 1.5 px of the source.  Chance is the same test at
+five positions at the same distance from the same brighter star, rotated
+about it in 60° steps (2″ shifts for a source with no brighter star within
+20 px).  Image realness = (peak − chance) / (1 − chance)
+(`data/img_realness_<field>.json`).  This tests position, not flux.  A wing
+feature of the brighter star that lands within 1.5 px of the source in both
+filters would pass; the rotated controls give how often a position at the
+same distance from the same star passes (0.03–0.14 in the Brick).
+
+| field (reference image) | S/N < 5 | S/N 5–10 | S/N ≥ 10 |
+|---|---|---|---|
+| Brick (F200W, independent visit) | 0.93 / 0.82 (1.13) | 0.88 / 0.84 (1.05) | 0.82 / 0.79 (1.03) |
+| Sgr B2 (F182M, same visit) | 0.84 / 0.74 (1.14) | 0.79 / 0.74 (1.06) | 0.69 / 0.76 (0.91) |
+| W51 (F182M, same visit) | 0.58 / 0.60 (0.96) | 0.85 / 0.77 (1.11) | 0.95 / 0.94 (1.02) |
+
+In the Brick at 5–8 px the image realness is 0.97–0.98 for the additions and
+0.93–0.94 for base-kept stars at every S/N, where the catalog test reads
+0.68–1.24 for the additions.  Sgr B2 at S/N ≥ 10 reads
+0.91, about 110 spurious-equivalent, mostly from additions within 5 px of a
+brighter star (451 sources at 0.06 and 0.40 against 0.22 and 0.54 for
+base-kept stars) and from the 12–20 px bin (0.88 against 0.97); its catalog
+test reads 1.11 there.  W51 chance is 0.2–0.5 beyond 8 px because emission
+structure makes local maxima, so its image test discriminates weakly.
+
+![](lsky_realness_vs_neighbour.png)
+
+Top row: catalog realness against distance to the nearest brighter base-kept
+star; solid lines are the additions, dashed lines base-kept stars of the
+same S/N, and the legends give the distance-matched comparison of the first
+table.  Bottom row: image realness, same layout.  Bins with fewer than 20
+sources are omitted.  In the Brick the catalog test (top left) reads ~0 for
+every set within 5 px, while the F200W image test (bottom left) reads
+0.32–0.78 for the 3–5 px sources and 0.93–0.98 for the 5–8 px sources.
+
+![](added_brick_lsky_snr10_nbr.png)
+
+Twelve Brick additions at per-frame S/N ≥ 10, grouped by distance to the
+nearest brighter base-kept star: rows 1–2 at 2.6–4.8 px, rows 3–4 at
+5.4–7.2 px, rows 5–6 at 8.7–11.4 px.  Layout and stretch as in the first
+gallery, with the F200W stamp of the independent visit in columns 4 and 8.
+Rows 3–4 sample the bin that carries the Brick deficit: three of the four
+sources are red (165–240 mas to the nearest F200W catalog entry), and each
+of the three shows a compact F200W peak at or next to the tick (row 3 both
+columns, row 4 right); row 4 left is green (3 mas).  The rows 5–6 sources
+are green (2–9 mas).  The rows 1–2 sources (red) sit on the flank of a
+brighter neighbour; the F200W stamps show structure at the tick blended with
+the neighbour's wing.  In each row the proposed residual removes the compact
+peak at the tick; row 2 right, 2.6 px from its neighbour, leaves a light
+patch (mild over-subtraction).
+
+### Decision
+
+This branch keeps the tier as it is, with no S/N ceiling:
+
+- The S/N gradient follows the distance to brighter stars, and base-kept
+  stars at the same distances show the same drop in the catalog test.
+- The image test, which does not depend on the reference catalog's vetting,
+  reads 1.03–1.13 of the distance-matched base-kept value in the Brick at
+  every S/N.
+- The catalog test leaves a Brick deficit of about 355 spurious-equivalent
+  at S/N ≥ 5, concentrated at 5–8 px; the F200W stamps of that bin show
+  peaks at red-labelled positions, so this count is an upper bound.
+- An S/N ceiling would also drop the 1,202 Sgr B2 additions at S/N ≥ 10
+  (catalog ratio 1.11, image ratio 0.91) along with the Brick's 602 (0.77,
+  image 1.03).
+- A field that needs the local reference off runs with
+  `--manual-sky-clean-local-arcsec 0` (the global dark-sky test remains).
 
 ## Reference fields at 10 seeds (dark cloud)
 
@@ -184,10 +293,22 @@ From `scripts/`:
   saturated-star distance bins, realness), `slices.py <field> lsky` (the
   S/N, prominence and qfit tables), `propresid.py` (the effective PSF) and
   `added_gallery.py` (the two galleries).
+- `python lsky_snr_diag.py <field>` (per-S/N and per-distance catalog
+  realness), `python img_realness.py <field>` (the image test) and
+  `python lsky_nbr_fig.py <out.png>` (the neighbour figure, from the two
+  scripts' JSON files next to it); `GALLERY_GROUP=nbr GALLERY_SNR_MIN=10
+  python added_gallery.py brick lsky <out.png> 4` (the neighbour gallery).
+  `lsky_snr_diag.py` imports `realness.py` from
+  `../../faint_m7_seed_union/scripts/`.
+- The replay tables the scripts read from `out/` (the `vet_variant.py`
+  outputs for this branch and the other faint-star branches, 952 MB) are
+  kept at `/orange/adamginsburg/jwst/faint_star_prs/replay_out/`; link it
+  as `scripts/out`.
 - Outputs used above, copied into `data/`: `compare_{brick,sgrb2,w51}.json`
   (these also hold the other branches' replays; this branch is variant
   `lsky`) and `slices_lsky.json` (the three `slices_<field>_lsky.json`
-  merged, keyed by field).  The 10-seed reference-field results are the
+  merged, keyed by field), `lsky_snr_diag_<field>.json` and
+  `img_realness_<field>.json`.  The 10-seed reference-field results are the
   #1014 evaluator output (`python -m
   jwst_gc_pipeline.photometry.reference_fields.evaluate --fields dark
   --json ...`), in `data/eval10_main.json` and
@@ -209,4 +330,5 @@ From `scripts/`:
 - The full-field realness relies on a catalog match: a real star missing
   from the reference catalog counts as spurious, and a reference entry on an
   artefact or emission knot counts as a confirmation.  The Brick value uses
-  an independent visit and is the least affected.
+  an independent visit and is the least affected.  The image test above
+  drops the catalog's vetting and keeps a position-only test.

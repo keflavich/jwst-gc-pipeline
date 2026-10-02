@@ -26,6 +26,11 @@ Label colour: reference-catalog counterpart within 60 mas (green) or not (red).
 <variant>@<other>: compare with the replay <other> in place of the #1015 base
 (the 'current' residual is then <other>'s catalog).
 
+Environment (optional): GALLERY_GROUP=nbr groups by distance to the nearest
+BRIGHTER base-kept star (0-5, 5-8, >8 px of the band's pixel grid) in place of
+the saturated-star distance; GALLERY_SNR_MIN draws only sources with per-frame
+S/N (flux/flux_err) at or above it.
+
 usage: python added_gallery.py <field> <variant>[@<other>] <out.png> [per_bin] [added|lost]
 """
 import json
@@ -81,6 +86,7 @@ PR = {'snr': '#1016 S/N floor on flux_err_prop', 'qsnr': '#1017 qfit noise term'
       'prom2p5': '#1018 prominence keep >= 7, peak-SB guard 5',
       'snrp2': '#1016 S/N floor on flux_err_prop (on #1018)'}
 SAT_BINS = ((0, 1), (1, 2), (2, np.inf))
+NBR_BINS = ((0, 5), (5, 8), (8, np.inf))   # px to the nearest brighter base-kept star
 ABBR = {'prominence_robust': 'rprom', 'core_concentration': 'conc', 'local_structure_snr': 'lstruct'}
 HALF = 0.5     # 1" stamps
 PEAK_R = 0.07  # stretch top = brightest pixel within this radius (arcsec) of the drawn source
@@ -100,6 +106,27 @@ def local(img, w, s):
     px = PEAK_R / (wcs.utils.proj_plane_pixel_scales(w)[0] * 3600)
     yy, xx = np.indices(img.shape)
     return img[(xx - x) ** 2 + (yy - y) ** 2 <= px ** 2]
+
+
+def nearest_brighter_px(sc_all, kb, flux, rows, band):
+    """Distance (px of the band's grid) from each of ``rows`` to the nearest
+    base-kept star brighter than it, among the 16 nearest within 20 px (inf if
+    none); as lsky_snr_diag.py."""
+    from scipy.spatial import cKDTree
+    pix = 0.0311 if band in ('f182m', 'f187n', 'f212n', 'f200w', 'f150w') else 0.0629
+    off = sc_all.transform_to(sc_all[0].skyoffset_frame())
+    xy = np.c_[off.lon.to_value(u.arcsec), off.lat.to_value(u.arcsec)] / pix
+    ik = np.flatnonzero(kb)
+    dd, jj = cKDTree(xy[ik]).query(xy[rows], k=16, distance_upper_bound=20)
+    d_b = np.full(len(sc_all), np.inf)
+    for n, i in enumerate(rows):
+        for d, j in zip(dd[n], jj[n]):
+            if not np.isfinite(d):
+                break
+            if ik[j] != i and flux[ik[j]] > flux[i]:
+                d_b[i] = d
+                break
+    return d_b
 
 
 def main(field, v, out, per_bin=4, kind='added'):
@@ -140,6 +167,8 @@ def main(field, v, out, per_bin=4, kind='added'):
     _, sep, _ = sc_all[add].match_to_catalog_sky(refsc)
     matched = np.zeros(len(base), bool)
     matched[add] = sep.to_value(u.mas) < 60
+    sepmas = np.full(len(base), np.nan)
+    sepmas[add] = sep.to_value(u.mas)
     infp = np.zeros(len(base), bool)
     infp[add] = sep.arcsec < 1.0
     addmask = np.zeros(len(base), bool)
@@ -155,10 +184,17 @@ def main(field, v, out, per_bin=4, kind='added'):
     img = [('data', load(prov['data_i2d'])), (f'current residual ({basel})', load(c['resid'])),
            (f'proposed residual ({PR[v].split()[0]})', load(c['resid'])), (c['reflab'], load(c['refimg']))]
     NI = len(img)
+    group = os.environ.get('GALLERY_GROUP', 'sat')
+    snr_min = float(os.environ.get('GALLERY_SNR_MIN', '0'))
+    ok = infp & (flux / ef >= snr_min) if snr_min > 0 else infp
+    if group == 'nbr':
+        dgrp, bins, unit = nearest_brighter_px(sc_all, kb, flux, add, band), NBR_BINS, ' px'
+    else:
+        dgrp, bins, unit = dsat, SAT_BINS, '"'
     rng = np.random.default_rng(11)
     picks = []
-    for lo, hi in SAT_BINS:
-        idx = add[(dsat[add] >= lo) & (dsat[add] < hi) & infp[add]]
+    for lo, hi in bins:
+        idx = add[(dgrp[add] >= lo) & (dgrp[add] < hi) & ok[add]]
         sel = rng.choice(idx, min(per_bin, idx.size), replace=False) if idx.size else np.array([], int)
         picks.append(((lo, hi), idx, sel))
     nrow = sum((len(s) + 1) // 2 for _, _, s in picks)
@@ -221,15 +257,22 @@ def main(field, v, out, per_bin=4, kind='added'):
             snr_f = flux[i] / ef[i]
             snr_p = flux[i] / efp[i] if np.isfinite(efp[i]) and efp[i] > 0 else np.nan
             ex = ''.join(f' {ABBR[cn]} {float(var[cn][i]):.1f}' for cn in extra)
-            axes[rr, c0].set_ylabel(f'sat {dsat[i]:.1f}"  S/N {snr_f:.1f}/{snr_p:.0f}\nqfit {qf[i]:.2f} prom {pr[i]:.1f}{ex}',
+            nbr = f'nbr {dgrp[i]:.1f} px  ' if group == 'nbr' else ''
+            axes[rr, c0].set_ylabel(f'{nbr}sat {dsat[i]:.1f}"  S/N {snr_f:.1f}/{snr_p:.0f}\nqfit {qf[i]:.2f} prom {pr[i]:.1f}{ex}',
                                     fontsize=7.5, color='green' if matched[i] else 'red')
+            print(f'row {rr + 1} {"left" if k % 2 == 0 else "right"}: rowid {i} {nbr}sat {dsat[i]:.2f}" '
+                  f'nearest reference {sepmas[i]:.0f} mas, S/N {snr_f:.1f}/{snr_p:.0f}, qfit {qf[i]:.2f}, prom {pr[i]:.1f}')
         r += (len(sel) + 1) // 2
-    summ = '; '.join(f'{lo}-{hi:g}" {int(matched[idx].sum())}/{idx.size}'
+    summ = '; '.join(f'{lo}-{hi:g}{unit} {int(matched[idx].sum())}/{idx.size}'
                      for (lo, hi), idx, _ in picks) + ' matched'
+    by = ('the nearest brighter base-kept star (px)' if group == 'nbr'
+          else 'the nearest saturated star')
+    if snr_min > 0:
+        by += f', per-frame S/N >= {snr_min:g}'
     what = 'adds over' if kind == 'added' else 'drops from'
     circ = 'other added sources' if kind == 'added' else 'other dropped sources'
-    lines = [f'{field} {band.upper()}: sources {PR[v]} {what} the {basel} catalog, by distance to the nearest '
-             f'saturated star.  In the reference footprint: {summ}.',
+    lines = [f'{field} {band.upper()}: sources {PR[v]} {what} the {basel} catalog, by distance to '
+             f'{by}.  In the reference footprint: {summ}.',
              f'1" stamps, linear stretch from the stamp 10th percentile to the brightest data pixel within '
              f'{PEAK_R}" of the drawn source; both residuals share that stretch with the floor lowered by '
              f'{RESID_FLOOR:g} x the range (grey = background, white = over-subtracted).',
@@ -237,7 +280,7 @@ def main(field, v, out, per_bin=4, kind='added'):
              f'held-out isolated stars: scale {ecal["s_iso"]:.2f}, rms mismatch {ecal["frac_rms_iso"]:.0%}; '
              f'random stamps: scale {ecal["s_random"]:.2f}).',
              f'Orange ticks = drawn source; cyan dots = {basel}-kept; orange circles = {circ}; red x = saturated star.',
-             'Label: sat distance, S/N per-frame/propagated, qfit, prominence'
+             'Label: ' + ('brighter-neighbour distance, ' if group == 'nbr' else '') + 'sat distance, S/N per-frame/propagated, qfit, prominence'
              + ''.join(f', {ABBR[cn]}' for cn in extra)
              + '; green = reference counterpart within 60 mas, red = none']
     fig.suptitle('\n'.join(textwrap.fill(t, 150) for t in lines), fontsize=9)
