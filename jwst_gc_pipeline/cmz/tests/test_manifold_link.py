@@ -104,3 +104,30 @@ def test_field_page_carries_the_link_only_when_given(mw, tmp_path):
     without = mw.render_field_page('brick', _manifest('brick'), '')
     assert 'brick_manifold/' not in without
     assert 'catalog manifold viewer' not in without
+
+
+def test_field_with_one_viewer_per_program(mw, tmp_path):
+    """The brick has two programs with disjoint filter sets (2221 o001,
+    1182 o004), so it has one viewer per observation; its page links both,
+    each named by its own title."""
+    _viewer(tmp_path, 'brick_o001_manifold',
+            title='Brick (program 2221) Manifold (prototype)')
+    _viewer(tmp_path, 'brick_o004_manifold',
+            title='Brick (program 1182) Manifold (prototype)')
+    _viewer(tmp_path, 'brickx_o001_manifold')   # another field's prefix
+    infos = mw.manifold_infos(tmp_path, 'brick')
+    assert [i['href'] for i in infos] == ['brick_o001_manifold/',
+                                          'brick_o004_manifold/']
+    page = mw.render_field_page('brick', _manifest('brick'), '',
+                                manifold=infos)
+    assert 'Open the Brick (program 2221) Manifold viewer</a>' in page
+    assert 'Open the Brick (program 1182) Manifold viewer</a>' in page
+    assert 'Open the catalog manifold viewer' not in page
+
+
+def test_single_viewer_keeps_the_plain_label(mw, tmp_path):
+    _viewer(tmp_path, 'sgra_manifold', title='Sgr A Manifold (prototype)')
+    infos = mw.manifold_infos(tmp_path, 'sgra')
+    page = mw.render_field_page('sgra', _manifest('sgra'), '', manifold=infos)
+    assert 'Open the catalog manifold viewer</a>' in page
+    assert mw.manifold_infos(tmp_path, 'w51') == []
