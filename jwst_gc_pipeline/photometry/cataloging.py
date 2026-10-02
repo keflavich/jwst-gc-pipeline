@@ -1864,26 +1864,6 @@ def _is_extended_emission(options):
     return str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
 
 
-def _auto_seed_round_loose_max(value, options):
-    """Resolve ``--manual-seed-round-loose-max``.  ``value < 0`` (the default)
-    is AUTO: 0.8 on star-dominated fields and 0 (loose-roundness seeds off) on
-    an extended-emission target (:func:`_is_extended_emission`); ``value >= 0``
-    is used verbatim.
-
-    On a nebular field the residual co-add's knots and filament points are
-    elongated and pass the prominence test once the residual background is
-    subtracted: W51 F187N reference field (3 seeds), phases m5-m7, 60-70
-    detections per phase with roundness in (0.5, 0.8], 25-29 of them at
-    prominence >= 5.  Against the tight cut alone this recovered one more of
-    48 injected stars and doubled the positive residual excess (0.55 -> 1.11
-    peaks per arcsec^2).
-    """
-    value = float(value)
-    if value >= 0:
-        return value
-    return 0.0 if _is_extended_emission(options) else 0.8
-
-
 def _resolve_each_suffix(options, filtername):
     """Per-filter input per-exposure-crf suffix.
 
@@ -3730,74 +3710,6 @@ def _annulus_prominence(image, x, y, *, half=10, core_r=1.5, ann_in=4):
     return out
 
 
-def _radially_elongated(image, x, y, star_x, star_y, *, radius_pix, half=3,
-                        tol_deg=15.0, min_ellip=0.1, min_sep_pix=2.0):
-    """True where the detection at (x, y) is elongated along the line to a
-    star at (star_x, star_y) between ``min_sep_pix`` and ``radius_pix`` away:
-    the shape of a diffraction-spike knot, which is stretched along the spike,
-    i.e. radially from its star.  A real star distorted by a neighbour's wing
-    or a residual has no preferred alignment with the bright stars around it.
-
-    Elongation and axis come from the second moments of the positive,
-    median-subtracted pixels in a (2*half+1)^2 box about the detection;
-    detections with ellipticity < ``min_ellip`` have no defined axis and are
-    never flagged.  NaN pixels are ignored.
-    """
-    from scipy.spatial import cKDTree
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    out = np.zeros(len(x), dtype=bool)
-    star_x = np.asarray(star_x, dtype=float)
-    star_y = np.asarray(star_y, dtype=float)
-    _sok = np.isfinite(star_x) & np.isfinite(star_y)
-    if len(x) == 0 or not np.any(_sok) or radius_pix <= 0:
-        return out
-    star_x, star_y = star_x[_sok], star_y[_sok]
-    tree = cKDTree(np.column_stack([star_x, star_y]))
-    ny, nx = image.shape
-    yo, xo = np.mgrid[-half:half + 1, -half:half + 1]
-    tol = np.deg2rad(float(tol_deg))
-    for i, (xi, yi) in enumerate(zip(x, y)):
-        if not (np.isfinite(xi) and np.isfinite(yi)):
-            continue
-        near = tree.query_ball_point([xi, yi], float(radius_pix))
-        if not near:
-            continue
-        ix, iy = int(round(xi)), int(round(yi))
-        if not (half <= ix < nx - half and half <= iy < ny - half):
-            continue
-        st = image[iy - half:iy + half + 1, ix - half:ix + half + 1]
-        ok = np.isfinite(st)
-        if ok.sum() < 5:
-            continue
-        w = np.where(ok, st - np.median(st[ok]), 0.0)
-        w = np.clip(w, 0.0, None)
-        tot = w.sum()
-        if tot <= 0:
-            continue
-        dx = xo + (ix - xi)
-        dy = yo + (iy - yi)
-        mxx = (w * dx * dx).sum() / tot
-        myy = (w * dy * dy).sum() / tot
-        mxy = (w * dx * dy).sum() / tot
-        if mxx + myy <= 0:
-            continue
-        ellip = np.hypot(mxx - myy, 2 * mxy) / (mxx + myy)
-        if ellip < min_ellip:
-            continue
-        theta = 0.5 * np.arctan2(2 * mxy, mxx - myy)
-        for j in near:
-            ddx, ddy = xi - star_x[j], yi - star_y[j]
-            if np.hypot(ddx, ddy) < min_sep_pix:
-                continue
-            phi = np.arctan2(ddy, ddx)
-            d = (theta - phi + np.pi / 2) % np.pi - np.pi / 2
-            if abs(d) < tol:
-                out[i] = True
-                break
-    return out
-
-
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
@@ -3805,8 +3717,6 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                               coarse_bg_box=0, seed_struct_protect_snr=8.0,
                               noise_floor_box=0, noise_floor_k=5.0,
                               round_loose_max=0.0, round_loose_prom_min=5.0,
-                              round_loose_spike_radius_as=0.0,
-                              round_loose_spike_bright_pct=99.5,
                               label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
@@ -3829,23 +3739,23 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     PSF photometry is *never* run on the i2d -- the fit always runs on the raw
     (or background-subtracted) frames.  This step is detection-only.
 
-    ``round_loose_max`` > ``roundhi``: also admit detections with roundness up
-    to +-``round_loose_max``, but only where they rise above their LOCAL
-    structure: annulus prominence (core peak minus 4-10 px annulus median, over
-    the annulus MAD) on the detection image >= ``round_loose_prom_min``.  A
-    faint star on a residual or a neighbour's wing is distorted past the tight
-    bound (Brick F182M m7 residual peaks at S/N > 7: 55% pass +-0.5, 78% pass
-    +-0.8).  The prominence test does NOT reject emission knots or filament
-    points once the residual background is subtracted (W51 F187N: 25-29 per
-    phase pass prominence >= 5), nor diffraction-spike knots, whose thin
-    spike covers little of the annulus.  Emission is handled by the target
-    choice (:func:`_auto_seed_round_loose_max` turns the loose cut off on
-    nebular targets); spikes by ``round_loose_spike_radius_as`` > 0, which
-    drops a loose detection that is elongated along the line to one of the
-    previous catalog's brightest stars (flux above the
-    ``round_loose_spike_bright_pct`` percentile) within that radius
-    (:func:`_radially_elongated`).  Admitted loose detections carry
-    ``seed_round_loose`` = True in the seed catalog.
+    ``round_loose_max`` > ``roundhi`` (opt-in; default 0 = off): also admit
+    detections with roundness up to +-``round_loose_max``, but only where they
+    rise above their LOCAL structure: annulus prominence (core peak minus 4-10
+    px annulus median, over the annulus MAD) on the detection image >=
+    ``round_loose_prom_min``.  A faint star on a residual or a neighbour's wing
+    is distorted past the tight bound (Brick F182M m7 residual peaks at S/N > 7:
+    55% pass +-0.5, 78% pass +-0.8).  The prominence test does NOT reject
+    emission knots or filament points once the residual background is
+    subtracted (W51 F187N: 25-29 per phase pass prominence >= 5), nor
+    diffraction-spike knots, whose thin spike covers little of the annulus.
+    At full frame (m6 residual, roundness 0.8) the loose-only seeds sit on the
+    brightest 10% of the smoothed background 3x as often as the previous seeds
+    (Brick NRCB F182M 31% vs 11%, Sgr B2 F187N 29% vs 11%), and near bright
+    stars they pile up at the spike position angles (2x the median bin, vs
+    1.3x for the tight seeds).  Admitted loose detections carry
+    ``seed_round_loose`` = True in the seed catalog; rows carried over from
+    ``prev_vetted_path`` are False.
 
     The i2d cutouts are drizzled at the native detector scale (0.063"/px), so the
     per-frame pixel FWHM applies unchanged.  Returns the seed-catalog path.
@@ -3926,40 +3836,10 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                                        np.asarray(xo, float), np.asarray(yo, float))
             ok = np.ones(len(det), dtype=bool)
             ok[np.where(outside)[0]] = np.isfinite(prom) & (prom >= float(round_loose_prom_min))
-            n_prom = int(ok[outside].sum())
-            n_spike = 0
-            if float(round_loose_spike_radius_as) > 0 and n_prom:
-                # diffraction-spike knots: elongated radially from a bright star
-                _bt = Table.read(prev_vetted_path)
-                _bf = None
-                for _fc in ('flux_fit', 'flux'):
-                    if _fc in _bt.colnames:
-                        _bf = np.asarray(_bt[_fc], dtype=float)
-                        break
-                if _bf is not None and np.any(np.isfinite(_bf) & (_bf > 0)):
-                    _good = np.isfinite(_bf) & (_bf > 0)
-                    _thr = np.percentile(_bf[_good], float(round_loose_spike_bright_pct))
-                    _bsky = _L._resolve_seed_skycoords(_bt[_good & (_bf >= _thr)])['skycoord']
-                    if not isinstance(_bsky, SkyCoord):
-                        _bsky = SkyCoord(_bsky)
-                    _bx, _by = ww_i2d.world_to_pixel(_bsky)
-                    _cand = np.where(outside & ok)[0]
-                    xc, yc = _L._best_available_xy(det[_cand])
-                    spike = _radially_elongated(
-                        np.where(mask, np.nan, data), xc, yc, _bx, _by,
-                        radius_pix=float(round_loose_spike_radius_as) / pixscale_as,
-                        half=max(2, int(np.ceil(1.5 * fwhm_pix))))
-                    ok[_cand[spike]] = False
-                    n_spike = int(spike.sum())
-                else:
-                    print(f"[{label}] i2d daofind loose roundness: no positive flux in "
-                          f"{os.path.basename(prev_vetted_path)}; spike guard skipped",
-                          flush=True)
             print(f"[{label}] i2d daofind loose roundness: {int(outside.sum())} "
                   f"detection(s) with roundness in ({roundhi:g},{float(round_loose_max):g}], "
-                  f"{n_prom} at prominence >= {float(round_loose_prom_min):g}, "
-                  f"{n_spike} of those dropped as spike-aligned, "
-                  f"{int(ok[outside].sum())} kept", flush=True)
+                  f"{int(ok[outside].sum())} kept at prominence >= "
+                  f"{float(round_loose_prom_min):g}", flush=True)
             det['seed_round_loose'] = outside
             det = det[ok]
     n_raw = len(det)
@@ -7705,8 +7585,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
-                        _sround_loose = _auto_seed_round_loose_max(
-                            mopt(opts_phase, 'manual_seed_round_loose_max'), opts_phase)
+                        _sround_loose = float(mopt(opts_phase, 'manual_seed_round_loose_max'))
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
