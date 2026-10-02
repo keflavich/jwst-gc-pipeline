@@ -100,15 +100,6 @@ def empirical_psf(sc_all, flux, prod, data, resid, sat, n=400, half=1.0, seed=5)
     return np.nan_to_num(psf, nan=0.0), used
 
 
-def prod_member(field, sc_all):
-    """Boolean per m6-table row: in the production vetted catalog (same position within 1 mas)."""
-    ref = sky(Table.read(PROD[field]))
-    idx, sep, _ = ref.match_to_catalog_sky(sc_all)
-    m = np.zeros(len(sc_all), bool)
-    m[idx[sep.to_value('mas') < 1]] = True
-    return m, int((sep.to_value('mas') >= 1).sum())
-
-
 def render(shape, xs, ys, fluxes, psf):
     """Sum of fluxes[i] * psf centred at (xs[i], ys[i]) on an image of shape (pixel coords)."""
     out = np.zeros(shape)
@@ -182,7 +173,12 @@ def main(field):
     base = Table.read(f'{here}/out/{field}_{band}_seed.fits')
     prov = json.loads(base.meta['PROVJSON'])
     sc_all = sky(base)
-    prod, nmiss = prod_member(field, sc_all)
+    # production membership: m6-table rows at a production vetted position (within 1 mas)
+    ref = sky(Table.read(PROD[field]))
+    idx, sep, _ = ref.match_to_catalog_sky(sc_all)
+    prod = np.zeros(len(sc_all), bool)
+    prod[idx[sep.to_value('mas') < 1]] = True
+    nmiss = int((sep.to_value('mas') >= 1).sum())
     kb = np.asarray(base['kept'], bool)
     print(f'{field}: production vetted rows {prod.sum()} (unmatched {nmiss}); base kept {kb.sum()}; '
           f'base-only {np.sum(kb & ~prod)}, production-only {np.sum(prod & ~kb)}')
