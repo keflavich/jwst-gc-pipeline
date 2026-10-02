@@ -1553,14 +1553,15 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # term admits it as readily as a faint star.  On continuum-confirmed W51 /
     # Sgr B2 F187N labels the knots it admits sit at low prominence.
     qfit_ceiling = np.full(n, float(qfit_max))
+    _noise_band = None
     if qfit_snr_k > 0:
         _snr_ok = np.isfinite(snr) & (snr > 0)
         if qfit_snr_prom_min > 0:
             _snr_ok &= np.isfinite(prominence) & (prominence >= float(qfit_snr_prom_min))
         qfit_ceiling[_snr_ok] = np.hypot(float(qfit_max),
                                          float(qfit_snr_k) / snr[_snr_ok])
-        _n_noise = int(np.sum((qf > qfit_max) & (qf <= qfit_ceiling)))
-        print(f"[{label}] qfit noise term: {_n_noise} source(s) with "
+        _noise_band = (qf > qfit_max) & (qf <= qfit_ceiling)
+        print(f"[{label}] qfit noise term: {int(_noise_band.sum())} source(s) with "
               f"{qfit_max:g} < qfit <= sqrt({qfit_max:g}^2 + ({qfit_snr_k:g}/S/N)^2)",
               flush=True)
     star_like = (
@@ -1840,6 +1841,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   flush=True)
 
     n_keep = int(np.sum(keep))
+    if _noise_band is not None:
+        # the band count above is before the S/N floor and the other gates
+        print(f"[{label}] qfit noise term: {int(np.sum(_noise_band & keep))} of the "
+              f"{int(_noise_band.sum())} kept", flush=True)
     # Only report the struct-prune numbers when that gate is active (the manual
     # path always calls with struct_x=struct_y=0, which would print a
     # meaningless "dropped 0 @ x=0,y=0" every time).
