@@ -339,7 +339,7 @@ still run after m6.
 | `--manual-ext-star-prom-robust-min` | 0.0 (off; −1 = AUTO) | 0 | 0 | 0 |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | (robust branch off) | (robust branch off) | (robust branch off) |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
-| `--manual-ext-snr-floor-per-frame` (`manual_ext_snr_floor_propagated`) | `True` | on | on | on |
+| `--manual-ext-snr-floor-per-frame` (opt-out: sets `manual_ext_snr_floor_propagated=False`) | not set (floor on flux_err_prop) | not set | not set | not set |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
 | `--manual-ext-qfit-recover-max` | 0.2 | 0.2 (= qfit_max ⇒ **no-op**) | set 0.5 to enable | |
@@ -364,7 +364,7 @@ still run after m6.
 | `--satstar-zeroframe-dilate` | 3 | 3 | | |
 | `--manual-crossband-seed-dedup-mas` | 30.0 | 30 | 30 | 30 |
 | `--manual-crossband-seed-min-filters` | 2 | 2 | 2 | 2 |
-| `--manual-crossband-seed-snr-min` | 5.0 | 5.0 | | |
+| `--manual-crossband-seed-snr-min` (on flux / flux_err, the per-frame S/N) | 5.0 | 5.0 | | |
 | `--manual-crossband-seed-qfit-max` | 0.2 | 0.2 | | |
 | `--manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `False` | off | off | (unused: MIRI drops m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |

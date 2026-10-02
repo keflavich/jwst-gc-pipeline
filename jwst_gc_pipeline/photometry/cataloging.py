@@ -1476,7 +1476,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     flux / flux_err, the mean per-frame uncertainty (larger by ~sqrt(nmatch)).
     Catalogs without flux_err_prop keep flux_err.  The sky-clean floor
     (``sky_clean_snr_min``) stays on flux / flux_err: that tier ignores qfit,
-    and its threshold was set on the per-frame S/N.
+    and its threshold was set on the per-frame S/N.  The bright-isolated keep
+    (``snr_high_keep``) also stays on flux / flux_err.  flux_err_prop
+    propagates the per-frame formal errors as if they were independent, so it
+    carries only the frame-to-frame part of the uncertainty.  Error terms
+    common to every frame -- the shared background model, the shared
+    neighbour model and the shared seed position -- do not average down, and
+    they are largest for faint stars on structured background.
 
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
@@ -1514,12 +1520,14 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # S/N for the FLOORS.  A merged catalog's flux is the mean over nmatch
     # per-frame fits, but its flux_err is the weighted MEAN of the per-frame
     # errors -- one frame's uncertainty.  The uncertainty of the merged flux is
-    # flux_err_prop = 1/sqrt(sum 1/sigma_i^2) ~ flux_err/sqrt(nmatch) (Brick
-    # F182M m6: median flux_err/flux_err_prop 3.16, median sqrt(nmatch) 3.74),
+    # flux_err_prop = 1/sqrt(sum 1/sigma_i^2) ~ flux_err/sqrt(nmatch_good)
+    # (Brick f182m_merged_o001_indivexp_merged_resbgsub_m6_dao_basic.fits,
+    # 506,114 rows: median flux_err/flux_err_prop 3.16, median
+    # sqrt(nmatch_good) 3.16, median sqrt(nmatch) 3.74),
     # so a per-frame S/N floor of 5 is a ~5*sqrt(nmatch) floor on the measured
     # flux: on the dark reference field it removed injected stars up to
-    # S/N_true ~20 in m2-m4.  The qfit noise term and the bright-isolated keep
-    # stay on the per-frame S/N (qfit is itself a per-frame mean), and so does
+    # S/N_true ~20 in m2-m4.  The bright-isolated keep stays on the per-frame
+    # S/N (its qfit partner is itself a per-frame mean), and so does
     # the sky-clean floor below (that tier ignores qfit; moving its S/N 3 floor
     # onto flux_err_prop admits per-frame S/N ~1 fits).
     snr_floor = snr
@@ -3404,6 +3412,11 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
       manual_crossband_seed_min_filters (default 2), _snr_min (5), _qfit_max
       (0.2), _max_sep_mas (30).  Set min_filters=1 to restore union-like behavior
       (NOT recommended -- reintroduces the single-band propagation bug).
+
+    The S/N confirmation uses flux / flux_err, the per-frame S/N, while the m6
+    vetting floor uses flux / flux_err_prop (``manual_ext_snr_floor_propagated``).
+    The seed's stricter definition is deliberate: a seed position is force-fit in
+    every band, so it requires a detection that is significant in one frame.
     """
     from astropy.coordinates import SkyCoord
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
