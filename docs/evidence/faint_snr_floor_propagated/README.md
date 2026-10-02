@@ -33,6 +33,75 @@ stars on the dark cloud.
 17 added, 2 dropped; residual excess 1.80 → 1.39, over-subtracted 21 → 20.
 Rows A–C: faint stars between brighter ones.
 
+## Full-field replay (Brick, Sgr B2)
+
+The m6 vetting of this branch and of the base branch was replayed on the
+production m6 merged catalogs (`scripts/vet_variant.py`, which executes each
+worktree's own vetting call with pipeline defaults).
+
+**Keep path.**  The local S/N floor moves to `flux_err_prop`; the sky-clean
+floor stays on the per-frame S/N (see "Sky-clean floor" below).
+
+| field, band | base kept | this branch | added | via local floor | of which qfit > 0.2 | lost |
+|---|---|---|---|---|---|---|
+| Brick F182M | 377,837 | 408,951 | 31,114 | 31,114 (31,062 peakSB, 52 flags) | 31,090 | 0 |
+| Brick F212N | 117,039 | 149,763 | 32,724 | 32,724 (32,595 peakSB, 129 flags) | — | 0 |
+| Brick F405N | 92,291 | 102,959 | 10,668 | 10,668 (10,632 peakSB, 36 flags) | — | 0 |
+
+The added F182M sources have median per-frame S/N 3.6, median S/N on
+`flux_err_prop` 12.1, median `nmatch` 16 and median prominence 4.8.
+
+**Realness.**  Added sources are matched against an independent catalog
+within 60 mas.  The chance rate comes from the same positions shifted by
+~2″.  The expectation is the match rate of base-kept sources of the same
+flux, in the same bin of distance to the nearest saturated star:
+rel = (match − chance) / (expected − chance); 1 means as real as the
+current catalog at that flux, 0 means chance.
+
+| field (reference) | sat. distance | added | match | chance | expected | rel |
+|---|---|---|---|---|---|---|
+| Brick F182M (F200W 1182/o004 m7, independent visit) | 0–1″ | 5,239 | 0.37 | 0.07 | 0.28 | 1.44 |
+| | 1–2″ | 15,145 | 0.51 | 0.07 | 0.34 | 1.62 |
+| | > 2″ | 11,028 | 0.49 | 0.07 | 0.49 | 0.99 |
+| Sgr B2 F187N (F182M m6, same visit) | 0–1″ | 1,340 | 0.26 | 0.10 | 0.25 | 1.18 |
+| | 1–2″ | 5,550 | 0.46 | 0.10 | 0.35 | 1.45 |
+| | > 2″ | 25,365 | 0.54 | 0.09 | 0.63 | 0.83 |
+
+(This replay predates the sky-clean correction below and includes its 298
+Brick F182M sky-clean additions; they change these rates by < 0.01.)
+Within 2″ of a saturated star the base catalog itself is confirmed less
+often than far from one, so rel > 1 there reflects a lower expectation; the
+added sources' match rate (0.37–0.54) is close to the far-field base rate.
+The Sgr B2 reference is another filter of the same visit, so PSF artifacts
+of bright stars can match in both; it overstates realness.
+
+![](added_brick_snr.png)
+
+Random added sources in Brick F182M, four per bin of distance to the
+nearest saturated star (2″ stamps).  Per source: F182M data with the current
+catalog (cyan dots), other added sources (orange circles) and saturated
+stars (red ×); the production m7 residual (the current final residual); the
+production m6 residual, in which every m6 fit, the added source included, is
+subtracted; the F200W image of the independent visit.  Green labels have an
+F200W counterpart within 60 mas: 6 of the 12 drawn here, and 0.48 of all
+28,962 added sources in the F200W footprint (chance 0.07).  Row 2 left: a
+faint star left in the current m7 residual and removed by the m6 fit.  The
+red-labelled sources include one beside a bright star (row 2 right), one on
+a diffraction spike (row 5 right) and faint isolated peaks (rows 4 and 6,
+right).  `scripts/` holds the replay (`vet_variant.py`), the comparison
+(`compare.py`) and this gallery (`added_gallery.py`).
+
+![](added_sgrb2_snr.png)
+
+The same for Sgr B2 F187N, with the same-visit F182M image as reference.
+
+**Sky-clean floor.**  The sky-clean tier keeps sources on clean sky
+regardless of `qfit`, with S/N ≥ 3 as its only fit-quality cut.  Applying the
+propagated S/N to that floor as well admitted 298 Brick F182M sources (678
+F212N, 344 F405N) with median per-frame S/N 2.6, so this branch leaves
+`sky_clean_snr_min` on `flux / flux_err`
+(`test_sky_clean_floor_stays_per_frame`).
+
 ## Metrics (m7)
 
 **superdense (NSC, F212N)** (phase m7)
