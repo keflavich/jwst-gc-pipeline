@@ -2891,9 +2891,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         if not (np.isfinite(yf) and np.isfinite(xf)):
             print(f"Source {ii+1}: center_of_mass returned NaN or infinite values ({yf}, {xf}); skipping", flush=True)
             continue
+        # xcen/ycen (integer) only place the cutout window; the PSF seed and
+        # the position bounds use the float xf/yf.  Seeding at the rounded
+        # pixel put a locked (NIRCAM_SATSTAR_LOCK_POS) model up to 0.7 px off
+        # the star: on wd2 the locked fits sat a median 0.4-0.45 px from the
+        # dolphot positions, and the flux error grew with that offset from
+        # -0.1 mag (<0.15 px) to +0.3..+0.8 mag (>0.75 px).
         ycen = int(round(yf))
         xcen = int(round(xf))
-        _vprint(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
+        _vprint(f"Source {ii+1}: center at (x, y) = ({xf:.2f}, {yf:.2f}), forced={forced_source}")
 
         if forced_source:
             # Cross-frame reconciliation may have flagged this off-field star as
@@ -2901,7 +2907,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # Skip it entirely so it contributes no (fake-background) model.
             if flux_drops:
                 try:
-                    _wpos_drop = ww.pixel_to_world(xcen, ycen)
+                    _wpos_drop = ww.pixel_to_world(xf, yf)
                     _dropped = any(
                         _wpos_drop.separation(_dsc).arcsec < 1.5 for _dsc in flux_drops)
                 except Exception:
@@ -2971,11 +2977,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # Allow the unclipped offset so the PSF is correctly initialised at its
         # true (possibly negative) position in cutout coordinates.
         if forced_source:
-            x_init = float(xcen - x0)
-            y_init = float(ycen - y0)
+            x_init = float(xf - x0)
+            y_init = float(yf - y0)
         else:
-            x_init = float(np.clip(xcen - x0, 0, max(0, cutout.shape[1] - 1)))
-            y_init = float(np.clip(ycen - y0, 0, max(0, cutout.shape[0] - 1)))
+            x_init = float(np.clip(xf - x0, 0, max(0, cutout.shape[1] - 1)))
+            y_init = float(np.clip(yf - y0, 0, max(0, cutout.shape[0] - 1)))
         init_params['x'] = [x_init]
         init_params['y'] = [y_init]
         # PSFPhotometry derives flux_init from aperture photometry by default.
@@ -3209,7 +3215,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             _ovr_flux = None
             if flux_overrides:
                 try:
-                    _wpos = ww.pixel_to_world(xcen, ycen)
+                    _wpos = ww.pixel_to_world(xf, yf)
                     for _osc, _of in flux_overrides:
                         if np.isfinite(_of) and _wpos.separation(_osc).arcsec < 1.5:
                             _ovr_flux = float(_of)
@@ -3491,7 +3497,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 model.x_0.fixed = True
                 model.y_0.fixed = True
                 print(f"{'MIRI' if _is_miri else 'NIRCam-ext'}: locked satstar "
-                      f"position to seed (x={xcen}, y={ycen}); fitting flux only",
+                      f"position to seed (x={xf:.2f}, y={yf:.2f}); fitting flux only",
                       flush=True)
             else:
                 # Bounded position fit.  The bound must stay >=1.5 FWHM: tighter
@@ -3508,10 +3514,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     pos_bound = 1.5 * fwhm_pix
                 else:
                     pos_bound = max(size_saturated, 1.5 * fwhm_pix)
-                low_x  = xcen - x0 - pos_bound
-                high_x = xcen - x0 + pos_bound
-                low_y  = ycen - y0 - pos_bound
-                high_y = ycen - y0 + pos_bound
+                low_x  = x_init - pos_bound
+                high_x = x_init + pos_bound
+                low_y  = y_init - pos_bound
+                high_y = y_init + pos_bound
                 for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
                     if not hasattr(model, pname):
                         raise AttributeError(
@@ -3921,12 +3927,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _fpk = float(np.nanmax(big_grid_large(np.zeros(1), np.zeros(1))))
                 _gny, _gnx = seed_gate_image.shape
                 for _ri in range(len(result)):
-                    # Use the SEED center (xcen,ycen = the star's TRUE projected
+                    # Use the SEED center (xf,yf = the star's TRUE projected
                     # position, possibly off this frame) NOT the fitted x_fit/y_fit:
                     # for a forced off-FOV source the cutout is clamped to the frame
                     # EDGE, so x0+x_fit maps to the coadd edge (off-coadd) -- the
                     # seed position maps to the star's real coadd core.
-                    _skyc = ww.pixel_to_world(xcen, ycen)
+                    _skyc = ww.pixel_to_world(xf, yf)
                     _gx, _gy = seed_gate_wcs.world_to_pixel(_skyc)
                     _gxi, _gyi = int(round(float(_gx))), int(round(float(_gy)))
                     # Use a min radius of 5px so the peak window reaches the
