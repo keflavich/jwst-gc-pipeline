@@ -6,11 +6,12 @@ Three questions.
 uncertainty against brightness gives both the noise model and, where it
 crosses :math:`1/5`, the :math:`5\sigma` depth.  Two uncertainties are
 plotted because the pipeline reports two and they answer different questions:
-``flux_err`` is the fitter's formal covariance from the single merged fit,
-while ``flux_err_prop`` propagates the per-exposure scatter.  Where the
-propagated error exceeds the formal one, something beyond photon noise --
-crowding, an imperfect PSF, residual background structure -- is moving the
-flux between exposures, and the formal error understates reality.
+``flux_err`` is the inverse-variance-weighted mean of the per-exposure
+formal errors (one exposure's uncertainty), while ``flux_err_prop`` is
+:math:`1/\sqrt{\sum_i 1/\sigma_i^2}` over the kept exposures, the formal
+uncertainty of the averaged flux (about ``flux_err``/:math:`\sqrt{n}`).  Both
+are formal errors: error terms shared by every exposure -- the background
+model, the neighbour model, the seed position -- are in neither.
 
 **Fit quality** (:func:`photometric_quality`) -- ``qfit`` is the normalised
 residual of the PSF fit,

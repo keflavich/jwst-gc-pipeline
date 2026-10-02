@@ -96,3 +96,19 @@ def test_sky_clean_floor_stays_per_frame():
     assert _sky_clean_case(flux_err=10.0) == 0
     # per-frame S/N 4 >= 3: the tier keeps it (the case discriminates)
     assert _sky_clean_case(flux_err=5.0) == 1
+
+
+def test_bright_isolated_keep_stays_per_frame():
+    # qfit 0.3 (above qfit_max 0.2, below qfit_high_keep_max 0.4), isolated,
+    # flags 0: only the bright-isolated keep (S/N >= 20) can admit it.  Its
+    # merged S/N is 40 in every row; the per-frame S/N decides.
+    t = _mk([1.0, 1.0], n=2)
+    t['flags'] = [0, 0]
+    t['qfit'] = [0.3, 0.3]
+    t['group_size'] = [1, 1]
+    t['flux_err'] = [4.0, 1.6]               # per-frame S/N 10, 25
+    t['flux_err_prop'] = [1.0, 1.0]
+    out = _filter_extended_emission(t, local_snr_min=5.0, snr_floor_propagated=True,
+                                    sky_clean_keep=False, snr_high_keep=20.0,
+                                    qfit_high_keep_max=0.4)
+    assert set(np.asarray(out['id']).tolist()) == {1}

@@ -3,10 +3,11 @@
 A merged catalog's `flux` is the mean over `nmatch` per-frame fits, but its
 `flux_err` is the weighted mean of the per-frame errors (one frame's
 uncertainty).  The vetting floor `local_snr_min = 5` on `flux/flux_err`
-therefore acts as ~5√nmatch on the merged flux (Brick F182M m6: median
-`flux_err/flux_err_prop` 3.16; 66,913 of 506,114 sources below the per-frame
-floor and above it on `flux_err_prop`).  This branch applies the floors to
-`flux/flux_err_prop`.
+therefore acts as ~5√nmatch on the merged flux (Brick
+`f182m_merged_o001_indivexp_merged_resbgsub_m6_dao_basic.fits`: median
+`flux_err/flux_err_prop` 3.16, equal to the median √nmatch_good; 66,913 of
+506,114 sources below the per-frame floor and above it on `flux_err_prop`).
+This branch applies the local S/N floor to `flux/flux_err_prop`.
 
 Figure layout and metric definitions:
 [../faint_reference_fields/README.md](../faint_reference_fields/README.md).
@@ -75,6 +76,40 @@ added sources' match rate (0.37–0.54) is close to the far-field base rate.
 The Sgr B2 reference is another filter of the same visit, so PSF artifacts
 of bright stars can match in both; it overstates realness.
 
+**Realness by keep path and prominence.**  The same replay, with the
+expectation taken over all saturated-star distances (`scripts/slices.py`).
+Keep path is the first of qfit ≤ 0.2, flags = 1, peakSB > 20 × local_bkg,
+other (sky-clean) that applies.
+
+| slice | Brick n | Brick rel | Sgr B2 n | Sgr B2 rel |
+|---|---|---|---|---|
+| all added | 31,412 | 1.02 | 32,255 | 0.81 |
+| via flags = 1 | 759 | 0.44 | 901 | 0.55 |
+| via peakSB | 30,446 | 1.03 | 31,087 | 0.81 |
+| via other (sky-clean) | 207 | 1.22 | 267 | 1.04 |
+| peakSB, prominence < 4 | 10,264 | 0.52 | 16,440 | 0.54 |
+| peakSB, prominence ≥ 4 | 20,182 | 1.28 | 14,647 | 1.09 |
+| prominence 0–2 | 1,767 | 0.20 | 3,404 | 0.17 |
+| prominence 2–3 | 3,564 | 0.37 | 6,021 | 0.44 |
+| prominence 3–4 | 5,296 | 0.70 | 7,575 | 0.77 |
+| prominence 4–5 | 5,884 | 0.94 | 6,916 | 1.00 |
+| prominence 5–7 | 8,409 | 1.29 | 5,310 | 1.17 |
+| prominence 7–10 | 4,679 | 1.47 | 2,114 | 1.19 |
+| prominence ≥ 10 | 1,805 | 1.63 | 857 | 1.04 |
+| qfit 0.2–0.4 | 230 | −0.11 | 363 | 0.17 |
+| qfit 0.4–0.6 | 288 | −0.05 | 395 | 0.29 |
+| qfit 0.6–1 | 12,394 | 1.12 | 8,950 | 0.94 |
+| qfit ≥ 1 | 18,476 | 0.98 | 22,522 | 0.76 |
+
+Nearly every addition enters through the peakSB test.  Their realness falls
+with prominence: below prominence 3 the additions are confirmed at 0.2–0.4
+of the rate of base-kept stars of the same flux.  The prominence guard on the
+peakSB branch in the prominence-keep PR (#1018, guard 4) removes the
+prominence < 4 additions; the remaining 20,182 Brick and 14,647 Sgr B2
+additions have rel 1.28 and 1.09.  The two branches are therefore intended to
+land together.  The 518 Brick additions with qfit 0.2–0.6 are at chance
+(rel −0.11 and −0.05); they are 1.6% of the additions.
+
 ![](added_brick_snr.png)
 
 Random added sources in Brick F182M, four per bin of distance to the
@@ -89,7 +124,8 @@ faint star left in the current m7 residual and removed by the m6 fit.  The
 red-labelled sources include one beside a bright star (row 2 right), one on
 a diffraction spike (row 5 right) and faint isolated peaks (rows 4 and 6,
 right).  `scripts/` holds the replay (`vet_variant.py`), the comparison
-(`compare.py`) and this gallery (`added_gallery.py`).
+(`compare.py`), the realness slices (`slices.py`) and this gallery
+(`added_gallery.py`).
 
 ![](added_sgrb2_snr.png)
 
@@ -142,5 +178,12 @@ F212N, 344 F405N) with median per-frame S/N 2.6, so this branch leaves
   one extended source split three ways.
 - Sgr B2 clean run, row D: two new sources on a diffuse residual patch;
   the F212N companion band does not settle whether they are stars.
-- The qfit noise term and the bright-isolated keep stay on the per-frame S/N,
-  since `qfit` is itself a per-frame mean.
+- The bright-isolated keep (`snr_high_keep`) stays on the per-frame S/N
+  (`test_bright_isolated_keep_stays_per_frame`), and so does the m7
+  cross-band seed confirmation (`--manual-crossband-seed-snr-min`), which
+  force-fits its positions in every band.
+- `flux_err_prop` propagates the per-frame formal errors as independent.
+  Terms common to every frame (the shared background model, the shared
+  neighbour model, the shared seed position) do not average down; they are
+  largest for faint stars on structured background, which is where this
+  branch adds sources.  The realness table above measures the net effect.
