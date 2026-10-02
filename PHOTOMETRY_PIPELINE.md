@@ -347,6 +347,9 @@ still run after m6.
 | `--manual-resid-roundlo` / `-roundhi` | −1.0 / 1.0 | −1.0 / 1.0 | −1.0 / 1.0 | −1.0 / 1.0 | daofind roundness window, m2+ |
 | `--manual-resid-sharplo` / `-sharphi` | 0.50 / 1.00 | 0.50 / 1.00 | 0.50 / 1.00 | 0.50 / 1.00 | daofind sharpness window, m2+ |
 | `--manual-ext-prom-min` | −1.0 = **AUTO** | 0 (measured emission-free) | **3.0** on extended-emission NIRCam | 0 | prominence rejection in vetting; AUTO engages 3.0 on w51/sickle/wd2/ngc6334 |
+| `--manual-ext-prom-exempt-qfit` | 0.2 | (floor off) | 0.2 | (floor off) | exemption from the extended-emission prominence floor: qfit ≤ this **and** merged S/N ≥ `-snr` **and** a local data_i2d peak at the fitted position (brightest pixel of the 7×7 box within 1 px) pass at prominence ≥ `-prom-min`; 0 disables |
+| `--manual-ext-prom-exempt-snr` | 40.0 | (floor off) | 40 | (floor off) | merged S/N (flux/flux_err_prop) the exemption requires |
+| `--manual-ext-prom-exempt-prom-min` | 2.0 | (floor off) | 2.0 | (floor off) | prominence floor for exempt sources |
 | `--manual-detect-threshold-scale` | 1.0 | 1.0 | 1.0 | 1.0 | scales the permissive daofind threshold |
 | `--local-snr-threshold` | 5.0 | 5.0 | 5.0 | 5.0 | m1 per-source local S/N |
 | `--manual-keep-intermediate-model-i2d` | off | off | off | off | write a model i2d for every phase; off writes the last phase only |
