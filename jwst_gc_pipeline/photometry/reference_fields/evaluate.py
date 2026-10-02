@@ -4,6 +4,8 @@
 
     python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant main
     python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant main --json out.json
+    python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant new --baseline out.json
+    python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --calibrate out.json --commit <sha>
 
 Metrics (all computed inside the field's inner box, the cutout minus
 ``inner_margin_arcsec`` per side, where the cutout's own edge does not bias
@@ -35,6 +37,14 @@ detection or the residual):
     stars and PSF-model mismatch at bright stars also contribute, so the
     threshold is set per field from a baseline.
 
+``seed_scalars``  (injection runs)
+    ``residual_excess`` and ``oversubtracted`` of each injection run, scored on
+    the field's own sources (injected positions excluded from the excess,
+    catalog sources on an injected star left out of the over-subtracted
+    count): median, standard deviation and number of seeds.  The injected
+    stars perturb the fits of their neighbours, so the spread over seeds
+    measures how much a neutral change moves the clean-run value.
+
 ``ring_ratio``  (clean run)
     Faint sources found ``ring_pix`` (1.5-4.5 px) from a bright star, over the
     number expected there from the faint sources' mean density.  Real faint
@@ -63,10 +73,32 @@ detection or the residual):
     sources fit to extended emission.  The labels are positions (RA, Dec) that
     show the same extended shape in the field's continuum bands and no point
     source in any band.
+
+Threshold calibration: ``--calibrate`` prints, per field, the ``thresholds:``
+and ``calibration:`` blocks for ``fields.yaml`` (with ``calibrate_main``) from
+the ``--json`` output of a calibration variant.  Each threshold sits ``nsigma`` (default 2) standard errors on
+the passing side of the calibration value, so a code change that leaves the
+true value where the calibration branch has it passes with probability
+~0.98 per threshold:
+
+* completeness floor = p - 2 sigma, ``p = k/n`` pooled over the seeds and
+  ``sigma = sqrt(p~(1 - p~)/n)`` with ``p~ = (k + 1)/(n + 2)`` (so a bin at 0/n
+  or n/n still has a margin), rounded down to 0.01.  A bin whose floor would be
+  below ``min_floor`` (0.05) carries none: a floor there cannot fail.
+* ``residual_excess_max`` / ``oversubtracted_max`` = clean-run value + 2 sigma,
+  sigma the standard deviation of the same metric over the injection seeds
+  (``seed_scalars``), rounded up to 0.05.
+* ``flux_bias_max_mag`` = |median dmag| + 2 sigma (its standard error),
+  rounded up to 0.01, and at least ``bias_floor`` (0.1 mag).
+* ``labels_recovered_min`` = clean-run fraction - 2 sigma (binomial over the
+  labelled stars), rounded down to 0.01.
+* ``emission_labels_cataloged_max`` = calibration count (a count of four fixed
+  structures has no seed replication; any further knot fails).
 """
 import argparse
 import glob
 import json
+import math
 import os
 
 import numpy as np
@@ -265,6 +297,28 @@ def oversubtracted(snr_map, src_x, src_y, inside, area_as2, *, thresh):
     return n / area_as2, n
 
 
+def injected_run_scalars(snr_map, inner_mask, area_as2, src_x, src_y, inside,
+                         inj_x, inj_y, *, excess_snr, excl_pix, oversub_snr,
+                         match_pix):
+    """``residual_excess`` and ``oversubtracted`` of an injection run's residual,
+    scored on the field's own sources: injected positions join the excess
+    exclusion list (an unrecovered injected star is not a missed field star),
+    and catalog sources within ``match_pix`` of an injected star leave the
+    over-subtracted count.  Returns ``(excess, npos, nneg, osub, n_osub)``."""
+    src_x, src_y = np.asarray(src_x, float), np.asarray(src_y, float)
+    inj_x, inj_y = np.asarray(inj_x, float), np.asarray(inj_y, float)
+    exc, npos, nneg = residual_excess(snr_map, inner_mask, np.r_[src_x, inj_x],
+                                      np.r_[src_y, inj_y], area_as2,
+                                      thresh=excess_snr, excl_pix=excl_pix)
+    field = np.ones(len(src_x), bool)
+    if len(inj_x) and len(src_x):
+        field = cKDTree(np.c_[inj_x, inj_y]).query(np.c_[src_x, src_y])[0] > match_pix
+    osub, n_osub = oversubtracted(snr_map, src_x[field], src_y[field],
+                                  np.asarray(inside, bool)[field], area_as2,
+                                  thresh=oversub_snr)
+    return exc, npos, nneg, osub, n_osub
+
+
 def ring_ratio(x, y, flux, snr, inside, *, bright_snr, faint_ratio, ring, area_pix):
     """Faint-near-bright pair count over its uniform-density expectation.
 
@@ -331,6 +385,19 @@ def _companion_snr_map(rdir, filt, spec, phase=None):
     return snr, fr
 
 
+def _residual_snr(spec, prod):
+    """Matched-filter S/N map of a run's primary-band residual minus its
+    smoothed background, on the residual mosaic's grid.  Returns
+    ``(frame, inner_mask, snr_map, scale)``."""
+    res, err, wcs, _ = _image(prod['residual'])
+    if prod['smoothed_bg'] is not None:
+        res = res - _image(prod['smoothed_bg'])[0]
+    fr = Frame(spec, wcs, res.shape)
+    inner = fr.mask()
+    snr_map, scale = matched_filter_snr(res, err, fwhm_pix(spec['filters'][0]), inner)
+    return fr, inner, snr_map, scale
+
+
 def evaluate_clean(spec, variant, *, rng=None, phase=None):
     """Residual excess, ring ratio, faint-source confirmation rates and label
     recovery of the clean run of ``spec`` (primary band) at ``phase`` (default:
@@ -339,17 +406,11 @@ def evaluate_clean(spec, variant, *, rng=None, phase=None):
     rdir = RF.run_dir(spec, variant, 0)
     prim = spec['filters'][0]
     prod = find_products(rdir, prim, phase)
-    res, err, wcs, _ = _image(prod['residual'])
-    if prod['smoothed_bg'] is not None:
-        res = res - _image(prod['smoothed_bg'])[0]
-    fr = Frame(spec, wcs, res.shape)
-    inner = fr.mask()
+    fr, inner, snr_map, scale = _residual_snr(spec, prod)
     sc, flux, ferr = load_catalog(prod['catalog'])
     x, y = fr.xy(sc)
     inside = fr.inside(x, y)
     snr_cat = flux / ferr
-    fw = fwhm_pix(prim)
-    snr_map, scale = matched_filter_snr(res, err, fw, inner)
     exc, npos, nneg = residual_excess(snr_map, inner, x, y, fr.area_as2,
                                       thresh=spec['excess_snr'], excl_pix=spec['excess_excl_pix'])
     osub, n_osub = oversubtracted(snr_map, x, y, inside, fr.area_as2,
@@ -425,6 +486,18 @@ def evaluate_injected(spec, variant, seed, *, phase=None):
     dm = np.full(keep.sum(), np.nan)
     dm[rec] = -2.5 * np.log10(flux[idx[rec]] / f_true[keep][rec])
     out['dmag'] = dm.tolist()
+    # the clean run's residual scalars on this run, scored on the field's own
+    # sources: their spread over seeds is the run-to-run noise of the
+    # clean-run value the thresholds check
+    rfr, inner, snr_map, _ = _residual_snr(spec, prod)
+    rx, ry = rfr.xy(sc)
+    jx, jy = rfr.xy(isc[keep])
+    exc, npos, nneg, osub, n_osub = injected_run_scalars(
+        snr_map, inner, rfr.area_as2, rx, ry, rfr.inside(rx, ry), jx, jy,
+        excess_snr=spec['excess_snr'], excl_pix=spec['excess_excl_pix'],
+        oversub_snr=spec['oversub_snr'], match_pix=spec['match_radius_pix'])
+    out.update(residual_excess=float(exc), residual_npos=npos, residual_nneg=nneg,
+               oversubtracted=float(osub), n_oversubtracted=n_osub)
     if len(spec['filters']) > 1:
         comp = spec['filters'][1]
         cmap, cfr = _companion_snr_map(rdir, comp, spec, phase)
@@ -451,9 +524,25 @@ def evaluate_field(spec, variant, *, phase=None):
         rec = np.concatenate([np.asarray(r['recovered'], bool) for r in injected])
         dm = np.concatenate([np.asarray(r['dmag']) for r in injected])
         res['completeness'] = completeness_by_bin(snr, rec, spec['snr_bins'])
+        # per injected star, in seed then table order (the same order for
+        # every variant): pairs two variants star by star (paired_comparison)
+        res['injected_seed'] = [r['seed'] for r in injected for _ in r['recovered']]
+        res['injected_snr'] = snr.tolist()
+        res['injected_recovered'] = rec.tolist()
         bright = rec & (snr >= spec['bias_min_snr'])
         res['flux_bias_mag'] = float(np.nanmedian(dm[bright])) if bright.any() else float('nan')
+        # standard error of that median (1.253 sigma/sqrt(n), sigma robust)
+        nb = int(np.isfinite(dm[bright]).sum())
+        res['flux_bias_n'] = nb
+        res['flux_bias_err_mag'] = (float(1.2533 * mad_std(dm[bright], ignore_nan=True) / np.sqrt(nb))
+                                    if nb > 1 else float('nan'))
         res['n_injected'] = int(len(snr))
+        res['seed_scalars'] = {
+            key: dict(median=float(np.median(v)),
+                      std=float(np.std(v, ddof=1)) if len(v) > 1 else float('nan'),
+                      n=int(len(v)))
+            for key in ('residual_excess', 'oversubtracted')
+            for v in [np.array([r[key] for r in injected], float)]}
         if 'companion_snr' in injected[0]:
             csnr = np.concatenate([np.asarray(r['companion_snr']) for r in injected])
             lo, hi = spec['faint_snr']
@@ -463,6 +552,28 @@ def evaluate_field(spec, variant, *, phase=None):
         c = res['clean']
         res['emission_purity'] = purity_estimate(c['r_on'], c['r_off'], res['r_real'])
     return res
+
+
+def paired_comparison(res, base, bins):
+    """Star-by-star recovery of two variants on the same injected stars, per
+    injected-S/N bin: ``{bin: (gained, lost, p)}`` with ``gained`` the stars
+    ``res`` recovers and ``base`` does not, ``lost`` the reverse, and ``p`` the
+    exact two-sided McNemar p-value (binomial test of gained vs lost at 1/2).
+    Stars both recover or both miss carry no information on the difference."""
+    from scipy.stats import binomtest
+    for key in ('injected_seed', 'injected_snr'):
+        if res[key] != base[key]:
+            raise ValueError(f'{key} differs: the two results are not the same injections')
+    snr = np.asarray(res['injected_snr'], float)
+    a = np.asarray(res['injected_recovered'], bool)
+    b = np.asarray(base['injected_recovered'], bool)
+    out = {}
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        sel = (snr >= lo) & (snr < hi)
+        gained, lost = int((a & ~b & sel).sum()), int((b & ~a & sel).sum())
+        p = float(binomtest(gained, gained + lost, 0.5).pvalue) if gained + lost else 1.0
+        out[f'{lo:g}-{hi:g}'] = (gained, lost, p)
+    return out
 
 
 def check(res, thresholds):
@@ -492,6 +603,117 @@ def check(res, thresholds):
     return fails
 
 
+# ---------------------------------------------------------------------------
+# threshold calibration
+# ---------------------------------------------------------------------------
+def floor_down(x, step=0.01):
+    return math.floor(round(x / step, 6)) * step
+
+
+def ceil_up(x, step=0.05):
+    return math.ceil(round(x / step, 6)) * step
+
+
+def completeness_floor(k, n, *, nsigma=2.0, min_floor=0.05):
+    """The floor of a bin recovered ``k`` of ``n`` in calibration, or None."""
+    if n <= 0:
+        return None
+    p = k / n
+    pt = (k + 1) / (n + 2)
+    f = floor_down(p - nsigma * math.sqrt(pt * (1 - pt) / n))
+    return round(f, 2) if f >= min_floor else None
+
+
+def thresholds_from(res, spec, *, nsigma=2.0, min_floor=0.05, bias_floor=0.1):
+    """``(thresholds, calibration)`` for one field from its ``evaluate_field``
+    result ``res`` (JSON form).  Metrics absent from ``res`` get no threshold."""
+    thr, cal = {}, {}
+    comp = res.get('completeness') or {}
+    floors = {}
+    for b, (n, k, _) in comp.items():
+        f = completeness_floor(k, n, nsigma=nsigma, min_floor=min_floor)
+        if f is not None:
+            floors[b] = f
+    cal['completeness'] = {b: [int(k), int(n)] for b, (n, k, _) in comp.items()}
+    if floors:
+        thr['completeness_min'] = floors
+    clean = res.get('clean') or {}
+    ss = res.get('seed_scalars') or {}
+    for key in ('residual_excess', 'oversubtracted'):
+        v, sd = clean.get(key), (ss.get(key) or {}).get('std')
+        if v is None or sd is None or not np.isfinite(sd):
+            continue
+        thr[f'{key}_max'] = round(ceil_up(v + nsigma * sd), 2)
+        cal[key] = dict(clean=round(v, 3), seed_std=round(sd, 3),
+                        seed_median=round(ss[key]['median'], 3), n_seeds=ss[key]['n'])
+    fb, fe = res.get('flux_bias_mag'), res.get('flux_bias_err_mag')
+    if fb is not None and fe is not None and np.isfinite(fe):
+        thr['flux_bias_max_mag'] = round(max(bias_floor, ceil_up(abs(fb) + nsigma * fe, 0.01)), 2)
+        cal['flux_bias_mag'] = dict(median=round(fb, 3), err=round(fe, 3), n=res.get('flux_bias_n'))
+    if 'labels_recovered' in clean and clean['labels_recovered'] is not None:
+        n = clean['n_labels']
+        k = int(round(clean['labels_recovered'] * n))
+        f = completeness_floor(k, n, nsigma=nsigma, min_floor=min_floor)
+        if f is not None:
+            thr['labels_recovered_min'] = f
+        cal['labels_recovered'] = [k, n]
+    if 'emission_labels_cataloged' in clean and clean['emission_labels_cataloged'] is not None:
+        thr['emission_labels_cataloged_max'] = int(clean['emission_labels_cataloged'])
+        cal['emission_labels_cataloged'] = [int(clean['emission_labels_cataloged']),
+                                            int(clean['n_emission_labels'])]
+    return thr, cal
+
+
+def pass_probability(thr, cal, *, nsim=20000, seed=0):
+    """Probability that a NEUTRAL change passes every threshold of one field:
+    one that keeps each metric's true value at the calibration value but draws
+    it afresh (each completeness bin and the labels a new binomial sample at
+    the calibration fraction; the residual scalars normal with the seed
+    standard deviation; the bias normal with its standard error).  A pessimistic
+    model: a real change re-draws only the marginal stars."""
+    rng = np.random.default_rng(seed)
+    ok = np.ones(nsim, bool)
+    for b, f in (thr.get('completeness_min') or {}).items():
+        k, n = cal['completeness'][b]
+        ok &= rng.binomial(n, k / n, nsim) / n >= f
+    for key in ('residual_excess', 'oversubtracted'):
+        if f'{key}_max' in thr:
+            c = cal[key]
+            ok &= rng.normal(c['clean'], c['seed_std'], nsim) <= thr[f'{key}_max']
+    if 'flux_bias_max_mag' in thr:
+        c = cal['flux_bias_mag']
+        ok &= np.abs(rng.normal(c['median'], c['err'], nsim)) <= thr['flux_bias_max_mag']
+    if 'labels_recovered_min' in thr:
+        k, n = cal['labels_recovered']
+        ok &= rng.binomial(n, k / n, nsim) / n >= thr['labels_recovered_min']
+    return float(ok.mean())
+
+
+def _yaml_block(name, thr, cal, variant, commit, nsigma):
+    lines = [f'  # {name}', '    thresholds:']
+    for key, v in thr.items():
+        if isinstance(v, dict):
+            inner = ', '.join(f'{b}: {f}' for b, f in v.items())
+            lines.append(f'      {key}: {{{inner}}}')
+        else:
+            lines.append(f'      {key}: {v}')
+    lines.append('    calibration:')
+    lines.append(f'      variant: {variant}')
+    if commit:
+        lines.append(f"      commit: '{commit}'")
+    lines.append(f'      nsigma: {nsigma}')
+    for key, v in cal.items():
+        if isinstance(v, dict) and key == 'completeness':
+            inner = ', '.join(f'{b}: [{k}, {n}]' for b, (k, n) in v.items())
+            lines.append(f'      completeness: {{{inner}}}   # [recovered, injected]')
+        elif isinstance(v, dict):
+            inner = ', '.join(f'{a}: {b}' for a, b in v.items())
+            lines.append(f'      {key}: {{{inner}}}')
+        else:
+            lines.append(f'      {key}: {list(v)}')
+    return '\n'.join(lines)
+
+
 def _jsonable(o):
     if isinstance(o, dict):
         return {k: _jsonable(v) for k, v in o.items()}
@@ -504,16 +726,49 @@ def _jsonable(o):
     return o
 
 
+def calibrate_main(path, fields, *, commit='', nsigma=2.0):
+    """Print the ``thresholds:``/``calibration:`` blocks of every field in the
+    ``--json`` output ``path``, each field's neutral-change pass probability
+    and their product."""
+    with open(path) as fh:
+        allres = json.load(fh)
+    joint = 1.0
+    for name, res in allres.items():
+        thr, cal = thresholds_from(res, fields[name], nsigma=nsigma)
+        pp = pass_probability(thr, cal)
+        joint *= pp
+        print(_yaml_block(name, thr, cal, res.get('variant'), commit, nsigma))
+        print(f'    # neutral-change pass probability: {pp:.3f}')
+    print(f'# all fields: {joint:.3f}')
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    p.add_argument('--variant', required=True)
+    p.add_argument('--variant', help='run label to score')
     p.add_argument('--fields', default='')
     p.add_argument('--json', default='')
+    p.add_argument('--baseline', default='',
+                   help='evaluate --json output of a baseline variant: also print the '
+                        'star-by-star gained/lost counts against it (paired_comparison)')
     p.add_argument('--phase', default=None,
                    help='score this phase (default: the last present, m7 else m6)')
+    p.add_argument('--calibrate', default='', metavar='JSON',
+                   help='print fields.yaml thresholds + calibration blocks from this '
+                        '--json output of the calibration variant, then exit')
+    p.add_argument('--commit', default='', help='with --calibrate: code commit of the runs')
+    p.add_argument('--nsigma', type=float, default=2.0, help='with --calibrate: margin')
     a = p.parse_args(argv)
     _, fields = RF.load_config()
+    if a.calibrate:
+        return calibrate_main(a.calibrate, fields, commit=a.commit, nsigma=a.nsigma)
+    if not a.variant:
+        p.error('--variant is required unless --calibrate is given')
     names = [n for n in a.fields.split(',') if n] or list(fields)
+    base = None
+    if a.baseline:
+        with open(a.baseline) as fh:
+            base = json.load(fh)
     allres = {}
     nfail = 0
     for name in names:
@@ -523,16 +778,24 @@ def main(argv=None):
         nfail += len(res['failures'])
         allres[name] = res
         c = res.get('clean', {})
+        ss = res.get('seed_scalars', {})
+        spread = {k: '{median:.2f}+-{std:.2f}'.format(**ss[k]) if k in ss else '-'
+                  for k in ('residual_excess', 'oversubtracted')}
         comp = ' '.join(f'{b}:{v[1]}/{v[0]}' for b, v in res.get('completeness', {}).items())
         print(f"{name:12s} {a.variant:10s} complete[{comp}] "
               f"bias={res.get('flux_bias_mag', np.nan):+.3f} "
-              f"excess={c.get('residual_excess', np.nan):.2f}/as2 "
-              f"oversub={c.get('oversubtracted', np.nan):.2f}/as2 "
+              f"excess={c.get('residual_excess', np.nan):.2f}/as2 (seeds {spread['residual_excess']}) "
+              f"oversub={c.get('oversubtracted', np.nan):.2f}/as2 (seeds {spread['oversubtracted']}) "
               f"ring={c.get('ring_ratio', np.nan):.2f} "
               f"purity={res.get('emission_purity', np.nan):.2f} "
               f"labels={c.get('labels_recovered', np.nan):.2f} "
               f"knots={c.get('emission_labels_cataloged', '-')}/{c.get('n_emission_labels', '-')} "
               f"-> {'PASS' if not res['failures'] else 'FAIL: ' + '; '.join(res['failures'])}")
+        if base and name in base and 'injected_recovered' in res:
+            pc = paired_comparison(res, base[name], spec['snr_bins'])
+            res['paired_vs_baseline'] = pc
+            print(f"{'':12s} vs {base[name].get('variant')}: " + ' '.join(
+                f'{b}:+{g}/-{l} (p={p:.2g})' for b, (g, l, p) in pc.items()))
     if a.json:
         with open(a.json, 'w') as fh:
             json.dump(_jsonable(allres), fh, indent=1)

@@ -118,8 +118,10 @@ def test_provenance_and_code_differences(tmp_path):
     rf = repo / 'jwst_gc_pipeline' / 'photometry' / 'reference_fields'
     rf.mkdir(parents=True)
     (repo / 'jwst_gc_pipeline' / 'photometry' / 'tests').mkdir()
+    (repo / 'jwst_gc_pipeline' / 'tests').mkdir()
     for f in ('cataloging.py', 'reference_fields/fields.yaml',
-              'reference_fields/evaluate.py', 'tests/test_x.py'):
+              'reference_fields/evaluate.py', 'tests/test_x.py', '../tests/test_guard.py',
+              'test_inline.py'):
         (repo / 'jwst_gc_pipeline' / 'photometry' / f).write_text('a\n')
     _git(repo, 'init', '-q')
     _git(repo, 'add', '.')
@@ -133,7 +135,7 @@ def test_provenance_and_code_differences(tmp_path):
     assert RUN.code_differences(rec['commit'], str(repo)) == []
 
     for f in ('reference_fields/fields.yaml', 'reference_fields/evaluate.py',
-              'tests/test_x.py'):
+              'tests/test_x.py', '../tests/test_guard.py', 'test_inline.py'):
         (repo / 'jwst_gc_pipeline' / 'photometry' / f).write_text('b\n')
     assert RUN.code_differences(rec['commit'], str(repo)) == []
     (repo / 'jwst_gc_pipeline' / 'photometry' / 'cataloging.py').write_text('b\n')
@@ -242,6 +244,80 @@ def test_oversubtracted_counts_negative_cores_at_sources():
     # per-source mask: off-map and non-finite positions are False
     m = EV.oversubtracted_mask(snr, np.r_[x, np.nan], np.r_[y, 5.0], thresh=7)
     assert m.tolist() == [True, True, False, False, False, False]
+
+
+def test_injected_run_scalars_score_field_sources_only():
+    rng = np.random.default_rng(7)
+    shape = (160, 160)
+    img = rng.normal(0, 1, shape)
+    err = np.ones(shape)
+    inner = np.ones(shape, bool)
+    # a missed field star, a missed injected star, an over-subtracted field
+    # fit and an over-subtracted fit on a (recovered) injected star
+    img += _gauss(shape, 30, 30, 2.0, 15.0) + _gauss(shape, 120, 30, 2.0, 15.0)
+    img -= _gauss(shape, 30, 120, 2.0, 15.0) + _gauss(shape, 120, 120, 2.0, 15.0)
+    snr, _ = EV.matched_filter_snr(img, err, 2.0, inner)
+    cat_x, cat_y = np.array([30.0, 120.3]), np.array([120.0, 119.8])
+    inside = np.ones(2, bool)
+    inj_x, inj_y = np.array([120.0, 120.0]), np.array([30.0, 120.0])
+    kw = dict(excess_snr=7, excl_pix=4.5, oversub_snr=7, match_pix=1.0)
+    exc, npos, nneg, osub, n_osub = EV.injected_run_scalars(
+        snr, inner, 1.0, cat_x, cat_y, inside, inj_x, inj_y, **kw)
+    assert (npos, nneg, exc) == (1, 0, 1.0)
+    assert (n_osub, osub) == (1, 1.0)
+    # without injected stars it is the clean-run scoring
+    exc, npos, _, osub, n_osub = EV.injected_run_scalars(
+        snr, inner, 1.0, cat_x, cat_y, inside, [], [], **kw)
+    assert (npos, exc) == (2, 2.0) and n_osub == 2
+    # and agrees with the clean-run functions
+    assert exc == EV.residual_excess(snr, inner, cat_x, cat_y, 1.0, thresh=7, excl_pix=4.5)[0]
+    assert osub == EV.oversubtracted(snr, cat_x, cat_y, inside, 1.0, thresh=7)[0]
+
+
+def test_paired_comparison_counts_flips():
+    res = dict(injected_seed=[1, 1, 1, 2, 2, 2], injected_snr=[6, 7, 15, 16, 30, 60],
+               injected_recovered=[True, True, True, False, True, True])
+    base = dict(injected_seed=res['injected_seed'], injected_snr=res['injected_snr'],
+                injected_recovered=[False, False, True, True, True, False])
+    pc = EV.paired_comparison(res, base, [5, 10, 20, 40, 80])
+    assert pc['5-10'][:2] == (2, 0) and pc['10-20'][:2] == (0, 1)
+    assert pc['20-40'] == (0, 0, 1.0) and pc['40-80'][:2] == (1, 0)
+    assert pc['5-10'][2] == 0.5            # exact two-sided binomial, 2 of 2
+    with pytest.raises(ValueError):
+        EV.paired_comparison(res, dict(base, injected_seed=[1] * 6), [5, 10])
+
+
+def test_calibrate_floors_and_limits():
+    # p - 2 sigma with p~ = (k+1)/(n+2), rounded down; none below min_floor
+    assert EV.completeness_floor(45, 60) == 0.63
+    assert EV.completeness_floor(60, 60) == 0.96
+    assert EV.completeness_floor(3, 60) is None
+    assert EV.completeness_floor(45, 60, nsigma=3) < EV.completeness_floor(45, 60)
+    res = dict(completeness={'5-10': [60, 3, 0.05], '10-20': [60, 45, 0.75]},
+               clean=dict(residual_excess=1.0, oversubtracted=0.5, labels_recovered=24 / 33,
+                          n_labels=33),
+               seed_scalars=dict(residual_excess=dict(median=0.9, std=0.1, n=10),
+                                 oversubtracted=dict(median=0.5, std=0.04, n=10)),
+               flux_bias_mag=-0.05, flux_bias_err_mag=0.01, flux_bias_n=40)
+    thr, cal = EV.thresholds_from(res, {})
+    assert thr['completeness_min'] == {'10-20': 0.63}
+    assert cal['completeness'] == {'5-10': [3, 60], '10-20': [45, 60]}
+    assert thr['residual_excess_max'] == 1.2 and thr['oversubtracted_max'] == 0.6
+    assert thr['flux_bias_max_mag'] == 0.1           # |-0.05| + 0.02 < the 0.1 floor
+    assert thr['labels_recovered_min'] == EV.completeness_floor(24, 33)
+    # every threshold passes the calibration result itself
+    res_check = dict(res, clean=dict(res['clean'], emission_labels_cataloged=1,
+                                     n_emission_labels=4))
+    thr2, _ = EV.thresholds_from(res_check, {})
+    assert EV.check(res_check, thr2) == []
+    # wider margins pass a neutral change more often
+    p2 = EV.pass_probability(thr, cal, nsim=4000)
+    thr3, cal3 = EV.thresholds_from(res, {}, nsigma=3)
+    assert 0.5 < p2 < EV.pass_probability(thr3, cal3, nsim=4000) <= 1
+    # one bin with its floor AT the calibration fraction: P(Bin(60, 0.75) >= 45) = 0.56
+    p_at = EV.pass_probability({'completeness_min': {'b': 0.75}},
+                               {'completeness': {'b': [45, 60]}}, nsim=20000)
+    assert 0.5 < p_at < 0.62
 
 
 def test_ring_ratio_uniform_vs_companions():

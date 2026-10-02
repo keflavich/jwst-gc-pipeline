@@ -51,8 +51,10 @@ PROVENANCE = 'reffield_provenance.json'
 #: tests are applied after the run, at test time.
 SCORING_ONLY = ('jwst_gc_pipeline/photometry/reference_fields/evaluate.py',
                 'jwst_gc_pipeline/photometry/reference_fields/figures.py',
-                'jwst_gc_pipeline/photometry/reference_fields/fields.yaml',
-                'jwst_gc_pipeline/photometry/tests')
+                'jwst_gc_pipeline/photometry/reference_fields/fields.yaml')
+#: Test files anywhere in the package (git glob pathspecs): the repo guard
+#: tests in ``jwst_gc_pipeline/tests`` change with unrelated PRs.
+TEST_FILES = ('jwst_gc_pipeline/**/tests/**', 'jwst_gc_pipeline/**/test_*.py')
 
 
 def _git(root, *args):
@@ -85,12 +87,14 @@ def read_provenance(rdir):
 
 
 def code_differences(commit, repo_root=REPO_ROOT):
-    """Files under ``jwst_gc_pipeline/`` (minus ``SCORING_ONLY``) that differ
-    between ``commit`` and the working tree of ``repo_root``.
+    """Files under ``jwst_gc_pipeline/`` (minus ``SCORING_ONLY`` and
+    ``TEST_FILES``) that differ between ``commit`` and the working tree of
+    ``repo_root``.
 
     Raises ``subprocess.CalledProcessError`` when ``commit`` is unknown there.
     """
-    excl = [f':(exclude){p}' for p in SCORING_ONLY]
+    excl = ([f':(exclude){p}' for p in SCORING_ONLY]
+            + [f':(exclude,glob){p}' for p in TEST_FILES])
     out = _git(repo_root, 'diff', '--name-only', commit, '--', 'jwst_gc_pipeline', *excl)
     return [ln for ln in out.splitlines() if ln]
 
