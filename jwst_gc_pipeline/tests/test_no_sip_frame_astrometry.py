@@ -114,6 +114,12 @@ ALLOWLIST = {
     # replay (vet_variant).
     "docs/evidence/faint_prominence_keep/scripts/compare.py",
     "docs/evidence/faint_prominence_keep/scripts/vet_variant.py",
+    # PR #1016 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and the vetting replays
+    # (replay_vetting, vet_variant).
+    "docs/evidence/faint_snr_floor_propagated/scripts/compare.py",
+    "docs/evidence/faint_snr_floor_propagated/scripts/replay_vetting.py",
+    "docs/evidence/faint_snr_floor_propagated/scripts/vet_variant.py",
     "scripts/satstar_deblend/batch_validate.py",
 }
 

@@ -105,6 +105,9 @@ ALLOWLIST = {
     # the close-pair fraction np.mean(d2 < 62.5 mas).
     ("docs/evidence/faint_prominence_keep/scripts/compare.py", "main"),
     ("docs/evidence/faint_prominence_keep/scripts/propresid.py", "main"),
+    # PR #1016 evidence scripts, no astrometry (same reduces as #1018 above).
+    ("docs/evidence/faint_snr_floor_propagated/scripts/compare.py", "main"),
+    ("docs/evidence/faint_snr_floor_propagated/scripts/propresid.py", "main"),
     # No astrometry: `match_to_catalog_sky(nthneighbor=2)` measures a star's
     # nearest-neighbour SEPARATION, used to SELECT isolated reference stars for
     # the curve of growth; the medians are of FLUX-RATIO (enclosed-energy)
