@@ -87,6 +87,10 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/aperture_photometry.py",
     "scripts/aperture_photometry/investigate_aperture_vs_psf.py",
     "scripts/aperture_photometry/reference_apcorr_and_compare.py",
+    # reference-field injection tables: reads the production merged data_i2d
+    # (rectified, no SIP) for the WCS that places the injected stars and for
+    # PIXAR_SR / ERR; no per-exposure header is read.
+    "jwst_gc_pipeline/photometry/reference_fields/make_injections.py",
     # DISPLAY only: the WCS is handed to WCSAxes, which needs a real
     # astropy.wcs.WCS.  No catalog position is derived from it.
     "jwst_gc_pipeline/plotting/plot_tools.py",

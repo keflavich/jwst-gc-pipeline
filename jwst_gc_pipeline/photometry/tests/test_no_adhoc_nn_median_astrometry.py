@@ -105,6 +105,11 @@ ALLOWLIST = {
     # change is for.
     ("jwst_gc_pipeline/photometry/aperture_photometry.py",
      "build_aperture_correction_table"),
+    # No astrometry: pairs S/N > 20 vetted sources of the primary and a partner
+    # band within 0.1" to take the median FLUX RATIO (the field colour given to
+    # the injected reference-field stars).  No position is derived from it.
+    ("jwst_gc_pipeline/photometry/reference_fields/make_injections.py",
+     "field_color_ratios"),
     # ---- cross-function splits: the match and the reduce are in DIFFERENT
     # functions, so they cannot be attributed to one and are allowlisted as
     # `<unattributed>`.  These entries are WEAKER than a function-scoped one --
