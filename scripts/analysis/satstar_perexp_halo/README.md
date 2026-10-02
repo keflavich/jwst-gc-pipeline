@@ -17,6 +17,9 @@ follows a pattern that a model can remove.
 | 5 | `perexp_figs.py pxh.npz models.json <out> 0.02 <epsf_map dir>` | Figures 1–9 and `tests.json`. Includes the self-constrained tests. |
 
 Steps 1–2 are copied unchanged from the halocal branch (satstar_poisson README §7).
+Step 1 reads its key list from `lw_cal_keys.json` in the *parent* of `<dir>`.
+That list is committed here: the 808 `[S3 key, size]` pairs, 404 NRCALONG and
+404 NRCBLONG. Copy it there before running.
 
 The last argument of step 5 is optional. It is the directory with the epsf_map
 `result_nrc{a,b}long.npz` (#1002/#1007), which supplies the field-star wing-vs-column
@@ -37,16 +40,26 @@ comparison.
 ## Results (8,933 exposures, 1,806 star-visits, 1,739 stars)
 
 - **rms of a:** 0.095, against a formal noise of 0.003.
-- **Dither index:** explains ≤5% (per-dither medians ±2%), and so does a term shared by all stars of one exposure (−7%). This change is **not** a property of the exposure.
+- **Dither index:** explains ≤5% (per-dither medians ±2%).
+- **Shared per-exposure term:** a term shared by all stars of one exposure explains −7%, i.e. less than nothing, cross-validated.
 - **Dipole:** none (<1%).
 - **Detector column (the pattern):** a free function f(x) per detector, on 64-px knots, explains **43%** cross-validated.
-  - NRCBLONG: a ~25% deficit centred at x ≈ 400 px, about 300 px wide.
-  - NRCALONG: a U shape, +30% within ~300 px of both x edges.
+  - NRCBLONG: a deficit centred at x ≈ 400 px, about 300 px wide.
+    - Binned median `a` (`tests.json`, 64-px bins): −0.20 at the trough. The mean is −0.15 over x = 250–550 against +0.02 at x < 150 or > 750.
+    - Core area: −0.25 at the trough; −0.19 against +0.02.
+  - NRCALONG: a U shape.
+    - Binned `a`: +0.08 at x < 300 or > 1750 against −0.03 at x = 700–1350.
+    - Core area: +0.10 against −0.04.
+  - The fitted spline `f(x)` (`tests.json` `xprofile.f`) swings further: −0.27 for the NRCBLONG trough and +0.30 for the NRCALONG edges. Those amplitudes are model-defined.
+    - δ is relative to each star-visit mean, so `f` is fixed only up to a constant and over the ±385 px dither span.
+    - Its edge values are pinned to 0, and the curvature penalty (`PEREXP_LAM`) shapes the contrast.
+    - Quote the binned numbers.
   - The dependence on detector row is weak.
   - The low-order Legendre "position" model reaches only 17%, because it cannot follow the NRCBLONG feature.
   - The saturated-core area traces the same f(x) independently.
-  - Unsaturated field-star PSF wings at 4–15 px are flat in x to ±4%. So the column structure goes with *saturation*; it is not the optical PSF.
-  - Cause unknown.
+  - **Unsaturated field-star PSF wings** (epsf_map, `tests.json` `field_wing`) are flat in x at 4–15 px to ±4%, except the NRCBLONG x > 1920 bin (−7%). So the core and inner wings do not follow the halo dip.
+    - This does not directly test the field PSF at the halo radii. At 15–29 px the field-wing bins are noisy (NRCBLONG −19% to +9%).
+  - **Cause:** see the next section. The deficit is confined to saturated stars, and it is already present in the raw ramp. The SATURATION reffile is excluded. The mechanism is open.
 - **Core area:** the area of the same exposure explains **67%** (a = 0.73 × (area − 1), r = 0.82). With f(x) added it reaches **70%**.
 - **Self-constrained:** the exposure's own inner halo at 15–40 px predicts its 40–80 px halo with slope 0.90 (85% explained), and its 80–150 px halo with slope 0.49 (76%).
   - The radial shape is ~80% one mode, and that mode peaks at r ≈ 25–40 px.
@@ -61,8 +74,14 @@ comparison.
 | 7 | `perexp_fieldstar_flux.py <prefix> <visit glob>...` | unsaturated field-star aperture flux vs detector x (`fieldstar.*`) |
 | 8 | `perexp_ramp.py measure <rowdir> <saturation reffile> <cal key>...` then `analyze <prefix> <rowdir>` | the halo and the saturated-core area in the RAW ramp (`ramp_10678.*`, `ramp_2221.*`) |
 
-- **Saturated stars only.** The deficit holds at every brightness (−0.14 / −0.18 / −0.20 by tercile), while 5,414 unsaturated field stars are flat in x to ≤1%.
-- **Not the SATURATION reffile.** Its threshold varies <1% rms in x, and the sign would move the core area the other way.
+- **Saturated stars only** (`cause.json`, NRCBLONG).
+  - Brightness terciles: split by star-visit mean `A30`, 2,235–2,239 exposures each.
+  - Halo: the deficit is −0.14 / −0.18 / −0.20. This is `column_feature`: the mean of the 128-px-binned median `a` over the bins centred at x = 320 and 448, minus its mean over bins centred at x < 150 or > 750.
+  - Core area: the same contrast of `area_prof` is −0.18 / −0.24 / −0.24.
+  - Field stars: 5,414 unsaturated stars give 25,456 star-exposure ratios, from 9 NRCBLONG visits (obs 042, 046, 061, 063, 069, 070, 078, 116, 126; listed in `fieldstar.json`). Their aperture flux (r = 3 px) is flat in x: every 128-px bin is within 0.990–1.002.
+- **Not the SATURATION reffile** (`cause.json` `saturation_ref`, `jwst_nircam_saturation_0115`).
+  - Its 128-px column medians vary 0.9% rms.
+  - They correlate +0.65 with `a`, so the threshold is lowest where the halo is lowest. A lower threshold saturates *more* pixels, while the core area is *smaller* there.
 - **Already in the raw ramp, so no calibration step causes it.** Step 8 works on the `_uncal` data, before superbias, linearity, dark and flat. The halo is the median group difference D_k at 15–80 px minus its value at 150–250 px; the area counts core pixels at or above the threshold in each group.
   - **Program 10678 (F480M):** 13 observations, the 12 with the most in-band saturated stars plus obs 061.
     - In-band / out-of-band halo: 0.81, 0.79, 0.75 for D1, D2, D3 (±0.02–0.03, 49 stars).

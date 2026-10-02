@@ -93,7 +93,7 @@ def visit(fns):
 
 def main():
     outp = sys.argv[1]
-    allx, allr = [], []
+    allx, allr, visits = [], [], []
     for g in sys.argv[2:]:
         fns = sorted(glob.glob(g))
         if len(fns) < 4:
@@ -102,6 +102,10 @@ def main():
         good = (np.isfinite(F).sum(0) >= 4) & (np.nanmedian(F, 0) > 0)
         R = F[:, good] / np.nanmedian(F[:, good], 0)
         allx.append(X[:, good].ravel()); allr.append(R.ravel())
+        with fits.open(fns[0]) as h:
+            det = h[0].header['DETECTOR']
+        visits.append(dict(visit=os.path.basename(fns[0])[:13], detector=det, n_frames=len(fns),
+                           n_stars=int(good.sum())))
         print(os.path.basename(fns[0])[:26], 'stars', good.sum(), flush=True)
     x = np.concatenate(allx); r = np.concatenate(allr)
     m = np.isfinite(x) & np.isfinite(r) & (r > 0.5) & (r < 2)
@@ -112,7 +116,11 @@ def main():
         n.append(int(v.size))
         med.append(float(np.median(v)) if v.size >= 30 else np.nan)
         err.append(float(1.2533 * 1.4826 * np.median(np.abs(v - np.median(v))) / np.sqrt(v.size)) if v.size >= 30 else np.nan)
-    json.dump(dict(edges=EDGES.tolist(), median_ratio=med, err=err, n=n), open(outp + '.json', 'w'), indent=1)
+    # n = star-exposure ratios per bin; n_stars = distinct stars (each counted once per visit)
+    json.dump(dict(edges=EDGES.tolist(), median_ratio=med, err=err, n=n,
+                   n_measurements=int(m.sum()), n_stars=int(sum(v['n_stars'] for v in visits)),
+                   detectors=sorted({v['detector'] for v in visits}), visits=visits),
+              open(outp + '.json', 'w'), indent=1)
     fig, ax = plt.subplots(figsize=(8, 4.8))
     ax.errorbar(0.5 * (EDGES[1:] + EDGES[:-1]), med, err, fmt='o-', label=f'unsaturated field stars ({m.sum()} measurements)')
     ax.axhline(1, color='k', lw=0.5); ax.set_ylim(0.9, 1.1)

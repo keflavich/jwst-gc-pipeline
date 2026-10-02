@@ -71,5 +71,66 @@
   1039,
   1067,
   1131
+ ],
+ "n_measurements": 25456,
+ "n_stars": 5414,
+ "detectors": [
+  "NRCBLONG"
+ ],
+ "visits": [
+  {
+   "visit": "jw10678042001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 659
+  },
+  {
+   "visit": "jw10678046001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 1379
+  },
+  {
+   "visit": "jw10678061001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 208
+  },
+  {
+   "visit": "jw10678063001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 684
+  },
+  {
+   "visit": "jw10678069001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 532
+  },
+  {
+   "visit": "jw10678070001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 330
+  },
+  {
+   "visit": "jw10678078001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 372
+  },
+  {
+   "visit": "jw10678116001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 418
+  },
+  {
+   "visit": "jw10678126001",
+   "detector": "NRCBLONG",
+   "n_frames": 6,
+   "n_stars": 832
+  }
  ]
 }
