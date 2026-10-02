@@ -95,6 +95,15 @@ ALLOWLIST = {
     # source ASSOCIATION for saturated replacement; the only reduce is a
     # magnitude median in an f-string (:2927), no offsets involved
     ("jwst_gc_pipeline/photometry/merge_catalogs.py", "replace_saturated"),
+    # PR #1019 evidence scripts, no astrometry.  compare.main / propresid.main:
+    # the same non-positional reduces as the #1018 copies (fraction of kept
+    # sources within 1" of a satstar, local-peak flag means, close-pair
+    # fraction).  lsky_snr_diag.main: nearest-reference separation HISTOGRAMS
+    # (realness), and medians of the pixel distance and flux ratio to the
+    # nearest brighter kept star, qfit and nmatch per S/N bin.
+    ("docs/evidence/faint_local_skyclean/scripts/compare.py", "main"),
+    ("docs/evidence/faint_local_skyclean/scripts/lsky_snr_diag.py", "main"),
+    ("docs/evidence/faint_local_skyclean/scripts/propresid.py", "main"),
     # sanctioned: masking extended emission, no astrometry in it
     ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
     # No astrometry: `match_to_catalog_sky(nthneighbor=2)` measures a star's

@@ -174,7 +174,10 @@ def main(field, v, out, per_bin=4, kind='added'):
     addmask = np.zeros(len(base), bool)
     addmask[add] = True
 
-    prod, _ = propresid.prod_member(field, sc_all)
+    # production membership: m6-table rows at a production vetted position (within 1 mas)
+    pidx, psep, _ = propresid.sky(Table.read(propresid.PROD[field])).match_to_catalog_sky(sc_all)
+    prod = np.zeros(len(base), bool)
+    prod[pidx[psep.to_value(u.mas) < 1]] = True
     psf = np.load(f'{HERE}/out/{field}_{band}_epsf.npy')
     with open(f'{HERE}/out/{field}_{band}_epsf.json') as fh:
         ecal = json.load(fh)
