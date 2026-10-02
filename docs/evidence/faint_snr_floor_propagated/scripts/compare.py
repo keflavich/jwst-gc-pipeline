@@ -3,7 +3,7 @@
 For each branch: sources the branch keeps that the base drops ('added') and
 the reverse ('lost'), split by distance to the nearest saturated star, with
   * realness: match fraction against a reference catalog within 60 mas,
-    chance from shifted positions (evid1015/realness.SHIFTS_AS), and the
+    chance from shifted positions (faint_m7_seed_union/scripts/realness.SHIFTS_AS), and the
     flux-matched expectation from the base-kept sources in the same flux
     bins.  rel = (m - ch) / (m_exp - ch_exp): 1 = as real as base-kept
     sources of the same flux, 0 = chance.
@@ -28,7 +28,8 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy import wcs
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'evid1015'))
+# realness.py of the #1015 evidence (docs/evidence/faint_m7_seed_union/scripts)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'faint_m7_seed_union', 'scripts'))
 from realness import match_fraction, in_footprint  # noqa: E402
 
 warnings.simplefilter('ignore', wcs.FITSFixedWarning)
@@ -41,8 +42,19 @@ FIELDS = {
     'sgrb2': dict(band='f187n',
                   ref=f'{R}/sgrb2/catalogs/f182m_merged_indivexp_merged_resbgsub_m6_dao_basic_vetted.fits',
                   ref_label='F182M m6 vetted (same visit)'),
+    'w51': dict(band='f187n',
+                ref=f'{R}/w51/catalogs/f182m_merged_indivexp_merged_resbgsub_m6_dao_basic_vetted.fits',
+                ref_label='F182M m6 vetted (same visit)'),
 }
-VARS = {'snr': '#1016', 'qsnr': '#1017', 'prom': '#1018', 'lsky': '#1019'}
+VARS = {'snr': '#1016', 'qsnr': '#1017', 'prom': '#1018', 'lsky': '#1019',
+        # threshold sweeps (vet_variant.py REPLAY_OPTS)
+        'qsnrp7': '#1017 prom_min 7', 'promr0p5': '#1018 robust off',
+        'promr0p7': '#1018 robust off, star_prom_min 7', 'promr0p10': '#1018 robust off, star_prom_min 10',
+        # #1018 redesign (d29fedb2): peakSB AND prominence >= guard, OR prominence >= 7; robust off
+        'prom2': '#1018 v2 (peakSB guard 4)', 'prom2p3': '#1018 v2 peakSB guard 3',
+        'prom2p5': '#1018 v2 peakSB guard 5',
+        # #1016 rebased on #1018 v2 (76f8abbf); snrp2pf = same code, per-frame S/N floor
+        'snrp2': '#1016 on #1018 v2', 'snrp2pf': '#1016 on #1018 v2, per-frame floor'}
 SAT_BINS = ((0, 1), (1, 2), (2, np.inf))     # arcsec to the nearest saturated star
 FLUX_EDGES = np.arange(0, 7.01, 0.25)        # log10 flux
 
