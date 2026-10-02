@@ -1429,6 +1429,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               conc_ref_min_n=5,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
+                              snr_floor_propagated=False,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
@@ -1475,6 +1476,19 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     qfit gate (which conflates blend-degraded real stars with emission knots)
     is replaced by prominence + S/N alone.  See the block comment below.
 
+    ``snr_floor_propagated``: the local S/N floor (``local_snr_min``) uses
+    flux / flux_err_prop, the uncertainty of the merged flux, in place of
+    flux / flux_err, the mean per-frame uncertainty (larger by ~sqrt(nmatch)).
+    Catalogs without flux_err_prop keep flux_err.  The sky-clean floor
+    (``sky_clean_snr_min``) stays on flux / flux_err: that tier ignores qfit,
+    and its threshold was set on the per-frame S/N.  The bright-isolated keep
+    (``snr_high_keep``) also stays on flux / flux_err.  flux_err_prop
+    propagates the per-frame formal errors as if they were independent, so it
+    carries only the frame-to-frame part of the uncertainty.  Error terms
+    common to every frame -- the shared background model, the shared
+    neighbour model and the shared seed position -- do not average down, and
+    they are largest for faint stars on structured background.
+
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
     skipped.  All thresholds are FIRST-PASS (one cutout) and CLI-tunable.
@@ -1507,6 +1521,27 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                    / np.asarray(t['flux_err'], dtype=float))
     else:
         snr = np.full(n, np.inf)
+
+    # S/N for the FLOORS.  A merged catalog's flux is the mean over nmatch
+    # per-frame fits, but its flux_err is the weighted MEAN of the per-frame
+    # errors -- one frame's uncertainty.  The uncertainty of the merged flux is
+    # flux_err_prop = 1/sqrt(sum 1/sigma_i^2) ~ flux_err/sqrt(nmatch_good)
+    # (Brick f182m_merged_o001_indivexp_merged_resbgsub_m6_dao_basic.fits,
+    # 506,114 rows: median flux_err/flux_err_prop 3.16, median
+    # sqrt(nmatch_good) 3.16, median sqrt(nmatch) 3.74),
+    # so a per-frame S/N floor of 5 is a ~5*sqrt(nmatch) floor on the measured
+    # flux: on the dark reference field it removed injected stars up to
+    # S/N_true ~20 in m2-m4.  The bright-isolated keep stays on the per-frame
+    # S/N (its qfit partner is itself a per-frame mean), and so does
+    # the sky-clean floor below (that tier ignores qfit; moving its S/N 3 floor
+    # onto flux_err_prop admits per-frame S/N ~1 fits).
+    snr_floor = snr
+    if (snr_floor_propagated and 'local_snr' not in t.colnames
+            and 'flux' in t.colnames and 'flux_err_prop' in t.colnames):
+        _fep = np.asarray(t['flux_err_prop'], dtype=float)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            _snr_prop = np.asarray(t['flux'], dtype=float) / _fep
+        snr_floor = np.where(np.isfinite(_snr_prop) & (_fep > 0), _snr_prop, snr)
 
     # peak surface brightness (3x3 box max) AND annulus-MAD PROMINENCE from the
     # data i2d, if provided.  Prominence = (core peak r<1.5) - (median in a
@@ -1838,7 +1873,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # S/N (inflated to ~0 by group-fit covariance degeneracy for close pairs
         # -- see _emission_keep_nircam): a well-fit star must never be dropped
         # from the vetted catalog/residual on a broken uncertainty.
-        keep = _emission_keep_nircam(star_like, snr, local_snr_min,
+        keep = _emission_keep_nircam(star_like, snr_floor, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
 
     # MULTI-FRAME CONFIRMATION keep (Hosek ndet-style; opt-in, nmatch_confirm>0).
@@ -2030,7 +2065,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
           f"{f', prominence>={star_prom_min:g}' if star_prom_min > 0 else ''}"
           f"{f' with qfit<=sqrt({qfit_max:g}^2+({qfit_snr_k:g}/S/N)^2)' if star_prom_min > 0 and qfit_snr_k > 0 else ''}"
           f"{f' or robust>={star_prom_robust_min:g}' if star_prom_min > 0 and star_prom_robust_min > 0 else ''}, "
-          f"snr>={local_snr_min}{_struct_msg})",
+          f"snr>={local_snr_min}"
+          f"{' (flux/flux_err_prop)' if snr_floor is not snr else ''}{_struct_msg})",
           flush=True)
     return t[keep]
 
@@ -3410,6 +3446,11 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
       manual_crossband_seed_min_filters (default 2), _snr_min (5), _qfit_max
       (0.2), _max_sep_mas (30).  Set min_filters=1 to restore union-like behavior
       (NOT recommended -- reintroduces the single-band propagation bug).
+
+    The S/N confirmation uses flux / flux_err, the per-frame S/N, while the m6
+    vetting floor uses flux / flux_err_prop (``manual_ext_snr_floor_propagated``).
+    The seed's stricter definition is deliberate: a seed position is force-fit in
+    every band, so it requires a detection that is significant in one frame.
     """
     from astropy.coordinates import SkyCoord
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
@@ -8402,6 +8443,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
+                    snr_floor_propagated=bool(mopt(opts_phase, 'manual_ext_snr_floor_propagated')),
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
                     qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),

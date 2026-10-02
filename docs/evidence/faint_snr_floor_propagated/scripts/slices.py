@@ -30,11 +30,18 @@ QFIT_MAX = 0.2
 
 
 def table(field, v, ref, base, kb, infp, flux, sc):
+    # <variant>@<other>: added / lost relative to the replay <other> in place of
+    # the #1015 base (realness expectation still from the base-kept sources)
+    v, _, against = v.partition('@')
     t = Table.read(f'{HERE}/out/{field}_{FIELDS[field]["band"]}_{v}.fits')
     assert np.array_equal(np.asarray(t['rowid']), np.asarray(base['rowid']))
     kv = np.asarray(t['kept'], bool)
-    add, lost = kv & ~kb, kb & ~kv
     bsel = kb & infp
+    if against:
+        t0 = Table.read(f'{HERE}/out/{field}_{FIELDS[field]["band"]}_{against}.fits')
+        assert np.array_equal(np.asarray(t0['rowid']), np.asarray(base['rowid']))
+        kb = np.asarray(t0['kept'], bool)
+    add, lost = kv & ~kb, kb & ~kv
     snr = np.asarray(t['flux'], float) / np.asarray(t['flux_err'], float)
     qf = np.asarray(t['qfit'], float)
     pr = np.asarray(t['prominence'], float)
@@ -91,7 +98,7 @@ def table(field, v, ref, base, kb, infp, flux, sc):
         prb = np.asarray(base['prominence'], float) if 'prominence' in base.colnames else pr
         run('base-kept, all, by prominence', kb, np.nan_to_num(prb, nan=-99), [-100, 0, 1, 2, 3, 4, 5, 6, 7, 8.5, 10, 20, np.inf])
         run('lost by S/N', lost, snr, [0, 5, 10, 20, 50, np.inf])
-    elif v == 'snr':
+    elif v.startswith('snr'):
         # #1016: S/N floor on flux/flux_err_prop.  Keep path of each addition,
         # and what #1018 v2's peak_SB prominence guard (>= 4) would leave.
         snrp = np.asarray(t['flux'], float) / np.asarray(t['flux_err_prop'], float)
@@ -105,6 +112,7 @@ def table(field, v, ref, base, kb, infp, flux, sc):
         path_p = ~path_q & ~path_f & (lb > 0) & (psb > 20 * lb)
         path_o = ~(path_q | path_f | path_p)
         out['added: all'] = [dict(n_all=int(add.sum()), **rel(add))]
+        out['lost: all'] = [dict(n_all=int(lost.sum()), **rel(lost))]
         for nm, pm in (('qfit<=0.2', path_q), ('flags==1', path_f), ('peakSB', path_p), ('other (sky-clean etc.)', path_o)):
             out[f'added via {nm}'] = [dict(n_all=int((add & pm).sum()), **rel(add & pm))]
         g = np.isfinite(pr) & (pr < 4)

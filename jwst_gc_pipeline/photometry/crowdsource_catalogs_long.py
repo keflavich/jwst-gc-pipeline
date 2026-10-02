@@ -4418,6 +4418,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
+    parser.add_option("--manual-ext-snr-floor-per-frame", dest="manual_ext_snr_floor_propagated",
+                    action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_snr_floor_propagated'],
+                    help="Apply the vetting local S/N floor (--manual-ext-local-snr-min) "
+                         "to flux / flux_err, the mean PER-FRAME S/N.  By default it "
+                         "uses flux / flux_err_prop, the S/N of the merged flux "
+                         "(~sqrt(nmatch) higher).  The sky-clean floor "
+                         "(--manual-sky-clean-snr-min) is always per-frame.")
     parser.add_option("--manual-ext-snr-high-keep", dest="manual_ext_snr_high_keep",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_snr_high_keep'],
                     help="Extended-emission vetting BRIGHT-ISOLATED keep: a "
@@ -4529,7 +4537,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-snr-min",
                     dest="manual_sky_clean_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_snr_min'],
-                    help="Sky-clean tier: minimum fit S/N (default 3).")
+                    help="Sky-clean tier: minimum per-frame fit S/N, flux / flux_err (default 3).")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "
