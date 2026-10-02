@@ -1530,6 +1530,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # quartile still samples the true inter-star sky), so it measures the
     # DIFFUSE emission level at the source, not the crowding.
     ann_floor = np.full(n, np.nan, dtype=float)
+    # pixel positions on the data i2d; None when there is no data i2d
+    xx = yy = None
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
         from astropy.coordinates import SkyCoord
         sc = t['skycoord']
