@@ -4483,8 +4483,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-max-sky-snr",
                     dest="manual_sky_clean_max_sky_snr",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_max_sky_snr'],
-                    help="Sky-clean tier: local emission floor must be <= this many "
-                         "dark-sky sigmas above the dark-sky reference (default 2).")
+                    help="Sky-clean tier, global reference: local emission floor "
+                         "must be <= this many dark-sky sigmas above the dark-sky "
+                         "reference (default 2).  The local reference has its "
+                         "own threshold, --manual-sky-clean-local-max-err.")
     parser.add_option("--manual-sky-clean-prom-min",
                     dest="manual_sky_clean_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_prom_min'],
@@ -4497,11 +4499,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     dest="manual_sky_clean_local_arcsec",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_arcsec'],
                     help="Sky-clean tier: also call a source clean when its "
-                         "deep-i2d annulus floor is within --manual-sky-clean-max-sky-snr "
+                         "deep-i2d annulus floor is within --manual-sky-clean-local-max-err "
                          "i2d ERR of the 5th percentile of its surrounding tile of "
                          "this size (default 3 arcsec; 0 = global dark-sky "
                          "reference only).  A smooth bright plateau is clean; "
-                         "PSF-scale emission structure or crowding is not.")
+                         "PSF-scale emission structure or crowding is not.  "
+                         "Needs the i2d ERR plane (skipped, with a log line, "
+                         "without it).")
+    parser.add_option("--manual-sky-clean-local-max-err",
+                    dest="manual_sky_clean_local_max_err",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_max_err'],
+                    help="Sky-clean tier, local reference: maximum (annulus "
+                         "floor - tile 5th percentile) in units of the i2d ERR "
+                         "(default 2; ~2.4 sigma of pixel scatter in the Brick "
+                         "dark cloud, where ERR ~ 1.2x the scatter).  The global "
+                         "test's --manual-sky-clean-max-sky-snr is in dark-sky "
+                         "sigma.")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "

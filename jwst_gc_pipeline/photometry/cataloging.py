@@ -1376,7 +1376,12 @@ def _tile_percentile_at(image, x, y, tile, q):
     """``q``-th percentile of ``image`` in ``tile`` x ``tile`` px tiles,
     bilinearly interpolated between tile centres to the pixel positions
     (x, y).  Tiles less than half finite are NaN; NaN at positions whose
-    interpolation touches one."""
+    interpolation touches one.
+
+    Tiles of 32 px or more are sampled at every 2nd pixel, and an odd
+    ``tile`` is then rounded down to the next even size.  Memory: one
+    float64 copy of ``image`` (padded to whole tiles), e.g. 0.45 GB for a
+    4844 x 11542 px NIRCam detector i2d."""
     import warnings
     from scipy.ndimage import map_coordinates
     # every 2nd pixel of a large tile: same percentile, a quarter of the memory
@@ -1422,6 +1427,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               sky_clean_prom_min=5.0,
                               sky_clean_snr_min=3.0,
                               sky_clean_local_arcsec=0.0,
+                              sky_clean_local_max_err=2.0,
                               err_i2d_image=None,
                               nmatch_confirm_strong=0,
                               low_fit_quality_qfit=0.0,
@@ -1777,12 +1783,22 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             # smooth bright plateau, which cannot be turned into a star any
             # more than dark sky can.  What can is STRUCTURE: compare the
             # annulus floor to the 5th percentile of the surrounding
-            # ~sky_clean_local_arcsec tile, in units of the i2d ERR.  Pure
-            # noise gives floor - p5 ~ 1 ERR; a source on a filament or in
-            # PSF-scale emission structure sits several ERR above its tile's
-            # darkest pixels (W51 F187N tile p25-p5 ~ 9 ERR, Sgr A* crowding
-            # ~ 13 ERR, Brick dark cloud ~ 0.8 ERR).  OR-ed with the global
-            # test, so a source clean by the global reference stays clean.
+            # ~sky_clean_local_arcsec tile, in units of the i2d ERR
+            # (sky_clean_local_max_err; the global test above is in dark-sky
+            # sigma, a different unit, so the two have separate thresholds).
+            # Gaussian pixel noise gives p25 - p5 = 0.97 sigma; the Brick dark
+            # cloud reads 0.8 ERR, so there ERR ~ 1.2x the pixel scatter and
+            # the default 2 ERR is ~ 2.4 sigma of pixel scatter.  A source on
+            # a filament or in PSF-scale emission structure sits several ERR
+            # above its tile's darkest pixels (W51 F187N tile p25-p5 ~ 9 ERR,
+            # Sgr A* crowding ~ 13 ERR).  OR-ed with the global test, so a
+            # source clean by the global reference stays clean.
+            # local_structure_snr is written whenever this tier runs (NaN
+            # where the local test does not), so the vetted schema is fixed.
+            _struct_snr = np.full(n, np.nan)
+            if sky_clean_local_arcsec > 0 and err_i2d_image is None:
+                print(f"[{label}] sky-clean local reference: no i2d ERR plane, "
+                      f"local test skipped (global dark-sky test only)", flush=True)
             if (sky_clean_local_arcsec > 0 and err_i2d_image is not None
                     and xx is not None):
                 _pixas = float(np.sqrt(np.abs(np.linalg.det(
@@ -1792,11 +1808,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                                               np.asarray(yy, float), _tile, 5.0)
                 with np.errstate(invalid='ignore', divide='ignore'):
                     _struct_snr = (ann_floor - _p5_loc) / ann_err
-                _local_clean = np.isfinite(_struct_snr) & (_struct_snr <= sky_clean_max_sky_snr)
-                t['local_structure_snr'] = _struct_snr
+                _local_clean = np.isfinite(_struct_snr) & (_struct_snr <= sky_clean_local_max_err)
                 sky_clean = sky_clean | _local_clean
                 print(f"[{label}] sky-clean local reference ({_tile} px tiles, floor - "
-                      f"tile p5 <= {sky_clean_max_sky_snr:g} ERR): {_n_global} clean "
+                      f"tile p5 <= {sky_clean_local_max_err:g} ERR): {_n_global} clean "
                       f"by the global reference -> {int(sky_clean.sum())} with the "
                       f"local one", flush=True)
             _sc_keep = (sky_clean
@@ -1804,6 +1819,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                         & np.isfinite(snr) & (snr >= sky_clean_snr_min)
                         & ~near_satstar)
             t['local_emission_snr'] = _emiss_snr
+            t['local_structure_snr'] = _struct_snr
             t['sky_clean'] = sky_clean
             _n_sc = int(np.sum(_sc_keep & ~keep))
             keep = keep | _sc_keep
@@ -8260,6 +8276,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         opts_phase, 'manual_sky_clean_snr_min')),
                     sky_clean_local_arcsec=float(mopt(
                         opts_phase, 'manual_sky_clean_local_arcsec')),
+                    sky_clean_local_max_err=float(mopt(
+                        opts_phase, 'manual_sky_clean_local_max_err')),
                     err_i2d_image=e_i2d,
                     struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                     label=f'{phase}:{filt}')

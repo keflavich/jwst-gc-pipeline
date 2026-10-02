@@ -57,7 +57,7 @@ def _run(xs, local_as, err=1.0, **kw):
                  'flux': np.full(len(xs), 100.0), 'flux_err': np.full(len(xs), 10.0),
                  'group_size': np.ones(len(xs)), 'id': np.arange(len(xs))})
     out = _filter_extended_emission(cat, data_i2d_image=data, ww_i2d=w,
-                                    err_i2d_image=np.full(data.shape, err),
+                                    err_i2d_image=None if err is None else np.full(data.shape, err),
                                     sky_clean_local_arcsec=local_as, label='test', **kw)
     return set(np.asarray(out['id']).tolist()), cat
 
@@ -80,6 +80,21 @@ def test_local_reference_uses_err_unit():
     assert kept == {0}
 
 
+def test_local_threshold_is_its_own_option():
+    # the global test in dark-sky sigma and the local one in ERR are set separately
+    kept, _ = _run([X_DARK, X_PLATEAU], local_as=3.0, sky_clean_max_sky_snr=-100.0)
+    assert kept == {0, 1}
+    kept, _ = _run([X_DARK, X_PLATEAU], local_as=3.0, sky_clean_local_max_err=-100.0)
+    assert kept == {0}
+
+
+def test_no_err_plane_logs_and_writes_nan_column(capsys):
+    kept, cat = _run([X_DARK, X_PLATEAU, X_STRUCT], local_as=3.0, err=None)
+    assert kept == {0}
+    assert 'no i2d ERR plane' in capsys.readouterr().out
+    assert np.all(np.isnan(np.asarray(cat['local_structure_snr'])))
+
+
 def test_tile_percentile_interpolates():
     img = np.zeros((128, 128))
     img[:, 64:] = 10.0
@@ -91,3 +106,4 @@ def test_tile_percentile_interpolates():
 
 def test_pipeline_default_on():
     assert MANUAL_DEFAULTS['manual_sky_clean_local_arcsec'] == 3.0
+    assert MANUAL_DEFAULTS['manual_sky_clean_local_max_err'] == 2.0
