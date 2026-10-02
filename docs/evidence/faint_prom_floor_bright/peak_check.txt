@@ -1,0 +1,32 @@
+== w51 F187N (jw06151-o001_t001_nircam_clear-f187n-merged_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 7389/7473 = 0.99
+   S/N 20-30: peak 0/2 = 0.00   (cont-matched 0/2, unmatched 0/0)
+   S/N 30-60: peak 14/14 = 1.00   (cont-matched 13/13, unmatched 1/1)
+   S/N 60-inf: peak 21/22 = 0.95   (cont-matched 19/20, unmatched 2/2)
+== w51 F480M (jw06151-o001_t001_nircam_clear-f480m-merged_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 8449/8755 = 0.97
+   S/N 20-30: peak 15/40 = 0.38   (cont-matched 13/16, unmatched 2/24)
+   S/N 30-60: peak 154/184 = 0.84   (cont-matched 150/160, unmatched 4/24)
+   S/N 60-inf: peak 370/399 = 0.93   (cont-matched 340/354, unmatched 30/45)
+== wd2 F187N (jw03523-o005_t001_nircam_clear-f187n-merged_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 6739/6919 = 0.97
+   S/N 20-30: peak 0/2 = 0.00   (cont-matched 0/0, unmatched 0/2)
+   S/N 30-60: peak 0/4 = 0.00   (cont-matched 0/0, unmatched 0/4)
+   S/N 60-inf: peak 5/8 = 0.62   (cont-matched 4/5, unmatched 1/3)
+== wd2 F405N (jw03523-o005_t001_nircam_clear-f405n-merged_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 5075/5269 = 0.96
+   S/N 20-30: peak 1/9 = 0.11   (cont-matched 0/1, unmatched 1/8)
+   S/N 30-60: peak 21/29 = 0.72   (cont-matched 19/20, unmatched 2/9)
+   S/N 60-inf: peak 21/26 = 0.81   (cont-matched 20/23, unmatched 1/3)
+== ngc6334 F187N (jw06778-o001_t001_nircam_clear-f187n-merged_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 16738/16900 = 0.99
+   S/N 20-30: peak 3/9 = 0.33   (cont-matched 0/0, unmatched 3/9)
+   S/N 30-60: peak 23/27 = 0.85   (cont-matched 2/2, unmatched 21/25)
+   S/N 60-inf: peak 6/6 = 1.00   (cont-matched 2/2, unmatched 4/4)
+== sickle F187N (jw03958-o007_t001_nircam_clear-f187n-nrcb_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 1764/1805 = 0.98
+   S/N 20-30: --
+   S/N 30-60: --
+   S/N 60-inf: --
+== sgrb2 F187N (jw05365-o001_t001_nircam_clear-f187n-merged_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 17911/18514 = 0.97
+   S/N 20-30: peak 1/47 = 0.02   (cont-matched 1/7, unmatched 0/40)
+   S/N 30-60: peak 1/52 = 0.02   (cont-matched 1/11, unmatched 0/41)
+   S/N 60-inf: peak 0/13 = 0.00   (cont-matched 0/7, unmatched 0/6)
+== sgrb2 F480M (jw05365-o001_t001_nircam_clear-f480m-merged_data_i2d.fits); control: qfit<=0.2, prom>=5, S/N>=60: peak 58058/63734 = 0.91
+   S/N 20-30: peak 12/57 = 0.21   (cont-matched 5/33, unmatched 7/24)
+   S/N 30-60: peak 89/288 = 0.31   (cont-matched 74/188, unmatched 15/100)
+   S/N 60-inf: peak 1926/2975 = 0.65   (cont-matched 1839/2674, unmatched 87/301)
