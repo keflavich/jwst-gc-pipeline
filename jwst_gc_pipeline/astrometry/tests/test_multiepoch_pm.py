@@ -367,3 +367,47 @@ def test_isolation_survives_duplicate_observation_concatenation():
     # (and therefore trustworthy) is 0 here, same as it was on real data.
     assert pm['dominant'].sum() > 0.9 * len(pm)
     assert pm['trustworthy'].sum() > 0.9 * len(pm)
+
+
+def test_ref_frame_position_is_the_untied_ref_position(tmp_path):
+    """ra_ref/dec_ref must be the ref star's own (untied) position, which is
+    where it sits in the Treasury HiPS, while ra0/dec0 live in the src frame
+    after the tie. The overlay JSON uses ra_ref/dec_ref by default."""
+    pytest.importorskip('flystar')
+    from astropy.table import Table
+    from jwst_gc_pipeline.astrometry.make_pm_overlay_json import make_overlay_json
+    n = 2000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=300.0)
+    offx, offy = 0.10, -0.12   # 100/-120 mas pointing offset the tie removes
+    # small noise keeps the tie's duplicate-row guard (#958) from firing
+    rx = sx + offx + RNG.normal(0, 0.003, n)
+    ry = sy + offy + RNG.normal(0, 0.003, n)
+    mag_ref = mag + RNG.normal(0, 0.02, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    src = dict(sc=src_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+              mag=mag, flux=10 ** (-0.4 * mag), epoch=2024.0, n=n)
+    ref = dict(sc=ref_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+              mag=mag_ref, flux=10 ** (-0.4 * mag_ref), epoch=2026.0, n=n)
+    tied, _ = affine_tie(ref['sc'], ref['mag'], src['sc'], src['mag'],
+                         magcut=0, match_radius=1.0)
+    ref = dict(ref, sc=tied, sc_raw=ref_sc, obs_index=np.zeros(n, dtype=int))
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=1.0, err_cap_mas=1e6)
+
+    ra_ref = SkyCoord(pm['ra_ref'] * u.deg, pm['dec_ref'] * u.deg)
+    ra0 = SkyCoord(pm['ra0'] * u.deg, pm['dec0'] * u.deg)
+    # ra_ref coincides with some raw ref position; ra0 sits ~offset away from it
+    idx, sep, _ = ra_ref.match_to_catalog_sky(ref_sc)
+    assert np.all(sep.arcsec < 1e-6)
+    assert np.median(ra_ref.separation(ra0).arcsec) == pytest.approx(np.hypot(offx, offy), abs=0.01)
+
+    fits_path = tmp_path / 'pm.fits'
+    pm['trustworthy'] = True
+    pm['pm_ra_err'] = 0.1
+    pm['pm_dec_err'] = 0.1
+    pm.write(fits_path)
+    doc = make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False)
+    assert doc['meta']['position_frame'] == 'treasury-ref-epoch'
+    assert doc['sources'][0]['ra'] == pytest.approx(float(pm['ra_ref'][0]))
+    doc_src = make_overlay_json(str(fits_path), str(tmp_path / 'o2.json'), 'x',
+                                verbose=False, frame='src')
+    assert doc_src['sources'][0]['ra'] == pytest.approx(float(pm['ra0'][0]))
