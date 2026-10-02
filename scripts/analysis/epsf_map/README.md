@@ -16,7 +16,7 @@ the halos and spikes of super-saturated stars (issue #993).
 | 3 | `analyze_detector.py` (+ `epsf.py`, `catalog.py`) | wing + core ePSF, spatial grid with cross-validation, shape maps, per-star table |
 | 4 | `figures.py` | figures and a JSON summary (one detector) |
 | 5 | `sw_summary.py` | combined figures + JSON for several detectors (the 8 SW detectors, focal-plane layout) |
-| 6 | `export_epsf_core.py` | write the full-sample spatial core as a pipeline core file (published in the separate `JWST-GC/epsfs` repository) for the hybrid PSF (`jwst_gc_pipeline.photometry.epsf_hybrid`, `PSF_EPSF_CORE_DIR`) |
+| 6 | `export_epsf_core.py` | write the full-sample spatial core as a pipeline core file (published in the separate [`JWST-GC/epsfs`](https://github.com/JWST-GC/epsfs) repository: commit `7a09209` holds the ten cores exported at af5c2db8) for the hybrid PSF (`jwst_gc_pipeline.photometry.epsf_hybrid`, `PSF_EPSF_CORE_DIR`) |
 | 7 | `fullfield_residual.py` → `fullfield_paired.py`, `fullfield_figures.py`, `fullfield_report_figs.py` | full-frame star subtraction with STPSF / held-out ePSF / hybrid on one frame (issue #1007) |
 | 8 | `validate_hybrid_grid.py` | the pipeline's hybrid grid vs its STPSF grid with the production fitter (`PSFPhotometry`, `fit_shape=(5, 5)`) on held-out stars, including the pixel-phase flux modulation of each model |
 | 9 | `satstar_halo_vs_epsf.py` | issues #993 / #994: whether the ePSF or the hybrid can model a saturated star's halo to better than the LOO model's ~5% (it cannot; see the script docstring) |

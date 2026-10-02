@@ -29,9 +29,10 @@ relies on:
 Opt-in.  Nothing changes unless ``PSF_EPSF_CORE_DIR`` names a directory of core
 files (``epsf_core_<detector>_<filter>.fits``, written by
 ``scripts/analysis/epsf_map/export_epsf_core.py``).  The 10678 cores live in
-their own repository, ``JWST-GC/epsfs`` (kept out of this one so binary PSF
-data never enter its history): clone it and point ``PSF_EPSF_CORE_DIR`` at the
-checkout.  A set directory that has
+their own repository, https://github.com/JWST-GC/epsfs (kept out of this one
+so binary PSF data never enter its history; the ten cores of PR #1009 are its
+commit 7a09209, exported here at af5c2db8): clone it and point
+``PSF_EPSF_CORE_DIR`` at the checkout.  A set directory that has
 no file for the requested detector/filter keeps the STPSF grid and says so.
 
 Provenance.  A hybrid catalog must never be mistaken for, or overwrite, an
