@@ -1421,6 +1421,7 @@ def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               star_prom_min=0.0,
+                              qfit_snr_k=0.0,
                               star_prom_peak_min=0.0,
                               star_prom_robust_min=0.0,
                               star_prom_robust_conc=0.0,
@@ -1457,7 +1458,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     ``prominence >= star_prom_peak_min`` wherever the data-i2d prominence is
     measured.  With ``star_prom_min > 0``, ``prominence >= star_prom_min``
     (OR, with ``star_prom_robust_min > 0``,
-    ``prominence_robust >= star_prom_robust_min``) keeps a source on its own.
+    ``prominence_robust >= star_prom_robust_min``) keeps a source on its own;
+    with ``qfit_snr_k > 0`` that keep also needs
+    ``qfit <= sqrt(qfit_max**2 + (qfit_snr_k / snr)**2)``, the qfit a point
+    source reaches with pixel noise (a non-finite qfit fails it; a non-finite
+    or non-positive S/N gets the flat ``qfit_max``).
     ``star_prom_peak_min >= star_prom_min`` reduces the branch to the
     prominence test wherever prominence is measured.
     With ``star_prom_robust_conc > 0`` the robust branch also needs a
@@ -1647,6 +1652,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # sides (_auto_star_prom_robust_min, used for --manual-ext-star-prom-robust-min
     # < 0, turns it off on extended-emission targets).
     _peak_branch = np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)
+    _q_refused = None
     if star_prom_peak_min > 0:
         _peak_branch = _peak_branch & ~(np.isfinite(prominence)
                                         & (prominence < float(star_prom_peak_min)))
@@ -1707,6 +1713,28 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                           f"{int(_cal.sum())} calibration source(s) < "
                           f"{int(conc_ref_min_n)}", flush=True)
             _prom_ok = _prom_ok | _rob_ok
+        if qfit_snr_k > 0:
+            # PIXEL-NOISE qfit bound on the prominence keep.  qfit =
+            # sum|resid|/flux of a perfect PSF fit is ~c/(S/N) from pixel noise
+            # alone (Brick F182M dark-sky stars, selected without qfit: c ~ 3.4
+            # median, 4.3 at the 90th percentile), so a point source sits at
+            # qfit <= sqrt(qfit_max^2 + (k/S/N)^2) with k ~ 5.  Prominence
+            # alone also admits fits whose qfit is far above that: a fit on a
+            # bright star's wing or ring, a blend, an emission knot.  Full-field
+            # m6 replays of this keep at prominence >= 7: the sources it adds
+            # with k_eff = S/N * sqrt(qfit^2 - qfit_max^2) in 4.5-5 / 5-5.5 /
+            # 8-12 match the independent-visit F200W catalog (Brick F182M) at
+            # 0.53 / 0.28 / 0.03 of the chance-corrected rate of kept stars of
+            # the same flux, against 1.02 at k_eff <= 3.
+            _qbound = np.full(n, float(qfit_max))
+            _sok = np.isfinite(snr) & (snr > 0)
+            _qbound[_sok] = np.hypot(float(qfit_max), float(qfit_snr_k) / snr[_sok])
+            _q_ok = np.isfinite(qf) & (qf <= _qbound)
+            _q_refused = _has_prom & _prom_ok & ~_q_ok
+            _prom_ok = _prom_ok & _q_ok
+            print(f"[{label}] prominence keep: qfit noise bound refuses "
+                  f"{int(_q_refused.sum())} source(s) with qfit > "
+                  f"sqrt({qfit_max:g}^2 + ({qfit_snr_k:g}/S/N)^2)", flush=True)
         _peak_branch = _peak_branch | (_has_prom & _prom_ok)
     star_like = (
         (qf <= qfit_max)
@@ -1985,6 +2013,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   flush=True)
 
     n_keep = int(np.sum(keep))
+    if _q_refused is not None:
+        # a refused source can still be kept by another branch
+        print(f"[{label}] prominence keep: {int(np.sum(_q_refused & keep))} of the "
+              f"{int(_q_refused.sum())} refused by the qfit noise bound kept by "
+              f"another branch", flush=True)
     # Only report the struct-prune numbers when that gate is active (the manual
     # path always calls with struct_x=struct_y=0, which would print a
     # meaningless "dropped 0 @ x=0,y=0" every time).
@@ -1995,6 +2028,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
           f"peakSB>{peak_over_bkg}x bkg"
           f"{f' with prominence>={star_prom_peak_min:g}' if star_prom_peak_min > 0 else ''}"
           f"{f', prominence>={star_prom_min:g}' if star_prom_min > 0 else ''}"
+          f"{f' with qfit<=sqrt({qfit_max:g}^2+({qfit_snr_k:g}/S/N)^2)' if star_prom_min > 0 and qfit_snr_k > 0 else ''}"
           f"{f' or robust>={star_prom_robust_min:g}' if star_prom_min > 0 and star_prom_robust_min > 0 else ''}, "
           f"snr>={local_snr_min}{_struct_msg})",
           flush=True)
@@ -8360,6 +8394,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
                     star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
+                    qfit_snr_k=float(mopt(opts_phase, 'manual_ext_qfit_snr_k')),
                     star_prom_peak_min=float(mopt(opts_phase, 'manual_ext_star_prom_peak_min')),
                     star_prom_robust_min=_auto_star_prom_robust_min(
                         mopt(opts_phase, 'manual_ext_star_prom_robust_min'), opts_phase),
