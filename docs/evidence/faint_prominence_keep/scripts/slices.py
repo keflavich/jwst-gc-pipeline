@@ -97,7 +97,9 @@ def table(field, v, ref, base, kb, infp, flux, sc):
         snrp = np.asarray(t['flux'], float) / np.asarray(t['flux_err_prop'], float)
         lb = np.asarray(t['local_bkg'], float)
         psb = np.asarray(t['peak_sb'], float)
-        fl = np.asarray(t['flags'], int) if 'flags' in t.colnames else np.zeros(len(t), int)
+        # merged flags is the per-frame mean (float): compare as the vetting does
+        # (np.isin on float), so a mean of 1.4 is not a flags == 1 keep
+        fl = np.asarray(t['flags'], float) if 'flags' in t.colnames else np.zeros(len(t))
         path_q = qf <= QFIT_MAX
         path_f = ~path_q & (fl == 1)
         path_p = ~path_q & ~path_f & (lb > 0) & (psb > 20 * lb)

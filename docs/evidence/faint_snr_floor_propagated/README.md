@@ -9,9 +9,15 @@ therefore acts as ~5√nmatch on the merged flux (Brick
 506,114 sources below the per-frame floor and above it on `flux_err_prop`).
 This branch applies the local S/N floor to `flux/flux_err_prop`.
 
+This branch is based on the prominence-keep branch (#1018).  The
+reference-field runs and the first full-field replay below ran before that
+rebase and compare against the seed-union base (#1015); the section
+"Combined with the prominence guard (#1018 v2)" restates the full-field
+numbers on #1018 v2.
+
 Figure layout and metric definitions:
 [../faint_reference_fields/README.md](../faint_reference_fields/README.md).
-Comparison: `m7seed` (the base branch) → `snrprop` (this branch).
+Comparison: `m7seed` (the #1015 base) → `snrprop` (this floor on #1015).
 
 ### Dark cloud (Brick, F182M), injection seed 1
 ![](dark_s1.png)
@@ -36,9 +42,9 @@ Rows A–C: faint stars between brighter ones.
 
 ## Full-field replay (Brick, Sgr B2)
 
-The m6 vetting of this branch and of the base branch was replayed on the
-production m6 merged catalogs (`scripts/vet_variant.py`, which executes each
-worktree's own vetting call with pipeline defaults).
+The m6 vetting of this floor (on #1015, b829c571) and of the #1015 base was
+replayed on the production m6 merged catalogs (`scripts/vet_variant.py`,
+which executes each worktree's own vetting call with pipeline defaults).
 
 **Keep path.**  The local S/N floor moves to `flux_err_prop`; the sky-clean
 floor stays on the per-frame S/N (see "Sky-clean floor" below).
@@ -79,16 +85,17 @@ of bright stars can match in both; it overstates realness.
 **Realness by keep path and prominence.**  The same replay, with the
 expectation taken over all saturated-star distances (`scripts/slices.py`).
 Keep path is the first of qfit ≤ 0.2, flags = 1, peakSB > 20 × local_bkg,
-other (sky-clean) that applies.
+other (the prominence keep or the sky-clean tier) that applies.  The merged `flags` column is the mean over
+frames, and the vetting keeps flags = 1 only for a mean of exactly 1.
 
 | slice | Brick n | Brick rel | Sgr B2 n | Sgr B2 rel |
 |---|---|---|---|---|
 | all added | 31,412 | 1.02 | 32,255 | 0.81 |
-| via flags = 1 | 759 | 0.44 | 901 | 0.55 |
-| via peakSB | 30,446 | 1.03 | 31,087 | 0.81 |
-| via other (sky-clean) | 207 | 1.22 | 267 | 1.04 |
-| peakSB, prominence < 4 | 10,264 | 0.52 | 16,440 | 0.54 |
-| peakSB, prominence ≥ 4 | 20,182 | 1.28 | 14,647 | 1.09 |
+| via flags = 1 | 52 | 0.14 | 110 | 0.15 |
+| via peakSB | 31,146 | 1.02 | 31,871 | 0.81 |
+| via other (prominence keep, sky-clean) | 214 | 1.21 | 274 | 1.06 |
+| peakSB, prominence < 4 | 10,590 | 0.51 | 16,971 | 0.54 |
+| peakSB, prominence ≥ 4 | 20,556 | 1.27 | 14,900 | 1.09 |
 | prominence 0–2 | 1,767 | 0.20 | 3,404 | 0.17 |
 | prominence 2–3 | 3,564 | 0.37 | 6,021 | 0.44 |
 | prominence 3–4 | 5,296 | 0.70 | 7,575 | 0.77 |
@@ -103,12 +110,9 @@ other (sky-clean) that applies.
 
 Nearly every addition enters through the peakSB test.  Their realness falls
 with prominence: below prominence 3 the additions are confirmed at 0.2–0.4
-of the rate of base-kept stars of the same flux.  The prominence guard on the
-peakSB branch in the prominence-keep PR (#1018, guard 4) removes the
-prominence < 4 additions; the remaining 20,182 Brick and 14,647 Sgr B2
-additions have rel 1.28 and 1.09.  The two branches are therefore intended to
-land together.  The 518 Brick additions with qfit 0.2–0.6 are at chance
-(rel −0.11 and −0.05); they are 1.6% of the additions.
+of the rate of base-kept stars of the same flux.  The prominence guard of
+#1018 v2 (guard 4 on the peakSB branch) removes the prominence < 4 peakSB
+additions; the section below measures what remains.
 
 ![](added_brick_snr.png)
 
@@ -130,6 +134,98 @@ right).  `scripts/` holds the replay (`vet_variant.py`), the comparison
 ![](added_sgrb2_snr.png)
 
 The same for Sgr B2 F187N, with the same-visit F182M image as reference.
+
+## Combined with the prominence guard (#1018 v2)
+
+#1018 v2 keeps a peakSB source only when its prominence is ≥ 4 and keeps any
+source with prominence ≥ 7.  The full-field replay was repeated at this
+branch's tip (76f8abbf, `scripts/replay_snrp2.sbatch`): `snrp2` runs the
+pipeline defaults, and `snrp2pf` runs the same code with
+`--manual-ext-snr-floor-per-frame`, which puts the floors back on the
+per-frame S/N.  `snrp2pf` keeps the same rows as the #1018 v2 replay on all
+three fields, so the additions below come from the floor change alone.
+
+| field, band | #1015 base kept | #1018 v2 kept | this branch kept | added over #1018 v2 | lost |
+|---|---|---|---|---|---|
+| Brick F182M | 377,837 | 366,605 | 387,581 | 20,976 | 0 |
+| Sgr B2 F187N | 408,591 | 395,473 | 411,208 | 15,735 | 0 |
+| W51 F187N | 20,041 | 20,720 | 21,308 | 588 | 0 |
+
+Realness of the additions over #1018 v2 (`scripts/slices.py
+<field> snrp2@prom2`; expectation from #1015 base-kept sources of the same
+flux).  The W51 reference is F182M of the same visit.
+
+| slice | Brick n | Brick rel | Sgr B2 n | Sgr B2 rel | W51 n | W51 rel |
+|---|---|---|---|---|---|---|
+| all added | 20,976 | 1.27 | 15,735 | 1.08 | 588 | 0.73 |
+| via flags = 1 | 52 | 0.14 | 107 | 0.16 | 41 | 0.35 |
+| via peakSB (prominence ≥ 4) | 20,472 | 1.27 | 14,806 | 1.09 | 435 | 0.72 |
+| via other (prominence ≥ 7 keep, sky-clean) | 452 | 1.58 | 822 | 0.98 | 112 | 0.90 |
+| prominence 4–5 | 5,884 | 0.94 | 6,916 | 1.00 | 135 | 0.54 |
+| prominence 5–7 | 8,165 | 1.29 | 5,060 | 1.16 | 163 | 0.70 |
+| prominence 7–10 | 4,974 | 1.48 | 2,616 | 1.16 | 201 | 0.89 |
+| prominence ≥ 10 | 1,908 | 1.64 | 1,056 | 1.06 | 77 | 0.69 |
+| S/N on `flux_err_prop` 5–7 | 1,925 | 1.38 | 1,579 | 0.71 | 201 | 0.61 |
+| S/N on `flux_err_prop` 7–10 | 3,670 | 1.31 | 1,681 | 1.00 | 189 | 0.64 |
+| S/N on `flux_err_prop` 10–17 | 11,152 | 1.24 | 7,413 | 1.16 | 198 | 0.92 |
+| S/N on `flux_err_prop` ≥ 17 | 4,229 | 1.29 | 5,062 | 1.10 | 0 | — |
+
+Three small subsets sit near chance (`scripts/subsets.py`):
+
+| subset of the additions | Brick n | Brick rel | Sgr B2 n | Sgr B2 rel | W51 n | W51 rel |
+|---|---|---|---|---|---|---|
+| prominence < 4 (not via peakSB) | 45 | −0.03 | 87 | 0.05 | 12 | 0.78 |
+| qfit 0.2–0.6 | 304 | −0.01 | 359 | 0.32 | 9 | 0.75 |
+| via flags = 1 | 52 | 0.14 | 107 | 0.16 | 41 | 0.35 |
+| union of the three | 329 | 0.02 | 403 | 0.31 | 44 | 0.37 |
+| the rest | 20,647 | 1.30 | 15,332 | 1.10 | 544 | 0.76 |
+
+The qfit 0.2–0.6 additions have qfit × S/N ≈ 1.6 (median), below the
+≈ 3.7 that noise alone gives a faint PSF fit, so their per-frame `flux_err`
+is large compared with their fit residual.  The union is 1.6% of the Brick
+additions and 2.6% of the Sgr B2 additions.  This branch does not add a rule
+for them; a cut such as qfit × S/N ≥ 3 would need its own reference-field
+runs.
+
+On W51 the additions are confirmed less often than base-kept stars of the
+same flux at every prominence and S/N (rel 0.54–0.92).  They are 588
+sources, 2.8% of the W51 catalog, on extended emission where the
+same-visit F182M reference also responds to emission structure.
+
+![](added_brick_snrp2.png)
+
+Random sources this branch adds over #1018 v2 in Brick F182M, four per bin
+of distance to the nearest saturated star (2″ stamps).  Per source: F182M
+data with the #1018 v2 catalog (cyan dots); the m6 residual with only the
+#1018 v2 sources subtracted (current); the same with the added sources also
+subtracted, each as catalog flux × the effective PSF (proposed); the F200W
+image of the independent visit.  Green labels have an F200W counterpart
+within 60 mas: 6 of the 12 drawn here.  In ten stamps the compact peak at
+the tick is removed in the proposed residual; in the left column, rows 1
+and 2, a fainter peak remains.  Several red-labelled sources (left column,
+rows 5 and 6; right column, rows 1, 5 and 6) have an F200W peak a few
+pixels from the tick, outside the 60 mas match radius.  Right column, row 3
+sits on the edge of emission that F200W also shows.
+
+![](added_sgrb2_snrp2.png)
+
+The same for Sgr B2 F187N with the same-visit F182M image as reference: 8
+of the 12 drawn have a counterpart.  The compact peak at the tick is removed
+in the left column, rows 2–6.  In the right column, rows 5 and 6, the
+residual peak is broader than the PSF and is only partly removed.  Right
+column, row 1 is 0.3″ from a saturated star, inside its masked core.  Left
+column, rows 3 and 5, are red-labelled with a compact F182M source at the
+tick: the reference is the vetted F182M catalog, and a star missing from it
+counts as unmatched.
+
+**Reproducing.**  From `scripts/`, with the #1015 base (`seed`) and #1018
+v2 (`prom2`) replays already in `out/`
+(`../../faint_prominence_keep/scripts/replay_prom2.sbatch` writes both; link
+its `out/`): `WT=<worktree at this branch> sbatch replay_snrp2.sbatch`, then
+`sbatch analyze_snrp2.sbatch`, which runs `slices.py`, `compare.py`,
+`subsets.py` and `added_gallery.py`.  The proposed residual stamps come from
+`propresid.py`.  `data/` holds the slices, the comparison tables and the
+subset table behind this section.
 
 **Sky-clean floor.**  The sky-clean tier keeps sources on clean sky
 regardless of `qfit`, with S/N ≥ 3 as its only fit-quality cut.  Applying the

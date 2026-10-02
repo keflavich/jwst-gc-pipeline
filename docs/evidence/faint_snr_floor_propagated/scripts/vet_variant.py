@@ -7,7 +7,7 @@ replayed with its own call-site arguments and AUTO resolution.  Writes the
 input catalog with a ``kept`` column and the diagnostics the vetting computed
 (prominence, prominence_robust, local_emission_snr, ...).
 
-usage: python vet_variant.py <pipeline_worktree> <field> <band> <out.fits>
+usage: [REPLAY_OPTS=<json>] python vet_variant.py <pipeline_worktree> <field> <band> <out.fits>
 """
 import contextlib
 import io
@@ -33,6 +33,8 @@ FIELDS = {
                   i2d='jw02221-o001_t001_nircam_clear-{fl}-merged_data_i2d.fits'),
     'sgrb2': dict(cat='{fl}_merged_indivexp_merged_resbgsub_m6_dao_basic.fits',
                   i2d='jw05365-o001_t001_nircam_clear-{fl}-merged_data_i2d.fits'),
+    'w51': dict(cat='{fl}_merged_indivexp_merged_resbgsub_m6_dao_basic.fits',
+                i2d='jw06151-o001_t001_nircam_clear-{fl}-merged_data_i2d.fits'),
 }
 fl = BAND.lower()
 cfg = FIELDS[FIELD]
@@ -69,6 +71,12 @@ with fits.open(dpath) as dh:
     e_i2d = dh['ERR'].data.astype(float) if 'ERR' in dh else None
 
 opts = types.SimpleNamespace(target=FIELD)
+# option overrides for threshold sweeps, e.g. REPLAY_OPTS='{"manual_ext_star_prom_min": 7}'
+overrides = json.loads(os.environ.get('REPLAY_OPTS', '{}'))
+for k, v in overrides.items():
+    assert k in C.MANUAL_DEFAULTS, k
+    setattr(opts, k, v)
+prov['overrides'] = overrides
 ns = dict(vars(C))
 ns.update(merged=merged, d_i2d=d_i2d, ww_i2d=ww_i2d, e_i2d=e_i2d, opts_phase=opts, _miri_field=False,
           phase='m6', filt=BAND.upper(), module='merged')
