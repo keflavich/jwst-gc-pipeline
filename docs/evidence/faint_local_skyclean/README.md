@@ -166,11 +166,13 @@ position in the data and in the reference image.  The 60° rotations map the
 six hexagon spikes onto themselves; only the 180° control maps the two
 strut spikes.  `scripts/lsky_pa_diag.py` splits the S/N < 5, 3–5 px bin by
 the angle of the source about its brighter star in the reference pixel
-grid, which is within 1° of the detector frame
+grid, which is within 1° of the detector frame, in six 30° bins over
+0–180° (folded: the PSF is point-symmetric)
 (`data/lsky_pa_diag_<field>_lsky_snr0-5_d3-5.json`).  The additions read
 0.72–0.84 (Brick, 559 sources) and 0.62–0.73 (Sgr B2, 832) in each 30° bin,
 and neither their peak fraction nor their count depends on angle (χ² p =
-0.26 and 0.50 in the Brick, 0.36 and 0.24 in Sgr B2), so the strut spikes
+0.26 and 0.50 in the Brick, 0.36 and 0.24 in Sgr B2; `chi2` in the
+JSON), so the strut spikes
 do not raise them above their controls.  The base-kept stars of this bin
 depend on angle (p < 1e-6 for both quantities in both fields): in Sgr B2
 the 30–60° and 120–150° bins, along the diagonal hexagon spikes, hold 1,192
