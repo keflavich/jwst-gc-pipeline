@@ -59,6 +59,7 @@ MANUAL_DEFAULTS = {
     'manual_ext_star_prom_robust_min': 0.0,  # OR neighbour-robust prominence; 0 = off, -1 = AUTO (8, off on ext-emission)
     'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
+    'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
