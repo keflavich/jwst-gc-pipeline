@@ -15,6 +15,10 @@ import stpsf
 from jwst_gc_pipeline.atomic_io import publish_into
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
+from jwst_gc_pipeline.photometry.wingcal import (
+    bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
+    passes_se_gate as wingcal_passes_se_gate,
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from stpsf.utils import to_griddedpsfmodel
 
 
@@ -4782,7 +4786,10 @@ def _wing_selfcal(data, err, sat_mask, psf_grid, radii, *, fwhm_pix=2.0,
         try:
             res = phot(data, error=err, mask=fmask, init_params=init)
             f = float(res['flux_fit'][0])
-            return f if np.isfinite(f) and f > 0 else np.nan
+            # A non-positive MASKED fit is a real (noisy) measurement of the
+            # wings: dropping it biases the bucket median high (#1041).  The
+            # truth fit is required to be positive by the caller.
+            return f if np.isfinite(f) else np.nan
         except Exception:
             return np.nan
 
@@ -4790,7 +4797,7 @@ def _wing_selfcal(data, err, sat_mask, psf_grid, radii, *, fwhm_pix=2.0,
     truths = {}
     for i in sel:
         truths[i] = _fit(x[i], y[i], bad, 11, False)
-    good = [i for i in sel if np.isfinite(truths[i])]
+    good = [i for i in sel if np.isfinite(truths[i]) and truths[i] > 0]
     print(f"wing-selfcal: {len(sel)} calibration star(s), {len(good)} good "
           f"truth fit(s)", flush=True)
     out = {}
@@ -4826,7 +4833,13 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
     NUMBER is biased by the model's wing deficit.  Adds columns
     ``flux_fit_raw``, ``wingcal_ratio``; divides ``flux_fit`` and
     ``flux_err`` by the per-star interpolated ratio.  Env
-    SATSTAR_WINGCAL=0 disables."""
+    SATSTAR_WINGCAL=0 disables.
+
+    Only buckets whose median has a standard error <= SATSTAR_WINGCAL_MAX_SE
+    (default 0.05) are applied, and the interpolation is anchored at
+    C(0) = 1 (see :mod:`jwst_gc_pipeline.photometry.wingcal`, #1041).  When
+    no bucket passes, the per-frame correction is skipped and the rows keep
+    ``wingcal_ratio == 1``, which leaves them to the pooled fallback."""
     if os.environ.get('SATSTAR_WINGCAL', '1') in ('0', 'false', 'False'):
         return base_tab
     if base_tab is None or 'wingcal_rmask' not in base_tab.colnames:
@@ -4863,8 +4876,22 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
         return base_tab
     rs = np.array(sorted(cal))
     vs = np.array([cal[r][0] for r in rs])
-    ratio = np.interp(np.clip(rmask, rs.min(), rs.max()), rs, vs)
-    ratio = np.where(np.isfinite(rmask), ratio, 1.0)
+    ns = np.array([cal[r][1] for r in rs])
+    mads = np.array([cal[r][2] for r in rs])
+    se = wingcal_bucket_se(mads, ns, ratio=vs,
+                           rel_floor=wingcal_rel_floor(rs, vs, mads, ns))
+    use = wingcal_passes_se_gate(se)
+    if not use.all():
+        print("wing-selfcal: bucket(s) above the SE gate "
+              f"({wingcal_max_se():g}) not applied: " + "; ".join(
+                  f"r={r}px ratio={v:.3f} se={s:.3f}"
+                  for r, v, s in zip(rs[~use], vs[~use], se[~use])),
+              flush=True)
+    if not use.any():
+        print("wing-selfcal: no bucket passes the SE gate; per-frame "
+              "application skipped", flush=True)
+        return base_tab
+    ratio = interp_wingcal_ratio(rmask, rs[use], vs[use])
     base_tab['wingcal_ratio'] = ratio
     base_tab['flux_fit'] = base_tab['flux_fit_raw'] / ratio
     if 'flux_err' in base_tab.colnames:

@@ -64,6 +64,10 @@ from jwst_gc_pipeline.photometry.satstar_phase_selection import (
     format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry.wingcal import (
+    interp_wingcal_ratio, passes_se_gate as wingcal_passes_se_gate,
+    pool_bucket as wingcal_pool_bucket,
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
@@ -3008,9 +3012,13 @@ def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/j
     43/48), so their satstar fluxes carried the raw STPSF wing deficit
     (wingcal_ratio == 1.0).  The per-frame measurements (persisted even when
     sub-threshold, *_wingcal_calibrators.fits) are pooled here across all
-    frames of a band: per rmask bucket, the n-weighted mean ratio.  Same PSF
-    grid within a band+detector, so the per-frame-vs-static objection (H9,
-    epoch-specific grid defects) does not apply within the pool.
+    frames of a band: per rmask bucket, the inverse-variance mean of the
+    per-frame medians with its standard error ``ratio_se``
+    (:func:`~jwst_gc_pipeline.photometry.wingcal.pool_bucket`; #1041 -- the
+    old n-weighted mean had no error, and buckets of 2-30 stars reached
+    C = 12-20).  Same PSF grid within a band+detector, so the
+    per-frame-vs-static objection (H9, epoch-specific grid defects) does not
+    apply within the pool.
 
     Each exposure contributes ONE phase's calibrator file
     (:func:`select_wingcal_calibrator_files`).  The table records the
@@ -3033,19 +3041,25 @@ def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/j
         except (OSError, ValueError) as err:
             print(f"WARNING: unreadable wingcal-calibrator file {f}: {err}")
             continue
+        has_mad = 'ratio_madstd' in tt.colnames
         for row in tt:
             rows.append((int(row['rmask_px']), float(row['ratio_median']),
-                         int(row['n_stars'])))
+                         int(row['n_stars']),
+                         float(row['ratio_madstd']) if has_mad else np.nan))
     if not rows:
         return None
-    rs = sorted({r for r, _, _ in rows})
+    rs = sorted({r for r, _, _, _ in rows})
+    _r, _v, _n, _s = np.array(rows, dtype=float).T
+    rel_floor = wingcal_rel_floor(_r, _v, _s, _n)
     out_rows = []
     for r in rs:
-        vals = np.array([(v, n) for rr, v, n in rows if rr == r])
-        med = float(np.average(vals[:, 0], weights=vals[:, 1]))
-        out_rows.append((r, med, int(vals[:, 1].sum()), len(vals)))
+        vals = np.array([(v, n, s) for rr, v, n, s in rows if rr == r])
+        ratio, ratio_se = wingcal_pool_bucket(vals[:, 0], vals[:, 1],
+                                              vals[:, 2], rel_floor=rel_floor)
+        out_rows.append((r, ratio, ratio_se, int(vals[:, 1].sum()), len(vals)))
     pooled = Table(rows=out_rows,
-                   names=['rmask_px', 'ratio', 'n_stars_total', 'n_frames'])
+                   names=['rmask_px', 'ratio', 'ratio_se', 'n_stars_total',
+                          'n_frames'])
     pooled.meta['band'] = filtername.lower()
     pooled.meta['WCALSEL'] = satstar_phase_selection_signature(files)
     pooled.meta['WCALPHS'] = _wingcal_phase_token(phase)
@@ -3075,7 +3089,8 @@ def load_pooled_wingcal(filtername, basepath, phase=None):
     never rebuilt, so it kept whatever phases and code version first built it;
     a table with no ``WCALSEL`` (written before this check) is rebuilt.  A
     refit with changed satstar code rewrites the calibrator files, and their
-    newer mtimes trigger the rebuild.
+    newer mtimes trigger the rebuild.  A table with no ``ratio_se`` column
+    (written before #1041) is rebuilt too.
     """
     files, report = select_wingcal_calibrator_files(filtername, basepath,
                                                     phase=phase)
@@ -3094,11 +3109,15 @@ def load_pooled_wingcal(filtername, basepath, phase=None):
             newest = max(os.path.getmtime(f) for f in files)
             if os.path.getmtime(pooled_fn) >= newest:
                 pooled = Table.read(pooled_fn, format='ascii.ecsv')
-                if str(pooled.meta.get('WCALSEL', '')) == sig:
+                if 'ratio_se' not in pooled.colnames:
+                    print(f"Rebuilding pooled wingcal {pooled_fn}: no "
+                          f"ratio_se column (written before #1041)")
+                elif str(pooled.meta.get('WCALSEL', '')) == sig:
                     return pooled
-                print(f"Rebuilding pooled wingcal {pooled_fn}: built from a "
-                      f"different set of calibrator files "
-                      f"({pooled.meta.get('WCALSEL', 'unrecorded')!r} -> {sig!r})")
+                else:
+                    print(f"Rebuilding pooled wingcal {pooled_fn}: built from a "
+                          f"different set of calibrator files "
+                          f"({pooled.meta.get('WCALSEL', 'unrecorded')!r} -> {sig!r})")
             else:
                 print(f"Rebuilding pooled wingcal {pooled_fn}: a calibrator "
                       f"file is newer than the table")
@@ -3118,7 +3137,12 @@ def apply_pooled_wingcal(satstar_cat, filtername,
     exactly 1).  Catalog-flux-only, like the per-frame calibration; adds
     wingcal_pooled (bool) and updates wingcal_ratio.  No pooled table and no
     calibrator files -> unchanged.  ``phase`` is the merge's iteration label;
-    see :func:`load_pooled_wingcal`."""
+    see :func:`load_pooled_wingcal`.
+
+    Only buckets with ``ratio_se`` <= SATSTAR_WINGCAL_MAX_SE (default 0.05)
+    are applied, and C(r) is anchored at C(0) = 1, as in the per-frame
+    calibration (#1041).  A table without ``ratio_se`` (a legacy table kept
+    because its calibrator files are gone) is applied ungated."""
     if (satstar_cat is None or 'wingcal_ratio' not in satstar_cat.colnames
             or 'wingcal_rmask' not in satstar_cat.colnames):
         return satstar_cat
@@ -3133,9 +3157,19 @@ def apply_pooled_wingcal(satstar_cat, filtername,
         return satstar_cat
     rs = np.asarray(pooled['rmask_px'], float)
     vs = np.asarray(pooled['ratio'], float)
-    order = np.argsort(rs)
-    ratio = np.interp(np.clip(rmask[need], rs[order].min(), rs[order].max()),
-                      rs[order], vs[order])
+    if 'ratio_se' in pooled.colnames:
+        use = wingcal_passes_se_gate(np.asarray(pooled['ratio_se'], float))
+        if not use.all():
+            print(f"apply_pooled_wingcal: {filtername}: {int((~use).sum())} "
+                  f"bucket(s) above the SE gate ({wingcal_max_se():g}) not "
+                  f"applied: r={rs[~use].astype(int).tolist()}")
+        rs, vs = rs[use], vs[use]
+    else:
+        print(f"apply_pooled_wingcal: {filtername}: table has no ratio_se; "
+              f"applying it without the SE gate")
+    if rs.size == 0:
+        return satstar_cat
+    ratio = interp_wingcal_ratio(rmask[need], rs, vs)
     if 'flux_fit' in satstar_cat.colnames:
         satstar_cat['flux_fit'][need] = (
             np.asarray(satstar_cat['flux_fit'], float)[need] / ratio)
