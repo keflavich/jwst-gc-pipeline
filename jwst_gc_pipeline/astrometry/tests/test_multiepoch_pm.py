@@ -367,3 +367,140 @@ def test_isolation_survives_duplicate_observation_concatenation():
     # (and therefore trustworthy) is 0 here, same as it was on real data.
     assert pm['dominant'].sum() > 0.9 * len(pm)
     assert pm['trustworthy'].sum() > 0.9 * len(pm)
+
+
+def test_affine_tie_local_correction_removes_a_module_seam():
+    """pr-reviewer's per-cell PM-variance analysis (PR #959 review) found the
+    excess scatter on Arches/Quintuplet/Brick/Cloud c is spatially COHERENT,
+    not centroid noise; a follow-up per-cell median-PM map on real Cloud c
+    data pinned a ~14 mas/yr DISCONTINUITY across one ~30" field-edge strip --
+    a step function a global 6-parameter affine cannot represent by
+    construction (it only fits a smooth linear plane). Inject the same
+    signature synthetically (a real small affine trend PLUS a sharp step in
+    dx at x=0, like a small relative offset between two NIRCam modules) and
+    confirm the LOCAL correction, not the global affine alone, removes it.
+    """
+    n = 4000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=90.0)
+    A_true = np.array([0.02, 0.0001, -0.0001])
+    B_true = np.array([-0.01, 0.00005, 0.0001])
+    step_dx_mas = 15.0  # a discrete jump, not a linear trend
+    step = np.where(sx > 0, step_dx_mas / 1000.0, 0.0)
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy + step
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    rmag = mag + RNG.normal(0, 0.01, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+
+    _, diag_local = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0,
+                               local_correction=True, local_cell_arcsec=30.0,
+                               local_min_stars=15)
+    _, diag_global = affine_tie(src_sc, mag, ref_sc, rmag, magcut=0, match_radius=1.0,
+                                local_correction=False)
+
+    assert diag_global['local_correction'] is None
+    assert diag_local['local_correction'] is not None
+    assert diag_local['local_correction']['n_valid_cells'] > 0
+    # The global-only fit cannot represent the step. Its 3-sigma clip loop
+    # rejects most of the offset half-field as "outliers" rather than fitting
+    # it, so the surviving residual undershoots the naive half-step estimate
+    # (measured: 2.08 mas vs a 0.63 mas no-step noise floor) -- still a clear,
+    # reproducible excess over the floor. The local correction should bring
+    # the residual down close to that noise floor.
+    assert diag_global['rms_resid_mas'] > 1.5
+    assert diag_local['rms_resid_mas'] < 0.5 * diag_global['rms_resid_mas']
+    assert diag_local['rms_resid_mas'] < 2.0
+
+
+def test_affine_tie_local_correction_false_matches_pre_feature_behavior():
+    """local_correction=False must reproduce the pre-existing global-affine-
+    only behavior exactly (regression pin for the opt-out) -- same fixture as
+    test_affine_tie_recovers_a_known_distortion."""
+    n = 1500
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=400.0)
+    A_true = np.array([0.150, 0.00030, -0.00040])
+    B_true = np.array([-0.080, 0.00025, -0.00020])
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    _, diag = affine_tie(src_sc, mag, ref_sc, mag, magcut=0, match_radius=1.0,
+                         local_correction=False)
+    assert diag['local_correction'] is None
+    assert diag['rms_resid_mas'] == diag['rms_resid_mas_before_local']
+    A, B = np.array(diag['A']), np.array(diag['B'])
+    assert abs(A[0] - A_true[0]) < 0.002 and abs(B[0] - B_true[0]) < 0.002
+
+
+def test_affine_tie_local_correction_defaults_off():
+    """pr-reviewer's PR #969 review, point 3: local_correction=True as the
+    default meant the very next real-data rebuild would silently change
+    Sgr B2/Cloud e/f too, which already pass the #959 excess-scatter check --
+    with no real-data validation of the feature at all. Pin the opt-in-only
+    default: calling affine_tie with NO local_correction argument must behave
+    exactly like the explicit local_correction=False path."""
+    n = 1500
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=400.0)
+    A_true = np.array([0.150, 0.00030, -0.00040])
+    B_true = np.array([-0.080, 0.00025, -0.00020])
+    dx = A_true[0] + A_true[1] * sx + A_true[2] * sy
+    dy = B_true[0] + B_true[1] * sx + B_true[2] * sy
+    noise = 0.001
+    rx = sx + dx + RNG.normal(0, noise, n)
+    ry = sy + dy + RNG.normal(0, noise, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    _, diag_default = affine_tie(src_sc, mag, ref_sc, mag, magcut=0, match_radius=1.0)
+    _, diag_explicit_off = affine_tie(src_sc, mag, ref_sc, mag, magcut=0,
+                                      match_radius=1.0, local_correction=False)
+    assert diag_default['local_correction'] is None
+    assert diag_default['rms_resid_mas'] == diag_explicit_off['rms_resid_mas']
+
+
+def test_affine_tie_local_correction_overfits_pure_noise_held_out():
+    """pr-reviewer's PR #969 review, point 2 (independently reproduced
+    before this fix): the in-sample RMS improvement the module-seam test
+    above measures is on the SAME pairs used to build the correction grid,
+    which cannot distinguish a real seam from the correction fitting each
+    cell's median-of-noise SAMPLING ERROR. Build the grid on one random half
+    of a PURE-NOISE field (no seam, no real signal at all) and apply it to
+    the other, held-out half: a sound correction should leave held-out RMS
+    unchanged (within noise); this one makes it WORSE, because a cell median
+    of ~15-40 noise draws is itself a ~noise/sqrt(n) - sized fake offset that
+    then gets baked in and applied to stars that were never used to compute
+    it. This is why local_correction defaults to False (see the affine_tie
+    docstring) -- this test pins the concrete failure mode, not just the
+    accompanying prose.
+    """
+    from jwst_gc_pipeline.astrometry.multiepoch_pm import (
+        _build_local_correction_grid, _apply_local_correction_grid)
+
+    rng = np.random.default_rng(84172)
+    cell_arcsec, n_cells_side, noise_mas, min_stars, n_per_cell = 30.0, 6, 3.0, 15, 40
+    halfwidth = cell_arcsec * n_cells_side / 2.0
+    xs, ys, resx, resy = [], [], [], []
+    for i in range(n_cells_side):
+        for j in range(n_cells_side):
+            cx = -halfwidth + cell_arcsec * (i + 0.5)
+            cy = -halfwidth + cell_arcsec * (j + 0.5)
+            xs.append(cx + rng.uniform(-cell_arcsec / 2, cell_arcsec / 2, n_per_cell))
+            ys.append(cy + rng.uniform(-cell_arcsec / 2, cell_arcsec / 2, n_per_cell))
+            resx.append(rng.normal(0, noise_mas / 1000.0, n_per_cell))
+            resy.append(rng.normal(0, noise_mas / 1000.0, n_per_cell))
+    x, y = np.concatenate(xs), np.concatenate(ys)
+    rx, ry = np.concatenate(resx), np.concatenate(resy)
+    idx = rng.permutation(len(x))
+    train, test = idx[:len(x) // 2], idx[len(x) // 2:]
+
+    grid = _build_local_correction_grid(x[train], y[train], rx[train], ry[train],
+                                        cell_arcsec=cell_arcsec, min_stars=min_stars)
+    assert grid['n_valid_cells'] > 0
+    cdx, cdy = _apply_local_correction_grid(x[test], y[test], grid)
+    rms_before = np.std(np.hypot(rx[test], ry[test])) * 1e3
+    rms_after = np.std(np.hypot(rx[test] - cdx, ry[test] - cdy)) * 1e3
+    # the failure mode: on pure noise, "correcting" held-out data makes it
+    # worse, not better, because there was never any real signal to remove.
+    assert rms_after > rms_before

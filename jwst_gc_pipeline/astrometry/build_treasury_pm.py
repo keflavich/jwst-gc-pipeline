@@ -292,10 +292,15 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
             default=0.0)
         diags.append(diag)
         if verbose:
+            local = diag.get('local_correction')
+            local_note = (
+                f' -- local correction: {local["n_valid_cells"]}/{local["n_cells"]} '
+                f'cells ({local["cell_arcsec"]:g}"), resid {diag["rms_resid_mas_before_local"]:.1f}'
+                f'->{diag["rms_resid_mas"]:.1f} mas' if local else ' -- local correction: not applied')
             print(f'  ref[{i}] {p.split("/")[-1]}: affine tie '
                   f'{diag["n_kept"]}/{diag["n_match"]} kept, '
                   f'median ({diag["med_dx_mas"]:+.1f},{diag["med_dy_mas"]:+.1f}) mas, '
-                  f'resid rms {diag["rms_resid_mas"]:.1f} mas')
+                  f'resid rms {diag["rms_resid_mas"]:.1f} mas{local_note}')
     sc = concatenate([c['sc'] for c in tied]) if len(tied) > 1 else tied[0]['sc']
     obs_index = np.concatenate([np.full(c['n'], c['obs_index']) for c in tied])
     ref = dict(sc=sc,
