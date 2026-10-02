@@ -80,9 +80,12 @@ def fit_exposure(fn, psffn):
     for name, (rmax, knots) in CONFIGS.items():
         s = fit_flux_with_halo_modes(d, err, bad, P, xt, yt, knots=None, rmax=rmax)
         h = fit_flux_with_halo_modes(d, err, bad, P, xt, yt, knots=knots, rmax=rmax)
-        # light in the fitted halo change, as a fraction of F: sum_k c_k int Pbar b_k
+        # light in the fitted halo change, as a fraction of F: sum_k c_k sum Pbar b_k over the
+        # FITTED pixels only.  A hat lying mostly under the masked core is constrained by its
+        # few unmasked pixels; integrating it over the masked annulus too would extrapolate.
         hats = log_hats(r, knots)
-        halo_light = float(np.sum([h.halo[k] * np.sum(pbar * hats[..., k]) for k in range(len(knots))
+        used = ~bad & (r <= rmax)
+        halo_light = float(np.sum([h.halo[k] * np.sum((pbar * hats[..., k])[used]) for k in range(len(knots))
                                    if np.isfinite(h.halo[k])]))
         # how much of the star's (model) light the halo range holds
         frac_range = float(np.sum(P * (hats.sum(-1) > 0)))
@@ -117,7 +120,7 @@ def main():
                                   mean_H_over_S=float(np.mean(FH / FS)),
                                   halo_light=[ex[e][name]['halo_light'] for e in ex])
     json.dump(dict(per_exposure=res, summary=summ, configs={k: [v[0], list(v[1])] for k, v in CONFIGS.items()}),
-              open(outp + '.json', 'w'), indent=1)
+              open(outp + '.json', 'w'), separators=(',', ':'))
     for st, v in summ.items():
         print(st, {k: {kk: (round(vv, 4) if isinstance(vv, float) else [round(x, 4) for x in vv]) for kk, vv in s.items()}
                    for k, s in v.items()})

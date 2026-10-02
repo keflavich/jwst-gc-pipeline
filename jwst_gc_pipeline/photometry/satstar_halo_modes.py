@@ -123,8 +123,9 @@ def fit_flux_with_halo_modes(data, err, mask, psf, x0, y0, *, knots=DEFAULT_KNOT
     rmax : float, optional
         Use only pixels with r <= rmax.
     clip, niter : float, int
-        Iterative rejection of pixels with |residual| > clip * err (field
-        stars); ``niter=1`` disables it.
+        Iterative rejection of pixels (field stars) whose normalised residual
+        departs from the median by more than ``clip`` x its robust (MAD)
+        scatter, floored at 1; ``niter=1`` disables it.
 
     Returns
     -------
@@ -166,7 +167,12 @@ def fit_flux_with_halo_modes(data, err, mask, psf, x0, y0, *, knots=DEFAULT_KNOT
         res = (data - model) / err
         if it == niter - 1 or clip is None:
             break
-        newkeep = good & (np.abs(res) < clip)
+        # clip against the residuals' robust scatter, not the formal errors: a
+        # model-mismatch chi2/pix of ~8 (real LW halos), or a first pass pulled
+        # by bright field stars, would otherwise clip most of the good pixels
+        rk = res[keep]
+        scale = max(1.0, 1.4826 * float(np.median(np.abs(rk - np.median(rk)))))
+        newkeep = good & (np.abs(res - np.median(rk)) < clip * scale)
         if newkeep.sum() == keep.sum():
             break
         keep = newkeep
@@ -215,3 +221,20 @@ def halo_mode_flux_ratio(data, err, mask, psf, x0, y0, *, r_core, rmax, **kw):
     if not (s.flux > 0 and h.flux > 0):
         return np.nan, s, h
     return h.flux / s.flux, s, h
+
+
+def satstar_halo_mode_ratios(cutout, err, mask, psf_model, positions, *, r_core, rmax):
+    """:func:`halo_mode_flux_ratio` for each fitted star of one satstar cutout.
+
+    ``psf_model`` is the photutils PSF model the production fit used (a
+    ``GriddedPSFModel``), evaluated at unit flux at each ``(x, y)`` of
+    ``positions`` (cutout pixel coordinates).  Returns an array of ratios
+    (NaN where no halo range fits inside ``rmax``).
+    """
+    yy, xx = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
+    out = np.full(len(positions), np.nan)
+    for k, (x, y) in enumerate(positions):
+        psf = psf_model.evaluate(xx, yy, 1.0, float(x), float(y))
+        out[k], _, _ = halo_mode_flux_ratio(cutout, err, mask, psf, float(x), float(y),
+                                            r_core=r_core, rmax=rmax)
+    return out
