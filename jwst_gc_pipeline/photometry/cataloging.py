@@ -3258,7 +3258,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     seed['skycoord'] = SkyCoord(np.array(seed_ra) * u.deg, np.array(seed_dec) * u.deg)
     seed['n_filt_confirmed'] = np.array(nfilt, dtype='i4')
     seed['confirming_filters'] = np.array(confl)
-    out = f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
+    out = crossband_seed_file(cut_bp, options)
     # every m7 shard rebuilds this same path -- see write_table_atomic
     write_table_atomic(seed, out)
     print(f"[m7] wrote STRINGENT crossband seed {out} (n={len(seed)} confirmed in "
@@ -3266,6 +3266,21 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
           f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
     return out
 
+
+def crossband_seed_file(cut_bp, options):
+    """The m7 cross-band seed file ``_build_crossband_seed`` writes (shared by
+    every m7 shard of the target/observation)."""
+    _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
+                           getattr(options, 'field', None))
+    return f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
+
+
+def m7_band_seed_path(crossband_path, module, filtername):
+    """The per-(module, filter) m7 seed ``_build_m7_band_seed`` writes.  The
+    ``_vetted`` suffix lets ``_build_i2d_augmented_seed`` write its residual-
+    augmented copy next to it (``naming.vetted_to_i2dseed``) instead of over
+    the shared cross-band seed."""
+    return crossband_path.replace('.fits', f'_{module}_{filtername.lower()}_vetted.fits')
 
 
 def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module, *,
@@ -3297,18 +3312,22 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     xb = Table.read(crossband_seed_path)
     xsc = xb['skycoord'] if isinstance(xb['skycoord'], SkyCoord) else SkyCoord(xb['skycoord'])
     own = _L._resolve_seed_skycoords(Table.read(own_vetted_path))
+    # An empty own-band catalog still gets its own per-band file (cross-band
+    # positions only): returning the shared cross-band seed path instead let
+    # _build_i2d_augmented_seed write the residual detections over it.
     if len(own) == 0:
         print(f"[{label}] m7 band seed: own-band m6 vetted catalog is empty; "
-              f"cross-band seed only", flush=True)
-        return crossband_seed_path
-    osc = own['skycoord'] if isinstance(own['skycoord'], SkyCoord) else SkyCoord(own['skycoord'])
-    oflux = None
-    for _fc in ('flux', 'flux_fit'):
-        if _fc in own.colnames:
-            oflux = np.asarray(own[_fc], dtype=float)
-            break
-    if oflux is None:
-        oflux = np.ones(len(own))
+              f"cross-band positions only", flush=True)
+        osc, oflux = xsc[:0], np.zeros(0)
+    else:
+        osc = own['skycoord'] if isinstance(own['skycoord'], SkyCoord) else SkyCoord(own['skycoord'])
+        oflux = None
+        for _fc in ('flux', 'flux_fit'):
+            if _fc in own.colnames:
+                oflux = np.asarray(own[_fc], dtype=float)
+                break
+        if oflux is None:
+            oflux = np.ones(len(own))
     good = np.isfinite(oflux) & (oflux > 0)
     osc, oflux = osc[good], oflux[good]
 
@@ -3325,9 +3344,8 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     out['skycoord'] = (SkyCoord([xsc, osc[own_new]]) if n_own and len(xsc)
                        else (xsc if len(xsc) else osc[own_new]))
     out['flux'] = np.concatenate([xflux, oflux[own_new]])
-    out['seed_origin'] = np.array(['crossband'] * len(xsc) + ['own_m6'] * n_own)
-    outpath = crossband_seed_path.replace(
-        '.fits', f'_{module}_{filtername.lower()}_vetted.fits')
+    out['seed_origin'] = np.array(['crossband'] * len(xsc) + ['own_m6'] * n_own, dtype=str)
+    outpath = m7_band_seed_path(crossband_seed_path, module, filtername)
     write_table_atomic(out, outpath)
     print(f"[{label}] m7 band seed: {len(xsc)} cross-band + {n_own} own-band m6 "
           f"vetted (not within {max_sep_mas:g} mas of a cross-band position) "
@@ -3486,6 +3504,15 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     band source.  m6 is the last per-band catalog built BEFORE the cross-band
     seed, so an m6 match == band saw it on its own.
 
+    The m7 seed of each band also adds daofind detections on that band's own
+    m6 residual (``seed_origin == 'i2d'`` rows of its
+    ``crossband_seed_manual*_<module>_<filt>_i2dseed.fits``; see
+    ``_build_m7_band_seed``).  Those are independent detections in that band
+    too.  They are matched back at the radius the seed builder recorded
+    (``DEDUPMAS``: every such row is at least that far from every other seed
+    position), as the fitted position can move further than ``radius_mas``
+    from the residual-image centroid.
+
     Tight ``radius_mas`` (30) keeps the dense-field chance-coincidence rate low
     (per-band m6 catalogs are far sparser than the merged catalog).  Additive +
     idempotent: re-running overwrites the flags.  Failure is non-fatal.
@@ -3514,6 +3541,11 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
         getattr(options, 'field', None))
     _endsuf = '' if _modtok else _obssuf
     _modules = (getattr(options, 'modules', '') or 'merged').split(',')
+    _xbseed = crossband_seed_file(cut_bp, options)
+    # only this run's m7 seeds: with the own-band seed off, a band seed left
+    # over from an earlier run says nothing about this merged catalog
+    _m7_own = bool(mopt(options, 'manual_m7_seed_own_band'))
+    n_m7_i2d = 0
     # Per-filter independence is OR-ed across modules and counted ONCE per
     # filter.  (The previous module-outer loop added ``indep`` to
     # ``nfilt_indep`` once PER MODULE -- double-counting a filter for
@@ -3534,6 +3566,22 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
             sc6 = m6['skycoord'] if isinstance(m6['skycoord'], SkyCoord) else SkyCoord(m6['skycoord'])
             _, sep, _ = ref.match_to_catalog_sky(sc6)
             indep |= np.asarray(sep < radius_mas * u.mas)
+        for module in (_modules if _m7_own else []):
+            p7 = vetted_to_i2dseed(m7_band_seed_path(_xbseed, module, f))
+            if not os.path.exists(p7):
+                continue
+            s7 = Table.read(p7)
+            if 'seed_origin' not in s7.colnames or len(s7) == 0:
+                continue
+            s7 = s7[np.asarray(s7['seed_origin']).astype(str) == 'i2d']
+            if len(s7) == 0:
+                continue
+            sc7 = s7['skycoord'] if isinstance(s7['skycoord'], SkyCoord) else SkyCoord(s7['skycoord'])
+            r7 = max(radius_mas, float(s7.meta.get('DEDUPMAS', radius_mas)))
+            _, sep, _ = ref.match_to_catalog_sky(sc7)
+            hit7 = np.asarray(sep < r7 * u.mas)
+            n_m7_i2d += int((hit7 & ~indep).sum())
+            indep |= hit7
         t[col] = indep
         nfilt_indep += indep.astype('i4')
     t['n_filt_independent'] = nfilt_indep
@@ -3541,7 +3589,8 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     print(f"[provenance] {os.path.basename(merged_path)}: wrote "
           f"independently_detected_<filt> (+ n_filt_independent); "
           f"{int((nfilt_indep == 0).sum())}/{len(t)} rows have NO independent "
-          f"per-band detection (pure cross-band-seeded)", flush=True)
+          f"per-band detection (pure cross-band-seeded); {n_m7_i2d} (row, band) "
+          f"flags from m7 residual detections alone", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -3633,6 +3682,13 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     per-frame pixel FWHM applies unchanged.  Returns the seed-catalog path.
     """
     from astropy.coordinates import SkyCoord
+
+    outpath = vetted_to_i2dseed(prev_vetted_path)
+    if outpath == prev_vetted_path:
+        # writing the augmented seed over its own input (a shared seed such as
+        # the m7 cross-band seed) corrupts every other shard that reads it
+        raise ValueError(f"[{label}] i2d-augmented seed: {os.path.basename(prev_vetted_path)} "
+                         f"has no '_vetted.fits' suffix, so the output would overwrite it")
 
     ftab = Table.read(_L.fwhm_table_path())
     fwhm_pix = float(ftab[ftab['Filter'] == filtername]['PSF FWHM (pixel)'][0])
@@ -3735,6 +3791,9 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     prev_sky = prev['skycoord']
     if not isinstance(prev_sky, SkyCoord):
         prev_sky = SkyCoord(prev_sky)
+    # where each seed came from; this round's i2d detections become 'i2d'
+    prev_origin = (np.asarray(prev['seed_origin']).astype(str)
+                   if 'seed_origin' in prev.colnames else np.full(len(prev), 'prev'))
     # the fitted flux: per-frame catalogs use 'flux_fit', the MERGED/vetted
     # catalog uses 'flux'.  Falling through to ones() poisons the next fit --
     # bright stars then start at flux_init=1.0 (orders of magnitude too low) and
@@ -3754,11 +3813,13 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     if not np.all(_pos):
         prev_sky = prev_sky[_pos]
         prev_flux = prev_flux[_pos]
+        prev_origin = prev_origin[_pos]
         print(f"[{label}] dropped {int(np.sum(~_pos))} non-positive-flux prev seeds",
               flush=True)
 
     # i2d detections -> sky, keep only those NOT already in the previous catalog
     n_new = 0
+    match_as = max(1.0, 0.5 * fwhm_pix) * pixscale_as
     if len(det):
         # photutils 2.x emits xcentroid/ycentroid, 3.x x_centroid/y_centroid
         xd, yd = _L._best_available_xy(det)
@@ -3768,7 +3829,6 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                     if 'flux' in det.colnames else np.ones(len(det), dtype=float))
         if len(prev_sky):
             _, sep, _ = det_sky.match_to_catalog_sky(prev_sky)
-            match_as = max(1.0, 0.5 * fwhm_pix) * pixscale_as
             fresh = sep.arcsec > match_as
         else:
             fresh = np.ones(len(det_sky), dtype=bool)
@@ -3784,7 +3844,10 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     out = Table()
     out['skycoord'] = all_sky
     out['flux'] = all_flux
-    outpath = vetted_to_i2dseed(prev_vetted_path)
+    out['seed_origin'] = np.concatenate([prev_origin, np.full(n_new, 'i2d')]).astype(str)
+    # every 'i2d' row is at least this far from every prev seed
+    # (annotate_independent_detection matches them back at this radius)
+    out.meta['DEDUPMAS'] = float(match_as * 1e3)
     # keyed by (filter, module), not by shard -- see write_table_atomic
     write_table_atomic(out, outpath)
     print(f"[{label}] i2d-augmented seed: {len(prev_sky)} prev + {n_new} new i2d "

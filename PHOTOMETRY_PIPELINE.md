@@ -504,7 +504,10 @@ control is the default.
   so a source detectable in only one band is not propagated to the OTHER bands.
   Each band's m7 seed is that cross-band seed UNION the band's own m6 vetted
   catalog, plus daofind on its m6 residual − bg mosaic (`_build_m7_band_seed`),
-  so a source this band's own vetting accepted stays in this band's m7 fit;
+  so a source this band's own vetting accepted stays in this band's m7 fit.
+  A merged source that only this band's m7 residual daofind found is flagged
+  `independently_detected_<filt>` in that band (its `seed_origin` is `i2d` in
+  the band's `crossband_seed_manual*_<module>_<filt>_i2dseed.fits`).
   `--manual-no-m7-seed-own-band` seeds m7 from the cross-band seed alone, which
   drops ~1/3 of the m6 vetted sources. `--manual-crossband-seed-min-filters=1`
   restores the legacy deduped-union behaviour, which seeds every band at every
