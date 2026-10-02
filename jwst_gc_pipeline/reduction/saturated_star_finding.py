@@ -3595,6 +3595,28 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             log.warning("pixel_to_world did not return SkyCoord; setting skycoord_fit to None")
             result['skycoord_fit'] = [None] * len(result)
 
+        # HALO-MODE FLUX (opt-in, record-only; #1013).  The LW halo changes
+        # per exposure by ~10% while the spikes do not, and the masked-core
+        # fit above takes its amplitude from that halo.  Refit the same
+        # pixels with free log-r rescalings of the model's smooth halo, so
+        # the amplitude comes from the spikes, and record the ratio of the
+        # two fits.  flux_fit itself is NOT changed.  SATSTAR_HALO_MODES=1.
+        if (int(os.environ.get('SATSTAR_HALO_MODES', 0)) and not _is_miri
+                and not forced_source and len(result)):
+            from ..photometry.satstar_halo_modes import halo_mode_flux_ratio
+            _yy, _xx = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
+            _ratio = np.full(len(result), np.nan)
+            _rmax = float(np.max(np.atleast_1d(_size_eff))) / 2.0
+            for _k in range(len(result)):
+                _xf, _yf = float(result['x_fit'][_k]), float(result['y_fit'][_k])
+                _psfu = _psf_for_fit.evaluate(_xx, _yy, 1.0, _xf, _yf)
+                _ratio[_k], _, _ = halo_mode_flux_ratio(
+                    cutout_fit, err_cutout_eff, mask, _psfu, _xf, _yf,
+                    r_core=_wingcal_rmask, rmax=_rmax)
+            result['halomodes_ratio'] = _ratio
+            result['flux_fit_halomodes'] = np.asarray(result['flux_fit'], dtype=float) * _ratio
+            print(f"  halo-mode flux ratio: {np.round(_ratio, 4).tolist()}", flush=True)
+
         # MIRI BOTTOM-UP ENVELOPE AMPLITUDE (2026-06-14).  The masked-core LSQ
         # (even on the 2D-bg-subtracted cutout) still OVER-fits some saturated
         # stars -- amplitude inflated by residual emission / wing structure ->
