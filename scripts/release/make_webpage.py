@@ -669,7 +669,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       diagrams=(),
                       superseded=(), reasons=None, curated=(),
                       curated_prov=(), preview_from_curated=False,
-                      release_dir=None):
+                      release_dir=None, manifold_href=None):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -1107,6 +1107,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     # catalogs table
     out.append("<h2>Catalogs</h2>")
+    if manifold_href:
+        out.append(manifold_link_html(manifold_href))
     if catalogs and not any(f["kind"] == "catalog_full" for f in catalogs):
         out.append("<p class=muted><b>Preliminary catalog release.</b> The field-wide "
                    "merged photometry table is still being built; only the per-filter "
@@ -2303,6 +2305,29 @@ PANNER_CARD = (
     "pointings that have imagery. Nothing to drive -- leave it running.")
 
 
+#: Per-field catalog manifold viewers (a WebGL density view of every star in
+#: color-magnitude space) are built outside this script and dropped into the
+#: site tree as ``<field>_manifold/``.  The 10678 Treasury one predates that
+#: naming.  Linked only when ``index.html`` is there, like the CMD explorer.
+MANIFOLD_DIR_OVERRIDES = {"gc-treasury": "treasury_manifold"}
+
+
+def manifold_href(out_dir, field):
+    """Relative link to ``field``'s manifold viewer, or None if not built."""
+    name = MANIFOLD_DIR_OVERRIDES.get(field, f"{field}_manifold")
+    if (Path(out_dir) / name / "index.html").is_file():
+        return f"{name}/"
+    return None
+
+
+def manifold_link_html(href):
+    return ("<p>&#x1F52D; <a class=btn href='" + html.escape(href) + "'>"
+            "Explore this catalog in the manifold viewer</a> "
+            "<span class=muted>Every star in the merged catalog, drawn as a "
+            "density map in color-magnitude space (WebGL; large download, "
+            "best on a desktop GPU).</span></p>")
+
+
 def _quicklook_cards(quicklooks):
     """Link cards for the analyses that sit alongside the release."""
     out = ["<h2>Quicklook analyses</h2>",
@@ -2591,6 +2616,10 @@ def main(argv=None):
                                      preview_version=preview_version,
                                      previews=preview_items,
                                      diagrams=diagram_items,
+                                     # only the CURRENT version's page: the
+                                     # viewer is built from the latest catalogs
+                                     manifold_href=(manifold_href(out_dir, field)
+                                                    if v == latest else None),
                                      # only the CURRENT version's page: the
                                      # offsets are re-measured continuously, so
                                      # a frozen older page must not carry
