@@ -240,10 +240,15 @@ the merged catalog is vetted by `_filter_extended_emission`. NIRCam keeps a
 source if it is **star-like**
 
 ```
-star_like = (qfit ≤ 0.2) OR (flags in keep_flags) OR (peakSB > 20 × local_bkg)
+star_like = (qfit ≤ 0.2) OR (flags in keep_flags)
+            OR (peakSB > 20 × local_bkg AND prominence ≥ 4) OR (prominence ≥ 7)
             OR bright_isolated
 bright_isolated = (snr ≥ 20) AND (qfit < 0.4) AND (group_size ≤ 1)
 ```
+
+(`prominence` is the data-i2d rise above the local annulus in annulus-MAD units;
+where it is not measured, with no data i2d or within 10 px of the i2d edge, the
+peak-SB test applies alone.)
 
 **and** it clears the local-S/N floor (`local_snr_min = 5`) — **or** it is
 qfit-confident (`qfit ≤ manual_ext_qfit_max`, 0.2), which is kept regardless of S/N
@@ -287,8 +292,8 @@ for a plain single-filter NIRCam field with no tuning flags.
 | **post-fit** | overshoot ratio / action | 1.2 / refit |
 | | negative-flux | banned |
 | **vetting** | qfit_max | 0.2 |
-| | peak-over-bkg | 20 (only where prominence is unmeasured) |
-| | star-prominence keep | 5.0 (or neighbour-robust prominence ≥ 8.0) |
+| | peak-over-bkg | 20 (and prominence ≥ 4.0 where measured) |
+| | star-prominence keep | 7.0 (neighbour-robust prominence branch off) |
 | | local-S/N min | 5.0 |
 | | bright-isolated keep (snr / qfit) | ≥20 / <0.4 |
 | | prominence gate | 0 (off; MIRI only) |
@@ -329,9 +334,10 @@ still run after m6.
 | `--manual-coarse-bg-box` (`coarse_bg_box`) | 0 | 0 (off) | 0 | **51** m12–m4, 0 m5–m6 |
 | `--manual-ext-qfit-max` | 0.2 | 0.2 | 0.2 | **0.4** |
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
-| `--manual-ext-star-prom-min` | 5.0 | 5.0 | 5.0 | 5.0 |
-| `--manual-ext-star-prom-robust-min` | −1.0 = **AUTO** | 8.0 | **0** (off) | 8.0 (0 on an extended-emission target) |
-| `--manual-ext-star-prom-robust-conc` | 0.6 | 0.6 | (robust branch off) | 0.6 |
+| `--manual-ext-star-prom-min` | 7.0 | 7.0 | 7.0 | 7.0 |
+| `--manual-ext-star-prom-peak-min` | 4.0 | 4.0 | 4.0 | 4.0 |
+| `--manual-ext-star-prom-robust-min` | 0.0 (off; −1 = AUTO) | 0 | 0 | 0 |
+| `--manual-ext-star-prom-robust-conc` | 0.6 | (robust branch off) | (robust branch off) | (robust branch off) |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
@@ -494,9 +500,10 @@ control is the default.
 | `--manual-overshoot-action` | refit | `flag` \| `drop` \| `refit` (forced photometry at seed) |
 | `--manual-iter2-local-snr` | 3.0 | local-S/N cut for residual-seeded passes |
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
-| `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg (where no data-i2d prominence is measured) |
-| `--manual-ext-star-prom-min` | 5.0 | …or data-i2d prominence ≥ this (replaces the peak-SB test; 0 restores it) |
-| `--manual-ext-star-prom-robust-min` | −1 (AUTO) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; AUTO = 8 on star-dominated fields, off on extended-emission targets; 0 = off |
+| `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg (with prominence ≥ `--manual-ext-star-prom-peak-min` where measured) |
+| `--manual-ext-star-prom-min` | 7.0 | …or data-i2d prominence ≥ this, whatever the peak-SB test says; 0 = off |
+| `--manual-ext-star-prom-peak-min` | 4.0 | the peak-SB keep also needs data-i2d prominence ≥ this where prominence is measured; 0 = off |
+| `--manual-ext-star-prom-robust-min` | 0 (off) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; −1 = AUTO (8 on star-dominated fields, off on extended-emission targets) |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |

@@ -43,8 +43,9 @@ MANUAL_DEFAULTS = {
     'manual_ext_qfit_max': 0.2,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
     'manual_ext_peak_over_bkg': 20.0,
-    'manual_ext_star_prom_min': 5.0,   # replaces the peakSB branch (>0)
-    'manual_ext_star_prom_robust_min': -1.0,  # OR neighbour-robust prominence; -1 = AUTO (8, off on ext-emission)
+    'manual_ext_star_prom_min': 7.0,   # keep on data-i2d prominence >= this (OR); 0 = off
+    'manual_ext_star_prom_peak_min': 4.0,  # peakSB branch also needs prominence >= this; 0 = off
+    'manual_ext_star_prom_robust_min': 0.0,  # OR neighbour-robust prominence; 0 = off, -1 = AUTO (8, off on ext-emission)
     'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
     'manual_ext_snr_high_keep': 20.0,

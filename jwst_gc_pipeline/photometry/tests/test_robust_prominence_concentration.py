@@ -110,6 +110,7 @@ def test_pipeline_defaults_without_data_i2d():
     out = _filter_extended_emission(
         cat, data_i2d_image=None, ww_i2d=None,
         star_prom_min=md['manual_ext_star_prom_min'],
+        star_prom_peak_min=md['manual_ext_star_prom_peak_min'],
         star_prom_robust_min=8.0,
         star_prom_robust_conc=md['manual_ext_star_prom_robust_conc'],
         label='test')

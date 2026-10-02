@@ -1421,6 +1421,7 @@ def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               star_prom_min=0.0,
+                              star_prom_peak_min=0.0,
                               star_prom_robust_min=0.0,
                               star_prom_robust_conc=0.0,
                               star_prom_robust_conc_snr=5.0,
@@ -1452,10 +1453,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         OR (flags in keep_flags)                  # central-saturation real star
         OR (peak_SB > peak_over_bkg * local_bkg)  # bright real star
     AND (local_snr >= local_snr_min where available)
-    With ``star_prom_min > 0`` the peak_SB branch becomes
-    ``prominence >= star_prom_min`` (OR, with ``star_prom_robust_min > 0``,
-    ``prominence_robust >= star_prom_robust_min``) wherever the data-i2d
-    prominence is measured (peak_SB stays the test where it is not).
+    With ``star_prom_peak_min > 0`` the peak_SB branch also needs
+    ``prominence >= star_prom_peak_min`` wherever the data-i2d prominence is
+    measured.  With ``star_prom_min > 0``, ``prominence >= star_prom_min``
+    (OR, with ``star_prom_robust_min > 0``,
+    ``prominence_robust >= star_prom_robust_min``) keeps a source on its own.
+    ``star_prom_peak_min >= star_prom_min`` reduces the branch to the
+    prominence test wherever prominence is measured.
     With ``star_prom_robust_conc > 0`` the robust branch also needs a
     PSF-concentrated core (see the block comment at the branch).
     AND (not model_overshoot, if that column exists and drop_overshoot).
@@ -1614,25 +1618,36 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # F187N labels (a Pa-alpha knot has no F182M/F210M counterpart) the branch
     # does not separate stars from emission: in W51 its admitted and rejected
     # S/N 5-17 qfit-failing sources have the same purity (0.45 vs 0.48).
-    # star_prom_min > 0 replaces it with the same-image prominence (rise above
-    # the local annulus, in annulus-MAD units), which does separate them
-    # (prominence >= 5: 0.67 vs 0.24 in W51, 0.89 vs 0.52 in Sgr B2).
+    # The same-image prominence (rise above the local annulus, in annulus-MAD
+    # units) does separate them (prominence >= 5: 0.67 vs 0.24 in W51, 0.89 vs
+    # 0.52 in Sgr B2).  On a full-field Brick F182M m6 replay, the rate at
+    # which an independent visit (F200W) confirms a kept source, relative to
+    # kept sources of the same flux, rises smoothly with prominence: 0.18 at
+    # 2-3, 0.27 at 3-4, 0.40 at 4-5, 0.68 at 6-7, 0.94 at 8.5-10, > 1.1 above
+    # 10.  So prominence enters twice:
+    #   star_prom_peak_min > 0: the peak_SB branch also needs prominence >=
+    #     this.  The peak_SB-kept sources below 4 are confirmed at 0.08-0.36 of
+    #     the rate of kept stars; those at 4-7 at 0.52 and above.
+    #   star_prom_min > 0: prominence >= this keeps a source on its own,
+    #     whatever the sign of local_bkg (Brick: the sources this adds at 7-10
+    #     are confirmed at 0.72 of the rate of kept stars, 1.07 at 10-20).
     # Sources without a measured prominence (no data_i2d, within 10 px of the
-    # i2d edge) keep the peak_SB test.
+    # i2d edge) keep the plain peak_SB test.
     # In a crowded field the annulus holds neighbours' PSF wings, which inflate
     # the annulus MAD: real faint stars in the superdense reference field (NSC,
     # F212N) read prominence 1.3-3.5 and were dropped.  star_prom_robust_min > 0
     # also admits prominence_robust (25th-percentile annulus floor, lower-half
-    # MAD) >= star_prom_robust_min.  On the F187N continuum labels
-    # (qfit > 0.2, S/N 5-20) prominence >= 5 OR prominence_robust >= 8 rejects
-    # sources of chance-corrected purity 0.21 (W51) and 0.26 (Sgr B2), against
-    # 0.24 and 0.53 for prominence >= 5 alone.  The prominence_robust 6-8 band
-    # has purity 0.30-0.37 in both fields (0.43 at 8-10 in Sgr B2), so a
-    # threshold of 6 admits more emission than stars there; it rescues ~6 more
-    # crowded faint stars per 124 in the superdense field.  The pipeline turns
-    # the robust branch off on extended-emission targets
-    # (_auto_star_prom_robust_min), where it admits points along filaments.
+    # MAD) >= star_prom_robust_min.  It is off by default: on the full-field
+    # Brick F182M replay the 21,540 sources it adds at robust >= 8 (with
+    # star_prom_min 5) are confirmed at 0.10 of the rate of kept stars, and on
+    # the F187N continuum labels the prominence_robust 6-10 band has purity
+    # 0.30-0.43.  On a narrow filament its floor reads the filament's dark
+    # sides (_auto_star_prom_robust_min, used for --manual-ext-star-prom-robust-min
+    # < 0, turns it off on extended-emission targets).
     _peak_branch = np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)
+    if star_prom_peak_min > 0:
+        _peak_branch = _peak_branch & ~(np.isfinite(prominence)
+                                        & (prominence < float(star_prom_peak_min)))
     if star_prom_min > 0:
         _has_prom = np.isfinite(prominence)
         _prom_ok = prominence >= float(star_prom_min)
@@ -1690,7 +1705,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                           f"{int(_cal.sum())} calibration source(s) < "
                           f"{int(conc_ref_min_n)}", flush=True)
             _prom_ok = _prom_ok | _rob_ok
-        _peak_branch = np.where(_has_prom, _prom_ok, _peak_branch)
+        _peak_branch = _peak_branch | (_has_prom & _prom_ok)
     star_like = (
         (qf <= qfit_max)
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
@@ -1975,7 +1990,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                    if (struct_x or struct_y) else "")
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
           f"(qfit<={qfit_max}, flags in {keep_flags}, "
-          f"{(f'prominence>={star_prom_min:g}' + (f' or robust>={star_prom_robust_min:g}' if star_prom_robust_min > 0 else '')) if star_prom_min > 0 else f'peakSB>{peak_over_bkg}x bkg'}, "
+          f"peakSB>{peak_over_bkg}x bkg"
+          f"{f' with prominence>={star_prom_peak_min:g}' if star_prom_peak_min > 0 else ''}"
+          f"{f', prominence>={star_prom_min:g}' if star_prom_min > 0 else ''}"
+          f"{f' or robust>={star_prom_robust_min:g}' if star_prom_min > 0 and star_prom_robust_min > 0 else ''}, "
           f"snr>={local_snr_min}{_struct_msg})",
           flush=True)
     return t[keep]
@@ -8340,6 +8358,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
                     star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
+                    star_prom_peak_min=float(mopt(opts_phase, 'manual_ext_star_prom_peak_min')),
                     star_prom_robust_min=_auto_star_prom_robust_min(
                         mopt(opts_phase, 'manual_ext_star_prom_robust_min'), opts_phase),
                     star_prom_robust_conc=float(mopt(opts_phase, 'manual_ext_star_prom_robust_conc')),
