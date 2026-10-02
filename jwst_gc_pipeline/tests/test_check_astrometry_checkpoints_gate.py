@@ -765,11 +765,13 @@ def test_a_correcting_record_alone_is_not_certified_as_a_pass(gate, tmp_path):
 
 def _region_map(status, n_measured=26, n_flagged=1, n_uncovered=0,
                 sigma=1.77, sigma_tol=2.0, max_frac=0.10,
-                worst_sig=22.98, worst_sig_cap=50.0):
+                worst_sig=22.98, worst_sig_cap=50.0,
+                n_low_coverage=0, grid_aligned=True):
     return dict(status=status, n_measured=n_measured, n_flagged=n_flagged,
                n_uncovered=n_uncovered, same_star_sigma_mas=sigma,
                sigma_tol_mas=sigma_tol, max_flagged_fraction=max_frac,
-               worst_sig_off_mas=worst_sig, worst_sig_off_cap_mas=worst_sig_cap)
+               worst_sig_off_mas=worst_sig, worst_sig_off_cap_mas=worst_sig_cap,
+               n_low_coverage=n_low_coverage, grid_aligned=grid_aligned)
 
 
 def _visit_with_region(visit, region_map):
@@ -862,6 +864,42 @@ def test_clean_and_not_applicable_region_maps_are_silent(gate, tmp_path,
     assert gate.main(['--field', 'fld']) == 0
     out = capsys.readouterr().out
     assert 'REGION MAP' not in out, out
+
+
+def test_a_clean_region_map_with_a_low_coverage_cell_does_not_refuse(
+        gate, tmp_path, capsys):
+    """PR #989 review, BLOCKING: a `clean` status with ``n_low_coverage`` > 0
+    is a grid-geometry NOTE, not a demotion.  Before this fix it fell into
+    `region_unverified` and the gate printed REFUSING TO STAGE naming a
+    demotion that never happened -- a clean tile with a thin chamfered corner
+    would block staging forever."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o993_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('clean', n_low_coverage=1))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o993_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'REGION MAP GEOMETRY NOTE' in out, out
+    assert 'REFUSING TO STAGE' not in out, out
+
+
+def test_a_clean_region_map_with_an_unaligned_grid_does_not_refuse(
+        gate, tmp_path, capsys):
+    """Same BLOCKING fix, the other trigger: a `clean` status whose grid could
+    not be footprint-aligned (``grid_aligned=False``) is also informational
+    only and must not refuse the field."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o992_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('clean', grid_aligned=False))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o992_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'REGION MAP GEOMETRY NOTE' in out, out
+    assert 'REFUSING TO STAGE' not in out, out
 
 
 def test_an_unrecognized_region_map_status_is_treated_as_unverified(

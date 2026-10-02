@@ -1,4 +1,4 @@
-"""Footprint-aligned region-map grid (issue #984).
+"""Footprint-aligned region-map grid (issue #989).
 
 gc-treasury o084 F212N's m2 checkpoint blocked on one region-map cell (ix=3,
 iy=1): 46 matched pairs against a tile median of 236, residual 57.3 mas.  That

@@ -509,7 +509,7 @@ than five independent checks would be.
   small global tie).
 
 **The region-map grid is FOOTPRINT-ALIGNED, not a fixed RA/Dec-axis grid
-(issue #984).** `local_residual_map`'s plain grid anchors at `min(ra),
+(issue #989).** `local_residual_map`'s plain grid anchors at `min(ra),
 min(dec)` of the matched stars and steps by a fixed `cell_arcsec` (45″ for
 `same_star_region_map`) — so unless a footprint's extent happens to be an
 exact multiple of the cell size, the last row/column is whatever remainder is
@@ -549,7 +549,7 @@ does not need re-deciding at each call site:
   (`align_to_footprint=False`, unchanged). Their cells are 2″, so a remainder
   sliver is a small fraction of one cell and has not been observed to
   misbehave the way the 45″ region map did; switching them was decided to be
-  out of scope for issue #984 and is left for a caller that measures a
+  out of scope for issue #989 and is left for a caller that measures a
   problem, rather than done pre-emptively.
 
 **Low coverage is RECORDED, never used to relax a gate ("checks with variable

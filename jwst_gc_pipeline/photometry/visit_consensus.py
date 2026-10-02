@@ -2081,7 +2081,7 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         tol_mas=(per_tile_same_star or {}).get("tol_mas"),
         tol_k=(per_tile_same_star or {}).get("tol_k"),
         tol_floor_mas=(per_tile_same_star or {}).get("tol_floor_mas"),
-        # issue #984: the full per-cell record (grid geometry, coverage_frac,
+        # issue #989: the full per-cell record (grid geometry, coverage_frac,
         # low_coverage) lives in `per_tile_same_star` below; these two are
         # pulled up so the release gate can flag a low-coverage tile without
         # re-walking that nested structure.

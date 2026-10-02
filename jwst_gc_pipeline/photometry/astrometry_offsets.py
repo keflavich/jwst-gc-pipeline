@@ -965,7 +965,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         The cut threshold (mas).  ``None`` (default, only meaningful when
         ``sigma_b_mas`` is given) uses ``DEFAULT_SIGMA_CAP_MAS``.
     align_to_footprint : bool
-        ``False`` (default, byte-identical to the pre-#984 grid): bin on the
+        ``False`` (default, byte-identical to the pre-#989 grid): bin on the
         plain RA/Dec-axis grid anchored at the matched pairs' own bounding
         box.  ``True``: bin on :func:`footprint_aligned_grid` fitted to ``a``
         (the FULL first-argument catalog, so the fit sees the mosaic's own
@@ -973,7 +973,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         the footprint's own angle with a cell size that divides its extent
         evenly, so the edge row/column is a full cell rather than whatever
         remainder is left over by a fixed step from an arbitrary origin (see
-        that function's docstring; issue #984, the gc-treasury o084 sliver-
+        that function's docstring; issue #989, the gc-treasury o084 sliver-
         column false seam).  Falls back to the plain grid, with
         ``footprint_grid['ok']=False`` and a ``reason``, when ``a`` has too
         few positions to fit a rotation (:data:`REGION_FOOTPRINT_ALIGN_MIN_POINTS`).
@@ -1032,7 +1032,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     gddec_deg = (global_result["ddec"] / 3.6e6)
 
     # Fit the footprint-aligned grid from the FULL first-argument catalog
-    # (issue #984) before any pairing -- it describes the mosaic's own
+    # (issue #989) before any pairing -- it describes the mosaic's own
     # boundary regardless of how many pairs end up matching, and an empty
     # map still reports whether/why the alignment did or did not apply.
     footprint_grid = (footprint_aligned_grid(a, cell_arcsec)
@@ -1093,7 +1093,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     ra_deg = a[ia_n].ra.deg
     dec_deg = a[ia_n].dec.deg
     if footprint_grid is not None and footprint_grid.get("ok"):
-        # Footprint-aligned grid (issue #984): rotated to the mosaic's own
+        # Footprint-aligned grid (issue #989): rotated to the mosaic's own
         # angle, cell size chosen to divide its extent evenly -- see
         # `footprint_aligned_grid`.  Cell sky centers come back from its
         # inverse, since (ix, iy) no longer correspond to a simple RA/Dec
@@ -1252,7 +1252,7 @@ REGION_TOL_K = 3.0
 REGION_TOL_FLOOR_MAS = 30.0
 
 #: Minimum distinct positions needed to fit a footprint-aligned grid (issue
-#: #984).  A convex hull built from a handful of points hallucinates whatever
+#: #989).  A convex hull built from a handful of points hallucinates whatever
 #: rotation minimizes ITS OWN tiny bounding box, not the mosaic's -- below this
 #: the aligned grid is refused (``footprint_aligned_grid`` returns
 #: ``ok=False``) and the caller falls back to the plain RA/Dec-axis grid.  20
@@ -1262,7 +1262,7 @@ REGION_TOL_FLOOR_MAS = 30.0
 REGION_FOOTPRINT_ALIGN_MIN_POINTS = 20
 
 #: A region cell whose matched-pair count falls below this fraction of the
-#: tile's own MEDIAN cell count is recorded as ``low_coverage`` (issue #984).
+#: tile's own MEDIAN cell count is recorded as ``low_coverage`` (issue #989).
 #: This is now purely INFORMATIONAL -- it does not relax the flag/tol/nsigma
 #: test for that cell, and a low-coverage cell that reads large still blocks
 #: exactly like any other.  It exists so a cell the footprint-aligned grid
@@ -1358,7 +1358,7 @@ def _min_area_rotation_deg(x, y, max_hull_points=20000, seed=1182):
 
 def footprint_aligned_grid(coords, cell_arcsec, min_points=REGION_FOOTPRINT_ALIGN_MIN_POINTS):
     """Rotated, EVENLY-DIVIDING region-map grid geometry for ``coords``' own
-    footprint (issue #984).
+    footprint (issue #989).
 
     ``local_residual_map``'s plain grid anchors on the matched pairs' RA/Dec
     bounding box and steps by a FIXED ``cell_arcsec`` -- so unless the
@@ -1371,7 +1371,7 @@ def footprint_aligned_grid(coords, cell_arcsec, min_points=REGION_FOOTPRINT_ALIG
     collects whatever stars the rotated footprint's corner puts inside it --
     46 matched pairs against a tile median of 236 -- and 46 heavy-tailed
     pairs read as a false 57 mas "seam" that blocked the tile's reference tie
-    (issue #984).
+    (issue #989).
 
     The fix bins in a frame ROTATED to the footprint's own minimum-bounding-
     rectangle angle (:func:`_min_area_rotation_deg`, straight from the star
@@ -1531,7 +1531,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     through to :func:`local_residual_map`; see its docstring for the cut/weight
     rule.  ``None`` (default) reproduces the pre-#965 behaviour exactly.
 
-    ``align_to_footprint`` (issue #984): ``True`` by default -- bin on
+    ``align_to_footprint`` (issue #989): ``True`` by default -- bin on
     :func:`footprint_aligned_grid` fitted to ``a`` instead of the plain
     RA/Dec-axis grid.  A NIRCam mosaic's extent is essentially never an exact
     multiple of ``cell_arcsec``, so the plain grid's edge row/column is
@@ -1545,7 +1545,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     left to collect a spurious sliver cell.  Falls back to the plain grid
     (with ``footprint_grid['ok']=False`` recorded) when ``a`` has too few
     positions to fit a rotation; pass ``False`` to force the plain grid (kept
-    for tests exercising the pre-#984 geometry directly).
+    for tests exercising the pre-#989 geometry directly).
     ``low_coverage_fraction`` : a region cell whose matched-pair count falls
     below this fraction of the tile's own MEDIAN cell count is recorded (per
     cell: ``low_coverage``, ``coverage_frac``; at top level:
@@ -1674,7 +1674,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         never passes.  When not ``measurable``, ``tol_mas``/``cell_resid_*``
         are ``nan``: there were too few cells to measure a spread from.
 
-        The ``grid_*`` fields (issue #984) describe the geometry
+        The ``grid_*`` fields (issue #989) describe the geometry
         ``align_to_footprint`` actually used: ``grid_aligned`` is False when it
         fell back to the plain axis-aligned grid (``grid_fallback_reason``
         names why -- e.g. too few points to fit a rotation), True when the PA
@@ -1721,7 +1721,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                 sigma_cap_mas=lrm.get("sigma_cap_mas"),
                 n_sigma_cut=int(lrm.get("n_sigma_cut", 0)),
                 n_sigma_unknown=int(lrm.get("n_sigma_unknown", 0)),
-                # Grid geometry actually used (issue #984) -- recorded even
+                # Grid geometry actually used (issue #989) -- recorded even
                 # when the fallback fired, so a checkpoint reader can tell
                 # "aligned and clean" from "fell back and clean" rather than
                 # assuming every record used the same binning.
@@ -1781,7 +1781,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         c["significant"] = bool(sem > 0 and off > nsigma * sem)
         c["flagged"] = bool(off > tol_used and c["significant"])
 
-    # --- low-coverage recording (issue #984) -- INFORMATIONAL ONLY ------------
+    # --- low-coverage recording (issue #989) -- INFORMATIONAL ONLY ------------
     # A cell whose matched-pair count `n` sits well below this tile's own
     # median is named here, but the flag/tol/nsigma test above is untouched --
     # a low-coverage cell that reads large still blocks exactly like any
@@ -1810,7 +1810,7 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     a_dec = np.asarray(a.dec.deg, dtype=float)
     if grid_aligned:
         # Reuse the SAME grid `local_residual_map` binned the pairs with --
-        # authoritative, and simpler than reconstructing it (issue #984).
+        # authoritative, and simpler than reconstructing it (issue #989).
         a_ix, a_iy = assign_footprint_cells(a_ra, a_dec, footprint_grid)
     else:
         # Rebuild local_residual_map's own PLAIN cell grid (it anchors on the
