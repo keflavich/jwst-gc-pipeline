@@ -3595,6 +3595,31 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             log.warning("pixel_to_world did not return SkyCoord; setting skycoord_fit to None")
             result['skycoord_fit'] = [None] * len(result)
 
+        # HALO-MODE FLUX (opt-in, record-only; #1013).  The LW halo changes
+        # per exposure by ~10% while the spikes do not, and the masked-core
+        # fit above takes its amplitude from that halo.  Refit the same
+        # pixels with free log-r rescalings of the model's smooth halo, so
+        # the amplitude comes from the spikes, and record the ratio of the
+        # two fits.  flux_fit itself is NOT changed.  SATSTAR_HALO_MODES=1.
+        # The fit radius defaults to the photutils box half-width (40.5 px at
+        # pad=81); SATSTAR_HALO_MODES_RMAX overrides it (the cutout's reach
+        # still limits it).  UNTESTED at the production box: the evidence
+        # (scripts/analysis/satstar_halo_modes) shows the dither-scatter gain
+        # only at r <= 200 px, none at r <= 100, and a core larger than
+        # ~rmax/1.3 leaves no halo range (ratio NaN).
+        if (int(os.environ.get('SATSTAR_HALO_MODES', 0)) and not _is_miri
+                and not forced_source and len(result)):
+            from ..photometry.satstar_halo_modes import satstar_halo_mode_ratios
+            _rmax = float(os.environ.get('SATSTAR_HALO_MODES_RMAX',
+                                         float(np.max(np.atleast_1d(_size_eff))) / 2.0))
+            _ratio = satstar_halo_mode_ratios(
+                cutout_fit, err_cutout_eff, mask, _psf_for_fit,
+                list(zip(np.asarray(result['x_fit'], float), np.asarray(result['y_fit'], float))),
+                r_core=_wingcal_rmask, rmax=_rmax)
+            result['halomodes_ratio'] = _ratio
+            result['flux_fit_halomodes'] = np.asarray(result['flux_fit'], dtype=float) * _ratio
+            print(f"  halo-mode flux ratio (rmax={_rmax:g}): {np.round(_ratio, 4).tolist()}", flush=True)
+
         # MIRI BOTTOM-UP ENVELOPE AMPLITUDE (2026-06-14).  The masked-core LSQ
         # (even on the 2D-bg-subtracted cutout) still OVER-fits some saturated
         # stars -- amplitude inflated by residual emission / wing structure ->

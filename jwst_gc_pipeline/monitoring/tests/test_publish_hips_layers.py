@@ -143,6 +143,8 @@ def test_every_published_layer_is_registered_explicitly():
         'jwst_gc_treasury_miri_residual_hips',
         'jwst_gc_treasury_f212n_residual_hips',
         'jwst_gc_treasury_f480m_residual_hips',
+        'gctreasury_mosaic_RGB_480-mean-212_hips',
+        'gctreasury_mosaic_RGB_480-mean-212_residual_hips',
         'jwst_nir_hips',
         'jwst_miri_hips',
     }

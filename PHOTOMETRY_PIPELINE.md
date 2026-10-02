@@ -188,6 +188,11 @@ practice 4 px), and
 for joint fitting of blends. Each phase runs one fit pass; reseeding happens
 between phases.
 
+The PSF model is STPSF by default.  The opt-in hybrid PSF (empirical core,
+STPSF wings; `jwst_gc_pipeline.photometry.epsf_hybrid`) is enabled with
+`git clone https://github.com/JWST-GC/epsfs && export PSF_EPSF_CORE_DIR=<checkout>`;
+its catalogs carry the `_hybpsf` filename token and `PSFMODEL`/`EPSFCORE`/`EPSFSHA`.
+
 Post-fit, in order: **overshoot QC** (rendered model peak vs local data peak; if
 `model_peak > 1.2 × data_peak` the free-position fit walked off the star →
 `--manual-overshoot-action=refit` re-solves flux-only at the pinned seed position
