@@ -103,7 +103,12 @@ def collect_pa_v3(basepath, bands, tol=0.5):
     for band in bands:
         files = sorted(glob.glob(os.path.join(
             basepath, str(band).upper(), 'pipeline', '*_cal.fits')))
-        for fn in _sample_files(files)[:_MAX_FILES_PER_BAND]:
+        sample = _sample_files(files)
+        if len(sample) > _MAX_FILES_PER_BAND:
+            print(f'spike_flag: {band}: reading PA_V3 from {_MAX_FILES_PER_BAND} of '
+                  f'{len(sample)} sampled cal files ({len(files)} on disk); later '
+                  f'observations may be missed', flush=True)
+        for fn in sample[:_MAX_FILES_PER_BAND]:
             try:
                 v = _read_pa_v3(fn)
             except (OSError, ValueError):
@@ -314,6 +319,12 @@ def flag_spike_artifacts(tbl, pa_v3, *, parent_mag=12.5, parent_min_real=2, max_
     dense fields come mostly from mosaic edges, nebular knots and red
     embedded sources, which are not spike artifacts.  ``pa_offset_deg``
     rotates the spike pattern (used for selectivity controls).
+
+    Selectivity of ``spike_wedge`` varies by field.  Against the same wedges
+    rotated by 15/30 deg, the on-spike count was 2-25x the rotated count in
+    wd2, cloudc, ngc6334 and brick o001, but 1.3-1.5x in the brick broad-band
+    m8_dedup (2,650 vs 1,818/1,980 rows) and 2-4x on 18-80 rows in arches.  In
+    those two fields treat ``spike_wedge`` as a soft flag, not a hard cut.
     """
     n = len(tbl)
     nreal, mmin = n_real_bands(tbl)

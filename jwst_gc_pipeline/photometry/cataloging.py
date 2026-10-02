@@ -4376,6 +4376,30 @@ def _resolve_crossband_ref_filter(options, filternames):
     return pick
 
 
+def _maybe_flag_m8_spikes(dedup_path, m8_path, options, label='m8'):
+    """Add the diffraction-spike flag columns to an m8_dedup file (#1035).
+
+    Skipped (returns False) when ``--no-m8-spike-flag`` is passed or
+    ``M8_SPIKE_FLAG=0`` is set.  A failure inside the flag code is logged and
+    returns False; the dedup file is rewritten atomically, so it is either
+    flagged or left as dedup wrote it.  Returns True when the columns were added.
+    """
+    if not getattr(options, 'm8_spike_flag', True):
+        return False
+    if os.environ.get('M8_SPIKE_FLAG', '1') == '0':
+        return False
+    from jwst_gc_pipeline.photometry.spike_flag import flag_m8_spike_artifacts
+    _bp = getattr(options, 'basepath', None)
+    if not _bp:
+        _bp = os.path.dirname(os.path.dirname(os.path.abspath(m8_path)))
+    try:
+        flag_m8_spike_artifacts(dedup_path, _bp)
+    except (OSError, KeyError, ValueError, IndexError, TypeError) as _sex:
+        print(f"manual [{label}]: m8 spike flag FAILED ({dedup_path}): {_sex}", flush=True)
+        return False
+    return True
+
+
 def _maybe_dedup_m8(m8_path, options, label='m8'):
     """De-duplicate a combined m8 catalog into a ``..._m8_dedup`` sibling.
 
@@ -4405,45 +4429,45 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         out = m8_path.replace('_m8.fits', '_m8_dedup.fits')
         if out == m8_path:
             out = m8_path.replace('.fits', '_dedup.fits')
+    _stage = 'dedup'
     try:
         from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
         dedup_merged_catalog(m8_path, out)
         print(f"manual [{label}]: m8 dedup -> {out}", flush=True)
-        # Catalog-level diffraction-spike flag (#1035): adds flag columns to
-        # the dedup file, never removes rows.  Best-effort.
-        if (getattr(options, 'm8_spike_flag', True)
-                and os.environ.get('M8_SPIKE_FLAG', '1') != '0'):
-            try:
-                from jwst_gc_pipeline.photometry.spike_flag import flag_m8_spike_artifacts
-                _bp = getattr(options, 'basepath', None)
-                if not _bp:
-                    _bp = os.path.dirname(os.path.dirname(os.path.abspath(m8_path)))
-                flag_m8_spike_artifacts(out, _bp)
-            except (OSError, KeyError, ValueError) as _sex:
-                print(f"manual [{label}]: m8 spike flag FAILED ({out}): {_sex}", flush=True)
-        # PROPOSAL-SCOPED COPY (brick only): the brick 'target' spans TWO proposals that
-        # share this generic filename -- jw01182 broadbands (field o004) and jw02221
-        # narrows (field o001) -- so their merges CLOBBER each other's m8/m8_dedup. Write
-        # an additive per-field copy so neither is lost. Primary output name is unchanged
-        # (readers unaffected); a combined all-band table is built by combine_brick_allband.py.
-        # Only brick collides (other targets have unique target dirs), so guard on it.
-        import shutil
-        _tgt = str(getattr(options, 'target', '') or '')
-        _fld = str(getattr(options, 'field', '') or '')
-        # Since #772 the primary name ALREADY carries the token, so copying
-        # again would produce `..._m8_o001_o001.fits`.  Only scope a name that
-        # is still unscoped.
-        if _tgt == 'brick' and _fld:
-            for _src in (m8_path, out):
-                if re.search(r'_o[0-9-]+\.fits$', _src):
-                    continue
-                _scoped = _src.replace('.fits', f'_o{_fld}.fits')
-                if _scoped != _src:
-                    shutil.copy(_src, _scoped)
-            print(f"manual [{label}]: proposal-scoped copies -> *_o{_fld}.fits (anti-clobber)", flush=True)
+        _stage = 'spike flag'
+        try:
+            # Catalog-level diffraction-spike flag (#1035): adds flag columns
+            # to the dedup file, never removes rows.  Best-effort.
+            _maybe_flag_m8_spikes(out, m8_path, options, label)
+        finally:
+            # Runs whether or not the flag step raised, so a flag failure
+            # cannot skip the brick anti-clobber copy.  The stage label is
+            # restored afterwards so a re-raised flag error is reported as one.
+            _flag_stage, _stage = _stage, 'proposal-scoped copy'
+            # PROPOSAL-SCOPED COPY (brick only): the brick 'target' spans TWO proposals that
+            # share this generic filename -- jw01182 broadbands (field o004) and jw02221
+            # narrows (field o001) -- so their merges CLOBBER each other's m8/m8_dedup. Write
+            # an additive per-field copy so neither is lost. Primary output name is unchanged
+            # (readers unaffected); a combined all-band table is built by combine_brick_allband.py.
+            # Only brick collides (other targets have unique target dirs), so guard on it.
+            import shutil
+            _tgt = str(getattr(options, 'target', '') or '')
+            _fld = str(getattr(options, 'field', '') or '')
+            # Since #772 the primary name ALREADY carries the token, so copying
+            # again would produce `..._m8_o001_o001.fits`.  Only scope a name that
+            # is still unscoped.
+            if _tgt == 'brick' and _fld:
+                for _src in (m8_path, out):
+                    if re.search(r'_o[0-9-]+\.fits$', _src):
+                        continue
+                    _scoped = _src.replace('.fits', f'_o{_fld}.fits')
+                    if _scoped != _src:
+                        shutil.copy(_src, _scoped)
+                print(f"manual [{label}]: proposal-scoped copies -> *_o{_fld}.fits (anti-clobber)", flush=True)
+            _stage = _flag_stage
         return out
     except Exception as _dex:
-        print(f"manual [{label}]: m8 dedup FAILED ({m8_path}): {_dex}", flush=True)
+        print(f"manual [{label}]: m8 {_stage} FAILED ({m8_path}): {_dex}", flush=True)
         import traceback
         traceback.print_exc()
         return None

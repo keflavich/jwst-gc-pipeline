@@ -418,7 +418,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   The dedup file also carries diffraction-spike flag columns `spike_wedge`,
   `single_band_crowd`, `spike_artifact` (bool) and `n_real_bands` (int), added by
   `photometry/spike_flag.py` (flags only, no rows removed; disable with
-  `--no-m8-spike-flag` or `M8_SPIKE_FLAG=0`).
+  `--no-m8-spike-flag` or `M8_SPIKE_FLAG=0`; `m8_merge_partials.py` adds the
+  same columns, `--no-spike-flag` there).  `spike_wedge` is close to random
+  placement in the brick broad-band catalog and in arches (see the
+  `flag_spike_artifacts` docstring), so use it as a soft flag in those fields.
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).

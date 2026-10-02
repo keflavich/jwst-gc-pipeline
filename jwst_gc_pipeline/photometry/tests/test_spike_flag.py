@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Table
@@ -213,3 +214,20 @@ def test_collect_pa_v3_multi_program(tmp_path):
     out = sf.collect_pa_v3(str(tmp_path), ['f212n'])
     assert np.allclose(out, [89.0, 91.0, 275.5])
     assert len(sf._cluster_pa([280.0, 280.1, 359.9, 0.1])) == 2
+
+
+@pytest.mark.parametrize('sep_arcsec', [30.0, 100.0])
+def test_crowd_needs_parent_within_its_length(sep_arcsec):
+    """A bright parent that exists but lies beyond its spike length L does not
+    license the crowd flag.  mag_min 7.5 gives L = 22 * 10**(-0.4*0.67*(7.5-7.7))
+    ~ 25", so 30" is inside the 40" search cap but outside L, and 100" is
+    outside both."""
+    c = SkyCoord(RA0 * u.deg, DEC0 * u.deg)
+    rng = np.random.default_rng(1)
+    clump = [(_offset(c, 0.5 * rng.random(), 360 * rng.random()), dict(f212n=19.0))
+             for _ in range(20)]
+    rows = clump + [(_offset(c, sep_arcsec, 90.0), dict(f115w=8.0, f200w=7.5))]
+    res = sf.flag_spike_artifacts(_table(rows), [])
+    assert not res['single_band_crowd'].any()
+    res0 = sf.flag_spike_artifacts(_table(rows), [], crowd_near_parent=False)
+    assert res0['single_band_crowd'][:20].all()
