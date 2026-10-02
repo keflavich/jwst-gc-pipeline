@@ -508,6 +508,71 @@ than five independent checks would be.
   then `local_residual_map` — which itself REFUSES to run without a verified
   small global tie).
 
+**The region-map grid is FOOTPRINT-ALIGNED, not a fixed RA/Dec-axis grid
+(issue #989).** `local_residual_map`'s plain grid anchors at `min(ra),
+min(dec)` of the matched stars and steps by a fixed `cell_arcsec` (45″ for
+`same_star_region_map`) — so unless a footprint's extent happens to be an
+exact multiple of the cell size, the last row/column is whatever remainder is
+left over, not a full cell. A NIRCam mosaic is a rotated rectangle (roll angle
+essentially never a multiple of 90°) whose RA/Dec-axis extent essentially
+never divides evenly: gc-treasury o084 F212N measures 145.3″ × 356.1″ against
+45″ cells (3.23 × 7.91 cells), so the last column is a ~10″ sliver. That sliver
+still collects whatever stars the rotated footprint's corner puts inside it —
+46 matched pairs against a tile median of 236 — and 46 heavy-tailed pairs read
+as a false 57 mas "seam" that blocked the tile's m2 reference tie. Every other
+low-count flagged cell across the fleet fell in the SAME edge column (`ix` at
+its max), which is the tell that this was a binning artifact, not a spatial
+one, before it was fixed here.
+
+`footprint_aligned_grid` (`astrometry_offsets.py`) fits the minimum-bounding-
+rectangle angle of the footprint (rotating calipers over its convex hull,
+`_min_area_rotation_deg`) directly from the star positions passed to it — no
+WCS of any kind, so this cannot run afoul of Rule #2 above — and sizes each
+axis so `round(extent / cell_arcsec)` cells divide that extent EVENLY, with
+`actual_cell_size = extent / n`. There is no remainder left to collect a
+sliver, at any rotation, including a footprint that turns out to already be
+axis-aligned (the fitted angle then comes out near a multiple of 90°, and the
+grid is the plain one up to the even-division rounding). It falls back to the
+plain grid — `footprint_grid.ok = False`, with a `reason` — when fewer than
+`REGION_FOOTPRINT_ALIGN_MIN_POINTS` (20) positions were given to fit a
+rotation from; this is recorded, never silent.
+
+`align_to_footprint` defaults differently per caller, decided once here so it
+does not need re-deciding at each call site:
+* `same_star_region_map` (the m2/m7 gate this fix targets): **`True`** by
+  default. Its 45″ cells are large enough that a remainder sliver is a
+  sizeable fraction of one cell's population, which is exactly the o084
+  failure mode.
+* `local_residual_map`'s other callers — `interframe_overlap.py`,
+  `stage_release.py`'s registration scan, `multiepoch_pm.py`,
+  `solve_filter_frame_offsets.py` — keep the plain grid
+  (`align_to_footprint=False`, unchanged). Their cells are 2″, so a remainder
+  sliver is a small fraction of one cell and has not been observed to
+  misbehave the way the 45″ region map did; switching them was decided to be
+  out of scope for issue #989 and is left for a caller that measures a
+  problem, rather than done pre-emptively.
+
+**Low coverage is RECORDED, never used to relax a gate ("checks with variable
+size cells are harmful").** Every cell in `per_tile_same_star["cells"]` carries
+`coverage_frac` (its matched-pair count over the tile's own MEDIAN cell count)
+and `low_coverage` (`coverage_frac < REGION_LOW_COVERAGE_FRACTION`, 0.3); the
+map's own `n_low_coverage`/`low_coverage_cells` summarize them, and
+`region_map.grid_aligned`/`region_map.n_low_coverage` are pulled up into the
+checkpoint's smaller `region_map` block for the release gate to read without
+walking the nested per-cell list. A low-coverage cell that still reads large
+keeps blocking exactly like any other cell — this label changes nothing about
+the RESIDUAL or COVERAGE tests above, it only names a cell that a human
+reviewing a still-blocking or still-passing tile should look at first. This
+should be rare once the grid is footprint-aligned (there is no sliver column
+left to be thin); when it still fires — a genuinely partial corner of an
+irregular footprint, or a fallback that never got a rotation fit — the record
+names it rather than passing it off as an ordinary cell.
+`check_astrometry_checkpoints.py`'s `_region_map_findings` surfaces it: a
+`clean` tile with `n_low_coverage > 0` or `grid_aligned = False` is still
+printed (as an informational, `verified=None` finding) rather than silently
+matching the "nothing to report" case, and a `recorded_nonblocking` /
+`blocking` finding's detail line names the count too.
+
 A correction is applied **only** when A is coherent AND the gross cross-check
 passes AND D is clean (`apply_ok`).  Anything else is recorded as
 *could-not-verify* — loud and audited.

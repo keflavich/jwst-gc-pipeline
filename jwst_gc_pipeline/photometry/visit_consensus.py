@@ -2080,7 +2080,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         worst_sig_off_cap_mas=REGION_SMALL_BULK_WORST_SIG_CAP_MAS,
         tol_mas=(per_tile_same_star or {}).get("tol_mas"),
         tol_k=(per_tile_same_star or {}).get("tol_k"),
-        tol_floor_mas=(per_tile_same_star or {}).get("tol_floor_mas"))
+        tol_floor_mas=(per_tile_same_star or {}).get("tol_floor_mas"),
+        # issue #989: the full per-cell record (grid geometry, coverage_frac,
+        # low_coverage) lives in `per_tile_same_star` below; these two are
+        # pulled up so the release gate can flag a low-coverage tile without
+        # re-walking that nested structure.
+        grid_aligned=(per_tile_same_star or {}).get("grid_aligned"),
+        n_low_coverage=(per_tile_same_star or {}).get("n_low_coverage"))
 
     apply_ok = bool(res_a is not None and res_a.get("ok")
                     and (per_tile_ok or per_tile_unmeasurable_exempt
