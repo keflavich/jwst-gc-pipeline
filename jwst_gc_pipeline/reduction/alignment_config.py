@@ -207,6 +207,21 @@ class FieldAlignment:
     #: on their own frames.  Their own table rows still SUM on top, as
     #: residuals.  ``TABLE_CONSENSUS`` only.
     inherit_bulk: Dict[str, InheritedBulk] = _dc_field(default_factory=dict)
+    #: When True, the m2 checkpoint ties every filter OTHER than
+    #: ``reference_filter`` to ``reference_filter``'s own JWST consensus
+    #: catalog (dense, already VIRAC2-framed) instead of to VIRAC2 directly.
+    #: ``reference_filter`` itself is unaffected -- it still ties straight to
+    #: VIRAC2, and its consensus catalog is what the other filters tie to.
+    #: This keeps every band on the SAME frame even when a band's own VIRAC2
+    #: tie is refused (a coherent VIRAC2 tie for one band and a refused one
+    #: for another leaves the two ~100-200 mas apart on a shared field, e.g.
+    #: gc-treasury o063: F212N refused, F480M applied its own VIRAC2 bulk,
+    #: bands 226 mas apart).  ``TABLE_CONSENSUS`` only.  See
+    #: ``astrometry_checkpoint.resolve_tie_reference`` for the resolution
+    #: logic and its staleness/ordering guard.  Off by default: every field
+    #: except gc-treasury (10678) keeps its pre-existing, independent
+    #: per-filter VIRAC2 tie unchanged.
+    tie_through_reference_filter: bool = False
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -360,6 +375,10 @@ ALIGNMENT_CONFIG = (
         proposal='10678', fields=None,
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F212N',
+        # OFF until most tiles' F212N m2 has settled (2026-10-02: 43 of 68
+        # had not, and each of those would stop at F480M m2 with
+        # ReferenceFilterNotSettledError).  Turning it on is a one-line PR.
+        tie_through_reference_filter=False,
         notes=('gc-treasury (GC Treasury, 139 planned observations over '
                '~1668 exposure-level MAST rows, none executed yet; #413).  '
                'Registered BEFORE any delivery: a field absent here reduces '
@@ -377,7 +396,16 @@ ALIGNMENT_CONFIG = (
                'for that list.  The table of per-exposure consensus '
                'coordinates, offsets/Offsets_JWST_Brick10678_consensus.csv, '
                'does not exist yet: the m2 checkpoint creates it and updates '
-               'it in place on the first reduce.'),
+               'it in place on the first reduce.  '
+               'tie_through_reference_filter (mechanism added 2026-09-27, '
+               'shipped OFF 2026-10-02 pending F212N settlement): F212N '
+               'and F480M each used to tie straight to VIRAC2 independently, '
+               'so a tile where one band\'s tie was refused (o063: F212N '
+               'refused, F480M applied its own VIRAC2 bulk of (-171,-147) '
+               'mas) left the two bands 226 mas apart on the same sky.  '
+               'F480M now ties to F212N\'s own JWST consensus catalog '
+               'instead of to VIRAC2, so the two bands stay on the same '
+               'frame whether or not F212N\'s VIRAC2 tie was itself applied.'),
         inherit_bulk={
             'mirimage': InheritedBulk(
                 donor_filters=('F212N',),

@@ -5675,7 +5675,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         AstrometryCorrectionRequiredError, AstrometryRegressionError,
         CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
-        run_visit_checkpoint, update_offsets_table)
+        resolve_tie_reference, run_visit_checkpoint, update_offsets_table)
     from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
     from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
         obs_token as _perframe_obs_token)
@@ -5803,6 +5803,22 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             proposal_id=getattr(options, 'proposal_id', None))
     refcat = refcat_cache['refcat']
 
+    # gc-treasury (10678) and any other field with
+    # `alignment_config.tie_through_reference_filter` ties every filter OTHER
+    # than its `reference_filter` (F212N) to the reference filter's OWN JWST
+    # consensus catalog instead of straight to VIRAC2 -- so a refused VIRAC2
+    # tie in one band cannot leave two bands of the same field apart on the
+    # sky (o063: F212N refused, F480M applied its own VIRAC2 bulk, 226 mas
+    # apart).  Resolved into a LOCAL variable, never written back into
+    # `refcat_cache`: that dict is shared with the m7 cross-filter checkpoint
+    # below, whose anchor tie must stay against the real VIRAC2 refcat.
+    # Raises `ReferenceFilterNotSettledError` (uncaught here, by design) when
+    # the field is opted in but the reference filter's own tie has not
+    # settled yet -- this must never fall back to VIRAC2 silently.
+    tie_refcat = resolve_tie_reference(
+        refcat, cut_bp, getattr(options, 'proposal_id', None),
+        getattr(options, 'field', None), filt, obs_token=_obs_token)
+
     # Saturated stars have no per-frame daophot row; their repeatable satstar
     # fits join the reference-tie consensus (#957).  At a frozen stage
     # run_visit_checkpoint uses them only when the m2 record did.
@@ -5820,7 +5836,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     warn_only = os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1'
     try:
         record = run_visit_checkpoint(
-            tables, merge_label, refcat=refcat, filtername=filt,
+            tables, merge_label, refcat=tie_refcat, filtername=filt,
             satstars_by_exposure=satstars,
             # JWST-resolved binaries/groups out of the dense reference (#957);
             # opt-in with ASTROM_REFERENCE_BLENDS=1 at m2.  A frozen stage

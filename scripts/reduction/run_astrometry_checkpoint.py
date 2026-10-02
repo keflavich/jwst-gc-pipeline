@@ -42,7 +42,7 @@ from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
-    run_crossfilter_checkpoint, run_visit_checkpoint,
+    resolve_tie_reference, run_crossfilter_checkpoint, run_visit_checkpoint,
     seed_offsets_table_from_consensus, update_offsets_table,
     _target_from_basepath,
 )
@@ -85,6 +85,15 @@ def main(argv=None):
                         "quarantines the others' good mosaics).  Padding does "
                         "not matter (3 == 003), but an obsid with no product "
                         "in the directory RAISES rather than tagging zero")
+    p.add_argument("--field", default=None,
+                   help="field token for alignment_config.resolve (visit mode "
+                        "only) -- needed to pick up a field-specific "
+                        "FieldAlignment entry (e.g. tie_through_reference_filter). "
+                        "Falls back to --obsid when omitted, which is "
+                        "equivalent for a proposal-wide entry (fields=None, "
+                        "e.g. gc-treasury/10678) but wrong for a "
+                        "per-observation one, so pass --field explicitly for "
+                        "those")
     p.add_argument("--offsets-table", default=None)
     p.add_argument("--apply", action="store_true",
                    help="apply implied corrections to --offsets-table "
@@ -205,12 +214,35 @@ def main(argv=None):
         print(f"satstar catalogs for {len(satstars)} of {len(tables)} "
               f"exposure(s)", flush=True)
 
+    obs_token = consensus_obs_token(args.proposal_id, args.obsid)
+    # gc-treasury (10678) and any other field with
+    # alignment_config.FieldAlignment.tie_through_reference_filter ties every
+    # filter OTHER than its reference_filter to that filter's own JWST
+    # consensus catalog instead of straight to VIRAC2 (see
+    # cataloging._run_astrometry_stage_checkpoint, which is the OTHER
+    # production caller of run_visit_checkpoint, and
+    # astrometry_checkpoint.resolve_tie_reference).  This CLI is a second
+    # production entry point into the same m2 tie measurement: run unrouted,
+    # it would tie an opted-in field's non-reference filter straight to
+    # VIRAC2 and, with --apply, write that bulk to the offsets table with no
+    # error (PR #988 review).  Route it through the same resolver cataloging
+    # uses, so the two call sites cannot disagree about which reference an
+    # opted-in filter ties to.  Never falls back to `refcat` silently when
+    # the field is opted in but its reference filter has not settled yet --
+    # raises ReferenceFilterNotSettledError here too, uncaught, exactly as in
+    # cataloging.py; this CLI run REFUSES rather than tying to VIRAC2
+    # unannounced.
+    tie_refcat = resolve_tie_reference(
+        refcat, args.basepath, args.proposal_id,
+        args.field if args.field is not None else args.obsid,
+        args.filtername, obs_token=obs_token, record_dir=args.record_dir)
+
     record = run_visit_checkpoint(
-        tables, args.stage, refcat=refcat, filtername=args.filtername,
+        tables, args.stage, refcat=tie_refcat, filtername=args.filtername,
         basepath=args.basepath, record_dir=args.record_dir, context="cli",
         satstars_by_exposure=satstars,
         exclude_reference_blends=args.exclude_reference_blends,
-        obs_token=consensus_obs_token(args.proposal_id, args.obsid))
+        obs_token=obs_token)
 
     corrections = record["corrections"]
     print(json.dumps(dict(passed=record["passed"],

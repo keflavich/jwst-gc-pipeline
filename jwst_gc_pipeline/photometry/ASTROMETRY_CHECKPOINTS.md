@@ -577,6 +577,93 @@ A correction is applied **only** when A is coherent AND the gross cross-check
 passes AND D is clean (`apply_ok`).  Anything else is recorded as
 *could-not-verify* — loud and audited.
 
+### Opt-in: check A's reference can be a filter's own JWST consensus, not VIRAC2
+
+`alignment_config.FieldAlignment.tie_through_reference_filter` (default
+`False`, set only on the 10678 entry) redirects check A's dense reference for
+every filter of a field OTHER than its `reference_filter`: instead of VIRAC2,
+A ties against the reference filter's own JWST consensus catalog.
+`astrometry_checkpoint.resolve_tie_reference` makes this substitution once,
+in `cataloging.py`, before `run_visit_checkpoint` is called; the frozen
+m3–m6 re-measure (`_survivor_baseline_tie`) reuses the same substituted
+reference automatically, because both stages thread the same `refcat`
+parameter. Nothing changes at m7: `run_crossfilter_checkpoint` already ties
+every non-anchor filter directly against the anchor's own merged catalog, not
+through `refcat`.
+
+Motivating failure (GC Treasury 10678, tile o063): F212N's own VIRAC2 tie was
+refused while F480M's independent VIRAC2 tie was applied, leaving the two
+bands 226 mas apart on the same sky. Tying F480M through F212N's consensus
+means the two bands agree with each other regardless of whether F212N's own
+VIRAC2 tie was itself applied.
+
+The substitution never falls back to VIRAC2 silently when the reference
+filter is not settled. `reference_filter_tie_settled` requires a latest m2
+record for the reference filter that names an on-disk consensus catalog,
+that passed (or carries a used `gate_override`), that applied no
+consensus-vs-reference correction of its own this pass, and whose consensus
+file is not older than the record by more than
+`REFERENCE_FILTER_STALENESS_SLACK_SEC` (300 s); anything short of that raises
+`ReferenceFilterNotSettledError` rather than tying to VIRAC2 unannounced.
+
+Provenance: the substituted reference carries `reference_kind=
+'jwst_consensus'` (`'virac2'` otherwise), `reference_filter`,
+`reference_path`, `reference_record_date`, `reference_record_passed`, all
+copied onto the visit's `reference_tie` record; a bulk correction tied this
+way appends `" (via <reference_filter> consensus)"` to its `source` string.
+Check E stays disabled for this path exactly as it already is for F480M/F770W
+against VIRAC2 (gated on the tied filter's own wavelength, not the
+reference's), and the substituted reference's `mag` is explicitly cleared so
+a future Ks-overlapping filter is never flux-matched against a JWST
+consensus catalog's own magnitudes.
+
+**Submission-order note.** `submit_cataloging_perframe.sh`'s split-finalize
+path submits one finalize job per filter, all held on the same fan-out and
+then released TOGETHER (`scontrol release`) — there is no dependency between
+one filter's finalize job and another's. On a field's FIRST pass (no prior
+`checkpoint_m2_F212N_latest.json` on disk yet), F480M's finalize job can run
+before, or concurrently with, F212N's, and will then raise
+`ReferenceFilterNotSettledError` rather than silently tying to VIRAC2. This
+is the intended fail-loud behavior, not a bug, but it means a 10678 field's
+first pass may need F212N's m2 checkpoint to complete and a resubmit of the
+filters that raised before every band settles. No submit-side ordering change
+is included in this change; the checkpoint's guard is what makes the race
+safe to leave alone rather than something the scheduler must be taught to
+avoid.
+
+Turning this flag on for an already-tied field is additive, not corrective:
+`--apply` only ever adds a new offsets-table row, so the first post-opt-in
+run writes an additional correction on top of any VIRAC2-tied bulk already in
+the table.
+
+**Frozen stages (m3-m6) re-resolve the substitution every time, with no
+pinning to the snapshot m2 used.** `resolve_tie_reference` is called fresh at
+every stage (`cataloging._run_astrometry_stage_checkpoint` runs it before
+every `run_visit_checkpoint` call, m2 through m6), never once and cached, so
+F480M's m3 call reads whatever F212N's *latest* `checkpoint_m2_F212N_*`
+record and consensus file are AT THAT TIME, not the ones its own m2 tied to.
+Two cases follow from that:
+
+* **F212N's m2 reruns and has not re-settled** (no new record yet, the new
+  record did not pass with no used override, or it just applied its own
+  consensus-vs-reference correction this pass) while F480M is at a frozen
+  stage: `reference_filter_tie_settled` says so, and F480M's frozen-stage
+  call **raises `ReferenceFilterNotSettledError`**, the same fail-loud
+  refusal as at m2. It does not fall back to comparing against a stale or
+  partial F212N state.
+* **F212N's m2 reruns and DOES re-settle, but rewrites its consensus
+  catalog** (a different exposure list, a few more mas of noise, a corrected
+  bulk that has now been baked in) in between F480M's m2 and F480M's m3-m6:
+  F480M's frozen-stage call gets the NEW consensus file, silently. There is
+  no check that this is the SAME consensus F480M's own m2 used. A
+  stage-stability "shift" measured on an opted-in field's non-reference
+  filter can therefore be the reference filter's consensus moving, not the
+  tied filter's own frame -- indistinguishable from a real regression by the
+  frozen-stage gate alone. Diagnosing one on a `tie_through_reference_filter`
+  field should start by comparing `reference_path` / `reference_record_date`
+  across the filter's own m2 record and the failing frozen stage's
+  `reference_tie` record before concluding the tied filter itself moved.
+
 ## Corrections & provenance
 
 * The offsets table is the ONLY authoring channel (see
