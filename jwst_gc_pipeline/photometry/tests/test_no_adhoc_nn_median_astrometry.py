@@ -97,6 +97,14 @@ ALLOWLIST = {
     ("jwst_gc_pipeline/photometry/merge_catalogs.py", "replace_saturated"),
     # sanctioned: masking extended emission, no astrometry in it
     ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
+    # PR #1018 evidence scripts, no astrometry.  compare.main: distance of each
+    # source to the nearest saturated star -> fraction of kept sources within
+    # 1" of one (np.mean of a boolean), plus means of a boolean data-i2d
+    # local-peak flag.  propresid.main: production-catalog membership (same
+    # position within 1 mas) and a self-match (nthneighbor=2) whose reduce is
+    # the close-pair fraction np.mean(d2 < 62.5 mas).
+    ("docs/evidence/faint_prominence_keep/scripts/compare.py", "main"),
+    ("docs/evidence/faint_prominence_keep/scripts/propresid.py", "main"),
     # No astrometry: `match_to_catalog_sky(nthneighbor=2)` measures a star's
     # nearest-neighbour SEPARATION, used to SELECT isolated reference stars for
     # the curve of growth; the medians are of FLUX-RATIO (enclosed-energy)

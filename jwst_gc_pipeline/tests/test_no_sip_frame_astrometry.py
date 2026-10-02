@@ -109,6 +109,11 @@ ALLOWLIST = {
     # frozen diagnostics/figures for a closed investigation
     "docs/pr57_recovery_investigation/make_caveat_figs.py",
     "docs/pr57_recovery_investigation/make_figs.py",
+    # PR #1018 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and for the _filter_extended_emission
+    # replay (vet_variant).
+    "docs/evidence/faint_prominence_keep/scripts/compare.py",
+    "docs/evidence/faint_prominence_keep/scripts/vet_variant.py",
     "scripts/satstar_deblend/batch_validate.py",
 }
 

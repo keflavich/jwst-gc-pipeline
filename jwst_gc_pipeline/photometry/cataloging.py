@@ -1372,8 +1372,60 @@ def _emission_keep_miri(prominence, min_prominence):
     return np.isfinite(prominence) & (prominence >= min_prominence)
 
 
+def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
+                        r_noise=(4.0, 10.0)):
+    """PSF-core flux above the local level, and its noise, at each position.
+
+    core  = sum(data, r <= r_core) - npix_core * median(data, r_ring[0] <= r <= r_ring[1])
+    sigma = s * sqrt(npix_core * (1 + npix_core / npix_ring)), with s the
+            lower-half MAD of the r_noise annulus (the prominence_robust
+            spread), so structure noise enters as well as pixel noise.
+
+    Positions within r_noise[1] px of the image edge, or with fewer than 10
+    finite annulus pixels, get NaN.  Returns (core, sigma).
+    """
+    n = len(xpix)
+    core = np.full(n, np.nan, dtype=float)
+    sigma = np.full(n, np.nan, dtype=float)
+    ny, nx = data.shape
+    h = int(np.ceil(r_noise[1]))
+    yo, xo = np.mgrid[-h:h + 1, -h:h + 1]
+    r0 = np.hypot(xo, yo)
+    noise_mask = (r0 >= r_noise[0]) & (r0 <= r_noise[1])
+    for i in range(n):
+        if not (np.isfinite(xpix[i]) and np.isfinite(ypix[i])):
+            continue
+        ix, iy = int(round(float(xpix[i]))), int(round(float(ypix[i])))
+        if not (h <= ix < nx - h and h <= iy < ny - h):
+            continue
+        st = data[iy - h:iy + h + 1, ix - h:ix + h + 1]
+        r = np.hypot(xo - (xpix[i] - ix), yo - (ypix[i] - iy))
+        cm = r <= r_core
+        rm = (r >= r_ring[0]) & (r <= r_ring[1])
+        ring = st[rm]
+        ring = ring[np.isfinite(ring)]
+        ann = st[noise_mask]
+        ann = ann[np.isfinite(ann)]
+        if ring.size < 5 or ann.size < 10 or not np.all(np.isfinite(st[cm])):
+            continue
+        low = ann[ann <= np.median(ann)]
+        spread = 1.4826 * np.median(np.abs(low - np.median(low)))
+        if not spread > 0:
+            continue
+        ncore = int(cm.sum())
+        core[i] = float(np.sum(st[cm])) - ncore * float(np.median(ring))
+        sigma[i] = spread * np.sqrt(ncore * (1.0 + ncore / ring.size))
+    return core, sigma
+
+
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
+                              star_prom_min=0.0,
+                              star_prom_peak_min=0.0,
+                              star_prom_robust_min=0.0,
+                              star_prom_robust_conc=0.0,
+                              star_prom_robust_conc_snr=5.0,
+                              conc_ref_min_n=5,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
@@ -1401,6 +1453,15 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         OR (flags in keep_flags)                  # central-saturation real star
         OR (peak_SB > peak_over_bkg * local_bkg)  # bright real star
     AND (local_snr >= local_snr_min where available)
+    With ``star_prom_peak_min > 0`` the peak_SB branch also needs
+    ``prominence >= star_prom_peak_min`` wherever the data-i2d prominence is
+    measured.  With ``star_prom_min > 0``, ``prominence >= star_prom_min``
+    (OR, with ``star_prom_robust_min > 0``,
+    ``prominence_robust >= star_prom_robust_min``) keeps a source on its own.
+    ``star_prom_peak_min >= star_prom_min`` reduces the branch to the
+    prominence test wherever prominence is measured.
+    With ``star_prom_robust_conc > 0`` the robust branch also needs a
+    PSF-concentrated core (see the block comment at the branch).
     AND (not model_overshoot, if that column exists and drop_overshoot).
 
     SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
@@ -1463,12 +1524,18 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     _recover_on = (_qrec > qfit_max) and (min_prominence <= 0)
     peaksb = np.full(n, np.nan, dtype=float)
     prominence = np.full(n, np.nan, dtype=float)
+    # neighbour-robust prominence (25th-pct floor, lower-half MAD) for the
+    # star keep; computed whatever MIRI_DAOPHOT_PROM_ROBUST selects for
+    # 'prominence'
+    prominence_robust = np.full(n, np.nan, dtype=float)
     # robust LOCAL EMISSION floor: 25th percentile of the same 4-10px annulus.
     # The low percentile resists stellar-wing / neighbour contamination (in a
     # dense clump the annulus median is pulled up by PSF wings, but the darkest
     # quartile still samples the true inter-star sky), so it measures the
     # DIFFUSE emission level at the source, not the crowding.
     ann_floor = np.full(n, np.nan, dtype=float)
+    # pixel positions on the data i2d; None when there is no data i2d
+    xx = yy = None
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
         from astropy.coordinates import SkyCoord
         sc = t['skycoord']
@@ -1513,12 +1580,19 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                         spread = 1.4826 * np.median(np.abs(annf - bg))
                     if np.isfinite(bg) and spread > 0:
                         prominence[i] = (core - bg) / spread
+                    _rbg = np.percentile(annf, 25)
+                    _low = annf[annf <= np.median(annf)]
+                    _rsp = (1.4826 * np.median(np.abs(_low - np.median(_low)))
+                            if _low.size > 5 else np.std(annf))
+                    if np.isfinite(_rbg) and _rsp > 0:
+                        prominence_robust[i] = (core - _rbg) / _rsp
 
     # Persist the data_i2d quality metrics on the catalog so every downstream
     # cut is reproducible.  'prominence' = (core peak - annulus median)/annulus
     # MAD on the data_i2d (rise above local emission; star-vs-emission); 'peak_sb'
     # = 3x3-box peak surface brightness.  NaN where no data_i2d / off the i2d.
     t['prominence'] = prominence
+    t['prominence_robust'] = prominence_robust
     t['peak_sb'] = peaksb
 
     # BRIGHT-ISOLATED keep (Mechanism 2): a real bright star whose qfit sits just
@@ -1537,10 +1611,107 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         & np.isfinite(qf) & (qf < qfit_high_keep_max)
         & (gsz <= 1)
     )
+    # BRIGHT-STAR branch.  peak_SB > peak_over_bkg * local_bkg needs
+    # local_bkg > 0, but local_bkg is fit on BACKGROUND-SUBTRACTED frames, so
+    # it scatters about zero and its sign decides the branch (W51 F187N m6:
+    # local_bkg > 0 for 61% of S/N 5-8 sources).  On continuum-confirmed
+    # F187N labels (a Pa-alpha knot has no F182M/F210M counterpart) the branch
+    # does not separate stars from emission: in W51 its admitted and rejected
+    # S/N 5-17 qfit-failing sources have the same purity (0.45 vs 0.48).
+    # The same-image prominence (rise above the local annulus, in annulus-MAD
+    # units) does separate them (prominence >= 5: 0.67 vs 0.24 in W51, 0.89 vs
+    # 0.52 in Sgr B2).  On a full-field Brick F182M m6 replay, the rate at
+    # which an independent visit (F200W) confirms a kept source, relative to
+    # kept sources of the same flux, rises smoothly with prominence: 0.18 at
+    # 2-3, 0.27 at 3-4, 0.40 at 4-5, 0.68 at 6-7, 0.94 at 8.5-10, > 1.1 above
+    # 10.  So prominence enters twice:
+    #   star_prom_peak_min > 0: the peak_SB branch also needs prominence >=
+    #     this.  On the Brick replay the peak_SB-kept sources a guard of 4
+    #     drops (16,809 of 377,837) are confirmed at 0.12 (prominence 1-2),
+    #     0.26 (2-3) and 0.36 (3-4) of the rate of kept stars of the same
+    #     flux; a guard of 5 would also drop the 4-5 band, confirmed at 0.52.
+    #   star_prom_min > 0: prominence >= this keeps a source on its own,
+    #     whatever the sign of local_bkg (Brick: the sources this adds at 7-10
+    #     are confirmed at 0.72 of the rate of kept stars, 1.07 at 10-20).
+    # Sources without a measured prominence (no data_i2d, within 10 px of the
+    # i2d edge) keep the plain peak_SB test.
+    # In a crowded field the annulus holds neighbours' PSF wings, which inflate
+    # the annulus MAD: real faint stars in the superdense reference field (NSC,
+    # F212N) read prominence 1.3-3.5 and were dropped.  star_prom_robust_min > 0
+    # also admits prominence_robust (25th-percentile annulus floor, lower-half
+    # MAD) >= star_prom_robust_min.  It is off by default: on the full-field
+    # Brick F182M replay the 21,540 sources it adds at robust >= 8 (with
+    # star_prom_min 5) are confirmed at 0.10 of the rate of kept stars, and on
+    # the F187N continuum labels the prominence_robust 6-10 band has purity
+    # 0.30-0.43.  On a narrow filament its floor reads the filament's dark
+    # sides (_auto_star_prom_robust_min, used for --manual-ext-star-prom-robust-min
+    # < 0, turns it off on extended-emission targets).
+    _peak_branch = np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)
+    if star_prom_peak_min > 0:
+        _peak_branch = _peak_branch & ~(np.isfinite(prominence)
+                                        & (prominence < float(star_prom_peak_min)))
+    if star_prom_min > 0:
+        _has_prom = np.isfinite(prominence)
+        _prom_ok = prominence >= float(star_prom_min)
+        if star_prom_robust_min > 0:
+            _rob_ok = prominence_robust >= float(star_prom_robust_min)
+            # CONCENTRATION guard on the robust branch.  Next to a bright star
+            # the 25th-percentile annulus floor reads the dark side of the
+            # star's wing, so a fit to a bump in the wing (PSF mismatch) reads
+            # a high robust prominence at a low plain prominence.  Such a fit
+            # takes flux from the neighbour's wing: its flux is not
+            # concentrated in the core like a PSF, and the residual core is
+            # over-subtracted.  Sgr B2 reference field (F187N, fix stack, no
+            # injections): of 48 sources with residual core matched-filter
+            # S/N < -7, 26 sit at prominence < 5 (robust median 13.5, F212N
+            # counterpart rate about half that of real stars at the same S/N).
+            # concentration = (core / flux) / median(core / flux of prominence
+            # >= 10, flags == 0 sources) [_core_concentration]; the branch
+            # refuses a source at concentration < star_prom_robust_conc whose
+            # core deficit (C_ref * flux - core) / sigma exceeds
+            # star_prom_robust_conc_snr.  At 0.6 / 5 on the reference fields
+            # (prominence < 5 sources): Sgr B2 refuses 14 of 26 over-subtracted
+            # sources and none of 7 injected stars or 120 well-subtracted
+            # sources; the superdense field (NSC) none of 13 injected stars;
+            # the dark field (Brick) 7 of 10 over-subtracted, none of 7
+            # injected.  Fewer than conc_ref_min_n calibration sources turns
+            # the guard off.
+            if (star_prom_robust_conc > 0 and xx is not None
+                    and 'flux' in t.colnames):
+                _flux = np.asarray(t['flux'], dtype=float)
+                _core, _csig = _core_concentration(
+                    data_i2d_image, np.asarray(xx, dtype=float),
+                    np.asarray(yy, dtype=float))
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    _conc = _core / _flux
+                _cal = (np.isfinite(_conc) & (_flux > 0)
+                        & np.isfinite(prominence) & (prominence >= 10)
+                        & ((flg == 0) | ~np.isfinite(flg)))
+                if int(_cal.sum()) >= int(conc_ref_min_n):
+                    _cref = float(np.median(_conc[_cal]))
+                    concentration = _conc / _cref
+                    t['core_concentration'] = concentration
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        _deficit = (_cref * _flux - _core) / _csig
+                    _diffuse = ((concentration < float(star_prom_robust_conc))
+                                & (_deficit > float(star_prom_robust_conc_snr)))
+                    _n_conc = int(np.sum(_has_prom & ~_prom_ok & _rob_ok & _diffuse))
+                    _rob_ok = _rob_ok & ~_diffuse
+                    print(f"[{label}] robust-prominence concentration guard: "
+                          f"C_ref {_cref:.3g} from {int(_cal.sum())} source(s); "
+                          f"refused {_n_conc} source(s) at core concentration < "
+                          f"{star_prom_robust_conc:g} x C_ref (deficit > "
+                          f"{star_prom_robust_conc_snr:g} sigma)", flush=True)
+                else:
+                    print(f"[{label}] robust-prominence concentration guard off: "
+                          f"{int(_cal.sum())} calibration source(s) < "
+                          f"{int(conc_ref_min_n)}", flush=True)
+            _prom_ok = _prom_ok | _rob_ok
+        _peak_branch = _peak_branch | (_has_prom & _prom_ok)
     star_like = (
         (qf <= qfit_max)
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
-        | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
+        | _peak_branch
         | bright_isolated
     )
     # RECOVER tier (opt-in: qfit_recover_max > qfit_max; NIRCam only).  A real
@@ -1820,7 +1991,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     _struct_msg = (f", struct-prune dropped {n_struct} @x={struct_x},y={struct_y}"
                    if (struct_x or struct_y) else "")
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
-          f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
+          f"(qfit<={qfit_max}, flags in {keep_flags}, "
+          f"peakSB>{peak_over_bkg}x bkg"
+          f"{f' with prominence>={star_prom_peak_min:g}' if star_prom_peak_min > 0 else ''}"
+          f"{f', prominence>={star_prom_min:g}' if star_prom_min > 0 else ''}"
+          f"{f' or robust>={star_prom_robust_min:g}' if star_prom_min > 0 and star_prom_robust_min > 0 else ''}, "
           f"snr>={local_snr_min}{_struct_msg})",
           flush=True)
     return t[keep]
@@ -1862,6 +2037,28 @@ def _is_extended_emission(options):
     if _opt is not None:
         return bool(_opt)
     return str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
+
+
+def _auto_star_prom_robust_min(value, options):
+    """Resolve ``--manual-ext-star-prom-robust-min``.
+
+    The pipeline default is 0 (the neighbour-robust branch off).  ``value < 0``
+    is AUTO (opt-in): 8 on star-dominated fields and 0 on an extended-emission
+    target (:func:`_is_extended_emission`); ``value >= 0`` is used verbatim.
+
+    The branch exists for crowding: neighbours' PSF wings raise the annulus MAD
+    and the 25th-percentile floor and lower-half MAD stay near the inter-star
+    sky.  On a narrow nebular filament the same statistics read the dark sides
+    of the filament, so every point along its ridge is prominent.  In the W51
+    reference field (F187N) the branch admitted three fits 2.6 px apart along a
+    filament that shows the same shape in F162M and F140M and has no F360M point
+    source, plus two compact nebular knots, all at prominence 3.3-4.8 and
+    prominence_robust 8.3-14.
+    """
+    value = float(value)
+    if value >= 0:
+        return value
+    return 0.0 if _is_extended_emission(options) else 8.0
 
 
 def _resolve_each_suffix(options, filtername):
@@ -8162,6 +8359,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
+                    star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
+                    star_prom_peak_min=float(mopt(opts_phase, 'manual_ext_star_prom_peak_min')),
+                    star_prom_robust_min=_auto_star_prom_robust_min(
+                        mopt(opts_phase, 'manual_ext_star_prom_robust_min'), opts_phase),
+                    star_prom_robust_conc=float(mopt(opts_phase, 'manual_ext_star_prom_robust_conc')),
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
