@@ -5,13 +5,20 @@ vetting accepted (a third of the m6 vetted catalog in Brick F182M); those
 faint stars leave the m7 model and reappear in the final residual.
 """
 import os
+import types
 
 import numpy as np
+import pytest
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 from astropy.table import Table
+from astropy.wcs import WCS
 
-from jwst_gc_pipeline.photometry.cataloging import _build_m7_band_seed
+from jwst_gc_pipeline.photometry.cataloging import (
+    _build_i2d_augmented_seed, _build_m7_band_seed, annotate_independent_detection,
+    crossband_seed_file, m7_band_seed_path)
+from jwst_gc_pipeline.photometry.naming import vetted_to_i2dseed
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
 RA0, DEC0 = 266.5, -28.8
@@ -72,11 +79,113 @@ def test_output_path_per_module_and_filter(tmp_path):
     assert os.path.exists(xpath)            # the shared seed is not rewritten
 
 
-def test_empty_own_catalog_returns_crossband_seed(tmp_path):
+def test_empty_own_catalog_still_writes_band_file(tmp_path):
+    """The band seed is never the shared cross-band seed itself: the m7 caller
+    adds the residual detections to it, and _build_i2d_augmented_seed writes
+    next to a ``_vetted`` input (over a suffix-less one)."""
     xpath, _ = _write(str(tmp_path))
+    before = Table.read(xpath)
     epath = os.path.join(str(tmp_path), 'empty.fits')
     Table({'skycoord': _sc([], []), 'flux': np.zeros(0)}).write(epath)
-    assert _build_m7_band_seed(xpath, epath, 'F182M', 'merged') == xpath
+    out = _build_m7_band_seed(xpath, epath, 'F182M', 'merged')
+    assert out != xpath
+    assert out == m7_band_seed_path(xpath, 'merged', 'F182M')
+    assert vetted_to_i2dseed(out) != out
+    t = Table.read(out)
+    assert list(np.asarray(t['seed_origin']).astype(str)) == ['crossband'] * 3
+    assert list(t['flux']) == [1.0, 1.0, 1.0]
+    after = Table.read(xpath)
+    assert after.colnames == before.colnames and len(after) == len(before)
+
+
+def test_i2d_augmented_seed_refuses_to_overwrite_its_input(tmp_path):
+    xpath, _ = _write(str(tmp_path))
+    with pytest.raises(ValueError, match='overwrite'):
+        _build_i2d_augmented_seed('unused_i2d.fits', xpath, 'F182M')
+
+
+def _write_i2d(path, stars, shape=(80, 80), sigma=0.9, noise=1.0, seed=0):
+    """SCI/ERR/WHT co-add at 0.063"/px with Gaussian stars ``(x, y, peak)``."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[:shape[0], :shape[1]]
+    sci = rng.normal(0.0, noise, shape)
+    for x, y, peak in stars:
+        sci += peak * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma ** 2))
+    w = WCS(naxis=2)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.crval = [RA0, DEC0]
+    w.wcs.crpix = [shape[1] / 2, shape[0] / 2]
+    w.wcs.cdelt = [-0.063 / 3600, 0.063 / 3600]
+    hdr = w.to_header()
+    fits.HDUList([fits.PrimaryHDU(),
+                  fits.ImageHDU(sci, hdr, name='SCI'),
+                  fits.ImageHDU(np.full(shape, noise), hdr, name='ERR'),
+                  fits.ImageHDU(np.ones(shape), hdr, name='WHT')]).writeto(path)
+    return w
+
+
+def test_i2d_augmented_seed_marks_residual_detections(tmp_path):
+    """Seed rows keep their origin; this round's residual detections are 'i2d',
+    each at least DEDUPMAS from every earlier seed."""
+    i2d = os.path.join(str(tmp_path), 'resid_i2d.fits')
+    w = _write_i2d(i2d, [(20, 20, 200.0), (55, 30, 150.0), (40, 60, 120.0)])
+    sky = w.pixel_to_world([20.0], [20.0])
+    prev = Table({'skycoord': sky, 'flux': [500.0], 'seed_origin': ['own_m6']})
+    ppath = os.path.join(str(tmp_path), 'band_seed_vetted.fits')
+    prev.write(ppath)
+    out = Table.read(_build_i2d_augmented_seed(i2d, ppath, 'F182M'))
+    origin = list(np.asarray(out['seed_origin']).astype(str))
+    assert origin == ['own_m6', 'i2d', 'i2d']
+    assert out['flux'][0] == 500.0
+    dedup = out.meta['DEDUPMAS']
+    assert 60 < dedup < 200
+    sc = out['skycoord']
+    assert sc[1:].separation(sc[0]).to_value(u.mas).min() > dedup
+
+    # a vetted catalog without seed_origin (m3..m6) reads as 'prev'
+    del prev['seed_origin']
+    prev.write(ppath, overwrite=True)
+    out = Table.read(_build_i2d_augmented_seed(i2d, ppath, 'F182M'))
+    assert list(np.asarray(out['seed_origin']).astype(str)) == ['prev', 'i2d', 'i2d']
+
+
+def _annot_opts(**kw):
+    o = types.SimpleNamespace(desaturated=False, bgsub=False, blur=False,
+                              proposal_id='4147', field='012', modules='merged')
+    for k, v in kw.items():
+        setattr(o, k, v)
+    return o
+
+
+def test_annotate_counts_m7_residual_detections(tmp_path):
+    """A source only the m7 residual daofind of one band found is an
+    independent detection in that band (review of #1015: it was flagged False
+    in the one band that detected it)."""
+    cut_bp = str(tmp_path)
+    os.makedirs(f'{cut_bp}/catalogs')
+    opts = _annot_opts()
+    # m6 vetted F182M: source A only
+    Table({'skycoord': _sc([0], [0]), 'flux': [100.0]}).write(
+        f'{cut_bp}/catalogs/f182m_merged_indivexp_merged_resbgsub_m6_dao_basic_vetted.fits')
+    # m7 F182M seed: A (own_m6), C (cross-band only), B (this band's residual)
+    xb = crossband_seed_file(cut_bp, opts)
+    seed = Table({'skycoord': _sc([0, 2000, 1000], [0, 0, 0]),
+                  'flux': [100.0, 1.0, 5.0],
+                  'seed_origin': ['own_m6', 'crossband', 'i2d']})
+    seed.meta['DEDUPMAS'] = 63.0
+    seed.write(vetted_to_i2dseed(m7_band_seed_path(xb, 'merged', 'F182M')))
+    # merged catalog: A; B whose fit moved 45 mas from its residual centroid
+    # (beyond the 30 mas m6 radius, inside DEDUPMAS); C
+    mp = f'{cut_bp}/catalogs/merged_test.fits'
+    Table({'skycoord_ref': _sc([5, 1045, 2000], [0, 0, 0])}).write(mp)
+
+    annotate_independent_detection(mp, cut_bp, ['F182M'], opts)
+    assert list(Table.read(mp)['independently_detected_f182m']) == [True, True, False]
+
+    # own-band seed off: a band seed left by an earlier run is not read
+    annotate_independent_detection(mp, cut_bp, ['F182M'],
+                                   _annot_opts(manual_m7_seed_own_band=False))
+    assert list(Table.read(mp)['independently_detected_f182m']) == [True, False, False]
 
 
 def test_pipeline_default_on():
