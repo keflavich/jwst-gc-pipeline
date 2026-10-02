@@ -107,3 +107,29 @@ def test_tile_percentile_interpolates():
 def test_pipeline_default_on():
     assert MANUAL_DEFAULTS['manual_sky_clean_local_arcsec'] == 3.0
     assert MANUAL_DEFAULTS['manual_sky_clean_local_max_err'] == 2.0
+
+
+def test_sky_clean_options_wired_to_their_own_kwargs():
+    # run_manual_pipeline passes each sky-clean threshold from its own CLI
+    # option.  The global and local thresholds share the default (2.0), so a
+    # swapped option name runs identically on every default-configured test;
+    # read the call site instead.
+    import ast
+    import inspect
+    from jwst_gc_pipeline.photometry import cataloging
+
+    tree = ast.parse(inspect.getsource(cataloging.run_manual_pipeline))
+    calls = [c for c in ast.walk(tree) if isinstance(c, ast.Call)
+             and getattr(c.func, 'id', None) == '_filter_extended_emission']
+    assert len(calls) == 1
+    wired = {}
+    for kw in calls[0].keywords:
+        if not (kw.arg or '').startswith('sky_clean_'):
+            continue
+        mopt = [c for c in ast.walk(kw.value) if isinstance(c, ast.Call)
+                and getattr(c.func, 'id', None) == 'mopt']
+        assert len(mopt) == 1, kw.arg
+        wired[kw.arg] = mopt[0].args[1].value
+    assert wired == {k: f'manual_{k}' for k in (
+        'sky_clean_keep', 'sky_clean_max_sky_snr', 'sky_clean_prom_min',
+        'sky_clean_snr_min', 'sky_clean_local_arcsec', 'sky_clean_local_max_err')}
