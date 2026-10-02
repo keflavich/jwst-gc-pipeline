@@ -93,7 +93,7 @@ def test_nan_rows_pass_through():
     ('f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits', 'perband'),
     ('f212n_nrca1_o040_indivexp_nrca1_m3_dao_basic.fits', 'perband'),
     ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o135.fits', 'crossband'),
-    ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o001_qualcuts_oksep2221.fits',
+    ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o001_qualcuts_oksep2221.fits',  # noqa: qualcuts-token
      'crossband'),
     ('f212n_merged_o135_indivexp_merged_m3_dao_basic_i2dseed.fits', 'excluded'),
     ('f212n_o135_consensus.fits', 'excluded'),
