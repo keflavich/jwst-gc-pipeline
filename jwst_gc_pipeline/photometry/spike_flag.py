@@ -229,12 +229,39 @@ def _wedge(ra, dec, x, y, cand, par, mmin, spike_pa, wmin_deg, w_phys, rmin, L0,
     return out
 
 
-def _crowd(x, y, nreal, dens_r1, dens_n1, dens_r2, dens_n2, contrast, ann):
+# Annulus probe points (arcsec offsets) and their area weights (~ ring radius),
+# used to estimate the fraction of the crowd annulus that the catalog covers.
+_ANN_RINGS = np.array([9.0, 12.0, 15.0, 18.0])
+_ANN_ANG = np.deg2rad(np.arange(0.0, 360.0, 15.0))
+
+
+def _annulus_coverage(xy_all, xy, ann, probe_r):
+    """Fraction of the annulus ``ann`` around each of ``xy`` that holds catalog
+    rows: probe points on rings inside the annulus count as covered when any
+    row of ``xy_all`` lies within ``probe_r`` arcsec."""
+    a_in, a_out = ann
+    rings = a_in + (_ANN_RINGS - 8.0) / 12.0 * (a_out - a_in)
+    off = np.array([(r * np.cos(a), r * np.sin(a)) for r in rings for a in _ANN_ANG])
+    wt = np.repeat(rings, len(_ANN_ANG))
+    wt = wt / wt.sum()
+    pts = (xy[:, None, :] + off[None]).reshape(-1, 2)
+    d, _ = cKDTree(xy_all).query(pts, k=1, distance_upper_bound=probe_r)
+    return (np.isfinite(d).reshape(len(xy), -1) * wt).sum(axis=1)
+
+
+def _crowd(x, y, nreal, dens_r1, dens_n1, dens_r2, dens_n2, contrast, ann,
+           ann_probe_r=1.5):
     """Single-band rows with a local excess of other single-band rows.
 
     The expected count within a radius is the n_real==1 surface density in the
     annulus ``ann`` (arcsec) times the circle area; a row is flagged when its
     count reaches both the absolute minimum and ``contrast`` times expected.
+
+    The annulus density is computed over the covered part of the annulus only
+    (``_annulus_coverage`` with ``ann_probe_r``; 0 uses the full annulus area).
+    Near a footprint edge or a chip gap the annulus runs off the catalog, and
+    dividing by its full area underestimates the density by up to ~2x.  On
+    cloudc, brick and arches that made the mosaic edges most of the flags.
     """
     one = nreal == 1
     crowd = np.zeros(len(x), bool)
@@ -248,10 +275,21 @@ def _crowd(x, y, nreal, dens_r1, dens_n1, dens_r2, dens_n2, contrast, ann):
     sigma = n_ann / (np.pi * (a_out ** 2 - a_in ** 2))
     c1 = t1.query_ball_point(xy, dens_r1, return_length=True) - one
     c2 = t1.query_ball_point(xy, dens_r2, return_length=True) - one
-    e1 = sigma * np.pi * dens_r1 ** 2
-    e2 = sigma * np.pi * dens_r2 ** 2
-    hit = ((c1 >= dens_n1) & (c1 >= contrast * e1)) | ((c2 >= dens_n2) & (c2 >= contrast * e2))
-    return one & hit
+
+    def _hit(sig, i=slice(None)):
+        e1 = sig * np.pi * dens_r1 ** 2
+        e2 = sig * np.pi * dens_r2 ** 2
+        return (((c1[i] >= dens_n1) & (c1[i] >= contrast * e1))
+                | ((c2[i] >= dens_n2) & (c2[i] >= contrast * e2)))
+
+    crowd = one & _hit(sigma)
+    if ann_probe_r and crowd.any():
+        # coverage <= 1 only raises the expected count, so only rows that pass
+        # with the full-area density need the coverage estimate
+        ci = np.where(crowd)[0]
+        fcov = np.maximum(_annulus_coverage(xy, xy[ci], ann, ann_probe_r), 0.05)
+        crowd[ci] = _hit(sigma[ci] / fcov, ci)
+    return crowd
 
 
 def flag_spike_artifacts(tbl, pa_v3, *, parent_mag=12.5, parent_min_real=2, max_real=2,
@@ -259,7 +297,7 @@ def flag_spike_artifacts(tbl, pa_v3, *, parent_mag=12.5, parent_min_real=2, max_
                          L0_arcsec=22.0, m0=7.7, alpha=0.67, Lcap_arcsec=40.0,
                          dens_r1=1.5, dens_n1=15, dens_r2=3.0, dens_n2=60,
                          adaptive=True, ratio=1.5, nsig=2.0, min_count=3, nseg=2,
-                         contrast=2.0, ann=(8.0, 20.0), crowd_near_parent=False,
+                         contrast=2.0, ann=(8.0, 20.0), ann_probe_r=1.5, crowd_near_parent=True,
                          pa_offset_deg=0.0, struts=False, verbose=True):
     """Flag likely diffraction-spike artifacts.
 
@@ -269,10 +307,13 @@ def flag_spike_artifacts(tbl, pa_v3, *, parent_mag=12.5, parent_min_real=2, max_
     ``adaptive`` makes the wedge test compare each parent's on-spike count with
     rotated control wedges (``ratio``, ``nsig``, ``min_count``; ``nseg`` radial
     segments per parent) and makes the crowd test a contrast against the local
-    n_real==1 density in the annulus ``ann`` (``contrast``).  With
-    ``crowd_near_parent`` the crowd flag additionally needs a bright parent
-    within its length L.  ``pa_offset_deg`` rotates the spike pattern (used for
-    selectivity controls).
+    n_real==1 density in the covered part of the annulus ``ann``
+    (``contrast``; coverage probed at ``ann_probe_r`` arcsec, 0 disables).
+    With ``crowd_near_parent`` (default) the crowd flag also needs a bright
+    parent within its length L.  Away from bright stars, single-band clumps in
+    dense fields come mostly from mosaic edges, nebular knots and red
+    embedded sources, which are not spike artifacts.  ``pa_offset_deg``
+    rotates the spike pattern (used for selectivity controls).
     """
     n = len(tbl)
     nreal, mmin = n_real_bands(tbl)
@@ -293,7 +334,8 @@ def flag_spike_artifacts(tbl, pa_v3, *, parent_mag=12.5, parent_min_real=2, max_
                        Lcap_arcsec, adaptive=adaptive, ratio=ratio, nsig=nsig,
                        min_count=min_count, nseg=nseg)
     if adaptive:
-        crowd = _crowd(x, y, nreal, dens_r1, dens_n1, dens_r2, dens_n2, contrast, ann)
+        crowd = _crowd(x, y, nreal, dens_r1, dens_n1, dens_r2, dens_n2, contrast, ann,
+                       ann_probe_r=ann_probe_r)
     else:
         one = nreal == 1
         crowd = np.zeros(n, bool)

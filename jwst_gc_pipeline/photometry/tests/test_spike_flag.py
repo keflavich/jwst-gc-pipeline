@@ -90,9 +90,10 @@ def test_density_flag():
     rows = [(_offset(c, 0.5 * rng.random(), 360 * rng.random()), dict(f212n=19.0))
             for _ in range(20)]
     rows.append((_offset(c, 100.0, 0.0), dict(f212n=19.0)))
+    rows.append((_offset(c, 3.0, 90.0), dict(f115w=8.0, f200w=7.5)))   # bright parent
     res = sf.flag_spike_artifacts(_table(rows), [])
     assert res['single_band_crowd'][:20].all()
-    assert not res['single_band_crowd'][20]
+    assert not res['single_band_crowd'][20:].any()
     assert not res['spike_wedge'].any()
     assert (res['spike_artifact'] == res['single_band_crowd']).all()
 
@@ -160,13 +161,45 @@ def test_crowd_contrast():
     clump = [(_offset(c, 0.4 * rng.random() + 0.0, 360 * rng.random()), dict(f212n=19.0))
              for _ in range(40)]
     shifted = [(_offset(r[0], 30.0, 0.0), r[1]) for r in clump]  # clump away from centre
+    shifted.append((_offset(c, 33.0, 0.0), dict(f115w=8.0, f200w=7.5)))  # bright parent
     res = sf.flag_spike_artifacts(_table(rows + shifted), [])
     nb = len(rows)
-    assert res['single_band_crowd'][nb:].mean() > 0.9
+    assert res['single_band_crowd'][nb:-1].mean() > 0.9
     assert res['single_band_crowd'][:nb].mean() < 0.02
     # absolute-count version flags the whole dense field core far more
     res0 = sf.flag_spike_artifacts(_table(rows + shifted), [], adaptive=False)
     assert res0['single_band_crowd'][:nb].sum() >= res['single_band_crowd'][:nb].sum()
+
+
+def test_crowd_needs_bright_parent():
+    c = SkyCoord(RA0 * u.deg, DEC0 * u.deg)
+    rng = np.random.default_rng(1)
+    clump = [(_offset(c, 0.5 * rng.random(), 360 * rng.random()), dict(f212n=19.0))
+             for _ in range(20)]
+    res = sf.flag_spike_artifacts(_table(clump), [])
+    assert not res['single_band_crowd'].any()
+    res0 = sf.flag_spike_artifacts(_table(clump), [], crowd_near_parent=False)
+    assert res0['single_band_crowd'].all()
+
+
+def test_crowd_ignores_footprint_edge():
+    """A dense uniform single-band field ending at a straight edge: next to the
+    edge the 8-20" annulus is about half off the catalog.  Dividing by the full
+    annulus area halves the expected density there and flags the edge strip;
+    the covered-area density does not."""
+    rng = np.random.default_rng(6)
+    c = SkyCoord(RA0 * u.deg, DEC0 * u.deg)
+    nrow = 18000
+    xs = 60.0 * rng.random(nrow)                     # x in [0, 60]: edge at x=0
+    ys = 100.0 * rng.random(nrow) - 50.0
+    r = np.hypot(xs, ys); pa = np.degrees(np.arctan2(xs, ys))
+    rows = [(_offset(c, ri, pai), dict(f212n=19.0)) for ri, pai in zip(r, pa)]
+    rows.append((c, dict(f115w=8.0, f200w=7.5)))     # bright parent on the edge
+    kw = dict(crowd_near_parent=False)
+    raw = sf.flag_spike_artifacts(_table(rows), [], ann_probe_r=0.0, **kw)
+    cov = sf.flag_spike_artifacts(_table(rows), [], **kw)
+    assert raw['single_band_crowd'].sum() > 20
+    assert cov['single_band_crowd'].sum() <= 0.1 * raw['single_band_crowd'].sum()
 
 
 def test_collect_pa_v3_multi_program(tmp_path):
