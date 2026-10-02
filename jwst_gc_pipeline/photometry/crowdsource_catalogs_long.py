@@ -4375,7 +4375,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-qfit-snr-prom-min", dest="manual_ext_qfit_snr_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_snr_prom_min'],
                     help="The qfit noise term applies only where the data-i2d "
-                         "prominence is >= this (default 3; unmeasured prominence "
+                         "prominence is >= this (default 7; unmeasured prominence "
                          "-> flat cut).  0 = no guard.")
     parser.add_option("--manual-ext-prom-min", dest="manual_ext_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_prom_min'],

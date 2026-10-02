@@ -249,8 +249,12 @@ The `5/snr` term (`manual_ext_qfit_snr_k`) is the pixel-noise part of qfit: a
 perfect PSF fit has qfit = Σ|resid|/flux ≈ 3.4/snr, so the flat 0.2 alone
 rejects every real star fainter than S/N ≈ 17. `--manual-ext-qfit-snr-k=0`
 restores the flat cut. The term applies only where the data-i2d prominence
-is ≥ 3 (`manual_ext_qfit_snr_prom_min`), since an emission knot fits badly
-too; a source without a measured prominence gets the flat cut.
+is ≥ 7 (`manual_ext_qfit_snr_prom_min`), since an emission knot fits badly
+too; a source without a measured prominence gets the flat cut.  In a
+full-field Brick F182M replay the sources the term admits at prominence 3–5
+match the independent-visit F200W catalog at 0.23 of the rate of kept stars
+of the same flux, 0.55 at 5–7 and 0.87 at 7–10
+(`docs/evidence/faint_qfit_snr/README.md`).
 
 **and** it clears the local-S/N floor (`local_snr_min = 5`) — **or** it is
 qfit-confident (`qfit ≤ manual_ext_qfit_max`, 0.2), which is kept regardless of S/N
@@ -335,7 +339,7 @@ still run after m6.
 | `--manual-coarse-bg-box` (`coarse_bg_box`) | 0 | 0 (off) | 0 | **51** m12–m4, 0 m5–m6 |
 | `--manual-ext-qfit-max` | 0.2 | 0.2 | 0.2 | **0.4** |
 | `--manual-ext-qfit-snr-k` | 5.0 | 5.0 | 5.0 | (unused: MIRI vets on prominence) |
-| `--manual-ext-qfit-snr-prom-min` | 3.0 | 3.0 | 3.0 | (unused) |
+| `--manual-ext-qfit-snr-prom-min` | 7.0 | 7.0 | 7.0 | (unused) |
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
@@ -500,7 +504,7 @@ control is the default.
 | `--manual-iter2-local-snr` | 3.0 | local-S/N cut for residual-seeded passes |
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
 | `--manual-ext-qfit-snr-k` | 5.0 | …widened by the pixel-noise term: qfit ≤ sqrt(qfit_max² + (k/S/N)²); 0 = flat cut |
-| `--manual-ext-qfit-snr-prom-min` | 3.0 | …where the data-i2d prominence is ≥ this (unmeasured → flat cut); 0 = no guard |
+| `--manual-ext-qfit-snr-prom-min` | 7.0 | …where the data-i2d prominence is ≥ this (unmeasured → flat cut); 0 = no guard |
 | `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |

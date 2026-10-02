@@ -107,10 +107,11 @@ def test_prominence_guard_drops_knot_keeps_star():
     assert kept == {0, 1, 2}          # unguarded: the knot passes too
     prom = np.asarray(t['prominence'])
     assert prom[0] > 10 and prom[1] < 3 and not np.isfinite(prom[2])
-    kept, _ = _guard_run(3.0)
-    assert kept == {0}                # knot low prominence; edge unmeasured -> flat cut
+    for guard in (3.0, 7.0):
+        kept, _ = _guard_run(guard)
+        assert kept == {0}            # knot low prominence; edge unmeasured -> flat cut
 
 
 def test_pipeline_default_on():
     assert MANUAL_DEFAULTS['manual_ext_qfit_snr_k'] == 5.0
-    assert MANUAL_DEFAULTS['manual_ext_qfit_snr_prom_min'] == 3.0
+    assert MANUAL_DEFAULTS['manual_ext_qfit_snr_prom_min'] == 7.0

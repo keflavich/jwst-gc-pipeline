@@ -51,8 +51,12 @@ MANUAL_DEFAULTS = {
     'manual_ext_qfit_snr_k': 5.0,
     # ...and only where the data-i2d prominence is >= this (an emission knot
     # also fits badly; on continuum-confirmed F187N labels the noise term
-    # admits knots at low prominence).  0 = no guard.
-    'manual_ext_qfit_snr_prom_min': 3.0,
+    # admits knots at low prominence).  Full-field m6 replay, Brick F182M,
+    # sources the term adds vs the independent-visit F200W catalog
+    # (chance-corrected match rate relative to kept stars of the same flux):
+    # 0.23 at prominence 3-5, 0.55 at 5-7, 0.87 at 7-10, >1.2 above 10;
+    # k matters less (0.98-1.05 for k 3-5 at prominence >= 7).  0 = no guard.
+    'manual_ext_qfit_snr_prom_min': 7.0,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_local_snr_min': 5.0,
