@@ -44,7 +44,7 @@ MANUAL_DEFAULTS = {
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
     # exemption from that floor for tight, bright fits (0 = off)
     'manual_ext_prom_exempt_qfit': 0.2,
-    'manual_ext_prom_exempt_snr': 30.0,
+    'manual_ext_prom_exempt_snr': 40.0,
     'manual_ext_prom_exempt_prom_min': 2.0,
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_star_prom_min': 7.0,   # keep on data-i2d prominence >= this (OR); 0 = off

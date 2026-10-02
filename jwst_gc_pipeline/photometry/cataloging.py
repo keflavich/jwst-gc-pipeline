@@ -1440,7 +1440,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm_maxpos_mas=0.0,
                               ext_prom_min=0.0,
                               ext_prom_exempt_qfit=0.0,
-                              ext_prom_exempt_snr=30.0,
+                              ext_prom_exempt_snr=40.0,
                               ext_prom_exempt_prom_min=2.0,
                               sky_clean_keep=True,
                               sky_clean_max_sky_snr=2.0,
@@ -1574,6 +1574,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     ann_floor = np.full(n, np.nan, dtype=float)
     # pixel positions on the data i2d; None when there is no data i2d
     xx = yy = None
+    # the brightest pixel of the 7x7 box on the data_i2d lies within 1 px of
+    # the fitted position (read by the prominence-floor exemption below)
+    local_peak = np.zeros(n, dtype=bool)
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
         from astropy.coordinates import SkyCoord
         sc = t['skycoord']
@@ -1600,6 +1603,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             if _H <= ix < nx - _H and _H <= iy < ny - _H:
                 st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
                 core = np.nanmax(st[_cm])
+                _box7 = st[_H - 3:_H + 4, _H - 3:_H + 4]
+                if np.isfinite(core):
+                    local_peak[i] = core >= np.nanmax(_box7)
                 ann = st[_am]
                 annf = ann[np.isfinite(ann)]
                 if annf.size >= 10:
@@ -1994,18 +2000,32 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # OFF by default (ext_prom_min<=0); the driver auto-enables it (=3.0) only for
     # extended-emission NIRCam fields, so star-dominated fields are byte-identical.
     #
-    # Exemption (ext_prom_exempt_qfit > 0): a source that is BOTH a tight PSF
-    # fit (qfit <= ext_prom_exempt_qfit) AND bright (merged S/N >=
-    # ext_prom_exempt_snr) passes at the lower prominence ext_prom_exempt_prom_min.
+    # Exemption (ext_prom_exempt_qfit > 0): a source that is a tight PSF fit
+    # (qfit <= ext_prom_exempt_qfit), bright (merged S/N >= ext_prom_exempt_snr)
+    # AND on a local peak of the data_i2d (the brightest pixel of the 7x7 box
+    # within 1 px of the fitted position) passes at the lower prominence
+    # ext_prom_exempt_prom_min.
     # On a nebular field the 4-10 px annulus MAD is set by emission structure,
     # so a real bright star reads prominence 2-3: W51 F187N injected stars at
     # S/N_true 52 and 76 (qfit 0.17, 0.09) sat at prominence 2.55 / 2.71 and
-    # were deleted.  Chance-corrected continuum-match purity of qfit <= 0.2,
-    # prominence 2-3 sources (W51 m6): F187N vs F210M ~1.0 at S/N_prop >= 30
-    # (n=33); F480M vs F410M, the band the floor was tuned on, 0.94-1.00 at
-    # S/N_prop >= 30 (n=583) but 0.38-0.51 at S/N_prop 20-30 (n=40), hence
-    # the S/N 30 requirement.  The emission bumps this gate targets sit at
-    # prominence ~0.9, below the exempt floor.
+    # were deleted.  Chance-corrected purity of qfit <= 0.2, prominence 2-3
+    # sources (full m6 catalogs; label = continuum counterpart within 60 mas;
+    # matched/n), without -> with the local-peak requirement:
+    #                     S/N_prop 30-40          40-60                    >= 60
+    #   W51 F187N/F210M   1.11 (4/4)   -> same    1.00 (9/10)   -> same    1.01 (20/22) -> 1.01 (19/21)
+    #   W51 F480M/F410M   0.96 (44/50) -> 1.07    0.96 (116/132)-> 1.07    0.98 (354/397)-> 1.01 (340/368)
+    #   Wd2 F187N/F182M   0.0  (0/2)   -> none    0.0  (0/2)    -> none    0.81 (5/8)   -> 1.03 (4/5)
+    #   Wd2 F405N/F410M   0.46 (2/6)   -> 0.92    1.19 (18/21)  -> 1.31    1.22 (23/26) -> 1.32 (20/21)
+    #   Sgr B2 F187N      0.16 (6/22)  -> none    0.09 (5/30)   -> 1/1     0.53 (7/13)  -> none
+    #   Sgr B2 F480M      0.57 (41/73) -> 0.69    0.71 (147/215)-> 0.90    0.94 (2674/2975) -> 1.00
+    # (Sgr B2 is not an extended-emission target; it tests the exemption on
+    # dense nebular emission.)  Without the peak requirement the purity below
+    # S/N 60 depends on the field.  The Sgr B2 F187N exempt-region sources sit
+    # off any data peak (bright-star halos and spikes), yet half of them match
+    # an F182M source within 60 mas.  With it, every field is >= 0.90 at
+    # S/N_prop >= 40; Sgr B2 F480M 30-40 is 0.69 (8/12), hence S/N 40.  The
+    # emission bumps the floor targets sit at prominence ~0.9, below the
+    # exempt floor.
     if ext_prom_min > 0 and min_prominence <= 0:
         _prom_keep = np.isfinite(prominence) & (prominence >= float(ext_prom_min))
         _n_exempt = 0
@@ -2015,14 +2035,16 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                            & (prominence >= float(ext_prom_exempt_prom_min))
                            & np.isfinite(qf) & (qf <= float(ext_prom_exempt_qfit))
                            & np.isfinite(snr_floor)
-                           & (snr_floor >= float(ext_prom_exempt_snr)))
+                           & (snr_floor >= float(ext_prom_exempt_snr))
+                           & local_peak)
             _n_exempt = int(np.sum(keep & _exempt & ~_prom_keep))
             _prom_keep = _prom_keep | _exempt
         _n_prom = int(np.sum(keep & ~_prom_keep))
         keep = keep & _prom_keep
         _exempt_msg = (f"; {_n_exempt} kept at prominence >= "
                        f"{ext_prom_exempt_prom_min:g} with qfit <= "
-                       f"{ext_prom_exempt_qfit:g} and S/N >= {ext_prom_exempt_snr:g}"
+                       f"{ext_prom_exempt_qfit:g}, S/N >= {ext_prom_exempt_snr:g} "
+                       f"and a local data_i2d peak"
                        if ext_prom_exempt_qfit > 0 else "")
         print(f"[{label}] extended-emission prominence gate: dropped {_n_prom} "
               f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)"

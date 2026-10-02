@@ -4385,7 +4385,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-prom-exempt-snr", dest="manual_ext_prom_exempt_snr",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_snr'],
                     help="Merged S/N (flux/flux_err_prop) required by the prominence-floor "
-                         "exemption (default 30).")
+                         "exemption (default 40).")
     parser.add_option("--manual-ext-prom-exempt-prom-min", dest="manual_ext_prom_exempt_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_prom_min'],
                     help="Lower prominence floor that applies to exempt sources (default 2.0).")
