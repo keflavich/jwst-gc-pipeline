@@ -120,6 +120,14 @@ ALLOWLIST = {
     "docs/evidence/faint_snr_floor_propagated/scripts/compare.py",
     "docs/evidence/faint_snr_floor_propagated/scripts/replay_vetting.py",
     "docs/evidence/faint_snr_floor_propagated/scripts/vet_variant.py",
+    # PR #1021 evidence scripts: merged *_i2d mosaics (rectified, no SIP) --
+    # the data_i2d for prominence (build_pl) and local-peak flags
+    # (anal_exempt_bins, peak_check), and data / m6 residual i2d cutouts
+    # (exempt_gallery).
+    "docs/evidence/faint_prom_floor_bright/scripts/anal_exempt_bins.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/build_pl.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/exempt_gallery.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/peak_check.py",
     "scripts/satstar_deblend/batch_validate.py",
 }
 
