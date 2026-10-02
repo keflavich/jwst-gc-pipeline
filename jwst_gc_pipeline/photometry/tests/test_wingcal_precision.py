@@ -241,10 +241,13 @@ def test_per_frame_small_bucket_with_tight_scatter_is_gated(monkeypatch):
     assert out['wingcal_ratio'][0] == pytest.approx(1.05)
 
 
-def test_per_frame_skips_a_near_zero_bucket(monkeypatch):
+def test_per_frame_skips_a_near_zero_bucket(monkeypatch, capsys):
     cal = {3: (1.05, 20, 0.05), 10: (0.01, 30, 0.01)}
     out = _apply(monkeypatch, cal, [10.0])
     assert out['wingcal_ratio'][0] == pytest.approx(1.05)
+    log = capsys.readouterr().out
+    assert 'below the minimum ratio' in log and 'r=10px' in log
+    assert 'above the SE gate' not in log
 
 
 def test_per_frame_with_no_passing_bucket_is_left_to_the_pool(monkeypatch):

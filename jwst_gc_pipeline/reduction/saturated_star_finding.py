@@ -17,7 +17,7 @@ from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
 from jwst_gc_pipeline.photometry.wingcal import (
     bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
-    passes_se_gate as wingcal_passes_se_gate,
+    MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
     relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from stpsf.utils import to_griddedpsfmodel
 
@@ -4881,12 +4881,14 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
     se = wingcal_bucket_se(mads, ns, ratio=vs,
                            rel_floor=wingcal_rel_floor(rs, vs, mads, ns))
     use = wingcal_passes_se_gate(se, ratio=vs)
-    if not use.all():
-        print("wing-selfcal: bucket(s) above the SE gate "
-              f"({wingcal_max_se():g}) not applied: " + "; ".join(
-                  f"r={r}px ratio={v:.3f} se={s:.3f}"
-                  for r, v, s in zip(rs[~use], vs[~use], se[~use])),
-              flush=True)
+    low = ~use & ~(vs >= WINGCAL_MIN_RATIO)
+    for sel, why in ((~use & ~low, f"above the SE gate ({wingcal_max_se():g})"),
+                     (low, f"below the minimum ratio ({WINGCAL_MIN_RATIO:g})")):
+        if sel.any():
+            print(f"wing-selfcal: bucket(s) {why} not applied: " + "; ".join(
+                      f"r={r}px ratio={v:.3f} se={s:.3f}"
+                      for r, v, s in zip(rs[sel], vs[sel], se[sel])),
+                  flush=True)
     if not use.any():
         print("wing-selfcal: no bucket passes the SE gate; per-frame "
               "application skipped", flush=True)

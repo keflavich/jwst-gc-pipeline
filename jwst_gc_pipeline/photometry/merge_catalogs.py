@@ -65,7 +65,8 @@ from jwst_gc_pipeline.photometry.satstar_phase_selection import (
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.wingcal import (
-    interp_wingcal_ratio, passes_se_gate as wingcal_passes_se_gate,
+    MIN_RATIO as WINGCAL_MIN_RATIO, interp_wingcal_ratio,
+    passes_se_gate as wingcal_passes_se_gate,
     pool_bucket as wingcal_pool_bucket,
     relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from jwst_gc_pipeline.photometry.residual_background import (
@@ -3160,10 +3161,15 @@ def apply_pooled_wingcal(satstar_cat, filtername,
     if 'ratio_se' in pooled.colnames:
         use = wingcal_passes_se_gate(np.asarray(pooled['ratio_se'], float),
                                      ratio=vs)
-        if not use.all():
-            print(f"apply_pooled_wingcal: {filtername}: {int((~use).sum())} "
-                  f"bucket(s) above the SE gate ({wingcal_max_se():g}) not "
-                  f"applied: r={rs[~use].astype(int).tolist()}")
+        low = ~use & ~(vs >= WINGCAL_MIN_RATIO)
+        for sel, why in ((~use & ~low,
+                          f"above the SE gate ({wingcal_max_se():g})"),
+                         (low, "below the minimum ratio "
+                               f"({WINGCAL_MIN_RATIO:g})")):
+            if sel.any():
+                print(f"apply_pooled_wingcal: {filtername}: {int(sel.sum())} "
+                      f"bucket(s) {why} not applied: "
+                      f"r={rs[sel].astype(int).tolist()}")
         rs, vs = rs[use], vs[use]
     else:
         print(f"apply_pooled_wingcal: {filtername}: table has no ratio_se; "
