@@ -128,8 +128,9 @@ faint star left in the current m7 residual and removed by the m6 fit.  The
 red-labelled sources include one beside a bright star (row 2 right), one on
 a diffraction spike (row 5 right) and faint isolated peaks (rows 4 and 6,
 right).  `scripts/` holds the replay (`vet_variant.py`), the comparison
-(`compare.py`), the realness slices (`slices.py`) and this gallery
-(`added_gallery.py`).
+(`compare.py`), the realness slices (`slices.py`) and the gallery script
+(`added_gallery.py`); this figure came from an earlier version of it with 2″
+stamps and the production m7 residual column.
 
 ![](added_sgrb2_snr.png)
 
@@ -199,28 +200,42 @@ row for row (the `snrp2pf` control above).
 ![](added_brick_snrp2.png)
 
 Random sources this branch adds over #1018 v2 in Brick F182M, four per bin
-of distance to the nearest saturated star (2″ stamps).  Per source: F182M
+of distance to the nearest saturated star (1″ stamps).  Per source: F182M
 data with the #1018 v2 catalog (cyan dots); the m6 residual with only the
 #1018 v2 sources subtracted (current); the same with the added sources also
 subtracted, each as catalog flux × the effective PSF (proposed); the F200W
-image of the independent visit.  Green labels have an F200W counterpart
-within 60 mas: 6 of the 12 drawn here.  In ten stamps the compact peak at
-the tick is removed in the proposed residual; in the left column, rows 1
-and 2, a fainter peak remains.  Several red-labelled sources (left column,
-rows 5 and 6; right column, rows 1, 5 and 6) have an F200W peak a few
-pixels from the tick, outside the 60 mas match radius.  Right column, row 3
-sits on the edge of emission that F200W also shows.
+image of the independent visit.  Both residuals share one stretch whose
+floor sits half the data range below the data floor, so the background reads
+grey and an over-subtracted core reads white.  Green labels have an F200W
+counterpart within 60 mas: 5 of the 12 drawn here (4–15 mas).  For the seven
+red-labelled sources the nearest F200W catalog source is 128–318 mas away.
+In five of them the F200W image shows a peak at or near the tick that the
+vetted F200W catalog does not list within 60 mas (left column, rows 5 and 6;
+right column, rows 1, 5 and 6); a star missing from the reference catalog
+counts as unmatched.  In ten stamps the
+compact peak at the tick is removed in the proposed residual; in the left
+column, rows 1 and 2, a fainter peak remains.  No stamp shows an
+over-subtracted core at the tick.  The Brick effective PSF is poorly
+calibrated (scale 0.37 on 13 held-out isolated stars, rms mismatch 54%; see
+the figure title), so the depth of each Brick subtraction is approximate.
+Right column, row 3 sits on the edge of emission that F200W also shows.
 
 ![](added_sgrb2_snrp2.png)
 
-The same for Sgr B2 F187N with the same-visit F182M image as reference: 8
-of the 12 drawn have a counterpart.  The compact peak at the tick is removed
-in the left column, rows 2–6.  In the right column, rows 5 and 6, the
-residual peak is broader than the PSF and is only partly removed.  Right
-column, row 1 is 0.3″ from a saturated star, inside its masked core.  Left
-column, rows 3 and 5, are red-labelled with a compact F182M source at the
-tick: the reference is the vetted F182M catalog, and a star missing from it
-counts as unmatched.
+The same for Sgr B2 F187N with the same-visit F182M image as reference.  The
+effective PSF reproduces the Sgr B2 model to 7% (scale 1.03).  8 of the 12
+drawn have a counterpart (2–19 mas); for the other four the nearest F182M
+catalog source is 99–360 mas away.  The compact peak at the tick is removed
+in the left column, rows 2 and 4–6, and in the right column, rows 2 and 3;
+in the left column, row 3, and the right column, row 4, a fainter peak
+remains.  In the right column, rows 5 and 6, the residual peak is broader
+than the PSF and is only partly removed.  Right column, row 1 is 0.3″ from a
+saturated star, inside its masked core.  No stamp shows an over-subtracted
+core at the tick.  Left column, row 3, is red-labelled with a compact F182M
+source at the tick and no F182M catalog source within 360 mas: the reference
+is the vetted F182M catalog, and a star missing from it counts as unmatched.
+`data/gallery_stamps_snrp2.txt` lists each drawn source with its
+separation from the nearest reference source (printed by `added_gallery.py`).
 
 **Reproducing.**  From `scripts/`, with the #1015 base (`seed`) and #1018
 v2 (`prom2`) replays already in `out/`

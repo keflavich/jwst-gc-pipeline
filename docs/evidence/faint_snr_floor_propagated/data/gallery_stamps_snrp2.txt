@@ -1,0 +1,27 @@
+# added_gallery.py stamp log: nearest reference-catalog source per drawn stamp
+## brick F182M, snrp2@prom2 (reference F200W 1182/o004)
+row 1 left: rowid 63815 sat 0.77" nearest reference 15 mas, S/N 3.1/5, qfit 1.75, prom 8.3
+row 1 right: rowid 293364 sat 0.65" nearest reference 318 mas, S/N 3.9/7, qfit 0.96, prom 5.4
+row 2 left: rowid 60650 sat 0.83" nearest reference 4 mas, S/N 3.1/12, qfit 1.35, prom 5.7
+row 2 right: rowid 407334 sat 0.94" nearest reference 5 mas, S/N 4.9/18, qfit 0.74, prom 6.4
+row 3 left: rowid 102222 sat 1.69" nearest reference 9 mas, S/N 4.4/17, qfit 0.91, prom 7.1
+row 3 right: rowid 27675 sat 1.80" nearest reference 279 mas, S/N 4.1/18, qfit 1.02, prom 4.2
+row 4 left: rowid 279244 sat 1.15" nearest reference 128 mas, S/N 2.3/10, qfit 2.42, prom 4.6
+row 4 right: rowid 216325 sat 1.99" nearest reference 5 mas, S/N 3.9/17, qfit 0.93, prom 7.6
+row 5 left: rowid 296929 sat 2.30" nearest reference 181 mas, S/N 2.5/9, qfit 1.47, prom 5.7
+row 5 right: rowid 402520 sat 2.14" nearest reference 132 mas, S/N 2.3/9, qfit 1.57, prom 4.5
+row 6 left: rowid 103040 sat 2.28" nearest reference 192 mas, S/N 2.3/10, qfit 1.93, prom 5.4
+row 6 right: rowid 477881 sat 2.33" nearest reference 271 mas, S/N 2.8/12, qfit 1.42, prom 5.8
+## sgrb2 F187N, snrp2@prom2 (reference F182M same visit)
+row 1 left: rowid 51690 sat 0.55" nearest reference 5 mas, S/N 4.5/6, qfit 1.70, prom 7.4
+row 1 right: rowid 200694 sat 0.32" nearest reference 154 mas, S/N 3.5/9, qfit 0.37, prom 9.8
+row 2 left: rowid 49614 sat 0.76" nearest reference 6 mas, S/N 3.1/6, qfit 1.66, prom 7.6
+row 2 right: rowid 304305 sat 0.96" nearest reference 8 mas, S/N 3.2/14, qfit 1.28, prom 4.0
+row 3 left: rowid 49044 sat 1.93" nearest reference 360 mas, S/N 4.3/14, qfit 0.91, prom 8.0
+row 3 right: rowid 8758 sat 1.96" nearest reference 12 mas, S/N 4.5/16, qfit 0.96, prom 4.3
+row 4 left: rowid 171845 sat 1.49" nearest reference 2 mas, S/N 4.9/26, qfit 0.76, prom 7.8
+row 4 right: rowid 138716 sat 1.22" nearest reference 348 mas, S/N 1.8/5, qfit 4.25, prom 5.2
+row 5 left: rowid 400706 sat 9.66" nearest reference 99 mas, S/N 4.3/17, qfit 1.01, prom 6.0
+row 5 right: rowid 530862 sat 5.10" nearest reference 19 mas, S/N 2.5/13, qfit 1.68, prom 9.7
+row 6 left: rowid 132497 sat 2.11" nearest reference 2 mas, S/N 4.4/20, qfit 0.86, prom 6.2
+row 6 right: rowid 594902 sat 21.15" nearest reference 9 mas, S/N 4.5/13, qfit 1.00, prom 16.3
