@@ -553,6 +553,21 @@ retained only as an explicit opt-out (`--legacy-iterations`). For the
 science-method narrative (publication style, no code), see
 [`PIPELINE_METHODS.md`](PIPELINE_METHODS.md).
 
+**2026-10, bright-star vetting branch (#1018).**  The `peakSB > 20 ×
+local_bkg` keep of the extended-emission vetting now also needs data-i2d
+prominence ≥ 4 (`--manual-ext-star-prom-peak-min`), and prominence ≥ 7 keeps
+a source on its own (`--manual-ext-star-prom-min`).  On the full-field m6
+replays the kept count changes by −3.0% in the Brick F182M (377,837 →
+366,605: +5,577, −16,809), −3.2% in Sgr B2 F187N (408,591 → 395,473) and
++3.4% in W51 F187N (20,041 → 20,720).  Against the independent F200W visit
+the Brick sources dropped match at 0.28 of the rate of kept stars of the
+same flux (about 4,700 real-star equivalents) and the sources added at 0.81
+(about 4,500); 10,114 of the 16,809 dropped Brick sources lie within 1″ of
+a saturated star.
+Catalogs re-made with this code lose those faint wing fits; see
+`docs/evidence/faint_prominence_keep/`.  `--manual-ext-star-prom-peak-min=0
+--manual-ext-star-prom-min=0` restores the previous keep.
+
 ## Why this replaced `IterativePSFPhotometry`
 
 photutils `IterativePSFPhotometry` (free position + LevMar + internal

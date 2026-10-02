@@ -21,6 +21,16 @@ annulus MAD):
    concentration guard stay available as options; their evidence is in the
    last section.
 
+**Release note.**  This changes the shipped catalogs of every NIRCam field.
+On the full-field m6 replays below the kept count changes by −3.0% in the
+Brick F182M, −3.2% in Sgr B2 F187N and +3.4% in W51 F187N.  In the Brick
+the dropped sources match the independent visit at 0.28 (about 4,700
+real-star equivalents of 16,809) and the added sources at 0.81 (about 4,500
+of 5,577).  It removes about 12,100 spurious-equivalent fits and adds about
+1,100, for a net change of about −200 real-star equivalents.  `--manual-ext-star-prom-peak-min=0
+--manual-ext-star-prom-min=0` restores the previous keep.  The same note is
+in `PHOTOMETRY_PIPELINE.md` (History Notes).
+
 Figure layout and metric definitions of the reference fields:
 [../faint_reference_fields/README.md](../faint_reference_fields/README.md).
 
@@ -205,6 +215,26 @@ mismatch).  Rows B–D: the same pattern around other bright stars.
 
 5 dropped, 1 added; hand-labelled emission knots cataloged 4 → 1.  Rows A–B:
 the robust branch had admitted fits on knots and a filament ridge.
+
+## Reproducing
+
+From `scripts/`, with worktrees at the #1015 tip (05b6d0a4) and at d29fedb2:
+
+```
+WT_BASE=<#1015 worktree> WT=<d29fedb2 worktree> sbatch replay_prom2.sbatch
+sbatch compare_prom2.sbatch      # after the replay finishes
+```
+
+`replay_prom2.sbatch` runs `vet_variant.py` (base, guard 4, guard 3, guard 5
+on Brick, Sgr B2 and W51) and writes `scripts/out/*.fits`, about 1 GB, which
+is not committed.  `compare_prom2.sbatch` runs `compare.py` and `slices.py`
+(realness tables) and, on Brick and Sgr B2, `propresid.py` (the i2d ePSF
+stamp used for the proposed residuals) and `added_gallery.py` (the
+full-field galleries).  The realness tables used in this README are in
+`data/`: `compare_<field>.json` (added and lost counts and realness, per
+saturated-star distance bin) and `slices_<field>_<variants>.json` (the
+prominence, S/N and qfit slices).  They also hold the other faint-star
+branches' replays, which share the same base catalogs.
 
 ## Caveats
 

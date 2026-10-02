@@ -2042,9 +2042,9 @@ def _is_extended_emission(options):
 def _auto_star_prom_robust_min(value, options):
     """Resolve ``--manual-ext-star-prom-robust-min``.
 
-    ``value < 0`` (the default) is AUTO: 8 on star-dominated fields and 0 (the
-    neighbour-robust branch off) on an extended-emission target
-    (:func:`_is_extended_emission`); ``value >= 0`` is used verbatim.
+    The pipeline default is 0 (the neighbour-robust branch off).  ``value < 0``
+    is AUTO (opt-in): 8 on star-dominated fields and 0 on an extended-emission
+    target (:func:`_is_extended_emission`); ``value >= 0`` is used verbatim.
 
     The branch exists for crowding: neighbours' PSF wings raise the annulus MAD
     and the 25th-percentile floor and lower-half MAD stay near the inter-star
