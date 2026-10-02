@@ -373,7 +373,10 @@ ALIGNMENT_CONFIG = (
         proposal='10678', fields=None,
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F212N',
-        tie_through_reference_filter=True,
+        # OFF until most tiles' F212N m2 has settled (2026-10-02: 43 of 68
+        # had not, and each of those would stop at F480M m2 with
+        # ReferenceFilterNotSettledError).  Turning it on is a one-line PR.
+        tie_through_reference_filter=False,
         notes=('gc-treasury (GC Treasury, 139 planned observations over '
                '~1668 exposure-level MAST rows, none executed yet; #413).  '
                'Registered BEFORE any delivery: a field absent here reduces '
@@ -392,7 +395,8 @@ ALIGNMENT_CONFIG = (
                'coordinates, offsets/Offsets_JWST_Brick10678_consensus.csv, '
                'does not exist yet: the m2 checkpoint creates it and updates '
                'it in place on the first reduce.  '
-               'tie_through_reference_filter=True (added 2026-09-27): F212N '
+               'tie_through_reference_filter (mechanism added 2026-09-27, '
+               'shipped OFF 2026-10-02 pending F212N settlement): F212N '
                'and F480M each used to tie straight to VIRAC2 independently, '
                'so a tile where one band\'s tie was refused (o063: F212N '
                'refused, F480M applied its own VIRAC2 bulk of (-171,-147) '

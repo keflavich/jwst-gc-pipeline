@@ -3827,6 +3827,13 @@ def reference_filter_tie_settled(record_dir, ref_filter, obs_token=""):
     return True, "", record
 
 
+def _is_miri_filtername(filtername):
+    """True for a MIRI imaging filter name (F560W..F2550W).  NIRCam's
+    longest is F480M, so a pivot of >= 5 um in the name is MIRI."""
+    m = re.match(r"^F(\d{3,4})", str(filtername).upper())
+    return bool(m) and int(m.group(1)) >= 500
+
+
 def resolve_tie_reference(refcat, basepath, proposal_id, field, filtername,
                           obs_token="", record_dir=None):
     """The reference dict ``run_visit_checkpoint`` should tie ``filtername``
@@ -3870,6 +3877,12 @@ def resolve_tie_reference(refcat, basepath, proposal_id, field, filtername,
         return None
     cfg = _alignment_config.resolve(proposal_id, field)
     if cfg is None or not cfg.tie_through_reference_filter or not cfg.reference_filter:
+        return refcat
+    if _is_miri_filtername(filtername):
+        # MIRI keeps its own path (FieldAlignment.inherit_bulk for 10678's
+        # F770W parallels, #956): its frames are not in the NIRCam reference
+        # filter's visit consensus, and the opt-in covers the NIRCam bands
+        # only (o063: F212N vs F480M).
         return refcat
     ref_filter = cfg.reference_filter
     if str(filtername).upper() == str(ref_filter).upper():

@@ -97,6 +97,26 @@ def test_passthrough_for_the_reference_filter_itself(monkeypatch, tmp_path):
     assert out is refcat
 
 
+@pytest.mark.parametrize("filtername", ["F770W", "f770w", "F560W", "F2550W"])
+def test_passthrough_for_miri_filters(monkeypatch, tmp_path, filtername):
+    """MIRI is outside the opt-in: with no F212N record on disk an F770W
+    tie must still return refcat, not raise ReferenceFilterNotSettledError
+    (the MIRI correction-channel tests hit exactly that on o088)."""
+    _opted_in(monkeypatch)
+    refcat = dict(all="sentinel-all", sparse="sentinel-sparse", mag=None)
+    out = ac.resolve_tie_reference(refcat, str(tmp_path), "TEST", None,
+                                   filtername, record_dir=str(tmp_path))
+    assert out is refcat
+
+
+@pytest.mark.parametrize("filtername,expect", [
+    ("F480M", False), ("F444W", False), ("F150W2", False), ("F212N", False),
+    ("F560W", True), ("F770W", True), ("F1130W", True), ("F2550W", True),
+])
+def test_is_miri_filtername(filtername, expect):
+    assert ac._is_miri_filtername(filtername) is expect
+
+
 # ---------------------------------------------------------------------------
 # resolve_tie_reference / reference_filter_tie_settled -- blocking cases
 # ---------------------------------------------------------------------------
@@ -275,12 +295,16 @@ def test_f480m_recovers_a_known_offset_from_f212n_consensus(monkeypatch, tmp_pat
 # alignment_config wiring: only 10678 is opted in
 # ---------------------------------------------------------------------------
 
-def test_only_10678_is_opted_in():
+def test_no_field_is_opted_in_yet():
+    """Shipped OFF (2026-10-02): 43 of 68 10678 tiles' F212N m2 had not
+    settled, so opting 10678 in would stop each of them at F480M m2.
+    Flipping it on is a deliberate one-line change that must update this
+    test."""
     from jwst_gc_pipeline.reduction.alignment_config import ALIGNMENT_CONFIG
-    opted_in = [c for c in ALIGNMENT_CONFIG if c.tie_through_reference_filter]
-    assert len(opted_in) == 1
-    assert opted_in[0].proposal == "10678"
-    assert opted_in[0].reference_filter == "F212N"
+    opted_in = [c.proposal for c in ALIGNMENT_CONFIG if c.tie_through_reference_filter]
+    assert opted_in == []
+    g = [c for c in ALIGNMENT_CONFIG if c.proposal == "10678"]
+    assert len(g) == 1 and g[0].reference_filter == "F212N"
 
 
 def test_field_alignment_defaults_to_opted_out():
