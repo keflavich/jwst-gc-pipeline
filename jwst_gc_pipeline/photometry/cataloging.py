@@ -3285,20 +3285,30 @@ def m7_band_seed_path(crossband_path, module, filtername):
 
 def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module, *,
                         max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
-                        label=''):
+                        companion_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
+                        fwhm_arcsec=None, label=''):
     """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
-    vetted catalog.
+    vetted catalog (opt-in, ``manual_m7_seed_own_band``).
 
     The cross-band seed keeps only positions confirmed (S/N > 5, qfit < 0.2)
-    in >= 2 filters.  Used ALONE as the m7 seed it drops every source that
-    THIS band's m6 vetting accepted but that is not confirmed in a second band
-    -- a third of the m6 vetted catalog in Brick F182M, Sgr B2 and Sgr A*
-    (126k/378k, 147k/475k, 96k/271k): the faint stars the per-band vetting
-    already accepted.  They then leave the m7 model and reappear in the final
-    residual.  Adding a band's own vetted sources back to ITS OWN seed does
+    in >= 2 filters.  Used ALONE as the m7 seed it leaves out every source
+    that THIS band's m6 vetting accepted but that is not confirmed in a second
+    band, and that m7's own detection does not find again: a third of the m6
+    vetted catalog in Brick F182M, Sgr B2 and Sgr A* (126k/378k, 147k/475k,
+    96k/271k).  Adding a band's own vetted sources back to ITS OWN seed does
     not propagate a single-band detection to other bands (the failure the
     stringent cross-band seed exists to prevent): each filter's seed gains
     only what that filter's own vetting accepted.
+
+    Against an independent visit (Brick 1182/o004), the own-band sources
+    production m7 lacks are confirmed 0.21x as often as the own-band sources
+    it keeps (flux-matched; docs/evidence/faint_m7_seed_union).  Those within
+    ~2.5 PSF FWHM of a brighter seed source are confirmed at the chance rate
+    in F182M and F212N: m6 fits in the PSF-mismatch ring of a brighter star.
+    So own-band sources within ``companion_fwhm`` FWHM of a brighter seed
+    source (cross-band or own-band) are not added; ``companion_fwhm=0``
+    disables the cut.  ``fwhm_arcsec`` defaults to the filter's entry in the
+    FWHM table.
 
     Seed fluxes: an own-band source keeps its m6 flux; a cross-band position
     takes the flux of the own-band source within ``max_sep_mas`` (else 1.0,
@@ -3308,7 +3318,7 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     ``_vetted`` suffix lets ``_build_i2d_augmented_seed`` add residual
     detections to it).
     """
-    from astropy.coordinates import SkyCoord
+    from astropy.coordinates import SkyCoord, search_around_sky
     xb = Table.read(crossband_seed_path)
     xsc = xb['skycoord'] if isinstance(xb['skycoord'], SkyCoord) else SkyCoord(xb['skycoord'])
     own = _L._resolve_seed_skycoords(Table.read(own_vetted_path))
@@ -3339,17 +3349,35 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
         xflux[hit] = oflux[idx[hit]]
         _, sep_o, _ = osc.match_to_catalog_sky(xsc)
         own_new = sep_o.to_value(u.mas) >= max_sep_mas
+    n_companion = 0
+    if companion_fwhm > 0 and own_new.any():
+        if fwhm_arcsec is None:
+            ftab = Table.read(_L.fwhm_table_path())
+            fwhm_arcsec = float(ftab[ftab['Filter'] == filtername.upper()]['PSF FWHM (arcsec)'][0])
+        cand = np.flatnonzero(own_new)
+        pool_sc = SkyCoord([xsc, osc[cand]]) if len(xsc) else osc[cand]
+        pool_flux = np.concatenate([xflux, oflux[cand]])
+        ic, ip, _, _ = search_around_sky(osc[cand], pool_sc,
+                                         companion_fwhm * fwhm_arcsec * u.arcsec)
+        brighter = pool_flux[ip] > oflux[cand][ic]
+        companion = np.zeros(len(cand), dtype=bool)
+        companion[ic[brighter]] = True
+        own_new[cand[companion]] = False
+        n_companion = int(companion.sum())
     n_own = int(own_new.sum())
     out = Table()
     out['skycoord'] = (SkyCoord([xsc, osc[own_new]]) if n_own and len(xsc)
                        else (xsc if len(xsc) else osc[own_new]))
     out['flux'] = np.concatenate([xflux, oflux[own_new]])
     out['seed_origin'] = np.array(['crossband'] * len(xsc) + ['own_m6'] * n_own, dtype=str)
+    out.meta['COMPFWHM'] = float(companion_fwhm)
+    out.meta['NCOMPAN'] = n_companion
     outpath = m7_band_seed_path(crossband_seed_path, module, filtername)
     write_table_atomic(out, outpath)
     print(f"[{label}] m7 band seed: {len(xsc)} cross-band + {n_own} own-band m6 "
-          f"vetted (not within {max_sep_mas:g} mas of a cross-band position) "
-          f"-> {len(out)} ({os.path.basename(outpath)})", flush=True)
+          f"vetted (not within {max_sep_mas:g} mas of a cross-band position; "
+          f"{n_companion} more within {companion_fwhm:g} FWHM of a brighter seed "
+          f"source left out) -> {len(out)} ({os.path.basename(outpath)})", flush=True)
     return outpath
 
 CARTA_EXPORT_COLUMNS = ('flux', 'flux_err', 'qfit', 'cfit', 'flags',
@@ -7449,9 +7477,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 elif phase == 'm7':
                     prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
                     resbg_path = bg_for_next.get((module, filt))      # bg from m6
-                    # cross-band seed UNION this band's own m6 vetted catalog,
-                    # plus daofind on the m6 residual - m6 bg (as m6 does on
-                    # m5's): see _build_m7_band_seed.  Off -> cross-band only.
+                    # opt-in: cross-band seed UNION this band's own m6 vetted
+                    # catalog, plus daofind on the m6 residual - m6 bg (as m6
+                    # does on m5's): see _build_m7_band_seed.  Off (default)
+                    # -> cross-band only.
                     if bool(mopt(opts_phase, 'manual_m7_seed_own_band')):
                         _own = [q for _m, _f, q in crossband_seed_inputs(
                                     cut_bp, modules, filternames, options)
@@ -7464,6 +7493,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             prev_seed = _build_m7_band_seed(
                                 prev_seed, _own[0], filt, module,
                                 max_sep_mas=float(mopt(opts_phase, 'manual_crossband_seed_max_sep_mas')),
+                                companion_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_fwhm')),
                                 label=f'{phase}:{filt}')
                             det_i2d = resid_i2d_for_next.get((module, filt))  # m6 residual
                             bg_sub = bg_for_next.get((module, filt))          # minus m6 bg

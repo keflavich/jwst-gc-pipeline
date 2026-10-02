@@ -205,7 +205,7 @@ rejection**.
 | m4 | m3 source-subtracted residual i2d | raw | **builds 1st bg** (after merge) |
 | m5 | m4 residual i2d − m4 bg | bg-subtracted | recompute |
 | m6 | m5 residual i2d − m5 bg | bg-subtracted | recompute |
-| m7 | cross-filter seed ∪ own m6 vetted + m6 residual − m6 bg (multi-filter only) | bg-subtracted (m6 bg) | — |
+| m7 | cross-filter seed (multi-filter only; opt-in: ∪ own m6 vetted + m6 residual − m6 bg) | bg-subtracted (m6 bg) | — |
 | m8 | m7 merged positions (no detection) | bg-subtracted | — |
 
 - **m12** is per-frame only (no merged mosaic yet): iter1 discovers unseeded on
@@ -219,10 +219,12 @@ rejection**.
   background, and fit **background-subtracted** frames, recomputing the
   background each time. m6 is the final per-filter pass.
 - **m7** (multi-filter only): the seed is the cross-band merge of every filter's
-  m6 vetted catalog, deduped so a star seen in N bands seeds once, UNION this
-  filter's own m6 vetted catalog, plus daofind detections on the m6 residual
-  mosaic minus the m6 background (`--manual-no-m7-seed-own-band` drops the last
-  two). Fit on m6 background-subtracted frames.
+  m6 vetted catalog, deduped so a star seen in N bands seeds once.
+  `--manual-m7-seed-own-band` (opt-in) adds this filter's own m6 vetted
+  catalog, except sources within `--manual-m7-seed-own-band-companion-fwhm`
+  (2.5) PSF FWHM of a brighter seed source, plus daofind detections on the m6
+  residual mosaic minus the m6 background. Fit on m6 background-subtracted
+  frames.
 - **m8** is a **forced cross-band fill** run after the m7 merge.
   For every m7 merged source that is a *non-saturated non-detection*
   in some band, it force-fits flux at the merged position in that band (position
@@ -353,7 +355,8 @@ still run after m6.
 | `--manual-crossband-seed-min-filters` | 2 | 2 | 2 | 2 |
 | `--manual-crossband-seed-snr-min` | 5.0 | 5.0 | | |
 | `--manual-crossband-seed-qfit-max` | 0.2 | 0.2 | | |
-| `--manual-no-m7-seed-own-band` (`manual_m7_seed_own_band`) | `True` | on | on | (unused: MIRI drops m7) |
+| `--manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `False` | off | off | (unused: MIRI drops m7) |
+| `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
@@ -396,9 +399,9 @@ Notes on the tri-state and env-driven values:
 - **Cross-band (m7).** Multi-filter runs union the per-filter vetted m6 catalogs,
   dedup co-located positions (`--manual-crossband-seed-dedup-mas=30`), and can
   require independent ≥`--manual-crossband-seed-min-filters` confirmation.
-  Each band then adds back its own m6 vetted sources (`manual_m7_seed_own_band`),
-  so the confirmation requirement limits what one band propagates to the others
-  and leaves each band's own vetted catalog in its m7 fit.
+  With `manual_m7_seed_own_band` (opt-in) each band adds back its own m6 vetted
+  sources, so the confirmation requirement limits what one band propagates to
+  the others and leaves each band's own vetted catalog in its m7 fit.
 - **Forced cross-band fill (m8).** Force-fits every band at the merged position of
   cross-band non-detections; full-frame only.
 
@@ -502,16 +505,21 @@ control is the default.
 - Cross-band seed requires a ≥2-filter coincidence **by default**
   (`--manual-crossband-seed-min-filters=2`, `--manual-crossband-seed-max-sep-mas=30`),
   so a source detectable in only one band is not propagated to the OTHER bands.
-  Each band's m7 seed is that cross-band seed UNION the band's own m6 vetted
-  catalog, plus daofind on its m6 residual − bg mosaic (`_build_m7_band_seed`),
-  so a source this band's own vetting accepted stays in this band's m7 fit.
-  A merged source that only this band's m7 residual daofind found is flagged
-  `independently_detected_<filt>` in that band (its `seed_origin` is `i2d` in
-  the band's `crossband_seed_manual*_<module>_<filt>_i2dseed.fits`).
-  `--manual-no-m7-seed-own-band` seeds m7 from the cross-band seed alone, which
-  drops ~1/3 of the m6 vetted sources. `--manual-crossband-seed-min-filters=1`
-  restores the legacy deduped-union behaviour, which seeds every band at every
-  position.
+  `--manual-m7-seed-own-band` (opt-in) makes each band's m7 seed that
+  cross-band seed UNION the band's own m6 vetted catalog, plus daofind on its
+  m6 residual − bg mosaic (`_build_m7_band_seed`), so a source this band's own
+  vetting accepted stays in this band's m7 fit.  Own-band sources within
+  `--manual-m7-seed-own-band-companion-fwhm` (2.5) PSF FWHM of a brighter seed
+  source are not added: in Brick F182M and F212N they match an independent
+  visit at the chance rate (fits in a brighter star's PSF-mismatch ring).
+  The remaining restored sources match it 0.4–0.8× as often as the m6 vetted
+  sources m7 already has (`docs/evidence/faint_m7_seed_union`), so the union
+  is off by default.  A merged source that only this band's m7 residual
+  daofind found is flagged `independently_detected_<filt>` in that band (its
+  `seed_origin` is `i2d` in the band's
+  `crossband_seed_manual*_<module>_<filt>_i2dseed.fits`).
+  `--manual-crossband-seed-min-filters=1` restores the legacy deduped-union
+  behaviour, which seeds every band at every position.
 - Faint sources blended on the wings of much brighter or saturated stars may be
   detected but dropped by the fit/dedup; the m8 forced cross-band fill recovers
   such sources where they were already detected in another band. Sources lost in

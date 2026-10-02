@@ -90,10 +90,16 @@ MANUAL_DEFAULTS = {
     'manual_crossband_seed_snr_min': 5.0,
     'manual_crossband_seed_qfit_max': 0.2,
     'manual_crossband_seed_max_sep_mas': 30.0,
-    # m7 seed of each band = cross-band seed UNION the band's own m6 vetted
-    # catalog, plus daofind on the m6 residual - bg (_build_m7_band_seed).
-    # False = cross-band seed only (drops ~1/3 of m6 vetted: the faint stars).
-    'manual_m7_seed_own_band': True,
+    # Opt-in: m7 seed of each band = cross-band seed UNION the band's own m6
+    # vetted catalog, plus daofind on the m6 residual - bg
+    # (_build_m7_band_seed).  Off by default: the own-band sources production
+    # m7 lacks are confirmed by an independent visit 0.21x as often as the
+    # ones it keeps (docs/evidence/faint_m7_seed_union).
+    'manual_m7_seed_own_band': False,
+    # ... and with it on, own-band sources within this many PSF FWHM of a
+    # brighter seed source are not added (PSF-ring fits; at the chance rate
+    # inside ~2.5 FWHM in Brick F182M/F212N).  0 disables the cut.
+    'manual_m7_seed_own_band_companion_fwhm': 2.5,
     # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.
