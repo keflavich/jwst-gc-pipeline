@@ -3187,8 +3187,11 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # extended emission stays in the residual, over-subtraction unchanged) + a free
     # depth win on star fields (arches clump 2/10 -> 7/10, purity unchanged 0.885);
     # purity is protected by the fit + nmatch confirmation, not the shape cut.  The
-    # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5): loosening
-    # it too is a star-field opt-in (plants fake stars on nebulosity in emission fields).
+    # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5) as a
+    # blanket cut (loosened everywhere it plants fake stars on nebulosity in
+    # emission fields).  The loose window --manual-seed-round-loose-max (opt-in,
+    # default 0 = off; 0.8 tested) admits detections out to that roundness only
+    # at annulus prominence >= --manual-seed-round-loose-prom-min.
     resid_roundlo = float(mopt(options, 'manual_resid_roundlo'))
     resid_roundhi = float(mopt(options, 'manual_resid_roundhi'))
     resid_sharplo = float(mopt(options, 'manual_resid_sharplo'))
@@ -4088,12 +4091,43 @@ def _structure_noise_keep(data, err, *, xpix, ypix, struct_x=0.0, struct_y=0.0,
     return data[yi, xi] > thresh
 
 
+def _annulus_prominence(image, x, y, *, half=10, core_r=1.5, ann_in=4):
+    """(core peak - annulus median) / annulus MAD at each (x, y), as the
+    vetting's ``prominence`` column (core r < 1.5 px, annulus 4-10 px); NaN
+    within ``half`` px of the edge or with < 10 finite annulus pixels."""
+    ny, nx = image.shape
+    yo, xo = np.mgrid[-half:half + 1, -half:half + 1]
+    rr = np.hypot(xo, yo)
+    cm = rr < core_r
+    am = (rr >= ann_in) & (rr <= half)
+    out = np.full(len(x), np.nan)
+    for i, (xi, yi) in enumerate(zip(x, y)):
+        if not (np.isfinite(xi) and np.isfinite(yi)):
+            continue
+        ix, iy = int(round(float(xi))), int(round(float(yi)))
+        if not (half <= ix < nx - half and half <= iy < ny - half):
+            continue
+        st = image[iy - half:iy + half + 1, ix - half:ix + half + 1]
+        ann = st[am]
+        ann = ann[np.isfinite(ann)]
+        core = np.nanmax(st[cm]) if np.any(np.isfinite(st[cm])) else np.nan
+        if ann.size < 10 or not np.isfinite(core):
+            continue
+        bg = np.median(ann)
+        spread = 1.4826 * np.median(np.abs(ann - bg))
+        if spread > 0:
+            out[i] = (core - bg) / spread
+    return out
+
+
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
                               struct_x=0.0, struct_y=0.0, struct_robust=False,
                               coarse_bg_box=0, seed_struct_protect_snr=8.0,
-                              noise_floor_box=0, noise_floor_k=5.0, label=''):
+                              noise_floor_box=0, noise_floor_k=5.0,
+                              round_loose_max=0.0, round_loose_prom_min=5.0,
+                              label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -4114,6 +4148,24 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
 
     PSF photometry is *never* run on the i2d -- the fit always runs on the raw
     (or background-subtracted) frames.  This step is detection-only.
+
+    ``round_loose_max`` > ``roundhi`` (opt-in; default 0 = off): also admit
+    detections with roundness up to +-``round_loose_max``, but only where they
+    rise above their LOCAL structure: annulus prominence (core peak minus 4-10
+    px annulus median, over the annulus MAD) on the detection image >=
+    ``round_loose_prom_min``.  A faint star on a residual or a neighbour's wing
+    is distorted past the tight bound (Brick F182M m7 residual peaks at S/N > 7:
+    55% pass +-0.5, 78% pass +-0.8).  The prominence test does NOT reject
+    emission knots or filament points once the residual background is
+    subtracted (W51 F187N: 25-29 per phase pass prominence >= 5), nor
+    diffraction-spike knots, whose thin spike covers little of the annulus.
+    At full frame (m6 residual, roundness 0.8) the loose-only seeds sit on the
+    brightest 10% of the smoothed background 3x as often as the previous seeds
+    (Brick NRCB F182M 31% vs 11%, Sgr B2 F187N 29% vs 11%), and near bright
+    stars they pile up at the spike position angles (2x the median bin, vs
+    1.3x for the tight seeds).  Admitted loose detections carry
+    ``seed_round_loose`` = True in the seed catalog; rows carried over from
+    ``prev_vetted_path`` are False.
 
     The i2d cutouts are drizzled at the native detector scale (0.063"/px), so the
     per-frame pixel FWHM applies unchanged.  Returns the seed-catalog path.
@@ -4175,10 +4227,31 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     finite = np.isfinite(noise_map) & (noise_map > 0)
     if not np.any(finite):
         raise ValueError(f"[{label}] i2d local noise map has no positive finite values")
+    _loose = float(round_loose_max) > max(abs(roundlo), abs(roundhi))
     det = _daofind_emission_floor(
         np.where(mask, 0.0, data), noise_map, mask, fwhm_pix,
-        roundlo=roundlo, roundhi=roundhi, sharplo=sharplo, sharphi=sharphi,
+        roundlo=-float(round_loose_max) if _loose else roundlo,
+        roundhi=float(round_loose_max) if _loose else roundhi,
+        sharplo=sharplo, sharphi=sharphi,
         noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k, label=label)
+    if _loose and len(det):
+        # the detections outside the tight bound must rise above local structure
+        _rc = [c for c in ('roundness1', 'roundness2') if c in det.colnames]
+        _r1 = (np.asarray(det[_rc[0]], dtype=float) if _rc else np.zeros(len(det)))
+        _r2 = (np.asarray(det[_rc[1]], dtype=float) if len(_rc) > 1 else _r1)
+        outside = ((_r1 < roundlo) | (_r1 > roundhi) | (_r2 < roundlo) | (_r2 > roundhi))
+        if np.any(outside):
+            xo, yo = _L._best_available_xy(det[outside])
+            prom = _annulus_prominence(np.where(mask, np.nan, data),
+                                       np.asarray(xo, float), np.asarray(yo, float))
+            ok = np.ones(len(det), dtype=bool)
+            ok[np.where(outside)[0]] = np.isfinite(prom) & (prom >= float(round_loose_prom_min))
+            print(f"[{label}] i2d daofind loose roundness: {int(outside.sum())} "
+                  f"detection(s) with roundness in ({roundhi:g},{float(round_loose_max):g}], "
+                  f"{int(ok[outside].sum())} kept at prominence >= "
+                  f"{float(round_loose_prom_min):g}", flush=True)
+            det['seed_round_loose'] = outside
+            det = det[ok]
     n_raw = len(det)
     if len(det):
         if err is not None:
@@ -4282,6 +4355,11 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     out['skycoord'] = all_sky
     out['flux'] = all_flux
     out['seed_origin'] = np.concatenate([prev_origin, np.full(n_new, 'i2d')]).astype(str)
+    _det_loose = (np.asarray(det['seed_round_loose'], dtype=bool)[fresh]
+                  if n_new and 'seed_round_loose' in det.colnames
+                  else np.zeros(n_new, dtype=bool))
+    out['seed_round_loose'] = np.concatenate([np.zeros(len(all_flux) - n_new, dtype=bool),
+                                              _det_loose])
     # every 'i2d' row is at least this far from every prev seed
     # (annotate_independent_detection matches them back at this radius)
     out.meta['DEDUPMAS'] = float(match_as * 1e3)
@@ -7917,10 +7995,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
+                        _sround_loose = float(mopt(opts_phase, 'manual_seed_round_loose_max'))
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
                             roundlo=-_sround, roundhi=_sround,
+                            round_loose_max=_sround_loose,
+                            round_loose_prom_min=float(mopt(opts_phase, 'manual_seed_round_loose_prom_min')),
                             sharplo=float(mopt(opts_phase, 'manual_seed_sharp_lo')),
                             sharphi=float(mopt(opts_phase, 'manual_seed_sharp_hi')),
                             bg_subtract_path=bg_sub,

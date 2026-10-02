@@ -172,7 +172,11 @@ extended emission dominates the false positives.
 
 For the merged-i2d-seeded phases (m3+), a second `daofind` runs on the **detection
 co-add** itself (`_build_i2d_augmented_seed`) with its own bounds —
-`--manual-seed-round-max=0.5`, `--manual-seed-sharp-lo/hi=0.4/1.2` — and that
+`--manual-seed-round-max=0.5`, `--manual-seed-sharp-lo/hi=0.4/1.2` (opt-in:
+`--manual-seed-round-loose-max=0.8` also admits detections with roundness up to
+±0.8 whose annulus prominence on the detection image is ≥
+`--manual-seed-round-loose-prom-min=5`; emission knots and diffraction-spike
+knots pass that test too, so it is off by default) — and that
 result is unioned with the previous phase's vetted merged catalog and deduped at
 `0.5 × FWHM`. FWHM is per-filter from `reduction/fwhm_table.ecsv` (F210M 2.30,
 F212N 2.34, F480M 2.57 px).
@@ -336,6 +340,8 @@ still run after m6.
 | `--manual-overshoot-action` | `refit` | refit | refit | refit |
 | `--manual-iter2-local-snr` | 3.0 | 3.0 (m2+) | 3.0 | 3.0 |
 | `--manual-seed-round-max` | 0.5 | 0.5 | 0.5 | 0.5 |
+| `--manual-seed-round-loose-max` | 0.0 (off; opt-in) | 0 | 0 | 0 |
+| `--manual-seed-round-loose-prom-min` | 5.0 | 5.0 | 5.0 | 5.0 |
 | `--manual-seed-sharp-lo` / `-hi` | 0.4 / 1.2 | 0.4 / 1.2 | | |
 | `--manual-struct-noise-x` (`struct_x`) | 0.0 | 0.0 (off) | **1.0** (auto) | **5.0** m12–m4, **3.0** m5–m6 |
 | `--manual-struct-noise-y` (`struct_y`) | 0.0 | 0.0 (off) | **2.0** (auto) | **8.0** all phases |
