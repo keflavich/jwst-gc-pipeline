@@ -1626,8 +1626,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # 2-3, 0.27 at 3-4, 0.40 at 4-5, 0.68 at 6-7, 0.94 at 8.5-10, > 1.1 above
     # 10.  So prominence enters twice:
     #   star_prom_peak_min > 0: the peak_SB branch also needs prominence >=
-    #     this.  The peak_SB-kept sources below 4 are confirmed at 0.08-0.36 of
-    #     the rate of kept stars; those at 4-7 at 0.52 and above.
+    #     this.  On the Brick replay the peak_SB-kept sources a guard of 4
+    #     drops (16,809 of 377,837) are confirmed at 0.12 (prominence 1-2),
+    #     0.26 (2-3) and 0.36 (3-4) of the rate of kept stars of the same
+    #     flux; a guard of 5 would also drop the 4-5 band, confirmed at 0.52.
     #   star_prom_min > 0: prominence >= this keeps a source on its own,
     #     whatever the sign of local_bkg (Brick: the sources this adds at 7-10
     #     are confirmed at 0.72 of the rate of kept stars, 1.07 at 10-20).
