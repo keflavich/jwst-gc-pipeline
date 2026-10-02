@@ -16,7 +16,9 @@ folded to 0-180 (the PSF is point-symmetric), prints the peak fraction, the
 control (chance) fraction and image realness for the additions and the
 base-kept stars of the same per-frame S/N and distance range, all of them
 and those with data-i2d prominence >= 5 (the sky-clean tier's prominence
-floor).
+floor).  For each set, chi^2 p-values over the angle bins test whether the
+peak fraction (peak / no-peak contingency) and the count (against uniform)
+depend on angle; they are written under 'chi2' in the JSON.
 
 usage: python lsky_pa_diag.py <field> [variant=lsky] [snr_lo=0] [snr_hi=5] [d_lo=3] [d_hi=5]
 writes lsky_pa_diag_<field>_<variant>_snr<lo>-<hi>_d<lo>-<hi>.json
@@ -31,6 +33,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from scipy.ndimage import gaussian_filter, maximum_filter
 from scipy.spatial import cKDTree
+from scipy.stats import chi2_contingency, chisquare
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -39,6 +42,17 @@ from added_gallery import CFG  # noqa: E402
 from img_realness import SMOOTH_PX, R_PEAK, ROT_DEG  # noqa: E402
 
 ANG_EDGES = np.arange(0, 181, 30)
+
+
+def angle_tests(rows):
+    """chi^2 p-values over the angle bins of one set: p_peak (does the peak
+    fraction depend on angle) and p_count (is the count uniform in angle)."""
+    n = np.array([r['n'] for r in rows], float)
+    pk = [r for r in rows if 'peak' in r]
+    npk = np.array([r['n'] for r in pk], float)
+    k = np.rint(np.array([r['peak'] for r in pk]) * npk)
+    return dict(p_peak=float(chi2_contingency(np.c_[k, npk - k])[1]),
+                p_count=float(chisquare(n)[1]))
 
 
 def main(field, v='lsky', snr_lo=0, snr_hi=5, d_lo=3, d_hi=5):
@@ -126,6 +140,9 @@ def main(field, v='lsky', snr_lo=0, snr_hi=5, d_lo=3, d_hi=5):
                             chance180=c180, img_rel=rel))
             print(f'   [{lo:3d},{hi:3d}) n {int(b.sum()):5d} {pk:.2f} {c:.2f} {c180:.2f} {rel:5.2f}')
         res['sets'][name] = out
+        res.setdefault('chi2', {})[name] = angle_tests(out)
+        print(f'   chi^2 p: peak fraction {res["chi2"][name]["p_peak"]:.3g}, '
+              f'count {res["chi2"][name]["p_count"]:.3g}')
     tag = f'{field}_{v}_snr{snr_lo:g}-{snr_hi:g}_d{d_lo:g}-{d_hi:g}'
     with open(f'{HERE}/lsky_pa_diag_{tag}.json', 'w') as fh:
         json.dump(res, fh, indent=1, default=float)
