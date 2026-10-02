@@ -1,0 +1,223 @@
+{
+ "superdense": {
+  "field": "superdense",
+  "variant": "main",
+  "environment": "super-high stellar density (nuclear star cluster, 16\" E of Sgr A*)",
+  "clean": {
+   "phase": "m7",
+   "n_sources": 80,
+   "density_per_as2": 5.54016620498615,
+   "residual_excess": 1.662049861495845,
+   "residual_npos": 27,
+   "residual_nneg": 3,
+   "residual_mf_scale": 7.18917372850365,
+   "oversubtracted": 1.10803324099723,
+   "n_oversubtracted": 16,
+   "ring_ratio": null,
+   "ring_n_obs": 0,
+   "ring_n_exp": 0.0,
+   "n_faint": 3,
+   "r_on": 1.0,
+   "r_off": 0.7916666666666666
+  },
+  "completeness": {
+   "40-80": [
+    51,
+    1,
+    0.0196078431372549
+   ],
+   "80-160": [
+    64,
+    6,
+    0.09375
+   ],
+   "160-320": [
+    74,
+    18,
+    0.24324324324324326
+   ],
+   "320-640": [
+    51,
+    26,
+    0.5098039215686274
+   ]
+  },
+  "flux_bias_mag": -0.024849217561980916,
+  "n_injected": 240,
+  "r_real": null,
+  "emission_purity": null,
+  "failures": [
+   "completeness[80-160] = 0.09 (6/64) < 0.3",
+   "completeness[160-320] = 0.24 (18/74) < 0.4",
+   "completeness[320-640] = 0.51 (26/51) < 0.7",
+   "residual_excess_max: 1.66 vs 1.5"
+  ]
+ },
+ "dense_bright": {
+  "field": "dense_bright",
+  "variant": "main",
+  "environment": "high stellar density on bright, structured background (Sgr B2 envelope)",
+  "clean": {
+   "phase": "m7",
+   "n_sources": 85,
+   "density_per_as2": 5.886426592797784,
+   "residual_excess": 3.0470914127423825,
+   "residual_npos": 44,
+   "residual_nneg": 0,
+   "residual_mf_scale": 1.2918396668848189,
+   "oversubtracted": 1.1772853185595569,
+   "n_oversubtracted": 17,
+   "ring_ratio": 0.0,
+   "ring_n_obs": 0,
+   "ring_n_exp": 0.95742167943317,
+   "n_faint": 34,
+   "r_on": 0.6176470588235294,
+   "r_off": 0.20955882352941177
+  },
+  "completeness": {
+   "5-10": [
+    49,
+    0,
+    0.0
+   ],
+   "10-20": [
+    69,
+    1,
+    0.014492753623188406
+   ],
+   "20-40": [
+    58,
+    11,
+    0.1896551724137931
+   ],
+   "40-80": [
+    64,
+    28,
+    0.4375
+   ]
+  },
+  "flux_bias_mag": 0.03000538752732512,
+  "n_injected": 240,
+  "r_real": 0.3728813559322034,
+  "emission_purity": null,
+  "failures": [
+   "completeness[10-20] = 0.01 (1/69) < 0.15",
+   "completeness[20-40] = 0.19 (11/58) < 0.3",
+   "completeness[40-80] = 0.44 (28/64) < 0.45",
+   "residual_excess_max: 3.05 vs 1.2"
+  ]
+ },
+ "bright_modest": {
+  "field": "bright_modest",
+  "variant": "main",
+  "environment": "modest stellar density on bright, filamentary Paschen-alpha emission (W51)",
+  "clean": {
+   "phase": "m7",
+   "n_sources": 6,
+   "density_per_as2": 0.41551246537396125,
+   "residual_excess": 0.20775623268698062,
+   "residual_npos": 4,
+   "residual_nneg": 1,
+   "residual_mf_scale": 0.8952168238327759,
+   "oversubtracted": 0.06925207756232687,
+   "n_oversubtracted": 1,
+   "ring_ratio": null,
+   "ring_n_obs": 0,
+   "ring_n_exp": 0.0,
+   "n_faint": 0,
+   "r_on": null,
+   "r_off": null,
+   "n_emission_labels": 4,
+   "emission_labels_cataloged": 2
+  },
+  "completeness": {
+   "5-10": [
+    53,
+    0,
+    0.0
+   ],
+   "10-20": [
+    56,
+    1,
+    0.017857142857142856
+   ],
+   "20-40": [
+    68,
+    5,
+    0.07352941176470588
+   ],
+   "40-80": [
+    62,
+    32,
+    0.5161290322580645
+   ]
+  },
+  "flux_bias_mag": -0.14531636553265528,
+  "n_injected": 239,
+  "r_real": 1.0,
+  "emission_purity": null,
+  "failures": [
+   "completeness[40-80] = 0.52 (32/62) < 0.6",
+   "flux_bias_max_mag: 0.145 vs 0.1",
+   "emission_labels_cataloged_max: 2 vs 1"
+  ]
+ },
+ "dark": {
+  "field": "dark",
+  "variant": "main",
+  "environment": "dark cloud, low background (Brick interior; hand-labelled clump of PR 57)",
+  "clean": {
+   "phase": "m7",
+   "n_sources": 61,
+   "density_per_as2": 4.224376731301939,
+   "residual_excess": 1.3850415512465375,
+   "residual_npos": 22,
+   "residual_nneg": 2,
+   "residual_mf_scale": 0.5884707660974157,
+   "oversubtracted": 1.1772853185595569,
+   "n_oversubtracted": 17,
+   "ring_ratio": 0.0,
+   "ring_n_obs": 0,
+   "ring_n_exp": 0.22426598359950933,
+   "n_faint": 31,
+   "r_on": 0.3548387096774194,
+   "r_off": 0.04838709677419355,
+   "n_labels": 33,
+   "labels_recovered": 0.45454545454545453
+  },
+  "completeness": {
+   "5-10": [
+    62,
+    0,
+    0.0
+   ],
+   "10-20": [
+    55,
+    12,
+    0.21818181818181817
+   ],
+   "20-40": [
+    61,
+    37,
+    0.6065573770491803
+   ],
+   "40-80": [
+    62,
+    45,
+    0.7258064516129032
+   ]
+  },
+  "flux_bias_mag": 0.032361771921290264,
+  "n_injected": 240,
+  "r_real": 0.05128205128205128,
+  "emission_purity": null,
+  "failures": [
+   "completeness[5-10] = 0.00 (0/62) < 0.4",
+   "completeness[10-20] = 0.22 (12/55) < 0.85",
+   "completeness[20-40] = 0.61 (37/61) < 0.65",
+   "completeness[40-80] = 0.73 (45/62) < 0.9",
+   "residual_excess_max: 1.39 vs 0.6",
+   "labels_recovered_min: 0.455 vs 0.69"
+  ]
+ }
+}
