@@ -21,6 +21,11 @@ selective.  The prominence test does not reject emission knots or spike knots:
 a thin linear feature covers a small part of the 4–10 px annulus, so the
 annulus median and MAD stay low and the knot reads as prominent.
 
+No realness or survival measurement exists for the loose-only seeds: the
+evidence below counts seeds and locates them, and no run has followed them
+through the m7 fit and vetting or matched them against an independent
+catalog.  A field that opts in needs that measurement first.
+
 Figure layout and metric definitions of the reference fields:
 [../faint_reference_fields/README.md](../faint_reference_fields/README.md).
 
@@ -180,12 +185,16 @@ or two injected stars per bin, within the binomial noise of these runs.
   sbatch seedspike.sbatch` from `scripts/`).
 - `scripts/spikefig.py`, `scripts/spikefig.sbatch`: the two full-frame
   figures, from the `seedspike.py` outputs.
+- `scripts/seedspike_brick_f182m_nrcb.json`,
+  `scripts/seedspike_sgrb2_f187n_merged.json`: the `seedspike.py` summaries
+  behind the tables above (seed counts, position-angle histograms, the guard's
+  flag rates on tight and loose seeds, background ranks).
 
 ## Caveats
 
 - Seed counts only: how many loose-only seeds survive the m7 fit and vetting
-  at full frame was not measured.  The `seed_round_loose` column makes that
-  measurable on any opt-in run.
+  at full frame, and how many of them are real, was not measured.  The
+  `seed_round_loose` column makes both measurable on any opt-in run.
 - The prominence test passes emission knots, filament points and spike knots.
   A field that turns the window on needs its own check of where the loose
   seeds land (the two figures above are the template).

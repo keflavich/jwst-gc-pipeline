@@ -146,3 +146,32 @@ def test_seed_round_loose_column(tmp_path, loose):
     assert _has(xy, (40.0, 70.0)) == (loose > 0)
     assert loose_col[near((40.0, 70.0))].all()
     assert not loose_col[np.asarray(t['seed_origin']).astype(str) != 'i2d'].any()
+
+
+def _loose_in_structure(t, margin=4):
+    """seed_round_loose rows inside the emission-structure box, ``margin`` px
+    in from its edge (where the annulus still samples flat sky)."""
+    x, y = _wcs().world_to_pixel(t['skycoord'])
+    lo, hi = 82 + margin, 118 - margin
+    inside = (x >= lo) & (x < hi) & (y >= lo) & (y < hi)
+    return int(np.sum(np.asarray(t['seed_round_loose'], bool) & inside))
+
+
+def test_prominence_gate_rejects_loose_structure_peaks(tmp_path):
+    """The prominence gate, and not the S/N cut, removes loose-window peaks in
+    emission structure.  With the gate open (prominence >= 0) some of them
+    pass S/N and enter the seed; at the default 5 none does, while the
+    elongated star on flat sky enters in both runs."""
+    n_in = {}
+    for pmin in (0.0, 5.0):
+        sub = tmp_path / f'p{pmin:g}'
+        sub.mkdir()
+        det, prev = _write(str(sub), _image())
+        t = Table.read(_build_i2d_augmented_seed(det, prev, 'F182M', local_snr_min=5.0,
+                                                 roundlo=-0.5, roundhi=0.5, round_loose_max=0.8,
+                                                 round_loose_prom_min=pmin))
+        x, y = _wcs().world_to_pixel(t['skycoord'])
+        assert _has(np.c_[x, y], STAR)
+        n_in[pmin] = _loose_in_structure(t)
+    assert n_in[0.0] >= 1
+    assert n_in[5.0] == 0
