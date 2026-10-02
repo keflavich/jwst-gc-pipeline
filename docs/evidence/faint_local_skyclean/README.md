@@ -111,7 +111,7 @@ all inside the reference footprint (`data/lsky_snr_diag_<field>.json`).
   0.09.
 - The share of Brick additions within 5 px of a brighter star rises with
   S/N: 20% at S/N < 5 and 5–7, 24% at 7–10, 34% at 10–20 and 70% at ≥ 20
-  (10 sources).  Most of the S/N gradient follows from this.
+  (10 sources).  Part of the S/N gradient follows from this.
 - Weighting the base-kept realness by the additions' distance distribution
   gives the realness expected of the additions at each S/N.  Entries are
   additions / distance-matched base-kept (ratio, n):
@@ -159,6 +159,29 @@ base-kept stars) and from the 12–20 px bin (0.88 against 0.97); its catalog
 test reads 1.11 there.  W51 chance is 0.2–0.5 beyond 8 px because emission
 structure makes local maxima, so its image test discriminates weakly.
 
+The Brick data (2221/o001, PA_V3 89.05°) and its F200W reference
+(1182/o004, PA_V3 91.01°) share the roll to 2°, and the Sgr B2 reference is
+the same visit, so a PSF feature of the brighter star falls at the same sky
+position in the data and in the reference image.  The 60° rotations map the
+six hexagon spikes onto themselves; only the 180° control maps the two
+strut spikes.  `scripts/lsky_pa_diag.py` splits the S/N < 5, 3–5 px bin by
+the angle of the source about its brighter star in the reference pixel
+grid, which is within 1° of the detector frame
+(`data/lsky_pa_diag_<field>_lsky_snr0-5_d3-5.json`).  The additions read
+0.72–0.84 (Brick, 559 sources) and 0.62–0.73 (Sgr B2, 832) in each 30° bin,
+and neither their peak fraction nor their count depends on angle (χ² p =
+0.26 and 0.50 in the Brick, 0.36 and 0.24 in Sgr B2), so the strut spikes
+do not raise them above their controls.  The base-kept stars of this bin
+depend on angle (p < 1e-6 for both quantities in both fields): in Sgr B2
+the 30–60° and 120–150° bins, along the diagonal hexagon spikes, hold 1,192
+and 1,178 stars at 0.14 and 0.16, against 723–792 stars at 0.23–0.30 in the
+other bins.  Base-kept stars with data-i2d prominence ≥ 5, the tier's own
+prominence floor, read 0.36–0.50 (Brick) and 0.21–0.37 (Sgr B2) per bin,
+still below the additions.  The two sets reach this bin through different
+tests (sky-clean and prominence against qfit, flags and peak-SB), and the
+3–5 px comparison carries that difference; the bound below uses the 5–8 px
+bin.
+
 ![](lsky_realness_vs_neighbour.png)
 
 Top row: catalog realness against distance to the nearest brighter base-kept
@@ -195,8 +218,10 @@ This branch keeps the tier as it is, with no S/N ceiling:
   reads 1.03–1.13 of the distance-matched base-kept value in the Brick at
   every S/N.
 - The catalog test leaves a Brick deficit of about 355 spurious-equivalent
-  at S/N ≥ 5, concentrated at 5–8 px; the F200W stamps of that bin show
-  peaks at red-labelled positions, so this count is an upper bound.
+  at S/N ≥ 5, concentrated at 5–8 px.  In that bin the F200W image test
+  reads 0.97–0.98 for the additions against 0.93–0.94 for base-kept stars at
+  every S/N (526 and 248 additions at S/N 5–10 and ≥ 10), so the image test
+  finds no deficit there and 355 is an upper bound.
 - An S/N ceiling would also drop the 1,202 Sgr B2 additions at S/N ≥ 10
   (catalog ratio 1.11, image ratio 0.91) along with the Brick's 602 (0.77,
   image 1.03).
@@ -296,7 +321,8 @@ From `scripts/`:
 - `python lsky_snr_diag.py <field>` (per-S/N and per-distance catalog
   realness), `python img_realness.py <field>` (the image test) and
   `python lsky_nbr_fig.py <out.png>` (the neighbour figure, from the two
-  scripts' JSON files next to it); `GALLERY_GROUP=nbr GALLERY_SNR_MIN=10
+  scripts' JSON files next to it); `python lsky_pa_diag.py <field>` (the
+  angle split of the S/N < 5, 3–5 px bin); `GALLERY_GROUP=nbr GALLERY_SNR_MIN=10
   python added_gallery.py brick lsky <out.png> 4` (the neighbour gallery).
   `lsky_snr_diag.py` imports `realness.py` from
   `../../faint_m7_seed_union/scripts/`.
@@ -307,8 +333,9 @@ From `scripts/`:
 - Outputs used above, copied into `data/`: `compare_{brick,sgrb2,w51}.json`
   (these also hold the other branches' replays; this branch is variant
   `lsky`) and `slices_lsky.json` (the three `slices_<field>_lsky.json`
-  merged, keyed by field), `lsky_snr_diag_<field>.json` and
-  `img_realness_<field>.json`.  The 10-seed reference-field results are the
+  merged, keyed by field), `lsky_snr_diag_<field>.json`,
+  `img_realness_<field>.json` and
+  `lsky_pa_diag_<field>_lsky_snr0-5_d3-5.json`.  The 10-seed reference-field results are the
   #1014 evaluator output (`python -m
   jwst_gc_pipeline.photometry.reference_fields.evaluate --fields dark
   --json ...`), in `data/eval10_main.json` and
