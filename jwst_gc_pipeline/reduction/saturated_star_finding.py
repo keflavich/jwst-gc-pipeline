@@ -4880,7 +4880,7 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
     mads = np.array([cal[r][2] for r in rs])
     se = wingcal_bucket_se(mads, ns, ratio=vs,
                            rel_floor=wingcal_rel_floor(rs, vs, mads, ns))
-    use = wingcal_passes_se_gate(se)
+    use = wingcal_passes_se_gate(se, ratio=vs)
     if not use.all():
         print("wing-selfcal: bucket(s) above the SE gate "
               f"({wingcal_max_se():g}) not applied: " + "; ".join(

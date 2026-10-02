@@ -26,6 +26,10 @@ MEDIAN_SE_FACTOR = float(np.sqrt(np.pi / 2.0))
 DEFAULT_MAX_SE = 0.05
 # Fewest stars whose scatter may set the floor.
 FLOOR_MIN_STARS = 5
+# Smallest bucket ratio that is applied.  Measured buckets sit at 0.93-1.5
+# where they are precise; a median near or below zero means the masked
+# fits are noise, and dividing a flux by it is meaningless.
+MIN_RATIO = 0.5
 
 
 def wingcal_max_se():
@@ -80,15 +84,20 @@ def bucket_se(madstd, n, ratio=None, rel_floor=0.0):
     return np.where((n > 0) & np.isfinite(madstd), se, np.nan)
 
 
-def passes_se_gate(se, max_se=None):
+def passes_se_gate(se, max_se=None, ratio=None):
     """True where a bucket's standard error is precise enough to apply.  A
-    NaN standard error fails unless the gate is disabled."""
+    NaN standard error fails unless the gate is disabled.  With ``ratio``
+    given, a bucket below :data:`MIN_RATIO` also fails (a noise-dominated
+    median can sit near zero with a small standard error)."""
     if max_se is None:
         max_se = wingcal_max_se()
     se = np.asarray(se, dtype=float)
     if max_se <= 0:
         return np.ones(se.shape, dtype=bool)
-    return np.isfinite(se) & (se <= max_se)
+    ok = np.isfinite(se) & (se <= max_se)
+    if ratio is not None:
+        ok &= np.asarray(ratio, dtype=float) >= MIN_RATIO
+    return ok
 
 
 def pool_bucket(ratios, n_stars, madstds, rel_floor=0.0):
@@ -132,11 +141,12 @@ def interp_wingcal_ratio(rmask, rs, vs):
     whose fit masked one pixel (r_mask = sqrt(1/pi) = 0.564) is nearly
     unmasked.  Between 0 and the smallest bucket the ratio is linear; beyond
     the largest bucket it is held at the largest bucket's value.  Rows with
-    a non-finite r_mask get 1.
+    a non-finite r_mask get 1.  Buckets with a ratio <= 0 are ignored even
+    when the gate is disabled, since the flux is divided by C.
     """
     rs = np.asarray(rs, dtype=float)
     vs = np.asarray(vs, dtype=float)
-    keep = np.isfinite(rs) & np.isfinite(vs) & (rs > 0)
+    keep = np.isfinite(rs) & np.isfinite(vs) & (rs > 0) & (vs > 0)
     rs, vs = rs[keep], vs[keep]
     r = np.asarray(rmask, dtype=float)
     if rs.size == 0:

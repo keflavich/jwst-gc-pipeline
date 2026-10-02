@@ -30,6 +30,13 @@ def test_interp_is_anchored_at_one_below_the_smallest_bucket():
     np.testing.assert_allclose(got, want)
 
 
+def test_interp_ignores_non_positive_buckets():
+    np.testing.assert_allclose(
+        interp_wingcal_ratio([10.0], [3, 10], [1.05, -0.01]), [1.05])
+    np.testing.assert_allclose(
+        interp_wingcal_ratio([3.0], [3], [0.0]), [1.0])
+
+
 def test_interp_without_buckets_is_one():
     np.testing.assert_array_equal(interp_wingcal_ratio([3.0, 9.0], [], []),
                                   [1.0, 1.0])
@@ -70,6 +77,17 @@ def test_gate_rejects_nan_and_noisy_buckets_and_can_be_disabled(monkeypatch):
     assert passes_se_gate(se).tolist() == [True, True, True, False]
     monkeypatch.setenv('SATSTAR_WINGCAL_MAX_SE', '0')
     assert passes_se_gate(se).tolist() == [True, True, True, True]
+
+
+def test_gate_rejects_a_near_zero_ratio_with_a_small_se():
+    # Masked fits that are pure noise: the pooled median sits near zero with
+    # an SE that passes the 0.05 gate on its own.
+    ratio, se = pool_bucket([0.02, -0.03, 0.01], [30] * 3, [0.01] * 3)
+    assert se < 0.05
+    assert passes_se_gate([se]).tolist() == [True]
+    assert passes_se_gate([se], ratio=[ratio]).tolist() == [False]
+    assert passes_se_gate([0.01, 0.01], ratio=[0.49, 0.5]).tolist() == \
+        [False, True]
 
 
 # --- pooling ----------------------------------------------------------------
@@ -220,6 +238,12 @@ def test_per_frame_skips_noisy_buckets_and_anchors(monkeypatch):
 def test_per_frame_small_bucket_with_tight_scatter_is_gated(monkeypatch):
     cal = {3: (1.05, 20, 0.14), 18: (3.22, 3, 0.017)}
     out = _apply(monkeypatch, cal, [18.0])
+    assert out['wingcal_ratio'][0] == pytest.approx(1.05)
+
+
+def test_per_frame_skips_a_near_zero_bucket(monkeypatch):
+    cal = {3: (1.05, 20, 0.05), 10: (0.01, 30, 0.01)}
+    out = _apply(monkeypatch, cal, [10.0])
     assert out['wingcal_ratio'][0] == pytest.approx(1.05)
 
 

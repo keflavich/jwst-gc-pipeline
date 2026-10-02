@@ -3158,7 +3158,8 @@ def apply_pooled_wingcal(satstar_cat, filtername,
     rs = np.asarray(pooled['rmask_px'], float)
     vs = np.asarray(pooled['ratio'], float)
     if 'ratio_se' in pooled.colnames:
-        use = wingcal_passes_se_gate(np.asarray(pooled['ratio_se'], float))
+        use = wingcal_passes_se_gate(np.asarray(pooled['ratio_se'], float),
+                                     ratio=vs)
         if not use.all():
             print(f"apply_pooled_wingcal: {filtername}: {int((~use).sum())} "
                   f"bucket(s) above the SE gate ({wingcal_max_se():g}) not "
