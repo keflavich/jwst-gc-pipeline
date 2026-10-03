@@ -135,8 +135,15 @@ saturated-but-recovered, bit 2 = unrecoverable), centroid refinement, and the
 function but **cataloging sets it to `1` on the extended-emission NIRCam fields**
 (`w51`, `sickle`, `wd2`, `ngc6334`) unless the variable is already in the
 environment, so on those four fields `_unrecoverable` does change reported
-fluxes. One open question: should frame-0-recovered wings be fit rather than
-masked? Tracked in
+fluxes. The cap bounds the model peak by the brightest recovered pixel of the
+star's own region when the model's peak pixel is itself measured (finite and
+recoverable, of either sign), or when the measured pixel nearest the model peak
+is at or below zero (a refit of an already-subtracted star, capped to its
+residual); otherwise (an unmeasured core) it compares the model with the data
+at the measured pixel nearest the model peak (`recovered_cap_flux`: flux ≤
+data / unit PSF there), so a recovered ring bounds the model at the ring. One
+open question: should frame-0-recovered wings be fit rather than masked?
+Tracked in
 [#213](https://github.com/keflavich/jwst-gc-pipeline/issues/213). Evidence that the
 current masked-core behaviour is deliberate: the wing
 self-calibration (`apply_wing_selfcal`, `SATSTAR_WINGCAL`, default on) exists
