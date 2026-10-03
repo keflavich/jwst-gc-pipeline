@@ -128,3 +128,48 @@ def test_unsaturated_companion_still_found():
     centers = _deblend(zf, sat, 1)
     assert len(centers) == 2, centers
     assert _near(centers, *star) and _near(centers, *comp)
+
+
+def test_fallback_peak_inside_a_neighbour_is_not_seeded():
+    """A component with no ZEROFRAME star of its own (flat first read) finds no
+    core and no peak; the brightest-pixel fallback inside its search region then
+    lands on the neighbour's peak.  That pixel belongs to the neighbour, so the
+    component falls back to its own bbox centre instead."""
+    own, nb = (30, 40), (35, 40)
+    sat = _disk(*own, r=1) | _disk(*nb)
+    sources, n, _ = _labels(sat)
+    assert n == 2
+    zf = 100.0 + _gauss(*nb, 3000.0)
+    blob = sources == sources[own[1], own[0]]
+    r_sat = np.sqrt(blob.sum() / np.pi)
+    dil = ndimage.binary_dilation(blob, iterations=int(np.ceil(r_sat + 2 * FWHM)))
+    assert dil[nb[1], nb[0]]                 # the fallback can reach it
+    centers = _deblend(zf, sat, sources[own[1], own[0]])
+    assert not _near(centers, *nb, tol=2.0), centers
+    assert _near(centers, *own), centers
+
+
+def test_neighbour_zf_core_claims_its_ring():
+    """A neighbour's ZEROFRAME-saturated core claims the ring around it, as the
+    component's own core would: a maximum there is the neighbour's flux, also
+    where it lies just outside the neighbour's SATURATED footprint (so the
+    ``other`` test cannot drop it), and it is not seeded as a second star even
+    when a catalog position confirms it."""
+    own, nb, bump = (28, 40), (35, 40), (32, 40)
+    sat = _disk(*own) | _disk(*nb)
+    sources, n, _ = _labels(sat)
+    assert n == 2 and sources[bump[1], bump[0]] == 0
+    zf = 100.0 + _gauss(*own, 5000.0) + _gauss(*nb, 3000.0) + _gauss(*bump, 1000.0)
+    nb_core = _disk(*nb, r=1)
+    zf[nb_core] = 0.0                        # the neighbour's invalid ZF core
+    blob = sources == sources[own[1], own[0]]
+    r_sat = np.sqrt(blob.sum() / np.pi)
+    dil = ndimage.binary_dilation(blob, iterations=int(np.ceil(r_sat + 2 * FWHM)))
+    assert dil[nb_core].all()                # the core is seen whole
+    assert dil[bump[1], bump[0]]             # the bump is searched
+    # the bump lies within min_sep (2 px) of the neighbour's core
+    assert ndimage.binary_dilation(nb_core, iterations=2)[bump[1], bump[0]]
+    centers = _deblend(zf, sat, sources[own[1], own[0]],
+                       confirm_xy=np.array([[bump[0], bump[1]]], float))
+    assert len(centers) == 1, centers
+    assert _near(centers, *own)
