@@ -32,6 +32,7 @@ Example:
         --out /orange/.../sgrb2/astrometry_diag/pm_flystar/pm_sgrb2_treasury_f212n.fits
 """
 import argparse
+import os
 import json
 import numpy as np
 from astropy.table import Table
@@ -281,6 +282,7 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                   f'this cut and the tie match radius both apply, so it is '
                   f'not directly comparable to an uncut n_match without '
                   f'rerunning affine_tie with magcut=inf.')
+        cat['sc_raw'] = cat['sc']
         cat['sc'] = sc_tied
         tied.append(cat)
         # worst ref-vs-ref duplicate fraction involving this observation, in
@@ -298,7 +300,8 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                   f'resid rms {diag["rms_resid_mas"]:.1f} mas')
     sc = concatenate([c['sc'] for c in tied]) if len(tied) > 1 else tied[0]['sc']
     obs_index = np.concatenate([np.full(c['n'], c['obs_index']) for c in tied])
-    ref = dict(sc=sc,
+    sc_raw = concatenate([c['sc_raw'] for c in tied]) if len(tied) > 1 else tied[0]['sc_raw']
+    ref = dict(sc=sc, sc_raw=sc_raw,
               ex=np.concatenate([c['ex'] for c in tied]),
               ey=np.concatenate([c['ey'] for c in tied]),
               flux=np.concatenate([c['flux'] for c in tied]),
@@ -341,6 +344,7 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     # exactly how much linear motion/shear each tie removed and add it back
     # if needed.
     pm.meta['tie_diag_json'] = json.dumps(diags)
+    pm.meta['ref_paths_json'] = json.dumps([os.path.basename(q) for q in ref_paths])
     pm.write(out_path, overwrite=True)
     ntrust = int(pm['trustworthy'].sum())
     if verbose:

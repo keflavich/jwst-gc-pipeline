@@ -367,3 +367,75 @@ def test_isolation_survives_duplicate_observation_concatenation():
     # (and therefore trustworthy) is 0 here, same as it was on real data.
     assert pm['dominant'].sum() > 0.9 * len(pm)
     assert pm['trustworthy'].sum() > 0.9 * len(pm)
+
+
+def test_ref_frame_position_is_the_untied_ref_position():
+    """ra_ref/dec_ref must be the ref star's own (untied) position, which is
+    where it sits in the Treasury HiPS, while ra0/dec0 live in the src frame
+    after the tie."""
+    pytest.importorskip('flystar')
+    n = 2000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=300.0)
+    offx, offy = 0.10, -0.12   # 100/-120 mas pointing offset the tie removes
+    # small noise keeps the tie's duplicate-row guard (#958) from firing
+    rx = sx + offx + RNG.normal(0, 0.003, n)
+    ry = sy + offy + RNG.normal(0, 0.003, n)
+    mag_ref = mag + RNG.normal(0, 0.02, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    src = dict(sc=src_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+              mag=mag, flux=10 ** (-0.4 * mag), epoch=2024.0, n=n)
+    ref = dict(sc=ref_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+              mag=mag_ref, flux=10 ** (-0.4 * mag_ref), epoch=2026.0, n=n)
+    tied, _ = affine_tie(ref['sc'], ref['mag'], src['sc'], src['mag'],
+                         magcut=0, match_radius=1.0)
+    ref = dict(ref, sc=tied, sc_raw=ref_sc, obs_index=np.zeros(n, dtype=int))
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=1.0, err_cap_mas=1e6)
+
+    ra_ref = SkyCoord(pm['ra_ref'] * u.deg, pm['dec_ref'] * u.deg)
+    ra0 = SkyCoord(pm['ra0'] * u.deg, pm['dec0'] * u.deg)
+    idx, sep, _ = ra_ref.match_to_catalog_sky(ref_sc)
+    assert np.all(sep.arcsec < 1e-6)
+    assert np.median(ra_ref.separation(ra0).arcsec) == pytest.approx(np.hypot(offx, offy), abs=0.01)
+
+
+def _fake_pm_table(with_ref_cols=True, ref_paths=None):
+    """Minimal PM table for make_overlay_json (no flystar needed)."""
+    import json
+    from astropy.table import Table
+    t = Table({'ra0': [266.5, 266.6], 'dec0': [-28.5, -28.4],
+               'pm_ra': [1.0, -2.0], 'pm_dec': [0.5, 3.0], 'pm_tot': [1.1, 3.6],
+               'pm_ra_err': [0.1, 0.1], 'pm_dec_err': [0.1, 0.1],
+               'mag_src': [-8.0, -7.0], 'trustworthy': [True, True]})
+    if with_ref_cols:
+        t['ra_ref'] = [266.5001, 266.6001]
+        t['dec_ref'] = [-28.5001, -28.4001]
+    t.meta['epochs'] = [2024.0, 2026.0]
+    t.meta['baseline_yr'] = 2.0
+    if ref_paths is not None:
+        t.meta['ref_paths_json'] = json.dumps(ref_paths)
+    return t
+
+
+def test_overlay_json_frame_selection_and_provenance(tmp_path):
+    from jwst_gc_pipeline.astrometry.make_pm_overlay_json import make_overlay_json
+    fits_path = tmp_path / 'pm.fits'
+    _fake_pm_table(ref_paths=['a_o128.fits', 'a_o129.fits']).write(fits_path)
+    doc = make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False)
+    assert doc['meta']['position_frame'] == 'treasury-ref-epoch'
+    assert doc['sources'][0]['ra'] == pytest.approx(266.5001)
+    assert doc['meta']['ref_observations'] == ['a_o128.fits', 'a_o129.fits']
+    doc_src = make_overlay_json(str(fits_path), str(tmp_path / 'o2.json'), 'x',
+                                verbose=False, frame='src')
+    assert doc_src['meta']['position_frame'] == 'src-tied'
+    assert doc_src['sources'][0]['ra'] == pytest.approx(266.5)
+
+
+def test_overlay_json_refuses_old_fits_without_ref_columns(tmp_path):
+    from jwst_gc_pipeline.astrometry.make_pm_overlay_json import make_overlay_json
+    fits_path = tmp_path / 'old.fits'
+    _fake_pm_table(with_ref_cols=False).write(fits_path)
+    with pytest.raises(ValueError, match='ra_ref'):
+        make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False)
+    doc = make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False,
+                            frame='src', ref_observations=['o112', 'o118'])
+    assert doc['meta']['ref_observations'] == ['o112', 'o118']
