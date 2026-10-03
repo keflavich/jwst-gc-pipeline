@@ -51,6 +51,9 @@ NULL_BAND = (1300, 1600)       # same width, where #1013 found no deficit
 HALO = (15, 80)
 SKY = (150, 250)
 LINK_ARCSEC = 0.5
+# RAMP_ZEROFRAME=1: prepend the first-frame terms (halo of G0 - ZEROFRAME,
+# core area at or above the threshold in ZEROFRAME) to H and A
+ZEROFRAME = bool(int(os.environ.get('RAMP_ZEROFRAME', 0)))
 
 
 def fetch(key, tmpdir):
@@ -64,17 +67,24 @@ def fetch(key, tmpdir):
 def exposure(fn_uncal, fn_cal, thr):
     with fits.open(fn_uncal) as h:
         raw = h['SCI'].data.astype(np.float32)          # (nint, ngroup, y, x)
+        zf = (h['ZEROFRAME'].data.astype(np.float32)
+              if ZEROFRAME and 'ZEROFRAME' in [e.name for e in h] else None)
     with fits.open(fn_cal) as h:
         dq = h['DQ'].data.astype(np.int64)
     ramp = raw.mean(0)
     satg = raw >= thr
     satany = satg.any((0, 1))
     D = np.diff(ramp, axis=0)
+    if zf is not None:
+        # group 0 averages frames 1..NFRAMES and ZEROFRAME is frame 1, so
+        # G0 - ZF is a bias-free signal from the first frame interval
+        D = np.concatenate([(ramp[0] - zf.mean(0))[None], D])
+        satz = (zf >= thr).mean(0)
     lab, nl = ndimage.label((dq & 2) > 0, structure=np.ones((3, 3)))
     sizes = ndimage.sum(np.ones_like(lab), lab, np.arange(1, nl + 1))
     keep = np.flatnonzero(sizes >= NMIN) + 1
     if keep.size == 0:
-        return []
+        return [], zf is not None
     cy, cx = np.array(ndimage.center_of_mass(np.ones_like(lab), lab, keep)).T
     good = ~satany & ((dq & 1) == 0)
     neigh = ndimage.binary_dilation(satany, iterations=7)
@@ -100,8 +110,10 @@ def exposure(fn_uncal, fn_cal, thr):
             He.append(float(1.2533 * 1.4826 * np.median(np.abs(v - np.median(v))) / np.sqrt(v.size)))
         core = (lab[sl] == L) | ((r < 2 * RMAX_CORE) & satany[sl])
         A = [float((satg[:, k, y1:y2, x1:x2] & core).sum() / satg.shape[0]) for k in range(ramp.shape[0])]
+        if zf is not None:
+            A = [float((satz[sl] * core).sum())] + A
         out.append((x0, y0, H, He, A))
-    return out
+    return out, zf is not None
 
 
 def measure(rowdir, reffile, keys):
@@ -117,14 +129,14 @@ def measure(rowdir, reffile, keys):
         fc, tc = fetch(key, rowdir)
         fu, tu = fetch(key.replace('_cal.fits', '_uncal.fits'), rowdir)
         try:
-            stars = exposure(fu, fc, thr)
+            stars, used_zf = exposure(fu, fc, thr)
             w = frame_wcs(fc)
             x = np.array([s[0] for s in stars]); y = np.array([s[1] for s in stars])
             sky = w.pixel_to_world(x, y) if len(stars) else None
             np.savez(out, x=x, y=y,
                      ra=sky.ra.deg if sky is not None else x, dec=sky.dec.deg if sky is not None else y,
                      H=np.array([s[2] for s in stars]), He=np.array([s[3] for s in stars]),
-                     A=np.array([s[4] for s in stars]))
+                     A=np.array([s[4] for s in stars]), zf=used_zf)
             print(root, len(stars), flush=True)
         finally:
             for f, t in ((fc, tc), (fu, tu)):
@@ -134,6 +146,7 @@ def measure(rowdir, reffile, keys):
 
 def analyze(outp, rowdir):
     rows = []                                   # (obs, exp, x, H[3], He[3], A[4], ra, dec)
+    zf_flags = set()
     for fn in sorted(glob.glob(os.path.join(rowdir, '*.npz'))):
         d = np.load(fn)
         if d['x'].size == 0:
@@ -145,6 +158,11 @@ def analyze(outp, rowdir):
         for i in range(d['x'].size):
             rows.append(dict(obs=obs, exp=exp, x=d['x'][i], H=d['H'][i], He=d['He'][i], A=d['A'][i],
                              ra=d['ra'][i], dec=d['dec'][i]))
+        zf_flags.add(bool(d['zf']) if 'zf' in d.files else False)
+    if len(zf_flags) > 1:
+        # the ZEROFRAME column shifts every H/A index by one
+        raise ValueError(f'{rowdir} mixes rows with and without the ZEROFRAME terms')
+    has_zf = zf_flags.pop() if zf_flags else False
     # link within each star-visit: a row joins the first cluster within 0.5"
     # (small-angle offsets about the cluster's first position)
     clusters = []
@@ -177,7 +195,7 @@ def analyze(outp, rowdir):
             continue
         x = np.array([r['x'] for r in k['rows']])
         H = np.array([r['H'] for r in k['rows']]); A = np.array([r['A'] for r in k['rows']])
-        Q = np.column_stack([H, H.sum(1), A])
+        Q = np.column_stack([H, H[:, int(has_zf):].sum(1), A])
         if np.any(np.median(Q[later], 0) <= 0):
             continue
         q = np.median(Q[first], 0) / np.median(Q[later], 0)
@@ -201,7 +219,7 @@ def analyze(outp, rowdir):
             if inb.sum() < 1 or out.sum() < 2:
                 continue
             H = np.array([r['H'] for r in k['rows']]); A = np.array([r['A'] for r in k['rows']])
-            Q = np.column_stack([H, H.sum(1), A])
+            Q = np.column_stack([H, H[:, int(has_zf):].sum(1), A])
             if np.any(np.median(Q[out], 0) <= 0):
                 continue
             q = np.median(Q[inb], 0) / np.median(Q[out], 0)
@@ -209,8 +227,9 @@ def analyze(outp, rowdir):
                 q[:H.shape[1] + 1] = np.nan
             groups[name].append(q)
     nD = len(clusters[0]['rows'][0]['H'])
-    labels = [f'halo D{k + 1}' for k in range(nD)] + ['halo sum'] + \
-        [f'core area g{g}' for g in range(len(clusters[0]['rows'][0]['A']))]
+    labels = [f'halo D{k + 1 - int(has_zf)}' for k in range(nD)] + ['halo sum'] + \
+        (['core area ZF'] if has_zf else []) + \
+        [f'core area g{g}' for g in range(len(clusters[0]['rows'][0]['A']) - int(has_zf))]
     rng = np.random.default_rng(0)
 
     def stat(v):
