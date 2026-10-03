@@ -91,9 +91,9 @@ comparison.
     - Null band at x = 1300–1600: 0.97–1.00.
     - With the 10678 pattern (+385 px in x per step) a star is in the band almost only in exposures 1–2. The control, stars whose exposures 1–2 are *outside* the band, (`control`) reads 0.99–1.03 for the halo and 0.97–0.99 for the area, so this is a column effect and not an exposure-order one.
   - **Program 2221 (F405N / F410M / F466N, 24-point FULLBOX, 2022):** 96 frames, cores ≥20 px.
-    - Halo 0.89 ± 0.03 (73 stars); area 0.73–0.75 (113 stars); null band 0.99–1.00.
+    - Halo 0.90 ± 0.03 (73 stars); area 0.73–0.75 (113 stars); null band 0.99–1.00.
     - So the effect is present in other LW filters and epochs, weaker for these smaller cores.
-    - The area uses the 10678 threshold reffile (0115); 2221 frames name 0098. The in/out ratio uses one threshold map for both, so only a spatial difference between the two versions would matter.
+    - Measured with the threshold reffile the 2221 frames name, `jwst_nircam_saturation_0098`. A first run used the 10678 file (0115); the two maps differ on 0.16% of pixels, evenly in and out of the band (0098/0115 = 1.0000 in every 128-px column bin). Rerun with 0098, every frame finds the same stars; the halo moves 0.889 → 0.898 (0.3σ) and the area, null band and exposure-order control are unchanged.
   - **The deficit grows along the ramp** in both the halo (0.81 → 0.75) and the area (0.61 → 0.54). Charge accumulation, not photon arrival, is implicated.
   - **The flat field** is only ~5% low here (rate/cal), so raw 0.78–0.81 corresponds to the ~0.83–0.85 seen in `cal`.
 - **Not optical.** Unsaturated PSF wings at 4–15 px are flat in x (±4%).
@@ -106,7 +106,7 @@ comparison.
   - A full-height column stripe: in the 256-px map every row of the x = 256–512 column reads −0.09 to −0.26. It is deepest at mid-height (−0.23 to −0.26 for y = 256–1792) and weaker at the top and bottom edges (−0.15, −0.09). At y < 512 it spreads to x = 512–768 (−0.07, −0.12). Every other cell is within ±0.07, apart from the x < 256, y < 256 corner (+0.11).
   - Stable in time: −0.18 to −0.23 in each date quartile of 2026-09-11 to 09-21 (out of band +0.01). It is also in the 2022 program 2221 (step 8), so it has persisted for ~4 years.
   - The open mechanism is therefore a detector property of the x ≈ 250–550 columns that acts only at very high illumination: a saturated core is smaller and its halo fainter there from the first read, while unsaturated stars are flat.
-- **LINEARITY reffile:** not inspected; CRDS is unreachable from this environment. The raw-ramp result makes it moot, because the deficit exists before linearity is applied.
+- **LINEARITY reffile:** not inspected. The raw-ramp result makes it moot, because the deficit exists before linearity is applied.
 
 ## Effect on the production saturated-star fluxes
 
