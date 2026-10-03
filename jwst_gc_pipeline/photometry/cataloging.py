@@ -2969,9 +2969,34 @@ def _resolve_residual_bg_median_size(median_size, fwhm_px, n_fwhm=7.0):
     return n if n % 2 else n + 1
 
 
+def _phase_satstar_product_paths(frames, sat_suffix, cutout_label=None,
+                                 pipeline_dir=None):
+    """Per-frame satstar products of one phase whose positions the residual bg
+    masks: accepted, extended, and gate-rejected catalogs.
+
+    ``frames`` are the original ``*_crf.fits`` paths (``frame_cache``);
+    ``sat_suffix`` is ``_bgsub_token(options) + _iteration_token(phase)``, the
+    writer's ``satstar_file_suffix`` in :func:`_prepare_frame_for_photometry`.
+    Cutout runs write the products next to the cropped copy
+    (``<pipeline_dir>/<crf stem>_cutout_<label>.fits``), full-frame runs next
+    to the frame.  Paths are not checked for existence.
+    """
+    out = []
+    for fr in frames:
+        if cutout_label:
+            fr = os.path.join(pipeline_dir if pipeline_dir else os.path.dirname(fr),
+                              os.path.basename(fr).replace(
+                                  '.fits', f'_cutout_{cutout_label}.fits'))
+        for kind in ('satstar_catalog', 'extended_satstar_catalog',
+                     'satstar_rejected'):
+            out.append(fr.replace('.fits', f'{sat_suffix}_{kind}.fits'))
+    return out
+
+
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
                             mask_radius_fwhm=2.0, median_size=3,
-                            extra_source_catalogs=()):
+                            extra_source_catalogs=(),
+                            satstar_catalogs=(), satstar_mask_radius_fwhm=0.0):
     """Build the smoothed background map from a mergedcat residual i2d with the
     fitted SOURCE CORES MASKED OUT before smoothing.
 
@@ -2989,6 +3014,11 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     with the PSF (:func:`_resolve_residual_bg_median_size`).  The source mask
     only covers catalogued sources, so the box must be wide enough for the
     median to reject an uncatalogued faint star (#1039).
+
+    ``satstar_catalogs`` / ``satstar_mask_radius_fwhm`` mask the per-frame
+    satstar positions (``skycoord_fit``, else ``skycoord``) at a wider radius
+    than the 2 FWHM source disks; ``0`` (default) leaves them unmasked.  See
+    the comment at the masking step for the measured numbers.
 
     Writes ``<mc_i2d>_..._smoothed_bg_i2d.fits`` (same name the plain smoother
     would produce) and returns its path.
@@ -3047,11 +3077,13 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
         src_ra.append(np.atleast_1d(np.asarray(_sc.ra.deg, dtype=float)))
         src_dec.append(np.atleast_1d(np.asarray(_sc.dec.deg, dtype=float)))
 
-    n_masked = 0
-    if src_ra:
-        sc = _SkyCoord(np.concatenate(src_ra), np.concatenate(src_dec), unit='deg')
+    def _mask_disks(ra_deg, dec_deg, Rm):
+        """NaN out disks of radius ``Rm`` px at the given sky positions of
+        ``work``; returns the number of disks that fall on the image."""
+        sc = _SkyCoord(ra_deg, dec_deg, unit='deg')
         xs, ys = w.world_to_pixel(sc)
-        Ri = int(np.ceil(R))
+        Ri = int(np.ceil(Rm))
+        n = 0
         for xc, yc in zip(np.atleast_1d(xs), np.atleast_1d(ys)):
             if not (np.isfinite(xc) and np.isfinite(yc)):
                 continue
@@ -3061,9 +3093,53 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
             if y0 >= y1 or x0 >= x1:
                 continue
             yy, xx = np.mgrid[y0:y1, x0:x1]
-            disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= R ** 2
+            disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= Rm ** 2
             work[y0:y1, x0:x1][disk] = np.nan
-            n_masked += 1
+            n += 1
+        return n
+
+    n_masked = 0
+    if src_ra:
+        n_masked = _mask_disks(np.concatenate(src_ra), np.concatenate(src_dec), R)
+
+    # Saturated stars the phase did not model (satstar fit rejected, or daophot
+    # masks the SAT pixels) keep their PSF wings in the residual out to ~8 px
+    # (F150W, FWHM 1.6 px).  The 2 FWHM disk leaves those wings in, the
+    # interpolation fills the disk from them, and the bg ends up with a bump of
+    # 3-5% of the star's 5x5-box flux; the next phase's daophot hand-off fit of
+    # the star then reads +0.05..+0.13 mag too faint.  Masking the per-frame
+    # satstar positions at a wider radius removes the wings from the bg (wd2
+    # F150W: 3.75 FWHM = 6 px puts the saturated stars on the unsaturated
+    # control scale, dm -0.029/-0.036/-0.027 vs control -0.035; 9 px
+    # over-corrects by ~0.02; 12 px fails, -0.12..-0.16, because the
+    # FWHM-wide interpolation kernel cannot fill a 24 px hole).
+    n_sat, R_sat = 0, R
+    if satstar_mask_radius_fwhm > 0 and satstar_catalogs:
+        R_sat = max(R, satstar_mask_radius_fwhm * fwhm_px)
+        sat_ra, sat_dec = [], []
+        for _sp in satstar_catalogs:
+            if not os.path.exists(_sp):
+                print(f"[bg] satstar catalog missing ({_sp}); skipping", flush=True)
+                continue
+            try:
+                _t = Table.read(_sp)
+                if len(_t) == 0:
+                    continue
+                _col = 'skycoord_fit' if 'skycoord_fit' in _t.colnames else 'skycoord'
+                _sc = _t[_col]
+                if not isinstance(_sc, _SkyCoord):
+                    _sc = _SkyCoord(_sc)
+                _ra = np.atleast_1d(np.asarray(_sc.ra.deg, dtype=float))
+                _dec = np.atleast_1d(np.asarray(_sc.dec.deg, dtype=float))
+            except (OSError, ValueError, KeyError) as ex:
+                print(f"[bg] satstar catalog unreadable ({_sp}: {ex}); skipping",
+                      flush=True)
+                continue
+            _ok = np.isfinite(_ra) & np.isfinite(_dec)
+            sat_ra.append(_ra[_ok])
+            sat_dec.append(_dec[_ok])
+        if sat_ra and sum(len(a) for a in sat_ra):
+            n_sat = _mask_disks(np.concatenate(sat_ra), np.concatenate(sat_dec), R_sat)
 
     # interpolate over the masked source disks (fill from surrounding diffuse bg)
     if np.any(np.isnan(work) & fov):
@@ -3074,8 +3150,10 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     out = residual_to_smoothed_bg_i2d(mc_i2d_path)
     _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
     print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
-          f"(masked {n_masked} sources, R={R:.1f}px, median box "
-          f"{median_size}px)", flush=True)
+          f"(masked {n_masked} sources, R={R:.1f}px"
+          + (f", {n_sat} satstar positions at R_sat={R_sat:.1f}px"
+             if n_sat else "")
+          + f", median box {median_size}px)", flush=True)
     return out
 
 
@@ -8061,11 +8139,28 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             # bg-absorption -> over-subtraction -> non-positive-ban
                             # cycle that permanently loses it (ngc6334 F405N).
                             _seed_for_bg = locals().get('prev_seed')
+                            # Wider mask at this phase's own satstar fits (the
+                            # unmodeled saturated stars' PSF wings); off by
+                            # default.  Same suffix as the per-frame writer.
+                            _sat_fwhm = float(mopt(
+                                options, 'manual_residual_bg_satstar_mask_fwhm') or 0.0)
+                            _sat_paths = ()
+                            if _sat_fwhm > 0:
+                                _is_cut = bool(getattr(options, 'cutout_region', ''))
+                                _sat_paths = _phase_satstar_product_paths(
+                                    frame_cache.get((module, filt), []),
+                                    f'{_bgsub_token(opts_phase)}{_iteration_token(phase)}',
+                                    cutout_label=(_L._cutout_label_for(options)
+                                                  if _is_cut else None),
+                                    pipeline_dir=(f'{cut_bp}/{filt}/pipeline'
+                                                  if _is_cut else None))
                             bg_for_next[(module, filt)] = _build_source_masked_bg(
                                 mc_i2d, vetted_path, filt,
                                 median_size=_bg_median_size,
                                 extra_source_catalogs=([_seed_for_bg]
-                                                       if _seed_for_bg else ()))
+                                                       if _seed_for_bg else ()),
+                                satstar_catalogs=_sat_paths,
+                                satstar_mask_radius_fwhm=_sat_fwhm)
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "
                                   f"using plain smoother", flush=True)
