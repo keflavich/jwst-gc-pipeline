@@ -880,6 +880,39 @@ def _env_switch(name, default, env=None):
         f"({'on' if default else 'off'})")
 
 
+def nircam_lock_min_area_px(fitsdata, env=None):
+    """Saturated area (pixels) at and above which ``NIRCAM_SATSTAR_LOCK_POS``
+    locks a satstar's position; 0 means every source is locked (the behaviour
+    before this gate existed).
+
+    ``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2`` (default 0) gives the threshold in
+    arcsec^2.  It is converted with the frame's pixel area (SCI ``PIXAR_A2``,
+    else the WCS pixel scales), so one value serves SW and LW frames.
+
+    The lock was introduced for large cores whose DQ-saturated extent changes
+    from frame to frame (W51 darkfil F480M: 370-659 LW px, 1.5-2.6 arcsec^2);
+    for those the raw mask centre of mass is the stable seed.  Compact stellar
+    cores are better served by the refined centroid and a bounded fit.  On wd2
+    F150W the raw centre of mass sits a median 0.21-0.27 px from the dolphot
+    positions; the refined seed plus the 1.5 FWHM bounded fit lands within
+    0.03-0.08 px of dolphot (and ~0.1 px of Gaia) for cores up to ~1 arcsec^2.
+    Above ~1 arcsec^2 the bounded fit moved 2-3 px off Gaia for 3 of 4 cores.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2')
+    min_as2 = float(raw) if raw is not None and str(raw).strip() else 0.0
+    if not min_as2 > 0:
+        return 0.0
+    pixar = None
+    if 'SCI' in fitsdata:
+        pixar = fitsdata['SCI'].header.get('PIXAR_A2')
+    if pixar is None or not float(pixar) > 0:
+        from astropy.wcs.utils import proj_plane_pixel_scales
+        scales = np.abs(proj_plane_pixel_scales(frame_wcs(fitsdata).celestial)) * 3600.0
+        pixar = float(scales[0] * scales[1])
+    return min_as2 / float(pixar)
+
+
 def _zeroframe_fit_enabled(env=None):
     """``SATSTAR_ZEROFRAME_FIT`` (default ON): anchor the satstar fit on the
     ramp first read wherever a sibling ``_ramp.fits`` exists.
@@ -1532,6 +1565,22 @@ def stamp_seed_kinds(source_records, seed_kinds):
                        seed_kinds[lbl] if 0 <= lbl < len(seed_kinds)
                        else 'dqsat')
     return source_records
+
+
+def _lock_gated_coms(coms, data, sources, saturated, min_px,
+                     unrecoverable=None):
+    """Seeds for a size-gated NIRCam position lock
+    (``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2``, see ``nircam_lock_min_area_px``).
+
+    Components with ``sat_area >= min_px`` keep the raw mask centre of mass,
+    which is the stable seed the lock needs; the others get the refined
+    centroid from ``_refine_coms_by_data``.  Returns the seeds and the number of
+    components kept on the raw centre of mass.
+    """
+    areas = np.atleast_1d(sum_labels(saturated, sources, np.arange(len(coms)) + 1))
+    refined = _refine_coms_by_data(coms, data, sources, unrecoverable=unrecoverable)
+    seeds = [c if a >= min_px else r for c, r, a in zip(coms, refined, areas)]
+    return seeds, int(np.sum(areas >= min_px))
 
 
 def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
@@ -2494,8 +2543,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # centre-of-mass, because that is stable across frames (~0.13") while the
     # refined one follows this frame's saturation extent and wanders ~0.6" --
     # the lock needs a consistent seed, not a per-frame-accurate one.
-    if not int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)):
+    # NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2 limits the lock to large cores
+    # (nircam_lock_min_area_px); smaller ones take the refined seed and the
+    # bounded fit below.
+    _lock_pos = bool(int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+    _lock_min_px = nircam_lock_min_area_px(fitsdata) if _lock_pos else 0.0
+    if not _lock_pos:
         coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
+    elif _lock_min_px > 0 and len(coms):
+        coms, _n_locked = _lock_gated_coms(coms, data, sources, saturated,
+                                           _lock_min_px,
+                                           unrecoverable=_unrecoverable)
+        print(f"NIRCam-ext: position lock limited to sat_area >= "
+              f"{_lock_min_px:.0f} px ({_n_locked} of {len(coms)} components); "
+              f"the rest use the refined seed", flush=True)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
@@ -3494,8 +3555,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # bound) also keeps flux_err finite -- the NaN flux_err came from a
             # near-singular 2D position covariance, not from a 1D flux fit.
             # NIRCAM_SATSTAR_LOCK_POS; supersedes the bound above.
-            _nc_lock = (not _is_miri
-                        and int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+            _nc_lock = (not _is_miri and _lock_pos
+                        and (_lock_min_px <= 0 or src_sat_area is None
+                             or int(src_sat_area) >= _lock_min_px))
             if (_is_miri and not _miri_bounded) or _nc_lock:
                 # hard lock: fit flux only at the seed (MIRI legacy / NIRCam ext)
                 model.x_0.fixed = True

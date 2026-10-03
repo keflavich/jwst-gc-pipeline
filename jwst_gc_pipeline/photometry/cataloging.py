@@ -2484,6 +2484,16 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # ~0.13") seed -> one clean coadded PSF.  A user export is respected.
     if 'NIRCAM_SATSTAR_LOCK_POS' not in os.environ:
         os.environ['NIRCAM_SATSTAR_LOCK_POS'] = '1' if _sat_ext_nircam else '0'
+    # ... but only for large cores.  A compact stellar core is better centred by
+    # the refined seed and the tight bounded fit: on wd2 F150W the locked raw
+    # mask centre of mass sat 0.21-0.27 px from dolphot, the bounded fit
+    # 0.03-0.08 px, up to ~1 arcsec^2 of saturated area.  0.5 arcsec^2 keeps
+    # the lock on the W51 darkfil blob that motivated it (1.5-2.6 arcsec^2) and
+    # on every core the merge_catalogs big-core fallback treats as big
+    # (r >= SATSTAR_FP_BIGCORE_ARCSEC = 0.5", i.e. >= 0.79 arcsec^2).
+    if 'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2' not in os.environ:
+        os.environ['NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2'] = (
+            '0.5' if _sat_ext_nircam else '0')
     # Cap a satstar's model to its frame0-RECOVERED core data (a recovered core is
     # not clipped, so the data is the true flux): stops an extended blob / mildly-
     # saturated star seeded as a satstar from extrapolating a huge flux -> crater.
