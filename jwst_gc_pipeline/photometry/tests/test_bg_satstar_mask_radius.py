@@ -8,16 +8,20 @@ flux; the next phase's hand-off fit then reads +0.05..+0.13 mag too faint.
 ``satstar_mask_radius_fwhm`` masks the per-frame satstar positions wider
 (wd2 F150W: 3.75 FWHM puts those stars on the control scale).
 """
+import inspect
 import os
 import re
+from types import SimpleNamespace
 
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
+from jwst_gc_pipeline.photometry import cataloging
 from jwst_gc_pipeline.photometry.cataloging import (
-    _build_source_masked_bg, _phase_satstar_product_paths)
+    _build_source_masked_bg, _phase_satstar_mask_inputs,
+    _phase_satstar_product_paths)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
 FILT = 'F150W'          # present in reduction/fwhm_table.ecsv
@@ -36,9 +40,13 @@ def _wcs():
     return w
 
 
-def _write(tmp_path):
+def _write(tmp_path, star_in_vetted=True):
     """Flat bg plus a bright star whose wings (Gaussian core + broad halo,
-    sigma 3.2 px ~ 2 FWHM) extend to ~4 FWHM."""
+    sigma 3.2 px ~ 2 FWHM) extend to ~4 FWHM.
+
+    By default the star is in the vetted catalog, as in production: the 2 FWHM
+    source disk is already there and only the wider satstar radius removes the
+    wings."""
     w = _wcs()
     shape = (200, 200)
     star_xy = (120.0, 80.0)
@@ -52,8 +60,8 @@ def _write(tmp_path):
                   fits.ImageHDU(data=data.astype('float32'), header=w.to_header(),
                                 name='SCI')]).writeto(mc)
     vet = str(tmp_path / 'vetted.fits')
-    # the star is in neither the vetted catalog nor the seed
-    Table({'skycoord': w.pixel_to_world(np.array([10.0]), np.array([10.0]))}
+    vx, vy = ([10.0, star_xy[0]], [10.0, star_xy[1]]) if star_in_vetted else ([10.0], [10.0])
+    Table({'skycoord': w.pixel_to_world(np.array(vx), np.array(vy))}
           ).write(vet, overwrite=True)
     sat = str(tmp_path / 'frame_resbgsub_m6_satstar_catalog.fits')
     Table({'skycoord_fit': w.pixel_to_world(np.array([star_xy[0]]),
@@ -77,24 +85,47 @@ def test_default_is_bit_identical(tmp_path):
 
 
 def test_satstar_mask_removes_wing_bump(tmp_path):
+    """The star sits in the vetted catalog, so the plain 2 FWHM disk is
+    already masked; the wings outside it still leave a bump that only the wider
+    satstar radius removes (test scene: ~43 -> ~14 above DIFFUSE)."""
     mc, vet, sat, xy = _write(tmp_path)
-    off = _build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[sat],
-                                  satstar_mask_radius_fwhm=0.0)
-    bump_off = _at(off, xy) - DIFFUSE
-    assert bump_off > 0.02 * PEAK
+    bump_2fwhm = _at(_build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[sat],
+                                             satstar_mask_radius_fwhm=0.0), xy) - DIFFUSE
+    assert bump_2fwhm > 0.01 * PEAK
+    # k = 2 is clamped to the source radius: same as off
+    bump_k2 = _at(_build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[sat],
+                                          satstar_mask_radius_fwhm=2.0), xy) - DIFFUSE
+    assert np.isclose(bump_k2, bump_2fwhm)
+    bump_wide = _at(_build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[sat],
+                                            satstar_mask_radius_fwhm=3.75), xy) - DIFFUSE
+    assert abs(bump_wide) < 0.5 * bump_2fwhm
+
+
+def test_satstar_mask_covers_unvetted_star(tmp_path):
+    """A satstar position missing from the vetted catalog is masked too."""
+    mc, vet, sat, xy = _write(tmp_path, star_in_vetted=False)
+    bump_off = _at(_build_source_masked_bg(mc, vet, FILT), xy) - DIFFUSE
+    assert bump_off > 0.2 * PEAK
     on = _build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[sat],
                                  satstar_mask_radius_fwhm=3.75)
-    # near the surrounding level: the wing bump drops by >5x
-    assert abs(_at(on, xy) - DIFFUSE) < 0.2 * bump_off
+    assert abs(_at(on, xy) - DIFFUSE) < 0.05 * bump_off
 
 
-def test_missing_satstar_file_is_skipped(tmp_path):
+def test_missing_satstar_file_is_skipped(tmp_path, capsys):
     mc, vet, sat, _ = _write(tmp_path)
     base = fits.getdata(_build_source_masked_bg(mc, vet, FILT)).copy()
-    out = _build_source_masked_bg(
-        mc, vet, FILT, satstar_catalogs=[str(tmp_path / 'nope_satstar_catalog.fits')],
-        satstar_mask_radius_fwhm=3.75)
+    nope = str(tmp_path / 'nope_satstar_catalog.fits')
+    out = _build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[nope],
+                                  satstar_mask_radius_fwhm=3.75)
     assert np.array_equal(fits.getdata(out), base, equal_nan=True)
+    # every product missing: a WARNING naming the first expected path
+    log = capsys.readouterr().out
+    assert 'WARNING [bg]' in log and nope in log
+    # some present: the quiet summary line only
+    _build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[sat, nope],
+                            satstar_mask_radius_fwhm=3.75)
+    log = capsys.readouterr().out
+    assert 'WARNING [bg]' not in log and '1/2 satstar product(s) not found' in log
 
 
 def test_skycoord_fallback_and_nonfinite(tmp_path):
@@ -108,7 +139,7 @@ def test_skycoord_fallback_and_nonfinite(tmp_path):
     bump_off = _at(_build_source_masked_bg(mc, vet, FILT), xy) - DIFFUSE
     out = _build_source_masked_bg(mc, vet, FILT, satstar_catalogs=[p],
                                   satstar_mask_radius_fwhm=3.75)
-    assert abs(_at(out, xy) - DIFFUSE) < 0.2 * bump_off
+    assert abs(_at(out, xy) - DIFFUSE) < 0.5 * bump_off
 
 
 def test_product_paths():
@@ -133,3 +164,34 @@ def test_option_default_and_parser_flag():
     assert m is not None
     assert 'manual_residual_bg_satstar_mask_fwhm' in m.group(1)
     assert 'type=float' in m.group(1)
+
+
+def test_mask_inputs_off_by_default():
+    opts = SimpleNamespace()
+    assert _phase_satstar_mask_inputs(opts, opts, 'm6', ['/d/a_crf.fits'], '/c', 'F150W') == (0.0, ())
+
+
+def test_mask_inputs_full_frame_and_cutout(monkeypatch):
+    opts = SimpleNamespace(manual_residual_bg_satstar_mask_fwhm=3.75)
+    phase_opts = SimpleNamespace(use_iter3_residual_bg=True)
+    k, paths = _phase_satstar_mask_inputs(opts, phase_opts, 'm6', ['/d/a_crf.fits'],
+                                          '/c', 'F150W')
+    assert k == 3.75
+    assert paths[0] == '/d/a_crf_resbgsub_m6_satstar_catalog.fits'
+    assert len(paths) == 3
+    monkeypatch.setattr(cataloging._L, '_cutout_label_for', lambda o: 'lab')
+    cut = SimpleNamespace(manual_residual_bg_satstar_mask_fwhm=3.75, cutout_region='r.reg')
+    _, paths = _phase_satstar_mask_inputs(cut, phase_opts, 'm6', ['/d/a_crf.fits'],
+                                          '/c', 'F150W')
+    assert paths[0] == '/c/F150W/pipeline/a_crf_cutout_lab_resbgsub_m6_satstar_catalog.fits'
+
+
+def test_call_site_wires_the_satstar_mask():
+    """run_manual_pipeline resolves the inputs with the helper and passes both
+    through to _build_source_masked_bg (guards against an unwired call)."""
+    src = inspect.getsource(cataloging.run_manual_pipeline)
+    assert '_phase_satstar_mask_inputs(' in src
+    call = src[src.index('bg_for_next[(module, filt)] = _build_source_masked_bg('):]
+    call = call[:call.index(')\n')]
+    assert 'satstar_catalogs=_sat_paths' in call
+    assert 'satstar_mask_radius_fwhm=_sat_fwhm' in call

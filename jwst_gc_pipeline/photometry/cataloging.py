@@ -2993,6 +2993,25 @@ def _phase_satstar_product_paths(frames, sat_suffix, cutout_label=None,
     return out
 
 
+def _phase_satstar_mask_inputs(options, opts_phase, phase, frames, cut_bp, filt):
+    """``(satstar_mask_radius_fwhm, satstar_catalogs)`` for
+    :func:`_build_source_masked_bg` at the end of ``phase``.
+
+    ``options`` carries ``manual_residual_bg_satstar_mask_fwhm`` and the cutout
+    settings; ``opts_phase`` is the per-phase copy whose bg flags set the
+    writer's suffix.  Returns ``(0.0, ())`` when the option is off.
+    """
+    fwhm = float(mopt(options, 'manual_residual_bg_satstar_mask_fwhm') or 0.0)
+    if fwhm <= 0:
+        return 0.0, ()
+    is_cut = bool(getattr(options, 'cutout_region', ''))
+    paths = _phase_satstar_product_paths(
+        frames, f'{_bgsub_token(opts_phase)}{_iteration_token(phase)}',
+        cutout_label=_L._cutout_label_for(options) if is_cut else None,
+        pipeline_dir=f'{cut_bp}/{filt}/pipeline' if is_cut else None)
+    return fwhm, tuple(paths)
+
+
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
                             mask_radius_fwhm=2.0, median_size=3,
                             extra_source_catalogs=(),
@@ -3136,10 +3155,15 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
                 print(f"[bg] satstar catalog unreadable ({_sp}: {ex}); skipping",
                       flush=True)
                 continue
-            _ok = np.isfinite(_ra) & np.isfinite(_dec)
-            sat_ra.append(_ra[_ok])
-            sat_dec.append(_dec[_ok])
-        if n_missing:
+            # non-finite positions are skipped by _mask_disks
+            sat_ra.append(_ra)
+            sat_dec.append(_dec)
+        if n_missing == len(satstar_catalogs):
+            print(f"WARNING [bg] satstar mask requested (R_sat={R_sat:.1f}px) but "
+                  f"none of the {n_missing} satstar products exist (first "
+                  f"expected: {satstar_catalogs[0]}); no satstar positions "
+                  f"masked", flush=True)
+        elif n_missing:
             print(f"[bg] {n_missing}/{len(satstar_catalogs)} satstar product(s) "
                   f"not found; masking the rest", flush=True)
         if sat_ra and sum(len(a) for a in sat_ra):
@@ -8146,18 +8170,20 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             # Wider mask at this phase's own satstar fits (the
                             # unmodeled saturated stars' PSF wings); off by
                             # default.  Same suffix as the per-frame writer.
-                            _sat_fwhm = float(mopt(
-                                options, 'manual_residual_bg_satstar_mask_fwhm') or 0.0)
-                            _sat_paths = ()
-                            if _sat_fwhm > 0:
-                                _is_cut = bool(getattr(options, 'cutout_region', ''))
-                                _sat_paths = _phase_satstar_product_paths(
+                            # A failure here only drops the satstar mask; it
+                            # must not reach the broad except below, which
+                            # would switch the phase to the plain smoother.
+                            try:
+                                _sat_fwhm, _sat_paths = _phase_satstar_mask_inputs(
+                                    options, opts_phase, phase,
                                     frame_cache.get((module, filt), []),
-                                    f'{_bgsub_token(opts_phase)}{_iteration_token(phase)}',
-                                    cutout_label=(_L._cutout_label_for(options)
-                                                  if _is_cut else None),
-                                    pipeline_dir=(f'{cut_bp}/{filt}/pipeline'
-                                                  if _is_cut else None))
+                                    cut_bp, filt)
+                            except (AttributeError, KeyError, TypeError,
+                                    ValueError) as _sex:
+                                print(f"WARNING manual [{phase}]: satstar bg mask "
+                                      f"inputs failed ({_sex!r}); building the bg "
+                                      f"without it", flush=True)
+                                _sat_fwhm, _sat_paths = 0.0, ()
                             bg_for_next[(module, filt)] = _build_source_masked_bg(
                                 mc_i2d, vetted_path, filt,
                                 median_size=_bg_median_size,
