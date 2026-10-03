@@ -3117,9 +3117,10 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     if satstar_mask_radius_fwhm > 0 and satstar_catalogs:
         R_sat = max(R, satstar_mask_radius_fwhm * fwhm_px)
         sat_ra, sat_dec = [], []
+        n_missing = 0  # extended catalogs exist only where extended fits ran
         for _sp in satstar_catalogs:
             if not os.path.exists(_sp):
-                print(f"[bg] satstar catalog missing ({_sp}); skipping", flush=True)
+                n_missing += 1
                 continue
             try:
                 _t = Table.read(_sp)
@@ -3138,6 +3139,9 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
             _ok = np.isfinite(_ra) & np.isfinite(_dec)
             sat_ra.append(_ra[_ok])
             sat_dec.append(_dec[_ok])
+        if n_missing:
+            print(f"[bg] {n_missing}/{len(satstar_catalogs)} satstar product(s) "
+                  f"not found; masking the rest", flush=True)
         if sat_ra and sum(len(a) for a in sat_ra):
             n_sat = _mask_disks(np.concatenate(sat_ra), np.concatenate(sat_dec), R_sat)
 
