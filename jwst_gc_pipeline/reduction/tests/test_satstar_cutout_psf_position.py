@@ -206,5 +206,77 @@ def test_evaluations_use_a_cutout_view(tree):
     assert not bad, bad
 
 
+# ---- no double correction: every PSF is read ONCE at the detector position --
+# A cutout view given DETECTOR coordinates adds the origin a second time; the
+# bare grid given CUTOUT coordinates adds it zero times (#1055).  Both read
+# the wrong node.  The halo-mode hooks are the two sites that take different
+# coordinate systems, so each is pinned to its pairing.
+
+def _calls(tree, name):
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+            and getattr(n.func, 'id', None) == name]
+
+
+def _names(node):
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def test_halo_mode_hook_reads_the_cutout_view_in_cutout_coordinates(tree):
+    calls = _calls(tree, 'satstar_halo_mode_ratios')
+    assert calls
+    for c in calls:
+        data, _, _, psf, pos = c.args[:5]
+        assert getattr(data, 'id', None) == 'cutout_fit', ast.unparse(c)
+        assert getattr(psf, 'id', None) == '_psf_for_fit', ast.unparse(c)
+        assert "result['x_fit']" in ast.unparse(pos) and "result['y_fit']" in ast.unparse(pos)
+
+
+def test_wide_halo_mode_hook_reads_the_bare_grid_in_detector_coordinates(tree):
+    calls = _calls(tree, 'satstar_halo_mode_ratios_wide')
+    assert calls
+    for c in calls:
+        data, _, _, psf, pos = c.args[:5]
+        assert getattr(data, 'id', None) == 'data', ast.unparse(c)
+        # only the bare grids: no view, no call that could build one
+        assert not any(isinstance(n, ast.Call) for n in ast.walk(psf)), ast.unparse(psf)
+        assert 'big_grid' in _names(psf), ast.unparse(psf)
+        assert _names(psf) <= {'big_grid', 'big_grid_large', '_use_large_infov'}, ast.unparse(psf)
+        assert {'x_centroid', 'y_centroid'} <= _names(pos), ast.unparse(pos)
+    # ... and x_centroid / y_centroid are the fitted cutout position plus the origin
+    src = {ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Assign)}
+    assert "result['xcentroid'] = result['x_fit'] + x0" in src
+    assert "result['ycentroid'] = result['y_fit'] + y0" in src
+    assert "x_centroid = np.asarray(result['xcentroid'], dtype=float)" in src
+    assert "y_centroid = np.asarray(result['ycentroid'], dtype=float)" in src
+
+
+def test_wide_halo_ratios_refuse_a_cutout_view(grid):
+    from jwst_gc_pipeline.photometry.satstar_halo_modes import satstar_halo_mode_ratios_wide
+    frame = np.zeros((2048, 2048))
+    err = np.ones_like(frame)
+    dq = np.zeros(frame.shape, np.uint32)
+    for view in (ssf.psf_in_cutout_coords(grid, X0, Y0),
+                 ssf.psf_in_cutout_coords(grid, 0, 0),
+                 ssf.psf_in_cutout_coords(ssf.psf_in_cutout_coords(grid, X0, Y0), 5, 5)):
+        with pytest.raises(TypeError, match='cutout origin twice'):
+            satstar_halo_mode_ratios_wide(frame, err, dq, view, [(X, Y)], 400.0)
+    # the bare grid is accepted
+    satstar_halo_mode_ratios_wide(frame, err, dq, grid, [(X, Y)], 400.0)
+
+
+def test_implied_peak_reads_the_grid_once_at_the_detector_position(grid):
+    """The implied-peak gate copies ``_psf_for_fit``: the copy keeps the
+    origin, so the view at cutout coordinates is the grid at the detector
+    position, and either wrong pairing is not."""
+    view = ssf.psf_in_cutout_coords(grid, X0, Y0)
+    assert view.copy()._cutout_xoff == X0 and view.copy()._cutout_yoff == Y0
+    truth = float(grid.evaluate(np.array([X]), np.array([Y]), 1.0, X, Y)[0])
+    once = ssf.satstar_implied_peak(1.0, view, X - X0, Y - Y0)
+    twice = ssf.satstar_implied_peak(1.0, view, X, Y)
+    never = ssf.satstar_implied_peak(1.0, grid, X - X0, Y - Y0)
+    assert once == pytest.approx(truth, rel=1e-9)
+    assert abs(twice / truth - 1) > 0.1 and abs(never / truth - 1) > 0.1
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

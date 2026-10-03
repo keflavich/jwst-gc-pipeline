@@ -265,7 +265,19 @@ def satstar_halo_mode_ratios_wide(data, err, dq, psf_model, positions, sat_area,
 
     Returns the ratio per star; NaN for ``sat_area < area_min`` and wherever
     :func:`halo_mode_flux_ratio` gives NaN.
+
+    ``psf_model`` must be the bare detector-position grid.  A cutout view
+    (``saturated_star_finding.psf_in_cutout_coords``, #1055) adds its cutout
+    origin to the detector positions given here, so the grid would be read
+    at the wrong node, offset by the origin a second time; it is refused.
     """
+    if hasattr(psf_model, '_cutout_xoff') or hasattr(psf_model, '_cutout_yoff'):
+        raise TypeError(
+            "satstar_halo_mode_ratios_wide takes DETECTOR positions and the bare "
+            "detector-position PSF grid; got a cutout-coordinate view "
+            f"(origin {getattr(psf_model, '_cutout_xoff', None)}, "
+            f"{getattr(psf_model, '_cutout_yoff', None)}), which would add the "
+            "cutout origin twice")
     from scipy import ndimage
     area = np.broadcast_to(np.asarray(sat_area, float), (len(positions),))
     ny, nx = data.shape
