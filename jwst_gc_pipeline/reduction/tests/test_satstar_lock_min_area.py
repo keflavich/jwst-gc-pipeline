@@ -103,6 +103,25 @@ def test_lock_decision_reads_the_gate(tree):
     assert {'_lock_pos', '_lock_min_px', 'src_sat_area'} <= _names(vals[0])
 
 
+def test_lock_on_shared_model_is_cleared_for_the_next_source():
+    """The loop reuses one PSF model object; a lock set for a large core must
+    not carry into the next (unlocked) source."""
+    from photutils.psf import CircularGaussianPRF
+    model = CircularGaussianPRF(fwhm=2.0)
+    ssf._set_position_fixed(model, True)
+    assert model.x_0.fixed and model.y_0.fixed
+    ssf._set_position_fixed(model, False)
+    assert not model.x_0.fixed and not model.y_0.fixed
+
+
+def test_both_fit_branches_set_the_position_freedom(tree):
+    """Lock branch fixes, bounded branch frees: each calls _set_position_fixed."""
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, 'id', None) == '_set_position_fixed']
+    flags = sorted(bool(c.args[1].value) for c in calls)
+    assert flags == [False, True]
+
+
 def test_driver_defaults_the_gate_for_extended_emission_nircam():
     from jwst_gc_pipeline.photometry import cataloging
     src = inspect.getsource(cataloging._prepare_frame_for_photometry)

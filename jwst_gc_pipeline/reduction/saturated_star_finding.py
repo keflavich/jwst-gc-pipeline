@@ -1567,6 +1567,20 @@ def stamp_seed_kinds(source_records, seed_kinds):
     return source_records
 
 
+def _set_position_fixed(model, fixed):
+    """Fix (lock) or free a PSF model's ``x_0``/``y_0``.
+
+    The satstar loop fits every source with the SAME PSF grid object, so a
+    lock set for one source persists into the next unless it is cleared.
+    Under the size-gated lock (``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2``) the
+    first source fitted is the largest core and is locked; without the reset
+    every smaller source after it inherited the lock (wd2 F150W nrcb1: all
+    803 refined seeds came back with x_fit == x_init).
+    """
+    model.x_0.fixed = bool(fixed)
+    model.y_0.fixed = bool(fixed)
+
+
 def _lock_gated_coms(coms, data, sources, saturated, min_px,
                      unrecoverable=None):
     """Seeds for a size-gated NIRCam position lock
@@ -3560,8 +3574,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                              or int(src_sat_area) >= _lock_min_px))
             if (_is_miri and not _miri_bounded) or _nc_lock:
                 # hard lock: fit flux only at the seed (MIRI legacy / NIRCam ext)
-                model.x_0.fixed = True
-                model.y_0.fixed = True
+                _set_position_fixed(model, True)
                 print(f"{'MIRI' if _is_miri else 'NIRCam-ext'}: locked satstar "
                       f"position to seed (x={xf:.2f}, y={yf:.2f}); fitting flux only",
                       flush=True)
@@ -3574,6 +3587,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # becomes a multi-peak smear -- the same failure MIRI fixed by
                 # dropping it.  NIRCAM_SATSTAR_TIGHT_BOUND drops it here too;
                 # default keeps it for star-dominated fields.
+                _set_position_fixed(model, False)
                 _nc_tight = (not _is_miri
                              and int(os.environ.get('NIRCAM_SATSTAR_TIGHT_BOUND', 0)))
                 if _is_miri or _nc_tight:
