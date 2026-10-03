@@ -521,7 +521,7 @@ control is the default.
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
 | `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg (with prominence ≥ `--manual-ext-star-prom-peak-min` where measured) |
 | `--manual-ext-star-prom-min` | 7.0 | …or data-i2d prominence ≥ this, whatever the peak-SB test says; 0 = off |
-| `--manual-ext-qfit-snr-k` | 5.0 | …that prominence keep also needs qfit ≤ sqrt(qfit_max² + (k/S/N)²), the qfit a point source reaches with pixel noise; 0 = no bound |
+| `--manual-ext-qfit-snr-k` | 5.0 | …that prominence keep (and the robust-prominence keep, when on) also needs qfit ≤ sqrt(qfit_max² + (k/S/N)²), the qfit a point source reaches with pixel noise; 0 = no bound |
 | `--manual-ext-star-prom-peak-min` | 4.0 | the peak-SB keep also needs data-i2d prominence ≥ this where prominence is measured; 0 = off |
 | `--manual-ext-star-prom-robust-min` | 0 (off) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; −1 = AUTO (8 on star-dominated fields, off on extended-emission targets) |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |

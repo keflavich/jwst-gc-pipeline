@@ -48,7 +48,7 @@ def _image(seed=3):
 
 
 def _run(qfit, snr, qfit_snr_k, star_prom_min=7.0, local_bkg=-0.05, flags=0,
-         xy=STAR, data=None):
+         xy=STAR, data=None, local_snr_min=5.0):
     """One source; local_bkg < 0 keeps it out of the peak_SB branch."""
     w = _wcs()
     flux_err = 10.0 if np.isfinite(snr) else 0.0
@@ -61,6 +61,7 @@ def _run(qfit, snr, qfit_snr_k, star_prom_min=7.0, local_bkg=-0.05, flags=0,
         out = _filter_extended_emission(cat, data_i2d_image=_image() if data is None else data,
                                         ww_i2d=w, star_prom_min=star_prom_min,
                                         star_prom_peak_min=4.0, qfit_snr_k=qfit_snr_k,
+                                        local_snr_min=local_snr_min,
                                         sky_clean_keep=False, label='test')
     return len(out) == 1, float(cat['prominence'][0])
 
@@ -102,6 +103,13 @@ def test_unmeasured_snr_gets_flat_qfit_max():
     assert _run(0.45, np.inf, 0.0)[0]
     assert not _run(0.45, np.inf, 5.0)[0]
     assert _run(0.15, np.inf, 5.0)[0]
+
+
+def test_negative_snr_gets_flat_qfit_max():
+    # S/N -8 with the S/N floor off: the bound is qfit_max, not
+    # sqrt(0.2^2 + (5/8)^2) = 0.656 from |k/S/N|
+    assert _run(0.45, -8.0, 0.0, local_snr_min=-np.inf)[0]
+    assert not _run(0.45, -8.0, 5.0, local_snr_min=-np.inf)[0]
 
 
 def test_bound_leaves_other_branches_alone():
