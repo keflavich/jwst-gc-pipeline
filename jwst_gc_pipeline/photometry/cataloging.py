@@ -1372,6 +1372,42 @@ def _emission_keep_miri(prominence, min_prominence):
     return np.isfinite(prominence) & (prominence >= min_prominence)
 
 
+def _tile_percentile_at(image, x, y, tile, q):
+    """``q``-th percentile of ``image`` in ``tile`` x ``tile`` px tiles,
+    bilinearly interpolated between tile centres to the pixel positions
+    (x, y).  Tiles less than half finite are NaN; NaN at positions whose
+    interpolation touches one.
+
+    Tiles of 32 px or more are sampled at every 2nd pixel, and an odd
+    ``tile`` is then rounded down to the next even size.  Memory: one
+    float64 copy of ``image`` (padded to whole tiles), e.g. 0.45 GB for a
+    4844 x 11542 px NIRCam detector i2d."""
+    import warnings
+    from scipy.ndimage import map_coordinates
+    # every 2nd pixel of a large tile: same percentile, a quarter of the memory
+    step = 2 if tile >= 32 else 1
+    tile = int(tile) - int(tile) % step
+    ny, nx = image.shape
+    gy, gx = -(-ny // tile), -(-nx // tile)
+    pad = np.full((gy * tile, gx * tile), np.nan)
+    pad[:ny, :nx] = image
+    ts = tile // step
+    sub = pad[::step, ::step][:gy * ts, :gx * ts]
+    blocks = sub.reshape(gy, ts, gx, ts).transpose(0, 2, 1, 3).reshape(gy, gx, -1)
+    nfin = np.sum(np.isfinite(blocks), axis=-1)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)    # all-NaN tiles
+        grid = np.nanpercentile(blocks, q, axis=-1)
+    grid[nfin < ts * ts // 2] = np.nan
+    # tile centre (i + 0.5) * tile - 0.5 in pixels -> fractional tile index
+    ty = (np.asarray(y, float) + 0.5) / tile - 0.5
+    tx = (np.asarray(x, float) + 0.5) / tile - 0.5
+    ty = np.clip(ty, 0, gy - 1)
+    tx = np.clip(tx, 0, gx - 1)
+    out = map_coordinates(grid, [ty, tx], order=1, mode='nearest', cval=np.nan)
+    return out
+
+
 def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
                         r_noise=(4.0, 10.0)):
     """PSF-core flux above the local level, and its noise, at each position.
@@ -1428,6 +1464,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               conc_ref_min_n=5,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
+                              snr_floor_propagated=False,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
@@ -1438,10 +1475,16 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm_qfit_max=0.6,
                               nmatch_confirm_maxpos_mas=0.0,
                               ext_prom_min=0.0,
+                              ext_prom_exempt_qfit=0.0,
+                              ext_prom_exempt_snr=40.0,
+                              ext_prom_exempt_prom_min=2.0,
                               sky_clean_keep=True,
                               sky_clean_max_sky_snr=2.0,
                               sky_clean_prom_min=5.0,
                               sky_clean_snr_min=3.0,
+                              sky_clean_local_arcsec=0.0,
+                              sky_clean_local_max_err=2.0,
+                              err_i2d_image=None,
                               nmatch_confirm_strong=0,
                               low_fit_quality_qfit=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
@@ -1469,6 +1512,19 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     a "star turned from extended emission" is physically impossible, so the
     qfit gate (which conflates blend-degraded real stars with emission knots)
     is replaced by prominence + S/N alone.  See the block comment below.
+
+    ``snr_floor_propagated``: the local S/N floor (``local_snr_min``) uses
+    flux / flux_err_prop, the uncertainty of the merged flux, in place of
+    flux / flux_err, the mean per-frame uncertainty (larger by ~sqrt(nmatch)).
+    Catalogs without flux_err_prop keep flux_err.  The sky-clean floor
+    (``sky_clean_snr_min``) stays on flux / flux_err: that tier ignores qfit,
+    and its threshold was set on the per-frame S/N.  The bright-isolated keep
+    (``snr_high_keep``) also stays on flux / flux_err.  flux_err_prop
+    propagates the per-frame formal errors as if they were independent, so it
+    carries only the frame-to-frame part of the uncertainty.  Error terms
+    common to every frame -- the shared background model, the shared
+    neighbour model and the shared seed position -- do not average down, and
+    they are largest for faint stars on structured background.
 
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
@@ -1503,6 +1559,27 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     else:
         snr = np.full(n, np.inf)
 
+    # S/N for the FLOORS.  A merged catalog's flux is the mean over nmatch
+    # per-frame fits, but its flux_err is the weighted MEAN of the per-frame
+    # errors -- one frame's uncertainty.  The uncertainty of the merged flux is
+    # flux_err_prop = 1/sqrt(sum 1/sigma_i^2) ~ flux_err/sqrt(nmatch_good)
+    # (Brick f182m_merged_o001_indivexp_merged_resbgsub_m6_dao_basic.fits,
+    # 506,114 rows: median flux_err/flux_err_prop 3.16, median
+    # sqrt(nmatch_good) 3.16, median sqrt(nmatch) 3.74),
+    # so a per-frame S/N floor of 5 is a ~5*sqrt(nmatch) floor on the measured
+    # flux: on the dark reference field it removed injected stars up to
+    # S/N_true ~20 in m2-m4.  The bright-isolated keep stays on the per-frame
+    # S/N (its qfit partner is itself a per-frame mean), and so does
+    # the sky-clean floor below (that tier ignores qfit; moving its S/N 3 floor
+    # onto flux_err_prop admits per-frame S/N ~1 fits).
+    snr_floor = snr
+    if (snr_floor_propagated and 'local_snr' not in t.colnames
+            and 'flux' in t.colnames and 'flux_err_prop' in t.colnames):
+        _fep = np.asarray(t['flux_err_prop'], dtype=float)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            _snr_prop = np.asarray(t['flux'], dtype=float) / _fep
+        snr_floor = np.where(np.isfinite(_snr_prop) & (_fep > 0), _snr_prop, snr)
+
     # peak surface brightness (3x3 box max) AND annulus-MAD PROMINENCE from the
     # data i2d, if provided.  Prominence = (core peak r<1.5) - (median in a
     # 4-10px annulus) over the annulus MAD: it measures whether the "star" rises
@@ -1534,8 +1611,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # quartile still samples the true inter-star sky), so it measures the
     # DIFFUSE emission level at the source, not the crowding.
     ann_floor = np.full(n, np.nan, dtype=float)
+    # median i2d ERR over the same annulus (the LOCAL sky-clean test's noise unit)
+    ann_err = np.full(n, np.nan, dtype=float)
     # pixel positions on the data i2d; None when there is no data i2d
     xx = yy = None
+    # the brightest pixel of the 7x7 box on the data_i2d lies within 1 px of
+    # the fitted position (read by the prominence-floor exemption below)
+    local_peak = np.zeros(n, dtype=bool)
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
         from astropy.coordinates import SkyCoord
         sc = t['skycoord']
@@ -1562,10 +1644,18 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             if _H <= ix < nx - _H and _H <= iy < ny - _H:
                 st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
                 core = np.nanmax(st[_cm])
+                _box7 = st[_H - 3:_H + 4, _H - 3:_H + 4]
+                if np.isfinite(core):
+                    local_peak[i] = core >= np.nanmax(_box7)
                 ann = st[_am]
                 annf = ann[np.isfinite(ann)]
                 if annf.size >= 10:
                     ann_floor[i] = np.percentile(annf, 25)
+                    if err_i2d_image is not None:
+                        _ea = err_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1][_am]
+                        _ea = _ea[np.isfinite(_ea) & (_ea > 0)]
+                        if _ea.size >= 10:
+                            ann_err[i] = np.median(_ea)
                 if annf.size >= 10 and np.isfinite(core):
                     if _prom_robust:
                         # neighbour-robust: 25th-pct emission FLOOR + lower-half
@@ -1810,7 +1900,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # S/N (inflated to ~0 by group-fit covariance degeneracy for close pairs
         # -- see _emission_keep_nircam): a well-fit star must never be dropped
         # from the vetted catalog/residual on a broken uncertainty.
-        keep = _emission_keep_nircam(star_like, snr, local_snr_min,
+        keep = _emission_keep_nircam(star_like, snr_floor, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
 
     # MULTI-FRAME CONFIRMATION keep (Hosek ndet-style; opt-in, nmatch_confirm>0).
@@ -1900,11 +1990,50 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             with np.errstate(invalid='ignore'):
                 _emiss_snr = (ann_floor - _sky_ref) / _sky_sig
             sky_clean = np.isfinite(_emiss_snr) & (_emiss_snr <= sky_clean_max_sky_snr)
+            _n_global = int(sky_clean.sum())
+            # LOCAL reference (sky_clean_local_arcsec > 0): the global 5th
+            # percentile is the darkest lane of the whole mosaic, so outside a
+            # dark cloud every source reads "on emission" -- including a
+            # smooth bright plateau, which cannot be turned into a star any
+            # more than dark sky can.  What can is STRUCTURE: compare the
+            # annulus floor to the 5th percentile of the surrounding
+            # ~sky_clean_local_arcsec tile, in units of the i2d ERR
+            # (sky_clean_local_max_err; the global test above is in dark-sky
+            # sigma, a different unit, so the two have separate thresholds).
+            # Gaussian pixel noise gives p25 - p5 = 0.97 sigma; the Brick dark
+            # cloud reads 0.8 ERR, so there ERR ~ 1.2x the pixel scatter and
+            # the default 2 ERR is ~ 2.4 sigma of pixel scatter.  A source on
+            # a filament or in PSF-scale emission structure sits several ERR
+            # above its tile's darkest pixels (W51 F187N tile p25-p5 ~ 9 ERR,
+            # Sgr A* crowding ~ 13 ERR).  OR-ed with the global test, so a
+            # source clean by the global reference stays clean.
+            # local_structure_snr is written whenever this tier runs (NaN
+            # where the local test does not), so the vetted schema is fixed.
+            _struct_snr = np.full(n, np.nan)
+            if sky_clean_local_arcsec > 0 and err_i2d_image is None:
+                print(f"[{label}] sky-clean local reference: no i2d ERR plane, "
+                      f"local test skipped (global dark-sky test only)", flush=True)
+            if (sky_clean_local_arcsec > 0 and err_i2d_image is not None
+                    and xx is not None):
+                _pixas = float(np.sqrt(np.abs(np.linalg.det(
+                    ww_i2d.pixel_scale_matrix))) * 3600.0)
+                _tile = max(16, int(round(float(sky_clean_local_arcsec) / _pixas)))
+                _p5_loc = _tile_percentile_at(data_i2d_image, np.asarray(xx, float),
+                                              np.asarray(yy, float), _tile, 5.0)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    _struct_snr = (ann_floor - _p5_loc) / ann_err
+                _local_clean = np.isfinite(_struct_snr) & (_struct_snr <= sky_clean_local_max_err)
+                sky_clean = sky_clean | _local_clean
+                print(f"[{label}] sky-clean local reference ({_tile} px tiles, floor - "
+                      f"tile p5 <= {sky_clean_local_max_err:g} ERR): {_n_global} clean "
+                      f"by the global reference -> {int(sky_clean.sum())} with the "
+                      f"local one", flush=True)
             _sc_keep = (sky_clean
                         & np.isfinite(prominence) & (prominence >= sky_clean_prom_min)
                         & np.isfinite(snr) & (snr >= sky_clean_snr_min)
                         & ~near_satstar)
             t['local_emission_snr'] = _emiss_snr
+            t['local_structure_snr'] = _struct_snr
             t['sky_clean'] = sky_clean
             _n_sc = int(np.sum(_sc_keep & ~keep))
             keep = keep | _sc_keep
@@ -1955,13 +2084,56 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # subtracted saturated cores (broad => low prominence) are never dropped.
     # OFF by default (ext_prom_min<=0); the driver auto-enables it (=3.0) only for
     # extended-emission NIRCam fields, so star-dominated fields are byte-identical.
+    #
+    # Exemption (ext_prom_exempt_qfit > 0): a source that is a tight PSF fit
+    # (qfit <= ext_prom_exempt_qfit), bright (merged S/N >= ext_prom_exempt_snr)
+    # AND on a local peak of the data_i2d (the brightest pixel of the 7x7 box
+    # within 1 px of the fitted position) passes at the lower prominence
+    # ext_prom_exempt_prom_min.
+    # On a nebular field the 4-10 px annulus MAD is set by emission structure,
+    # so a real bright star reads prominence 2-3: W51 F187N injected stars at
+    # S/N_true 52 and 76 (qfit 0.17, 0.09) sat at prominence 2.55 / 2.71 and
+    # were deleted.  Chance-corrected purity of qfit <= 0.2, prominence 2-3
+    # sources (full m6 catalogs; label = continuum counterpart within 60 mas;
+    # matched/n), without -> with the local-peak requirement:
+    #                     S/N_prop 30-40          40-60                    >= 60
+    #   W51 F187N/F210M   1.11 (4/4)   -> same    1.00 (9/10)   -> same    1.01 (20/22) -> 1.01 (19/21)
+    #   W51 F480M/F410M   0.96 (44/50) -> 1.07    0.96 (116/132)-> 1.07    0.98 (354/397)-> 1.01 (340/368)
+    #   Wd2 F187N/F182M   0.0  (0/2)   -> none    0.0  (0/2)    -> none    0.81 (5/8)   -> 1.03 (4/5)
+    #   Wd2 F405N/F410M   0.46 (2/6)   -> 0.92    1.19 (18/21)  -> 1.31    1.22 (23/26) -> 1.32 (20/21)
+    #   Sgr B2 F187N      0.16 (6/22)  -> none    0.09 (5/30)   -> 1/1     0.53 (7/13)  -> none
+    #   Sgr B2 F480M      0.57 (41/73) -> 0.69    0.71 (147/215)-> 0.90    0.94 (2674/2975) -> 1.00
+    # (Sgr B2 is not an extended-emission target; it tests the exemption on
+    # dense nebular emission.)  Without the peak requirement the purity below
+    # S/N 60 depends on the field.  The Sgr B2 F187N exempt-region sources sit
+    # off any data peak (bright-star halos and spikes), yet half of them match
+    # an F182M source within 60 mas.  With it, every field is >= 0.90 at
+    # S/N_prop >= 40; Sgr B2 F480M 30-40 is 0.69 (8/12), hence S/N 40.  The
+    # emission bumps the floor targets sit at prominence ~0.9, below the
+    # exempt floor.
     if ext_prom_min > 0 and min_prominence <= 0:
         _prom_keep = np.isfinite(prominence) & (prominence >= float(ext_prom_min))
+        _n_exempt = 0
+        if ext_prom_exempt_qfit > 0:
+            with np.errstate(invalid='ignore'):
+                _exempt = (np.isfinite(prominence)
+                           & (prominence >= float(ext_prom_exempt_prom_min))
+                           & np.isfinite(qf) & (qf <= float(ext_prom_exempt_qfit))
+                           & np.isfinite(snr_floor)
+                           & (snr_floor >= float(ext_prom_exempt_snr))
+                           & local_peak)
+            _n_exempt = int(np.sum(keep & _exempt & ~_prom_keep))
+            _prom_keep = _prom_keep | _exempt
         _n_prom = int(np.sum(keep & ~_prom_keep))
         keep = keep & _prom_keep
+        _exempt_msg = (f"; {_n_exempt} kept at prominence >= "
+                       f"{ext_prom_exempt_prom_min:g} with qfit <= "
+                       f"{ext_prom_exempt_qfit:g}, S/N >= {ext_prom_exempt_snr:g} "
+                       f"and a local data_i2d peak"
+                       if ext_prom_exempt_qfit > 0 else "")
         print(f"[{label}] extended-emission prominence gate: dropped {_n_prom} "
-              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)",
-              flush=True)
+              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)"
+              f"{_exempt_msg}", flush=True)
 
     # model==catalog invariant (user 2026-06-27): every saturated star that was
     # SUBTRACTED into the per-frame model (replaced_saturated) MUST appear in
@@ -1996,7 +2168,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
           f"{f' with prominence>={star_prom_peak_min:g}' if star_prom_peak_min > 0 else ''}"
           f"{f', prominence>={star_prom_min:g}' if star_prom_min > 0 else ''}"
           f"{f' or robust>={star_prom_robust_min:g}' if star_prom_min > 0 and star_prom_robust_min > 0 else ''}, "
-          f"snr>={local_snr_min}{_struct_msg})",
+          f"snr>={local_snr_min}"
+          f"{' (flux/flux_err_prop)' if snr_floor is not snr else ''}{_struct_msg})",
           flush=True)
     return t[keep]
 
@@ -3379,6 +3552,11 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
       manual_crossband_seed_min_filters (default 2), _snr_min (5), _qfit_max
       (0.2), _max_sep_mas (30).  Set min_filters=1 to restore union-like behavior
       (NOT recommended -- reintroduces the single-band propagation bug).
+
+    The S/N confirmation uses flux / flux_err, the per-frame S/N, while the m6
+    vetting floor uses flux / flux_err_prop (``manual_ext_snr_floor_propagated``).
+    The seed's stricter definition is deliberate: a seed position is force-fit in
+    every band, so it requires a detection that is significant in one frame.
     """
     from astropy.coordinates import SkyCoord
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
@@ -8413,13 +8591,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                           parent_paths=_parents)
                 prev_merged_for[(module, filt)] = (_msc, _ifound)
 
-                d_i2d, ww_i2d = None, None
+                d_i2d, ww_i2d, e_i2d = None, None, None
                 dpath = _data_i2d_path(module, filt)
                 if os.path.exists(dpath):
                     with fits.open(dpath) as dh:
-                        hdu = dh['SCI'] if 'SCI' in [h.name for h in dh] else dh[0]
+                        _hn = [h.name for h in dh]
+                        hdu = dh['SCI'] if 'SCI' in _hn else dh[0]
                         d_i2d = hdu.data.astype(float)
                         ww_i2d = wcs.WCS(hdu.header)
+                        if 'ERR' in _hn and dh['ERR'].data is not None:
+                            e_i2d = dh['ERR'].data.astype(float)
                 # MIRI: required deep-i2d prominence gate kills false emission
                 # sources that pass the qfit OR-branch.  NIRCam: off (0).
                 _miri_field = (module == 'mirimage'
@@ -8448,6 +8629,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
+                    snr_floor_propagated=bool(mopt(opts_phase, 'manual_ext_snr_floor_propagated')),
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
                     qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
@@ -8461,6 +8643,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     nmatch_confirm_strong=int(mopt(opts_phase, 'manual_ext_nmatch_confirm_strong')),
                     low_fit_quality_qfit=float(mopt(opts_phase, 'manual_ext_low_fit_quality_qfit')),
                     ext_prom_min=_ext_prom_min,
+                    ext_prom_exempt_qfit=float(mopt(opts_phase, 'manual_ext_prom_exempt_qfit')),
+                    ext_prom_exempt_snr=float(mopt(opts_phase, 'manual_ext_prom_exempt_snr')),
+                    ext_prom_exempt_prom_min=float(mopt(opts_phase, 'manual_ext_prom_exempt_prom_min')),
                     sky_clean_keep=bool(mopt(opts_phase, 'manual_sky_clean_keep')),
                     sky_clean_max_sky_snr=float(mopt(
                         opts_phase, 'manual_sky_clean_max_sky_snr')),
@@ -8468,6 +8653,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         opts_phase, 'manual_sky_clean_prom_min')),
                     sky_clean_snr_min=float(mopt(
                         opts_phase, 'manual_sky_clean_snr_min')),
+                    sky_clean_local_arcsec=float(mopt(
+                        opts_phase, 'manual_sky_clean_local_arcsec')),
+                    sky_clean_local_max_err=float(mopt(
+                        opts_phase, 'manual_sky_clean_local_max_err')),
+                    err_i2d_image=e_i2d,
                     struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)

@@ -80,6 +80,10 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/cataloging.py",
     "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
     "scripts/release/make_preview_rgb.py",
+    # PR #1019 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and the vetting replay (vet_variant).
+    "docs/evidence/faint_local_skyclean/scripts/compare.py",
+    "docs/evidence/faint_local_skyclean/scripts/vet_variant.py",
     "scripts/satstar_deblend/run_satstar_compare.py",
     # aperture photometry reads only the i2d MOSAIC SCI header (rectified,
     # RA---TAN, no SIP) for the WCS + pixel solid angle; positions come from the
@@ -118,6 +122,20 @@ ALLOWLIST = {
     # replay (vet_variant).
     "docs/evidence/faint_prominence_keep/scripts/compare.py",
     "docs/evidence/faint_prominence_keep/scripts/vet_variant.py",
+    # PR #1016 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and the vetting replays
+    # (replay_vetting, vet_variant).
+    "docs/evidence/faint_snr_floor_propagated/scripts/compare.py",
+    "docs/evidence/faint_snr_floor_propagated/scripts/replay_vetting.py",
+    "docs/evidence/faint_snr_floor_propagated/scripts/vet_variant.py",
+    # PR #1021 evidence scripts: merged *_i2d mosaics (rectified, no SIP) --
+    # the data_i2d for prominence (build_pl) and local-peak flags
+    # (anal_exempt_bins, peak_check), and data / m6 residual i2d cutouts
+    # (exempt_gallery).
+    "docs/evidence/faint_prom_floor_bright/scripts/anal_exempt_bins.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/build_pl.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/exempt_gallery.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/peak_check.py",
     "scripts/satstar_deblend/batch_validate.py",
 }
 

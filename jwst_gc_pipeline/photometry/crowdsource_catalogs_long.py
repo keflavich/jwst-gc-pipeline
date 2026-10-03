@@ -4375,6 +4375,20 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "~0.9).  -1 (default) = AUTO: 3.0 for extended-emission NIRCam "
                          "fields, off otherwise.  0 = force off.  Satstar force-keep "
                          "(model==catalog) still overrides it.")
+    parser.add_option("--manual-ext-prom-exempt-qfit", dest="manual_ext_prom_exempt_qfit",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_qfit'],
+                    help="Exempt from the --manual-ext-prom-min floor a source with qfit "
+                         "<= this AND merged S/N >= --manual-ext-prom-exempt-snr AND "
+                         "prominence >= --manual-ext-prom-exempt-prom-min (default 0.2; "
+                         "0 = no exemption).  A bright star on nebular emission reads "
+                         "prominence 2-3 because the annulus MAD is emission structure.")
+    parser.add_option("--manual-ext-prom-exempt-snr", dest="manual_ext_prom_exempt_snr",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_snr'],
+                    help="Merged S/N (flux/flux_err_prop) required by the prominence-floor "
+                         "exemption (default 40).")
+    parser.add_option("--manual-ext-prom-exempt-prom-min", dest="manual_ext_prom_exempt_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_prom_min'],
+                    help="Lower prominence floor that applies to exempt sources (default 2.0).")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
                     help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).  "
@@ -4412,6 +4426,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
+    parser.add_option("--manual-ext-snr-floor-per-frame", dest="manual_ext_snr_floor_propagated",
+                    action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_snr_floor_propagated'],
+                    help="Apply the vetting local S/N floor (--manual-ext-local-snr-min) "
+                         "to flux / flux_err, the mean PER-FRAME S/N.  By default it "
+                         "uses flux / flux_err_prop, the S/N of the merged flux "
+                         "(~sqrt(nmatch) higher).  The sky-clean floor "
+                         "(--manual-sky-clean-snr-min) is always per-frame.")
     parser.add_option("--manual-ext-snr-high-keep", dest="manual_ext_snr_high_keep",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_snr_high_keep'],
                     help="Extended-emission vetting BRIGHT-ISOLATED keep: a "
@@ -4514,8 +4536,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-max-sky-snr",
                     dest="manual_sky_clean_max_sky_snr",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_max_sky_snr'],
-                    help="Sky-clean tier: local emission floor must be <= this many "
-                         "dark-sky sigmas above the dark-sky reference (default 2).")
+                    help="Sky-clean tier, global reference: local emission floor "
+                         "must be <= this many dark-sky sigmas above the dark-sky "
+                         "reference (default 2).  The local reference has its "
+                         "own threshold, --manual-sky-clean-local-max-err.")
     parser.add_option("--manual-sky-clean-prom-min",
                     dest="manual_sky_clean_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_prom_min'],
@@ -4523,7 +4547,27 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-snr-min",
                     dest="manual_sky_clean_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_snr_min'],
-                    help="Sky-clean tier: minimum fit S/N (default 3).")
+                    help="Sky-clean tier: minimum per-frame fit S/N, flux / flux_err (default 3).")
+    parser.add_option("--manual-sky-clean-local-arcsec",
+                    dest="manual_sky_clean_local_arcsec",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_arcsec'],
+                    help="Sky-clean tier: also call a source clean when its "
+                         "deep-i2d annulus floor is within --manual-sky-clean-local-max-err "
+                         "i2d ERR of the 5th percentile of its surrounding tile of "
+                         "this size (default 3 arcsec; 0 = global dark-sky "
+                         "reference only).  A smooth bright plateau is clean; "
+                         "PSF-scale emission structure or crowding is not.  "
+                         "Needs the i2d ERR plane (skipped, with a log line, "
+                         "without it).")
+    parser.add_option("--manual-sky-clean-local-max-err",
+                    dest="manual_sky_clean_local_max_err",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_max_err'],
+                    help="Sky-clean tier, local reference: maximum (annulus "
+                         "floor - tile 5th percentile) in units of the i2d ERR "
+                         "(default 2; ~2.4 sigma of pixel scatter in the Brick "
+                         "dark cloud, where ERR ~ 1.2x the scatter).  The global "
+                         "test's --manual-sky-clean-max-sky-snr is in dark-sky "
+                         "sigma.")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "

@@ -6,11 +6,12 @@ Three questions.
 uncertainty against brightness gives both the noise model and, where it
 crosses :math:`1/5`, the :math:`5\sigma` depth.  Two uncertainties are
 plotted because the pipeline reports two and they answer different questions:
-``flux_err`` is the fitter's formal covariance from the single merged fit,
-while ``flux_err_prop`` propagates the per-exposure scatter.  Where the
-propagated error exceeds the formal one, something beyond photon noise --
-crowding, an imperfect PSF, residual background structure -- is moving the
-flux between exposures, and the formal error understates reality.
+``flux_err`` is the inverse-variance-weighted mean of the per-exposure
+formal errors (one exposure's uncertainty), while ``flux_err_prop`` is
+:math:`1/\sqrt{\sum_i 1/\sigma_i^2}` over the kept exposures, the formal
+uncertainty of the averaged flux (about ``flux_err``/:math:`\sqrt{n}`).  Both
+are formal errors: error terms shared by every exposure -- the background
+model, the neighbour model, the seed position -- are in neither.
 
 **Fit quality** (:func:`photometric_quality`) -- ``qfit`` is the normalised
 residual of the PSF fit,
@@ -128,12 +129,15 @@ def photometric_precision(inv, outdir, max_sources=400000):
     path = save(fig, outdir, 'D4_photometry_precision')
     caption = (
         f'Photometric precision of {inv.name}. Greyscale is source density; '
-        'the solid line is the running median of the fitter\'s formal '
-        r'uncertainty $\sigma_F/F$ and the dashed line the same quantity '
-        'propagated from the per-exposure scatter. The dotted horizontal line '
-        r'is $\sigma_F/F = 0.2$, and where the median crosses it is quoted as '
-        r'the $5\sigma$ depth. A propagated-to-formal ratio above unity means '
-        'the exposures disagree by more than the fit covariance predicts.')
+        r'the solid line is the running median of $\sigma_F/F$ with '
+        r'\code{flux\_err}, the weighted mean of the per-exposure formal '
+        'errors (one exposure\'s uncertainty), and the dashed line the same '
+        r'with \code{flux\_err\_prop}, the formal uncertainty of the averaged '
+        r'flux (about \code{flux\_err}/$\sqrt{n}$). The dotted horizontal line '
+        r'is $\sigma_F/F = 0.2$, and where the solid median crosses it is quoted '
+        r'as the $5\sigma$ depth. Both are formal errors: terms shared by every '
+        'exposure (background model, neighbour model, seed position) are in '
+        'neither.')
     return FigureResult('D4_photometry_precision', path, caption, 'photometry',
                         dict(depth=depths, err_ratio=err_ratio,
                              maglabel=maglabel_seen, scales=scales))

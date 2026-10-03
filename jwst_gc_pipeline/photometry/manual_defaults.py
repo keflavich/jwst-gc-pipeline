@@ -42,12 +42,17 @@ MANUAL_DEFAULTS = {
     # -- extended-emission vetting (_filter_extended_emission)
     'manual_ext_qfit_max': 0.2,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
+    # exemption from that floor for tight, bright fits (0 = off)
+    'manual_ext_prom_exempt_qfit': 0.2,
+    'manual_ext_prom_exempt_snr': 40.0,
+    'manual_ext_prom_exempt_prom_min': 2.0,
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_star_prom_min': 7.0,   # keep on data-i2d prominence >= this (OR); 0 = off
     'manual_ext_star_prom_peak_min': 4.0,  # peakSB branch also needs prominence >= this; 0 = off
     'manual_ext_star_prom_robust_min': 0.0,  # OR neighbour-robust prominence; 0 = off, -1 = AUTO (8, off on ext-emission)
     'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
+    'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
@@ -71,6 +76,12 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_max_sky_snr': 2.0,
     'manual_sky_clean_prom_min': 5.0,
     'manual_sky_clean_snr_min': 3.0,
+    # local reference tile (arcsec): annulus floor vs the tile's 5th percentile
+    # in i2d-ERR units, OR-ed with the global dark-sky test.  0 = global only.
+    'manual_sky_clean_local_arcsec': 3.0,
+    # local test threshold, in i2d ERR (2 ERR ~ 2.4 sigma of pixel scatter in
+    # the Brick dark cloud, where ERR ~ 1.2x the pixel scatter)
+    'manual_sky_clean_local_max_err': 2.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
     # opt-in (0 = off): roundness up to +-x admitted where the detection rises
