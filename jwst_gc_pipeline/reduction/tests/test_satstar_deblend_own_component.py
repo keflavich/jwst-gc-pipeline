@@ -14,7 +14,7 @@ import numpy as np
 from scipy import ndimage
 
 from jwst_gc_pipeline.reduction.satstar_deblend import (
-    build_deblended_source_records, deblend_blob_zeroframe)
+    _neighbour_claim, build_deblended_source_records, deblend_blob_zeroframe)
 
 SHAPE = (80, 80)
 FWHM = 1.61   # NIRCam F150W, px
@@ -237,3 +237,30 @@ def test_gap_peak_out_of_the_neighbours_reach_is_kept():
     # pad=12 puts the peak (10 px from the bright star's footprint) in the crop
     centers = _deblend(zf, sat, sources[big_c[1], big_c[0]], pad=12)
     assert _near(centers, *peak), centers
+
+
+def _strip(blob_col, other_col, width=13):
+    blob = np.zeros((5, width), bool)
+    other = np.zeros((5, width), bool)
+    blob[:, blob_col] = True
+    other[:, other_col] = True
+    return blob, other
+
+
+def test_equidistant_pixel_stays_with_own_component():
+    blob, other = _strip(2, 8)
+    claim = _neighbour_claim(blob, other, FWHM, pad=8)
+    assert not claim[2, 5]          # 3 px from each: a tie stays with blob
+    assert claim[2, 6]              # 2 px from the neighbour, 4 from blob
+    assert not claim[2, 4]
+    assert claim[:, 8].all() and not claim[:, 2].any()
+
+
+def test_reach_is_capped_at_the_crop_pad():
+    """With a wide PSF (1 + 2 FWHM = 13 px) the hand-over stops at pad: a
+    pixel further out may fall outside the neighbour's crop, where its own
+    search cannot see it."""
+    blob, other = _strip(0, 12, width=13)
+    claim = _neighbour_claim(blob, other, 6.0, pad=3)
+    assert claim[2, 9] and not claim[2, 8]
+    assert _neighbour_claim(blob, other, 6.0, pad=8)[2, 8]
