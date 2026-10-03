@@ -84,7 +84,7 @@ def exposure(fn_uncal, fn_cal, thr):
     sizes = ndimage.sum(np.ones_like(lab), lab, np.arange(1, nl + 1))
     keep = np.flatnonzero(sizes >= NMIN) + 1
     if keep.size == 0:
-        return []
+        return [], zf is not None
     cy, cx = np.array(ndimage.center_of_mass(np.ones_like(lab), lab, keep)).T
     good = ~satany & ((dq & 1) == 0)
     neigh = ndimage.binary_dilation(satany, iterations=7)
