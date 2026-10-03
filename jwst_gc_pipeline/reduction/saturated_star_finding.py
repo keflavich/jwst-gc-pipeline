@@ -908,10 +908,15 @@ def satstar_fit_switches(env=None):
       observed-peak second chance reads the crf values, not the rewrite.
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
-      (1.0): qfit over the disk r < R around the fit ('qfit_local' column),
-      used by the NIRCam fit-quality gate in place of the box qfit when the
-      gate is on, for components carrying SATURATED DQ only
-      (``satstar_qfit_for_gate``).
+      (5.0, the box qfit cap): qfit over the disk r < R around the fit
+      ('qfit_local' column), used by the NIRCam fit-quality gate in place of
+      the box qfit when the gate is on, for components carrying SATURATED DQ
+      only (``satstar_qfit_for_gate``).  ``qfit_local`` sums |residual| over
+      the ~300 px disk and divides by the star's flux, so on bright nebula the
+      background structure alone lifts it above 1 for a 16-18 mag star.  On
+      wd2 F150W nrcb3 (#1058), the 13-19 mag rows that failed only this test
+      at 1.0 and had 1 <= qfit_local < 5 all matched a dolphot star (61 of 61,
+      51 within 0.3 mag); at qfit_local >= 5, 9 of 17 had no counterpart.
     """
     env = os.environ if env is None else env
     qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
@@ -923,7 +928,7 @@ def satstar_fit_switches(env=None):
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
-        'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 1.0),
+        'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
     }
 
 
