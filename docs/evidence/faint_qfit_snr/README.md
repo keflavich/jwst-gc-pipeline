@@ -81,11 +81,21 @@ bound).  `verify_promq_b.py` (`data/verify_promq_b.json`):
 | refused (base and not k = 5) | 986 | 3,735 | 256 |
 | refused: minimum prominence | 7.006 | 7.001 | 7.002 |
 | refused: minimum k_eff | 5.006 | 5.003 | 5.015 |
-| refused: no finite k_eff (NaN qfit or S/N ≤ 0) | 15 | 60 | 2 |
+| refused: NaN qfit, S/N > 0 | 9 | 21 | 0 |
+| refused: S/N ≤ 0 or non-finite | 6 | 39 | 2 |
 | refused and in the #1015 catalog | 0 | 0 | 0 |
 | bound-dependent (k = 0 and not k = 10⁻⁶) | pending (`promqeb`) | | |
 | k = 10⁻⁶ rows k = 5 does not keep | pending (`promqeb`) | | |
 | refused = bound-dependent with k_eff > 5 or none | pending (`promqeb`) | | |
+
+The refused sources without a finite k_eff form two groups.  A NaN qfit at
+positive S/N fails the bound by rule (`k_eff` does not apply to it), so
+those 9 / 21 / 0 sources are refused because the bound exists, whatever k
+is: in the Brick none of the 9 has an F200W counterpart, and in Sgr B2 the
+21 read realness 0.25 ± 0.13.  A source with S/N ≤ 0 or non-finite S/N gets
+the flat `qfit_max` and has qfit above it: the Brick's 5 in the footprint
+read 0.52 ± 0.47, Sgr B2's 39 read 0.33 ± 0.12, and W51's 2 have no
+counterpart.
 
 Realness as in the #1018 README: `(match − chance) / (expected − chance)` at
 60 mas, `expected` from #1015-kept stars of the same flux; Brick against

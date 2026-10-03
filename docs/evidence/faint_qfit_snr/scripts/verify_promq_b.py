@@ -5,6 +5,8 @@ ef01f404, which carries #1016's flux_err_prop floor and #1019's local sky-clean)
   * promq5b (this branch at defaults, k = 5) keeps a subset of base1016;
     base1016 & ~promq5b is the refused set;
   * every refused source has prominence >= 7 and k_eff > 5 or no finite k_eff;
+    the no-k_eff sources split into NaN qfit at positive S/N and S/N <= 0 (or
+    non-finite), counted and scored separately;
   * with promqeb (k = 1e-6, bound = flat qfit_max; skipped until that replay
     exists): promqeb is a subset of
     promq5b, and the refused set is exactly the bound-dependent set
@@ -81,6 +83,8 @@ def main(*fields):
                  refused_min_keff=float(np.min(keff[refused & fin])) if (refused & fin).any() else None,
                  refused_keff_le5=int((refused & fin & (keff <= 5.0)).sum()),
                  refused_nonfinite_keff=int((refused & ~fin).sum()),
+                 refused_nan_qfit_snr_pos=int((refused & ~np.isfinite(qf) & (snr > 0)).sum()),
+                 refused_snr_not_pos=int((refused & ~(snr > 0)).sum()),
                  refused_in_seed=int((refused & ks).sum()),
                  only1018=int(only1018.sum()),
                  refused_and_only1018=int((refused & only1018).sum()),
@@ -89,6 +93,16 @@ def main(*fields):
                  only1018_not_in_base1016=int((only1018 & ~kb).sum()),
                  refused_in_footprint=int(rr.get('n', 0)),
                  refused_rel=rr.get('rel'), refused_rel_err=rel_err(rr))
+        # the two groups without a finite k_eff: NaN qfit at positive S/N
+        # (refused only because the bound exists) and S/N <= 0 or non-finite
+        # (refused by the flat qfit_max)
+        for key, sel in (('nan_qfit_snr_pos', refused & ~np.isfinite(qf) & (snr > 0)),
+                         ('snr_not_pos', refused & ~(snr > 0))):
+            g = sel & infp
+            rg = realness(sc[g], flux[g], ref, sc[bsel], flux[bsel]) if g.any() else {}
+            r[f'refused_{key}_in_footprint'] = int(g.sum())
+            r[f'refused_{key}_rel'] = rg.get('rel')
+            r[f'refused_{key}_rel_err'] = rel_err(rg) if rg else None
         if not os.path.exists(f'{HERE}/out/{f}_{FIELDS[f]["band"]}_promqeb.fits'):
             out[f] = r
             print(f, json.dumps(r), '(no promqeb replay)')
