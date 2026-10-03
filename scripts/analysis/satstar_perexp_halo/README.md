@@ -115,7 +115,7 @@ Note that the catalog's `x_fit`/`y_fit` are positions inside the fit box; the de
 
   This is smaller than the ~20% halo deficit: the masked-core fit also uses the inner wings, which are flat in x.
 - **Depth model** (robust fit, `depth_model`): in band / outside = 1 − 0.145 · max(0, log10(sat_area / 50)). Here `sat_area` is the core area *of the in-band detection*, which is what a per-detection correction has.
-- **Shape** (`xshape32`, cores ≥ 100 px): a trough from x ≈ 190 to 600, flat at 0.90–0.93 over x = 350–520. It matches the core-area stripe of step 10. Outside it the flux is within ±1.5%.
+- **Shape** (`xshape32`, cores ≥ 100 px): a trough from x ≈ 190 to 600, 0.90–0.93 over x = 320–512. It matches the core-area stripe of step 10. Outside it the flux is within ±1.5%.
 - **Proposed correction (not applied):** `flux_fit / (1 − 0.145 · max(0, log10(sat_area / 50)) · s(x))`.
   - s(x) is the `xshape32` trough normalized to 1 in the band. It is NRCBLONG only.
   - It is calibrated on F480M 10678 only.
