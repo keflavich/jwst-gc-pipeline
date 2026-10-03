@@ -107,3 +107,30 @@ comparison.
   - Stable in time: −0.18 to −0.23 in each date quartile of 2026-09-11 to 09-21 (out of band +0.01). It is also in the 2022 program 2221 (step 8), so it has persisted for ~4 years.
   - The open mechanism is therefore a detector property of the x ≈ 250–550 columns that acts only at very high illumination: a saturated core is smaller and its halo fainter there from the first read, while unsaturated stars are flat.
 - **LINEARITY reffile:** not inspected; CRDS is unreachable from this environment. The raw-ramp result makes it moot, because the deficit exists before linearity is applied.
+
+## Effect on the production saturated-star fluxes
+
+`production_flux_vs_x.py fit <workdir> <psf dir> <cal key>...` runs `saturated_star_finding.remove_saturated_stars` unchanged on each `_cal` frame. It uses the fovp1024 F480M grid, and has no ZEROFRAME anchoring because no `_ramp.fits` is available here. `analyze <prefix> <workdir>` then compares each star's `flux_fit` across its dithers (`production_flux_vs_x.*`).
+
+Note that the catalog's `x_fit`/`y_fit` are positions inside the fit box; the detector position is `x_0`/`y_0`, which agrees with `skycoord_fit` through the GWCS to 0.0005 px.
+
+- **Data:** obs 041, 061, 075 and 086 of 10678, 24 NRCBLONG frames, 16,397 catalog rows. 921 stars have dithers both in the band (x = 250–550) and outside it. "Outside" excludes both the band and the null band (±50 px).
+- **The production flux is low in the band, and more so for larger cores.** Median `flux_fit` in band / outside, by the star's median `sat_area`:
+
+  | `sat_area` | band | null (x = 1300–1600) | band / null |
+  |---|---|---|---|
+  | < 50 | 1.003 ± 0.004 (360 stars) | 1.011 ± 0.006 | 0.993 ± 0.007 |
+  | 50–150 | 0.957 ± 0.004 (404 stars) | 1.000 ± 0.002 | 0.957 ± 0.004 |
+  | 150–500 | 0.910 ± 0.005 (138 stars) | 0.990 ± 0.003 | 0.919 ± 0.006 |
+  | ≥ 500 | 0.842 ± 0.025 (19 stars) | 0.984 ± 0.006 | 0.856 ± 0.026 |
+
+  This table bins on the star's median `sat_area` over all its dithers. The depth model below uses the in-band detection's own area, which is smaller.
+  The null band has a weak size trend of its own (1.011 → 0.984), so band / null (`band_over_null_by_sat_area`) isolates the column term.
+
+  This is smaller than the ~20% halo deficit: the masked-core fit also uses the inner wings, which are flat in x.
+- **Depth model** (robust fit, `depth_model`): in band / outside = 1 − 0.147 · max(0, log10(sat_area / 50)). Here `sat_area` is the core area *of the in-band detection*, which is what a per-detection correction has.
+- **Shape** (`xshape32`, cores ≥ 100 px): a trough from x ≈ 190 to 600, 0.90–0.93 over x = 320–512. It matches the core-area stripe of step 10. Outside it the flux is within ±1.5%.
+- **Proposed correction (not applied):** `flux_fit / (1 − 0.147 · max(0, log10(sat_area / 50)) · s(x))`.
+  - s(x) is the `xshape32` trough normalized to 1 in the band. It is NRCBLONG only.
+  - It is calibrated on F480M 10678 only.
+  - The mechanism is still open (JWST-GC/data-qa#349), so it is an empirical, per-detector term.
