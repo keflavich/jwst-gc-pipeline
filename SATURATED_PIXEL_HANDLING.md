@@ -233,6 +233,14 @@ to `DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
   the wings with 1/ERR² weighting. Sources are fit **brightest-core-first** and
   each accepted model is subtracted from the working image before the next fit,
   so each wing's flux is counted once.
+- **Background-scatter error floor** (`SATSTAR_ERR_BKG_SCATTER`, on by default
+  for extended-emission NIRCam, `bkg_scatter_fit_error`): the crf ERR holds
+  read and Poisson noise only, so in a crowded or nebular field the background
+  pixels of the fit box carry far too much weight (wd2 F150W: annulus scatter
+  ~12 against a median ERR of ~0.5, ~6500 background pixels per 81×81 box) and
+  15–18 mag stars come out 0.4–0.8 mag faint. The robust scatter (1.4826 MAD)
+  of the unmasked local-background annulus is added in quadrature to every
+  pixel's error before the fit.
 - **PSF grid by size** (`get_psf(..., fov_pixels=1024)`): LW (NRCA5/NRCB5) in-FOV stars use `fov=1024`
   (a 512-px grid under-estimates bright LW flux by 50–70%); SW use 512. Off-FOV
   (forced) stars require the **large grid** (2048 SW / 1024 LW) to carry the
@@ -508,6 +516,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
+| `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
 | `SATSTAR_FLUX_STAT` | median | consolidated `flux_fit`: `median` of the per-exposure fluxes, or `brightest` (the representative's own flux, the old behaviour; kept as `flux_brightest_fit` either way) |
