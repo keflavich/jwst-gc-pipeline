@@ -524,7 +524,7 @@ def test_grayzone_clip_correction_bounds():
 
 
 def test_pooled_wingcal_build_and_apply(tmp_path):
-    """Phase B1: per-frame calibrator buckets pool into an n-weighted C(r);
+    """Phase B1: per-frame calibrator buckets pool into C(r) (#1041);
     the pooled ratio applies ONLY to rows whose per-frame self-cal was
     skipped (wingcal_ratio == 1.0 exactly), dividing flux and updating
     provenance; already-calibrated rows are untouched."""
@@ -545,7 +545,8 @@ def test_pooled_wingcal_build_and_apply(tmp_path):
     pooled = MC.build_pooled_wingcal('f410m', basepath=str(base))
     assert len(pooled) == 2
     r3 = float(pooled['ratio'][pooled['rmask_px'] == 3][0])
-    assert abs(r3 - (1.05 * 4 + 1.07 * 4) / 8) < 1e-9
+    # two equal-weight frames; the scatter floor (#1041) shifts it by 2e-4
+    assert abs(r3 - (1.05 * 4 + 1.07 * 4) / 8) < 1e-3
 
     cat = Table({'flux_fit': [1000.0, 1000.0, 1000.0],
                  'flux_err': [10.0, 10.0, 10.0],
