@@ -2123,6 +2123,34 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     return files
 
 
+def _default_nircam_satstar_lock_env(environ, sat_ext_nircam):
+    """Default the NIRCam satstar position-lock variables in ``environ``.
+
+    LOCK the per-frame satstar position to its stable data-refined seed (flux-
+    only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
+    positions into ~0.25" clusters -> the coadded per-frame satstar model
+    (subtracted into data_for_residual) over-subtracts into a CRATER the catalog
+    / consolidation dedup cannot touch (it lives in the per-frame model, not the
+    catalog).  Locking makes every frame subtract at the same (per-frame-stable,
+    ~0.13") seed -> one clean coadded PSF.
+
+    ... but only for large cores.  A compact stellar core is better centred by
+    the refined seed and the tight bounded fit: on wd2 F150W the locked raw
+    mask centre of mass sat 0.21-0.27 px from dolphot, the bounded fit
+    0.03-0.08 px, up to ~1 arcsec^2 of saturated area.  0.5 arcsec^2 keeps
+    the lock on the W51 darkfil blob that motivated it (1.5-2.6 arcsec^2) and
+    on every core the merge_catalogs big-core fallback treats as big
+    (r >= SATSTAR_FP_BIGCORE_ARCSEC = 0.5", i.e. >= 0.79 arcsec^2).
+
+    Variables already set in ``environ`` (a user export) are left alone.
+    """
+    if 'NIRCAM_SATSTAR_LOCK_POS' not in environ:
+        environ['NIRCAM_SATSTAR_LOCK_POS'] = '1' if sat_ext_nircam else '0'
+    if 'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2' not in environ:
+        environ['NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2'] = (
+            '0.5' if sat_ext_nircam else '0')
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -2475,25 +2503,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # merge_catalogs so it is testable without a pipeline run.
         _sibling_sky = satstar_sibling_seed_positions(
             filtername, basepath, proposal_id=proposal_id, field=field)
-    # LOCK the per-frame satstar position to its stable data-refined seed (flux-
-    # only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
-    # positions into ~0.25" clusters -> the coadded per-frame satstar model
-    # (subtracted into data_for_residual) over-subtracts into a CRATER the catalog
-    # / consolidation dedup cannot touch (it lives in the per-frame model, not the
-    # catalog).  Locking makes every frame subtract at the same (per-frame-stable,
-    # ~0.13") seed -> one clean coadded PSF.  A user export is respected.
-    if 'NIRCAM_SATSTAR_LOCK_POS' not in os.environ:
-        os.environ['NIRCAM_SATSTAR_LOCK_POS'] = '1' if _sat_ext_nircam else '0'
-    # ... but only for large cores.  A compact stellar core is better centred by
-    # the refined seed and the tight bounded fit: on wd2 F150W the locked raw
-    # mask centre of mass sat 0.21-0.27 px from dolphot, the bounded fit
-    # 0.03-0.08 px, up to ~1 arcsec^2 of saturated area.  0.5 arcsec^2 keeps
-    # the lock on the W51 darkfil blob that motivated it (1.5-2.6 arcsec^2) and
-    # on every core the merge_catalogs big-core fallback treats as big
-    # (r >= SATSTAR_FP_BIGCORE_ARCSEC = 0.5", i.e. >= 0.79 arcsec^2).
-    if 'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2' not in os.environ:
-        os.environ['NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2'] = (
-            '0.5' if _sat_ext_nircam else '0')
+    # Satstar position lock for extended-emission NIRCam, limited to large cores
+    # (see _default_nircam_satstar_lock_env).  A user export is respected.
+    _default_nircam_satstar_lock_env(os.environ, _sat_ext_nircam)
     # Cap a satstar's model to its frame0-RECOVERED core data (a recovered core is
     # not clipped, so the data is the true flux): stops an extended blob / mildly-
     # saturated star seeded as a satstar from extrapolating a huge flux -> crater.

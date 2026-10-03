@@ -54,13 +54,15 @@ def test_threshold_falls_back_to_wcs_pixel_scale():
 
 
 def _two_components():
-    """A small core with a one-sided spike (raw centre of mass pulled off the
-    core) and a large round core."""
-    sat = np.zeros((120, 120), bool)
-    yy, xx = np.mgrid[:120, :120]
+    """A small and a large core, each with a one-sided 1-px spike, so the raw
+    centre of mass of both is pulled off the core and the refined (eroded-core)
+    seed differs from it."""
+    sat = np.zeros((130, 130), bool)
+    yy, xx = np.mgrid[:130, :130]
     sat |= np.hypot(xx - 30.0, yy - 30.0) <= 3.0          # 29 px core
     sat[30, 34:44] = True                                  # 1-px spike to +x
     sat |= np.hypot(xx - 85.0, yy - 85.0) <= 14.0         # ~620 px core
+    sat[85, 99:125] = True                                 # 1-px spike to +x
     sources, n = label(sat)
     coms = list(center_of_mass(sat, labels=sources, index=np.arange(n) + 1))
     return sat, sources, coms
@@ -74,6 +76,10 @@ def test_small_core_gets_refined_seed_large_core_keeps_raw():
     # the refined seed (eroded core) is back on the core
     assert coms[0][1] > 31.0
     assert abs(seeds[0][1] - 30.0) < 0.3 and abs(seeds[0][0] - 30.0) < 0.3
+    # the large core keeps its raw centre of mass, which the refinement would
+    # have moved back onto the core
+    refined = ssf._refine_coms_by_data(coms, np.zeros(sat.shape), sources)
+    assert refined[1][1] < coms[1][1] - 0.5
     assert seeds[1] == coms[1]
 
 
@@ -94,13 +100,30 @@ def _names(node):
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
 
 
-def test_lock_decision_reads_the_gate(tree):
-    """The flux-only lock applies only at sat_area >= the gate (or when the
-    gate is off, or for forced sources with no sat_area)."""
+@pytest.mark.parametrize('is_miri, lock_pos, min_px, area, locked', [
+    (False, False, 0.0, 900, False),     # lock off
+    (False, True, 0.0, 10, True),        # gate off: every source locked
+    (False, True, 520.0, 519, False),    # below the gate: bounded fit
+    (False, True, 520.0, 520, True),     # at the gate: locked
+    (False, True, 520.0, 5000, True),
+    (False, True, 520.0, None, True),    # no sat_area (forced seed): locked
+    (True, True, 0.0, 900, False),       # MIRI: never via this switch
+])
+def test_position_lock_decision(is_miri, lock_pos, min_px, area, locked):
+    assert ssf._nircam_position_locked(is_miri=is_miri, lock_pos=lock_pos,
+                                       lock_min_px=min_px, sat_area=area) is locked
+
+
+def test_fit_uses_the_lock_decision(tree):
+    """``_nc_lock`` in the fit loop is the helper's answer for this source."""
     vals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
             and any(getattr(t, 'id', None) == '_nc_lock' for t in n.targets)]
     assert len(vals) == 1
-    assert {'_lock_pos', '_lock_min_px', 'src_sat_area'} <= _names(vals[0])
+    call = vals[0]
+    assert isinstance(call, ast.Call) and call.func.id == '_nircam_position_locked'
+    kw = {k.arg: getattr(k.value, 'id', None) for k in call.keywords}
+    assert kw == {'is_miri': '_is_miri', 'lock_pos': '_lock_pos',
+                  'lock_min_px': '_lock_min_px', 'sat_area': 'src_sat_area'}
 
 
 def test_lock_on_shared_model_is_cleared_for_the_next_source():
@@ -122,11 +145,33 @@ def test_both_fit_branches_set_the_position_freedom(tree):
     assert flags == [False, True]
 
 
-def test_driver_defaults_the_gate_for_extended_emission_nircam():
+def test_driver_default_env():
     from jwst_gc_pipeline.photometry import cataloging
-    src = inspect.getsource(cataloging._prepare_frame_for_photometry)
-    assert "os.environ['NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2']" in src
-    assert "'0.5' if _sat_ext_nircam else '0'" in src
+    env = {}
+    cataloging._default_nircam_satstar_lock_env(env, True)
+    assert env == {'NIRCAM_SATSTAR_LOCK_POS': '1',
+                   'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2': '0.5'}
+    env = {}
+    cataloging._default_nircam_satstar_lock_env(env, False)
+    assert env == {'NIRCAM_SATSTAR_LOCK_POS': '0',
+                   'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2': '0'}
+    # a user export wins
+    env = {'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2': '2'}
+    cataloging._default_nircam_satstar_lock_env(env, True)
+    assert env['NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2'] == '2'
+    assert env['NIRCAM_SATSTAR_LOCK_POS'] == '1'
+
+
+def test_driver_calls_the_default_with_the_ext_nircam_flag():
+    from jwst_gc_pipeline.photometry import cataloging
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(cataloging._prepare_frame_for_photometry)))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, 'id', None) == '_default_nircam_satstar_lock_env']
+    assert len(calls) == 1
+    env_arg, flag_arg = calls[0].args
+    assert ast.unparse(env_arg) == 'os.environ'
+    assert flag_arg.id == '_sat_ext_nircam'
 
 
 if __name__ == '__main__':

@@ -1581,6 +1581,22 @@ def _set_position_fixed(model, fixed):
     model.y_0.fixed = bool(fixed)
 
 
+def _nircam_position_locked(*, is_miri, lock_pos, lock_min_px, sat_area):
+    """Whether a NIRCam satstar is fitted flux-only at its seed.
+
+    ``lock_pos`` is ``NIRCAM_SATSTAR_LOCK_POS``.  With the size gate off
+    (``lock_min_px <= 0``) it locks every NIRCam source; with the gate on
+    (``nircam_lock_min_area_px``) only components with
+    ``sat_area >= lock_min_px``.  A source without a ``sat_area`` follows the
+    lock.  MIRI is never locked here; its own bounded/unbounded switch applies.
+    """
+    if is_miri or not lock_pos:
+        return False
+    if lock_min_px <= 0 or sat_area is None:
+        return True
+    return int(sat_area) >= lock_min_px
+
+
 def _lock_gated_coms(coms, data, sources, saturated, min_px,
                      unrecoverable=None):
     """Seeds for a size-gated NIRCam position lock
@@ -3569,9 +3585,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # bound) also keeps flux_err finite -- the NaN flux_err came from a
             # near-singular 2D position covariance, not from a 1D flux fit.
             # NIRCAM_SATSTAR_LOCK_POS; supersedes the bound above.
-            _nc_lock = (not _is_miri and _lock_pos
-                        and (_lock_min_px <= 0 or src_sat_area is None
-                             or int(src_sat_area) >= _lock_min_px))
+            _nc_lock = _nircam_position_locked(
+                is_miri=_is_miri, lock_pos=_lock_pos,
+                lock_min_px=_lock_min_px, sat_area=src_sat_area)
             if (_is_miri and not _miri_bounded) or _nc_lock:
                 # hard lock: fit flux only at the seed (MIRI legacy / NIRCam ext)
                 _set_position_fixed(model, True)
