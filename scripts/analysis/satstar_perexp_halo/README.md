@@ -96,3 +96,27 @@ comparison.
   - **The flat field** is only ~5% low here (rate/cal), so raw 0.78–0.81 corresponds to the ~0.83–0.85 seen in `cal`.
 - **Not optical.** Unsaturated PSF wings at 4–15 px are flat in x (±4%).
 - **LINEARITY reffile:** not inspected; CRDS is unreachable from this environment. The raw-ramp result makes it moot, because the deficit exists before linearity is applied.
+
+## Effect on the production saturated-star fluxes
+
+`production_flux_vs_x.py fit <workdir> <psf dir> <cal key>...` runs `saturated_star_finding.remove_saturated_stars` unchanged on each `_cal` frame. It uses the fovp1024 F480M grid, and has no ZEROFRAME anchoring because no `_ramp.fits` is available here. `analyze <prefix> <workdir>` then compares each star's `flux_fit` across its dithers (`production_flux_vs_x.*`).
+
+Note that the catalog's `x_fit`/`y_fit` are positions inside the fit box; the detector position is `x_0`/`y_0`, which agrees with `skycoord_fit` through the GWCS to 0.0005 px.
+
+- **Data:** obs 041, 061, 075 and 086 of 10678, 24 NRCBLONG frames, 16,397 catalog rows. 956 stars have dithers both in the band (x = 250–550) and outside it.
+- **The production flux is low in the band, and more so for larger cores.** Median `flux_fit` in band / outside, by the star's median `sat_area`:
+
+  | `sat_area` | band | null (x = 1300–1600) |
+  |---|---|---|
+  | < 50 | 1.002 ± 0.004 (376 stars) | 1.012 |
+  | 50–150 | 0.959 ± 0.004 (421 stars) | 1.003 |
+  | 150–500 | 0.912 ± 0.005 (139 stars) | 0.993 |
+  | ≥ 500 | 0.844 ± 0.028 (20 stars) | 0.985 |
+
+  This is smaller than the ~20% halo deficit: the masked-core fit also uses the inner wings, which are flat in x.
+- **Depth model** (robust fit, `depth_model`): in band / outside = 1 − 0.145 · max(0, log10(sat_area / 50)). Here `sat_area` is the core area *of the in-band detection*, which is what a per-detection correction has.
+- **Shape** (`xshape32`, cores ≥ 100 px): a trough from x ≈ 190 to 600, flat at 0.90–0.93 over x = 350–520. It matches the core-area stripe of step 10. Outside it the flux is within ±1.5%.
+- **Proposed correction (not applied):** `flux_fit / (1 − 0.145 · max(0, log10(sat_area / 50)) · s(x))`.
+  - s(x) is the `xshape32` trough normalized to 1 in the band. It is NRCBLONG only.
+  - It is calibrated on F480M 10678 only.
+  - The mechanism is still open (JWST-GC/data-qa#349), so it is an empirical, per-detector term.
