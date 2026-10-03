@@ -20,6 +20,7 @@ from jwst_gc_pipeline.photometry.wingcal import (
     MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
     relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from stpsf.utils import to_griddedpsfmodel
+from photutils.psf import GriddedPSFModel
 
 
 try:
@@ -84,6 +85,45 @@ def _has_plausible_pixel_scale(ww, max_arcsec=10.0):
     scales = np.abs(proj_plane_pixel_scales(cel)) * 3600.0
     return bool(np.all(np.isfinite(scales)) and np.all(scales < max_arcsec)
                 and np.all(scales > 0))
+
+
+class _CutoutOriginGriddedPSF(GriddedPSFModel):
+    """A detector-position ``GriddedPSFModel`` read in cutout coordinates.
+
+    The satstar fits run on ``data[y0:y1, x0:x1]`` with ``x_0``/``y_0`` in
+    cutout pixels, and ``GriddedPSFModel`` picks and interpolates its nodes
+    from ``x_0``/``y_0``.  Evaluated directly, every star got the PSF of
+    detector pixel ~(81, 81), the lower-left node, wherever it was (#1055).
+    This adds the cutout origin before the grid sees the position, so the
+    node matches the star's detector position while every coordinate the
+    caller handles stays in cutout pixels.  Build it with
+    :func:`psf_in_cutout_coords`."""
+
+    def evaluate(self, x, y, flux, x_0, y_0):
+        xoff, yoff = self._cutout_xoff, self._cutout_yoff
+        return super().evaluate(np.asarray(x, dtype=float) + xoff,
+                                np.asarray(y, dtype=float) + yoff,
+                                flux, x_0 + xoff, y_0 + yoff)
+
+
+def psf_in_cutout_coords(psf_grid, x0, y0):
+    """``psf_grid`` evaluated in the frame of a cutout whose pixel (0, 0) is
+    detector pixel (``x0``, ``y0``).
+
+    ``GriddedPSFModel.copy`` copies only the parameters, so the returned model
+    shares the grid data and the interpolator cache with ``psf_grid`` (one
+    rebuilt per source would cost ~25 s on an LW fovp1024 grid).  Any other
+    PSF model has no position dependence and is returned unchanged."""
+    if not isinstance(psf_grid, GriddedPSFModel):
+        return psf_grid
+    if isinstance(psf_grid, _CutoutOriginGriddedPSF):
+        x0 = x0 + psf_grid._cutout_xoff
+        y0 = y0 + psf_grid._cutout_yoff
+    model = psf_grid.copy()
+    model.__class__ = _CutoutOriginGriddedPSF
+    model._cutout_xoff = float(x0)
+    model._cutout_yoff = float(y0)
+    return model
 
 
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
@@ -3306,6 +3346,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     "forced_source=True but big_grid_large is None — "
                     "earlier require-large-PSF check should have raised."
                 )
+            # cutout-coordinate view of the detector-position grid (#1055)
+            _forced_psf = psf_in_cutout_coords(big_grid_large, x0, y0)
             FORCED_SHIFT_RADIUS = int(forced_grid_search_radius)  # pixels, per-axis (0 = single-point flux-only fit at seed)
             FORCED_SIGMA_CLIP = 3.0
             FORCED_CLIP_ITERS = 3
@@ -3315,7 +3357,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # Background sigma from cutout edges — used for chi^2 metric
             # and for sigma-clipping.  Evaluate PSF at seed once just to
             # define the "background" region (where PSF is negligible).
-            psf_center = big_grid_large(xx - x_init, yy - y_init)
+            psf_center = _forced_psf.evaluate(xx, yy, 1.0, x_init, y_init)
             if psf_center.shape != cutout.shape:
                 raise RuntimeError(
                     f"PSF eval shape {psf_center.shape} != cutout shape "
@@ -3378,8 +3420,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             max_psf_inframe = 0
             for dy in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
                 for dx in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
-                    psf_try = big_grid_large(xx - (x_init + dx),
-                                             yy - (y_init + dy))
+                    psf_try = _forced_psf.evaluate(xx, yy, 1.0, x_init + dx,
+                                                   y_init + dy)
                     psf_hot = psf_try > psf_thresh
                     max_psf_inframe = max(max_psf_inframe, int(psf_hot.sum()))
                     usable = (~mask) & np.isfinite(cutout) & psf_hot
@@ -3426,7 +3468,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # we keep the geometry (PSF at the seed) but force the trusted flux,
             # so the rendered wings carry the correct amplitude into this frame.
             if _ovr_flux is not None:
-                psf_seed = big_grid_large(xx - x_init, yy - y_init)
+                psf_seed = _forced_psf.evaluate(xx, yy, 1.0, x_init, y_init)
                 usable = ((~mask) & np.isfinite(cutout) & (psf_seed > psf_thresh))
                 n_use = int(usable.sum())
                 if n_use >= 10:
@@ -3507,7 +3549,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # oversub_clamp_scale, never silent.
             _oversub_scale = 1.0
             if forced_source and np.isfinite(flux_fit_val) and flux_fit_val > 0:
-                _pmod = big_grid_large(xx - x_fit_val, yy - y_fit_val) * flux_fit_val
+                _pmod = _forced_psf.evaluate(xx, yy, flux_fit_val, x_fit_val, y_fit_val)
                 _foot = (~mask) & np.isfinite(cutout) & (_pmod > 5.0 * sigma)
                 _nf = int(_foot.sum())
                 if _nf >= 10:
@@ -3577,7 +3619,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                 and big_grid_large is not None
                                 and src_sat_area is not None
                                 and int(src_sat_area) >= _SAT_AREA_LARGE)
-            _infov_psf = big_grid_large if _use_large_infov else big_grid
+            # Evaluated in cutout coordinates at the star's DETECTOR position:
+            # the grid's nodes are detector positions (#1055).
+            _infov_psf = psf_in_cutout_coords(
+                big_grid_large if _use_large_infov else big_grid, x0, y0)
             _psf_for_fit = _infov_psf
             # ADAPTIVE fit footprint (opt-in): scale the PSFPhotometry ``fit_shape``
             # to THIS star's saturated-core radius instead of the global ``size``.
@@ -3819,7 +3864,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             _yy, _xx = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
             _xf = float(result['x_fit'][0]); _yf = float(result['y_fit'][0])
             # use the SAME psf the fit used (flux normalization must match)
-            _psfu = np.clip(_infov_psf(_xx - _xf, _yy - _yf), 0, None)
+            _psfu = np.clip(_infov_psf.evaluate(_xx, _yy, 1.0, _xf, _yf), 0, None)
             # Spike-weighted amplitude: the optimal flux Sum(d*p)/Sum(p^2) over
             # finite pixels outside the genuine NaN core (+4 px buffer) with
             # non-negligible PSF, 3-sigma clipped.  The p^2 weighting puts the
@@ -4069,7 +4114,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if np.isfinite(_drec):
                 _xf2 = float(result['x_fit'][0]); _yf2 = float(result['y_fit'][0])
                 _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
-                _psf2 = np.clip(_infov_psf(_xx2 - _xf2, _yy2 - _yf2), 0, None)
+                _psf2 = np.clip(_infov_psf.evaluate(_xx2, _yy2, 1.0, _xf2, _yf2), 0, None)
                 _ppk = float(np.nanmax(_psf2)) if np.isfinite(_psf2).any() else np.nan
                 if np.isfinite(_ppk) and _ppk > 0:
                     _cap = _drec / _ppk
@@ -4097,7 +4142,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 and seed_gate_wcs is not None and big_grid_large is not None
                 and len(result)):
             try:
-                _fpk = float(np.nanmax(big_grid_large(np.zeros(1), np.zeros(1))))
+                _fpk = float(np.nanmax(_forced_psf.evaluate(
+                    np.array([xf - x0]), np.array([yf - y0]), 1.0, xf - x0, yf - y0)))
                 _gny, _gnx = seed_gate_image.shape
                 for _ri in range(len(result)):
                     # Use the SEED center (xf,yf = the star's TRUE projected
@@ -4201,13 +4247,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         "build time — earlier require-large-PSF check should have "
                         "raised already."
                     )
-                _psf_for_model = big_grid_large
+                _psf_for_model = _forced_psf
             else:
                 # in-FOV: render with the SAME psf the amplitude was fit against
                 # (big_grid_large for MIRI satstars, else big_grid) so the model
                 # flux normalization matches the fit.
                 _psf_for_model = _infov_psf
-            psf_eval = _psf_for_model(x-x_fit, y-y_fit) * flux  # works for GriddedPSFModel
+            psf_eval = _psf_for_model.evaluate(x, y, flux, x_fit, y_fit)
             # Stars are physically nonnegative.  GriddedPSFModel bicubic
             # interpolation produces small negative pixel values at large
             # offsets (interpolation overshoot between tabulated grid
@@ -4728,8 +4774,6 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     and int(os.environ.get('MIRI_SATSTAR_RENDER_FOOTPRINT', 1))):
                 try:
                     _wfloor = float(os.environ.get('MIRI_SATSTAR_WING_FLOOR', 5.0))
-                    _psf0 = float(_psf_for_model(np.array([0.0]),
-                                                 np.array([0.0]))[0])
                     _maxhalf = int(min(512,
                         min(_psf_for_model.data.shape[-2:])
                         // (2 * int(max(1, getattr(_psf_for_model,
@@ -4738,7 +4782,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                              result['flux_fit']):
                         if not np.isfinite(_fl):
                             continue
-                        _peak = _psf0 * float(_fl)
+                        _peak = float(_psf_for_model.evaluate(
+                            np.array([float(_xf)]), np.array([float(_yf)]),
+                            float(_fl), float(_xf), float(_yf))[0])
                         # ~r^-3 diffraction wing reaches _wfloor at this radius
                         _rh = (int(pad * (max(1.0, _peak / _wfloor)) ** (1.0 / 3.0))
                                if _peak > _wfloor else pad)
@@ -4750,8 +4796,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         _Y0 = int(max(0, _gcy - _rh)); _Y1 = int(min(data.shape[0], _gcy + _rh))
                         _X0 = int(max(0, _gcx - _rh)); _X1 = int(min(data.shape[1], _gcx + _rh))
                         _yb, _xb = np.mgrid[_Y0:_Y1, _X0:_X1]
-                        _wing = np.maximum(_psf_for_model(_xb - _gcx, _yb - _gcy)
-                                           * float(_fl), 0)
+                        _wing = np.maximum(_psf_for_model.evaluate(
+                            _xb - x0, _yb - y0, float(_fl), float(_xf), float(_yf)), 0)
                         _ext = np.ones(_wing.shape, dtype=bool)
                         _iy0 = max(_Y0, y0); _iy1 = min(_Y1, y1)
                         _ix0 = max(_X0, x0); _ix1 = min(_X1, x1)
