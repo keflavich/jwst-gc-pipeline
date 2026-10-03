@@ -3642,7 +3642,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # flux_fit (halo-defined vs spike-defined amplitude), so it is
         # recorded beside flux_fit, never in place of it.  Smaller cores:
         # crowding over the wide stamp makes it WORSE -> NaN.
-        # SATSTAR_HALO_MODES_WIDE=1; _RMAX / _AREA_MIN override.
+        # SATSTAR_HALO_MODES_WIDE=1; _RMAX / _AREA_MIN override.  The 300 px /
+        # 200 px defaults are calibrated on NRCBLONG F480M (10678) only.
         if (int(os.environ.get('SATSTAR_HALO_MODES_WIDE', 0)) and not _is_miri
                 and not forced_source and len(result)):
             from ..photometry.satstar_halo_modes import (

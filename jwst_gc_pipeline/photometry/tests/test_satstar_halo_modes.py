@@ -10,17 +10,17 @@ from jwst_gc_pipeline.photometry.satstar_halo_modes import (
 N, C = 241, 120.3
 
 
-def _psf(c=C):
+def _psf(c=C, core_sigma=2.0, halo_amp=0.05, spike_amp=0.3):
     """Gaussian core + r^-3 smooth halo + six r^-2 diffraction spikes."""
     yy, xx = np.indices((N, N))
     dx, dy = xx - c, yy - c
     r = np.hypot(dx, dy)
     th = np.arctan2(dy, dx)
-    core = np.exp(-0.5 * (r / 2.0) ** 2)
-    halo = 0.05 * (np.maximum(r, 3.0) / 10.0) ** -3
+    core = np.exp(-0.5 * (r / core_sigma) ** 2)
+    halo = halo_amp * (np.maximum(r, 3.0) / 10.0) ** -3
     ang = np.abs(((th[..., None] - np.arange(6) * np.pi / 3 + np.pi) % (2 * np.pi)) - np.pi)
     perp = r[..., None] * np.sin(np.minimum(ang, np.pi / 2))
-    spikes = (np.exp(-0.5 * (perp / 1.0) ** 2) * (ang < np.pi / 2)).sum(-1) * 0.3 * (np.maximum(r, 3.0) / 10.0) ** -2
+    spikes = (np.exp(-0.5 * (perp / 1.0) ** 2) * (ang < np.pi / 2)).sum(-1) * spike_amp * (np.maximum(r, 3.0) / 10.0) ** -2
     p = core + halo + spikes
     return p / p.sum(), r
 
@@ -148,3 +148,66 @@ def test_wide_ratios_on_a_full_frame():
     # below the core-area threshold: not measured
     assert np.isnan(satstar_halo_mode_ratios_wide(frame, ferr, dq, grid, [(x, y)], 100.0,
                                                   rmax=110.0, area_min=300)[0])
+
+
+def test_wide_ratios_use_detector_coordinates_on_the_psf_grid():
+    """The PSF grid must be evaluated at the star's DETECTOR position (#1055):
+    on a grid whose PSF changes across the detector, evaluating it at stamp
+    coordinates picks the far node and the flux is wrong."""
+    from astropy.nddata import NDData
+    from photutils.psf import GriddedPSFModel
+    from jwst_gc_pipeline.photometry.satstar_halo_modes import satstar_halo_mode_ratios_wide
+    c = (N - 1) / 2
+    right, _ = _psf(c=c)                                            # the PSF at the star
+    wrong, _ = _psf(c=c, core_sigma=4.0, halo_amp=0.15, spike_amp=0.1)  # elsewhere
+    nodes = [(0.0, 0.0), (1000.0, 0.0), (0.0, 1000.0), (1000.0, 1000.0)]
+    grid = GriddedPSFModel(NDData(np.stack([wrong, wrong, wrong, right]),
+                                  meta={'grid_xypos': nodes, 'oversampling': 1}))
+    data, err, mask, p, r = _star(1.0)                              # a star made with `right`
+    frame = np.zeros((1200, 1200)); ferr = np.ones_like(frame)
+    dq = np.zeros(frame.shape, np.uint32)
+    x, y = 1000.0 + (C - c), 1000.0 + (C - c)                     # on the `right` node
+    sl = (slice(1000 - int(c), 1000 - int(c) + N), slice(1000 - int(c), 1000 - int(c) + N))
+    frame[sl], ferr[sl] = data, err
+    dq[sl][r < 17] = 2
+    area = float((r < 17).sum())
+    got = satstar_halo_mode_ratios_wide(frame, ferr, dq, grid, [(x, y)], area, rmax=110.0, area_min=300)
+    # the right PSF and an unchanged halo: the two fits agree
+    assert got[0] == pytest.approx(1.0, abs=0.01)
+    # the same star fitted with the far node's PSF does not
+    yy, xx = np.indices(data.shape)
+    bad, _, _ = halo_mode_flux_ratio(data, err, r < 20, grid.evaluate(xx, yy, 1.0, C, C), C, C,
+                                     r_core=np.sqrt(area / np.pi) + 3, rmax=110.0)
+    assert abs(bad - 1.0) > 0.05
+
+
+def test_wide_ratios_mask_dilation_and_bad_pixels():
+    """DQ SATURATED is dilated by 3 px, and non-finite / zero-error pixels are
+    not used: corrupting them must not move the ratio."""
+    from astropy.nddata import NDData
+    from photutils.psf import GriddedPSFModel
+    from jwst_gc_pipeline.photometry.satstar_halo_modes import satstar_halo_mode_ratios_wide
+    pc, _ = _psf(c=(N - 1) / 2)
+    grid = GriddedPSFModel(NDData(pc[None], meta={'grid_xypos': [(0.0, 0.0)], 'oversampling': 1}))
+    data, err, mask, p, r = _star(1.2)
+    off = (37, 61)
+    frame = np.zeros((N + 80, N + 120)); ferr = np.ones_like(frame)
+    dq = np.zeros(frame.shape, np.uint32)
+    sl = (slice(off[1], off[1] + N), slice(off[0], off[0] + N))
+    frame[sl], ferr[sl] = data, err
+    dq[sl][r < 17] = 2
+    x, y = C + off[0], C + off[1]
+    area = float((r < 17).sum())
+    ref = satstar_halo_mode_ratios_wide(frame, ferr, dq, grid, [(x, y)], area, rmax=110.0, area_min=300)[0]
+    # 3 taxicab steps of dilation cover r < 17 + 3/sqrt(2) in every direction:
+    # garbage in that ring is never fitted (with 1 step it would be)
+    f2 = frame.copy(); f2[sl][(r >= 17) & (r < 19.0)] = 1e9
+    assert satstar_halo_mode_ratios_wide(f2, ferr, dq, grid, [(x, y)], area,
+                                         rmax=110.0, area_min=300)[0] == pytest.approx(ref, rel=1e-9)
+    # NaN data and zero / negative errors in the halo are not used
+    f3, e3 = frame.copy(), ferr.copy()
+    ring = (r > 40) & (r < 45)
+    f3[sl][ring & (np.arange(N)[None, :] % 2 == 0)] = np.nan
+    e3[sl][ring & (np.arange(N)[None, :] % 2 == 1)] = 0.0
+    got = satstar_halo_mode_ratios_wide(f3, e3, dq, grid, [(x, y)], area, rmax=110.0, area_min=300)[0]
+    assert np.isfinite(got) and got == pytest.approx(ref, rel=0.01)
