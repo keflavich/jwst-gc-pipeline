@@ -11,6 +11,8 @@
   "refused_min_keff": 5.005812892459949,
   "refused_keff_le5": 0,
   "refused_nonfinite_keff": 15,
+  "refused_nan_qfit_snr_pos": 9,
+  "refused_snr_not_pos": 6,
   "refused_in_seed": 0,
   "only1018": 1045,
   "refused_and_only1018": 949,
@@ -19,7 +21,13 @@
   "only1018_not_in_base1016": 0,
   "refused_in_footprint": 858,
   "refused_rel": 0.19506656821875695,
-  "refused_rel_err": 0.02260664064280605
+  "refused_rel_err": 0.02260664064280605,
+  "refused_nan_qfit_snr_pos_in_footprint": 9,
+  "refused_nan_qfit_snr_pos_rel": -0.1542522195180475,
+  "refused_nan_qfit_snr_pos_rel_err": 0.0,
+  "refused_snr_not_pos_in_footprint": 5,
+  "refused_snr_not_pos_rel": 0.5248597400187435,
+  "refused_snr_not_pos_rel_err": 0.4694488229339109
  },
  "sgrb2": {
   "n_seed": 408591,
@@ -33,6 +41,8 @@
   "refused_min_keff": 5.002782030208056,
   "refused_keff_le5": 0,
   "refused_nonfinite_keff": 60,
+  "refused_nan_qfit_snr_pos": 21,
+  "refused_snr_not_pos": 39,
   "refused_in_seed": 0,
   "only1018": 4054,
   "refused_and_only1018": 3631,
@@ -41,7 +51,13 @@
   "only1018_not_in_base1016": 0,
   "refused_in_footprint": 3735,
   "refused_rel": 0.42464566505780976,
-  "refused_rel_err": 0.01079520529167401
+  "refused_rel_err": 0.01079520529167401,
+  "refused_nan_qfit_snr_pos_in_footprint": 21,
+  "refused_nan_qfit_snr_pos_rel": 0.2475574333245313,
+  "refused_nan_qfit_snr_pos_rel_err": 0.12884870252819294,
+  "refused_snr_not_pos_in_footprint": 39,
+  "refused_snr_not_pos_rel": 0.3342455254641706,
+  "refused_snr_not_pos_rel_err": 0.12430943746882576
  },
  "w51": {
   "n_seed": 20041,
@@ -55,6 +71,8 @@
   "refused_min_keff": 5.0147151415610525,
   "refused_keff_le5": 0,
   "refused_nonfinite_keff": 2,
+  "refused_nan_qfit_snr_pos": 0,
+  "refused_snr_not_pos": 2,
   "refused_in_seed": 0,
   "only1018": 261,
   "refused_and_only1018": 236,
@@ -63,6 +81,12 @@
   "only1018_not_in_base1016": 0,
   "refused_in_footprint": 210,
   "refused_rel": 0.17610507776845094,
-  "refused_rel_err": 0.03416879391353647
+  "refused_rel_err": 0.03416879391353647,
+  "refused_nan_qfit_snr_pos_in_footprint": 0,
+  "refused_nan_qfit_snr_pos_rel": null,
+  "refused_nan_qfit_snr_pos_rel_err": null,
+  "refused_snr_not_pos_in_footprint": 2,
+  "refused_snr_not_pos_rel": 0.0,
+  "refused_snr_not_pos_rel_err": 0.0
  }
 }
