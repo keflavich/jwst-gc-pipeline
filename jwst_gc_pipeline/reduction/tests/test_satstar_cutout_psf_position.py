@@ -221,33 +221,76 @@ def _names(node):
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
 
 
+def _bound(call, func):
+    """The AST argument of ``call`` for each parameter of ``func``, whether it
+    was passed by position or by keyword."""
+    params = list(inspect.signature(func).parameters)
+    out = dict(zip(params, call.args))
+    out.update({kw.arg: kw.value for kw in call.keywords if kw.arg})
+    return out
+
+
+VIEW_NAMES = {'_infov_psf', '_psf_for_fit', '_psf_for_model', '_forced_psf'}
+
+
+def _assigns_to(tree, name):
+    return [n for n in ast.walk(tree)
+            if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+            and name in {t.id for tgt in (n.targets if isinstance(n, ast.Assign) else [n.target])
+                         for t in ast.walk(tgt) if isinstance(t, ast.Name)}]
+
+
 def test_halo_mode_hook_reads_the_cutout_view_in_cutout_coordinates(tree):
+    from jwst_gc_pipeline.photometry.satstar_halo_modes import satstar_halo_mode_ratios
     calls = _calls(tree, 'satstar_halo_mode_ratios')
     assert calls
     for c in calls:
-        data, _, _, psf, pos = c.args[:5]
-        assert getattr(data, 'id', None) == 'cutout_fit', ast.unparse(c)
-        assert getattr(psf, 'id', None) == '_psf_for_fit', ast.unparse(c)
-        assert "result['x_fit']" in ast.unparse(pos) and "result['y_fit']" in ast.unparse(pos)
+        b = _bound(c, satstar_halo_mode_ratios)
+        assert getattr(b['cutout'], 'id', None) == 'cutout_fit', ast.unparse(c)
+        assert getattr(b['psf_model'], 'id', None) == '_psf_for_fit', ast.unparse(c)
+        pos = ast.unparse(b['positions'])
+        assert "result['x_fit']" in pos and "result['y_fit']" in pos, pos
 
 
 def test_wide_halo_mode_hook_reads_the_bare_grid_in_detector_coordinates(tree):
+    from jwst_gc_pipeline.photometry.satstar_halo_modes import satstar_halo_mode_ratios_wide
     calls = _calls(tree, 'satstar_halo_mode_ratios_wide')
     assert calls
     for c in calls:
-        data, _, _, psf, pos = c.args[:5]
-        assert getattr(data, 'id', None) == 'data', ast.unparse(c)
+        b = _bound(c, satstar_halo_mode_ratios_wide)
+        assert getattr(b['data'], 'id', None) == 'data', ast.unparse(c)
+        psf = b['psf_model']
         # only the bare grids: no view, no call that could build one
         assert not any(isinstance(n, ast.Call) for n in ast.walk(psf)), ast.unparse(psf)
         assert 'big_grid' in _names(psf), ast.unparse(psf)
         assert _names(psf) <= {'big_grid', 'big_grid_large', '_use_large_infov'}, ast.unparse(psf)
-        assert {'x_centroid', 'y_centroid'} <= _names(pos), ast.unparse(pos)
-    # ... and x_centroid / y_centroid are the fitted cutout position plus the origin
-    src = {ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Assign)}
-    assert "result['xcentroid'] = result['x_fit'] + x0" in src
-    assert "result['ycentroid'] = result['y_fit'] + y0" in src
-    assert "x_centroid = np.asarray(result['xcentroid'], dtype=float)" in src
-    assert "y_centroid = np.asarray(result['ycentroid'], dtype=float)" in src
+        assert {'x_centroid', 'y_centroid'} <= _names(b['positions']), ast.unparse(b['positions'])
+    # x_centroid / y_centroid are the fitted cutout position plus the origin
+    for axis in ('x', 'y'):
+        col = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+               and any(ast.unparse(t) == f"result['{axis}centroid']" for t in n.targets)]
+        assert col, axis
+        for n in col:
+            assert isinstance(n.value, ast.BinOp) and isinstance(n.value.op, ast.Add), ast.unparse(n)
+            assert {f'{axis}0'} <= _names(n.value), ast.unparse(n)
+            assert f"result['{axis}_fit']" in ast.unparse(n.value), ast.unparse(n)
+        for n in _assigns_to(tree, f'{axis}_centroid'):
+            assert f"result['{axis}centroid']" in ast.unparse(n.value), ast.unparse(n)
+
+
+@pytest.mark.parametrize('name', ['big_grid', 'big_grid_large'])
+def test_bare_grids_are_never_rebound_to_a_view(tree, name):
+    """The wide-hook check above trusts the NAME ``big_grid``: a later
+    ``big_grid = _psf_for_fit`` (or a view built in place) would pass it.  The
+    bare grids are only ever loaded, indexed or unset."""
+    for n in _assigns_to(tree, name):
+        v = getattr(n, 'value', None)
+        if v is None:
+            continue
+        assert not (_names(v) & VIEW_NAMES), ast.unparse(n)
+        assert not any(isinstance(m, ast.Call)
+                       and getattr(m.func, 'id', None) == 'psf_in_cutout_coords'
+                       for m in ast.walk(v)), ast.unparse(n)
 
 
 def test_wide_halo_ratios_refuse_a_cutout_view(grid):
