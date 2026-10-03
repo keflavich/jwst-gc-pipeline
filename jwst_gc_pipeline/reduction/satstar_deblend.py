@@ -119,6 +119,15 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     zf = zeroframe[y0:y1, x0:x1].astype(float)
     blob = (sources[y0:y1, x0:x1] == label_id)
     blob_dil = ndimage.binary_dilation(blob, iterations=int(np.ceil(r_sat + 2 * fwhm_pix)))
+    # Pixels of OTHER saturated components in the crop.  The dilation (r_sat +
+    # 2 FWHM) reaches neighbouring components a few px away, and each of those
+    # seeds its own star(s); a core or peak centred there is the neighbour's star.
+    # Seeding it here as well fits that star twice: iterative subtraction splits
+    # its flux between two rows at the same position (wd2 nrcb3: 42 such pairs).
+    # Detection still runs on the full ``blob_dil`` and the foreign centres are
+    # dropped afterwards; masking the map instead creates false maxima on the
+    # mask edge, where the neighbour's wing rises toward its core.
+    other = (sources[y0:y1, x0:x1] > 0) & ~blob
 
     if sat_ceiling is None:
         sat_ceiling = robust_zf_ceiling(zeroframe)
@@ -155,9 +164,13 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
             areas = ndimage.sum_labels(inv_blob, lab_ci, np.arange(n_ci) + 1)
             for kk, ((cyl, cxl), a) in enumerate(zip(cen, areas), start=1):
                 if a >= 3:
+                    # a neighbour's core still claims its region (its ring
+                    # maxima are not new stars) but seeds no centre here
+                    claimed |= (lab_ci == kk)
+                    if other[int(round(cyl)), int(round(cxl))]:
+                        continue
                     core_centers.append((float(cyl + y0), float(cxl + x0)))
                     core_radii.append(float(np.sqrt(a / np.pi)))
-                    claimed |= (lab_ci == kk)
         claimed = ndimage.binary_dilation(claimed, iterations=min_sep)
 
     # UNIFIED PEAK DETECTION (handles BOTH regimes).  Nearest-valid fill of the
@@ -186,6 +199,8 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
             # maximum -> would split a single star, the L31 failure).  The core's
             # centroid already represents it.
             if claimed.any() and claimed[py, px]:
+                continue
+            if other[py, px]:
                 continue
             peak_centers.append((float(py + y0), float(px + x0)))
 
@@ -227,7 +242,8 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     if not centers:
         masked = np.where(blob_dil, zf_sm, -np.inf)
         py, px = np.unravel_index(np.argmax(masked), masked.shape)
-        if np.isfinite(masked[py, px]) and masked[py, px] > thresh:
+        if (np.isfinite(masked[py, px]) and masked[py, px] > thresh
+                and not other[py, px]):
             centers = [(float(py + y0), float(px + x0))]
 
     # DAOPHOT only for ASTROMETRY: snap each ZF peak to the nearest deduped daophot
