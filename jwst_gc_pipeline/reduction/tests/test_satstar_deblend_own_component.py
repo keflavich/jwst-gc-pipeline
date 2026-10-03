@@ -173,3 +173,67 @@ def test_neighbour_zf_core_claims_its_ring():
                        confirm_xy=np.array([[bump[0], bump[1]]], float))
     assert len(centers) == 1, centers
     assert _near(centers, *own)
+
+
+# a bright star and a small saturated neighbour 10 px away.  The neighbour's
+# first-read peak lies off its own SATURATED pixels, in the gap between the two
+# components, 2 px from the neighbour and 3 px from the bright star's footprint.
+BIG, SMALL, GAP_PEAK = (30, 40), (40, 40), (37, 40)
+
+
+def _gap_scene():
+    sat = _disk(*BIG, r=4) | _disk(*SMALL, r=1)
+    zf = 100.0 + _gauss(*BIG, 5000.0) + _gauss(*GAP_PEAK, 2000.0)
+    return zf, sat
+
+
+def test_gap_scene_geometry():
+    """Guard: the gap peak is off every SATURATED pixel, nearer to the small
+    neighbour than to the bright star, and inside both search regions."""
+    zf, sat = _gap_scene()
+    sources, n, _ = _labels(sat)
+    assert n == 2 and sources[GAP_PEAK[1], GAP_PEAK[0]] == 0
+    big = sources == sources[BIG[1], BIG[0]]
+    small = sources == sources[SMALL[1], SMALL[0]]
+    d_big = ndimage.distance_transform_edt(~big)[GAP_PEAK[1], GAP_PEAK[0]]
+    d_small = ndimage.distance_transform_edt(~small)[GAP_PEAK[1], GAP_PEAK[0]]
+    assert d_small < d_big
+    for blob in (big, small):
+        r_sat = np.sqrt(blob.sum() / np.pi)
+        dil = ndimage.binary_dilation(blob, iterations=int(np.ceil(r_sat + 2 * FWHM)))
+        assert dil[GAP_PEAK[1], GAP_PEAK[0]]
+
+
+def test_gap_peak_nearer_the_neighbour_is_seeded_once():
+    """The peak between the two components goes to the nearer one only.  The
+    bright star's search used to return it as a second star; the unlocked fit
+    then drifted onto the neighbour and split its flux between two rows."""
+    zf, sat = _gap_scene()
+    sources, _, _ = _labels(sat)
+    big = _deblend(zf, sat, sources[BIG[1], BIG[0]])
+    assert len(big) == 1, big
+    assert _near(big, *BIG)
+    small = _deblend(zf, sat, sources[SMALL[1], SMALL[0]])
+    assert len(small) == 1, small
+    assert _near(small, *GAP_PEAK)
+
+
+def test_gap_peak_out_of_the_neighbours_reach_is_kept():
+    """A peak nearer to a neighbour but beyond the smallest search radius of
+    any component (1 + 2 FWHM, in the L1 metric of the dilation) stays with
+    the component that found it, because the neighbour might not search
+    that far."""
+    big_c, small_c, peak = (20, 40), (38, 47), (38, 40)
+    sat = _disk(*big_c, r=8) | _disk(*small_c, r=0)
+    sources, n, _ = _labels(sat)
+    assert n == 2
+    small = sources == sources[small_c[1], small_c[0]]
+    big = sources == sources[big_c[1], big_c[0]]
+    d_small = ndimage.distance_transform_edt(~small)[peak[1], peak[0]]
+    d_big = ndimage.distance_transform_edt(~big)[peak[1], peak[0]]
+    assert d_small < d_big
+    assert d_small > np.ceil(1.0 + 2 * FWHM)
+    zf = 100.0 + _gauss(*big_c, 5000.0) + _gauss(*peak, 2000.0)
+    # pad=12 puts the peak (10 px from the bright star's footprint) in the crop
+    centers = _deblend(zf, sat, sources[big_c[1], big_c[0]], pad=12)
+    assert _near(centers, *peak), centers

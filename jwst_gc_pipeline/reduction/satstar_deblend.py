@@ -128,6 +128,19 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     # dropped afterwards; masking the map instead creates false maxima on the
     # mask edge, where the neighbour's wing rises toward its core.
     other = (sources[y0:y1, x0:x1] > 0) & ~blob
+    if other.any():
+        # A centre off every SATURATED pixel but nearer to a neighbour's than
+        # to this component's belongs to the neighbour as well.  On wd2 F150W
+        # such peaks sat between a large component and a small one, 2.8-4.3 px
+        # from the small one's star; the unlocked fit drifted onto that star
+        # and split its flux between two rows (5 pairs on nrcb3, 2 on nrcb1).
+        # Only pixels within the smallest search radius of any component are
+        # handed over, so the neighbour's own search reaches them.
+        reach = int(np.ceil(1.0 + 2 * fwhm_pix))
+        d_own = ndimage.distance_transform_edt(~blob)
+        d_other = ndimage.distance_transform_edt(~other)
+        l1_other = ndimage.distance_transform_cdt(~other, metric='taxicab')
+        other |= (d_other < d_own) & (l1_other <= reach)
 
     if sat_ceiling is None:
         sat_ceiling = robust_zf_ceiling(zeroframe)
