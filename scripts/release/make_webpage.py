@@ -2381,6 +2381,9 @@ def manifold_link_html(info, page_version=None, labelled=False):
     # it was built from this release's files.
     if page_version and info["release_version"] == page_version:
         prov = "Built from this release's catalog files."
+    elif info["release_version"]:
+        prov = (f"Built from the {info['release_version']} catalog files; "
+                "it can differ from the catalog files listed below.")
     else:
         when = f" as of {info['created']}" if info["created"] else ""
         prov = (f"Built from the pipeline catalogs{when}; it can differ from "

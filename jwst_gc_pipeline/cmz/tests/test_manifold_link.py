@@ -52,6 +52,9 @@ def test_no_viewer_no_link(mw, tmp_path):
 def test_empty_or_malformed_manifest_is_not_linked(mw, tmp_path):
     _viewer(tmp_path, 'brick_manifold', n=0)
     assert mw.manifold_info(tmp_path, 'brick') is None
+    # unparseable JSON (a half-written manifest) is skipped, not raised
+    (tmp_path / 'brick_manifold' / 'data' / 'manifest.json').write_text('{')
+    assert mw.manifold_info(tmp_path, 'brick') is None
 
 
 def test_treasury_uses_its_existing_directory(mw, tmp_path):
@@ -93,6 +96,8 @@ def test_provenance_is_claimed_only_when_recorded(mw, tmp_path):
     other = mw.manifold_link_html(mw.manifold_info(tmp_path, 'sgra'),
                                   'v1.8-2026.10')
     assert "this release's catalog files" not in other
+    # a viewer built from another release names that release
+    assert 'Built from the v1.7-2026.09 catalog files' in other
 
 
 def test_field_page_carries_the_link_only_when_given(mw, tmp_path):
