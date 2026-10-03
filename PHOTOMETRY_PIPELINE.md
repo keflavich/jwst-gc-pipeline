@@ -245,14 +245,22 @@ source if it is **star-like**
 
 ```
 star_like = (qfit ≤ 0.2) OR (flags in keep_flags)
-            OR (peakSB > 20 × local_bkg AND prominence ≥ 4) OR (prominence ≥ 7)
+            OR (peakSB > 20 × local_bkg AND prominence ≥ 4)
+            OR (prominence ≥ 7 AND qfit ≤ sqrt(0.2² + (5/snr)²))
             OR bright_isolated
 bright_isolated = (snr ≥ 20) AND (qfit < 0.4) AND (group_size ≤ 1)
 ```
 
 (`prominence` is the data-i2d rise above the local annulus in annulus-MAD units;
 where it is not measured, with no data i2d or within 10 px of the i2d edge, the
-peak-SB test applies alone.)
+peak-SB test applies alone.)  The `5/snr` term (`--manual-ext-qfit-snr-k`) is
+the pixel-noise part of qfit: a perfect PSF fit has qfit = Σ|resid|/flux ≈
+3.4/snr (median for Brick F182M dark-sky stars), so `sqrt(0.2² + (5/snr)²)` is
+the qfit a point source reaches with noise.  In full-field m6 replays the
+prominent sources above it (fits to a bright star's wing or ring, blends,
+emission knots) match a reference catalog at 0.20 (Brick), 0.42 (Sgr B2) and
+0.18 (W51) of the chance-corrected rate of kept stars of the same flux
+(`docs/evidence/faint_qfit_snr/README.md`).
 
 **and** it clears the local-S/N floor (`local_snr_min = 5`) — **or** it is
 qfit-confident (`qfit ≤ manual_ext_qfit_max`, 0.2), which is kept regardless of S/N
@@ -297,7 +305,7 @@ for a plain single-filter NIRCam field with no tuning flags.
 | | negative-flux | banned |
 | **vetting** | qfit_max | 0.2 |
 | | peak-over-bkg | 20 (and prominence ≥ 4.0 where measured) |
-| | star-prominence keep | 7.0 (neighbour-robust prominence branch off) |
+| | star-prominence keep | 7.0, with qfit ≤ sqrt(0.2² + (5/S/N)²) (neighbour-robust prominence branch off) |
 | | local-S/N min | 5.0 (on flux / flux_err_prop, the merged-flux S/N) |
 | | bright-isolated keep (snr / qfit) | ≥20 / <0.4 |
 | | prominence gate | 0 (off; MIRI only) |
@@ -341,6 +349,7 @@ still run after m6.
 | `--manual-ext-qfit-max` | 0.2 | 0.2 | 0.2 | **0.4** |
 | `--manual-ext-peak-over-bkg` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-star-prom-min` | 7.0 | 7.0 | 7.0 | 7.0 |
+| `--manual-ext-qfit-snr-k` | 5.0 | 5.0 | 5.0 | (unused: MIRI vets on prominence) |
 | `--manual-ext-star-prom-peak-min` | 4.0 | 4.0 | 4.0 | 4.0 |
 | `--manual-ext-star-prom-robust-min` | 0.0 (off; −1 = AUTO) | 0 | 0 | 0 |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | (robust branch off) | (robust branch off) | (robust branch off) |
@@ -512,6 +521,7 @@ control is the default.
 | `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
 | `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg (with prominence ≥ `--manual-ext-star-prom-peak-min` where measured) |
 | `--manual-ext-star-prom-min` | 7.0 | …or data-i2d prominence ≥ this, whatever the peak-SB test says; 0 = off |
+| `--manual-ext-qfit-snr-k` | 5.0 | …that prominence keep (and the robust-prominence keep, when on) also needs qfit ≤ sqrt(qfit_max² + (k/S/N)²), the qfit a point source reaches with pixel noise; 0 = no bound |
 | `--manual-ext-star-prom-peak-min` | 4.0 | the peak-SB keep also needs data-i2d prominence ≥ this where prominence is measured; 0 = off |
 | `--manual-ext-star-prom-robust-min` | 0 (off) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; −1 = AUTO (8 on star-dominated fields, off on extended-emission targets) |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
@@ -580,6 +590,20 @@ a saturated star.
 Catalogs re-made with this code lose those faint wing fits; see
 `docs/evidence/faint_prominence_keep/`.  `--manual-ext-star-prom-peak-min=0
 --manual-ext-star-prom-min=0` restores the previous keep.
+
+**2026-10, qfit noise bound on the prominence keep (#1017).**  The
+prominence ≥ 7 keep (and the robust-prominence keep, when on) now also
+needs `qfit ≤ sqrt(qfit_max² + (k/snr)²)` with k = 5
+(`--manual-ext-qfit-snr-k`), the qfit a point source reaches with pixel
+noise.  On the full-field m6 replays it removes 986 sources from the Brick
+F182M catalog (389,555 → 388,569), 3,735 from Sgr B2 F187N (413,946 →
+410,211) and 256 from W51 F187N (21,631 → 21,375), and adds none.  The
+removed sources match a reference catalog at 0.20 (Brick, independent
+visit), 0.42 (Sgr B2) and 0.18 (W51; both same visit) of the rate of kept
+stars of the same flux: about 190 / 1,590 / 45 real-star equivalents.
+Catalogs re-made with this code lose those fits; see
+`docs/evidence/faint_qfit_snr/`.  `--manual-ext-qfit-snr-k=0` restores the
+previous keep.
 
 ## Why this replaced `IterativePSFPhotometry`
 
