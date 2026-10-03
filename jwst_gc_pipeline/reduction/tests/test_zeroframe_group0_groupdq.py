@@ -149,6 +149,44 @@ def test_fit_anchor_masks_the_core_instead_of_rewriting_it():
     assert np.array_equal(out[core_b], data[core_b])
 
 
+class _AnchorReached(Exception):
+    pass
+
+
+def test_get_saturated_stars_hands_the_mask_to_the_anchor(monkeypatch):
+    """get_saturated_stars passes ``zeroframe_group0_saturated`` on to
+    ``zeroframe_fit_anchor``.  The anchor is stubbed to stop the fit there."""
+    n = 200
+    sci = np.ones((n, n))
+    dq = np.zeros((n, n), dtype=np.uint32)
+    dq[98:103, 98:103] = SATBIT
+    sci[dq != 0] = np.nan
+    wcs_hdr = fits.Header({'CTYPE1': 'RA---TAN', 'CTYPE2': 'DEC--TAN',
+                           'CRPIX1': 100, 'CRPIX2': 100, 'CRVAL1': 150.0,
+                           'CRVAL2': 2.0, 'CDELT1': -1.7e-5, 'CDELT2': 1.7e-5,
+                           'BUNIT': 'MJy/sr'})
+    fh = fits.HDUList([
+        fits.PrimaryHDU(header=fits.Header({
+            'INSTRUME': 'NIRCAM', 'FILTER': 'F150W', 'PUPIL': 'CLEAR',
+            'DETECTOR': 'NRCB3', 'MODULE': 'B', 'CHANNEL': 'SHORT'})),
+        fits.ImageHDU(sci, header=wcs_hdr, name='SCI'),
+        fits.ImageHDU(np.full((n, n), 0.1), name='ERR'),
+        fits.ImageHDU(dq, name='DQ'),
+        fits.ImageHDU(np.where(dq != 0, np.nan, 0.01), name='VAR_POISSON')])
+    mask = np.zeros((n, n), bool)
+    mask[100, 100] = True
+    seen = {}
+
+    def _anchor(data, dq, zeroframe, **kw):
+        seen.update(kw)
+        raise _AnchorReached
+    monkeypatch.setattr(SSF, 'zeroframe_fit_anchor', _anchor)
+    with pytest.raises(_AnchorReached):
+        SSF.get_saturated_stars(fh, zeroframe=np.ones((n, n)),
+                                zeroframe_group0_saturated=mask, plot=False)
+    assert seen['group0_saturated'] is mask
+
+
 # --------------------------------------------------------------------------
 # reading GROUPDQ
 # --------------------------------------------------------------------------
@@ -198,19 +236,33 @@ def test_zeroframe_loader_is_unchanged(tmp_path):
 # the switch and the writer
 # --------------------------------------------------------------------------
 
-def test_switch_default_is_on(monkeypatch):
+def test_switch_default_follows_the_recovered_cap(monkeypatch):
+    # On where the recovered-core cap is on (cataloging: extended-emission
+    # NIRCam), the setting the wd2 evidence comes from; an export wins.
+    assert satstar_fit_switches()['g0_groupdq'] is False
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
+    assert satstar_fit_switches()['g0_groupdq'] is False
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
     assert satstar_fit_switches()['g0_groupdq'] is True
     monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', 'off')
     assert satstar_fit_switches()['g0_groupdq'] is False
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
+    monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', 'on')
+    assert satstar_fit_switches()['g0_groupdq'] is True
     monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', 'of')
     with pytest.raises(ValueError, match='SATSTAR_ZF_G0_GROUPDQ'):
         satstar_fit_switches()
 
 
+_CAP = {'NIRCAM_SATSTAR_RECOVERED_CAP': '1'}
+
+
 @pytest.mark.parametrize('env, zf_on, hands_mask', [
-    ({}, True, True),
-    ({'SATSTAR_ZF_G0_GROUPDQ': '0'}, True, False),
-    ({'SATSTAR_ZEROFRAME_FIT': '0'}, False, False),
+    (_CAP, True, True),
+    ({}, True, False),
+    ({**_CAP, 'SATSTAR_ZF_G0_GROUPDQ': '0'}, True, False),
+    ({'SATSTAR_ZF_G0_GROUPDQ': '1'}, True, True),
+    ({**_CAP, 'SATSTAR_ZEROFRAME_FIT': '0'}, False, False),
 ])
 def test_remove_saturated_stars_hands_the_mask_to_the_fit(tmp_path,
                                                           monkeypatch, env,

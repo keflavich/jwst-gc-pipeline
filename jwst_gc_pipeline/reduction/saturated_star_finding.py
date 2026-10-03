@@ -979,10 +979,14 @@ def satstar_fit_switches(env=None):
       nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
       observed-peak second chance reads the crf values, not the rewrite.
-    * ``SATSTAR_ZF_G0_GROUPDQ`` (default ON): first-read pixels that the ramp
-      GROUPDQ flags SATURATED (integration 0, group 0) join the anchor's deep
-      core instead of being rewritten from a clipped value
-      (``zeroframe_recover_saturated(group0_saturated=)``).
+    * ``SATSTAR_ZF_G0_GROUPDQ`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``,
+      which cataloging turns on for extended-emission NIRCam): first-read
+      pixels that the ramp GROUPDQ flags SATURATED (integration 0, group 0)
+      join the anchor's deep core instead of being rewritten from a clipped
+      value (``zeroframe_recover_saturated(group0_saturated=)``).  The wd2
+      F150W evidence (#1065) is from cap-on frames, and the mask needs the
+      cap to read the star's own measured core (#1064): with the earlier
+      cap it moved the bright stars 2 mag faint.
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (5.0, the box qfit cap): qfit over the disk r < R around the fit
@@ -998,12 +1002,14 @@ def satstar_fit_switches(env=None):
     env = os.environ if env is None else env
     qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
     qloc_r = float(env.get('SATSTAR_QFIT_LOCAL_R', '') or (10.0 if qloc_gate else 0.0))
+    # Parsed like the cap itself (get_saturated_stars).
+    cap_on = bool(int(env.get('NIRCAM_SATSTAR_RECOVERED_CAP', '') or 0))
     return {
         'rcurve_guard': _env_switch('SATSTAR_ZF_RCURVE_GUARD', True, env),
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
         'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
-        'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', True, env),
+        'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1124,7 +1130,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         multi-frame readout: group 0 then averages several frames and its
         pile-up level varies by pixel, and on wd2 F150W nrcb3 (SHALLOW4) 3699
         of the 6488 flagged pixels sat below the 48142 DN ceiling and were
-        rewritten as R x (clipped value), about half the true rate (ISSUE_REF).
+        rewritten as R x (clipped value), about half the true rate (#1065).
         The ceiling is still estimated from all positive group-0 values at
         SATURATED pixels, flagged ones included, so it keeps the plateau.
 
@@ -5274,7 +5280,10 @@ def _find_group0_saturation_for(filename):
     Pairs with ``_find_zeroframe_for``, which hands the anchor that first read
     (``SCI[0, 0]``); without a 4-D SCI cube the loader falls back to the
     ZEROFRAME extension, which is already 0 at saturated pixels, and this
-    returns None.  See ``zeroframe_recover_saturated(group0_saturated=)``."""
+    returns None.  See ``zeroframe_recover_saturated(group0_saturated=)``.
+    ``first_group_saturation_mask`` (the MIRI DQ correction) ORs group 0 over
+    every integration; the anchor reads integration 0 only, the integration
+    its first read comes from."""
     rf = _find_ramp_for(filename)
     if rf is None:
         return None
@@ -5395,7 +5404,7 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         if zf is not None:
             kwargs['zeroframe'] = zf
     # GROUPDQ first-read saturation for the fit anchor, which runs whenever a
-    # first read is handed over (SATSTAR_ZF_G0_GROUPDQ, default ON): those
+    # first read is handed over (SATSTAR_ZF_G0_GROUPDQ, on with the cap): those
     # pixels are deep core even below the group-0 ceiling.
     if (kwargs.get('zeroframe') is not None
             and kwargs.get('zeroframe_group0_saturated') is None
