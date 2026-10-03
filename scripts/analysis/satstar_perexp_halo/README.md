@@ -100,6 +100,7 @@ comparison.
 - **Present from the first read** (step 9, obs 041/043/075/086, 24 frames). In the ZEROFRAME the in-band / out-of-band saturated-core area is already 0.64 ± 0.06 (19 stars; null band 1.00 ± 0.01; the exposure-1–2 control 0.96).
   It is 0.65 at group 0 and 0.56 at group 3, and the halo in G0 − ZEROFRAME is 0.80 ± 0.11.
   So almost all of the deficit is there in the first ~10 s; the growth along the ramp is second order.
+  The exposure-order control is 0.957 ± 0.009 in the ZEROFRAME, against 0.97–0.98 in the later groups: a small first-read effect in exposures 1–2 (persistence, or a first-exposure reset effect) that does not depend on x. It is small next to the in-band 0.64.
 - **Where it sits** (step 10, the 8,933-exposure table).
   - Not readout: the 32-px profile is a smooth trough from x ≈ 200 to ≈ 560, deepest at x ≈ 390 (core area −0.26, halo −0.20), with no step at the x = 512 amplifier boundary.
   - A full-height column stripe: in the 256-px map every row of the x = 256–512 column reads −0.09 to −0.26. It is deepest at mid-height (−0.23 to −0.26 for y = 256–1792) and weaker at the top and bottom edges (−0.15, −0.09). At y < 512 it spreads to x = 512–768 (−0.07, −0.12). Every other cell is within ±0.07, apart from the x < 256, y < 256 corner (+0.11).

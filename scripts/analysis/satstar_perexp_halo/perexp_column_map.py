@@ -58,9 +58,10 @@ def main():
     dates = []
     for j in range(4):
         s = (t >= q[j]) & (t <= q[j + 1])
+        med = [np.median(area[s & m]) if (s & m).any() else np.nan for m in (inb, out)]
         dates.append(dict(start=Time(q[j], format='mjd').iso[:10], end=Time(q[j + 1], format='mjd').iso[:10],
-                          band_area=float(np.median(area[s & inb])), n_band=int((s & inb).sum()),
-                          out_area=float(np.median(area[s & out]))))
+                          band_area=None if not np.isfinite(med[0]) else float(med[0]), n_band=int((s & inb).sum()),
+                          out_area=None if not np.isfinite(med[1]) else float(med[1])))
     res = dict(edges32=e32.tolist(), area_prof32=[None if not np.isfinite(v) else float(v) for v in pa],
                n_area32=na.tolist(), a_prof32=[None if not np.isfinite(v) else float(v) for v in ph],
                edges256=e256.tolist(), area_map256=[[None if not np.isfinite(v) else float(v) for v in r] for r in grid],
@@ -84,8 +85,9 @@ def main():
         ax[1].axvline(xa, color='0.3', ls=':', lw=1)
     fig.colorbar(im, ax=ax[1], label='median core area − 1')
     ax[1].set_xlabel('x [px]'); ax[1].set_ylabel('y [px]'); ax[1].set_title('256-px map', fontsize=9)
-    ax[2].errorbar(range(4), [r['band_area'] for r in dates], fmt='o', label='x = 256–512')
-    ax[2].errorbar(range(4), [r['out_area'] for r in dates], fmt='s', label='x < 150 or > 750')
+    nan = lambda v: np.nan if v is None else v
+    ax[2].errorbar(range(4), [nan(r['band_area']) for r in dates], fmt='o', label='x = 256–512')
+    ax[2].errorbar(range(4), [nan(r['out_area']) for r in dates], fmt='s', label='x < 150 or > 750')
     ax[2].set_xticks(range(4)); ax[2].set_xticklabels([r['start'][5:] for r in dates], fontsize=8)
     ax[2].axhline(0, color='k', lw=0.5); ax[2].legend(fontsize=8)
     ax[2].set_xlabel('date-quartile start (2026)'); ax[2].set_ylabel('median core area − 1')

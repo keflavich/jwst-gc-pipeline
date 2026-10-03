@@ -113,7 +113,7 @@ def exposure(fn_uncal, fn_cal, thr):
         if zf is not None:
             A = [float((satz[sl] * core).sum())] + A
         out.append((x0, y0, H, He, A))
-    return out
+    return out, zf is not None
 
 
 def measure(rowdir, reffile, keys):
@@ -129,14 +129,14 @@ def measure(rowdir, reffile, keys):
         fc, tc = fetch(key, rowdir)
         fu, tu = fetch(key.replace('_cal.fits', '_uncal.fits'), rowdir)
         try:
-            stars = exposure(fu, fc, thr)
+            stars, used_zf = exposure(fu, fc, thr)
             w = frame_wcs(fc)
             x = np.array([s[0] for s in stars]); y = np.array([s[1] for s in stars])
             sky = w.pixel_to_world(x, y) if len(stars) else None
             np.savez(out, x=x, y=y,
                      ra=sky.ra.deg if sky is not None else x, dec=sky.dec.deg if sky is not None else y,
                      H=np.array([s[2] for s in stars]), He=np.array([s[3] for s in stars]),
-                     A=np.array([s[4] for s in stars]), zf=ZEROFRAME)
+                     A=np.array([s[4] for s in stars]), zf=used_zf)
             print(root, len(stars), flush=True)
         finally:
             for f, t in ((fc, tc), (fu, tu)):
@@ -146,6 +146,7 @@ def measure(rowdir, reffile, keys):
 
 def analyze(outp, rowdir):
     rows = []                                   # (obs, exp, x, H[3], He[3], A[4], ra, dec)
+    zf_flags = set()
     for fn in sorted(glob.glob(os.path.join(rowdir, '*.npz'))):
         d = np.load(fn)
         if d['x'].size == 0:
@@ -157,7 +158,11 @@ def analyze(outp, rowdir):
         for i in range(d['x'].size):
             rows.append(dict(obs=obs, exp=exp, x=d['x'][i], H=d['H'][i], He=d['He'][i], A=d['A'][i],
                              ra=d['ra'][i], dec=d['dec'][i]))
-        has_zf = bool(d['zf']) if 'zf' in d.files else False
+        zf_flags.add(bool(d['zf']) if 'zf' in d.files else False)
+    if len(zf_flags) > 1:
+        # the ZEROFRAME column shifts every H/A index by one
+        raise ValueError(f'{rowdir} mixes rows with and without the ZEROFRAME terms')
+    has_zf = zf_flags.pop() if zf_flags else False
     # link within each star-visit: a row joins the first cluster within 0.5"
     # (small-angle offsets about the cluster's first position)
     clusters = []
