@@ -84,3 +84,32 @@ They move each flux by ~10% in either direction, with a −3 to −5% median.
   one PSF node), not production's. The comparison is like-for-like.
 - **Recommendation:** leave `SATSTAR_HALO_MODES` off. Use the halo modes only
   for strongly saturated stars fitted to r ≳ 150–200 px.
+
+## Wide radius on production catalogs (r ≤ 200 px)
+
+`wide_radius_production.py fit <catalog dir> <psf grid> <out npz> <cal key>...` starts from the production `_satstar_catalog.fits` of `satstar_perexp_halo/production_flux_vs_x.py`. For every star with ≥ 50 saturated px it cuts a 401 × 401 px stamp of the `_cal` frame around the fitted detector position (`x_0`, `y_0`). It evaluates the production PSF grid there, masks DQ DO_NOT_USE|SATURATED dilated by 3 px, and fits F·P+B (`F_S`) and the halo modes (`F_H`, knots from `satstar_halo_knots`, r_core = √(sat_area/π) + 3) on the same pixels. `analyze` links the dithers of each star (`docs/evidence/satstar_halo_modes/wide_radius.*`).
+
+Data: 10678 obs 041, 061, 075 and 086, 24 NRCBLONG frames, 9,897 rows, 1,157 stars with ≥ 4 dithers.
+
+| sat_area | stars | dither rms, production flux_fit | F_S | F_H | stars where F_H beats flux_fit | F_H / flux_fit |
+|---|---|---|---|---|---|---|
+| 50–300 | 990 | 3.8% | 7.0% | 5.9% | 32% | 0.82 |
+| 300–1000 | 151 | 4.2% | 5.1% | 3.8% | 57% | 0.84 |
+| 1000–3000 | 4 | 3.7% | 3.1% | 3.3% | 3 of 4 | 0.97 |
+
+**The column deficit** (`column`). This is the real gain. It uses the per-star median in x-region / outside, where outside excludes both regions ±50 px.
+
+| | flux_fit | F_S | F_H |
+|---|---|---|---|
+| band x = 250–550, 50–300 px | 0.940 ± 0.004 | 0.946 ± 0.006 | 0.959 ± 0.004 |
+| null x = 1300–1600, 50–300 px | 0.995 | 0.992 | 0.995 |
+| **band, ≥ 300 px** (54 stars) | **0.884 ± 0.008** | 0.889 ± 0.009 | **0.982 ± 0.006** |
+| null, ≥ 300 px | 0.991 | 0.989 | 1.004 |
+
+- **What the column test shows:** for cores ≥ 300 px, the wide halo-mode flux all but removes the NRCBLONG column deficit that the production flux carries (`satstar_perexp_halo`, data-qa#349). This fits the model: the deficit lives in the halo, and the halo terms absorb the halo while the spikes set F. Below 300 px the 200-px stamp is dominated by crowding: the dither scatter gets worse (5.9% against 3.8%) and the deficit is only partly removed.
+- **Absolute scale:** F_H is ~0.84 × flux_fit for these cores. A halo-defined amplitude (production) and a spike-defined one disagree by that much because the real halo is brighter than STPSF's. Neither is validated in absolute terms (see above), so F_H is recorded beside `flux_fit`, never in place of it.
+- **Production hook:** `SATSTAR_HALO_MODES_WIDE=1` records `halomodes_wide_ratio` = F_H / F_S on the full-frame stamp, and `flux_fit_halomodes_wide = flux_fit × ratio`, for cores ≥ 300 px (`SATSTAR_HALO_MODES_WIDE_AREA_MIN`). Smaller cores get NaN. It uses `satstar_halo_mode_ratios_wide`, evaluated at DETECTOR coordinates (#1055). It is opt-in and record-only.
+- **End-to-end check:** I ran `remove_saturated_stars` with `SATSTAR_HALO_MODES_WIDE=1` on 10678 obs 061 exposure 1 (855 saturated sources).
+  - `flux_fit` is identical to the run without it.
+  - The 45 sources with ≥ 300 px get a ratio and every other source gets NaN.
+  - The median ratio of 0.837 (16–84%: 0.715–0.975) matches the standalone script on the same frame (0.838).

@@ -3632,6 +3632,33 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             result['flux_fit_halomodes'] = np.asarray(result['flux_fit'], dtype=float) * _ratio
             print(f"  halo-mode flux ratio (rmax={_rmax:g}): {np.round(_ratio, 4).tolist()}", flush=True)
 
+        # WIDE-RADIUS HALO-MODE FLUX (opt-in, record-only; #1013 follow-up).
+        # The same refit on a 2*200+1 px stamp of the FULL frame (DQ
+        # DO_NOT_USE|SATURATED dilated 3 px masked), for cores of >= 300
+        # saturated px only.  It removes the NRCBLONG x = 250-550 column
+        # deficit that flux_fit carries (in band / outside 0.982 vs 0.884 for
+        # cores >= 300 px, 10678 F480M; scripts/analysis/satstar_halo_modes/
+        # wide_radius_production.py), at ~0.85 x the absolute scale of
+        # flux_fit (halo-defined vs spike-defined amplitude), so it is
+        # recorded beside flux_fit, never in place of it.  Smaller cores:
+        # crowding over the wide stamp makes it WORSE -> NaN.
+        # SATSTAR_HALO_MODES_WIDE=1; _RMAX / _AREA_MIN override.
+        if (int(os.environ.get('SATSTAR_HALO_MODES_WIDE', 0)) and not _is_miri
+                and not forced_source and len(result)):
+            from ..photometry.satstar_halo_modes import (
+                WIDE_AREA_MIN, WIDE_RMAX, satstar_halo_mode_ratios_wide)
+            _rmaxw = float(os.environ.get('SATSTAR_HALO_MODES_WIDE_RMAX', WIDE_RMAX))
+            _aminw = float(os.environ.get('SATSTAR_HALO_MODES_WIDE_AREA_MIN', WIDE_AREA_MIN))
+            # DETECTOR coordinates: the grid interpolates its nodes by position
+            _ratio_w = satstar_halo_mode_ratios_wide(
+                data, err_working, dq, _psf_for_fit,
+                list(zip(x_centroid, y_centroid)),
+                np.asarray(result['sat_area'], float), rmax=_rmaxw, area_min=_aminw)
+            result['halomodes_wide_ratio'] = _ratio_w
+            result['flux_fit_halomodes_wide'] = np.asarray(result['flux_fit'], dtype=float) * _ratio_w
+            print(f"  wide halo-mode flux ratio (rmax={_rmaxw:g}, area>={_aminw:g}): "
+                  f"{np.round(_ratio_w, 4).tolist()}", flush=True)
+
         # MIRI BOTTOM-UP ENVELOPE AMPLITUDE (2026-06-14).  The masked-core LSQ
         # (even on the 2D-bg-subtracted cutout) still OVER-fits some saturated
         # stars -- amplitude inflated by residual emission / wing structure ->

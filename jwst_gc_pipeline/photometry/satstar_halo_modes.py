@@ -238,3 +238,54 @@ def satstar_halo_mode_ratios(cutout, err, mask, psf_model, positions, *, r_core,
         out[k], _, _ = halo_mode_flux_ratio(cutout, err, mask, psf, float(x), float(y),
                                             r_core=r_core, rmax=rmax)
     return out
+
+
+# Wide-radius variant (#1013 follow-up, scripts/analysis/satstar_halo_modes/
+# wide_radius_production.py).  At the production box (r <= 40.5 px) the halo
+# modes do not help; fitted to r <= 200 px on the FULL frame, for cores of
+# >= 300 saturated px, they remove the NRCBLONG x = 250-550 column deficit
+# (in band / outside: production flux_fit 0.884 +- 0.008, wide halo-mode flux
+# 0.982 +- 0.006, 54 stars; obs 041/061/075/086 of 10678).  Below ~300 px the
+# 200-px stamp is dominated by crowding and the dither scatter gets WORSE.
+WIDE_RMAX = 200.0
+WIDE_AREA_MIN = 300
+WIDE_DQ_BAD = 3          # DO_NOT_USE | SATURATED
+WIDE_DQ_DILATE = 3
+
+
+def satstar_halo_mode_ratios_wide(data, err, dq, psf_model, positions, sat_area, *,
+                                  rmax=WIDE_RMAX, area_min=WIDE_AREA_MIN):
+    """:func:`halo_mode_flux_ratio` on a ``2 rmax + 1`` stamp of the full frame.
+
+    ``data``, ``err``, ``dq`` are full-frame arrays and ``positions`` the
+    fitted DETECTOR ``(x, y)`` of each star; ``sat_area`` its saturated-core
+    area [px] (one value or one per star).  Pixels with ``dq & 3`` (dilated by
+    3 px), non-finite data or non-positive error are not used; other stars are
+    left to the fit's clipping.  ``r_core = sqrt(sat_area / pi) + 3``.
+
+    Returns the ratio per star; NaN for ``sat_area < area_min`` and wherever
+    :func:`halo_mode_flux_ratio` gives NaN.
+    """
+    from scipy import ndimage
+    area = np.broadcast_to(np.asarray(sat_area, float), (len(positions),))
+    ny, nx = data.shape
+    h = int(np.ceil(rmax)) + 2
+    out = np.full(len(positions), np.nan)
+    for k, (x, y) in enumerate(positions):
+        if not (np.isfinite(x) and np.isfinite(y) and area[k] >= area_min):
+            continue
+        ix, iy = int(round(float(x))), int(round(float(y)))
+        y1, y2, x1, x2 = max(iy - h, 0), min(iy + h + 1, ny), max(ix - h, 0), min(ix + h + 1, nx)
+        if y2 <= y1 or x2 <= x1:
+            continue
+        d = np.asarray(data[y1:y2, x1:x2], float)
+        e = np.asarray(err[y1:y2, x1:x2], float)
+        bad = ndimage.binary_dilation((np.asarray(dq[y1:y2, x1:x2]).astype(np.int64) & WIDE_DQ_BAD) > 0,
+                                      iterations=WIDE_DQ_DILATE)
+        bad |= ~np.isfinite(d) | ~(e > 0)
+        yy, xx = np.mgrid[y1:y2, x1:x2]
+        psf = psf_model.evaluate(xx, yy, 1.0, float(x), float(y))
+        out[k], _, _ = halo_mode_flux_ratio(np.where(bad, 0.0, d), np.where(bad, 1.0, e), bad, psf,
+                                            float(x) - x1, float(y) - y1,
+                                            r_core=float(np.sqrt(area[k] / np.pi)) + 3.0, rmax=rmax)
+    return out

@@ -120,3 +120,31 @@ def test_ratios_from_a_gridded_psf_model():
     assert got[0] < 0.99      # a 20%-bright halo: the standard fit over-reads
     # a core too large for the fit radius records NaN, not a number
     assert np.isnan(satstar_halo_mode_ratios(data, err, mask, grid, [(C, C)], r_core=100.0, rmax=110.0)[0])
+
+
+def test_wide_ratios_on_a_full_frame():
+    """The wide-radius entry point: stamp from a full frame in detector
+    coordinates, DQ-SATURATED core masked, ratio NaN below the area cut."""
+    from astropy.nddata import NDData
+    from photutils.psf import GriddedPSFModel
+    from jwst_gc_pipeline.photometry.satstar_halo_modes import satstar_halo_mode_ratios_wide
+    pc, _ = _psf(c=(N - 1) / 2)
+    grid = GriddedPSFModel(NDData(pc[None], meta={'grid_xypos': [(0.0, 0.0)], 'oversampling': 1}))
+    data, err, mask, p, r = _star(1.2)
+    # embed the stamp in a larger frame at an offset, so a coordinate mix-up fails
+    off = (37, 61)
+    frame = np.zeros((N + 80, N + 120)); ferr = np.ones_like(frame)
+    dq = np.zeros(frame.shape, np.uint32)
+    sl = (slice(off[1], off[1] + N), slice(off[0], off[0] + N))
+    frame[sl], ferr[sl] = data, err
+    dq[sl][r < 17] = 2                  # SATURATED; + 3 px dilation = the r < 20 mask
+    x, y = C + off[0], C + off[1]
+    area = float((r < 17).sum())
+    got = satstar_halo_mode_ratios_wide(frame, ferr, dq, grid, [(x, y)], area, rmax=110.0, area_min=300)
+    assert got.shape == (1,) and np.isfinite(got[0])
+    assert got[0] < 0.99                # a 20%-bright halo: the standard fit over-reads
+    _, s, h = halo_mode_flux_ratio(data, err, r < 20, p, C, C, r_core=np.sqrt(area / np.pi) + 3, rmax=110.0)
+    assert h.flux == pytest.approx(1e7, rel=0.02)
+    # below the core-area threshold: not measured
+    assert np.isnan(satstar_halo_mode_ratios_wide(frame, ferr, dq, grid, [(x, y)], 100.0,
+                                                  rmax=110.0, area_min=300)[0])
