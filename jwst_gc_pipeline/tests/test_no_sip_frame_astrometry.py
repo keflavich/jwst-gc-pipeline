@@ -94,6 +94,10 @@ ALLOWLIST = {
     # DISPLAY only: the WCS is handed to WCSAxes, which needs a real
     # astropy.wcs.WCS.  No catalog position is derived from it.
     "jwst_gc_pipeline/plotting/plot_tools.py",
+    # PR #1020 evidence scripts: the merged m6 residual *_i2d mosaic (rectified,
+    # no SIP), the seed-detection image, for pixel positions of seeds and stars.
+    "docs/evidence/faint_seed_roundness/scripts/seedspike.py",
+    "docs/evidence/faint_seed_roundness/scripts/spikefig.py",
     # one-off historical MIRI reduction scripts, kept for provenance.  They are
     # not on any live pipeline path; converting them cannot be validated
     # because the runs they belong to are finished.  Do NOT copy their pattern.
@@ -109,6 +113,11 @@ ALLOWLIST = {
     # frozen diagnostics/figures for a closed investigation
     "docs/pr57_recovery_investigation/make_caveat_figs.py",
     "docs/pr57_recovery_investigation/make_figs.py",
+    # PR #1018 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and for the _filter_extended_emission
+    # replay (vet_variant).
+    "docs/evidence/faint_prominence_keep/scripts/compare.py",
+    "docs/evidence/faint_prominence_keep/scripts/vet_variant.py",
     "scripts/satstar_deblend/batch_validate.py",
 }
 

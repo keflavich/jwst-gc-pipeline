@@ -97,6 +97,14 @@ ALLOWLIST = {
     ("jwst_gc_pipeline/photometry/merge_catalogs.py", "replace_saturated"),
     # sanctioned: masking extended emission, no astrometry in it
     ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
+    # PR #1018 evidence scripts, no astrometry.  compare.main: distance of each
+    # source to the nearest saturated star -> fraction of kept sources within
+    # 1" of one (np.mean of a boolean), plus means of a boolean data-i2d
+    # local-peak flag.  propresid.main: production-catalog membership (same
+    # position within 1 mas) and a self-match (nthneighbor=2) whose reduce is
+    # the close-pair fraction np.mean(d2 < 62.5 mas).
+    ("docs/evidence/faint_prominence_keep/scripts/compare.py", "main"),
+    ("docs/evidence/faint_prominence_keep/scripts/propresid.py", "main"),
     # No astrometry: `match_to_catalog_sky(nthneighbor=2)` measures a star's
     # nearest-neighbour SEPARATION, used to SELECT isolated reference stars for
     # the curve of growth; the medians are of FLUX-RATIO (enclosed-energy)
@@ -110,6 +118,13 @@ ALLOWLIST = {
     # the injected reference-field stars).  No position is derived from it.
     ("jwst_gc_pipeline/photometry/reference_fields/make_injections.py",
      "field_color_ratios"),
+    # PR #1015 evidence scripts, no astrometry.  match_fraction: the fraction
+    # of sources with a reference-catalog counterpart within 60 mas, and the
+    # same at randomly shifted positions (the chance rate) -- np.mean of a
+    # boolean, a realness statistic.  seed_gallery.main: a "has a counterpart"
+    # marker for the gallery; its medians are of local source density.
+    ("docs/evidence/faint_m7_seed_union/scripts/realness.py", "match_fraction"),
+    ("docs/evidence/faint_m7_seed_union/scripts/seed_gallery.py", "main"),
     # ---- cross-function splits: the match and the reduce are in DIFFERENT
     # functions, so they cannot be attributed to one and are allowlisted as
     # `<unattributed>`.  These entries are WEAKER than a function-scoped one --
@@ -171,6 +186,11 @@ ALLOWLIST = {
     ("jwst_gc_pipeline/astrometry/multiepoch_pm.py", "<unattributed>"),
     # one-off scripts outside the pipeline's astrometric path
     ("scripts/reduction/combine_brick_allband.py", "main"),
+    # PR #1020 evidence script, no astrometry.  seedspike.main: which loose
+    # seeds of run B have no run-C seed within 30 mas (a boolean "dropped by
+    # the spike guard" flag); its reduces are the median of position-angle
+    # histogram counts and the median background rank per population.
+    ("docs/evidence/faint_seed_roundness/scripts/seedspike.py", "main"),
     # :130-137 medians NN matches against a DENSE NIRCam F405N reference and
     # prints "astrometry: median offset" -- the validation-fools-you pattern by
     # name.  PRINT ONLY: nothing reads it and no WCS is written from it.  It
