@@ -371,9 +371,19 @@ these flag sets would remove the footgun of setting them individually.)*
   under-subtraction.
 - **Merged catalog** (`merge_catalogs.py`, the satstar consolidation +
   `replace_saturated`): per-exposure satstar catalogs
-  are consolidated and deduped (~0.15″, keep brightest), then merged into the
+  are consolidated and deduped (~0.15″; the brightest exposure's row
+  represents the star, and its `flux_fit` is the median over exposures of
+  the per-exposure fluxes, `SATSTAR_FLUX_STAT`), then merged into the
   daophot catalog; satstar-only rows are marked **`replaced_saturated=True`**
   (per-filter `replaced_saturated_{FILTER}` in cross-filter merges).
+  The pooled wing calibration (`apply_pooled_wingcal`, for rows whose
+  per-frame self-cal was skipped) is applied to every per-exposure row
+  before the dedup, so the representative and the median see fluxes in one
+  calibration state.  On the wd2 dolphot benchmark (#1032) the median moves
+  9 of 10 saturated bands 0.02–0.12 mag toward dolphot and F150W 0.12 mag
+  away (+0.10 → +0.22 mag fainter than dolphot); the F150W per-exposure fits
+  are biased faint, and the brightest-of-N selection happened to offset part
+  of that.  `SATSTAR_FLUX_STAT=brightest` restores the old statistic.
 - **Post-merge off-FOV cleanup** (`_clean_offfov_dups_and_offfield`): off-FOV
   `replaced_saturated` rows within 1.0″ collapse to one row (the per-frame fits of
   an off-FOV star scatter wider than the 0.15″ dedup). In-field rows follow
@@ -493,6 +503,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 1.0 | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
+| `SATSTAR_FLUX_STAT` | median | consolidated `flux_fit`: `median` of the per-exposure fluxes, or `brightest` (the representative's own flux, the old behaviour; kept as `flux_brightest_fit` either way) |
 | `SATSTAR_REPLACE_RADIUS_ARCSEC` | (see code) | satstar→daophot replacement radius |
 | `SATSTAR_FP_*` (11 vars: `_REJECT`, `_REJECT_RATIO`, `_REJECT_MIN_N`, `_REJECT_BRIGHTFRAC`, `_FLUXRATIO`, `_MERGE_MAX_ARCSEC`, `_COMP_ARCSEC`, `_BIG_ARCSEC`, `_BIGCORE_ARCSEC`, `_BIGCORE_MERGE_ARCSEC`, `_USE_ANCHOR`) | see `merge_catalogs.py` | false-positive rejection / merging at consolidation |
 | `SATSTAR_PIXSCALE_ARCSEC` | 0.063 | pixel scale used by those radii (no `FP_` in the name) |
