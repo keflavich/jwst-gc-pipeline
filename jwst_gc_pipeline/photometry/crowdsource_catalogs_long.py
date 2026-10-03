@@ -4850,6 +4850,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'out into 5 independent per-filter jobs; '
                             'scripts/reduction/m8_merge_partials.py column-merges '
                             'them into the final ..._resbgsub_m8.fits.'))
+    parser.add_option('--no-m8-spike-flag', dest='m8_spike_flag',
+                      default=True, action='store_false',
+                      help=('Skip the diffraction-spike artifact flag columns '
+                            '(spike_wedge, single_band_crowd, spike_artifact, '
+                            'n_real_bands) added to the m8_dedup catalog '
+                            '(spike_flag.flag_m8_spike_artifacts).  Env '
+                            'M8_SPIKE_FLAG=0 also disables.  Rows are never removed.'))
     parser.add_option('--no-m8-dedup', dest='m8_dedup',
                       default=True, action='store_false',
                       help=('Skip the post-m8 split-source de-duplication '

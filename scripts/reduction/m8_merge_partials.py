@@ -99,6 +99,11 @@ def main(argv=None):
                          'bands keep m7 values)')
     ap.add_argument('--no-dedup', dest='dedup', action='store_false', default=True,
                     help='skip the post-merge split-source de-duplication')
+    ap.add_argument('--no-spike-flag', dest='spike_flag', action='store_false',
+                    default=True,
+                    help='skip the diffraction-spike flag columns added to the '
+                         'dedup file (spike_flag.flag_m8_spike_artifacts); env '
+                         'M8_SPIKE_FLAG=0 also disables')
     ap.add_argument('--link-radius-arcsec', type=float, default=0.10,
                     help='dedup link radius (arcsec, default 0.10)')
     ap.add_argument('--execute', action='store_true',
@@ -167,6 +172,13 @@ def main(argv=None):
         dedup_merged_catalog(out_path, dedup_path,
                              link_radius=args.link_radius_arcsec * u.arcsec)
         print(f"WROTE {dedup_path}  (de-duplicated; science-final)")
+        if args.spike_flag and os.environ.get('M8_SPIKE_FLAG', '1') != '0':
+            # Same flag columns cataloging._maybe_dedup_m8 adds (#1035).  The
+            # catalog lives in <basepath>/catalogs/, and the PA_V3 headers are
+            # read from <basepath>/<BAND>/pipeline/*_cal.fits.
+            from jwst_gc_pipeline.photometry.spike_flag import flag_m8_spike_artifacts
+            basepath = os.path.dirname(os.path.dirname(os.path.abspath(dedup_path)))
+            flag_m8_spike_artifacts(dedup_path, basepath)
 
 
 if __name__ == '__main__':
