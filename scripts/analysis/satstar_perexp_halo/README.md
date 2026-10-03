@@ -93,7 +93,7 @@ comparison.
   - **Program 2221 (F405N / F410M / F466N, 24-point FULLBOX, 2022):** 96 frames, cores ≥20 px.
     - Halo 0.90 ± 0.03 (73 stars); area 0.73–0.75 (113 stars); null band 0.99–1.00.
     - So the effect is present in other LW filters and epochs, weaker for these smaller cores.
-    - Measured with the threshold reffile the 2221 frames name, `jwst_nircam_saturation_0098`. A first run used the 10678 file (0115); the two maps differ on 0.16% of pixels, evenly in and out of the band (0098/0115 = 1.0000 in every 128-px column bin). Rerun with 0098, every frame finds the same stars; the halo moves 0.889 → 0.898 (0.3σ) and the area, null band and exposure-order control are unchanged.
+    - Measured with the threshold reffile the 2221 frames name, `jwst_nircam_saturation_0098`. A first run used the 10678 file (0115); the two NRCBLONG maps (all 96 frames are NRCBLONG) differ on 0.16% of pixels, evenly in and out of the band (0098/0115 = 1.0000 in every 128-px column bin). Rerun with 0098, every frame finds the same number of saturated cores, and one more null-band star passes the core-area cut (167 → 168). The halo moves 0.889 → 0.898 (0.3σ); the area, null band and exposure-order control are unchanged.
   - **The deficit grows along the ramp** in both the halo (0.81 → 0.75) and the area (0.61 → 0.54). Charge accumulation, not photon arrival, is implicated.
   - **The flat field** is only ~5% low here (rate/cal), so raw 0.78–0.81 corresponds to the ~0.83–0.85 seen in `cal`.
 - **Not optical.** Unsaturated PSF wings at 4–15 px are flat in x (±4%).
