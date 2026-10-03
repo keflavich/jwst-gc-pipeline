@@ -108,7 +108,11 @@ def analyze(outp, workdir):
         for k in clusters:
             x = np.array([r['x'] for r in k['rows']]); F = np.array([r['flux'] for r in k['rows']])
             inb = (x > lo) & (x < hi)
-            out = (x < lo - 50) | (x > hi + 50)
+            # "outside" excludes BOTH regions (+-50 px), so neither the band's
+            # low dithers nor the null's enter the other's denominator
+            out = np.ones(x.size, bool)
+            for a, b in (BAND, NULL_BAND):
+                out &= (x < a - 50) | (x > b + 50)
             if inb.sum() < 1 or out.sum() < 2:
                 continue
             q.append(np.median(F[inb]) / np.median(F[out])); fmed.append(np.median(F))
@@ -128,6 +132,11 @@ def analyze(outp, workdir):
             res[name]['by_sat_area'][f'{lo:g}-{hi:g}'] = dict(n_stars=int(m.sum()), median_ratio=float(np.median(q[m])),
                                                              err=float(np.std(bsm)))
         per[name] = (q, fmed, amed, ain)
+    # the column term: band / null per area bin (a size trend common to both cancels)
+    res['band_over_null_by_sat_area'] = {
+        k: dict(ratio=v['median_ratio'] / res['null']['by_sat_area'][k]['median_ratio'],
+                err=float(np.hypot(v['err'], res['null']['by_sat_area'][k]['err'])))
+        for k, v in res['band']['by_sat_area'].items() if k in res['null']['by_sat_area']}
     # proposed correction: in-band depth = k log10(area / A0) above A0, with
     # area the core area OF THE IN-BAND DETECTION (what a per-detection
     # correction has); robust (L1) grid fit over the band stars
