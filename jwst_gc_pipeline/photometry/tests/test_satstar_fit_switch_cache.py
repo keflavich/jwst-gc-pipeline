@@ -165,7 +165,7 @@ def test_signature_keys_the_local_qfit_with_or_without_a_ramp(tmp_path,
                                                               monkeypatch):
     fn = _frame(tmp_path, with_ramp=False)
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
-    assert satstar_fit_switch_signature(fn) == 'ql10g1s'
+    assert satstar_fit_switch_signature(fn) == 'ql10g5s'
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
     assert satstar_fit_switch_signature(fn) == 'ql10g0.8s'
     monkeypatch.delenv('SATSTAR_QFIT_LOCAL_GATE')
@@ -235,13 +235,14 @@ def test_local_qfit_gate_refits_even_without_a_ramp(tmp_path, monkeypatch):
     assert calls['n'] == 1
 
 
-@pytest.mark.parametrize('old_stamp', ['ql10g1', 'ql10g1d'])
+@pytest.mark.parametrize('old_stamp', ['ql10g1', 'ql10g1d', 'ql10g1s'])
 def test_catalog_from_an_earlier_local_gate_is_refit(tmp_path, monkeypatch,
                                                      old_stamp):
     """'ql10g1' was stamped when the local gate judged every component and
     'ql10g1d' when it judged seed_kind == 'dqsat' only (validation trees);
     the gate now judges the components carrying SATURATED DQ, so both are
-    refit, and the new stamp is reused afterwards."""
+    refit.  'ql10g1s' is the SATURATED-DQ gate at the old 1.0 cap (#1058),
+    refit at the 5.0 default.  The new stamp is reused afterwards."""
     fn = _frame(tmp_path, with_ramp=False)
     _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'),
                  satfitsw=old_stamp)
@@ -249,7 +250,7 @@ def test_catalog_from_an_earlier_local_gate_is_refit(tmp_path, monkeypatch,
     calls = _counting_fit(monkeypatch)
     _load(fn, tmp_path)
     assert calls['n'] == 1
-    assert calls['fit_switch_signature'] == ['ql10g1s']
+    assert calls['fit_switch_signature'] == ['ql10g5s']
     _load(fn, tmp_path)
     assert calls['n'] == 1
 

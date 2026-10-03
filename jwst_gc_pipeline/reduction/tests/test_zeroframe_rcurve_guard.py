@@ -380,7 +380,7 @@ def test_qfit_local_switch_defaults(monkeypatch):
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
     sw = satstar_fit_switches()
     assert sw['qfit_local_gate'] and sw['qfit_local_r'] == 10.0
-    assert sw['qfit_local_max'] == 1.0
+    assert sw['qfit_local_max'] == 5.0     # the box qfit cap (#1058)
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_R', '0')
     assert not satstar_fit_switches()['qfit_local_gate']
     monkeypatch.delenv('SATSTAR_QFIT_LOCAL_GATE')
