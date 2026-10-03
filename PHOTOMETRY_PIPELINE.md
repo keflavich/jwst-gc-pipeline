@@ -263,7 +263,7 @@ the pixel-noise part of qfit: a perfect PSF fit has qfit = Σ|resid|/flux ≈
 3.4/snr (median for Brick F182M dark-sky stars), so `sqrt(0.2² + (5/snr)²)` is
 the qfit a point source reaches with noise.  In full-field m6 replays the
 prominent sources above it (fits to a bright star's wing or ring, blends,
-emission knots) match a reference catalog at 0.15 (Brick), 0.46 (Sgr B2) and
+emission knots) match a reference catalog at 0.20 (Brick), 0.42 (Sgr B2) and
 0.18 (W51) of the chance-corrected rate of kept stars of the same flux
 (`docs/evidence/faint_qfit_snr/README.md`).
 
@@ -603,6 +603,20 @@ a saturated star.
 Catalogs re-made with this code lose those faint wing fits; see
 `docs/evidence/faint_prominence_keep/`.  `--manual-ext-star-prom-peak-min=0
 --manual-ext-star-prom-min=0` restores the previous keep.
+
+**2026-10, qfit noise bound on the prominence keep (#1017).**  The
+prominence ≥ 7 keep (and the robust-prominence keep, when on) now also
+needs `qfit ≤ sqrt(qfit_max² + (k/snr)²)` with k = 5
+(`--manual-ext-qfit-snr-k`), the qfit a point source reaches with pixel
+noise.  On the full-field m6 replays it removes 986 sources from the Brick
+F182M catalog (389,555 → 388,569), 3,735 from Sgr B2 F187N (413,946 →
+410,211) and 256 from W51 F187N (21,631 → 21,375), and adds none.  The
+removed sources match a reference catalog at 0.20 (Brick, independent
+visit), 0.42 (Sgr B2) and 0.18 (W51; both same visit) of the rate of kept
+stars of the same flux: about 190 / 1,590 / 45 real-star equivalents.
+Catalogs re-made with this code lose those fits; see
+`docs/evidence/faint_qfit_snr/`.  `--manual-ext-qfit-snr-k=0` restores the
+previous keep.
 
 ## Why this replaced `IterativePSFPhotometry`
 

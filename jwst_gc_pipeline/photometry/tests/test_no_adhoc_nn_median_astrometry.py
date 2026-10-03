@@ -104,6 +104,12 @@ ALLOWLIST = {
     ("docs/evidence/faint_local_skyclean/scripts/compare.py", "main"),
     ("docs/evidence/faint_local_skyclean/scripts/lsky_snr_diag.py", "main"),
     ("docs/evidence/faint_local_skyclean/scripts/propresid.py", "main"),
+    # PR #1017 evidence scripts, no astrometry: copies of the #1019 scripts
+    # above with the same reduces (lsky_snr_diag.main also takes an 'A-B'
+    # variant, the sources A adds that B does not keep).
+    ("docs/evidence/faint_qfit_snr/scripts/compare.py", "main"),
+    ("docs/evidence/faint_qfit_snr/scripts/lsky_snr_diag.py", "main"),
+    ("docs/evidence/faint_qfit_snr/scripts/propresid.py", "main"),
     # sanctioned: masking extended emission, no astrometry in it
     ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
     # PR #1018 evidence scripts, no astrometry.  compare.main: distance of each
