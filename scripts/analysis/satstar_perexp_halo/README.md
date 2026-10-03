@@ -73,6 +73,8 @@ comparison.
 | 6 | `perexp_cause.py` | the deficit and the a-vs-area slope by brightness; the SATURATION reffile threshold maps against f(x) (`cause_*.png`, `cause.json`) |
 | 7 | `perexp_fieldstar_flux.py <prefix> <visit glob>...` | unsaturated field-star aperture flux vs detector x (`fieldstar.*`) |
 | 8 | `perexp_ramp.py measure <rowdir> <saturation reffile> <cal key>...` then `analyze <prefix> <rowdir>` | the halo and the saturated-core area in the RAW ramp (`ramp_10678.*`, `ramp_2221.*`) |
+| 9 | `RAMP_ZEROFRAME=1 perexp_ramp.py measure ...` | the same, with the `_uncal` ZEROFRAME (the first ~10 s read) as an extra group (`ramp_10678_zf.*`) |
+| 10 | `perexp_column_map.py pxh.npz <prefix>` | 32-px column profile against the amplifier boundaries, 256-px detector map, date quartiles (`column_map.*`) |
 
 - **Saturated stars only** (`cause.json`, NRCBLONG).
   - Brightness terciles: split by star-visit mean `A30`, 2,235–2,239 exposures each.
@@ -95,4 +97,12 @@ comparison.
   - **The deficit grows along the ramp** in both the halo (0.81 → 0.75) and the area (0.61 → 0.54). Charge accumulation, not photon arrival, is implicated.
   - **The flat field** is only ~5% low here (rate/cal), so raw 0.78–0.81 corresponds to the ~0.83–0.85 seen in `cal`.
 - **Not optical.** Unsaturated PSF wings at 4–15 px are flat in x (±4%).
+- **Present from the first read** (step 9, obs 041/043/075/086, 24 frames). In the ZEROFRAME the in-band / out-of-band saturated-core area is already 0.64 ± 0.06 (19 stars; null band 1.00 ± 0.01; the exposure-1–2 control 0.96).
+  It is 0.65 at group 0 and 0.56 at group 3, and the halo in G0 − ZEROFRAME is 0.80 ± 0.11.
+  So almost all of the deficit is there in the first ~10 s; the growth along the ramp is second order.
+- **Where it sits** (step 10, the 8,933-exposure table).
+  - Not readout: the 32-px profile is a smooth trough from x ≈ 200 to ≈ 560, deepest at x ≈ 390 (core area −0.26, halo −0.20), with no step at the x = 512 amplifier boundary.
+  - A full-height column stripe: in the 256-px map every row of the x = 256–512 column reads −0.09 to −0.26. It is deepest at mid-height (−0.23 to −0.26 for y = 256–1792) and weaker at the top and bottom edges (−0.15, −0.09). At y < 512 it spreads to x = 512–768 (−0.07, −0.12). Every other cell is within ±0.07, apart from the x < 256, y < 256 corner (+0.11).
+  - Stable in time: −0.18 to −0.23 in each date quartile of 2026-09-11 to 09-21 (out of band +0.01). It is also in the 2022 program 2221 (step 8), so it has persisted for ~4 years.
+  - The open mechanism is therefore a detector property of the x ≈ 250–550 columns that acts only at very high illumination: a saturated core is smaller and its halo fainter there from the first read, while unsaturated stars are flat.
 - **LINEARITY reffile:** not inspected; CRDS is unreachable from this environment. The raw-ramp result makes it moot, because the deficit exists before linearity is applied.
