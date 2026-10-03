@@ -1238,6 +1238,46 @@ def zeroframe_fit_anchor(data, dq, zeroframe):
     return data, None, rim, None
 
 
+def recovered_cap_region(own_component, own_deep_core, own_deep_core_expanded):
+    """Pixels the NIRCam recovered-core cap (``NIRCAM_SATSTAR_RECOVERED_CAP``)
+    reads for one source, all as cutout-shaped boolean arrays.
+
+    The cap bounds the model peak by the brightest measured pixel of THIS
+    star.  Other sources' saturated cores in the cutout must not enter: they
+    hold model-subtracted residuals or clipped values, so a weakly saturated
+    star read against them was capped to ~1% of its flux and then rejected by
+    the fit-quality gate (wd2 F150W, 2026-10).
+
+    * ``own_deep_core`` non-empty: the dilated own deep core
+      (``own_deep_core_expanded``), whose recovered ring is the measured core.
+    * ``own_deep_core`` empty (weakly saturated: the ZEROFRAME anchor
+      recovered every SATURATED pixel, or ``SATSTAR_ZF_KEEP_FINITE`` kept
+      them): the source's own saturated component, which then holds its
+      measured core.
+    """
+    if own_deep_core.any():
+        return own_deep_core_expanded
+    return own_component
+
+
+def recovered_core_peak(cutout, region, unrecoverable, max_lost=0.2, min_px=3):
+    """Brightest measured pixel of ``region`` for the recovered-core cap.
+
+    Returns ``(peak, lost_frac, n_rec)``.  ``lost_frac`` is the fraction of
+    ``region`` flagged ``unrecoverable``; ``n_rec`` counts its finite, positive,
+    recoverable pixels.  ``peak`` is NaN (cap skipped) when ``lost_frac`` is at
+    least ``max_lost`` (a deeply saturated star's recovered ring sits far below
+    its true peak) or fewer than ``min_px`` pixels remain.
+    """
+    nreg = int(region.sum())
+    lost_frac = int((region & unrecoverable).sum()) / nreg if nreg else 1.0
+    rec = region & ~unrecoverable & np.isfinite(cutout) & (cutout > 0)
+    n_rec = int(rec.sum())
+    if lost_frac >= max_lost or n_rec < min_px:
+        return np.nan, lost_frac, n_rec
+    return float(np.nanmax(cutout[rec])), lost_frac, n_rec
+
+
 def satstar_observed_peak(cutout, mask, rewrite_delta=None):
     """Brightest unmasked pixel of a satstar cutout (the implied-peak gate's
     observed-peak second chance).  ``rewrite_delta`` (the matching cutout of
@@ -3092,12 +3132,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # how much core is masked -- see _wing_selfcal)
             _wingcal_rmask = float(np.sqrt(
                 max(int(this_source_sat_expanded.sum()), 1) / np.pi))
+            # region the NIRCam recovered-core cap reads: this source only
+            _cap_region = recovered_cap_region(
+                sources[y0:y1, x0:x1] == src_label, this_source_sat,
+                this_source_sat_expanded)
         else:
             # Forced sources or no src_label: fall back to dilating the
             # whole saturated mask (legacy behaviour).
             satmask_combined = binary_dilation(saturated_mask,
                                                iterations=effective_buffer)
             _wingcal_rmask = np.nan   # forced/off-FOV: no wing self-cal
+            _cap_region = satmask_combined
         # NB: np.logical_or takes only TWO array operands; a 3rd positional arg
         # is interpreted as ``out``.  The previous
         # ``np.logical_or(cutout==0, np.isnan(cutout), satmask_combined)`` therefore
@@ -3891,20 +3936,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # NIRCAM_SATSTAR_RECOVERED_CAP.
         if (not _is_miri and int(os.environ.get('NIRCAM_SATSTAR_RECOVERED_CAP', 0))
                 and len(result) and np.isfinite(float(result['flux_fit'][0]))):
-            _unrec_cut = _unrecoverable[y0:y1, x0:x1]
-            _nsat = int(satmask_combined.sum())
-            _lostf = (int((satmask_combined & _unrec_cut).sum()) / _nsat
-                      if _nsat else 1.0)
             _max_lost = float(os.environ.get('NIRCAM_SATSTAR_RECOVERED_MAXLOST', 0.2))
-            _rec_core = (satmask_combined & (~_unrec_cut)
-                         & np.isfinite(cutout) & (cutout > 0))
-            if _lostf < _max_lost and int(_rec_core.sum()) >= 3:
+            _drec, _lostf, _nrec = recovered_core_peak(
+                cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _max_lost)
+            if np.isfinite(_drec):
                 _xf2 = float(result['x_fit'][0]); _yf2 = float(result['y_fit'][0])
                 _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
                 _psf2 = np.clip(_infov_psf(_xx2 - _xf2, _yy2 - _yf2), 0, None)
                 _ppk = float(np.nanmax(_psf2)) if np.isfinite(_psf2).any() else np.nan
                 if np.isfinite(_ppk) and _ppk > 0:
-                    _drec = float(np.nanmax(cutout[_rec_core]))
                     _cap = _drec / _ppk
                     _fc = float(result['flux_fit'][0])
                     if np.isfinite(_fc) and _fc > _cap:
@@ -3912,7 +3952,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         print(f"  [nircam recovered-core cap] flux {_fc:.2e} -> "
                               f"{_cap:.2e} (model peak {_fc*_ppk:.0f} -> {_drec:.0f} "
                               f"vs recovered core {_drec:.0f}; lost {_lostf*100:.0f}%, "
-                              f"{int(_rec_core.sum())} rec px)", flush=True)
+                              f"{_nrec} rec px)", flush=True)
 
         # Same coadd-core peak cap for forced / outside-FOV sources (MIRI).  With
         # only a faint spike-less PSF corner in frame, the fit is amplitude-
