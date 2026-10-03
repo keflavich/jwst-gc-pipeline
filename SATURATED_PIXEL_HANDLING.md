@@ -317,6 +317,12 @@ flux, trading depth for a brighter saturation ceiling:
   migration) gives the true profile → rewrite inflated rim pixels with `R×group0`
   (`R` = median `cal/group0` over bright unsaturated px).
   Where group-0 itself saturates (deep core), unrecoverable → PSF-model fallback.
+  Group-0 saturation is read from the ramp GROUPDQ (`SATSTAR_ZF_G0_GROUPDQ`,
+  default on) as well as from the frame-wide ceiling (0.9 × p99 of group 0 at
+  SATURATED pixels). With a multi-frame readout (SHALLOW4, MEDIUM8, …) group 0
+  averages several frames, and its pile-up level varies by pixel: on wd2 F150W
+  nrcb3, 3699 group-0-saturated pixels sat below the ceiling and were rewritten
+  to about half the rate the ramp fit took from the ZEROFRAME (ISSUE_REF).
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
@@ -500,6 +506,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_RCURVE_GUARD` / `…_MAXSTEP` | 1 (**on**) / 1.3 | truncate the ZEROFRAME R(g0) curve at the first bin-to-bin step larger than MAXSTEP, up or down; 0 restores the untruncated curve, which collapses on F480M (#972) |
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
+| `SATSTAR_ZF_G0_GROUPDQ` | 1 (**on**) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (ISSUE_REF) |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
@@ -513,7 +520,7 @@ The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table ab
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
 
-The four `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows are read
+The five `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows are read
 by `satstar_fit_switches`, and the per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
 one refits the cached catalogs it affects. Their on/off values follow the
