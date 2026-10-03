@@ -4338,6 +4338,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help="median-filter box in i2d px for the source-masked "
                            "smoothed-residual background subtracted in the next "
                            "phase (default 3); 0 = 7 x FWHM rounded up to odd")
+    parser.add_option("--residual-bg-satstar-mask-fwhm",
+                      dest="manual_residual_bg_satstar_mask_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_satstar_mask_fwhm'],
+                      type=float,
+                      help="mask the phase's per-frame satstar fit positions at "
+                           "this radius (FWHM) in the residual background "
+                           "(default 0 = off).  3.75 recommended when "
+                           "DAOPHOT_HANDOFF_UNACCEPTED_SAT is on (wd2 F150W: "
+                           "hand-off stars dm -0.03 vs control -0.035, was "
+                           "+0.05..+0.13 too faint); >~5 breaks the "
+                           "interpolation (12 px hole: -0.12..-0.16)")
     parser.add_option("--manual-iterations", dest="manual_iterations",
                     default=True, action='store_true',
                     help=("Use the default PSF photometry pipeline "
