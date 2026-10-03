@@ -80,6 +80,10 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/cataloging.py",
     "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
     "scripts/release/make_preview_rgb.py",
+    # PR #1019 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and the vetting replay (vet_variant).
+    "docs/evidence/faint_local_skyclean/scripts/compare.py",
+    "docs/evidence/faint_local_skyclean/scripts/vet_variant.py",
     "scripts/satstar_deblend/run_satstar_compare.py",
     # aperture photometry reads only the i2d MOSAIC SCI header (rectified,
     # RA---TAN, no SIP) for the WCS + pixel solid angle; positions come from the

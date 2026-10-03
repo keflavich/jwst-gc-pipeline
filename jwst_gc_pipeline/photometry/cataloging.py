@@ -1372,6 +1372,42 @@ def _emission_keep_miri(prominence, min_prominence):
     return np.isfinite(prominence) & (prominence >= min_prominence)
 
 
+def _tile_percentile_at(image, x, y, tile, q):
+    """``q``-th percentile of ``image`` in ``tile`` x ``tile`` px tiles,
+    bilinearly interpolated between tile centres to the pixel positions
+    (x, y).  Tiles less than half finite are NaN; NaN at positions whose
+    interpolation touches one.
+
+    Tiles of 32 px or more are sampled at every 2nd pixel, and an odd
+    ``tile`` is then rounded down to the next even size.  Memory: one
+    float64 copy of ``image`` (padded to whole tiles), e.g. 0.45 GB for a
+    4844 x 11542 px NIRCam detector i2d."""
+    import warnings
+    from scipy.ndimage import map_coordinates
+    # every 2nd pixel of a large tile: same percentile, a quarter of the memory
+    step = 2 if tile >= 32 else 1
+    tile = int(tile) - int(tile) % step
+    ny, nx = image.shape
+    gy, gx = -(-ny // tile), -(-nx // tile)
+    pad = np.full((gy * tile, gx * tile), np.nan)
+    pad[:ny, :nx] = image
+    ts = tile // step
+    sub = pad[::step, ::step][:gy * ts, :gx * ts]
+    blocks = sub.reshape(gy, ts, gx, ts).transpose(0, 2, 1, 3).reshape(gy, gx, -1)
+    nfin = np.sum(np.isfinite(blocks), axis=-1)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)    # all-NaN tiles
+        grid = np.nanpercentile(blocks, q, axis=-1)
+    grid[nfin < ts * ts // 2] = np.nan
+    # tile centre (i + 0.5) * tile - 0.5 in pixels -> fractional tile index
+    ty = (np.asarray(y, float) + 0.5) / tile - 0.5
+    tx = (np.asarray(x, float) + 0.5) / tile - 0.5
+    ty = np.clip(ty, 0, gy - 1)
+    tx = np.clip(tx, 0, gx - 1)
+    out = map_coordinates(grid, [ty, tx], order=1, mode='nearest', cval=np.nan)
+    return out
+
+
 def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
                         r_noise=(4.0, 10.0)):
     """PSF-core flux above the local level, and its noise, at each position.
@@ -1446,6 +1482,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               sky_clean_max_sky_snr=2.0,
                               sky_clean_prom_min=5.0,
                               sky_clean_snr_min=3.0,
+                              sky_clean_local_arcsec=0.0,
+                              sky_clean_local_max_err=2.0,
+                              err_i2d_image=None,
                               nmatch_confirm_strong=0,
                               low_fit_quality_qfit=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
@@ -1572,6 +1611,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # quartile still samples the true inter-star sky), so it measures the
     # DIFFUSE emission level at the source, not the crowding.
     ann_floor = np.full(n, np.nan, dtype=float)
+    # median i2d ERR over the same annulus (the LOCAL sky-clean test's noise unit)
+    ann_err = np.full(n, np.nan, dtype=float)
     # pixel positions on the data i2d; None when there is no data i2d
     xx = yy = None
     # the brightest pixel of the 7x7 box on the data_i2d lies within 1 px of
@@ -1610,6 +1651,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 annf = ann[np.isfinite(ann)]
                 if annf.size >= 10:
                     ann_floor[i] = np.percentile(annf, 25)
+                    if err_i2d_image is not None:
+                        _ea = err_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1][_am]
+                        _ea = _ea[np.isfinite(_ea) & (_ea > 0)]
+                        if _ea.size >= 10:
+                            ann_err[i] = np.median(_ea)
                 if annf.size >= 10 and np.isfinite(core):
                     if _prom_robust:
                         # neighbour-robust: 25th-pct emission FLOOR + lower-half
@@ -1944,11 +1990,50 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             with np.errstate(invalid='ignore'):
                 _emiss_snr = (ann_floor - _sky_ref) / _sky_sig
             sky_clean = np.isfinite(_emiss_snr) & (_emiss_snr <= sky_clean_max_sky_snr)
+            _n_global = int(sky_clean.sum())
+            # LOCAL reference (sky_clean_local_arcsec > 0): the global 5th
+            # percentile is the darkest lane of the whole mosaic, so outside a
+            # dark cloud every source reads "on emission" -- including a
+            # smooth bright plateau, which cannot be turned into a star any
+            # more than dark sky can.  What can is STRUCTURE: compare the
+            # annulus floor to the 5th percentile of the surrounding
+            # ~sky_clean_local_arcsec tile, in units of the i2d ERR
+            # (sky_clean_local_max_err; the global test above is in dark-sky
+            # sigma, a different unit, so the two have separate thresholds).
+            # Gaussian pixel noise gives p25 - p5 = 0.97 sigma; the Brick dark
+            # cloud reads 0.8 ERR, so there ERR ~ 1.2x the pixel scatter and
+            # the default 2 ERR is ~ 2.4 sigma of pixel scatter.  A source on
+            # a filament or in PSF-scale emission structure sits several ERR
+            # above its tile's darkest pixels (W51 F187N tile p25-p5 ~ 9 ERR,
+            # Sgr A* crowding ~ 13 ERR).  OR-ed with the global test, so a
+            # source clean by the global reference stays clean.
+            # local_structure_snr is written whenever this tier runs (NaN
+            # where the local test does not), so the vetted schema is fixed.
+            _struct_snr = np.full(n, np.nan)
+            if sky_clean_local_arcsec > 0 and err_i2d_image is None:
+                print(f"[{label}] sky-clean local reference: no i2d ERR plane, "
+                      f"local test skipped (global dark-sky test only)", flush=True)
+            if (sky_clean_local_arcsec > 0 and err_i2d_image is not None
+                    and xx is not None):
+                _pixas = float(np.sqrt(np.abs(np.linalg.det(
+                    ww_i2d.pixel_scale_matrix))) * 3600.0)
+                _tile = max(16, int(round(float(sky_clean_local_arcsec) / _pixas)))
+                _p5_loc = _tile_percentile_at(data_i2d_image, np.asarray(xx, float),
+                                              np.asarray(yy, float), _tile, 5.0)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    _struct_snr = (ann_floor - _p5_loc) / ann_err
+                _local_clean = np.isfinite(_struct_snr) & (_struct_snr <= sky_clean_local_max_err)
+                sky_clean = sky_clean | _local_clean
+                print(f"[{label}] sky-clean local reference ({_tile} px tiles, floor - "
+                      f"tile p5 <= {sky_clean_local_max_err:g} ERR): {_n_global} clean "
+                      f"by the global reference -> {int(sky_clean.sum())} with the "
+                      f"local one", flush=True)
             _sc_keep = (sky_clean
                         & np.isfinite(prominence) & (prominence >= sky_clean_prom_min)
                         & np.isfinite(snr) & (snr >= sky_clean_snr_min)
                         & ~near_satstar)
             t['local_emission_snr'] = _emiss_snr
+            t['local_structure_snr'] = _struct_snr
             t['sky_clean'] = sky_clean
             _n_sc = int(np.sum(_sc_keep & ~keep))
             keep = keep | _sc_keep
@@ -8506,13 +8591,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                           parent_paths=_parents)
                 prev_merged_for[(module, filt)] = (_msc, _ifound)
 
-                d_i2d, ww_i2d = None, None
+                d_i2d, ww_i2d, e_i2d = None, None, None
                 dpath = _data_i2d_path(module, filt)
                 if os.path.exists(dpath):
                     with fits.open(dpath) as dh:
-                        hdu = dh['SCI'] if 'SCI' in [h.name for h in dh] else dh[0]
+                        _hn = [h.name for h in dh]
+                        hdu = dh['SCI'] if 'SCI' in _hn else dh[0]
                         d_i2d = hdu.data.astype(float)
                         ww_i2d = wcs.WCS(hdu.header)
+                        if 'ERR' in _hn and dh['ERR'].data is not None:
+                            e_i2d = dh['ERR'].data.astype(float)
                 # MIRI: required deep-i2d prominence gate kills false emission
                 # sources that pass the qfit OR-branch.  NIRCam: off (0).
                 _miri_field = (module == 'mirimage'
@@ -8565,6 +8653,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         opts_phase, 'manual_sky_clean_prom_min')),
                     sky_clean_snr_min=float(mopt(
                         opts_phase, 'manual_sky_clean_snr_min')),
+                    sky_clean_local_arcsec=float(mopt(
+                        opts_phase, 'manual_sky_clean_local_arcsec')),
+                    sky_clean_local_max_err=float(mopt(
+                        opts_phase, 'manual_sky_clean_local_max_err')),
+                    err_i2d_image=e_i2d,
                     struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)
