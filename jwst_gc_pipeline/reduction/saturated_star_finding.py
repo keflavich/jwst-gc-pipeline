@@ -3787,9 +3787,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 WIDE_AREA_MIN, WIDE_RMAX, satstar_halo_mode_ratios_wide)
             _rmaxw = float(os.environ.get('SATSTAR_HALO_MODES_WIDE_RMAX', WIDE_RMAX))
             _aminw = float(os.environ.get('SATSTAR_HALO_MODES_WIDE_AREA_MIN', WIDE_AREA_MIN))
-            # DETECTOR coordinates: the grid interpolates its nodes by position
+            # DETECTOR coordinates on the bare DETECTOR-position grid: not
+            # _psf_for_fit, which the main fit may wrap to take cutout
+            # coordinates (#1055 / #1060) -- the origin would be added twice
             _ratio_w = satstar_halo_mode_ratios_wide(
-                data, err_working, dq, _psf_for_fit,
+                data, err_working, dq, big_grid_large if _use_large_infov else big_grid,
                 list(zip(x_centroid, y_centroid)),
                 np.asarray(result['sat_area'], float), rmax=_rmaxw, area_min=_aminw)
             result['halomodes_wide_ratio'] = _ratio_w
