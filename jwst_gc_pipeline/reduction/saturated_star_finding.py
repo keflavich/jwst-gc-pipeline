@@ -880,6 +880,39 @@ def _env_switch(name, default, env=None):
         f"({'on' if default else 'off'})")
 
 
+def nircam_lock_min_area_px(fitsdata, env=None):
+    """Saturated area (pixels) at and above which ``NIRCAM_SATSTAR_LOCK_POS``
+    locks a satstar's position; 0 means every source is locked (the behaviour
+    before this gate existed).
+
+    ``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2`` (default 0) gives the threshold in
+    arcsec^2.  It is converted with the frame's pixel area (SCI ``PIXAR_A2``,
+    else the WCS pixel scales), so one value serves SW and LW frames.
+
+    The lock was introduced for large cores whose DQ-saturated extent changes
+    from frame to frame (W51 darkfil F480M: 370-659 LW px, 1.5-2.6 arcsec^2);
+    for those the raw mask centre of mass is the stable seed.  Compact stellar
+    cores are better served by the refined centroid and a bounded fit.  On wd2
+    F150W the raw centre of mass sits a median 0.21-0.27 px from the dolphot
+    positions; the refined seed plus the 1.5 FWHM bounded fit lands within
+    0.03-0.08 px of dolphot (and ~0.1 px of Gaia) for cores up to ~1 arcsec^2.
+    Above ~1 arcsec^2 the bounded fit moved 2-3 px off Gaia for 3 of 4 cores.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2')
+    min_as2 = float(raw) if raw is not None and str(raw).strip() else 0.0
+    if not min_as2 > 0:
+        return 0.0
+    pixar = None
+    if 'SCI' in fitsdata:
+        pixar = fitsdata['SCI'].header.get('PIXAR_A2')
+    if pixar is None or not float(pixar) > 0:
+        from astropy.wcs.utils import proj_plane_pixel_scales
+        scales = np.abs(proj_plane_pixel_scales(frame_wcs(fitsdata).celestial)) * 3600.0
+        pixar = float(scales[0] * scales[1])
+    return min_as2 / float(pixar)
+
+
 def _zeroframe_fit_enabled(env=None):
     """``SATSTAR_ZEROFRAME_FIT`` (default ON): anchor the satstar fit on the
     ramp first read wherever a sibling ``_ramp.fits`` exists.
@@ -1238,6 +1271,46 @@ def zeroframe_fit_anchor(data, dq, zeroframe):
     return data, None, rim, None
 
 
+def recovered_cap_region(own_component, own_deep_core, own_deep_core_expanded):
+    """Pixels the NIRCam recovered-core cap (``NIRCAM_SATSTAR_RECOVERED_CAP``)
+    reads for one source, all as cutout-shaped boolean arrays.
+
+    The cap bounds the model peak by the brightest measured pixel of THIS
+    star.  Other sources' saturated cores in the cutout must not enter: they
+    hold model-subtracted residuals or clipped values, so a weakly saturated
+    star read against them was capped to ~1% of its flux and then rejected by
+    the fit-quality gate (wd2 F150W, 2026-10).
+
+    * ``own_deep_core`` non-empty: the dilated own deep core
+      (``own_deep_core_expanded``), whose recovered ring is the measured core.
+    * ``own_deep_core`` empty (weakly saturated: the ZEROFRAME anchor
+      recovered every SATURATED pixel, or ``SATSTAR_ZF_KEEP_FINITE`` kept
+      them): the source's own saturated component, which then holds its
+      measured core.
+    """
+    if own_deep_core.any():
+        return own_deep_core_expanded
+    return own_component
+
+
+def recovered_core_peak(cutout, region, unrecoverable, max_lost=0.2, min_px=3):
+    """Brightest measured pixel of ``region`` for the recovered-core cap.
+
+    Returns ``(peak, lost_frac, n_rec)``.  ``lost_frac`` is the fraction of
+    ``region`` flagged ``unrecoverable``; ``n_rec`` counts its finite, positive,
+    recoverable pixels.  ``peak`` is NaN (cap skipped) when ``lost_frac`` is at
+    least ``max_lost`` (a deeply saturated star's recovered ring sits far below
+    its true peak) or fewer than ``min_px`` pixels remain.
+    """
+    nreg = int(region.sum())
+    lost_frac = int((region & unrecoverable).sum()) / nreg if nreg else 1.0
+    rec = region & ~unrecoverable & np.isfinite(cutout) & (cutout > 0)
+    n_rec = int(rec.sum())
+    if lost_frac >= max_lost or n_rec < min_px:
+        return np.nan, lost_frac, n_rec
+    return float(np.nanmax(cutout[rec])), lost_frac, n_rec
+
+
 def satstar_observed_peak(cutout, mask, rewrite_delta=None):
     """Brightest unmasked pixel of a satstar cutout (the implied-peak gate's
     observed-peak second chance).  ``rewrite_delta`` (the matching cutout of
@@ -1532,6 +1605,52 @@ def stamp_seed_kinds(source_records, seed_kinds):
                        seed_kinds[lbl] if 0 <= lbl < len(seed_kinds)
                        else 'dqsat')
     return source_records
+
+
+def _set_position_fixed(model, fixed):
+    """Fix (lock) or free a PSF model's ``x_0``/``y_0``.
+
+    The satstar loop fits every source with the SAME PSF grid object, so a
+    lock set for one source persists into the next unless it is cleared.
+    Under the size-gated lock (``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2``) the
+    first source fitted is the largest core and is locked; without the reset
+    every smaller source after it inherited the lock (wd2 F150W nrcb1: all
+    803 refined seeds came back with x_fit == x_init).
+    """
+    model.x_0.fixed = bool(fixed)
+    model.y_0.fixed = bool(fixed)
+
+
+def _nircam_position_locked(*, is_miri, lock_pos, lock_min_px, sat_area):
+    """Whether a NIRCam satstar is fitted flux-only at its seed.
+
+    ``lock_pos`` is ``NIRCAM_SATSTAR_LOCK_POS``.  With the size gate off
+    (``lock_min_px <= 0``) it locks every NIRCam source; with the gate on
+    (``nircam_lock_min_area_px``) only components with
+    ``sat_area >= lock_min_px``.  A source without a ``sat_area`` follows the
+    lock.  MIRI is never locked here; its own bounded/unbounded switch applies.
+    """
+    if is_miri or not lock_pos:
+        return False
+    if lock_min_px <= 0 or sat_area is None:
+        return True
+    return int(sat_area) >= lock_min_px
+
+
+def _lock_gated_coms(coms, data, sources, saturated, min_px,
+                     unrecoverable=None):
+    """Seeds for a size-gated NIRCam position lock
+    (``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2``, see ``nircam_lock_min_area_px``).
+
+    Components with ``sat_area >= min_px`` keep the raw mask centre of mass,
+    which is the stable seed the lock needs; the others get the refined
+    centroid from ``_refine_coms_by_data``.  Returns the seeds and the number of
+    components kept on the raw centre of mass.
+    """
+    areas = np.atleast_1d(sum_labels(saturated, sources, np.arange(len(coms)) + 1))
+    refined = _refine_coms_by_data(coms, data, sources, unrecoverable=unrecoverable)
+    seeds = [c if a >= min_px else r for c, r, a in zip(coms, refined, areas)]
+    return seeds, int(np.sum(areas >= min_px))
 
 
 def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
@@ -2494,8 +2613,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # centre-of-mass, because that is stable across frames (~0.13") while the
     # refined one follows this frame's saturation extent and wanders ~0.6" --
     # the lock needs a consistent seed, not a per-frame-accurate one.
-    if not int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)):
+    # NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2 limits the lock to large cores
+    # (nircam_lock_min_area_px); smaller ones take the refined seed and the
+    # bounded fit below.
+    _lock_pos = bool(int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+    _lock_min_px = nircam_lock_min_area_px(fitsdata) if _lock_pos else 0.0
+    if not _lock_pos:
         coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
+    elif _lock_min_px > 0 and len(coms):
+        coms, _n_locked = _lock_gated_coms(coms, data, sources, saturated,
+                                           _lock_min_px,
+                                           unrecoverable=_unrecoverable)
+        print(f"NIRCam-ext: position lock limited to sat_area >= "
+              f"{_lock_min_px:.0f} px ({_n_locked} of {len(coms)} components); "
+              f"the rest use the refined seed", flush=True)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
@@ -3092,12 +3223,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # how much core is masked -- see _wing_selfcal)
             _wingcal_rmask = float(np.sqrt(
                 max(int(this_source_sat_expanded.sum()), 1) / np.pi))
+            # region the NIRCam recovered-core cap reads: this source only
+            _cap_region = recovered_cap_region(
+                sources[y0:y1, x0:x1] == src_label, this_source_sat,
+                this_source_sat_expanded)
         else:
             # Forced sources or no src_label: fall back to dilating the
             # whole saturated mask (legacy behaviour).
             satmask_combined = binary_dilation(saturated_mask,
                                                iterations=effective_buffer)
             _wingcal_rmask = np.nan   # forced/off-FOV: no wing self-cal
+            _cap_region = satmask_combined
         # NB: np.logical_or takes only TWO array operands; a 3rd positional arg
         # is interpreted as ``out``.  The previous
         # ``np.logical_or(cutout==0, np.isnan(cutout), satmask_combined)`` therefore
@@ -3494,12 +3630,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # bound) also keeps flux_err finite -- the NaN flux_err came from a
             # near-singular 2D position covariance, not from a 1D flux fit.
             # NIRCAM_SATSTAR_LOCK_POS; supersedes the bound above.
-            _nc_lock = (not _is_miri
-                        and int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+            _nc_lock = _nircam_position_locked(
+                is_miri=_is_miri, lock_pos=_lock_pos,
+                lock_min_px=_lock_min_px, sat_area=src_sat_area)
             if (_is_miri and not _miri_bounded) or _nc_lock:
                 # hard lock: fit flux only at the seed (MIRI legacy / NIRCam ext)
-                model.x_0.fixed = True
-                model.y_0.fixed = True
+                _set_position_fixed(model, True)
                 print(f"{'MIRI' if _is_miri else 'NIRCam-ext'}: locked satstar "
                       f"position to seed (x={xf:.2f}, y={yf:.2f}); fitting flux only",
                       flush=True)
@@ -3512,6 +3648,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # becomes a multi-peak smear -- the same failure MIRI fixed by
                 # dropping it.  NIRCAM_SATSTAR_TIGHT_BOUND drops it here too;
                 # default keeps it for star-dominated fields.
+                _set_position_fixed(model, False)
                 _nc_tight = (not _is_miri
                              and int(os.environ.get('NIRCAM_SATSTAR_TIGHT_BOUND', 0)))
                 if _is_miri or _nc_tight:
@@ -3919,20 +4056,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # NIRCAM_SATSTAR_RECOVERED_CAP.
         if (not _is_miri and int(os.environ.get('NIRCAM_SATSTAR_RECOVERED_CAP', 0))
                 and len(result) and np.isfinite(float(result['flux_fit'][0]))):
-            _unrec_cut = _unrecoverable[y0:y1, x0:x1]
-            _nsat = int(satmask_combined.sum())
-            _lostf = (int((satmask_combined & _unrec_cut).sum()) / _nsat
-                      if _nsat else 1.0)
             _max_lost = float(os.environ.get('NIRCAM_SATSTAR_RECOVERED_MAXLOST', 0.2))
-            _rec_core = (satmask_combined & (~_unrec_cut)
-                         & np.isfinite(cutout) & (cutout > 0))
-            if _lostf < _max_lost and int(_rec_core.sum()) >= 3:
+            _drec, _lostf, _nrec = recovered_core_peak(
+                cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _max_lost)
+            if np.isfinite(_drec):
                 _xf2 = float(result['x_fit'][0]); _yf2 = float(result['y_fit'][0])
                 _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
                 _psf2 = np.clip(_infov_psf(_xx2 - _xf2, _yy2 - _yf2), 0, None)
                 _ppk = float(np.nanmax(_psf2)) if np.isfinite(_psf2).any() else np.nan
                 if np.isfinite(_ppk) and _ppk > 0:
-                    _drec = float(np.nanmax(cutout[_rec_core]))
                     _cap = _drec / _ppk
                     _fc = float(result['flux_fit'][0])
                     if np.isfinite(_fc) and _fc > _cap:
@@ -3940,7 +4072,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         print(f"  [nircam recovered-core cap] flux {_fc:.2e} -> "
                               f"{_cap:.2e} (model peak {_fc*_ppk:.0f} -> {_drec:.0f} "
                               f"vs recovered core {_drec:.0f}; lost {_lostf*100:.0f}%, "
-                              f"{int(_rec_core.sum())} rec px)", flush=True)
+                              f"{_nrec} rec px)", flush=True)
 
         # Same coadd-core peak cap for forced / outside-FOV sources (MIRI).  With
         # only a faint spike-less PSF corner in frame, the fit is amplitude-
