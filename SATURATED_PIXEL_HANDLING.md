@@ -141,7 +141,16 @@ recoverable, of either sign), or when the measured pixel nearest the model peak
 is at or below zero (a refit of an already-subtracted star, capped to its
 residual); otherwise (an unmeasured core) it compares the model with the data
 at the measured pixel nearest the model peak (`recovered_cap_flux`: flux ≤
-data / unit PSF there), so a recovered ring bounds the model at the ring. One
+data / unit PSF there), so a recovered ring bounds the model at the ring.
+For a blended component (several deblended seeds share one label) the star's
+own region is the part of the component nearer its seed than any sibling
+seed (`nearest_seed_cell`); without that split, a faint star's region holds
+its brighter sibling's core and the unmeasured-core branch reads the
+sibling's model-subtracted residual. The unmeasured-core branch is also
+skipped when the pixel it reads has a unit PSF below
+`NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC` (0.005) of the peak. The
+`flux_fit_precap` and `cap_psf_frac` columns record the flux before the cap
+and where the cap read the model. One
 open question: should frame-0-recovered wings be fit rather than masked?
 Tracked in
 [#213](https://github.com/keflavich/jwst-gc-pipeline/issues/213). Evidence that the
@@ -514,6 +523,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_RCURVE_GUARD` / `…_MAXSTEP` | 1 (**on**) / 1.3 | truncate the ZEROFRAME R(g0) curve at the first bin-to-bin step larger than MAXSTEP, up or down; 0 restores the untruncated curve, which collapses on F480M (#972) |
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
+| `NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC` | 0.005 | the recovered-core cap skips a star whose model peak pixel is unmeasured when the measured pixel it reads has a unit PSF below this fraction of the peak; the data there belong to other sources (§2b) |
 | `SATSTAR_ZF_G0_GROUPDQ` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (#1065) |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
