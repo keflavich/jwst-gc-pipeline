@@ -102,11 +102,36 @@ How they were set:
   −0.145 ± 0.035, 37 stars at S/N_true ≥ 20), so its bias limit is 0.24 mag.
   The other three fields keep 0.1 mag.
 
+How large a regression the floors catch (`failpoints.py`: the true value at
+which a threshold fails with probability 0.5 and 0.9, under the same noise
+model as the pass probability):
+
+| field | completeness bin (cal.) | fails 50% at | fails 90% at | other thresholds: fail 50% / 90% at |
+|---|---|---|---|---|
+| `superdense` | 80–160 (11/64) | 3.7/64 (−7 stars) | 1.8/64 (−9) | excess 2.10 / 2.39 (cal. 1.52); oversub 1.40 / 1.47 (1.25) |
+| | 160–320 (29/74) | 17.6/74 (−11) | 13.2/74 (−16) | |
+| | 320–640 (29/51) | 19.5/51 (−10) | 15.3/51 (−14) | |
+| `dense_bright` | 20–40 (15/58) | 6.6/58 (−8) | 4.0/58 (−11) | excess 2.65 / 2.89 (2.15); oversub 1.25 / 1.41 (0.90) |
+| | 40–80 (36/64) | 25.5/64 (−11) | 20.7/64 (−15) | |
+| `bright_modest` | 40–80 (35/62) | 24.5/62 (−11) | 19.8/62 (−15) | excess 0.70 / 0.81 (0.48); oversub 0.15 / 0.18 (0.07); bias −0.24 / −0.29 (−0.135) |
+| `dark` | 10–20 (29/55) | 19.5/55 (−10) | 15.2/55 (−14) | labels 11.6 / 8.3 of 33 (19); excess 1.25 / 1.37 (0.97); oversub 1.30 / 1.42 (1.04) |
+| | 20–40 (45/61) | 35.5/61 (−10) | 30.5/61 (−15) | |
+| | 40–80 (48/62) | 39.5/62 (−9) | 34.5/62 (−14) | |
+
+A completeness floor therefore fails with 90% probability only after a loss
+of 9–16 of the 51–74 injected stars in its bin (14–27 percentage points).  The floors are a
+coarse guard; smaller changes show in the star-by-star comparison against the
+calibration run (`evaluate.py --baseline`), which reaches p ≈ 0.03 at +6/−0.
+A PR that changes detection or vetting should report both.
+
 `test_reference_field_passes` scores the run of `JWST_GC_REFFIELD_VARIANT`
 (default `main`) against these thresholds and skips where that run's products
-are absent (CI) or were made by different pipeline code.  The pipeline at its
-shipped defaults fails the Brick field (next section); that failure is the
-faint-star problem the default-on follow-up PR addresses.
+are absent (CI) or were made by different pipeline code.  Current `main`
+(500fc69c) fails three of the four fields: `dense_bright`, `bright_modest` and
+`dark` (next section).  The integration branch at its shipped defaults (`int3`,
+which also carries the open #1017) fails `dark`.  After this PR merges, `main`
+at its shipped defaults is expected to keep failing at least `dark` until the
+default-on follow-up PR lands.
 
 ## main, the shipped defaults, and the calibration run
 
