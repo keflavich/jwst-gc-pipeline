@@ -66,6 +66,17 @@ MANUAL_DEFAULTS = {
     'manual_ext_prom_exempt_prom_min': 2.0,
     'manual_ext_peak_over_bkg': 20.0,
     'manual_ext_star_prom_min': 7.0,   # keep on data-i2d prominence >= this (OR); 0 = off
+    # ...when qfit <= sqrt(qfit_max^2 + (k/S/N)^2).  qfit = sum|resid|/flux of a
+    # PERFECT PSF fit is ~c/(S/N) from pixel noise alone (c ~ 3.4 median, ~4.3
+    # at the 90th percentile for Brick F182M dark-sky stars at S/N 5-10, which
+    # the sky-clean tier selects without qfit).  Full-field m6 replays, sources
+    # the prominence keep adds per k_eff = S/N sqrt(qfit^2 - qfit_max^2) band,
+    # chance-corrected match rate relative to kept stars of the same flux
+    # (Brick F182M vs the independent F200W visit / W51 F187N vs same-visit
+    # F182M): 0.72 / 1.21 at 4-4.5, 0.53 / 0.52 at 4.5-5, 0.28 / 0.46 at
+    # 5-5.5, 0.40 / 0.32 at 5.5-6, 0.03 / 0.10 at 8-12.  5 is the largest
+    # half-integer k whose last band stays at or above 0.5 in both.  0 = off.
+    'manual_ext_qfit_snr_k': 5.0,
     'manual_ext_star_prom_peak_min': 4.0,  # peakSB branch also needs prominence >= this; 0 = off
     'manual_ext_star_prom_robust_min': 0.0,  # OR neighbour-robust prominence; 0 = off, -1 = AUTO (8, off on ext-emission)
     'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off

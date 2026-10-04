@@ -4436,6 +4436,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "units) is >= this, whatever its peak-SB / local bkg; "
                          "local_bkg scatters about zero on background-subtracted "
                          "frames.  0 = off (default 7).")
+    parser.add_option("--manual-ext-qfit-snr-k", dest="manual_ext_qfit_snr_k",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_snr_k'],
+                    help="The --manual-ext-star-prom-min keep (and the "
+                         "--manual-ext-star-prom-robust-min keep, when on) also "
+                         "needs qfit <= "
+                         "sqrt(qfit_max^2 + (k/S/N)^2), the qfit a point source "
+                         "reaches with pixel noise (a perfect PSF fit has qfit "
+                         "~3.4/S/N).  0 = no qfit bound on that keep (default 5).")
     parser.add_option("--manual-ext-star-prom-peak-min", dest="manual_ext_star_prom_peak_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_peak_min'],
                     help="Extended-emission vetting: the peak-SB keep also needs "
