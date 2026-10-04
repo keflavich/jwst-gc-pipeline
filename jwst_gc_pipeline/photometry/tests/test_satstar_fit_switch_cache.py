@@ -94,16 +94,20 @@ def test_signature_is_empty_without_a_ramp(tmp_path, monkeypatch):
 
 def test_signature_with_a_ramp_carries_the_default_guard(tmp_path, monkeypatch):
     fn = _frame(tmp_path, with_ramp=True)
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3b'
     monkeypatch.setenv('SATSTAR_ZF_RCURVE_GUARD', '0')
+    assert satstar_fit_switch_signature(fn) == 'zfb'
+    monkeypatch.setenv('SATSTAR_ZF_RIM_BADPIX', '0')
     assert satstar_fit_switch_signature(fn) == ''          # = pre-#972 fit
     monkeypatch.delenv('SATSTAR_ZF_RCURVE_GUARD')
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3'    # = pre-badpix fit
+    monkeypatch.delenv('SATSTAR_ZF_RIM_BADPIX')
     monkeypatch.setenv('SATSTAR_ZF_RCURVE_MAXSTEP', '1.5')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.5'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.5b'
     monkeypatch.delenv('SATSTAR_ZF_RCURVE_MAXSTEP')
     monkeypatch.setenv('SATSTAR_ZF_KEEP_FINITE', '1')
     monkeypatch.setenv('SATSTAR_OBS_PK_FROM_CRF', '1')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3ko'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3kob'
 
 
 def test_signature_follows_whether_the_anchor_runs(tmp_path, monkeypatch):
@@ -113,7 +117,7 @@ def test_signature_follows_whether_the_anchor_runs(tmp_path, monkeypatch):
     monkeypatch.setenv('SATSTAR_ZEROFRAME_FIT', '0')
     assert satstar_fit_switch_signature(fn) == ''
     assert satstar_fit_switch_signature(
-        fn, deblend_with_zeroframe=True) == 'zfg1.3'
+        fn, deblend_with_zeroframe=True) == 'zfg1.3b'
 
 
 @pytest.mark.parametrize('value, on', [
@@ -127,7 +131,7 @@ def test_zeroframe_fit_switch_spellings(tmp_path, monkeypatch, value, on):
     fn = _frame(tmp_path, with_ramp=True)
     monkeypatch.setenv('SATSTAR_ZEROFRAME_FIT', value)
     assert SSF._zeroframe_fit_enabled() is on
-    assert satstar_fit_switch_signature(fn) == ('zfg1.3' if on else '')
+    assert satstar_fit_switch_signature(fn) == ('zfg1.3b' if on else '')
 
 
 def test_zeroframe_fit_switch_typo_raises(tmp_path, monkeypatch):
@@ -213,8 +217,8 @@ def test_catalog_built_without_the_guard_is_refit_once(tmp_path, monkeypatch):
     calls = _counting_fit(monkeypatch)
     out = _load(fn, tmp_path)
     assert calls['n'] == 1
-    assert calls['fit_switch_signature'] == ['zfg1.3']
-    assert str(out.meta.get('SATFITSW')) == 'zfg1.3'
+    assert calls['fit_switch_signature'] == ['zfg1.3b']
+    assert str(out.meta.get('SATFITSW')) == 'zfg1.3b'
     _load(fn, tmp_path)
     assert calls['n'] == 1
 
@@ -228,12 +232,13 @@ def test_catalog_built_without_the_guard_is_refit_once(tmp_path, monkeypatch):
     ('SATSTAR_ZF_RCURVE_MAXSTEP', '2'),
     ('SATSTAR_ERR_BKG_SCATTER', '1'),
     ('SATSTAR_ZF_G0_GROUPDQ', '1'),
+    ('SATSTAR_ZF_RIM_BADPIX', '0'),
 ])
 def test_changing_a_switch_refits_a_cached_catalog(tmp_path, monkeypatch,
                                                   name, value):
     fn = _frame(tmp_path, with_ramp=True)
     _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'),
-                 satfitsw='zfg1.3')          # built by a default run
+                 satfitsw='zfg1.3b')         # built by a default run
     calls = _counting_fit(monkeypatch)
     _load(fn, tmp_path)
     assert calls['n'] == 0                   # same switches -> reused
@@ -250,16 +255,16 @@ def test_group0_groupdq_default_follows_the_recovered_cap(tmp_path,
     """SATSTAR_ZF_G0_GROUPDQ defaults to NIRCAM_SATSTAR_RECOVERED_CAP, so only
     cap-on frames (extended-emission NIRCam) change key; an export wins."""
     fn = _frame(tmp_path, with_ramp=True)
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3b'
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3b'
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3d_cs0.005'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3db_cs0.005'
     monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', '0')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3_cs0.005'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3b_cs0.005'
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
     monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', '1')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3d'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3db'
 
 
 def test_cap_on_catalog_from_before_the_group0_groupdq_switch_is_refit(
@@ -274,7 +279,28 @@ def test_cap_on_catalog_from_before_the_group0_groupdq_switch_is_refit(
     calls = _counting_fit(monkeypatch)
     _load(fn, tmp_path)
     assert calls['n'] == 1
-    assert calls['fit_switch_signature'] == ['zfg1.3d_cs0.005']
+    assert calls['fit_switch_signature'] == ['zfg1.3db_cs0.005']
+    _load(fn, tmp_path)
+    assert calls['n'] == 1
+
+
+@pytest.mark.parametrize('cap, old_stamp, new_stamp', [
+    ('0', 'zfg1.3', 'zfg1.3b'),
+    ('1', 'zfg1.3d_cs0.005', 'zfg1.3db_cs0.005'),
+])
+def test_catalog_from_before_the_rim_badpix_switch_is_refit(
+        tmp_path, monkeypatch, cap, old_stamp, new_stamp):
+    """The stamps without 'b' were written before SATSTAR_ZF_RIM_BADPIX, when
+    the rim rewrite included dead/hot pixels, so a default run refits them
+    once (with the cap off or on) and reuses the new stamp afterwards."""
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', cap)
+    fn = _frame(tmp_path, with_ramp=True)
+    _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'),
+                 satfitsw=old_stamp)
+    calls = _counting_fit(monkeypatch)
+    _load(fn, tmp_path)
+    assert calls['n'] == 1
+    assert calls['fit_switch_signature'] == [new_stamp]
     _load(fn, tmp_path)
     assert calls['n'] == 1
 
@@ -297,12 +323,12 @@ def test_signature_keys_the_error_floor_with_or_without_a_ramp(tmp_path,
     ramp = _frame(tmp_path / 'ramp', with_ramp=True)
     monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
     assert satstar_fit_switch_signature(no_ramp) == 'es'
-    assert satstar_fit_switch_signature(ramp) == 'zfg1.3_es'
+    assert satstar_fit_switch_signature(ramp) == 'zfg1.3b_es'
     # cataloging turns on both the cap (hence the group-0 GROUPDQ mask and
     # the 'cs' cap key) and the floor for extended-emission NIRCam.
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
     assert satstar_fit_switch_signature(no_ramp) == 'cs0.005_es'
-    assert satstar_fit_switch_signature(ramp) == 'zfg1.3d_cs0.005_es'
+    assert satstar_fit_switch_signature(ramp) == 'zfg1.3db_cs0.005_es'
 
 
 def test_error_floor_refits_a_catalog_of_a_frame_without_a_ramp(tmp_path,

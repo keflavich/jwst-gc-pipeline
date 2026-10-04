@@ -705,6 +705,112 @@ def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
     return restore & valid
 
 
+# Radius (pixels) around each handed-off star inside which a negative hole in
+# the subtracted resbg map is undone, and the width of the annulus outside it
+# that sets the floor.  wd2 refit replay: with these values the handed-off LW
+# stars go from ~-0.3 mag against dolphot to median dm +0.003 / +0.029 / +0.016
+# (F250M / F277W / F300M) and SW is unchanged; with a frame-median floor,
+# r = 6 px leaves F277W at +0.05 mag.
+_HANDOFF_RESBG_CLIP_RADIUS_PIX = 10.0
+_HANDOFF_RESBG_CLIP_ANNULUS_PIX = 5.0
+
+
+def _clip_resbg_hole_at_handoff(data, bg, handoff_xy,
+                                radius=_HANDOFF_RESBG_CLIP_RADIUS_PIX,
+                                annulus_width=_HANDOFF_RESBG_CLIP_ANNULUS_PIX):
+    """Remove the pedestal a negative resbg hole adds under hand-off stars.
+
+    The resbg map is built from the previous phase's residuals, which never
+    modelled a handed-off saturated star, so it carries a negative hole at the
+    core.  ``data = crf - bg`` then sits on a positive pedestal and the fit
+    inflates.  Within ``radius`` of each hand-off position the data are
+    lowered by ``max(bg, floor) - bg``, so they become ``crf - max(bg,
+    floor)``.  ``floor`` is the median of the valid ``bg`` in the annulus
+    ``radius <= r < radius + annulus_width`` around that star, so it follows
+    a background gradient.  Where two stars' circles overlap the higher floor
+    applies.
+
+    Valid ``bg`` is finite and nonzero (an exact zero is a reproject miss).
+    Pixels with invalid ``bg``, non-finite ``data`` or ``data == 0`` (detector
+    gap) are left alone, as is everything outside ``radius``, and so is a star
+    whose annulus holds no valid ``bg``.
+
+    Parameters
+    ----------
+    data : `~numpy.ndarray`
+        Frame data after the ``bg`` subtraction.  Not modified.
+    bg : `~numpy.ndarray`
+        The subtracted background map, same shape as ``data``.
+    handoff_xy : `~numpy.ndarray` (N, 2) or None
+        Hand-off positions, (x, y) frame pixels.
+    radius : float
+        Clip radius in pixels.
+    annulus_width : float
+        Width in pixels of the floor annulus outside ``radius``.
+
+    Returns
+    -------
+    out : `~numpy.ndarray`
+        Corrected copy of ``data``.
+    n_star : int
+        Number of hand-off positions with a floor.
+    n_pix : int
+        Number of pixels changed.
+    removed : `~numpy.ndarray`
+        Values subtracted from the changed pixels (all positive).
+    """
+    out = np.array(data, copy=True)
+    empty = np.zeros(0, dtype=float)
+    if handoff_xy is None or len(handoff_xy) == 0 or radius <= 0:
+        return out, 0, 0, empty
+    bg = np.asarray(bg, dtype=float)
+    valid_bg = np.isfinite(bg) & (bg != 0)
+    ny, nx = out.shape
+    floor = np.full(out.shape, -np.inf)
+    rout = radius + max(float(annulus_width), 0.0)
+    n_star = 0
+    for xc, yc in np.asarray(handoff_xy, dtype=float):
+        if not (np.isfinite(xc) and np.isfinite(yc)):
+            continue
+        x0, x1 = max(int(np.floor(xc - rout)), 0), min(int(np.ceil(xc + rout)) + 1, nx)
+        y0, y1 = max(int(np.floor(yc - rout)), 0), min(int(np.ceil(yc + rout)) + 1, ny)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        rr = np.hypot(xx - xc, yy - yc)
+        ann = (rr >= radius) & (rr < rout) & valid_bg[y0:y1, x0:x1]
+        if not ann.any():
+            continue
+        f = float(np.median(bg[y0:y1, x0:x1][ann]))
+        win = floor[y0:y1, x0:x1]
+        circ = rr < radius
+        win[circ] = np.maximum(win[circ], f)
+        n_star += 1
+    hole = valid_bg & np.isfinite(out) & (out != 0) & (bg < floor)
+    removed = (floor - bg)[hole]
+    out[hole] = out[hole] - removed.astype(out.dtype)
+    return out, n_star, int(hole.sum()), removed
+
+
+def _apply_handoff_resbg_clip(data, background_map, handoff_xy, resbg_path):
+    """Apply `_clip_resbg_hole_at_handoff` when the frame has hand-off positions
+    and a subtracted resbg map; otherwise return ``data`` unchanged.
+
+    Returns
+    -------
+    data : `~numpy.ndarray`
+    message : str or None
+        Log line, None when the clip did not run.
+    """
+    if handoff_xy is None or not resbg_path or background_map is None:
+        return data, None
+    out, n_star, n_pix, removed = _clip_resbg_hole_at_handoff(
+        data, background_map, handoff_xy)
+    med = float(np.median(removed)) if removed.size else 0.0
+    return out, (f"[manual] hand-off resbg clip: {n_star} star(s), {n_pix} "
+                 f"pixel(s) lowered, median {med:.3g} MJy/sr")
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -1458,6 +1564,7 @@ def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               star_prom_min=0.0,
+                              qfit_snr_k=0.0,
                               star_prom_peak_min=0.0,
                               star_prom_robust_min=0.0,
                               star_prom_robust_conc=0.0,
@@ -1501,7 +1608,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     ``prominence >= star_prom_peak_min`` wherever the data-i2d prominence is
     measured.  With ``star_prom_min > 0``, ``prominence >= star_prom_min``
     (OR, with ``star_prom_robust_min > 0``,
-    ``prominence_robust >= star_prom_robust_min``) keeps a source on its own.
+    ``prominence_robust >= star_prom_robust_min``) keeps a source on its own;
+    with ``qfit_snr_k > 0`` that keep also needs
+    ``qfit <= sqrt(qfit_max**2 + (qfit_snr_k / snr)**2)``, the qfit a point
+    source reaches with pixel noise (a non-finite qfit fails it; a non-finite
+    or non-positive S/N gets the flat ``qfit_max``).
     ``star_prom_peak_min >= star_prom_min`` reduces the branch to the
     prominence test wherever prominence is measured.
     With ``star_prom_robust_conc > 0`` the robust branch also needs a
@@ -1738,6 +1849,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # sides (_auto_star_prom_robust_min, used for --manual-ext-star-prom-robust-min
     # < 0, turns it off on extended-emission targets).
     _peak_branch = np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)
+    _q_refused = None
     if star_prom_peak_min > 0:
         _peak_branch = _peak_branch & ~(np.isfinite(prominence)
                                         & (prominence < float(star_prom_peak_min)))
@@ -1798,6 +1910,28 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                           f"{int(_cal.sum())} calibration source(s) < "
                           f"{int(conc_ref_min_n)}", flush=True)
             _prom_ok = _prom_ok | _rob_ok
+        if qfit_snr_k > 0:
+            # PIXEL-NOISE qfit bound on the prominence keep.  qfit =
+            # sum|resid|/flux of a perfect PSF fit is ~c/(S/N) from pixel noise
+            # alone (Brick F182M dark-sky stars, selected without qfit: c ~ 3.4
+            # median, 4.3 at the 90th percentile), so a point source sits at
+            # qfit <= sqrt(qfit_max^2 + (k/S/N)^2) with k ~ 5.  Prominence
+            # alone also admits fits whose qfit is far above that: a fit on a
+            # bright star's wing or ring, a blend, an emission knot.  Full-field
+            # m6 replays of this keep at prominence >= 7: the sources it adds
+            # with k_eff = S/N * sqrt(qfit^2 - qfit_max^2) in 4.5-5 / 5-5.5 /
+            # 8-12 match the independent-visit F200W catalog (Brick F182M) at
+            # 0.53 / 0.28 / 0.03 of the chance-corrected rate of kept stars of
+            # the same flux, against 1.02 at k_eff <= 3.
+            _qbound = np.full(n, float(qfit_max))
+            _sok = np.isfinite(snr) & (snr > 0)
+            _qbound[_sok] = np.hypot(float(qfit_max), float(qfit_snr_k) / snr[_sok])
+            _q_ok = np.isfinite(qf) & (qf <= _qbound)
+            _q_refused = _has_prom & _prom_ok & ~_q_ok
+            _prom_ok = _prom_ok & _q_ok
+            print(f"[{label}] prominence keep: qfit noise bound refuses "
+                  f"{int(_q_refused.sum())} source(s) with qfit > "
+                  f"sqrt({qfit_max:g}^2 + ({qfit_snr_k:g}/S/N)^2)", flush=True)
         _peak_branch = _peak_branch | (_has_prom & _prom_ok)
     star_like = (
         (qf <= qfit_max)
@@ -2158,6 +2292,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   flush=True)
 
     n_keep = int(np.sum(keep))
+    if _q_refused is not None:
+        # a refused source can still be kept by another branch
+        print(f"[{label}] prominence keep: {int(np.sum(_q_refused & keep))} of the "
+              f"{int(_q_refused.sum())} refused by the qfit noise bound kept by "
+              f"another branch", flush=True)
     # Only report the struct-prune numbers when that gate is active (the manual
     # path always calls with struct_x=struct_y=0, which would print a
     # meaningless "dropped 0 @ x=0,y=0" every time).
@@ -2168,6 +2307,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
           f"peakSB>{peak_over_bkg}x bkg"
           f"{f' with prominence>={star_prom_peak_min:g}' if star_prom_peak_min > 0 else ''}"
           f"{f', prominence>={star_prom_min:g}' if star_prom_min > 0 else ''}"
+          f"{f' with qfit<=sqrt({qfit_max:g}^2+({qfit_snr_k:g}/S/N)^2)' if star_prom_min > 0 and qfit_snr_k > 0 else ''}"
           f"{f' or robust>={star_prom_robust_min:g}' if star_prom_min > 0 and star_prom_robust_min > 0 else ''}, "
           f"snr>={local_snr_min}"
           f"{' (flux/flux_err_prop)' if snr_floor is not snr else ''}{_struct_msg})",
@@ -2233,6 +2373,67 @@ def _auto_star_prom_robust_min(value, options):
     if value >= 0:
         return value
     return 0.0 if _is_extended_emission(options) else 8.0
+
+
+def _auto_seed_round_loose_max(value, options, *, miri=False):
+    """Resolve ``--manual-seed-round-loose-max``.
+
+    The pipeline default is 0 (the loose window off).  ``value < 0`` is AUTO
+    (opt-in): 0.8 on star-dominated NIRCam fields and 0 on an
+    extended-emission target (:func:`_is_extended_emission`) and on MIRI;
+    ``value >= 0`` is used verbatim.
+
+    Annulus prominence, the loose window's only extra test, also passes
+    emission knots and diffraction-spike knots.  On the full Brick and Sgr B2
+    frames 29-31% of the loose-only seeds sit in the brightest tenth of the
+    background (docs/evidence/faint_seed_roundness).  On the star-field
+    reference fields the window moves at most one injected star per S/N bin
+    on top of the own-band m7 seed (docs/evidence/faint_defaults_on).
+    MIRI's residual seeds were never measured with it.
+    """
+    value = float(value)
+    if value >= 0:
+        return value
+    return 0.0 if (miri or _is_extended_emission(options)) else 0.8
+
+
+def _auto_m7_seed_own_band(value, options, *, miri=False):
+    """Resolve ``--manual-m7-seed-own-band``.
+
+    ``value is None`` is AUTO (the default): on for star-dominated NIRCam
+    fields and off on an extended-emission target
+    (:func:`_is_extended_emission`) and for a MIRI filter; ``True`` / ``False``
+    (the flag / ``--no-`` flag) are used verbatim.
+
+    The own-band seed adds this band's residual detections at m7.  Every m7
+    seed position is masked out of the smoothed background, so a seed that
+    vetting then drops leaves a hole in the background map.  On the W51
+    reference field (F187N) the union gained one injected star and raised the
+    residual excess from 0.21 to 0.48 per arcsec^2 through such holes, while on
+    the three star-field reference fields it lowered the excess and gained
+    stars (docs/evidence/faint_defaults_on).  All-MIRI runs drop m7; a MIRI
+    filter in a mixed run was never measured with it.
+    """
+    if value is not None:
+        return bool(value)
+    return not (miri or _is_extended_emission(options))
+
+
+def _phase_seed_switches(options, filtername):
+    """``(m7_own_band, round_loose_max)`` for one band of one run.
+
+    Resolves ``--manual-m7-seed-own-band`` (:func:`_auto_m7_seed_own_band`)
+    and ``--manual-seed-round-loose-max`` (:func:`_auto_seed_round_loose_max`)
+    with the band's instrument.  ``run_manual_pipeline`` (the m7 own-band seed
+    and the i2d-augmented seed's loose window) and
+    ``annotate_independent_detection`` read both switches from here, so the
+    MIRI and extended-emission cases reach every call site the same way.
+    """
+    miri = _L._instrument_from_filter(filtername) == 'MIRI'
+    return (_auto_m7_seed_own_band(mopt(options, 'manual_m7_seed_own_band'),
+                                   options, miri=miri),
+            _auto_seed_round_loose_max(mopt(options, 'manual_seed_round_loose_max'),
+                                       options, miri=miri))
 
 
 def _resolve_each_suffix(options, filtername):
@@ -3002,6 +3203,12 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                       f"fit around {len(handoff_xy)} star(s)", flush=True)
             else:
                 handoff_restore = None
+        # The resbg map has a negative hole at each handed-off saturated core;
+        # take the pedestal it adds back out of the fitted data.
+        nan_replaced_data, _clip_msg = _apply_handoff_resbg_clip(
+            nan_replaced_data, background_map, handoff_xy, resbg_path)
+        if _clip_msg:
+            print(_clip_msg, flush=True)
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):
@@ -3822,7 +4029,8 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
                         companion_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
                         fwhm_arcsec=None, label=''):
     """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
-    vetted catalog (opt-in, ``manual_m7_seed_own_band``).
+    vetted catalog (``manual_m7_seed_own_band``; AUTO by default, see
+    :func:`_auto_m7_seed_own_band`).
 
     The cross-band seed keeps only positions confirmed (S/N > 5, qfit < 0.2)
     in >= 2 filters.  Used ALONE as the m7 seed it leaves out every source
@@ -4104,9 +4312,6 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     _endsuf = '' if _modtok else _obssuf
     _modules = (getattr(options, 'modules', '') or 'merged').split(',')
     _xbseed = crossband_seed_file(cut_bp, options)
-    # only this run's m7 seeds: with the own-band seed off, a band seed left
-    # over from an earlier run says nothing about this merged catalog
-    _m7_own = bool(mopt(options, 'manual_m7_seed_own_band'))
     n_m7_i2d = 0
     # Per-filter independence is OR-ed across modules and counted ONCE per
     # filter.  (The previous module-outer loop added ``indep`` to
@@ -4128,6 +4333,9 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
             sc6 = m6['skycoord'] if isinstance(m6['skycoord'], SkyCoord) else SkyCoord(m6['skycoord'])
             _, sep, _ = ref.match_to_catalog_sky(sc6)
             indep |= np.asarray(sep < radius_mas * u.mas)
+        # only this run's m7 seeds: with the own-band seed off, a band seed
+        # left over from an earlier run says nothing about this merged catalog
+        _m7_own, _ = _phase_seed_switches(options, filt)
         for module in (_modules if _m7_own else []):
             p7 = vetted_to_i2dseed(m7_band_seed_path(_xbseed, module, f))
             if not os.path.exists(p7):
@@ -8097,6 +8305,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             for filt in filternames:
                 prev_seed = None
                 resbg_path = None
+                # AUTO seed switches for this band (own-band m7 seed, loose
+                # roundness window); see _phase_seed_switches
+                _m7_own_band, _sround_loose = _phase_seed_switches(opts_phase, filt)
                 # End-slot observation tokens on the vetted (_vtok) and
                 # combined (_combsuf) catalog names: MIRI multi-obs targets and
                 # gc2211 vet per observation, the per-obs-MERGED proposals
@@ -8138,11 +8349,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 elif phase == 'm7':
                     prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
                     resbg_path = bg_for_next.get((module, filt))      # bg from m6
-                    # opt-in: cross-band seed UNION this band's own m6 vetted
-                    # catalog, plus daofind on the m6 residual - m6 bg (as m6
-                    # does on m5's): see _build_m7_band_seed.  Off (default)
-                    # -> cross-band only.
-                    if bool(mopt(opts_phase, 'manual_m7_seed_own_band')):
+                    # cross-band seed UNION this band's own m6 vetted catalog,
+                    # plus daofind on the m6 residual - m6 bg (as m6 does on
+                    # m5's): see _build_m7_band_seed.  AUTO by default
+                    # (_auto_m7_seed_own_band); off -> cross-band only.
+                    if _m7_own_band:
                         _own = [q for _m, _f, q in crossband_seed_inputs(
                                     cut_bp, modules, filternames, options)
                                 if _m == module and _f == filt]
@@ -8169,7 +8380,6 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
-                        _sround_loose = float(mopt(opts_phase, 'manual_seed_round_loose_max'))
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
@@ -8830,6 +9040,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
                     star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
+                    qfit_snr_k=float(mopt(opts_phase, 'manual_ext_qfit_snr_k')),
                     star_prom_peak_min=float(mopt(opts_phase, 'manual_ext_star_prom_peak_min')),
                     star_prom_robust_min=_auto_star_prom_robust_min(
                         mopt(opts_phase, 'manual_ext_star_prom_robust_min'), opts_phase),

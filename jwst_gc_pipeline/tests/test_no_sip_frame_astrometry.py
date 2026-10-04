@@ -84,6 +84,10 @@ ALLOWLIST = {
     # read for a local-peak flag (compare) and the vetting replay (vet_variant).
     "docs/evidence/faint_local_skyclean/scripts/compare.py",
     "docs/evidence/faint_local_skyclean/scripts/vet_variant.py",
+    # PR #1017 evidence scripts: copies of the #1019 scripts above, the same
+    # merged data_i2d reads.
+    "docs/evidence/faint_qfit_snr/scripts/compare.py",
+    "docs/evidence/faint_qfit_snr/scripts/vet_variant.py",
     "scripts/satstar_deblend/run_satstar_compare.py",
     # aperture photometry reads only the i2d MOSAIC SCI header (rectified,
     # RA---TAN, no SIP) for the WCS + pixel solid angle; positions come from the
