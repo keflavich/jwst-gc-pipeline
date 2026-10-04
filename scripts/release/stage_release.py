@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 
 import sys
 from pathlib import Path
@@ -2641,6 +2642,18 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
               file=sys.stderr)
         return field_dir, 0
 
+    # PR #1091 review, Blocking 1 (the exposures-then-catalog ordering): when
+    # this release ALREADY carries a joint catalog, the exposures about to be
+    # added must carry a matching roll-corrected image WCS -- the same gate
+    # `stage_joint_catalog` runs for the catalog-then-exposures ordering.
+    # Raises BEFORE anything below is linked or pruned.
+    catalog_joint_present = any(f.get("kind") in JOINT_CATALOG_KINDS
+                                for f in manifest.get("files", []))
+    if catalog_joint_present:
+        current_rows = roll_table_versions().get(current_roll_table_sha(), {})
+        check_frames_roll_corrected(field, [it["src"] for it in exposures],
+                                   current_rows)
+
     print_manifest(exposures)
     orphans, unexpected = prune_exposure_orphans(
         field_dir, [it["dest"] for it in exposures])
@@ -2718,6 +2731,198 @@ JOINT_CATALOG_KINDS = ("catalog_joint", "catalog_joint_provenance")
 class JointCatalogGateError(RuntimeError):
     """A joint-catalog build directory failed its release gate, or there is
     no build to stage.  Raised BEFORE anything is written."""
+
+
+# ---------------------------------------------------------------------------
+# Roll-table provenance (PR #1091 review, Blocking 1 + 2)
+# ---------------------------------------------------------------------------
+# The 68 real gc-treasury input tiles were each corrected against WHICHEVER
+# version of `roll_corrections.csv` was current when `catalog_roll_correction`
+# ran on them -- six different versions across the 68 tiles, recorded per tile
+# as `ROLLCTAB` (`'sha1:<12hex>'` of that version's file CONTENT) and
+# `ROLLCVER`.  The coordinator verified that every tile's own (program,
+# observation) row reads the SAME VALUE in its table version as in the
+# CURRENT table, so the gate below checks that per-observation VALUE
+# equality -- not a single shared sha, which the six versions do not share.
+ROLL_TABLE_REL = os.path.join("jwst_gc_pipeline", "reduction", "roll_corrections.csv")
+
+
+def _roll_table_repo_root():
+    """The repo root containing THIS file (`scripts/release/stage_release.py`),
+    which is also where `jwst_gc_pipeline/reduction/roll_corrections.csv`
+    lives -- two directories up."""
+    here = os.path.dirname(os.path.abspath(__file__))     # scripts/release
+    return os.path.dirname(os.path.dirname(here))          # repo root
+
+
+def roll_table_versions():
+    """``{sha1(content)[:12]: {(program, observation): delta_roll_arcsec}}``
+    for every version of ``roll_corrections.csv`` that ever existed in this
+    repo's git history at that path, PLUS the current working-tree file (which
+    may hold an uncommitted edit the log would not show).
+
+    Parsed with the existing reader
+    (``jwst_gc_pipeline.astrometry.catalog_roll_correction.read_roll_table``),
+    applied to each historical git blob via a temp file since that reader
+    takes a path, not text.  Only rows with ``visit == '*'`` are kept: every
+    10678 row in the table is observation-wide (``*``); a multi-visit
+    observation (1182 o004, 2221 o002) has no single per-observation value and
+    is intentionally left out of the returned mapping -- this module only
+    ever asks it about 10678 observations, which are all ``visit == '*'``.
+    """
+    from jwst_gc_pipeline.astrometry.catalog_roll_correction import (
+        read_roll_table, table_sha)
+    from jwst_gc_pipeline.reduction.roll_correction import TABLE as CURRENT_TABLE
+
+    def _rows_to_map(rows):
+        return {(r["program"], r["observation"]): r["roll_arcsec"]
+                for r in rows if r["visit"] == "*"}
+
+    root = _roll_table_repo_root()
+    out = {}
+    log = subprocess.run(
+        ["git", "-C", root, "log", "--format=%H", "--", ROLL_TABLE_REL],
+        capture_output=True, text=True, check=True).stdout
+    for commit in log.split():
+        # RAW BYTES, not `text=True`: `table_sha`/`ROLLCTAB` hash the file's
+        # exact on-disk bytes, and decoding+re-encoding through `text=True`
+        # can normalize line endings and change the sha1 -- it did, for the
+        # real PR #1004 commit (90709b3...'s sha1 came out 931962344935
+        # instead of the real 1721e98c8599 this way).
+        content = subprocess.run(
+            ["git", "-C", root, "show", f"{commit}:{ROLL_TABLE_REL}"],
+            capture_output=True, check=True).stdout
+        sha = hashlib.sha1(content).hexdigest()[:12]
+        if sha in out:
+            continue
+        fd, tmp_path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(content)
+            out[sha] = _rows_to_map(read_roll_table(tmp_path))
+        finally:
+            os.unlink(tmp_path)
+
+    current_sha = table_sha(CURRENT_TABLE)
+    if current_sha not in out:
+        out[current_sha] = _rows_to_map(read_roll_table(CURRENT_TABLE))
+    return out
+
+
+def current_roll_table_sha():
+    """``sha1(content)[:12]`` of the roll table currently on disk (the
+    working-tree file, which may be ahead of the git log) -- the version
+    every tile's ``ROLLCTAB`` and every frame's ``ROLLARC`` are compared
+    against."""
+    from jwst_gc_pipeline.astrometry.catalog_roll_correction import table_sha
+    from jwst_gc_pipeline.reduction.roll_correction import TABLE as CURRENT_TABLE
+    return table_sha(CURRENT_TABLE)
+
+
+def _field_program(field):
+    """Program number for ``field`` (e.g. ``'10678'``), derived from its
+    ``proposal_prefix`` in ``FIELDS`` (``'jw10678'`` -> ``'10678'``) -- never
+    hardcoded a second time alongside it."""
+    prefix = FIELDS.get(field, {}).get("proposal_prefix")
+    if not prefix or not str(prefix).startswith("jw"):
+        raise JointCatalogGateError(
+            f"'{field}' has no 'proposal_prefix' in FIELDS -- cannot derive "
+            f"its program number for the roll-table gate.")
+    return str(int(str(prefix)[2:]))
+
+
+def _read_header_rollctab(path):
+    """``ROLLCTAB`` from a tile's PRIMARY or table HDU header, or ``None``.
+
+    Fallback for a joint-catalog build whose ``prov.json`` predates recording
+    ``rollctab`` per tile (PR #1091): the 2026-10-04 build that is on hold
+    today was already written before this landed, and should not need a
+    rebuild to pass this gate.
+    """
+    from astropy.io import fits
+    try:
+        with fits.open(path, memmap=True) as hdul:
+            for hdu in hdul:
+                if "ROLLCTAB" in hdu.header:
+                    return str(hdu.header["ROLLCTAB"])
+    except (OSError, IndexError):
+        return None
+    return None
+
+
+def check_frames_roll_corrected(field, frame_paths, current_rows):
+    """Refuse (``JointCatalogGateError``) unless every one of ``frame_paths``
+    carries an image-WCS roll (``image_roll_wcs.py``'s ``ROLLARC`` SCI-header
+    card) matching ``current_rows``' value for its own (program, observation).
+
+    ``current_rows``: ``{(program, observation): delta_roll_arcsec}`` for the
+    roll table a staged joint catalog was corrected against -- see
+    ``roll_table_versions`` / ``current_roll_table_sha``.
+
+    PR #1091 review, Blocking 1: nothing previously checked that a roll-
+    corrected JOINT CATALOG is staged beside exposures whose own image WCS
+    carries the matching roll -- as of 2026-10-04 NONE of the 10678 ``_crf``
+    frames carry ``ROLLARC`` at all.  Collects every failure rather than
+    stopping at the first (thousands of frames may need checking; the
+    operator needs the whole list), and prints progress every 500 frames.
+    """
+    from astropy.io import fits
+    from jwst_gc_pipeline.reduction.image_roll_wcs import _prog_obs_from_name
+
+    failures = []
+    n = len(frame_paths)
+    for i, path in enumerate(frame_paths, 1):
+        if i % 500 == 0:
+            print(f"  roll-WCS exposure check ({field}): {i}/{n} frames...")
+        try:
+            header = fits.getheader(path, "SCI")
+        except KeyError:
+            try:
+                header = fits.getheader(path, 1)
+            except (OSError, IndexError) as err:
+                failures.append(f"{path}: cannot read any header ({err})")
+                continue
+        except (OSError, IndexError) as err:
+            failures.append(f"{path}: cannot read SCI header ({err})")
+            continue
+
+        rollarc = header.get("ROLLARC")
+        if rollarc is None:
+            failures.append(f"{path}: no ROLLARC -- image WCS not roll-corrected")
+            continue
+
+        po = _prog_obs_from_name(os.path.basename(path))
+        if po is None:
+            rollvis = header.get("ROLLVIS")
+            parts = str(rollvis).split("-") if rollvis else []
+            po = ((parts[0], parts[1], parts[2] if len(parts) > 2 else None)
+                 if len(parts) >= 2 else None)
+        if po is None:
+            failures.append(
+                f"{path}: cannot resolve (program, observation) from the "
+                f"filename or ROLLVIS={header.get('ROLLVIS')!r}")
+            continue
+
+        program, observation = str(int(po[0])), po[1]
+        expected = current_rows.get((program, observation))
+        if expected is None:
+            failures.append(
+                f"{path}: no current-table row for (program={program}, "
+                f"observation={observation})")
+            continue
+        if abs(float(rollarc) - float(expected)) > 1e-6:
+            failures.append(
+                f"{path}: ROLLARC={rollarc!r}\" disagrees with the current "
+                f"table's {expected!r}\" for (program={program}, "
+                f"observation={observation})")
+
+    if failures:
+        raise JointCatalogGateError(
+            f"{field}: {len(failures)} of {n} exposure(s) do not carry an "
+            f"image WCS roll matching the current roll_corrections.csv "
+            f"(PR #1091 review, Blocking 1) -- staging a roll-corrected joint "
+            f"catalog beside them would ship it next to uncorrected frames. "
+            f"First 10:\n  " + "\n  ".join(failures[:10]))
 
 
 def discover_joint_catalog(field, build_dir=None):
@@ -2798,7 +3003,16 @@ def check_joint_catalog(build_dir):
       returned summary, never silently passed through;
     * ``roll_corrected`` is ``True`` at the top level AND for every tile in
       ``tiles`` (a raw or MIXED build never ships);
-    * ``n_rows_total`` is a positive count.
+    * ``n_rows_total`` is a positive count;
+    * every tile's ``ROLLCTAB`` (the ``roll_corrections.csv`` version sha it
+      was corrected with -- read from ``tiles[obsid]['rollctab']``, falling
+      back to the tile's own FITS header for a build written before PR #1091)
+      resolves to a KNOWN table version (``roll_table_versions()``), and that
+      version's ``delta_roll_arcsec`` for the tile's own (10678, observation)
+      agrees with the CURRENT table's value for the same row to <1e-9" --
+      PR #1091 review, Blocking 2.  The 68 real tiles were corrected with six
+      different table versions; this checks the VALUE each tile was actually
+      corrected with, never a single shared sha.
 
     Returns a summary dict for MANIFEST.json / the README on success.
     """
@@ -2866,6 +3080,69 @@ def check_joint_catalog(build_dir):
             f"{prov_path}: n_rows_total={n_rows_total!r} -- REFUSING an "
             f"empty or malformed build.")
 
+    # PR #1091 review, Blocking 2: per-tile roll-table provenance.  Six
+    # different `roll_corrections.csv` versions corrected the 68 real input
+    # tiles; checked here is that each tile's OWN table version agrees with
+    # the CURRENT table's value for that tile's (program, observation) --
+    # never a single shared sha, which the six versions do not share.
+    program = _field_program("gc-treasury")
+    table_versions = roll_table_versions()
+    current_sha = current_roll_table_sha()
+    current_rows = table_versions.get(current_sha)
+    if current_rows is None:
+        raise JointCatalogGateError(
+            f"the CURRENT roll_corrections.csv (sha1:{current_sha}) could not "
+            f"be resolved among this repo's known roll-table versions -- "
+            f"cannot verify any tile's roll correction.")
+    roll_tables = {}
+    for obsid, t in sorted(tiles.items()):
+        rollctab = t.get("rollctab")
+        if not rollctab:
+            tile_path = t.get("path")
+            if tile_path and os.path.isfile(tile_path):
+                rollctab = _read_header_rollctab(tile_path)
+        if not rollctab:
+            raise JointCatalogGateError(
+                f"{prov_path}: tile {obsid} carries no ROLLCTAB (neither in "
+                f"the provenance nor its on-disk FITS header) -- cannot "
+                f"verify which roll_corrections.csv version corrected it "
+                f"(PR #1091 review, Blocking 2).")
+        # The real 68 tiles were stamped by an older `catalog_roll_correction`
+        # whose ROLLCTAB value reads 'roll_corrections.csv sha1:<12hex>' (free
+        # text, then the sha) rather than the current writer's bare
+        # 'sha1:<12hex>' -- `search`, not `match`, so either form resolves.
+        m = re.search(r"sha1:([0-9a-f]{12})\b", str(rollctab))
+        if not m:
+            raise JointCatalogGateError(
+                f"{prov_path}: tile {obsid} ROLLCTAB={rollctab!r} carries no "
+                f"'sha1:<12hex>' token.")
+        sha = m.group(1)
+        tile_rows = table_versions.get(sha)
+        if tile_rows is None:
+            raise JointCatalogGateError(
+                f"{prov_path}: tile {obsid}'s roll table sha1:{sha} "
+                f"(ROLLCTAB) does not match any version of "
+                f"roll_corrections.csv known to this repo's git history -- "
+                f"cannot verify its correction.")
+        key = (program, obsid)
+        tile_value = tile_rows.get(key)
+        current_value = current_rows.get(key)
+        if tile_value is None or current_value is None:
+            raise JointCatalogGateError(
+                f"{prov_path}: tile {obsid} -- no delta_roll_arcsec row for "
+                f"(program={program}, observation={obsid}) in "
+                f"{'its own (sha1:' + sha + ')' if tile_value is None else 'the CURRENT'} "
+                f"roll table version.")
+        if abs(tile_value - current_value) > 1e-9:
+            raise JointCatalogGateError(
+                f"{prov_path}: tile {obsid} was corrected with roll table "
+                f"sha1:{sha} (delta_roll_arcsec={tile_value}\"), which "
+                f"disagrees with the CURRENT table's value for "
+                f"(program={program}, observation={obsid}) "
+                f"(delta_roll_arcsec={current_value}\") -- REFUSING to "
+                f"stage (PR #1091 review, Blocking 2).")
+        roll_tables[f"sha1:{sha}"] = roll_tables.get(f"sha1:{sha}", 0) + 1
+
     return {
         "n_rows_total": n_rows_total,
         "n_tiles": prov.get("n_tiles"),
@@ -2881,6 +3158,8 @@ def check_joint_catalog(build_dir):
         # and what the README's joint-catalog section needs to describe the
         # dedup that produced this table.
         "dedup_radius_arcsec": prov.get("dedup_radius_arcsec"),
+        "roll_tables": roll_tables,
+        "roll_value_check": "per-observation values match current table",
     }
 
 
@@ -2911,7 +3190,6 @@ def stage_joint_catalog(field, version, release_root, build_dir=None,
     summary = check_joint_catalog(chosen)   # raises before anything is written
 
     field_dir = field_release_dir(field, version, release_root)
-    field_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = field_dir / "MANIFEST.json"
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text())
@@ -2929,6 +3207,19 @@ def stage_joint_catalog(field, version, release_root, build_dir=None,
             "globus_https_base": GLOBUS_HTTPS_BASE, "files": [],
         }
 
+    # PR #1091 review, Blocking 1: a roll-corrected joint catalog must never be
+    # staged beside exposures whose own image WCS carries a different (or no)
+    # roll.  gc-treasury ships no mosaic, so there is no mosaic-side same-run
+    # gate to have caught this instead.  Checked against whatever exposures
+    # this release ALREADY carries -- raises BEFORE field_dir is created or
+    # anything is written.
+    existing_exposure_srcs = [f["src"] for f in manifest.get("files", [])
+                              if f.get("category") == exposure_bundle.EXPOSURE_CATEGORY]
+    if existing_exposure_srcs:
+        current_rows = roll_table_versions().get(current_roll_table_sha(), {})
+        check_frames_roll_corrected(field, existing_exposure_srcs, current_rows)
+
+    field_dir.mkdir(parents=True, exist_ok=True)
     prov_path = sorted(chosen.glob("*_joint_nircam.prov.json"))[0]
     stem = prov_path.name[:-len(".prov.json")]
     fits_src = chosen / f"{stem}.fits"
@@ -3642,7 +3933,7 @@ def main(argv=None):
                 args.field, args.version, args.release_root,
                 from_disk=args.exposures_from_disk,
                 allow_older=args.allow_older_version)
-        except FrozenReleaseError as err:
+        except (JointCatalogGateError, FrozenReleaseError) as err:
             print(f"\n{err}", file=sys.stderr)
             return 2
         if field_dir is None:
