@@ -84,9 +84,10 @@ bound).  `verify_promq_b.py` (`data/verify_promq_b.json`):
 | refused: NaN qfit, S/N > 0 | 9 | 21 | 0 |
 | refused: S/N ≤ 0 or non-finite | 6 | 39 | 2 |
 | refused and in the #1015 catalog | 0 | 0 | 0 |
-| bound-dependent (k = 0 and not k = 10⁻⁶) | pending (`promqeb`) | | |
-| k = 10⁻⁶ rows k = 5 does not keep | pending (`promqeb`) | | |
-| refused = bound-dependent with k_eff > 5 or none | pending (`promqeb`) | | |
+| k = 10⁻⁶ kept | 384,474 | 405,998 | 20,831 |
+| bound-dependent (k = 0 and not k = 10⁻⁶) | 5,081 | 7,948 | 800 |
+| k = 10⁻⁶ rows k = 5 does not keep | 0 | 0 | 0 |
+| refused = bound-dependent with k_eff > 5 or none | yes | yes | yes |
 
 The refused sources without a finite k_eff form two groups.  A NaN qfit at
 positive S/N fails the bound by rule (`k_eff` does not apply to it), so
@@ -106,11 +107,42 @@ Errors are binomial on the match fraction,
 
 ### Choice of k: realness of each k_eff band
 
-The k_eff bands on this base need the k = 10⁻⁶ replay (`promqeb`, queued);
-this section then gets the current-base table and `kband_realness.png`.
-The refused bands (k_eff > 5) on this base are in the next section.  The
-band study on the #1018-era base, where the prominence-keep additions are
-`prom2` over #1015 (`KBAND_VARIANT=prom2 python kband_fig.py`):
+On this base the bound-dependent set (`promq0b & ~promqeb`) is split by
+k_eff (`kband_qsnr.py <field> promq0b-promqeb`,
+`data/kband_qsnr_<field>_promq0b_minus_promqeb.json`):
+
+![](kband_realness.png)
+
+Left: realness of the sources in each k_eff band, that is, the sources a
+step of k from the band's lower to its upper edge admits.  Right: cumulative
+admitted sources against k; the dashed lines are the totals with the bound
+off (k = 0).
+
+| k_eff band | Brick | Sgr B2 | W51 |
+|---|---|---|---|
+| ≤ 3 | 1,821 at 1.02 ± 0.02 | 1,471 at 1.10 ± 0.01 | 223 at 1.41 ± 0.02 |
+| 3–3.5 | 1,093 at 1.17 ± 0.03 | 885 at 1.17 ± 0.02 | 110 at 1.50 ± 0.05 |
+| 3.5–4 | 663 at 0.99 ± 0.04 | 807 at 1.05 ± 0.02 | 97 at 1.20 ± 0.09 |
+| 4–4.5 | 313 at 0.82 ± 0.06 | 608 at 1.02 ± 0.03 | 67 at 0.94 ± 0.11 |
+| 4.5–5 | 205 at 0.61 ± 0.07 | 442 at 0.96 ± 0.03 | 47 at 0.47 ± 0.14 |
+| **5–5.5 (refused from here)** | 146 at 0.37 ± 0.08 | 378 at 0.81 ± 0.04 | 34 at 0.34 ± 0.12 |
+| 5.5–6 | 117 at 0.47 ± 0.09 | 299 at 0.70 ± 0.04 | 24 at 0.41 ± 0.17 |
+| 6–8 | 246 at 0.28 ± 0.05 | 796 at 0.56 ± 0.02 | 63 at 0.08 ± 0.05 |
+| 8–12 | 207 at 0.05 ± 0.04 | 852 at 0.37 ± 0.02 | 62 at 0.10 ± 0.06 |
+| 12–20 | 155 at 0.06 ± 0.04 | 798 at 0.27 ± 0.02 | 46 at 0.22 ± 0.08 |
+| > 20 | 100 at 0.04 ± 0.04 | 552 at 0.20 ± 0.02 | 25 at 0.12 ± 0.08 |
+| no k_eff (NaN qfit or S/N) | 15 at 0.04 ± 0.14 | 60 at 0.30 ± 0.09 | 2 (0 matched) |
+
+The refused rows (5–5.5 and below) sum to 986 / 3,735 / 256, the refused
+counts above.  On this base the Brick reads 0.61 ± 0.07 in the 4.5–5 band
+and 0.37 ± 0.08 in the 5–5.5 band, a 2.3σ difference.  W51 reads 0.47 ± 0.14
+and 0.34 ± 0.12, within 1σ.  Sgr B2 crosses 0.5 between the 6–8 and 8–12
+bands.  k = 4.5 would refuse 205 / 442 / 47 more sources at 0.61 / 0.96 /
+0.47; k = 6 would keep 263 / 677 / 58 more at 0.42 / 0.76 / 0.37.  These
+are the same pattern as on the #1018-era base below, so k = 5 stays.
+
+The band study on the #1018-era base, where the prominence-keep additions
+are `prom2` over #1015 (`KBAND_VARIANT=prom2 python kband_fig.py`):
 
 ![](kband_realness_1018era.png)
 
@@ -259,10 +291,36 @@ stars the F182M catalog misses near spikes and some Paα knots.
 
 ## Reference fields (m7, injection seeds 1–10 + clean run)
 
-Queued: the four reference fields at seeds 1–10 plus the clean run for
-`base1016` (ef01f404) and `promq5b` (this branch), submitted with
-`python -m jwst_gc_pipeline.photometry.reference_fields.run --variant <v>`.
-The per-field pass/fail and the metric differences go here when they finish.
+The four reference fields (`docs/evidence/faint_reference_fields`) at the
+clean run plus injection seeds 1–10, for `base1016` (ef01f404) and `promq5b`
+(36764218; later commits on this branch change only test allowlists and
+evidence), run with
+`python -m jwst_gc_pipeline.photometry.reference_fields.run --variant <v>` and
+scored with `evaluate --variant promq5b --baseline base1016.json`
+(`data/reffield_base1016.json`, `data/reffield_promq5b.json`).  Phase m7,
+inner box, pooled over the 11 runs of each field.  The completeness bins
+are S/N 40–80, 80–160, 160–320 and 320–640 on `superdense` and S/N 5–10,
+10–20, 20–40 and 40–80 on the other fields.
+
+| field | variant | injected completeness per S/N bin | resid excess /as² | over-subtracted /as² | bias mag | result |
+|---|---|---|---|---|---|---|
+| `superdense` | base1016 | 1/51, 5/64, 18/74, 26/51 | 1.66 | 1.18 | −0.009 | pass |
+| | promq5b | 1/51, 5/64, 18/74, 26/51 | 1.66 | 1.25 | −0.018 | pass |
+| `dense_bright` | base1016 | 0/49, 1/69, 12/58, 32/64 | 2.35 | 1.25 | +0.032 | pass |
+| | promq5b | 0/49, 1/69, 12/58, 32/64 | 2.29 | 1.18 | +0.032 | pass |
+| `bright_modest` | base1016 | 0/53, 0/56, 3/68, 34/62 | 0.21 | 0.07 | −0.130 | pass |
+| | promq5b | 0/53, 0/56, 3/68, 34/62 | 0.21 | 0.07 | −0.130 | pass |
+| `dark` | base1016 | 0/62, 18/55, 42/61, 47/62 | 1.32 | 1.11 | +0.031 | fail |
+| | promq5b | 0/62, 18/55, 42/61, 47/62 | 1.32 | 1.11 | +0.031 | fail |
+
+The bound changes no injected star's recovery on any field (paired sign
+test: +0/−0 in every bin).  Across the 44 runs the inner-box m7 vetted
+catalogs differ by 5 sources out of about 2,900 (4 kept only by `promq5b`,
+1 only by `base1016`).  Five differing sources are too few to test the
+full-frame realness results above.  `dark` fails at both variants (10–20
+completeness 18/55 < 0.35, residual excess 1.32 > 1.25).  It fails because
+the own-band m7 seed and the loose roundness window are off on this base;
+the default-on PR turns them on and passes `dark`.
 
 ## Tests
 
@@ -312,6 +370,16 @@ python lsky_snr_diag.py <field> base1016-promq5b # neighbour distance and catalo
 python img_realness.py <field> base1016-promq5b  # image test
 python added_gallery.py <field> promq5b@base1016 ../refused_<field>.png 4 lost
 GALLERY_GROUP=nbr python added_gallery.py <field> promq5b@base1016 ../refused_<field>_nbr.png 4 lost
+```
+
+Reference fields (from a checkout of the code under test; the runs go to
+SLURM):
+
+```
+python -m jwst_gc_pipeline.photometry.reference_fields.run --variant promq5b
+python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant base1016 --json base1016.json
+python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant promq5b --json promq5b.json \
+    --baseline base1016.json
 ```
 
 `<field>` is `brick`, `sgrb2` or `w51`.  The scripts write their JSON next

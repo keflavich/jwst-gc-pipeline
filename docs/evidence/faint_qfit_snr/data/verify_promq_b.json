@@ -27,7 +27,11 @@
   "refused_nan_qfit_snr_pos_rel_err": 0.0,
   "refused_snr_not_pos_in_footprint": 5,
   "refused_snr_not_pos_rel": 0.5248597400187435,
-  "refused_snr_not_pos_rel_err": 0.4694488229339109
+  "refused_snr_not_pos_rel_err": 0.4694488229339109,
+  "n_promqeb": 384474,
+  "promqeb_not_in_promq5b": 0,
+  "bound_dependent": 5081,
+  "refused_eq_dependent_keff_gt5": true
  },
  "sgrb2": {
   "n_seed": 408591,
@@ -57,7 +61,11 @@
   "refused_nan_qfit_snr_pos_rel_err": 0.12884870252819294,
   "refused_snr_not_pos_in_footprint": 39,
   "refused_snr_not_pos_rel": 0.3342455254641706,
-  "refused_snr_not_pos_rel_err": 0.12430943746882576
+  "refused_snr_not_pos_rel_err": 0.12430943746882576,
+  "n_promqeb": 405998,
+  "promqeb_not_in_promq5b": 0,
+  "bound_dependent": 7948,
+  "refused_eq_dependent_keff_gt5": true
  },
  "w51": {
   "n_seed": 20041,
@@ -87,6 +95,10 @@
   "refused_nan_qfit_snr_pos_rel_err": null,
   "refused_snr_not_pos_in_footprint": 2,
   "refused_snr_not_pos_rel": 0.0,
-  "refused_snr_not_pos_rel_err": 0.0
+  "refused_snr_not_pos_rel_err": 0.0,
+  "n_promqeb": 20831,
+  "promqeb_not_in_promq5b": 0,
+  "bound_dependent": 800,
+  "refused_eq_dependent_keff_gt5": true
  }
 }
