@@ -2780,18 +2780,29 @@ def roll_table_versions():
 
     root = _roll_table_repo_root()
     out = {}
-    log = subprocess.run(
-        ["git", "-C", root, "log", "--format=%H", "--", ROLL_TABLE_REL],
-        capture_output=True, text=True, check=True).stdout
+    try:
+        log = subprocess.run(
+            ["git", "-C", root, "log", "--format=%H", "--", ROLL_TABLE_REL],
+            capture_output=True, text=True, check=True).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        # No git checkout (or no git binary): the tile ROLLCTAB shas cannot
+        # be resolved, so refuse like every other gate failure (exit 2).
+        raise JointCatalogGateError(
+            f"cannot read the git history of {ROLL_TABLE_REL} under {root} "
+            f"to resolve tile roll-table versions: {exc}") from exc
     for commit in log.split():
         # RAW BYTES, not `text=True`: `table_sha`/`ROLLCTAB` hash the file's
         # exact on-disk bytes, and decoding+re-encoding through `text=True`
         # can normalize line endings and change the sha1 -- it did, for the
         # real PR #1004 commit (90709b3...'s sha1 came out 931962344935
         # instead of the real 1721e98c8599 this way).
-        content = subprocess.run(
-            ["git", "-C", root, "show", f"{commit}:{ROLL_TABLE_REL}"],
-            capture_output=True, check=True).stdout
+        try:
+            content = subprocess.run(
+                ["git", "-C", root, "show", f"{commit}:{ROLL_TABLE_REL}"],
+                capture_output=True, check=True).stdout
+        except subprocess.CalledProcessError as exc:
+            raise JointCatalogGateError(
+                f"cannot read {ROLL_TABLE_REL} at {commit}: {exc}") from exc
         sha = hashlib.sha1(content).hexdigest()[:12]
         if sha in out:
             continue

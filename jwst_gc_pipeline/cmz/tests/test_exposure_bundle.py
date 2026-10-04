@@ -2247,6 +2247,15 @@ def test_exposures_then_joint_catalog_share_one_release(sr, tmp_path,
 # Roll-table provenance gate (PR #1091 review, Blocking 1 + 2)
 # ---------------------------------------------------------------------------
 
+def test_roll_table_versions_without_git_checkout_refuses(sr, tmp_path,
+                                                        monkeypatch):
+    """A tree with no git history cannot resolve tile ROLLCTAB shas; that is
+    a gate refusal (JointCatalogGateError -> exit 2), not a traceback."""
+    monkeypatch.setattr(sr, "_roll_table_repo_root", lambda: str(tmp_path))
+    with pytest.raises(sr.JointCatalogGateError, match="git history"):
+        sr.roll_table_versions()
+
+
 def test_roll_table_versions_includes_the_current_file(sr):
     """Real git history, no monkeypatching: the function this module's gate
     is built on must at minimum resolve the CURRENT working-tree file, even
