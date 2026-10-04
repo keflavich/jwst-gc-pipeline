@@ -20,7 +20,8 @@ import pytest
 from scipy.ndimage import binary_dilation
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
-    recovered_cap_flux, recovered_cap_region, recovered_core_peak)
+    nearest_seed_cell, recovered_cap_flux, recovered_cap_region,
+    recovered_core_peak)
 
 
 def _disk(shape, x, y, r):
@@ -260,3 +261,78 @@ def test_cap_is_nan_without_a_measured_pixel_or_psf():
     cap, pfrac = recovered_cap_flux(np.where(far, 50.0, cutout), far,
                                     np.zeros(psf.shape, bool), psf_far)
     assert np.isnan(cap)
+
+
+# --------------------------------------------------------------------------
+# Blended components: the deblend gives every seed of a SAT component the
+# component's label, so the cap must read only this seed's share
+# --------------------------------------------------------------------------
+
+def test_nearest_seed_cell_splits_at_the_midline():
+    cell = nearest_seed_cell((21, 41), (10, 10), [(10, 30)])
+    assert cell[10, :20].all() and not cell[10, 21:].any()
+    assert cell[10, 20]                       # a tie stays with both seeds
+    assert nearest_seed_cell((5, 5), (2, 2), []).all()
+
+
+def _moffat_unit_psf(shape=(41, 41), x=12.0, y=20.0, a=1.5, beta=2.5):
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    p = (1 + ((xx - x) ** 2 + (yy - y) ** 2) / a ** 2) ** -beta
+    return p / p.sum()
+
+
+def _blend_scene():
+    """wd2 F150W nrcb3 (1893.7, 1338.2), arm with the first-frame anchor: a
+    16.3 mag star A shares SAT component 521 with a 12.9 mag sibling B
+    10.6 px away.  A's peak is unmeasured and its own ring lost; B's
+    recovered ring holds B's model-subtracted residual, here 10% of A's
+    model.  The cap read that residual where A's PSF is 0.0044 of its peak
+    and cut A from 1.5e4 to 1.6e3."""
+    shape = (41, 41)
+    flux_a = 1.5e4
+    psf_a = _moffat_unit_psf(shape, x=12.0, y=20.0)
+    a_core = _disk(shape, 12, 20, 1)
+    b_core = _disk(shape, 23, 20, 4)
+    comp = _disk(shape, 12, 20, 2) | _disk(shape, 23, 20, 6)
+    comp[19:22, 12:24] = True
+    deep = a_core | b_core
+    deep_exp = binary_dilation(deep, iterations=2)
+    unrec = _disk(shape, 12, 20, 3) & ~a_core
+    cutout = flux_a * psf_a
+    b_ring = deep_exp & _disk(shape, 23, 20, 6) & ~b_core
+    cutout[b_ring] *= 0.1
+    cutout[deep] = np.nan
+    return cutout, psf_a, flux_a, comp, deep, deep_exp, unrec, b_core
+
+
+def test_blend_whole_component_region_reads_the_sibling_ring():
+    """The pre-fix behaviour: the component-wide region and no PSF floor
+    cap A to a tenth of its flux."""
+    cutout, psf_a, flux_a, comp, deep, deep_exp, unrec, _ = _blend_scene()
+    region = recovered_cap_region(comp, deep, deep_exp)
+    peak, lost, _ = recovered_core_peak(cutout, region, unrec)
+    assert np.isfinite(peak) and lost < 0.2
+    cap, pfrac = recovered_cap_flux(cutout, region, unrec, psf_a,
+                                    min_psf_frac=0.0)
+    assert pfrac < 0.005
+    assert cap == pytest.approx(0.1 * flux_a, rel=0.01)
+
+
+def test_blend_cap_skipped_below_the_psf_floor():
+    cutout, psf_a, _, comp, deep, deep_exp, unrec, _ = _blend_scene()
+    region = recovered_cap_region(comp, deep, deep_exp)
+    cap, pfrac = recovered_cap_flux(cutout, region, unrec, psf_a)
+    assert np.isnan(cap)
+    assert 0 < pfrac < 0.005
+
+
+def test_blend_own_seed_region_leaves_out_the_sibling_core():
+    """With A's share of the component only, B's core and most of its ring
+    leave the region, A's lost ring dominates it, and the cap is skipped."""
+    cutout, psf_a, _, comp, deep, deep_exp, unrec, b_core = _blend_scene()
+    cell = nearest_seed_cell(comp.shape, (20, 12), [(20, 23)])
+    region = recovered_cap_region(comp, deep, deep_exp, own_cell=cell)
+    assert not (region & b_core).any()
+    assert region[20, 12]
+    peak, lost, _ = recovered_core_peak(cutout, region, unrec)
+    assert np.isnan(peak) and lost >= 0.2
