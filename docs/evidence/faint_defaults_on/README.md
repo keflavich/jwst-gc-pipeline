@@ -140,6 +140,16 @@ Injected stars gained / lost (exact sign test):
   `int3on` to within a few injected stars per field; the remaining
   differences come from the code between 94033cf0 and d1ea6b73.
 
+### Run at the PR head: `defonm`, `defownm` (on main a503f985)
+
+Main gained satstar changes (#1067, #1069, #1072) after d1ea6b73.
+`defonm` ran the first version of this PR on main (9cc105c2, both options
+on by default).  Its scores and injected-star recoveries equal `defon`'s in
+every field and bin (+0/−0 everywhere, `reffield_defonm_vs_defon.json`),
+so the satstar changes leave the reference fields unchanged.  `defownm`
+runs this PR's head (a689fcdd) at its defaults on all four fields and is
+the provenance-checked run for `test_reference_field_passes`.
+
 ## Figures
 
 `figures/defoff_vs_defown/<field>_<filter>_m7_s<seed>.png` (same code, this
@@ -280,9 +290,19 @@ section).  It stays opt-in.
   loose-only seeds were never followed through m7 and vetting on a full
   frame.  A run that opts in with `-1` gets AUTO (0.8 on star fields).
 - **Sgr B2.**  `sgrb2` is not an extended-emission target, so own-band is
-  on there.  `dense_bright` (in the Sgr B2 envelope) gains stars and
-  loses over-subtracted cores, and also has background holes of −1.3σ
-  (median) at dropped seeds.
+  on there.  On `dense_bright` (in the Sgr B2 envelope) `defown` vs
+  `defoff` gives no significant change in recovered injected stars (10–20:
+  +1/−0, p = 1; 20–40: +3/−1, p = 0.62; 40–80: +4/−0, p = 0.12).  The
+  residual excess falls from 2.35 to 1.73 per arcsec² and the
+  over-subtracted-core density stays at 1.25 per arcsec² (seed spread
+  ±0.08 and ±0.14).  Next to bright stars some new sources carry
+  over-subtracted marks (`figures/defoff_vs_defown`, cutouts A and B),
+  dropped seeds leave background holes of −1.3σ (median), and the clean
+  run has one ring companion (1.4 expected by chance).  Both
+  configurations pass the field.  Turning own-band off for Sgr B2 alone
+  needs its own target list: the extended-emission switch also sets the
+  NIRCam per-pass prominence gate, the robust-prominence threshold, the
+  structure-noise floor, the satstar fit settings and the in-field dedup.
 - **Other emission-rich targets.**  `cloudef`, `sgrc`, `arches` and `quint`
   are not in the extended-emission list, so own-band is on there; no
   reference field samples them (#1087).
