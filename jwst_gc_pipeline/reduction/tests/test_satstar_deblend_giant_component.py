@@ -144,6 +144,10 @@ def test_fof_core_radius_link_is_per_pair():
     assert any(np.allclose(c, (20.0, 21.5)) for c in out), out
     # one link for every centre (0.6 x the largest core) merges the pair too
     assert len(_fof_merge([core, near, p1, p2], link=0.6 * 9.6)) == 2
+    # the core link is 0.6 r = 5.76 px: a peak 5 px out merges, one 7 px out
+    # stays (it would merge at radius_frac = 1)
+    assert len(_fof_merge([core, (20.0, 25.0)], link=2, radii=[9.6, 0.0])) == 1
+    assert len(_fof_merge([core, (20.0, 27.0)], link=2, radii=[9.6, 0.0])) == 2
 
 
 def _core_and_pair_scene():
