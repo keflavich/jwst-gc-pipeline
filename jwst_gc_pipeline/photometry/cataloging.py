@@ -24,6 +24,7 @@ with legacy ``iter2/iter3/iter4`` ones.
 The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 (BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
+import functools
 import glob
 
 import numpy as np
@@ -1372,10 +1373,99 @@ def _emission_keep_miri(prominence, min_prominence):
     return np.isfinite(prominence) & (prominence >= min_prominence)
 
 
+def _tile_percentile_at(image, x, y, tile, q):
+    """``q``-th percentile of ``image`` in ``tile`` x ``tile`` px tiles,
+    bilinearly interpolated between tile centres to the pixel positions
+    (x, y).  Tiles less than half finite are NaN; NaN at positions whose
+    interpolation touches one.
+
+    Tiles of 32 px or more are sampled at every 2nd pixel, and an odd
+    ``tile`` is then rounded down to the next even size.  Memory: one
+    float64 copy of ``image`` (padded to whole tiles), e.g. 0.45 GB for a
+    4844 x 11542 px NIRCam detector i2d."""
+    import warnings
+    from scipy.ndimage import map_coordinates
+    # every 2nd pixel of a large tile: same percentile, a quarter of the memory
+    step = 2 if tile >= 32 else 1
+    tile = int(tile) - int(tile) % step
+    ny, nx = image.shape
+    gy, gx = -(-ny // tile), -(-nx // tile)
+    pad = np.full((gy * tile, gx * tile), np.nan)
+    pad[:ny, :nx] = image
+    ts = tile // step
+    sub = pad[::step, ::step][:gy * ts, :gx * ts]
+    blocks = sub.reshape(gy, ts, gx, ts).transpose(0, 2, 1, 3).reshape(gy, gx, -1)
+    nfin = np.sum(np.isfinite(blocks), axis=-1)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)    # all-NaN tiles
+        grid = np.nanpercentile(blocks, q, axis=-1)
+    grid[nfin < ts * ts // 2] = np.nan
+    # tile centre (i + 0.5) * tile - 0.5 in pixels -> fractional tile index
+    ty = (np.asarray(y, float) + 0.5) / tile - 0.5
+    tx = (np.asarray(x, float) + 0.5) / tile - 0.5
+    ty = np.clip(ty, 0, gy - 1)
+    tx = np.clip(tx, 0, gx - 1)
+    out = map_coordinates(grid, [ty, tx], order=1, mode='nearest', cval=np.nan)
+    return out
+
+
+def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
+                        r_noise=(4.0, 10.0)):
+    """PSF-core flux above the local level, and its noise, at each position.
+
+    core  = sum(data, r <= r_core) - npix_core * median(data, r_ring[0] <= r <= r_ring[1])
+    sigma = s * sqrt(npix_core * (1 + npix_core / npix_ring)), with s the
+            lower-half MAD of the r_noise annulus (the prominence_robust
+            spread), so structure noise enters as well as pixel noise.
+
+    Positions within r_noise[1] px of the image edge, or with fewer than 10
+    finite annulus pixels, get NaN.  Returns (core, sigma).
+    """
+    n = len(xpix)
+    core = np.full(n, np.nan, dtype=float)
+    sigma = np.full(n, np.nan, dtype=float)
+    ny, nx = data.shape
+    h = int(np.ceil(r_noise[1]))
+    yo, xo = np.mgrid[-h:h + 1, -h:h + 1]
+    r0 = np.hypot(xo, yo)
+    noise_mask = (r0 >= r_noise[0]) & (r0 <= r_noise[1])
+    for i in range(n):
+        if not (np.isfinite(xpix[i]) and np.isfinite(ypix[i])):
+            continue
+        ix, iy = int(round(float(xpix[i]))), int(round(float(ypix[i])))
+        if not (h <= ix < nx - h and h <= iy < ny - h):
+            continue
+        st = data[iy - h:iy + h + 1, ix - h:ix + h + 1]
+        r = np.hypot(xo - (xpix[i] - ix), yo - (ypix[i] - iy))
+        cm = r <= r_core
+        rm = (r >= r_ring[0]) & (r <= r_ring[1])
+        ring = st[rm]
+        ring = ring[np.isfinite(ring)]
+        ann = st[noise_mask]
+        ann = ann[np.isfinite(ann)]
+        if ring.size < 5 or ann.size < 10 or not np.all(np.isfinite(st[cm])):
+            continue
+        low = ann[ann <= np.median(ann)]
+        spread = 1.4826 * np.median(np.abs(low - np.median(low)))
+        if not spread > 0:
+            continue
+        ncore = int(cm.sum())
+        core[i] = float(np.sum(st[cm])) - ncore * float(np.median(ring))
+        sigma[i] = spread * np.sqrt(ncore * (1.0 + ncore / ring.size))
+    return core, sigma
+
+
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
+                              star_prom_min=0.0,
+                              star_prom_peak_min=0.0,
+                              star_prom_robust_min=0.0,
+                              star_prom_robust_conc=0.0,
+                              star_prom_robust_conc_snr=5.0,
+                              conc_ref_min_n=5,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
+                              snr_floor_propagated=False,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
@@ -1386,10 +1476,16 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm_qfit_max=0.6,
                               nmatch_confirm_maxpos_mas=0.0,
                               ext_prom_min=0.0,
+                              ext_prom_exempt_qfit=0.0,
+                              ext_prom_exempt_snr=40.0,
+                              ext_prom_exempt_prom_min=2.0,
                               sky_clean_keep=True,
                               sky_clean_max_sky_snr=2.0,
                               sky_clean_prom_min=5.0,
                               sky_clean_snr_min=3.0,
+                              sky_clean_local_arcsec=0.0,
+                              sky_clean_local_max_err=2.0,
+                              err_i2d_image=None,
                               nmatch_confirm_strong=0,
                               low_fit_quality_qfit=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
@@ -1401,6 +1497,15 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         OR (flags in keep_flags)                  # central-saturation real star
         OR (peak_SB > peak_over_bkg * local_bkg)  # bright real star
     AND (local_snr >= local_snr_min where available)
+    With ``star_prom_peak_min > 0`` the peak_SB branch also needs
+    ``prominence >= star_prom_peak_min`` wherever the data-i2d prominence is
+    measured.  With ``star_prom_min > 0``, ``prominence >= star_prom_min``
+    (OR, with ``star_prom_robust_min > 0``,
+    ``prominence_robust >= star_prom_robust_min``) keeps a source on its own.
+    ``star_prom_peak_min >= star_prom_min`` reduces the branch to the
+    prominence test wherever prominence is measured.
+    With ``star_prom_robust_conc > 0`` the robust branch also needs a
+    PSF-concentrated core (see the block comment at the branch).
     AND (not model_overshoot, if that column exists and drop_overshoot).
 
     SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
@@ -1408,6 +1513,19 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     a "star turned from extended emission" is physically impossible, so the
     qfit gate (which conflates blend-degraded real stars with emission knots)
     is replaced by prominence + S/N alone.  See the block comment below.
+
+    ``snr_floor_propagated``: the local S/N floor (``local_snr_min``) uses
+    flux / flux_err_prop, the uncertainty of the merged flux, in place of
+    flux / flux_err, the mean per-frame uncertainty (larger by ~sqrt(nmatch)).
+    Catalogs without flux_err_prop keep flux_err.  The sky-clean floor
+    (``sky_clean_snr_min``) stays on flux / flux_err: that tier ignores qfit,
+    and its threshold was set on the per-frame S/N.  The bright-isolated keep
+    (``snr_high_keep``) also stays on flux / flux_err.  flux_err_prop
+    propagates the per-frame formal errors as if they were independent, so it
+    carries only the frame-to-frame part of the uncertainty.  Error terms
+    common to every frame -- the shared background model, the shared
+    neighbour model and the shared seed position -- do not average down, and
+    they are largest for faint stars on structured background.
 
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
@@ -1442,6 +1560,27 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     else:
         snr = np.full(n, np.inf)
 
+    # S/N for the FLOORS.  A merged catalog's flux is the mean over nmatch
+    # per-frame fits, but its flux_err is the weighted MEAN of the per-frame
+    # errors -- one frame's uncertainty.  The uncertainty of the merged flux is
+    # flux_err_prop = 1/sqrt(sum 1/sigma_i^2) ~ flux_err/sqrt(nmatch_good)
+    # (Brick f182m_merged_o001_indivexp_merged_resbgsub_m6_dao_basic.fits,
+    # 506,114 rows: median flux_err/flux_err_prop 3.16, median
+    # sqrt(nmatch_good) 3.16, median sqrt(nmatch) 3.74),
+    # so a per-frame S/N floor of 5 is a ~5*sqrt(nmatch) floor on the measured
+    # flux: on the dark reference field it removed injected stars up to
+    # S/N_true ~20 in m2-m4.  The bright-isolated keep stays on the per-frame
+    # S/N (its qfit partner is itself a per-frame mean), and so does
+    # the sky-clean floor below (that tier ignores qfit; moving its S/N 3 floor
+    # onto flux_err_prop admits per-frame S/N ~1 fits).
+    snr_floor = snr
+    if (snr_floor_propagated and 'local_snr' not in t.colnames
+            and 'flux' in t.colnames and 'flux_err_prop' in t.colnames):
+        _fep = np.asarray(t['flux_err_prop'], dtype=float)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            _snr_prop = np.asarray(t['flux'], dtype=float) / _fep
+        snr_floor = np.where(np.isfinite(_snr_prop) & (_fep > 0), _snr_prop, snr)
+
     # peak surface brightness (3x3 box max) AND annulus-MAD PROMINENCE from the
     # data i2d, if provided.  Prominence = (core peak r<1.5) - (median in a
     # 4-10px annulus) over the annulus MAD: it measures whether the "star" rises
@@ -1463,12 +1602,23 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     _recover_on = (_qrec > qfit_max) and (min_prominence <= 0)
     peaksb = np.full(n, np.nan, dtype=float)
     prominence = np.full(n, np.nan, dtype=float)
+    # neighbour-robust prominence (25th-pct floor, lower-half MAD) for the
+    # star keep; computed whatever MIRI_DAOPHOT_PROM_ROBUST selects for
+    # 'prominence'
+    prominence_robust = np.full(n, np.nan, dtype=float)
     # robust LOCAL EMISSION floor: 25th percentile of the same 4-10px annulus.
     # The low percentile resists stellar-wing / neighbour contamination (in a
     # dense clump the annulus median is pulled up by PSF wings, but the darkest
     # quartile still samples the true inter-star sky), so it measures the
     # DIFFUSE emission level at the source, not the crowding.
     ann_floor = np.full(n, np.nan, dtype=float)
+    # median i2d ERR over the same annulus (the LOCAL sky-clean test's noise unit)
+    ann_err = np.full(n, np.nan, dtype=float)
+    # pixel positions on the data i2d; None when there is no data i2d
+    xx = yy = None
+    # the brightest pixel of the 7x7 box on the data_i2d lies within 1 px of
+    # the fitted position (read by the prominence-floor exemption below)
+    local_peak = np.zeros(n, dtype=bool)
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
         from astropy.coordinates import SkyCoord
         sc = t['skycoord']
@@ -1495,10 +1645,18 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             if _H <= ix < nx - _H and _H <= iy < ny - _H:
                 st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
                 core = np.nanmax(st[_cm])
+                _box7 = st[_H - 3:_H + 4, _H - 3:_H + 4]
+                if np.isfinite(core):
+                    local_peak[i] = core >= np.nanmax(_box7)
                 ann = st[_am]
                 annf = ann[np.isfinite(ann)]
                 if annf.size >= 10:
                     ann_floor[i] = np.percentile(annf, 25)
+                    if err_i2d_image is not None:
+                        _ea = err_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1][_am]
+                        _ea = _ea[np.isfinite(_ea) & (_ea > 0)]
+                        if _ea.size >= 10:
+                            ann_err[i] = np.median(_ea)
                 if annf.size >= 10 and np.isfinite(core):
                     if _prom_robust:
                         # neighbour-robust: 25th-pct emission FLOOR + lower-half
@@ -1513,12 +1671,19 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                         spread = 1.4826 * np.median(np.abs(annf - bg))
                     if np.isfinite(bg) and spread > 0:
                         prominence[i] = (core - bg) / spread
+                    _rbg = np.percentile(annf, 25)
+                    _low = annf[annf <= np.median(annf)]
+                    _rsp = (1.4826 * np.median(np.abs(_low - np.median(_low)))
+                            if _low.size > 5 else np.std(annf))
+                    if np.isfinite(_rbg) and _rsp > 0:
+                        prominence_robust[i] = (core - _rbg) / _rsp
 
     # Persist the data_i2d quality metrics on the catalog so every downstream
     # cut is reproducible.  'prominence' = (core peak - annulus median)/annulus
     # MAD on the data_i2d (rise above local emission; star-vs-emission); 'peak_sb'
     # = 3x3-box peak surface brightness.  NaN where no data_i2d / off the i2d.
     t['prominence'] = prominence
+    t['prominence_robust'] = prominence_robust
     t['peak_sb'] = peaksb
 
     # BRIGHT-ISOLATED keep (Mechanism 2): a real bright star whose qfit sits just
@@ -1537,10 +1702,107 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         & np.isfinite(qf) & (qf < qfit_high_keep_max)
         & (gsz <= 1)
     )
+    # BRIGHT-STAR branch.  peak_SB > peak_over_bkg * local_bkg needs
+    # local_bkg > 0, but local_bkg is fit on BACKGROUND-SUBTRACTED frames, so
+    # it scatters about zero and its sign decides the branch (W51 F187N m6:
+    # local_bkg > 0 for 61% of S/N 5-8 sources).  On continuum-confirmed
+    # F187N labels (a Pa-alpha knot has no F182M/F210M counterpart) the branch
+    # does not separate stars from emission: in W51 its admitted and rejected
+    # S/N 5-17 qfit-failing sources have the same purity (0.45 vs 0.48).
+    # The same-image prominence (rise above the local annulus, in annulus-MAD
+    # units) does separate them (prominence >= 5: 0.67 vs 0.24 in W51, 0.89 vs
+    # 0.52 in Sgr B2).  On a full-field Brick F182M m6 replay, the rate at
+    # which an independent visit (F200W) confirms a kept source, relative to
+    # kept sources of the same flux, rises smoothly with prominence: 0.18 at
+    # 2-3, 0.27 at 3-4, 0.40 at 4-5, 0.68 at 6-7, 0.94 at 8.5-10, > 1.1 above
+    # 10.  So prominence enters twice:
+    #   star_prom_peak_min > 0: the peak_SB branch also needs prominence >=
+    #     this.  On the Brick replay the peak_SB-kept sources a guard of 4
+    #     drops (16,809 of 377,837) are confirmed at 0.12 (prominence 1-2),
+    #     0.26 (2-3) and 0.36 (3-4) of the rate of kept stars of the same
+    #     flux; a guard of 5 would also drop the 4-5 band, confirmed at 0.52.
+    #   star_prom_min > 0: prominence >= this keeps a source on its own,
+    #     whatever the sign of local_bkg (Brick: the sources this adds at 7-10
+    #     are confirmed at 0.72 of the rate of kept stars, 1.07 at 10-20).
+    # Sources without a measured prominence (no data_i2d, within 10 px of the
+    # i2d edge) keep the plain peak_SB test.
+    # In a crowded field the annulus holds neighbours' PSF wings, which inflate
+    # the annulus MAD: real faint stars in the superdense reference field (NSC,
+    # F212N) read prominence 1.3-3.5 and were dropped.  star_prom_robust_min > 0
+    # also admits prominence_robust (25th-percentile annulus floor, lower-half
+    # MAD) >= star_prom_robust_min.  It is off by default: on the full-field
+    # Brick F182M replay the 21,540 sources it adds at robust >= 8 (with
+    # star_prom_min 5) are confirmed at 0.10 of the rate of kept stars, and on
+    # the F187N continuum labels the prominence_robust 6-10 band has purity
+    # 0.30-0.43.  On a narrow filament its floor reads the filament's dark
+    # sides (_auto_star_prom_robust_min, used for --manual-ext-star-prom-robust-min
+    # < 0, turns it off on extended-emission targets).
+    _peak_branch = np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)
+    if star_prom_peak_min > 0:
+        _peak_branch = _peak_branch & ~(np.isfinite(prominence)
+                                        & (prominence < float(star_prom_peak_min)))
+    if star_prom_min > 0:
+        _has_prom = np.isfinite(prominence)
+        _prom_ok = prominence >= float(star_prom_min)
+        if star_prom_robust_min > 0:
+            _rob_ok = prominence_robust >= float(star_prom_robust_min)
+            # CONCENTRATION guard on the robust branch.  Next to a bright star
+            # the 25th-percentile annulus floor reads the dark side of the
+            # star's wing, so a fit to a bump in the wing (PSF mismatch) reads
+            # a high robust prominence at a low plain prominence.  Such a fit
+            # takes flux from the neighbour's wing: its flux is not
+            # concentrated in the core like a PSF, and the residual core is
+            # over-subtracted.  Sgr B2 reference field (F187N, fix stack, no
+            # injections): of 48 sources with residual core matched-filter
+            # S/N < -7, 26 sit at prominence < 5 (robust median 13.5, F212N
+            # counterpart rate about half that of real stars at the same S/N).
+            # concentration = (core / flux) / median(core / flux of prominence
+            # >= 10, flags == 0 sources) [_core_concentration]; the branch
+            # refuses a source at concentration < star_prom_robust_conc whose
+            # core deficit (C_ref * flux - core) / sigma exceeds
+            # star_prom_robust_conc_snr.  At 0.6 / 5 on the reference fields
+            # (prominence < 5 sources): Sgr B2 refuses 14 of 26 over-subtracted
+            # sources and none of 7 injected stars or 120 well-subtracted
+            # sources; the superdense field (NSC) none of 13 injected stars;
+            # the dark field (Brick) 7 of 10 over-subtracted, none of 7
+            # injected.  Fewer than conc_ref_min_n calibration sources turns
+            # the guard off.
+            if (star_prom_robust_conc > 0 and xx is not None
+                    and 'flux' in t.colnames):
+                _flux = np.asarray(t['flux'], dtype=float)
+                _core, _csig = _core_concentration(
+                    data_i2d_image, np.asarray(xx, dtype=float),
+                    np.asarray(yy, dtype=float))
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    _conc = _core / _flux
+                _cal = (np.isfinite(_conc) & (_flux > 0)
+                        & np.isfinite(prominence) & (prominence >= 10)
+                        & ((flg == 0) | ~np.isfinite(flg)))
+                if int(_cal.sum()) >= int(conc_ref_min_n):
+                    _cref = float(np.median(_conc[_cal]))
+                    concentration = _conc / _cref
+                    t['core_concentration'] = concentration
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        _deficit = (_cref * _flux - _core) / _csig
+                    _diffuse = ((concentration < float(star_prom_robust_conc))
+                                & (_deficit > float(star_prom_robust_conc_snr)))
+                    _n_conc = int(np.sum(_has_prom & ~_prom_ok & _rob_ok & _diffuse))
+                    _rob_ok = _rob_ok & ~_diffuse
+                    print(f"[{label}] robust-prominence concentration guard: "
+                          f"C_ref {_cref:.3g} from {int(_cal.sum())} source(s); "
+                          f"refused {_n_conc} source(s) at core concentration < "
+                          f"{star_prom_robust_conc:g} x C_ref (deficit > "
+                          f"{star_prom_robust_conc_snr:g} sigma)", flush=True)
+                else:
+                    print(f"[{label}] robust-prominence concentration guard off: "
+                          f"{int(_cal.sum())} calibration source(s) < "
+                          f"{int(conc_ref_min_n)}", flush=True)
+            _prom_ok = _prom_ok | _rob_ok
+        _peak_branch = _peak_branch | (_has_prom & _prom_ok)
     star_like = (
         (qf <= qfit_max)
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
-        | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
+        | _peak_branch
         | bright_isolated
     )
     # RECOVER tier (opt-in: qfit_recover_max > qfit_max; NIRCam only).  A real
@@ -1639,7 +1901,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # S/N (inflated to ~0 by group-fit covariance degeneracy for close pairs
         # -- see _emission_keep_nircam): a well-fit star must never be dropped
         # from the vetted catalog/residual on a broken uncertainty.
-        keep = _emission_keep_nircam(star_like, snr, local_snr_min,
+        keep = _emission_keep_nircam(star_like, snr_floor, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
 
     # MULTI-FRAME CONFIRMATION keep (Hosek ndet-style; opt-in, nmatch_confirm>0).
@@ -1729,11 +1991,50 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             with np.errstate(invalid='ignore'):
                 _emiss_snr = (ann_floor - _sky_ref) / _sky_sig
             sky_clean = np.isfinite(_emiss_snr) & (_emiss_snr <= sky_clean_max_sky_snr)
+            _n_global = int(sky_clean.sum())
+            # LOCAL reference (sky_clean_local_arcsec > 0): the global 5th
+            # percentile is the darkest lane of the whole mosaic, so outside a
+            # dark cloud every source reads "on emission" -- including a
+            # smooth bright plateau, which cannot be turned into a star any
+            # more than dark sky can.  What can is STRUCTURE: compare the
+            # annulus floor to the 5th percentile of the surrounding
+            # ~sky_clean_local_arcsec tile, in units of the i2d ERR
+            # (sky_clean_local_max_err; the global test above is in dark-sky
+            # sigma, a different unit, so the two have separate thresholds).
+            # Gaussian pixel noise gives p25 - p5 = 0.97 sigma; the Brick dark
+            # cloud reads 0.8 ERR, so there ERR ~ 1.2x the pixel scatter and
+            # the default 2 ERR is ~ 2.4 sigma of pixel scatter.  A source on
+            # a filament or in PSF-scale emission structure sits several ERR
+            # above its tile's darkest pixels (W51 F187N tile p25-p5 ~ 9 ERR,
+            # Sgr A* crowding ~ 13 ERR).  OR-ed with the global test, so a
+            # source clean by the global reference stays clean.
+            # local_structure_snr is written whenever this tier runs (NaN
+            # where the local test does not), so the vetted schema is fixed.
+            _struct_snr = np.full(n, np.nan)
+            if sky_clean_local_arcsec > 0 and err_i2d_image is None:
+                print(f"[{label}] sky-clean local reference: no i2d ERR plane, "
+                      f"local test skipped (global dark-sky test only)", flush=True)
+            if (sky_clean_local_arcsec > 0 and err_i2d_image is not None
+                    and xx is not None):
+                _pixas = float(np.sqrt(np.abs(np.linalg.det(
+                    ww_i2d.pixel_scale_matrix))) * 3600.0)
+                _tile = max(16, int(round(float(sky_clean_local_arcsec) / _pixas)))
+                _p5_loc = _tile_percentile_at(data_i2d_image, np.asarray(xx, float),
+                                              np.asarray(yy, float), _tile, 5.0)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    _struct_snr = (ann_floor - _p5_loc) / ann_err
+                _local_clean = np.isfinite(_struct_snr) & (_struct_snr <= sky_clean_local_max_err)
+                sky_clean = sky_clean | _local_clean
+                print(f"[{label}] sky-clean local reference ({_tile} px tiles, floor - "
+                      f"tile p5 <= {sky_clean_local_max_err:g} ERR): {_n_global} clean "
+                      f"by the global reference -> {int(sky_clean.sum())} with the "
+                      f"local one", flush=True)
             _sc_keep = (sky_clean
                         & np.isfinite(prominence) & (prominence >= sky_clean_prom_min)
                         & np.isfinite(snr) & (snr >= sky_clean_snr_min)
                         & ~near_satstar)
             t['local_emission_snr'] = _emiss_snr
+            t['local_structure_snr'] = _struct_snr
             t['sky_clean'] = sky_clean
             _n_sc = int(np.sum(_sc_keep & ~keep))
             keep = keep | _sc_keep
@@ -1784,13 +2085,56 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # subtracted saturated cores (broad => low prominence) are never dropped.
     # OFF by default (ext_prom_min<=0); the driver auto-enables it (=3.0) only for
     # extended-emission NIRCam fields, so star-dominated fields are byte-identical.
+    #
+    # Exemption (ext_prom_exempt_qfit > 0): a source that is a tight PSF fit
+    # (qfit <= ext_prom_exempt_qfit), bright (merged S/N >= ext_prom_exempt_snr)
+    # AND on a local peak of the data_i2d (the brightest pixel of the 7x7 box
+    # within 1 px of the fitted position) passes at the lower prominence
+    # ext_prom_exempt_prom_min.
+    # On a nebular field the 4-10 px annulus MAD is set by emission structure,
+    # so a real bright star reads prominence 2-3: W51 F187N injected stars at
+    # S/N_true 52 and 76 (qfit 0.17, 0.09) sat at prominence 2.55 / 2.71 and
+    # were deleted.  Chance-corrected purity of qfit <= 0.2, prominence 2-3
+    # sources (full m6 catalogs; label = continuum counterpart within 60 mas;
+    # matched/n), without -> with the local-peak requirement:
+    #                     S/N_prop 30-40          40-60                    >= 60
+    #   W51 F187N/F210M   1.11 (4/4)   -> same    1.00 (9/10)   -> same    1.01 (20/22) -> 1.01 (19/21)
+    #   W51 F480M/F410M   0.96 (44/50) -> 1.07    0.96 (116/132)-> 1.07    0.98 (354/397)-> 1.01 (340/368)
+    #   Wd2 F187N/F182M   0.0  (0/2)   -> none    0.0  (0/2)    -> none    0.81 (5/8)   -> 1.03 (4/5)
+    #   Wd2 F405N/F410M   0.46 (2/6)   -> 0.92    1.19 (18/21)  -> 1.31    1.22 (23/26) -> 1.32 (20/21)
+    #   Sgr B2 F187N      0.16 (6/22)  -> none    0.09 (5/30)   -> 1/1     0.53 (7/13)  -> none
+    #   Sgr B2 F480M      0.57 (41/73) -> 0.69    0.71 (147/215)-> 0.90    0.94 (2674/2975) -> 1.00
+    # (Sgr B2 is not an extended-emission target; it tests the exemption on
+    # dense nebular emission.)  Without the peak requirement the purity below
+    # S/N 60 depends on the field.  The Sgr B2 F187N exempt-region sources sit
+    # off any data peak (bright-star halos and spikes), yet half of them match
+    # an F182M source within 60 mas.  With it, every field is >= 0.90 at
+    # S/N_prop >= 40; Sgr B2 F480M 30-40 is 0.69 (8/12), hence S/N 40.  The
+    # emission bumps the floor targets sit at prominence ~0.9, below the
+    # exempt floor.
     if ext_prom_min > 0 and min_prominence <= 0:
         _prom_keep = np.isfinite(prominence) & (prominence >= float(ext_prom_min))
+        _n_exempt = 0
+        if ext_prom_exempt_qfit > 0:
+            with np.errstate(invalid='ignore'):
+                _exempt = (np.isfinite(prominence)
+                           & (prominence >= float(ext_prom_exempt_prom_min))
+                           & np.isfinite(qf) & (qf <= float(ext_prom_exempt_qfit))
+                           & np.isfinite(snr_floor)
+                           & (snr_floor >= float(ext_prom_exempt_snr))
+                           & local_peak)
+            _n_exempt = int(np.sum(keep & _exempt & ~_prom_keep))
+            _prom_keep = _prom_keep | _exempt
         _n_prom = int(np.sum(keep & ~_prom_keep))
         keep = keep & _prom_keep
+        _exempt_msg = (f"; {_n_exempt} kept at prominence >= "
+                       f"{ext_prom_exempt_prom_min:g} with qfit <= "
+                       f"{ext_prom_exempt_qfit:g}, S/N >= {ext_prom_exempt_snr:g} "
+                       f"and a local data_i2d peak"
+                       if ext_prom_exempt_qfit > 0 else "")
         print(f"[{label}] extended-emission prominence gate: dropped {_n_prom} "
-              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)",
-              flush=True)
+              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)"
+              f"{_exempt_msg}", flush=True)
 
     # model==catalog invariant (user 2026-06-27): every saturated star that was
     # SUBTRACTED into the per-frame model (replaced_saturated) MUST appear in
@@ -1820,8 +2164,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     _struct_msg = (f", struct-prune dropped {n_struct} @x={struct_x},y={struct_y}"
                    if (struct_x or struct_y) else "")
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
-          f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
-          f"snr>={local_snr_min}{_struct_msg})",
+          f"(qfit<={qfit_max}, flags in {keep_flags}, "
+          f"peakSB>{peak_over_bkg}x bkg"
+          f"{f' with prominence>={star_prom_peak_min:g}' if star_prom_peak_min > 0 else ''}"
+          f"{f', prominence>={star_prom_min:g}' if star_prom_min > 0 else ''}"
+          f"{f' or robust>={star_prom_robust_min:g}' if star_prom_min > 0 and star_prom_robust_min > 0 else ''}, "
+          f"snr>={local_snr_min}"
+          f"{' (flux/flux_err_prop)' if snr_floor is not snr else ''}{_struct_msg})",
           flush=True)
     return t[keep]
 
@@ -1862,6 +2211,28 @@ def _is_extended_emission(options):
     if _opt is not None:
         return bool(_opt)
     return str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
+
+
+def _auto_star_prom_robust_min(value, options):
+    """Resolve ``--manual-ext-star-prom-robust-min``.
+
+    The pipeline default is 0 (the neighbour-robust branch off).  ``value < 0``
+    is AUTO (opt-in): 8 on star-dominated fields and 0 on an extended-emission
+    target (:func:`_is_extended_emission`); ``value >= 0`` is used verbatim.
+
+    The branch exists for crowding: neighbours' PSF wings raise the annulus MAD
+    and the 25th-percentile floor and lower-half MAD stay near the inter-star
+    sky.  On a narrow nebular filament the same statistics read the dark sides
+    of the filament, so every point along its ridge is prominent.  In the W51
+    reference field (F187N) the branch admitted three fits 2.6 px apart along a
+    filament that shows the same shape in F162M and F140M and has no F360M point
+    source, plus two compact nebular knots, all at prominence 3.3-4.8 and
+    prominence_robust 8.3-14.
+    """
+    value = float(value)
+    if value >= 0:
+        return value
+    return 0.0 if _is_extended_emission(options) else 8.0
 
 
 def _resolve_each_suffix(options, filtername):
@@ -2123,6 +2494,48 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     return files
 
 
+def _reorigin_psf_grid(grid, cx0, cy0):
+    """``grid`` with its ``grid_xypos`` moved into a cutout whose origin is
+    parent pixel ``(cx0, cy0)``, so a cutout fit uses the PSF the full-frame
+    fit would use at the same source positions."""
+    shifted_xy = [(gx - cx0, gy - cy0) for (gx, gy) in grid.grid_xypos]
+    return type(grid)(NDData(np.asarray(grid.data),
+                             meta={'grid_xypos': shifted_xy,
+                                   'oversampling': grid.oversampling}))
+
+
+@functools.lru_cache(maxsize=4)
+def _cached_injection_table(path):
+    from jwst_gc_pipeline.photometry.injection import read_injection_table
+    return read_injection_table(path)
+
+
+def _inject_reference_stars(options, filename, original_filename, filtername,
+                            module, proposal_id, field, basepath, use_webbpsf,
+                            cx0, cy0):
+    """``--inject-stars``: add the injection table's stars to the cutout frame
+    copy ``filename`` (see ``photometry/injection.py``), with the same
+    per-detector PSF grid the fit loads, re-origined to the cutout."""
+    from jwst_gc_pipeline.photometry.injection import (
+        frame_seed, inject_table_into_frame)
+    table = _cached_injection_table(os.path.abspath(options.inject_stars))
+    hdr0 = fits.getheader(filename, 0)
+    grid, _ = _L.get_psf_model(
+        filtername, proposal_id, field, module=module, use_webbpsf=use_webbpsf,
+        use_grid=options.each_exposure, blur=options.blur, target=options.target,
+        obsdate=hdr0['DATE-OBS'], basepath='/blue/adamginsburg/adamginsburg/jwst/',
+        psf_cache_dir=os.path.join(basepath, 'psfs'), instrument=hdr0['INSTRUME'])
+    if cx0 or cy0:
+        grid = _reorigin_psf_grid(grid, cx0, cy0)
+    rng = np.random.default_rng(
+        frame_seed(int(getattr(options, 'inject_seed', 0)), original_filename))
+    n = inject_table_into_frame(filename, table, grid, filtername, rng)
+    print(f"[manual] INJECT: {n} artificial stars from "
+          f"{os.path.basename(options.inject_stars)} -> {os.path.basename(filename)}",
+          flush=True)
+    return n
+
+
 def _default_nircam_satstar_lock_env(environ, sat_ext_nircam):
     """Default the NIRCam satstar position-lock variables in ``environ``.
 
@@ -2190,10 +2603,22 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     cutout_label = ''
     out_basepath = basepath
     cx0, cy0 = 0, 0
+    original_filename = filename
     if getattr(options, 'cutout_region', ''):
         cutout_label, filename, out_basepath, cx0, cy0 = _L._prepare_cutout_input(
             filename, basepath, filtername, options)
     cutout_active = bool(cutout_label)
+
+    if getattr(options, 'inject_stars', ''):
+        # Reference-field truth (photometry/injection.py): add the table's stars
+        # to the cropped copy ON DISK, so the cutout data i2d, the residual
+        # mosaics and every phase's fit all see them.
+        if not cutout_active:
+            raise ValueError("--inject-stars rewrites frame pixels; it is only "
+                             "allowed together with --cutout-region")
+        _inject_reference_stars(options, filename, original_filename, filtername,
+                                module, proposal_id, field, basepath,
+                                use_webbpsf, cx0, cy0)
 
     fh, im1, data, wht, err, instrument, telescope, obsdate = _L.load_data(filename)
     inst_token = instrument.lower()
@@ -2281,11 +2706,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         psf_cache_dir=os.path.join(basepath, 'psfs'), instrument=instrument)
     dao_psf_model = grid
     if cutout_active and (cx0 or cy0):
-        shifted_xy = [(gx - cx0, gy - cy0) for (gx, gy) in dao_psf_model.grid_xypos]
-        dao_psf_model = type(dao_psf_model)(NDData(
-            np.asarray(dao_psf_model.data),
-            meta={'grid_xypos': shifted_xy,
-                  'oversampling': dao_psf_model.oversampling}))
+        dao_psf_model = _reorigin_psf_grid(dao_psf_model, cx0, cy0)
         print(f"[manual] CUTOUT: re-origined PSF grid by (-{cx0}, -{cy0})", flush=True)
     dao_psf_model.flux.min = 0
 
@@ -2512,6 +2933,12 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # Deeply-saturated (truly-lost/clipped) cores are left uncapped.  Ext-NIRCam.
     if 'NIRCAM_SATSTAR_RECOVERED_CAP' not in os.environ:
         os.environ['NIRCAM_SATSTAR_RECOVERED_CAP'] = '1' if _sat_ext_nircam else '0'
+    # Add the local background scatter to the satstar fit errors (crf ERR has
+    # read + Poisson noise only, so a crowded/nebular background dominates chi2
+    # and the star comes out faint).  Ext-NIRCam only.  Set only when enabling,
+    # so other fields keep their satstar cache keys.  A user export is respected.
+    if _sat_ext_nircam and 'SATSTAR_ERR_BKG_SCATTER' not in os.environ:
+        os.environ['SATSTAR_ERR_BKG_SCATTER'] = '1'
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
@@ -2755,8 +3182,11 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # extended emission stays in the residual, over-subtraction unchanged) + a free
     # depth win on star fields (arches clump 2/10 -> 7/10, purity unchanged 0.885);
     # purity is protected by the fit + nmatch confirmation, not the shape cut.  The
-    # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5): loosening
-    # it too is a star-field opt-in (plants fake stars on nebulosity in emission fields).
+    # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5) as a
+    # blanket cut (loosened everywhere it plants fake stars on nebulosity in
+    # emission fields).  The loose window --manual-seed-round-loose-max (opt-in,
+    # default 0 = off; 0.8 tested) admits detections out to that roundness only
+    # at annulus prominence >= --manual-seed-round-loose-prom-min.
     resid_roundlo = float(mopt(options, 'manual_resid_roundlo'))
     resid_roundhi = float(mopt(options, 'manual_resid_roundhi'))
     resid_sharplo = float(mopt(options, 'manual_resid_sharplo'))
@@ -3278,6 +3708,11 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
       manual_crossband_seed_min_filters (default 2), _snr_min (5), _qfit_max
       (0.2), _max_sep_mas (30).  Set min_filters=1 to restore union-like behavior
       (NOT recommended -- reintroduces the single-band propagation bug).
+
+    The S/N confirmation uses flux / flux_err, the per-frame S/N, while the m6
+    vetting floor uses flux / flux_err_prop (``manual_ext_snr_floor_propagated``).
+    The seed's stricter definition is deliberate: a seed position is force-fit in
+    every band, so it requires a detection that is significant in one frame.
     """
     from astropy.coordinates import SkyCoord
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
@@ -3357,7 +3792,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     seed['skycoord'] = SkyCoord(np.array(seed_ra) * u.deg, np.array(seed_dec) * u.deg)
     seed['n_filt_confirmed'] = np.array(nfilt, dtype='i4')
     seed['confirming_filters'] = np.array(confl)
-    out = f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
+    out = crossband_seed_file(cut_bp, options)
     # every m7 shard rebuilds this same path -- see write_table_atomic
     write_table_atomic(seed, out)
     print(f"[m7] wrote STRINGENT crossband seed {out} (n={len(seed)} confirmed in "
@@ -3365,6 +3800,119 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
           f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
     return out
 
+
+def crossband_seed_file(cut_bp, options):
+    """The m7 cross-band seed file ``_build_crossband_seed`` writes (shared by
+    every m7 shard of the target/observation)."""
+    _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
+                           getattr(options, 'field', None))
+    return f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
+
+
+def m7_band_seed_path(crossband_path, module, filtername):
+    """The per-(module, filter) m7 seed ``_build_m7_band_seed`` writes.  The
+    ``_vetted`` suffix lets ``_build_i2d_augmented_seed`` write its residual-
+    augmented copy next to it (``naming.vetted_to_i2dseed``) instead of over
+    the shared cross-band seed."""
+    return crossband_path.replace('.fits', f'_{module}_{filtername.lower()}_vetted.fits')
+
+
+def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module, *,
+                        max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
+                        companion_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
+                        fwhm_arcsec=None, label=''):
+    """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
+    vetted catalog (opt-in, ``manual_m7_seed_own_band``).
+
+    The cross-band seed keeps only positions confirmed (S/N > 5, qfit < 0.2)
+    in >= 2 filters.  Used ALONE as the m7 seed it leaves out every source
+    that THIS band's m6 vetting accepted but that is not confirmed in a second
+    band, and that m7's own detection does not find again: a third of the m6
+    vetted catalog in Brick F182M, Sgr B2 and Sgr A* (126k/378k, 147k/475k,
+    96k/271k).  Adding a band's own vetted sources back to ITS OWN seed does
+    not propagate a single-band detection to other bands (the failure the
+    stringent cross-band seed exists to prevent): each filter's seed gains
+    only what that filter's own vetting accepted.
+
+    Against an independent visit (Brick 1182/o004), the own-band sources
+    production m7 lacks are confirmed 0.21x as often as the own-band sources
+    it keeps (flux-matched; docs/evidence/faint_m7_seed_union).  Those within
+    ~2.5 PSF FWHM of a brighter seed source are confirmed at the chance rate
+    in F182M and F212N: m6 fits in the PSF-mismatch ring of a brighter star.
+    So own-band sources within ``companion_fwhm`` FWHM of a brighter seed
+    source (cross-band or own-band) are not added; ``companion_fwhm=0``
+    disables the cut.  ``fwhm_arcsec`` defaults to the filter's entry in the
+    FWHM table.
+
+    Seed fluxes: an own-band source keeps its m6 flux; a cross-band position
+    takes the flux of the own-band source within ``max_sep_mas`` (else 1.0,
+    the value ``SeededFinder`` gives a flux-less seed).  Writes
+    ``<crossband seed>_<module>_<filt>_vetted.fits`` (one per shard key, as
+    the per-module own-band catalogs differ) and returns its path (the
+    ``_vetted`` suffix lets ``_build_i2d_augmented_seed`` add residual
+    detections to it).
+    """
+    from astropy.coordinates import SkyCoord, search_around_sky
+    xb = Table.read(crossband_seed_path)
+    xsc = xb['skycoord'] if isinstance(xb['skycoord'], SkyCoord) else SkyCoord(xb['skycoord'])
+    own = _L._resolve_seed_skycoords(Table.read(own_vetted_path))
+    # An empty own-band catalog still gets its own per-band file (cross-band
+    # positions only): returning the shared cross-band seed path instead let
+    # _build_i2d_augmented_seed write the residual detections over it.
+    if len(own) == 0:
+        print(f"[{label}] m7 band seed: own-band m6 vetted catalog is empty; "
+              f"cross-band positions only", flush=True)
+        osc, oflux = xsc[:0], np.zeros(0)
+    else:
+        osc = own['skycoord'] if isinstance(own['skycoord'], SkyCoord) else SkyCoord(own['skycoord'])
+        oflux = None
+        for _fc in ('flux', 'flux_fit'):
+            if _fc in own.colnames:
+                oflux = np.asarray(own[_fc], dtype=float)
+                break
+        if oflux is None:
+            oflux = np.ones(len(own))
+    good = np.isfinite(oflux) & (oflux > 0)
+    osc, oflux = osc[good], oflux[good]
+
+    xflux = np.ones(len(xsc))
+    own_new = np.ones(len(osc), dtype=bool)
+    if len(osc) and len(xsc):
+        idx, sep, _ = xsc.match_to_catalog_sky(osc)
+        hit = sep.to_value(u.mas) < max_sep_mas
+        xflux[hit] = oflux[idx[hit]]
+        _, sep_o, _ = osc.match_to_catalog_sky(xsc)
+        own_new = sep_o.to_value(u.mas) >= max_sep_mas
+    n_companion = 0
+    if companion_fwhm > 0 and own_new.any():
+        if fwhm_arcsec is None:
+            ftab = Table.read(_L.fwhm_table_path())
+            fwhm_arcsec = float(ftab[ftab['Filter'] == filtername.upper()]['PSF FWHM (arcsec)'][0])
+        cand = np.flatnonzero(own_new)
+        pool_sc = SkyCoord([xsc, osc[cand]]) if len(xsc) else osc[cand]
+        pool_flux = np.concatenate([xflux, oflux[cand]])
+        ic, ip, _, _ = search_around_sky(osc[cand], pool_sc,
+                                         companion_fwhm * fwhm_arcsec * u.arcsec)
+        brighter = pool_flux[ip] > oflux[cand][ic]
+        companion = np.zeros(len(cand), dtype=bool)
+        companion[ic[brighter]] = True
+        own_new[cand[companion]] = False
+        n_companion = int(companion.sum())
+    n_own = int(own_new.sum())
+    out = Table()
+    out['skycoord'] = (SkyCoord([xsc, osc[own_new]]) if n_own and len(xsc)
+                       else (xsc if len(xsc) else osc[own_new]))
+    out['flux'] = np.concatenate([xflux, oflux[own_new]])
+    out['seed_origin'] = np.array(['crossband'] * len(xsc) + ['own_m6'] * n_own, dtype=str)
+    out.meta['COMPFWHM'] = float(companion_fwhm)
+    out.meta['NCOMPAN'] = n_companion
+    outpath = m7_band_seed_path(crossband_seed_path, module, filtername)
+    write_table_atomic(out, outpath)
+    print(f"[{label}] m7 band seed: {len(xsc)} cross-band + {n_own} own-band m6 "
+          f"vetted (not within {max_sep_mas:g} mas of a cross-band position; "
+          f"{n_companion} more within {companion_fwhm:g} FWHM of a brighter seed "
+          f"source left out) -> {len(out)} ({os.path.basename(outpath)})", flush=True)
+    return outpath
 
 CARTA_EXPORT_COLUMNS = ('flux', 'flux_err', 'qfit', 'cfit', 'flags',
                         'is_saturated', 'replaced_saturated', 'iter_found')
@@ -3518,6 +4066,15 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     band source.  m6 is the last per-band catalog built BEFORE the cross-band
     seed, so an m6 match == band saw it on its own.
 
+    The m7 seed of each band also adds daofind detections on that band's own
+    m6 residual (``seed_origin == 'i2d'`` rows of its
+    ``crossband_seed_manual*_<module>_<filt>_i2dseed.fits``; see
+    ``_build_m7_band_seed``).  Those are independent detections in that band
+    too.  They are matched back at the radius the seed builder recorded
+    (``DEDUPMAS``: every such row is at least that far from every other seed
+    position), as the fitted position can move further than ``radius_mas``
+    from the residual-image centroid.
+
     Tight ``radius_mas`` (30) keeps the dense-field chance-coincidence rate low
     (per-band m6 catalogs are far sparser than the merged catalog).  Additive +
     idempotent: re-running overwrites the flags.  Failure is non-fatal.
@@ -3546,6 +4103,11 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
         getattr(options, 'field', None))
     _endsuf = '' if _modtok else _obssuf
     _modules = (getattr(options, 'modules', '') or 'merged').split(',')
+    _xbseed = crossband_seed_file(cut_bp, options)
+    # only this run's m7 seeds: with the own-band seed off, a band seed left
+    # over from an earlier run says nothing about this merged catalog
+    _m7_own = bool(mopt(options, 'manual_m7_seed_own_band'))
+    n_m7_i2d = 0
     # Per-filter independence is OR-ed across modules and counted ONCE per
     # filter.  (The previous module-outer loop added ``indep`` to
     # ``nfilt_indep`` once PER MODULE -- double-counting a filter for
@@ -3566,6 +4128,22 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
             sc6 = m6['skycoord'] if isinstance(m6['skycoord'], SkyCoord) else SkyCoord(m6['skycoord'])
             _, sep, _ = ref.match_to_catalog_sky(sc6)
             indep |= np.asarray(sep < radius_mas * u.mas)
+        for module in (_modules if _m7_own else []):
+            p7 = vetted_to_i2dseed(m7_band_seed_path(_xbseed, module, f))
+            if not os.path.exists(p7):
+                continue
+            s7 = Table.read(p7)
+            if 'seed_origin' not in s7.colnames or len(s7) == 0:
+                continue
+            s7 = s7[np.asarray(s7['seed_origin']).astype(str) == 'i2d']
+            if len(s7) == 0:
+                continue
+            sc7 = s7['skycoord'] if isinstance(s7['skycoord'], SkyCoord) else SkyCoord(s7['skycoord'])
+            r7 = max(radius_mas, float(s7.meta.get('DEDUPMAS', radius_mas)))
+            _, sep, _ = ref.match_to_catalog_sky(sc7)
+            hit7 = np.asarray(sep < r7 * u.mas)
+            n_m7_i2d += int((hit7 & ~indep).sum())
+            indep |= hit7
         t[col] = indep
         nfilt_indep += indep.astype('i4')
     t['n_filt_independent'] = nfilt_indep
@@ -3573,7 +4151,8 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     print(f"[provenance] {os.path.basename(merged_path)}: wrote "
           f"independently_detected_<filt> (+ n_filt_independent); "
           f"{int((nfilt_indep == 0).sum())}/{len(t)} rows have NO independent "
-          f"per-band detection (pure cross-band-seeded)", flush=True)
+          f"per-band detection (pure cross-band-seeded); {n_m7_i2d} (row, band) "
+          f"flags from m7 residual detections alone", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -3634,12 +4213,43 @@ def _structure_noise_keep(data, err, *, xpix, ypix, struct_x=0.0, struct_y=0.0,
     return data[yi, xi] > thresh
 
 
+def _annulus_prominence(image, x, y, *, half=10, core_r=1.5, ann_in=4):
+    """(core peak - annulus median) / annulus MAD at each (x, y), as the
+    vetting's ``prominence`` column (core r < 1.5 px, annulus 4-10 px); NaN
+    within ``half`` px of the edge or with < 10 finite annulus pixels."""
+    ny, nx = image.shape
+    yo, xo = np.mgrid[-half:half + 1, -half:half + 1]
+    rr = np.hypot(xo, yo)
+    cm = rr < core_r
+    am = (rr >= ann_in) & (rr <= half)
+    out = np.full(len(x), np.nan)
+    for i, (xi, yi) in enumerate(zip(x, y)):
+        if not (np.isfinite(xi) and np.isfinite(yi)):
+            continue
+        ix, iy = int(round(float(xi))), int(round(float(yi)))
+        if not (half <= ix < nx - half and half <= iy < ny - half):
+            continue
+        st = image[iy - half:iy + half + 1, ix - half:ix + half + 1]
+        ann = st[am]
+        ann = ann[np.isfinite(ann)]
+        core = np.nanmax(st[cm]) if np.any(np.isfinite(st[cm])) else np.nan
+        if ann.size < 10 or not np.isfinite(core):
+            continue
+        bg = np.median(ann)
+        spread = 1.4826 * np.median(np.abs(ann - bg))
+        if spread > 0:
+            out[i] = (core - bg) / spread
+    return out
+
+
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
                               struct_x=0.0, struct_y=0.0, struct_robust=False,
                               coarse_bg_box=0, seed_struct_protect_snr=8.0,
-                              noise_floor_box=0, noise_floor_k=5.0, label=''):
+                              noise_floor_box=0, noise_floor_k=5.0,
+                              round_loose_max=0.0, round_loose_prom_min=5.0,
+                              label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -3661,10 +4271,35 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     PSF photometry is *never* run on the i2d -- the fit always runs on the raw
     (or background-subtracted) frames.  This step is detection-only.
 
+    ``round_loose_max`` > ``roundhi`` (opt-in; default 0 = off): also admit
+    detections with roundness up to +-``round_loose_max``, but only where they
+    rise above their LOCAL structure: annulus prominence (core peak minus 4-10
+    px annulus median, over the annulus MAD) on the detection image >=
+    ``round_loose_prom_min``.  A faint star on a residual or a neighbour's wing
+    is distorted past the tight bound (Brick F182M m7 residual peaks at S/N > 7:
+    55% pass +-0.5, 78% pass +-0.8).  The prominence test does NOT reject
+    emission knots or filament points once the residual background is
+    subtracted (W51 F187N: 25-29 per phase pass prominence >= 5), nor
+    diffraction-spike knots, whose thin spike covers little of the annulus.
+    At full frame (m6 residual, roundness 0.8) the loose-only seeds sit on the
+    brightest 10% of the smoothed background 3x as often as the previous seeds
+    (Brick NRCB F182M 31% vs 11%, Sgr B2 F187N 29% vs 11%), and near bright
+    stars they pile up at the spike position angles (2x the median bin, vs
+    1.3x for the tight seeds).  Admitted loose detections carry
+    ``seed_round_loose`` = True in the seed catalog; rows carried over from
+    ``prev_vetted_path`` are False.
+
     The i2d cutouts are drizzled at the native detector scale (0.063"/px), so the
     per-frame pixel FWHM applies unchanged.  Returns the seed-catalog path.
     """
     from astropy.coordinates import SkyCoord
+
+    outpath = vetted_to_i2dseed(prev_vetted_path)
+    if outpath == prev_vetted_path:
+        # writing the augmented seed over its own input (a shared seed such as
+        # the m7 cross-band seed) corrupts every other shard that reads it
+        raise ValueError(f"[{label}] i2d-augmented seed: {os.path.basename(prev_vetted_path)} "
+                         f"has no '_vetted.fits' suffix, so the output would overwrite it")
 
     ftab = Table.read(_L.fwhm_table_path())
     fwhm_pix = float(ftab[ftab['Filter'] == filtername]['PSF FWHM (pixel)'][0])
@@ -3714,10 +4349,31 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     finite = np.isfinite(noise_map) & (noise_map > 0)
     if not np.any(finite):
         raise ValueError(f"[{label}] i2d local noise map has no positive finite values")
+    _loose = float(round_loose_max) > max(abs(roundlo), abs(roundhi))
     det = _daofind_emission_floor(
         np.where(mask, 0.0, data), noise_map, mask, fwhm_pix,
-        roundlo=roundlo, roundhi=roundhi, sharplo=sharplo, sharphi=sharphi,
+        roundlo=-float(round_loose_max) if _loose else roundlo,
+        roundhi=float(round_loose_max) if _loose else roundhi,
+        sharplo=sharplo, sharphi=sharphi,
         noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k, label=label)
+    if _loose and len(det):
+        # the detections outside the tight bound must rise above local structure
+        _rc = [c for c in ('roundness1', 'roundness2') if c in det.colnames]
+        _r1 = (np.asarray(det[_rc[0]], dtype=float) if _rc else np.zeros(len(det)))
+        _r2 = (np.asarray(det[_rc[1]], dtype=float) if len(_rc) > 1 else _r1)
+        outside = ((_r1 < roundlo) | (_r1 > roundhi) | (_r2 < roundlo) | (_r2 > roundhi))
+        if np.any(outside):
+            xo, yo = _L._best_available_xy(det[outside])
+            prom = _annulus_prominence(np.where(mask, np.nan, data),
+                                       np.asarray(xo, float), np.asarray(yo, float))
+            ok = np.ones(len(det), dtype=bool)
+            ok[np.where(outside)[0]] = np.isfinite(prom) & (prom >= float(round_loose_prom_min))
+            print(f"[{label}] i2d daofind loose roundness: {int(outside.sum())} "
+                  f"detection(s) with roundness in ({roundhi:g},{float(round_loose_max):g}], "
+                  f"{int(ok[outside].sum())} kept at prominence >= "
+                  f"{float(round_loose_prom_min):g}", flush=True)
+            det['seed_round_loose'] = outside
+            det = det[ok]
     n_raw = len(det)
     if len(det):
         if err is not None:
@@ -3767,6 +4423,9 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     prev_sky = prev['skycoord']
     if not isinstance(prev_sky, SkyCoord):
         prev_sky = SkyCoord(prev_sky)
+    # where each seed came from; this round's i2d detections become 'i2d'
+    prev_origin = (np.asarray(prev['seed_origin']).astype(str)
+                   if 'seed_origin' in prev.colnames else np.full(len(prev), 'prev'))
     # the fitted flux: per-frame catalogs use 'flux_fit', the MERGED/vetted
     # catalog uses 'flux'.  Falling through to ones() poisons the next fit --
     # bright stars then start at flux_init=1.0 (orders of magnitude too low) and
@@ -3786,11 +4445,13 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     if not np.all(_pos):
         prev_sky = prev_sky[_pos]
         prev_flux = prev_flux[_pos]
+        prev_origin = prev_origin[_pos]
         print(f"[{label}] dropped {int(np.sum(~_pos))} non-positive-flux prev seeds",
               flush=True)
 
     # i2d detections -> sky, keep only those NOT already in the previous catalog
     n_new = 0
+    match_as = max(1.0, 0.5 * fwhm_pix) * pixscale_as
     if len(det):
         # photutils 2.x emits xcentroid/ycentroid, 3.x x_centroid/y_centroid
         xd, yd = _L._best_available_xy(det)
@@ -3800,7 +4461,6 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                     if 'flux' in det.colnames else np.ones(len(det), dtype=float))
         if len(prev_sky):
             _, sep, _ = det_sky.match_to_catalog_sky(prev_sky)
-            match_as = max(1.0, 0.5 * fwhm_pix) * pixscale_as
             fresh = sep.arcsec > match_as
         else:
             fresh = np.ones(len(det_sky), dtype=bool)
@@ -3816,7 +4476,15 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     out = Table()
     out['skycoord'] = all_sky
     out['flux'] = all_flux
-    outpath = vetted_to_i2dseed(prev_vetted_path)
+    out['seed_origin'] = np.concatenate([prev_origin, np.full(n_new, 'i2d')]).astype(str)
+    _det_loose = (np.asarray(det['seed_round_loose'], dtype=bool)[fresh]
+                  if n_new and 'seed_round_loose' in det.colnames
+                  else np.zeros(n_new, dtype=bool))
+    out['seed_round_loose'] = np.concatenate([np.zeros(len(all_flux) - n_new, dtype=bool),
+                                              _det_loose])
+    # every 'i2d' row is at least this far from every prev seed
+    # (annotate_independent_detection matches them back at this radius)
+    out.meta['DEDUPMAS'] = float(match_as * 1e3)
     # keyed by (filter, module), not by shard -- see write_table_atomic
     write_table_atomic(out, outpath)
     print(f"[{label}] i2d-augmented seed: {len(prev_sky)} prev + {n_new} new i2d "
@@ -7470,15 +8138,44 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 elif phase == 'm7':
                     prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
                     resbg_path = bg_for_next.get((module, filt))      # bg from m6
+                    # opt-in: cross-band seed UNION this band's own m6 vetted
+                    # catalog, plus daofind on the m6 residual - m6 bg (as m6
+                    # does on m5's): see _build_m7_band_seed.  Off (default)
+                    # -> cross-band only.
+                    if bool(mopt(opts_phase, 'manual_m7_seed_own_band')):
+                        _own = [q for _m, _f, q in crossband_seed_inputs(
+                                    cut_bp, modules, filternames, options)
+                                if _m == module and _f == filt]
+                        if _own:
+                            # NOT vetted_prev: that feeds the resume's seed
+                            # provenance, and this derived file is rewritten
+                            # every run (its inputs, _own and the m6 mosaics,
+                            # are already listed there).
+                            prev_seed = _build_m7_band_seed(
+                                prev_seed, _own[0], filt, module,
+                                max_sep_mas=float(mopt(opts_phase, 'manual_crossband_seed_max_sep_mas')),
+                                companion_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_fwhm')),
+                                label=f'{phase}:{filt}')
+                            det_i2d = resid_i2d_for_next.get((module, filt))  # m6 residual
+                            bg_sub = bg_for_next.get((module, filt))          # minus m6 bg
+                        else:
+                            print(f"manual [m7]: no m6 vetted {filt} catalog for "
+                                  f"the own-band seed; cross-band seed only", flush=True)
 
-                if phase in ('m3', 'm4', 'm5', 'm6'):
+                if phase in ('m3', 'm4', 'm5', 'm6') or (phase == 'm7' and det_i2d):
                     det_i2d = det_i2d or _data_i2d_path(module, filt)  # fallback
+                    # the catalog the i2d detections are added to: the
+                    # previous phase's vetted catalog, or m7's band seed
+                    _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
+                        _sround_loose = float(mopt(opts_phase, 'manual_seed_round_loose_max'))
                         prev_seed = _build_i2d_augmented_seed(
-                            det_i2d, vetted_prev, filt,
+                            det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
                             roundlo=-_sround, roundhi=_sround,
+                            round_loose_max=_sround_loose,
+                            round_loose_prom_min=float(mopt(opts_phase, 'manual_seed_round_loose_prom_min')),
                             sharplo=float(mopt(opts_phase, 'manual_seed_sharp_lo')),
                             sharphi=float(mopt(opts_phase, 'manual_seed_sharp_hi')),
                             bg_subtract_path=bg_sub,
@@ -7510,8 +8207,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             label=f'{phase}:{filt}')
                     except Exception as ex:
                         print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "
-                              f"using {os.path.basename(vetted_prev)}", flush=True)
-                        prev_seed = vetted_prev
+                              f"using {os.path.basename(_aug_base)}", flush=True)
+                        prev_seed = _aug_base
 
                 # SEED PROVENANCE for the fan-out resume.  Everything this phase
                 # fits against that the PREVIOUS phase's finalize wrote.  A
@@ -8102,13 +8799,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                           parent_paths=_parents)
                 prev_merged_for[(module, filt)] = (_msc, _ifound)
 
-                d_i2d, ww_i2d = None, None
+                d_i2d, ww_i2d, e_i2d = None, None, None
                 dpath = _data_i2d_path(module, filt)
                 if os.path.exists(dpath):
                     with fits.open(dpath) as dh:
-                        hdu = dh['SCI'] if 'SCI' in [h.name for h in dh] else dh[0]
+                        _hn = [h.name for h in dh]
+                        hdu = dh['SCI'] if 'SCI' in _hn else dh[0]
                         d_i2d = hdu.data.astype(float)
                         ww_i2d = wcs.WCS(hdu.header)
+                        if 'ERR' in _hn and dh['ERR'].data is not None:
+                            e_i2d = dh['ERR'].data.astype(float)
                 # MIRI: required deep-i2d prominence gate kills false emission
                 # sources that pass the qfit OR-branch.  NIRCam: off (0).
                 _miri_field = (module == 'mirimage'
@@ -8129,9 +8829,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
                     peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
+                    star_prom_min=float(mopt(opts_phase, 'manual_ext_star_prom_min')),
+                    star_prom_peak_min=float(mopt(opts_phase, 'manual_ext_star_prom_peak_min')),
+                    star_prom_robust_min=_auto_star_prom_robust_min(
+                        mopt(opts_phase, 'manual_ext_star_prom_robust_min'), opts_phase),
+                    star_prom_robust_conc=float(mopt(opts_phase, 'manual_ext_star_prom_robust_conc')),
                     min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
+                    snr_floor_propagated=bool(mopt(opts_phase, 'manual_ext_snr_floor_propagated')),
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
                     qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
@@ -8145,6 +8851,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     nmatch_confirm_strong=int(mopt(opts_phase, 'manual_ext_nmatch_confirm_strong')),
                     low_fit_quality_qfit=float(mopt(opts_phase, 'manual_ext_low_fit_quality_qfit')),
                     ext_prom_min=_ext_prom_min,
+                    ext_prom_exempt_qfit=float(mopt(opts_phase, 'manual_ext_prom_exempt_qfit')),
+                    ext_prom_exempt_snr=float(mopt(opts_phase, 'manual_ext_prom_exempt_snr')),
+                    ext_prom_exempt_prom_min=float(mopt(opts_phase, 'manual_ext_prom_exempt_prom_min')),
                     sky_clean_keep=bool(mopt(opts_phase, 'manual_sky_clean_keep')),
                     sky_clean_max_sky_snr=float(mopt(
                         opts_phase, 'manual_sky_clean_max_sky_snr')),
@@ -8152,6 +8861,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         opts_phase, 'manual_sky_clean_prom_min')),
                     sky_clean_snr_min=float(mopt(
                         opts_phase, 'manual_sky_clean_snr_min')),
+                    sky_clean_local_arcsec=float(mopt(
+                        opts_phase, 'manual_sky_clean_local_arcsec')),
+                    sky_clean_local_max_err=float(mopt(
+                        opts_phase, 'manual_sky_clean_local_max_err')),
+                    err_i2d_image=e_i2d,
                     struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)
