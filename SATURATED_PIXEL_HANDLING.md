@@ -508,6 +508,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | var | default | effect |
 |---|---|---|
 | `SATSTAR_DATA_FLOOR` | per-filter | override the finder data floor |
+| `SATSTAR_DATA_FLOOR_READOUT_FRAC` | 0.5 | NIRCam: lower a per-filter finder floor to FRAC × 50000 × PHOTMJSR / t_last when smaller; 0 keeps the table |
 | `MIRI_FIRSTGROUP_SAT_DQ` | 0 | MIRI: keep only first-group (unrecoverable) saturation |
 | `MIRI_SATSTAR_SPIKE_MERGE` / `…_RATIO` | 3 / 3.0 | spike-satellite merge gap / size ratio |
 | `MIRI_SATSTAR_SEED_{PROM,CORE,CONC}_MIN` | 8.0 / 1000 / 1.3 | seed-gate thresholds |
