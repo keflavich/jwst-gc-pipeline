@@ -469,6 +469,13 @@ def satstar_readout_data_floor(header, photmjsr, frac=None, env=None):
     of the last group, ((NGROUPS - 1)(NFRAMES + GROUPGAP) + (NFRAMES + 1) / 2)
     x TFRAME.  Returns None for other instruments, when a keyword is missing or
     not positive, or when FRAC is 0.
+
+    The floor does not separate all spurious components on its own.  Spurious
+    DQ-SATURATED flags carry a wing max that does not scale with t_last (wd2
+    F410M: up to 78 MJy/sr, against a floor of 61.6 at t_last = 349 s), so on
+    longer ramps more of them pass the floor.  Downstream, ``fit_quality_gate``
+    and the finder's seed gates reject them (#1083); a change that loosens
+    those gates should recheck these components.
     """
     frac = (_satstar_data_floor_readout_frac(env) if frac is None
             else float(frac))
