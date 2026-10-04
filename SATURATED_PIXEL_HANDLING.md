@@ -331,6 +331,33 @@ flux, trading depth for a brighter saturation ceiling:
   averages several frames, and its pile-up level varies by pixel: on wd2 F150W
   nrcb3, 3699 group-0-saturated pixels sat below the ceiling and were rewritten
   to about half the rate the ramp fit took from the ZEROFRAME (#1065).
+  Group 0 also flattens once the later frames of a multi-frame group reach the
+  pile-up level: group 0 / first frame falls from 2.66 at a predicted
+  last-frame fill (NFRAMES × first frame / saturation) of 0–0.2 to 2.44 at
+  fill 1.0–1.1 and 1.69 at fill 2–3 (wd2 F150W nrcb3; nrcb1 2.60 → 2.38 →
+  1.62). The jwst saturation step flags these reads: an averaged group whose
+  next group saturates and whose value exceeds the threshold × mean(frames) /
+  last frame (0.625 for SHALLOW4) gets DO_NOT_USE, and every SATURATED pixel
+  at fill ≥ 0.9 carries SATURATED or DO_NOT_USE in group 0 (nrcb3 exposure 1:
+  1418 SATURATED, 5087 DO_NOT_USE only). `ramp_fit` then has no good group and
+  takes the rate from the ZEROFRAME. The anchor without the next switch reads
+  only the SATURATED bit, so it rewrites the DO_NOT_USE pixels as R × (flat
+  group 0): recovered / crf falls from 1.05 to 0.82 at fill 1.5–2 on nrcb3
+  and to 0.77 on nrcb1. With `SATSTAR_ZF_FIRST_FRAME` (on by default with the
+  cap) `remove_saturated_stars` loads the ramp ZEROFRAME extension, which
+  holds the first frame alone (`_find_first_frame_for`, only for NFRAMES > 1),
+  and the group-0 mask with DO_NOT_USE included
+  (`_find_group0_saturation_for(do_not_use=True)`). `first_frame_group0`
+  measures k = group 0 / first frame as binned medians in log first frame
+  over the frame's unflagged SATURATED-buffer pixels with group 0 in
+  [R_g0_min, ceiling) (2.675 → 2.561 on nrcb3, 2.622 → 2.502 on nrcb1; the
+  ratio drifts with brightness below the flag threshold too), and replaces
+  group 0 by k(first frame) × first frame wherever group 0 is flagged and the
+  first frame is positive. Pixels whose first frame is 0 (jwst zeroes the
+  ZEROFRAME where the first frame saturates) stay deep core. On nrcb3
+  exposure 1 it replaces 6617 pixels, and the recovered / crf ratio of the
+  flagged pixels stays at 1.04–1.06 from fill 0.2 to 5 (nrcb1: 1.00–1.01);
+  unflagged pixels read 1.02 (nrcb1 1.00) with or without the switch.
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
@@ -515,6 +542,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
 | `SATSTAR_ZF_G0_GROUPDQ` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (#1065) |
+| `SATSTAR_ZF_FIRST_FRAME` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | with NFRAMES > 1, the ZEROFRAME anchor reads k(first frame) × the ramp ZEROFRAME extension (the first frame) where the ramp GROUPDQ flags group 0 SATURATED or DO_NOT_USE; k = binned median group 0 / first frame on the frame's unflagged pixels (`first_frame_group0`) |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
@@ -528,7 +556,7 @@ The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table ab
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
 
-The five `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows are read
+The six `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows are read
 by `satstar_fit_switches`, and the per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
 one refits the cached catalogs it affects. Their on/off values follow the

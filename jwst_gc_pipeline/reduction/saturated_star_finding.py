@@ -987,6 +987,15 @@ def satstar_fit_switches(env=None):
       F150W evidence (#1065) is from cap-on frames, and the mask needs the
       cap to read the star's own measured core (#1064): with the earlier
       cap it moved the bright stars 2 mag faint.
+    * ``SATSTAR_ZF_FIRST_FRAME`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``):
+      with a multi-frame readout (NFRAMES > 1), the anchor reads the scaled
+      first frame (ramp ZEROFRAME extension) where the ramp GROUPDQ flags
+      group 0 SATURATED or DO_NOT_USE (``first_frame_group0``).  On wd2
+      F150W (SHALLOW4) group 0 flattens once its later frames pile up; the
+      jwst saturation step flags those reads DO_NOT_USE and ``ramp_fit``
+      takes their rate from the first frame, while the anchor without this
+      switch reads only the SATURATED bit and rewrites them as R x (flat
+      group 0), up to ~20% low.
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (5.0, the box qfit cap): qfit over the disk r < R around the fit
@@ -1010,6 +1019,7 @@ def satstar_fit_switches(env=None):
         'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
+        'first_frame': _env_switch('SATSTAR_ZF_FIRST_FRAME', cap_on, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1049,6 +1059,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             zf += 'o'
         if sw['g0_groupdq']:
             zf += 'd'
+        if sw['first_frame']:
+            zf += 'f'
         if zf:
             parts.append('zf' + zf)
     if sw['qfit_local_r'] > 0:
@@ -1062,9 +1074,87 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     return '_'.join(parts)
 
 
+def first_frame_group0(group0, first_frame, region, *, lo, hi,
+                       group0_saturated=None, min_px=50, nbins=8,
+                       min_bin=20):
+    """Group 0 with its flagged pixels replaced by the scaled first frame.
+
+    Under a multi-frame readout (NFRAMES > 1) group 0 is the average of the
+    group's frames, and the ramp's ZEROFRAME extension holds the first frame
+    alone.  Once the last frame of group 0 nears saturation the average
+    flattens: on wd2 F150W nrcb3 (SHALLOW4) group 0 / first frame falls from
+    2.66 at 4 x first frame / S = 0-0.2 to 2.44 at 1.0-1.1 and 1.69 at 2-3.
+    The jwst saturation step flags those reads, SATURATED or DO_NOT_USE (its
+    partial-saturation test for averaged groups), on every pixel at
+    4 x first frame / S >= 0.9, and ``ramp_fit`` takes their rate from the
+    first frame.  The caller passes both flags as ``group0_saturated``.
+
+    ``k`` is the median group0 / first_frame in ``nbins`` log-spaced bins of
+    the first frame, over ``region`` pixels with both positive, group 0 in
+    [``lo``, ``hi``) and not flagged.  Bins need ``min_bin`` pixels; the curve
+    is interpolated in log first frame and held at its end bins, and with
+    fewer than two bins a single median is used (``min_px`` pixels at least).
+    The ratio drifts with brightness where group 0 is unflagged too (2.66 at
+    fill 0-0.2 to 2.49 at 0.7-0.9 on nrcb3), so a single median would read
+    the brightest pixels ~6% high.
+
+    A pixel of ``region`` with a positive first frame is replaced by
+    ``k * first_frame`` when its group 0 is flagged or non-finite.  Pixels
+    whose first frame is 0 (jwst zeroes the ZEROFRAME where it saturates) or
+    negative keep their group 0.
+
+    Returns ``(group0_eff, replaced, k_bright)``, ``k_bright`` being the
+    brightest bin's ratio; ``group0`` itself, an empty mask and NaN when
+    ``first_frame`` is None, has another shape, or ``k`` cannot be measured.
+    """
+    shp = np.shape(group0)
+    nothing = (group0, np.zeros(shp, dtype=bool), np.nan)
+    if first_frame is None or np.shape(first_frame) != shp:
+        return nothing
+    g0 = np.asarray(group0, dtype=float)
+    ff = np.asarray(first_frame, dtype=float)
+    ff_ok = np.isfinite(ff) & (ff > 0)
+    g0_ok = np.isfinite(g0) & (g0 > 0)
+    if group0_saturated is not None and np.shape(group0_saturated) == shp:
+        gs0 = np.asarray(group0_saturated, dtype=bool)
+    else:
+        gs0 = np.zeros(shp, dtype=bool)
+    cal = region & ff_ok & g0_ok & ~gs0 & (g0 >= lo) & (g0 < hi)
+    if int(cal.sum()) < min_px:
+        return nothing
+    ratio = g0[cal] / ff[cal]
+    lff = np.log(ff[cal])
+    edges = np.linspace(*np.percentile(lff, [0.5, 99.5]), nbins + 1)
+    ctr, med = [], []
+    for a, b in zip(edges[:-1], edges[1:]):
+        inb = (lff >= a) & (lff <= b)
+        if int(inb.sum()) >= min_bin:
+            ctr.append(float(np.median(lff[inb])))
+            med.append(float(np.median(ratio[inb])))
+    if len(ctr) >= 2:
+        k = np.interp(np.log(np.where(ff_ok, ff, 1.0)), ctr, med)
+        k_bright = med[-1]
+    else:
+        k_bright = float(np.median(ratio))
+        k = np.full(shp, k_bright)
+    if not (np.all(np.isfinite(med)) and np.all(np.asarray(med) > 0)
+            and np.isfinite(k_bright) and k_bright > 0):
+        return nothing
+    replaced = region & ff_ok & (~np.isfinite(g0) | gs0)
+    out = np.where(replaced, k * ff, g0)
+    _curve = (f"{med[0]:.4g} (first frame ~{np.exp(ctr[0]):.0f}) -> "
+              f"{med[-1]:.4g} (~{np.exp(ctr[-1]):.0f}), {len(med)} bins"
+              if len(med) >= 2 else f"{k_bright:.4g}")
+    print(f"satstar first frame: group0/first frame k = {_curve} from "
+          f"{int(cal.sum())} px; {int(replaced.sum())} flagged px read the "
+          f"scaled first frame", flush=True)
+    return out, replaced, k_bright
+
+
 def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                                 g0_sat_frac=0.9, sat_dilate=3, infl_tol=0.10,
-                                R=None, group0_saturated=None):
+                                R=None, group0_saturated=None,
+                                first_frame=None):
     """Recover the saturated-star RIM from the ramp first read (group-0).
 
     A bright star's DQ-SATURATED region reads wrong in the calibrated frame: the
@@ -1133,6 +1223,13 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         rewritten as R x (clipped value), about half the true rate (#1065).
         The ceiling is still estimated from all positive group-0 values at
         SATURATED pixels, flagged ones included, so it keeps the plateau.
+    first_frame : 2-D float array or None
+        The ramp ZEROFRAME extension (integration 0) of a multi-frame readout
+        (``_find_first_frame_for``), or None.  Where ``group0_saturated``
+        is set (the caller then passes SATURATED | DO_NOT_USE) and the first
+        frame is positive, the anchor reads the scaled first frame instead of
+        group 0 (``first_frame_group0``); those pixels then follow the rim
+        path.  The ceiling is still estimated from the raw group 0.
 
     Returns
     -------
@@ -1172,6 +1269,14 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     g0_clean = g0_finite & (group0 > 0) & (group0 < ceiling)
     if group0_saturated is not None and np.shape(group0_saturated) == shp:
         g0_clean = g0_clean & ~np.asarray(group0_saturated, dtype=bool)
+    # Multi-frame readouts: a group 0 whose later frames clipped reads low
+    # (SATSTAR_ZF_FIRST_FRAME; first_frame_group0).  The replaced pixels are
+    # valid whatever their raw value; the R(g0) calibration below still reads
+    # the raw group 0 of unsaturated pixels.
+    g0_eff, _ff_rep, _ = first_frame_group0(
+        group0, first_frame, sat_buf, lo=R_g0_min, hi=ceiling,
+        group0_saturated=group0_saturated)
+    g0_clean = g0_clean | _ff_rep
     _sw = satstar_fit_switches()
     # SATSTAR_ZF_KEEP_FINITE (default OFF): a SATURATED pixel with a finite,
     # nonzero SCI and no DO_NOT_USE was measured from its pre-saturation
@@ -1278,17 +1383,17 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     rim_mask = np.zeros(shp, dtype=bool)
     if np.isfinite(R):
         if _Rcurve is not None:
-            recov_val = np.interp(np.log(np.clip(group0, 1, None)),
-                                  np.log(_Rcurve[0]), _Rcurve[1]) * group0
+            recov_val = np.interp(np.log(np.clip(g0_eff, 1, None)),
+                                  np.log(_Rcurve[0]), _Rcurve[1]) * g0_eff
         else:
-            recov_val = R * group0
+            recov_val = R * g0_eff
         # always rewrite genuinely-saturated rim pixels (group-0 clean); in the
         # (non-DQ-flagged) dilation buffer rewrite only BRIGHT (group0>R_g0_min,
         # so R*group0 is reliable) and INFLATED (charge-migration) pixels, leaving
         # faint neighbours untouched.
         rim_mask = (sat & g0_clean) | (
             sat_buf & ~sat & g0_clean & np.isfinite(data)
-            & (group0 > R_g0_min)
+            & (g0_eff > R_g0_min)
             & (data > recov_val * (1.0 + infl_tol)))
         if _keep is not None:
             rim_mask = rim_mask & ~_keep
@@ -1299,7 +1404,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     return recovered, rim_mask, deep_core_mask, R
 
 
-def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None):
+def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
+                         first_frame=None):
     """Apply the ZEROFRAME fit anchor for ``get_saturated_stars``.
 
     Returns ``(data, zf_deep_core, rim, rewrite_delta)``:
@@ -1319,11 +1425,13 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None):
     blob would mask exactly the pixels KEEP_FINITE keeps (a 45-px blob fully
     masked instead of its 9 deep-core pixels in the test scene).
 
-    ``group0_saturated`` (GROUPDQ first-read saturation, or None) is passed on
-    to ``zeroframe_recover_saturated``.
+    ``group0_saturated`` (GROUPDQ first-read saturation, or None) and
+    ``first_frame`` (the ramp ZEROFRAME extension of a multi-frame readout, or
+    None) are passed on to ``zeroframe_recover_saturated``.
     """
     rec, rim, deep, R = zeroframe_recover_saturated(
-        data, dq, zeroframe, group0_saturated=group0_saturated)
+        data, dq, zeroframe, group0_saturated=group0_saturated,
+        first_frame=first_frame)
     if not np.isfinite(R):
         return data, None, rim, None
     sw = satstar_fit_switches()
@@ -2544,7 +2652,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, zeroframe_group0_saturated=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, sibling_sky=None,
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, zeroframe_group0_saturated=None, zeroframe_first_frame=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, sibling_sky=None,
                         adaptive_fit_shape=False, adaptive_fit_scale=2.83, adaptive_fit_margin=17.0, adaptive_fit_min=21):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -2940,7 +3048,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                      if 'DQ' in [h.name for h in fitsdata] else None)
         data, zf_deep_core, _rim, _zf_rewrite_delta = zeroframe_fit_anchor(
             data, _dqarr_zf, zeroframe,
-            group0_saturated=zeroframe_group0_saturated)
+            group0_saturated=zeroframe_group0_saturated,
+            first_frame=zeroframe_first_frame)
 
     # Fit-quality switches (issue #972), read once per frame.
     _fit_switches = satstar_fit_switches()
@@ -5331,7 +5440,7 @@ def truly_lost_saturated_mask(dq):
     return truly if np.any(truly) else sat
 
 
-def _find_group0_saturation_for(filename):
+def _find_group0_saturation_for(filename, do_not_use=False):
     """Pixels whose ramp first read (integration 0, group 0) is SATURATED in
     the GROUPDQ of the sibling ``_ramp.fits``, or None.
 
@@ -5341,10 +5450,22 @@ def _find_group0_saturation_for(filename):
     returns None.  See ``zeroframe_recover_saturated(group0_saturated=)``.
     ``first_group_saturation_mask`` (the MIRI DQ correction) ORs group 0 over
     every integration; the anchor reads integration 0 only, the integration
-    its first read comes from."""
+    its first read comes from.
+
+    ``do_not_use=True`` also returns group-0 DO_NOT_USE pixels.  Under a
+    multi-frame readout the jwst saturation step sets DO_NOT_USE on an
+    averaged group whose next group saturates and whose value exceeds the
+    saturation threshold times mean(frames) / last frame (0.625 for
+    SHALLOW4): the group's last frames clipped while its average stayed
+    below the threshold.  On wd2 F150W nrcb3 exposure 1, group 0 carries
+    SATURATED at 1418 px and DO_NOT_USE alone at 5087 px; together they
+    cover every SATURATED pixel at 4 x first frame / S >= 0.9."""
     rf = _find_ramp_for(filename)
     if rf is None:
         return None
+    bits = dqflags.group['SATURATED']
+    if do_not_use:
+        bits = bits | dqflags.group['DO_NOT_USE']
     with fits.open(rf) as rh:
         names = [e.name for e in rh]
         if 'SCI' not in names or 'GROUPDQ' not in names:
@@ -5354,10 +5475,42 @@ def _find_group0_saturation_for(filename):
         gdq = rh['GROUPDQ'].data
         if gdq is None or getattr(gdq, 'ndim', 0) != 4:
             return None
-        sat0 = (np.asarray(gdq[0, 0]) & dqflags.group['SATURATED']) != 0
-    print(f"satstar zeroframe: {int(sat0.sum())} px saturated in the first "
+        sat0 = (np.asarray(gdq[0, 0]) & bits) != 0
+    what = "saturated or DO_NOT_USE" if do_not_use else "saturated"
+    print(f"satstar zeroframe: {int(sat0.sum())} px {what} in the first "
           f"read (GROUPDQ) from {rf}", flush=True)
     return sat0
+
+
+def _find_first_frame_for(filename):
+    """The ZEROFRAME extension (integration 0) of the sibling ``_ramp.fits``
+    when its readout averages several frames per group, or None.
+
+    ``_find_zeroframe_for`` hands the anchor group 0, the average of the
+    group's NFRAMES frames; the ZEROFRAME extension holds the first frame
+    alone, which stays valid after the group's later frames saturate (see
+    ``first_frame_group0``).  With NFRAMES = 1 the two are the same read, and
+    without a 4-D SCI cube the loader already falls back to the ZEROFRAME, so
+    both return None."""
+    rf = _find_ramp_for(filename)
+    if rf is None:
+        return None
+    with fits.open(rf) as rh:
+        names = [e.name for e in rh]
+        if 'SCI' not in names or 'ZEROFRAME' not in names:
+            return None
+        if getattr(rh['SCI'].data, 'ndim', 0) != 4:
+            return None
+        nframes = int(rh[0].header.get('NFRAMES', 1) or 1)
+        if nframes <= 1:
+            return None
+        zfx = rh['ZEROFRAME'].data
+        if zfx is None or getattr(zfx, 'ndim', 0) != 3:
+            return None
+        ff = np.asarray(zfx[0], dtype=float)
+    print(f"satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES={nframes}) "
+          f"from {rf}", flush=True)
+    return ff
 
 
 def _find_zeroframe_for(filename):
@@ -5461,13 +5614,26 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         zf = _find_zeroframe_for(filename)
         if zf is not None:
             kwargs['zeroframe'] = zf
-    # GROUPDQ first-read saturation for the fit anchor, which runs whenever a
-    # first read is handed over (SATSTAR_ZF_G0_GROUPDQ, on with the cap): those
-    # pixels are deep core even below the group-0 ceiling.
+    # The first frame of a multi-frame readout stands in for a group 0 whose
+    # later frames clipped (SATSTAR_ZF_FIRST_FRAME, on with the cap).
+    _sw_zf = satstar_fit_switches()
+    if (kwargs.get('zeroframe') is not None
+            and kwargs.get('zeroframe_first_frame') is None
+            and _sw_zf['first_frame']):
+        ff = _find_first_frame_for(filename)
+        if ff is not None:
+            kwargs['zeroframe_first_frame'] = ff
+    # GROUPDQ first-read flags for the fit anchor, which runs whenever a first
+    # read is handed over (SATSTAR_ZF_G0_GROUPDQ, on with the cap): SATURATED
+    # pixels are deep core even below the group-0 ceiling.  With a first frame
+    # the mask also carries group-0 DO_NOT_USE, and those pixels read the
+    # scaled first frame instead.
+    _with_ff = kwargs.get('zeroframe_first_frame') is not None
     if (kwargs.get('zeroframe') is not None
             and kwargs.get('zeroframe_group0_saturated') is None
-            and satstar_fit_switches()['g0_groupdq']):
-        g0s = _find_group0_saturation_for(filename)
+            and (_sw_zf['g0_groupdq'] or _with_ff)):
+        g0s = (_find_group0_saturation_for(filename, do_not_use=True)
+               if _with_ff else _find_group0_saturation_for(filename))
         if g0s is not None:
             kwargs['zeroframe_group0_saturated'] = g0s
     if deblend_with_zeroframe:
