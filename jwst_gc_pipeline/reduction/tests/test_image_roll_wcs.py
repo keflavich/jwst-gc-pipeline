@@ -272,9 +272,11 @@ def test_in_flight_guard_parses_job_names(monkeypatch):
     import subprocess
 
     class R:
-        stdout = ('gc-treasury10678-o063-m7\nbrick2221-o001-reduce-F182M\n'
-                  '1pass_extract_gc-treasury_F212N_o066\ngc-monitor\n')
+        stdout = ('101 gc-treasury10678-o063-m7\n102_3 brick2221-o001-reduce-F182M\n'
+                  '103 1pass_extract_gc-treasury_F212N_o066\n104 gc-monitor\n')
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: R())
+    monkeypatch.delenv('SLURM_JOB_ID', raising=False)
+    monkeypatch.delenv('SLURM_ARRAY_JOB_ID', raising=False)
     busy, names = irw.in_flight_observations(user='x')
     assert ('10678', '063') in busy and ('2221', '001') in busy and (None, '066') in busy
     assert irw.is_busy('10678', '063', 'gc-treasury', busy, names)
@@ -290,6 +292,30 @@ def test_in_flight_guard_parses_job_names(monkeypatch):
     assert irw.is_busy('10678', '040', 'gc-treasury', busy,
                        names + ['gc-treasury10678-regen-F480M'])
     assert irw.is_busy('10678', '040', 'gc-treasury', busy, names + ['gctreasury10678-m7'])
+
+
+def test_in_flight_guard_skips_its_own_job(monkeypatch):
+    """The apply job's own name carries the field; it must not block itself."""
+    import subprocess
+
+    class R:
+        stdout = '44440289 quintuplet-rollwcs-apply-pilot\n'
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: R())
+    monkeypatch.setenv('SLURM_JOB_ID', '44440289')
+    monkeypatch.delenv('SLURM_ARRAY_JOB_ID', raising=False)
+    busy, names = irw.in_flight_observations(user='x')
+    assert names == []
+    assert not irw.is_busy('2045', '003', 'quintuplet', busy, names)
+    # an array task of this job is also this job
+    R.stdout = '500_2 brick-rollwcs-apply\n'
+    monkeypatch.setenv('SLURM_JOB_ID', '502')
+    monkeypatch.setenv('SLURM_ARRAY_JOB_ID', '500')
+    assert irw.in_flight_observations(user='x')[1] == []
+    # a different job with the field name still blocks
+    monkeypatch.setenv('SLURM_JOB_ID', '1')
+    monkeypatch.delenv('SLURM_ARRAY_JOB_ID')
+    busy, names = irw.in_flight_observations(user='x')
+    assert irw.is_busy('1182', '004', 'brick', busy, names)
 
 
 def test_refuses_release_symlink_target(tmp_path):
