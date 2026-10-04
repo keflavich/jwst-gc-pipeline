@@ -44,7 +44,8 @@ program,observation,visit,delta_roll_arcsec,delta_roll_err_arcsec,reference,sour
 10678,081,*,15.4,2.42,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,082,*,18.0,0.96,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,083,*,18.3,2.3,VIRAC2+GaiaDR3,data-qa#346 F212N
-10678,085,*,6.78,2.94,VIRAC2+GaiaDR3,data-qa#346 F212N
+10678,084,*,18.1,2.0,JWST-neighbour-tie,data-qa#346 stage13 neighbour tie (o075 o076 o083) F212N; VIRAC2 rejected: local PM systematic
+10678,085,*,18.0,,adopted-by-fiat,data-qa#346 adopted by fiat (no measurement; adjacent-tile roll prior; 10678 rows median 18.4); measured VIRAC2 5.21 Gaia 11.10 nb-tie 13.23 disputed; remeasure pending
 10678,086,*,16.4,1.13,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,087,*,19.82,2.82,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,098,*,19.9,0.95,VIRAC2+GaiaDR3,data-qa#346 F212N
