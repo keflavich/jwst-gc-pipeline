@@ -80,6 +80,10 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/cataloging.py",
     "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
     "scripts/release/make_preview_rgb.py",
+    # PR #1019 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and the vetting replay (vet_variant).
+    "docs/evidence/faint_local_skyclean/scripts/compare.py",
+    "docs/evidence/faint_local_skyclean/scripts/vet_variant.py",
     "scripts/satstar_deblend/run_satstar_compare.py",
     # aperture photometry reads only the i2d MOSAIC SCI header (rectified,
     # RA---TAN, no SIP) for the WCS + pixel solid angle; positions come from the
@@ -87,9 +91,17 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/aperture_photometry.py",
     "scripts/aperture_photometry/investigate_aperture_vs_psf.py",
     "scripts/aperture_photometry/reference_apcorr_and_compare.py",
+    # reference-field injection tables: reads the production merged data_i2d
+    # (rectified, no SIP) for the WCS that places the injected stars and for
+    # PIXAR_SR / ERR; no per-exposure header is read.
+    "jwst_gc_pipeline/photometry/reference_fields/make_injections.py",
     # DISPLAY only: the WCS is handed to WCSAxes, which needs a real
     # astropy.wcs.WCS.  No catalog position is derived from it.
     "jwst_gc_pipeline/plotting/plot_tools.py",
+    # PR #1020 evidence scripts: the merged m6 residual *_i2d mosaic (rectified,
+    # no SIP), the seed-detection image, for pixel positions of seeds and stars.
+    "docs/evidence/faint_seed_roundness/scripts/seedspike.py",
+    "docs/evidence/faint_seed_roundness/scripts/spikefig.py",
     # one-off historical MIRI reduction scripts, kept for provenance.  They are
     # not on any live pipeline path; converting them cannot be validated
     # because the runs they belong to are finished.  Do NOT copy their pattern.
@@ -105,6 +117,25 @@ ALLOWLIST = {
     # frozen diagnostics/figures for a closed investigation
     "docs/pr57_recovery_investigation/make_caveat_figs.py",
     "docs/pr57_recovery_investigation/make_figs.py",
+    # PR #1018 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and for the _filter_extended_emission
+    # replay (vet_variant).
+    "docs/evidence/faint_prominence_keep/scripts/compare.py",
+    "docs/evidence/faint_prominence_keep/scripts/vet_variant.py",
+    # PR #1016 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
+    # read for a local-peak flag (compare) and the vetting replays
+    # (replay_vetting, vet_variant).
+    "docs/evidence/faint_snr_floor_propagated/scripts/compare.py",
+    "docs/evidence/faint_snr_floor_propagated/scripts/replay_vetting.py",
+    "docs/evidence/faint_snr_floor_propagated/scripts/vet_variant.py",
+    # PR #1021 evidence scripts: merged *_i2d mosaics (rectified, no SIP) --
+    # the data_i2d for prominence (build_pl) and local-peak flags
+    # (anal_exempt_bins, peak_check), and data / m6 residual i2d cutouts
+    # (exempt_gallery).
+    "docs/evidence/faint_prom_floor_bright/scripts/anal_exempt_bins.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/build_pl.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/exempt_gallery.py",
+    "docs/evidence/faint_prom_floor_bright/scripts/peak_check.py",
     "scripts/satstar_deblend/batch_validate.py",
 }
 

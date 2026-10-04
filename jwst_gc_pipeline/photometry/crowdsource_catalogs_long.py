@@ -4410,12 +4410,65 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "~0.9).  -1 (default) = AUTO: 3.0 for extended-emission NIRCam "
                          "fields, off otherwise.  0 = force off.  Satstar force-keep "
                          "(model==catalog) still overrides it.")
+    parser.add_option("--manual-ext-prom-exempt-qfit", dest="manual_ext_prom_exempt_qfit",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_qfit'],
+                    help="Exempt from the --manual-ext-prom-min floor a source with qfit "
+                         "<= this AND merged S/N >= --manual-ext-prom-exempt-snr AND "
+                         "prominence >= --manual-ext-prom-exempt-prom-min (default 0.2; "
+                         "0 = no exemption).  A bright star on nebular emission reads "
+                         "prominence 2-3 because the annulus MAD is emission structure.")
+    parser.add_option("--manual-ext-prom-exempt-snr", dest="manual_ext_prom_exempt_snr",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_snr'],
+                    help="Merged S/N (flux/flux_err_prop) required by the prominence-floor "
+                         "exemption (default 40).")
+    parser.add_option("--manual-ext-prom-exempt-prom-min", dest="manual_ext_prom_exempt_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_prom_min'],
+                    help="Lower prominence floor that applies to exempt sources (default 2.0).")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
-                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")
+                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).  "
+                         "Where the data-i2d prominence is measured the test also needs "
+                         "prominence >= --manual-ext-star-prom-peak-min.")
+    parser.add_option("--manual-ext-star-prom-min", dest="manual_ext_star_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_min'],
+                    help="Extended-emission vetting: keep a source whose data-i2d "
+                         "prominence (rise above the local annulus in annulus-MAD "
+                         "units) is >= this, whatever its peak-SB / local bkg; "
+                         "local_bkg scatters about zero on background-subtracted "
+                         "frames.  0 = off (default 7).")
+    parser.add_option("--manual-ext-star-prom-peak-min", dest="manual_ext_star_prom_peak_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_peak_min'],
+                    help="Extended-emission vetting: the peak-SB keep also needs "
+                         "data-i2d prominence >= this where prominence is measured.  "
+                         "A value >= --manual-ext-star-prom-min leaves the "
+                         "prominence test alone.  0 = off (default 4).")
+    parser.add_option("--manual-ext-star-prom-robust-min", dest="manual_ext_star_prom_robust_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_min'],
+                    help="With --manual-ext-star-prom-min > 0, also keep a source whose "
+                         "neighbour-robust prominence (25th-percentile annulus floor, "
+                         "lower-half MAD) is >= this; neighbours' PSF wings inflate the "
+                         "plain annulus MAD in crowded fields.  0 (default) = off; "
+                         "< 0 = AUTO: 8 on star-dominated fields, off on "
+                         "extended-emission targets, where the 25th-percentile floor "
+                         "reads the dark sides of a filament.")
+    parser.add_option("--manual-ext-star-prom-robust-conc", dest="manual_ext_star_prom_robust_conc",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_conc'],
+                    help="The neighbour-robust prominence branch refuses a source whose "
+                         "data-i2d core flux per unit fitted flux is below this "
+                         "fraction of the field median for prominent stars (core "
+                         "deficit > 5 sigma): a fit to a bump in a bright star's PSF "
+                         "wing.  Default 0.6; 0 = off.")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
+    parser.add_option("--manual-ext-snr-floor-per-frame", dest="manual_ext_snr_floor_propagated",
+                    action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_snr_floor_propagated'],
+                    help="Apply the vetting local S/N floor (--manual-ext-local-snr-min) "
+                         "to flux / flux_err, the mean PER-FRAME S/N.  By default it "
+                         "uses flux / flux_err_prop, the S/N of the merged flux "
+                         "(~sqrt(nmatch) higher).  The sky-clean floor "
+                         "(--manual-sky-clean-snr-min) is always per-frame.")
     parser.add_option("--manual-ext-snr-high-keep", dest="manual_ext_snr_high_keep",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_snr_high_keep'],
                     help="Extended-emission vetting BRIGHT-ISOLATED keep: a "
@@ -4518,8 +4571,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-max-sky-snr",
                     dest="manual_sky_clean_max_sky_snr",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_max_sky_snr'],
-                    help="Sky-clean tier: local emission floor must be <= this many "
-                         "dark-sky sigmas above the dark-sky reference (default 2).")
+                    help="Sky-clean tier, global reference: local emission floor "
+                         "must be <= this many dark-sky sigmas above the dark-sky "
+                         "reference (default 2).  The local reference has its "
+                         "own threshold, --manual-sky-clean-local-max-err.")
     parser.add_option("--manual-sky-clean-prom-min",
                     dest="manual_sky_clean_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_prom_min'],
@@ -4527,7 +4582,27 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-snr-min",
                     dest="manual_sky_clean_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_snr_min'],
-                    help="Sky-clean tier: minimum fit S/N (default 3).")
+                    help="Sky-clean tier: minimum per-frame fit S/N, flux / flux_err (default 3).")
+    parser.add_option("--manual-sky-clean-local-arcsec",
+                    dest="manual_sky_clean_local_arcsec",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_arcsec'],
+                    help="Sky-clean tier: also call a source clean when its "
+                         "deep-i2d annulus floor is within --manual-sky-clean-local-max-err "
+                         "i2d ERR of the 5th percentile of its surrounding tile of "
+                         "this size (default 3 arcsec; 0 = global dark-sky "
+                         "reference only).  A smooth bright plateau is clean; "
+                         "PSF-scale emission structure or crowding is not.  "
+                         "Needs the i2d ERR plane (skipped, with a log line, "
+                         "without it).")
+    parser.add_option("--manual-sky-clean-local-max-err",
+                    dest="manual_sky_clean_local_max_err",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_max_err'],
+                    help="Sky-clean tier, local reference: maximum (annulus "
+                         "floor - tile 5th percentile) in units of the i2d ERR "
+                         "(default 2; ~2.4 sigma of pixel scatter in the Brick "
+                         "dark cloud, where ERR ~ 1.2x the scatter).  The global "
+                         "test's --manual-sky-clean-max-sky-snr is in dark-sky "
+                         "sigma.")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "
@@ -4537,6 +4612,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "neighbour's residual gradient are distorted and fail the "
                          "tight cut (Arches: ~3x more recovered).  Do NOT loosen on "
                          "emission fields (shape is what rejects emission knots).")
+    parser.add_option("--manual-seed-round-loose-max", dest="manual_seed_round_loose_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_max'],
+                    help="Also admit i2d residual-seed detections with roundness up "
+                         "to +-x, but only those whose annulus prominence on the "
+                         "detection image is >= --manual-seed-round-loose-prom-min: "
+                         "a distorted faint star rises above its local structure.  "
+                         "Default 0 = off.  Opt-in per field (0.8 tested): emission "
+                         "knots and diffraction-spike knots also pass the "
+                         "prominence test.")
+    parser.add_option("--manual-seed-round-loose-prom-min", dest="manual_seed_round_loose_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'],
+                    help="Prominence floor of the loose-roundness i2d seeds (default 5).")
     parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_lo'],
                     help="DAOStarFinder sharpness lower bound for the residual seed "
@@ -4673,6 +4760,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help="Square cutout size (arcsec) for DS9 point regions / "
                          "fallback.  Default 5.0.",
                     metavar="cutout_size_arcsec")
+    parser.add_option("--inject-stars", dest="inject_stars",
+                    default='',
+                    help=("Artificial-star truth table (ra, dec, "
+                          "flux_jy_<FILTER>) to add to every cutout frame "
+                          "before fitting (photometry/injection.py; the "
+                          "reference-field regression tests).  Requires "
+                          "--cutout-region."),
+                    metavar="inject_stars")
+    parser.add_option("--inject-seed", dest="inject_seed",
+                    default=0, type='int',
+                    help="Seed for the injected stars' photon-noise draw.",
+                    metavar="inject_seed")
     # Fit saturated stars whose centres lie OUTSIDE this frame's FOV (from
     # regions_/saturated_stars_outside_fov[_locked].reg) so their wings are
     # subtracted.  Tri-state: default (None) -> ON for normal runs, OFF for
@@ -4802,6 +4901,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
+    parser.add_option('--manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
+                      action='store_true',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
+                      help="Seed each band's m7 fit from the cross-band seed UNION "
+                           "that band's own m6 vetted catalog, plus daofind on its "
+                           "m6 residual - bg mosaic.  Off by default (cross-band "
+                           "seed alone): the own-band sources this restores are "
+                           "confirmed by an independent visit 0.21x as often as "
+                           "the ones m7 already has.")
+    parser.add_option('--manual-m7-seed-own-band-companion-fwhm',
+                      dest='manual_m7_seed_own_band_companion_fwhm', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
+                      help='With --manual-m7-seed-own-band: own-band sources within '
+                           'this many PSF FWHM of a brighter seed source are not '
+                           'added (PSF-ring fits).  0 disables.  Default 2.5.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
