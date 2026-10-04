@@ -147,8 +147,13 @@ Main gained satstar changes (#1067, #1069, #1072) after d1ea6b73.
 on by default).  Its scores and injected-star recoveries equal `defon`'s in
 every field and bin (+0/−0 everywhere, `reffield_defonm_vs_defon.json`),
 so the satstar changes leave the reference fields unchanged.  `defownm`
-runs this PR's head (a689fcdd) at its defaults on all four fields and is
-the provenance-checked run for `test_reference_field_passes`.
+ran this PR's head code (a689fcdd, clean checkout; all 44 runs record that
+commit) at its defaults on all four fields.  Its scores and injected-star
+recoveries equal `defown`'s on the three star fields and `defoff`'s on
+`bright_modest` in every bin (+0/−0; `reffield_defownm_vs_defown.json`,
+`reffield_defownm_vs_defoff.json`), and
+`JWST_GC_REFFIELD_VARIANT=defownm pytest -k test_reference_field_passes`
+passes all four fields with the provenance check (4 passed).
 
 ## Figures
 
@@ -348,6 +353,15 @@ python -m jwst_gc_pipeline.photometry.reference_fields.figures --variant defown 
     --fields superdense,dense_bright,dark --phase m7 --seeds 0,1 --out figures/defoff_vs_defown/
 python scripts/bg_holes.py <field> defoff defown defown_bg_holes_<field>.json
 JWST_GC_REFFIELD_VARIANT=defon python -m pytest \
+    jwst_gc_pipeline/photometry/tests/test_reference_fields.py -k test_reference_field_passes
+
+# runs at the PR head on main (defonm used 9cc105c2, the first version of this PR)
+python -m jwst_gc_pipeline.photometry.reference_fields.run --variant defownm --submit
+python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant defownm \
+    --json defownm_vs_defown.json --baseline defown.json
+python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant defonm \
+    --json defonm_vs_defon.json --baseline defon.json
+JWST_GC_REFFIELD_VARIANT=defownm python -m pytest \
     jwst_gc_pipeline/photometry/tests/test_reference_fields.py -k test_reference_field_passes
 ```
 
