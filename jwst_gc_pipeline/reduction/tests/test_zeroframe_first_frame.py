@@ -134,6 +134,12 @@ def test_an_unflagged_low_group0_is_kept():
     what ``ramp_fit`` used as well."""
     data, dq, g0, ff, gsat, gdnu, masks = _scene()
     _, rim_c, _ = masks['c']
+    _, _, wing_a = masks['a']
+    iy, ix = np.argwhere(wing_a)[0]
+    g0[iy, ix] = 0.7 * 8000.0               # 30% below k x first frame
+    out, rep, k = _ffg(g0, ff, gsat | gdnu)
+    assert k == pytest.approx(K_TRUE)
+    assert not rep[iy, ix] and out[iy, ix] == g0[iy, ix]
     out, rep, k = _ffg(g0, ff, gsat)
     assert not rep[rim_c].any()
     assert np.array_equal(out[rim_c], g0[rim_c])
