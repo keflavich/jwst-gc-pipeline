@@ -2486,11 +2486,13 @@ def _satstar_recovery_signature(options):
     satstar catalogs; only a recovery/deblend run rebuilds a legacy (or
     differently-configured) cache.
 
-    The deblend flag is an appended ``_dbl1`` token rather than a field of the
-    recovery triple, so that with deblending OFF this returns byte-identical
-    strings to the pre-#427 version: the ~409 cached catalogs in a single
+    The deblend flag is an appended ``_dbl<version>`` token rather than a
+    field of the recovery triple, so that with deblending OFF this returns
+    byte-identical strings to the pre-#427 version: the ~409 cached catalogs in a single
     filter of brick alone stay valid for every run that does not ask for the
-    deblend."""
+    deblend.  The token carries a version: ``_dbl2`` since the deblender
+    resolves stars in large blended components (#1081), so deblended catalogs
+    seeded by the earlier deblender (``_dbl1``) are refit."""
     zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
     ramp = bool(getattr(options, 'satstar_ramp_recover', False))
     deblend = bool(getattr(options, 'deblend_satstars', False))
@@ -2499,7 +2501,7 @@ def _satstar_recovery_signature(options):
     else:
         base = "zf%d_ramp%d_dil%d" % (
             int(zf), int(ramp), int(getattr(options, 'satstar_zeroframe_dilate', 3)))
-    return base + "_dbl1" if deblend else base
+    return base + "_dbl2" if deblend else base
 
 
 def _fill_saturated_pixels(filename, data, dqarr, was_sat, finite_model,

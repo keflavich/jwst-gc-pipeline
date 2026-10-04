@@ -10,6 +10,11 @@ Modules:
   * ``catalog_assembly`` -- assemble a CMZ-wide catalog from per-field combined
     catalogs (vstack + cross-field dedup + provenance + coverage); write
     FITS/ECSV/Parquet.  (pure-Python; no optional deps)
+  * ``treasury_joint_catalog`` -- the all-TILE joint NIRCam catalog for program
+    10678 (GC Treasury): per-tile astrometric overlap gate, vectorized
+    cross-tile dedup (grouped by obsid, reusing ``catalog_assembly``'s
+    ``_dedup_cross_field``), provenance sidecar.  NIRCam only -- MIRI F770W is
+    out of scope (issue #956).  (pure-Python; no optional deps)
   * ``hips`` -- mono-per-filter HiPS substrate + **pure-Python incremental merge**
     (per-order tile combine, no pyramid re-derivation) + derived two-color HiPS
     (R=F480M, B=F212N, G=0.5*(R+B), global stretch).  (needs ``reproject`` +
@@ -26,4 +31,5 @@ The three catalog layers are complementary, not alternatives:
   hats_export = ANALYSE/distribute/cross-match at scale.
 """
 
-__all__ = ['catalog_assembly', 'hips', 'coverage_moc', 'hats_export', 'hipsgen']
+__all__ = ['catalog_assembly', 'treasury_joint_catalog', 'hips', 'coverage_moc',
+          'hats_export', 'hipsgen']

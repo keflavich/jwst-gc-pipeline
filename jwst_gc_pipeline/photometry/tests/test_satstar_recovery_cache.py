@@ -57,6 +57,15 @@ def test_signature_covers_the_deblend_flag():
     assert len(sigs) == 4
 
 
+def test_deblend_token_names_the_deblender_version():
+    """Catalogs seeded by the deblender before #1081 (``_dbl1``) collapsed
+    large blended components to one seed; a deblend run refits them."""
+    assert _satstar_recovery_signature(_opts(deblend_satstars=True)) == "off_dbl2"
+    assert _satstar_recovery_signature(
+        _opts(satstar_zeroframe_recover=True,
+              deblend_satstars=True)) == "zf1_ramp0_dil3_dbl2"
+
+
 def test_deblend_off_keeps_the_pre_427_signature_strings():
     """The deblend token is APPENDED, so with the deblend off the signature is
     byte-identical to what built the caches already on disk (409 in brick F410M

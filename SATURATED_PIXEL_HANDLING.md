@@ -96,6 +96,26 @@ code), so `git grep -n '<symbol>'` resolves any reference here, and
   original harm (real sources vetoed on bright emission; cloudc 2526 F770W) is
   unmitigated on MIRI.
 
+  **Readout bound** (`satstar_readout_data_floor`): a pixel that reached the
+  saturation level S (DN) by the last group has a rate of at least S / t_last, so
+  its crf value is at least about S · PHOTMJSR / t_last. On NIRCam the finder wing
+  floor is lowered to `FRAC × 50000 × PHOTMJSR / t_last` (MJy/sr) when that value
+  is below the table entry; it never raises a table entry or turns on a filter
+  whose entry is 0. t_last is the mean time of the last group,
+  `((NGROUPS − 1)(NFRAMES + GROUPGAP) + (NFRAMES + 1)/2) × TFRAME`, and FRAC is
+  0.5 (env `SATSTAR_DATA_FLOOR_READOUT_FRAC`; 0 restores the table). The table
+  values were tuned on a long-ramp field (W51 F480M, SHALLOW2 × 5 groups, rule
+  value 213). On the shallow wd2 F410M ramp (SHALLOW4 × 7 groups, t_last 349 s)
+  the rule value is 62 against the table 800, and the 800 floor dropped 1037
+  components (first saturated group 1–6), most of them 15–16 mag stars that
+  daophot then masked.
+  On both fields the components with a SATURATED flag split into a group at
+  10–80 MJy/sr (flagged pixels that are not stars) and a group that tracks
+  S · PHOTMJSR / t_g of their first saturated group; the rule value falls
+  between the two. An explicit floor or env `SATSTAR_DATA_FLOOR` takes
+  precedence, and the satstar cache key carries `dfr<FRAC>` when the readout
+  bound is active.
+
   Override: `--saturation-data-floor` (photometry), env `SATSTAR_DATA_FLOOR`
   (finder). `-1` = per-filter auto; `0` = mask all SATURATED; `>0` = explicit.
 
@@ -359,6 +379,33 @@ flux, trading depth for a brighter saturation ceiling:
   averages several frames, and its pile-up level varies by pixel: on wd2 F150W
   nrcb3, 3699 group-0-saturated pixels sat below the ceiling and were rewritten
   to about half the rate the ramp fit took from the ZEROFRAME (#1065).
+  Group 0 also flattens once the later frames of a multi-frame group reach the
+  pile-up level: group 0 / first frame falls from 2.66 at a predicted
+  last-frame fill (NFRAMES × first frame / saturation) of 0–0.2 to 2.44 at
+  fill 1.0–1.1 and 1.69 at fill 2–3 (wd2 F150W nrcb3; nrcb1 2.60 → 2.38 →
+  1.62). The jwst saturation step flags these reads: an averaged group whose
+  next group saturates and whose value exceeds the threshold × mean(frames) /
+  last frame (0.625 for SHALLOW4) gets DO_NOT_USE, and every SATURATED pixel
+  at fill ≥ 0.9 carries SATURATED or DO_NOT_USE in group 0 (nrcb3 exposure 1:
+  1418 SATURATED, 5087 DO_NOT_USE only). `ramp_fit` then has no good group and
+  takes the rate from the ZEROFRAME. The anchor without the next switch reads
+  only the SATURATED bit, so it rewrites the DO_NOT_USE pixels as R × (flat
+  group 0): recovered / crf falls from 1.05 to 0.82 at fill 1.5–2 on nrcb3
+  and to 0.77 on nrcb1. With `SATSTAR_ZF_FIRST_FRAME` (on by default with the
+  cap) `remove_saturated_stars` loads the ramp ZEROFRAME extension, which
+  holds the first frame alone (`_find_first_frame_for`, only for NFRAMES > 1),
+  and the group-0 mask with DO_NOT_USE included
+  (`_find_group0_saturation_for(do_not_use=True)`). `first_frame_group0`
+  measures k = group 0 / first frame as binned medians in log first frame
+  over the frame's unflagged SATURATED-buffer pixels with group 0 in
+  [R_g0_min, ceiling) (2.675 → 2.561 on nrcb3, 2.622 → 2.502 on nrcb1; the
+  ratio drifts with brightness below the flag threshold too), and replaces
+  group 0 by k(first frame) × first frame wherever group 0 is flagged and the
+  first frame is positive. Pixels whose first frame is 0 (jwst zeroes the
+  ZEROFRAME where the first frame saturates) stay deep core. On nrcb3
+  exposure 1 it replaces 6617 pixels, and the recovered / crf ratio of the
+  flagged pixels stays at 1.04–1.06 from fill 0.2 to 5 (nrcb1: 1.00–1.01);
+  unflagged pixels read 1.02 (nrcb1 1.00) with or without the switch.
   DEAD, HOT and REFERENCE_PIXEL pixels are left out of the rewrite
   (`SATSTAR_ZF_RIM_BADPIX`, default on): dead/hot clumps carry the SATURATED bit
   with a group-0 of ~0.001–1.2 DN, and their `R×group0` rewrite, weighted at 5%
@@ -522,6 +569,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | var | default | effect |
 |---|---|---|
 | `SATSTAR_DATA_FLOOR` | per-filter | override the finder data floor |
+| `SATSTAR_DATA_FLOOR_READOUT_FRAC` | 0.5 | NIRCam: lower a per-filter finder floor to FRAC × 50000 × PHOTMJSR / t_last when smaller; 0 keeps the table |
 | `MIRI_FIRSTGROUP_SAT_DQ` | 0 | MIRI: keep only first-group (unrecoverable) saturation |
 | `MIRI_SATSTAR_SPIKE_MERGE` / `…_RATIO` | 3 / 3.0 | spike-satellite merge gap / size ratio |
 | `MIRI_SATSTAR_SEED_{PROM,CORE,CONC}_MIN` | 8.0 / 1000 / 1.3 | seed-gate thresholds |
@@ -550,6 +598,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
 | `NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC` | 0.005 | the recovered-core cap skips a star whose model peak pixel is unmeasured when the measured pixel it reads has a unit PSF below this fraction of the peak; the data there belong to other sources (§2b) |
 | `SATSTAR_ZF_G0_GROUPDQ` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (#1065) |
+| `SATSTAR_ZF_FIRST_FRAME` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | with NFRAMES > 1, the ZEROFRAME anchor reads k(first frame) × the ramp ZEROFRAME extension (the first frame) where the ramp GROUPDQ flags group 0 SATURATED or DO_NOT_USE; k = binned median group 0 / first frame on the frame's unflagged pixels (`first_frame_group0`) |
 | `SATSTAR_ZF_RIM_BADPIX` | 1 (**on**) | leave DEAD, HOT and REFERENCE_PIXEL pixels out of the ZEROFRAME rim rewrite, and floor a rewritten pixel's fit error at the frame's median ERR; 0 restores the rewrite that weighted dead pixels at 400–5e8× a normal pixel (#1071) |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
@@ -565,7 +614,7 @@ The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table ab
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
 
-The six `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows and
+The seven `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows and
 `SATSTAR_ERR_BKG_SCATTER` are read by `satstar_fit_switches`, and the
 per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
