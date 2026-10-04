@@ -2933,6 +2933,12 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # Deeply-saturated (truly-lost/clipped) cores are left uncapped.  Ext-NIRCam.
     if 'NIRCAM_SATSTAR_RECOVERED_CAP' not in os.environ:
         os.environ['NIRCAM_SATSTAR_RECOVERED_CAP'] = '1' if _sat_ext_nircam else '0'
+    # Add the local background scatter to the satstar fit errors (crf ERR has
+    # read + Poisson noise only, so a crowded/nebular background dominates chi2
+    # and the star comes out faint).  Ext-NIRCam only.  Set only when enabling,
+    # so other fields keep their satstar cache keys.  A user export is respected.
+    if _sat_ext_nircam and 'SATSTAR_ERR_BKG_SCATTER' not in os.environ:
+        os.environ['SATSTAR_ERR_BKG_SCATTER'] = '1'
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
