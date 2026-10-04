@@ -415,7 +415,8 @@ flux, trading depth for a brighter saturation ceiling:
   within 0.015 mag of the unsaturated stars (benchmark |dm| < 0.3: 862 →
   863 of 876, MAD 0.025 → 0.018). On F277W nrcblong the 14–17 mag offset went
   from +0.03 to −0.01 (3031 → 3042 of 3257) with the per-magnitude scatter
-  0.003–0.006 mag larger (#1092).
+  0.003–0.006 mag larger (#1092); the default accepts that scatter increase
+  for the removal of the offset.
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
