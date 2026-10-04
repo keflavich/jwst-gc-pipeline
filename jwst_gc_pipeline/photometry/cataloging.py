@@ -2235,6 +2235,50 @@ def _auto_star_prom_robust_min(value, options):
     return 0.0 if _is_extended_emission(options) else 8.0
 
 
+def _auto_seed_round_loose_max(value, options, *, miri=False):
+    """Resolve ``--manual-seed-round-loose-max``.
+
+    ``value < 0`` is AUTO (the default): 0.8 on star-dominated NIRCam fields
+    and 0 (the loose window off) on an extended-emission target
+    (:func:`_is_extended_emission`) and on MIRI; ``value >= 0`` is used
+    verbatim.
+
+    Annulus prominence, the loose window's only extra test, also passes
+    emission knots and diffraction-spike knots.  On the full Brick and Sgr B2
+    frames 29-31% of the loose-only seeds sit in the brightest tenth of the
+    background (docs/evidence/faint_seed_roundness), and the measurement that
+    supports turning the window on comes from star fields only
+    (docs/evidence/faint_defaults_on).  MIRI's residual seeds were never
+    measured with it.
+    """
+    value = float(value)
+    if value >= 0:
+        return value
+    return 0.0 if (miri or _is_extended_emission(options)) else 0.8
+
+
+def _auto_m7_seed_own_band(value, options, *, miri=False):
+    """Resolve ``--manual-m7-seed-own-band``.
+
+    ``value is None`` is AUTO (the default): on for star-dominated NIRCam
+    fields and off on an extended-emission target
+    (:func:`_is_extended_emission`) and for a MIRI filter; ``True`` / ``False``
+    (the flag / ``--no-`` flag) are used verbatim.
+
+    The own-band seed adds this band's residual detections at m7.  Every m7
+    seed position is masked out of the smoothed background, so a seed that
+    vetting then drops leaves a hole in the background map.  On the W51
+    reference field (F187N) the union gained one injected star and raised the
+    residual excess from 0.21 to 0.48 per arcsec^2 through such holes, while on
+    the three star-field reference fields it lowered the excess and gained
+    stars (docs/evidence/faint_defaults_on).  All-MIRI runs drop m7; a MIRI
+    filter in a mixed run was never measured with it.
+    """
+    if value is not None:
+        return bool(value)
+    return not (miri or _is_extended_emission(options))
+
+
 def _resolve_each_suffix(options, filtername):
     """Per-filter input per-exposure-crf suffix.
 
@@ -3822,7 +3866,8 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
                         companion_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
                         fwhm_arcsec=None, label=''):
     """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
-    vetted catalog (opt-in, ``manual_m7_seed_own_band``).
+    vetted catalog (``manual_m7_seed_own_band``; AUTO by default, see
+    :func:`_auto_m7_seed_own_band`).
 
     The cross-band seed keeps only positions confirmed (S/N > 5, qfit < 0.2)
     in >= 2 filters.  Used ALONE as the m7 seed it leaves out every source
@@ -4104,9 +4149,6 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     _endsuf = '' if _modtok else _obssuf
     _modules = (getattr(options, 'modules', '') or 'merged').split(',')
     _xbseed = crossband_seed_file(cut_bp, options)
-    # only this run's m7 seeds: with the own-band seed off, a band seed left
-    # over from an earlier run says nothing about this merged catalog
-    _m7_own = bool(mopt(options, 'manual_m7_seed_own_band'))
     n_m7_i2d = 0
     # Per-filter independence is OR-ed across modules and counted ONCE per
     # filter.  (The previous module-outer loop added ``indep`` to
@@ -4128,6 +4170,11 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
             sc6 = m6['skycoord'] if isinstance(m6['skycoord'], SkyCoord) else SkyCoord(m6['skycoord'])
             _, sep, _ = ref.match_to_catalog_sky(sc6)
             indep |= np.asarray(sep < radius_mas * u.mas)
+        # only this run's m7 seeds: with the own-band seed off, a band seed
+        # left over from an earlier run says nothing about this merged catalog
+        _m7_own = _auto_m7_seed_own_band(
+            mopt(options, 'manual_m7_seed_own_band'), options,
+            miri=_L._instrument_from_filter(filt) == 'MIRI')
         for module in (_modules if _m7_own else []):
             p7 = vetted_to_i2dseed(m7_band_seed_path(_xbseed, module, f))
             if not os.path.exists(p7):
@@ -8138,11 +8185,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 elif phase == 'm7':
                     prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
                     resbg_path = bg_for_next.get((module, filt))      # bg from m6
-                    # opt-in: cross-band seed UNION this band's own m6 vetted
-                    # catalog, plus daofind on the m6 residual - m6 bg (as m6
-                    # does on m5's): see _build_m7_band_seed.  Off (default)
-                    # -> cross-band only.
-                    if bool(mopt(opts_phase, 'manual_m7_seed_own_band')):
+                    # cross-band seed UNION this band's own m6 vetted catalog,
+                    # plus daofind on the m6 residual - m6 bg (as m6 does on
+                    # m5's): see _build_m7_band_seed.  AUTO by default
+                    # (_auto_m7_seed_own_band); off -> cross-band only.
+                    if _auto_m7_seed_own_band(
+                            mopt(opts_phase, 'manual_m7_seed_own_band'), opts_phase,
+                            miri=_L._instrument_from_filter(filt) == 'MIRI'):
                         _own = [q for _m, _f, q in crossband_seed_inputs(
                                     cut_bp, modules, filternames, options)
                                 if _m == module and _f == filt]
@@ -8169,7 +8218,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
-                        _sround_loose = float(mopt(opts_phase, 'manual_seed_round_loose_max'))
+                        _sround_loose = _auto_seed_round_loose_max(
+                            mopt(opts_phase, 'manual_seed_round_loose_max'),
+                            opts_phase,
+                            miri=_L._instrument_from_filter(filt) == 'MIRI')
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),

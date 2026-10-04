@@ -172,11 +172,12 @@ extended emission dominates the false positives.
 
 For the merged-i2d-seeded phases (m3+), a second `daofind` runs on the **detection
 co-add** itself (`_build_i2d_augmented_seed`) with its own bounds —
-`--manual-seed-round-max=0.5`, `--manual-seed-sharp-lo/hi=0.4/1.2` (opt-in:
-`--manual-seed-round-loose-max=0.8` also admits detections with roundness up to
-±0.8 whose annulus prominence on the detection image is ≥
-`--manual-seed-round-loose-prom-min=5`; emission knots and diffraction-spike
-knots pass that test too, so it is off by default) — and that
+`--manual-seed-round-max=0.5`, `--manual-seed-sharp-lo/hi=0.4/1.2` (on
+star-dominated NIRCam fields `--manual-seed-round-loose-max` AUTO = 0.8 also
+admits detections with roundness up to ±0.8 whose annulus prominence on the
+detection image is ≥ `--manual-seed-round-loose-prom-min=5`; emission knots and
+diffraction-spike knots pass that test too, so AUTO is 0 on extended-emission
+targets and MIRI) — and that
 result is unioned with the previous phase's vetted merged catalog and deduped at
 `0.5 × FWHM`. FWHM is per-filter from `reduction/fwhm_table.ecsv` (F210M 2.30,
 F212N 2.34, F480M 2.57 px).
@@ -229,8 +230,9 @@ rejection**.
   background each time. m6 is the final per-filter pass.
 - **m7** (multi-filter only): the seed is the cross-band merge of every filter's
   m6 vetted catalog, deduped so a star seen in N bands seeds once.
-  `--manual-m7-seed-own-band` (opt-in) adds this filter's own m6 vetted
-  catalog, except sources within `--manual-m7-seed-own-band-companion-fwhm`
+  `--manual-m7-seed-own-band` (AUTO by default: on for star-dominated NIRCam
+  fields, off on an extended-emission target and for MIRI filters;
+  `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` force it) adds this filter's own m6 vetted catalog, except sources within `--manual-m7-seed-own-band-companion-fwhm`
   (2.5) PSF FWHM of a brighter seed source, plus daofind detections on the m6
   residual mosaic minus the m6 background. Fit on m6 background-subtracted
   frames.
@@ -337,7 +339,7 @@ still run after m6.
 | `--manual-overshoot-action` | `refit` | refit | refit | refit |
 | `--manual-iter2-local-snr` | 3.0 | 3.0 (m2+) | 3.0 | 3.0 |
 | `--manual-seed-round-max` | 0.5 | 0.5 | 0.5 | 0.5 |
-| `--manual-seed-round-loose-max` | 0.0 (off; opt-in) | 0 | 0 | 0 |
+| `--manual-seed-round-loose-max` | -1 (AUTO) | 0.8 | 0 | 0 |
 | `--manual-seed-round-loose-prom-min` | 5.0 | 5.0 | 5.0 | 5.0 |
 | `--manual-seed-sharp-lo` / `-hi` | 0.4 / 1.2 | 0.4 / 1.2 | | |
 | `--manual-struct-noise-x` (`struct_x`) | 0.0 | 0.0 (off) | **1.0** (auto) | **5.0** m12–m4, **3.0** m5–m6 |
@@ -380,7 +382,7 @@ still run after m6.
 | `--manual-crossband-seed-min-filters` | 2 | 2 | 2 | 2 |
 | `--manual-crossband-seed-snr-min` (on flux / flux_err, the per-frame S/N) | 5.0 | 5.0 | | |
 | `--manual-crossband-seed-qfit-max` | 0.2 | 0.2 | | |
-| `--manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `False` | off | off | (unused: MIRI drops m7) |
+| `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
@@ -425,7 +427,7 @@ Notes on the tri-state and env-driven values:
 - **Cross-band (m7).** Multi-filter runs union the per-filter vetted m6 catalogs,
   dedup co-located positions (`--manual-crossband-seed-dedup-mas=30`), and can
   require independent ≥`--manual-crossband-seed-min-filters` confirmation.
-  With `manual_m7_seed_own_band` (opt-in) each band adds back its own m6 vetted
+  With `manual_m7_seed_own_band` (AUTO: on for star-dominated NIRCam fields) each band adds back its own m6 vetted
   sources, so the confirmation requirement limits what one band propagates to
   the others and leaves each band's own vetted catalog in its m7 fit.
 - **Forced cross-band fill (m8).** Force-fits every band at the merged position of
@@ -545,7 +547,8 @@ control is the default.
 - Cross-band seed requires a ≥2-filter coincidence **by default**
   (`--manual-crossband-seed-min-filters=2`, `--manual-crossband-seed-max-sep-mas=30`),
   so a source detectable in only one band is not propagated to the OTHER bands.
-  `--manual-m7-seed-own-band` (opt-in) makes each band's m7 seed that
+  `--manual-m7-seed-own-band` (AUTO: on for star-dominated NIRCam fields,
+  off on an extended-emission target and for MIRI filters) makes each band's m7 seed that
   cross-band seed UNION the band's own m6 vetted catalog, plus daofind on its
   m6 residual − bg mosaic (`_build_m7_band_seed`), so a source this band's own
   vetting accepted stays in this band's m7 fit.  Own-band sources within
@@ -553,8 +556,13 @@ control is the default.
   source are not added: in Brick F182M and F212N they match an independent
   visit at the chance rate (fits in a brighter star's PSF-mismatch ring).
   The remaining restored sources match it 0.4–0.8× as often as the m6 vetted
-  sources m7 already has (`docs/evidence/faint_m7_seed_union`), so the union
-  is off by default.  A merged source that only this band's m7 residual
+  sources m7 already has (`docs/evidence/faint_m7_seed_union`).
+  `docs/evidence/faint_defaults_on` has the faint-star reference-field
+  results with and without it.  It is off on extended-emission targets
+  because every m7 seed position is masked out of the smoothed background:
+  on the W51 field the extra seeds that vetting then dropped left holes in
+  the background map and raised the residual excess, for one injected star
+  gained.  A merged source that only this band's m7 residual
   daofind found is flagged `independently_detected_<filt>` in that band (its
   `seed_origin` is `i2d` in the band's
   `crossband_seed_manual*_<module>_<filt>_i2dseed.fits`).

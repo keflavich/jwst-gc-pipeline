@@ -1,13 +1,14 @@
 """i2d residual seed: detections with roundness beyond the tight +-0.5 cut are
 admitted up to +-0.8 when they rise above their local structure (annulus
-prominence), and rejected when they sit in structure.  Opt-in (default 0).
+prominence), and rejected when they sit in structure.  AUTO by default:
+on for star-dominated NIRCam fields, off on extended-emission targets and MIRI.
 
 A faint star distorted by noise or a neighbour's wing fails +-0.5 (Brick F182M
 m7 residual peaks at S/N > 7: 55% pass +-0.5, 78% pass +-0.8).  The synthetic
 knot below sits inside PSF-scale structure and has low prominence; real
 nebular knots and diffraction-spike knots often pass the prominence test
-(W51 F187N; Brick and Sgr B2 full frame), which is why the loose cut is off
-by default.
+(W51 F187N; Brick and Sgr B2 full frame), which is why the AUTO default
+leaves the loose cut off on extended-emission targets.
 """
 import os
 
@@ -103,8 +104,30 @@ def test_loose_roundness_admits_star_not_knot(tmp_path, loose, star_in):
 
 def test_pipeline_default():
     assert MANUAL_DEFAULTS['manual_seed_round_max'] == 0.5
-    assert MANUAL_DEFAULTS['manual_seed_round_loose_max'] == 0.0      # opt-in
+    assert MANUAL_DEFAULTS['manual_seed_round_loose_max'] == -1.0     # AUTO
     assert MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'] == 5.0
+
+
+def test_auto_round_loose_off_on_extended_emission_and_miri():
+    from types import SimpleNamespace
+    from jwst_gc_pipeline.photometry.cataloging import _auto_seed_round_loose_max
+    auto = MANUAL_DEFAULTS['manual_seed_round_loose_max']
+    for target in ('w51', 'sickle', 'wd2', 'ngc6334'):
+        assert _auto_seed_round_loose_max(auto, SimpleNamespace(target=target)) == 0.0
+    for target in ('brick', 'sgrb2', 'sgra', 'cloudc'):
+        assert _auto_seed_round_loose_max(auto, SimpleNamespace(target=target)) == 0.8
+        assert _auto_seed_round_loose_max(
+            auto, SimpleNamespace(target=target), miri=True) == 0.0
+    # --extended-emission / --no-extended-emission override the target list
+    assert _auto_seed_round_loose_max(
+        auto, SimpleNamespace(target='brick', extended_emission=True)) == 0.0
+    assert _auto_seed_round_loose_max(
+        auto, SimpleNamespace(target='w51', extended_emission=False)) == 0.8
+    # an explicit value is used verbatim, on MIRI too
+    assert _auto_seed_round_loose_max(0.0, SimpleNamespace(target='brick')) == 0.0
+    assert _auto_seed_round_loose_max(0.7, SimpleNamespace(target='w51')) == 0.7
+    assert _auto_seed_round_loose_max(
+        0.8, SimpleNamespace(target='brick'), miri=True) == 0.8
 
 
 def _rot_blob(x0, y0, amp, q, theta_deg):
