@@ -263,6 +263,14 @@ FIELDS = {
     # Stage with `--exposures-only --exposures-from-disk`; a plain `--stage`
     # would look for mosaics and find none.
     #
+    # Catalogs ship separately via `--joint-catalog`: there is no per-field
+    # per-pointing merge here (66 tiles, no field-wide cross-band merge), so
+    # the normal `discover_catalogs` path has nothing to find.  Instead
+    # `jwst_gc_pipeline.cmz.treasury_joint_catalog` builds a single all-tile
+    # NIRCam catalog with cross-tile duplicates collapsed, and
+    # `stage_joint_catalog` copies the newest gated build from
+    # `joint_catalog_root` into this release's `catalogs/`.
+    #
     # Every observation the registry knows is listed rather than globbed, and
     # the list must never be emptied.  `enumerate_field_exposures` skips its
     # scoping filter when the list is empty (`if keys and ... not in keys`) and
@@ -282,6 +290,13 @@ FIELDS = {
             "o129", "o130", "o131", "o132", "o133", "o134", "o135", "o137",
             "o138", "o139",
         ],
+        # Parent of the versioned joint-catalog build directories written by
+        # `treasury_joint_catalog.write_joint_catalog` (one subdirectory per
+        # `--version-tag`, e.g. `2026-10-04_rollcorr_v1_dataqa346/`, each
+        # holding the `.fits`/`.parquet`/`.prov.json` triple).  `--joint-catalog`
+        # picks the newest one with a provenance sidecar unless
+        # `--joint-catalog-dir` names one explicitly.
+        "joint_catalog_root": Path("/orange/adamginsburg/jwst/gc-treasury/catalogs_joint"),
     },
     "gc2211": {
         "data_dir": Path("/orange/adamginsburg/jwst/gc2211"),
@@ -2689,6 +2704,296 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
     return field_dir, len(exposures)
 
 
+# ---------------------------------------------------------------------------
+# gc-treasury joint NIRCam catalog (jwst_gc_pipeline.cmz.treasury_joint_catalog)
+# ---------------------------------------------------------------------------
+# Manifest `kind`s this block writes under category "catalog".  Named here so
+# `stage_joint_catalog` can find and replace its OWN previous items by kind
+# rather than by filename -- the output stem is fixed
+# (`gctreasury10678_joint_nircam`), but matching on kind keeps a re-stage
+# correct even if that ever changes.
+JOINT_CATALOG_KINDS = ("catalog_joint", "catalog_joint_provenance")
+
+
+class JointCatalogGateError(RuntimeError):
+    """A joint-catalog build directory failed its release gate, or there is
+    no build to stage.  Raised BEFORE anything is written."""
+
+
+def discover_joint_catalog(field, build_dir=None):
+    """The joint-catalog BUILD DIRECTORY to stage.
+
+    ``build_dir``, if given, is used as-is (an explicit override).  Otherwise
+    this picks the newest subdirectory of the field's ``joint_catalog_root``
+    that contains a ``*_joint_nircam.prov.json`` -- newest by THAT FILE's
+    mtime, since a build directory's own mtime does not change once its three
+    outputs are written, while a later build writes a new ``--version-tag``
+    directory alongside it.
+
+    Raises ``JointCatalogGateError`` when the field has no
+    ``joint_catalog_root`` configured, or none of its subdirectories carries a
+    provenance sidecar.
+    """
+    if build_dir is not None:
+        chosen = Path(build_dir)
+        print(f"joint catalog: staging the given build dir {chosen}")
+        return chosen
+    cfg = FIELDS.get(field) or {}
+    root = cfg.get("joint_catalog_root")
+    if root is None:
+        raise JointCatalogGateError(
+            f"'{field}' has no 'joint_catalog_root' configured in FIELDS -- "
+            f"the joint catalog is only wired up for gc-treasury.")
+    root = Path(root)
+    candidates = []
+    if root.is_dir():
+        for sub in sorted(root.iterdir()):
+            if not sub.is_dir():
+                continue
+            provs = sorted(sub.glob("*_joint_nircam.prov.json"))
+            if provs:
+                candidates.append((provs[0].stat().st_mtime, sub))
+    if not candidates:
+        raise JointCatalogGateError(
+            f"no joint-catalog build found under {root} (looked for a "
+            f"subdirectory holding a '*_joint_nircam.prov.json'). Build one "
+            f"with `python -m jwst_gc_pipeline.cmz.treasury_joint_catalog` "
+            f"first.")
+    candidates.sort(key=lambda kv: kv[0])
+    chosen = candidates[-1][1]
+    print(f"joint catalog: chose newest build {chosen} "
+          f"(of {len(candidates)} candidate build(s) under {root})")
+    return chosen
+
+
+def _gate_override_reason(gate_override):
+    """The written override reason out of a ``gate_override`` value, or
+    ``None``.
+
+    ``treasury_joint_catalog.build_joint_catalog`` writes
+    ``{'allow_overlap_fail_reason': <reason>}`` (or ``None`` when there is no
+    override); this also accepts a bare string, in case that provenance shape
+    is ever simplified -- either way, an EMPTY reason is the same as no
+    override.
+    """
+    if isinstance(gate_override, dict):
+        return (gate_override.get("allow_overlap_fail_reason")
+                or gate_override.get("reason")) or None
+    if isinstance(gate_override, str):
+        return gate_override or None
+    return None
+
+
+def check_joint_catalog(build_dir):
+    """The release GATE for a joint-catalog build directory.
+
+    Reads ``<build_dir>/*_joint_nircam.prov.json`` and raises
+    ``JointCatalogGateError`` -- before anything is staged -- unless ALL of:
+
+    * the ``.fits``, ``.parquet`` and ``.prov.json`` are all present;
+    * the pre-merge overlap gate recorded no failing tile pair
+      (``overlap_gate.n_failed == 0``), UNLESS the build's own
+      ``gate_override`` carries a written reason -- then the build is
+      ALLOWED, but the override is printed LOUDLY and carried into the
+      returned summary, never silently passed through;
+    * ``roll_corrected`` is ``True`` at the top level AND for every tile in
+      ``tiles`` (a raw or MIXED build never ships);
+    * ``n_rows_total`` is a positive count.
+
+    Returns a summary dict for MANIFEST.json / the README on success.
+    """
+    build_dir = Path(build_dir)
+    provs = sorted(build_dir.glob("*_joint_nircam.prov.json"))
+    if len(provs) != 1:
+        raise JointCatalogGateError(
+            f"expected exactly one '*_joint_nircam.prov.json' under "
+            f"{build_dir}, found {len(provs)}.")
+    prov_path = provs[0]
+    stem = prov_path.name[:-len(".prov.json")]
+    fits_path = build_dir / f"{stem}.fits"
+    parquet_path = build_dir / f"{stem}.parquet"
+    missing = [p for p in (fits_path, parquet_path, prov_path) if not p.is_file()]
+    if missing:
+        raise JointCatalogGateError(
+            f"joint-catalog build at {build_dir} is incomplete -- missing "
+            + ", ".join(str(p) for p in missing))
+
+    try:
+        prov = json.loads(prov_path.read_text())
+    except (OSError, ValueError) as err:
+        raise JointCatalogGateError(f"cannot read {prov_path}: {err}") from err
+
+    gate_override = prov.get("gate_override")
+    override_reason = _gate_override_reason(gate_override)
+
+    overlap = prov.get("overlap_gate") or {}
+    n_failed = overlap.get("n_failed")
+    if n_failed is None:
+        raise JointCatalogGateError(
+            f"{prov_path} carries no 'overlap_gate.n_failed' -- cannot "
+            f"confirm the pre-merge astrometric gate ran.")
+    if n_failed != 0:
+        if not override_reason:
+            raise JointCatalogGateError(
+                f"{prov_path}: the overlap gate recorded {n_failed} failing "
+                f"tile pair(s) with no 'gate_override' reason -- REFUSING to "
+                f"stage. Fix the tiles, or re-run "
+                f"treasury_joint_catalog --allow-overlap-fail-reason (a "
+                f"written justification, stored in the provenance); never "
+                f"override at staging time.")
+        print(f"  *** JOINT CATALOG OVERLAP GATE OVERRIDDEN ***  "
+              f"{n_failed} failing pair(s) out of {overlap.get('n_overlapping')} "
+              f"overlapping; override reason: {override_reason!r} "
+              f"(build {build_dir})")
+
+    if prov.get("roll_corrected") is not True:
+        raise JointCatalogGateError(
+            f"{prov_path}: roll_corrected={prov.get('roll_corrected')!r} -- "
+            f"REFUSING a build that is not roll-corrected (PR #1006).")
+    tiles = prov.get("tiles") or {}
+    uncorrected = sorted(o for o, t in tiles.items()
+                        if t.get("roll_corrected") is not True)
+    if uncorrected:
+        raise JointCatalogGateError(
+            f"{prov_path}: {len(uncorrected)} tile(s) are NOT roll-corrected "
+            f"({uncorrected[:10]}{'...' if len(uncorrected) > 10 else ''}) "
+            f"while the build's top-level roll_corrected=True -- a MIXED "
+            f"build. REFUSING to stage.")
+
+    n_rows_total = prov.get("n_rows_total")
+    if not isinstance(n_rows_total, (int, float)) or n_rows_total <= 0:
+        raise JointCatalogGateError(
+            f"{prov_path}: n_rows_total={n_rows_total!r} -- REFUSING an "
+            f"empty or malformed build.")
+
+    return {
+        "n_rows_total": n_rows_total,
+        "n_tiles": prov.get("n_tiles"),
+        "n_clusters": prov.get("n_clusters"),
+        "overlap_n_overlapping": overlap.get("n_overlapping"),
+        "overlap_n_failed": n_failed,
+        "overlap_tol_mas": overlap.get("tol_mas"),
+        "gate_override": gate_override,
+        "pipeline_tag": prov.get("pipeline_tag"),
+        "build_dir": str(build_dir),
+        "roll_corrected": prov.get("roll_corrected"),
+        # Not asked for by the manifest spec on its own, but cheap to carry
+        # and what the README's joint-catalog section needs to describe the
+        # dedup that produced this table.
+        "dedup_radius_arcsec": prov.get("dedup_radius_arcsec"),
+    }
+
+
+def stage_joint_catalog(field, version, release_root, build_dir=None,
+                        allow_older=False):
+    """Stage the gc-treasury JOINT NIRCam catalog into an existing (or new)
+    release.
+
+    COPIES (never symlinks -- these are frozen deliverables, unlike the
+    detector-frame exposures) the ``.fits``/``.parquet``/``.prov.json`` triple
+    into ``catalogs/``, checksums them, and records the result in
+    ``MANIFEST.json``/``README.md``.  Modeled closely on
+    ``stage_exposures_only``: ``built`` is never touched -- a separate
+    ``joint_catalog_added`` timestamp records when this ran -- and every other
+    manifest file and ``CHECKSUMS.sha256`` line is left alone.
+
+    Raises ``JointCatalogGateError`` or ``FrozenReleaseError`` BEFORE writing
+    anything on a gate failure.  Returns ``(field_dir, n_files)``.
+    """
+    assert_writable(version, release_root, allow_older, field)
+    cfg = FIELDS.get(field) or {}
+    if "joint_catalog_root" not in cfg:
+        raise JointCatalogGateError(
+            f"'{field}' has no 'joint_catalog_root' configured -- the joint "
+            f"catalog is only wired up for gc-treasury.")
+
+    chosen = discover_joint_catalog(field, build_dir=build_dir)
+    summary = check_joint_catalog(chosen)   # raises before anything is written
+
+    field_dir = field_release_dir(field, version, release_root)
+    field_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = field_dir / "MANIFEST.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text())
+    else:
+        # Same shape `stage_exposures_only` uses for its from-disk new-
+        # manifest case: a release that has never been staged has no prior
+        # `built` to preserve, so stamping it now is correct.
+        manifest = {
+            "field": field, "version": version,
+            "group": cfg.get("group"),
+            "release_path": "/" + str(field_dir.relative_to(GLOBUS_COLLECTION_ROOT)),
+            "built": datetime.datetime.now().astimezone().isoformat(),
+            "mode": "symlink", "continuity_gate": "not_applicable(joint-catalog)",
+            "globus_collection_id": GLOBUS_COLLECTION_ID,
+            "globus_https_base": GLOBUS_HTTPS_BASE, "files": [],
+        }
+
+    prov_path = sorted(chosen.glob("*_joint_nircam.prov.json"))[0]
+    stem = prov_path.name[:-len(".prov.json")]
+    fits_src = chosen / f"{stem}.fits"
+    parquet_src = chosen / f"{stem}.parquet"
+
+    new_items = []
+    for src, kind in ((fits_src, "catalog_joint"),
+                      (parquet_src, "catalog_joint"),
+                      (prov_path, "catalog_joint_provenance")):
+        dest_rel = assign_dest({"category": "catalog", "src": str(src)}, field)
+        dest = field_dir / dest_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        digest = sha256sum(dest)
+        rel = dest.relative_to(GLOBUS_COLLECTION_ROOT)
+        item = {
+            "category": "catalog", "kind": kind, "filter": None,
+            "iteration": None, "observation": None,
+            "src": str(src), "dest": str(dest_rel),
+            "size_bytes": dest.stat().st_size, "sha256": digest,
+            "version": version,
+            "globus_path": "/" + str(rel),
+            "url": GLOBUS_HTTPS_BASE + "/" + str(rel),
+        }
+        if src is fits_src:
+            item["joint_catalog"] = summary
+        new_items.append(item)
+    new_dests = {it["dest"] for it in new_items}
+
+    # Replace any PREVIOUS joint-catalog items.  The output stem is fixed, so
+    # a re-stage ordinarily overwrites the same dest in place (handled by the
+    # `copy2` above); this additionally removes a stale file whose dest is NOT
+    # in the new set, which only differs if the naming ever changes.
+    prior_joint = [f for f in manifest.get("files", [])
+                  if f.get("kind") in JOINT_CATALOG_KINDS]
+    for old in prior_joint:
+        if old.get("dest") not in new_dests:
+            old_path = field_dir / old["dest"]
+            if old_path.is_file():
+                old_path.unlink()
+    kept = [f for f in manifest.get("files", [])
+           if f.get("kind") not in JOINT_CATALOG_KINDS]
+    manifest["files"] = kept + new_items
+    # `built` is NOT touched, for the same reason `stage_exposures_only`
+    # leaves it alone: `release_freshness` reads it as the staging time, and
+    # moving it would re-publish anything this release has quarantined.
+    manifest["joint_catalog_added"] = datetime.datetime.now().astimezone().isoformat()
+    manifest["joint_catalog"] = summary
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    stale_dests = {f["dest"] for f in prior_joint} | new_dests
+    checksums = field_dir / "CHECKSUMS.sha256"
+    existing = [ln for ln in (checksums.read_text().splitlines()
+                              if checksums.is_file() else [])
+               if ln.strip() and not any(ln.endswith(f"  {d}") for d in stale_dests)]
+    new_lines = [f"{it['sha256']}  {it['dest']}" for it in new_items]
+    checksums.write_text("\n".join(existing + new_lines) + "\n")
+
+    write_readme(field_dir, field, manifest.get("version", version),
+                manifest["files"], manifest.get("mode", "symlink"),
+                built_at=manifest.get("built"))
+    subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
+    return field_dir, len(new_items)
+
+
 def latest_staged_version(field, release_root):
     """Newest version directory that actually holds a staged `field`, or ``None``.
 
@@ -2765,7 +3070,17 @@ def _link_mode_phrase(exposures):
 def write_readme(field_dir, field, version, items, mode, built_at=None,
                  withheld_instruments=None):
     images = [it for it in items if it["category"] == "image"]
-    catalogs = [it for it in items if it["category"] == "catalog"]
+    all_catalogs = [it for it in items if it["category"] == "catalog"]
+    # The gc-treasury joint catalog (`stage_joint_catalog`) is a DIFFERENT
+    # product from the per-field combined/qualcuts/vetted tables the rest of
+    # this function describes -- there is no per-field cross-band merge for
+    # it to be a subset or superset of.  Split it out so the qualcuts/
+    # filtered-subset logic below (which assumes the normal per-field catalog
+    # shape) never runs over it and never claims it is an "UNFILTERED
+    # combined catalog" or an image-only release missing a merge.
+    joint_catalog_items = [it for it in all_catalogs
+                          if it.get("kind") in JOINT_CATALOG_KINDS]
+    catalogs = [it for it in all_catalogs if it not in joint_catalog_items]
     # describe the mosaics ACTUALLY staged: a module-split field (arches,
     # quintuplet, sickle) ships `-nrca_i2d`/`-nrcb_i2d`, not `-merged_i2d`, and
     # a README promising the latter sends users looking for a file that is not
@@ -2997,6 +3312,53 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
             "  Apply your own cuts on `qfit_<band>`, `sep_<band>` and",
             "  `nmatch_good_<band>`; also in `MANIFEST.json` as `filtered_subset`.",
         ]
+    # The gc-treasury joint catalog (see `joint_catalog_items` above) is its
+    # own product with its own provenance; describe it in its own section
+    # rather than folding it into the per-field combined/qualcuts text above,
+    # which does not apply to it (there is no per-field cross-band merge
+    # behind it to be "filtered" or "unfiltered").
+    _joint_fits = next((it for it in joint_catalog_items
+                       if it.get("kind") == "catalog_joint"
+                       and str(it.get("dest", "")).endswith(".fits")), None)
+    _joint_prov = next((it for it in joint_catalog_items
+                       if it.get("kind") == "catalog_joint_provenance"), None)
+    joint_catalog_lines = []
+    if _joint_fits is not None:
+        _jsum = _joint_fits.get("joint_catalog") or {}
+        _override_reason = _gate_override_reason(_jsum.get("gate_override"))
+        joint_catalog_lines = [
+            "## Joint catalog (`catalogs/`)",
+            "",
+            f"`{Path(_joint_fits['dest']).name}` (+ `.parquet`): a single ALL-TILE",
+            "NIRCam photometry catalog assembled across the full 10678 Treasury",
+            "footprint (`jwst_gc_pipeline.cmz.treasury_joint_catalog`), built from",
+            f"{_jsum.get('n_tiles', '?')} per-pointing tiles with cross-tile duplicates",
+            f"collapsed within {_jsum.get('dedup_radius_arcsec', '?')}\" "
+            f"({_jsum.get('n_clusters', '?')} duplicate cluster(s) resolved) down to",
+            f"{_jsum.get('n_rows_total', '?')} rows.",
+            "",
+            f"- Pre-merge astrometric gate: {_jsum.get('overlap_n_overlapping', '?')} "
+            f"overlapping tile pair(s) checked reference-free (offset-histogram, "
+            f"window-swept) against a {_jsum.get('overlap_tol_mas', '?')} mas "
+            f"tolerance: {_jsum.get('overlap_n_failed', '?')} failing.",
+        ]
+        if _override_reason:
+            joint_catalog_lines.append(
+                "  **Overridden** with a recorded reason (see `MANIFEST.json`, "
+                f"`joint_catalog.gate_override`): {_override_reason!r}.")
+        joint_catalog_lines.append(
+            f"- Roll-corrected: {bool(_jsum.get('roll_corrected'))} "
+            f"(every input tile).")
+        joint_catalog_lines.append(
+            f"- Pipeline tag: `{_jsum.get('pipeline_tag', '?')}`.")
+        if _joint_prov is not None:
+            joint_catalog_lines.append(
+                f"- `{Path(_joint_prov['dest']).name}` : the full build provenance "
+                f"(input tile sha1s, overlap-gate results per pair, winner rule, "
+                f"per-tile row counts).")
+        joint_catalog_lines.append(
+            "- MIRI F770W is OUT OF SCOPE for this table (issue #956) -- NIRCam only.")
+        joint_catalog_lines.append("")
     lines += ([
         "## Catalogs (`catalogs/`)",
         "",
@@ -3004,14 +3366,14 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
         "- `*_dao_basic_vetted.fits` : per-filter vetted catalogs.",
         "- `seed_union_iter3_*.fits` : seed source list.",
         "",
-    ] if catalogs else [
+    ] if catalogs else ([] if joint_catalog_items else [
         "## Catalogs",
         "",
         "**This is an image-only release: no catalogs are shipped.** The mosaics",
         "are current, but the photometry catalogs for this field are not yet",
         "certified. They will follow in a later release.",
         "",
-    ]) + exposure_lines + provenance_lines + limitation_lines + [
+    ])) + joint_catalog_lines + exposure_lines + provenance_lines + limitation_lines + [
         "## Astrometric frame and epoch (READ BEFORE TARGETING)",
         "",
         "- **Reference frame:** Gaia DR3 (via the Gaia+VIRAC2 per-field reference",
@@ -3192,6 +3554,21 @@ def main(argv=None):
                              "ones that fell back to a symlink (not HTTPS-servable). "
                              "Exits 1 when anything has diverged. This is the check "
                              "the README tells readers the release performs.")
+    parser.add_argument("--joint-catalog", action="store_true",
+                        help="stage the gc-treasury all-tile JOINT NIRCam catalog "
+                             "(jwst_gc_pipeline.cmz.treasury_joint_catalog) into an "
+                             "already-staged release, or create one: copies the "
+                             "newest gated build's .fits/.parquet/.prov.json into "
+                             "catalogs/, leaving images/, exposures/ and any other "
+                             "catalogs untouched. Usable on its own on gc-treasury, "
+                             "which ships no mosaic. Refuses (exit 2) when the "
+                             "build fails its own gate (overlap failures, mixed or "
+                             "missing roll correction, an empty table) -- see "
+                             "check_joint_catalog.")
+    parser.add_argument("--joint-catalog-dir", default=None,
+                        help="with --joint-catalog: stage this specific build "
+                             "directory instead of the newest one under the "
+                             "field's 'joint_catalog_root'.")
     parser.add_argument("--images-only", action="store_true",
                         help="ship mosaics only, no catalogs (e.g. images are internally "
                              "consistent but the catalog/absolute frame is not yet certified)")
@@ -3274,6 +3651,25 @@ def main(argv=None):
             return 1
         print(f"Added {n} detector-frame exposures (linked, not checksummed) "
               f"to {field_dir}. Mosaics and catalogs unchanged.")
+        return 0
+
+    # ---- JOINT CATALOG (gc-treasury) -------------------------------------------------
+    # Same shape as --exposures-only above: this path adds ONE product (the
+    # all-tile joint NIRCam catalog) to an existing or new release and touches
+    # nothing else, so it runs ahead of the mosaic-oriented discovery and gates
+    # below, which have nothing to say about a field that ships no mosaic.
+    if args.joint_catalog:
+        try:
+            field_dir, n = stage_joint_catalog(
+                args.field, args.version, args.release_root,
+                build_dir=args.joint_catalog_dir,
+                allow_older=args.allow_older_version)
+        except (JointCatalogGateError, FrozenReleaseError) as err:
+            print(f"\nREFUSING TO STAGE the joint catalog for '{args.field}': "
+                  f"{err}", file=sys.stderr)
+            return 2
+        print(f"Staged the joint catalog ({n} file(s)) into {field_dir}. "
+              f"Images, exposures and any other catalogs unchanged.")
         return 0
 
     missing = []
