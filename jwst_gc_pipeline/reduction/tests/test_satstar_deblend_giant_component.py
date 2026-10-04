@@ -11,13 +11,14 @@ Two limits in ``deblend_blob_zeroframe`` collapsed big blends to a single seed:
    secondary peak survives.
 
 On wd2 F277W nrcblong the cluster-core component (34,700 saturated px, about 150
-dolphot stars) gave one seed.  The guard now uses the largest ZF-core radius and
-the peak limit grows with the saturated area.
+dolphot stars) gave one seed.  The guard now links centres within min_sep, or
+within 0.6 r of the ZF-saturated core either centre was taken from, and the
+peak limit grows with the saturated area.
 """
 import numpy as np
 from scipy import ndimage
 
-from jwst_gc_pipeline.reduction.satstar_deblend import deblend_blob_zeroframe
+from jwst_gc_pipeline.reduction.satstar_deblend import _fof_merge, deblend_blob_zeroframe
 
 SHAPE = (90, 90)
 FWHM = 1.61   # NIRCam F150W, px
@@ -89,7 +90,7 @@ def test_many_core_blend_old_limits_collapse(monkeypatch):
     r_sat = np.sqrt(sat.sum() / np.pi)
     orig = sd._fof_merge
     monkeypatch.setattr(sd, '_fof_merge',
-                        lambda centers, link: orig(centers, link=max(link, 0.6 * r_sat)))
+                        lambda centers, link, **kw: orig(centers, link=max(link, 0.6 * r_sat)))
     centers, _ = _deblend(zf, sat, area_per_peak=None)
     assert len(centers) <= 2, centers
 
@@ -129,3 +130,81 @@ def test_small_component_keeps_fixed_limit():
     c_fixed, _ = _deblend(zf, sat, area_per_peak=None)
     assert sorted(c_default) == sorted(c_fixed)
     assert len(c_default) == 2
+
+
+def test_fof_core_radius_link_is_per_pair():
+    """A core's 0.6 r link reaches only centres paired with that core.  Two
+    peaks 4 px apart, far from a 9.6 px core, stay separate; a peak 3 px from
+    the core (a double detection of it) merges into it."""
+    core, near = (20.0, 20.0), (20.0, 23.0)
+    p1, p2 = (60.0, 45.0), (60.0, 49.0)
+    out = _fof_merge([core, near, p1, p2], link=2, radii=[9.6, 0.0, 0.0, 0.0])
+    assert len(out) == 3, out
+    assert p1 in out and p2 in out
+    assert any(np.allclose(c, (20.0, 21.5)) for c in out), out
+    # one link for every centre (0.6 x the largest core) merges the pair too
+    assert len(_fof_merge([core, near, p1, p2], link=0.6 * 9.6)) == 2
+
+
+def _core_and_pair_scene():
+    """A bright star with a ZF-saturated core (r ~ 9.6 px), joined by DQ
+    saturation to two unsaturated stars 4 px apart about 35 px away."""
+    big, pair = (25, 45), [(60, 45), (64, 45)]
+    sat = _disk(*big, 14) | _disk(62, 45, 5)
+    sat[43:48, 25:62] = True
+    yy, xx = np.mgrid[0:SHAPE[0], 0:SHAPE[1]]
+    zf = 100.0 + 1e6 * np.exp(-((xx - big[0]) ** 2 + (yy - big[1]) ** 2) / 18.0)
+    for (x, y) in pair:
+        zf += _gauss(x, y, 3000.0)
+    zf[_disk(*big, 9.6)] = 0.0
+    return zf, sat, big, pair
+
+
+def test_two_stars_beside_a_large_core_stay_separate():
+    """wd2 F277W L2368: one link for the whole component, 0.6 x its largest
+    core radius, merged 13 pairs of centres, 8 of them two dolphot stars.
+    Here both stars of the pair keep a seed, and so does the core."""
+    zf, sat, big, pair = _core_and_pair_scene()
+    centers, _ = _deblend(zf, sat)
+    assert len(_matched(centers, pair)) == 2, centers
+    assert len(_matched(centers, [big], tol=1.5)) == 1, centers
+    assert len(centers) == 3, centers
+
+
+def test_two_stars_beside_a_large_core_merge_with_one_link(monkeypatch):
+    """With one link for every centre, 0.6 x the largest core radius, the
+    same pair collapses to one seed between the stars; this pins the failure
+    the per-pair link addresses."""
+    from jwst_gc_pipeline.reduction import satstar_deblend as sd
+    zf, sat, big, pair = _core_and_pair_scene()
+    orig = sd._fof_merge
+    monkeypatch.setattr(
+        sd, '_fof_merge',
+        lambda centers, link, radii=None, **kw: orig(
+            centers, link=max([link] + [0.6 * r for r in (radii or [])])))
+    centers, _ = _deblend(zf, sat)
+    assert len(_matched(centers, pair)) == 0, centers
+    assert len(_matched(centers, [(62, 45)])) == 1, centers
+
+
+def test_merge_gets_core_radius_for_cores_and_zero_for_peaks(monkeypatch):
+    """The guard receives each centre's own core radius: the core's for the
+    core centre, 0 for each peak."""
+    from jwst_gc_pipeline.reduction import satstar_deblend as sd
+    zf, sat, big, pair = _core_and_pair_scene()
+    orig, seen = sd._fof_merge, []
+
+    def spy(centers, link, radii=None, **kw):
+        seen.append((list(centers), radii))
+        return orig(centers, link=link, radii=radii, **kw)
+
+    monkeypatch.setattr(sd, '_fof_merge', spy)
+    _deblend(zf, sat)
+    assert len(seen) == 1
+    centers, radii = seen[0]
+    assert radii is not None and len(radii) == len(centers) == 3
+    by_r = sorted(zip(radii, centers))
+    assert by_r[0][0] == 0.0 and by_r[1][0] == 0.0
+    assert 8.0 < by_r[2][0] < 11.0, radii
+    cy, cx = by_r[2][1]
+    assert np.hypot(cx - big[0], cy - big[1]) < 1.5

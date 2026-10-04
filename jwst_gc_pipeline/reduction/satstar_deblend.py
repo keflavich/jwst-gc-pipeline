@@ -65,11 +65,17 @@ def _is_compact(zf_sm, yy, xx, fwhm_pix, conc_min):
     return peak >= conc_min * abs(med) if med != 0 else True
 
 
-def _fof_merge(centers, link):
-    """Friends-of-friends merge of (y,x) centres within `link` px → group means."""
+def _fof_merge(centers, link, radii=None, radius_frac=0.6):
+    """Friends-of-friends merge of (y,x) centres → group means.
+
+    Two centres link when they are within ``link`` px, or, given ``radii``
+    (the radius of the ZF-saturated core each centre was taken from, 0 for a
+    peak), within ``radius_frac * max(r_i, r_j)`` px.
+    """
     if len(centers) <= 1:
         return centers
     pts = np.asarray(centers, dtype=float)
+    r = np.zeros(len(pts)) if radii is None else np.asarray(radii, dtype=float)
     tree = cKDTree(pts)
     parent = list(range(len(pts)))
 
@@ -78,8 +84,9 @@ def _fof_merge(centers, link):
             parent[a] = parent[parent[a]]
             a = parent[a]
         return a
-    for a, b in tree.query_pairs(link):
-        parent[find(a)] = find(b)
+    for a, b in tree.query_pairs(max(link, radius_frac * r.max())):
+        if np.hypot(*(pts[a] - pts[b])) <= max(link, radius_frac * max(r[a], r[b])):
+            parent[find(a)] = find(b)
     groups = {}
     for i in range(len(pts)):
         groups.setdefault(find(i), []).append(i)
@@ -277,6 +284,7 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
                         if (ok and enable_secondary_peaks)]
 
     centers = core_centers + peak_centers
+    center_r = core_radii + [0.0] * len(peak_centers)
     if verbose:
         print(f"      n_core={len(core_centers)} core_radii={[round(r,1) for r in core_radii]} "
               f"n_peak_kept={len(peak_centers)} ceiling={sat_ceiling:.0f}", flush=True)
@@ -286,6 +294,7 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
         if (np.isfinite(masked[py, px]) and masked[py, px] > thresh
                 and not other[py, px]):
             centers = [(float(py + y0), float(px + x0))]
+            center_r = [0.0]
 
     # DAOPHOT only for ASTROMETRY: snap each ZF peak to the nearest deduped daophot
     # is_saturated position within snap_frac*FWHM (sub-pixel JWST centroid).  We do
@@ -314,16 +323,19 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
             snapped.append((cy, cx))
         centers = snapped
 
-    # Final guard: merge any centres closer than the core radius (paranoia against
-    # a residual double-detection of one core).  The radius is that of the
-    # largest ZF-saturated core cluster, not r_sat of the whole component: for a
-    # blend of many stars r_sat measures the blend, and friends-of-friends at
-    # 0.6 r_sat chains every centre into one (wd2 F277W cluster core: r_sat 105
-    # px, link 63 px, 42 centres -> 1 seed).  Peaks inside a core's claimed
-    # region are already absorbed above, and unconfirmed secondary peaks must
-    # pass the compactness test.
-    r_core = max(core_radii) if core_radii else 0.0
-    centers = _fof_merge(centers, link=max(min_sep, 0.6 * r_core))
+    # Final guard: merge centres closer than min_sep, or closer than 0.6 r_core
+    # where r_core is the radius of the ZF-saturated core either centre was
+    # taken from (paranoia against a residual double-detection of one core).
+    # The radius is per pair.  One radius for the whole component (its largest
+    # core's) merged distinct peaks far from that core: wd2 F277W nrcblong, a
+    # 5.7 px link from a 9.6 px core joined 13 pairs, 8 of them two dolphot
+    # stars.  r_sat of the whole component is worse: for a blend of many stars
+    # it measures the blend, and friends-of-friends at 0.6 r_sat chains every
+    # centre into one (wd2 F277W cluster core: r_sat 105 px, link 63 px, 42
+    # centres -> 1 seed).  Peaks inside a core's claimed region are already
+    # absorbed above, and unconfirmed secondary peaks must pass the
+    # compactness test.
+    centers = _fof_merge(centers, link=min_sep, radii=center_r)
 
     if not centers:
         # ultimate fallback: bbox centre (current production behaviour)
