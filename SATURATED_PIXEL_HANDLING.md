@@ -240,7 +240,9 @@ to `DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
   ~12 against a median ERR of ~0.5, ~6500 background pixels per 81×81 box) and
   15–18 mag stars come out 0.4–0.8 mag faint. The robust scatter (1.4826 MAD)
   of the unmasked local-background annulus is added in quadrature to every
-  pixel's error before the fit.
+  pixel's error before the fit. The switch is part of the satstar cache key
+  (`es` in `SATFITSW`), so turning it on refits cached catalogs, including
+  those of frames without a ramp.
 - **PSF grid by size** (`get_psf(..., fov_pixels=1024)`): LW (NRCA5/NRCB5) in-FOV stars use `fov=1024`
   (a 512-px grid under-estimates bright LW flux by 50–70%); SW use 512. Off-FOV
   (forced) stars require the **large grid** (2048 SW / 1024 LW) to carry the
@@ -529,8 +531,8 @@ The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table ab
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
 
-The four `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows are read
-by `satstar_fit_switches`, and the per-exposure satstar cache is keyed on them
+The four `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows and
+`SATSTAR_ERR_BKG_SCATTER` are read by `satstar_fit_switches`, and the per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
 one refits the cached catalogs it affects. Their on/off values follow the
 daophot hand-off convention: unset or blank gives the default, `1/true/yes/on`

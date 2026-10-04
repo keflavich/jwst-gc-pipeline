@@ -979,6 +979,9 @@ def satstar_fit_switches(env=None):
       nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
       observed-peak second chance reads the crf values, not the rewrite.
+    * ``SATSTAR_ERR_BKG_SCATTER`` (default OFF; ``cataloging`` turns it on for
+      extended-emission NIRCam): the robust local-background scatter is added
+      to the fit errors in quadrature (``bkg_scatter_fit_error``).
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (5.0, the box qfit cap): qfit over the disk r < R around the fit
@@ -999,6 +1002,7 @@ def satstar_fit_switches(env=None):
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
         'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
+        'err_bkg_scatter': _env_switch('SATSTAR_ERR_BKG_SCATTER', False, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1046,6 +1050,9 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             # matches and is refit.
             ql += f"g{sw['qfit_local_max']:g}s"
         parts.append(ql)
+    if sw['err_bkg_scatter']:
+        # Acts on every NIRCam in-FOV fit, with or without a ramp.
+        parts.append('es')
     return '_'.join(parts)
 
 
@@ -3407,7 +3414,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # see bkg_scatter_fit_error.  Without it, crowded 15-18 mag wd2 F150W
         # stars came out 0.4-0.8 mag faint.
         if (not _is_miri and not forced_source
-                and int(os.environ.get('SATSTAR_ERR_BKG_SCATTER', 0))):
+                and _fit_switches['err_bkg_scatter']):
             err_cutout_eff, _bkg_sigma = bkg_scatter_fit_error(
                 err_cutout_eff, cutout, ~mask, x_init, y_init,
                 bkg_inner, bkg_outer)

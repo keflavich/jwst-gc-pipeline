@@ -82,7 +82,19 @@ def test_gated_on_env_and_feeds_fit_error():
     # The full get_saturated_stars needs real PSF grids and a full frame, so
     # the wiring is checked on the source (as in test_satstar_float_seed.py).
     src = inspect.getsource(ssf.get_saturated_stars)
-    assert "SATSTAR_ERR_BKG_SCATTER" in src
+    assert "_fit_switches['err_bkg_scatter']" in src
     i_call = src.index("bkg_scatter_fit_error(")
     i_fit = src.index("error=err_cutout_eff", i_call)
     assert i_call < i_fit
+
+
+@pytest.mark.parametrize('value, on', [(None, False), ('', False), ('0', False),
+                                       ('1', True), ('on', True)])
+def test_switch_is_read_with_the_other_fit_switches(value, on):
+    env = {} if value is None else {'SATSTAR_ERR_BKG_SCATTER': value}
+    assert ssf.satstar_fit_switches(env)['err_bkg_scatter'] is on
+
+
+def test_switch_typo_raises():
+    with pytest.raises(ValueError, match='SATSTAR_ERR_BKG_SCATTER'):
+        ssf.satstar_fit_switches({'SATSTAR_ERR_BKG_SCATTER': 'yse'})

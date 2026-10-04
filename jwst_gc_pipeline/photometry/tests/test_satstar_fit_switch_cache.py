@@ -199,6 +199,7 @@ def test_catalog_built_without_the_guard_is_refit_once(tmp_path, monkeypatch):
     ('SATSTAR_QFIT_LOCAL_R', '10'),
     ('SATSTAR_ZF_RCURVE_GUARD', '0'),
     ('SATSTAR_ZF_RCURVE_MAXSTEP', '2'),
+    ('SATSTAR_ERR_BKG_SCATTER', '1'),
 ])
 def test_changing_a_switch_refits_a_cached_catalog(tmp_path, monkeypatch,
                                                   name, value):
@@ -224,6 +225,25 @@ def test_frame_without_a_ramp_keeps_its_old_catalog(tmp_path, monkeypatch):
     calls = _counting_fit(monkeypatch)
     _load(fn, tmp_path)
     assert calls['n'] == 0
+
+
+def test_signature_keys_the_error_floor_with_or_without_a_ramp(tmp_path,
+                                                               monkeypatch):
+    monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
+    assert satstar_fit_switch_signature(
+        _frame(tmp_path, with_ramp=False)) == 'es'
+    assert satstar_fit_switch_signature(
+        _frame(tmp_path, with_ramp=True)) == 'zfg1.3_es'
+
+
+def test_error_floor_refits_a_catalog_of_a_frame_without_a_ramp(tmp_path,
+                                                                monkeypatch):
+    fn = _frame(tmp_path, with_ramp=False)
+    _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'))
+    monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
+    calls = _counting_fit(monkeypatch)
+    _load(fn, tmp_path)
+    assert calls['fit_switch_signature'] == ['es']
 
 
 def test_local_qfit_gate_refits_even_without_a_ramp(tmp_path, monkeypatch):
