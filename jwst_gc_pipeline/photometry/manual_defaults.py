@@ -60,8 +60,28 @@ MANUAL_DEFAULTS = {
     # -- extended-emission vetting (_filter_extended_emission)
     'manual_ext_qfit_max': 0.2,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
+    # exemption from that floor for tight, bright fits (0 = off)
+    'manual_ext_prom_exempt_qfit': 0.2,
+    'manual_ext_prom_exempt_snr': 40.0,
+    'manual_ext_prom_exempt_prom_min': 2.0,
     'manual_ext_peak_over_bkg': 20.0,
+    'manual_ext_star_prom_min': 7.0,   # keep on data-i2d prominence >= this (OR); 0 = off
+    # ...when qfit <= sqrt(qfit_max^2 + (k/S/N)^2).  qfit = sum|resid|/flux of a
+    # PERFECT PSF fit is ~c/(S/N) from pixel noise alone (c ~ 3.4 median, ~4.3
+    # at the 90th percentile for Brick F182M dark-sky stars at S/N 5-10, which
+    # the sky-clean tier selects without qfit).  Full-field m6 replays, sources
+    # the prominence keep adds per k_eff = S/N sqrt(qfit^2 - qfit_max^2) band,
+    # chance-corrected match rate relative to kept stars of the same flux
+    # (Brick F182M vs the independent F200W visit / W51 F187N vs same-visit
+    # F182M): 0.72 / 1.21 at 4-4.5, 0.53 / 0.52 at 4.5-5, 0.28 / 0.46 at
+    # 5-5.5, 0.40 / 0.32 at 5.5-6, 0.03 / 0.10 at 8-12.  5 is the largest
+    # half-integer k whose last band stays at or above 0.5 in both.  0 = off.
+    'manual_ext_qfit_snr_k': 5.0,
+    'manual_ext_star_prom_peak_min': 4.0,  # peakSB branch also needs prominence >= this; 0 = off
+    'manual_ext_star_prom_robust_min': 0.0,  # OR neighbour-robust prominence; 0 = off, -1 = AUTO (8, off on ext-emission)
+    'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
+    'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
@@ -85,8 +105,26 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_max_sky_snr': 2.0,
     'manual_sky_clean_prom_min': 5.0,
     'manual_sky_clean_snr_min': 3.0,
+    # local reference tile (arcsec): annulus floor vs the tile's 5th percentile
+    # in i2d-ERR units, OR-ed with the global dark-sky test.  0 = global only.
+    'manual_sky_clean_local_arcsec': 3.0,
+    # local test threshold, in i2d ERR (2 ERR ~ 2.4 sigma of pixel scatter in
+    # the Brick dark cloud, where ERR ~ 1.2x the pixel scatter)
+    'manual_sky_clean_local_max_err': 2.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
+    # opt-in (0 = off): roundness up to +-x admitted where the detection rises
+    # above its local structure (annulus prominence >= 5).  -1 = AUTO
+    # (_auto_seed_round_loose_max): 0.8 on star-dominated NIRCam fields, 0 on
+    # an extended-emission target and on MIRI.  Off by default: the loose-only
+    # seeds concentrate on bright background and on diffraction-spike
+    # position angles (docs/evidence/faint_seed_roundness), and on the
+    # star-field reference fields the window moves at most one injected star
+    # per S/N bin on top of the own-band m7 seed while raising the Sgr B2
+    # field's residual excess from 1.73 to 2.08 per arcsec^2
+    # (docs/evidence/faint_defaults_on).
+    'manual_seed_round_loose_max': 0.0,
+    'manual_seed_round_loose_prom_min': 5.0,
     'manual_seed_sharp_lo': 0.4,
     'manual_seed_sharp_hi': 1.2,
     # -- per-pass prominence reject (ext-emission NIRCam; 0 = off)
@@ -108,6 +146,20 @@ MANUAL_DEFAULTS = {
     'manual_crossband_seed_snr_min': 5.0,
     'manual_crossband_seed_qfit_max': 0.2,
     'manual_crossband_seed_max_sep_mas': 30.0,
+    # m7 seed of each band = cross-band seed UNION the band's own m6 vetted
+    # catalog, plus daofind on the m6 residual - bg (_build_m7_band_seed).
+    # None = AUTO (_auto_m7_seed_own_band): on for star-dominated NIRCam
+    # fields, off on an extended-emission target and for MIRI filters;
+    # --manual-m7-seed-own-band / --no-manual-m7-seed-own-band force it.
+    # After the companion cut below, the restored own-band sources are
+    # confirmed by an independent visit 0.4-0.8x as often as the ones m7
+    # already has (docs/evidence/faint_m7_seed_union).  Reference-field
+    # results with and without it: docs/evidence/faint_defaults_on.
+    'manual_m7_seed_own_band': None,
+    # ... and with it on, own-band sources within this many PSF FWHM of a
+    # brighter seed source are not added (PSF-ring fits; at the chance rate
+    # inside ~2.5 FWHM in Brick F182M/F212N).  0 disables the cut.
+    'manual_m7_seed_own_band_companion_fwhm': 2.5,
     # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.

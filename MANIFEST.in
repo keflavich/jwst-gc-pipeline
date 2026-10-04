@@ -3,6 +3,8 @@ prune docs/_build
 prune docs/api
 recursive-include jwst_gc_pipeline/reduction *.ecsv
 recursive-include jwst_gc_pipeline/reduction *.csv
+include jwst_gc_pipeline/photometry/reference_fields/fields.yaml
+recursive-include jwst_gc_pipeline/photometry/reference_fields/injections *.ecsv
 include licenses/LICENSE.rst
 include README.md
 global-exclude *.pyc *.o

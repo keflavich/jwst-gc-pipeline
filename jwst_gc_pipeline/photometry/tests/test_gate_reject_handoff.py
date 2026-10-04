@@ -336,7 +336,7 @@ def _prep_options():
 
 
 def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
-             with_truly_lost=False, peaks=None):
+             with_truly_lost=False, peaks=None, resbg=None):
     from astropy.io import fits
     for k, v in (('NIRCAM_SATSTAR_TIGHT_BOUND', '0'),
                  ('SATSTAR_COMPONENT_OVERLAP_FRAC', '0'),
@@ -354,6 +354,12 @@ def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
                              [(BIG[0], BIG[1], reject_reason)])
     if peaks is not None:
         _add_peaks(rej_fn, [peaks])
+    resbg_path = None
+    if resbg is not None:
+        # a resbg map on the frame's own grid
+        resbg_path = str(tmp_path / 'resbg_i2d.fits')
+        fits.PrimaryHDU(resbg.astype('float32'),
+                        header=fits.getheader(fn, 'SCI')).writeto(resbg_path)
     monkeypatch.setattr(L, 'get_psf_model',
                         lambda *a, **k: (_gaussian_grid_psf_fwhm(2.574), None))
     monkeypatch.setattr(L, 'load_or_make_satstar_catalog',
@@ -361,8 +367,8 @@ def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
     ctx = C._prepare_frame_for_photometry(
         _prep_options(), 'F480M', 'nrcalong', '132', str(tmp_path), fn,
         '10678', exposurenumber=4, visit_id=1, vgroup_id='02101',
-        bg_boxsizes=None, use_webbpsf=True, pupil='clear', resbg_path=None,
-        satstar_label='m7')
+        bg_boxsizes=None, use_webbpsf=True, pupil='clear',
+        resbg_path=resbg_path, satstar_label='m7')
     return ctx, img
 
 
@@ -431,6 +437,48 @@ def test_prepare_never_restores_truly_lost_pixels(tmp_path, monkeypatch):
     ctx, _ = _prepare(tmp_path, monkeypatch, with_truly_lost=True)
     assert ctx.mask[50, 40], 'SATURATED & DO_NOT_USE has no rate; keep it masked'
     assert not ctx.mask[49, 39]
+
+
+def _holed_resbg(level=4.0, hole=-20.0, r_hole=6.0):
+    yy, xx = np.mgrid[:SHAPE[0], :SHAPE[1]]
+    rr = np.hypot(xx - BIG[0], yy - BIG[1])
+    bg = np.full(SHAPE, level)
+    bg[rr < r_hole] = hole
+    return bg, rr
+
+
+def test_prepare_clips_resbg_hole_under_handed_off_star(tmp_path, monkeypatch,
+                                                        capsys):
+    """The resbg hole at a hand-off core must not leave a pedestal in the fitted
+    data: within the clip radius they become crf - floor, not crf - hole."""
+    bg, rr = _holed_resbg()
+    ctx, img = _prepare(tmp_path, monkeypatch, resbg=bg)
+    assert ctx.handoff_xy is not None
+    core = np.zeros(SHAPE, bool)
+    core[47:54, 37:44] = True
+    hole = rr < 6.0
+    np.testing.assert_allclose(ctx.nan_replaced_data[hole], img[hole] - 4.0,
+                               atol=1e-3)
+    assert hole[~core].any()
+    far = rr > 16
+    np.testing.assert_allclose(ctx.nan_replaced_data[far], img[far] - 4.0,
+                               atol=1e-3)
+    out = capsys.readouterr().out
+    assert '[manual] hand-off resbg clip: 1 star(s), ' in out
+    assert 'pixel(s) lowered, median 24 MJy/sr' in out
+
+
+def test_prepare_leaves_resbg_hole_without_handoff(tmp_path, monkeypatch, capsys):
+    bg, rr = _holed_resbg()
+    ctx, img = _prepare(tmp_path, monkeypatch, resbg=bg,
+                        reject_reason='fit_quality_gate')
+    assert ctx.handoff_xy is None
+    core = np.zeros(SHAPE, bool)
+    core[47:54, 37:44] = True
+    ring = (rr < 6.0) & ~core
+    np.testing.assert_allclose(ctx.nan_replaced_data[ring], img[ring] + 20.0,
+                               atol=1e-3)
+    assert 'hand-off resbg clip' not in capsys.readouterr().out
 
 
 def test_restore_skips_component_holding_an_accepted_satstar():

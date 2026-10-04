@@ -1047,6 +1047,9 @@ def satstar_fit_switches(env=None):
       nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
       observed-peak second chance reads the crf values, not the rewrite.
+    * ``SATSTAR_ERR_BKG_SCATTER`` (default OFF; ``cataloging`` turns it on for
+      extended-emission NIRCam): the robust local-background scatter is added
+      to the fit errors in quadrature (``bkg_scatter_fit_error``).
     * ``SATSTAR_ZF_G0_GROUPDQ`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``,
       which cataloging turns on for extended-emission NIRCam): first-read
       pixels that the ramp GROUPDQ flags SATURATED (integration 0, group 0)
@@ -1055,6 +1058,9 @@ def satstar_fit_switches(env=None):
       F150W evidence (#1065) is from cap-on frames, and the mask needs the
       cap to read the star's own measured core (#1064): with the earlier
       cap it moved the bright stars 2 mag faint.
+    * ``SATSTAR_ZF_RIM_BADPIX`` (default ON): DEAD, HOT and REFERENCE_PIXEL
+      pixels are left out of the rim rewrite, and a rewritten rim pixel's
+      error is at least the frame's median ERR (``zeroframe_rim_error``).
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (5.0, the box qfit cap): qfit over the disk r < R around the fit
@@ -1077,7 +1083,9 @@ def satstar_fit_switches(env=None):
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
         'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
+        'err_bkg_scatter': _env_switch('SATSTAR_ERR_BKG_SCATTER', False, env),
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
+        'rim_badpix': _env_switch('SATSTAR_ZF_RIM_BADPIX', True, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1145,6 +1153,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             zf += 'o'
         if sw['g0_groupdq']:
             zf += 'd'
+        if sw['rim_badpix']:
+            zf += 'b'
         if zf:
             parts.append('zf' + zf)
     if sw['qfit_local_r'] > 0:
@@ -1155,10 +1165,41 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             # matches and is refit.
             ql += f"g{sw['qfit_local_max']:g}s"
         parts.append(ql)
+    if sw['err_bkg_scatter']:
+        # Acts on every NIRCam in-FOV fit, with or without a ramp.
+        parts.append('es')
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
     return '_'.join(parts)
+
+
+_RIM_BADPIX_BITS = (dqflags.pixel['DEAD'] | dqflags.pixel['HOT']
+                    | dqflags.pixel['REFERENCE_PIXEL'])
+
+
+def zeroframe_rim_error(data, err, rim, *, floor=True):
+    """1-sigma fit error with the ZEROFRAME-rewritten rim filled in.
+
+    The crf ERR is NaN at SATURATED pixels.  A rewritten rim pixel gets 5% of
+    its value (the per-pixel scatter of the R calibration).  With ``floor``
+    that error is at least the median finite, positive ERR of the frame: a
+    value read from a single group cannot be measured better than a typical
+    ramp-fit pixel, and 5% of a near-zero rewrite would otherwise outweigh
+    the rest of the fit box.  Pixels outside ``rim`` and rim pixels with a
+    finite ERR keep their ERR.  Returns a new array.
+    """
+    err = np.array(err, dtype=float, copy=True)
+    fix = np.asarray(rim, dtype=bool) & ~np.isfinite(err)
+    if not fix.any():
+        return err
+    val = np.abs(np.asarray(data, dtype=float)[fix]) * 0.05
+    if floor:
+        ok = np.isfinite(err) & (err > 0)
+        if ok.any():
+            val = np.maximum(val, float(np.median(err[ok])))
+    err[fix] = val
+    return err
 
 
 def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
@@ -1199,7 +1240,9 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     Every measured curve is logged (faint-bin R, bright-end R, R used), with a
     WARNING when the R used at the bright end is below half the faint-bin R.
     ``SATSTAR_ZF_KEEP_FINITE`` (default OFF) leaves SATURATED pixels that have
-    a valid ramp-fit rate alone.  See ``satstar_fit_switches``.
+    a valid ramp-fit rate alone.  ``SATSTAR_ZF_RIM_BADPIX`` (default ON) leaves
+    DEAD, HOT and REFERENCE_PIXEL pixels out of the rim.  See
+    ``satstar_fit_switches``.
 
     Parameters
     ----------
@@ -1391,6 +1434,17 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
             & (data > recov_val * (1.0 + infl_tol)))
         if _keep is not None:
             rim_mask = rim_mask & ~_keep
+        # SATSTAR_ZF_RIM_BADPIX (default ON, #1071): dead/hot clumps carry
+        # the SATURATED bit with a group-0 of ~0.001-1.2 DN, which is "clean"
+        # (positive, below the ceiling), so they were rewritten to R*group0 ~
+        # 1e-4-0.1 MJy/sr with a 5% error, 400-5e8x the weight of a normal
+        # pixel.  Next to a +2-3 MJy/sr local background that drove four
+        # 16-18 mag wd2 F150W nrcb1 stars to negative flux.  Their crf SCI and
+        # ERR are NaN, so left alone they carry zero weight.  Reference pixels
+        # hold no sky either.
+        if _sw['rim_badpix'] and dq is not None:
+            rim_mask = rim_mask & ((np.asarray(dq).astype(np.int64)
+                                    & _RIM_BADPIX_BITS) == 0)
         recovered[rim_mask] = recov_val[rim_mask]
     deep_core_mask = sat_buf & ~g0_clean
     if _keep is not None:
@@ -2103,6 +2157,52 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
     bkg_inner = int(np.clip(np.round(10 * sat_radius ** 0.75), bkg_inner_min, bkg_inner_max))
     bkg_outer = 2 * bkg_inner
     return bkg_inner, bkg_outer
+
+
+def bkg_scatter_fit_error(err, cutout, valid, x, y, bkg_inner, bkg_outer,
+                          min_pixels=20):
+    """Satstar fit errors with the background scatter added in quadrature.
+
+    The crf ERR holds read and Poisson noise only.  In a crowded field the
+    background of the fit box scatters far more than that (unresolved stars,
+    nebulosity, neighbour residuals): on wd2 F150W the annulus scatter is ~12
+    against a median ERR of ~0.5.  With inverse-variance weights the ~6500
+    background pixels of an 81x81 box then set the flux and the core barely
+    constrains it.  ``SATSTAR_ERR_BKG_SCATTER`` adds the robust scatter of the
+    local-background annulus to every pixel's error.
+
+    Parameters
+    ----------
+    err, cutout : 2D arrays
+        Per-pixel error and data of the fit cutout.
+    valid : 2D bool array
+        Pixels the fit uses (True = unmasked).
+    x, y : float
+        Star position in cutout coordinates.
+    bkg_inner, bkg_outer : float
+        Radii of the local-background annulus.
+    min_pixels : int
+        Fewest valid finite annulus pixels needed to measure the scatter.
+
+    Returns
+    -------
+    err_eff : 2D array
+        ``sqrt(err**2 + sigma**2)``, or ``err`` unchanged when the scatter
+        cannot be measured.
+    sigma : float
+        1.4826 * MAD of the annulus pixels, NaN when fewer than
+        ``min_pixels`` are usable.
+    """
+    yy, xx = np.indices(cutout.shape)
+    rr = np.hypot(xx - x, yy - y)
+    sel = (valid & np.isfinite(cutout) & (rr >= bkg_inner) & (rr < bkg_outer))
+    if sel.sum() < min_pixels:
+        return err, np.nan
+    vals = cutout[sel]
+    sigma = float(1.4826 * np.median(np.abs(vals - np.median(vals))))
+    if not np.isfinite(sigma) or sigma <= 0:
+        return err, sigma
+    return np.sqrt(err ** 2 + sigma ** 2), sigma
 
 
 def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
@@ -3080,8 +3180,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # assign the ~5% per-pixel scatter of the R calibration so the fit can
     # inverse-variance weight them instead of dropping/inf-weighting.
     if zf_deep_core is not None:
-        _rimfix = _rim & ~np.isfinite(err_working)
-        err_working[_rimfix] = np.abs(data[_rimfix]) * 0.05
+        err_working = zeroframe_rim_error(
+            data, err_working, _rim, floor=_fit_switches['rim_badpix'])
     _bad_err = ~np.isfinite(err_working) | (err_working <= 0)
     err_working[_bad_err] = 1e10
 
@@ -3495,6 +3595,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             w_prox = 1.0 - np.exp(-(dist_to_sat ** 2) / (2.0 * _sig ** 2))
             w_prox = np.clip(w_prox, 1e-3, 1.0)
             err_cutout_eff = err_cutout / np.sqrt(w_prox)
+
+        # Background-scatter error floor (NIRCam, SATSTAR_ERR_BKG_SCATTER=1):
+        # see bkg_scatter_fit_error.  Without it, crowded 15-18 mag wd2 F150W
+        # stars came out 0.4-0.8 mag faint.  Applied after the proximity
+        # downweighting above, so where the scatter exceeds err/sqrt(w_prox)
+        # it flattens that downweighting; flux_err and reduced_chi2 below are
+        # computed with the floored errors.
+        if (not _is_miri and not forced_source
+                and _fit_switches['err_bkg_scatter']):
+            err_cutout_eff, _bkg_sigma = bkg_scatter_fit_error(
+                err_cutout_eff, cutout, ~mask, x_init, y_init,
+                bkg_inner, bkg_outer)
+            _vprint(f"  err floor: bkg scatter {_bkg_sigma:.3g} "
+                    f"(median ERR {np.nanmedian(err_cutout):.3g})", flush=True)
 
         # MIRI 2D LOCAL BACKGROUND (2026-06-14).  MIRI-ONLY -- NIRCam backgrounds
         # are always low.  The scalar-annulus ``LocalBackground`` cannot remove

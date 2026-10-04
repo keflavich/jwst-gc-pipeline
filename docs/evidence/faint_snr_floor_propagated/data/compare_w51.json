@@ -1,0 +1,529 @@
+{
+ "field": "w51",
+ "band": "f187n",
+ "ref": "F182M m6 vetted (same visit)",
+ "base": {
+  "wt": "/blue/adamginsburg/adamginsburg/tmp/claude-3663/-orange-adamginsburg-jwst/3628e1c3-037c-44d2-983f-710a80e638be/scratchpad/wt-rp-seed",
+  "commit": "178b99ff908c070a8fb7d028837569d85e331e84",
+  "branch": "HEAD",
+  "dirty": false,
+  "catalog": "/orange/adamginsburg/jwst/w51/catalogs/f187n_merged_indivexp_merged_resbgsub_m6_dao_basic.fits",
+  "data_i2d": "/orange/adamginsburg/jwst/w51/F187N/pipeline/jw06151-o001_t001_nircam_clear-f187n-merged_data_i2d.fits",
+  "started": "2026-10-02T04:15:44",
+  "slurm_job_id": "44402732",
+  "overrides": {},
+  "seconds": 9,
+  "n_merged": 76163,
+  "n_vetted": 20041
+ },
+ "n_merged": 76163,
+ "n_base_kept": 20041,
+ "frac_in_ref_footprint": 0.7849480718984284,
+ "base_kept_within_1as_of_satstar": 0.028990569332867623,
+ "variants": {
+  "snr": {
+   "pr": "#1016",
+   "commit": "b829c5712e1cb14a3062cbd7964389ed4032156e",
+   "dirty": false,
+   "slurm_job_id": "44402733",
+   "n_kept": 20659,
+   "n_added": 618,
+   "n_lost": 0,
+   "added_reason": {
+    "qfit<=0.2": 0,
+    "flags==1": 43,
+    "peakSB": 563,
+    "other": 12
+   },
+   "added_peak": 0.9579288025889967,
+   "lost_peak": NaN,
+   "sat_bins": {
+    "0-1": {
+     "n_added": 19,
+     "n_lost": 0,
+     "added_peak": 0.8421052631578947,
+     "added_real": {
+      "n": 19,
+      "match": 0.2631578947368421,
+      "chance": 0.013157894736842105,
+      "match_exp": 0.35334481998677697,
+      "chance_exp": 0.0007412898443291327,
+      "rel": 0.7090116196482855
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "1-2": {
+     "n_added": 68,
+     "n_lost": 0,
+     "added_peak": 0.9852941176470589,
+     "added_real": {
+      "n": 58,
+      "match": 0.10344827586206896,
+      "chance": 0.01293103448275862,
+      "match_exp": 0.3770191316301982,
+      "chance_exp": 0.00400962309542903,
+      "rel": 0.2426673832923833
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "2-inf": {
+     "n_added": 531,
+     "n_lost": 0,
+     "added_peak": 0.9585687382297552,
+     "added_real": {
+      "n": 464,
+      "match": 0.35560344827586204,
+      "chance": 0.005926724137931034,
+      "match_exp": 0.5140825729401455,
+      "chance_exp": 0.008800748487046824,
+      "rel": 0.6920429495290281
+     },
+     "lost_real": {
+      "n": 0
+     }
+    }
+   }
+  },
+  "lsky": {
+   "pr": "#1019",
+   "commit": "54f5bc7f5478efa1d345ab7b3f71bb5b70d6c365",
+   "dirty": false,
+   "slurm_job_id": "44402736",
+   "n_kept": 21148,
+   "n_added": 1107,
+   "n_lost": 0,
+   "added_reason": {
+    "qfit<=0.2": 0,
+    "flags==1": 21,
+    "peakSB": 230,
+    "other": 856
+   },
+   "added_peak": 0.986449864498645,
+   "lost_peak": NaN,
+   "sat_bins": {
+    "0-1": {
+     "n_added": 0,
+     "n_lost": 0,
+     "added_peak": NaN,
+     "added_real": {
+      "n": 0
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "1-2": {
+     "n_added": 0,
+     "n_lost": 0,
+     "added_peak": NaN,
+     "added_real": {
+      "n": 0
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "2-inf": {
+     "n_added": 1107,
+     "n_lost": 0,
+     "added_peak": 0.986449864498645,
+     "added_real": {
+      "n": 1015,
+      "match": 0.6945812807881774,
+      "chance": 0.005911330049261084,
+      "match_exp": 0.5857922179825141,
+      "chance_exp": 0.007756358437957751,
+      "rel": 1.1913965878890806
+     },
+     "lost_real": {
+      "n": 0
+     }
+    }
+   }
+  },
+  "qsnrp7": {
+   "pr": "#1017 prom_min 7",
+   "commit": "bd107e81630c7e26060fc8d7780a2404c40b920a",
+   "dirty": false,
+   "slurm_job_id": "44402734",
+   "n_kept": 21118,
+   "n_added": 1077,
+   "n_lost": 0,
+   "added_reason": {
+    "qfit<=0.2": 0,
+    "flags==1": 0,
+    "peakSB": 0,
+    "other": 1077
+   },
+   "added_peak": 0.9962859795728877,
+   "lost_peak": NaN,
+   "sat_bins": {
+    "0-1": {
+     "n_added": 22,
+     "n_lost": 0,
+     "added_peak": 1.0,
+     "added_real": {
+      "n": 22,
+      "match": 0.7272727272727273,
+      "chance": 0.0,
+      "match_exp": 0.29543872454236236,
+      "chance_exp": 0.01100057092561742,
+      "rel": 2.556874730148412
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "1-2": {
+     "n_added": 89,
+     "n_lost": 0,
+     "added_peak": 0.9887640449438202,
+     "added_real": {
+      "n": 79,
+      "match": 0.4430379746835443,
+      "chance": 0.0031645569620253164,
+      "match_exp": 0.3185916207711197,
+      "chance_exp": 0.01018217686957591,
+      "rel": 1.4262644235432154
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "2-inf": {
+     "n_added": 966,
+     "n_lost": 0,
+     "added_peak": 0.9968944099378882,
+     "added_real": {
+      "n": 941,
+      "match": 0.9128586609989373,
+      "chance": 0.005313496280552604,
+      "match_exp": 0.6462717152737528,
+      "chance_exp": 0.006735672704822044,
+      "rel": 1.4190680498207686
+     },
+     "lost_real": {
+      "n": 0
+     }
+    }
+   }
+  },
+  "prom2": {
+   "pr": "#1018 v2 (peakSB guard 4)",
+   "commit": "d29fedb2ea2dd58bbe4892c1916a691de145c48e",
+   "dirty": false,
+   "slurm_job_id": "44402735",
+   "n_kept": 20720,
+   "n_added": 1338,
+   "n_lost": 659,
+   "added_reason": {
+    "qfit<=0.2": 0,
+    "flags==1": 0,
+    "peakSB": 0,
+    "other": 1338
+   },
+   "added_peak": 0.9880418535127056,
+   "lost_peak": 0.7966616084977238,
+   "sat_bins": {
+    "0-1": {
+     "n_added": 74,
+     "n_lost": 33,
+     "added_peak": 0.9324324324324325,
+     "added_real": {
+      "n": 74,
+      "match": 0.33783783783783783,
+      "chance": 0.0033783783783783786,
+      "match_exp": 0.35876071876825466,
+      "chance_exp": 0.012651982496285132,
+      "rel": 0.9663421474476848
+     },
+     "lost_real": {
+      "n": 33,
+      "match": 0.15151515151515152,
+      "chance": 0.007575757575757576,
+      "match_exp": 0.36361640782763927,
+      "chance_exp": 0.011792726258777378,
+      "rel": 0.40912366472187267
+     }
+    },
+    "1-2": {
+     "n_added": 220,
+     "n_lost": 53,
+     "added_peak": 0.990909090909091,
+     "added_real": {
+      "n": 184,
+      "match": 0.2391304347826087,
+      "chance": 0.009510869565217392,
+      "match_exp": 0.37622707762801494,
+      "chance_exp": 0.009266917654092342,
+      "rel": 0.625734317408486
+     },
+     "lost_real": {
+      "n": 52,
+      "match": 0.15384615384615385,
+      "chance": 0.0,
+      "match_exp": 0.41266329998489426,
+      "chance_exp": 0.008549410454280953,
+      "rel": 0.38069999035383156
+     }
+    },
+    "2-inf": {
+     "n_added": 1044,
+     "n_lost": 573,
+     "added_peak": 0.9913793103448276,
+     "added_real": {
+      "n": 999,
+      "match": 0.8708708708708709,
+      "chance": 0.005255255255255255,
+      "match_exp": 0.6493509612406319,
+      "chance_exp": 0.006738824888946107,
+      "rel": 1.3470265602669624
+     },
+     "lost_real": {
+      "n": 503,
+      "match": 0.43737574552683894,
+      "chance": 0.0024850894632206756,
+      "match_exp": 0.6714887219141388,
+      "chance_exp": 0.006697547666613105,
+      "rel": 0.6541763382401536
+     }
+    }
+   }
+  },
+  "prom2p3": {
+   "pr": "#1018 v2 peakSB guard 3",
+   "commit": "d29fedb2ea2dd58bbe4892c1916a691de145c48e",
+   "dirty": false,
+   "slurm_job_id": "44402730",
+   "n_kept": 21379,
+   "n_added": 1338,
+   "n_lost": 0,
+   "added_reason": {
+    "qfit<=0.2": 0,
+    "flags==1": 0,
+    "peakSB": 0,
+    "other": 1338
+   },
+   "added_peak": 0.9880418535127056,
+   "lost_peak": NaN,
+   "sat_bins": {
+    "0-1": {
+     "n_added": 74,
+     "n_lost": 0,
+     "added_peak": 0.9324324324324325,
+     "added_real": {
+      "n": 74,
+      "match": 0.33783783783783783,
+      "chance": 0.0033783783783783786,
+      "match_exp": 0.35876071876825466,
+      "chance_exp": 0.012651982496285132,
+      "rel": 0.9663421474476848
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "1-2": {
+     "n_added": 220,
+     "n_lost": 0,
+     "added_peak": 0.990909090909091,
+     "added_real": {
+      "n": 184,
+      "match": 0.2391304347826087,
+      "chance": 0.009510869565217392,
+      "match_exp": 0.37622707762801494,
+      "chance_exp": 0.009266917654092342,
+      "rel": 0.625734317408486
+     },
+     "lost_real": {
+      "n": 0
+     }
+    },
+    "2-inf": {
+     "n_added": 1044,
+     "n_lost": 0,
+     "added_peak": 0.9913793103448276,
+     "added_real": {
+      "n": 999,
+      "match": 0.8708708708708709,
+      "chance": 0.005255255255255255,
+      "match_exp": 0.6493509612406319,
+      "chance_exp": 0.006738824888946107,
+      "rel": 1.3470265602669624
+     },
+     "lost_real": {
+      "n": 0
+     }
+    }
+   }
+  },
+  "snrp2": {
+   "pr": "#1016 on #1018 v2",
+   "commit": "76f8abbf352053989841291e585fe7c57a5cc30a",
+   "dirty": false,
+   "slurm_job_id": "44414184",
+   "n_kept": 21308,
+   "n_added": 1926,
+   "n_lost": 659,
+   "added_reason": {
+    "qfit<=0.2": 0,
+    "flags==1": 41,
+    "peakSB": 435,
+    "other": 1450
+   },
+   "added_peak": 0.9844236760124611,
+   "lost_peak": 0.7966616084977238,
+   "sat_bins": {
+    "0-1": {
+     "n_added": 91,
+     "n_lost": 33,
+     "added_peak": 0.9230769230769231,
+     "added_real": {
+      "n": 91,
+      "match": 0.32967032967032966,
+      "chance": 0.005494505494505495,
+      "match_exp": 0.35396104781332977,
+      "chance_exp": 0.010288425326649447,
+      "rel": 0.9432692712914258
+     },
+     "lost_real": {
+      "n": 33,
+      "match": 0.15151515151515152,
+      "chance": 0.007575757575757576,
+      "match_exp": 0.36361640782763927,
+      "chance_exp": 0.011792726258777378,
+      "rel": 0.40912366472187267
+     }
+    },
+    "1-2": {
+     "n_added": 319,
+     "n_lost": 53,
+     "added_peak": 0.9937304075235109,
+     "added_real": {
+      "n": 258,
+      "match": 0.20930232558139536,
+      "chance": 0.00872093023255814,
+      "match_exp": 0.3802307613813127,
+      "chance_exp": 0.0074652832593454675,
+      "rel": 0.5380900515771686
+     },
+     "lost_real": {
+      "n": 52,
+      "match": 0.15384615384615385,
+      "chance": 0.0,
+      "match_exp": 0.41266329998489426,
+      "chance_exp": 0.008549410454280953,
+      "rel": 0.38069999035383156
+     }
+    },
+    "2-inf": {
+     "n_added": 1516,
+     "n_lost": 573,
+     "added_peak": 0.9861477572559367,
+     "added_real": {
+      "n": 1412,
+      "match": 0.7386685552407932,
+      "chance": 0.004957507082152974,
+      "match_exp": 0.6114923142341878,
+      "chance_exp": 0.007468864704929785,
+      "rel": 1.2147062315717272
+     },
+     "lost_real": {
+      "n": 503,
+      "match": 0.43737574552683894,
+      "chance": 0.0024850894632206756,
+      "match_exp": 0.6714887219141388,
+      "chance_exp": 0.006697547666613105,
+      "rel": 0.6541763382401536
+     }
+    }
+   }
+  },
+  "snrp2pf": {
+   "pr": "#1016 on #1018 v2, per-frame floor",
+   "commit": "76f8abbf352053989841291e585fe7c57a5cc30a",
+   "dirty": false,
+   "slurm_job_id": "44413339",
+   "n_kept": 20720,
+   "n_added": 1338,
+   "n_lost": 659,
+   "added_reason": {
+    "qfit<=0.2": 0,
+    "flags==1": 0,
+    "peakSB": 0,
+    "other": 1338
+   },
+   "added_peak": 0.9880418535127056,
+   "lost_peak": 0.7966616084977238,
+   "sat_bins": {
+    "0-1": {
+     "n_added": 74,
+     "n_lost": 33,
+     "added_peak": 0.9324324324324325,
+     "added_real": {
+      "n": 74,
+      "match": 0.33783783783783783,
+      "chance": 0.0033783783783783786,
+      "match_exp": 0.35876071876825466,
+      "chance_exp": 0.012651982496285132,
+      "rel": 0.9663421474476848
+     },
+     "lost_real": {
+      "n": 33,
+      "match": 0.15151515151515152,
+      "chance": 0.007575757575757576,
+      "match_exp": 0.36361640782763927,
+      "chance_exp": 0.011792726258777378,
+      "rel": 0.40912366472187267
+     }
+    },
+    "1-2": {
+     "n_added": 220,
+     "n_lost": 53,
+     "added_peak": 0.990909090909091,
+     "added_real": {
+      "n": 184,
+      "match": 0.2391304347826087,
+      "chance": 0.009510869565217392,
+      "match_exp": 0.37622707762801494,
+      "chance_exp": 0.009266917654092342,
+      "rel": 0.625734317408486
+     },
+     "lost_real": {
+      "n": 52,
+      "match": 0.15384615384615385,
+      "chance": 0.0,
+      "match_exp": 0.41266329998489426,
+      "chance_exp": 0.008549410454280953,
+      "rel": 0.38069999035383156
+     }
+    },
+    "2-inf": {
+     "n_added": 1044,
+     "n_lost": 573,
+     "added_peak": 0.9913793103448276,
+     "added_real": {
+      "n": 999,
+      "match": 0.8708708708708709,
+      "chance": 0.005255255255255255,
+      "match_exp": 0.6493509612406319,
+      "chance_exp": 0.006738824888946107,
+      "rel": 1.3470265602669624
+     },
+     "lost_real": {
+      "n": 503,
+      "match": 0.43737574552683894,
+      "chance": 0.0024850894632206756,
+      "match_exp": 0.6714887219141388,
+      "chance_exp": 0.006697547666613105,
+      "rel": 0.6541763382401536
+     }
+    }
+   }
+  }
+ }
+}
