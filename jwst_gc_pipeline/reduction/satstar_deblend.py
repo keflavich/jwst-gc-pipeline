@@ -111,7 +111,8 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
                            peak_min_sep_frac=0.9, snap_frac=1.2,
                            prom_nsigma=4.0, dao_nsigma=2.5, seed_conc_min=2.5,
                            max_stars=6, pad=8, confirm_xy=None,
-                           enable_secondary_peaks=True, verbose=False):
+                           enable_secondary_peaks=True, verbose=False,
+                           area_per_peak=50.0):
     """Return a list of (y, x) star centres inside one saturated blob.
 
     Parameters
@@ -131,6 +132,12 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     sat_ceiling : float or None
         ZEROFRAME saturation value; pixels >= this (or ==0) are treated as
         invalid core and filled before detection.  If None, inferred.
+    max_stars : int
+        Minimum number of ZEROFRAME peaks passed to ``peak_local_max``.
+    area_per_peak : float or None
+        The peak limit grows to one per ``area_per_peak`` saturated px of the
+        component when that is larger than ``max_stars``.  ``None`` or 0 keeps
+        the fixed ``max_stars`` limit.
     """
     area = int((sources[sl] == label_id).sum())
     r_sat = max(1.0, np.sqrt(area / np.pi))
@@ -214,11 +221,19 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     zf_filled = np.where(np.isfinite(zf_filled), zf_filled, bg)
     zf_sm = ndimage.gaussian_filter(zf_filled - bg, sigma)
 
+    # The peak limit applies BEFORE the claimed-region filter below, and the
+    # brightest maxima of a blend are its filled saturated cores.  A fixed limit
+    # of 6 therefore leaves no secondary peak in a component holding 6 or more
+    # cores (wd2 F277W nrcblong: the 34,700 px cluster-core component has 36 ZF
+    # cores and ~150 dolphot stars).  Scale the limit with the saturated area.
+    n_peaks = int(max_stars)
+    if area_per_peak:
+        n_peaks = max(n_peaks, int(area / float(area_per_peak)))
     peak_centers = []
     if _HAVE_SKIMAGE:
         det_mask = blob_dil & np.isfinite(zf_sm)
         pk = peak_local_max(zf_sm, min_distance=min_sep, threshold_abs=thresh,
-                            labels=det_mask.astype(int), num_peaks=max_stars)
+                            labels=det_mask.astype(int), num_peaks=n_peaks)
         for (py, px) in pk:
             # ABSORB peaks inside a saturated core's claimed region: they are that
             # core star's own filled flux (and a big filled core can show >1 ring
@@ -300,8 +315,15 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
         centers = snapped
 
     # Final guard: merge any centres closer than the core radius (paranoia against
-    # a residual double-detection of one core).
-    centers = _fof_merge(centers, link=max(min_sep, 0.6 * r_sat))
+    # a residual double-detection of one core).  The radius is that of the
+    # largest ZF-saturated core cluster, not r_sat of the whole component: for a
+    # blend of many stars r_sat measures the blend, and friends-of-friends at
+    # 0.6 r_sat chains every centre into one (wd2 F277W cluster core: r_sat 105
+    # px, link 63 px, 42 centres -> 1 seed).  Peaks inside a core's claimed
+    # region are already absorbed above, and unconfirmed secondary peaks must
+    # pass the compactness test.
+    r_core = max(core_radii) if core_radii else 0.0
+    centers = _fof_merge(centers, link=max(min_sep, 0.6 * r_core))
 
     if not centers:
         # ultimate fallback: bbox centre (current production behaviour)
