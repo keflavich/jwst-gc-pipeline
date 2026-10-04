@@ -86,6 +86,26 @@ def _fof_merge(centers, link):
     return [tuple(pts[idx].mean(axis=0)) for idx in groups.values()]
 
 
+def _neighbour_claim(blob, other, fwhm_pix, pad):
+    """Crop pixels that belong to saturated neighbours of ``blob``: their own
+    pixels (``other``), plus every pixel nearer to them than to ``blob``
+    (Euclidean; a tie stays with ``blob``) within ``reach`` of them in the
+    taxicab metric of the dilation.
+
+    ``reach`` = ceil(1 + 2 FWHM) is the smallest search radius of any
+    component (r_sat >= 1), so the neighbour's own search covers the handed-
+    over pixels.  It is capped at ``pad`` so that they also lie inside the
+    neighbour's crop, which extends ``pad`` px beyond its bounding box.
+    """
+    if not other.any():
+        return other
+    reach = min(int(np.ceil(1.0 + 2 * fwhm_pix)), int(pad))
+    d_own = ndimage.distance_transform_edt(~blob)
+    d_other = ndimage.distance_transform_edt(~other)
+    l1_other = ndimage.distance_transform_cdt(~other, metric='taxicab')
+    return other | ((d_other < d_own) & (l1_other <= reach))
+
+
 def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
                            daophot_xy=None, sat_ceiling=None,
                            peak_min_sep_frac=0.9, snap_frac=1.2,
@@ -128,6 +148,12 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     # dropped afterwards; masking the map instead creates false maxima on the
     # mask edge, where the neighbour's wing rises toward its core.
     other = (sources[y0:y1, x0:x1] > 0) & ~blob
+    # A centre off every SATURATED pixel but nearer to a neighbour's than to
+    # this component's belongs to the neighbour as well.  On wd2 F150W such
+    # peaks sat between a large component and a small one, 2.8-4.3 px from
+    # the small one's star; the unlocked fit drifted onto that star and split
+    # its flux between two rows (5 pairs on nrcb3, 2 on nrcb1).
+    other = _neighbour_claim(blob, other, fwhm_pix, pad)
 
     if sat_ceiling is None:
         sat_ceiling = robust_zf_ceiling(zeroframe)
