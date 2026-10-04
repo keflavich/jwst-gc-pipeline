@@ -2238,18 +2238,18 @@ def _auto_star_prom_robust_min(value, options):
 def _auto_seed_round_loose_max(value, options, *, miri=False):
     """Resolve ``--manual-seed-round-loose-max``.
 
-    ``value < 0`` is AUTO (the default): 0.8 on star-dominated NIRCam fields
-    and 0 (the loose window off) on an extended-emission target
-    (:func:`_is_extended_emission`) and on MIRI; ``value >= 0`` is used
-    verbatim.
+    The pipeline default is 0 (the loose window off).  ``value < 0`` is AUTO
+    (opt-in): 0.8 on star-dominated NIRCam fields and 0 on an
+    extended-emission target (:func:`_is_extended_emission`) and on MIRI;
+    ``value >= 0`` is used verbatim.
 
     Annulus prominence, the loose window's only extra test, also passes
     emission knots and diffraction-spike knots.  On the full Brick and Sgr B2
     frames 29-31% of the loose-only seeds sit in the brightest tenth of the
-    background (docs/evidence/faint_seed_roundness), and the measurement that
-    supports turning the window on comes from star fields only
-    (docs/evidence/faint_defaults_on).  MIRI's residual seeds were never
-    measured with it.
+    background (docs/evidence/faint_seed_roundness).  On the star-field
+    reference fields the window moves at most one injected star per S/N bin
+    on top of the own-band m7 seed (docs/evidence/faint_defaults_on).
+    MIRI's residual seeds were never measured with it.
     """
     value = float(value)
     if value >= 0:

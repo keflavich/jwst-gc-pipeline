@@ -4618,7 +4618,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "to +-x, but only those whose annulus prominence on the "
                          "detection image is >= --manual-seed-round-loose-prom-min: "
                          "a distorted faint star rises above its local structure.  "
-                         "0 = off.  Default -1 = AUTO: 0.8 on star-dominated NIRCam "
+                         "Default 0 = off.  -1 = AUTO: 0.8 on star-dominated NIRCam "
                          "fields, 0 on an extended-emission target and on MIRI "
                          "(emission knots and diffraction-spike knots also pass "
                          "the prominence test).")

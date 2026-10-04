@@ -24,32 +24,44 @@ def _no_instrument_override(monkeypatch):
     monkeypatch.delenv('GC_INSTRUMENT_OVERRIDE', raising=False)
 
 
-@pytest.mark.parametrize('target,filt,expected', [
-    # star-dominated NIRCam fields: both on
-    ('brick', 'F212N', (True, 0.8)),
-    ('sgrb2', 'F182M', (True, 0.8)),
-    ('sgra', 'F405N', (True, 0.8)),
-    # extended-emission targets: both off
-    ('w51', 'F187N', (False, 0.0)),
-    ('sickle', 'F212N', (False, 0.0)),
-    ('wd2', 'F444W', (False, 0.0)),
-    ('ngc6334', 'F200W', (False, 0.0)),
-    # a MIRI band on a star field: both off
-    ('brick', 'F770W', (False, 0.0)),
-    ('cloudc', 'F1130W', (False, 0.0)),
-])
-def test_defaults_per_target_and_band(target, filt, expected):
-    assert _phase_seed_switches(SimpleNamespace(target=target), filt) == expected
+CASES = [
+    # star-dominated NIRCam fields
+    ('brick', 'F212N', True, 0.8),
+    ('sgrb2', 'F182M', True, 0.8),
+    ('sgra', 'F405N', True, 0.8),
+    # extended-emission targets
+    ('w51', 'F187N', False, 0.0),
+    ('sickle', 'F212N', False, 0.0),
+    ('wd2', 'F444W', False, 0.0),
+    ('ngc6334', 'F200W', False, 0.0),
+    # a MIRI band on a star field
+    ('brick', 'F770W', False, 0.0),
+    ('cloudc', 'F1130W', False, 0.0),
+]
+
+
+@pytest.mark.parametrize('target,filt,own,auto_loose', CASES)
+def test_defaults_per_target_and_band(target, filt, own, auto_loose):
+    # own-band is AUTO by default; the loose window is off by default
+    assert _phase_seed_switches(SimpleNamespace(target=target), filt) == (own, 0.0)
+
+
+@pytest.mark.parametrize('target,filt,own,auto_loose', CASES)
+def test_auto_loose_per_target_and_band(target, filt, own, auto_loose):
+    opts = SimpleNamespace(target=target, manual_seed_round_loose_max=-1.0)
+    assert _phase_seed_switches(opts, filt) == (own, auto_loose)
 
 
 def test_extended_emission_flag_overrides_target():
-    on = SimpleNamespace(target='brick', extended_emission=True)
-    off = SimpleNamespace(target='w51', extended_emission=False)
+    loose = dict(manual_seed_round_loose_max=-1.0)
+    on = SimpleNamespace(target='brick', extended_emission=True, **loose)
+    off = SimpleNamespace(target='w51', extended_emission=False, **loose)
     assert _phase_seed_switches(on, 'F212N') == (False, 0.0)
     assert _phase_seed_switches(off, 'F187N') == (True, 0.8)
     # MIRI stays off with --no-extended-emission
     assert _phase_seed_switches(
-        SimpleNamespace(target='brick', extended_emission=False), 'F770W') == (False, 0.0)
+        SimpleNamespace(target='brick', extended_emission=False, **loose),
+        'F770W') == (False, 0.0)
 
 
 def test_explicit_values_used_verbatim():

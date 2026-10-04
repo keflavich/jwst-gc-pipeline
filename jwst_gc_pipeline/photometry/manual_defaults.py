@@ -102,16 +102,17 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_local_max_err': 2.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
-    # roundness up to +-x admitted where the detection rises above its local
-    # structure (annulus prominence >= 5).  -1 = AUTO
-    # (_auto_seed_round_loose_max): 0.8 on star-dominated NIRCam fields, 0
-    # (off) on an extended-emission target and on MIRI.  The loose-only seeds
-    # concentrate on bright background and on diffraction-spike position
-    # angles (docs/evidence/faint_seed_roundness); on the star-field
-    # reference fields a similar fraction of loose-only and tight seeds
-    # reaches the final catalog, and a similar fraction of those lands on
-    # injected stars (docs/evidence/faint_defaults_on).
-    'manual_seed_round_loose_max': -1.0,
+    # opt-in (0 = off): roundness up to +-x admitted where the detection rises
+    # above its local structure (annulus prominence >= 5).  -1 = AUTO
+    # (_auto_seed_round_loose_max): 0.8 on star-dominated NIRCam fields, 0 on
+    # an extended-emission target and on MIRI.  Off by default: the loose-only
+    # seeds concentrate on bright background and on diffraction-spike
+    # position angles (docs/evidence/faint_seed_roundness), and on the
+    # star-field reference fields the window moves at most one injected star
+    # per S/N bin on top of the own-band m7 seed while raising the Sgr B2
+    # field's residual excess from 1.73 to 2.08 per arcsec^2
+    # (docs/evidence/faint_defaults_on).
+    'manual_seed_round_loose_max': 0.0,
     'manual_seed_round_loose_prom_min': 5.0,
     'manual_seed_sharp_lo': 0.4,
     'manual_seed_sharp_hi': 1.2,
