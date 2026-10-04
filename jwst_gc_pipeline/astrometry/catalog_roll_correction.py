@@ -294,7 +294,7 @@ def read_roll_table(table=ROLL_TABLE):
     for r in rows:
         out.append(dict(program=str(int(r['program'])), observation=_norm3(r['observation']),
                         visit=_norm3(r['visit']), roll_arcsec=float(r['delta_roll_arcsec']),
-                        roll_err_arcsec=float(r['delta_roll_err_arcsec']),
+                        roll_err_arcsec=float(r['delta_roll_err_arcsec'] or 'nan'),  # blank = adopted by fiat
                         reference=r['reference'], source=r['source']))
     return out
 
