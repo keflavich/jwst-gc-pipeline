@@ -199,6 +199,7 @@ def test_catalog_built_without_the_guard_is_refit_once(tmp_path, monkeypatch):
     ('SATSTAR_QFIT_LOCAL_R', '10'),
     ('SATSTAR_ZF_RCURVE_GUARD', '0'),
     ('SATSTAR_ZF_RCURVE_MAXSTEP', '2'),
+    ('SATSTAR_ZF_G0_GROUPDQ', '1'),
 ])
 def test_changing_a_switch_refits_a_cached_catalog(tmp_path, monkeypatch,
                                                   name, value):
@@ -214,6 +215,40 @@ def test_changing_a_switch_refits_a_cached_catalog(tmp_path, monkeypatch,
     monkeypatch.delenv(name)
     _load(fn, tmp_path)
     assert calls['n'] == 2                   # and back again
+
+
+def test_group0_groupdq_default_follows_the_recovered_cap(tmp_path,
+                                                         monkeypatch):
+    """SATSTAR_ZF_G0_GROUPDQ defaults to NIRCAM_SATSTAR_RECOVERED_CAP, so only
+    cap-on frames (extended-emission NIRCam) change key; an export wins."""
+    fn = _frame(tmp_path, with_ramp=True)
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3'
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3'
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3d'
+    monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', '0')
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3'
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
+    monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', '1')
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3d'
+
+
+def test_cap_on_catalog_from_before_the_group0_groupdq_switch_is_refit(
+        tmp_path, monkeypatch):
+    """'zfg1.3' was stamped while the anchor rewrote first-read pixels that
+    saturate in group 0 from their clipped values; a cap-on run refits it
+    once and reuses the new stamp afterwards."""
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    fn = _frame(tmp_path, with_ramp=True)
+    _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'),
+                 satfitsw='zfg1.3')
+    calls = _counting_fit(monkeypatch)
+    _load(fn, tmp_path)
+    assert calls['n'] == 1
+    assert calls['fit_switch_signature'] == ['zfg1.3d']
+    _load(fn, tmp_path)
+    assert calls['n'] == 1
 
 
 def test_frame_without_a_ramp_keeps_its_old_catalog(tmp_path, monkeypatch):
