@@ -134,6 +134,12 @@ def _prog_obs_from_name(basename):
 # in-flight guard
 # ----------------------------------------------------------------------------
 
+def _own_job_ids():
+    """SLURM ids naming the job this process runs in (empty off-SLURM)."""
+    return {os.environ[k] for k in ('SLURM_JOB_ID', 'SLURM_ARRAY_JOB_ID')
+            if os.environ.get(k)}
+
+
 def in_flight_observations(user=None):
     """(busy, names): observations referenced by queued/running SLURM jobs.
 
@@ -142,11 +148,24 @@ def in_flight_observations(user=None):
     token and no program (``1pass_extract_gc-treasury_F212N_o066``).  A
     product whose observation matches either form is never written.  squeue
     failure raises: the guard must not silently pass.
+
+    The job running this process is left out.  Its name carries the field
+    (``quintuplet-rollwcs-apply-pilot``), so counting it marked every product
+    of that field busy and the apply wrote nothing.
     """
     user = user or os.environ.get('USER')
-    out = subprocess.run(['squeue', '-h', '-u', user, '-o', '%j'], check=True,
+    out = subprocess.run(['squeue', '-h', '-u', user, '-o', '%i %j'], check=True,
                          capture_output=True, text=True, timeout=120).stdout
-    names = [n.strip() for n in out.splitlines() if n.strip()]
+    own = _own_job_ids()
+    names = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        jobid, name = parts
+        if jobid.split('_')[0] in own:
+            continue
+        names.append(name.strip())
     busy = set()
     for n in names:
         for m in re.finditer(r'(?:(\d{4,5})-)?o(\d{3})(?![0-9])', n):
