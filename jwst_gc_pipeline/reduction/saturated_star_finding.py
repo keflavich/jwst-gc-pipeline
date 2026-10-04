@@ -3444,7 +3444,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         # Background-scatter error floor (NIRCam, SATSTAR_ERR_BKG_SCATTER=1):
         # see bkg_scatter_fit_error.  Without it, crowded 15-18 mag wd2 F150W
-        # stars came out 0.4-0.8 mag faint.
+        # stars came out 0.4-0.8 mag faint.  Applied after the proximity
+        # downweighting above, so where the scatter exceeds err/sqrt(w_prox)
+        # it flattens that downweighting; flux_err and reduced_chi2 below are
+        # computed with the floored errors.
         if (not _is_miri and not forced_source
                 and _fit_switches['err_bkg_scatter']):
             err_cutout_eff, _bkg_sigma = bkg_scatter_fit_error(

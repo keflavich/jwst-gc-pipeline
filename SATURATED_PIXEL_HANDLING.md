@@ -240,7 +240,16 @@ to `DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
   ~12 against a median ERR of ~0.5, ~6500 background pixels per 81×81 box) and
   15–18 mag stars come out 0.4–0.8 mag faint. The robust scatter (1.4826 MAD)
   of the unmasked local-background annulus is added in quadrature to every
-  pixel's error before the fit. The switch is part of the satstar cache key
+  pixel's error before the fit. `flux_err` and `reduced_chi2` are computed
+  with these errors: on wd2 F150W nrcb3 the median `flux_err` grows 1.6×
+  (3.7× for stars brighter than 13 mag, whose masked cores leave mostly
+  background pixels in the fit) and the median `reduced_chi2` falls from 177
+  to 44, so neither column is comparable between runs with and without the
+  switch. No gate reads `reduced_chi2`; the accept gate's S/N > 3 floor and
+  its S/N > 10 bypass of the `ssr_ratio` test do read `flux_err`. The
+  floor also largely cancels the optional near-core downweighting
+  (`satstar_central_downweight_sigma`, default off) wherever the scatter
+  exceeds the downweighted ERR. The switch is part of the satstar cache key
   (`es` in `SATFITSW`), so turning it on refits cached catalogs, including
   those of frames without a ramp.
 - **PSF grid by size** (`get_psf(..., fov_pixels=1024)`): LW (NRCA5/NRCB5) in-FOV stars use `fov=1024`
