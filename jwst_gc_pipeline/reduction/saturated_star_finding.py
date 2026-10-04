@@ -987,6 +987,9 @@ def satstar_fit_switches(env=None):
       F150W evidence (#1065) is from cap-on frames, and the mask needs the
       cap to read the star's own measured core (#1064): with the earlier
       cap it moved the bright stars 2 mag faint.
+    * ``SATSTAR_ZF_RIM_BADPIX`` (default ON): DEAD, HOT and REFERENCE_PIXEL
+      pixels are left out of the rim rewrite, and a rewritten rim pixel's
+      error is at least the frame's median ERR (``zeroframe_rim_error``).
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (5.0, the box qfit cap): qfit over the disk r < R around the fit
@@ -1010,6 +1013,7 @@ def satstar_fit_switches(env=None):
         'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
+        'rim_badpix': _env_switch('SATSTAR_ZF_RIM_BADPIX', True, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1049,6 +1053,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             zf += 'o'
         if sw['g0_groupdq']:
             zf += 'd'
+        if sw['rim_badpix']:
+            zf += 'b'
         if zf:
             parts.append('zf' + zf)
     if sw['qfit_local_r'] > 0:
@@ -1060,6 +1066,34 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             ql += f"g{sw['qfit_local_max']:g}s"
         parts.append(ql)
     return '_'.join(parts)
+
+
+_RIM_BADPIX_BITS = (dqflags.pixel['DEAD'] | dqflags.pixel['HOT']
+                    | dqflags.pixel['REFERENCE_PIXEL'])
+
+
+def zeroframe_rim_error(data, err, rim, *, floor=True):
+    """1-sigma fit error with the ZEROFRAME-rewritten rim filled in.
+
+    The crf ERR is NaN at SATURATED pixels.  A rewritten rim pixel gets 5% of
+    its value (the per-pixel scatter of the R calibration).  With ``floor``
+    that error is at least the median finite, positive ERR of the frame: a
+    value read from a single group cannot be measured better than a typical
+    ramp-fit pixel, and 5% of a near-zero rewrite would otherwise outweigh
+    the rest of the fit box.  Pixels outside ``rim`` and rim pixels with a
+    finite ERR keep their ERR.  Returns a new array.
+    """
+    err = np.array(err, dtype=float, copy=True)
+    fix = np.asarray(rim, dtype=bool) & ~np.isfinite(err)
+    if not fix.any():
+        return err
+    val = np.abs(np.asarray(data, dtype=float)[fix]) * 0.05
+    if floor:
+        ok = np.isfinite(err) & (err > 0)
+        if ok.any():
+            val = np.maximum(val, float(np.median(err[ok])))
+    err[fix] = val
+    return err
 
 
 def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
@@ -1100,7 +1134,9 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     Every measured curve is logged (faint-bin R, bright-end R, R used), with a
     WARNING when the R used at the bright end is below half the faint-bin R.
     ``SATSTAR_ZF_KEEP_FINITE`` (default OFF) leaves SATURATED pixels that have
-    a valid ramp-fit rate alone.  See ``satstar_fit_switches``.
+    a valid ramp-fit rate alone.  ``SATSTAR_ZF_RIM_BADPIX`` (default ON) leaves
+    DEAD, HOT and REFERENCE_PIXEL pixels out of the rim.  See
+    ``satstar_fit_switches``.
 
     Parameters
     ----------
@@ -1292,6 +1328,17 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
             & (data > recov_val * (1.0 + infl_tol)))
         if _keep is not None:
             rim_mask = rim_mask & ~_keep
+        # SATSTAR_ZF_RIM_BADPIX (default ON, #1071): dead/hot clumps carry
+        # the SATURATED bit with a group-0 of ~0.001-1.2 DN, which is "clean"
+        # (positive, below the ceiling), so they were rewritten to R*group0 ~
+        # 1e-4-0.1 MJy/sr with a 5% error, 400-5e8x the weight of a normal
+        # pixel.  Next to a +2-3 MJy/sr local background that drove four
+        # 16-18 mag wd2 F150W nrcb1 stars to negative flux.  Their crf SCI and
+        # ERR are NaN, so left alone they carry zero weight.  Reference pixels
+        # hold no sky either.
+        if _sw['rim_badpix'] and dq is not None:
+            rim_mask = rim_mask & ((np.asarray(dq).astype(np.int64)
+                                    & _RIM_BADPIX_BITS) == 0)
         recovered[rim_mask] = recov_val[rim_mask]
     deep_core_mask = sat_buf & ~g0_clean
     if _keep is not None:
@@ -2973,8 +3020,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # assign the ~5% per-pixel scatter of the R calibration so the fit can
     # inverse-variance weight them instead of dropping/inf-weighting.
     if zf_deep_core is not None:
-        _rimfix = _rim & ~np.isfinite(err_working)
-        err_working[_rimfix] = np.abs(data[_rimfix]) * 0.05
+        err_working = zeroframe_rim_error(
+            data, err_working, _rim, floor=_fit_switches['rim_badpix'])
     _bad_err = ~np.isfinite(err_working) | (err_working <= 0)
     err_working[_bad_err] = 1e10
 
