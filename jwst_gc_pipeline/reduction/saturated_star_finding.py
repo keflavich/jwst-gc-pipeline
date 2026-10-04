@@ -1050,8 +1050,15 @@ def satstar_fit_switches(env=None):
       (1.3): truncate the R(g0) calibration curve at the first bin-to-bin
       change larger than MAXSTEP, up or down (see
       ``zeroframe_recover_saturated``).
-    * ``SATSTAR_ZF_KEEP_FINITE`` (default OFF): SATURATED pixels with a finite,
-      nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
+    * ``SATSTAR_ZF_KEEP_FINITE`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``,
+      which cataloging turns on for extended-emission NIRCam): SATURATED pixels
+      with a finite, nonzero ramp-fit rate and no DO_NOT_USE are neither
+      rewritten nor masked.  On wd2 (#1092), with the cap and
+      ``SATSTAR_ZF_FIRST_FRAME`` on, the rewrite read 5-8% above the crf at
+      the replaced F150W pixels and the 14.5-16.5 mag saturated stars read
+      0.05 mag brighter than the unsaturated ones; keeping the crf removed
+      that offset on F150W nrcb3 and reduced the F277W nrcblong 14-17 mag
+      offset from +0.03 to -0.01.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
       observed-peak second chance reads the crf values, not the rewrite.
     * ``SATSTAR_ERR_BKG_SCATTER`` (default OFF; ``cataloging`` turns it on for
@@ -1097,7 +1104,7 @@ def satstar_fit_switches(env=None):
     return {
         'rcurve_guard': _env_switch('SATSTAR_ZF_RCURVE_GUARD', True, env),
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
-        'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
+        'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', cap_on, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
         'err_bkg_scatter': _env_switch('SATSTAR_ERR_BKG_SCATTER', False, env),
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
@@ -1334,10 +1341,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     default ON).
     Every measured curve is logged (faint-bin R, bright-end R, R used), with a
     WARNING when the R used at the bright end is below half the faint-bin R.
-    ``SATSTAR_ZF_KEEP_FINITE`` (default OFF) leaves SATURATED pixels that have
-    a valid ramp-fit rate alone.  ``SATSTAR_ZF_RIM_BADPIX`` (default ON) leaves
-    DEAD, HOT and REFERENCE_PIXEL pixels out of the rim.  See
-    ``satstar_fit_switches``.
+    ``SATSTAR_ZF_KEEP_FINITE`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``)
+    leaves SATURATED pixels that have a valid ramp-fit rate alone.
+    ``SATSTAR_ZF_RIM_BADPIX`` (default ON) leaves DEAD, HOT and
+    REFERENCE_PIXEL pixels out of the rim.  See ``satstar_fit_switches``.
 
     Parameters
     ----------
@@ -1425,10 +1432,11 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         group0_saturated=group0_saturated)
     g0_clean = g0_clean | _ff_rep
     _sw = satstar_fit_switches()
-    # SATSTAR_ZF_KEEP_FINITE (default OFF): a SATURATED pixel with a finite,
-    # nonzero SCI and no DO_NOT_USE was measured from its pre-saturation
-    # groups (the crf SATURATED bit is any-group), so it is data, not a
-    # clipped value.  Keep it: neither rewritten with R*group0 nor masked.
+    # SATSTAR_ZF_KEEP_FINITE (default = the recovered-core cap): a SATURATED
+    # pixel with a finite, nonzero SCI and no DO_NOT_USE was measured from its
+    # pre-saturation groups (the crf SATURATED bit is any-group), so it is
+    # data, not a clipped value.  Keep it: neither rewritten with R*group0
+    # nor masked.
     # SAT&DO_NOT_USE pixels (SCI zeroed upstream) are still recovered.
     if _sw['keep_finite'] and dq is not None:
         _keep = (sat & np.isfinite(data) & (data != 0)

@@ -403,6 +403,19 @@ flux, trading depth for a brighter saturation ceiling:
   of its value, drove four 16–18 mag wd2 F150W stars to negative flux
   (#1071). A rewritten pixel's fit error is also at least the frame's
   median ERR.
+  Wherever the cap is on, SATURATED pixels with a finite, nonzero crf rate
+  and no DO_NOT_USE keep that rate (`SATSTAR_ZF_KEEP_FINITE`): the crf
+  SATURATED bit is any-group, and `ramp_fit` measured these pixels from their
+  unsaturated groups or, for a flagged group 0, from the first frame. Only
+  pixels with no rate (SATURATED and DO_NOT_USE, SCI zeroed) are rewritten
+  from group 0 or the first frame. On wd2 F150W nrcb3 the first-frame rewrite
+  read 5–8% above the crf at the replaced pixels, and the 14.5–16.5 mag
+  saturated stars read 0.05 mag brighter than the unsaturated ones against
+  dolphot; keeping the crf brought every 0.5 mag bin from 14.5 to 18 mag
+  within 0.015 mag of the unsaturated stars (benchmark |dm| < 0.3: 862 →
+  863 of 876, MAD 0.025 → 0.018). On F277W nrcblong the 14–17 mag offset went
+  from +0.03 to −0.01 (3031 → 3042 of 3257) with the per-magnitude scatter
+  0.003–0.006 mag larger (#1092).
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
@@ -585,7 +598,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_WINGCAL_MAX_SE` | 0.05 | largest standard error (1.2533 madstd/√n) of a C(r) bucket that wing self-calibration applies, per-frame and pooled; ≤ 0 disables the gate. madstd is floored at the fractional scatter of the smallest r_mask bucket (≥ 5 stars) times the bucket ratio, and C(r) is anchored at C(0) = 1 (#1041) |
 | `SATSTAR_ZEROFRAME_FIT` | 1 | fit using the ZEROFRAME where available; blank = default, `1/true/yes/on` or `0/false/no/off` (any case), any other value raises |
 | `SATSTAR_ZF_RCURVE_GUARD` / `…_MAXSTEP` | 1 (**on**) / 1.3 | truncate the ZEROFRAME R(g0) curve at the first bin-to-bin step larger than MAXSTEP, up or down; 0 restores the untruncated curve, which collapses on F480M (#972) |
-| `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
+| `SATSTAR_ZF_KEEP_FINITE` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked); on wd2 it removed the 0.05 mag bright offset of the first-frame rewrite on F150W (#1092) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
 | `SATSTAR_ZF_G0_GROUPDQ` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (#1065) |
 | `SATSTAR_ZF_FIRST_FRAME` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | with NFRAMES > 1, the ZEROFRAME anchor reads k(first frame) × the ramp ZEROFRAME extension (the first frame) where the ramp GROUPDQ flags group 0 SATURATED or DO_NOT_USE; k = binned median group 0 / first frame on the frame's unflagged pixels (`first_frame_group0`) |

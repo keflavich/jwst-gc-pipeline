@@ -226,14 +226,16 @@ def test_changing_a_switch_refits_a_cached_catalog(tmp_path, monkeypatch,
 
 def test_group0_groupdq_default_follows_the_recovered_cap(tmp_path,
                                                          monkeypatch):
-    """SATSTAR_ZF_G0_GROUPDQ and SATSTAR_ZF_FIRST_FRAME default to
-    NIRCAM_SATSTAR_RECOVERED_CAP, so only cap-on frames (extended-emission
-    NIRCam) change key; an export wins."""
+    """SATSTAR_ZF_KEEP_FINITE, SATSTAR_ZF_G0_GROUPDQ and SATSTAR_ZF_FIRST_FRAME
+    default to NIRCAM_SATSTAR_RECOVERED_CAP, so only cap-on frames
+    (extended-emission NIRCam) change key; an export wins."""
     fn = _frame(tmp_path, with_ramp=True)
     assert satstar_fit_switch_signature(fn) == 'zfg1.3b'
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
     assert satstar_fit_switch_signature(fn) == 'zfg1.3b'
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3kdbf'
+    monkeypatch.setenv('SATSTAR_ZF_KEEP_FINITE', '0')
     assert satstar_fit_switch_signature(fn) == 'zfg1.3dbf'
     monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', '0')
     assert satstar_fit_switch_signature(fn) == 'zfg1.3bf'
@@ -244,15 +246,19 @@ def test_group0_groupdq_default_follows_the_recovered_cap(tmp_path,
     assert satstar_fit_switch_signature(fn) == 'zfg1.3db'
     monkeypatch.setenv('SATSTAR_ZF_FIRST_FRAME', '1')
     assert satstar_fit_switch_signature(fn) == 'zfg1.3dbf'
+    monkeypatch.setenv('SATSTAR_ZF_KEEP_FINITE', '1')
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3kdbf'
 
 
-@pytest.mark.parametrize('old_stamp', ['zfg1.3', 'zfg1.3d', 'zfg1.3db'])
+@pytest.mark.parametrize('old_stamp',
+                         ['zfg1.3', 'zfg1.3d', 'zfg1.3db', 'zfg1.3dbf'])
 def test_cap_on_catalog_from_before_the_group0_switches_is_refit(
         tmp_path, monkeypatch, old_stamp):
     """'zfg1.3' was stamped while the anchor rewrote first-read pixels that
-    saturate in group 0 from their clipped values, and 'zfg1.3d' while it
-    still read a group 0 whose later frames clipped; a cap-on run refits
-    either once and reuses the new stamp afterwards."""
+    saturate in group 0 from their clipped values, 'zfg1.3d' while it still
+    read a group 0 whose later frames clipped, and 'zfg1.3dbf' while it
+    rewrote SATURATED pixels that have a finite ramp-fit rate; a cap-on run
+    refits any of them once and reuses the new stamp afterwards."""
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
     fn = _frame(tmp_path, with_ramp=True)
     _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'),
@@ -260,14 +266,14 @@ def test_cap_on_catalog_from_before_the_group0_switches_is_refit(
     calls = _counting_fit(monkeypatch)
     _load(fn, tmp_path)
     assert calls['n'] == 1
-    assert calls['fit_switch_signature'] == ['zfg1.3dbf']
+    assert calls['fit_switch_signature'] == ['zfg1.3kdbf']
     _load(fn, tmp_path)
     assert calls['n'] == 1
 
 
 @pytest.mark.parametrize('cap, old_stamp, new_stamp', [
     ('0', 'zfg1.3', 'zfg1.3b'),
-    ('1', 'zfg1.3d', 'zfg1.3dbf'),
+    ('1', 'zfg1.3d', 'zfg1.3kdbf'),
 ])
 def test_catalog_from_before_the_rim_badpix_switch_is_refit(
         tmp_path, monkeypatch, cap, old_stamp, new_stamp):
@@ -305,11 +311,12 @@ def test_signature_keys_the_error_floor_with_or_without_a_ramp(tmp_path,
     monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
     assert satstar_fit_switch_signature(no_ramp) == 'es'
     assert satstar_fit_switch_signature(ramp) == 'zfg1.3b_es'
-    # cataloging turns on both the cap (hence the group-0 GROUPDQ mask) and
-    # the floor for extended-emission NIRCam.
+    # cataloging turns on both the cap (hence keep-finite, the group-0
+    # GROUPDQ mask and the first frame) and the floor for extended-emission
+    # NIRCam.
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
     assert satstar_fit_switch_signature(no_ramp) == 'es'
-    assert satstar_fit_switch_signature(ramp) == 'zfg1.3dbf_es'
+    assert satstar_fit_switch_signature(ramp) == 'zfg1.3kdbf_es'
 
 
 def test_error_floor_refits_a_catalog_of_a_frame_without_a_ramp(tmp_path,
