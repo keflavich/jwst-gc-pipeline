@@ -1,24 +1,24 @@
 """Build the all-TILE JOINT NIRCam catalog for JWST program 10678 (GC Treasury).
 
 There is no all-tile joint catalog for 10678 today: every one of the 66
-per-pointing ``..._qualcuts_oksep10678.fits`` tables stands alone, so a star
+per-pointing ``..._qualcuts_oksep<proposal>.fits`` tables stands alone, so a star
 seen in two adjacent, overlapping pointings appears twice with two independent
 positions and two independent photometry measurements.  This module assembles
 the single joint table, with cross-TILE duplicates collapsed and every
 surviving row carrying which OTHER tile(s) also saw it.
 
 INPUT FILE COUNT CAVEAT: the input directory actually holds 198 files, not 66 --
-each of the 66 pointings (``obsid``) has THREE ``..._qualcuts_oksep10678.fits``
+each of the 66 pointings (``obsid``) has THREE ``..._qualcuts_oksep<proposal>.fits``
 siblings: ``basic_merged_...`` (both NIRCam modules combined -- the one this
 module wants) and ``basic_nrca_...`` / ``basic_nrcb_...`` (single-module
 SUBSETS of that same pointing, not independent pointings).  A naive glob on
-``*_qualcuts_oksep10678.fits`` matches all three per obsid and -- keyed into a
+``*_qualcuts_oksep<proposal>.fits`` matches all three per obsid and -- keyed into a
 ``{obsid: path}`` dict -- silently keeps whichever sorts last
 (``nrcb`` > ``nrca`` > ``merged`` alphabetically), handing the joint build a
 single-module PARTIAL catalog instead of the full pointing (caught during this
 PR's real-data smoke test: o040 read back only 35631 rows under the naive glob,
 not the 62933 the ``basic_merged_`` file actually has).  ``discover_tile_paths``
-therefore globs ``basic_merged_*_qualcuts_oksep10678.fits`` specifically; see
+therefore globs ``basic_merged_*_qualcuts_oksep<proposal>.fits`` specifically; see
 ``test_discover_tile_paths_excludes_module_subset_siblings``.
 
 This reuses :mod:`jwst_gc_pipeline.cmz.catalog_assembly` (in particular its
@@ -40,7 +40,7 @@ pipeline resolved it
 (``catalog_assembly._dedup_cross_field(..., field_col='obsid')``).
 
 Schema (from inspecting a real tile,
-``basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o040_qualcuts_oksep10678.fits``):
+``basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o040_qualcuts_oksep<proposal>.fits``):
 
 * position: the ``skycoord_ref`` mixin column (``skycoord_ref.ra`` /
   ``skycoord_ref.dec`` on disk) -- the position the per-tile m7 cross-band merge
@@ -76,7 +76,7 @@ MIRI F770W is explicitly OUT OF SCOPE here -- see ``_miri_crossmatch_todo`` and
 issue #956: a per-tile MIRI tie must be independently verified (swept
 ``measure_offset`` vs the joint F480M position list, contrast >= 5,
 ``confirm_windows=True``) before any MIRI source could be matched in; this
-module only ever reads NIRCam ``..._qualcuts_oksep10678.fits`` tiles.
+module only ever reads NIRCam ``..._qualcuts_oksep<proposal>.fits`` tiles.
 
 Winner rule inside a cross-tile duplicate cluster (most-important first, each
 criterion only breaks a tie left by the previous one):
@@ -117,6 +117,7 @@ module defaults to 0.2"):
 """
 import argparse
 import glob
+import functools
 import hashlib
 import json
 import os
@@ -145,16 +146,36 @@ DEFAULT_DEDUP_RADIUS_ARCSEC = 0.2
 
 # NOTE: the input directory also carries 'basic_nrca_...'/'basic_nrcb_...'
 # per-MODULE subset catalogs alongside the module-combined 'basic_merged_...'
-# one, all three sharing the same obsid and the same '..._qualcuts_oksep10678.
-# fits' suffix (e.g. 'basic_merged_indivexp_photometry_tables_merged_
-# resbgsub_m7_o040_qualcuts_oksep10678.fits' next to 'basic_nrca_...' and
-# 'basic_nrcb_...' siblings for the SAME o040). A glob on '*_qualcuts_
-# oksep10678.fits' matches all three; keying a dict by obsid then silently
-# keeps whichever sorts LAST (alphabetically 'nrcb' > 'merged'), handing the
-# module-only partial catalog to the joint build instead of the full tile.
-# Match 'basic_merged_' specifically.
-_TILE_RE = re.compile(
-    r'^basic_merged_.*_o(?P<obsid>\d+)_qualcuts_oksep10678\.fits$')
+# one, all three sharing the same obsid and the same qualcuts suffix (e.g.
+# 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o040<suffix>.fits'
+# next to 'basic_nrca_...' and 'basic_nrcb_...' siblings for the SAME o040).
+# A glob on '*<suffix>.fits' matches all three; keying a dict by obsid then
+# silently keeps whichever sorts LAST (alphabetically 'nrcb' > 'merged'),
+# handing the module-only partial catalog to the joint build instead of the
+# full tile.  Match 'basic_merged_' specifically.
+#
+# The suffix comes from the per-field registry
+# (merge_catalogs._qualcuts_oksep_suffix), never a literal; see
+# jwst_gc_pipeline/tests/test_no_hardcoded_qualcuts_token.py.
+TREASURY_TARGET = 'gc-treasury'
+
+
+@functools.lru_cache(maxsize=None)
+def qualcuts_suffix(target=TREASURY_TARGET):
+    """The quality-cut table suffix for ``target`` (10678 for gc-treasury).
+
+    Imported lazily: merge_catalogs is a slow import, and only tile discovery
+    needs it."""
+    from jwst_gc_pipeline.photometry.merge_catalogs import (
+        _qualcuts_oksep_suffix)
+    return _qualcuts_oksep_suffix(target)
+
+
+def _tile_re(suffix):
+    return re.compile(
+        r'^basic_merged_.*_o(?P<obsid>\d+)' + re.escape(suffix) + r'\.fits$')
+
+
 _FLUX_JY_RE = re.compile(r'^flux_jy_(?P<band>.+)$')
 
 REF_RA_COL = 'skycoord_ref.ra'
@@ -177,15 +198,17 @@ class OutputRefusedError(RuntimeError):
 # Tile discovery and per-tile metadata
 # ---------------------------------------------------------------------------
 def discover_tile_paths(input_dir, obsids=None):
-    """Return ``{obsid: path}`` for every ``..._qualcuts_oksep10678.fits`` tile
+    """Return ``{obsid: path}`` for every ``..._qualcuts_oksep<proposal>.fits`` tile
     in ``input_dir``, optionally restricted to ``obsids`` (an iterable of
     3-digit-or-wider obsid strings, e.g. ``['040', '041']`` -- the smoke-test
     subsetting hook; a full production run omits it)."""
+    suffix = qualcuts_suffix()
+    tile_re = _tile_re(suffix)
     paths = sorted(glob.glob(os.path.join(
-        input_dir, 'basic_merged_*_qualcuts_oksep10678.fits')))
+        input_dir, f'basic_merged_*{suffix}.fits')))
     out = {}
     for p in paths:
-        m = _TILE_RE.search(os.path.basename(p))
+        m = tile_re.search(os.path.basename(p))
         if not m:
             continue
         obsid = m.group('obsid')
@@ -194,7 +217,7 @@ def discover_tile_paths(input_dir, obsids=None):
         out[obsid] = p
     if not out:
         raise FileNotFoundError(
-            f'no *_qualcuts_oksep10678.fits tiles found in {input_dir!r} '
+            f'no *{suffix}.fits tiles found in {input_dir!r} '
             f'(obsids filter={obsids!r})')
     return dict(sorted(out.items()))
 
@@ -589,7 +612,7 @@ def build_parser():
         description='Build the all-tile JOINT NIRCam catalog for 10678 '
                     '(GC Treasury).')
     p.add_argument('--input-dir', default=DEFAULT_INPUT_DIR,
-                   help='directory of *_qualcuts_oksep10678.fits tiles '
+                   help='directory of *_qualcuts_oksep<proposal>.fits tiles '
                         '(default: the raw per-tile catalogs; point at a '
                         'catalogs_rollcorr/<tag>/ directory once roll '
                         'correction has landed for every tile -- never mix)')

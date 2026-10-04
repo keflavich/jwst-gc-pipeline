@@ -9,6 +9,8 @@ from astropy.table import Table
 
 from jwst_gc_pipeline.cmz import treasury_joint_catalog as TJC
 
+SUFFIX = TJC.qualcuts_suffix()
+
 
 def _write_tile(path, ra, dec, f212=None, f480=None, ef212=None,
                 roll_corrected=None, gctag='2026-09-24_PR959'):
@@ -41,7 +43,7 @@ def _grid_tile_coords(ra0, dec0, nx=6, ny=6, step_arcsec=5.0):
 # ---------------------------------------------------------------------------
 def test_discover_tile_paths(tmp_path):
     for o in ('040', '041', '099'):
-        _write_tile(tmp_path / f'basic_merged_m7_o{o}_qualcuts_oksep10678.fits',
+        _write_tile(tmp_path / f'basic_merged_m7_o{o}{SUFFIX}.fits',
                    *_grid_tile_coords(266.3 + int(o) * 0.001, -29.1))
     paths = TJC.discover_tile_paths(str(tmp_path))
     assert set(paths) == {'040', '041', '099'}
@@ -55,7 +57,7 @@ def test_discover_tile_paths_empty_raises(tmp_path):
 
 
 def test_discover_tile_paths_excludes_module_subset_siblings(tmp_path):
-    # Real layout: each obsid has THREE '..._qualcuts_oksep10678.fits' files --
+    # Real layout: each obsid has THREE '...<suffix>.fits' files --
     # 'basic_merged_...' (both modules) plus 'basic_nrca_...'/'basic_nrcb_...'
     # (single-module SUBSETS of the SAME pointing, not separate pointings).
     # A naive glob matches all three per obsid and, keyed by obsid, silently
@@ -66,7 +68,7 @@ def test_discover_tile_paths_excludes_module_subset_siblings(tmp_path):
     for stem in ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m7',
                 'basic_nrca_indivexp_photometry_tables_merged_resbgsub_m7',
                 'basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m7'):
-        _write_tile(tmp_path / f'{stem}_o040_qualcuts_oksep10678.fits', ra, dec)
+        _write_tile(tmp_path / f'{stem}_o040{SUFFIX}.fits', ra, dec)
     paths = TJC.discover_tile_paths(str(tmp_path))
     assert set(paths) == {'040'}   # one pointing, not double/triple-counted
     assert os.path.basename(paths['040']).startswith('basic_merged_')
@@ -78,7 +80,7 @@ def test_discover_tile_paths_module_subset_alone_is_invisible(tmp_path):
     # pointing for this module, not a fallback to a partial catalog.
     ra, dec = _grid_tile_coords(266.30, -29.10, nx=6, ny=6)
     _write_tile(
-        tmp_path / 'basic_nrca_indivexp_photometry_tables_merged_resbgsub_m7_o099_qualcuts_oksep10678.fits',
+        tmp_path / f'basic_nrca_indivexp_photometry_tables_merged_resbgsub_m7_o099{SUFFIX}.fits',
         ra, dec)
     with pytest.raises(FileNotFoundError):
         TJC.discover_tile_paths(str(tmp_path))
@@ -275,9 +277,9 @@ def test_build_joint_catalog_end_to_end_no_overlap(tmp_path):
     in_dir.mkdir()
     ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=8, ny=8, step_arcsec=3.0)
     ra1, dec1 = _grid_tile_coords(266.50, -29.30, nx=8, ny=8, step_arcsec=3.0)
-    _write_tile(in_dir / 'basic_merged_m7_o040_qualcuts_oksep10678.fits',
+    _write_tile(in_dir / f'basic_merged_m7_o040{SUFFIX}.fits',
                ra0, dec0, f212=[1.0] * 64, f480=[1.0] * 64)
-    _write_tile(in_dir / 'basic_merged_m7_o041_qualcuts_oksep10678.fits',
+    _write_tile(in_dir / f'basic_merged_m7_o041{SUFFIX}.fits',
                ra1, dec1, f212=[1.0] * 64, f480=[1.0] * 64)
     table, prov = TJC.build_joint_catalog(str(in_dir))
     assert prov['n_tiles'] == 2
@@ -293,9 +295,15 @@ def test_build_joint_catalog_refuses_mixed_roll_correction(tmp_path):
     in_dir.mkdir()
     ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=4, ny=4, step_arcsec=3.0)
     ra1, dec1 = _grid_tile_coords(266.50, -29.30, nx=4, ny=4, step_arcsec=3.0)
-    _write_tile(in_dir / 'basic_merged_m7_o040_qualcuts_oksep10678.fits',
+    _write_tile(in_dir / f'basic_merged_m7_o040{SUFFIX}.fits',
                ra0, dec0, roll_corrected=False)
-    _write_tile(in_dir / 'basic_merged_m7_o041_qualcuts_oksep10678.fits',
+    _write_tile(in_dir / f'basic_merged_m7_o041{SUFFIX}.fits',
                ra1, dec1, roll_corrected=True)
     with pytest.raises(TJC.MixedRollCorrectionError):
         TJC.build_joint_catalog(str(in_dir))
+
+
+def test_qualcuts_suffix_is_the_treasury_proposal():
+    """The tile glob asks the per-field registry; for gc-treasury that is
+    program 10678, the token every on-disk treasury table carries."""
+    assert TJC.qualcuts_suffix().endswith('10678')
