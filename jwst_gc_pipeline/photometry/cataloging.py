@@ -704,6 +704,74 @@ def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
     return restore & valid
 
 
+# Radius (pixels) around each handed-off star inside which a negative hole in
+# the subtracted resbg map is undone.  wd2 refit replay: r = 10 px brings the
+# handed-off LW stars from ~-0.3 mag against dolphot to |dm| <= 0.02 mag and
+# leaves SW unchanged; r = 6 px gives a similar result.
+_HANDOFF_RESBG_CLIP_RADIUS_PIX = 10.0
+
+
+def _clip_resbg_hole_at_handoff(data, bg, handoff_xy, radius, field_median):
+    """Undo negative resbg excursions below the field level around hand-off stars.
+
+    The resbg map is built from the previous phase's residuals, which never
+    modelled a handed-off saturated star, so it carries a negative hole at the
+    core.  Subtracting it adds a positive pedestal under the star and inflates
+    the fit.  Within ``radius`` of each hand-off position, the data are raised
+    by ``max(bg, field_median) - bg`` (the data become ``crf - max(bg,
+    field_median)``).  Pixels with ``bg >= field_median``, non-finite ``bg`` or
+    non-finite ``data`` are left alone, as is everything outside ``radius``.
+
+    Parameters
+    ----------
+    data : `~numpy.ndarray`
+        Frame data after the ``bg`` subtraction.  Not modified.
+    bg : `~numpy.ndarray`
+        The subtracted background map, same shape as ``data``.
+    handoff_xy : `~numpy.ndarray` (N, 2) or None
+        Hand-off positions, (x, y) frame pixels.
+    radius : float
+        Clip radius in pixels.
+    field_median : float
+        Median of the frame's finite, nonzero background map.
+
+    Returns
+    -------
+    out : `~numpy.ndarray`
+        Corrected copy of ``data``.
+    n_star : int
+        Number of hand-off positions applied.
+    n_pix : int
+        Number of pixels changed.
+    added : `~numpy.ndarray`
+        Values added to the changed pixels.
+    """
+    out = np.array(data, copy=True)
+    empty = np.zeros(0, dtype=float)
+    if (handoff_xy is None or len(handoff_xy) == 0 or not np.isfinite(field_median)
+            or radius <= 0):
+        return out, 0, 0, empty
+    bg = np.asarray(bg, dtype=float)
+    ny, nx = out.shape
+    near = np.zeros(out.shape, dtype=bool)
+    xy = np.asarray(handoff_xy, dtype=float)
+    n_star = 0
+    for xc, yc in xy:
+        if not (np.isfinite(xc) and np.isfinite(yc)):
+            continue
+        n_star += 1
+        x0, x1 = max(int(np.floor(xc - radius)), 0), min(int(np.ceil(xc + radius)) + 1, nx)
+        y0, y1 = max(int(np.floor(yc - radius)), 0), min(int(np.ceil(yc + radius)) + 1, ny)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        near[y0:y1, x0:x1] |= (xx - xc) ** 2 + (yy - yc) ** 2 <= radius ** 2
+    hole = near & np.isfinite(bg) & np.isfinite(out) & (bg < field_median)
+    add = (field_median - bg)[hole]
+    out[hole] = out[hole] + add.astype(out.dtype)
+    return out, n_star, int(hole.sum()), add
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -2575,6 +2643,21 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                       f"fit around {len(handoff_xy)} star(s)", flush=True)
             else:
                 handoff_restore = None
+        if handoff_xy is not None and resbg_path and background_map is not None:
+            # The resbg map has a negative hole at each handed-off saturated
+            # core; floor it at the field median under those stars.  Exact-zero
+            # bg pixels are reproject misses (see bg_finite) and stay untouched.
+            _bg_valid = np.where(background_map == 0, np.nan, background_map)
+            _bg_nz = _bg_valid[np.isfinite(_bg_valid)]
+            if _bg_nz.size:
+                nan_replaced_data, _n_clip, _n_pix, _added = (
+                    _clip_resbg_hole_at_handoff(
+                        nan_replaced_data, _bg_valid, handoff_xy,
+                        _HANDOFF_RESBG_CLIP_RADIUS_PIX, float(np.median(_bg_nz))))
+                _med_add = float(np.median(_added)) if _added.size else 0.0
+                print(f"[manual] hand-off resbg clip: {_n_clip} star(s), "
+                      f"{_n_pix} pixel(s) changed, median added {_med_add:.3g} "
+                      f"MJy/sr", flush=True)
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):
