@@ -199,6 +199,7 @@ def test_catalog_built_without_the_guard_is_refit_once(tmp_path, monkeypatch):
     ('SATSTAR_QFIT_LOCAL_R', '10'),
     ('SATSTAR_ZF_RCURVE_GUARD', '0'),
     ('SATSTAR_ZF_RCURVE_MAXSTEP', '2'),
+    ('SATSTAR_ERR_BKG_SCATTER', '1'),
     ('SATSTAR_ZF_G0_GROUPDQ', '1'),
     ('SATSTAR_ZF_FIRST_FRAME', '1'),
 ])
@@ -267,6 +268,32 @@ def test_frame_without_a_ramp_keeps_its_old_catalog(tmp_path, monkeypatch):
     calls = _counting_fit(monkeypatch)
     _load(fn, tmp_path)
     assert calls['n'] == 0
+
+
+def test_signature_keys_the_error_floor_with_or_without_a_ramp(tmp_path,
+                                                               monkeypatch):
+    (tmp_path / 'noramp').mkdir()
+    (tmp_path / 'ramp').mkdir()
+    no_ramp = _frame(tmp_path / 'noramp', with_ramp=False)
+    ramp = _frame(tmp_path / 'ramp', with_ramp=True)
+    monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
+    assert satstar_fit_switch_signature(no_ramp) == 'es'
+    assert satstar_fit_switch_signature(ramp) == 'zfg1.3_es'
+    # cataloging turns on both the cap (hence the group-0 GROUPDQ mask) and
+    # the floor for extended-emission NIRCam.
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    assert satstar_fit_switch_signature(no_ramp) == 'es'
+    assert satstar_fit_switch_signature(ramp) == 'zfg1.3df_es'
+
+
+def test_error_floor_refits_a_catalog_of_a_frame_without_a_ramp(tmp_path,
+                                                                monkeypatch):
+    fn = _frame(tmp_path, with_ramp=False)
+    _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'))
+    monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
+    calls = _counting_fit(monkeypatch)
+    _load(fn, tmp_path)
+    assert calls['fit_switch_signature'] == ['es']
 
 
 def test_local_qfit_gate_refits_even_without_a_ramp(tmp_path, monkeypatch):

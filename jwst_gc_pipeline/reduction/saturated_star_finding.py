@@ -979,6 +979,9 @@ def satstar_fit_switches(env=None):
       nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
       observed-peak second chance reads the crf values, not the rewrite.
+    * ``SATSTAR_ERR_BKG_SCATTER`` (default OFF; ``cataloging`` turns it on for
+      extended-emission NIRCam): the robust local-background scatter is added
+      to the fit errors in quadrature (``bkg_scatter_fit_error``).
     * ``SATSTAR_ZF_G0_GROUPDQ`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``,
       which cataloging turns on for extended-emission NIRCam): first-read
       pixels that the ramp GROUPDQ flags SATURATED (integration 0, group 0)
@@ -1018,6 +1021,7 @@ def satstar_fit_switches(env=None):
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
         'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
+        'err_bkg_scatter': _env_switch('SATSTAR_ERR_BKG_SCATTER', False, env),
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
         'first_frame': _env_switch('SATSTAR_ZF_FIRST_FRAME', cap_on, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
@@ -1071,6 +1075,9 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             # matches and is refit.
             ql += f"g{sw['qfit_local_max']:g}s"
         parts.append(ql)
+    if sw['err_bkg_scatter']:
+        # Acts on every NIRCam in-FOV fit, with or without a ramp.
+        parts.append('es')
     return '_'.join(parts)
 
 
@@ -2112,6 +2119,52 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
     bkg_inner = int(np.clip(np.round(10 * sat_radius ** 0.75), bkg_inner_min, bkg_inner_max))
     bkg_outer = 2 * bkg_inner
     return bkg_inner, bkg_outer
+
+
+def bkg_scatter_fit_error(err, cutout, valid, x, y, bkg_inner, bkg_outer,
+                          min_pixels=20):
+    """Satstar fit errors with the background scatter added in quadrature.
+
+    The crf ERR holds read and Poisson noise only.  In a crowded field the
+    background of the fit box scatters far more than that (unresolved stars,
+    nebulosity, neighbour residuals): on wd2 F150W the annulus scatter is ~12
+    against a median ERR of ~0.5.  With inverse-variance weights the ~6500
+    background pixels of an 81x81 box then set the flux and the core barely
+    constrains it.  ``SATSTAR_ERR_BKG_SCATTER`` adds the robust scatter of the
+    local-background annulus to every pixel's error.
+
+    Parameters
+    ----------
+    err, cutout : 2D arrays
+        Per-pixel error and data of the fit cutout.
+    valid : 2D bool array
+        Pixels the fit uses (True = unmasked).
+    x, y : float
+        Star position in cutout coordinates.
+    bkg_inner, bkg_outer : float
+        Radii of the local-background annulus.
+    min_pixels : int
+        Fewest valid finite annulus pixels needed to measure the scatter.
+
+    Returns
+    -------
+    err_eff : 2D array
+        ``sqrt(err**2 + sigma**2)``, or ``err`` unchanged when the scatter
+        cannot be measured.
+    sigma : float
+        1.4826 * MAD of the annulus pixels, NaN when fewer than
+        ``min_pixels`` are usable.
+    """
+    yy, xx = np.indices(cutout.shape)
+    rr = np.hypot(xx - x, yy - y)
+    sel = (valid & np.isfinite(cutout) & (rr >= bkg_inner) & (rr < bkg_outer))
+    if sel.sum() < min_pixels:
+        return err, np.nan
+    vals = cutout[sel]
+    sigma = float(1.4826 * np.median(np.abs(vals - np.median(vals))))
+    if not np.isfinite(sigma) or sigma <= 0:
+        return err, sigma
+    return np.sqrt(err ** 2 + sigma ** 2), sigma
 
 
 def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
@@ -3497,6 +3550,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             w_prox = 1.0 - np.exp(-(dist_to_sat ** 2) / (2.0 * _sig ** 2))
             w_prox = np.clip(w_prox, 1e-3, 1.0)
             err_cutout_eff = err_cutout / np.sqrt(w_prox)
+
+        # Background-scatter error floor (NIRCam, SATSTAR_ERR_BKG_SCATTER=1):
+        # see bkg_scatter_fit_error.  Without it, crowded 15-18 mag wd2 F150W
+        # stars came out 0.4-0.8 mag faint.  Applied after the proximity
+        # downweighting above, so where the scatter exceeds err/sqrt(w_prox)
+        # it flattens that downweighting; flux_err and reduced_chi2 below are
+        # computed with the floored errors.
+        if (not _is_miri and not forced_source
+                and _fit_switches['err_bkg_scatter']):
+            err_cutout_eff, _bkg_sigma = bkg_scatter_fit_error(
+                err_cutout_eff, cutout, ~mask, x_init, y_init,
+                bkg_inner, bkg_outer)
+            _vprint(f"  err floor: bkg scatter {_bkg_sigma:.3g} "
+                    f"(median ERR {np.nanmedian(err_cutout):.3g})", flush=True)
 
         # MIRI 2D LOCAL BACKGROUND (2026-06-14).  MIRI-ONLY -- NIRCam backgrounds
         # are always low.  The scalar-annulus ``LocalBackground`` cannot remove
