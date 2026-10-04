@@ -171,6 +171,9 @@ def test_signature_marks_a_readout_floor(tmp_path, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     fn = _crf(tmp_path, WD2_F410M)
     assert SSF.satstar_fit_switch_signature(fn) == 'dfr0.5'
+    monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
+    assert SSF.satstar_fit_switch_signature(fn) == 'es_dfr0.5'
+    monkeypatch.delenv('SATSTAR_ERR_BKG_SCATTER')
     monkeypatch.setenv('SATSTAR_DATA_FLOOR_READOUT_FRAC', '0.25')
     assert SSF.satstar_fit_switch_signature(fn) == 'dfr0.25'
     monkeypatch.setenv('SATSTAR_DATA_FLOOR_READOUT_FRAC', '0')
