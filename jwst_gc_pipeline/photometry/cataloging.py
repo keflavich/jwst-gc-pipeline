@@ -706,8 +706,8 @@ def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
 
 # Radius (pixels) around each handed-off star inside which a negative hole in
 # the subtracted resbg map is undone.  wd2 refit replay: r = 10 px brings the
-# handed-off LW stars from ~-0.3 mag against dolphot to |dm| <= 0.02 mag and
-# leaves SW unchanged; r = 6 px gives a similar result.
+# handed-off LW stars from ~-0.3 mag against dolphot to |median dm| <= 0.02 mag
+# and leaves SW unchanged; r = 6 px leaves F277W at +0.05 mag.
 _HANDOFF_RESBG_CLIP_RADIUS_PIX = 10.0
 
 
