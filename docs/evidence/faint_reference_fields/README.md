@@ -124,9 +124,10 @@ coarse guard; smaller changes show in the star-by-star comparison against the
 calibration run (`evaluate.py --baseline`), which reaches p ≈ 0.03 at +6/−0.
 A PR that changes detection or vetting should report both.
 
-`test_reference_field_passes` scores the run of `JWST_GC_REFFIELD_VARIANT`
-(default `main`) against these thresholds and skips where that run's products
-are absent (CI) or were made by different pipeline code.  Current `main`
+`test_reference_field_passes` scores the runs labelled `JWST_GC_REFFIELD_VARIANT`
+against these thresholds.  It is skipped when that variable is unset (as in
+CI), and it fails when a run is missing or was made by different pipeline
+code.  Current `main`
 (500fc69c) fails three of the four fields: `dense_bright`, `bright_modest` and
 `dark` (next section).  The integration branch at its shipped defaults (`int3`,
 which also carries the open #1017) fails `dark`.  After this PR merges, `main`
