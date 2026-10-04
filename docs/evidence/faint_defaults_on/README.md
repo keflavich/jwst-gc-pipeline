@@ -1,17 +1,21 @@
-# Faint-star options on by default (AUTO)
+# Own-band m7 seed on by default (AUTO); loose seed roundness stays opt-in
 
-Two faint-star options that were opt-in become AUTO.  Each is on for a
-star-dominated NIRCam field and off on an extended-emission target
-(`_is_extended_emission`: `--extended-emission`, or the target list
-w51/sickle/wd2/ngc6334) and for a MIRI filter.
+The own-band m7 seed (#1015) becomes AUTO: on for a star-dominated NIRCam
+field, off on an extended-emission target (`_is_extended_emission`:
+`--extended-emission`, or the target list w51/sickle/wd2/ngc6334) and for a
+MIRI filter.  The loose seed roundness window (#1020) stays off by default;
+`--manual-seed-round-loose-max=-1` selects the same AUTO rule for it.
 
-| option | before | AUTO, star-dominated NIRCam | AUTO, extended emission | AUTO, MIRI filter |
-|---|---|---|---|---|
-| `manual_m7_seed_own_band` (#1015: each band's m7 seed adds the band's own m6 vetted sources and its m6-residual detections) | off | on | off | off (all-MIRI runs drop m7) |
-| `manual_seed_round_loose_max` (#1020: residual seeds with roundness up to ±0.8 pass when their annulus prominence is ≥ 5) | 0 | 0.8 | 0 | 0 |
+| option | before | default after | star-dominated NIRCam | extended emission | MIRI filter |
+|---|---|---|---|---|---|
+| `manual_m7_seed_own_band` (#1015: each band's m7 seed adds the band's own m6 vetted sources and its m6-residual detections) | off | AUTO | on | off | off (all-MIRI runs drop m7) |
+| `manual_seed_round_loose_max` (#1020: residual seeds with roundness up to ±0.8 pass when their annulus prominence is ≥ 5) | 0 | 0 (off) | with `-1`: 0.8 | with `-1`: 0 | with `-1`: 0 |
 
-`--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` and an explicit
-`--manual-seed-round-loose-max` override AUTO.
+`--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` override AUTO.
+The first version of this PR turned both options on.  The same-commit runs
+below separate them: the own-band seed carries the completeness gain, and
+the loose window adds at most one injected star per S/N bin on top of it
+(see "Same-commit runs" and "Loose-only seeds").
 
 ## Reference-field results
 
@@ -70,14 +74,20 @@ Injected stars gained / lost, `int3on` vs `int3` (exact sign test):
 
 ### Same-commit runs: `defoff`, `defown`, `defon` (code d1ea6b73)
 
-All three ran this branch's code (d1ea6b73, clean checkout).  `defon` is
-the branch at its defaults (AUTO).  `defoff` adds
+All three ran this branch's first code commit (d1ea6b73, clean checkout),
+whose defaults turned both options on (AUTO).  `defon` is that commit at
+its defaults.  `defoff` adds
 `--no-manual-m7-seed-own-band --manual-seed-round-loose-max=0` on all four
 fields, which is the behavior before this PR.  `defown` adds
 `--manual-seed-round-loose-max=0` on the three star fields, so own-band is
-on and the loose window off; `defon` vs `defown` isolates the loose window.
+on and the loose window off: **`defown` is this PR's default configuration**
+on the star fields.  On `bright_modest` (W51) AUTO turns own-band off and
+`defon` already ran with the loose window off, so `defoff` and `defon` there
+are this PR's default configuration as well.  `defon` vs `defown` isolates
+the loose window.
 `JWST_GC_REFFIELD_VARIANT=defon pytest -k test_reference_field_passes`
-passes all four fields (4 passed).
+passes all four fields (4 passed).  The provenance-checked run at this PR's
+head is `defownm` (see "Run at the PR head").
 
 | field | variant | injected completeness per S/N bin | resid excess /as² | over-subtracted /as² | bias mag | labels | result |
 |---|---|---|---|---|---|---|---|
@@ -99,12 +109,15 @@ The completeness bins are S/N 40–80, 80–160, 160–320 and 320–640 on
 
 Injected stars gained / lost (exact sign test):
 
-| field | `defon` vs `defoff` | `defon` vs `defown` |
-|---|---|---|
-| `superdense` | 80–160: +6/−0 (p=0.031); 160–320: +12/−0 (p=0.00049); 320–640: +3/−0 (p=0.25) | 160–320: +1/−0; others +0/−0 |
-| `dense_bright` | 20–40: +4/−1 (p=0.38); 40–80: +5/−0 (p=0.062) | 10–20: +0/−1; 20–40: +1/−0; 40–80: +2/−1 |
-| `bright_modest` | +0/−0 in every bin | (not run) |
-| `dark` | 5–10: +2/−0 (p=0.5); 10–20: +12/−1 (p=0.0034); 20–40: +4/−1 (p=0.38); 40–80: +2/−1 (p=1) | 10–20: +1/−0; 40–80: +0/−1 |
+| field | `defown` vs `defoff` (this PR's default) | `defon` vs `defoff` | `defon` vs `defown` (loose window) |
+|---|---|---|---|
+| `superdense` | 80–160: +6/−0 (p=0.031); 160–320: +11/−0 (p=0.00098); 320–640: +3/−0 (p=0.25) | 80–160: +6/−0 (p=0.031); 160–320: +12/−0 (p=0.00049); 320–640: +3/−0 (p=0.25) | 160–320: +1/−0; others +0/−0 |
+| `dense_bright` | 10–20: +1/−0 (p=1); 20–40: +3/−1 (p=0.62); 40–80: +4/−0 (p=0.12) | 20–40: +4/−1 (p=0.38); 40–80: +5/−0 (p=0.062) | 10–20: +0/−1; 20–40: +1/−0; 40–80: +2/−1 |
+| `bright_modest` | (same configuration as `defoff`) | +0/−0 in every bin | (not run) |
+| `dark` | 5–10: +2/−0 (p=0.5); 10–20: +11/−1 (p=0.0063); 20–40: +4/−1 (p=0.38); 40–80: +2/−0 (p=0.5) | 5–10: +2/−0 (p=0.5); 10–20: +12/−1 (p=0.0034); 20–40: +4/−1 (p=0.38); 40–80: +2/−1 (p=1) | 10–20: +1/−0; 40–80: +0/−1 |
+
+`defown` passes `superdense`, `dense_bright` and `dark`, and `defoff` fails
+`dark` (`reffield_defown.json`, `reffield_defown_vs_defoff.json`).
 
 - **AUTO wiring.**  On `bright_modest` (W51, an extended-emission target)
   `defon` and `defoff` write no own-band m7 seed file, their cross-band
@@ -118,7 +131,8 @@ Injected stars gained / lost (exact sign test):
   per bin (every p = 1).  The loose window changes the residual metrics:
   `superdense` excess 1.39 → 1.32 and over-subtracted 1.18 → 1.11;
   `dense_bright` over-subtracted 1.25 → 0.90 and excess 1.73 → 2.08 (seed
-  spread ±0.19); `dark` excess 0.90 → 0.97.
+  spread ±0.19); `dark` excess 0.90 → 0.97.  This PR therefore turns only
+  the own-band seed on.
 - **Ring companions.**  `defown` has one faint source 1.5–4.5 px from a
   bright star on the `dense_bright` clean run (1.4 expected by chance);
   `defoff` and `defon` have none.  `ring_ratio` carries no threshold.
@@ -128,8 +142,10 @@ Injected stars gained / lost (exact sign test):
 
 ## Figures
 
-`figures/defoff_vs_defon/<field>_<filter>_m7_s<seed>.png` (same code, this
-PR's defaults against both options off) and
+`figures/defoff_vs_defown/<field>_<filter>_m7_s<seed>.png` (same code, this
+PR's default configuration against both options off, three star fields),
+`figures/defoff_vs_defon/<field>_<filter>_m7_s<seed>.png` (same code, both
+options on against both off) and
 `figures/int3_vs_int3on/<field>_<filter>_m7_s<seed>.png` (calibration
 runs), seeds 0 (clean) and 1 (injection).  Columns: data with the base
 catalog, base residual, data with the proposed catalog, proposed residual,
@@ -139,10 +155,21 @@ sources, red boxes base-only sources, yellow crosses injected stars and
 orange crosses over-subtracted cores.  Each row's residual stretch is ±5σ of
 the base residual.
 
-- `superdense` and `dark`: most green sources sit on a compact positive
-  residual in the base column that the proposed fit removes; in
-  `superdense` seed 1 three of them are injected stars (cutouts A and B).
-- `dense_bright`: the same, and over-subtracted cores fall from 18 to 12
+- `defoff_vs_defown`: `dark` seed 1 goes from 72 to 84 sources (13
+  `defown`-only, 1 `defoff`-only) and over-subtracted cores from 16 to 12.
+  The difference column shows a compact positive residual at the green
+  sources in cutouts A–D that the `defown` fit removes, and green sources
+  in cutouts A and B sit on injected stars.  This seed holds the one 10–20
+  loss of the pooled +11/−1 (3/6 → 2/6 recovered), and the one
+  `defoff`-only source (red box, cutout A) sits on an injected star.
+  `dense_bright` seed 1 goes from 97 to 114 sources (18 / 2) and
+  over-subtracted cores from 18 to 14; next to the bright stars in cutouts
+  A and B some of the new sources carry over-subtracted marks themselves.
+- `defoff_vs_defon` and `int3_vs_int3on`, `superdense` and `dark`: most
+  green sources sit on a compact positive residual in the base column that
+  the proposed fit removes; in `superdense` seed 1 three of them are
+  injected stars (cutouts A and B).
+- `defoff_vs_defon` and `int3_vs_int3on`, `dense_bright`: the same, and over-subtracted cores fall from 18 to 12
   (`defoff_vs_defon` seed 1) or 17 to 12 (`int3_vs_int3on` seed 1).  Next
   to the bright star in cutout A some of the new sources carry
   over-subtracted marks themselves.
@@ -169,9 +196,17 @@ mosaic in the inner box.
 | `bright_modest` | 19 | 74/212 | −22.5 (−37) | −0.51 (−0.84) | +0.0 |
 | `dark` | 84 | 791/926 | −0.8 (−2.5) | −2.65 (−8.5) | +0.0 |
 
-The same-commit pair `defoff` → `defon` (`defon_bg_holes_<field>.json`;
-`defon` also has the loose window on) gives the same picture on the star
-fields:
+The same-commit pair `defoff` → `defown` (`defown_bg_holes_<field>.json`,
+this PR's default configuration) gives the same picture on the star fields:
+
+| field | added m7 seeds per run | kept in final catalog | dropped: bg difference, median (p10) | dropped, in σ: median (p10) | random positions: median |
+|---|---|---|---|---|---|
+| `superdense` | 114 | 936/1253 | −23.2 (−252) | −0.88 (−9.6) | +0.0 |
+| `dense_bright` | 115 | 876/1268 | −0.7 (−1.6) | −1.33 (−3.2) | −0.0 |
+| `dark` | 80 | 791/880 | −0.8 (−4.5) | −2.56 (−14.8) | +0.0 |
+
+and so does `defoff` → `defon` (`defon_bg_holes_<field>.json`; `defon`
+also has the loose window on):
 
 | field | added m7 seeds per run | kept in final catalog | dropped: bg difference, median (p10) | dropped, in σ: median (p10) | random positions: median |
 |---|---|---|---|---|---|
@@ -192,7 +227,7 @@ what the residual should show.  A hole at an emission knot moves part of the
 knot from the background into the residual.  AUTO turns own-band off on
 extended-emission targets for that reason.
 
-## Loose-only seeds (`int3on`, `defon`)
+## Loose-only seeds (`int3on`, `defon`): why the window stays opt-in
 
 `scripts/loose_survival.py` follows every new i2d residual seed of the scored
 band (all phases, deduplicated at one pixel) inside the inner box.  A seed
@@ -223,7 +258,12 @@ Pooled over the three fields:
 Loose-only seeds reach the final catalog at the same rate as tight seeds,
 and those that do land on injected stars at a similar rate.  The last
 comparison has 47 loose survivors and cannot separate rates that differ by
-less than about a factor of two.
+less than about a factor of two.  Loose seeds land on injected stars more
+often than tight seeds before vetting (p = 0.0045), but the window adds at
+most one injected star per S/N bin to the final catalog on top of the
+own-band seed, raises the `dense_bright` residual excess from 1.73 to 2.08,
+and its full-frame behavior after vetting was never measured (next
+section).  It stays opt-in.
 
 ## Caveats
 
@@ -232,22 +272,28 @@ less than about a factor of two.
   vetted sources m7 already has (`docs/evidence/faint_m7_seed_union`).
   The reference fields measure completeness on injected stars and residual
   structure; they do not measure that realness ratio.
-- **Loose window on bright background.**  On the full Brick and Sgr B2 frames
-  29–31% of the loose-only seeds sit in the brightest tenth of the background,
-  and they cluster at diffraction-spike position angles
+- **Loose window on bright background (opt-in).**  On the full Brick and
+  Sgr B2 frames 29–31% of the loose-only seeds sit in the brightest tenth of
+  the background, and they cluster at diffraction-spike position angles
   (`docs/evidence/faint_seed_roundness`).  Each star-field reference field
-  covers 3.9″ and does not sample those full-frame distributions.
-- **Sgr B2.**  `sgrb2` is not an extended-emission target, so both options
-  are on there.  `dense_bright` (in the Sgr B2 envelope) gains stars and
-  loses over-subtracted cores, and also has background holes of −1.4σ
+  covers 3.9″ and does not sample those full-frame distributions, and the
+  loose-only seeds were never followed through m7 and vetting on a full
+  frame.  A run that opts in with `-1` gets AUTO (0.8 on star fields).
+- **Sgr B2.**  `sgrb2` is not an extended-emission target, so own-band is
+  on there.  `dense_bright` (in the Sgr B2 envelope) gains stars and
+  loses over-subtracted cores, and also has background holes of −1.3σ
   (median) at dropped seeds.
+- **Other emission-rich targets.**  `cloudef`, `sgrc`, `arches` and `quint`
+  are not in the extended-emission list, so own-band is on there; no
+  reference field samples them (#1087).
 - **Injection.**  Injected stars are drawn from the same PSF model the fit
   uses, so completeness on them is an upper bound for real stars of the same
   flux.
 - **Residual excess depends on the background mask.**  The metric subtracts
   the m7 smoothed background, so a change in which positions are masked
   changes it without any change in the residual image itself.
-- **MIRI.**  Neither option was measured on MIRI; AUTO leaves both off there.
+- **MIRI.**  Neither option was measured on MIRI; AUTO leaves own-band off
+  there, and the AUTO loose rule gives 0.
 
 ## Reproduce
 
@@ -276,6 +322,11 @@ python -m jwst_gc_pipeline.photometry.reference_fields.figures --variant defon -
     --phase m7 --seeds 0,1 --out figures/defoff_vs_defon/
 python scripts/loose_survival.py defon defon_loose_survival.json
 python scripts/bg_holes.py <field> defoff defon defon_bg_holes_<field>.json
+python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant defown \
+    --json defown_vs_defoff.json --baseline defoff.json
+python -m jwst_gc_pipeline.photometry.reference_fields.figures --variant defown --base defoff \
+    --fields superdense,dense_bright,dark --phase m7 --seeds 0,1 --out figures/defoff_vs_defown/
+python scripts/bg_holes.py <field> defoff defown defown_bg_holes_<field>.json
 JWST_GC_REFFIELD_VARIANT=defon python -m pytest \
     jwst_gc_pipeline/photometry/tests/test_reference_fields.py -k test_reference_field_passes
 ```
