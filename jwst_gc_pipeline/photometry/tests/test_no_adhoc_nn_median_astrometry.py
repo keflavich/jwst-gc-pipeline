@@ -104,6 +104,12 @@ ALLOWLIST = {
     ("docs/evidence/faint_local_skyclean/scripts/compare.py", "main"),
     ("docs/evidence/faint_local_skyclean/scripts/lsky_snr_diag.py", "main"),
     ("docs/evidence/faint_local_skyclean/scripts/propresid.py", "main"),
+    # PR #1017 evidence scripts, no astrometry: copies of the #1019 scripts
+    # above with the same reduces (lsky_snr_diag.main also takes an 'A-B'
+    # variant, the sources A adds that B does not keep).
+    ("docs/evidence/faint_qfit_snr/scripts/compare.py", "main"),
+    ("docs/evidence/faint_qfit_snr/scripts/lsky_snr_diag.py", "main"),
+    ("docs/evidence/faint_qfit_snr/scripts/propresid.py", "main"),
     # sanctioned: masking extended emission, no astrometry in it
     ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
     # PR #1018 evidence scripts, no astrometry.  compare.main: distance of each
@@ -142,6 +148,11 @@ ALLOWLIST = {
     # marker for the gallery; its medians are of local source density.
     ("docs/evidence/faint_m7_seed_union/scripts/realness.py", "match_fraction"),
     ("docs/evidence/faint_m7_seed_union/scripts/seed_gallery.py", "main"),
+    # default-on PR evidence script, no astrometry.  bg_holes.run_pair: each
+    # added m7 seed is "kept" when the final catalog has a source within one
+    # pixel (a boolean); its median is 1.4826 MAD of residual-mosaic pixels,
+    # the scatter that background differences are expressed in.
+    ("docs/evidence/faint_defaults_on/scripts/bg_holes.py", "run_pair"),
     # ---- cross-function splits: the match and the reduce are in DIFFERENT
     # functions, so they cannot be attributed to one and are allowlisted as
     # `<unattributed>`.  These entries are WEAKER than a function-scoped one --

@@ -37,6 +37,7 @@ program,observation,visit,delta_roll_arcsec,delta_roll_err_arcsec,reference,sour
 10678,074,*,19.3,2.04,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,075,*,19.07,1.08,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,076,*,17.7,0.92,VIRAC2+GaiaDR3,data-qa#346 F212N
+10678,077,*,18.32,0.97,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,078,*,23.56,5.9,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,079,*,11.58,3.01,VIRAC2+GaiaDR3,data-qa#346 F212N
 10678,080,*,15.98,2.24,VIRAC2+GaiaDR3,data-qa#346 F212N
