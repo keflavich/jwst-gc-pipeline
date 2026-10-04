@@ -1356,6 +1356,59 @@ def recovered_core_peak(cutout, region, unrecoverable, max_lost=0.2, min_px=3):
     return float(np.nanmax(cutout[rec])), lost_frac, n_rec
 
 
+def recovered_cap_flux(cutout, region, unrecoverable, psf_unit):
+    """Flux bound of the NIRCam recovered-core cap.
+
+    ``psf_unit`` is the unit-flux PSF evaluated at the fit position on the
+    cutout grid.  Returns ``(cap, psf_frac)``, or NaNs when no pixel of
+    ``region`` is measured or the PSF is not positive where it is read.
+
+    A pixel of ``region`` is measured when it is finite and not
+    ``unrecoverable``, whatever its sign.
+
+    Let ``p`` be the measured pixel where the model is brightest (nearest its
+    peak).
+
+    * ``p`` is the model's peak pixel (the maximum of ``psf_unit``):
+      ``cap = max(measured) / max(psf_unit)``, the brightest measured pixel
+      bounds the model peak (``psf_frac`` = 1).  Reading the maximum over the
+      region, rather than the data at the model's peak pixel, tolerates a fit
+      position a fraction of a pixel off the star.
+    * ``cutout[p]`` is at or below zero: the same bound.  This is a refit of
+      a star whose model was already subtracted, so the data nearest the
+      model peak are a residual.  The positive pixels further out are
+      residuals too, read where the PSF is near zero, and bound nothing.
+    * Otherwise the star's peak is unmeasured (deep core) or lies outside
+      ``region``, and the model must not exceed the data at ``p``:
+      ``cap = cutout[p] / psf_unit[p]``, with
+      ``psf_frac = psf_unit[p] / max(psf_unit)``.  The brightest measured
+      pixel can belong to a neighbour that shares the region; the model of
+      this star is faint there and does not bound its flux.
+
+    Dividing a pixel away from the star by the PSF peak cut wd2 F150W stars
+    to a fraction of their flux: 14.5 mag stars whose group-0-saturated
+    pixels enter the deep core (6.9e6 -> 8.3e4, a recovered ring read against
+    the PSF peak with 19% of the region lost), and a 16 mag star whose deep
+    core was one dead pixel 3 px from its peak (1.2 mag).
+    """
+    measured = region & ~unrecoverable & np.isfinite(cutout)
+    rec = measured & (cutout > 0)
+    if not rec.any() or not np.isfinite(psf_unit).any():
+        return np.nan, np.nan
+    ppk = float(np.nanmax(psf_unit))
+    if not ppk > 0:
+        return np.nan, np.nan
+    ipk = np.unravel_index(np.nanargmax(psf_unit), psf_unit.shape)
+    psf_meas = np.where(measured & np.isfinite(psf_unit), psf_unit, -np.inf)
+    iy, ix = np.unravel_index(np.argmax(psf_meas), cutout.shape)
+    if measured[ipk] or not cutout[iy, ix] > 0:
+        return float(np.max(cutout[rec])) / ppk, 1.0
+    pp = float(psf_unit[iy, ix])
+    if not (np.isfinite(pp) and pp > 0):
+        return np.nan, np.nan
+    return float(cutout[iy, ix]) / pp, pp / ppk
+
+
 def satstar_observed_peak(cutout, mask, rewrite_delta=None):
     """Brightest unmasked pixel of a satstar cutout (the implied-peak gate's
     observed-peak second chance).  ``rewrite_delta`` (the matching cutout of
@@ -4099,7 +4152,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         # NIRCam extended emission: where the saturated core was RECOVERED by the
         # ramp fit, the data is not clipped, so it is the true surface brightness
-        # and a point-source model must not exceed it.  Cap the model peak to it.
+        # and a point-source model must not exceed it.  Cap the model peak to
+        # the brightest recovered pixel, or, when the star's peak pixel is
+        # not measured, the model at that pixel (recovered_cap_flux).
         # No fake-vs-real test is needed (there is no clean discriminator, and the
         # cap is right either way), but it only applies when the truly-lost
         # fraction is under NIRCAM_SATSTAR_RECOVERED_MAXLOST (0.2): a deeply
@@ -4115,15 +4170,18 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _xf2 = float(result['x_fit'][0]); _yf2 = float(result['y_fit'][0])
                 _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
                 _psf2 = np.clip(_infov_psf.evaluate(_xx2, _yy2, 1.0, _xf2, _yf2), 0, None)
-                _ppk = float(np.nanmax(_psf2)) if np.isfinite(_psf2).any() else np.nan
-                if np.isfinite(_ppk) and _ppk > 0:
-                    _cap = _drec / _ppk
+                _cap, _pfrac = recovered_cap_flux(
+                    cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _psf2)
+                if np.isfinite(_cap):
                     _fc = float(result['flux_fit'][0])
                     if np.isfinite(_fc) and _fc > _cap:
                         result['flux_fit'][0] = _cap
+                        # the model where the cap reads it, before and after
+                        _pk = _pfrac * float(np.nanmax(_psf2))
                         print(f"  [nircam recovered-core cap] flux {_fc:.2e} -> "
-                              f"{_cap:.2e} (model peak {_fc*_ppk:.0f} -> {_drec:.0f} "
-                              f"vs recovered core {_drec:.0f}; lost {_lostf*100:.0f}%, "
+                              f"{_cap:.2e} (model {_fc * _pk:.0f} -> "
+                              f"{_cap * _pk:.0f} where the PSF is {_pfrac:.2f} "
+                              f"of its peak; lost {_lostf*100:.0f}%, "
                               f"{_nrec} rec px)", flush=True)
 
         # Same coadd-core peak cap for forced / outside-FOV sources (MIRI).  With
