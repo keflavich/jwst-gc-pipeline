@@ -2279,6 +2279,23 @@ def _auto_m7_seed_own_band(value, options, *, miri=False):
     return not (miri or _is_extended_emission(options))
 
 
+def _phase_seed_switches(options, filtername):
+    """``(m7_own_band, round_loose_max)`` for one band of one run.
+
+    Resolves ``--manual-m7-seed-own-band`` (:func:`_auto_m7_seed_own_band`)
+    and ``--manual-seed-round-loose-max`` (:func:`_auto_seed_round_loose_max`)
+    with the band's instrument.  ``run_manual_pipeline`` (the m7 own-band seed
+    and the i2d-augmented seed's loose window) and
+    ``annotate_independent_detection`` read both switches from here, so the
+    MIRI and extended-emission cases reach every call site the same way.
+    """
+    miri = _L._instrument_from_filter(filtername) == 'MIRI'
+    return (_auto_m7_seed_own_band(mopt(options, 'manual_m7_seed_own_band'),
+                                   options, miri=miri),
+            _auto_seed_round_loose_max(mopt(options, 'manual_seed_round_loose_max'),
+                                       options, miri=miri))
+
+
 def _resolve_each_suffix(options, filtername):
     """Per-filter input per-exposure-crf suffix.
 
@@ -4172,9 +4189,7 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
             indep |= np.asarray(sep < radius_mas * u.mas)
         # only this run's m7 seeds: with the own-band seed off, a band seed
         # left over from an earlier run says nothing about this merged catalog
-        _m7_own = _auto_m7_seed_own_band(
-            mopt(options, 'manual_m7_seed_own_band'), options,
-            miri=_L._instrument_from_filter(filt) == 'MIRI')
+        _m7_own, _ = _phase_seed_switches(options, filt)
         for module in (_modules if _m7_own else []):
             p7 = vetted_to_i2dseed(m7_band_seed_path(_xbseed, module, f))
             if not os.path.exists(p7):
@@ -8144,6 +8159,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             for filt in filternames:
                 prev_seed = None
                 resbg_path = None
+                # AUTO seed switches for this band (own-band m7 seed, loose
+                # roundness window); see _phase_seed_switches
+                _m7_own_band, _sround_loose = _phase_seed_switches(opts_phase, filt)
                 # End-slot observation tokens on the vetted (_vtok) and
                 # combined (_combsuf) catalog names: MIRI multi-obs targets and
                 # gc2211 vet per observation, the per-obs-MERGED proposals
@@ -8189,9 +8207,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # plus daofind on the m6 residual - m6 bg (as m6 does on
                     # m5's): see _build_m7_band_seed.  AUTO by default
                     # (_auto_m7_seed_own_band); off -> cross-band only.
-                    if _auto_m7_seed_own_band(
-                            mopt(opts_phase, 'manual_m7_seed_own_band'), opts_phase,
-                            miri=_L._instrument_from_filter(filt) == 'MIRI'):
+                    if _m7_own_band:
                         _own = [q for _m, _f, q in crossband_seed_inputs(
                                     cut_bp, modules, filternames, options)
                                 if _m == module and _f == filt]
@@ -8218,10 +8234,6 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
-                        _sround_loose = _auto_seed_round_loose_max(
-                            mopt(opts_phase, 'manual_seed_round_loose_max'),
-                            opts_phase,
-                            miri=_L._instrument_from_filter(filt) == 'MIRI')
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, _aug_base, filt,
                             local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),

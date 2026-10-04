@@ -4915,7 +4915,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help="Seed each band's m7 fit from the cross-band seed alone. "
                            "The own-band sources the union restores are "
                            "confirmed by an independent visit 0.4-0.8x as often "
-                           "as the ones m7 already has.")
+                           "as the ones m7 already has, depending on band (full "
+                           "Brick field; docs/evidence/faint_m7_seed_union).")
     parser.add_option('--manual-m7-seed-own-band-companion-fwhm',
                       dest='manual_m7_seed_own_band_companion_fwhm', type='float',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
