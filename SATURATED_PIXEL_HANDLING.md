@@ -350,6 +350,12 @@ flux, trading depth for a brighter saturation ceiling:
   averages several frames, and its pile-up level varies by pixel: on wd2 F150W
   nrcb3, 3699 group-0-saturated pixels sat below the ceiling and were rewritten
   to about half the rate the ramp fit took from the ZEROFRAME (#1065).
+  DEAD, HOT and REFERENCE_PIXEL pixels are left out of the rewrite
+  (`SATSTAR_ZF_RIM_BADPIX`, default on): dead/hot clumps carry the SATURATED bit
+  with a group-0 of ~0.001–1.2 DN, and their `R×group0` rewrite, weighted at 5%
+  of its value, drove four 16–18 mag wd2 F150W stars to negative flux
+  (#1071). A rewritten pixel's fit error is also at least the frame's
+  median ERR.
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
@@ -534,6 +540,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
 | `SATSTAR_ZF_G0_GROUPDQ` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (#1065) |
+| `SATSTAR_ZF_RIM_BADPIX` | 1 (**on**) | leave DEAD, HOT and REFERENCE_PIXEL pixels out of the ZEROFRAME rim rewrite, and floor a rewritten pixel's fit error at the frame's median ERR; 0 restores the rewrite that weighted dead pixels at 400–5e8× a normal pixel (#1071) |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
@@ -548,7 +555,7 @@ The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table ab
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
 
-The five `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows and
+The six `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows and
 `SATSTAR_ERR_BKG_SCATTER` are read by `satstar_fit_switches`, and the
 per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
