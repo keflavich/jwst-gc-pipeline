@@ -669,7 +669,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       diagrams=(),
                       superseded=(), reasons=None, curated=(),
                       curated_prov=(), preview_from_curated=False,
-                      release_dir=None):
+                      release_dir=None, manifold=None):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -1107,6 +1107,11 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     # catalogs table
     out.append("<h2>Catalogs</h2>")
+    if isinstance(manifold, dict):
+        manifold = [manifold]
+    for viewer in manifold or ():
+        out.append(manifold_link_html(viewer, manifest.get("version"),
+                                      labelled=len(manifold) > 1))
     if catalogs and not any(f["kind"] == "catalog_full" for f in catalogs):
         out.append("<p class=muted><b>Preliminary catalog release.</b> The field-wide "
                    "merged photometry table is still being built; only the per-filter "
@@ -2303,6 +2308,99 @@ PANNER_CARD = (
     "pointings that have imagery. Nothing to drive -- leave it running.")
 
 
+#: Per-field catalog manifold viewers (a WebGL density view of a field's
+#: catalog in color-magnitude space) are built outside this script and dropped
+#: into the site tree as ``<field>_manifold/``.  The 10678 Treasury one
+#: predates that naming.  A field observed by several programs that do not
+#: share a filter set (brick: 2221 o001, 1182 o004) gets one viewer per
+#: observation, ``<field>_o<NNN>_manifold/``.  Linked only when the viewer's
+#: own ``data/manifest.json`` is there and readable, like the CMD explorer card.
+MANIFOLD_DIR_OVERRIDES = {"gc-treasury": "treasury_manifold"}
+
+
+def manifold_infos(out_dir, field):
+    """Every manifold viewer built for ``field``, in directory order."""
+    if field in MANIFOLD_DIR_OVERRIDES:
+        names = [MANIFOLD_DIR_OVERRIDES[field]]
+    else:
+        names = [f"{field}_manifold"] + sorted(
+            p.name for p in Path(out_dir).glob(f"{field}_o[0-9][0-9][0-9]_manifold"))
+    infos = (manifold_info(out_dir, field, name=n) for n in names)
+    return [i for i in infos if i is not None]
+
+
+def manifold_info(out_dir, field, name=None):
+    """Describe ``field``'s manifold viewer from its manifest, or None.
+
+    Everything the page says about the viewer comes from the viewer's own
+    ``data/manifest.json``, so the link cannot claim more than the build did.
+    """
+    if name is None:
+        name = MANIFOLD_DIR_OVERRIDES.get(field, f"{field}_manifold")
+    root = Path(out_dir) / name
+    if not (root / "index.html").is_file():
+        return None
+    try:
+        m = json.loads((root / "data" / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(m, dict) or not isinstance(m.get("n"), int) or m["n"] <= 0:
+        return None
+    sample = m.get("sample") if isinstance(m.get("sample"), dict) else {}
+    source = m.get("source") if isinstance(m.get("source"), dict) else {}
+    caveats = m.get("caveats") if isinstance(m.get("caveats"), list) else []
+    title = str(m.get("title") or "")
+    return {"href": f"{name}/",
+            "title": title,
+            "n": m["n"],
+            "prototype": "prototype" in title.lower(),
+            "created": str(m.get("created") or ""),
+            "parent": str(sample.get("parent") or ""),
+            "release_version": str(source.get("release_version") or ""),
+            "caveats": [str(c) for c in caveats]}
+
+
+def manifold_link_html(info, page_version=None, labelled=False):
+    """The viewer link under a field page's Catalogs heading.
+
+    ``labelled`` names the viewer by its title (minus "(prototype)", which
+    the tag already says), for a page that links more than one.
+    """
+    tag = " <span class=tag>prototype</span>" if info["prototype"] else ""
+    label = "Open the catalog manifold viewer"
+    if labelled and info.get("title"):
+        name = re.sub(r"\s*\(prototype\)\s*", " ", info["title"],
+                      flags=re.I).strip()
+        label = f"Open the {name} viewer"
+    desc = f"{info['n']:,} stars"
+    if info["parent"]:
+        desc += f" from {info['parent']}"
+    desc += "."
+    # The viewer is rebuilt on its own schedule from whatever catalogs it was
+    # pointed at.  Claim it matches this release only when its manifest says
+    # it was built from this release's files.
+    if page_version and info["release_version"] == page_version:
+        prov = "Built from this release's catalog files."
+    elif info["release_version"]:
+        prov = (f"Built from the {info['release_version']} catalog files; "
+                "it can differ from the catalog files listed below.")
+    else:
+        when = f" as of {info['created']}" if info["created"] else ""
+        prov = (f"Built from the pipeline catalogs{when}; it can differ from "
+                "the catalog files listed below.")
+    out = [f"<p><a class=btn href='{html.escape(info['href'])}'>"
+           f"{html.escape(label, quote=False)}</a>{tag} "
+           f"<span class=muted>{html.escape(desc, quote=False)} "
+           f"{html.escape(prov, quote=False)} "
+           "WebGL; best on a desktop GPU.</span></p>"]
+    if info["caveats"]:
+        out.append("<details class=muted><summary>Viewer caveats</summary><ul>"
+                   + "".join(f"<li>{html.escape(c, quote=False)}</li>"
+                           for c in info["caveats"])
+                   + "</ul></details>")
+    return "\n".join(out)
+
+
 def _quicklook_cards(quicklooks):
     """Link cards for the analyses that sit alongside the release."""
     out = ["<h2>Quicklook analyses</h2>",
@@ -2591,6 +2689,8 @@ def main(argv=None):
                                      preview_version=preview_version,
                                      previews=preview_items,
                                      diagrams=diagram_items,
+                                     manifold=(manifold_infos(out_dir, field)
+                                               if v == latest else None),
                                      # only the CURRENT version's page: the
                                      # offsets are re-measured continuously, so
                                      # a frozen older page must not carry

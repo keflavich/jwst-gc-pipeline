@@ -508,9 +508,161 @@ than five independent checks would be.
   then `local_residual_map` — which itself REFUSES to run without a verified
   small global tie).
 
+**The region-map grid is FOOTPRINT-ALIGNED, not a fixed RA/Dec-axis grid
+(issue #989).** `local_residual_map`'s plain grid anchors at `min(ra),
+min(dec)` of the matched stars and steps by a fixed `cell_arcsec` (45″ for
+`same_star_region_map`) — so unless a footprint's extent happens to be an
+exact multiple of the cell size, the last row/column is whatever remainder is
+left over, not a full cell. A NIRCam mosaic is a rotated rectangle (roll angle
+essentially never a multiple of 90°) whose RA/Dec-axis extent essentially
+never divides evenly: gc-treasury o084 F212N measures 145.3″ × 356.1″ against
+45″ cells (3.23 × 7.91 cells), so the last column is a ~10″ sliver. That sliver
+still collects whatever stars the rotated footprint's corner puts inside it —
+46 matched pairs against a tile median of 236 — and 46 heavy-tailed pairs read
+as a false 57 mas "seam" that blocked the tile's m2 reference tie. Every other
+low-count flagged cell across the fleet fell in the SAME edge column (`ix` at
+its max), which is the tell that this was a binning artifact, not a spatial
+one, before it was fixed here.
+
+`footprint_aligned_grid` (`astrometry_offsets.py`) fits the minimum-bounding-
+rectangle angle of the footprint (rotating calipers over its convex hull,
+`_min_area_rotation_deg`) directly from the star positions passed to it — no
+WCS of any kind, so this cannot run afoul of Rule #2 above — and sizes each
+axis so `round(extent / cell_arcsec)` cells divide that extent EVENLY, with
+`actual_cell_size = extent / n`. There is no remainder left to collect a
+sliver, at any rotation, including a footprint that turns out to already be
+axis-aligned (the fitted angle then comes out near a multiple of 90°, and the
+grid is the plain one up to the even-division rounding). It falls back to the
+plain grid — `footprint_grid.ok = False`, with a `reason` — when fewer than
+`REGION_FOOTPRINT_ALIGN_MIN_POINTS` (20) positions were given to fit a
+rotation from; this is recorded, never silent.
+
+`align_to_footprint` defaults differently per caller, decided once here so it
+does not need re-deciding at each call site:
+* `same_star_region_map` (the m2/m7 gate this fix targets): **`True`** by
+  default. Its 45″ cells are large enough that a remainder sliver is a
+  sizeable fraction of one cell's population, which is exactly the o084
+  failure mode.
+* `local_residual_map`'s other callers — `interframe_overlap.py`,
+  `stage_release.py`'s registration scan, `multiepoch_pm.py`,
+  `solve_filter_frame_offsets.py` — keep the plain grid
+  (`align_to_footprint=False`, unchanged). Their cells are 2″, so a remainder
+  sliver is a small fraction of one cell and has not been observed to
+  misbehave the way the 45″ region map did; switching them was decided to be
+  out of scope for issue #989 and is left for a caller that measures a
+  problem, rather than done pre-emptively.
+
+**Low coverage is RECORDED, never used to relax a gate ("checks with variable
+size cells are harmful").** Every cell in `per_tile_same_star["cells"]` carries
+`coverage_frac` (its matched-pair count over the tile's own MEDIAN cell count)
+and `low_coverage` (`coverage_frac < REGION_LOW_COVERAGE_FRACTION`, 0.3); the
+map's own `n_low_coverage`/`low_coverage_cells` summarize them, and
+`region_map.grid_aligned`/`region_map.n_low_coverage` are pulled up into the
+checkpoint's smaller `region_map` block for the release gate to read without
+walking the nested per-cell list. A low-coverage cell that still reads large
+keeps blocking exactly like any other cell — this label changes nothing about
+the RESIDUAL or COVERAGE tests above, it only names a cell that a human
+reviewing a still-blocking or still-passing tile should look at first. This
+should be rare once the grid is footprint-aligned (there is no sliver column
+left to be thin); when it still fires — a genuinely partial corner of an
+irregular footprint, or a fallback that never got a rotation fit — the record
+names it rather than passing it off as an ordinary cell.
+`check_astrometry_checkpoints.py`'s `_region_map_findings` surfaces it: a
+`clean` tile with `n_low_coverage > 0` or `grid_aligned = False` is still
+printed (as an informational, `verified=None` finding) rather than silently
+matching the "nothing to report" case, and a `recorded_nonblocking` /
+`blocking` finding's detail line names the count too.
+
 A correction is applied **only** when A is coherent AND the gross cross-check
 passes AND D is clean (`apply_ok`).  Anything else is recorded as
 *could-not-verify* — loud and audited.
+
+### Opt-in: check A's reference can be a filter's own JWST consensus, not VIRAC2
+
+`alignment_config.FieldAlignment.tie_through_reference_filter` (default
+`False`, set only on the 10678 entry) redirects check A's dense reference for
+every filter of a field OTHER than its `reference_filter`: instead of VIRAC2,
+A ties against the reference filter's own JWST consensus catalog.
+`astrometry_checkpoint.resolve_tie_reference` makes this substitution once,
+in `cataloging.py`, before `run_visit_checkpoint` is called; the frozen
+m3–m6 re-measure (`_survivor_baseline_tie`) reuses the same substituted
+reference automatically, because both stages thread the same `refcat`
+parameter. Nothing changes at m7: `run_crossfilter_checkpoint` already ties
+every non-anchor filter directly against the anchor's own merged catalog, not
+through `refcat`.
+
+Motivating failure (GC Treasury 10678, tile o063): F212N's own VIRAC2 tie was
+refused while F480M's independent VIRAC2 tie was applied, leaving the two
+bands 226 mas apart on the same sky. Tying F480M through F212N's consensus
+means the two bands agree with each other regardless of whether F212N's own
+VIRAC2 tie was itself applied.
+
+The substitution never falls back to VIRAC2 silently when the reference
+filter is not settled. `reference_filter_tie_settled` requires a latest m2
+record for the reference filter that names an on-disk consensus catalog,
+that passed (or carries a used `gate_override`), that applied no
+consensus-vs-reference correction of its own this pass, and whose consensus
+file is not older than the record by more than
+`REFERENCE_FILTER_STALENESS_SLACK_SEC` (300 s); anything short of that raises
+`ReferenceFilterNotSettledError` rather than tying to VIRAC2 unannounced.
+
+Provenance: the substituted reference carries `reference_kind=
+'jwst_consensus'` (`'virac2'` otherwise), `reference_filter`,
+`reference_path`, `reference_record_date`, `reference_record_passed`, all
+copied onto the visit's `reference_tie` record; a bulk correction tied this
+way appends `" (via <reference_filter> consensus)"` to its `source` string.
+Check E stays disabled for this path exactly as it already is for F480M/F770W
+against VIRAC2 (gated on the tied filter's own wavelength, not the
+reference's), and the substituted reference's `mag` is explicitly cleared so
+a future Ks-overlapping filter is never flux-matched against a JWST
+consensus catalog's own magnitudes.
+
+**Submission-order note.** `submit_cataloging_perframe.sh`'s split-finalize
+path submits one finalize job per filter, all held on the same fan-out and
+then released TOGETHER (`scontrol release`) — there is no dependency between
+one filter's finalize job and another's. On a field's FIRST pass (no prior
+`checkpoint_m2_F212N_latest.json` on disk yet), F480M's finalize job can run
+before, or concurrently with, F212N's, and will then raise
+`ReferenceFilterNotSettledError` rather than silently tying to VIRAC2. This
+is the intended fail-loud behavior, not a bug, but it means a 10678 field's
+first pass may need F212N's m2 checkpoint to complete and a resubmit of the
+filters that raised before every band settles. No submit-side ordering change
+is included in this change; the checkpoint's guard is what makes the race
+safe to leave alone rather than something the scheduler must be taught to
+avoid.
+
+Turning this flag on for an already-tied field is additive, not corrective:
+`--apply` only ever adds a new offsets-table row, so the first post-opt-in
+run writes an additional correction on top of any VIRAC2-tied bulk already in
+the table.
+
+**Frozen stages (m3-m6) re-resolve the substitution every time, with no
+pinning to the snapshot m2 used.** `resolve_tie_reference` is called fresh at
+every stage (`cataloging._run_astrometry_stage_checkpoint` runs it before
+every `run_visit_checkpoint` call, m2 through m6), never once and cached, so
+F480M's m3 call reads whatever F212N's *latest* `checkpoint_m2_F212N_*`
+record and consensus file are AT THAT TIME, not the ones its own m2 tied to.
+Two cases follow from that:
+
+* **F212N's m2 reruns and has not re-settled** (no new record yet, the new
+  record did not pass with no used override, or it just applied its own
+  consensus-vs-reference correction this pass) while F480M is at a frozen
+  stage: `reference_filter_tie_settled` says so, and F480M's frozen-stage
+  call **raises `ReferenceFilterNotSettledError`**, the same fail-loud
+  refusal as at m2. It does not fall back to comparing against a stale or
+  partial F212N state.
+* **F212N's m2 reruns and DOES re-settle, but rewrites its consensus
+  catalog** (a different exposure list, a few more mas of noise, a corrected
+  bulk that has now been baked in) in between F480M's m2 and F480M's m3-m6:
+  F480M's frozen-stage call gets the NEW consensus file, silently. There is
+  no check that this is the SAME consensus F480M's own m2 used. A
+  stage-stability "shift" measured on an opted-in field's non-reference
+  filter can therefore be the reference filter's consensus moving, not the
+  tied filter's own frame -- indistinguishable from a real regression by the
+  frozen-stage gate alone. Diagnosing one on a `tie_through_reference_filter`
+  field should start by comparing `reference_path` / `reference_record_date`
+  across the filter's own m2 record and the failing frozen stage's
+  `reference_tie` record before concluding the tied filter itself moved.
 
 ## Corrections & provenance
 

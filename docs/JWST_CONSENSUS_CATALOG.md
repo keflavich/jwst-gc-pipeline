@@ -170,10 +170,86 @@ than a direct VIRAC2 tie, for the reasons above — but "far tighter" is not a
 number, and inventing one would either pass everything or fail good data. The
 offset is measured and recorded; the tolerance gets set from the measurements.
 
+## Opt-in: tying a filter's own m2 checkpoint through the reference filter
+
+`alignment_config.FieldAlignment.tie_through_reference_filter` (default
+`False`) is a separate, narrower mechanism from `tie_to_reference_consensus`
+above: it runs *inside* the m2 checkpoint itself
+(`astrometry_checkpoint.resolve_tie_reference`), substituting the dense
+reference that `measure_reference_tie` ties against — the reference
+filter's own JWST consensus catalog in place of VIRAC2 — for every filter
+of the field OTHER than `reference_filter`. The reference filter itself is
+unaffected: it always ties straight to VIRAC2.
+
+This exists because two bands can each tie independently to VIRAC2 and land
+apart from each other on the sky. GC Treasury proposal 10678, tile o063: the
+reference filter's (F212N) own VIRAC2 tie was refused (no coherent dense
+peak), while F480M's independent VIRAC2 tie was applied — the two bands then
+sat 226 mas apart on the same field. Tying F480M through F212N's consensus
+instead means the two bands agree with each other whether or not F212N's own
+VIRAC2 tie was itself applied that pass.
+
+Only the 10678 `FieldAlignment` entry sets this flag; every other field keeps
+ties direct to VIRAC2/Gaia, unchanged.
+
+**One substitution point, both stages.** `cataloging.py` calls
+`resolve_tie_reference` once, before `run_visit_checkpoint`, and passes its
+result through the SAME `refcat` parameter the checkpoint already threads
+into both the correcting m2 pass and the frozen m3–m6 re-measure
+(`_survivor_baseline_tie` reuses the `refcat` its caller was given). No
+second call site is needed for the frozen stages to stay consistent with m2.
+
+**The m7 cross-filter checkpoint needs no change.** `run_crossfilter_checkpoint`
+already ties every non-anchor filter (F480M included) directly against the
+anchor filter's own merged catalog via `measure_offset` / `local_residual_map`
+— never through `refcat` — so it never touches VIRAC2 for a non-anchor band in
+the first place. The MIRI `inherit_bulk` mechanism (frame-shift application at
+`unified_alignment.resolve_shift`, not the m2 tie measurement) is a different,
+complementary fix for the same underlying VIRAC2-tie-refused problem and
+needs no change either.
+
+**Staleness/ordering guard.** Substitution never falls back to VIRAC2 silently
+when the reference filter's own tie has not settled. `resolve_tie_reference`
+raises `ReferenceFilterNotSettledError` unless `reference_filter_tie_settled`
+confirms all of: a latest m2 record exists for the reference filter, it names
+a consensus catalog that exists on disk, the record passed (or carries a used
+`gate_override`), that pass applied no consensus-vs-reference bulk correction
+of its own (a pass that just corrected the reference filter's frame means the
+frame moved this run — regenerate from `_cal` and re-run its m2 checkpoint
+first), and the consensus file is not older than the record by more than
+`REFERENCE_FILTER_STALENESS_SLACK_SEC` (300 s).
+
+**Provenance.** The substituted reference carries `reference_kind=
+'jwst_consensus'`, `reference_filter`, `reference_path`,
+`reference_record_date` and `reference_record_passed`; `run_visit_checkpoint`
+stamps these onto the visit's `reference_tie` record, and a bulk correction
+tied this way gets a `" (via <reference_filter> consensus)"` suffix appended
+to its `source` string (`cataloging._is_whole_consensus_shift` matches this
+with `in`, not `endswith`, so the suffix does not exempt it from anything the
+unqualified form already was not exempt from).
+
+**Magnitude/flux matching.** Check E (the flux-matched residual in
+`measure_reference_tie`) is already gated on the tied filter's own wavelength
+overlapping VIRAC2's Ks band, so it is naturally disabled for F480M/F770W
+regardless of which dense reference is substituted. `resolve_tie_reference`
+also sets `mag=None` on the substituted reference explicitly, so a future
+filter that DOES overlap Ks is not silently flux-matched against a JWST
+consensus catalog's own magnitudes (which are not on the VIRAC2 photometric
+system).
+
+**Transition consequence.** A field's existing offsets-table bulk rows from a
+straight VIRAC2 tie are not replaced when this flag is turned on — the m2
+`--apply` step only ever ADDS a new correction row, never replaces one. The
+first post-opt-in run for an already-tied filter writes an ADDITIVE
+correction on top of whatever VIRAC2-tied bulk is already in the table.
+
 ## What is not here
 
 The catalogs are written and the ties are measurable. **Applying** a
 reference-filter tie to the m12–m8 catalogs is a separate piece of work, with
 instructions in [`REALIGN_TO_JWST_CONSENSUS.md`](REALIGN_TO_JWST_CONSENSUS.md).
 `tie_to_reference_consensus` has no pipeline caller yet — it is the tool that
-work starts from, not something running today.
+work starts from, not something running today. (This is the standalone
+post-hoc measurement tool. `tie_through_reference_filter` above is the
+narrower, opt-in mechanism wired into the live m2 checkpoint; the two are
+separate code paths and either can exist without the other.)

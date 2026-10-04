@@ -135,8 +135,15 @@ saturated-but-recovered, bit 2 = unrecoverable), centroid refinement, and the
 function but **cataloging sets it to `1` on the extended-emission NIRCam fields**
 (`w51`, `sickle`, `wd2`, `ngc6334`) unless the variable is already in the
 environment, so on those four fields `_unrecoverable` does change reported
-fluxes. One open question: should frame-0-recovered wings be fit rather than
-masked? Tracked in
+fluxes. The cap bounds the model peak by the brightest recovered pixel of the
+star's own region when the model's peak pixel is itself measured (finite and
+recoverable, of either sign), or when the measured pixel nearest the model peak
+is at or below zero (a refit of an already-subtracted star, capped to its
+residual); otherwise (an unmeasured core) it compares the model with the data
+at the measured pixel nearest the model peak (`recovered_cap_flux`: flux ≤
+data / unit PSF there), so a recovered ring bounds the model at the ring. One
+open question: should frame-0-recovered wings be fit rather than masked?
+Tracked in
 [#213](https://github.com/keflavich/jwst-gc-pipeline/issues/213). Evidence that the
 current masked-core behaviour is deliberate: the wing
 self-calibration (`apply_wing_selfcal`, `SATSTAR_WINGCAL`, default on) exists
@@ -371,9 +378,19 @@ these flag sets would remove the footgun of setting them individually.)*
   under-subtraction.
 - **Merged catalog** (`merge_catalogs.py`, the satstar consolidation +
   `replace_saturated`): per-exposure satstar catalogs
-  are consolidated and deduped (~0.15″, keep brightest), then merged into the
+  are consolidated and deduped (~0.15″; the brightest exposure's row
+  represents the star, and its `flux_fit` is the median over exposures of
+  the per-exposure fluxes, `SATSTAR_FLUX_STAT`), then merged into the
   daophot catalog; satstar-only rows are marked **`replaced_saturated=True`**
   (per-filter `replaced_saturated_{FILTER}` in cross-filter merges).
+  The pooled wing calibration (`apply_pooled_wingcal`, for rows whose
+  per-frame self-cal was skipped) is applied to every per-exposure row
+  before the dedup, so the representative and the median see fluxes in one
+  calibration state.  On the wd2 dolphot benchmark (#1032) the median moves
+  9 of 10 saturated bands 0.02–0.12 mag toward dolphot and F150W 0.12 mag
+  away (+0.10 → +0.22 mag fainter than dolphot); the F150W per-exposure fits
+  are biased faint, and the brightest-of-N selection happened to offset part
+  of that.  `SATSTAR_FLUX_STAT=brightest` restores the old statistic.
 - **Post-merge off-FOV cleanup** (`_clean_offfov_dups_and_offfield`): off-FOV
   `replaced_saturated` rows within 1.0″ collapse to one row (the per-frame fits of
   an off-FOV star scatter wider than the 0.15″ dedup). In-field rows follow
@@ -485,13 +502,15 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_SUBFLOOR_SEED_FRAC` | 0.35 | sub-floor seeding fraction |
 | `SATSTAR_COMPONENT_OVERLAP_FRAC` / `…_MIN_PX` | (see code) / 250 | merge overlapping saturated components |
 | `SATSTAR_WINGCAL` | 1 | wing self-calibration (`apply_wing_selfcal`) |
+| `SATSTAR_WINGCAL_MAX_SE` | 0.05 | largest standard error (1.2533 madstd/√n) of a C(r) bucket that wing self-calibration applies, per-frame and pooled; ≤ 0 disables the gate. madstd is floored at the fractional scatter of the smallest r_mask bucket (≥ 5 stars) times the bucket ratio, and C(r) is anchored at C(0) = 1 (#1041) |
 | `SATSTAR_ZEROFRAME_FIT` | 1 | fit using the ZEROFRAME where available; blank = default, `1/true/yes/on` or `0/false/no/off` (any case), any other value raises |
 | `SATSTAR_ZF_RCURVE_GUARD` / `…_MAXSTEP` | 1 (**on**) / 1.3 | truncate the ZEROFRAME R(g0) curve at the first bin-to-bin step larger than MAXSTEP, up or down; 0 restores the untruncated curve, which collapses on F480M (#972) |
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
-| `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 1.0 | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
+| `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
+| `SATSTAR_FLUX_STAT` | median | consolidated `flux_fit`: `median` of the per-exposure fluxes, or `brightest` (the representative's own flux, the old behaviour; kept as `flux_brightest_fit` either way) |
 | `SATSTAR_REPLACE_RADIUS_ARCSEC` | (see code) | satstar→daophot replacement radius |
 | `SATSTAR_FP_*` (11 vars: `_REJECT`, `_REJECT_RATIO`, `_REJECT_MIN_N`, `_REJECT_BRIGHTFRAC`, `_FLUXRATIO`, `_MERGE_MAX_ARCSEC`, `_COMP_ARCSEC`, `_BIG_ARCSEC`, `_BIGCORE_ARCSEC`, `_BIGCORE_MERGE_ARCSEC`, `_USE_ANCHOR`) | see `merge_catalogs.py` | false-positive rejection / merging at consolidation |
 | `SATSTAR_PIXSCALE_ARCSEC` | 0.063 | pixel scale used by those radii (no `FP_` in the name) |

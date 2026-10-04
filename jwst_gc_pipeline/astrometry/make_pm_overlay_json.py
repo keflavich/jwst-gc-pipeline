@@ -17,19 +17,44 @@ Example:
 import argparse
 import json
 import os
+import subprocess
 from astropy.table import Table
 
 
+def _git_commit():
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        return subprocess.check_output(['git', '-C', here, 'rev-parse', 'HEAD'],
+                                       text=True, stderr=subprocess.DEVNULL).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
 def make_overlay_json(pm_fits, out_path, name, mag_key='mag_instr',
-                      mag_col='mag_src', verbose=True):
+                      mag_col='mag_src', verbose=True, frame='ref',
+                      ref_observations=None):
+    """``frame='ref'`` places each source at its Treasury-frame (current-epoch)
+    position (ra_ref/dec_ref) so it lands on the star in the Treasury HiPS;
+    ``frame='src'`` uses ra0/dec0 (src frame after the affine tie).
+    ``ref_observations`` overrides the Treasury ref catalog names, which
+    otherwise come from the PM FITS (``ref_paths_json``, absent in files built
+    before it was recorded).  Both end up in ``meta`` with the builder commit."""
     t = Table.read(pm_fits)
+    ra_col, dec_col = 'ra0', 'dec0'
+    if frame == 'ref':
+        if 'ra_ref' not in t.colnames:
+            raise ValueError(f'{pm_fits} has no ra_ref/dec_ref; rebuild with the '
+                             f'raw-ref-position build_treasury_pm or pass frame="src"')
+        ra_col, dec_col = 'ra_ref', 'dec_ref'
+    if ref_observations is None and 'ref_paths_json' in t.meta:
+        ref_observations = json.loads(t.meta['ref_paths_json'])
     t = t[t['trustworthy']]
     if verbose:
         print(f'{len(t):,} trustworthy PMs -> {out_path}')
 
     sources = [
         {
-            'ra': float(row['ra0']), 'dec': float(row['dec0']),
+            'ra': float(row[ra_col]), 'dec': float(row[dec_col]),
             'pm_ra': round(float(row['pm_ra']), 3),
             'pm_dec': round(float(row['pm_dec']), 3),
             'pm_tot': round(float(row['pm_tot']), 3),
@@ -45,7 +70,10 @@ def make_overlay_json(pm_fits, out_path, name, mag_key='mag_instr',
             'epochs': list(t.meta.get('EPOCHS', [])),
             'baseline_yr': float(t.meta.get('baseline_yr', 0)) or None,
             'frame': t.meta.get('FRAME', ''),
+            'position_frame': 'treasury-ref-epoch' if frame == 'ref' else 'src-tied',
             'n_trustworthy': len(t),
+            'ref_observations': ref_observations,
+            'builder_commit': _git_commit(),
         },
         'sources': sources,
     }
@@ -81,9 +109,16 @@ def main():
     ap.add_argument('--mag-key', default='mag_instr',
                     help="JSON property name for the source's instrumental "
                          "magnitude, e.g. mag_f212n_instr")
+    ap.add_argument('--frame', choices=['ref', 'src'], default='ref',
+                    help="position frame for ra/dec: 'ref' = Treasury frame at the "
+                         "ref epoch (matches the HiPS), 'src' = src-tied ra0/dec0")
+    ap.add_argument('--ref-observations', nargs='+', default=None,
+                    help='Treasury ref catalog names to record in meta '
+                         '(default: from the PM FITS, if it recorded them)')
     args = ap.parse_args()
     make_overlay_json(args.pm_fits, args.out, args.name,
-                      mag_key=args.mag_key, mag_col=args.mag_col)
+                      mag_key=args.mag_key, mag_col=args.mag_col, frame=args.frame,
+                      ref_observations=args.ref_observations)
 
 
 if __name__ == '__main__':

@@ -64,6 +64,11 @@ from jwst_gc_pipeline.photometry.satstar_phase_selection import (
     format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry.wingcal import (
+    MIN_RATIO as WINGCAL_MIN_RATIO, interp_wingcal_ratio,
+    passes_se_gate as wingcal_passes_se_gate,
+    pool_bucket as wingcal_pool_bucket,
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
@@ -73,6 +78,7 @@ from jwst_gc_pipeline.photometry.naming import (
     perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
+from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
 from jwst_gc_pipeline.photometry.measure_offsets import (
     DenseNNMedianAstrometryError, assert_sparse_reference_for_nn_median)
 # Imported as field_registry: `fields` is a local variable in these
@@ -1248,7 +1254,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
     else:
         iter_token = f'_{iteration_label}'
 
-    epsf_ = "_epsf" if epsf else ""
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
 
     matching_ref_tables = [tb for tb in tbls if tb.meta['filter'] == ref_filter]
@@ -1973,7 +1979,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
     bgsub = _bgsub_token(bgsub, resbgsub)
-    epsf_ = "_epsf" if epsf else ""
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
     if iteration_label in (None, ''):
         iter_token = ''
@@ -2809,12 +2815,12 @@ def load_satstar_catalog(filtername, target='brick',
             if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
                     and str(cached.meta.get('SATOBSSC', '')) == obs_scope
                     and abs(_rcache - _rcur) < 1e-6
-                    and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG
+                    and str(cached.meta.get('SATDDALG', '')) == _satstar_dedup_alg_tag()
                     and str(cached.meta.get('SATFRMSG', '')) == _fsig
                     and str(cached.meta.get('SATPHSEL', '')) == _phase_sig):
                 print(f"Using consolidated satstar catalog {cache} "
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
-                      f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG}, "
+                      f"dedup radius {_rcur}\", alg {_satstar_dedup_alg_tag()}, "
                       f"frame state {_fsig}, phase selection {_phase_sig})")
                 return _ensure_satstar_aperture_photometry(
                     cached, filtername, target, basepath, cache_path=cache)
@@ -2823,9 +2829,9 @@ def load_satstar_catalog(filtername, target='brick',
                       f"set of per-exposure catalogs -- phase selection "
                       f"{cached.meta.get('SATPHSEL', 'unrecorded (every phase pooled)')!r}"
                       f" -> {_phase_sig!r}")
-            if str(cached.meta.get('SATDDALG', '')) != _SATSTAR_DEDUP_ALG:
+            if str(cached.meta.get('SATDDALG', '')) != _satstar_dedup_alg_tag():
                 print(f"Rebuilding satstar cache {cache}: dedup algorithm changed "
-                      f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_SATSTAR_DEDUP_ALG!r}")
+                      f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_satstar_dedup_alg_tag()!r}")
             if abs(_rcache - _rcur) >= 1e-6:
                 print(f"Rebuilding satstar cache {cache}: dedup radius changed "
                       f"{_rcache}\" -> {_rcur}\"")
@@ -2871,13 +2877,20 @@ def load_satstar_catalog(filtername, target='brick',
     # duplicate rows at one position (sickle cutouts showed a star 3-8x), and
     # the merged-cat residual subtracts it N times.  Collapse to one row per
     # physical star (keep the brightest as representative).
-    deduped = _dedup_satstar_catalog(combined, target=target)
     # Pooled wing-calibration fallback (Phase B1): rows whose per-frame
     # self-cal was skipped (ratio exactly 1.0) get the cross-frame pooled
-    # C(r).  Applied post-dedup, pre-cache, so the cache holds calibrated
-    # fluxes with wingcal_pooled provenance.
-    deduped = apply_pooled_wingcal(deduped, filtername, basepath=basepath,
-                                   phase=phase)
+    # C(r).  Applied to every PER-EXPOSURE row, before the dedup: a star's
+    # exposures can mix per-frame-calibrated and skipped frames (GC F410M
+    # skips 43 of 48), and the dedup's representative and its median over
+    # exposures (_adopt_ensemble_flux) need every member in the calibrated
+    # state.  Applied after the dedup it keyed on the representative alone,
+    # so a skipped representative divided already-calibrated members a second
+    # time and a calibrated one left skipped members raw.  Called once: a
+    # second call resets wingcal_pooled.  Pre-cache, so the cache holds
+    # calibrated fluxes with wingcal_pooled provenance.
+    combined = apply_pooled_wingcal(combined, filtername, basepath=basepath,
+                                    phase=phase)
+    deduped = _dedup_satstar_catalog(combined, target=target)
     # Aperture photometry from the i2d mosaic (added by default; see
     # _ensure_satstar_aperture_photometry).  Done pre-cache so the cache holds
     # the aperture columns; cache_path=None here (the cache is written below).
@@ -2887,7 +2900,7 @@ def load_satstar_catalog(filtername, target='brick',
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
     deduped.meta['SATDDUPR'] = float(_satstar_dedup_radius().to(u.arcsec).value)
-    deduped.meta['SATDDALG'] = _SATSTAR_DEDUP_ALG
+    deduped.meta['SATDDALG'] = _satstar_dedup_alg_tag()
     # ...and the state of the frames those positions were re-projected onto, so
     # the next read rebuilds when a frame has since moved (issue #193).
     deduped.meta['SATFRMSG'] = _frame_sig
@@ -2917,8 +2930,17 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp5'  # fp5: per-exposure ensemble statistics on the kept row (#925)
+_SATSTAR_DEDUP_ALG = 'fp6'  # fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
+#                              fp5: per-exposure ensemble statistics on the kept row (#925)
 #                              fp4: sky columns re-projected onto the current GWCS (#193)
+
+
+def _satstar_dedup_alg_tag():
+    """Cache key for the consolidated catalog: the algorithm version plus
+    the flux statistic, so toggling ``SATSTAR_FLUX_STAT`` rebuilds the cache
+    instead of serving the other statistic's fluxes."""
+    stat = _satstar_flux_statistic()
+    return _SATSTAR_DEDUP_ALG if stat == 'median' else f'{_SATSTAR_DEDUP_ALG}-{stat}'
 
 
 # Wide second-chance radius for matching a fitted satstar to its daophot row
@@ -3007,9 +3029,13 @@ def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/j
     43/48), so their satstar fluxes carried the raw STPSF wing deficit
     (wingcal_ratio == 1.0).  The per-frame measurements (persisted even when
     sub-threshold, *_wingcal_calibrators.fits) are pooled here across all
-    frames of a band: per rmask bucket, the n-weighted mean ratio.  Same PSF
-    grid within a band+detector, so the per-frame-vs-static objection (H9,
-    epoch-specific grid defects) does not apply within the pool.
+    frames of a band: per rmask bucket, the inverse-variance mean of the
+    per-frame medians with its standard error ``ratio_se``
+    (:func:`~jwst_gc_pipeline.photometry.wingcal.pool_bucket`; #1041 -- the
+    old n-weighted mean had no error, and buckets of 2-30 stars reached
+    C = 12-20).  Same PSF grid within a band+detector, so the
+    per-frame-vs-static objection (H9, epoch-specific grid defects) does not
+    apply within the pool.
 
     Each exposure contributes ONE phase's calibrator file
     (:func:`select_wingcal_calibrator_files`).  The table records the
@@ -3032,19 +3058,25 @@ def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/j
         except (OSError, ValueError) as err:
             print(f"WARNING: unreadable wingcal-calibrator file {f}: {err}")
             continue
+        has_mad = 'ratio_madstd' in tt.colnames
         for row in tt:
             rows.append((int(row['rmask_px']), float(row['ratio_median']),
-                         int(row['n_stars'])))
+                         int(row['n_stars']),
+                         float(row['ratio_madstd']) if has_mad else np.nan))
     if not rows:
         return None
-    rs = sorted({r for r, _, _ in rows})
+    rs = sorted({r for r, _, _, _ in rows})
+    _r, _v, _n, _s = np.array(rows, dtype=float).T
+    rel_floor = wingcal_rel_floor(_r, _v, _s, _n)
     out_rows = []
     for r in rs:
-        vals = np.array([(v, n) for rr, v, n in rows if rr == r])
-        med = float(np.average(vals[:, 0], weights=vals[:, 1]))
-        out_rows.append((r, med, int(vals[:, 1].sum()), len(vals)))
+        vals = np.array([(v, n, s) for rr, v, n, s in rows if rr == r])
+        ratio, ratio_se = wingcal_pool_bucket(vals[:, 0], vals[:, 1],
+                                              vals[:, 2], rel_floor=rel_floor)
+        out_rows.append((r, ratio, ratio_se, int(vals[:, 1].sum()), len(vals)))
     pooled = Table(rows=out_rows,
-                   names=['rmask_px', 'ratio', 'n_stars_total', 'n_frames'])
+                   names=['rmask_px', 'ratio', 'ratio_se', 'n_stars_total',
+                          'n_frames'])
     pooled.meta['band'] = filtername.lower()
     pooled.meta['WCALSEL'] = satstar_phase_selection_signature(files)
     pooled.meta['WCALPHS'] = _wingcal_phase_token(phase)
@@ -3074,7 +3106,8 @@ def load_pooled_wingcal(filtername, basepath, phase=None):
     never rebuilt, so it kept whatever phases and code version first built it;
     a table with no ``WCALSEL`` (written before this check) is rebuilt.  A
     refit with changed satstar code rewrites the calibrator files, and their
-    newer mtimes trigger the rebuild.
+    newer mtimes trigger the rebuild.  A table with no ``ratio_se`` column
+    (written before #1041) is rebuilt too.
     """
     files, report = select_wingcal_calibrator_files(filtername, basepath,
                                                     phase=phase)
@@ -3093,11 +3126,15 @@ def load_pooled_wingcal(filtername, basepath, phase=None):
             newest = max(os.path.getmtime(f) for f in files)
             if os.path.getmtime(pooled_fn) >= newest:
                 pooled = Table.read(pooled_fn, format='ascii.ecsv')
-                if str(pooled.meta.get('WCALSEL', '')) == sig:
+                if 'ratio_se' not in pooled.colnames:
+                    print(f"Rebuilding pooled wingcal {pooled_fn}: no "
+                          f"ratio_se column (written before #1041)")
+                elif str(pooled.meta.get('WCALSEL', '')) == sig:
                     return pooled
-                print(f"Rebuilding pooled wingcal {pooled_fn}: built from a "
-                      f"different set of calibrator files "
-                      f"({pooled.meta.get('WCALSEL', 'unrecorded')!r} -> {sig!r})")
+                else:
+                    print(f"Rebuilding pooled wingcal {pooled_fn}: built from a "
+                          f"different set of calibrator files "
+                          f"({pooled.meta.get('WCALSEL', 'unrecorded')!r} -> {sig!r})")
             else:
                 print(f"Rebuilding pooled wingcal {pooled_fn}: a calibrator "
                       f"file is newer than the table")
@@ -3117,7 +3154,12 @@ def apply_pooled_wingcal(satstar_cat, filtername,
     exactly 1).  Catalog-flux-only, like the per-frame calibration; adds
     wingcal_pooled (bool) and updates wingcal_ratio.  No pooled table and no
     calibrator files -> unchanged.  ``phase`` is the merge's iteration label;
-    see :func:`load_pooled_wingcal`."""
+    see :func:`load_pooled_wingcal`.
+
+    Only buckets with ``ratio_se`` <= SATSTAR_WINGCAL_MAX_SE (default 0.05)
+    are applied, and C(r) is anchored at C(0) = 1, as in the per-frame
+    calibration (#1041).  A table without ``ratio_se`` (a legacy table kept
+    because its calibrator files are gone) is applied ungated."""
     if (satstar_cat is None or 'wingcal_ratio' not in satstar_cat.colnames
             or 'wingcal_rmask' not in satstar_cat.colnames):
         return satstar_cat
@@ -3132,9 +3174,25 @@ def apply_pooled_wingcal(satstar_cat, filtername,
         return satstar_cat
     rs = np.asarray(pooled['rmask_px'], float)
     vs = np.asarray(pooled['ratio'], float)
-    order = np.argsort(rs)
-    ratio = np.interp(np.clip(rmask[need], rs[order].min(), rs[order].max()),
-                      rs[order], vs[order])
+    if 'ratio_se' in pooled.colnames:
+        use = wingcal_passes_se_gate(np.asarray(pooled['ratio_se'], float),
+                                     ratio=vs)
+        low = ~use & ~(vs >= WINGCAL_MIN_RATIO)
+        for sel, why in ((~use & ~low,
+                          f"above the SE gate ({wingcal_max_se():g})"),
+                         (low, "below the minimum ratio "
+                               f"({WINGCAL_MIN_RATIO:g})")):
+            if sel.any():
+                print(f"apply_pooled_wingcal: {filtername}: {int(sel.sum())} "
+                      f"bucket(s) {why} not applied: "
+                      f"r={rs[sel].astype(int).tolist()}")
+        rs, vs = rs[use], vs[use]
+    else:
+        print(f"apply_pooled_wingcal: {filtername}: table has no ratio_se; "
+              f"applying it without the SE gate")
+    if rs.size == 0:
+        return satstar_cat
+    ratio = interp_wingcal_ratio(rmask[need], rs, vs)
     if 'flux_fit' in satstar_cat.colnames:
         satstar_cat['flux_fit'][need] = (
             np.asarray(satstar_cat['flux_fit'], float)[need] / ratio)
@@ -3267,7 +3325,7 @@ def load_rejected_satstar_catalog(filtername, target='brick',
 #: merged catalog's own astrometry schema, so keep the two in step.
 SATSTAR_ENSEMBLE_COLUMNS = ('n_frames_fit', 'n_meas_fit', 'std_ra_fit',
                             'std_ra_coord_fit', 'std_dec_fit', 'flux_med_fit',
-                            'std_flux_fit')
+                            'flux_median_fit', 'std_flux_fit')
 
 
 def _satstar_use_ensemble_position():
@@ -3304,11 +3362,11 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     Compare it across catalog versions only with that in mind.
 
     Adds ``n_frames_fit``, ``n_meas_fit``, ``std_ra_fit``/``std_dec_fit``
-    (degrees, ddof=1, NaN below two exposures), and ``flux_med_fit`` /
-    ``std_flux_fit``.  ``flux_fit`` is deliberately LEFT ALONE: the
-    brightest-of-N flux is a photometric-continuity question (#925 items 4-5)
-    handled separately, and this function's job is to publish the ensemble it
-    needs, not to change photometry under it.
+    (degrees, ddof=1, NaN below two exposures), ``flux_med_fit`` (the
+    across-exposure mean), ``flux_median_fit`` and ``std_flux_fit``.
+    ``flux_fit`` is LEFT ALONE here: this function publishes the ensemble,
+    and :func:`_adopt_ensemble_flux` decides which statistic ``flux_fit``
+    carries (``SATSTAR_FLUX_STAT``).
     """
     n_out = len(out)
     if n_out == 0:
@@ -3421,7 +3479,10 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
         out['std_ra_coord_fit'] = np.where(np.abs(_cosd) > 1e-12,
                                            std_ra / _cosd, np.nan)
     out['std_dec_fit'] = std_dec
+    # ``flux_med_fit`` is the across-exposure MEAN (the name predates the
+    # median below and is kept for readers of existing catalogs).
     out['flux_med_fit'] = mean_flux
+    out['flux_median_fit'] = _group_median(exp_flux, exp_grp, n_out)
     out['std_flux_fit'] = std_flux
     # exposures that measured a usable FLUX, which is <= n_frames_fit whenever
     # sibling seeds contributed position-only rows
@@ -3457,6 +3518,94 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
                   f"stars measured in >1 exposure (median N={int(np.median(n_frames))}); "
                   f"adopted mean position, median shift {np.median(_mm):.1f} mas, "
                   f"p95 {np.percentile(_mm, 95):.1f} mas", flush=True)
+    return out
+
+
+def _group_median(values, group, n_groups):
+    """Median of ``values`` within each of ``n_groups`` groups, NaN-skipping.
+
+    ``group[i]`` is the group of ``values[i]``.  Groups with no finite value
+    get NaN.  An even count takes the mean of the two middle values, as
+    ``np.median`` does.
+    """
+    values = np.asarray(values, dtype=float)
+    group = np.asarray(group, dtype=np.int64)
+    out = np.full(n_groups, np.nan)
+    ok = np.isfinite(values)
+    if not ok.any():
+        return out
+    v = values[ok]
+    g = group[ok]
+    order = np.lexsort((v, g))
+    v = v[order]
+    g = g[order]
+    counts = np.bincount(g, minlength=n_groups)
+    starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    has = counts > 0
+    lo = starts[has] + (counts[has] - 1) // 2
+    hi = starts[has] + counts[has] // 2
+    out[has] = 0.5 * (v[lo] + v[hi])
+    return out
+
+
+def _satstar_flux_statistic():
+    """Which per-exposure statistic the consolidated ``flux_fit`` carries.
+
+    ``median`` (default): the median over exposures of each star's
+    per-exposure satstar fluxes (``flux_median_fit``).  ``brightest``: the
+    dedup representative's own flux, i.e. the brightest of the N exposures,
+    which was the only behaviour before this switch existed.
+
+    The brightest of N noisy fits is biased bright by construction, and the
+    bias grows with the scatter between exposures.  In the GC (o132) that
+    scatter is 1.6-2.8%, so brightest - median was only -0.02 to -0.03 mag
+    (#925); on wd2 the per-exposure satstar fits scatter far more and the
+    brightest sits 0.03-0.15 mag above the median.  Set with
+    ``SATSTAR_FLUX_STAT``.
+    """
+    stat = os.environ.get('SATSTAR_FLUX_STAT', 'median').strip().lower()
+    if stat not in ('median', 'brightest'):
+        raise ValueError(f"SATSTAR_FLUX_STAT={stat!r}: expected 'median' or "
+                         f"'brightest'")
+    return stat
+
+
+def _adopt_ensemble_flux(out):
+    """Put the chosen per-exposure statistic into ``flux_fit``.
+
+    The representative row's own flux (the brightest exposure, because the
+    dedup processes rows brightest-first) is kept as ``flux_brightest_fit``
+    in every mode, so both values stay on the row.  Rows without a finite
+    median (a single position-only member, a legacy table) keep their
+    representative flux.  ``flux_err`` keeps the representative fit's
+    fractional error (scaled by median / representative); the
+    between-exposure scatter is ``std_flux_fit``.  ``load_satstar_catalog``
+    applies the pooled wing calibration to each per-exposure row before the
+    dedup, so the median is taken over fluxes in one calibration state.
+    """
+    if len(out) == 0 or 'flux_fit' not in out.colnames:
+        return out
+    rep = np.asarray(out['flux_fit'], dtype=float).copy()
+    out['flux_brightest_fit'] = rep
+    if _satstar_flux_statistic() != 'median' or 'flux_median_fit' not in out.colnames:
+        return out
+    med = np.asarray(out['flux_median_fit'], dtype=float)
+    use = np.isfinite(med) & (med > 0) & np.isfinite(rep) & (rep > 0)
+    out['flux_fit'] = np.where(use, med, rep)
+    if 'flux_err' in out.colnames:
+        err = np.asarray(out['flux_err'], dtype=float)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            out['flux_err'] = np.where(use, err * med / np.where(use, rep, 1.0),
+                                       err)
+    if use.any():
+        with np.errstate(invalid='ignore', divide='ignore'):
+            dmag = -2.5 * np.log10(rep[use] / med[use])
+        dmag = dmag[np.isfinite(dmag)]
+        if len(dmag):
+            print(f"  satstar flux: adopted the per-exposure median for "
+                  f"{int(use.sum())}/{len(out)} stars; brightest - median = "
+                  f"{np.median(dmag):.3f} mag (median), "
+                  f"{np.percentile(dmag, 10):.3f} (p10)", flush=True)
     return out
 
 
@@ -3512,7 +3661,14 @@ def satstar_sibling_seed_positions(filtername, basepath, verbose=True,
 
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
-    one row (the brightest), so downstream merging doesn't duplicate them.
+    one row, so downstream merging doesn't duplicate them.
+
+    The kept row is the brightest member (it anchors the group), but its
+    ``flux_fit`` is replaced by the median over exposures of the group's
+    per-exposure fluxes (:func:`_adopt_ensemble_flux`; ``SATSTAR_FLUX_STAT=
+    brightest`` keeps the representative's own flux).  The brightest of N
+    noisy fits is biased bright: 0.03-0.15 mag on wd2, where the substituted
+    fluxes sat 0.15-0.57 mag above dolphot (#1032).
 
     Greedy brightest-first spatial dedup: process stars in descending flux and
     keep one unless it falls within a merge radius of an already-kept (brighter)
@@ -3723,7 +3879,8 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
               f"footprint radius; rejected {n_reject_rows} big-footprint "
               f"extended-emission pile rows)")
     out = tbl[np.sort(kept)]
-    return _attach_satstar_ensemble(out, tbl, fin_idx, owner, np.sort(kept))
+    out = _attach_satstar_ensemble(out, tbl, fin_idx, owner, np.sort(kept))
+    return _adopt_ensemble_flux(out)
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',

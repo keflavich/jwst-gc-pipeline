@@ -15,7 +15,12 @@ import stpsf
 from jwst_gc_pipeline.atomic_io import publish_into
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
+from jwst_gc_pipeline.photometry.wingcal import (
+    bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
+    MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from stpsf.utils import to_griddedpsfmodel
+from photutils.psf import GriddedPSFModel
 
 
 try:
@@ -80,6 +85,45 @@ def _has_plausible_pixel_scale(ww, max_arcsec=10.0):
     scales = np.abs(proj_plane_pixel_scales(cel)) * 3600.0
     return bool(np.all(np.isfinite(scales)) and np.all(scales < max_arcsec)
                 and np.all(scales > 0))
+
+
+class _CutoutOriginGriddedPSF(GriddedPSFModel):
+    """A detector-position ``GriddedPSFModel`` read in cutout coordinates.
+
+    The satstar fits run on ``data[y0:y1, x0:x1]`` with ``x_0``/``y_0`` in
+    cutout pixels, and ``GriddedPSFModel`` picks and interpolates its nodes
+    from ``x_0``/``y_0``.  Evaluated directly, every star got the PSF of
+    detector pixel ~(81, 81), the lower-left node, wherever it was (#1055).
+    This adds the cutout origin before the grid sees the position, so the
+    node matches the star's detector position while every coordinate the
+    caller handles stays in cutout pixels.  Build it with
+    :func:`psf_in_cutout_coords`."""
+
+    def evaluate(self, x, y, flux, x_0, y_0):
+        xoff, yoff = self._cutout_xoff, self._cutout_yoff
+        return super().evaluate(np.asarray(x, dtype=float) + xoff,
+                                np.asarray(y, dtype=float) + yoff,
+                                flux, x_0 + xoff, y_0 + yoff)
+
+
+def psf_in_cutout_coords(psf_grid, x0, y0):
+    """``psf_grid`` evaluated in the frame of a cutout whose pixel (0, 0) is
+    detector pixel (``x0``, ``y0``).
+
+    ``GriddedPSFModel.copy`` copies only the parameters, so the returned model
+    shares the grid data and the interpolator cache with ``psf_grid`` (one
+    rebuilt per source would cost ~25 s on an LW fovp1024 grid).  Any other
+    PSF model has no position dependence and is returned unchanged."""
+    if not isinstance(psf_grid, GriddedPSFModel):
+        return psf_grid
+    if isinstance(psf_grid, _CutoutOriginGriddedPSF):
+        x0 = x0 + psf_grid._cutout_xoff
+        y0 = y0 + psf_grid._cutout_yoff
+    model = psf_grid.copy()
+    model.__class__ = _CutoutOriginGriddedPSF
+    model._cutout_xoff = float(x0)
+    model._cutout_yoff = float(y0)
+    return model
 
 
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
@@ -876,6 +920,39 @@ def _env_switch(name, default, env=None):
         f"({'on' if default else 'off'})")
 
 
+def nircam_lock_min_area_px(fitsdata, env=None):
+    """Saturated area (pixels) at and above which ``NIRCAM_SATSTAR_LOCK_POS``
+    locks a satstar's position; 0 means every source is locked (the behaviour
+    before this gate existed).
+
+    ``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2`` (default 0) gives the threshold in
+    arcsec^2.  It is converted with the frame's pixel area (SCI ``PIXAR_A2``,
+    else the WCS pixel scales), so one value serves SW and LW frames.
+
+    The lock was introduced for large cores whose DQ-saturated extent changes
+    from frame to frame (W51 darkfil F480M: 370-659 LW px, 1.5-2.6 arcsec^2);
+    for those the raw mask centre of mass is the stable seed.  Compact stellar
+    cores are better served by the refined centroid and a bounded fit.  On wd2
+    F150W the raw centre of mass sits a median 0.21-0.27 px from the dolphot
+    positions; the refined seed plus the 1.5 FWHM bounded fit lands within
+    0.03-0.08 px of dolphot (and ~0.1 px of Gaia) for cores up to ~1 arcsec^2.
+    Above ~1 arcsec^2 the bounded fit moved 2-3 px off Gaia for 3 of 4 cores.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2')
+    min_as2 = float(raw) if raw is not None and str(raw).strip() else 0.0
+    if not min_as2 > 0:
+        return 0.0
+    pixar = None
+    if 'SCI' in fitsdata:
+        pixar = fitsdata['SCI'].header.get('PIXAR_A2')
+    if pixar is None or not float(pixar) > 0:
+        from astropy.wcs.utils import proj_plane_pixel_scales
+        scales = np.abs(proj_plane_pixel_scales(frame_wcs(fitsdata).celestial)) * 3600.0
+        pixar = float(scales[0] * scales[1])
+    return min_as2 / float(pixar)
+
+
 def _zeroframe_fit_enabled(env=None):
     """``SATSTAR_ZEROFRAME_FIT`` (default ON): anchor the satstar fit on the
     ramp first read wherever a sibling ``_ramp.fits`` exists.
@@ -904,10 +981,15 @@ def satstar_fit_switches(env=None):
       observed-peak second chance reads the crf values, not the rewrite.
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
-      (1.0): qfit over the disk r < R around the fit ('qfit_local' column),
-      used by the NIRCam fit-quality gate in place of the box qfit when the
-      gate is on, for components carrying SATURATED DQ only
-      (``satstar_qfit_for_gate``).
+      (5.0, the box qfit cap): qfit over the disk r < R around the fit
+      ('qfit_local' column), used by the NIRCam fit-quality gate in place of
+      the box qfit when the gate is on, for components carrying SATURATED DQ
+      only (``satstar_qfit_for_gate``).  ``qfit_local`` sums |residual| over
+      the ~300 px disk and divides by the star's flux, so on bright nebula the
+      background structure alone lifts it above 1 for a 16-18 mag star.  On
+      wd2 F150W nrcb3 (#1058), the 13-19 mag rows that failed only this test
+      at 1.0 and had 1 <= qfit_local < 5 all matched a dolphot star (61 of 61,
+      51 within 0.3 mag); at qfit_local >= 5, 9 of 17 had no counterpart.
     """
     env = os.environ if env is None else env
     qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
@@ -919,7 +1001,7 @@ def satstar_fit_switches(env=None):
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
-        'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 1.0),
+        'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
     }
 
 
@@ -1234,6 +1316,99 @@ def zeroframe_fit_anchor(data, dq, zeroframe):
     return data, None, rim, None
 
 
+def recovered_cap_region(own_component, own_deep_core, own_deep_core_expanded):
+    """Pixels the NIRCam recovered-core cap (``NIRCAM_SATSTAR_RECOVERED_CAP``)
+    reads for one source, all as cutout-shaped boolean arrays.
+
+    The cap bounds the model peak by the brightest measured pixel of THIS
+    star.  Other sources' saturated cores in the cutout must not enter: they
+    hold model-subtracted residuals or clipped values, so a weakly saturated
+    star read against them was capped to ~1% of its flux and then rejected by
+    the fit-quality gate (wd2 F150W, 2026-10).
+
+    * ``own_deep_core`` non-empty: the dilated own deep core
+      (``own_deep_core_expanded``), whose recovered ring is the measured core.
+    * ``own_deep_core`` empty (weakly saturated: the ZEROFRAME anchor
+      recovered every SATURATED pixel, or ``SATSTAR_ZF_KEEP_FINITE`` kept
+      them): the source's own saturated component, which then holds its
+      measured core.
+    """
+    if own_deep_core.any():
+        return own_deep_core_expanded
+    return own_component
+
+
+def recovered_core_peak(cutout, region, unrecoverable, max_lost=0.2, min_px=3):
+    """Brightest measured pixel of ``region`` for the recovered-core cap.
+
+    Returns ``(peak, lost_frac, n_rec)``.  ``lost_frac`` is the fraction of
+    ``region`` flagged ``unrecoverable``; ``n_rec`` counts its finite, positive,
+    recoverable pixels.  ``peak`` is NaN (cap skipped) when ``lost_frac`` is at
+    least ``max_lost`` (a deeply saturated star's recovered ring sits far below
+    its true peak) or fewer than ``min_px`` pixels remain.
+    """
+    nreg = int(region.sum())
+    lost_frac = int((region & unrecoverable).sum()) / nreg if nreg else 1.0
+    rec = region & ~unrecoverable & np.isfinite(cutout) & (cutout > 0)
+    n_rec = int(rec.sum())
+    if lost_frac >= max_lost or n_rec < min_px:
+        return np.nan, lost_frac, n_rec
+    return float(np.nanmax(cutout[rec])), lost_frac, n_rec
+
+
+def recovered_cap_flux(cutout, region, unrecoverable, psf_unit):
+    """Flux bound of the NIRCam recovered-core cap.
+
+    ``psf_unit`` is the unit-flux PSF evaluated at the fit position on the
+    cutout grid.  Returns ``(cap, psf_frac)``, or NaNs when no pixel of
+    ``region`` is measured or the PSF is not positive where it is read.
+
+    A pixel of ``region`` is measured when it is finite and not
+    ``unrecoverable``, whatever its sign.
+
+    Let ``p`` be the measured pixel where the model is brightest (nearest its
+    peak).
+
+    * ``p`` is the model's peak pixel (the maximum of ``psf_unit``):
+      ``cap = max(measured) / max(psf_unit)``, the brightest measured pixel
+      bounds the model peak (``psf_frac`` = 1).  Reading the maximum over the
+      region, rather than the data at the model's peak pixel, tolerates a fit
+      position a fraction of a pixel off the star.
+    * ``cutout[p]`` is at or below zero: the same bound.  This is a refit of
+      a star whose model was already subtracted, so the data nearest the
+      model peak are a residual.  The positive pixels further out are
+      residuals too, read where the PSF is near zero, and bound nothing.
+    * Otherwise the star's peak is unmeasured (deep core) or lies outside
+      ``region``, and the model must not exceed the data at ``p``:
+      ``cap = cutout[p] / psf_unit[p]``, with
+      ``psf_frac = psf_unit[p] / max(psf_unit)``.  The brightest measured
+      pixel can belong to a neighbour that shares the region; the model of
+      this star is faint there and does not bound its flux.
+
+    Dividing a pixel away from the star by the PSF peak cut wd2 F150W stars
+    to a fraction of their flux: 14.5 mag stars whose group-0-saturated
+    pixels enter the deep core (6.9e6 -> 8.3e4, a recovered ring read against
+    the PSF peak with 19% of the region lost), and a 16 mag star whose deep
+    core was one dead pixel 3 px from its peak (1.2 mag).
+    """
+    measured = region & ~unrecoverable & np.isfinite(cutout)
+    rec = measured & (cutout > 0)
+    if not rec.any() or not np.isfinite(psf_unit).any():
+        return np.nan, np.nan
+    ppk = float(np.nanmax(psf_unit))
+    if not ppk > 0:
+        return np.nan, np.nan
+    ipk = np.unravel_index(np.nanargmax(psf_unit), psf_unit.shape)
+    psf_meas = np.where(measured & np.isfinite(psf_unit), psf_unit, -np.inf)
+    iy, ix = np.unravel_index(np.argmax(psf_meas), cutout.shape)
+    if measured[ipk] or not cutout[iy, ix] > 0:
+        return float(np.max(cutout[rec])) / ppk, 1.0
+    pp = float(psf_unit[iy, ix])
+    if not (np.isfinite(pp) and pp > 0):
+        return np.nan, np.nan
+    return float(cutout[iy, ix]) / pp, pp / ppk
+
+
 def satstar_observed_peak(cutout, mask, rewrite_delta=None):
     """Brightest unmasked pixel of a satstar cutout (the implied-peak gate's
     observed-peak second chance).  ``rewrite_delta`` (the matching cutout of
@@ -1528,6 +1703,52 @@ def stamp_seed_kinds(source_records, seed_kinds):
                        seed_kinds[lbl] if 0 <= lbl < len(seed_kinds)
                        else 'dqsat')
     return source_records
+
+
+def _set_position_fixed(model, fixed):
+    """Fix (lock) or free a PSF model's ``x_0``/``y_0``.
+
+    The satstar loop fits every source with the SAME PSF grid object, so a
+    lock set for one source persists into the next unless it is cleared.
+    Under the size-gated lock (``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2``) the
+    first source fitted is the largest core and is locked; without the reset
+    every smaller source after it inherited the lock (wd2 F150W nrcb1: all
+    803 refined seeds came back with x_fit == x_init).
+    """
+    model.x_0.fixed = bool(fixed)
+    model.y_0.fixed = bool(fixed)
+
+
+def _nircam_position_locked(*, is_miri, lock_pos, lock_min_px, sat_area):
+    """Whether a NIRCam satstar is fitted flux-only at its seed.
+
+    ``lock_pos`` is ``NIRCAM_SATSTAR_LOCK_POS``.  With the size gate off
+    (``lock_min_px <= 0``) it locks every NIRCam source; with the gate on
+    (``nircam_lock_min_area_px``) only components with
+    ``sat_area >= lock_min_px``.  A source without a ``sat_area`` follows the
+    lock.  MIRI is never locked here; its own bounded/unbounded switch applies.
+    """
+    if is_miri or not lock_pos:
+        return False
+    if lock_min_px <= 0 or sat_area is None:
+        return True
+    return int(sat_area) >= lock_min_px
+
+
+def _lock_gated_coms(coms, data, sources, saturated, min_px,
+                     unrecoverable=None):
+    """Seeds for a size-gated NIRCam position lock
+    (``NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2``, see ``nircam_lock_min_area_px``).
+
+    Components with ``sat_area >= min_px`` keep the raw mask centre of mass,
+    which is the stable seed the lock needs; the others get the refined
+    centroid from ``_refine_coms_by_data``.  Returns the seeds and the number of
+    components kept on the raw centre of mass.
+    """
+    areas = np.atleast_1d(sum_labels(saturated, sources, np.arange(len(coms)) + 1))
+    refined = _refine_coms_by_data(coms, data, sources, unrecoverable=unrecoverable)
+    seeds = [c if a >= min_px else r for c, r, a in zip(coms, refined, areas)]
+    return seeds, int(np.sum(areas >= min_px))
 
 
 def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
@@ -2490,8 +2711,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # centre-of-mass, because that is stable across frames (~0.13") while the
     # refined one follows this frame's saturation extent and wanders ~0.6" --
     # the lock needs a consistent seed, not a per-frame-accurate one.
-    if not int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)):
+    # NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2 limits the lock to large cores
+    # (nircam_lock_min_area_px); smaller ones take the refined seed and the
+    # bounded fit below.
+    _lock_pos = bool(int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+    _lock_min_px = nircam_lock_min_area_px(fitsdata) if _lock_pos else 0.0
+    if not _lock_pos:
         coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
+    elif _lock_min_px > 0 and len(coms):
+        coms, _n_locked = _lock_gated_coms(coms, data, sources, saturated,
+                                           _lock_min_px,
+                                           unrecoverable=_unrecoverable)
+        print(f"NIRCam-ext: position lock limited to sat_area >= "
+              f"{_lock_min_px:.0f} px ({_n_locked} of {len(coms)} components); "
+              f"the rest use the refined seed", flush=True)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
@@ -2891,9 +3124,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         if not (np.isfinite(yf) and np.isfinite(xf)):
             print(f"Source {ii+1}: center_of_mass returned NaN or infinite values ({yf}, {xf}); skipping", flush=True)
             continue
+        # xcen/ycen (integer) only place the cutout window; the PSF seed and
+        # the position bounds use the float xf/yf.  Seeding at the rounded
+        # pixel put a locked (NIRCAM_SATSTAR_LOCK_POS) model up to 0.7 px off
+        # the star: on wd2 the locked fits sat a median 0.4-0.45 px from the
+        # dolphot positions, and the flux error grew with that offset from
+        # -0.1 mag (<0.15 px) to +0.3..+0.8 mag (>0.75 px).
         ycen = int(round(yf))
         xcen = int(round(xf))
-        _vprint(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
+        _vprint(f"Source {ii+1}: center at (x, y) = ({xf:.2f}, {yf:.2f}), forced={forced_source}")
 
         if forced_source:
             # Cross-frame reconciliation may have flagged this off-field star as
@@ -2901,7 +3140,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # Skip it entirely so it contributes no (fake-background) model.
             if flux_drops:
                 try:
-                    _wpos_drop = ww.pixel_to_world(xcen, ycen)
+                    _wpos_drop = ww.pixel_to_world(xf, yf)
                     _dropped = any(
                         _wpos_drop.separation(_dsc).arcsec < 1.5 for _dsc in flux_drops)
                 except Exception:
@@ -2928,7 +3167,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if (_is_miri and seed_gate_image is not None
                     and seed_gate_wcs is not None):
                 try:
-                    _scov = ww.pixel_to_world(xcen, ycen)
+                    _scov = ww.pixel_to_world(xf, yf)
                     _cxg, _cyg = seed_gate_wcs.world_to_pixel(_scov)
                     _cxi, _cyi = int(round(float(_cxg))), int(round(float(_cyg)))
                     _gny2, _gnx2 = seed_gate_image.shape
@@ -2971,11 +3210,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # Allow the unclipped offset so the PSF is correctly initialised at its
         # true (possibly negative) position in cutout coordinates.
         if forced_source:
-            x_init = float(xcen - x0)
-            y_init = float(ycen - y0)
+            x_init = float(xf - x0)
+            y_init = float(yf - y0)
         else:
-            x_init = float(np.clip(xcen - x0, 0, max(0, cutout.shape[1] - 1)))
-            y_init = float(np.clip(ycen - y0, 0, max(0, cutout.shape[0] - 1)))
+            x_init = float(np.clip(xf - x0, 0, max(0, cutout.shape[1] - 1)))
+            y_init = float(np.clip(yf - y0, 0, max(0, cutout.shape[0] - 1)))
         init_params['x'] = [x_init]
         init_params['y'] = [y_init]
         # PSFPhotometry derives flux_init from aperture photometry by default.
@@ -3082,12 +3321,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # how much core is masked -- see _wing_selfcal)
             _wingcal_rmask = float(np.sqrt(
                 max(int(this_source_sat_expanded.sum()), 1) / np.pi))
+            # region the NIRCam recovered-core cap reads: this source only
+            _cap_region = recovered_cap_region(
+                sources[y0:y1, x0:x1] == src_label, this_source_sat,
+                this_source_sat_expanded)
         else:
             # Forced sources or no src_label: fall back to dilating the
             # whole saturated mask (legacy behaviour).
             satmask_combined = binary_dilation(saturated_mask,
                                                iterations=effective_buffer)
             _wingcal_rmask = np.nan   # forced/off-FOV: no wing self-cal
+            _cap_region = satmask_combined
         # NB: np.logical_or takes only TWO array operands; a 3rd positional arg
         # is interpreted as ``out``.  The previous
         # ``np.logical_or(cutout==0, np.isnan(cutout), satmask_combined)`` therefore
@@ -3155,6 +3399,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     "forced_source=True but big_grid_large is None — "
                     "earlier require-large-PSF check should have raised."
                 )
+            # cutout-coordinate view of the detector-position grid (#1055)
+            _forced_psf = psf_in_cutout_coords(big_grid_large, x0, y0)
             FORCED_SHIFT_RADIUS = int(forced_grid_search_radius)  # pixels, per-axis (0 = single-point flux-only fit at seed)
             FORCED_SIGMA_CLIP = 3.0
             FORCED_CLIP_ITERS = 3
@@ -3164,7 +3410,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # Background sigma from cutout edges — used for chi^2 metric
             # and for sigma-clipping.  Evaluate PSF at seed once just to
             # define the "background" region (where PSF is negligible).
-            psf_center = big_grid_large(xx - x_init, yy - y_init)
+            psf_center = _forced_psf.evaluate(xx, yy, 1.0, x_init, y_init)
             if psf_center.shape != cutout.shape:
                 raise RuntimeError(
                     f"PSF eval shape {psf_center.shape} != cutout shape "
@@ -3209,7 +3455,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             _ovr_flux = None
             if flux_overrides:
                 try:
-                    _wpos = ww.pixel_to_world(xcen, ycen)
+                    _wpos = ww.pixel_to_world(xf, yf)
                     for _osc, _of in flux_overrides:
                         if np.isfinite(_of) and _wpos.separation(_osc).arcsec < 1.5:
                             _ovr_flux = float(_of)
@@ -3227,8 +3473,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             max_psf_inframe = 0
             for dy in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
                 for dx in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
-                    psf_try = big_grid_large(xx - (x_init + dx),
-                                             yy - (y_init + dy))
+                    psf_try = _forced_psf.evaluate(xx, yy, 1.0, x_init + dx,
+                                                   y_init + dy)
                     psf_hot = psf_try > psf_thresh
                     max_psf_inframe = max(max_psf_inframe, int(psf_hot.sum()))
                     usable = (~mask) & np.isfinite(cutout) & psf_hot
@@ -3275,7 +3521,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # we keep the geometry (PSF at the seed) but force the trusted flux,
             # so the rendered wings carry the correct amplitude into this frame.
             if _ovr_flux is not None:
-                psf_seed = big_grid_large(xx - x_init, yy - y_init)
+                psf_seed = _forced_psf.evaluate(xx, yy, 1.0, x_init, y_init)
                 usable = ((~mask) & np.isfinite(cutout) & (psf_seed > psf_thresh))
                 n_use = int(usable.sum())
                 if n_use >= 10:
@@ -3356,7 +3602,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # oversub_clamp_scale, never silent.
             _oversub_scale = 1.0
             if forced_source and np.isfinite(flux_fit_val) and flux_fit_val > 0:
-                _pmod = big_grid_large(xx - x_fit_val, yy - y_fit_val) * flux_fit_val
+                _pmod = _forced_psf.evaluate(xx, yy, flux_fit_val, x_fit_val, y_fit_val)
                 _foot = (~mask) & np.isfinite(cutout) & (_pmod > 5.0 * sigma)
                 _nf = int(_foot.sum())
                 if _nf >= 10:
@@ -3426,7 +3672,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                 and big_grid_large is not None
                                 and src_sat_area is not None
                                 and int(src_sat_area) >= _SAT_AREA_LARGE)
-            _infov_psf = big_grid_large if _use_large_infov else big_grid
+            # Evaluated in cutout coordinates at the star's DETECTOR position:
+            # the grid's nodes are detector positions (#1055).
+            _infov_psf = psf_in_cutout_coords(
+                big_grid_large if _use_large_infov else big_grid, x0, y0)
             _psf_for_fit = _infov_psf
             # ADAPTIVE fit footprint (opt-in): scale the PSFPhotometry ``fit_shape``
             # to THIS star's saturated-core radius instead of the global ``size``.
@@ -3484,14 +3733,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # bound) also keeps flux_err finite -- the NaN flux_err came from a
             # near-singular 2D position covariance, not from a 1D flux fit.
             # NIRCAM_SATSTAR_LOCK_POS; supersedes the bound above.
-            _nc_lock = (not _is_miri
-                        and int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+            _nc_lock = _nircam_position_locked(
+                is_miri=_is_miri, lock_pos=_lock_pos,
+                lock_min_px=_lock_min_px, sat_area=src_sat_area)
             if (_is_miri and not _miri_bounded) or _nc_lock:
                 # hard lock: fit flux only at the seed (MIRI legacy / NIRCam ext)
-                model.x_0.fixed = True
-                model.y_0.fixed = True
+                _set_position_fixed(model, True)
                 print(f"{'MIRI' if _is_miri else 'NIRCam-ext'}: locked satstar "
-                      f"position to seed (x={xcen}, y={ycen}); fitting flux only",
+                      f"position to seed (x={xf:.2f}, y={yf:.2f}); fitting flux only",
                       flush=True)
             else:
                 # Bounded position fit.  The bound must stay >=1.5 FWHM: tighter
@@ -3502,16 +3751,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # becomes a multi-peak smear -- the same failure MIRI fixed by
                 # dropping it.  NIRCAM_SATSTAR_TIGHT_BOUND drops it here too;
                 # default keeps it for star-dominated fields.
+                _set_position_fixed(model, False)
                 _nc_tight = (not _is_miri
                              and int(os.environ.get('NIRCAM_SATSTAR_TIGHT_BOUND', 0)))
                 if _is_miri or _nc_tight:
                     pos_bound = 1.5 * fwhm_pix
                 else:
                     pos_bound = max(size_saturated, 1.5 * fwhm_pix)
-                low_x  = xcen - x0 - pos_bound
-                high_x = xcen - x0 + pos_bound
-                low_y  = ycen - y0 - pos_bound
-                high_y = ycen - y0 + pos_bound
+                low_x  = x_init - pos_bound
+                high_x = x_init + pos_bound
+                low_y  = y_init - pos_bound
+                high_y = y_init + pos_bound
                 for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
                     if not hasattr(model, pname):
                         raise AttributeError(
@@ -3595,6 +3845,63 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             log.warning("pixel_to_world did not return SkyCoord; setting skycoord_fit to None")
             result['skycoord_fit'] = [None] * len(result)
 
+        # HALO-MODE FLUX (opt-in, record-only; #1013).  The LW halo changes
+        # per exposure by ~10% while the spikes do not, and the masked-core
+        # fit above takes its amplitude from that halo.  Refit the same
+        # pixels with free log-r rescalings of the model's smooth halo, so
+        # the amplitude comes from the spikes, and record the ratio of the
+        # two fits.  flux_fit itself is NOT changed.  SATSTAR_HALO_MODES=1.
+        # The fit radius defaults to the photutils box half-width (40.5 px at
+        # pad=81); SATSTAR_HALO_MODES_RMAX overrides it (the cutout's reach
+        # still limits it).  NO GAIN at the production box: on 215
+        # moderately saturated stars (obs 061, production_radius.py) the
+        # dither scatter is 13.0% with the halo modes vs 12.3% without at
+        # r <= 40.5 px; the gain appears only for large cores fitted to
+        # r <= 200 px (scripts/analysis/satstar_halo_modes), and a core
+        # larger than ~rmax/1.3 leaves no halo range (ratio NaN).
+        if (int(os.environ.get('SATSTAR_HALO_MODES', 0)) and not _is_miri
+                and not forced_source and len(result)):
+            from ..photometry.satstar_halo_modes import satstar_halo_mode_ratios
+            _rmax = float(os.environ.get('SATSTAR_HALO_MODES_RMAX',
+                                         float(np.max(np.atleast_1d(_size_eff))) / 2.0))
+            _ratio = satstar_halo_mode_ratios(
+                cutout_fit, err_cutout_eff, mask, _psf_for_fit,
+                list(zip(np.asarray(result['x_fit'], float), np.asarray(result['y_fit'], float))),
+                r_core=_wingcal_rmask, rmax=_rmax)
+            result['halomodes_ratio'] = _ratio
+            result['flux_fit_halomodes'] = np.asarray(result['flux_fit'], dtype=float) * _ratio
+            print(f"  halo-mode flux ratio (rmax={_rmax:g}): {np.round(_ratio, 4).tolist()}", flush=True)
+
+        # WIDE-RADIUS HALO-MODE FLUX (opt-in, record-only; #1013 follow-up).
+        # The same refit on a 2*200+1 px stamp of the FULL frame (DQ
+        # DO_NOT_USE|SATURATED dilated 3 px masked), for cores of >= 300
+        # saturated px only.  It removes the NRCBLONG x = 250-550 column
+        # deficit that flux_fit carries (in band / outside 0.982 vs 0.884 for
+        # cores >= 300 px, 10678 F480M; scripts/analysis/satstar_halo_modes/
+        # wide_radius_production.py), at ~0.85 x the absolute scale of
+        # flux_fit (halo-defined vs spike-defined amplitude), so it is
+        # recorded beside flux_fit, never in place of it.  Smaller cores:
+        # crowding over the wide stamp makes it WORSE -> NaN.
+        # SATSTAR_HALO_MODES_WIDE=1; _RMAX / _AREA_MIN override.  The 300 px /
+        # 200 px defaults are calibrated on NRCBLONG F480M (10678) only.
+        if (int(os.environ.get('SATSTAR_HALO_MODES_WIDE', 0)) and not _is_miri
+                and not forced_source and len(result)):
+            from ..photometry.satstar_halo_modes import (
+                WIDE_AREA_MIN, WIDE_RMAX, satstar_halo_mode_ratios_wide)
+            _rmaxw = float(os.environ.get('SATSTAR_HALO_MODES_WIDE_RMAX', WIDE_RMAX))
+            _aminw = float(os.environ.get('SATSTAR_HALO_MODES_WIDE_AREA_MIN', WIDE_AREA_MIN))
+            # DETECTOR coordinates on the bare DETECTOR-position grid: not
+            # _psf_for_fit, which the main fit may wrap to take cutout
+            # coordinates (#1055 / #1060) -- the origin would be added twice
+            _ratio_w = satstar_halo_mode_ratios_wide(
+                data, err_working, dq, big_grid_large if _use_large_infov else big_grid,
+                list(zip(x_centroid, y_centroid)),
+                np.asarray(result['sat_area'], float), rmax=_rmaxw, area_min=_aminw)
+            result['halomodes_wide_ratio'] = _ratio_w
+            result['flux_fit_halomodes_wide'] = np.asarray(result['flux_fit'], dtype=float) * _ratio_w
+            print(f"  wide halo-mode flux ratio (rmax={_rmaxw:g}, area>={_aminw:g}): "
+                  f"{np.round(_ratio_w, 4).tolist()}", flush=True)
+
         # MIRI BOTTOM-UP ENVELOPE AMPLITUDE (2026-06-14).  The masked-core LSQ
         # (even on the 2D-bg-subtracted cutout) still OVER-fits some saturated
         # stars -- amplitude inflated by residual emission / wing structure ->
@@ -3610,7 +3917,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             _yy, _xx = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
             _xf = float(result['x_fit'][0]); _yf = float(result['y_fit'][0])
             # use the SAME psf the fit used (flux normalization must match)
-            _psfu = np.clip(_infov_psf(_xx - _xf, _yy - _yf), 0, None)
+            _psfu = np.clip(_infov_psf.evaluate(_xx, _yy, 1.0, _xf, _yf), 0, None)
             # Spike-weighted amplitude: the optimal flux Sum(d*p)/Sum(p^2) over
             # finite pixels outside the genuine NaN core (+4 px buffer) with
             # non-negligible PSF, 3-sigma clipped.  The p^2 weighting puts the
@@ -3845,7 +4152,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         # NIRCam extended emission: where the saturated core was RECOVERED by the
         # ramp fit, the data is not clipped, so it is the true surface brightness
-        # and a point-source model must not exceed it.  Cap the model peak to it.
+        # and a point-source model must not exceed it.  Cap the model peak to
+        # the brightest recovered pixel, or, when the star's peak pixel is
+        # not measured, the model at that pixel (recovered_cap_flux).
         # No fake-vs-real test is needed (there is no clean discriminator, and the
         # cap is right either way), but it only applies when the truly-lost
         # fraction is under NIRCAM_SATSTAR_RECOVERED_MAXLOST (0.2): a deeply
@@ -3854,28 +4163,26 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # NIRCAM_SATSTAR_RECOVERED_CAP.
         if (not _is_miri and int(os.environ.get('NIRCAM_SATSTAR_RECOVERED_CAP', 0))
                 and len(result) and np.isfinite(float(result['flux_fit'][0]))):
-            _unrec_cut = _unrecoverable[y0:y1, x0:x1]
-            _nsat = int(satmask_combined.sum())
-            _lostf = (int((satmask_combined & _unrec_cut).sum()) / _nsat
-                      if _nsat else 1.0)
             _max_lost = float(os.environ.get('NIRCAM_SATSTAR_RECOVERED_MAXLOST', 0.2))
-            _rec_core = (satmask_combined & (~_unrec_cut)
-                         & np.isfinite(cutout) & (cutout > 0))
-            if _lostf < _max_lost and int(_rec_core.sum()) >= 3:
+            _drec, _lostf, _nrec = recovered_core_peak(
+                cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _max_lost)
+            if np.isfinite(_drec):
                 _xf2 = float(result['x_fit'][0]); _yf2 = float(result['y_fit'][0])
                 _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
-                _psf2 = np.clip(_infov_psf(_xx2 - _xf2, _yy2 - _yf2), 0, None)
-                _ppk = float(np.nanmax(_psf2)) if np.isfinite(_psf2).any() else np.nan
-                if np.isfinite(_ppk) and _ppk > 0:
-                    _drec = float(np.nanmax(cutout[_rec_core]))
-                    _cap = _drec / _ppk
+                _psf2 = np.clip(_infov_psf.evaluate(_xx2, _yy2, 1.0, _xf2, _yf2), 0, None)
+                _cap, _pfrac = recovered_cap_flux(
+                    cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _psf2)
+                if np.isfinite(_cap):
                     _fc = float(result['flux_fit'][0])
                     if np.isfinite(_fc) and _fc > _cap:
                         result['flux_fit'][0] = _cap
+                        # the model where the cap reads it, before and after
+                        _pk = _pfrac * float(np.nanmax(_psf2))
                         print(f"  [nircam recovered-core cap] flux {_fc:.2e} -> "
-                              f"{_cap:.2e} (model peak {_fc*_ppk:.0f} -> {_drec:.0f} "
-                              f"vs recovered core {_drec:.0f}; lost {_lostf*100:.0f}%, "
-                              f"{int(_rec_core.sum())} rec px)", flush=True)
+                              f"{_cap:.2e} (model {_fc * _pk:.0f} -> "
+                              f"{_cap * _pk:.0f} where the PSF is {_pfrac:.2f} "
+                              f"of its peak; lost {_lostf*100:.0f}%, "
+                              f"{_nrec} rec px)", flush=True)
 
         # Same coadd-core peak cap for forced / outside-FOV sources (MIRI).  With
         # only a faint spike-less PSF corner in frame, the fit is amplitude-
@@ -3893,15 +4200,16 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 and seed_gate_wcs is not None and big_grid_large is not None
                 and len(result)):
             try:
-                _fpk = float(np.nanmax(big_grid_large(np.zeros(1), np.zeros(1))))
+                _fpk = float(np.nanmax(_forced_psf.evaluate(
+                    np.array([xf - x0]), np.array([yf - y0]), 1.0, xf - x0, yf - y0)))
                 _gny, _gnx = seed_gate_image.shape
                 for _ri in range(len(result)):
-                    # Use the SEED center (xcen,ycen = the star's TRUE projected
+                    # Use the SEED center (xf,yf = the star's TRUE projected
                     # position, possibly off this frame) NOT the fitted x_fit/y_fit:
                     # for a forced off-FOV source the cutout is clamped to the frame
                     # EDGE, so x0+x_fit maps to the coadd edge (off-coadd) -- the
                     # seed position maps to the star's real coadd core.
-                    _skyc = ww.pixel_to_world(xcen, ycen)
+                    _skyc = ww.pixel_to_world(xf, yf)
                     _gx, _gy = seed_gate_wcs.world_to_pixel(_skyc)
                     _gxi, _gyi = int(round(float(_gx))), int(round(float(_gy)))
                     # Use a min radius of 5px so the peak window reaches the
@@ -3997,13 +4305,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         "build time — earlier require-large-PSF check should have "
                         "raised already."
                     )
-                _psf_for_model = big_grid_large
+                _psf_for_model = _forced_psf
             else:
                 # in-FOV: render with the SAME psf the amplitude was fit against
                 # (big_grid_large for MIRI satstars, else big_grid) so the model
                 # flux normalization matches the fit.
                 _psf_for_model = _infov_psf
-            psf_eval = _psf_for_model(x-x_fit, y-y_fit) * flux  # works for GriddedPSFModel
+            psf_eval = _psf_for_model.evaluate(x, y, flux, x_fit, y_fit)
             # Stars are physically nonnegative.  GriddedPSFModel bicubic
             # interpolation produces small negative pixel values at large
             # offsets (interpolation overshoot between tabulated grid
@@ -4460,7 +4768,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             result['seed_kind'] = str(_seed_kind)
             # POSITION-ONLY (#925 item 3): this row's position joins the
             # cross-exposure ensemble; its flux never reaches the catalog.
-            # merge_catalogs keeps such a row out of flux_med_fit/std_flux_fit,
+            # merge_catalogs keeps such a row out of flux_med_fit,
+            # flux_median_fit (the adopted flux_fit) and std_flux_fit,
             # out of the dedup representative, and out of replace_saturated.
             result['position_only'] = bool(_position_only)
             result['sat_severity_floor'] = (float(_sev_floor)
@@ -4523,8 +4832,6 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     and int(os.environ.get('MIRI_SATSTAR_RENDER_FOOTPRINT', 1))):
                 try:
                     _wfloor = float(os.environ.get('MIRI_SATSTAR_WING_FLOOR', 5.0))
-                    _psf0 = float(_psf_for_model(np.array([0.0]),
-                                                 np.array([0.0]))[0])
                     _maxhalf = int(min(512,
                         min(_psf_for_model.data.shape[-2:])
                         // (2 * int(max(1, getattr(_psf_for_model,
@@ -4533,7 +4840,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                              result['flux_fit']):
                         if not np.isfinite(_fl):
                             continue
-                        _peak = _psf0 * float(_fl)
+                        _peak = float(_psf_for_model.evaluate(
+                            np.array([float(_xf)]), np.array([float(_yf)]),
+                            float(_fl), float(_xf), float(_yf))[0])
                         # ~r^-3 diffraction wing reaches _wfloor at this radius
                         _rh = (int(pad * (max(1.0, _peak / _wfloor)) ** (1.0 / 3.0))
                                if _peak > _wfloor else pad)
@@ -4545,8 +4854,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         _Y0 = int(max(0, _gcy - _rh)); _Y1 = int(min(data.shape[0], _gcy + _rh))
                         _X0 = int(max(0, _gcx - _rh)); _X1 = int(min(data.shape[1], _gcx + _rh))
                         _yb, _xb = np.mgrid[_Y0:_Y1, _X0:_X1]
-                        _wing = np.maximum(_psf_for_model(_xb - _gcx, _yb - _gcy)
-                                           * float(_fl), 0)
+                        _wing = np.maximum(_psf_for_model.evaluate(
+                            _xb - x0, _yb - y0, float(_fl), float(_xf), float(_yf)), 0)
                         _ext = np.ones(_wing.shape, dtype=bool)
                         _iy0 = max(_Y0, y0); _iy1 = min(_Y1, y1)
                         _ix0 = max(_X0, x0); _ix1 = min(_X1, x1)
@@ -4757,7 +5066,10 @@ def _wing_selfcal(data, err, sat_mask, psf_grid, radii, *, fwhm_pix=2.0,
         try:
             res = phot(data, error=err, mask=fmask, init_params=init)
             f = float(res['flux_fit'][0])
-            return f if np.isfinite(f) and f > 0 else np.nan
+            # A non-positive MASKED fit is a real (noisy) measurement of the
+            # wings: dropping it biases the bucket median high (#1041).  The
+            # truth fit is required to be positive by the caller.
+            return f if np.isfinite(f) else np.nan
         except Exception:
             return np.nan
 
@@ -4765,7 +5077,7 @@ def _wing_selfcal(data, err, sat_mask, psf_grid, radii, *, fwhm_pix=2.0,
     truths = {}
     for i in sel:
         truths[i] = _fit(x[i], y[i], bad, 11, False)
-    good = [i for i in sel if np.isfinite(truths[i])]
+    good = [i for i in sel if np.isfinite(truths[i]) and truths[i] > 0]
     print(f"wing-selfcal: {len(sel)} calibration star(s), {len(good)} good "
           f"truth fit(s)", flush=True)
     out = {}
@@ -4801,7 +5113,13 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
     NUMBER is biased by the model's wing deficit.  Adds columns
     ``flux_fit_raw``, ``wingcal_ratio``; divides ``flux_fit`` and
     ``flux_err`` by the per-star interpolated ratio.  Env
-    SATSTAR_WINGCAL=0 disables."""
+    SATSTAR_WINGCAL=0 disables.
+
+    Only buckets whose median has a standard error <= SATSTAR_WINGCAL_MAX_SE
+    (default 0.05) are applied, and the interpolation is anchored at
+    C(0) = 1 (see :mod:`jwst_gc_pipeline.photometry.wingcal`, #1041).  When
+    no bucket passes, the per-frame correction is skipped and the rows keep
+    ``wingcal_ratio == 1``, which leaves them to the pooled fallback."""
     if os.environ.get('SATSTAR_WINGCAL', '1') in ('0', 'false', 'False'):
         return base_tab
     if base_tab is None or 'wingcal_rmask' not in base_tab.colnames:
@@ -4838,8 +5156,24 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
         return base_tab
     rs = np.array(sorted(cal))
     vs = np.array([cal[r][0] for r in rs])
-    ratio = np.interp(np.clip(rmask, rs.min(), rs.max()), rs, vs)
-    ratio = np.where(np.isfinite(rmask), ratio, 1.0)
+    ns = np.array([cal[r][1] for r in rs])
+    mads = np.array([cal[r][2] for r in rs])
+    se = wingcal_bucket_se(mads, ns, ratio=vs,
+                           rel_floor=wingcal_rel_floor(rs, vs, mads, ns))
+    use = wingcal_passes_se_gate(se, ratio=vs)
+    low = ~use & ~(vs >= WINGCAL_MIN_RATIO)
+    for sel, why in ((~use & ~low, f"above the SE gate ({wingcal_max_se():g})"),
+                     (low, f"below the minimum ratio ({WINGCAL_MIN_RATIO:g})")):
+        if sel.any():
+            print(f"wing-selfcal: bucket(s) {why} not applied: " + "; ".join(
+                      f"r={r}px ratio={v:.3f} se={s:.3f}"
+                      for r, v, s in zip(rs[sel], vs[sel], se[sel])),
+                  flush=True)
+    if not use.any():
+        print("wing-selfcal: no bucket passes the SE gate; per-frame "
+              "application skipped", flush=True)
+        return base_tab
+    ratio = interp_wingcal_ratio(rmask, rs[use], vs[use])
     base_tab['wingcal_ratio'] = ratio
     base_tab['flux_fit'] = base_tab['flux_fit_raw'] / ratio
     if 'flux_err' in base_tab.colnames:

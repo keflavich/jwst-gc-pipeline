@@ -211,6 +211,8 @@ from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     assert_no_foreign_observation_overwrite, foreign_observation_conflict,
 )
+from jwst_gc_pipeline.photometry.epsf_hybrid import (
+    hybrid_psf_token, maybe_apply_epsf_core, psf_provenance_meta)
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -1091,7 +1093,7 @@ def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
         exposure_ = f'_exp{int(exposure_id):05d}'
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = _bgsub_token(options)
-    epsf_ = '_epsf' if options.epsf else ''
+    epsf_ = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur_ = '_blur' if options.blur else ''
     group_ = '_group' if options.group else ''
     if iteration_label is None:
@@ -2207,6 +2209,9 @@ def save_photutils_results(result, ww, filename,
     result.meta['pixscale'] = pixscale.to(u.arcsec).value
     result.meta['pixscale_as'] = pixscale.to(u.arcsec).value
     result.meta['proposal_id'] = options.proposal_id
+    # Which PSF model fitted this catalog (STPSF, or the opt-in ePSF-core hybrid):
+    # the two differ in flux by 0.4-2.4%, so a catalog must say (epsf_hybrid.py).
+    result.meta.update(psf_provenance_meta(filtername))
 
     if 'RAOFFSET' in im1[0].header:
         result.meta['RAOFFSET'] = im1[0].header['RAOFFSET']
@@ -2224,7 +2229,13 @@ def save_photutils_results(result, ww, filename,
                      ('DVACORR', 'WCSGDVA'), ('ABASERA', 'ABASERA'),
                      ('ABASEDE', 'ABASEDE'), ('ATGTRA', 'ATGTRA'),
                      ('ATGTDE', 'ATGTDE'), ('AOFFCONV', 'AOFFCONV'),
-                     ('APROVTB', 'APROVTB'), ('APROVDT', 'APROVDT')):
+                     ('APROVTB', 'APROVTB'), ('APROVDT', 'APROVDT'),
+                     # image-level roll correction (data-qa#346): a catalog fit
+                     # on rotated frames is born rotated, and the catalog-level
+                     # correction refuses it on this stamp
+                     ('ROLLCORR', 'ROLLCORR'), ('ROLLMODE', 'ROLLMODE'),
+                     ('ROLLARC', 'ROLLARC'), ('ROLLPVRA', 'ROLLPVRA'),
+                     ('ROLLPVDE', 'ROLLPVDE')):
         for _ext in (0, 1):
             if _hk in im1[_ext].header:
                 result.meta[_mk] = im1[_ext].header[_hk]
@@ -2586,6 +2597,12 @@ def get_psf_model(filtername, proposal_id, field,
                             f"last error: {type(ex).__name__}: {ex}") from ex
                     time.sleep(min(2 ** ntries, 30))
 
+        # Opt-in hybrid PSF: empirical ePSF core inside 10 px, this STPSF grid
+        # outside 12 px (photometry/epsf_hybrid.py, issue #1007).  A no-op --
+        # the same grid object -- unless PSF_EPSF_CORE_DIR is set.
+        if instrument == 'NIRCam':
+            grid = maybe_apply_epsf_core(grid, _cache_detector, filtername, program=proposal_id)
+
         if use_grid:
             # to_griddedpsfmodel returns a LIST (one grid per detector) for
             # module='merged'; downstream wants a single grid.
@@ -2652,7 +2669,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     # Mirror _bgsub_token: the iter3-residual-bg run appends _resbgsub after
     # _bgsub so this glob finds the residuals do_photometry_step wrote.
     bgsub_ = ('_bgsub' if bgsub else '') + ('_resbgsub' if resbgsub else '')
-    epsf_ = '_epsf' if epsf else ''
+    epsf_ = ('_epsf' if epsf else '') + hybrid_psf_token()
     blur_ = '_blur' if blur else ''
     group_ = '_group' if group else ''
     iter_ = _iteration_token(iteration_label)
@@ -2686,6 +2703,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         '_bgsub': bgsub,
         '_resbgsub': resbgsub,
         '_epsf': epsf,
+        '_hybpsf': bool(hybrid_psf_token()),
         '_blur': blur,
         '_group': group,
     }
@@ -3222,7 +3240,7 @@ def _build_cutout_model_i2d(cut_bp, filtername, proposal_id, field, module,
     inst_token = _inst_token(filtername)
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
-    epsf = '_epsf' if options.epsf else ''
+    epsf = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur = '_blur' if options.blur else ''
     group = '_group' if options.group else ''
     iter_ = _iteration_token(iteration_label)
@@ -3985,7 +4003,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     bgsub_tok = _bgsub_token(options)
     iter_tok = _iteration_token(iteration_label)
     desat_tok = '_unsatstar' if options.desaturated else ''
-    epsf_tok = '_epsf' if options.epsf else ''
+    epsf_tok = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur_tok = '_blur' if options.blur else ''
     group_tok = '_group' if options.group else ''
     # Land the residual AND model mosaics on the EXACT grid of the _data_i2d so
@@ -4205,7 +4223,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     desat_tok = '_unsatstar' if options.desaturated else ''
     bgsub_tok = _bgsub_token(options)
     blur_tok = '_blur' if options.blur else ''
-    epsf_tok = '_epsf' if options.epsf else ''
+    epsf_tok = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     group_tok = '_group' if options.group else ''
     product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
@@ -4314,6 +4332,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       type=int,
                       help="footprint size in px for modelsub_bkg (default 3, "
                            "Jay Anderson JWST1PASS convention); forced odd")
+    parser.add_option("--residual-bg-median-size", dest="manual_residual_bg_median_size",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_median_size'],
+                      type=int,
+                      help="median-filter box in i2d px for the source-masked "
+                           "smoothed-residual background subtracted in the next "
+                           "phase (default 3); 0 = 7 x FWHM rounded up to odd")
+    parser.add_option("--residual-bg-satstar-mask-fwhm",
+                      dest="manual_residual_bg_satstar_mask_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_satstar_mask_fwhm'],
+                      type=float,
+                      help="mask the phase's per-frame satstar fit positions at "
+                           "this radius (FWHM) in the residual background "
+                           "(default 0 = off).  3.75 recommended when "
+                           "DAOPHOT_HANDOFF_UNACCEPTED_SAT is on (wd2 F150W: "
+                           "hand-off stars dm -0.03 vs control -0.035, was "
+                           "+0.05..+0.13 too faint); >~5 breaks the "
+                           "interpolation (12 px hole: -0.12..-0.16)")
     parser.add_option("--manual-iterations", dest="manual_iterations",
                     default=True, action='store_true',
                     help=("Use the default PSF photometry pipeline "
@@ -4946,6 +4981,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'out into 5 independent per-filter jobs; '
                             'scripts/reduction/m8_merge_partials.py column-merges '
                             'them into the final ..._resbgsub_m8.fits.'))
+    parser.add_option('--no-m8-spike-flag', dest='m8_spike_flag',
+                      default=True, action='store_false',
+                      help=('Skip the diffraction-spike artifact flag columns '
+                            '(spike_wedge, single_band_crowd, spike_artifact, '
+                            'n_real_bands) added to the m8_dedup catalog '
+                            '(spike_flag.flag_m8_spike_artifacts).  Env '
+                            'M8_SPIKE_FLAG=0 also disables.  Rows are never removed.'))
     parser.add_option('--no-m8-dedup', dest='m8_dedup',
                       default=True, action='store_false',
                       help=('Skip the post-m8 split-source de-duplication '

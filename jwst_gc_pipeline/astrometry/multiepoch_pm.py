@@ -617,6 +617,14 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
     out['pm_ra_err'] = np.hypot(src['ex'][selidx], ref['ex'][idx][selidx]) * 1e3 / abs(dt)
     out['pm_dec_err'] = np.hypot(src['ey'][selidx], ref['ey'][idx][selidx]) * 1e3 / abs(dt)
     out['mag_src'] = src['mag'][selidx]
+    if 'sc_raw' in ref:
+        # Untied ref-frame position (the frame the Treasury HiPS/catalogs live in);
+        # ra0/dec0 are in the src frame after the per-obs affine tie.
+        raw = ref['sc_raw'][idx][selidx]
+        out['ra_ref'] = raw.ra.deg
+        out['dec_ref'] = raw.dec.deg
+        if 'obs_index' in ref:
+            out['ref_obs_index'] = np.asarray(ref['obs_index'])[idx][selidx]
 
     good_err = (np.isfinite(out['pm_ra_err']) & np.isfinite(out['pm_dec_err']) &
                 (out['pm_ra_err'] < err_cap_mas) & (out['pm_dec_err'] < err_cap_mas))

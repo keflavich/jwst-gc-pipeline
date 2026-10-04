@@ -25,7 +25,8 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    measure_offset, same_star_region_map, DEFAULT_REGION_CELL_ARCSEC)
+    measure_offset, same_star_region_map, DEFAULT_REGION_CELL_ARCSEC,
+    DEFAULT_REGION_MIN_STARS)
 from jwst_gc_pipeline.photometry import visit_consensus as _vc
 from jwst_gc_pipeline.photometry.visit_consensus import measure_reference_tie
 
@@ -70,6 +71,27 @@ def _tie(a, ref):
     return res
 
 
+def _rectangular_field(n_common=3000, n_ref_only=4000, width=145.3, height=356.1,
+                       scatter_mas=40.0, tie_mas=(15.0, -8.0), seed=21):
+    """Like ``_field`` but RECTANGULAR, not square -- o084 F212N's own
+    consensus-catalog extent (145.3" x 356.1", the geometry
+    ``test_o084_like_extent_has_no_sliver_edge_column`` in
+    ``test_footprint_aligned_grid.py`` reproduces) is nowhere near a multiple
+    of ``DEFAULT_REGION_CELL_ARCSEC`` (45"), which is exactly the shape the
+    plain grid slivers and the footprint-aligned grid does not."""
+    rng = np.random.RandomState(seed)
+    x = (rng.rand(n_common) - 0.5) * width
+    y = (rng.rand(n_common) - 0.5) * height
+    rx = x + rng.randn(n_common) * scatter_mas / 1000.0
+    ry = y + rng.randn(n_common) * scatter_mas / 1000.0
+    ox = (rng.rand(n_ref_only) - 0.5) * (width + 30.0)
+    oy = (rng.rand(n_ref_only) - 0.5) * (height + 30.0)
+    ref = _sky(np.concatenate([rx, ox]), np.concatenate([ry, oy]))
+    x = x - tie_mas[0] / 1000.0
+    y = y - tie_mas[1] / 1000.0
+    return x, y, ref
+
+
 def test_clean_field_gives_a_measurable_clean_region_map():
     x, y, ref = _field()
     a = _sky(x, y)
@@ -80,9 +102,45 @@ def test_clean_field_gives_a_measurable_clean_region_map():
     assert m["clean"] is True, m["reason"]
 
 
+def test_o084_like_field_uses_the_aligned_grid_by_default():
+    """Pin M1 (PR #989 review): nothing else pins ``align_to_footprint``'s
+    production default.  Reverting it to ``False`` left the 21-test suite
+    green.  On the o084-like extent (145.3" x 356.1", not a multiple of the
+    45" cell -- see ``test_o084_like_extent_has_no_sliver_edge_column`` in
+    ``test_footprint_aligned_grid.py``) a caller that does NOT pass
+    ``align_to_footprint`` must still get the footprint-aligned grid, with no
+    sliver edge cell."""
+    x, y, ref = _rectangular_field()
+    a = _sky(x, y)
+    m = same_star_region_map(a, ref, _tie(a, ref), context="o084-like")
+    assert m["measurable"] is True, m["reason"]
+    assert m["grid_aligned"] is True, m
+    counts = np.array([c["n"] for c in m["cells"]], dtype=float)
+    med = float(np.median(counts))
+    assert counts.min() >= 0.5 * med, (sorted(c["n"] for c in m["cells"]), med)
+
+
 def test_seam_inside_the_match_radius_is_flagged():
     """brick-1182 F200W class: a ~90 mas residual confined to one strip, which
-    a rigid tie cannot remove and a field-pooled number averages away."""
+    a rigid tie cannot remove and a field-pooled number averages away.
+
+    The exact ``worst_off_mas`` this strip produces depends on where the
+    footprint-aligned grid's cell boundaries happen to fall relative to the
+    ``y > 40`` cut (issue #989: cells are now sized to divide THIS field's own
+    fitted extent evenly, ~39.8-39.9" here rather than the plain grid's fixed
+    45"), so the assertion is against the tolerance the map itself measured
+    and reported, not a number pinned to one grid's specific cell layout --
+    the seam must clear ITS OWN tolerance, whatever that tolerance is.
+
+    Measured directly on this field (PR #989 review): the aligned grid
+    (39.9" x 39.8" cells) reads ``worst_off_mas`` 36.0 mas against this field's
+    own plain 45" grid reading 61.5 mas -- both well above the 30.0 mas
+    tolerance floor, both ``n_flagged=3``.  The margin drops from 31.5 mas to
+    6 mas because the aligned cell boundary straddles the strip differently,
+    which is grid PHASE, not a regression: the old fixed grid could straddle a
+    real seam the same way.  The seam stays caught either way, which is why
+    the assertion below is against the tolerance the map itself measured, not
+    a number pinned to one grid's layout."""
     x, y, ref = _field()
     strip = y > 40.0
     y = y.copy()
@@ -92,7 +150,7 @@ def test_seam_inside_the_match_radius_is_flagged():
     assert m["measurable"] is True, m["reason"]
     assert m["n_flagged"] >= 1, m
     assert m["clean"] is False
-    assert m["worst_off_mas"] > 60.0, m
+    assert m["worst_off_mas"] > m["tol_mas"], m
     assert "above 30.0 mas (adaptive tolerance)" in m["reason"], m["reason"]
 
 
@@ -153,15 +211,46 @@ def test_a_displaced_strip_smaller_than_a_cell_is_caught_as_a_group():
     keeps enough pairs from its undisplaced half to clear the bar, and the cells
     that ARE fully displaced predict fewer than min_stars pairs, so each was
     skipped as "not expected to be measurable".  Those cells are adjacent and
-    they all lost their pairs, so the GROUP is tested against the same bar."""
+    they all lost their pairs, so the GROUP is tested against the same bar.
+
+    ``align_to_footprint=False`` is pinned deliberately (issue #989): this test
+    is about the CONNECTED-GROUP mechanism itself, which is grid-geometry
+    agnostic, not about which grid produced the cells it operates on -- the
+    footprint-aligned grid's own even-division cell sizing for THIS field
+    (~39.8" x 46.5", not the plain grid's fixed 45" x 45") happens to give the
+    20" strip enough source deficit in a single cell to fail alone, which
+    would make this test stop exercising the group path it exists to cover.
+    The plain grid reproduces the original 45"-cell layout the test was
+    designed around."""
     x, y, ref = _field()
     y = y.copy()
     y[y > 40.0] += 20.0                 # a strip 16% of the field, 20" out
     a = _sky(x, y)
-    m = same_star_region_map(a, ref, _tie(a, ref), context="strip")
+    m = same_star_region_map(a, ref, _tie(a, ref), context="strip",
+                             align_to_footprint=False)
     assert m["measurable"] is True, m["reason"]
     assert m["n_uncovered"] >= 1, m["uncovered_cells"]
     assert any("cells" in c for c in m["uncovered_cells"]), m["uncovered_cells"]
+    assert m["clean"] is False
+    assert "displaced beyond" in m["reason"], m["reason"]
+
+
+def test_a_displaced_strip_under_the_aligned_grid_is_caught_as_a_single_cell():
+    """Aligned-grid variant of the group test above (PR #989 review).  Same
+    20"-strip geometry, default ``align_to_footprint`` (True): the
+    footprint-aligned grid's even-division cell sizing for THIS field
+    (~39.8" x 46.5", not the plain grid's fixed 45" x 45") gives the strip
+    enough source deficit in a SINGLE cell to fail alone (measured:
+    ``n_uncovered == 1``), rather than needing the connected-GROUP mechanism
+    the test above exists to cover."""
+    x, y, ref = _field()
+    y = y.copy()
+    y[y > 40.0] += 20.0                 # a strip 16% of the field, 20" out
+    a = _sky(x, y)
+    m = same_star_region_map(a, ref, _tie(a, ref), context="strip-aligned")
+    assert m["measurable"] is True, m["reason"]
+    assert m["grid_aligned"] is True, m
+    assert m["n_uncovered"] == 1, m["uncovered_cells"]
     assert m["clean"] is False
     assert "displaced beyond" in m["reason"], m["reason"]
 
@@ -381,6 +470,63 @@ def test_hidden_seam_the_sigma_cut_must_not_erase_a_flagged_cell():
     # stay flagged), and the field must never read clean.
     assert m_on["clean"] is False, m_on
     assert (m_on["n_uncovered"] >= 1 or m_on["n_flagged"] >= 1), m_on
+
+
+def test_a_thin_cell_is_recorded_low_coverage_but_never_relaxes_the_gate():
+    """Pin M4 (PR #989 review): nothing else pins the low-coverage recording.
+    A thin cell -- fewer matched pairs than the tile's own median, but not
+    displaced -- must be recorded ``low_coverage=True`` and counted in
+    ``n_low_coverage``, and turning the recording effectively off
+    (``low_coverage_fraction=0.0``, which no nonnegative fraction can ever be
+    less than) must change NOTHING about ``clean``/``n_flagged`` -- the
+    docstring's "PURELY INFORMATIONAL" claim, pinned directly rather than only
+    implied by the release-gate tests."""
+    cell = float(DEFAULT_REGION_CELL_ARCSEC)
+    n_normal = 160
+    n_thin = DEFAULT_REGION_MIN_STARS + 4   # 44: clears min_stars with a small
+                                            # margin, and 44/160 = 0.275 is
+                                            # comfortably under the 0.3 default
+                                            # REGION_LOW_COVERAGE_FRACTION bar
+    thin_cell = (1, 1)
+    rng = np.random.RandomState(13)
+    x_common, y_common, x_ref, y_ref = [], [], [], []
+    for cx in range(3):
+        for cy in range(3):
+            n = n_thin if (cx, cy) == thin_cell else n_normal
+            x0 = (cx - 1) * cell
+            y0 = (cy - 1) * cell
+            x = x0 + (rng.rand(n) - 0.5) * (cell * 0.6)
+            y = y0 + (rng.rand(n) - 0.5) * (cell * 0.6)
+            rx = x + rng.randn(n) * 5.0 / 1000.0
+            ry = y + rng.randn(n) * 5.0 / 1000.0
+            x_common.append(x); y_common.append(y)
+            x_ref.append(rx); y_ref.append(ry)
+    x = np.concatenate(x_common); y = np.concatenate(y_common)
+    rx = np.concatenate(x_ref); ry = np.concatenate(y_ref)
+    tie_mas = (12.0, -6.0)
+    a = _sky(x - tie_mas[0] / 1000.0, y - tie_mas[1] / 1000.0)
+    ref = _sky(rx, ry)
+    gr = _tie(a, ref)
+
+    m_on = same_star_region_map(a, ref, gr, cell_arcsec=cell,
+                                align_to_footprint=False,
+                                context="thin-cell-on")
+    assert m_on["measurable"] is True, m_on["reason"]
+    assert m_on["n_cells"] == 9, m_on
+    assert m_on["n_low_coverage"] >= 1, m_on
+    assert any(c["low_coverage"] for c in m_on["cells"]), m_on["cells"]
+    assert m_on["clean"] is True, m_on["reason"]
+
+    m_off = same_star_region_map(a, ref, gr, cell_arcsec=cell,
+                                 align_to_footprint=False,
+                                 low_coverage_fraction=0.0,
+                                 context="thin-cell-off")
+    assert m_off["n_low_coverage"] == 0, m_off
+    assert not any(c["low_coverage"] for c in m_off["cells"]), m_off["cells"]
+    # The only thing that changed is the RECORDING -- the gate itself (clean,
+    # n_flagged) must read identically either way.
+    assert m_on["clean"] == m_off["clean"]
+    assert m_on["n_flagged"] == m_off["n_flagged"]
 
 
 def test_measure_reference_tie_passes_sigma_through_to_the_region_map(monkeypatch):

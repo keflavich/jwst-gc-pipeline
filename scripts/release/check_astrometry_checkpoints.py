@@ -282,20 +282,40 @@ def _region_map_findings(rec):
     The record's stored thresholds are still read and reported in ``detail``
     for provenance, and a mismatch against the live constant is called out.
 
-    ``clean`` and ``not_applicable`` are not findings -- there is nothing to
-    verify -- and are left out.  ``blocking`` is reported for visibility but
-    is not itself a new refusal: an m2/m12 record that reached disk still
-    carrying a blocking region map is already covered by the existing
-    corrections/override machinery (m2 raises in place by default; a
-    continued run shows up as CORRECTIONS NEVER APPLIED or OVERRIDDEN above).
+    ``not_applicable`` is not a finding -- there is no region map at all -- and
+    is left out.  ``blocking`` is reported for visibility but is not itself a
+    new refusal: an m2/m12 record that reached disk still carrying a blocking
+    region map is already covered by the existing corrections/override
+    machinery (m2 raises in place by default; a continued run shows up as
+    CORRECTIONS NEVER APPLIED or OVERRIDDEN above).
+
+    ``clean`` normally has nothing further to verify and is left out too, but
+    is still reported, ``verified=None``, when the tile's grid carries a
+    LOW-COVERAGE cell (issue #989: ``n_low_coverage`` > 0, or the grid could
+    not be footprint-aligned at all, ``grid_aligned=False``) -- purely
+    informational, since a low-coverage cell never relaxes or fails the gate
+    on its own, but a tile that still has one after the fix is worth a human
+    look (a genuinely partial corner of an irregular footprint, or a
+    fallback that never got a rotation fit).
     """
     out = []
     for v in rec.get("visits", []):
         rm = ((v.get("reference_tie") or {}).get("region_map") or {})
         status = rm.get("status")
-        if not status or status in ("not_applicable", "clean"):
+        if not status or status == "not_applicable":
             continue
         visit = v.get("visit")
+        n_low_cov = rm.get("n_low_coverage") or 0
+        grid_aligned = rm.get("grid_aligned")
+        low_cov_note = ""
+        if n_low_cov or grid_aligned is False:
+            low_cov_note = (f", low_coverage_cells={n_low_cov}, "
+                            f"grid_aligned={grid_aligned}")
+        if status == "clean":
+            if low_cov_note:
+                out.append((visit, status, None,
+                           f"grid geometry note{low_cov_note}"))
+            continue
         if status == "recorded_nonblocking":
             n_measured = _as_float(rm.get("n_measured"))
             n_flagged = _as_float(rm.get("n_flagged"))
@@ -329,11 +349,11 @@ def _region_map_findings(rec):
                       f"({'n/a' if frac is None else f'{frac:.1%}'} <= "
                       f"{max_frac}), sigma={sigma} mas (<= {sigma_tol}), "
                       f"worst_sig_off={worst_sig} mas (<= {worst_sig_cap}), "
-                      f"n_uncovered={n_uncovered}{stale_note}")
+                      f"n_uncovered={n_uncovered}{stale_note}{low_cov_note}")
             out.append((visit, status, verified, detail))
         elif status == "blocking":
             detail = (f"n_flagged={rm.get('n_flagged')}/{rm.get('n_measured')}, "
-                      f"n_uncovered={rm.get('n_uncovered')}")
+                      f"n_uncovered={rm.get('n_uncovered')}{low_cov_note}")
             out.append((visit, status, None, detail))
         else:
             out.append((visit, status, False,
@@ -527,12 +547,24 @@ def main(argv=None):
     region_unverified = []
     region_demoted_verified = []
     region_blocking = []
+    region_clean_notes = []
     for path, info, rec in _region_records:
         for visit, status, verified, detail in _region_map_findings(rec):
             if status == "recorded_nonblocking" and verified:
                 region_demoted_verified.append((path, info, rec, visit, detail))
             elif status == "blocking":
                 region_blocking.append((path, info, rec, visit, detail))
+            elif status == "clean":
+                # A grid-geometry NOTE only (PR #989 review, BLOCKING): a
+                # low-coverage cell or a grid that could not be
+                # footprint-aligned, on an otherwise `clean` tile, never fails
+                # or relaxes this gate on its own -- see the `clean` branch of
+                # `_region_map_findings`'s docstring.  Before this split it
+                # fell into the `else` below and reached `region_unverified`,
+                # so a clean field with a thin chamfered corner, or any tile
+                # whose grid fell back, was refused with a message naming a
+                # "demotion" that never happened.
+                region_clean_notes.append((path, info, rec, visit, detail))
             else:
                 region_unverified.append((path, info, rec, visit, status, detail))
 
@@ -547,6 +579,8 @@ def main(argv=None):
              if unapplied else "")
           + (f", {len(region_demoted_verified)} region-map demotion(s) "
              f"verified" if region_demoted_verified else "")
+          + (f", {len(region_clean_notes)} region-map geometry note(s)"
+             if region_clean_notes else "")
           + (f", {len(region_unverified)} region-map demotion(s) UNVERIFIED"
              if region_unverified else ""))
     sys.stdout.flush()
@@ -555,6 +589,13 @@ def main(argv=None):
               f"({os.path.basename(path)}, {rec.get('date')}): {detail} -- "
               f"the same-star spatial gate was dirty but the bulk correction "
               f"was recorded and APPLIED per issue #965 item 2.  Non-blocking.")
+    for path, info, rec, visit, detail in region_clean_notes:
+        print(f"REGION MAP GEOMETRY NOTE {_who(info)} visit {visit}  "
+              f"({os.path.basename(path)}, {rec.get('date')}): {detail} -- "
+              f"informational only (issue #989); a low-coverage cell or a grid "
+              f"that could not be footprint-aligned never fails or relaxes "
+              f"this gate on its own.  Worth a human look if the footprint is "
+              f"irregular or the grid fell back, but it does not block.")
     for path, info, rec, visit, status, detail in region_unverified:
         print(f"\nREGION MAP DEMOTION UNVERIFIED {_who(info)} visit {visit}  "
               f"({os.path.basename(path)}, {rec.get('date')}, status={status}): "

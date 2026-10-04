@@ -38,7 +38,7 @@ come from the same-star bulk.  See CLAUDE.md and the
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord, search_around_sky
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree, ConvexHull, QhullError
 
 from jwst_gc_pipeline.photometry.reference_uncertainty import (
     weighted_median, inverse_variance_weights, weights_with_unknown_fallback)
@@ -894,7 +894,8 @@ class GlobalTieNotVerifiedError(RuntimeError):
 def local_residual_map(a, b, global_result, cell_arcsec=2.0,
                        match_radius=0.3 * u.arcsec, min_stars=10,
                        tol_mas=15.0, nsigma=3.0, context="", return_pairs=False,
-                       sigma_b_mas=None, sigma_cap_mas=None):
+                       sigma_b_mas=None, sigma_cap_mas=None,
+                       align_to_footprint=False):
     """Fine-scale (default 2"x2" cell) residual-offset map from matched pairs,
     AFTER a verified global tie.  This is the sanctioned "histogram refinement"
     class of measurement: the coarse offset is measured first with the
@@ -963,14 +964,34 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     sigma_cap_mas : float or None
         The cut threshold (mas).  ``None`` (default, only meaningful when
         ``sigma_b_mas`` is given) uses ``DEFAULT_SIGMA_CAP_MAS``.
+    align_to_footprint : bool
+        ``False`` (default, byte-identical to the pre-#989 grid): bin on the
+        plain RA/Dec-axis grid anchored at the matched pairs' own bounding
+        box.  ``True``: bin on :func:`footprint_aligned_grid` fitted to ``a``
+        (the FULL first-argument catalog, so the fit sees the mosaic's own
+        boundary rather than just the matched subset) -- a grid rotated to
+        the footprint's own angle with a cell size that divides its extent
+        evenly, so the edge row/column is a full cell rather than whatever
+        remainder is left over by a fixed step from an arbitrary origin (see
+        that function's docstring; issue #989, the gc-treasury o084 sliver-
+        column false seam).  Falls back to the plain grid, with
+        ``footprint_grid['ok']=False`` and a ``reason``, when ``a`` has too
+        few positions to fit a rotation (:data:`REGION_FOOTPRINT_ALIGN_MIN_POINTS`).
+        Only :func:`same_star_region_map` turns this on; every other caller
+        (``interframe_overlap``, ``stage_release``, ``multiepoch_pm`` -- all
+        2" cells, where a remainder sliver is a small fraction of one cell)
+        keeps the plain grid by default.
 
     Returns
     -------
     dict
         ``dict(cells=[...], n_cells, n_measured, n_pairs, n_flagged,
-        worst_off_mas, worst_sig_off_mas, clean)``, plus ``reason`` on an empty
-        map and ``pairs`` when ``return_pairs``.  ``n_pairs`` is the number of
-        UNAMBIGUOUS matched pairs the map was built from (after the sigma cut,
+        worst_off_mas, worst_sig_off_mas, clean, footprint_grid)``, plus
+        ``reason`` on an empty map and ``pairs`` when ``return_pairs``.
+        ``footprint_grid`` is ``None`` unless ``align_to_footprint=True``, in
+        which case it is the ``footprint_aligned_grid`` dict actually used
+        (``ok=False`` and a ``reason`` when the fallback fired).  ``n_pairs``
+        is the number of UNAMBIGUOUS matched pairs the map was built from (after the sigma cut,
         when one was applied).  Each cell:
         ``dict(ra0, dec0, ix, iy, n, dra_mas, ddec_mas, dra_sem, ddec_sem,
         off_mas, significant, flagged, n_cut)``.  ``clean`` is True when no
@@ -1010,6 +1031,13 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     gdra_deg = (global_result["dra"] / 3.6e6)  # on-sky mas -> deg (Δα·cosδ)
     gddec_deg = (global_result["ddec"] / 3.6e6)
 
+    # Fit the footprint-aligned grid from the FULL first-argument catalog
+    # (issue #989) before any pairing -- it describes the mosaic's own
+    # boundary regardless of how many pairs end up matching, and an empty
+    # map still reports whether/why the alignment did or did not apply.
+    footprint_grid = (footprint_aligned_grid(a, cell_arcsec)
+                      if align_to_footprint else None)
+
     def _no_pairs(n_pairs=0, reason=None):
         # A map can come back empty three ways, and `n_pairs` alone separates
         # only one of them (issue #400): the "0 pairs found" and "pairs found
@@ -1023,7 +1051,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         out = dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
                    n_pairs=n_pairs, reason=reason,
                    worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
-                   clean=False)
+                   clean=False, footprint_grid=footprint_grid)
         if return_pairs:
             empty_i = np.zeros(0, dtype=int)
             out["pairs"] = dict(ia=empty_i, ib=empty_i, ix=empty_i, iy=empty_i,
@@ -1064,12 +1092,22 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
 
     ra_deg = a[ia_n].ra.deg
     dec_deg = a[ia_n].dec.deg
-    dec_mid = float(np.median(dec_deg))
-    cell_deg_dec = cell_arcsec / 3600.0
-    cell_deg_ra = cell_arcsec / 3600.0 / max(np.cos(np.radians(dec_mid)), 1e-6)
-    r0, d0 = float(ra_deg.min()), float(dec_deg.min())
-    ix = np.floor((ra_deg - r0) / cell_deg_ra).astype(int)
-    iy = np.floor((dec_deg - d0) / cell_deg_dec).astype(int)
+    if footprint_grid is not None and footprint_grid.get("ok"):
+        # Footprint-aligned grid (issue #989): rotated to the mosaic's own
+        # angle, cell size chosen to divide its extent evenly -- see
+        # `footprint_aligned_grid`.  Cell sky centers come back from its
+        # inverse, since (ix, iy) no longer correspond to a simple RA/Dec
+        # step from (r0, d0).
+        ix, iy = assign_footprint_cells(ra_deg, dec_deg, footprint_grid)
+        _cell_ra0, _cell_dec0 = _footprint_cell_center_radec(ix, iy, footprint_grid)
+    else:
+        dec_mid = float(np.median(dec_deg))
+        cell_deg_dec = cell_arcsec / 3600.0
+        cell_deg_ra = cell_arcsec / 3600.0 / max(np.cos(np.radians(dec_mid)), 1e-6)
+        r0, d0 = float(ra_deg.min()), float(dec_deg.min())
+        ix = np.floor((ra_deg - r0) / cell_deg_ra).astype(int)
+        iy = np.floor((dec_deg - d0) / cell_deg_dec).astype(int)
+        _cell_ra0 = _cell_dec0 = None
 
     # Predicted-reference-sigma cut/weight (issue #965 item 1).  `None` keeps
     # every downstream array/branch byte-identical to the pre-#965 code path --
@@ -1111,8 +1149,13 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         off = float(np.hypot(cdra, cddec))
         sem = float(np.hypot(dra_sem, ddec_sem))
         significant = bool(sem > 0 and off > nsigma * sem)
+        if _cell_ra0 is not None:
+            cell_ra0, cell_dec0 = float(_cell_ra0[sel_all][0]), float(_cell_dec0[sel_all][0])
+        else:
+            cell_ra0 = r0 + (cx + 0.5) * cell_deg_ra
+            cell_dec0 = d0 + (cy + 0.5) * cell_deg_dec
         cells.append(dict(
-            ra0=r0 + (cx + 0.5) * cell_deg_ra, dec0=d0 + (cy + 0.5) * cell_deg_dec,
+            ra0=cell_ra0, dec0=cell_dec0,
             ix=int(cx), iy=int(cy), n=n, dra_mas=cdra, ddec_mas=cddec,
             dra_sem=dra_sem, ddec_sem=ddec_sem, off_mas=off,
             significant=significant, flagged=bool(off > tol_mas and significant),
@@ -1128,7 +1171,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
                        f"of the {len(ia_n)} unambiguous pair(s)"),
                worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
                worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
-               clean=bool(cells) and not flagged)
+               clean=bool(cells) and not flagged, footprint_grid=footprint_grid)
     if return_pairs:
         # `resid_mas` is the pair separation AFTER the verified global tie is
         # removed -- the distance from where this star should be, not from
@@ -1208,6 +1251,209 @@ REGION_TIGHT_PAIR_MAS = 50.0
 REGION_TOL_K = 3.0
 REGION_TOL_FLOOR_MAS = 30.0
 
+#: Minimum distinct positions needed to fit a footprint-aligned grid (issue
+#: #989).  A convex hull built from a handful of points hallucinates whatever
+#: rotation minimizes ITS OWN tiny bounding box, not the mosaic's -- below this
+#: the aligned grid is refused (``footprint_aligned_grid`` returns
+#: ``ok=False``) and the caller falls back to the plain RA/Dec-axis grid.  20
+#: is comfortably above ``DEFAULT_REGION_MIN_STARS`` (40 matched PAIRS is
+#: already a bare minimum for one region cell; a rotation fit from the same
+#: order of SOURCES, which the aligned grid is built from, needs no more).
+REGION_FOOTPRINT_ALIGN_MIN_POINTS = 20
+
+#: A region cell whose matched-pair count falls below this fraction of the
+#: tile's own MEDIAN cell count is recorded as ``low_coverage`` (issue #989).
+#: This is now purely INFORMATIONAL -- it does not relax the flag/tol/nsigma
+#: test for that cell, and a low-coverage cell that reads large still blocks
+#: exactly like any other.  It exists so a cell the footprint-aligned grid
+#: still leaves thin (a genuinely partial corner of an irregular mosaic, e.g.
+#: the chamfered corners measured on gc-treasury o084 -- see
+#: ``footprint_aligned_grid``) is named in the record rather than passing
+#: silently as an ordinary cell.  0.3 is the break measured across the fleet's
+#: pre-fix sliver cells (o084 46/236 = 0.19, o100 next lowest surviving
+#: sliver, both a full order below the interior cells' 0.7-1.3), replayed
+#: against every measurable ``per_tile_same_star`` cell in the live
+#: ``checkpoint_m2_*.json`` history (2026-09-27): no interior cell in that
+#: history falls below 0.3, so the bar does not fire on ordinary tile-to-tile
+#: cell-count scatter.
+REGION_LOW_COVERAGE_FRACTION = 0.3
+
+
+def _tangent_plane_xy(ra_deg, dec_deg, ra0_deg, dec0_deg):
+    """Flat-sky (arcsec) offsets from (ra0, dec0).  Valid over one mosaic's
+    footprint (a few arcmin) -- the same small-angle approximation
+    ``local_residual_map`` already uses for its own ``dra``/``ddec``."""
+    cosd0 = max(np.cos(np.radians(dec0_deg)), 1e-6)
+    x = (np.asarray(ra_deg, dtype=float) - ra0_deg) * cosd0 * 3600.0
+    y = (np.asarray(dec_deg, dtype=float) - dec0_deg) * 3600.0
+    return x, y
+
+
+def _rotate_xy(x, y, pa_deg):
+    """Rotate (x, y) arcsec offsets by ``-pa_deg`` into the (u, v) frame
+    aligned with a footprint whose minimum-bounding-rectangle angle is
+    ``pa_deg``."""
+    theta = np.radians(-pa_deg)
+    c, s = np.cos(theta), np.sin(theta)
+    return x * c - y * s, x * s + y * c
+
+
+def _inverse_rotate_uv(u, v, pa_deg):
+    """Inverse of :func:`_rotate_xy` -- (u, v) back to (x, y)."""
+    theta = np.radians(-pa_deg)
+    c, s = np.cos(theta), np.sin(theta)
+    return u * c + v * s, -u * s + v * c
+
+
+def _min_area_rotation_deg(x, y, max_hull_points=20000, seed=1182):
+    """Rotating-calipers minimum-area-bounding-rectangle angle (deg, mod 90)
+    for a 2D point cloud (arcsec).
+
+    A NIRCam mosaic footprint is a rotated rectangle (or a union of dithered
+    ones), so the angle that minimizes the AXIS-ALIGNED bounding box of its
+    own star positions recovers the mosaic's own roll angle straight from data
+    the checkpoint already has (the matched-pair/source SkyCoord list) --
+    no WCS, S_REGION, or header lookup needed, and per ASTROMETRY RULE #2
+    this never builds an `astropy.wcs.WCS`.  Standard algorithm: the minimum-
+    area bounding rectangle of a point set always has one side flush with a
+    convex-hull edge, so it suffices to test the (up to) H angles the hull's
+    own edges define and keep the one with the smallest rotated bounding-box
+    area.
+
+    Returns 0.0 (unrotated) when the cloud is degenerate for a hull (fewer
+    than 3 points, all collinear, or a coincident/near-zero-area hull) --
+    the caller must gate on ``footprint_aligned_grid``'s own ``ok``/
+    ``n_points`` check, not treat 0.0 coming back here as a confirmed axis
+    alignment.
+    """
+    pts = np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
+    if len(pts) > max_hull_points:
+        # Deterministic uniform subsample: the CONVEX HULL is a property of
+        # the outer envelope, so a subsample that still reaches every corner
+        # traces the same boundary -- the same reasoning ``_cap_stars`` uses
+        # for the offset histogram, applied to a shape instead of a density.
+        rng = np.random.default_rng(seed)
+        idx = np.sort(rng.choice(len(pts), max_hull_points, replace=False))
+        pts = pts[idx]
+    try:
+        hull = ConvexHull(pts)
+    except QhullError:
+        return 0.0
+    hv = pts[hull.vertices]
+    n = len(hv)
+    if n < 3:
+        return 0.0
+    best_area, best_angle = np.inf, 0.0
+    for i in range(n):
+        edge = hv[(i + 1) % n] - hv[i]
+        if edge[0] == 0.0 and edge[1] == 0.0:
+            continue
+        angle = np.degrees(np.arctan2(edge[1], edge[0]))
+        rx, ry = _rotate_xy(hv[:, 0], hv[:, 1], angle)
+        area = (rx.max() - rx.min()) * (ry.max() - ry.min())
+        if area < best_area:
+            best_area, best_angle = area, angle % 90.0
+    return float(best_angle)
+
+
+def footprint_aligned_grid(coords, cell_arcsec, min_points=REGION_FOOTPRINT_ALIGN_MIN_POINTS):
+    """Rotated, EVENLY-DIVIDING region-map grid geometry for ``coords``' own
+    footprint (issue #989).
+
+    ``local_residual_map``'s plain grid anchors on the matched pairs' RA/Dec
+    bounding box and steps by a FIXED ``cell_arcsec`` -- so unless the
+    footprint's extent happens to be an exact multiple of the cell size, the
+    last row/column is whatever is left over, not a full cell.  A NIRCam
+    mosaic is a rotated rectangle (roll angle rarely a multiple of 90 deg)
+    whose RA/Dec-axis extent is essentially never an exact multiple of 45":
+    gc-treasury o084 F212N measures 145.3" x 356.1" against a 45" cell (3.23 x
+    7.91 cells), so the last column is a ~10" sliver.  That sliver still
+    collects whatever stars the rotated footprint's corner puts inside it --
+    46 matched pairs against a tile median of 236 -- and 46 heavy-tailed
+    pairs read as a false 57 mas "seam" that blocked the tile's reference tie
+    (issue #989).
+
+    The fix bins in a frame ROTATED to the footprint's own minimum-bounding-
+    rectangle angle (:func:`_min_area_rotation_deg`, straight from the star
+    positions) and picks a cell size PER AXIS that divides the footprint's
+    extent EVENLY (``round(extent / cell_arcsec)`` cells, each exactly
+    ``extent / n`` across) -- eliminating the remainder sliver for any
+    rotation, including a field that turns out to already be axis-aligned
+    (the fitted angle then comes out near a multiple of 90 deg and the grid
+    is the old one, up to the even-division rounding).
+
+    Parameters
+    ----------
+    coords : SkyCoord
+        The footprint to fit -- pass the FULL source/consensus catalog (not
+        just the matched pairs), so the fitted rectangle describes the
+        mosaic's own boundary rather than wherever pairs happened to match.
+    cell_arcsec : float
+        Target cell size (arcsec); the actual per-axis size returned divides
+        the fitted extent evenly and is only ever adjusted to make that
+        exact -- never enough to change the cell count.
+
+    Returns
+    -------
+    dict
+        ``dict(ok, ra0, dec0, pa_deg, u_min, v_min, cell_u_arcsec,
+        cell_v_arcsec, n_u, n_v, n_points, reason)``.  ``ok`` is False (with
+        ``reason``) when fewer than ``min_points`` distinct positions were
+        given; the caller must then fall back to the plain axis-aligned grid
+        rather than trust a rotation fit from too few points.
+    """
+    ra = np.asarray(coords.ra.deg, dtype=float)
+    dec = np.asarray(coords.dec.deg, dtype=float)
+    n_points = int(len(ra))
+    if n_points < min_points:
+        return dict(ok=False, n_points=n_points, ra0=None, dec0=None,
+                    pa_deg=None, u_min=None, v_min=None,
+                    cell_u_arcsec=None, cell_v_arcsec=None, n_u=None, n_v=None,
+                    reason=f"only {n_points} position(s) (< {min_points}) -- "
+                           f"too few to fit a footprint rotation")
+    ra0, dec0 = float(np.median(ra)), float(np.median(dec))
+    x, y = _tangent_plane_xy(ra, dec, ra0, dec0)
+    pa_deg = _min_area_rotation_deg(x, y)
+    u, v = _rotate_xy(x, y, pa_deg)
+    u_min, u_max = float(u.min()), float(u.max())
+    v_min, v_max = float(v.min()), float(v.max())
+    extent_u = max(u_max - u_min, 1e-6)
+    extent_v = max(v_max - v_min, 1e-6)
+    n_u = max(int(round(extent_u / cell_arcsec)), 1)
+    n_v = max(int(round(extent_v / cell_arcsec)), 1)
+    return dict(ok=True, ra0=ra0, dec0=dec0, pa_deg=pa_deg,
+               u_min=u_min, v_min=v_min,
+               cell_u_arcsec=extent_u / n_u, cell_v_arcsec=extent_v / n_v,
+               n_u=n_u, n_v=n_v, n_points=n_points, reason=None)
+
+
+def assign_footprint_cells(ra_deg, dec_deg, grid):
+    """``(ix, iy)`` of each (ra, dec) (deg) inside a :func:`footprint_aligned_grid`
+    grid, clipped to its bounds -- a position measured slightly outside the
+    footprint used to FIT the grid (e.g. a matched pair whose reference-
+    catalog partner sits marginally beyond it) still lands in the nearest
+    edge cell rather than getting a negative/overflow index."""
+    x, y = _tangent_plane_xy(ra_deg, dec_deg, grid["ra0"], grid["dec0"])
+    u, v = _rotate_xy(x, y, grid["pa_deg"])
+    ix = np.clip(np.floor((u - grid["u_min"]) / grid["cell_u_arcsec"]).astype(int),
+                0, grid["n_u"] - 1)
+    iy = np.clip(np.floor((v - grid["v_min"]) / grid["cell_v_arcsec"]).astype(int),
+                0, grid["n_v"] - 1)
+    return ix, iy
+
+
+def _footprint_cell_center_radec(ix, iy, grid):
+    """Sky (ra, dec) deg of a footprint-grid cell's center -- the inverse of
+    :func:`assign_footprint_cells`, for cell dicts that report a sky
+    position."""
+    u = grid["u_min"] + (np.asarray(ix, dtype=float) + 0.5) * grid["cell_u_arcsec"]
+    v = grid["v_min"] + (np.asarray(iy, dtype=float) + 0.5) * grid["cell_v_arcsec"]
+    x, y = _inverse_rotate_uv(u, v, grid["pa_deg"])
+    cosd0 = max(np.cos(np.radians(grid["dec0"])), 1e-6)
+    ra = grid["ra0"] + x / cosd0 / 3600.0
+    dec = grid["dec0"] + y / 3600.0
+    return ra, dec
+
 
 def _cell_counts(ix, iy):
     """``{(ix, iy): count}`` for a pair of integer cell-index arrays."""
@@ -1274,7 +1520,9 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                          tol_k=REGION_TOL_K, tol_floor_mas=REGION_TOL_FLOOR_MAS,
                          coverage_fraction=REGION_COVERAGE_FRACTION,
                          tight_pair_mas=REGION_TIGHT_PAIR_MAS, context="",
-                         sigma_b_mas=None, sigma_cap_mas=None):
+                         sigma_b_mas=None, sigma_cap_mas=None,
+                         align_to_footprint=True,
+                         low_coverage_fraction=REGION_LOW_COVERAGE_FRACTION):
     """Per-REGION seam map from SAME-STAR matched pairs, bulk removed.
 
     ``sigma_b_mas`` / ``sigma_cap_mas`` (issue #965 item 1): per-star predicted
@@ -1282,6 +1530,32 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     (mas) above which a pair is cut before its cell is formed.  Passed straight
     through to :func:`local_residual_map`; see its docstring for the cut/weight
     rule.  ``None`` (default) reproduces the pre-#965 behaviour exactly.
+
+    ``align_to_footprint`` (issue #989): ``True`` by default -- bin on
+    :func:`footprint_aligned_grid` fitted to ``a`` instead of the plain
+    RA/Dec-axis grid.  A NIRCam mosaic's extent is essentially never an exact
+    multiple of ``cell_arcsec``, so the plain grid's edge row/column is
+    whatever remainder is left over, not a full cell; gc-treasury o084 F212N
+    measured a ~10" remainder column that still collected 46 matched pairs
+    (against a tile median of 236) and read a false 57 mas "seam" from that
+    small, heavy-tailed sample -- the tell (every low-count sliver cell in the
+    fleet fell in the SAME edge column, ix at its max) is a binning artifact,
+    not a spatial one.  The aligned grid rotates to the footprint's own angle
+    and sizes each axis to divide its extent evenly, so there is no remainder
+    left to collect a spurious sliver cell.  Falls back to the plain grid
+    (with ``footprint_grid['ok']=False`` recorded) when ``a`` has too few
+    positions to fit a rotation; pass ``False`` to force the plain grid (kept
+    for tests exercising the pre-#989 geometry directly).
+    ``low_coverage_fraction`` : a region cell whose matched-pair count falls
+    below this fraction of the tile's own MEDIAN cell count is recorded (per
+    cell: ``low_coverage``, ``coverage_frac``; at top level:
+    ``n_low_coverage``, ``low_coverage_cells``) -- PURELY INFORMATIONALLY.  It
+    does not relax the flag/tol/nsigma test for that cell: a low-coverage
+    cell that still reads large keeps blocking exactly like any other cell.
+    This should be rare once the grid is aligned; when it still fires (a
+    genuinely partial corner of an irregular footprint) the record names it
+    rather than passing it off as an ordinary cell.  See
+    ``REGION_LOW_COVERAGE_FRACTION``.
 
     The spatial check ``measure_offset_grid`` is meant to be, measured with the
     estimator CLAUDE.md prescribes for a DENSE reference.  A per-tile histogram
@@ -1384,8 +1658,11 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         tight_pair_mas, worst_off_mas, worst_sig_off_mas, bulk_dra_mas,
         bulk_ddec_mas, measurable, clean, reason, tol_mas, tol_source, tol_k,
         tol_floor_mas, cell_resid_mad_mas, cell_resid_median_mas, sigma_cap_mas,
-        n_sigma_cut, n_sigma_unknown)``.  The last three (issue #965 item 1)
-        pass through from ``local_residual_map``: the cap actually used
+        n_sigma_cut, n_sigma_unknown, grid_aligned, grid_pa_deg,
+        grid_cell_u_arcsec, grid_cell_v_arcsec, grid_n_u, grid_n_v,
+        grid_fallback_reason, low_coverage_fraction, n_low_coverage,
+        low_coverage_cells)``.  The three ``n_sigma_*`` fields (issue #965 item
+        1) pass through from ``local_residual_map``: the cap actually used
         (``None`` when ``sigma_b_mas`` was not given), the total pairs it
         dropped, and the total kept pairs whose sigma was unknown -- so the
         checkpoint record can show how much of the map the cut touched.
@@ -1396,12 +1673,29 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         which is False in that case for the same reason an unverifiable check
         never passes.  When not ``measurable``, ``tol_mas``/``cell_resid_*``
         are ``nan``: there were too few cells to measure a spread from.
+
+        The ``grid_*`` fields (issue #989) describe the geometry
+        ``align_to_footprint`` actually used: ``grid_aligned`` is False when it
+        fell back to the plain axis-aligned grid (``grid_fallback_reason``
+        names why -- e.g. too few points to fit a rotation), True when the PA
+        (``grid_pa_deg``), even-division cell sizes (``grid_cell_u_arcsec``/
+        ``grid_cell_v_arcsec``) and cell counts (``grid_n_u``/``grid_n_v``)
+        below came from :func:`footprint_aligned_grid`.  ``low_coverage_cells``
+        lists, per low-coverage cell (see ``low_coverage_fraction`` above),
+        ``ix``/``iy``/``n``/``coverage_frac``/``resid_off_mas``/``flagged``;
+        every cell in ``cells`` also carries its own ``coverage_frac`` and
+        ``low_coverage`` bool.  This is recording only -- see the
+        ``align_to_footprint`` docstring paragraph above for why it must never
+        relax a gate.
     """
     lrm = local_residual_map(a, b, global_result, cell_arcsec=cell_arcsec,
                              match_radius=match_radius, min_stars=min_stars,
                              tol_mas=float("inf"), nsigma=nsigma,
                              context=f"{context} region map", return_pairs=True,
-                             sigma_b_mas=sigma_b_mas, sigma_cap_mas=sigma_cap_mas)
+                             sigma_b_mas=sigma_b_mas, sigma_cap_mas=sigma_cap_mas,
+                             align_to_footprint=align_to_footprint)
+    footprint_grid = lrm.get("footprint_grid")
+    grid_aligned = bool(footprint_grid is not None and footprint_grid.get("ok"))
     cells = list(lrm.get("cells") or [])
     pairs = lrm.get("pairs") or {}
     pair_sep_mas = np.asarray(pairs.get("resid_mas", []), dtype=float)
@@ -1426,7 +1720,21 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                 cell_resid_median_mas=float("nan"),
                 sigma_cap_mas=lrm.get("sigma_cap_mas"),
                 n_sigma_cut=int(lrm.get("n_sigma_cut", 0)),
-                n_sigma_unknown=int(lrm.get("n_sigma_unknown", 0)))
+                n_sigma_unknown=int(lrm.get("n_sigma_unknown", 0)),
+                # Grid geometry actually used (issue #989) -- recorded even
+                # when the fallback fired, so a checkpoint reader can tell
+                # "aligned and clean" from "fell back and clean" rather than
+                # assuming every record used the same binning.
+                grid_aligned=grid_aligned,
+                grid_pa_deg=(footprint_grid or {}).get("pa_deg"),
+                grid_cell_u_arcsec=(footprint_grid or {}).get("cell_u_arcsec"),
+                grid_cell_v_arcsec=(footprint_grid or {}).get("cell_v_arcsec"),
+                grid_n_u=(footprint_grid or {}).get("n_u"),
+                grid_n_v=(footprint_grid or {}).get("n_v"),
+                grid_fallback_reason=(None if grid_aligned or footprint_grid is None
+                                     else footprint_grid.get("reason")),
+                low_coverage_fraction=float(low_coverage_fraction),
+                n_low_coverage=0, low_coverage_cells=[])
     if len(cells) < min_cells:
         return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                     n_flagged=0, n_uncovered=0, uncovered_cells=[],
@@ -1473,31 +1781,62 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         c["significant"] = bool(sem > 0 and off > nsigma * sem)
         c["flagged"] = bool(off > tol_used and c["significant"])
 
+    # --- low-coverage recording (issue #989) -- INFORMATIONAL ONLY ------------
+    # A cell whose matched-pair count `n` sits well below this tile's own
+    # median is named here, but the flag/tol/nsigma test above is untouched --
+    # a low-coverage cell that reads large still blocks exactly like any
+    # other.  This should be rare now that the grid is footprint-aligned (see
+    # `align_to_footprint`); when it still fires it is a genuinely thin part
+    # of the footprint (an irregular mosaic corner), not a binning artifact,
+    # and the record names it rather than passing it off as an ordinary cell
+    # -- the #970 "cells must never silently drop out" hazard, one level up:
+    # a cell can survive `min_stars` and still be too thin to trust the way an
+    # interior cell can.
+    cell_ns = [c["n"] for c in cells]
+    median_cell_n = float(np.median(cell_ns)) if cell_ns else float("nan")
+    low_coverage_cells = []
+    for c in cells:
+        frac = (float(c["n"]) / median_cell_n
+                if median_cell_n and median_cell_n > 0 else float("nan"))
+        c["coverage_frac"] = frac
+        c["low_coverage"] = bool(np.isfinite(frac) and frac < low_coverage_fraction)
+        if c["low_coverage"]:
+            low_coverage_cells.append(dict(
+                ix=c["ix"], iy=c["iy"], n=c["n"], coverage_frac=frac,
+                resid_off_mas=c["resid_off_mas"], flagged=c["flagged"]))
+
     # --- coverage: sources present, matched pairs missing ---------------------
-    # Rebuild local_residual_map's own cell grid (it anchors on the minimum
-    # matched-pair position, which is why the origin is recovered from a cell
-    # rather than recomputed from `a`), then count SOURCES per cell.
-    cell_deg_dec = cell_arcsec / 3600.0
-    # Take the RA cell width from the cells THEMSELVES rather than recomputing
-    # cos(dec): local_residual_map divides by the cos(dec) of its matched pairs,
-    # and a grid built on a slightly different one drifts out of register with
-    # the cells whose origin it is about to reconstruct.
-    cell_deg_ra = None
-    for c in cells[1:]:
-        if c["ix"] != cells[0]["ix"]:
-            cell_deg_ra = ((float(c["ra0"]) - float(cells[0]["ra0"]))
-                           / (c["ix"] - cells[0]["ix"]))
-            break
-    if not cell_deg_ra:      # one column only: nothing to measure it from
-        dec_mid = float(np.median([c["dec0"] for c in cells]))
-        cell_deg_ra = cell_arcsec / 3600.0 / max(np.cos(np.radians(dec_mid)), 1e-6)
-    c0 = cells[0]
-    r0 = float(c0["ra0"]) - (c0["ix"] + 0.5) * cell_deg_ra
-    d0 = float(c0["dec0"]) - (c0["iy"] + 0.5) * cell_deg_dec
     a_ra = np.asarray(a.ra.deg, dtype=float)
     a_dec = np.asarray(a.dec.deg, dtype=float)
-    a_ix = np.floor((a_ra - r0) / cell_deg_ra).astype(int)
-    a_iy = np.floor((a_dec - d0) / cell_deg_dec).astype(int)
+    if grid_aligned:
+        # Reuse the SAME grid `local_residual_map` binned the pairs with --
+        # authoritative, and simpler than reconstructing it (issue #989).
+        a_ix, a_iy = assign_footprint_cells(a_ra, a_dec, footprint_grid)
+    else:
+        # Rebuild local_residual_map's own PLAIN cell grid (it anchors on the
+        # minimum matched-pair position, which is why the origin is recovered
+        # from a cell rather than recomputed from `a`), then count SOURCES per
+        # cell.
+        cell_deg_dec = cell_arcsec / 3600.0
+        # Take the RA cell width from the cells THEMSELVES rather than
+        # recomputing cos(dec): local_residual_map divides by the cos(dec) of
+        # its matched pairs, and a grid built on a slightly different one
+        # drifts out of register with the cells whose origin it is about to
+        # reconstruct.
+        cell_deg_ra = None
+        for c in cells[1:]:
+            if c["ix"] != cells[0]["ix"]:
+                cell_deg_ra = ((float(c["ra0"]) - float(cells[0]["ra0"]))
+                               / (c["ix"] - cells[0]["ix"]))
+                break
+        if not cell_deg_ra:      # one column only: nothing to measure it from
+            dec_mid = float(np.median([c["dec0"] for c in cells]))
+            cell_deg_ra = cell_arcsec / 3600.0 / max(np.cos(np.radians(dec_mid)), 1e-6)
+        c0 = cells[0]
+        r0 = float(c0["ra0"]) - (c0["ix"] + 0.5) * cell_deg_ra
+        d0 = float(c0["dec0"]) - (c0["iy"] + 0.5) * cell_deg_dec
+        a_ix = np.floor((a_ra - r0) / cell_deg_ra).astype(int)
+        a_iy = np.floor((a_dec - d0) / cell_deg_dec).astype(int)
     keys, n_src = np.unique(np.column_stack([a_ix, a_iy]), axis=0,
                             return_counts=True)
     keys = [tuple(int(v) for v in k) for k in keys.tolist()]
@@ -1582,7 +1921,9 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     base.update(bulk_dra_mas=float(bulk[0]), bulk_ddec_mas=float(bulk[1]),
                tol_mas=tol_used, tol_source=tol_source,
                cell_resid_mad_mas=cell_resid_mad,
-               cell_resid_median_mas=cell_resid_median)
+               cell_resid_median_mas=cell_resid_median,
+               n_low_coverage=len(low_coverage_cells),
+               low_coverage_cells=low_coverage_cells)
     return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                 n_flagged=len(flagged), n_uncovered=len(uncovered),
                 uncovered_cells=uncovered, worst_off_mas=worst,

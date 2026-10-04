@@ -192,6 +192,11 @@ practice 4 px), and
 for joint fitting of blends. Each phase runs one fit pass; reseeding happens
 between phases.
 
+The PSF model is STPSF by default.  The opt-in hybrid PSF (empirical core,
+STPSF wings; `jwst_gc_pipeline.photometry.epsf_hybrid`) is enabled with
+`git clone https://github.com/JWST-GC/epsfs && export PSF_EPSF_CORE_DIR=<checkout>`;
+its catalogs carry the `_hybpsf` filename token and `PSFMODEL`/`EPSFCORE`/`EPSFSHA`.
+
 Post-fit, in order: **overshoot QC** (rendered model peak vs local data peak; if
 `model_peak > 1.2 × data_peak` the free-position fit walked off the star →
 `--manual-overshoot-action=refit` re-solves flux-only at the pinned seed position
@@ -379,6 +384,7 @@ still run after m6.
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
+| `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
@@ -439,6 +445,13 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 - `..._resbgsub_m8<obs>.fits` + `..._resbgsub_m8_dedup.fits` — the **forced-fill**
   sibling of the m7 table; every band's flux is force-fit at the merged position.
   Full-frame only; m7 stays as written.
+  The dedup file also carries diffraction-spike flag columns `spike_wedge`,
+  `single_band_crowd`, `spike_artifact` (bool) and `n_real_bands` (int), added by
+  `photometry/spike_flag.py` (flags only, no rows removed; disable with
+  `--no-m8-spike-flag` or `M8_SPIKE_FLAG=0`; `m8_merge_partials.py` adds the
+  same columns, `--no-spike-flag` there).  `spike_wedge` is close to random
+  placement in the brick broad-band catalog and in arches (see the
+  `flag_spike_artifacts` docstring), so use it as a soft flag in those fields.
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).

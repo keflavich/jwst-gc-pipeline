@@ -8,7 +8,9 @@ Three coordinated guards are pinned here:
 
 1. ``dedup_merged_catalog`` ``sat_link_radius``: satstar-involved pairs link
    out to 0.5" (unsaturated pairs keep the tight 0.10"); binary protection
-   (same-band discrepant detections) still blocks.
+   (same-band discrepant detections) still blocks, and beyond 0.10" rows
+   sharing two or more bands are split by a shared band where both rows or
+   neither are saturated (#1038).
 2. ``forced_fill._satstar_partner_guard``: a saturated row with a real
    detection of the fill band nearby is NOT filled.
 3. ``column_utils.color_reliable_mask``: interim plotting rule -- a color is
@@ -80,6 +82,63 @@ def test_dedup_satstar_binary_protection(tmp_path):
         dict(dra=0.3, mag_f182m=13.5, mag_f212n=11.5),
     ])
     assert len(out) == 2
+
+
+def test_dedup_wide_satstar_pair_sharing_a_band_stays_split(tmp_path):
+    """Two rows 0.3" apart, both detected in f182m and f212n and both
+    saturated in f182m with similar mags: two satstar fits of two resolved
+    stars (wd2, #1038)."""
+    out = _run_dedup(tmp_path, [
+        dict(dra=0.0, mag_f182m=12.0, sat_f182m=True, mag_f212n=11.6),
+        dict(dra=0.3, mag_f182m=12.1, sat_f182m=True, mag_f212n=11.5),
+    ])
+    assert len(out) == 2
+    assert sorted(np.round(out['mag_vega_f182m'], 2)) == [12.0, 12.1]
+
+
+def test_dedup_wide_pair_unsaturated_in_a_shared_band_stays_split(tmp_path):
+    """A saturated row and a neighbour 0.3" away, both detected in f182m and
+    f212n, both unsaturated in f212n with similar mags: two daophot
+    detections of two stars."""
+    out = _run_dedup(tmp_path, [
+        dict(dra=0.0, mag_f182m=12.0, sat_f182m=True, mag_f212n=11.6),
+        dict(dra=0.3, mag_f182m=12.2, mag_f212n=11.5),
+    ])
+    assert len(out) == 2
+
+
+def test_dedup_wide_one_band_satstar_fragment_merges(tmp_path):
+    """A one-band saturated row 0.25" from a two-band row saturated in the
+    same band: a fragment of the same star (on wd2 dolphot has one star for
+    157 of 165 such pairs), merged at sat_dmag_collision."""
+    out = _run_dedup(tmp_path, [
+        dict(dra=0.0, mag_f182m=12.0, sat_f182m=True, mag_f212n=11.5),
+        dict(dra=0.25, mag_f182m=12.2, sat_f182m=True),
+    ])
+    assert len(out) == 1
+
+
+def test_dedup_wide_satstar_daophot_duplicate_merges(tmp_path):
+    """The satstar fit and a daophot detection of the SAME star 0.13" apart,
+    detected in two bands and saturated in only one row of each (cloudc: a
+    coherent 0.13" offset between the two): still merged at
+    sat_dmag_collision."""
+    out = _run_dedup(tmp_path, [
+        dict(dra=0.0, mag_f182m=12.0, sat_f182m=True, mag_f212n=11.4,
+             sat_f212n=True),
+        dict(ddec=0.13, mag_f182m=12.2, mag_f212n=11.5),
+    ])
+    assert len(out) == 1
+
+
+def test_dedup_close_satstar_pair_keeps_loose_threshold(tmp_path):
+    """Within link_radius a saturated pair sharing a band still merges at
+    dmag < sat_dmag_collision (the same star's two rows)."""
+    out = _run_dedup(tmp_path, [
+        dict(dra=0.0, mag_f182m=12.0, sat_f182m=True),
+        dict(dra=0.05, mag_f182m=12.3, mag_f212n=11.5),
+    ])
+    assert len(out) == 1
 
 
 def test_dedup_sat_radius_disabled(tmp_path):
