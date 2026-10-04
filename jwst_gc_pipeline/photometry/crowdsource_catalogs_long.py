@@ -4626,9 +4626,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "to +-x, but only those whose annulus prominence on the "
                          "detection image is >= --manual-seed-round-loose-prom-min: "
                          "a distorted faint star rises above its local structure.  "
-                         "Default 0 = off.  Opt-in per field (0.8 tested): emission "
-                         "knots and diffraction-spike knots also pass the "
-                         "prominence test.")
+                         "Default 0 = off.  -1 = AUTO: 0.8 on star-dominated NIRCam "
+                         "fields, 0 on an extended-emission target and on MIRI "
+                         "(emission knots and diffraction-spike knots also pass "
+                         "the prominence test).")
     parser.add_option("--manual-seed-round-loose-prom-min", dest="manual_seed_round_loose_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'],
                     help="Prominence floor of the loose-roundness i2d seeds (default 5).")
@@ -4914,10 +4915,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
                       help="Seed each band's m7 fit from the cross-band seed UNION "
                            "that band's own m6 vetted catalog, plus daofind on its "
-                           "m6 residual - bg mosaic.  Off by default (cross-band "
-                           "seed alone): the own-band sources this restores are "
-                           "confirmed by an independent visit 0.21x as often as "
-                           "the ones m7 already has.")
+                           "m6 residual - bg mosaic.  Default (neither flag) = "
+                           "AUTO: on for star-dominated NIRCam fields, off on an "
+                           "extended-emission target and for MIRI filters.")
+    parser.add_option('--no-manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
+                      action='store_false',
+                      help="Seed each band's m7 fit from the cross-band seed alone. "
+                           "The own-band sources the union restores are "
+                           "confirmed by an independent visit 0.4-0.8x as often "
+                           "as the ones m7 already has, depending on band (full "
+                           "Brick field; docs/evidence/faint_m7_seed_union).")
     parser.add_option('--manual-m7-seed-own-band-companion-fwhm',
                       dest='manual_m7_seed_own_band_companion_fwhm', type='float',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],

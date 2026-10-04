@@ -1,5 +1,6 @@
 """m7 seed of one filter = cross-band seed UNION that filter's m6 vetted catalog
-(opt-in, ``manual_m7_seed_own_band``).
+(``manual_m7_seed_own_band``; AUTO by default: on for star-dominated NIRCam
+fields, off on an extended-emission target and for MIRI filters).
 
 The >=2-filter cross-band seed alone leaves out every source only ONE band's
 m6 vetting accepted and m7 does not find again (a third of the m6 vetted
@@ -18,8 +19,8 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 from jwst_gc_pipeline.photometry.cataloging import (
-    _build_i2d_augmented_seed, _build_m7_band_seed, annotate_independent_detection,
-    crossband_seed_file, m7_band_seed_path)
+    _auto_m7_seed_own_band, _build_i2d_augmented_seed, _build_m7_band_seed,
+    annotate_independent_detection, crossband_seed_file, m7_band_seed_path)
 from jwst_gc_pipeline.photometry.naming import vetted_to_i2dseed
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
@@ -189,6 +190,15 @@ def test_annotate_counts_m7_residual_detections(tmp_path):
                                    _annot_opts(manual_m7_seed_own_band=False))
     assert list(Table.read(mp)['independently_detected_f182m']) == [True, False, False]
 
+    # AUTO (None): read on a star field, not on an extended-emission run
+    annotate_independent_detection(mp, cut_bp, ['F182M'],
+                                   _annot_opts(manual_m7_seed_own_band=None))
+    assert list(Table.read(mp)['independently_detected_f182m']) == [True, True, False]
+    annotate_independent_detection(mp, cut_bp, ['F182M'],
+                                   _annot_opts(manual_m7_seed_own_band=None,
+                                               extended_emission=True))
+    assert list(Table.read(mp)['independently_detected_f182m']) == [True, False, False]
+
 
 def test_companion_of_brighter_seed_not_added(tmp_path):
     """Own-band sources within companion_fwhm FWHM of a brighter seed source
@@ -219,6 +229,27 @@ def test_companion_of_brighter_seed_not_added(tmp_path):
 
 
 def test_pipeline_defaults():
-    # opt-in; see docs/evidence/faint_m7_seed_union for the full-field realness
-    assert MANUAL_DEFAULTS['manual_m7_seed_own_band'] is False
+    # AUTO by default (docs/evidence/faint_defaults_on); see
+    # docs/evidence/faint_m7_seed_union for the full-field realness
+    assert MANUAL_DEFAULTS['manual_m7_seed_own_band'] is None
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'] == 2.5
+
+
+def test_auto_own_band_off_on_extended_emission_and_miri():
+    auto = MANUAL_DEFAULTS['manual_m7_seed_own_band']
+    for target in ('w51', 'sickle', 'wd2', 'ngc6334'):
+        assert _auto_m7_seed_own_band(auto, types.SimpleNamespace(target=target)) is False
+    for target in ('brick', 'sgrb2', 'sgra', 'cloudc'):
+        assert _auto_m7_seed_own_band(auto, types.SimpleNamespace(target=target)) is True
+        assert _auto_m7_seed_own_band(
+            auto, types.SimpleNamespace(target=target), miri=True) is False
+    # --extended-emission / --no-extended-emission override the target list
+    assert _auto_m7_seed_own_band(
+        auto, types.SimpleNamespace(target='brick', extended_emission=True)) is False
+    assert _auto_m7_seed_own_band(
+        auto, types.SimpleNamespace(target='w51', extended_emission=False)) is True
+    # the flag and the --no- flag are used verbatim, on MIRI too
+    assert _auto_m7_seed_own_band(False, types.SimpleNamespace(target='brick')) is False
+    assert _auto_m7_seed_own_band(True, types.SimpleNamespace(target='w51')) is True
+    assert _auto_m7_seed_own_band(
+        True, types.SimpleNamespace(target='brick'), miri=True) is True

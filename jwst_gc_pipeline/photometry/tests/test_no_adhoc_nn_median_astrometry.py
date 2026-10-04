@@ -148,6 +148,11 @@ ALLOWLIST = {
     # marker for the gallery; its medians are of local source density.
     ("docs/evidence/faint_m7_seed_union/scripts/realness.py", "match_fraction"),
     ("docs/evidence/faint_m7_seed_union/scripts/seed_gallery.py", "main"),
+    # default-on PR evidence script, no astrometry.  bg_holes.run_pair: each
+    # added m7 seed is "kept" when the final catalog has a source within one
+    # pixel (a boolean); its median is 1.4826 MAD of residual-mosaic pixels,
+    # the scatter that background differences are expressed in.
+    ("docs/evidence/faint_defaults_on/scripts/bg_holes.py", "run_pair"),
     # ---- cross-function splits: the match and the reduce are in DIFFERENT
     # functions, so they cannot be attributed to one and are allowlisted as
     # `<unattributed>`.  These entries are WEAKER than a function-scoped one --
