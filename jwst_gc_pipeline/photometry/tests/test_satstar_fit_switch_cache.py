@@ -173,6 +173,33 @@ def test_signature_keys_the_local_qfit_with_or_without_a_ramp(tmp_path,
     assert satstar_fit_switch_signature(fn) == 'ql12'      # column only
 
 
+def test_signature_keys_the_recovered_cap_with_or_without_a_ramp(
+        tmp_path, monkeypatch):
+    """The cap acts on every cap-on NIRCam fit; its key carries the PSF
+    floor below which it is skipped."""
+    fn = _frame(tmp_path, with_ramp=False)
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
+    assert satstar_fit_switch_signature(fn) == ''
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    assert satstar_fit_switch_signature(fn) == 'cs0.005'
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '0')
+    assert satstar_fit_switch_signature(fn) == 'cs0'
+
+
+def test_cap_on_catalog_from_before_the_per_seed_cap_is_refit(tmp_path,
+                                                              monkeypatch):
+    """A cap-on catalog stamped before the cap read only the seed's share of
+    a blended component carries no 'cs' and is refit once."""
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    fn = _frame(tmp_path, with_ramp=False)
+    _write_cache(tmp_path / FRAME.replace('.fits', '_satstar_catalog.fits'))
+    calls = _counting_fit(monkeypatch)
+    _load(fn, tmp_path)
+    assert calls['fit_switch_signature'] == ['cs0.005']
+    _load(fn, tmp_path)
+    assert calls['n'] == 1
+
+
 # --------------------------------------------------------------------------
 # the cache
 # --------------------------------------------------------------------------
@@ -226,9 +253,9 @@ def test_group0_groupdq_default_follows_the_recovered_cap(tmp_path,
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
     assert satstar_fit_switch_signature(fn) == 'zfg1.3'
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3d'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3d_cs0.005'
     monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', '0')
-    assert satstar_fit_switch_signature(fn) == 'zfg1.3'
+    assert satstar_fit_switch_signature(fn) == 'zfg1.3_cs0.005'
     monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '0')
     monkeypatch.setenv('SATSTAR_ZF_G0_GROUPDQ', '1')
     assert satstar_fit_switch_signature(fn) == 'zfg1.3d'
@@ -246,7 +273,7 @@ def test_cap_on_catalog_from_before_the_group0_groupdq_switch_is_refit(
     calls = _counting_fit(monkeypatch)
     _load(fn, tmp_path)
     assert calls['n'] == 1
-    assert calls['fit_switch_signature'] == ['zfg1.3d']
+    assert calls['fit_switch_signature'] == ['zfg1.3d_cs0.005']
     _load(fn, tmp_path)
     assert calls['n'] == 1
 

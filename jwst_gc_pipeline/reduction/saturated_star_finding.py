@@ -998,6 +998,11 @@ def satstar_fit_switches(env=None):
       wd2 F150W nrcb3 (#1058), the 13-19 mag rows that failed only this test
       at 1.0 and had 1 <= qfit_local < 5 all matched a dolphot star (61 of 61,
       51 within 0.3 mag); at qfit_local >= 5, 9 of 17 had no counterpart.
+    * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
+      ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
+      recovered-core cap and the PSF fraction below which it is skipped
+      (``recovered_cap_flux``).  The cap reads only the fitted seed's share of
+      a blended component (``recovered_cap_region``).
     """
     env = os.environ if env is None else env
     qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
@@ -1013,6 +1018,9 @@ def satstar_fit_switches(env=None):
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
+        'recovered_cap': cap_on,
+        'cap_min_psf_frac': float(
+            env.get('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '') or 0.005),
     }
 
 
@@ -1059,6 +1067,11 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             # matches and is refit.
             ql += f"g{sw['qfit_local_max']:g}s"
         parts.append(ql)
+    if sw['recovered_cap']:
+        # Acts on every cap-on NIRCam fit, with or without a ramp.  A catalog
+        # stamped before the cap read only the seed's share of a blended
+        # component (and before the PSF floor) has no 'cs' and is refit.
+        parts.append(f"cs{sw['cap_min_psf_frac']:g}")
     return '_'.join(parts)
 
 
@@ -4262,8 +4275,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _psf2 = np.clip(_infov_psf.evaluate(_xx2, _yy2, 1.0, _xf2, _yf2), 0, None)
                 _cap, _pfrac = recovered_cap_flux(
                     cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _psf2,
-                    min_psf_frac=float(os.environ.get(
-                        'NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', 0.005)))
+                    min_psf_frac=satstar_fit_switches()['cap_min_psf_frac'])
                 result['cap_psf_frac'][0] = _pfrac
                 if np.isfinite(_cap):
                     _fc = float(result['flux_fit'][0])

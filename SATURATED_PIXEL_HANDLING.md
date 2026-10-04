@@ -544,6 +544,10 @@ by `satstar_fit_switches`, and the per-exposure satstar cache is keyed on them
 one refits the cached catalogs it affects. Their on/off values follow the
 daophot hand-off convention: unset or blank gives the default, `1/true/yes/on`
 and `0/false/no/off` are accepted in any case, and any other value raises.
+A cap-on run (`NIRCAM_SATSTAR_RECOVERED_CAP=1`, read as an integer like the
+fitter reads it) adds `cs<NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC>` to the key, so
+catalogs fitted before the cap read only the seed's share of a blended
+component are refit once.
 
 ---
 
