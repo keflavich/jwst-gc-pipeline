@@ -1040,9 +1040,13 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 #else:
                 #    print(f"Field {field} proposal {proposal_id} did not require re-alignment")
                 print(f"IMAGE2 PIPELINE on {member['expname']}")
+                # resample skipped: Image2's per-exposure `jw..._nrcXN_i2d.fits`
+                # is read by no NIRCam pipeline step (mosaics come from Image3)
+                # and retention protects every `_i2d.fits`, so they piled up.
                 Image2Pipeline.call(member['expname'].replace("_cal.fits",
                                                               "_rate.fits"),
                                     save_results=True, output_dir=output_dir,
+                                    steps={'resample': {'skip': True}},
                                    )
                 # #417: a later module pass in this same interpreter must not
                 # redo the member we just calibrated.
