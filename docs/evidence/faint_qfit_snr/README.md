@@ -133,8 +133,8 @@ off (k = 0).
 | > 20 | 100 at 0.04 ± 0.04 | 552 at 0.20 ± 0.02 | 25 at 0.12 ± 0.08 |
 | no k_eff (NaN qfit or S/N) | 15 at 0.04 ± 0.14 | 60 at 0.30 ± 0.09 | 2 (0 matched) |
 
-The refused rows (5–5.5 and below) sum to 986 / 3,735 / 256, the refused
-counts above.  On this base the Brick reads 0.61 ± 0.07 in the 4.5–5 band
+The rows from 5–5.5 to the end of the table (k_eff > 5 or no k_eff) sum to
+986 / 3,735 / 256, the refused counts above.  On this base the Brick reads 0.61 ± 0.07 in the 4.5–5 band
 and 0.37 ± 0.08 in the 5–5.5 band, a 2.3σ difference.  W51 reads 0.47 ± 0.14
 and 0.34 ± 0.12, within 1σ.  Sgr B2 crosses 0.5 between the 6–8 and 8–12
 bands.  k = 4.5 would refuse 205 / 442 / 47 more sources at 0.61 / 0.96 /
@@ -295,7 +295,7 @@ The four reference fields (`docs/evidence/faint_reference_fields`) at the
 clean run plus injection seeds 1–10, for `base1016` (ef01f404) and `promq5b`
 (36764218; later commits on this branch change only test allowlists and
 evidence), run with
-`python -m jwst_gc_pipeline.photometry.reference_fields.run --variant <v>` and
+`python -m jwst_gc_pipeline.photometry.reference_fields.run --variant <v> --submit` and
 scored with `evaluate --variant promq5b --baseline base1016.json`
 (`data/reffield_base1016.json`, `data/reffield_promq5b.json`).  Phase m7,
 inner box, pooled over the 11 runs of each field.  The completeness bins
@@ -376,7 +376,7 @@ Reference fields (from a checkout of the code under test; the runs go to
 SLURM):
 
 ```
-python -m jwst_gc_pipeline.photometry.reference_fields.run --variant promq5b
+python -m jwst_gc_pipeline.photometry.reference_fields.run --variant promq5b --submit
 python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant base1016 --json base1016.json
 python -m jwst_gc_pipeline.photometry.reference_fields.evaluate --variant promq5b --json promq5b.json \
     --baseline base1016.json
