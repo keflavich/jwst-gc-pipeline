@@ -113,7 +113,8 @@ def test_gap_nan_and_missing_floor_left_alone():
     np.testing.assert_array_equal(out2, data)
 
 
-def test_overlap_takes_the_higher_floor():
+@pytest.mark.parametrize('order', [[0, 1], [1, 0]])
+def test_overlap_takes_the_higher_floor(order):
     bg = np.where(XX < 40, 2.0, 6.0)
     bg[40, 40] = -20.0
     crf, data = _frame(bg)
@@ -123,7 +124,7 @@ def test_overlap_takes_the_higher_floor():
         r = np.hypot(XX - xc, YY - yc)
         floors.append(np.median(bg[(r >= R) & (r < R + 5)]))
     assert floors[0] < floors[1]
-    out, n, _, _ = _clip_resbg_hole_at_handoff(data, bg, stars)
+    out, n, _, _ = _clip_resbg_hole_at_handoff(data, bg, stars[order])
     assert n == 2
     assert out[40, 40] == pytest.approx(crf[40, 40] - floors[1])
 
