@@ -427,9 +427,81 @@ _SATSTAR_DATA_FLOOR = {
 }
 
 
-def _resolve_satstar_data_floor(filtername, explicit=None):
+# Readout bound on the data floor (#952).  A pixel that the ramp flags
+# SATURATED reached the saturation level S (DN) by the mean time t_last of the
+# last group at the latest, so its ramp-fit rate is at least S / t_last and its
+# crf value at least about S * PHOTMJSR / t_last.  The table above was set on
+# W51 F480M (SHALLOW2, 5 groups, S*P/t_last ~ 480 MJy/sr); a longer ramp or a
+# smaller PHOTMJSR puts that bound below the table.  On wd2 F410M (SHALLOW4,
+# 7 groups, S*P/t_last ~ 130) the components split into wing maxima of
+# 10-80 MJy/sr with no star in the crf, and wing maxima that track S*P/t_k of
+# the group where they first saturate (139-660, star-like).  The 800 floor
+# dropped 1037 of the latter, 95% of the 15-16 mag stars, and the daophot
+# channel recovered 51 of them within 0.3 mag of dolphot.  On W51 F480M the
+# same split sits at 10-80 and 480-930.  The readout floor is FRAC x the bound
+# with a nominal S (R_SATURA medians are 52,600-57,400 DN on those detectors)
+# and only LOWERS a table entry; unlisted filters stay off.  Env
+# SATSTAR_DATA_FLOOR_READOUT_FRAC overrides FRAC, and 0 restores the table.
+_SATSTAR_DATA_FLOOR_READOUT_FRAC = 0.5
+_NIRCAM_NOMINAL_SATURATION_DN = 50000.0
+
+
+def _satstar_data_floor_readout_frac(env=None):
+    """FRAC for ``satstar_readout_data_floor``: env
+    SATSTAR_DATA_FLOOR_READOUT_FRAC, blank or unparsable -> the default, and
+    anything not > 0 -> 0 (readout floor off)."""
+    env = os.environ if env is None else env
+    raw = str(env.get('SATSTAR_DATA_FLOOR_READOUT_FRAC', '')).strip()
+    if not raw:
+        return _SATSTAR_DATA_FLOOR_READOUT_FRAC
+    try:
+        frac = float(raw)
+    except ValueError:
+        return _SATSTAR_DATA_FLOOR_READOUT_FRAC
+    return frac if np.isfinite(frac) and frac > 0 else 0.0
+
+
+def satstar_readout_data_floor(header, photmjsr, frac=None, env=None):
+    """FRAC x S * PHOTMJSR / t_last (MJy/sr) for a NIRCam exposure.
+
+    ``header`` is the primary header (INSTRUME, NGROUPS, NFRAMES, GROUPGAP,
+    TFRAME); ``photmjsr`` comes from the SCI header.  t_last is the mean time
+    of the last group, ((NGROUPS - 1)(NFRAMES + GROUPGAP) + (NFRAMES + 1) / 2)
+    x TFRAME.  Returns None for other instruments, when a keyword is missing or
+    not positive, or when FRAC is 0.
+
+    The floor does not separate all spurious components on its own.  Spurious
+    DQ-SATURATED flags carry a wing max that does not scale with t_last (wd2
+    F410M: up to 78 MJy/sr, against a floor of 61.6 at t_last = 349 s), so on
+    longer ramps more of them pass the floor.  Downstream, ``fit_quality_gate``
+    and the finder's seed gates reject them (#1083); a change that loosens
+    those gates should recheck these components.
+    """
+    frac = (_satstar_data_floor_readout_frac(env) if frac is None
+            else float(frac))
+    if not frac > 0 or header is None:
+        return None
+    if str(header.get('INSTRUME', '')).upper() != 'NIRCAM':
+        return None
+    try:
+        ngroups = int(header['NGROUPS'])
+        nframes = int(header['NFRAMES'])
+        groupgap = int(header.get('GROUPGAP', 0))
+        tframe = float(header['TFRAME'])
+        photmjsr = float(photmjsr)
+    except (KeyError, TypeError, ValueError):
+        return None
+    t_last = ((ngroups - 1) * (nframes + groupgap) + (nframes + 1) / 2.) * tframe
+    if not (ngroups >= 1 and nframes >= 1 and t_last > 0
+            and np.isfinite(photmjsr) and photmjsr > 0):
+        return None
+    return frac * _NIRCAM_NOMINAL_SATURATION_DN * photmjsr / t_last
+
+
+def _resolve_satstar_data_floor(filtername, explicit=None, readout_floor=None):
     """Data floor for the satstar finder: explicit arg > env SATSTAR_DATA_FLOOR >
-    per-filter default > 0 (off)."""
+    per-filter default, lowered to ``readout_floor`` when that is smaller
+    (``satstar_readout_data_floor``) > 0 (off)."""
     if explicit is not None and float(explicit) > 0:
         return float(explicit)
     _env = os.environ.get('SATSTAR_DATA_FLOOR')
@@ -438,7 +510,10 @@ def _resolve_satstar_data_floor(filtername, explicit=None):
             return float(_env)
         except ValueError:
             pass
-    return float(_SATSTAR_DATA_FLOOR.get(str(filtername).lower(), 0.0))
+    table = float(_SATSTAR_DATA_FLOOR.get(str(filtername).lower(), 0.0))
+    if table > 0 and readout_floor is not None and 0 < readout_floor < table:
+        return float(readout_floor)
+    return table
 
 
 # Data level (MJy/sr) at which each filter really saturates.  A DQ-SATURATED
@@ -1034,6 +1109,31 @@ def satstar_fit_switches(env=None):
     }
 
 
+def _satstar_data_floor_signature(filename, env=None):
+    """``'dfr<FRAC>'`` when ``get_saturated_stars`` will take this frame's data
+    floor from the readout (it lowers the per-filter table entry and env
+    SATSTAR_DATA_FLOOR is unset), else ``''``."""
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_DATA_FLOOR')
+    if raw is not None:
+        try:
+            float(raw)
+            return ''
+        except ValueError:
+            pass
+    try:
+        with fits.open(filename) as fh:
+            h0 = fh[0].header
+            photmjsr = fh['SCI'].header.get('PHOTMJSR', h0.get('PHOTMJSR'))
+    except (OSError, KeyError):
+        return ''
+    table = float(_SATSTAR_DATA_FLOOR.get(str(h0.get('FILTER', '')).lower(), 0.0))
+    readout = satstar_readout_data_floor(h0, photmjsr, env=env)
+    if table > 0 and readout is not None and 0 < readout < table:
+        return f"dfr{_satstar_data_floor_readout_frac(env):g}"
+    return ''
+
+
 def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
                                  env=None):
     """Cache key for the ``satstar_fit_switches`` of one frame.
@@ -1052,6 +1152,9 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     ZEROFRAME).  Frames without one keep ``''`` for that part.  The R-curve
     guard is ON by default, so a frame with a ramp gets a non-empty key by
     default and its older catalog is refit once.
+
+    ``dfr<FRAC>`` marks a frame whose finder data floor comes from the readout
+    (``satstar_readout_data_floor``) in place of the per-filter table.
     """
     sw = satstar_fit_switches(env)
     parts = []
@@ -1084,6 +1187,9 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
+    dfr = _satstar_data_floor_signature(filename, env)
+    if dfr:
+        parts.append(dfr)
     return '_'.join(parts)
 
 
@@ -2895,8 +3001,16 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _spike_gap = (int(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE', 3))
                   if header['INSTRUME'].lower() == 'miri' else 0)
     _spike_ratio = float(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE_RATIO', 3.0))
+    _readout_floor = satstar_readout_data_floor(
+        header, fitsdata['SCI'].header.get('PHOTMJSR', header.get('PHOTMJSR')))
     _sat_floor = _resolve_satstar_data_floor(header.get('FILTER', ''),
-                                             explicit=sat_data_floor)
+                                             explicit=sat_data_floor,
+                                             readout_floor=_readout_floor)
+    if _readout_floor is not None and _sat_floor == _readout_floor:
+        print(f"Saturated starfinding: data floor {_sat_floor:.0f} MJy/sr from the "
+              f"readout (table "
+              f"{_SATSTAR_DATA_FLOOR[str(header.get('FILTER', '')).lower()]:g})",
+              flush=True)
     _sev_floor = _resolve_satstar_severity_floor(header.get('FILTER', ''),
                                                  explicit=satstar_severity_floor)
     _partner_xy = None

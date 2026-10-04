@@ -49,8 +49,15 @@ UNLESS
       genuine deep-saturated star reads low/NaN in the core).
 `get_saturated_stars` resolves the floor: explicit arg > env `SATSTAR_DATA_FLOOR`
 > per-filter `_SATSTAR_DATA_FLOOR` default > 0 (a floor of 0 leaves unlisted
-filters as before). Genuine *moderate* stars below the floor are cataloged by
-the normal daophot channel; only the satstar channel skips them.
+filters as before). On NIRCam a per-filter entry is lowered to the readout
+bound `0.5 × 50000 × PHOTMJSR / t_last` when that is smaller
+(`satstar_readout_data_floor`, env `SATSTAR_DATA_FLOOR_READOUT_FRAC`).
+Stars below the floor are skipped by the satstar channel, and the normal daophot
+channel does not reliably recover them: on wd2 F410M (SHALLOW4 × 7 groups) the
+fixed 800 floor dropped 1099 benchmark stars with a SATURATED pixel, and daophot
+returned a matching row for 51 of them, because the SATURATED pixels stay masked
+in the daophot fit. The readout bound keeps those components (rule value 62 on
+that ramp, 213 on the W51 F480M ramp where the 127 MJy/sr fakes were found).
 
 ## Dead ends we tried first (don't repeat)
 - **Satstar consolidation dedup radius** (0.15→0.5"): real but partial — collapses

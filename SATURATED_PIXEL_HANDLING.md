@@ -96,6 +96,26 @@ code), so `git grep -n '<symbol>'` resolves any reference here, and
   original harm (real sources vetoed on bright emission; cloudc 2526 F770W) is
   unmitigated on MIRI.
 
+  **Readout bound** (`satstar_readout_data_floor`): a pixel that reached the
+  saturation level S (DN) by the last group has a rate of at least S / t_last, so
+  its crf value is at least about S · PHOTMJSR / t_last. On NIRCam the finder wing
+  floor is lowered to `FRAC × 50000 × PHOTMJSR / t_last` (MJy/sr) when that value
+  is below the table entry; it never raises a table entry or turns on a filter
+  whose entry is 0. t_last is the mean time of the last group,
+  `((NGROUPS − 1)(NFRAMES + GROUPGAP) + (NFRAMES + 1)/2) × TFRAME`, and FRAC is
+  0.5 (env `SATSTAR_DATA_FLOOR_READOUT_FRAC`; 0 restores the table). The table
+  values were tuned on a long-ramp field (W51 F480M, SHALLOW2 × 5 groups, rule
+  value 213). On the shallow wd2 F410M ramp (SHALLOW4 × 7 groups, t_last 349 s)
+  the rule value is 62 against the table 800, and the 800 floor dropped 1037
+  components (first saturated group 1–6), most of them 15–16 mag stars that
+  daophot then masked.
+  On both fields the components with a SATURATED flag split into a group at
+  10–80 MJy/sr (flagged pixels that are not stars) and a group that tracks
+  S · PHOTMJSR / t_g of their first saturated group; the rule value falls
+  between the two. An explicit floor or env `SATSTAR_DATA_FLOOR` takes
+  precedence, and the satstar cache key carries `dfr<FRAC>` when the readout
+  bound is active.
+
   Override: `--saturation-data-floor` (photometry), env `SATSTAR_DATA_FLOOR`
   (finder). `-1` = per-filter auto; `0` = mask all SATURATED; `>0` = explicit.
 
@@ -540,6 +560,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | var | default | effect |
 |---|---|---|
 | `SATSTAR_DATA_FLOOR` | per-filter | override the finder data floor |
+| `SATSTAR_DATA_FLOOR_READOUT_FRAC` | 0.5 | NIRCam: lower a per-filter finder floor to FRAC × 50000 × PHOTMJSR / t_last when smaller; 0 keeps the table |
 | `MIRI_FIRSTGROUP_SAT_DQ` | 0 | MIRI: keep only first-group (unrecoverable) saturation |
 | `MIRI_SATSTAR_SPIKE_MERGE` / `…_RATIO` | 3 / 3.0 | spike-satellite merge gap / size ratio |
 | `MIRI_SATSTAR_SEED_{PROM,CORE,CONC}_MIN` | 8.0 / 1000 / 1.3 | seed-gate thresholds |
