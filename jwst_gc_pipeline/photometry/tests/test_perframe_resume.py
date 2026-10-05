@@ -19,7 +19,7 @@ import pytest
 
 from jwst_gc_pipeline.photometry.cataloging import (
     perframe_detector_token, perframe_legacy_detector_token,
-    perframe_marker_path, select_resumable_frames)
+    perframe_marker_path, select_resumable_frames, stamp_resumed_markers)
 
 
 def _marker_dir(tmp_path):
@@ -434,6 +434,99 @@ def test_the_WRITER_never_emits_the_legacy_token():
         assert 'perframe_detector_token(' in w, (
             f'marker write not using the basename-derived token: {w}')
         assert "split('_')[3]" not in w, w
+
+
+# The resume's own receipt stamp is a WRITER too.  It looped over the reader
+# list, so it also wrote the legacy spelling -- and on a tree with underscores in
+# several directory names that spelling spans directories, the marker name holds
+# path separators, and `open` raises.  wd2 Q_integ, 2026-10-05: all 12
+# SKIP_IF_DONE=1 array tasks of mainfcbg / mainfcbgkf died within a minute with
+#   FileNotFoundError: ... _perframe_markers/jw03523005001_08101_00001_nrca2_
+#   align_o005_crf.fits.f115w.merged-mainfcbg//F115W/pipeline/jw03523005001.m7.ok
+
+#: The tree shape that crashed, relative so the split does not depend on the
+#: underscores pytest puts in tmp_path (the test chdirs into tmp_path).
+WD2_TREE = ('dolphot_benchmark/Q_integ/tree_mainfcbg//F115W/pipeline/'
+            'jw03523005001_08101_00001_nrca2_align_o005_crf.fits')
+
+
+def _wd2_frame(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    os.makedirs(os.path.dirname(WD2_TREE), exist_ok=True)
+    open(WD2_TREE, 'w').close()
+    return WD2_TREE
+
+
+def test_the_legacy_token_of_the_wd2_tree_spans_directories(tmp_path,
+                                                            monkeypatch):
+    """The precondition, so the tests below exercise the case that crashed."""
+    frame = _wd2_frame(tmp_path, monkeypatch)
+    assert perframe_detector_token(frame) == 'nrca2'
+    assert perframe_legacy_detector_token(frame) == (
+        'mainfcbg//F115W/pipeline/jw03523005001')
+
+
+def test_the_stamp_does_not_raise_on_a_separator_in_the_legacy_token(
+        tmp_path, monkeypatch):
+    frame = _wd2_frame(tmp_path, monkeypatch)
+    d = _marker_dir(tmp_path)
+    stamp_resumed_markers(str(d), [frame], [], 'f115w', 'm7', 'merged')
+    assert sorted(os.listdir(d)) == [
+        _marker_name(frame, 'f115w', 'nrca2', 'm7', merge='merged')]
+
+
+def test_the_stamp_writes_only_the_correct_spelling(tmp_path):
+    """On a tree where the legacy token is a plain exposure number the old loop
+    did not crash -- it wrote a second, legacy-spelled marker, the divergence
+    the writers are not supposed to grow."""
+    frame = _affected_frame(tmp_path)
+    if perframe_legacy_detector_token(frame) == perframe_detector_token(frame):
+        pytest.skip('this tmp_path does not shift the split; no legacy spelling')
+    d = _marker_dir(tmp_path)
+    stamp_resumed_markers(str(d), [frame], [], 'f277w', 'm7', 'merged')
+    assert sorted(os.listdir(d)) == [
+        _marker_name(frame, 'f277w', 'nrcalong', 'm7', merge='merged')]
+
+
+def test_the_stamp_writes_nooverlap_markers_too(tmp_path, monkeypatch):
+    frame = _wd2_frame(tmp_path, monkeypatch)
+    d = _marker_dir(tmp_path)
+    stamp_resumed_markers(str(d), [], [(frame, 'no-overlap (marker)')],
+                          'f115w', 'm7', 'merged')
+    assert sorted(os.listdir(d)) == [
+        _marker_name(frame, 'f115w', 'nrca2', 'm7', kind='nooverlap',
+                     merge='merged')]
+
+
+def test_a_stamped_marker_resumes_its_frame(tmp_path, monkeypatch):
+    """Round trip: what the stamp writes is what the resume reads."""
+    frame = _wd2_frame(tmp_path, monkeypatch)
+    d = _marker_dir(tmp_path)
+    stamp_resumed_markers(str(d), [frame], [], 'f115w', 'm7', 'merged')
+    todo, ok, nov, stale = select_resumable_frames(
+        [{'filename': frame}], str(d), 'f115w', 'm7', 'merged')
+    assert (todo, ok, nov, stale) == ([], [frame], [], [])
+
+
+def test_the_stamp_leaves_an_existing_marker_alone(tmp_path, monkeypatch):
+    """`if not os.path.exists`: re-stamping must not move a marker's mtime,
+    which the #570 staleness gate compares against the seed inputs."""
+    frame = _wd2_frame(tmp_path, monkeypatch)
+    d = _marker_dir(tmp_path)
+    stamp_resumed_markers(str(d), [frame], [], 'f115w', 'm7', 'merged')
+    p = d / _marker_name(frame, 'f115w', 'nrca2', 'm7', merge='merged')
+    os.utime(p, (1e9, 1e9))
+    stamp_resumed_markers(str(d), [frame], [], 'f115w', 'm7', 'merged')
+    assert os.path.getmtime(p) == 1e9
+
+
+def test_run_manual_pipeline_stamps_through_the_helper():
+    """The inline loop over `_perframe_detector_tokens` must not come back:
+    the WRITER guard above only sees `open(_marker_path(...))`, and the stamp
+    wrote through `open(_rp, 'w')`, which is how it escaped that guard."""
+    src = _run_manual_src()
+    assert 'stamp_resumed_markers(_marker_dir, _ok, _nov, filt' in src
+    assert 'open(_rp' not in src
 
 
 # ---------------------------------------------------------------------------
