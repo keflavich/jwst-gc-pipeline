@@ -29,8 +29,8 @@ code), so `git grep -n '<symbol>'` resolves any reference here, and
 3. **Label + refine** — connected components (`ndimage.label`), remove large
    edge bleeds (preserving genuine NaN-variance cores), refine centroids on the
    real core (`_refine_coms_by_data`). The refinement's core leaves out
-   NaN-variance pixels flagged OUTLIER or by the bad-pixel mask
-   (`SATSTAR_SEED_CORE_DQ`, #1098).
+   NaN-variance pixels flagged OUTLIER or by the bad-pixel mask, and the
+   pieces of fewer than 3 px left after that (`SATSTAR_SEED_CORE_DQ`, #1098).
 4. **(MIRI) merge spike satellites** — fold diffraction-spike fragments into the
    parent core (`_merge_spike_satellites`; off for NIRCam).
 5. **(opt) Deblend touching cores** — split merged saturated blobs into one seed
@@ -592,7 +592,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_G0_GROUPDQ` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (#1065) |
 | `SATSTAR_ZF_FIRST_FRAME` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | with NFRAMES > 1, the ZEROFRAME anchor reads k(first frame) × the ramp ZEROFRAME extension (the first frame) where the ramp GROUPDQ flags group 0 SATURATED or DO_NOT_USE; k = binned median group 0 / first frame on the frame's unflagged pixels (`first_frame_group0`) |
 | `SATSTAR_ZF_RIM_BADPIX` | 1 (**on**) | leave DEAD, HOT and REFERENCE_PIXEL pixels out of the ZEROFRAME rim rewrite, and floor a rewritten pixel's fit error at the frame's median ERR; 0 restores the rewrite that weighted dead pixels at 400–5e8× a normal pixel (#1071) |
-| `SATSTAR_SEED_CORE_DQ` | 1 (**on**) | leave NaN-variance pixels carrying OUTLIER, DEAD, HOT, WARM, LOW_QE, RC, TELEGRAPH, NO_LIN_CORR, NO_SAT_CHECK, NO_GAIN_VALUE, NO_FLAT_FIELD, UNRELIABLE_BIAS, OTHER_BAD_PIXEL or REFERENCE_PIXEL out of the core that `_refine_coms_by_data` centres a seed on (`seed_saturation_core`); 0 restores the seed that an OUTLIER pair or a WARM/HOT clump on a star's edge moved 2.4–3.6 px off wd2 stars (#1098) |
+| `SATSTAR_SEED_CORE_DQ` | 1 (**on**) | leave NaN-variance pixels carrying OUTLIER, DEAD, HOT, WARM, LOW_QE, RC, TELEGRAPH, NO_LIN_CORR, NO_SAT_CHECK, NO_GAIN_VALUE, NO_FLAT_FIELD, UNRELIABLE_BIAS, OTHER_BAD_PIXEL or REFERENCE_PIXEL out of the core that `_refine_coms_by_data` centres a seed on (`seed_saturation_core`), then the pieces of fewer than 3 px that remain (a HOT clump on a gc-treasury F480M star's peak otherwise left a 2-px edge pair to win, #1101); 0 restores the seed that an OUTLIER pair or a WARM/HOT clump on a star's edge moved 2.4–3.6 px off wd2 stars (#1098) |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
