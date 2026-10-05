@@ -1851,6 +1851,44 @@ def test_staging_records_the_provenance_the_frames_carry(sr, tmp_path,
         assert recorded[key] == str(on_disk[key]).strip(), key
 
 
+def test_exposure_instruments_withholds_the_other_instruments_frames(
+        sr, tmp_path, monkeypatch):
+    """gc-treasury v1.9 ships NIRCam frames only: the MIRI F770W parallels
+    carry neither the per-visit image roll nor their bulk correction (#956),
+    and the joint catalog's roll gate refuses a release that holds them.
+    `exposure_instruments` is what keeps them out; without it a MIRI frame
+    reaches the release and the gate refuses the whole staging run."""
+    from astropy.io import fits
+    import numpy as np
+
+    data_dir = tmp_path / 'field'
+    names = {
+        'F212N': 'jw12345001001_02101_00001_nrca1_destreak_o001_crf.fits',
+        'F770W': 'jw12345001001_02101_00001_mirimage_o001_crf.fits',
+    }
+    for filt, name in names.items():
+        pipeline = data_dir / filt / 'pipeline'
+        pipeline.mkdir(parents=True)
+        fits.HDUList([fits.PrimaryHDU(np.zeros((2, 2), dtype='float32'))]
+                     ).writeto(pipeline / name)
+
+    config = {'data_dir': data_dir, 'proposal_prefix': 'jw12345',
+              'observations': ['o001']}
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path)
+
+    monkeypatch.setitem(sr.FIELDS, 'zz_inst', dict(config))
+    both = sr._exposures_from_disk('zz_inst', 'v9-test',
+                                   tmp_path / 'v9-test' / 'zz_inst')
+    assert sorted(it['instrument'] for it in both) == ['MIRI', 'NIRCam']
+
+    monkeypatch.setitem(sr.FIELDS, 'zz_inst',
+                        dict(config, exposure_instruments=['NIRCam']))
+    kept = sr._exposures_from_disk('zz_inst', 'v9-test',
+                                   tmp_path / 'v9-test' / 'zz_inst')
+    assert [it['instrument'] for it in kept] == ['NIRCam']
+    assert os.path.basename(kept[0]['src']) == names['F212N']
+
+
 def test_the_recorded_keys_and_the_rendered_keys_are_the_same_set(sr, mw):
     """The list lives twice -- `stage_release` records it, `make_webpage`
     renders it -- and nothing compared them. Narrowing either alone drops rows
