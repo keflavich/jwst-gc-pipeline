@@ -19,13 +19,20 @@ more than a factor 2.  Pinned here:
 4. DO_NOT_USE, DEAD/HOT and group-0-saturated SATURATED pixels do not enter
    the check;
 5. a precomputed R is not checked;
-6. the switch and its cache-signature letter.
+6. the switch and its cache-signature letter;
+7. with fewer than _RCURVE_SATCHECK_MIN_PX measured SATURATED pixels, a
+   curve more than a factor 2 from the header PHOTMJSR / t(group 0) is
+   replaced by it (w51 F187N nrca1: 13 such pixels, R = 0.0026 against 2.66);
+   the header value is read by get_saturated_stars and handed to the anchor.
 """
 import numpy as np
 import pytest
+from astropy.io import fits
 
+import jwst_gc_pipeline.reduction.saturated_star_finding as SSF
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
-    _RCURVE_SATCHECK_MIN_PX, satstar_fit_switches, zeroframe_recover_saturated)
+    _RCURVE_SATCHECK_MIN_PX, satstar_fit_switches, zeroframe_header_R,
+    zeroframe_recover_saturated)
 
 SATBIT, DNUBIT, HOTBIT, JUMPBIT = 2, 1, 2048, 4
 R_TRUE = 1.46
@@ -167,3 +174,156 @@ def test_switch_spellings(monkeypatch, value, on):
 
 def test_switch_default_on():
     assert satstar_fit_switches()['rcurve_satcheck'] is True
+
+
+# --------------------------------------------------------------------------
+# header fallback (too few measured SATURATED pixels)
+# --------------------------------------------------------------------------
+
+FEW = _RCURVE_SATCHECK_MIN_PX - 1
+
+
+def test_too_few_measured_pixels_use_the_header_rate(capsys):
+    data, dq, g0, core, meas = _scene(n_sat_meas=FEW)
+    rec, rim, deep, R = zeroframe_recover_saturated(data, dq, g0,
+                                                    R_header=R_TRUE)
+    out = capsys.readouterr().out
+    assert R == R_TRUE
+    assert 'the header value is used' in out
+    assert rim[meas].all()
+    assert np.allclose(rec[meas], data[meas], rtol=1e-9)
+
+
+def test_header_rate_within_factor_two_leaves_the_curve(capsys):
+    data, dq, g0, core, meas = _scene(calib='real', n_sat_meas=FEW)
+    rec0, rim0, deep0, R0 = zeroframe_recover_saturated(data, dq, g0)
+    rec1, rim1, deep1, R1 = zeroframe_recover_saturated(
+        data, dq, g0, R_header=1.9 * R_TRUE)
+    assert R1 == R0
+    assert np.array_equal(rec1, rec0, equal_nan=True)
+    assert np.array_equal(rim1, rim0) and np.array_equal(deep1, deep0)
+    assert '[zeroframe R-curve check]' not in capsys.readouterr().out
+
+
+def test_header_rate_is_not_consulted_when_the_pixel_check_ran(capsys):
+    data, dq, g0, core, meas = _scene()
+    rec, rim, deep, R = zeroframe_recover_saturated(data, dq, g0,
+                                                    R_header=10 * R_TRUE)
+    out = capsys.readouterr().out
+    assert abs(R / R_TRUE - 1) < 0.03
+    assert 'curve rebuilt' in out
+    assert 'header' not in out
+
+
+def test_header_rate_is_not_consulted_on_a_healthy_checked_curve(capsys):
+    data, dq, g0, core, meas = _scene(calib='real')
+    rec0, rim0, deep0, R0 = zeroframe_recover_saturated(data, dq, g0)
+    rec1, rim1, deep1, R1 = zeroframe_recover_saturated(
+        data, dq, g0, R_header=10 * R_TRUE)
+    assert R1 == R0
+    assert np.array_equal(rec1, rec0, equal_nan=True)
+    assert '[zeroframe R-curve check]' not in capsys.readouterr().out
+
+
+def test_header_rate_off_with_the_check(monkeypatch, capsys):
+    monkeypatch.setenv('SATSTAR_ZF_RCURVE_SATCHECK', '0')
+    data, dq, g0, core, meas = _scene(n_sat_meas=FEW)
+    rec, rim, deep, R = zeroframe_recover_saturated(data, dq, g0,
+                                                    R_header=R_TRUE)
+    assert R < 0.02 * R_TRUE
+    assert '[zeroframe R-curve check]' not in capsys.readouterr().out
+
+
+def test_header_rate_does_not_override_a_precomputed_R(capsys):
+    data, dq, g0, core, meas = _scene(n_sat_meas=FEW)
+    rec, rim, deep, R = zeroframe_recover_saturated(data, dq, g0, R=R_JUNK,
+                                                    R_header=R_TRUE)
+    assert R == R_JUNK
+    assert '[zeroframe R-curve check]' not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('bad', [None, np.nan, 0.0, -1.0])
+def test_unusable_header_rate_is_ignored(bad, capsys):
+    data, dq, g0, core, meas = _scene(n_sat_meas=FEW)
+    rec, rim, deep, R = zeroframe_recover_saturated(data, dq, g0, R_header=bad)
+    assert R < 0.02 * R_TRUE
+    assert '[zeroframe R-curve check]' not in capsys.readouterr().out
+
+
+def _nircam_header(**kw):
+    h = fits.Header({'INSTRUME': 'NIRCAM', 'NFRAMES': 4, 'TFRAME': 10.73677})
+    h.update(kw)
+    return h
+
+
+def test_zeroframe_header_R_nircam():
+    # wd2 F187N nrca4: SHALLOW4, PHOTMJSR 39.23 -> 1.462 (cal/group0 of the
+    # star pixels there: 1.44-1.51)
+    assert zeroframe_header_R(_nircam_header(), 39.23) == pytest.approx(
+        39.23 / (10.73677 * 2.5))
+    assert zeroframe_header_R(_nircam_header(NFRAMES=1), 2.0) == pytest.approx(
+        2.0 / 10.73677)
+
+
+@pytest.mark.parametrize('header, photmjsr', [
+    (None, 1.0),
+    (fits.Header({'INSTRUME': 'MIRI', 'NFRAMES': 1, 'TFRAME': 2.775}), 1.0),
+    (fits.Header({'INSTRUME': 'NIRCAM', 'NFRAMES': 4}), 1.0),
+    (fits.Header({'INSTRUME': 'NIRCAM', 'TFRAME': 10.7}), 1.0),
+    (fits.Header({'INSTRUME': 'NIRCAM', 'NFRAMES': 0, 'TFRAME': 10.7}), 1.0),
+    (fits.Header({'INSTRUME': 'NIRCAM', 'NFRAMES': 4, 'TFRAME': 10.7}), None),
+    (fits.Header({'INSTRUME': 'NIRCAM', 'NFRAMES': 4, 'TFRAME': 10.7}), 0.0),
+    (fits.Header({'INSTRUME': 'NIRCAM', 'NFRAMES': 4, 'TFRAME': 10.7}),
+     np.nan)])
+def test_zeroframe_header_R_unusable(header, photmjsr):
+    assert zeroframe_header_R(header, photmjsr) is None
+
+
+def test_fit_anchor_hands_the_header_rate_on(monkeypatch):
+    seen = {}
+
+    def _recover(data, dq, group0, **kw):
+        seen.update(kw)
+        shp = np.shape(data)
+        return data, np.zeros(shp, bool), np.zeros(shp, bool), np.nan
+    monkeypatch.setattr(SSF, 'zeroframe_recover_saturated', _recover)
+    data, dq, g0, core, meas = _scene()
+    SSF.zeroframe_fit_anchor(data, dq, g0, R_header=1.25)
+    assert seen['R_header'] == 1.25
+
+
+class _AnchorReached(Exception):
+    pass
+
+
+def test_get_saturated_stars_hands_the_header_rate_to_the_anchor(monkeypatch):
+    """get_saturated_stars reads PHOTMJSR / t(group 0) from the frame headers
+    and passes it to ``zeroframe_fit_anchor``.  The anchor is stubbed to stop
+    the fit there."""
+    n = 200
+    sci = np.ones((n, n))
+    dq = np.zeros((n, n), dtype=np.uint32)
+    dq[98:103, 98:103] = SATBIT
+    sci[dq != 0] = np.nan
+    wcs_hdr = fits.Header({'CTYPE1': 'RA---TAN', 'CTYPE2': 'DEC--TAN',
+                           'CRPIX1': 100, 'CRPIX2': 100, 'CRVAL1': 150.0,
+                           'CRVAL2': 2.0, 'CDELT1': -1.7e-5, 'CDELT2': 1.7e-5,
+                           'BUNIT': 'MJy/sr', 'PHOTMJSR': 39.23})
+    fh = fits.HDUList([
+        fits.PrimaryHDU(header=fits.Header({
+            'INSTRUME': 'NIRCAM', 'FILTER': 'F187N', 'PUPIL': 'CLEAR',
+            'DETECTOR': 'NRCA4', 'MODULE': 'A', 'CHANNEL': 'SHORT',
+            'NFRAMES': 4, 'TFRAME': 10.73677, 'NGROUPS': 7, 'GROUPGAP': 1})),
+        fits.ImageHDU(sci, header=wcs_hdr, name='SCI'),
+        fits.ImageHDU(np.full((n, n), 0.1), name='ERR'),
+        fits.ImageHDU(dq, name='DQ'),
+        fits.ImageHDU(np.where(dq != 0, np.nan, 0.01), name='VAR_POISSON')])
+    seen = {}
+
+    def _anchor(data, dq, zeroframe, **kw):
+        seen.update(kw)
+        raise _AnchorReached
+    monkeypatch.setattr(SSF, 'zeroframe_fit_anchor', _anchor)
+    with pytest.raises(_AnchorReached):
+        SSF.get_saturated_stars(fh, zeroframe=np.ones((n, n)), plot=False)
+    assert seen['R_header'] == pytest.approx(39.23 / (10.73677 * 2.5))
