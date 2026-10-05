@@ -64,6 +64,7 @@ def test_classify_image_miri():
     assert c('jw10678113001_02201_00001_mirimage_cal.fits') == 'cal'
     assert c('jw10678113001_02201_00001_mirimage_align.fits') == 'frame'
     assert c('jw10678113001_02201_00001_mirimage_o113_crf.fits') == 'frame'
+    assert c('jw02221002001_03201_00001_mirimage_align_o002_crf.fits') == 'frame'
     assert c('jw10678113001_02201_00001_mirimage_i2d.fits') == 'skip'
     assert c('jw10678113001_02201_00001_mirimage_ramp.fits') == 'skip'
     assert c('jw10678-o113_t001_miri_f770w_i2d.fits') == 'i2d-primary'

@@ -127,7 +127,8 @@ def classify_image(basename):
         # MIRI's crf carries no destreak/align stem (*_mirimage_o<obs>_crf).
         # A stemless NIRCam crf is a stale pre-destreak product (brick 2221,
         # cloudc 2022/23): left alone.
-        crf = r'(destreak|align)_o\d{3}_crf' if det != 'mirimage' else r'o\d{3}_crf'
+        crf = r'(destreak|align)_o\d{3}_crf' if det != 'mirimage' \
+            else r'((destreak|align)_)?o\d{3}_crf'
         if rest in ('destreak', 'align') or re.fullmatch(crf, rest):
             return 'frame'
         return 'skip'                     # satstar/wingcal/model/residual per-frame products
