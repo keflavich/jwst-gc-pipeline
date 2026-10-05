@@ -2,7 +2,8 @@
 
 WHAT THIS DOES
 --------------
-Rotates the WCS -- and only the WCS -- of already-aligned NIRCam products by
+Rotates the WCS -- and only the WCS -- of already-aligned NIRCam and MIRI
+imager products by
 the per-visit roll in ``roll_corrections.csv``, about the same per-visit pivot
 the catalog correction uses (``astrometry.catalog_roll_correction``: the visit
 coverage centroid).  Pixels, fluxes and fits are untouched; nothing is
@@ -23,7 +24,8 @@ Products
   table shift ``t`` after the rotation on regeneration, and
   ``S_t o R_(P-t) = R_P o S_t``, so a regenerated frame reproduces the
   rotated aligned frame instead of losing the roll.
-* **i2d mosaics** (``jw<prog>-o<obs>_t*_nircam_*_i2d.fits``): CRVAL and PC in
+* **i2d mosaics** (``jw<prog>-o<obs>_t*_nircam_*_i2d.fits``,
+  ``jw<prog>-o<obs>_t*_miri_<filter>_i2d.fits``): CRVAL and PC in
   the SCI header, the ``FITSImagingWCSTransform`` in the ASDF GWCS and
   ``meta.wcsinfo`` are updated together.  A single-roll mosaic is corrected
   EXACTLY (a rotation of the sphere maps a TAN projection onto a TAN
@@ -31,6 +33,19 @@ Products
   cloudef 2092 o002) gets the best single similarity to the per-pixel
   catalog model; the residual is measured and stored (``ROLLIRES``) and the
   write is refused above ``--i2d-tol-mas``.
+
+MIRI imager
+~~~~~~~~~~~
+MIRI frames (``*_mirimage_cal.fits``, ``*_mirimage_align.fits``,
+``*_mirimage_o<obs>_crf.fits``) of a NIRCam visit are rotated about that
+visit's NIRCam pivot.  The roll is an attitude error of the whole
+observatory, so one rotation about one point corrects every instrument in
+the visit; rotating MIRI about its own center would instead add a
+translation of roll x separation (~40 mas at ~7' for an 18" roll).  The
+MIRI parallels of 10678 are the case this exists for.  Rotating about the
+NIRCam pivot leaves a translation at MIRI (roll x separation); a MIRI bulk
+offset (issue #956) absorbs it only if that offset is fit AFTER the roll,
+so fit MIRI bulk offsets on rolled frames, never before.
 
 Provenance, idempotency, reversibility
 --------------------------------------
@@ -93,8 +108,8 @@ class ImageRollError(RuntimeError):
 # classification
 # ----------------------------------------------------------------------------
 
-_FRAME_RE = re.compile(r'^jw(\d{5})(\d{3})(\d{3})_\d{5}_\d{5}_(nrc[a-z0-9]+)_(.+)\.fits$')
-_I2D_RE = re.compile(r'^jw(\d{5})-o(\d{3})_t\d+_nircam_[a-z0-9-]+?_i2d\.fits$')
+_FRAME_RE = re.compile(
+    r'^jw(\d{5})(\d{3})(\d{3})_\d{5}_\d{5}_(nrc[a-z0-9]+|mirimage)_(.+)\.fits$')
 
 
 def classify_image(basename):
@@ -104,18 +119,25 @@ def classify_image(basename):
         return 'skip'
     m = _FRAME_RE.match(b)
     if m:
-        rest = m.group(5)
+        det, rest = m.group(4), m.group(5)
         if rest == 'cal':
             return 'cal'
         if rest == 'i2d':
             return 'skip'                 # MAST stage-2 per-exposure i2d: unaligned
-        if rest in ('destreak', 'align') or re.fullmatch(r'(destreak|align)_o\d{3}_crf', rest):
+        # MIRI's crf carries no destreak/align stem (*_mirimage_o<obs>_crf).
+        # A stemless NIRCam crf is a stale pre-destreak product (brick 2221,
+        # cloudc 2022/23): left alone.
+        crf = r'(destreak|align)_o\d{3}_crf' if det != 'mirimage' \
+            else r'((destreak|align)_)?o\d{3}_crf'
+        if rest in ('destreak', 'align') or re.fullmatch(crf, rest):
             return 'frame'
         return 'skip'                     # satstar/wingcal/model/residual per-frame products
     if b.startswith('jw') and b.endswith('_i2d.fits') and '_nircam_' in b:
         if re.search(r'-(merged|nrca|nrcb|nrcalong|nrcblong)(_data)?_i2d\.fits$', b):
             return 'i2d-primary'
         return 'i2d-derived'
+    if re.fullmatch(r'jw\d{5}-o\d{3}_t\d+_miri_f\d+w_i2d\.fits', b):
+        return 'i2d-primary'
     return 'skip'
 
 
@@ -684,7 +706,7 @@ def restore_product(fn):
 # ----------------------------------------------------------------------------
 
 def enumerate_images(field_name, include_derived=False, filters=None, obs=None):
-    """{class: [paths]} of a field's NIRCam image products (read-only listing).
+    """{class: [paths]} of a field's NIRCam + MIRI image products (read-only listing).
 
     ``obs`` (iterable of 3-digit ids) narrows the globs, which matters on
     gc-treasury, whose pipeline directories hold >10^5 files.
