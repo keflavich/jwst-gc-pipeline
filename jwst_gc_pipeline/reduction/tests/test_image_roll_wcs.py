@@ -57,6 +57,22 @@ def test_classify_image():
     assert c('jw10678-o040_t001_nircam_clear-f212n-merged_im0_badastrom_i2d.fits') == 'skip'
 
 
+def test_classify_image_miri():
+    c = irw.classify_image
+    assert c('jw10678113001_02201_00001_mirimage_cal.fits') == 'cal'
+    assert c('jw10678113001_02201_00001_mirimage_align.fits') == 'frame'
+    assert c('jw10678113001_02201_00001_mirimage_o113_crf.fits') == 'frame'
+    assert c('jw10678113001_02201_00001_mirimage_i2d.fits') == 'skip'
+    assert c('jw10678113001_02201_00001_mirimage_ramp.fits') == 'skip'
+    assert c('jw10678-o113_t001_miri_f770w_i2d.fits') == 'i2d-primary'
+    # image3 per-member intermediates are not products
+    assert c('jw10678-o113_t001_miri_f770w_0_o113_crf.fits') == 'skip'
+    assert c('jw10678-o113_t001_miri_f770w_segm.fits') == 'skip'
+    # same (program, observation, visit) as the NIRCam frames of the visit
+    assert irw._prog_obs_from_name('jw10678113001_02201_00001_mirimage_o113_crf.fits') == \
+        ('10678', '113', '001')
+
+
 def test_rotate_frame_matches_rotation_and_is_idempotent(tmp_path):
     fn = _synthetic_frame(tmp_path / 'x_destreak.fits', raoffset=1.5)
     ra0, dec0 = _grid_sky(fn)
