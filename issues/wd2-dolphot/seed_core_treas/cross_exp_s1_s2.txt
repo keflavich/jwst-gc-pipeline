@@ -1,0 +1,7 @@
+s1: rows 1947, stars with >= 4 exposures (one row each) 258, rows with flags&16 26, rejected rows 0
+s2: rows 1944, stars with >= 4 exposures (one row each) 257, rows with flags&16 12, rejected rows 0
+stars in both arms: 257
+pos-rms changed by > 1 mas: 7  (better in s2: 7, worse: 0)
+  all      N= 257 median pos_rms s1    2.6 s2    2.5 mas; median mag_rms s1 0.061 s2 0.061; flags16 rows s1 16 s2 8
+  changed  N=   7 median pos_rms s1   15.9 s2    2.4 mas; median mag_rms s1 0.098 s2 0.034; flags16 rows s1 7 s2 0
+  changed with pos_rms > 30 mas in either arm: 0  better 0 worse 0

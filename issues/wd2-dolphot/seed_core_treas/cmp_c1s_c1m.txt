@@ -1,0 +1,37 @@
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.708892 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.867458 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729381699.972 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.708892 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.867458 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729381699.972 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.710392 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.868383 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729387955.818 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.714210 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.870738 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729403860.545 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.693754 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.858126 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729318330.085 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.737740 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.885268 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729501311.133 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.686897 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.853902 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729289492.660 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.723968 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.876761 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729444393.666 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.722439 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.875817 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729438052.840 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.729263 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.880031 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729466317.722 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.730754 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.880952 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729472481.717 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+c1s -> c1m: gained 0, lost 0
