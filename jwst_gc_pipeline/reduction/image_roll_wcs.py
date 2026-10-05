@@ -42,7 +42,10 @@ visit's NIRCam pivot.  The roll is an attitude error of the whole
 observatory, so one rotation about one point corrects every instrument in
 the visit; rotating MIRI about its own center would instead add a
 translation of roll x separation (~40 mas at ~7' for an 18" roll).  The
-MIRI parallels of 10678 are the case this exists for.
+MIRI parallels of 10678 are the case this exists for.  Rotating about the
+NIRCam pivot leaves a translation at MIRI (roll x separation); a MIRI bulk
+offset (issue #956) absorbs it only if that offset is fit AFTER the roll,
+so fit MIRI bulk offsets on rolled frames, never before.
 
 Provenance, idempotency, reversibility
 --------------------------------------
