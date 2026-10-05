@@ -33,6 +33,9 @@ RAMP = 'jw02221001001_07101_00001_nrca2_ramp.fits'
 def _clean_env(monkeypatch):
     for name in [n for n in os.environ if 'SATSTAR' in n]:
         monkeypatch.delenv(name, raising=False)
+    # the keys pinned here are the anchor / qfit / error parts; the seed-core
+    # part (`sq`, default on) has its own tests in test_satstar_seed_core_dq.py
+    monkeypatch.setenv('SATSTAR_SEED_CORE_DQ', '0')
 
 
 def _frame(tmp_path, with_ramp):
