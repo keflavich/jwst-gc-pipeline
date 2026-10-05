@@ -1295,7 +1295,7 @@ def zeroframe_header_R(header, photmjsr):
     1..NFRAMES, read at TFRAME, 2 TFRAME, ... after the reset, so
     t(group 0) = TFRAME x (NFRAMES + 1) / 2, and a pixel with rate r [DN/s]
     reads r x t(group 0) in group 0 and r x PHOTMJSR in the crf.  The measured
-    R(g0) curve of 47 healthy NIRCam frames (brick, sgrb2, gc-treasury, w51,
+    R(g0) curve of 46 healthy NIRCam frames (brick, sgrb2, gc-treasury, w51,
     wd2; 2026-10) sat at 0.88-1.04 times this value.  Returns None for other
     instruments, or when a keyword is missing or not positive.
     """
