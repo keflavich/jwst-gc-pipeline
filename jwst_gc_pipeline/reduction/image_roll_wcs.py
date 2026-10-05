@@ -116,13 +116,16 @@ def classify_image(basename):
         return 'skip'
     m = _FRAME_RE.match(b)
     if m:
-        rest = m.group(5)
+        det, rest = m.group(4), m.group(5)
         if rest == 'cal':
             return 'cal'
         if rest == 'i2d':
             return 'skip'                 # MAST stage-2 per-exposure i2d: unaligned
-        # MIRI's crf carries no destreak/align stem: *_mirimage_o<obs>_crf
-        if rest in ('destreak', 'align') or re.fullmatch(r'((destreak|align)_)?o\d{3}_crf', rest):
+        # MIRI's crf carries no destreak/align stem (*_mirimage_o<obs>_crf).
+        # A stemless NIRCam crf is a stale pre-destreak product (brick 2221,
+        # cloudc 2022/23): left alone.
+        crf = r'(destreak|align)_o\d{3}_crf' if det != 'mirimage' else r'o\d{3}_crf'
+        if rest in ('destreak', 'align') or re.fullmatch(crf, rest):
             return 'frame'
         return 'skip'                     # satstar/wingcal/model/residual per-frame products
     if b.startswith('jw') and b.endswith('_i2d.fits') and '_nircam_' in b:

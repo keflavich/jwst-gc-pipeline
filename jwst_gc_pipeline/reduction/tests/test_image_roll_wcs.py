@@ -50,6 +50,8 @@ def test_classify_image():
     assert c('jw01182004001_02101_00001_nrca1_destreak_o004_crf.fits') == 'frame'
     assert c('jw01182004001_02101_00001_nrca1_i2d.fits') == 'skip'
     assert c('jw01182004001_02101_00001_nrca1_destreak_satstar_catalog.fits') == 'skip'
+    # stale stemless NIRCam crf (brick 2221 / cloudc, pre-destreak lineage)
+    assert c('jw02221001001_07101_00001_nrca1_o001_crf.fits') == 'skip'
     assert c('jw10678-o040_t001_nircam_clear-f212n-merged_i2d.fits') == 'i2d-primary'
     assert c('jw10678-o040_t001_nircam_clear-f212n-nrca_data_i2d.fits') == 'i2d-primary'
     assert c('jw10678-o040_t001_nircam_clear-f212n-merged_m7_daophot_basic_mergedcat_'
