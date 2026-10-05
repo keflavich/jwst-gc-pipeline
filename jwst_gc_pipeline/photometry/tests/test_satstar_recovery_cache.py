@@ -7,10 +7,18 @@ because the pre-recovery caches were reused).  The recovery signature stamped in
 meta['SATRECOV'] must force a rebuild on mismatch and a cache-hit on match."""
 import types
 
+import pytest
 from astropy.table import Table
 
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as CL
 from jwst_gc_pipeline.photometry.cataloging import _satstar_recovery_signature
+
+
+@pytest.fixture(autouse=True)
+def _no_fit_switch_part(monkeypatch):
+    # these caches carry no SATFITSW; the seed-core part (`sq`, default on)
+    # would refit them once, which test_satstar_seed_core_dq.py covers
+    monkeypatch.setenv('SATSTAR_SEED_CORE_DQ', '0')
 
 
 def _opts(**kw):
