@@ -14,6 +14,7 @@ written by `_on_result` on the worker that SUCCEEDED.  Unlike a predicted
 filename it cannot drift from what the writer does.
 """
 import os
+import re
 
 import pytest
 
@@ -513,7 +514,10 @@ def test_run_manual_pipeline_stamps_through_the_helper():
     the WRITER guard above only sees `open(_marker_path(...))`, and the stamp
     wrote through `open(_rp, 'w')`, which is how it escaped that guard."""
     src = _run_manual_src()
-    assert 'stamp_resumed_markers(_marker_dir, _ok, _nov, filt' in src
+    # the label is this run's `module`; any other label leaves the finalize's
+    # per-label completeness check without its receipts
+    assert re.search(r'stamp_resumed_markers\(\s*_marker_dir,\s*_ok,\s*_nov,'
+                     r'\s*filt,\s*phase,\s*module\s*\)', src)
     assert 'open(_rp' not in src
 
 
