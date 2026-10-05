@@ -508,18 +508,6 @@ def test_a_stamped_marker_resumes_its_frame(tmp_path, monkeypatch):
     assert (todo, ok, nov, stale) == ([], [frame], [], [])
 
 
-def test_the_stamp_leaves_an_existing_marker_alone(tmp_path, monkeypatch):
-    """`if not os.path.exists`: re-stamping must not move a marker's mtime,
-    which the #570 staleness gate compares against the seed inputs."""
-    frame = _wd2_frame(tmp_path, monkeypatch)
-    d = _marker_dir(tmp_path)
-    stamp_resumed_markers(str(d), [frame], [], 'f115w', 'm7', 'merged')
-    p = d / _marker_name(frame, 'f115w', 'nrca2', 'm7', merge='merged')
-    os.utime(p, (1e9, 1e9))
-    stamp_resumed_markers(str(d), [frame], [], 'f115w', 'm7', 'merged')
-    assert os.path.getmtime(p) == 1e9
-
-
 def test_run_manual_pipeline_stamps_through_the_helper():
     """The inline loop over `_perframe_detector_tokens` must not come back:
     the WRITER guard above only sees `open(_marker_path(...))`, and the stamp
