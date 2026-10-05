@@ -1,0 +1,15 @@
+F150W 10101_00001_nrcb3 (1385,1280) dolphot 16.55 nsat 24: c1 +nan  c1s -0.08  -> gain in c1s
+F150W 10101_00001_nrcb3 (1410,1282) dolphot 17.39 nsat 19: c1 +nan  c1s +0.07  -> gain in c1s
+F150W 10101_00001_nrcb3 (1414,1278) dolphot 17.54 nsat 16: c1 +nan  c1s -0.08  -> gain in c1s
+F250M 04101_00001_nrcalong (1644,809) dolphot 15.53 nsat 18: c1 +nan  c1s +0.04  -> gain in c1s
+F250M 04101_00001_nrcalong (1638,781) dolphot 15.66 nsat 15: c1 +nan  c1s +0.01  -> gain in c1s
+F250M 04101_00001_nrcalong (974,237) dolphot 13.31 nsat 32: c1 +nan  c1s -0.05  -> gain in c1s
+F250M 04101_00001_nrcalong (1603,803) dolphot 13.18 nsat 26: c1 +0.95  c1s +0.13  -> gain in c1s
+c1 -> c1s: gained 7, lost 0
+F150W 10101_00001_nrcb3 (1385,1280) dolphot 16.55 nsat 24: c1k +nan  c1ks -0.03  -> gain in c1ks
+F187N 06101_00002_nrcb1 (57,756) dolphot 14.24 nsat 32: c1k +0.46  c1ks -0.01  -> gain in c1ks
+F250M 04101_00001_nrcalong (1644,809) dolphot 15.53 nsat 18: c1k +nan  c1ks -0.01  -> gain in c1ks
+F250M 04101_00001_nrcalong (1638,781) dolphot 15.66 nsat 15: c1k +nan  c1ks -0.01  -> gain in c1ks
+F250M 04101_00001_nrcalong (974,237) dolphot 13.31 nsat 32: c1k +nan  c1ks -0.05  -> gain in c1ks
+F250M 04101_00001_nrcalong (1603,803) dolphot 13.18 nsat 26: c1k +0.94  c1ks +0.04  -> gain in c1ks
+c1k -> c1ks: gained 6, lost 0
