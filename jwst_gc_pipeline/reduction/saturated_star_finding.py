@@ -1077,6 +1077,11 @@ def satstar_fit_switches(env=None):
     * ``SATSTAR_ZF_RIM_BADPIX`` (default ON): DEAD, HOT and REFERENCE_PIXEL
       pixels are left out of the rim rewrite, and a rewritten rim pixel's
       error is at least the frame's median ERR (``zeroframe_rim_error``).
+    * ``SATSTAR_ZF_RCURVE_SATCHECK`` (default ON): the measured R(g0) curve
+      is checked against SATURATED pixels that have a ramp-fit rate (finite,
+      positive, no DO_NOT_USE, group 0 clean); when the two differ by more
+      than a factor ``_RCURVE_SATCHECK_MAX_RATIO`` the curve is rebuilt from
+      those pixels (``zeroframe_recover_saturated``).
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (5.0, the box qfit cap): qfit over the disk r < R around the fit
@@ -1103,6 +1108,7 @@ def satstar_fit_switches(env=None):
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
         'first_frame': _env_switch('SATSTAR_ZF_FIRST_FRAME', cap_on, env),
         'rim_badpix': _env_switch('SATSTAR_ZF_RIM_BADPIX', True, env),
+        'rcurve_satcheck': _env_switch('SATSTAR_ZF_RCURVE_SATCHECK', True, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1174,6 +1180,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             zf += 'b'
         if sw['first_frame']:
             zf += 'f'
+        if sw['rcurve_satcheck']:
+            zf += 'c'
         if zf:
             parts.append('zf' + zf)
     if sw['qfit_local_r'] > 0:
@@ -1271,6 +1279,56 @@ def first_frame_group0(group0, first_frame, region, *, lo, hi,
 _RIM_BADPIX_BITS = (dqflags.pixel['DEAD'] | dqflags.pixel['HOT']
                     | dqflags.pixel['REFERENCE_PIXEL'])
 
+# SATSTAR_ZF_RCURVE_SATCHECK: minimum number of measured SATURATED pixels, and
+# the largest factor between the measured R(g0) curve and their cal/group0
+# before the curve is rebuilt from them.
+_RCURVE_SATCHECK_MIN_PX = 50
+_RCURVE_SATCHECK_MAX_RATIO = 2.0
+
+
+def zeroframe_header_R(header, photmjsr):
+    """PHOTMJSR / t(group 0): the crf SCI / group 0 ratio implied by the
+    header of a NIRCam exposure, in MJy/sr per DN.
+
+    ``header`` is the primary header (INSTRUME, NFRAMES, TFRAME);
+    ``photmjsr`` comes from the SCI header.  Group 0 averages frames
+    1..NFRAMES, read at TFRAME, 2 TFRAME, ... after the reset, so
+    t(group 0) = TFRAME x (NFRAMES + 1) / 2, and a pixel with rate r [DN/s]
+    reads r x t(group 0) in group 0 and r x PHOTMJSR in the crf.  The measured
+    R(g0) curve of 46 healthy NIRCam frames (brick, sgrb2, gc-treasury, w51,
+    wd2; 2026-10) sat at 0.88-1.04 times this value.  Returns None for other
+    instruments, or when a keyword is missing or not positive.
+    """
+    if header is None:
+        return None
+    if str(header.get('INSTRUME', '')).upper() != 'NIRCAM':
+        return None
+    try:
+        nframes = int(header['NFRAMES'])
+        tframe = float(header['TFRAME'])
+        photmjsr = float(photmjsr)
+    except (KeyError, TypeError, ValueError):
+        return None
+    t0 = tframe * (nframes + 1) / 2.
+    if not (nframes >= 1 and t0 > 0 and np.isfinite(photmjsr)
+            and photmjsr > 0):
+        return None
+    return photmjsr / t0
+
+
+def _rcurve_bins(g, r, lo, hi, min_per_bin=20):
+    """Binned medians of ``r`` in 8 log-spaced bins of ``g`` from ``lo`` to
+    ``hi``; bins with fewer than ``min_per_bin`` values are skipped.  Returns
+    ``(centres, medians)`` as lists."""
+    edges = np.geomspace(lo, max(hi, lo * 1.01), 9)
+    ctr, med = [], []
+    for k in range(len(edges) - 1):
+        inb = (g >= edges[k]) & (g < edges[k + 1])
+        if int(inb.sum()) >= min_per_bin:
+            ctr.append(np.sqrt(edges[k] * edges[k + 1]))
+            med.append(float(np.nanmedian(r[inb])))
+    return ctr, med
+
 
 def zeroframe_rim_error(data, err, rim, *, floor=True):
     """1-sigma fit error with the ZEROFRAME-rewritten rim filled in.
@@ -1299,7 +1357,7 @@ def zeroframe_rim_error(data, err, rim, *, floor=True):
 def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                                 g0_sat_frac=0.9, sat_dilate=3, infl_tol=0.10,
                                 R=None, group0_saturated=None,
-                                first_frame=None):
+                                first_frame=None, R_header=None):
     """Recover the saturated-star RIM from the ramp first read (group-0).
 
     A bright star's DQ-SATURATED region reads wrong in the calibrated frame: the
@@ -1336,7 +1394,11 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     WARNING when the R used at the bright end is below half the faint-bin R.
     ``SATSTAR_ZF_KEEP_FINITE`` (default OFF) leaves SATURATED pixels that have
     a valid ramp-fit rate alone.  ``SATSTAR_ZF_RIM_BADPIX`` (default ON) leaves
-    DEAD, HOT and REFERENCE_PIXEL pixels out of the rim.  See
+    DEAD, HOT and REFERENCE_PIXEL pixels out of the rim.
+    ``SATSTAR_ZF_RCURVE_SATCHECK`` (default ON) rebuilds a measured curve that
+    disagrees by more than a factor 2 with the SATURATED pixels the ramp fit
+    measured, and, when too few such pixels exist, replaces a curve that
+    disagrees by more than a factor 2 with ``R_header``.  See
     ``satstar_fit_switches``.
 
     Parameters
@@ -1377,6 +1439,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         frame is positive, the anchor reads the scaled first frame instead of
         group 0 (``first_frame_group0``); those pixels then follow the rim
         path.  The ceiling is still estimated from the raw group 0.
+    R_header : float or None
+        PHOTMJSR / t(group 0) from the frame header (``zeroframe_header_R``),
+        or None.  Used by the R-curve check only when fewer than
+        ``_RCURVE_SATCHECK_MIN_PX`` measured SATURATED pixels are available.
 
     Returns
     -------
@@ -1423,6 +1489,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     g0_eff, _ff_rep, _ = first_frame_group0(
         group0, first_frame, sat_buf, lo=R_g0_min, hi=ceiling,
         group0_saturated=group0_saturated)
+    _g0_clean_raw = g0_clean
     g0_clean = g0_clean | _ff_rep
     _sw = satstar_fit_switches()
     # SATSTAR_ZF_KEEP_FINITE (default OFF): a SATURATED pixel with a finite,
@@ -1436,7 +1503,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     else:
         _keep = None
     _Rcurve = None
-    if R is None or not np.isfinite(R):
+    _measured = R is None or not np.isfinite(R)
+    if _measured:
         # cal/group0 DRIFTS ~25% from faint to bright pixels even after the
         # linearity step (0.229 at group0~2k -> 0.167 at ~20k on brick F182M
         # nrca1; residual single-read nonlinearity / charge migration).  A
@@ -1452,13 +1520,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         if int(good.sum()) >= 50:
             _g = group0[good]
             _r = data[good] / _g
-            _edges = np.geomspace(R_g0_min, max(ceiling, R_g0_min * 1.01), 9)
-            _ctr, _med = [], []
-            for _k in range(len(_edges) - 1):
-                _inb = (_g >= _edges[_k]) & (_g < _edges[_k + 1])
-                if int(_inb.sum()) >= 20:
-                    _ctr.append(np.sqrt(_edges[_k] * _edges[_k + 1]))
-                    _med.append(float(np.nanmedian(_r[_inb])))
+            _ctr, _med = _rcurve_bins(_g, _r, R_g0_min, ceiling)
             _raw_ctr, _raw_med = list(_ctr), list(_med)
             # R-curve guard (SATSTAR_ZF_RCURVE_GUARD, default ON; issue #972):
             # above the brightest genuinely unsaturated pixel the "good" set
@@ -1526,6 +1588,71 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                           f"R (< 0.5): the R(g0) curve looks collapsed; "
                           f"saturated cores will be rewritten far below their "
                           f"true rate ({_hint})", flush=True)
+    # R-curve check against the measured SATURATED pixels
+    # (SATSTAR_ZF_RCURVE_SATCHECK, default ON).  The step guard above cannot
+    # help when every calibration bin is junk.  On a sparse frame no star pixel
+    # stays unsaturated above R_g0_min, so the "good" set holds only hot and
+    # offset pixels from the first bin on: wd2 F187N nrca4 (SHALLOW4, 2026-10)
+    # measured R = 0.0165 where cal/group0 of the star pixels is 1.44-1.51
+    # (PHOTMJSR / t(group 0) = 1.46), and every rewritten core read ~1% of its
+    # rate.  A SATURATED pixel with a finite, positive rate, no DO_NOT_USE and
+    # a clean group 0 was measured by the ramp fit from its pre-saturation
+    # groups, so its cal/group0 is the R of the star pixels at the group 0 of
+    # the pixels being rewritten.  When the curve read at their median group 0
+    # differs from their median cal/group0 by more than
+    # _RCURVE_SATCHECK_MAX_RATIO, the curve is rebuilt from those pixels.
+    _satchecked = False
+    if _measured and np.isfinite(R) and _sw['rcurve_satcheck'] and dq is not None:
+        _dqi = np.asarray(dq).astype(np.int64)
+        _satcal = (sat & _g0_clean_raw & (group0 > R_g0_min)
+                   & np.isfinite(data) & (data > 0)
+                   & ((_dqi & (dqflags.pixel['DO_NOT_USE']
+                               | _RIM_BADPIX_BITS)) == 0))
+        _nsat = int(_satcal.sum())
+        _satchecked = _nsat >= _RCURVE_SATCHECK_MIN_PX
+        if _satchecked:
+            _gs = group0[_satcal]
+            _rs = data[_satcal] / _gs
+            _r_sat = float(np.median(_rs))
+            _g_sat = float(np.median(_gs))
+            if _Rcurve is not None:
+                _r_cur = float(np.interp(np.log(_g_sat), np.log(_Rcurve[0]),
+                                         _Rcurve[1]))
+            else:
+                _r_cur = float(R)
+            _fac = _r_cur / _r_sat if _r_sat > 0 else np.nan
+            if (np.isfinite(_fac) and _fac > 0
+                    and max(_fac, 1.0 / _fac) > _RCURVE_SATCHECK_MAX_RATIO):
+                _sc, _sm = _rcurve_bins(_gs, _rs, R_g0_min, ceiling)
+                if len(_sc) >= 2:
+                    _Rcurve = (np.array(_sc), np.array(_sm))
+                    R = float(_sm[-1])
+                else:
+                    _Rcurve = None
+                    R = _r_sat
+                print(f"[zeroframe R-curve check] R(g0) at g0~{_g_sat:.0f} DN "
+                      f"is {_fac:.3g}x the cal/group0 of {_nsat} SATURATED "
+                      f"pixels with a ramp-fit rate ({_r_sat:.4g}); curve "
+                      f"rebuilt from those pixels ({len(_sc)} bin(s), R used "
+                      f"at bright end={R:.4g})", flush=True)
+    # Header fallback of the check: on a frame with fewer than
+    # _RCURVE_SATCHECK_MIN_PX measured SATURATED pixels the check above cannot
+    # run (w51 F187N nrca1, 2026-10: 13 such pixels; most of its 2336
+    # SATURATED pixels are DO_NOT_USE or read ~0 DN in group 0), and the
+    # junk curve stayed at R = 0.0026 against PHOTMJSR / t(group 0) = 2.66.
+    # The header value then serves as the reference, with the same factor.
+    if (_measured and np.isfinite(R) and _sw['rcurve_satcheck']
+            and not _satchecked and R_header is not None
+            and np.isfinite(R_header) and R_header > 0):
+        _fac = R / R_header
+        if _fac > 0 and max(_fac, 1.0 / _fac) > _RCURVE_SATCHECK_MAX_RATIO:
+            print(f"[zeroframe R-curve check] bright-end R {R:.4g} is "
+                  f"{_fac:.3g}x the header PHOTMJSR / t(group 0) "
+                  f"{R_header:.4g}, with fewer than {_RCURVE_SATCHECK_MIN_PX} "
+                  f"SATURATED pixels with a ramp-fit rate to check against; "
+                  f"the header value is used", flush=True)
+            _Rcurve = None
+            R = float(R_header)
     recovered = np.array(data, dtype=float, copy=True)
     rim_mask = np.zeros(shp, dtype=bool)
     if np.isfinite(R):
@@ -1563,7 +1690,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
 
 
 def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
-                         first_frame=None):
+                         first_frame=None, R_header=None):
     """Apply the ZEROFRAME fit anchor for ``get_saturated_stars``.
 
     Returns ``(data, zf_deep_core, rim, rewrite_delta)``:
@@ -1583,13 +1710,14 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
     blob would mask exactly the pixels KEEP_FINITE keeps (a 45-px blob fully
     masked instead of its 9 deep-core pixels in the test scene).
 
-    ``group0_saturated`` (GROUPDQ first-read saturation, or None) and
+    ``group0_saturated`` (GROUPDQ first-read saturation, or None),
     ``first_frame`` (the ramp ZEROFRAME extension of a multi-frame readout, or
-    None) are passed on to ``zeroframe_recover_saturated``.
+    None) and ``R_header`` (``zeroframe_header_R``, or None) are passed on to
+    ``zeroframe_recover_saturated``.
     """
     rec, rim, deep, R = zeroframe_recover_saturated(
         data, dq, zeroframe, group0_saturated=group0_saturated,
-        first_frame=first_frame)
+        first_frame=first_frame, R_header=R_header)
     if not np.isfinite(R):
         return data, None, rim, None
     sw = satstar_fit_switches()
@@ -3261,7 +3389,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         data, zf_deep_core, _rim, _zf_rewrite_delta = zeroframe_fit_anchor(
             data, _dqarr_zf, zeroframe,
             group0_saturated=zeroframe_group0_saturated,
-            first_frame=zeroframe_first_frame)
+            first_frame=zeroframe_first_frame,
+            R_header=zeroframe_header_R(
+                header, fitsdata['SCI'].header.get(
+                    'PHOTMJSR', header.get('PHOTMJSR'))))
 
     # Fit-quality switches (issue #972), read once per frame.
     _fit_switches = satstar_fit_switches()
