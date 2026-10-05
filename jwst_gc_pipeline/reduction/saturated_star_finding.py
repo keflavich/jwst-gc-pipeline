@@ -1293,6 +1293,9 @@ for _bit in ('OUTLIER', 'DEAD', 'HOT', 'WARM', 'LOW_QE', 'RC', 'TELEGRAPH',
              'UNRELIABLE_BIAS', 'OTHER_BAD_PIXEL', 'REFERENCE_PIXEL'):
     _SEED_CORE_EXCLUDE_BITS |= dqflags.pixel[_bit]
 del _bit
+# the smallest filtered fragment that still counts as a saturated core; the
+# refinement itself recentres only when a component holds at least 3 such px
+_SEED_CORE_MIN_PX = 3
 
 
 def seed_saturation_core(unrecoverable, dq, env=None):
@@ -1310,13 +1313,29 @@ def seed_saturation_core(unrecoverable, dq, env=None):
     F250M fit ended on the 1.5 FWHM position bound, 0.95 mag faint.
 
     With ``SATSTAR_SEED_CORE_DQ`` on (default) and a DQ array, pixels with any
-    ``_SEED_CORE_EXCLUDE_BITS`` bit are left out; otherwise ``unrecoverable``
-    is returned unchanged.  The flag image keeps the unfiltered mask.
+    ``_SEED_CORE_EXCLUDE_BITS`` bit are left out, and so are the fragments
+    of fewer than ``_SEED_CORE_MIN_PX`` pixels that remain; otherwise
+    ``unrecoverable`` is returned unchanged.  The flag image keeps the
+    unfiltered mask.
+
+    The fragment cut matters when a bad-pixel clump sits on the star's own
+    peak.  On gc-treasury F480M (jw10678040001_02101_00002 nrcalong) a 5-px
+    HOT / WARM clump covers the brightest pixels of a 70-px component; leaving
+    it out left a 2-px DO_NOT_USE | SATURATED pair on the component's edge,
+    which won the refinement and put the seed 4 px off (fit on the bound,
+    flags 17).  Without the pair the seed falls back to the eroded core.
     """
     if dq is None or not satstar_fit_switches(env)['seed_core_dq']:
         return unrecoverable
-    return unrecoverable & ((np.asarray(dq).astype(np.int64)
+    core = unrecoverable & ((np.asarray(dq).astype(np.int64)
                              & _SEED_CORE_EXCLUDE_BITS) == 0)
+    lab, n = ndimage.label(core)
+    if n == 0:
+        return core
+    size = np.bincount(lab.ravel(), minlength=n + 1)
+    keep = size >= _SEED_CORE_MIN_PX
+    keep[0] = False
+    return keep[lab]
 
 
 def zeroframe_rim_error(data, err, rim, *, floor=True):

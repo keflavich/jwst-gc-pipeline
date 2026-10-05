@@ -135,10 +135,42 @@ def test_a_hot_pixel_inside_a_genuine_core_keeps_the_seed_on_it():
     (3 | 2 ** 31, False),       # + REFERENCE_PIXEL
 ])
 def test_which_dq_bits_leave_the_core(dq, kept):
-    unrec = np.ones((1, 1), bool)
-    dqa = np.full((1, 1), dq, dtype=np.uint32)
-    assert bool(ssf.seed_saturation_core(unrec, dqa, env=ON)[0, 0]) is kept
-    assert bool(ssf.seed_saturation_core(unrec, dqa, env=OFF)[0, 0])
+    unrec = np.ones((2, 2), bool)
+    dqa = np.full((2, 2), dq, dtype=np.uint32)
+    assert bool(ssf.seed_saturation_core(unrec, dqa, env=ON).all()) is kept
+    assert ssf.seed_saturation_core(unrec, dqa, env=OFF).all()
+
+
+def test_fragments_left_by_the_filter_leave_the_core():
+    """1- and 2-px pieces are dropped, a 3-px piece is kept; with the switch
+    off nothing is dropped."""
+    unrec = np.zeros((8, 8), bool)
+    unrec[0, 0] = True
+    unrec[2, 2:4] = True
+    unrec[5, 1:4] = True
+    dq = np.full(unrec.shape, 3, dtype=np.uint32)
+    core = ssf.seed_saturation_core(unrec, dq, env=ON)
+    assert np.array_equal(np.argwhere(core), [[5, 1], [5, 2], [5, 3]])
+    assert ssf.seed_saturation_core(unrec, dq, env=OFF) is unrec
+
+
+def test_a_bad_pixel_clump_on_the_peak_leaves_no_edge_fragment_to_win():
+    """gc-treasury F480M nrcalong e2 (#1101): a 5-px HOT / WARM clump covers
+    the star's brightest pixels, and a 2-px DO_NOT_USE | SATURATED pair and a
+    single pixel sit on the edge of the 70-px component.  Without the clump
+    the pair would be the largest piece left, 3.9 px off the star."""
+    sat = _disk((40, 40), 20, 20, 4.5)
+    dq = np.where(sat, 3, 0)
+    unrec = np.zeros(sat.shape, bool)
+    for (y, x), v in zip([(19, 20), (20, 20), (21, 20), (20, 19), (20, 21)],
+                         [6147, 6147, 6151, 22531, 1103875]):
+        unrec[y, x] = True
+        dq[y, x] = v
+    for y, x in [(17, 17), (18, 17), (23, 19)]:
+        unrec[y, x] = True
+    assert all(sat[y, x] for y, x in [(17, 17), (18, 17), (23, 19)])
+    assert np.hypot(*np.subtract(_seed(sat, unrec, dq, OFF), (20, 20))) < 0.5
+    assert np.hypot(*np.subtract(_seed(sat, unrec, dq, ON), (20, 20))) < 0.5
 
 
 def test_no_dq_leaves_the_core_unchanged():
