@@ -50,11 +50,30 @@ def test_classify_image():
     assert c('jw01182004001_02101_00001_nrca1_destreak_o004_crf.fits') == 'frame'
     assert c('jw01182004001_02101_00001_nrca1_i2d.fits') == 'skip'
     assert c('jw01182004001_02101_00001_nrca1_destreak_satstar_catalog.fits') == 'skip'
+    # stale stemless NIRCam crf (brick 2221 / cloudc, pre-destreak lineage)
+    assert c('jw02221001001_07101_00001_nrca1_o001_crf.fits') == 'skip'
     assert c('jw10678-o040_t001_nircam_clear-f212n-merged_i2d.fits') == 'i2d-primary'
     assert c('jw10678-o040_t001_nircam_clear-f212n-nrca_data_i2d.fits') == 'i2d-primary'
     assert c('jw10678-o040_t001_nircam_clear-f212n-merged_m7_daophot_basic_mergedcat_'
              'residual_i2d.fits') == 'i2d-derived'
     assert c('jw10678-o040_t001_nircam_clear-f212n-merged_im0_badastrom_i2d.fits') == 'skip'
+
+
+def test_classify_image_miri():
+    c = irw.classify_image
+    assert c('jw10678113001_02201_00001_mirimage_cal.fits') == 'cal'
+    assert c('jw10678113001_02201_00001_mirimage_align.fits') == 'frame'
+    assert c('jw10678113001_02201_00001_mirimage_o113_crf.fits') == 'frame'
+    assert c('jw02221002001_03201_00001_mirimage_align_o002_crf.fits') == 'frame'
+    assert c('jw10678113001_02201_00001_mirimage_i2d.fits') == 'skip'
+    assert c('jw10678113001_02201_00001_mirimage_ramp.fits') == 'skip'
+    assert c('jw10678-o113_t001_miri_f770w_i2d.fits') == 'i2d-primary'
+    # image3 per-member intermediates are not products
+    assert c('jw10678-o113_t001_miri_f770w_0_o113_crf.fits') == 'skip'
+    assert c('jw10678-o113_t001_miri_f770w_segm.fits') == 'skip'
+    # same (program, observation, visit) as the NIRCam frames of the visit
+    assert irw._prog_obs_from_name('jw10678113001_02201_00001_mirimage_o113_crf.fits') == \
+        ('10678', '113', '001')
 
 
 def test_rotate_frame_matches_rotation_and_is_idempotent(tmp_path):
@@ -272,9 +291,11 @@ def test_in_flight_guard_parses_job_names(monkeypatch):
     import subprocess
 
     class R:
-        stdout = ('gc-treasury10678-o063-m7\nbrick2221-o001-reduce-F182M\n'
-                  '1pass_extract_gc-treasury_F212N_o066\ngc-monitor\n')
+        stdout = ('101 gc-treasury10678-o063-m7\n102_3 brick2221-o001-reduce-F182M\n'
+                  '103 1pass_extract_gc-treasury_F212N_o066\n104 gc-monitor\n')
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: R())
+    monkeypatch.delenv('SLURM_JOB_ID', raising=False)
+    monkeypatch.delenv('SLURM_ARRAY_JOB_ID', raising=False)
     busy, names = irw.in_flight_observations(user='x')
     assert ('10678', '063') in busy and ('2221', '001') in busy and (None, '066') in busy
     assert irw.is_busy('10678', '063', 'gc-treasury', busy, names)
@@ -290,6 +311,30 @@ def test_in_flight_guard_parses_job_names(monkeypatch):
     assert irw.is_busy('10678', '040', 'gc-treasury', busy,
                        names + ['gc-treasury10678-regen-F480M'])
     assert irw.is_busy('10678', '040', 'gc-treasury', busy, names + ['gctreasury10678-m7'])
+
+
+def test_in_flight_guard_skips_its_own_job(monkeypatch):
+    """The apply job's own name carries the field; it must not block itself."""
+    import subprocess
+
+    class R:
+        stdout = '44440289 quintuplet-rollwcs-apply-pilot\n'
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: R())
+    monkeypatch.setenv('SLURM_JOB_ID', '44440289')
+    monkeypatch.delenv('SLURM_ARRAY_JOB_ID', raising=False)
+    busy, names = irw.in_flight_observations(user='x')
+    assert names == []
+    assert not irw.is_busy('2045', '003', 'quintuplet', busy, names)
+    # an array task of this job is also this job
+    R.stdout = '500_2 brick-rollwcs-apply\n'
+    monkeypatch.setenv('SLURM_JOB_ID', '502')
+    monkeypatch.setenv('SLURM_ARRAY_JOB_ID', '500')
+    assert irw.in_flight_observations(user='x')[1] == []
+    # a different job with the field name still blocks
+    monkeypatch.setenv('SLURM_JOB_ID', '1')
+    monkeypatch.delenv('SLURM_ARRAY_JOB_ID')
+    busy, names = irw.in_flight_observations(user='x')
+    assert irw.is_busy('1182', '004', 'brick', busy, names)
 
 
 def test_refuses_release_symlink_target(tmp_path):

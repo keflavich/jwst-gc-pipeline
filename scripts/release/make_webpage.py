@@ -162,7 +162,20 @@ KIND_LABEL = {
     "seed": "Seed source list",
     "catalog_per_filter_vetted": "Per-filter vetted",
     "detector_frame": "Detector-frame exposure",
+    # gc-treasury's all-tile joint NIRCam catalog (`stage_release.py
+    # --joint-catalog`) -- its own product, not a per-field cross-band merge,
+    # so it carries its own kinds rather than reusing catalog_full/_qualcut.
+    "catalog_joint": "Joint catalog (all-tile)",
+    "catalog_joint_provenance": "Joint catalog provenance",
 }
+
+#: Kinds that count as "the field-wide catalog has been built" for the
+#: preliminary-release banner below.  `catalog_full` is the normal per-field
+#: cross-band merge; `catalog_joint` is gc-treasury's all-tile equivalent --
+#: there is no per-field merge for it to be a subset of, so treating its
+#: absence as "preliminary" would tell a reader the all-tile catalog
+#: shipped beside it is not there.
+FULL_CATALOG_KINDS = {"catalog_full", "catalog_joint"}
 
 #: Manifest category of a detector-frame exposure (see `exposure_bundle`).
 #: Named here rather than imported so the page generator keeps working against
@@ -1112,7 +1125,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     for viewer in manifold or ():
         out.append(manifold_link_html(viewer, manifest.get("version"),
                                       labelled=len(manifold) > 1))
-    if catalogs and not any(f["kind"] == "catalog_full" for f in catalogs):
+    if catalogs and not any(f["kind"] in FULL_CATALOG_KINDS for f in catalogs):
         out.append("<p class=muted><b>Preliminary catalog release.</b> The field-wide "
                    "merged photometry table is still being built; only the per-filter "
                    "vetted catalogs are provided for now. The merged table will be added "
@@ -1122,8 +1135,9 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     else:
         out.append(f"<table><tr><th>Catalog</th>{obs_col}<th>Filter</th><th>Iteration</th>"
                    "<th>Version</th><th>Size</th><th>Download</th></tr>")
-        cat_order = {"catalog_full": 0, "catalog_qualcut": 1, "seed": 2,
-                     "catalog_per_filter_vetted": 3}
+        cat_order = {"catalog_full": 0, "catalog_joint": 0, "catalog_qualcut": 1,
+                     "seed": 2, "catalog_per_filter_vetted": 3,
+                     "catalog_joint_provenance": 4}
         for f in sorted(catalogs, key=lambda f: (f.get("observation") or "",
                                                  cat_order.get(f["kind"], 9),
                                                  f.get("filter") or "")):

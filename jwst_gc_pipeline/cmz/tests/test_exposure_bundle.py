@@ -1851,9 +1851,715 @@ def test_staging_records_the_provenance_the_frames_carry(sr, tmp_path,
         assert recorded[key] == str(on_disk[key]).strip(), key
 
 
+def test_exposure_instruments_withholds_the_other_instruments_frames(
+        sr, tmp_path, monkeypatch):
+    """gc-treasury v1.9 ships NIRCam frames only: the MIRI F770W parallels
+    carry neither the per-visit image roll nor their bulk correction (#956),
+    and the joint catalog's roll gate refuses a release that holds them.
+    `exposure_instruments` is what keeps them out; without it a MIRI frame
+    reaches the release and the gate refuses the whole staging run."""
+    from astropy.io import fits
+    import numpy as np
+
+    data_dir = tmp_path / 'field'
+    names = {
+        'F212N': 'jw12345001001_02101_00001_nrca1_destreak_o001_crf.fits',
+        'F770W': 'jw12345001001_02101_00001_mirimage_o001_crf.fits',
+    }
+    for filt, name in names.items():
+        pipeline = data_dir / filt / 'pipeline'
+        pipeline.mkdir(parents=True)
+        fits.HDUList([fits.PrimaryHDU(np.zeros((2, 2), dtype='float32'))]
+                     ).writeto(pipeline / name)
+
+    config = {'data_dir': data_dir, 'proposal_prefix': 'jw12345',
+              'observations': ['o001']}
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path)
+
+    monkeypatch.setitem(sr.FIELDS, 'zz_inst', dict(config))
+    both = sr._exposures_from_disk('zz_inst', 'v9-test',
+                                   tmp_path / 'v9-test' / 'zz_inst')
+    assert sorted(it['instrument'] for it in both) == ['MIRI', 'NIRCam']
+
+    monkeypatch.setitem(sr.FIELDS, 'zz_inst',
+                        dict(config, exposure_instruments=['NIRCam']))
+    kept = sr._exposures_from_disk('zz_inst', 'v9-test',
+                                   tmp_path / 'v9-test' / 'zz_inst')
+    assert [it['instrument'] for it in kept] == ['NIRCam']
+    assert os.path.basename(kept[0]['src']) == names['F212N']
+
+
 def test_the_recorded_keys_and_the_rendered_keys_are_the_same_set(sr, mw):
     """The list lives twice -- `stage_release` records it, `make_webpage`
     renders it -- and nothing compared them. Narrowing either alone drops rows
     from the version table silently, since the renderer only shows keys it
     knows and the recorder only writes keys it lists."""
     assert set(sr.FRAME_PROVENANCE_KEYS) == set(mw.FRAME_PROVENANCE_ORDER)
+
+
+# ---------------------------------------------------------------------------
+# gc-treasury joint NIRCam catalog (stage_release.stage_joint_catalog)
+# ---------------------------------------------------------------------------
+# These build a fake joint-catalog BUILD DIRECTORY -- a tiny stand-in
+# .fits/.parquet (neither `check_joint_catalog` nor `stage_joint_catalog` reads
+# their CONTENT, only their existence and their sha256) plus a real
+# `.prov.json` in the shape `treasury_joint_catalog.build_joint_catalog`
+# actually writes (`gate_override` is `None` or
+# `{'allow_overlap_fail_reason': <reason>}`, never a bare string).
+#
+# Roll-table provenance (PR #1091 review, Blocking 2): every tile here
+# defaults to the SAME fake sha (`DEFAULT_ROLL_SHA`), and `_joint_field`
+# monkeypatches `roll_table_versions`/`current_roll_table_sha` so that sha IS
+# the current one -- the per-observation value check then passes trivially
+# for every test that does not care about it. Tests that DO exercise the
+# roll-table gate override both.
+DEFAULT_ROLL_SHA = 'aaaaaaaaaaaa'
+ALT_ROLL_SHA = 'bbbbbbbbbbbb'
+
+
+def _joint_build(root, name='2026-10-04_test', n_rows_total=100, n_tiles=2,
+                 n_clusters=3, roll_corrected=True, tiles_roll=None,
+                 n_failed=0, n_overlapping=1, tol_mas=30.0,
+                 gate_override=None, pipeline_tag='tag-abc',
+                 write_parquet=True, write_prov=True, dedup_radius_arcsec=0.2,
+                 tiles_rollctab=None, tiles_path=None):
+    build_dir = root / name
+    build_dir.mkdir(parents=True)
+    stem = 'gctreasury10678_joint_nircam'
+    (build_dir / f'{stem}.fits').write_bytes(('FITSDATA-%s' % name).encode())
+    if write_parquet:
+        (build_dir / f'{stem}.parquet').write_bytes(b'PARQUETDATA')
+    if tiles_roll is None:
+        tiles_roll = {'o100': roll_corrected, 'o101': roll_corrected}
+    if tiles_rollctab is None:
+        tiles_rollctab = {o: f'sha1:{DEFAULT_ROLL_SHA}' for o in tiles_roll}
+    tiles_path = tiles_path or {}
+    if write_prov:
+        prov = {
+            'pipeline_tag': pipeline_tag,
+            'n_rows_total': n_rows_total,
+            'n_tiles': n_tiles,
+            'n_clusters': n_clusters,
+            'roll_corrected': roll_corrected,
+            'dedup_radius_arcsec': dedup_radius_arcsec,
+            'overlap_gate': {
+                'tol_mas': tol_mas, 'n_pairs_checked': 1,
+                'n_overlapping': n_overlapping, 'n_failed': n_failed,
+            },
+            'gate_override': gate_override,
+            'tiles': {
+                o: dict({'roll_corrected': v, 'rollctab': tiles_rollctab.get(o)},
+                       **({'path': tiles_path[o]} if o in tiles_path else {}))
+                for o, v in tiles_roll.items()
+            },
+        }
+        (build_dir / f'{stem}.prov.json').write_text(json.dumps(prov))
+    return build_dir
+
+
+def _joint_field(sr, monkeypatch, tmp_path, field='zz_joint'):
+    """Register `field` in sr.FIELDS with a joint_catalog_root under tmp_path,
+    and point GLOBUS_COLLECTION_ROOT there -- the same pattern every other
+    test in this module uses for the exposures-only path, applied here.
+
+    Also monkeypatches the roll-table resolvers (PR #1091 review) to a fixed,
+    fake default so every test that is not specifically about the roll-table
+    gate does not depend on real git history -- `DEFAULT_ROLL_SHA` covers
+    both the catalog-tile obsid convention this fixture file already uses
+    ('o100'/'o101') and the bare (no 'o') convention real frame filenames and
+    `roll_corrections.csv` rows use ('100'/'101')."""
+    root = tmp_path / 'catalogs_joint'
+    monkeypatch.setitem(sr.FIELDS, field, {
+        'joint_catalog_root': root,
+        # `write_readme` -> `astrometry_provenance.collect` reads
+        # `field_cfg["data_dir"]` unconditionally; this field is not in
+        # `alignment_config.ALIGNMENT_CONFIG` so it resolves to "unregistered"
+        # and never touches the directory's contents.
+        'data_dir': tmp_path / 'pipeline_data_dir',
+    })
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path / 'releases')
+    monkeypatch.setattr(sr, 'roll_table_versions', lambda: {
+        DEFAULT_ROLL_SHA: {('10678', 'o100'): 1.0, ('10678', 'o101'): 1.0,
+                           ('10678', '100'): 1.0, ('10678', '101'): 1.0},
+    })
+    monkeypatch.setattr(sr, 'current_roll_table_sha', lambda: DEFAULT_ROLL_SHA)
+    return root
+
+
+def _frame_fits(path, rollarc=None):
+    """A minimal 2-HDU FITS (PRIMARY + 'SCI') for the Blocking-1 frame-roll
+    gate. The caller picks a filename of the form ``jw<prog>-o<obs>_...`` so
+    ``image_roll_wcs._prog_obs_from_name`` resolves (program, observation)
+    straight from the name, with no header-only fallback needed."""
+    from astropy.io import fits
+    import numpy as np
+    primary = fits.PrimaryHDU()
+    sci = fits.ImageHDU(data=np.zeros((2, 2), dtype='float32'), name='SCI')
+    if rollarc is not None:
+        sci.header['ROLLARC'] = float(rollarc)
+    fits.HDUList([primary, sci]).writeto(path, overwrite=True)
+    return str(path)
+
+
+def _exposure_item(sr, src, dest='exposures/F212N/frame.fits', filter='F212N'):
+    return {
+        'category': sr.exposure_bundle.EXPOSURE_CATEGORY,
+        'kind': sr.exposure_bundle.EXPOSURE_KIND,
+        'filter': filter, 'iteration': None, 'observation': None,
+        'src': str(src), 'dest': dest,
+        'size_bytes': os.path.getsize(src), 'version': 'v9-test',
+    }
+
+
+def test_discover_joint_catalog_picks_the_newest_prov_by_mtime(sr, tmp_path,
+                                                                monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    older = _joint_build(root, name='2026-09-01_old')
+    newer = _joint_build(root, name='2026-10-04_new')
+    old_prov = next(older.glob('*.prov.json'))
+    new_prov = next(newer.glob('*.prov.json'))
+    now = os.path.getmtime(new_prov)
+    os.utime(old_prov, (now - 1000, now - 1000))
+    os.utime(new_prov, (now, now))
+    chosen = sr.discover_joint_catalog('zz_joint')
+    assert chosen == newer
+
+
+def test_discover_joint_catalog_an_explicit_build_dir_wins(sr, tmp_path,
+                                                            monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    newer = _joint_build(root, name='2026-10-04_new')
+    older = _joint_build(root, name='2026-09-01_old')
+    assert sr.discover_joint_catalog('zz_joint', build_dir=older) == older
+    del newer  # unused beyond establishing "newer exists but is not chosen"
+
+
+def test_discover_joint_catalog_refuses_an_unregistered_field(sr):
+    with pytest.raises(sr.JointCatalogGateError, match='joint_catalog_root'):
+        sr.discover_joint_catalog('zz_not_registered_joint_field')
+
+
+def test_discover_joint_catalog_refuses_an_empty_root(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    root.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(sr.JointCatalogGateError, match='no joint-catalog build'):
+        sr.discover_joint_catalog('zz_joint')
+
+
+def test_check_joint_catalog_happy_path(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root)
+    summary = sr.check_joint_catalog(build_dir)
+    assert summary['n_rows_total'] == 100
+    assert summary['n_tiles'] == 2
+    assert summary['n_clusters'] == 3
+    assert summary['overlap_n_overlapping'] == 1
+    assert summary['overlap_n_failed'] == 0
+    assert summary['overlap_tol_mas'] == 30.0
+    assert summary['gate_override'] is None
+    assert summary['pipeline_tag'] == 'tag-abc'
+    assert summary['roll_corrected'] is True
+    assert summary['build_dir'] == str(build_dir)
+
+
+def test_check_joint_catalog_refuses_overlap_failures_with_no_override(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, n_failed=2)
+    with pytest.raises(sr.JointCatalogGateError, match='2 failing'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_check_joint_catalog_allows_a_recorded_override(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(
+        root, n_failed=1,
+        gate_override={'allow_overlap_fail_reason':
+                       'o100|o101 known 40 mas, tracked in #999'})
+    summary = sr.check_joint_catalog(build_dir)
+    assert summary['overlap_n_failed'] == 1
+    assert summary['gate_override']['allow_overlap_fail_reason'].startswith(
+        'o100|o101')
+
+
+def test_check_joint_catalog_refuses_a_raw_build(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, roll_corrected=False,
+                             tiles_roll={'o100': False, 'o101': False})
+    with pytest.raises(sr.JointCatalogGateError, match='roll_corrected'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_check_joint_catalog_refuses_a_mixed_build(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, roll_corrected=True,
+                             tiles_roll={'o100': True, 'o101': False})
+    with pytest.raises(sr.JointCatalogGateError, match='NOT roll-corrected'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_check_joint_catalog_refuses_a_missing_parquet(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, write_parquet=False)
+    with pytest.raises(sr.JointCatalogGateError, match='incomplete'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_check_joint_catalog_refuses_an_empty_table(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, n_rows_total=0)
+    with pytest.raises(sr.JointCatalogGateError, match='n_rows_total'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_stage_joint_catalog_gate_failure_writes_nothing(sr, tmp_path,
+                                                          monkeypatch):
+    _joint_field(sr, monkeypatch, tmp_path)
+    root = tmp_path / 'catalogs_joint'
+    _joint_build(root, n_failed=3)
+    field_dir = tmp_path / 'releases' / 'v9-test' / 'zz_joint'
+    with pytest.raises(sr.JointCatalogGateError):
+        sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases')
+    assert not field_dir.exists()
+
+
+def test_stage_joint_catalog_happy_path_fresh_release(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root)
+    field_dir, n = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                          tmp_path / 'releases')
+    assert n == 3
+    assert field_dir == tmp_path / 'releases' / 'v9-test' / 'zz_joint'
+    manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    catalog_items = [f for f in manifest['files'] if f['category'] == 'catalog']
+    assert len(catalog_items) == 3
+    kinds = sorted(f['kind'] for f in catalog_items)
+    assert kinds == ['catalog_joint', 'catalog_joint', 'catalog_joint_provenance']
+    for f in catalog_items:
+        assert (field_dir / f['dest']).is_file()
+        assert 'sha256' in f
+    checksums = (field_dir / 'CHECKSUMS.sha256').read_text()
+    for f in catalog_items:
+        assert f['dest'] in checksums
+    assert manifest['joint_catalog_added']
+    assert manifest['joint_catalog']['n_rows_total'] == 100
+
+
+def test_stage_joint_catalog_preserves_an_existing_manifest(sr, tmp_path,
+                                                             monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root)
+    field_dir = tmp_path / 'releases' / 'v9-test' / 'zz_joint'
+    field_dir.mkdir(parents=True)
+    other_file = field_dir / 'images' / 'F212N' / 'm_i2d.fits'
+    other_file.parent.mkdir(parents=True)
+    other_file.write_bytes(b'MOSAIC')
+    other_sha = sr.sha256sum(other_file)
+    prior_manifest = {
+        'field': 'zz_joint', 'version': 'v9-test', 'group': None,
+        'release_path': '/releases/v9-test/zz_joint',
+        'built': '2026-01-01T00:00:00-05:00', 'mode': 'copy',
+        'continuity_gate': 'passed',
+        'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+        'globus_https_base': sr.GLOBUS_HTTPS_BASE,
+        'files': [{'category': 'image', 'kind': 'science', 'filter': 'F212N',
+                   'iteration': None, 'observation': None,
+                   'src': str(other_file),
+                   'dest': 'images/F212N/m_i2d.fits', 'sha256': other_sha,
+                   'size_bytes': other_file.stat().st_size, 'version': 'v9-test'}],
+    }
+    (field_dir / 'MANIFEST.json').write_text(json.dumps(prior_manifest))
+    (field_dir / 'CHECKSUMS.sha256').write_text(
+        f'{other_sha}  images/F212N/m_i2d.fits\n')
+
+    field_dir2, n = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                           tmp_path / 'releases',
+                                           allow_older=True)
+    assert field_dir2 == field_dir
+    manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    assert manifest['built'] == '2026-01-01T00:00:00-05:00'   # NOT touched
+    image_items = [f for f in manifest['files'] if f['category'] == 'image']
+    assert image_items == prior_manifest['files']
+    assert len(manifest['files']) == 1 + 3   # image + 3 joint files
+    checksums = (field_dir / 'CHECKSUMS.sha256').read_text()
+    assert f'{other_sha}  images/F212N/m_i2d.fits' in checksums
+    catalog_items = [f for f in manifest['files'] if f['category'] == 'catalog']
+    for f in catalog_items:
+        assert f['dest'] in checksums
+
+
+def test_stage_joint_catalog_restaging_replaces_not_duplicates(sr, tmp_path,
+                                                                monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root, name='2026-09-01_v1', n_rows_total=100)
+    field_dir, n1 = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                           tmp_path / 'releases')
+    manifest1 = json.loads((field_dir / 'MANIFEST.json').read_text())
+    n_catalog_1 = len([f for f in manifest1['files'] if f['category'] == 'catalog'])
+
+    build2 = _joint_build(root, name='2026-10-04_v2', n_rows_total=200)
+    older_prov = next((root / '2026-09-01_v1').glob('*.prov.json'))
+    newer_prov = next(build2.glob('*.prov.json'))
+    t0 = os.path.getmtime(older_prov)
+    os.utime(newer_prov, (t0 + 1000, t0 + 1000))
+
+    field_dir2, n2 = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                            tmp_path / 'releases',
+                                            allow_older=True)
+    assert field_dir2 == field_dir
+    manifest2 = json.loads((field_dir / 'MANIFEST.json').read_text())
+    catalog_items = [f for f in manifest2['files'] if f['category'] == 'catalog']
+    assert len(catalog_items) == n_catalog_1   # replaced, not accumulated
+    assert manifest2['joint_catalog']['n_rows_total'] == 200
+    checksums = (field_dir / 'CHECKSUMS.sha256').read_text().splitlines()
+    dests = [f['dest'] for f in catalog_items]
+    assert len(checksums) == len(dests)   # exactly one line per dest, no dupes
+
+
+def test_exposures_then_joint_catalog_share_one_release(sr, tmp_path,
+                                                         monkeypatch):
+    """gc-treasury's own shape: frames staged from disk first (no mosaic
+    exists yet for this field), then the joint catalog added on top.  Both
+    must land in the same MANIFEST.json/CHECKSUMS.sha256, and the joint
+    catalog's dests must be checksummed even though the exposures beside them
+    deliberately are not."""
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    monkeypatch.setitem(sr.FIELDS['zz_joint'], 'data_dir', tmp_path / 'pipeline')
+
+    # PR #1091 review, Blocking 1: `stage_joint_catalog` re-checks every
+    # exposure already in the manifest for a matching roll WCS, so this fake
+    # exposure must be a real FITS carrying a ROLLARC that agrees with the
+    # fixture's mocked roll table (`_joint_field` -> 1.0" for 10678/100), and
+    # named so `_prog_obs_from_name` can resolve its (program, observation).
+    fake_exposure_src = tmp_path / 'pipeline_src' / 'jw10678-o100_cal.fits'
+    fake_exposure_src.parent.mkdir(parents=True)
+    _frame_fits(fake_exposure_src, rollarc=1.0)
+
+    def _fake_exposures_from_disk(field, version, field_dir):
+        it = {
+            'category': sr.exposure_bundle.EXPOSURE_CATEGORY,
+            'kind': sr.exposure_bundle.EXPOSURE_KIND,
+            'filter': 'F212N', 'iteration': None, 'observation': None,
+            'instrument': 'NIRCam', 'src': str(fake_exposure_src),
+            'version': version, 'provenance': {},
+        }
+        it['dest'] = str(sr.assign_dest(it, field))
+        it['size_bytes'] = fake_exposure_src.stat().st_size
+        rel = (field_dir / it['dest']).relative_to(sr.GLOBUS_COLLECTION_ROOT)
+        it['globus_path'] = '/' + str(rel)
+        it['url'] = sr.GLOBUS_HTTPS_BASE + it['globus_path']
+        return [it]
+
+    monkeypatch.setattr(sr, '_exposures_from_disk', _fake_exposures_from_disk)
+    # astrometry_provenance.stage_item would otherwise look for a real offsets
+    # table for this field; there is none, so it must return None rather than
+    # the test needing to fabricate one.
+    monkeypatch.setattr(sr.astrometry_provenance, 'stage_item',
+                        lambda *a, **kw: None)
+
+    field_dir, n_exp = sr.stage_exposures_only(
+        'zz_joint', 'v9-test', tmp_path / 'releases', from_disk=True)
+    assert n_exp == 1
+
+    _joint_build(root)
+    field_dir2, n_cat = sr.stage_joint_catalog(
+        'zz_joint', 'v9-test', tmp_path / 'releases', allow_older=True)
+    assert field_dir2 == field_dir
+    assert n_cat == 3
+
+    manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    exposures = [f for f in manifest['files']
+                if f['category'] == sr.exposure_bundle.EXPOSURE_CATEGORY]
+    catalogs = [f for f in manifest['files'] if f['category'] == 'catalog']
+    assert len(exposures) == 1
+    assert len(catalogs) == 3
+
+    checksums = (field_dir / 'CHECKSUMS.sha256').read_text()
+    for f in catalogs:
+        assert f['dest'] in checksums
+    for f in exposures:
+        assert f['dest'] not in checksums   # exposures are never checksummed
+
+
+# ---------------------------------------------------------------------------
+# Roll-table provenance gate (PR #1091 review, Blocking 1 + 2)
+# ---------------------------------------------------------------------------
+
+def test_roll_table_versions_without_git_checkout_refuses(sr, tmp_path,
+                                                        monkeypatch):
+    """A tree with no git history cannot resolve tile ROLLCTAB shas; that is
+    a gate refusal (JointCatalogGateError -> exit 2), not a traceback."""
+    monkeypatch.setattr(sr, "_roll_table_repo_root", lambda: str(tmp_path))
+    with pytest.raises(sr.JointCatalogGateError, match="git history"):
+        sr.roll_table_versions()
+
+
+def test_roll_table_versions_includes_the_current_file(sr):
+    """Real git history, no monkeypatching: the function this module's gate
+    is built on must at minimum resolve the CURRENT working-tree file, even
+    if its sha is not (yet) in any commit."""
+    versions = sr.roll_table_versions()
+    current_sha = sr.current_roll_table_sha()
+    assert current_sha in versions
+    assert isinstance(versions[current_sha], dict)
+    assert len(versions[current_sha]) > 0
+    # every real 10678 row is a bare zero-padded observation, never 'o'-prefixed
+    assert all(k[0].isdigit() for k in versions[current_sha])
+
+
+def test_current_roll_table_sha_matches_the_real_file(sr):
+    from jwst_gc_pipeline.astrometry.catalog_roll_correction import table_sha
+    from jwst_gc_pipeline.reduction.roll_correction import TABLE
+    assert sr.current_roll_table_sha() == table_sha(TABLE)
+
+
+def test_field_program_derives_from_proposal_prefix(sr):
+    assert sr._field_program('gc-treasury') == '10678'
+
+
+def test_field_program_refuses_a_field_with_no_proposal_prefix(sr):
+    with pytest.raises(sr.JointCatalogGateError, match='proposal_prefix'):
+        sr._field_program('zz_not_a_real_field')
+
+
+def test_check_joint_catalog_refuses_unresolvable_rollctab_sha(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(
+        root, tiles_rollctab={'o100': 'sha1:deadbeef0000', 'o101': 'sha1:deadbeef0000'})
+    with pytest.raises(sr.JointCatalogGateError, match='does not match any version'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_check_joint_catalog_refuses_disagreeing_table_version(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    # the ALT table disagrees with the current one for o100 (2.0" vs 1.0")
+    monkeypatch.setattr(sr, 'roll_table_versions', lambda: {
+        DEFAULT_ROLL_SHA: {('10678', 'o100'): 1.0, ('10678', 'o101'): 1.0},
+        ALT_ROLL_SHA: {('10678', 'o100'): 2.0, ('10678', 'o101'): 1.0},
+    })
+    build_dir = _joint_build(
+        root, tiles_rollctab={'o100': f'sha1:{ALT_ROLL_SHA}',
+                              'o101': f'sha1:{DEFAULT_ROLL_SHA}'})
+    with pytest.raises(sr.JointCatalogGateError, match='disagrees with the CURRENT'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_check_joint_catalog_passes_with_two_agreeing_table_versions(
+        sr, tmp_path, monkeypatch):
+    """Tiles corrected under TWO different table versions still pass when
+    each version's value for that tile's observation agrees with the
+    current table -- the real 68-tile/six-version shape."""
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    monkeypatch.setattr(sr, 'roll_table_versions', lambda: {
+        DEFAULT_ROLL_SHA: {('10678', 'o100'): 1.0, ('10678', 'o101'): 1.0},
+        ALT_ROLL_SHA: {('10678', 'o100'): 1.0, ('10678', 'o101'): 1.0},
+    })
+    build_dir = _joint_build(
+        root, tiles_rollctab={'o100': f'sha1:{ALT_ROLL_SHA}',
+                              'o101': f'sha1:{DEFAULT_ROLL_SHA}'})
+    summary = sr.check_joint_catalog(build_dir)
+    assert summary['roll_tables'] == {f'sha1:{ALT_ROLL_SHA}': 1,
+                                      f'sha1:{DEFAULT_ROLL_SHA}': 1}
+    assert summary['roll_value_check'] == (
+        'per-observation values match current table')
+
+
+def test_check_joint_catalog_refuses_missing_rollctab(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, tiles_rollctab={'o100': None, 'o101': None})
+    with pytest.raises(sr.JointCatalogGateError, match='carries no ROLLCTAB'):
+        sr.check_joint_catalog(build_dir)
+
+
+def test_check_joint_catalog_falls_back_to_tile_header_rollctab(
+        sr, tmp_path, monkeypatch):
+    """A build written before PR #1091 whose prov.json lacks `rollctab` must
+    still pass by reading it from the tile's own on-disk FITS header via
+    `tiles[obsid]['path']` -- this is what lets the existing 2026-10-04 build
+    pass without a rebuild."""
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    tile_path = tmp_path / 'tile_o100.fits'
+    from astropy.io import fits
+    hdu = fits.PrimaryHDU()
+    hdu.header['ROLLCTAB'] = f'sha1:{DEFAULT_ROLL_SHA}'
+    hdu.writeto(tile_path)
+    build_dir = _joint_build(
+        root, tiles_rollctab={'o100': None, 'o101': f'sha1:{DEFAULT_ROLL_SHA}'},
+        tiles_path={'o100': str(tile_path)})
+    summary = sr.check_joint_catalog(build_dir)
+    assert summary['roll_tables'] == {f'sha1:{DEFAULT_ROLL_SHA}': 2}
+
+
+# ---------------------------------------------------------------------------
+# Frame roll-WCS gate (PR #1091 review, Blocking 1)
+# ---------------------------------------------------------------------------
+
+def test_stage_joint_catalog_refuses_uncorrected_exposure_in_manifest(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    field_dir = tmp_path / 'releases' / 'v9-test' / 'zz_joint'
+    field_dir.mkdir(parents=True)
+    frame_path = field_dir / 'exposures' / 'F212N' / 'jw10678-o100_cal.fits'
+    frame_path.parent.mkdir(parents=True)
+    _frame_fits(frame_path, rollarc=None)   # no ROLLARC at all
+    manifest = {
+        'field': 'zz_joint', 'version': 'v9-test', 'group': None,
+        'release_path': '/releases/v9-test/zz_joint',
+        'built': '2026-01-01T00:00:00-05:00', 'mode': 'symlink',
+        'continuity_gate': 'not_applicable(exposures-only)',
+        'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+        'globus_https_base': sr.GLOBUS_HTTPS_BASE,
+        'files': [_exposure_item(sr, frame_path,
+                                 dest='exposures/F212N/jw10678-o100_cal.fits')],
+    }
+    (field_dir / 'MANIFEST.json').write_text(json.dumps(manifest))
+
+    _joint_build(root)
+    before = json.loads((field_dir / 'MANIFEST.json').read_text())
+    with pytest.raises(sr.JointCatalogGateError, match='ROLLARC'):
+        sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases',
+                               allow_older=True)
+    after = json.loads((field_dir / 'MANIFEST.json').read_text())
+    assert after == before   # nothing written
+    assert not (field_dir / 'catalogs').exists()
+
+    rc = sr.main(['--field', 'zz_joint', '--version', 'v9-test',
+                 '--release-root', str(tmp_path / 'releases'),
+                 '--allow-older-version', '--joint-catalog'])
+    assert rc == 2
+
+
+def test_stage_joint_catalog_refuses_wrong_rollarc_value(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    field_dir = tmp_path / 'releases' / 'v9-test' / 'zz_joint'
+    field_dir.mkdir(parents=True)
+    frame_path = field_dir / 'exposures' / 'F212N' / 'jw10678-o100_cal.fits'
+    frame_path.parent.mkdir(parents=True)
+    _frame_fits(frame_path, rollarc=99.0)   # current table says 1.0 for o100
+    manifest = {
+        'field': 'zz_joint', 'version': 'v9-test', 'group': None,
+        'release_path': '/releases/v9-test/zz_joint',
+        'built': '2026-01-01T00:00:00-05:00', 'mode': 'symlink',
+        'continuity_gate': 'not_applicable(exposures-only)',
+        'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+        'globus_https_base': sr.GLOBUS_HTTPS_BASE,
+        'files': [_exposure_item(sr, frame_path,
+                                 dest='exposures/F212N/jw10678-o100_cal.fits')],
+    }
+    (field_dir / 'MANIFEST.json').write_text(json.dumps(manifest))
+
+    _joint_build(root)
+    with pytest.raises(sr.JointCatalogGateError, match='disagrees with the current'):
+        sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases',
+                               allow_older=True)
+
+
+def test_stage_joint_catalog_stages_with_correct_rollarc_value(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    field_dir = tmp_path / 'releases' / 'v9-test' / 'zz_joint'
+    field_dir.mkdir(parents=True)
+    frame_path = field_dir / 'exposures' / 'F212N' / 'jw10678-o100_cal.fits'
+    frame_path.parent.mkdir(parents=True)
+    _frame_fits(frame_path, rollarc=1.0)   # matches the mocked current table
+    manifest = {
+        'field': 'zz_joint', 'version': 'v9-test', 'group': None,
+        'release_path': '/releases/v9-test/zz_joint',
+        'built': '2026-01-01T00:00:00-05:00', 'mode': 'symlink',
+        'continuity_gate': 'not_applicable(exposures-only)',
+        'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+        'globus_https_base': sr.GLOBUS_HTTPS_BASE,
+        'files': [_exposure_item(sr, frame_path,
+                                 dest='exposures/F212N/jw10678-o100_cal.fits')],
+    }
+    (field_dir / 'MANIFEST.json').write_text(json.dumps(manifest))
+
+    _joint_build(root)
+    field_dir2, n = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                           tmp_path / 'releases',
+                                           allow_older=True)
+    assert field_dir2 == field_dir
+    assert n == 3
+
+
+def test_stage_exposures_only_refuses_when_joint_catalog_already_staged_and_frame_uncorrected(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root)
+    field_dir, n_cat = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                              tmp_path / 'releases')
+    assert n_cat == 3
+
+    frame_src = tmp_path / 'pipeline_src' / 'jw10678-o100_cal.fits'
+    frame_src.parent.mkdir(parents=True)
+    _frame_fits(frame_src, rollarc=None)   # uncorrected
+
+    def _fake_exposures_from_disk(field, version, field_dir_):
+        return [_exposure_item(sr, frame_src)]
+
+    monkeypatch.setattr(sr, '_exposures_from_disk', _fake_exposures_from_disk)
+    monkeypatch.setattr(sr.astrometry_provenance, 'stage_item',
+                       lambda *a, **kw: None)
+
+    before_manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    with pytest.raises(sr.JointCatalogGateError, match='ROLLARC'):
+        sr.stage_exposures_only('zz_joint', 'v9-test', tmp_path / 'releases',
+                                from_disk=True, allow_older=True)
+    after_manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    assert after_manifest == before_manifest   # nothing linked/rewritten
+    assert not (field_dir / 'exposures').exists()
+
+
+def test_kind_label_covers_the_joint_catalog_kinds(mw):
+    assert mw.KIND_LABEL['catalog_joint'] == 'Joint catalog (all-tile)'
+    assert mw.KIND_LABEL['catalog_joint_provenance'] == 'Joint catalog provenance'
+
+
+def test_joint_catalog_does_not_trigger_the_preliminary_banner(mw, sr):
+    manifest = {
+        'field': 'gc-treasury', 'version': 'v9-test', 'group': None,
+        'release_path': '/releases/v9-test/gc-treasury',
+        'built': '2026-10-04T00:00:00-04:00', 'mode': 'copy',
+        'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+        'globus_https_base': sr.GLOBUS_HTTPS_BASE,
+        'files': [{
+            'category': 'catalog', 'kind': 'catalog_joint', 'filter': None,
+            'iteration': None, 'observation': None,
+            'dest': 'catalogs/gctreasury10678_joint_nircam.fits',
+            'size_bytes': 2048, 'version': 'v9-test',
+            'url': sr.GLOBUS_HTTPS_BASE
+                   + '/releases/v9-test/gc-treasury/catalogs/'
+                     'gctreasury10678_joint_nircam.fits',
+        }],
+    }
+    page = mw.render_field_page('gc-treasury', manifest, None)
+    assert 'Preliminary catalog release' not in page
+    assert 'Joint catalog (all-tile)' in page
+
+
+def test_a_normal_field_with_no_merged_table_still_gets_the_preliminary_banner(
+        mw, sr):
+    manifest = {
+        'field': 'f', 'version': 'v9-test', 'group': None,
+        'release_path': '/releases/v9-test/f',
+        'built': '2026-10-04T00:00:00-04:00', 'mode': 'copy',
+        'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+        'globus_https_base': sr.GLOBUS_HTTPS_BASE,
+        'files': [{
+            'category': 'catalog', 'kind': 'catalog_per_filter_vetted',
+            'filter': 'F212N', 'iteration': 'm7', 'observation': None,
+            'dest': 'catalogs/f212n_vetted.fits', 'size_bytes': 10,
+            'version': 'v9-test',
+            'url': sr.GLOBUS_HTTPS_BASE
+                   + '/releases/v9-test/f/catalogs/f212n_vetted.fits',
+        }],
+    }
+    page = mw.render_field_page('f', manifest, None)
+    assert 'Preliminary catalog release' in page
+
+
+def test_the_treasury_field_carries_a_joint_catalog_root(sr):
+    assert sr.FIELDS['gc-treasury']['joint_catalog_root'] == \
+        sr.Path('/orange/adamginsburg/jwst/gc-treasury/catalogs_joint')

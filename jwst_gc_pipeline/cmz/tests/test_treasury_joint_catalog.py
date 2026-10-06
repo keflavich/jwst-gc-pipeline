@@ -13,7 +13,8 @@ SUFFIX = TJC.qualcuts_suffix()
 
 
 def _write_tile(path, ra, dec, f212=None, f480=None, ef212=None,
-                roll_corrected=None, gctag='2026-09-24_PR959'):
+                roll_corrected=None, gctag='2026-09-24_PR959',
+                rollctab=None, rollcver=None):
     n = len(ra)
     t = Table()
     t['skycoord_ref'] = SkyCoord(ra=np.asarray(ra) * u.deg,
@@ -28,6 +29,10 @@ def _write_tile(path, ra, dec, f212=None, f480=None, ef212=None,
     t.meta['GCTAG'] = gctag
     if roll_corrected is not None:
         t.meta['ROLLCCAT'] = bool(roll_corrected)
+    if rollctab is not None:
+        t.meta['ROLLCTAB'] = rollctab
+    if rollcver is not None:
+        t.meta['ROLLCVER'] = rollcver
     t.write(path, overwrite=True)
 
 
@@ -101,6 +106,18 @@ def test_header_roll_corrected(tmp_path):
     _write_tile(p_rolled, *_grid_tile_coords(266.4, -29.1), roll_corrected=True)
     assert TJC._header_roll_corrected(str(p_raw)) is False
     assert TJC._header_roll_corrected(str(p_rolled)) is True
+
+
+def test_header_roll_table_provenance(tmp_path):
+    p_stamped = tmp_path / 'a.fits'
+    p_bare = tmp_path / 'b.fits'
+    _write_tile(p_stamped, *_grid_tile_coords(266.3, -29.1),
+               roll_corrected=True, rollctab='sha1:1721e98c8599',
+               rollcver='2026-09-29_PR1004-3-g0e21107b')
+    _write_tile(p_bare, *_grid_tile_coords(266.4, -29.1))
+    assert TJC._header_roll_table_provenance(str(p_stamped)) == (
+        'sha1:1721e98c8599', '2026-09-29_PR1004-3-g0e21107b')
+    assert TJC._header_roll_table_provenance(str(p_bare)) == (None, None)
 
 
 def test_assert_no_mixed_roll_correction_raises():
@@ -288,6 +305,34 @@ def test_build_joint_catalog_end_to_end_no_overlap(tmp_path):
     assert prov['roll_corrected'] is False
     assert 'joint_tile' in table.colnames
     assert 'also_in_tiles' in table.colnames
+
+
+def test_build_joint_catalog_records_per_tile_roll_table_provenance(tmp_path):
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=8, ny=8, step_arcsec=3.0)
+    ra1, dec1 = _grid_tile_coords(266.50, -29.30, nx=8, ny=8, step_arcsec=3.0)
+    _write_tile(in_dir / f'basic_merged_m7_o040{SUFFIX}.fits',
+               ra0, dec0, roll_corrected=True, rollctab='sha1:1721e98c8599',
+               rollcver='2026-09-29_PR1004-3-g0e21107b')
+    _write_tile(in_dir / f'basic_merged_m7_o041{SUFFIX}.fits',
+               ra1, dec1, roll_corrected=True, rollctab='sha1:d94358412b7b',
+               rollcver='2026-10-02_PR1030')
+    _, prov = TJC.build_joint_catalog(str(in_dir))
+    assert prov['tiles']['040']['rollctab'] == 'sha1:1721e98c8599'
+    assert prov['tiles']['040']['rollcver'] == '2026-09-29_PR1004-3-g0e21107b'
+    assert prov['tiles']['041']['rollctab'] == 'sha1:d94358412b7b'
+    assert prov['tiles']['041']['rollcver'] == '2026-10-02_PR1030'
+
+
+def test_build_joint_catalog_tiles_with_no_rollctab_record_none(tmp_path):
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=4, ny=4, step_arcsec=3.0)
+    _write_tile(in_dir / f'basic_merged_m7_o040{SUFFIX}.fits', ra0, dec0)
+    _, prov = TJC.build_joint_catalog(str(in_dir))
+    assert prov['tiles']['040']['rollctab'] is None
+    assert prov['tiles']['040']['rollcver'] is None
 
 
 def test_build_joint_catalog_refuses_mixed_roll_correction(tmp_path):

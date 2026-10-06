@@ -252,6 +252,28 @@ def _tile_pipeline_tag(path):
     return 'unknown'
 
 
+def _header_roll_table_provenance(path):
+    """``(ROLLCTAB, ROLLCVER)`` from a tile's PRIMARY or table HDU header, or
+    ``(None, None)`` if either card is absent.
+
+    ``jwst_gc_pipeline.astrometry.catalog_roll_correction`` stamps both on
+    every roll-corrected catalog (``ROLLCTAB``: ``'sha1:<12hex>'`` of the
+    ``roll_corrections.csv`` CONTENT that corrected it; ``ROLLCVER``: the code
+    version that ran). Recorded per tile in the joint-catalog provenance so
+    the release gate can verify which table version corrected which tile --
+    PR #1091 review, Blocking 2: the 68 real input tiles were corrected with
+    SIX different table versions, invisible to the gate until this landed.
+    """
+    with fits.open(path, memmap=True) as hdul:
+        for hdu in hdul:
+            if 'ROLLCTAB' in hdu.header or 'ROLLCVER' in hdu.header:
+                rollctab = hdu.header.get('ROLLCTAB')
+                rollcver = hdu.header.get('ROLLCVER')
+                return (str(rollctab) if rollctab is not None else None,
+                       str(rollcver) if rollcver is not None else None)
+    return (None, None)
+
+
 def discover_bands(colnames):
     """Bands present in a tile's schema, discovered from ``flux_jy_<band>``
     column names (NOT hardcoded -- a schema change becomes visible instead of
@@ -490,6 +512,8 @@ def build_joint_catalog(input_dir, obsids=None,
     roll_flags = {o: _header_roll_corrected(p) for o, p in tile_paths.items()}
     assert_no_mixed_roll_correction(roll_flags)
     roll_corrected = next(iter(roll_flags.values())) if roll_flags else False
+    roll_table_prov = {o: _header_roll_table_provenance(p)
+                       for o, p in tile_paths.items()}
 
     sample = Table.read(next(iter(tile_paths.values())), memmap=True)
     bands = discover_bands(sample.colnames)
@@ -534,6 +558,8 @@ def build_joint_catalog(input_dir, obsids=None,
                 sha1=_sha1_file(p),
                 roll_corrected=roll_flags[o],
                 tile_pipeline_tag=_tile_pipeline_tag(p),
+                rollctab=roll_table_prov[o][0],
+                rollcver=roll_table_prov[o][1],
                 **rows_in_out[o],
             )
             for o, p in tile_paths.items()

@@ -268,6 +268,21 @@ Two consequences for a release:
   are mislabelled, not corrupt.  Check which token a field's staged table
   carries before quoting the program in release notes.
 
+### gc-treasury ships its catalog separately, via `--joint-catalog`
+
+10678 has no per-field cross-band merge (66 tiles, no field-wide `discover_catalogs`
+output), so its catalog is the single all-tile table built by
+`jwst_gc_pipeline.cmz.treasury_joint_catalog` and staged with
+`stage_release.py --field gc-treasury --joint-catalog` (on its own, before or after
+`--exposures-only`; gc-treasury ships no mosaic). `stage_joint_catalog` picks the
+newest build under `joint_catalog_root` unless `--joint-catalog-dir` names one, and
+refuses (exit 2) — writing nothing — when the build's own provenance
+(`*.prov.json`) shows an unresolved overlap-gate failure, a build that is not (or
+only partly) roll-corrected, or an empty table. A recorded `gate_override` reason
+in the provenance is the only way an overlap failure may still ship; check for
+it, and for `MANIFEST.json`'s `joint_catalog.gate_override`, before trusting a
+"staged cleanly" run.
+
 ## 5. Versioning & provenance
 - MANIFEST per-file version bumped; webpage version column updated.
 - `exposures/` (the detector frames behind each mosaic; on by default,
