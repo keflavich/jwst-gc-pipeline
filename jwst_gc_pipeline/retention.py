@@ -32,12 +32,15 @@ logic"), extended one product class further.
 Catalogs are deliberately NOT in scope.  Every per-stage merged catalog for
 brick totals ~41 GB against 4+ TB of that field's stage images: they are the
 scientific record, they are cheap, and this module never selects one.  The two
-exceptions are explicit, opt-in derivative rules (``_allcols`` supersets and
-duplicate table formats), both off unless the caller asks for them.
+exceptions are explicit derivative rules -- ``_allcols`` supersets (verified
+dead: no reader anywhere in the repo, every consumer explicitly excludes the
+name; ``default_on``) and duplicate ECSV/FITS table formats (``default_on=
+False`` -- the release ships BOTH formats of the combined merged table as
+separate deliverables, so "has a twin" does not mean "is dead" here).
 
 WHAT PROTECTS A PRODUCT
 -----------------------
-Selection alone never deletes.  :class:`Guard` holds the four facts that veto a
+Selection alone never deletes.  :class:`Guard` holds the facts that veto a
 candidate, and :func:`plan` applies it to every match:
 
 1. anything a published release points at.  ``releases/v1.3-*/brick/exposures``
@@ -48,6 +51,11 @@ candidate, and :func:`plan` applies it to every match:
    resumes from a partial marker set.
 3. anything younger than ``min_age_days``.
 4. anything under a caller-supplied protect glob.
+5. (``stale_badastrom_mosaic`` only) anything whose pre-quarantine name a
+   release MANIFEST.json recorded as its staging ``src`` -- that quarantine
+   twin's mtime may be the only way ``release_freshness.py`` can tell an
+   already-served release page it is showing repudiated bytes.  See
+   :func:`release_manifest_srcs`.
 
 The Guard belongs to :func:`plan`.  The in-run helpers at the bottom of this
 module -- the ones the phase loop calls -- do NOT go through it, and the block
@@ -69,7 +77,8 @@ from dataclasses import dataclass, field as _dcfield
 
 __all__ = ['Rule', 'Candidate', 'Guard', 'POLICY', 'DEFAULT_RULES',
            'classify', 'plan', 'apply', 'release_symlink_targets',
-           'busy_targets', 'superseded_perframe_products',
+           'release_manifest_srcs', 'busy_targets',
+           'superseded_perframe_products',
            'spent_mergedcat_frames', 'superseded_smoothed_bg',
            'RetentionError']
 
@@ -90,6 +99,14 @@ PROTECTED_SUFFIXES = (
                         # *_mergedcat_residual_smoothed_bg_i2d.fits.  The one
                         # in-run exception is superseded_smoothed_bg below,
                         # which names a single smoothed-bg path two phases back.
+                        # A checkpoint-quarantined twin (``..._i2d_im0_badastrom
+                        # [.N].fits``, written by astrometry_checkpoint
+                        # .mark_i2d_stale) does NOT end in ``_i2d.fits`` -- it
+                        # ends in ``_badastrom.fits`` -- so it is deliberately
+                        # NOT caught here.  It is handled by its own narrowly
+                        # scoped rule (``stale_badastrom_mosaic`` below), which
+                        # checks for a fresh replacement before it can fire.
+                        # Do not widen this suffix to reach it.
     '_crf.fits', '_cal.fits', '_rate.fits', '_rateints.fits', '_uncal.fits',
     '_destreak.fits', '_align.fits', '_asn.json',
     '_consensus.fits', '_satstar_reconciled_m12.fits',
@@ -149,6 +166,24 @@ QUARANTINE_DIR_RE = re.compile(
     re.IGNORECASE)
 
 ALLCOLS_RE = re.compile(r'_allcols\.fits$')
+
+# The m2 checkpoint's quarantine rename (astrometry_checkpoint.mark_i2d_stale,
+# STALE_TAG = "_im0_badastrom.fits"): "<stem>.fits" -> "<stem>_im0_badastrom
+# .fits", and, if that name is taken, "<stem>_im0_badastrom.<N>.fits" for N =
+# 1, 2, ...  The captured ``stem`` is exactly the pre-quarantine basename minus
+# its own ".fits", so ``stem + ".fits"`` is the original mosaic's name -- the
+# same name ``find_i2d_for_filter`` looks for when deciding a field has (or has
+# not) been regenerated.
+BADASTROM_RE = re.compile(r'^(?P<stem>.+)_im0_badastrom(?:\.\d+)?\.fits$')
+
+
+def _badastrom_original(path):
+    """The pre-quarantine path a ``*_im0_badastrom[.N].fits`` twin was renamed
+    from, or ``None`` if ``path`` is not one of those."""
+    m = BADASTROM_RE.match(os.path.basename(str(path)))
+    if m is None:
+        return None
+    return os.path.join(os.path.dirname(str(path)), m.group('stem') + '.fits')
 
 # The smoothed-residual background a phase builds for the next one.  The
 # ``_mergedcat_residual_`` infix is what separates it from the residual and
@@ -244,12 +279,61 @@ def _rule_duplicate_table_format(path, ctx):
     Off by default: which format is canonical is a project decision (the write
     site prefers ECSV for mixin/mask fidelity; the release ships FITS), and this
     rule must not make it silently.
+
+    It stays off by default for a stronger reason than "undecided": for the
+    field's combined merged table (``basic_merged_indivexp_photometry_tables_
+    merged*``), BOTH formats are shipped as separate release deliverables --
+    ``scripts/release/stage_release.py::_emit_table_group`` emits a
+    ``full_fits`` item AND a ``full_ecsv`` item whenever both exist, and real
+    manifests do carry both (checked across the current release tree: v1.0
+    cloudc/gc2211/sgrb2/sgrc each staged one ``.ecsv`` catalog alongside its
+    ``.fits`` twin).  ``jwst_gc_pipeline/cmz/catalog_assembly.write_outputs``
+    says the same thing about its own output: "FITS/ECSV are the familiar
+    deliverables".  So an ECSV with a FITS twin is not reliably a dead
+    duplicate -- for the one table family a release actually ships in both
+    formats, deleting the ECSV silently drops a format from every future
+    release of that field, with nothing logged.  Enabling this rule safely
+    would need it to tell "this stem is a shipped deliverable" from "this is
+    an intermediate ECSV nothing ships", which it does not do today.
     """
     base = os.path.basename(path)
     sibs = _sibling_names(ctx)
     if base.endswith('.ecsv') and (base[:-5] + '.fits') in sibs:
         return 'ECSV duplicate of the FITS table beside it'
     return None
+
+
+def _rule_stale_badastrom_mosaic(path, ctx):
+    """A checkpoint-quarantined mosaic whose field has since been regenerated.
+
+    ``astrometry_checkpoint.mark_i2d_stale`` renames a mosaic built on
+    superseded offsets to ``*_im0_badastrom[.N].fits`` rather than deleting it,
+    specifically so ``stage_release.py`` can tell "this field was never
+    regenerated" (refuse to stage) from "this field has no mosaic at all"
+    (unrelated absence) -- see ``_badastrom_sibling`` there.  That refusal only
+    fires while the ORIGINAL name is missing, so once a fresh mosaic has been
+    written under that name the stale twin blocks nothing further; it is pure
+    debris from then on.
+
+    This only fires when the original (pre-quarantine) name exists on disk AND
+    is newer than the stale twin -- i.e. a real regeneration happened after the
+    quarantine, not merely some other file with the same stem.  No replacement,
+    or a replacement no newer than the twin (a second checkpoint run against
+    the SAME still-bad mosaic), leaves it alone.
+    """
+    orig = _badastrom_original(path)
+    if orig is None:
+        return None
+    try:
+        orig_mtime = os.path.getmtime(orig)
+        stale_mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    if orig_mtime <= stale_mtime:
+        return None
+    return (f'checkpoint-quarantined mosaic; {os.path.basename(orig)} is a '
+            f'fresh regenerated replacement, newer on disk, so this twin is '
+            f'no longer what stage_release.py needs to refuse staging')
 
 
 DEFAULT_RULES = (
@@ -263,9 +347,13 @@ DEFAULT_RULES = (
          'per-frame residual/model below the final phase on disk',
          _rule_superseded_perframe, min_age_days=7.0),
     Rule('allcols', '_allcols superset tables', _rule_allcols,
-         min_age_days=30.0, default_on=False),
+         min_age_days=30.0, default_on=True),
     Rule('duplicate_table_format', 'ECSV/FITS twins of one table',
          _rule_duplicate_table_format, min_age_days=30.0, default_on=False),
+    Rule('stale_badastrom_mosaic',
+         'checkpoint-quarantined i2d mosaics with a fresh regenerated '
+         'replacement',
+         _rule_stale_badastrom_mosaic, min_age_days=14.0, default_on=True),
 )
 
 POLICY = {r.name: r for r in DEFAULT_RULES}
@@ -329,6 +417,7 @@ class Guard:
     min_age_days: float = 30.0
     protect_globs: tuple = ()
     now: float = None
+    manifest_srcs: frozenset = _dcfield(default_factory=frozenset)
 
     def veto(self, path, st, rule):
         """Reason this candidate must not be deleted, or None."""
@@ -342,6 +431,17 @@ class Guard:
             if f'/{fieldname}/' in path or f'/{fieldname}/' in real:
                 return (f'field {fieldname} has a queued or running SLURM '
                         f'chain')
+        if rule is not None and rule.name == 'stale_badastrom_mosaic':
+            orig = _badastrom_original(path)
+            if orig is not None and os.path.realpath(orig) in self.manifest_srcs:
+                return (
+                    'a release MANIFEST.json recorded the pre-quarantine name '
+                    'as its staging source; release_freshness.py reads this '
+                    "twin's mtime to tell a repudiated staged release from a "
+                    'live one when the regenerated mosaic lands at an '
+                    'identical byte size (the normal case for a re-drizzle on '
+                    'a fixed output grid, where the staged-size comparison '
+                    'alone sees nothing)')
         now = self.now if self.now is not None else _now()
         age_days = (now - st.st_mtime) / 86400.0
         floor = max(self.min_age_days, rule.min_age_days if rule else 0.0)
@@ -369,6 +469,39 @@ def release_symlink_targets(releases_root):
             if os.path.islink(p):
                 targets.add(os.path.realpath(p))
     return frozenset(targets)
+
+
+def release_manifest_srcs(releases_root):
+    """Resolved ``src`` path of every file any release ever staged.
+
+    ``scripts/release/release_freshness.py`` audits an ALREADY-STAGED release
+    by re-stat'ing its manifest's ``src`` path: if that path has since grown a
+    ``*_im0_badastrom[.N].fits`` twin NEWER than the staging time, the staged
+    bytes are reported ``quarantined`` rather than ``live`` -- the whole reason
+    that module exists ("Cloud C's published images predate the 2026-07-12
+    astrometry fix, so the page was showing ~4 arcsec errors as evidence that
+    the astrometry is sound").  Its fallback, when no twin is found, compares
+    recorded vs. current file SIZE -- which is blind for a re-drizzled ``i2d``:
+    the output grid is fixed, so a re-drizzle after a mas-level correction
+    writes an IDENTICAL byte count.  So a ``src`` any manifest recorded is a
+    path whose quarantine twin may be the ONLY evidence an already-served
+    release page has that it needs to stop presenting those bytes as current;
+    :func:`guard_for` feeds this into :class:`Guard` so
+    ``stale_badastrom_mosaic`` never prunes one.
+    """
+    srcs = set()
+    for manifest_path in glob.glob(
+            os.path.join(releases_root, '*', '*', 'MANIFEST.json')):
+        try:
+            with open(manifest_path) as fh:
+                manifest = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        for item in manifest.get('files', ()):
+            src = item.get('src')
+            if src:
+                srcs.add(os.path.realpath(src))
+    return frozenset(srcs)
 
 
 def busy_targets(known_targets, squeue_output=None):
@@ -402,12 +535,15 @@ def guard_for(roots, known_targets, *, releases_root=None, min_age_days=30.0,
               protect_globs=(), squeue_output=None, assume_idle=False):
     """Build the Guard for a real cleanup run."""
     targets = frozenset()
+    manifest_srcs = frozenset()
     if releases_root and os.path.isdir(releases_root):
         targets = release_symlink_targets(releases_root)
+        manifest_srcs = release_manifest_srcs(releases_root)
     busy = frozenset() if assume_idle else busy_targets(known_targets,
                                                         squeue_output)
     return Guard(release_targets=targets, busy_fields=busy,
-                 min_age_days=min_age_days, protect_globs=tuple(protect_globs))
+                 min_age_days=min_age_days, protect_globs=tuple(protect_globs),
+                 manifest_srcs=manifest_srcs)
 
 
 # --------------------------------------------------------------------------

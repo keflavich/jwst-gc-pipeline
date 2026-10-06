@@ -39,20 +39,33 @@ the scientific record, they are what a re-analysis asks for, and they are the
 only artifact showing how a source's photometry moved as the background model
 improved. No default rule selects one.
 
-Two derivative-table rules exist and are **off by default**:
+Two derivative-table rules exist:
 
-* `allcols` — the `_allcols` superset, from which the minimal table beside it is
-  derived in memory. `merge_catalogs` says downstream "doesn't consume" the
-  extra columns and `diagnostics/inventory.py` lists it in `_DERIVATIVE_RE`, the
-  products that are never canonical. Every reader in `scripts/` explicitly
-  excludes it. 922 GB on disk, 798 GB of that brick's.
-* `duplicate_table_format` — an ECSV that has a FITS twin. Which format is
-  canonical is a project decision (the write site prefers ECSV for mixin and
-  mask fidelity; the release ships FITS), so this rule will not make it for you.
+* `allcols` (**on by default**) — the `_allcols` superset, from which the
+  minimal table beside it is derived in memory. `merge_catalogs` says
+  downstream "doesn't consume" the extra columns and `diagnostics/inventory.py`
+  lists it in `_DERIVATIVE_RE`, the products that are never canonical. Every
+  reader in `scripts/` explicitly excludes it, and that was verified again
+  before turning this rule on (grep of `scripts/release`, `jwst_gc_pipeline/cmz`
+  and `merge_catalogs.py` turned up no reader anywhere). 922 GB on disk, 798 GB
+  of that brick's.
+* `duplicate_table_format` (**off by default — do not flip without narrowing
+  it first**) — an ECSV that has a same-stem FITS twin. The obvious read is
+  "one is derived from the other", but for the field's combined merged table
+  (`basic_merged_indivexp_photometry_tables_merged*`) that is wrong:
+  `scripts/release/stage_release.py::_emit_table_group` ships BOTH formats as
+  separate deliverables whenever both exist (`full_fits` + `full_ecsv` items),
+  and real manifests do carry both — checked across the current release tree,
+  v1.0 cloudc/gc2211/sgrb2/sgrc each staged one `.ecsv` catalog alongside its
+  `.fits` twin. `jwst_gc_pipeline/cmz/catalog_assembly.write_outputs` makes the
+  same call about its own output ("FITS/ECSV are the familiar deliverables").
+  So "has a twin" does not mean "is dead" for that one stem family, and this
+  rule cannot tell that stem apart from a genuinely dead intermediate ECSV
+  today. Enabling it safely needs that distinction added first.
 
 ## What protects a product
 
-Selection never deletes on its own. `retention.Guard` holds four vetoes and
+Selection never deletes on its own. `retention.Guard` holds the vetoes and
 `plan()` applies all of them:
 
 1. **A published release points at it.** `releases/v1.3-*/brick/exposures` is
@@ -65,6 +78,8 @@ Selection never deletes on its own. `retention.Guard` holds four vetoes and
 3. **It is younger than the age floor** (global `--min-age-days`, or the rule's
    own floor, whichever is longer).
 4. **It matches a `--protect` glob.**
+5. **(`stale_badastrom_mosaic` only) a release MANIFEST.json recorded its
+   pre-quarantine name as a staging `src`.** See below.
 
 On top of that, `PROTECTED_SUFFIXES` / `PROTECTED_SUBSTRINGS` put every mosaic,
 exposure-level science product, astrometry sidecar and PSF cache out of scope
@@ -75,15 +90,64 @@ directory as `<field>/mastDownload/JWST/F<X>`, so the same bytes are reachable
 up to four ways. The walker deduplicates by resolved path; a naive sum
 over-reports by ~4× on those fields.
 
+## Checkpoint-quarantined mosaics (`stale_badastrom_mosaic`, on by default)
+
+`astrometry_checkpoint.mark_i2d_stale` never deletes a mosaic built on
+offsets the m2 checkpoint later corrected — it renames it, `..._i2d.fits` ->
+`..._i2d_im0_badastrom.fits` (or `..._im0_badastrom.<N>.fits` if that name is
+taken), and drops a `.why.json` sidecar. `PROTECTED_SUFFIXES` does **not**
+catch this name — it matches `_i2d.fits`, and a quarantined twin ends in
+`_badastrom.fits` — which is why this needed its own rule rather than a gap
+in an existing one.
+
+The rule fires only when the ORIGINAL (pre-quarantine) name exists on disk
+again AND is newer than the stale twin — i.e. the field was actually
+regenerated after the quarantine, not merely some unrelated file sharing the
+stem. No replacement, or one no newer than the twin (a second checkpoint run
+against the same still-bad mosaic), leaves it alone. This matters because
+`scripts/release/stage_release.py::_badastrom_sibling` relies on exactly the
+*absence* of the original name, with the twin beside it, to refuse staging a
+field whose mosaic was quarantined and never regenerated — once the original
+is back and newer, that refusal path is already dead, and the twin is pure
+debris. `min_age_days` is 14.
+
+**Guard fact #5 exists only for this rule.** `scripts/release/release_freshness.py`
+re-stats an *already-staged* release's manifest `src`, and when it finds a
+`*_im0_badastrom*.fits` twin NEWER than the staging time it reports that
+staged copy `quarantined` rather than `live` — its whole reason for existing
+("Cloud C's published images predate the 2026-07-12 astrometry fix, so the
+page was showing ~4″ errors as evidence that the astrometry is sound").
+Without a twin it falls back to comparing recorded vs. current file size,
+which is blind for a re-drizzled `i2d`: the output grid is fixed, so a
+re-drizzle after a mas-level correction can write an *identical* byte count.
+So for any `src` a release manifest ever recorded, that quarantine twin may be
+the only evidence an already-published, still-served release page (older
+releases stay servable — `make_webpage.py` renders every version) has that it
+needs to stop presenting those bytes as current. `guard_for()` reads every
+`releases/*/*/MANIFEST.json` (`retention.release_manifest_srcs`) and the Guard
+refuses to let `stale_badastrom_mosaic` touch any twin of a recorded `src`,
+regardless of age or replacement. Verified empirically: real release manifests
+do ship catalogs in both formats (see `duplicate_table_format` above) — the
+same "identical size looks the same as live" trap is generic to this archive,
+not a hypothetical.
+
+Only the renamed `.fits` is removed; the `.why.json` sidecar is left in place
+(a few KB, and harmless — `stage_release._quarantine_note` only reads it
+beside a twin that still exists, so an orphaned sidecar is never read again).
+
+Measured 2026-10-06: 6,696 `*_i2d_im0_badastrom*.fits` files across
+`/orange/adamginsburg/jwst` (mostly crowded_l3's 9438 campaign); 27
+`releases/*/*/MANIFEST.json` files recording staged `src` paths.
+
 ## Using it
 
 ```bash
-# what the safe rules would take, and what the guard is protecting
+# what the safe (default-on) rules would take, and what the guard is protecting
 python scripts/maintenance/prune_products.py --target arches
 
-# add the two opt-in derivative rules, and list every file
+# add the one opt-in derivative rule not on by default, and list every file
 python scripts/maintenance/prune_products.py --target arches \
-    --rule allcols --rule duplicate_table_format --verbose
+    --rule duplicate_table_format --verbose
 
 # whole directories whose NAME says they are superseded, sized as trees
 python scripts/maintenance/prune_products.py --target arches --directories
