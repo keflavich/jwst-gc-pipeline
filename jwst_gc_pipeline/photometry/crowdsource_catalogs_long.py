@@ -3631,7 +3631,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               overlapping_frames, iteration_label, kinds,
                               pupil='clear', psf_shape=(21, 21),
                               satstar_label=None, satstar_cover_thresh=10.0,
-                              write_model_i2d=True):
+                              write_model_i2d=True, perframe_record=None):
     """Build residual i2d mosaics from the VETTED MERGED catalog (cutout path).
 
     The per-frame RAW residuals subtract every fitted source, including spurious
@@ -3650,6 +3650,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     the merged-catalog MODEL mosaic *for display only* -- so the model image
     shows the saturated stars alongside the fitted point sources.  The RESIDUAL
     is unaffected (it already has the satstar model subtracted via ``base``).
+
+    ``perframe_record``: a list.  When given, one entry per frame and kind is
+    appended -- ``{'frame', 'kind', 'raw': [resid, model], 'rendered': [resid,
+    model]}`` -- naming the exact per-frame files this build read and wrote.
+    The phase barrier's in-run cleanup deletes from this record and nothing
+    else (``retention.write_perframe_ledger``).
     """
     from astropy.nddata import NDData as _NDData
     merged = Table.read(merged_cat_path)
@@ -3975,7 +3981,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 save_residual_datamodel(raw_resid, out_resid, mc_resid)
                 save_residual_datamodel(raw_model, out_model, mc_model_display,
                                         clear_dq=True)
-            _result[kind] = (out_resid, out_model)
+            _result[kind] = (out_resid, out_model, raw_resid, raw_model)
         return _result
 
     if _render_threads > 1 and len(overlapping_frames) > 1:
@@ -3986,10 +3992,14 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                                         _render_threads)
     # Accumulate in frame order so the resample input lists are deterministic
     # (identical to the pre-parallel serial append order).
-    for _res in _frame_results:
-        for kind, (out_resid, out_model) in _res.items():
+    for _orig, _res in zip(overlapping_frames, _frame_results):
+        for kind, (out_resid, out_model, raw_resid, raw_model) in _res.items():
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
+            if perframe_record is not None:
+                perframe_record.append({'frame': str(_orig), 'kind': kind,
+                                        'raw': [raw_resid, raw_model],
+                                        'rendered': [out_resid, out_model]})
     # Per-frame stems must be unique: a collision means two frames wrote the same
     # product (one render lost -> a hole in the mosaic), and under threading the
     # surviving writer would be nondeterministic.  Fail loudly (serial or threaded).

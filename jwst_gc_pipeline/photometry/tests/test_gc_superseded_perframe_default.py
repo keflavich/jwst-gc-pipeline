@@ -23,7 +23,9 @@ This module pins three things a future change must not quietly undo:
    barrier to retire it).
 """
 import os
+import types
 
+from jwst_gc_pipeline import retention
 from jwst_gc_pipeline.photometry import cataloging
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
@@ -32,6 +34,7 @@ FRAME = 'nrcalong_visit001_vgroup11101_exp00001'
 PROPOSAL_ID = '2221'
 FIELD = '001'
 FILTERNAME = 'F410M'
+CRF = f'/data/brick/{FILTERNAME}/pipeline/jw02221001001_02101_00001_nrcalong_crf.fits'
 
 
 def test_manual_gc_superseded_perframe_defaults_on():
@@ -58,9 +61,9 @@ def test_cli_still_offers_an_opt_out():
     assert "action='store_false'" in tail
 
 
-def _perframe(label, what='residual', mergedcat=False):
+def _perframe(label, what='residual', mergedcat=False, frame=FRAME):
     tag = '_mergedcat' if mergedcat else ''
-    return f'{PRE}-{FRAME}_{label}_daophot_basic{tag}_{what}.fits'
+    return f'{PRE}-{frame}_{label}_daophot_basic{tag}_{what}.fits'
 
 
 def _mosaic(label, what='residual_i2d'):
@@ -75,57 +78,146 @@ def _write(directory, name, size=16):
     return p
 
 
-def _write_phase_products(pipeline_dir, label):
-    """Everything one phase writes: raw pair, mergedcat pair, mosaic.
+def _write_phase_products(pipeline_dir, label, frame=CRF):
+    """Everything one phase's build leaves: raw pair, mergedcat pair, mosaic,
+    and the ledger naming the pairs (what ``run_manual_pipeline`` writes from
+    ``build_mergedcat_residuals(perframe_record=...)``)."""
+    raw = [_write(pipeline_dir, _perframe(label, w))
+           for w in ('residual', 'model')]
+    ren = [_write(pipeline_dir, _perframe(label, w, mergedcat=True))
+           for w in ('residual', 'model')]
+    i2d = _write(pipeline_dir, _mosaic(label))
+    retention.write_perframe_ledger(
+        i2d, [{'frame': frame, 'kind': 'basic', 'raw': raw, 'rendered': ren}],
+        phase=label)
+    return i2d
 
-    Mirrors the real on-disk shape closely enough for the glob-based
-    selectors in ``retention.py``: the mosaic must exist for
-    ``spent_mergedcat_frames`` to fire, and the raw/mergedcat pairs must not
-    collide with each other's regex (``PERFRAME_MERGEDCAT_RE`` is tried
-    before ``PERFRAME_RAW_RE``).
-    """
-    for what in ('residual', 'model'):
-        _write(pipeline_dir, _perframe(label, what))
-        _write(pipeline_dir, _perframe(label, what, mergedcat=True))
-    _write(pipeline_dir, _mosaic(label))
+
+def _exists(pipeline_dir, label, mergedcat=False):
+    return all(os.path.exists(os.path.join(
+        pipeline_dir, _perframe(label, w, mergedcat=mergedcat)))
+        for w in ('residual', 'model'))
 
 
 def test_barrier_keeps_current_phase_and_final_phase_raw_pair(tmp_path):
-    cut_bp = str(tmp_path)
-    pipeline_dir = os.path.join(cut_bp, FILTERNAME, 'pipeline')
-    phases = ['m3', 'm4', 'm5']
+    pipeline_dir = str(tmp_path / FILTERNAME / 'pipeline')
+    i2d = {label: _write_phase_products(pipeline_dir, label)
+           for label in ('m3', 'm4', 'm5')}
 
-    for label in phases:
-        _write_phase_products(pipeline_dir, label)
-
-    def raw_exists(label):
-        return (os.path.exists(os.path.join(pipeline_dir, _perframe(label, 'residual')))
-                and os.path.exists(os.path.join(pipeline_dir, _perframe(label, 'model'))))
-
-    def mergedcat_exists(label):
-        return (os.path.exists(os.path.join(pipeline_dir, _perframe(label, 'residual', mergedcat=True)))
-                and os.path.exists(os.path.join(pipeline_dir, _perframe(label, 'model', mergedcat=True))))
-
-    def mosaic_exists(label):
-        return os.path.exists(os.path.join(pipeline_dir, _mosaic(label)))
-
-    # -- m3 barrier: first phase in the list, so no PREVIOUS phase to retire.
-    cataloging._gc_perframe_images(cut_bp, PROPOSAL_ID, FIELD, FILTERNAME, 'm3', phases)
-    assert raw_exists('m3'), "m3's own raw pair must survive its own barrier (retry)"
-    assert not mergedcat_exists('m3'), "m3's spent mergedcat render should be gone"
-    assert mosaic_exists('m3')
+    # -- m3 barrier: no previous mosaic, so no raw pair to retire.
+    cataloging._gc_perframe_images(i2d['m3'], None, None, FILTERNAME, 'm3')
+    assert _exists(pipeline_dir, 'm3'), \
+        "m3's own raw pair must survive its own barrier (retry)"
+    assert not _exists(pipeline_dir, 'm3', mergedcat=True), \
+        "m3's spent mergedcat render should be gone"
+    assert os.path.exists(i2d['m3'])
 
     # -- m4 barrier: retires m3's raw pair, keeps m4's own for its retry.
-    cataloging._gc_perframe_images(cut_bp, PROPOSAL_ID, FIELD, FILTERNAME, 'm4', phases)
-    assert not raw_exists('m3'), "m3's raw pair is unreachable once m4 exists"
-    assert raw_exists('m4'), "m4's own raw pair must survive its own barrier (retry)"
-    assert not mergedcat_exists('m4')
-    assert mosaic_exists('m3') and mosaic_exists('m4'), "mosaics are never touched"
+    cataloging._gc_perframe_images(i2d['m4'], i2d['m3'], None, FILTERNAME, 'm4')
+    assert not _exists(pipeline_dir, 'm3'), \
+        "m3's raw pair is unreachable once m4 exists"
+    assert _exists(pipeline_dir, 'm4')
+    assert not _exists(pipeline_dir, 'm4', mergedcat=True)
 
-    # -- m5 barrier (final phase in this run): retires m4's raw pair; m5's own
-    # raw pair is never retired because there is no later phase.
-    cataloging._gc_perframe_images(cut_bp, PROPOSAL_ID, FIELD, FILTERNAME, 'm5', phases)
-    assert not raw_exists('m4'), "m4's raw pair is unreachable once m5 exists"
-    assert raw_exists('m5'), "the FINAL phase's raw pair is never removed"
-    assert not mergedcat_exists('m5')
-    assert mosaic_exists('m3') and mosaic_exists('m4') and mosaic_exists('m5')
+    # -- m5 barrier (final): retires m4's; m5's own is never retired.
+    cataloging._gc_perframe_images(i2d['m5'], i2d['m4'], None, FILTERNAME, 'm5')
+    assert not _exists(pipeline_dir, 'm4')
+    assert _exists(pipeline_dir, 'm5'), \
+        "the FINAL phase's raw pair is never removed"
+    assert not _exists(pipeline_dir, 'm5', mergedcat=True)
+    assert all(os.path.exists(p) for p in i2d.values()), \
+        "mosaics are never touched"
+
+
+def test_barrier_leaves_files_no_ledger_names(tmp_path):
+    """Another observation, detector or variant in the same directory.
+
+    The pre-ledger glob ``{prefix}*-{filt}-*_{label}_daophot_*`` matched all
+    three, so a concurrent chain lost its pairs and cloudef's obs005 frames
+    (``-o002_`` prefix, shared directory) went with obs002's cleanup.
+    """
+    pipeline_dir = str(tmp_path / FILTERNAME / 'pipeline')
+    m3 = _write_phase_products(pipeline_dir, 'm3')
+    m4 = _write_phase_products(pipeline_dir, 'm4')
+    bystanders = [
+        _write(pipeline_dir, _perframe('m3', frame=FRAME.replace('nrcalong',
+                                                                'nrcblong'))),
+        _write(pipeline_dir, _perframe('m3', mergedcat=True,
+                                       frame=FRAME.replace('nrcalong',
+                                                           'nrcblong'))),
+        _write(pipeline_dir, _perframe('m3').replace('_m3_', '_resbgsub_m3_')),
+        _write(pipeline_dir, _perframe('m4', mergedcat=True)
+               .replace('_m4_', '_epsf_hybpsf_m4_')),
+    ]
+    cataloging._gc_perframe_images(m4, m3, None, FILTERNAME, 'm4')
+    assert not _exists(pipeline_dir, 'm3')
+    assert all(os.path.exists(p) for p in bystanders)
+
+
+def test_barrier_without_ledger_removes_nothing(tmp_path):
+    """A mosaic from before ledgers existed offers nothing to the cleanup."""
+    pipeline_dir = str(tmp_path / FILTERNAME / 'pipeline')
+    m3 = _write_phase_products(pipeline_dir, 'm3')
+    m4 = _write_phase_products(pipeline_dir, 'm4')
+    for i2d in (m3, m4):
+        os.unlink(retention.perframe_ledger_path(i2d))
+    cataloging._gc_perframe_images(m4, m3, None, FILTERNAME, 'm4')
+    assert _exists(pipeline_dir, 'm3')
+    assert _exists(pipeline_dir, 'm4', mergedcat=True)
+
+
+def test_retiring_a_raw_pair_removes_its_completion_markers(tmp_path):
+    """A --skip-if-done restart of a retired phase must refit, not resume.
+
+    Without this, ``select_resumable_frames`` reads the m3 marker as done, the
+    frame is skipped, and ``build_mergedcat_residuals`` raises on the m3 raw
+    pair the m4 barrier deleted.
+    """
+    pipeline_dir = str(tmp_path / FILTERNAME / 'pipeline')
+    marker_dir = str(tmp_path / 'catalogs' / '_perframe_markers')
+    os.makedirs(marker_dir)
+    crf = _write(pipeline_dir, os.path.basename(CRF))
+    m3 = _write_phase_products(pipeline_dir, 'm3', frame=crf)
+    m4 = _write_phase_products(pipeline_dir, 'm4', frame=crf)
+    old = os.path.getmtime(crf) - 60
+    os.utime(crf, (old, old))     # markers must be newer than the frame
+    det = cataloging.perframe_detector_token(crf)
+    markers = {}
+    for phase in ('m3', 'm4'):
+        markers[phase] = [
+            cataloging.perframe_marker_path(marker_dir, crf, det, FILTERNAME,
+                                            phase, 'ok', merge=m)
+            for m in ('nrca', 'merged')]
+        for p in markers[phase]:
+            open(p, 'w').close()
+    frame_args = [{'filename': crf}]
+    todo, ok, _, _ = cataloging.select_resumable_frames(
+        frame_args, marker_dir, FILTERNAME, 'm3', 'nrca')
+    assert ok == [crf] and todo == []
+
+    cataloging._gc_perframe_images(m4, m3, marker_dir, FILTERNAME, 'm4')
+
+    assert not any(os.path.exists(p) for p in markers['m3'])
+    assert all(os.path.exists(p) for p in markers['m4']), \
+        "the current phase's markers stay: its raw pair stays too"
+    todo, ok, _, _ = cataloging.select_resumable_frames(
+        frame_args, marker_dir, FILTERNAME, 'm3', 'nrca')
+    assert todo == frame_args and ok == []
+    assert retention.read_perframe_ledger(m3)['raw_retired'] is True
+
+
+def test_opt_out_suppresses_every_deletion(tmp_path):
+    """``--no-manual-gc-superseded-perframe`` keeps everything."""
+    pipeline_dir = str(tmp_path / FILTERNAME / 'pipeline')
+    m3 = _write_phase_products(pipeline_dir, 'm3')
+    m4 = _write_phase_products(pipeline_dir, 'm4')
+    before = sorted(os.listdir(pipeline_dir))
+
+    off = types.SimpleNamespace(manual_gc_superseded_perframe=False)
+    cataloging._gc_perframe_after_barrier(off, m4, m3, None, FILTERNAME, 'm4')
+    assert sorted(os.listdir(pipeline_dir)) == before
+
+    on = types.SimpleNamespace(manual_gc_superseded_perframe=True)
+    cataloging._gc_perframe_after_barrier(on, m4, m3, None, FILTERNAME, 'm4')
+    assert not _exists(pipeline_dir, 'm3')
+    assert not _exists(pipeline_dir, 'm4', mergedcat=True)
