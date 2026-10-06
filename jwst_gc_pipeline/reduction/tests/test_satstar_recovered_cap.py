@@ -423,6 +423,10 @@ def test_get_saturated_stars_hands_the_cap_this_seeds_cell(monkeypatch,
     monkeypatch.setattr(SSF, 'zeroframe_fit_anchor', _anchor)
     monkeypatch.setattr(SSF, 'get_psf',
                         lambda header, **kw: CircularGaussianPRF(fwhm=1.6))
+    # get_saturated_stars builds an stpsf.NIRCam() generator up front, which
+    # reads the STPSF data files (absent on CI); only get_psf, stubbed above,
+    # would use it.
+    monkeypatch.setattr(SSF.stpsf, 'NIRCam', lambda *a, **kw: object())
     monkeypatch.setattr(SSF, 'nearest_seed_cell', _nearest)
     monkeypatch.setattr(SSF, 'recovered_cap_region', _region)
     with pytest.raises(_CapRegionReached):
