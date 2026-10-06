@@ -1082,6 +1082,11 @@ def satstar_fit_switches(env=None):
       positive, no DO_NOT_USE, group 0 clean); when the two differ by more
       than a factor ``_RCURVE_SATCHECK_MAX_RATIO`` the curve is rebuilt from
       those pixels (``zeroframe_recover_saturated``).
+    * ``SATSTAR_SEED_CORE_DQ`` (default ON): NaN-variance pixels flagged
+      OUTLIER or by the bad-pixel mask are left out of the "genuine
+      saturation core" the seed refinement centres on
+      (``seed_saturation_core``, #1098).  Acts on every in-FOV seed, with or
+      without a ramp.
     * ``SATSTAR_QFIT_LOCAL_GATE`` (default OFF), ``SATSTAR_QFIT_LOCAL_R``
       (default 0, or 10 px when the gate is on) and ``SATSTAR_QFIT_LOCAL_MAX``
       (5.0, the box qfit cap): qfit over the disk r < R around the fit
@@ -1114,6 +1119,7 @@ def satstar_fit_switches(env=None):
         'first_frame': _env_switch('SATSTAR_ZF_FIRST_FRAME', cap_on, env),
         'rim_badpix': _env_switch('SATSTAR_ZF_RIM_BADPIX', True, env),
         'rcurve_satcheck': _env_switch('SATSTAR_ZF_RCURVE_SATCHECK', True, env),
+        'seed_core_dq': _env_switch('SATSTAR_SEED_CORE_DQ', True, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1169,6 +1175,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
 
     ``dfr<FRAC>`` marks a frame whose finder data floor comes from the readout
     (``satstar_readout_data_floor``) in place of the per-filter table.
+
+    ``sq`` (``SATSTAR_SEED_CORE_DQ``, ON by default) moves seeds on any frame,
+    so every frame's default key carries it and its older catalog is refit
+    once.
     """
     sw = satstar_fit_switches(env)
     parts = []
@@ -1205,6 +1215,9 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
         # stamped before the cap read only the seed's share of a blended
         # component (and before the PSF floor) has no 'cs' and is refit.
         parts.append(f"cs{sw['cap_min_psf_frac']:g}")
+    if sw['seed_core_dq']:
+        # Acts on every in-FOV seed, with or without a ramp.
+        parts.append('sq')
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
@@ -1341,6 +1354,60 @@ def _rcurve_bins(g, r, lo, hi, min_per_bin=20):
             ctr.append(np.sqrt(edges[k] * edges[k + 1]))
             med.append(float(np.nanmedian(r[inb])))
     return ctr, med
+
+
+# SATSTAR_SEED_CORE_DQ: a NaN-variance pixel carrying any of these bits was
+# flagged by outlier detection or by the bad-pixel mask, which says nothing
+# about where a star saturated (#1098).
+_SEED_CORE_EXCLUDE_BITS = 0
+for _bit in ('OUTLIER', 'DEAD', 'HOT', 'WARM', 'LOW_QE', 'RC', 'TELEGRAPH',
+             'NO_LIN_CORR', 'NO_SAT_CHECK', 'NO_GAIN_VALUE', 'NO_FLAT_FIELD',
+             'UNRELIABLE_BIAS', 'OTHER_BAD_PIXEL', 'REFERENCE_PIXEL'):
+    _SEED_CORE_EXCLUDE_BITS |= dqflags.pixel[_bit]
+del _bit
+# the smallest filtered fragment that still counts as a saturated core; the
+# refinement itself recentres only when a component holds at least 3 such px
+_SEED_CORE_MIN_PX = 3
+
+
+def seed_saturation_core(unrecoverable, dq, env=None):
+    """The NaN-variance pixels the seed refinement may centre on.
+
+    ``_refine_coms_by_data`` re-centres a seed on the largest sub-cluster of
+    its component's NaN-``VAR_POISSON`` pixels, taken as the star's genuinely
+    saturated core.  Outlier detection and the bad-pixel mask also leave NaN
+    variance.  On the 11 wd2 dolphot benchmark frames (#1098) 6244 of 12381
+    NaN-variance SATURATED pixels carry only DO_NOT_USE | SATURATED; the rest
+    carry HOT, NO_LIN_CORR, NO_FLAT_FIELD, DEAD, OUTLIER and similar bits.  An
+    OUTLIER pair on the edge of a weakly saturated F187N star (whose own core
+    has finite variance) moved its seed 2.4 px, and a WARM / HOT / TELEGRAPH
+    clump moved an F250M seed 3.6 px; with ``NIRCAM_SATSTAR_TIGHT_BOUND`` the
+    F250M fit ended on the 1.5 FWHM position bound, 0.95 mag faint.
+
+    With ``SATSTAR_SEED_CORE_DQ`` on (default) and a DQ array, pixels with any
+    ``_SEED_CORE_EXCLUDE_BITS`` bit are left out, and so are the fragments
+    of fewer than ``_SEED_CORE_MIN_PX`` pixels that remain; otherwise
+    ``unrecoverable`` is returned unchanged.  The flag image keeps the
+    unfiltered mask.
+
+    The fragment cut matters when a bad-pixel clump sits on the star's own
+    peak.  On gc-treasury F480M (jw10678040001_02101_00002 nrcalong) a 5-px
+    HOT / WARM clump covers the brightest pixels of a 70-px component; leaving
+    it out left a 2-px DO_NOT_USE | SATURATED pair on the component's edge,
+    which won the refinement and put the seed 4 px off (fit on the bound,
+    flags 17).  Without the pair the seed falls back to the eroded core.
+    """
+    if dq is None or not satstar_fit_switches(env)['seed_core_dq']:
+        return unrecoverable
+    core = unrecoverable & ((np.asarray(dq).astype(np.int64)
+                             & _SEED_CORE_EXCLUDE_BITS) == 0)
+    lab, n = ndimage.label(core)
+    if n == 0:
+        return core
+    size = np.bincount(lab.ravel(), minlength=n + 1)
+    keep = size >= _SEED_CORE_MIN_PX
+    keep[0] = False
+    return keep[lab]
 
 
 def zeroframe_rim_error(data, err, rim, *, floor=True):
@@ -2285,7 +2352,10 @@ def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
         # distinct from the finite spurious-DQ emission filling the rest of the
         # component.  When such a core exists, recentre on its LARGEST sub-cluster
         # (the real star).  This is the most reliable centre available and takes
-        # priority over the eroded-mask heuristic below.
+        # priority over the eroded-mask heuristic below.  get_saturated_stars
+        # passes the core without outlier / bad-pixel NaN variance
+        # (seed_saturation_core, #1098): an OUTLIER pair on a star's edge
+        # otherwise wins here and moves the seed off the star.
         if unrecoverable is not None:
             _core = clmask & unrecoverable
             if int(_core.sum()) >= 3:
@@ -3242,12 +3312,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # bounded fit below.
     _lock_pos = bool(int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
     _lock_min_px = nircam_lock_min_area_px(fitsdata) if _lock_pos else 0.0
+    # the core the refinement centres on: outlier / bad-pixel NaN variance
+    # left out (SATSTAR_SEED_CORE_DQ, #1098)
+    _seed_core = seed_saturation_core(
+        _unrecoverable,
+        fitsdata['DQ'].data if 'DQ' in [h.name for h in fitsdata] else None)
     if not _lock_pos:
-        coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
+        coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_seed_core)
     elif _lock_min_px > 0 and len(coms):
         coms, _n_locked = _lock_gated_coms(coms, data, sources, saturated,
                                            _lock_min_px,
-                                           unrecoverable=_unrecoverable)
+                                           unrecoverable=_seed_core)
         print(f"NIRCam-ext: position lock limited to sat_area >= "
               f"{_lock_min_px:.0f} px ({_n_locked} of {len(coms)} components); "
               f"the rest use the refined seed", flush=True)

@@ -169,6 +169,7 @@ def test_signature_marks_a_readout_floor(tmp_path, monkeypatch):
     """A frame whose floor now comes from the readout is refit once."""
     for name in [n for n in os.environ if 'SATSTAR' in n]:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('SATSTAR_SEED_CORE_DQ', '0')   # pin the floor part only
     fn = _crf(tmp_path, WD2_F410M)
     assert SSF.satstar_fit_switch_signature(fn) == 'dfr0.5'
     monkeypatch.setenv('SATSTAR_ERR_BKG_SCATTER', '1')
