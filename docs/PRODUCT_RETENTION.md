@@ -102,16 +102,29 @@ it was about to remove.
 
 ## In-run cleanup
 
-`--manual-gc-superseded-perframe` (default **off**) runs the same selection at
+`--manual-gc-superseded-perframe` (default **on**) runs the same selection at
 each phase barrier, at the point where the phase's residual i2d and smoothed bg
-are on disk. It removes this phase's mergedcat renders and the previous phase's
-raw pair, keeps this phase's own raw pair — a retry of the mosaic still needs it
-— and therefore never touches the final phase's.
+are on disk. It removes this phase's mergedcat renders and the previous
+phase's raw pair, keeps this phase's own raw pair — a retry of the mosaic
+still needs it — and therefore never touches the final phase's.
+`--no-manual-gc-superseded-perframe` restores the old leave-everything
+behaviour.
 
-It is off by default because turning it on changes what a completed run leaves
-behind for inspection. Landing it off means this PR can be reviewed on the
-offline tool's output first, on a field that is idle, before any chain behaves
-differently.
+It landed off first so the selection could be reviewed against the offline
+tool's output on an idle field before any chain behaved differently. It is on
+by default now, following a consumer audit of every path that reads a
+per-frame image across a phase boundary: restart/`--manual-start-phase`, the
+per-frame SLURM fan-out and its completion markers, the m7 cross-band seed,
+the m8 forced fill, release staging, and the registration/QA scripts. Every
+one of them reads a mosaic (`_i2d.fits`, protected and untouched by this
+selector), a catalog (also untouched — see "Catalogs are not in scope" above),
+or the current phase's own raw per-frame pair (kept). None reads a per-frame
+raw pair from a phase further back than the one just completed, so a
+completed run now keeps only the final phase's raw pair plus every mosaic.
+Turning it on still changes what a completed run leaves behind for
+inspection, which is why the offline tool
+(`scripts/maintenance/prune_products.py`) and
+`--no-manual-gc-superseded-perframe` both remain available.
 
 ### Smoothed-background mosaics (on by default)
 

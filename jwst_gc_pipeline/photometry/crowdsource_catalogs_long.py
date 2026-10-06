@@ -5110,9 +5110,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'just been written) and the PREVIOUS phase\'s '
                             '*_{residual,model}.fits (their mergedcat build '
                             'finished a barrier ago).  This phase\'s own raw '
-                            'pair and every mosaic are kept.  Off by default; '
+                            'pair and every mosaic are kept.  ON by default; '
                             'the same selection is available offline via '
                             'scripts/maintenance/prune_products.py.'))
+    parser.add_option('--no-manual-gc-superseded-perframe',
+                      dest='manual_gc_superseded_perframe',
+                      action='store_false',
+                      help=('Keep every intermediate phase\'s per-frame '
+                            'residual/model scaffolding on disk for '
+                            'inspection, instead of deleting a phase\'s raw '
+                            'pair once the next phase\'s mosaic exists.'))
     parser.add_option('--manual-keep-intermediate-model-i2d',
                       dest='manual_keep_intermediate_model_i2d',
                       default=MANUAL_DEFAULTS['manual_keep_intermediate_model_i2d'],

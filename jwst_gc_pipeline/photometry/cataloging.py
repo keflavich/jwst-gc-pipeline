@@ -9250,10 +9250,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                               f"{bg_for_next[(module, filt)]}", flush=True)
                         # Everything the next phase needs is now on disk, so
                         # the scaffolding this phase and the one before it left
-                        # behind is unreachable.  Off by default: turning it on
-                        # changes what a completed run leaves for inspection,
-                        # which is a decision to make deliberately and not as a
-                        # side effect of upgrading.
+                        # behind is unreachable.  On by default; see the
+                        # consumer audit in docs/PRODUCT_RETENTION.md.
+                        # --no-manual-gc-superseded-perframe keeps it all.
                         if bool(mopt(options, 'manual_gc_superseded_perframe')):
                             _gc_perframe_images(cut_bp, proposal_id, field,
                                                 filt, phase, phases)
