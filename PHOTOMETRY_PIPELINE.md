@@ -234,8 +234,9 @@ rejection**.
   `--manual-m7-seed-own-band` (AUTO by default: on for star-dominated NIRCam
   fields, off on an extended-emission target and for MIRI filters;
   `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` force it) adds this filter's own m6 vetted catalog, except sources within `--manual-m7-seed-own-band-companion-fwhm`
-  (2.5) PSF FWHM of a brighter seed source, plus daofind detections on the m6
-  residual mosaic minus the m6 background. Fit on m6 background-subtracted
+  (2.5) PSF FWHM of a seed source more than 10× brighter
+  (`--manual-m7-seed-own-band-companion-max-ratio`, 0.1), plus daofind
+  detections on the m6 residual mosaic minus the m6 background. Fit on m6 background-subtracted
   frames.
 - **m8** is a **forced cross-band fill** run after the m7 merge.
   For every m7 merged source that is a *non-saturated non-detection*
@@ -394,6 +395,7 @@ still run after m6.
 | `--manual-crossband-seed-qfit-max` | 0.2 | 0.2 | | |
 | `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
+| `--manual-m7-seed-own-band-companion-max-ratio` (in [0, 1]; 1.0 = cut every fainter source in the radius, 0 = no cut) | 0.1 | 0.1 | | |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
@@ -563,10 +565,20 @@ control is the default.
   cross-band seed UNION the band's own m6 vetted catalog, plus daofind on its
   m6 residual − bg mosaic (`_build_m7_band_seed`), so a source this band's own
   vetting accepted stays in this band's m7 fit.  Own-band sources within
-  `--manual-m7-seed-own-band-companion-fwhm` (2.5) PSF FWHM of a brighter seed
-  source are not added: in Brick F182M and F212N they match an independent
-  visit at the chance rate (fits in a brighter star's PSF-mismatch ring).
-  The remaining restored sources match it 0.4–0.8× as often as the m6 vetted
+  `--manual-m7-seed-own-band-companion-fwhm` (2.5) PSF FWHM of a seed source
+  are not added when their flux is below
+  `--manual-m7-seed-own-band-companion-max-ratio` (0.1) times that source's.
+  In Brick F182M, against an independent visit's m6 vetted catalog
+  (1182/o004), such faint companions within 2 FWHM match at the chance rate
+  and sit at preferred position angles around the brighter star (fits in its
+  PSF-mismatch ring), while companions at ≥ 0.1× its flux match 0.3–0.9× as
+  often as the own-band sources m7 keeps (`docs/evidence/m7_companion_ratio`).
+  m6 has already subtracted a star the cut leaves out, so m7 does not find it
+  again and it stays whole in the final residual.  Of 93 injected stars m6
+  found next to a brighter source on the reference fields, m7 keeps 24 at
+  ratio 1.0 (every fainter source within the radius, the cut before #1107)
+  and 86 at 0.1.  The restored sources with no brighter seed source within
+  the radius match the independent visit 0.4–0.8× as often as the m6 vetted
   sources m7 already has (`docs/evidence/faint_m7_seed_union`).
   `docs/evidence/faint_defaults_on` has the faint-star reference-field
   results with and without it.  It is off on extended-emission targets

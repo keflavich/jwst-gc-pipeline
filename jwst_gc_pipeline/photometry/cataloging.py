@@ -4056,10 +4056,10 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     production m7 keeps (docs/evidence/m7_companion_ratio).  So an own-band
     source is not added when a seed source (cross-band or own-band) within
     ``companion_fwhm`` FWHM is more than ``1 / companion_max_ratio`` times
-    brighter; ``companion_fwhm=0`` disables the cut and
-    ``companion_max_ratio=1`` cuts every fainter source within that radius
-    (the cut before the ratio gate).  ``fwhm_arcsec`` defaults to the
-    filter's entry in the FWHM table.
+    brighter; ``companion_fwhm=0`` or ``companion_max_ratio=0`` disables the
+    cut (for positive fluxes) and ``companion_max_ratio=1`` cuts every
+    fainter source within that radius (the cut before the ratio gate).
+    ``fwhm_arcsec`` defaults to the filter's entry in the FWHM table.
 
     A star the cut leaves out was fitted and subtracted at m6, so m6's
     residual (the image m7 detects on) no longer shows it and m7 does not
