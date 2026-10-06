@@ -40,6 +40,7 @@ import subprocess
 import tempfile
 
 import sys
+from collections import Counter
 from pathlib import Path
 
 # `release_freshness` is a sibling MODULE, not a package member, so a bare
@@ -303,6 +304,13 @@ FIELDS = {
         # picks the newest one with a provenance sidecar unless
         # `--joint-catalog-dir` names one explicitly.
         "joint_catalog_root": Path("/orange/adamginsburg/jwst/gc-treasury/catalogs_joint"),
+        # Instruments whose detector frames `--exposures-from-disk` stages.
+        # NIRCam only: the per-visit image-WCS roll (`image_roll_wcs.py`)
+        # rotates NIRCam frames, and the MIRI F770W parallels still carry
+        # neither that roll nor their bulk correction (#956).  The joint
+        # catalog's roll gate refuses a release that holds an unrotated frame,
+        # so the MIRI frames stay in v1.8 until both corrections exist.
+        "exposure_instruments": ["NIRCam"],
     },
     "gc2211": {
         "data_dir": Path("/orange/adamginsburg/jwst/gc2211"),
@@ -2472,6 +2480,15 @@ def _exposures_from_disk(field, version, field_dir):
                 "src": str(path), "version": version,
                 "provenance": frame_provenance(path),
             })
+    wanted = FIELDS[field].get("exposure_instruments")
+    if wanted:
+        dropped = Counter(it["instrument"] for it in items
+                          if it["instrument"] not in wanted)
+        items = [it for it in items if it["instrument"] in wanted]
+        for instrument, n in sorted(dropped.items()):
+            print(f"  {n} {instrument} frame(s) not staged: '{field}' stages "
+                  f"exposures from {', '.join(wanted)} only "
+                  f"(`exposure_instruments`)")
     for it in items:
         it["dest"] = str(assign_dest(it, field))
         src = Path(it["src"])
@@ -3508,6 +3525,18 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
             "the `_destreak`/`_align`/`_cal` frame the mosaic was drizzled from",
             "directly.",
             "",
+        ]
+        wanted = FIELDS.get(field, {}).get("exposure_instruments")
+        if wanted:
+            exposure_lines += [
+                f"Only {', '.join(wanted)} frames are staged here "
+                "(`exposure_instruments`). Frames from other instruments are",
+                "withheld until they carry the same astrometric corrections",
+                "as the frames above; see the astrometric provenance section and",
+                "the field notes for which corrections are outstanding.",
+                "",
+            ]
+        exposure_lines += [
             f"**These are {_link_mode_phrase(exposures)} to the pipeline's own "
             f"frames, not frozen copies.**",
             "They cost no additional storage and unlike",

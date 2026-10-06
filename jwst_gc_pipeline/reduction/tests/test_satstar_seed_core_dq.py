@@ -209,10 +209,10 @@ def test_signature_carries_sq_with_or_without_a_ramp(tmp_path, monkeypatch):
     fn0 = _frame(tmp_path / 'noramp', with_ramp=False)
     fn1 = _frame(tmp_path, with_ramp=True)
     assert ssf.satstar_fit_switch_signature(fn0) == 'sq'
-    assert ssf.satstar_fit_switch_signature(fn1) == 'zfg1.3b_sq'
+    assert ssf.satstar_fit_switch_signature(fn1) == 'zfg1.3bc_sq'
     monkeypatch.setenv('SATSTAR_SEED_CORE_DQ', '0')
     assert ssf.satstar_fit_switch_signature(fn0) == ''
-    assert ssf.satstar_fit_switch_signature(fn1) == 'zfg1.3b'
+    assert ssf.satstar_fit_switch_signature(fn1) == 'zfg1.3bc'
 
 
 def test_a_frame_without_a_ramp_is_refit_once(tmp_path, monkeypatch):
