@@ -17,10 +17,16 @@ stars whose region is a recovered ring around an unmeasured core.
 """
 import numpy as np
 import pytest
+from astropy.io import fits
+from jwst.datamodels import dqflags
+from photutils.psf import CircularGaussianPRF
 from scipy.ndimage import binary_dilation
 
+import jwst_gc_pipeline.reduction.satstar_deblend as SD
+import jwst_gc_pipeline.reduction.saturated_star_finding as SSF
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
-    recovered_cap_flux, recovered_cap_region, recovered_core_peak)
+    nearest_seed_cell, recovered_cap_flux, recovered_cap_region,
+    recovered_core_peak)
 
 
 def _disk(shape, x, y, r):
@@ -260,3 +266,179 @@ def test_cap_is_nan_without_a_measured_pixel_or_psf():
     cap, pfrac = recovered_cap_flux(np.where(far, 50.0, cutout), far,
                                     np.zeros(psf.shape, bool), psf_far)
     assert np.isnan(cap)
+
+
+# --------------------------------------------------------------------------
+# Blended components: the deblend gives every seed of a SAT component the
+# component's label, so the cap must read only this seed's share
+# --------------------------------------------------------------------------
+
+def test_nearest_seed_cell_splits_at_the_midline():
+    cell = nearest_seed_cell((21, 41), (10, 10), [(10, 30)])
+    assert cell[10, :20].all() and not cell[10, 21:].any()
+    assert cell[10, 20]                       # a tie stays with both seeds
+    assert nearest_seed_cell((5, 5), (2, 2), []).all()
+
+
+def _moffat_unit_psf(shape=(41, 41), x=12.0, y=20.0, a=1.5, beta=2.5):
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    p = (1 + ((xx - x) ** 2 + (yy - y) ** 2) / a ** 2) ** -beta
+    return p / p.sum()
+
+
+def _blend_scene():
+    """wd2 F150W nrcb3 (1893.7, 1338.2), arm with the first-frame anchor: a
+    16.3 mag star A shares SAT component 521 with a 12.9 mag sibling B
+    10.6 px away.  A's peak is unmeasured and its own ring lost; B's
+    recovered ring holds B's model-subtracted residual, here 10% of A's
+    model.  The cap read that residual where A's PSF is 0.0044 of its peak
+    and cut A from 1.5e4 to 1.6e3."""
+    shape = (41, 41)
+    flux_a = 1.5e4
+    psf_a = _moffat_unit_psf(shape, x=12.0, y=20.0)
+    a_core = _disk(shape, 12, 20, 1)
+    b_core = _disk(shape, 23, 20, 4)
+    comp = _disk(shape, 12, 20, 2) | _disk(shape, 23, 20, 6)
+    comp[19:22, 12:24] = True
+    deep = a_core | b_core
+    deep_exp = binary_dilation(deep, iterations=2)
+    unrec = _disk(shape, 12, 20, 3) & ~a_core
+    cutout = flux_a * psf_a
+    b_ring = deep_exp & _disk(shape, 23, 20, 6) & ~b_core
+    cutout[b_ring] *= 0.1
+    cutout[deep] = np.nan
+    return cutout, psf_a, flux_a, comp, deep, deep_exp, unrec, b_core
+
+
+def test_blend_whole_component_region_reads_the_sibling_ring():
+    """The pre-fix behaviour: the component-wide region and no PSF floor
+    cap A to a tenth of its flux."""
+    cutout, psf_a, flux_a, comp, deep, deep_exp, unrec, _ = _blend_scene()
+    region = recovered_cap_region(comp, deep, deep_exp)
+    peak, lost, _ = recovered_core_peak(cutout, region, unrec)
+    assert np.isfinite(peak) and lost < 0.2
+    cap, pfrac = recovered_cap_flux(cutout, region, unrec, psf_a,
+                                    min_psf_frac=0.0)
+    assert pfrac < 0.005
+    assert cap == pytest.approx(0.1 * flux_a, rel=0.01)
+
+
+def test_blend_cap_skipped_below_the_psf_floor():
+    cutout, psf_a, _, comp, deep, deep_exp, unrec, _ = _blend_scene()
+    region = recovered_cap_region(comp, deep, deep_exp)
+    cap, pfrac = recovered_cap_flux(cutout, region, unrec, psf_a)
+    assert np.isnan(cap)
+    assert 0 < pfrac < 0.005
+
+
+def test_blend_own_seed_region_leaves_out_the_sibling_core():
+    """With A's share of the component only, B's core and most of its ring
+    leave the region, A's lost ring dominates it, and the cap is skipped."""
+    cutout, psf_a, _, comp, deep, deep_exp, unrec, b_core = _blend_scene()
+    cell = nearest_seed_cell(comp.shape, (20, 12), [(20, 23)])
+    region = recovered_cap_region(comp, deep, deep_exp, own_cell=cell)
+    assert not (region & b_core).any()
+    assert region[20, 12]
+    peak, lost, _ = recovered_core_peak(cutout, region, unrec)
+    assert np.isnan(peak) and lost >= 0.2
+
+
+def test_blend_without_own_deep_core_keeps_own_share_of_component():
+    """No deep core (the anchor recovered every SATURATED pixel): the region
+    is this seed's share of the component, without the sibling's half."""
+    _, _, _, comp, _, _, _, b_core = _blend_scene()
+    none = np.zeros_like(comp)
+    cell = nearest_seed_cell(comp.shape, (20, 12), [(20, 23)])
+    region = recovered_cap_region(comp, none, none, own_cell=cell)
+    assert np.array_equal(region, comp & cell)
+    assert region[20, 12] and not region[20, 23]
+    assert not (region & b_core).any()
+    assert region.sum() < comp.sum()
+
+
+# --------------------------------------------------------------------------
+# wiring in get_saturated_stars
+# --------------------------------------------------------------------------
+
+class _CapRegionReached(Exception):
+    pass
+
+
+def _two_star_frame(n=200):
+    """One SATURATED component holding two stars 14 px apart."""
+    sat = dqflags.pixel['SATURATED']
+    sci = np.ones((n, n))
+    dq = np.zeros((n, n), dtype=np.uint32)
+    dq[96:105, 88:113] = sat
+    sci[dq != 0] = np.nan
+    wcs_hdr = fits.Header({'CTYPE1': 'RA---TAN', 'CTYPE2': 'DEC--TAN',
+                           'CRPIX1': 100, 'CRPIX2': 100, 'CRVAL1': 150.0,
+                           'CRVAL2': 2.0, 'CDELT1': -1.7e-5, 'CDELT2': 1.7e-5,
+                           'BUNIT': 'MJy/sr'})
+    fh = fits.HDUList([
+        fits.PrimaryHDU(header=fits.Header({
+            'TELESCOP': 'JWST', 'INSTRUME': 'NIRCAM', 'FILTER': 'F150W',
+            'PUPIL': 'CLEAR',
+            'DETECTOR': 'NRCB1', 'MODULE': 'B', 'CHANNEL': 'SHORT'})),
+        fits.ImageHDU(sci, header=wcs_hdr, name='SCI'),
+        fits.ImageHDU(np.where(dq != 0, np.nan, 0.1), name='ERR'),
+        fits.ImageHDU(dq, name='DQ'),
+        fits.ImageHDU(np.where(dq != 0, np.nan, 0.01), name='VAR_POISSON')])
+    return fh, dq != 0
+
+
+@pytest.mark.parametrize('seeds', [[(100.0, 93.0), (100.0, 107.0)],
+                                   [(100.0, 100.0)]])
+def test_get_saturated_stars_hands_the_cap_this_seeds_cell(monkeypatch,
+                                                            seeds):
+    """The deblend gives both seeds of the component its label.  The cap
+    region of the first seed fitted reaches ``recovered_cap_region`` with a
+    cell that holds that seed and leaves out its sibling; a lone seed gets
+    no cell.  The deblend, the anchor and the PSF grid are stubbed, and the
+    region helper stops the fit."""
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    fh, sat = _two_star_frame()
+    n = sat.shape[0]
+
+    def _records(saturated, sources, coms, sizes, zeroframe, data, fwhm,
+                 **kw):
+        return [{'com': c, 'label': 1, 'forced': False,
+                 'sat_area': int(sat.sum())} for c in seeds]
+
+    def _anchor(data, dq, zeroframe, **kw):
+        return data, sat.copy(), np.zeros_like(sat), None
+
+    seen = {}
+    _cell = SSF.nearest_seed_cell
+
+    def _nearest(shape, own_yx, sibling_yx):
+        seen.update(own=own_yx, sibs=list(sibling_yx))
+        return _cell(shape, own_yx, sibling_yx)
+
+    def _region(own_component, own_deep_core, own_deep_core_expanded,
+                own_cell=None):
+        seen.update(component=own_component, cell=own_cell)
+        raise _CapRegionReached
+    monkeypatch.setattr(SD, 'build_deblended_source_records', _records)
+    monkeypatch.setattr(SSF, 'zeroframe_fit_anchor', _anchor)
+    monkeypatch.setattr(SSF, 'get_psf',
+                        lambda header, **kw: CircularGaussianPRF(fwhm=1.6))
+    # get_saturated_stars builds an stpsf.NIRCam() generator up front, which
+    # reads the STPSF data files (absent on CI); only get_psf, stubbed above,
+    # would use it.
+    monkeypatch.setattr(SSF.stpsf, 'NIRCam', lambda *a, **kw: object())
+    monkeypatch.setattr(SSF, 'nearest_seed_cell', _nearest)
+    monkeypatch.setattr(SSF, 'recovered_cap_region', _region)
+    with pytest.raises(_CapRegionReached):
+        SSF.get_saturated_stars(fh, zeroframe=np.ones((n, n)),
+                                zeroframe_deblend=True, plot=False)
+    if len(seeds) == 1:
+        assert seen['cell'] is None and 'own' not in seen
+        return
+    cell = seen['cell']
+    assert cell is not None and cell.shape == seen['component'].shape
+    (oy, ox), [(sy, sx)] = seen['own'], seen['sibs']
+    assert (oy, abs(ox - sx)) == (sy, 14.0)
+    assert cell[int(oy), int(ox)] and not cell[int(sy), int(sx)]
+    comp = seen['component']
+    assert (comp & cell).any() and (comp & ~cell).any()

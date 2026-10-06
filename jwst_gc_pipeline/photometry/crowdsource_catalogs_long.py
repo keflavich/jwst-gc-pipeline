@@ -2599,8 +2599,11 @@ def get_psf_model(filtername, proposal_id, field,
 
         # Opt-in hybrid PSF: empirical ePSF core inside 10 px, this STPSF grid
         # outside 12 px (photometry/epsf_hybrid.py, issue #1007).  A no-op --
-        # the same grid object -- unless PSF_EPSF_CORE_DIR is set.
-        if instrument == 'NIRCam':
+        # the same grid object -- unless PSF_EPSF_CORE_DIR is set.  Compare
+        # case-blind: the per-frame callers pass the header INSTRUME, which is
+        # 'NIRCAM'; an exact 'NIRCam' match skipped the core on every frame
+        # while the filenames still carried _hybpsf.
+        if instrument.upper() == 'NIRCAM':
             grid = maybe_apply_epsf_core(grid, _cache_detector, filtername, program=proposal_id)
 
         if use_grid:
@@ -5121,6 +5124,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'pipeline logic, so skipping them saves ~1 resample per '
                             'intermediate phase (~5 per filter). Set this to restore the '
                             'old behaviour of writing the model i2d every phase.'))
+    parser.add_option('--manual-keep-intermediate-smoothed-bg',
+                      dest='manual_keep_intermediate_smoothed_bg',
+                      default=MANUAL_DEFAULTS['manual_keep_intermediate_smoothed_bg'],
+                      action='store_true',
+                      help=('By default each phase barrier deletes the smoothed-'
+                            'residual background mosaic '
+                            '(*_mergedcat_residual_smoothed_bg_i2d.fits) from two '
+                            'phases back: a phase reads only its predecessor\'s '
+                            'map, so a completed run keeps the last two.  Residual '
+                            'and model mosaics are kept regardless.  Set this to '
+                            'keep every phase\'s map.'))
     parser.add_option('--bundle-size', dest='bundle_size',
                       default=1, type='int',
                       help='Number of consecutive per-exposure iterations each SLURM array task handles (default 1 = one exposure per task).')

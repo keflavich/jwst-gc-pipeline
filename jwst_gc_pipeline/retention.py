@@ -70,7 +70,8 @@ from dataclasses import dataclass, field as _dcfield
 __all__ = ['Rule', 'Candidate', 'Guard', 'POLICY', 'DEFAULT_RULES',
            'classify', 'plan', 'apply', 'release_symlink_targets',
            'busy_targets', 'superseded_perframe_products',
-           'spent_mergedcat_frames', 'RetentionError']
+           'spent_mergedcat_frames', 'superseded_smoothed_bg',
+           'RetentionError']
 
 
 class RetentionError(RuntimeError):
@@ -86,7 +87,9 @@ class RetentionError(RuntimeError):
 # --------------------------------------------------------------------------
 PROTECTED_SUFFIXES = (
     '_i2d.fits',        # every mosaic, incl. *_mergedcat_residual_i2d.fits and
-                        # *_mergedcat_residual_smoothed_bg_i2d.fits
+                        # *_mergedcat_residual_smoothed_bg_i2d.fits.  The one
+                        # in-run exception is superseded_smoothed_bg below,
+                        # which names a single smoothed-bg path two phases back.
     '_crf.fits', '_cal.fits', '_rate.fits', '_rateints.fits', '_uncal.fits',
     '_destreak.fits', '_align.fits', '_asn.json',
     '_consensus.fits', '_satstar_reconciled_m12.fits',
@@ -146,6 +149,12 @@ QUARANTINE_DIR_RE = re.compile(
     re.IGNORECASE)
 
 ALLCOLS_RE = re.compile(r'_allcols\.fits$')
+
+# The smoothed-residual background a phase builds for the next one.  The
+# ``_mergedcat_residual_`` infix is what separates it from the residual and
+# model mosaics, which are kept as diagnostics.
+SMOOTHED_BG_RE = re.compile(
+    r'_' + _LABEL + r'_daophot_[a-z]+_mergedcat_residual_smoothed_bg_i2d\.fits$')
 
 
 @dataclass(frozen=True)
@@ -669,3 +678,31 @@ def superseded_perframe_products(pipeline_dir, *, proposal_id, field,
     return sorted(p for p in out
                   if '_mergedcat_' not in os.path.basename(p)
                   and not _is_protected_name(p))
+
+
+def superseded_smoothed_bg(path, *, label):
+    """Return ``[path]`` when it is ``label``'s smoothed-bg mosaic, else ``[]``.
+
+    The caller passes one exact path, rebuilt with the same function a restart
+    uses to find it (``cataloging._reconstruct_smoothed_bg_path``), and decides
+    that ``label`` is superseded: in the phase loop it is the label TWO phases
+    before the one whose smoothed bg just landed.  The phase in between still
+    needs its predecessor's map for a retry, so one map back is kept.
+
+    This is the in-run selector that reaches into ``PROTECTED_SUFFIXES``
+    (``_i2d.fits``).  It earns that by naming one file and checking its whole
+    basename: the smoothed-bg suffix, the ``_mergedcat_residual_`` infix that
+    no residual or model mosaic carries, and the label.  A residual i2d, a
+    model i2d, a renamed quarantine copy (``..._i2d_im0_badastrom.fits``) or a
+    different phase's map all return ``[]``, as does anything under a
+    protected directory.
+    """
+    base = os.path.basename(str(path))
+    m = SMOOTHED_BG_RE.search(base)
+    if m is None or m.group('label') != label:
+        return []
+    if any(s in str(path) for s in PROTECTED_SUBSTRINGS):
+        return []
+    if not os.path.isfile(path):
+        return []
+    return [str(path)]

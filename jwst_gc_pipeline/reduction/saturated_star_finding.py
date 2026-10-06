@@ -1100,6 +1100,11 @@ def satstar_fit_switches(env=None):
       wd2 F150W nrcb3 (#1058), the 13-19 mag rows that failed only this test
       at 1.0 and had 1 <= qfit_local < 5 all matched a dolphot star (61 of 61,
       51 within 0.3 mag); at qfit_local >= 5, 9 of 17 had no counterpart.
+    * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
+      ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
+      recovered-core cap and the PSF fraction below which it is skipped
+      (``recovered_cap_flux``).  The cap reads only the fitted seed's share of
+      a blended component (``recovered_cap_region``).
     """
     env = os.environ if env is None else env
     qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
@@ -1119,6 +1124,9 @@ def satstar_fit_switches(env=None):
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
+        'recovered_cap': cap_on,
+        'cap_min_psf_frac': float(
+            env.get('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '') or 0.005),
     }
 
 
@@ -1199,6 +1207,11 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             # matches and is refit.
             ql += f"g{sw['qfit_local_max']:g}s"
         parts.append(ql)
+    if sw['recovered_cap']:
+        # Acts on every cap-on NIRCam fit, with or without a ramp.  A catalog
+        # stamped before the cap read only the seed's share of a blended
+        # component (and before the PSF floor) has no 'cs' and is refit.
+        parts.append(f"cs{sw['cap_min_psf_frac']:g}")
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
@@ -1748,7 +1761,20 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
     return data, None, rim, None
 
 
-def recovered_cap_region(own_component, own_deep_core, own_deep_core_expanded):
+def nearest_seed_cell(shape, own_yx, sibling_yx):
+    """Pixels of a cutout of ``shape`` at least as near the seed ``own_yx`` as
+    any seed in ``sibling_yx`` (cutout (y, x) coordinates).  All True when
+    there is no sibling."""
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    d_own = (yy - own_yx[0]) ** 2 + (xx - own_yx[1]) ** 2
+    cell = np.ones(shape, bool)
+    for sy, sx in sibling_yx:
+        cell &= d_own <= (yy - sy) ** 2 + (xx - sx) ** 2
+    return cell
+
+
+def recovered_cap_region(own_component, own_deep_core, own_deep_core_expanded,
+                         own_cell=None):
     """Pixels the NIRCam recovered-core cap (``NIRCAM_SATSTAR_RECOVERED_CAP``)
     reads for one source, all as cutout-shaped boolean arrays.
 
@@ -1764,7 +1790,21 @@ def recovered_cap_region(own_component, own_deep_core, own_deep_core_expanded):
       recovered every SATURATED pixel, or ``SATSTAR_ZF_KEEP_FINITE`` kept
       them): the source's own saturated component, which then holds its
       measured core.
+
+    ``own_cell`` (optional): the pixels nearer this seed than any other seed
+    of the same component (``nearest_seed_cell``).  The deblend gives every
+    star of a blended component the component's label, so without it the
+    region of a faint star holds its brighter sibling's core.  When the faint
+    star's own peak is unmeasured, the cap then reads the sibling's
+    model-subtracted core, where the faint star's PSF is a fraction of a per
+    cent of its peak: on wd2 F150W a 16.3 mag star 10.6 px from a 12.9 mag
+    sibling was cut from 1.5e4 to 1.6e3 by a 1.2 MJy/sr residual and then
+    rejected by the fit-quality gate.
     """
+    if own_cell is not None:
+        own_component = own_component & own_cell
+        own_deep_core = own_deep_core & own_cell
+        own_deep_core_expanded = own_deep_core_expanded & own_cell
     if own_deep_core.any():
         return own_deep_core_expanded
     return own_component
@@ -1788,7 +1828,8 @@ def recovered_core_peak(cutout, region, unrecoverable, max_lost=0.2, min_px=3):
     return float(np.nanmax(cutout[rec])), lost_frac, n_rec
 
 
-def recovered_cap_flux(cutout, region, unrecoverable, psf_unit):
+def recovered_cap_flux(cutout, region, unrecoverable, psf_unit,
+                       min_psf_frac=0.005):
     """Flux bound of the NIRCam recovered-core cap.
 
     ``psf_unit`` is the unit-flux PSF evaluated at the fit position on the
@@ -1816,6 +1857,10 @@ def recovered_cap_flux(cutout, region, unrecoverable, psf_unit):
       ``psf_frac = psf_unit[p] / max(psf_unit)``.  The brightest measured
       pixel can belong to a neighbour that shares the region; the model of
       this star is faint there and does not bound its flux.
+      When ``psf_frac`` is below ``min_psf_frac`` the cap is skipped
+      (``cap`` NaN, ``psf_frac`` returned): there the data are the wings of
+      other sources and their model residuals, which bound nothing about this
+      star.
 
     Dividing a pixel away from the star by the PSF peak cut wd2 F150W stars
     to a fraction of their flux: 14.5 mag stars whose group-0-saturated
@@ -1838,6 +1883,8 @@ def recovered_cap_flux(cutout, region, unrecoverable, psf_unit):
     pp = float(psf_unit[iy, ix])
     if not (np.isfinite(pp) and pp > 0):
         return np.nan, np.nan
+    if pp / ppk < min_psf_frac:
+        return np.nan, pp / ppk
     return float(cutout[iy, ix]) / pp, pp / ppk
 
 
@@ -3375,6 +3422,18 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
     nsource = len(source_records)
 
+    # Deblended seeds of one SAT component share its label
+    # (build_deblended_source_records).  The recovered-core cap splits the
+    # component between them (nearest_seed_cell).
+    _seeds_by_label = {}
+    for _jj, _rec in enumerate(source_records):
+        _c = _rec.get('com')
+        if (_rec.get('forced') or _rec.get('label') is None or _c is None
+                or not (np.isfinite(_c[0]) and np.isfinite(_c[1]))):
+            continue
+        _seeds_by_label.setdefault(_rec['label'], []).append(
+            (_jj, float(_c[0]), float(_c[1])))
+
     # ZEROFRAME-ANCHORED FIT DATA (2026-07-10): when the ramp first read is
     # available, replace the clipped/NaN/charge-inflated DQ-SATURATED rim with
     # its group-0 truth (R * group0, self-calibrated per frame -- see
@@ -3814,10 +3873,16 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # how much core is masked -- see _wing_selfcal)
             _wingcal_rmask = float(np.sqrt(
                 max(int(this_source_sat_expanded.sum()), 1) / np.pi))
-            # region the NIRCam recovered-core cap reads: this source only
+            # region the NIRCam recovered-core cap reads: this source only,
+            # and of a blended component only this seed's share
+            _sibs = [(_sy - y0, _sx - x0) for _jj, _sy, _sx
+                     in _seeds_by_label.get(src_label, ()) if _jj != ii]
+            _own_cell = (nearest_seed_cell(this_source_sat.shape,
+                                           (com[0] - y0, com[1] - x0), _sibs)
+                         if _sibs else None)
             _cap_region = recovered_cap_region(
                 sources[y0:y1, x0:x1] == src_label, this_source_sat,
-                this_source_sat_expanded)
+                this_source_sat_expanded, own_cell=_own_cell)
         else:
             # Forced sources or no src_label: fall back to dilating the
             # whole saturated mask (legacy behaviour).
@@ -4668,6 +4733,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # saturated star's recovered ring sits far below its true peak, so
         # capping to it would badly under-subtract.
         # NIRCAM_SATSTAR_RECOVERED_CAP.
+        # flux_fit_precap: flux_fit before this cap (and before the wing
+        # self-calibration); cap_psf_frac: where the cap read the model, as a
+        # fraction of its peak (NaN when the cap was not evaluated).
+        if result is not None and len(result):
+            result['flux_fit_precap'] = np.asarray(result['flux_fit'], float)
+            result['cap_psf_frac'] = np.full(len(result), np.nan)
         if (not _is_miri and int(os.environ.get('NIRCAM_SATSTAR_RECOVERED_CAP', 0))
                 and len(result) and np.isfinite(float(result['flux_fit'][0]))):
             _max_lost = float(os.environ.get('NIRCAM_SATSTAR_RECOVERED_MAXLOST', 0.2))
@@ -4678,14 +4749,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
                 _psf2 = np.clip(_infov_psf.evaluate(_xx2, _yy2, 1.0, _xf2, _yf2), 0, None)
                 _cap, _pfrac = recovered_cap_flux(
-                    cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _psf2)
+                    cutout, _cap_region, _unrecoverable[y0:y1, x0:x1], _psf2,
+                    min_psf_frac=satstar_fit_switches()['cap_min_psf_frac'])
+                result['cap_psf_frac'][0] = _pfrac
                 if np.isfinite(_cap):
                     _fc = float(result['flux_fit'][0])
                     if np.isfinite(_fc) and _fc > _cap:
                         result['flux_fit'][0] = _cap
                         # the model where the cap reads it, before and after
                         _pk = _pfrac * float(np.nanmax(_psf2))
-                        print(f"  [nircam recovered-core cap] flux {_fc:.2e} -> "
+                        print(f"  [nircam recovered-core cap] ({_xf2 + x0:.1f}, "
+                              f"{_yf2 + y0:.1f}) flux {_fc:.2e} -> "
                               f"{_cap:.2e} (model {_fc * _pk:.0f} -> "
                               f"{_cap * _pk:.0f} where the PSF is {_pfrac:.2f} "
                               f"of its peak; lost {_lostf*100:.0f}%, "
