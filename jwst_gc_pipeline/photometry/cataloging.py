@@ -7720,6 +7720,45 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge,
     return todo, resumed_ok, resumed_nooverlap, stale
 
 
+def stamp_resumed_markers(marker_dir, resumed_ok, resumed_nooverlap, filt,
+                          phase, merge):
+    """Write THIS label's marker for every frame the resume skipped.
+
+    A frame resumed from ANOTHER label's marker (#841) has no receipt under this
+    label, and the finalize's completeness check is per label -- it would read
+    every such frame as a dropped exposure and abort.  So the fan-out stamps
+    this label's marker for what it skips, and the receipt matches what it
+    asserts: this frame's product is on disk and current.  Measured: wd1
+    F150W/merged came back with 1 merged marker where 96 were expected, because
+    the merged pass resumed all of them and recorded none.
+
+    WRITER: correct spelling only, as in ``_on_result``.  The stamp used to loop
+    over ``_perframe_detector_tokens`` -- the READER list -- and so also wrote
+    the pre-#562 spelling.  That spelling is ``filename.split('_')[3]`` on the
+    full path, and under a tree with underscores in several directory names it
+    spans a directory boundary:
+
+        .../dolphot_benchmark/Q_integ/tree_mainfcbg//F115W/pipeline/jw..._crf.fits
+            -> 'mainfcbg//F115W/pipeline/jw03523005001'
+
+    so the marker name carried path separators, ``open`` raised
+    FileNotFoundError, and every ``SKIP_IF_DONE=1`` shard that resumed a frame
+    died within a minute (wd2 Q_integ mainfcbg / mainfcbgkf, 12 of 12 array
+    tasks).  No pre-#562 writer can have left such a marker -- it would have
+    hit the same error -- so the readers lose nothing either.
+    """
+    for fn in resumed_ok:
+        p = perframe_marker_path(marker_dir, fn, perframe_detector_token(fn),
+                                 filt, phase, 'ok', merge=merge)
+        if not os.path.exists(p):
+            open(p, 'w').close()
+    for fn, _reason in resumed_nooverlap:
+        p = perframe_marker_path(marker_dir, fn, perframe_detector_token(fn),
+                                 filt, phase, 'nooverlap', merge=merge)
+        if not os.path.exists(p):
+            open(p, 'w').close()
+
+
 def merged_catalog_path(cut_bp, label, module, filt, proposal_id, field,
                         desat=False, bgsub=False, resbgsub=False, blur=False):
     """The per-filter merged catalog name for one phase, as the merge WRITES it.
@@ -8660,30 +8699,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                       f"the photometry code is unchanged since "
                                       f"they were fitted", flush=True)
                         else:
-                            # A frame resumed from ANOTHER label's marker (#841)
-                            # has no receipt under THIS label, and the finalize's
-                            # completeness check is per label -- it would read
-                            # every such frame as a dropped exposure and abort.
-                            # Stamp this label's marker for what we are skipping,
-                            # so the receipt matches what the fan-out is
-                            # asserting: this frame's product is on disk and
-                            # current.  Measured: wd1 F150W/merged came back with
-                            # 1 merged marker where 96 were expected, because the
-                            # merged pass resumed all of them and recorded none.
-                            for _rfn in _ok:
-                                for _rdet in _perframe_detector_tokens(_rfn):
-                                    _rp = perframe_marker_path(
-                                        _marker_dir, _rfn, _rdet, filt, phase,
-                                        'ok', merge=module)
-                                    if not os.path.exists(_rp):
-                                        open(_rp, 'w').close()
-                            for _rfn, _rreason in _nov:
-                                for _rdet in _perframe_detector_tokens(_rfn):
-                                    _rp = perframe_marker_path(
-                                        _marker_dir, _rfn, _rdet, filt, phase,
-                                        'nooverlap', merge=module)
-                                    if not os.path.exists(_rp):
-                                        open(_rp, 'w').close()
+                            # This label's receipt for every skipped frame, in
+                            # the correct spelling only (#841; see the helper).
+                            stamp_resumed_markers(_marker_dir, _ok, _nov, filt,
+                                                  phase, module)
                             overlapping_now.extend(_ok)
                             no_overlap.extend(_nov)
                             _resumed = len(_ok) + len(_nov)
