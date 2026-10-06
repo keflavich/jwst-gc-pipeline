@@ -5354,16 +5354,23 @@ def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
     Used by --manual-start-phase to recover the previous phase's background map
     (the only cross-phase state) when starting partway through.  Mirrors the
     name build_mergedcat_residuals + _build_source_masked_bg write:
-    ``...-{filt}-{module}{desat}{bgsub}{group}_{label}_daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits``
-    (m5/m6/m7 are resbgsub).
+    ``...-{filt}-{module}{desat}{bgsub}{epsf}{blur}{group}_{label}_daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits``
+    (m5/m6/m7 are resbgsub).  ``{epsf}`` is ``_epsf`` under ``--epsf`` plus
+    ``_hybpsf`` when ``PSF_EPSF_CORE_DIR`` is set (``hybrid_psf_token``), the
+    same expression ``build_mergedcat_residuals`` uses.  Without them, every
+    per-phase job of an ePSF or hybrid-PSF run looked for a name nothing wrote:
+    m3/m4 silently lost the previous phase's detection image from their seed,
+    and m5 raised on the missing smoothed bg.
     """
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = ('_bgsub' if options.bgsub else '') + (
         '_resbgsub' if label in ('m5', 'm6', 'm7') else '')
+    epsf_ = ('_epsf' if getattr(options, 'epsf', False) else '') + hybrid_psf_token()
+    blur_ = '_blur' if getattr(options, 'blur', False) else ''
     group_ = '_group' if options.group else ''
     inst = _L._inst_token(filt)
     return (f'{cut_bp}/{filt}/pipeline/{jw_prefix(proposal_id)}-o{field}_t001_{inst}_'
-            f'{pupil}-{filt.lower()}-{module}{desat}{bgsub}{group_}_{label}_'
+            f'{pupil}-{filt.lower()}-{module}{desat}{bgsub}{epsf_}{blur_}{group_}_{label}_'
             f'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits')
 
 
