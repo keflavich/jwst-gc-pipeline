@@ -60,6 +60,10 @@ LIVE_PRODUCTS = [
     'f410m_merged_satstar_reconciled_m12.fits',
     # astrometry state
     'jw02221-o001_t001_nircam_clear-f410m-merged_mergedcat_grid_o001_f410m.asdf',
+    # a checkpoint-quarantined mosaic with NO replacement on disk: stage_release
+    # relies on exactly this absence to refuse staging the field, so it must
+    # never be selected regardless of age.
+    'jw02221-o001_t001_nircam_clear-f410m-merged_i2d_im0_badastrom.fits',
 ]
 
 
@@ -123,6 +127,169 @@ def test_mergedcat_frames_need_their_i2d(tmp_path):
     rule, why = retention.classify(
         os.path.join(d, _perframe('m4', mergedcat=True)), ctx)
     assert rule is not None and rule.name == 'spent_mergedcat_frame'
+
+
+# --------------------------------------------------------------------------
+# allcols / duplicate_table_format default state (PR: turn allcols on)
+# --------------------------------------------------------------------------
+
+def test_allcols_is_on_by_default():
+    """No reader anywhere in the repo touches an _allcols table; verified by
+    grep of scripts/ + jwst_gc_pipeline/ (merge_catalogs, cmz, release)."""
+    assert retention.POLICY['allcols'].default_on is True
+
+
+def test_duplicate_table_format_stays_off_by_default():
+    """The release ships BOTH the .fits and .ecsv of the combined merged table
+    as separate deliverables (stage_release.py::_emit_table_group emits
+    full_fits AND full_ecsv); 'has a FITS twin' does not mean 'is dead' for
+    that stem, so this rule is not safe to flip on untouched."""
+    assert retention.POLICY['duplicate_table_format'].default_on is False
+
+
+# --------------------------------------------------------------------------
+# stale_badastrom_mosaic: checkpoint-quarantined i2d with a fresh replacement
+# --------------------------------------------------------------------------
+
+BADASTROM_NAME = ('jw01182-o001_t001_nircam_clear-f200w-merged_i2d'
+                  '_im0_badastrom.fits')
+BADASTROM_NUMBERED_NAME = ('jw01182-o001_t001_nircam_clear-f200w-merged_i2d'
+                           '_im0_badastrom.1.fits')
+ORIGINAL_NAME = 'jw01182-o001_t001_nircam_clear-f200w-merged_i2d.fits'
+
+
+def _age(path, days):
+    t = os.stat(path).st_mtime - days * 86400
+    os.utime(path, (t, t))
+
+
+def test_stale_badastrom_mosaic_is_on_by_default():
+    assert retention.POLICY['stale_badastrom_mosaic'].default_on is True
+    assert retention.POLICY['stale_badastrom_mosaic'].min_age_days == 14.0
+
+
+def test_badastrom_original_name_strips_the_tag():
+    assert retention._badastrom_original(
+        '/a/b/' + BADASTROM_NAME) == '/a/b/' + ORIGINAL_NAME
+    assert retention._badastrom_original(
+        '/a/b/' + BADASTROM_NUMBERED_NAME) == '/a/b/' + ORIGINAL_NAME
+    assert retention._badastrom_original('/a/b/' + ORIGINAL_NAME) is None
+
+
+def test_fires_with_a_newer_replacement(tmp_path):
+    d = str(tmp_path)
+    stale = _write(d, BADASTROM_NAME, age_days=20)
+    orig = _write(d, ORIGINAL_NAME, age_days=1)
+    rule, why = retention.classify(stale, {}, enabled=set(retention.POLICY))
+    assert rule is not None and rule.name == 'stale_badastrom_mosaic'
+    assert os.path.basename(orig) in why
+
+
+def test_fires_with_a_newer_replacement_numbered_variant(tmp_path):
+    d = str(tmp_path)
+    stale = _write(d, BADASTROM_NUMBERED_NAME, age_days=20)
+    _write(d, ORIGINAL_NAME, age_days=1)
+    rule, _ = retention.classify(stale, {}, enabled=set(retention.POLICY))
+    assert rule is not None and rule.name == 'stale_badastrom_mosaic'
+
+
+def test_does_not_fire_without_a_replacement(tmp_path):
+    """stage_release.py relies on the absence of the original name (with the
+    badastrom twin beside it) to refuse staging an unregenerated field."""
+    d = str(tmp_path)
+    stale = _write(d, BADASTROM_NAME, age_days=20)
+    rule, _ = retention.classify(stale, {}, enabled=set(retention.POLICY))
+    assert rule is None
+
+
+def test_does_not_fire_when_replacement_is_older(tmp_path):
+    """A second checkpoint pass against the SAME still-bad mosaic: the
+    'replacement' predates the quarantine and is not a real regeneration."""
+    d = str(tmp_path)
+    stale = _write(d, BADASTROM_NAME, age_days=20)
+    _write(d, ORIGINAL_NAME, age_days=25)
+    rule, _ = retention.classify(stale, {}, enabled=set(retention.POLICY))
+    assert rule is None
+
+
+def test_does_not_fire_when_replacement_is_same_age(tmp_path):
+    d = str(tmp_path)
+    stale = _write(d, BADASTROM_NAME, age_days=20)
+    orig = _write(d, ORIGINAL_NAME, age_days=20)
+    # _write ages each file from its own creation instant, so the two differ
+    # by the microseconds between the writes; pin one identical mtime.
+    t = os.stat(stale).st_mtime
+    os.utime(orig, (t, t))
+    rule, _ = retention.classify(stale, {}, enabled=set(retention.POLICY))
+    assert rule is None
+
+
+def test_normal_i2d_is_never_touched(tmp_path):
+    """The rule reaches only the _im0_badastrom tag, never plain _i2d.fits."""
+    d = str(tmp_path)
+    live = _write(d, ORIGINAL_NAME, age_days=400)
+    rule, _ = retention.classify(live, {}, enabled=set(retention.POLICY))
+    assert rule is None
+
+
+def test_guard_protects_a_manifest_referenced_original(tmp_path):
+    """release_freshness.py needs this twin's mtime to flag an already-staged
+    release as repudiated when the regenerated mosaic is the same size as what
+    was staged (the normal case for a re-drizzle on a fixed output grid)."""
+    d = str(tmp_path)
+    stale = _write(d, BADASTROM_NAME, age_days=20)
+    orig = _write(d, ORIGINAL_NAME, age_days=1)
+
+    rule = retention.POLICY['stale_badastrom_mosaic']
+    guard = retention.Guard(min_age_days=0,
+                           manifest_srcs=frozenset({os.path.realpath(orig)}))
+    st = os.lstat(stale)
+    veto = guard.veto(stale, st, rule)
+    assert veto is not None and 'MANIFEST.json' in veto
+
+    # without that manifest reference, the same candidate is deletable
+    guard2 = retention.Guard(min_age_days=0)
+    assert guard2.veto(stale, st, rule) is None
+
+
+def test_release_manifest_srcs_reads_every_manifest(tmp_path):
+    releases = tmp_path / 'releases'
+    (releases / 'v1.0' / 'brick').mkdir(parents=True)
+    (releases / 'v1.1' / 'cloudc').mkdir(parents=True)
+    import json
+    (releases / 'v1.0' / 'brick' / 'MANIFEST.json').write_text(
+        json.dumps({'files': [{'src': '/orange/x/a_i2d.fits'}]}))
+    (releases / 'v1.1' / 'cloudc' / 'MANIFEST.json').write_text(
+        json.dumps({'files': [{'src': '/orange/x/b_i2d.fits'}, {}]}))
+    srcs = retention.release_manifest_srcs(str(releases))
+    assert srcs == {os.path.realpath('/orange/x/a_i2d.fits'),
+                    os.path.realpath('/orange/x/b_i2d.fits')}
+
+
+def test_plan_end_to_end_selects_only_the_unneeded_twin(tmp_path):
+    """Full plan() path: one field has a replacement and no manifest reference
+    (selected); another has a manifest reference to the pre-quarantine name
+    (vetoed); a third has no replacement at all (never a candidate)."""
+    base = tmp_path / 'brick' / 'F200W' / 'pipeline'
+    base.mkdir(parents=True)
+    free_stale = _write(str(base), 'a' + BADASTROM_NAME, age_days=20)
+    _write(str(base), 'a' + ORIGINAL_NAME, age_days=1)
+
+    pinned_stale = _write(str(base), 'b' + BADASTROM_NAME, age_days=20)
+    pinned_orig = _write(str(base), 'b' + ORIGINAL_NAME, age_days=1)
+
+    _write(str(base), 'c' + BADASTROM_NAME, age_days=20)  # no replacement
+
+    guard = retention.Guard(
+        min_age_days=0, manifest_srcs=frozenset({os.path.realpath(pinned_orig)}))
+    candidates = retention.plan([str(tmp_path)], guard=guard,
+                               enabled=set(retention.POLICY),
+                               include_vetoed=True)
+    by_path = {c.path: c for c in candidates}
+    assert by_path[free_stale].deletable
+    assert not by_path[pinned_stale].deletable
+    assert 'MANIFEST.json' in by_path[pinned_stale].vetoed_by
+    assert str(base / ('c' + BADASTROM_NAME)) not in by_path
 
 
 # --------------------------------------------------------------------------
@@ -561,3 +728,50 @@ def test_find_products_returns_present_bg(tmp_path):
     rdir = _reffield_run(tmp_path, with_bg=True)
     assert EV.find_products(rdir, 'F212N', phase='m4')['smoothed_bg'].endswith(
         '_smoothed_bg_i2d.fits')
+
+
+def test_release_manifest_srcs_reads_nested_category_layout(tmp_path):
+    """Some releases nest a category level (v1.1/globular_clusters/m4); a
+    fixed-depth glob missed them and left their twins un-vetoed."""
+    import json
+    releases = tmp_path / 'releases'
+    (releases / 'v1.0' / 'brick').mkdir(parents=True)
+    (releases / 'v1.1' / 'globular_clusters' / 'm4').mkdir(parents=True)
+    (releases / 'v1.0' / 'brick' / 'MANIFEST.json').write_text(
+        json.dumps({'files': [{'src': '/orange/x/a_i2d.fits'}]}))
+    (releases / 'v1.1' / 'globular_clusters' / 'm4' / 'MANIFEST.json'
+     ).write_text(json.dumps({'files': [{'src': '/orange/x/m4_i2d.fits'}]}))
+    srcs = retention.release_manifest_srcs(str(releases))
+    assert os.path.realpath('/orange/x/m4_i2d.fits') in srcs
+    assert os.path.realpath('/orange/x/a_i2d.fits') in srcs
+
+
+def test_release_manifest_srcs_refuses_unreadable_manifest(tmp_path):
+    """The set is a deletion veto: a corrupt manifest must stop the plan."""
+    releases = tmp_path / 'releases' / 'v1.0' / 'brick'
+    releases.mkdir(parents=True)
+    (releases / 'MANIFEST.json').write_text('{not json')
+    with pytest.raises(ValueError):
+        retention.release_manifest_srcs(str(tmp_path / 'releases'))
+
+
+def test_guard_veto_follows_symlinked_manifest_src(tmp_path):
+    """A manifest src recorded through a symlinked directory must still veto
+    the twin whose original is reached by its real path (and vice versa)."""
+    import json
+    real = tmp_path / 'real' / 'F200W' / 'pipeline'
+    real.mkdir(parents=True)
+    link = tmp_path / 'linked'
+    os.symlink(tmp_path / 'real', link)
+    stale = _write(str(real), BADASTROM_NAME, age_days=20)
+    _write(str(real), ORIGINAL_NAME, age_days=1)
+    rel = tmp_path / 'releases' / 'v1.0' / 'brick'
+    rel.mkdir(parents=True)
+    linked_src = os.path.join(str(link), 'F200W', 'pipeline', ORIGINAL_NAME)
+    (rel / 'MANIFEST.json').write_text(
+        json.dumps({'files': [{'src': linked_src}]}))
+    srcs = retention.release_manifest_srcs(str(tmp_path / 'releases'))
+    rule = retention.POLICY['stale_badastrom_mosaic']
+    guard = retention.Guard(min_age_days=0, manifest_srcs=srcs)
+    veto = guard.veto(stale, os.lstat(stale), rule)
+    assert veto is not None and 'MANIFEST.json' in veto
