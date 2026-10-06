@@ -129,50 +129,78 @@ def test_mergedcat_frames_need_their_i2d(tmp_path):
 # The in-run helpers the phase barrier calls
 # --------------------------------------------------------------------------
 
-def test_perframe_helpers_scope_to_one_observation(tmp_path):
-    """A pipeline directory shared by two observations must not leak.
+def _ledger_for(d, label, frames=(FRAME,)):
+    """Write the ledger a mergedcat build of ``label`` would leave."""
+    recs = []
+    for fr in frames:
+        raw = [os.path.join(d, _perframe(label, what=w).replace(FRAME, fr))
+               for w in ('residual', 'model')]
+        ren = [os.path.join(d, _perframe(label, what=w, mergedcat=True)
+                            .replace(FRAME, fr))
+               for w in ('residual', 'model')]
+        recs.append({'frame': f'/x/{fr}_crf.fits', 'kind': 'basic',
+                     'raw': raw, 'rendered': ren})
+    i2d = os.path.join(d, _mosaic(label))
+    retention.write_perframe_ledger(i2d, recs, phase=label)
+    return i2d
 
-    cloudef's obs002 and obs005 share one directory and one per-frame naming
-    scheme, so an unscoped glob deletes the other observation's frames.
+
+def test_perframe_helpers_return_only_ledger_files(tmp_path):
+    """Files no build recorded are never offered, however they are named.
+
+    cloudef's obs005 per-frame files carry the ``-o002_`` prefix and share
+    obs002's directory; a variant chain (``_resbgsub``, ``_epsf``) or another
+    module's detector writes the same ``*_{label}_daophot_*`` shape.  The old
+    glob matched all of them.
     """
     d = str(tmp_path)
-    other = _perframe('m3').replace('-o001_', '-o005_')
     _write(d, _perframe('m3'))
     _write(d, _perframe('m3', what='model'))
-    _write(d, other)
-    _write(d, _mosaic('m4'))
-    _write(d, _perframe('m4', mergedcat=True))
+    obs005 = _perframe('m3').replace('-o001_', '-o005_')
+    other_det = _perframe('m3').replace('nrcalong', 'nrcblong')
+    variant = _perframe('m3').replace('_m3_', '_resbgsub_m3_')
+    for n in (obs005, other_det, variant):
+        _write(d, n)
+    i2d = _ledger_for(d, 'm3')
 
     doomed = retention.superseded_perframe_products(
-        d, proposal_id='2221', field='001', filtername='F410M', label='m3')
+        retention.read_perframe_ledger(i2d))
     assert [os.path.basename(p) for p in doomed] == sorted(
         [_perframe('m3'), _perframe('m3', what='model')])
-    assert all('-o005_' not in p for p in doomed)
 
 
 def test_superseded_helper_never_returns_mergedcat_or_i2d(tmp_path):
     d = str(tmp_path)
-    _write(d, _perframe('m4'))
-    _write(d, _perframe('m4', mergedcat=True))
-    _write(d, _mosaic('m4'))
-    _write(d, _mosaic('m4', 'residual_smoothed_bg_i2d'))
+    i2d = _ledger_for(d, 'm4')
+    ledger = retention.read_perframe_ledger(i2d)
+    # a corrupted record naming a mosaic or a render as "raw" is refused
+    ledger['frames'][0]['raw'] += [
+        os.path.join(d, _mosaic('m4')),
+        os.path.join(d, _perframe('m4', mergedcat=True))]
+    ledger['frames'][0]['rendered'] += [os.path.join(d, _mosaic('m4'))]
 
-    doomed = retention.superseded_perframe_products(
-        d, proposal_id='2221', field='001', filtername='F410M', label='m4')
-    assert [os.path.basename(p) for p in doomed] == [_perframe('m4')]
+    doomed = retention.superseded_perframe_products(ledger)
+    assert sorted(os.path.basename(p) for p in doomed) == sorted(
+        [_perframe('m4'), _perframe('m4', what='model')])
+    spent = retention.spent_mergedcat_frames(ledger)
+    assert sorted(os.path.basename(p) for p in spent) == sorted(
+        [_perframe('m4', mergedcat=True),
+         _perframe('m4', what='model', mergedcat=True)])
 
-    spent = retention.spent_mergedcat_frames(
-        d, proposal_id='2221', field='001', filtername='F410M', label='m4')
-    assert [os.path.basename(p) for p in spent] == [
-        _perframe('m4', mergedcat=True)]
 
-
-def test_spent_mergedcat_helper_silent_without_i2d(tmp_path):
+def test_helpers_silent_without_ledger(tmp_path):
     d = str(tmp_path)
     _write(d, _perframe('m4', mergedcat=True))
-    assert retention.spent_mergedcat_frames(
-        d, proposal_id='2221', field='001', filtername='F410M',
-        label='m4') == []
+    _write(d, _mosaic('m4'))
+    ledger = retention.read_perframe_ledger(os.path.join(d, _mosaic('m4')))
+    assert ledger is None
+    assert retention.spent_mergedcat_frames(ledger) == []
+    assert retention.superseded_perframe_products(ledger) == []
+
+
+def test_ledger_path_sits_beside_the_i2d():
+    assert retention.perframe_ledger_path('/a/x_mergedcat_residual_i2d.fits') \
+        == '/a/x_mergedcat_residual_perframe_inputs.json'
 
 
 # --------------------------------------------------------------------------

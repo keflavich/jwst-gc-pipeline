@@ -173,11 +173,20 @@ MANUAL_DEFAULTS = {
     'manual_keep_intermediate_model_i2d': False,
     # -- retention: at each phase barrier, drop the per-frame images the
     # barrier makes unreachable (this phase's mergedcat renders, the previous
-    # phase's raw residual/model).  OFF by default: a completed run currently
-    # leaves every phase's scaffolding for inspection, and taking that away is
-    # a deliberate decision, not an upgrade side effect.  See
+    # phase's raw residual/model).  ON by default: this phase's own raw pair
+    # is always kept (a retry of THIS phase's mergedcat build still needs it)
+    # and the final phase's pair is never touched (no later barrier retires
+    # it). A consumer audit (restart/--manual-start-phase, the per-frame
+    # SLURM fan-out + completion markers, the m7 cross-band seed, the m8
+    # forced fill, release staging, registration/QA scripts) found every one
+    # of them reads a mosaic, a catalog, or the current phase's own raw pair
+    # -- never a superseded phase's raw pair -- so turning this on removes
+    # nothing any of them needs. A completed run now keeps only the final
+    # phase's raw pair plus every mosaic, instead of every intermediate
+    # phase's scaffolding. --no-manual-gc-superseded-perframe restores the
+    # old leave-everything-for-inspection behaviour. See
     # jwst_gc_pipeline/retention.py and docs/PRODUCT_RETENTION.md.
-    'manual_gc_superseded_perframe': False,
+    'manual_gc_superseded_perframe': True,
     # -- retention: at each phase barrier, delete the smoothed-residual
     # background mosaic from two phases back (nothing reads it once the
     # current phase's map exists).  ON: a completed run keeps the last two

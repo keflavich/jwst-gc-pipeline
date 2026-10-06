@@ -41,7 +41,7 @@ Selection alone never deletes.  :class:`Guard` holds the four facts that veto a
 candidate, and :func:`plan` applies it to every match:
 
 1. anything a published release points at.  ``releases/v1.3-*/brick/exposures``
-   is 1,200 SYMLINKS into the live tree, so deleting a live exposure silently
+   is 2,400 SYMLINKS into the live tree, so deleting a live exposure silently
    breaks a published download.  Targets are resolved, not assumed.
 2. anything belonging to a field with a queued or running SLURM chain.  A phase
    that restarts into missing inputs either trips the mergedcat guard or, worse,
@@ -71,6 +71,9 @@ __all__ = ['Rule', 'Candidate', 'Guard', 'POLICY', 'DEFAULT_RULES',
            'classify', 'plan', 'apply', 'release_symlink_targets',
            'busy_targets', 'superseded_perframe_products',
            'spent_mergedcat_frames', 'superseded_smoothed_bg',
+           'perframe_ledger_path', 'write_perframe_ledger',
+           'read_perframe_ledger', 'mark_perframe_raw_retired',
+           'ledger_frames', 'mosaic_variant_key', 'same_run_mosaics',
            'RetentionError']
 
 
@@ -618,66 +621,153 @@ def apply(candidates, *, dry_run=True, manifest_path=None, on_error='raise'):
 # In-run helpers (used by the phase loop; see cataloging.py)
 #
 # These do NOT go through :class:`Guard`.  They apply ``_is_protected_name`` and
-# their own narrow globs, and that is the whole of their protection.  It is
-# enough here for reasons that do not generalise: the caller runs inside a live
-# chain, so the busy-field veto would refuse everything; every release symlink
-# target is a ``_crf.fits``, which the name filter already excludes (measured:
-# 0 of 1200 reach a Guard unprotected) and which these globs cannot name
-# anyway; an age floor is meaningless for a file the same run just wrote; and
+# select only from a per-build ledger (the exact files one mergedcat build read
+# and wrote; see :func:`write_perframe_ledger`), and that is the whole of their
+# protection.  They used to glob ``*_{label}_daophot_*`` under the field
+# prefix; the ``*`` spanned detector, module and variant tokens, so a second
+# chain or variant in the same pipeline directory lost its pairs, and cloudef's
+# obs005 frames (which carry the ``-o002_`` prefix) were offered to obs002's
+# cleanup.
+#
+# That protection is enough here for reasons that do not generalize: the caller
+# runs inside a live chain, so the busy-field veto would refuse everything;
+# every release symlink target is a ``_crf.fits``, which the name filter
+# already excludes (measured: 0 of 2400 reach a Guard unprotected) and which
+# the selectors' suffix checks refuse anyway; an age floor is meaningless for a file the same run just wrote; and
 # ``--protect`` is an operator flag with no operator in a SLURM job.
 #
 # A NEW in-run selector therefore inherits no Guard.  Either earn the safety
-# from ``_is_protected_name`` plus the glob, as these two do, or route the
+# from ``_is_protected_name`` plus an exact list, as these do, or route the
 # selection through :func:`plan`.  See docs/PRODUCT_RETENTION.md.
 # --------------------------------------------------------------------------
 
-def _stem_prefix(proposal_id, field, filtername):
-    from jwst_gc_pipeline.mast_names import jw_prefix
-    from jwst_gc_pipeline.photometry.naming import _inst_token
-    return (f'{jw_prefix(proposal_id)}-o{field}_t001_'
-            f'{_inst_token(filtername)}_')
+PERFRAME_LEDGER_SUFFIX = '_perframe_inputs.json'
 
 
-def spent_mergedcat_frames(pipeline_dir, *, proposal_id, field, filtername,
-                           label):
-    """Per-frame mergedcat renders for ``label`` whose i2d mosaic exists.
+def perframe_ledger_path(i2d_path):
+    """The ledger beside a mergedcat residual i2d: ``..._i2d.fits`` ->
+    ``..._perframe_inputs.json``."""
+    p = str(i2d_path)
+    if p.endswith('_i2d.fits'):
+        p = p[:-len('_i2d.fits')]
+    return p + PERFRAME_LEDGER_SUFFIX
 
-    Scoped by the ``-o{field}_t001_`` prefix so a directory shared by two
-    observations never offers up the other observation's frames.
+
+def write_perframe_ledger(i2d_path, records, *, phase):
+    """Record the exact per-frame files the build of ``i2d_path`` used.
+
+    ``records`` is what ``build_mergedcat_residuals(perframe_record=...)``
+    filled: one ``{'frame', 'kind', 'raw', 'rendered'}`` per frame and kind.
+    The in-run cleanup deletes from this list and nothing else, so it cannot
+    reach a file another observation, module or variant wrote into the same
+    pipeline directory: those files are not in this build's record.  Written
+    atomically; returns the ledger path.
     """
-    pre = _stem_prefix(proposal_id, field, filtername)
-    mid = f'-{filtername.lower()}-'
-    i2d = glob.glob(os.path.join(
-        pipeline_dir,
-        f'{pre}*{mid}*_{label}_daophot_*_mergedcat_residual_i2d.fits'))
-    if not i2d:
+    path = perframe_ledger_path(i2d_path)
+    tmp = f'{path}.tmp{os.getpid()}'
+    with open(tmp, 'w') as fh:
+        json.dump({'i2d': os.path.basename(str(i2d_path)), 'phase': phase,
+                   'frames': list(records), 'raw_retired': False}, fh,
+                  indent=1)
+    os.replace(tmp, path)
+    return path
+
+
+def read_perframe_ledger(i2d_path):
+    """The ledger for ``i2d_path``, or ``None`` when there is none.
+
+    ``None`` means "delete nothing": a mosaic written before ledgers existed,
+    or by a caller that keeps none, offers no files to the in-run cleanup.
+    """
+    path = perframe_ledger_path(i2d_path)
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+
+
+def mark_perframe_raw_retired(i2d_path, ledger):
+    """Rewrite ``i2d_path``'s ledger with ``raw_retired`` set."""
+    ledger = dict(ledger, raw_retired=True)
+    path = perframe_ledger_path(i2d_path)
+    tmp = f'{path}.tmp{os.getpid()}'
+    with open(tmp, 'w') as fh:
+        json.dump(ledger, fh, indent=1)
+    os.replace(tmp, path)
+
+
+_MOSAIC_VARIANT_RE = re.compile(
+    r'^(?P<stem>.*)_(?P<label>m\d+)_daophot_[a-z]+_mergedcat_residual_i2d\.fits$')
+
+
+def mosaic_variant_key(i2d_path):
+    """The run-identifying part of a mergedcat residual i2d name.
+
+    The basename up to the phase label, with ``_resbgsub`` removed (m5-m7 add
+    it, m3/m4 do not, within one run).  Everything else in that stem -- field,
+    filter, module, ``_unsatstar``, ``_bgsub``, ``_epsf``, ``_hybpsf``,
+    ``_blur``, ``_group`` -- must match between two phases of the same run.
+    ``None`` for a name that is not a mergedcat residual i2d.
+    """
+    m = _MOSAIC_VARIANT_RE.match(os.path.basename(str(i2d_path)))
+    if m is None:
+        return None
+    return m.group('stem').replace('_resbgsub', '')
+
+
+def same_run_mosaics(this_i2d, prev_i2d):
+    """True when ``prev_i2d`` is an earlier phase of the run that wrote
+    ``this_i2d`` (equal :func:`mosaic_variant_key`, neither ``None``)."""
+    a = mosaic_variant_key(this_i2d)
+    return a is not None and a == mosaic_variant_key(prev_i2d)
+
+
+def spent_mergedcat_frames(ledger):
+    """The per-frame mergedcat renders a ledger's build wrote.
+
+    Only ``*_mergedcat_{residual,model}.fits`` names are returned; anything
+    else in the record, or a protected name, is dropped.
+    """
+    if not ledger:
         return []
     out = []
-    for what in ('residual', 'model'):
-        out.extend(glob.glob(os.path.join(
-            pipeline_dir,
-            f'{pre}*{mid}*_{label}_daophot_*_mergedcat_{what}.fits')))
-    return sorted(p for p in out if not _is_protected_name(p))
+    for rec in ledger.get('frames', ()):
+        for p in rec.get('rendered', ()):
+            base = os.path.basename(p)
+            if (base.endswith(('_mergedcat_residual.fits',
+                               '_mergedcat_model.fits'))
+                    and not _is_protected_name(p)):
+                out.append(p)
+    return sorted(set(out))
 
 
-def superseded_perframe_products(pipeline_dir, *, proposal_id, field,
-                                 filtername, label):
-    """Per-frame residual/model for ``label``, for a label already superseded.
+def superseded_perframe_products(ledger):
+    """The per-frame raw residual/model a ledger's build read.
 
-    The caller decides that ``label`` is superseded -- in the phase loop it is
-    the phase before the one whose mosaic just landed.  This function only
-    resolves that decision to paths, and never returns a mergedcat render or an
-    i2d (the ``_mergedcat_`` exclusion and the protected-suffix check).
+    The caller decides the ledger's phase is superseded -- in the phase loop it
+    is the phase before the one whose mosaic just landed.  Never returns a
+    mergedcat render or an i2d (the ``_mergedcat_`` exclusion and the
+    protected-suffix check).
     """
-    pre = _stem_prefix(proposal_id, field, filtername)
-    mid = f'-{filtername.lower()}-'
+    if not ledger:
+        return []
     out = []
-    for what in ('residual', 'model'):
-        out.extend(glob.glob(os.path.join(
-            pipeline_dir, f'{pre}*{mid}*_{label}_daophot_*_{what}.fits')))
-    return sorted(p for p in out
-                  if '_mergedcat_' not in os.path.basename(p)
-                  and not _is_protected_name(p))
+    for rec in ledger.get('frames', ()):
+        for p in rec.get('raw', ()):
+            base = os.path.basename(p)
+            if ('_daophot_' in base and '_mergedcat_' not in base
+                    and base.endswith(('_residual.fits', '_model.fits'))
+                    and not _is_protected_name(p)):
+                out.append(p)
+    return sorted(set(out))
+
+
+def ledger_frames(ledger):
+    """The original frame paths a ledger's build rendered."""
+    if not ledger:
+        return []
+    return sorted({rec['frame'] for rec in ledger.get('frames', ())})
 
 
 def superseded_smoothed_bg(path, *, label):

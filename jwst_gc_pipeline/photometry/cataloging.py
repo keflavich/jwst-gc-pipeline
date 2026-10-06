@@ -5232,19 +5232,31 @@ def _infield_dedup_settings(target, module, filt, header_instrument=None):
     return mode, env_name, mode != 'legacy', mode == 'cofit'
 
 
-def _gc_perframe_images(cut_bp, proposal_id, field, filt, phase, phases):
+def _gc_perframe_images(this_i2d, prev_i2d, marker_dir, filt, phase):
     """Remove the per-frame images a completed phase barrier retires.
 
-    Called only once this phase's ``*_mergedcat_residual_i2d.fits`` exists and
-    its smoothed bg is built -- the state ``_reconstruct_smoothed_bg_path``
-    calls "the only cross-phase state".  Two classes become unreachable at that
-    moment:
+    Called only once this phase's ``*_mergedcat_residual_i2d.fits``
+    (``this_i2d``) exists and its smoothed bg is built -- the state
+    ``_reconstruct_smoothed_bg_path`` calls "the only cross-phase state".  Two
+    classes become unreachable at that moment:
 
     * THIS phase's per-frame ``*_mergedcat_{residual,model}.fits``: they were
       rendered so the resample could write the i2d that now exists, and no
       other reader takes them.
     * The PREVIOUS phase's per-frame ``*_{residual,model}.fits``: their only
-      consumer was that phase's own mergedcat build, one barrier ago.
+      consumer was that phase's own mergedcat build (``prev_i2d``, the
+      detection image this phase was seeded from), one barrier ago.
+
+    Both lists come from the ledger each build writes beside its i2d
+    (``retention.write_perframe_ledger``): the exact files that build read and
+    wrote, nothing matched by pattern.  A mosaic with no ledger (written before
+    ledgers existed) offers nothing.
+
+    Retiring a raw pair also removes that phase's completion markers for the
+    same frames, every merge label and detector spelling, BEFORE the files go.
+    A ``--skip-if-done`` restart of that phase then refits those frames
+    instead of resuming from a marker whose product is gone and crashing in
+    ``build_mergedcat_residuals`` on the missing pair.
 
     This phase's own raw pair is deliberately kept: a retry of this phase's
     mosaic still needs it, and ``build_mergedcat_residuals`` hard-crashes on a
@@ -5257,31 +5269,85 @@ def _gc_perframe_images(cut_bp, proposal_id, field, filt, phase, phases):
     """
     from jwst_gc_pipeline import retention
 
-    pipeline_dir = os.path.join(cut_bp, filt, 'pipeline')
-    try:
-        idx = list(phases).index(phase)
-    except ValueError:
-        return
-    doomed = retention.spent_mergedcat_frames(
-        pipeline_dir, proposal_id=proposal_id, field=field, filtername=filt,
-        label=phase)
-    if idx > 0:
-        doomed += retention.superseded_perframe_products(
-            pipeline_dir, proposal_id=proposal_id, field=field, filtername=filt,
-            label=phases[idx - 1])
     freed = 0
     removed = 0
-    for path in doomed:
+
+    def _unlink(path):
+        nonlocal freed, removed
         try:
-            freed += os.path.getsize(path)
+            size = os.path.getsize(path)
             os.unlink(path)
-            removed += 1
+        except FileNotFoundError:
+            # another label's barrier in this run already retired it
+            return
         except OSError as ex:
-            print(f"manual [{phase}]: could not remove {os.path.basename(path)}"
-                  f" ({ex})", flush=True)
+            print(f"manual [{phase}]: could not remove "
+                  f"{os.path.basename(path)} ({ex})", flush=True)
+            return
+        freed += size
+        removed += 1
+
+    if (prev_i2d and os.path.abspath(prev_i2d) != os.path.abspath(this_i2d)
+            and not retention.same_run_mosaics(this_i2d, prev_i2d)):
+        # The seed mosaic belongs to another run (a different module or PSF /
+        # variant token): its raw pairs are that run's to retire, not ours.
+        print(f"manual [{phase}]: retention keeps the raw pairs behind "
+              f"{os.path.basename(prev_i2d)}: not an earlier phase of "
+              f"{os.path.basename(this_i2d)}", flush=True)
+        prev_i2d = None
+    try:
+        this_ledger = retention.read_perframe_ledger(this_i2d)
+        prev_ledger = (retention.read_perframe_ledger(prev_i2d)
+                       if prev_i2d and os.path.abspath(prev_i2d)
+                       != os.path.abspath(this_i2d) else None)
+    except (OSError, ValueError) as ex:
+        print(f"manual [{phase}]: retention skipped for {filt}: unreadable "
+              f"per-frame ledger ({ex})", flush=True)
+        return
+    for path in retention.spent_mergedcat_frames(this_ledger):
+        _unlink(path)
+    if prev_ledger is not None and not prev_ledger.get('raw_retired'):
+        prev_phase = prev_ledger.get('phase')
+        if prev_phase and marker_dir:
+            for fn in retention.ledger_frames(prev_ledger):
+                for det in _perframe_detector_tokens(fn):
+                    for merge in (None,) + PERFRAME_MERGE_LABELS:
+                        marker = perframe_marker_path(marker_dir, fn, det, filt,
+                                                      prev_phase, 'ok',
+                                                      merge=merge)
+                        try:
+                            os.unlink(marker)
+                        except FileNotFoundError:
+                            pass
+        for path in retention.superseded_perframe_products(prev_ledger):
+            _unlink(path)
+        try:
+            retention.mark_perframe_raw_retired(prev_i2d, prev_ledger)
+        except OSError as ex:
+            print(f"manual [{phase}]: could not mark "
+                  f"{os.path.basename(prev_i2d)} ledger retired ({ex})",
+                  flush=True)
     if removed:
         print(f"manual [{phase}]: retention removed {removed} superseded "
               f"per-frame images ({freed / 1e9:.1f} GB) for {filt}", flush=True)
+
+
+def _write_mergedcat_ledger(mc_i2d, perframe_record, phase, kind='basic'):
+    """Write ``mc_i2d``'s ledger from the ``kind`` entries of the record
+    ``build_mergedcat_residuals(perframe_record=...)`` filled; the other
+    kinds belong to their own mosaics."""
+    from jwst_gc_pipeline import retention
+    return retention.write_perframe_ledger(
+        mc_i2d, [r for r in perframe_record if r['kind'] == kind], phase=phase)
+
+
+def _gc_perframe_after_barrier(options, this_i2d, prev_i2d, marker_dir, filt,
+                               phase):
+    """Barrier hook: run :func:`_gc_perframe_images` unless
+    ``--no-manual-gc-superseded-perframe`` turned it off."""
+    if not bool(mopt(options, 'manual_gc_superseded_perframe')):
+        return
+    _gc_perframe_images(this_i2d, prev_i2d, marker_dir, filt, phase)
 
 
 # Phases that subtract the previous phase's smoothed-bg map.  m3 and m4 fit the
@@ -9217,13 +9283,28 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
 
                 # build vetted mergedcat residual i2d, smooth -> bg for next phase
                 try:
+                    _pf_record = []
                     outpaths = _L.build_mergedcat_residuals(
                         cut_bp, basepath, vetted_path, filt, proposal_id, field,
                         module, opts_phase, frame_cache.get((module, filt), []),
                         merge_label, ['basic'], pupil=pupil, satstar_label=phase,
-                        write_model_i2d=(_keep_all_model_i2d or phase == _final_phase))
+                        write_model_i2d=(_keep_all_model_i2d or phase == _final_phase),
+                        perframe_record=_pf_record)
                     mc_i2d = outpaths.get('basic')
                     if mc_i2d and os.path.exists(mc_i2d):
+                        # The exact per-frame files this build read and wrote,
+                        # beside the i2d; the barrier cleanup below (and the
+                        # next phase's) deletes from this list only.
+                        try:
+                            _write_mergedcat_ledger(mc_i2d, _pf_record, phase)
+                        except OSError as _lex:
+                            print(f"WARNING manual [{phase}]: per-frame ledger "
+                                  f"not written for {module}/{filt} ({_lex}); "
+                                  f"its per-frame images will not be cleaned "
+                                  f"up in-run", flush=True)
+                        # The previous phase's mosaic: its ledger names the raw
+                        # pairs this barrier retires.
+                        _prev_resid_i2d = resid_i2d_for_next.get((module, filt))
                         # this phase's residual i2d is the detection image for the
                         # next phase's i2d-augmented seed (blended-source recovery)
                         resid_i2d_for_next[(module, filt)] = mc_i2d
@@ -9276,13 +9357,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                               f"{bg_for_next[(module, filt)]}", flush=True)
                         # Everything the next phase needs is now on disk, so
                         # the scaffolding this phase and the one before it left
-                        # behind is unreachable.  Off by default: turning it on
-                        # changes what a completed run leaves for inspection,
-                        # which is a decision to make deliberately and not as a
-                        # side effect of upgrading.
-                        if bool(mopt(options, 'manual_gc_superseded_perframe')):
-                            _gc_perframe_images(cut_bp, proposal_id, field,
-                                                filt, phase, phases)
+                        # behind is unreachable.  On by default; see the
+                        # consumer audit in docs/PRODUCT_RETENTION.md.
+                        # --no-manual-gc-superseded-perframe keeps it all.
+                        _gc_perframe_after_barrier(options, mc_i2d,
+                                                   _prev_resid_i2d,
+                                                   _marker_dir, filt, phase)
                         # The map two phases back has no reader left (see
                         # _gc_superseded_smoothed_bg).  On by default; the
                         # residual and model mosaics stay either way.
