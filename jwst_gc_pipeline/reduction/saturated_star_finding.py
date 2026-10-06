@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 #os.environ['stpsf_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
 import stpsf
 from jwst_gc_pipeline.atomic_io import publish_into
+from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
 from jwst_gc_pipeline.photometry.wingcal import (
@@ -6164,6 +6165,11 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         satstar_model_filename = filename.replace(".fits", f'{file_suffix}_satstar_model.fits')
         satstar_residual_filename = filename.replace(".fits", f'{file_suffix}_satstar_residual.fits')
 
+        # Shrink photometric-metric / counter columns to float32/int32 before
+        # the write (catalog_dtypes.downcast_catalog_dtypes) -- pixel
+        # positions/errors and sky coordinates (incl. sat_com_ra/dec) are
+        # untouched; this is a pure size reduction on the already-fit table.
+        downcast_catalog_dtypes(satstar_table)
         satstar_table.write(satstar_catalog_filename, overwrite=overwrite)
         print(f"Saved saturated star catalog to {satstar_catalog_filename}", flush=True)
 
