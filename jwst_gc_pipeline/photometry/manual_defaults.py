@@ -171,6 +171,12 @@ MANUAL_DEFAULTS = {
     # a deliberate decision, not an upgrade side effect.  See
     # jwst_gc_pipeline/retention.py and docs/PRODUCT_RETENTION.md.
     'manual_gc_superseded_perframe': False,
+    # -- retention: at each phase barrier, delete the smoothed-residual
+    # background mosaic from two phases back (nothing reads it once the
+    # current phase's map exists).  ON: a completed run keeps the last two
+    # maps, plus every phase's residual and model mosaics as diagnostics.
+    # True restores every phase's map.
+    'manual_keep_intermediate_smoothed_bg': False,
 }
 
 

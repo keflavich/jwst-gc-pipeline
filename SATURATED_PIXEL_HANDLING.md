@@ -163,7 +163,16 @@ recoverable, of either sign), or when the measured pixel nearest the model peak
 is at or below zero (a refit of an already-subtracted star, capped to its
 residual); otherwise (an unmeasured core) it compares the model with the data
 at the measured pixel nearest the model peak (`recovered_cap_flux`: flux ≤
-data / unit PSF there), so a recovered ring bounds the model at the ring. One
+data / unit PSF there), so a recovered ring bounds the model at the ring.
+For a blended component (several deblended seeds share one label) the star's
+own region is the part of the component nearer its seed than any sibling
+seed (`nearest_seed_cell`); without that split, a faint star's region holds
+its brighter sibling's core and the unmeasured-core branch reads the
+sibling's model-subtracted residual. The unmeasured-core branch is also
+skipped when the pixel it reads has a unit PSF below
+`NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC` (0.005) of the peak. The
+`flux_fit_precap` and `cap_psf_frac` columns record the flux before the cap
+and where the cap read the model. One
 open question: should frame-0-recovered wings be fit rather than masked?
 Tracked in
 [#213](https://github.com/keflavich/jwst-gc-pipeline/issues/213). Evidence that the
@@ -590,6 +599,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_RCURVE_SATCHECK` | 1 (**on**) | compare the measured R(g0) curve with cal/group0 of the SATURATED pixels that keep a finite ramp-fit rate (no DO_NOT_USE, clean group 0, ≥ 50 pixels); when they differ by more than 2×, rebuild the curve from those pixels.  On sparse frames every calibration pixel above 2000 DN can be a hot or offset pixel, and the guard keeps that smooth junk curve (wd2 F164N/F187N/F212N: R 30–3000× low; w51 F140M/F162M/F187N/F210M/F405N in a 49-frame sample: 20 of 49 collapsed).  When fewer than 50 such pixels exist (NIRCam frames only), a curve whose bright-end R differs by more than 2× from PHOTMJSR / t(group 0), t(group 0) = TFRAME × (NFRAMES + 1) / 2, is replaced by that header rate (w51 F187N nrca1: 13 pixels, R 0.0026 vs 2.66).  Healthy curves sit at 0.88–1.04× the header rate in 46 frames (brick, sgrb2, gc-treasury, w51, wd2) |
 | `SATSTAR_ZF_KEEP_FINITE` | 0 | leave SATURATED pixels with a finite ramp-fit rate and no DO_NOT_USE alone (not rewritten, not masked) |
 | `SATSTAR_OBS_PK_FROM_CRF` | 0 | the implied-peak gate reads its observed peak from the crf values, not the ZEROFRAME rewrite |
+| `NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC` | 0.005 | the recovered-core cap skips a star whose model peak pixel is unmeasured when the measured pixel it reads has a unit PSF below this fraction of the peak; the data there belong to other sources (§2b) |
 | `SATSTAR_ZF_G0_GROUPDQ` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | first-read pixels flagged SATURATED in the ramp GROUPDQ (integration 0, group 0) are invalid for the ZEROFRAME anchor: deep core, not rewritten from their clipped value (#1065) |
 | `SATSTAR_ZF_FIRST_FRAME` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | with NFRAMES > 1, the ZEROFRAME anchor reads k(first frame) × the ramp ZEROFRAME extension (the first frame) where the ramp GROUPDQ flags group 0 SATURATED or DO_NOT_USE; k = binned median group 0 / first frame on the frame's unflagged pixels (`first_frame_group0`) |
 | `SATSTAR_ZF_RIM_BADPIX` | 1 (**on**) | leave DEAD, HOT and REFERENCE_PIXEL pixels out of the ZEROFRAME rim rewrite, and floor a rewritten pixel's fit error at the frame's median ERR; 0 restores the rewrite that weighted dead pixels at 400–5e8× a normal pixel (#1071) |
@@ -616,6 +626,10 @@ per-exposure satstar cache is keyed on them
 one refits the cached catalogs it affects. Their on/off values follow the
 daophot hand-off convention: unset or blank gives the default, `1/true/yes/on`
 and `0/false/no/off` are accepted in any case, and any other value raises.
+A cap-on run (`NIRCAM_SATSTAR_RECOVERED_CAP=1`, read as an integer like the
+fitter reads it) adds `cs<NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC>` to the key, so
+catalogs fitted before the cap read only the seed's share of a blended
+component are refit once.
 
 ---
 
