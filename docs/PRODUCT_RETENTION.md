@@ -137,10 +137,11 @@ previous map on disk, since neither phase reads it. m5-m7 still require it, and
 the two-phase window keeps it for a retry of the phase that just completed.
 Restarting further back than that means rerunning from an earlier phase.
 
-Tools that read an intermediate phase's map after a run has finished, such as
-`reference_fields/evaluate.find_products(phase='m4')`, find it gone and fall
-back to no background subtraction (`smoothed_bg=None`) without a warning. Run
-with `--manual-keep-intermediate-smoothed-bg` when a benchmark needs m2-m5 maps.
+Tools that read an intermediate phase's map after a run has finished find it
+gone. `reference_fields/evaluate.find_products(phase='m4')` raises
+`FileNotFoundError` in that case; `allow_missing_bg=True` returns
+`smoothed_bg=None` with a warning. Run with
+`--manual-keep-intermediate-smoothed-bg` when a benchmark needs m2-m5 maps.
 
 This selector names `_i2d.fits`, a protected suffix. `retention.superseded_smoothed_bg`
 accepts one exact path, rebuilt by `_reconstruct_smoothed_bg_path` (the

@@ -100,6 +100,7 @@ import glob
 import json
 import math
 import os
+import warnings
 
 import numpy as np
 from astropy import units as u
@@ -128,12 +129,19 @@ def fwhm_pix(filt):
 # products of one run
 # ---------------------------------------------------------------------------
 
-def find_products(rdir, filt, phase=None):
+def find_products(rdir, filt, phase=None, allow_missing_bg=False):
     """Final catalog and mosaics of one filter of one run.
 
     ``phase`` defaults to the last phase present (m7, else m6).  Returns a
     dict with ``catalog``, ``residual``, ``smoothed_bg``, ``data`` paths and
     ``phase``; a missing product raises ``FileNotFoundError``.
+
+    That includes the smoothed-bg map: cataloging removes each phase's map
+    two phases later (``--manual-keep-intermediate-smoothed-bg`` keeps them),
+    so an intermediate phase of a finished run has none, and scoring its
+    residual without it would read the background as unsubtracted stars.
+    ``allow_missing_bg=True`` returns ``smoothed_bg=None`` instead, with a
+    warning.
     """
     fl = filt.lower()
     phases = [phase] if phase else ['m7', 'm6']
@@ -152,8 +160,16 @@ def find_products(rdir, filt, phase=None):
         raise FileNotFoundError(f'{rdir}: {fl} {ph} residual ({len(res)}) '
                                 f'or data ({len(data)}) mosaic missing')
     bg = res[0].replace('_residual_i2d.fits', '_residual_smoothed_bg_i2d.fits')
+    if not os.path.exists(bg):
+        msg = (f'{rdir}: {fl} {ph} smoothed-bg mosaic missing ({bg}); rerun '
+               f'with --manual-keep-intermediate-smoothed-bg to keep '
+               f'intermediate phases\' maps')
+        if not allow_missing_bg:
+            raise FileNotFoundError(msg)
+        warnings.warn(msg + '; scoring without background subtraction')
+        bg = None
     return dict(catalog=cats[0], residual=res[0], data=data[0], phase=ph,
-                smoothed_bg=bg if os.path.exists(bg) else None)
+                smoothed_bg=bg)
 
 
 def _image(path):

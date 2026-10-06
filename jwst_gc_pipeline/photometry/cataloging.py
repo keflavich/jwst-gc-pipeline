@@ -5266,6 +5266,44 @@ def _gc_perframe_images(cut_bp, proposal_id, field, filt, phase, phases):
               f"per-frame images ({freed / 1e9:.1f} GB) for {filt}", flush=True)
 
 
+# Phases that subtract the previous phase's smoothed-bg map.  m3 and m4 fit the
+# raw frames (resbg_path is None in the phase-seed switch) and read none.
+_PHASES_READING_PREV_SMOOTHED_BG = ('m5', 'm6', 'm7')
+
+
+def _start_phase_prev_smoothed_bg(start_phase, prev, bg_path, filt, module):
+    """The previous phase's smoothed-bg path for a ``--manual-start-phase`` run.
+
+    Returns ``bg_path`` when it exists.  When it is absent, a phase that
+    subtracts it (``_PHASES_READING_PREV_SMOOTHED_BG``) raises
+    ``FileNotFoundError``: running m5-m7 without its background would change
+    the photometry silently.  m3 and m4 read no map, so for them an absent
+    file (removed by retention two phases later) is reported and ``None``
+    returned.
+    """
+    if os.path.exists(bg_path):
+        return bg_path
+    if start_phase in _PHASES_READING_PREV_SMOOTHED_BG:
+        raise FileNotFoundError(
+            f"--manual-start-phase={start_phase}: required {prev} "
+            f"smoothed-bg for {filt}/{module} is missing (expected "
+            f"{bg_path}).  Run the earlier per-filter phases first.")
+    print(f"manual [{start_phase}]: {prev} smoothed-bg for {filt}/{module} "
+          f"is absent ({bg_path}); not needed, this phase fits raw frames",
+          flush=True)
+    return None
+
+
+def _prune_smoothed_bg_after_barrier(cut_bp, proposal_id, field, module, filt,
+                                     phase, options, pupil):
+    """Barrier hook: prune the map two phases back unless
+    ``manual_keep_intermediate_smoothed_bg`` is set."""
+    if bool(mopt(options, 'manual_keep_intermediate_smoothed_bg')):
+        return
+    _gc_superseded_smoothed_bg(cut_bp, proposal_id, field, module, filt,
+                               phase, options, pupil)
+
+
 # Phase order of the smoothed-bg chain.  The per-phase finalize jobs run with
 # --manual-start-phase=X --manual-stop-after-phase=X, so the runtime ``phases``
 # list is a single entry there; "two phases back" has to come from this order.
@@ -8255,21 +8293,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # any per-frame job that starts at m3.
                     _bg = _reconstruct_smoothed_bg_path(
                         cut_bp, proposal_id, field, module, filt, _prev_label, options, pupil)
-                    if not os.path.exists(_bg):
-                        # m3 and m4 fit the RAW frames and never read the
-                        # previous map, and retention removes it two phases
-                        # later; only a phase that subtracts it needs it.
-                        if start_phase in ('m3', 'm4'):
-                            print(f"manual [{start_phase}]: {_prev} smoothed-bg "
-                                  f"for {filt}/{module} is absent ({_bg}); not "
-                                  f"needed, this phase fits raw frames",
-                                  flush=True)
-                        else:
-                            raise FileNotFoundError(
-                                f"--manual-start-phase={start_phase}: required {_prev} "
-                                f"smoothed-bg for {filt}/{module} is missing (expected "
-                                f"{_bg}).  Run the earlier per-filter phases first.")
-                    else:
+                    _bg = _start_phase_prev_smoothed_bg(
+                        start_phase, _prev, _bg, filt, module)
+                    if _bg is not None:
                         bg_for_next[(module, filt)] = _bg
                     # mergedcat residual i2d (detection image for m4..m6 seed)
                     _ri = _reconstruct_resid_i2d_path(
@@ -9234,10 +9260,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # The map two phases back has no reader left (see
                         # _gc_superseded_smoothed_bg).  On by default; the
                         # residual and model mosaics stay either way.
-                        if not bool(mopt(options, 'manual_keep_intermediate_smoothed_bg')):
-                            _gc_superseded_smoothed_bg(cut_bp, proposal_id, field,
-                                                       module, filt, phase,
-                                                       options, pupil)
+                        _prune_smoothed_bg_after_barrier(
+                            cut_bp, proposal_id, field, module, filt, phase,
+                            options, pupil)
                     else:
                         raise MergedcatMosaicError(
                             f"[{phase}] {module}/{filt}: build_mergedcat_residuals "
