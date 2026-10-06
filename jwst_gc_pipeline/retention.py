@@ -490,13 +490,16 @@ def release_manifest_srcs(releases_root):
     ``stale_badastrom_mosaic`` never prunes one.
     """
     srcs = set()
-    for manifest_path in glob.glob(
-            os.path.join(releases_root, '*', '*', 'MANIFEST.json')):
-        try:
-            with open(manifest_path) as fh:
-                manifest = json.load(fh)
-        except (OSError, ValueError):
-            continue
+    # Recursive: releases nest a category level for some fields
+    # (v1.0/galactic_plane/w51, v1.1/globular_clusters/m4, ...), and a
+    # fixed-depth '*/*' glob silently missed every one of them.  A manifest
+    # that cannot be read RAISES: this set is a deletion veto, so an
+    # unreadable manifest must stop the plan rather than shrink the veto.
+    for manifest_path in sorted(glob.glob(
+            os.path.join(releases_root, '**', 'MANIFEST.json'),
+            recursive=True)):
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
         for item in manifest.get('files', ()):
             src = item.get('src')
             if src:

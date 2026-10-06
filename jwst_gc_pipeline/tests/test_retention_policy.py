@@ -700,3 +700,50 @@ def test_find_products_returns_present_bg(tmp_path):
     rdir = _reffield_run(tmp_path, with_bg=True)
     assert EV.find_products(rdir, 'F212N', phase='m4')['smoothed_bg'].endswith(
         '_smoothed_bg_i2d.fits')
+
+
+def test_release_manifest_srcs_reads_nested_category_layout(tmp_path):
+    """Some releases nest a category level (v1.1/globular_clusters/m4); a
+    fixed-depth glob missed them and left their twins un-vetoed."""
+    import json
+    releases = tmp_path / 'releases'
+    (releases / 'v1.0' / 'brick').mkdir(parents=True)
+    (releases / 'v1.1' / 'globular_clusters' / 'm4').mkdir(parents=True)
+    (releases / 'v1.0' / 'brick' / 'MANIFEST.json').write_text(
+        json.dumps({'files': [{'src': '/orange/x/a_i2d.fits'}]}))
+    (releases / 'v1.1' / 'globular_clusters' / 'm4' / 'MANIFEST.json'
+     ).write_text(json.dumps({'files': [{'src': '/orange/x/m4_i2d.fits'}]}))
+    srcs = retention.release_manifest_srcs(str(releases))
+    assert os.path.realpath('/orange/x/m4_i2d.fits') in srcs
+    assert os.path.realpath('/orange/x/a_i2d.fits') in srcs
+
+
+def test_release_manifest_srcs_refuses_unreadable_manifest(tmp_path):
+    """The set is a deletion veto: a corrupt manifest must stop the plan."""
+    releases = tmp_path / 'releases' / 'v1.0' / 'brick'
+    releases.mkdir(parents=True)
+    (releases / 'MANIFEST.json').write_text('{not json')
+    with pytest.raises(ValueError):
+        retention.release_manifest_srcs(str(tmp_path / 'releases'))
+
+
+def test_guard_veto_follows_symlinked_manifest_src(tmp_path):
+    """A manifest src recorded through a symlinked directory must still veto
+    the twin whose original is reached by its real path (and vice versa)."""
+    import json
+    real = tmp_path / 'real' / 'F200W' / 'pipeline'
+    real.mkdir(parents=True)
+    link = tmp_path / 'linked'
+    os.symlink(tmp_path / 'real', link)
+    stale = _write(str(real), BADASTROM_NAME, age_days=20)
+    _write(str(real), ORIGINAL_NAME, age_days=1)
+    rel = tmp_path / 'releases' / 'v1.0' / 'brick'
+    rel.mkdir(parents=True)
+    linked_src = os.path.join(str(link), 'F200W', 'pipeline', ORIGINAL_NAME)
+    (rel / 'MANIFEST.json').write_text(
+        json.dumps({'files': [{'src': linked_src}]}))
+    srcs = retention.release_manifest_srcs(str(tmp_path / 'releases'))
+    rule = retention.POLICY['stale_badastrom_mosaic']
+    guard = retention.Guard(min_age_days=0, manifest_srcs=srcs)
+    veto = guard.veto(stale, os.lstat(stale), rule)
+    assert veto is not None and 'MANIFEST.json' in veto
