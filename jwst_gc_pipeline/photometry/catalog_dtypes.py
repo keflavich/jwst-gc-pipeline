@@ -92,8 +92,14 @@ def downcast_catalog_dtypes(table, *, float_columns=FLOAT32_COLUMNS,
                 table[name] = col.astype(np.float32)
         elif name in int_columns:
             if is_i8 and len(col):
-                col_min = int(np.min(col))
-                col_max = int(np.max(col))
-                if _INT32_MIN <= col_min and col_max <= _INT32_MAX:
+                # Range-check the UNMASKED values only: np.min on a masked
+                # column whose entries are all masked returns ``masked``,
+                # and int(masked) raises MaskError (seeded fits leave
+                # group_id fully masked).  A column with no unmasked value
+                # has nothing that can overflow and is cast as-is.
+                vals = np.ma.compressed(np.ma.asarray(col))
+                if (vals.size == 0
+                        or (_INT32_MIN <= int(vals.min())
+                            and int(vals.max()) <= _INT32_MAX)):
                     table[name] = col.astype(np.int32)
     return table

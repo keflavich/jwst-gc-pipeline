@@ -191,3 +191,14 @@ def test_empty_table_is_a_noop():
 if __name__ == '__main__':
     import sys
     sys.exit(pytest.main([__file__, '-v']))
+
+
+def test_fully_masked_int_column_is_cast_without_maskerror():
+    """Regression: seeded fits can leave an int counter fully masked, and
+    int(np.min(col)) on that raised MaskError inside save_photutils_results."""
+    t = Table()
+    t['group_id'] = MaskedColumn(np.array([1, 2, 3], dtype=np.int64),
+                                 mask=[True, True, True])
+    downcast_catalog_dtypes(t)
+    assert t['group_id'].dtype == np.int32
+    assert t['group_id'].mask.all()
