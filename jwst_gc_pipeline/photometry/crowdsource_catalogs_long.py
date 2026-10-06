@@ -15,6 +15,7 @@ from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
@@ -2283,6 +2284,13 @@ def save_photutils_results(result, ww, filename,
     # catalog in silence -- cloudef obs-005 over obs-002, 528 files (#718).
     # The existing file records the exposure it was measured on, so ask it.
     assert_no_foreign_observation_overwrite(tblfilename, filename)
+
+    # Shrink photometric-metric / counter columns to float32/int32 before the
+    # write (catalog_dtypes.downcast_catalog_dtypes) -- pixel positions, their
+    # errors, and every sky-coordinate column are untouched (CLAUDE.md
+    # astrometry rules); this is a pure size reduction on an ALREADY-COMPUTED
+    # table, not a measurement.
+    downcast_catalog_dtypes(result)
 
     # Per-frame catalog write -- the highest-frequency per-frame output (once per
     # frame per pass).  Build on node-local scratch then copy, to spare the
