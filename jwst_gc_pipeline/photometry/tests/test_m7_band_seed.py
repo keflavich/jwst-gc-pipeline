@@ -259,6 +259,9 @@ def test_companion_cut_spares_bright_companions(tmp_path):
                                           companion_max_ratio=1.0, **run))
     assert sorted(out1['flux']) == [80.0, 100.0]
     assert out1.meta['NCOMPAN'] == 4
+    # above 1 a source would be its own "brighter" neighbour
+    with pytest.raises(ValueError):
+        _build_m7_band_seed(xpath, opath, 'F182M', 'merged', companion_max_ratio=1.5, **run)
 
 
 def test_pipeline_defaults():

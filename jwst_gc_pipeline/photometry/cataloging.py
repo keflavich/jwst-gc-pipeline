@@ -4074,6 +4074,9 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     detections to it).
     """
     from astropy.coordinates import SkyCoord, search_around_sky
+    # above 1 every candidate would cut itself (the pool holds the candidates)
+    if not 0 <= companion_max_ratio <= 1:
+        raise ValueError(f"companion_max_ratio must be in [0, 1], got {companion_max_ratio}")
     xb = Table.read(crossband_seed_path)
     xsc = xb['skycoord'] if isinstance(xb['skycoord'], SkyCoord) else SkyCoord(xb['skycoord'])
     own = _L._resolve_seed_skycoords(Table.read(own_vetted_path))
