@@ -215,7 +215,11 @@ def test_does_not_fire_when_replacement_is_older(tmp_path):
 def test_does_not_fire_when_replacement_is_same_age(tmp_path):
     d = str(tmp_path)
     stale = _write(d, BADASTROM_NAME, age_days=20)
-    _write(d, ORIGINAL_NAME, age_days=20)
+    orig = _write(d, ORIGINAL_NAME, age_days=20)
+    # _write ages each file from its own creation instant, so the two differ
+    # by the microseconds between the writes; pin one identical mtime.
+    t = os.stat(stale).st_mtime
+    os.utime(orig, (t, t))
     rule, _ = retention.classify(stale, {}, enabled=set(retention.POLICY))
     assert rule is None
 
