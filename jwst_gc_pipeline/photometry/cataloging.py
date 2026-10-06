@@ -5269,6 +5269,14 @@ def _gc_perframe_images(this_i2d, prev_i2d, marker_dir, filt, phase):
         freed += size
         removed += 1
 
+    if (prev_i2d and os.path.abspath(prev_i2d) != os.path.abspath(this_i2d)
+            and not retention.same_run_mosaics(this_i2d, prev_i2d)):
+        # The seed mosaic belongs to another run (a different module or PSF /
+        # variant token): its raw pairs are that run's to retire, not ours.
+        print(f"manual [{phase}]: retention keeps the raw pairs behind "
+              f"{os.path.basename(prev_i2d)}: not an earlier phase of "
+              f"{os.path.basename(this_i2d)}", flush=True)
+        prev_i2d = None
     try:
         this_ledger = retention.read_perframe_ledger(this_i2d)
         prev_ledger = (retention.read_perframe_ledger(prev_i2d)
@@ -5304,6 +5312,15 @@ def _gc_perframe_images(this_i2d, prev_i2d, marker_dir, filt, phase):
     if removed:
         print(f"manual [{phase}]: retention removed {removed} superseded "
               f"per-frame images ({freed / 1e9:.1f} GB) for {filt}", flush=True)
+
+
+def _write_mergedcat_ledger(mc_i2d, perframe_record, phase, kind='basic'):
+    """Write ``mc_i2d``'s ledger from the ``kind`` entries of the record
+    ``build_mergedcat_residuals(perframe_record=...)`` filled; the other
+    kinds belong to their own mosaics."""
+    from jwst_gc_pipeline import retention
+    return retention.write_perframe_ledger(
+        mc_i2d, [r for r in perframe_record if r['kind'] == kind], phase=phase)
 
 
 def _gc_perframe_after_barrier(options, this_i2d, prev_i2d, marker_dir, filt,
@@ -9252,11 +9269,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # The exact per-frame files this build read and wrote,
                         # beside the i2d; the barrier cleanup below (and the
                         # next phase's) deletes from this list only.
-                        from jwst_gc_pipeline import retention as _retention
                         try:
-                            _retention.write_perframe_ledger(
-                                mc_i2d, [r for r in _pf_record
-                                         if r['kind'] == 'basic'], phase=phase)
+                            _write_mergedcat_ledger(mc_i2d, _pf_record, phase)
                         except OSError as _lex:
                             print(f"WARNING manual [{phase}]: per-frame ledger "
                                   f"not written for {module}/{filt} ({_lex}); "

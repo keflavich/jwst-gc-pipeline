@@ -66,8 +66,8 @@ def _perframe(label, what='residual', mergedcat=False, frame=FRAME):
     return f'{PRE}-{frame}_{label}_daophot_basic{tag}_{what}.fits'
 
 
-def _mosaic(label, what='residual_i2d'):
-    return f'{PRE}-merged_{label}_daophot_basic_mergedcat_{what}.fits'
+def _mosaic(label, what='residual_i2d', tokens=''):
+    return f'{PRE}-merged{tokens}_{label}_daophot_basic_mergedcat_{what}.fits'
 
 
 def _write(directory, name, size=16):
@@ -78,7 +78,7 @@ def _write(directory, name, size=16):
     return p
 
 
-def _write_phase_products(pipeline_dir, label, frame=CRF):
+def _write_phase_products(pipeline_dir, label, frame=CRF, tokens=''):
     """Everything one phase's build leaves: raw pair, mergedcat pair, mosaic,
     and the ledger naming the pairs (what ``run_manual_pipeline`` writes from
     ``build_mergedcat_residuals(perframe_record=...)``)."""
@@ -86,7 +86,7 @@ def _write_phase_products(pipeline_dir, label, frame=CRF):
            for w in ('residual', 'model')]
     ren = [_write(pipeline_dir, _perframe(label, w, mergedcat=True))
            for w in ('residual', 'model')]
-    i2d = _write(pipeline_dir, _mosaic(label))
+    i2d = _write(pipeline_dir, _mosaic(label, tokens=tokens))
     retention.write_perframe_ledger(
         i2d, [{'frame': frame, 'kind': 'basic', 'raw': raw, 'rendered': ren}],
         phase=label)
@@ -221,3 +221,47 @@ def test_opt_out_suppresses_every_deletion(tmp_path):
     cataloging._gc_perframe_after_barrier(on, m4, m3, None, FILTERNAME, 'm4')
     assert not _exists(pipeline_dir, 'm3')
     assert not _exists(pipeline_dir, 'm4', mergedcat=True)
+
+
+def test_variant_run_never_retires_production_pairs(tmp_path):
+    """A hybrid/ePSF/blur run whose prev-mosaic rebuild lands on production's.
+
+    Before #1111 the per-phase rebuild dropped ``_hybpsf``/``_epsf``/``_blur``,
+    so a variant run's m4 barrier was handed production's m3 mosaic.  Its
+    ledger must be refused: those raw pairs and markers are production's.
+    """
+    pipeline_dir = str(tmp_path / FILTERNAME / 'pipeline')
+    marker_dir = str(tmp_path / 'catalogs' / '_perframe_markers')
+    os.makedirs(marker_dir)
+    prod_m3 = _write_phase_products(pipeline_dir, 'm3')
+    hyb_m4 = _write_phase_products(pipeline_dir, 'm4', tokens='_hybpsf')
+    marker = cataloging.perframe_marker_path(
+        marker_dir, CRF, cataloging.perframe_detector_token(CRF), FILTERNAME,
+        'm3', 'ok', merge='merged')
+    open(marker, 'w').close()
+
+    cataloging._gc_perframe_images(hyb_m4, prod_m3, marker_dir, FILTERNAME,
+                                   'm4')
+    assert _exists(pipeline_dir, 'm3'), "production's m3 raw pair must stay"
+    assert os.path.exists(marker), "production's m3 marker must stay"
+    assert retention.read_perframe_ledger(prod_m3)['raw_retired'] is False
+
+
+def test_resbgsub_step_is_the_same_run(tmp_path):
+    """m4 -> m5 adds ``_resbgsub``; that is still one run."""
+    pipeline_dir = str(tmp_path / FILTERNAME / 'pipeline')
+    m4 = _write_phase_products(pipeline_dir, 'm4', tokens='_hybpsf')
+    m5 = _write_phase_products(pipeline_dir, 'm5',
+                               tokens='_resbgsub_hybpsf')
+    assert retention.same_run_mosaics(m5, m4)
+    cataloging._gc_perframe_images(m5, m4, None, FILTERNAME, 'm5')
+    assert not _exists(pipeline_dir, 'm4')
+
+
+def test_ledger_writer_keeps_only_its_own_kind(tmp_path):
+    rec = [{'frame': CRF, 'kind': 'basic', 'raw': ['a'], 'rendered': ['b']},
+           {'frame': CRF, 'kind': 'iterative', 'raw': ['c'], 'rendered': ['d']}]
+    i2d = str(tmp_path / _mosaic('m4'))
+    cataloging._write_mergedcat_ledger(i2d, rec, 'm4')
+    assert [r['kind'] for r in retention.read_perframe_ledger(i2d)['frames']] \
+        == ['basic']

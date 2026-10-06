@@ -442,7 +442,7 @@ def _e2e_setup(tmp_path, grid):
     return frame, merged
 
 
-def _run_e2e(tmp_path, monkeypatch, cover_mode):
+def _run_e2e(tmp_path, monkeypatch, cover_mode, record=None):
     """Run build_mergedcat_residuals on the synthetic frame.  Returns
     (rendered positions per _render_model_from_table call, residual, model)."""
     for var in ('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', 'MERGE_RENDER_PSF_SHAPE',
@@ -480,7 +480,8 @@ def _run_e2e(tmp_path, monkeypatch, cover_mode):
     out = ccl.build_mergedcat_residuals(
         str(tmp_path), str(tmp_path), merged, 'F480M', E2E_PID, E2E_FIELD,
         'nrcb', _e2e_options(), [frame], E2E_ITER, ['basic'],
-        satstar_label=E2E_SATLABEL, write_model_i2d=False)
+        satstar_label=E2E_SATLABEL, write_model_i2d=False,
+        perframe_record=record)
     assert list(out) == ['basic']
     resid = [v for k, v in saved.items() if k.endswith('_mergedcat_residual.fits')]
     model = [v for k, v in saved.items() if k.endswith('_mergedcat_model.fits')]
@@ -537,3 +538,24 @@ def test_e2e_model_rule_leaves_the_neighbour_wing_star_in_the_residual(
     out = capsys.readouterr().out
     assert 'satstar cover test = model' in out
     assert 'NOT covered by this frame' not in out
+
+
+def test_e2e_perframe_record_names_the_raw_pair_read_and_the_render_written(
+        tmp_path, monkeypatch):
+    """The in-run cleanup deletes from this record only (retention ledger), so
+    a swap of ``raw`` and ``rendered`` would delete the pair a retry needs."""
+    record = []
+    _run_e2e(tmp_path, monkeypatch, None, record=record)
+    assert len(record) == 1
+    rec = record[0]
+    assert rec['kind'] == 'basic'
+    assert os.path.basename(rec['frame']).endswith('.fits')
+    raw_resid, raw_model = rec['raw']
+    assert raw_resid.endswith('_daophot_basic_residual.fits')
+    assert raw_model.endswith('_daophot_basic_model.fits')
+    assert os.path.exists(raw_resid) and os.path.exists(raw_model)
+    out_resid, out_model = rec['rendered']
+    assert out_resid == raw_resid.replace('_residual.fits',
+                                          '_mergedcat_residual.fits')
+    assert out_model == raw_model.replace('_model.fits',
+                                          '_mergedcat_model.fits')

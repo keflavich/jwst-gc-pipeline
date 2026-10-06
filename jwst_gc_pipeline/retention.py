@@ -41,7 +41,7 @@ Selection alone never deletes.  :class:`Guard` holds the four facts that veto a
 candidate, and :func:`plan` applies it to every match:
 
 1. anything a published release points at.  ``releases/v1.3-*/brick/exposures``
-   is 1,200 SYMLINKS into the live tree, so deleting a live exposure silently
+   is 2,400 SYMLINKS into the live tree, so deleting a live exposure silently
    breaks a published download.  Targets are resolved, not assumed.
 2. anything belonging to a field with a queued or running SLURM chain.  A phase
    that restarts into missing inputs either trips the mergedcat guard or, worse,
@@ -73,7 +73,7 @@ __all__ = ['Rule', 'Candidate', 'Guard', 'POLICY', 'DEFAULT_RULES',
            'spent_mergedcat_frames', 'superseded_smoothed_bg',
            'perframe_ledger_path', 'write_perframe_ledger',
            'read_perframe_ledger', 'mark_perframe_raw_retired',
-           'ledger_frames',
+           'ledger_frames', 'mosaic_variant_key', 'same_run_mosaics',
            'RetentionError']
 
 
@@ -632,7 +632,7 @@ def apply(candidates, *, dry_run=True, manifest_path=None, on_error='raise'):
 # That protection is enough here for reasons that do not generalize: the caller
 # runs inside a live chain, so the busy-field veto would refuse everything;
 # every release symlink target is a ``_crf.fits``, which the name filter
-# already excludes (measured: 0 of 1200 reach a Guard unprotected) and which
+# already excludes (measured: 0 of 2400 reach a Guard unprotected) and which
 # the selectors' suffix checks refuse anyway; an age floor is meaningless for a file the same run just wrote; and
 # ``--protect`` is an operator flag with no operator in a SLURM job.
 #
@@ -695,6 +695,32 @@ def mark_perframe_raw_retired(i2d_path, ledger):
     with open(tmp, 'w') as fh:
         json.dump(ledger, fh, indent=1)
     os.replace(tmp, path)
+
+
+_MOSAIC_VARIANT_RE = re.compile(
+    r'^(?P<stem>.*)_(?P<label>m\d+)_daophot_[a-z]+_mergedcat_residual_i2d\.fits$')
+
+
+def mosaic_variant_key(i2d_path):
+    """The run-identifying part of a mergedcat residual i2d name.
+
+    The basename up to the phase label, with ``_resbgsub`` removed (m5-m7 add
+    it, m3/m4 do not, within one run).  Everything else in that stem -- field,
+    filter, module, ``_unsatstar``, ``_bgsub``, ``_epsf``, ``_hybpsf``,
+    ``_blur``, ``_group`` -- must match between two phases of the same run.
+    ``None`` for a name that is not a mergedcat residual i2d.
+    """
+    m = _MOSAIC_VARIANT_RE.match(os.path.basename(str(i2d_path)))
+    if m is None:
+        return None
+    return m.group('stem').replace('_resbgsub', '')
+
+
+def same_run_mosaics(this_i2d, prev_i2d):
+    """True when ``prev_i2d`` is an earlier phase of the run that wrote
+    ``this_i2d`` (equal :func:`mosaic_variant_key`, neither ``None``)."""
+    a = mosaic_variant_key(this_i2d)
+    return a is not None and a == mosaic_variant_key(prev_i2d)
 
 
 def spent_mergedcat_frames(ledger):
