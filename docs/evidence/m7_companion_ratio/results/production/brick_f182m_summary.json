@@ -1,0 +1,71 @@
+{
+ "label": "brick",
+ "filt": "F182M",
+ "n_vetted": {
+  "m2": 268835,
+  "m3": 252438,
+  "m4": 256253,
+  "resbgsub_m5": 371298,
+  "resbgsub_m6": 377837,
+  "resbgsub_m7": 264057
+ },
+ "n_union_m2_m6": 417719,
+ "n_lost": 161290,
+ "ctrl_final_resid_snr_p50": 0.8088036437614052,
+ "ctrl_final_resid_snr_p90": 4.325866607885223,
+ "ctrl_final_resid_snr_p99": 14.280333807549427,
+ "by_last_phase": {
+  "m2->vetted_out": {
+   "n": 8271,
+   "starlike_left": 2584
+  },
+  "m2->not_fit": {
+   "n": 5432,
+   "starlike_left": 1528
+  },
+  "m3->vetted_out": {
+   "n": 1539,
+   "starlike_left": 666
+  },
+  "m3->not_fit": {
+   "n": 1402,
+   "starlike_left": 325
+  },
+  "m4->vetted_out": {
+   "n": 5473,
+   "starlike_left": 2587
+  },
+  "m4->not_fit": {
+   "n": 1581,
+   "starlike_left": 389
+  },
+  "resbgsub_m5->vetted_out": {
+   "n": 8134,
+   "starlike_left": 6313
+  },
+  "resbgsub_m5->not_fit": {
+   "n": 2148,
+   "starlike_left": 667
+  },
+  "resbgsub_m6->vetted_out": {
+   "n": 26122,
+   "starlike_left": 25609
+  },
+  "resbgsub_m6->not_fit": {
+   "n": 101188,
+   "starlike_left": 76042
+  }
+ },
+ "m7_seed_reason": {
+  "own_band_off": {
+   "n": 126460,
+   "starlike_left": 101010
+  },
+  "seeded": {
+   "n": 850,
+   "starlike_left": 641
+  }
+ },
+ "n_final_vetted_inner": 264057,
+ "n_starlike_left": 116710
+}

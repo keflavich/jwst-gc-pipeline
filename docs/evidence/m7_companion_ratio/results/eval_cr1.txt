@@ -1,0 +1,4 @@
+superdense   cr1        complete[40-80:1/51 80-160:11/64 160-320:30/74 320-640:29/51] bias=-0.017 excess=1.39/as2 (seeds 1.28+-0.18) oversub=1.18/as2 (seeds 1.25+-0.07) ring=nan purity=nan labels=nan knots=-/- -> PASS
+dense_bright cr1        complete[5-10:0/49 10-20:1/69 20-40:14/58 40-80:36/64] bias=+0.046 excess=1.73/as2 (seeds 1.59+-0.19) oversub=1.04/as2 (seeds 0.97+-0.14) ring=0.00 purity=nan labels=nan knots=-/- -> PASS
+bright_modest cr1        complete[5-10:0/53 10-20:0/56 20-40:3/68 40-80:34/62] bias=-0.130 excess=0.21/as2 (seeds 0.17+-0.07) oversub=0.07/as2 (seeds 0.07+-0.02) ring=nan purity=nan labels=nan knots=1/4 -> PASS
+dark         cr1        complete[5-10:2/62 10-20:28/55 20-40:45/61 40-80:49/62] bias=+0.041 excess=0.97/as2 (seeds 0.83+-0.09) oversub=1.04/as2 (seeds 0.87+-0.09) ring=0.00 purity=nan labels=0.58 knots=-/- -> PASS
