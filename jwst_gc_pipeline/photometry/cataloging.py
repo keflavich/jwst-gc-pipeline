@@ -5266,15 +5266,21 @@ def _gc_perframe_images(cut_bp, proposal_id, field, filt, phase, phases):
               f"per-frame images ({freed / 1e9:.1f} GB) for {filt}", flush=True)
 
 
+# Phase order of the smoothed-bg chain.  The per-phase finalize jobs run with
+# --manual-start-phase=X --manual-stop-after-phase=X, so the runtime ``phases``
+# list is a single entry there; "two phases back" has to come from this order.
+_SMOOTHED_BG_PHASE_ORDER = ('m12', 'm3', 'm4', 'm5', 'm6', 'm7')
+
+
 def _gc_superseded_smoothed_bg(cut_bp, proposal_id, field, module, filt,
-                               phase, phases, options, pupil):
+                               phase, options, pupil):
     """Remove the smoothed-bg mosaic two phases before ``phase``.
 
     Called once this phase's own smoothed bg is on disk.  Each phase reads only
     its predecessor's map (m5 subtracts m4's, m6 m5's, m7 m6's, and m8 reads
-    m7's), so at this barrier the map from ``phases[idx-2]`` has no reader
-    left: the next phase reads this one, and a retry of this phase reads
-    ``phases[idx-1]``, which is kept.  A completed run therefore ends with the
+    m7's), so at this barrier the map two phases back in
+    ``_SMOOTHED_BG_PHASE_ORDER`` has no reader left: the next phase reads this
+    one, and a retry of this phase reads the one before it, which is kept.  A completed run therefore ends with the
     last two maps (m6 + m7, or m5 + m6 single-band).  The residual and model
     mosaics are never touched; they are the diagnostics.
 
@@ -5282,13 +5288,12 @@ def _gc_superseded_smoothed_bg(cut_bp, proposal_id, field, module, filt,
     """
     from jwst_gc_pipeline import retention
 
-    try:
-        idx = list(phases).index(phase)
-    except ValueError:
+    if phase not in _SMOOTHED_BG_PHASE_ORDER:
         return
+    idx = _SMOOTHED_BG_PHASE_ORDER.index(phase)
     if idx < 2:
         return
-    old = phases[idx - 2]
+    old = _SMOOTHED_BG_PHASE_ORDER[idx - 2]
     label = 'm2' if old == 'm12' else old
     path = _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module,
                                          filt, label, options, pupil)
@@ -9232,7 +9237,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         if not bool(mopt(options, 'manual_keep_intermediate_smoothed_bg')):
                             _gc_superseded_smoothed_bg(cut_bp, proposal_id, field,
                                                        module, filt, phase,
-                                                       phases, options, pupil)
+                                                       options, pupil)
                     else:
                         raise MergedcatMosaicError(
                             f"[{phase}] {module}/{filt}: build_mergedcat_residuals "

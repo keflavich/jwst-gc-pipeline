@@ -120,7 +120,10 @@ for the next phase, and each phase reads only its predecessor's map: m5
 subtracts m4's, m6 m5's, m7 m6's, and the m8 forced fill reads m7's. m3 and m4
 fit raw frames and read none. So at the barrier where phase N's map lands, the
 map from two phases back has no reader: phase N+1 reads N's, and a retry of N
-reads N-1's. `cataloging._gc_superseded_smoothed_bg` removes that one file. A
+reads N-1's. `cataloging._gc_superseded_smoothed_bg` removes that one file,
+counting back in the fixed chain order m12, m3, m4, m5, m6, m7: a per-phase
+finalize job runs with start and stop phase equal, so its own phase list holds
+one entry and cannot be counted back in. A
 completed run keeps the last two maps (m6 + m7 multi-band, m5 + m6 single-band)
 and every phase's residual and model mosaics, which are the diagnostics.
 
@@ -133,6 +136,11 @@ A restart with `--manual-start-phase=m3` or `m4` no longer requires the
 previous map on disk, since neither phase reads it. m5-m7 still require it, and
 the two-phase window keeps it for a retry of the phase that just completed.
 Restarting further back than that means rerunning from an earlier phase.
+
+Tools that read an intermediate phase's map after a run has finished, such as
+`reference_fields/evaluate.find_products(phase='m4')`, find it gone and fall
+back to no background subtraction (`smoothed_bg=None`) without a warning. Run
+with `--manual-keep-intermediate-smoothed-bg` when a benchmark needs m2-m5 maps.
 
 This selector names `_i2d.fits`, a protected suffix. `retention.superseded_smoothed_bg`
 accepts one exact path, rebuilt by `_reconstruct_smoothed_bg_path` (the

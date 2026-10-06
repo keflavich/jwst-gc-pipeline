@@ -393,7 +393,6 @@ def test_phase_loop_prunes_two_phases_back(tmp_path):
     from jwst_gc_pipeline.photometry import cataloging as C
 
     opts = SimpleNamespace(desaturated=False, bgsub=False, group=False)
-    phases = ['m12', 'm3', 'm4', 'm5', 'm6', 'm7']
     kw = dict(cut_bp=str(tmp_path), proposal_id='2221', field='001',
               module='merged', filt='F410M', options=opts, pupil='clear')
     pipe = tmp_path / 'F410M' / 'pipeline'
@@ -406,13 +405,37 @@ def test_phase_loop_prunes_two_phases_back(tmp_path):
         paths[label] = (p, resid)
 
     for phase in ('m12', 'm3'):           # nothing two phases back yet
-        C._gc_superseded_smoothed_bg(phase=phase, phases=phases, **kw)
+        C._gc_superseded_smoothed_bg(phase=phase, **kw)
     assert all(os.path.exists(p) for p, _ in paths.values())
 
-    C._gc_superseded_smoothed_bg(phase='m4', phases=phases, **kw)  # m12 -> m2
-    C._gc_superseded_smoothed_bg(phase='m5', phases=phases, **kw)
-    C._gc_superseded_smoothed_bg(phase='m6', phases=phases, **kw)
+    C._gc_superseded_smoothed_bg(phase='m4', **kw)  # m12 -> m2
+    C._gc_superseded_smoothed_bg(phase='m5', **kw)
+    C._gc_superseded_smoothed_bg(phase='m6', **kw)
     assert [lab for lab, (p, _) in paths.items() if os.path.exists(p)] == \
         ['m5', 'm6']
     # residual mosaics are diagnostics and stay
     assert all(os.path.exists(r) for _, r in paths.values())
+
+
+def test_prune_does_not_depend_on_runtime_phase_list(tmp_path):
+    """Per-phase finalize jobs run --manual-start-phase=X
+    --manual-stop-after-phase=X, so the driver's ``phases`` list holds only X.
+    Pruning must still remove the map two phases back in the chain order."""
+    import inspect
+    from types import SimpleNamespace
+    from jwst_gc_pipeline.photometry import cataloging as C
+
+    assert 'phases' not in inspect.signature(C._gc_superseded_smoothed_bg).parameters
+    opts = SimpleNamespace(desaturated=False, bgsub=False, group=False)
+    kw = dict(cut_bp=str(tmp_path), proposal_id='10678', field='067',
+              module='merged', filt='F212N', options=opts, pupil='clear')
+    pipe = tmp_path / 'F212N' / 'pipeline'
+    for label in ('m2', 'm3', 'm4', 'm5', 'm6', 'm7'):
+        _write(str(pipe), os.path.basename(
+            C._reconstruct_smoothed_bg_path(label=label, **kw)))
+    # one separate finalize job per phase
+    for phase in ('m12', 'm3', 'm4', 'm5', 'm6', 'm7'):
+        C._gc_superseded_smoothed_bg(phase=phase, **kw)
+    left = sorted(f for f in os.listdir(pipe) if 'smoothed_bg' in f)
+    assert len(left) == 2
+    assert any('_m6_' in f for f in left) and any('_m7_' in f for f in left)
