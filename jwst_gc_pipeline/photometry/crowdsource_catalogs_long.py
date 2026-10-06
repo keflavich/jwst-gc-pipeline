@@ -2599,8 +2599,11 @@ def get_psf_model(filtername, proposal_id, field,
 
         # Opt-in hybrid PSF: empirical ePSF core inside 10 px, this STPSF grid
         # outside 12 px (photometry/epsf_hybrid.py, issue #1007).  A no-op --
-        # the same grid object -- unless PSF_EPSF_CORE_DIR is set.
-        if instrument == 'NIRCam':
+        # the same grid object -- unless PSF_EPSF_CORE_DIR is set.  Compare
+        # case-blind: the per-frame callers pass the header INSTRUME, which is
+        # 'NIRCAM'; an exact 'NIRCam' match skipped the core on every frame
+        # while the filenames still carried _hybpsf.
+        if instrument.upper() == 'NIRCAM':
             grid = maybe_apply_epsf_core(grid, _cache_detector, filtername, program=proposal_id)
 
         if use_grid:

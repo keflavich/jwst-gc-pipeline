@@ -219,17 +219,21 @@ def test_core_shape_validation():
         eh.EPSFCore(np.zeros((1, 81, 81)), 4, 10, [1.0], [1.0])
 
 
-def test_get_psf_model_wiring(tmp_path, monkeypatch):
+@pytest.mark.parametrize('instrument', ['NIRCam', 'NIRCAM', None])
+def test_get_psf_model_wiring(tmp_path, monkeypatch, instrument):
     """get_psf_model hands its STPSF grid (and the cache detector) to
     maybe_apply_epsf_core and returns what that gives back -- and with
-    PSF_EPSF_CORE_DIR unset the grid is the cached object, untouched."""
+    PSF_EPSF_CORE_DIR unset the grid is the cached object, untouched.
+
+    'NIRCAM' is what the per-frame callers pass (the frame's INSTRUME header);
+    None derives it from the filter."""
     ccl = pytest.importorskip('jwst_gc_pipeline.photometry.crowdsource_catalogs_long')
     st = _stpsf_grid()
     fn = tmp_path / 'nircam_nrcb5_f480m_fovp101_samp2_npsf16.fits'
     fn.write_text('fake')
     monkeypatch.setattr(ccl, 'to_griddedpsfmodel', lambda f: st)
     monkeypatch.delenv(eh.EPSF_CORE_DIR_ENV, raising=False)
-    kw = dict(module='nrcb', use_webbpsf=True, use_grid=True, instrument='NIRCam',
+    kw = dict(module='nrcb', use_webbpsf=True, use_grid=True, instrument=instrument,
               psf_cache_dir=str(tmp_path))
     grid, _ = ccl.get_psf_model('F480M', '10678', '081', **kw)
     assert grid is st
