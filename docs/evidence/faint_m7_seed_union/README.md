@@ -18,6 +18,12 @@ The remainder are confirmed 0.4–0.8× as often as the m6 vetted sources that
 production m7 already has, depending on band.  The union is therefore off by
 default, and applies the companion cut when on.
 
+**Later change (#1107):** the companion cut now leaves out only sources below
+0.1× their neighbour's flux (`--manual-m7-seed-own-band-companion-max-ratio`).
+The chance-rate comparison below used the reference visit's **m7** catalog,
+whose seed lacks the same single-band companions; against its m6 catalog the
+brighter companions are confirmed.  See `docs/evidence/m7_companion_ratio`.
+
 ## Full-field realness (Brick)
 
 `scripts/seeds_fullfield.py` builds, outside the production tree, the m7 seed

@@ -7,7 +7,10 @@ m6 vetting accepted and m7 does not find again (a third of the m6 vetted
 catalog in Brick F182M).  Own-band sources near a brighter seed source are not
 added (companion cut).
 """
+import ast
+import inspect
 import os
+import textwrap
 import types
 
 import numpy as np
@@ -18,6 +21,7 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
+from jwst_gc_pipeline.photometry import cataloging
 from jwst_gc_pipeline.photometry.cataloging import (
     _auto_m7_seed_own_band, _build_i2d_augmented_seed, _build_m7_band_seed,
     annotate_independent_detection, crossband_seed_file, m7_band_seed_path)
@@ -228,11 +232,44 @@ def test_companion_of_brighter_seed_not_added(tmp_path):
     assert out0.meta['NCOMPAN'] == 0
 
 
+def test_companion_cut_spares_bright_companions(tmp_path):
+    """The cut leaves out only companions below companion_max_ratio x their
+    neighbour's flux: brighter close companions are real stars about as often
+    as the sources m7 keeps (docs/evidence/m7_companion_ratio), and a star
+    left out after m6 subtracted it stays whole in the final residual."""
+    xpath = os.path.join(str(tmp_path), 'crossband_seed_manual.fits')
+    Table({'skycoord': _sc([0], [0]), 'n_filt_confirmed': [2]}).write(xpath)
+    opath = os.path.join(str(tmp_path), 'own_m6.fits')
+    # the cross-band star (5 mas), companions at 0.05x, 0.3x and 0.09x of it
+    # (the last one also 0.18x of the 0.3x companion, 60 mas away); an
+    # own-band-only pair 3000 / 3120 mas at 0.5x
+    Table({'skycoord': _sc([5, 100, -100, 0, 3000, 3120], [0, 0, 0, 120, 0, 0]),
+           'flux': [100.0, 5.0, 30.0, 9.0, 80.0, 40.0]}).write(opath)
+    run = dict(companion_fwhm=2.5, fwhm_arcsec=0.062)
+    out = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                         companion_max_ratio=0.1, **run))
+    assert sorted(out['flux']) == [30.0, 40.0, 80.0, 100.0]
+    assert out.meta['NCOMPAN'] == 2
+    assert out.meta['COMPRAT'] == 0.1
+    # a lower ratio keeps the 0.09x companion; ratio 1 is the cut without it
+    out2 = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                          companion_max_ratio=0.08, **run))
+    assert sorted(out2['flux']) == [9.0, 30.0, 40.0, 80.0, 100.0]
+    out1 = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                          companion_max_ratio=1.0, **run))
+    assert sorted(out1['flux']) == [80.0, 100.0]
+    assert out1.meta['NCOMPAN'] == 4
+    # above 1 a source would be its own "brighter" neighbour
+    with pytest.raises(ValueError):
+        _build_m7_band_seed(xpath, opath, 'F182M', 'merged', companion_max_ratio=1.5, **run)
+
+
 def test_pipeline_defaults():
     # AUTO by default (docs/evidence/faint_defaults_on); see
     # docs/evidence/faint_m7_seed_union for the full-field realness
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band'] is None
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'] == 2.5
+    assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'] == 0.1
 
 
 def test_auto_own_band_off_on_extended_emission_and_miri():
@@ -253,3 +290,13 @@ def test_auto_own_band_off_on_extended_emission_and_miri():
     assert _auto_m7_seed_own_band(True, types.SimpleNamespace(target='w51')) is True
     assert _auto_m7_seed_own_band(
         True, types.SimpleNamespace(target='brick'), miri=True) is True
+
+
+def test_pipeline_passes_the_companion_options():
+    """run_manual_pipeline hands both companion-cut options to the builder."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(cataloging.run_manual_pipeline)))
+    (call,) = [c for c in ast.walk(tree) if isinstance(c, ast.Call)
+               and getattr(c.func, 'id', None) == '_build_m7_band_seed']
+    kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
+    for arg in ('companion_fwhm', 'companion_max_ratio'):
+        assert kw[arg] == f"float(mopt(opts_phase, 'manual_m7_seed_own_band_{arg}'))"

@@ -1,0 +1,71 @@
+{
+ "label": "arches",
+ "filt": "F212N",
+ "n_vetted": {
+  "m2": 257750,
+  "m3": 249836,
+  "m4": 257893,
+  "resbgsub_m5": 290131,
+  "resbgsub_m6": 292398,
+  "resbgsub_m7": 204523
+ },
+ "n_union_m2_m6": 317925,
+ "n_lost": 116300,
+ "ctrl_final_resid_snr_p50": 1.4792872582516228,
+ "ctrl_final_resid_snr_p90": 4.513584371328435,
+ "ctrl_final_resid_snr_p99": 15.952147465294667,
+ "by_last_phase": {
+  "m2->vetted_out": {
+   "n": 5411,
+   "starlike_left": 3496
+  },
+  "m2->not_fit": {
+   "n": 1865,
+   "starlike_left": 952
+  },
+  "m3->vetted_out": {
+   "n": 1019,
+   "starlike_left": 798
+  },
+  "m3->not_fit": {
+   "n": 622,
+   "starlike_left": 209
+  },
+  "m4->vetted_out": {
+   "n": 4892,
+   "starlike_left": 3949
+  },
+  "m4->not_fit": {
+   "n": 1359,
+   "starlike_left": 602
+  },
+  "resbgsub_m5->vetted_out": {
+   "n": 5633,
+   "starlike_left": 5141
+  },
+  "resbgsub_m5->not_fit": {
+   "n": 1234,
+   "starlike_left": 634
+  },
+  "resbgsub_m6->vetted_out": {
+   "n": 5344,
+   "starlike_left": 5215
+  },
+  "resbgsub_m6->not_fit": {
+   "n": 88921,
+   "starlike_left": 80244
+  }
+ },
+ "m7_seed_reason": {
+  "own_band_off": {
+   "n": 94190,
+   "starlike_left": 85398
+  },
+  "seeded": {
+   "n": 75,
+   "starlike_left": 61
+  }
+ },
+ "n_final_vetted_inner": 204523,
+ "n_starlike_left": 101240
+}

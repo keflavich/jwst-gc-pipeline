@@ -4932,8 +4932,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_m7_seed_own_band_companion_fwhm', type='float',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
                       help='With --manual-m7-seed-own-band: own-band sources within '
-                           'this many PSF FWHM of a brighter seed source are not '
+                           'this many PSF FWHM of a much brighter seed source are not '
                            'added (PSF-ring fits).  0 disables.  Default 2.5.')
+    parser.add_option('--manual-m7-seed-own-band-companion-max-ratio',
+                      dest='manual_m7_seed_own_band_companion_max_ratio', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'],
+                      help='The companion cut leaves out an own-band source only when '
+                           'its flux is below this fraction of the neighbour\'s.  1.0 '
+                           'cuts every fainter source within the radius.  Default 0.1.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '

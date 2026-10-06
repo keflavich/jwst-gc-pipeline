@@ -1,0 +1,28 @@
+counts_cr01_to_cr1.json cr01 -> cr1
+   ('superdense', 'F212N') {'n_b_only': 11, 'n_left_in_a_snr5': 10, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 11, 'runs': 11}
+   ('superdense', 'F405N') {'n_b_only': 2, 'n_left_in_a_snr5': 1, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 1, 'runs': 11}
+   ('dense_bright', 'F187N') {'n_b_only': 14, 'n_left_in_a_snr5': 7, 'n_left_in_b_snr5': 5, 'n_injected': 1, 'n_brighter_nb': 6, 'runs': 11}
+   ('dense_bright', 'F212N') {'n_b_only': 0, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 0, 'runs': 11}
+   ('dark', 'F182M') {'n_b_only': 0, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 0, 'runs': 11}
+   ('dark', 'F212N') {'n_b_only': 0, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 0, 'runs': 11}
+counts_cr03_to_cr1.json cr03 -> cr1
+   ('superdense', 'F212N') {'n_b_only': 1, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 1, 'runs': 11}
+   ('superdense', 'F405N') {'n_b_only': 2, 'n_left_in_a_snr5': 1, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 1, 'runs': 11}
+   ('dense_bright', 'F187N') {'n_b_only': 3, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 2, 'runs': 11}
+   ('dense_bright', 'F212N') {'n_b_only': 0, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 0, 'runs': 11}
+   ('dark', 'F182M') {'n_b_only': 0, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 0, 'runs': 11}
+   ('dark', 'F212N') {'n_b_only': 0, 'n_left_in_a_snr5': 0, 'n_left_in_b_snr5': 0, 'n_injected': 0, 'n_brighter_nb': 0, 'runs': 11}
+counts_cr1_to_cr01.json cr1 -> cr01
+   ('superdense', 'F212N') {'n_b_only': 232, 'n_left_in_a_snr5': 224, 'n_left_in_b_snr5': 2, 'n_injected': 24, 'n_brighter_nb': 232, 'runs': 11}
+   ('superdense', 'F405N') {'n_b_only': 8, 'n_left_in_a_snr5': 5, 'n_left_in_b_snr5': 0, 'n_injected': 2, 'n_brighter_nb': 8, 'runs': 11}
+   ('dense_bright', 'F187N') {'n_b_only': 157, 'n_left_in_a_snr5': 153, 'n_left_in_b_snr5': 0, 'n_injected': 16, 'n_brighter_nb': 152, 'runs': 11}
+   ('dense_bright', 'F212N') {'n_b_only': 144, 'n_left_in_a_snr5': 143, 'n_left_in_b_snr5': 0, 'n_injected': 7, 'n_brighter_nb': 144, 'runs': 11}
+   ('dark', 'F182M') {'n_b_only': 121, 'n_left_in_a_snr5': 116, 'n_left_in_b_snr5': 0, 'n_injected': 15, 'n_brighter_nb': 120, 'runs': 11}
+   ('dark', 'F212N') {'n_b_only': 14, 'n_left_in_a_snr5': 11, 'n_left_in_b_snr5': 0, 'n_injected': 1, 'n_brighter_nb': 14, 'runs': 11}
+counts_cr1_to_cr03.json cr1 -> cr03
+   ('superdense', 'F212N') {'n_b_only': 139, 'n_left_in_a_snr5': 139, 'n_left_in_b_snr5': 2, 'n_injected': 17, 'n_brighter_nb': 139, 'runs': 11}
+   ('superdense', 'F405N') {'n_b_only': 7, 'n_left_in_a_snr5': 4, 'n_left_in_b_snr5': 0, 'n_injected': 1, 'n_brighter_nb': 7, 'runs': 11}
+   ('dense_bright', 'F187N') {'n_b_only': 65, 'n_left_in_a_snr5': 64, 'n_left_in_b_snr5': 1, 'n_injected': 9, 'n_brighter_nb': 59, 'runs': 11}
+   ('dense_bright', 'F212N') {'n_b_only': 66, 'n_left_in_a_snr5': 66, 'n_left_in_b_snr5': 0, 'n_injected': 4, 'n_brighter_nb': 66, 'runs': 11}
+   ('dark', 'F182M') {'n_b_only': 72, 'n_left_in_a_snr5': 72, 'n_left_in_b_snr5': 0, 'n_injected': 11, 'n_brighter_nb': 72, 'runs': 11}
+   ('dark', 'F212N') {'n_b_only': 4, 'n_left_in_a_snr5': 1, 'n_left_in_b_snr5': 0, 'n_injected': 1, 'n_brighter_nb': 4, 'runs': 11}
