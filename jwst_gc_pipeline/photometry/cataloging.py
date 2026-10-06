@@ -5266,6 +5266,44 @@ def _gc_perframe_images(cut_bp, proposal_id, field, filt, phase, phases):
               f"per-frame images ({freed / 1e9:.1f} GB) for {filt}", flush=True)
 
 
+def _gc_superseded_smoothed_bg(cut_bp, proposal_id, field, module, filt,
+                               phase, phases, options, pupil):
+    """Remove the smoothed-bg mosaic two phases before ``phase``.
+
+    Called once this phase's own smoothed bg is on disk.  Each phase reads only
+    its predecessor's map (m5 subtracts m4's, m6 m5's, m7 m6's, and m8 reads
+    m7's), so at this barrier the map from ``phases[idx-2]`` has no reader
+    left: the next phase reads this one, and a retry of this phase reads
+    ``phases[idx-1]``, which is kept.  A completed run therefore ends with the
+    last two maps (m6 + m7, or m5 + m6 single-band).  The residual and model
+    mosaics are never touched; they are the diagnostics.
+
+    Failure is reported and swallowed, as in :func:`_gc_perframe_images`.
+    """
+    from jwst_gc_pipeline import retention
+
+    try:
+        idx = list(phases).index(phase)
+    except ValueError:
+        return
+    if idx < 2:
+        return
+    old = phases[idx - 2]
+    label = 'm2' if old == 'm12' else old
+    path = _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module,
+                                         filt, label, options, pupil)
+    for doomed in retention.superseded_smoothed_bg(path, label=label):
+        try:
+            size = os.path.getsize(doomed)
+            os.unlink(doomed)
+        except OSError as ex:
+            print(f"manual [{phase}]: could not remove {os.path.basename(doomed)}"
+                  f" ({ex})", flush=True)
+            continue
+        print(f"manual [{phase}]: retention removed superseded {label} smoothed "
+              f"bg for {filt}/{module} ({size / 1e9:.2f} GB)", flush=True)
+
+
 def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
                                   label, options, pupil):
     """Rebuild the on-disk smoothed-bg i2d path for a completed phase ``label``.
@@ -8213,11 +8251,21 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _bg = _reconstruct_smoothed_bg_path(
                         cut_bp, proposal_id, field, module, filt, _prev_label, options, pupil)
                     if not os.path.exists(_bg):
-                        raise FileNotFoundError(
-                            f"--manual-start-phase={start_phase}: required {_prev} "
-                            f"smoothed-bg for {filt}/{module} is missing (expected "
-                            f"{_bg}).  Run the earlier per-filter phases first.")
-                    bg_for_next[(module, filt)] = _bg
+                        # m3 and m4 fit the RAW frames and never read the
+                        # previous map, and retention removes it two phases
+                        # later; only a phase that subtracts it needs it.
+                        if start_phase in ('m3', 'm4'):
+                            print(f"manual [{start_phase}]: {_prev} smoothed-bg "
+                                  f"for {filt}/{module} is absent ({_bg}); not "
+                                  f"needed, this phase fits raw frames",
+                                  flush=True)
+                        else:
+                            raise FileNotFoundError(
+                                f"--manual-start-phase={start_phase}: required {_prev} "
+                                f"smoothed-bg for {filt}/{module} is missing (expected "
+                                f"{_bg}).  Run the earlier per-filter phases first.")
+                    else:
+                        bg_for_next[(module, filt)] = _bg
                     # mergedcat residual i2d (detection image for m4..m6 seed)
                     _ri = _reconstruct_resid_i2d_path(
                         cut_bp, proposal_id, field, module, filt, _prev_label, options, pupil)
@@ -9178,6 +9226,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         if bool(mopt(options, 'manual_gc_superseded_perframe')):
                             _gc_perframe_images(cut_bp, proposal_id, field,
                                                 filt, phase, phases)
+                        # The map two phases back has no reader left (see
+                        # _gc_superseded_smoothed_bg).  On by default; the
+                        # residual and model mosaics stay either way.
+                        if not bool(mopt(options, 'manual_keep_intermediate_smoothed_bg')):
+                            _gc_superseded_smoothed_bg(cut_bp, proposal_id, field,
+                                                       module, filt, phase,
+                                                       phases, options, pupil)
                     else:
                         raise MergedcatMosaicError(
                             f"[{phase}] {module}/{filt}: build_mergedcat_residuals "

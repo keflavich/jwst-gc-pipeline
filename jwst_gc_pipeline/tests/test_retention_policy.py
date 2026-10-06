@@ -347,3 +347,72 @@ def test_recently_touched_backup_is_not_stale(tmp_path):
         [str(tmp_path)], guard=retention.Guard(min_age_days=0),
         min_age_days=90)
     assert found == []
+
+
+# --------------------------------------------------------------------------
+# In-run smoothed-bg pruning
+# --------------------------------------------------------------------------
+
+def test_superseded_smoothed_bg_selects_only_that_labels_map(tmp_path):
+    bg = _write(str(tmp_path), _mosaic('m4', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(bg, label='m4') == [bg]
+    # the label must match: m4's map is not m5's, and m2 is not m12
+    assert retention.superseded_smoothed_bg(bg, label='m5') == []
+    m12 = _write(str(tmp_path), _mosaic('m12', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(m12, label='m2') == []
+
+
+@pytest.mark.parametrize('name', [
+    _mosaic('m4', 'residual_i2d'),                    # the diagnostic residual
+    _mosaic('m4', 'model_i2d'),                       # the diagnostic model
+    # the m2 checkpoint's renamed quarantine copy
+    f'{PRE}-merged_m4_daophot_basic_mergedcat_residual_smoothed_bg_i2d'
+    '_im0_badastrom.fits',
+    f'{PRE}-merged_data_i2d.fits',
+    _perframe('m4', what='residual'),
+])
+def test_superseded_smoothed_bg_refuses_every_other_mosaic(tmp_path, name):
+    p = _write(str(tmp_path), name)
+    assert retention.superseded_smoothed_bg(p, label='m4') == []
+
+
+def test_superseded_smoothed_bg_refuses_protected_directories(tmp_path):
+    p = _write(str(tmp_path / 'releases' / 'v1'),
+               _mosaic('m4', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(p, label='m4') == []
+
+
+def test_superseded_smoothed_bg_missing_file_is_empty(tmp_path):
+    p = str(tmp_path / _mosaic('m4', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(p, label='m4') == []
+
+
+def test_phase_loop_prunes_two_phases_back(tmp_path):
+    """m6's barrier removes m4's map and keeps m5's (a retry of m6 reads it)."""
+    from types import SimpleNamespace
+    from jwst_gc_pipeline.photometry import cataloging as C
+
+    opts = SimpleNamespace(desaturated=False, bgsub=False, group=False)
+    phases = ['m12', 'm3', 'm4', 'm5', 'm6', 'm7']
+    kw = dict(cut_bp=str(tmp_path), proposal_id='2221', field='001',
+              module='merged', filt='F410M', options=opts, pupil='clear')
+    pipe = tmp_path / 'F410M' / 'pipeline'
+    paths = {}
+    for label in ('m2', 'm3', 'm4', 'm5', 'm6'):
+        p = C._reconstruct_smoothed_bg_path(label=label, **kw)
+        _write(str(pipe), os.path.basename(p))
+        resid = p.replace('_smoothed_bg_i2d.fits', '_i2d.fits')
+        _write(str(pipe), os.path.basename(resid))
+        paths[label] = (p, resid)
+
+    for phase in ('m12', 'm3'):           # nothing two phases back yet
+        C._gc_superseded_smoothed_bg(phase=phase, phases=phases, **kw)
+    assert all(os.path.exists(p) for p, _ in paths.values())
+
+    C._gc_superseded_smoothed_bg(phase='m4', phases=phases, **kw)  # m12 -> m2
+    C._gc_superseded_smoothed_bg(phase='m5', phases=phases, **kw)
+    C._gc_superseded_smoothed_bg(phase='m6', phases=phases, **kw)
+    assert [lab for lab, (p, _) in paths.items() if os.path.exists(p)] == \
+        ['m5', 'm6']
+    # residual mosaics are diagnostics and stay
+    assert all(os.path.exists(r) for _, r in paths.values())
