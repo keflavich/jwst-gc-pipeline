@@ -2,8 +2,8 @@
 column.
 
 Per-frame ``*_daophot_basic.fits`` (``crowdsource_catalogs_long.save_photutils_results``)
-and ``*_m<N>_satstar_catalog.fits`` (``saturated_star_finding.get_saturated_stars``
-writer) are the only catalogs carried in ORIGINAL DETECTOR PIXEL coordinates,
+and ``*_m<N>_satstar_catalog.fits`` (written in
+``saturated_star_finding.remove_saturated_stars``) are the only catalogs carried in ORIGINAL DETECTOR PIXEL coordinates,
 so they must be kept -- but on disk they carry ``float64``/``int64`` columns
 for quantities that do not need that width: photometric metrics (flux, local
 background, fit-quality statistics) and small integer counters/bitmasks.
@@ -39,7 +39,10 @@ FLOAT32_COLUMNS = frozenset({
     'qfit', 'cfit', 'reduced_chi2', 'model_data_peak_ratio',
     'modelsub_bkg', 'modelsub_bkg_rms',
     'sidelobe_resid_sigma', 'ssr_ratio',
-    'wingcal_rmask', 'wingcal_ratio',
+    # wingcal_ratio stays float64: merge_catalogs tests `ratio == 1.0` as
+    # the 'no per-star C(r) applied' sentinel, and a float32 rounding of a
+    # real ratio near 1 onto exactly 1.0 would apply the pooled C(r) twice.
+    'wingcal_rmask',
     'sat_severity_floor', 'satstar_implied_peak', 'satstar_observed_peak',
 })
 

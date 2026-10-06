@@ -202,3 +202,13 @@ def test_fully_masked_int_column_is_cast_without_maskerror():
     downcast_catalog_dtypes(t)
     assert t['group_id'].dtype == np.int32
     assert t['group_id'].mask.all()
+
+
+def test_wingcal_ratio_stays_float64():
+    """merge_catalogs uses wingcal_ratio == 1.0 as a sentinel; float32 could
+    round a real ratio onto it and double-apply the pooled C(r)."""
+    t = Table()
+    t['wingcal_ratio'] = np.array([1.0 + 3e-8, 1.0], dtype=np.float64)
+    downcast_catalog_dtypes(t)
+    assert t['wingcal_ratio'].dtype == np.float64
+    assert t['wingcal_ratio'][0] != 1.0
