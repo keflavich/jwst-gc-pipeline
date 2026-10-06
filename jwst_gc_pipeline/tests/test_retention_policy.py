@@ -347,3 +347,189 @@ def test_recently_touched_backup_is_not_stale(tmp_path):
         [str(tmp_path)], guard=retention.Guard(min_age_days=0),
         min_age_days=90)
     assert found == []
+
+
+# --------------------------------------------------------------------------
+# In-run smoothed-bg pruning
+# --------------------------------------------------------------------------
+
+def test_superseded_smoothed_bg_selects_only_that_labels_map(tmp_path):
+    bg = _write(str(tmp_path), _mosaic('m4', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(bg, label='m4') == [bg]
+    # the label must match: m4's map is not m5's, and m2 is not m12
+    assert retention.superseded_smoothed_bg(bg, label='m5') == []
+    m12 = _write(str(tmp_path), _mosaic('m12', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(m12, label='m2') == []
+
+
+@pytest.mark.parametrize('name', [
+    _mosaic('m4', 'residual_i2d'),                    # the diagnostic residual
+    _mosaic('m4', 'model_i2d'),                       # the diagnostic model
+    # the m2 checkpoint's renamed quarantine copy
+    f'{PRE}-merged_m4_daophot_basic_mergedcat_residual_smoothed_bg_i2d'
+    '_im0_badastrom.fits',
+    f'{PRE}-merged_data_i2d.fits',
+    _perframe('m4', what='residual'),
+])
+def test_superseded_smoothed_bg_refuses_every_other_mosaic(tmp_path, name):
+    p = _write(str(tmp_path), name)
+    assert retention.superseded_smoothed_bg(p, label='m4') == []
+
+
+def test_superseded_smoothed_bg_refuses_protected_directories(tmp_path):
+    p = _write(str(tmp_path / 'releases' / 'v1'),
+               _mosaic('m4', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(p, label='m4') == []
+
+
+def test_superseded_smoothed_bg_missing_file_is_empty(tmp_path):
+    p = str(tmp_path / _mosaic('m4', 'residual_smoothed_bg_i2d'))
+    assert retention.superseded_smoothed_bg(p, label='m4') == []
+
+
+def test_phase_loop_prunes_two_phases_back(tmp_path):
+    """m6's barrier removes m4's map and keeps m5's (a retry of m6 reads it)."""
+    from types import SimpleNamespace
+    from jwst_gc_pipeline.photometry import cataloging as C
+
+    opts = SimpleNamespace(desaturated=False, bgsub=False, group=False)
+    kw = dict(cut_bp=str(tmp_path), proposal_id='2221', field='001',
+              module='merged', filt='F410M', options=opts, pupil='clear')
+    pipe = tmp_path / 'F410M' / 'pipeline'
+    paths = {}
+    for label in ('m2', 'm3', 'm4', 'm5', 'm6'):
+        p = C._reconstruct_smoothed_bg_path(label=label, **kw)
+        _write(str(pipe), os.path.basename(p))
+        resid = p.replace('_smoothed_bg_i2d.fits', '_i2d.fits')
+        _write(str(pipe), os.path.basename(resid))
+        paths[label] = (p, resid)
+
+    for phase in ('m12', 'm3'):           # nothing two phases back yet
+        C._gc_superseded_smoothed_bg(phase=phase, **kw)
+    assert all(os.path.exists(p) for p, _ in paths.values())
+
+    C._gc_superseded_smoothed_bg(phase='m4', **kw)  # m12 -> m2
+    C._gc_superseded_smoothed_bg(phase='m5', **kw)
+    C._gc_superseded_smoothed_bg(phase='m6', **kw)
+    assert [lab for lab, (p, _) in paths.items() if os.path.exists(p)] == \
+        ['m5', 'm6']
+    # residual mosaics are diagnostics and stay
+    assert all(os.path.exists(r) for _, r in paths.values())
+
+
+def test_prune_does_not_depend_on_runtime_phase_list(tmp_path):
+    """Per-phase finalize jobs run --manual-start-phase=X
+    --manual-stop-after-phase=X, so the driver's ``phases`` list holds only X.
+    Pruning must still remove the map two phases back in the chain order."""
+    import inspect
+    from types import SimpleNamespace
+    from jwst_gc_pipeline.photometry import cataloging as C
+
+    assert 'phases' not in inspect.signature(C._gc_superseded_smoothed_bg).parameters
+    opts = SimpleNamespace(desaturated=False, bgsub=False, group=False)
+    kw = dict(cut_bp=str(tmp_path), proposal_id='10678', field='067',
+              module='merged', filt='F212N', options=opts, pupil='clear')
+    pipe = tmp_path / 'F212N' / 'pipeline'
+    for label in ('m2', 'm3', 'm4', 'm5', 'm6', 'm7'):
+        _write(str(pipe), os.path.basename(
+            C._reconstruct_smoothed_bg_path(label=label, **kw)))
+    # one separate finalize job per phase
+    for phase in ('m12', 'm3', 'm4', 'm5', 'm6', 'm7'):
+        C._gc_superseded_smoothed_bg(phase=phase, **kw)
+    left = sorted(f for f in os.listdir(pipe) if 'smoothed_bg' in f)
+    assert len(left) == 2
+    assert any('_m6_' in f for f in left) and any('_m7_' in f for f in left)
+
+
+def _smoothed_bg_kw(tmp_path, **opt):
+    from types import SimpleNamespace
+    opts = SimpleNamespace(desaturated=False, bgsub=False, group=False, **opt)
+    return dict(cut_bp=str(tmp_path), proposal_id='10678', field='067',
+                module='merged', filt='F212N', options=opts, pupil='clear')
+
+
+@pytest.mark.parametrize('keep', [False, True])
+def test_barrier_hook_honours_keep_flag(tmp_path, keep):
+    """The barrier hook prunes m4's map at m6 unless the keep flag is set."""
+    from jwst_gc_pipeline.photometry import cataloging as C
+    kw = _smoothed_bg_kw(tmp_path, manual_keep_intermediate_smoothed_bg=keep)
+    pipe = tmp_path / 'F212N' / 'pipeline'
+    m4 = C._reconstruct_smoothed_bg_path(label='m4', **kw)
+    _write(str(pipe), os.path.basename(m4))
+    C._prune_smoothed_bg_after_barrier(phase='m6', **kw)
+    assert os.path.exists(m4) is keep
+
+
+def test_phase_loop_calls_barrier_hook():
+    """run_manual_pipeline's barrier calls the prune hook (a deleted or
+    disabled call would otherwise pass every unit test above)."""
+    import ast
+    import inspect
+    import textwrap
+    from jwst_gc_pipeline.photometry import cataloging as C
+    tree = ast.parse(textwrap.dedent(inspect.getsource(C.run_manual_pipeline)))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, 'id', None) == '_prune_smoothed_bg_after_barrier']
+    assert len(calls) == 1
+    # not guarded by a constant-false test
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Constant) \
+                and not node.test.value:
+            assert not any(c in list(ast.walk(node)) for c in calls)
+
+
+@pytest.mark.parametrize('start', ['m5', 'm6', 'm7'])
+def test_start_phase_requires_bg_for_phases_that_read_it(tmp_path, start):
+    from jwst_gc_pipeline.photometry import cataloging as C
+    with pytest.raises(FileNotFoundError):
+        C._start_phase_prev_smoothed_bg(start, 'mX', str(tmp_path / 'nope.fits'),
+                                        'F212N', 'merged')
+
+
+@pytest.mark.parametrize('start', ['m3', 'm4'])
+def test_start_phase_tolerates_absent_bg_for_raw_frame_phases(tmp_path, start):
+    from jwst_gc_pipeline.photometry import cataloging as C
+    assert C._start_phase_prev_smoothed_bg(
+        start, 'mX', str(tmp_path / 'nope.fits'), 'F212N', 'merged') is None
+    present = tmp_path / 'bg.fits'
+    present.write_bytes(b'x')
+    assert C._start_phase_prev_smoothed_bg(
+        start, 'mX', str(present), 'F212N', 'merged') == str(present)
+
+
+def test_reading_phases_match_chain_order():
+    """Every phase after m4 in the chain subtracts its predecessor's map."""
+    from jwst_gc_pipeline.photometry import cataloging as C
+    order = C._SMOOTHED_BG_PHASE_ORDER
+    assert C._PHASES_READING_PREV_SMOOTHED_BG == order[order.index('m5'):]
+
+
+def _reffield_run(tmp_path, with_bg):
+    cat = tmp_path / 'catalogs'
+    cat.mkdir()
+    (cat / 'f212n_merged_indivexp_merged_resbgsub_m4_dao_basic_vetted.fits').write_bytes(b'x')
+    pipe = tmp_path / 'F212N' / 'pipeline'
+    pipe.mkdir(parents=True)
+    stem = 'jw1-o1_t1_nircam_clear-f212n-merged_m4_daophot_basic_mergedcat_residual'
+    (pipe / f'{stem}_i2d.fits').write_bytes(b'x')
+    (pipe / 'jw1-o1_t1_nircam_clear-f212n-merged_data_i2d.fits').write_bytes(b'x')
+    if with_bg:
+        (pipe / f'{stem}_smoothed_bg_i2d.fits').write_bytes(b'x')
+    return str(tmp_path)
+
+
+def test_find_products_raises_on_missing_bg(tmp_path):
+    from jwst_gc_pipeline.photometry.reference_fields import evaluate as EV
+    rdir = _reffield_run(tmp_path, with_bg=False)
+    with pytest.raises(FileNotFoundError, match='keep-intermediate'):
+        EV.find_products(rdir, 'F212N', phase='m4')
+    with pytest.warns(UserWarning, match='smoothed-bg'):
+        prod = EV.find_products(rdir, 'F212N', phase='m4', allow_missing_bg=True)
+    assert prod['smoothed_bg'] is None
+
+
+def test_find_products_returns_present_bg(tmp_path):
+    from jwst_gc_pipeline.photometry.reference_fields import evaluate as EV
+    rdir = _reffield_run(tmp_path, with_bg=True)
+    assert EV.find_products(rdir, 'F212N', phase='m4')['smoothed_bg'].endswith(
+        '_smoothed_bg_i2d.fits')
