@@ -157,9 +157,16 @@ MANUAL_DEFAULTS = {
     # results with and without it: docs/evidence/faint_defaults_on.
     'manual_m7_seed_own_band': None,
     # ... and with it on, own-band sources within this many PSF FWHM of a
-    # brighter seed source are not added (PSF-ring fits; at the chance rate
-    # inside ~2.5 FWHM in Brick F182M/F212N).  0 disables the cut.
+    # much brighter seed source are not added (PSF-ring fits).  0 disables
+    # the cut.
     'manual_m7_seed_own_band_companion_fwhm': 2.5,
+    # ... where "much brighter" = the source's flux is below this fraction of
+    # its neighbour's.  Companions fainter than 0.1x within 2 FWHM are
+    # confirmed by an independent visit at the chance rate; brighter ones
+    # 0.3-0.9x as often as the sources m7 keeps, and the cut without this
+    # gate (1.0) left them unsubtracted in the m7 residual
+    # (docs/evidence/m7_companion_ratio).
+    'manual_m7_seed_own_band_companion_max_ratio': 0.1,
     # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.

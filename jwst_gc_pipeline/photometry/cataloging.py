@@ -4029,6 +4029,7 @@ def m7_band_seed_path(crossband_path, module, filtername):
 def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module, *,
                         max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                         companion_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
+                        companion_max_ratio=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'],
                         fwhm_arcsec=None, label=''):
     """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
     vetted catalog (``manual_m7_seed_own_band``; AUTO by default, see
@@ -4046,13 +4047,23 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
 
     Against an independent visit (Brick 1182/o004), the own-band sources
     production m7 lacks are confirmed 0.21x as often as the own-band sources
-    it keeps (flux-matched; docs/evidence/faint_m7_seed_union).  Those within
-    ~2.5 PSF FWHM of a brighter seed source are confirmed at the chance rate
-    in F182M and F212N: m6 fits in the PSF-mismatch ring of a brighter star.
-    So own-band sources within ``companion_fwhm`` FWHM of a brighter seed
-    source (cross-band or own-band) are not added; ``companion_fwhm=0``
-    disables the cut.  ``fwhm_arcsec`` defaults to the filter's entry in the
-    FWHM table.
+    it keeps (flux-matched; docs/evidence/faint_m7_seed_union).  Faint
+    own-band sources close to a brighter seed source are m6 fits in the
+    PSF-mismatch ring of that star: within 2 PSF FWHM, those fainter than 0.1x
+    their neighbour are confirmed by o004's m6 catalog at the chance rate and
+    sit at preferred position angles around it.  Brighter companions at the
+    same separations are confirmed 0.3-0.9x as often as the own-band sources
+    production m7 keeps (docs/evidence/m7_companion_ratio).  So an own-band
+    source is not added when a seed source (cross-band or own-band) within
+    ``companion_fwhm`` FWHM is more than ``1 / companion_max_ratio`` times
+    brighter; ``companion_fwhm=0`` disables the cut and
+    ``companion_max_ratio=1`` cuts every fainter source within that radius
+    (the cut before the ratio gate).  ``fwhm_arcsec`` defaults to the
+    filter's entry in the FWHM table.
+
+    A star the cut leaves out was fitted and subtracted at m6, so m6's
+    residual (the image m7 detects on) no longer shows it and m7 does not
+    find it again; it stays whole in the final m7 residual.
 
     Seed fluxes: an own-band source keeps its m6 flux; a cross-band position
     takes the flux of the own-band source within ``max_sep_mas`` (else 1.0,
@@ -4103,9 +4114,11 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
         pool_flux = np.concatenate([xflux, oflux[cand]])
         ic, ip, _, _ = search_around_sky(osc[cand], pool_sc,
                                          companion_fwhm * fwhm_arcsec * u.arcsec)
-        brighter = pool_flux[ip] > oflux[cand][ic]
+        # a flux-less cross-band position (flux 1.0) counts with that flux,
+        # as SeededFinder gives it
+        dominant = oflux[cand][ic] < companion_max_ratio * pool_flux[ip]
         companion = np.zeros(len(cand), dtype=bool)
-        companion[ic[brighter]] = True
+        companion[ic[dominant]] = True
         own_new[cand[companion]] = False
         n_companion = int(companion.sum())
     n_own = int(own_new.sum())
@@ -4115,13 +4128,15 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     out['flux'] = np.concatenate([xflux, oflux[own_new]])
     out['seed_origin'] = np.array(['crossband'] * len(xsc) + ['own_m6'] * n_own, dtype=str)
     out.meta['COMPFWHM'] = float(companion_fwhm)
+    out.meta['COMPRAT'] = float(companion_max_ratio)
     out.meta['NCOMPAN'] = n_companion
     outpath = m7_band_seed_path(crossband_seed_path, module, filtername)
     write_table_atomic(out, outpath)
     print(f"[{label}] m7 band seed: {len(xsc)} cross-band + {n_own} own-band m6 "
           f"vetted (not within {max_sep_mas:g} mas of a cross-band position; "
-          f"{n_companion} more within {companion_fwhm:g} FWHM of a brighter seed "
-          f"source left out) -> {len(out)} ({os.path.basename(outpath)})", flush=True)
+          f"{n_companion} more within {companion_fwhm:g} FWHM of a seed source "
+          f">{1 / companion_max_ratio:g}x brighter left out) -> {len(out)} "
+          f"({os.path.basename(outpath)})", flush=True)
     return outpath
 
 CARTA_EXPORT_COLUMNS = ('flux', 'flux_err', 'qfit', 'cfit', 'flags',
@@ -8407,6 +8422,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                 prev_seed, _own[0], filt, module,
                                 max_sep_mas=float(mopt(opts_phase, 'manual_crossband_seed_max_sep_mas')),
                                 companion_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_fwhm')),
+                                companion_max_ratio=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_max_ratio')),
                                 label=f'{phase}:{filt}')
                             det_i2d = resid_i2d_for_next.get((module, filt))  # m6 residual
                             bg_sub = bg_for_next.get((module, filt))          # minus m6 bg
