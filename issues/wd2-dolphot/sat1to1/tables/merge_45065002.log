@@ -1,0 +1,1138 @@
+WARNING: VerifyWarning: Keyword name 'flux_err_prop' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'forced_refit_frac' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'forced_refit_nframes' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'modelsub_bkg' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+mfs0 done
+mfs1 f115w: 11243 -> 11237 rows (dropped 6)
+mfs1 f150w: 14481 -> 14479 rows (dropped 2)
+WARNING: VerifyWarning: Keyword name 'flux_err_prop' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'forced_refit_frac' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'forced_refit_nframes' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'modelsub_bkg' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+mfs1 f162m: 15129 -> 15129 rows (dropped 0)
+mfs1 f164n: 25283 -> 25283 rows (dropped 0)
+mfs1 f182m: 14320 -> 14319 rows (dropped 1)
+mfs1 f187n: 15027 -> 15020 rows (dropped 7)
+mfs1 f200w: 14215 -> 14215 rows (dropped 0)
+mfs1 f212n: 25996 -> 25986 rows (dropped 10)
+mfs1 f250m: 14689 -> 14686 rows (dropped 3)
+mfs1 f277w: 12764 -> 12761 rows (dropped 3)
+mfs1 f300m: 13023 -> 13022 rows (dropped 1)
+mfs1 f323n: 14207 -> 14206 rows (dropped 1)
+mfs1 f335m: 11146 -> 11146 rows (dropped 0)
+mfs1 f405n: 9658 -> 9654 rows (dropped 4)
+mfs1 f410m: 11727 -> 11727 rows (dropped 0)
+mfs1 f466n: 10819 -> 10809 rows (dropped 10)
+mfs1 done
+== mfs0 (5434f5e7) Wed Oct  7 12:34:04 PM EDT 2026
+merge_catalogs from /blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wd2main2/jwst_gc_pipeline/photometry/merge_catalogs.py
+Merging daophot basic, , merged, , _resbgsub, , . filters ['f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n', 'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n', 'f335m', 'f405n', 'f410m', 'f466n']
+WARNING: no merged i2d for filter f115w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f150w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f162m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f164n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f182m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f187n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f200w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f212n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f250m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f277w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f300m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f323n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f335m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f405n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f410m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f466n; will fall back to the catalog's own skycoord/pixelscale for WCS
+SANITY CHECK f115w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f115w: 19607544.0; in jy=0.4493553218912865 Jy; magmin=9.768525276057574 mag=9.768525276057574 mag, magmax=28.436654527613477 mag=28.436654527613477 mag
+100th brightest flux=0.00535387609891973 Jy abmag=14.57832920902984 mag abmag_tbl=14.57832920902984 mag
+SANITY CHECK f150w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f150w: 33287174.0; in jy=0.7628530364429075 Jy; magmin=9.193897801932838 mag=9.193897801932838 mag, magmax=28.383921365180967 mag=28.383921365180967 mag
+100th brightest flux=0.0075806283679502795 Jy abmag=14.200736984131371 mag abmag_tbl=14.200736984131371 mag
+SANITY CHECK f162m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f162m: 39501396.0; in jy=0.9056024691579504 Jy; magmin=9.007656005086366 mag=9.007656005086366 mag, magmax=27.744706647212098 mag=27.744706647212098 mag
+100th brightest flux=0.009246036358221214 Jy abmag=13.98511100779216 mag abmag_tbl=13.98511100779216 mag
+SANITY CHECK f164n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f164n: 39162728.0; in jy=0.8978391449607955 Jy; magmin=9.017003659204203 mag=9.017003659204203 mag, magmax=25.9867700748323 mag=25.9867700748323 mag
+100th brightest flux=0.0080259080461528 Jy abmag=14.1387645508517 mag abmag_tbl=14.1387645508517 mag
+SANITY CHECK f182m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f182m: 36912536.0; in jy=0.8459318528471803 Jy; magmin=9.081661554354273 mag=9.081661554354273 mag, magmax=27.765051937715533 mag=27.765051937715533 mag
+100th brightest flux=0.00923885734852904 Jy abmag=13.985954346277374 mag abmag_tbl=13.985954346277374 mag
+SANITY CHECK f187n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f187n: 24115960.0; in jy=0.5526369550246029 Jy; magmin=9.543900192565063 mag=9.543900192565063 mag, magmax=25.694451279426147 mag=25.694451279426147 mag
+100th brightest flux=0.007535692081221672 Jy abmag=14.207192139311307 mag abmag_tbl=14.207192139311307 mag
+SANITY CHECK f200w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f200w: 43377056.0; in jy=0.9942497626941262 Jy; magmin=8.90626125999663 mag=8.90626125999663 mag, magmax=28.0102557260792 mag=28.0102557260792 mag
+100th brightest flux=0.008298903803194506 Jy abmag=14.102448173777995 mag abmag_tbl=14.102448173777995 mag
+SANITY CHECK f212n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f212n: 11439661.0; in jy=0.26215432308482717 Jy; magmin=10.35360744027518 mag=10.35360744027518 mag, magmax=25.81453228986679 mag=25.81453228986679 mag
+100th brightest flux=0.007030516568891451 Jy abmag=14.28253190979146 mag abmag_tbl=14.28253190979146 mag
+SANITY CHECK f250m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f250m: 5099053.0; in jy=0.4742109784386258 Jy; magmin=9.710070989769923 mag=9.710070989769923 mag, magmax=26.44491710907836 mag=26.44491710907836 mag
+100th brightest flux=0.003750421646299066 Jy abmag=14.964799758436083 mag abmag_tbl=14.964799758436083 mag
+SANITY CHECK f277w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f277w: 3780914.75; in jy=0.3516070829106563 Jy; magmin=10.034855962280428 mag=10.034855962280428 mag, magmax=26.807055702207137 mag=26.807055702207137 mag
+100th brightest flux=0.003134214288686577 Jy abmag=15.15967828449579 mag abmag_tbl=15.15967828449579 mag
+SANITY CHECK f300m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f300m: 5280992.0; in jy=0.4911012020380998 Jy; magmin=9.672072507178246 mag=9.672072507178246 mag, magmax=26.816639444092836 mag=26.816639444092836 mag
+100th brightest flux=0.0030668926678355454 Jy abmag=15.183253556931964 mag abmag_tbl=15.183253556931964 mag
+SANITY CHECK f323n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f323n: 5534260.0; in jy=0.5151397846131623 Jy; magmin=9.620187269878544 mag=9.620187269878544 mag, magmax=25.151576686047925 mag=25.151576686047925 mag
+100th brightest flux=0.004613842383155403 Jy abmag=14.739843114532476 mag abmag_tbl=14.739843114532476 mag
+SANITY CHECK f335m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f335m: 3329607.75; in jy=0.3096398843753074 Jy; magmin=10.172857758470307 mag=10.172857758470307 mag, magmax=25.624504025300062 mag=25.624504025300062 mag
+100th brightest flux=0.002449046418744707 Jy abmag=15.427507458162456 mag abmag_tbl=15.427507458162456 mag
+SANITY CHECK f405n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f405n: 6526061.0; in jy=0.6074230290357726 Jy; magmin=9.44127186709325 mag=9.44127186709325 mag, magmax=23.972849400332578 mag=23.972849400332578 mag
+100th brightest flux=0.003831228690634968 Jy abmag=14.941654809211887 mag abmag_tbl=14.941654809211887 mag
+SANITY CHECK f410m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f410m: 5875358.5; in jy=0.5464347023718479 Jy; magmin=9.556154319390457 mag=9.556154319390457 mag, magmax=26.166259616361764 mag=26.166259616361764 mag
+100th brightest flux=0.0024954438945752945 Jy abmag=15.407130474983795 mag abmag_tbl=15.407130474983795 mag
+SANITY CHECK f466n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f466n: 1751501.25; in jy=0.16303037305818144 Jy; magmin=10.86932869416277 mag=10.86932869416277 mag, magmax=24.498325797595143 mag=24.498325797595143 mag
+100th brightest flux=0.003034738541964056 Jy abmag=15.194696799094185 mag abmag_tbl=15.194696799094185 mag
+Starting merge catalogs: catalog_type: basic module: merged target: wd2
+Started with 11727 in filter f410m
+Table Meta Loop:   0%|          | 0/16 [00:00<?, ?it/s]Added 2930 new sources in filter f115w
+Added 3310 new sources in filter f150w
+Added 1968 new sources in filter f162m
+Table Meta Loop:  19%|█▉        | 3/16 [00:00<00:00, 24.32it/s]Added 12816 new sources in filter f164n
+Added 1021 new sources in filter f182m
+Added 4050 new sources in filter f187n
+Table Meta Loop:  38%|███▊      | 6/16 [00:00<00:00, 17.74it/s]Added 749 new sources in filter f200w
+Added 10364 new sources in filter f212n
+Table Meta Loop:  50%|█████     | 8/16 [00:00<00:00, 15.09it/s]Added 1816 new sources in filter f250m
+Added 668 new sources in filter f277w
+Table Meta Loop:  62%|██████▎   | 10/16 [00:00<00:00, 13.54it/s]Added 697 new sources in filter f300m
+Added 2724 new sources in filter f323n
+Table Meta Loop:  75%|███████▌  | 12/16 [00:00<00:00, 12.53it/s]Added 577 new sources in filter f335m
+Added 1196 new sources in filter f405n
+Table Meta Loop:  88%|████████▊ | 14/16 [00:01<00:00, 11.89it/s]Added 1735 new sources in filter f466n
+Table Meta Loop: 100%|██████████| 16/16 [00:01<00:00, 14.09it/s]
+Base coordinate length = 58348
+Table Loop:   0%|          | 0/16 [00:00<?, ?it/s]Flagging near saturated stars for filter f115w
+load_satstar_catalog: f115w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f115w from 32 per-exposure catalogs
+  satstar dedup: 1985 -> 593 unique (merged 1392 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 516/593 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.7 mas, p95 14.4 mas
+  satstar flux: adopted the per-exposure median for 593/593 stars; brightest - median = -0.027 mag (median), -0.116 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f115w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f115w_consolidated_satstar_catalog.fits (n=593)
+load_satstar_catalog: f115w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f115w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f115w_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state a5d719fc7883e64b, phase selection 8652b737d584580e)
+Loaded saturated star catalog for f115w with 593 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 1/599 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 598 stars that are saturated of 11243 in filter f115w.  0 are newly added.  The total replaced stars=598
+load_rejected_satstar_catalog: f115w: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1359 gate-rejected candidate row(s) for f115w from 32 file(s)
+satstar gate-taper flag: 369 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f115w
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 12 row(s) in f115w (0.02-0.5 mag brighter; median 0.072 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f115w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f115w has 11243 rows.  11230 of 11243 are mutual.  Matching took 60.9 seconds
+Max flux in tbl for f115w: 19607544.0; in jy=0.4493553218912865; mag=9.768525242809938
+merging tables step: max flux for f115w is 19607544.0 0.4493553218912865 9.768525242809938
+Basetable has length 58348 and ncols=4 before stack
+Basetable has length 58348 and ncols=52 after stack
+merging tables step: max flux for f115w in merged table is 19607544.0 0.4493553218912865 9.768525242809938
+Flagged 1023 stars that are near saturated stars in filter f115w out of 11243.  There are then 1017 in the merged table.  There are also 592 replaced saturated.
+Table Loop:   6%|▋         | 1/16 [01:00<15:14, 60.98s/it]Flagging near saturated stars for filter f150w
+load_satstar_catalog: f150w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 160 superseded [m12: 32, m3: 32, m4: 32, m5: 32, m6: 32] and 0 from a later phase [none]
+Building consolidated satstar catalog for f150w from 32 per-exposure catalogs
+  satstar dedup: 8993 -> 2512 unique (merged 6481 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 2345/2512 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 2.4 mas
+  satstar flux: adopted the per-exposure median for 2512/2512 stars; brightest - median = -0.020 mag (median), -0.080 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f150w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f150w_consolidated_satstar_catalog.fits (n=2512)
+load_satstar_catalog: f150w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 160 superseded [m12: 32, m3: 32, m4: 32, m5: 32, m6: 32] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f150w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f150w_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 7447a79feddbf558, phase selection dd70765f2a65c3d6)
+Loaded saturated star catalog for f150w with 2512 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 84/2513 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+  replace_saturated: 1 appended satstar row(s) carry 8 astrometry column(s) from their per-exposure ensemble instead of a NaN fill
+Replacing 2429 stars that are saturated of 14482 in filter f150w.  1 are newly added.  The total replaced stars=2430
+load_rejected_satstar_catalog: f150w: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 160 superseded [m12: 32, m3: 32, m4: 32, m5: 32, m6: 32] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 3545 gate-rejected candidate row(s) for f150w from 32 file(s)
+satstar gate-taper flag: 618 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f150w
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f150w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f150w has 14482 rows.  14479 of 14482 are mutual.  Matching took 46.7 seconds
+Max flux in tbl for f150w: 33287174.0; in jy=0.7628530364429075; mag=9.19389780323556
+merging tables step: max flux for f150w is 33287174.0 0.7628530364429075 9.19389780323556
+Basetable has length 58348 and ncols=54 before stack
+Basetable has length 58348 and ncols=102 after stack
+merging tables step: max flux for f150w in merged table is 33287174.0 0.7628530364429075 9.19389780323556
+Flagged 3299 stars that are near saturated stars in filter f150w out of 14482.  There are then 3297 in the merged table.  There are also 2427 replaced saturated.
+Table Loop:  12%|█▎        | 2/16 [01:47<12:16, 52.59s/it]Flagging near saturated stars for filter f162m
+load_satstar_catalog: f162m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f162m from 32 per-exposure catalogs
+  satstar dedup: 6805 -> 1875 unique (merged 4930 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1744/1875 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 1.8 mas
+  satstar flux: adopted the per-exposure median for 1875/1875 stars; brightest - median = -0.017 mag (median), -0.059 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f162m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f162m_consolidated_satstar_catalog.fits (n=1875)
+load_satstar_catalog: f162m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f162m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f162m_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state c215eed751e633b7, phase selection 0d88ca9e6d5fc5ff)
+Loaded saturated star catalog for f162m with 1875 rows
+replace_saturated: mutual-nearest second pass matched 5 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 9/1874 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+  replace_saturated: 1 appended satstar row(s) carry 8 astrometry column(s) from their per-exposure ensemble instead of a NaN fill
+Replacing 1865 stars that are saturated of 15130 in filter f162m.  1 are newly added.  The total replaced stars=1866
+load_rejected_satstar_catalog: f162m: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 2784 gate-rejected candidate row(s) for f162m from 32 file(s)
+satstar gate-taper flag: 435 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f162m
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f162m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f162m has 15130 rows.  15129 of 15130 are mutual.  Matching took 53.2 seconds
+Max flux in tbl for f162m: 39501396.0; in jy=0.9056024691579504; mag=9.007656027352331
+merging tables step: max flux for f162m is 39501396.0 0.9056024691579504 9.007656027352331
+Basetable has length 58348 and ncols=104 before stack
+Basetable has length 58348 and ncols=152 after stack
+merging tables step: max flux for f162m in merged table is 39501396.0 0.9056024691579504 9.007656027352331
+Flagged 2686 stars that are near saturated stars in filter f162m out of 15130.  There are then 2686 in the merged table.  There are also 1865 replaced saturated.
+Table Loop:  19%|█▉        | 3/16 [02:40<11:27, 52.88s/it]Flagging near saturated stars for filter f164n
+load_satstar_catalog: f164n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 9, m7: 23]; excluded 311 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 55] and 0 from a later phase [none]; 9 same-phase tie(s) went to the newer file: jw03523005001_02101_00001_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca2_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrcb4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits (+6 more)
+Building consolidated satstar catalog for f164n from 32 per-exposure catalogs
+  satstar sky refresh: jw03523005001_02101_00001_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -10.2/-4.9 mas onto the frame's current WCS (11 sources)
+  satstar sky refresh: jw03523005001_02101_00001_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +26.0/-4.5 mas onto the frame's current WCS (12 sources)
+  satstar sky refresh: jw03523005001_02101_00001_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -23.5/-14.1 mas onto the frame's current WCS (23 sources)
+  satstar sky refresh: jw03523005001_02101_00002_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -19.2/-13.6 mas onto the frame's current WCS (20 sources)
+  satstar sky refresh: jw03523005001_02101_00003_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -5.2/-0.3 mas onto the frame's current WCS (10 sources)
+  satstar sky refresh: jw03523005001_02101_00003_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +44.0/-0.2 mas onto the frame's current WCS (12 sources)
+  satstar sky refresh: jw03523005001_02101_00003_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -20.3/-11.1 mas onto the frame's current WCS (21 sources)
+  satstar sky refresh: jw03523005001_02101_00004_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -11.8/-5.3 mas onto the frame's current WCS (8 sources)
+  satstar sky refresh: jw03523005001_02101_00004_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +36.0/-3.8 mas onto the frame's current WCS (11 sources)
+  satstar dedup: 1113 -> 403 unique (merged 710 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 266/403 stars measured in >1 exposure (median N=3); adopted mean position, median shift 0.4 mas, p95 1.5 mas
+  satstar flux: adopted the per-exposure median for 403/403 stars; brightest - median = -0.010 mag (median), -0.052 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f164n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f164n_consolidated_satstar_catalog.fits (n=403)
+load_satstar_catalog: f164n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 9, m7: 23]; excluded 311 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 55] and 0 from a later phase [none]; 9 same-phase tie(s) went to the newer file: jw03523005001_02101_00001_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca2_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrcb4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits (+6 more)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f164n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f164n_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 51f289d0f4a2877c, phase selection 3c76d39959bbb12f)
+Loaded saturated star catalog for f164n with 403 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 5/403 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 398 stars that are saturated of 25283 in filter f164n.  0 are newly added.  The total replaced stars=398
+load_rejected_satstar_catalog: f164n: one phase per exposure (merging m7): using 23 rejected-satstar file(s) [m7: 23]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1219 gate-rejected candidate row(s) for f164n from 23 file(s)
+satstar gate-taper flag: 158 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f164n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f164n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f164n has 25283 rows.  25282 of 25283 are mutual.  Matching took 47.2 seconds
+Max flux in tbl for f164n: 39162728.0; in jy=0.8978391449607955; mag=9.017003637540684
+merging tables step: max flux for f164n is 39162728.0 0.8978391449607955 9.017003637540684
+Basetable has length 58348 and ncols=154 before stack
+Basetable has length 58348 and ncols=202 after stack
+merging tables step: max flux for f164n in merged table is 39162728.0 0.8978391449607955 9.017003637540684
+Flagged 886 stars that are near saturated stars in filter f164n out of 25283.  There are then 886 in the merged table.  There are also 398 replaced saturated.
+Table Loop:  25%|██▌       | 4/16 [03:28<10:07, 50.67s/it]Flagging near saturated stars for filter f182m
+load_satstar_catalog: f182m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 1, m7: 31]; excluded 319 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 63] and 0 from a later phase [none]; 1 same-phase tie(s) went to the newer file: jw03523005001_16101_00003_nrca3_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_16101_00003_nrca3_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits
+Building consolidated satstar catalog for f182m from 32 per-exposure catalogs
+  satstar sky refresh: jw03523005001_16101_00003_nrca3_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +1.9/+12.8 mas onto the frame's current WCS (86 sources)
+  satstar dedup: 3593 -> 1010 unique (merged 2583 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 903/1010 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.5 mas, p95 2.9 mas
+  satstar flux: adopted the per-exposure median for 1010/1010 stars; brightest - median = -0.018 mag (median), -0.085 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f182m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f182m_consolidated_satstar_catalog.fits (n=1010)
+load_satstar_catalog: f182m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 1, m7: 31]; excluded 319 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 63] and 0 from a later phase [none]; 1 same-phase tie(s) went to the newer file: jw03523005001_16101_00003_nrca3_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_16101_00003_nrca3_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits
+WARNING: aperture_photometry: no i2d mosaic for wd2/f182m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f182m_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state d73dcf57a6668857, phase selection 75e838853cdb1d58)
+Loaded saturated star catalog for f182m with 1010 rows
+replace_saturated: mutual-nearest second pass matched 3 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 3/1011 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1008 stars that are saturated of 14320 in filter f182m.  0 are newly added.  The total replaced stars=1008
+load_rejected_satstar_catalog: f182m: one phase per exposure (merging m7): using 31 rejected-satstar file(s) [m7: 31]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1402 gate-rejected candidate row(s) for f182m from 31 file(s)
+satstar gate-taper flag: 321 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f182m
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 31 row(s) in f182m (0.02-0.5 mag brighter; median 0.045 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f182m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f182m has 14320 rows.  14318 of 14320 are mutual.  Matching took 52.7 seconds
+Max flux in tbl for f182m: 36912536.0; in jy=0.8459318528471803; mag=9.081661527459174
+merging tables step: max flux for f182m is 36912536.0 0.8459318528471803 9.081661527459174
+Basetable has length 58348 and ncols=204 before stack
+Basetable has length 58348 and ncols=252 after stack
+merging tables step: max flux for f182m in merged table is 36912536.0 0.8459318528471803 9.081661527459174
+Flagged 1718 stars that are near saturated stars in filter f182m out of 14320.  There are then 1717 in the merged table.  There are also 1007 replaced saturated.
+Table Loop:  31%|███▏      | 5/16 [04:21<09:26, 51.46s/it]Flagging near saturated stars for filter f187n
+load_satstar_catalog: f187n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f187n from 32 per-exposure catalogs
+  satstar dedup: 1737 -> 494 unique (merged 1243 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 462/494 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.5 mas, p95 1.0 mas
+  satstar flux: adopted the per-exposure median for 494/494 stars; brightest - median = -0.010 mag (median), -0.039 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f187n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f187n_consolidated_satstar_catalog.fits (n=494)
+load_satstar_catalog: f187n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f187n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f187n_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 5341f572ec8417e4, phase selection fed2928242af3f22)
+Loaded saturated star catalog for f187n with 494 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 4/501 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 497 stars that are saturated of 15027 in filter f187n.  0 are newly added.  The total replaced stars=497
+load_rejected_satstar_catalog: f187n: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1244 gate-rejected candidate row(s) for f187n from 32 file(s)
+satstar gate-taper flag: 230 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f187n
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 4 row(s) in f187n (0.02-0.5 mag brighter; median 0.028 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f187n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f187n has 15027 rows.  15017 of 15027 are mutual.  Matching took 55.9 seconds
+Max flux in tbl for f187n: 24115960.0; in jy=0.5526369550246029; mag=9.543900192227348
+merging tables step: max flux for f187n is 24115960.0 0.5526369550246029 9.543900192227348
+Basetable has length 58348 and ncols=254 before stack
+Basetable has length 58348 and ncols=302 after stack
+merging tables step: max flux for f187n in merged table is 24115960.0 0.5526369550246029 9.543900192227348
+Flagged 947 stars that are near saturated stars in filter f187n out of 15027.  There are then 940 in the merged table.  There are also 490 replaced saturated.
+Table Loop:  38%|███▊      | 6/16 [05:17<08:49, 53.00s/it]Flagging near saturated stars for filter f200w
+load_satstar_catalog: f200w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f200w from 32 per-exposure catalogs
+  satstar dedup: 3426 -> 956 unique (merged 2470 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 877/956 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 4.0 mas
+  satstar flux: adopted the per-exposure median for 956/956 stars; brightest - median = -0.021 mag (median), -0.077 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f200w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f200w_consolidated_satstar_catalog.fits (n=956)
+load_satstar_catalog: f200w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f200w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f200w_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state e029d94ac02e587e, phase selection ad8a1f390e340bd8)
+Loaded saturated star catalog for f200w with 956 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 3/956 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 953 stars that are saturated of 14215 in filter f200w.  0 are newly added.  The total replaced stars=953
+load_rejected_satstar_catalog: f200w: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1469 gate-rejected candidate row(s) for f200w from 32 file(s)
+satstar gate-taper flag: 388 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f200w
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 51 row(s) in f200w (0.02-0.5 mag brighter; median 0.047 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f200w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f200w has 14215 rows.  14214 of 14215 are mutual.  Matching took 53.9 seconds
+Max flux in tbl for f200w: 43377056.0; in jy=0.9942497626941262; mag=8.906261302280688
+merging tables step: max flux for f200w is 43377056.0 0.9942497626941262 8.906261302280688
+Basetable has length 58348 and ncols=304 before stack
+Basetable has length 58348 and ncols=352 after stack
+merging tables step: max flux for f200w in merged table is 43377056.0 0.9942497626941262 8.906261302280688
+Flagged 1374 stars that are near saturated stars in filter f200w out of 14215.  There are then 1374 in the merged table.  There are also 953 replaced saturated.
+Table Loop:  44%|████▍     | 7/16 [06:11<08:00, 53.34s/it]Flagging near saturated stars for filter f212n
+load_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f212n from 32 per-exposure catalogs
+  satstar dedup: 2777 -> 788 unique (merged 1989 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 719/788 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.5 mas, p95 1.0 mas
+  satstar flux: adopted the per-exposure median for 788/788 stars; brightest - median = -0.007 mag (median), -0.039 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f212n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f212n_consolidated_satstar_catalog.fits (n=788)
+load_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f212n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f212n_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 8931ff77a52234bf, phase selection 9d4bd01e0b69d662)
+Loaded saturated star catalog for f212n with 788 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 18/798 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 780 stars that are saturated of 25996 in filter f212n.  0 are newly added.  The total replaced stars=780
+load_rejected_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1646 gate-rejected candidate row(s) for f212n from 32 file(s)
+satstar gate-taper flag: 362 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f212n
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 8 row(s) in f212n (0.02-0.5 mag brighter; median 0.032 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f212n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f212n has 25996 rows.  25985 of 25996 are mutual.  Matching took 42.4 seconds
+Max flux in tbl for f212n: 11439661.0; in jy=0.26215432308482717; mag=10.353607442954821
+merging tables step: max flux for f212n is 11439661.0 0.26215432308482717 10.353607442954821
+Basetable has length 58348 and ncols=354 before stack
+Basetable has length 58348 and ncols=402 after stack
+merging tables step: max flux for f212n in merged table is 11439661.0 0.26215432308482717 10.353607442954821
+Flagged 1433 stars that are near saturated stars in filter f212n out of 25996.  There are then 1423 in the merged table.  There are also 770 replaced saturated.
+Table Loop:  50%|█████     | 8/16 [06:53<06:39, 49.93s/it]Flagging near saturated stars for filter f250m
+load_satstar_catalog: f250m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f250m from 8 per-exposure catalogs
+  satstar dedup: 4376 -> 1310 unique (merged 3066 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1170/1310 stars measured in >1 exposure (median N=4); adopted mean position, median shift 1.1 mas, p95 23.4 mas
+  satstar flux: adopted the per-exposure median for 1310/1310 stars; brightest - median = -0.019 mag (median), -0.118 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f250m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f250m_consolidated_satstar_catalog.fits (n=1310)
+load_satstar_catalog: f250m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f250m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f250m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 04fde6004f09ef05, phase selection b06a393ee785d6e6)
+Loaded saturated star catalog for f250m with 1310 rows
+replace_saturated: mutual-nearest second pass matched 3 satstar(s) at 0.08 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 21/1313 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1292 stars that are saturated of 14689 in filter f250m.  0 are newly added.  The total replaced stars=1292
+load_rejected_satstar_catalog: f250m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 3988 gate-rejected candidate row(s) for f250m from 8 file(s)
+satstar gate-taper flag: 905 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f250m
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f250m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f250m has 14689 rows.  14686 of 14689 are mutual.  Matching took 8.6 seconds
+Max flux in tbl for f250m: 5099053.0; in jy=0.4742109784386258; mag=9.710071036381562
+merging tables step: max flux for f250m is 5099053.0 0.4742109784386258 9.710071036381562
+Basetable has length 58348 and ncols=404 before stack
+Basetable has length 58348 and ncols=452 after stack
+merging tables step: max flux for f250m in merged table is 5099053.0 0.4742109784386258 9.710071036381562
+Flagged 1788 stars that are near saturated stars in filter f250m out of 14689.  There are then 1785 in the merged table.  There are also 1289 replaced saturated.
+Table Loop:  56%|█████▋    | 9/16 [07:02<04:19, 37.07s/it]Flagging near saturated stars for filter f277w
+load_satstar_catalog: f277w: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f277w from 8 per-exposure catalogs
+  satstar dedup: 5746 -> 1673 unique (merged 4073 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1523/1673 stars measured in >1 exposure (median N=4); adopted mean position, median shift 1.3 mas, p95 30.9 mas
+  satstar flux: adopted the per-exposure median for 1673/1673 stars; brightest - median = -0.021 mag (median), -0.147 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f277w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f277w_consolidated_satstar_catalog.fits (n=1673)
+load_satstar_catalog: f277w: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f277w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f277w_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state c773590ad892bba8, phase selection 5120b12eb9418d9c)
+Loaded saturated star catalog for f277w with 1673 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 16/1676 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1660 stars that are saturated of 12764 in filter f277w.  0 are newly added.  The total replaced stars=1660
+load_rejected_satstar_catalog: f277w: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 8539 gate-rejected candidate row(s) for f277w from 8 file(s)
+satstar gate-taper flag: 2044 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f277w
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f277w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f277w has 12764 rows.  12761 of 12764 are mutual.  Matching took 9.5 seconds
+Max flux in tbl for f277w: 3780914.75; in jy=0.3516070829106563; mag=10.034855948485854
+merging tables step: max flux for f277w is 3780914.75 0.3516070829106563 10.034855948485854
+Basetable has length 58348 and ncols=454 before stack
+Basetable has length 58348 and ncols=502 after stack
+merging tables step: max flux for f277w in merged table is 3780914.75 0.3516070829106563 10.034855948485854
+Flagged 2083 stars that are near saturated stars in filter f277w out of 12764.  There are then 2080 in the merged table.  There are also 1657 replaced saturated.
+Table Loop:  62%|██████▎   | 10/16 [07:12<02:51, 28.61s/it]Flagging near saturated stars for filter f300m
+load_satstar_catalog: f300m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f300m from 8 per-exposure catalogs
+  satstar dedup: 4824 -> 1401 unique (merged 3423 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1276/1401 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.9 mas, p95 23.7 mas
+  satstar flux: adopted the per-exposure median for 1401/1401 stars; brightest - median = -0.018 mag (median), -0.111 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f300m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f300m_consolidated_satstar_catalog.fits (n=1401)
+load_satstar_catalog: f300m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f300m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f300m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state a34ef83c53875720, phase selection d6ddc039b8b36f9e)
+Loaded saturated star catalog for f300m with 1401 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 8/1402 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1394 stars that are saturated of 13023 in filter f300m.  0 are newly added.  The total replaced stars=1394
+load_rejected_satstar_catalog: f300m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 4700 gate-rejected candidate row(s) for f300m from 8 file(s)
+satstar gate-taper flag: 1059 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f300m
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f300m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f300m has 13023 rows.  13022 of 13023 are mutual.  Matching took 9.3 seconds
+Max flux in tbl for f300m: 5280992.0; in jy=0.4911012020380998; mag=9.672072497155366
+merging tables step: max flux for f300m is 5280992.0 0.4911012020380998 9.672072497155366
+Basetable has length 58348 and ncols=504 before stack
+Basetable has length 58348 and ncols=552 after stack
+merging tables step: max flux for f300m in merged table is 5280992.0 0.4911012020380998 9.672072497155366
+Flagged 1759 stars that are near saturated stars in filter f300m out of 13023.  There are then 1758 in the merged table.  There are also 1393 replaced saturated.
+Table Loop:  69%|██████▉   | 11/16 [07:21<01:53, 22.78s/it]Flagging near saturated stars for filter f323n
+load_satstar_catalog: f323n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f323n from 8 per-exposure catalogs
+  satstar dedup: 582 -> 240 unique (merged 342 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 189/240 stars measured in >1 exposure (median N=2); adopted mean position, median shift 1.5 mas, p95 28.7 mas
+  satstar flux: adopted the per-exposure median for 240/240 stars; brightest - median = -0.024 mag (median), -0.735 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f323n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f323n_consolidated_satstar_catalog.fits (n=240)
+load_satstar_catalog: f323n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f323n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f323n_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state e1e59514b4fa7b6b, phase selection f83fbeaf59e02a71)
+Loaded saturated star catalog for f323n with 240 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 26/241 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 215 stars that are saturated of 14207 in filter f323n.  0 are newly added.  The total replaced stars=215
+load_rejected_satstar_catalog: f323n: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1340 gate-rejected candidate row(s) for f323n from 8 file(s)
+satstar gate-taper flag: 169 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f323n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f323n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f323n has 14207 rows.  14205 of 14207 are mutual.  Matching took 9.1 seconds
+Max flux in tbl for f323n: 5534260.0; in jy=0.5151397846131623; mag=9.620187269897528
+merging tables step: max flux for f323n is 5534260.0 0.5151397846131623 9.620187269897528
+Basetable has length 58348 and ncols=554 before stack
+Basetable has length 58348 and ncols=602 after stack
+merging tables step: max flux for f323n in merged table is 5534260.0 0.5151397846131623 9.620187269897528
+Flagged 436 stars that are near saturated stars in filter f323n out of 14207.  There are then 435 in the merged table.  There are also 214 replaced saturated.
+Table Loop:  75%|███████▌  | 12/16 [07:31<01:14, 18.70s/it]Flagging near saturated stars for filter f335m
+load_satstar_catalog: f335m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f335m from 8 per-exposure catalogs
+  satstar dedup: 1149 -> 372 unique (merged 777 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 307/372 stars measured in >1 exposure (median N=4); adopted mean position, median shift 2.2 mas, p95 40.8 mas
+  satstar flux: adopted the per-exposure median for 372/372 stars; brightest - median = -0.033 mag (median), -0.289 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f335m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f335m_consolidated_satstar_catalog.fits (n=372)
+load_satstar_catalog: f335m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f335m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f335m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 4e76ca36dbab455b, phase selection a5bb3d4a3d15cfd3)
+Loaded saturated star catalog for f335m with 372 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 6/373 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 367 stars that are saturated of 11146 in filter f335m.  0 are newly added.  The total replaced stars=367
+load_rejected_satstar_catalog: f335m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 2185 gate-rejected candidate row(s) for f335m from 8 file(s)
+satstar gate-taper flag: 729 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f335m
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 5 row(s) in f335m (0.02-0.5 mag brighter; median 0.038 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f335m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f335m has 11146 rows.  11146 of 11146 are mutual.  Matching took 8.8 seconds
+Max flux in tbl for f335m: 3544204.75; in jy=0.3096398843753074; mag=10.105043430827088
+merging tables step: max flux for f335m is 3544204.75 0.3096398843753074 10.105043430827088
+Basetable has length 58348 and ncols=604 before stack
+Basetable has length 58348 and ncols=652 after stack
+merging tables step: max flux for f335m in merged table is 3544204.75 0.3096398843753074 10.105043430827088
+Flagged 522 stars that are near saturated stars in filter f335m out of 11146.  There are then 522 in the merged table.  There are also 367 replaced saturated.
+Table Loop:  81%|████████▏ | 13/16 [07:40<00:47, 15.79s/it]Flagging near saturated stars for filter f405n
+load_satstar_catalog: f405n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f405n from 8 per-exposure catalogs
+  satstar dedup: 892 -> 251 unique (merged 641 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 234/251 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.8 mas, p95 20.3 mas
+  satstar flux: adopted the per-exposure median for 251/251 stars; brightest - median = -0.015 mag (median), -0.085 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f405n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f405n_consolidated_satstar_catalog.fits (n=251)
+load_satstar_catalog: f405n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f405n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f405n_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state b0216e6f5f459120, phase selection 5d9f06bb966605d6)
+Loaded saturated star catalog for f405n with 251 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 3/255 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 252 stars that are saturated of 9658 in filter f405n.  0 are newly added.  The total replaced stars=252
+load_rejected_satstar_catalog: f405n: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1064 gate-rejected candidate row(s) for f405n from 8 file(s)
+satstar gate-taper flag: 173 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f405n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f405n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f405n has 9658 rows.  9654 of 9658 are mutual.  Matching took 9.1 seconds
+Max flux in tbl for f405n: 6868327.0; in jy=0.6074230290357726; mag=9.38577228730402
+merging tables step: max flux for f405n is 6868327.0 0.6074230290357726 9.38577228730402
+Basetable has length 58348 and ncols=654 before stack
+Basetable has length 58348 and ncols=702 after stack
+merging tables step: max flux for f405n in merged table is 6868327.0 0.6074230290357726 9.38577228730402
+Flagged 368 stars that are near saturated stars in filter f405n out of 9658.  There are then 364 in the merged table.  There are also 248 replaced saturated.
+Table Loop:  88%|████████▊ | 14/16 [07:49<00:27, 13.84s/it]Flagging near saturated stars for filter f410m
+load_satstar_catalog: f410m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f410m from 8 per-exposure catalogs
+  satstar dedup: 884 -> 282 unique (merged 602 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 241/282 stars measured in >1 exposure (median N=4); adopted mean position, median shift 3.4 mas, p95 64.0 mas
+  satstar flux: adopted the per-exposure median for 282/282 stars; brightest - median = -0.026 mag (median), -0.283 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f410m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f410m_consolidated_satstar_catalog.fits (n=282)
+load_satstar_catalog: f410m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f410m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f410m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 9408f9d5b910197c, phase selection ec9cdb1ca01c57aa)
+Loaded saturated star catalog for f410m with 282 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 7/282 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 275 stars that are saturated of 11727 in filter f410m.  0 are newly added.  The total replaced stars=275
+load_rejected_satstar_catalog: f410m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 2032 gate-rejected candidate row(s) for f410m from 8 file(s)
+satstar gate-taper flag: 656 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f410m
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 9 row(s) in f410m (0.02-0.5 mag brighter; median 0.050 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f410m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f410m has 11727 rows.  11727 of 11727 are mutual.  Matching took 8.6 seconds
+Max flux in tbl for f410m: 5875358.5; in jy=0.5464347023718479; mag=9.556154334457307
+merging tables step: max flux for f410m is 5875358.5 0.5464347023718479 9.556154334457307
+Basetable has length 58348 and ncols=704 before stack
+Basetable has length 58348 and ncols=752 after stack
+merging tables step: max flux for f410m in merged table is 5875358.5 0.5464347023718479 9.556154334457307
+Flagged 372 stars that are near saturated stars in filter f410m out of 11727.  There are then 372 in the merged table.  There are also 275 replaced saturated.
+Table Loop:  94%|█████████▍| 15/16 [07:58<00:12, 12.36s/it]Flagging near saturated stars for filter f466n
+load_satstar_catalog: f466n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f466n from 8 per-exposure catalogs
+  satstar dedup: 276 -> 90 unique (merged 186 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 72/90 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 12.4 mas
+  satstar flux: adopted the per-exposure median for 90/90 stars; brightest - median = -0.018 mag (median), -0.082 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f466n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f466n_consolidated_satstar_catalog.fits (n=90)
+load_satstar_catalog: f466n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f466n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/f466n_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 18fdb51ea15520e2, phase selection 99d83e1720e7751d)
+Loaded saturated star catalog for f466n with 90 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 15/100 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 85 stars that are saturated of 10819 in filter f466n.  0 are newly added.  The total replaced stars=85
+load_rejected_satstar_catalog: f466n: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1280 gate-rejected candidate row(s) for f466n from 8 file(s)
+satstar gate-taper flag: 246 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f466n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f466n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f466n has 10819 rows.  10809 of 10819 are mutual.  Matching took 9.0 seconds
+Max flux in tbl for f466n: 1751501.25; in jy=0.16303037305818144; mag=10.869328711180172
+merging tables step: max flux for f466n is 1751501.25 0.16303037305818144 10.869328711180172
+Basetable has length 58348 and ncols=754 before stack
+Basetable has length 58348 and ncols=802 after stack
+merging tables step: max flux for f466n in merged table is 1751501.25 0.16303037305818144 10.869328711180172
+Flagged 160 stars that are near saturated stars in filter f466n out of 10819.  There are then 150 in the merged table.  There are also 75 replaced saturated.
+Table Loop: 100%|██████████| 16/16 [08:07<00:00, 11.45s/it]Table Loop: 100%|██████████| 16/16 [08:07<00:00, 30.49s/it]
+Stacked all rows into table with len=58348
+Writing table /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7 with len=58348 and ncols=814
+Done writing table /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits in 4.4 seconds
+Done writing table /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.ecsv in 519.6 seconds
+Keeping 0 sources of 58348 with at least 4 matches in two or more of the narrower bands
+Writing /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs0/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_qualcuts_oksep3523.fits
+== mfs1 (sat1to1) Wed Oct  7 12:51:23 PM EDT 2026
+merge_catalogs from /blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-sat1to1/jwst_gc_pipeline/photometry/merge_catalogs.py
+Merging daophot basic, , merged, , _resbgsub, , . filters ['f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n', 'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n', 'f335m', 'f405n', 'f410m', 'f466n']
+WARNING: no merged i2d for filter f115w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f150w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f162m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f164n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f182m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f187n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f200w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f212n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f250m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f277w; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f300m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f323n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f335m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f405n; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f410m; will fall back to the catalog's own skycoord/pixelscale for WCS
+WARNING: no merged i2d for filter f466n; will fall back to the catalog's own skycoord/pixelscale for WCS
+SANITY CHECK f115w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f115w: 19607544.0; in jy=0.4493553218912865 Jy; magmin=9.768525276057574 mag=9.768525276057574 mag, magmax=28.436654527613477 mag=28.436654527613477 mag
+100th brightest flux=0.00535387609891973 Jy abmag=14.57832920902984 mag abmag_tbl=14.57832920902984 mag
+SANITY CHECK f150w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f150w: 33287174.0; in jy=0.7628530364429075 Jy; magmin=9.193897801932838 mag=9.193897801932838 mag, magmax=28.383921365180967 mag=28.383921365180967 mag
+100th brightest flux=0.0075806283679502795 Jy abmag=14.200736984131371 mag abmag_tbl=14.200736984131371 mag
+SANITY CHECK f162m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f162m: 39501396.0; in jy=0.9056024691579504 Jy; magmin=9.007656005086366 mag=9.007656005086366 mag, magmax=27.744706647212098 mag=27.744706647212098 mag
+100th brightest flux=0.009246036358221214 Jy abmag=13.98511100779216 mag abmag_tbl=13.98511100779216 mag
+SANITY CHECK f164n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f164n: 39162728.0; in jy=0.8978391449607955 Jy; magmin=9.017003659204203 mag=9.017003659204203 mag, magmax=25.9867700748323 mag=25.9867700748323 mag
+100th brightest flux=0.0080259080461528 Jy abmag=14.1387645508517 mag abmag_tbl=14.1387645508517 mag
+SANITY CHECK f182m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f182m: 36912536.0; in jy=0.8459318528471803 Jy; magmin=9.081661554354273 mag=9.081661554354273 mag, magmax=27.765051937715533 mag=27.765051937715533 mag
+100th brightest flux=0.00923885734852904 Jy abmag=13.985954346277374 mag abmag_tbl=13.985954346277374 mag
+SANITY CHECK f187n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f187n: 24115960.0; in jy=0.5526369550246029 Jy; magmin=9.543900192565063 mag=9.543900192565063 mag, magmax=25.694451279426147 mag=25.694451279426147 mag
+100th brightest flux=0.007535692081221672 Jy abmag=14.207192139311307 mag abmag_tbl=14.207192139311307 mag
+SANITY CHECK f200w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f200w: 43377056.0; in jy=0.9942497626941262 Jy; magmin=8.90626125999663 mag=8.90626125999663 mag, magmax=28.0102557260792 mag=28.0102557260792 mag
+100th brightest flux=0.008298903803194506 Jy abmag=14.102448173777995 mag abmag_tbl=14.102448173777995 mag
+SANITY CHECK f212n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f212n: 11439661.0; in jy=0.26215432308482717 Jy; magmin=10.35360744027518 mag=10.35360744027518 mag, magmax=25.81453228986679 mag=25.81453228986679 mag
+100th brightest flux=0.007030516568891451 Jy abmag=14.28253190979146 mag abmag_tbl=14.28253190979146 mag
+SANITY CHECK f250m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f250m: 5099053.0; in jy=0.4742109784386258 Jy; magmin=9.710070989769923 mag=9.710070989769923 mag, magmax=26.44491710907836 mag=26.44491710907836 mag
+100th brightest flux=0.003750421646299066 Jy abmag=14.964799758436083 mag abmag_tbl=14.964799758436083 mag
+SANITY CHECK f277w
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f277w: 3780914.75; in jy=0.3516070829106563 Jy; magmin=10.034855962280428 mag=10.034855962280428 mag, magmax=26.807055702207137 mag=26.807055702207137 mag
+100th brightest flux=0.003134214288686577 Jy abmag=15.15967828449579 mag abmag_tbl=15.15967828449579 mag
+SANITY CHECK f300m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f300m: 5280992.0; in jy=0.4911012020380998 Jy; magmin=9.672072507178246 mag=9.672072507178246 mag, magmax=26.816639444092836 mag=26.816639444092836 mag
+100th brightest flux=0.0030668926678355454 Jy abmag=15.183253556931964 mag abmag_tbl=15.183253556931964 mag
+SANITY CHECK f323n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f323n: 5534260.0; in jy=0.5151397846131623 Jy; magmin=9.620187269878544 mag=9.620187269878544 mag, magmax=25.151576686047925 mag=25.151576686047925 mag
+100th brightest flux=0.004613842383155403 Jy abmag=14.739843114532476 mag abmag_tbl=14.739843114532476 mag
+SANITY CHECK f335m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f335m: 3329607.75; in jy=0.3096398843753074 Jy; magmin=10.172857758470307 mag=10.172857758470307 mag, magmax=25.624504025300062 mag=25.624504025300062 mag
+100th brightest flux=0.002449046418744707 Jy abmag=15.427507458162456 mag abmag_tbl=15.427507458162456 mag
+SANITY CHECK f405n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f405n: 6526061.0; in jy=0.6074230290357726 Jy; magmin=9.44127186709325 mag=9.44127186709325 mag, magmax=23.972849400332578 mag=23.972849400332578 mag
+100th brightest flux=0.003831228690634968 Jy abmag=14.941654809211887 mag abmag_tbl=14.941654809211887 mag
+SANITY CHECK f410m
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f410m: 5875358.5; in jy=0.5464347023718479 Jy; magmin=9.556154319390457 mag=9.556154319390457 mag, magmax=26.166259616361764 mag=26.166259616361764 mag
+100th brightest flux=0.0024954438945752945 Jy abmag=15.407130474983795 mag abmag_tbl=15.407130474983795 mag
+SANITY CHECK f466n
+Units of abmag columns are: abmag=mag, abmag_tbl=mag
+Nanmax difference between the two tables: 0.0 mag
+Max flux in tbl for f466n: 1751501.25; in jy=0.16303037305818144 Jy; magmin=10.86932869416277 mag=10.86932869416277 mag, magmax=24.498325797595143 mag=24.498325797595143 mag
+100th brightest flux=0.003034738541964056 Jy abmag=15.194696799094185 mag abmag_tbl=15.194696799094185 mag
+Starting merge catalogs: catalog_type: basic module: merged target: wd2
+Started with 11727 in filter f410m
+Table Meta Loop:   0%|          | 0/16 [00:00<?, ?it/s]Added 2924 new sources in filter f115w
+Added 3308 new sources in filter f150w
+Added 1968 new sources in filter f162m
+Table Meta Loop:  19%|█▉        | 3/16 [00:00<00:00, 19.26it/s]Added 12816 new sources in filter f164n
+Added 1020 new sources in filter f182m
+Table Meta Loop:  31%|███▏      | 5/16 [00:00<00:00, 15.21it/s]Added 4043 new sources in filter f187n
+Added 749 new sources in filter f200w
+Table Meta Loop:  44%|████▍     | 7/16 [00:00<00:00, 13.55it/s]Added 10354 new sources in filter f212n
+Added 1813 new sources in filter f250m
+Table Meta Loop:  56%|█████▋    | 9/16 [00:00<00:00, 11.19it/s]Added 665 new sources in filter f277w
+Added 696 new sources in filter f300m
+Table Meta Loop:  69%|██████▉   | 11/16 [00:00<00:00, 10.30it/s]Added 2723 new sources in filter f323n
+Added 577 new sources in filter f335m
+Table Meta Loop:  81%|████████▏ | 13/16 [00:01<00:00,  9.67it/s]Added 1192 new sources in filter f405n
+Table Meta Loop:  88%|████████▊ | 14/16 [00:01<00:00,  9.47it/s]Added 1725 new sources in filter f466n
+Table Meta Loop: 100%|██████████| 16/16 [00:01<00:00, 11.15it/s]Table Meta Loop: 100%|██████████| 16/16 [00:01<00:00, 11.34it/s]
+Base coordinate length = 58300
+Table Loop:   0%|          | 0/16 [00:00<?, ?it/s]Flagging near saturated stars for filter f115w
+load_satstar_catalog: f115w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f115w from 32 per-exposure catalogs
+  satstar dedup: 1985 -> 593 unique (merged 1392 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 516/593 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.7 mas, p95 14.4 mas
+  satstar flux: adopted the per-exposure median for 593/593 stars; brightest - median = -0.027 mag (median), -0.116 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f115w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f115w_consolidated_satstar_catalog.fits (n=593)
+load_satstar_catalog: f115w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f115w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f115w_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state a5d719fc7883e64b, phase selection 8652b737d584580e)
+Loaded saturated star catalog for f115w with 593 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 1/593 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 592 stars that are saturated of 11237 in filter f115w.  0 are newly added.  The total replaced stars=592
+load_rejected_satstar_catalog: f115w: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1359 gate-rejected candidate row(s) for f115w from 32 file(s)
+satstar gate-taper flag: 369 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f115w
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 12 row(s) in f115w (0.02-0.5 mag brighter; median 0.072 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f115w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f115w has 11237 rows.  11230 of 11237 are mutual.  Matching took 69.0 seconds
+Max flux in tbl for f115w: 19607544.0; in jy=0.4493553218912865; mag=9.768525242809938
+merging tables step: max flux for f115w is 19607544.0 0.4493553218912865 9.768525242809938
+Basetable has length 58300 and ncols=4 before stack
+Basetable has length 58300 and ncols=52 after stack
+merging tables step: max flux for f115w in merged table is 19607544.0 0.4493553218912865 9.768525242809938
+Flagged 1017 stars that are near saturated stars in filter f115w out of 11237.  There are then 1017 in the merged table.  There are also 592 replaced saturated.
+Table Loop:   6%|▋         | 1/16 [01:09<17:16, 69.11s/it]Flagging near saturated stars for filter f150w
+load_satstar_catalog: f150w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 160 superseded [m12: 32, m3: 32, m4: 32, m5: 32, m6: 32] and 0 from a later phase [none]
+Building consolidated satstar catalog for f150w from 32 per-exposure catalogs
+  satstar dedup: 8993 -> 2512 unique (merged 6481 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 2345/2512 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 2.4 mas
+  satstar flux: adopted the per-exposure median for 2512/2512 stars; brightest - median = -0.020 mag (median), -0.080 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f150w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f150w_consolidated_satstar_catalog.fits (n=2512)
+load_satstar_catalog: f150w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 160 superseded [m12: 32, m3: 32, m4: 32, m5: 32, m6: 32] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f150w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f150w_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 7447a79feddbf558, phase selection dd70765f2a65c3d6)
+Loaded saturated star catalog for f150w with 2512 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 84/2511 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+  replace_saturated: 1 appended satstar row(s) carry 8 astrometry column(s) from their per-exposure ensemble instead of a NaN fill
+Replacing 2427 stars that are saturated of 14480 in filter f150w.  1 are newly added.  The total replaced stars=2428
+load_rejected_satstar_catalog: f150w: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 160 superseded [m12: 32, m3: 32, m4: 32, m5: 32, m6: 32] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 3545 gate-rejected candidate row(s) for f150w from 32 file(s)
+satstar gate-taper flag: 618 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f150w
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f150w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f150w has 14480 rows.  14479 of 14480 are mutual.  Matching took 45.8 seconds
+Max flux in tbl for f150w: 33287174.0; in jy=0.7628530364429075; mag=9.19389780323556
+merging tables step: max flux for f150w is 33287174.0 0.7628530364429075 9.19389780323556
+Basetable has length 58300 and ncols=54 before stack
+Basetable has length 58300 and ncols=102 after stack
+merging tables step: max flux for f150w in merged table is 33287174.0 0.7628530364429075 9.19389780323556
+Flagged 3297 stars that are near saturated stars in filter f150w out of 14480.  There are then 3297 in the merged table.  There are also 2427 replaced saturated.
+Table Loop:  12%|█▎        | 2/16 [01:54<12:55, 55.42s/it]Flagging near saturated stars for filter f162m
+load_satstar_catalog: f162m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f162m from 32 per-exposure catalogs
+  satstar dedup: 6805 -> 1875 unique (merged 4930 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1744/1875 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 1.8 mas
+  satstar flux: adopted the per-exposure median for 1875/1875 stars; brightest - median = -0.017 mag (median), -0.059 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f162m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f162m_consolidated_satstar_catalog.fits (n=1875)
+load_satstar_catalog: f162m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f162m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f162m_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state c215eed751e633b7, phase selection 0d88ca9e6d5fc5ff)
+Loaded saturated star catalog for f162m with 1875 rows
+replace_saturated: mutual-nearest second pass matched 5 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 9/1874 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+  replace_saturated: 1 appended satstar row(s) carry 8 astrometry column(s) from their per-exposure ensemble instead of a NaN fill
+Replacing 1865 stars that are saturated of 15130 in filter f162m.  1 are newly added.  The total replaced stars=1866
+load_rejected_satstar_catalog: f162m: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 2784 gate-rejected candidate row(s) for f162m from 32 file(s)
+satstar gate-taper flag: 435 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f162m
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f162m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f162m has 15130 rows.  15129 of 15130 are mutual.  Matching took 53.8 seconds
+Max flux in tbl for f162m: 39501396.0; in jy=0.9056024691579504; mag=9.007656027352331
+merging tables step: max flux for f162m is 39501396.0 0.9056024691579504 9.007656027352331
+Basetable has length 58300 and ncols=104 before stack
+Basetable has length 58300 and ncols=152 after stack
+merging tables step: max flux for f162m in merged table is 39501396.0 0.9056024691579504 9.007656027352331
+Flagged 2686 stars that are near saturated stars in filter f162m out of 15130.  There are then 2686 in the merged table.  There are also 1865 replaced saturated.
+Table Loop:  19%|█▉        | 3/16 [02:48<11:51, 54.74s/it]Flagging near saturated stars for filter f164n
+load_satstar_catalog: f164n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 9, m7: 23]; excluded 311 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 55] and 0 from a later phase [none]; 9 same-phase tie(s) went to the newer file: jw03523005001_02101_00001_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca2_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrcb4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits (+6 more)
+Building consolidated satstar catalog for f164n from 32 per-exposure catalogs
+  satstar sky refresh: jw03523005001_02101_00001_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -10.2/-4.9 mas onto the frame's current WCS (11 sources)
+  satstar sky refresh: jw03523005001_02101_00001_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +26.0/-4.5 mas onto the frame's current WCS (12 sources)
+  satstar sky refresh: jw03523005001_02101_00001_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -23.5/-14.1 mas onto the frame's current WCS (23 sources)
+  satstar sky refresh: jw03523005001_02101_00002_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -19.2/-13.6 mas onto the frame's current WCS (20 sources)
+  satstar sky refresh: jw03523005001_02101_00003_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -5.2/-0.3 mas onto the frame's current WCS (10 sources)
+  satstar sky refresh: jw03523005001_02101_00003_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +44.0/-0.2 mas onto the frame's current WCS (12 sources)
+  satstar sky refresh: jw03523005001_02101_00003_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -20.3/-11.1 mas onto the frame's current WCS (21 sources)
+  satstar sky refresh: jw03523005001_02101_00004_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved -11.8/-5.3 mas onto the frame's current WCS (8 sources)
+  satstar sky refresh: jw03523005001_02101_00004_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +36.0/-3.8 mas onto the frame's current WCS (11 sources)
+  satstar dedup: 1113 -> 403 unique (merged 710 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 266/403 stars measured in >1 exposure (median N=3); adopted mean position, median shift 0.4 mas, p95 1.5 mas
+  satstar flux: adopted the per-exposure median for 403/403 stars; brightest - median = -0.010 mag (median), -0.052 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f164n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f164n_consolidated_satstar_catalog.fits (n=403)
+load_satstar_catalog: f164n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 9, m7: 23]; excluded 311 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 55] and 0 from a later phase [none]; 9 same-phase tie(s) went to the newer file: jw03523005001_02101_00001_nrca2_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca2_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrca4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrca4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits; jw03523005001_02101_00001_nrcb4_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_02101_00001_nrcb4_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits (+6 more)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f164n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f164n_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 51f289d0f4a2877c, phase selection 3c76d39959bbb12f)
+Loaded saturated star catalog for f164n with 403 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 5/403 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 398 stars that are saturated of 25283 in filter f164n.  0 are newly added.  The total replaced stars=398
+load_rejected_satstar_catalog: f164n: one phase per exposure (merging m7): using 23 rejected-satstar file(s) [m7: 23]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1219 gate-rejected candidate row(s) for f164n from 23 file(s)
+satstar gate-taper flag: 158 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f164n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f164n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f164n has 25283 rows.  25283 of 25283 are mutual.  Matching took 51.7 seconds
+Max flux in tbl for f164n: 39162728.0; in jy=0.8978391449607955; mag=9.017003637540684
+merging tables step: max flux for f164n is 39162728.0 0.8978391449607955 9.017003637540684
+Basetable has length 58300 and ncols=154 before stack
+Basetable has length 58300 and ncols=202 after stack
+merging tables step: max flux for f164n in merged table is 39162728.0 0.8978391449607955 9.017003637540684
+Flagged 886 stars that are near saturated stars in filter f164n out of 25283.  There are then 886 in the merged table.  There are also 398 replaced saturated.
+Table Loop:  25%|██▌       | 4/16 [03:40<10:43, 53.60s/it]Flagging near saturated stars for filter f182m
+load_satstar_catalog: f182m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 1, m7: 31]; excluded 319 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 63] and 0 from a later phase [none]; 1 same-phase tie(s) went to the newer file: jw03523005001_16101_00003_nrca3_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_16101_00003_nrca3_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits
+Building consolidated satstar catalog for f182m from 32 per-exposure catalogs
+  satstar sky refresh: jw03523005001_16101_00003_nrca3_align_o005_crf_resbgsub_m6_satstar_catalog.fits moved +1.9/+12.8 mas onto the frame's current WCS (86 sources)
+  satstar dedup: 3593 -> 1010 unique (merged 2583 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 903/1010 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.5 mas, p95 2.9 mas
+  satstar flux: adopted the per-exposure median for 1010/1010 stars; brightest - median = -0.018 mag (median), -0.085 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f182m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f182m_consolidated_satstar_catalog.fits (n=1010)
+load_satstar_catalog: f182m: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m6: 1, m7: 31]; excluded 319 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 63] and 0 from a later phase [none]; 1 same-phase tie(s) went to the newer file: jw03523005001_16101_00003_nrca3_align_o005_crf_resbgsub_m6_satstar_catalog.fits over jw03523005001_16101_00003_nrca3_destreak_o005_crf_resbgsub_m6_satstar_catalog.fits
+WARNING: aperture_photometry: no i2d mosaic for wd2/f182m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f182m_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state d73dcf57a6668857, phase selection 75e838853cdb1d58)
+Loaded saturated star catalog for f182m with 1010 rows
+replace_saturated: mutual-nearest second pass matched 3 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 3/1010 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1007 stars that are saturated of 14319 in filter f182m.  0 are newly added.  The total replaced stars=1007
+load_rejected_satstar_catalog: f182m: one phase per exposure (merging m7): using 31 rejected-satstar file(s) [m7: 31]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1402 gate-rejected candidate row(s) for f182m from 31 file(s)
+satstar gate-taper flag: 321 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f182m
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 31 row(s) in f182m (0.02-0.5 mag brighter; median 0.045 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f182m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f182m has 14319 rows.  14318 of 14319 are mutual.  Matching took 51.9 seconds
+Max flux in tbl for f182m: 36912536.0; in jy=0.8459318528471803; mag=9.081661527459174
+merging tables step: max flux for f182m is 36912536.0 0.8459318528471803 9.081661527459174
+Basetable has length 58300 and ncols=204 before stack
+Basetable has length 58300 and ncols=252 after stack
+merging tables step: max flux for f182m in merged table is 36912536.0 0.8459318528471803 9.081661527459174
+Flagged 1717 stars that are near saturated stars in filter f182m out of 14319.  There are then 1717 in the merged table.  There are also 1007 replaced saturated.
+Table Loop:  31%|███▏      | 5/16 [04:32<09:43, 53.04s/it]Flagging near saturated stars for filter f187n
+load_satstar_catalog: f187n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f187n from 32 per-exposure catalogs
+  satstar dedup: 1737 -> 494 unique (merged 1243 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 462/494 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.5 mas, p95 1.0 mas
+  satstar flux: adopted the per-exposure median for 494/494 stars; brightest - median = -0.010 mag (median), -0.039 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f187n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f187n_consolidated_satstar_catalog.fits (n=494)
+load_satstar_catalog: f187n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f187n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f187n_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 5341f572ec8417e4, phase selection fed2928242af3f22)
+Loaded saturated star catalog for f187n with 494 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 4/494 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 490 stars that are saturated of 15020 in filter f187n.  0 are newly added.  The total replaced stars=490
+load_rejected_satstar_catalog: f187n: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1244 gate-rejected candidate row(s) for f187n from 32 file(s)
+satstar gate-taper flag: 230 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f187n
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 4 row(s) in f187n (0.02-0.5 mag brighter; median 0.028 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f187n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f187n has 15020 rows.  15017 of 15020 are mutual.  Matching took 55.9 seconds
+Max flux in tbl for f187n: 24115960.0; in jy=0.5526369550246029; mag=9.543900192227348
+merging tables step: max flux for f187n is 24115960.0 0.5526369550246029 9.543900192227348
+Basetable has length 58300 and ncols=254 before stack
+Basetable has length 58300 and ncols=302 after stack
+merging tables step: max flux for f187n in merged table is 24115960.0 0.5526369550246029 9.543900192227348
+Flagged 940 stars that are near saturated stars in filter f187n out of 15020.  There are then 940 in the merged table.  There are also 490 replaced saturated.
+Table Loop:  38%|███▊      | 6/16 [05:28<09:00, 54.06s/it]Flagging near saturated stars for filter f200w
+load_satstar_catalog: f200w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f200w from 32 per-exposure catalogs
+  satstar dedup: 3426 -> 956 unique (merged 2470 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 877/956 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 4.0 mas
+  satstar flux: adopted the per-exposure median for 956/956 stars; brightest - median = -0.021 mag (median), -0.077 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f200w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f200w_consolidated_satstar_catalog.fits (n=956)
+load_satstar_catalog: f200w: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f200w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f200w_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state e029d94ac02e587e, phase selection ad8a1f390e340bd8)
+Loaded saturated star catalog for f200w with 956 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 3/956 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 953 stars that are saturated of 14215 in filter f200w.  0 are newly added.  The total replaced stars=953
+load_rejected_satstar_catalog: f200w: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1469 gate-rejected candidate row(s) for f200w from 32 file(s)
+satstar gate-taper flag: 388 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f200w
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 51 row(s) in f200w (0.02-0.5 mag brighter; median 0.047 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f200w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f200w has 14215 rows.  14214 of 14215 are mutual.  Matching took 53.6 seconds
+Max flux in tbl for f200w: 43377056.0; in jy=0.9942497626941262; mag=8.906261302280688
+merging tables step: max flux for f200w is 43377056.0 0.9942497626941262 8.906261302280688
+Basetable has length 58300 and ncols=304 before stack
+Basetable has length 58300 and ncols=352 after stack
+merging tables step: max flux for f200w in merged table is 43377056.0 0.9942497626941262 8.906261302280688
+Flagged 1374 stars that are near saturated stars in filter f200w out of 14215.  There are then 1374 in the merged table.  There are also 953 replaced saturated.
+Table Loop:  44%|████▍     | 7/16 [06:22<08:05, 53.97s/it]Flagging near saturated stars for filter f212n
+load_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f212n from 32 per-exposure catalogs
+  satstar dedup: 2777 -> 788 unique (merged 1989 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 719/788 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.5 mas, p95 1.0 mas
+  satstar flux: adopted the per-exposure median for 788/788 stars; brightest - median = -0.007 mag (median), -0.039 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f212n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f212n_consolidated_satstar_catalog.fits (n=788)
+load_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f212n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f212n_consolidated_satstar_catalog.fits (cache fresh vs 32 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 8931ff77a52234bf, phase selection 9d4bd01e0b69d662)
+Loaded saturated star catalog for f212n with 788 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 18/788 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 770 stars that are saturated of 25986 in filter f212n.  0 are newly added.  The total replaced stars=770
+load_rejected_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1646 gate-rejected candidate row(s) for f212n from 32 file(s)
+satstar gate-taper flag: 362 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f212n
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 8 row(s) in f212n (0.02-0.5 mag brighter; median 0.032 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f212n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f212n has 25986 rows.  25985 of 25986 are mutual.  Matching took 54.6 seconds
+Max flux in tbl for f212n: 11439661.0; in jy=0.26215432308482717; mag=10.353607442954821
+merging tables step: max flux for f212n is 11439661.0 0.26215432308482717 10.353607442954821
+Basetable has length 58300 and ncols=354 before stack
+Basetable has length 58300 and ncols=402 after stack
+merging tables step: max flux for f212n in merged table is 11439661.0 0.26215432308482717 10.353607442954821
+Flagged 1423 stars that are near saturated stars in filter f212n out of 25986.  There are then 1423 in the merged table.  There are also 770 replaced saturated.
+Table Loop:  50%|█████     | 8/16 [07:17<07:13, 54.22s/it]Flagging near saturated stars for filter f250m
+load_satstar_catalog: f250m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f250m from 8 per-exposure catalogs
+  satstar dedup: 4376 -> 1310 unique (merged 3066 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1170/1310 stars measured in >1 exposure (median N=4); adopted mean position, median shift 1.1 mas, p95 23.4 mas
+  satstar flux: adopted the per-exposure median for 1310/1310 stars; brightest - median = -0.019 mag (median), -0.118 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f250m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f250m_consolidated_satstar_catalog.fits (n=1310)
+load_satstar_catalog: f250m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f250m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f250m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 04fde6004f09ef05, phase selection b06a393ee785d6e6)
+Loaded saturated star catalog for f250m with 1310 rows
+replace_saturated: mutual-nearest second pass matched 3 satstar(s) at 0.08 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 21/1310 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1289 stars that are saturated of 14686 in filter f250m.  0 are newly added.  The total replaced stars=1289
+load_rejected_satstar_catalog: f250m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 3988 gate-rejected candidate row(s) for f250m from 8 file(s)
+satstar gate-taper flag: 905 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f250m
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f250m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f250m has 14686 rows.  14686 of 14686 are mutual.  Matching took 12.7 seconds
+Max flux in tbl for f250m: 5099053.0; in jy=0.4742109784386258; mag=9.710071036381562
+merging tables step: max flux for f250m is 5099053.0 0.4742109784386258 9.710071036381562
+Basetable has length 58300 and ncols=404 before stack
+Basetable has length 58300 and ncols=452 after stack
+merging tables step: max flux for f250m in merged table is 5099053.0 0.4742109784386258 9.710071036381562
+Flagged 1785 stars that are near saturated stars in filter f250m out of 14686.  There are then 1785 in the merged table.  There are also 1289 replaced saturated.
+Table Loop:  56%|█████▋    | 9/16 [07:30<04:49, 41.29s/it]Flagging near saturated stars for filter f277w
+load_satstar_catalog: f277w: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f277w from 8 per-exposure catalogs
+  satstar dedup: 5746 -> 1673 unique (merged 4073 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1523/1673 stars measured in >1 exposure (median N=4); adopted mean position, median shift 1.3 mas, p95 30.9 mas
+  satstar flux: adopted the per-exposure median for 1673/1673 stars; brightest - median = -0.021 mag (median), -0.147 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f277w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f277w_consolidated_satstar_catalog.fits (n=1673)
+load_satstar_catalog: f277w: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f277w under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f277w_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state c773590ad892bba8, phase selection 5120b12eb9418d9c)
+Loaded saturated star catalog for f277w with 1673 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 16/1673 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1657 stars that are saturated of 12761 in filter f277w.  0 are newly added.  The total replaced stars=1657
+load_rejected_satstar_catalog: f277w: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 8539 gate-rejected candidate row(s) for f277w from 8 file(s)
+satstar gate-taper flag: 2044 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f277w
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f277w', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f277w has 12761 rows.  12761 of 12761 are mutual.  Matching took 13.8 seconds
+Max flux in tbl for f277w: 3780914.75; in jy=0.3516070829106563; mag=10.034855948485854
+merging tables step: max flux for f277w is 3780914.75 0.3516070829106563 10.034855948485854
+Basetable has length 58300 and ncols=454 before stack
+Basetable has length 58300 and ncols=502 after stack
+merging tables step: max flux for f277w in merged table is 3780914.75 0.3516070829106563 10.034855948485854
+Flagged 2080 stars that are near saturated stars in filter f277w out of 12761.  There are then 2080 in the merged table.  There are also 1657 replaced saturated.
+Table Loop:  62%|██████▎   | 10/16 [07:44<03:17, 32.84s/it]Flagging near saturated stars for filter f300m
+load_satstar_catalog: f300m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f300m from 8 per-exposure catalogs
+  satstar dedup: 4824 -> 1401 unique (merged 3423 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 1276/1401 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.9 mas, p95 23.7 mas
+  satstar flux: adopted the per-exposure median for 1401/1401 stars; brightest - median = -0.018 mag (median), -0.111 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f300m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f300m_consolidated_satstar_catalog.fits (n=1401)
+load_satstar_catalog: f300m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f300m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f300m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state a34ef83c53875720, phase selection d6ddc039b8b36f9e)
+Loaded saturated star catalog for f300m with 1401 rows
+replace_saturated: mutual-nearest second pass matched 1 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 8/1401 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 1393 stars that are saturated of 13022 in filter f300m.  0 are newly added.  The total replaced stars=1393
+load_rejected_satstar_catalog: f300m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 4700 gate-rejected candidate row(s) for f300m from 8 file(s)
+satstar gate-taper flag: 1059 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f300m
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f300m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f300m has 13022 rows.  13022 of 13022 are mutual.  Matching took 13.0 seconds
+Max flux in tbl for f300m: 5280992.0; in jy=0.4911012020380998; mag=9.672072497155366
+merging tables step: max flux for f300m is 5280992.0 0.4911012020380998 9.672072497155366
+Basetable has length 58300 and ncols=504 before stack
+Basetable has length 58300 and ncols=552 after stack
+merging tables step: max flux for f300m in merged table is 5280992.0 0.4911012020380998 9.672072497155366
+Flagged 1758 stars that are near saturated stars in filter f300m out of 13022.  There are then 1758 in the merged table.  There are also 1393 replaced saturated.
+Table Loop:  69%|██████▉   | 11/16 [07:57<02:14, 26.82s/it]Flagging near saturated stars for filter f323n
+load_satstar_catalog: f323n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f323n from 8 per-exposure catalogs
+  satstar dedup: 582 -> 240 unique (merged 342 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 189/240 stars measured in >1 exposure (median N=2); adopted mean position, median shift 1.5 mas, p95 28.7 mas
+  satstar flux: adopted the per-exposure median for 240/240 stars; brightest - median = -0.024 mag (median), -0.735 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f323n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f323n_consolidated_satstar_catalog.fits (n=240)
+load_satstar_catalog: f323n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f323n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f323n_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state e1e59514b4fa7b6b, phase selection f83fbeaf59e02a71)
+Loaded saturated star catalog for f323n with 240 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 26/240 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 214 stars that are saturated of 14206 in filter f323n.  0 are newly added.  The total replaced stars=214
+load_rejected_satstar_catalog: f323n: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1340 gate-rejected candidate row(s) for f323n from 8 file(s)
+satstar gate-taper flag: 169 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f323n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f323n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f323n has 14206 rows.  14205 of 14206 are mutual.  Matching took 13.4 seconds
+Max flux in tbl for f323n: 5534260.0; in jy=0.5151397846131623; mag=9.620187269897528
+merging tables step: max flux for f323n is 5534260.0 0.5151397846131623 9.620187269897528
+Basetable has length 58300 and ncols=554 before stack
+Basetable has length 58300 and ncols=602 after stack
+merging tables step: max flux for f323n in merged table is 5534260.0 0.5151397846131623 9.620187269897528
+Flagged 435 stars that are near saturated stars in filter f323n out of 14206.  There are then 435 in the merged table.  There are also 214 replaced saturated.
+Table Loop:  75%|███████▌  | 12/16 [08:10<01:31, 22.81s/it]Flagging near saturated stars for filter f335m
+load_satstar_catalog: f335m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f335m from 8 per-exposure catalogs
+  satstar dedup: 1149 -> 372 unique (merged 777 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 307/372 stars measured in >1 exposure (median N=4); adopted mean position, median shift 2.2 mas, p95 40.8 mas
+  satstar flux: adopted the per-exposure median for 372/372 stars; brightest - median = -0.033 mag (median), -0.289 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f335m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f335m_consolidated_satstar_catalog.fits (n=372)
+load_satstar_catalog: f335m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f335m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f335m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 4e76ca36dbab455b, phase selection a5bb3d4a3d15cfd3)
+Loaded saturated star catalog for f335m with 372 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 6/372 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 366 stars that are saturated of 11146 in filter f335m.  0 are newly added.  The total replaced stars=366
+load_rejected_satstar_catalog: f335m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 2185 gate-rejected candidate row(s) for f335m from 8 file(s)
+satstar gate-taper flag: 729 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f335m
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 5 row(s) in f335m (0.02-0.5 mag brighter; median 0.038 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f335m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f335m has 11146 rows.  11146 of 11146 are mutual.  Matching took 14.0 seconds
+Max flux in tbl for f335m: 3544204.75; in jy=0.3096398843753074; mag=10.105043430827088
+merging tables step: max flux for f335m is 3544204.75 0.3096398843753074 10.105043430827088
+Basetable has length 58300 and ncols=604 before stack
+Basetable has length 58300 and ncols=652 after stack
+merging tables step: max flux for f335m in merged table is 3544204.75 0.3096398843753074 10.105043430827088
+Flagged 522 stars that are near saturated stars in filter f335m out of 11146.  There are then 522 in the merged table.  There are also 366 replaced saturated.
+Table Loop:  81%|████████▏ | 13/16 [08:25<01:00, 20.20s/it]Flagging near saturated stars for filter f405n
+load_satstar_catalog: f405n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f405n from 8 per-exposure catalogs
+  satstar dedup: 892 -> 251 unique (merged 641 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 234/251 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.8 mas, p95 20.3 mas
+  satstar flux: adopted the per-exposure median for 251/251 stars; brightest - median = -0.015 mag (median), -0.085 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f405n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f405n_consolidated_satstar_catalog.fits (n=251)
+load_satstar_catalog: f405n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f405n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f405n_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state b0216e6f5f459120, phase selection 5d9f06bb966605d6)
+Loaded saturated star catalog for f405n with 251 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 3/251 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 248 stars that are saturated of 9654 in filter f405n.  0 are newly added.  The total replaced stars=248
+load_rejected_satstar_catalog: f405n: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1064 gate-rejected candidate row(s) for f405n from 8 file(s)
+satstar gate-taper flag: 173 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f405n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f405n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f405n has 9654 rows.  9654 of 9654 are mutual.  Matching took 13.7 seconds
+Max flux in tbl for f405n: 6868327.0; in jy=0.6074230290357726; mag=9.38577228730402
+merging tables step: max flux for f405n is 6868327.0 0.6074230290357726 9.38577228730402
+Basetable has length 58300 and ncols=654 before stack
+Basetable has length 58300 and ncols=702 after stack
+merging tables step: max flux for f405n in merged table is 6868327.0 0.6074230290357726 9.38577228730402
+Flagged 364 stars that are near saturated stars in filter f405n out of 9654.  There are then 364 in the merged table.  There are also 248 replaced saturated.
+Table Loop:  88%|████████▊ | 14/16 [08:39<00:36, 18.33s/it]Flagging near saturated stars for filter f410m
+load_satstar_catalog: f410m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f410m from 8 per-exposure catalogs
+  satstar dedup: 884 -> 282 unique (merged 602 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 241/282 stars measured in >1 exposure (median N=4); adopted mean position, median shift 3.4 mas, p95 64.0 mas
+  satstar flux: adopted the per-exposure median for 282/282 stars; brightest - median = -0.026 mag (median), -0.283 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f410m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f410m_consolidated_satstar_catalog.fits (n=282)
+load_satstar_catalog: f410m: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f410m under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f410m_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 9408f9d5b910197c, phase selection ec9cdb1ca01c57aa)
+Loaded saturated star catalog for f410m with 282 rows
+replace_saturated: faint-replacement guard kept the daophot flux for 7/282 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 275 stars that are saturated of 11727 in filter f410m.  0 are newly added.  The total replaced stars=275
+load_rejected_satstar_catalog: f410m: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 2032 gate-rejected candidate row(s) for f410m from 8 file(s)
+satstar gate-taper flag: 656 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f410m
+satstar gray-zone clip correction: adopted the rejected wing-fit flux for 9 row(s) in f410m (0.02-0.5 mag brighter; median 0.050 mag; uncertainty floored at half the adjustment)
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f410m', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f410m has 11727 rows.  11727 of 11727 are mutual.  Matching took 13.4 seconds
+Max flux in tbl for f410m: 5875358.5; in jy=0.5464347023718479; mag=9.556154334457307
+merging tables step: max flux for f410m is 5875358.5 0.5464347023718479 9.556154334457307
+Basetable has length 58300 and ncols=704 before stack
+Basetable has length 58300 and ncols=752 after stack
+merging tables step: max flux for f410m in merged table is 5875358.5 0.5464347023718479 9.556154334457307
+Flagged 372 stars that are near saturated stars in filter f410m out of 11727.  There are then 372 in the merged table.  There are also 275 replaced saturated.
+Table Loop:  94%|█████████▍| 15/16 [08:52<00:16, 16.92s/it]Flagging near saturated stars for filter f466n
+load_satstar_catalog: f466n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+Building consolidated satstar catalog for f466n from 8 per-exposure catalogs
+  satstar dedup: 276 -> 90 unique (merged 186 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 72/90 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.6 mas, p95 12.4 mas
+  satstar flux: adopted the per-exposure median for 90/90 stars; brightest - median = -0.018 mag (median), -0.082 (p10)
+WARNING: aperture_photometry: no i2d mosaic for wd2/f466n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f466n_consolidated_satstar_catalog.fits (n=90)
+load_satstar_catalog: f466n: one phase per exposure (merging m7): using 8 satstar catalog file(s) [m7: 8]; excluded 80 superseded [m12: 16, m3: 16, m4: 16, m5: 16, m6: 16] and 0 from a later phase [none]
+WARNING: aperture_photometry: no i2d mosaic for wd2/f466n under /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1; leaving catalog without aperture columns [jwst_gc_pipeline.photometry.aperture_photometry]
+Using consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/f466n_consolidated_satstar_catalog.fits (cache fresh vs 8 per-exposure catalogs, dedup radius 0.15", alg fp6, frame state 18fdb51ea15520e2, phase selection 99d83e1720e7751d)
+Loaded saturated star catalog for f466n with 90 rows
+replace_saturated: mutual-nearest second pass matched 2 satstar(s) at 0.1 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 15/90 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+Replacing 75 stars that are saturated of 10809 in filter f466n.  0 are newly added.  The total replaced stars=75
+load_rejected_satstar_catalog: f466n: one phase per exposure (merging m7): using 8 rejected-satstar file(s) [m7: 8]; excluded 0 superseded [none] and 0 from a later phase [none]
+load_rejected_satstar_catalog: 1280 gate-rejected candidate row(s) for f466n from 8 file(s)
+satstar gate-taper flag: 246 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f466n
+Catalog did not have flux_fit.  colnames=['flux', 'flux_err', 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'group_size', 'modelsub_bkg_rms', 'modelsub_bkg_npix', 'dra', 'ddec', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err', 'modelsub_bkg_nframes', 'forced_refit_frac', 'forced_refit_nframes', 'flux_err_prop', 'satstar_match_sep', 'satstar_nframes', 'satstar_nmeas', 'satstar_std_ra', 'satstar_std_dec', 'iter_found', 'prominence', 'prominence_robust', 'peak_sb', 'local_emission_snr', 'local_structure_snr', 'sky_clean', 'flux_jy', 'mag_ab', 'mag_vega', 'eflux_jy', 'emag_ab', 'near_saturated_f466n', 'is_saturated', 'replaced_saturated', 'satstar_gate_rejected', 'satclip_corrected', 'satclip_corr_mag'].  (this is expected for crowdsource)
+filter f466n has 10809 rows.  10809 of 10809 are mutual.  Matching took 14.8 seconds
+Max flux in tbl for f466n: 1751501.25; in jy=0.16303037305818144; mag=10.869328711180172
+merging tables step: max flux for f466n is 1751501.25 0.16303037305818144 10.869328711180172
+Basetable has length 58300 and ncols=754 before stack
+Basetable has length 58300 and ncols=802 after stack
+merging tables step: max flux for f466n in merged table is 1751501.25 0.16303037305818144 10.869328711180172
+Flagged 150 stars that are near saturated stars in filter f466n out of 10809.  There are then 150 in the merged table.  There are also 75 replaced saturated.
+Table Loop: 100%|██████████| 16/16 [09:07<00:00, 16.34s/it]Table Loop: 100%|██████████| 16/16 [09:07<00:00, 34.24s/it]
+Stacked all rows into table with len=58300
+Writing table /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7 with len=58300 and ncols=814
+Done writing table /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits in 3.9 seconds
+Done writing table /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.ecsv in 476.1 seconds
+Keeping 0 sources of 58300 with at least 4 matches in two or more of the narrower bands
+Writing /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mfs1/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_qualcuts_oksep3523.fits
+== guard Wed Oct  7 01:08:59 PM EDT 2026
+== done Wed Oct  7 01:13:03 PM EDT 2026
