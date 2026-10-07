@@ -6,7 +6,8 @@ flags == 1) can be vetted at phase K and dropped at K+1 after a small refit
 change, leaving the whole star in the K+1 residual.  The keep re-admits a
 source within ``hysteresis_match_arcsec`` of the previous phase's vetted
 catalog while qfit < ``hysteresis_qfit_max`` and S/N >= ``hysteresis_snr_min``,
-except within ``hysteresis_satstar_guard_arcsec`` of a saturated star.
+except within ``hysteresis_satstar_guard_arcsec`` of a saturated star (its
+row, or a position estimate the merge's in-field collapse dropped).
 """
 import numpy as np
 import astropy.units as u
@@ -125,6 +126,45 @@ def test_satstar_guard_without_saturated_rows_is_inert():
     assert _kept(t, _prev_at(t), hysteresis_satstar_guard_arcsec=5.0) == {0, 1}
     t['is_saturated'] = np.zeros(2, bool)
     assert _kept(t, _prev_at(t), hysteresis_satstar_guard_arcsec=5.0) == {0, 1}
+
+
+def test_satstar_guard_uses_the_precollapse_positions(capsys):
+    # the merge's in-field duplicate collapse kept a saturated row 0.9" west
+    # of a second position estimate of the same star; the sources lie 0.3",
+    # 0.6" and 1.0" east of that dropped estimate
+    t = _with_satstar([0.3, 0.6, 1.0])
+    sat = SkyCoord(t['skycoord'][0])
+    t['skycoord'][0] = sat.spherical_offsets_by(-0.9 * u.arcsec, 0 * u.arcsec)
+    prev = _prev_at(t)
+    # the kept row alone is too far: every source keeps
+    assert _kept(t, prev, hysteresis_satstar_guard_arcsec=0.612) == {0, 1, 2, 3}
+    capsys.readouterr()
+    extra = SkyCoord([sat, SkyCoord(np.nan * u.deg, np.nan * u.deg)])
+    assert _kept(t, prev, hysteresis_satstar_guard_arcsec=0.612,
+                 hysteresis_satstar_skycoord=extra) == {0, 3}
+    assert '2 refused within 0.612"' in capsys.readouterr().out
+    # the extra positions alone also guard (no is_saturated column)
+    del t['is_saturated']
+    assert _kept(t, prev, hysteresis_satstar_guard_arcsec=0.612,
+                 hysteresis_satstar_skycoord=extra) == {0, 3}
+    # and do nothing with the guard off
+    assert _kept(t, prev, hysteresis_satstar_skycoord=extra) == {0, 1, 2, 3}
+
+
+def test_satstar_row_skycoord():
+    t = _with_satstar([0.3, 0.6])
+    t['replaced_saturated'] = np.array([False, True, False])
+    sc = C._satstar_row_skycoord(t)
+    assert len(sc) == 2
+    assert sc.separation(SkyCoord(t['skycoord'][:2])).arcsec.max() < 1e-6
+    # non-finite coordinates are dropped; no satstar rows gives None
+    t['skycoord'][0] = SkyCoord(np.nan * u.deg, np.nan * u.deg)
+    assert len(C._satstar_row_skycoord(t)) == 1
+    t['is_saturated'] = False
+    t['replaced_saturated'] = False
+    assert C._satstar_row_skycoord(t) is None
+    assert C._satstar_row_skycoord(Table({'id': [0]})) is None
+    assert C._satstar_row_skycoord(None) is None
 
 
 def test_hysteresis_radii_from_the_fwhm_table(tmp_path):

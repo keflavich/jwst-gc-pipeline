@@ -1601,6 +1601,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               hysteresis_snr_min=10.0,
                               hysteresis_match_arcsec=0.0,
                               hysteresis_satstar_guard_arcsec=0.0,
+                              hysteresis_satstar_skycoord=None,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
 
@@ -1635,8 +1636,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     catalog (``prev_vetted_skycoord``) is kept while its qfit stays below
     ``hysteresis_qfit_max`` and its S/N (flux / flux_err) stays at or above
     ``hysteresis_snr_min``.  A non-saturated source within
-    ``hysteresis_satstar_guard_arcsec`` of an ``is_saturated`` row gets no
-    previous-phase keep (0 = no guard).  The overshoot drop, the
+    ``hysteresis_satstar_guard_arcsec`` of an ``is_saturated`` row, or of a
+    position in ``hysteresis_satstar_skycoord`` (the merge's satstar rows
+    before the in-field duplicate collapse), gets no previous-phase keep
+    (0 = no guard).  The overshoot drop, the
     structure-noise prune and the extended-emission prominence gate still
     apply to it.  See the block comment at the keep.
 
@@ -2233,16 +2236,31 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # the previous phase fitted as a star.  The kept F212N stars lie
         # 2.5-9.5 FWHM from a satstar, so the radius scales with the FWHM
         # (the caller passes it in arcsec).  The saturated rows themselves
-        # are not guarded.
+        # are not guarded.  The centres are the is_saturated rows plus the
+        # merge's satstar rows before the in-field duplicate collapse
+        # (``hysteresis_satstar_skycoord``): that collapse keeps one of a
+        # saturated star's position estimates, and the others lie up to
+        # ~0.7" from it (superdense F405N m7: 18 of 37 rows collapsed).
+        # Guarding the kept row alone left 9 of the 27 over-subtracted
+        # sources, 0.61-0.79" from it and 0.48-0.63" from a collapsed one.
         _n_hguard = 0
-        if (hysteresis_satstar_guard_arcsec > 0 and 'is_saturated' in t.colnames):
-            _hiss = t['is_saturated']
-            _hiss = np.asarray(_hiss.filled(False) if hasattr(_hiss, 'filled')
-                               else _hiss, dtype=bool)
-            _hsat = _hiss & _hfin
-            if _hsat.any():
+        if hysteresis_satstar_guard_arcsec > 0:
+            if 'is_saturated' in t.colnames:
+                _hiss = t['is_saturated']
+                _hiss = np.asarray(_hiss.filled(False) if hasattr(_hiss, 'filled')
+                                   else _hiss, dtype=bool)
+            else:
+                _hiss = np.zeros(n, dtype=bool)
+            _hcen = _hsc[_hiss & _hfin]
+            if hysteresis_satstar_skycoord is not None and len(hysteresis_satstar_skycoord):
+                _hx = hysteresis_satstar_skycoord
+                _hx = _hx[np.isfinite(_hx.ra.deg) & np.isfinite(_hx.dec.deg)]
+                if len(_hx):
+                    _hcen = (SkyCoord([_hcen.icrs, _hx.icrs]) if len(_hcen)
+                             else _hx.icrs)
+            if len(_hcen) and _hfin.any():
                 _hnear = np.zeros(n, dtype=bool)
-                _, _hsd, _ = _hsc[_hfin].match_to_catalog_sky(_hsc[_hsat])
+                _, _hsd, _ = _hsc[_hfin].match_to_catalog_sky(_hcen)
                 _hnear[_hfin] = _hsd.arcsec <= float(hysteresis_satstar_guard_arcsec)
                 _hnear &= ~_hiss
                 _n_hguard = int(np.sum(_hyst & _hnear & ~keep))
@@ -2417,6 +2435,24 @@ _EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2', 'ngc6334')
 _PREV_VETTED_PHASE = {'m3': ('m2', False), 'm4': ('m3', False),
                       'm5': ('m4', False), 'm6': ('m5', True),
                       'm7': ('m6', True)}
+
+
+def _satstar_row_skycoord(tab):
+    """Sky positions of the ``is_saturated`` / ``replaced_saturated`` rows of
+    ``tab`` with finite coordinates, or None when it has none."""
+    if tab is None or not len(tab) or 'skycoord' not in tab.colnames:
+        return None
+    sat = np.zeros(len(tab), dtype=bool)
+    for col in ('is_saturated', 'replaced_saturated'):
+        if col in tab.colnames:
+            c = tab[col]
+            sat |= np.asarray(c.filled(False) if hasattr(c, 'filled') else c,
+                              dtype=bool)
+    if not sat.any():
+        return None
+    sc = SkyCoord(tab['skycoord'][sat])
+    sc = sc[np.isfinite(sc.ra.deg) & np.isfinite(sc.dec.deg)]
+    return sc if len(sc) else None
 
 
 def _hysteresis_radii(filt, basepath=None, satstar_guard_fwhm=0.0):
@@ -9225,6 +9261,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # ARE the same field).  _combsuf is set next to _vtok above.
                 combined_vetted_path = merged_path.replace('.fits', f'{_combsuf}_vetted.fits')
                 merged = Table.read(merged_path)
+                # the satstar rows before the collapse below, for the
+                # previous-phase keep's satstar guard
+                _sat_precollapse = _satstar_row_skycoord(merged)
                 # post-merge off-FOV cleanup: (A) one row per off-FOV satstar
                 # (the per-frame fits scatter wider than the 0.15" satstar
                 # dedup), (B) drop NON-satstar rows that fall >5 PSF widths
@@ -9400,6 +9439,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     hysteresis_snr_min=float(mopt(opts_phase, 'manual_ext_hysteresis_snr_min')),
                     hysteresis_match_arcsec=_hyst_r,
                     hysteresis_satstar_guard_arcsec=_hyst_guard,
+                    hysteresis_satstar_skycoord=_sat_precollapse,
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)
                 # -> the un-tokened all-obs vetted catalog, which is the final
