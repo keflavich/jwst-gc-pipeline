@@ -42,6 +42,12 @@ there is no measurement of any kind, not even a limit). Reading
 the same set, but the flag exists so a consumer does not have to reconstruct
 that combination correctly at every call site.
 
+IMPORTANT for any consumer: ``flux_ulim_{filt}``/``mag_ab_ulim_{filt}``/
+``mag_vega_ulim_{filt}`` are ALSO populated for a firm detection (a depth
+diagnostic there, same as a sub-threshold row) -- a finite ``mag_ab_ulim``
+is NOT by itself evidence that a row is a limit.  Gate on
+``is_upper_limit_{filt}``, never on ``isfinite(mag_ab_ulim_{filt})`` alone.
+
 Calibration is taken from the band's own firm detections in the merged table
 (``conv = median(flux_jy / flux)``; Vega zero-point likewise), so m8 fluxes are
 on exactly the same system as m7 -- no zero-point / pixel-area re-derivation.
@@ -318,6 +324,34 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
             tbl[col] = tbl[col].filled(tbl[col].fill_value)
 
     ridx = tgt_idx
+    # Reset every column this call owns, for EVERY current target row, before
+    # writing this pass's results.  Without this a rerun over the fill's own
+    # output (or a partial overlay applied twice) leaves a PRIOR pass's
+    # is_upper_limit/flux_ulim/forced_snr stale on a row this pass does NOT
+    # fit this time (its frames became unavailable) or DOES promote to a
+    # firm detection -- `fitted`/`not_detected` only ever SET True, so
+    # without a reset they can only accumulate, never clear.  `mask_{filt}`
+    # needs no equivalent reset: a row this call cleared to a detection on a
+    # prior pass reads mask=False from the table and is excluded from
+    # `targets` (and so from `ridx`) on the next call, so it is never
+    # revisited here.
+    tbl[f'forced_filled_{filt}'][ridx] = False
+    tbl[f'forced_snr_{filt}'][ridx] = np.nan
+    tbl[f'flux_ulim_{filt}'][ridx] = np.nan
+    tbl[f'mag_ab_ulim_{filt}'][ridx] = np.nan
+    tbl[f'mag_vega_ulim_{filt}'][ridx] = np.nan
+    tbl[f'is_upper_limit_{filt}'][ridx] = False
+    if f'flux_{filt}' in tbl.colnames:
+        tbl[f'flux_{filt}'][ridx] = np.nan
+    if f'flux_jy_{filt}' in tbl.colnames:
+        tbl[f'flux_jy_{filt}'][ridx] = np.nan
+    if f'mag_ab_{filt}' in tbl.colnames:
+        tbl[f'mag_ab_{filt}'][ridx] = np.nan
+    if f'mag_vega_{filt}' in tbl.colnames:
+        tbl[f'mag_vega_{filt}'][ridx] = np.nan
+    if f'emag_ab_{filt}' in tbl.colnames:
+        tbl[f'emag_ab_{filt}'][ridx] = np.nan
+
     tbl[f'forced_filled_{filt}'][ridx[fitted]] = True
     tbl[f'forced_snr_{filt}'][ridx[fitted]] = snr[fitted]
     tbl[f'flux_ulim_{filt}'][ridx[fitted]] = ulim_flux[fitted]

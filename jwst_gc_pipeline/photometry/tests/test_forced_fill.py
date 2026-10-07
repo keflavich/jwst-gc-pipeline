@@ -175,12 +175,50 @@ def test_forced_fill_is_upper_limit_flag():
     # sub-threshold (negative) fit: flagged as an upper limit
     assert bool(tbl['is_upper_limit_f405n'][ineg])
     assert bool(tbl['mask_f405n'][ineg])
-    # firm recovered detections: NOT flagged as upper limits
+    # firm recovered detections: NOT flagged as upper limits, even though
+    # mag_ab_ulim is still finite there too (a depth diagnostic, not a bound)
     for i in (ndet, ndet + 1):
-        assert not bool(tbl['forced_filled_f405n'][i]) or tbl['forced_snr_f405n'][i] >= 3.0
+        assert bool(tbl['forced_filled_f405n'][i])
+        assert tbl['forced_snr_f405n'][i] >= 3.0
+        assert np.isfinite(tbl['mag_ab_ulim_f405n'][i])
         assert not bool(tbl['is_upper_limit_f405n'][i])
     # never a fill target (already an independent detection): default False
     assert not bool(tbl['is_upper_limit_f405n'][0])
+
+
+def test_forced_fill_rerun_clears_stale_output():
+    """Regression: a SECOND forced_fill_band call over the fill's own prior
+    output (e.g. a rerun, or a partial overlay applied twice) must not leave
+    a PRIOR pass's is_upper_limit/flux_ulim/forced_snr/flux stale on a row
+    that THIS pass can no longer fit.  ``_ensure`` only creates a column once
+    and the per-row writes only ever SET True/finite, so without an explicit
+    reset of every current target row before writing, a row that loses frame
+    coverage between runs would silently keep reading as an upper limit from
+    the run before."""
+    tbl, prepare_frame, ndet, cjy, zp, atrue = _build(neg_target=True)
+    ineg = ndet + 2  # phantom on the negative blob -> sub-threshold, stays a target
+
+    # pass 1: full coverage -- ineg is fitted (negative, sub-threshold)
+    ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare_frame,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False)
+    assert bool(tbl['is_upper_limit_f405n'][ineg])
+    assert np.isfinite(tbl['flux_ulim_f405n'][ineg])
+    assert np.isfinite(tbl['forced_snr_f405n'][ineg])
+    assert np.isfinite(tbl['flux_f405n'][ineg])
+    assert bool(tbl['mask_f405n'][ineg])  # still a non-detection -> stays a target
+
+    # pass 2: zero coverage this time (e.g. the frame list is now empty) --
+    # ineg is STILL a target (mask unchanged) but cannot be fitted at all.
+    nrec2 = ff.forced_fill_band(tbl, 'f405n', [], prepare_frame=prepare_frame,
+                                frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                                fit_shape=(5, 5), verbose=False)
+    assert nrec2 == 0
+    assert not bool(tbl['forced_filled_f405n'][ineg])
+    assert not bool(tbl['is_upper_limit_f405n'][ineg])   # must NOT still read True
+    assert np.isnan(tbl['flux_ulim_f405n'][ineg])        # must NOT still read finite
+    assert np.isnan(tbl['forced_snr_f405n'][ineg])
+    assert np.isnan(tbl['flux_f405n'][ineg])
 
 
 def test_forced_fill_prep_failure_handling(capsys):
