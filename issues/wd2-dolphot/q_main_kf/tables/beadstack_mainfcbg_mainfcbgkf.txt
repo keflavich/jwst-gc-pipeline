@@ -1,0 +1,16 @@
+F164N: sat 396, dolphot within 4.0" 16774; bead zone 308 vs control 238; both bead/control 248/225, mainfcbg only bead/control 34/2, mainfcbgkf only bead/control 2/1, neither bead/control 24/10
+   bead-zone stars by spike (PA0+60k, k=0..5): [39 31 50 54 83 51]  mainfcbg-only by spike: [ 0  1  0  5 27  1]
+F250M: sat 1284, dolphot within 4.0" 31780; bead zone 1166 vs control 1047; both bead/control 970/965, mainfcbg only bead/control 29/4, mainfcbgkf only bead/control 6/1, neither bead/control 161/77
+   bead-zone stars by spike (PA0+60k, k=0..5): [187 188 186 194 220 191]  mainfcbg-only by spike: [ 2  4  3  4 14  2]
+F150W: sat 2424, dolphot within 4.0" 89687; bead zone 1164 vs control 1100; both bead/control 937/947, mainfcbg only bead/control 5/2, mainfcbgkf only bead/control 1/0, neither bead/control 221/151
+   bead-zone stars by spike (PA0+60k, k=0..5): [180 188 189 167 222 218]  mainfcbg-only by spike: [0 0 0 2 2 1]
+F162M: sat 1864, dolphot within 4.0" 74810; bead zone 1274 vs control 1178; both bead/control 1038/1008, mainfcbg only bead/control 19/1, mainfcbgkf only bead/control 0/1, neither bead/control 217/168
+   bead-zone stars by spike (PA0+60k, k=0..5): [202 167 214 215 248 228]  mainfcbg-only by spike: [ 1  1  1  2 12  2]
+F182M: sat 1007, dolphot within 4.0" 41054; bead zone 883 vs control 689; both bead/control 681/628, mainfcbg only bead/control 20/2, mainfcbgkf only bead/control 4/1, neither bead/control 178/58
+   bead-zone stars by spike (PA0+60k, k=0..5): [134 115 119 135 252 128]  mainfcbg-only by spike: [ 0  0  0  0 20  0]
+F187N: sat 490, dolphot within 4.0" 20204; bead zone 398 vs control 406; both bead/control 349/396, mainfcbg only bead/control 9/3, mainfcbgkf only bead/control 1/0, neither bead/control 39/7
+   bead-zone stars by spike (PA0+60k, k=0..5): [ 55  59  61  53 102  68]  mainfcbg-only by spike: [0 1 0 0 7 1]
+F200W: sat 953, dolphot within 4.0" 37505; bead zone 773 vs control 855; both bead/control 680/765, mainfcbg only bead/control 1/4, mainfcbgkf only bead/control 3/0, neither bead/control 89/86
+   bead-zone stars by spike (PA0+60k, k=0..5): [128 115 128 114 135 153]  mainfcbg-only by spike: [0 0 1 0 0 0]
+F212N: sat 770, dolphot within 4.0" 29238; bead zone 733 vs control 729; both bead/control 720/714, mainfcbg only bead/control 0/1, mainfcbgkf only bead/control 1/1, neither bead/control 12/13
+   bead-zone stars by spike (PA0+60k, k=0..5): [123 118 111 115 118 148]  mainfcbg-only by spike: [0 0 0 0 0 0]
