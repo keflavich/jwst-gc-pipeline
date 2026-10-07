@@ -6149,11 +6149,23 @@ _SRC_OBS_RE = re.compile(r'_o\d{3}(?:-\d{3})?_')
 _PERFRAME_SEGMENTS = ("", "resbgsub")
 
 
-def _perframe_catalog_re(merge_label):
-    """Match a canonical per-frame catalog basename for ``merge_label``."""
+def _perframe_catalog_re(merge_label, psf_token=None):
+    """Match a canonical per-frame catalog basename for ``merge_label``.
+
+    ``psf_token`` is the ``{epsf_}`` segment the per-frame writer
+    (``_predict_output_tokens``) stamps after ``{bgsub}``: ``_epsf``,
+    ``_hybpsf`` (``PSF_EPSF_CORE_DIR`` set), both, or empty.  ``None`` reads
+    the hybrid token from the environment, which is what the writer does.
+    Only THIS run's PSF token is accepted: an ``_hybpsf`` catalog and a plain
+    one of the same exposure are two measurements, like the grouped fit.
+    """
+    if psf_token is None:
+        psf_token = hybrid_psf_token()
+    psf_ = (str(psf_token).lstrip("_") + "_") if psf_token else ""
     seg = "|".join(f"{s}_" for s in _PERFRAME_SEGMENTS if s)
     return re.compile(
-        r'_exp\d{5}_(?:' + seg + r')?' + re.escape(str(merge_label))
+        r'_exp\d{5}_(?:' + seg + r')?' + re.escape(psf_)
+        + re.escape(str(merge_label))
         + r'(?:_chunk\d+of\d+)?_daophot_basic\.fits$')
 
 
@@ -7100,7 +7112,10 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     fns = sorted(set(
         glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
         + glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
-    accept = _perframe_catalog_re(merge_label)
+    accept = _perframe_catalog_re(
+        merge_label,
+        ("_epsf" if getattr(options, "epsf", False) else "")
+        + hybrid_psf_token())
     rejected = [f for f in fns if not accept.search(os.path.basename(f))]
     fns = [f for f in fns if accept.search(os.path.basename(f))]
     if rejected:
