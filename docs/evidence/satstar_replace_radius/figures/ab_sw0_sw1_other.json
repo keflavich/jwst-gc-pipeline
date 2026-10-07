@@ -1,0 +1,125 @@
+{
+ "var_a": "sw0",
+ "var_b": "sw1",
+ "summary": [
+  {
+   "field": "dense_bright",
+   "filt": "F212N",
+   "seed": 0,
+   "n_inner_b": 100,
+   "n_b_only": 1,
+   "n_left_in_a_snr5": 1,
+   "n_left_in_b_snr5": 0,
+   "n_near_satstar": 1,
+   "n_near_satstar_left_in_a_snr5": 1,
+   "n_injected": 0,
+   "n_brighter_nb": 0
+  },
+  {
+   "field": "dense_bright",
+   "filt": "F212N",
+   "seed": 4,
+   "n_inner_b": 103,
+   "n_b_only": 1,
+   "n_left_in_a_snr5": 1,
+   "n_left_in_b_snr5": 0,
+   "n_near_satstar": 1,
+   "n_near_satstar_left_in_a_snr5": 1,
+   "n_injected": 0,
+   "n_brighter_nb": 0
+  },
+  {
+   "field": "bright_modest",
+   "filt": "F210M",
+   "seed": 1,
+   "n_inner_b": 35,
+   "n_b_only": 1,
+   "n_left_in_a_snr5": 1,
+   "n_left_in_b_snr5": 0,
+   "n_near_satstar": 1,
+   "n_near_satstar_left_in_a_snr5": 1,
+   "n_injected": 1,
+   "n_brighter_nb": 0
+  },
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 7,
+   "n_inner_b": 129,
+   "n_b_only": 14,
+   "n_left_in_a_snr5": 14,
+   "n_left_in_b_snr5": 1,
+   "n_near_satstar": 14,
+   "n_near_satstar_left_in_a_snr5": 14,
+   "n_injected": 2,
+   "n_brighter_nb": 6
+  }
+ ],
+ "rows": [
+  {
+   "field": "dense_bright",
+   "filt": "F212N",
+   "seed": 0,
+   "x": 135.71851407292098,
+   "y": 49.360110015752184,
+   "ratio": NaN,
+   "injected": false,
+   "sat_dist_as": 0.303626807717491,
+   "snr_data": 26.85850368570978,
+   "snr_a": 59.87980804642259,
+   "snr_b": -0.22696906324108693
+  },
+  {
+   "field": "dense_bright",
+   "filt": "F212N",
+   "seed": 4,
+   "x": 135.71999558346636,
+   "y": 49.364294318887204,
+   "ratio": NaN,
+   "injected": false,
+   "sat_dist_as": 0.303506917149724,
+   "snr_data": 26.873321804197772,
+   "snr_a": 61.31232162925464,
+   "snr_b": -0.5164495691067413
+  },
+  {
+   "field": "bright_modest",
+   "filt": "F210M",
+   "seed": 1,
+   "x": 75.98712269370206,
+   "y": 142.81473999176637,
+   "ratio": NaN,
+   "injected": true,
+   "sat_dist_as": 0.48352235043153413,
+   "snr_data": 44.521875959546996,
+   "snr_a": 46.3532976335477,
+   "snr_b": -4.6575975295023655
+  },
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 7,
+   "x": 74.80523116477843,
+   "y": 60.72091616959233,
+   "ratio": 0.29137556854831304,
+   "injected": true,
+   "sat_dist_as": 0.3027679036928074,
+   "snr_data": 10.508518421283265,
+   "snr_a": 19.1059850253319,
+   "snr_b": -0.5697589577874314
+  },
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 7,
+   "x": 126.3331490120695,
+   "y": 85.62433336624352,
+   "ratio": NaN,
+   "injected": true,
+   "sat_dist_as": 0.3192151588021944,
+   "snr_data": 14.04101668993408,
+   "snr_a": 16.508567695255422,
+   "snr_b": -3.723353596098179
+  }
+ ]
+}
