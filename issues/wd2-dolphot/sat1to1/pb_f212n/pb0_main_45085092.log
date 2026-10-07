@@ -1,0 +1,161 @@
+ARM=pb0 REPO=/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wd2main2 HEAD=5434f5e7
+merge_catalogs from /blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wd2main2/jwst_gc_pipeline/photometry/merge_catalogs.py
+has _one_to_one_satstar_pairs: False
+Found 32 files across 32 frames (0 chunked) for f212n_*_visit*_exp*_resbgsub:
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca1_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca1_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca1_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca1_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca2_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca2_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca2_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca2_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca3_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca3_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca3_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca3_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca4_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca4_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca4_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrca4_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb1_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb1_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb1_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb1_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb2_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb2_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb2_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb2_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb3_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb3_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb3_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb3_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb4_visit001_vgroup04101_exp00001_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb4_visit001_vgroup04101_exp00002_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb4_visit001_vgroup04101_exp00003_resbgsub_m7_daophot_basic.fits
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/F212N/f212n_nrcb4_visit001_vgroup04101_exp00004_resbgsub_m7_daophot_basic.fits
+Iteration 0: There are a total of 13322 sources in the base coordinate list [method=daophot]
+Added 9623 new sources in exposure 00002 nrca1 [total=22945]
+Iteration 1: There are a total of 22945 sources in the base coordinate list [method=daophot]
+Added 9390 new sources in exposure 00003 nrca1 [total=32335]
+Iteration 2: There are a total of 32335 sources in the base coordinate list [method=daophot]
+Added 7353 new sources in exposure 00004 nrca1 [total=39688]
+Iteration 3: There are a total of 39688 sources in the base coordinate list [method=daophot]
+Added 13557 new sources in exposure 00001 nrca2 [total=53245]
+Iteration 4: There are a total of 53245 sources in the base coordinate list [method=daophot]
+Added 10218 new sources in exposure 00002 nrca2 [total=63463]
+Iteration 5: There are a total of 63463 sources in the base coordinate list [method=daophot]
+Added 9446 new sources in exposure 00003 nrca2 [total=72909]
+Iteration 6: There are a total of 72909 sources in the base coordinate list [method=daophot]
+Added 8635 new sources in exposure 00004 nrca2 [total=81544]
+Iteration 7: There are a total of 81544 sources in the base coordinate list [method=daophot]
+Added 12551 new sources in exposure 00001 nrca3 [total=94095]
+Iteration 8: There are a total of 94095 sources in the base coordinate list [method=daophot]
+Added 10637 new sources in exposure 00002 nrca3 [total=104732]
+Iteration 9: There are a total of 104732 sources in the base coordinate list [method=daophot]
+Added 9344 new sources in exposure 00003 nrca3 [total=114076]
+Iteration 10: There are a total of 114076 sources in the base coordinate list [method=daophot]
+Added 8590 new sources in exposure 00004 nrca3 [total=122666]
+Iteration 11: There are a total of 122666 sources in the base coordinate list [method=daophot]
+Added 14146 new sources in exposure 00001 nrca4 [total=136812]
+Iteration 12: There are a total of 136812 sources in the base coordinate list [method=daophot]
+Added 10556 new sources in exposure 00002 nrca4 [total=147368]
+Iteration 13: There are a total of 147368 sources in the base coordinate list [method=daophot]
+Added 9104 new sources in exposure 00003 nrca4 [total=156472]
+Iteration 14: There are a total of 156472 sources in the base coordinate list [method=daophot]
+Added 8330 new sources in exposure 00004 nrca4 [total=164802]
+Iteration 15: There are a total of 164802 sources in the base coordinate list [method=daophot]
+Added 13252 new sources in exposure 00001 nrcb1 [total=178054]
+Iteration 16: There are a total of 178054 sources in the base coordinate list [method=daophot]
+Added 8441 new sources in exposure 00002 nrcb1 [total=186495]
+Iteration 17: There are a total of 186495 sources in the base coordinate list [method=daophot]
+Added 7464 new sources in exposure 00003 nrcb1 [total=193959]
+Iteration 18: There are a total of 193959 sources in the base coordinate list [method=daophot]
+Added 6286 new sources in exposure 00004 nrcb1 [total=200245]
+Iteration 19: There are a total of 200245 sources in the base coordinate list [method=daophot]
+Added 14346 new sources in exposure 00001 nrcb2 [total=214591]
+Iteration 20: There are a total of 214591 sources in the base coordinate list [method=daophot]
+Added 10208 new sources in exposure 00002 nrcb2 [total=224799]
+Iteration 21: There are a total of 224799 sources in the base coordinate list [method=daophot]
+Added 8922 new sources in exposure 00003 nrcb2 [total=233721]
+Iteration 22: There are a total of 233721 sources in the base coordinate list [method=daophot]
+Added 7582 new sources in exposure 00004 nrcb2 [total=241303]
+Iteration 23: There are a total of 241303 sources in the base coordinate list [method=daophot]
+Added 13954 new sources in exposure 00001 nrcb3 [total=255257]
+Iteration 24: There are a total of 255257 sources in the base coordinate list [method=daophot]
+Added 7608 new sources in exposure 00002 nrcb3 [total=262865]
+Iteration 25: There are a total of 262865 sources in the base coordinate list [method=daophot]
+Added 6032 new sources in exposure 00003 nrcb3 [total=268897]
+Iteration 26: There are a total of 268897 sources in the base coordinate list [method=daophot]
+Added 5071 new sources in exposure 00004 nrcb3 [total=273968]
+Iteration 27: There are a total of 273968 sources in the base coordinate list [method=daophot]
+Added 14148 new sources in exposure 00001 nrcb4 [total=288116]
+Iteration 28: There are a total of 288116 sources in the base coordinate list [method=daophot]
+Added 10578 new sources in exposure 00002 nrcb4 [total=298694]
+Iteration 29: There are a total of 298694 sources in the base coordinate list [method=daophot]
+Added 8969 new sources in exposure 00003 nrcb4 [total=307663]
+Iteration 30: There are a total of 307663 sources in the base coordinate list [method=daophot]
+Added 7967 new sources in exposure 00004 nrcb4 [total=315630]
+Iteration 31: There are a total of 315630 sources in the base coordinate list [method=daophot]
+Skipping re-matching diagnostics (realign=False; set MERGE_REMATCH_DIAGNOSTICS=1 to enable)
+There are a total of 315630 sources in the base coordinate list after rematching
+WARNING: Input data contains invalid values (NaNs or infs), which were automatically clipped. [astropy.stats.sigma_clipping]
+  Skipping iter_detected (not in tbls[0])
+forced_refit: 7772 of 315630 source(s) have >=1 forced-refit frame; 315630 source(s) have the flag on at least one frame
+Residual-footprint background: stacking 3 columns (315630x32) for the weighted combine...
+/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wd2main2/jwst_gc_pipeline/photometry/merge_catalogs.py:954: RuntimeWarning: Mean of empty slice
+  _combined['modelsub_bkg_npix_avg'] = np.nanmean(
+Model-subtracted background: 315621/315630 sources combined in 0.3s
+Skipping the _allcols superset table (--write-allcols to keep it); the minimal table below carries every column downstream reads.
+load_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 satstar catalog file(s) [m7: 32]; excluded 320 superseded [m12: 64, m3: 64, m4: 64, m5: 64, m6: 64] and 0 from a later phase [none]
+Building consolidated satstar catalog for f212n from 32 per-exposure catalogs
+build_pooled_wingcal: f212n: one phase per exposure (merging m7): using 32 wingcal-calibrator file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+build_pooled_wingcal: f212n pooled C(r) from 32 frame file(s) -> /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/catalogs/f212n_pooled_wingcal_m7.ecsv
+  satstar dedup: 2777 -> 788 unique (merged 1989 per-frame duplicates within footprint radius; rejected 0 big-footprint extended-emission pile rows)
+  satstar ensemble: 719/788 stars measured in >1 exposure (median N=4); adopted mean position, median shift 0.5 mas, p95 1.0 mas
+  satstar flux: adopted the per-exposure median for 788/788 stars; brightest - median = -0.007 mag (median), -0.039 (p10)
+WARNING: FITSFixedWarning: 'datfix' made the change 'Set DATE-BEG to '2024-07-14T02:32:09.077' from MJD-BEG.
+Set DATE-AVG to '2024-07-14T02:46:28.070' from MJD-AVG.
+Set DATE-END to '2024-07-14T03:00:47.086' from MJD-END'. [astropy.wcs.wcs]
+WARNING: FITSFixedWarning: 'obsfix' made the change 'Set OBSGEO-L to   -83.730754 from OBSGEO-[XYZ].
+Set OBSGEO-B to   -35.880952 from OBSGEO-[XYZ].
+Set OBSGEO-H to 1729472482.591 from OBSGEO-[XYZ]'. [astropy.wcs.wcs]
+WARNING: VerifyWarning: Keyword name 'psf_class' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'psf_model' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'fitter_maxiters' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'xy_bounds' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'aperture_radius' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'local_bkg_estimator' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'group_warning_threshold' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'progress_bar' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'APER_PRIM' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'APER_UNIT' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+INFO: aperture_photometry: measuring f212n from 1 mosaic(s) [jwst_gc_pipeline.photometry.aperture_photometry]
+Wrote consolidated satstar catalog /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/catalogs/f212n_consolidated_satstar_catalog.fits (n=788)
+Loaded saturated star catalog for f212n with 788 rows
+Catalog metadata lacks pixelscale_deg2 for f212n; skipping satstar mag conversion
+replace_saturated: mutual-nearest second pass matched 262 satstar(s) at 0.05 arcsec < sep < 0.5 arcsec (clipped-daophot rows recovered)
+replace_saturated: faint-replacement guard kept the daophot flux for 18/720 match(es) (satstar fit < 0.8x the daophot flux it would overwrite -- over-flagged unsaturated star)
+  replace_saturated: 78 appended satstar row(s) carry 8 astrometry column(s) from their per-exposure ensemble instead of a NaN fill
+Replacing 702 stars that are saturated of 315708 in filter f212n.  78 are newly added.  The total replaced stars=780
+load_rejected_satstar_catalog: f212n: one phase per exposure (merging m7): using 32 rejected-satstar file(s) [m7: 32]; excluded 0 superseded [none] and 0 from a later phase [none]
+WARNING: VerifyWarning: Keyword name 'ra_offset' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: Attribute `ra_offset` of type <class 'float'> cannot be added to FITS Header - skipping [astropy.io.fits.convenience]
+WARNING: VerifyWarning: Keyword name 'dec_offset' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: Attribute `dec_offset` of type <class 'float'> cannot be added to FITS Header - skipping [astropy.io.fits.convenience]
+WARNING: VerifyWarning: Keyword name 'dra_offset' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: Attribute `dra_offset` of type <class 'float'> cannot be added to FITS Header - skipping [astropy.io.fits.convenience]
+WARNING: VerifyWarning: Keyword name 'ddec_offset' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: Attribute `ddec_offset` of type <class 'float'> cannot be added to FITS Header - skipping [astropy.io.fits.convenience]
+WARNING: Attribute `offsets` of type <class 'dict'> cannot be added to FITS Header - skipping [astropy.io.fits.convenience]
+WARNING: VerifyWarning: Keyword name 'flux_err_prop' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'forced_refit_frac' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'forced_refit_nframes' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+WARNING: VerifyWarning: Keyword name 'modelsub_bkg' is greater than 8 characters or contains characters not allowed by the FITS standard; a HIERARCH card will be created. [astropy.io.fits.card]
+load_rejected_satstar_catalog: 1646 gate-rejected candidate row(s) for f212n from 32 file(s)
+satstar gate-taper flag: excluded 0 rejected-candidate + 151 catalog row(s) with non-finite coordinates from the match (f212n)
+satstar gate-taper flag: 554 row(s) match a gate-rejected candidate (<0.15") and keep clipped daophot photometry in f212n
+Rejected 151 sources that had nan coordinates.
+Final table length is 315557.  Writing /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/sat1to1/pb/tree_pb0/catalogs/f212n_merged_indivexp_merged_resbgsub_m7_dao_basic.fits
+rows 315557
+GUARD: 0 tree_mainfcbg file(s) changed, 0 added
