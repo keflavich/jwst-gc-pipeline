@@ -2949,22 +2949,75 @@ def _satstar_dedup_alg_tag():
     return _SATSTAR_DEDUP_ALG if stat == 'median' else f'{_SATSTAR_DEDUP_ALG}-{stat}'
 
 
-# Wide second-chance radius for matching a fitted satstar to its daophot row
-# in replace_saturated (mutual-nearest only; see the second-pass block there).
+# Second-chance radius for matching a fitted satstar to its daophot row in
+# replace_saturated (mutual-nearest only; see the second-pass block there).
 # Satstar positions scatter ~0.08-0.15" from the true position, so the tight
-# per-filter radii miss most pairings.  Env SATSTAR_REPLACE_RADIUS_ARCSEC
-# overrides (read at CALL time, not import time, so setting it after import
-# works); set 0 to disable the second pass.
-def _satstar_replace_radius():
-    _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
-    # 0.5": wide-band saturated blobs scatter worse than SW (brick f356w
-    # catastrophic clipped rows: satstar at med 0.16", 77% < 0.3" but 90% <
-    # 0.5"); mutual-nearest keeps the wide radius crowding-safe.
+# per-filter radii miss many pairings.
+#
+# The radius is SATSTAR_REPLACE_RADIUS_FWHM (default 1.5) times the band's
+# PSF FWHM, capped at 0.5".  The fixed 0.5" used before spans 3 (F480M) to
+# 17 (F070W) FWHM in the NIRCam bands, and a satstar with no daophot row of
+# its own then paired with its nearest NEIGHBOUR star and overwrote it,
+# erasing a real star from the catalog (superdense reference cutout, F212N,
+# m3-m7 over 11 seeds: 754 second-pass pairings beyond 0.15", every one with
+# a seed flux < 1/3 of the satstar flux).  Pairings with the star's own
+# clipped row sit at <= 1.5 FWHM for 95-100% of rows in the short-wave bands
+# and 80-89% in the long-wave bands of the production m4 catalogs checked
+# (brick, sgrb2, sgra, arches; lowest brick F405N, 4 of 5, and brick F356W,
+# 332 of 377; see docs/evidence/satstar_replace_radius).  A satstar left
+# unpaired is appended as its own row, as before, so an own row beyond the
+# radius stays in the catalog next to it.  The 0.5" cap keeps the old radius
+# where 1.5 FWHM is wider (MIRI F1130W and redder).
+#
+# Env SATSTAR_REPLACE_RADIUS_ARCSEC overrides with a fixed radius in arcsec
+# (0.5 restores the old behaviour; 0 disables the second pass).  Both
+# variables are read at CALL time, so setting them after import works.
+_SATSTAR_REPLACE_RADIUS_CAP_ARCSEC = 0.5
+
+
+def _satstar_replace_radius_fwhm():
+    """``SATSTAR_REPLACE_RADIUS_FWHM``: the second-pass radius in units of
+    the band's PSF FWHM.  Unset or blank gives 1.5; a value that is not a
+    finite number > 0 raises ``ValueError`` (use
+    ``SATSTAR_REPLACE_RADIUS_ARCSEC=0`` to disable the second pass)."""
+    raw = os.environ.get('SATSTAR_REPLACE_RADIUS_FWHM', '')
+    if not raw.strip():
+        return 1.5
     try:
-        val = float(_env) if _env is not None else 0.5
+        val = float(raw)
     except ValueError:
-        val = 0.5
-    return (val * u.arcsec) if val > 0 else None
+        val = np.nan
+    if not (np.isfinite(val) and val > 0):
+        raise ValueError(f"SATSTAR_REPLACE_RADIUS_FWHM={raw!r}: "
+                         f"expected a finite number > 0")
+    return val
+
+
+def _satstar_replace_radius(filtername=None, basepath=None):
+    """The second-pass pairing radius for ``filtername`` (a Quantity), or
+    None when the second pass is disabled.  ``basepath`` is the field tree
+    whose ``reduction/fwhm_table.ecsv`` takes precedence over the packaged
+    table.  A band missing from the table, or no ``filtername``, gets the
+    0.5" cap."""
+    _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
+    if _env is not None:
+        try:
+            val = float(_env)
+        except ValueError:
+            val = _SATSTAR_REPLACE_RADIUS_CAP_ARCSEC
+        return (val * u.arcsec) if val > 0 else None
+    cap = _SATSTAR_REPLACE_RADIUS_CAP_ARCSEC
+    if filtername is None:
+        return cap * u.arcsec
+    from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    fwhm_tbl = Table.read(fwhm_table_path(basepath, _iov()))
+    row = fwhm_tbl[np.char.upper(np.asarray(fwhm_tbl['Filter']).astype(str))
+                   == str(filtername).upper()]
+    if not len(row):
+        return cap * u.arcsec
+    fwhm = float(row['PSF FWHM (arcsec)'][0])
+    return min(cap, _satstar_replace_radius_fwhm() * fwhm) * u.arcsec
 
 
 def _satstar_dedup_radius():
@@ -4240,12 +4293,14 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         # bright rows, 62% with their correct satstar fit 0.05-0.15" away)
         # while the correct satstar row was appended as a near-duplicate.
         # Satstars unmatched at the tight radius get one more chance at
-        # _satstar_replace_radius(), but only as a MUTUAL nearest-neighbour
-        # pair (each is the other's closest) -- crowding-safe where the plain
-        # radius bump would mis-pair neighbours.  The faint-replacement guard
+        # _satstar_replace_radius() (1.5 FWHM by default), and only as a
+        # MUTUAL nearest-neighbour pair (each is the other's closest).  Mutual
+        # nearest alone does not protect a neighbour: a satstar with no
+        # daophot row of its own is the closest satstar to its neighbour, so
+        # the radius has to stay near the PSF core.  The faint-replacement guard
         # below still vetoes any pairing whose satstar flux is below the
         # daophot flux (a clipped row is always fainter than its satstar fit).
-        _wide = _satstar_replace_radius()
+        _wide = _satstar_replace_radius(filtername, basepath)
         _unmatched_sat = np.setdiff1d(np.arange(len(satstar_cat)), idx_sat)
         if _wide is not None and len(_unmatched_sat) and len(valid_cat_inds):
             _catc = cat_coords[catfinite]
