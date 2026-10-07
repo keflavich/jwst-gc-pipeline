@@ -1,0 +1,4 @@
+F150W n 32 median over frames: m6 resid 1.645  align crf 1.675  destreak crf nan
+  by detector (first exposure): [('nrca1', 0.89, 0.9, nan), ('nrca2', 1.32, 1.33, nan), ('nrca3', 0.84, 0.85, nan), ('nrca4', 1.53, 1.55, nan), ('nrcb1', 2.34, 2.53, nan), ('nrcb2', 2.08, 2.13, nan), ('nrcb3', 3.14, 3.41, nan), ('nrcb4', 1.8, 1.85, nan)]
+F200W n 32 median over frames: m6 resid 0.382  align crf 4.547  destreak crf 0.476
+  by detector (first exposure): [('nrca1', 0.2, 1.75, 0.22), ('nrca2', 0.34, 3.54, 0.38), ('nrca3', 0.23, 1.91, 0.26), ('nrca4', 0.36, 4.55, 0.4), ('nrcb1', 0.41, 6.0, 0.78), ('nrcb2', 0.79, 5.95, 0.95), ('nrcb3', 0.48, 8.14, 1.23), ('nrcb4', 0.46, 4.55, 0.56)]

@@ -1,0 +1,15 @@
+F115W m1_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.6092 MAD 0.0644 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F115W resbgsub_m6_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.6092 MAD 0.0644 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F115W resbgsub_m7_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000 | destreak_o005_crf: median(frame-(res+model)) -0.5956 MAD 0.0595
+F162M m1_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.9581 MAD 0.1406 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F162M resbgsub_m6_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.9581 MAD 0.1406 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F162M resbgsub_m7_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000 | destreak_o005_crf: median(frame-(res+model)) -0.9155 MAD 0.1305
+F182M m1_daophot_basic | align_o005_crf: median(frame-(res+model)) 1.6579 MAD 0.4465 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F182M resbgsub_m6_daophot_basic | align_o005_crf: median(frame-(res+model)) 1.6579 MAD 0.4465 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F182M resbgsub_m7_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000 | destreak_o005_crf: median(frame-(res+model)) -1.5656 MAD 0.4388
+F200W m1_daophot_basic | align_o005_crf: median(frame-(res+model)) 1.5127 MAD 0.3534 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F200W resbgsub_m6_daophot_basic | align_o005_crf: median(frame-(res+model)) 1.5127 MAD 0.3534 | destreak_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000
+F200W resbgsub_m7_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000 | destreak_o005_crf: median(frame-(res+model)) -1.4290 MAD 0.3501
+F150W m1_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000 | destreak_o005_crf: none
+F150W resbgsub_m6_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000 | destreak_o005_crf: none
+F150W resbgsub_m7_daophot_basic | align_o005_crf: median(frame-(res+model)) 0.0000 MAD 0.0000 | destreak_o005_crf: none
