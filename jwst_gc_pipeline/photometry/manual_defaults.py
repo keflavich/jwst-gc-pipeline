@@ -89,6 +89,8 @@ MANUAL_DEFAULTS = {
     # kept while qfit < this and S/N >= the next; 0 = off
     'manual_ext_hysteresis_qfit_max': 0.6,
     'manual_ext_hysteresis_snr_min': 10.0,
+    # ... except within this many FWHM of a saturated star (0 = no guard)
+    'manual_ext_hysteresis_satstar_guard_fwhm': 4.5,
     'manual_ext_recover_satstar_guard_arcsec': 2.0,
     'manual_ext_recover_prom_gate': True,
     'manual_ext_recover_prom_log_intercept': -0.77,

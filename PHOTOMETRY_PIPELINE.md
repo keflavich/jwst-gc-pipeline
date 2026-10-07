@@ -281,7 +281,9 @@ within 0.5 FWHM of a row of the previous phase's vetted catalog (m3 ← m2, …,
 m7 ← m6) while its qfit < `manual_ext_hysteresis_qfit_max` (0.6) and S/N ≥
 `manual_ext_hysteresis_snr_min` (10), so a star the previous phase subtracted
 stays through a small qfit or S/N change between phases (the vetting flicker,
-`docs/evidence/vetting_hysteresis/README.md`); 0 turns it off. Anything flagged `model_overshoot` is then dropped, and
+`docs/evidence/vetting_hysteresis/README.md`); 0 turns it off. A source within
+`manual_ext_hysteresis_satstar_guard_fwhm` (4.5) FWHM of a saturated star gets
+no such keep (0 = no guard). Anything flagged `model_overshoot` is then dropped, and
 a fit whose model peak still exceeds `manual_overshoot_drop_ratio` (5.0) × the
 local data peak after the refit is dropped outright. MIRI instead vets purely on data-i2d **prominence**
 `(core_peak − annulus_median)/annulus_MAD ≥ min_prominence`. The pipeline then
@@ -373,6 +375,7 @@ still run after m6.
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
 | `--manual-ext-hysteresis-qfit-max` (0 = off) | 0.6 | 0.6 (m3–m7) | 0.6 (m3–m7) | (off: MIRI vets on prominence) |
 | `--manual-ext-hysteresis-snr-min` | 10.0 | 10 | 10 | |
+| `--manual-ext-hysteresis-satstar-guard-fwhm` (0 = no guard) | 4.5 | 4.5 | 4.5 | |
 | `--manual-ext-qfit-recover-max` | 0.2 | 0.2 (= qfit_max ⇒ **no-op**) | set 0.5 to enable | |
 | `--manual-overshoot-drop-ratio` | 5.0 | 5.0 | 5.0 | 5.0 | final overshoot DROP (model peak > this × local data peak after the refit) |
 | `--manual-resid-roundlo` / `-roundhi` | −1.0 / 1.0 | −1.0 / 1.0 | −1.0 / 1.0 | −1.0 / 1.0 | daofind roundness window, m2+ |
@@ -551,7 +554,7 @@ control is the default.
 | `--manual-ext-star-prom-robust-min` | 0 (off) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; −1 = AUTO (8 on star-dominated fields, off on extended-emission targets) |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
-| `--manual-ext-hysteresis-qfit-max` | 0.6 | m3–m7, NIRCam: also keep a source within 0.5 FWHM of a row of the previous phase's vetted catalog with qfit < this and S/N ≥ `--manual-ext-hysteresis-snr-min` (10); the overshoot drop and structure prune still apply; 0 = off |
+| `--manual-ext-hysteresis-qfit-max` | 0.6 | m3–m7, NIRCam: also keep a source within 0.5 FWHM of a row of the previous phase's vetted catalog with qfit < this and S/N ≥ `--manual-ext-hysteresis-snr-min` (10), except within `--manual-ext-hysteresis-satstar-guard-fwhm` (4.5) FWHM of a saturated star; the overshoot drop and structure prune still apply; 0 = off |
 | `--manual-ext-snr-floor-per-frame` | (propagated) | put the local S/N floor (`--manual-ext-local-snr-min`) on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch); the sky-clean floor is per-frame either way |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + per-frame S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-sky-clean-local-arcsec` | 3.0 | sky-clean tier, LOCAL reference: a source is also clean when its annulus floor is ≤ `--manual-sky-clean-local-max-err` i2d ERR above the 5th percentile of its 3″ tile (smooth bright plateau = clean; filament, PSF-scale emission structure or crowding = not); OR-ed with the global dark-sky test; 0 = global only; needs the i2d ERR plane (skipped with a log line without it) |

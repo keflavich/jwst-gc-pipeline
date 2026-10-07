@@ -5,7 +5,8 @@ threshold (the bright-isolated keep's qfit < 0.4 cap, qfit <= qfit_max,
 flags == 1) can be vetted at phase K and dropped at K+1 after a small refit
 change, leaving the whole star in the K+1 residual.  The keep re-admits a
 source within ``hysteresis_match_arcsec`` of the previous phase's vetted
-catalog while qfit < ``hysteresis_qfit_max`` and S/N >= ``hysteresis_snr_min``.
+catalog while qfit < ``hysteresis_qfit_max`` and S/N >= ``hysteresis_snr_min``,
+except within ``hysteresis_satstar_guard_arcsec`` of a saturated star.
 """
 import numpy as np
 import astropy.units as u
@@ -89,14 +90,74 @@ def test_miri_path_ignores_the_keep():
     assert _kept(t, _prev_at(t), min_prominence=5.0) == set()
 
 
+def _with_satstar(sep_arcsec, masked=False):
+    """Row 0 a saturated star, rows 1.. sources ``sep_arcsec`` east of it;
+    every row passes the keep's qfit and S/N gates."""
+    sep = np.atleast_1d(np.asarray(sep_arcsec, float))
+    t = _mk(np.full(len(sep) + 1, 0.45), 30)
+    sat = SkyCoord(RA0 * u.deg, DEC0 * u.deg)
+    t['skycoord'] = SkyCoord([sat] + [sat.spherical_offsets_by(d * u.arcsec, 0 * u.arcsec)
+                                      for d in sep])
+    t['is_saturated'] = np.r_[True, np.zeros(len(sep), bool)]
+    if masked:
+        from astropy.table import MaskedColumn
+        t['is_saturated'] = MaskedColumn(t['is_saturated'],
+                                         mask=np.r_[False, np.ones(len(sep), bool)])
+    return t
+
+
+@pytest.mark.parametrize('masked', [False, True])
+def test_satstar_guard_refuses_nearby_sources(masked, capsys):
+    t = _with_satstar([0.3, 0.6, 1.0], masked=masked)
+    prev = _prev_at(t)
+    assert _kept(t, prev) == {0, 1, 2, 3}                       # no guard
+    capsys.readouterr()
+    # sources within 0.612" (4.5 FWHM at F405N) lose the keep.  The saturated
+    # row is not guarded (and the model==catalog invariant keeps it anyway),
+    # so the log counts the two neighbours only.
+    assert _kept(t, prev, hysteresis_satstar_guard_arcsec=0.612) == {0, 3}
+    assert '2 refused within 0.612"' in capsys.readouterr().out
+    assert _kept(t, prev, hysteresis_satstar_guard_arcsec=0.2) == {0, 1, 2, 3}
+
+
+def test_satstar_guard_without_saturated_rows_is_inert():
+    t = _mk([0.45, 0.45], [30, 30])
+    assert _kept(t, _prev_at(t), hysteresis_satstar_guard_arcsec=5.0) == {0, 1}
+    t['is_saturated'] = np.zeros(2, bool)
+    assert _kept(t, _prev_at(t), hysteresis_satstar_guard_arcsec=5.0) == {0, 1}
+
+
+def test_hysteresis_radii_from_the_fwhm_table(tmp_path):
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    packaged = Table.read(fwhm_table_path(None, 'NIRCAM'))
+    fw = float(packaged[np.char.upper(np.asarray(packaged['Filter']).astype(str))
+                        == 'F405N']['PSF FWHM (arcsec)'][0])
+    # case-insensitive band match; packaged table when basepath has none
+    for filt in ('F405N', 'f405n'):
+        r, g = C._hysteresis_radii(filt, str(tmp_path), 4.5)
+        assert r == pytest.approx(0.5 * fw)
+        assert g == pytest.approx(4.5 * fw)
+    assert C._hysteresis_radii('F405N', None, 0.0)[1] == 0.0
+    # a band missing from the table turns the keep off instead of raising
+    assert C._hysteresis_radii('F999X', None, 4.5) is None
+    # the field tree's reduction/fwhm_table.ecsv takes precedence
+    (tmp_path / 'reduction').mkdir()
+    Table({'Filter': ['F405N'], 'PSF FWHM (arcsec)': [0.2]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv', format='ascii.ecsv')
+    r, g = C._hysteresis_radii('F405N', str(tmp_path), 4.5)
+    assert (r, g) == (pytest.approx(0.1), pytest.approx(0.9))
+
+
 def test_pipeline_defaults_and_cli():
     assert MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'] == 0.6
     assert MANUAL_DEFAULTS['manual_ext_hysteresis_snr_min'] == 10.0
+    assert MANUAL_DEFAULTS['manual_ext_hysteresis_satstar_guard_fwhm'] == 4.5
     import inspect
     from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as CL
     src = inspect.getsource(CL)
     assert '--manual-ext-hysteresis-qfit-max' in src
     assert '--manual-ext-hysteresis-snr-min' in src
+    assert '--manual-ext-hysteresis-satstar-guard-fwhm' in src
 
 
 @pytest.mark.parametrize('phase,prev', [('m3', ('m2', False)), ('m4', ('m3', False)),

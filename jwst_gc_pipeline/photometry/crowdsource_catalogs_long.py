@@ -4524,6 +4524,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_snr_min'],
                     help="S/N (flux / flux_err) floor of the previous-phase keep "
                          "(default 10).")
+    parser.add_option("--manual-ext-hysteresis-satstar-guard-fwhm",
+                    dest="manual_ext_hysteresis_satstar_guard_fwhm",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_satstar_guard_fwhm'],
+                    help="Satstar guard of the previous-phase keep: a source within "
+                         "this many FWHM of a saturated star gets no previous-phase "
+                         "keep, so wing structure fitted as a star in one phase is "
+                         "not carried into the next (default 4.5; 0 = no guard).")
     parser.add_option("--manual-ext-qfit-recover-max", dest="manual_ext_qfit_recover_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_recover_max'],
                     help="RECOVER-tier qfit ceiling for the extended-emission vetting "

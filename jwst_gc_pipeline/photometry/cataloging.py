@@ -1600,6 +1600,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               hysteresis_qfit_max=0.0,
                               hysteresis_snr_min=10.0,
                               hysteresis_match_arcsec=0.0,
+                              hysteresis_satstar_guard_arcsec=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
 
@@ -1633,9 +1634,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     within ``hysteresis_match_arcsec`` of a row of the previous phase's vetted
     catalog (``prev_vetted_skycoord``) is kept while its qfit stays below
     ``hysteresis_qfit_max`` and its S/N (flux / flux_err) stays at or above
-    ``hysteresis_snr_min``.  The overshoot drop, the structure-noise prune and
-    the extended-emission prominence gate still apply to it.  See the block
-    comment at the keep.
+    ``hysteresis_snr_min``.  A non-saturated source within
+    ``hysteresis_satstar_guard_arcsec`` of an ``is_saturated`` row gets no
+    previous-phase keep (0 = no guard).  The overshoot drop, the
+    structure-noise prune and the extended-emission prominence gate still
+    apply to it.  See the block comment at the keep.
 
     ``snr_floor_propagated``: the local S/N floor (``local_snr_min``) uses
     flux / flux_err_prop, the uncertainty of the merged flux, in place of
@@ -2224,11 +2227,33 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         with np.errstate(invalid='ignore'):
             _hyst = (_hmatch & np.isfinite(qf) & (qf < float(hysteresis_qfit_max))
                      & np.isfinite(snr) & (snr >= float(hysteresis_snr_min)))
+        # satstar guard: in superdense F405N, 27 of the 50 sources only the
+        # keep retained were over-subtracted at m7 (residual S/N <= -3), all
+        # 0.11-0.63" (0.8-4.7 FWHM) from a saturated star: wing structure
+        # the previous phase fitted as a star.  The kept F212N stars lie
+        # 2.5-9.5 FWHM from a satstar, so the radius scales with the FWHM
+        # (the caller passes it in arcsec).  The saturated rows themselves
+        # are not guarded.
+        _n_hguard = 0
+        if (hysteresis_satstar_guard_arcsec > 0 and 'is_saturated' in t.colnames):
+            _hiss = t['is_saturated']
+            _hiss = np.asarray(_hiss.filled(False) if hasattr(_hiss, 'filled')
+                               else _hiss, dtype=bool)
+            _hsat = _hiss & _hfin
+            if _hsat.any():
+                _hnear = np.zeros(n, dtype=bool)
+                _, _hsd, _ = _hsc[_hfin].match_to_catalog_sky(_hsc[_hsat])
+                _hnear[_hfin] = _hsd.arcsec <= float(hysteresis_satstar_guard_arcsec)
+                _hnear &= ~_hiss
+                _n_hguard = int(np.sum(_hyst & _hnear & ~keep))
+                _hyst &= ~_hnear
         _n_hyst = int(np.sum(_hyst & ~keep))
         keep = keep | _hyst
         print(f"[{label}] previous-phase keep: +{_n_hyst} vetted in the previous "
               f"phase (within {hysteresis_match_arcsec:.3g}\") with qfit < "
-              f"{hysteresis_qfit_max:g} and S/N >= {hysteresis_snr_min:g}",
+              f"{hysteresis_qfit_max:g} and S/N >= {hysteresis_snr_min:g}; "
+              f"{_n_hguard} refused within {hysteresis_satstar_guard_arcsec:.3g}\" "
+              f"of a saturated star",
               flush=True)
 
     # LOW-FIT-QUALITY flag: mark kept sources whose fit is poor (qfit above the
@@ -2392,6 +2417,22 @@ _EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2', 'ngc6334')
 _PREV_VETTED_PHASE = {'m3': ('m2', False), 'm4': ('m3', False),
                       'm5': ('m4', False), 'm6': ('m5', True),
                       'm7': ('m6', True)}
+
+
+def _hysteresis_radii(filt, basepath=None, satstar_guard_fwhm=0.0):
+    """(match radius, satstar guard radius) in arcsec of the previous-phase
+    keep for ``filt``: 0.5 FWHM and ``satstar_guard_fwhm`` FWHM.  The FWHM
+    comes from ``basepath``'s ``reduction/fwhm_table.ecsv`` when it exists,
+    else the packaged table (the table the satstar replacement reads).  A
+    band missing from the table gives None (the keep is off)."""
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    ftab = Table.read(fwhm_table_path(basepath, _L._instrument_override()))
+    row = ftab[np.char.upper(np.asarray(ftab['Filter']).astype(str))
+               == str(filt).upper()]
+    if not len(row):
+        return None
+    fwhm = float(row['PSF FWHM (arcsec)'][0])
+    return 0.5 * fwhm, float(satstar_guard_fwhm) * fwhm
 
 
 def _is_extended_emission(options):
@@ -9288,7 +9329,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # previous-phase keep: this module/band's vetted catalog of
                 # the phase before (the per-obs file this run wrote there)
                 _hyst_qmax = float(mopt(opts_phase, 'manual_ext_hysteresis_qfit_max'))
-                _hyst_sc, _hyst_r = None, 0.0
+                _hyst_sc, _hyst_r, _hyst_guard = None, 0.0, 0.0
                 if (_hyst_qmax > 0 and not _miri_field
                         and phase in _PREV_VETTED_PHASE):
                     _hpl, _hprs = _PREV_VETTED_PHASE[phase]
@@ -9297,10 +9338,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     if os.path.exists(_hpath):
                         _htab = Table.read(_hpath)
                         if len(_htab) and 'skycoord' in _htab.colnames:
-                            _hyst_sc = SkyCoord(_htab['skycoord'])
-                            _hft = Table.read(_L.fwhm_table_path())
-                            _hyst_r = 0.5 * float(_hft[_hft['Filter'] == filt]
-                                                  ['PSF FWHM (arcsec)'][0])
+                            _hradii = _hysteresis_radii(
+                                filt, basepath, float(mopt(
+                                    opts_phase, 'manual_ext_hysteresis_satstar_guard_fwhm')))
+                            if _hradii is not None:
+                                _hyst_sc = SkyCoord(_htab['skycoord'])
+                                _hyst_r, _hyst_guard = _hradii
+                            else:
+                                print(f"manual [{phase}] {filt}/{module}: {filt} not in "
+                                      f"the FWHM table; previous-phase keep off",
+                                      flush=True)
                     else:
                         print(f"manual [{phase}] {filt}/{module}: no previous-phase "
                               f"vetted catalog {_hpath}; previous-phase keep off",
@@ -9352,6 +9399,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     hysteresis_qfit_max=_hyst_qmax,
                     hysteresis_snr_min=float(mopt(opts_phase, 'manual_ext_hysteresis_snr_min')),
                     hysteresis_match_arcsec=_hyst_r,
+                    hysteresis_satstar_guard_arcsec=_hyst_guard,
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)
                 # -> the un-tokened all-obs vetted catalog, which is the final
