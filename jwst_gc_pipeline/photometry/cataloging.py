@@ -3886,6 +3886,68 @@ def crossband_seed_inputs(cut_bp, modules, filternames, options):
     return out
 
 
+def _catalog_dva_state(meta):
+    """Was the catalog fit on DVA-corrected frames?  Read from its ``WCSGDVA``
+    stamp, the crf ``DVACORR`` keyword that ``crowdsource_catalogs_long``
+    copies into every catalog it writes.
+
+    ``reduction/dva_correction.py`` writes ``DVACORR = True`` when it applies
+    the inter-detector DVA shift and writes nothing otherwise, so an absent
+    stamp is an uncorrected frame.  A catalog older than the stamps
+    (2026-07-13) is also read as uncorrected; the DVA code dates from
+    2026-07-11.  On the production m6 seed inputs of 2026-10-07 this reading
+    flags only wd1 (F150W, F444W corrected) and wd2 (F150W corrected).
+    """
+    val = meta.get('WCSGDVA')
+    if val is None:
+        return False
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
+    return str(val).strip().upper() in ('T', 'TRUE', '1')
+
+
+def _check_crossband_dva_consistency(states, label='m7 crossband seed'):
+    """Refuse to combine catalogs fit on DVA-corrected and uncorrected frames.
+
+    The inter-detector DVA correction shifts each detector rigidly about the
+    V1 boresight, ~540" from the NIRCam apertures, so each detector moves by
+    10-25 mas and only ~5 mas of that is differential.  A reference tie
+    absorbs the common part; a field without one (wd2, #1128) keeps it.  A
+    band reduced before 2026-07-11 next to a band reduced after it then sits
+    ~20 mas away, and a seed position taken from one group lands 0.4-0.8 SW
+    px off-star in the other (wd2 F150W: overshoot-refit rows 0.5 mag faint).
+
+    Parameters
+    ----------
+    states : dict
+        ``{label: bool}`` per input catalog (``_catalog_dva_state``).
+    label : str
+        Caller name for the message.
+
+    Raises
+    ------
+    RuntimeError
+        When both states are present, unless env
+        ``CROSSBAND_ALLOW_DVA_MISMATCH`` is on (then it prints a warning).
+    """
+    on = sorted(k for k, v in states.items() if v)
+    off = sorted(k for k, v in states.items() if not v)
+    if not (on and off):
+        return
+    msg = (f"{label}: the input catalogs mix DVA states (WCSGDVA). Corrected: "
+           f"{on}; uncorrected or unstamped: {off}. The inter-detector DVA "
+           f"correction moves "
+           f"each detector by 10-25 mas unless a reference tie absorbs the "
+           f"common shift, so positions from one group land off-star in the "
+           f"other. Rebuild one group's crf with the other group's "
+           f"APPLY_DVA_CORRECTION setting (CROSSBAND_ALLOW_DVA_MISMATCH=1 to "
+           f"override).")
+    if _handoff_env_flag('CROSSBAND_ALLOW_DVA_MISMATCH', False):
+        print("WARNING (override): " + msg, flush=True)
+    else:
+        raise RuntimeError(msg)
+
+
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                           min_filters=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],
@@ -3936,11 +3998,13 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     # staleness check reads exactly the list this loop consumes.
     ras = []; decs = []; filtidx = []; snrs = []
     flist = []
+    dva_states = {}
     for module, filt, p in crossband_seed_inputs(cut_bp, modules, filternames,
                                                  options):
         t = Table.read(p)
         if 'skycoord' not in t.colnames or len(t) == 0:
             continue
+        dva_states[f'{filt.lower()}/{module}'] = _catalog_dva_state(t.meta)
         sc = t['skycoord'] if isinstance(t['skycoord'], SkyCoord) else SkyCoord(t['skycoord'])
         qf = np.asarray(t['qfit'], float) if 'qfit' in t.colnames else np.zeros(len(t))
         fx = np.asarray(t['flux'], float) if 'flux' in t.colnames else np.full(len(t), np.nan)
@@ -3956,6 +4020,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
         decs.extend(np.atleast_1d(sc.dec.deg)[good])
         snrs.extend(snr[good])
         filtidx.extend([k] * int(good.sum()))
+    _check_crossband_dva_consistency(dva_states)
     if not ras:
         raise ValueError(f"m7 crossband seed: no confirmed m6 detections under {cut_bp}/catalogs/ "
                          f"(snr>{snr_min}, qfit<{qfit_max})")
