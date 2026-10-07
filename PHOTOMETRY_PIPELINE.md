@@ -282,8 +282,9 @@ m7 ← m6) while its qfit < `manual_ext_hysteresis_qfit_max` (0.6) and S/N ≥
 `manual_ext_hysteresis_snr_min` (10), so a star the previous phase subtracted
 stays through a small qfit or S/N change between phases (the vetting flicker,
 `docs/evidence/vetting_hysteresis/README.md`); 0 turns it off. A source within
-`manual_ext_hysteresis_satstar_guard_fwhm` (4.5) FWHM of a saturated star gets
-no such keep (0 = no guard). Anything flagged `model_overshoot` is then dropped, and
+`manual_ext_hysteresis_satstar_guard_fwhm` (4.5) FWHM of a saturated star (its
+`is_saturated` row, or any satstar row of the merged catalog before the in-field
+duplicate collapse) gets no such keep (0 = no guard). Anything flagged `model_overshoot` is then dropped, and
 a fit whose model peak still exceeds `manual_overshoot_drop_ratio` (5.0) × the
 local data peak after the refit is dropped outright. MIRI instead vets purely on data-i2d **prominence**
 `(core_peak − annulus_median)/annulus_MAD ≥ min_prominence`. The pipeline then
