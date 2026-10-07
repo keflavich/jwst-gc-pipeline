@@ -1,0 +1,6 @@
+m2: 4 of 327 no-row stars have a f277w row within 0.1"
+m3: 13 of 327 no-row stars have a f277w row within 0.1"
+m4: 13 of 327 no-row stars have a f277w row within 0.1"
+resbgsub_m5: 11 of 327 no-row stars have a f277w row within 0.1"
+resbgsub_m6: 10 of 327 no-row stars have a f277w row within 0.1"
+resbgsub_m7: 0 of 327 no-row stars have a f277w row within 0.1"
