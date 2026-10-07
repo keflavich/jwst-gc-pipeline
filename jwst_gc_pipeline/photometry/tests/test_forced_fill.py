@@ -119,6 +119,45 @@ def test_forced_fill_negative_flux_no_emag():
     # the positive-flux phantoms still get their emag
     assert np.isfinite(tbl['emag_ab_f405n'][ndet])
     assert np.isfinite(tbl['emag_ab_f405n'][ndet + 1])
+    # ... but a sub-threshold / negative fit must still carry a finite,
+    # POSITIVE upper limit derived from the fit error (not from flux/snr,
+    # which would be meaningless for flux <= 0).
+    assert np.isfinite(tbl['flux_ulim_f405n'][ineg])
+    assert tbl['flux_ulim_f405n'][ineg] > 0
+    assert np.isfinite(tbl['mag_vega_ulim_f405n'][ineg])
+
+
+def test_forced_fill_upper_limit_scales_with_nsigma():
+    """``flux_ulim_{filt}`` must equal nsigma * ferr for a recovered (SNR>=
+    nsigma) source too -- it is a depth diagnostic independent of whether the
+    source was promoted to a detection, derived from the per-source combined
+    fit error, never from flux/snr (which breaks sign/definition at flux<=0)."""
+    tbl, prepare_frame, ndet, cjy, zp, atrue = _build()
+    ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare_frame,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False)
+    for i in (ndet, ndet + 1):
+        assert tbl['forced_snr_f405n'][i] > 0
+        implied_ferr = tbl['flux_f405n'][i] / tbl['forced_snr_f405n'][i]
+        assert abs(tbl['flux_ulim_f405n'][i] - 3.0 * implied_ferr) < 1e-6 * abs(implied_ferr)
+
+
+def test_forced_fill_no_fit_leaves_ulim_nan():
+    """A target with zero in-footprint frames (nseen=0, e.g. off every frame)
+    gets no error estimate at all, so its upper limit must stay NaN rather than
+    silently reading as some number -- there is no local noise measurement to
+    derive one from."""
+    tbl, _, ndet, cjy, zp, atrue = _build()
+
+    def prep_no_coverage(**kw):
+        raise FileNotFoundError("unused -- forces zero coverage via empty frame list")
+
+    nrec = ff.forced_fill_band(tbl, 'f405n', [], prepare_frame=prep_no_coverage,
+                               frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                               fit_shape=(5, 5), verbose=False)
+    assert nrec == 0
+    assert np.isnan(tbl['flux_ulim_f405n'][ndet])
+    assert np.isnan(tbl['flux_ulim_f405n'][ndet + 1])
 
 
 def test_forced_fill_prep_failure_handling(capsys):
