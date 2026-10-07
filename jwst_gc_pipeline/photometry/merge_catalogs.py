@@ -1529,6 +1529,12 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     desat = "_unsatstar" if desat else ""
     bgsub = _bgsub_token(bgsub, resbgsub)
     fitpsf = '_fitpsf' if fitpsf else ''
+    # the per-frame writer (save_photutils_results, _predict_output_tokens)
+    # stamps ``{epsf_}`` between {bgsub} and {blur_}; without it an --epsf or
+    # PSF_EPSF_CORE_DIR (``_hybpsf``) run globs nothing and m12 dies with
+    # "No tables found".  The merged OUTPUT name stays epsf-less: its readers
+    # (cataloging.merged_catalog_path et al.) spell it without the token.
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
     # the per-frame writer inserts a ``_group`` token (between {blur_} and the
     # iteration token) when sources were fit with a SourceGrouper
@@ -1644,7 +1650,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                 base_pat = (
                     f"{basepath}/{filtername.upper()}/"
                     f"{filtername.lower()}_{module_}{glob_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
-                    f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
+                    f"{desat}{bgsub}{epsf_}{fitpsf}{blur_}{group_}{iter_token}"
                 )
                 raw_fns.extend(glob.glob(
                     f"{base_pat}_{method_suffix}{suffix}.fits"))
@@ -1664,7 +1670,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     n_chunked = sum(1 for fns in frame_groups.values() if len(fns) > 1)
     print(f"Found {len(raw_fns)} files across {len(tblfns)} frames "
           f"({n_chunked} chunked) for "
-          f"{filtername.lower()}_*_visit*_exp*{desat}{bgsub}{fitpsf}{blur_}:")
+          f"{filtername.lower()}_*_visit*_exp*{desat}{bgsub}{epsf_}{fitpsf}{blur_}:")
     for key in tblfns:
         chunks = frame_groups[key]
         if len(chunks) == 1:
@@ -1673,7 +1679,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             print(f"{key}  <- vstack of {len(chunks)} chunks")
 
     if len(tblfns) == 0:
-        raise ValueError(f"No tables found matching {basepath}/{filtername.upper()}/{filtername.lower()}_{module}....{desat}{bgsub}{fitpsf}{blur_}_{method}{suffix}.fits")
+        raise ValueError(f"No tables found matching {basepath}/{filtername.upper()}/{filtername.lower()}_{module}....{desat}{bgsub}{epsf_}{fitpsf}{blur_}_{method}{suffix}.fits")
 
     tables = []
     for key in tblfns:
