@@ -2460,6 +2460,58 @@ def _resolve_each_suffix(options, filtername):
     return default
 
 
+#: Header key on a smoothed residual background: the per-exposure crf suffix
+#: of the frames whose residuals built it (#1130).
+BG_FRAME_SUFFIX_KEY = 'BGFRMSUF'
+BG_FRAME_SUFFIX_OVERRIDE_ENV = 'ALLOW_BG_FRAME_SUFFIX_MISMATCH'
+
+
+def _stamp_bg_frame_suffix(bg_path, each_suffix):
+    """Record on ``bg_path`` which per-exposure crf its residuals came from.
+
+    The smoothed background carries the sky level of the frames the phase
+    fit: the per-frame residuals keep the pristine frame level
+    (``original_data``) and the smoother adds and removes none.  ``destreak``
+    frames sit near 0 and ``align`` frames keep the sky, so a background
+    built from one and subtracted from the other leaves the difference on
+    every pixel.  wd2 SW (#1130): m1-m6 read ``destreak``, m7 read ``align``,
+    0.6-7.5 MJy/sr stayed in every m7 frame, and the local-S/N gate (which
+    divides the raw daofind ``peak`` by a high-pass noise map) passed 96-99%
+    of the detections.
+    """
+    with fits.open(bg_path, mode='update') as h:
+        hdu = h['SCI'] if 'SCI' in [x.name for x in h] else h[0]
+        hdu.header[BG_FRAME_SUFFIX_KEY] = (
+            str(each_suffix), 'per-exposure crf suffix the bg was built from')
+
+
+def _check_bg_frame_suffix(bg_header, frame_suffix, label=''):
+    """Compare a smoothed background's frame-suffix stamp with the frames
+    about to have it subtracted.
+
+    Returns ``'match'``, ``'unstamped'`` (a background written before the
+    stamp existed; nothing to compare) or ``'mismatch'`` under the override.
+    Raises ``RuntimeError`` on a mismatch unless
+    ``ALLOW_BG_FRAME_SUFFIX_MISMATCH=1``.
+    """
+    stamped = str(bg_header.get(BG_FRAME_SUFFIX_KEY, '') or '').strip()
+    if not stamped:
+        return 'unstamped'
+    want = str(frame_suffix).strip()
+    if stamped == want:
+        return 'match'
+    msg = (f"{label}: smoothed bg was built from '{stamped}' frames but is "
+           f"being subtracted from '{want}' frames.  The two carry different "
+           f"sky levels, so the difference stays in every pixel and inflates "
+           f"the local S/N of every detection (#1130).  Rebuild the bg from "
+           f"'{want}' frames or run this phase on '{stamped}'.")
+    if os.environ.get(BG_FRAME_SUFFIX_OVERRIDE_ENV, '') == '1':
+        print(f"WARNING ({BG_FRAME_SUFFIX_OVERRIDE_ENV}=1): {msg}", flush=True)
+        return 'mismatch'
+    raise RuntimeError(f"{msg}  Set {BG_FRAME_SUFFIX_OVERRIDE_ENV}=1 to "
+                       f"subtract it anyway.")
+
+
 def _satstar_recovery_signature(options):
     """A compact string identifying every option that changes the per-exposure
     satstar FIT.  It is stamped into the per-exposure satstar catalog (meta key
@@ -2851,6 +2903,16 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             raise ValueError(f"manual resbg subtraction needs {resbg_path} to exist")
         with fits.open(resbg_path) as bgh:
             bg_hdu = bgh['SCI'] if 'SCI' in [h.name for h in bgh] else bgh[0]
+            # A bg built from other frames (destreak vs align) leaves their
+            # sky-level difference in every pixel after subtraction (#1130).
+            if getattr(options, 'each_suffix', None):
+                _bg_state = _check_bg_frame_suffix(
+                    bg_hdu.header, _resolve_each_suffix(options, filtername),
+                    label=os.path.basename(resbg_path))
+                if _bg_state == 'unstamped':
+                    print(f"[manual] {os.path.basename(resbg_path)} has no "
+                          f"{BG_FRAME_SUFFIX_KEY} stamp; its frame lineage "
+                          f"is not checked", flush=True)
             bg_wcs = wcs.WCS(bg_hdu.header)
             # MEMORY: crop the full-mosaic bg (~8766x11574) to just this frame's footprint
             # (+margin) BEFORE loading/reprojecting.  Reprojecting the whole mosaic in every
@@ -2885,8 +2947,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         data = data - bg_finite
         data[zeros] = 0
         background_map = bg_finite
+        # median(frame - bg) is ~0 when the bg came from these frames; a
+        # lineage mismatch shows up here as the sky-level difference (#1130).
+        _good = ~zeros & np.isfinite(data)
+        _med_after = float(np.median(data[_good])) if _good.any() else float('nan')
         print(f"[manual] subtracted reprojected smoothed-bg {os.path.basename(resbg_path)} "
-              f"(sum={float(np.nansum(bg_finite)):.3e})", flush=True)
+              f"(sum={float(np.nansum(bg_finite)):.3e}, "
+              f"median(frame-bg)={_med_after:.4g})", flush=True)
 
     # What LocalBackground will actually be measured on.  `local_bkg` means a
     # different physical quantity at m4 (raw frame) and m5 (smoothed-residual
@@ -9312,6 +9379,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # feedback loop that drives faint stars negative with
                         # iteration); falls back to the plain smoother on error
                         _bg_median_size = int(mopt(options, 'manual_residual_bg_median_size'))
+                        _bg_fresh = False
                         try:
                             # Also mask the i2d detection seed (coadd-confirmed
                             # point sources), not just this phase's vetted
@@ -9345,6 +9413,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                                        if _seed_for_bg else ()),
                                 satstar_catalogs=_sat_paths,
                                 satstar_mask_radius_fwhm=_sat_fwhm)
+                            _bg_fresh = True
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "
                                   f"using plain smoother", flush=True)
@@ -9353,6 +9422,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(
                                 mc_i2d, median_size=(_bg_median_size
                                                      if _bg_median_size > 0 else 3))
+                        if _bg_fresh:
+                            # The source-masked builder always rewrites the map,
+                            # so the stamp names the frames this phase fit.  The
+                            # plain smoother may hand back an older file; that
+                            # one stays unstamped and is not checked (#1130).
+                            _stamp_bg_frame_suffix(bg_for_next[(module, filt)],
+                                                   _resolve_each_suffix(options, filt))
                         print(f"manual [{phase}]: smoothed bg for next phase = "
                               f"{bg_for_next[(module, filt)]}", flush=True)
                         # Everything the next phase needs is now on disk, so
