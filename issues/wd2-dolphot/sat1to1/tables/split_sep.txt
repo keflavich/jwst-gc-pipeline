@@ -1,0 +1,12 @@
+mainfcbg  0- 3 mas: 13 pairs; with a satstar-replaced band in either row: 13; partner band values: 75
+mainfcbg  3-20 mas: 22 pairs; with a satstar-replaced band in either row: 22; partner band values: 156
+mainfcbg 20-50 mas: 3 pairs; with a satstar-replaced band in either row: 3; partner band values: 4
+mainfcbg 50-80 mas: 2 pairs; with a satstar-replaced band in either row: 2; partner band values: 12
+integfcbg  0- 3 mas: 3 pairs; with a satstar-replaced band in either row: 3; partner band values: 19
+integfcbg  3-20 mas: 36 pairs; with a satstar-replaced band in either row: 36; partner band values: 207
+integfcbg 20-50 mas: 6 pairs; with a satstar-replaced band in either row: 6; partner band values: 27
+integfcbg 50-80 mas: 0 pairs; with a satstar-replaced band in either row: 0; partner band values: 0
+mainfcbgkf  0- 3 mas: 13 pairs; with a satstar-replaced band in either row: 13; partner band values: 74
+mainfcbgkf  3-20 mas: 19 pairs; with a satstar-replaced band in either row: 19; partner band values: 150
+mainfcbgkf 20-50 mas: 4 pairs; with a satstar-replaced band in either row: 4; partner band values: 5
+mainfcbgkf 50-80 mas: 2 pairs; with a satstar-replaced band in either row: 2; partner band values: 4
