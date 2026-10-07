@@ -31,6 +31,17 @@ source noise level survived was ``forced_snr_{filt}`` (flux/ferr), from which
 a limit cannot be safely recovered when the point estimate itself is near
 zero or negative.
 
+``is_upper_limit_{filt}`` is an explicit per-band bool, set ``True`` exactly
+for a fitted-but-sub-threshold row (the only rows where ``flux_ulim_{filt}``
+is a bound rather than a detection-depth diagnostic) and ``False`` everywhere
+else -- a firm detection, a row never targeted (independently detected,
+saturated, or vetoed by the satstar-partner guard), and a row where the fill
+was attempted but never converged on any frame (``fitted`` is ``False``, so
+there is no measurement of any kind, not even a limit). Reading
+``mask_{filt} & forced_filled_{filt} & isfinite(flux_ulim_{filt})`` recovers
+the same set, but the flag exists so a consumer does not have to reconstruct
+that combination correctly at every call site.
+
 Calibration is taken from the band's own firm detections in the merged table
 (``conv = median(flux_jy / flux)``; Vega zero-point likewise), so m8 fluxes are
 on exactly the same system as m7 -- no zero-point / pixel-area re-derivation.
@@ -158,14 +169,16 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
 
     Adds/sets columns: ``forced_filled_{filt}`` (bool), ``forced_snr_{filt}``,
     ``flux_ulim_{filt}``, ``mag_vega_ulim_{filt}`` (when a Vega zero-point is
-    available) and ``mag_ab_ulim_{filt}`` -- the last three are the
-    ``nsigma``-scaled per-source upper limit, written for every fitted target
-    regardless of SNR -- and -- for sources reaching SNR>=nsigma -- updates
-    ``flux_{filt}``, ``flux_jy_{filt}``, ``mag_ab_{filt}``, ``mag_vega_{filt}``,
-    ``emag_ab_{filt}`` and clears ``mask_{filt}``.  Sub-threshold sources keep
-    ``mask_{filt}=True``, keep the raw measured flux in ``flux_{filt}`` (a point
-    estimate, not a bound -- may be negative or zero), and get their bound from
-    ``flux_ulim_{filt}``/``mag_*_ulim_{filt}`` instead.
+    available), ``mag_ab_ulim_{filt}`` -- these four are the ``nsigma``-scaled
+    per-source upper limit, written for every fitted target regardless of SNR
+    -- and ``is_upper_limit_{filt}`` (bool) -- and -- for sources reaching
+    SNR>=nsigma -- updates ``flux_{filt}``, ``flux_jy_{filt}``, ``mag_ab_{filt}``,
+    ``mag_vega_{filt}``, ``emag_ab_{filt}`` and clears ``mask_{filt}``.
+    Sub-threshold sources keep ``mask_{filt}=True``, keep the raw measured flux
+    in ``flux_{filt}`` (a point estimate, not a bound -- may be negative or
+    zero), get their bound from ``flux_ulim_{filt}``/``mag_*_ulim_{filt}``
+    instead, and are flagged ``is_upper_limit_{filt}=True`` so a consumer does
+    not have to re-derive "fitted but not detected" from the other columns.
     """
     n = len(tbl)
     fl = filt.lower()  # merged-catalog columns are lowercase; frames keep orig case
@@ -275,8 +288,10 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     _ensure(f'flux_ulim_{filt}', float, np.nan)
     _ensure(f'mag_ab_ulim_{filt}', float, np.nan)
     _ensure(f'mag_vega_ulim_{filt}', float, np.nan)
+    _ensure(f'is_upper_limit_{filt}', bool, False)
 
     detected = fitted & np.isfinite(snr) & (snr >= nsigma) & (flux > 0)
+    not_detected = fitted & ~detected
     fjy = flux * conv_jy
 
     # per-source nsigma upper limit -- from ferr (the SAME inverse-variance
@@ -297,7 +312,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     # unmask columns we may write (MaskedColumn -> plain so assignment sticks)
     for col in (f'flux_{filt}', f'flux_jy_{filt}', f'mag_ab_{filt}',
                 f'mag_vega_{filt}', f'emag_ab_{filt}', f'mask_{filt}',
-                f'flux_ulim_{filt}', f'mag_ab_ulim_{filt}', f'mag_vega_ulim_{filt}'):
+                f'flux_ulim_{filt}', f'mag_ab_ulim_{filt}', f'mag_vega_ulim_{filt}',
+                f'is_upper_limit_{filt}'):
         if col in tbl.colnames and hasattr(tbl[col], 'filled'):
             tbl[col] = tbl[col].filled(tbl[col].fill_value)
 
@@ -307,6 +323,7 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     tbl[f'flux_ulim_{filt}'][ridx[fitted]] = ulim_flux[fitted]
     tbl[f'mag_ab_ulim_{filt}'][ridx[fitted]] = ulim_mag_ab[fitted]
     tbl[f'mag_vega_ulim_{filt}'][ridx[fitted]] = ulim_mag_vega[fitted]
+    tbl[f'is_upper_limit_{filt}'][ridx[not_detected]] = True
     if f'flux_{filt}' in tbl.colnames:
         tbl[f'flux_{filt}'][ridx[fitted]] = flux[fitted]
     if f'flux_jy_{filt}' in tbl.colnames:

@@ -160,6 +160,29 @@ def test_forced_fill_no_fit_leaves_ulim_nan():
     assert np.isnan(tbl['flux_ulim_f405n'][ndet + 1])
 
 
+def test_forced_fill_is_upper_limit_flag():
+    """``is_upper_limit_{filt}`` must be True for exactly the fitted-but-
+    sub-threshold rows (including a negative-flux fit), False for a firm
+    recovered detection, and False (the column default) for a row that was
+    never a fill target at all (an independent detection)."""
+    tbl, prepare_frame, ndet, cjy, zp, atrue = _build(neg_target=True)
+    ineg = ndet + 2  # phantom sitting on the negative blob -> sub-threshold
+
+    ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare_frame,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False)
+
+    # sub-threshold (negative) fit: flagged as an upper limit
+    assert bool(tbl['is_upper_limit_f405n'][ineg])
+    assert bool(tbl['mask_f405n'][ineg])
+    # firm recovered detections: NOT flagged as upper limits
+    for i in (ndet, ndet + 1):
+        assert not bool(tbl['forced_filled_f405n'][i]) or tbl['forced_snr_f405n'][i] >= 3.0
+        assert not bool(tbl['is_upper_limit_f405n'][i])
+    # never a fill target (already an independent detection): default False
+    assert not bool(tbl['is_upper_limit_f405n'][0])
+
+
 def test_forced_fill_prep_failure_handling(capsys):
     """Frame-prep failures must not be silent (no-silent-frame-drops): an
     expected failure (missing file and friends) prints the FULL traceback and
