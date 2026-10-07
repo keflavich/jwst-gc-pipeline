@@ -1,0 +1,13 @@
+F164N: measured (frame - F212N anchor), module median removed, from datascale_wd1_f164n.txt
+
+ table wd2_m6_filter_frame_corrections_NEG.ecsv  (frame=instrument)
+  det     measured(sky mas)    applied shift(sky mas)   after
+  NRCA1  (  -8.43,  -4.85)     (  +8.05,  +5.29)     (  -0.37,  +0.44)
+  NRCA2  (  +2.96,  -6.22)     (  -3.92,  +7.42)     (  -0.96,  +1.21)
+  NRCA3  (  -2.95,  +6.68)     (  +3.93,  -7.69)     (  +0.98,  -1.01)
+  NRCA4  (  +8.41,  +4.38)     (  -8.06,  -5.01)     (  +0.35,  -0.64)
+  NRCB1  (  +9.58,  +4.64)     (  -9.11,  -5.08)     (  +0.47,  -0.44)
+  NRCB2  (  -5.23,  +9.98)     (  +5.79, -10.71)     (  +0.56,  -0.73)
+  NRCB3  (  +5.71,  -9.62)     (  -6.22, +10.23)     (  -0.51,  +0.61)
+  NRCB4  ( -10.07,  -5.02)     (  +9.54,  +5.57)     (  -0.53,  +0.56)
+  2-D rms before 9.86 mas -> after 0.98 mas  (0.10x)

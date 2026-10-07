@@ -1,0 +1,64 @@
+F115W nrca1 F115W/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0189.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0189.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0189.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0189.asdf jwst_nircam_filteroffset_0009.asdf
+F115W nrcb1 F115W/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0233.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0233.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0233.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0233.asdf jwst_nircam_filteroffset_0010.asdf
+F150W nrca1 F150W/CLEAR used ctx=jwst_1595.pmap jwst_nircam_distortion_0192.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0192.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0192.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0192.asdf jwst_nircam_filteroffset_0009.asdf
+F150W nrcb1 F150W/CLEAR used ctx=jwst_1595.pmap jwst_nircam_distortion_0315.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0315.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0315.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0315.asdf jwst_nircam_filteroffset_0010.asdf
+F162M nrca1 F150W2/F162M used ctx=jwst_1568.pmap jwst_nircam_distortion_0218.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0218.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0218.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0218.asdf jwst_nircam_filteroffset_0009.asdf
+F162M nrcb1 F150W2/F162M used ctx=jwst_1568.pmap jwst_nircam_distortion_0198.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0198.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0198.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0198.asdf jwst_nircam_filteroffset_0010.asdf
+F164N nrca1 F150W2/F164N used ctx=jwst_1568.pmap jwst_nircam_distortion_0196.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0196.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0196.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0196.asdf jwst_nircam_filteroffset_0009.asdf
+F164N nrcb1 F150W2/F164N used ctx=jwst_1568.pmap jwst_nircam_distortion_0287.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0287.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0287.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0287.asdf jwst_nircam_filteroffset_0010.asdf
+F182M nrca1 F182M/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0185.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0185.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0185.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0185.asdf jwst_nircam_filteroffset_0009.asdf
+F182M nrcb1 F182M/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0266.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0266.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0266.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0266.asdf jwst_nircam_filteroffset_0010.asdf
+F187N nrca1 F187N/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0255.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0255.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0255.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0255.asdf jwst_nircam_filteroffset_0009.asdf
+F187N nrcb1 F187N/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0298.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0298.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0298.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0298.asdf jwst_nircam_filteroffset_0010.asdf
+F200W nrca1 F200W/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0281.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0281.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0281.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0281.asdf jwst_nircam_filteroffset_0009.asdf
+F200W nrcb1 F200W/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0208.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0208.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0208.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0208.asdf jwst_nircam_filteroffset_0010.asdf
+F212N nrca1 F212N/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0228.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1568: jwst_nircam_distortion_0228.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1595: jwst_nircam_distortion_0228.asdf jwst_nircam_filteroffset_0005.asdf
+     jwst_1596: jwst_nircam_distortion_0228.asdf jwst_nircam_filteroffset_0009.asdf
+F212N nrcb1 F212N/CLEAR used ctx=jwst_1568.pmap jwst_nircam_distortion_0305.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1568: jwst_nircam_distortion_0305.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1595: jwst_nircam_distortion_0305.asdf jwst_nircam_filteroffset_0006.asdf
+     jwst_1596: jwst_nircam_distortion_0305.asdf jwst_nircam_filteroffset_0010.asdf

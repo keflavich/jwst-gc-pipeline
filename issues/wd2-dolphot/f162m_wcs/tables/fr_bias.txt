@@ -1,0 +1,32 @@
+F115W: zp -0.050  N matched ok 9447
+  15-19  free (0): N   931 med -0.009 madstd 0.045 | 0<f<0.5: N   122 med -0.007 madstd 0.040 | 0.5<=f<1: N   111 med +0.003 madstd 0.138 | f==1: N    21 med +0.198 madstd 0.491
+  19-21  free (0): N   724 med +0.008 madstd 0.028 | 0<f<0.5: N  1071 med +0.006 madstd 0.029 | 0.5<=f<1: N   767 med -0.032 madstd 0.095 | f==1: N    33 med -0.043 madstd 0.155
+  21-23  free (0): N   874 med +0.004 madstd 0.029 | 0<f<0.5: N   899 med -0.001 madstd 0.027 | 0.5<=f<1: N   401 med -0.153 madstd 0.140 | f==1: N     8 med -0.334 madstd 0.108
+F150W: zp -0.033  N matched ok 10031
+  15-19  free (0): N   829 med +0.003 madstd 0.035 | 0<f<0.5: N   201 med +0.001 madstd 0.030 | 0.5<=f<1: N    35 med +0.545 madstd 0.217 | f==1: N    10 med +1.602 madstd 1.264
+  19-21  free (0): N  1797 med -0.000 madstd 0.023 | 0<f<0.5: N   585 med -0.002 madstd 0.024 | 0.5<=f<1: N    82 med +0.533 madstd 0.121 | f==1: N     5 med +0.506 madstd 0.292
+  21-23  free (0): N  2263 med -0.004 madstd 0.027 | 0<f<0.5: N   331 med -0.005 madstd 0.023 | 0.5<=f<1: N    34 med +0.188 madstd 0.313 | f==1: N     4 med +nan madstd nan
+F162M: zp -0.030  N matched ok 10955
+  15-19  free (0): N  1984 med -0.001 madstd 0.023 | 0<f<0.5: N   331 med -0.001 madstd 0.019 | 0.5<=f<1: N    51 med +0.020 madstd 0.142 | f==1: N     5 med -0.122 madstd 0.314
+  19-21  free (0): N  2270 med +0.000 madstd 0.023 | 0<f<0.5: N   263 med -0.002 madstd 0.021 | 0.5<=f<1: N    26 med -0.186 madstd 0.212 | f==1: N     4 med +nan madstd nan
+  21-23  free (0): N  2865 med -0.003 madstd 0.030 | 0<f<0.5: N    82 med -0.007 madstd 0.040 | 0.5<=f<1: N    19 med -0.375 madstd 0.129 | f==1: N     1 med +nan madstd nan
+F164N: zp -0.032  N matched ok 10611
+  15-19  free (0): N  3594 med +0.001 madstd 0.018 | 0<f<0.5: N   384 med +0.004 madstd 0.020 | 0.5<=f<1: N    67 med -0.101 madstd 0.218 | f==1: N    12 med -0.033 madstd 0.335
+  19-21  free (0): N  2558 med +0.000 madstd 0.024 | 0<f<0.5: N    53 med -0.011 madstd 0.033 | 0.5<=f<1: N    22 med -0.194 madstd 0.139 | f==1: N     2 med +nan madstd nan
+  21-23  free (0): N  2803 med +0.010 madstd 0.043 | 0<f<0.5: N   104 med -0.026 madstd 0.104 | 0.5<=f<1: N    15 med -0.280 madstd 0.169 | f==1: N     1 med +nan madstd nan
+F182M: zp -0.024  N matched ok 11457
+  15-19  free (0): N  3471 med -0.003 madstd 0.020 | 0<f<0.5: N   129 med -0.006 madstd 0.036 | 0.5<=f<1: N    34 med -0.237 madstd 0.183 | f==1: N    20 med -0.305 madstd 0.166
+  19-21  free (0): N  2732 med +0.002 madstd 0.025 | 0<f<0.5: N    77 med -0.007 madstd 0.032 | 0.5<=f<1: N    18 med -0.357 madstd 0.254 | f==1: N     4 med +nan madstd nan
+  21-23  free (0): N  3167 med +0.002 madstd 0.035 | 0<f<0.5: N    28 med -0.042 madstd 0.072 | 0.5<=f<1: N    13 med -0.539 madstd 0.238 | f==1: N     3 med +nan madstd nan
+F187N: zp -0.021  N matched ok 8515
+  15-19  free (0): N  4147 med -0.001 madstd 0.017 | 0<f<0.5: N   112 med -0.007 madstd 0.027 | 0.5<=f<1: N    31 med -0.257 madstd 0.184 | f==1: N    10 med -0.467 madstd 0.121
+  19-21  free (0): N  2808 med +0.003 madstd 0.031 | 0<f<0.5: N    25 med -0.041 madstd 0.085 | 0.5<=f<1: N    11 med -0.924 madstd 0.432 | f==1: N     5 med -1.123 madstd 0.062
+  21-23  free (0): N  1241 med +0.018 madstd 0.059 | 0<f<0.5: N    30 med +0.022 madstd 0.055 | 0.5<=f<1: N     1 med +nan madstd nan | f==1: N     0 med +nan madstd nan
+F200W: zp -0.023  N matched ok 12089
+  15-19  free (0): N  3783 med -0.007 madstd 0.027 | 0<f<0.5: N    67 med -0.018 madstd 0.054 | 0.5<=f<1: N    47 med -0.150 madstd 0.187 | f==1: N    28 med -0.324 madstd 0.089
+  19-21  free (0): N  2871 med +0.004 madstd 0.028 | 0<f<0.5: N    40 med -0.018 madstd 0.049 | 0.5<=f<1: N    25 med -0.343 madstd 0.161 | f==1: N     9 med -0.516 madstd 0.241
+  21-23  free (0): N  3245 med +0.004 madstd 0.033 | 0<f<0.5: N    31 med -0.069 madstd 0.102 | 0.5<=f<1: N    23 med -0.582 madstd 0.335 | f==1: N     3 med +nan madstd nan
+F212N: zp -0.017  N matched ok 10621
+  15-19  free (0): N  4400 med -0.000 madstd 0.019 | 0<f<0.5: N    49 med -0.010 madstd 0.042 | 0.5<=f<1: N    35 med -0.161 madstd 0.138 | f==1: N    16 med -0.260 madstd 0.106
+  19-21  free (0): N  2984 med -0.000 madstd 0.028 | 0<f<0.5: N    42 med -0.041 madstd 0.126 | 0.5<=f<1: N    18 med -0.340 madstd 0.127 | f==1: N     8 med -0.399 madstd 0.099
+  21-23  free (0): N  2626 med +0.012 madstd 0.051 | 0<f<0.5: N   106 med -0.009 madstd 0.098 | 0.5<=f<1: N    15 med -0.402 madstd 0.423 | f==1: N     2 med +nan madstd nan

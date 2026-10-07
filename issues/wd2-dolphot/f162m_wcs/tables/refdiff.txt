@@ -1,0 +1,92 @@
+anchor F212N: nrca1:0228 nrca2:0234 nrca3:0182 nrca4:0283 nrcb1:0305 nrcb2:0257 nrcb3:0307 nrcb4:0209
+
+### F162M - F212N: distortion-ref prediction [mas, sky], per-module mean (at centres) removed
+det     ref            dRA*     dDec   grid-rms(after rigid)
+nrca1  tion_0218     +0.00    +0.00     6.20
+nrca2  tion_0205     +0.00    +0.00     6.84
+nrca3  tion_0222     +0.00    +0.00     7.13
+nrca4  tion_0258     +0.00    +0.00     6.55
+  module A mean (+0.00, +0.00)
+nrcb1  tion_0198     +0.00    +0.00     6.65
+nrcb2  tion_0245     +0.00    +0.00     6.48
+nrcb3  tion_0206     +0.00    +0.00     6.77
+nrcb4  tion_0253     +0.00    +0.00     6.81
+  module B mean (+0.00, +0.00)
+
+### F164N - F212N: distortion-ref prediction [mas, sky], per-module mean (at centres) removed
+det     ref            dRA*     dDec   grid-rms(after rigid)
+nrca1  tion_0196     +0.00    +0.00     6.25
+nrca2  tion_0263     +0.00    +0.00     6.71
+nrca3  tion_0237     +0.00    +0.00     7.14
+nrca4  tion_0288     +0.00    +0.00     6.26
+  module A mean (+0.00, +0.00)
+nrcb1  tion_0287     +0.00    +0.00     6.39
+nrcb2  tion_0291     +0.00    +0.00     6.71
+nrcb3  tion_0187     +0.00    +0.00     6.49
+nrcb4  tion_0286     +0.00    +0.00     7.01
+  module B mean (+0.00, +0.00)
+
+### F150W - F212N: distortion-ref prediction [mas, sky], per-module mean (at centres) removed
+det     ref            dRA*     dDec   grid-rms(after rigid)
+nrca1  tion_0192     +0.00    +0.00     1.88
+nrca2  tion_0232     +0.00    +0.00     3.71
+nrca3  tion_0251     +0.00    +0.00     3.97
+nrca4  tion_0267     +0.00    +0.00     2.18
+  module A mean (+0.00, +0.00)
+nrcb1  tion_0315     +0.00    +0.00     1.79
+nrcb2  tion_0212     +0.00    +0.00     0.91
+nrcb3  tion_0204     +0.00    +0.00     1.09
+nrcb4  tion_0207     +0.00    +0.00     1.18
+  module B mean (+0.00, +0.00)
+
+### F115W - F212N: distortion-ref prediction [mas, sky], per-module mean (at centres) removed
+det     ref            dRA*     dDec   grid-rms(after rigid)
+nrca1  tion_0189     +0.00    +0.00     1.75
+nrca2  tion_0290     +0.00    +0.00     3.83
+nrca3  tion_0219     +0.00    +0.00     3.94
+nrca4  tion_0304     +0.00    +0.00     2.26
+  module A mean (+0.00, +0.00)
+nrcb1  tion_0233     +0.00    +0.00     1.20
+nrcb2  tion_0224     +0.00    +0.00     0.73
+nrcb3  tion_0274     +0.00    +0.00     0.77
+nrcb4  tion_0294     +0.00    +0.00     0.93
+  module B mean (+0.00, +0.00)
+
+### F182M - F212N: distortion-ref prediction [mas, sky], per-module mean (at centres) removed
+det     ref            dRA*     dDec   grid-rms(after rigid)
+nrca1  tion_0185     +0.00    +0.00     1.04
+nrca2  tion_0262     +0.00    +0.00     0.96
+nrca3  tion_0215     +0.00    +0.00     0.74
+nrca4  tion_0210     +0.00    +0.00     0.78
+  module A mean (+0.00, +0.00)
+nrcb1  tion_0266     +0.00    +0.00     1.87
+nrcb2  tion_0181     +0.00    +0.00     1.24
+nrcb3  tion_0261     +0.00    +0.00     1.35
+nrcb4  tion_0299     +0.00    +0.00     1.39
+  module B mean (+0.00, +0.00)
+
+### F187N - F212N: distortion-ref prediction [mas, sky], per-module mean (at centres) removed
+det     ref            dRA*     dDec   grid-rms(after rigid)
+nrca1  tion_0255     +0.00    +0.00     0.56
+nrca2  tion_0227     +0.00    +0.00     0.43
+nrca3  tion_0295     +0.00    +0.00     0.45
+nrca4  tion_0312     +0.00    +0.00     0.42
+  module A mean (+0.00, +0.00)
+nrcb1  tion_0298     +0.00    +0.00     0.92
+nrcb2  tion_0292     +0.00    +0.00     0.42
+nrcb3  tion_0195     +0.00    +0.00     0.56
+nrcb4  tion_0235     +0.00    +0.00     0.53
+  module B mean (+0.00, +0.00)
+
+### F200W - F212N: distortion-ref prediction [mas, sky], per-module mean (at centres) removed
+det     ref            dRA*     dDec   grid-rms(after rigid)
+nrca1  tion_0281     +0.00    +0.00     2.91
+nrca2  tion_0268     +0.00    +0.00     3.30
+nrca3  tion_0284     +0.00    +0.00     4.98
+nrca4  tion_0313     +0.00    +0.00     1.87
+  module A mean (+0.00, +0.00)
+nrcb1  tion_0208     +0.00    +0.00     1.91
+nrcb2  tion_0186     +0.00    +0.00     0.97
+nrcb3  tion_0200     +0.00    +0.00     1.26
+nrcb4  tion_0221     +0.00    +0.00     1.03
+  module B mean (+0.00, +0.00)
