@@ -1,0 +1,14 @@
+F115W: median offset frac=0 (-43.1, +5.8) mas; residual offset median frac=0 1.1 mas
+  frac=0      10-18.6: N=  766 r med   1.1 mas p90   2.7; dm med -0.012; corr(dm, r) +0.91
+  frac=0      18.6-21: N=  902 r med   0.8 mas p90   1.9; dm med +0.005; corr(dm, r) +0.61
+  frac=0      21-24: N= 1622 r med   0.8 mas p90   1.8; dm med -0.001; corr(dm, r) +0.09
+  0<frac<0.5  10-18.6: N=   33 r med   2.5 mas p90  15.2; dm med -0.076; corr(dm, r) +0.91
+  0<frac<0.5  18.6-21: N= 1166 r med   0.8 mas p90   1.8; dm med +0.003; corr(dm, r) +0.15
+  0<frac<0.5  21-24: N= 1159 r med   0.8 mas p90   1.7; dm med -0.003; corr(dm, r) -0.03
+  frac>=0.5   10-18.6: N=   35 r med  12.2 mas p90  43.9; dm med +0.138; corr(dm, r) +0.80
+  frac>=0.5   18.6-21: N=  905 r med   2.5 mas p90  11.3; dm med -0.032; corr(dm, r) +0.74
+  frac>=0.5   21-24: N=  463 r med   2.1 mas p90   9.5; dm med -0.166; corr(dm, r) -0.23
+  frac>=0.5, r 0-10 mas: N=1241 dm med -0.080
+  frac>=0.5, r 10-20 mas: N=122 dm med +0.378
+  frac>=0.5, r 20-40 mas: N=38 dm med +1.208
+  frac>=0.5, r 40-80 mas: N=11 dm med +2.682

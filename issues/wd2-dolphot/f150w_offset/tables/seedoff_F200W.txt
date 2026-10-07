@@ -1,0 +1,14 @@
+F200W: median offset frac=0 (-42.7, +5.6) mas; residual offset median frac=0 2.4 mas
+  frac=0      10-18.6: N= 3260 r med   2.0 mas p90   3.4; dm med -0.011; corr(dm, r) +0.28
+  frac=0      18.6-21: N= 3417 r med   2.1 mas p90   4.0; dm med +0.000; corr(dm, r) -0.47
+  frac=0      21-24: N= 4898 r med   2.9 mas p90   8.0; dm med +0.005; corr(dm, r) -0.05
+  0<frac<0.5  10-18.6: N=   55 r med   2.5 mas p90  10.6; dm med -0.021; corr(dm, r) -0.34
+  0<frac<0.5  18.6-21: N=   51 r med   2.5 mas p90   8.1; dm med -0.021; corr(dm, r) -0.43
+  0<frac<0.5  21-24: N=   43 r med   5.5 mas p90  18.5; dm med -0.075; corr(dm, r) -0.16
+  frac>=0.5   10-18.6: N=   80 r med  10.2 mas p90  62.3; dm med -0.196; corr(dm, r) +0.82
+  frac>=0.5   18.6-21: N=   49 r med   4.5 mas p90  16.6; dm med -0.381; corr(dm, r) -0.04
+  frac>=0.5   21-24: N=   45 r med   9.5 mas p90  27.3; dm med -0.803; corr(dm, r) -0.38
+  frac>=0.5, r 0-10 mas: N=100 dm med -0.357
+  frac>=0.5, r 10-20 mas: N=37 dm med -0.320
+  frac>=0.5, r 20-40 mas: N=26 dm med -0.444
+  frac>=0.5, r 40-80 mas: N=5 dm med +1.086

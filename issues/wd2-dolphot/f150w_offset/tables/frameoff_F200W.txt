@@ -1,0 +1,34 @@
+F200W: 32 frames
+frame | N free | med dx | med dy | N forced | flux>0 forced
+nrca1_visit001_vgroup12101_exp00001 | 7885 | -0.006 | -0.017 | 113 | 113
+nrca1_visit001_vgroup12101_exp00002 | 7928 | -0.014 | -0.015 | 109 | 109
+nrca1_visit001_vgroup12101_exp00003 | 7930 | -0.010 | -0.011 | 112 | 112
+nrca1_visit001_vgroup12101_exp00004 | 7903 | -0.009 | -0.019 | 132 | 132
+nrca2_visit001_vgroup12101_exp00001 | 8435 | -0.015 | -0.013 | 33 | 33
+nrca2_visit001_vgroup12101_exp00002 | 8454 | -0.026 | -0.008 | 41 | 41
+nrca2_visit001_vgroup12101_exp00003 | 8498 | -0.017 | -0.007 | 30 | 30
+nrca2_visit001_vgroup12101_exp00004 | 8541 | -0.021 | -0.014 | 28 | 28
+nrca3_visit001_vgroup12101_exp00001 | 8307 | +0.000 | -0.023 | 85 | 85
+nrca3_visit001_vgroup12101_exp00002 | 8329 | -0.008 | -0.024 | 96 | 96
+nrca3_visit001_vgroup12101_exp00003 | 8298 | +0.000 | -0.022 | 105 | 105
+nrca3_visit001_vgroup12101_exp00004 | 8212 | -0.004 | -0.023 | 89 | 89
+nrca4_visit001_vgroup12101_exp00001 | 8298 | -0.001 | -0.003 | 53 | 53
+nrca4_visit001_vgroup12101_exp00002 | 8436 | -0.016 | +0.003 | 47 | 47
+nrca4_visit001_vgroup12101_exp00003 | 8288 | -0.007 | +0.000 | 46 | 46
+nrca4_visit001_vgroup12101_exp00004 | 8280 | -0.010 | -0.006 | 57 | 57
+nrcb1_visit001_vgroup12101_exp00001 | 6468 | +0.005 | -0.006 | 134 | 134
+nrcb1_visit001_vgroup12101_exp00002 | 6536 | -0.011 | +0.012 | 152 | 152
+nrcb1_visit001_vgroup12101_exp00003 | 6560 | +0.000 | +0.006 | 143 | 143
+nrcb1_visit001_vgroup12101_exp00004 | 6483 | -0.004 | -0.005 | 141 | 141
+nrcb2_visit001_vgroup12101_exp00001 | 7716 | +0.001 | -0.011 | 71 | 71
+nrcb2_visit001_vgroup12101_exp00002 | 7699 | -0.010 | -0.000 | 86 | 86
+nrcb2_visit001_vgroup12101_exp00003 | 7727 | -0.001 | -0.001 | 68 | 68
+nrcb2_visit001_vgroup12101_exp00004 | 7629 | -0.008 | -0.011 | 73 | 73
+nrcb3_visit001_vgroup12101_exp00001 | 5692 | +0.009 | -0.005 | 178 | 178
+nrcb3_visit001_vgroup12101_exp00002 | 5748 | -0.013 | +0.010 | 161 | 161
+nrcb3_visit001_vgroup12101_exp00003 | 5742 | -0.002 | +0.005 | 187 | 187
+nrcb3_visit001_vgroup12101_exp00004 | 5713 | -0.008 | -0.008 | 176 | 176
+nrcb4_visit001_vgroup12101_exp00001 | 7598 | -0.020 | -0.011 | 68 | 68
+nrcb4_visit001_vgroup12101_exp00002 | 7627 | -0.029 | -0.000 | 63 | 63
+nrcb4_visit001_vgroup12101_exp00003 | 7745 | -0.024 | -0.002 | 60 | 60
+nrcb4_visit001_vgroup12101_exp00004 | 7707 | -0.028 | -0.011 | 61 | 61

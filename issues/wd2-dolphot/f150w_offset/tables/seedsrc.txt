@@ -1,0 +1,7 @@
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_mainfcbg/catalogs/crossband_seed_manual.fits 14321 seeds; 12949 within 80 mas of a dolphot star
+seed at F150W offset: 513 (0.040); at other-band offset: 8912 (0.688)
+seeds whose cluster includes F150W: 8125 ; of those at F150W offset: 505
+  dolphot F200W 10-16: N=1054 at F150W offset 0.010 at other 0.557
+  dolphot F200W 16-18.6: N=3610 at F150W offset 0.034 at other 0.670
+  dolphot F200W 18.6-21: N=3551 at F150W offset 0.023 at other 0.787
+  dolphot F200W 21-24: N=3672 at F150W offset 0.077 at other 0.657
