@@ -1,0 +1,29 @@
+F150W R=0.1: mirror-sub centroid arcsec=(+0.001,+0.677) "/um=(+0.001,+0.452) net=67
+F150W R=0.15: mirror-sub centroid arcsec=(+0.004,+0.674) "/um=(+0.003,+0.449) net=137
+F150W R=0.2: mirror-sub centroid arcsec=(+0.098,+0.700) "/um=(+0.065,+0.467) net=250
+   hist peak (0.15" boxcar, mirror-sub) arcsec=(+0.175,+0.675)
+F162M R=0.1: mirror-sub centroid arcsec=(+0.020,+0.727) "/um=(+0.012,+0.449) net=51
+F162M R=0.15: mirror-sub centroid arcsec=(+0.005,+0.686) "/um=(+0.003,+0.424) net=120
+F162M R=0.2: mirror-sub centroid arcsec=(+0.110,+0.707) "/um=(+0.068,+0.436) net=213
+   hist peak (0.15" boxcar, mirror-sub) arcsec=(+0.175,+0.675)
+F182M R=0.1: mirror-sub centroid arcsec=(+0.053,+0.728) "/um=(+0.029,+0.400) net=42
+F182M R=0.15: mirror-sub centroid arcsec=(+0.089,+0.714) "/um=(+0.049,+0.393) net=67
+F182M R=0.2: mirror-sub centroid arcsec=(+0.073,+0.725) "/um=(+0.040,+0.398) net=102
+   hist peak (0.15" boxcar, mirror-sub) arcsec=(+0.125,+0.725)
+F200W R=0.1: mirror-sub centroid arcsec=(+0.027,+0.917) "/um=(+0.013,+0.458) net=25
+F200W R=0.15: mirror-sub centroid arcsec=(+0.091,+0.749) "/um=(+0.045,+0.374) net=62
+F200W R=0.2: mirror-sub centroid arcsec=(+0.094,+0.791) "/um=(+0.047,+0.396) net=85
+   hist peak (0.15" boxcar, mirror-sub) arcsec=(+0.075,+0.725)
+task1 selection: 139
+ref mag median in list 25.093 all 21.947
+sat mag pct   mag_vega_f150w  
+       mag        
+------------------
+ 7.966261231643711
+14.625963878603663
+17.217307474269653
+ 18.32349863843261
+ 24.63409608203326
+mag -99-12: nsat=49 blob 4 mirror 1 excess/sat 0.061; neither blob 0 mirror 0
+mag 12-14: nsat=132 blob 6 mirror 3 excess/sat 0.023; neither blob 0 mirror 0
+mag 14-99: nsat=2243 blob 136 mirror 46 excess/sat 0.040; neither blob 72 mirror 7

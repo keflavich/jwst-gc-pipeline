@@ -1,0 +1,24 @@
+band 150W
+  mag -99-12: nsat=49 blob 3 mirror 2 excess/sat +0.020; neither 0 vs 0
+  mag 12-14: nsat=132 blob 4 mirror 2 excess/sat +0.015; neither 0 vs 0
+  mag 14-16: nsat=356 blob 22 mirror 6 excess/sat +0.045; neither 2 vs 2
+  mag 16-17: nsat=530 blob 37 mirror 7 excess/sat +0.057; neither 17 vs 1
+  mag 17-18: nsat=830 blob 53 mirror 18 excess/sat +0.042; neither 43 vs 1
+  mag 18-19: nsat=486 blob 13 mirror 12 excess/sat +0.002; neither 4 vs 3
+  mag 19-99: nsat=41 blob 0 mirror 0 excess/sat +0.000; neither 0 vs 0
+band 162M
+  mag -99-12: nsat=49 blob 3 mirror 2 excess/sat +0.020; neither 0 vs 0
+  mag 12-14: nsat=132 blob 6 mirror 2 excess/sat +0.030; neither 0 vs 0
+  mag 14-16: nsat=356 blob 23 mirror 7 excess/sat +0.045; neither 1 vs 2
+  mag 16-17: nsat=530 blob 34 mirror 10 excess/sat +0.045; neither 13 vs 2
+  mag 17-18: nsat=830 blob 52 mirror 17 excess/sat +0.042; neither 38 vs 3
+  mag 18-19: nsat=486 blob 1 mirror 2 excess/sat -0.002; neither 0 vs 1
+  mag 19-99: nsat=41 blob 0 mirror 0 excess/sat +0.000; neither 0 vs 0
+band 200W
+  mag -99-12: nsat=49 blob 4 mirror 1 excess/sat +0.061; neither 0 vs 0
+  mag 12-14: nsat=132 blob 6 mirror 4 excess/sat +0.015; neither 0 vs 0
+  mag 14-16: nsat=356 blob 34 mirror 8 excess/sat +0.073; neither 5 vs 1
+  mag 16-17: nsat=530 blob 29 mirror 10 excess/sat +0.036; neither 2 vs 1
+  mag 17-18: nsat=830 blob 1 mirror 1 excess/sat +0.000; neither 1 vs 0
+  mag 18-19: nsat=486 blob 0 mirror 1 excess/sat -0.002; neither 0 vs 0
+  mag 19-99: nsat=41 blob 0 mirror 0 excess/sat +0.000; neither 0 vs 0

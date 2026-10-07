@@ -1,0 +1,7 @@
+prod: our rows 37956, isolated+matched 2MASS stars 55
+ctrl: our rows 49540, isolated+matched 2MASS stars 56
+integ: our rows 46807, isolated+matched 2MASS stars 50
+integfcbg: our rows 54006, isolated+matched 2MASS stars 44
+mainfcbg: our rows 58067, isolated+matched 2MASS stars 59
+mainfcbgkf: our rows 52916, isolated+matched 2MASS stars 59
+common sample (all arms): 38 stars of 2518 2MASS H+K AB clean-isolated candidates
