@@ -1087,6 +1087,9 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     # images table grouped by (observation, filter)
     out.append("<h2>Mosaic images <span class=muted>(resampled onto a sky grid)</span></h2>")
+    tour = wavelength_tour_html(field)
+    if tour:
+        out.append(tour)
     # An empty table under a heading says nothing about WHY it is empty -- a
     # reader cannot tell a withheld mosaic from one that was never drizzled.
     # A release that ships only detector frames is a normal state (the frames
@@ -2320,6 +2323,31 @@ PANNER_CARD = (
     PANNER_FILE, "Slow panner",
     "The Treasury mosaic at its own pixel scale, drifting across the "
     "pointings that have imagery. Nothing to drive -- leave it running.")
+
+
+#: Linear color wavelength tours: an Aladin Lite page whose slider steps
+#: through RGB layers of three neighboring filters, bluest triplet to reddest.
+#: They are built in the ACES_Aladin_tour repository and served from a
+#: different docroot on the same host, so they are named absolutely, like the
+#: HiPS viewer quicklook.  A field is listed here once its tour is deployed.
+WAVELENGTH_TOUR_BASE = "https://starformation.astro.ufl.edu/Aladin_tours/"
+WAVELENGTH_TOURS = {
+    field: f"{field}_wavelength_tour_linear.html"
+    for field in ("arches", "brick", "sgra", "sgrb2", "sgrc", "sickle", "w51",
+                  "wd2")
+}
+
+
+def wavelength_tour_html(field):
+    """The tour link under a field page's mosaic heading, or ''."""
+    page = WAVELENGTH_TOURS.get(field)
+    if page is None:
+        return ""
+    return (f"<p><a class=btn href='{html.escape(WAVELENGTH_TOUR_BASE + page)}'>"
+            "Open the color wavelength tour</a> "
+            "<span class=muted>Aladin Lite view of the mosaics; the slider "
+            "steps through color images of three neighboring filters, from "
+            "the shortest wavelengths to the longest.</span></p>")
 
 
 #: Per-field catalog manifold viewers (a WebGL density view of a field's
