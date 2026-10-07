@@ -1,0 +1,203 @@
+{
+ "n_circle": 190,
+ "n_mirror": 47,
+ "n_circle_neither": 144,
+ "n_mirror_neither": 4,
+ "per_detector": {
+  "NRCA1": {
+   "n_stars_sources": 43,
+   "circle": 0,
+   "mirror": 0,
+   "centroid": [
+    NaN,
+    NaN
+   ],
+   "circle_mean": null
+  },
+  "NRCA2": {
+   "n_stars_sources": 39,
+   "circle": 1,
+   "mirror": 0,
+   "centroid": [
+    0.47795685083245015,
+    0.02215217202730654
+   ],
+   "circle_mean": [
+    0.47795685083245015,
+    0.02215217202730654
+   ]
+  },
+  "NRCA3": {
+   "n_stars_sources": 36,
+   "circle": 0,
+   "mirror": 0,
+   "centroid": [
+    NaN,
+    NaN
+   ],
+   "circle_mean": null
+  },
+  "NRCA4": {
+   "n_stars_sources": 119,
+   "circle": 8,
+   "mirror": 0,
+   "centroid": [
+    0.4854625213058472,
+    0.0014559910761652894
+   ],
+   "circle_mean": [
+    0.4854625213058472,
+    0.0014559910761652894
+   ]
+  },
+  "NRCB1": {
+   "n_stars_sources": 402,
+   "circle": 63,
+   "mirror": 1,
+   "centroid": [
+    0.485027235505293,
+    0.0037032694472766054
+   ],
+   "circle_mean": [
+    0.485027235505293,
+    0.0037032694472766054
+   ]
+  },
+  "NRCB2": {
+   "n_stars_sources": 220,
+   "circle": 14,
+   "mirror": 0,
+   "centroid": [
+    0.483474385055156,
+    0.005207602463430612
+   ],
+   "circle_mean": [
+    0.483474385055156,
+    0.005207602463430612
+   ]
+  },
+  "NRCB3": {
+   "n_stars_sources": 382,
+   "circle": 54,
+   "mirror": 2,
+   "centroid": [
+    0.4882959440674189,
+    0.0034604047907314524
+   ],
+   "circle_mean": [
+    0.4879179565985411,
+    0.0008041926245507866
+   ]
+  },
+  "NRCB4": {
+   "n_stars_sources": 177,
+   "circle": 1,
+   "mirror": 0,
+   "centroid": [
+    0.4409437171491553,
+    0.1081477075504939
+   ],
+   "circle_mean": [
+    0.4409437171491553,
+    0.1081477075504939
+   ]
+  }
+ },
+ "module_A": {
+  "n_circle": 9,
+  "n_mirror": 0,
+  "centroid": [
+   0.48462855791991416,
+   0.0037555667374032068
+  ]
+ },
+ "module_B": {
+  "n_circle": 132,
+  "n_mirror": 3,
+  "centroid": [
+   0.48588404412378067,
+   0.004546484065467507
+  ]
+ },
+ "dmag_circle_neither": {
+  "median": 6.861615734375841,
+  "std": 0.42612050014103175,
+  "n": 144
+ },
+ "by_parent_mag": {
+  "0-12": {
+   "n_sat_stars": 64,
+   "parents_with_circle_src": 0,
+   "parents_with_mirror_src": 0,
+   "median_dmag": null,
+   "n": 0
+  },
+  "12-13": {
+   "n_sat_stars": 55,
+   "parents_with_circle_src": 1,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.737431240111295,
+   "n": 1
+  },
+  "13-14": {
+   "n_sat_stars": 83,
+   "parents_with_circle_src": 5,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.974084759012566,
+   "n": 5
+  },
+  "14-15": {
+   "n_sat_stars": 165,
+   "parents_with_circle_src": 14,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.971758259974117,
+   "n": 14
+  },
+  "15-15.5": {
+   "n_sat_stars": 122,
+   "parents_with_circle_src": 8,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.9511122858205425,
+   "n": 8
+  },
+  "15.5-16": {
+   "n_sat_stars": 223,
+   "parents_with_circle_src": 16,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.914629479347959,
+   "n": 16
+  },
+  "16-17": {
+   "n_sat_stars": 681,
+   "parents_with_circle_src": 62,
+   "parents_with_mirror_src": 1,
+   "median_dmag": 6.843540624600589,
+   "n": 62
+  },
+  "17-18": {
+   "n_sat_stars": 427,
+   "parents_with_circle_src": 38,
+   "parents_with_mirror_src": 3,
+   "median_dmag": 6.833018988517489,
+   "n": 38
+  },
+  "18-19": {
+   "n_sat_stars": 19,
+   "parents_with_circle_src": 0,
+   "parents_with_mirror_src": 0,
+   "median_dmag": null,
+   "n": 0
+  },
+  "19-30": {
+   "n_sat_stars": 25,
+   "parents_with_circle_src": 0,
+   "parents_with_mirror_src": 0,
+   "median_dmag": null,
+   "n": 0
+  }
+ },
+ "mag_vs_parentmag_fit_slope_intercept": [
+  0.9374436899168601,
+  7.862193509925528
+ ]
+}

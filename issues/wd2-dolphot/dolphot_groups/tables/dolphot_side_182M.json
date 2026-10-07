@@ -1,0 +1,194 @@
+{
+ "n_circle": 147,
+ "n_mirror": 31,
+ "n_circle_neither": 44,
+ "n_mirror_neither": 16,
+ "per_detector": {
+  "NRCA1": {
+   "n_stars_sources": 52,
+   "circle": 0,
+   "mirror": 0,
+   "centroid": [
+    NaN,
+    NaN
+   ],
+   "circle_mean": null
+  },
+  "NRCA2": {
+   "n_stars_sources": 53,
+   "circle": 0,
+   "mirror": 0,
+   "centroid": [
+    NaN,
+    NaN
+   ],
+   "circle_mean": null
+  },
+  "NRCA3": {
+   "n_stars_sources": 65,
+   "circle": 0,
+   "mirror": 1,
+   "centroid": [
+    NaN,
+    NaN
+   ],
+   "circle_mean": null
+  },
+  "NRCA4": {
+   "n_stars_sources": 105,
+   "circle": 0,
+   "mirror": 0,
+   "centroid": [
+    NaN,
+    NaN
+   ],
+   "circle_mean": null
+  },
+  "NRCB1": {
+   "n_stars_sources": 274,
+   "circle": 16,
+   "mirror": 6,
+   "centroid": [
+    -0.4958723264481961,
+    -0.076359024383855
+   ],
+   "circle_mean": [
+    -0.4958723264481961,
+    -0.076359024383855
+   ]
+  },
+  "NRCB2": {
+   "n_stars_sources": 135,
+   "circle": 0,
+   "mirror": 3,
+   "centroid": [
+    NaN,
+    NaN
+   ],
+   "circle_mean": null
+  },
+  "NRCB3": {
+   "n_stars_sources": 266,
+   "circle": 24,
+   "mirror": 4,
+   "centroid": [
+    -0.49622009063795564,
+    -0.08668124564299447
+   ],
+   "circle_mean": [
+    -0.49622009063795564,
+    -0.08668124564299447
+   ]
+  },
+  "NRCB4": {
+   "n_stars_sources": 118,
+   "circle": 3,
+   "mirror": 2,
+   "centroid": [
+    -0.4997822551986215,
+    -0.08438542698891423
+   ],
+   "circle_mean": [
+    -0.4997822551986215,
+    -0.08438542698891423
+   ]
+  }
+ },
+ "module_A": {
+  "n_circle": 0,
+  "n_mirror": 1,
+  "centroid": [
+   NaN,
+   NaN
+  ]
+ },
+ "module_B": {
+  "n_circle": 43,
+  "n_mirror": 15,
+  "centroid": [
+   -0.49633921311809154,
+   -0.08268024573349511
+  ]
+ },
+ "dmag_circle_neither": {
+  "median": 6.654341167940864,
+  "std": 0.4080222327267506,
+  "n": 44
+ },
+ "by_parent_mag": {
+  "0-12": {
+   "n_sat_stars": 66,
+   "parents_with_circle_src": 7,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.740173283987378,
+   "n": 7
+  },
+  "12-13": {
+   "n_sat_stars": 63,
+   "parents_with_circle_src": 4,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.719658787398468,
+   "n": 4
+  },
+  "13-14": {
+   "n_sat_stars": 101,
+   "parents_with_circle_src": 5,
+   "parents_with_mirror_src": 0,
+   "median_dmag": 6.684799970113165,
+   "n": 5
+  },
+  "14-15": {
+   "n_sat_stars": 210,
+   "parents_with_circle_src": 9,
+   "parents_with_mirror_src": 4,
+   "median_dmag": 6.616060250065397,
+   "n": 9
+  },
+  "15-15.5": {
+   "n_sat_stars": 181,
+   "parents_with_circle_src": 9,
+   "parents_with_mirror_src": 5,
+   "median_dmag": 6.659235537968225,
+   "n": 9
+  },
+  "15.5-16": {
+   "n_sat_stars": 290,
+   "parents_with_circle_src": 7,
+   "parents_with_mirror_src": 3,
+   "median_dmag": 6.593805587195263,
+   "n": 7
+  },
+  "16-17": {
+   "n_sat_stars": 73,
+   "parents_with_circle_src": 2,
+   "parents_with_mirror_src": 3,
+   "median_dmag": 6.622131016675182,
+   "n": 2
+  },
+  "17-18": {
+   "n_sat_stars": 19,
+   "parents_with_circle_src": 1,
+   "parents_with_mirror_src": 1,
+   "median_dmag": 6.805622780880594,
+   "n": 1
+  },
+  "18-19": {
+   "n_sat_stars": 0,
+   "parents_with_circle_src": 0,
+   "parents_with_mirror_src": 0,
+   "median_dmag": null,
+   "n": 0
+  },
+  "19-30": {
+   "n_sat_stars": 4,
+   "parents_with_circle_src": 0,
+   "parents_with_mirror_src": 0,
+   "median_dmag": null,
+   "n": 0
+  }
+ },
+ "mag_vs_parentmag_fit_slope_intercept": [
+  0.9460231511198324,
+  7.386265377920333
+ ]
+}

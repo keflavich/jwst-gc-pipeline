@@ -1,0 +1,6 @@
+F164N: peak neither-excess at (-0.55, -0.08) "/um, r=0.56, PA=262: dolphot in 0.08 circle 42 (mirror 12); neither 9 (mirror 0); A-only 9, both 23
+F250M: peak neither-excess at (+0.20, -0.24) "/um, r=0.31, PA=140: dolphot in 0.08 circle 97 (mirror 113); neither 19 (mirror 29); A-only 1, both 77
+F150W: peak neither-excess at (+0.32, +0.00) "/um, r=0.32, PA=90: dolphot in 0.08 circle 302 (mirror 94); neither 229 (mirror 14); A-only 0, both 73
+F162M: peak neither-excess at (+0.32, +0.00) "/um, r=0.32, PA=90: dolphot in 0.08 circle 225 (mirror 78); neither 147 (mirror 6); A-only 2, both 76
+F182M: peak neither-excess at (-0.28, -0.04) "/um, r=0.28, PA=262: dolphot in 0.08 circle 174 (mirror 50); neither 45 (mirror 18); A-only 19, both 107
+F200W: peak neither-excess at (-0.24, -0.04) "/um, r=0.24, PA=261: dolphot in 0.08 circle 183 (mirror 66); neither 83 (mirror 21); A-only 11, both 88
