@@ -4008,6 +4008,29 @@ def _faint_replacement_veto(catflux, satflux, factor=0.8):
     return (np.isfinite(catflux) & np.isfinite(satflux)
             & (satflux < factor * catflux))
 
+
+def _one_to_one_satstar_pairs(idx_cat, idx_sat, sep_arcsec):
+    """Keep mask reducing (catalog row, satstar) candidate pairs to one-to-one.
+
+    ``search_around_sky`` returns EVERY catalog row within the match radius of
+    a satstar.  Writing the satstar into each of them copies its flux and
+    position onto all of them, so two daophot rows on one saturated core (a
+    split detection 30-50 mas apart) become exact duplicates.  Greedy by
+    ascending separation: a pair is kept when neither its row nor its satstar
+    is already taken."""
+    idx_cat = np.asarray(idx_cat, dtype=int)
+    idx_sat = np.asarray(idx_sat, dtype=int)
+    keep = np.zeros(len(idx_cat), dtype=bool)
+    taken_cat, taken_sat = set(), set()
+    for k in np.argsort(np.asarray(sep_arcsec, dtype=float), kind='stable'):
+        ci, si = int(idx_cat[k]), int(idx_sat[k])
+        if ci in taken_cat or si in taken_sat:
+            continue
+        taken_cat.add(ci)
+        taken_sat.add(si)
+        keep[k] = True
+    return keep
+
 #: Merged-catalog astrometry column <- consolidated-satstar ensemble column.
 #: A satstar row appended by ``replace_saturated`` is usually the star's ONLY
 #: row in the catalog (its core is blanked in the crf, so daophot never detects
@@ -4269,6 +4292,28 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         idx_cat = np.array([], dtype=int)
         idx_sat = np.array([], dtype=int)
 
+    # ONE ROW PER SATSTAR: the tight-radius search above pairs a satstar with
+    # every row inside the radius, and each of those rows used to be
+    # overwritten with the same flux and position.  wd2 (main bd392ab8) m7
+    # per-band tables carried 49 such exact-duplicate pairs over 16 bands (up to
+    # 11 in F212N; one row 0.2-2 mas from the fit, its twin 30-50 mas in SW and
+    # 60-100 mas in LW), and the cross-band merge then split the star's bands
+    # between two output rows (#1119).  Keep the nearest
+    # one-to-one pairs; a row that lost its satstar to a nearer row measures
+    # the same saturated core and is removed below once that satstar is
+    # actually written (a satstar vetoed by the faint guard leaves it alone).
+    _lost_cat = np.array([], dtype=int)
+    _lost_sat = np.array([], dtype=int)
+    if len(idx_cat):
+        _pair_sep = cat_coords[idx_cat].separation(
+            satstar_coords[idx_sat]).to_value(u.arcsec)
+        _keep1 = _one_to_one_satstar_pairs(idx_cat, idx_sat, _pair_sep)
+        if not _keep1.all():
+            _lost_cat = idx_cat[~_keep1]
+            _lost_sat = idx_sat[~_keep1]
+            idx_cat = idx_cat[_keep1]
+            idx_sat = idx_sat[_keep1]
+
     # FAINT-REPLACEMENT GUARD (2026-07-10): a satstar flux must EXCEED the
     # daophot flux it overwrites.  A truly saturated core CLIPS the daophot
     # flux low, so satstar >= daophot always holds for a genuine saturated
@@ -4297,6 +4342,11 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             _vetoed_cat = idx_cat[_fainter]
             idx_cat = idx_cat[~_fainter]
             idx_sat = idx_sat[~_fainter]
+
+    # rows that lost their satstar to a nearer row whose replacement goes
+    # ahead: duplicates of that row, removed after every index-based write
+    _dup_rows = np.setdiff1d(_lost_cat[np.isin(_lost_sat, idx_sat)],
+                             np.concatenate([idx_cat, _vetoed_cat]))
 
     replaced_sat = np.zeros(len(cat), dtype='bool')
     replaced_sat[idx_cat] = True
@@ -4583,6 +4633,12 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         cat.rename_column('flux_fit', 'flux')
     else:
         print(f"Catalog did not have flux_fit.  colnames={cat.colnames}.  (this is expected for crowdsource)")
+
+    if len(_dup_rows):
+        print(f"replace_saturated: removed {len(_dup_rows)} row(s) within "
+              f"{radius} of a satstar already written to a nearer row "
+              f"({filtername})", flush=True)
+        cat.remove_rows(_dup_rows)
 
 
 def main():
