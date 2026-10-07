@@ -1,0 +1,192 @@
+
+### rows 753 (f410m) / 12725 (f115w), 66.2 mas apart; dolphot F200W 15.57, F115W 16.63, F410M 14.62
+  row 753: offset from dolphot (-58, +14) mas; bands 150W,200W,250M,300M,335M,410M,212N,323N,405N,466N
+  row 12725: offset from dolphot (-79, +77) mas; bands 115W,277W
+  dolphot star at (+5, -19) mas  115W=16.63 200W=15.57 410M=nan
+  dolphot star at (-35, +72) mas  115W=16.79 200W=15.72 410M=nan
+  dolphot star at (-5, +19) mas  115W=nan 200W=nan 410M=14.62
+    F115W: (-54, -68) mas  flux 1.76e+03  rep=False
+    F115W: (-40, -11) mas  flux 1.96e+04  rep=False
+    F115W: (-79, +77) mas  flux 1.83e+04  rep=False
+    F150W: (-38, +19) mas  flux 1.22e+04  rep=True
+    F162M: (-75, -76) mas  flux 1.43e+03  rep=False
+    F162M: (-37, -5) mas  flux 2.68e+04  rep=False
+    F182M: (-78, -93) mas  flux 1.15e+03  rep=False
+    F182M: (-35, -10) mas  flux 2.37e+04  rep=False
+    F200W: (-50, +14) mas  flux 2.14e+04  rep=True
+    F250M: (-48, +19) mas  flux 3e+03  rep=True
+    F277W: (-59, +51) mas  flux 2.88e+03  rep=True
+    F300M: (-51, +30) mas  flux 2.84e+03  rep=True
+    F335M: (-47, +9) mas  flux 3.67e+03  rep=False
+    F410M: (-58, +14) mas  flux 3.38e+03  rep=False
+    F164N: (-37, -10) mas  flux 2.27e+04  rep=False
+    F187N: (-34, -15) mas  flux 2.05e+04  rep=False
+    F212N: (-31, -19) mas  flux 1.83e+04  rep=False
+    F212N: (-53, +31) mas  flux 2.18e+04  rep=True
+    F323N: (-47, +8) mas  flux 3.77e+03  rep=False
+    F405N: (-46, +24) mas  flux 3.44e+03  rep=False
+    F466N: (-47, +25) mas  flux 2.53e+03  rep=False
+
+### rows 3530 (f410m) / 13189 (f115w), 49.4 mas apart; dolphot F200W 17.29, F115W 19.78, F410M 15.84
+  row 3530: offset from dolphot (-70, +16) mas; bands 150W,200W,250M,277W,300M,335M,410M,323N,405N,466N
+  row 13189: offset from dolphot (-23, -1) mas; bands 115W
+  dolphot star at (-63, +38) mas  115W=19.61 200W=17.10 410M=nan
+  dolphot star at (+22, -9) mas  115W=19.78 200W=17.29 410M=15.84
+  dolphot star at (-22, +9) mas  115W=nan 200W=nan 410M=15.84
+    F115W: (-103, +43) mas  flux 1.26e+03  rep=False
+    F115W: (-23, -1) mas  flux 1.05e+03  rep=False
+    F150W: (-84, +24) mas  flux 3.65e+03  rep=False
+    F162M: (-102, +33) mas  flux 4.95e+03  rep=False
+    F182M: (-100, +41) mas  flux 6.86e+03  rep=True
+    F200W: (-70, +18) mas  flux 3.64e+03  rep=False
+    F200W: (-99, +43) mas  flux 5.89e+03  rep=False
+    F250M: (-70, +18) mas  flux 1.51e+03  rep=False
+    F277W: (-73, +18) mas  flux 1.04e+03  rep=True
+    F300M: (-70, +18) mas  flux 1.44e+03  rep=False
+    F335M: (-70, +18) mas  flux 1.4e+03  rep=False
+    F410M: (-70, +16) mas  flux 1.2e+03  rep=False
+    F164N: (-101, +31) mas  flux 4.94e+03  rep=False
+    F187N: (-99, +39) mas  flux 5.01e+03  rep=False
+    F212N: (-94, +35) mas  flux 5.33e+03  rep=False
+    F323N: (-70, +15) mas  flux 1.32e+03  rep=False
+    F405N: (-67, +12) mas  flux 1.19e+03  rep=False
+    F466N: (-66, +13) mas  flux 894  rep=False
+
+### rows 10391 (f410m) / 23876 (f164n), 41.4 mas apart; dolphot F200W 16.18, F115W 18.33, F410M 14.37
+  row 10391: offset from dolphot (-14, +30) mas; bands 335M,410M,323N,405N,466N
+  row 23876: offset from dolphot (-48, +7) mas; bands 115W,150W,162M,182M,200W,250M,277W,300M,164N,187N,212N
+  dolphot star at (+0, +0) mas  115W=18.33 200W=16.18 410M=14.37
+  dolphot star at (+62, +44) mas  115W=19.58 200W=nan 410M=nan
+    F115W: (+20, +51) mas  flux 1.6e+03  rep=False
+    F115W: (-41, +8) mas  flux 4.09e+03  rep=False
+    F150W: (-31, -12) mas  flux 8.62e+03  rep=True
+    F162M: (-49, +8) mas  flux 1.06e+04  rep=True
+    F162M: (+93, +71) mas  flux 144  rep=False
+    F182M: (+20, +51) mas  flux 4.98e+03  rep=False
+    F182M: (-37, +11) mas  flux 1.3e+04  rep=False
+    F200W: (+20, +51) mas  flux 5.22e+03  rep=False
+    F200W: (-37, +12) mas  flux 1.3e+04  rep=False
+    F250M: (-35, +16) mas  flux 3.11e+03  rep=True
+    F277W: (-37, +17) mas  flux 3.18e+03  rep=True
+    F300M: (-36, +15) mas  flux 3.23e+03  rep=True
+    F335M: (-2, +39) mas  flux 2.47e+03  rep=False
+    F410M: (-14, +30) mas  flux 3.3e+03  rep=False
+    F164N: (+20, +51) mas  flux 4.09e+03  rep=False
+    F164N: (-48, +7) mas  flux 1.24e+04  rep=False
+    F187N: (+36, +61) mas  flux 4.61e+03  rep=False
+    F187N: (-37, +7) mas  flux 1.25e+04  rep=False
+    F212N: (+20, +51) mas  flux 5.52e+03  rep=False
+    F212N: (-35, +13) mas  flux 1.34e+04  rep=False
+    F323N: (+2, +39) mas  flux 2.12e+03  rep=False
+    F405N: (-15, +28) mas  flux 3.36e+03  rep=False
+    F466N: (-16, +27) mas  flux 3.43e+03  rep=False
+
+### rows 13632 (f115w) / 18999 (f162m), 48.4 mas apart; dolphot F200W 17.19, F115W 19.50, F410M nan
+  row 13632: offset from dolphot (-47, +5) mas; bands 115W,150W
+  row 18999: offset from dolphot (-90, +29) mas; bands 162M,182M,200W,164N
+  dolphot star at (+0, -0) mas  115W=19.50 200W=17.19 410M=nan
+  dolphot star at (-79, -7) mas  115W=19.72 200W=16.92 410M=14.74
+  dolphot star at (-53, -2) mas  115W=nan 200W=nan 410M=14.74
+    F115W: (-108, +0) mas  flux 1.18e+03  rep=False
+    F115W: (-47, +5) mas  flux 1.51e+03  rep=False
+    F150W: (-41, -16) mas  flux 3.42e+03  rep=True
+    F162M: (-116, -0) mas  flux 5.04e+03  rep=False
+    F162M: (-90, +29) mas  flux 1.58e+03  rep=False
+    F182M: (-108, +0) mas  flux 6.68e+03  rep=False
+    F182M: (-90, +29) mas  flux 1.85e+03  rep=False
+    F200W: (-108, +0) mas  flux 7.46e+03  rep=False
+    F200W: (-90, +29) mas  flux 2.49e+03  rep=False
+    F250M: (-101, +3) mas  flux 2.02e+03  rep=True
+    F277W: (-105, +5) mas  flux 2.29e+03  rep=True
+    F300M: (-108, +2) mas  flux 2.47e+03  rep=True
+    F335M: (-110, +3) mas  flux 2.47e+03  rep=True
+    F410M: (-108, +1) mas  flux 2.91e+03  rep=False
+    F164N: (-115, -0) mas  flux 5.07e+03  rep=False
+    F164N: (-73, +16) mas  flux 2.77e+03  rep=False
+    F187N: (-110, -1) mas  flux 6.65e+03  rep=False
+    F212N: (-108, +0) mas  flux 7.74e+03  rep=False
+    F323N: (-108, +1) mas  flux 2.69e+03  rep=False
+    F405N: (-109, +1) mas  flux 2.85e+03  rep=False
+    F466N: (-112, +0) mas  flux 2.85e+03  rep=False
+
+### rows 10391 (f410m) / 11770 (f115w), 39.6 mas apart; dolphot F200W nan, F115W 19.58, F410M nan
+  row 10391: offset from dolphot (-76, -14) mas; bands 335M,410M,323N,405N,466N
+  row 11770: offset from dolphot (-42, +7) mas; bands 115W,182M,200W,164N,187N,212N
+  dolphot star at (-62, -44) mas  115W=18.33 200W=16.18 410M=14.37
+  dolphot star at (+0, -0) mas  115W=19.58 200W=nan 410M=nan
+    F115W: (-42, +7) mas  flux 1.6e+03  rep=False
+    F115W: (-103, -36) mas  flux 4.09e+03  rep=False
+    F150W: (-93, -55) mas  flux 8.62e+03  rep=True
+    F162M: (-111, -35) mas  flux 1.06e+04  rep=True
+    F162M: (+31, +27) mas  flux 144  rep=False
+    F182M: (-42, +7) mas  flux 4.98e+03  rep=False
+    F182M: (-99, -32) mas  flux 1.3e+04  rep=False
+    F200W: (-42, +7) mas  flux 5.22e+03  rep=False
+    F200W: (-99, -32) mas  flux 1.3e+04  rep=False
+    F200W: (+42, +93) mas  flux 252  rep=False
+    F250M: (-97, -28) mas  flux 3.11e+03  rep=True
+    F277W: (-99, -27) mas  flux 3.18e+03  rep=True
+    F300M: (-98, -29) mas  flux 3.23e+03  rep=True
+    F335M: (-64, -5) mas  flux 2.47e+03  rep=False
+    F410M: (-76, -14) mas  flux 3.3e+03  rep=False
+    F164N: (-42, +7) mas  flux 4.09e+03  rep=False
+    F164N: (-110, -37) mas  flux 1.24e+04  rep=False
+    F187N: (-26, +17) mas  flux 4.61e+03  rep=False
+    F187N: (-99, -37) mas  flux 1.25e+04  rep=False
+    F212N: (-42, +7) mas  flux 5.52e+03  rep=False
+    F212N: (-97, -31) mas  flux 1.34e+04  rep=False
+    F212N: (+42, +93) mas  flux 236  rep=False
+    F323N: (-60, -5) mas  flux 2.12e+03  rep=False
+    F405N: (-77, -16) mas  flux 3.36e+03  rep=False
+    F466N: (-78, -17) mas  flux 3.43e+03  rep=False
+
+### rows 14324 (f115w) / 38418 (f200w), 50.0 mas apart; dolphot F200W 17.08, F115W 19.76, F410M 14.97
+  row 14324: offset from dolphot (-75, +5) mas; bands 115W,150W,162M,182M,250M,164N,187N
+  row 38418: offset from dolphot (-25, +3) mas; bands 200W,277W,300M,335M,323N,405N,466N
+  dolphot star at (+36, -3) mas  115W=19.76 200W=17.08 410M=nan
+  dolphot star at (-38, +1) mas  115W=nan 200W=16.79 410M=nan
+  dolphot star at (+2, +2) mas  115W=nan 200W=nan 410M=14.97
+    F115W: (+8, +36) mas  flux 179  rep=False
+    F115W: (-75, +5) mas  flux 2.11e+03  rep=False
+    F150W: (-62, -15) mas  flux 5.74e+03  rep=False
+    F162M: (-73, +13) mas  flux 7.29e+03  rep=True
+    F182M: (+8, +36) mas  flux 1.56e+03  rep=False
+    F182M: (-65, +6) mas  flux 8.58e+03  rep=False
+    F200W: (-4, +20) mas  flux 2.18e+03  rep=False
+    F200W: (-25, +3) mas  flux 7.07e+03  rep=False
+    F250M: (-52, -4) mas  flux 2.52e+03  rep=False
+    F277W: (-34, +6) mas  flux 2.07e+03  rep=False
+    F300M: (-36, +5) mas  flux 2.21e+03  rep=False
+    F335M: (-34, +5) mas  flux 2.26e+03  rep=False
+    F410M: (-15, +21) mas  flux 1.89e+03  rep=False
+    F164N: (+8, +36) mas  flux 1.7e+03  rep=False
+    F164N: (-67, +12) mas  flux 8.95e+03  rep=False
+    F187N: (-62, +1) mas  flux 9.11e+03  rep=False
+    F323N: (-37, +2) mas  flux 2.36e+03  rep=False
+    F405N: (-37, +4) mas  flux 2.35e+03  rep=False
+    F466N: (-35, +2) mas  flux 2.05e+03  rep=False
+
+### rows 4773 (f410m) / 23851 (f164n), 45.6 mas apart; dolphot F200W 20.42, F115W 22.18, F410M 19.14
+  row 4773: offset from dolphot (-36, -20) mas; bands 150W,250M,277W,300M,335M,410M,323N,405N
+  row 23851: offset from dolphot (-52, +22) mas; bands 164N,187N
+  dolphot star at (+18, -72) mas  115W=22.13 200W=20.36 410M=nan
+  dolphot star at (-3, +21) mas  115W=22.18 200W=20.42 410M=19.14
+  dolphot star at (+3, -21) mas  115W=nan 200W=nan 410M=19.14
+    F115W: (-25, -66) mas  flux 121  rep=False
+    F150W: (-36, +2) mas  flux 215  rep=False
+    F150W: (-16, -87) mas  flux 232  rep=False
+    F162M: (-34, -65) mas  flux 272  rep=False
+    F182M: (-27, -64) mas  flux 267  rep=False
+    F200W: (-27, -62) mas  flux 271  rep=False
+    F250M: (-36, -10) mas  flux 74.9  rep=False
+    F277W: (-36, +2) mas  flux 66.9  rep=False
+    F300M: (-36, +2) mas  flux 62.3  rep=False
+    F335M: (-36, +2) mas  flux 64.4  rep=False
+    F410M: (-36, -20) mas  flux 57.9  rep=False
+    F164N: (-52, +22) mas  flux 287  rep=False
+    F164N: (-33, -66) mas  flux 288  rep=False
+    F187N: (-44, +17) mas  flux 246  rep=False
+    F187N: (-24, -64) mas  flux 252  rep=False
+    F212N: (-34, -65) mas  flux 306  rep=False
+    F323N: (-33, -22) mas  flux 64.7  rep=False
+    F405N: (-34, -26) mas  flux 51.1  rep=False
