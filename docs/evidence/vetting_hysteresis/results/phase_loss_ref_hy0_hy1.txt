@@ -1,0 +1,24 @@
+== bright_modest f187n
+  hy0      seeds=11 lost=  16 starlike_left=  14 (1.3/run)  m6->vetted_out:own_band_off=11/11  m5->vetted_out=1/1  m4->vetted_out=1/1  m4->not_fit=1/1  m6->vetted_out:seeded=1/0  m5->not_fit=1/0
+  hy1      seeds= 2 lost=   3 starlike_left=   1 (0.5/run)  m4->not_fit=1/1  m6->vetted_out:seeded=1/0  m5->not_fit=1/0
+== bright_modest f210m
+  hy0      seeds=10 lost=  36 starlike_left=  33 (3.3/run)  m6->not_fit:own_band_off=29/27  m5->not_fit=2/2  m5->vetted_out=2/2  m4->vetted_out=1/1  m6->vetted_out:own_band_off=1/1  m2->not_fit=1/0
+  hy1      seeds=10 lost=  35 starlike_left=  32 (3.2/run)  m6->not_fit:own_band_off=30/28  m5->not_fit=2/2  m4->vetted_out=1/1  m5->vetted_out=1/1  m2->not_fit=1/0
+== dark f182m
+  hy0      seeds=11 lost= 154 starlike_left=  56 (5.1/run)  m6->not_fit:companion_cut=49/22  m2->vetted_out=23/12  m4->not_fit=17/8  m4->vetted_out=8/7  m6->vetted_out:seeded=3/2  m5->not_fit=9/1  m3->not_fit=13/1  m2->not_fit=28/1  m3->vetted_out=1/1  m5->vetted_out=3/1
+  hy1      seeds=11 lost= 156 starlike_left=  56 (5.1/run)  m6->not_fit:companion_cut=49/22  m2->vetted_out=19/12  m4->not_fit=18/8  m4->vetted_out=10/7  m6->vetted_out:seeded=5/3  m5->not_fit=11/1  m3->not_fit=13/1  m2->not_fit=28/1  m5->vetted_out=3/1
+== dark f212n
+  hy0      seeds=11 lost=  64 starlike_left=   9 (0.8/run)  m2->vetted_out=5/4  m6->vetted_out:seeded=10/1  m4->vetted_out=14/1  m5->vetted_out=3/1  m5->not_fit=1/1  m3->vetted_out=2/1  m3->not_fit=11/0  m2->not_fit=18/0
+  hy1      seeds=11 lost=  64 starlike_left=   9 (0.8/run)  m2->vetted_out=5/4  m6->vetted_out:seeded=10/1  m4->vetted_out=14/1  m5->vetted_out=3/1  m5->not_fit=1/1  m3->vetted_out=2/1  m3->not_fit=11/0  m2->not_fit=18/0
+== dense_bright f187n
+  hy0      seeds=11 lost= 173 starlike_left=  23 (2.1/run)  m2->vetted_out=16/11  m6->vetted_out:seeded=12/6  m5->not_fit=4/2  m6->not_fit:companion_cut=64/1  m5->vetted_out=12/1  m2->not_fit=37/1  m6->not_fit:seeded=2/1  m4->not_fit=7/0  m3->not_fit=12/0  m3->vetted_out=6/0  m4->vetted_out=1/0
+  hy1      seeds=11 lost= 170 starlike_left=  20 (1.8/run)  m2->vetted_out=14/10  m6->vetted_out:seeded=9/3  m6->not_fit:companion_cut=65/2  m5->vetted_out=14/2  m2->not_fit=37/1  m6->not_fit:seeded=2/1  m5->not_fit=3/1  m4->not_fit=7/0  m3->not_fit=12/0  m3->vetted_out=6/0  m4->vetted_out=1/0
+== dense_bright f212n
+  hy0      seeds=11 lost= 153 starlike_left=  47 (4.3/run)  m2->not_fit=29/14  m6->not_fit:companion_cut=36/11  m4->vetted_out=21/7  m6->vetted_out:seeded=7/7  m5->vetted_out=6/4  m2->vetted_out=34/3  m3->not_fit=13/1  m4->not_fit=5/0  m3->vetted_out=2/0
+  hy1      seeds=11 lost= 151 starlike_left=  44 (4.0/run)  m2->not_fit=29/14  m6->not_fit:companion_cut=43/11  m4->vetted_out=21/7  m6->vetted_out:seeded=5/5  m5->vetted_out=6/4  m2->vetted_out=27/3  m3->not_fit=13/0  m4->not_fit=5/0  m3->vetted_out=2/0
+== superdense f212n
+  hy0      seeds=11 lost= 218 starlike_left= 171 (15.5/run)  m2->vetted_out=37/36  m4->vetted_out=45/33  m6->not_fit:companion_cut=47/22  m4->not_fit=20/20  m6->vetted_out:seeded=20/19  m2->not_fit=20/17  m5->vetted_out=14/13  m3->not_fit=5/5  m3->vetted_out=6/5  m6->not_fit:seeded=1/1  m5->not_fit=3/0
+  hy1      seeds=11 lost= 140 starlike_left= 106 (9.6/run)  m6->not_fit:companion_cut=56/30  m4->not_fit=20/20  m2->not_fit=20/17  m6->vetted_out:seeded=13/13  m4->vetted_out=12/10  m3->not_fit=6/6  m2->vetted_out=6/6  m5->vetted_out=3/3  m6->not_fit:seeded=1/1  m5->not_fit=3/0
+== superdense f405n
+  hy0      seeds=11 lost= 123 starlike_left=  40 (3.6/run)  m4->vetted_out=30/13  m2->vetted_out=18/12  m6->vetted_out:seeded=9/5  m5->vetted_out=8/3  m2->not_fit=4/2  m3->vetted_out=7/2  m5->not_fit=16/2  m3->not_fit=4/1  m6->not_fit:companion_cut=16/0  m6->not_fit:seeded=7/0  m4->not_fit=4/0
+  hy1      seeds=11 lost=  82 starlike_left=  14 (1.3/run)  m4->vetted_out=14/5  m5->vetted_out=5/2  m2->not_fit=4/2  m5->not_fit=15/2  m6->vetted_out:seeded=5/1  m2->vetted_out=4/1  m3->not_fit=5/1  m6->not_fit:companion_cut=16/0  m6->not_fit:seeded=6/0  m4->not_fit=3/0  m3->vetted_out=4/0  m6->vetted_out:companion_cut=1/0

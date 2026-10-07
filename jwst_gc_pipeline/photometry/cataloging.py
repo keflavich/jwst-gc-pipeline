@@ -1596,6 +1596,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm_strong=0,
                               low_fit_quality_qfit=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
+                              prev_vetted_skycoord=None,
+                              hysteresis_qfit_max=0.0,
+                              hysteresis_snr_min=10.0,
+                              hysteresis_match_arcsec=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
 
@@ -1624,6 +1628,14 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     a "star turned from extended emission" is physically impossible, so the
     qfit gate (which conflates blend-degraded real stars with emission knots)
     is replaced by prominence + S/N alone.  See the block comment below.
+
+    PREVIOUS-PHASE keep (``hysteresis_qfit_max > 0``, NIRCam path): a source
+    within ``hysteresis_match_arcsec`` of a row of the previous phase's vetted
+    catalog (``prev_vetted_skycoord``) is kept while its qfit stays below
+    ``hysteresis_qfit_max`` and its S/N (flux / flux_err) stays at or above
+    ``hysteresis_snr_min``.  The overshoot drop, the structure-noise prune and
+    the extended-emission prominence gate still apply to it.  See the block
+    comment at the keep.
 
     ``snr_floor_propagated``: the local S/N floor (``local_snr_min``) uses
     flux / flux_err_prop, the uncertainty of the merged flux, in place of
@@ -2179,6 +2191,46 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   f"qfit ignored; {int(sky_clean.sum())}/{n} sources on clean sky)",
                   flush=True)
 
+    # PREVIOUS-PHASE (HYSTERESIS) keep.  Each phase re-vets its merged catalog
+    # from scratch, so a star whose qfit or S/N sits near a branch threshold
+    # flips in and out between phases: kept at phase K (and subtracted), it
+    # is refitted at K+1, a small qfit change drops it, and the K+1 residual
+    # shows the whole star again.  On the reference cutouts (cr01 runs, 11
+    # seeds x 4 fields, m2..m7) 398 stars were vetted at K and vetted out at
+    # K+1; 229 left a star-like residual.  The only keep branch they passed
+    # at K was the bright-isolated keep for 142 (superdense F212N: median
+    # qfit 0.37 at K, 0.42 at K+1, across its 0.4 cap), qfit <= qfit_max for
+    # 55 and flags==1 for 53.  Requiring qfit < 0.6 and S/N >= 10 at K+1
+    # keeps 181 of the 398, 137 of them star-like residuals; the other 44
+    # are bright (median S/N 53) stars whose residual did not read as a
+    # star.  The tier only
+    # re-admits a source the previous phase already kept, so it adds no new
+    # detections; the hard gates below (overshoot, structure prune, the
+    # extended-emission prominence gate) still apply to it.
+    if (hysteresis_qfit_max > 0 and hysteresis_match_arcsec > 0
+            and prev_vetted_skycoord is not None and len(prev_vetted_skycoord)
+            and 'skycoord' in t.colnames and min_prominence <= 0):
+        # local import: SkyCoord is a local name of this function (imported
+        # in the branches above), so the module-level name is not visible
+        from astropy.coordinates import SkyCoord
+        _hsc = SkyCoord(t['skycoord'])
+        _pv = prev_vetted_skycoord[np.isfinite(prev_vetted_skycoord.ra.deg)
+                                   & np.isfinite(prev_vetted_skycoord.dec.deg)]
+        _hfin = np.isfinite(_hsc.ra.deg) & np.isfinite(_hsc.dec.deg)
+        _hmatch = np.zeros(n, dtype=bool)
+        if _hfin.any() and len(_pv):
+            _, _hsep, _ = _hsc[_hfin].match_to_catalog_sky(_pv)
+            _hmatch[_hfin] = _hsep.arcsec <= float(hysteresis_match_arcsec)
+        with np.errstate(invalid='ignore'):
+            _hyst = (_hmatch & np.isfinite(qf) & (qf < float(hysteresis_qfit_max))
+                     & np.isfinite(snr) & (snr >= float(hysteresis_snr_min)))
+        _n_hyst = int(np.sum(_hyst & ~keep))
+        keep = keep | _hyst
+        print(f"[{label}] previous-phase keep: +{_n_hyst} vetted in the previous "
+              f"phase (within {hysteresis_match_arcsec:.3g}\") with qfit < "
+              f"{hysteresis_qfit_max:g} and S/N >= {hysteresis_snr_min:g}",
+              flush=True)
+
     # LOW-FIT-QUALITY flag: mark kept sources whose fit is poor (qfit above the
     # threshold) so downstream photometry can cut them while positions are kept.
     # Only added when the STRONG tier is active or the user explicitly requests it,
@@ -2334,6 +2386,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 # (in-field dedup exemption, per-frame seed protection).  Used by
 # run_manual_pipeline and do_photometry_step_manual.
 _EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2', 'ngc6334')
+
+# The vetted catalog the previous-phase keep of each phase reads:
+# phase -> (merge label, resbgsub) of the phase before it.
+_PREV_VETTED_PHASE = {'m3': ('m2', False), 'm4': ('m3', False),
+                      'm5': ('m4', False), 'm6': ('m5', True),
+                      'm7': ('m6', True)}
 
 
 def _is_extended_emission(options):
@@ -9227,6 +9285,26 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                      else 0.0)
                 else:
                     _ext_prom_min = _ext_prom_opt
+                # previous-phase keep: this module/band's vetted catalog of
+                # the phase before (the per-obs file this run wrote there)
+                _hyst_qmax = float(mopt(opts_phase, 'manual_ext_hysteresis_qfit_max'))
+                _hyst_sc, _hyst_r = None, 0.0
+                if (_hyst_qmax > 0 and not _miri_field
+                        and phase in _PREV_VETTED_PHASE):
+                    _hpl, _hprs = _PREV_VETTED_PHASE[phase]
+                    _hpath = _merged_path(_hpl, module, filt, _hprs).replace(
+                        '.fits', f'{_vtok}_vetted.fits')
+                    if os.path.exists(_hpath):
+                        _htab = Table.read(_hpath)
+                        if len(_htab) and 'skycoord' in _htab.colnames:
+                            _hyst_sc = SkyCoord(_htab['skycoord'])
+                            _hft = Table.read(_L.fwhm_table_path())
+                            _hyst_r = 0.5 * float(_hft[_hft['Filter'] == filt]
+                                                  ['PSF FWHM (arcsec)'][0])
+                    else:
+                        print(f"manual [{phase}] {filt}/{module}: no previous-phase "
+                              f"vetted catalog {_hpath}; previous-phase keep off",
+                              flush=True)
                 vetted = _filter_extended_emission(
                     merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
@@ -9270,6 +9348,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         opts_phase, 'manual_sky_clean_local_max_err')),
                     err_i2d_image=e_i2d,
                     struct_x=0.0, struct_y=0.0,  # prune at detection, not here
+                    prev_vetted_skycoord=_hyst_sc,
+                    hysteresis_qfit_max=_hyst_qmax,
+                    hysteresis_snr_min=float(mopt(opts_phase, 'manual_ext_hysteresis_snr_min')),
+                    hysteresis_match_arcsec=_hyst_r,
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)
                 # -> the un-tokened all-obs vetted catalog, which is the final

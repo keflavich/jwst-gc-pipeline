@@ -4510,6 +4510,20 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_high_keep_max'],
                     help="Upper qfit cap for the bright-isolated keep (default 0.4); "
                          "extended-emission knots have worse qfit so stay rejected.")
+    parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
+                    help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "
+                         "source within 0.5 FWHM of a row of the previous phase's "
+                         "vetted catalog is kept while its qfit < this and its S/N "
+                         ">= --manual-ext-hysteresis-snr-min, so a star near a "
+                         "vetting threshold does not drop out (and reappear whole "
+                         "in the residual) when a refit moves its qfit slightly.  "
+                         "The overshoot drop and the extended-emission prominence "
+                         "gate still apply.  Default 0.6; 0 = off.")
+    parser.add_option("--manual-ext-hysteresis-snr-min", dest="manual_ext_hysteresis_snr_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_snr_min'],
+                    help="S/N (flux / flux_err) floor of the previous-phase keep "
+                         "(default 10).")
     parser.add_option("--manual-ext-qfit-recover-max", dest="manual_ext_qfit_recover_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_recover_max'],
                     help="RECOVER-tier qfit ceiling for the extended-emission vetting "
