@@ -1,0 +1,96 @@
+## F250M
+### mainfcbg: 37800 rows (1292 replaced_saturated), ZP 24.316 from 3734 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 0, |dm|<0.3 0 (0.000), median dm +nan, replaced 0
+  control: N=3447, row within 0.08" 3386, |dm|<0.3 3342 (0.970), median dm +0.007, replaced 1103
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 5008, |dm|<0.3 4950 (0.948), median dm +0.005, replaced 1119
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3883, |dm|<0.3 3826 (0.964), median dm +0.000, replaced 0
+  rows within 20" of the core: 2017; with no dolphot source within 0.1": 770; of those brighter than 18.6: 165
+### dbl0: 36641 rows (1310 replaced_saturated), ZP 24.316 from 3752 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 18, |dm|<0.3 17 (0.173), median dm +0.000, replaced 0
+  control: N=3447, row within 0.08" 3395, |dm|<0.3 3359 (0.974), median dm +0.006, replaced 1122
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 5060, |dm|<0.3 5007 (0.959), median dm +0.004, replaced 1139
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3901, |dm|<0.3 3842 (0.968), median dm +0.000, replaced 0
+  rows within 20" of the core: 2047; with no dolphot source within 0.1": 782; of those brighter than 18.6: 166
+### dbl1: 36151 rows (1355 replaced_saturated), ZP 24.316 from 3758 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 28, |dm|<0.3 26 (0.265), median dm +0.011, replaced 13
+  control: N=3447, row within 0.08" 3386, |dm|<0.3 3350 (0.972), median dm +0.008, replaced 1160
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 5061, |dm|<0.3 5003 (0.959), median dm +0.006, replaced 1197
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3907, |dm|<0.3 3844 (0.969), median dm +0.000, replaced 0
+  rows within 20" of the core: 1805; with no dolphot source within 0.1": 545; of those brighter than 18.6: 89
+### dbl2: 36759 rows (1311 replaced_saturated), ZP 24.316 from 3751 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 61, |dm|<0.3 57 (0.582), median dm -0.011, replaced 0
+  control: N=3447, row within 0.08" 3415, |dm|<0.3 3381 (0.981), median dm +0.006, replaced 1123
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 5129, |dm|<0.3 5077 (0.973), median dm +0.004, replaced 1140
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3900, |dm|<0.3 3840 (0.968), median dm +0.000, replaced 0
+  rows within 20" of the core: 2107; with no dolphot source within 0.1": 753; of those brighter than 18.6: 166
+### dbl3: 36161 rows (1355 replaced_saturated), ZP 24.316 from 3757 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 33, |dm|<0.3 31 (0.316), median dm +0.005, replaced 13
+  control: N=3447, row within 0.08" 3388, |dm|<0.3 3351 (0.972), median dm +0.008, replaced 1160
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 5071, |dm|<0.3 5013 (0.961), median dm +0.006, replaced 1197
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3907, |dm|<0.3 3844 (0.969), median dm +0.000, replaced 0
+  rows within 20" of the core: 1802; with no dolphot source within 0.1": 529; of those brighter than 18.6: 75
+wrote cutouts_ab_250M.png
+## F277W
+### mainfcbg: 43800 rows (1660 replaced_saturated), ZP 24.129 from 3657 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 0, |dm|<0.3 0 (0.000), median dm +nan, replaced 0
+  control: N=4350, row within 0.08" 4212, |dm|<0.3 4170 (0.959), median dm -0.000, replaced 1363
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 4715, |dm|<0.3 4657 (0.891), median dm -0.001, replaced 1383
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3898, |dm|<0.3 3827 (0.961), median dm +0.000, replaced 0
+  rows within 20" of the core: 1602; with no dolphot source within 0.1": 611; of those brighter than 18.6: 86
+### dbl0: 44030 rows (1673 replaced_saturated), ZP 24.130 from 3694 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 8, |dm|<0.3 7 (0.021), median dm -0.044, replaced 0
+  control: N=4350, row within 0.08" 4231, |dm|<0.3 4193 (0.964), median dm +0.000, replaced 1392
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 4763, |dm|<0.3 4708 (0.901), median dm -0.000, replaced 1414
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3940, |dm|<0.3 3863 (0.970), median dm +0.000, replaced 0
+  rows within 20" of the core: 1611; with no dolphot source within 0.1": 616; of those brighter than 18.6: 86
+### dbl1: 42287 rows (1846 replaced_saturated), ZP 24.130 from 3704 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 29, |dm|<0.3 22 (0.067), median dm +0.082, replaced 27
+  control: N=4350, row within 0.08" 4186, |dm|<0.3 4147 (0.953), median dm +0.003, replaced 1454
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 4740, |dm|<0.3 4679 (0.896), median dm +0.003, replaced 1503
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3939, |dm|<0.3 3854 (0.968), median dm +0.000, replaced 0
+  rows within 20" of the core: 1331; with no dolphot source within 0.1": 338; of those brighter than 18.6: 90
+### dbl2: 44288 rows (1672 replaced_saturated), ZP 24.130 from 3692 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 258, |dm|<0.3 239 (0.731), median dm -0.010, replaced 0
+  control: N=4350, row within 0.08" 4296, |dm|<0.3 4252 (0.977), median dm +0.001, replaced 1391
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 5086, |dm|<0.3 5009 (0.959), median dm -0.000, replaced 1413
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3939, |dm|<0.3 3861 (0.969), median dm +0.000, replaced 0
+  rows within 20" of the core: 1752; with no dolphot source within 0.1": 483; of those brighter than 18.6: 93
+### dbl3: 42354 rows (1845 replaced_saturated), ZP 24.130 from 3707 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 56, |dm|<0.3 48 (0.147), median dm +0.009, replaced 27
+  control: N=4350, row within 0.08" 4210, |dm|<0.3 4168 (0.958), median dm +0.003, replaced 1454
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 4795, |dm|<0.3 4732 (0.906), median dm +0.002, replaced 1503
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3938, |dm|<0.3 3848 (0.966), median dm +0.000, replaced 0
+  rows within 20" of the core: 1326; with no dolphot source within 0.1": 294; of those brighter than 18.6: 72
+wrote cutouts_ab_277W.png
+## F300M
+### mainfcbg: 34332 rows (1394 replaced_saturated), ZP 23.970 from 3753 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 1, |dm|<0.3 0 (0.000), median dm -1.728, replaced 1
+  control: N=3599, row within 0.08" 3528, |dm|<0.3 3497 (0.972), median dm -0.006, replaced 1196
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5248, |dm|<0.3 5196 (0.941), median dm -0.006, replaced 1225
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3918, |dm|<0.3 3850 (0.963), median dm -0.000, replaced 0
+  rows within 20" of the core: 1844; with no dolphot source within 0.1": 663; of those brighter than 18.6: 162
+### dbl0: 34385 rows (1403 replaced_saturated), ZP 23.970 from 3770 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 14, |dm|<0.3 13 (0.086), median dm -0.014, replaced 0
+  control: N=3599, row within 0.08" 3544, |dm|<0.3 3515 (0.977), median dm -0.006, replaced 1212
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5301, |dm|<0.3 5253 (0.951), median dm -0.006, replaced 1239
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3934, |dm|<0.3 3866 (0.967), median dm -0.000, replaced 0
+  rows within 20" of the core: 1860; with no dolphot source within 0.1": 668; of those brighter than 18.6: 166
+### dbl1: 33627 rows (1474 replaced_saturated), ZP 23.970 from 3778 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 30, |dm|<0.3 26 (0.172), median dm +0.003, replaced 18
+  control: N=3599, row within 0.08" 3534, |dm|<0.3 3505 (0.974), median dm -0.005, replaced 1252
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5308, |dm|<0.3 5259 (0.952), median dm -0.005, replaced 1302
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3934, |dm|<0.3 3873 (0.969), median dm +0.000, replaced 0
+  rows within 20" of the core: 1654; with no dolphot source within 0.1": 458; of those brighter than 18.6: 96
+### dbl2: 34473 rows (1402 replaced_saturated), ZP 23.971 from 3771 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 99, |dm|<0.3 95 (0.629), median dm -0.033, replaced 0
+  control: N=3599, row within 0.08" 3562, |dm|<0.3 3531 (0.981), median dm -0.005, replaced 1211
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5407, |dm|<0.3 5353 (0.969), median dm -0.006, replaced 1238
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3934, |dm|<0.3 3863 (0.966), median dm -0.000, replaced 0
+  rows within 20" of the core: 1938; with no dolphot source within 0.1": 623; of those brighter than 18.6: 160
+### dbl3: 33616 rows (1475 replaced_saturated), ZP 23.970 from 3777 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 36, |dm|<0.3 32 (0.212), median dm -0.003, replaced 18
+  control: N=3599, row within 0.08" 3540, |dm|<0.3 3512 (0.976), median dm -0.005, replaced 1252
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5323, |dm|<0.3 5275 (0.955), median dm -0.005, replaced 1302
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3933, |dm|<0.3 3870 (0.968), median dm -0.000, replaced 0
+  rows within 20" of the core: 1649; with no dolphot source within 0.1": 451; of those brighter than 18.6: 92
+wrote cutouts_ab_300M.png
