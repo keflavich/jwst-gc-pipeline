@@ -551,7 +551,14 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
     so neither the near-saturation exemption nor the pixel restore reaches
     them.  Local maxima (5x5 box) of one such frame lie within 1 px of 237 of
     those stars.  Default 0 keeps the centre of mass for every component.
-    Validation scope: not yet validated on a full run.
+    Validation scope: wd2 m7 A/B on the production m6 inputs (#1125).  With
+    ``peak_min_area=50`` the hand-off gives a row with ``|dm| < 0.3`` against
+    dolphot for 239 of the 327 bright stars with no F277W value (centre of
+    mass: 7), 57 of 98 in F250M (17) and 95 of 151 in F300M (13).  The
+    18.6-21 mag bins change by at most 0.002, and core rows with no dolphot
+    source within 0.1" fall from 616 to 483 in F277W.  Combined with
+    ``--deblend-satstars`` it recovers 48 of the 327.  Not yet validated
+    through m8 or on other fields.
 
     Parameters
     ----------
