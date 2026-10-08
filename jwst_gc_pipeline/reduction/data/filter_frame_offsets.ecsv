@@ -17,7 +17,14 @@
 #       (91.50), wd2 jw03523-o005 (141.01).  A table built from', '  brick+sgrc alone predicts wd2 -- held out, 52 deg away in roll --
 #       with 0.41 mas', '  residual and 95 percent of the variance explained; the opposite rotation gives', '  2.15 mas and explains nothing.',
 #     'F187N: brick jw02221-o001 only (n=1).  Jay Anderson has no F187N STDGDC solution', '  and no second observation has been solved.  Residual
-#       amplitude 0.55 mas.', 'Solved by scripts/analysis/solve_filter_frame_offsets.py --write; see issue #296.']
+#       amplitude 0.55 mas.', 'F182M/F187N solved by scripts/analysis/solve_filter_frame_offsets.py --write; see issue #296.', 'F162M:
+#       mean of wd2 jw03523-o005 (ROLL_REF 141.01) and sgrc jw04147-o012 (91.50).', '  Each field predicted from the other field alone:
+#       10.24 -> 0.36 mas (wd2) and', '  10.18 -> 0.36 mas (sgrc), 2-D rms.', 'F164N: mean of wd2 jw03523-o005 (141.01) and wd1 jw01905-o001
+#       (284.71).  Each', '  field predicted from the other: 10.28 -> 0.97 mas (wd2), 9.86 -> 0.97 mas (wd1).', 'F162M/F164N origin: the
+#       distortion references pin every filter to the same', '  V2Ref/V3Ref per detector, while their plate scale is 202-241 ppm larger
+#       than', '  F212N''s, so each detector centre sits s*R too close to the module centre.', 'F162M/F164N: n = fields, sem_mas = |row_1
+#       - row_2| / (2 sqrt 2).  Rows are', '  sky_residual_to_instrument_correction applied to explicit (frame - anchor) pair', '  residuals
+#       of m6 per-frame catalogs against the F212N m6 merged vetted catalog;', '  see issue #1133.']
 # schema: astropy-2.0
 detector filter anchor frame dx_mas dy_mas n sem_mas
 NRCA1 F182M F212N instrument 0.975 -0.352 3 0.11
@@ -36,3 +43,19 @@ NRCB1 F187N F212N instrument -0.254 0.084 1 0.05
 NRCB2 F187N F212N instrument -0.444 -0.583 1 0.06
 NRCB3 F187N F212N instrument 0.646 0.75 1 0.06
 NRCB4 F187N F212N instrument 0.051 -0.251 1 0.06
+NRCA1 F162M F212N instrument 7.42 -6.434 2 0.175
+NRCA2 F162M F212N instrument 6.181 5.383 2 0.161
+NRCA3 F162M F212N instrument -6.264 -5.444 2 0.234
+NRCA4 F162M F212N instrument -7.338 6.494 2 0.064
+NRCB1 F162M F212N instrument -7.894 6.961 2 0.079
+NRCB2 F162M F212N instrument -8.719 -7.712 2 0.098
+NRCB3 F162M F212N instrument 8.806 8.12 2 0.036
+NRCB4 F162M F212N instrument 7.808 -7.369 2 0.025
+NRCA1 F164N F212N instrument 6.998 -6.617 2 0.245
+NRCA2 F164N F212N instrument 5.674 5.018 2 0.505
+NRCA3 F164N F212N instrument -6.06 -5.168 2 0.502
+NRCA4 F164N F212N instrument -6.612 6.767 2 0.253
+NRCB1 F164N F212N instrument -7.071 7.805 2 0.226
+NRCB2 F164N F212N instrument -8.628 -7.958 2 0.333
+NRCB3 F164N F212N instrument 8.085 8.28 2 0.277
+NRCB4 F164N F212N instrument 7.614 -8.127 2 0.279
