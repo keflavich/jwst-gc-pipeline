@@ -9203,9 +9203,33 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # targets' untokened names unchanged.  Tests call that helper
                 # with a recording merge; this call site is 3000 lines inside
                 # run_manual_pipeline and no test drives it.
+                #
+                # Register each per-frame catalog onto its visit consensus with
+                # the offset m2 measured for it (m2_registration).  m2 acts only
+                # on offsets over 2 mas AND over the field's correction floor, so
+                # the sub-floor per-exposure offsets otherwise stay in every
+                # merged catalog and set its across-exposure scatter (sgrb2
+                # F212N: 1.35 mas as written, 0.62 registered).  Not at m1/m2:
+                # those stages are the measurement; the solution is frozen from
+                # m3 on.  Same record directory and token as the checkpoint
+                # below, so both read one file.  Cutout runs have no checkpoint.
+                from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                    CORRECTION_STAGES as _ASTROM_CORRECTION_STAGES)
+                _m2_registration = None
+                if (merge_label not in _ASTROM_CORRECTION_STAGES
+                        and not getattr(options, 'cutout_region', '')):
+                    from jwst_gc_pipeline.photometry.consensus_catalog import (
+                        consensus_obs_token as _cons_obs_token)
+                    from jwst_gc_pipeline.photometry.m2_registration import (
+                        load_m2_registration)
+                    _m2_registration = load_m2_registration(
+                        os.path.join(cut_bp, 'astrometry_checkpoints'), filt,
+                        _cons_obs_token(getattr(options, 'proposal_id', None),
+                                        getattr(options, 'field', None)))
                 merge_frames_for_observation(
                     proposal_id, field,
                     module=module, filtername=filt.lower(),
+                    m2_registration=_m2_registration,
                     method='dao', suffix='_basic', target=target, basepath=cut_bp,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,

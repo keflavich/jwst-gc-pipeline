@@ -1524,7 +1524,22 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         merge_workers=1,
                                         field=None,
                                         write_allcols=None,
+                                        m2_registration=None,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    """Merge one filter's per-frame catalogs into the indivexp-merged catalog.
+
+    ``m2_registration``: an ``m2_registration.M2Registration`` (or None).  When
+    given, each per-frame catalog is shifted by the offset the m2 checkpoint
+    measured for it against its visit consensus before the catalogs are
+    averaged (see ``m2_registration``).  It describes the frames as baked, so
+    it cannot be combined with ``offsets_table``, which re-shifts them first.
+    """
+    if m2_registration is not None and offsets_table is not None:
+        raise ValueError(
+            "merge_individual_frames: m2_registration and offsets_table were "
+            "both given.  The m2 offsets were measured on the frames' BAKED "
+            "positions; an offsets table re-shifts each frame first, so the "
+            "registration would be applied to positions it did not measure.")
 
     desat = "_unsatstar" if desat else ""
     bgsub = _bgsub_token(bgsub, resbgsub)
@@ -1702,6 +1717,16 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             print('tb.meta:', tb.meta)
             raise ValueError(f"Table file {fn} is not correctly formatted; it is missing FILENAME metadata")
 
+    # Register each per-frame catalog onto its m2 visit consensus before the
+    # positions are averaged (m2_registration; the frames are not touched).
+    m2_registration_summary = None
+    if m2_registration is not None:
+        from jwst_gc_pipeline.photometry.m2_registration import (
+            apply_m2_registration)
+        m2_registration_summary = apply_m2_registration(
+            tables, m2_registration,
+            context=f"{filtername.upper()}/{module} {iteration_label or ''}".strip())
+
     # Note (2026-04-23): an earlier "dedup bug" diagnosis (realign=True +
     # min_offset=0.25") was based on analysing the FIRST 200k rows of the
     # F200W brick catalog which are exposure-adjacent and therefore
@@ -1772,6 +1797,15 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
 
     minimal_table = Table(minimal_version)
     minimal_table.meta = merged_exposure_table.meta.copy()
+    if m2_registration_summary is not None:
+        # How many per-frame catalogs were registered onto the m2 consensus,
+        # and from which record; absent means the step did not run.
+        _c = m2_registration_summary['counts']
+        minimal_table.meta['M2REGREC'] = os.path.basename(
+            m2_registration_summary['record'])
+        minimal_table.meta['M2REGN'] = int(_c.get('applied', 0))
+        minimal_table.meta['M2REGNOT'] = int(sum(_c.values())
+                                             - _c.get('applied', 0))
     for ii, fn in enumerate(tblfns):
         minimal_table.meta[f'fn{ii}'] = os.path.basename(fn)
 
