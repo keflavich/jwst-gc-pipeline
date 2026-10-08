@@ -919,3 +919,198 @@ def test_flux_ban_logs_nan_fits_separately(tmp_path, monkeypatch, capsys):
     assert 'with non-finite flux (fit had no usable pixels)' in out
     line = [ln for ln in out.splitlines() if 'non-finite flux' in ln][0]
     assert ' 1 with non-finite flux' in line
+
+
+# ---------------------------------------------------------------------------
+# Peak hand-off for large SATURATED components (env
+# DAOPHOT_HANDOFF_PEAK_MIN_AREA, default 0 = off)
+# ---------------------------------------------------------------------------
+
+MERGED = ((30.2, 50.1), (36.3, 49.8), (35.8, 56.2))   # one merged component
+LONE = (80.0, 20.0)                                    # small own component
+
+
+def _merged_scene():
+    """Three stars whose late-group SATURATED areas merge into one component
+    (as in the wd2 core in F277W), plus one isolated small component.  Every
+    SATURATED pixel has a valid rate."""
+    yy, xx = np.mgrid[:SHAPE[0], :SHAPE[1]]
+    sig = FWHM / 2.3548
+    img = np.full(SHAPE, 10.0)
+    for (x0, y0), amp in zip(MERGED + (LONE,), (20000., 12000., 16000., 3000.)):
+        img += amp * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * sig ** 2))
+    img += np.random.default_rng(5).normal(0, 1.0, SHAPE)
+    dq = np.where(img > 250.0, SAT, 0).astype(np.uint32)
+    return img, dq
+
+
+def _nearest(xy, star):
+    return float(np.min(np.hypot(xy[:, 0] - star[0], xy[:, 1] - star[1])))
+
+
+def test_merged_scene_is_one_large_component():
+    from scipy import ndimage
+    img, dq = _merged_scene()
+    lab, n = ndimage.label((dq & SAT) != 0)
+    assert n == 2
+    labs = {int(lab[int(round(y)), int(round(x))]) for x, y in MERGED}
+    assert len(labs) == 1
+    assert int((lab == labs.pop()).sum()) > 60
+
+
+def test_large_component_handed_off_at_its_peaks():
+    """The centre of mass of the merged component is > 1.25 px (the exemption
+    radius) from every star; its peaks are within 0.75 px of each one.  The
+    small component keeps its centre of mass."""
+    img, dq = _merged_scene()
+    com = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img, label='t')
+    assert com.shape == (2, 2)
+    for star in MERGED:
+        assert _nearest(com, star) > 0.5 * FWHM
+    xy = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img, label='t',
+                                        peak_min_area=40)
+    assert xy.shape == (4, 2)
+    for star in MERGED + (LONE,):
+        assert _nearest(xy, star) < 0.75
+    # an area threshold above the merged component's size changes nothing
+    big = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img,
+                                         peak_min_area=10 ** 6)
+    np.testing.assert_allclose(big, com)
+    # without sci there are no peaks to find
+    nosci = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=None,
+                                           peak_min_area=40)
+    assert nosci.shape == (2, 2)
+
+
+def test_peak_handoff_applies_data_floor_and_accepted_exclusion():
+    """Peaks below the data floor are dropped, and so is a peak on an accepted
+    satstar."""
+    img, dq = _merged_scene()
+    xy = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img,
+                                        data_floor=14000.0, peak_min_area=40)
+    # 20000 and 16000 peaks remain; 12000 and the 3000 component do not
+    assert xy.shape == (2, 2)
+    assert _nearest(xy, MERGED[1]) > 3
+    acc = Table({'xcentroid': [MERGED[0][0]], 'ycentroid': [MERGED[0][1]]})
+    xy = C._unaccepted_sat_component_xy(dq, acc, FWHM, sci=img,
+                                        peak_min_area=40)
+    assert xy.shape == (3, 2)
+    assert _nearest(xy, MERGED[0]) > 3
+
+
+def test_peak_handoff_collapses_a_lost_core_to_one_position():
+    """A truly-lost (DO_NOT_USE, NaN) core gives one position at its centre,
+    not a ring of peaks around it."""
+    img, dq = _merged_scene()
+    x0, y0 = int(round(MERGED[0][0])), int(round(MERGED[0][1]))
+    dq[y0 - 1:y0 + 2, x0 - 1:x0 + 2] |= L.dqflags.pixel['DO_NOT_USE']
+    img[y0 - 1:y0 + 2, x0 - 1:x0 + 2] = np.nan
+    xy = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img,
+                                        peak_min_area=40)
+    assert xy.shape == (4, 2)
+    d = np.hypot(xy[:, 0] - x0, xy[:, 1] - y0)
+    assert int((d < 3).sum()) == 1
+    assert float(d.min()) < 1e-9
+
+
+def test_peak_handoff_gives_one_position_per_flat_top():
+    """A flat top of tied values (here a 2x2 block at the brightest star)
+    gives one position at its centre, not one per tied pixel."""
+    img, dq = _merged_scene()
+    x0, y0 = int(round(MERGED[0][0])), int(round(MERGED[0][1]))
+    img[y0:y0 + 2, x0:x0 + 2] = img.max() + 1.0
+    xy = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img,
+                                        peak_min_area=40)
+    assert xy.shape == (4, 2)
+    d = np.hypot(xy[:, 0] - (x0 + 0.5), xy[:, 1] - (y0 + 0.5))
+    assert int((d < 2).sum()) == 1
+    assert float(d.min()) < 1e-9
+
+
+def test_peak_handoff_logs_positions_per_component(capsys):
+    img, dq = _merged_scene()
+    C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img, label='t',
+                                   peak_min_area=40)
+    out = capsys.readouterr().out
+    assert '1 of >= 40 px handed off at 3 peak(s)' in out
+    assert 'median 3 / max 3 per component' in out
+
+
+def _run_restored_pass(img, dq, handoff_xy):
+    """``_run_pass`` with the frame preparation's pixel restore applied."""
+    err = np.ones(SHAPE)
+    restore = C._handoff_restore_pixels(dq, img, np.zeros(SHAPE, bool),
+                                        handoff_xy, None, FWHM)
+    seed = Table()
+    seed['x_init'] = np.array([p[0] for p in MERGED], float)
+    seed['y_init'] = np.array([p[1] for p in MERGED], float)
+    seed['flux_init'] = np.full(len(MERGED), 2.0e4)
+    res, _, _ = C._manual_phot_pass(
+        data=img, mask=((dq & SAT) != 0) & ~restore, err=err,
+        bad=np.zeros(SHAPE, bool), dao_psf_model=_gaussian_grid_psf(),
+        init_params=seed, aperture_radius_pix=2 * FWHM, localbkg_inner=6,
+        localbkg_outer=10, grouper=SourceGrouper(2 * FWHM), options=_options(),
+        dq=dq, satstar_model_subtracted=np.zeros(SHAPE), label='t',
+        near_sat_dist_pix=1.0, handoff_xy=handoff_xy,
+        handoff_radius_pix=max(1.0, 0.5 * FWHM))
+    return res
+
+
+def test_peak_handoff_keeps_fits_the_centre_of_mass_loses():
+    """With the centre-of-mass hand-off the near-saturation filter deletes
+    the three merged-component fits; the peak hand-off keeps them at the
+    right flux."""
+    img, dq = _merged_scene()
+    com = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img)
+    res = _run_restored_pass(img, dq, com)
+    assert not any(_has_fit_near(res, s) for s in MERGED)
+    peaks = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img,
+                                           peak_min_area=40)
+    res = _run_restored_pass(img, dq, peaks)
+    sig = FWHM / 2.3548
+    for star, amp in zip(MERGED, (20000., 12000., 16000.)):
+        assert _has_fit_near(res, star)
+        d = np.hypot(np.asarray(res['x_fit']) - star[0],
+                     np.asarray(res['y_fit']) - star[1])
+        flux = float(np.asarray(res['flux_fit'])[np.argmin(d)])
+        assert flux == pytest.approx(amp * 2 * np.pi * sig ** 2, rel=0.05)
+
+
+def test_handoff_peak_min_area_env(monkeypatch):
+    monkeypatch.delenv('DAOPHOT_HANDOFF_PEAK_MIN_AREA', raising=False)
+    assert C._daophot_handoff_peak_min_area() == 0
+    monkeypatch.setenv('DAOPHOT_HANDOFF_PEAK_MIN_AREA', '  ')
+    assert C._daophot_handoff_peak_min_area() == 0
+    monkeypatch.setenv('DAOPHOT_HANDOFF_PEAK_MIN_AREA', '50')
+    assert C._daophot_handoff_peak_min_area() == 50
+
+
+@pytest.mark.parametrize('raw', ['abc', '-1', '2.5', 'nan'])
+def test_handoff_peak_min_area_rejects_malformed_values(monkeypatch, raw):
+    monkeypatch.setenv('DAOPHOT_HANDOFF_PEAK_MIN_AREA', raw)
+    with pytest.raises(ValueError, match='DAOPHOT_HANDOFF_PEAK_MIN_AREA'):
+        C._daophot_handoff_peak_min_area()
+
+
+def test_daophot_handoff_xy_reads_peak_area_only_with_component_handoff(
+        tmp_path, monkeypatch):
+    path = _write_rejected(tmp_path / 'r.fits',
+                           [(STAR[0], STAR[1], 'implied_peak_gate')])
+    img, dq = _merged_scene()
+    monkeypatch.setenv('DAOPHOT_HANDOFF_PEAK_MIN_AREA', 'not-a-number')
+    monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    xy, _ = C._daophot_handoff_xy(dq, img, None, path, FWHM, data_floor=0.0,
+                                  label='t')
+    assert xy.shape == (1, 2)
+    monkeypatch.setenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', '1')
+    with pytest.raises(ValueError, match='DAOPHOT_HANDOFF_PEAK_MIN_AREA'):
+        C._daophot_handoff_xy(dq, img, None, path, FWHM, data_floor=0.0,
+                              label='t')
+    monkeypatch.delenv('DAOPHOT_HANDOFF_PEAK_MIN_AREA')
+    xy, _ = C._daophot_handoff_xy(dq, img, None, path, FWHM, data_floor=0.0,
+                                  label='t')
+    assert xy.shape == (3, 2)        # reject + 2 centres of mass
+    monkeypatch.setenv('DAOPHOT_HANDOFF_PEAK_MIN_AREA', '40')
+    xy, _ = C._daophot_handoff_xy(dq, img, None, path, FWHM, data_floor=0.0,
+                                  label='t')
+    assert xy.shape == (5, 2)        # reject + 3 peaks + 1 centre of mass

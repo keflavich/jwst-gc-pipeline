@@ -438,9 +438,68 @@ def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
     return xy, radius_pix
 
 
+def _sat_component_peak_xy(sci, dqarr, lab, labels, fwhm_pix, data_floor=0.0):
+    """Star positions inside the given SATURATED components, from ``sci`` peaks.
+
+    Usable pixels have a finite ``sci`` value and no ``DO_NOT_USE`` flag.  A
+    usable pixel is a peak when it is the maximum of the component pixels in
+    the ``2 * ceil(fwhm_pix) + 1`` box around it, and, with ``data_floor >
+    0``, reaches the floor.  Touching peak pixels (a flat top of tied values)
+    give one position, their centre of mass.  Unusable component pixels (a
+    truly-lost core) count as brighter than any usable pixel, so the ring
+    around a lost core yields no peak; each connected group of them gives one
+    position, its centre of mass.
+
+    Parameters
+    ----------
+    sci : `~numpy.ndarray`
+        Frame SCI data.
+    dqarr : `~numpy.ndarray`
+        Frame DQ array.
+    lab : `~numpy.ndarray` of int
+        SATURATED component labels (``scipy.ndimage.label``).
+    labels : array-like of int
+        Components to search.
+    fwhm_pix : float
+        PSF FWHM in pixels.
+    data_floor : float
+        Minimum value of a usable peak; 0 disables it.
+
+    Returns
+    -------
+    xy : `~numpy.ndarray` (N, 2)
+        Positions (x, y), frame pixels: usable peaks, then lost-core centres.
+    """
+    from scipy import ndimage as _ndi
+    sci = np.asarray(sci, dtype=float)
+    comp = np.isin(lab, np.asarray(labels, dtype=int))
+    usable = (np.isfinite(sci)
+              & ((dqarr & _L.dqflags.pixel['DO_NOT_USE']) == 0))
+    lost = comp & ~usable
+    vals = np.where(comp & usable, sci, -np.inf)
+    vals[lost] = np.inf
+    size = 2 * int(np.ceil(float(fwhm_pix))) + 1
+    peak = (comp & usable
+            & (vals == _ndi.maximum_filter(vals, size=size, mode='constant',
+                                           cval=-np.inf)))
+    if data_floor is not None and float(data_floor) > 0:
+        peak &= vals >= float(data_floor)
+    # a flat top (tied values) marks every pixel of it; keep one position
+    pl, npk = _ndi.label(peak, structure=np.ones((3, 3), dtype=int))
+    xy = np.asarray(_ndi.center_of_mass(peak, pl, np.arange(1, npk + 1)),
+                    dtype=float).reshape(-1, 2)[:, ::-1]
+    if lost.any():
+        hl, nh = _ndi.label(lost)
+        hc = np.asarray(_ndi.center_of_mass(lost, hl, np.arange(1, nh + 1)),
+                        dtype=float).reshape(-1, 2)
+        xy = np.vstack([xy, hc[:, ::-1]])
+    return xy
+
+
 def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
                                  sci=None, data_floor=0.0,
-                                 label='', accepted_excl_fwhm=1.5):
+                                 label='', accepted_excl_fwhm=1.5,
+                                 peak_min_area=0):
     """Centroids of SATURATED components the satstar channel did not accept.
 
     The gate-reject hand-off only sees stars that reached the satstar FIT.  A
@@ -485,6 +544,25 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
       SATURATED transients are handed off and fitted (6 of 8).  They are
       bright, so no data floor removes them; this needs a transient guard.
 
+    With ``peak_min_area > 0`` (and ``sci``), a kept component of at least
+    ``peak_min_area`` pixels is handed off at its ``sci`` local maxima
+    (``_sat_component_peak_xy``) instead of its centre of mass.  In crowded
+    long-wavelength fields the late-group SATURATED flag of neighbouring stars
+    merges into large components: wd2 F277W nrcblong exp1 has 19 components
+    of more than 1000 px (the largest 34702 px), and for the 326 dolphot stars
+    with no F277W value the centre of mass lies a median 26 px from the star,
+    so neither the near-saturation exemption nor the pixel restore reaches
+    them.  Local maxima (5x5 box) of one such frame lie within 1 px of 237 of
+    those stars.  Default 0 keeps the centre of mass for every component.
+    Validation scope: wd2 m7 A/B on the production m6 inputs (#1125).  With
+    ``peak_min_area=50`` the hand-off gives a row with ``|dm| < 0.3`` against
+    dolphot for 239 of the 327 bright stars with no F277W value (centre of
+    mass: 7), 57 of 98 in F250M (17) and 95 of 151 in F300M (13).  The
+    18.6-21 mag bins change by at most 0.002, and core rows with no dolphot
+    source within 0.1" fall from 616 to 483 in F277W.  Combined with
+    ``--deblend-satstars`` it recovers 48 of the 327.  Not yet validated
+    through m8 or on other fields.
+
     Parameters
     ----------
     dqarr : `~numpy.ndarray`
@@ -502,12 +580,15 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
         Log prefix.
     accepted_excl_fwhm : float
         Exclusion radius around accepted satstars, in FWHM.
+    peak_min_area : int
+        Component area (pixels) from which the hand-off uses ``sci`` local
+        maxima instead of the centre of mass; 0 disables it.  Needs ``sci``.
 
     Returns
     -------
     xy : `~numpy.ndarray` (N, 2) or None
-        Component centres of mass (x, y), frame pixels; None when there are
-        none.
+        Component centres of mass, or local maxima of large components
+        (x, y), frame pixels; None when there are none.
     """
     from scipy import ndimage as _ndi
     if dqarr is None:
@@ -521,6 +602,7 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
                      dtype=float).reshape(-1, 2)
     xy = com[:, ::-1]
     floor_txt = ''
+    n_peak_comp = 0
     if sci is not None:
         sci_f = np.asarray(sci, dtype=float)
         # brightest finite pixel per component; -inf where it has none
@@ -534,7 +616,30 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
             floor_txt += (f"{int((keep & ~above).sum())} below the "
                           f"{float(data_floor):g} data floor, ")
             keep = above
-        xy = xy[keep]
+        if peak_min_area is not None and int(peak_min_area) > 0:
+            area = np.bincount(lab.ravel(), minlength=n + 1)[1:]
+            big = keep & (area >= int(peak_min_area))
+            if big.any():
+                peak_xy = _sat_component_peak_xy(
+                    sci_f, dqarr, lab, idx[big], fwhm_pix,
+                    data_floor=data_floor)
+                n_peak_comp = int(big.sum())
+                # positions per large component (lost-core centres included)
+                py = np.clip(np.rint(peak_xy[:, 1]).astype(int), 0,
+                             lab.shape[0] - 1)
+                px = np.clip(np.rint(peak_xy[:, 0]).astype(int), 0,
+                             lab.shape[1] - 1)
+                per = np.bincount(lab[py, px], minlength=n + 1)[idx[big]]
+                floor_txt += (f"{n_peak_comp} of >= {int(peak_min_area)} "
+                              f"px handed off at {len(peak_xy)} peak(s), "
+                              f"median {np.median(per):g} / max {per.max()} "
+                              f"per component, ")
+                keep = keep & ~big
+                xy = np.vstack([xy[keep], peak_xy])
+            else:
+                xy = xy[keep]
+        else:
+            xy = xy[keep]
     n_near_acc = 0
     if (len(xy) and satstar_table is not None and len(satstar_table)
             and 'xcentroid' in satstar_table.colnames
@@ -548,7 +653,8 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
                 accepted_excl_fwhm * float(fwhm_pix))
             n_near_acc = int(near_acc.sum())
             xy = xy[~near_acc]
-    print(f"[{label}] unaccepted-SATURATED hand-off: {len(xy)} of {n} "
+    what = 'position(s) from' if n_peak_comp else 'of'
+    print(f"[{label}] unaccepted-SATURATED hand-off: {len(xy)} {what} {n} "
           f"SATURATED component(s) handed to daophot ({floor_txt}"
           f"{n_near_acc} dropped as within {accepted_excl_fwhm:g} FWHM of an "
           f"accepted satstar)", flush=True)
@@ -595,6 +701,38 @@ def _daophot_handoff_data_floor():
     return floor
 
 
+def _daophot_handoff_peak_min_area():
+    """Component area from which the unaccepted-SATURATED hand-off uses peaks.
+
+    Env ``DAOPHOT_HANDOFF_PEAK_MIN_AREA`` (pixels); unset or blank gives 0,
+    which hands off every component at its centre of mass.  A positive value
+    hands off components of at least that many pixels at their ``sci`` local
+    maxima (see ``_unaccepted_sat_component_xy``).
+
+    Returns
+    -------
+    int
+        The area; 0 disables the peak hand-off.
+
+    Raises
+    ------
+    ValueError
+        The value is not an integer >= 0.
+    """
+    raw = os.environ.get('DAOPHOT_HANDOFF_PEAK_MIN_AREA', '')
+    if not raw.strip():
+        return 0
+    try:
+        area = int(raw)
+    except ValueError:
+        area = -1
+    if area < 0:
+        raise ValueError(
+            f"DAOPHOT_HANDOFF_PEAK_MIN_AREA={raw!r} is not an integer >= 0 "
+            f"(pixels; 0 or unset hands off component centres of mass)")
+    return area
+
+
 def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
                         data_floor=None, label='manual'):
     """Every position handed from the satstar channel to daophot on a frame.
@@ -606,8 +744,11 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     satstar that has a finite ``sci`` pixel reaching ``data_floor``
     (``_unaccepted_sat_component_xy``).  ``data_floor=None`` reads it from
     ``_daophot_handoff_data_floor``, and only when the component hand-off is
-    on, so the floor variable is never parsed on the default path.  The
-    component hand-off is validated only for gc-treasury F480M (see
+    on, so the floor variable is never parsed on the default path.  Env
+    ``DAOPHOT_HANDOFF_PEAK_MIN_AREA`` (``_daophot_handoff_peak_min_area``,
+    read only when the component hand-off is on) switches large components
+    to a hand-off at their local maxima.  The component hand-off is
+    validated only for gc-treasury F480M (see
     ``_unaccepted_sat_component_xy``).
 
     Returns
@@ -624,7 +765,7 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
             data_floor = _daophot_handoff_data_floor()
         comp_xy = _unaccepted_sat_component_xy(
             dqarr, satstar_table, fwhm_pix, sci=sci, data_floor=data_floor,
-            label=label)
+            label=label, peak_min_area=_daophot_handoff_peak_min_area())
         if comp_xy is not None:
             handoff_xy = (comp_xy if handoff_xy is None
                           else np.vstack([handoff_xy, comp_xy]))
