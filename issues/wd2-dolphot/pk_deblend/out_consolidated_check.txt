@@ -1,0 +1,28 @@
+pk2 consolidated rows 1676
+  stars with per-frame satstar <0.08": 3; consolidated row <0.08": 0; consolidated 0.08-0.5": 3
+  of those, merged row <0.08": 0; not merged: 3
+  unmerged: nearest consolidated sep [0.169 0.194 0.166] flux ratio to dolphot [0.87 0.93 1.14]
+  n_meas_fit [4 4 4] n_frames_fit [4 4 4]
+  sat_area of that consolidated row [ 28. 107.  53.]
+pk3 consolidated rows 1850
+['id', 'group_id', 'group_size', 'local_bkg', 'x_init', 'y_init', 'flux_init', 'x_fit', 'y_fit', 'flux_fit', 'x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'reduced_chi2', 'flags', 'outside_fov_seed', 'sat_area', 'sat_com_ra', 'sat_com_dec', 'xcentroid', 'ycentroid', 'skycoord_fit', 'flux_fit_precap', 'cap_psf_frac', 'sidelobe_resid_sigma', 'ssr_ratio', 'seed_kind', 'position_only', 'sat_severity_floor', 'satstar_implied_peak', 'satstar_observed_peak', 'wingcal_rmask', 'x_0', 'y_0', 'flux_fit_raw', 'wingcal_ratio', 'satstar_expkey', 'satstar_itertoken', 'wingcal_pooled', 'n_frames_fit', 'n_meas_fit', 'std_ra_fit', 'std_ra_coord_fit', 'std_dec_fit', 'flux_med_fit', 'flux_median_fit', 'std_flux_fit', 'n_frames_flux_fit', 'skycoord_repr_fit', 'flux_brightest_fit', 'aper_flux_jy', 'aper_flux_valid', 'aper_flux_err_jy', 'aper_mag_vega', 'aper_mag_ab', 'aper_bkg', 'aper_area_frac', 'aper_core_saturated', 'aper_i2d', 'aper_flux_jy_r0p10', 'aper_area_frac_r0p10', 'aper_flux_jy_r0p15', 'aper_area_frac_r0p15', 'aper_flux_jy_r0p20', 'aper_area_frac_r0p20', 'aper_flux_jy_r0p30', 'aper_area_frac_r0p30', 'aper_flux_jy_r0p40', 'aper_area_frac_r0p40', 'aper_flux_jy_r0p50', 'aper_area_frac_r0p50', 'aper_flux_jy_r0p70', 'aper_area_frac_r0p70', 'aper_flux_jy_r1p00', 'aper_area_frac_r1p00']
+  stars with per-frame satstar <0.08": 41; consolidated row <0.08": 27; consolidated 0.08-0.5": 14
+  of those, merged row <0.08": 28; not merged: 13
+  unmerged: nearest consolidated sep [0.167 0.374 0.289 0.318 0.217 0.218 0.182 0.296 0.196 0.148 0.387 0.31
+ 0.497] flux ratio to dolphot [ 3.15  8.23  4.03  9.16 15.32  3.29  1.09  8.28  0.92  2.83 33.29 14.23
+ 22.06]
+  n_meas_fit [11  8  8  8  7  6  8  6  8  6  7  8  6] n_frames_fit [4 4 4 4 4 4 4 4 4 4 4 4 4]
+  sat_area of that consolidated row [174. 541. 482. 505. 291. 201. 112. 145. 107.  75. 813. 326. 302.]
+   star 0: consolidated sep 0.167 flux 13223 (dolphot 4202), per-frame rows within 0.8" of it summed over 4 exp: 0
+   star 5: consolidated sep 0.374 flux 63440 (dolphot 7710), per-frame rows within 0.8" of it summed over 4 exp: 8
+   star 11: consolidated sep 0.289 flux 44315 (dolphot 10991), per-frame rows within 0.8" of it summed over 4 exp: 8
+   star 74: consolidated sep 0.318 flux 53154 (dolphot 5805), per-frame rows within 0.8" of it summed over 4 exp: 8
+   star 80: consolidated sep 0.217 flux 28539 (dolphot 1863), per-frame rows within 0.8" of it summed over 4 exp: 7
+   star 87: consolidated sep 0.218 flux 12649 (dolphot 3839), per-frame rows within 0.8" of it summed over 4 exp: 6
+   star 169: consolidated sep 0.182 flux 3375 (dolphot 3089), per-frame rows within 0.8" of it summed over 4 exp: 8
+   star 202: consolidated sep 0.296 flux 16987 (dolphot 2050), per-frame rows within 0.8" of it summed over 4 exp: 6
+   star 217: consolidated sep 0.196 flux 3158 (dolphot 3450), per-frame rows within 0.8" of it summed over 4 exp: 8
+   star 251: consolidated sep 0.148 flux 3817 (dolphot 1348), per-frame rows within 0.8" of it summed over 4 exp: 6
+   star 302: consolidated sep 0.387 flux 203868 (dolphot 6124), per-frame rows within 0.8" of it summed over 4 exp: 7
+   star 317: consolidated sep 0.310 flux 38150 (dolphot 2681), per-frame rows within 0.8" of it summed over 4 exp: 8
+   star 320: consolidated sep 0.497 flux 46635 (dolphot 2114), per-frame rows within 0.8" of it summed over 4 exp: 6

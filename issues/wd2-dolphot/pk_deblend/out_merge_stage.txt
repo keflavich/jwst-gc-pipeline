@@ -1,0 +1,81 @@
+== (a) per-star presence flags (any covering frame)
+pk2 {'sat008': 3, 'sat05': 38, 'rej008': 4, 'rej05': 35, 'dao008': 260, 'mhit': 258}
+   none of sat<0.5, rej<0.5, dao<0.08: 38
+   dao008 & mhit 258  dao008 & ~mhit 2
+   sat008 & mhit 0  sat008 & ~mhit 3
+   rej008 only (no sat008, no dao008): 2 merged hit 0
+pk3 {'sat008': 41, 'sat05': 96, 'rej008': 270, 'rej05': 299, 'dao008': 37, 'mhit': 56}
+   none of sat<0.5, rej<0.5, dao<0.08: 8
+   dao008 & mhit 34  dao008 & ~mhit 3
+   sat008 & mhit 28  sat008 & ~mhit 13
+   rej008 only (no sat008, no dao008): 222 merged hit 0
+lost (pk2 hit, pk3 no): 219 gained: 17 both: 39 neither: 52
+lost stars, pk3 flags: {'sat008': 1, 'sat05': 35, 'rej008': 194, 'rej05': 207, 'dao008': 1, 'mhit': 0}
+lost stars, pk2 flags: {'sat008': 0, 'sat05': 9, 'rej008': 0, 'rej05': 19, 'dao008': 219, 'mhit': 219}
+lost stars: pk2 merged row replaced? 0  pk2 merged dm pctl [-0.17 -0.1   0.    0.13  0.34]
+
+== (b) lost stars: nearest pk3 accepted satstar (any frame), n = 219
+sep pctl 5,25,50,75,95 [0.326 0.616 0.903 1.218 1.793]
+  sep 0-0.08: 1 flux ratio pctl 5,50,95 [0.85 0.85 0.85]
+  sep 0.08-0.2: 3 flux ratio pctl 5,50,95 [ 3.08 24.14 25.14]
+  sep 0.2-0.5: 31 flux ratio pctl 5,50,95 [  1.46  16.72 346.81]
+  sep 0.5-1.0: 97 flux ratio pctl 5,50,95 [  4.02  77.56 536.27]
+  sep 1.0-99: 87 flux ratio pctl 5,50,95 [   8.23  213.3  3237.14]
+flux ratio (all lost) pctl 5,16,50,84,95 [   3.23    9.52   81.94  481.8  1597.04]
+frames-with-sat<0.5 mean per lost star 0.12
+pk2 nearest accepted satstar for lost stars: sep pctl 5,50,95 [0.549 3.921 7.638]  <0.5: 9
+
+pk3 merged: rows 42354 finite/pos 42354 cols satstar_gate_rejected sum 3190 replaced 1845 is_saturated 1854
+== (c) pk3 stars with a per-frame satstar row <0.08 but no merged row <0.08: 13
+star 0 dolphot_idx 21 ref 15.07 dolflux 4202; sat frames [(np.str_('a1'), 0.046, 3548.0), (np.str_('a2'), 0.061, 2926.0), (np.str_('a3'), 0.01, 3582.0), (np.str_('a4'), 0.046, 3743.0)]; dao008 False
+    merged row 41885: sep 0.167" flux 13223 rep True satstar_nframes 4 nmeas 11 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 41527: sep 0.476" flux 1495 rep True satstar_nframes 1 nmeas 1 gate_rej False sat_sat True flags 1.0 nmatch 1 satstar_match_sep --
+    merged row 7142: sep 1.096" flux 2 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 0.0 nmatch 2 satstar_match_sep --
+star 5 dolphot_idx 3208 ref 14.41 dolflux 7710; sat frames [(np.str_('b1'), 0.077, 5544.0), (np.str_('b2'), 0.065, 6286.0), (np.str_('b3'), 0.013, 5701.0), (np.str_('b4'), 0.046, 7095.0)]; dao008 False
+    merged row 41302: sep 0.374" flux 63440 rep True satstar_nframes 4 nmeas 8 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 24364: sep 0.797" flux 757 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+    merged row 23211: sep 0.810" flux 540 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+star 11 dolphot_idx 3314 ref 14.03 dolflux 10991; sat frames [(np.str_('b1'), 0.062, 16505.0), (np.str_('b2'), 0.055, 8232.0), (np.str_('b4'), 0.033, 12349.0)]; dao008 False
+    merged row 41306: sep 0.289" flux 44315 rep True satstar_nframes 4 nmeas 8 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 24276: sep 0.912" flux 2019 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 3 satstar_match_sep --
+    merged row 23327: sep 1.030" flux 200 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.2054254710674286 nmatch 4 satstar_match_sep --
+star 74 dolphot_idx 3632 ref 14.72 dolflux 5805; sat frames [(np.str_('b1'), 0.059, 4620.0), (np.str_('b2'), 0.05, 3889.0), (np.str_('b3'), 0.039, 4918.0), (np.str_('b4'), 0.07, 4455.0)]; dao008 False
+    merged row 41677: sep 0.318" flux 53154 rep True satstar_nframes 4 nmeas 8 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 29443: sep 0.837" flux 31 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 1.0 nmatch 1 satstar_match_sep --
+    merged row 22915: sep 1.091" flux 324 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+star 80 dolphot_idx 3656 ref 15.95 dolflux 1863; sat frames [(np.str_('b1'), 0.062, 1469.0), (np.str_('b2'), 0.039, 1634.0), (np.str_('b3'), 0.048, 1308.0)]; dao008 False
+    merged row 41030: sep 0.217" flux 28539 rep True satstar_nframes 4 nmeas 7 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 39146: sep 0.426" flux 32 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 1.0 nmatch 1 satstar_match_sep --
+    merged row 22612: sep 0.705" flux 9 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 1.0 nmatch 4 satstar_match_sep --
+star 87 dolphot_idx 3708 ref 15.17 dolflux 3839; sat frames [(np.str_('b1'), 0.043, 3337.0), (np.str_('b4'), 0.056, 2173.0)]; dao008 False
+    merged row 42052: sep 0.218" flux 12649 rep True satstar_nframes 4 nmeas 6 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 21899: sep 1.266" flux 52 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 0.5844972729682922 nmatch 4 satstar_match_sep --
+    merged row 21870: sep 1.436" flux 792 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+star 169 dolphot_idx 4335 ref 15.40 dolflux 3089; sat frames [(np.str_('b1'), 0.044, 3017.0), (np.str_('b2'), 0.042, 3038.0), (np.str_('b3'), 0.045, 3019.0), (np.str_('b4'), 0.047, 3040.0)]; dao008 False
+    merged row 41072: sep 0.182" flux 3375 rep True satstar_nframes 4 nmeas 8 gate_rej False sat_sat True flags 0.0 nmatch 4 satstar_match_sep --
+    merged row 25519: sep 0.449" flux 58 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 22991: sep 1.133" flux 549 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+star 202 dolphot_idx 4698 ref 15.85 dolflux 2050; sat frames [(np.str_('b1'), 0.06, 1893.0), (np.str_('b4'), 0.032, 1752.0)]; dao008 False
+    merged row 42071: sep 0.296" flux 16987 rep True satstar_nframes 4 nmeas 6 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 31660: sep 0.335" flux 476 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 1.0 nmatch 1 satstar_match_sep --
+    merged row 37646: sep 0.729" flux 25 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 1.0 nmatch 1 satstar_match_sep --
+star 217 dolphot_idx 4821 ref 15.29 dolflux 3450; sat frames [(np.str_('b1'), 0.047, 3502.0), (np.str_('b2'), 0.046, 3552.0), (np.str_('b3'), 0.047, 3480.0), (np.str_('b4'), 0.048, 3294.0)]; dao008 False
+    merged row 41369: sep 0.196" flux 3158 rep True satstar_nframes 4 nmeas 8 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 22739: sep 0.883" flux 178 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+    merged row 25593: sep 1.283" flux 14 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+star 251 dolphot_idx 5218 ref 16.30 dolflux 1348; sat frames [(np.str_('b2'), 0.04, 1221.0), (np.str_('b3'), 0.041, 1240.0)]; dao008 False
+    merged row 41110: sep 0.148" flux 3817 rep True satstar_nframes 4 nmeas 6 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 26214: sep 0.869" flux 55 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+    merged row 26259: sep 0.945" flux 17 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 0.7207134366035461 nmatch 4 satstar_match_sep --
+star 302 dolphot_idx 12800 ref 14.66 dolflux 6124; sat frames [(np.str_('b1'), 0.079, 4231.0), (np.str_('b2'), 0.015, 4321.0), (np.str_('b4'), 0.05, 4870.0)]; dao008 False
+    merged row 41007: sep 0.387" flux 203868 rep True satstar_nframes 4 nmeas 7 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 31656: sep 0.794" flux 286 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 1.0 nmatch 3 satstar_match_sep --
+    merged row 23206: sep 1.196" flux 80 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+star 317 dolphot_idx 17215 ref 15.56 dolflux 2681; sat frames [(np.str_('b1'), 0.043, 2172.0), (np.str_('b2'), 0.023, 2026.0), (np.str_('b3'), 0.064, 2560.0), (np.str_('b4'), 0.06, 2125.0)]; dao008 False
+    merged row 42044: sep 0.310" flux 38150 rep True satstar_nframes 4 nmeas 8 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 26872: sep 0.805" flux 32 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+    merged row 27105: sep 1.188" flux 1103 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+star 320 dolphot_idx 17235 ref 15.82 dolflux 2114; sat frames [(np.str_('b3'), 0.065, 1677.0), (np.str_('b4'), 0.051, 1981.0)]; dao008 False
+    merged row 41029: sep 0.497" flux 46635 rep True satstar_nframes 4 nmeas 6 gate_rej False sat_sat True flags 1.0 nmatch 4 satstar_match_sep --
+    merged row 26852: sep 0.752" flux 114 rep False satstar_nframes 0 nmeas 0 gate_rej True sat_sat False flags 0.0 nmatch 4 satstar_match_sep --
+    merged row 25632: sep 0.873" flux 21 rep False satstar_nframes 0 nmeas 0 gate_rej False sat_sat False flags 1.0 nmatch 4 satstar_match_sep --

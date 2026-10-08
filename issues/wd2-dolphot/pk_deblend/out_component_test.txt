@@ -1,0 +1,11 @@
+per-frame: star inside SATURATED component (3x3), component area >= 50, number of accepted satstars in that component
+-- lost (pk2 hit, pk3 none) 219
+ exp1: covered 219, in sat comp 218, comp>=50px 218, median area 34702; comp holds >=1 accepted: pk2 11, pk3 218; median n accepted in comp: pk2 0 pk3 34
+ exp2: covered 219, in sat comp 218, comp>=50px 218, median area 35377; comp holds >=1 accepted: pk2 30, pk3 218; median n accepted in comp: pk2 0 pk3 34
+ exp3: covered 219, in sat comp 219, comp>=50px 218, median area 35161; comp holds >=1 accepted: pk2 19, pk3 218; median n accepted in comp: pk2 0 pk3 34
+ exp4: covered 219, in sat comp 219, comp>=50px 219, median area 35277; comp holds >=1 accepted: pk2 25, pk3 218; median n accepted in comp: pk2 0 pk3 35
+-- kept (both hit) 39
+ exp1: covered 38, in sat comp 38, comp>=50px 37, median area 464; comp holds >=1 accepted: pk2 3, pk3 23; median n accepted in comp: pk2 0 pk3 1
+ exp2: covered 38, in sat comp 38, comp>=50px 37, median area 445; comp holds >=1 accepted: pk2 3, pk3 18; median n accepted in comp: pk2 0 pk3 0
+ exp3: covered 38, in sat comp 38, comp>=50px 37, median area 490; comp holds >=1 accepted: pk2 5, pk3 30; median n accepted in comp: pk2 0 pk3 2
+ exp4: covered 38, in sat comp 38, comp>=50px 37, median area 354; comp holds >=1 accepted: pk2 3, pk3 19; median n accepted in comp: pk2 0 pk3 1

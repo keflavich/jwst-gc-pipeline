@@ -1,0 +1,10 @@
+pk3 exp1 rejected fits within 0.08" of lost stars: 169 of 219
+  qfit pctl 5,50,95 [  8.7   29.34 121.05]  flux_fit/dolphot pctl 5,50,95 [0.46 0.87 1.06]
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/numpy/lib/_nanfunctions_impl.py:1396: RuntimeWarning: All-NaN slice encountered
+  return _nanquantile_unchecked(
+  implied_peak/floor pctl 5,50,95 [nan nan nan]  observed_peak/floor [nan nan nan]
+  meets faint-fit-quality hand-off criterion (implied < 0.5 floor, positive): 0 of 169
+  flags (<Column name='flags' dtype='int64' length=2>
+1
+5, array([167,   2]))
+picked [3285, 3472, 3558, 5638, 4996, 5057, 4870, 15377]
