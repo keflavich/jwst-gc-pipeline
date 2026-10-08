@@ -113,11 +113,22 @@ Fit quality (photutils PSF-fit outputs, averaged over exposures)
       flux. Large positive: sharper than the PSF (cosmic ray, hot pixel).
       Large negative: broader than the PSF (extended source, blend).
   flags_{filter}
-      Weighted mean over exposures of the photutils fit flag bitmask
-      (1 = partial fit footprint, 2 = position outside image, 4 =
-      non-positive flux, 8 = possible non-convergence, 16 = no covariance,
-      32 = parameter near a bound). 0 means no flag in any exposure. Because
-      it is an average, non-zero values are usually not integers and the
+      Weighted mean over exposures of the photutils fit flag bitmask:
+          1 = fewer pixels fit than the full fit box
+          2 = fitted position outside the image
+          4 = non-positive flux
+          8 = possible non-convergence
+         16 = no parameter covariance
+         32 = position near a fit bound
+         64 = no overlap with the data
+        128 = source fully masked
+        256 = too few pixels to fit
+        512 = non-finite fitted position
+       1024 = non-finite fitted flux
+       2048 = non-finite local background
+      0 means no flag in any exposure. An integer value (for example
+      2049 = 2048 + 1) is exact only when every exposure had the same flags;
+      because the column is an average, non-integer values occur and their
       individual bits cannot be recovered.
   group_size_{filter}
       Number of sources fit together with this one as a blended group

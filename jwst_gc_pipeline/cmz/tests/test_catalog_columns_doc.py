@@ -90,3 +90,11 @@ def test_page_with_catalogs_links_the_descriptions(mw):
 def test_page_without_catalogs_does_not(mw):
     page = mw.render_field_page('m92', _manifest('m92', []), '')
     assert mw.CATALOG_COLUMNS_NAME not in page
+
+
+def test_flags_entry_lists_every_photutils_bit(mw):
+    # released catalogs carry bits up to 2048 (brick v1.0 F200W has flags=2049)
+    text = mw.CATALOG_COLUMNS_SRC.read_text()
+    entry = text.split('  flags_{filter}\n', 1)[1].split('\n  group_size_', 1)[0]
+    listed = {int(b) for b in re.findall(r'^\s+(\d+) = ', entry, re.M)}
+    assert listed == {2 ** k for k in range(12)}
