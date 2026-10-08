@@ -1,0 +1,292 @@
+JWST Galactic Center survey: catalog column descriptions
+=======================================================
+
+This file describes the columns of the photometric catalogs on the release
+pages (https://starformation.astro.ufl.edu/jwst-gc/). The same column names
+are used for every field.
+
+Conventions
+-----------
+{filter}   A lowercase JWST filter name, for example f212n or f770w. A merged
+           catalog has one copy of each per-filter column for every filter
+           observed in that field.
+Positions  ICRS, degrees, unless a column says otherwise.
+NaN        No measurement (floating-point columns).
+999999     Null value of integer columns (TNULL in the FITS header; astropy
+           reads these entries as masked).
+Units      The FITS TUNIT keyword is set for positions, Jy fluxes and
+           magnitudes. Columns with no TUNIT carry the units given below.
+
+Catalog types
+-------------
+Merged catalog (full)
+    basic_merged_indivexp_photometry_tables_merged_resbgsub_m8*.fits (or
+    _m7* in older releases; .ecsv copies have the same columns). One row per
+    source, cross-matched across all filters. The m8 version adds forced
+    photometry at the positions of sources that a filter did not detect on
+    its own (see "Forced photometry" below). A suffix _o001, _o004, ...
+    marks a catalog of one observation; _nrca / _nrcb mark one NIRCam module.
+Merged catalog (quality-cut)
+    *_qualcuts_oksep*.fits. The merged catalog after the quality cuts; same
+    columns.
+Per-filter vetted catalog
+    {filter}_*_dao_basic_vetted.fits. The sources of one filter that passed
+    the vetting stage. Its columns are the per-filter columns below without
+    the _{filter} suffix (flux, qfit, skycoord.ra, ...). It has no Jy or
+    magnitude columns: convert flux as described under flux_{filter}.
+Joint catalog (gc-treasury only)
+    gctreasury10678_joint_nircam.fits / .parquet. All Treasury tiles in one
+    table, with duplicates between overlapping tiles removed. Same columns
+    as the merged catalog plus the joint-catalog columns below. The
+    .prov.json file next to it records the input tile catalogs (path, SHA-1,
+    rows in and out), the deduplication radius and rule, and the overlap
+    registration check.
+Seed source list
+    seed_union_iter3_{field}.fits. A union of the per-filter detections from
+    an earlier pipeline version, which was used as the input position list
+    for forced photometry. Kept for reference; use the merged catalog for
+    science.
+
+
+Per-filter columns (merged, quality-cut and joint catalogs)
+-----------------------------------------------------------
+Each filter is measured by PSF fitting in every individual exposure; the
+per-exposure measurements are then combined. "Weighted mean" below means the
+inverse-variance-weighted mean over the exposures in which the source was
+found.
+
+Position and cross-match
+  skycoord_ref.ra, skycoord_ref.dec
+      Reference position of the source (deg). Positions of the reference
+      filter come first; a source found in another filter with no match
+      within 0.1" is added at that filter's position.
+  skycoord_ref_filtername
+      Filter whose detection supplied skycoord_ref.
+  skycoord_{filter}.ra, skycoord_{filter}.dec
+      Position measured in this filter (deg, weighted mean over exposures).
+      NaN where this filter has no valid match to the reference position.
+  sep_{filter}
+      Separation between skycoord_ref and the nearest source in this filter
+      (deg). Filled for every row, including rows where the match was
+      rejected; a value above 0.1" (2.8e-5 deg) means no match. In m8
+      catalogs a forced-photometry row keeps its large sep_{filter}.
+  id_{filter}
+      Row index of the matched source in this filter's own catalog.
+  mask_{filter}
+      True = this filter has no usable measurement for this source. Set when
+      the cross-match is rejected (separation above 0.1" or not a mutual
+      nearest neighbor). In m8 catalogs the forced photometry clears it for
+      a source with a forced detection, so there it means "no measurement
+      after forced photometry"; sep_{filter} keeps the original match.
+
+Flux and magnitudes
+  flux_{filter}
+      PSF-fit flux, weighted mean over exposures, in the image units summed
+      over the PSF: MJy/sr x pixels. Multiply by the pixel solid angle in
+      steradians to get Jy (flux_jy_{filter} is that conversion).
+  flux_err_{filter}
+      Weighted mean of the per-exposure flux errors: the uncertainty of a
+      single exposure, same units as flux_{filter}.
+  flux_err_prop_{filter}
+      Propagated uncertainty of the combined flux, 1/sqrt(sum 1/sigma_i^2)
+      over the exposures kept after outlier clipping. Use this for the
+      signal-to-noise ratio of the catalog flux. See "Known issues" for
+      catalogs built before 2026-07-21.
+  flux_init_{filter}
+      Starting flux given to the PSF fit (from source detection). Not a
+      measurement.
+  flux_jy_{filter}, eflux_jy_{filter}
+      Flux and its uncertainty in Jy.
+  mag_ab_{filter}, emag_ab_{filter}
+      AB magnitude, -2.5 log10(flux_jy / 3631 Jy), and its uncertainty,
+      1.0857 x eflux_jy / flux_jy.
+  mag_vega_{filter}
+      Vega magnitude, -2.5 log10(flux_jy / ZP), with the filter zero point ZP
+      from the SVO Filter Profile Service. NaN for non-positive flux.
+
+Fit quality (photutils PSF-fit outputs, averaged over exposures)
+  qfit_{filter}
+      Sum of the absolute fit residuals divided by the fit flux. 0 for a
+      source the PSF model fits perfectly; larger is worse.
+  cfit_{filter}
+      Fit residual (data - model) in the central pixel divided by the fit
+      flux. Large positive: sharper than the PSF (cosmic ray, hot pixel).
+      Large negative: broader than the PSF (extended source, blend).
+  flags_{filter}
+      Weighted mean over exposures of the photutils fit flag bitmask
+      (1 = partial fit footprint, 2 = position outside image, 4 =
+      non-positive flux, 8 = possible non-convergence, 16 = no covariance,
+      32 = parameter near a bound). 0 means no flag in any exposure. Because
+      it is an average, non-zero values are usually not integers and the
+      individual bits cannot be recovered.
+  group_size_{filter}
+      Number of sources fit together with this one as a blended group
+      (1 = fit alone).
+  local_bkg_{filter}
+      Local background level at the source used in the fit (MJy/sr per
+      pixel).
+  iter_found_{filter}
+      Pipeline stage (2 to 7, for stages m2 to m7) at which the source was
+      first detected in this filter. Provenance, not a quality measure.
+
+Astrometric scatter and number of measurements
+  dra_{filter}, ddec_{filter}
+      PSF-fit position uncertainty in RA and Dec (arcsec), averaged over
+      exposures.
+  std_ra_{filter}, std_dec_{filter}
+      Weighted scatter of the per-exposure positions (deg). NaN where both
+      are exactly zero, which happens when the per-exposure positions were
+      fixed to a common input position rather than measured.
+  nmatch_{filter}
+      Number of exposures with a finite flux for this source.
+  nmatch_good_{filter}
+      Number of those exposures that survived outlier clipping in flux and
+      position. flux_err / flux_err_prop is close to sqrt(nmatch_good).
+
+Saturated stars
+  is_saturated_{filter}
+      True if the star is saturated in this filter, whether or not its
+      photometry was replaced (see replaced_saturated_{filter}).
+  replaced_saturated_{filter}
+      True if flux and position come from the dedicated saturated-star fit
+      (a fit to the unsaturated PSF wings) instead of the standard PSF fit.
+  satstar_match_sep_{filter}
+      Separation (arcsec) between the standard-fit position and the
+      saturated-star fit position for a replaced row. NaN otherwise.
+  satstar_gate_rejected_{filter}
+      True if a saturated-star fit exists for this source but failed the
+      quality checks, so it was not used. The photometry is then the standard
+      fit, whose core is clipped by saturation (too faint), unless
+      satclip_corrected_{filter} is True.
+  satclip_corrected_{filter}, satclip_corr_mag_{filter}
+      True if the flux of such a row was replaced by the rejected wing fit
+      after a secondary check; satclip_corr_mag is the brightening applied
+      (mag, 0.02 to 0.5). NaN when not applied.
+  near_saturated_{filter}_{filter}
+      True if the source lies near a saturated star in this filter (within
+      0.55" for NIRCam; 0.7" to 2.75" for MIRI, scaled with the PSF width),
+      so its photometry may be contaminated by the star's wings or
+      diffraction spikes. The filter name appears twice because of how the
+      merge names columns; it is one flag per filter.
+  satstar_nframes_{filter}, satstar_nmeas_{filter}   (joint catalog)
+      Number of exposures, and of individual measurements, in the
+      saturated-star fit.
+  satstar_std_ra_{filter}, satstar_std_dec_{filter}  (joint catalog)
+      Scatter of the per-exposure saturated-star fit positions (deg, RA term
+      includes cos Dec). NaN with a single exposure.
+
+Star versus extended emission
+  prominence_{filter}
+      (Peak - local median) / local MAD, measured on the mosaic: how far the
+      source rises above its surroundings in units of the local noise.
+  peak_sb_{filter}
+      Peak surface brightness in a 3x3-pixel box on the mosaic (MJy/sr).
+  local_emission_snr_{filter}
+      Local background level above the darkest sky in the field, in units of
+      that dark-sky noise. Small values mean the source sits on dark sky.
+  sky_clean_{filter}
+      True if the local background is consistent with dark sky. Such sources
+      are kept on prominence and S/N alone, since extended emission cannot
+      mimic them there.
+
+Residual background (diagnostic; does not enter the flux)
+  mean_modelsub_bkg_{filter}
+      Mean residual surface brightness in a 3x3-pixel box at the source after
+      all fitted stars are subtracted (MJy/sr); weighted mean over exposures
+      with 3-sigma clipping.
+  mean_modelsub_bkg_err_{filter}
+      Uncertainty of that mean.
+  mean_modelsub_bkg_std_{filter}
+      Exposure-to-exposure scatter of the residual background.
+  modelsub_bkg_nframes_{filter}
+      Number of exposures used for mean_modelsub_bkg.
+  modelsub_bkg_rms_{filter}
+      Average over exposures of the pixel-to-pixel RMS in the 3x3 box
+      (MJy/sr).
+  modelsub_bkg_npix_{filter}
+      Average over exposures of the number of valid pixels in the 3x3 box.
+
+Overshoot refits (joint catalog)
+  forced_refit_frac_{filter}
+      Fraction of the exposures behind this measurement that were refit
+      because a brighter neighbor's model over-subtracted the area. Those
+      fluxes tend to be too bright. NaN where no exposure carried the flag.
+  forced_refit_nframes_{filter}
+      Number of such exposures.
+
+
+Forced photometry and independent detections (m8 catalogs)
+-----------------------------------------------------------
+  independently_detected_{filter}
+      True if this filter detected the source on its own, within 30 mas of
+      the reference position. False if the filter's measurement comes only
+      from a fit at a position taken from another filter.
+  n_filt_independent
+      Number of filters with independently_detected = True.
+  forced_filled_{filter}
+      True if the source had no detection in this filter and a fit at its
+      reference position converged in at least one exposure.
+  forced_snr_{filter}
+      Signal-to-noise ratio of that forced fit. At or above 3 the forced
+      flux is written into flux_{filter} / mag_*_{filter} and mask_{filter}
+      is cleared. Below 3 the magnitudes stay NaN and mask_{filter} stays
+      True.
+  flux_ulim_{filter}, mag_ab_ulim_{filter}, mag_vega_ulim_{filter},
+  is_upper_limit_{filter}
+      Present in catalogs built after 2026-10-07. The 3-sigma upper limit of
+      the forced fit in Jy, AB and Vega magnitudes. is_upper_limit is True
+      only for a forced fit below the detection threshold; select upper
+      limits with it, since the *_ulim columns are also filled for
+      detections (as a depth estimate).
+
+
+Line-minus-continuum columns (fields with F405N+F410M or F187N+F182M)
+---------------------------------------------------------------------
+  flux_jy_410m405, mag_ab_410m405, mag_vega_410m405
+      F410M with the line contribution removed: F410M - 0.11 x F405N (Jy).
+      The factor 0.11 is the fraction of the F410M band covered by F405N.
+  flux_jy_405m410, mag_ab_405m410, mag_vega_405m410
+      F405N (Br alpha) with that continuum subtracted:
+      F405N - flux_jy_410m405 (Jy).
+  flux_jy_182m187, mag_ab_182m187, mag_vega_182m187
+  flux_jy_187m182, mag_ab_187m182, mag_vega_187m182
+      The same for F182M and F187N (Pa alpha).
+  Vega magnitudes use the zero point of the first-named filter.
+
+
+Joint catalog (gc-treasury)
+---------------------------
+  joint_tile
+      Treasury observation number (tile) whose measurement was kept.
+  also_in_tiles
+      Other tiles that detected the same source (comma-separated); empty if
+      the source is in one tile only. Among duplicates the row kept is the
+      one with the most filters measured, then the largest distance from its
+      tile edge, then the smallest F212N flux error.
+
+
+Seed source list
+----------------
+  source_id_union             Source number in the union list.
+  ra, dec                     Position (deg).
+  skycoord_ref.ra, .dec       Reference position (deg).
+  seed_filter_origin          Filter whose detection supplied the position.
+  n_filters                   Number of filters that detected the source.
+  is_saturated                True if saturated in at least one filter.
+  detected_{filter}           True if detected in this filter.
+  flux_{filter}, fluxerr_{filter}
+                              Flux and uncertainty in this filter, MJy/sr x
+                              pixels (earlier pipeline version).
+  qfit_{filter}               Fit quality, as qfit_{filter} above.
+
+
+Known issues
+------------
+* Line-minus-continuum magnitudes (mag_ab_405m410 and the like) carry
+  TUNIT = 'Jy' in the FITS header. The values are magnitudes.
+* flux_err_prop in catalogs built before 2026-07-21 (all catalogs in
+  release v1.0-2026.06) is larger than the propagated error by a factor
+  sqrt(nmatch_good); in those catalogs it equals flux_err. Divide it by
+  sqrt(nmatch_good_{filter}) to get the propagated error.
+* modelsub_bkg_rms and modelsub_bkg_npix are averages over exposures even
+  though their names carry no _avg suffix.

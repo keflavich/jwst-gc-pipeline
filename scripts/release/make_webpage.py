@@ -1133,6 +1133,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                    "merged photometry table is still being built; only the per-filter "
                    "vetted catalogs are provided for now. The merged table will be added "
                    "in a later update.</p>")
+    if catalogs:
+        out.append(catalog_columns_html())
     if not catalogs:
         out.append("<p class=muted><b>No catalogs in this release.</b> Photometry for these data is still being produced; when it is ready it will be added here under a new version.</p>")
     else:
@@ -2338,6 +2340,21 @@ WAVELENGTH_TOURS = {
 }
 
 
+#: Plain-text description of every column in the released catalogs.  One file
+#: covers every field (the columns are the same pattern everywhere, with the
+#: filter name substituted), so it is copied once into the site directory and
+#: each field page links to it from its Catalogs heading.
+CATALOG_COLUMNS_SRC = Path(__file__).with_name("catalog_columns.txt")
+CATALOG_COLUMNS_NAME = "catalog_columns.txt"
+
+
+def catalog_columns_html():
+    """The column-description link under a field page's Catalogs heading."""
+    return (f"<p><a class=btn href='{CATALOG_COLUMNS_NAME}'>Column descriptions "
+            "(text)</a> <span class=muted>What each catalog column means, with "
+            "units and flag values.</span></p>")
+
+
 def wavelength_tour_html(field):
     """The tour link under a field page's mosaic heading, or ''."""
     page = WAVELENGTH_TOURS.get(field)
@@ -2914,7 +2931,9 @@ def main(argv=None):
     (out_dir / "download_help.html").write_text(render_help())
     # .txt extension so the web server serves it as text (a .py 500s under CGI)
     (out_dir / "get_globus_token_helper.txt").write_text(TOKEN_HELPER)
+    shutil.copy2(CATALOG_COLUMNS_SRC, out_dir / CATALOG_COLUMNS_NAME)
     print(f"wrote index.html + download_help.html + get_globus_token_helper.txt "
+          f"+ {CATALOG_COLUMNS_NAME} "
           f"({len(fields_info)} field(s) rebuilt, {len(index_fields)} on the "
           f"index) into {out_dir}")
 
