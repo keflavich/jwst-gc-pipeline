@@ -9203,9 +9203,30 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # targets' untokened names unchanged.  Tests call that helper
                 # with a recording merge; this call site is 3000 lines inside
                 # run_manual_pipeline and no test drives it.
+                #
+                # Register each per-frame catalog onto its visit consensus with
+                # the offset m2 measured for it (m2_registration).  m2 acts only
+                # on offsets over 2 mas AND over the field's correction floor, so
+                # the sub-floor per-exposure offsets otherwise stay in every
+                # merged catalog and set its across-exposure scatter (sgrb2
+                # F212N: 1.35 mas as written, 0.62 registered).  Not at m1/m2:
+                # those stages are the measurement; the solution is frozen from
+                # m3 on.  Same record directory and token as the checkpoint
+                # below, so both read one file.  Cutout runs have no checkpoint.
+                # Opt-in (ASTROM_MERGE_M2_REGISTRATION=1) until the offsets are
+                # also written to the offsets table, so catalogs and mosaics
+                # carry the same solution.
+                from jwst_gc_pipeline.photometry.m2_registration import (
+                    registration_for_merge)
+                _m2_registration = registration_for_merge(
+                    merge_label, os.path.join(cut_bp, 'astrometry_checkpoints'),
+                    filt, getattr(options, 'proposal_id', None),
+                    getattr(options, 'field', None),
+                    cutout=bool(getattr(options, 'cutout_region', '')))
                 merge_frames_for_observation(
                     proposal_id, field,
                     module=module, filtername=filt.lower(),
+                    m2_registration=_m2_registration,
                     method='dao', suffix='_basic', target=target, basepath=cut_bp,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,
