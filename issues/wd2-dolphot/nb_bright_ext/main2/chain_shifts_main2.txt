@@ -1,0 +1,104 @@
+mainfcbg -> main2: 51058 of 58067 rows matched within 0.05"
+### F164N / F162M: per F164N (mainfcbg) mag bin: N / median df164n / median df162m / median d(colour)  (d = main2 - mainfcbg); replaced_saturated fraction in mainfcbg / main2 for f164n, f162m
+  10-11: 10 / +0.000 / +0.000 / -0.000   sat f164n 1.00/1.00, f162m 1.00/1.00
+  11-12: 35 / -0.000 / -0.000 / -0.000   sat f164n 0.94/1.00, f162m 1.00/1.00
+  12-13: 57 / -0.000 / -0.000 / -0.000   sat f164n 0.93/1.00, f162m 1.00/1.00
+  13-14: 84 / +0.000 / +0.000 / +0.000   sat f164n 0.89/1.00, f162m 0.98/0.99
+### F187N / F182M: per F187N (mainfcbg) mag bin: N / median df187n / median df182m / median d(colour)  (d = main2 - mainfcbg); replaced_saturated fraction in mainfcbg / main2 for f187n, f182m
+  10-11: 12 / -0.000 / -0.000 / +0.000   sat f187n 1.00/1.00, f182m 1.00/1.00
+  11-12: 33 / -0.000 / +0.000 / -0.000   sat f187n 0.88/1.00, f182m 1.00/1.00
+  12-13: 58 / -0.000 / -0.000 / -0.000   sat f187n 0.81/1.00, f182m 0.98/0.98
+  13-14: 114 / -0.000 / +0.000 / -0.000   sat f187n 0.81/1.00, f182m 0.96/1.00
+### F212N / F200W: per F212N (mainfcbg) mag bin: N / median df212n / median df200w / median d(colour)  (d = main2 - mainfcbg); replaced_saturated fraction in mainfcbg / main2 for f212n, f200w
+  10-11: 11 / +0.000 / -0.003 / +0.000   sat f212n 1.00/1.00, f200w 0.91/0.91
+  11-12: 30 / +0.000 / -0.001 / -0.000   sat f212n 0.90/1.00, f200w 1.00/1.00
+  12-13: 65 / -0.000 / -0.000 / +0.000   sat f212n 0.78/1.00, f200w 0.98/0.98
+  13-14: 125 / -0.000 / -0.000 / -0.000   sat f212n 0.75/0.98, f200w 0.98/0.98
+### F405N / F410M: per F405N (mainfcbg) mag bin: N / median df405n / median df410m / median d(colour)  (d = main2 - mainfcbg); replaced_saturated fraction in mainfcbg / main2 for f405n, f410m
+  10-11: 13 / +0.000 / +0.001 / -0.001   sat f405n 0.77/1.00, f410m 1.00/1.00
+  11-12: 41 / +0.000 / +0.001 / -0.001   sat f405n 0.78/0.90, f410m 0.85/0.85
+  12-13: 104 / +0.000 / +0.000 / +0.000   sat f405n 0.78/0.84, f410m 0.79/0.79
+  13-14: 319 / +0.000 / +0.000 / +0.000   sat f405n 0.18/0.18, f410m 0.20/0.20
+### F466N / F410M: per F466N (mainfcbg) mag bin: N / median df466n / median df410m / median d(colour)  (d = main2 - mainfcbg); replaced_saturated fraction in mainfcbg / main2 for f466n, f410m
+  10-11: 14 / +0.005 / +0.001 / +0.004   sat f466n 0.00/0.93, f410m 0.93/0.93
+  11-12: 50 / +0.025 / +0.000 / +0.025   sat f466n 0.04/0.94, f410m 0.84/0.84
+  12-13: 123 / +0.000 / +0.000 / +0.000   sat f466n 0.37/0.57, f410m 0.73/0.73
+  13-14: 372 / +0.000 / +0.000 / +0.000   sat f466n 0.01/0.01, f410m 0.14/0.13
+main2 -> main2kf: 51155 of 52319 rows matched within 0.05"
+### F164N / F162M: per F164N (main2) mag bin: N / median df164n / median df162m / median d(colour)  (d = main2kf - main2); replaced_saturated fraction in main2 / main2kf for f164n, f162m
+  10-11: 10 / -0.000 / -0.012 / +0.009   sat f164n 1.00/1.00, f162m 1.00/1.00
+  11-12: 36 / -0.008 / -0.005 / +0.004   sat f164n 1.00/1.00, f162m 1.00/1.00
+  12-13: 57 / -0.001 / +0.000 / -0.004   sat f164n 1.00/1.00, f162m 1.00/1.00
+  13-14: 87 / -0.017 / +0.019 / -0.041   sat f164n 1.00/1.00, f162m 0.99/0.99
+### F187N / F182M: per F187N (main2) mag bin: N / median df187n / median df182m / median d(colour)  (d = main2kf - main2); replaced_saturated fraction in main2 / main2kf for f187n, f182m
+  10-11: 13 / -0.001 / +0.004 / +0.003   sat f187n 1.00/1.00, f182m 1.00/1.00
+  11-12: 34 / -0.005 / -0.001 / -0.009   sat f187n 1.00/1.00, f182m 1.00/1.00
+  12-13: 58 / -0.015 / -0.004 / -0.008   sat f187n 1.00/1.00, f182m 0.98/0.98
+  13-14: 113 / -0.027 / +0.029 / -0.057   sat f187n 1.00/1.00, f182m 0.99/0.99
+### F212N / F200W: per F212N (main2) mag bin: N / median df212n / median df200w / median d(colour)  (d = main2kf - main2); replaced_saturated fraction in main2 / main2kf for f212n, f200w
+  10-11: 12 / -0.004 / -0.014 / +0.005   sat f212n 1.00/1.00, f200w 0.92/0.92
+  11-12: 33 / -0.011 / -0.014 / +0.003   sat f212n 1.00/1.00, f200w 1.00/1.00
+  12-13: 64 / -0.012 / +0.006 / -0.015   sat f212n 1.00/1.00, f200w 1.00/1.00
+  13-14: 123 / -0.020 / +0.024 / -0.050   sat f212n 0.98/0.98, f200w 0.98/0.98
+### F405N / F410M: per F405N (main2) mag bin: N / median df405n / median df410m / median d(colour)  (d = main2kf - main2); replaced_saturated fraction in main2 / main2kf for f405n, f410m
+  10-11: 14 / -0.046 / -0.073 / +0.023   sat f405n 1.00/1.00, f410m 1.00/1.00
+  11-12: 43 / -0.044 / -0.069 / +0.008   sat f405n 0.91/0.91, f410m 0.86/0.86
+  12-13: 101 / -0.000 / -0.035 / +0.027   sat f405n 0.83/0.83, f410m 0.78/0.78
+  13-14: 321 / +0.000 / -0.000 / +0.000   sat f405n 0.18/0.17, f410m 0.20/0.22
+### F466N / F410M: per F466N (main2) mag bin: N / median df466n / median df410m / median d(colour)  (d = main2kf - main2); replaced_saturated fraction in main2 / main2kf for f466n, f410m
+  10-11: 17 / +0.005 / -0.073 / +0.067   sat f466n 0.94/0.94, f410m 0.94/0.94
+  11-12: 52 / +0.039 / -0.062 / +0.104   sat f466n 0.94/0.90, f410m 0.83/0.83
+  12-13: 121 / +0.000 / -0.032 / +0.036   sat f466n 0.56/0.56, f410m 0.75/0.76
+  13-14: 366 / +0.000 / -0.000 / +0.000   sat f466n 0.01/0.01, f410m 0.13/0.15
+prod -> main2: 27986 of 37956 rows matched within 0.05"
+### F164N / F162M: per F164N (prod) mag bin: N / median df164n / median df162m / median d(colour)  (d = main2 - prod); replaced_saturated fraction in prod / main2 for f164n, f162m
+  10-11: 13 / +0.117 / +0.121 / -0.097   sat f164n 1.00/1.00, f162m 1.00/1.00
+  11-12: 33 / +0.097 / +0.024 / +0.057   sat f164n 1.00/1.00, f162m 1.00/1.00
+  12-13: 57 / +0.135 / -0.006 / +0.097   sat f164n 1.00/0.98, f162m 1.00/1.00
+  13-14: 80 / +0.092 / +0.162 / -0.062   sat f164n 1.00/1.00, f162m 1.00/1.00
+### F187N / F182M: per F187N (prod) mag bin: N / median df187n / median df182m / median d(colour)  (d = main2 - prod); replaced_saturated fraction in prod / main2 for f187n, f182m
+  10-11: 15 / +0.239 / +0.134 / +0.059   sat f187n 1.00/1.00, f182m 1.00/1.00
+  11-12: 32 / +0.139 / +0.065 / +0.077   sat f187n 1.00/1.00, f182m 1.00/1.00
+  12-13: 66 / +0.173 / +0.056 / +0.074   sat f187n 1.00/1.00, f182m 1.00/1.00
+  13-14: 103 / +0.140 / +0.183 / -0.038   sat f187n 1.00/0.99, f182m 1.00/0.99
+### F212N / F200W: per F212N (prod) mag bin: N / median df212n / median df200w / median d(colour)  (d = main2 - prod); replaced_saturated fraction in prod / main2 for f212n, f200w
+  10-11: 8 / +0.122 / +0.095 / +0.057   sat f212n 1.00/1.00, f200w 1.00/1.00
+  11-12: 35 / +0.092 / +0.039 / +0.041   sat f212n 1.00/1.00, f200w 1.00/1.00
+  12-13: 62 / +0.119 / +0.056 / +0.049   sat f212n 1.00/1.00, f200w 1.00/1.00
+  13-14: 111 / +0.077 / +0.155 / -0.107   sat f212n 1.00/0.98, f200w 1.00/1.00
+### F405N / F410M: per F405N (prod) mag bin: N / median df405n / median df410m / median d(colour)  (d = main2 - prod); replaced_saturated fraction in prod / main2 for f405n, f410m
+  10-11: 19 / +0.431 / +0.494 / -0.072   sat f405n 1.00/0.95, f410m 1.00/0.84
+  11-12: 49 / +0.370 / +0.651 / -0.140   sat f405n 1.00/0.96, f410m 0.98/0.84
+  12-13: 73 / +0.156 / +0.413 / -0.230   sat f405n 0.88/0.90, f410m 0.99/0.89
+  13-14: 249 / +0.000 / +0.445 / -0.434   sat f405n 0.04/0.17, f410m 0.99/0.20
+### F466N / F410M: per F466N (prod) mag bin: N / median df466n / median df410m / median d(colour)  (d = main2 - prod); replaced_saturated fraction in prod / main2 for f466n, f410m
+  10-11: 19 / +0.295 / +0.501 / -0.331   sat f466n 1.00/1.00, f410m 1.00/0.95
+  11-12: 49 / +0.206 / +0.580 / -0.317   sat f466n 1.00/0.94, f410m 0.98/0.86
+  12-13: 89 / +0.013 / +0.462 / -0.420   sat f466n 0.07/0.61, f410m 0.99/0.79
+  13-14: 283 / -0.000 / +0.431 / -0.433   sat f466n 0.02/0.01, f410m 0.98/0.16
+prod -> main2kf: 27953 of 37956 rows matched within 0.05"
+### F164N / F162M: per F164N (prod) mag bin: N / median df164n / median df162m / median d(colour)  (d = main2kf - prod); replaced_saturated fraction in prod / main2kf for f164n, f162m
+  10-11: 13 / +0.099 / +0.103 / -0.088   sat f164n 1.00/1.00, f162m 1.00/1.00
+  11-12: 33 / +0.119 / +0.016 / +0.074   sat f164n 1.00/1.00, f162m 1.00/1.00
+  12-13: 57 / +0.112 / -0.014 / +0.099   sat f164n 1.00/0.98, f162m 1.00/1.00
+  13-14: 79 / +0.090 / +0.196 / -0.083   sat f164n 1.00/1.00, f162m 1.00/1.00
+### F187N / F182M: per F187N (prod) mag bin: N / median df187n / median df182m / median d(colour)  (d = main2kf - prod); replaced_saturated fraction in prod / main2kf for f187n, f182m
+  10-11: 15 / +0.230 / +0.157 / +0.057   sat f187n 1.00/1.00, f182m 1.00/1.00
+  11-12: 32 / +0.140 / +0.062 / +0.073   sat f187n 1.00/1.00, f182m 1.00/1.00
+  12-13: 66 / +0.169 / +0.057 / +0.072   sat f187n 1.00/1.00, f182m 1.00/1.00
+  13-14: 102 / +0.108 / +0.229 / -0.093   sat f187n 1.00/0.99, f182m 1.00/0.99
+### F212N / F200W: per F212N (prod) mag bin: N / median df212n / median df200w / median d(colour)  (d = main2kf - prod); replaced_saturated fraction in prod / main2kf for f212n, f200w
+  10-11: 8 / +0.124 / +0.079 / +0.061   sat f212n 1.00/1.00, f200w 1.00/1.00
+  11-12: 35 / +0.089 / +0.021 / +0.048   sat f212n 1.00/1.00, f200w 1.00/1.00
+  12-13: 62 / +0.110 / +0.061 / +0.048   sat f212n 1.00/1.00, f200w 1.00/1.00
+  13-14: 110 / +0.053 / +0.207 / -0.150   sat f212n 1.00/0.98, f200w 1.00/1.00
+### F405N / F410M: per F405N (prod) mag bin: N / median df405n / median df410m / median d(colour)  (d = main2kf - prod); replaced_saturated fraction in prod / main2kf for f405n, f410m
+  10-11: 19 / +0.352 / +0.420 / -0.107   sat f405n 1.00/0.95, f410m 1.00/0.84
+  11-12: 49 / +0.325 / +0.579 / -0.082   sat f405n 1.00/0.96, f410m 0.98/0.84
+  12-13: 73 / +0.152 / +0.353 / -0.176   sat f405n 0.88/0.90, f410m 0.99/0.90
+  13-14: 250 / +0.000 / +0.420 / -0.414   sat f405n 0.04/0.16, f410m 0.99/0.22
+### F466N / F410M: per F466N (prod) mag bin: N / median df466n / median df410m / median d(colour)  (d = main2kf - prod); replaced_saturated fraction in prod / main2kf for f466n, f410m
+  10-11: 19 / +0.320 / +0.462 / -0.264   sat f466n 1.00/0.95, f410m 1.00/0.95
+  11-12: 49 / +0.252 / +0.457 / -0.224   sat f466n 1.00/0.94, f410m 0.98/0.86
+  12-13: 89 / +0.013 / +0.396 / -0.376   sat f466n 0.07/0.60, f410m 0.99/0.80
+  13-14: 284 / -0.000 / +0.417 / -0.421   sat f466n 0.02/0.01, f410m 0.98/0.18
