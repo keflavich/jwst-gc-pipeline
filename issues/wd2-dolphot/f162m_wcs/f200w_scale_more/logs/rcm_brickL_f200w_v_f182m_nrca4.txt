@@ -1,0 +1,13 @@
+  f200w_nrca4_visit001_vgroup04101_exp00001_re  r=  +1.32"  m(0,-,+)=( 14.6, 13.8, 13.8)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit001_vgroup04101_exp00002_re  r=  +1.32"  m(0,-,+)=( 11.7, 11.7, 11.7)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit001_vgroup04101_exp00003_re  r=  +1.32"  m(0,-,+)=( 10.5, 10.1, 10.1)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit001_vgroup04101_exp00004_re  r=  +1.32"  m(0,-,+)=( 11.2, 10.7, 10.7)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit002_vgroup04101_exp00001_re  r=  +1.32"  m(0,-,+)=(  6.4,  5.1,  5.1)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit002_vgroup04101_exp00002_re  r=  +1.32"  m(0,-,+)=(  6.2,  4.9,  4.9)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit002_vgroup04101_exp00003_re  r=  +1.32"  m(0,-,+)=(  7.5,  6.3,  6.3)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit002_vgroup04101_exp00004_re  r=  +1.32"  m(0,-,+)=(  7.6,  6.4,  6.4)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+
+### f200w - f212n (m6), exposures 1-4: m (arcsec) of median J per detector
+det    n  ref_rot(")  m_uncorr  m_sign-  m_sign+   (tr-,curl+) uncorr -> sign-  (mas/pix)
+    pixel frame: scale uncorr   -20.7 ppm rot   -5.40"  -> corrected scale   -20.7 ppm rot   -4.09"
+nrca4  8     +1.32       6.9      5.9      5.9   (-0.0016,-0.0012) -> (-0.0013,-0.0013)

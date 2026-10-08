@@ -1,0 +1,8 @@
+| series | mean offset (ppm) | rms vs wd (F200W-F150W) raw | after mean removal | rms vs wd2 F200W-F212N raw | after mean removal | n det |
+|---|---|---|---|---|---|---|
+| brick F200W-F187N | -4.3 (vs diff), -4.9 (vs wd2) | 30.9 | 30.6 | 29.8 | 29.4 | 8 |
+| brick F200W-F182M | +0.8 (vs diff), +0.2 (vs wd2) | 23.3 | 23.2 | 22.2 | 22.2 | 8 |
+| ngc F200W(6778)-F187N | -1.0 (vs diff), -1.7 (vs wd2) | 9.0 | 9.0 | 8.3 | 8.2 | 8 |
+| ngc F200W(6778)-F182M | -14.3 (vs diff), -12.8 (vs wd2) | 37.1 | 34.3 | 34.1 | 31.6 | 4 |
+| ngc F200W(7213)-F182M | +12.6 (vs diff), +12.0 (vs wd2) | 17.3 | 11.8 | 15.9 | 10.5 | 8 |
+| wd1 F200W-F212N | +11.6 (vs diff), +11.0 (vs wd2) | 18.3 | 14.1 | 15.9 | 11.5 | 8 |
