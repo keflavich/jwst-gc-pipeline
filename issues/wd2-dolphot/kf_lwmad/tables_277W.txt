@@ -1,0 +1,29 @@
+## F277W: 3853 frame-star rows, 3211 with dolphot ref
+| dolphot mag | N | med on/off flux | dm=-2.5log(on/off) | MAD | med nsat px | med nkeep | med frac rewritten-by-off | med firstsat | med frac nuse<=1 | med crf/(R g0 rewrite) sum |
+|---|---|---|---|---|---|---|---|---|---|---|
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/numpy/_core/fromnumeric.py:840: UserWarning: Warning: 'partition' will ignore the 'mask' of the MaskedColumn.
+  a.partition(kth, axis=axis, kind=kind, order=order)
+| 13-14 | 55 | 1.061 | -0.064 | 0.049 | 134 | 124 | 1.00 | 1.0 | 0.81 | 1.057 |
+| 14-15 | 777 | 1.037 | -0.039 | 0.030 | 94 | 93 | 1.00 | 1.0 | 0.70 | 1.026 |
+| 15-15.5 | 630 | 1.021 | -0.022 | 0.029 | 63 | 61 | 1.00 | 1.0 | 0.73 | 1.011 |
+| 15.5-16 | 619 | 1.032 | -0.034 | 0.042 | 52 | 51 | 1.00 | 2.0 | 0.27 | 1.019 |
+| 16-17 | 928 | 1.024 | -0.025 | 0.028 | 27 | 26 | 1.00 | 3.0 | 0.27 | 1.023 |
+| 17-18.5 | 198 | 0.992 | +0.008 | 0.042 | 15 | 13 | 1.00 | 4.0 | 0.00 | 1.005 |
+
+F277W pixel-level (pixels SATURATED, finite, no DNU, that the off arm rewrote): N=904333
+| usable groups | N px | med crf/rewrite | 16-84% | frac group0 flagged |
+|---|---|---|---|---|
+| 0 | 114169 | 0.999 | 0.939-1.061 | 1.00 |
+| 1 | 368424 | 0.996 | 0.960-1.054 | 0.00 |
+| 2 | 78306 | 1.033 | 0.972-1.123 | 0.00 |
+| 3 | 74764 | 1.033 | 0.975-1.119 | 0.00 |
+| 4 | 105162 | 1.034 | 0.977-1.137 | 0.00 |
+| 5 | 88766 | 1.064 | 0.986-1.170 | 0.00 |
+| 6 | 74742 | 1.068 | 0.987-1.175 | 0.00 |
+
+| rewrite value bin (MJy/sr) | N px | med crf/rewrite | med nuse |
+|---|---|---|---|
+| 0-100 | 790856 | 1.009 | 2.0 |
+| 100-300 | 94339 | 1.036 | 0.0 |
+| 300-1000 | 17520 | 1.057 | 0.0 |
+| 1000-3000 | 1618 | 1.054 | 0.0 |

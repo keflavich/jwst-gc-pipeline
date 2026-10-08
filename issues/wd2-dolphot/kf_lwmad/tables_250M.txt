@@ -1,0 +1,33 @@
+## F250M: 3644 frame-star rows, 3260 with dolphot ref
+| dolphot mag | N | med on/off flux | dm=-2.5log(on/off) | MAD | med nsat px | med nkeep | med frac rewritten-by-off | med firstsat | med frac nuse<=1 | med crf/(R g0 rewrite) sum |
+|---|---|---|---|---|---|---|---|---|---|---|
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/numpy/_core/fromnumeric.py:840: UserWarning: Warning: 'partition' will ignore the 'mask' of the MaskedColumn.
+  a.partition(kth, axis=axis, kind=kind, order=order)
+| 12-13 | 105 | 1.060 | -0.063 | 0.037 | 118 | 115 | 1.00 | 1.0 | 0.81 | 1.056 |
+| 13-14 | 320 | 1.066 | -0.069 | 0.035 | 72 | 71 | 1.00 | 1.0 | 0.71 | 1.053 |
+| 14-15 | 748 | 1.061 | -0.064 | 0.033 | 45 | 45 | 1.00 | 2.0 | 0.32 | 1.045 |
+| 15-15.5 | 684 | 1.038 | -0.041 | 0.025 | 24 | 23 | 1.00 | 3.0 | 0.36 | 1.043 |
+| 15.5-16 | 685 | 1.006 | -0.006 | 0.054 | 16 | 16 | 1.00 | 4.0 | 0.00 | 1.035 |
+| 16-17 | 708 | 1.007 | -0.008 | 0.049 | 9 | 9 | 1.00 | nan | nan | 1.026 |
+/orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/kf_lwmad/kf_step_tables.py:55: FutureWarning: Format strings passed to MaskedConstant are ignored, but in future may error or produce different behavior
+  f'{np.nanmedian(r["med_firstsat"]):.1f} | {np.nanmedian(r["frac_le1"]):.2f} | {np.nanmedian(r["crf_over_rew"]):.3f} |')
+| 17-18.5 | 6 | 1.002 | -0.002 | 0.011 | 9 | 0 | 0.00 | -- | -- | 1.037 |
+
+F250M pixel-level (pixels SATURATED, finite, no DNU, that the off arm rewrote): N=346661
+| usable groups | N px | med crf/rewrite | 16-84% | frac group0 flagged |
+|---|---|---|---|---|
+| 0 | 35313 | 1.016 | 0.945-1.078 | 1.00 |
+| 1 | 135237 | 1.024 | 0.995-1.065 | 0.00 |
+| 2 | 32250 | 1.058 | 0.997-1.164 | 0.00 |
+| 3 | 31001 | 1.053 | 0.997-1.152 | 0.00 |
+| 4 | 42625 | 1.050 | 1.003-1.177 | 0.00 |
+| 5 | 39883 | 1.085 | 1.007-1.252 | 0.00 |
+| 6 | 30352 | 1.111 | 1.010-1.308 | 0.00 |
+
+| rewrite value bin (MJy/sr) | N px | med crf/rewrite | med nuse |
+|---|---|---|---|
+| 0-100 | 220170 | 1.035 | 3.0 |
+| 100-300 | 81507 | 1.031 | 1.0 |
+| 300-1000 | 37967 | 1.048 | 1.0 |
+| 1000-3000 | 6031 | 1.074 | 0.0 |
+| 3000-10000 | 986 | 1.077 | 0.0 |

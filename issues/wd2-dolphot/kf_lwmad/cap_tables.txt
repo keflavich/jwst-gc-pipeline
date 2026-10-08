@@ -1,0 +1,17 @@
+## F250M: capped fraction (flux_fit < 0.999 flux_fit_precap) and median flux/precap, per arm
+| dolphot mag | N | off capped | off f/precap | on capped | on f/precap | on/off precap | on/off f | med obs-peak on/off | med implied-peak on/off |
+|---|---|---|---|---|---|---|---|---|---|
+| 12-13 | 105 | 0.82 | 0.870 | 0.82 | 0.882 | 1.044 | 1.060 | nan | nan |
+| 13-14 | 320 | 0.65 | 0.977 | 0.48 | 1.000 | 1.046 | 1.066 | nan | nan |
+| 14-15 | 748 | 0.62 | 0.984 | 0.47 | 1.000 | 1.050 | 1.061 | nan | nan |
+| 15-15.5 | 684 | 0.46 | 1.000 | 0.51 | 0.998 | 1.040 | 1.038 | nan | nan |
+| 15.5-16 | 685 | 0.27 | 1.000 | 0.76 | 0.968 | 1.031 | 1.006 | nan | nan |
+| 16-17 | 708 | 0.15 | 1.000 | 0.68 | 0.971 | 1.028 | 1.007 | nan | nan |
+## F277W: capped fraction (flux_fit < 0.999 flux_fit_precap) and median flux/precap, per arm
+| dolphot mag | N | off capped | off f/precap | on capped | on f/precap | on/off precap | on/off f | med obs-peak on/off | med implied-peak on/off |
+|---|---|---|---|---|---|---|---|---|---|
+| 13-14 | 55 | 0.80 | 0.877 | 0.76 | 0.900 | 1.045 | 1.061 | nan | nan |
+| 14-15 | 777 | 0.58 | 0.990 | 0.45 | 1.000 | 1.028 | 1.037 | nan | nan |
+| 15-15.5 | 630 | 0.34 | 1.000 | 0.16 | 1.000 | 1.015 | 1.021 | nan | nan |
+| 15.5-16 | 619 | 0.33 | 1.000 | 0.19 | 1.000 | 1.026 | 1.032 | nan | nan |
+| 16-17 | 928 | 0.16 | 1.000 | 0.27 | 1.000 | 1.025 | 1.024 | nan | nan |
