@@ -40,8 +40,8 @@ needed.  Only the rotation is corrected.  The references also differ in scale
 follow those differences to about 10 ppm, so they are left alone.  F200W is
 the exception: its data scale differs from the reference by +16..+42 ppm on
 module A and about -17 ppm on NRCB2-4 (1-2 mas at the detector edge), while
-STDGDC agrees with the CRDS F200W scale to 5 ppm.  That term is not corrected
-here.
+STDGDC agrees with the CRDS F200W scale to 5 ppm.  That term is corrected
+separately, and opt-in, by ``distortion_scale_correction`` (#1137).
 
 The detector centre maps to the same sky position before and after the
 correction, so the per-exposure reference shift, the module ties and the

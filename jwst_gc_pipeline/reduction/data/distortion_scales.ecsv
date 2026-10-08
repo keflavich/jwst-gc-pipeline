@@ -1,0 +1,27 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: detector, datatype: string}
+# - {name: filter, datatype: string}
+# - {name: pupil, datatype: string}
+# - {name: distortion_ref, datatype: string}
+# - {name: correction_ppm, datatype: float64}
+# - {name: wd2_ppm, datatype: float64}
+# - {name: wd1_ppm, datatype: float64}
+# meta: !!omap
+# - comments: [Per-detector F200W plate-scale correction for NIRCam SW (#1137)., 'correction_ppm = -(mean of wd2_ppm and wd1_ppm), applied
+#       as an isotropic scale of', detector->v2v3 by (1 + correction_ppm*1e-6) about the full-frame detector centre., 'wd2_ppm, wd1_ppm:
+#       measured pixel-frame scale of (F200W - F150W), both against the F212N', 'm6 catalog of the field, after the #1135 rotation correction;
+#       m6 per-frame catalogs,', exposures 1-2.  wd2 and wd1 agree to 2.5 ppm rms.  NGC 6334 F200W - F187N matches the, 'mean to 9 ppm
+#       rms (#1137).  distortion_ref: the F200W references of', distortion_rotations.ecsv (jwst_1596.pmap); a new reference needs a new
+#       measurement.]
+# schema: astropy-2.0
+detector filter pupil distortion_ref correction_ppm wd2_ppm wd1_ppm
+NRCA1 F200W CLEAR jwst_nircam_distortion_0281.asdf -34.0 34.3 33.8
+NRCA2 F200W CLEAR jwst_nircam_distortion_0268.asdf -19.9 21.1 18.7
+NRCA3 F200W CLEAR jwst_nircam_distortion_0284.asdf -21.4 20.3 22.6
+NRCA4 F200W CLEAR jwst_nircam_distortion_0313.asdf -13.5 11.7 15.2
+NRCB1 F200W CLEAR jwst_nircam_distortion_0208.asdf 8.2 -8.1 -8.3
+NRCB2 F200W CLEAR jwst_nircam_distortion_0186.asdf 12.2 -10.1 -14.4
+NRCB3 F200W CLEAR jwst_nircam_distortion_0200.asdf 10.4 -9.9 -10.8
+NRCB4 F200W CLEAR jwst_nircam_distortion_0221.asdf 13.5 -14.9 -12.1
