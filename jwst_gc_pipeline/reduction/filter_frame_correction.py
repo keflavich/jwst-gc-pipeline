@@ -27,6 +27,16 @@ module A and +39/+48 in module B -- the large F200W filteroffset with its A/B
 split, which CRDS applies correctly -- and 2.11 mas is what is left once that
 per-module constant is taken out.
 
+F162M and F164N, which the library does not cover, carry a term five times
+larger: 9.9-10.3 mas 2-D rms against F212N on wd2, sgrc and wd1.  The
+distortion references pin every filter's detector reference point to the same
+V2Ref/V3Ref, while the F162M/F164N within-detector plate scale is 202-241 ppm
+larger than F212N's, so each detector centre sits s*R too close to its module
+centre (R the module-centre-to-detector-centre lever arm).  The term is static
+in the instrument frame: rows from one field predict another field at a
+different roll to 0.36 mas (F162M, wd2 <-> sgrc) and 0.97 mas (F164N, wd2 <->
+wd1).
+
 WHY IT SHOWS UP AS A POSITION-DEPENDENT FIELD
 ---------------------------------------------
 In a mosaic, different sky positions are covered by different mixes of the four
@@ -84,9 +94,9 @@ COEFFICIENT SOURCES
 ``gdc``     -- derived from Jay Anderson's STDGDC library.  Covers SW F070W,
                F090W, F115W, F140M, F150W, F182M, F200W, F210M, F212N.
 ``table``   -- an ECSV solved from our own data, for everything the library does
-               not cover: F187N and every LW GC band (F323N ... F480M, since the
-               library's only LW solution is F277W).  Format is documented in
-               ``filter_frame_table_schema``.
+               not cover: F162M, F164N, F187N and every LW GC band (F323N ...
+               F480M, since the library's only LW solution is F277W).  Format
+               is documented in ``filter_frame_table_schema``.
 
 Opt-in: ``FILTER_FRAME_CORRECTION=1``.  Default off, byte-identical behaviour.
 """
