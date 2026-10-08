@@ -7,6 +7,7 @@ them.  That pins the sign convention against the writer rather than against a
 hand-made record.
 """
 import json
+import re
 
 import numpy as np
 import pytest
@@ -17,8 +18,9 @@ from astropy.table import Table
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import run_visit_checkpoint
 from jwst_gc_pipeline.photometry.m2_registration import (
     M2_REGISTRATION_ENV, M2_REGISTRATION_MAX_ENV, apply_m2_registration,
-    load_m2_registration, registration_from_record)
+    load_m2_registration, registration_for_merge, registration_from_record)
 
+ON = {M2_REGISTRATION_ENV: "1"}
 RA0, DEC0 = 266.5, -28.7
 COSD = np.cos(np.radians(DEC0))
 
@@ -79,7 +81,7 @@ def test_registration_from_the_real_m2_record_removes_subtolerance_offsets(tmp_p
     assert not any(e["misaligned"] for e in exps)
 
     before = _offsets_vs_truth(tables, ra, dec)
-    reg = load_m2_registration(str(tmp_path), "F212N", env={})
+    reg = load_m2_registration(str(tmp_path), "F212N", env=ON)
     assert len(reg.entries) == len(SUBTOL)
     summary = apply_m2_registration(tables, reg)
     assert summary["counts"]["applied"] == len(SUBTOL)
@@ -283,13 +285,31 @@ def test_only_an_m2_record_is_accepted():
         registration_from_record(_record([], stage="m4"), env={})
 
 
-def test_disabled_by_env_and_missing_record(tmp_path):
+def test_opt_in_and_missing_record(tmp_path):
+    """Off unless asked for: unset and 0 both leave the merge as it was."""
     (tmp_path / "checkpoint_m2_F212N_latest.json").write_text(
         json.dumps(_record([_entry(1, 1.0, 1.0)])))
-    assert load_m2_registration(str(tmp_path), "F212N",
-                                env={M2_REGISTRATION_ENV: "0"}) is None
-    assert load_m2_registration(str(tmp_path), "F480M", env={}) is None
-    assert load_m2_registration(str(tmp_path), "F212N", env={}) is not None
+    assert load_m2_registration(str(tmp_path), "F212N", env={}) is None
+    for off in ("0", "false", "off", ""):
+        assert load_m2_registration(str(tmp_path), "F212N",
+                                    env={M2_REGISTRATION_ENV: off}) is None
+    assert load_m2_registration(str(tmp_path), "F480M", env=ON) is None
+    for on in ("1", "true", "YES", "on"):
+        assert load_m2_registration(str(tmp_path), "F212N",
+                                    env={M2_REGISTRATION_ENV: on}) is not None
+
+
+def test_an_unrecognised_switch_value_raises(tmp_path):
+    with pytest.raises(ValueError, match=M2_REGISTRATION_ENV):
+        load_m2_registration(str(tmp_path), "F212N",
+                             env={M2_REGISTRATION_ENV: "yse"})
+
+
+def test_the_merge_default_is_off(tmp_path):
+    (tmp_path / "checkpoint_m2_F212N_o001_latest.json").write_text(
+        json.dumps(_record([_entry(1, 1.0, 1.0)])))
+    assert registration_for_merge("m3", str(tmp_path), "F212N", 5365, "001",
+                                  env={}) is None
 
 
 def test_merge_refuses_registration_together_with_an_offsets_table():
@@ -297,3 +317,60 @@ def test_merge_refuses_registration_together_with_an_offsets_table():
     reg = registration_from_record(_record([]), env={})
     with pytest.raises(ValueError, match="both given"):
         merge_individual_frames(offsets_table=Table(), m2_registration=reg)
+
+
+def test_every_sky_column_is_shifted():
+    """combine_singleframe reads skycoord_centroid (DAO) or skycoord
+    (crowdsource), and shift_individual_catalog prefers skycoord: a table with
+    both must have both registered."""
+    _, _, t = _one()
+    t["skycoord"] = t["skycoord_centroid"]
+    dec0 = t["skycoord"].dec.deg.copy()
+    reg = registration_from_record(_record([_entry(1, 0.0, 2.0)]), env={})
+    apply_m2_registration([t], reg)
+    for col in ("skycoord", "skycoord_centroid"):
+        np.testing.assert_allclose((t[col].dec.deg - dec0) * 3.6e6, 2.0,
+                                   atol=1e-4)
+
+
+@pytest.mark.parametrize("label", ["m1", "m2", "m12"])
+def test_no_registration_at_the_correction_stages(tmp_path, label):
+    """Gated before the observation token is built: field='sgrb2' would raise
+    ObservationFieldError if it were."""
+    (tmp_path / "checkpoint_m2_F212N_latest.json").write_text(
+        json.dumps(_record([_entry(1, 1.0, 1.0)])))
+    assert registration_for_merge(label, str(tmp_path), "F212N", 5365,
+                                  "sgrb2", env=ON) is None
+
+
+def test_no_registration_for_a_cutout_run(tmp_path):
+    (tmp_path / "checkpoint_m2_F212N_latest.json").write_text(
+        json.dumps(_record([_entry(1, 1.0, 1.0)])))
+    assert registration_for_merge("m3", str(tmp_path), "F212N", None, None,
+                                  cutout=True, env=ON) is None
+
+
+@pytest.mark.parametrize("label", ["m3", "m4", "m5", "m6", "m7"])
+def test_frozen_stage_merges_load_the_observations_m2_record(tmp_path, label):
+    (tmp_path / "checkpoint_m2_F212N_o001_latest.json").write_text(
+        json.dumps(_record([_entry(1, 1.0, 1.0)])))
+    reg = registration_for_merge(label, str(tmp_path), "F212N", 5365, "001",
+                                 env=ON)
+    assert reg is not None
+    assert reg.record_path.endswith("checkpoint_m2_F212N_o001_latest.json")
+
+
+def test_the_cataloging_merge_call_passes_the_registration():
+    """The call site is deep inside run_manual_pipeline and no test drives it:
+    pin that it builds the registration with registration_for_merge and hands
+    it to merge_frames_for_observation."""
+    import inspect
+    from jwst_gc_pipeline.photometry import cataloging
+    src = inspect.getsource(cataloging)
+    build = re.findall(r"_m2_registration = registration_for_merge\(\s*"
+                       r"merge_label,", src)
+    assert len(build) == 1
+    calls = re.findall(r"merge_frames_for_observation\(\s*proposal_id, field,"
+                       r"(.{0,2000}?)merge_workers=", src, re.S)
+    assert len(calls) == 1
+    assert "m2_registration=_m2_registration" in calls[0]

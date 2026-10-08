@@ -1819,6 +1819,14 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                           fwhm_basepath=fwhm_basepath, basepath=basepath,
                           proposal_id=progid, field=field,
                           phase=iteration_label)
+        if m2_registration_summary is not None:
+            # Saturated-star rows come from the satstar catalogs, which are not
+            # per-frame catalogs and have no m2 entry: their positions are not
+            # registered.  Say so in the log and in the product.
+            print("m2 registration: saturated-star positions inserted by "
+                  "replace_saturated are NOT registered (no per-frame m2 entry)",
+                  flush=True)
+            minimal_table.meta['M2REGSAT'] = 'unregistered'
 
     reject = np.isnan(minimal_table['skycoord'].ra) | np.isnan(minimal_table['skycoord'].dec)
     if np.any(reject):

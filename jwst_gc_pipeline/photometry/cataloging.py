@@ -9213,19 +9213,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # those stages are the measurement; the solution is frozen from
                 # m3 on.  Same record directory and token as the checkpoint
                 # below, so both read one file.  Cutout runs have no checkpoint.
-                from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-                    CORRECTION_STAGES as _ASTROM_CORRECTION_STAGES)
-                _m2_registration = None
-                if (merge_label not in _ASTROM_CORRECTION_STAGES
-                        and not getattr(options, 'cutout_region', '')):
-                    from jwst_gc_pipeline.photometry.consensus_catalog import (
-                        consensus_obs_token as _cons_obs_token)
-                    from jwst_gc_pipeline.photometry.m2_registration import (
-                        load_m2_registration)
-                    _m2_registration = load_m2_registration(
-                        os.path.join(cut_bp, 'astrometry_checkpoints'), filt,
-                        _cons_obs_token(getattr(options, 'proposal_id', None),
-                                        getattr(options, 'field', None)))
+                # Opt-in (ASTROM_MERGE_M2_REGISTRATION=1) until the offsets are
+                # also written to the offsets table, so catalogs and mosaics
+                # carry the same solution.
+                from jwst_gc_pipeline.photometry.m2_registration import (
+                    registration_for_merge)
+                _m2_registration = registration_for_merge(
+                    merge_label, os.path.join(cut_bp, 'astrometry_checkpoints'),
+                    filt, getattr(options, 'proposal_id', None),
+                    getattr(options, 'field', None),
+                    cutout=bool(getattr(options, 'cutout_region', '')))
                 merge_frames_for_observation(
                     proposal_id, field,
                     module=module, filtername=filt.lower(),

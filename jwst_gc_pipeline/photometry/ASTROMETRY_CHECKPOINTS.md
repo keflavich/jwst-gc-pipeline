@@ -912,7 +912,7 @@ the same table rows.
 | `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit and broadcast-provenance guards raise instead of warn (`reduction/validate_offsets_table.py`). **No-op on both production paths**: `astrometry_checkpoint.update_offsets_table` (write) and `unified_alignment._validate_once` (apply, PR #770) already pass `raise_on_issue=True`, so they raise whether or not it is set. It still applies to a caller that passes `raise_on_issue=False` |
 | `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
 | `ASTROM_M2_CORRECTION_FLOOR_MAS=<f>` | at m2, MEASURE and RECORD every residual as usual but only ACT on those at or above this magnitude (default 0 = act on all). See below. |
-| `ASTROM_MERGE_M2_REGISTRATION=0` | turn off the m3+ merge-time registration of per-frame catalogs onto the m2 consensus (see "Merge-time registration") |
+| `ASTROM_MERGE_M2_REGISTRATION=1` | turn ON the m3+ merge-time registration of per-frame catalogs onto the m2 consensus (opt-in; off when unset or 0; see "Merge-time registration") |
 | `ASTROM_M2_REGISTRATION_MAX_MAS=<f>` | optional ceiling (on-sky mas) on a registered per-exposure offset; unset = none |
 | `ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1` | let a checkpoint that measured a shift and then refused to apply it count as a pass |
 
@@ -969,7 +969,7 @@ As merged, F212N reads worse than F480M in sgrb2 although its PSF is half the
 size.  The SW per-exposure residuals are larger than the LW ones and nothing
 removed them.
 
-`m2_registration.py::apply_m2_registration` now adds each per-frame catalog's
+`m2_registration.py::apply_m2_registration`, when enabled (opt-in, below), adds each per-frame catalog's
 recorded offset to its sky positions before `combine_singleframe` averages them.
 `cataloging.py` loads the registration (`m2_registration.py::load_m2_registration`,
 which finds the record with the frozen-stage reader `_m2_record_path`) for every
@@ -1023,8 +1023,15 @@ What it leaves unchanged:
 The registration uses m2's offset-histogram measurement
 (`astrometry_offsets.py::measure_offset`), which is the sanctioned estimator.
 It does not touch the forbidden `combine_singleframe(realign=True)` NN-median
-path.  `ASTROM_MERGE_M2_REGISTRATION=0` turns it off, and the merge then runs as
-before.
+path.
+
+**Opt-in.**  `ASTROM_MERGE_M2_REGISTRATION=1` turns it on.  Unset (or 0) leaves
+every merge as before.  It is off by default because of the catalog-vs-mosaic
+difference above.  The offsets table is where this pipeline puts the solution
+so that catalogs and images share it.  The planned default path writes these
+offsets into the table and regenerates the frames.  Pooling (#697) limits a
+module-locked table to the module-common part, so the per-detector remainder
+would still need this step.
 
 ## Relationship to the other astrometry shields
 

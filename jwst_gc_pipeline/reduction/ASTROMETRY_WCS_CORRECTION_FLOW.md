@@ -76,7 +76,7 @@ fails CI if a new file pairs a NN match with a median/mean — do not write ad-h
 | `*_i2d.fits` (resampled mosaic — **final image deliverable**) | inherits | resample of the corrected exposures | (pristine) |
 | per-frame catalogs (`*_daophot_basic.fits`) | use the corrected crf GWCS | (read crf GWCS) | n/a |
 | merged catalog | **Yes — table-space** | `shift_individual_catalog()`: `final = centroid − RAOFFSET_meta + dra_table` | re-derivable from any offsets table |
-| merged catalog, m3+ merges | **Yes — catalog-only relative registration** | `m2_registration.py::apply_m2_registration`: each per-frame catalog + its m2-recorded vs-consensus offset (sub-floor, certified, baked offset unchanged since m2) | re-derivable from the m2 record; frame unchanged (median ~0) |
+| merged catalog, m3+ merges (opt-in, `ASTROM_MERGE_M2_REGISTRATION=1`) | **Yes — catalog-only relative registration** | `m2_registration.py::apply_m2_registration`: each per-frame catalog + its m2-recorded vs-consensus offset (sub-floor, certified, baked offset unchanged since m2) | re-derivable from the m2 record; frame unchanged (median ~0) |
 
 **The astrometric solution now has exactly ONE authoring point:**
 1. **Per-exposure** (`fix_alignment` → `adjust_wcs`): the science-bearing tie.
@@ -129,8 +129,8 @@ re-enable TweakReg, or you will double-correct.
 one* place — per-exposure `fix_alignment`. Never add a post-resample mosaic
 corrector, and never edit `_cal.fits` or `_i2d.fits` in place.
 
-**The one catalog-side exception (2026-10-08):** the m3+ per-filter merges
-register each per-frame catalog onto its visit consensus with the offset the m2
+**The one catalog-side exception (2026-10-08, opt-in via
+`ASTROM_MERGE_M2_REGISTRATION=1`):** the m3+ per-filter merges can register each per-frame catalog onto its visit consensus with the offset the m2
 checkpoint recorded for it.  These are the sub-floor per-exposure offsets that
 m2 measures and leaves in the frames.  The absolute tie and every correction m2
 acts on still go through `fix_alignment` alone.  This is a relative

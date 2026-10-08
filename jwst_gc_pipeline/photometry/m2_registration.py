@@ -69,7 +69,12 @@ Guards (each one leaves the catalog as it is and says why)
 * **ambiguous**: two record entries carry the same exposure key with different
   values.
 
-``ASTROM_MERGE_M2_REGISTRATION=0`` turns the whole step off.
+Opt-in: ``ASTROM_MERGE_M2_REGISTRATION=1`` turns the step on; unset (or 0)
+leaves every merge as it was.  It is off by default because a registered
+catalog no longer matches its ``_i2d`` mosaic at the sub-floor level (sgrb2
+F212N: median 1.8, max 4.1 mas) until the same offsets are written into the
+offsets table and the frames regenerated -- the place this pipeline puts the
+astrometric solution so that catalogs and images share it.
 """
 import json
 import os
@@ -80,7 +85,7 @@ import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 
-#: Environment switch.  Any value other than '0' (including unset) means ON.
+#: Environment switch, OFF unless set to 1/true/yes/on (see module docstring).
 M2_REGISTRATION_ENV = "ASTROM_MERGE_M2_REGISTRATION"
 #: Optional operator ceiling on a registered offset, in on-sky mas.
 M2_REGISTRATION_MAX_ENV = "ASTROM_M2_REGISTRATION_MAX_MAS"
@@ -115,9 +120,25 @@ class M2Registration:
     actionable: set = field(default_factory=set)
 
 
+_ON = ("1", "true", "yes", "on")
+_OFF = ("", "0", "false", "no", "off")
+
+
 def registration_enabled(env=None):
+    """True only when ``ASTROM_MERGE_M2_REGISTRATION`` is 1/true/yes/on.
+
+    Any other non-empty value raises: a typo in an opt-in switch that silently
+    read as OFF would leave a run unregistered while its operator believed
+    otherwise.
+    """
     env = os.environ if env is None else env
-    return str(env.get(M2_REGISTRATION_ENV, "1")).strip() != "0"
+    raw = str(env.get(M2_REGISTRATION_ENV, "")).strip().lower()
+    if raw in _ON:
+        return True
+    if raw in _OFF:
+        return False
+    raise ValueError(f"{M2_REGISTRATION_ENV}={raw!r}: use 1/true/yes/on to "
+                     f"enable or leave unset/0 to disable")
 
 
 def _ceiling_mas(env):
@@ -242,8 +263,8 @@ def load_m2_registration(record_dir, filtername, obs_token="", env=None):
     """
     env = os.environ if env is None else env
     if not registration_enabled(env):
-        print(f"m2 registration: OFF ({M2_REGISTRATION_ENV}=0); per-frame "
-              f"catalogs are merged as written", flush=True)
+        print(f"m2 registration: off (opt-in; set {M2_REGISTRATION_ENV}=1); "
+              f"per-frame catalogs are merged as written", flush=True)
         return None
     from .astrometry_checkpoint import _m2_record_path
     path = _m2_record_path(record_dir, filtername, obs_token)
@@ -266,12 +287,40 @@ def load_m2_registration(record_dir, filtername, obs_token="", env=None):
     return reg
 
 
-def _skycoord_colname(tbl):
-    for name in ("skycoord_centroid", "skycoord"):
-        if name in tbl.colnames:
-            return name
-    raise KeyError(f"per-frame catalog has no skycoord/skycoord_centroid column "
-                   f"({tbl.colnames[:8]}...)")
+#: Sky-position columns a per-frame catalog can carry.  ``combine_singleframe``
+#: reads ``skycoord_centroid`` for DAO tables and ``skycoord`` for crowdsource
+#: ones, and ``shift_individual_catalog`` prefers ``skycoord`` -- so every one
+#: present is shifted, and the merge reads a registered position whichever it
+#: picks.
+SKYCOORD_COLUMNS = ("skycoord", "skycoord_centroid")
+
+
+def registration_for_merge(merge_label, record_dir, filtername, proposal_id,
+                           field, cutout=False, env=None):
+    """The registration a per-filter merge at ``merge_label`` should apply.
+
+    ``None`` at the correction stages (``CORRECTION_STAGES``: m1/m2/m12 are the
+    measurement, and the solution is frozen from m3 on) and for cutout runs,
+    which have no checkpoint record.  Otherwise ``load_m2_registration`` with
+    the checkpoint's own observation token (``consensus_obs_token``), computed
+    only past that gate so a correction-stage merge never builds it.  This is
+    the whole decision ``cataloging.run_manual_pipeline`` makes, kept here so
+    it is testable without driving that function.
+    """
+    from .astrometry_checkpoint import CORRECTION_STAGES
+    if merge_label in CORRECTION_STAGES or cutout:
+        return None
+    from .consensus_catalog import consensus_obs_token
+    return load_m2_registration(record_dir, filtername,
+                                consensus_obs_token(proposal_id, field), env=env)
+
+
+def _skycoord_colnames(tbl):
+    names = [name for name in SKYCOORD_COLUMNS if name in tbl.colnames]
+    if not names:
+        raise KeyError(f"per-frame catalog has no skycoord/skycoord_centroid "
+                       f"column ({tbl.colnames[:8]}...)")
+    return names
 
 
 def _stamp(tbl, status, dra=0.0, ddec=0.0, reg=None):
@@ -339,13 +388,13 @@ def apply_m2_registration(tables, registration, context=""):
                          f"mas ceiling")
             _stamp(tbl, "over_cap", reg=registration)
             continue
-        col = _skycoord_colname(tbl)
-        sc = tbl[col]
-        dec = sc.dec.to(u.deg)
-        cosd = np.cos(dec.to(u.rad).value)
-        new_ra = sc.ra.to(u.deg) + (dra / 3.6e6 / cosd) * u.deg
-        new_dec = dec + (ddec / 3.6e6) * u.deg
-        tbl[col] = SkyCoord(ra=new_ra, dec=new_dec, frame=sc.frame)
+        for col in _skycoord_colnames(tbl):
+            sc = tbl[col]
+            dec = sc.dec.to(u.deg)
+            cosd = np.cos(dec.to(u.rad).value)
+            new_ra = sc.ra.to(u.deg) + (dra / 3.6e6 / cosd) * u.deg
+            new_dec = dec + (ddec / 3.6e6) * u.deg
+            tbl[col] = SkyCoord(ra=new_ra, dec=new_dec, frame=sc.frame)
         counts["applied"] += 1
         applied.append((key, dra, ddec))
         _stamp(tbl, "applied", dra, ddec, reg=registration)
