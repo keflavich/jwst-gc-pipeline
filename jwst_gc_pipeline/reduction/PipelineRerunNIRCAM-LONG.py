@@ -1468,6 +1468,17 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             apply_distortion_rotation_correction)
         apply_distortion_rotation_correction(fn)
 
+    if os.environ.get('DISTORTION_SCALE_CORRECTION', '0') == '1':
+        # Per-detector F200W plate scale relative to the other SW bands
+        # (+14..+34 ppm on NRCA1-4, -8..-14 ppm on NRCB1-4, issue #1137).
+        # OPT-IN: scales detector->v2v3 about the detector centre by the
+        # factor in data/distortion_scales.ecsv, keyed on R_DISTOR.  Applied
+        # BEFORE the reference shift; commutes with the rotation above (same
+        # pivot), and the detector centre does not move.
+        from jwst_gc_pipeline.reduction.distortion_scale_correction import (
+            apply_distortion_scale_correction)
+        apply_distortion_scale_correction(fn)
+
     if os.environ.get('ROLL_CORRECTION', '0') == '1':
         # Rigid field rotation (attitude roll error) measured against VIRAC2
         # and Gaia DR3 in JWST-GC/data-qa#346.  OPT-IN: rotates every
