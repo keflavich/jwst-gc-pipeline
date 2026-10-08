@@ -138,6 +138,10 @@ registration in the consensus frame, and it applies only while the frame's baked
 `RAOFFSET` matches what m2 measured.  The merged catalog then differs from the
 `_i2d` mosaic by those sub-floor offsets (sgrb2 F212N: median 1.8, max 4.1 mas).
 See "Merge-time registration" in `../photometry/ASTROMETRY_CHECKPOINTS.md`.
+`scripts/reduction/m2_offsets_writeback.py` closes most of that gap through the
+authoring point above: it writes the module-common part of those offsets into
+the locked offsets table, and the next regeneration from `_cal` bakes it into
+the frames and mosaics.  The per-detector remainder (#697) stays catalog-side.
 
 **Verification ladder (2026-07-12):** cataloging re-verifies this tie at every
 merge stage — visit-consensus per-exposure checks (2 mas), frozen-solution
