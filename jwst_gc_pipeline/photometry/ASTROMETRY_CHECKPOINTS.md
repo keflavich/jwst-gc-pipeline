@@ -1014,8 +1014,9 @@ What it leaves unchanged:
   sub-floor per-exposure offsets.  A merged catalog therefore differs from its
   mosaic by up to the recorded offset of each exposure: on sgrb2 F212N the
   median is 1.8 mas and the maximum 4.1 mas (0.06 and 0.13 SW pixels).
-  Writing the registration into the offsets table and regenerating would put
-  it in the mosaics too.  That remains to be done.
+  `scripts/reduction/m2_offsets_writeback.py` writes the module-common part
+  of these offsets into a locked table so a regeneration puts it in the mosaics
+  too (next section).
 * **An offsets table passed to the merge.**  `merge_individual_frames` refuses
   `m2_registration` together with `offsets_table`.  m2 measured the frames'
   baked positions, and `shift_individual_catalog` re-shifts them first.
@@ -1028,10 +1029,55 @@ path.
 **Opt-in.**  `ASTROM_MERGE_M2_REGISTRATION=1` turns it on.  Unset (or 0) leaves
 every merge as before.  It is off by default because of the catalog-vs-mosaic
 difference above.  The offsets table is where this pipeline puts the solution
-so that catalogs and images share it.  The planned default path writes these
-offsets into the table and regenerates the frames.  Pooling (#697) limits a
-module-locked table to the module-common part, so the per-detector remainder
-would still need this step.
+so that catalogs and images share it.  The write-back below puts the
+module-common part there.  Pooling (#697) limits a module-locked table to that
+part, so the per-detector remainder still needs this step.
+
+## Writing the module-common part back into the offsets table
+
+`scripts/reduction/m2_offsets_writeback.py` (rules in
+`m2_writeback.py`) writes, for each row of a module-locked table, the mean over
+the row's detectors of m2's recorded vs-consensus offset.  It runs by hand, as a
+dry run unless given `--write`, and only on the `locked` channel.
+
+    python scripts/reduction/m2_offsets_writeback.py \
+        --basepath /orange/adamginsburg/jwst/sgrb2 --proposal 5365 --field 001 \
+        --filter F212N --filter F480M            # add --write to apply
+
+What it writes differs from the m2 APPLY path in membership.  m2 pools only a
+row's misaligned detectors and acts only at the floor.  The write-back averages
+all of the row's detectors and writes any row whose mean is at least 0.5 mas.
+On the live records the two means differ by a median of 0.54 mas on sgrb2 F212N
+and 0.95 mas on sgrc F212N.
+
+| field / filter (live m2 record) | per-axis rms of recorded offsets | after removing each row's mean |
+|---|---|---|
+| sgrb2 F212N | 1.51 mas | 0.50 mas |
+| sgrc F212N | 1.11 | 0.57 |
+| brick F212N | 0.62 | 0.41 |
+| sgrb2 F480M (one detector per row) | 0.89 | 0 |
+
+The written part repeats and follows the table.  sgrb2 F212N: two m2 runs whose
+baked offsets differ by a 47.8 mas global re-bake agree per exposure to 0.07
+mas (median).  sgrc F480M: across re-reductions whose rows changed by up to 11
+mas, the recorded offsets followed the table change to within 0.05-0.24 mas
+(median).  One write and one regeneration should therefore leave the written
+rows near 0 and a second pass with nothing to write.
+
+Rows it leaves, each reported with its reason: **m2_actionable** (m2's own
+floor rule applies it), **incomplete** (a detector of the row is refused or
+absent), **stale** (the baked offsets m2 recorded differ from the row
+`fix_alignment` reads; this also makes a second pass from the same record a
+no-op), **row_mismatch** (reader and writer resolve different rows),
+**below_min**.  A record that did not pass is refused whole.
+
+The rows reach the frames only on regeneration.  `fix_alignment` treats a frame
+within `RAOFFSET_DISAGREE_TOL_ARCSEC` (default 0.05") of its row as current, so
+regenerate from `_cal`, or rerun `fix_alignment` with that tolerance at or below
+the value the script prints.  The im0 mosaics are not stale-tagged: they stay
+as good as the m2 verdict they passed.  The rows carry
+`prov_stage='m2-writeback'` and the m2 record's date; the writer keeps a
+`.pre_m2-writeback_<timestamp>` backup.
 
 ## Relationship to the other astrometry shields
 
