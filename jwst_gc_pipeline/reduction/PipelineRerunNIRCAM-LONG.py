@@ -1456,6 +1456,18 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             apply_placement_correction)
         apply_placement_correction(fn)
 
+    if os.environ.get('DISTORTION_ROTATION_CORRECTION', '0') == '1':
+        # In-detector rotation of the F115W/F150W/F162M/F164N/F200W SW
+        # distortion references relative to the F182M/F187N/F212N group
+        # (19-31" on NRCA2/NRCA3, issue #1135).  OPT-IN: rotates
+        # detector->v2v3 about the detector centre by the angle in
+        # data/distortion_rotations.ecsv, keyed on R_DISTOR.  Applied BEFORE
+        # the reference shift.  The detector centre does not move, so the
+        # array-centre fiducial checked against offsets tables is unchanged.
+        from jwst_gc_pipeline.reduction.distortion_rotation_correction import (
+            apply_distortion_rotation_correction)
+        apply_distortion_rotation_correction(fn)
+
     if os.environ.get('ROLL_CORRECTION', '0') == '1':
         # Rigid field rotation (attitude roll error) measured against VIRAC2
         # and Gaia DR3 in JWST-GC/data-qa#346.  OPT-IN: rotates every
