@@ -1,0 +1,24 @@
+# wingmig curve: g0_ctr R
+W 228.52 0.07173
+W 298.35 0.07337
+W 389.52 0.07420
+W 508.54 0.07440
+W 663.93 0.07436
+W 866.80 0.07347
+W 1131.67 0.07324
+W 1477.46 0.07295
+W 1928.92 0.07313
+W 2518.34 0.07243
+W 3287.85 0.07266
+# pipeline curve (kept bins): g0_ctr R
+P 2439.85 0.07761
+P 3631.05 0.07572
+# pipeline raw bins (before guard): g0_ctr R
+PR 2439.85 0.07761
+PR 3631.05 0.07572
+PR 5403.81 0.00135
+PR 8042.07 0.00092
+# ceiling=48125.3 gmax=3287.8
+# measured 4 bins, kept 2 after guard
+# satcheck 47098 px: curve/sat = 1.015
+# rim check (55719 px): rewritten / (my curve x g0) median 1.0000, p16-84 1.0000-1.0000
