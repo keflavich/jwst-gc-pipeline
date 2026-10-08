@@ -102,8 +102,8 @@ class DistortionRotationError(RuntimeError):
 
 
 def correction_enabled():
-    return str(os.environ.get('DISTORTION_ROTATION_CORRECTION', '0')).strip().lower() in (
-        '1', 'true', 'yes', 'on')
+    # same test as the fix_alignment hook (and its sibling corrections): exactly '1'
+    return os.environ.get('DISTORTION_ROTATION_CORRECTION', '0') == '1'
 
 
 def reference_rotation(band_model, anchor_model, centre=FULL_FRAME_CENTRE, n=9, margin=100):

@@ -235,6 +235,9 @@ def test_enabled_switch(monkeypatch):
     assert not drc.correction_enabled()
     monkeypatch.setenv('DISTORTION_ROTATION_CORRECTION', '1')
     assert drc.correction_enabled()
+    # matches the fix_alignment hook, which only accepts '1'
+    monkeypatch.setenv('DISTORTION_ROTATION_CORRECTION', 'true')
+    assert not drc.correction_enabled()
 
 
 def _synthetic_frame(path, xstart=993, ystart=993, filt='F150W', pupil='CLEAR',
