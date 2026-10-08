@@ -1,0 +1,130 @@
+iter 0 offset ground-minus-JWST (dRA*cos, dDec) arcsec (np.float64(0.03235553669857422), np.float64(-0.0559175458960226)) N 7067
+iter 1 offset ground-minus-JWST (dRA*cos, dDec) arcsec (np.float64(0.039685413846643536), np.float64(-0.06575099474162016)) N 7069
+iter 2 offset ground-minus-JWST (dRA*cos, dDec) arcsec (np.float64(0.04212230217003129), np.float64(-0.06704663225889362)) N 7068
+mutual matches within 0.4 arcsec: 2218  median sep arcsec 0.07909671505740062
+
+=== F150W-H vs J-H: base sample N=766  (sat 684, unsat 82)
+A: color term a=+0.189 b=+0.170 (N fit 74, rms 0.190); saturation edge (p95 ground mag of sat stars) = 17.97
+A residual (JWST - ground - colorterm) vs A JWST mag, 1-mag bins: bin | unsat N med MAD | sat N med MAD
+  13-14:     0 +nan nan |     0 +nan nan
+  14-15:     0 +nan nan |    46 -0.144 0.093
+  15-16:     1 +0.750 0.000 |   107 -0.066 0.104
+  16-17:     0 +nan nan |   181 -0.007 0.128
+  17-18:     0 +nan nan |   230 -0.002 0.151
+  18-19:    64 +0.023 0.180 |   120 +0.012 0.134
+  19-20:    15 +0.270 0.522 |     0 +nan nan
+  20-21:     1 +0.524 0.000 |     0 +nan nan
+  21-22:     0 +nan nan |     0 +nan nan
+  22-23:     1 +3.747 0.000 |     0 +nan nan
+  step[A] unsat window ground in [17.97,18.97] N=65 med=+0.018; sat all N=684 med=-0.026 -> step -0.044 +- 0.029; sat within 1.5 mag of edge N=374 med=-0.011 step -0.030 +- 0.030; sat brighter N=310 med=-0.039
+  step[A] unsat window ground in [17.97,19.47] N=71 med=+0.001; sat all N=684 med=-0.026 -> step -0.027 +- 0.029; sat within 1.5 mag of edge N=374 med=-0.011 step -0.013 +- 0.030; sat brighter N=310 med=-0.039
+  step[A] unsat window ground in [17.97,19.97] N=71 med=+0.001; sat all N=684 med=-0.026 -> step -0.027 +- 0.029; sat within 1.5 mag of edge N=374 med=-0.011 step -0.013 +- 0.030; sat brighter N=310 med=-0.039
+B: color term a=+0.129 b=+0.242 (N fit 77, rms 0.176); saturation edge (p95 ground mag of sat stars) = 17.97
+B residual (JWST - ground - colorterm) vs B JWST mag, 1-mag bins: bin | unsat N med MAD | sat N med MAD
+  13-14:     0 +nan nan |     0 +nan nan
+  14-15:     0 +nan nan |    40 -0.040 0.048
+  15-16:     1 +0.853 0.000 |   104 -0.001 0.088
+  16-17:     0 +nan nan |   177 +0.023 0.098
+  17-18:     2 +5.203 0.315 |   238 +0.008 0.133
+  18-19:    66 +0.009 0.162 |   125 -0.026 0.132
+  19-20:    13 -0.023 0.325 |     0 +nan nan
+  20-21:     0 +nan nan |     0 +nan nan
+  21-22:     0 +nan nan |     0 +nan nan
+  22-23:     0 +nan nan |     0 +nan nan
+  step[B] unsat window ground in [17.97,18.97] N=65 med=-0.005; sat all N=684 med=+0.006 -> step +0.011 +- 0.027; sat within 1.5 mag of edge N=374 med=-0.004 step +0.001 +- 0.028; sat brighter N=310 med=+0.016
+  step[B] unsat window ground in [17.97,19.47] N=71 med=-0.009; sat all N=684 med=+0.006 -> step +0.015 +- 0.026; sat within 1.5 mag of edge N=374 med=-0.004 step +0.005 +- 0.026; sat brighter N=310 med=+0.016
+  step[B] unsat window ground in [17.97,19.97] N=71 med=-0.009; sat all N=684 med=+0.006 -> step +0.015 +- 0.026; sat within 1.5 mag of edge N=374 med=-0.004 step +0.005 +- 0.026; sat brighter N=310 med=+0.016
+A-B direct: sat N=684 med=-0.057  unsat(edge..edge+1.5) N=71 med=-0.030  diff -0.028
+   A-B ref-mag 13-14: sat N=0 med=+nan | unsat N=0 med=+nan
+   A-B ref-mag 14-15: sat N=40 med=-0.110 | unsat N=0 med=+nan
+   A-B ref-mag 15-16: sat N=104 med=-0.104 | unsat N=1 med=-0.112
+   A-B ref-mag 16-17: sat N=177 med=-0.077 | unsat N=0 med=+nan
+   A-B ref-mag 17-18: sat N=238 med=-0.043 | unsat N=2 med=+0.681
+   A-B ref-mag 18-19: sat N=125 med=-0.016 | unsat N=66 med=-0.029
+   A-B ref-mag 19-20: sat N=0 med=+nan | unsat N=13 med=-0.014
+   A-B ref-mag 20-21: sat N=0 med=+nan | unsat N=0 med=+nan
+   A-B ref-mag 21-22: sat N=0 med=+nan | unsat N=0 med=+nan
+
+=== F150W-H vs H-Ks: base sample N=1072  (sat 838, unsat 234)
+A: color term a=+0.325 b=+0.146 (N fit 215, rms 0.216); saturation edge (p95 ground mag of sat stars) = 18.04
+A residual (JWST - ground - colorterm) vs A JWST mag, 1-mag bins: bin | unsat N med MAD | sat N med MAD
+  13-14:     0 +nan nan |     0 +nan nan
+  14-15:     0 +nan nan |    52 -0.209 0.146
+  15-16:     1 +0.714 0.000 |   124 -0.062 0.142
+  16-17:     0 +nan nan |   213 -0.008 0.147
+  17-18:     1 +2.754 0.000 |   287 -0.002 0.183
+  18-19:   124 -0.048 0.189 |   161 +0.015 0.165
+  19-20:    99 +0.078 0.328 |     1 +0.368 0.000
+  20-21:     8 +0.581 0.412 |     0 +nan nan
+  21-22:     0 +nan nan |     0 +nan nan
+  22-23:     1 +3.692 0.000 |     0 +nan nan
+  step[A] unsat window ground in [18.04,19.04] N=174 med=-0.008; sat all N=838 med=-0.019 -> step -0.011 +- 0.021; sat within 1.5 mag of edge N=459 med=-0.014 step -0.006 +- 0.022; sat brighter N=379 med=-0.024
+  step[A] unsat window ground in [18.04,19.54] N=204 med=-0.020; sat all N=838 med=-0.019 -> step +0.001 +- 0.021; sat within 1.5 mag of edge N=459 med=-0.014 step +0.006 +- 0.022; sat brighter N=379 med=-0.024
+  step[A] unsat window ground in [18.04,20.04] N=208 med=-0.025; sat all N=838 med=-0.019 -> step +0.006 +- 0.021; sat within 1.5 mag of edge N=459 med=-0.014 step +0.011 +- 0.022; sat brighter N=379 med=-0.024
+B: color term a=+0.292 b=+0.202 (N fit 218, rms 0.191); saturation edge (p95 ground mag of sat stars) = 18.04
+B residual (JWST - ground - colorterm) vs B JWST mag, 1-mag bins: bin | unsat N med MAD | sat N med MAD
+  13-14:     0 +nan nan |     0 +nan nan
+  14-15:     0 +nan nan |    46 -0.073 0.107
+  15-16:     1 +0.834 0.000 |   115 +0.040 0.137
+  16-17:     0 +nan nan |   213 +0.066 0.144
+  17-18:     3 +4.942 0.534 |   295 +0.050 0.171
+  18-19:   126 -0.020 0.181 |   168 +0.027 0.194
+  19-20:    99 +0.035 0.255 |     1 +0.346 0.000
+  20-21:     4 +0.134 0.297 |     0 +nan nan
+  21-22:     1 +1.355 0.000 |     0 +nan nan
+  22-23:     0 +nan nan |     0 +nan nan
+  step[B] unsat window ground in [18.04,19.04] N=174 med=+0.012; sat all N=838 med=+0.045 -> step +0.033 +- 0.019; sat within 1.5 mag of edge N=459 med=+0.028 step +0.016 +- 0.020; sat brighter N=379 med=+0.058
+  step[B] unsat window ground in [18.04,19.54] N=204 med=-0.020; sat all N=838 med=+0.045 -> step +0.065 +- 0.019; sat within 1.5 mag of edge N=459 med=+0.028 step +0.047 +- 0.020; sat brighter N=379 med=+0.058
+  step[B] unsat window ground in [18.04,20.04] N=208 med=-0.029; sat all N=838 med=+0.045 -> step +0.074 +- 0.018; sat within 1.5 mag of edge N=459 med=+0.028 step +0.056 +- 0.020; sat brighter N=379 med=+0.058
+A-B direct: sat N=838 med=-0.056  unsat(edge..edge+1.5) N=204 med=-0.024  diff -0.032
+   A-B ref-mag 13-14: sat N=0 med=+nan | unsat N=0 med=+nan
+   A-B ref-mag 14-15: sat N=46 med=-0.108 | unsat N=0 med=+nan
+   A-B ref-mag 15-16: sat N=115 med=-0.100 | unsat N=1 med=-0.112
+   A-B ref-mag 16-17: sat N=213 med=-0.078 | unsat N=0 med=+nan
+   A-B ref-mag 17-18: sat N=295 med=-0.044 | unsat N=3 med=+0.567
+   A-B ref-mag 18-19: sat N=168 med=-0.016 | unsat N=126 med=-0.025
+   A-B ref-mag 19-20: sat N=1 med=-0.015 | unsat N=99 med=-0.021
+   A-B ref-mag 20-21: sat N=0 med=+nan | unsat N=4 med=-0.013
+   A-B ref-mag 21-22: sat N=0 med=+nan | unsat N=1 med=-0.039
+
+=== F200W-Ks vs H-Ks: base sample N=1070  (sat 307, unsat 763)
+A: color term a=-0.046 b=+0.333 (N fit 731, rms 0.146); saturation edge (p95 ground mag of sat stars) = 15.83
+A residual (JWST - ground - colorterm) vs A JWST mag, 1-mag bins: bin | unsat N med MAD | sat N med MAD
+  13-14:     0 +nan nan |    12 +0.008 0.073
+  14-15:     1 +0.669 0.000 |   119 -0.017 0.085
+  15-16:    41 +0.023 0.095 |   163 +0.009 0.088
+  16-17:   305 +0.018 0.138 |     9 +0.012 0.109
+  17-18:   306 -0.022 0.153 |     4 +0.078 0.091
+  18-19:   107 +0.008 0.248 |     0 +nan nan
+  19-20:     2 +0.177 0.049 |     0 +nan nan
+  20-21:     0 +nan nan |     0 +nan nan
+  21-22:     0 +nan nan |     0 +nan nan
+  22-23:     1 +5.718 0.000 |     0 +nan nan
+  step[A] unsat window ground in [15.83,16.83] N=294 med=+0.027; sat all N=307 med=-0.001 -> step -0.029 +- 0.011; sat within 1.5 mag of edge N=252 med=-0.002 step -0.029 +- 0.012; sat brighter N=55 med=-0.001
+  step[A] unsat window ground in [15.83,17.33] N=458 med=+0.018; sat all N=307 med=-0.001 -> step -0.019 +- 0.010; sat within 1.5 mag of edge N=252 med=-0.002 step -0.020 +- 0.010; sat brighter N=55 med=-0.001
+  step[A] unsat window ground in [15.83,17.83] N=592 med=+0.009; sat all N=307 med=-0.001 -> step -0.010 +- 0.010; sat within 1.5 mag of edge N=252 med=-0.002 step -0.011 +- 0.010; sat brighter N=55 med=-0.001
+B: color term a=-0.023 b=+0.336 (N fit 729, rms 0.148); saturation edge (p95 ground mag of sat stars) = 15.83
+B residual (JWST - ground - colorterm) vs B JWST mag, 1-mag bins: bin | unsat N med MAD | sat N med MAD
+  13-14:     0 +nan nan |     6 +0.050 0.057
+  14-15:     1 +0.748 0.000 |   109 +0.025 0.093
+  15-16:    34 +0.049 0.092 |   178 +0.055 0.093
+  16-17:   302 +0.031 0.139 |    10 +0.007 0.053
+  17-18:   308 -0.015 0.149 |     4 +0.057 0.073
+  18-19:   114 -0.011 0.227 |     0 +nan nan
+  19-20:     3 +0.176 0.035 |     0 +nan nan
+  20-21:     0 +nan nan |     0 +nan nan
+  21-22:     0 +nan nan |     0 +nan nan
+  22-23:     1 +5.775 0.000 |     0 +nan nan
+  step[B] unsat window ground in [15.83,16.83] N=294 med=+0.037; sat all N=307 med=+0.042 -> step +0.006 +- 0.012; sat within 1.5 mag of edge N=252 med=+0.046 step +0.009 +- 0.012; sat brighter N=55 med=+0.035
+  step[B] unsat window ground in [15.83,17.33] N=458 med=+0.021; sat all N=307 med=+0.042 -> step +0.022 +- 0.011; sat within 1.5 mag of edge N=252 med=+0.046 step +0.025 +- 0.011; sat brighter N=55 med=+0.035
+  step[B] unsat window ground in [15.83,17.83] N=592 med=+0.011; sat all N=307 med=+0.042 -> step +0.031 +- 0.010; sat within 1.5 mag of edge N=252 med=+0.046 step +0.035 +- 0.010; sat brighter N=55 med=+0.035
+A-B direct: sat N=307 med=-0.075  unsat(edge..edge+1.5) N=458 med=-0.027  diff -0.048
+   A-B ref-mag 13-14: sat N=6 med=-0.009 | unsat N=0 med=+nan
+   A-B ref-mag 14-15: sat N=109 med=-0.077 | unsat N=1 med=-0.103
+   A-B ref-mag 15-16: sat N=178 med=-0.078 | unsat N=34 med=-0.028
+   A-B ref-mag 16-17: sat N=10 med=-0.058 | unsat N=302 med=-0.028
+   A-B ref-mag 17-18: sat N=4 med=-0.013 | unsat N=308 med=-0.022
+   A-B ref-mag 18-19: sat N=0 med=+nan | unsat N=114 med=-0.021
+   A-B ref-mag 19-20: sat N=0 med=+nan | unsat N=3 med=-0.032
+   A-B ref-mag 20-21: sat N=0 med=+nan | unsat N=0 med=+nan
+   A-B ref-mag 21-22: sat N=0 med=+nan | unsat N=0 med=+nan
