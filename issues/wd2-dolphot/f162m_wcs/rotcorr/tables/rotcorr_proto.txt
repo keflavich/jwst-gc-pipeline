@@ -1,0 +1,175 @@
+  f150w_nrca1_visit001_vgroup10101_exp00001_re  r=  -6.82"  m(0,-,+)=(  5.7,  2.0, 12.6)  max|corr|=1.36 mas  corrector-direct=0.0000 mas (flip 2.71)
+  f150w_nrca1_visit001_vgroup10101_exp00002_re  r=  -6.82"  m(0,-,+)=(  6.0,  2.0, 12.8)  max|corr|=1.36 mas  corrector-direct=0.0000 mas (flip 2.71)
+  f150w_nrca2_visit001_vgroup10101_exp00001_re  r= +22.76"  m(0,-,+)=( 24.1,  1.6, 46.7)  max|corr|=4.45 mas  corrector-direct=0.0000 mas (flip 8.90)
+  f150w_nrca2_visit001_vgroup10101_exp00002_re  r= +22.76"  m(0,-,+)=( 24.3,  1.7, 46.9)  max|corr|=4.45 mas  corrector-direct=0.0000 mas (flip 8.90)
+  f150w_nrca3_visit001_vgroup10101_exp00001_re  r= +24.23"  m(0,-,+)=( 25.9,  1.4, 50.4)  max|corr|=4.86 mas  corrector-direct=0.0000 mas (flip 9.71)
+  f150w_nrca3_visit001_vgroup10101_exp00002_re  r= +24.23"  m(0,-,+)=( 25.6,  1.1, 50.1)  max|corr|=4.86 mas  corrector-direct=0.0000 mas (flip 9.71)
+  f150w_nrca4_visit001_vgroup10101_exp00001_re  r=  -6.38"  m(0,-,+)=(  6.9,  0.9, 13.2)  max|corr|=1.25 mas  corrector-direct=0.0000 mas (flip 2.51)
+  f150w_nrca4_visit001_vgroup10101_exp00002_re  r=  -6.38"  m(0,-,+)=(  6.6,  0.9, 13.0)  max|corr|=1.25 mas  corrector-direct=0.0000 mas (flip 2.51)
+  f150w_nrcb1_visit001_vgroup10101_exp00001_re  r=  +2.00"  m(0,-,+)=(  2.3,  1.8,  3.9)  max|corr|=0.39 mas  corrector-direct=0.0000 mas (flip 0.78)
+  f150w_nrcb1_visit001_vgroup10101_exp00002_re  r=  +2.00"  m(0,-,+)=(  2.7,  2.5,  4.0)  max|corr|=0.39 mas  corrector-direct=0.0000 mas (flip 0.78)
+  f150w_nrcb2_visit001_vgroup10101_exp00001_re  r=  +0.81"  m(0,-,+)=(  2.1,  1.8,  2.7)  max|corr|=0.16 mas  corrector-direct=0.0000 mas (flip 0.32)
+  f150w_nrcb2_visit001_vgroup10101_exp00002_re  r=  +0.81"  m(0,-,+)=(  2.0,  1.4,  2.7)  max|corr|=0.16 mas  corrector-direct=0.0000 mas (flip 0.32)
+  f150w_nrcb3_visit001_vgroup10101_exp00001_re  r=  +2.03"  m(0,-,+)=(  2.4,  1.8,  4.1)  max|corr|=0.40 mas  corrector-direct=0.0000 mas (flip 0.80)
+  f150w_nrcb3_visit001_vgroup10101_exp00002_re  r=  +2.03"  m(0,-,+)=(  2.5,  1.6,  4.2)  max|corr|=0.40 mas  corrector-direct=0.0000 mas (flip 0.80)
+  f150w_nrcb4_visit001_vgroup10101_exp00001_re  r=  +1.97"  m(0,-,+)=(  2.7,  0.9,  4.6)  max|corr|=0.39 mas  corrector-direct=0.0000 mas (flip 0.79)
+  f150w_nrcb4_visit001_vgroup10101_exp00002_re  r=  +1.97"  m(0,-,+)=(  3.0,  1.1,  5.0)  max|corr|=0.39 mas  corrector-direct=0.0000 mas (flip 0.79)
+
+### f150w - f212n (m6), exposures 1-2: m (arcsec) of median J per detector
+det    n  ref_rot(")  m_uncorr  m_sign-  m_sign+   (tr-,curl+) uncorr -> sign-  (mas/pix)
+    pixel frame: scale uncorr    +7.7 ppm rot   +5.60"  -> corrected scale    +7.8 ppm rot   -1.18"
+nrca1  2     -6.82       5.9      2.0     12.7   (+0.0014,-0.0010) -> (+0.0001,+0.0006)
+    pixel frame: scale uncorr    -0.9 ppm rot  -24.38"  -> corrected scale    -0.9 ppm rot   -1.60"
+nrca2  2    +22.76      24.2      1.6     46.8   (-0.0046,+0.0056) -> (-0.0003,+0.0003)
+    pixel frame: scale uncorr    +2.0 ppm rot  -25.45"  -> corrected scale    +1.9 ppm rot   -1.21"
+nrca3  2    +24.23      25.7      1.3     50.3   (-0.0048,+0.0061) -> (-0.0001,+0.0004)
+    pixel frame: scale uncorr    +3.8 ppm rot   +6.75"  -> corrected scale    +3.8 ppm rot   +0.37"
+nrca4  2     -6.38       6.8      0.9     13.1   (+0.0015,-0.0014) -> (+0.0003,+0.0001)
+    pixel frame: scale uncorr   +10.0 ppm rot   -1.34"  -> corrected scale   +10.0 ppm rot   +0.65"
+nrcb1  2     +2.00       2.5      2.2      3.9   (+0.0002,+0.0007) -> (+0.0006,+0.0002)
+    pixel frame: scale uncorr    -6.9 ppm rot   -1.48"  -> corrected scale    -6.9 ppm rot   -0.67"
+nrcb2  2     +0.81       2.1      1.6      2.7   (-0.0006,+0.0001) -> (-0.0005,-0.0001)
+    pixel frame: scale uncorr    -8.1 ppm rot   -1.78"  -> corrected scale    -8.1 ppm rot   +0.24"
+nrcb3  2     +2.03       2.4      1.7      4.1   (-0.0007,+0.0001) -> (-0.0003,-0.0004)
+    pixel frame: scale uncorr    -2.4 ppm rot   -2.76"  -> corrected scale    -2.4 ppm rot   -0.80"
+nrcb4  2     +1.97       2.8      0.9      4.8   (-0.0006,+0.0006) -> (-0.0003,+0.0001)
+  f115w_nrca1_visit001_vgroup08101_exp00001_re  r=  -7.21"  m(0,-,+)=(  5.1,  2.2, 12.4)  max|corr|=1.43 mas  corrector-direct=0.0000 mas (flip 2.87)
+  f115w_nrca1_visit001_vgroup08101_exp00002_re  r=  -7.21"  m(0,-,+)=(  4.7,  2.9, 11.8)  max|corr|=1.43 mas  corrector-direct=0.0000 mas (flip 2.87)
+  f115w_nrca2_visit001_vgroup08101_exp00001_re  r= +23.74"  m(0,-,+)=( 25.4,  1.9, 49.0)  max|corr|=4.64 mas  corrector-direct=0.0000 mas (flip 9.29)
+  f115w_nrca2_visit001_vgroup08101_exp00002_re  r= +23.74"  m(0,-,+)=( 25.2,  1.7, 48.8)  max|corr|=4.64 mas  corrector-direct=0.0000 mas (flip 9.29)
+  f115w_nrca3_visit001_vgroup08101_exp00001_re  r= +24.10"  m(0,-,+)=( 25.7,  2.2, 50.1)  max|corr|=4.83 mas  corrector-direct=0.0000 mas (flip 9.66)
+  f115w_nrca3_visit001_vgroup08101_exp00002_re  r= +24.10"  m(0,-,+)=( 25.8,  2.2, 50.1)  max|corr|=4.83 mas  corrector-direct=0.0000 mas (flip 9.66)
+  f115w_nrca4_visit001_vgroup08101_exp00001_re  r=  -7.57"  m(0,-,+)=(  7.4,  1.3, 14.9)  max|corr|=1.49 mas  corrector-direct=0.0000 mas (flip 2.98)
+  f115w_nrca4_visit001_vgroup08101_exp00002_re  r=  -7.57"  m(0,-,+)=(  6.9,  1.1, 14.4)  max|corr|=1.49 mas  corrector-direct=0.0000 mas (flip 2.98)
+  f115w_nrcb1_visit001_vgroup08101_exp00001_re  r=  +1.30"  m(0,-,+)=(  1.3,  1.8,  1.8)  max|corr|=0.25 mas  corrector-direct=0.0000 mas (flip 0.51)
+  f115w_nrcb1_visit001_vgroup08101_exp00002_re  r=  +1.30"  m(0,-,+)=(  1.5,  2.0,  2.0)  max|corr|=0.25 mas  corrector-direct=0.0000 mas (flip 0.51)
+  f115w_nrcb2_visit001_vgroup08101_exp00001_re  r=  +2.05"  m(0,-,+)=(  3.1,  1.9,  4.9)  max|corr|=0.41 mas  corrector-direct=0.0000 mas (flip 0.81)
+  f115w_nrcb2_visit001_vgroup08101_exp00002_re  r=  +2.05"  m(0,-,+)=(  3.1,  2.4,  4.7)  max|corr|=0.41 mas  corrector-direct=0.0000 mas (flip 0.81)
+  f115w_nrcb3_visit001_vgroup08101_exp00001_re  r=  +2.37"  m(0,-,+)=(  2.9,  1.4,  5.1)  max|corr|=0.46 mas  corrector-direct=0.0000 mas (flip 0.93)
+  f115w_nrcb3_visit001_vgroup08101_exp00002_re  r=  +2.37"  m(0,-,+)=(  2.4,  0.9,  4.6)  max|corr|=0.46 mas  corrector-direct=0.0000 mas (flip 0.93)
+  f115w_nrcb4_visit001_vgroup08101_exp00001_re  r=  +2.37"  m(0,-,+)=(  3.2,  0.9,  5.6)  max|corr|=0.47 mas  corrector-direct=0.0000 mas (flip 0.95)
+  f115w_nrcb4_visit001_vgroup08101_exp00002_re  r=  +2.37"  m(0,-,+)=(  3.7,  1.3,  6.0)  max|corr|=0.47 mas  corrector-direct=0.0000 mas (flip 0.95)
+
+### f115w - f212n (m6), exposures 1-2: m (arcsec) of median J per detector
+det    n  ref_rot(")  m_uncorr  m_sign-  m_sign+   (tr-,curl+) uncorr -> sign-  (mas/pix)
+    pixel frame: scale uncorr    +3.3 ppm rot   +4.80"  -> corrected scale    +3.3 ppm rot   -2.41"
+nrca1  2     -7.21       4.9      2.5     12.1   (+0.0011,-0.0010) -> (-0.0003,+0.0007)
+    pixel frame: scale uncorr    +0.0 ppm rot  -25.52"  -> corrected scale    -0.1 ppm rot   -1.78"
+nrca2  2    +23.74      25.3      1.8     48.9   (-0.0048,+0.0059) -> (-0.0003,+0.0004)
+    pixel frame: scale uncorr    +8.7 ppm rot  -25.37"  -> corrected scale    +8.6 ppm rot   -1.25"
+nrca3  2    +24.10      25.7      2.2     50.1   (-0.0044,+0.0063) -> (+0.0002,+0.0006)
+    pixel frame: scale uncorr    -5.2 ppm rot   +7.06"  -> corrected scale    -5.2 ppm rot   -0.51"
+nrca4  2     -7.57       7.1      1.2     14.6   (+0.0011,-0.0018) -> (-0.0003,-0.0001)
+    pixel frame: scale uncorr    +6.7 ppm rot   -0.00"  -> corrected scale    +6.7 ppm rot   +1.30"
+nrcb1  2     +1.30       1.4      1.9      1.9   (+0.0003,+0.0003) -> (+0.0006,-0.0000)
+    pixel frame: scale uncorr   +10.2 ppm rot   -2.23"  -> corrected scale   +10.2 ppm rot   -0.18"
+nrcb2  2     +2.05       3.1      2.1      4.8   (+0.0001,+0.0009) -> (+0.0005,+0.0004)
+    pixel frame: scale uncorr    -5.5 ppm rot   -2.39"  -> corrected scale    -5.5 ppm rot   -0.03"
+nrcb3  2     +2.37       2.6      1.1      4.9   (-0.0007,+0.0003) -> (-0.0003,-0.0002)
+    pixel frame: scale uncorr    -2.4 ppm rot   -3.34"  -> corrected scale    -2.4 ppm rot   -0.98"
+nrcb4  2     +2.37       3.4      1.1      5.8   (-0.0008,+0.0007) -> (-0.0003,+0.0001)
+  f162m_nrca1_visit001_vgroup14101_exp00001_re  r=  -5.80"  m(0,-,+)=(  5.8,  0.3, 11.6)  max|corr|=1.15 mas  corrector-direct=0.0000 mas (flip 2.31)
+  f162m_nrca1_visit001_vgroup14101_exp00002_re  r=  -5.80"  m(0,-,+)=(  5.6,  0.4, 11.5)  max|corr|=1.15 mas  corrector-direct=0.0000 mas (flip 2.31)
+  f162m_nrca2_visit001_vgroup14101_exp00001_re  r= +20.67"  m(0,-,+)=( 20.9,  1.6, 41.4)  max|corr|=4.04 mas  corrector-direct=0.0000 mas (flip 8.09)
+  f162m_nrca2_visit001_vgroup14101_exp00002_re  r= +20.67"  m(0,-,+)=( 20.9,  1.6, 41.4)  max|corr|=4.04 mas  corrector-direct=0.0000 mas (flip 8.09)
+  f162m_nrca3_visit001_vgroup14101_exp00001_re  r= +24.76"  m(0,-,+)=( 25.4,  0.6, 50.5)  max|corr|=4.96 mas  corrector-direct=0.0000 mas (flip 9.93)
+  f162m_nrca3_visit001_vgroup14101_exp00002_re  r= +24.76"  m(0,-,+)=( 25.6,  0.5, 50.7)  max|corr|=4.96 mas  corrector-direct=0.0000 mas (flip 9.93)
+  f162m_nrca4_visit001_vgroup14101_exp00001_re  r=  -7.62"  m(0,-,+)=(  7.8,  0.5, 15.3)  max|corr|=1.50 mas  corrector-direct=0.0000 mas (flip 3.00)
+  f162m_nrca4_visit001_vgroup14101_exp00002_re  r=  -7.62"  m(0,-,+)=(  7.8,  0.7, 15.4)  max|corr|=1.50 mas  corrector-direct=0.0000 mas (flip 3.00)
+  f162m_nrcb1_visit001_vgroup14101_exp00001_re  r=  +1.54"  m(0,-,+)=(  1.9,  0.6,  3.4)  max|corr|=0.30 mas  corrector-direct=0.0000 mas (flip 0.60)
+  f162m_nrcb1_visit001_vgroup14101_exp00002_re  r=  +1.54"  m(0,-,+)=(  1.8,  0.3,  3.3)  max|corr|=0.30 mas  corrector-direct=0.0000 mas (flip 0.60)
+  f162m_nrcb2_visit001_vgroup14101_exp00001_re  r=  +0.19"  m(0,-,+)=(  2.6,  2.5,  2.8)  max|corr|=0.04 mas  corrector-direct=0.0000 mas (flip 0.08)
+  f162m_nrcb2_visit001_vgroup14101_exp00002_re  r=  +0.19"  m(0,-,+)=(  2.2,  2.1,  2.3)  max|corr|=0.04 mas  corrector-direct=0.0000 mas (flip 0.08)
+  f162m_nrcb3_visit001_vgroup14101_exp00001_re  r=  +1.86"  m(0,-,+)=(  1.2,  0.9,  3.0)  max|corr|=0.36 mas  corrector-direct=0.0000 mas (flip 0.73)
+  f162m_nrcb3_visit001_vgroup14101_exp00002_re  r=  +1.86"  m(0,-,+)=(  0.9,  0.9,  2.7)  max|corr|=0.36 mas  corrector-direct=0.0000 mas (flip 0.73)
+  f162m_nrcb4_visit001_vgroup14101_exp00001_re  r=  +2.39"  m(0,-,+)=(  2.9,  0.7,  5.3)  max|corr|=0.48 mas  corrector-direct=0.0000 mas (flip 0.96)
+  f162m_nrcb4_visit001_vgroup14101_exp00002_re  r=  +2.39"  m(0,-,+)=(  3.1,  0.7,  5.5)  max|corr|=0.48 mas  corrector-direct=0.0000 mas (flip 0.96)
+
+### f162m - f212n (m6), exposures 1-2: m (arcsec) of median J per detector
+det    n  ref_rot(")  m_uncorr  m_sign-  m_sign+   (tr-,curl+) uncorr -> sign-  (mas/pix)
+    pixel frame: scale uncorr    +1.6 ppm rot   +5.65"  -> corrected scale    +1.4 ppm rot   -0.16"
+nrca1  2     -5.80       5.7      0.3     11.5   (+0.0012,-0.0013) -> (+0.0000,+0.0001)
+    pixel frame: scale uncorr    -7.7 ppm rot  -20.98"  -> corrected scale    -7.7 ppm rot   -0.30"
+nrca2  2    +20.67      20.9      1.6     41.4   (-0.0043,+0.0046) -> (-0.0004,-0.0002)
+    pixel frame: scale uncorr    -1.0 ppm rot  -25.21"  -> corrected scale    -1.0 ppm rot   -0.43"
+nrca3  2    +24.76      25.5      0.5     50.6   (-0.0049,+0.0059) -> (-0.0001,+0.0001)
+    pixel frame: scale uncorr    +2.5 ppm rot   +7.78"  -> corrected scale    +2.6 ppm rot   +0.18"
+nrca4  2     -7.62       7.8      0.6     15.4   (+0.0016,-0.0017) -> (+0.0002,+0.0001)
+    pixel frame: scale uncorr    -1.7 ppm rot   -1.80"  -> corrected scale    -1.7 ppm rot   -0.26"
+nrcb1  2     +1.54       1.8      0.4      3.3   (-0.0004,+0.0004) -> (-0.0001,-0.0000)
+    pixel frame: scale uncorr    -8.6 ppm rot   -1.61"  -> corrected scale    -8.6 ppm rot   -1.42"
+nrcb2  2     +0.19       2.4      2.3      2.5   (-0.0007,+0.0000) -> (-0.0007,+0.0000)
+    pixel frame: scale uncorr    -1.4 ppm rot   -1.00"  -> corrected scale    -1.4 ppm rot   +0.86"
+nrcb3  2     +1.86       1.0      0.9      2.8   (-0.0003,+0.0002) -> (+0.0001,-0.0003)
+    pixel frame: scale uncorr    -0.8 ppm rot   -2.96"  -> corrected scale    -0.8 ppm rot   -0.57"
+nrcb4  2     +2.39       3.0      0.6      5.4   (-0.0006,+0.0007) -> (-0.0001,+0.0001)
+  f164n_nrca1_visit001_vgroup02101_exp00001_re  r=  -6.92"  m(0,-,+)=(  6.2,  0.8, 13.2)  max|corr|=1.38 mas  corrector-direct=0.0000 mas (flip 2.75)
+  f164n_nrca1_visit001_vgroup02101_exp00002_re  r=  -6.92"  m(0,-,+)=(  6.4,  0.9, 13.4)  max|corr|=1.38 mas  corrector-direct=0.0000 mas (flip 2.75)
+  f164n_nrca2_visit001_vgroup02101_exp00001_re  r= +21.15"  m(0,-,+)=( 20.2,  2.7, 41.1)  max|corr|=4.14 mas  corrector-direct=0.0000 mas (flip 8.27)
+  f164n_nrca2_visit001_vgroup02101_exp00002_re  r= +21.15"  m(0,-,+)=( 19.8,  2.4, 40.7)  max|corr|=4.14 mas  corrector-direct=0.0000 mas (flip 8.27)
+  f164n_nrca3_visit001_vgroup02101_exp00001_re  r= +24.90"  m(0,-,+)=( 25.8,  1.0, 51.0)  max|corr|=4.99 mas  corrector-direct=0.0000 mas (flip 9.98)
+  f164n_nrca3_visit001_vgroup02101_exp00002_re  r= +24.90"  m(0,-,+)=( 25.9,  0.8, 51.1)  max|corr|=4.99 mas  corrector-direct=0.0000 mas (flip 9.98)
+  f164n_nrca4_visit001_vgroup02101_exp00001_re  r=  -7.22"  m(0,-,+)=(  6.0,  1.4, 13.2)  max|corr|=1.42 mas  corrector-direct=0.0000 mas (flip 2.84)
+  f164n_nrca4_visit001_vgroup02101_exp00002_re  r=  -7.22"  m(0,-,+)=(  5.9,  1.3, 13.1)  max|corr|=1.42 mas  corrector-direct=0.0000 mas (flip 2.84)
+  f164n_nrcb1_visit001_vgroup02101_exp00001_re  r=  +1.94"  m(0,-,+)=(  3.5,  1.7,  5.4)  max|corr|=0.38 mas  corrector-direct=0.0000 mas (flip 0.76)
+  f164n_nrcb1_visit001_vgroup02101_exp00002_re  r=  +1.94"  m(0,-,+)=(  3.0,  1.2,  4.9)  max|corr|=0.38 mas  corrector-direct=0.0000 mas (flip 0.76)
+  f164n_nrcb2_visit001_vgroup02101_exp00001_re  r=  +0.09"  m(0,-,+)=(  3.1,  3.0,  3.1)  max|corr|=0.02 mas  corrector-direct=0.0000 mas (flip 0.03)
+  f164n_nrcb2_visit001_vgroup02101_exp00002_re  r=  +0.09"  m(0,-,+)=(  2.5,  2.5,  2.6)  max|corr|=0.02 mas  corrector-direct=0.0000 mas (flip 0.03)
+  f164n_nrcb3_visit001_vgroup02101_exp00001_re  r=  +1.88"  m(0,-,+)=(  2.1,  1.0,  3.8)  max|corr|=0.37 mas  corrector-direct=0.0000 mas (flip 0.74)
+  f164n_nrcb3_visit001_vgroup02101_exp00002_re  r=  +1.88"  m(0,-,+)=(  1.4,  0.7,  3.2)  max|corr|=0.37 mas  corrector-direct=0.0000 mas (flip 0.74)
+  f164n_nrcb4_visit001_vgroup02101_exp00001_re  r=  +1.73"  m(0,-,+)=(  2.8,  1.1,  4.5)  max|corr|=0.35 mas  corrector-direct=0.0000 mas (flip 0.69)
+  f164n_nrcb4_visit001_vgroup02101_exp00002_re  r=  +1.73"  m(0,-,+)=(  2.5,  0.8,  4.3)  max|corr|=0.35 mas  corrector-direct=0.0000 mas (flip 0.69)
+
+### f164n - f212n (m6), exposures 1-2: m (arcsec) of median J per detector
+det    n  ref_rot(")  m_uncorr  m_sign-  m_sign+   (tr-,curl+) uncorr -> sign-  (mas/pix)
+    pixel frame: scale uncorr    +2.3 ppm rot   +6.26"  -> corrected scale    +2.3 ppm rot   -0.69"
+nrca1  2     -6.92       6.3      0.8     13.3   (+0.0013,-0.0014) -> (-0.0000,+0.0003)
+    pixel frame: scale uncorr   -10.5 ppm rot  -20.03"  -> corrected scale   -10.7 ppm rot   +1.22"
+nrca2  2    +21.15      20.0      2.5     40.9   (-0.0043,+0.0042) -> (-0.0003,-0.0007)
+    pixel frame: scale uncorr    -3.0 ppm rot  -25.54"  -> corrected scale    -3.1 ppm rot   -0.62"
+nrca3  2    +24.90      25.8      0.9     51.0   (-0.0050,+0.0059) -> (-0.0003,+0.0000)
+    pixel frame: scale uncorr    -1.8 ppm rot   +5.96"  -> corrected scale    -1.8 ppm rot   -1.26"
+nrca4  2     -7.22       6.0      1.3     13.2   (+0.0010,-0.0015) -> (-0.0003,+0.0002)
+    pixel frame: scale uncorr    -3.7 ppm rot   -3.20"  -> corrected scale    -3.7 ppm rot   -1.26"
+nrcb1  2     +1.94       3.3      1.5      5.2   (-0.0008,+0.0006) -> (-0.0004,+0.0002)
+    pixel frame: scale uncorr    -9.1 ppm rot   -2.08"  -> corrected scale    -9.1 ppm rot   -1.99"
+nrcb2  2     +0.09       2.8      2.7      2.9   (-0.0008,+0.0001) -> (-0.0008,+0.0001)
+    pixel frame: scale uncorr    -3.5 ppm rot   -1.59"  -> corrected scale    -3.4 ppm rot   +0.30"
+nrcb3  2     +1.88       1.7      0.8      3.5   (-0.0005,+0.0002) -> (-0.0001,-0.0002)
+    pixel frame: scale uncorr    -2.0 ppm rot   -2.59"  -> corrected scale    -2.0 ppm rot   -0.86"
+nrcb4  2     +1.73       2.6      1.0      4.4   (-0.0006,+0.0005) -> (-0.0003,+0.0001)
+  f200w_nrca1_visit001_vgroup12101_exp00001_re  r=  -8.39"  m(0,-,+)=( 10.6,  8.8, 16.9)  max|corr|=1.67 mas  corrector-direct=0.0000 mas (flip 3.33)
+  f200w_nrca1_visit001_vgroup12101_exp00002_re  r=  -8.39"  m(0,-,+)=( 10.9,  9.3, 17.1)  max|corr|=1.67 mas  corrector-direct=0.0000 mas (flip 3.33)
+  f200w_nrca2_visit001_vgroup12101_exp00001_re  r= +19.07"  m(0,-,+)=( 21.0,  4.3, 39.8)  max|corr|=3.73 mas  corrector-direct=0.0000 mas (flip 7.46)
+  f200w_nrca2_visit001_vgroup12101_exp00002_re  r= +19.07"  m(0,-,+)=( 21.1,  4.6, 39.8)  max|corr|=3.73 mas  corrector-direct=0.0000 mas (flip 7.46)
+  f200w_nrca3_visit001_vgroup12101_exp00001_re  r= +30.86"  m(0,-,+)=( 31.1,  4.0, 62.1)  max|corr|=6.18 mas  corrector-direct=0.0000 mas (flip 12.37)
+  f200w_nrca3_visit001_vgroup12101_exp00002_re  r= +30.86"  m(0,-,+)=( 31.1,  5.4, 62.1)  max|corr|=6.18 mas  corrector-direct=0.0000 mas (flip 12.37)
+  f200w_nrca4_visit001_vgroup12101_exp00001_re  r=  +1.32"  m(0,-,+)=(  3.3,  3.0,  4.1)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrca4_visit001_vgroup12101_exp00002_re  r=  +1.32"  m(0,-,+)=(  3.6,  3.4,  4.2)  max|corr|=0.26 mas  corrector-direct=0.0000 mas (flip 0.52)
+  f200w_nrcb1_visit001_vgroup12101_exp00001_re  r=  +0.38"  m(0,-,+)=(  0.5,  0.2,  0.8)  max|corr|=0.07 mas  corrector-direct=0.0000 mas (flip 0.15)
+  f200w_nrcb1_visit001_vgroup12101_exp00002_re  r=  +0.38"  m(0,-,+)=(  0.7,  0.6,  0.9)  max|corr|=0.07 mas  corrector-direct=0.0000 mas (flip 0.15)
+  f200w_nrcb2_visit001_vgroup12101_exp00001_re  r=  +0.32"  m(0,-,+)=(  3.8,  3.8,  3.8)  max|corr|=0.06 mas  corrector-direct=0.0000 mas (flip 0.13)
+  f200w_nrcb2_visit001_vgroup12101_exp00002_re  r=  +0.32"  m(0,-,+)=(  3.3,  3.3,  3.3)  max|corr|=0.06 mas  corrector-direct=0.0000 mas (flip 0.13)
+  f200w_nrcb3_visit001_vgroup12101_exp00001_re  r=  -0.32"  m(0,-,+)=(  4.0,  3.9,  4.1)  max|corr|=0.06 mas  corrector-direct=0.0000 mas (flip 0.12)
+  f200w_nrcb3_visit001_vgroup12101_exp00002_re  r=  -0.32"  m(0,-,+)=(  3.7,  3.6,  3.8)  max|corr|=0.06 mas  corrector-direct=0.0000 mas (flip 0.12)
+  f200w_nrcb4_visit001_vgroup12101_exp00001_re  r=  +0.34"  m(0,-,+)=(  4.0,  3.9,  4.1)  max|corr|=0.07 mas  corrector-direct=0.0000 mas (flip 0.14)
+  f200w_nrcb4_visit001_vgroup12101_exp00002_re  r=  +0.34"  m(0,-,+)=(  3.6,  3.5,  3.7)  max|corr|=0.07 mas  corrector-direct=0.0000 mas (flip 0.14)
+
+### f200w - f212n (m6), exposures 1-2: m (arcsec) of median J per detector
+det    n  ref_rot(")  m_uncorr  m_sign-  m_sign+   (tr-,curl+) uncorr -> sign-  (mas/pix)
+    pixel frame: scale uncorr   +42.3 ppm rot   +6.10"  -> corrected scale   +42.1 ppm rot   -2.29"
+nrca1  2     -8.39      10.7      9.0     17.0   (+0.0032,+0.0003) -> (+0.0016,+0.0022)
+    pixel frame: scale uncorr   +20.2 ppm rot  -20.81"  -> corrected scale   +20.2 ppm rot   -1.72"
+nrca2  2    +19.07      21.1      4.5     39.8   (-0.0030,+0.0056) -> (+0.0006,+0.0012)
+    pixel frame: scale uncorr   +22.2 ppm rot  -30.38"  -> corrected scale   +22.2 ppm rot   +0.49"
+nrca3  2    +30.86      31.1      4.7     62.1   (-0.0047,+0.0081) -> (+0.0012,+0.0008)
+    pixel frame: scale uncorr   +15.5 ppm rot   -1.35"  -> corrected scale   +15.5 ppm rot   -0.03"
+nrca4  2     +1.32       3.5      3.2      4.2   (+0.0005,+0.0009) -> (+0.0007,+0.0006)
+    pixel frame: scale uncorr    +1.9 ppm rot   -0.33"  -> corrected scale    +1.9 ppm rot   +0.06"
+nrcb1  2     +0.38       0.5      0.4      0.8   (+0.0000,+0.0001) -> (+0.0001,+0.0001)
+    pixel frame: scale uncorr   -17.0 ppm rot   -0.07"  -> corrected scale   -17.0 ppm rot   +0.25"
+nrcb2  2     +0.32       3.5      3.5      3.6   (-0.0008,-0.0006) -> (-0.0008,-0.0007)
+    pixel frame: scale uncorr   -18.0 ppm rot   +1.08"  -> corrected scale   -18.0 ppm rot   +0.77"
+nrcb3  2     -0.32       3.9      3.8      4.0   (-0.0007,-0.0010) -> (-0.0007,-0.0009)
+    pixel frame: scale uncorr   -17.3 ppm rot   -1.15"  -> corrected scale   -17.3 ppm rot   -0.80"
+nrcb4  2     +0.34       3.8      3.7      3.9   (-0.0011,-0.0004) -> (-0.0010,-0.0005)
