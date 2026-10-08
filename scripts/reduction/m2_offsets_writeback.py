@@ -26,8 +26,10 @@ per detector and creates rows on write, which is a different writer
 The written rows reach the frames only through a regeneration: from ``_cal``
 (destreak overwrite -> fix_alignment -> Image3), or a fix_alignment rerun with
 ``RAOFFSET_DISAGREE_TOL_ARCSEC`` at or below the value printed (its 0.05"
-default treats a mas-scale change as current).  Then rerun m2: the written
-rows should read ~0 and a second pass should write nothing.
+default treats a mas-scale change as current).  The script prints the
+``submit_reduction.sbatch`` command for the filters with written rows, with
+that tolerance exported.  Then rerun m2: the written rows should read ~0 and a
+second pass should write nothing.
 """
 import argparse
 import json
@@ -54,6 +56,21 @@ def _dec_deg(record):
             f"no correction carries dec_deg and the consensus catalog "
             f"{path!r} is not readable; cannot convert dRA to a coordinate offset")
     return float(np.median(np.asarray(Table.read(path)["DEC"], dtype=float)))
+
+
+def _regen_command(basepath, proposal, field, filters, tol_arcsec):
+    """The reduction that carries written rows into the frames: one array task
+    per filter, this checkout pinned through PIPE_ROOT, and the stale-check
+    tolerance lowered so frames that are not re-destreaked still realign."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(here))
+    target = os.path.basename(os.path.normpath(basepath))
+    return (f"sbatch --array=0-{len(filters) - 1} --qos=astronomy-dept-b "
+            f"--job-name={target}{proposal}-o{field}-reduce-m2wb \\\n"
+            f"    --export=ALL,PROPOSAL={proposal},FIELD={field},"
+            f"FILTERS=\"{' '.join(filters)}\",PIPE_ROOT={root},"
+            f"RAOFFSET_DISAGREE_TOL_ARCSEC={tol_arcsec:.2e} \\\n"
+            f"    {os.path.join(here, 'submit_reduction.sbatch')}")
 
 
 def _report(filt, record_path, plan, verbose):
@@ -108,7 +125,7 @@ def main(argv=None):
     record_dir = os.path.join(args.basepath, "astrometry_checkpoints")
     token = consensus_obs_token(args.proposal, args.field)
 
-    tols = []
+    tols, written = [], []
     for filt in args.filters:
         filt = filt.upper()
         record_path = _m2_record_path(record_dir, filt, token)
@@ -126,6 +143,7 @@ def main(argv=None):
             print(f"  WROTE {len(plan.written())} row(s) to {table}")
         if plan.realign_tol_arcsec() is not None:
             tols.append(plan.realign_tol_arcsec())
+            written.append(filt)
 
     if not tols:
         print("nothing to write")
@@ -133,8 +151,10 @@ def main(argv=None):
     verb = "written" if args.write else "would be written"
     print(f"\nRows {verb}.  They reach the frames only on regeneration: from "
           f"_cal, or a fix_alignment rerun with "
-          f"RAOFFSET_DISAGREE_TOL_ARCSEC={min(tols):.1e} (the 0.05\" default "
-          f"treats these changes as current).  Then rerun m2.")
+          f"RAOFFSET_DISAGREE_TOL_ARCSEC={min(tols):.2e} (the 0.05\" default "
+          f"treats these changes as current).  Then rerun m2.  Reduction:\n")
+    print(_regen_command(args.basepath, args.proposal, args.field, written,
+                         min(tols)))
     if not args.write:
         print("Dry run: nothing was written (--write to apply).")
     return 0

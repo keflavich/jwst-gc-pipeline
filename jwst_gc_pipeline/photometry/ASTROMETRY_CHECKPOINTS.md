@@ -1069,12 +1069,20 @@ floor rule applies it), **incomplete** (a detector of the row is refused or
 absent), **stale** (the baked offsets m2 recorded differ from the row
 `fix_alignment` reads; this also makes a second pass from the same record a
 no-op), **row_mismatch** (reader and writer resolve different rows),
-**below_min**.  A record that did not pass is refused whole.
+**below_min** (row mean under `--min-mas`, default 0.5 mas, ~2.5 sigma for a
+mean of four).  A record that did not pass is refused whole.
+
+The 0.5 mas threshold sits below m2's 4 or 8 mas floor because the floor is set
+for the per-detector distortion term, which a locked row cannot express (see
+"The m2 correction floor" above).  The all-member row mean is the module-common
+part: the row expresses it exactly and it repeats across runs, so its
+threshold follows its measurement noise.
 
 The rows reach the frames only on regeneration.  `fix_alignment` treats a frame
 within `RAOFFSET_DISAGREE_TOL_ARCSEC` (default 0.05") of its row as current, so
 regenerate from `_cal`, or rerun `fix_alignment` with that tolerance at or below
-the value the script prints.  The im0 mosaics are not stale-tagged: they stay
+the value the script prints.  The script prints the `submit_reduction.sbatch`
+command for the filters it wrote, with that tolerance exported.  The im0 mosaics are not stale-tagged: they stay
 as good as the m2 verdict they passed.  The rows carry
 `prov_stage='m2-writeback'` and the m2 record's date; the writer keeps a
 `.pre_m2-writeback_<timestamp>` backup.
