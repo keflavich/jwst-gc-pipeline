@@ -1,0 +1,269 @@
+Gaia DR3: 6999 rows, 5298 after ruwe<1.4, 5/6-param, G<21.0, pos err<5 mas
+### f212n: 32 frame catalogs
+  f212n_nrca1_visit001_vgroup02105_exp00001_re tie=(-32.4,-30.0) mas off=44.1 pairs=67 (unsat stars 906, fit-pool 906) median(frame-gaia)=(+27.7,+29.0)
+  f212n_nrca2_visit001_vgroup02105_exp00001_re tie=(-32.4,-30.0) mas off=44.1 pairs=61 (unsat stars 754, fit-pool 754) median(frame-gaia)=(+32.4,+27.9)
+  f212n_nrca3_visit001_vgroup02105_exp00001_re tie=(-32.4,-30.0) mas off=44.1 pairs=70 (unsat stars 1035, fit-pool 1035) median(frame-gaia)=(+32.0,+33.2)
+  f212n_nrca4_visit001_vgroup02105_exp00001_re tie=(-32.4,-30.0) mas off=44.1 pairs=56 (unsat stars 896, fit-pool 896) median(frame-gaia)=(+36.2,+30.9)
+  f212n_nrcb1_visit001_vgroup02105_exp00001_re tie=(-43.1,-43.0) mas off=60.9 pairs=64 (unsat stars 767, fit-pool 767) median(frame-gaia)=(+45.2,+43.4)
+  f212n_nrcb2_visit001_vgroup02105_exp00001_re tie=(-43.1,-43.0) mas off=60.9 pairs=84 (unsat stars 952, fit-pool 952) median(frame-gaia)=(+43.5,+45.3)
+  f212n_nrcb3_visit001_vgroup02105_exp00001_re tie=(-43.1,-43.0) mas off=60.9 pairs=74 (unsat stars 834, fit-pool 834) median(frame-gaia)=(+43.0,+40.9)
+  f212n_nrcb4_visit001_vgroup02105_exp00001_re tie=(-43.1,-43.0) mas off=60.9 pairs=78 (unsat stars 1081, fit-pool 1081) median(frame-gaia)=(+40.1,+42.4)
+  f212n_nrca1_visit001_vgroup02105_exp00002_re tie=(-25.7,-32.9) mas off=41.8 pairs=65 (unsat stars 893, fit-pool 893) median(frame-gaia)=(+21.4,+32.0)
+  f212n_nrca2_visit001_vgroup02105_exp00002_re tie=(-25.7,-32.9) mas off=41.8 pairs=61 (unsat stars 770, fit-pool 770) median(frame-gaia)=(+25.8,+30.6)
+  f212n_nrca3_visit001_vgroup02105_exp00002_re tie=(-25.7,-32.9) mas off=41.8 pairs=70 (unsat stars 1022, fit-pool 1022) median(frame-gaia)=(+25.3,+36.0)
+  f212n_nrca4_visit001_vgroup02105_exp00002_re tie=(-25.7,-32.9) mas off=41.8 pairs=56 (unsat stars 905, fit-pool 905) median(frame-gaia)=(+29.5,+33.5)
+  f212n_nrcb1_visit001_vgroup02105_exp00002_re tie=(-36.6,-46.2) mas off=58.9 pairs=64 (unsat stars 789, fit-pool 789) median(frame-gaia)=(+38.6,+46.4)
+  f212n_nrcb2_visit001_vgroup02105_exp00002_re tie=(-36.6,-46.2) mas off=58.9 pairs=86 (unsat stars 968, fit-pool 968) median(frame-gaia)=(+37.0,+48.2)
+  f212n_nrcb3_visit001_vgroup02105_exp00002_re tie=(-36.6,-46.2) mas off=58.9 pairs=72 (unsat stars 820, fit-pool 820) median(frame-gaia)=(+36.2,+44.0)
+  f212n_nrcb4_visit001_vgroup02105_exp00002_re tie=(-36.6,-46.2) mas off=58.9 pairs=77 (unsat stars 1087, fit-pool 1087) median(frame-gaia)=(+33.3,+45.5)
+  f212n_nrca1_visit001_vgroup02105_exp00003_re tie=(-30.0,-27.5) mas off=40.7 pairs=53 (unsat stars 781, fit-pool 781) median(frame-gaia)=(+25.4,+26.0)
+  f212n_nrca2_visit001_vgroup02105_exp00003_re tie=(-30.0,-27.5) mas off=40.7 pairs=60 (unsat stars 699, fit-pool 699) median(frame-gaia)=(+30.3,+25.6)
+  f212n_nrca3_visit001_vgroup02105_exp00003_re tie=(-30.0,-27.5) mas off=40.7 pairs=70 (unsat stars 1035, fit-pool 1035) median(frame-gaia)=(+29.7,+30.2)
+  f212n_nrca4_visit001_vgroup02105_exp00003_re tie=(-30.0,-27.5) mas off=40.7 pairs=59 (unsat stars 890, fit-pool 890) median(frame-gaia)=(+33.4,+27.9)
+  f212n_nrcb1_visit001_vgroup02105_exp00003_re tie=(-39.0,-40.8) mas off=56.5 pairs=79 (unsat stars 829, fit-pool 829) median(frame-gaia)=(+41.6,+40.8)
+  f212n_nrcb2_visit001_vgroup02105_exp00003_re tie=(-39.0,-40.8) mas off=56.5 pairs=94 (unsat stars 1025, fit-pool 1025) median(frame-gaia)=(+39.1,+43.0)
+  f212n_nrcb3_visit001_vgroup02105_exp00003_re tie=(-39.0,-40.8) mas off=56.5 pairs=62 (unsat stars 875, fit-pool 875) median(frame-gaia)=(+38.8,+38.6)
+  f212n_nrcb4_visit001_vgroup02105_exp00003_re tie=(-39.0,-40.8) mas off=56.5 pairs=96 (unsat stars 1189, fit-pool 1189) median(frame-gaia)=(+36.6,+40.5)
+  f212n_nrca1_visit001_vgroup02105_exp00004_re tie=(-31.9,-23.9) mas off=39.8 pairs=54 (unsat stars 787, fit-pool 787) median(frame-gaia)=(+26.8,+22.5)
+  f212n_nrca2_visit001_vgroup02105_exp00004_re tie=(-31.9,-23.9) mas off=39.8 pairs=61 (unsat stars 721, fit-pool 721) median(frame-gaia)=(+32.0,+21.9)
+  f212n_nrca3_visit001_vgroup02105_exp00004_re tie=(-31.9,-23.9) mas off=39.8 pairs=68 (unsat stars 1020, fit-pool 1020) median(frame-gaia)=(+31.6,+26.7)
+  f212n_nrca4_visit001_vgroup02105_exp00004_re tie=(-31.9,-23.9) mas off=39.8 pairs=60 (unsat stars 892, fit-pool 892) median(frame-gaia)=(+35.0,+24.2)
+  f212n_nrcb1_visit001_vgroup02105_exp00004_re tie=(-41.1,-37.0) mas off=55.3 pairs=81 (unsat stars 834, fit-pool 834) median(frame-gaia)=(+44.1,+36.9)
+  f212n_nrcb2_visit001_vgroup02105_exp00004_re tie=(-41.1,-37.0) mas off=55.3 pairs=94 (unsat stars 1048, fit-pool 1048) median(frame-gaia)=(+41.6,+39.7)
+  f212n_nrcb3_visit001_vgroup02105_exp00004_re tie=(-41.1,-37.0) mas off=55.3 pairs=63 (unsat stars 868, fit-pool 868) median(frame-gaia)=(+41.0,+34.8)
+  f212n_nrcb4_visit001_vgroup02105_exp00004_re tie=(-41.1,-37.0) mas off=55.3 pairs=98 (unsat stars 1184, fit-pool 1184) median(frame-gaia)=(+38.8,+37.1)
+### f187n: 32 frame catalogs
+  f187n_nrca1_visit001_vgroup02103_exp00001_re tie=(-32.5,-30.2) mas off=44.3 pairs=64 (unsat stars 805, fit-pool 805) median(frame-gaia)=(+28.0,+28.8)
+  f187n_nrca2_visit001_vgroup02103_exp00001_re tie=(-32.5,-30.2) mas off=44.3 pairs=60 (unsat stars 699, fit-pool 699) median(frame-gaia)=(+31.8,+27.7)
+  f187n_nrca3_visit001_vgroup02103_exp00001_re tie=(-32.5,-30.2) mas off=44.3 pairs=70 (unsat stars 920, fit-pool 920) median(frame-gaia)=(+32.8,+33.4)
+  f187n_nrca4_visit001_vgroup02103_exp00001_re tie=(-32.5,-30.2) mas off=44.3 pairs=56 (unsat stars 815, fit-pool 815) median(frame-gaia)=(+36.8,+31.5)
+  f187n_nrcb1_visit001_vgroup02103_exp00001_re tie=(-42.9,-43.4) mas off=61.1 pairs=65 (unsat stars 703, fit-pool 703) median(frame-gaia)=(+45.3,+44.2)
+  f187n_nrcb2_visit001_vgroup02103_exp00001_re tie=(-42.9,-43.4) mas off=61.1 pairs=84 (unsat stars 835, fit-pool 835) median(frame-gaia)=(+43.0,+46.3)
+  f187n_nrcb3_visit001_vgroup02103_exp00001_re tie=(-42.9,-43.4) mas off=61.1 pairs=74 (unsat stars 762, fit-pool 762) median(frame-gaia)=(+43.2,+40.2)
+  f187n_nrcb4_visit001_vgroup02103_exp00001_re tie=(-42.9,-43.4) mas off=61.1 pairs=76 (unsat stars 968, fit-pool 968) median(frame-gaia)=(+39.2,+42.5)
+  f187n_nrca1_visit001_vgroup02103_exp00002_re tie=(-26.0,-33.0) mas off=42.0 pairs=64 (unsat stars 801, fit-pool 801) median(frame-gaia)=(+22.1,+31.7)
+  f187n_nrca2_visit001_vgroup02103_exp00002_re tie=(-26.0,-33.0) mas off=42.0 pairs=60 (unsat stars 685, fit-pool 685) median(frame-gaia)=(+25.8,+30.4)
+  f187n_nrca3_visit001_vgroup02103_exp00002_re tie=(-26.0,-33.0) mas off=42.0 pairs=72 (unsat stars 911, fit-pool 911) median(frame-gaia)=(+26.4,+36.0)
+  f187n_nrca4_visit001_vgroup02103_exp00002_re tie=(-26.0,-33.0) mas off=42.0 pairs=55 (unsat stars 822, fit-pool 822) median(frame-gaia)=(+30.2,+34.2)
+  f187n_nrcb1_visit001_vgroup02103_exp00002_re tie=(-36.4,-46.1) mas off=58.8 pairs=65 (unsat stars 698, fit-pool 698) median(frame-gaia)=(+39.3,+46.7)
+  f187n_nrcb2_visit001_vgroup02103_exp00002_re tie=(-36.4,-46.1) mas off=58.8 pairs=85 (unsat stars 848, fit-pool 848) median(frame-gaia)=(+36.7,+49.2)
+  f187n_nrcb3_visit001_vgroup02103_exp00002_re tie=(-36.4,-46.1) mas off=58.8 pairs=73 (unsat stars 753, fit-pool 753) median(frame-gaia)=(+36.7,+42.8)
+  f187n_nrcb4_visit001_vgroup02103_exp00002_re tie=(-36.4,-46.1) mas off=58.8 pairs=77 (unsat stars 955, fit-pool 955) median(frame-gaia)=(+33.0,+45.5)
+  f187n_nrca1_visit001_vgroup02103_exp00003_re tie=(-30.1,-27.9) mas off=41.0 pairs=47 (unsat stars 686, fit-pool 686) median(frame-gaia)=(+25.7,+25.9)
+  f187n_nrca2_visit001_vgroup02103_exp00003_re tie=(-30.1,-27.9) mas off=41.0 pairs=58 (unsat stars 643, fit-pool 643) median(frame-gaia)=(+29.8,+25.1)
+  f187n_nrca3_visit001_vgroup02103_exp00003_re tie=(-30.1,-27.9) mas off=41.0 pairs=69 (unsat stars 911, fit-pool 911) median(frame-gaia)=(+30.4,+30.0)
+  f187n_nrca4_visit001_vgroup02103_exp00003_re tie=(-30.1,-27.9) mas off=41.0 pairs=61 (unsat stars 804, fit-pool 804) median(frame-gaia)=(+33.0,+28.6)
+  f187n_nrcb1_visit001_vgroup02103_exp00003_re tie=(-38.5,-40.4) mas off=55.8 pairs=80 (unsat stars 750, fit-pool 750) median(frame-gaia)=(+41.4,+41.2)
+  f187n_nrcb2_visit001_vgroup02103_exp00003_re tie=(-38.5,-40.4) mas off=55.8 pairs=94 (unsat stars 912, fit-pool 912) median(frame-gaia)=(+37.6,+43.1)
+  f187n_nrcb3_visit001_vgroup02103_exp00003_re tie=(-38.5,-40.4) mas off=55.8 pairs=63 (unsat stars 771, fit-pool 771) median(frame-gaia)=(+38.9,+37.3)
+  f187n_nrcb4_visit001_vgroup02103_exp00003_re tie=(-38.5,-40.4) mas off=55.8 pairs=95 (unsat stars 1054, fit-pool 1054) median(frame-gaia)=(+36.0,+39.9)
+  f187n_nrca1_visit001_vgroup02103_exp00004_re tie=(-32.6,-24.1) mas off=40.6 pairs=49 (unsat stars 685, fit-pool 685) median(frame-gaia)=(+28.3,+22.3)
+  f187n_nrca2_visit001_vgroup02103_exp00004_re tie=(-32.6,-24.1) mas off=40.6 pairs=59 (unsat stars 645, fit-pool 645) median(frame-gaia)=(+32.3,+21.6)
+  f187n_nrca3_visit001_vgroup02103_exp00004_re tie=(-32.6,-24.1) mas off=40.6 pairs=68 (unsat stars 915, fit-pool 915) median(frame-gaia)=(+32.4,+26.5)
+  f187n_nrca4_visit001_vgroup02103_exp00004_re tie=(-32.6,-24.1) mas off=40.6 pairs=61 (unsat stars 803, fit-pool 803) median(frame-gaia)=(+35.9,+24.8)
+  f187n_nrcb1_visit001_vgroup02103_exp00004_re tie=(-41.3,-37.1) mas off=55.5 pairs=80 (unsat stars 757, fit-pool 757) median(frame-gaia)=(+44.8,+37.7)
+  f187n_nrcb2_visit001_vgroup02103_exp00004_re tie=(-41.3,-37.1) mas off=55.5 pairs=94 (unsat stars 917, fit-pool 917) median(frame-gaia)=(+41.1,+40.7)
+  f187n_nrcb3_visit001_vgroup02103_exp00004_re tie=(-41.3,-37.1) mas off=55.5 pairs=63 (unsat stars 800, fit-pool 800) median(frame-gaia)=(+41.5,+33.3)
+  f187n_nrcb4_visit001_vgroup02103_exp00004_re tie=(-41.3,-37.1) mas off=55.5 pairs=96 (unsat stars 1051, fit-pool 1051) median(frame-gaia)=(+38.7,+36.7)
+### f150w: 32 frame catalogs
+  f150w_nrca1_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 80.7, 235.0))
+  f150w_nrca2_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 80.7, 235.0))
+  f150w_nrca3_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 80.7, 235.0))
+  f150w_nrca4_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 80.7, 235.0))
+  f150w_nrcb1_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 84.3, 152.0))
+  f150w_nrcb2_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 84.3, 152.0))
+  f150w_nrcb3_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 84.3, 152.0))
+  f150w_nrcb4_visit001_vgroup02109_exp00001_re skip: no verified Gaia tie ((True, np.False_, 84.3, 152.0))
+  f150w_nrca1_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 80.5, 232.0))
+  f150w_nrca2_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 80.5, 232.0))
+  f150w_nrca3_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 80.5, 232.0))
+  f150w_nrca4_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 80.5, 232.0))
+  f150w_nrcb1_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 84.3, 154.0))
+  f150w_nrcb2_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 84.3, 154.0))
+  f150w_nrcb3_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 84.3, 154.0))
+  f150w_nrcb4_visit001_vgroup02109_exp00002_re skip: no verified Gaia tie ((True, np.False_, 84.3, 154.0))
+  f150w_nrca1_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 78.4, 214.0))
+  f150w_nrca2_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 78.4, 214.0))
+  f150w_nrca3_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 78.4, 214.0))
+  f150w_nrca4_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 78.4, 214.0))
+  f150w_nrcb1_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 82.6, 160.0))
+  f150w_nrcb2_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 82.6, 160.0))
+  f150w_nrcb3_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 82.6, 160.0))
+  f150w_nrcb4_visit001_vgroup02109_exp00003_re skip: no verified Gaia tie ((True, np.False_, 82.6, 160.0))
+  f150w_nrca1_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 79.4, 220.0))
+  f150w_nrca2_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 79.4, 220.0))
+  f150w_nrca3_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 79.4, 220.0))
+  f150w_nrca4_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 79.4, 220.0))
+  f150w_nrcb1_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 83.3, 159.5))
+  f150w_nrcb2_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 83.3, 159.5))
+  f150w_nrcb3_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 83.3, 159.5))
+  f150w_nrcb4_visit001_vgroup02109_exp00004_re skip: no verified Gaia tie ((True, np.False_, 83.3, 159.5))
+### f115w: 32 frame catalogs
+  f115w_nrca1_visit001_vgroup02107_exp00001_re tie=(-36.1,-29.1) mas off=46.4 pairs=24 (unsat stars 1329, fit-pool 1329) median(frame-gaia)=(+32.3,+28.0)
+  f115w_nrca2_visit001_vgroup02107_exp00001_re tie=(-36.1,-29.1) mas off=46.4 pairs=26 (unsat stars 1309, fit-pool 1309) median(frame-gaia)=(+35.7,+25.8)
+  f115w_nrca3_visit001_vgroup02107_exp00001_re tie=(-36.1,-29.1) mas off=46.4 pairs=21 (unsat stars 1550, fit-pool 1550) median(frame-gaia)=(+36.1,+31.1)
+  f115w_nrca4_visit001_vgroup02107_exp00001_re tie=(-36.1,-29.1) mas off=46.4 pairs=19 (unsat stars 1489, fit-pool 1489) median(frame-gaia)=(+39.5,+30.0)
+  f115w_nrcb1_visit001_vgroup02107_exp00001_re tie=(-44.8,-43.0) mas off=62.1 pairs=31 (unsat stars 1271, fit-pool 1271) median(frame-gaia)=(+46.3,+44.1)
+  f115w_nrcb2_visit001_vgroup02107_exp00001_re tie=(-44.8,-43.0) mas off=62.1 pairs=35 (unsat stars 1282, fit-pool 1282) median(frame-gaia)=(+45.0,+46.2)
+  f115w_nrcb3_visit001_vgroup02107_exp00001_re tie=(-44.8,-43.0) mas off=62.1 pairs=30 (unsat stars 1282, fit-pool 1282) median(frame-gaia)=(+42.8,+40.2)
+  f115w_nrcb4_visit001_vgroup02107_exp00001_re tie=(-44.8,-43.0) mas off=62.1 pairs=32 (unsat stars 1749, fit-pool 1749) median(frame-gaia)=(+42.9,+43.3)
+  f115w_nrca1_visit001_vgroup02107_exp00002_re tie=(-30.2,-32.1) mas off=44.0 pairs=19 (unsat stars 1294, fit-pool 1294) median(frame-gaia)=(+28.0,+29.0)
+  f115w_nrca2_visit001_vgroup02107_exp00002_re tie=(-30.2,-32.1) mas off=44.0 pairs=26 (unsat stars 1318, fit-pool 1318) median(frame-gaia)=(+30.7,+28.4)
+  f115w_nrca3_visit001_vgroup02107_exp00002_re tie=(-30.2,-32.1) mas off=44.0 pairs=22 (unsat stars 1543, fit-pool 1543) median(frame-gaia)=(+30.3,+33.5)
+  f115w_nrca4_visit001_vgroup02107_exp00002_re tie=(-30.2,-32.1) mas off=44.0 pairs=22 (unsat stars 1482, fit-pool 1482) median(frame-gaia)=(+32.9,+32.5)
+  f115w_nrcb1_visit001_vgroup02107_exp00002_re tie=(-39.8,-45.5) mas off=60.4 pairs=29 (unsat stars 1315, fit-pool 1315) median(frame-gaia)=(+41.1,+46.7)
+  f115w_nrcb2_visit001_vgroup02107_exp00002_re tie=(-39.8,-45.5) mas off=60.4 pairs=35 (unsat stars 1271, fit-pool 1271) median(frame-gaia)=(+38.6,+47.6)
+  f115w_nrcb3_visit001_vgroup02107_exp00002_re tie=(-39.8,-45.5) mas off=60.4 pairs=31 (unsat stars 1293, fit-pool 1293) median(frame-gaia)=(+40.2,+40.6)
+  f115w_nrcb4_visit001_vgroup02107_exp00002_re tie=(-39.8,-45.5) mas off=60.4 pairs=31 (unsat stars 1742, fit-pool 1742) median(frame-gaia)=(+38.3,+44.5)
+  f115w_nrca1_visit001_vgroup02107_exp00003_re tie=(-31.8,-25.0) mas off=40.4 pairs=25 (unsat stars 1135, fit-pool 1135) median(frame-gaia)=(+27.2,+22.8)
+  f115w_nrca2_visit001_vgroup02107_exp00003_re tie=(-31.8,-25.0) mas off=40.4 pairs=32 (unsat stars 1175, fit-pool 1175) median(frame-gaia)=(+33.1,+23.9)
+  f115w_nrca3_visit001_vgroup02107_exp00003_re tie=(-31.8,-25.0) mas off=40.4 pairs=23 (unsat stars 1484, fit-pool 1484) median(frame-gaia)=(+33.1,+26.2)
+  f115w_nrca4_visit001_vgroup02107_exp00003_re tie=(-31.8,-25.0) mas off=40.4 pairs=24 (unsat stars 1494, fit-pool 1494) median(frame-gaia)=(+35.5,+25.8)
+  f115w_nrcb1_visit001_vgroup02107_exp00003_re tie=(-42.0,-39.9) mas off=57.9 pairs=34 (unsat stars 1401, fit-pool 1401) median(frame-gaia)=(+43.4,+40.2)
+  f115w_nrcb2_visit001_vgroup02107_exp00003_re tie=(-42.0,-39.9) mas off=57.9 pairs=35 (unsat stars 1466, fit-pool 1466) median(frame-gaia)=(+42.6,+43.4)
+  f115w_nrcb3_visit001_vgroup02107_exp00003_re tie=(-42.0,-39.9) mas off=57.9 pairs=24 (unsat stars 1272, fit-pool 1272) median(frame-gaia)=(+41.2,+35.8)
+  f115w_nrcb4_visit001_vgroup02107_exp00003_re tie=(-42.0,-39.9) mas off=57.9 pairs=21 (unsat stars 1705, fit-pool 1705) median(frame-gaia)=(+39.6,+38.6)
+  f115w_nrca1_visit001_vgroup02107_exp00004_re tie=(-34.3,-23.2) mas off=41.5 pairs=25 (unsat stars 1171, fit-pool 1171) median(frame-gaia)=(+30.5,+21.4)
+  f115w_nrca2_visit001_vgroup02107_exp00004_re tie=(-34.3,-23.2) mas off=41.5 pairs=33 (unsat stars 1185, fit-pool 1185) median(frame-gaia)=(+35.2,+21.5)
+  f115w_nrca3_visit001_vgroup02107_exp00004_re tie=(-34.3,-23.2) mas off=41.5 pairs=22 (unsat stars 1466, fit-pool 1466) median(frame-gaia)=(+37.4,+23.6)
+  f115w_nrca4_visit001_vgroup02107_exp00004_re tie=(-34.3,-23.2) mas off=41.5 pairs=27 (unsat stars 1508, fit-pool 1508) median(frame-gaia)=(+37.5,+24.1)
+  f115w_nrcb1_visit001_vgroup02107_exp00004_re tie=(-42.8,-37.0) mas off=56.6 pairs=37 (unsat stars 1406, fit-pool 1406) median(frame-gaia)=(+46.0,+38.8)
+  f115w_nrcb2_visit001_vgroup02107_exp00004_re tie=(-42.8,-37.0) mas off=56.6 pairs=37 (unsat stars 1475, fit-pool 1475) median(frame-gaia)=(+44.6,+41.6)
+  f115w_nrcb3_visit001_vgroup02107_exp00004_re tie=(-42.8,-37.0) mas off=56.6 pairs=25 (unsat stars 1297, fit-pool 1297) median(frame-gaia)=(+42.2,+34.0)
+  f115w_nrcb4_visit001_vgroup02107_exp00004_re tie=(-42.8,-37.0) mas off=56.6 pairs=24 (unsat stars 1647, fit-pool 1647) median(frame-gaia)=(+42.1,+37.6)
+### f164n: 32 frame catalogs
+  f164n_nrca1_visit001_vgroup02101_exp00001_re tie=(-31.5,-29.6) mas off=43.2 pairs=66 (unsat stars 662, fit-pool 662) median(frame-gaia)=(+19.4,+25.0)
+  f164n_nrca2_visit001_vgroup02101_exp00001_re tie=(-31.5,-29.6) mas off=43.2 pairs=60 (unsat stars 589, fit-pool 589) median(frame-gaia)=(+36.1,+22.1)
+  f164n_nrca3_visit001_vgroup02101_exp00001_re tie=(-31.5,-29.6) mas off=43.2 pairs=71 (unsat stars 753, fit-pool 753) median(frame-gaia)=(+28.7,+41.5)
+  f164n_nrca4_visit001_vgroup02101_exp00001_re tie=(-31.5,-29.6) mas off=43.2 pairs=55 (unsat stars 694, fit-pool 694) median(frame-gaia)=(+42.6,+36.9)
+  f164n_nrcb1_visit001_vgroup02101_exp00001_re tie=(-40.9,-44.4) mas off=60.3 pairs=63 (unsat stars 578, fit-pool 578) median(frame-gaia)=(+53.2,+50.0)
+  f164n_nrcb2_visit001_vgroup02101_exp00001_re tie=(-40.9,-44.4) mas off=60.3 pairs=85 (unsat stars 733, fit-pool 733) median(frame-gaia)=(+37.2,+56.6)
+  f164n_nrcb3_visit001_vgroup02101_exp00001_re tie=(-40.9,-44.4) mas off=60.3 pairs=72 (unsat stars 641, fit-pool 641) median(frame-gaia)=(+48.5,+32.4)
+  f164n_nrcb4_visit001_vgroup02101_exp00001_re tie=(-40.9,-44.4) mas off=60.3 pairs=78 (unsat stars 840, fit-pool 840) median(frame-gaia)=(+29.7,+37.9)
+  f164n_nrca1_visit001_vgroup02101_exp00002_re tie=(-25.1,-32.0) mas off=40.7 pairs=62 (unsat stars 662, fit-pool 662) median(frame-gaia)=(+12.6,+27.9)
+  f164n_nrca2_visit001_vgroup02101_exp00002_re tie=(-25.1,-32.0) mas off=40.7 pairs=60 (unsat stars 591, fit-pool 591) median(frame-gaia)=(+29.2,+23.9)
+  f164n_nrca3_visit001_vgroup02101_exp00002_re tie=(-25.1,-32.0) mas off=40.7 pairs=70 (unsat stars 736, fit-pool 736) median(frame-gaia)=(+22.1,+42.5)
+  f164n_nrca4_visit001_vgroup02101_exp00002_re tie=(-25.1,-32.0) mas off=40.7 pairs=53 (unsat stars 684, fit-pool 684) median(frame-gaia)=(+35.6,+39.4)
+  f164n_nrcb1_visit001_vgroup02101_exp00002_re tie=(-35.1,-46.0) mas off=57.9 pairs=65 (unsat stars 581, fit-pool 581) median(frame-gaia)=(+46.4,+52.1)
+  f164n_nrcb2_visit001_vgroup02101_exp00002_re tie=(-35.1,-46.0) mas off=57.9 pairs=88 (unsat stars 734, fit-pool 734) median(frame-gaia)=(+30.2,+58.9)
+  f164n_nrcb3_visit001_vgroup02101_exp00002_re tie=(-35.1,-46.0) mas off=57.9 pairs=72 (unsat stars 624, fit-pool 624) median(frame-gaia)=(+41.7,+34.7)
+  f164n_nrcb4_visit001_vgroup02101_exp00002_re tie=(-35.1,-46.0) mas off=57.9 pairs=78 (unsat stars 834, fit-pool 834) median(frame-gaia)=(+23.1,+41.2)
+  f164n_nrca1_visit001_vgroup02101_exp00003_re tie=(-29.9,-28.9) mas off=41.6 pairs=48 (unsat stars 567, fit-pool 567) median(frame-gaia)=(+17.2,+21.8)
+  f164n_nrca2_visit001_vgroup02101_exp00003_re tie=(-29.9,-28.9) mas off=41.6 pairs=59 (unsat stars 521, fit-pool 521) median(frame-gaia)=(+33.8,+19.2)
+  f164n_nrca3_visit001_vgroup02101_exp00003_re tie=(-29.9,-28.9) mas off=41.6 pairs=69 (unsat stars 732, fit-pool 732) median(frame-gaia)=(+23.3,+36.7)
+  f164n_nrca4_visit001_vgroup02101_exp00003_re tie=(-29.9,-28.9) mas off=41.6 pairs=61 (unsat stars 669, fit-pool 669) median(frame-gaia)=(+40.0,+34.0)
+  f164n_nrcb1_visit001_vgroup02101_exp00003_re tie=(-36.6,-39.2) mas off=53.7 pairs=79 (unsat stars 617, fit-pool 617) median(frame-gaia)=(+48.6,+47.1)
+  f164n_nrcb2_visit001_vgroup02101_exp00003_re tie=(-36.6,-39.2) mas off=53.7 pairs=95 (unsat stars 746, fit-pool 746) median(frame-gaia)=(+32.7,+53.7)
+  f164n_nrcb3_visit001_vgroup02101_exp00003_re tie=(-36.6,-39.2) mas off=53.7 pairs=64 (unsat stars 662, fit-pool 662) median(frame-gaia)=(+43.7,+29.0)
+  f164n_nrcb4_visit001_vgroup02101_exp00003_re tie=(-36.6,-39.2) mas off=53.7 pairs=93 (unsat stars 909, fit-pool 909) median(frame-gaia)=(+26.3,+35.0)
+  f164n_nrca1_visit001_vgroup02101_exp00004_re tie=(-31.5,-24.6) mas off=40.0 pairs=50 (unsat stars 571, fit-pool 571) median(frame-gaia)=(+18.4,+18.1)
+  f164n_nrca2_visit001_vgroup02101_exp00004_re tie=(-31.5,-24.6) mas off=40.0 pairs=61 (unsat stars 529, fit-pool 529) median(frame-gaia)=(+36.0,+15.3)
+  f164n_nrca3_visit001_vgroup02101_exp00004_re tie=(-31.5,-24.6) mas off=40.0 pairs=69 (unsat stars 731, fit-pool 731) median(frame-gaia)=(+25.2,+32.7)
+  f164n_nrca4_visit001_vgroup02101_exp00004_re tie=(-31.5,-24.6) mas off=40.0 pairs=61 (unsat stars 660, fit-pool 660) median(frame-gaia)=(+42.0,+29.9)
+  f164n_nrcb1_visit001_vgroup02101_exp00004_re tie=(-38.4,-37.1) mas off=53.4 pairs=79 (unsat stars 624, fit-pool 624) median(frame-gaia)=(+52.0,+42.9)
+  f164n_nrcb2_visit001_vgroup02101_exp00004_re tie=(-38.4,-37.1) mas off=53.4 pairs=96 (unsat stars 776, fit-pool 776) median(frame-gaia)=(+35.5,+50.5)
+  f164n_nrcb3_visit001_vgroup02101_exp00004_re tie=(-38.4,-37.1) mas off=53.4 pairs=63 (unsat stars 667, fit-pool 667) median(frame-gaia)=(+46.4,+25.1)
+  f164n_nrcb4_visit001_vgroup02101_exp00004_re tie=(-38.4,-37.1) mas off=53.4 pairs=95 (unsat stars 921, fit-pool 921) median(frame-gaia)=(+28.6,+31.8)
+### f200w: 32 frame catalogs
+  f200w_nrca1_visit001_vgroup0210b_exp00001_re tie=(-34.6,-29.4) mas off=45.4 pairs=23 (unsat stars 6019, fit-pool 6019) median(frame-gaia)=(+33.1,+27.3)
+  f200w_nrca2_visit001_vgroup0210b_exp00001_re tie=(-34.6,-29.4) mas off=45.4 pairs=29 (unsat stars 5701, fit-pool 5701) median(frame-gaia)=(+35.8,+26.0)
+  f200w_nrca3_visit001_vgroup0210b_exp00001_re tie=(-34.6,-29.4) mas off=45.4 pairs=20 (unsat stars 5904, fit-pool 5904) median(frame-gaia)=(+35.6,+33.0)
+  f200w_nrca4_visit001_vgroup0210b_exp00001_re tie=(-34.6,-29.4) mas off=45.4 pairs=21 (unsat stars 6043, fit-pool 6043) median(frame-gaia)=(+38.7,+30.0)
+  f200w_nrcb1_visit001_vgroup0210b_exp00001_re tie=(-44.9,-42.8) mas off=62.0 pairs=30 (unsat stars 5696, fit-pool 5696) median(frame-gaia)=(+48.0,+44.3)
+  f200w_nrcb2_visit001_vgroup0210b_exp00001_re tie=(-44.9,-42.8) mas off=62.0 pairs=35 (unsat stars 5647, fit-pool 5647) median(frame-gaia)=(+44.9,+46.6)
+  f200w_nrcb3_visit001_vgroup0210b_exp00001_re tie=(-44.9,-42.8) mas off=62.0 pairs=35 (unsat stars 5935, fit-pool 5935) median(frame-gaia)=(+44.6,+37.1)
+  f200w_nrcb4_visit001_vgroup0210b_exp00001_re tie=(-44.9,-42.8) mas off=62.0 pairs=29 (unsat stars 6392, fit-pool 6392) median(frame-gaia)=(+40.3,+42.6)
+  f200w_nrca1_visit001_vgroup0210b_exp00002_re tie=(-28.9,-32.2) mas off=43.2 pairs=19 (unsat stars 5980, fit-pool 5980) median(frame-gaia)=(+26.8,+31.9)
+  f200w_nrca2_visit001_vgroup0210b_exp00002_re tie=(-28.9,-32.2) mas off=43.2 pairs=28 (unsat stars 5719, fit-pool 5719) median(frame-gaia)=(+29.2,+28.5)
+  f200w_nrca3_visit001_vgroup0210b_exp00002_re tie=(-28.9,-32.2) mas off=43.2 pairs=19 (unsat stars 5916, fit-pool 5916) median(frame-gaia)=(+28.8,+33.1)
+  f200w_nrca4_visit001_vgroup0210b_exp00002_re tie=(-28.9,-32.2) mas off=43.2 pairs=20 (unsat stars 6058, fit-pool 6058) median(frame-gaia)=(+32.4,+33.6)
+  f200w_nrcb1_visit001_vgroup0210b_exp00002_re tie=(-38.0,-45.7) mas off=59.4 pairs=30 (unsat stars 5724, fit-pool 5724) median(frame-gaia)=(+41.3,+47.2)
+  f200w_nrcb2_visit001_vgroup0210b_exp00002_re tie=(-38.0,-45.7) mas off=59.4 pairs=37 (unsat stars 5708, fit-pool 5708) median(frame-gaia)=(+38.9,+49.5)
+  f200w_nrcb3_visit001_vgroup0210b_exp00002_re tie=(-38.0,-45.7) mas off=59.4 pairs=32 (unsat stars 5915, fit-pool 5915) median(frame-gaia)=(+37.6,+40.8)
+  f200w_nrcb4_visit001_vgroup0210b_exp00002_re tie=(-38.0,-45.7) mas off=59.4 pairs=29 (unsat stars 6399, fit-pool 6399) median(frame-gaia)=(+33.5,+44.6)
+  f200w_nrca1_visit001_vgroup0210b_exp00003_re tie=(-32.5,-25.6) mas off=41.4 pairs=26 (unsat stars 5791, fit-pool 5791) median(frame-gaia)=(+28.0,+24.7)
+  f200w_nrca2_visit001_vgroup0210b_exp00003_re tie=(-32.5,-25.6) mas off=41.4 pairs=31 (unsat stars 5606, fit-pool 5606) median(frame-gaia)=(+33.9,+24.3)
+  f200w_nrca3_visit001_vgroup0210b_exp00003_re tie=(-32.5,-25.6) mas off=41.4 pairs=21 (unsat stars 6128, fit-pool 6128) median(frame-gaia)=(+32.9,+26.4)
+  f200w_nrca4_visit001_vgroup0210b_exp00003_re tie=(-32.5,-25.6) mas off=41.4 pairs=24 (unsat stars 6297, fit-pool 6297) median(frame-gaia)=(+34.6,+26.8)
+  f200w_nrcb1_visit001_vgroup0210b_exp00003_re tie=(-39.9,-39.4) mas off=56.0 pairs=33 (unsat stars 5772, fit-pool 5772) median(frame-gaia)=(+44.0,+41.1)
+  f200w_nrcb2_visit001_vgroup0210b_exp00003_re tie=(-39.9,-39.4) mas off=56.0 pairs=36 (unsat stars 6265, fit-pool 6265) median(frame-gaia)=(+40.7,+45.5)
+  f200w_nrcb3_visit001_vgroup0210b_exp00003_re tie=(-39.9,-39.4) mas off=56.0 pairs=26 (unsat stars 5976, fit-pool 5976) median(frame-gaia)=(+41.2,+34.9)
+  f200w_nrcb4_visit001_vgroup0210b_exp00003_re tie=(-39.9,-39.4) mas off=56.0 pairs=19 (unsat stars 6180, fit-pool 6180) median(frame-gaia)=(+36.7,+39.0)
+  f200w_nrca1_visit001_vgroup0210b_exp00004_re tie=(-34.4,-23.1) mas off=41.4 pairs=27 (unsat stars 5754, fit-pool 5754) median(frame-gaia)=(+29.7,+22.3)
+  f200w_nrca2_visit001_vgroup0210b_exp00004_re tie=(-34.4,-23.1) mas off=41.4 pairs=30 (unsat stars 5614, fit-pool 5614) median(frame-gaia)=(+36.4,+20.9)
+  f200w_nrca3_visit001_vgroup0210b_exp00004_re tie=(-34.4,-23.1) mas off=41.4 pairs=22 (unsat stars 6109, fit-pool 6109) median(frame-gaia)=(+34.5,+24.3)
+  f200w_nrca4_visit001_vgroup0210b_exp00004_re tie=(-34.4,-23.1) mas off=41.4 pairs=25 (unsat stars 6266, fit-pool 6266) median(frame-gaia)=(+37.1,+23.7)
+  f200w_nrcb1_visit001_vgroup0210b_exp00004_re tie=(-42.5,-36.0) mas off=55.7 pairs=32 (unsat stars 5716, fit-pool 5716) median(frame-gaia)=(+46.8,+38.1)
+  f200w_nrcb2_visit001_vgroup0210b_exp00004_re tie=(-42.5,-36.0) mas off=55.7 pairs=37 (unsat stars 6244, fit-pool 6244) median(frame-gaia)=(+43.3,+42.5)
+  f200w_nrcb3_visit001_vgroup0210b_exp00004_re tie=(-42.5,-36.0) mas off=55.7 pairs=30 (unsat stars 5948, fit-pool 5948) median(frame-gaia)=(+44.0,+31.0)
+  f200w_nrcb4_visit001_vgroup0210b_exp00004_re tie=(-42.5,-36.0) mas off=55.7 pairs=22 (unsat stars 6151, fit-pool 6151) median(frame-gaia)=(+40.3,+35.4)
+
+## wd1_q01s20: J (mas/pix), tr-/curl+ and m (arcsec) per detector; errors = cluster-bootstrap std (300 draws)
+
+### f212n - gaia
+det     Nstars Npairs nfr sigma | J00 J01 J10 J11 (+-) | tr- curl+ | m[arcsec] +- | angle
+nrca1    85   178 4   2.5 | J=[+0.0018 -0.0013; +0.0004 -0.0015] +-(0.0005,0.0005,0.0003,0.0006) | +0.0034 -0.0009 | m= 11.6 +- 2.5 (boot 16-84: 9.0-14.2) | ang=-15
+nrca2    80   170 4   1.8 | J=[-0.0001 -0.0006; -0.0003 -0.0008] +-(0.0003,0.0003,0.0004,0.0004) | +0.0008 -0.0009 | m=  3.9 +- 1.7 (boot 16-84: 2.9-6.0) | ang=-49
+nrca3   108   225 4   3.4 | J=[+0.0002 +0.0022; -0.0005 +0.0005] +-(0.0006,0.0007,0.0005,0.0006) | -0.0003 +0.0016 | m=  5.5 +- 3.0 (boot 16-84: 3.3-9.0) | ang=+99
+nrca4    83   176 4   2.3 | J=[-0.0001 -0.0001; -0.0001 -0.0009] +-(0.0004,0.0005,0.0004,0.0004) | +0.0008 -0.0002 | m=  2.7 +- 1.7 (boot 16-84: 1.8-5.3) | ang=-12
+nrcb1    91   186 4   2.0 | J=[+0.0006 +0.0008; -0.0014 -0.0009] +-(0.0003,0.0004,0.0005,0.0004) | +0.0015 -0.0006 | m=  5.4 +- 1.6 (boot 16-84: 4.4-7.2) | ang=-23
+nrcb2   122   262 4   2.6 | J=[+0.0014 +0.0014; +0.0005 -0.0034] +-(0.0004,0.0005,0.0003,0.0004) | +0.0047 +0.0019 | m= 16.9 +- 1.9 (boot 16-84: 15.1-19.0) | ang=+22
+nrcb3   104   210 4   2.2 | J=[+0.0019 +0.0000; -0.0003 -0.0017] +-(0.0003,0.0005,0.0004,0.0005) | +0.0035 -0.0003 | m= 11.8 +- 2.0 (boot 16-84: 9.8-13.9) | ang=-4
+nrcb4   125   267 4   3.1 | J=[+0.0017 +0.0003; -0.0002 +0.0002] +-(0.0005,0.0006,0.0004,0.0005) | +0.0016 +0.0001 | m=  5.3 +- 2.3 (boot 16-84: 3.4-8.0) | ang=+3
+
+### f187n - gaia
+det     Nstars Npairs nfr sigma | J00 J01 J10 J11 (+-) | tr- curl+ | m[arcsec] +- | angle
+nrca1    89   186 4   3.3 | J=[+0.0035 -0.0007; +0.0002 -0.0017] +-(0.0006,0.0007,0.0004,0.0007) | +0.0052 -0.0004 | m= 17.4 +- 3.1 (boot 16-84: 14.5-20.5) | ang=-5
+nrca2    79   168 4   1.7 | J=[+0.0001 -0.0005; +0.0000 -0.0009] +-(0.0003,0.0004,0.0004,0.0004) | +0.0010 -0.0004 | m=  3.7 +- 1.6 (boot 16-84: 2.7-5.8) | ang=-24
+nrca3   103   213 4   3.1 | J=[+0.0008 +0.0014; -0.0004 +0.0004] +-(0.0005,0.0007,0.0005,0.0005) | +0.0004 +0.0010 | m=  3.7 +- 2.6 (boot 16-84: 2.4-7.1) | ang=+69
+nrca4    81   172 4   2.2 | J=[+0.0001 -0.0004; +0.0004 -0.0007] +-(0.0004,0.0005,0.0004,0.0005) | +0.0008 -0.0001 | m=  2.5 +- 1.6 (boot 16-84: 1.9-5.3) | ang=-5
+nrcb1    92   188 4   1.9 | J=[+0.0008 +0.0004; -0.0014 -0.0005] +-(0.0003,0.0005,0.0004,0.0003) | +0.0013 -0.0010 | m=  5.4 +- 1.7 (boot 16-84: 4.2-7.5) | ang=-39
+nrcb2   117   248 4   2.6 | J=[+0.0013 +0.0019; +0.0008 -0.0036] +-(0.0004,0.0005,0.0003,0.0004) | +0.0049 +0.0027 | m= 18.5 +- 2.1 (boot 16-84: 16.4-20.7) | ang=+29
+nrcb3   101   209 4   2.2 | J=[+0.0016 +0.0000; +0.0003 -0.0017] +-(0.0003,0.0005,0.0004,0.0005) | +0.0034 +0.0003 | m= 11.2 +- 1.9 (boot 16-84: 9.4-12.9) | ang=+5
+nrcb4   120   257 4   3.0 | J=[+0.0017 +0.0004; -0.0005 -0.0001] +-(0.0005,0.0006,0.0004,0.0005) | +0.0018 -0.0001 | m=  5.8 +- 2.4 (boot 16-84: 3.8-8.7) | ang=-3
+
+### f150w - gaia
+det     Nstars Npairs nfr sigma | J00 J01 J10 J11 (+-) | tr- curl+ | m[arcsec] +- | angle
+nrca1 no data
+nrca2 no data
+nrca3 no data
+nrca4 no data
+nrcb1 no data
+nrcb2 no data
+nrcb3 no data
+nrcb4 no data
+
+### f115w - gaia
+det     Nstars Npairs nfr sigma | J00 J01 J10 J11 (+-) | tr- curl+ | m[arcsec] +- | angle
+nrca1    44    83 4   7.7 | J=[+0.0041 +0.0022; -0.0000 -0.0034] +-(0.0019,0.0027,0.0014,0.0028) | +0.0075 +0.0022 | m= 25.8 +- 9.9 (boot 16-84: 18.8-37.0) | ang=+16
+nrca2    52   104 4   4.4 | J=[+0.0037 -0.0004; -0.0010 -0.0037] +-(0.0008,0.0011,0.0008,0.0008) | +0.0074 -0.0014 | m= 25.1 +- 4.0 (boot 16-84: 21.3-29.5) | ang=-11
+nrca3    42    81 4   7.0 | J=[+0.0048 +0.0049; -0.0012 +0.0070] +-(0.0024,0.0031,0.0016,0.0026) | -0.0022 +0.0036 | m= 14.1 +-10.0 (boot 16-84: 8.5-28.7) | ang=+121
+nrca4    37    74 4   4.3 | J=[-0.0002 -0.0000; +0.0015 -0.0007] +-(0.0010,0.0010,0.0008,0.0014) | +0.0006 +0.0015 | m=  5.2 +- 3.7 (boot 16-84: 4.1-11.4) | ang=+69
+nrcb1    55   107 4   5.1 | J=[+0.0005 -0.0040; -0.0010 +0.0005] +-(0.0012,0.0014,0.0009,0.0012) | -0.0000 -0.0050 | m= 16.6 +- 5.0 (boot 16-84: 12.6-22.5) | ang=-90
+nrcb2    68   122 4   7.3 | J=[+0.0040 +0.0012; -0.0012 +0.0020] +-(0.0020,0.0022,0.0019,0.0024) | +0.0020 +0.0000 | m=  6.8 +- 7.1 (boot 16-84: 7.6-21.1) | ang=+1
+nrcb3    52    96 4   4.9 | J=[+0.0022 -0.0027; -0.0004 -0.0017] +-(0.0014,0.0020,0.0010,0.0015) | +0.0039 -0.0030 | m= 16.4 +- 6.7 (boot 16-84: 11.6-24.9) | ang=-38
+nrcb4    49    93 4   6.7 | J=[+0.0017 +0.0008; -0.0004 -0.0018] +-(0.0018,0.0023,0.0013,0.0019) | +0.0035 +0.0005 | m= 11.8 +- 8.2 (boot 16-84: 7.8-23.9) | ang=+7
+
+### f164n - gaia
+det     Nstars Npairs nfr sigma | J00 J01 J10 J11 (+-) | tr- curl+ | m[arcsec] +- | angle
+nrca1    82   173 4   2.7 | J=[+0.0018 -0.0013; +0.0011 -0.0002] +-(0.0005,0.0005,0.0004,0.0007) | +0.0020 -0.0002 | m=  6.8 +- 2.5 (boot 16-84: 4.5-9.7) | ang=-6
+nrca2    98   206 4   2.6 | J=[+0.0035 -0.0007; -0.0010 -0.0037] +-(0.0005,0.0005,0.0004,0.0005) | +0.0073 -0.0017 | m= 24.8 +- 2.4 (boot 16-84: 22.4-27.2) | ang=-13
+nrca3    99   195 4   3.3 | J=[+0.0048 +0.0009; -0.0021 -0.0030] +-(0.0006,0.0008,0.0005,0.0006) | +0.0078 -0.0012 | m= 26.4 +- 2.8 (boot 16-84: 23.8-29.3) | ang=-9
+nrca4    84   176 4   2.4 | J=[-0.0010 +0.0001; +0.0007 -0.0000] +-(0.0004,0.0005,0.0005,0.0005) | -0.0009 +0.0009 | m=  4.2 +- 2.0 (boot 16-84: 3.0-6.9) | ang=+137
+nrcb1    92   179 4   1.9 | J=[+0.0011 +0.0006; -0.0011 -0.0010] +-(0.0004,0.0004,0.0004,0.0003) | +0.0021 -0.0005 | m=  7.1 +- 1.7 (boot 16-84: 5.8-9.0) | ang=-13
+nrcb2   106   218 4   2.8 | J=[+0.0014 +0.0027; +0.0007 -0.0037] +-(0.0004,0.0006,0.0003,0.0006) | +0.0051 +0.0035 | m= 20.6 +- 2.4 (boot 16-84: 18.2-23.0) | ang=+34
+nrcb3   104   213 4   2.4 | J=[+0.0020 -0.0000; +0.0001 -0.0021] +-(0.0003,0.0005,0.0004,0.0004) | +0.0041 +0.0001 | m= 13.6 +- 1.9 (boot 16-84: 11.6-15.5) | ang=+2
+nrcb4   125   264 4   3.8 | J=[+0.0018 +0.0007; +0.0001 -0.0001] +-(0.0006,0.0007,0.0004,0.0006) | +0.0019 +0.0008 | m=  6.7 +- 2.7 (boot 16-84: 4.8-10.1) | ang=+22
+
+### f200w - gaia
+det     Nstars Npairs nfr sigma | J00 J01 J10 J11 (+-) | tr- curl+ | m[arcsec] +- | angle
+nrca1    45    92 4   6.3 | J=[+0.0025 -0.0024; -0.0012 -0.0022] +-(0.0016,0.0020,0.0011,0.0016) | +0.0047 -0.0036 | m= 19.6 +- 8.0 (boot 16-84: 14.2-29.5) | ang=-38
+nrca2    52   112 4   3.4 | J=[+0.0031 -0.0002; -0.0019 -0.0028] +-(0.0008,0.0012,0.0006,0.0007) | +0.0059 -0.0020 | m= 20.8 +- 3.9 (boot 16-84: 17.6-25.4) | ang=-19
+nrca3    35    72 4   6.5 | J=[+0.0046 +0.0038; -0.0016 -0.0003] +-(0.0027,0.0033,0.0016,0.0029) | +0.0049 +0.0022 | m= 17.8 +-11.3 (boot 16-84: 11.1-34.6) | ang=+24
+nrca4    34    75 4   4.6 | J=[+0.0016 -0.0013; -0.0003 -0.0004] +-(0.0011,0.0011,0.0008,0.0014) | +0.0020 -0.0016 | m=  8.6 +- 4.2 (boot 16-84: 6.5-14.4) | ang=-38
+nrcb1    45    89 4   3.4 | J=[+0.0014 -0.0011; -0.0020 -0.0004] +-(0.0011,0.0009,0.0010,0.0008) | +0.0018 -0.0031 | m= 12.0 +- 4.5 (boot 16-84: 7.9-16.9) | ang=-59
+nrcb2    53   109 4   4.1 | J=[+0.0035 +0.0027; +0.0021 -0.0030] +-(0.0008,0.0011,0.0007,0.0009) | +0.0065 +0.0047 | m= 26.8 +- 3.6 (boot 16-84: 23.8-30.3) | ang=+36
+nrcb3    47    91 4   3.5 | J=[+0.0020 +0.0011; +0.0005 -0.0018] +-(0.0010,0.0012,0.0008,0.0009) | +0.0039 +0.0016 | m= 14.0 +- 3.6 (boot 16-84: 11.5-18.8) | ang=+22
+nrcb4    44    88 4   5.8 | J=[-0.0003 +0.0017; -0.0007 -0.0011] +-(0.0021,0.0019,0.0013,0.0012) | +0.0008 +0.0010 | m=  4.1 +- 5.6 (boot 16-84: 5.3-16.2) | ang=+50
+
+### J_F212N - J_F150W (both Gaia-anchored)

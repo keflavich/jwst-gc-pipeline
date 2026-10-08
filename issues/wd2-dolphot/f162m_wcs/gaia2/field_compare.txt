@@ -1,0 +1,10 @@
+dPA(wd1-wd2) = 144.0 deg; vectors in mas/pix; mean over ['f212n', 'f187n', 'f164n']
+det    wd2 v (tr-,curl+) m   | wd1 v m  | wd2 rotated by +dPA: m, resid-to-wd1 m | rotated by -dPA: resid m
+nrca1 (+0.0001,+0.0023)   7.8 | (+0.0037,-0.0006)  12.5 | rot+: (-0.0015,-0.0018) resid  17.7 | rot-: resid   9.2 | unrotated resid  15.5
+nrca2 (-0.0030,+0.0033)  14.7 | (+0.0031,-0.0012)  10.9 | rot+: (+0.0005,-0.0044) resid  13.7 | rot-: resid   4.3 | unrotated resid  25.0
+nrca3 (-0.0014,+0.0030)  11.1 | (+0.0029,+0.0005)   9.9 | rot+: (-0.0006,-0.0033) resid  17.2 | rot-: resid   7.0 | unrotated resid  16.8
+nrca4 (+0.0005,+0.0013)   4.6 | (+0.0003,+0.0001)   1.1 | rot+: (-0.0011,-0.0008) resid   5.7 | rot-: resid   4.7 | unrotated resid   4.1
+nrcb1 (+0.0002,+0.0028)   9.2 | (+0.0018,-0.0005)   6.2 | rot+: (-0.0018,-0.0021) resid  13.2 | rot-: resid   6.3 | unrotated resid  12.1
+nrcb2 (-0.0035,+0.0010)  12.1 | (+0.0048,+0.0028)  18.4 | rot+: (+0.0023,-0.0029) resid  20.5 | rot-: resid   6.8 | unrotated resid  28.3
+nrcb3 (-0.0056,+0.0017)  19.6 | (+0.0037,+0.0004)  12.3 | rot+: (+0.0035,-0.0047) resid  16.9 | rot-: resid   8.0 | unrotated resid  31.3
+nrcb4 (-0.0050,-0.0007)  16.8 | (+0.0020,+0.0002)   6.7 | rot+: (+0.0045,-0.0023) resid  11.9 | rot-: resid  12.1 | unrotated resid  23.5
