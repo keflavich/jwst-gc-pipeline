@@ -126,10 +126,10 @@ Fit quality (photutils PSF-fit outputs, averaged over exposures)
         512 = non-finite fitted position
        1024 = non-finite fitted flux
        2048 = non-finite local background
-      0 means no flag in any exposure. An integer value (for example
-      2049 = 2048 + 1) is exact only when every exposure had the same flags;
-      because the column is an average, non-integer values occur and their
-      individual bits cannot be recovered.
+      0 means no flag in any exposure. An integer value such as 2049
+      (2048 + 1) decodes exactly only when every exposure had the same
+      flags; because the column is an average, non-integer values occur and
+      their individual bits cannot be recovered.
   group_size_{filter}
       Number of sources fit together with this one as a blended group
       (1 = fit alone).
