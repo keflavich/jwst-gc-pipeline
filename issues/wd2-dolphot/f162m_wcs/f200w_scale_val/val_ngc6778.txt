@@ -1,0 +1,107 @@
+  f200w_nrca1_j6778_visit001_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=366
+  f200w_nrca1_j6778_visit001_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=297
+  f200w_nrca1_j6778_visit001_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=428
+  f200w_nrca1_j6778_visit001_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=641
+  f200w_nrca1_j6778_visit002_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=101
+  f200w_nrca1_j6778_visit002_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=156
+  f200w_nrca1_j6778_visit002_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=202
+  f200w_nrca1_j6778_visit002_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=313
+  f200w_nrca1_j6778_visit003_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=555
+  f200w_nrca1_j6778_visit003_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=581
+  f200w_nrca1_j6778_visit003_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=561
+  f200w_nrca1_j6778_visit003_vgroup02105_exp00  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=511
+  f200w_nrca2_j6778_visit001_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=349
+  f200w_nrca2_j6778_visit001_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=394
+  f200w_nrca2_j6778_visit001_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=775
+  f200w_nrca2_j6778_visit001_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=1328
+  f200w_nrca2_j6778_visit002_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=438
+  f200w_nrca2_j6778_visit002_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=477
+  f200w_nrca2_j6778_visit002_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=662
+  f200w_nrca2_j6778_visit002_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=821
+  f200w_nrca2_j6778_visit003_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=190
+  f200w_nrca2_j6778_visit003_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=126
+  f200w_nrca2_j6778_visit003_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=122
+  f200w_nrca2_j6778_visit003_vgroup02105_exp00  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=119
+  f200w_nrca3_j6778_visit001_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=418
+  f200w_nrca3_j6778_visit001_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=368
+  f200w_nrca3_j6778_visit001_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=369
+  f200w_nrca3_j6778_visit001_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=351
+  f200w_nrca3_j6778_visit002_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=258
+  f200w_nrca3_j6778_visit002_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=260
+  f200w_nrca3_j6778_visit002_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=144
+  f200w_nrca3_j6778_visit002_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=100
+  f200w_nrca3_j6778_visit003_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=629
+  f200w_nrca3_j6778_visit003_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=585
+  f200w_nrca3_j6778_visit003_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=590
+  f200w_nrca3_j6778_visit003_vgroup02105_exp00  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=510
+  f200w_nrca4_j6778_visit001_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=189
+  f200w_nrca4_j6778_visit001_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=218
+  f200w_nrca4_j6778_visit001_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=298
+  f200w_nrca4_j6778_visit001_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=342
+  f200w_nrca4_j6778_visit002_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=229
+  f200w_nrca4_j6778_visit002_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=247
+  f200w_nrca4_j6778_visit002_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=283
+  f200w_nrca4_j6778_visit002_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=348
+  f200w_nrca4_j6778_visit003_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=250
+  f200w_nrca4_j6778_visit003_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=211
+  f200w_nrca4_j6778_visit003_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=267
+  f200w_nrca4_j6778_visit003_vgroup02105_exp00  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=257
+  f200w_nrcb1_j6778_visit001_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=93
+  f200w_nrcb1_j6778_visit001_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=106
+  f200w_nrcb1_j6778_visit001_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=88
+  f200w_nrcb1_j6778_visit001_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=106
+  f200w_nrcb1_j6778_visit002_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=57
+  f200w_nrcb1_j6778_visit002_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=42
+  f200w_nrcb1_j6778_visit002_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=101
+  f200w_nrcb1_j6778_visit002_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=204
+  f200w_nrcb1_j6778_visit003_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=222
+  f200w_nrcb1_j6778_visit003_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=248
+  f200w_nrcb1_j6778_visit003_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=484
+  f200w_nrcb1_j6778_visit003_vgroup02105_exp00  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=900
+  f200w_nrcb2_j6778_visit001_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=73
+  f200w_nrcb2_j6778_visit001_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=100
+  f200w_nrcb2_j6778_visit001_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=93
+  f200w_nrcb2_j6778_visit001_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=200
+  f200w_nrcb2_j6778_visit002_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=268
+  f200w_nrcb2_j6778_visit002_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=274
+  f200w_nrcb2_j6778_visit002_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=220
+  f200w_nrcb2_j6778_visit002_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=189
+  f200w_nrcb2_j6778_visit003_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=263
+  f200w_nrcb2_j6778_visit003_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=221
+  f200w_nrcb2_j6778_visit003_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=352
+  f200w_nrcb2_j6778_visit003_vgroup02105_exp00  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=375
+  f200w_nrcb3_j6778_visit001_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=127
+  f200w_nrcb3_j6778_visit001_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=112
+  f200w_nrcb3_j6778_visit001_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=204
+  f200w_nrcb3_j6778_visit001_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=226
+  f200w_nrcb3_j6778_visit002_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=266
+  f200w_nrcb3_j6778_visit002_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=357
+  f200w_nrcb3_j6778_visit002_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=347
+  f200w_nrcb3_j6778_visit002_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=291
+  f200w_nrcb3_j6778_visit003_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=1039
+  f200w_nrcb3_j6778_visit003_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=865
+  f200w_nrcb3_j6778_visit003_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=963
+  f200w_nrcb3_j6778_visit003_vgroup02105_exp00  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=772
+  f200w_nrcb4_j6778_visit001_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=337
+  f200w_nrcb4_j6778_visit001_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=321
+  f200w_nrcb4_j6778_visit001_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=580
+  f200w_nrcb4_j6778_visit001_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=710
+  f200w_nrcb4_j6778_visit002_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=239
+  f200w_nrcb4_j6778_visit002_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=195
+  f200w_nrcb4_j6778_visit002_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=306
+  f200w_nrcb4_j6778_visit002_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=429
+  f200w_nrcb4_j6778_visit003_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=325
+  f200w_nrcb4_j6778_visit003_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=412
+  f200w_nrcb4_j6778_visit003_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=455
+  f200w_nrcb4_j6778_visit003_vgroup02105_exp00  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=529
+
+### f200w - anchor, exposures 1-4: pixel-frame scale (ppm) / rotation (") of median J
+det    n  table_ppm   rot-only          rot+scale         rot-scale(flip)
+nrca1  12    -34.0     +37.6  -4.41"      +3.6  -4.41"     +71.6  -4.41"
+nrca2  12    -19.9     +21.9  -2.40"      +1.9  -2.41"     +41.8  -2.40"
+nrca3  12    -21.4     +35.4  -1.36"     +14.0  -1.37"     +56.8  -1.27"
+nrca4  12    -13.5     +13.0  -5.65"      -0.5  -5.65"     +26.5  -5.65"
+nrcb1  12     +8.2     -11.2  -5.64"      -3.0  -5.64"     -19.4  -5.64"
+nrcb2  12    +12.2     -18.8  -0.76"      -6.7  -0.76"     -31.0  -0.76"
+nrcb3  12    +10.4     -30.0  -5.30"     -19.6  -5.30"     -40.4  -5.30"
+nrcb4  12    +13.5     -11.6  -1.34"      +1.9  -1.34"     -25.1  -1.32"

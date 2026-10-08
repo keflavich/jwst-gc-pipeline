@@ -1,0 +1,27 @@
+  f200w_nrca1_visit001_vgroup12101_exp00001_re  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=330
+  f200w_nrca1_visit001_vgroup12101_exp00002_re  rot=  +8.39"  scale= -34.0 ppm  max|scale shift|=1.39 mas  pairs=325
+  f200w_nrca2_visit001_vgroup12101_exp00001_re  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=365
+  f200w_nrca2_visit001_vgroup12101_exp00002_re  rot= -19.07"  scale= -19.9 ppm  max|scale shift|=0.80 mas  pairs=370
+  f200w_nrca3_visit001_vgroup12101_exp00001_re  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=456
+  f200w_nrca3_visit001_vgroup12101_exp00002_re  rot= -30.86"  scale= -21.4 ppm  max|scale shift|=0.88 mas  pairs=457
+  f200w_nrca4_visit001_vgroup12101_exp00001_re  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=441
+  f200w_nrca4_visit001_vgroup12101_exp00002_re  rot=  -1.32"  scale= -13.5 ppm  max|scale shift|=0.55 mas  pairs=430
+  f200w_nrcb1_visit001_vgroup12101_exp00001_re  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=745
+  f200w_nrcb1_visit001_vgroup12101_exp00002_re  rot=  -0.38"  scale=  +8.2 ppm  max|scale shift|=0.33 mas  pairs=733
+  f200w_nrcb2_visit001_vgroup12101_exp00001_re  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=566
+  f200w_nrcb2_visit001_vgroup12101_exp00002_re  rot=  -0.32"  scale= +12.2 ppm  max|scale shift|=0.50 mas  pairs=574
+  f200w_nrcb3_visit001_vgroup12101_exp00001_re  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=784
+  f200w_nrcb3_visit001_vgroup12101_exp00002_re  rot=  +0.32"  scale= +10.4 ppm  max|scale shift|=0.42 mas  pairs=788
+  f200w_nrcb4_visit001_vgroup12101_exp00001_re  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=522
+  f200w_nrcb4_visit001_vgroup12101_exp00002_re  rot=  -0.34"  scale= +13.5 ppm  max|scale shift|=0.56 mas  pairs=513
+
+### f200w - anchor, exposures 1-2: pixel-frame scale (ppm) / rotation (") of median J
+det    n  table_ppm   rot-only          rot+scale         rot-scale(flip)
+nrca1   2    -34.0     +42.1  -2.29"      +8.1  -2.29"     +76.1  -2.29"
+nrca2   2    -19.9     +20.2  -1.72"      +0.3  -1.72"     +40.1  -1.72"
+nrca3   2    -21.4     +22.2  +0.49"      +0.8  +0.49"     +43.6  +0.49"
+nrca4   2    -13.5     +15.5  -0.03"      +2.0  -0.03"     +29.0  -0.03"
+nrcb1   2     +8.2      +1.9  +0.06"     +10.1  +0.06"      -6.3  +0.06"
+nrcb2   2    +12.2     -17.0  +0.25"      -4.8  +0.25"     -29.2  +0.25"
+nrcb3   2    +10.4     -18.0  +0.77"      -7.6  +0.77"     -28.4  +0.77"
+nrcb4   2    +13.5     -17.3  -0.80"      -3.8  -0.80"     -30.8  -0.80"
