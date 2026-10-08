@@ -1596,6 +1596,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm_strong=0,
                               low_fit_quality_qfit=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
+                              prev_vetted_skycoord=None,
+                              hysteresis_qfit_max=0.0,
+                              hysteresis_snr_min=10.0,
+                              hysteresis_match_arcsec=0.0,
+                              hysteresis_satstar_guard_arcsec=0.0,
+                              hysteresis_satstar_skycoord=None,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
 
@@ -1624,6 +1630,18 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     a "star turned from extended emission" is physically impossible, so the
     qfit gate (which conflates blend-degraded real stars with emission knots)
     is replaced by prominence + S/N alone.  See the block comment below.
+
+    PREVIOUS-PHASE keep (``hysteresis_qfit_max > 0``, NIRCam path): a source
+    within ``hysteresis_match_arcsec`` of a row of the previous phase's vetted
+    catalog (``prev_vetted_skycoord``) is kept while its qfit stays below
+    ``hysteresis_qfit_max`` and its S/N (flux / flux_err) stays at or above
+    ``hysteresis_snr_min``.  A non-saturated source within
+    ``hysteresis_satstar_guard_arcsec`` of an ``is_saturated`` row, or of a
+    position in ``hysteresis_satstar_skycoord`` (the merge's satstar rows
+    before the in-field duplicate collapse), gets no previous-phase keep
+    (0 = no guard).  The overshoot drop, the
+    structure-noise prune and the extended-emission prominence gate still
+    apply to it.  See the block comment at the keep.
 
     ``snr_floor_propagated``: the local S/N floor (``local_snr_min``) uses
     flux / flux_err_prop, the uncertainty of the merged flux, in place of
@@ -2179,6 +2197,83 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   f"qfit ignored; {int(sky_clean.sum())}/{n} sources on clean sky)",
                   flush=True)
 
+    # PREVIOUS-PHASE (HYSTERESIS) keep.  Each phase re-vets its merged catalog
+    # from scratch, so a star whose qfit or S/N sits near a branch threshold
+    # flips in and out between phases: kept at phase K (and subtracted), it
+    # is refitted at K+1, a small qfit change drops it, and the K+1 residual
+    # shows the whole star again.  On the reference cutouts (cr01 runs, 11
+    # seeds x 4 fields, m2..m7) 398 stars were vetted at K and vetted out at
+    # K+1; 229 left a star-like residual.  The only keep branch they passed
+    # at K was the bright-isolated keep for 142 (superdense F212N: median
+    # qfit 0.37 at K, 0.42 at K+1, across its 0.4 cap), qfit <= qfit_max for
+    # 55 and flags==1 for 53.  Requiring qfit < 0.6 and S/N >= 10 at K+1
+    # keeps 181 of the 398, 137 of them star-like residuals; the other 44
+    # are bright (median S/N 53) stars whose residual did not read as a
+    # star.  The tier only
+    # re-admits a source the previous phase already kept, so it adds no new
+    # detections; the hard gates below (overshoot, structure prune, the
+    # extended-emission prominence gate) still apply to it.
+    if (hysteresis_qfit_max > 0 and hysteresis_match_arcsec > 0
+            and prev_vetted_skycoord is not None and len(prev_vetted_skycoord)
+            and 'skycoord' in t.colnames and min_prominence <= 0):
+        # local import: SkyCoord is a local name of this function (imported
+        # in the branches above), so the module-level name is not visible
+        from astropy.coordinates import SkyCoord
+        _hsc = SkyCoord(t['skycoord'])
+        _pv = prev_vetted_skycoord[np.isfinite(prev_vetted_skycoord.ra.deg)
+                                   & np.isfinite(prev_vetted_skycoord.dec.deg)]
+        _hfin = np.isfinite(_hsc.ra.deg) & np.isfinite(_hsc.dec.deg)
+        _hmatch = np.zeros(n, dtype=bool)
+        if _hfin.any() and len(_pv):
+            _, _hsep, _ = _hsc[_hfin].match_to_catalog_sky(_pv)
+            _hmatch[_hfin] = _hsep.arcsec <= float(hysteresis_match_arcsec)
+        with np.errstate(invalid='ignore'):
+            _hyst = (_hmatch & np.isfinite(qf) & (qf < float(hysteresis_qfit_max))
+                     & np.isfinite(snr) & (snr >= float(hysteresis_snr_min)))
+        # satstar guard: in superdense F405N, 27 of the 50 sources only the
+        # keep retained were over-subtracted at m7 (residual S/N <= -3), all
+        # 0.11-0.63" (0.8-4.7 FWHM) from a saturated star: wing structure
+        # the previous phase fitted as a star.  The kept F212N stars lie
+        # 2.5-9.5 FWHM from a satstar, so the radius scales with the FWHM
+        # (the caller passes it in arcsec).  The saturated rows themselves
+        # are not guarded.  The centres are the is_saturated rows plus the
+        # merge's satstar rows before the in-field duplicate collapse
+        # (``hysteresis_satstar_skycoord``): that collapse keeps one of a
+        # saturated star's position estimates, and the others lie up to
+        # ~0.7" from it (superdense F405N m7: 18 of 37 rows collapsed).
+        # Guarding the kept row alone left 9 of the 27 over-subtracted
+        # sources, 0.61-0.79" from it and 0.48-0.63" from a collapsed one.
+        _n_hguard = 0
+        if hysteresis_satstar_guard_arcsec > 0:
+            if 'is_saturated' in t.colnames:
+                _hiss = t['is_saturated']
+                _hiss = np.asarray(_hiss.filled(False) if hasattr(_hiss, 'filled')
+                                   else _hiss, dtype=bool)
+            else:
+                _hiss = np.zeros(n, dtype=bool)
+            _hcen = _hsc[_hiss & _hfin]
+            if hysteresis_satstar_skycoord is not None and len(hysteresis_satstar_skycoord):
+                _hx = hysteresis_satstar_skycoord
+                _hx = _hx[np.isfinite(_hx.ra.deg) & np.isfinite(_hx.dec.deg)]
+                if len(_hx):
+                    _hcen = (SkyCoord([_hcen.icrs, _hx.icrs]) if len(_hcen)
+                             else _hx.icrs)
+            if len(_hcen) and _hfin.any():
+                _hnear = np.zeros(n, dtype=bool)
+                _, _hsd, _ = _hsc[_hfin].match_to_catalog_sky(_hcen)
+                _hnear[_hfin] = _hsd.arcsec <= float(hysteresis_satstar_guard_arcsec)
+                _hnear &= ~_hiss
+                _n_hguard = int(np.sum(_hyst & _hnear & ~keep))
+                _hyst &= ~_hnear
+        _n_hyst = int(np.sum(_hyst & ~keep))
+        keep = keep | _hyst
+        print(f"[{label}] previous-phase keep: +{_n_hyst} vetted in the previous "
+              f"phase (within {hysteresis_match_arcsec:.3g}\") with qfit < "
+              f"{hysteresis_qfit_max:g} and S/N >= {hysteresis_snr_min:g}; "
+              f"{_n_hguard} refused within {hysteresis_satstar_guard_arcsec:.3g}\" "
+              f"of a saturated star",
+              flush=True)
+
     # LOW-FIT-QUALITY flag: mark kept sources whose fit is poor (qfit above the
     # threshold) so downstream photometry can cut them while positions are kept.
     # Only added when the STRONG tier is active or the user explicitly requests it,
@@ -2334,6 +2429,46 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 # (in-field dedup exemption, per-frame seed protection).  Used by
 # run_manual_pipeline and do_photometry_step_manual.
 _EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2', 'ngc6334')
+
+# The vetted catalog the previous-phase keep of each phase reads:
+# phase -> (merge label, resbgsub) of the phase before it.
+_PREV_VETTED_PHASE = {'m3': ('m2', False), 'm4': ('m3', False),
+                      'm5': ('m4', False), 'm6': ('m5', True),
+                      'm7': ('m6', True)}
+
+
+def _satstar_row_skycoord(tab):
+    """Sky positions of the ``is_saturated`` / ``replaced_saturated`` rows of
+    ``tab`` with finite coordinates, or None when it has none."""
+    if tab is None or not len(tab) or 'skycoord' not in tab.colnames:
+        return None
+    sat = np.zeros(len(tab), dtype=bool)
+    for col in ('is_saturated', 'replaced_saturated'):
+        if col in tab.colnames:
+            c = tab[col]
+            sat |= np.asarray(c.filled(False) if hasattr(c, 'filled') else c,
+                              dtype=bool)
+    if not sat.any():
+        return None
+    sc = SkyCoord(tab['skycoord'][sat])
+    sc = sc[np.isfinite(sc.ra.deg) & np.isfinite(sc.dec.deg)]
+    return sc if len(sc) else None
+
+
+def _hysteresis_radii(filt, basepath=None, satstar_guard_fwhm=0.0):
+    """(match radius, satstar guard radius) in arcsec of the previous-phase
+    keep for ``filt``: 0.5 FWHM and ``satstar_guard_fwhm`` FWHM.  The FWHM
+    comes from ``basepath``'s ``reduction/fwhm_table.ecsv`` when it exists,
+    else the packaged table (the table the satstar replacement reads).  A
+    band missing from the table gives None (the keep is off)."""
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    ftab = Table.read(fwhm_table_path(basepath, _L._instrument_override()))
+    row = ftab[np.char.upper(np.asarray(ftab['Filter']).astype(str))
+               == str(filt).upper()]
+    if not len(row):
+        return None
+    fwhm = float(row['PSF FWHM (arcsec)'][0])
+    return 0.5 * fwhm, float(satstar_guard_fwhm) * fwhm
 
 
 def _is_extended_emission(options):
@@ -9294,6 +9429,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # ARE the same field).  _combsuf is set next to _vtok above.
                 combined_vetted_path = merged_path.replace('.fits', f'{_combsuf}_vetted.fits')
                 merged = Table.read(merged_path)
+                # the satstar rows before the collapse below, for the
+                # previous-phase keep's satstar guard
+                _sat_precollapse = _satstar_row_skycoord(merged)
                 # post-merge off-FOV cleanup: (A) one row per off-FOV satstar
                 # (the per-frame fits scatter wider than the 0.15" satstar
                 # dedup), (B) drop NON-satstar rows that fall >5 PSF widths
@@ -9395,6 +9533,32 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                      else 0.0)
                 else:
                     _ext_prom_min = _ext_prom_opt
+                # previous-phase keep: this module/band's vetted catalog of
+                # the phase before (the per-obs file this run wrote there)
+                _hyst_qmax = float(mopt(opts_phase, 'manual_ext_hysteresis_qfit_max'))
+                _hyst_sc, _hyst_r, _hyst_guard = None, 0.0, 0.0
+                if (_hyst_qmax > 0 and not _miri_field
+                        and phase in _PREV_VETTED_PHASE):
+                    _hpl, _hprs = _PREV_VETTED_PHASE[phase]
+                    _hpath = _merged_path(_hpl, module, filt, _hprs).replace(
+                        '.fits', f'{_vtok}_vetted.fits')
+                    if os.path.exists(_hpath):
+                        _htab = Table.read(_hpath)
+                        if len(_htab) and 'skycoord' in _htab.colnames:
+                            _hradii = _hysteresis_radii(
+                                filt, basepath, float(mopt(
+                                    opts_phase, 'manual_ext_hysteresis_satstar_guard_fwhm')))
+                            if _hradii is not None:
+                                _hyst_sc = SkyCoord(_htab['skycoord'])
+                                _hyst_r, _hyst_guard = _hradii
+                            else:
+                                print(f"manual [{phase}] {filt}/{module}: {filt} not in "
+                                      f"the FWHM table; previous-phase keep off",
+                                      flush=True)
+                    else:
+                        print(f"manual [{phase}] {filt}/{module}: no previous-phase "
+                              f"vetted catalog {_hpath}; previous-phase keep off",
+                              flush=True)
                 vetted = _filter_extended_emission(
                     merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                     qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
@@ -9438,6 +9602,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         opts_phase, 'manual_sky_clean_local_max_err')),
                     err_i2d_image=e_i2d,
                     struct_x=0.0, struct_y=0.0,  # prune at detection, not here
+                    prev_vetted_skycoord=_hyst_sc,
+                    hysteresis_qfit_max=_hyst_qmax,
+                    hysteresis_snr_min=float(mopt(opts_phase, 'manual_ext_hysteresis_snr_min')),
+                    hysteresis_match_arcsec=_hyst_r,
+                    hysteresis_satstar_guard_arcsec=_hyst_guard,
+                    hysteresis_satstar_skycoord=_sat_precollapse,
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)
                 # -> the un-tokened all-obs vetted catalog, which is the final
