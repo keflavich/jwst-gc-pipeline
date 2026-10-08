@@ -60,6 +60,15 @@ Guards (the row is skipped and the reason reported)
   / brick F212N: 0.28 / 0.32 / 0.26), so the mean of four carries ~0.15 mas per
   axis; 0.5 mas is ~2.5 sigma on the magnitude.
 
+  The threshold sits below m2's own floor (4 or 8 mas) because the two
+  thresholds govern different quantities.  m2's floor is set for the
+  per-detector distortion term, which a module-locked row cannot express:
+  applying the misaligned detectors' mean of that term leaves the term in the
+  frames, and the re-tie loop does not converge (ASTROMETRY_CHECKPOINTS.md,
+  "The m2 correction floor").  The all-member row mean is the module-common
+  part.  The row expresses it exactly and it repeats across runs (above), so
+  its threshold follows its measurement noise.
+
 Whole-record refusals: a stage other than m2, ``passed`` not True, or a record
 correction whose visit token disagrees with the proposal/observation given.
 

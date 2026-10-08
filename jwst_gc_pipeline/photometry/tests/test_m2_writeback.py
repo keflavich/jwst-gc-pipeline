@@ -8,6 +8,7 @@ of the catalog they were measured on.
 """
 import json
 import os
+import re
 
 import numpy as np
 import pytest
@@ -373,7 +374,18 @@ def test_the_script_is_a_dry_run_unless_told_to_write(tmp_path, capsys):
     args = ["--basepath", base, "--proposal", PROP, "--field", OBS,
             "--filter", "F212N"]
     assert script.main(args) == 0
-    assert "Dry run" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Dry run" in out
+    tol = re.search(r"RAOFFSET_DISAGREE_TOL_ARCSEC=(\S+) \\$", out, re.M)
+    assert float(tol.group(1)) == pytest.approx(
+        0.4 * max(abs(ROW1_MEAN[0]) / COSD, abs(ROW1_MEAN[1])) / 1000.0, rel=5e-3)
+    block = out.split("Reduction:\n")[1].split("\nDry run")[0]
+    sbatch = block.replace("\\\n", " ").split()
+    assert sbatch[:3] == ["sbatch", "--array=0-0", "--qos=astronomy-dept-b"]
+    assert f"--job-name=sgrb2{PROP}-o{OBS}-reduce-m2wb" in sbatch
+    assert 'FILTERS="F212N"' in sbatch[4]
+    assert os.path.exists(sbatch[-1]) and sbatch[-1].endswith(
+        "submit_reduction.sbatch")
     assert list(Table.read(path)[TABLE_RA_COL]) == list(before[TABLE_RA_COL])
     assert script.main(args + ["--write"]) == 0
     assert "WROTE 1 row(s)" in capsys.readouterr().out
