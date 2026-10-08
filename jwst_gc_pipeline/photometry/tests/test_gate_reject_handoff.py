@@ -1013,6 +1013,29 @@ def test_peak_handoff_collapses_a_lost_core_to_one_position():
     assert float(d.min()) < 1e-9
 
 
+def test_peak_handoff_gives_one_position_per_flat_top():
+    """A flat top of tied values (here a 2x2 block at the brightest star)
+    gives one position at its centre, not one per tied pixel."""
+    img, dq = _merged_scene()
+    x0, y0 = int(round(MERGED[0][0])), int(round(MERGED[0][1]))
+    img[y0:y0 + 2, x0:x0 + 2] = img.max() + 1.0
+    xy = C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img,
+                                        peak_min_area=40)
+    assert xy.shape == (4, 2)
+    d = np.hypot(xy[:, 0] - (x0 + 0.5), xy[:, 1] - (y0 + 0.5))
+    assert int((d < 2).sum()) == 1
+    assert float(d.min()) < 1e-9
+
+
+def test_peak_handoff_logs_positions_per_component(capsys):
+    img, dq = _merged_scene()
+    C._unaccepted_sat_component_xy(dq, None, FWHM, sci=img, label='t',
+                                   peak_min_area=40)
+    out = capsys.readouterr().out
+    assert '1 of >= 40 px handed off at 3 peak(s)' in out
+    assert 'median 3 / max 3 per component' in out
+
+
 def _run_restored_pass(img, dq, handoff_xy):
     """``_run_pass`` with the frame preparation's pixel restore applied."""
     err = np.ones(SHAPE)

@@ -444,10 +444,11 @@ def _sat_component_peak_xy(sci, dqarr, lab, labels, fwhm_pix, data_floor=0.0):
     Usable pixels have a finite ``sci`` value and no ``DO_NOT_USE`` flag.  A
     usable pixel is a peak when it is the maximum of the component pixels in
     the ``2 * ceil(fwhm_pix) + 1`` box around it, and, with ``data_floor >
-    0``, reaches the floor.  Unusable component pixels (a truly-lost core)
-    count as brighter than any usable pixel, so the ring around a lost core
-    yields no peak; each connected group of them gives one position, its
-    centre of mass.
+    0``, reaches the floor.  Touching peak pixels (a flat top of tied values)
+    give one position, their centre of mass.  Unusable component pixels (a
+    truly-lost core) count as brighter than any usable pixel, so the ring
+    around a lost core yields no peak; each connected group of them gives one
+    position, its centre of mass.
 
     Parameters
     ----------
@@ -483,8 +484,10 @@ def _sat_component_peak_xy(sci, dqarr, lab, labels, fwhm_pix, data_floor=0.0):
                                            cval=-np.inf)))
     if data_floor is not None and float(data_floor) > 0:
         peak &= vals >= float(data_floor)
-    yy, xx = np.nonzero(peak)
-    xy = np.column_stack([xx, yy]).astype(float)
+    # a flat top (tied values) marks every pixel of it; keep one position
+    pl, npk = _ndi.label(peak, structure=np.ones((3, 3), dtype=int))
+    xy = np.asarray(_ndi.center_of_mass(peak, pl, np.arange(1, npk + 1)),
+                    dtype=float).reshape(-1, 2)[:, ::-1]
     if lost.any():
         hl, nh = _ndi.label(lost)
         hc = np.asarray(_ndi.center_of_mass(lost, hl, np.arange(1, nh + 1)),
@@ -621,8 +624,16 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
                     sci_f, dqarr, lab, idx[big], fwhm_pix,
                     data_floor=data_floor)
                 n_peak_comp = int(big.sum())
+                # positions per large component (lost-core centres included)
+                py = np.clip(np.rint(peak_xy[:, 1]).astype(int), 0,
+                             lab.shape[0] - 1)
+                px = np.clip(np.rint(peak_xy[:, 0]).astype(int), 0,
+                             lab.shape[1] - 1)
+                per = np.bincount(lab[py, px], minlength=n + 1)[idx[big]]
                 floor_txt += (f"{n_peak_comp} of >= {int(peak_min_area)} "
-                              f"px handed off at {len(peak_xy)} peak(s), ")
+                              f"px handed off at {len(peak_xy)} peak(s), "
+                              f"median {np.median(per):g} / max {per.max()} "
+                              f"per component, ")
                 keep = keep & ~big
                 xy = np.vstack([xy[keep], peak_xy])
             else:
