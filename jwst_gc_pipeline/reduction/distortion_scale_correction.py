@@ -26,7 +26,10 @@ pixel -> sky Jacobian.  Evidence (#1137):
 
 The origin is not known.  The correction puts F200W on the common scale of
 the other SW bands, measured empirically; it says nothing about which of the
-two is closer to the true plate scale.
+two is closer to the true plate scale.  The module-B rows (+8..+14 ppm) are
+comparable to the 10-30 ppm visit-to-visit scatter of single-visit fits; the
+module-A rows and the A-minus-B contrast (about 33 ppm) are the
+well-determined part.
 
 WHAT THIS APPLIES
 -----------------
