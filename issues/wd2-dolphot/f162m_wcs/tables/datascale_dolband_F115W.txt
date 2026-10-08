@@ -1,0 +1,43 @@
+dolphot F115W anchor: 3663 stars
+  f150w_nrcb1_visit001_vgroup10101_exp0000  median(frame-anchor)=(-34.33,-15.03)  solver g+cell=(+34.33,+15.03)
+  f150w_nrcb1_visit001_vgroup10101_exp0000  median(frame-anchor)=(-34.41,-15.98)  solver g+cell=(+34.41,+15.98)
+  f150w_nrcb2_visit001_vgroup10101_exp0000  median(frame-anchor)=(-30.87,-18.91)  solver g+cell=(+30.87,+18.91)
+  f150w_nrcb2_visit001_vgroup10101_exp0000  median(frame-anchor)=(-31.00,-19.48)  solver g+cell=(+31.00,+19.48)
+  f150w_nrcb3_visit001_vgroup10101_exp0000  median(frame-anchor)=(-30.23,-10.99)  solver g+cell=(+30.23,+10.99)
+  f150w_nrcb3_visit001_vgroup10101_exp0000  median(frame-anchor)=(-30.27,-11.98)  solver g+cell=(+30.27,+11.98)
+  f150w_nrcb4_visit001_vgroup10101_exp0000  median(frame-anchor)=(-27.20,-15.64)  solver g+cell=(+27.20,+15.64)
+  f150w_nrcb4_visit001_vgroup10101_exp0000  median(frame-anchor)=(-27.47,-16.60)  solver g+cell=(+27.47,+16.60)
+
+### f150w - dolphot F115W (m6): per-detector linear fit, exposures ['00001', '00002']
+det    n_exp  c0 dRA*  c0 dDec (mas, module-median removed)  scale(ppm)  rot(arcsec)  pairs  sigma(mas)
+nrcb1   2      -3.72    +0.36       J=[+0.0004 +0.0008; +0.0003 -0.0005] mas/pix   |J|-invariants: (tr -0.0001, curl -0.0005) (tr- +0.0010, curl+ +0.0011)  236  0.6
+nrcb2   2      -0.24    -3.87       J=[+0.0005 -0.0004; -0.0016 +0.0017] mas/pix   |J|-invariants: (tr +0.0022, curl -0.0012) (tr- -0.0012, curl+ -0.0019)  114  0.5
+nrcb3   2      +0.24    +4.41       J=[-0.0005 +0.0008; -0.0010 +0.0004] mas/pix   |J|-invariants: (tr -0.0000, curl -0.0018) (tr- -0.0009, curl+ -0.0002)  258  0.5
+nrcb4   2      +3.36    -0.36       J=[+0.0002 -0.0004; -0.0003 +0.0000] mas/pix   |J|-invariants: (tr +0.0003, curl +0.0001) (tr- +0.0002, curl+ -0.0007)  52  0.4
+  f182m_nrca1_visit001_vgroup16101_exp0000  median(frame-anchor)=(-41.92,+5.79)  solver g+cell=(+41.92,-5.79)
+  f182m_nrca1_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.27,+4.66)  solver g+cell=(+42.27,-4.66)
+  f182m_nrca2_visit001_vgroup16101_exp0000  median(frame-anchor)=(-41.97,+5.31)  solver g+cell=(+41.97,-5.31)
+  f182m_nrca2_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.28,+3.99)  solver g+cell=(+42.28,-3.99)
+  f182m_nrca3_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.88,+5.83)  solver g+cell=(+42.88,-5.83)
+  f182m_nrca3_visit001_vgroup16101_exp0000  median(frame-anchor)=(-43.20,+4.69)  solver g+cell=(+43.20,-4.69)
+  f182m_nrca4_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.87,+5.17)  solver g+cell=(+42.87,-5.17)
+  f182m_nrca4_visit001_vgroup16101_exp0000  median(frame-anchor)=(-43.04,+3.94)  solver g+cell=(+43.04,-3.94)
+  f182m_nrcb1_visit001_vgroup16101_exp0000  median(frame-anchor)=(-44.58,+5.49)  solver g+cell=(+44.58,-5.49)
+  f182m_nrcb1_visit001_vgroup16101_exp0000  median(frame-anchor)=(-44.69,+4.38)  solver g+cell=(+44.69,-4.38)
+  f182m_nrcb2_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.01,+3.93)  solver g+cell=(+42.01,-3.93)
+  f182m_nrcb2_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.18,+2.98)  solver g+cell=(+42.18,-2.98)
+  f182m_nrcb3_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.35,+7.19)  solver g+cell=(+42.35,-7.19)
+  f182m_nrcb3_visit001_vgroup16101_exp0000  median(frame-anchor)=(-42.55,+6.09)  solver g+cell=(+42.55,-6.09)
+  f182m_nrcb4_visit001_vgroup16101_exp0000  median(frame-anchor)=(-40.16,+4.71)  solver g+cell=(+40.16,-4.71)
+  f182m_nrcb4_visit001_vgroup16101_exp0000  median(frame-anchor)=(-40.42,+3.56)  solver g+cell=(+40.42,-3.56)
+
+### f182m - dolphot F115W (m6): per-detector linear fit, exposures ['00001', '00002']
+det    n_exp  c0 dRA*  c0 dDec (mas, module-median removed)  scale(ppm)  rot(arcsec)  pairs  sigma(mas)
+nrca1   2      +0.14    +0.28       J=[-0.0008 +0.0017; +0.0014 -0.0000] mas/pix   |J|-invariants: (tr -0.0008, curl -0.0002) (tr- -0.0008, curl+ +0.0031)  54  0.4
+nrca2   2      +0.07    -0.28       J=[+0.0025 -0.0027; -0.0029 -0.0026] mas/pix   |J|-invariants: (tr -0.0001, curl -0.0002) (tr- +0.0050, curl+ -0.0056)  71  0.6
+nrca3   2      -0.07    +0.36       J=[+0.0029 -0.0032; -0.0029 -0.0016] mas/pix   |J|-invariants: (tr +0.0013, curl +0.0004) (tr- +0.0046, curl+ -0.0061)  54  0.4
+nrca4   2      -0.52    -0.66       J=[-0.0007 +0.0004; +0.0007 +0.0005] mas/pix   |J|-invariants: (tr -0.0002, curl +0.0003) (tr- -0.0012, curl+ +0.0011)  71  0.6
+nrcb1   2      -2.44    +0.48       J=[+0.0002 +0.0007; +0.0003 -0.0004] mas/pix   |J|-invariants: (tr -0.0001, curl -0.0004) (tr- +0.0006, curl+ +0.0010)  390  0.6
+nrcb2   2      +0.27    -1.76       J=[+0.0007 -0.0005; -0.0017 +0.0016] mas/pix   |J|-invariants: (tr +0.0022, curl -0.0012) (tr- -0.0009, curl+ -0.0021)  185  0.5
+nrcb3   2      -0.27    +2.37       J=[-0.0004 +0.0004; -0.0015 +0.0006] mas/pix   |J|-invariants: (tr +0.0001, curl -0.0019) (tr- -0.0010, curl+ -0.0011)  482  0.6
+nrcb4   2      +1.84    -0.48       J=[+0.0007 -0.0004; -0.0003 -0.0002] mas/pix   |J|-invariants: (tr +0.0006, curl +0.0001) (tr- +0.0009, curl+ -0.0007)  100  0.6
