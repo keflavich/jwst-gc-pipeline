@@ -1,0 +1,20 @@
+  o.append(dict(lA=np.asarray(G['lA']), do=-2.5 * np.log10(fl / np.asarray(G['fold5'])), nb=nb, pk=pk, fl=fl))
+  s1 = np.nanmedian([slope(r['lA'][r['nb'] > 0], r['do'][r['nb'] > 0]) for r in R])
+F150W: det  frac_masked  slope(no mask)  slope(masked)  median do(masked) - do(clean)   N
+  nrca1  0.016  -0.32  +nan  +0.0116  624
+  nrca2  0.016  -0.24  +nan  -0.0023  800
+  nrca3  0.024  -0.32  +nan  +0.0001  783
+  nrca4  0.024  -0.11  +nan  -0.0022  1000
+  nrcb1  0.037  -0.77  +0.62  -0.0011  1591
+  nrcb2  0.036  -0.67  -0.90  +0.0012  1288
+  nrcb3  0.046  -2.42  +0.03  -0.0019  1686
+  nrcb4  0.039  -0.39  +nan  -0.0043  1074
+F200W: det  frac_masked  slope(no mask)  slope(masked)  median do(masked) - do(clean)   N
+  nrca1  0.023  -0.01  +nan  -0.0022  873
+  nrca2  0.026  -0.02  +nan  +0.0001  1060
+  nrca3  0.015  +0.04  +nan  +0.0008  1178
+  nrca4  0.018  -0.00  +nan  +0.0005  1225
+  nrcb1  0.035  -0.20  +0.18  -0.0025  1885
+  nrcb2  0.016  +0.04  +nan  -0.0020  1540
+  nrcb3  0.015  +0.13  +nan  -0.1742  1878
+  nrcb4  0.020  -0.02  +nan  -0.0009  1383

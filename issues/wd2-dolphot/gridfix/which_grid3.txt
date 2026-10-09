@@ -1,0 +1,22 @@
+  do=-2.5 * np.log10(fl / np.asarray(G['fold5'])),
+  print(f'  {det}  {np.nanmedian(s_all):+.2f}  {np.nanmedian(s0):+.2f}  {np.nanmedian(s1):+.2f}   {frac:.3f}'
+F150W: per-frame slope of do on lA (median over frames per detector)
+  det    all   refit=0 refit=1  frac_refit  faint  mid   bright   med lbkg  med lbkg_resbgsub  med modelsub_bkg
+  nrca1  -0.32  -0.32  +nan   0.010   -0.30 -0.34 -0.22   +0.0477  +0.0477  +1.0380
+  nrca2  -0.23  -0.24  +nan   0.014   -0.11 -0.20 -0.33   +0.0516  +0.0516  +1.4204
+  nrca3  -0.30  -0.31  +nan   0.018   -0.18 -0.25 -0.54   +0.0531  +0.0531  +0.8354
+  nrca4  -0.10  -0.10  +nan   0.017   -0.14 -0.09 -0.09   +0.0646  +0.0646  +1.7895
+  nrcb1  -0.77  -0.75  +nan   0.015   -0.92 -0.61 -0.94   +0.0288  +0.0288  +2.7928
+  nrcb2  -0.65  -0.67  +nan   0.026   -0.38 -0.64 -0.98   +0.0586  +0.0586  +2.5470
+  nrcb3  -2.29  -2.39  +nan   0.021   -0.83 -2.06 -3.09   +0.0173  +0.0173  +3.7114
+  nrcb4  -0.37  -0.39  +nan   0.026   -0.21 -0.40 -0.41   +0.0591  +0.0591  +2.2465
+F200W: per-frame slope of do on lA (median over frames per detector)
+  det    all   refit=0 refit=1  frac_refit  faint  mid   bright   med lbkg  med lbkg_resbgsub  med modelsub_bkg
+  nrca1  -0.01  -0.00  +nan   0.007   -0.05 +0.01 +0.00   +1.6723  +1.6723  +1.8827
+  nrca2  -0.02  -0.02  +nan   0.014   -0.14 -0.03 +0.02   +3.1049  +3.1049  +3.4949
+  nrca3  +0.04  +0.04  +nan   0.008   +0.08 +0.05 +0.05   +1.7466  +1.7466  +1.8940
+  nrca4  -0.00  +0.00  +nan   0.006   -0.09 +0.00 +0.05   +4.2316  +4.2316  +4.6332
+  nrcb1  -0.21  -0.21  +nan   0.011   -0.01 -0.12 -0.12   +5.2994  +5.2994  +6.1052
+  nrcb2  +0.04  +0.04  +nan   0.008   +0.13 +0.07 -0.06   +5.0246  +5.0246  +5.8968
+  nrcb3  +0.06  +0.08  +nan   0.015   +1.23 +0.59 -0.29   +7.2109  +7.2109  +7.7348
+  nrcb4  -0.01  -0.01  +nan   0.010   -0.08 +0.04 +0.00   +4.0348  +4.0348  +4.6871
