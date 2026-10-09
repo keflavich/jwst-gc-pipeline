@@ -811,7 +811,7 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
 
 def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
                             fwhm_pix, *, radius_fwhm=3.0,
-                            accepted_excl_fwhm=None, label=None):
+                            accepted_excl_fwhm=None, label='manual'):
     """Late-group SATURATED pixels of handed-off stars that the fit may use.
 
     Selects the SATURATED connected components that touch a hand-off position
@@ -856,7 +856,7 @@ def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
         None skips every component holding an accepted satstar centre; a
         value ``>= 0`` keeps them and leaves masked the pixels within this
         many FWHM of an accepted centre (0 leaves none masked).
-    label : str or None
+    label : str
         Log prefix of the line printed when ``accepted_excl_fwhm`` is set.
 
     Returns
