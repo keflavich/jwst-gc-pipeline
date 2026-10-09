@@ -1,0 +1,194 @@
+| field | band | det | B_dn 500-2000 | SAT rewritten off / on | buffer off / on | buffer only-off / only-on | buffer only-off: data / R_hdr (g0 + B) | SAT on/off by g0 <2k / 2-5k / 5-15k / >15k (n) |
+|---|---|---|---|---|---|---|---|---|
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcalong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcalong_ramp.fits
+satstar zeroframe: 25202 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcalong_ramp.fits
+satstar first frame: group0/first frame k = 1.593 (first frame ~1457) -> 1.523 (~18363), 8 bins from 29266 px; 1050 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 155478 px: R_faint=0.02577 (g0~2429) R_bright=0.02546 (g0~36880) R_bright/R_faint=0.988; R used at bright end=0.02546 (used/R_faint=0.988, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 4272 rim/core pixels from group-0 (R=0.02546); 19928 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcalong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcalong_ramp.fits
+satstar zeroframe: 25202 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcalong_ramp.fits
+satstar first frame: group0/first frame k = 1.593 (first frame ~1457) -> 1.523 (~18363), 8 bins from 29266 px; 1050 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 155478 px: R_faint=0.02577 (g0~2429) R_bright=0.02546 (g0~36880) R_bright/R_faint=0.988; R used at bright end=0.02546 (used/R_faint=0.988, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.02614 (PHOTMJSR / t(group 0)); measured bright-end R=0.02546 is 0.974x that
+satstar ZEROFRAME fit-anchor: recovered 3120 rim/core pixels from group-0 (R=0.02614); 19928 deep-core pixels remain masked
+| brick | F356W | nrcalong | +8 | 0 / 0 | 4272 / 3120 | 1152 / 0 | 1.084 | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcblong_ramp.fits
+satstar zeroframe: 58164 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.63 (first frame ~1381) -> 1.847 (~14210), 8 bins from 50838 px; 3768 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 275199 px: R_faint=0.01899 (g0~2425) R_bright=0.02344 (g0~35943) R_bright/R_faint=1.23; R used at bright end=0.02344 (used/R_faint=1.23, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 3110 rim/core pixels from group-0 (R=0.02344); 39816 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcblong_ramp.fits
+satstar zeroframe: 58164 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F356W/pipeline/jw01182004001_02101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.63 (first frame ~1381) -> 1.847 (~14210), 8 bins from 50838 px; 3768 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 275199 px: R_faint=0.01899 (g0~2425) R_bright=0.02344 (g0~35943) R_bright/R_faint=1.23; R used at bright end=0.02344 (used/R_faint=1.23, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.02353 (PHOTMJSR / t(group 0)); measured bright-end R=0.02344 is 0.996x that
+satstar ZEROFRAME fit-anchor: recovered 261 rim/core pixels from group-0 (R=0.02353); 39816 deep-core pixels remain masked
+| brick | F356W | nrcblong | -475 | 0 / 0 | 3110 / 261 | 2849 / 0 | 1.124 | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcalong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcalong_ramp.fits
+satstar zeroframe: 23340 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcalong_ramp.fits
+satstar first frame: group0/first frame k = 1.583 (first frame ~1546) -> 1.53 (~18213), 8 bins from 30872 px; 1040 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 177227 px: R_faint=0.02485 (g0~2429) R_bright=0.02455 (g0~36855) R_bright/R_faint=0.988; R used at bright end=0.02455 (used/R_faint=0.988, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 3241 rim/core pixels from group-0 (R=0.02455); 18105 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcalong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcalong_ramp.fits
+satstar zeroframe: 23340 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcalong_ramp.fits
+satstar first frame: group0/first frame k = 1.583 (first frame ~1546) -> 1.53 (~18213), 8 bins from 30872 px; 1040 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 177227 px: R_faint=0.02485 (g0~2429) R_bright=0.02455 (g0~36855) R_bright/R_faint=0.988; R used at bright end=0.02455 (used/R_faint=0.988, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.02496 (PHOTMJSR / t(group 0)); measured bright-end R=0.02455 is 0.984x that
+satstar ZEROFRAME fit-anchor: recovered 2564 rim/core pixels from group-0 (R=0.02496); 18105 deep-core pixels remain masked
+| brick | F444W | nrcalong | +13 | 0 / 0 | 3241 / 2564 | 677 / 0 | 1.089 | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: 51567 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.632 (first frame ~1412) -> 1.787 (~14358), 8 bins from 46997 px; 3591 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 271176 px: R_faint=0.01809 (g0~2425) R_bright=0.02294 (g0~35931) R_bright/R_faint=1.27; R used at bright end=0.02294 (used/R_faint=1.27, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 1960 rim/core pixels from group-0 (R=0.02294); 34127 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: 51567 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F444W/pipeline/jw01182004001_04101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.632 (first frame ~1412) -> 1.787 (~14358), 8 bins from 46997 px; 3591 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 271176 px: R_faint=0.01809 (g0~2425) R_bright=0.02294 (g0~35931) R_bright/R_faint=1.27; R used at bright end=0.02294 (used/R_faint=1.27, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.02304 (PHOTMJSR / t(group 0)); measured bright-end R=0.02294 is 0.996x that
+satstar ZEROFRAME fit-anchor: recovered 122 rim/core pixels from group-0 (R=0.02304); 34127 deep-core pixels remain masked
+| brick | F444W | nrcblong | -522 | 0 / 0 | 1960 / 122 | 1838 / 0 | 1.122 | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca2_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca2_ramp.fits
+satstar zeroframe: 6238 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca2_ramp.fits
+satstar first frame: group0/first frame k = 1.586 (first frame ~1490) -> 1.504 (~15393), 8 bins from 1640 px; 143 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 9154 px: R_faint=0.3188 (g0~2441) R_bright=0.3186 (g0~39832) R_bright/R_faint=0.999; R used at bright end=0.3186 (used/R_faint=0.999, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 92 rim/core pixels from group-0 (R=0.3186); 1234 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca2_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca2_ramp.fits
+satstar zeroframe: 6238 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca2_ramp.fits
+satstar first frame: group0/first frame k = 1.586 (first frame ~1490) -> 1.504 (~15393), 8 bins from 1640 px; 143 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 9154 px: R_faint=0.3188 (g0~2441) R_bright=0.3186 (g0~39832) R_bright/R_faint=0.999; R used at bright end=0.3186 (used/R_faint=0.999, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.3054 (PHOTMJSR / t(group 0)); measured bright-end R=0.3186 is 1.04x that
+satstar ZEROFRAME fit-anchor: recovered 124 rim/core pixels from group-0 (R=0.3054); 1234 deep-core pixels remain masked
+| sgrb2 | F210M | nrca2 | +113 | 0 / 0 | 92 / 124 | 0 / 32 | nan | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrcb1_ramp.fits
+satstar zeroframe: 10213 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrcb1_ramp.fits
+satstar first frame: group0/first frame k = 1.589 (first frame ~1511) -> 1.504 (~17200), 8 bins from 1433 px; 284 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 6658 px: R_faint=0.3097 (g0~2441) R_bright=0.3117 (g0~39675) R_bright/R_faint=1.01; R used at bright end=0.3117 (used/R_faint=1.01, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 38 rim/core pixels from group-0 (R=0.3117); 2949 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrcb1_ramp.fits
+satstar zeroframe: 10213 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrcb1_ramp.fits
+satstar first frame: group0/first frame k = 1.589 (first frame ~1511) -> 1.504 (~17200), 8 bins from 1433 px; 284 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 6658 px: R_faint=0.3097 (g0~2441) R_bright=0.3117 (g0~39675) R_bright/R_faint=1.01; R used at bright end=0.3117 (used/R_faint=1.01, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.2994 (PHOTMJSR / t(group 0)); measured bright-end R=0.3117 is 1.04x that
+satstar ZEROFRAME fit-anchor: recovered 56 rim/core pixels from group-0 (R=0.2994); 2949 deep-core pixels remain masked
+| sgrb2 | F210M | nrcb1 | +89 | 0 / 0 | 38 / 56 | 4 / 22 | 1.083 | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca2_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca2_ramp.fits
+satstar zeroframe: 5691 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca2_ramp.fits
+satstar first frame: group0/first frame k = 1.58 (first frame ~1525) -> 1.527 (~10411), 7 bins from 906 px; 98 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 5068 px: R_faint=0.1541 (g0~2441) R_bright=0.1578 (g0~39662) R_bright/R_faint=1.02; R used at bright end=0.1578 (used/R_faint=1.02, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 46 rim/core pixels from group-0 (R=0.1578); 900 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca2_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca2_ramp.fits
+satstar zeroframe: 5691 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca2_ramp.fits
+satstar first frame: group0/first frame k = 1.58 (first frame ~1525) -> 1.527 (~10411), 7 bins from 906 px; 98 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 5068 px: R_faint=0.1541 (g0~2441) R_bright=0.1578 (g0~39662) R_bright/R_faint=1.02; R used at bright end=0.1578 (used/R_faint=1.02, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.1498 (PHOTMJSR / t(group 0)); measured bright-end R=0.1578 is 1.05x that
+satstar ZEROFRAME fit-anchor: recovered 67 rim/core pixels from group-0 (R=0.1498); 900 deep-core pixels remain masked
+| sgrb2 | F150W | nrca2 | +102 | 0 / 0 | 46 / 67 | 2 / 23 | 1.084 | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F480M/pipeline/jw05365001001_09101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F480M/pipeline/jw05365001001_09101_00001_nrcblong_ramp.fits
+satstar zeroframe: 57343 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F480M/pipeline/jw05365001001_09101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.989 (first frame ~1202) -> 1.815 (~10666), 8 bins from 3770 px; 843 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 25398 px: R_faint=0.09267 (g0~2425) R_bright=0.09649 (g0~35923) R_bright/R_faint=1.04; R used at bright end=0.09649 (used/R_faint=1.04, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 82 rim/core pixels from group-0 (R=0.09649); 3916 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F480M/pipeline/jw05365001001_09101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F480M/pipeline/jw05365001001_09101_00001_nrcblong_ramp.fits
+satstar zeroframe: 57343 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F480M/pipeline/jw05365001001_09101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.989 (first frame ~1202) -> 1.815 (~10666), 8 bins from 3770 px; 843 flagged px read the scaled first frame
+[zeroframe R-curve] 8 bin(s) from 25398 px: R_faint=0.09267 (g0~2425) R_bright=0.09649 (g0~35923) R_bright/R_faint=1.04; R used at bright end=0.09649 (used/R_faint=1.04, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.09041 (PHOTMJSR / t(group 0)); measured bright-end R=0.09649 is 1.07x that
+satstar ZEROFRAME fit-anchor: recovered 79 rim/core pixels from group-0 (R=0.09041); 3916 deep-core pixels remain masked
+| sgrb2 | F480M | nrcblong | +35 | 0 / 0 | 82 / 79 | 15 / 12 | 1.091 | - (0) / - (0) / - (0) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrc/F360M/pipeline/jw04147012001_08101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrc/F360M/pipeline/jw04147012001_08101_00001_nrcblong_ramp.fits
+satstar zeroframe: 90341 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrc/F360M/pipeline/jw04147012001_08101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.569 (first frame ~1361) -> 1.479 (~12486), 8 bins from 67332 px; 16211 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 4/5 (g0<7602 DN): R 0.03807 -> next 0.001149 rejected
+[zeroframe R-curve] 5 bin(s) from 14070 px: R_faint=0.05594 (g0~2420) R_bright=0.001149 (g0~11133) R_bright/R_faint=0.0205; R used at bright end=0.03807 (used/R_faint=0.681, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 3356 rim/core pixels from group-0 (R=0.03807); 15760 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrc/F360M/pipeline/jw04147012001_08101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrc/F360M/pipeline/jw04147012001_08101_00001_nrcblong_ramp.fits
+satstar zeroframe: 90341 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrc/F360M/pipeline/jw04147012001_08101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 1.569 (first frame ~1361) -> 1.479 (~12486), 8 bins from 67332 px; 16211 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 4/5 (g0<7602 DN): R 0.03807 -> next 0.001149 rejected
+[zeroframe R-curve] 5 bin(s) from 14070 px: R_faint=0.05594 (g0~2420) R_bright=0.001149 (g0~11133) R_bright/R_faint=0.0205; R used at bright end=0.03807 (used/R_faint=0.681, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.05445 (PHOTMJSR / t(group 0)); measured bright-end R=0.03807 is 0.699x that
+satstar ZEROFRAME fit-anchor: recovered 3488 rim/core pixels from group-0 (R=0.05445); 15760 deep-core pixels remain masked
+| sgrc | F360M | nrcblong | +28 | 3011 / 3011 | 345 / 477 | 49 / 181 | 1.014 | 0.973 (2035) / 0.986 (500) / 1.430 (314) / 1.430 (103) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb1_ramp.fits
+satstar zeroframe: 12199 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb1_ramp.fits
+satstar first frame: group0/first frame k = 2.622 (first frame ~880) -> 2.502 (~7998), 8 bins from 10786 px; 2572 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/4 (g0<3622 DN): R 0.08821 -> next 0.0004143 rejected
+[zeroframe R-curve] 4 bin(s) from 1686 px: R_faint=0.09025 (g0~2438) R_bright=0.0003308 (g0~7997) R_bright/R_faint=0.00367; R used at bright end=0.08821 (used/R_faint=0.977, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 63 rim/core pixels from group-0 (R=0.08821); 2736 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb1_ramp.fits
+satstar zeroframe: 12199 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb1_ramp.fits
+satstar first frame: group0/first frame k = 2.622 (first frame ~880) -> 2.502 (~7998), 8 bins from 10786 px; 2572 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/4 (g0<3622 DN): R 0.08821 -> next 0.0004143 rejected
+[zeroframe R-curve] 4 bin(s) from 1686 px: R_faint=0.09025 (g0~2438) R_bright=0.0003308 (g0~7997) R_bright/R_faint=0.00367; R used at bright end=0.08821 (used/R_faint=0.977, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.08889 (PHOTMJSR / t(group 0)); measured bright-end R=0.08821 is 0.992x that
+satstar ZEROFRAME fit-anchor: recovered 84 rim/core pixels from group-0 (R=0.08889); 2736 deep-core pixels remain masked
+| wd2 | F150W | nrcb1 | -12 | 33 / 33 | 30 / 51 | 0 / 21 | nan | 0.985 (23) / 1.005 (8) / 1.008 (1) / - (0) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb3_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb3_ramp.fits
+satstar zeroframe: 14934 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb3_ramp.fits
+satstar first frame: group0/first frame k = 2.675 (first frame ~861) -> 2.561 (~7372), 8 bins from 39798 px; 6617 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/4 (g0<3631 DN): R 0.09139 -> next 0.0007537 rejected
+[zeroframe R-curve] 4 bin(s) from 6635 px: R_faint=0.09388 (g0~2440) R_bright=0.0004268 (g0~8043) R_bright/R_faint=0.00455; R used at bright end=0.09139 (used/R_faint=0.973, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 186 rim/core pixels from group-0 (R=0.09139); 5350 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb3_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb3_ramp.fits
+satstar zeroframe: 14934 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F150W/pipeline/jw03523005001_10101_00001_nrcb3_ramp.fits
+satstar first frame: group0/first frame k = 2.675 (first frame ~861) -> 2.561 (~7372), 8 bins from 39798 px; 6617 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/4 (g0<3631 DN): R 0.09139 -> next 0.0007537 rejected
+[zeroframe R-curve] 4 bin(s) from 6635 px: R_faint=0.09388 (g0~2440) R_bright=0.0004268 (g0~8043) R_bright/R_faint=0.00455; R used at bright end=0.09139 (used/R_faint=0.973, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.08759 (PHOTMJSR / t(group 0)); measured bright-end R=0.09139 is 1.04x that
+satstar ZEROFRAME fit-anchor: recovered 1345 rim/core pixels from group-0 (R=0.08759); 5350 deep-core pixels remain masked
+| wd2 | F150W | nrcb3 | +16 | 100 / 100 | 86 / 1245 | 0 / 1159 | nan | 0.933 (61) / 0.954 (32) / 0.958 (6) / 0.958 (1) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F250M/pipeline/jw03523005001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F250M/pipeline/jw03523005001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: 65498 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F250M/pipeline/jw03523005001_04101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 5.462 (first frame ~497) -> 2.46 (~6078), 8 bins from 18746 px; 11192 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/6 (g0<3537 DN): R 0.059 -> next 0.0009809 rejected
+[zeroframe R-curve] 6 bin(s) from 3069 px: R_faint=0.06164 (g0~2419) R_bright=0.0002101 (g0~16177) R_bright/R_faint=0.00341; R used at bright end=0.059 (used/R_faint=0.957, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 689 rim/core pixels from group-0 (R=0.059); 5382 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F250M/pipeline/jw03523005001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F250M/pipeline/jw03523005001_04101_00001_nrcblong_ramp.fits
+satstar zeroframe: 65498 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F250M/pipeline/jw03523005001_04101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 5.462 (first frame ~497) -> 2.46 (~6078), 8 bins from 18746 px; 11192 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/6 (g0<3537 DN): R 0.059 -> next 0.0009809 rejected
+[zeroframe R-curve] 6 bin(s) from 3069 px: R_faint=0.06164 (g0~2419) R_bright=0.0002101 (g0~16177) R_bright/R_faint=0.00341; R used at bright end=0.059 (used/R_faint=0.957, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.06203 (PHOTMJSR / t(group 0)); measured bright-end R=0.059 is 0.951x that
+satstar ZEROFRAME fit-anchor: recovered 643 rim/core pixels from group-0 (R=0.06203); 5382 deep-core pixels remain masked
+| wd2 | F250M | nrcblong | -6 | 565 / 565 | 124 / 78 | 46 / 0 | 1.087 | 1.006 (369) / 1.030 (89) / 1.051 (66) / 1.051 (38) |
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F300M/pipeline/jw03523005001_12101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F300M/pipeline/jw03523005001_12101_00001_nrcblong_ramp.fits
+satstar zeroframe: 71381 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F300M/pipeline/jw03523005001_12101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 3.65 (first frame ~619) -> 2.467 (~5871), 8 bins from 29949 px; 16314 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/6 (g0<3538 DN): R 0.03454 -> next 0.001082 rejected
+[zeroframe R-curve] 6 bin(s) from 3849 px: R_faint=0.03598 (g0~2419) R_bright=0.0003342 (g0~16195) R_bright/R_faint=0.00929; R used at bright end=0.03454 (used/R_faint=0.96, guard=on)
+satstar ZEROFRAME fit-anchor: recovered 934 rim/core pixels from group-0 (R=0.03454); 6938 deep-core pixels remain masked
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F300M/pipeline/jw03523005001_12101_00001_nrcblong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F300M/pipeline/jw03523005001_12101_00001_nrcblong_ramp.fits
+satstar zeroframe: 71381 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/dolphot_benchmark/Q_integ/tree_main2/F300M/pipeline/jw03523005001_12101_00001_nrcblong_ramp.fits
+satstar first frame: group0/first frame k = 3.65 (first frame ~619) -> 2.467 (~5871), 8 bins from 29949 px; 16314 flagged px read the scaled first frame
+[zeroframe R-curve guard] truncated R(g0) curve at bin 2/6 (g0<3538 DN): R 0.03454 -> next 0.001082 rejected
+[zeroframe R-curve] 6 bin(s) from 3849 px: R_faint=0.03598 (g0~2419) R_bright=0.0003342 (g0~16195) R_bright/R_faint=0.00929; R used at bright end=0.03454 (used/R_faint=0.96, guard=on)
+[zeroframe R header] rim rewritten with R_header=0.03595 (PHOTMJSR / t(group 0)); measured bright-end R=0.03454 is 0.961x that
+satstar ZEROFRAME fit-anchor: recovered 913 rim/core pixels from group-0 (R=0.03595); 6938 deep-core pixels remain masked
+| wd2 | F300M | nrcblong | +3 | 770 / 770 | 164 / 143 | 25 / 4 | 1.089 | 0.999 (499) / 1.023 (119) / 1.041 (89) / 1.041 (57) |
