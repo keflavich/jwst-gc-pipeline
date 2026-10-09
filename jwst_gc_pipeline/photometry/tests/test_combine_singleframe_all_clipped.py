@@ -79,6 +79,7 @@ def test_all_clipped_source_keeps_a_finite_position_and_flux():
     assert row['nmatch'] == 4
     assert row['nmatch_good'] == 4
     assert np.isfinite(row['dflux_prop'])
+    assert bool(row['clip_fallback'])
 
 
 def test_the_fallback_is_logged(capsys):
@@ -97,3 +98,14 @@ def test_a_flux_outlier_frame_is_still_clipped():
     assert row['nmatch'] == 4
     assert row['nmatch_good'] == 3
     np.testing.assert_allclose(row['flux_avg'], OUTLIER_FLUX[:3].mean(), rtol=1e-5)
+    assert not bool(row['clip_fallback'])
+
+
+def test_clip_fallback_is_carried_into_the_shipped_minimal_table():
+    """``merge_individual_frames`` ships a minimal table built from an
+    allowlist, so the flag reaches the release only if it is named there."""
+    import inspect
+    src = inspect.getsource(merge_catalogs.merge_individual_frames)
+    block = src[src.index("for key in ('dra_avg'"):]
+    block = block[:block.index("minimal_table = Table(")]
+    assert "'clip_fallback'" in block

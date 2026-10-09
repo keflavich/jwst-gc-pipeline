@@ -722,7 +722,6 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print(f"Phase 1: the flux/ra/dec sigma clip masked every frame of "
               f"{int(_all_clipped.sum())} source(s); those use all their "
               f"finite frames", flush=True)
-    del _all_clipped
     nmatch_good = keepmask.sum(axis=1).astype(np.int32)
 
     # free clip objects (they reference the big arrays)
@@ -831,6 +830,14 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     newtbl['std_dec'] = std_dec
     newtbl['nmatch'] = nmatch
     newtbl['nmatch_good'] = nmatch_good
+    # nmatch_good == nmatch on a fallback row, the same as on a row with no
+    # clipped frame; this flag tells the two apart.
+    newtbl['clip_fallback'] = _all_clipped
+    newtbl.meta['clip_fallback'] = (
+        'True when the flux/ra/dec sigma clip masked every frame of this '
+        'source, so its averages use all frames with a finite flux and '
+        'position (#1160)')
+    del _all_clipped
     newtbl[f'{flux_colname}_avg'] = flux_avg
     newtbl[f'std_{flux_colname}_avg'] = std_flux_avg
     newtbl[f'{flux_error_colname}_avg'] = flux_err_avg
@@ -1805,7 +1812,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # the same spelling.  Same convention as flux_fit_avg -> flux_fit; the
     # *_allcols.fits table keeps the unambiguous names.)
     for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
-                'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
+                'clip_fallback', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                 'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
                 'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
                 'forced_refit_frac', 'forced_refit_nframes',
