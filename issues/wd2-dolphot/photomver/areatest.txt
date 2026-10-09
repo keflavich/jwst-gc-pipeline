@@ -1,0 +1,160 @@
+
+### F115W (N 2571): dm vs pred; OLS slope 1.48 +- 0.38 (r 0.08), Theil-Sen 1.16 [0.94, 1.38]; rms(pred) 0.0087; robust std dm 0.0397 -> dm - pred 0.0393
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0001, nrca2 1.0001, nrca3 1.0001, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 139 | +0.0168 | -0.0010 | +0.0187 | 0.116 | 0.085 |
+| nrca2 | 139 | +0.0090 | +0.0014 | +0.0056 | 0.027 | 0.033 |
+| nrca3 | 126 | +0.0433 | -0.0003 | +0.0431 | 0.104 | 0.073 |
+| nrca4 | 212 | -0.0081 | +0.0008 | -0.0028 | 0.089 | 0.076 |
+| nrcb1 | 576 | -0.0081 | +0.0013 | -0.0116 | 0.085 | 0.104 |
+| nrcb2 | 370 | +0.0092 | -0.0032 | +0.0126 | 0.098 | 0.075 |
+| nrcb3 | 756 | -0.0070 | -0.0037 | -0.0072 | 0.034 | 0.035 |
+| nrcb4 | 253 | +0.0014 | -0.0020 | +0.0043 | 0.070 | 0.046 |
+
+### F150W (N 2562): dm vs pred; OLS slope 0.69 +- 0.50 (r 0.03), Theil-Sen 0.95 [0.83, 1.08]; rms(pred) 0.0090; robust std dm 0.0256 -> dm - pred 0.0229
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0001, nrca2 1.0001, nrca3 1.0001, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 171 | +0.0189 | +0.0006 | +0.0197 | 0.075 | 0.045 |
+| nrca2 | 223 | -0.0018 | +0.0014 | -0.0037 | 0.027 | 0.013 |
+| nrca3 | 214 | +0.0061 | +0.0001 | +0.0045 | 0.091 | 0.057 |
+| nrca4 | 271 | +0.0023 | +0.0002 | +0.0039 | 0.074 | 0.057 |
+| nrcb1 | 485 | -0.0018 | +0.0024 | -0.0031 | 0.031 | 0.042 |
+| nrcb2 | 373 | -0.0002 | -0.0014 | -0.0031 | 0.036 | 0.035 |
+| nrcb3 | 518 | -0.0189 | -0.0013 | -0.0200 | 0.045 | 0.060 |
+| nrcb4 | 307 | +0.0145 | +0.0007 | +0.0127 | 0.062 | 0.027 |
+
+### F162M (N 2685): dm vs pred; OLS slope 1.37 +- 0.18 (r 0.14), Theil-Sen 1.29 [1.20, 1.39]; rms(pred) 0.0090; robust std dm 0.0232 -> dm - pred 0.0190
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0001, nrca2 1.0001, nrca3 1.0001, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 148 | +0.0173 | -0.0009 | +0.0170 | 0.078 | 0.049 |
+| nrca2 | 186 | +0.0070 | +0.0017 | +0.0056 | 0.053 | 0.036 |
+| nrca3 | 202 | +0.0261 | -0.0002 | +0.0275 | 0.128 | 0.086 |
+| nrca4 | 279 | +0.0124 | +0.0006 | +0.0111 | 0.079 | 0.049 |
+| nrcb1 | 531 | -0.0041 | +0.0017 | -0.0041 | 0.028 | 0.023 |
+| nrcb2 | 375 | +0.0022 | -0.0015 | +0.0003 | 0.049 | 0.027 |
+| nrcb3 | 659 | -0.0112 | -0.0029 | -0.0108 | 0.021 | 0.022 |
+| nrcb4 | 305 | +0.0019 | -0.0000 | +0.0008 | 0.050 | 0.029 |
+
+### F182M (N 2812): dm vs pred; OLS slope 1.67 +- 0.12 (r 0.25), Theil-Sen 1.57 [1.47, 1.67]; rms(pred) 0.0090; robust std dm 0.0246 -> dm - pred 0.0191
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0001, nrca2 1.0001, nrca3 1.0001, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 167 | +0.0158 | -0.0011 | +0.0179 | 0.079 | 0.052 |
+| nrca2 | 216 | +0.0071 | +0.0018 | +0.0051 | 0.046 | 0.027 |
+| nrca3 | 253 | +0.0393 | +0.0004 | +0.0407 | 0.134 | 0.092 |
+| nrca4 | 291 | +0.0087 | +0.0010 | +0.0073 | 0.076 | 0.048 |
+| nrcb1 | 556 | -0.0005 | +0.0015 | -0.0014 | 0.028 | 0.026 |
+| nrcb2 | 390 | +0.0022 | -0.0015 | +0.0040 | 0.085 | 0.059 |
+| nrcb3 | 618 | -0.0120 | -0.0024 | -0.0126 | 0.018 | 0.027 |
+| nrcb4 | 321 | -0.0007 | -0.0000 | +0.0011 | 0.056 | 0.023 |
+
+### F200W (N 2922): dm vs pred; OLS slope 1.78 +- 0.13 (r 0.25), Theil-Sen 1.80 [1.70, 1.90]; rms(pred) 0.0091; robust std dm 0.0288 -> dm - pred 0.0235
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0000, nrca2 1.0001, nrca3 1.0000, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 230 | +0.0263 | -0.0005 | +0.0270 | 0.077 | 0.049 |
+| nrca2 | 276 | +0.0023 | +0.0020 | +0.0016 | 0.045 | 0.025 |
+| nrca3 | 306 | +0.0039 | +0.0009 | +0.0067 | 0.140 | 0.099 |
+| nrca4 | 314 | +0.0078 | +0.0009 | +0.0074 | 0.079 | 0.050 |
+| nrcb1 | 506 | +0.0032 | +0.0016 | +0.0022 | 0.029 | 0.025 |
+| nrcb2 | 411 | -0.0041 | +0.0006 | -0.0043 | 0.080 | 0.053 |
+| nrcb3 | 510 | -0.0249 | -0.0012 | -0.0260 | 0.028 | 0.010 |
+| nrcb4 | 369 | +0.0088 | +0.0009 | +0.0094 | 0.059 | 0.027 |
+
+### F250M (N 3010): dm vs pred; OLS slope 1.62 +- 0.11 (r 0.25), Theil-Sen 1.63 [1.54, 1.71]; rms(pred) 0.0170; robust std dm 0.0450 -> dm - pred 0.0355
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 1032 | -0.0227 | +0.0029 | -0.0253 | 0.168 | 0.117 |
+| nrcblong | 1978 | +0.0063 | -0.0034 | +0.0066 | 0.078 | 0.047 |
+
+### F277W (N 3228): dm vs pred; OLS slope 1.54 +- 0.08 (r 0.32), Theil-Sen 1.76 [1.67, 1.85]; rms(pred) 0.0172; robust std dm 0.0543 -> dm - pred 0.0418
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 1464 | -0.0165 | +0.0029 | -0.0201 | 0.146 | 0.093 |
+| nrcblong | 1764 | +0.0120 | +0.0023 | +0.0056 | 0.097 | 0.070 |
+
+### F300M (N 3036): dm vs pred; OLS slope 1.56 +- 0.08 (r 0.35), Theil-Sen 1.66 [1.58, 1.73]; rms(pred) 0.0171; robust std dm 0.0452 -> dm - pred 0.0323
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 1142 | -0.0076 | +0.0027 | -0.0103 | 0.152 | 0.099 |
+| nrcblong | 1894 | +0.0037 | -0.0023 | +0.0010 | 0.086 | 0.057 |
+
+### F335M (N 3001): dm vs pred; OLS slope 1.45 +- 0.09 (r 0.28), Theil-Sen 1.42 [1.29, 1.55]; rms(pred) 0.0172; robust std dm 0.0605 -> dm - pred 0.0568
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 1179 | -0.0320 | +0.0034 | -0.0401 | 0.143 | 0.090 |
+| nrcblong | 1822 | +0.0158 | -0.0020 | +0.0143 | 0.079 | 0.046 |
+
+### F410M (N 3043): dm vs pred; OLS slope 1.45 +- 0.09 (r 0.28), Theil-Sen 1.52 [1.43, 1.61]; rms(pred) 0.0171; robust std dm 0.0504 -> dm - pred 0.0417
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 1111 | -0.0185 | +0.0047 | -0.0233 | 0.138 | 0.083 |
+| nrcblong | 1932 | +0.0086 | -0.0036 | +0.0101 | 0.085 | 0.054 |
+
+### F164N (N 2140): dm vs pred; OLS slope 2.37 +- 0.60 (r 0.09), Theil-Sen 1.03 [0.93, 1.13]; rms(pred) 0.0084; robust std dm 0.0184 -> dm - pred 0.0148
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0001, nrca2 1.0001, nrca3 1.0001, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 61 | +0.0126 | -0.0004 | +0.0168 | 0.064 | 0.047 |
+| nrca2 | 57 | +0.0082 | +0.0038 | +0.0068 | 0.000 | 0.000 |
+| nrca3 | 63 | +0.0236 | +0.0021 | +0.0243 | 0.000 | 0.000 |
+| nrca4 | 76 | +0.0039 | +0.0014 | -0.0007 | 0.028 | 0.018 |
+| nrcb1 | 592 | +0.0027 | +0.0022 | +0.0025 | 0.032 | 0.026 |
+| nrcb2 | 231 | +0.0006 | -0.0038 | +0.0025 | 0.038 | 0.033 |
+| nrcb3 | 914 | -0.0026 | -0.0059 | +0.0013 | 0.034 | 0.031 |
+| nrcb4 | 146 | -0.0066 | -0.0048 | -0.0001 | 0.039 | 0.026 |
+
+### F187N (N 2133): dm vs pred; OLS slope 1.23 +- 0.42 (r 0.06), Theil-Sen 1.05 [0.96, 1.14]; rms(pred) 0.0086; robust std dm 0.0153 -> dm - pred 0.0131
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0001, nrca2 1.0001, nrca3 1.0001, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 65 | +0.0024 | -0.0030 | +0.0105 | 0.057 | 0.027 |
+| nrca2 | 62 | +0.0019 | +0.0019 | +0.0016 | 0.000 | 0.000 |
+| nrca3 | 69 | +0.0392 | +0.0023 | +0.0340 | 0.000 | 0.000 |
+| nrca4 | 83 | +0.0002 | +0.0013 | -0.0003 | 0.044 | 0.029 |
+| nrcb1 | 581 | +0.0011 | +0.0021 | +0.0007 | 0.028 | 0.024 |
+| nrcb2 | 234 | -0.0022 | -0.0038 | +0.0026 | 0.078 | 0.054 |
+| nrcb3 | 880 | -0.0013 | -0.0058 | +0.0019 | 0.024 | 0.021 |
+| nrcb4 | 159 | -0.0003 | -0.0046 | +0.0077 | 0.048 | 0.030 |
+
+### F212N (N 2954): dm vs pred; OLS slope 1.56 +- 0.14 (r 0.21), Theil-Sen 1.62 [1.54, 1.71]; rms(pred) 0.0091; robust std dm 0.0236 -> dm - pred 0.0181
+PIXAR_SR / proj_plane_pixel_area per detector: nrca1 1.0001, nrca2 1.0001, nrca3 1.0001, nrca4 1.0001, nrcb1 1.0001, nrcb2 1.0001, nrcb3 1.0001, nrcb4 1.0001
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrca1 | 194 | +0.0036 | -0.0013 | +0.0086 | 0.081 | 0.050 |
+| nrca2 | 238 | -0.0012 | +0.0020 | -0.0010 | 0.031 | 0.019 |
+| nrca3 | 294 | +0.0149 | +0.0002 | +0.0173 | 0.134 | 0.095 |
+| nrca4 | 310 | -0.0041 | +0.0012 | -0.0042 | 0.069 | 0.043 |
+| nrcb1 | 555 | +0.0058 | +0.0015 | +0.0056 | 0.031 | 0.018 |
+| nrcb2 | 404 | -0.0015 | -0.0012 | -0.0015 | 0.084 | 0.058 |
+| nrcb3 | 611 | -0.0045 | -0.0022 | -0.0055 | 0.028 | 0.038 |
+| nrcb4 | 348 | -0.0020 | -0.0000 | -0.0017 | 0.056 | 0.031 |
+
+### F323N (N 2761): dm vs pred; OLS slope 1.65 +- 0.07 (r 0.39), Theil-Sen 1.60 [1.53, 1.67]; rms(pred) 0.0155; robust std dm 0.0357 -> dm - pred 0.0258
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 548 | +0.0094 | +0.0027 | +0.0067 | 0.134 | 0.080 |
+| nrcblong | 2213 | -0.0020 | -0.0078 | +0.0048 | 0.087 | 0.051 |
+
+### F405N (N 2913): dm vs pred; OLS slope 1.60 +- 0.08 (r 0.35), Theil-Sen 1.64 [1.56, 1.72]; rms(pred) 0.0156; robust std dm 0.0412 -> dm - pred 0.0320
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 571 | +0.0153 | +0.0058 | +0.0119 | 0.133 | 0.079 |
+| nrcblong | 2342 | -0.0028 | -0.0082 | +0.0035 | 0.077 | 0.049 |
+
+### F466N (N 2849): dm vs pred; OLS slope 1.61 +- 0.10 (r 0.28), Theil-Sen 1.64 [1.52, 1.76]; rms(pred) 0.0172; robust std dm 0.0629 -> dm - pred 0.0495
+PIXAR_SR / proj_plane_pixel_area per detector: nrcalong 1.0002, nrcblong 1.0002
+| detector | N | median dm | median pred | median dm - pred | cell pk-pk dm | cell pk-pk dm - pred |
+|---|---|---|---|---|---|---|
+| nrcalong | 1058 | -0.0016 | +0.0041 | -0.0068 | 0.142 | 0.087 |
+| nrcblong | 1791 | +0.0007 | -0.0041 | -0.0012 | 0.077 | 0.038 |

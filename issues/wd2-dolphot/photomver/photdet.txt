@@ -1,0 +1,147 @@
+
+### F115W (ZP -0.052, window 19.9-21.9; N-weighted mean pred +0.0178)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 139 | +0.0168 ± 0.0048 | +0.0164 | +0.0130 | -0.0048 | +0.0212 | 3.069 / 3.106 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 139 | +0.0090 ± 0.0019 | +0.0086 | +0.0297 | +0.0119 | -0.0033 | 3.104 / 3.19 (jwst_nircam_photom_0167.fits) |
+| nrca3 | 126 | +0.0433 ± 0.0041 | +0.0429 | +0.0340 | +0.0162 | +0.0267 | 3.017 / 3.113 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 212 | -0.0081 ± 0.0029 | -0.0085 | +0.0255 | +0.0077 | -0.0162 | 2.78 / 2.846 (jwst_nircam_photom_0172.fits) |
+| nrcb1 | 576 | -0.0081 ± 0.0021 | -0.0085 | +0.0325 | +0.0147 | -0.0231 | 3.261 / 3.36 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 370 | +0.0092 ± 0.0022 | +0.0087 | +0.0065 | -0.0113 | +0.0201 | 3.175 / 3.194 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 756 | -0.0070 ± 0.0018 | -0.0075 | +0.0138 | -0.0040 | -0.0035 | 3.198 / 3.239 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 253 | +0.0014 ± 0.0032 | +0.0009 | -0.0055 | -0.0233 | +0.0242 | 2.783 / 2.769 (jwst_nircam_photom_0166.fits) |
+
+### F150W (ZP -0.032, window 19.4-21.4; N-weighted mean pred +0.0115)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 171 | +0.0189 ± 0.0027 | +0.0195 | +0.0131 | +0.0016 | +0.0180 | 2.305 / 2.333 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 223 | -0.0018 ± 0.0010 | -0.0012 | +0.0260 | +0.0144 | -0.0157 | 2.355 / 2.412 (jwst_nircam_photom_0181.fits) |
+| nrca3 | 214 | +0.0061 ± 0.0022 | +0.0067 | -0.0080 | -0.0196 | +0.0262 | 2.313 / 2.296 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 271 | +0.0023 ± 0.0021 | +0.0029 | +0.0267 | +0.0152 | -0.0123 | 2.085 / 2.137 (jwst_nircam_photom_0180.fits) |
+| nrcb1 | 485 | -0.0018 ± 0.0011 | -0.0012 | +0.0274 | +0.0159 | -0.0171 | 2.386 / 2.447 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 373 | -0.0002 ± 0.0011 | +0.0004 | -0.0088 | -0.0203 | +0.0207 | 2.357 / 2.338 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 518 | -0.0189 ± 0.0015 | -0.0183 | +0.0087 | -0.0028 | -0.0155 | 2.351 / 2.37 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 307 | +0.0145 ± 0.0013 | +0.0151 | +0.0048 | -0.0068 | +0.0219 | 2.047 / 2.056 (jwst_nircam_photom_0166.fits) |
+
+### F162M (ZP -0.028, window 18.4-20.4; N-weighted mean pred +0.0104)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 148 | +0.0173 ± 0.0031 | +0.0156 | +0.0110 | +0.0007 | +0.0150 | 4.798 / 4.847 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 186 | +0.0070 ± 0.0024 | +0.0054 | +0.0294 | +0.0190 | -0.0136 | 4.926 / 5.061 (jwst_nircam_photom_0167.fits) |
+| nrca3 | 202 | +0.0261 ± 0.0030 | +0.0245 | +0.0098 | -0.0006 | +0.0251 | 4.646 / 4.688 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 279 | +0.0124 ± 0.0020 | +0.0107 | +0.0270 | +0.0166 | -0.0059 | 4.33 / 4.439 (jwst_nircam_photom_0172.fits) |
+| nrcb1 | 531 | -0.0041 ± 0.0008 | -0.0057 | +0.0256 | +0.0153 | -0.0210 | 4.98 / 5.099 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 375 | +0.0022 ± 0.0012 | +0.0006 | -0.0067 | -0.0171 | +0.0177 | 4.867 / 4.837 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 659 | -0.0112 ± 0.0008 | -0.0129 | +0.0062 | -0.0042 | -0.0087 | 4.897 / 4.925 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 305 | +0.0019 ± 0.0016 | +0.0002 | -0.0128 | -0.0232 | +0.0234 | 4.346 / 4.295 (jwst_nircam_photom_0166.fits) |
+
+### F182M (ZP -0.023, window 18.3-20.3; N-weighted mean pred +0.0115)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 167 | +0.0158 ± 0.0029 | +0.0123 | +0.0081 | -0.0034 | +0.0157 | 3.596 / 3.623 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 216 | +0.0071 ± 0.0018 | +0.0037 | +0.0292 | +0.0177 | -0.0140 | 3.745 / 3.847 (jwst_nircam_photom_0167.fits) |
+| nrca3 | 253 | +0.0393 ± 0.0031 | +0.0359 | +0.0181 | +0.0066 | +0.0293 | 3.459 / 3.517 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 291 | +0.0087 ± 0.0018 | +0.0053 | +0.0217 | +0.0103 | -0.0050 | 3.314 / 3.381 (jwst_nircam_photom_0172.fits) |
+| nrcb1 | 556 | -0.0005 ± 0.0008 | -0.0039 | +0.0253 | +0.0138 | -0.0177 | 3.732 / 3.82 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 390 | +0.0022 ± 0.0018 | -0.0012 | -0.0044 | -0.0159 | +0.0147 | 3.69 / 3.675 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 618 | -0.0120 ± 0.0007 | -0.0154 | +0.0095 | -0.0020 | -0.0135 | 3.632 / 3.664 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 321 | -0.0007 ± 0.0017 | -0.0041 | -0.0140 | -0.0255 | +0.0214 | 3.352 / 3.309 (jwst_nircam_photom_0166.fits) |
+
+### F200W (ZP -0.020, window 18.8-20.8; N-weighted mean pred +0.0128)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 230 | +0.0263 ± 0.0024 | +0.0261 | +0.0206 | +0.0079 | +0.0182 | 1.927 / 1.964 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 276 | +0.0023 ± 0.0015 | +0.0020 | +0.0389 | +0.0262 | -0.0242 | 2.026 / 2.1 (jwst_nircam_photom_0167.fits) |
+| nrca3 | 306 | +0.0039 ± 0.0030 | +0.0036 | -0.0108 | -0.0236 | +0.0272 | 1.915 / 1.896 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 314 | +0.0078 ± 0.0018 | +0.0075 | +0.0252 | +0.0125 | -0.0049 | 1.787 / 1.829 (jwst_nircam_photom_0172.fits) |
+| nrcb1 | 506 | +0.0032 ± 0.0010 | +0.0029 | +0.0311 | +0.0183 | -0.0154 | 1.998 / 2.056 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 411 | -0.0041 ± 0.0015 | -0.0044 | -0.0099 | -0.0226 | +0.0183 | 1.987 / 1.969 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 510 | -0.0249 ± 0.0010 | -0.0252 | +0.0078 | -0.0050 | -0.0202 | 1.944 / 1.958 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 369 | +0.0088 ± 0.0017 | +0.0085 | +0.0042 | -0.0085 | +0.0170 | 1.79 / 1.797 (jwst_nircam_photom_0166.fits) |
+
+### F250M (ZP +0.022, window 17.5-19.5; N-weighted mean pred +0.0073)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 1032 | -0.0227 ± 0.0022 | -0.0190 | -0.0073 | -0.0146 | -0.0044 | 1.787 / 1.775 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 1978 | +0.0063 ± 0.0010 | +0.0099 | +0.0149 | +0.0076 | +0.0023 | 1.665 / 1.688 (jwst_nircam_photom_0171.fits) |
+
+### F277W (ZP +0.034, window 18.6-20.6; N-weighted mean pred +0.0089)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 1464 | -0.0165 ± 0.0017 | -0.0156 | +0.0133 | +0.0045 | -0.0200 | 0.485 / 0.491 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 1764 | +0.0120 ± 0.0015 | +0.0129 | +0.0052 | -0.0037 | +0.0166 | 0.418 / 0.42 (jwst_nircam_photom_0171.fits) |
+
+### F300M (ZP +0.023, window 17.5-19.5; N-weighted mean pred +0.0021)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 1142 | -0.0076 ± 0.0018 | -0.0071 | +0.0092 | +0.0072 | -0.0142 | 1.056 / 1.065 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 1894 | +0.0037 ± 0.0012 | +0.0043 | -0.0023 | -0.0043 | +0.0086 | 0.965 / 0.963 (jwst_nircam_photom_0171.fits) |
+
+### F335M (ZP +0.022, window 17.3-19.3; N-weighted mean pred -0.0185)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 1179 | -0.0320 ± 0.0022 | -0.0290 | -0.0371 | -0.0187 | -0.0103 | 1.011 / 0.977 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 1822 | +0.0158 ± 0.0015 | +0.0188 | -0.0064 | +0.0121 | +0.0067 | 0.853 / 0.848 (jwst_nircam_photom_0171.fits) |
+
+### F410M (ZP +0.037, window 16.6-18.6; N-weighted mean pred +0.0109)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 1111 | -0.0185 ± 0.0018 | -0.0173 | +0.0145 | +0.0036 | -0.0209 | 0.89 / 0.902 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 1932 | +0.0086 ± 0.0014 | +0.0099 | +0.0088 | -0.0021 | +0.0120 | 0.86 / 0.867 (jwst_nircam_photom_0171.fits) |
+
+### F164N (ZP -0.031, window 15.9-17.9; N-weighted mean pred +0.0129)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 61 | +0.0126 ± 0.0067 | +0.0120 | +0.0109 | -0.0019 | +0.0139 | 47.77 / 48.25 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 57 | +0.0082 ± 0.0033 | +0.0075 | +0.0305 | +0.0176 | -0.0101 | 49.67 / 51.08 (jwst_nircam_photom_0167.fits) |
+| nrca3 | 63 | +0.0236 ± 0.0055 | +0.0229 | +0.0066 | -0.0063 | +0.0292 | 46.09 / 46.37 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 76 | +0.0039 ± 0.0042 | +0.0033 | +0.0201 | +0.0072 | -0.0040 | 43.72 / 44.53 (jwst_nircam_photom_0172.fits) |
+| nrcb1 | 592 | +0.0027 ± 0.0007 | +0.0021 | +0.0355 | +0.0227 | -0.0206 | 49.7 / 51.35 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 231 | +0.0006 ± 0.0020 | -0.0001 | -0.0049 | -0.0177 | +0.0176 | 47.85 / 47.63 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 914 | -0.0026 ± 0.0007 | -0.0033 | +0.0059 | -0.0069 | +0.0037 | 49.19 / 49.46 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 146 | -0.0066 ± 0.0026 | -0.0072 | -0.0147 | -0.0275 | +0.0203 | 42.99 / 42.42 (jwst_nircam_photom_0166.fits) |
+
+### F187N (ZP -0.022, window 15.7-17.7; N-weighted mean pred +0.0165)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 65 | +0.0024 ± 0.0055 | +0.0014 | +0.0085 | -0.0080 | +0.0094 | 42.8 / 43.13 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 62 | +0.0019 ± 0.0029 | +0.0010 | +0.0292 | +0.0127 | -0.0117 | 44.68 / 45.9 (jwst_nircam_photom_0167.fits) |
+| nrca3 | 69 | +0.0392 ± 0.0067 | +0.0383 | +0.0165 | +0.0001 | +0.0382 | 40.87 / 41.5 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 83 | +0.0002 ± 0.0045 | -0.0007 | +0.0206 | +0.0042 | -0.0048 | 39.25 / 40 (jwst_nircam_photom_0172.fits) |
+| nrcb1 | 581 | +0.0011 ± 0.0006 | +0.0002 | +0.0367 | +0.0203 | -0.0201 | 43.94 / 45.45 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 234 | -0.0022 ± 0.0023 | -0.0032 | -0.0018 | -0.0183 | +0.0151 | 43.73 / 43.66 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 880 | -0.0013 ± 0.0005 | -0.0022 | +0.0121 | -0.0043 | +0.0021 | 43.48 / 43.97 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 159 | -0.0003 ± 0.0027 | -0.0012 | -0.0108 | -0.0272 | +0.0261 | 40.17 / 39.78 (jwst_nircam_photom_0166.fits) |
+
+### F212N (ZP -0.018, window 18.0-20.0; N-weighted mean pred +0.0149)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrca1 | 194 | +0.0036 ± 0.0025 | +0.0027 | +0.0109 | -0.0040 | +0.0066 | 40.74 / 41.15 (jwst_nircam_photom_0173.fits) |
+| nrca2 | 238 | -0.0012 ± 0.0013 | -0.0022 | +0.0334 | +0.0185 | -0.0206 | 43.49 / 44.85 (jwst_nircam_photom_0167.fits) |
+| nrca3 | 294 | +0.0149 ± 0.0034 | +0.0140 | +0.0034 | -0.0115 | +0.0255 | 39.2 / 39.32 (jwst_nircam_photom_0169.fits) |
+| nrca4 | 310 | -0.0041 ± 0.0018 | -0.0050 | +0.0218 | +0.0069 | -0.0119 | 38.1 / 38.87 (jwst_nircam_photom_0172.fits) |
+| nrcb1 | 555 | +0.0058 ± 0.0009 | +0.0049 | +0.0431 | +0.0282 | -0.0233 | 41.35 / 43.02 (jwst_nircam_photom_0175.fits) |
+| nrcb2 | 404 | -0.0015 ± 0.0018 | -0.0024 | +0.0001 | -0.0148 | +0.0124 | 40.83 / 40.83 (jwst_nircam_photom_0174.fits) |
+| nrcb3 | 611 | -0.0045 ± 0.0009 | -0.0054 | +0.0110 | -0.0038 | -0.0016 | 41.01 / 41.43 (jwst_nircam_photom_0170.fits) |
+| nrcb4 | 348 | -0.0020 ± 0.0019 | -0.0029 | -0.0131 | -0.0279 | +0.0251 | 37.94 / 37.49 (jwst_nircam_photom_0166.fits) |
+
+### F323N (ZP +0.012, window 15.4-17.4; N-weighted mean pred +0.0093)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 548 | +0.0094 ± 0.0026 | +0.0091 | +0.0240 | +0.0147 | -0.0056 | 13.28 / 13.57 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 2213 | -0.0020 ± 0.0009 | -0.0022 | +0.0057 | -0.0036 | +0.0014 | 12.06 / 12.13 (jwst_nircam_photom_0171.fits) |
+
+### F405N (ZP +0.031, window 15.0-17.0; N-weighted mean pred +0.0188)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 571 | +0.0153 ± 0.0028 | +0.0145 | +0.0314 | +0.0126 | +0.0019 | 11.2 / 11.53 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 2342 | -0.0028 ± 0.0010 | -0.0035 | +0.0158 | -0.0031 | -0.0005 | 9.572 / 9.712 (jwst_nircam_photom_0171.fits) |
+
+### F466N (ZP +0.030, window 16.5-18.5; N-weighted mean pred +0.0057)
+| detector | N | measured dm | measured - mean | pred | pred - mean | residual | PHOTMJSR ours / 2023 |
+|---|---|---|---|---|---|---|---|
+| nrcalong | 1058 | -0.0016 ± 0.0025 | -0.0015 | +0.0123 | +0.0066 | -0.0081 | 12.29 / 12.43 (jwst_nircam_photom_0168.fits) |
+| nrcblong | 1791 | +0.0007 ± 0.0018 | +0.0009 | +0.0018 | -0.0039 | +0.0048 | 12.44 / 12.47 (jwst_nircam_photom_0171.fits) |
+
+all bands, detectors: 80 points; slope measured-mean vs pred-mean (through 0, 1/err^2) 0.117; rms measured-mean 0.0126, rms after subtracting pred 0.0169, after subtracting slope*pred 0.0123
+band ZP vs mean pred: F115W -0.052/+0.018, F150W -0.032/+0.012, F162M -0.028/+0.010, F182M -0.023/+0.011, F200W -0.020/+0.013, F250M +0.022/+0.007, F277W +0.034/+0.009, F300M +0.023/+0.002, F335M +0.022/-0.018, F410M +0.037/+0.011, F164N -0.031/+0.013, F187N -0.022/+0.016, F212N -0.018/+0.015, F323N +0.012/+0.009, F405N +0.031/+0.019, F466N +0.030/+0.006
