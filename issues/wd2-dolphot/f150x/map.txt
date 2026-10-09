@@ -1,0 +1,6 @@
+F150W O-D' (ours - dolphot): rstd nbr mean 0.0062; Spearman-like corr(nbr mean, rank bg) +0.112
+F150W D'-A (dolphot - aperture): rstd nbr mean 0.0063; Spearman-like corr(nbr mean, rank bg) -0.027
+F150W O-A (ours - aperture): rstd nbr mean 0.0039; Spearman-like corr(nbr mean, rank bg) +0.154
+F200W O-D' (ours - dolphot): rstd nbr mean 0.0031; Spearman-like corr(nbr mean, rank bg) -0.069
+F200W D'-A (dolphot - aperture): rstd nbr mean 0.0046; Spearman-like corr(nbr mean, rank bg) +0.056
+F200W O-A (ours - aperture): rstd nbr mean 0.0043; Spearman-like corr(nbr mean, rank bg) +0.017
