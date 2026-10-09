@@ -1,0 +1,7 @@
+dvx0 frac=0      N= 9144 median +0.0003 rstd 0.0293 bad 0.015
+dvx0 0<frac<0.5  N= 1264 median -0.0021 rstd 0.0225 bad 0.007
+dvx0 frac>=0.5   N=  199 median +0.4596 rstd 0.3605 bad 0.633
+dvx1 frac=0      N= 9138 median +0.0005 rstd 0.0294 bad 0.015
+dvx1 0<frac<0.5  N= 1241 median -0.0018 rstd 0.0215 bad 0.006
+dvx1 frac>=0.5   N=  203 median -0.0054 rstd 0.0642 bad 0.084
+wrote dm_forced.png
