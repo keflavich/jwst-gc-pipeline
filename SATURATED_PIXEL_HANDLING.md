@@ -623,6 +623,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
 | `SATSTAR_FLUX_STAT` | median | consolidated `flux_fit`: `median` of the per-exposure fluxes, or `brightest` (the representative's own flux, the old behaviour; kept as `flux_brightest_fit` either way) |
+| `PHOT_PIXEL_AREA` | 0 (off) | scale each per-exposure satstar catalog's fluxes by the crf `AREA` at its frame centroid (`xcentroid`/`ycentroid`) before consolidation, as for the per-frame catalogs (PHOTOMETRY_PIPELINE.md, Merge + vet); the consolidated cache tag gains `-pam` (#1151) |
 | `SATSTAR_REPLACE_RADIUS_FWHM` | 1.5 | radius of `replace_saturated`'s mutual-nearest second pass (a satstar the tight per-band radius missed pairs with its clipped daophot row) in units of the band's PSF FWHM, capped at 0.5"; a fixed 0.5" (3–17 FWHM in NIRCam) let a satstar with no daophot row of its own overwrite its nearest neighbour star |
 | `SATSTAR_REPLACE_RADIUS_ARCSEC` | (unset) | fixed second-pass radius in arcsec, overriding `SATSTAR_REPLACE_RADIUS_FWHM`; 0.5 restores the radius used before the FWHM scaling, 0 disables the second pass |
 | `SATSTAR_FP_*` (11 vars: `_REJECT`, `_REJECT_RATIO`, `_REJECT_MIN_N`, `_REJECT_BRIGHTFRAC`, `_FLUXRATIO`, `_MERGE_MAX_ARCSEC`, `_COMP_ARCSEC`, `_BIG_ARCSEC`, `_BIGCORE_ARCSEC`, `_BIGCORE_MERGE_ARCSEC`, `_USE_ANCHOR`) | see `merge_catalogs.py` | false-positive rejection / merging at consolidation |

@@ -64,6 +64,9 @@ from jwst_gc_pipeline.photometry.satstar_phase_selection import (
     format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry.pixel_area import (
+    SATSTAR_POSITION_COLUMNS, apply_pixel_area, apply_pixel_area_to_frames,
+    pixel_area_enabled)
 from jwst_gc_pipeline.photometry.wingcal import (
     MIN_RATIO as WINGCAL_MIN_RATIO, interp_wingcal_ratio,
     passes_se_gate as wingcal_passes_se_gate,
@@ -1717,6 +1720,13 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             print('tb.meta:', tb.meta)
             raise ValueError(f"Table file {fn} is not correctly formatted; it is missing FILENAME metadata")
 
+    # Pixel-area correction (opt-in, PHOT_PIXEL_AREA=1; #1151): the fit ran on
+    # MJy/sr with a unit-sum PSF, and the merge below calibrates with one
+    # constant pixel area, so scale each frame's fluxes by its AREA map at the
+    # star before the frames are averaged.  See photometry.pixel_area.
+    if pixel_area_enabled():
+        apply_pixel_area_to_frames(tables, label=f"{filtername.upper()}/{module}")
+
     # Register each per-frame catalog onto its m2 visit consensus before the
     # positions are averaged (m2_registration; the frames are not touched).
     m2_registration_summary = None
@@ -1808,6 +1818,8 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                              - _c.get('applied', 0))
     for ii, fn in enumerate(tblfns):
         minimal_table.meta[f'fn{ii}'] = os.path.basename(fn)
+    if pixel_area_enabled():
+        minimal_table.meta['PIXAREA'] = 1
 
     # Ensure saturated stars are represented in indivexp merged products too.
     # Skippable (do_replace_saturated=False) for cutout runs whose basepath
@@ -2420,8 +2432,17 @@ def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
     tbl[_SATSTAR_ITER_COL] = np.full(len(tbl), satstar_iteration_token(filename))
     frame = frame_path_for_satstar_catalog(filename)
     if frame is None:
+        if pixel_area_enabled():
+            print(f"  pixel-area correction NOT applied to "
+                  f"{os.path.basename(filename)}: its frame is not on disk",
+                  flush=True)
         refresh_satstar_skycoords(tbl, catalog_path=filename)
         return tbl
+    if pixel_area_enabled():
+        # Same correction as the per-frame catalogues (#1151), applied per
+        # exposure so the consolidated median sees corrected members.  The
+        # satstar x_fit/y_fit are cutout-local; xcentroid is the frame pixel.
+        apply_pixel_area(tbl, frame, position_columns=SATSTAR_POSITION_COLUMNS)
     _wcs = wcs_cache.get(frame)
     if _wcs is None:
         _wcs = frame_wcs(frame)
@@ -2750,6 +2771,10 @@ def load_satstar_catalog(filtername, target='brick',
                                              proposal_id, field)
     if _primary is not None:
         print(f"Using saturated star catalog {_primary}")
+        if pixel_area_enabled():
+            print("  pixel-area correction NOT applied to the primary satstar "
+                  "catalog: it has no per-exposure frame to read AREA from",
+                  flush=True)
         _cat = apply_pooled_wingcal(Table.read(_primary), filtername,
                                     basepath=basepath, phase=phase)
         # cache_path=None: NEVER rewrite the raw pipeline satstar product on
@@ -2986,9 +3011,13 @@ _SATSTAR_DEDUP_ALG = 'fp6'  # fp6: flux_fit = per-exposure median (SATSTAR_FLUX_
 def _satstar_dedup_alg_tag():
     """Cache key for the consolidated catalog: the algorithm version plus
     the flux statistic, so toggling ``SATSTAR_FLUX_STAT`` rebuilds the cache
-    instead of serving the other statistic's fluxes."""
+    instead of serving the other statistic's fluxes.  ``-pam`` marks a cache
+    built with the pixel-area correction (``PHOT_PIXEL_AREA``), which scales
+    the per-exposure fluxes before the dedup; the tag without it is unchanged,
+    so existing caches stay valid while the switch is off."""
     stat = _satstar_flux_statistic()
-    return _SATSTAR_DEDUP_ALG if stat == 'median' else f'{_SATSTAR_DEDUP_ALG}-{stat}'
+    tag = _SATSTAR_DEDUP_ALG if stat == 'median' else f'{_SATSTAR_DEDUP_ALG}-{stat}'
+    return f'{tag}-pam' if pixel_area_enabled() else tag
 
 
 # Second-chance radius for matching a fitted satstar to its daophot row in

@@ -291,6 +291,21 @@ local data peak after the refit is dropped outright. MIRI instead vets purely on
 builds the residual i2d and the source-masked smoothed background for the next
 phase.
 
+**Pixel area (opt-in, `PHOT_PIXEL_AREA=1`, #1151).** The fit runs on the
+MJy/sr crf with a unit-sum PSF, and the merge converts to Jy with one constant
+pixel solid angle per catalog (`proj_plane_pixel_area()`), so a star on a
+pixel larger than nominal reads faint by 2.5 log10(`AREA`), where `AREA` is the
+crf extension the jwst photom step attaches from the CRDS area reference
+(rms 0.009 mag SW and 0.017 mag LW over the wd2 stars).  With the switch on,
+`merge_individual_frames` multiplies each per-frame catalog's flux columns
+(`flux_fit`, `flux_err`, `flux_init`; crowdsource `flux`, `dflux`, `fluxiso`)
+by `AREA` at the fitted pixel before the frames are averaged, and
+`load_satstar_catalog` does the same for each per-exposure satstar catalog at
+its frame centroid before consolidation (the consolidated cache tag gains
+`-pam`).  The merged catalog carries meta `PIXAREA = 1`.  The primary
+(non-per-exposure) satstar catalog has no frame and stays uncorrected, with a
+log line.  Off by default.
+
 ---
 
 ## Table A — simplified, all defaults (NIRCam, non-extended field)
