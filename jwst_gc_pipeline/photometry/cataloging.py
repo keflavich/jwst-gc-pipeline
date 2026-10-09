@@ -516,7 +516,9 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
     the daophot channel responsible for all of them.  Positions within
     ``accepted_excl_fwhm`` FWHM of an accepted satstar are dropped here, and
     ``_handoff_restore_pixels`` also skips any component holding an accepted
-    centre, so accepted cores stay masked and model-filled.
+    centre (by default; env ``DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM``
+    keeps such components and masks only a radius around the centre), so
+    accepted cores stay masked and model-filled.
 
     With ``sci``, a component with no finite ``sci`` pixel is never handed
     off, whatever ``data_floor`` is: ``_handoff_restore_pixels`` has nothing
@@ -733,6 +735,40 @@ def _daophot_handoff_peak_min_area():
     return area
 
 
+def _daophot_handoff_restore_accepted_excl_fwhm():
+    """Accepted-satstar exclusion radius of the hand-off pixel restore.
+
+    Env ``DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM`` (FWHM); unset or blank
+    gives None, under which ``_handoff_restore_pixels`` skips every
+    SATURATED component that holds an accepted satstar centre.  A value
+    ``>= 0`` keeps those components and leaves masked only the pixels within
+    that many FWHM of an accepted centre (see ``_handoff_restore_pixels``).
+
+    Returns
+    -------
+    float or None
+        The radius in FWHM; None keeps the component skip.
+
+    Raises
+    ------
+    ValueError
+        The value is not a finite number >= 0.
+    """
+    raw = os.environ.get('DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM', '')
+    if not raw.strip():
+        return None
+    try:
+        excl = float(raw)
+    except ValueError:
+        excl = np.nan
+    if not (np.isfinite(excl) and excl >= 0):
+        raise ValueError(
+            f"DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM={raw!r} is not a "
+            f"finite number >= 0 (FWHM; unset skips every component holding "
+            f"an accepted satstar)")
+    return excl
+
+
 def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
                         data_floor=None, label='manual'):
     """Every position handed from the satstar channel to daophot on a frame.
@@ -774,15 +810,31 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
 
 
 def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
-                            fwhm_pix, *, radius_fwhm=3.0):
+                            fwhm_pix, *, radius_fwhm=3.0,
+                            accepted_excl_fwhm=None, label=None):
     """Late-group SATURATED pixels of handed-off stars that the fit may use.
 
     Selects the SATURATED connected components that touch a hand-off position
     (the 3x3 pixels around it), limited to ``radius_fwhm`` FWHM from that
     position, and keeps only pixels whose rate is valid: finite, not flagged
     ``bad`` by ``get_uncertainty`` and not ``DO_NOT_USE`` (truly-lost
-    saturation, #567).  A component holding an ACCEPTED satstar's centre is
-    skipped, so an accepted star's core stays masked and model-filled.
+    saturation, #567).  With ``accepted_excl_fwhm=None`` (the default) a
+    component holding an ACCEPTED satstar's centre is skipped, so an accepted
+    star's core stays masked and model-filled.
+
+    With ``accepted_excl_fwhm`` set, such components are kept and the pixels
+    within ``accepted_excl_fwhm`` FWHM of any accepted centre are left masked
+    instead, in every selected component.  In crowded long-wavelength fields
+    the late-group SATURATED areas of neighbouring stars merge, and the merged
+    component nearly always holds an accepted satstar: in the wd2 core, 130 of
+    133 F277W star-frames handed off at a dolphot star with no catalog value
+    lie in such a component (F250M 79 of 81, F300M 95 of 96), so the skip
+    leaves the handed-off star's core masked and the satstar fill writes the
+    accepted star's model over it.  The exclusion of the component hand-off
+    (``_unaccepted_sat_component_xy``, 1.5 FWHM) is the matching choice.
+    Pixels left masked are still model-filled by the frame preparation;
+    restored pixels keep their measured rate, from which the accepted star's
+    model is subtracted as everywhere else.
 
     Parameters
     ----------
@@ -800,6 +852,12 @@ def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
         PSF FWHM in pixels.
     radius_fwhm : float
         Radius cap, in FWHM.
+    accepted_excl_fwhm : float or None
+        None skips every component holding an accepted satstar centre; a
+        value ``>= 0`` keeps them and leaves masked the pixels within this
+        many FWHM of an accepted centre (0 leaves none masked).
+    label : str or None
+        Log prefix of the line printed when ``accepted_excl_fwhm`` is set.
 
     Returns
     -------
@@ -827,19 +885,33 @@ def _handoff_restore_pixels(dqarr, data, bad, handoff_xy, satstar_table,
     hx = np.asarray(handoff_xy[:, 0], dtype=float)
     hy = np.asarray(handoff_xy[:, 1], dtype=float)
     labels = _labels_at(hx, hy, 1)
+    acc_xy = np.zeros((0, 2))
+    acc_labels = set()
     if (satstar_table is not None and len(satstar_table)
             and 'xcentroid' in satstar_table.colnames
             and 'ycentroid' in satstar_table.colnames):
         xa = np.asarray(satstar_table['xcentroid'], dtype=float)
         ya = np.asarray(satstar_table['ycentroid'], dtype=float)
         ok = np.isfinite(xa) & np.isfinite(ya)
-        labels -= _labels_at(xa[ok], ya[ok], 0)
+        acc_xy = np.column_stack([xa[ok], ya[ok]])
+        acc_labels = _labels_at(xa[ok], ya[ok], 0)
+    if accepted_excl_fwhm is None:
+        labels -= acc_labels
     if not labels:
         return restore
     comp = np.isin(lab, sorted(labels))
     yy, xx = np.nonzero(comp)
     near = _L._protect_mask(xx, yy, np.column_stack([hx, hy]),
                             radius_fwhm * float(fwhm_pix))
+    if accepted_excl_fwhm is not None:
+        excl = _L._protect_mask(xx, yy, acc_xy,
+                                float(accepted_excl_fwhm) * float(fwhm_pix))
+        print(f"[{label}] hand-off restore: {len(labels & acc_labels)} of "
+              f"{len(labels)} selected SATURATED component(s) hold an "
+              f"accepted satstar and are kept; {int((near & excl).sum())} "
+              f"px within {float(accepted_excl_fwhm):g} FWHM of an accepted "
+              f"centre left masked", flush=True)
+        near &= ~excl
     restore[yy[near], xx[near]] = True
     valid = (np.isfinite(data) & ~np.asarray(bad, dtype=bool)
              & ((dqarr & _L.dqflags.pixel['DO_NOT_USE']) == 0))
@@ -3538,8 +3610,14 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             dqarr, original_data, satstar_table, satstar_rejected_path,
             fwhm_pix, label='manual')
         if handoff_xy is not None:
+            # Opt-in (env DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM): restore
+            # in components that also hold an accepted satstar, outside a
+            # radius around its centre (merged LW components, #1125).
             handoff_restore = _handoff_restore_pixels(
-                dqarr, data, bad, handoff_xy, satstar_table, fwhm_pix)
+                dqarr, data, bad, handoff_xy, satstar_table, fwhm_pix,
+                accepted_excl_fwhm=(
+                    _daophot_handoff_restore_accepted_excl_fwhm()),
+                label='manual')
             n_restore = int(handoff_restore.sum())
             if n_restore:
                 mask = mask & ~handoff_restore
