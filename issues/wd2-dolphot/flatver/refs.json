@@ -1,0 +1,602 @@
+{
+ "jwst_1298.pmap|F150W|NRCA1": {
+  "flat": "jwst_nircam_flat_0657.fits",
+  "photom": "jwst_nircam_photom_0155.fits",
+  "area": "jwst_nircam_area_0240.fits"
+ },
+ "jwst_1298.pmap|F150W|NRCA2": {
+  "flat": "jwst_nircam_flat_0727.fits",
+  "photom": "jwst_nircam_photom_0152.fits",
+  "area": "jwst_nircam_area_0247.fits"
+ },
+ "jwst_1298.pmap|F150W|NRCA3": {
+  "flat": "jwst_nircam_flat_0689.fits",
+  "photom": "jwst_nircam_photom_0156.fits",
+  "area": "jwst_nircam_area_0322.fits"
+ },
+ "jwst_1298.pmap|F150W|NRCA4": {
+  "flat": "jwst_nircam_flat_0685.fits",
+  "photom": "jwst_nircam_photom_0159.fits",
+  "area": "jwst_nircam_area_0230.fits"
+ },
+ "jwst_1298.pmap|F150W|NRCB1": {
+  "flat": "jwst_nircam_flat_0738.fits",
+  "photom": "jwst_nircam_photom_0151.fits",
+  "area": "jwst_nircam_area_0217.fits"
+ },
+ "jwst_1298.pmap|F150W|NRCB2": {
+  "flat": "jwst_nircam_flat_0675.fits",
+  "photom": "jwst_nircam_photom_0150.fits",
+  "area": "jwst_nircam_area_0262.fits"
+ },
+ "jwst_1298.pmap|F150W|NRCB3": {
+  "flat": "jwst_nircam_flat_0641.fits",
+  "photom": "jwst_nircam_photom_0154.fits",
+  "area": "jwst_nircam_area_0324.fits"
+ },
+ "jwst_1298.pmap|F150W|NRCB4": {
+  "flat": "jwst_nircam_flat_0645.fits",
+  "photom": "jwst_nircam_photom_0158.fits",
+  "area": "jwst_nircam_area_0204.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCA1": {
+  "flat": "jwst_nircam_flat_0695.fits",
+  "photom": "jwst_nircam_photom_0155.fits",
+  "area": "jwst_nircam_area_0312.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCA2": {
+  "flat": "jwst_nircam_flat_0654.fits",
+  "photom": "jwst_nircam_photom_0152.fits",
+  "area": "jwst_nircam_area_0263.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCA3": {
+  "flat": "jwst_nircam_flat_0639.fits",
+  "photom": "jwst_nircam_photom_0156.fits",
+  "area": "jwst_nircam_area_0325.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCA4": {
+  "flat": "jwst_nircam_flat_0653.fits",
+  "photom": "jwst_nircam_photom_0159.fits",
+  "area": "jwst_nircam_area_0290.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCB1": {
+  "flat": "jwst_nircam_flat_0740.fits",
+  "photom": "jwst_nircam_photom_0151.fits",
+  "area": "jwst_nircam_area_0329.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCB2": {
+  "flat": "jwst_nircam_flat_0712.fits",
+  "photom": "jwst_nircam_photom_0150.fits",
+  "area": "jwst_nircam_area_0266.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCB3": {
+  "flat": "jwst_nircam_flat_0672.fits",
+  "photom": "jwst_nircam_photom_0154.fits",
+  "area": "jwst_nircam_area_0203.fits"
+ },
+ "jwst_1298.pmap|F200W|NRCB4": {
+  "flat": "jwst_nircam_flat_0720.fits",
+  "photom": "jwst_nircam_photom_0158.fits",
+  "area": "jwst_nircam_area_0270.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCA1": {
+  "flat": "jwst_nircam_flat_0713.fits",
+  "photom": "jwst_nircam_photom_0155.fits",
+  "area": "jwst_nircam_area_0305.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCA2": {
+  "flat": "jwst_nircam_flat_0669.fits",
+  "photom": "jwst_nircam_photom_0152.fits",
+  "area": "jwst_nircam_area_0315.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCA3": {
+  "flat": "jwst_nircam_flat_0703.fits",
+  "photom": "jwst_nircam_photom_0156.fits",
+  "area": "jwst_nircam_area_0292.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCA4": {
+  "flat": "jwst_nircam_flat_0734.fits",
+  "photom": "jwst_nircam_photom_0159.fits",
+  "area": "jwst_nircam_area_0202.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCB1": {
+  "flat": "jwst_nircam_flat_0693.fits",
+  "photom": "jwst_nircam_photom_0151.fits",
+  "area": "jwst_nircam_area_0238.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCB2": {
+  "flat": "jwst_nircam_flat_0676.fits",
+  "photom": "jwst_nircam_photom_0150.fits",
+  "area": "jwst_nircam_area_0251.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCB3": {
+  "flat": "jwst_nircam_flat_0679.fits",
+  "photom": "jwst_nircam_photom_0154.fits",
+  "area": "jwst_nircam_area_0275.fits"
+ },
+ "jwst_1298.pmap|F212N|NRCB4": {
+  "flat": "jwst_nircam_flat_0710.fits",
+  "photom": "jwst_nircam_photom_0158.fits",
+  "area": "jwst_nircam_area_0310.fits"
+ },
+ "jwst_1298.pmap|F250M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0630.fits",
+  "photom": "jwst_nircam_photom_0157.fits",
+  "area": "jwst_nircam_area_0215.fits"
+ },
+ "jwst_1298.pmap|F250M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0631.fits",
+  "photom": "jwst_nircam_photom_0153.fits",
+  "area": "jwst_nircam_area_0281.fits"
+ },
+ "jwst_1298.pmap|F300M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0616.fits",
+  "photom": "jwst_nircam_photom_0157.fits",
+  "area": "jwst_nircam_area_0294.fits"
+ },
+ "jwst_1298.pmap|F300M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0618.fits",
+  "photom": "jwst_nircam_photom_0153.fits",
+  "area": "jwst_nircam_area_0249.fits"
+ },
+ "jwst_1298.pmap|F410M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0636.fits",
+  "photom": "jwst_nircam_photom_0157.fits",
+  "area": "jwst_nircam_area_0334.fits"
+ },
+ "jwst_1298.pmap|F410M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0613.fits",
+  "photom": "jwst_nircam_photom_0153.fits",
+  "area": "jwst_nircam_area_0287.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCA1": {
+  "flat": "jwst_nircam_flat_0657.fits",
+  "photom": "jwst_nircam_photom_0155.fits",
+  "area": "jwst_nircam_area_0240.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCA2": {
+  "flat": "jwst_nircam_flat_0727.fits",
+  "photom": "jwst_nircam_photom_0152.fits",
+  "area": "jwst_nircam_area_0247.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCA3": {
+  "flat": "jwst_nircam_flat_0689.fits",
+  "photom": "jwst_nircam_photom_0156.fits",
+  "area": "jwst_nircam_area_0322.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCA4": {
+  "flat": "jwst_nircam_flat_0685.fits",
+  "photom": "jwst_nircam_photom_0159.fits",
+  "area": "jwst_nircam_area_0230.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCB1": {
+  "flat": "jwst_nircam_flat_0738.fits",
+  "photom": "jwst_nircam_photom_0151.fits",
+  "area": "jwst_nircam_area_0217.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCB2": {
+  "flat": "jwst_nircam_flat_0675.fits",
+  "photom": "jwst_nircam_photom_0150.fits",
+  "area": "jwst_nircam_area_0262.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCB3": {
+  "flat": "jwst_nircam_flat_0641.fits",
+  "photom": "jwst_nircam_photom_0154.fits",
+  "area": "jwst_nircam_area_0324.fits"
+ },
+ "jwst_1322.pmap|F150W|NRCB4": {
+  "flat": "jwst_nircam_flat_0645.fits",
+  "photom": "jwst_nircam_photom_0158.fits",
+  "area": "jwst_nircam_area_0204.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCA1": {
+  "flat": "jwst_nircam_flat_0695.fits",
+  "photom": "jwst_nircam_photom_0155.fits",
+  "area": "jwst_nircam_area_0312.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCA2": {
+  "flat": "jwst_nircam_flat_0654.fits",
+  "photom": "jwst_nircam_photom_0152.fits",
+  "area": "jwst_nircam_area_0263.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCA3": {
+  "flat": "jwst_nircam_flat_0639.fits",
+  "photom": "jwst_nircam_photom_0156.fits",
+  "area": "jwst_nircam_area_0325.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCA4": {
+  "flat": "jwst_nircam_flat_0653.fits",
+  "photom": "jwst_nircam_photom_0159.fits",
+  "area": "jwst_nircam_area_0290.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCB1": {
+  "flat": "jwst_nircam_flat_0740.fits",
+  "photom": "jwst_nircam_photom_0151.fits",
+  "area": "jwst_nircam_area_0329.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCB2": {
+  "flat": "jwst_nircam_flat_0712.fits",
+  "photom": "jwst_nircam_photom_0150.fits",
+  "area": "jwst_nircam_area_0266.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCB3": {
+  "flat": "jwst_nircam_flat_0672.fits",
+  "photom": "jwst_nircam_photom_0154.fits",
+  "area": "jwst_nircam_area_0203.fits"
+ },
+ "jwst_1322.pmap|F200W|NRCB4": {
+  "flat": "jwst_nircam_flat_0720.fits",
+  "photom": "jwst_nircam_photom_0158.fits",
+  "area": "jwst_nircam_area_0270.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCA1": {
+  "flat": "jwst_nircam_flat_0713.fits",
+  "photom": "jwst_nircam_photom_0155.fits",
+  "area": "jwst_nircam_area_0305.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCA2": {
+  "flat": "jwst_nircam_flat_0669.fits",
+  "photom": "jwst_nircam_photom_0152.fits",
+  "area": "jwst_nircam_area_0315.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCA3": {
+  "flat": "jwst_nircam_flat_0703.fits",
+  "photom": "jwst_nircam_photom_0156.fits",
+  "area": "jwst_nircam_area_0292.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCA4": {
+  "flat": "jwst_nircam_flat_0734.fits",
+  "photom": "jwst_nircam_photom_0159.fits",
+  "area": "jwst_nircam_area_0202.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCB1": {
+  "flat": "jwst_nircam_flat_0693.fits",
+  "photom": "jwst_nircam_photom_0151.fits",
+  "area": "jwst_nircam_area_0238.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCB2": {
+  "flat": "jwst_nircam_flat_0676.fits",
+  "photom": "jwst_nircam_photom_0150.fits",
+  "area": "jwst_nircam_area_0251.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCB3": {
+  "flat": "jwst_nircam_flat_0679.fits",
+  "photom": "jwst_nircam_photom_0154.fits",
+  "area": "jwst_nircam_area_0275.fits"
+ },
+ "jwst_1322.pmap|F212N|NRCB4": {
+  "flat": "jwst_nircam_flat_0710.fits",
+  "photom": "jwst_nircam_photom_0158.fits",
+  "area": "jwst_nircam_area_0310.fits"
+ },
+ "jwst_1322.pmap|F250M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0630.fits",
+  "photom": "jwst_nircam_photom_0157.fits",
+  "area": "jwst_nircam_area_0215.fits"
+ },
+ "jwst_1322.pmap|F250M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0631.fits",
+  "photom": "jwst_nircam_photom_0153.fits",
+  "area": "jwst_nircam_area_0281.fits"
+ },
+ "jwst_1322.pmap|F300M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0616.fits",
+  "photom": "jwst_nircam_photom_0157.fits",
+  "area": "jwst_nircam_area_0294.fits"
+ },
+ "jwst_1322.pmap|F300M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0618.fits",
+  "photom": "jwst_nircam_photom_0153.fits",
+  "area": "jwst_nircam_area_0249.fits"
+ },
+ "jwst_1322.pmap|F410M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0636.fits",
+  "photom": "jwst_nircam_photom_0157.fits",
+  "area": "jwst_nircam_area_0334.fits"
+ },
+ "jwst_1322.pmap|F410M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0613.fits",
+  "photom": "jwst_nircam_photom_0153.fits",
+  "area": "jwst_nircam_area_0287.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCA1": {
+  "flat": "jwst_nircam_flat_0657.fits",
+  "photom": "jwst_nircam_photom_0173.fits",
+  "area": "jwst_nircam_area_0240.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCA2": {
+  "flat": "jwst_nircam_flat_0727.fits",
+  "photom": "jwst_nircam_photom_0167.fits",
+  "area": "jwst_nircam_area_0247.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCA3": {
+  "flat": "jwst_nircam_flat_0689.fits",
+  "photom": "jwst_nircam_photom_0169.fits",
+  "area": "jwst_nircam_area_0322.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCA4": {
+  "flat": "jwst_nircam_flat_0685.fits",
+  "photom": "jwst_nircam_photom_0172.fits",
+  "area": "jwst_nircam_area_0230.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCB1": {
+  "flat": "jwst_nircam_flat_0738.fits",
+  "photom": "jwst_nircam_photom_0175.fits",
+  "area": "jwst_nircam_area_0217.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCB2": {
+  "flat": "jwst_nircam_flat_0675.fits",
+  "photom": "jwst_nircam_photom_0174.fits",
+  "area": "jwst_nircam_area_0262.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCB3": {
+  "flat": "jwst_nircam_flat_0641.fits",
+  "photom": "jwst_nircam_photom_0170.fits",
+  "area": "jwst_nircam_area_0324.fits"
+ },
+ "jwst_1568.pmap|F150W|NRCB4": {
+  "flat": "jwst_nircam_flat_0645.fits",
+  "photom": "jwst_nircam_photom_0166.fits",
+  "area": "jwst_nircam_area_0204.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCA1": {
+  "flat": "jwst_nircam_flat_0695.fits",
+  "photom": "jwst_nircam_photom_0173.fits",
+  "area": "jwst_nircam_area_0312.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCA2": {
+  "flat": "jwst_nircam_flat_0654.fits",
+  "photom": "jwst_nircam_photom_0167.fits",
+  "area": "jwst_nircam_area_0263.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCA3": {
+  "flat": "jwst_nircam_flat_0639.fits",
+  "photom": "jwst_nircam_photom_0169.fits",
+  "area": "jwst_nircam_area_0325.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCA4": {
+  "flat": "jwst_nircam_flat_0653.fits",
+  "photom": "jwst_nircam_photom_0172.fits",
+  "area": "jwst_nircam_area_0290.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCB1": {
+  "flat": "jwst_nircam_flat_0740.fits",
+  "photom": "jwst_nircam_photom_0175.fits",
+  "area": "jwst_nircam_area_0329.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCB2": {
+  "flat": "jwst_nircam_flat_0712.fits",
+  "photom": "jwst_nircam_photom_0174.fits",
+  "area": "jwst_nircam_area_0266.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCB3": {
+  "flat": "jwst_nircam_flat_0672.fits",
+  "photom": "jwst_nircam_photom_0170.fits",
+  "area": "jwst_nircam_area_0203.fits"
+ },
+ "jwst_1568.pmap|F200W|NRCB4": {
+  "flat": "jwst_nircam_flat_0720.fits",
+  "photom": "jwst_nircam_photom_0166.fits",
+  "area": "jwst_nircam_area_0270.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCA1": {
+  "flat": "jwst_nircam_flat_0713.fits",
+  "photom": "jwst_nircam_photom_0173.fits",
+  "area": "jwst_nircam_area_0305.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCA2": {
+  "flat": "jwst_nircam_flat_0669.fits",
+  "photom": "jwst_nircam_photom_0167.fits",
+  "area": "jwst_nircam_area_0315.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCA3": {
+  "flat": "jwst_nircam_flat_0703.fits",
+  "photom": "jwst_nircam_photom_0169.fits",
+  "area": "jwst_nircam_area_0292.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCA4": {
+  "flat": "jwst_nircam_flat_0734.fits",
+  "photom": "jwst_nircam_photom_0172.fits",
+  "area": "jwst_nircam_area_0202.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCB1": {
+  "flat": "jwst_nircam_flat_0693.fits",
+  "photom": "jwst_nircam_photom_0175.fits",
+  "area": "jwst_nircam_area_0238.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCB2": {
+  "flat": "jwst_nircam_flat_0676.fits",
+  "photom": "jwst_nircam_photom_0174.fits",
+  "area": "jwst_nircam_area_0251.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCB3": {
+  "flat": "jwst_nircam_flat_0679.fits",
+  "photom": "jwst_nircam_photom_0170.fits",
+  "area": "jwst_nircam_area_0275.fits"
+ },
+ "jwst_1568.pmap|F212N|NRCB4": {
+  "flat": "jwst_nircam_flat_0710.fits",
+  "photom": "jwst_nircam_photom_0166.fits",
+  "area": "jwst_nircam_area_0310.fits"
+ },
+ "jwst_1568.pmap|F250M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0750.fits",
+  "photom": "jwst_nircam_photom_0168.fits",
+  "area": "jwst_nircam_area_0215.fits"
+ },
+ "jwst_1568.pmap|F250M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0757.fits",
+  "photom": "jwst_nircam_photom_0171.fits",
+  "area": "jwst_nircam_area_0281.fits"
+ },
+ "jwst_1568.pmap|F300M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0766.fits",
+  "photom": "jwst_nircam_photom_0168.fits",
+  "area": "jwst_nircam_area_0294.fits"
+ },
+ "jwst_1568.pmap|F300M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0752.fits",
+  "photom": "jwst_nircam_photom_0171.fits",
+  "area": "jwst_nircam_area_0249.fits"
+ },
+ "jwst_1568.pmap|F410M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0747.fits",
+  "photom": "jwst_nircam_photom_0168.fits",
+  "area": "jwst_nircam_area_0334.fits"
+ },
+ "jwst_1568.pmap|F410M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0765.fits",
+  "photom": "jwst_nircam_photom_0171.fits",
+  "area": "jwst_nircam_area_0287.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCA1": {
+  "flat": "jwst_nircam_flat_0657.fits",
+  "photom": "jwst_nircam_photom_0173.fits",
+  "area": "jwst_nircam_area_0240.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCA2": {
+  "flat": "jwst_nircam_flat_0727.fits",
+  "photom": "jwst_nircam_photom_0181.fits",
+  "area": "jwst_nircam_area_0247.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCA3": {
+  "flat": "jwst_nircam_flat_0689.fits",
+  "photom": "jwst_nircam_photom_0169.fits",
+  "area": "jwst_nircam_area_0322.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCA4": {
+  "flat": "jwst_nircam_flat_0685.fits",
+  "photom": "jwst_nircam_photom_0180.fits",
+  "area": "jwst_nircam_area_0230.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCB1": {
+  "flat": "jwst_nircam_flat_0738.fits",
+  "photom": "jwst_nircam_photom_0175.fits",
+  "area": "jwst_nircam_area_0217.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCB2": {
+  "flat": "jwst_nircam_flat_0675.fits",
+  "photom": "jwst_nircam_photom_0174.fits",
+  "area": "jwst_nircam_area_0262.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCB3": {
+  "flat": "jwst_nircam_flat_0641.fits",
+  "photom": "jwst_nircam_photom_0170.fits",
+  "area": "jwst_nircam_area_0324.fits"
+ },
+ "jwst_1595.pmap|F150W|NRCB4": {
+  "flat": "jwst_nircam_flat_0645.fits",
+  "photom": "jwst_nircam_photom_0166.fits",
+  "area": "jwst_nircam_area_0204.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCA1": {
+  "flat": "jwst_nircam_flat_0695.fits",
+  "photom": "jwst_nircam_photom_0173.fits",
+  "area": "jwst_nircam_area_0312.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCA2": {
+  "flat": "jwst_nircam_flat_0654.fits",
+  "photom": "jwst_nircam_photom_0181.fits",
+  "area": "jwst_nircam_area_0263.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCA3": {
+  "flat": "jwst_nircam_flat_0639.fits",
+  "photom": "jwst_nircam_photom_0169.fits",
+  "area": "jwst_nircam_area_0325.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCA4": {
+  "flat": "jwst_nircam_flat_0653.fits",
+  "photom": "jwst_nircam_photom_0180.fits",
+  "area": "jwst_nircam_area_0290.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCB1": {
+  "flat": "jwst_nircam_flat_0740.fits",
+  "photom": "jwst_nircam_photom_0175.fits",
+  "area": "jwst_nircam_area_0329.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCB2": {
+  "flat": "jwst_nircam_flat_0712.fits",
+  "photom": "jwst_nircam_photom_0174.fits",
+  "area": "jwst_nircam_area_0266.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCB3": {
+  "flat": "jwst_nircam_flat_0672.fits",
+  "photom": "jwst_nircam_photom_0170.fits",
+  "area": "jwst_nircam_area_0203.fits"
+ },
+ "jwst_1595.pmap|F200W|NRCB4": {
+  "flat": "jwst_nircam_flat_0720.fits",
+  "photom": "jwst_nircam_photom_0166.fits",
+  "area": "jwst_nircam_area_0270.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCA1": {
+  "flat": "jwst_nircam_flat_0713.fits",
+  "photom": "jwst_nircam_photom_0173.fits",
+  "area": "jwst_nircam_area_0305.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCA2": {
+  "flat": "jwst_nircam_flat_0669.fits",
+  "photom": "jwst_nircam_photom_0181.fits",
+  "area": "jwst_nircam_area_0315.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCA3": {
+  "flat": "jwst_nircam_flat_0703.fits",
+  "photom": "jwst_nircam_photom_0169.fits",
+  "area": "jwst_nircam_area_0292.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCA4": {
+  "flat": "jwst_nircam_flat_0734.fits",
+  "photom": "jwst_nircam_photom_0180.fits",
+  "area": "jwst_nircam_area_0202.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCB1": {
+  "flat": "jwst_nircam_flat_0693.fits",
+  "photom": "jwst_nircam_photom_0175.fits",
+  "area": "jwst_nircam_area_0238.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCB2": {
+  "flat": "jwst_nircam_flat_0676.fits",
+  "photom": "jwst_nircam_photom_0174.fits",
+  "area": "jwst_nircam_area_0251.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCB3": {
+  "flat": "jwst_nircam_flat_0679.fits",
+  "photom": "jwst_nircam_photom_0170.fits",
+  "area": "jwst_nircam_area_0275.fits"
+ },
+ "jwst_1595.pmap|F212N|NRCB4": {
+  "flat": "jwst_nircam_flat_0710.fits",
+  "photom": "jwst_nircam_photom_0166.fits",
+  "area": "jwst_nircam_area_0310.fits"
+ },
+ "jwst_1595.pmap|F250M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0750.fits",
+  "photom": "jwst_nircam_photom_0168.fits",
+  "area": "jwst_nircam_area_0215.fits"
+ },
+ "jwst_1595.pmap|F250M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0757.fits",
+  "photom": "jwst_nircam_photom_0171.fits",
+  "area": "jwst_nircam_area_0281.fits"
+ },
+ "jwst_1595.pmap|F300M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0766.fits",
+  "photom": "jwst_nircam_photom_0168.fits",
+  "area": "jwst_nircam_area_0294.fits"
+ },
+ "jwst_1595.pmap|F300M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0752.fits",
+  "photom": "jwst_nircam_photom_0171.fits",
+  "area": "jwst_nircam_area_0249.fits"
+ },
+ "jwst_1595.pmap|F410M|NRCALONG": {
+  "flat": "jwst_nircam_flat_0747.fits",
+  "photom": "jwst_nircam_photom_0168.fits",
+  "area": "jwst_nircam_area_0334.fits"
+ },
+ "jwst_1595.pmap|F410M|NRCBLONG": {
+  "flat": "jwst_nircam_flat_0765.fits",
+  "photom": "jwst_nircam_photom_0171.fits",
+  "area": "jwst_nircam_area_0287.fits"
+ }
+}
