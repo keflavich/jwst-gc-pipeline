@@ -1,0 +1,16 @@
+**WARNING**: LOCAL JWST PRD VERSION PRDOPSSOC-072 DOESN'T MATCH THE CURRENT ONLINE VERSION PRDOPSSOC-075
+Please consider updating pysiaf, e.g. pip install --upgrade pysiaf or conda update pysiaf
+150W 14 15 {'n': 224, 'sat_area': 71.0, 'buf': 2.0, 'area_est': 143.3062170694515, 'nfit': 6537.0, 'deficit': 24.0, 'nrim': 109.0, 'sat_area_q': [69.0, 79.0]}
+150W 15 16 {'n': 627, 'sat_area': 50.0, 'buf': 2.0, 'area_est': 112.69893610697918, 'nfit': 6553.0, 'deficit': 8.0, 'nrim': 103.0, 'sat_area_q': [45.0, 59.0]}
+150W 16 17 {'n': 1466, 'sat_area': 28.0, 'buf': 2.0, 'area_est': 78.08214741303718, 'nfit': 6559.0, 'deficit': 2.0, 'nrim': 86.0, 'sat_area_q': [24.0, 45.0]}
+200W 13 14 {'n': 32, 'sat_area': 102.0, 'buf': 3.0, 'area_est': 237.67977240374296, 'nfit': 6501.5, 'deficit': 59.5, 'nrim': 140.0, 'sat_area_q': [94.0, 108.03999999999999]}
+200W 14 15 {'n': 613, 'sat_area': 73.0, 'buf': 2.0, 'area_est': 146.14177997651603, 'nfit': 6551.0, 'deficit': 10.0, 'nrim': 157.0, 'sat_area_q': [50.92, 91.0]}
+200W 15 16 {'n': 1130, 'sat_area': 24.0, 'buf': 2.0, 'area_est': 71.29923083315602, 'nfit': 6560.0, 'deficit': 1.0, 'nrim': 119.0, 'sat_area_q': [21.0, 28.0]}
+250M 12.3 13 {'n': 104, 'sat_area': 118.5, 'buf': 3.0, 'area_est': 262.5412316098327, 'nfit': 6496.0, 'deficit': 65.0, 'nrim': 160.5, 'sat_area_q': [84.0, 136.0]}
+250M 13 13.5 {'n': 105, 'sat_area': 91.0, 'buf': 3.0, 'area_est': 220.72312654718007, 'nfit': 6538.0, 'deficit': 23.0, 'nrim': 189.0, 'sat_area_q': [71.28, 107.36]}
+250M 13.5 14 {'n': 203, 'sat_area': 67.0, 'buf': 2.0, 'area_est': 137.59901078046101, 'nfit': 6548.0, 'deficit': 13.0, 'nrim': 216.0, 'sat_area_q': [54.0, 77.0]}
+250M 14 15 {'n': 723, 'sat_area': 45.0, 'buf': 2.0, 'area_est': 105.1262981856313, 'nfit': 6553.0, 'deficit': 8.0, 'nrim': 125.0, 'sat_area_q': [32.0, 59.0]}
+300M 12.3 13 {'n': 72, 'sat_area': 139.0, 'buf': 3.0, 'area_est': 292.65505896976833, 'nfit': 6511.0, 'deficit': 50.0, 'nrim': 230.0, 'sat_area_q': [101.36, 147.64]}
+300M 13 13.5 {'n': 98, 'sat_area': 109.5, 'buf': 3.0, 'area_est': 249.0581767654543, 'nfit': 6543.0, 'deficit': 18.0, 'nrim': 275.5, 'sat_area_q': [81.52, 128.48000000000002]}
+300M 13.5 14 {'n': 264, 'sat_area': 79.0, 'buf': 3.0, 'area_est': 201.79782041771574, 'nfit': 6533.0, 'deficit': 28.0, 'nrim': 186.0, 'sat_area_q': [63.08, 93.0]}
+300M 14 15 {'n': 876, 'sat_area': 56.0, 'buf': 2.0, 'area_est': 121.62169096601151, 'nfit': 6557.0, 'deficit': 4.0, 'nrim': 164.0, 'sat_area_q': [43.0, 67.0]}

@@ -1,0 +1,17 @@
+150W nrcb3 1
+**WARNING**: LOCAL JWST PRD VERSION PRDOPSSOC-072 DOESN'T MATCH THE CURRENT ONLINE VERSION PRDOPSSOC-075
+Please consider updating pysiaf, e.g. pip install --upgrade pysiaf or conda update pysiaf
+01:53:08 frame jw03523005001_10101_00001_nrcb3_align_o005_crf.fits L(p99.999) 339.6633356932871 L(sat-neighbour p99) 284.4090704345703
+01:53:08 dolphot rows in frame 3241
+01:53:08 stats {'n_in': 3021, 'edge': 0, 'dq': 1240, 'sat_near': 817, 'iso': 76, 'sn': 0} candidates 888
+01:53:08 after S/N and subsample 407 fail S/N 481
+01:53:09 star 0 407 done 1
+01:53:18 star 50 407 done 51
+01:53:26 star 100 407 done 101
+01:53:34 star 150 407 done 151
+01:53:41 star 200 407 done 201
+01:53:49 star 250 407 done 251
+01:53:57 star 300 407 done 301
+01:54:05 star 350 407 done 351
+01:54:12 star 400 407 done 401
+01:54:13 wrote 407

@@ -1,0 +1,22 @@
+300M nrcblong 2
+**WARNING**: LOCAL JWST PRD VERSION PRDOPSSOC-072 DOESN'T MATCH THE CURRENT ONLINE VERSION PRDOPSSOC-075
+Please consider updating pysiaf, e.g. pip install --upgrade pysiaf or conda update pysiaf
+01:53:09 frame jw03523005001_12101_00002_nrcblong_align_o005_crf.fits L(p99.999) 155.23074344555317 L(sat-neighbour p99) 69.29706695556665
+01:53:09 dolphot rows in frame 8103
+01:53:10 stats {'n_in': 7553, 'edge': 0, 'dq': 3455, 'sat_near': 2501, 'iso': 131, 'sn': 0} candidates 1466
+01:53:10 after S/N and subsample 659 fail S/N 804
+01:53:12 star 0 659 done 1
+01:53:46 star 50 659 done 51
+01:54:14 star 100 659 done 101
+01:54:42 star 150 659 done 151
+01:55:10 star 200 659 done 201
+01:55:38 star 250 659 done 251
+01:56:06 star 300 659 done 300
+01:56:33 star 350 659 done 349
+01:57:01 star 400 659 done 399
+01:57:28 star 450 659 done 449
+01:57:55 star 500 659 done 499
+01:58:21 star 550 659 done 548
+01:58:44 star 600 659 done 597
+01:59:10 star 650 659 done 647
+01:59:15 wrote 655

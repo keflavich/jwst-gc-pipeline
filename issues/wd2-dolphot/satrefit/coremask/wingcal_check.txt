@@ -1,0 +1,15 @@
+catalog columns: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags outside_fov_seed sat_area sat_com_ra sat_com_dec xcentroid ycentroid skycoord_fit flux_fit_precap cap_psf_frac sidelobe_resid_sigma ssr_ratio seed_kind position_only sat_severity_floor satstar_implied_peak satstar_observed_peak wingcal_rmask x_0 y_0 flux_fit_raw wingcal_ratio
+150W 14-15 N=224 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+150W 15-16 N=627 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+150W 16-17 N=1466 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+200W 13-14 N=32 wingcal_rmask med 4.26 wingcal_ratio med 1.040 (16-84: 1.003-1.054) flux_fit/flux_fit_raw med 0.962
+200W 14-15 N=613 wingcal_rmask med 0.56 wingcal_ratio med 1.003 (16-84: 1.002-1.004) flux_fit/flux_fit_raw med 0.997
+200W 15-16 N=1130 wingcal_rmask med 0.56 wingcal_ratio med 1.003 (16-84: 1.002-1.004) flux_fit/flux_fit_raw med 0.997
+250M 12.3-13 N=104 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+250M 13-13.5 N=105 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+250M 13.5-14 N=203 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+250M 14-15 N=723 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+300M 12.3-13 N=72 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+300M 13-13.5 N=98 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+300M 13.5-14 N=264 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
+300M 14-15 N=876 wingcal_rmask med 0.56 wingcal_ratio med 1.000 (16-84: 1.000-1.000) flux_fit/flux_fit_raw med 1.000
