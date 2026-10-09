@@ -1,0 +1,32 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: band, datatype: string}
+# - {name: dolphot_idx, datatype: int64}
+# - {name: cat, datatype: string}
+# - {name: ref_mag, datatype: float64}
+# - {name: n_frames_row_1px, datatype: int64}
+# schema: astropy-2.0
+band dolphot_idx cat ref_mag n_frames_row_1px
+300M 201 b2 16.993 4
+300M 647 b2 16.854 4
+300M 697 b2 16.619 4
+300M 3187 b2 13.237 1
+300M 3383 b2 14.419 1
+300M 3411 b2 14.397 1
+300M 3648 c 15.213 4
+300M 3867 c 15.36 1
+300M 4291 b2 17.463 4
+300M 4293 b2 15.492 4
+300M 4359 b2 17.33 3
+300M 4749 b2 16.68 4
+300M 4935 b2 16.806 3
+300M 4965 b2 16.831 1
+300M 4980 b2 16.641 3
+300M 5130 b2 16.843 4
+300M 5138 c 16.318 3
+300M 5229 b2 16.883 4
+300M 5259 b2 16.87 2
+300M 5569 b2 16.947 4
+300M 7432 b2 17.331 4
+300M 17344 b2 16.933 4

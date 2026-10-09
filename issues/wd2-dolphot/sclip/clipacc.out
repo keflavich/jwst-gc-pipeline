@@ -1,0 +1,23 @@
+F277W: nmatch>=3 rows 12935, zp 24.1280, all-masked under union 49
+  variant    rows_with_pos  good(<0.3,<0.08")  good_18-22  robust_std_dm_18-22  median_dm_18-22  median_nkept
+  union        12886      10404         6306         0.0620         0.0006      3.0
+  fallback     12935      10443         6333         0.0619         0.0006      3.0
+  none         12935      10457         6337         0.0606         0.0018      4.0
+  fluxonly     12935      10466         6342         0.0607         0.0014      4.0
+  floor        12932      10465         6343         0.0606         0.0018      4.0
+F250M: nmatch>=3 rows 13526, zp 24.3147, all-masked under union 68
+  variant    rows_with_pos  good(<0.3,<0.08")  good_18-22  robust_std_dm_18-22  median_dm_18-22  median_nkept
+  union        13458      10954         6390         0.0585         0.0001      3.0
+  fallback     13526      11010         6424         0.0583         0.0001      3.0
+  none         13526      11035         6435         0.0585         0.0007      4.0
+  fluxonly     13526      11032         6435         0.0575        -0.0001      4.0
+  floor        13525      11022         6435         0.0582         0.0003      4.0
+F300M: nmatch>=3 rows 12836, zp 23.9700, all-masked under union 64
+  variant    rows_with_pos  good(<0.3,<0.08")  good_18-22  robust_std_dm_18-22  median_dm_18-22  median_nkept
+  union        12772      10394         6243         0.0589         0.0017      3.0
+  fallback     12836      10443         6264         0.0589         0.0017      3.0
+  none         12836      10452         6271         0.0585         0.0015      4.0
+  fluxonly     12836      10447         6269         0.0585         0.0018      4.0
+  floor        12833      10448         6270         0.0584         0.0017      4.0
+
+[exited with code 0]

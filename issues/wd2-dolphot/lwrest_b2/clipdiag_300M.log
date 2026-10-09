@@ -1,0 +1,3 @@
+base 32726 all-masked (nmatch>0, nmatch_good==0): 64  by nmatch [ 0  0  0 13 51]
+frac with nmatch=4 all masked 51 of 11502 ; nmatch>=3 64 of 12836
+masked by: flux-only-all 0 ra-all 0 dec-all 0

@@ -1,0 +1,25 @@
+277W             current      600   618       2208    2251         2256      2297     5064  5166                          0                          0
+277W    median_unclipped      600   618       2198    2251         2257      2297     5055  5166                         89                         17
+277W           max_frame      600   618       2200    2251         2244      2297     5044  5166                       1212                        155
+277W mean_brightest_half      601   618       2205    2251         2252      2297     5058  5166                        639                         52
+277W ivar_mean_unclipped      597   618       2209    2251         2257      2297     5063  5166                        145                         13
+277W flux_mean_unclipped      600   618       2193    2251         2254      2297     5047  5166                        210                         31
+3285 ref=13.86 current:+0.90 median_unclipped:+0.75 max_frame:+0.29 mean_brightest_half:+0.29 ivar_mean_unclipped:+0.90 flux_mean_unclipped:+0.75
+3555 ref=14.98 current:+0.61 median_unclipped:+0.65 max_frame:+0.08 mean_brightest_half:+0.15 ivar_mean_unclipped:+0.61 flux_mean_unclipped:+0.61
+3581 ref=15.80 current:+0.41 median_unclipped:+0.41 max_frame:+0.41 mean_brightest_half:+0.41 ivar_mean_unclipped:+0.41 flux_mean_unclipped:+0.41
+3590 ref=15.09 current:-1.57 median_unclipped:-1.54 max_frame:-1.61 mean_brightest_half:-1.59 ivar_mean_unclipped:-1.41 flux_mean_unclipped:-1.41
+3648 ref=15.32 current:+0.31 median_unclipped:+0.34 max_frame:+0.22 mean_brightest_half:+0.26 ivar_mean_unclipped:+0.37 flux_mean_unclipped:+0.42
+3867 ref=15.41 current:+0.37 median_unclipped:+0.39 max_frame:+0.33 mean_brightest_half:+0.35 ivar_mean_unclipped:+0.37 flux_mean_unclipped:+0.40
+4251 ref=16.03 current:-1.19 median_unclipped:-1.15 max_frame:-1.24 mean_brightest_half:-1.20 ivar_mean_unclipped:-1.17 flux_mean_unclipped:-1.17
+4329 ref=15.52 current:-1.24 median_unclipped:-1.24 max_frame:-1.97 mean_brightest_half:-1.97 ivar_mean_unclipped:-1.24 flux_mean_unclipped:-1.24
+4441 ref=16.25 current:+0.64 median_unclipped:+0.64 max_frame:+0.02 mean_brightest_half:+0.17 ivar_mean_unclipped:+0.58 flux_mean_unclipped:+0.56
+4775 ref=15.52 current:+0.55 median_unclipped:+0.57 max_frame:+0.53 mean_brightest_half:+0.55 ivar_mean_unclipped:+0.60 flux_mean_unclipped:+0.60
+4832 ref=16.75 current:+0.37 median_unclipped:+0.34 max_frame:+0.31 mean_brightest_half:+0.31 ivar_mean_unclipped:+0.35 flux_mean_unclipped:+0.35
+4901 ref=16.92 current:-2.53 median_unclipped:-2.46 max_frame:-2.54 mean_brightest_half:-2.54 ivar_mean_unclipped:-2.24 flux_mean_unclipped:-2.26
+4985 ref=16.84 current:-2.04 median_unclipped:-2.04 max_frame:-2.38 mean_brightest_half:-2.22 ivar_mean_unclipped:-2.11 flux_mean_unclipped:-2.11
+5239 ref=16.96 current:+0.44 median_unclipped:+0.46 max_frame:+0.43 mean_brightest_half:+0.44 ivar_mean_unclipped:+0.49 flux_mean_unclipped:+0.49
+5673 ref=17.87 current:+0.33 median_unclipped:+0.32 max_frame:+0.11 mean_brightest_half:+0.12 ivar_mean_unclipped:+0.32 flux_mean_unclipped:+0.32
+5686 ref=17.11 current:+0.49 median_unclipped:+0.49 max_frame:+0.48 mean_brightest_half:+0.48 ivar_mean_unclipped:+0.49 flux_mean_unclipped:+0.49
+6366 ref=17.69 current:+0.33 median_unclipped:+0.32 max_frame:+0.25 mean_brightest_half:+0.26 ivar_mean_unclipped:+0.33 flux_mean_unclipped:+0.34
+6388 ref=18.11 current:+0.51 median_unclipped:+0.45 max_frame:+0.23 mean_brightest_half:+0.31 ivar_mean_unclipped:+0.38 flux_mean_unclipped:+0.41
+12810 ref=17.78 current:+0.77 median_unclipped:+0.83 max_frame:+0.61 mean_brightest_half:+0.61 ivar_mean_unclipped:+0.77 flux_mean_unclipped:+0.83

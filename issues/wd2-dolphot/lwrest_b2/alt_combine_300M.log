@@ -1,0 +1,9 @@
+300M             current      663   669       2657    2689         2294      2317     5614  5675                          0                          0
+300M    median_unclipped      665   669       2657    2689         2295      2317     5617  5675                         88                         16
+300M           max_frame      665   669       2648    2689         2279      2317     5592  5675                       1078                        105
+300M mean_brightest_half      666   669       2657    2689         2285      2317     5608  5675                        547                         42
+300M ivar_mean_unclipped      662   669       2651    2689         2295      2317     5608  5675                        129                         23
+300M flux_mean_unclipped      665   669       2650    2689         2295      2317     5610  5675                        169                         27
+3648 ref=15.21 current:+0.36 median_unclipped:+0.41 max_frame:+0.30 mean_brightest_half:+0.34 ivar_mean_unclipped:+0.36 flux_mean_unclipped:+0.39
+3867 ref=15.36 current:-0.36 median_unclipped:-0.36 max_frame:-0.36 mean_brightest_half:-0.36 ivar_mean_unclipped:-0.36 flux_mean_unclipped:-0.36
+5138 ref=16.32 current:+0.38 median_unclipped:+0.38 max_frame:+0.03 mean_brightest_half:+0.19 ivar_mean_unclipped:+0.30 flux_mean_unclipped:+0.29

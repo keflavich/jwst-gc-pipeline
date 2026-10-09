@@ -1,0 +1,23 @@
+F277W: 8 frames, 42253 base sources
+  nmatch=1:  25512 rows; nmatch_good histogram [0, 25512]
+  nmatch=2:   3806 rows; nmatch_good histogram [0, 0, 3806]
+  nmatch=3:   1496 rows; nmatch_good histogram [8, 254, 816, 418]
+  nmatch=4:  11439 rows; nmatch_good histogram [41, 578, 2848, 3273, 4699]
+  all-masked 49 ; with >=1 forced_refit frame 18 ; masked-by-flux-only-all 0 ra-all 0 dec-all 0
+  nmatch>=3 rows with a zero position MAD 0 ; of these all-masked 0
+F250M: 8 frames, 35038 base sources
+  nmatch=1:  18381 rows; nmatch_good histogram [0, 18381]
+  nmatch=2:   3131 rows; nmatch_good histogram [0, 0, 3131]
+  nmatch=3:   1605 rows; nmatch_good histogram [9, 273, 876, 447]
+  nmatch=4:  11921 rows; nmatch_good histogram [59, 609, 3064, 3374, 4815]
+  all-masked 68 ; with >=1 forced_refit frame 34 ; masked-by-flux-only-all 0 ra-all 0 dec-all 0
+  nmatch>=3 rows with a zero position MAD 0 ; of these all-masked 0
+F300M: 8 frames, 32726 base sources
+  nmatch=1:  17228 rows; nmatch_good histogram [0, 17228]
+  nmatch=2:   2662 rows; nmatch_good histogram [0, 0, 2662]
+  nmatch=3:   1334 rows; nmatch_good histogram [13, 224, 702, 395]
+  nmatch=4:  11502 rows; nmatch_good histogram [51, 582, 2728, 3213, 4928]
+  all-masked 64 ; with >=1 forced_refit frame 15 ; masked-by-flux-only-all 0 ra-all 0 dec-all 0
+  nmatch>=3 rows with a zero position MAD 0 ; of these all-masked 0
+
+[exited with code 0]

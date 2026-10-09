@@ -1,0 +1,23 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: band, datatype: string}
+# - {name: option, datatype: string}
+# - {name: good_<16, datatype: int64}
+# - {name: n_<16, datatype: int64}
+# - {name: good_16-18, datatype: int64}
+# - {name: n_16-18, datatype: int64}
+# - {name: good_18-19.5, datatype: int64}
+# - {name: n_18-19.5, datatype: int64}
+# - {name: good_all, datatype: int64}
+# - {name: n_all, datatype: int64}
+# - {name: n_changed_gt0.1_vs_current, datatype: int64}
+# - {name: n_changed_gt0.3_vs_current, datatype: int64}
+# schema: astropy-2.0
+band option good_<16 n_<16 good_16-18 n_16-18 good_18-19.5 n_18-19.5 good_all n_all n_changed_gt0.1_vs_current n_changed_gt0.3_vs_current
+250M current 504 510 2590 2633 2259 2283 5353 5426 0 0
+250M median_unclipped 503 510 2596 2633 2265 2283 5364 5426 94 7
+250M max_frame 501 510 2602 2633 2243 2283 5346 5426 1345 145
+250M mean_brightest_half 502 510 2608 2633 2251 2283 5361 5426 692 48
+250M ivar_mean_unclipped 501 510 2590 2633 2265 2283 5356 5426 199 25
+250M flux_mean_unclipped 503 510 2595 2633 2265 2283 5363 5426 247 16
