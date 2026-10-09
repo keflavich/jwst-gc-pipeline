@@ -1,0 +1,7 @@
+band grid  rstd_dq  r2_coef  r2_intercept  N_rows  score_rstd  N_stars  median f/f_cached  median f/f_control(a)
+F150W cached samp2   0.0038 +0.0224 -0.0038 238 0.0182 425 1.00000 1.00000
+F150W control samp2  0.0038 +0.0224 -0.0038 238 0.0182 425 1.00000 1.00000
+F150W new samp4      0.0037 +0.0198 -0.0033 238 0.0180 425 1.00007 1.00007
+F200W cached samp2   0.0021 -0.0050 +0.0008 254 0.0122 475 1.00000 1.00000
+F200W control samp2  0.0021 -0.0050 +0.0008 254 0.0122 475 1.00000 1.00000
+F200W new samp4      0.0020 -0.0043 +0.0007 254 0.0113 475 0.99778 0.99778
