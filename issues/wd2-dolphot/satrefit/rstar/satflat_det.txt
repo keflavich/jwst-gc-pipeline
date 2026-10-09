@@ -1,0 +1,12 @@
+
+### F150W
+nrcb1: rows 2830, rim flat p16/50/84 [0.9818 1.0057 1.0235]
+nrcb3: rows 3326, rim flat p16/50/84 [0.9707 0.992  1.0144]
+nrcb1 only (276 stars < 17 mag, star flat p16/50/84 [0.9889 1.0044 1.0217]): H slope -0.85 [-1.02,-0.65]; Hf slope +0.08 [-0.09,+0.25]
+nrcb3 only (325 stars < 17 mag, star flat p16/50/84 [0.9699 0.9883 1.0119]): H slope -0.79 [-0.92,-0.67]; Hf slope +0.13 [+0.01,+0.25]
+
+### F200W
+nrcb1: rows 992, rim flat p16/50/84 [0.9844 1.0059 1.021 ]
+nrcb3: rows 1523, rim flat p16/50/84 [0.9691 0.9877 1.0091]
+nrcb1 only (232 stars < 17 mag, star flat p16/50/84 [0.9912 1.0055 1.0203]): H slope -0.81 [-0.97,-0.64]; Hf slope +0.09 [-0.07,+0.26]
+nrcb3 only (278 stars < 17 mag, star flat p16/50/84 [0.973  0.9894 1.0121]): H slope -0.56 [-0.70,-0.43]; Hf slope +0.31 [+0.17,+0.44]
