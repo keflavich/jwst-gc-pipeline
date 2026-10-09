@@ -498,6 +498,102 @@ def test_restore_skips_component_holding_an_accepted_satstar():
     assert np.hypot(xx - 21.0, yy - 21.0).max() <= 3 * FWHM
 
 
+def test_restore_keeps_shared_component_outside_accepted_radius(capsys):
+    """With ``accepted_excl_fwhm`` the component holding an accepted satstar
+    is restored around the hand-off, except within that radius of the
+    accepted centre; 0 restores as if there were no accepted satstar."""
+    dq = np.zeros(SHAPE, dtype=np.uint32)
+    dq[20:30, 20:30] |= SAT
+    data = np.ones(SHAPE)
+    bad = np.zeros(SHAPE, bool)
+    acc = Table({'xcentroid': [25.0], 'ycentroid': [25.0]})
+    hxy = np.array([[21.0, 21.0]])
+    r = C._handoff_restore_pixels(dq, data, bad, hxy, acc, FWHM,
+                                  accepted_excl_fwhm=1.5, label='t')
+    assert r[21, 21]
+    no_acc = C._handoff_restore_pixels(dq, data, bad, hxy, None, FWHM)
+    yy, xx = np.mgrid[:SHAPE[0], :SHAPE[1]]
+    inside = np.hypot(xx - 25.0, yy - 25.0) <= 1.5 * FWHM
+    assert (no_acc & inside).any()
+    assert np.array_equal(r, no_acc & ~inside)
+    out = capsys.readouterr().out
+    assert ('[t] hand-off restore: 1 of 1 selected SATURATED component(s) '
+            'hold an accepted satstar and are kept; '
+            f'{int((no_acc & inside).sum())} px within 1.5 FWHM') in out
+    r0 = C._handoff_restore_pixels(dq, data, bad, hxy, acc, FWHM,
+                                   accepted_excl_fwhm=0.0)
+    assert np.array_equal(r0, no_acc)
+
+
+def test_restore_accepted_radius_applies_to_every_selected_component():
+    """The radius also masks pixels of a component that holds no accepted
+    centre itself (an accepted star just outside it)."""
+    dq = np.zeros(SHAPE, dtype=np.uint32)
+    dq[20:30, 20:30] |= SAT
+    acc = Table({'xcentroid': [31.0], 'ycentroid': [25.0]})
+    hxy = np.array([[25.0, 25.0]])
+    data, bad = np.ones(SHAPE), np.zeros(SHAPE, bool)
+    assert C._handoff_restore_pixels(dq, data, bad, hxy, acc, FWHM)[25, 29]
+    r = C._handoff_restore_pixels(dq, data, bad, hxy, acc, FWHM,
+                                  accepted_excl_fwhm=1.5)
+    assert r[25, 25]
+    yy, xx = np.nonzero(r)
+    assert np.hypot(xx - 31.0, yy - 25.0).min() > 1.5 * FWHM
+
+
+def test_restore_accepted_radius_keeps_invalid_pixels_masked():
+    dq = np.zeros(SHAPE, dtype=np.uint32)
+    dq[20:30, 20:30] |= SAT
+    dq[21, 22] |= L.dqflags.pixel['DO_NOT_USE']
+    data = np.ones(SHAPE)
+    data[22, 21] = np.nan
+    bad = np.zeros(SHAPE, bool)
+    bad[22, 22] = True
+    acc = Table({'xcentroid': [25.0], 'ycentroid': [25.0]})
+    r = C._handoff_restore_pixels(dq, data, bad, np.array([[21.0, 21.0]]),
+                                  acc, FWHM, accepted_excl_fwhm=1.5)
+    assert r[21, 21]
+    assert not r[21, 22] and not r[22, 21] and not r[22, 22]
+
+
+def test_restore_accepted_excl_fwhm_env(monkeypatch):
+    var = 'DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM'
+    monkeypatch.delenv(var, raising=False)
+    assert C._daophot_handoff_restore_accepted_excl_fwhm() is None
+    monkeypatch.setenv(var, '  ')
+    assert C._daophot_handoff_restore_accepted_excl_fwhm() is None
+    monkeypatch.setenv(var, '1.5')
+    assert C._daophot_handoff_restore_accepted_excl_fwhm() == 1.5
+    monkeypatch.setenv(var, '0')
+    assert C._daophot_handoff_restore_accepted_excl_fwhm() == 0.0
+
+
+@pytest.mark.parametrize('raw', ['abc', '-1', 'nan', 'inf'])
+def test_restore_accepted_excl_fwhm_rejects_malformed_values(monkeypatch,
+                                                             raw):
+    monkeypatch.setenv('DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM', raw)
+    with pytest.raises(ValueError,
+                       match='DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM'):
+        C._daophot_handoff_restore_accepted_excl_fwhm()
+
+
+def test_prepare_reads_restore_accepted_radius_env(tmp_path, monkeypatch,
+                                                   capsys):
+    """The frame preparation passes the env radius to the restore; unset, the
+    restore runs as before and prints no restore line."""
+    monkeypatch.delenv('DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM',
+                       raising=False)
+    ctx, _ = _prepare(tmp_path / 'a', monkeypatch)
+    assert ctx.handoff_xy is not None
+    assert 'hand-off restore:' not in capsys.readouterr().out
+    monkeypatch.setenv('DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM', '1.5')
+    ctx2, _ = _prepare(tmp_path / 'b', monkeypatch)
+    assert '[manual] hand-off restore: 0 of 1 selected' in (
+        capsys.readouterr().out)
+    # no accepted satstar here: the same pixels are restored
+    assert np.array_equal(ctx.mask, ctx2.mask)
+
+
 # ---------------------------------------------------------------------------
 # Fit-quality rejects whose recorded peaks say "not saturated"
 # ---------------------------------------------------------------------------
@@ -1069,6 +1165,56 @@ def test_peak_handoff_keeps_fits_the_centre_of_mass_loses():
     res = _run_restored_pass(img, dq, peaks)
     sig = FWHM / 2.3548
     for star, amp in zip(MERGED, (20000., 12000., 16000.)):
+        assert _has_fit_near(res, star)
+        d = np.hypot(np.asarray(res['x_fit']) - star[0],
+                     np.asarray(res['y_fit']) - star[1])
+        flux = float(np.asarray(res['flux_fit'])[np.argmin(d)])
+        assert flux == pytest.approx(amp * 2 * np.pi * sig ** 2, rel=0.05)
+
+
+def test_restore_accepted_radius_fits_neighbours_of_an_accepted_satstar():
+    """The brightest star of the merged component is an accepted satstar
+    (its model subtracted).  Its two neighbours are handed off at their
+    peaks; the component skip leaves their cores masked and they get no fit,
+    while the accepted-radius restore fits both at the right flux and keeps
+    the accepted core masked."""
+    img, dq = _merged_scene()
+    sig = FWHM / 2.3548
+    yy, xx = np.mgrid[:SHAPE[0], :SHAPE[1]]
+    acc_model = 20000. * np.exp(-((xx - MERGED[0][0]) ** 2
+                                  + (yy - MERGED[0][1]) ** 2) / (2 * sig ** 2))
+    acc = Table({'xcentroid': [MERGED[0][0]], 'ycentroid': [MERGED[0][1]]})
+    hxy = C._unaccepted_sat_component_xy(dq, acc, FWHM, sci=img,
+                                         peak_min_area=40)
+    assert _nearest(hxy, MERGED[0]) > 1.5 * FWHM
+    assert _nearest(hxy, MERGED[1]) < 0.75 and _nearest(hxy, MERGED[2]) < 0.75
+    seed = Table()
+    seed['x_init'] = np.array([MERGED[1][0], MERGED[2][0]])
+    seed['y_init'] = np.array([MERGED[1][1], MERGED[2][1]])
+    seed['flux_init'] = np.full(2, 2.0e4)
+
+    def run(excl):
+        restore = C._handoff_restore_pixels(
+            dq, img, np.zeros(SHAPE, bool), hxy, acc, FWHM,
+            accepted_excl_fwhm=excl, label='t')
+        mask = ((dq & SAT) != 0) & ~restore
+        res, _, _ = C._manual_phot_pass(
+            data=img - acc_model, mask=mask, err=np.ones(SHAPE),
+            bad=np.zeros(SHAPE, bool), dao_psf_model=_gaussian_grid_psf(),
+            init_params=seed, aperture_radius_pix=2 * FWHM, localbkg_inner=6,
+            localbkg_outer=10, grouper=SourceGrouper(2 * FWHM),
+            options=_options(), dq=dq, satstar_model_subtracted=acc_model,
+            label='t', near_sat_dist_pix=1.0, handoff_xy=hxy,
+            handoff_radius_pix=max(1.0, 0.5 * FWHM))
+        return res, mask
+
+    res, _ = run(None)
+    assert not _has_fit_near(res, MERGED[1])
+    assert not _has_fit_near(res, MERGED[2])
+    res, mask = run(1.5)
+    x0, y0 = int(round(MERGED[0][0])), int(round(MERGED[0][1]))
+    assert mask[y0 - 1:y0 + 2, x0 - 1:x0 + 2].all()
+    for star, amp in zip(MERGED[1:], (12000., 16000.)):
         assert _has_fit_near(res, star)
         d = np.hypot(np.asarray(res['x_fit']) - star[0],
                      np.asarray(res['y_fit']) - star[1])
