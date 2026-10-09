@@ -1100,6 +1100,13 @@ def satstar_fit_switches(env=None):
       The rewrite subtracts the level a destreak removed after calibration,
       cal - crf per row and amplifier (``zeroframe_cal_offset``; 0 when no
       sibling cal exists or nothing was removed).
+    * ``SATSTAR_ZF_FLAT`` (default OFF): the rim rewrite is divided by the
+      pixel flat the calibration applied (``R_FLAT``, read from the CRDS
+      cache by ``zeroframe_pixel_flat``), and a measured R(g0) curve is
+      calibrated on cal x flat / group 0.  The crf is rate x PHOTMJSR /
+      flat while group 0 is raw DN, so R x group 0 alone leaves each
+      rewritten pixel off by its flat value (wd2 SW and LW: 16-84% range
+      0.97-1.02 at the rim pixels).
     * ``SATSTAR_SEED_CORE_DQ`` (default ON): NaN-variance pixels flagged
       OUTLIER or by the bad-pixel mask are left out of the "genuine
       saturation core" the seed refinement centres on
@@ -1138,6 +1145,7 @@ def satstar_fit_switches(env=None):
         'rim_badpix': _env_switch('SATSTAR_ZF_RIM_BADPIX', True, env),
         'rcurve_satcheck': _env_switch('SATSTAR_ZF_RCURVE_SATCHECK', True, env),
         'r_header': _env_switch('SATSTAR_ZF_R_HEADER', cap_on, env),
+        'zf_flat': _env_switch('SATSTAR_ZF_FLAT', False, env),
         'seed_core_dq': _env_switch('SATSTAR_SEED_CORE_DQ', True, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
@@ -1221,6 +1229,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             zf += 'c'
         if sw['r_header']:
             zf += 'h'
+        if sw['zf_flat']:
+            zf += 'p'
         if zf:
             parts.append('zf' + zf)
     if sw['qfit_local_r'] > 0:
@@ -1459,7 +1469,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                                 g0_sat_frac=0.9, sat_dilate=3, infl_tol=0.10,
                                 R=None, group0_saturated=None,
                                 first_frame=None, R_header=None,
-                                cal_offset=None):
+                                cal_offset=None, flat=None):
     """Recover the saturated-star RIM from the ramp first read (group-0).
 
     A bright star's DQ-SATURATED region reads wrong in the calibrated frame: the
@@ -1477,9 +1487,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
 
         R = median(cal / group0)  over BRIGHT unsaturated pixels (group0>R_g0_min)
 
-    is ~constant (calibration-free: cal[MJy/sr] ~ rate*photom*flat and
-    group0[DN] ~ rate*tframe, so R ~ photom*flat/tframe; measured 5% scatter for
-    group0>2000).  Then at saturated pixels whose group-0 is UNSATURATED (the
+    is ~constant (calibration-free: cal[MJy/sr] = rate*photom/flat and
+    group0[DN] ~ rate*tframe, so R ~ photom/(flat*tframe); measured 5% scatter
+    for group0>2000).  The per-pixel 1/flat factor is in the crf and not in
+    group 0; ``flat`` (``SATSTAR_ZF_FLAT``) puts it into the rewrite.  Then at saturated pixels whose group-0 is UNSATURATED (the
     rim), replace the inflated cal with R*group0 (de-inflated truth) so the
     PSF-subtracted residual collapses to ~0.  Where group-0 ALSO saturates (the
     deep core), it cannot be recovered -> returned in ``deep_core_mask``.
@@ -1555,6 +1566,13 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         cal-scale value, so wherever the rim R comes from ``R_header`` the
         rewrite is R_header x group 0 - ``cal_offset``.  A measured curve
         already carries the offset and ignores it.
+    flat : 2-D float array or None
+        The pixel flat the calibration divided the crf by
+        (``zeroframe_pixel_flat``), or None.  With it, the R(g0) curve and the
+        R-curve check are measured on ``data`` x flat / group 0, so R,
+        ``R_header`` and an explicit ``R`` are all flat-free, and the
+        rewrite is R x group 0 / flat (minus ``cal_offset`` for a header
+        rate).
 
     Returns
     -------
@@ -1615,6 +1633,19 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                  & ((dq & dqflags.pixel['DO_NOT_USE']) == 0))
     else:
         _keep = None
+    # Pixel flat (SATSTAR_ZF_FLAT): the crf is rate x PHOTMJSR / flat and
+    # group 0 is raw DN, so cal / group 0 carries each pixel's 1 / flat and
+    # R x group 0 does not.  On wd2 the rim pixels' flat spans 0.97-1.02
+    # (16-84%), and the satstars on nrcb3 sit at a median 0.988 against
+    # 1.005 on nrcb1.
+    _flat = None
+    if flat is not None:
+        _flat = np.asarray(flat, dtype=float)
+        if _flat.shape != tuple(shp):
+            print(f"WARNING [zeroframe flat] pixel flat has shape "
+                  f"{_flat.shape}, the frame {tuple(shp)}; not applied",
+                  flush=True)
+            _flat = None
     _Rcurve = None
     _from_header = False
     _measured = R is None or not np.isfinite(R)
@@ -1634,6 +1665,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         if int(good.sum()) >= 50:
             _g = group0[good]
             _r = data[good] / _g
+            if _flat is not None:
+                _r = _r * _flat[good]
             _ctr, _med = _rcurve_bins(_g, _r, R_g0_min, ceiling)
             _raw_ctr, _raw_med = list(_ctr), list(_med)
             # R-curve guard (SATSTAR_ZF_RCURVE_GUARD, default ON; issue #972):
@@ -1727,6 +1760,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         if _satchecked:
             _gs = group0[_satcal]
             _rs = data[_satcal] / _gs
+            if _flat is not None:
+                _rs = _rs * _flat[_satcal]
             _r_sat = float(np.median(_rs))
             _g_sat = float(np.median(_gs))
             if _Rcurve is not None:
@@ -1825,8 +1860,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                                   np.log(_Rcurve[0]), _Rcurve[1]) * g0_eff
         else:
             recov_val = R * g0_eff
-            if _offset is not None:
-                recov_val = recov_val - _offset
+        if _flat is not None:
+            recov_val = recov_val / _flat
+        if _offset is not None:
+            recov_val = recov_val - _offset
         # always rewrite genuinely-saturated rim pixels (group-0 clean); in the
         # (non-DQ-flagged) dilation buffer rewrite only BRIGHT (group0>R_g0_min,
         # so R*group0 is reliable) and INFLATED (charge-migration) pixels, leaving
@@ -1849,6 +1886,11 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
             rim_mask = rim_mask & ((np.asarray(dq).astype(np.int64)
                                     & _RIM_BADPIX_BITS) == 0)
         recovered[rim_mask] = recov_val[rim_mask]
+        if _flat is not None and rim_mask.any():
+            _f16, _f50, _f84 = np.percentile(_flat[rim_mask], [16, 50, 84])
+            print(f"[zeroframe flat] rim divided by the pixel flat, median "
+                  f"{_f50:.4g} over {int(rim_mask.sum())} px (16-84%: "
+                  f"{_f16:.4g} to {_f84:.4g})", flush=True)
     deep_core_mask = sat_buf & ~g0_clean
     if _keep is not None:
         deep_core_mask = deep_core_mask & ~_keep
@@ -1856,7 +1898,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
 
 
 def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
-                         first_frame=None, R_header=None, cal_offset=None):
+                         first_frame=None, R_header=None, cal_offset=None,
+                         flat=None):
     """Apply the ZEROFRAME fit anchor for ``get_saturated_stars``.
 
     Returns ``(data, zf_deep_core, rim, rewrite_delta)``:
@@ -1878,13 +1921,14 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
 
     ``group0_saturated`` (GROUPDQ first-read saturation, or None),
     ``first_frame`` (the ramp ZEROFRAME extension of a multi-frame readout, or
-    None), ``R_header`` (``zeroframe_header_R``, or None) and ``cal_offset``
-    (``zeroframe_cal_offset``, or None) are passed on to
-    ``zeroframe_recover_saturated``.
+    None), ``R_header`` (``zeroframe_header_R``, or None), ``cal_offset``
+    (``zeroframe_cal_offset``, or None) and ``flat`` (``zeroframe_pixel_flat``,
+    or None) are passed on to ``zeroframe_recover_saturated``.
     """
     rec, rim, deep, R = zeroframe_recover_saturated(
         data, dq, zeroframe, group0_saturated=group0_saturated,
-        first_frame=first_frame, R_header=R_header, cal_offset=cal_offset)
+        first_frame=first_frame, R_header=R_header, cal_offset=cal_offset,
+        flat=flat)
     if not np.isfinite(R):
         return data, None, rim, None
     sw = satstar_fit_switches()
@@ -3188,7 +3232,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, zeroframe_group0_saturated=None, zeroframe_first_frame=None, zeroframe_cal_offset=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, sibling_sky=None,
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, zeroframe_group0_saturated=None, zeroframe_first_frame=None, zeroframe_cal_offset=None, zeroframe_flat=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, sibling_sky=None,
                         adaptive_fit_shape=False, adaptive_fit_scale=2.83, adaptive_fit_margin=17.0, adaptive_fit_min=21):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -3612,6 +3656,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             group0_saturated=zeroframe_group0_saturated,
             first_frame=zeroframe_first_frame,
             cal_offset=zeroframe_cal_offset,
+            flat=zeroframe_flat,
             R_header=zeroframe_header_R(
                 header, fitsdata['SCI'].header.get(
                     'PHOTMJSR', header.get('PHOTMJSR'))))
@@ -6204,6 +6249,65 @@ def zeroframe_cal_offset(filename, data, dq, photmjsr=None):
     return off
 
 
+def zeroframe_pixel_flat(header, shape, crds_dir=None):
+    """The pixel flat the calibration divided the frame by, on the frame
+    grid, or None.
+
+    ``header`` is the primary header: ``R_FLAT`` names the reference
+    (``crds://jwst_nircam_flat_0738.fits``), ``INSTRUME`` its CRDS
+    instrument, and ``SUBSTRT1`` / ``SUBSTRT2`` the subarray origin.  The file
+    is read from the CRDS cache under ``crds_dir`` (default ``CRDS_PATH``);
+    nothing is fetched.  As in the jwst flat_field step, a NaN or zero flat
+    value and a DO_NOT_USE or NO_FLAT_FIELD flat DQ read as 1.0 (no
+    correction); a negative or infinite value does too.  Returns None, with
+    a log line, when the keyword, the cache or the file is missing or the
+    flat does not cover ``shape``.
+    """
+    from .crds_cache import cached_reference_path
+    rf = str(header.get('R_FLAT', '') or '')
+    name = rf.split('//')[-1].strip()
+    if not name or name.upper() == 'N/A':
+        print(f"satstar zeroframe: no R_FLAT in the header ({rf!r}); "
+              f"rim not flat-fielded", flush=True)
+        return None
+    crds_dir = crds_dir or os.environ.get('CRDS_PATH')
+    if not crds_dir:
+        print("satstar zeroframe: CRDS_PATH is not set; rim not "
+              "flat-fielded", flush=True)
+        return None
+    inst = str(header.get('INSTRUME', '')).lower()
+    path = cached_reference_path(crds_dir, inst, name)
+    if not os.path.exists(path):
+        print(f"satstar zeroframe: pixel flat {name} not in {crds_dir}; "
+              f"rim not flat-fielded", flush=True)
+        return None
+    with fits.open(path) as fh:
+        flat = np.array(fh['SCI'].data, dtype=float)
+        fdq = (np.asarray(fh['DQ'].data).astype(np.int64)
+               if 'DQ' in [h.name for h in fh] else None)
+    if flat.shape != tuple(shape):
+        y0 = int(header.get('SUBSTRT2', 1)) - 1
+        x0 = int(header.get('SUBSTRT1', 1)) - 1
+        ny, nx = shape
+        if (y0 < 0 or x0 < 0 or y0 + ny > flat.shape[0]
+                or x0 + nx > flat.shape[1]):
+            print(f"satstar zeroframe: pixel flat {name} {flat.shape} does "
+                  f"not cover the frame {tuple(shape)} at SUBSTRT "
+                  f"({x0 + 1}, {y0 + 1}); rim not flat-fielded", flush=True)
+            return None
+        flat = flat[y0:y0 + ny, x0:x0 + nx]
+        if fdq is not None:
+            fdq = fdq[y0:y0 + ny, x0:x0 + nx]
+    bad = ~np.isfinite(flat) | (flat <= 0)
+    if fdq is not None:
+        bad |= (fdq & (dqflags.pixel['DO_NOT_USE']
+                       | dqflags.pixel['NO_FLAT_FIELD'])) != 0
+    flat[bad] = 1.0
+    print(f"satstar zeroframe: pixel flat {name}, median "
+          f"{np.median(flat):.4g}", flush=True)
+    return flat
+
+
 def _find_zeroframe_for(filename):
     """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
 
@@ -6342,6 +6446,14 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
                                           fh[0].header.get('PHOTMJSR')))
         if _off is not None:
             kwargs['zeroframe_cal_offset'] = _off
+    # The pixel flat the calibration applied, for the rim rewrite
+    # (SATSTAR_ZF_FLAT, default OFF).
+    if (kwargs.get('zeroframe') is not None
+            and kwargs.get('zeroframe_flat') is None
+            and _sw_zf['zf_flat']):
+        _fl = zeroframe_pixel_flat(fh[0].header, np.shape(fh['SCI'].data))
+        if _fl is not None:
+            kwargs['zeroframe_flat'] = _fl
     if deblend_with_zeroframe:
         kwargs['zeroframe_deblend'] = True
     print("Running get_saturated_stars", flush=True)

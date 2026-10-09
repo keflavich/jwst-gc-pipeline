@@ -243,6 +243,7 @@ def test_catalog_built_without_the_guard_is_refit_once(tmp_path, monkeypatch):
     ('SATSTAR_ZF_RIM_BADPIX', '0'),
     ('SATSTAR_ZF_RCURVE_SATCHECK', '0'),
     ('SATSTAR_ZF_R_HEADER', '1'),
+    ('SATSTAR_ZF_FLAT', '1'),
 ])
 def test_changing_a_switch_refits_a_cached_catalog(tmp_path, monkeypatch,
                                                   name, value):
