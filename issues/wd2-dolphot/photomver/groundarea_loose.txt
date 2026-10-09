@@ -1,0 +1,14 @@
+
+### F150W vs H (loose selection; rms(pred) 0.0085, N sat 1077, unsat 322)
+| sample | ours - ground vs pred | dolphot - ground vs pred | ours - dolphot vs pred |
+|---|---|---|---|
+| all | Theil-Sen +0.02 [-1.50, +1.55], OLS +2.28 +- 1.30 (N 1392) | Theil-Sen +0.19 [-1.20, +1.58], OLS +2.86 +- 1.21 (N 1392) | Theil-Sen -0.04 [-0.33, +0.24], OLS -0.33 +- 0.50 (N 1392) |
+| unsaturated | Theil-Sen +2.01 [-1.80, +5.74], OLS +8.26 +- 4.15 (N 320) | Theil-Sen +1.90 [-1.46, +5.46], OLS +10.10 +- 3.77 (N 320) | Theil-Sen +0.43 [-0.00, +0.83], OLS -1.49 +- 1.86 (N 320) |
+| saturated | Theil-Sen -0.62 [-2.30, +1.03], OLS -0.84 +- 0.99 (N 1072) | Theil-Sen -0.31 [-1.81, +1.19], OLS -0.52 +- 0.96 (N 1072) | Theil-Sen -0.24 [-0.60, +0.10], OLS -0.25 +- 0.19 (N 1072) |
+
+### F200W vs Ks (loose selection; rms(pred) 0.0086, N sat 404, unsat 1041)
+| sample | ours - ground vs pred | dolphot - ground vs pred | ours - dolphot vs pred |
+|---|---|---|---|
+| all | Theil-Sen +0.39 [-0.73, +1.51], OLS +4.31 +- 1.19 (N 1431) | Theil-Sen -0.88 [-2.05, +0.26], OLS +3.56 +- 1.26 (N 1431) | Theil-Sen +1.16 [+0.96, +1.36], OLS +0.69 +- 0.22 (N 1431) |
+| unsaturated | Theil-Sen +1.25 [-0.18, +2.65], OLS +6.07 +- 1.55 (N 1032) | Theil-Sen -0.19 [-1.65, +1.27], OLS +5.30 +- 1.64 (N 1032) | Theil-Sen +1.30 [+1.10, +1.49], OLS +0.80 +- 0.27 (N 1032) |
+| saturated | Theil-Sen -1.89 [-3.73, -0.14], OLS -3.18 +- 1.19 (N 399) | Theil-Sen -2.90 [-4.80, -1.05], OLS -3.99 +- 1.20 (N 399) | Theil-Sen +0.64 [-0.03, +1.30], OLS +0.67 +- 0.32 (N 399) |
