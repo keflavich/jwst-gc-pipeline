@@ -1,0 +1,72 @@
+F200W nrca1 jw03523005001_12101_00001_nrca1_align_o0
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +0.998
+   siaf-area vs crf AREA[x,y] (transp): corr -0.129 slope -0.128
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr +0.116 slope +0.113
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.997 slope -0.972
+   PSF sum (header as y,x) vs crf AREA normal   : corr +0.125 slope +0.123
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.997 slope -0.980
+   PSF sum range 0.9578-0.9924
+F200W nrca3 jw03523005001_12101_00001_nrca3_align_o0
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +0.999
+   siaf-area vs crf AREA[x,y] (transp): corr -0.709 slope -0.708
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr +0.713 slope +0.698
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.997 slope -0.977
+   PSF sum (header as y,x) vs crf AREA normal   : corr +0.708 slope +0.700
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.997 slope -0.986
+   PSF sum range 0.9523-0.9985
+F200W nrcb3 jw03523005001_12101_00001_nrcb3_align_o0
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +1.003
+   siaf-area vs crf AREA[x,y] (transp): corr +0.907 slope +0.910
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr -0.905 slope -0.881
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.996 slope -0.969
+   PSF sum (header as y,x) vs crf AREA normal   : corr -0.910 slope -0.878
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.996 slope -0.962
+   PSF sum range 0.9578-0.9908
+F200W nrcb4 jw03523005001_12101_00001_nrcb4_align_o0
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +1.002
+   siaf-area vs crf AREA[x,y] (transp): corr +0.707 slope +0.709
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr -0.699 slope -0.686
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.997 slope -0.979
+   PSF sum (header as y,x) vs crf AREA normal   : corr -0.707 slope -0.691
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.997 slope -0.973
+   PSF sum range 0.9529-0.9982
+F150W nrcb1 jw03523005001_10101_00001_nrcb1_align_o0
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +1.004
+   siaf-area vs crf AREA[x,y] (transp): corr +0.182 slope +0.183
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr -0.159 slope -0.152
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.996 slope -0.955
+   PSF sum (header as y,x) vs crf AREA normal   : corr -0.179 slope -0.170
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.995 slope -0.948
+   PSF sum range 0.9692-0.9916
+F212N nrca2 jw03523005001_04101_00001_nrca2_align_o0
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +0.997
+   siaf-area vs crf AREA[x,y] (transp): corr -0.189 slope -0.189
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr +0.147 slope +0.142
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.998 slope -0.962
+   PSF sum (header as y,x) vs crf AREA normal   : corr +0.156 slope +0.151
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.997 slope -0.964
+   PSF sum range 0.9608-0.9827
+F300M nrca5 jw03523005001_12101_00001_nrcalong_align
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +1.001
+   siaf-area vs crf AREA[x,y] (transp): corr -0.476 slope -0.476
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr +0.463 slope +0.423
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.995 slope -0.909
+   PSF sum (header as y,x) vs crf AREA normal   : corr +0.466 slope +0.424
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.995 slope -0.905
+   PSF sum range 0.9455-1.0071
+F300M nrcb5 jw03523005001_12101_00001_nrcblong_align
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +1.001
+   siaf-area vs crf AREA[x,y] (transp): corr +0.551 slope +0.551
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr -0.553 slope -0.504
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.995 slope -0.908
+   PSF sum (header as y,x) vs crf AREA normal   : corr -0.556 slope -0.506
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.995 slope -0.906
+   PSF sum range 0.9447-1.0076
+F410M nrca5 jw03523005001_16101_00001_nrcalong_align
+   siaf-area vs crf AREA[y,x] (normal): corr +1.000 slope +1.001
+   siaf-area vs crf AREA[x,y] (transp): corr -0.476 slope -0.476
+   PSF sum (header as y,x) vs siaf-area at (x,y): corr +0.459 slope +0.429
+   PSF sum (header as y,x) vs siaf-area at (y,x): corr -0.998 slope -0.932
+   PSF sum (header as y,x) vs crf AREA normal   : corr +0.463 slope +0.431
+   PSF sum (header as y,x) vs crf AREA transp   : corr -0.998 slope -0.929
+   PSF sum range 0.9369-0.9990

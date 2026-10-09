@@ -1,0 +1,432 @@
+
+## F150W  (stars with >=2 PSF-matched frames: 751)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.54 [-0.66, -0.42] | 0.0148 | 723 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0100 | 751 |
+| (c) dolphot - ap_area | 3 | -0.67 [-0.79, -0.56] | 0.0128 | 718 |
+| (d) psf_raw - dolphot | 3 | +1.07 [+0.91, +1.22] | 0.0196 | 742 |
+| (e) psf_raw - ap_area | 3 | +0.44 [+0.32, +0.55] | 0.0128 | 718 |
+| (a) psf_raw - ap_raw | 5 | -0.59 [-0.73, -0.44] | 0.0169 | 706 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0100 | 751 |
+| (c) dolphot - ap_area | 5 | -0.81 [-0.98, -0.64] | 0.0200 | 711 |
+| (d) psf_raw - dolphot | 5 | +1.07 [+0.91, +1.22] | 0.0196 | 742 |
+| (e) psf_raw - ap_area | 5 | +0.40 [+0.26, +0.54] | 0.0152 | 701 |
+| (a) psf_raw - ap_raw | 8 | -0.56 [-0.75, -0.37] | 0.0210 | 688 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0100 | 751 |
+| (c) dolphot - ap_area | 8 | -0.84 [-1.06, -0.62] | 0.0238 | 693 |
+| (d) psf_raw - dolphot | 8 | +1.07 [+0.91, +1.22] | 0.0196 | 742 |
+| (e) psf_raw - ap_area | 8 | +0.39 [+0.20, +0.58] | 0.0200 | 682 |
+pred range (5/50/95%): [-0.0137  0.0006  0.0176]; pred robust std 0.0100
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = -0.53 [-0.65, -0.43]  B = -0.69 [-0.79, -0.59]  N=621  corr(pred,predT)=-0.04
+  (c) dolphot - ap_area: A = -0.89 [-1.03, -0.75]  B = +0.07 [-0.08, +0.21]  N=664  corr(pred,predT)=-0.05
+  (d) psf_raw - dolphot: A = +1.16 [+1.02, +1.33]  B = -0.61 [-0.75, -0.48]  N=724  corr(pred,predT)=-0.03
+  (e) psf_raw - ap_area: A = +0.47 [+0.35, +0.57]  B = -0.69 [-0.79, -0.59]  N=621  corr(pred,predT)=-0.04
+r=5, brighter half (N=375): (a) -0.68 [-0.84,-0.52] ; (c) -0.83 [-1.04,-0.61] ; (d) +0.94 [+0.72,+1.17]
+r=5, fainter half (N=376): (a) -0.45 [-0.70,-0.20] ; (c) -0.78 [-1.05,-0.51] ; (d) +1.20 [+0.99,+1.40]
+
+## F164N  (stars with >=2 PSF-matched frames: 469)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.02 [-0.16, +0.14] | 0.0116 | 443 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0099 | 469 |
+| (c) dolphot - ap_area | 3 | -0.60 [-0.70, -0.49] | 0.0099 | 447 |
+| (d) psf_raw - dolphot | 3 | +1.45 [+1.27, +1.64] | 0.0189 | 454 |
+| (e) psf_raw - ap_area | 3 | +0.98 [+0.83, +1.13] | 0.0143 | 447 |
+| (a) psf_raw - ap_raw | 5 | -0.05 [-0.22, +0.12] | 0.0133 | 444 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0099 | 469 |
+| (c) dolphot - ap_area | 5 | -0.61 [-0.73, -0.49] | 0.0115 | 446 |
+| (d) psf_raw - dolphot | 5 | +1.45 [+1.27, +1.64] | 0.0189 | 454 |
+| (e) psf_raw - ap_area | 5 | +0.94 [+0.78, +1.11] | 0.0139 | 443 |
+| (a) psf_raw - ap_raw | 8 | +0.07 [-0.12, +0.26] | 0.0147 | 443 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0100 | 469 |
+| (c) dolphot - ap_area | 8 | -0.54 [-0.67, -0.39] | 0.0123 | 443 |
+| (d) psf_raw - dolphot | 8 | +1.45 [+1.27, +1.64] | 0.0189 | 454 |
+| (e) psf_raw - ap_area | 8 | +1.03 [+0.84, +1.22] | 0.0152 | 444 |
+pred range (5/50/95%): [-0.014   0.0004  0.0153]; pred robust std 0.0099
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.06 [-0.06, +0.18]  B = -0.74 [-0.83, -0.62]  N=401  corr(pred,predT)=+0.21
+  (c) dolphot - ap_area: A = -0.78 [-0.90, -0.65]  B = +0.08 [-0.06, +0.20]  N=411  corr(pred,predT)=+0.22
+  (d) psf_raw - dolphot: A = +1.84 [+1.68, +2.00]  B = -0.95 [-1.11, -0.76]  N=411  corr(pred,predT)=+0.28
+  (e) psf_raw - ap_area: A = +1.07 [+0.97, +1.19]  B = -0.74 [-0.85, -0.64]  N=402  corr(pred,predT)=+0.21
+r=5, brighter half (N=234): (a) +0.12 [-0.15,+0.38] ; (c) -0.63 [-0.79,-0.46] ; (d) +1.48 [+1.20,+1.78]
+r=5, fainter half (N=235): (a) -0.18 [-0.40,+0.04] ; (c) -0.63 [-0.83,-0.43] ; (d) +1.40 [+1.16,+1.64]
+
+## F187N  (stars with >=2 PSF-matched frames: 537)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.08 [-0.24, +0.08] | 0.0133 | 514 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0102 | 537 |
+| (c) dolphot - ap_area | 3 | -0.71 [-0.83, -0.59] | 0.0119 | 507 |
+| (d) psf_raw - dolphot | 3 | +1.39 [+1.24, +1.54] | 0.0175 | 516 |
+| (e) psf_raw - ap_area | 3 | +0.90 [+0.74, +1.06] | 0.0153 | 516 |
+| (a) psf_raw - ap_raw | 5 | +0.03 [-0.16, +0.23] | 0.0171 | 515 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0101 | 537 |
+| (c) dolphot - ap_area | 5 | -0.70 [-0.90, -0.51] | 0.0182 | 509 |
+| (d) psf_raw - dolphot | 5 | +1.39 [+1.24, +1.54] | 0.0175 | 516 |
+| (e) psf_raw - ap_area | 5 | +1.02 [+0.82, +1.22] | 0.0202 | 518 |
+| (a) psf_raw - ap_raw | 8 | +0.21 [-0.07, +0.51] | 0.0256 | 511 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0102 | 537 |
+| (c) dolphot - ap_area | 8 | -0.60 [-0.90, -0.30] | 0.0276 | 510 |
+| (d) psf_raw - dolphot | 8 | +1.39 [+1.24, +1.54] | 0.0175 | 516 |
+| (e) psf_raw - ap_area | 8 | +1.16 [+0.87, +1.47] | 0.0292 | 516 |
+pred range (5/50/95%): [-0.0144  0.0004  0.0155]; pred robust std 0.0102
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.05 [-0.09, +0.17]  B = -0.89 [-1.03, -0.75]  N=458  corr(pred,predT)=+0.13
+  (c) dolphot - ap_area: A = -0.88 [-1.07, -0.72]  B = +0.04 [-0.15, +0.25]  N=481  corr(pred,predT)=+0.12
+  (d) psf_raw - dolphot: A = +1.72 [+1.59, +1.84]  B = -0.78 [-0.89, -0.67]  N=454  corr(pred,predT)=+0.22
+  (e) psf_raw - ap_area: A = +1.05 [+0.91, +1.17]  B = -0.89 [-1.03, -0.75]  N=458  corr(pred,predT)=+0.13
+r=5, brighter half (N=268): (a) +0.25 [+0.01,+0.50] ; (c) -0.66 [-0.88,-0.42] ; (d) +1.43 [+1.20,+1.68]
+r=5, fainter half (N=269): (a) -0.18 [-0.49,+0.13] ; (c) -0.80 [-1.13,-0.47] ; (d) +1.34 [+1.15,+1.54]
+
+## F200W  (stars with >=2 PSF-matched frames: 786)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.05 [-0.08, +0.19] | 0.0149 | 752 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0101 | 786 |
+| (c) dolphot - ap_area | 3 | -0.75 [-0.88, -0.62] | 0.0156 | 741 |
+| (d) psf_raw - dolphot | 3 | +1.77 [+1.62, +1.92] | 0.0256 | 774 |
+| (e) psf_raw - ap_area | 3 | +1.05 [+0.92, +1.19] | 0.0181 | 758 |
+| (a) psf_raw - ap_raw | 5 | +0.18 [-0.03, +0.38] | 0.0215 | 740 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0100 | 786 |
+| (c) dolphot - ap_area | 5 | -0.66 [-0.87, -0.45] | 0.0237 | 736 |
+| (d) psf_raw - dolphot | 5 | +1.77 [+1.62, +1.92] | 0.0256 | 774 |
+| (e) psf_raw - ap_area | 5 | +1.15 [+0.94, +1.35] | 0.0264 | 748 |
+| (a) psf_raw - ap_raw | 8 | +0.22 [-0.13, +0.57] | 0.0380 | 735 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0100 | 785 |
+| (c) dolphot - ap_area | 8 | -0.64 [-0.98, -0.29] | 0.0405 | 729 |
+| (d) psf_raw - dolphot | 8 | +1.77 [+1.63, +1.92] | 0.0256 | 773 |
+| (e) psf_raw - ap_area | 8 | +1.18 [+0.83, +1.54] | 0.0424 | 740 |
+pred range (5/50/95%): [-0.0138  0.001   0.0178]; pred robust std 0.0100
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.06 [-0.09, +0.20]  B = -1.00 [-1.15, -0.85]  N=652  corr(pred,predT)=-0.06
+  (c) dolphot - ap_area: A = -0.70 [-0.90, -0.53]  B = -0.14 [-0.33, +0.05]  N=674  corr(pred,predT)=-0.07
+  (d) psf_raw - dolphot: A = +1.87 [+1.77, +1.99]  B = -1.00 [-1.10, -0.90]  N=719  corr(pred,predT)=-0.06
+  (e) psf_raw - ap_area: A = +1.05 [+0.91, +1.17]  B = -1.00 [-1.18, -0.87]  N=651  corr(pred,predT)=-0.06
+r=5, brighter half (N=393): (a) +0.16 [-0.06,+0.36] ; (c) -0.77 [-1.01,-0.54] ; (d) +1.84 [+1.64,+2.03]
+r=5, fainter half (N=393): (a) +0.26 [-0.13,+0.65] ; (c) -0.46 [-0.81,-0.09] ; (d) +1.71 [+1.48,+1.92]
+
+## F212N  (stars with >=2 PSF-matched frames: 876)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.12 [-0.23, -0.00] | 0.0128 | 836 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0100 | 876 |
+| (c) dolphot - ap_area | 3 | -0.99 [-1.09, -0.89] | 0.0149 | 830 |
+| (d) psf_raw - dolphot | 3 | +1.75 [+1.63, +1.86] | 0.0221 | 858 |
+| (e) psf_raw - ap_area | 3 | +0.88 [+0.76, +1.00] | 0.0143 | 836 |
+| (a) psf_raw - ap_raw | 5 | +0.01 [-0.14, +0.17] | 0.0178 | 821 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0100 | 876 |
+| (c) dolphot - ap_area | 5 | -0.87 [-1.02, -0.72] | 0.0207 | 825 |
+| (d) psf_raw - dolphot | 5 | +1.75 [+1.63, +1.86] | 0.0221 | 858 |
+| (e) psf_raw - ap_area | 5 | +0.98 [+0.82, +1.14] | 0.0203 | 830 |
+| (a) psf_raw - ap_raw | 8 | +0.01 [-0.25, +0.28] | 0.0311 | 828 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0100 | 876 |
+| (c) dolphot - ap_area | 8 | -0.90 [-1.15, -0.66] | 0.0316 | 818 |
+| (d) psf_raw - dolphot | 8 | +1.75 [+1.63, +1.86] | 0.0221 | 858 |
+| (e) psf_raw - ap_area | 8 | +1.00 [+0.74, +1.27] | 0.0342 | 830 |
+pred range (5/50/95%): [-0.0139  0.0008  0.0179]; pred robust std 0.0101
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.03 [-0.10, +0.14]  B = -0.92 [-1.02, -0.82]  N=769  corr(pred,predT)=-0.02
+  (c) dolphot - ap_area: A = -0.93 [-1.05, -0.80]  B = +0.12 [-0.01, +0.25]  N=777  corr(pred,predT)=-0.02
+  (d) psf_raw - dolphot: A = +1.74 [+1.66, +1.82]  B = -0.82 [-0.91, -0.73]  N=785  corr(pred,predT)=+0.08
+  (e) psf_raw - ap_area: A = +1.03 [+0.90, +1.14]  B = -0.92 [-1.02, -0.82]  N=769  corr(pred,predT)=-0.02
+r=5, brighter half (N=438): (a) +0.01 [-0.17,+0.19] ; (c) -0.85 [-1.01,-0.68] ; (d) +1.74 [+1.58,+1.89]
+r=5, fainter half (N=438): (a) -0.01 [-0.29,+0.27] ; (c) -0.84 [-1.12,-0.55] ; (d) +1.74 [+1.56,+1.93]
+
+## F182M  (stars with >=2 PSF-matched frames: 790)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.05 [-0.08, +0.18] | 0.0150 | 756 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0102 | 790 |
+| (c) dolphot - ap_area | 3 | -0.75 [-0.86, -0.63] | 0.0145 | 753 |
+| (d) psf_raw - dolphot | 3 | +1.63 [+1.49, +1.76] | 0.0237 | 777 |
+| (e) psf_raw - ap_area | 3 | +1.05 [+0.91, +1.18] | 0.0176 | 761 |
+| (a) psf_raw - ap_raw | 5 | +0.08 [-0.09, +0.25] | 0.0213 | 750 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0102 | 790 |
+| (c) dolphot - ap_area | 5 | -0.76 [-0.95, -0.57] | 0.0232 | 749 |
+| (d) psf_raw - dolphot | 5 | +1.63 [+1.49, +1.76] | 0.0237 | 777 |
+| (e) psf_raw - ap_area | 5 | +1.07 [+0.90, +1.25] | 0.0229 | 753 |
+| (a) psf_raw - ap_raw | 8 | +0.17 [-0.11, +0.46] | 0.0332 | 742 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0103 | 789 |
+| (c) dolphot - ap_area | 8 | -0.75 [-1.04, -0.46] | 0.0350 | 739 |
+| (d) psf_raw - dolphot | 8 | +1.63 [+1.49, +1.76] | 0.0237 | 777 |
+| (e) psf_raw - ap_area | 8 | +1.12 [+0.84, +1.41] | 0.0370 | 748 |
+pred range (5/50/95%): [-0.0138  0.0009  0.0181]; pred robust std 0.0102
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.03 [-0.08, +0.16]  B = -1.06 [-1.17, -0.97]  N=662  corr(pred,predT)=-0.01
+  (c) dolphot - ap_area: A = -0.89 [-1.09, -0.70]  B = +0.12 [-0.05, +0.32]  N=718  corr(pred,predT)=+0.00
+  (d) psf_raw - dolphot: A = +1.65 [+1.56, +1.76]  B = -0.63 [-0.74, -0.54]  N=677  corr(pred,predT)=+0.09
+  (e) psf_raw - ap_area: A = +1.03 [+0.92, +1.16]  B = -1.06 [-1.17, -0.97]  N=662  corr(pred,predT)=-0.01
+r=5, brighter half (N=395): (a) +0.04 [-0.16,+0.24] ; (c) -0.83 [-1.04,-0.61] ; (d) +1.62 [+1.45,+1.79]
+r=5, fainter half (N=395): (a) +0.13 [-0.19,+0.44] ; (c) -0.70 [-1.03,-0.34] ; (d) +1.61 [+1.41,+1.83]
+
+## F250M  (stars with >=2 PSF-matched frames: 288)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.36 [+0.13, +0.58] | 0.0287 | 272 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0193 | 288 |
+| (c) dolphot - ap_area | 3 | -0.54 [-0.81, -0.24] | 0.0388 | 277 |
+| (d) psf_raw - dolphot | 3 | +1.78 [+1.54, +2.02] | 0.0387 | 286 |
+| (e) psf_raw - ap_area | 3 | +1.39 [+1.16, +1.62] | 0.0375 | 277 |
+| (a) psf_raw - ap_raw | 5 | +0.57 [+0.19, +0.95] | 0.0457 | 265 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0191 | 288 |
+| (c) dolphot - ap_area | 5 | -0.43 [-0.83, +0.01] | 0.0497 | 269 |
+| (d) psf_raw - dolphot | 5 | +1.78 [+1.54, +2.02] | 0.0387 | 286 |
+| (e) psf_raw - ap_area | 5 | +1.51 [+1.12, +1.90] | 0.0525 | 269 |
+| (a) psf_raw - ap_raw | 8 | +0.67 [-0.08, +1.41] | 0.0908 | 266 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0193 | 286 |
+| (c) dolphot - ap_area | 8 | -0.39 [-1.15, +0.45] | 0.0933 | 267 |
+| (d) psf_raw - dolphot | 8 | +1.77 [+1.52, +2.01] | 0.0378 | 284 |
+| (e) psf_raw - ap_area | 8 | +1.67 [+0.91, +2.40] | 0.0923 | 266 |
+pred range (5/50/95%): [-0.0197  0.0034  0.0328]; pred robust std 0.0194
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.41 [+0.14, +0.79]  B = -0.75 [-1.00, -0.44]  N=240  corr(pred,predT)=+0.00
+  (c) dolphot - ap_area: A = -0.69 [-1.01, -0.35]  B = +0.17 [-0.13, +0.52]  N=236  corr(pred,predT)=-0.02
+  (d) psf_raw - dolphot: A = +1.82 [+1.63, +1.99]  B = -0.85 [-1.04, -0.67]  N=282  corr(pred,predT)=-0.00
+  (e) psf_raw - ap_area: A = +1.40 [+1.12, +1.75]  B = -0.78 [-1.07, -0.49]  N=241  corr(pred,predT)=+0.00
+r=5, brighter half (N=144): (a) +0.34 [-0.06,+0.75] ; (c) -0.62 [-1.09,-0.13] ; (d) +1.64 [+1.34,+1.96]
+r=5, fainter half (N=144): (a) +0.82 [+0.07,+1.54] ; (c) -0.32 [-1.09,+0.48] ; (d) +1.96 [+1.61,+2.30]
+
+## F300M  (stars with >=2 PSF-matched frames: 311)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.31 [+0.04, +0.59] | 0.0368 | 291 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0198 | 311 |
+| (c) dolphot - ap_area | 3 | -0.59 [-0.84, -0.35] | 0.0335 | 293 |
+| (d) psf_raw - dolphot | 3 | +1.77 [+1.60, +1.95] | 0.0375 | 309 |
+| (e) psf_raw - ap_area | 3 | +1.30 [+1.02, +1.59] | 0.0459 | 298 |
+| (a) psf_raw - ap_raw | 5 | +0.20 [-0.37, +0.74] | 0.0725 | 287 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0199 | 311 |
+| (c) dolphot - ap_area | 5 | -0.65 [-1.13, -0.14] | 0.0676 | 284 |
+| (d) psf_raw - dolphot | 5 | +1.77 [+1.60, +1.95] | 0.0375 | 309 |
+| (e) psf_raw - ap_area | 5 | +1.17 [+0.60, +1.73] | 0.0782 | 289 |
+| (a) psf_raw - ap_raw | 8 | +0.38 [-0.73, +1.48] | 0.1501 | 286 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+0.99, +1.00] | 0.0205 | 306 |
+| (c) dolphot - ap_area | 8 | -0.44 [-1.56, +0.69] | 0.1521 | 287 |
+| (d) psf_raw - dolphot | 8 | +1.77 [+1.59, +1.94] | 0.0372 | 304 |
+| (e) psf_raw - ap_area | 8 | +1.24 [+0.09, +2.35] | 0.1559 | 288 |
+pred range (5/50/95%): [-0.0187  0.0044  0.034 ]; pred robust std 0.0199
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.33 [-0.07, +0.79]  B = -0.70 [-1.11, -0.35]  N=258  corr(pred,predT)=+0.00
+  (c) dolphot - ap_area: A = -0.50 [-0.97, -0.05]  B = +0.22 [-0.18, +0.61]  N=258  corr(pred,predT)=-0.00
+  (d) psf_raw - dolphot: A = +1.79 [+1.68, +1.90]  B = -0.90 [-1.01, -0.79]  N=297  corr(pred,predT)=+0.04
+  (e) psf_raw - ap_area: A = +1.44 [+1.02, +1.93]  B = -0.81 [-1.29, -0.42]  N=261  corr(pred,predT)=-0.01
+r=5, brighter half (N=155): (a) +0.36 [-0.32,+1.02] ; (c) -0.52 [-1.13,+0.10] ; (d) +1.71 [+1.48,+1.94]
+r=5, fainter half (N=156): (a) +0.25 [-0.82,+1.22] ; (c) -0.74 [-1.68,+0.27] ; (d) +1.83 [+1.56,+2.10]
+
+## F410M  (stars with >=2 PSF-matched frames: 372)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.21 [-0.17, +0.58] | 0.0520 | 356 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0197 | 372 |
+| (c) dolphot - ap_area | 3 | -0.30 [-0.68, +0.09] | 0.0551 | 355 |
+| (d) psf_raw - dolphot | 3 | +1.48 [+1.27, +1.69] | 0.0412 | 372 |
+| (e) psf_raw - ap_area | 3 | +1.20 [+0.81, +1.56] | 0.0588 | 357 |
+| (a) psf_raw - ap_raw | 5 | +0.48 [-0.33, +1.33] | 0.1196 | 356 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.01] | 0.0197 | 370 |
+| (c) dolphot - ap_area | 5 | -0.02 [-0.83, +0.82] | 0.1173 | 357 |
+| (d) psf_raw - dolphot | 5 | +1.49 [+1.28, +1.70] | 0.0412 | 370 |
+| (e) psf_raw - ap_area | 5 | +1.39 [+0.58, +2.24] | 0.1203 | 356 |
+| (a) psf_raw - ap_raw | 8 | +1.85 [+0.08, +3.65] | 0.2538 | 351 |
+| (b) ap_raw - ap_area | 8 | +1.01 [+0.99, +1.02] | 0.0200 | 362 |
+| (c) dolphot - ap_area | 8 | +1.25 [-0.47, +2.99] | 0.2434 | 350 |
+| (d) psf_raw - dolphot | 8 | +1.48 [+1.28, +1.70] | 0.0412 | 362 |
+| (e) psf_raw - ap_area | 8 | +2.87 [+1.09, +4.66] | 0.2644 | 351 |
+pred range (5/50/95%): [-0.0191  0.0041  0.0353]; pred robust std 0.0197
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.42 [-0.19, +1.14]  B = -0.91 [-1.47, -0.24]  N=323  corr(pred,predT)=+0.07
+  (c) dolphot - ap_area: A = -0.35 [-1.19, +0.30]  B = -0.34 [-1.08, +0.41]  N=334  corr(pred,predT)=+0.06
+  (d) psf_raw - dolphot: A = +1.53 [+1.37, +1.67]  B = -0.74 [-0.88, -0.61]  N=360  corr(pred,predT)=+0.05
+  (e) psf_raw - ap_area: A = +1.42 [+0.81, +2.15]  B = -0.92 [-1.48, -0.24]  N=323  corr(pred,predT)=+0.07
+r=5, brighter half (N=184): (a) +0.37 [-0.39,+1.15] ; (c) +0.00 [-0.84,+0.78] ; (d) +1.32 [+1.05,+1.61]
+r=5, fainter half (N=186): (a) +1.05 [-0.72,+2.89] ; (c) +0.55 [-1.05,+2.27] ; (d) +1.65 [+1.34,+1.95]
+
+## F466N  (stars with >=2 PSF-matched frames: 415)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.22 [-0.47, +0.90] | 0.0990 | 403 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0204 | 415 |
+| (c) dolphot - ap_area | 3 | -0.49 [-1.18, +0.19] | 0.0994 | 406 |
+| (d) psf_raw - dolphot | 3 | +1.81 [+1.56, +2.05] | 0.0537 | 412 |
+| (e) psf_raw - ap_area | 3 | +1.21 [+0.52, +1.89] | 0.1049 | 404 |
+| (a) psf_raw - ap_raw | 5 | +1.28 [-0.36, +2.86] | 0.2527 | 400 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+0.99, +1.01] | 0.0212 | 408 |
+| (c) dolphot - ap_area | 5 | +0.55 [-1.04, +2.12] | 0.2483 | 399 |
+| (d) psf_raw - dolphot | 5 | +1.80 [+1.55, +2.04] | 0.0553 | 405 |
+| (e) psf_raw - ap_area | 5 | +2.22 [+0.58, +3.81] | 0.2591 | 402 |
+| (a) psf_raw - ap_raw | 8 | +4.01 [+0.60, +7.33] | 0.5227 | 382 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+0.98, +1.02] | 0.0224 | 385 |
+| (c) dolphot - ap_area | 8 | +3.26 [-0.03, +6.51] | 0.5026 | 381 |
+| (d) psf_raw - dolphot | 8 | +1.82 [+1.57, +2.08] | 0.0550 | 385 |
+| (e) psf_raw - ap_area | 8 | +5.00 [+1.61, +8.32] | 0.5244 | 382 |
+pred range (5/50/95%): [-0.0193  0.0033  0.0354]; pred robust std 0.0203
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +1.11 [-0.42, +2.23]  B = -1.32 [-2.57, -0.25]  N=359  corr(pred,predT)=+0.08
+  (c) dolphot - ap_area: A = +0.13 [-1.60, +1.73]  B = +0.34 [-0.97, +1.87]  N=374  corr(pred,predT)=+0.09
+  (d) psf_raw - dolphot: A = +1.81 [+1.63, +2.02]  B = -0.69 [-0.87, -0.50]  N=369  corr(pred,predT)=+0.06
+  (e) psf_raw - ap_area: A = +2.11 [+0.53, +3.27]  B = -1.34 [-2.61, -0.05]  N=360  corr(pred,predT)=+0.08
+r=5, brighter half (N=204): (a) +0.15 [-1.53,+1.76] ; (c) -0.13 [-1.70,+1.48] ; (d) +1.46 [+1.19,+1.74]
+r=5, fainter half (N=204): (a) +2.64 [-0.40,+5.76] ; (c) +1.72 [-1.46,+4.69] ; (d) +2.10 [+1.71,+2.46]
+
+## F115W  (stars with >=2 PSF-matched frames: 740)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.13 [-0.30, +0.04] | 0.0171 | 715 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0100 | 740 |
+| (c) dolphot - ap_area | 3 | -0.47 [-0.65, -0.29] | 0.0193 | 720 |
+| (d) psf_raw - dolphot | 3 | +1.17 [+0.96, +1.38] | 0.0242 | 729 |
+| (e) psf_raw - ap_area | 3 | +0.86 [+0.70, +1.03] | 0.0182 | 716 |
+| (a) psf_raw - ap_raw | 5 | +0.05 [-0.15, +0.25] | 0.0203 | 702 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0099 | 740 |
+| (c) dolphot - ap_area | 5 | -0.32 [-0.54, -0.10] | 0.0238 | 707 |
+| (d) psf_raw - dolphot | 5 | +1.17 [+0.96, +1.38] | 0.0242 | 729 |
+| (e) psf_raw - ap_area | 5 | +1.04 [+0.84, +1.25] | 0.0214 | 703 |
+| (a) psf_raw - ap_raw | 8 | +0.11 [-0.13, +0.35] | 0.0250 | 690 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0099 | 740 |
+| (c) dolphot - ap_area | 8 | -0.23 [-0.49, +0.05] | 0.0292 | 697 |
+| (d) psf_raw - dolphot | 8 | +1.17 [+0.96, +1.38] | 0.0242 | 729 |
+| (e) psf_raw - ap_area | 8 | +1.08 [+0.83, +1.32] | 0.0272 | 692 |
+pred range (5/50/95%): [-0.0139  0.      0.0165]; pred robust std 0.0099
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.27 [+0.15, +0.40]  B = -1.20 [-1.32, -1.07]  N=631  corr(pred,predT)=+0.11
+  (c) dolphot - ap_area: A = -0.47 [-0.68, -0.27]  B = +0.09 [-0.12, +0.32]  N=675  corr(pred,predT)=+0.04
+  (d) psf_raw - dolphot: A = +1.40 [+1.16, +1.63]  B = -0.92 [-1.12, -0.69]  N=719  corr(pred,predT)=+0.05
+  (e) psf_raw - ap_area: A = +1.27 [+1.15, +1.40]  B = -1.20 [-1.32, -1.07]  N=631  corr(pred,predT)=+0.11
+r=5, brighter half (N=370): (a) +0.06 [-0.21,+0.34] ; (c) -0.29 [-0.57,-0.00] ; (d) +1.10 [+0.77,+1.44]
+r=5, fainter half (N=370): (a) +0.13 [-0.15,+0.41] ; (c) -0.31 [-0.65,+0.04] ; (d) +1.29 [+1.03,+1.57]
+
+## F162M  (stars with >=2 PSF-matched frames: 728)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.09 [-0.22, +0.03] | 0.0128 | 704 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0099 | 728 |
+| (c) dolphot - ap_area | 3 | -0.63 [-0.74, -0.53] | 0.0120 | 700 |
+| (d) psf_raw - dolphot | 3 | +1.36 [+1.21, +1.51] | 0.0204 | 711 |
+| (e) psf_raw - ap_area | 3 | +0.89 [+0.77, +1.02] | 0.0149 | 705 |
+| (a) psf_raw - ap_raw | 5 | -0.14 [-0.28, +0.01] | 0.0145 | 694 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0099 | 728 |
+| (c) dolphot - ap_area | 5 | -0.72 [-0.87, -0.57] | 0.0164 | 697 |
+| (d) psf_raw - dolphot | 5 | +1.36 [+1.21, +1.51] | 0.0204 | 711 |
+| (e) psf_raw - ap_area | 5 | +0.85 [+0.70, +1.00] | 0.0170 | 695 |
+| (a) psf_raw - ap_raw | 8 | -0.09 [-0.27, +0.09] | 0.0181 | 678 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0099 | 728 |
+| (c) dolphot - ap_area | 8 | -0.72 [-0.89, -0.54] | 0.0193 | 678 |
+| (d) psf_raw - dolphot | 8 | +1.36 [+1.21, +1.51] | 0.0204 | 711 |
+| (e) psf_raw - ap_area | 8 | +0.89 [+0.71, +1.07] | 0.0209 | 684 |
+pred range (5/50/95%): [-0.0136  0.0004  0.0168]; pred robust std 0.0099
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = -0.16 [-0.24, -0.05]  B = -0.96 [-1.04, -0.87]  N=624  corr(pred,predT)=+0.01
+  (c) dolphot - ap_area: A = -0.81 [-0.93, -0.67]  B = +0.01 [-0.12, +0.13]  N=661  corr(pred,predT)=+0.00
+  (d) psf_raw - dolphot: A = +1.48 [+1.36, +1.62]  B = -0.72 [-0.85, -0.60]  N=693  corr(pred,predT)=+0.04
+  (e) psf_raw - ap_area: A = +0.85 [+0.76, +0.95]  B = -0.96 [-1.04, -0.87]  N=624  corr(pred,predT)=+0.01
+r=5, brighter half (N=364): (a) -0.19 [-0.39,+0.00] ; (c) -0.76 [-0.95,-0.57] ; (d) +1.29 [+1.10,+1.50]
+r=5, fainter half (N=364): (a) -0.07 [-0.29,+0.16] ; (c) -0.69 [-0.92,-0.46] ; (d) +1.43 [+1.22,+1.65]
+
+## F277W  (stars with >=2 PSF-matched frames: 262)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.11 [-0.47, +0.68] | 0.0731 | 246 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0217 | 261 |
+| (c) dolphot - ap_area | 3 | -0.83 [-1.38, -0.27] | 0.0678 | 248 |
+| (d) psf_raw - dolphot | 3 | +1.74 [+1.51, +1.97] | 0.0428 | 256 |
+| (e) psf_raw - ap_area | 3 | +1.04 [+0.45, +1.62] | 0.0769 | 248 |
+| (a) psf_raw - ap_raw | 5 | -0.43 [-1.69, +0.90] | 0.1675 | 247 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.01] | 0.0226 | 259 |
+| (c) dolphot - ap_area | 5 | -1.23 [-2.53, +0.01] | 0.1479 | 247 |
+| (d) psf_raw - dolphot | 5 | +1.75 [+1.51, +1.98] | 0.0429 | 255 |
+| (e) psf_raw - ap_area | 5 | +0.51 [-0.78, +1.83] | 0.1720 | 248 |
+| (a) psf_raw - ap_raw | 8 | -0.20 [-2.59, +2.17] | 0.3055 | 237 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+0.99, +1.01] | 0.0227 | 250 |
+| (c) dolphot - ap_area | 8 | -1.02 [-3.49, +1.41] | 0.2904 | 239 |
+| (d) psf_raw - dolphot | 8 | +1.79 [+1.56, +2.02] | 0.0435 | 247 |
+| (e) psf_raw - ap_area | 8 | +0.88 [-1.56, +3.29] | 0.3156 | 239 |
+pred range (5/50/95%): [-0.0186  0.0059  0.0367]; pred robust std 0.0216
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = -0.13 [-1.24, +0.86]  B = -0.76 [-1.67, +0.30]  N=212  corr(pred,predT)=-0.06
+  (c) dolphot - ap_area: A = -0.95 [-1.84, +0.16]  B = +0.03 [-0.86, +1.08]  N=201  corr(pred,predT)=-0.05
+  (d) psf_raw - dolphot: A = +1.79 [+1.60, +1.96]  B = -0.66 [-0.84, -0.47]  N=244  corr(pred,predT)=-0.05
+  (e) psf_raw - ap_area: A = +0.79 [-0.25, +1.76]  B = -0.89 [-1.84, +0.21]  N=210  corr(pred,predT)=-0.06
+r=5, brighter half (N=130): (a) +0.47 [-0.70,+1.68] ; (c) -0.38 [-1.40,+0.70] ; (d) +1.91 [+1.61,+2.23]
+r=5, fainter half (N=130): (a) -2.35 [-5.46,+0.82] ; (c) -3.08 [-6.17,-0.01] ; (d) +1.64 [+1.31,+1.99]
+
+## F335M  (stars with >=2 PSF-matched frames: 338)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.31 [-1.18, +0.52] | 0.1118 | 323 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0200 | 337 |
+| (c) dolphot - ap_area | 3 | -0.38 [-1.33, +0.50] | 0.1090 | 325 |
+| (d) psf_raw - dolphot | 3 | +1.21 [+0.88, +1.55] | 0.0560 | 333 |
+| (e) psf_raw - ap_area | 3 | +0.65 [-0.24, +1.48] | 0.1209 | 324 |
+| (a) psf_raw - ap_raw | 5 | -0.71 [-2.75, +1.22] | 0.2574 | 316 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+0.99, +1.01] | 0.0203 | 331 |
+| (c) dolphot - ap_area | 5 | -0.74 [-2.76, +1.19] | 0.2570 | 317 |
+| (d) psf_raw - dolphot | 5 | +1.21 [+0.88, +1.55] | 0.0548 | 327 |
+| (e) psf_raw - ap_area | 5 | +0.28 [-1.74, +2.22] | 0.2563 | 316 |
+| (a) psf_raw - ap_raw | 8 | -1.05 [-4.72, +2.60] | 0.4821 | 302 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+0.99, +1.01] | 0.0201 | 308 |
+| (c) dolphot - ap_area | 8 | -1.21 [-4.89, +2.24] | 0.4665 | 301 |
+| (d) psf_raw - dolphot | 8 | +1.18 [+0.84, +1.53] | 0.0530 | 306 |
+| (e) psf_raw - ap_area | 8 | -0.40 [-4.01, +3.22] | 0.4598 | 300 |
+pred range (5/50/95%): [-0.0188  0.0035  0.0324]; pred robust std 0.0200
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = -0.42 [-1.48, +1.49]  B = +0.39 [-1.42, +1.82]  N=275  corr(pred,predT)=-0.00
+  (c) dolphot - ap_area: A = -0.27 [-2.21, +1.07]  B = +1.73 [-0.27, +3.33]  N=284  corr(pred,predT)=-0.00
+  (d) psf_raw - dolphot: A = +1.28 [+0.97, +1.57]  B = -0.63 [-0.88, -0.32]  N=313  corr(pred,predT)=+0.02
+  (e) psf_raw - ap_area: A = +0.58 [-0.48, +2.49]  B = +0.39 [-1.43, +1.82]  N=275  corr(pred,predT)=-0.00
+r=5, brighter half (N=165): (a) +1.38 [-0.59,+3.25] ; (c) +0.76 [-1.02,+2.62] ; (d) +1.41 [+0.99,+1.87]
+r=5, fainter half (N=166): (a) -1.51 [-5.60,+2.37] ; (c) -1.49 [-5.66,+2.50] ; (d) +0.94 [+0.40,+1.45]
+
+## F323N  (stars with >=2 PSF-matched frames: 315)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | -0.06 [-0.28, +0.16] | 0.0265 | 302 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0167 | 314 |
+| (c) dolphot - ap_area | 3 | -0.57 [-0.76, -0.39] | 0.0229 | 297 |
+| (d) psf_raw - dolphot | 3 | +1.48 [+1.33, +1.65] | 0.0344 | 313 |
+| (e) psf_raw - ap_area | 3 | +0.93 [+0.71, +1.15] | 0.0285 | 303 |
+| (a) psf_raw - ap_raw | 5 | -0.14 [-0.50, +0.21] | 0.0428 | 290 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0166 | 314 |
+| (c) dolphot - ap_area | 5 | -0.64 [-0.97, -0.32] | 0.0413 | 289 |
+| (d) psf_raw - dolphot | 5 | +1.48 [+1.33, +1.65] | 0.0344 | 313 |
+| (e) psf_raw - ap_area | 5 | +0.80 [+0.44, +1.16] | 0.0453 | 293 |
+| (a) psf_raw - ap_raw | 8 | +0.09 [-0.51, +0.69] | 0.0761 | 286 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+1.00, +1.00] | 0.0163 | 314 |
+| (c) dolphot - ap_area | 8 | -0.34 [-0.99, +0.31] | 0.0758 | 285 |
+| (d) psf_raw - dolphot | 8 | +1.48 [+1.33, +1.65] | 0.0344 | 313 |
+| (e) psf_raw - ap_area | 8 | +1.06 [+0.46, +1.65] | 0.0769 | 285 |
+pred range (5/50/95%): [-0.0201 -0.0015  0.0346]; pred robust std 0.0169
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +0.08 [-0.18, +0.36]  B = -0.64 [-0.99, -0.35]  N=265  corr(pred,predT)=+0.12
+  (c) dolphot - ap_area: A = -0.61 [-0.92, -0.33]  B = -0.01 [-0.27, +0.30]  N=257  corr(pred,predT)=+0.14
+  (d) psf_raw - dolphot: A = +1.74 [+1.66, +1.82]  B = -0.83 [-0.92, -0.73]  N=288  corr(pred,predT)=+0.15
+  (e) psf_raw - ap_area: A = +1.08 [+0.82, +1.36]  B = -0.64 [-0.99, -0.35]  N=265  corr(pred,predT)=+0.12
+r=5, brighter half (N=157): (a) -0.00 [-0.39,+0.41] ; (c) -0.59 [-0.94,-0.24] ; (d) +1.49 [+1.28,+1.69]
+r=5, fainter half (N=157): (a) -0.21 [-0.87,+0.47] ; (c) -0.72 [-1.36,-0.08] ; (d) +1.50 [+1.26,+1.74]
+
+## F405N  (stars with >=2 PSF-matched frames: 339)
+| diff | r | slope [95% CI] | robust std | N |
+|---|---|---|---|---|
+| (a) psf_raw - ap_raw | 3 | +0.71 [+0.18, +1.21] | 0.0622 | 330 |
+| (b) ap_raw - ap_area | 3 | +1.00 [+1.00, +1.00] | 0.0165 | 339 |
+| (c) dolphot - ap_area | 3 | -0.15 [-0.61, +0.34] | 0.0583 | 328 |
+| (d) psf_raw - dolphot | 3 | +1.65 [+1.44, +1.85] | 0.0387 | 336 |
+| (e) psf_raw - ap_area | 3 | +1.69 [+1.16, +2.20] | 0.0711 | 332 |
+| (a) psf_raw - ap_raw | 5 | +1.37 [+0.26, +2.43] | 0.1329 | 327 |
+| (b) ap_raw - ap_area | 5 | +1.00 [+1.00, +1.00] | 0.0167 | 337 |
+| (c) dolphot - ap_area | 5 | +0.61 [-0.43, +1.68] | 0.1337 | 329 |
+| (d) psf_raw - dolphot | 5 | +1.66 [+1.46, +1.86] | 0.0392 | 334 |
+| (e) psf_raw - ap_area | 5 | +2.39 [+1.30, +3.46] | 0.1445 | 328 |
+| (a) psf_raw - ap_raw | 8 | +2.66 [+0.44, +5.00] | 0.2903 | 322 |
+| (b) ap_raw - ap_area | 8 | +1.00 [+0.99, +1.01] | 0.0169 | 330 |
+| (c) dolphot - ap_area | 8 | +1.84 [-0.43, +4.07] | 0.2873 | 321 |
+| (d) psf_raw - dolphot | 8 | +1.68 [+1.48, +1.88] | 0.0393 | 327 |
+| (e) psf_raw - ap_area | 8 | +3.73 [+1.52, +6.07] | 0.3042 | 323 |
+pred range (5/50/95%): [-0.0201 -0.0016  0.0321]; pred robust std 0.0165
+two-regressor fit d = A*pred + B*predT + const (3-sigma clipped OLS, bootstrap 95% CI), r = 5 px:
+  (a) psf_raw - ap_raw: A = +1.48 [+0.59, +2.44]  B = -1.50 [-2.40, -0.61]  N=303  corr(pred,predT)=+0.13
+  (c) dolphot - ap_area: A = +0.42 [-0.43, +1.31]  B = -1.02 [-1.92, -0.28]  N=294  corr(pred,predT)=+0.12
+  (d) psf_raw - dolphot: A = +1.82 [+1.70, +1.95]  B = -0.85 [-0.96, -0.73]  N=299  corr(pred,predT)=+0.16
+  (e) psf_raw - ap_area: A = +2.51 [+1.57, +3.43]  B = -1.44 [-2.42, -0.50]  N=302  corr(pred,predT)=+0.13
+r=5, brighter half (N=168): (a) +0.88 [-0.21,+1.96] ; (c) +0.34 [-0.69,+1.42] ; (d) +1.65 [+1.42,+1.88]
+r=5, fainter half (N=169): (a) +1.78 [-0.51,+4.13] ; (c) +1.14 [-1.10,+3.53] ; (d) +1.63 [+1.28,+1.99]

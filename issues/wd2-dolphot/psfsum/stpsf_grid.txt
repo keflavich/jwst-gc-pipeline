@@ -1,0 +1,12 @@
+grid_xypos [[   0.    0.]
+ [2047.    0.]
+ [   0. 2047.]
+ [2047. 2047.]]
+det_yx0 ('(0.0, 0.0)', "The #0 PSF's (y,x) detector pixel position")
+det_yx1 ('(2047.0, 0.0)', "The #1 PSF's (y,x) detector pixel position")
+det_yx2 ('(0.0, 2047.0)', "The #2 PSF's (y,x) detector pixel position")
+det_yx3 ('(2047.0, 2047.0)', "The #3 PSF's (y,x) detector pixel position")
+PSF 0 at grid_xypos (x=0, y=0): sum 0.93144  siaf area (x,y) 993.8  (y,x) 993.8 [1e-6 arcsec2... idl units]
+PSF 1 at grid_xypos (x=2047, y=0): sum 0.93072  siaf area (x,y) 995.3  (y,x) 960.3 [1e-6 arcsec2... idl units]
+PSF 2 at grid_xypos (x=0, y=2047): sum 0.96367  siaf area (x,y) 960.3  (y,x) 995.3 [1e-6 arcsec2... idl units]
+PSF 3 at grid_xypos (x=2047, y=2047): sum 0.96080  siaf area (x,y) 962.4  (y,x) 962.4 [1e-6 arcsec2... idl units]

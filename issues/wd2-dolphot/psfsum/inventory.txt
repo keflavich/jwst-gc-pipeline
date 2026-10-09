@@ -1,0 +1,14 @@
+# (PSF store, header VERSION, DET_YX keys already in photutils (y, x) order) -> number of grid files
+('/orange/adamginsburg/jwst/arches/psfs', '2.2.0', False) 20
+('/orange/adamginsburg/jwst/brick/psfs', '2.2.0', False) 125
+('/orange/adamginsburg/jwst/cloudc/psfs', '2.2.0', False) 125
+('/orange/adamginsburg/jwst/cloudef/psfs', '2.2.0', False) 44
+('/orange/adamginsburg/jwst/cloudef_controlfield/psfs', '2.2.0', False) 40
+('/orange/adamginsburg/jwst/crowded_l20/psfs', '2.2.0', False) 140
+('/orange/adamginsburg/jwst/crowded_l3/psfs', '2.2.0', False) 140
+('/orange/adamginsburg/jwst/g007/psfs', '2.2.0', False) 140
+('/orange/adamginsburg/jwst/g028/psfs', '2.2.0', False) 140
+('/orange/adamginsburg/jwst/g033/psfs', '2.2.0', False) 140
+('/orange/adamginsburg/jwst/g041/psfs', '2.2.0', False) 140
+('/orange/adamginsburg/jwst/g054/psfs', '2.2.0', False) 140
+('/orange/adamginsburg/jwst/wd2/psfs', '2.2.0', False) 162

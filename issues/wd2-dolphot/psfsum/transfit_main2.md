@@ -1,0 +1,156 @@
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/lib/python3.13/site-packages/astropy/wcs/wcsapi/fitswcs.py:367: UserWarning: 'WCS.all_world2pix' failed to converge to the requested accuracy.
+After 20 iterations, the solution is diverging at least for one input point.
+  warnings.warn(str(e))
+arm main2: dm = a*pred + b*predT + c, unsaturated stars in the ZP window
+| band | N | corr(pred, predT) | a [95 % CI] | b [95 % CI] | rstd dm | dm - pred | dm - (2 pred - predT) | dm - (1.5 pred - 0.5 predT) | dm - fit |
+|---|---|---|---|---|---|---|---|---|---|
+| F115W | 2586 | +0.26 | 1.37 [1.19, 1.53] | -0.74 [-0.90, -0.57] | 0.0399 | 0.0396 | 0.0401 | 0.0394 | 0.0392 |
+| F150W | 2585 | +0.13 | 1.14 [1.04, 1.24] | -0.50 [-0.61, -0.41] | 0.0258 | 0.0230 | 0.0256 | 0.0227 | 0.0224 |
+| F162M | 2708 | +0.19 | 1.58 [1.50, 1.67] | -0.66 [-0.74, -0.57] | 0.0232 | 0.0191 | 0.0206 | 0.0187 | 0.0187 |
+| F182M | 2836 | +0.14 | 1.60 [1.51, 1.66] | -0.59 [-0.67, -0.52] | 0.0246 | 0.0193 | 0.0172 | 0.0171 | 0.0171 |
+| F200W | 2952 | +0.07 | 1.90 [1.83, 1.96] | -0.97 [-1.04, -0.90] | 0.0289 | 0.0236 | 0.0180 | 0.0198 | 0.0179 |
+| F250M | 3049 | +0.15 | 1.78 [1.71, 1.85] | -0.89 [-0.96, -0.82] | 0.0455 | 0.0356 | 0.0333 | 0.0317 | 0.0323 |
+| F277W | 3266 | +0.10 | 1.82 [1.75, 1.88] | -0.86 [-0.93, -0.79] | 0.0546 | 0.0419 | 0.0342 | 0.0351 | 0.0342 |
+| F300M | 3076 | +0.14 | 1.78 [1.73, 1.82] | -0.97 [-1.03, -0.92] | 0.0453 | 0.0324 | 0.0231 | 0.0248 | 0.0222 |
+| F335M | 3037 | +0.12 | 1.49 [1.39, 1.60] | -0.67 [-0.78, -0.55] | 0.0606 | 0.0570 | 0.0563 | 0.0550 | 0.0545 |
+| F410M | 3076 | +0.12 | 1.59 [1.52, 1.66] | -0.76 [-0.84, -0.68] | 0.0506 | 0.0420 | 0.0370 | 0.0375 | 0.0367 |
+| F164N | 2163 | +0.43 | 1.63 [1.53, 1.71] | -0.79 [-0.88, -0.68] | 0.0185 | 0.0150 | 0.0154 | 0.0145 | 0.0143 |
+| F187N | 2156 | +0.42 | 1.55 [1.47, 1.63] | -0.78 [-0.85, -0.69] | 0.0154 | 0.0132 | 0.0127 | 0.0121 | 0.0115 |
+| F212N | 2982 | +0.10 | 1.81 [1.74, 1.88] | -0.90 [-0.96, -0.83] | 0.0236 | 0.0181 | 0.0161 | 0.0155 | 0.0154 |
+| F323N | 2788 | +0.18 | 1.76 [1.72, 1.81] | -0.83 [-0.87, -0.78] | 0.0360 | 0.0259 | 0.0190 | 0.0193 | 0.0180 |
+| F405N | 2938 | +0.16 | 1.73 [1.68, 1.79] | -0.74 [-0.79, -0.68] | 0.0415 | 0.0321 | 0.0249 | 0.0253 | 0.0238 |
+| F466N | 2880 | +0.13 | 1.73 [1.65, 1.82] | -0.85 [-0.95, -0.76] | 0.0631 | 0.0496 | 0.0449 | 0.0455 | 0.0445 |
+
+Per detector (first exposure containing the star), dm = a*pred + b*predT + c
+| band | det | N | corr(pred, predT) | a | b | rstd dm | dm - pred | dm - fit(band) |
+|---|---|---|---|---|---|---|---|---|
+| F115W | nrca1 | 139 | -0.16 | 2.80 [2.56, 3.02] | -0.58 [-0.85, -0.24] | 0.0456 | 0.0322 | 0.0322 |
+| F115W | nrca2 | 139 | -0.07 | 0.30 [-0.03, 0.63] | +0.89 [+0.51, +1.23] | 0.0175 | 0.0216 | 0.0258 |
+| F115W | nrca3 | 128 | -0.73 | 1.73 [1.50, 1.90] | -1.19 [-1.47, -0.97] | 0.0365 | 0.0287 | 0.0194 |
+| F115W | nrca4 | 213 | -0.91 | -0.98 [-1.55, -0.26] | -3.74 [-4.37, -3.04] | 0.0336 | 0.0316 | 0.0256 |
+| F115W | nrcb1 | 582 | +0.07 | -0.94 [-1.23, -0.68] | -2.29 [-2.63, -1.98] | 0.0405 | 0.0466 | 0.0455 |
+| F115W | nrcb2 | 373 | +0.16 | 0.94 [0.58, 1.17] | -0.45 [-0.72, -0.12] | 0.0335 | 0.0335 | 0.0327 |
+| F115W | nrcb3 | 759 | +0.91 | -0.37 [-1.05, 0.31] | +0.96 [+0.32, +1.65] | 0.0387 | 0.0408 | 0.0420 |
+| F115W | nrcb4 | 253 | +0.72 | 2.56 [2.34, 2.73] | -1.34 [-1.60, -1.09] | 0.0404 | 0.0311 | 0.0269 |
+| F150W | nrca1 | 172 | -0.12 | 2.08 [1.97, 2.17] | -0.44 [-0.55, -0.31] | 0.0284 | 0.0176 | 0.0138 |
+| F150W | nrca2 | 225 | -0.29 | 1.15 [1.02, 1.26] | -0.20 [-0.34, -0.02] | 0.0118 | 0.0087 | 0.0093 |
+| F150W | nrca3 | 217 | -0.73 | 1.37 [1.24, 1.52] | -0.94 [-1.09, -0.77] | 0.0259 | 0.0176 | 0.0120 |
+| F150W | nrca4 | 275 | -0.88 | -0.58 [-0.95, -0.25] | -3.13 [-3.44, -2.79] | 0.0283 | 0.0208 | 0.0168 |
+| F150W | nrcb1 | 489 | +0.07 | -0.21 [-0.45, -0.10] | -0.97 [-1.20, -0.83] | 0.0189 | 0.0241 | 0.0223 |
+| F150W | nrcb2 | 375 | +0.15 | 0.79 [0.79, 1.00] | -0.15 [-0.33, -0.09] | 0.0176 | 0.0137 | 0.0126 |
+| F150W | nrcb3 | 523 | +0.90 | -2.35 [-2.68, -1.96] | +2.94 [+2.58, +3.29] | 0.0265 | 0.0279 | 0.0294 |
+| F150W | nrcb4 | 309 | +0.71 | 1.40 [1.27, 1.55] | -0.28 [-0.42, -0.10] | 0.0183 | 0.0125 | 0.0115 |
+| F162M | nrca1 | 149 | -0.18 | 2.02 [1.92, 2.14] | -0.88 [-1.00, -0.79] | 0.0307 | 0.0197 | 0.0091 |
+| F162M | nrca2 | 188 | -0.29 | 2.08 [1.99, 2.22] | -1.08 [-1.22, -0.97] | 0.0260 | 0.0162 | 0.0076 |
+| F162M | nrca3 | 204 | -0.73 | 1.63 [1.51, 1.76] | -1.09 [-1.21, -1.01] | 0.0343 | 0.0214 | 0.0102 |
+| F162M | nrca4 | 282 | -0.89 | 1.01 [0.86, 1.21] | -2.07 [-2.29, -1.84] | 0.0258 | 0.0191 | 0.0122 |
+| F162M | nrcb1 | 534 | +0.08 | 0.93 [0.81, 1.05] | -0.72 [-0.80, -0.62] | 0.0144 | 0.0129 | 0.0117 |
+| F162M | nrcb2 | 377 | +0.13 | 0.95 [0.87, 1.13] | -0.08 [-0.26, -0.04] | 0.0185 | 0.0122 | 0.0127 |
+| F162M | nrcb3 | 667 | +0.92 | 1.70 [1.30, 2.05] | -0.94 [-1.28, -0.61] | 0.0170 | 0.0155 | 0.0153 |
+| F162M | nrcb4 | 307 | +0.73 | 1.86 [1.79, 1.96] | -0.84 [-0.95, -0.76] | 0.0224 | 0.0120 | 0.0082 |
+| F182M | nrca1 | 168 | -0.19 | 2.06 [1.99, 2.14] | -0.88 [-0.96, -0.81] | 0.0306 | 0.0200 | 0.0108 |
+| F182M | nrca2 | 218 | -0.31 | 1.88 [1.79, 1.96] | -0.82 [-0.95, -0.70] | 0.0219 | 0.0154 | 0.0068 |
+| F182M | nrca3 | 257 | -0.69 | 1.95 [1.83, 2.08] | -1.39 [-1.51, -1.27] | 0.0401 | 0.0312 | 0.0166 |
+| F182M | nrca4 | 295 | -0.90 | 1.32 [1.13, 1.47] | -1.46 [-1.65, -1.30] | 0.0250 | 0.0174 | 0.0090 |
+| F182M | nrcb1 | 558 | +0.11 | 1.05 [0.94, 1.16] | -0.82 [-0.96, -0.74] | 0.0147 | 0.0135 | 0.0128 |
+| F182M | nrcb2 | 393 | +0.14 | 1.95 [1.88, 2.00] | -0.91 [-0.99, -0.83] | 0.0292 | 0.0164 | 0.0090 |
+| F182M | nrcb3 | 624 | +0.91 | 0.04 [-0.25, 0.25] | +0.52 [+0.32, +0.82] | 0.0147 | 0.0136 | 0.0154 |
+| F182M | nrcb4 | 323 | +0.73 | 1.87 [1.78, 1.95] | -0.71 [-0.79, -0.63] | 0.0242 | 0.0125 | 0.0078 |
+| F200W | nrca1 | 233 | -0.16 | 1.97 [1.91, 2.03] | -0.89 [-0.98, -0.83] | 0.0285 | 0.0192 | 0.0071 |
+| F200W | nrca2 | 279 | -0.31 | 1.75 [1.66, 1.87] | -0.73 [-0.85, -0.63] | 0.0197 | 0.0130 | 0.0064 |
+| F200W | nrca3 | 310 | -0.67 | 1.99 [1.86, 2.13] | -1.41 [-1.56, -1.31] | 0.0414 | 0.0322 | 0.0118 |
+| F200W | nrca4 | 317 | -0.90 | 1.61 [1.39, 1.79] | -1.15 [-1.29, -0.99] | 0.0265 | 0.0182 | 0.0071 |
+| F200W | nrcb1 | 513 | +0.10 | 1.18 [1.10, 1.31] | -0.72 [-0.84, -0.55] | 0.0178 | 0.0142 | 0.0146 |
+| F200W | nrcb2 | 412 | +0.11 | 1.91 [1.81, 2.00] | -0.99 [-1.05, -0.92] | 0.0244 | 0.0165 | 0.0084 |
+| F200W | nrcb3 | 517 | +0.90 | 0.62 [0.34, 0.86] | +0.17 [-0.08, +0.42] | 0.0184 | 0.0146 | 0.0166 |
+| F200W | nrcb4 | 371 | +0.72 | 2.09 [2.02, 2.18] | -0.89 [-1.00, -0.83] | 0.0265 | 0.0143 | 0.0088 |
+| F250M | nrcalong | 1050 | -0.51 | 2.02 [1.94, 2.09] | -1.00 [-1.07, -0.94] | 0.0574 | 0.0399 | 0.0195 |
+| F250M | nrcblong | 1999 | +0.51 | 1.57 [1.48, 1.62] | -0.68 [-0.73, -0.59] | 0.0376 | 0.0273 | 0.0252 |
+| F277W | nrcalong | 1480 | -0.48 | 1.83 [1.73, 1.89] | -0.78 [-0.86, -0.68] | 0.0532 | 0.0374 | 0.0239 |
+| F277W | nrcblong | 1786 | +0.55 | 1.81 [1.71, 1.93] | -0.98 [-1.12, -0.90] | 0.0503 | 0.0393 | 0.0355 |
+| F300M | nrcalong | 1160 | -0.51 | 1.89 [1.83, 1.95] | -0.90 [-0.95, -0.83] | 0.0503 | 0.0369 | 0.0180 |
+| F300M | nrcblong | 1916 | +0.53 | 1.73 [1.68, 1.80] | -0.94 [-1.00, -0.90] | 0.0414 | 0.0295 | 0.0233 |
+| F335M | nrcalong | 1194 | -0.51 | 1.55 [1.45, 1.68] | -0.82 [-0.98, -0.68] | 0.0599 | 0.0454 | 0.0330 |
+| F335M | nrcblong | 1843 | +0.52 | 1.78 [1.64, 1.88] | -0.78 [-0.91, -0.63] | 0.0521 | 0.0429 | 0.0403 |
+| F410M | nrcalong | 1121 | -0.52 | 1.76 [1.70, 1.82] | -0.63 [-0.68, -0.56] | 0.0483 | 0.0318 | 0.0193 |
+| F410M | nrcblong | 1955 | +0.50 | 1.92 [1.84, 1.99] | -1.03 [-1.12, -0.94] | 0.0480 | 0.0359 | 0.0299 |
+| F164N | nrcb1 | 596 | +0.03 | 1.01 [0.85, 1.15] | -0.72 [-0.86, -0.62] | 0.0146 | 0.0124 | 0.0125 |
+| F164N | nrcb2 | 235 | +0.17 | 0.79 [0.51, 0.93] | +0.33 [+0.18, +0.54] | 0.0246 | 0.0175 | 0.0204 |
+| F164N | nrcb3 | 925 | +0.92 | 1.98 [1.71, 2.25] | -1.51 [-1.73, -1.18] | 0.0161 | 0.0147 | 0.0145 |
+| F164N | nrcb4 | 147 | +0.75 | 1.70 [1.57, 1.84] | -0.75 [-0.90, -0.60] | 0.0249 | 0.0112 | 0.0086 |
+| F187N | nrca4 | 85 | -0.92 | 1.81 [1.41, 2.31] | -1.19 [-1.73, -0.66] | 0.0324 | 0.0199 | 0.0102 |
+| F187N | nrcb1 | 586 | +0.02 | 0.99 [0.93, 1.09] | -0.86 [-0.95, -0.80] | 0.0119 | 0.0102 | 0.0084 |
+| F187N | nrcb2 | 238 | +0.17 | 2.16 [2.07, 2.28] | -1.14 [-1.25, -1.07] | 0.0288 | 0.0209 | 0.0112 |
+| F187N | nrcb3 | 890 | +0.92 | 0.09 [-0.10, 0.23] | +0.44 [+0.28, +0.66] | 0.0113 | 0.0111 | 0.0122 |
+| F187N | nrcb4 | 159 | +0.78 | 2.15 [2.00, 2.34] | -0.95 [-1.09, -0.81] | 0.0267 | 0.0125 | 0.0105 |
+| F212N | nrca1 | 195 | -0.23 | 1.98 [1.88, 2.09] | -0.74 [-0.88, -0.60] | 0.0283 | 0.0186 | 0.0084 |
+| F212N | nrca2 | 240 | -0.29 | 1.34 [1.19, 1.52] | -0.29 [-0.46, -0.08] | 0.0158 | 0.0093 | 0.0107 |
+| F212N | nrca3 | 297 | -0.68 | 2.17 [2.10, 2.27] | -1.49 [-1.59, -1.39] | 0.0462 | 0.0359 | 0.0152 |
+| F212N | nrca4 | 316 | -0.90 | 1.49 [1.26, 1.75] | -1.18 [-1.35, -0.93] | 0.0252 | 0.0177 | 0.0084 |
+| F212N | nrcb1 | 558 | +0.11 | 1.07 [0.96, 1.19] | -0.68 [-0.83, -0.54] | 0.0165 | 0.0139 | 0.0139 |
+| F212N | nrcb2 | 407 | +0.10 | 2.06 [1.99, 2.12] | -0.98 [-1.04, -0.88] | 0.0293 | 0.0197 | 0.0101 |
+| F212N | nrcb3 | 619 | +0.91 | 0.08 [-0.26, 0.31] | +0.52 [+0.26, +0.80] | 0.0182 | 0.0157 | 0.0183 |
+| F212N | nrcb4 | 350 | +0.71 | 2.09 [2.01, 2.20] | -0.87 [-0.95, -0.82] | 0.0278 | 0.0153 | 0.0101 |
+| F323N | nrcalong | 553 | -0.52 | 1.74 [1.67, 1.83] | -0.64 [-0.73, -0.55] | 0.0485 | 0.0300 | 0.0160 |
+| F323N | nrcblong | 2235 | +0.44 | 1.89 [1.86, 1.95] | -0.95 [-1.01, -0.90] | 0.0338 | 0.0251 | 0.0180 |
+| F405N | nrcalong | 577 | -0.53 | 1.70 [1.58, 1.81] | -0.72 [-0.84, -0.62] | 0.0533 | 0.0352 | 0.0188 |
+| F405N | nrcblong | 2361 | +0.44 | 1.82 [1.75, 1.89] | -0.77 [-0.84, -0.71] | 0.0388 | 0.0305 | 0.0257 |
+| F466N | nrcalong | 1069 | -0.52 | 1.70 [1.60, 1.84] | -1.01 [-1.15, -0.87] | 0.0657 | 0.0497 | 0.0347 |
+| F466N | nrcblong | 1811 | +0.53 | 1.59 [1.44, 1.71] | -0.63 [-0.83, -0.42] | 0.0612 | 0.0507 | 0.0505 |

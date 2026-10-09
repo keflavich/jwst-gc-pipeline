@@ -1,0 +1,9 @@
+F200W nrca1: sum range 0.9299-0.9629 (phase0 0.9299-0.9629); vs area(x,y) corr -0.999 slope -0.957; vs area(y,x) corr +0.118 slope +0.113
+F200W nrca3: sum range 0.9245-0.9680 (phase0 0.9246-0.9681); vs area(x,y) corr -1.000 slope -0.960; vs area(y,x) corr +0.710 slope +0.682
+F200W nrcb3: sum range 0.9296-0.9615 (phase0 0.9296-0.9615); vs area(x,y) corr -0.999 slope -0.966; vs area(y,x) corr -0.909 slope -0.879
+F200W nrcb4: sum range 0.9247-0.9682 (phase0 0.9247-0.9682); vs area(x,y) corr -1.000 slope -0.971; vs area(y,x) corr -0.702 slope -0.682
+F150W nrcb1: sum range 0.9430-0.9645 (phase0 0.9430-0.9645); vs area(x,y) corr -0.999 slope -0.950; vs area(y,x) corr -0.165 slope -0.157
+F250M nrca5: sum range 0.9274-0.9899 (phase0 0.9275-0.9899); vs area(x,y) corr -0.999 slope -0.948; vs area(y,x) corr +0.460 slope +0.436
+F300M nrca5: sum range 0.9213-0.9836 (phase0 0.9213-0.9836); vs area(x,y) corr -0.999 slope -0.953; vs area(y,x) corr +0.459 slope +0.438
+F300M nrcb5: sum range 0.9204-0.9839 (phase0 0.9205-0.9839); vs area(x,y) corr -0.999 slope -0.950; vs area(y,x) corr -0.552 slope -0.525
+F410M nrca5: sum range 0.9105-0.9728 (phase0 0.9106-0.9728); vs area(x,y) corr -1.000 slope -0.965; vs area(y,x) corr +0.457 slope +0.441
