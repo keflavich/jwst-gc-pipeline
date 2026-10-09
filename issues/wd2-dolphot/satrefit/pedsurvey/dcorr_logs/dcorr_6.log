@@ -1,0 +1,80 @@
+**WARNING**: LOCAL JWST PRD VERSION PRDOPSSOC-072 DOESN'T MATCH THE CURRENT ONLINE VERSION PRDOPSSOC-075
+Please consider updating pysiaf, e.g. pip install --upgrade pysiaf or conda update pysiaf
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/w51/F140M/pipeline/jw06151001001_03109_00001_nrcb3_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/w51/F140M/pipeline/jw06151001001_03109_00001_nrcb3_ramp.fits
+satstar zeroframe: 4554 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/w51/F140M/pipeline/jw06151001001_03109_00001_nrcb3_ramp.fits
+satstar zeroframe: cal - crf level from jw06151001001_03109_00001_nrcb3_cal.fits, median 0.655 MJy/sr
+ROW w51 F140M nrcb3 D50=+0.655 Dfar=+0.67 B=-557 B_D=-554 sat c/h/hD 83/83/83 buf 0/1/1 h/c=0.985 hD/c=0.984 g0rim=1809
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/w51/F162M/pipeline/jw06151001001_03103_00001_nrcb3_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/w51/F162M/pipeline/jw06151001001_03103_00001_nrcb3_ramp.fits
+satstar zeroframe: 4593 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/w51/F162M/pipeline/jw06151001001_03103_00001_nrcb3_ramp.fits
+satstar zeroframe: cal - crf level from jw06151001001_03103_00001_nrcb3_cal.fits, median 0.98 MJy/sr
+ROW w51 F162M nrcb3 D50=+0.98 Dfar=+0.994 B=-56 B_D=-53 sat c/h/hD 26/26/26 buf 4/0/0 h/c=1.051 hD/c=1.044 g0rim=455
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/w51/F182M/pipeline/jw06151001001_03105_00001_nrcb3_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/w51/F182M/pipeline/jw06151001001_03105_00001_nrcb3_ramp.fits
+satstar zeroframe: 4611 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/w51/F182M/pipeline/jw06151001001_03105_00001_nrcb3_ramp.fits
+satstar zeroframe: cal - crf level from jw06151001001_03105_00001_nrcb3_cal.fits, median 2.18 MJy/sr
+ROW w51 F182M nrcb3 D50=+2.18 Dfar=+2.32 B=-26 B_D=-13 sat c/h/hD 35/35/35 buf 3/2/2 h/c=1.024 hD/c=1.007 g0rim=570
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/w51/F187N/pipeline/jw06151001001_03101_00001_nrcb3_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/w51/F187N/pipeline/jw06151001001_03101_00001_nrcb3_ramp.fits
+satstar zeroframe: 4436 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/w51/F187N/pipeline/jw06151001001_03101_00001_nrcb3_ramp.fits
+satstar zeroframe: cal - crf level from jw06151001001_03101_00001_nrcb3_cal.fits, median 9.47 MJy/sr
+ROW w51 F187N nrcb3 D50=+9.47 Dfar=+9.73 B=-763 B_D=-758 sat c/h/hD 9/9/9 buf 0/0/0 h/c=0.979 hD/c=0.971 g0rim=305
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/w51/F210M/pipeline/jw06151001001_03107_00001_nrcb3_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/w51/F210M/pipeline/jw06151001001_03107_00001_nrcb3_ramp.fits
+satstar zeroframe: 4599 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/w51/F210M/pipeline/jw06151001001_03107_00001_nrcb3_ramp.fits
+satstar zeroframe: cal - crf level from jw06151001001_03107_00001_nrcb3_cal.fits, median 2.27 MJy/sr
+ROW w51 F210M nrcb3 D50=+2.27 Dfar=+2.36 B=-15 B_D=-5 sat c/h/hD 41/41/41 buf 4/3/3 h/c=1.032 hD/c=0.982 g0rim=151
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/w51/F410M/pipeline/jw06151001001_03107_00001_nrcalong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/w51/F410M/pipeline/jw06151001001_03107_00001_nrcalong_ramp.fits
+satstar zeroframe: 72927 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/w51/F410M/pipeline/jw06151001001_03107_00001_nrcalong_ramp.fits
+satstar zeroframe: cal - crf level from jw06151001001_03107_00001_nrcalong_cal.fits, median 8.56 MJy/sr
+ROW w51 F410M nrcalong D50=+8.56 Dfar=+14.3 B=-248 B_D=-2 sat c/h/hD 3042/3042/3042 buf 1973/126/2132 h/c=1.152 hD/c=1.075 g0rim=4694
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F115W/pipeline/jw01182004001_02101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F115W/pipeline/jw01182004001_02101_00001_nrcb1_ramp.fits
+satstar zeroframe: 4719 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F115W/pipeline/jw01182004001_02101_00001_nrcb1_ramp.fits
+satstar zeroframe: cal - crf level from jw01182004001_02101_00001_nrcb1_cal.fits, median 1.01 MJy/sr
+ROW brick F115W nrcb1 D50=+1.01 Dfar=+1.01 B=-27 B_D=-22 sat c/h/hD 0/0/0 buf 8/6/6 h/c=nan hD/c=nan g0rim=nan
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/brick/F200W/pipeline/jw01182004001_04101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/brick/F200W/pipeline/jw01182004001_04101_00001_nrcb1_ramp.fits
+satstar zeroframe: 7960 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/brick/F200W/pipeline/jw01182004001_04101_00001_nrcb1_ramp.fits
+satstar zeroframe: cal - crf level from jw01182004001_04101_00001_nrcb1_cal.fits, median 5.25 MJy/sr
+ROW brick F200W nrcb1 D50=+5.25 Dfar=+5.3 B=-12 B_D=+30 sat c/h/hD 0/0/0 buf 199/157/196 h/c=nan hD/c=nan g0rim=nan
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca1_ramp.fits
+satstar zeroframe: 14855 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F150W/pipeline/jw05365001001_13101_00001_nrca1_ramp.fits
+satstar zeroframe: cal - crf level from jw05365001001_13101_00001_nrca1_cal.fits, median 0.000343 MJy/sr
+ROW sgrb2 F150W nrca1 D50=+0.000343 Dfar=+0.013 B=+59 B_D=+59 sat c/h/hD 0/0/0 buf 24/25/25 h/c=nan hD/c=nan g0rim=nan
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca1_ramp.fits
+satstar zeroframe: 15151 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F210M/pipeline/jw05365001001_09101_00001_nrca1_ramp.fits
+satstar zeroframe: cal - crf level from jw05365001001_09101_00001_nrca1_cal.fits, median 0.00376 MJy/sr
+ROW sgrb2 F210M nrca1 D50=+0.00376 Dfar=+0.0328 B=+71 B_D=+72 sat c/h/hD 0/0/0 buf 39/45/45 h/c=nan hD/c=nan g0rim=nan
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrb2/F360M/pipeline/jw05365001001_13101_00001_nrcalong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrb2/F360M/pipeline/jw05365001001_13101_00001_nrcalong_ramp.fits
+satstar zeroframe: 58960 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrb2/F360M/pipeline/jw05365001001_13101_00001_nrcalong_ramp.fits
+satstar zeroframe: cal - crf level from jw05365001001_13101_00001_nrcalong_cal.fits, median 0.01 MJy/sr
+ROW sgrb2 F360M nrcalong D50=+0.01 Dfar=+0.119 B=+13 B_D=+28 sat c/h/hD 0/0/0 buf 1164/809/823 h/c=nan hD/c=nan g0rim=nan
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrc/F115W/pipeline/jw04147012001_08101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrc/F115W/pipeline/jw04147012001_08101_00001_nrcb1_ramp.fits
+satstar zeroframe: 10936 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrc/F115W/pipeline/jw04147012001_08101_00001_nrcb1_ramp.fits
+satstar zeroframe: cal - crf level from jw04147012001_08101_00001_nrcb1_cal.fits, median 4.65e-05 MJy/sr
+ROW sgrc F115W nrcb1 D50=+4.65e-05 Dfar=+0.00311 B=-577 B_D=-577 sat c/h/hD 1/1/1 buf 0/0/0 h/c=1.011 hD/c=1.008 g0rim=126
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/sgrc/F162M/pipeline/jw04147012001_04101_00001_nrcb1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=2) from /orange/adamginsburg/jwst/sgrc/F162M/pipeline/jw04147012001_04101_00001_nrcb1_ramp.fits
+satstar zeroframe: 11381 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/sgrc/F162M/pipeline/jw04147012001_04101_00001_nrcb1_ramp.fits
+satstar zeroframe: cal - crf level from jw04147012001_04101_00001_nrcb1_cal.fits, median -0.0002 MJy/sr
+ROW sgrc F162M nrcb1 D50=-0.0002 Dfar=+0.00317 B=+71 B_D=+71 sat c/h/hD 20/20/20 buf 4/5/5 h/c=0.988 hD/c=0.988 g0rim=509
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/F150W/pipeline/jw03523005001_10101_00001_nrca1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/F150W/pipeline/jw03523005001_10101_00001_nrca1_ramp.fits
+satstar zeroframe: 15261 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/F150W/pipeline/jw03523005001_10101_00001_nrca1_ramp.fits
+ROW wd2 F150W nrca1 D50=+0 Dfar=+0 B=-630 B_D=-630 sat c/h/hD 41/41/41 buf 36/89/89 h/c=0.964 hD/c=0.964 g0rim=572
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/F200W/pipeline/jw03523005001_12101_00001_nrca1_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/F200W/pipeline/jw03523005001_12101_00001_nrca1_ramp.fits
+satstar zeroframe: 15500 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/F200W/pipeline/jw03523005001_12101_00001_nrca1_ramp.fits
+ROW wd2 F200W nrca1 D50=+0 Dfar=+0 B=-19 B_D=-19 sat c/h/hD 82/82/82 buf 25/70/70 h/c=0.967 hD/c=0.967 g0rim=178
+satstar zeroframe: using ramp first read SCI[0,0] from /orange/adamginsburg/jwst/wd2/F250M/pipeline/jw03523005001_04101_00001_nrcalong_ramp.fits
+satstar zeroframe: first frame (ZEROFRAME ext, NFRAMES=4) from /orange/adamginsburg/jwst/wd2/F250M/pipeline/jw03523005001_04101_00001_nrcalong_ramp.fits
+satstar zeroframe: 52443 px saturated or DO_NOT_USE in the first read (GROUPDQ) from /orange/adamginsburg/jwst/wd2/F250M/pipeline/jw03523005001_04101_00001_nrcalong_ramp.fits
+ROW wd2 F250M nrcalong D50=+0 Dfar=+0 B=-91 B_D=-91 sat c/h/hD 140/140/140 buf 54/47/47 h/c=1.013 hD/c=1.013 g0rim=107
+ALLDONE 16
