@@ -1,0 +1,6 @@
+F150W oi: k = +0.252, rstd after det medians 0.0160, after det + k lA 0.0153, rms lA 0.0119
+F150W ni: k = -0.171, rstd after det medians 0.0124, after det + k lA 0.0127, rms lA 0.0119
+F150W nf: k = -0.126, rstd after det medians 0.0119, after det + k lA 0.0118, rms lA 0.0119
+F200W oi: k = +0.904, rstd after det medians 0.0160, after det + k lA 0.0099, rms lA 0.0122
+F200W ni: k = +0.027, rstd after det medians 0.0088, after det + k lA 0.0088, rms lA 0.0122
+F200W nf: k = +0.018, rstd after det medians 0.0088, after det + k lA 0.0087, rms lA 0.0122

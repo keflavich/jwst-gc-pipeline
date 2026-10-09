@@ -1,0 +1,8 @@
+F150W
+  oi: rstd 0.0215, after per-detector medians 0.0160; medians a1 +0.0173 a2 -0.0043 a3 +0.0028 a4 +0.0029 b1 -0.0069 b2 -0.0046 b3 -0.0260 b4 +0.0119
+  ni: rstd 0.0193, after per-detector medians 0.0124; medians a1 +0.0163 a2 -0.0044 a3 +0.0023 a4 +0.0051 b1 -0.0087 b2 -0.0080 b3 -0.0263 b4 +0.0087
+  nf: rstd 0.0196, after per-detector medians 0.0119; medians a1 +0.0175 a2 -0.0035 a3 +0.0024 a4 +0.0062 b1 -0.0079 b2 -0.0083 b3 -0.0227 b4 +0.0111
+F200W
+  oi: rstd 0.0231, after per-detector medians 0.0160; medians a1 +0.0266 a2 +0.0017 a3 +0.0064 a4 +0.0075 b1 +0.0019 b2 -0.0039 b3 -0.0261 b4 +0.0095
+  ni: rstd 0.0166, after per-detector medians 0.0088; medians a1 +0.0281 a2 +0.0023 a3 +0.0114 a4 +0.0093 b1 +0.0019 b2 -0.0038 b3 -0.0263 b4 +0.0095
+  nf: rstd 0.0166, after per-detector medians 0.0088; medians a1 +0.0281 a2 +0.0023 a3 +0.0114 a4 +0.0095 b1 +0.0019 b2 -0.0038 b3 -0.0261 b4 +0.0095

@@ -1,0 +1,2 @@
+F150W: oi per-frame 0.0090 -> 4-frame mean 0.0045; ni per-frame 0.0078 -> 4-frame mean 0.0039; nf per-frame 0.0079 -> 4-frame mean 0.0040  (N rows 8846)
+F200W: oi per-frame 0.0061 -> 4-frame mean 0.0031; ni per-frame 0.0060 -> 4-frame mean 0.0030; nf per-frame 0.0059 -> 4-frame mean 0.0030  (N rows 11022)

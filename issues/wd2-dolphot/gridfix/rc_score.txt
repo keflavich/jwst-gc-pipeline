@@ -1,0 +1,38 @@
+F150W: N stars 2353 (96 with forced-refit frames), frame rows 8846
+  variant                      rstd all   rstd no-forced   median
+  old grid, seed box (main2)   0.0215     0.0211        -0.0024
+  new grid, seed box           0.0193     0.0190        -0.0031
+  old grid, recentred box      0.0212     0.0212        -0.0019
+  new grid, recentred box      0.0196     0.0189        -0.0027
+  closure dm + dfix5 - pred    0.0222
+  per detector rstd (oi ni of nf), init - fit offset dx dy [px] (main2)
+  nrca1  0.0169  0.0089  0.0228  0.0085   -0.216 -0.827   N=162
+  nrca2  0.0084  0.0134  0.0094  0.0125   -0.164 -0.762   N=211
+  nrca3  0.0182  0.0088  0.0236  0.0080   -0.126 -0.767   N=208
+  nrca4  0.0194  0.0131  0.0194  0.0128   -0.072 -0.725   N=263
+  nrcb1  0.0199  0.0182  0.0180  0.0172   +0.151 -0.757   N=425
+  nrcb2  0.0108  0.0077  0.0134  0.0072   +0.158 -0.783   N=347
+  nrcb3  0.0227  0.0198  0.0177  0.0190   +0.090 -0.734   N=453
+  nrcb4  0.0104  0.0090  0.0131  0.0090   +0.102 -0.775   N=284
+  per-frame slope of -2.5 log10(f_ni/f_main2) on lA: -0.492
+  per-frame slope of -2.5 log10(f_of/f_main2) on lA: +0.289
+  per-frame slope of -2.5 log10(f_nf/f_main2) on lA: -0.449
+F200W: N stars 2782 (57 with forced-refit frames), frame rows 11022
+  variant                      rstd all   rstd no-forced   median
+  old grid, seed box (main2)   0.0231     0.0224        +0.0009
+  new grid, seed box           0.0166     0.0161        +0.0029
+  old grid, recentred box      0.0230     0.0223        +0.0010
+  new grid, recentred box      0.0166     0.0161        +0.0030
+  closure dm + dfix5 - pred    0.0160
+  per detector rstd (oi ni of nf), init - fit offset dx dy [px] (main2)
+  nrca1  0.0188  0.0075  0.0186  0.0074   +0.004 +0.008   N=219
+  nrca2  0.0129  0.0058  0.0135  0.0058   +0.028 -0.000   N=268
+  nrca3  0.0321  0.0095  0.0315  0.0094   -0.066 +0.052   N=297
+  nrca4  0.0181  0.0069  0.0181  0.0065   -0.003 -0.011   N=308
+  nrcb1  0.0136  0.0122  0.0138  0.0122   -0.017 -0.009   N=475
+  nrcb2  0.0158  0.0075  0.0156  0.0076   -0.016 +0.004   N=391
+  nrcb3  0.0142  0.0145  0.0143  0.0145   -0.007 -0.002   N=474
+  nrcb4  0.0141  0.0079  0.0144  0.0081   -0.005 +0.007   N=350
+  per-frame slope of -2.5 log10(f_ni/f_main2) on lA: -0.903
+  per-frame slope of -2.5 log10(f_of/f_main2) on lA: -0.000
+  per-frame slope of -2.5 log10(f_nf/f_main2) on lA: -0.905

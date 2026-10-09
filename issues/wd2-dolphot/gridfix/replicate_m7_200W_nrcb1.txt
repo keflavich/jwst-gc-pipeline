@@ -1,0 +1,13 @@
+jw03523005001_12101_00001_nrcb1_align_o005_crf.fits: 472 stars, smoothed bg median 0.398, satstar model sum 3.385e+07, max 1.26e+06
+F200W nrcb1: variant vs main2 flux_fit, -2.5 log10(f_variant / f_main2)  (N=472)
+  variant      rstd     slope on lA   median
+  fold        0.0117   +0.22   -0.0063
+  d0_ann      0.0117   +0.22   -0.0063
+  d0_loc      0.0048   +0.02   +0.0000
+  d1_ann      0.0088   +0.02   -0.0066
+  d1_loc      0.0033   -0.02   -0.0002
+  d2_ann      0.0045   +0.06   -0.0064
+  d2_loc      0.0004   +0.00   +0.0000
+  lm_d2       0.0000   -0.00   +0.0000
+  local_bkg(d2) - main2 local_bkg: median +0.0000, rstd 0.0026
+  LevMar refit position - main2 x_fit,y_fit: median |dr| 0.0000 px, p90 0.0000 px
