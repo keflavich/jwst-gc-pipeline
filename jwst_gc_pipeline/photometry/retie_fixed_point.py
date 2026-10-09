@@ -39,6 +39,11 @@ Given a ceiling, this exits 4 for the first and 3 for the second, and prints
 the ``ASTROM_M2_CORRECTION_FLOOR_MAS`` that lets the frozen m3+ stages run over
 a residual that is measured, recorded and left alone.  Without the flag every
 fixed point still stops, which is the behaviour this had before.
+
+It exits 0 when no (filter, token) group is stuck: each one is still moving,
+has too little history to judge, or converged (its newest pass left nothing
+for m2 to apply).  That includes every group having converged, and the loop
+reads 0 as "continue" in all of these cases.
 """
 import collections
 import glob
