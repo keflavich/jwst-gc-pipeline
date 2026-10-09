@@ -35,7 +35,7 @@ FRAME = (f'/blue/adamginsburg/adamginsburg/jwst/brick/{FILT.upper()}/pipeline/'
 PSF_FN = (f'/blue/adamginsburg/adamginsburg/jwst/brick/psfs/'
           f'nircam_{DET}_{FILT}_fovp101_samp2_npsf16.fits')
 
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 from photutils.psf import PSFPhotometry
 
 
@@ -59,7 +59,7 @@ def make_corrected_model(grid, r_c, C_c):
 
 
 def main():
-    grid = to_griddedpsfmodel(PSF_FN)
+    grid = load_stpsf_grid(PSF_FN)
     if isinstance(grid, list):
         grid = grid[0]
 

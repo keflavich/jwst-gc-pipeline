@@ -29,7 +29,7 @@ import numpy as np
 from astropy.table import Table
 from astropy.modeling.fitting import LevMarLSQFitter
 from photutils.psf import PSFPhotometry
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -59,7 +59,7 @@ def fit(grid, img, err, mask, x, y, f):
 
 def main():
     gfn, cdir, zfn, pfn, filt, outp = sys.argv[1:7]
-    st = to_griddedpsfmodel(gfn)
+    st = load_stpsf_grid(gfn)
     st = st[0] if isinstance(st, list) else st
     hyb = maybe_apply_epsf_core(st, grid_detector(st), filt, environ={EPSF_CORE_DIR_ENV: cdir})
     assert hyb is not st, 'no core file for this grid'

@@ -616,7 +616,7 @@ print("Importing webbpsf", flush=True)
 import stpsf as webbpsf
 import stpsf
 print(f"Webbpsf version: {webbpsf.__version__}")
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 import datetime
 print("Done with imports", flush=True)
 
@@ -2453,7 +2453,7 @@ def get_psf_model(filtername, proposal_id, field,
                 # this check load a half-written file.
                 if os.path.exists(_psf_fn):
                     print(f"Loading cached PSF grid (skipping MAST/Poppy): {_psf_fn}", flush=True)
-                    grid = to_griddedpsfmodel(_psf_fn)
+                    grid = load_stpsf_grid(_psf_fn)
                     if isinstance(grid, list):
                         grid = grid[0]
                     break
@@ -2500,7 +2500,7 @@ def get_psf_model(filtername, proposal_id, field,
                       f"{_cached_files}", flush=True)
                 grid = []
                 for _fn in _cached_files:
-                    _g = to_griddedpsfmodel(_fn)
+                    _g = load_stpsf_grid(_fn)
                     grid.append(_g[0] if isinstance(_g, list) else _g)
 
         if grid is None:
@@ -2615,7 +2615,7 @@ def get_psf_model(filtername, proposal_id, field,
             grid = maybe_apply_epsf_core(grid, _cache_detector, filtername, program=proposal_id)
 
         if use_grid:
-            # to_griddedpsfmodel returns a LIST (one grid per detector) for
+            # psf_grid(all_detectors=True) returns a LIST (one grid per detector) for
             # module='merged'; downstream wants a single grid.
             if isinstance(grid, list):
                 grid = grid[0]
@@ -2639,7 +2639,7 @@ def get_psf_model(filtername, proposal_id, field,
         _psf_grid_path = resolve_merged_psf_grid_path(
             jwst_root, target, instrument, module, filtername,
             proposal_id, field, oversample=oversample, blur=blur)
-        grid = psfgrid = to_griddedpsfmodel(_psf_grid_path)
+        grid = psfgrid = load_stpsf_grid(_psf_grid_path)
 
         psf_model = WrappedPSFModel(grid, stampsz=stampsz)
         dao_psf_model = grid

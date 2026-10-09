@@ -20,7 +20,7 @@ from jwst_gc_pipeline.photometry.wingcal import (
     bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
     MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
     relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 from photutils.psf import GriddedPSFModel
 
 
@@ -207,7 +207,7 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
     if os.path.exists(str(psf_fn)):
         # As a file
         log.info(f"Loading grid from psf_fn={psf_fn}")
-        big_grid = to_griddedpsfmodel(psf_fn)  # file created 2 cells above
+        big_grid = load_stpsf_grid(psf_fn)  # file created 2 cells above
         if isinstance(big_grid, list):
             print(f"PSF IS A LIST OF GRIDS!!!", flush=True)
             big_grid = big_grid[0]
@@ -3638,7 +3638,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                       f"back to the small grid (amplitude may under-fit).", flush=True)
         else:
             print(f"Loading large PSF grid: {_lg_fn}", flush=True)
-            big_grid_large = to_griddedpsfmodel(_lg_fn)
+            big_grid_large = load_stpsf_grid(_lg_fn)
             if isinstance(big_grid_large, list):
                 big_grid_large = big_grid_large[0]
 
