@@ -1,0 +1,4 @@
+F150W nrcb1: per-frame rows 2832, changed (|dm|>1e-4) 52, |dm|>0.005 0, p1/p50/p99 dm -0.0000/-0.0000/+0.0003
+F150W nrcb3: per-frame rows 3335, changed (|dm|>1e-4) 384, |dm|>0.005 62, p1/p50/p99 dm -0.0004/+0.0000/+0.0064
+F200W nrcb1: per-frame rows 994, changed (|dm|>1e-4) 132, |dm|>0.005 49, p1/p50/p99 dm -0.0454/-0.0000/+0.0012
+F200W nrcb3: per-frame rows 1496, changed (|dm|>1e-4) 491, |dm|>0.005 228, p1/p50/p99 dm -0.0405/-0.0000/+0.0533

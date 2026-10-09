@@ -1,0 +1,8 @@
+f115w 645 645 matched 645 changed 127 dm p10/50/90 of changed [-0.0013  0.0001  0.0047] min/max -0.133 0.015
+f150w 2602 2602 matched 2602 changed 146 dm p10/50/90 of changed [-0.0003  0.0008  0.0041] min/max -0.011 0.012
+f200w 928 928 matched 928 changed 240 dm p10/50/90 of changed [-0.0097  0.0003  0.0128] min/max -0.03 0.055
+f182m 991 991 matched 991 changed 139 dm p10/50/90 of changed [-0.0001  0.0013  0.013 ] min/max -0.001 0.043
+f250m 1325 1325 matched 1325 changed 76 dm p10/50/90 of changed [-0.0024 -0.0003  0.0001] min/max -0.048 0.001
+f277w 1707 1706 matched 1706 changed 131 dm p10/50/90 of changed [-0.0013 -0.0001  0.0007] min/max -0.008 0.004
+f300m 1414 1414 matched 1414 changed 58 dm p10/50/90 of changed [-0.0027 -0.0002  0.0003] min/max -0.035 0.001
+f410m 280 280 matched 280 changed 27 dm p10/50/90 of changed [-0.0013 -0.0003  0.0002] min/max -0.008 0.001
