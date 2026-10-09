@@ -32,7 +32,7 @@ for b in sys.argv[1:]:
     cnt_det = np.array([np.bincount(row[R['det'] == d], minlength=len(S)) for d in dets])
     sdet = dets[np.argmax(cnt_det, axis=0)]
     lA = np.asarray(S['pred'] - S['predT'], float)
-    for v in ('oi', 'ni', 'nf'):
+    for v in ('oi', 'ni', 'of', 'nf'):
         num = np.bincount(row, weights=R[f'f_{v}'] / R['fmain'], minlength=len(S))
         cnt = np.bincount(row, minlength=len(S))
         sc = np.asarray(S['dm']) - 2.5 * np.log10(num / cnt) - np.asarray(S['pred'])
