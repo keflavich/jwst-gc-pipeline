@@ -17,7 +17,7 @@ from astropy.table import Table
 from photutils.detection import DAOStarFinder
 from photutils.psf import PSFPhotometry
 from photutils.background import LocalBackground
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 
 SCRATCH = os.path.dirname(os.path.abspath(__file__))
 
@@ -99,7 +99,7 @@ def fit_one(data, err, mask, psf, x0, y0, flux0, fit_shape, localbkg,
 def run_frame(frame_fn, psf_fn, label, outer_test=True, annulus_test=True):
     print(f'=== {label}: {os.path.basename(frame_fn)}', flush=True)
     data, err, bad, sat = load_frame(frame_fn)
-    psf = to_griddedpsfmodel(psf_fn)
+    psf = load_stpsf_grid(psf_fn)
     if isinstance(psf, list):
         psf = psf[0]
     xs, ys, peaks, skymed = select_stars(data, bad, sat)

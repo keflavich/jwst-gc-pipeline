@@ -30,7 +30,7 @@ class _FakeGrid:
 def _trap_mast(monkeypatch):
     """Make the MAST-rebuild fallback fail loudly, and make the on-disk loader
     return a sentinel keyed on the file it was asked to load."""
-    monkeypatch.setattr(ccl, 'to_griddedpsfmodel',
+    monkeypatch.setattr(ccl, 'load_stpsf_grid',
                         lambda fn: _FakeGrid(os.path.basename(fn)))
     # get_psf_model's rebuild branch opens os.path.expanduser('~/.mast_api_token')
     # first; point it at a path that cannot exist so any fall-through raises.
