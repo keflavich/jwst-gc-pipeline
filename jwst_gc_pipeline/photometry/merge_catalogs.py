@@ -705,6 +705,23 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     clip_dec = sigma_clip(arr_dec, stdfunc='mad_std', axis=1)
     to_mask = clip_flux.mask | clip_ra.mask | clip_dec.mask
     keepmask = ~to_mask
+
+    # ALL-CLIPPED FALLBACK: with 3-4 frames, mad_std comes from two or three
+    # near-equal values, so each axis can clip a frame that agrees to a few
+    # per cent in flux or 1-2 mas in position, and the UNION of the three
+    # per-axis masks can then cover every frame.  Such a source got
+    # nmatch_good=0, a NaN position, and was dropped as "nan coordinates" by
+    # the caller.  wd2 m7 (#1160): 49 / 68 / 64 rows in F277W / F250M / F300M,
+    # 39 / 55 / 49 of them within 0.3 mag and 0.08" of a dolphot star; no
+    # single axis masked every frame of any of them.  Fall back to every
+    # frame with a finite flux and position for those sources only.
+    _all_clipped = (nmatch > 0) & ~keepmask.any(axis=1)
+    if _all_clipped.any():
+        keepmask[_all_clipped] = (np.isfinite(arr_flux) & np.isfinite(arr_ra)
+                                  & np.isfinite(arr_dec))[_all_clipped]
+        print(f"Phase 1: the flux/ra/dec sigma clip masked every frame of "
+              f"{int(_all_clipped.sum())} source(s); those use all their "
+              f"finite frames", flush=True)
     nmatch_good = keepmask.sum(axis=1).astype(np.int32)
 
     # free clip objects (they reference the big arrays)
@@ -813,6 +830,14 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     newtbl['std_dec'] = std_dec
     newtbl['nmatch'] = nmatch
     newtbl['nmatch_good'] = nmatch_good
+    # nmatch_good == nmatch on a fallback row, the same as on a row with no
+    # clipped frame; this flag tells the two apart.
+    newtbl['clip_fallback'] = _all_clipped
+    newtbl.meta['clip_fallback'] = (
+        'True when the flux/ra/dec sigma clip masked every frame of this '
+        'source, so its averages use all frames with a finite flux and '
+        'position (#1160)')
+    del _all_clipped
     newtbl[f'{flux_colname}_avg'] = flux_avg
     newtbl[f'std_{flux_colname}_avg'] = std_flux_avg
     newtbl[f'{flux_error_colname}_avg'] = flux_err_avg
@@ -1787,7 +1812,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # the same spelling.  Same convention as flux_fit_avg -> flux_fit; the
     # *_allcols.fits table keeps the unambiguous names.)
     for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
-                'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
+                'clip_fallback', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                 'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
                 'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
                 'forced_refit_frac', 'forced_refit_nframes',
