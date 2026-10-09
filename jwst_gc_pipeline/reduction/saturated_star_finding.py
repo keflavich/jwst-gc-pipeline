@@ -1090,6 +1090,13 @@ def satstar_fit_switches(env=None):
       positive, no DO_NOT_USE, group 0 clean); when the two differ by more
       than a factor ``_RCURVE_SATCHECK_MAX_RATIO`` the curve is rebuilt from
       those pixels (``zeroframe_recover_saturated``).
+    * ``SATSTAR_ZF_R_HEADER`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``):
+      the rim rewrite uses PHOTMJSR / t(group 0) (``zeroframe_header_R``) in
+      place of the measured R(g0) curve, on NIRCam frames where an R was
+      measured.  The curve's calibration pixels are mostly the wings of
+      saturated stars, inflated by charge migration: on wd2 the SW curve sat
+      4-9% above the header rate on nrcb3/nrcb4 and 1-2% on nrcb1, and the
+      nrcb3 satstars read 0.06 mag brighter than the nrcb1 ones (#1142).
     * ``SATSTAR_SEED_CORE_DQ`` (default ON): NaN-variance pixels flagged
       OUTLIER or by the bad-pixel mask are left out of the "genuine
       saturation core" the seed refinement centres on
@@ -1127,6 +1134,7 @@ def satstar_fit_switches(env=None):
         'first_frame': _env_switch('SATSTAR_ZF_FIRST_FRAME', cap_on, env),
         'rim_badpix': _env_switch('SATSTAR_ZF_RIM_BADPIX', True, env),
         'rcurve_satcheck': _env_switch('SATSTAR_ZF_RCURVE_SATCHECK', True, env),
+        'r_header': _env_switch('SATSTAR_ZF_R_HEADER', cap_on, env),
         'seed_core_dq': _env_switch('SATSTAR_SEED_CORE_DQ', True, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
@@ -1208,6 +1216,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             zf += 'f'
         if sw['rcurve_satcheck']:
             zf += 'c'
+        if sw['r_header']:
+            zf += 'h'
         if zf:
             parts.append('zf' + zf)
     if sw['qfit_local_r'] > 0:
@@ -1487,8 +1497,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     ``SATSTAR_ZF_RCURVE_SATCHECK`` (default ON) rebuilds a measured curve that
     disagrees by more than a factor 2 with the SATURATED pixels the ramp fit
     measured, and, when too few such pixels exist, replaces a curve that
-    disagrees by more than a factor 2 with ``R_header``.  See
-    ``satstar_fit_switches``.
+    disagrees by more than a factor 2 with ``R_header``.
+    ``SATSTAR_ZF_R_HEADER`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``)
+    rewrites the rim with ``R_header`` wherever an R was measured; the
+    measured curve is then only logged.  See ``satstar_fit_switches``.
 
     Parameters
     ----------
@@ -1530,8 +1542,9 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         path.  The ceiling is still estimated from the raw group 0.
     R_header : float or None
         PHOTMJSR / t(group 0) from the frame header (``zeroframe_header_R``),
-        or None.  Used by the R-curve check only when fewer than
-        ``_RCURVE_SATCHECK_MIN_PX`` measured SATURATED pixels are available.
+        or None.  The rim R under ``SATSTAR_ZF_R_HEADER``; otherwise used by
+        the R-curve check only when fewer than ``_RCURVE_SATCHECK_MIN_PX``
+        measured SATURATED pixels are available.
 
     Returns
     -------
@@ -1743,6 +1756,29 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                   f"the header value is used", flush=True)
             _Rcurve = None
             R = float(R_header)
+    # Header anchor (SATSTAR_ZF_R_HEADER, default: the recovered-core cap):
+    # the rim is rewritten with R_header = PHOTMJSR / t(group 0), the rate
+    # group 0 itself implies, and the measured curve is only logged.  Above
+    # R_g0_min the unsaturated pixels of a crowded frame are mostly the wings
+    # of saturated stars, which carry charge that migrated out of the core
+    # over the ramp, so the curve reads high where saturated stars are dense.
+    # wd2 F150W nrcb3 (2026-10): cal/group0 at g0 2000-3000 DN falls from
+    # 0.0955 at 1-2 px from SATURATED to 0.0873 beyond 25 px, and the curve
+    # sat 7.5% above R_header (nrcb1: 1.5%); the far-field pixels sit within
+    # 1-2% of R_header on every SW detector.  The rim and the recovered-core
+    # cap inherited the excess, and the nrcb3 satstars read 0.06 mag brighter
+    # than the nrcb1 ones.  On LW nrcblong the curve already equals R_header
+    # (0.99-1.00) while far-field star peaks read 5-9% below it above
+    # 2000 DN, so a curve measured away from saturation is not a substitute.
+    # A frame on which no R could be measured is left alone, as before.
+    if (_measured and np.isfinite(R) and _sw['r_header']
+            and R_header is not None and np.isfinite(R_header)
+            and R_header > 0):
+        print(f"[zeroframe R header] rim rewritten with R_header="
+              f"{R_header:.4g} (PHOTMJSR / t(group 0)); measured bright-end "
+              f"R={R:.4g} is {R / R_header:.3g}x that", flush=True)
+        _Rcurve = None
+        R = float(R_header)
     recovered = np.array(data, dtype=float, copy=True)
     rim_mask = np.zeros(shp, dtype=bool)
     if np.isfinite(R):
