@@ -1,0 +1,57 @@
+## F250M
+### mainfcbg: 37800 rows (1292 replaced_saturated), ZP 24.316 from 3734 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 0, |dm|<0.3 0 (0.000), median dm +nan, replaced 0
+  control: N=3447, row within 0.08" 3386, |dm|<0.3 3342 (0.970), median dm +0.007, replaced 1103
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 5008, |dm|<0.3 4950 (0.948), median dm +0.005, replaced 1119
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3883, |dm|<0.3 3826 (0.964), median dm +0.000, replaced 0
+  rows within 20" of the core: 2017; with no dolphot source within 0.1": 770; of those brighter than 18.6: 165
+### main2kf: 35375 rows (1317 replaced_saturated), ZP 24.316 from 3734 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 3, |dm|<0.3 3 (0.031), median dm -0.040, replaced 1
+  control: N=3447, row within 0.08" 3371, |dm|<0.3 3336 (0.968), median dm -0.006, replaced 1133
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 4993, |dm|<0.3 4943 (0.947), median dm -0.004, replaced 1151
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3882, |dm|<0.3 3824 (0.964), median dm +0.000, replaced 0
+  rows within 20" of the core: 1932; with no dolphot source within 0.1": 693; of those brighter than 18.6: 161
+### main2kfpk: 35470 rows (1316 replaced_saturated), ZP 24.316 from 3732 stars 18.6-21
+  no-row (98): N=98, row within 0.08" 44, |dm|<0.3 41 (0.418), median dm -0.050, replaced 1
+  control: N=3447, row within 0.08" 3392, |dm|<0.3 3355 (0.973), median dm -0.006, replaced 1133
+  all dolphot F250M < 18.6: N=5219, row within 0.08" 5062, |dm|<0.3 5009 (0.960), median dm -0.004, replaced 1151
+  dolphot F250M 18.6-21: N=3968, row within 0.08" 3881, |dm|<0.3 3822 (0.963), median dm +0.000, replaced 0
+  rows within 20" of the core: 1991; with no dolphot source within 0.1": 667; of those brighter than 18.6: 161
+## F277W
+### mainfcbg: 43800 rows (1660 replaced_saturated), ZP 24.129 from 3657 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 0, |dm|<0.3 0 (0.000), median dm +nan, replaced 0
+  control: N=4350, row within 0.08" 4212, |dm|<0.3 4170 (0.959), median dm -0.000, replaced 1363
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 4715, |dm|<0.3 4657 (0.891), median dm -0.001, replaced 1383
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3898, |dm|<0.3 3827 (0.961), median dm +0.000, replaced 0
+  rows within 20" of the core: 1602; with no dolphot source within 0.1": 611; of those brighter than 18.6: 86
+### main2kf: 42720 rows (1705 replaced_saturated), ZP 24.129 from 3648 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 1, |dm|<0.3 1 (0.003), median dm -0.061, replaced 0
+  control: N=4350, row within 0.08" 4210, |dm|<0.3 4176 (0.960), median dm -0.012, replaced 1425
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 4720, |dm|<0.3 4671 (0.894), median dm -0.011, replaced 1448
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3888, |dm|<0.3 3815 (0.958), median dm +0.000, replaced 0
+  rows within 20" of the core: 1594; with no dolphot source within 0.1": 611; of those brighter than 18.6: 84
+### main2kfpk: 42993 rows (1705 replaced_saturated), ZP 24.129 from 3649 stars 18.6-21
+  no-row (327): N=327, row within 0.08" 254, |dm|<0.3 235 (0.719), median dm -0.011, replaced 0
+  control: N=4350, row within 0.08" 4277, |dm|<0.3 4235 (0.974), median dm -0.012, replaced 1425
+  all dolphot F277W < 18.6: N=5225, row within 0.08" 5048, |dm|<0.3 4974 (0.952), median dm -0.011, replaced 1448
+  dolphot F277W 18.6-21: N=3983, row within 0.08" 3889, |dm|<0.3 3816 (0.958), median dm +0.000, replaced 0
+  rows within 20" of the core: 1740; with no dolphot source within 0.1": 475; of those brighter than 18.6: 92
+## F300M
+### mainfcbg: 34332 rows (1394 replaced_saturated), ZP 23.970 from 3753 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 1, |dm|<0.3 0 (0.000), median dm -1.728, replaced 1
+  control: N=3599, row within 0.08" 3528, |dm|<0.3 3497 (0.972), median dm -0.006, replaced 1196
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5248, |dm|<0.3 5196 (0.941), median dm -0.006, replaced 1225
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3918, |dm|<0.3 3850 (0.963), median dm -0.000, replaced 0
+  rows within 20" of the core: 1844; with no dolphot source within 0.1": 663; of those brighter than 18.6: 162
+### main2kf: 33190 rows (1411 replaced_saturated), ZP 23.970 from 3759 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 4, |dm|<0.3 4 (0.026), median dm -0.032, replaced 0
+  control: N=3599, row within 0.08" 3519, |dm|<0.3 3493 (0.971), median dm -0.015, replaced 1220
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5240, |dm|<0.3 5197 (0.941), median dm -0.013, replaced 1247
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3920, |dm|<0.3 3854 (0.964), median dm -0.000, replaced 0
+  rows within 20" of the core: 1804; with no dolphot source within 0.1": 625; of those brighter than 18.6: 159
+### main2kfpk: 33280 rows (1409 replaced_saturated), ZP 23.970 from 3756 stars 18.6-21
+  no-row (151): N=151, row within 0.08" 86, |dm|<0.3 83 (0.550), median dm -0.049, replaced 0
+  control: N=3599, row within 0.08" 3536, |dm|<0.3 3508 (0.975), median dm -0.015, replaced 1219
+  all dolphot F300M < 18.6: N=5522, row within 0.08" 5342, |dm|<0.3 5294 (0.959), median dm -0.013, replaced 1246
+  dolphot F300M 18.6-21: N=3998, row within 0.08" 3919, |dm|<0.3 3850 (0.963), median dm -0.000, replaced 0
+  rows within 20" of the core: 1875; with no dolphot source within 0.1": 580; of those brighter than 18.6: 151
