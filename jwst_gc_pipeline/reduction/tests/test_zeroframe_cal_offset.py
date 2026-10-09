@@ -12,25 +12,37 @@ median cal - crf is 7-16 MJy/sr.  Pinned here:
    R_header x group 0 - offset, and the log says so;
 3. a measured curve, an explicit R or an offset of the wrong shape leave the
    rim as without the offset;
-4. ``zeroframe_cal_offset`` reads the sibling cal and returns None when there
+4. the R-curve satcheck fallback to R_header subtracts the offset with
+   SATSTAR_ZF_R_HEADER off, and ``remove_saturated_stars`` reads the level
+   whenever a first read is handed over;
+5. ``zeroframe_cal_offset`` reads the sibling cal and returns None when there
    is none, when the PHOTMJSR differs, or when cal - crf is 0.
 """
+import builtins
+
 import numpy as np
 import pytest
 from astropy.io import fits
+from astropy.table import Table
 
+import jwst_gc_pipeline.reduction.saturated_star_finding as SSF
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
-    _find_cal_for, cal_offset_map, zeroframe_cal_offset,
-    zeroframe_fit_anchor, zeroframe_recover_saturated)
+    _RCURVE_SATCHECK_MIN_PX, _find_cal_for, cal_offset_map,
+    zeroframe_cal_offset, zeroframe_fit_anchor, zeroframe_recover_saturated)
+from jwst_gc_pipeline.reduction.tests.test_zeroframe_first_frame import (
+    _write_pair)
 from jwst_gc_pipeline.reduction.tests.test_zeroframe_r_header import (
     R_TRUE, WING_INFL, _scene)
+from jwst_gc_pipeline.reduction.tests.test_zeroframe_rcurve_satcheck import (
+    R_TRUE as SC_R_TRUE, _scene as _satcheck_scene)
 
 SAT = 2
 DNU = 1
 _ENV = ('SATSTAR_ZF_R_HEADER', 'NIRCAM_SATSTAR_RECOVERED_CAP',
         'SATSTAR_ZF_KEEP_FINITE', 'SATSTAR_ZF_G0_GROUPDQ',
         'SATSTAR_ZF_FIRST_FRAME', 'SATSTAR_ZF_RCURVE_GUARD',
-        'SATSTAR_ZF_RCURVE_MAXSTEP', 'SATSTAR_ZF_RCURVE_SATCHECK')
+        'SATSTAR_ZF_RCURVE_MAXSTEP', 'SATSTAR_ZF_RCURVE_SATCHECK',
+        'SATSTAR_ZF_RIM_BADPIX')
 
 
 @pytest.fixture(autouse=True)
@@ -134,6 +146,70 @@ def test_curve_explicit_r_and_bad_shape_ignore_the_offset(monkeypatch, capsys):
         data, dq, g0, R_header=R_TRUE, cal_offset=np.zeros((3, 3)))
     assert np.allclose(rec_s[rim], R_TRUE * 25000.0)
     assert 'not applied' in capsys.readouterr().out
+
+
+def test_satcheck_header_fallback_subtracts_the_offset(monkeypatch, capsys):
+    """Too few measured SATURATED pixels to rebuild a junk curve: the rate
+    falls back to R_header with SATSTAR_ZF_R_HEADER off, and the rim takes
+    the offset as under the switch."""
+    monkeypatch.setenv('SATSTAR_ZF_R_HEADER', '0')
+    data, dq, g0, core, meas = _satcheck_scene(
+        n_sat_meas=_RCURVE_SATCHECK_MIN_PX - 1)
+    off = np.full(data.shape, 0.5)
+    rec, rim, deep, R = zeroframe_recover_saturated(
+        data, dq, g0, R_header=SC_R_TRUE, cal_offset=off)
+    out = capsys.readouterr().out
+    assert R == SC_R_TRUE
+    assert 'the header value is used' in out
+    assert 'minus the cal - crf level, median 0.5 MJy/sr' in out
+    assert rim[meas].all()
+    assert np.allclose(rec[meas], SC_R_TRUE * g0[meas] - 0.5)
+
+
+@pytest.mark.parametrize('env, zf_on', [
+    ({}, True),
+    ({'SATSTAR_ZF_R_HEADER': '1'}, True),
+    ({'NIRCAM_SATSTAR_RECOVERED_CAP': '1'}, True),
+    ({'SATSTAR_ZEROFRAME_FIT': '0'}, False),
+])
+def test_remove_saturated_stars_hands_the_offset_with_a_first_read(
+        tmp_path, monkeypatch, env, zf_on):
+    """The level is read whenever a first read is handed over, with the
+    header switch on or off, since the satcheck fallback can take the
+    header rate either way."""
+    fn, _ = _write_pair(tmp_path, shape=(8, 8))
+    for attr in ('satstar_wingcal_measurements', 'satstar_rejected',
+                 'satstar_model', 'satstar_resid', 'satstar_flagimg'):
+        monkeypatch.delattr(builtins, attr, raising=False)
+    monkeypatch.delenv('SATSTAR_ZEROFRAME_FIT', raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(SSF, '_find_zeroframe_for',
+                        lambda filename: np.ones((8, 8)))
+    monkeypatch.setattr(SSF, '_find_first_frame_for', lambda filename: None)
+    monkeypatch.setattr(SSF, '_find_group0_saturation_for',
+                        lambda filename, do_not_use=False:
+                        np.zeros((8, 8), bool))
+    level = np.full((8, 8), 2.0)
+    calls = []
+
+    def _offset(filename, data, dq, photmjsr=None):
+        calls.append(filename)
+        return level
+    monkeypatch.setattr(SSF, 'zeroframe_cal_offset', _offset)
+    seen = {}
+
+    def _fit(fh, **kw):
+        seen.update(kw)
+        return Table({'flux_fit': [1.0]})
+    monkeypatch.setattr(SSF, 'get_saturated_stars', _fit)
+    SSF.remove_saturated_stars(fn, recovery_signature='off')
+    assert ('zeroframe' in seen) is zf_on
+    assert bool(calls) is zf_on
+    if zf_on:
+        assert seen['zeroframe_cal_offset'] is level
+    else:
+        assert 'zeroframe_cal_offset' not in seen
 
 
 def _write(path, sci, photmjsr=1.0, dq=None):

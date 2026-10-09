@@ -6130,6 +6130,12 @@ def cal_offset_map(cal, data, dq, noutputs=4, min_px=16):
     median runs over pixels finite in both, without SATURATED or DO_NOT_USE.
     A row of a chunk with fewer than ``min_px`` such pixels takes the value
     interpolated from the chunk's other rows; a chunk with none reads 0.
+
+    The in-situ destreak (DESTRKMD) restores a smoothed 2-D level, so its
+    cal - crf varies along a row and the row median keeps only its typical
+    value.  On the in-situ fields surveyed in #1148 (sgrb2, sgrc, brick nrca)
+    the median level is below 0.03 MJy/sr, so the variation it drops is of
+    that order or smaller.
     """
     cal = np.asarray(cal, dtype=float)
     data = np.asarray(data, dtype=float)
@@ -6321,11 +6327,15 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
                if _with_ff else _find_group0_saturation_for(filename))
         if g0s is not None:
             kwargs['zeroframe_group0_saturated'] = g0s
-    # The level a destreak removed after calibration, for the header-rate
-    # rim (SATSTAR_ZF_R_HEADER), which is cal-scale.
+    # The level a destreak removed after calibration, for a rim at the
+    # header rate, which is cal-scale.  The rate comes from the header under
+    # SATSTAR_ZF_R_HEADER and also through the R-curve satcheck fallback,
+    # which runs with that switch off, so the level is read whenever a first
+    # read is handed over; zeroframe_recover_saturated applies it only to a
+    # header-rate rim.
     if (kwargs.get('zeroframe') is not None
             and kwargs.get('zeroframe_cal_offset') is None
-            and _sw_zf['r_header'] and 'DQ' in [h.name for h in fh]):
+            and 'DQ' in [h.name for h in fh]):
         _off = zeroframe_cal_offset(
             filename, fh['SCI'].data, fh['DQ'].data,
             photmjsr=fh['SCI'].header.get('PHOTMJSR',
