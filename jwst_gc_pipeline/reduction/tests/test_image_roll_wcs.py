@@ -365,3 +365,25 @@ def test_no_queue_check_refused_under_field_roots(tmp_path):
               crc.BLUE_JWST + 'brick/F200W/pipeline/x_i2d.fits'):
         with pytest.raises(SystemExit):
             irw.main(['--field', 'brick', '--apply', '--no-queue-check', '--file', p])
+
+
+def test_locked_table_observation_reported_and_left_alone(tmp_path, monkeypatch):
+    """A locked-table observation (brick 2221 o001) is reported 'locked-table'
+    and not rotated, matching fix_alignment's deferral; a consensus one is."""
+    import json
+    from jwst_gc_pipeline.astrometry import catalog_roll_correction as crc
+    locked = _synthetic_frame(tmp_path / 'jw02221001001_02101_00001_nrca1_destreak.fits',
+                              raoffset=0.0, program='2221', observation='001')
+    free = _synthetic_frame(tmp_path / 'jw10678135001_02101_00001_nrca1_destreak.fits',
+                            raoffset=0.0)
+    from jwst_gc_pipeline.astrometry.catalog_roll_correction import VisitRoll
+    monkeypatch.setattr(crc, 'build_models_for_field', lambda *a, **k: {
+        ('2221', '001'): [VisitRoll('2221', '001', '001', 20.0, PIVOT[0], PIVOT[1], 't')],
+        ('10678', '135'): [VisitRoll('10678', '135', '001', 20.0, PIVOT[0], PIVOT[1], 't')]})
+    monkeypatch.setattr(crc, 'field_root', lambda f: str(tmp_path))
+    man = tmp_path / 'm.json'
+    irw.main(['--field', 'x', '--dry-run', '--verify-sample', '5',
+              '--file', locked, '--file', free, '--manifest', str(man)])
+    st = {os.path.basename(r['path']): r['status'] for r in json.load(open(man))['files']}
+    assert st[os.path.basename(locked)] == 'locked-table'
+    assert st[os.path.basename(free)] == 'dry-run'

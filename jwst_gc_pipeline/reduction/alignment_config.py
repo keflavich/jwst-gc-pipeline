@@ -80,7 +80,7 @@ __all__ = [
     'ALIGNMENT_CONFIG', 'offsets_channel', 'offsets_table_path',
     'CHANNEL_LOCKED', 'CHANNEL_CONSENSUS', 'CHANNEL_NONE',
     'TABLE_DRIVEN_INSTRUMENTS', 'instrument_has_table_channel',
-    'InheritedBulk', 'inherited_bulk',
+    'InheritedBulk', 'inherited_bulk', 'roll_blocked_by_locked_table',
 ]
 
 #: Wildcard for a ``recorded_bulk`` key component (matches any visit / filter).
@@ -222,6 +222,21 @@ class FieldAlignment:
     #: except gc-treasury (10678) keeps its pre-existing, independent
     #: per-filter VIRAC2 tie unchanged.
     tie_through_reference_filter: bool = False
+    #: ``TABLE_LOCKED`` only: whether ``fix_alignment`` may apply the per-visit
+    #: roll correction (``roll_correction.py``, JWST-GC/data-qa#346) to this
+    #: field's frames.  A locked table holds one VIRAC2 shift per module,
+    #: solved on frames that still carried the roll, so each shift already
+    #: moved its module centre by the roll's displacement there (theta x the
+    #: ~90" module-centre lever, ~4 mas per module at a 10" roll).  Rotating
+    #: the frames on top of those shifts moves the two module centres a second
+    #: time, in opposite directions.  m2 cannot see that inter-module term
+    #: (#799) and refuses to correct it above 15 mas (#674).  Set True to start
+    #: rolling the field; the locked table must then be rebuilt from the
+    #: rolled frames before the field is released.  Consensus-channel and
+    #: recorded-bulk fields need no flag: their tables tie each frame to a
+    #: visit consensus that carries the same roll, plus one bulk shift per
+    #: visit, so no row absorbed a module-centre displacement.
+    roll_ready: bool = False
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -1060,6 +1075,16 @@ def offsets_channel(proposal_id, field, instrument=None):
         # bulk is a constant; only the per-exposure term is table-driven
         return CHANNEL_CONSENSUS if cfg.consensus_jitter else CHANNEL_NONE
     return CHANNEL_NONE
+
+
+def roll_blocked_by_locked_table(proposal_id, field) -> bool:
+    """True when this field's roll correction waits on a locked-table rebuild.
+
+    See :attr:`FieldAlignment.roll_ready`.  A field with no entry, a
+    consensus-channel field and a recorded-bulk field are never blocked.
+    """
+    cfg = resolve(str(proposal_id), str(field) if field is not None else None)
+    return cfg is not None and cfg.source == TABLE_LOCKED and not cfg.roll_ready
 
 
 def inherited_bulk(proposal_id, field, module):

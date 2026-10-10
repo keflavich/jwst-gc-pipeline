@@ -1479,16 +1479,24 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             apply_distortion_scale_correction)
         apply_distortion_scale_correction(fn)
 
-    if os.environ.get('ROLL_CORRECTION', '0') == '1':
+    from jwst_gc_pipeline.reduction.roll_correction import (
+        roll_correction_enabled, ensure_roll_correction)
+    if roll_correction_enabled():
         # Rigid field rotation (attitude roll error) measured against VIRAC2
-        # and Gaia DR3 in JWST-GC/data-qa#346.  OPT-IN: rotates every
-        # detector about the NIRCam field centre by the roll resolved from
-        # roll_corrections.csv (or ROLL_CORRECTION_ARCSEC).  Applied BEFORE the
-        # reference shift.  Frames change their base fiducial by up to tens
-        # of mas, so offsets tables solved on unrotated frames fail the base
-        # check and must be rebuilt (see roll_correction.py).
-        from jwst_gc_pipeline.reduction.roll_correction import apply_roll_correction
-        apply_roll_correction(fn)
+        # and Gaia DR3 in JWST-GC/data-qa#346, resolved per visit from
+        # roll_corrections.csv (or ROLL_CORRECTION_ARCSEC).  DEFAULT ON and
+        # idempotent: a frame that already carries the table's roll (from
+        # here, from its _cal via image_roll_wcs, or from a previous run) is
+        # left alone; one carrying a different roll gets the difference about
+        # its recorded pivot; an unrolled frame is rotated about the NIRCam
+        # field centre through its current WCS, which equals rotating before
+        # any shift already baked in.  Fields whose locked offsets table
+        # predates the roll are deferred until their alignment_config entry
+        # sets roll_ready (see roll_correction.py).
+        ensure_roll_correction(fn)
+    else:
+        print(f"ROLL_CORRECTION=0: {fn} keeps whatever roll it carries; the "
+              f"table's per-visit roll is NOT enforced on this run.", flush=True)
 
     mod = ImageModel(fn)
     if proposal_id is None:

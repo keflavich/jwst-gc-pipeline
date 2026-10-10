@@ -130,7 +130,7 @@ def test_gwcs_rotation_about_common_pivot():
 # assign_wcs builds, so adjust_wcs, the pivot lookup and the SIP sync all run
 # for real; no CRDS or real data needed.
 
-def _synthetic_frame(path, raoffset=None):
+def _synthetic_frame(path, raoffset=None, program='10678', observation='135'):
     from astropy import coordinates as coord
     from astropy import units as u
     from astropy.modeling import models as M
@@ -140,8 +140,8 @@ def _synthetic_frame(path, raoffset=None):
     from jwst.datamodels import ImageModel
 
     m = ImageModel((64, 64))
-    m.meta.observation.program_number = '10678'
-    m.meta.observation.observation_number = '135'
+    m.meta.observation.program_number = program
+    m.meta.observation.observation_number = observation
     m.meta.observation.visit_number = '001'
     wi = m.meta.wcsinfo
     wi.v2_ref, wi.v3_ref, wi.roll_ref = -82.0, -497.0, 90.2
@@ -231,3 +231,255 @@ def test_resolve_handles_missing_header_values(monkeypatch):
     assert rc.resolve_roll_arcsec(None, '135') is None
     assert rc.resolve_roll_arcsec('10678', None) is None
     assert rc.resolve_roll_arcsec('10678', '135', None) == rc.resolve_roll_arcsec('10678', '135', '*')
+
+
+# --------------------------------------------------------------------------
+# ensure_roll_correction: the default-on, idempotent apply fix_alignment runs.
+
+def _dev_mas(a, b):
+    return np.hypot((a[0] - b[0]) * np.cos(np.radians(b[1])), a[1] - b[1]) * 3.6e6
+
+
+def _shift(fn, raoff, deoff):
+    """Shift ``fn`` in place by a coordinate offset, as fix_alignment does."""
+    from astropy import units as u
+    from jwst.datamodels import ImageModel
+    from jwst.tweakreg.utils import adjust_wcs
+    with ImageModel(fn) as m:
+        m.meta.wcs = adjust_wcs(m.meta.wcs, delta_ra=raoff * u.arcsec,
+                                delta_dec=deoff * u.arcsec)
+        m.save(fn, overwrite=True)
+    with fits.open(fn) as h:
+        h['SCI'].header['RAOFFSET'] = raoff
+        h['SCI'].header['DEOFFSET'] = deoff
+        h.writeto(fn, overwrite=True)
+    return fn
+
+
+def _rolled_reference(tmp_path, name, roll, shift=None):
+    """A virgin frame rolled once by ``roll`` about the NRCALL pivot (pre-shift),
+    then optionally shifted: the state every other path must reproduce."""
+    from jwst.datamodels import ImageModel
+    fn = _synthetic_frame(tmp_path / name)
+    pivot = rc.nircam_pivot_sky(ImageModel(fn).meta.wcs)
+    ra0, dec0 = _sky(fn)
+    ra1, dec1 = rc.rotation_about_pivot(ra0, dec0, pivot[0], pivot[1], roll)
+    if shift is None:
+        return np.array([ra1, dec1])
+    ref = _synthetic_frame(tmp_path / ('ref_' + name))
+    rc.apply_roll_correction(ref, roll, verbose=False)   # roll first, then align
+    _shift(ref, *shift)
+    return np.array(_sky(ref))
+
+
+def test_roll_correction_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("ROLL_CORRECTION", raising=False)
+    assert rc.roll_correction_enabled()
+    monkeypatch.setenv("ROLL_CORRECTION", "1")
+    assert rc.roll_correction_enabled()
+    monkeypatch.setenv("ROLL_CORRECTION", "0")
+    assert not rc.roll_correction_enabled()
+
+
+def _hdr(**kw):
+    h = fits.Header()
+    for k, v in kw.items():
+        h[k] = v
+    return h
+
+
+def test_roll_apply_plan_verdicts():
+    assert rc.roll_apply_plan(_hdr(), None)[0] == rc.ROLL_SKIP_NO_ROW
+    # an explicit zero row is stamped (the release gate needs ROLLARC), never deferred
+    assert rc.roll_apply_plan(_hdr(), 0.0, locked_unready=True)[:2] == (rc.ROLL_APPLY_FULL, 0.0)
+    v, d, _ = rc.roll_apply_plan(_hdr(), 18.0)
+    assert v == rc.ROLL_APPLY_FULL and d == 18.0
+    # an RAOFFSET does not block the first roll any more
+    assert rc.roll_apply_plan(_hdr(RAOFFSET=1.2), 18.0)[0] == rc.ROLL_APPLY_FULL
+    assert rc.roll_apply_plan(_hdr(), 18.0, locked_unready=True)[0] == rc.ROLL_DEFER_LOCKED
+    rolled = _hdr(ROLLCORR=True, ROLLARC=18.0)
+    assert rc.roll_apply_plan(rolled, 18.0)[0] == rc.ROLL_SKIP_CURRENT
+    assert rc.roll_apply_plan(rolled, 18.0 + 5e-7)[0] == rc.ROLL_SKIP_CURRENT
+    # already rolled: the locked deferral never reverts or blocks a re-correction
+    v, d, _ = rc.roll_apply_plan(rolled, 20.5, locked_unready=True)
+    assert v == rc.ROLL_APPLY_DELTA and d == pytest.approx(2.5)
+
+
+@pytest.mark.parametrize("hdr, target, match", [
+    (dict(ROLLPEND=True), 18.0, "crashed"),
+    (dict(ROLLCORR=True), 18.0, "no readable ROLLARC"),
+    (dict(ROLLCORR=True, ROLLARC='x'), 18.0, "no readable ROLLARC"),
+    (dict(ROLLCORR=True, ROLLARC=18.0), None, "no row"),
+])
+def test_roll_apply_plan_refuses_irreconcilable_state(hdr, target, match):
+    with pytest.raises(rc.RollStateError, match=match):
+        rc.roll_apply_plan(_hdr(**hdr), target)
+
+
+def test_ensure_full_on_virgin_frame_then_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "20.0")
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    want = _rolled_reference(tmp_path, "ref.fits", 20.0)
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_FULL
+    got = np.array(_sky(fn))
+    assert _dev_mas(got, want).max() < 0.05
+    h = fits.getheader(fn, ('SCI', 1))
+    assert h[rc.MARKER] is True and h['ROLLARC'] == 20.0 and h[rc.PENDING] is False
+    assert h['ROLLMODE'] == 'pre-shift-nrcall' and 'ROLLDATE' in h
+    assert h['ROLLPVOR'] == 0.0 and h['ROLLPVOD'] == 0.0
+    assert h['SIPGWMAX'] < 0.05
+    # second call: nothing moves, nothing is rewritten
+    mtime = os.path.getmtime(fn)
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_SKIP_CURRENT
+    assert np.array_equal(np.array(_sky(fn)), got)
+    assert os.path.getmtime(fn) == mtime
+
+
+def test_ensure_on_shifted_frame_equals_roll_before_shift(tmp_path, monkeypatch):
+    """Rolling an already-aligned frame about the pivot through its current
+    WCS lands where rolling first and shifting after would have."""
+    t = (-4.4845, -19.914)                     # arcsec, o040-sized shift
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "22.0")
+    fn = _shift(_synthetic_frame(tmp_path / "syn_crf.fits"), *t)
+    want = _rolled_reference(tmp_path, "ref.fits", 22.0, shift=t)
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_FULL
+    assert _dev_mas(np.array(_sky(fn)), want).max() < 0.1
+    h = fits.getheader(fn, ('SCI', 1))
+    assert h['ROLLMODE'] == 'post-shift-nrcall'
+    # the alignment keywords survive the GWCS rewrite
+    assert h['RAOFFSET'] == t[0] and h['DEOFFSET'] == t[1]
+    assert h['ROLLPVOR'] == t[0] and h['ROLLPVOD'] == t[1]
+
+
+def test_ensure_delta_converges_to_single_rotation(tmp_path, monkeypatch):
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "20.0")
+    rc.ensure_roll_correction(fn, verbose=False)
+    pivot0 = fits.getheader(fn, ('SCI', 1))['ROLLPVRA']
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "25.0")     # table re-measured
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_DELTA
+    want = _rolled_reference(tmp_path, "ref.fits", 25.0)
+    assert _dev_mas(np.array(_sky(fn)), want).max() < 0.05
+    h = fits.getheader(fn, ('SCI', 1))
+    assert h['ROLLARC'] == 25.0 and h['ROLLPREV'] == 20.0 and h['ROLLNDLT'] == 1
+    assert h['ROLLPVRA'] == pivot0 and h['ROLLMODE'] == 'pre-shift-nrcall'
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_SKIP_CURRENT
+
+
+def test_ensure_delta_follows_a_later_shift(tmp_path, monkeypatch):
+    """roll 20 -> align by t -> table moves to 25 must equal roll 25 -> align by t:
+    the delta pivot follows the shift applied since the first roll."""
+    t = (3.0, -12.0)
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "20.0")
+    rc.ensure_roll_correction(fn, verbose=False)
+    _shift(fn, *t)
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "25.0")
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_DELTA
+    want = _rolled_reference(tmp_path, "ref.fits", 25.0, shift=t)
+    assert _dev_mas(np.array(_sky(fn)), want).max() < 0.1
+
+
+def test_ensure_skips_frame_rolled_elsewhere(tmp_path, monkeypatch):
+    """A frame image_roll_wcs already rolled to the table value is left alone."""
+    from jwst_gc_pipeline.reduction import image_roll_wcs as irw
+    fn = _synthetic_frame(tmp_path / "x_destreak.fits", raoffset=0.0)
+    irw.rotate_frame(fn, 20.0, PIV)
+    before = np.array(_sky(fn))
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "20.0")
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_SKIP_CURRENT
+    assert np.array_equal(np.array(_sky(fn)), before)
+
+
+def test_ensure_refuses_rolled_frame_without_row(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "20.0")
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    rc.ensure_roll_correction(fn, verbose=False)
+    monkeypatch.setattr(rc, "resolve_roll_arcsec", lambda *a, **k: None)
+    with pytest.raises(rc.RollStateError, match="no row"):
+        rc.ensure_roll_correction(fn, verbose=False)
+
+
+def test_ensure_skips_without_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(rc, "resolve_roll_arcsec", lambda *a, **k: None)
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_SKIP_NO_ROW
+    assert rc.MARKER not in fits.getheader(fn, ('SCI', 1))
+
+
+def test_ensure_defers_locked_table_until_roll_ready(tmp_path, monkeypatch, capsys):
+    from jwst_gc_pipeline.reduction import alignment_config as ac
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "20.0")
+    monkeypatch.setattr(rc, "_DEFERRED_REPORTED", set())
+    # 2221 o001 (brick) is a TABLE_LOCKED field
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits", program='2221', observation='001')
+    before = np.array(_sky(fn))
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_DEFER_LOCKED
+    assert np.array_equal(np.array(_sky(fn)), before)
+    assert rc.MARKER not in fits.getheader(fn, ('SCI', 1))
+    assert "DEFERRED" in capsys.readouterr().out
+    # once the entry is flagged roll_ready, the same frame rolls
+    monkeypatch.setattr(ac, "roll_blocked_by_locked_table", lambda *a, **k: False)
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_FULL
+
+
+def test_roll_blocked_by_locked_table():
+    from jwst_gc_pipeline.reduction import alignment_config as ac
+    assert ac.roll_blocked_by_locked_table('2221', '001')      # brick: locked
+    assert ac.roll_blocked_by_locked_table('1182', '004')
+    assert not ac.roll_blocked_by_locked_table('10678', '135')  # treasury: consensus
+    assert not ac.roll_blocked_by_locked_table('2045', '001')   # arches o001: consensus
+    assert not ac.roll_blocked_by_locked_table('2092', '002')   # recorded bulk
+    assert not ac.roll_blocked_by_locked_table('99999', '001')  # unconfigured
+
+
+def test_ensure_refuses_pending_frame(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "20.0")
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits")
+    with fits.open(fn, mode='update') as h:
+        h['SCI'].header[rc.PENDING] = True
+    with pytest.raises(rc.RollStateError, match="crashed"):
+        rc.ensure_roll_correction(fn, verbose=False)
+
+
+def test_ensure_explicit_zero_row_stamps_without_moving(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "0.0")
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits", program='2221', observation='001')
+    before = np.array(_sky(fn))
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_FULL
+    assert _dev_mas(np.array(_sky(fn)), before).max() < 1e-3
+    h = fits.getheader(fn, ('SCI', 1))
+    assert h[rc.MARKER] is True and h['ROLLARC'] == 0.0
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_SKIP_CURRENT
+
+
+def test_image_roll_wcs_stamps_pivot_shift(tmp_path, monkeypatch):
+    """A frame rolled by image_roll_wcs, re-aligned, then re-corrected by
+    ensure_roll_correction must follow the shift exactly (no legacy fallback)."""
+    from jwst_gc_pipeline.reduction import image_roll_wcs as irw
+    t0, t1 = (1.0, -2.0), (4.0, -9.0)
+    fn = _shift(_synthetic_frame(tmp_path / "x_destreak.fits"), *t0)
+    irw.rotate_frame(fn, 20.0, PIV)
+    h = fits.getheader(fn, ('SCI', 1))
+    assert (h['ROLLPVOR'], h['ROLLPVOD']) == t0
+    # re-align by the difference (what an APPLY_DELTA of the shift does)
+    from astropy import units as u
+    from jwst.datamodels import ImageModel
+    from jwst.tweakreg.utils import adjust_wcs
+    with ImageModel(fn) as m:
+        m.meta.wcs = adjust_wcs(m.meta.wcs, delta_ra=(t1[0] - t0[0]) * u.arcsec,
+                                delta_dec=(t1[1] - t0[1]) * u.arcsec)
+        m.save(fn, overwrite=True)
+    with fits.open(fn) as hl:
+        hl['SCI'].header['RAOFFSET'], hl['SCI'].header['DEOFFSET'] = t1
+        hl.writeto(fn, overwrite=True)
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "25.0")
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_DELTA
+    # reference: unshifted frame -> shift t0 -> roll 25 about PIV -> shift to t1
+    ref = _shift(_synthetic_frame(tmp_path / "r_destreak.fits"), *t0)
+    irw.rotate_frame(ref, 25.0, PIV)
+    with ImageModel(ref) as m:
+        m.meta.wcs = adjust_wcs(m.meta.wcs, delta_ra=(t1[0] - t0[0]) * u.arcsec,
+                                delta_dec=(t1[1] - t0[1]) * u.arcsec)
+        m.save(ref, overwrite=True)
+    assert _dev_mas(np.array(_sky(fn)), np.array(_sky(ref))).max() < 0.1
