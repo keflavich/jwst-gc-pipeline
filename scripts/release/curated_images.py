@@ -29,6 +29,8 @@ AVM = "/blue/adamginsburg/adamginsburg/repos/avm_images"
 GC2211_PNGS = "/orange/adamginsburg/jwst/gc2211/pngs"
 #: JWST x radio composites of the 10678 Treasury survey (data.rc avm_images).
 RADIO_RGB = "/orange/adamginsburg/web/public/avm_images/gc_treasury_radio_rgb"
+#: Cropped, block-reduced AVM copies of the whole-field 10678 JWST mosaics.
+TREASURY = "/orange/adamginsburg/web/public/avm_images/gc_treasury_curated"
 
 
 def _avm(name):
@@ -113,10 +115,20 @@ CURATED = {
         {"file": _avm("wd2_miri_RGB_1130-1000-770_log"),
          "label": "R=F1130W, G=F1000W, B=F770W (MIRI)", "instrument": "MIRI"},
     ],
-    # The Treasury composites mix the JWST diffuse emission (F212N, F480M,
-    # stars removed) with radio continuum; stars come back from the PSF models.
-    # `pointing` here names a zoom region, not an observation.
+    # The Treasury leads with JWST alone (NIRCam, then MIRI); the radio
+    # composites after them mix the JWST diffuse emission (F212N, F480M, stars
+    # removed) with radio continuum, and stars come back from the PSF models.
+    # `pointing` here names a footprint or zoom region, not an observation.
     "gc-treasury": [
+        # JWST alone first: the first entry is the field's front-page image.
+        {"file": f"{TREASURY}/gctreasury_nircam_RGB_480-mean-212_avm.png",
+         "label": "R=F480M, G=mean, B=F212N (NIRCam)"},
+        {"file": f"{TREASURY}/gctreasury_miri_F770W_avm.png",
+         "label": "F770W (MIRI)", "instrument": "MIRI", "pointing": "MIRI footprint"},
+        {"file": f"{TREASURY}/gctreasury_miri_RGB_770-480-212_avm.png",
+         "label": "R=F770W, G=F480M, B=F212N (MIRI + NIRCam)", "instrument": "MIRI",
+         "pointing": "MIRI footprint"},
+        # JWST x radio composites
         {"file": f"{RADIO_RGB}/gctreasury_meerkat_aces_overview_avm.png",
          "label": "F212N + F480M diffuse with MeerKAT 1.28 GHz + ACES 3 mm continuum"},
         {"file": f"{RADIO_RGB}/gctreasury_meerkat_overview_avm.png",
@@ -156,13 +168,16 @@ CURATED = {
 #: generic intro (which describes single-program JWST renders).
 INTRO = {
     "gc-treasury": (
-        "JWST x radio composites. The JWST layers are the F212N and F480M "
-        "diffuse emission (stars removed, from the per-tile PSF-photometry "
-        "residuals); stars are added back in white from the PSF models. Radio: "
-        "MeerKAT 1.28 GHz (Heywood et al. 2022) and the ALMA CMZ Exploration "
-        "Survey (ACES) 3 mm continuum, feathered with MUSTANG-2. All layers are "
-        "reprojected onto one Galactic grid, 0.5\" for the overview and 0.1\" "
-        "for the Sgr B2 and Radio Arc zooms."),
+        "JWST images first: the NIRCam mosaic (R=F480M, G=mean, B=F212N) "
+        "over the whole survey, then the MIRI F770W coverage, alone and "
+        "with F480M and F212N. The MIRI images show the main block of MIRI "
+        "parallel fields. After those come JWST x radio composites: the F212N "
+        "and F480M diffuse emission (stars removed, from the per-tile "
+        "PSF-photometry residuals) with stars added back in white from the PSF "
+        "models, combined with MeerKAT 1.28 GHz (Heywood et al. 2022) and the "
+        "ALMA CMZ Exploration Survey (ACES) 3 mm continuum, feathered with "
+        "MUSTANG-2. The composites are reprojected onto one Galactic grid, "
+        "0.5\" for the overview and 0.1\" for the Sgr B2 and Radio Arc zooms."),
 }
 
 
