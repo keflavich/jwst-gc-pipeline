@@ -1024,6 +1024,35 @@ def _apply_handoff_resbg_clip(data, background_map, handoff_xy, resbg_path):
                  f"pixel(s) lowered, median {med:.3g} MJy/sr")
 
 
+def _daophot_refit_nbrsub():
+    """On/off switch (env ``DAOPHOT_REFIT_NBRSUB``, default off) of the
+    neighbour- and background-subtracted overshoot refit in
+    ``_manual_phot_pass``.  Parsed like the hand-off switches: a malformed
+    value raises ``ValueError`` naming the variable.
+
+    Validation scope: unit tests only; not yet validated on a full run.
+    """
+    return _handoff_env_flag('DAOPHOT_REFIT_NBRSUB', False)
+
+
+def _subset_model_image(phot, keep, shape):
+    """Model image (no local background) of the rows ``keep`` of
+    ``phot.results`` alone.  ``phot.results`` is restored before returning.
+    """
+    keep = np.asarray(keep, dtype=bool)
+    if not keep.any():
+        return np.zeros(shape, dtype=float)
+    full = phot.results
+    try:
+        phot.results = full[keep]
+        phot.__dict__.pop('_model_image_params', None)
+        return _make_model_image(phot, shape, psf_shape=(21, 21),
+                                 include_local_bkg=False)
+    finally:
+        phot.results = full
+        phot.__dict__.pop('_model_image_params', None)
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -1281,10 +1310,23 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         seed = Table()
         seed['x_init'] = xseed[over]
         seed['y_init'] = yseed[over]
-        forced = forced_psf_photometry(data, dao_psf_model, seed,
+        refit_img, refit_lbkg = data, None
+        if _daophot_refit_nbrsub():
+            # Opt-in (env DAOPHOT_REFIT_NBRSUB=1, #932): solve on the frame with
+            # every non-overshooting source's model removed, and subtract the
+            # row's own local background, so the forced flux sees what the
+            # grouped main fit saw.  On raw ``data`` the 5x5 single-source
+            # solve absorbs neighbour and spike light plus the background
+            # pedestal (about 11x local_bkg for a NIRCam LW PSF): wd2 F277W
+            # core rows on empty sky reach 14.8 mag this way.
+            refit_img = data - _subset_model_image(phot, ~over, data.shape)
+            if 'local_bkg' in res.colnames:
+                refit_lbkg = np.asarray(res['local_bkg'], dtype=float)[over]
+        forced = forced_psf_photometry(refit_img, dao_psf_model, seed,
                                        error=np.where(bad, 1e10, err),
                                        mask=mask, fit_shape=(5, 5),
-                                       nonnegative=True)
+                                       nonnegative=True,
+                                       local_bkg=refit_lbkg)
         if 'forced_refit' not in res.colnames:
             res['forced_refit'] = np.zeros(len(res), dtype=bool)
         idx = np.where(over)[0]

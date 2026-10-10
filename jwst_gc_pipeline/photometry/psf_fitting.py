@@ -130,7 +130,8 @@ def forced_psf_photometry(image, psf_model, init_params, *,
                           error=None, mask=None,
                           fit_shape=(5, 5),
                           aperture_radius=4,
-                          nonnegative=False):
+                          nonnegative=False,
+                          local_bkg=None):
     """Closed-form linear flux solve at the (fixed) positions in
     ``init_params``.  Bypasses photutils LM entirely.
 
@@ -185,6 +186,12 @@ def forced_psf_photometry(image, psf_model, init_params, *,
     fit_shape : (ny, nx) stamp around each source (must be odd-ish; 5x5
         matches production).
     aperture_radius : kept for signature compatibility; not used here.
+    local_bkg : float or array of shape (len(init_params),), optional
+        Constant background subtracted from each source's stamp before the
+        solve (non-finite values count as 0).  The model has no background
+        term, so a pedestal ``B`` under the stamp otherwise enters the flux as
+        ``B * sum(p*w) / sum(p^2*w)`` (about ``11 * B`` for a 5x5 NIRCam LW
+        PSF).  ``None`` (default) subtracts nothing.
 
     Returns
     -------
@@ -205,6 +212,12 @@ def forced_psf_photometry(image, psf_model, init_params, *,
     # Build the (ny_fit x nx_fit) pixel grid offsets once.
     dy, dx = np.mgrid[-half_y:half_y + 1, -half_x:half_x + 1].astype(float)
 
+    if local_bkg is None:
+        lbkg = np.zeros(n, dtype=np.float64)
+    else:
+        lbkg = np.broadcast_to(np.asarray(local_bkg, dtype=np.float64), (n,))
+        lbkg = np.where(np.isfinite(lbkg), lbkg, 0.0)
+
     use_err = error is not None
     if mask is None:
         mask_arr = np.zeros(image.shape, dtype=bool)
@@ -221,7 +234,7 @@ def forced_psf_photometry(image, psf_model, init_params, *,
         if (y_lo < 0 or x_lo < 0 or y_hi > img_ny or x_hi > img_nx):
             continue
 
-        data = image[y_lo:y_hi, x_lo:x_hi]
+        data = image[y_lo:y_hi, x_lo:x_hi] - lbkg[i]
         mstamp = mask_arr[y_lo:y_hi, x_lo:x_hi]
         if mstamp.all():
             continue
