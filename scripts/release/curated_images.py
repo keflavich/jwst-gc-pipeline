@@ -27,6 +27,8 @@ import os
 
 AVM = "/blue/adamginsburg/adamginsburg/repos/avm_images"
 GC2211_PNGS = "/orange/adamginsburg/jwst/gc2211/pngs"
+#: JWST x radio composites of the 10678 Treasury survey (data.rc avm_images).
+RADIO_RGB = "/orange/adamginsburg/web/public/avm_images/gc_treasury_radio_rgb"
 
 
 def _avm(name):
@@ -111,6 +113,29 @@ CURATED = {
         {"file": _avm("wd2_miri_RGB_1130-1000-770_log"),
          "label": "R=F1130W, G=F1000W, B=F770W (MIRI)", "instrument": "MIRI"},
     ],
+    # The Treasury composites mix the JWST diffuse emission (F212N, F480M,
+    # stars removed) with radio continuum; stars come back from the PSF models.
+    # `pointing` here names a zoom region, not an observation.
+    "gc-treasury": [
+        {"file": f"{RADIO_RGB}/gctreasury_meerkat_aces_overview_avm.png",
+         "label": "F212N + F480M diffuse with MeerKAT 1.28 GHz + ACES 3 mm continuum"},
+        {"file": f"{RADIO_RGB}/gctreasury_meerkat_overview_avm.png",
+         "label": "F212N + F480M diffuse with MeerKAT 1.28 GHz"},
+        {"file": f"{RADIO_RGB}/gctreasury_aces_overview_avm.png",
+         "label": "F212N + F480M diffuse with ACES 3 mm continuum"},
+        {"file": f"{RADIO_RGB}/gctreasury_meerkat_aces_sgrb2_avm.png",
+         "label": "F212N + F480M diffuse with MeerKAT 1.28 GHz + ACES 3 mm continuum", "pointing": "Sgr B2"},
+        {"file": f"{RADIO_RGB}/gctreasury_meerkat_sgrb2_avm.png",
+         "label": "F212N + F480M diffuse with MeerKAT 1.28 GHz", "pointing": "Sgr B2"},
+        {"file": f"{RADIO_RGB}/gctreasury_aces_sgrb2_avm.png",
+         "label": "F212N + F480M diffuse with ACES 3 mm continuum", "pointing": "Sgr B2"},
+        {"file": f"{RADIO_RGB}/gctreasury_meerkat_aces_arc_avm.png",
+         "label": "F212N + F480M diffuse with MeerKAT 1.28 GHz + ACES 3 mm continuum", "pointing": "Radio Arc"},
+        {"file": f"{RADIO_RGB}/gctreasury_meerkat_arc_avm.png",
+         "label": "F212N + F480M diffuse with MeerKAT 1.28 GHz", "pointing": "Radio Arc"},
+        {"file": f"{RADIO_RGB}/gctreasury_aces_arc_avm.png",
+         "label": "F212N + F480M diffuse with ACES 3 mm continuum", "pointing": "Radio Arc"},
+    ],
     # gc2211 is five separate pointings; each has its own curated render.
     "gc2211": [
         {"file": f"{GC2211_PNGS}/o023/GC2211_o023_F277_asinh.png",
@@ -125,6 +150,25 @@ CURATED = {
          "label": "R=F277W, G=mean, B=F200W", "pointing": "o050"},
     ],
 }
+
+
+#: field -> paragraph shown above that field's curated images, in place of the
+#: generic intro (which describes single-program JWST renders).
+INTRO = {
+    "gc-treasury": (
+        "JWST x radio composites. The JWST layers are the F212N and F480M "
+        "diffuse emission (stars removed, from the per-tile PSF-photometry "
+        "residuals); stars are added back in white from the PSF models. Radio: "
+        "MeerKAT 1.28 GHz (Heywood et al. 2022) and the ALMA CMZ Exploration "
+        "Survey (ACES) 3 mm continuum, feathered with MUSTANG-2. All layers are "
+        "reprojected onto one Galactic grid, 0.5\" for the overview and 0.1\" "
+        "for the Sgr B2 and Radio Arc zooms."),
+}
+
+
+def intro(field):
+    """The curated-images intro for this field, or None for the generic one."""
+    return INTRO.get(field)
 
 
 def for_field(field):

@@ -870,9 +870,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     multi = any(f.get("observation") for f in files)
 
     if curated:
-        out.append("<p class=muted>Curated color images -- the published "
-                   "renders. Tuned stretches, channels chosen far apart, and "
-                   "each program combined with itself.</p>")
+        out.append("<p class=muted>"
+                   + html.escape(curated_images.intro(field)
+                                 or "Curated color images -- the published "
+                                    "renders. Tuned stretches, channels chosen "
+                                    "far apart, and each program combined with "
+                                    "itself.")
+                   + "</p>")
         # Provenance per published render, keyed on the asset filename.  These
         # are the field's PRIMARY images and they are not staged products, so
         # without this they would be the only thing on the page with no source,
@@ -900,8 +904,11 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                        f"{html.escape(field)}_curated.json</a> -- source path and "
                        f"checksum, the checksum of the bytes served, and whether "
                        f"the AVM astrometry survived resizing. These are curated "
-                       f"renders, not staged data products; the mosaics they were "
-                       f"made from are in the table below.</p>")
+                       f"renders, not staged data products"
+                       + ("." if curated_images.intro(field) else
+                          "; the mosaics they were made from are in the table "
+                          "below.")
+                       + "</p>")
 
     # `assets/<field>.jpg` is a BYTE COPY of the first curated JPEG when there
     # is one -- but `preview_channels`, `_preview_caption` and
