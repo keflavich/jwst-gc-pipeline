@@ -290,7 +290,8 @@ def _hdr(**kw):
 
 def test_roll_apply_plan_verdicts():
     assert rc.roll_apply_plan(_hdr(), None)[0] == rc.ROLL_SKIP_NO_ROW
-    assert rc.roll_apply_plan(_hdr(), 0.0)[0] == rc.ROLL_SKIP_NO_ROW
+    # an explicit zero row is stamped (the release gate needs ROLLARC), never deferred
+    assert rc.roll_apply_plan(_hdr(), 0.0, locked_unready=True)[:2] == (rc.ROLL_APPLY_FULL, 0.0)
     v, d, _ = rc.roll_apply_plan(_hdr(), 18.0)
     assert v == rc.ROLL_APPLY_FULL and d == 18.0
     # an RAOFFSET does not block the first roll any more
@@ -439,3 +440,46 @@ def test_ensure_refuses_pending_frame(tmp_path, monkeypatch):
         h['SCI'].header[rc.PENDING] = True
     with pytest.raises(rc.RollStateError, match="crashed"):
         rc.ensure_roll_correction(fn, verbose=False)
+
+
+def test_ensure_explicit_zero_row_stamps_without_moving(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "0.0")
+    fn = _synthetic_frame(tmp_path / "syn_crf.fits", program='2221', observation='001')
+    before = np.array(_sky(fn))
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_FULL
+    assert _dev_mas(np.array(_sky(fn)), before).max() < 1e-3
+    h = fits.getheader(fn, ('SCI', 1))
+    assert h[rc.MARKER] is True and h['ROLLARC'] == 0.0
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_SKIP_CURRENT
+
+
+def test_image_roll_wcs_stamps_pivot_shift(tmp_path, monkeypatch):
+    """A frame rolled by image_roll_wcs, re-aligned, then re-corrected by
+    ensure_roll_correction must follow the shift exactly (no legacy fallback)."""
+    from jwst_gc_pipeline.reduction import image_roll_wcs as irw
+    t0, t1 = (1.0, -2.0), (4.0, -9.0)
+    fn = _shift(_synthetic_frame(tmp_path / "x_destreak.fits"), *t0)
+    irw.rotate_frame(fn, 20.0, PIV)
+    h = fits.getheader(fn, ('SCI', 1))
+    assert (h['ROLLPVOR'], h['ROLLPVOD']) == t0
+    # re-align by the difference (what an APPLY_DELTA of the shift does)
+    from astropy import units as u
+    from jwst.datamodels import ImageModel
+    from jwst.tweakreg.utils import adjust_wcs
+    with ImageModel(fn) as m:
+        m.meta.wcs = adjust_wcs(m.meta.wcs, delta_ra=(t1[0] - t0[0]) * u.arcsec,
+                                delta_dec=(t1[1] - t0[1]) * u.arcsec)
+        m.save(fn, overwrite=True)
+    with fits.open(fn) as hl:
+        hl['SCI'].header['RAOFFSET'], hl['SCI'].header['DEOFFSET'] = t1
+        hl.writeto(fn, overwrite=True)
+    monkeypatch.setenv("ROLL_CORRECTION_ARCSEC", "25.0")
+    assert rc.ensure_roll_correction(fn, verbose=False) == rc.ROLL_APPLY_DELTA
+    # reference: unshifted frame -> shift t0 -> roll 25 about PIV -> shift to t1
+    ref = _shift(_synthetic_frame(tmp_path / "r_destreak.fits"), *t0)
+    irw.rotate_frame(ref, 25.0, PIV)
+    with ImageModel(ref) as m:
+        m.meta.wcs = adjust_wcs(m.meta.wcs, delta_ra=(t1[0] - t0[0]) * u.arcsec,
+                                delta_dec=(t1[1] - t0[1]) * u.arcsec)
+        m.save(ref, overwrite=True)
+    assert _dev_mas(np.array(_sky(fn)), np.array(_sky(ref))).max() < 0.1

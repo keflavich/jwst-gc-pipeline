@@ -56,7 +56,8 @@ value for every frame (for tests / a global-constant run).
 ``ROLL_CORRECTION=0``.  It makes the frame carry the CURRENT table value,
 whatever the frame already holds (:func:`roll_apply_plan`):
 
-* no roll and no table row: nothing to do;
+* no roll and no table row: nothing to do (an explicit 0.0 row stamps
+  ``ROLLARC=0`` and moves nothing);
 * no roll and a row: rotate by the row, about the NRCALL centre mapped
   through the frame's current WCS.  On a frame that already carries its
   reference shift ``t`` that pivot is ``P + t``, and
@@ -397,8 +398,13 @@ def roll_apply_plan(header, target_arcsec, locked_unready=False, fn=''):
             return ROLL_SKIP_CURRENT, 0.0, f'already carries {applied:+.3f}"'
         return ROLL_APPLY_DELTA, delta, (
             f'carries {applied:+.3f}" but the table says {float(target_arcsec):+.3f}"')
-    if target_arcsec is None or float(target_arcsec) == 0.0:
+    if target_arcsec is None:
         return ROLL_SKIP_NO_ROW, 0.0, 'no roll configured'
+    if float(target_arcsec) == 0.0:
+        # An explicit zero row is a decision (e.g. a per-visit override of a
+        # wildcard row): stamp ROLLARC=0 so the release roll gate sees it.  It
+        # moves nothing, so a locked table has nothing to wait for.
+        return ROLL_APPLY_FULL, 0.0, 'explicit zero row'
     if locked_unready:
         return ROLL_DEFER_LOCKED, 0.0, (
             'the field\'s locked offsets table was solved on unrotated frames; set '
@@ -455,9 +461,10 @@ def ensure_roll_correction(fn, verbose=True):
     target = resolve_roll_arcsec(program, observation, hdr0.get('VISIT', '*'))
     locked_unready = False
     if not hdr.get(MARKER) and target not in (None, 0.0) and program and observation:
+        from jwst_gc_pipeline.mast_names import proposal_id_from_program
         from jwst_gc_pipeline.reduction.alignment_config import roll_blocked_by_locked_table
-        prog = str(int(str(program).strip().lstrip('jw')))
-        locked_unready = roll_blocked_by_locked_table(prog, f"{int(observation):03d}")
+        locked_unready = roll_blocked_by_locked_table(proposal_id_from_program(program),
+                                                      f"{int(observation):03d}")
     verdict, delta, why = roll_apply_plan(hdr, target, locked_unready, fn)
 
     if verdict == ROLL_SKIP_NO_ROW:

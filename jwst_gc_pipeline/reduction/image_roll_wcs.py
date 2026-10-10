@@ -313,6 +313,10 @@ def _stamp(h, roll, pivot, table_sha, visit_key, extra=()):
     h['ROLLARC'] = (float(roll), '[arcsec] roll applied, +N->E')
     h['ROLLPVRA'] = (float(pivot[0]), '[deg] roll pivot RA')
     h['ROLLPVDE'] = (float(pivot[1]), '[deg] roll pivot Dec')
+    # the shift this product carried when the pivot was taken, so a later
+    # roll_correction.ensure_roll_correction delta can follow any shift since
+    h['ROLLPVOR'] = (float(h.get('RAOFFSET', 0.0)), '[arcsec] RAOFFSET when pivot taken')
+    h['ROLLPVOD'] = (float(h.get('DEOFFSET', 0.0)), '[arcsec] DEOFFSET when pivot taken')
     h['ROLLVIS'] = _card(str(visit_key)[:68], 'program-obs-visit of the roll')
     h['ROLLTAB'] = _card(f'sha1:{table_sha}'[:68], 'roll_corrections.csv')
     h['ROLLDATE'] = (time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'applied UTC')
