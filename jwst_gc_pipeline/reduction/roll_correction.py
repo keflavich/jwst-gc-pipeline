@@ -1,4 +1,4 @@
-"""Field-rotation (telescope roll) correction for NIRCam frames (opt-in, default OFF).
+"""Field-rotation (telescope roll) correction for NIRCam frames (default ON).
 
 WHY THIS EXISTS
 ---------------
@@ -52,22 +52,45 @@ match exact values or ``*``; the most specific row wins.
 ``ROLL_CORRECTION_ARCSEC`` in the environment overrides the table with one
 value for every frame (for tests / a global-constant run).
 
-Enable with ``ROLL_CORRECTION=1``.  Applied in ``fix_alignment`` after the
-DVA and placement corrections and BEFORE the reference shift.  Idempotent
-via the ``ROLLCORR`` marker; a ``ROLLPEND`` flag makes a crash between the
-GWCS write and the marker write fail loud instead of double-rotating.  A frame
-that already carries a reference shift (``RAOFFSET``) without ``ROLLCORR`` is
-refused before anything is written: the roll must precede the shift.
+``fix_alignment`` calls :func:`ensure_roll_correction` on every frame unless
+``ROLL_CORRECTION=0``.  It makes the frame carry the CURRENT table value,
+whatever the frame already holds (:func:`roll_apply_plan`):
 
-WARNING: enabling this on an already-processed field invalidates the
-consensus / VIRAC2locked offsets tables solved against the unrotated frames
-(per-exposure shifts would stack on a rotation they partly absorbed).
-Rebuild the offsets tables for the field after enabling, then re-drizzle
-and re-catalog.
+* no roll and no table row: nothing to do;
+* no roll and a row: rotate by the row, about the NRCALL centre mapped
+  through the frame's current WCS.  On a frame that already carries its
+  reference shift ``t`` that pivot is ``P + t``, and
+  ``R_(P+t) o S_t = S_t o R_P``, so the result is the frame a pre-shift
+  roll would have produced;
+* a roll equal to the row: nothing to do (the idempotent case);
+* a roll that differs from the row: rotate by the difference about the
+  pivot the first roll recorded (``ROLLPVRA``/``ROLLPVDE``).  Two rotations
+  about one point add exactly, so the frame ends up carrying the row's value
+  whichever tool rolled it first (this module, or ``image_roll_wcs.py``
+  with its visit pivot);
+* a roll with no row: refused.  A table that lost a row is more likely a
+  regression than a decision to un-roll.
+
+Fields whose offsets table is ``TABLE_LOCKED`` are deferred until their
+``alignment_config`` entry sets ``roll_ready`` (see the note there): their
+per-module shifts already absorbed part of the roll.
+
+A ``ROLLPEND`` flag makes a crash between the GWCS write and the marker write
+fail loud instead of double-rotating.  :func:`apply_roll_correction` is the
+older single-shot entry point; it applies only to a virgin frame and refuses
+a frame that already carries ``RAOFFSET``.
+
+WARNING: rolling a field for the first time moves each exposure's detectors
+relative to shifts solved on the unrotated frames.  On a consensus-channel
+field the residual is a per-exposure translation of theta x (pivot offset),
+which the next m2 checkpoint measures and writes back; re-drizzle and
+re-catalog from m2.  On a locked field the per-module shifts absorbed part of
+the roll, so the table must be rebuilt (``roll_ready`` above).
 """
 import copy
 import csv
 import os
+import time
 
 import numpy as np
 import astropy.units as u
@@ -76,7 +99,10 @@ from astropy.io import fits
 from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
 
 __all__ = ['resolve_roll_arcsec', 'rotation_about_pivot', 'roll_correction_needed',
-           'apply_roll_correction', 'nircam_pivot_sky']
+           'apply_roll_correction', 'nircam_pivot_sky', 'roll_correction_enabled',
+           'roll_apply_plan', 'ensure_roll_correction', 'RollStateError',
+           'ROLL_APPLY_FULL', 'ROLL_APPLY_DELTA', 'ROLL_SKIP_CURRENT',
+           'ROLL_SKIP_NO_ROW', 'ROLL_DEFER_LOCKED']
 
 MARKER = 'ROLLCORR'
 PENDING = 'ROLLPEND'
@@ -256,31 +282,7 @@ def apply_roll_correction(fn, delta_roll_arcsec=None, verbose=True):
                   f"program {hdr0.get('PROGRAM')} obs {hdr0.get('OBSERVTN')}")
         return None
 
-    with fits.open(fn, mode='update') as hdul:
-        hdul['SCI'].header[PENDING] = (True, 'roll correction apply in progress')
-
-    from jwst.datamodels import ImageModel
-    fa = ImageModel(fn)
-    wcsobj = fa.meta.wcs
-    ww, (dra, ddec), pivot = roll_adjusted_wcs(wcsobj, delta_roll_arcsec)
-    worst = verify_rotation(wcsobj, ww, fa.data.shape, pivot, delta_roll_arcsec)
-    fa.meta.oldwcs = copy.copy(wcsobj)
-    fa.meta.wcs = ww
-    fa.save(fn, overwrite=True)
-
-    with fits.open(fn) as hdul:
-        h = hdul['SCI'].header
-        _sip_max, _sip_med = sync_header_to_gwcs(h, ww, fa.data.shape, label=os.path.basename(fn))
-        h['SIPGWMAX'] = (_sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
-        h[MARKER] = (True, 'field roll correction applied (data-qa#346)')
-        h['ROLLARC'] = (float(delta_roll_arcsec), '[arcsec] roll applied, +N->E')
-        h['ROLLPVRA'] = (pivot[0], '[deg] roll pivot RA (NRCALL_FULL ref)')
-        h['ROLLPVDE'] = (pivot[1], '[deg] roll pivot Dec (NRCALL_FULL ref)')
-        h['ROLLSHRA'] = (dra, '[deg] ref-point RA coord shift of the roll')
-        h['ROLLSHDE'] = (ddec, '[deg] ref-point Dec shift of the roll')
-        h['ROLLVMAS'] = (worst, '[mas] max deviation from pure rotation')
-        h[PENDING] = (False, 'roll correction apply completed')
-        hdul.writeto(fn, overwrite=True)
+    pivot, dra, ddec, worst = _write_roll(fn, delta_roll_arcsec, delta_roll_arcsec)
     if verbose:
         print(f"roll correction applied to {fn}: {delta_roll_arcsec:+.2f}\" about "
               f"({pivot[0]:.6f}, {pivot[1]:.6f}); ref-point shift "
@@ -288,3 +290,210 @@ def apply_roll_correction(fn, delta_roll_arcsec=None, verbose=True):
         print("NOTE: offsets tables solved against the unrotated frames are invalidated -- "
               "rebuild them for this field before use.")
     return float(delta_roll_arcsec)
+
+
+def _write_roll(fn, delta_arcsec, total_arcsec, pivot=None, mode=None, previous_arcsec=None):
+    """Rotate ``fn``'s GWCS by ``delta_arcsec`` about ``pivot`` (default: the
+    NRCALL centre through the frame's current WCS), re-sync the SIP header,
+    and stamp the roll keywords with ``total_arcsec`` as the roll the frame
+    now carries.  Returns (pivot, dra_deg, ddec_deg, verify_mas)."""
+    with fits.open(fn, mode='update') as hdul:
+        hdul['SCI'].header[PENDING] = (True, 'roll correction apply in progress')
+
+    from jwst.datamodels import ImageModel
+    fa = ImageModel(fn)
+    wcsobj = fa.meta.wcs
+    ww, (dra, ddec), pivot = roll_adjusted_wcs(wcsobj, delta_arcsec, pivot=pivot)
+    worst = verify_rotation(wcsobj, ww, fa.data.shape, pivot, delta_arcsec)
+    fa.meta.oldwcs = copy.copy(wcsobj)
+    fa.meta.wcs = ww
+    fa.save(fn, overwrite=True)
+
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    with fits.open(fn) as hdul:
+        h = hdul['SCI'].header
+        _sip_max, _sip_med = sync_header_to_gwcs(h, ww, fa.data.shape, label=os.path.basename(fn))
+        h['SIPGWMAX'] = (_sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
+        h[MARKER] = (True, 'field roll correction applied (data-qa#346)')
+        h['ROLLARC'] = (float(total_arcsec), '[arcsec] roll applied, +N->E')
+        if previous_arcsec is None:
+            h['ROLLPVRA'] = (pivot[0], '[deg] roll pivot RA (NRCALL_FULL ref)')
+            h['ROLLPVDE'] = (pivot[1], '[deg] roll pivot Dec (NRCALL_FULL ref)')
+            # the pivot is a sky position in the frame as it stood: a later
+            # alignment shift moves it, and a delta must follow (see _delta_pivot)
+            h['ROLLPVOR'] = (float(h.get('RAOFFSET', 0.0)), '[arcsec] RAOFFSET when pivot taken')
+            h['ROLLPVOD'] = (float(h.get('DEOFFSET', 0.0)), '[arcsec] DEOFFSET when pivot taken')
+            h['ROLLSHRA'] = (dra, '[deg] ref-point RA coord shift of the roll')
+            h['ROLLSHDE'] = (ddec, '[deg] ref-point Dec shift of the roll')
+            h['ROLLVMAS'] = (worst, '[mas] max deviation from pure rotation')
+            if mode is not None:
+                h['ROLLMODE'] = (mode, 'how the roll was applied')
+                h['ROLLDATE'] = (stamp, 'UTC the roll was applied')
+        else:
+            # A re-correction keeps the first roll's pivot, mode and date (the
+            # date is when the frame first moved, which catalog_roll_correction
+            # reads) and records the step it took.
+            h['ROLLPREV'] = (float(previous_arcsec), '[arcsec] roll carried before the delta')
+            h['ROLLDVMA'] = (worst, '[mas] delta step: max deviation from rotation')
+            h['ROLLDDAT'] = (stamp, 'UTC of the last delta re-correction')
+            h['ROLLNDLT'] = (int(h.get('ROLLNDLT', 0)) + 1, 'delta re-corrections applied')
+        h[PENDING] = (False, 'roll correction apply completed')
+        hdul.writeto(fn, overwrite=True)
+    return pivot, dra, ddec, worst
+
+
+def roll_correction_enabled():
+    """``fix_alignment`` applies the roll unless ``ROLL_CORRECTION=0``."""
+    return os.environ.get('ROLL_CORRECTION', '1') != '0'
+
+
+class RollStateError(RuntimeError):
+    """The frame's roll keywords and the table cannot be reconciled."""
+
+
+#: ``roll_apply_plan`` verdicts.
+ROLL_APPLY_FULL = 'apply-full'        # no roll yet, table has a row: apply it
+ROLL_APPLY_DELTA = 'apply-delta'      # rolled, table moved: apply the difference
+ROLL_SKIP_CURRENT = 'skip-current'    # rolled by the table's value already
+ROLL_SKIP_NO_ROW = 'skip-no-row'      # no roll, and the table has none to give
+ROLL_DEFER_LOCKED = 'defer-locked'    # locked offsets table not rebuilt for the roll
+
+#: Same tolerance stage_release's roll gate uses on ROLLARC vs the table.
+ROLL_TOL_ARCSEC = 1e-6
+
+
+def roll_apply_plan(header, target_arcsec, locked_unready=False, fn=''):
+    """What ``ensure_roll_correction`` should do with one frame.
+
+    ``header`` is the frame's SCI header; ``target_arcsec`` the table value
+    (``resolve_roll_arcsec``) or None.  Returns ``(verdict, delta_arcsec,
+    reason)``.  Raises :class:`RollStateError` for a crashed apply, a marker
+    without a readable value, or a rolled frame whose row is gone.  Kept
+    apart from the file I/O so the policy is testable on a bare header.
+    """
+    label = fn or 'this frame'
+    if header.get(PENDING):
+        raise RollStateError(
+            f"{label}: pending roll-correction marker without completion marker -- a "
+            f"previous apply crashed mid-write. Re-create this frame from its _cal; "
+            f"refusing to guess the GWCS state.")
+    if header.get(MARKER):
+        try:
+            applied = float(header['ROLLARC'])
+        except (KeyError, TypeError, ValueError):
+            applied = float('nan')
+        if not np.isfinite(applied):
+            raise RollStateError(
+                f"{label}: carries {MARKER} but no readable ROLLARC "
+                f"({header.get('ROLLARC')!r}); the roll it holds is unknown.")
+        if target_arcsec is None:
+            raise RollStateError(
+                f"{label}: carries a {applied:+.3f}\" roll but roll_corrections.csv has "
+                f"no row for it. Restore the row, or restore the frame "
+                f"(image_roll_wcs --restore / regenerate from an unrolled _cal) if "
+                f"the roll is meant to go.")
+        delta = float(target_arcsec) - applied
+        if abs(delta) <= ROLL_TOL_ARCSEC:
+            return ROLL_SKIP_CURRENT, 0.0, f'already carries {applied:+.3f}"'
+        return ROLL_APPLY_DELTA, delta, (
+            f'carries {applied:+.3f}" but the table says {float(target_arcsec):+.3f}"')
+    if target_arcsec is None or float(target_arcsec) == 0.0:
+        return ROLL_SKIP_NO_ROW, 0.0, 'no roll configured'
+    if locked_unready:
+        return ROLL_DEFER_LOCKED, 0.0, (
+            'the field\'s locked offsets table was solved on unrotated frames; set '
+            'roll_ready in its alignment_config entry once the table is rebuilt '
+            'from rolled frames')
+    return ROLL_APPLY_FULL, float(target_arcsec), 'first roll'
+
+
+def _delta_pivot(hdr, delta_arcsec, fn='', why=''):
+    """The first roll's pivot, as a sky position in the frame's CURRENT WCS.
+
+    Rotations about one pivot add exactly, so a delta about it lands the frame
+    where a single rotation by the new total would have.  The pivot is
+    recorded in the frame as it stood when rolled; an alignment shift applied
+    since (``RAOFFSET`` changed) carries the pivot with it, since
+    S_t R_P = R_(P+t) S_t.  ``ROLLPVOR``/``ROLLPVOD`` hold the shift at roll
+    time.  Frames rolled before those keys existed (``image_roll_wcs``) are
+    taken as rolled at their current shift; the cost of being wrong is a
+    rigid translation of at most delta[rad] * |RAOFFSET, DEOFFSET|, which this
+    prints, and which the m2 re-tie that any roll change requires absorbs.
+    """
+    try:
+        ra_p, dec_p = float(hdr['ROLLPVRA']), float(hdr['ROLLPVDE'])
+    except (KeyError, TypeError, ValueError) as ex:
+        raise RollStateError(
+            f"{fn}: {why}, but the first roll's pivot (ROLLPVRA/ROLLPVDE) is "
+            f"unreadable ({ex}); a delta about any other point would add a "
+            f"translation. Regenerate the frame.") from ex
+    raoff, deoff = float(hdr.get('RAOFFSET', 0.0)), float(hdr.get('DEOFFSET', 0.0))
+    if 'ROLLPVOR' in hdr and 'ROLLPVOD' in hdr:
+        ra_p += (raoff - float(hdr['ROLLPVOR'])) / 3600.0
+        dec_p += (deoff - float(hdr['ROLLPVOD'])) / 3600.0
+    elif raoff or deoff:
+        bound_mas = abs(np.deg2rad(delta_arcsec / 3600.0)) * np.hypot(raoff, deoff) * 1e3
+        print(f"roll correction: {fn} predates ROLLPVOR/ROLLPVOD; taking its pivot as "
+              f"recorded at the current shift ({raoff:+.3f}, {deoff:+.3f})\". If it was "
+              f"taken unshifted the delta adds a rigid translation <= {bound_mas:.3f} mas.")
+    return ra_p, dec_p
+
+
+_DEFERRED_REPORTED = set()
+
+
+def ensure_roll_correction(fn, verbose=True):
+    """Make ``fn`` carry the roll ``roll_corrections.csv`` gives it.
+
+    Idempotent and convergent: a second call is a no-op, and a call after the
+    table changed applies only the difference.  Returns the verdict
+    (``ROLL_*``).  See the module docstring for the cases.
+    """
+    hdr0 = fits.getheader(fn, ext=0)
+    hdr = fits.getheader(fn, ext=('SCI', 1))
+    program, observation = hdr0.get('PROGRAM'), hdr0.get('OBSERVTN')
+    target = resolve_roll_arcsec(program, observation, hdr0.get('VISIT', '*'))
+    locked_unready = False
+    if not hdr.get(MARKER) and target not in (None, 0.0) and program and observation:
+        from jwst_gc_pipeline.reduction.alignment_config import roll_blocked_by_locked_table
+        prog = str(int(str(program).strip().lstrip('jw')))
+        locked_unready = roll_blocked_by_locked_table(prog, f"{int(observation):03d}")
+    verdict, delta, why = roll_apply_plan(hdr, target, locked_unready, fn)
+
+    if verdict == ROLL_SKIP_NO_ROW:
+        if verbose:
+            print(f"roll correction: none for {fn} (program {program} obs {observation} "
+                  f"has no row)")
+        return verdict
+    if verdict == ROLL_SKIP_CURRENT:
+        if verbose:
+            print(f"roll correction: {fn} {why}; nothing to do")
+        return verdict
+    if verdict == ROLL_DEFER_LOCKED:
+        key = (program, observation)
+        if key not in _DEFERRED_REPORTED:
+            _DEFERRED_REPORTED.add(key)
+            print(f"WARNING: roll correction DEFERRED for program {program} obs "
+                  f"{observation} ({target:+.3f}\" in roll_corrections.csv): {why}. "
+                  f"Frames of this observation stay unrolled.", flush=True)
+        return verdict
+
+    if verdict == ROLL_APPLY_FULL:
+        mode = 'post-shift-nrcall' if 'RAOFFSET' in hdr else 'pre-shift-nrcall'
+        pivot, dra, ddec, worst = _write_roll(fn, delta, delta, mode=mode)
+        if verbose:
+            print(f"roll correction applied to {fn}: {delta:+.3f}\" about "
+                  f"({pivot[0]:.6f}, {pivot[1]:.6f}) [{mode}]; verified to {worst:.3f} mas")
+        return verdict
+
+    # ROLL_APPLY_DELTA: rotate about the pivot the first roll used.
+    pivot = _delta_pivot(hdr, delta, fn, why)
+    applied = float(hdr['ROLLARC'])
+    print(f"STALE ROLL -- RE-CORRECTING {fn}: {why}; applying {delta:+.3f}\" about "
+          f"the recorded pivot ({pivot[0]:.6f}, {pivot[1]:.6f}).", flush=True)
+    _, _, _, worst = _write_roll(fn, delta, applied + delta, pivot=pivot,
+                                 previous_arcsec=applied)
+    if verbose:
+        print(f"roll correction delta verified to {worst:.3f} mas; {fn} now carries "
+              f"{applied + delta:+.3f}\"")
+    return verdict
