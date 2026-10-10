@@ -318,6 +318,40 @@ ALIGNMENT_CONFIG = (
                'has data.'),
     ),
     FieldAlignment(
+        proposal='1905', fields=('001',),
+        reference_frame=GAIA, source=RECORDED_BULK,
+        visit_key='suffix3', consensus_jitter=True, reference_filter='F212N',
+        dec_ref_deg=-45.856,
+        recorded_bulk={
+            ('003', ANY): BulkEntry(-2379.0, -1628.4, onsky_mas=True),
+        },
+        notes=('wd1 obs 001, visit 003 (the eastern third of the mosaic, guide '
+               'star S8UV267665, observed 2023-04-05; visits 001/002 are '
+               '2023-03-31 on other guide stars) sits (+2.379", +1.628") on '
+               'sky from Gaia DR3 and (+2.363", +1.614") from visit 002 on '
+               '4307 matched F212N stars (peak contrast 1152).  All 27 cells of '
+               'the m2 per-tile grid agree to 2.870-2.903".  Measured '
+               '2026-10-09 by the m2 checkpoint against gaia_refcat.fits '
+               '(F212N, histogram; F444W reads +2.422", +1.620").\n\n'
+               'The checkpoint cannot apply this itself: against a Gaia-only '
+               'reference per_tile_ok requires the same-star refinement, which '
+               'runs only once the tie is verified small, so a multi-arcsec '
+               'visit bulk is refused ("COULD NOT VERIFY ... NOT applying") '
+               'on every iteration.  Every wd1 NIRCam mosaic therefore '
+               'carried visit 003 2.9" off visits 001/002, doubling the stars '
+               'in the overlap.\n\n'
+               'This records only the coarse visit-003 pre-shift (correction '
+               'sign: reference minus frame).  Visits 001/002 get no recorded '
+               'constant.  consensus_jitter=True keeps the TABLE_CONSENSUS '
+               'behaviour on top: the m2 checkpoint measures each '
+               '(visit, filter) residual against Gaia, which is now tens of mas '
+               'for every visit, verifies it with the same-star refinement, and '
+               'writes the BULK sentinel + per-exposure jitter rows into '
+               'Offsets_JWST_Brick1905_consensus.csv; resolve_shift sums them '
+               'with this constant.  Same pattern as cloudef 2092 obs 002.\n\n'
+               'Obs 003 keeps the proposal-wide TABLE_CONSENSUS entry below.'),
+    ),
+    FieldAlignment(
         proposal='1905', fields=None,
         reference_frame=GAIA, source=TABLE_CONSENSUS,
         reference_filter='F212N',
