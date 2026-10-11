@@ -51,6 +51,13 @@ def test_field_selection_and_exclusions(hi):
     assert hi.field_layers('sgrb2', None) == []
 
 
+def test_exclusion_matches_whole_tokens(hi):
+    assert hi.EXCLUDE.search('jwst_gc_treasury_hips_stale_20260912b')
+    assert hi.EXCLUDE.search('Brick_RGB_test_hips')
+    assert not hi.EXCLUDE.search('Brick_RGB_checkerboard_hips')
+    assert not hi.EXCLUDE.search('Sickle_RGB_contest_hips')
+
+
 def test_label_falls_back_to_directory_name(hi):
     cloudef = hi.field_layers('cloudef_controlfield', INVENTORY)
     assert [hi.layer_label(la) for la in cloudef] == ['Cloudef_RGB_2100_hips']

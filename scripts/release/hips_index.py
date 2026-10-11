@@ -51,9 +51,11 @@ INDEX_PAGE = "hips_index.html"
 
 #: properties keys copied into the inventory
 KEYS = ("obs_title", "hips_initial_ra", "hips_initial_dec", "hips_initial_fov",
-        "hips_order", "hips_frame", "hips_release_date")
+        "hips_order", "hips_release_date")
 
-#: Layer-name patterns per release field.  Only renders of JWST data from the
+#: Layer-name patterns per release field.  Hand-maintained: a new HiPS
+#: target name needs a pattern here (and a title in jwst_scripts'
+#: jwst_rgb/hips_naming.py, which sets the obs_title shown in the table).  Only renders of JWST data from the
 #: field are listed: the ALMA, GTC, and MUSTANG layers that share a target
 #: name (SgrB2M_RGB, MUBLO_*, w51_GTC_*, w51e2...) are not matched.  JWST
 #: renders WITH a radio overlay (Brick_*_alma, GCTreasury_radio_*) are.
@@ -76,7 +78,8 @@ FIELD_HIPS = {
 }
 
 #: Superseded and diagnostic renders kept on disk beside the real ones.
-EXCLUDE = re.compile(r"stale|superseded|_test|check|flipped|broken", re.IGNORECASE)
+EXCLUDE = re.compile(r"(?:^|_)(?:stale|superseded|tests?|check|flipped|broken)(?=_|\d|$)",
+                     re.IGNORECASE)
 
 #: Fields inside the Central Molecular Zone: their data are also part of the
 #: survey-wide coadds below.
@@ -288,9 +291,8 @@ def field_section_html(field, inventory):
     return "\n".join(out)
 
 
-def render_index_page(fields, inventory, page_head, footer, field_titles=None):
+def render_index_page(fields, inventory, page_head, footer):
     """``hips_index.html``: every field's layers, then the multi-field views."""
-    field_titles = field_titles or {}
     out = [page_head("HiPS index — JWST Galactic Center survey"),
            "<header><h1>HiPS index</h1><div class=muted><a href='index.html'>"
            "&larr; all fields</a></div></header><main>",
@@ -311,7 +313,7 @@ def render_index_page(fields, inventory, page_head, footer, field_titles=None):
         tours = tour_links(field)
         if not layers and not tours:
             continue
-        title = field_titles.get(field, field)
+        title = field
         out.append(f"<h2 id='{html.escape(field)}'><a href='{html.escape(field)}.html'>"
                    f"{html.escape(title)}</a> <span class=muted>({len(layers)} "
                    f"layer{'s' if len(layers) != 1 else ''})</span></h2>")
