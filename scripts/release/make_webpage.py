@@ -29,6 +29,7 @@ from pathlib import Path
 
 import curated_images
 import field_overview
+import hips_index
 import release_freshness
 import make_preview_rgb
 import preview_plan
@@ -682,7 +683,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       diagrams=(),
                       superseded=(), reasons=None, curated=(),
                       curated_prov=(), preview_from_curated=False,
-                      release_dir=None, manifold=None):
+                      release_dir=None, manifold=None, hips_inventory=None):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -1127,6 +1128,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                            f"<td class=size>{human_size(f['size_bytes'])}</td>"
                            f"<td>{dl(f)}</td></tr>")
         out.append("</table>")
+
+    # HiPS layers rendered from this field's mosaics, and the tours and
+    # survey-wide views that include them (served from another docroot, so
+    # read from the collected inventory rather than the manifest)
+    hips_section = hips_index.field_section_html(field, hips_inventory)
+    if hips_section:
+        out.append(hips_section)
 
     # catalogs table
     out.append("<h2>Catalogs</h2>")
@@ -2334,6 +2342,13 @@ PANNER_CARD = (
     "pointings that have imagery. Nothing to drive -- leave it running.")
 
 
+#: Written when a HiPS inventory is available (see hips_index.py).
+HIPS_INDEX_CARD = (
+    hips_index.INDEX_PAGE, "HiPS index",
+    "Every HiPS sky map made from the release fields, grouped by field, with "
+    "the tours and survey-wide views that combine them.")
+
+
 #: Linear color wavelength tours: an Aladin Lite page whose slider steps
 #: through RGB layers of three neighboring filters, bluest triplet to reddest.
 #: They are built in the ACES_Aladin_tour repository and served from a
@@ -2534,11 +2549,17 @@ def main(argv=None):
                              "it from the index.")
     parser.add_argument("--cmz-cat-hips",
                         help="site-relative URL of the catalog HiPS (optional)")
+    parser.add_argument("--hips-inventory",
+                        help="HiPS inventory JSON written by hips_index.py "
+                             f"(default: <out>/{hips_index.INVENTORY_NAME}); "
+                             "without one the HiPS sections are omitted")
     parser.add_argument("--cmz-moc",
                         help="site-relative URL of the coverage MOC .fits (optional)")
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out)
+    hips_inventory = hips_index.load_inventory(
+        args.hips_inventory or out_dir / hips_index.INVENTORY_NAME)
     assets = out_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
 
@@ -2757,6 +2778,10 @@ def main(argv=None):
                                      diagrams=diagram_items,
                                      manifold=(manifold_infos(out_dir, field)
                                                if v == latest else None),
+                                     # the served layers today: a frozen
+                                     # older page must not claim them
+                                     hips_inventory=(hips_inventory
+                                                     if v == latest else None),
                                      # only the CURRENT version's page: the
                                      # offsets are re-measured continuously, so
                                      # a frozen older page must not carry
@@ -2925,6 +2950,13 @@ def main(argv=None):
         quicklooks.append(CMD_VIEWER_CARD)
     if (out_dir / PANNER_FILE).exists():
         quicklooks.append(PANNER_CARD)
+    if hips_inventory is not None:
+        inv_path = Path(args.hips_inventory or out_dir / hips_index.INVENTORY_NAME)
+        if inv_path.resolve() != (out_dir / hips_index.INVENTORY_NAME).resolve():
+            shutil.copy2(inv_path, out_dir / hips_index.INVENTORY_NAME)
+        (out_dir / hips_index.INDEX_PAGE).write_text(hips_index.render_index_page(
+            sorted(roster), hips_inventory, page_head, footer))
+        quicklooks.append(HIPS_INDEX_CARD)
     index_html = render_index(index_fields, overview_html=overview_html,
                               quicklooks=tuple(quicklooks))
     if cmz_explorer_link:
