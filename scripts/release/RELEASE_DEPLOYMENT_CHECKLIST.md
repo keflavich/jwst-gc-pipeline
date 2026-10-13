@@ -273,7 +273,8 @@ Two consequences for a release:
 10678 has a cross-band merge per tile but none field-wide, so its catalogs are the
 single all-tile table built by `jwst_gc_pipeline.cmz.treasury_joint_catalog` plus
 the per-tile m8 table of every tile that build read (taken from the same
-roll-corrected snapshot directory, hardlinked when on the same filesystem). Both are
+roll-corrected snapshot directory, hardlinked when on the same filesystem). The
+m8 tables are unfiltered; the joint build reads each tile's quality-cut m7 table. Both are
 staged together with
 `stage_release.py --field gc-treasury --joint-catalog` (on its own, before or after
 `--exposures-only`; gc-treasury ships no mosaic). `stage_joint_catalog` picks the
@@ -281,7 +282,7 @@ newest build under `joint_catalog_root` unless `--joint-catalog-dir` names one, 
 refuses (exit 2) — writing nothing — when the build's own provenance
 (`*.prov.json`) shows an unresolved overlap-gate failure, a build that is not (or
 only partly) roll-corrected, or an empty table, and when any tile lacks an m8
-table or its m8 table's `ROLLCTAB` differs from the tile the build read. A recorded `gate_override` reason
+table or its m8 table's `ROLLCTAB` or `GCTAG` differs from the tile the build read. A recorded `gate_override` reason
 in the provenance is the only way an overlap failure may still ship; check for
 it, and for `MANIFEST.json`'s `joint_catalog.gate_override`, before trusting a
 "staged cleanly" run.

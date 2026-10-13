@@ -2752,8 +2752,9 @@ JOINT_CATALOG_KINDS = ("catalog_joint", "catalog_joint_provenance",
                        "catalog_tile")
 
 # The per-tile table each joint-catalog tile ships as, beside the joint table.
-# m8 is the forced cross-band fill of the m7 merge the joint catalog was built
-# from: same rows, every band measured at every source.  It sits in the same
+# m8 is the tile's full cross-band merge (m7) with every band force-filled at
+# every source.  It is unfiltered: the joint build reads the quality-cut m7
+# table instead (o040: 62,933 of m8's 196,672 rows).  It sits in the same
 # roll-corrected snapshot directory as the tile the joint build read, so the
 # two products carry the same correction.
 TILE_CATALOG_ITERATION = "resbgsub_m8"
@@ -3210,6 +3211,16 @@ def _rollctab_sha(rollctab):
     return m.group(1) if m else None
 
 
+def _read_header_keyword(path, key):
+    """``key`` from the first HDU header of ``path`` that carries it, or ``None``."""
+    from astropy.io import fits
+    with fits.open(path, memmap=True) as hdul:
+        for hdu in hdul:
+            if key in hdu.header:
+                return hdu.header[key]
+    return None
+
+
 def discover_tile_catalogs(build_dir):
     """The per-tile m8 tables behind a joint-catalog build, gated.
 
@@ -3221,7 +3232,9 @@ def discover_tile_catalogs(build_dir):
     anything is written -- if a tile has no m8 table there, or if the m8 table
     is not roll-corrected with the same ``roll_corrections.csv`` version as
     the tile the joint build read (which ``check_joint_catalog`` has just
-    verified against the current table).  A tile is never silently dropped.
+    verified against the current table), or if its ``GCTAG`` differs from the
+    build's recorded ``tile_pipeline_tag`` (a table from another run).  A tile
+    is never silently dropped.
     """
     build_dir = Path(build_dir)
     prov_path = sorted(build_dir.glob("*_joint_nircam.prov.json"))[0]
@@ -3246,6 +3259,13 @@ def discover_tile_catalogs(build_dir):
             problems.append(
                 f"tile {obsid}: m8 table ROLLCTAB sha1:{have} does not match "
                 f"the joint build's tile (sha1:{want})")
+            continue
+        want_tag = t.get("tile_pipeline_tag")
+        have_tag = _read_header_keyword(src, "GCTAG")
+        if want_tag and have_tag != want_tag:
+            problems.append(
+                f"tile {obsid}: m8 table GCTAG {have_tag!r} does not match the "
+                f"joint build's tile_pipeline_tag {want_tag!r}")
             continue
         found.append((obs, src))
     if problems:
@@ -3792,8 +3812,12 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
                 f"one per tile ({len(_tiles)}: {_tiles[0]}-{_tiles[-1]}).  Each is "
                 "that tile's own cross-band merge with every band force-filled "
                 "(m8), roll-corrected with the same table as the tile the joint "
-                "catalog read.  Tiles overlap, so a star near a tile edge can "
-                "appear in two of them; the joint catalog is the deduplicated set.")
+                "catalog read.  These tables are UNFILTERED: the joint catalog "
+                "is built from each tile's quality-cut table, so a per-tile "
+                "table also holds sources the joint catalog drops on quality "
+                "cuts.  Tiles overlap, so a star near a tile edge can appear in "
+                "two per-tile tables; the joint catalog collapses those "
+                "duplicates.")
         joint_catalog_lines.append(
             "- MIRI F770W is OUT OF SCOPE for this table (issue #956) -- NIRCam only.")
         joint_catalog_lines.append("")

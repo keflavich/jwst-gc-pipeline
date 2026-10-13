@@ -2680,4 +2680,22 @@ def test_readme_describes_the_tile_tables(sr, tmp_path, monkeypatch):
                                           tmp_path / 'releases')
     readme = (field_dir / 'README.md').read_text()
     assert 'Per-tile tables' in readme
+    assert 'UNFILTERED' in readme
     assert '(2: o100-o101)' in readme
+
+
+def test_stage_joint_catalog_refuses_an_m8_table_from_another_run(
+        sr, tmp_path, monkeypatch):
+    # FITS writes in this package stamp the CURRENT GCTAG, so the header
+    # read is stubbed rather than written.
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root)
+    prov_path = next(build_dir.glob('*.prov.json'))
+    prov = json.loads(prov_path.read_text())
+    for t in prov['tiles'].values():
+        t['tile_pipeline_tag'] = 'run-A'
+    prov_path.write_text(json.dumps(prov))
+    monkeypatch.setattr(sr, '_read_header_keyword',
+                        lambda path, key: 'run-B' if 'o101' in str(path) else 'run-A')
+    with pytest.raises(sr.JointCatalogGateError, match="tile o101: m8 table GCTAG 'run-B'"):
+        sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases')
