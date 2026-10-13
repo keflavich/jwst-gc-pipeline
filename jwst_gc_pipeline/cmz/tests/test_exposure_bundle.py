@@ -1922,7 +1922,8 @@ def _joint_build(root, name='2026-10-04_test', n_rows_total=100, n_tiles=2,
                  n_failed=0, n_overlapping=1, tol_mas=30.0,
                  gate_override=None, pipeline_tag='tag-abc',
                  write_parquet=True, write_prov=True, dedup_radius_arcsec=0.2,
-                 tiles_rollctab=None, tiles_path=None):
+                 tiles_rollctab=None, tiles_path=None, write_tile_m8=True,
+                 tile_m8_rollctab=None):
     build_dir = root / name
     build_dir.mkdir(parents=True)
     stem = 'gctreasury10678_joint_nircam'
@@ -1933,7 +1934,26 @@ def _joint_build(root, name='2026-10-04_test', n_rows_total=100, n_tiles=2,
         tiles_roll = {'o100': roll_corrected, 'o101': roll_corrected}
     if tiles_rollctab is None:
         tiles_rollctab = {o: f'sha1:{DEFAULT_ROLL_SHA}' for o in tiles_roll}
-    tiles_path = tiles_path or {}
+    tiles_path = dict(tiles_path or {})
+    if write_tile_m8:
+        # The per-tile m8 tables `stage_joint_catalog` ships beside the joint
+        # table live in the directory the build read each tile from; give
+        # every tile a path there and an m8 table whose ROLLCTAB matches
+        # (or, via `tile_m8_rollctab`, deliberately does not).
+        tile_dir = root.parent / f'tiles_{name}'
+        tile_dir.mkdir(parents=True, exist_ok=True)
+        for o in tiles_roll:
+            if o in tiles_path:
+                continue
+            obs = o if o.startswith('o') else f'o{o}'
+            tile = tile_dir / f'tile_m7_{obs}.fits'
+            tile.write_bytes(b'TILE')
+            tiles_path[o] = str(tile)
+            rollctab = (tile_m8_rollctab or {}).get(
+                o, tiles_rollctab.get(o) or f'sha1:{DEFAULT_ROLL_SHA}')
+            _tile_m8_fits(tile_dir / ('basic_merged_indivexp_photometry_tables_'
+                                      f'merged_resbgsub_m8_{obs}.fits'),
+                          rollctab)
     if write_prov:
         prov = {
             'pipeline_tag': pipeline_tag,
@@ -1955,6 +1975,14 @@ def _joint_build(root, name='2026-10-04_test', n_rows_total=100, n_tiles=2,
         }
         (build_dir / f'{stem}.prov.json').write_text(json.dumps(prov))
     return build_dir
+
+
+def _tile_m8_fits(path, rollctab):
+    from astropy.io import fits
+    hdu = fits.PrimaryHDU()
+    if rollctab is not None:
+        hdu.header['ROLLCTAB'] = rollctab
+    hdu.writeto(path, overwrite=True)
 
 
 def _joint_field(sr, monkeypatch, tmp_path, field='zz_joint'):
@@ -2128,13 +2156,19 @@ def test_stage_joint_catalog_happy_path_fresh_release(sr, tmp_path, monkeypatch)
     _joint_build(root)
     field_dir, n = sr.stage_joint_catalog('zz_joint', 'v9-test',
                                           tmp_path / 'releases')
-    assert n == 3
+    assert n == 5
     assert field_dir == tmp_path / 'releases' / 'v9-test' / 'zz_joint'
     manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
     catalog_items = [f for f in manifest['files'] if f['category'] == 'catalog']
-    assert len(catalog_items) == 3
+    assert len(catalog_items) == 5
     kinds = sorted(f['kind'] for f in catalog_items)
-    assert kinds == ['catalog_joint', 'catalog_joint', 'catalog_joint_provenance']
+    assert kinds == ['catalog_joint', 'catalog_joint', 'catalog_joint_provenance',
+                     'catalog_tile', 'catalog_tile']
+    tiles = sorted((f['observation'], f['dest']) for f in catalog_items
+                   if f['kind'] == 'catalog_tile')
+    assert tiles == [
+        ('o100', 'catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o100.fits'),
+        ('o101', 'catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o101.fits')]
     for f in catalog_items:
         assert (field_dir / f['dest']).is_file()
         assert 'sha256' in f
@@ -2180,7 +2214,7 @@ def test_stage_joint_catalog_preserves_an_existing_manifest(sr, tmp_path,
     assert manifest['built'] == '2026-01-01T00:00:00-05:00'   # NOT touched
     image_items = [f for f in manifest['files'] if f['category'] == 'image']
     assert image_items == prior_manifest['files']
-    assert len(manifest['files']) == 1 + 3   # image + 3 joint files
+    assert len(manifest['files']) == 1 + 3 + 2   # image + 3 joint + 2 tiles
     checksums = (field_dir / 'CHECKSUMS.sha256').read_text()
     assert f'{other_sha}  images/F212N/m_i2d.fits' in checksums
     catalog_items = [f for f in manifest['files'] if f['category'] == 'catalog']
@@ -2265,14 +2299,14 @@ def test_exposures_then_joint_catalog_share_one_release(sr, tmp_path,
     field_dir2, n_cat = sr.stage_joint_catalog(
         'zz_joint', 'v9-test', tmp_path / 'releases', allow_older=True)
     assert field_dir2 == field_dir
-    assert n_cat == 3
+    assert n_cat == 5   # 3 joint files + 2 per-tile m8 tables
 
     manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
     exposures = [f for f in manifest['files']
                 if f['category'] == sr.exposure_bundle.EXPOSURE_CATEGORY]
     catalogs = [f for f in manifest['files'] if f['category'] == 'catalog']
     assert len(exposures) == 1
-    assert len(catalogs) == 3
+    assert len(catalogs) == 5
 
     checksums = (field_dir / 'CHECKSUMS.sha256').read_text()
     for f in catalogs:
@@ -2481,7 +2515,7 @@ def test_stage_joint_catalog_stages_with_correct_rollarc_value(
                                            tmp_path / 'releases',
                                            allow_older=True)
     assert field_dir2 == field_dir
-    assert n == 3
+    assert n == 5
 
 
 def test_stage_exposures_only_refuses_when_joint_catalog_already_staged_and_frame_uncorrected(
@@ -2490,7 +2524,7 @@ def test_stage_exposures_only_refuses_when_joint_catalog_already_staged_and_fram
     _joint_build(root)
     field_dir, n_cat = sr.stage_joint_catalog('zz_joint', 'v9-test',
                                               tmp_path / 'releases')
-    assert n_cat == 3
+    assert n_cat == 5
 
     frame_src = tmp_path / 'pipeline_src' / 'jw10678-o100_cal.fits'
     frame_src.parent.mkdir(parents=True)
@@ -2563,3 +2597,105 @@ def test_a_normal_field_with_no_merged_table_still_gets_the_preliminary_banner(
 def test_the_treasury_field_carries_a_joint_catalog_root(sr):
     assert sr.FIELDS['gc-treasury']['joint_catalog_root'] == \
         sr.Path('/orange/adamginsburg/jwst/gc-treasury/catalogs_joint')
+
+
+# ---------------------------------------------------------------------------
+# Per-tile m8 tables shipped beside the joint catalog
+# ---------------------------------------------------------------------------
+
+def test_stage_joint_catalog_refuses_a_tile_with_no_m8_table(sr, tmp_path,
+                                                             monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root)
+    prov = json.loads(next(build_dir.glob('*.prov.json')).read_text())
+    m8 = (sr.Path(prov['tiles']['o101']['path']).parent
+          / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o101.fits')
+    m8.unlink()
+    with pytest.raises(sr.JointCatalogGateError, match='tile o101: no m8 table'):
+        sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases')
+    assert not (tmp_path / 'releases' / 'v9-test' / 'zz_joint').exists()
+
+
+def test_stage_joint_catalog_refuses_an_m8_table_with_another_roll(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root, tile_m8_rollctab={'o100': f'sha1:{ALT_ROLL_SHA}'})
+    with pytest.raises(sr.JointCatalogGateError, match='tile o100: m8 table ROLLCTAB'):
+        sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases')
+    assert not (tmp_path / 'releases' / 'v9-test' / 'zz_joint').exists()
+
+
+def test_tile_catalogs_accept_bare_observation_keys(sr, tmp_path, monkeypatch):
+    """The real build keys tiles '040', not 'o040'."""
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, tiles_roll={'100': True, '101': True})
+    found = sr.discover_tile_catalogs(build_dir)
+    assert [(obs, p.name) for obs, p in found] == [
+        ('o100', 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o100.fits'),
+        ('o101', 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o101.fits')]
+
+
+def test_tile_catalog_is_a_frozen_copy(sr, tmp_path, monkeypatch):
+    """Replacing the source by rename (how the pipeline rewrites tables)
+    leaves the staged table's bytes and checksum unchanged."""
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root)
+    field_dir, _ = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                          tmp_path / 'releases')
+    manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    item = next(f for f in manifest['files'] if f['kind'] == 'catalog_tile')
+    src = sr.Path(item['src'])
+    tmp = src.with_suffix('.new')
+    tmp.write_bytes(b'REWRITTEN')
+    os.replace(tmp, src)
+    assert sr.sha256sum(field_dir / item['dest']) == item['sha256']
+
+
+def test_page_lists_tile_catalogs_under_the_joint_one(mw):
+    def cat(kind, dest, obs=None):
+        return {'category': 'catalog', 'kind': kind, 'filter': None,
+                'iteration': 'resbgsub_m8' if obs else None, 'observation': obs,
+                'dest': dest, 'size_bytes': 10, 'version': 'v1.9-2026.10',
+                'url': 'https://example.invalid/' + dest}
+    manifest = {'field': 'gc-treasury', 'version': 'v1.9-2026.10', 'group': None,
+                'release_path': '/releases/v1.9/gc-treasury',
+                'built': '2026-10-04T12:00:00', 'mode': 'copy',
+                'globus_collection_id': 'x',
+                'globus_https_base': 'https://example.invalid',
+                'files': [cat('catalog_tile', 'catalogs/x_m8_o041.fits', 'o041'),
+                          cat('catalog_joint', 'catalogs/joint.fits'),
+                          cat('catalog_tile', 'catalogs/x_m8_o040.fits', 'o040')]}
+    page = mw.render_field_page('gc-treasury', manifest, '')
+    i_joint = page.index('catalogs/joint.fits')
+    i40 = page.index('catalogs/x_m8_o040.fits')
+    i41 = page.index('catalogs/x_m8_o041.fits')
+    assert i_joint < i40 < i41
+    assert 'Per-tile merged catalog' in page
+
+
+def test_readme_describes_the_tile_tables(sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root)
+    field_dir, _ = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                          tmp_path / 'releases')
+    readme = (field_dir / 'README.md').read_text()
+    assert 'Per-tile tables' in readme
+    assert 'UNFILTERED' in readme
+    assert '(2: o100-o101)' in readme
+
+
+def test_stage_joint_catalog_refuses_an_m8_table_from_another_run(
+        sr, tmp_path, monkeypatch):
+    # FITS writes in this package stamp the CURRENT GCTAG, so the header
+    # read is stubbed rather than written.
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root)
+    prov_path = next(build_dir.glob('*.prov.json'))
+    prov = json.loads(prov_path.read_text())
+    for t in prov['tiles'].values():
+        t['tile_pipeline_tag'] = 'run-A'
+    prov_path.write_text(json.dumps(prov))
+    monkeypatch.setattr(sr, '_read_header_keyword',
+                        lambda path, key: 'run-B' if 'o101' in str(path) else 'run-A')
+    with pytest.raises(sr.JointCatalogGateError, match="tile o101: m8 table GCTAG 'run-B'"):
+        sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases')
