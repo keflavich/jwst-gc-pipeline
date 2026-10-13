@@ -168,6 +168,7 @@ KIND_LABEL = {
     # so it carries its own kinds rather than reusing catalog_full/_qualcut.
     "catalog_joint": "Joint catalog (all-tile)",
     "catalog_joint_provenance": "Joint catalog provenance",
+    "catalog_tile": "Per-tile merged catalog",
 }
 
 #: Kinds that count as "the field-wide catalog has been built" for the
@@ -1157,7 +1158,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                    "<th>Version</th><th>Size</th><th>Download</th></tr>")
         cat_order = {"catalog_full": 0, "catalog_joint": 0, "catalog_qualcut": 1,
                      "seed": 2, "catalog_per_filter_vetted": 3,
-                     "catalog_joint_provenance": 4}
+                     "catalog_joint_provenance": 4, "catalog_tile": 5}
         for f in sorted(catalogs, key=lambda f: (f.get("observation") or "",
                                                  cat_order.get(f["kind"], 9),
                                                  f.get("filter") or "")):
