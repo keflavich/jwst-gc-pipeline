@@ -548,11 +548,67 @@ def _resolve_satstar_severity_floor(filtername, explicit=None):
     return float(SAT_SEVERITY_FLOOR.get(str(filtername).lower(), 0.0))
 
 
+#: Columns of ``*_satstar_severity_dropped.fits``.
+SEVERITY_DROP_COLUMNS = ('xcentroid', 'ycentroid', 'core_peak', 'npix',
+                         'sat_severity_floor')
+
+
+def severity_drop_records(sci, sources, drop_lab, core_peak):
+    """One record per component the pre-fit severity gate drops.
+
+    The position is the component's brightest finite ``sci`` pixel: the gate
+    only drops components with no NaN-variance pixel, so the star's own peak
+    is in the component, and ``_handoff_restore_pixels`` finds the component
+    from the 3x3 pixels around it.
+    """
+    sci = np.asarray(sci, dtype=float)
+    vals = np.where(np.isfinite(sci), sci, -np.inf)
+    drop_lab = np.asarray(drop_lab, dtype=int)
+    pos = ndimage.maximum_position(vals, labels=sources, index=drop_lab)
+    npix = ndimage.sum_labels(np.ones(sources.shape), labels=sources,
+                              index=drop_lab)
+    return [{'xcentroid': float(p[1]), 'ycentroid': float(p[0]),
+             'core_peak': float(pk), 'npix': int(n)}
+            for p, pk, n in zip(pos, np.atleast_1d(core_peak),
+                                np.atleast_1d(npix))]
+
+
+def severity_drop_table(records, saturated, severity_floor):
+    """``*_satstar_severity_dropped.fits`` rows: severity-gate drops that no
+    later seeding put back.
+
+    The peak / sub-floor / partner / sibling seeding after the gate can
+    re-seed a dropped star, which then reaches the fit and, if rejected, the
+    gate-reject hand-off.  Only drops whose peak pixel is outside the final
+    ``saturated`` mask are kept: those leave the satstar channel with no fit
+    and no ``*_satstar_rejected.fits`` row, and their any-group SATURATED
+    core is masked out of the daophot fit, so neither channel models them
+    unless they are handed off (cataloging ``_severity_drop_handoff_xy``).
+    Always returns a table (possibly empty) so a rerun overwrites a stale file.
+    """
+    keep = []
+    ny, nx = np.shape(saturated)
+    for rec in records:
+        ix, iy = int(round(rec['xcentroid'])), int(round(rec['ycentroid']))
+        if 0 <= iy < ny and 0 <= ix < nx and saturated[iy, ix]:
+            continue
+        keep.append(rec)
+    tab = table.Table(
+        {'xcentroid': np.array([r['xcentroid'] for r in keep], dtype=float),
+         'ycentroid': np.array([r['ycentroid'] for r in keep], dtype=float),
+         'core_peak': np.array([r['core_peak'] for r in keep], dtype=float),
+         'npix': np.array([r['npix'] for r in keep], dtype=int),
+         'sat_severity_floor': np.full(len(keep), float(severity_floor or 0.0))})
+    tab.meta['NDROPPED'] = len(records)  # gate drops before re-seeding
+    return tab
+
+
 def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                          spike_merge_gap=0, spike_merge_ratio=3.0,
                          sat_data_floor=0.0, severity_floor=0.0,
                          partner_xy=None, partner_frac=0.25,
-                         sibling_xy=None, sibling_radius_px=None):
+                         sibling_xy=None, sibling_radius_px=None,
+                         severity_drops=None):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -578,6 +634,10 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     spike_merge_ratio : float, optional
         A satellite is folded into the core only if core_area >= this x
         satellite_area, protecting comparable-size separate stars.
+    severity_drops : list, optional
+        When given, one dict per component the pre-fit severity gate drops is
+        appended to it (``severity_drop_records``): the components this
+        channel disowns as weakly saturated, for the daophot hand-off.
 
     Returns
     -------
@@ -734,6 +794,9 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
         drop_lab = _idx[(~comp_unrec) & np.isfinite(comp_coremax)
                         & (comp_coremax < float(severity_floor))]
         if len(drop_lab):
+            if severity_drops is not None:
+                severity_drops.extend(severity_drop_records(
+                    sci, sources, drop_lab, comp_coremax[drop_lab - 1]))
             saturated = saturated & (~np.isin(sources, drop_lab))
             sources, nsource = label(saturated)
             print(f"Saturated starfinding: severity gate ({severity_floor:g} "
@@ -3416,11 +3479,22 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 except Exception as _sex:
                     print(f"WARNING: sibling-seed WCS conversion failed: "
                           f"{type(_sex).__name__}: {_sex}", flush=True)
+    _severity_drops = []
     saturated, sources, coms, _seed_kinds = find_saturated_stars(
         fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
         sat_data_floor=_sat_floor, severity_floor=_sev_floor,
-        partner_xy=_partner_xy, sibling_xy=_sibling_xy)
+        partner_xy=_partner_xy, sibling_xy=_sibling_xy,
+        severity_drops=_severity_drops)
+    # Weakly saturated stars the pre-fit severity gate disowned and no later
+    # seeding took back: remove_saturated_stars persists them for the
+    # daophot hand-off (severity_drop_table).
+    builtins.satstar_severity_dropped = severity_drop_table(
+        _severity_drops, saturated, _sev_floor)
+    if len(_severity_drops):
+        print(f"Saturated starfinding: {len(builtins.satstar_severity_dropped)} "
+              f"of {len(_severity_drops)} severity-gate drop(s) were not "
+              f"re-seeded (left to the daophot hand-off)", flush=True)
 
     # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
     #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
@@ -6457,7 +6531,19 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     if deblend_with_zeroframe:
         kwargs['zeroframe_deblend'] = True
     print("Running get_saturated_stars", flush=True)
+    builtins.satstar_severity_dropped = None
     satstar_table = get_saturated_stars(fh, **kwargs)
+    # Written whatever the fit outcome (also when nothing was accepted), and
+    # empty when nothing was dropped, so a rerun never leaves a stale file for
+    # the daophot hand-off to read.
+    _sev_dropped = getattr(builtins, 'satstar_severity_dropped', None)
+    if _sev_dropped is not None:
+        _sev_fn = filename.replace(
+            ".fits", f'{file_suffix}_satstar_severity_dropped.fits')
+        _sev_dropped.meta.update(fh[0].header)
+        _sev_dropped.write(_sev_fn, overwrite=overwrite)
+        print(f"Saved {len(_sev_dropped)} severity-gate drop(s) to {_sev_fn}",
+              flush=True)
     if satstar_table is not None:
         satstar_table.meta.update(header)
         # Stamp the saturated-core recovery config so load_or_make_satstar_catalog

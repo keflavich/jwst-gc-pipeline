@@ -769,16 +769,97 @@ def _daophot_handoff_restore_accepted_excl_fwhm():
     return excl
 
 
+def severity_dropped_path(rejected_path):
+    """The ``*_satstar_severity_dropped.fits`` written beside a frame's
+    ``*_satstar_rejected.fits`` (same satstar run and suffix); None when
+    ``rejected_path`` is empty or not a ``*_satstar_rejected.fits`` name."""
+    tail = '_satstar_rejected.fits'
+    if not rejected_path or not str(rejected_path).endswith(tail):
+        return None
+    return str(rejected_path)[:-len(tail)] + '_satstar_severity_dropped.fits'
+
+
+def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
+                              label='', accepted_excl_fwhm=1.5):
+    """Positions of the satstar severity-gate drops, handed off to daophot.
+
+    ``find_saturated_stars`` drops a DQ-SATURATED component with no
+    NaN-variance pixel whose data peak is below the filter's
+    ``SAT_SEVERITY_FLOOR``: the star still has a valid rate from its early
+    groups, so it belongs to the daophot channel.  But the drop wrote nothing,
+    so no hand-off reached it, and daophot masks its any-group SATURATED core
+    and deletes fits next to it -- neither channel modelled the star.  On
+    10678 F480M NRCBLONG cal frames (BRIGHT2, 4 groups) the gate drops ~300-450
+    components per frame with median core ~1300 MJy/sr, and the gc-treasury
+    F480M residual mosaic leaves 28-37% of all stars with data peaks of
+    1000-2500 MJy/sr whole.  ``remove_saturated_stars`` now persists the drops
+    no later seeding took back (``severity_drop_table``); this reads them.
+
+    The position is the component's peak pixel, so ``_handoff_restore_pixels``
+    returns its late-group pixels (all of which have a valid rate: the gate
+    only drops components with no NaN-variance pixel) to the fit.  Positions
+    within ``accepted_excl_fwhm`` FWHM of an accepted satstar are dropped, as
+    for the gate-reject hand-off.  A missing file (a satstar catalog cached
+    before the file existed) hands off nothing.
+
+    Returns
+    -------
+    xy : `~numpy.ndarray` (N, 2) or None
+    radius_pix : float
+        ``max(1.0, 0.5 * fwhm_pix)``; 0.0 when ``xy`` is None.
+    """
+    if not drops_path or not os.path.exists(drops_path):
+        return None, 0.0
+    try:
+        tab = Table.read(drops_path)
+    except (OSError, ValueError, IORegistryError) as exc:
+        print(f"[{label}] severity-drop hand-off skipped: unreadable "
+              f"{os.path.basename(drops_path)} ({exc})", flush=True)
+        return None, 0.0
+    if (len(tab) == 0 or 'xcentroid' not in tab.colnames
+            or 'ycentroid' not in tab.colnames):
+        return None, 0.0
+    xy = np.column_stack([np.asarray(tab['xcentroid'], dtype=float),
+                          np.asarray(tab['ycentroid'], dtype=float)])
+    xy = xy[np.isfinite(xy).all(axis=1)]
+    n_near_acc = 0
+    if (len(xy) and satstar_table is not None and len(satstar_table)
+            and 'xcentroid' in satstar_table.colnames
+            and 'ycentroid' in satstar_table.colnames):
+        xa = np.asarray(satstar_table['xcentroid'], dtype=float)
+        ya = np.asarray(satstar_table['ycentroid'], dtype=float)
+        ok = np.isfinite(xa) & np.isfinite(ya)
+        if ok.any():
+            near_acc = _L._protect_mask(
+                xy[:, 0], xy[:, 1], np.column_stack([xa[ok], ya[ok]]),
+                accepted_excl_fwhm * float(fwhm_pix))
+            n_near_acc = int(near_acc.sum())
+            xy = xy[~near_acc]
+    radius_pix = max(1.0, 0.5 * float(fwhm_pix))
+    print(f"[{label}] severity-drop hand-off: {len(xy)} weakly saturated "
+          f"star(s) the satstar severity gate dropped are handed to daophot "
+          f"(r={radius_pix:.2f}px; {n_near_acc} dropped as within "
+          f"{accepted_excl_fwhm:g} FWHM of an accepted satstar)", flush=True)
+    if len(xy) == 0:
+        return None, 0.0
+    return xy, radius_pix
+
+
 def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
                         data_floor=None, label='manual'):
     """Every position handed from the satstar channel to daophot on a frame.
 
     The gate-reject hand-off (``_gate_reject_handoff_xy``: implied-peak-gate
-    rejects plus faint fit-quality rejects) and, when env
+    rejects plus faint fit-quality rejects), the severity-drop hand-off
+    (``_severity_drop_handoff_xy``: the components the satstar finder's
+    pre-fit severity gate dropped and nothing re-seeded; env
+    ``DAOPHOT_HANDOFF_SEVERITY_DROPS``, default on) and, when env
     ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` is on (default off; parsed by
     ``_handoff_env_flag``), every SATURATED component without an accepted
     satstar that has a finite ``sci`` pixel reaching ``data_floor``
-    (``_unaccepted_sat_component_xy``).  ``data_floor=None`` reads it from
+    (``_unaccepted_sat_component_xy``).  That component hand-off includes the
+    severity drops, so the drop file is not read when it is on.
+    ``data_floor=None`` reads it from
     ``_daophot_handoff_data_floor``, and only when the component hand-off is
     on, so the floor variable is never parsed on the default path.  Env
     ``DAOPHOT_HANDOFF_PEAK_MIN_AREA`` (``_daophot_handoff_peak_min_area``,
@@ -796,7 +877,18 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     """
     handoff_xy, handoff_radius = _gate_reject_handoff_xy(
         rejected_path, satstar_table, fwhm_pix, label=label)
-    if _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT', False):
+    component_handoff = _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT',
+                                          False)
+    if (_handoff_env_flag('DAOPHOT_HANDOFF_SEVERITY_DROPS', True)
+            and not component_handoff):
+        drop_xy, drop_radius = _severity_drop_handoff_xy(
+            severity_dropped_path(rejected_path), satstar_table, fwhm_pix,
+            label=label)
+        if drop_xy is not None:
+            handoff_xy = (drop_xy if handoff_xy is None
+                          else np.vstack([handoff_xy, drop_xy]))
+            handoff_radius = max(handoff_radius, drop_radius)
+    if component_handoff:
         if data_floor is None:
             data_floor = _daophot_handoff_data_floor()
         comp_xy = _unaccepted_sat_component_xy(
