@@ -70,12 +70,26 @@ if [ "${SLURM_JOB_NAME:-catalog_m8merge}" = "catalog_m8merge" ] && [ -n "${SLURM
 fi
 
 FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')
-M7_ARG=""
-[ -n "$M7" ] && M7_ARG="--m7=$M7" || M7_ARG="--catdir=$CATDIR --module=$MODULES --obs=$FIELD"
 
-echo "M8_MERGE start $(date -u +%FT%TZ) NODE=$(hostname) target=$TARGET filters=$FILT_CSV"
-"$PY" "$MERGE_PY" $M7_ARG --filters="$FILT_CSV" --execute $MERGE_EXTRA
-rc=$?
+echo "M8_MERGE start $(date -u +%FT%TZ) NODE=$(hostname) target=$TARGET filters=$FILT_CSV modules=$MODULES"
+if [ -n "$M7" ]; then
+    "$PY" "$MERGE_PY" --m7="$M7" --filters="$FILT_CSV" --execute $MERGE_EXTRA
+    rc=$?
+else
+    # MODULES is the same list the partials ran over (e.g. "nrca,nrcb,merged"),
+    # and each module has its own m7 anchor and its own partials.  Passing the
+    # whole list as one --module token derived an anchor named
+    # basic_nrca,nrcb,merged_..._m7.fits, which never exists (w51 m8, 2026-10-15).
+    rc=0
+    for MOD in $(echo "$MODULES" | tr ',' ' '); do
+        echo "M8_MERGE module=$MOD"
+        "$PY" "$MERGE_PY" --catdir="$CATDIR" --module="$MOD" --obs="$FIELD" \
+            --filters="$FILT_CSV" --execute $MERGE_EXTRA
+        mrc=$?
+        echo "M8_MERGE module=$MOD rc=$mrc"
+        [ $mrc -ne 0 ] && rc=$mrc
+    done
+fi
 echo "M8_MERGE_DONE rc=$rc $(date -u +%FT%TZ)"
 # Propagate the real exit code: a trailing echo previously masked a failed merge
 # as SLURM COMPLETED (the merge could silently not run and the job still passed).
