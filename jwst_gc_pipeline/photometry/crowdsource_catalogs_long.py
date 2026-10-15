@@ -3303,6 +3303,70 @@ def _cutout_origin(orig_filename, options):
     return int(xslc.start), int(yslc.start)
 
 
+class _RenderPSFGrids:
+    """Per-detector PSF grids for the merged-catalog render, loaded once each.
+
+    The per-frame fit loads its grid with ``module=<the frame's detector>``
+    (cataloging's phase loop sets ``file_module = file_detector``).  The render
+    used to load ONE grid with the run's ``module``, so frames were rendered
+    with a PSF the fit never used: ``module='nrcb'`` maps to NRCB1, so nrcb2-4
+    were rendered with the NRCB1 grid, and ``module='merged'`` gave every
+    frame the channel's first grid (NRCA1 / NRCA5, B-module frames included).
+    A model rendered with a PSF other than the fitted one leaves a ring or a
+    hole at bright stars.  This keys the render grid by the frame's detector,
+    as the fit does.
+
+    ``loader(detector)`` returns the grid for that detector token.  Grids are
+    cached by stpsf detector name, so tokens naming the same grid
+    ('nrcblong' / 'nrcb5') share one load.  Thread-safe: the render may run on
+    several threads, and each grid is loaded once, under the lock.
+    """
+
+    def __init__(self, loader, filtername, instrument):
+        import threading
+        self._loader = loader
+        self._filtername = filtername
+        self._instrument = instrument
+        self._grids = {}
+        self._lock = threading.Lock()
+
+    def key(self, detector):
+        name = stpsf_detector_for_module(str(detector), self._filtername,
+                                         self._instrument)
+        return name if name is not None else str(detector).lower()
+
+    def __call__(self, detector):
+        key = self.key(detector)
+        with self._lock:
+            grid = self._grids.get(key)
+            if grid is None:
+                grid = self._loader(detector)
+                self._grids[key] = grid
+        return grid
+
+    @property
+    def loaded(self):
+        return sorted(self._grids)
+
+
+def _render_psf_grids(filtername, proposal_id, field, options, obsdate,
+                      basepath, instrument):
+    """`_RenderPSFGrids` loading through `get_psf_model` with the per-frame
+    fit's arguments.  The cached grids are keyed by detector and filter only,
+    so the first frame's ``obsdate`` serves every detector, as it did for the
+    single render grid this replaces."""
+    def _load(detector):
+        grid, _ = get_psf_model(filtername, proposal_id, field, module=detector,
+                                use_webbpsf=True, use_grid=options.each_exposure,
+                                blur=options.blur, target=options.target,
+                                obsdate=obsdate,
+                                basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                                psf_cache_dir=os.path.join(basepath, 'psfs'),
+                                instrument=instrument)
+        return grid
+    return _RenderPSFGrids(_load, filtername, instrument)
+
+
 def _resolve_render_psf_shape(fwhm_pix, grid, default=(21, 21)):
     """Render-stamp size scaled to the PSF FWHM (detector pixels).
 
@@ -3716,13 +3780,9 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
     # PASSED astrometry checkpoint before discovering one absent file (#346).
     psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
-    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
-                               use_webbpsf=True, use_grid=options.each_exposure,
-                               blur=options.blur, target=options.target,
-                               obsdate=obsdate,
-                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
-                               psf_cache_dir=os.path.join(basepath, 'psfs'),
-                               instrument=instrument)
+    render_grids = _render_psf_grids(filtername, proposal_id, field, options,
+                                     obsdate, basepath, instrument)
+    grid = render_grids(frame_identity(overlapping_frames[0], field=field)[3])
     # FWHM-scale the render stamp so broad MIRI long-wavelength PSFs are not
     # clipped (see _resolve_render_psf_shape).  Falls back to the (21,21) default
     # for NIRCam / short-MIRI and if the FWHM lookup fails.
@@ -3793,11 +3853,6 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # own satstar pass fitted it (_satstar_render_covered)
             satstar_sm, acc_xy = _load_frame_satstar_cover(
                 _fitter_in, sat_suffix, _cover_mode)
-        # re-origin the spatially-varying PSF grid to cutout pixel coords
-        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
-        rg = type(grid)(_NDData(np.asarray(grid.data),
-                                meta={'grid_xypos': shifted_xy,
-                                      'oversampling': grid.oversampling}))
         bn = os.path.basename(orig)
         # JOINT multi-obs runs (field like '002-998'): the per-frame products fold
         # the observation number into vgroup_id (cataloging.py do_photometry frame
@@ -3814,6 +3869,13 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         # keeps the requested ``module`` (merged-module) name.
         (visit_id, vgroup_id, exposure_id,
          frame_detector) = frame_identity(orig, field=field)
+        # Render with this frame's own detector grid -- the one its fit used
+        # (_RenderPSFGrids) -- re-origined to cutout pixel coords.
+        fgrid = render_grids(frame_detector)
+        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in fgrid.grid_xypos]
+        rg = type(fgrid)(_NDData(np.asarray(fgrid.data),
+                                 meta={'grid_xypos': shifted_xy,
+                                       'oversampling': fgrid.oversampling}))
         (visitid_, vgroupid_, exposure_, desat, bgsub,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
@@ -4174,13 +4236,8 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
     # PASSED astrometry checkpoint before discovering one absent file (#346).
     psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
-    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
-                               use_webbpsf=True, use_grid=options.each_exposure,
-                               blur=options.blur, target=options.target,
-                               obsdate=obsdate,
-                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
-                               psf_cache_dir=os.path.join(basepath, 'psfs'),
-                               instrument=instrument)
+    render_grids = _render_psf_grids(filtername, proposal_id, field, options,
+                                     obsdate, basepath, instrument)
     written = []
     n_kept = n_drop = 0
     for orig in overlapping_frames:
@@ -4188,12 +4245,13 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
         if origin is None:
             continue
         x0, y0 = origin
+        visit_id, vgroup_id, exposure_id, frame_detector = frame_identity(orig)
+        grid = render_grids(frame_detector)
         shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
         rg = type(grid)(_NDData(np.asarray(grid.data),
                                 meta={'grid_xypos': shifted_xy,
                                       'oversampling': grid.oversampling}))
         bn = os.path.basename(orig)
-        visit_id, vgroup_id, exposure_id, _ = frame_identity(orig)
         catfn = _predict_tblfilename(cut_bp, filtername, module, options,
                                      visit_id, vgroup_id, exposure_id,
                                      iteration_label='iter2', method='daophot',
