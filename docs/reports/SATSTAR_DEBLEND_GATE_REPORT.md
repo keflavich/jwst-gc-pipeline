@@ -40,7 +40,8 @@ found, because each is a bug in the gate's own logic:
 
 **Defect filtering.** A raw group-0-saturated cluster can be a recurring
 detector hot/fixed-pattern pixel rather than a real second star's core.
-data-qa's component-level scan (`g0_clean.py`) found 97% of raw F212N
+data-qa's component-level scan (g0_clean.py, a data-qa-repo script, not
+tracked here) found 97% of raw F212N
 g0>=2 components are exactly this (4989 raw components -> 165 after
 filtering a (detector, 4-px bin) recurring in >=5 of 4040 frames).
 `group0_core_positions` (in `satstar_deblend_gate.py`) now drops any cluster
