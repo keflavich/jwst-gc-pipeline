@@ -19,8 +19,11 @@ from jwst_gc_pipeline.photometry.naming import _instrument_from_filter
 #:
 #: This used to read "it opens outlier_detection coverage holes".  That reason
 #: has expired: ``outlier_detection`` is skipped on the per-module NIRCam pass
-#: (#161) and, since #848, on the merged pass too, so no NIRCam pass runs it by
-#: default and it can no longer punch holes in anything.  The membership of
+#: (#161) and, since #848, on the merged pass too.  Since 2026-10
+#: (resolve_skip_outlier_detection in PipelineRerunNIRCAM-LONG.py) it runs by
+#: default only on associations whose members skipped JumpStep (NGROUPS=2,
+#: ``S_JUMP != COMPLETE``), where it is the only cosmic-ray rejection; on those
+#: it can punch holes again.  The membership of
 #: this tuple is UNCHANGED -- the emission-subtraction reason above stands on
 #: its own and is the one to weigh if a field is ever added or removed.
 EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2', 'ngc6334')
