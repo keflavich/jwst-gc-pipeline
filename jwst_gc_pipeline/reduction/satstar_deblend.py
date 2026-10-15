@@ -356,6 +356,8 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
                                    zeroframe, data, fwhm_pix,
                                    daophot_xy=None, confirm_xy=None,
                                    min_area=4, group0_saturated=None,
+                                   detector=None, defect_registry=None,
+                                   gate_diagnostics=None,
                                    **deblend_kwargs):
     """Expand per-connected-component satstar seeds into per-STAR seeds.
 
@@ -380,18 +382,28 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
     ``group0_saturated`` is the full-frame group-0 GROUPDQ-SATURATED mask
     (``saturated_star_finding._find_group0_saturation_for``), when available.
     Every proposed >=2-centre split is passed through
-    ``satstar_deblend_gate.gate_split_centers``, which REJECTS (collapses to
-    the single blob centroid) a split that is not independently confirmed by
-    >=2 distinct group-0-saturated cores -- see that module's docstring for
-    the measured precision/recall this gate achieves against data-qa's
-    10678 ground truth. ``group0_saturated=None`` fails closed: every
-    proposed split on that frame is rejected, same as if the gate had run and
-    found < 2 cores.
+    ``satstar_deblend_gate.gate_split_centers``, which keeps only the centres
+    independently confirmed by their OWN distinct, defect-filtered group-0
+    GROUPDQ-saturated core (1-to-1 nearest match, ``detector``/
+    ``defect_registry`` select the fixed-pattern exclusion list) and collapses
+    the whole split to the single blob centroid when fewer than 2 centres
+    survive -- see that module's docstring. ``group0_saturated=None`` fails
+    closed: every proposed split on that frame is rejected, same as if the
+    gate had run and found < 2 cores.
+
+    ``gate_diagnostics``, if given a dict, is updated in place with
+    ``n_multi_centre_proposed``, ``n_gate_unavailable`` (the independent
+    signal was ``None`` -- a silent-collapse frame that must stay visible;
+    see the "no silent frame drops" rule), ``n_gate_rejected`` and
+    ``n_gate_accepted`` counts, for the caller to log/stamp per-frame.
     """
     slices = ndimage.find_objects(sources)
     ceiling = robust_zf_ceiling(zeroframe)
     records = []
-    n_gated = 0
+    diag = gate_diagnostics if gate_diagnostics is not None else {}
+    for key in ('n_multi_centre_proposed', 'n_gate_unavailable',
+               'n_gate_rejected', 'n_gate_accepted'):
+        diag.setdefault(key, 0)
     for ii, com in enumerate(coms):
         label_id = ii + 1
         area = int(sizes_by_label[ii]) if ii < len(sizes_by_label) else 0
@@ -411,16 +423,28 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
         if not centers:
             centers = [com]
         if len(centers) >= 2:
+            diag['n_multi_centre_proposed'] += 1
             blob_mask = (sources == label_id)
-            centers, _n_g0 = gate_split_centers(
-                centers, com, blob_mask, sl, group0_saturated)
-            if len(centers) == 1:
-                n_gated += 1
+            centers, n_g0 = gate_split_centers(
+                centers, com, blob_mask, sl, group0_saturated,
+                detector=detector, registry=defect_registry, fwhm_pix=fwhm_pix)
+            if n_g0 is None:
+                diag['n_gate_unavailable'] += 1
+            elif len(centers) < 2:
+                diag['n_gate_rejected'] += 1
+            else:
+                diag['n_gate_accepted'] += 1
         for c in centers:
             records.append({'com': (float(c[0]), float(c[1])), 'label': label_id,
                             'forced': False, 'sat_area': area})
-    if n_gated:
-        print(f"satstar deblend gate: rejected {n_gated} unconfirmed multi-centre "
-              f"split(s) (< 2 independent group-0-saturated cores); collapsed "
-              f"to the single blob centroid", flush=True)
+    if diag['n_gate_unavailable']:
+        print(f"satstar deblend gate: UNAVAILABLE (no group-0-saturated signal) "
+              f"for {diag['n_gate_unavailable']} of {diag['n_multi_centre_proposed']} "
+              f"proposed multi-centre split(s) this frame; collapsed BLIND to "
+              f"the single blob centroid (gate could not run)", flush=True)
+    if diag['n_gate_rejected']:
+        print(f"satstar deblend gate: rejected {diag['n_gate_rejected']} unconfirmed "
+              f"multi-centre split(s) (insufficient independently-matched "
+              f"group-0-saturated cores); collapsed to the single blob centroid",
+              flush=True)
     return records
