@@ -24,7 +24,7 @@ HIPS_BASE = 'https://starformation.astro.ufl.edu/avm_images/'
 #: everywhere else: fixed cuts, so a given surface brightness is the same
 #: colour in every field.  A per-field stretch would make the pan read as
 #: brightness steps at every tile edge.
-SURVEY_URL = HIPS_BASE + 'jwst_gc_treasury_vminmax_hips/'
+SURVEY_URL = HIPS_BASE + 'jwst_gc_treasury_vminmax_satfill_hips/'
 
 #: The products the page can switch between, in menu order; the first is the
 #: default.  Each one gets its own tour, because the products do not cover the
@@ -45,7 +45,7 @@ SURVEY_URL = HIPS_BASE + 'jwst_gc_treasury_vminmax_hips/'
 #: caption's first sentence when the product is chosen.
 PRODUCTS = (
     {'key': 'nircam', 'label': 'NIRCam, fixed cuts',
-     'hips': 'jwst_gc_treasury_vminmax_hips',
+     'hips': 'jwst_gc_treasury_vminmax_satfill_hips',
      'layers': 'RGB_480-mean-212_vminmax', 'centre': 'nircam',
      'note': 'NIRCam <b>F212N + F480M</b>, one set of cuts for every field'},
     {'key': 'nircam-field', 'label': 'NIRCam, per-field stretch',
@@ -81,7 +81,7 @@ PRODUCTS = (
     {'key': 'rgb', 'label': 'MIRI + NIRCam (F770W / F480M / F212N)',
      'hips': 'gctreasury_mosaic_RGB_770-480-212_hips',
      'layers': 'MIRI_F770W', 'centre': 'miri', 'coverage': True,
-     'overlap': 'jwst_gc_treasury_vminmax_hips',
+     'overlap': 'jwst_gc_treasury_vminmax_satfill_hips',
      'note':'R = MIRI <b>F770W</b>, G = <b>F480M</b>, B = <b>F212N</b>, '
              'where MIRI and NIRCam overlap'},
 )
