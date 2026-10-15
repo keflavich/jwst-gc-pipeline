@@ -147,7 +147,7 @@ RGPS_COMPONENTS = (
 #: about 3.4% of F480M and 1.5% of F212N pixels.
 TREASURY_NIRCAM_HIPS = (
     'https://starformation.astro.ufl.edu/avm_images/'
-    'jwst_gc_treasury_vminmax_hips/')
+    'jwst_gc_treasury_vminmax_satfill_hips/')
 
 SURVEYS = (
     # NIRCam is deliberately NOT here -- see TREASURY_NIRCAM_HIPS above. It is

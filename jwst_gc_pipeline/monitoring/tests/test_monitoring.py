@@ -2321,7 +2321,7 @@ def test_the_nircam_imagery_is_the_fixed_cut_build():
     """
     from jwst_gc_pipeline.monitoring import skyview
     assert skyview.TREASURY_NIRCAM_HIPS.endswith(
-        '/jwst_gc_treasury_vminmax_hips/'), skyview.TREASURY_NIRCAM_HIPS
+        '/jwst_gc_treasury_vminmax_satfill_hips/'), skyview.TREASURY_NIRCAM_HIPS
 
 
 def test_no_two_nircam_layers_of_the_same_sky_are_drawn_at_once():
