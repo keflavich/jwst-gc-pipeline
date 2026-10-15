@@ -19,6 +19,8 @@ import numpy as np
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
+from .satstar_deblend_gate import gate_split_centers
+
 try:
     from skimage.feature import peak_local_max
     _HAVE_SKIMAGE = True
@@ -353,7 +355,8 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
 def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
                                    zeroframe, data, fwhm_pix,
                                    daophot_xy=None, confirm_xy=None,
-                                   min_area=4, **deblend_kwargs):
+                                   min_area=4, group0_saturated=None,
+                                   **deblend_kwargs):
     """Expand per-connected-component satstar seeds into per-STAR seeds.
 
     Drop-in replacement for the one-record-per-``coms``-entry loop in
@@ -373,10 +376,22 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
 
     Parameters mirror ``deblend_blob_zeroframe``.  ``zeroframe`` is the ZEROFRAME
     (frame zero) array from the matching ``_ramp.fits`` (raw DN).
+
+    ``group0_saturated`` is the full-frame group-0 GROUPDQ-SATURATED mask
+    (``saturated_star_finding._find_group0_saturation_for``), when available.
+    Every proposed >=2-centre split is passed through
+    ``satstar_deblend_gate.gate_split_centers``, which REJECTS (collapses to
+    the single blob centroid) a split that is not independently confirmed by
+    >=2 distinct group-0-saturated cores -- see that module's docstring for
+    the measured precision/recall this gate achieves against data-qa's
+    10678 ground truth. ``group0_saturated=None`` fails closed: every
+    proposed split on that frame is rejected, same as if the gate had run and
+    found < 2 cores.
     """
     slices = ndimage.find_objects(sources)
     ceiling = robust_zf_ceiling(zeroframe)
     records = []
+    n_gated = 0
     for ii, com in enumerate(coms):
         label_id = ii + 1
         area = int(sizes_by_label[ii]) if ii < len(sizes_by_label) else 0
@@ -395,7 +410,17 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
             centers = None
         if not centers:
             centers = [com]
+        if len(centers) >= 2:
+            blob_mask = (sources == label_id)
+            centers, _n_g0 = gate_split_centers(
+                centers, com, blob_mask, sl, group0_saturated)
+            if len(centers) == 1:
+                n_gated += 1
         for c in centers:
             records.append({'com': (float(c[0]), float(c[1])), 'label': label_id,
                             'forced': False, 'sat_area': area})
+    if n_gated:
+        print(f"satstar deblend gate: rejected {n_gated} unconfirmed multi-centre "
+              f"split(s) (< 2 independent group-0-saturated cores); collapsed "
+              f"to the single blob centroid", flush=True)
     return records

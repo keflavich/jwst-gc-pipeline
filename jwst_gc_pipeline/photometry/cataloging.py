@@ -2982,9 +2982,12 @@ def _satstar_recovery_signature(options):
     field of the recovery triple, so that with deblending OFF this returns
     byte-identical strings to the pre-#427 version: the ~409 cached catalogs in a single
     filter of brick alone stay valid for every run that does not ask for the
-    deblend.  The token carries a version: ``_dbl2`` since the deblender
-    resolves stars in large blended components (#1081), so deblended catalogs
-    seeded by the earlier deblender (``_dbl1``) are refit."""
+    deblend.  The token carries a version: ``_dbl3`` since
+    ``satstar_deblend_gate`` now rejects a proposed split that is not
+    independently confirmed by >=2 group-0-saturated cores (data-qa measured
+    most ``_dbl2`` splits are unconfirmed PSF-sidelobe artifacts, 10678
+    2026-10-15), so deblended catalogs built under ``_dbl2`` (ungated) or
+    ``_dbl1`` (the earlier deblender) are refit."""
     zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
     ramp = bool(getattr(options, 'satstar_ramp_recover', False))
     deblend = bool(getattr(options, 'deblend_satstars', False))
@@ -2993,7 +2996,7 @@ def _satstar_recovery_signature(options):
     else:
         base = "zf%d_ramp%d_dil%d" % (
             int(zf), int(ramp), int(getattr(options, 'satstar_zeroframe_dilate', 3)))
-    return base + "_dbl2" if deblend else base
+    return base + "_dbl3" if deblend else base
 
 
 def _fill_saturated_pixels(filename, data, dqarr, was_sat, finite_model,

@@ -3556,7 +3556,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         source_records = build_deblended_source_records(
             saturated, sources, coms, _sizes_by_label, zeroframe, data,
             _fwhm_pix_db, daophot_xy=deblend_daophot_xy,
-            confirm_xy=deblend_confirm_xy)
+            confirm_xy=deblend_confirm_xy,
+            group0_saturated=zeroframe_group0_saturated)
         # Inherit each record's PARENT COMPONENT seed kind via its stamped
         # label; the bare 'dqsat' default reported every deblended seed as DQ
         # even when it came from the peak / subfloor / partner logic (#212).
