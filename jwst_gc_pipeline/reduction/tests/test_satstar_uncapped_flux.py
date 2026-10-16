@@ -36,19 +36,18 @@ def test_list_parsing():
     assert got == {'F323N', 'F405N', 'F466N'}
 
 
-def test_default_is_noop_but_column_present():
+def test_default_is_noop_and_schema_unchanged():
     t = _tab()
     ref = t.copy()
     out = apply_uncapped_flux(t, 'F323N', env={})
+    assert out.colnames == ref.colnames
     for c in ref.colnames:
         np.testing.assert_array_equal(out[c], ref[c])
-    assert out['flux_uncapped'].dtype == bool
-    assert not out['flux_uncapped'].any()
 
 
 def test_unlisted_band_untouched():
     out = apply_uncapped_flux(_tab(), 'F212N', env={ENV: 'F323N'})
-    assert not out['flux_uncapped'].any()
+    assert 'flux_uncapped' not in out.colnames
     np.testing.assert_allclose(out['flux_fit'], [80., 200., 300., 400 / 1.1])
 
 

@@ -1284,8 +1284,9 @@ def apply_uncapped_flux(base_tab, filtername, env=None):
     ratio, 1 where none was applied, so the pooled fallback in
     ``merge_catalogs.apply_pooled_wingcal`` still divides it afterwards) and
     ``flux_err`` is multiplied by the same factor as ``flux_fit`` changed,
-    which keeps the row's S/N.  ``flux_uncapped`` (bool, present in every
-    table) marks the replaced rows.
+    which keeps the row's S/N.  ``flux_uncapped`` (bool) marks the replaced
+    rows; it is added only for listed bandpasses, so the default catalog
+    schema (and per-frame catalogs cached before this switch) is unchanged.
 
     ``flux_fit_raw``, ``flux_fit_precap``, the satstar model and the residual
     are untouched.  Out-of-field (``outside_fov_seed``) rows are skipped: their
@@ -1295,10 +1296,11 @@ def apply_uncapped_flux(base_tab, filtername, env=None):
     listed carry ``uf`` in ``satstar_fit_switch_signature``."""
     if base_tab is None:
         return base_tab
+    if str(filtername).upper() not in satstar_uncapped_flux_filters(env):
+        return base_tab
     n = len(base_tab)
     replaced = np.zeros(n, dtype=bool)
-    if (n and str(filtername).upper() in satstar_uncapped_flux_filters(env)
-            and 'flux_fit_precap' in base_tab.colnames):
+    if n and 'flux_fit_precap' in base_tab.colnames:
         flux = np.asarray(base_tab['flux_fit'], dtype=float)
         ratio = (np.asarray(base_tab['wingcal_ratio'], dtype=float)
                  if 'wingcal_ratio' in base_tab.colnames else np.ones(n))
