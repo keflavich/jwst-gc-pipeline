@@ -61,7 +61,7 @@ KEYS = ("obs_title", "hips_initial_ra", "hips_initial_dec", "hips_initial_fov",
 #: renders WITH a radio overlay (Brick_*_alma, GCTreasury_radio_*) are.
 FIELD_HIPS = {
     "arches": (r"^arches_", r"^ArchesQuintuplet_"),
-    "quintuplet": (r"^Quintuplet_", r"^ArchesQuintuplet_"),
+    "quintuplet": (r"^Quintuplet_", r"^quintuplet_", r"^ArchesQuintuplet_"),
     "brick": (r"^Brick(JWST)?_",),
     "cloudc": (r"^cloudcJWST_", r"^CloudC_"),
     "cloudef_controlfield": (r"^Cloudef_", r"^CloudefControl_"),
@@ -93,6 +93,8 @@ CMZ_WIDE_HIPS = ("jwst_nir_hips", "jwst_miri_hips", "jwst_gc_treasury_hips",
 #: Aladin Lite tours of one field, as (page under TOUR_BASE, title).
 FIELD_TOURS = {
     "arches": (("arches_wavelength_tour_linear.html", "Arches wavelength explorer (linear)"),),
+    "quintuplet": (("quintuplet_wavelength_tour_linear.html",
+                    "Quintuplet wavelength explorer (linear)"),),
     "brick": (("brick_wavelength_tour_linear.html", "Brick wavelength explorer (linear)"),
               ("brick_wavelength_tour_other.html", "Brick wavelength explorer (other)")),
     "cloudef_controlfield": (("cloudef_wavelength_tour_linear.html",
