@@ -50,6 +50,36 @@ flux (1-2 pixel spikes):
 leave PSF-matched S/N > 10 in the m7 residual: cloudc 12.6%, sgrc 2.0%. The
 cloudc failures are spread uniformly over the field (`figures/cloudc_f212n_ctrl_map.png`).
 
+## Re-run with this fix (2026-10-15/16)
+
+cloudc and gc2211 o050 were re-reduced on 98151f91 + this commit (auto
+policy). Every pass of both fields logged `RUNNING outlier_detection`. The
+regenerated crf all carry `S_OUTLIR = COMPLETE`.
+
+**cloudc F212N merged mosaic.** In the 400 fixed stamps it has 68 sharp
+pixels: 68 pre-rerun, 413 retie. Its pixels match the pre-rerun
+(2026-08-26) mosaic exactly (maximum |difference| = 0 over all 400 stamps),
+so the re-reduction reproduces the August cosmic-ray rejection.
+
+**o050 m7** (`scripts/o050_compare.py`, `results/o050_m7_compare.json`).
+"Before" is the 2026-10-10 retie m7, with no cosmic-ray rejection. "After" is
+the re-catalogued m7. The S/N figures are the PSF-matched residual S/N at every
+vetted star in that product's own m7 residual. The sharp-pixel counts use the
+same 2000 random sky positions in both products.
+
+| o050 m7 | vetted stars | resid S/N > 10 | p99 S/N | sharp px |
+|---|---|---|---|---|
+| F200W before | 187,637 | 2.40% | 15.8 | 399 |
+| F200W after | 186,332 | 2.00% | 14.0 | 341 |
+| F277W before | 54,551 | 0.79% | 8.8 | 289 |
+| F277W after | 54,956 | 0.69% | 8.1 | 301 |
+
+The o050 change is smaller than the cloudc F212N regression. In the
+wide bands each cosmic ray stands against a higher sky level than in a narrow
+band; that is the likely reason, but it has not been measured here. The
+largest o050 residuals are bright-star cores (`figures/o050_m7_gallery.png`),
+which are the same before and after and are a separate PSF-model issue.
+
 ## Figures
 
 * `figures/cloudc_f212n_bad_50_150.png`, `figures/cloudc_f212n_bad_500_5000.png`
@@ -61,6 +91,10 @@ cloudc failures are spread uniformly over the field (`figures/cloudc_f212n_ctrl_
   after, with stamp galleries.
 * `figures/{cloudc,sgrc}_f212n_ctrl_map.png` -- position maps of the S/N > 10
   stars and that fraction against catalogue flux.
+* `figures/o050_m7_ctrl.png` -- o050 F200W/F277W m7 before | after maps of
+  vetted stars with residual S/N > 10, and the S/N histograms.
+* `figures/o050_m7_gallery.png` -- m7 residual before | after at the 12
+  worst-residual vetted stars of the retie product.
 
 ## Scripts
 
@@ -72,6 +106,8 @@ the `sys.path` lines at the top of each script point there.
 * `ctrl_map.py <field> <FILT> <out>` -- control-sample residual S/N map.
 * `cutouts.py <field> <FILT> <fmin> <fmax>` -- the bad-star galleries.
 * `spikes.py <fields...>` -- the sharp-pixel count.
+* `o050_compare.py <out>` -- o050 m7 before/after (reads the retie m7 snapshot
+  from `prod_before/gc2211_o050_retie/` and the live products).
 
 ## Fix
 

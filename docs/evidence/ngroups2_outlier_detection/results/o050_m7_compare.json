@@ -1,0 +1,86 @@
+{
+ "F200W": {
+  "before": {
+   "n_vetted": 187637,
+   "n_sampled": 187637,
+   "p50": 0.7403080307728024,
+   "p90": 5.111648048714865,
+   "p99": 15.842114119136014,
+   "frac_gt10": 0.024009124000063952,
+   "sharp_px_2000_stamps": 399,
+   "resid": "<scratch>/prod_before/gc2211_o050_retie/jw02211-o050_t001_nircam_clear-f200w-nrcb_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+   "vetted": "<scratch>/prod_before/gc2211_o050_retie/f200w_nrcb_o050_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+   "vetted_mtime": 1791663190.0,
+   "resid_mtime": 1791664495.0
+  },
+  "after": {
+   "n_vetted": 186332,
+   "n_sampled": 186332,
+   "p50": 0.7235938321566535,
+   "p90": 4.953969186356069,
+   "p99": 14.013940953340914,
+   "frac_gt10": 0.019964364682394865,
+   "sharp_px_2000_stamps": 341,
+   "resid": "/orange/adamginsburg/jwst/gc2211_o050/F200W/pipeline/jw02211-o050_t001_nircam_clear-f200w-nrcb_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+   "vetted": "/orange/adamginsburg/jwst/gc2211_o050/catalogs/f200w_nrcb_o050_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+   "vetted_mtime": 1792179575.0,
+   "resid_mtime": 1792180908.0
+  },
+  "gallery_before_snr": [
+   674.1945932495597,
+   664.830047325928,
+   645.3810792568662,
+   633.3813971686412,
+   618.3604880320659,
+   592.4696656460717,
+   591.6417843645494,
+   584.5168194072646,
+   582.85162399298,
+   567.6930847248548,
+   567.3786411440044,
+   562.8403861393333
+  ]
+ },
+ "F277W": {
+  "before": {
+   "n_vetted": 54551,
+   "n_sampled": 54551,
+   "p50": -0.1240448957586288,
+   "p90": 2.842140927213768,
+   "p99": 8.812088145416011,
+   "frac_gt10": 0.007864200472951917,
+   "sharp_px_2000_stamps": 289,
+   "resid": "<scratch>/prod_before/gc2211_o050_retie/jw02211-o050_t001_nircam_clear-f277w-nrcb_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+   "vetted": "<scratch>/prod_before/gc2211_o050_retie/f277w_nrcb_o050_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+   "vetted_mtime": 1791665002.0,
+   "resid_mtime": 1791665367.0
+  },
+  "after": {
+   "n_vetted": 54956,
+   "n_sampled": 54956,
+   "p50": -0.222114273079686,
+   "p90": 2.6954806778142837,
+   "p99": 8.139182484943474,
+   "frac_gt10": 0.006896426231894607,
+   "sharp_px_2000_stamps": 301,
+   "resid": "/orange/adamginsburg/jwst/gc2211_o050/F277W/pipeline/jw02211-o050_t001_nircam_clear-f277w-nrcb_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+   "vetted": "/orange/adamginsburg/jwst/gc2211_o050/catalogs/f277w_nrcb_o050_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+   "vetted_mtime": 1792181475.0,
+   "resid_mtime": 1792181850.0
+  },
+  "gallery_before_snr": [
+   586.4536541929924,
+   497.193217134562,
+   427.68558953453964,
+   360.3092729183688,
+   313.47253456952956,
+   251.0956139048846,
+   227.45325066674582,
+   183.76341776520434,
+   118.2933817383326,
+   117.10301510562164,
+   109.57109511396632,
+   105.45300705673864
+  ]
+ }
+}
