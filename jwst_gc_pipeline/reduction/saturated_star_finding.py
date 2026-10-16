@@ -1244,6 +1244,84 @@ def _satstar_data_floor_signature(filename, env=None):
     return ''
 
 
+def satstar_uncapped_flux_filters(env=None):
+    """Bandpasses whose satstar CATALOG flux is reported without the
+    recovered-core cap, from ``NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS``.
+
+    Comma- and/or space-separated bandpass names, case-insensitive (returned
+    upper-case); unset or blank -> empty, i.e. no behaviour change.  See
+    ``apply_uncapped_flux`` (#1186)."""
+    env = os.environ if env is None else env
+    raw = env.get('NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS') or ''
+    return frozenset(tok.upper() for tok in raw.replace(',', ' ').split())
+
+
+def _frame_bandpass(header):
+    """The science bandpass of an exposure header (pupil-wheel narrow/medium
+    bands win over the wide filter-wheel blocker, #950), upper-case; ``''``
+    when the header names no bandpass."""
+    from ..mast_names import filtername_from_header
+    try:
+        return str(filtername_from_header(header)).upper()
+    except (ValueError, KeyError):
+        return ''
+
+
+def apply_uncapped_flux(base_tab, filtername, env=None):
+    """Opt-in "option B" for the recovered-core cap (#1186): report the
+    UNCAPPED satstar flux in the catalog while the model and residual keep
+    the capped amplitude.
+
+    ``NIRCAM_SATSTAR_RECOVERED_CAP`` lowers ``flux_fit`` (the pre-cap value is
+    kept in ``flux_fit_precap``).  In wd2 that leaves F323N/F405N/F466N
+    saturated stars +0.03..+0.05 mag faint against dolphot and the
+    unsaturated scale, and the capped catalog flux carries more frame-to-frame
+    scatter.  When ``filtername`` is listed in
+    ``NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS`` (see
+    ``satstar_uncapped_flux_filters``), every row whose cap bound
+    (finite ``flux_fit_precap`` > the capped flux) gets
+    ``flux_fit = flux_fit_precap / wingcal_ratio`` (the wing self-calibration
+    ratio, 1 where none was applied, so the pooled fallback in
+    ``merge_catalogs.apply_pooled_wingcal`` still divides it afterwards) and
+    ``flux_err`` is multiplied by the same factor as ``flux_fit`` changed,
+    which keeps the row's S/N.  ``flux_uncapped`` (bool, present in every
+    table) marks the replaced rows.
+
+    ``flux_fit_raw``, ``flux_fit_precap``, the satstar model and the residual
+    are untouched.  Out-of-field (``outside_fov_seed``) rows are skipped: their
+    ``flux_fit`` feeds ``reconcile_outside_fov_satstar_fluxes`` ->
+    ``flux_overrides``, which sets the amplitude of the forced model, so
+    uncapping them would change a subtracted model.  Frames whose bandpass is
+    listed carry ``uf`` in ``satstar_fit_switch_signature``."""
+    if base_tab is None:
+        return base_tab
+    n = len(base_tab)
+    replaced = np.zeros(n, dtype=bool)
+    if (n and str(filtername).upper() in satstar_uncapped_flux_filters(env)
+            and 'flux_fit_precap' in base_tab.colnames):
+        flux = np.asarray(base_tab['flux_fit'], dtype=float)
+        ratio = (np.asarray(base_tab['wingcal_ratio'], dtype=float)
+                 if 'wingcal_ratio' in base_tab.colnames else np.ones(n))
+        raw = (np.asarray(base_tab['flux_fit_raw'], dtype=float)
+               if 'flux_fit_raw' in base_tab.colnames else flux * ratio)
+        pre = np.asarray(base_tab['flux_fit_precap'], dtype=float)
+        with np.errstate(invalid='ignore'):
+            replaced = np.isfinite(pre) & np.isfinite(raw) & (raw > 0) & (pre > raw)
+        if 'outside_fov_seed' in base_tab.colnames:
+            replaced &= ~np.asarray(base_tab['outside_fov_seed'], dtype=bool)
+        if replaced.any():
+            factor = np.where(replaced, pre / np.where(raw > 0, raw, 1.0), 1.0)
+            base_tab['flux_fit'] = np.where(replaced, pre / ratio, flux)
+            if 'flux_err' in base_tab.colnames:
+                base_tab['flux_err'] = (
+                    np.asarray(base_tab['flux_err'], dtype=float) * factor)
+            print(f"uncapped flux: {filtername}: {int(replaced.sum())}/{n} "
+                  f"satstar catalog flux(es) reported without the "
+                  f"recovered-core cap", flush=True)
+    base_tab['flux_uncapped'] = replaced
+    return base_tab
+
+
 def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
                                  env=None):
     """Cache key for the ``satstar_fit_switches`` of one frame.
@@ -1318,6 +1396,19 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
+    if satstar_uncapped_flux_filters(env):
+        # NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS changes the per-frame catalog
+        # flux_fit/flux_err (not the model) of the listed bandpasses (#1186),
+        # so a catalog written without it is stale there.  Only a frame whose
+        # own bandpass is listed gets the part; the default (empty list) and
+        # every unlisted band keep their keys.
+        try:
+            with fits.open(filename) as fh:
+                _bp = _frame_bandpass(fh[0].header)
+        except OSError:
+            _bp = ''
+        if _bp in satstar_uncapped_flux_filters(env):
+            parts.append('uf')
     return '_'.join(parts)
 
 
@@ -5817,6 +5908,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             base_tab, data - full_model_image, err_working, saturated,
             big_grid, fwhm_pix=float(_fwhm_wc),
             severity_floor=float(_sev_floor or 0.0))
+        # Opt-in uncapped catalog flux (#1186): catalog only, model unchanged.
+        base_tab = apply_uncapped_flux(base_tab, get_filtername(header))
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
