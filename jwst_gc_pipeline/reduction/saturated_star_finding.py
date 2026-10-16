@@ -666,8 +666,12 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     #     The FIT has never used `saturated & _unrecoverable` -- that pair only
     #     sets a diagnostic flag bit below -- and `isnan(VAR_POISSON)` is not a
     #     portable truly-lost test anyway: on a _cal product it can be empty
-    #     while every SATURATED pixel is DO_NOT_USE, and on the _crf sibling it
-    #     covers all of them.
+    #     while every SATURATED pixel is DO_NOT_USE.  Where it is populated it
+    #     marks only the SATURATED pixels with no good group (SATURATED &
+    #     DO_NOT_USE, SCI/ERR/VAR_* all NaN), not every SATURATED pixel: on
+    #     the 10678 _cal and _destreak_crf frames that is 14.7% of them on
+    #     NRCBLONG F480M and 22% on NRCB1, and the rest kept a finite
+    #     ramp-fit rate and variance (identical counts in _cal and _crf).
     #     OPEN (#213): whether frame0-recovered wings should instead be fit
     #     -- see #213 and SATURATED_PIXEL_HANDLING.md section 2b.
     # SATSTAR_SEED_REQUIRE_DO_NOT_USE=1 restores the old narrow seed, for
@@ -1507,7 +1511,9 @@ def seed_saturation_core(unrecoverable, dq, env=None):
 def zeroframe_rim_error(data, err, rim, *, floor=True):
     """1-sigma fit error with the ZEROFRAME-rewritten rim filled in.
 
-    The crf ERR is NaN at SATURATED pixels.  A rewritten rim pixel gets 5% of
+    The crf ERR is NaN at SATURATED pixels with no good group (DO_NOT_USE),
+    which the rewrite covers; SATURATED pixels with a good group keep a finite
+    ERR and are left alone below.  A rewritten rim pixel gets 5% of
     its value (the per-pixel scatter of the R calibration).  With ``floor``
     that error is at least the median finite, positive ERR of the frame: a
     value read from a single group cannot be measured better than a typical
@@ -3762,7 +3768,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # non-positive ERR (saturated / unrecoverable pixels) is set huge so those
     # pixels carry ~zero weight even if the mask were to miss them.
     err_working = np.array(fitsdata['ERR'].data, dtype=float)
-    # recovered rim pixels carry no valid ERR (NaN at SATURATED px in crf);
+    # recovered rim pixels carry no valid ERR (NaN at SATURATED & DO_NOT_USE
+    # px, i.e. no good group, in the crf);
     # assign the ~5% per-pixel scatter of the R calibration so the fit can
     # inverse-variance weight them instead of dropping/inf-weighting.
     if zf_deep_core is not None:
@@ -5358,9 +5365,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         # Post-fit severity gate (NIRCam in-FOV): a genuine saturated star's
         # model must at least reach its filter's saturation level at its own peak.
-        # In the crf products every SATURATED pixel is blanked (SCI and
-        # VAR_POISSON both NaN), so neither the data nor the variance can tell a
-        # real saturated core from the any-group over-flag -- but the fit can.
+        # The crf SATURATED bit is any-group: it flags a core that lost every
+        # group (DO_NOT_USE; SCI and VAR_POISSON both NaN) and, far more
+        # often, pixels that saturated only in a late group and kept a finite
+        # ramp-fit rate (85% of SATURATED pixels on 10678 F480M NRCBLONG,
+        # _cal and _destreak_crf alike).  The DQ alone cannot tell a real
+        # saturated core from that over-flag -- but the fit can.
         # 0.5x margin for wing-fit scatter on borderline saturation.  Rejects
         # are handed to the daophot channel: they are persisted to
         # *_satstar_rejected.fits with reject_reason='implied_peak_gate', and
