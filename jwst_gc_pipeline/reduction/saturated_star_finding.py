@@ -550,7 +550,7 @@ def _resolve_satstar_severity_floor(filtername, explicit=None):
 
 #: Columns of ``*_satstar_severity_dropped.fits``.
 SEVERITY_DROP_COLUMNS = ('xcentroid', 'ycentroid', 'core_peak', 'npix',
-                         'sat_severity_floor')
+                         'sat_severity_floor', 'sat_data_floor')
 
 
 def severity_drop_records(sci, sources, drop_lab, core_peak):
@@ -573,7 +573,7 @@ def severity_drop_records(sci, sources, drop_lab, core_peak):
                                 np.atleast_1d(npix))]
 
 
-def severity_drop_table(records, saturated, severity_floor):
+def severity_drop_table(records, saturated, severity_floor, data_floor=None):
     """``*_satstar_severity_dropped.fits`` rows: severity-gate drops that no
     later seeding put back.
 
@@ -585,6 +585,12 @@ def severity_drop_table(records, saturated, severity_floor):
     core is masked out of the daophot fit, so neither channel models them
     unless they are handed off (cataloging ``_severity_drop_handoff_xy``).
     Always returns a table (possibly empty) so a rerun overwrites a stale file.
+
+    ``data_floor`` (the frame's ``sat_data_floor``, 0 when off) is stored per
+    row for the hand-off's transient guard: a drop whose own ``core_peak`` is
+    below it is not handed off.  The data-floor gate tests the 5 px maximum
+    filter, so a cosmic-ray SATURATED block on the sky next to an unsaturated
+    star passes it on the star's pixels.
     """
     keep = []
     ny, nx = np.shape(saturated)
@@ -598,7 +604,8 @@ def severity_drop_table(records, saturated, severity_floor):
          'ycentroid': np.array([r['ycentroid'] for r in keep], dtype=float),
          'core_peak': np.array([r['core_peak'] for r in keep], dtype=float),
          'npix': np.array([r['npix'] for r in keep], dtype=int),
-         'sat_severity_floor': np.full(len(keep), float(severity_floor or 0.0))})
+         'sat_severity_floor': np.full(len(keep), float(severity_floor or 0.0)),
+         'sat_data_floor': np.full(len(keep), float(data_floor or 0.0))})
     tab.meta['NDROPPED'] = len(records)  # gate drops before re-seeding
     return tab
 
@@ -3490,7 +3497,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # seeding took back: remove_saturated_stars persists them for the
     # daophot hand-off (severity_drop_table).
     builtins.satstar_severity_dropped = severity_drop_table(
-        _severity_drops, saturated, _sev_floor)
+        _severity_drops, saturated, _sev_floor, data_floor=_sat_floor)
     if len(_severity_drops):
         print(f"Saturated starfinding: {len(builtins.satstar_severity_dropped)} "
               f"of {len(_severity_drops)} severity-gate drop(s) were not "
