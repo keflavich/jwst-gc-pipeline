@@ -99,11 +99,11 @@ def photometric_precision(inv, outdir, max_sources=400000):
             if cp.size:
                 ax.plot(cp, pp[50], color=colors[filt], lw=1.2, ls='--',
                         label='propagated')
-            # The ratio divides by the FORMAL error, so both must be positive:
+            # The ratio divides by flux_err, so both errors must be positive:
             # gate on good (frac>0) as well as good_p, or a flux_err==0 row
-            # contributes inf and np.nanmedian keeps it -- which prints a dash
-            # while median_ratio>1.5 still fires the "use the propagated error"
-            # paragraph attached to that dash.
+            # contributes inf and np.nanmedian keeps it.  The ratio itself is
+            # ~1/sqrt(n) by construction (flux_err_prop is the error of the
+            # averaged flux, flux_err that of one exposure; #1024).
             g = good & good_p
             if g.any():
                 err_ratio[filt] = float(np.nanmedian(frac_prop[g] / frac[g]))
@@ -135,7 +135,7 @@ def photometric_precision(inv, outdir, max_sources=400000):
         r'with \code{flux\_err\_prop}, the formal uncertainty of the averaged '
         r'flux (about \code{flux\_err}/$\sqrt{n}$). The dotted horizontal line '
         r'is $\sigma_F/F = 0.2$, and where the solid median crosses it is quoted '
-        r'as the $5\sigma$ depth. Both are formal errors: terms shared by every '
+        r'as the $5\sigma$ depth, which is the depth of a single exposure. Both are formal errors: terms shared by every '
         'exposure (background model, neighbour model, seed position) are in '
         'neither.')
     return FigureResult('D4_photometry_precision', path, caption, 'photometry',
