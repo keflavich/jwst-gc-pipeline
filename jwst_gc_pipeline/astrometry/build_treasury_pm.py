@@ -344,28 +344,8 @@ def _median_and_err(x):
     return med, 1.2533 * mad / np.sqrt(len(x))
 
 
-def saturation_pm_offset(pm, which, max_offset=SAT_PM_OFFSET_MAS_YR,
-                         nsigma=SAT_PM_OFFSET_NSIGMA, min_n=SAT_PM_OFFSET_MIN_N):
-    """Median trustworthy PM of saturated-star-replaced rows minus that of
-    the other trustworthy rows, for ``which`` in ('src', 'ref').
-
-    The frame tie (brightest 20% of src) is dominated by unsaturated stars,
-    so a position bias in the saturated-star fit of ONE epoch passes
-    straight into those stars' PMs as a common offset: a step in PM at the
-    saturation magnitude. Returns a dict with n_sat, n_unsat, the offset
-    and its standard error per axis, and ``offset`` (True when either axis
-    exceeds ``max_offset`` mas/yr AND ``nsigma`` standard errors), or None
-    when the column is missing or either population has < ``min_n`` rows.
-    """
-    col = f'{which}_saturated'
-    if col not in pm.colnames:
-        return None
-    g = np.asarray(pm['trustworthy'], bool)
-    sat = np.asarray(pm[col], bool)
-    a, b = g & sat, g & ~sat
-    if a.sum() < min_n or b.sum() < min_n:
-        return None
-    res = dict(which=which, n_sat=int(a.sum()), n_unsat=int(b.sum()), offset=False)
+def _offset_between(pm, a, b, dt, max_offset, nsigma):
+    res = dict(n_sat=int(a.sum()), n_unsat=int(b.sum()), offset=False)
     for ax in ('pm_ra', 'pm_dec'):
         x = np.asarray(pm[ax], float)
         ms, es = _median_and_err(x[a])
@@ -373,9 +353,88 @@ def saturation_pm_offset(pm, which, max_offset=SAT_PM_OFFSET_MAS_YR,
         d, e = ms - mu, float(np.hypot(es, eu))
         res[f'd_{ax}'] = round(d, 3)
         res[f'd_{ax}_err'] = round(e, 3)
+        # the epoch-to-epoch position offset this PM offset implies
+        res[f'd_{ax.replace("pm_", "pos_")}_mas'] = round(d * dt, 1)
         if abs(d) > max_offset and abs(d) > nsigma * e:
             res['offset'] = True
     return res
+
+
+def saturation_pm_offset(pm, max_offset=SAT_PM_OFFSET_MAS_YR,
+                         nsigma=SAT_PM_OFFSET_NSIGMA, min_n=SAT_PM_OFFSET_MIN_N):
+    """Saturated-minus-unsaturated median trustworthy PM, per epoch.
+
+    The frame tie (brightest 20% of src) is dominated by unsaturated stars,
+    so a position bias in the saturated-star fit of ONE epoch passes
+    straight into those stars' PMs as a common offset: a step in PM at the
+    saturation magnitude.
+
+    A PM difference alone cannot say WHICH epoch's positions are biased, and
+    a star saturated in both epochs carries either epoch's bias. Each
+    epoch's diagnostic therefore uses the rows saturated ONLY in that epoch
+    (src: ``src_saturated & ~ref_saturated``; ref: the converse), compared
+    against rows saturated in neither. Rows saturated in both form a third,
+    'both' entry, which can show that an offset exists but cannot attribute
+    it.
+
+    Returns a list of dicts, ``which`` in ('src', 'ref', 'both'), each with
+    n_sat, n_unsat, d_pm_ra/d_pm_dec (+ _err, mas/yr), the implied position
+    offset d_pos_ra_mas/d_pos_dec_mas (= d_pm * baseline) and ``offset``
+    (True when either axis exceeds ``max_offset`` mas/yr AND ``nsigma``
+    standard errors). An entry is omitted when its saturated set or the
+    neither-saturated set has < ``min_n`` trustworthy rows. When only one of
+    the src/ref columns exists, rows are attributed to that epoch alone.
+    """
+    g = np.asarray(pm['trustworthy'], bool)
+    have = {w: f'{w}_saturated' in pm.colnames for w in ('src', 'ref')}
+    if not any(have.values()):
+        return []
+    sat = {w: (np.asarray(pm[f'{w}_saturated'], bool) if have[w]
+               else np.zeros(len(pm), bool)) for w in ('src', 'ref')}
+    neither = g & ~sat['src'] & ~sat['ref']
+    dt = float(pm.meta.get('baseline_yr', np.nan))
+    sets = {'src': g & sat['src'] & ~sat['ref'],
+            'ref': g & sat['ref'] & ~sat['src'],
+            'both': g & sat['src'] & sat['ref']}
+    out = []
+    if neither.sum() < min_n:
+        return out
+    for which, a in sets.items():
+        if which != 'both' and not have[which]:
+            continue
+        if a.sum() < min_n:
+            continue
+        res = dict(which=which)
+        res.update(_offset_between(pm, a, neither, dt, max_offset, nsigma))
+        out.append(res)
+    return out
+
+
+def saturation_offset_epochs(diags):
+    """From saturation_pm_offset's output: (epochs whose saturated positions
+    are offset, unattributed).
+
+    An epoch is blamed when its own exclusive set is offset. An offset seen
+    only in the saturated-in-both set is attributed by elimination when the
+    OTHER epoch's exclusive set exists and is clean (that epoch's saturated
+    positions agree with its unsaturated frame), e.g. Quintuplet v6: every
+    src-saturated star is also ref-saturated, but 3,011 ref-only saturated
+    stars show no offset, so the 'both' offset comes from src. With neither
+    exclusive set available, ``unattributed`` is True and no epoch is
+    blamed.
+    """
+    by = {d['which']: d for d in diags}
+    epochs = [w for w in ('src', 'ref') if w in by and by[w]['offset']]
+    both_off = 'both' in by and by['both']['offset']
+    if both_off and not epochs:
+        # 'clean' needs the sensitivity to have seen the offset
+        clean = [w for w in ('src', 'ref') if w in by and not by[w]['offset']
+                 and SAT_PM_OFFSET_NSIGMA * max(by[w]['d_pm_ra_err'],
+                                                by[w]['d_pm_dec_err'])
+                 < SAT_PM_OFFSET_MAS_YR]
+        if len(clean) == 1:
+            epochs = [{'src': 'ref', 'ref': 'src'}[clean[0]]]
+    return epochs, (both_off and not epochs)
 
 
 def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
@@ -414,31 +473,43 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     # if needed.
     pm.meta['tie_diag_json'] = json.dumps(diags)
     pm.meta['ref_paths_json'] = json.dumps([os.path.basename(q) for q in ref_paths])
-    # Saturated-star PM offset check (both epochs). An offset saturated
-    # population is a catalog-side position bias, not a motion: report it,
-    # and (by default) remove those rows from 'trustworthy' so downstream
-    # products do not carry a PM step at the saturation magnitude. The
-    # untouched flag is kept as 'trustworthy_presat'.
-    sat_diag = [d for d in (saturation_pm_offset(pm, w) for w in ('src', 'ref'))
-                if d is not None]
+    # Saturated-star PM offset check (see saturation_pm_offset). An offset
+    # saturated population is a catalog-side position bias, not a motion:
+    # report it, and (by default) remove the affected rows from
+    # 'trustworthy' so downstream products do not carry a PM step at the
+    # saturation magnitude. 'trustworthy_presat' always holds the flag
+    # before this step.
+    sat_diag = saturation_pm_offset(pm)
     pm.meta['sat_pm_offset_json'] = json.dumps(sat_diag)
-    if any(d['offset'] for d in sat_diag):
-        pm['trustworthy_presat'] = pm['trustworthy'].copy()
+    pm['trustworthy_presat'] = pm['trustworthy'].copy()
     for d in sat_diag:
         if verbose or d['offset']:
-            print(f'  saturated-star PM offset ({d["which"]}): '
+            label = ('saturated in both epochs' if d['which'] == 'both'
+                     else f'saturated in {d["which"]} only')
+            print(f'  saturated-star PM offset ({label} vs neither): '
                   f'n_sat={d["n_sat"]:,} n_unsat={d["n_unsat"]:,} '
                   f'd_pm_ra={d["d_pm_ra"]:+.2f}+-{d["d_pm_ra_err"]:.2f} '
-                  f'd_pm_dec={d["d_pm_dec"]:+.2f}+-{d["d_pm_dec_err"]:.2f} mas/yr')
-        if d['offset']:
-            print(f'  WARNING: {d["which"]}-epoch saturated-star-replaced positions '
-                  f'are offset from the unsaturated frame (PM step at the '
-                  f'saturation magnitude); re-catalog the {d["which"]} epoch with '
-                  f'the current saturated_star_finding before using bright-star PMs.'
-                  + (f' {d["n_sat"]:,} rows removed from trustworthy.'
-                     if demote_offset_saturated else ''))
-            if demote_offset_saturated:
-                pm['trustworthy'] &= ~np.asarray(pm[f'{d["which"]}_saturated'], bool)
+                  f'd_pm_dec={d["d_pm_dec"]:+.2f}+-{d["d_pm_dec_err"]:.2f} mas/yr '
+                  f'(position {d["d_pos_ra_mas"]:+.1f}, {d["d_pos_dec_mas"]:+.1f} mas)')
+    epochs, unattributed = saturation_offset_epochs(sat_diag)
+    demote = np.zeros(len(pm), bool)
+    for w in epochs:
+        print(f'  WARNING: {w}-epoch saturated-star-replaced positions are offset '
+              f'from the unsaturated frame (PM step at the saturation magnitude); '
+              f're-catalog the {w} epoch with the current saturated_star_finding '
+              f'before using bright-star PMs.')
+        demote |= np.asarray(pm[f'{w}_saturated'], bool)
+    if unattributed:
+        print('  WARNING: stars saturated in BOTH epochs show a PM offset, but '
+              'cannot attribute it to an epoch (too few stars saturated in only '
+              'one epoch); check both epochs\' saturated-star positions.')
+        demote |= (np.asarray(pm['src_saturated'], bool) &
+                   np.asarray(pm['ref_saturated'], bool))
+    if demote_offset_saturated and demote.any():
+        n_dem = int((pm['trustworthy'] & demote).sum())
+        pm['trustworthy'] &= ~demote
+        print(f'  {n_dem:,} saturated rows removed from trustworthy '
+              f'(trustworthy_presat keeps them).')
     pm.write(out_path, overwrite=True)
     ntrust = int(pm['trustworthy'].sum())
     if verbose:
