@@ -1,0 +1,8 @@
+superdense    F212N grp0: n_inj=240 excess(run-clean within 1.5 FWHM) hist={-1: 6, 0: 127, 1: 105, 2: 2}  >=2: 0.008 | isolated n=84 n_run hist={0: 34, 1: 49, 2: 1} split=0.011904761904761904 (S/N>=40: 0.011904761904761904 of 84)
+superdense    F212N grp1: n_inj=240 excess(run-clean within 1.5 FWHM) hist={-1: 4, 0: 129, 1: 104, 2: 3}  >=2: 0.013 | isolated n=85 n_run hist={0: 35, 1: 49, 2: 1} split=0.011764705882352941 (S/N>=40: 0.011764705882352941 of 85)
+dense_bright  F187N grp0: n_inj=240 excess(run-clean within 1.5 FWHM) hist={-1: 3, 0: 166, 1: 70, 2: 1}  >=2: 0.004 | isolated n=110 n_run hist={0: 76, 1: 33, 2: 1} split=0.00909090909090909 (S/N>=40: 0.03125 of 32)
+dense_bright  F187N grp1: n_inj=240 excess(run-clean within 1.5 FWHM) hist={-1: 6, 0: 159, 1: 73, 2: 2}  >=2: 0.008 | isolated n=106 n_run hist={0: 74, 1: 30, 2: 2} split=0.018867924528301886 (S/N>=40: 0.034482758620689655 of 29)
+bright_modest F187N grp0: n_inj=239 excess(run-clean within 1.5 FWHM) hist={0: 201, 1: 38}  >=2: 0.000 | isolated n=230 n_run hist={0: 193, 1: 37} split=0.0 (S/N>=40: 0.0 of 56)
+bright_modest F187N grp1: n_inj=239 excess(run-clean within 1.5 FWHM) hist={0: 200, 1: 39}  >=2: 0.000 | isolated n=230 n_run hist={0: 193, 1: 37} split=0.0 (S/N>=40: 0.0 of 56)
+dark          F182M grp0: n_inj=240 excess(run-clean within 1.5 FWHM) hist={-1: 1, 0: 102, 1: 135, 2: 2}  >=2: 0.008 | isolated n=153 n_run hist={0: 49, 1: 104} split=0.0 (S/N>=40: 0.0 of 39)
+dark          F182M grp1: n_inj=240 excess(run-clean within 1.5 FWHM) hist={-1: 1, 0: 92, 1: 146, 2: 1}  >=2: 0.004 | isolated n=152 n_run hist={0: 50, 1: 101, 2: 1} split=0.006578947368421052 (S/N>=40: 0.02564102564102564 of 39)

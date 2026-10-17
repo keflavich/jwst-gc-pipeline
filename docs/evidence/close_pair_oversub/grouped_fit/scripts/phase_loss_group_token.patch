@@ -1,0 +1,27 @@
+--- a/docs/evidence/m7_companion_ratio/scripts/phase_loss.py	2026-10-17 16:54:10.000000000 -0400
++++ b/docs/evidence/m7_companion_ratio/scripts/phase_loss.py	2026-10-17 17:34:58.000000000 -0400
+@@ -61,6 +61,15 @@
+     return hits[0]
+ 
+ 
++def _resid(pipedir, f, module, ph):
++    # --group runs insert a _group token before the phase in mosaic names
++    pat = f'{pipedir}/*-{f}-{module}_{ph}_daophot_basic_mergedcat_residual_i2d.fits'
++    if glob.glob(pat):
++        return _one(pat)
++    phg = ph[:-2] + 'group_' + ph[-2:]
++    return _one(f'{pipedir}/*-{f}-{module}_{phg}_daophot_basic_mergedcat_residual_i2d.fits')
++
++
+ def phase_files(catdir, pipedir, filt, module, obstok):
+     f = filt.lower()
+     out = {}
+@@ -68,7 +77,7 @@
+         stem = f'{catdir}/{f}_{module}{obstok}_indivexp_merged_{ph}_dao_basic'
+         out[ph] = dict(
+             basic=stem + '.fits', vetted=stem + '_vetted.fits',
+-            resid=_one(f'{pipedir}/*-{f}-{module}_{ph}_daophot_basic_mergedcat_residual_i2d.fits'))
++            resid=_resid(pipedir, f, module, ph))
+     out['data'] = _one(f'{pipedir}/*-{f}-{module}_data_i2d.fits')
+     # m7 seed: the band seed + m6-residual detections (own-band on), else
+     # the shared cross-band seed alone

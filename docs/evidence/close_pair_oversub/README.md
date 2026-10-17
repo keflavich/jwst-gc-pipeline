@@ -65,7 +65,8 @@ vetted sources):
 2. **0.75-2 FWHM: elongated blends and close real pairs.** 16-76% are
    over-subtracted. The likely mechanism is that each independent fit absorbs
    part of its neighbour's light, so the residual subtracts the shared light
-   twice. The grouped-fitting test below measures this directly.
+   twice. `grouped_fit/README.md` tests this with grouped fits on the
+   reference fields.
 
 Isolated stars (> 5 FWHM) are over-subtracted at 5-12%; that floor is a
 separate PSF-model / bright-star effect and is the reference level for the
@@ -108,7 +109,8 @@ in-pass post-fit dedup radius is 1.0 px, 0.46 FWHM in F405N.
 
 1. **Grouped fitting** (`--group --max-group-size=N`, grouping radius
    `manual_group_min_sep_fwhm` = 2.0 FWHM): fits sources that share light
-   together. Addresses regime 2 and part of regime 1. Cost: larger fits.
+   together. Addresses regime 2 and part of regime 1. Tested on the
+   reference fields in `grouped_fit/README.md`.
 2. **Seed deduplication in `_build_m7_band_seed`**: match own-band to
    cross-band positions within max(`max_sep_mas`, 0.5 FWHM), carry the
    own-band flux onto the matched cross-band position, and deduplicate
