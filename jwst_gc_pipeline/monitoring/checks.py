@@ -274,11 +274,46 @@ def check_astrometry(run):
             # Measured on brick F182M: 36/36 tiles "ok" with a 29.1 mas worst
             # cell. Only worst_off_mas reports the thing the ladder gates on.
             worst = visit.get('worst_tile_mas')
-            if worst is not None and worst > LOCAL_CELL_TOL_MAS:
-                from . import figures as _fig
-                cells = visit.get('cells') or []
+            # Since #667 the gating map can be the same-star REGION map, which
+            # judges its bulk-removed cells against its own (adaptive) tol_mas
+            # and needs significance too; scan.py publishes that map's cells
+            # with a `flagged` verdict and `tile_source='same-star-region'`.
+            # Re-judging those cells against LOCAL_CELL_TOL_MAS would warn on a
+            # tie the checkpoint passed (#668), so follow the map's own verdict.
+            region_gated = visit.get('tile_source') == 'same-star-region'
+            tile_tol = (visit.get('tile_tol_mas') if region_gated
+                        and visit.get('tile_tol_mas') is not None
+                        else LOCAL_CELL_TOL_MAS)
+            cells = visit.get('cells') or []
+            if region_gated:
+                over = [c for c in cells if c.get('flagged')]
+                tile_hot = bool(over) or visit.get('tiles_clean') is False
+            else:
                 over = [c for c in cells
                         if (c.get('off_mas') or 0) > LOCAL_CELL_TOL_MAS]
+                tile_hot = worst is not None and worst > LOCAL_CELL_TOL_MAS
+            if region_gated and tile_hot and not over:
+                # The region map failed with no cell flagged: only its
+                # COVERAGE arm fired (regions with sources but no matched
+                # pairs, e.g. displaced beyond the match radius).  The worst
+                # residual is inside tolerance here, so word the finding from
+                # the map's own reason instead of the residual.
+                n_unc = visit.get('tiles_uncovered') or 0
+                out.append(_verdict(
+                    f'astrometry-region-coverage-{filt}-v{visit.get("visit")}',
+                    'warn',
+                    f'{label}: same-star region map not clean: {n_unc} '
+                    f'uncovered region(s), none flagged',
+                    (visit.get('tile_reason')
+                     or 'The region map reported clean=False with no flagged '
+                        'cell and recorded no reason.')
+                    + ' An uncovered region holds sources but not the matched '
+                    'pairs the field rate predicts; that is the signature of a '
+                    'region displaced beyond the match radius, which no '
+                    'residual in the measured cells can show.',
+                    value=n_unc, threshold=0, source=src))
+            elif tile_hot and worst is not None:
+                from . import figures as _fig
                 # Derive the grid from the cells rather than assuming 6x6:
                 # on any other grid a hard-coded edge INVERTS the edge-vs-interior
                 # attribution, which is the thing this evidence block is for.
@@ -292,17 +327,22 @@ def check_astrometry(run):
                     f'astrometry-worst-tile-{filt}-v{visit.get("visit")}', 'warn',
                     f'{label}: worst tile {worst:.1f} mas at cell '
                     f'{visit.get("worst_tile_cell") or "?"} '
-                    f'(> {LOCAL_CELL_TOL_MAS:g} mas)',
-                    f'{visit.get("tiles_ok")}/{visit.get("tiles_total")} tiles are '
-                    f'reported "ok", but that counts tiles whose offset histogram '
-                    f'had a coherent PEAK — not tiles within tolerance. The m7 '
-                    f'cross-band gate is no significant 2" cell above '
-                    f'{LOCAL_CELL_TOL_MAS:g} mas, and this cell exceeds it, so the '
-                    f'bulk tie being ~0 does not mean the field is flat.',
-                    value=worst, threshold=LOCAL_CELL_TOL_MAS, source=src,
+                    f'(> {tile_tol:g} mas)',
+                    (f'Same-star region map (the map this checkpoint gated on): '
+                     f'{len(over)} of {visit.get("tiles_total")} regions are '
+                     f'flagged, i.e. their bulk-removed residual exceeds the '
+                     f'map tolerance {tile_tol:g} mas and is significant.'
+                     if region_gated else
+                     f'{visit.get("tiles_ok")}/{visit.get("tiles_total")} tiles are '
+                     f'reported "ok", but that counts tiles whose offset histogram '
+                     f'had a coherent PEAK — not tiles within tolerance. The m7 '
+                     f'cross-band gate is no significant 2" cell above '
+                     f'{LOCAL_CELL_TOL_MAS:g} mas, and this cell exceeds it, so the '
+                     f'bulk tie being ~0 does not mean the field is flat.'),
+                    value=worst, threshold=tile_tol, source=src,
                     cause=(
                         (f'{len(over)}/{len(cells)} cells exceed '
-                         f'{LOCAL_CELL_TOL_MAS:g} mas' if cells else
+                         f'{tile_tol:g} mas' if cells else
                          'The per-cell list was not recorded in this checkpoint, '
                          'so only the worst value is available — the map below is '
                          'empty for that reason, not because the field is flat')
@@ -320,7 +360,7 @@ def check_astrometry(run):
                         + ' — a small bulk value cannot cancel a local one.'),
                     evidence={
                         'tile_map': _fig.tile_map_svg(
-                            cells, LOCAL_CELL_TOL_MAS,
+                            cells, tile_tol,
                             visit.get('worst_tile_cell')),
                         'rows': {
                             'columns': ['cell', 'off (mas)', 'dRA', 'dDec',
