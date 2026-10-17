@@ -625,6 +625,15 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
         out['dec_ref'] = raw.dec.deg
         if 'obs_index' in ref:
             out['ref_obs_index'] = np.asarray(ref['obs_index'])[idx][selidx]
+    # Saturated-star-replacement flags (catalog ``replaced_saturated``), when
+    # the caller loaded them: a saturated star's position comes from a
+    # separate fit (saturated_star_finding), so a bias in that fit shows up
+    # as a PM offset of the saturated population alone. build_treasury_pm's
+    # saturation_pm_offset reads these columns.
+    if 'sat' in src:
+        out['src_saturated'] = np.asarray(src['sat'], bool)[selidx]
+    if 'sat' in ref:
+        out['ref_saturated'] = np.asarray(ref['sat'], bool)[idx][selidx]
 
     good_err = (np.isfinite(out['pm_ra_err']) & np.isfinite(out['pm_dec_err']) &
                 (out['pm_ra_err'] < err_cap_mas) & (out['pm_dec_err'] < err_cap_mas))
