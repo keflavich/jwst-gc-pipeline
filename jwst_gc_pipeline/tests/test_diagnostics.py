@@ -205,15 +205,25 @@ def test_writeup_quotes_the_measurements_it_was_given(tmp_path):
 
 
 def test_writeup_prose_follows_the_numbers(tmp_path):
-    """A large propagated/formal ratio must change what the text says."""
+    """The propagated/formal ratio is ~1/sqrt(n) by construction (#1024).
+
+    ``flux_err_prop`` is the formal error of the averaged flux and
+    ``flux_err`` that of one exposure, so the text reports the ratio as an
+    equivalent exposure count and never reads it as exposure scatter.
+    """
     def render(ratio):
         results = [_result('D4_photometry_precision', 'photometry',
                            dict(depth={'f212n': 20.0}, err_ratio={'f212n': ratio}))]
         return writeup.Writeup(_inv(), results, str(tmp_path)).render()
 
-    assert 'understate the real uncertainty' in render(3.0)
-    assert 'understate the real uncertainty' not in render(1.0)
-    assert 'noise model is' in render(1.0)
+    four = render(0.5)
+    assert r'n \approx 4.0' in four
+    assert 'single exposure' in four
+    assert 'factor of 2.00 larger' in four
+    for text in (four, render(1.0), render(3.0)):
+        assert 'understate the real uncertainty' not in text
+        assert 'safer error bar' not in text
+        assert 'not a test of the noise model' in text
 
 
 def test_writeup_reports_a_weak_background_correlation_as_such(tmp_path):
