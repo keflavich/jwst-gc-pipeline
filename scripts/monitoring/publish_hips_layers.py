@@ -48,6 +48,7 @@ import argparse
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -565,5 +566,31 @@ def main(argv=None):
     return rc
 
 
+def exit_on_sigterm():
+    """Turn SIGTERM into ``SystemExit`` so `build_lock`'s ``finally`` runs.
+
+    SLURM ends a job at its time limit with SIGTERM (SIGKILL follows after
+    ``KillWait``), and ``scancel`` and preemption send the same signal.
+    Python's default action for SIGTERM ends the process without unwinding,
+    so the ``finally`` that removes the lock never runs and the lock stays
+    behind until `LOCK_STALE_S` (6 h) has passed.  That happened to the
+    2026-09-30 publish (job 43949285) and twice on 2026-10-04 to the build
+    entry (#1005); each time every later build and publish waited the
+    lock out.  Raising ``SystemExit`` unwinds the stack: the lock file is
+    removed, and a running rsync/ssh child is killed by `subprocess.run`
+    on the way out.  A staged ``<layer>.new`` left behind is harmless, as
+    the next run reseeds it.
+
+    Installed only when run as a script, so importing the module (tests,
+    other tools) leaves the caller's signal handling alone.
+    """
+    def _raise(signum, frame):
+        print(f'received signal {signum}; releasing the build lock and '
+              f'exiting', file=sys.stderr, flush=True)
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, _raise)
+
+
 if __name__ == '__main__':
+    exit_on_sigterm()
     sys.exit(main())
