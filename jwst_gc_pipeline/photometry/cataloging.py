@@ -6334,6 +6334,18 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None):
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
         path = _pick_refcat(cands, field=field)
+        if not path and not _refcat_is_required(proposal_id, field):
+            # A field outside the VVV footprint carries only the Gaia seed
+            # catalog.  Without this fallback its m2 checkpoint ran
+            # consensus-only and left wd1's 25-50 mas per-visit bulks and its
+            # 2.9" visit-003 offset unverified (#1167).  VIRAC2-framed fields
+            # never fall back: tying them to Gaia would swap the frame.
+            gcands = sorted(glob.glob(f"{basepath}/catalogs/gaia_refcat*.fits"))
+            path = _pick_refcat(gcands, field=field)
+            if path:
+                print(f"astrom checkpoint: no gaia_virac2_refcat under "
+                      f"{basepath}/catalogs; using the Gaia-only seed refcat",
+                      flush=True)
     if path and os.path.exists(path):
         print(f"astrom checkpoint: reference catalog {path}", flush=True)
         return load_reference_catalog(path)

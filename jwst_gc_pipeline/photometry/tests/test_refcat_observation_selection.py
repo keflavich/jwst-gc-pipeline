@@ -207,3 +207,45 @@ def test_every_call_site_actually_passes_field(func_name):
         assert 'field' in c, (
             f'{func_name} calls _astrom_checkpoint_refcat without a field -- '
             f'gc2211 goes back to o028 for every observation: {c}')
+
+
+# --- Gaia-only fields (#1167) ----------------------------------------------
+
+def test_gaia_only_field_falls_back_to_gaia_refcat(tmp_path, capsys, monkeypatch):
+    """wd1 (1905 o001, GAIA frame) has only catalogs/gaia_refcat.fits."""
+    import os as _os
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits'])
+    out = _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905')
+    assert out is not None
+    chosen = [ln for ln in capsys.readouterr().out.splitlines()
+              if 'reference catalog' in ln]
+    assert chosen and _os.path.basename(chosen[-1].split()[-1]) == 'gaia_refcat.fits'
+
+
+def test_virac2_refcat_still_preferred_over_gaia_refcat(tmp_path, capsys,
+                                                        monkeypatch):
+    import os as _os
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits',
+                              'gaia_virac2_refcat_epoch2023.71.fits'])
+    _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905')
+    chosen = [ln for ln in capsys.readouterr().out.splitlines()
+              if 'reference catalog' in ln]
+    assert _os.path.basename(chosen[-1].split()[-1]) == \
+        'gaia_virac2_refcat_epoch2023.71.fits'
+
+
+def test_virac2_framed_field_does_not_fall_back_to_gaia(tmp_path, monkeypatch):
+    """A VIRAC2-framed field with only a Gaia catalog still refuses (#1167)."""
+    from jwst_gc_pipeline.photometry.cataloging import (
+        MissingReferenceCatalogError, _astrom_checkpoint_refcat)
+    from jwst_gc_pipeline.reduction import alignment_config as ac
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    monkeypatch.delenv('ALLOW_CONSENSUS_ONLY_ASTROMETRY', raising=False)
+    monkeypatch.setattr(ac, 'reference_catalog_required', lambda p, f: True)
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits'])
+    with pytest.raises(MissingReferenceCatalogError):
+        _astrom_checkpoint_refcat(bp, field='001', proposal_id='2221')
