@@ -600,7 +600,20 @@ def _astrometry_table(run):
         for visit in (rec.get('visits') or [{}]) or [{}]:
             worst = visit.get('worst_tile_mas')
             tie = visit.get('tie_off_mas')
-            hot = (worst or 0) > LOCAL_CELL_TOL_MAS
+            source = visit.get('tile_source') or 'histogram-grid'
+            if source == 'same-star-region':
+                # The region map carries its own verdict (adaptive tol_mas +
+                # significance); re-judging it at LOCAL_CELL_TOL_MAS would
+                # contradict the checkpoint (#668).
+                hot = visit.get('tiles_clean') is False
+            else:
+                hot = (worst or 0) > LOCAL_CELL_TOL_MAS
+            grid = visit.get('grid_diagnostic') or {}
+            gworst = grid.get('worst_tile_mas')
+            grid_note = ('' if not grid else
+                         f' title="histogram grid (diagnostic, not gating): '
+                         f'worst {"—" if gworst is None else f"{gworst:.1f}"} mas'
+                         f' at {esc(grid.get("worst_tile_cell") or "?")}"')
             rows.append(f"""<tr>
 <td class="filt" style="color:hsl({filter_hue(filt):.0f} 50% 40%)">{esc(filt)}</td>
 <td class="z">{esc(visit.get('visit') or '—')}</td>
@@ -613,13 +626,14 @@ def _astrometry_table(run):
 <td class="n">{visit.get('tiles_ok') if visit.get('tiles_ok') is not None else '—'}/{visit.get('tiles_total') if visit.get('tiles_total') is not None else '—'}</td>
 <td class="n" style="{'color:var(--fail);font-weight:600' if hot else ''}">{'—' if worst is None else f'{worst:.1f}'}</td>
 <td class="z">{esc(visit.get('worst_tile_cell') or '')}</td>
+<td class="z"{grid_note}>{esc(source)}{' †' if grid else ''}</td>
 <td class="z">{esc(rec.get('date') or '')}</td>
 </tr>""")
     return f"""
 <div class="gcm-scroll"><table class="gcm-t">
 <thead><tr><th>filter</th><th>visit</th><th>exposures</th><th>misaligned</th>
 <th>swept</th><th>min contrast</th><th>bulk tie (mas)</th><th>tie from</th>
-<th>tiles ok</th><th>worst tile (mas)</th><th>cell</th>
+<th>tiles ok</th><th>worst tile (mas)</th><th>cell</th><th>tile map</th>
 <th>checkpoint</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
 <details class="gcm-fold"><summary>about “tiles ok”</summary>
@@ -629,7 +643,14 @@ def _astrometry_table(run):
   <code>off_ok=True</code> whenever that is <code>None</code> — so N/N counts tiles
   whose offset histogram had a coherent <em>peak</em>, however large the offset.
   The column that carries the gate is <b>worst tile</b>, against
-  {LOCAL_CELL_TOL_MAS:g} mas.</p></details>"""
+  {LOCAL_CELL_TOL_MAS:g} mas.</p>
+<p class="gcm-note" style="margin:.4rem 0 0;font-size:.74rem">
+  <b>tile map</b> names the map the checkpoint gated on
+  (<code>per_tile_source</code>). For <code>same-star-region</code> the tile
+  columns come from the same-star region map: bulk-removed residuals judged
+  against that map's own tolerance, and “tiles ok” counts unflagged regions.
+  The histogram grid is then a diagnostic only (†; hover for its worst cell),
+  and its worst cell can be a noise bin far larger than any real offset.</p></details>"""
 
 
 def _provenance_block(run):
