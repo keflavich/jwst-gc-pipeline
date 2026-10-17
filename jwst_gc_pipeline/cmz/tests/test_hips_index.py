@@ -95,6 +95,18 @@ def test_cloudef_tour_uses_its_page_name(hi):
     assert any('cloudef_wavelength_tour_linear.html' in href for href, _, _ in links)
 
 
+def test_quintuplet_combined_rgb_layers_and_tour(hi):
+    # The 2045 x 10678 combined RGB layers are lowercase, like arches_2045_10678_*.
+    inv = dict(INVENTORY, layers=[_layer('quintuplet_2045_10678_RGB_770-480-212_hips'),
+                                  _layer('arches_2045_10678_RGB_770-480-212_hips')])
+    assert [la['name'] for la in hi.field_layers('quintuplet', inv)] == [
+        'quintuplet_2045_10678_RGB_770-480-212_hips']
+    assert [la['name'] for la in hi.field_layers('arches', inv)] == [
+        'arches_2045_10678_RGB_770-480-212_hips']
+    links = hi.tour_links('quintuplet')
+    assert any('quintuplet_wavelength_tour_linear.html' in href for href, _, _ in links)
+
+
 def test_parse_properties_dump(hi):
     text = ('### b_hips\nobs_title = B\nhips_order = 11\nunrelated = x\n'
             '### a_hips\nobs_title = A = first\n')
