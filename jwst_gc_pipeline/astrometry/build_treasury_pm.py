@@ -427,20 +427,24 @@ def saturation_offset_epochs(diags):
     epochs = [w for w in ('src', 'ref') if w in by and by[w]['offset']]
     both_off = 'both' in by and by['both']['offset']
     if both_off and not epochs:
-        # 'clean' = consistent with zero on both axes (|d| < nsigma*err)
-        # AND under 1/4 of the 'both' offset on each axis where that offset
-        # is significant; a set merely below the flag threshold can still
-        # carry a real, significant offset of its own.
+        # 'clean' = consistent with zero (|d| < nsigma*err), small next to
+        # the 'both' offset (|d| < 1/4 of it) AND precise enough to have seen
+        # 1/4 of it (nsigma*err < 1/4 of it), on each axis where that offset
+        # is significant; on every axis also precise enough to have seen the
+        # flag threshold (nsigma*err < SAT_PM_OFFSET_MAS_YR). A set merely
+        # below the flag threshold can carry a real offset of its own, and a
+        # noisy set is consistent with zero without showing anything.
         def clean(w):
             d, b = by.get(w), by['both']
             if d is None or d['offset']:
                 return False
             for ax in ('d_pm_ra', 'd_pm_dec'):
-                if abs(d[ax]) >= SAT_PM_OFFSET_NSIGMA * d[f'{ax}_err']:
+                lim = SAT_PM_OFFSET_NSIGMA * d[f'{ax}_err']
+                if abs(d[ax]) >= lim or lim >= SAT_PM_OFFSET_MAS_YR:
                     return False
-                if (abs(b[ax]) > SAT_PM_OFFSET_NSIGMA * b[f'{ax}_err']
-                        and abs(d[ax]) >= 0.25 * abs(b[ax])):
-                    return False
+                if abs(b[ax]) > SAT_PM_OFFSET_NSIGMA * b[f'{ax}_err']:
+                    if abs(d[ax]) >= 0.25 * abs(b[ax]) or lim >= 0.25 * abs(b[ax]):
+                        return False
             return True
         cl = [w for w in ('src', 'ref') if clean(w)]
         if len(cl) == 1:

@@ -95,16 +95,33 @@ def test_both_offset_attributed_by_elimination():
     assert B.saturation_offset_epochs(diags) == (['src'], False)
 
 
-@pytest.mark.parametrize('ref_only_dec,ref_only_err', [(9.0, 0.3), (3.0, 0.3), (5.0, 1.2)])
+@pytest.mark.parametrize('ref_only_dec,ref_only_err', [(9.0, 0.3), (3.0, 0.3), (5.0, 1.2),
+                                                       (0.0, 8.0), (0.0, 2.5), (3.0, 2.5),
+                                                       (0.0, 1.0)])
 def test_significant_exclusive_set_is_not_clean(ref_only_dec, ref_only_err):
     """Reviewer's probe: ref-only +9.0+-0.3 (below the 10 mas/yr flag but
     30 sigma from zero) and both +14+-0.3. The ref-only set is not clean,
     so src must not be blamed by elimination. +3.0 (10 sigma, but under 1/4
     of the 'both' offset) checks the consistent-with-zero test alone;
-    +5.0+-1.2 (4.2 sigma, but over 1/4 of it) checks the ratio test alone."""
+    +5.0+-1.2 (4.2 sigma, but over 1/4 of it) checks the ratio test alone;
+    0+-8, 0+-2.5 and +3+-2.5 are consistent with zero but too noisy to have
+    seen 1/4 of the 'both' offset (5 sigma >= 3.5), so they are not clean
+    either (reviewer's second probe set); 0+-1.0 (5 sigma = 5) isolates the
+    1/4-precision test from the flag-threshold precision test."""
     diags = [dict(which='ref', n_sat=500, n_unsat=5000, offset=False,
                   d_pm_ra=0.0, d_pm_ra_err=0.3, d_pm_dec=ref_only_dec,
                   d_pm_dec_err=ref_only_err),
+             dict(which='both', n_sat=500, n_unsat=5000, offset=True,
+                  d_pm_ra=0.0, d_pm_ra_err=0.3, d_pm_dec=14.0, d_pm_dec_err=0.3)]
+    assert B.saturation_offset_epochs(diags) == ([], True)
+
+
+def test_noisy_axis_without_both_offset_is_not_clean():
+    """Precision is required on every axis: a ref-only set precise in Dec
+    but with a 3 mas/yr RA error (5 sigma = 15 > the 10 mas/yr flag) on an
+    axis where 'both' shows nothing could hide a flag-sized offset."""
+    diags = [dict(which='ref', n_sat=500, n_unsat=5000, offset=False,
+                  d_pm_ra=0.0, d_pm_ra_err=3.0, d_pm_dec=0.0, d_pm_dec_err=0.3),
              dict(which='both', n_sat=500, n_unsat=5000, offset=True,
                   d_pm_ra=0.0, d_pm_ra_err=0.3, d_pm_dec=14.0, d_pm_dec_err=0.3)]
     assert B.saturation_offset_epochs(diags) == ([], True)
