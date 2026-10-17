@@ -83,6 +83,8 @@ Galleries (`figures/nn_grp0_grp1_gallery_<field>_<band>.png`): rows are data
 | grp0 m7 residual | grp1 m7 residual at random grp0 sources that are
 over-subtracted and have a neighbour within 2 FWHM; orange x = that variant's
 m7 vetted sources. In dense_bright and dark most grp0 holes are gone in grp1.
+In dense_bright F212N column s9 grp1 keeps one source of the grp0 pair and
+leaves S/N +19 (grp0: -62).
 In superdense F212N the remaining holes sit on bright-star cores, and in
 superdense F405N they are saturated-star over-subtractions (S/N -500 to
 -4000); grouping does not change either.
