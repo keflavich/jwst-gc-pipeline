@@ -427,13 +427,26 @@ def saturation_offset_epochs(diags):
     epochs = [w for w in ('src', 'ref') if w in by and by[w]['offset']]
     both_off = 'both' in by and by['both']['offset']
     if both_off and not epochs:
-        # 'clean' needs the sensitivity to have seen the offset
-        clean = [w for w in ('src', 'ref') if w in by and not by[w]['offset']
-                 and SAT_PM_OFFSET_NSIGMA * max(by[w]['d_pm_ra_err'],
-                                                by[w]['d_pm_dec_err'])
-                 < SAT_PM_OFFSET_MAS_YR]
-        if len(clean) == 1:
-            epochs = [{'src': 'ref', 'ref': 'src'}[clean[0]]]
+        # 'clean' = consistent with zero on both axes (|d| < nsigma*err)
+        # AND under 1/4 of the 'both' offset on each axis where that offset
+        # is significant; a set merely below the flag threshold can still
+        # carry a real, significant offset of its own.
+        def clean(w):
+            d, b = by.get(w), by['both']
+            if d is None or d['offset']:
+                return False
+            for ax in ('d_pm_ra', 'd_pm_dec'):
+                if abs(d[ax]) >= SAT_PM_OFFSET_NSIGMA * d[f'{ax}_err']:
+                    return False
+                if (abs(b[ax]) > SAT_PM_OFFSET_NSIGMA * b[f'{ax}_err']
+                        and abs(d[ax]) >= 0.25 * abs(b[ax])):
+                    return False
+            return True
+        cl = [w for w in ('src', 'ref') if clean(w)]
+        if len(cl) == 1:
+            epochs = [{'src': 'ref', 'ref': 'src'}[cl[0]]]
+            # recorded in the diag (and so in meta['sat_pm_offset_json'])
+            by['both']['attributed_by_elimination'] = epochs[0]
     return epochs, (both_off and not epochs)
 
 
@@ -480,7 +493,6 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     # saturation magnitude. 'trustworthy_presat' always holds the flag
     # before this step.
     sat_diag = saturation_pm_offset(pm)
-    pm.meta['sat_pm_offset_json'] = json.dumps(sat_diag)
     pm['trustworthy_presat'] = pm['trustworthy'].copy()
     for d in sat_diag:
         if verbose or d['offset']:
@@ -492,12 +504,16 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
                   f'd_pm_dec={d["d_pm_dec"]:+.2f}+-{d["d_pm_dec_err"]:.2f} mas/yr '
                   f'(position {d["d_pos_ra_mas"]:+.1f}, {d["d_pos_dec_mas"]:+.1f} mas)')
     epochs, unattributed = saturation_offset_epochs(sat_diag)
+    pm.meta['sat_pm_offset_json'] = json.dumps(sat_diag)
     demote = np.zeros(len(pm), bool)
     for w in epochs:
         print(f'  WARNING: {w}-epoch saturated-star-replaced positions are offset '
               f'from the unsaturated frame (PM step at the saturation magnitude); '
               f're-catalog the {w} epoch with the current saturated_star_finding '
-              f'before using bright-star PMs.')
+              f'before using bright-star PMs.'
+              + (' (attributed by elimination; assumes depth-independent bias)'
+                 if any(d.get('attributed_by_elimination') == w for d in sat_diag)
+                 else ''))
         demote |= np.asarray(pm[f'{w}_saturated'], bool)
     if unattributed:
         print('  WARNING: stars saturated in BOTH epochs show a PM offset, but '

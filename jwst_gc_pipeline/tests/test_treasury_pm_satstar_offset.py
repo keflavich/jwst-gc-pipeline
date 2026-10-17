@@ -95,6 +95,28 @@ def test_both_offset_attributed_by_elimination():
     assert B.saturation_offset_epochs(diags) == (['src'], False)
 
 
+@pytest.mark.parametrize('ref_only_dec,ref_only_err', [(9.0, 0.3), (3.0, 0.3), (5.0, 1.2)])
+def test_significant_exclusive_set_is_not_clean(ref_only_dec, ref_only_err):
+    """Reviewer's probe: ref-only +9.0+-0.3 (below the 10 mas/yr flag but
+    30 sigma from zero) and both +14+-0.3. The ref-only set is not clean,
+    so src must not be blamed by elimination. +3.0 (10 sigma, but under 1/4
+    of the 'both' offset) checks the consistent-with-zero test alone;
+    +5.0+-1.2 (4.2 sigma, but over 1/4 of it) checks the ratio test alone."""
+    diags = [dict(which='ref', n_sat=500, n_unsat=5000, offset=False,
+                  d_pm_ra=0.0, d_pm_ra_err=0.3, d_pm_dec=ref_only_dec,
+                  d_pm_dec_err=ref_only_err),
+             dict(which='both', n_sat=500, n_unsat=5000, offset=True,
+                  d_pm_ra=0.0, d_pm_ra_err=0.3, d_pm_dec=14.0, d_pm_dec_err=0.3)]
+    assert B.saturation_offset_epochs(diags) == ([], True)
+
+
+def test_elimination_is_recorded():
+    rng = np.random.default_rng(10)
+    diags = B.saturation_pm_offset(_pm_table(0, 3000, 200, 6000, -39.0, rng))
+    B.saturation_offset_epochs(diags)
+    assert {d['which']: d for d in diags}['both']['attributed_by_elimination'] == 'src'
+
+
 def test_missing_columns_and_small_sets():
     rng = np.random.default_rng(3)
     t = _pm_table(300, 0, 0, 3000, -22.0, rng)
@@ -217,3 +239,18 @@ def test_trustworthy_presat_always_written(tmp_path):
     pm = _synthetic_field(tmp_path, rng, 0.0, 0.0, n=900)
     assert 'trustworthy_presat' in pm.colnames
     assert np.array_equal(pm['trustworthy'], pm['trustworthy_presat'])
+
+
+def test_build_elimination_warning_states_assumption(tmp_path, capsys):
+    """Quintuplet v6 shape end to end: src-saturated stars (2%) all also
+    ref-saturated (5%); the clean ref-only set lets src be blamed, and the
+    warning says the attribution assumes a depth-independent bias."""
+    pytest.importorskip('flystar')
+    pm = _synthetic_field(tmp_path, np.random.default_rng(11), 0.02, 0.05)
+    log = capsys.readouterr().out
+    diag = _by(json.loads(pm.meta['sat_pm_offset_json']))
+    assert 'src' not in diag
+    assert diag['both']['attributed_by_elimination'] == 'src'
+    assert 're-catalog the src epoch' in log
+    assert 'attributed by elimination; assumes depth-independent bias' in log
+    assert not np.any(pm['trustworthy'] & pm['src_saturated'])
