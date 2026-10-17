@@ -78,8 +78,10 @@ BASE = "/orange/adamginsburg/jwst"
 
 def load(field, band, stage, snr_min=20.0, qfit_max=0.1):
     """Reliable stars from one vetted merged catalog, as SkyCoord + inst mag."""
+    # Catalog filenames are lower-case; fold the band so `--bands F212N`
+    # (the spelling every other entry point takes) resolves too (#690).
     path = (f"{BASE}/{field}/catalogs/"
-            f"{band}_merged_indivexp_merged_{stage}_dao_basic_vetted.fits")
+            f"{band.lower()}_merged_indivexp_merged_{stage}_dao_basic_vetted.fits")
     tbl = Table.read(path)
     cols = tbl.colnames
     sc = SkyCoord(tbl["skycoord_centroid" if "skycoord_centroid" in cols
