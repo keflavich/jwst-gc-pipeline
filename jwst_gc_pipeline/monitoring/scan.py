@@ -100,6 +100,8 @@ def _tile_view_from_grid(tiles, worst_cell):
         'min_tile_contrast': _finite(tiles.get('min_contrast_seen')),
         # The grid has no tolerance of its own; checks use LOCAL_CELL_TOL_MAS.
         'tile_tol_mas': None,
+        'tiles_uncovered': None,
+        'tile_reason': None,
         'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
                    'off_mas': _finite(c.get('off_mas', c.get('off'))),
                    'dra': _finite(c.get('dra')),
@@ -135,6 +137,12 @@ def _tile_view_from_region(region):
                             if worst else None),
         'min_tile_contrast': None,
         'tile_tol_mas': _finite(region.get('tol_mas')),
+        # Regions that hold sources but not the matched pairs the field rate
+        # predicts (a region displaced beyond the match radius).  They are
+        # outside `cells`/`n_cells`, and they alone can make `clean` False with
+        # nothing flagged, so they are published beside `tiles_ok`.
+        'tiles_uncovered': region.get('n_uncovered'),
+        'tile_reason': region.get('reason'),
         'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
                    'off_mas': _finite(c.get('resid_off_mas')),
                    'dra': _finite(c.get('resid_dra_mas')),
@@ -768,6 +776,11 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
                 tile_view = _tile_view_from_region(region)
             else:
                 tile_view = grid_view
+                if tile_source == 'same-star-region':
+                    # The producer always pairs the two keys; if a record
+                    # lacks the map, say the grid was read instead of
+                    # labelling grid numbers as the region map.
+                    tile_source = 'histogram-grid (region map missing)'
             visits.append({
                 'visit': visit.get('visit'),
                 'n_stars': cons.get('n_stars'),
@@ -794,7 +807,7 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
                     {k: grid_view[k] for k in ('tiles_ok', 'tiles_total',
                                                'tiles_clean', 'worst_tile_mas',
                                                'worst_tile_cell')}
-                    if tile_source != 'histogram-grid' and tiles else None),
+                    if tile_source == 'same-star-region' and tiles else None),
             })
             for exposure in visit.get('exposures') or []:
                 exposure = dict(exposure)

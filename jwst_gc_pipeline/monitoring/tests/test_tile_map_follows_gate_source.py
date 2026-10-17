@@ -113,3 +113,38 @@ def test_table_names_the_gating_map(tmp_path):
     assert 'same-star-region' in html
     assert 'histogram grid (diagnostic, not gating)' in html
     assert '5953.8' not in html.split('title=')[0]
+
+
+def test_region_map_failing_on_coverage_only_is_worded_from_coverage(tmp_path):
+    """Review of #1204: clean=False with an uncovered region and no flagged
+    cell must not print "21.5 mas (> 26 mas)" / "0 regions flagged" / 2/2 ok."""
+    region = _region()
+    region.update(clean=False, n_uncovered=1,
+                  reason='1 region cell(s)/group(s) hold sources but not the '
+                         'matched pairs the field rate predicts')
+    astrom = _scan(tmp_path, {'off_mas': 0.334, 'per_tile': _grid(),
+                              'per_tile_source': 'same-star-region',
+                              'per_tile_same_star': region})
+    visit = astrom['F200W']['visits'][0]
+    assert visit['tiles_uncovered'] == 1
+    verdicts = [v for v in checks.check_astrometry(_run(astrom))
+                if v['name'].startswith('astrometry-')
+                and ('tile' in v['name'] or 'region' in v['name'])]
+    assert [v['name'] for v in verdicts] == ['astrometry-region-coverage-F200W-v1']
+    v = verdicts[0]
+    assert '1 uncovered region' in v['summary']
+    assert 'hold sources but not the matched pairs' in v['detail']
+    assert '> 26' not in v['summary']
+    html = render._astrometry_table(_run(astrom))
+    assert '+1 uncovered' in html
+
+
+def test_region_source_without_region_map_is_labelled_as_the_grid(tmp_path):
+    astrom = _scan(tmp_path, {'off_mas': 0.334, 'per_tile': _grid(),
+                              'per_tile_source': 'same-star-region',
+                              'per_tile_same_star': None})
+    visit = astrom['F200W']['visits'][0]
+    assert visit['tile_source'] == 'histogram-grid (region map missing)'
+    assert visit['worst_tile_mas'] == 5953.8
+    for v in _tile_verdicts(astrom):
+        assert 'Same-star region map' not in v['detail']

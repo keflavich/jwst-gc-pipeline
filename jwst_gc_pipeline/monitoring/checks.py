@@ -292,7 +292,27 @@ def check_astrometry(run):
                 over = [c for c in cells
                         if (c.get('off_mas') or 0) > LOCAL_CELL_TOL_MAS]
                 tile_hot = worst is not None and worst > LOCAL_CELL_TOL_MAS
-            if tile_hot and worst is not None:
+            if region_gated and tile_hot and not over:
+                # The region map failed with no cell flagged: only its
+                # COVERAGE arm fired (regions with sources but no matched
+                # pairs, e.g. displaced beyond the match radius).  The worst
+                # residual is inside tolerance here, so word the finding from
+                # the map's own reason instead of the residual.
+                n_unc = visit.get('tiles_uncovered') or 0
+                out.append(_verdict(
+                    f'astrometry-region-coverage-{filt}-v{visit.get("visit")}',
+                    'warn',
+                    f'{label}: same-star region map not clean: {n_unc} '
+                    f'uncovered region(s), none flagged',
+                    (visit.get('tile_reason')
+                     or 'The region map reported clean=False with no flagged '
+                        'cell and recorded no reason.')
+                    + ' An uncovered region holds sources but not the matched '
+                    'pairs the field rate predicts; that is the signature of a '
+                    'region displaced beyond the match radius, which no '
+                    'residual in the measured cells can show.',
+                    value=n_unc, threshold=0, source=src))
+            elif tile_hot and worst is not None:
                 from . import figures as _fig
                 # Derive the grid from the cells rather than assuming 6x6:
                 # on any other grid a hard-coded edge INVERTS the edge-vs-interior
