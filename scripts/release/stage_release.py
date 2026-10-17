@@ -3998,7 +3998,9 @@ def main(argv=None):
                              "images/, catalogs/ and CHECKSUMS.sha256 untouched and "
                              "not re-running the mosaic gates (it cannot change which "
                              "mosaics ship). Use when a field's frames should go out "
-                             "but a band has no live mosaic to re-stage.")
+                             "but a band has no live mosaic to re-stage. Writes "
+                             "only with --stage; cannot be combined with "
+                             "--joint-catalog.")
     parser.add_argument("--exposures-from-disk", action="store_true",
                         help="with --exposures-only: enumerate the frames from the "
                              "pipeline directories instead of from staged mosaics, "
@@ -4094,6 +4096,27 @@ def main(argv=None):
     # release is exactly what is being added to (arches: F212N has no live
     # mosaic, so the listed-source gate refuses the field while its published
     # v1.2 tree sits there gated and frozen).
+    if args.exposures_only and args.joint_catalog:
+        # The two add-only paths each return as soon as they finish, so this
+        # combination used to stage the exposures and silently drop the
+        # catalog (gc-treasury v1.9, #1104).  Refuse before anything is written.
+        print("--exposures-only and --joint-catalog are two separate staging "
+              "steps; run them as two invocations (either order), e.g.\n"
+              f"  stage_release.py --field {args.field} --version {args.version} "
+              f"--joint-catalog [--joint-catalog-dir DIR] --stage\n"
+              f"  stage_release.py --field {args.field} --version {args.version} "
+              f"--exposures-only [--exposures-from-disk] --stage",
+              file=sys.stderr)
+        return 2
+    if args.exposures_only and not args.stage:
+        # `--help` promises a dry run by default.  This path used to write the
+        # release tree regardless (#1104).
+        field_dir = field_release_dir(args.field, args.version, args.release_root)
+        print(f"Dry run: --exposures-only would add detector-frame exposures to "
+              f"{field_dir}"
+              f"{' (enumerated from the pipeline directories)' if args.exposures_from_disk else ''}"
+              f".  Nothing was written.  Re-run with --stage to write it.")
+        return 0
     if args.exposures_only:
         # The frozen-version guard runs HERE too, not only on the full staging
         # path below. Adding an exposures/ tree and an astrometry/ table to a

@@ -2699,3 +2699,49 @@ def test_stage_joint_catalog_refuses_an_m8_table_from_another_run(
                         lambda path, key: 'run-B' if 'o101' in str(path) else 'run-A')
     with pytest.raises(sr.JointCatalogGateError, match="tile o101: m8 table GCTAG 'run-B'"):
         sr.stage_joint_catalog('zz_joint', 'v9-test', tmp_path / 'releases')
+
+
+# --- #1104: --exposures-only honours the dry-run default --------------------
+
+def test_exposures_only_without_stage_is_a_dry_run(sr, tmp_path, monkeypatch,
+                                                    capsys):
+    """`--help` says the default is a dry run.  gc-treasury v1.9 was written
+    by an `--exposures-only` invocation meant as one (#1104)."""
+    calls = []
+    monkeypatch.setattr(sr, 'stage_exposures_only',
+                        lambda *a, **kw: calls.append((a, kw)) or (None, 0))
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v9-test',
+                  '--release-root', str(tmp_path), '--exposures-only',
+                  '--exposures-from-disk'])
+    assert rc == 0
+    assert calls == []
+    assert 'Dry run' in capsys.readouterr().out
+    assert not (tmp_path / 'v9-test').exists()
+
+
+def test_exposures_only_with_stage_still_writes(sr, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(sr, 'stage_exposures_only',
+                        lambda *a, **kw: calls.append((a, kw)) or (tmp_path, 3))
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v9-test',
+                  '--release-root', str(tmp_path), '--exposures-only',
+                  '--exposures-from-disk', '--stage'])
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_exposures_only_and_joint_catalog_together_refuse(sr, tmp_path,
+                                                          monkeypatch, capsys):
+    """The two add-only paths each return first, so the pair used to stage
+    the exposures and silently drop the catalog (#1104)."""
+    calls = []
+    monkeypatch.setattr(sr, 'stage_exposures_only',
+                        lambda *a, **kw: calls.append('exp') or (tmp_path, 3))
+    monkeypatch.setattr(sr, 'stage_joint_catalog',
+                        lambda *a, **kw: calls.append('cat') or (tmp_path, 1))
+    rc = sr.main(['--field', 'gc-treasury', '--version', 'v9-test',
+                  '--release-root', str(tmp_path), '--exposures-only',
+                  '--exposures-from-disk', '--joint-catalog', '--stage'])
+    assert rc == 2
+    assert calls == []
+    assert 'two separate staging steps' in capsys.readouterr().err
