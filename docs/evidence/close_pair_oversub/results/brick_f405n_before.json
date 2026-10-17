@@ -1,0 +1,90 @@
+{
+ "field": "brick",
+ "filt": "F405N",
+ "which": "before",
+ "vetted": "/orange/adamginsburg/jwst/brick/catalogs/f405n_merged_o001_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+ "resid": "/orange/adamginsburg/jwst/brick/F405N/pipeline/jw02221-o001_t001_nircam_clear-f405n-merged_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+ "n_vetted": 67553,
+ "n_sample": 60000,
+ "fwhm_pix": 2.165,
+ "frac_lt_m5_all": 0.13389505297405524,
+ "frac_gt5_all": 0.11233836656377742,
+ "frac_nn_lt_1p5fwhm": 0.08638333333333334,
+ "group_size_values": [
+  1.0
+ ],
+ "bins": [
+  {
+   "lo": 0.0,
+   "hi": 0.5,
+   "n": 117,
+   "frac_lt_m5": 0.9743589743589743,
+   "frac_gt5": 0.0,
+   "med_snr": -16.745645735808797
+  },
+  {
+   "lo": 0.5,
+   "hi": 0.75,
+   "n": 435,
+   "frac_lt_m5": 0.960919540229885,
+   "frac_gt5": 0.006896551724137931,
+   "med_snr": -21.487540306408835
+  },
+  {
+   "lo": 0.75,
+   "hi": 1.0,
+   "n": 1087,
+   "frac_lt_m5": 0.858325666973321,
+   "frac_gt5": 0.010119595216191352,
+   "med_snr": -15.81229030363918
+  },
+  {
+   "lo": 1.0,
+   "hi": 1.25,
+   "n": 992,
+   "frac_lt_m5": 0.6522177419354839,
+   "frac_gt5": 0.01310483870967742,
+   "med_snr": -7.759087513694533
+  },
+  {
+   "lo": 1.25,
+   "hi": 1.5,
+   "n": 2551,
+   "frac_lt_m5": 0.5017640141121129,
+   "frac_gt5": 0.0199921599372795,
+   "med_snr": -5.020241309607346
+  },
+  {
+   "lo": 1.5,
+   "hi": 2.0,
+   "n": 6211,
+   "frac_lt_m5": 0.3146031234905812,
+   "frac_gt5": 0.04540331669618419,
+   "med_snr": -1.5730643626757643
+  },
+  {
+   "lo": 2.0,
+   "hi": 3.0,
+   "n": 12311,
+   "frac_lt_m5": 0.06985622613922508,
+   "frac_gt5": 0.08602063195516205,
+   "med_snr": 1.2408928720824308
+  },
+  {
+   "lo": 3.0,
+   "hi": 5.0,
+   "n": 26235,
+   "frac_lt_m5": 0.041280731846769586,
+   "frac_gt5": 0.132799695063846,
+   "med_snr": 1.867268857805428
+  },
+  {
+   "lo": 5.0,
+   "hi": Infinity,
+   "n": 9996,
+   "frac_lt_m5": 0.07362945178071229,
+   "frac_gt5": 0.18307322929171668,
+   "med_snr": 1.666334489533054
+  }
+ ]
+}

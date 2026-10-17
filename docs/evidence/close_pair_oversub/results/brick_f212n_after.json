@@ -1,0 +1,90 @@
+{
+ "field": "brick",
+ "filt": "F212N",
+ "which": "after",
+ "vetted": "/blue/adamginsburg/adamginsburg/jwst/brick/catalogs/f212n_merged_o001_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+ "resid": "/blue/adamginsburg/adamginsburg/jwst/brick/F212N/pipeline/jw02221-o001_t001_nircam_clear-f212n-merged_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+ "n_vetted": 195636,
+ "n_sample": 60000,
+ "fwhm_pix": 2.341,
+ "frac_lt_m5_all": 0.09956154243702382,
+ "frac_gt5_all": 0.04454595468716136,
+ "frac_nn_lt_1p5fwhm": 0.08171666666666667,
+ "group_size_values": [
+  1.0
+ ],
+ "bins": [
+  {
+   "lo": 0.0,
+   "hi": 0.5,
+   "n": 115,
+   "frac_lt_m5": 1.0,
+   "frac_gt5": 0.0,
+   "med_snr": -19.361726783047004
+  },
+  {
+   "lo": 0.5,
+   "hi": 0.75,
+   "n": 118,
+   "frac_lt_m5": 0.9745762711864406,
+   "frac_gt5": 0.00847457627118644,
+   "med_snr": -15.839805254462789
+  },
+  {
+   "lo": 0.75,
+   "hi": 1.0,
+   "n": 215,
+   "frac_lt_m5": 0.8604651162790697,
+   "frac_gt5": 0.013953488372093023,
+   "med_snr": -10.25140684645129
+  },
+  {
+   "lo": 1.0,
+   "hi": 1.25,
+   "n": 1002,
+   "frac_lt_m5": 0.5179640718562875,
+   "frac_gt5": 0.0029940119760479044,
+   "med_snr": -5.196521435841806
+  },
+  {
+   "lo": 1.25,
+   "hi": 1.5,
+   "n": 3453,
+   "frac_lt_m5": 0.35766000579206486,
+   "frac_gt5": 0.013032145960034752,
+   "med_snr": -3.0161811816662913
+  },
+  {
+   "lo": 1.5,
+   "hi": 2.0,
+   "n": 6248,
+   "frac_lt_m5": 0.1619718309859155,
+   "frac_gt5": 0.019846350832266324,
+   "med_snr": -0.7574394329838716
+  },
+  {
+   "lo": 2.0,
+   "hi": 3.0,
+   "n": 11319,
+   "frac_lt_m5": 0.05071119356833643,
+   "frac_gt5": 0.039049385988161496,
+   "med_snr": 1.0498352198270704
+  },
+  {
+   "lo": 3.0,
+   "hi": 5.0,
+   "n": 22941,
+   "frac_lt_m5": 0.050564491521729656,
+   "frac_gt5": 0.05501067956933002,
+   "med_snr": 1.3094521895058655
+  },
+  {
+   "lo": 5.0,
+   "hi": Infinity,
+   "n": 14572,
+   "frac_lt_m5": 0.07253637112270107,
+   "frac_gt5": 0.054350809772165797,
+   "med_snr": 0.44327952290223716
+  }
+ ]
+}

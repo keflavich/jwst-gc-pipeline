@@ -1,0 +1,95 @@
+{
+ "F182M": {
+  "path": "crossband_seed_manual_merged_f182m_vetted.fits",
+  "n": 388282,
+  "fwhm_mas": 62.4,
+  "header": {
+   "COMPFWHM": 2.5,
+   "COMPRAT": 0.1,
+   "NCOMPAN": 9170
+  },
+  "origins": {
+   "crossband": 66912,
+   "own_m6": 321370
+  },
+  "frac_nn_lt_0p5fwhm": 0.0003554117883394028,
+  "n_pairs_lt_0p5fwhm": 69,
+  "pairs_by_origin": {
+   "crossband+crossband": 2,
+   "crossband+own_m6": 41,
+   "own_m6+own_m6": 26
+  },
+  "pair_sep_mas_p10_50_90": [
+   17.96794015379326,
+   30.246057106138853,
+   30.963975232453773
+  ],
+  "pair_faint_over_bright_p16_50_84": [
+   0.0009795235376820225,
+   0.0031557376970241416,
+   0.8629025934154303
+  ]
+ },
+ "F212N": {
+  "path": "crossband_seed_manual_merged_f212n_vetted.fits",
+  "n": 195164,
+  "fwhm_mas": 73.3,
+  "header": {
+   "COMPFWHM": 2.5,
+   "COMPRAT": 0.1,
+   "NCOMPAN": 3747
+  },
+  "origins": {
+   "crossband": 66912,
+   "own_m6": 128252
+  },
+  "frac_nn_lt_0p5fwhm": 0.0038941608083458016,
+  "n_pairs_lt_0p5fwhm": 380,
+  "pairs_by_origin": {
+   "crossband+crossband": 12,
+   "crossband+own_m6": 187,
+   "own_m6+own_m6": 181
+  },
+  "pair_sep_mas_p10_50_90": [
+   22.44331836468566,
+   31.544613036848446,
+   35.67732670749705
+  ],
+  "pair_faint_over_bright_p16_50_84": [
+   0.0008332116907540866,
+   0.11134465040470806,
+   0.9258855489804236
+  ]
+ },
+ "F405N": {
+  "path": "crossband_seed_manual_merged_f405n_vetted.fits",
+  "n": 98604,
+  "fwhm_mas": 136.2,
+  "header": {
+   "COMPFWHM": 2.5,
+   "COMPRAT": 0.1,
+   "NCOMPAN": 2148
+  },
+  "origins": {
+   "crossband": 66912,
+   "own_m6": 31692
+  },
+  "frac_nn_lt_0p5fwhm": 0.023274917853231106,
+  "n_pairs_lt_0p5fwhm": 1147,
+  "pairs_by_origin": {
+   "crossband+crossband": 51,
+   "crossband+own_m6": 778,
+   "own_m6+own_m6": 318
+  },
+  "pair_sep_mas_p10_50_90": [
+   31.35840436415699,
+   41.141811214035606,
+   60.75303935548247
+  ],
+  "pair_faint_over_bright_p16_50_84": [
+   0.001294750607340969,
+   0.0034640440515445697,
+   0.8916941538190308
+  ]
+ }
+}

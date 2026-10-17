@@ -1,0 +1,90 @@
+{
+ "field": "brick",
+ "filt": "F405N",
+ "which": "after",
+ "vetted": "/blue/adamginsburg/adamginsburg/jwst/brick/catalogs/f405n_merged_o001_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+ "resid": "/blue/adamginsburg/adamginsburg/jwst/brick/F405N/pipeline/jw02221-o001_t001_nircam_clear-f405n-merged_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+ "n_vetted": 88722,
+ "n_sample": 60000,
+ "fwhm_pix": 2.165,
+ "frac_lt_m5_all": 0.19261891652902213,
+ "frac_gt5_all": 0.09194654387106461,
+ "frac_nn_lt_1p5fwhm": 0.21613333333333334,
+ "group_size_values": [
+  1.0
+ ],
+ "bins": [
+  {
+   "lo": 0.0,
+   "hi": 0.5,
+   "n": 562,
+   "frac_lt_m5": 0.9501779359430605,
+   "frac_gt5": 0.017793594306049824,
+   "med_snr": -14.535446433945477
+  },
+  {
+   "lo": 0.5,
+   "hi": 0.75,
+   "n": 1010,
+   "frac_lt_m5": 0.9445544554455445,
+   "frac_gt5": 0.0039603960396039604,
+   "med_snr": -14.703983658893815
+  },
+  {
+   "lo": 0.75,
+   "hi": 1.0,
+   "n": 2287,
+   "frac_lt_m5": 0.8491473546130301,
+   "frac_gt5": 0.004809794490599038,
+   "med_snr": -13.631233673605465
+  },
+  {
+   "lo": 1.0,
+   "hi": 1.25,
+   "n": 2986,
+   "frac_lt_m5": 0.5689886135298058,
+   "frac_gt5": 0.006363027461486939,
+   "med_snr": -5.850742220548952
+  },
+  {
+   "lo": 1.25,
+   "hi": 1.5,
+   "n": 6116,
+   "frac_lt_m5": 0.3790058862001308,
+   "frac_gt5": 0.01079136690647482,
+   "med_snr": -3.3914240227403982
+  },
+  {
+   "lo": 1.5,
+   "hi": 2.0,
+   "n": 9293,
+   "frac_lt_m5": 0.23630689766490906,
+   "frac_gt5": 0.03637146239104702,
+   "med_snr": -0.7656327299206381
+  },
+  {
+   "lo": 2.0,
+   "hi": 3.0,
+   "n": 12242,
+   "frac_lt_m5": 0.05963077928443065,
+   "frac_gt5": 0.09377552687469368,
+   "med_snr": 1.4736391257430617
+  },
+  {
+   "lo": 3.0,
+   "hi": 5.0,
+   "n": 19520,
+   "frac_lt_m5": 0.03939549180327869,
+   "frac_gt5": 0.1454405737704918,
+   "med_snr": 2.0771370402720777
+  },
+  {
+   "lo": 5.0,
+   "hi": Infinity,
+   "n": 5921,
+   "frac_lt_m5": 0.06806282722513089,
+   "frac_gt5": 0.1817260597871981,
+   "med_snr": 1.7100636329235444
+  }
+ ]
+}
