@@ -3909,7 +3909,6 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # matching the user's by-eye).  For IN-FOV use we fall back to the small grid
     # if the large file is missing (only forced sources hard-require it).
     if forced_sources_present or _is_miri:
-        from .filtering import get_filtername
         _inst = header['INSTRUME'].lower()   # 'nircam' or 'miri'
         _det = header['DETECTOR']
         if _det == 'NRCALONG':
