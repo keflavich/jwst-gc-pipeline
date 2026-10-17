@@ -120,6 +120,48 @@ def test_nan_variance_component_is_not_dropped():
     assert drops == []
 
 
+def test_drop_table_records_the_data_floor():
+    recs = [{'xcentroid': 1.0, 'ycentroid': 1.0, 'core_peak': 900.0, 'npix': 9}]
+    no_sat = np.zeros((4, 4), bool)
+    tab = ssf.severity_drop_table(recs, no_sat, 5000.0, data_floor=448.0)
+    assert list(tab['sat_data_floor']) == [448.0]
+    assert list(ssf.severity_drop_table(recs, no_sat, 5000.0)['sat_data_floor']) == [0.0]
+
+
+# A cosmic ray that saturates a sky pixel in a late group: the jwst saturation
+# step grows the flag to 3x3 and the ramp fit keeps the pre-hit (sky) rate.
+# The block's left edge is 2 px from an unsaturated 600 MJy/sr star, so the
+# data-floor gate's 5 px maximum filter sees the star and keeps the block
+# (10678 F480M o081 x=29 y=1493: a 196 MJy/sr block beside a 588 star).
+DATA_FLOOR = 448.0
+NEIGHBOUR = (90.0, 100.0, 600.0)
+CR_BLOCK = (slice(99, 102), slice(92, 95))
+
+
+def _cr_scene(stars=()):
+    h = _hdul(list(stars))
+    _star(h['SCI'].data, *NEIGHBOUR)
+    h['DQ'].data[CR_BLOCK] |= SAT
+    return h
+
+
+def test_a_cr_block_beside_a_star_passes_the_data_floor_below_it():
+    """The block is recorded as a drop (the data-floor gate keeps it on the
+    neighbour's pixels), with its own peak at the sky + wing level."""
+    drops = []
+    saturated, *_ = ssf.find_saturated_stars(
+        _cr_scene([WEAK]),
+        sat_data_floor=DATA_FLOOR, severity_floor=5000.0,
+        severity_drops=drops)
+    by_x = {round(r['xcentroid']): r for r in drops}
+    assert set(by_x) == {round(WEAK[0]), 92}
+    assert by_x[92]['core_peak'] < DATA_FLOOR
+    assert by_x[round(WEAK[0])]['core_peak'] >= DATA_FLOOR
+    tab = ssf.severity_drop_table(drops, saturated, 5000.0,
+                                  data_floor=DATA_FLOOR)
+    assert len(tab) == 2
+
+
 def test_empty_drop_table_round_trips(tmp_path):
     """An empty table is written too, so a rerun overwrites a stale file."""
     tab = ssf.severity_drop_table([], np.zeros((4, 4), bool), 5000.0)
@@ -201,6 +243,78 @@ def test_reader_without_drops_hands_off_nothing(tmp_path, rows):
     if rows is not None:
         _write_drops(fn, rows)
     assert C._severity_drop_handoff_xy(fn, None, FWHM) == (None, 0.0)
+
+
+def _write_peaked_drops(path, rows, data_floor=DATA_FLOOR):
+    """rows: (x, y, core_peak)."""
+    ssf.severity_drop_table(
+        [{'xcentroid': x, 'ycentroid': y, 'core_peak': pk, 'npix': 9}
+         for x, y, pk in rows], np.zeros((4, 4), bool), 5000.0,
+        data_floor=data_floor).write(path)
+
+
+TRANSIENT = (92.0, 100.0, 123.0)
+STAR = (10.0, 10.0, 900.0)
+
+
+def test_reader_skips_drops_whose_core_is_below_the_data_floor(
+        tmp_path, monkeypatch):
+    monkeypatch.delenv('DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD', raising=False)
+    fn = str(tmp_path / 'f_m7_satstar_severity_dropped.fits')
+    _write_peaked_drops(fn, [STAR, TRANSIENT, (20.0, 20.0, DATA_FLOOR)])
+    xy, _ = C._severity_drop_handoff_xy(fn, None, FWHM)
+    np.testing.assert_allclose(xy, [[10.0, 10.0], [20.0, 20.0]])
+
+
+def test_reader_hands_off_nothing_when_every_drop_is_a_transient(
+        tmp_path, monkeypatch):
+    monkeypatch.delenv('DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD', raising=False)
+    fn = str(tmp_path / 'f_m7_satstar_severity_dropped.fits')
+    _write_peaked_drops(fn, [TRANSIENT])
+    assert C._severity_drop_handoff_xy(fn, None, FWHM) == (None, 0.0)
+
+
+@pytest.mark.parametrize('case', ['switch_off', 'no_floor', 'old_file'])
+def test_reader_guard_off_hands_off_every_drop(tmp_path, monkeypatch, case):
+    """Guard switched off, a filter with no data floor (0), or a file written
+    before the sat_data_floor column existed: every drop is handed off."""
+    monkeypatch.delenv('DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD', raising=False)
+    fn = str(tmp_path / 'f_m7_satstar_severity_dropped.fits')
+    if case == 'switch_off':
+        monkeypatch.setenv('DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD', '0')
+    _write_peaked_drops(fn, [STAR, TRANSIENT],
+                        data_floor=0.0 if case == 'no_floor' else DATA_FLOOR)
+    if case == 'old_file':
+        tab = Table.read(fn)
+        tab.remove_column('sat_data_floor')
+        tab.write(fn, overwrite=True)
+    xy, _ = C._severity_drop_handoff_xy(fn, None, FWHM)
+    assert len(xy) == 2
+
+
+def test_peak_guard_switch_rejects_typos(tmp_path, monkeypatch):
+    monkeypatch.setenv('DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD', 'of')
+    fn = str(tmp_path / 'f_m7_satstar_severity_dropped.fits')
+    _write_peaked_drops(fn, [STAR])
+    with pytest.raises(ValueError,
+                       match='DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD'):
+        C._severity_drop_handoff_xy(fn, None, FWHM)
+
+
+def test_cr_block_scene_end_to_end_hands_off_only_the_star(
+        tmp_path, monkeypatch):
+    """find_saturated_stars -> severity_drop_table -> file -> reader: the
+    weakly saturated star is handed off, the CR block beside it is not."""
+    monkeypatch.delenv('DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD', raising=False)
+    drops = []
+    saturated, *_ = ssf.find_saturated_stars(
+        _cr_scene([WEAK]), sat_data_floor=DATA_FLOOR, severity_floor=5000.0,
+        severity_drops=drops)
+    fn = str(tmp_path / 'f_m7_satstar_severity_dropped.fits')
+    ssf.severity_drop_table(drops, saturated, 5000.0,
+                            data_floor=DATA_FLOOR).write(fn)
+    xy, _ = C._severity_drop_handoff_xy(fn, None, FWHM)
+    np.testing.assert_allclose(xy, [[WEAK[0], WEAK[1]]])
 
 
 def _prepare_with_drop(tmp_path, monkeypatch, *, write_drop=True):

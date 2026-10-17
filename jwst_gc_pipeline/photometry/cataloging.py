@@ -802,6 +802,32 @@ def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
     for the gate-reject hand-off.  A missing file (a satstar catalog cached
     before the file existed) hands off nothing.
 
+    Transient guard (env ``DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD``, default
+    on): a drop whose ``core_peak`` is below its row's ``sat_data_floor`` is
+    not handed off.  A pixel that saturates from the star's own flux has a
+    ramp-fit rate of at least the readout bound S * PHOTMJSR / t_last.  The
+    default floor is the filter's table value lowered to FRAC (0.5) x that
+    bound (``_resolve_satstar_data_floor``), so the bound is at least twice
+    the floor.  An explicit floor, env SATSTAR_DATA_FLOOR, a
+    SATSTAR_DATA_FLOOR_READOUT_FRAC above 0.5 or a header without the
+    readout keywords (table value only) carries no such margin.  A cosmic
+    ray that saturates a pixel leaves the rate of the groups before it: sky,
+    plus any neighbour's wing.  The data-floor gate tests the 5 px maximum
+    filter, so such a block passes on a neighbouring star's pixels.
+    On 10678 F480M NRCBLONG (o081 + o061 exposure 1, floor 448 MJy/sr), 3
+    of 503 drops fall below the floor, at 44-196 MJy/sr, and none of the 3
+    has an F212N counterpart in the STScI level-3 catalog.  Two are 3x3
+    SATURATED blocks on the sky beside a 480-600 MJy/sr star, and the third
+    sits in a JUMP_DET patch.  Of the other 500 (670-2090 MJy/sr), 497 match
+    F212N within 80 mas and 3 match F480M; a 3" offset control matches 2-4%.
+    A minimum ``npix`` cannot do this job.  The jwst saturation step grows
+    each flag to 3x3, so 57 of the 200 o081 drops are 9 px stars, the size of
+    a 1 px hit.  Files written before the ``sat_data_floor`` column existed
+    are not guarded.  A cosmic ray on the core of a star fainter than the
+    floor is skipped too, and that star stays unmodelled (its SATURATED core
+    is masked out of the daophot fit) as it was before the hand-off existed;
+    no drop the guard skipped in these two exposures is a star.
+
     Returns
     -------
     xy : `~numpy.ndarray` (N, 2) or None
@@ -819,6 +845,15 @@ def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
     if (len(tab) == 0 or 'xcentroid' not in tab.colnames
             or 'ycentroid' not in tab.colnames):
         return None, 0.0
+    n_transient = 0
+    if (_handoff_env_flag('DAOPHOT_HANDOFF_SEVERITY_DROP_PEAK_GUARD', True)
+            and 'core_peak' in tab.colnames
+            and 'sat_data_floor' in tab.colnames):
+        floor = np.asarray(tab['sat_data_floor'], dtype=float)
+        peak = np.asarray(tab['core_peak'], dtype=float)
+        transient = np.isfinite(floor) & (floor > 0) & ~(peak >= floor)
+        n_transient = int(transient.sum())
+        tab = tab[~transient]
     xy = np.column_stack([np.asarray(tab['xcentroid'], dtype=float),
                           np.asarray(tab['ycentroid'], dtype=float)])
     xy = xy[np.isfinite(xy).all(axis=1)]
@@ -839,7 +874,9 @@ def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
     print(f"[{label}] severity-drop hand-off: {len(xy)} weakly saturated "
           f"star(s) the satstar severity gate dropped are handed to daophot "
           f"(r={radius_pix:.2f}px; {n_near_acc} dropped as within "
-          f"{accepted_excl_fwhm:g} FWHM of an accepted satstar)", flush=True)
+          f"{accepted_excl_fwhm:g} FWHM of an accepted satstar, "
+          f"{n_transient} as transients with a core below the data floor)",
+          flush=True)
     if len(xy) == 0:
         return None, 0.0
     return xy, radius_pix
