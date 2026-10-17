@@ -6364,6 +6364,16 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
                 print(f"astrom checkpoint: no gaia_virac2_refcat under "
                       f"{basepath}/catalogs; using the Gaia-only seed refcat",
                       flush=True)
+                if os.path.exists(path):
+                    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                        REFERENCE_KIND_GAIA)
+                    print(f"astrom checkpoint: reference catalog {path}",
+                          flush=True)
+                    out = load_reference_catalog(path)
+                    # Recorded in the m2 reference_tie and named in its log
+                    # line, so a Gaia tie is not reported as VIRAC2.
+                    out['reference_kind'] = REFERENCE_KIND_GAIA
+                    return out
     if path and os.path.exists(path):
         print(f"astrom checkpoint: reference catalog {path}", flush=True)
         return load_reference_catalog(path)

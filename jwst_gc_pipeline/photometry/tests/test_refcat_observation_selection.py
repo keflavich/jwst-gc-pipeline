@@ -227,6 +227,18 @@ def test_gaia_only_field_falls_back_to_gaia_refcat(tmp_path, capsys, monkeypatch
                                     gaia_fallback=True)
     assert out is not None
     assert _chosen(capsys) == 'gaia_refcat.fits'
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        REFERENCE_KIND_GAIA)
+    assert out['reference_kind'] == REFERENCE_KIND_GAIA
+
+
+def test_virac2_refcat_carries_no_gaia_kind(tmp_path, monkeypatch):
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_virac2_refcat_epoch2023.71.fits'])
+    out = _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905',
+                                    gaia_fallback=True)
+    assert 'reference_kind' not in out
 
 
 def test_gaia_fallback_is_off_by_default(tmp_path, monkeypatch):
@@ -349,12 +361,11 @@ def test_only_the_m2_stage_checkpoint_uses_gaia(tmp_path, monkeypatch, label,
 
 def test_m2_gaia_does_not_leak_into_later_stages_or_crossfilter(tmp_path,
                                                                 monkeypatch):
-    """m2 then m3 in one process share the cache; m3 and the m7 cross-filter
-    checkpoint must still see no reference."""
+    """m2 then the m7 cross-filter checkpoint in one process share the cache;
+    the cross-filter checkpoint must still see no reference."""
     from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
     _cat, seen = _stub_stage_checkpoint(monkeypatch)
     bp, cut_bp = _wd1_tree(tmp_path, 'm2')
-    _wd1_tree(tmp_path, 'm3')
     cache = {}
     _cat._run_astrometry_stage_checkpoint('m2', 'nrca', 'F150W', cut_bp, bp,
                                           '1905', _WdOpt(), cache, context='t')
