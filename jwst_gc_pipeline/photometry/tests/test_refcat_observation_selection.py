@@ -211,31 +211,65 @@ def test_every_call_site_actually_passes_field(func_name):
 
 # --- Gaia-only fields (#1167) ----------------------------------------------
 
+def _chosen(capsys):
+    import os as _os
+    lines = [ln for ln in capsys.readouterr().out.splitlines()
+             if 'reference catalog' in ln]
+    return _os.path.basename(lines[-1].split()[-1]) if lines else None
+
+
 def test_gaia_only_field_falls_back_to_gaia_refcat(tmp_path, capsys, monkeypatch):
     """wd1 (1905 o001, GAIA frame) has only catalogs/gaia_refcat.fits."""
-    import os as _os
     from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
     monkeypatch.delenv('ASTROM_REFCAT', raising=False)
     bp = _catalogs(tmp_path, ['gaia_refcat.fits'])
-    out = _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905')
+    out = _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905',
+                                    gaia_fallback=True)
     assert out is not None
-    chosen = [ln for ln in capsys.readouterr().out.splitlines()
-              if 'reference catalog' in ln]
-    assert chosen and _os.path.basename(chosen[-1].split()[-1]) == 'gaia_refcat.fits'
+    assert _chosen(capsys) == 'gaia_refcat.fits'
+
+
+def test_gaia_fallback_is_off_by_default(tmp_path, monkeypatch):
+    """Only the m2 stage checkpoint asks for the fallback (#1201 review)."""
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits'])
+    assert _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905') is None
+
+
+def test_gaia_fallback_matches_exact_names_only(tmp_path, capsys, monkeypatch):
+    """A backup or test build must not be preferred over gaia_refcat.fits."""
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits', 'gaia_refcat_old.fits',
+                              'gaia_refcat_test.fits'])
+    _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905',
+                              gaia_fallback=True)
+    assert _chosen(capsys) == 'gaia_refcat.fits'
+    bp2 = _catalogs(tmp_path / 'b', ['gaia_refcat_old.fits'])
+    assert _astrom_checkpoint_refcat(bp2, field='001', proposal_id='1905',
+                                     gaia_fallback=True) is None
+
+
+def test_gaia_fallback_takes_this_observations_token(tmp_path, capsys,
+                                                     monkeypatch):
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits', 'gaia_refcat_o001.fits'])
+    _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905',
+                              gaia_fallback=True)
+    assert _chosen(capsys) == 'gaia_refcat_o001.fits'
 
 
 def test_virac2_refcat_still_preferred_over_gaia_refcat(tmp_path, capsys,
                                                         monkeypatch):
-    import os as _os
     from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
     monkeypatch.delenv('ASTROM_REFCAT', raising=False)
     bp = _catalogs(tmp_path, ['gaia_refcat.fits',
                               'gaia_virac2_refcat_epoch2023.71.fits'])
-    _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905')
-    chosen = [ln for ln in capsys.readouterr().out.splitlines()
-              if 'reference catalog' in ln]
-    assert _os.path.basename(chosen[-1].split()[-1]) == \
-        'gaia_virac2_refcat_epoch2023.71.fits'
+    _astrom_checkpoint_refcat(bp, field='001', proposal_id='1905',
+                              gaia_fallback=True)
+    assert _chosen(capsys) == 'gaia_virac2_refcat_epoch2023.71.fits'
 
 
 def test_virac2_framed_field_does_not_fall_back_to_gaia(tmp_path, monkeypatch):
@@ -248,4 +282,97 @@ def test_virac2_framed_field_does_not_fall_back_to_gaia(tmp_path, monkeypatch):
     monkeypatch.setattr(ac, 'reference_catalog_required', lambda p, f: True)
     bp = _catalogs(tmp_path, ['gaia_refcat.fits'])
     with pytest.raises(MissingReferenceCatalogError):
-        _astrom_checkpoint_refcat(bp, field='001', proposal_id='2221')
+        _astrom_checkpoint_refcat(bp, field='001', proposal_id='2221',
+                                  gaia_fallback=True)
+
+
+# --- which checkpoints take the fallback (#1201 review) ---------------------
+
+class _WdOpt:
+    target = 'wd1'
+    proposal_id = '1905'
+    field = '001'
+    modules = 'nrca'
+    each_exposure = True
+    cutout_region = ''
+    epsf = False
+
+
+def _wd1_tree(tmp_path, label):
+    from astropy.table import Table
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits'])
+    cut_bp = tmp_path / 'cut'
+    d = cut_bp / 'F150W'
+    d.mkdir(parents=True, exist_ok=True)
+    for i in (1, 2):
+        Table({'x': [1.0]}).write(str(
+            d / f'f150w_nrca1_visit001_vgroup02101_exp{i:05d}_{label}'
+                f'_daophot_basic.fits'))
+    return bp, str(cut_bp)
+
+
+def _stub_stage_checkpoint(monkeypatch):
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
+    from jwst_gc_pipeline.photometry import cataloging as _cat
+    for k in ('ASTROM_CHECKPOINT', 'ASTROM_CHECKPOINT_WARN_ONLY', 'ASTROM_REFCAT'):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv('ASTROM_SATSTAR_CONSENSUS', '0')
+    monkeypatch.setattr(_cat, '_drop_foreign_obs_duplicates',
+                        lambda fns, *a, **k: fns)
+    monkeypatch.setattr(ac, 'resolve_tie_reference', lambda refcat, *a, **k: refcat)
+    seen = {}
+
+    def _fake(tables, merge_label, refcat=None, **kw):
+        seen[merge_label] = refcat
+        return dict(passed=True, failures=[], corrections=[],
+                    unverified_blocking=[], record_path='x')
+    monkeypatch.setattr(ac, 'run_visit_checkpoint', _fake)
+    return _cat, seen
+
+
+@pytest.mark.parametrize('label,expect_gaia', [('m2', True), ('m1', False),
+                                               ('m3', False), ('m7', False)])
+def test_only_the_m2_stage_checkpoint_uses_gaia(tmp_path, monkeypatch, label,
+                                                expect_gaia):
+    _cat, seen = _stub_stage_checkpoint(monkeypatch)
+    bp, cut_bp = _wd1_tree(tmp_path, label)
+    cache = {}
+    _cat._run_astrometry_stage_checkpoint(label, 'nrca', 'F150W', cut_bp, bp,
+                                          '1905', _WdOpt(), cache, context='t')
+    if label in seen:
+        assert (seen[label] is not None) == expect_gaia, seen
+    else:
+        assert not expect_gaia
+    # the shared key the m7 cross-filter checkpoint reads stays consensus-only
+    assert cache.get('refcat') is None
+
+
+def test_m2_gaia_does_not_leak_into_later_stages_or_crossfilter(tmp_path,
+                                                                monkeypatch):
+    """m2 then m3 in one process share the cache; m3 and the m7 cross-filter
+    checkpoint must still see no reference."""
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
+    _cat, seen = _stub_stage_checkpoint(monkeypatch)
+    bp, cut_bp = _wd1_tree(tmp_path, 'm2')
+    _wd1_tree(tmp_path, 'm3')
+    cache = {}
+    _cat._run_astrometry_stage_checkpoint('m2', 'nrca', 'F150W', cut_bp, bp,
+                                          '1905', _WdOpt(), cache, context='t')
+    assert seen['m2'] is not None
+    assert cache.get('refcat') is None
+    xf = {}
+    monkeypatch.setattr(_cat, 'run_crossfilter_checkpoint',
+                        lambda catalogs, refcat=None, **kw: xf.setdefault('r', refcat),
+                        raising=False)
+    monkeypatch.setattr(ac, 'run_crossfilter_checkpoint',
+                        lambda catalogs, refcat=None, **kw: xf.setdefault('r', refcat))
+    from astropy.table import Table
+    vp = {}
+    for f in ('F150W', 'F200W'):
+        p = tmp_path / f'{f}_vetted.fits'
+        Table({'x': [1.0]}).write(str(p))
+        vp[f] = str(p)
+    _cat._run_crossfilter_astrom_checkpoint(vp, cut_bp, bp, cache,
+                                            obs_token='_o001',
+                                            proposal_id='1905')
+    assert 'r' in xf and xf['r'] is None

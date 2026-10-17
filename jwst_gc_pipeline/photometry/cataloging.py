@@ -6316,7 +6316,14 @@ def _refcat_is_required(proposal_id, field):
     return _ac.reference_catalog_required(proposal_id, field)
 
 
-def _astrom_checkpoint_refcat(basepath, field, proposal_id=None):
+#: The Gaia-only seed refcat names the m2 fallback accepts: the untokened file
+#: or one built for a single observation.  Exact names, so a backup or test
+#: build (``gaia_refcat_old.fits``) is never preferred over the real one.
+_GAIA_REFCAT_RE = re.compile(r'^gaia_refcat(?:_o\d{3})?\.fits$')
+
+
+def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
+                              gaia_fallback=False):
     """Locate + load the absolute reference catalog for the astrometry
     checkpoints: env ``ASTROM_REFCAT`` first, else the seed refcat matching this
     OBSERVATION (see :func:`pick_refcat`).  None (consensus-only checks) when
@@ -6328,19 +6335,30 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None):
     selector cannot see the omission.  Pass ``None`` explicitly for a caller
     that genuinely does not know its observation; that reads as a decision
     rather than an oversight, and it still refuses to substitute some other
-    observation's catalogue."""
+    observation's catalogue.
+
+    ``gaia_fallback`` (keyword-only, default off): when no
+    ``gaia_virac2_refcat`` exists and the field is not VIRAC2-framed, use the
+    Gaia-only seed refcat (``gaia_refcat.fits`` / ``gaia_refcat_oNNN.fits``).
+    Only the m2 stage checkpoint asks for it (#1167); m1, m3-m8 and the m7
+    cross-filter anchor tie keep the consensus-only behaviour, because a
+    Gaia-only reference can make the blocking m7 anchor tie fail with
+    "same-star tie could not be refined" (#1201 review)."""
     from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
         path = _pick_refcat(cands, field=field)
-        if not path and not _refcat_is_required(proposal_id, field):
+        if (gaia_fallback and not path
+                and not _refcat_is_required(proposal_id, field)):
             # A field outside the VVV footprint carries only the Gaia seed
             # catalog.  Without this fallback its m2 checkpoint ran
             # consensus-only and left wd1's 25-50 mas per-visit bulks and its
             # 2.9" visit-003 offset unverified (#1167).  VIRAC2-framed fields
             # never fall back: tying them to Gaia would swap the frame.
-            gcands = sorted(glob.glob(f"{basepath}/catalogs/gaia_refcat*.fits"))
+            gcands = sorted(
+                p for p in glob.glob(f"{basepath}/catalogs/gaia_refcat*.fits")
+                if _GAIA_REFCAT_RE.match(os.path.basename(p)))
             path = _pick_refcat(gcands, field=field)
             if path:
                 print(f"astrom checkpoint: no gaia_virac2_refcat under "
@@ -7679,6 +7697,17 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             basepath, field=getattr(options, 'field', None),
             proposal_id=getattr(options, 'proposal_id', None))
     refcat = refcat_cache['refcat']
+    # Only m2 may fall back to the Gaia-only seed refcat (#1167).  The result
+    # is cached under its own key: 'refcat' stays exactly what every other
+    # stage and the m7 cross-filter checkpoint (which shares this dict) read,
+    # so none of them inherits the Gaia reference (#1201 review).
+    if refcat is None and merge_label == 'm2':
+        if 'refcat_m2_gaia' not in refcat_cache:
+            refcat_cache['refcat_m2_gaia'] = _astrom_checkpoint_refcat(
+                basepath, field=getattr(options, 'field', None),
+                proposal_id=getattr(options, 'proposal_id', None),
+                gaia_fallback=True)
+        refcat = refcat_cache['refcat_m2_gaia']
 
     # gc-treasury (10678) and any other field with
     # `alignment_config.tie_through_reference_filter` ties every filter OTHER
