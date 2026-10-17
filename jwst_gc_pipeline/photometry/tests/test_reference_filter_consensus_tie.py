@@ -311,3 +311,33 @@ def test_field_alignment_defaults_to_opted_out():
     cfg = FieldAlignment(proposal="X", fields=None, reference_frame=VIRAC2,
                          source=TABLE_CONSENSUS)
     assert cfg.tie_through_reference_filter is False
+
+
+# ---------------------------------------------------------------------------
+# Gaia-only reference (#1167): recorded and logged as Gaia, not VIRAC2
+# ---------------------------------------------------------------------------
+
+def test_gaia_only_tie_is_recorded_and_logged_as_gaia(tmp_path, capsys):
+    DRA_MAS, DDEC_MAS = 15.0, -9.0
+    rng = np.random.default_rng(7)
+    ra, dec = _field(n=400, rng=rng)
+    ref_all, _ = _reference_sets(ra, dec, rng=rng)
+    # what load_reference_catalog returns for gaia_refcat.fits, plus the kind
+    # cataloging._astrom_checkpoint_refcat stamps on the m2 fallback
+    gaia_refcat = dict(all=ref_all, sparse=ref_all, mag=None, dense=False,
+                       sigma_pred_mas=None,
+                       reference_kind=ac.REFERENCE_KIND_GAIA)
+    ra_f = ra + DRA_MAS / 3.6e6 / COSD
+    dec_f = dec + DDEC_MAS / 3.6e6
+    tables = [_exposure_table(ra_f, dec_f, exposure=e, filtername="F150W",
+                              rng=np.random.default_rng(700 + e))
+              for e in range(1, 5)]
+    rec = ac.run_visit_checkpoint(tables, "m2", refcat=gaia_refcat,
+                                  filtername="F150W", record_dir=str(tmp_path),
+                                  context="test-gaia-only")
+    ref_tie = rec["visits"][0]["reference_tie"]
+    assert ref_tie["reference_kind"] == ac.REFERENCE_KIND_GAIA
+    assert "reference_filter" not in ref_tie
+    assert len(rec["corrections"]) == 1
+    out = capsys.readouterr().out
+    assert "off Gaia" in out and "off VIRAC2" not in out
