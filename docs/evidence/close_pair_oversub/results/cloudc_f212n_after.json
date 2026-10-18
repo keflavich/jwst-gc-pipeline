@@ -1,0 +1,90 @@
+{
+ "field": "cloudc",
+ "filt": "F212N",
+ "which": "after",
+ "vetted": "/orange/adamginsburg/jwst/cloudc/catalogs/f212n_merged_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits",
+ "resid": "/orange/adamginsburg/jwst/cloudc/F212N/pipeline/jw02221-o002_t001_nircam_clear-f212n-merged_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits",
+ "n_vetted": 233665,
+ "n_sample": 60000,
+ "fwhm_pix": 2.341,
+ "frac_lt_m5_all": 0.06998714760227671,
+ "frac_gt5_all": 0.05763549264742702,
+ "frac_nn_lt_1p5fwhm": 0.05906666666666667,
+ "group_size_values": [
+  1.0
+ ],
+ "bins": [
+  {
+   "lo": 0.0,
+   "hi": 0.5,
+   "n": 13,
+   "frac_lt_m5": 1.0,
+   "frac_gt5": 0.0,
+   "med_snr": -22.446164223520448
+  },
+  {
+   "lo": 0.5,
+   "hi": 0.75,
+   "n": 43,
+   "frac_lt_m5": 1.0,
+   "frac_gt5": 0.0,
+   "med_snr": -19.98741773084702
+  },
+  {
+   "lo": 0.75,
+   "hi": 1.0,
+   "n": 118,
+   "frac_lt_m5": 0.8135593220338984,
+   "frac_gt5": 0.00847457627118644,
+   "med_snr": -9.828657185723818
+  },
+  {
+   "lo": 1.0,
+   "hi": 1.25,
+   "n": 884,
+   "frac_lt_m5": 0.504524886877828,
+   "frac_gt5": 0.012443438914027148,
+   "med_snr": -5.048293345581486
+  },
+  {
+   "lo": 1.25,
+   "hi": 1.5,
+   "n": 2486,
+   "frac_lt_m5": 0.32180209171359614,
+   "frac_gt5": 0.021319388576025743,
+   "med_snr": -2.853607162919169
+  },
+  {
+   "lo": 1.5,
+   "hi": 2.0,
+   "n": 5347,
+   "frac_lt_m5": 0.1584065831307275,
+   "frac_gt5": 0.034224798952683745,
+   "med_snr": -0.6701683887691984
+  },
+  {
+   "lo": 2.0,
+   "hi": 3.0,
+   "n": 10229,
+   "frac_lt_m5": 0.03910450679440806,
+   "frac_gt5": 0.04262391240590478,
+   "med_snr": 0.9609722246662811
+  },
+  {
+   "lo": 3.0,
+   "hi": 5.0,
+   "n": 23584,
+   "frac_lt_m5": 0.0362533921302578,
+   "frac_gt5": 0.06309362279511534,
+   "med_snr": 1.2455109079861295
+  },
+  {
+   "lo": 5.0,
+   "hi": Infinity,
+   "n": 17207,
+   "frac_lt_m5": 0.04027430696809438,
+   "frac_gt5": 0.07444644621375021,
+   "med_snr": 0.6776461796328742
+  }
+ ]
+}

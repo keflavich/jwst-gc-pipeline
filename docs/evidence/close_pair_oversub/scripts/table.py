@@ -7,7 +7,7 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out')
 GROUPS = [(0, 0.75), (0.75, 1.25), (1.25, 1.5), (1.5, 2), (2, 3), (3, 5), (5, float('inf'))]
 lines = ['| field band (m7) | n vetted | ' + ' | '.join(f'{a}–{b:g}' for a, b in GROUPS)
          + ' | all | NN < 1.5 FWHM |', '|---|---|' + '---|' * len(GROUPS) + '---|---|']
-files = sorted(glob.glob(os.path.join(OUT, '*.json')),
+files = sorted((f for f in glob.glob(os.path.join(OUT, '*.json')) if f.endswith(('_after.json', '_before.json'))),
                key=lambda f: (json.load(open(f))['which'] != 'after', f))
 for f in files:
     d = json.load(open(f))

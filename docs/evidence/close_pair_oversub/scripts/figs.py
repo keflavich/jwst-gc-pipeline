@@ -31,7 +31,7 @@ SEPBINS = [(0, 0.75), (0.75, 1.25), (1.25, 2.0)]
 
 def curves():
     fig, ax = plt.subplots(1, 3, figsize=(16, 4.6))
-    for f in sorted(glob.glob(os.path.join(OUT, '*.json'))):
+    for f in sorted(f for f in glob.glob(os.path.join(OUT, '*.json')) if f.endswith(('_after.json', '_before.json'))):
         d = json.load(open(f))
         name = os.path.basename(f)[:-5]
         ls = '--' if d['which'] == 'before' else '-'
