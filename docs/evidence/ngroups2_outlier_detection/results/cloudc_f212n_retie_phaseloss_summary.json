@@ -1,0 +1,71 @@
+{
+ "label": "cloudc",
+ "filt": "F212N",
+ "n_vetted": {
+  "m2": 294266,
+  "m3": 258956,
+  "m4": 260262,
+  "resbgsub_m5": 271333,
+  "resbgsub_m6": 264901,
+  "resbgsub_m7": 263836
+ },
+ "n_union_m2_m6": 361553,
+ "n_lost": 100390,
+ "ctrl_final_resid_snr_p50": 0.9574083338425152,
+ "ctrl_final_resid_snr_p90": 14.977427254201205,
+ "ctrl_final_resid_snr_p99": 185.03175033198872,
+ "by_last_phase": {
+  "m2->vetted_out": {
+   "n": 29465,
+   "starlike_left": 23628
+  },
+  "m2->not_fit": {
+   "n": 14752,
+   "starlike_left": 10466
+  },
+  "m3->vetted_out": {
+   "n": 6876,
+   "starlike_left": 5419
+  },
+  "m3->not_fit": {
+   "n": 3144,
+   "starlike_left": 2111
+  },
+  "m4->vetted_out": {
+   "n": 13659,
+   "starlike_left": 11503
+  },
+  "m4->not_fit": {
+   "n": 4427,
+   "starlike_left": 3152
+  },
+  "resbgsub_m5->vetted_out": {
+   "n": 6692,
+   "starlike_left": 5430
+  },
+  "resbgsub_m5->not_fit": {
+   "n": 3735,
+   "starlike_left": 2595
+  },
+  "resbgsub_m6->vetted_out": {
+   "n": 9721,
+   "starlike_left": 8476
+  },
+  "resbgsub_m6->not_fit": {
+   "n": 7919,
+   "starlike_left": 4752
+  }
+ },
+ "m7_seed_reason": {
+  "companion_cut": {
+   "n": 3175,
+   "starlike_left": 1331
+  },
+  "seeded": {
+   "n": 14465,
+   "starlike_left": 11897
+  }
+ },
+ "n_final_vetted_inner": 263836,
+ "n_starlike_left": 77532
+}

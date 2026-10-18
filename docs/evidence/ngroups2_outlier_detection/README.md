@@ -80,6 +80,48 @@ band; that is the likely reason, but it has not been measured here. The
 largest o050 residuals are bright-star cores (`figures/o050_m7_gallery.png`),
 which are the same before and after and are a separate PSF-model issue.
 
+**cloudc F212N m7** (finalize job 46172885, 2026-10-18; `scripts/run_cloudc_m7_audit.sh`).
+"Pre-rerun" is the 2026-09-02 m7, "retie" the 2026-10-09 m7 (no cosmic-ray
+rejection), "this fix" the re-catalogued m7. Starlike residuals and the
+5,000-star control p99 come from `phase_loss.py` with the same code on all
+three products (`results/cloudc_f212n_{prerun,retie,ng2}_phaseloss_summary.json`).
+The 20,000-star control fraction comes from `ctrl_map.py`; it was not run on
+the pre-rerun product, whose residual mosaic has since been overwritten.
+
+| cloudc F212N m7 | vetted stars | starlike residuals | control S/N > 10 | control p99 | random-position p99 |
+|---|---|---|---|---|---|
+| pre-rerun, 2026-09-02 | 137,475 | 41,027 | -- | 9.4 | 15.5 |
+| retie, 2026-10-09 | 263,836 | 77,532 | 12.6% | 185.0 | 175.9 |
+| this fix, 2026-10-18 | 233,665 | 12,940 | 3.1% | 44.9 | 9.1 |
+
+Control S/N > 10 by catalogue flux (`results/cloudc_f212n_ctrl_by_flux.json`):
+
+| flux | retie | this fix |
+|---|---|---|
+| < 1e4 (94% of stars) | 10.9% | 0.9% |
+| 1e4 - 3e4 | 25.0% | 19.6% |
+| > 3e4 | 63.2% | 62.8% |
+
+* The fix removes the cosmic-ray excess. For stars below flux 1e4 the control
+  p99 is 9.2, the same as the pre-rerun 9.4.
+* The retie m7 holds 30,171 more vetted sources than the re-catalogued one.
+* The starlike-residual count falls below the pre-rerun value. That drop also
+  includes the #1086 / #1107 gains seen in the other fields.
+* Bright stars (> 3e4) leave S/N > 10 at the same rate in the retie product
+  and with this fix, so this PR does not affect them. They raise the control
+  p99 over the pre-rerun value.
+* The pre-rerun m7 vetted catalogue lacked many of these bright stars. The
+  three largest pre-rerun starlike residuals (S/N 694, 280, 464) were absent
+  from it and still leave S/N 577, 281 and 188, now catalogued. Their entry
+  into the catalogue changes which stars the control sample draws.
+* The remaining faint S/N > 10 stars (`figures/cloudc_f212n_ng2_bad_*.png`)
+  are mostly 1-2 pixel sharp features present in the data mosaic, which
+  matches the August mosaic pixel for pixel (above).
+* At the 300 sampled pre-rerun starlike positions, 223 are now in the m7
+  vetted catalogue (retie: 208), and 87 still leave S/N > 5 (retie: 109).
+  21 leave S/N < -5, all catalogued; that is the close-pair
+  over-subtraction of #1206.
+
 ## Figures
 
 * `figures/cloudc_f212n_bad_50_150.png`, `figures/cloudc_f212n_bad_500_5000.png`
@@ -95,6 +137,9 @@ which are the same before and after and are a separate PSF-model issue.
   vetted stars with residual S/N > 10, and the S/N histograms.
 * `figures/o050_m7_gallery.png` -- m7 residual before | after at the 12
   worst-residual vetted stars of the retie product.
+* `figures/cloudc_f212n_ng2_before_after.png`, `figures/cloudc_f212n_ng2_ctrl_map.png`,
+  `figures/cloudc_f212n_ng2_bad_{50_150,500_5000}.png` -- the same four cloudc
+  figures on the re-catalogued m7 (the unsuffixed versions show the retie m7).
 
 ## Scripts
 
