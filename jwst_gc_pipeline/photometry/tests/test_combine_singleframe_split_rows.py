@@ -202,12 +202,30 @@ def test_owners_keep_co_occurring_rows():
 
 def test_owners_do_not_chain_beyond_the_radius():
     """A, B, C on a line 0.09" apart, all disjoint: B joins one neighbour, and
-    the other stays out because the group centroid then lies more than 0.1"
-    from it."""
+    the other stays out because it lies more than 0.1" from a group member."""
     ra, dec = _arrays([{0: 0.0}, {1: 0.09}, {2: 0.18, 3: 0.18}])
     owner = MC.split_row_owners(ra, dec, 0.1 * u.arcsec)
     assert len(set(owner.tolist())) == 2
     assert owner[0] != owner[2]
+
+
+def test_owners_group_is_never_wider_than_the_radius():
+    """Rows at 0", 0.08" (3 frames) and 0.155": both outer rows lie within
+    0.1" of the middle one, and the group centroid would lie within 0.1" of
+    each, but the outer rows are 0.155" apart, so only one joins."""
+    ra, dec = _arrays([{0: 0.0}, {1: 0.08, 2: 0.08, 3: 0.08}, {}])
+    ra = np.c_[ra, np.full(3, np.nan)]
+    dec = np.c_[dec, np.full(3, np.nan)]
+    ra[2, 4] = RA0 + 0.155 / 3600.0 / COSD
+    dec[2, 4] = DEC0
+    owner = MC.split_row_owners(ra, dec, 0.1 * u.arcsec)
+    assert owner[1] == 1
+    assert owner[0] != owner[2]
+    # every group's rows lie within the radius of each other
+    x = np.array([0.0, 0.08, 0.155])
+    for o in set(owner.tolist()):
+        xs = x[owner == o]
+        assert xs.max() - xs.min() <= 0.1
 
 
 def test_owners_ignore_rows_without_frames():
