@@ -21,6 +21,7 @@ import dask.array
 # before the FITS/ECSV writes (see merge_catalogs()).
 import yaml
 import yaml.representer
+from scipy.spatial import cKDTree
 
 from tqdm.auto import tqdm
 
@@ -361,6 +362,173 @@ def _resolve_dedup_offset(filtername, current):
     return current
 
 
+def _band_fwhm_arcsec(filtername, basepath=None):
+    """PSF FWHM of ``filtername`` in arcsec from the FWHM table, or None for
+    no ``filtername`` or a band the table lacks.  ``basepath`` is the field
+    tree whose ``reduction/fwhm_table.ecsv`` takes precedence over the
+    packaged table."""
+    if not filtername:
+        return None
+    from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    fwhm_tbl = Table.read(fwhm_table_path(basepath, _iov()))
+    row = fwhm_tbl[np.char.upper(np.asarray(fwhm_tbl['Filter']).astype(str))
+                   == str(filtername).upper()]
+    if not len(row):
+        return None
+    return float(row['PSF FWHM (arcsec)'][0])
+
+
+#: Disjoint base rows closer than this many PSF FWHM are one star
+#: (split_row_owners).  On brick m7, 73-96% of the merged-row pairs inside
+#: 0.75 FWHM have disjoint frame sets (F212N, F405N), against 27-50% at
+#: 1.0-1.25 FWHM, where real pairs fitted in alternating frames start to
+#: contribute.
+SPLIT_ROW_RADIUS_FWHM = 0.75
+
+
+def split_row_radius(filtername, min_offset):
+    """Merge radius of :func:`split_row_owners`:
+    ``min(min_offset, SPLIT_ROW_RADIUS_FWHM * FWHM)``, or ``min_offset`` when
+    the band's FWHM is unknown.  ``min_offset`` is the radius within which
+    Loop 1 already calls two detections the same star."""
+    fwhm = _band_fwhm_arcsec(filtername)
+    if fwhm is None:
+        return min_offset
+    return min(min_offset, SPLIT_ROW_RADIUS_FWHM * fwhm * u.arcsec)
+
+
+def split_row_owners(arr_ra, arr_dec, radius):
+    """Base rows of ``combine_singleframe`` that are one star split in two.
+
+    Loop 1 adds a frame's source as a new base row when it lies more than
+    ``min_offset`` from every existing row, judged at that frame's own fitted
+    position.  A star whose fit drifted in one frame, or that one frame fitted
+    as two sources, therefore gets a second base row.  Phase 1 hands each
+    frame's single fit of the star to only one of the two rows (the mutual
+    nearest-neighbour match), so the rows split the star's frames between them,
+    each averages to the full flux, and their averaged positions converge.  The
+    merged-catalog residual then subtracts the star twice in every frame
+    (brick m7 F405N: one fit matched both members of a <0.5 FWHM merged pair
+    804 times, two distinct fits 6 times).
+
+    Two rows are the same star when their averaged positions lie within
+    ``radius`` and no frame contributed to both.  A real close pair that a
+    frame resolves contributes to both rows in that frame and is never merged.
+    Rows merge greedily, closest pair first, and a merge is refused when the
+    two groups share a frame or their centroids lie beyond ``radius``, so a
+    chain of rows never grows into a group wider than ``radius``.
+
+    Parameters
+    ----------
+    arr_ra, arr_dec : ndarray, shape (n_src, n_tbl)
+        Per-frame positions in degrees, NaN where the frame did not contribute.
+    radius : `~astropy.units.Quantity`
+        Angular radius within which disjoint rows are merged.
+
+    Returns
+    -------
+    owner : ndarray of int, shape (n_src,)
+        Index of the row each row merges into; ``owner[i] == i`` for a row
+        that is kept.
+    """
+    n_src = arr_ra.shape[0]
+    owner = np.arange(n_src)
+    present = np.isfinite(arr_ra) & np.isfinite(arr_dec)
+    nm = present.sum(axis=1)
+    rows = np.nonzero(nm > 0)[0]
+    if len(rows) < 2:
+        return owner
+    pres = present[rows]
+    # tangent-plane offsets in arcsec about the field centre
+    dec0 = np.nanmedian(arr_dec[rows][pres])
+    ra0 = np.nanmedian(arr_ra[rows][pres])
+    dx = ((arr_ra[rows] - ra0 + 180.0) % 360.0 - 180.0) * np.cos(np.deg2rad(dec0)) * 3600.0
+    dy = (arr_dec[rows] - dec0) * 3600.0
+    # per-row sums of the offsets: a group's centroid is sum / count, the mean
+    # over every frame of every member
+    sx = np.where(pres, dx, 0.0).sum(axis=1)
+    sy = np.where(pres, dy, 0.0).sum(axis=1)
+    cnt = nm[rows].astype(float)
+    xy = np.c_[sx / cnt, sy / cnt]
+    r_as = radius.to_value(u.arcsec)
+    pairs = cKDTree(xy).query_pairs(r_as, output_type='ndarray')
+    if len(pairs) == 0:
+        return owner
+    sep = np.hypot(*(xy[pairs[:, 0]] - xy[pairs[:, 1]]).T)
+    pairs = pairs[np.argsort(sep, kind='stable')]
+
+    # union-find over the local indices; a root carries its group's frame set,
+    # offset sums and frame count
+    parent = np.arange(len(rows))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, j in pairs:
+        ri, rj = find(i), find(j)
+        if ri == rj or (pres[ri] & pres[rj]).any():
+            continue
+        if np.hypot(sx[ri] / cnt[ri] - sx[rj] / cnt[rj],
+                    sy[ri] / cnt[ri] - sy[rj] / cnt[rj]) > r_as:
+            continue
+        # the row with more frames survives (ties: the earlier row)
+        if (cnt[rj], -rj) > (cnt[ri], -ri):
+            ri, rj = rj, ri
+        parent[rj] = ri
+        pres[ri] |= pres[rj]
+        sx[ri] += sx[rj]
+        sy[ri] += sy[rj]
+        cnt[ri] += cnt[rj]
+    roots = np.array([find(i) for i in range(len(rows))])
+    owner[rows] = rows[roots]
+    return owner
+
+
+def fold_split_rows(owner, stacks, saved_match_inds):
+    """Apply :func:`split_row_owners` to the Phase 1 stacks of
+    ``combine_singleframe``.
+
+    Each absorbed row's frames are copied into its owner (the frame sets are
+    disjoint, so nothing is overwritten), the absorbed rows are removed, and
+    every frame's match indices are remapped onto the remaining rows.
+
+    Parameters
+    ----------
+    owner : ndarray of int, shape (n_src,)
+        Output of :func:`split_row_owners`.
+    stacks : list of ndarray, shape (n_src, n_tbl)
+        Phase 1 arrays.  The first must be the RA stack: its finite entries
+        mark the contributing frames.
+    saved_match_inds : list of ndarray
+        Per-frame base-row index of every row of that frame.
+
+    Returns
+    -------
+    stacks : list of ndarray
+        The folded arrays, absorbed rows removed.
+    saved_match_inds : list of ndarray
+        The remapped per-frame indices.
+    """
+    n_src = len(owner)
+    absorbed = owner != np.arange(n_src)
+    if not absorbed.any():
+        return stacks, saved_match_inds
+    src = np.nonzero(absorbed)[0]
+    rr, cc = np.nonzero(np.isfinite(stacks[0][src]))
+    dst = owner[src][rr]
+    for arr in stacks:
+        arr[dst, cc] = arr[src[rr], cc]
+    kept = ~absorbed
+    final = (np.cumsum(kept) - 1)[owner].astype(np.int32)
+    stacks = [arr[kept] for arr in stacks]
+    saved_match_inds = [final[mi] for mi in saved_match_inds]
+    return stacks, saved_match_inds
+
+
 def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaverage=nanaverage_dask,
                         min_offset=0.10*u.arcsec,
                         offsets_table=None,
@@ -695,6 +863,21 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print(f"P1 {ii}: Added {keep.sum()} of {len(keep)} sources from exposure "
               f"{tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''} [total={n_src}]",
               flush=True)
+
+    # Rows of one star that Loop 1 split in two: their frames are disjoint and
+    # their averaged positions lie within 0.75 FWHM (at most min_offset, the
+    # radius Loop 1 itself calls "same star").  See split_row_owners.
+    _split_radius = split_row_radius(_filt, min_offset)
+    owner = split_row_owners(arr_ra, arr_dec, _split_radius)
+    n_split = int((owner != np.arange(n_src)).sum())
+    if n_split:
+        (arr_ra, arr_dec, arr_flux, arr_fluxerr), saved_match_inds = fold_split_rows(
+            owner, [arr_ra, arr_dec, arr_flux, arr_fluxerr], saved_match_inds)
+        n_src = arr_ra.shape[0]
+    print(f"Phase 1: merged {n_split} split-star row(s) (disjoint frames, "
+          f"averaged positions within {_split_radius.to(u.arcsec):.3f}) "
+          f"[total={n_src}]", flush=True)
+    del owner
 
     print("Phase 1 stack done; computing mask / weights / position averages", flush=True)
     nmatch = np.isfinite(arr_flux).sum(axis=1).astype(np.int32)
@@ -3074,16 +3257,9 @@ def _satstar_replace_radius(filtername=None, basepath=None):
             val = _SATSTAR_REPLACE_RADIUS_CAP_ARCSEC
         return (val * u.arcsec) if val > 0 else None
     cap = _SATSTAR_REPLACE_RADIUS_CAP_ARCSEC
-    if filtername is None:
+    fwhm = _band_fwhm_arcsec(filtername, basepath)
+    if fwhm is None:
         return cap * u.arcsec
-    from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
-    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
-    fwhm_tbl = Table.read(fwhm_table_path(basepath, _iov()))
-    row = fwhm_tbl[np.char.upper(np.asarray(fwhm_tbl['Filter']).astype(str))
-                   == str(filtername).upper()]
-    if not len(row):
-        return cap * u.arcsec
-    fwhm = float(row['PSF FWHM (arcsec)'][0])
     return min(cap, _satstar_replace_radius_fwhm() * fwhm) * u.arcsec
 
 
