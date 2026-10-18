@@ -6767,7 +6767,8 @@ def requested_nircam_families(modules):
     return fams
 
 
-def perframe_families_on_disk(cut_bp, filt, merge_label, obs_token=''):
+def perframe_families_on_disk(cut_bp, filt, merge_label, obs_token='',
+                              psf_token=None):
     """NIRCam module families with per-frame ``merge_label`` catalogs on disk.
 
     Returns ``{family: example basename}``, restricted to
@@ -6781,13 +6782,19 @@ def perframe_families_on_disk(cut_bp, filt, merge_label, obs_token=''):
     catalog spelling a different token belongs to another tile, and reading it
     would refuse tile 037 for tile 042's modules.  No header is read: the
     question is which modules were fitted, and the name answers it.
+
+    ``psf_token`` is this run's ``{epsf_}`` segment (see
+    :func:`_perframe_catalog_re`).  ``None`` reads only the hybrid token from
+    the environment, so a ``--epsf`` caller must pass ``"_epsf"`` (plus the
+    hybrid token) or its ``_epsf`` catalogs are rejected and this layer
+    reports no modules at all (#1126).
     """
     want_obs = str(obs_token or '').lstrip('_')
     base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
     fns = sorted(set(
         glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
         + glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
-    accept = _perframe_catalog_re(merge_label)
+    accept = _perframe_catalog_re(merge_label, psf_token)
     found = {}
     for fn in fns:
         bn = os.path.basename(fn)
@@ -6882,10 +6889,16 @@ def assert_finalize_covers_disk_modules(cut_bp, modules, filternames,
         toks = frame_detector_tokens((frames_by_filter or {}).get(filt, ()))
         for tok in uncovered_module_tokens(modules, toks):
             missing.setdefault(tok, []).append((filt, 'frames'))
-    # Layer 2: the per-frame catalogs, at module-family granularity.
+    # Layer 2: the per-frame catalogs, at module-family granularity.  Spell
+    # THIS run's PSF token, as the astrometry checkpoint does: a `--epsf` run
+    # writes `_epsf` per-frame catalogs, and the environment-only token would
+    # reject every one of them (#1126).
+    _psf_token = (("_epsf" if getattr(options, "epsf", False) else "")
+                  + hybrid_psf_token())
     for filt in filternames:
         have = perframe_families_on_disk(cut_bp, filt, merge_label,
-                                         obs_token=obs_token)
+                                         obs_token=obs_token,
+                                         psf_token=_psf_token)
         for fam, example in sorted(have.items()):
             if fam not in want:
                 missing.setdefault(fam, []).append((filt, example))
@@ -7688,6 +7701,18 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                       f"checkpoint in the run).")
         if not merged and merge_label not in ("m1", "m12", "m2"):
             msg += f" (no {merge_label} merge for this filter either)"
+        if merge_label in ("m1", "m12", "m2"):
+            # These stages are exempt from the raise above, so a PSF-token or
+            # naming mismatch here ran the checkpoint on zero frames with one
+            # quiet line (the o067 `_hybpsf` mismatch surfaced only at m3,
+            # #1126).  Say so loudly.
+            print(f"WARNING: {msg}; skipped.  This checkpoint verified NOTHING "
+                  f"for {filt}/{module}.  If per-frame {merge_label} catalogs "
+                  f"exist, their names do not match this run's PSF token "
+                  f"({'_epsf' if getattr(options, 'epsf', False) else ''}"
+                  f"{hybrid_psf_token()!s} expected) or observation token.",
+                  flush=True)
+            return
         print(msg + "; skipped", flush=True)
         return
     fns = _drop_module_level_duplicates(fns, filt, merge_label, module)
