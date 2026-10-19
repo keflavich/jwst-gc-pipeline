@@ -130,3 +130,17 @@ def test_small_visits_record_no_parity_half():
     tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
     cons = build_visit_consensus(tables, context="test-small")
     assert all(e["parity_half"] is None for e in cons["exposures"])
+
+
+def test_dropouts_on_one_parity_do_not_empty_a_half():
+    """Every even dither unusable: computed over all catalogs, every usable
+    exposure would sit in half 0 and nothing could tie.  The builder
+    re-alternates over the usable set instead."""
+    dets = ["nrca1", "nrca2", "nrca3", "nrca4", "nrcb1", "nrcb2"]
+    pairs = [(d, e) for d in dets for e in range(1, 7)]
+    counts = {p: (20 if p[1] % 2 == 0 else 300) for p in pairs}
+    halves, cons = _halves_from_build(_visit_tables(counts))
+    assert len(halves) == 18                   # > 16: the parity-halves path
+    assert sorted(np.bincount(list(halves.values()))) == [9, 9]
+    assert all(e["vs_consensus"] is not None for e in cons["exposures"])
+    assert cons["n_components"] == 1

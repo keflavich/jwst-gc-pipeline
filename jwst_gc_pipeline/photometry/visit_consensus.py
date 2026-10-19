@@ -702,7 +702,9 @@ def parity_halves(keys):
     four nrcb2 exposures alone in one half with no partner across (#626).
 
     Pass the keys of ALL ingested exposures, not only the usable ones, so an
-    exposure dropping below ``min_stars`` does not shift its siblings.
+    exposure dropping below ``min_stars`` does not shift its siblings.  The
+    builder re-alternates over the usable set only when dropouts leave one
+    half with under a quarter of the usable exposures.
     """
     order = sorted(range(len(keys)), key=lambda i: (_parity_sort_key(keys[i]), i))
     parity = np.zeros(len(keys), dtype=int)
@@ -1040,6 +1042,16 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             n_components += 1
     else:
         parity = parity_halves([e["key"] for e in entries])[usable_idx]
+        n_odd = int(parity.sum())
+        if min(n_odd, len(parity) - n_odd) < len(parity) // 4:
+            # Dropouts correlated with exposure parity (every even dither
+            # unusable) starved one half; with no opposite half nothing ties
+            # and the build aborts.  Re-alternate over the usable exposures,
+            # still by identity alone.
+            print(f"astrom consensus [{context}]: parity halves "
+                  f"{len(parity) - n_odd}+{n_odd} over the usable exposures "
+                  f"after dropouts; re-alternating over the usable set")
+            parity = parity_halves([e["key"] for e in usable])
         halves = {}
         for par in (0, 1):
             sel = [i for i in range(len(usable)) if parity[i] == par]
