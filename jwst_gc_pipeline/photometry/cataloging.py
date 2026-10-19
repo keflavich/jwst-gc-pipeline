@@ -304,6 +304,31 @@ def _handoff_env_flag(name, default):
         f"({'on' if default else 'off'})")
 
 
+def _read_satstar_handoff_table(path, label, kind):
+    """Read a satstar hand-off table that exists, or raise.
+
+    An existing file that does not parse is a corrupt product, never "no
+    hand-off": the satstar writer publishes atomically
+    (``saturated_star_finding._publish_satstar_product``), so a reader cannot
+    catch one mid-write.  This used to print ``hand-off skipped: unreadable``
+    and carry on, which let the fan-out task exit 0 with the hand-off silently
+    missing from that frame -- and the m5 finalize then read the same file in
+    ``_satstar_cofit_positions`` and died hours later (10678 o098/o087,
+    2026-10-18).  Raising here fails the task that can be rerun, minutes in.
+    """
+    try:
+        return Table.read(path)
+    except (OSError, ValueError, IORegistryError) as exc:
+        # First line only: IORegistryError appends astropy's whole format table.
+        why = (str(exc).splitlines() or [''])[0]
+        raise RuntimeError(
+            f"[{label}] {kind} hand-off: {path} exists but is unreadable "
+            f"({type(exc).__name__}: {why}).  It is a corrupt satstar product "
+            f"(a size of 0 or 2880 bytes is the usual tell).  Move it aside "
+            f"with that frame's satstar catalog and completion marker, and "
+            f"rerun the fan-out task that fits the frame.") from exc
+
+
 def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
                             label='', accepted_excl_fwhm=1.5):
     """Frame-pixel positions the satstar implied-peak gate handed to daophot.
@@ -361,12 +386,7 @@ def _gate_reject_handoff_xy(rejected_path, satstar_table, fwhm_pix, *,
     faint_fq_on = _handoff_env_flag('DAOPHOT_HANDOFF_FAINT_FIT_QUALITY', True)
     if not rejected_path or not os.path.exists(rejected_path):
         return None, 0.0
-    try:
-        rej = Table.read(rejected_path)
-    except (OSError, ValueError, IORegistryError) as exc:
-        print(f"[{label}] gate-reject hand-off skipped: unreadable "
-              f"{os.path.basename(rejected_path)} ({exc})", flush=True)
-        return None, 0.0
+    rej = _read_satstar_handoff_table(rejected_path, label, 'gate-reject')
     need = ('reject_reason', 'xcentroid', 'ycentroid')
     if len(rej) == 0 or any(c not in rej.colnames for c in need):
         return None, 0.0
@@ -836,12 +856,7 @@ def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
     """
     if not drops_path or not os.path.exists(drops_path):
         return None, 0.0
-    try:
-        tab = Table.read(drops_path)
-    except (OSError, ValueError, IORegistryError) as exc:
-        print(f"[{label}] severity-drop hand-off skipped: unreadable "
-              f"{os.path.basename(drops_path)} ({exc})", flush=True)
-        return None, 0.0
+    tab = _read_satstar_handoff_table(drops_path, label, 'severity-drop')
     if (len(tab) == 0 or 'xcentroid' not in tab.colnames
             or 'ycentroid' not in tab.colnames):
         return None, 0.0

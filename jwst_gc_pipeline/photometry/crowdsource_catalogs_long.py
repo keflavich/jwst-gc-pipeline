@@ -220,7 +220,7 @@ from jwst_gc_pipeline.photometry.psf_paths import (
 # Imported as field_registry: `fields` is a local variable in these
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
-from jwst_gc_pipeline.atomic_io import publish_into
+from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
 
 
 def _seed_table_chunk_subset(seed_table, ww, image_shape,
@@ -744,10 +744,19 @@ def write_via_local_scratch(final_path, write_fn):
     ``final_path`` directly when no local scratch is configured, or if the
     local write/copy fails (e.g. scratch full), so behaviour is unchanged off
     SLURM and never loses the output.
+
+    Every path into ``final_path`` is atomic (``atomic_io.atomic_write``): the
+    copy, and the direct write, land on a hidden temporary beside it and are
+    ``os.replace``-d into position.  The module pass and the ``merged`` pass
+    both fit every frame and write this same detector-keyed name, possibly at
+    the same moment in two shards (#840), and a copy straight onto
+    ``final_path`` left a window in which the other task could read a
+    truncated catalog.
     """
     scratch = os.environ.get('SLURM_TMPDIR')
     if not scratch or not os.path.isdir(scratch):
-        write_fn(final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            write_fn(dest)
         return
     import tempfile
     import shutil
@@ -757,11 +766,13 @@ def write_via_local_scratch(final_path, write_fn):
     os.close(fd)
     try:
         write_fn(tmp)
-        shutil.copyfile(tmp, final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            shutil.copyfile(tmp, dest)
     except OSError as ex:
         print(f"[io] local-scratch write for {final_path} failed ({ex}); "
               f"writing directly to shared storage", flush=True)
-        write_fn(final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            write_fn(dest)
     finally:
         try:
             os.remove(tmp)
@@ -2938,6 +2949,13 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
     saturated cores were being lost.  Clearing DQ lets the full model resample.
     Used ONLY for the model; the RESIDUAL keeps the data DQ (a NaN core there is
     correct -- the data IS missing).
+
+    The file is built in a private directory beside ``output_filename`` and
+    moved into place when complete (``atomic_io.publish_into``), because the
+    module and ``merged`` passes can write the same per-frame residual at once
+    (#840).  ``publish_into`` rather than a temporary NAME: ``ImageModel.save``
+    stamps the basename it is given into ``meta.filename``, so the file has to
+    be written under its real name.
     """
     import astropy.io.fits as fits_io
 
@@ -2985,16 +3003,21 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
         except Exception as _ex:
             print(f"save_residual_datamodel: could not zero meta.background "
                   f"({_ex}); i2d mosaic may show a negative pedestal", flush=True)
-        model.save(output_filename, overwrite=True)
+        out_dir = os.path.dirname(os.path.abspath(output_filename))
+        with publish_into(out_dir) as building:
+            staged = os.path.join(building, os.path.basename(output_filename))
+            model.save(staged, overwrite=True)
 
-    # Restore full S_REGION (with CONTINUE support) that ImageModel.save() may have truncated.
-    if s_region is not None:
-        with fits_io.open(output_filename, mode='update') as hdul:
-            for hdu in hdul:
-                if 'S_REGION' in hdu.header:
-                    hdu.header['S_REGION'] = s_region
-                    break
-            hdul.flush()
+            # Restore full S_REGION (with CONTINUE support) that
+            # ImageModel.save() may have truncated -- before publishing, so a
+            # reader never sees the truncated polygon either.
+            if s_region is not None:
+                with fits_io.open(staged, mode='update') as hdul:
+                    for hdu in hdul:
+                        if 'S_REGION' in hdu.header:
+                            hdu.header['S_REGION'] = s_region
+                            break
+                    hdul.flush()
 
 
 def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False):
