@@ -369,6 +369,83 @@ def test_isolation_survives_duplicate_observation_concatenation():
     assert pm['trustworthy'].sum() > 0.9 * len(pm)
 
 
+def _field_with_src_companions(ratios, sep_arcsec=0.3):
+    """src = n primaries plus, for each finite ``ratios[i]``, one src-only
+    companion ``sep_arcsec`` away with flux ratios[i] x the primary's (a deeper
+    src catalogue resolves stars the ref epoch does not); ref = the primaries
+    only, moved by a small random PM. Primaries sit on a 5" grid so no two
+    land inside one another's isolation beam by chance."""
+    n = len(ratios)
+    side = int(np.ceil(np.sqrt(n)))
+    gx, gy = np.meshgrid(np.arange(side) * 5.0, np.arange(side) * 5.0)
+    pick = RNG.permutation(side * side)[:n]
+    sx, sy = gx.ravel()[pick] - 2.5 * side, gy.ravel()[pick] - 2.5 * side
+    mag = RNG.uniform(-10, -5, n)
+    flux = 10 ** (-0.4 * mag)
+    has = np.isfinite(ratios)
+    ang = RNG.uniform(0, 2 * np.pi, n)[has]
+    cx, cy = sx[has] + sep_arcsec * np.cos(ang), sy[has] + sep_arcsec * np.sin(ang)
+    cflux = ratios[has] * flux[has]
+    m = n + int(has.sum())
+    src = dict(sc=_sc_from_xy(np.concatenate([sx, cx]), np.concatenate([sy, cy])),
+               ex=np.full(m, 0.003), ey=np.full(m, 0.003),
+               mag=np.concatenate([mag, -2.5 * np.log10(cflux)]),
+               flux=np.concatenate([flux, cflux]), epoch=2024.0, n=m)
+    dt = 2.0
+    rx = sx + RNG.normal(0, 4.0, n) * dt / 1000.0
+    ry = sy + RNG.normal(0, 4.0, n) * dt / 1000.0
+    ref = dict(sc=_sc_from_xy(rx, ry), ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+               mag=mag, flux=flux, epoch=2024.0 + dt, n=n)
+    return src, ref
+
+
+def test_src_isolation_ignores_faint_src_neighbours():
+    """A src neighbour at contrast >= 10 (flux ratio <= flux_ratio_cap) does not
+    disqualify a star; a comparable one does. With the previous rule
+    (src_isolation='any') every src neighbour in the beam disqualified the
+    star, so a deeper src catalogue (Arches v6fix, built on the faint-star
+    stack) dropped trustworthy from 6,025 (v6) to 1,339."""
+    pytest.importorskip('flystar')
+    n = 300
+    ratios = np.concatenate([np.full(n, 0.05), np.full(n, 0.5), np.full(n, np.nan)])
+    src, ref = _field_with_src_companions(ratios)
+    faint, bright, alone = np.arange(n), np.arange(n, 2 * n), np.arange(2 * n, 3 * n)
+
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    # build_pm_catalog_2epoch keeps src order for matched rows; every primary
+    # matches and no companion does (0.3" > match_radius)
+    assert len(pm) == 3 * n
+    assert pm.meta['src_isolation'] == 'flux'
+    assert pm['dominant'][faint].all() and pm['trustworthy'][faint].all()
+    assert not pm['dominant'][bright].any()
+    assert pm['dominant'][alone].all()
+    np.testing.assert_allclose(pm['src_comp_flux_ratio'][faint], 0.05, rtol=1e-6)
+    np.testing.assert_allclose(pm['src_comp_flux_ratio'][bright], 0.5, rtol=1e-6)
+    assert (pm['src_comp_flux_ratio'][alone] == 0).all()
+    assert (pm['n_src_within_beam'][faint] == 2).all()
+
+    old = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6,
+                                  src_isolation='any')
+    assert old.meta['src_isolation'] == 'any'
+    assert not old['dominant'][faint].any() and not old['dominant'][bright].any()
+    assert old['dominant'][alone].all()
+
+
+def test_src_isolation_nonfinite_neighbour_flux_counts_as_competing():
+    pytest.importorskip('flystar')
+    n = 200
+    src, ref = _field_with_src_companions(np.full(n, 0.05))
+    src['flux'][n:] = np.nan
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    assert len(pm) == n
+    assert not pm['dominant'].any()
+
+
+def test_src_isolation_rejects_unknown_mode():
+    with pytest.raises(ValueError, match='src_isolation'):
+        build_pm_catalog_2epoch({}, {}, src_isolation='bright')
+
+
 def test_ref_frame_position_is_the_untied_ref_position():
     """ra_ref/dec_ref must be the ref star's own (untied) position, which is
     where it sits in the Treasury HiPS, while ra0/dec0 live in the src frame

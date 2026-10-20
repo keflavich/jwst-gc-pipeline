@@ -550,7 +550,7 @@ def build_pm_catalog(jwst, virac, gns, match_radius=0.3, require_jwst=True):
 
 def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
                             flux_ratio_cap=0.10, isolation_radius=None,
-                            same_star_radius=0.05):
+                            same_star_radius=0.05, src_isolation='flux'):
     """2-epoch flystar PM fit between two plain catalogs (e.g. two independent
     JWST epochs), after ``ref``'s coords have already been affine-tied onto
     ``src`` (or vice versa) with :func:`affine_tie`.
@@ -577,7 +577,19 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
     tied observations. Any ``ref`` candidate within this radius of the
     primary match's own position is treated as the same star, not a
     competitor.
+
+    ``src_isolation`` sets the source-epoch half of the isolation cut, within
+    3 x the isolation beam. 'flux' (default) rejects a star only when some
+    other src row is brighter than ``flux_ratio_cap`` x its own src flux;
+    neighbours at contrast >= 1/flux_ratio_cap (10 by default) do not count.
+    'any' is the previous rule: any other src row in the beam rejects the
+    star. Output columns: ``src_comp_flux_ratio`` (brightest other src row /
+    own src flux; 0 when there is none), ``n_src_within_beam`` (src rows in
+    the beam including the star itself, any brightness) and
+    ``meta['src_isolation']``.
     """
+    if src_isolation not in ('flux', 'any'):
+        raise ValueError(f"src_isolation must be 'flux' or 'any', got {src_isolation!r}")
     from flystar.startables import StarTable
     center = _field_center(src['sc'])
     ia, ib = _unique_nearest_pairs(src['sc'], ref['sc'], match_radius)
@@ -654,12 +666,34 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
             if ref['flux'][bb] > comp_flux[gg]:
                 comp_flux[gg] = ref['flux'][bb]
         frac = np.where(prim_flux > 0, comp_flux / prim_flux, np.nan)
-        ss_i, _, _, _ = search_around_sky(src['sc'][sel], src['sc'], beam * 3 * u.arcsec)
+        # Source-epoch side: a src neighbour disqualifies the star only if it
+        # is brighter than flux_ratio_cap x the star's own src flux (contrast
+        # < 1/flux_ratio_cap), the same test the ref side applies. Counting
+        # every src neighbour regardless of brightness (src_isolation='any',
+        # the pre-2026-10-20 rule) let a deeper src catalogue reject most of a
+        # crowded field: the Arches v6fix src, built on the faint-star stack,
+        # kept 1,339 trustworthy stars that way against 6,025 in v6.
+        # Non-finite neighbour flux counts as competing (unknown brightness).
+        ss_i, ss_j, _, _ = search_around_sky(src['sc'][sel], src['sc'], beam * 3 * u.arcsec)
         n_src_near = np.bincount(ss_i, minlength=int(sel.sum()))
-        dominant = (frac < flux_ratio_cap) & (n_src_near == 1)
+        other = ss_j != selidx[ss_i]
+        src_flux = np.asarray(src['flux'], dtype=float)
+        nb_flux = src_flux[ss_j[other]]
+        nb_flux = np.where(np.isfinite(nb_flux), nb_flux, np.inf)
+        src_comp = np.zeros(int(sel.sum()))
+        np.maximum.at(src_comp, ss_i[other], nb_flux)
+        own = src_flux[selidx]
+        own_ok = np.isfinite(own) & (own > 0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            src_frac = np.where(src_comp == 0, 0.0,
+                                np.where(own_ok, src_comp / np.where(own_ok, own, 1.0), np.inf))
+        src_isolated = (src_frac <= flux_ratio_cap) if src_isolation == 'flux' else (n_src_near == 1)
+        dominant = (frac < flux_ratio_cap) & src_isolated
         out['comp_flux_ratio'] = frac
+        out['src_comp_flux_ratio'] = src_frac
         out['n_src_within_beam'] = n_src_near
         out['dominant'] = dominant
+        out.meta['src_isolation'] = src_isolation
         trust = trust & dominant
     out['trustworthy'] = trust
     out.meta['epochs'] = [float(src['epoch']), float(ref['epoch'])]
