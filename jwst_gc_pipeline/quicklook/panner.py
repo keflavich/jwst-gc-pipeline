@@ -66,6 +66,12 @@ PRODUCTS = (
      'layers': 'RGB_480-mean-212_residual_log', 'centre': 'nircam',
      'note': 'NIRCam <b>F212N + F480M</b> with the fitted stars subtracted, '
              'log stretch'},
+    {'key': 'nircam-aces', 'label': 'NIRCam + ACES 3 mm',
+     'hips': 'GCTreasury_radio_ACES_hips',
+     'layers': 'RGB_480-mean-212_vminmax', 'centre': 'nircam',
+     'coverage': True,
+     'note': 'NIRCam <b>F212N + F480M</b> diffuse emission with the '
+             '<b>ACES</b> 3 mm continuum'},
     {'key': 'miri', 'label': 'MIRI F770W',
      'hips': 'jwst_gc_treasury_miri_hips',
      'layers': 'MIRI_F770W', 'centre': 'miri',
