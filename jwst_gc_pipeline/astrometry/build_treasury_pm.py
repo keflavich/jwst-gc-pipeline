@@ -456,7 +456,7 @@ def saturation_offset_epochs(diags):
 
 def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
          match_radius=0.15, tie_magcut=None, isolation_radius=None, verbose=True,
-         demote_offset_saturated=True):
+         demote_offset_saturated=True, src_isolation='flux'):
     src = load_filter_catalog(src_paths, filt, src_epoch)
     if verbose:
         print(f'  src ({filt}, epoch {src_epoch:.3f}) usable: {src["n"]:,}')
@@ -478,7 +478,8 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
                       f'neighbor -- isolation-cut results here are less trustworthy than '
                       f'the trustworthy flag alone suggests.')
     pm = M.build_pm_catalog_2epoch(src, ref, match_radius=match_radius,
-                                   isolation_radius=isolation_radius)
+                                   isolation_radius=isolation_radius,
+                                   src_isolation=src_isolation)
     pm.meta['filter'] = filt
     pm.meta['frame'] = ('relative: mean motion + mean shear of the affine tie\'s own '
                         'bright/compact matching sample subtracted per observation; '
@@ -560,13 +561,20 @@ def main():
                          'field with real sub-arcsec structure (e.g. a dense '
                          'cluster core) where match_radius alone is too small '
                          'to catch a blended-but-undetected companion.')
+    ap.add_argument('--src-isolation', choices=('flux', 'any'), default='flux',
+                    help="source-epoch half of the isolation check: 'flux' "
+                         "(default) ignores src neighbours at contrast >= 10 "
+                         "(flux ratio <= 0.1, as on the ref side); 'any' is the "
+                         "pre-2026-10-20 rule, any src neighbour in the beam "
+                         "rejects the star")
     ap.add_argument('--keep-offset-saturated', action='store_true',
                     help='report a saturated-star PM offset but leave those '
                          'rows trustworthy (default: remove them)')
     args = ap.parse_args()
     build(args.src, args.ref, args.filter, args.src_epoch, args.ref_epoch, args.out,
          match_radius=args.match_radius, isolation_radius=args.isolation_radius,
-         demote_offset_saturated=not args.keep_offset_saturated)
+         demote_offset_saturated=not args.keep_offset_saturated,
+         src_isolation=args.src_isolation)
 
 
 if __name__ == '__main__':
