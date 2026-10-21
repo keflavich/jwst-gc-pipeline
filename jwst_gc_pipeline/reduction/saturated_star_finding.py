@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 #os.environ['stpsf_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
 import stpsf
-from jwst_gc_pipeline.atomic_io import publish_into
+from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
@@ -6530,6 +6530,36 @@ def _find_zeroframe_for(filename):
     return None
 
 
+def _publish_satstar_product(path, write, overwrite):
+    """Write one per-frame satstar product so no reader can see it half-written.
+
+    ``write`` takes a path and writes the product there; it is pointed at a
+    hidden temporary beside ``path``, which is then ``os.replace``-d into
+    position (``atomic_io.atomic_write``).
+
+    Two fan-out tasks can fit the same frame at the same time: the per-module
+    pass (``nrca``/``nrcb``) and the ``merged`` pass both cover every frame
+    (#840), they land in different shards, and both write these
+    detector-keyed names.  Written in place, a reader in the other task -- the
+    gate-reject hand-off, or the next phase's cached-catalog load -- can open
+    the file between the writer's create and close.  10678 o098 m5
+    (2026-10-18): the two tasks fitting nrcblong exp5 both wrote
+    ``*_m5_satstar_rejected.fits`` within the same minute and it was left at
+    zero bytes; the m5 finalize died four hours later in
+    ``_satstar_cofit_positions`` with ``IORegistryError: Format could not be
+    identified``.  o087 m5 (2026-10-18) repeated it.
+
+    Both fits produce the same product, so last-writer-wins is harmless once
+    each write is atomic.  ``overwrite=False`` keeps astropy's refusal to
+    replace an existing file.
+    """
+    if not overwrite and os.path.exists(path):
+        raise OSError(f'File {path} already exists.  If you mean to replace it '
+                      f'then use the argument "overwrite=True".')
+    with atomic_write(path, hidden=True) as tmp:
+        write(tmp)
+
+
 def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
                            file_suffix='', deblend_with_zeroframe=False,
                            recovery_signature=None, fit_switch_signature=None,
@@ -6652,7 +6682,8 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         _sev_fn = filename.replace(
             ".fits", f'{file_suffix}_satstar_severity_dropped.fits')
         _sev_dropped.meta.update(fh[0].header)
-        _sev_dropped.write(_sev_fn, overwrite=overwrite)
+        _publish_satstar_product(
+            _sev_fn, lambda p: _sev_dropped.write(p, overwrite=True), overwrite)
         print(f"Saved {len(_sev_dropped)} severity-gate drop(s) to {_sev_fn}",
               flush=True)
     if satstar_table is not None:
@@ -6678,7 +6709,9 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         # positions/errors and sky coordinates (incl. sat_com_ra/dec) are
         # untouched; this is a pure size reduction on the already-fit table.
         downcast_catalog_dtypes(satstar_table)
-        satstar_table.write(satstar_catalog_filename, overwrite=overwrite)
+        _publish_satstar_product(
+            satstar_catalog_filename,
+            lambda p: satstar_table.write(p, overwrite=True), overwrite)
         print(f"Saved saturated star catalog to {satstar_catalog_filename}", flush=True)
 
         _wcm = getattr(builtins, 'satstar_wingcal_measurements', None)
@@ -6686,7 +6719,8 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
             _wcm_fn = filename.replace(
                 ".fits", f'{file_suffix}_wingcal_calibrators.fits')
             _wcm.meta.update(header)
-            _wcm.write(_wcm_fn, overwrite=overwrite)
+            _publish_satstar_product(
+                _wcm_fn, lambda p: _wcm.write(p, overwrite=True), overwrite)
             print(f"Saved {len(_wcm)} wing-selfcal calibrator bucket(s) to "
                   f"{_wcm_fn}", flush=True)
 
@@ -6695,20 +6729,24 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
             ".fits", f'{file_suffix}_satstar_rejected.fits')
         if _rejected is not None and len(_rejected):
             _rejected.meta.update(header)
-            _rejected.write(satstar_rejected_filename, overwrite=overwrite)
+            _publish_satstar_product(
+                satstar_rejected_filename,
+                lambda p: _rejected.write(p, overwrite=True), overwrite)
             print(f"Saved {len(_rejected)} gate-REJECTED satstar candidate(s) "
                   f"to {satstar_rejected_filename}", flush=True)
 
         if hasattr(builtins, 'satstar_model'):
-            fits.PrimaryHDU(data=builtins.satstar_model, header=header).writeto(
-                satstar_model_filename, overwrite=overwrite
-            )
+            _hdu = fits.PrimaryHDU(data=builtins.satstar_model, header=header)
+            _publish_satstar_product(
+                satstar_model_filename,
+                lambda p: _hdu.writeto(p, overwrite=True), overwrite)
             print(f"Saved saturated star model image to {satstar_model_filename}", flush=True)
 
         if hasattr(builtins, 'satstar_resid'):
-            fits.PrimaryHDU(data=builtins.satstar_resid, header=header).writeto(
-                satstar_residual_filename, overwrite=overwrite
-            )
+            _hdu = fits.PrimaryHDU(data=builtins.satstar_resid, header=header)
+            _publish_satstar_product(
+                satstar_residual_filename,
+                lambda p: _hdu.writeto(p, overwrite=True), overwrite)
             print(f"Saved saturated star residual image to {satstar_residual_filename}", flush=True)
 
         if hasattr(builtins, 'satstar_flagimg'):
@@ -6718,8 +6756,9 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
             fh_flag.header['FLAGBIT1'] = (1, 'partly saturated (nonlinear, recoverable)')
             fh_flag.header['FLAGBIT2'] = (2, 'totally saturated (unrecoverable NaN)')
             fh_flag.header['FLAGBIT4'] = (4, 'included in saturated-star fit')
-            fh_flag.writeto(filename.replace(".fits", f'{file_suffix}_satstar_flags.fits'),
-                            overwrite=overwrite)
+            _publish_satstar_product(
+                filename.replace(".fits", f'{file_suffix}_satstar_flags.fits'),
+                lambda p: fh_flag.writeto(p, overwrite=True), overwrite)
             print(f"Saved saturated star flag image", flush=True)
     else:
         print("No saturated stars found", flush=True)
