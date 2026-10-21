@@ -431,6 +431,22 @@ def test_src_isolation_ignores_faint_src_neighbours():
     assert old['dominant'][alone].all()
 
 
+def test_src_isolation_keeps_contrast_exactly_ten():
+    """Contrast exactly 1/flux_ratio_cap (1.0 / 10.0 == 0.1 in IEEE doubles)
+    is kept; a slightly brighter companion is not."""
+    pytest.importorskip('flystar')
+    n = 100
+    src, ref = _field_with_src_companions(np.full(2 * n, 0.1))
+    src['flux'][:2 * n] = 10.0
+    src['flux'][2 * n:3 * n] = 1.0
+    src['flux'][3 * n:] = 1.001
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    assert len(pm) == 2 * n
+    assert (pm['src_comp_flux_ratio'][:n] == 0.1).all()
+    assert pm['dominant'][:n].all()
+    assert not pm['dominant'][n:].any()
+
+
 def test_src_isolation_nonfinite_neighbour_flux_counts_as_competing():
     pytest.importorskip('flystar')
     n = 200
