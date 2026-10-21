@@ -67,7 +67,10 @@ search-window edge (9.86″ at a 10″ window, 29.50″ at 30″, 58.23″ at 60
 `alias_rejected=true`, `component=-1` and "recorded, NOT applied", and the
 frozen reader admitted the number on `np.isfinite` alone: m3–m7 each reported
 "MOVED 9858 mas since the m2 freeze" against frames that read 1–2.5 mas, five
-FAILED records nothing downstream can rewrite.
+FAILED records nothing downstream can rewrite.  The halves were then assigned by
+rank of `n_reliable`; `parity_halves` now alternates by exposure number within
+each (visit, filter, vgroup, detector), so those four dithers split 2 + 2.  The
+two reader rows stay, because a one-exposure detector still has no partner.
 
 The split between rows two and three is the same one `_checkpoint_passed` draws:
 a number m2 could not certify measures nothing and stays advisory, while a
