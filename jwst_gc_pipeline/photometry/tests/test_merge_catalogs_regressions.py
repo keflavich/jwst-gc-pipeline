@@ -236,6 +236,19 @@ def test_bgsub_token(bgsub, resbgsub, expected):
     assert '_bgsub' not in '_resbgsub'
 
 
+@pytest.mark.parametrize("epsf, expected", [(False, ''), (True, '_epsf')])
+def test_crossband_name_has_no_hybrid_psf_token(monkeypatch, tmp_path, epsf, expected):
+    """A PSF_EPSF_CORE_DIR run must write the cross-band merged catalog under
+    the name its readers spell (m8 forced fill, independent-detection
+    annotation, stage_release: ``..._merged_resbgsub_m7<obs>.fits``).  With
+    ``_hybpsf`` in the name, all 68 10678 prodD tiles' m8 read the previous
+    plain-PSF run's m7 instead."""
+    from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
+    monkeypatch.setenv('PSF_EPSF_CORE_DIR', str(tmp_path))
+    assert hybrid_psf_token() == '_hybpsf'
+    assert MC._crossband_epsf_token(epsf) == expected
+
+
 def test_merge_catalogs_missing_ref_filter_raises():
     """merge_catalogs.py:564-572 -- requesting a ref_filter that is not in
     the input tables must raise ValueError, not silently pick another."""

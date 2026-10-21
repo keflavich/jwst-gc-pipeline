@@ -1462,6 +1462,14 @@ def _qualcuts_oksep_suffix(target):
     return f'_qualcuts_oksep{token}'
 
 
+def _crossband_epsf_token(epsf):
+    """PSF token in the cross-band merged catalog name: ``_epsf`` or ``''``.
+
+    Never the hybrid-PSF token; see the note in :func:`merge_catalogs`.
+    """
+    return "_epsf" if epsf else ""
+
+
 def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    ref_filter='f405n',
                    epsf=False, bgsub=False, desat=False, blur=False,
@@ -1483,7 +1491,16 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
     else:
         iter_token = f'_{iteration_label}'
 
-    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
+    # The cross-band merged catalog is spelled WITHOUT the hybrid-PSF token,
+    # like the per-band merged catalogs (merge_individual_frames).  Every
+    # reader spells it that way: the m7 independent-detection annotation, the
+    # m8 forced fill, m8_merge_partials, stage_release, the CMD and joint
+    # catalog builders.  With ``_hybpsf`` in the name, a PSF_EPSF_CORE_DIR run
+    # wrote its m7 under a name nothing read, and every reader picked up the
+    # previous plain-PSF run's catalog instead (10678 prodD: all 68 tiles'
+    # m8 forced-filled the September m7).  The PSF model is recorded in the
+    # header (``<band>PSFM``).
+    epsf_ = _crossband_epsf_token(epsf)
     blur_ = "_blur" if blur else ""
 
     matching_ref_tables = [tb for tb in tbls if tb.meta['filter'] == ref_filter]
