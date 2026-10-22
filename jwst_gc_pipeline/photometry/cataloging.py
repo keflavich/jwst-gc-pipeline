@@ -55,6 +55,7 @@ from jwst_gc_pipeline.atomic_io import write_table_atomic
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
+from jwst_gc_pipeline.photometry.nan_fill import replace_nans
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -92,7 +93,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from astropy.io import fits
 from astropy import wcs
 from astropy import units as u
-from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans, convolve_fft
+from astropy.convolution import Gaussian2DKernel
 from astropy.nddata import NDData
 from photutils.background import Background2D, MedianBackground, MMMBackground
 from photutils.psf import SourceGrouper
@@ -3561,8 +3562,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             if _bset:
                 _border = np.isin(_lbl, list(_bset))
                 mask = mask | _bdil(_border, iterations=_edge_margin)
-    nan_replaced_data = interpolate_replace_nans(data_, kernel, convolve=convolve_fft,
-                                                 allow_huge=True)
+    # interpolate_replace_nans(data_, kernel, convolve=convolve_fft), summed
+    # directly at the NaN pixels instead of by two whole-frame FFTs (#1223).
+    nan_replaced_data = replace_nans(data_, kernel)
 
     # --- saturated-star fit + subtract (per phase, namespaced by satstar_label) ---
     satstar_table = None
