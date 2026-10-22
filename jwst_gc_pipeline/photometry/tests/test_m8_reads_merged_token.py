@@ -59,13 +59,34 @@ def test_fields_whose_spellings_already_agree_are_unaffected(proposal, field):
 
 def test_no_site_builds_a_merged_catalog_path_from_the_perframe_token():
     """Pinned by source: the failure mode is a path that matches the WRONG file
-    rather than raising, so there is no exception to assert on."""
+    rather than raising, so there is no exception to assert on.
+
+    Both cross-band sites build the name through ``crossband_merged_path``
+    (#1197 added the PSF token there), so the merged-token spelling is pinned
+    inside the helper and the sites are pinned to call it.
+    """
     src = inspect.getsource(cataloging)
     assert '_xbsuf = _L.obs_token(' not in src, (
         'a cross-band merged path is being spelled with the per-frame token; '
         'use naming.merged_catalog_obs_token, which is what merge_daophot writes')
-    n = len(re.findall(r'_xbsuf = merged_catalog_obs_token\(proposal_id, field\)', src))
-    assert n == 2, f'expected both cross-band sites to use the merged token, found {n}'
+    helper = inspect.getsource(cataloging.crossband_merged_path)
+    assert 'merged_catalog_obs_token(proposal_id, field)' in helper, (
+        'crossband_merged_path must spell the obs suffix with the merged token')
+    assert 'obs_token(' not in helper.replace('merged_catalog_obs_token(', ''), (
+        'crossband_merged_path spells a second obs token besides the merged one')
+    manual = inspect.getsource(cataloging.run_manual_pipeline)
+    n = len(re.findall(r'_xb = crossband_merged_path\(', manual))
+    assert n == 2, f'expected both cross-band sites to call crossband_merged_path, found {n}'
+
+
+@pytest.mark.parametrize('proposal,field', list(_DIVERGING))
+def test_crossband_merged_path_spells_the_merged_token(proposal, field, monkeypatch):
+    """The helper itself, on the fields where the two spellings diverge."""
+    monkeypatch.delenv('PSF_EPSF_CORE_DIR', raising=False)
+    for label in ('m7', 'm8'):
+        path = cataloging.crossband_merged_path('/x', label, 'merged', proposal, field)
+        assert path.endswith(f'_{label}{merged_catalog_obs_token(proposal, field)}.fits')
+        assert not path.endswith(f'_{label}.fits')
 
 
 def test_the_reader_path_matches_the_writer_path_for_brick():
