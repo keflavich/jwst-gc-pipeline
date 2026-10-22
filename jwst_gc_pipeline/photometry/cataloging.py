@@ -24,6 +24,7 @@ with legacy ``iter2/iter3/iter4`` ones.
 The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 (BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
+import copy
 import functools
 import glob
 
@@ -7582,6 +7583,120 @@ def _floor_actionable_corrections(corrections, floor_mas, label):
             or np.hypot(c['dra_onsky_mas'], c['ddec_onsky_mas']) >= floor_mas]
 
 
+#: Key in the run's shared ``astrom_refcat_cache`` dict under which
+#: ``_run_astrometry_stage_checkpoint`` keeps the FROZEN-stage records it has
+#: already measured, keyed by ``_checkpoint_input_signature``.
+_FROZEN_STAGE_RECORDS_KEY = 'frozen_stage_records'
+
+
+def _checkpoint_input_signature(merge_label, filt, fns):
+    """What can differ between two frozen-stage checkpoint calls of one run:
+    the stage, the filter, and the exact per-frame catalogs (path, mtime_ns,
+    size).  A catalog rewritten in between changes the signature."""
+    files = []
+    for fn in fns:
+        st = os.stat(fn)
+        files.append((os.path.abspath(fn), st.st_mtime_ns, st.st_size))
+    return (str(merge_label), str(filt).upper(), tuple(files))
+
+
+def _measure_stage_checkpoint(fns, merge_label, module, filt, cut_bp, basepath,
+                              options, refcat_cache, context, obs_token,
+                              warn_only):
+    """Read the per-frame catalogs ``fns`` and run the visit checkpoint on them.
+
+    The measuring half of ``_run_astrometry_stage_checkpoint``, which acts on
+    the verdict.  Returns the record, or None when ``warn_only`` demoted an
+    ``AstrometryRegressionError`` (there is no record to act on).
+    """
+    import re as _re
+    from astropy.table import vstack as _vstack
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        AstrometryRegressionError, resolve_tie_reference, run_visit_checkpoint)
+
+    _chunk_re = _re.compile(r'_chunk\d+of\d+')
+    groups = {}
+    for fn in fns:
+        groups.setdefault(_chunk_re.sub('', fn), []).append(fn)
+    tables = []
+    for key, chunk_fns in sorted(groups.items()):
+        subs = [Table.read(f) for f in sorted(chunk_fns)]
+        tables.append(subs[0] if len(subs) == 1
+                      else _vstack(subs, metadata_conflicts='silent'))
+
+    if 'refcat' not in refcat_cache:
+        refcat_cache['refcat'] = _astrom_checkpoint_refcat(
+            basepath, field=getattr(options, 'field', None),
+            proposal_id=getattr(options, 'proposal_id', None))
+    refcat = refcat_cache['refcat']
+    # Only m2 may fall back to the Gaia-only seed refcat (#1167).  The result
+    # is cached under its own key: 'refcat' stays exactly what every other
+    # stage and the m7 cross-filter checkpoint (which shares this dict) read,
+    # so none of them inherits the Gaia reference (#1201 review).
+    if refcat is None and merge_label == 'm2':
+        if 'refcat_m2_gaia' not in refcat_cache:
+            refcat_cache['refcat_m2_gaia'] = _astrom_checkpoint_refcat(
+                basepath, field=getattr(options, 'field', None),
+                proposal_id=getattr(options, 'proposal_id', None),
+                gaia_fallback=True)
+        refcat = refcat_cache['refcat_m2_gaia']
+
+    # gc-treasury (10678) and any other field with
+    # `alignment_config.tie_through_reference_filter` ties every filter OTHER
+    # than its `reference_filter` (F212N) to the reference filter's OWN JWST
+    # consensus catalog instead of straight to VIRAC2 -- so a refused VIRAC2
+    # tie in one band cannot leave two bands of the same field apart on the
+    # sky (o063: F212N refused, F480M applied its own VIRAC2 bulk, 226 mas
+    # apart).  Resolved into a LOCAL variable, never written back into
+    # `refcat_cache`: that dict is shared with the m7 cross-filter checkpoint
+    # below, whose anchor tie must stay against the real VIRAC2 refcat.
+    # Raises `ReferenceFilterNotSettledError` (uncaught here, by design) when
+    # the field is opted in but the reference filter's own tie has not
+    # settled yet -- this must never fall back to VIRAC2 silently.
+    tie_refcat = resolve_tie_reference(
+        refcat, cut_bp, getattr(options, 'proposal_id', None),
+        getattr(options, 'field', None), filt, obs_token=obs_token)
+
+    # Saturated stars have no per-frame daophot row; their repeatable satstar
+    # fits join the reference-tie consensus (#957).  At a frozen stage
+    # run_visit_checkpoint uses them only when the m2 record did.
+    # ASTROM_SATSTAR_CONSENSUS=0 turns that off (for comparing against a record
+    # made before it existed).
+    satstars = None
+    if os.environ.get('ASTROM_SATSTAR_CONSENSUS', '1') != '0':
+        from jwst_gc_pipeline.photometry.satstar_consensus import (
+            load_exposure_satstars)
+        satstars = load_exposure_satstars(tables, merge_label)
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: satstar "
+              f"catalogs for {len(satstars)} of {len(tables)} exposure(s)",
+              flush=True)
+
+    try:
+        record = run_visit_checkpoint(
+            tables, merge_label, refcat=tie_refcat, filtername=filt,
+            satstars_by_exposure=satstars,
+            # JWST-resolved binaries/groups out of the dense reference (#957);
+            # opt-in with ASTROM_REFERENCE_BLENDS=1 at m2.  A frozen stage
+            # follows its m2 record regardless.
+            exclude_reference_blends=(
+                os.environ.get('ASTROM_REFERENCE_BLENDS', '0') == '1'),
+            basepath=cut_bp, context=context or f"{filt}/{module}",
+            target=getattr(options, 'target', None),
+            # ngc6334's two proposals and cloudef's two obsids share a target
+            # directory AND a filter list, so the per-filter consensus catalog
+            # this writes needs the same disambiguator every other per-obs
+            # product carries.
+            obs_token=obs_token)
+    except AstrometryRegressionError:
+        if warn_only:
+            traceback.print_exc()
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: REGRESSION "
+                  f"demoted to warning (ASTROM_CHECKPOINT_WARN_ONLY=1)", flush=True)
+            return None
+        raise
+    return record
+
+
 def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
                                      proposal_id, options, refcat_cache,
                                      context=""):
@@ -7601,11 +7716,10 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     demotes blocking errors to loud warnings.  Cutout runs are skipped (partial
     frames cannot form a visit consensus).
     """
-    import re as _re
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         AstrometryCorrectionRequiredError, AstrometryRegressionError,
         CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
-        resolve_tie_reference, run_visit_checkpoint, update_offsets_table)
+        update_offsets_table)
     from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
     from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
         obs_token as _perframe_obs_token)
@@ -7731,88 +7845,38 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         print(msg + "; skipped", flush=True)
         return
     fns = _drop_module_level_duplicates(fns, filt, merge_label, module)
-    _chunk_re = _re.compile(r'_chunk\d+of\d+')
-    groups = {}
-    for fn in fns:
-        groups.setdefault(_chunk_re.sub('', fn), []).append(fn)
-    from astropy.table import vstack as _vstack
-    tables = []
-    for key, chunk_fns in sorted(groups.items()):
-        subs = [Table.read(f) for f in sorted(chunk_fns)]
-        tables.append(subs[0] if len(subs) == 1
-                      else _vstack(subs, metadata_conflicts='silent'))
-
-    if 'refcat' not in refcat_cache:
-        refcat_cache['refcat'] = _astrom_checkpoint_refcat(
-            basepath, field=getattr(options, 'field', None),
-            proposal_id=getattr(options, 'proposal_id', None))
-    refcat = refcat_cache['refcat']
-    # Only m2 may fall back to the Gaia-only seed refcat (#1167).  The result
-    # is cached under its own key: 'refcat' stays exactly what every other
-    # stage and the m7 cross-filter checkpoint (which shares this dict) read,
-    # so none of them inherits the Gaia reference (#1201 review).
-    if refcat is None and merge_label == 'm2':
-        if 'refcat_m2_gaia' not in refcat_cache:
-            refcat_cache['refcat_m2_gaia'] = _astrom_checkpoint_refcat(
-                basepath, field=getattr(options, 'field', None),
-                proposal_id=getattr(options, 'proposal_id', None),
-                gaia_fallback=True)
-        refcat = refcat_cache['refcat_m2_gaia']
-
-    # gc-treasury (10678) and any other field with
-    # `alignment_config.tie_through_reference_filter` ties every filter OTHER
-    # than its `reference_filter` (F212N) to the reference filter's OWN JWST
-    # consensus catalog instead of straight to VIRAC2 -- so a refused VIRAC2
-    # tie in one band cannot leave two bands of the same field apart on the
-    # sky (o063: F212N refused, F480M applied its own VIRAC2 bulk, 226 mas
-    # apart).  Resolved into a LOCAL variable, never written back into
-    # `refcat_cache`: that dict is shared with the m7 cross-filter checkpoint
-    # below, whose anchor tie must stay against the real VIRAC2 refcat.
-    # Raises `ReferenceFilterNotSettledError` (uncaught here, by design) when
-    # the field is opted in but the reference filter's own tie has not
-    # settled yet -- this must never fall back to VIRAC2 silently.
-    tie_refcat = resolve_tie_reference(
-        refcat, cut_bp, getattr(options, 'proposal_id', None),
-        getattr(options, 'field', None), filt, obs_token=_obs_token)
-
-    # Saturated stars have no per-frame daophot row; their repeatable satstar
-    # fits join the reference-tie consensus (#957).  At a frozen stage
-    # run_visit_checkpoint uses them only when the m2 record did.
-    # ASTROM_SATSTAR_CONSENSUS=0 turns that off (for comparing against a record
-    # made before it existed).
-    satstars = None
-    if os.environ.get('ASTROM_SATSTAR_CONSENSUS', '1') != '0':
-        from jwst_gc_pipeline.photometry.satstar_consensus import (
-            load_exposure_satstars)
-        satstars = load_exposure_satstars(tables, merge_label)
-        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: satstar "
-              f"catalogs for {len(satstars)} of {len(tables)} exposure(s)",
-              flush=True)
-
     warn_only = os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1'
-    try:
-        record = run_visit_checkpoint(
-            tables, merge_label, refcat=tie_refcat, filtername=filt,
-            satstars_by_exposure=satstars,
-            # JWST-resolved binaries/groups out of the dense reference (#957);
-            # opt-in with ASTROM_REFERENCE_BLENDS=1 at m2.  A frozen stage
-            # follows its m2 record regardless.
-            exclude_reference_blends=(
-                os.environ.get('ASTROM_REFERENCE_BLENDS', '0') == '1'),
-            basepath=cut_bp, context=context or f"{filt}/{module}",
-            target=getattr(options, 'target', None),
-            # ngc6334's two proposals and cloudef's two obsids share a target
-            # directory AND a filter list, so the per-filter consensus catalog
-            # this writes needs the same disambiguator every other per-obs
-            # product carries.
-            obs_token=_obs_token)
-    except AstrometryRegressionError:
-        if warn_only:
-            traceback.print_exc()
-            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: REGRESSION "
-                  f"demoted to warning (ASTROM_CHECKPOINT_WARN_ONLY=1)", flush=True)
+
+    # The input set above is MODULE-blind: the glob spans every detector of
+    # the filter, so the nrca, nrcb and merged blocks of one run hand this
+    # function the same per-frame catalogs.  At a FROZEN stage nothing else
+    # the measurement reads changes between those calls either -- its
+    # baseline is the m2 record and consensus, which only a correcting stage
+    # writes -- so the second and third measurements repeat the first.  The
+    # sgrb2 m7 finalize (2026-10) spent ~29 min per block on it, 15.5 h of
+    # its 72 h wall, two thirds of that on repeats.  Reuse the record
+    # measured on the identical inputs instead; the verdict handling below
+    # still runs for every module.  A CORRECTING stage always re-measures.
+    # ASTROM_CHECKPOINT_REUSE=0 re-measures every call.
+    signature = None
+    if (merge_label not in CORRECTION_STAGES
+            and os.environ.get('ASTROM_CHECKPOINT_REUSE', '1') != '0'):
+        signature = _checkpoint_input_signature(merge_label, filt, fns)
+    frozen_records = refcat_cache.setdefault(_FROZEN_STAGE_RECORDS_KEY, {})
+    if signature is not None and signature in frozen_records:
+        record = copy.deepcopy(frozen_records[signature])
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: REUSING the "
+              f"record measured earlier in this run on the same {len(fns)} "
+              f"per-frame catalog(s) ({record.get('context')}): "
+              f"{record.get('record_path')}", flush=True)
+    else:
+        record = _measure_stage_checkpoint(
+            fns, merge_label, module, filt, cut_bp, basepath, options,
+            refcat_cache, context, _obs_token, warn_only)
+        if record is None:
             return
-        raise
+        if signature is not None:
+            frozen_records[signature] = copy.deepcopy(record)
 
     # A record can FAIL without implying a correction, and the corrections
     # check alone read that as a pass.  `duplicate_exposure` is the case:
