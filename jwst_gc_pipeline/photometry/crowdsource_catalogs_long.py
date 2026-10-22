@@ -12,6 +12,7 @@ import numpy as np
 from pathlib import Path
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
@@ -3507,19 +3508,25 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     return img
 
 
-def _run_frame_renders(overlapping_frames, render_fn, n_threads):
-    """Apply ``render_fn`` to each frame, serial or across ``n_threads``.
+def _run_frame_renders(overlapping_frames, render_fn, n_threads, n_procs=1):
+    """Apply ``render_fn`` to each frame: serial, across ``n_threads`` threads,
+    or across ``n_procs`` forked processes (``frame_pool.map_frames``; takes
+    precedence over ``n_threads``).
 
-    Returns results in the SAME order as ``overlapping_frames`` in both modes, so
+    Returns results in the SAME order as ``overlapping_frames`` in every mode, so
     the caller's downstream accumulation is deterministic and byte-identical
-    regardless of thread count.  ``render_fn`` must be a pure function of its
-    frame plus shared read-only state (no cross-frame mutation).  Exceptions from
-    any frame propagate (via ``ThreadPoolExecutor.map`` iteration in the threaded
-    path, or directly in the serial path) -- no frame is silently dropped.
+    regardless of thread or process count.  ``render_fn`` must be a pure function
+    of its frame plus shared read-only state (no cross-frame mutation); in the
+    process path its return value must pickle, and anything else it changes
+    stays in the child.  Exceptions from any frame propagate (via the executor's
+    ``map`` iteration in the parallel paths, or directly in the serial path) --
+    no frame is silently dropped.
 
     Split out from ``build_mergedcat_residuals`` so the serial-vs-parallel
     equivalence of the dispatch is unit-testable (test_mergedcat_render_dispatch).
     """
+    if n_procs > 1 and len(overlapping_frames) > 1:
+        return frame_pool.map_frames(render_fn, overlapping_frames, n_procs)
     if n_threads > 1 and len(overlapping_frames) > 1:
         from concurrent.futures import ThreadPoolExecutor
         n = min(int(n_threads), len(overlapping_frames))
@@ -3850,6 +3857,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # NOT --parallel-workers, which every production sbatch already sets.
     # Frame stems must be unique or two threads write the same file.
     _render_threads = max(1, int(getattr(options, 'mergedcat_render_threads', 1) or 1))
+    # --mergedcat-render-procs forks N processes instead (frame_pool, #1230),
+    # which the FITPACK lock and the GIL do not serialize: each child inherits
+    # the grids, catalog and options, writes its frames' files, and returns
+    # their paths.
+    _render_procs = max(1, int(getattr(options, 'mergedcat_render_procs', 1) or 1))
     import threading as _threading
     _save_lock = _threading.Lock()
 
@@ -4077,12 +4089,22 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             _result[kind] = (out_resid, out_model, raw_resid, raw_model)
         return _result
 
-    if _render_threads > 1 and len(overlapping_frames) > 1:
+    if _render_procs > 1 and len(overlapping_frames) > 1:
+        # Load every detector's grid before the fork, so the children share
+        # the parent's copy instead of each loading its own.
+        for _orig in overlapping_frames:
+            render_grids(frame_identity(_orig, field=field)[3])
+        print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
+              f"{min(_render_procs, len(overlapping_frames))} processes "
+              f"(--mergedcat-render-procs"
+              + (f"; --mergedcat-render-threads={_render_threads} unused"
+                 if _render_threads > 1 else '') + ")", flush=True)
+    elif _render_threads > 1 and len(overlapping_frames) > 1:
         print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
               f"{min(_render_threads, len(overlapping_frames))} threads "
               f"(--mergedcat-render-threads)", flush=True)
     _frame_results = _run_frame_renders(overlapping_frames, _render_frame,
-                                        _render_threads)
+                                        _render_threads, _render_procs)
     # Accumulate in frame order so the resample input lists are deterministic
     # (identical to the pre-parallel serial append order).
     for _orig, _res in zip(overlapping_frames, _frame_results):
@@ -5332,6 +5354,26 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'does not silently enable the threaded render on live '
                             'jobs -- validate byte-identity against the serial '
                             'path before raising it.'))
+    parser.add_option('--mergedcat-render-procs', dest='mergedcat_render_procs',
+                      default=1, type='int',
+                      help=('Render the per-frame merged-catalog residual/model '
+                            'images (build_mergedcat_residuals) in N forked '
+                            'processes.  Default 1 = serial.  Frames are '
+                            'gathered in frame order, so the output is identical '
+                            'to the serial path (#1230).  Unlike the threads of '
+                            '--mergedcat-render-threads, the processes are not '
+                            'serialized by the GIL or by scipy\'s FITPACK lock; '
+                            'takes precedence over that option.  Each process '
+                            'adds one frame\'s working arrays to the memory in '
+                            'use.'))
+    parser.add_option('--forced-fill-procs', dest='forced_fill_procs',
+                      default=1, type='int',
+                      help=('Prepare and force-fit the m8 forced fill\'s frames '
+                            'in N forked processes.  Default 1 = serial.  The '
+                            'per-frame fluxes and variances are summed in frame '
+                            'order, so the m8 catalog is identical to the serial '
+                            'path (#1230).  Each process adds one prepared '
+                            'frame to the memory in use.'))
     (options, args) = parser.parse_args()
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the

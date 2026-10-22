@@ -62,6 +62,7 @@ from astropy.table import Table
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 
+from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry.naming import frame_identity
 from jwst_gc_pipeline.photometry.psf_fitting import forced_psf_photometry
 
@@ -166,12 +167,63 @@ def _satstar_partner_guard(tbl, filt, ref, targets,
     return veto
 
 
+def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
+                      frame_arg_builder, fit_shape):
+    """Prepare one frame and force-fit every target that lands on it.
+
+    Returns ``(loc, flux, var)`` for the fits with a finite flux and a positive
+    error, ``loc`` indexing the target arrays ``ra``/``dec``, or ``None`` when
+    the frame contributes nothing: no target lands on it, or its preparation
+    raised one of the exceptions a missing or malformed frame raises (printed
+    with its traceback).  Anything else propagates.
+    """
+    # A dropped frame here silently weakens the inverse-variance combine
+    # (no-silent-frame-drops rule): catch only the exceptions frame prep
+    # can legitimately raise (filename-token parsing -> ValueError /
+    # IndexError; missing or unreadable frame products / headers ->
+    # OSError (incl. FileNotFoundError) / KeyError), ALWAYS print the
+    # full traceback, and let anything else propagate.
+    try:
+        kw = frame_arg_builder(filename)
+        ctx = prepare_frame(**kw)
+    except (OSError, KeyError, ValueError, IndexError) as ex:
+        print(f"  [m8 {filt}] prep failed {os.path.basename(filename)}: {ex}\n"
+              f"{traceback.format_exc()}", flush=True)
+        return None
+    ny, nx = ctx.nan_replaced_data.shape
+    # The cross-band source list spans the whole mosaic, so for any single
+    # frame most reference positions fall outside its footprint.  With the
+    # GWCS (ctx.ww is a FrameWCS) those return NaN and are dropped by the
+    # ``inb`` test below.  With a SIP WCS the iterative inverse cannot
+    # converge there and raises NoConvergence unless ``quiet=True`` --
+    # which aborted the entire W51 m8 fill (#187).  Pass quiet for the
+    # SIP-fallback case; FrameWCS ignores it (its inverse is exact).
+    xpix, ypix = ctx.ww.all_world2pix(ra, dec, 0, quiet=True)
+    inb = (xpix > 2) & (xpix < nx - 3) & (ypix > 2) & (ypix < ny - 3) & \
+          np.isfinite(xpix) & np.isfinite(ypix)
+    if not inb.any():
+        return None
+    seed = Table({'x_init': xpix[inb], 'y_init': ypix[inb]})
+    res = forced_psf_photometry(
+        ctx.nan_replaced_data, ctx.dao_psf_model, seed,
+        error=ctx.err, mask=ctx.mask, fit_shape=fit_shape, nonnegative=False)
+    f = np.asarray(res['flux_fit'], dtype=float)
+    e = np.asarray(res['flux_err'], dtype=float)
+    ok = np.isfinite(f) & np.isfinite(e) & (e > 0)
+    return np.where(inb)[0][ok], f[ok], e[ok] ** 2
+
+
 def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
                      nsigma=3.0, fit_shape=(5, 5),
-                     satstar_partner_guard=0.5 * u.arcsec, verbose=True):
+                     satstar_partner_guard=0.5 * u.arcsec, verbose=True,
+                     n_procs=1):
     """Force-fit ``filt`` at the reference position of every source that is a
     non-detection (and not saturated) in ``filt``, combine across ``frames``,
     and write the results back into ``tbl`` in place.
+
+    ``n_procs > 1`` prepares and fits the frames in that many forked processes
+    (``frame_pool.map_frames``, #1230).  The per-frame results are summed in
+    ``frames`` order either way, so the result does not depend on ``n_procs``.
 
     Adds/sets columns: ``forced_filled_{filt}`` (bool), ``forced_snr_{filt}``,
     ``flux_ulim_{filt}``, ``mag_vega_ulim_{filt}`` (when a Vega zero-point is
@@ -238,44 +290,23 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     ra = ref.ra.deg[tgt_idx]
     dec = ref.dec.deg[tgt_idx]
 
-    for filename in frames:
-        # A dropped frame here silently weakens the inverse-variance combine
-        # (no-silent-frame-drops rule): catch only the exceptions frame prep
-        # can legitimately raise (filename-token parsing -> ValueError /
-        # IndexError; missing or unreadable frame products / headers ->
-        # OSError (incl. FileNotFoundError) / KeyError), ALWAYS print the
-        # full traceback, and let anything else propagate.
-        try:
-            kw = frame_arg_builder(filename)
-            ctx = prepare_frame(**kw)
-        except (OSError, KeyError, ValueError, IndexError) as ex:
-            print(f"  [m8 {filt}] prep failed {os.path.basename(filename)}: {ex}\n"
-                  f"{traceback.format_exc()}", flush=True)
+    def _fit(filename):
+        return _forced_fit_frame(filename, filt, ra, dec,
+                                 prepare_frame=prepare_frame,
+                                 frame_arg_builder=frame_arg_builder,
+                                 fit_shape=fit_shape)
+
+    frames = list(frames)
+    if verbose and n_procs > 1 and len(frames) > 1:
+        print(f"  [m8 {filt}] {len(frames)} frames across "
+              f"{min(int(n_procs), len(frames))} processes "
+              f"(--forced-fill-procs)", flush=True)
+    for fit in frame_pool.map_frames(_fit, frames, n_procs):
+        if fit is None:
             continue
-        ny, nx = ctx.nan_replaced_data.shape
-        # The cross-band source list spans the whole mosaic, so for any single
-        # frame most reference positions fall outside its footprint.  With the
-        # GWCS (ctx.ww is a FrameWCS) those return NaN and are dropped by the
-        # ``inb`` test below.  With a SIP WCS the iterative inverse cannot
-        # converge there and raises NoConvergence unless ``quiet=True`` --
-        # which aborted the entire W51 m8 fill (#187).  Pass quiet for the
-        # SIP-fallback case; FrameWCS ignores it (its inverse is exact).
-        xpix, ypix = ctx.ww.all_world2pix(ra, dec, 0, quiet=True)
-        inb = (xpix > 2) & (xpix < nx - 3) & (ypix > 2) & (ypix < ny - 3) & \
-              np.isfinite(xpix) & np.isfinite(ypix)
-        if not inb.any():
-            continue
-        seed = Table({'x_init': xpix[inb], 'y_init': ypix[inb]})
-        res = forced_psf_photometry(
-            ctx.nan_replaced_data, ctx.dao_psf_model, seed,
-            error=ctx.err, mask=ctx.mask, fit_shape=fit_shape, nonnegative=False)
-        f = np.asarray(res['flux_fit'], dtype=float)
-        e = np.asarray(res['flux_err'], dtype=float)
-        ok = np.isfinite(f) & np.isfinite(e) & (e > 0)
-        loc = np.where(inb)[0][ok]
-        var = e[ok] ** 2
+        loc, f, var = fit
         wsum[loc] += 1.0 / var
-        wfsum[loc] += f[ok] / var
+        wfsum[loc] += f / var
         nseen[loc] += 1
 
     fitted = nseen > 0
@@ -386,7 +417,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
 
 def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
                               frames_for, prepare_frame, frame_arg_builder_for,
-                              nsigma=3.0, fit_shape=(5, 5), verbose=True):
+                              nsigma=3.0, fit_shape=(5, 5), verbose=True,
+                              n_procs=1):
     """Load the merged m7 catalog, force-fill every band, write the m8 catalog.
 
     Parameters
@@ -399,6 +431,7 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
     prepare_frame : callable matching ``_prepare_frame_for_photometry`` kwargs,
         returning the per-frame context object
     frame_arg_builder_for : callable ``filt -> (filename -> kwargs dict)``
+    n_procs : forked processes per band's frame loop (``forced_fill_band``)
     """
     if verbose:
         print(f"[m8] forced cross-band fill: {os.path.basename(merged_path)} "
@@ -416,7 +449,8 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
         total += forced_fill_band(
             tbl, filt, frames, prepare_frame=prepare_frame,
             frame_arg_builder=frame_arg_builder_for(filt),
-            nsigma=nsigma, fit_shape=fit_shape, verbose=verbose)
+            nsigma=nsigma, fit_shape=fit_shape, verbose=verbose,
+            n_procs=n_procs)
     tbl.write(out_path, overwrite=True)
     if verbose:
         print(f"[m8] wrote {out_path}  ({total} phantom non-detections recovered)",
