@@ -21,7 +21,9 @@ It reproduces ``convolve_fft``'s defaults as ``interpolate_replace_nans``
 calls it (``boundary='fill'``, ``fill_value=0``, ``normalize_kernel=True``,
 ``nan_treatment='interpolate'``, ``min_wt=0``):
 
-- the kernel is divided by its sum, after zeroing non-finite elements;
+- the kernel is divided by its sum, after zeroing non-finite elements (a
+  kernel summing to less than ``1 / MAX_NORMALIZATION`` goes to astropy, which
+  refuses it);
 - a non-finite pixel (NaN or +-inf) contributes value 0 with weight 0;
 - a pixel outside the frame contributes value 0 with weight 1;
 - a NaN pixel whose summed weight is below ``10 * eps`` becomes 0;
@@ -35,16 +37,23 @@ frames, at the 2000 NaN pixels where the two differ most, the direct result
 equals float32 of an extended-precision sum at 1998 and 1994 of them, the FFT
 result at 2 and 3; the FFT is off by up to 6.8e-4 where the weight is ~1e-9.
 
-``NAN_FILL_DIRECT=0`` restores the FFT path.
+Only a plain 2-D `numpy.ndarray` takes the direct path.  A masked array (whose
+masked pixels astropy treats as NaN), a Quantity, or any other input goes
+through ``interpolate_replace_nans`` unchanged, as does everything when
+``NAN_FILL_DIRECT=0``.
 """
 import os
 
 import numpy as np
-from astropy.convolution import convolve_fft, interpolate_replace_nans
+from astropy.convolution import convolve_fft, core as _convolution_core
+from astropy.convolution import interpolate_replace_nans
 
 #: ``convolve_fft`` zeroes the result where the convolved weight is below
 #: ``10 * np.finfo(bigimwt.dtype).eps`` with ``bigimwt`` complex128.
 ZERO_WEIGHT = 10 * np.finfo(np.complex128).eps
+
+#: ``convolve_fft`` refuses to normalize a kernel whose sum is below this.
+MIN_KERNEL_SUM = 1.0 / getattr(_convolution_core, 'MAX_NORMALIZATION', 100)
 
 #: NaN pixels per gather; bounds the temporary index and value arrays.
 _CHUNK = 1 << 20
@@ -59,6 +68,9 @@ def replace_nans(array, kernel):
     """``interpolate_replace_nans(array, kernel, convolve=convolve_fft)``,
     summed directly at the NaN pixels.
 
+    It takes no ``convolve_fft`` keywords: it reproduces the defaults
+    ``interpolate_replace_nans`` uses (``min_wt=0`` among them).
+
     Parameters
     ----------
     array : 2-D `numpy.ndarray`
@@ -70,20 +82,21 @@ def replace_nans(array, kernel):
     Returns
     -------
     `numpy.ndarray`
-        A copy of ``array`` with its NaN pixels replaced.  Any other
-        dimensionality, an unnormalizable kernel, or ``NAN_FILL_DIRECT=0``
-        goes through ``interpolate_replace_nans`` with ``convolve_fft``.
+        A copy of ``array`` with its NaN pixels replaced.  Anything other
+        than a plain 2-D ndarray, an unnormalizable kernel, or
+        ``NAN_FILL_DIRECT=0`` goes through ``interpolate_replace_nans`` with
+        ``convolve_fft``.
     """
-    array = np.asarray(array)
     karr = np.array(getattr(kernel, 'array', kernel), dtype=float)
     if (os.environ.get('NAN_FILL_DIRECT', '1') == '0'
+            or type(array) is not np.ndarray
             or array.ndim != 2 or karr.ndim != 2):
         return _fft_replace_nans(array, kernel)
     isnan = np.isnan(array)
     if not isnan.any():
         return array.copy()
     karr[~np.isfinite(karr)] = 0
-    if not karr.sum() > 0:
+    if not karr.sum() >= MIN_KERNEL_SUM:
         # let astropy raise its own unnormalizable-kernel error
         return _fft_replace_nans(array, kernel)
     karr /= karr.sum()

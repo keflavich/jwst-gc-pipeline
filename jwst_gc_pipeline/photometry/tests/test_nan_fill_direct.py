@@ -152,11 +152,44 @@ def test_anything_else_goes_through_astropy(monkeypatch, why, array, kernel):
     assert np.array_equal(out, _astropy(array, kernel), equal_nan=True)
 
 
-def test_an_unnormalizable_kernel_raises_as_astropy_does(monkeypatch):
+@pytest.mark.parametrize('kernel', [
+    np.array([[1.0, -1.0], [-1.0, 1.0]]),     # sums to zero
+    np.full((3, 3), 0.001),                   # sums to 0.009 < 1/MAX_NORMALIZATION
+], ids=['zero-sum', 'small-sum'])
+def test_an_unnormalizable_kernel_raises_as_astropy_does(monkeypatch, kernel):
     monkeypatch.delenv('NAN_FILL_DIRECT', raising=False)
-    zero_sum = np.array([[1.0, -1.0], [-1.0, 1.0]])
     with pytest.raises(Exception, match="can't be normalized"):
-        nan_fill.replace_nans(_frame(1), zero_sum)
+        _astropy(_frame(1), kernel)
+    with pytest.raises(Exception, match="can't be normalized"):
+        nan_fill.replace_nans(_frame(1), kernel)
+
+
+def test_a_masked_array_goes_through_astropy(monkeypatch):
+    """astropy gives a masked pixel weight 0; a plain-array sum would use its
+    value.  Two masked 100.0 neighbours: 5.0 from astropy, 28.75 if summed."""
+    monkeypatch.delenv('NAN_FILL_DIRECT', raising=False)
+    data = np.array([[1.0, 100.0, 1.0],
+                     [100.0, np.nan, 9.0],
+                     [1.0, 9.0, 9.0]])
+    mask = np.zeros(data.shape, bool)
+    mask[0, 1] = mask[1, 0] = True
+    masked = np.ma.MaskedArray(data, mask=mask)
+    kernel = np.ones((3, 3))
+    out = nan_fill.replace_nans(masked, kernel)
+    ref = _astropy(masked, kernel)
+    assert isinstance(out, np.ma.MaskedArray)
+    assert out[1, 1] == ref[1, 1] == pytest.approx(5.0)
+    assert nan_fill.replace_nans(data, kernel)[1, 1] == pytest.approx(28.75)
+
+
+def test_a_kernel_larger_than_the_frame(monkeypatch):
+    monkeypatch.delenv('NAN_FILL_DIRECT', raising=False)
+    a = _frame(4, shape=(5, 6), nan_fraction=0.3, dtype=np.float64)
+    kernel = KERNELS['gauss-17']
+    new = nan_fill.replace_nans(a, kernel)
+    ref = _astropy(a, kernel)
+    isnan = np.isnan(a)
+    assert np.allclose(new[isnan], ref[isnan], rtol=1e-10, atol=1e-10)
 
 
 def test_prepare_frame_fills_through_replace_nans():
