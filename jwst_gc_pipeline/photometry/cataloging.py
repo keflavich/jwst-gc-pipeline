@@ -8682,6 +8682,26 @@ def merged_catalog_path(cut_bp, label, module, filt, proposal_id, field,
             f'_indivexp_merged{_desat}{_bgsub}{_blur}_{label}_dao_basic.fits')
 
 
+def crossband_merged_path(cut_bp, label, module, proposal_id, field,
+                          psf_token=None):
+    """The manual pipeline's cross-band merged catalog, as merge_daophot WRITES it.
+
+    ``merge_catalogs``' output name puts the PSF token between ``_resbgsub`` and
+    the phase.  The manual path passes no ``--epsf``, so that token is
+    ``hybrid_psf_token()``.  A reader that leaves it out picks up an earlier
+    STPSF run's catalog in a ``PSF_EPSF_CORE_DIR`` run (#1197: the 10678 m8
+    catalogs rebuilt 2026-10-17..20 carry the VERSION of the 09-25 STPSF m7).
+
+    ``psf_token=''`` spells the untokened name.  The m8 products keep it, since
+    their readers (``stage_release``, ``m8_merge_partials``) spell it so; their
+    PSFTOKEN card, copied from the m7 meta, records the variant.
+    """
+    psf = hybrid_psf_token() if psf_token is None else psf_token
+    return (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
+            f'merged_resbgsub{psf}_{label}'
+            f'{merged_catalog_obs_token(proposal_id, field)}.fits')
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -9036,11 +9056,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         # merged.  Reading with the per-frame spelling did not fail loudly -- it
         # matched a STALE untokened sibling from before #597, and the m8 forced
         # fill inherited that file's TEN bands under an _o001 name (#661).
-        # Spell it the way the writer does.
-        _xbsuf = merged_catalog_obs_token(proposal_id, field)
+        # Spell it the way the writer does, PSF token included (#1197).
         for module in modules:
-            _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
-                   f'merged_resbgsub_m7{_xbsuf}.fits')
+            _xb = crossband_merged_path(cut_bp, 'm7', module, proposal_id, field)
             if not os.path.exists(_xb):
                 print(f"manual [m8]: m7 merged catalog not found (module={module}): "
                       f"{_xb}", flush=True)
@@ -9049,9 +9067,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # one band per job -> partial catalog (only this band's columns
                 # are meaningful); m8_merge_partials.py overlays them onto _xb.
                 _tag = '-'.join(filternames)
-                _m8 = _xb.replace('resbgsub_m7', f'resbgsub_m8_partial_{_tag}')
+                _m8 = crossband_merged_path(cut_bp, f'm8_partial_{_tag}', module,
+                                            proposal_id, field, psf_token='')
             else:
-                _m8 = _xb.replace('resbgsub_m7', 'resbgsub_m8')
+                _m8 = crossband_merged_path(cut_bp, 'm8', module, proposal_id,
+                                            field, psf_token='')
             from jwst_gc_pipeline.photometry import forced_fill as _ff
 
             def _frames_for(filt, _module=module):
@@ -10229,10 +10249,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             # merged.  Reading with the per-frame spelling did not fail loudly -- it
             # matched a STALE untokened sibling from before #597, and the m8 forced
             # fill inherited that file's TEN bands under an _o001 name (#661).
-            # Spell it the way the writer does.
-            _xbsuf = merged_catalog_obs_token(proposal_id, field)
-            _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
-                   f'merged_resbgsub_{last_phase}{_xbsuf}.fits')
+            # Spell it the way the writer does, PSF token included: without it
+            # a PSF_EPSF_CORE_DIR run annotated, stamped and m8-filled the STPSF
+            # catalog of an earlier run (#1197).
+            _xb = crossband_merged_path(cut_bp, last_phase, module, proposal_id,
+                                        field)
             print(f"manual [{last_phase}]: CROSS-BAND MERGE done (module={module}) "
                   f"-> {_xb}", flush=True)
 
@@ -10270,7 +10291,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             if getattr(options, 'forced_fill_m8', True):
                 try:
                     from jwst_gc_pipeline.photometry import forced_fill as _ff
-                    _m8 = _xb.replace(f'resbgsub_{last_phase}', 'resbgsub_m8')
+                    # built, not str.replace'd from _xb: with the PSF token in
+                    # _xb a 'resbgsub_{last_phase}' replace matches nothing and
+                    # _m8 would name the m7 catalog itself.
+                    _m8 = crossband_merged_path(cut_bp, 'm8', module, proposal_id,
+                                                field, psf_token='')
 
                     def _frames_for(filt, _module=module):
                         return frame_cache.get((_module, filt), [])

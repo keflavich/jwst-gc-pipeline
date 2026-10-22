@@ -79,7 +79,8 @@ from jwst_gc_pipeline.photometry.naming import (
     perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
-from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
+from jwst_gc_pipeline.photometry.epsf_hybrid import (
+    HYBRID_TOKEN, hybrid_psf_token)
 from jwst_gc_pipeline.photometry.measure_offsets import (
     DenseNNMedianAstrometryError, assert_sparse_reference_for_nn_median)
 # Imported as field_registry: `fields` is a local variable in these
@@ -1641,6 +1642,10 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
         print(f"Writing table {tablename} with len={len(basetable)} and ncols={len(basetable.colnames)}", flush=True)
         # use caps b/c FITS will force it to caps anyway
         basetable.meta['VERSION'] = datetime.datetime.now().isoformat()
+        # The PSF variant the inputs were merged under (#1197).  The name above
+        # carries it too, but the m8 forced fill copies this meta into an
+        # untokened ..._resbgsub_m8 name, where the card is the only record.
+        basetable.meta['PSFTOKEN'] = epsf_ or 'none'
         # FITS can mishandle masked bool columns; force saturated flags to plain bool.
         for colname in basetable.colnames:
             if 'saturated' in colname:
@@ -1735,6 +1740,102 @@ def _want_allcols(write_allcols=None):
         return bool(write_allcols)
     return os.environ.get('GC_WRITE_ALLCOLS', '').strip().lower() in (
         '1', 'true', 'yes', 'on')
+
+
+#: Set to 1 to merge one PSF variant on purpose while the other variant's
+#: per-frame catalogs are newer (an A/B comparison); see StalePSFVariantError.
+PSF_VARIANT_OPTOUT_ENV = 'GC_ALLOW_STALE_PSF_VARIANT'
+
+
+class StalePSFVariantError(ValueError):
+    """A merge would read one PSF variant of its inputs while the other is current.
+
+    Every per-frame catalog name carries the PSF variant (``_epsf`` and/or
+    ``_hybpsf``, the latter from ``PSF_EPSF_CORE_DIR``), but the per-filter
+    merged catalog name does not.  A merge run with the other
+    ``PSF_EPSF_CORE_DIR`` setting therefore globs the other variant's per-frame
+    catalogs and writes over the same merged file, and the cross-band merge
+    reads whichever per-filter variant was written last (issue #1197: 10678
+    m7 merges built from pre-roll STPSF per-frame catalogs).
+    """
+
+
+def _psf_variant_optout(environ=None):
+    env = os.environ if environ is None else environ
+    return env.get(PSF_VARIANT_OPTOUT_ENV, '').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+
+
+def _psf_variant_label(epsf_):
+    return f"'{epsf_}'" if epsf_ else 'no PSF token (STPSF)'
+
+
+def _other_psf_variant_path(path, head, epsf_, tail):
+    """``path`` with its ``_hybpsf`` token toggled, or None if the slot is not found.
+
+    ``head`` is the token run between ``_exp{NNNNN}`` and the PSF slot
+    (``{desat}{bgsub}``) and ``tail`` the run after it
+    (``{fitpsf}{blur_}{group_}{iter_token}``), as the per-frame writer spells
+    them; a ``_chunk{i}of{n}`` token may follow ``tail``.
+    """
+    if epsf_.endswith(HYBRID_TOKEN):
+        alt = epsf_[:-len(HYBRID_TOKEN)]
+    else:
+        alt = epsf_ + HYBRID_TOKEN
+    pat = re.compile(r'(_exp\d{5}' + re.escape(head) + r')' + re.escape(epsf_)
+                     + r'(' + re.escape(tail) + r'(?:_chunk\d+of\d+)?_)')
+    dirname, base = os.path.split(path)
+    new, n = pat.subn(lambda m: m.group(1) + alt + m.group(2), base, count=1)
+    return os.path.join(dirname, new) if n else None
+
+
+def _check_perframe_psf_variant(fns, head, epsf_, tail):
+    """Raise StalePSFVariantError if any input has a NEWER other-variant sibling.
+
+    A newer sibling means the latest per-frame run used the other
+    ``PSF_EPSF_CORE_DIR`` setting, so this merge would replace that run's
+    merged catalog with an older one under the same name.
+    """
+    if _psf_variant_optout():
+        print(f"{PSF_VARIANT_OPTOUT_ENV} set: skipping the per-frame PSF-variant "
+              f"check", flush=True)
+        return
+    stale = []
+    for fn in fns:
+        sib = _other_psf_variant_path(fn, head, epsf_, tail)
+        if (sib is not None and os.path.exists(sib)
+                and os.path.getmtime(sib) > os.path.getmtime(fn)):
+            stale.append((fn, sib))
+    if stale:
+        fn, sib = stale[0]
+        raise StalePSFVariantError(
+            f"{len(stale)} of {len(fns)} per-frame catalogs this merge reads "
+            f"({_psf_variant_label(epsf_)}) have a newer sibling of the other "
+            f"PSF variant, e.g.\n    reads  {fn}\n    newer  {sib}\n"
+            f"The merged catalog name carries no PSF token, so this merge would "
+            f"overwrite the newer variant's merged catalog with the older one "
+            f"(issue #1197).  Set PSF_EPSF_CORE_DIR as the latest per-frame run "
+            f"did, or set {PSF_VARIANT_OPTOUT_ENV}=1 to merge the older variant "
+            f"on purpose.")
+
+
+def _recorded_psf_token(meta):
+    """The ``_hybpsf`` part of the PSF variant a per-filter merged catalog records.
+
+    Reads the PSFTOKEN card when present; otherwise infers it from the FN*
+    cards (the per-frame input basenames).  Returns a set of tokens ('' or
+    '_hybpsf'; more than one means mixed inputs), or None when the catalog
+    records neither.
+    """
+    up = {str(k).upper(): v for k, v in meta.items()}
+    if 'PSFTOKEN' in up:
+        tok = str(up['PSFTOKEN']).strip()
+        return {HYBRID_TOKEN if tok.endswith(HYBRID_TOKEN) else ''}
+    fns = [os.path.basename(str(v)) for k, v in up.items()
+           if re.fullmatch(r'FN\d+', k)]
+    if not fns:
+        return None
+    return {HYBRID_TOKEN if HYBRID_TOKEN in fn else '' for fn in fns}
 
 
 def merge_individual_frames(module='merged', suffix="", desat=False, filtername='f410m',
@@ -1925,6 +2026,11 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     if len(tblfns) == 0:
         raise ValueError(f"No tables found matching {basepath}/{filtername.upper()}/{filtername.lower()}_{module}....{desat}{bgsub}{epsf_}{fitpsf}{blur_}_{method}{suffix}.fits")
 
+    # The output name below has no {epsf_}, so refuse to merge the older PSF
+    # variant over the newer one (#1197).
+    _check_perframe_psf_variant(raw_fns, f"{desat}{bgsub}", epsf_,
+                                f"{fitpsf}{blur_}{group_}{iter_token}")
+
     tables = []
     for key in tblfns:
         chunks = frame_groups[key]
@@ -2037,6 +2143,9 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                              - _c.get('applied', 0))
     for ii, fn in enumerate(tblfns):
         minimal_table.meta[f'fn{ii}'] = os.path.basename(fn)
+    # The PSF variant of the inputs, which the output name does not carry
+    # (#1197); merge_daophot checks it against the cross-band run's.
+    minimal_table.meta['PSFTOKEN'] = epsf_ or 'none'
 
     # Ensure saturated stars are represented in indivexp merged products too.
     # Skippable (do_replace_saturated=False) for cutout runs whose basepath
@@ -2415,6 +2524,35 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
             f"{_miss}")
 
     tbls = [Table.read(catfn) for catfn in catfns]
+
+    # The per-filter indivexp names carry no PSF token, but this merge's output
+    # name does ({epsf_} in merge_catalogs' tablename).  Check that each input
+    # was merged under this run's PSF_EPSF_CORE_DIR setting (#1197).
+    if indivexp:
+        _want = HYBRID_TOKEN if HYBRID_TOKEN in epsf_ else ''
+        _bad, _unknown = [], []
+        for catfn, tbl in zip(catfns, tbls):
+            _rec = _recorded_psf_token(tbl.meta)
+            if _rec is None:
+                _unknown.append(os.path.basename(catfn))
+            elif _rec != {_want}:
+                _bad.append(f"    {os.path.basename(catfn)}: "
+                            f"{sorted(_psf_variant_label(t) for t in _rec)}")
+        if _unknown:
+            print(f"WARNING: no PSFTOKEN or FN* cards in {_unknown}; cannot check "
+                  f"their PSF variant against {_psf_variant_label(_want)}",
+                  flush=True)
+        if _bad and _psf_variant_optout():
+            print(f"{PSF_VARIANT_OPTOUT_ENV} set: merging per-filter catalogs of "
+                  f"another PSF variant:\n" + '\n'.join(_bad), flush=True)
+        elif _bad:
+            raise StalePSFVariantError(
+                f"cross-band merge runs with {_psf_variant_label(_want)} "
+                f"(PSF_EPSF_CORE_DIR {'set' if _want else 'unset'}) but these "
+                f"per-filter inputs were merged from another PSF variant:\n"
+                + '\n'.join(_bad) + "\nRe-run their per-filter merge with "
+                f"the same PSF_EPSF_CORE_DIR setting, or set "
+                f"{PSF_VARIANT_OPTOUT_ENV}=1 to merge them anyway.")
 
     for catfn, tbl, filtername in zip(catfns, tbls, filternames):
         tbl.meta['filename'] = catfn
