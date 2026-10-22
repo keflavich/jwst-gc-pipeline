@@ -143,3 +143,29 @@ def test_missing_photutils_internals_use_evaluate(monkeypatch):
                         psf_render._INTERNALS + ('_not_in_this_photutils',))
     assert not isinstance(psf_render.stamp_function(_grid()),
                           psf_render._GridStamp)
+
+
+@pytest.mark.parametrize('cls', [GriddedPSFModel, CachingGriddedPSFModel])
+@pytest.mark.parametrize('n', [1, 2, 3])
+@pytest.mark.parametrize('fill_value', [0.0, 1e-3, None])
+def test_every_grid_stamp_is_the_evaluate_stamp(cls, n, fill_value):
+    """`_fast` against `evaluate`, star by star.  A render checks only its
+    first stamp and falls back to `evaluate` on a difference, which hides a
+    regression in the grid math from the render-level tests above.  Stamps
+    inside the ePSF footprint (21 x 21), past it (31 x 31, 20 x 25 against its
+    +-12.5 px), and off the frame."""
+    grid = _grid(cls, n=n, fill_value=fill_value)
+    fast = psf_render._GridStamp(grid, cls is CachingGriddedPSFModel)
+    ref = psf_render._meshgrid_stamp(grid)
+    rng = np.random.default_rng(11)
+    for sy, sx in [(21, 21), (31, 31), (20, 25)]:
+        for _ in range(40):
+            x0 = rng.uniform(-12, SHAPE[1] + 12)
+            y0 = rng.uniform(-12, SHAPE[0] + 12)
+            flux = rng.lognormal(5, 2) * rng.choice([-1, 1])
+            x_lo = int(np.floor(x0)) - sx // 2
+            y_lo = int(np.floor(y0)) - sy // 2
+            args = (x_lo, x_lo + sx, y_lo, y_lo + sy, flux, x0, y0)
+            got, want = fast._fast(*args), ref(*args)
+            assert got.shape == want.shape == (sy, sx)
+            assert np.array_equal(got, want, equal_nan=True), args
