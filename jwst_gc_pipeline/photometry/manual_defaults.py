@@ -177,6 +177,10 @@ MANUAL_DEFAULTS = {
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.
     'manual_keep_intermediate_model_i2d': False,
+    # ... and of the final phase's, only the MERGED module's: the release stages
+    # only that one, so the nrca/nrcb model resamples run only on request (a run
+    # with no merged module -- a disjoint field -- still writes every module's).
+    'manual_model_i2d_all_modules': False,
     # -- retention: at each phase barrier, drop the per-frame images the
     # barrier makes unreachable (this phase's mergedcat renders, the previous
     # phase's raw residual/model).  ON by default: this phase's own raw pair

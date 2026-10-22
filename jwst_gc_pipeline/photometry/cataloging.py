@@ -8682,6 +8682,22 @@ def merged_catalog_path(cut_bp, label, module, filt, proposal_id, field,
             f'_indivexp_merged{_desat}{_bgsub}{_blur}_{label}_dao_basic.fits')
 
 
+def final_phase_model_i2d_modules(modules, all_modules=False):
+    """The modules whose merged-catalog MODEL i2d the final phase writes.
+
+    The model i2d is display-only, and a release stages only the MERGED
+    module's (``stage_release.IMAGE_RE`` matches ``-merged_`` only), so the
+    nrca/nrcb resamples are skipped unless ``all_modules``
+    (``--manual-model-i2d-all-modules``).  A run with no merged module -- a
+    disjoint field, catalogued per module -- writes every module's, since
+    those are its only mosaics (#1225).
+    """
+    modules = list(modules)
+    if all_modules or 'merged' not in modules:
+        return modules
+    return ['merged']
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -9147,6 +9163,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # (--manual-keep-intermediate-model-i2d restores writing it every phase).
     _final_phase = phases[-1] if phases else None
     _keep_all_model_i2d = getattr(options, 'manual_keep_intermediate_model_i2d', False)
+    # ... and of the final phase's, only the merged module's is staged.
+    _final_model_i2d_modules = final_phase_model_i2d_modules(
+        modules, getattr(options, 'manual_model_i2d_all_modules', False))
 
     for phase in phases:
         # iter3 (m3) and iter4 (m4) fit the RAW frames; m4 produces the first
@@ -10065,7 +10084,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         cut_bp, basepath, vetted_path, filt, proposal_id, field,
                         module, opts_phase, frame_cache.get((module, filt), []),
                         merge_label, ['basic'], pupil=pupil, satstar_label=phase,
-                        write_model_i2d=(_keep_all_model_i2d or phase == _final_phase),
+                        write_model_i2d=(_keep_all_model_i2d
+                                         or (phase == _final_phase and
+                                             module in _final_model_i2d_modules)),
                         perframe_record=_pf_record)
                     mc_i2d = outpaths.get('basic')
                     if mc_i2d and os.path.exists(mc_i2d):
