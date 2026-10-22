@@ -1069,9 +1069,21 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         if 0 in halves and 1 in halves:
             # correction to move the ODD half onto the EVEN half's frame
             # (both halves cover the full mosaic; capped uniform subsamples
-            # keep this single measure cheap without moving the peak)
+            # keep this single measure cheap without moving the peak).
+            #
+            # The even half goes in as a KDTreeReference so the bridge takes
+            # the tree path, like the per-exposure ties below.  Handed a plain
+            # SkyCoord it took the astropy path, whose 2000-point subsample
+            # floor ignores the pair budget: on sgrb2 F182M (500k vs 500k
+            # stars) the 30" and 60" windows materialized 56M and 194M pairs,
+            # and the bridge took 2256 s of a 6271 s checkpoint.  On the tree
+            # path the same sweep took 63 s and returned the same window,
+            # offset and contrast.
+            bridge_ref = _cap_stars(halves[0].coords)
+            bridge_ref = (halves[0] if len(bridge_ref) == len(halves[0])
+                          else KDTreeReference(bridge_ref))
             half_bridge = measure_offset(_cap_stars(halves[1].coords),
-                                         _cap_stars(halves[0].coords), sweep=True,
+                                         bridge_ref, sweep=True,
                                          confirm_windows=True,
                                          context=f"{context} half1 vs half0")
         for i, e in enumerate(usable):
