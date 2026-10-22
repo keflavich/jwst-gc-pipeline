@@ -89,6 +89,7 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
     CachingGriddedPSFModel, forced_psf_photometry,
     _make_model_image, _dedup_close_sources,
 )
+from jwst_gc_pipeline.photometry.psf_render import stamp_function
 
 
 # Used only by the parallel-chunked PSFPhotometry machinery, which lives in
@@ -3476,6 +3477,10 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     centered on the source rounded to integer pixel coords, but the
     PSF is evaluated at exact (x_fit, y_fit) so sub-pixel registration
     is preserved.
+
+    Each stamp comes from ``psf_render.stamp_function``: the same values
+    ``psf_model.evaluate`` gives on the stamp's meshgrid, through a
+    3-4x faster grid evaluation for a gridded PSF (#1220).
     """
     img = np.zeros(shape, dtype=np.float32)
     if len(table) == 0:
@@ -3488,6 +3493,7 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     yfit = np.asarray(table['y_fit'], dtype=float)
     flux = np.asarray(table['flux_fit'], dtype=float)
 
+    stamp_at = stamp_function(psf_model)
     for i in range(len(table)):
         x0, y0, f0 = xfit[i], yfit[i], flux[i]
         if not (np.isfinite(x0) and np.isfinite(y0) and np.isfinite(f0)):
@@ -3500,9 +3506,7 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
         x_hi = min(nx, ix - half_w + psf_w)
         if y_hi <= y_lo or x_hi <= x_lo:
             continue
-        yy, xx = np.mgrid[y_lo:y_hi, x_lo:x_hi]
-        stamp = psf_model.evaluate(xx.astype(float), yy.astype(float),
-                                   f0, x0, y0)
+        stamp = stamp_at(x_lo, x_hi, y_lo, y_hi, f0, x0, y0)
         img[y_lo:y_hi, x_lo:x_hi] += np.asarray(stamp, dtype=np.float32)
     return img
 

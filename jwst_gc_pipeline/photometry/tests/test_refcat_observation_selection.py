@@ -184,7 +184,9 @@ def test_field_has_NO_default_so_a_call_site_cannot_drop_it():
 
 
 @pytest.mark.parametrize('func_name', [
-    '_run_astrometry_stage_checkpoint',
+    # the measuring half of _run_astrometry_stage_checkpoint, which reaches
+    # the refcat only through it (pinned by the next test)
+    '_measure_stage_checkpoint',
     '_run_crossfilter_astrom_checkpoint',
 ])
 def test_every_call_site_actually_passes_field(func_name):
@@ -207,6 +209,16 @@ def test_every_call_site_actually_passes_field(func_name):
         assert 'field' in c, (
             f'{func_name} calls _astrom_checkpoint_refcat without a field -- '
             f'gc2211 goes back to o028 for every observation: {c}')
+
+
+def test_the_stage_checkpoint_still_reaches_the_pinned_call():
+    """The pin above covers _measure_stage_checkpoint; this keeps it covering
+    the per-stage checkpoint, which reaches the refcat only through it."""
+    import inspect
+    from jwst_gc_pipeline.photometry import cataloging
+    src = inspect.getsource(cataloging._run_astrometry_stage_checkpoint)
+    assert '_measure_stage_checkpoint(' in src
+    assert '_astrom_checkpoint_refcat(' not in src
 
 
 # --- Gaia-only fields (#1167) ----------------------------------------------

@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import epsf  # noqa: E402
 
 from jwst_gc_pipeline.frame_wcs import frame_wcs  # noqa: E402
+from jwst_gc_pipeline.photometry.psf_render import stamp_function  # noqa: E402
 
 DO_NOT_USE, SATURATED = 1, 2
 BKG_STEP = int(os.environ.get('BKG_STEP', 32))
@@ -46,13 +47,14 @@ SUPP_NSIG = float(os.environ.get('SUPP_NSIG', 8.0))
 
 def load_pipeline_renderer():
     """_render_model_from_table from the pipeline module, without importing that module
-    (it needs the jwst package at import time; the function itself is numpy only)."""
+    (it needs the jwst package at import time; the function itself needs only numpy and
+    psf_render.stamp_function, which are supplied to it here)."""
     import jwst_gc_pipeline.photometry as ph
     path = os.path.join(os.path.dirname(ph.__file__), 'crowdsource_catalogs_long.py')
     src = open(path).read()
     node = next(n for n in ast.parse(src).body
                 if isinstance(n, ast.FunctionDef) and n.name == '_render_model_from_table')
-    ns = {'np': np}
+    ns = {'np': np, 'stamp_function': stamp_function}
     exec(compile(ast.Module(body=[node], type_ignores=[]), path, 'exec'), ns)
     return ns['_render_model_from_table']
 
