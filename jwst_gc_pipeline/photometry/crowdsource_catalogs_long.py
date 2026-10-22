@@ -5002,6 +5002,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'one of --filternames.  Default: auto-select the '
                             'reddest broad/medium band (e.g. sickle -> F480M).'),
                       metavar='manual_crossband_ref_filter')
+    parser.add_option('--manual-crossband-ecsv-all-modules',
+                      dest='manual_crossband_ecsv_all_modules',
+                      default=MANUAL_DEFAULTS['manual_crossband_ecsv_all_modules'],
+                      action='store_true',
+                      help=('The m7 cross-band merge writes every module\'s '
+                            'table as FITS, and the ECSV twin only for the '
+                            'merged module (or for every module when the run '
+                            'has no merged module); a skipped module\'s ECSV '
+                            'from an earlier run is removed.  Set this to also '
+                            'write the nrca/nrcb ECSVs (~1 h each on sgrb2).'))
     parser.add_option('--manual-crossband-seed-dedup-mas', type=float,
                       dest='manual_crossband_seed_dedup_mas', default=30.0,
                       help=('Dedup radius (mas) for the m7 cross-band union seed: '

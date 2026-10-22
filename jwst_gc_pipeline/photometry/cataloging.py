@@ -4910,6 +4910,23 @@ def _dedup_combined_vetted(comb, min_sep_deg=0.11 / 3600.0):
     return comb[keep]
 
 
+def crossband_ecsv_modules(modules, all_modules=False):
+    """The modules whose m7 cross-band table also gets an ECSV twin.
+
+    The merged module only, when the run has one: on the sgrb2 m7 finalize
+    (2026-10) the three ECSV writes took 2.3 h against 4.6 min for the same
+    tables as FITS, and a release stages only the merged module's table on a
+    field whose modules overlap (``stage_release.catalog_modules``).  A run
+    with no merged module (a disjoint field, a MIRI run) writes every
+    module's, as does ``all_modules`` (``--manual-crossband-ecsv-all-modules``).
+    The FITS table is written for every module either way (#1227).
+    """
+    modules = list(modules)
+    if all_modules or 'merged' not in modules:
+        return modules
+    return ['merged']
+
+
 def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
                                    radius_mas=30.0):
     """Add ``independently_detected_<filt>`` to the cross-band merged catalog.
@@ -10183,6 +10200,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
               f"job; runs in the {orig_last_phase} finalize)", flush=True)
     if _do_crossband and not getattr(options, 'cutout_region', ''):
         ref_filter = _resolve_crossband_ref_filter(options, filternames)
+        # FITS for every module; the slow ECSV twin for the merged module only
+        # unless the run has none (#1227).
+        _xb_ecsv_modules = crossband_ecsv_modules(
+            modules, getattr(options, 'manual_crossband_ecsv_all_modules', False))
         for module in modules:
             # ---- CROSS-FILTER ASTROMETRY CHECKPOINT (blocking) ----
             # Every filter must agree with the VIRAC2-Ks-nearest anchor to
@@ -10221,7 +10242,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 filternames_override=[f.lower() for f in filternames],
                 field=field,
                 progid=proposal_id,
-                vetted=True)
+                vetted=True,
+                write_ecsv=(module in _xb_ecsv_modules))
             # The cross-band MERGED catalog is written by merge_daophot with
             # naming.merged_catalog_obs_token (its `_obssuf`), NOT the PER-FRAME
             # token.  They differ for exactly the PER_OBS_MERGED_FIELDS entries:

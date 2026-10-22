@@ -147,6 +147,11 @@ MANUAL_DEFAULTS = {
     'coarse_bg_box': 0,
     # -- grouping
     'manual_group_min_sep_fwhm': 2.0,
+    # -- cross-band merge output (m7): every module's table is written as FITS;
+    # the ECSV twin (~30x slower to write on sgrb2) only for the merged module, or for
+    # every module when the run has none (cataloging.crossband_ecsv_modules).
+    # True writes the nrca/nrcb ECSVs too (#1227).
+    'manual_crossband_ecsv_all_modules': False,
     # -- cross-band seed (m7, _build_crossband_seed)
     'manual_crossband_seed_min_filters': 2,
     'manual_crossband_seed_snr_min': 5.0,
