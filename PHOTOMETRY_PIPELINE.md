@@ -388,6 +388,7 @@ still run after m6.
 | `--manual-detect-threshold-scale` | 1.0 | 1.0 | 1.0 | 1.0 | scales the permissive daofind threshold |
 | `--local-snr-threshold` | 5.0 | 5.0 | 5.0 | 5.0 | m1 per-source local S/N |
 | `--manual-keep-intermediate-model-i2d` | off | off | off | off | write a model i2d for every phase; off writes the last phase only |
+| `--manual-model-i2d-all-modules` | off | off | off | off | write the last phase's model i2d for nrca/nrcb too; off writes the merged module's only (every module's when the run has no merged module) |
 | prominence gate (`miri_prominence_snr`) | 5.0 in `MANUAL_DEFAULTS`/`mopt`; no CLI flag (the `do_photometry_step_manual` signature default of 0.0 applies only to direct callers) | 0 (off — NIRCam leaves it 0) | 0 (off) | **8→3 progressive** (m12:8, m4:5.5, m6:3), scheduled by `miri_tuning` |
 | `--nircam-prom-m1` / `-m2` / `-m3plus` | 0.0 | 0 (off) | 0 (off; opt-in) | n/a |
 | `--group` | off | off (pass `--group`) | | |
@@ -481,7 +482,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).
 - `..._m{N}_..._mergedcat_model_i2d.fits` — model mosaic. Written for the FINAL
-  phase only unless `--manual-keep-intermediate-model-i2d` is passed. **For display
+  phase only unless `--manual-keep-intermediate-model-i2d` is passed, and only for
+  the merged module (the one a release stages) unless
+  `--manual-model-i2d-all-modules` is passed; a run with no merged module writes
+  it for every module. **For display
   it adds the saturated-star model back** on top of the fitted point-source model;
   the residual above is unaffected.
 - `..._m{N}_..._mergedcat_residual_smoothed_bg_i2d.fits` — background map.

@@ -4175,11 +4175,14 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         # also mosaic the merged-catalog MODEL so the CARTA loaders can show
         # data / model / residual / bg side by side.  This is a full 192-frame
         # resample (~20 min); it is display-only (no pipeline logic reads it and
-        # the release stages only the highest iteration), so intermediate phases
-        # skip it (write_model_i2d=False) -- see run_manual_pipeline.
+        # the release stages only the merged module's highest iteration), so
+        # intermediate phases and the final phase's nrca/nrcb blocks skip it
+        # (write_model_i2d=False) -- see run_manual_pipeline.
         if not write_model_i2d:
-            print(f"mergedcat: skipped {kind} model i2d (intermediate phase; "
-                  f"--manual-keep-intermediate-model-i2d to restore)", flush=True)
+            print(f"mergedcat: skipped {kind} model i2d (an intermediate phase, "
+                  f"or a module the release does not stage; "
+                  f"--manual-keep-intermediate-model-i2d / "
+                  f"--manual-model-i2d-all-modules to write it)", flush=True)
         else:
             model_product = product_name.replace('_mergedcat_residual',
                                                  '_mergedcat_model')
@@ -5261,6 +5264,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'pipeline logic, so skipping them saves ~1 resample per '
                             'intermediate phase (~5 per filter). Set this to restore the '
                             'old behaviour of writing the model i2d every phase.'))
+    parser.add_option('--manual-model-i2d-all-modules',
+                      dest='manual_model_i2d_all_modules',
+                      default=MANUAL_DEFAULTS['manual_model_i2d_all_modules'],
+                      action='store_true',
+                      help=('The final phase builds the merged-catalog MODEL i2d '
+                            'for the merged module only -- the one a release '
+                            'stages -- or for every module when the run has no '
+                            'merged module (a disjoint field). Set this to also '
+                            'build the nrca/nrcb model i2d (display-only; ~half '
+                            'of the model resample time).'))
     parser.add_option('--manual-keep-intermediate-smoothed-bg',
                       dest='manual_keep_intermediate_smoothed_bg',
                       default=MANUAL_DEFAULTS['manual_keep_intermediate_smoothed_bg'],
