@@ -1463,6 +1463,38 @@ def _qualcuts_oksep_suffix(target):
     return f'_qualcuts_oksep{token}'
 
 
+def _write_ecsv_twin(basetable, tablename, write_ecsv=True):
+    """Write ``{tablename}.ecsv`` beside the FITS table, or remove a stale one.
+
+    ECSV writes these tables slowly: the sgrb2 m7 finalize (2026-10) wrote
+    its nrca, nrcb and merged cross-band tables (312k-618k rows x 564 columns)
+    in 2144, 2072 and 4004 s as ECSV against 178, 22 and 75 s as FITS (#1227).
+    With ``write_ecsv=False`` the FITS table is the only output, and an ECSV
+    of the same name left by an earlier run is removed so that it cannot be
+    read as this run's table.
+    """
+    path = f"{tablename}.ecsv"
+    if not write_ecsv:
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"Removed {path}: an earlier run's ECSV twin; this run "
+                  f"writes {tablename}.fits only", flush=True)
+        else:
+            print(f"Skipped the ECSV twin {path} (FITS only)", flush=True)
+        return
+    t0 = time.time()
+    # takes FOR-EV-ER
+    try:
+        basetable.write(path, overwrite=True)
+    except yaml.representer.RepresenterError:
+        import astropy
+        print("astropy version: ", astropy.__version__)
+        # https://github.com/astropy/astropy/pull/18677 ?
+        print("YAML RepresenterError: trying again after removing masks")
+        raise
+    print(f"Done writing table {path} in {time.time()-t0:0.1f} seconds", flush=True)
+
+
 def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    ref_filter='f405n',
                    epsf=False, bgsub=False, desat=False, blur=False,
@@ -1474,7 +1506,8 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    resbgsub=False,
                    obs_suffix='',
                    basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                   satstar_proposal_id=None, satstar_field=None):
+                   satstar_proposal_id=None, satstar_field=None,
+                   write_ecsv=True):
     print(f'Starting merge catalogs: catalog_type: {catalog_type} module: {module} target: {target}', flush=True)
 
     if iteration_label in (None, ''):
@@ -1682,17 +1715,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                     basetable.meta[k] = str(v)
                     print("BAD META:", k, type(v), v, ex)
 
-        t0 = time.time()
-        # takes FOR-EV-ER
-        try:
-            basetable.write(f"{tablename}.ecsv", overwrite=True)
-        except yaml.representer.RepresenterError:
-            import astropy
-            print("astropy version: ", astropy.__version__)
-            # https://github.com/astropy/astropy/pull/18677 ?
-            print("YAML RepresenterError: trying again after removing masks")
-            raise
-        print(f"Done writing table {tablename}.ecsv in {time.time()-t0:0.1f} seconds", flush=True)
+        _write_ecsv_twin(basetable, tablename, write_ecsv)
 
         # keep any rows with at least two qf cut pass
         if qfcut is not None:
@@ -2346,7 +2369,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   filternames_override=None,
                   field=None,
                   progid=None,
-                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                  write_ecsv=True):
     """Cross-filter merge of per-filter daophot catalogs.
 
     ``vetted`` (manual path): read the ``_vetted`` per-filter merged catalogs
@@ -2360,6 +2384,9 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     module-slot token (``naming.merged_catalog_obs_token``) of the per-filter
     input glob; the field registry answers only for a caller that names no
     proposal.
+
+    ``write_ecsv=False`` writes the merged table as FITS only and removes an
+    ECSV twin of the same name left by an earlier run (`_write_ecsv_twin`).
     """
 
     desat = "_unsatstar" if desat else ""
@@ -2645,7 +2672,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                          obs_suffix=_obssuf,
                          satstar_proposal_id=_satstar_prop,
                          satstar_field=field,
-                         basepath=basepath)
+                         basepath=basepath,
+                         write_ecsv=write_ecsv)
     if ref_filter is not None:
         _merge_kwargs['ref_filter'] = ref_filter
     merge_catalogs(tbls, **_merge_kwargs)

@@ -408,6 +408,7 @@ still run after m6.
 | `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--manual-m7-seed-own-band-companion-max-ratio` (in [0, 1]; 1.0 = cut every fainter source in the radius, 0 = no cut) | 0.1 | 0.1 | | |
+| `--manual-crossband-ecsv-all-modules` | off | off | off | off | write the cross-band table's `.ecsv` twin for nrca/nrcb too; off writes it for the merged module only, or for every module when the run has no merged module (a disjoint field, MIRI). The FITS table is written for every module either way |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
@@ -468,7 +469,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   `iter_found`, …).
 - `catalogs/basic_<module>_indivexp_photometry_tables_merged_resbgsub_m7<obs>.fits`
   — the multi-filter **cross-band** table (per-band fluxes/mags, anchored on the
-  reference filter). Full-frame only.
+  reference filter). Full-frame only. Its `.ecsv` twin is written for the merged
+  module only (for every module when the run has no merged module) unless
+  `--manual-crossband-ecsv-all-modules` is passed; a skipped module's `.ecsv`
+  from an earlier run is removed (`crossband_ecsv_modules`, `_write_ecsv_twin`).
 - `..._resbgsub_m8<obs>.fits` + `..._resbgsub_m8_dedup.fits` — the **forced-fill**
   sibling of the m7 table; every band's flux is force-fit at the merged position.
   Full-frame only; m7 stays as written.
