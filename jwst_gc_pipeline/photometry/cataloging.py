@@ -9178,7 +9178,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 frames_for=_frames_for,
                 prepare_frame=_prepare_frame_for_photometry,
                 frame_arg_builder_for=_builder_for,
-                nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
+                nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
+                n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1))
             # Partial fill writes one band only -> dedup waits for the merge
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
             if not _m8_partial:
@@ -10406,7 +10407,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         frames_for=_frames_for,
                         prepare_frame=_prepare_frame_for_photometry,
                         frame_arg_builder_for=_builder_for,
-                        nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
+                        nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
+                        n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
                     _stamp_catalog_provenance(
                         _m8, 'm8', options,
