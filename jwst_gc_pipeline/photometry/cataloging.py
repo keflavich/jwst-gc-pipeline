@@ -5033,6 +5033,83 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
           f"flags from m7 residual detections alone", flush=True)
 
 
+#: Columns ``annotate_independent_detection`` adds, by prefix / exact name.
+_INDEP_COL_PREFIX = 'independently_detected_'
+_INDEP_COUNT_COL = 'n_filt_independent'
+
+
+def _ref_key_index(table):
+    """``{(ra_deg, dec_deg): row}`` over ``skycoord_ref`` (None on a duplicate), and the keys."""
+    ref = table['skycoord_ref']
+    ref = ref if isinstance(ref, SkyCoord) else SkyCoord(ref)
+    keys = list(zip(ref.ra.deg.tolist(), ref.dec.deg.tolist()))
+    index = dict(zip(keys, range(len(keys))))
+    return (index if len(index) == len(keys) else None), keys
+
+
+def propagate_independent_detection(merged_path):
+    """Copy the independent-detection flags onto the ``_qualcuts*`` subsets.
+
+    ``merge_daophot`` writes the cross-band merged catalog and, in the same
+    call, its quality-cut row subsets (``{table}_qualcuts.fits`` and
+    ``{table}_qualcuts_oksep<token>.fits``).  ``annotate_independent_detection``
+    runs afterwards and rewrites only ``{table}.fits``, so every subset was
+    written without ``independently_detected_<filt>`` / ``n_filt_independent``
+    -- and the treasury joint catalog, built from the ``_qualcuts_oksep``
+    tables, inherited the gap.
+
+    The subsets are row subsets of the merged table, and ``skycoord_ref`` is
+    unique per row, so each subset row is joined back to its merged row by
+    exact ``(ra, dec)``.  A subset whose rows do not all join exactly once is
+    left untouched and reported: it is not a subset of this merged table (a
+    stale sibling from another run), and guessing would attach flags to the
+    wrong stars.  Returns ``{subset_path: n_rows or None}``.
+    """
+    stem = merged_path[:-len('.fits')] if merged_path.endswith('.fits') else merged_path
+    subsets = sorted(glob.glob(f'{stem}_qualcuts*.fits'))
+    if not subsets or not os.path.exists(merged_path):
+        return {}
+    parent = Table.read(merged_path)
+    cols = [c for c in parent.colnames if c.startswith(_INDEP_COL_PREFIX)]
+    if _INDEP_COUNT_COL in parent.colnames:
+        cols.append(_INDEP_COUNT_COL)
+    if not cols or 'skycoord_ref' not in parent.colnames:
+        print(f"[provenance] {os.path.basename(merged_path)}: no independent-detection "
+              f"columns to propagate", flush=True)
+        return {}
+    index, _ = _ref_key_index(parent)
+    if index is None:
+        print(f"[provenance] WARNING: {os.path.basename(merged_path)} has duplicate "
+              f"skycoord_ref rows; subsets left without independent-detection flags",
+              flush=True)
+        return {p: None for p in subsets}
+    done = {}
+    for path in subsets:
+        sub = Table.read(path)
+        if 'skycoord_ref' not in sub.colnames:
+            print(f"[provenance] WARNING: {os.path.basename(path)}: no skycoord_ref; "
+                  f"left without independent-detection flags", flush=True)
+            done[path] = None
+            continue
+        _, keys = _ref_key_index(sub)
+        rows = np.array([index.get(k, -1) for k in keys], dtype=np.int64)
+        if (rows < 0).any() or len(np.unique(rows)) != len(rows):
+            print(f"[provenance] WARNING: {os.path.basename(path)}: "
+                  f"{int((rows < 0).sum())}/{len(rows)} rows are not in "
+                  f"{os.path.basename(merged_path)}; not a subset of it, left "
+                  f"without independent-detection flags", flush=True)
+            done[path] = None
+            continue
+        for c in cols:
+            sub[c] = parent[c][rows]
+        sub.write(path, overwrite=True)
+        done[path] = len(sub)
+        print(f"[provenance] {os.path.basename(path)}: copied {len(cols)} "
+              f"independent-detection columns from {os.path.basename(merged_path)} "
+              f"({len(sub)} rows)", flush=True)
+    return done
+
+
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
@@ -10377,6 +10454,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 print(f"manual [{last_phase}]: independent-detection annotation "
                       f"failed ({_aex}); merged catalog written without provenance "
                       f"flags", flush=True)
+            # merge_daophot wrote the _qualcuts* subsets before annotate ran;
+            # carry the flags onto them (the joint catalog reads _qualcuts_oksep).
+            try:
+                propagate_independent_detection(_xb)
+            except (OSError, ValueError, KeyError) as _pex:
+                print(f"manual [{last_phase}]: copying the independent-detection "
+                      f"flags onto the _qualcuts subsets failed ({_pex})", flush=True)
             # provenance sidecar for the m7 cross-band catalog (after annotate,
             # which mutates the file); stamp as stage 'm7'.  Its seed parent is
             # the POOL of every filter's m6 merged catalog (the cross-band seed
