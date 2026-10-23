@@ -88,7 +88,7 @@ LAYERS = {
     # own F770W mosaic.  This is the RGB layer the Aladin viewers load (`trgb`
     # in jwst_gc_aladin.html and in every per-field viewer); the entry above
     # is linked only from the avm_images index.  It reached both hosts by hand
-    # on 2026-10-10, so a rebuild of it was never published.
+    # on 2026-10-10 and had no scheduled path until this entry.
     'gctreasury_nbmosaic_RGB_770-480-212_hips':
         f'{MOSAIC_BUILD}/gctreasury_nbmosaic_RGB_770-480-212_hips',
     # Star-subtracted ("residual") twins of the layers above, built from the
