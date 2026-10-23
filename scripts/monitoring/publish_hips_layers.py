@@ -83,6 +83,14 @@ LAYERS = {
     # it is a thing to turn on rather than a background to work against.
     'gctreasury_mosaic_RGB_770-480-212_hips':
         f'{MOSAIC_BUILD}/gctreasury_mosaic_RGB_770-480-212_hips',
+    # The same composite with its red channel taken from N. Budaiev's combined
+    # F770W mosaic (gc10678_f770w_combined_i2d.fits) in place of the treasury's
+    # own F770W mosaic.  This is the RGB layer the Aladin viewers load (`trgb`
+    # in jwst_gc_aladin.html and in every per-field viewer); the entry above
+    # is linked only from the avm_images index.  It reached both hosts by hand
+    # on 2026-10-10 and had no scheduled path until this entry.
+    'gctreasury_nbmosaic_RGB_770-480-212_hips':
+        f'{MOSAIC_BUILD}/gctreasury_nbmosaic_RGB_770-480-212_hips',
     # Star-subtracted ("residual") twins of the layers above, built from the
     # DAOPHOT residual mosaics the cataloguing chain writes beside each i2d.
     # The quicklook builder renders a tile once its chain reaches the final
