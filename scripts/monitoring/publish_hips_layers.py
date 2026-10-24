@@ -96,7 +96,7 @@ LAYERS = {
     # The quicklook builder renders a tile once its chain reaches the final
     # residual stage (resbgsub_m7 NIRCam, resbgsub_m6 MIRI), with the same
     # cuts as the image flavour so the two can be toggled on the same sky;
-    # pct and bgmatch have no residual twin.  The RGB composite
+    # pct has no residual twin.  The RGB composite
     # (gctreasury_mosaic_RGB_770-480-212_residual_hips) is NOT registered:
     # only five MIRI tiles have residuals yet and the NIRCam residuals do not
     # cover them, so it renders as F770W alone.
@@ -104,6 +104,16 @@ LAYERS = {
         f'{BUILD_ROOT}/jwst_gc_treasury_residual_vminmax_hips',
     'jwst_gc_treasury_residual_log_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_residual_log_hips',
+    # The residual vminmax cuts after removing one offset per tile and filter,
+    # solved on the residual mosaics themselves (jwst_scripts
+    # `--nircam-match --residual`).  The crf frames are never sky-matched, so
+    # each tile sits on its own sky pedestal (up to ~2 MJy/sr apart in F480M),
+    # and with the stars subtracted that pedestal is what the residual layers
+    # show at every tile edge.  vminmax and log above stay uncorrected: they
+    # are the last-line QA view, where a seam is a finding about the
+    # reduction.  This layer is the one to read the diffuse emission from.
+    'jwst_gc_treasury_residual_bgmatch_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_residual_bgmatch_hips',
     'jwst_gc_treasury_miri_residual_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_miri_residual_hips',
     # Single-filter grey versions of the NIRCam residual layer, one per band,
