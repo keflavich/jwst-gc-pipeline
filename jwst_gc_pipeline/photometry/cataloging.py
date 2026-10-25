@@ -1170,6 +1170,53 @@ def _apply_handoff_resbg_clip(data, background_map, handoff_xy, resbg_path):
                  f"pixel(s) lowered, median {med:.3g} MJy/sr")
 
 
+def _seed_nearest_fit(xfit, yfit, xinit, yinit, owner):
+    """For each post-fit dedup survivor, the cluster member whose seed lies
+    nearest the survivor's fitted position (#1239).
+
+    A seed a few px from a bright star (an Airy-ring or wing detection) can
+    converge onto the star in the free fit.  The dedup then keeps one of the
+    two rows by flux or qfit, and it can keep the neighbour's row, which still
+    carries the neighbour's ``x_init/y_init``.  The overshoot refit pins a
+    flagged row at that seed, so the star's flux is re-measured 2-4 px off the
+    star and the star loses its row in that frame.  Handing the survivor the
+    seed nearest its fit keeps the refit on the star.
+
+    Parameters
+    ----------
+    xfit, yfit, xinit, yinit : array, shape (N,)
+        Fitted and seed positions of every row before the dedup.
+    owner : array of int, shape (N,)
+        From ``_dedup_close_sources(..., return_owner=True)``: the survivor
+        that absorbed each row (its own index when kept).
+
+    Returns
+    -------
+    src : ndarray of int, shape (N,)
+        For a survivor ``r``, the row whose seed to use: ``r`` itself or one
+        of the rows it absorbed.  A non-finite seed never wins, and a tie goes
+        to ``r``.  Entries for dropped rows are their own index.
+    """
+    owner = np.asarray(owner, dtype=np.int64)
+    n = owner.size
+    idx = np.arange(n)
+    xfit = np.asarray(xfit, dtype=float)
+    yfit = np.asarray(yfit, dtype=float)
+    d = np.hypot(np.asarray(xinit, dtype=float) - xfit[owner],
+                 np.asarray(yinit, dtype=float) - yfit[owner])
+    d = np.where(np.isfinite(d), d, np.inf)
+    # Sort by survivor, then distance, then the survivor's own row first.
+    order = np.lexsort((owner != idx, d, owner))
+    grp = owner[order]
+    first = np.ones(n, dtype=bool)
+    first[1:] = grp[1:] != grp[:-1]
+    src = idx.copy()
+    best = order[first]
+    ok = np.isfinite(d[best])
+    src[grp[first][ok]] = best[ok]
+    return src
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -1188,9 +1235,9 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
-      dedup (1.0 px, qfit tiebreak) -> near-saturation filter ->
-      satstar-wing rejection -> model/data-peak overshoot QC ->
-      render model image.
+      dedup (1.0 px, qfit tiebreak; the survivor takes the cluster seed
+      nearest its fit) -> near-saturation filter -> satstar-wing rejection ->
+      model/data-peak overshoot QC -> render model image.
 
     ``handoff_xy``/``handoff_radius_pix`` exempt fits at the satstar channel's
     implied-peak-gate rejects from the near-saturation filter ONLY (see
@@ -1247,11 +1294,29 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     flux = np.asarray(result['flux_fit'], dtype=float)
     qfit = (np.asarray(result['qfit'], dtype=float)
             if 'qfit' in result.colnames else None)
-    keep, n_disagree = _dedup_close_sources(
+    keep, n_disagree, owner = _dedup_close_sources(
         xy=np.column_stack([xfit, yfit]), flux=flux,
-        min_sep_pix=1.0, quality=qfit)
+        min_sep_pix=1.0, quality=qfit, return_owner=True)
     if int(len(keep) - np.sum(keep)) > 0:
+        # The survivor's seed is where the overshoot refit below pins it, so
+        # give it the cluster seed nearest its fit (#1239).
+        res = phot.results
+        if 'x_init' in res.colnames and 'y_init' in res.colnames:
+            src = _seed_nearest_fit(xfit, yfit, res['x_init'], res['y_init'],
+                                    owner)
+            moved = np.where(keep & (src != np.arange(len(src))))[0]
+            if moved.size:
+                for col in ('x_init', 'y_init', 'flux_init'):
+                    if col in res.colnames:
+                        res[col][moved] = np.asarray(res[col])[src[moved]]
+                print(f"[{label}] post-fit dedup seed hand-over: "
+                      f"{moved.size} survivor(s) took an absorbed row's seed "
+                      f"(nearer their fit)", flush=True)
         phot.results = phot.results[keep]
+        # phot.init_params keeps each survivor's ORIGINAL seed, so after a
+        # hand-over it no longer matches phot.results' x_init/y_init.  Nothing
+        # downstream reads phot.init_params' positions; the refit reads
+        # phot.results.
         if (phot.init_params is not None
                 and len(phot.init_params) == len(keep)):
             phot.init_params = phot.init_params[keep]
@@ -1418,7 +1483,10 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         # SEED position (x_init/y_init), NOT the drifted x_fit: the whole failure
         # mode is the centroid walking off the star, so refitting at the drifted
         # position would give a wrong (off-source) flux.  Replace rows in-place
-        # and snap x_fit/y_fit back to the seed.
+        # and snap x_fit/y_fit back to the seed.  After the post-fit dedup the
+        # seed is the one nearest the fit among the rows the dedup merged
+        # (#1239), so a neighbour that converged onto this star does not pull
+        # the refit to its own seed.
         res = phot.results
         xseed = (np.asarray(res['x_init'], dtype=float) if 'x_init' in res.colnames
                  else np.asarray(res['x_fit'], dtype=float))
