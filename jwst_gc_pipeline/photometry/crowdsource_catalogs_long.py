@@ -3578,27 +3578,37 @@ def _run_frame_renders(overlapping_frames, render_fn, n_threads, n_procs=1):
     return [render_fn(orig) for orig in overlapping_frames]
 
 
+# key of the per-frame render result that carries "this frame fell back to the
+# model-threshold cover test" (build_mergedcat_residuals summary line)
+_COVER_FALLBACK_KEY = '_satstar_cover_fallback'
+
+
 def _mergedcat_satstar_cover_mode(filtername=None):
     """``MERGEDCAT_SATSTAR_COVER``: how build_mergedcat_residuals decides that a
     frame's satstar model already subtracts a replaced_saturated merged row.
 
-    ``model`` (default, unset or empty): the model-threshold test alone, i.e.
-    the frame's satstar model exceeds the cover threshold in the 7x7 box at the
-    row (the rule in use before this switch existed).
+    ``accepted`` (default, unset or empty): the model-threshold test AND an
+    accepted fit in the frame's own satstar catalog within
+    ``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM`` (default 1.5, the radius the
+    daophot hand-off uses to leave a SATURATED component to an accepted
+    satstar) FWHM of the row.  A row whose star this frame's satstar pass did
+    not fit is rendered from the merged catalog, also where a bright
+    neighbour's satstar-model wing exceeds the threshold at its position.
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1`` makes the per-frame residuals (and so
+    the next phase's background) agree with this render; without it only the
+    merged-catalog residual subtracts those stars.
 
-    ``accepted`` (opt-in): the model-threshold test AND an accepted fit in the
-    frame's own satstar catalog within ``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM``
-    (default 1.5, the radius the daophot hand-off uses to leave a SATURATED
-    component to an accepted satstar) FWHM of the row.  Use it together with
-    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1``: that hand-off is what fits the stars
-    the frame's satstar pass rejected, and this rule is what renders them in
-    the merged-catalog residual instead of leaving them to a neighbour's wing.
+    ``model``: the model-threshold test alone, i.e. the frame's satstar model
+    exceeds the cover threshold in the 7x7 box at the row (the default through
+    main 6399b833).  A bright accepted neighbour's wing passes it, so a star
+    this frame did not fit is subtracted by neither channel; set it to
+    reproduce renders made with that default.
 
     MIRI always gets ``model`` (``filtername`` given): the daophot hand-off
     skips MIRI, MIRI renders uncovered satstars through its own flat-top path,
     and the ``accepted`` rule was measured on NIRCam F480M/F212N only.
     """
-    mode = (os.environ.get('MERGEDCAT_SATSTAR_COVER', '') or 'model').strip().lower()
+    mode = (os.environ.get('MERGEDCAT_SATSTAR_COVER', '') or 'accepted').strip().lower()
     if mode not in ('accepted', 'model'):
         raise ValueError(f"MERGEDCAT_SATSTAR_COVER={mode!r}: expected 'accepted' or 'model'")
     if (mode == 'accepted' and filtername is not None
@@ -3887,7 +3897,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     print(f"mergedcat: satstar cover test = {_cover_mode}"
           + (f" (accepted fit of the frame within {_cover_radius_px:.2f} px)"
              if _cover_mode == 'accepted' else '')
-          + (f" (MERGEDCAT_SATSTAR_COVER=accepted is NIRCam-only; {filtername} is MIRI)"
+          + (f" (the accepted rule is NIRCam-only; {filtername} is MIRI)"
              if _cover_mode != _mergedcat_satstar_cover_mode() else ''), flush=True)
 
     written = {k: [] for k in kinds}
@@ -3931,6 +3941,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # own satstar pass fitted it (_satstar_render_covered)
             satstar_sm, acc_xy = _load_frame_satstar_cover(
                 _fitter_in, sat_suffix, _cover_mode)
+            if _cover_mode == 'accepted' and satstar_sm is not None:
+                # no usable satstar catalog: this frame keeps the
+                # model-threshold test (counted in the summary line below)
+                _result[_COVER_FALLBACK_KEY] = acc_xy is None
         bn = os.path.basename(orig)
         # JOINT multi-obs runs (field like '002-998'): the per-frame products fold
         # the observation number into vgroup_id (cataloging.py do_photometry frame
@@ -4150,7 +4164,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                                         _render_threads, _render_procs)
     # Accumulate in frame order so the resample input lists are deterministic
     # (identical to the pre-parallel serial append order).
+    _n_cover_acc = _n_cover_fallback = 0
     for _orig, _res in zip(overlapping_frames, _frame_results):
+        _fb = _res.pop(_COVER_FALLBACK_KEY, None)
+        if _fb is not None:
+            _n_cover_fallback += int(_fb)
+            _n_cover_acc += int(not _fb)
         for kind, (out_resid, out_model, raw_resid, raw_model) in _res.items():
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
@@ -4158,6 +4177,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 perframe_record.append({'frame': str(_orig), 'kind': kind,
                                         'raw': [raw_resid, raw_model],
                                         'rendered': [out_resid, out_model]})
+    if _cover_mode == 'accepted':
+        print(f"mergedcat: satstar cover test per frame: accepted-fit rule in "
+              f"{_n_cover_acc}, model-threshold fallback (no usable satstar "
+              f"catalog) in {_n_cover_fallback} of "
+              f"{_n_cover_acc + _n_cover_fallback} frames with a satstar model",
+              flush=True)
     # Per-frame stems must be unique: a collision means two frames wrote the same
     # product (one render lost -> a hole in the mosaic), and under threading the
     # surviving writer would be nondeterministic.  Fail loudly (serial or threaded).
