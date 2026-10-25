@@ -1313,6 +1313,10 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       f"{moved.size} survivor(s) took an absorbed row's seed "
                       f"(nearer their fit)", flush=True)
         phot.results = phot.results[keep]
+        # phot.init_params keeps each survivor's ORIGINAL seed, so after a
+        # hand-over it no longer matches phot.results' x_init/y_init.  Nothing
+        # downstream reads phot.init_params' positions; the refit reads
+        # phot.results.
         if (phot.init_params is not None
                 and len(phot.init_params) == len(keep)):
             phot.init_params = phot.init_params[keep]
