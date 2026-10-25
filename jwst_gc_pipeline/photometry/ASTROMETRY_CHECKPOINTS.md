@@ -67,7 +67,10 @@ search-window edge (9.86″ at a 10″ window, 29.50″ at 30″, 58.23″ at 60
 `alias_rejected=true`, `component=-1` and "recorded, NOT applied", and the
 frozen reader admitted the number on `np.isfinite` alone: m3–m7 each reported
 "MOVED 9858 mas since the m2 freeze" against frames that read 1–2.5 mas, five
-FAILED records nothing downstream can rewrite.
+FAILED records nothing downstream can rewrite.  The halves were then assigned by
+rank of `n_reliable`; `parity_halves` now alternates by exposure number within
+each (visit, filter, vgroup, detector), so those four dithers split 2 + 2.  The
+two reader rows stay, because a one-exposure detector still has no partner.
 
 The split between rows two and three is the same one `_checkpoint_passed` draws:
 a number m2 could not certify measures nothing and stays advisory, while a
@@ -912,6 +915,8 @@ the same table rows.
 | `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit and broadcast-provenance guards raise instead of warn (`reduction/validate_offsets_table.py`). **No-op on both production paths**: `astrometry_checkpoint.update_offsets_table` (write) and `unified_alignment._validate_once` (apply, PR #770) already pass `raise_on_issue=True`, so they raise whether or not it is set. It still applies to a caller that passes `raise_on_issue=False` |
 | `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
 | `ASTROM_M2_CORRECTION_FLOOR_MAS=<f>` | at m2, MEASURE and RECORD every residual as usual but only ACT on those at or above this magnitude (default 0 = act on all). See below. |
+| `ASTROM_MERGE_M2_REGISTRATION=1` | turn ON the m3+ merge-time registration of per-frame catalogs onto the m2 consensus (opt-in; off when unset or 0; see "Merge-time registration") |
+| `ASTROM_M2_REGISTRATION_MAX_MAS=<f>` | optional ceiling (on-sky mas) on a registered per-exposure offset; unset = none |
 | `ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1` | let a checkpoint that measured a shift and then refused to apply it count as a pass |
 
 ### The m2 correction floor, and what it may not suppress
@@ -941,6 +946,149 @@ Two consequences follow, and both are enforced in code:
 Set an override to record a decision you have already justified by other
 means. A red gate stays red: the override is the record, not the justification (same policy as
 `ALLOW_REGISTRATION_FAIL`).
+
+## Merge-time registration onto the m2 consensus (m3+ merges)
+
+m2 measures every exposure x detector catalog against its (visit, filter)
+consensus and records the offset (`dra`/`ddec`, consensus minus exposure, on-sky
+mas) whether or not it acts.  It acts only on the tail: an exposure must be
+`misaligned` (over the 2 mas tolerance and significant), and its pooled offsets
+table row must reach the field's floor.  Everything below that stays in the
+frames, and before this step it also stayed in the merged catalog, because the
+per-filter merge (`merge_catalogs.py::merge_individual_frames`, via
+`observation_merge.py::merge_frames_for_observation`) averages the per-frame
+positions as written.
+
+That residual sets the merged catalog's across-exposure scatter (`std_ra`,
+`std_dec`, and data-qa's jicama `rms(jwst)`).  Per-star floor, as merged ->
+registered with m2's own offsets (2026-10-08):
+
+| field | F212N | F480M |
+|---|---|---|
+| sgrb2 o001 (floor 4 mas) | 1.35 -> 0.62 mas | 0.79 -> 0.66 mas |
+| sgrc o012 (floor 8 mas) | 0.96 -> 0.56 mas | 0.77 -> 0.64 mas |
+
+As merged, F212N reads worse than F480M in sgrb2 although its PSF is half the
+size.  The SW per-exposure residuals are larger than the LW ones and nothing
+removed them.
+
+`m2_registration.py::apply_m2_registration`, when enabled (opt-in, below), adds each per-frame catalog's
+recorded offset to its sky positions before `combine_singleframe` averages them.
+`cataloging.py` loads the registration (`m2_registration.py::load_m2_registration`,
+which finds the record with the frozen-stage reader `_m2_record_path`) for every
+merge label outside `CORRECTION_STAGES`, so m3..m7 merges are registered and the
+m1/m2/m12 merges are not.  It skips cutout runs.  Every per-frame table is
+stamped `M2REGST`/`M2REGRA`/`M2REGDE`/`M2REGREC`, and the merged catalog carries
+`M2REGREC`/`M2REGN`/`M2REGNOT`.
+
+A catalog is left as written, with the reason logged, when:
+
+* **stale**: its baked `RAOFFSET`/`DEOFFSET` differs from the value m2 recorded
+  for it.  The frame was regenerated after m2, so the record describes a
+  different WCS.
+* **refused**: m2 did not certify the number (`_m2_exposure_untrustworthy`:
+  `ok` False, `unverified`, `alias_suspect`, `alias_rejected`, or past the
+  per-exposure magnitude bound), or the exposure had no internal tie.
+* **m2_actionable**: m2's own floor rule sends it to the offsets table.  The
+  rule pools misaligned exposures by (visit, exposure, module family, filter,
+  vgroup) with the mean, as `pool_corrections_to_table_granularity` does, and
+  tests the pooled magnitude against the record's `correction_floor_mas`.  The
+  per-detector value is not tested: pooling discards the per-detector spread
+  before the floor (#697), so a detector can sit over the floor in a row m2
+  passed.  sgrb2 F212N exposures 18-20 nrcb3 measure 4.08-4.13 mas in an nrcb
+  row that pools to 2.97 mas, and they are registered.  On the `consensus`
+  channel m2 does not pool, so this rule is looser there than m2's own.  The
+  stale guard covers that case: anything m2 acts on is regenerated with a new
+  baked offset.
+* **over_cap**: over the optional operator ceiling `ASTROM_M2_REGISTRATION_MAX_MAS`.
+* **absent** / **ambiguous**: no m2 entry for the exposure key, or two entries
+  for it that disagree.
+
+What it leaves unchanged:
+
+* **The checkpoints.**  m2..m6 measure the per-frame catalogs on disk.  The
+  registration acts on the in-memory tables inside the merge only, so the
+  frozen-stage movement checks see what they saw before.  The release gate
+  reads m2's `corrections`, which this does not touch.
+* **The absolute frame.**  `build_visit_consensus` median-re-centres the
+  consensus, so the median per-exposure offset is ~0 and the registered catalog
+  sits in the frame the consensus->reference tie measured.
+* **The frames, mosaics and offsets table.**  The `_i2d` mosaics keep the
+  sub-floor per-exposure offsets.  A merged catalog therefore differs from its
+  mosaic by up to the recorded offset of each exposure: on sgrb2 F212N the
+  median is 1.8 mas and the maximum 4.1 mas (0.06 and 0.13 SW pixels).
+  `scripts/reduction/m2_offsets_writeback.py` writes the module-common part
+  of these offsets into a locked table so a regeneration puts it in the mosaics
+  too (next section).
+* **An offsets table passed to the merge.**  `merge_individual_frames` refuses
+  `m2_registration` together with `offsets_table`.  m2 measured the frames'
+  baked positions, and `shift_individual_catalog` re-shifts them first.
+
+The registration uses m2's offset-histogram measurement
+(`astrometry_offsets.py::measure_offset`), which is the sanctioned estimator.
+It does not touch the forbidden `combine_singleframe(realign=True)` NN-median
+path.
+
+**Opt-in.**  `ASTROM_MERGE_M2_REGISTRATION=1` turns it on.  Unset (or 0) leaves
+every merge as before.  It is off by default because of the catalog-vs-mosaic
+difference above.  The offsets table is where this pipeline puts the solution
+so that catalogs and images share it.  The write-back below puts the
+module-common part there.  Pooling (#697) limits a module-locked table to that
+part, so the per-detector remainder still needs this step.
+
+## Writing the module-common part back into the offsets table
+
+`scripts/reduction/m2_offsets_writeback.py` (rules in
+`m2_writeback.py`) writes, for each row of a module-locked table, the mean over
+the row's detectors of m2's recorded vs-consensus offset.  It runs by hand, as a
+dry run unless given `--write`, and only on the `locked` channel.
+
+    python scripts/reduction/m2_offsets_writeback.py \
+        --basepath /orange/adamginsburg/jwst/sgrb2 --proposal 5365 --field 001 \
+        --filter F212N --filter F480M            # add --write to apply
+
+What it writes differs from the m2 APPLY path in membership.  m2 pools only a
+row's misaligned detectors and acts only at the floor.  The write-back averages
+all of the row's detectors and writes any row whose mean is at least 0.5 mas.
+On the live records the two means differ by a median of 0.54 mas on sgrb2 F212N
+and 0.95 mas on sgrc F212N.
+
+| field / filter (live m2 record) | per-axis rms of recorded offsets | after removing each row's mean |
+|---|---|---|
+| sgrb2 F212N | 1.51 mas | 0.50 mas |
+| sgrc F212N | 1.11 | 0.57 |
+| brick F212N | 0.62 | 0.41 |
+| sgrb2 F480M (one detector per row) | 0.89 | 0 |
+
+The written part repeats and follows the table.  sgrb2 F212N: two m2 runs whose
+baked offsets differ by a 47.8 mas global re-bake agree per exposure to 0.07
+mas (median).  sgrc F480M: across re-reductions whose rows changed by up to 11
+mas, the recorded offsets followed the table change to within 0.05-0.24 mas
+(median).  One write and one regeneration should therefore leave the written
+rows near 0 and a second pass with nothing to write.
+
+Rows it leaves, each reported with its reason: **m2_actionable** (m2's own
+floor rule applies it), **incomplete** (a detector of the row is refused or
+absent), **stale** (the baked offsets m2 recorded differ from the row
+`fix_alignment` reads; this also makes a second pass from the same record a
+no-op), **row_mismatch** (reader and writer resolve different rows),
+**below_min** (row mean under `--min-mas`, default 0.5 mas, ~2.5 sigma for a
+mean of four).  A record that did not pass is refused whole.
+
+The 0.5 mas threshold sits below m2's 4 or 8 mas floor because the floor is set
+for the per-detector distortion term, which a locked row cannot express (see
+"The m2 correction floor" above).  The all-member row mean is the module-common
+part: the row expresses it exactly and it repeats across runs, so its
+threshold follows its measurement noise.
+
+The rows reach the frames only on regeneration.  `fix_alignment` treats a frame
+within `RAOFFSET_DISAGREE_TOL_ARCSEC` (default 0.05") of its row as current, so
+regenerate from `_cal`, or rerun `fix_alignment` with that tolerance at or below
+the value the script prints.  The script prints the `submit_reduction.sbatch`
+command for the filters it wrote, with that tolerance exported.  The im0 mosaics are not stale-tagged: they stay
+as good as the m2 verdict they passed.  The rows carry
+`prov_stage='m2-writeback'` and the m2 record's date; the writer keeps a
+`.pre_m2-writeback_<timestamp>` backup.
 
 ## Relationship to the other astrometry shields
 

@@ -55,8 +55,8 @@ def refine_centroid(stamp, x0, y0, box=7):
 
 
 def main():
-    from stpsf.utils import to_griddedpsfmodel
-    grid = to_griddedpsfmodel(PSF_FN)
+    from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
+    grid = load_stpsf_grid(PSF_FN)
     if isinstance(grid, list):
         grid = grid[0]
 

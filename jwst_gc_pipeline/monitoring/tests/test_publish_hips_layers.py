@@ -138,8 +138,10 @@ def test_every_published_layer_is_registered_explicitly():
         'jwst_gc_treasury_vminmax_hips',
         'jwst_gc_treasury_log_hips',
         'gctreasury_mosaic_RGB_770-480-212_hips',
+        'gctreasury_nbmosaic_RGB_770-480-212_hips',
         'jwst_gc_treasury_residual_vminmax_hips',
         'jwst_gc_treasury_residual_log_hips',
+        'jwst_gc_treasury_residual_bgmatch_hips',
         'jwst_gc_treasury_miri_residual_hips',
         'jwst_gc_treasury_f212n_residual_hips',
         'jwst_gc_treasury_f480m_residual_hips',
@@ -427,6 +429,7 @@ def test_only_the_layers_the_hourly_job_builds_are_guarded():
     # the residual coadds are written by the same hourly job
     for name in ('jwst_gc_treasury_residual_vminmax_hips',
                  'jwst_gc_treasury_residual_log_hips',
+                 'jwst_gc_treasury_residual_bgmatch_hips',
                  'jwst_gc_treasury_miri_residual_hips',
                  'jwst_gc_treasury_f212n_residual_hips',
                  'jwst_gc_treasury_f480m_residual_hips'):
@@ -739,3 +742,58 @@ def test_a_first_publish_has_no_live_layer_to_seed_from(tmp_path, monkeypatch):
     ph.publish_local('zz_layer', str(src))
     assert not [c for c in runs if c[0] == 'cp'], runs
     assert [c for c in runs if c[0] == 'rsync'], runs
+
+
+def test_sigterm_while_holding_the_lock_releases_it(tmp_path):
+    """A SLURM time limit sends SIGTERM; the lock must not outlive the job.
+
+    Python's default SIGTERM action skips ``finally`` blocks, so before the
+    handler a publisher killed at its wall left ``.auto.lock`` in place for
+    the 6 h staleness window (#1005).  Run a child that holds the lock, send
+    it SIGTERM, and check that it exits through ``SystemExit`` with the lock
+    file gone.
+    """
+    import signal
+    import subprocess
+    import sys
+    import textwrap
+    import time
+
+    src = tmp_path / 'layer'
+    src.mkdir()
+    ready = tmp_path / 'ready'
+    child = textwrap.dedent(f"""
+        import importlib.util, time
+        spec = importlib.util.spec_from_file_location('ph', {_MOD!r})
+        ph = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ph)
+        ph.BUILD_ROOT = {str(tmp_path)!r}
+        ph.exit_on_sigterm()
+        with ph.build_lock({str(src)!r}, 'publishing layer', wait_s=0) as held:
+            assert held
+            open({str(ready)!r}, 'w').close()
+            time.sleep(60)
+    """)
+    proc = subprocess.Popen([sys.executable, '-c', child],
+                            stderr=subprocess.PIPE, text=True)
+    lock = tmp_path / ph.LOCK_FILE
+    deadline = time.time() + 30
+    while not ready.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert ready.exists(), proc.stderr.read() if proc.poll() is not None else ''
+    assert lock.exists()
+    proc.send_signal(signal.SIGTERM)
+    rc = proc.wait(timeout=30)
+    err = proc.stderr.read()
+    assert rc == 128 + signal.SIGTERM, err
+    assert not lock.exists(), 'the finally in build_lock must run on SIGTERM'
+    assert 'releasing the build lock' in err
+
+
+def test_the_sigterm_handler_is_installed_only_when_run_as_a_script():
+    """Importing the module (as these tests do) must not change signals."""
+    import inspect
+    src = inspect.getsource(ph)
+    main_block = src[src.index("if __name__ == '__main__':"):]
+    assert 'exit_on_sigterm()' in main_block
+    assert 'exit_on_sigterm()' not in inspect.getsource(ph.main)

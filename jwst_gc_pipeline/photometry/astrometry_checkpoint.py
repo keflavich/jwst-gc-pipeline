@@ -120,6 +120,14 @@ REFERENCE_TIE_SOURCE_SUFFIX = 'consensus->reference'
 #: ``resolve_tie_reference``).
 REFERENCE_KIND_VIRAC2 = 'virac2'
 REFERENCE_KIND_JWST_CONSENSUS = 'jwst_consensus'
+#: A Gaia-only seed refcat (``gaia_refcat.fits``), which the m2 checkpoint of a
+#: Gaia-framed field with no ``gaia_virac2_refcat`` ties to (#1167).
+REFERENCE_KIND_GAIA = 'gaia'
+
+#: Log label per ``reference_kind`` (the JWST-consensus label names its filter
+#: at the call site).
+_REFERENCE_KIND_LABEL = {REFERENCE_KIND_VIRAC2: 'VIRAC2',
+                         REFERENCE_KIND_GAIA: 'Gaia'}
 
 #: Slack (seconds) allowed between a reference filter's own m2 record's
 #: ``date`` and the mtime of the consensus catalog it names, before
@@ -4516,6 +4524,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                        raoffset_meta=exp["raoffset_meta"],
                        deoffset_meta=exp["deoffset_meta"],
                        component=exp.get("component", 0),
+                       parity_half=exp.get("parity_half"),
                        internal_tie=exp.get("internal_tie", True),
                        unverified=exp.get("unverified", False),
                        alias_suspect=bool(tuple(exp["key"]) in antisym_keys),
@@ -4740,7 +4749,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             ref_tie = dict(ref_tie)
             ref_tie["reference_kind"] = tie_refcat.get(
                 "reference_kind", REFERENCE_KIND_VIRAC2)
-            if ref_tie["reference_kind"] != REFERENCE_KIND_VIRAC2:
+            if ref_tie["reference_kind"] == REFERENCE_KIND_JWST_CONSENSUS:
                 ref_tie["reference_filter"] = tie_refcat.get("reference_filter")
                 ref_tie["reference_path"] = tie_refcat.get("reference_path")
                 ref_tie["reference_record_date"] = tie_refcat.get(
@@ -4816,7 +4825,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         _ref_label = (
                             f"{ref_tie['reference_filter']} consensus"
                             if ref_tie.get("reference_kind") == REFERENCE_KIND_JWST_CONSENSUS
-                            else "VIRAC2")
+                            else _REFERENCE_KIND_LABEL.get(
+                                ref_tie.get("reference_kind"), "VIRAC2"))
                         print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {vctx} "
                               f"consensus is {off:.2f} mas off {_ref_label} "
                               f"(coherent dense tie, {_spatial_gate_detail(ref_tie)}, "

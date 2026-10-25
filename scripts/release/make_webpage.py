@@ -29,6 +29,7 @@ from pathlib import Path
 
 import curated_images
 import field_overview
+import hips_index
 import release_freshness
 import make_preview_rgb
 import preview_plan
@@ -167,6 +168,7 @@ KIND_LABEL = {
     # so it carries its own kinds rather than reusing catalog_full/_qualcut.
     "catalog_joint": "Joint catalog (all-tile)",
     "catalog_joint_provenance": "Joint catalog provenance",
+    "catalog_tile": "Per-tile merged catalog",
 }
 
 #: Kinds that count as "the field-wide catalog has been built" for the
@@ -682,7 +684,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       diagrams=(),
                       superseded=(), reasons=None, curated=(),
                       curated_prov=(), preview_from_curated=False,
-                      release_dir=None, manifold=None):
+                      release_dir=None, manifold=None, hips_inventory=None):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -870,9 +872,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     multi = any(f.get("observation") for f in files)
 
     if curated:
-        out.append("<p class=muted>Curated color images -- the published "
-                   "renders. Tuned stretches, channels chosen far apart, and "
-                   "each program combined with itself.</p>")
+        out.append("<p class=muted>"
+                   + html.escape(curated_images.intro(field)
+                                 or "Curated color images -- the published "
+                                    "renders. Tuned stretches, channels chosen "
+                                    "far apart, and each program combined with "
+                                    "itself.")
+                   + "</p>")
         # Provenance per published render, keyed on the asset filename.  These
         # are the field's PRIMARY images and they are not staged products, so
         # without this they would be the only thing on the page with no source,
@@ -900,8 +906,11 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                        f"{html.escape(field)}_curated.json</a> -- source path and "
                        f"checksum, the checksum of the bytes served, and whether "
                        f"the AVM astrometry survived resizing. These are curated "
-                       f"renders, not staged data products; the mosaics they were "
-                       f"made from are in the table below.</p>")
+                       f"renders, not staged data products"
+                       + ("." if curated_images.intro(field) else
+                          "; the mosaics they were made from are in the table "
+                          "below.")
+                       + "</p>")
 
     # `assets/<field>.jpg` is a BYTE COPY of the first curated JPEG when there
     # is one -- but `preview_channels`, `_preview_caption` and
@@ -1121,6 +1130,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                            f"<td>{dl(f)}</td></tr>")
         out.append("</table>")
 
+    # HiPS layers rendered from this field's mosaics, and the tours and
+    # survey-wide views that include them (served from another docroot, so
+    # read from the collected inventory rather than the manifest)
+    hips_section = hips_index.field_section_html(field, hips_inventory)
+    if hips_section:
+        out.append(hips_section)
+
     # catalogs table
     out.append("<h2>Catalogs</h2>")
     if isinstance(manifold, dict):
@@ -1133,6 +1149,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                    "merged photometry table is still being built; only the per-filter "
                    "vetted catalogs are provided for now. The merged table will be added "
                    "in a later update.</p>")
+    if catalogs:
+        out.append(catalog_columns_html())
     if not catalogs:
         out.append("<p class=muted><b>No catalogs in this release.</b> Photometry for these data is still being produced; when it is ready it will be added here under a new version.</p>")
     else:
@@ -1140,7 +1158,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                    "<th>Version</th><th>Size</th><th>Download</th></tr>")
         cat_order = {"catalog_full": 0, "catalog_joint": 0, "catalog_qualcut": 1,
                      "seed": 2, "catalog_per_filter_vetted": 3,
-                     "catalog_joint_provenance": 4}
+                     "catalog_joint_provenance": 4, "catalog_tile": 5}
         for f in sorted(catalogs, key=lambda f: (f.get("observation") or "",
                                                  cat_order.get(f["kind"], 9),
                                                  f.get("filter") or "")):
@@ -2325,6 +2343,13 @@ PANNER_CARD = (
     "pointings that have imagery. Nothing to drive -- leave it running.")
 
 
+#: Written when a HiPS inventory is available (see hips_index.py).
+HIPS_INDEX_CARD = (
+    hips_index.INDEX_PAGE, "HiPS index",
+    "Every HiPS sky map made from the release fields, grouped by field, with "
+    "the tours and survey-wide views that combine them.")
+
+
 #: Linear color wavelength tours: an Aladin Lite page whose slider steps
 #: through RGB layers of three neighboring filters, bluest triplet to reddest.
 #: They are built in the ACES_Aladin_tour repository and served from a
@@ -2336,6 +2361,21 @@ WAVELENGTH_TOURS = {
     for field in ("arches", "brick", "sgra", "sgrb2", "sgrc", "sickle", "w51",
                   "wd2")
 }
+
+
+#: Plain-text description of every column in the released catalogs.  One file
+#: covers every field (the columns are the same pattern everywhere, with the
+#: filter name substituted), so it is copied once into the site directory and
+#: each field page links to it from its Catalogs heading.
+CATALOG_COLUMNS_SRC = Path(__file__).with_name("catalog_columns.txt")
+CATALOG_COLUMNS_NAME = "catalog_columns.txt"
+
+
+def catalog_columns_html():
+    """The column-description link under a field page's Catalogs heading."""
+    return (f"<p><a class=btn href='{CATALOG_COLUMNS_NAME}'>Column descriptions "
+            "(text)</a> <span class=muted>What each catalog column means, with "
+            "units and flag values.</span></p>")
 
 
 def wavelength_tour_html(field):
@@ -2510,11 +2550,17 @@ def main(argv=None):
                              "it from the index.")
     parser.add_argument("--cmz-cat-hips",
                         help="site-relative URL of the catalog HiPS (optional)")
+    parser.add_argument("--hips-inventory",
+                        help="HiPS inventory JSON written by hips_index.py "
+                             f"(default: <out>/{hips_index.INVENTORY_NAME}); "
+                             "without one the HiPS sections are omitted")
     parser.add_argument("--cmz-moc",
                         help="site-relative URL of the coverage MOC .fits (optional)")
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out)
+    hips_inventory = hips_index.load_inventory(
+        args.hips_inventory or out_dir / hips_index.INVENTORY_NAME)
     assets = out_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
 
@@ -2733,6 +2779,10 @@ def main(argv=None):
                                      diagrams=diagram_items,
                                      manifold=(manifold_infos(out_dir, field)
                                                if v == latest else None),
+                                     # the served layers today: a frozen
+                                     # older page must not claim them
+                                     hips_inventory=(hips_inventory
+                                                     if v == latest else None),
                                      # only the CURRENT version's page: the
                                      # offsets are re-measured continuously, so
                                      # a frozen older page must not carry
@@ -2901,6 +2951,13 @@ def main(argv=None):
         quicklooks.append(CMD_VIEWER_CARD)
     if (out_dir / PANNER_FILE).exists():
         quicklooks.append(PANNER_CARD)
+    if hips_inventory is not None:
+        inv_path = Path(args.hips_inventory or out_dir / hips_index.INVENTORY_NAME)
+        if inv_path.resolve() != (out_dir / hips_index.INVENTORY_NAME).resolve():
+            shutil.copy2(inv_path, out_dir / hips_index.INVENTORY_NAME)
+        (out_dir / hips_index.INDEX_PAGE).write_text(hips_index.render_index_page(
+            sorted(roster), hips_inventory, page_head, footer))
+        quicklooks.append(HIPS_INDEX_CARD)
     index_html = render_index(index_fields, overview_html=overview_html,
                               quicklooks=tuple(quicklooks))
     if cmz_explorer_link:
@@ -2914,7 +2971,9 @@ def main(argv=None):
     (out_dir / "download_help.html").write_text(render_help())
     # .txt extension so the web server serves it as text (a .py 500s under CGI)
     (out_dir / "get_globus_token_helper.txt").write_text(TOKEN_HELPER)
+    shutil.copy2(CATALOG_COLUMNS_SRC, out_dir / CATALOG_COLUMNS_NAME)
     print(f"wrote index.html + download_help.html + get_globus_token_helper.txt "
+          f"+ {CATALOG_COLUMNS_NAME} "
           f"({len(fields_info)} field(s) rebuilt, {len(index_fields)} on the "
           f"index) into {out_dir}")
 

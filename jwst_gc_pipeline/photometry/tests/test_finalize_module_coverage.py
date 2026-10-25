@@ -419,3 +419,44 @@ def test_intra_family_truncation_survives_the_override(tmp_path, monkeypatch):
     assert_finalize_covers_disk_modules(
         str(tmp_path), ['nrcb1'], ['F187N'], 'm2',
         _options(allow_partial_modules=True), frames_by_filter=frames)
+
+
+# --- the PSF token (#1126) -------------------------------------------------
+
+def _write_epsf_perframe(cut_bp, filt, detector, exp='00001', label='m2'):
+    d = os.path.join(cut_bp, filt.upper())
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(
+        d, f'{filt.lower()}_{detector}_visit001_vgroup04101_exp{exp}_epsf_'
+           f'{label}_daophot_basic.fits')
+    with open(path, 'wb') as fh:
+        fh.write(b'')
+    return path
+
+
+def test_epsf_catalogs_are_seen_with_the_epsf_token(tmp_path, monkeypatch):
+    monkeypatch.delenv('PSF_EPSF_CORE_DIR', raising=False)
+    cut_bp = str(tmp_path)
+    _write_epsf_perframe(cut_bp, 'F200W', 'nrca1', exp='00001')
+    _write_epsf_perframe(cut_bp, 'F200W', 'nrcb1', exp='00002')
+    # the environment-only token rejects `_epsf` catalogs ...
+    assert perframe_families_on_disk(cut_bp, 'F200W', 'm2') == {}
+    # ... and the run's own token accepts them
+    assert set(perframe_families_on_disk(cut_bp, 'F200W', 'm2',
+                                         psf_token='_epsf')) == {'nrca', 'nrcb'}
+
+
+def test_epsf_run_truncated_modules_refuses_from_catalogs(tmp_path, monkeypatch):
+    """A `--epsf` finalize with a truncated module list is refused by layer 2."""
+    monkeypatch.delenv('PSF_EPSF_CORE_DIR', raising=False)
+    cut_bp = str(tmp_path)
+    _write_epsf_perframe(cut_bp, 'F200W', 'nrca1', exp='00001')
+    _write_epsf_perframe(cut_bp, 'F200W', 'nrcb1', exp='00002')
+    with pytest.raises(FinalizeModuleCoverageError):
+        assert_finalize_covers_disk_modules(
+            cut_bp, ['nrca'], ['F200W'], 'm2', _options(epsf=True),
+            frames_by_filter={})
+    # without --epsf the same tree reads no catalogs, so layer 2 is silent
+    assert_finalize_covers_disk_modules(
+        cut_bp, ['nrca'], ['F200W'], 'm2', _options(epsf=False),
+        frames_by_filter={})

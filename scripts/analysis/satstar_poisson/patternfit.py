@@ -164,7 +164,10 @@ def fit_nuisance(e, Qp, anchor=False, niter=3):
         stack = np.stack([Fm, Fm*1j*KX, Fm*1j*KY, -F*KX**2, -F*KY**2, -F*KX*KY])
         out = finufft.nufft2d2(2*np.pi*e.qy/HQ/N, 2*np.pi*e.qx/HQ/N, stack, isign=1, eps=EPS, nthreads=NTHREADS).real
         v, gx, gy, qxx, qyy, qxy = out
-        cols = [v, np.ones_like(v), e.X, e.Y]
+        # anchor: the flux a is held fixed and a*v is moved to the RHS, so v
+        # must not stay a column -- solving a flux increment jointly would
+        # condition c and g on a flux that is then discarded (#1008).
+        cols = ([] if anchor else [v]) + [np.ones_like(v), e.X, e.Y]
         if not anchor:
             cols += [e.a*gx*e.phi[:, k] for k in range(len(POLY))]
             cols += [e.a*gy*e.phi[:, k] for k in range(len(POLY))]
@@ -184,7 +187,8 @@ def fit_nuisance(e, Qp, anchor=False, niter=3):
         j = 0
         if not anchor:
             e.a = sol[0]
-        e.c = sol[1]; e.g = sol[2:4].copy(); j = 4
+        k = 0 if anchor else 1
+        e.c = sol[k]; e.g = sol[k+1:k+3].copy(); j = k+3
         if not anchor:
             P = len(POLY)
             e.cx = e.cx+np.clip(sol[j:j+P], -0.3, 0.3); j += P

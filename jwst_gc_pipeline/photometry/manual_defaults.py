@@ -85,6 +85,12 @@ MANUAL_DEFAULTS = {
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
+    # previous-phase (hysteresis) keep: a source the previous phase vetted is
+    # kept while qfit < this and S/N >= the next; 0 = off
+    'manual_ext_hysteresis_qfit_max': 0.6,
+    'manual_ext_hysteresis_snr_min': 10.0,
+    # ... except within this many FWHM of a saturated star (0 = no guard)
+    'manual_ext_hysteresis_satstar_guard_fwhm': 4.5,
     'manual_ext_recover_satstar_guard_arcsec': 2.0,
     'manual_ext_recover_prom_gate': True,
     'manual_ext_recover_prom_log_intercept': -0.77,
@@ -141,6 +147,11 @@ MANUAL_DEFAULTS = {
     'coarse_bg_box': 0,
     # -- grouping
     'manual_group_min_sep_fwhm': 2.0,
+    # -- cross-band merge output (m7): every module's table is written as FITS;
+    # the ECSV twin (~30x slower to write on sgrb2) only for the merged module, or for
+    # every module when the run has none (cataloging.crossband_ecsv_modules).
+    # True writes the nrca/nrcb ECSVs too (#1227).
+    'manual_crossband_ecsv_all_modules': False,
     # -- cross-band seed (m7, _build_crossband_seed)
     'manual_crossband_seed_min_filters': 2,
     'manual_crossband_seed_snr_min': 5.0,
@@ -171,6 +182,10 @@ MANUAL_DEFAULTS = {
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.
     'manual_keep_intermediate_model_i2d': False,
+    # ... and of the final phase's, only the MERGED module's: the release stages
+    # only that one, so the nrca/nrcb model resamples run only on request (a run
+    # with no merged module -- a disjoint field -- still writes every module's).
+    'manual_model_i2d_all_modules': False,
     # -- retention: at each phase barrier, drop the per-frame images the
     # barrier makes unreachable (this phase's mergedcat renders, the previous
     # phase's raw residual/model).  ON by default: this phase's own raw pair

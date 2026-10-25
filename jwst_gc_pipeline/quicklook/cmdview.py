@@ -37,7 +37,7 @@ _AVM = 'https://starformation.astro.ufl.edu/avm_images/'
 #: wrong for a page whose point is comparing one pointing against the rest.
 HIPS_LAYERS = (
     ('tmiri', _AVM + 'jwst_gc_treasury_miri_hips/', 'Treasury MIRI (F770W)'),
-    ('tnir', _AVM + 'jwst_gc_treasury_vminmax_hips/',
+    ('tnir', _AVM + 'jwst_gc_treasury_vminmax_satfill_hips/',
      'Treasury NIRCam (F212N/F480M)'),
 )
 

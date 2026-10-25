@@ -20,11 +20,13 @@ because exposures sitting at 2-4 mas drift across the threshold.  Comparing the
 per-exposure MEASUREMENT is what makes both visible.
 """
 import json
+import math
 
 import pytest
 
 from jwst_gc_pipeline.photometry.retie_fixed_point import (
-    DEFAULT_REPEATS, compare, find_fixed_point, measurements)
+    DEFAULT_REPEATS, actionable_corrections, compare, converged,
+    find_fixed_point, group_verdicts, measurements, reference_ties)
 
 
 def _rec(offsets, corrections=1):
@@ -702,3 +704,227 @@ def test_a_comma_separated_declaration_is_one_filter_name(tmp_path):
                  filt='F162M', token='o012')
     assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
                 '--expect-filters', 'F162M,F480M') == 3
+
+
+# ---------------------------------------------------------------------------
+# gc2211/o050 F200W, 2026-10-08/09: a CONVERGING loop called REPEATING.
+#
+# The whole-visit consensus->reference tie went 39.99 -> 2.71 -> 0.24 mas over
+# three passes.  It shifts every exposure of the visit together, so each
+# per-exposure measurement (taken against that visit's own consensus) repeated
+# to 0.00 mas, and `compare` -- which read only those -- called the field a
+# fixed point and the loop stopped at iteration 2.  Two separate defects:
+#
+#   * the tie was invisible to the comparison;
+#   * the newest pass had nothing to apply (12 residuals of 2.1-2.7 mas under
+#     the 4.0 mas floor, tie under the 2.0 mas apply threshold), so F200W had
+#     already finished -- the loop was running for F277W's 36 mas tie -- but
+#     the "no corrections" exemption read the sub-floor residuals as work.
+#
+# Each fix alone clears the o050 history; the tests pin them separately.
+# ---------------------------------------------------------------------------
+
+#: o050 F200W per-exposure residuals: sub-floor, identical every pass
+O050_EXP = {('jw02211050001', 1, 'nrcb1'): (-0.40, 2.32),
+            ('jw02211050001', 3, 'nrcb1'): (1.86, -1.89),
+            ('jw02211050001', 3, 'nrcb4'): (1.58, -1.67)}
+#: the measured consensus->reference tie, pass by pass
+O050_TIES = [(-34.731, 19.640), (-34.781, 19.745), (-2.527, 0.991),
+             (-0.075, 0.224)]
+
+
+def _o050_rec(tie, *, applied, exposures=O050_EXP, floor=4.0, passed=True,
+              visit='jw02211050001'):
+    """A record shaped like o050's: per-exposure residuals listed as
+    corrections, the tie measured in `visits[].reference_tie`, and listed as a
+    correction only when m2 applied it."""
+    corr = [{'visit': visit, 'exposure': k[1], 'module': k[2],
+             'dra_onsky_mas': v[0], 'ddec_onsky_mas': v[1],
+             'source': 'm2 visit-consensus'} for k, v in exposures.items()]
+    if applied:
+        corr.append({'visit': visit, 'exposure': None, 'module': None,
+                     'dra_onsky_mas': tie[0], 'ddec_onsky_mas': tie[1],
+                     'source': 'm2 consensus->reference'})
+    return {
+        'passed': passed, 'failures': [],
+        'visits': [{'visit': visit, 'filtername': 'F200W',
+                    'reference_tie': {'dra_mas': tie[0], 'ddec_mas': tie[1]},
+                    'exposures': [{'key': list(k), 'dra': v[0], 'ddec': v[1],
+                                   'misaligned': True}
+                                  for k, v in sorted(exposures.items())]}],
+        'corrections': corr,
+        'tolerances': {'reference_apply_min_mas': 2.0,
+                       'correction_floor_mas': floor},
+    }
+
+
+def _o050_history(tmp_path, recs, filt='F200W'):
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir(exist_ok=True)
+    for i, rec in enumerate(recs):
+        (d / f'checkpoint_m2_{filt}_o050_2026100{i}T000000Z.json').write_text(
+            json.dumps(rec))
+    return str(d)
+
+
+def _o050_f200w():
+    return [_o050_rec(t, applied=math.hypot(*t) >= 2.0) for t in O050_TIES]
+
+
+def test_a_MOVING_reference_tie_is_not_a_repeat():
+    """39.99 -> 2.71 mas with every exposure unchanged: the tie moved the
+    whole visit, and that is the loop converging."""
+    same, detail = compare(_o050_rec(O050_TIES[1], applied=True),
+                           _o050_rec(O050_TIES[2], applied=True))
+    assert not same, detail
+    assert 'consensus->reference' in detail
+    assert '39.99 -> 2.71' in detail
+
+
+def test_a_reference_tie_that_only_WOBBLES_still_repeats():
+    """sgrc F162M's tie re-measured to ~0.1 mas across seven passes.  The
+    tie comparison must not turn a real fixed point into 'still moving'."""
+    t = (-4.58, -3.42)
+    same, detail = compare(_o050_rec(t, applied=True),
+                           _o050_rec((t[0] - 0.09, t[1] + 0.10), applied=True))
+    assert same, detail
+
+
+def test_reference_ties_reads_the_MEASURED_tie_not_the_applied_one():
+    """A tie under the apply threshold is measured and not applied; its
+    absence from `corrections` says nothing about whether it moved."""
+    rec = _o050_rec(O050_TIES[3], applied=False)
+    assert reference_ties(rec) == {'jw02211050001': O050_TIES[3]}
+    rec['visits'][0]['reference_tie'] = {'dra_mas': float('nan'),
+                                         'ddec_mas': 0.0}
+    assert reference_ties(rec) == {}
+
+
+def test_a_pass_with_only_SUB_FLOOR_residuals_has_nothing_to_apply():
+    rec = _o050_rec(O050_TIES[3], applied=False)
+    assert len(rec['corrections']) == 3
+    assert actionable_corrections(rec) == []
+    assert converged(rec)
+
+
+def test_the_reference_tie_is_ALWAYS_actionable():
+    """Cataloging never floors the whole-visit tie, so neither does this --
+    even under a floor larger than the tie."""
+    rec = _o050_rec(O050_TIES[2], applied=True, floor=8.0)
+    assert [c['source'] for c in actionable_corrections(rec)] == [
+        'm2 consensus->reference']
+    assert not converged(rec)
+
+
+def test_passed_ALONE_is_not_converged():
+    """Every o050 F200W record reads `passed: True`, including the ones whose
+    40 mas tie the finalize then applied and raised on."""
+    rec = _o050_rec(O050_TIES[0], applied=True)
+    assert rec['passed'] is True
+    assert not converged(rec)
+
+
+def test_a_record_that_did_not_pass_is_not_converged():
+    """Cataloging's own test: `failures`, or `passed is False`, is not a pass
+    however little there is to apply."""
+    assert not converged(_o050_rec(O050_TIES[3], applied=False, passed=False))
+    rec = _o050_rec(O050_TIES[3], applied=False)
+    rec['failures'] = ['late-stage shift']
+    assert not converged(rec)
+
+
+@pytest.mark.parametrize('floor', [None, 0.0])
+def test_without_a_recorded_floor_every_correction_is_actionable(floor):
+    """Records written before `correction_floor_mas` was recorded (sgrc,
+    August) cannot say what was sub-floor.  Reading them as 'nothing to apply'
+    would hide the sgrc fixed points this check was built on."""
+    rec = _o050_rec(O050_TIES[3], applied=False, floor=floor)
+    if floor is None:
+        del rec['tolerances']['correction_floor_mas']
+    assert len(actionable_corrections(rec)) == 3
+    assert not converged(rec)
+
+
+def test_an_unreadable_magnitude_is_actionable():
+    """Cataloging raises on these; reading one as sub-floor would call a pass
+    converged that the finalize refuses."""
+    rec = _o050_rec(O050_TIES[3], applied=False)
+    rec['corrections'][0]['dra_onsky_mas'] = None
+    rec['corrections'][1]['ddec_onsky_mas'] = float('nan')
+    assert len(actionable_corrections(rec)) == 2
+    assert not converged(rec)
+
+
+def test_the_o050_F200W_history_is_NOT_a_fixed_point(tmp_path):
+    d = _o050_history(tmp_path, _o050_f200w())
+    stuck, moving, unjudged, lines = group_verdicts(d, obs_token='o050')
+    assert not stuck, lines
+    assert any('converged' in ln for ln in lines), lines
+
+
+def test_the_o050_history_is_NOT_a_fixed_point_on_the_tie_alone(tmp_path):
+    """The comparison fix by itself: the newest pass still carries an
+    actionable residual, so only the moving tie keeps it off the stuck list."""
+    recs = _o050_f200w()
+    recs[-1] = _o050_rec(O050_TIES[3], applied=False, floor=2.0)
+    assert not converged(recs[-1])
+    d = _o050_history(tmp_path, recs)
+    stuck, moving, _, lines = group_verdicts(d, obs_token='o050')
+    assert not stuck, lines
+    assert ('F200W', 'o050') in moving
+    assert any('consensus->reference' in ln for ln in lines), lines
+
+
+def test_the_o050_history_is_NOT_a_fixed_point_on_convergence_alone(tmp_path):
+    """The convergence fix by itself: no tie measured at all, residuals
+    identical every pass, and the newest pass has nothing to apply."""
+    recs = [_o050_rec(O050_TIES[3], applied=False) for _ in range(3)]
+    for r in recs:
+        r['visits'][0].pop('reference_tie')
+    recs[0]['corrections'].append(dict(recs[0]['corrections'][0],
+                                       dra_onsky_mas=9.0))
+    d = _o050_history(tmp_path, recs)
+    stuck, moving, unjudged, lines = group_verdicts(d, obs_token='o050')
+    assert not (stuck or moving or unjudged), lines
+
+
+def test_the_o050_LOOP_continues_for_the_filter_still_correcting(tmp_path):
+    """The production invocation at o050's iteration 2: F200W finished, F277W
+    one pass in with a 36 mas tie to apply.  Exit 0 -- keep iterating."""
+    d = _o050_history(tmp_path, _o050_f200w())
+    _o050_history(tmp_path, [_o050_rec((-26.79, 24.66), applied=True)],
+                  filt='F277W')
+    assert _cli(d, '--obs-token', 'o050', '--expect-filters', 'F200W F277W',
+                '--accept-below-mas', '0') == 0
+
+
+def test_a_STUCK_reference_tie_is_still_stuck(tmp_path):
+    """The other direction: a tie applied every pass that comes back the same
+    is a correction not reaching the frame, and it still stops."""
+    t = (-2.6, 1.0)
+    recs = [_o050_rec(t, applied=True) for _ in range(3)]
+    d = _o050_history(tmp_path, recs)
+    stuck, lines = find_fixed_point(d, obs_token='o050')
+    assert ('F200W', 'o050') in stuck, lines
+
+
+def test_a_converged_group_counts_as_SCANNED_and_does_not_size_the_floor(
+        tmp_path, capsys):
+    """A converged filter is in none of the verdict sets.  It still has to
+    satisfy --expect-filters, and its sub-floor residuals (here 7 mas under an
+    8 mas floor) must not size the floor the stuck filter's ~5.2 mas needs."""
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN]})
+    seven = {('1', 3, 'nrcb2'): (7.0, 0.0)}
+    (tmp_path / 'astrometry_checkpoints' /
+     'checkpoint_m2_F212N_o012_20260809T000000Z.json').write_text(
+        json.dumps(_o050_rec((0.1, 0.1), applied=False, exposures=seven,
+                             floor=8.0, visit='1')))
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                '--expect-filters', 'F162M F212N') == 4
+    out = capsys.readouterr().out
+    assert 'F212N/o012: converged' in out
+    floor = float([ln for ln in out.splitlines()
+                   if ln.startswith('ASTROM_M2_CORRECTION_FLOOR_MAS=')][-1]
+                  .split('=')[1])
+    assert floor < 7.0, out

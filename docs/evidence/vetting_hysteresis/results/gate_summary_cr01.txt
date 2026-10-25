@@ -1,0 +1,28 @@
+vetted at K, vetted out at K+1: 398; star-like residual left: 229
+keep branches passed at K (prev_kept_by):
+  bright_iso                   142
+  qfit                         55
+  flags1                       53
+  qfit+bright_iso              33
+  peak|prom                    29
+  sky_clean                    21
+  peak|prom+sky_clean          18
+  bright_iso+flags1            15
+  qfit+peak|prom+bright_iso    13
+  qfit+peak|prom               12
+  qfit+flags1                  4
+  bright_iso+sky_clean         1
+  peak|prom+bright_iso         1
+  qfit+peak|prom+sky_clean     1
+superdense F212N, bright_iso only: n=86, median qfit at K 0.37, at K+1 0.42
+previous-phase keep (r <= 0.5 FWHM, qfit < 0.6, S/N >= 10.0) re-admits 181 of 398; star-like 137; other 44 (median S/N 53)
+| field / band | vetted_out | star-like | re-admitted | re-admitted star-like |
+|---|---|---|---|---|
+| bright_modest F187N | 14 | 13 | 14 | 13 |
+| bright_modest F210M | 4 | 4 | 4 | 4 |
+| dark F182M | 38 | 23 | 4 | 0 |
+| dark F212N | 34 | 8 | 0 | 0 |
+| dense_bright F187N | 47 | 18 | 5 | 4 |
+| dense_bright F212N | 70 | 21 | 8 | 1 |
+| superdense F212N | 113 | 102 | 96 | 87 |
+| superdense F405N | 78 | 40 | 50 | 28 |

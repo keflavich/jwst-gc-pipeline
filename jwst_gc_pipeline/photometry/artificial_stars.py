@@ -135,12 +135,12 @@ EDGE_BUFFER_PIX = 16
 
 def load_psf_grid(band, detector):
     """The per-detector webbpsf cache grid the production per-frame path uses."""
-    from stpsf.utils import to_griddedpsfmodel
+    from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
     fn = os.path.join(PSF_DIR,
                       f'nircam_{detector}_{band.lower()}_fovp101_samp2_npsf16.fits')
     if not os.path.exists(fn):
         raise FileNotFoundError(fn)
-    grid = to_griddedpsfmodel(fn)
+    grid = load_stpsf_grid(fn)
     if isinstance(grid, list):
         grid = grid[0]
     return grid

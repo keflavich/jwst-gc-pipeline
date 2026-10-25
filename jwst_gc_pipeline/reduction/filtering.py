@@ -18,6 +18,7 @@ import numpy as np
 from jwst_gc_pipeline.atomic_io import publish_into
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 import time
 from astropy.stats import mad_std
 from astropy import stats
@@ -44,7 +45,6 @@ from astropy.visualization import simple_norm
 import os
 try:
     import webbpsf
-    from webbpsf.utils import to_griddedpsfmodel
     # setdefault, not assignment: saturated_star_finding REQUIRES this variable
     # and raises without it, so overwriting it sent anyone who set it correctly
     # to a HiPerGator path that does not exist on their machine.  Unset (the
@@ -52,7 +52,6 @@ try:
     os.environ.setdefault('WEBBPSF_PATH', '/orange/adamginsburg/jwst/webbpsf-data/')
 except ImportError:
     import stpsf
-    from stpsf.utils import to_griddedpsfmodel
     os.environ.setdefault('STPSF_PATH', '/orange/adamginsburg/jwst/stpsf-data/')
 
 try:
@@ -329,10 +328,10 @@ def estimate_background(data, header, medfilt_size=[15,15], do_segment_mask=Fals
     psf_fn = f'{path_prefix}/{instrument.lower()}_{filtername}_samp{oversample}_nspsf{npsf}_npix{fov_pixels}.fits'
     if os.path.exists(psf_fn):
         # As a file
-        grid = to_griddedpsfmodel(psf_fn)
+        grid = load_stpsf_grid(psf_fn)
     elif os.path.exists(psf_fn.replace(".fits", "_nrca5.fits")):
         # apparently even with outfile specified, nrca5 gets appended?
-        grid = to_griddedpsfmodel(psf_fn.replace(".fits", "_nrca5.fits"))
+        grid = load_stpsf_grid(psf_fn.replace(".fits", "_nrca5.fits"))
     else:
         log.info(f"filtering: Calculating grid for psf_fn={psf_fn}")
         # Same publish-then-rename as saturated_star_finding.get_psf (#617):

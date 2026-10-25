@@ -265,13 +265,14 @@ FIELDS = {
     # Stage with `--exposures-only --exposures-from-disk`; a plain `--stage`
     # would look for mosaics and find none.
     #
-    # Catalogs ship separately via `--joint-catalog`: there is no per-field
-    # per-pointing merge here (66 tiles, no field-wide cross-band merge), so
-    # the normal `discover_catalogs` path has nothing to find.  Instead
+    # Catalogs ship separately via `--joint-catalog`.  Each tile has its own
+    # per-observation cross-band merge, but there is no field-wide merge, so
     # `jwst_gc_pipeline.cmz.treasury_joint_catalog` builds a single all-tile
-    # NIRCam catalog with cross-tile duplicates collapsed, and
+    # NIRCam catalog with cross-tile duplicates collapsed.
     # `stage_joint_catalog` copies the newest gated build from
-    # `joint_catalog_root` into this release's `catalogs/`.
+    # `joint_catalog_root` into this release's `catalogs/`, and beside it the
+    # per-tile m8 table of every tile that build read, taken from the same
+    # roll-corrected snapshot.
     #
     # Every observation the registry knows is listed rather than globbed, and
     # the list must never be emptied.  `enumerate_field_exposures` skips its
@@ -2747,7 +2748,16 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
 # rather than by filename -- the output stem is fixed
 # (`gctreasury10678_joint_nircam`), but matching on kind keeps a re-stage
 # correct even if that ever changes.
-JOINT_CATALOG_KINDS = ("catalog_joint", "catalog_joint_provenance")
+JOINT_CATALOG_KINDS = ("catalog_joint", "catalog_joint_provenance",
+                       "catalog_tile")
+
+# The per-tile table each joint-catalog tile ships as, beside the joint table.
+# m8 is the tile's full cross-band merge (m7) with every band force-filled at
+# every source.  It is unfiltered: the joint build reads the quality-cut m7
+# table instead (o040: 62,933 of m8's 196,672 rows).  It sits in the same
+# roll-corrected snapshot directory as the tile the joint build read, so the
+# two products carry the same correction.
+TILE_CATALOG_ITERATION = "resbgsub_m8"
 
 
 class JointCatalogGateError(RuntimeError):
@@ -3196,6 +3206,92 @@ def check_joint_catalog(build_dir):
     }
 
 
+def _rollctab_sha(rollctab):
+    m = re.search(r"sha1:([0-9a-f]{12})\b", str(rollctab or ""))
+    return m.group(1) if m else None
+
+
+def _read_header_keyword(path, key):
+    """``key`` from the first HDU header of ``path`` that carries it, or ``None``."""
+    from astropy.io import fits
+    with fits.open(path, memmap=True) as hdul:
+        for hdu in hdul:
+            if key in hdu.header:
+                return hdu.header[key]
+    return None
+
+
+def discover_tile_catalogs(build_dir):
+    """The per-tile m8 tables behind a joint-catalog build, gated.
+
+    For every tile in the build's ``prov.json`` ``tiles``, returns
+    ``(observation, path)`` for
+    ``<tile dir>/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o<obs>.fits``,
+    where ``<tile dir>`` is the directory the joint build read that tile from
+    (the roll-corrected snapshot).  Raises ``JointCatalogGateError`` -- before
+    anything is written -- if a tile has no m8 table there, or if the m8 table
+    is not roll-corrected with the same ``roll_corrections.csv`` version as
+    the tile the joint build read (which ``check_joint_catalog`` has just
+    verified against the current table), or if its ``GCTAG`` differs from the
+    build's recorded ``tile_pipeline_tag`` (a table from another run).  A tile
+    is never silently dropped.
+    """
+    build_dir = Path(build_dir)
+    prov_path = sorted(build_dir.glob("*_joint_nircam.prov.json"))[0]
+    prov = json.loads(prov_path.read_text())
+    found, problems = [], []
+    for obsid, t in sorted((prov.get("tiles") or {}).items()):
+        tile_path = t.get("path")
+        if not tile_path:
+            problems.append(f"tile {obsid}: no 'path' in the provenance")
+            continue
+        obs = obsid if str(obsid).startswith("o") else f"o{obsid}"
+        src = (Path(tile_path).parent
+               / f"{CAT_BASE}_{TILE_CATALOG_ITERATION}_{obs}.fits")
+        if not src.is_file():
+            problems.append(f"tile {obsid}: no m8 table at {src}")
+            continue
+        want = _rollctab_sha(t.get("rollctab")
+                             or (_read_header_rollctab(tile_path)
+                                 if os.path.isfile(tile_path) else None))
+        have = _rollctab_sha(_read_header_rollctab(src))
+        if have is None or have != want:
+            problems.append(
+                f"tile {obsid}: m8 table ROLLCTAB sha1:{have} does not match "
+                f"the joint build's tile (sha1:{want})")
+            continue
+        want_tag = t.get("tile_pipeline_tag")
+        have_tag = _read_header_keyword(src, "GCTAG")
+        if want_tag and have_tag != want_tag:
+            problems.append(
+                f"tile {obsid}: m8 table GCTAG {have_tag!r} does not match the "
+                f"joint build's tile_pipeline_tag {want_tag!r}")
+            continue
+        found.append((obs, src))
+    if problems:
+        raise JointCatalogGateError(
+            f"{prov_path}: {len(problems)} per-tile m8 table(s) cannot ship "
+            f"beside the joint catalog -- REFUSING to stage:\n  "
+            + "\n  ".join(problems))
+    return found
+
+
+def _place_frozen_copy(src, dest):
+    """Hardlink ``src`` to ``dest`` (same filesystem), else copy it.
+
+    A hardlink is a frozen copy for these tables: their writers replace a
+    file by rename, which gives the source a new inode and leaves the
+    released one untouched.  It costs no space on a nearly full volume
+    (68 tiles x ~100 MB).
+    """
+    if dest.exists() or dest.is_symlink():
+        dest.unlink()
+    try:
+        os.link(src, dest)
+    except OSError:
+        shutil.copy2(src, dest)
+
+
 def stage_joint_catalog(field, version, release_root, build_dir=None,
                         allow_older=False):
     """Stage the gc-treasury JOINT NIRCam catalog into an existing (or new)
@@ -3221,6 +3317,7 @@ def stage_joint_catalog(field, version, release_root, build_dir=None,
 
     chosen = discover_joint_catalog(field, build_dir=build_dir)
     summary = check_joint_catalog(chosen)   # raises before anything is written
+    tile_catalogs = discover_tile_catalogs(chosen)   # likewise
 
     field_dir = field_release_dir(field, version, release_root)
     manifest_path = field_dir / "MANIFEST.json"
@@ -3280,6 +3377,21 @@ def stage_joint_catalog(field, version, release_root, build_dir=None,
         if src is fits_src:
             item["joint_catalog"] = summary
         new_items.append(item)
+    for obs, src in tile_catalogs:
+        dest_rel = assign_dest({"category": "catalog", "src": str(src)}, field)
+        dest = field_dir / dest_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _place_frozen_copy(src, dest)
+        rel = dest.relative_to(GLOBUS_COLLECTION_ROOT)
+        new_items.append({
+            "category": "catalog", "kind": "catalog_tile", "filter": None,
+            "iteration": TILE_CATALOG_ITERATION, "observation": obs,
+            "src": str(src), "dest": str(dest_rel),
+            "size_bytes": dest.stat().st_size, "sha256": sha256sum(dest),
+            "version": version,
+            "globus_path": "/" + str(rel),
+            "url": GLOBUS_HTTPS_BASE + "/" + str(rel),
+        })
     new_dests = {it["dest"] for it in new_items}
 
     # Replace any PREVIOUS joint-catalog items.  The output stem is fixed, so
@@ -3692,6 +3804,20 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
                 f"- `{Path(_joint_prov['dest']).name}` : the full build provenance "
                 f"(input tile sha1s, overlap-gate results per pair, winner rule, "
                 f"per-tile row counts).")
+        _tiles = sorted(it.get("observation") or "" for it in joint_catalog_items
+                        if it.get("kind") == "catalog_tile")
+        if _tiles:
+            joint_catalog_lines.append(
+                f"- Per-tile tables: `{CAT_BASE}_{TILE_CATALOG_ITERATION}_o<obs>.fits`, "
+                f"one per tile ({len(_tiles)}: {_tiles[0]}-{_tiles[-1]}).  Each is "
+                "that tile's own cross-band merge with every band force-filled "
+                "(m8), roll-corrected with the same table as the tile the joint "
+                "catalog read.  These tables are UNFILTERED: the joint catalog "
+                "is built from each tile's quality-cut table, so a per-tile "
+                "table also holds sources the joint catalog drops on quality "
+                "cuts.  Tiles overlap, so a star near a tile edge can appear in "
+                "two per-tile tables; the joint catalog collapses those "
+                "duplicates.")
         joint_catalog_lines.append(
             "- MIRI F770W is OUT OF SCOPE for this table (issue #956) -- NIRCam only.")
         joint_catalog_lines.append("")
@@ -3872,7 +3998,9 @@ def main(argv=None):
                              "images/, catalogs/ and CHECKSUMS.sha256 untouched and "
                              "not re-running the mosaic gates (it cannot change which "
                              "mosaics ship). Use when a field's frames should go out "
-                             "but a band has no live mosaic to re-stage.")
+                             "but a band has no live mosaic to re-stage. Writes "
+                             "only with --stage; cannot be combined with "
+                             "--joint-catalog.")
     parser.add_argument("--exposures-from-disk", action="store_true",
                         help="with --exposures-only: enumerate the frames from the "
                              "pipeline directories instead of from staged mosaics, "
@@ -3968,6 +4096,27 @@ def main(argv=None):
     # release is exactly what is being added to (arches: F212N has no live
     # mosaic, so the listed-source gate refuses the field while its published
     # v1.2 tree sits there gated and frozen).
+    if args.exposures_only and args.joint_catalog:
+        # The two add-only paths each return as soon as they finish, so this
+        # combination used to stage the exposures and silently drop the
+        # catalog (gc-treasury v1.9, #1104).  Refuse before anything is written.
+        print("--exposures-only and --joint-catalog are two separate staging "
+              "steps; run them as two invocations (either order), e.g.\n"
+              f"  stage_release.py --field {args.field} --version {args.version} "
+              f"--joint-catalog [--joint-catalog-dir DIR] --stage\n"
+              f"  stage_release.py --field {args.field} --version {args.version} "
+              f"--exposures-only [--exposures-from-disk] --stage",
+              file=sys.stderr)
+        return 2
+    if args.exposures_only and not args.stage:
+        # `--help` promises a dry run by default.  This path used to write the
+        # release tree regardless (#1104).
+        field_dir = field_release_dir(args.field, args.version, args.release_root)
+        print(f"Dry run: --exposures-only would add detector-frame exposures to "
+              f"{field_dir}"
+              f"{' (enumerated from the pipeline directories)' if args.exposures_from_disk else ''}"
+              f".  Nothing was written.  Re-run with --stage to write it.")
+        return 0
     if args.exposures_only:
         # The frozen-version guard runs HERE too, not only on the full staging
         # path below. Adding an exposures/ tree and an astrometry/ table to a

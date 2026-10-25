@@ -127,8 +127,12 @@ def exposure_residual(path, anchor_sc, snr_min=20.0, qfit_max=0.1):
         return None
     c = max(lrm["cells"], key=lambda cc: cc["n"])
     # local_residual_map reports the residual about the applied global tie, so
-    # add the tie back to recover the total (exposure - anchor).
-    return (g["dra"] + c["dra_mas"], g["ddec"] + c["ddec_mas"], int(c["n"]))
+    # add the tie back to recover the total.  Both measure_offset(a, b) and
+    # local_residual_map(a, b, ...) report (b - a); with a = exposure and
+    # b = anchor that total is (anchor - exposure), so negate it to return
+    # (exposure - anchor).  Without the negation --write stores the residual
+    # and applying it doubles the error (wd2 F162M: 10.2 -> 20.5 mas rms).
+    return (-(g["dra"] + c["dra_mas"]), -(g["ddec"] + c["ddec_mas"]), int(c["n"]))
 
 
 def roll_ref_of(path):

@@ -14,6 +14,7 @@ weakly saturated core is rewritten to ~3% of its rate.  Pinned here:
 3. a healthy curve is unchanged by the guard;
 4. SATSTAR_ZF_KEEP_FINITE=1 keeps finite, non-DO_NOT_USE SATURATED pixels
    (neither rewritten nor masked), including when that leaves no rim pixel;
+   it defaults to NIRCAM_SATSTAR_RECOVERED_CAP;
 5. SATSTAR_OBS_PK_FROM_CRF=1 reads the observed peak from the crf values;
 6. SATSTAR_QFIT_LOCAL_* compute a local qfit and, with the gate on, judge
    NIRCam in-FOV fits on it.
@@ -32,7 +33,8 @@ R_JUNK = 0.0005
 _ENV = ('SATSTAR_ZF_RCURVE_GUARD', 'SATSTAR_ZF_RCURVE_DQ0',
         'SATSTAR_ZF_RCURVE_MAXSTEP', 'SATSTAR_ZF_KEEP_FINITE',
         'SATSTAR_OBS_PK_FROM_CRF', 'SATSTAR_QFIT_LOCAL_GATE',
-        'SATSTAR_QFIT_LOCAL_R', 'SATSTAR_QFIT_LOCAL_MAX')
+        'SATSTAR_QFIT_LOCAL_R', 'SATSTAR_QFIT_LOCAL_MAX',
+        'NIRCAM_SATSTAR_RECOVERED_CAP')
 
 
 @pytest.fixture(autouse=True)
@@ -239,6 +241,26 @@ def test_keep_finite_saturated_pixels(monkeypatch):
     assert not deep_b[kept].any()
     assert rim_b[lost].all()
     assert np.allclose(rec_b[lost], R_TRUE * 25000.0, rtol=0.02)
+
+
+@pytest.mark.parametrize('cap, keep, on', [
+    (None, None, False), ('0', None, False), ('1', None, True),
+    ('1', '0', False), ('0', '1', True), ('1', '', True)])
+def test_keep_finite_default_follows_the_recovered_cap(monkeypatch, cap, keep,
+                                                       on):
+    """Cap-on frames (extended-emission NIRCam, set by cataloging) keep
+    finite SATURATED pixels by default; an export wins and a blank value
+    means the default."""
+    if cap is not None:
+        monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', cap)
+    if keep is not None:
+        monkeypatch.setenv('SATSTAR_ZF_KEEP_FINITE', keep)
+    assert satstar_fit_switches()['keep_finite'] is on
+    data, dq, g0, core, rim = _scene()
+    rec, rim_out, _, _ = zeroframe_recover_saturated(data, dq, g0)
+    assert bool(rim_out[rim].any()) is (not on)
+    if on:
+        assert np.array_equal(rec[rim], data[rim])
 
 
 def test_default_anchor_rewrites_rim_and_masks_deep_core():

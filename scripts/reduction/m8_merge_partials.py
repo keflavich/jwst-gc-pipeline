@@ -30,10 +30,20 @@ per-observation one appends the obs token, ``..._resbgsub_m7_o049.fits``, so add
 import argparse
 import glob
 import os
+import re
 import sys
 
 import numpy as np
 from astropy.table import Table
+
+#: The phase slot of an m7 anchor name, PSF token included.
+_M7_SLOT = re.compile(r'resbgsub(?:_hybpsf)?_m7(?=[_.])')
+
+
+def _m8_name(m7_path, slot):
+    """``m7_path`` with its ``resbgsub[_hybpsf]_m7`` slot replaced by ``slot``."""
+    head, base = os.path.split(m7_path)
+    return os.path.join(head, _M7_SLOT.sub(slot, base, count=1))
 
 
 def _default_m7(catdir, module, obs=None):
@@ -52,12 +62,19 @@ def _default_m7(catdir, module, obs=None):
     brick o001/o004, the other gc2211 observations, gc1266 and m4 all carry the
     same token.
 
+    The m7 name also carries the PSF token (``_hybpsf`` when
+    ``PSF_EPSF_CORE_DIR`` is set, ``..._resbgsub_hybpsf_m7_o049.fits``), as
+    ``merge_daophot`` writes it; the cataloging m8 partial jobs fill that
+    catalog, so the anchor follows the same setting (#1197).
+
     With ``obs`` given, the token'd name is tried first and the plain one is the
     fallback.  Without it, any single token'd anchor for this module is
     accepted, since one is unambiguous; two or more is the caller's to resolve
     with an explicit --m7.
     """
-    stem = f'basic_{module}_indivexp_photometry_tables_merged_resbgsub_m7'
+    from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
+    stem = (f'basic_{module}_indivexp_photometry_tables_merged_resbgsub'
+            f'{hybrid_psf_token()}_m7')
     plain = os.path.join(catdir, f'{stem}.fits')
     if obs:
         tokened = os.path.join(catdir, f'{stem}_o{str(obs).zfill(3)}.fits')
@@ -118,7 +135,14 @@ def main(argv=None):
         ap.error(f'm7 anchor not found: {args.m7}')
 
     filters = [f.strip() for f in args.filters.split(',') if f.strip()]
-    out_path = args.m7.replace('resbgsub_m7', 'resbgsub_m8')
+    # The m8 names carry no PSF token (cataloging.crossband_merged_path), so a
+    # `_hybpsf` anchor maps to the same m8 names as a plain one.  A str.replace
+    # of 'resbgsub_m7' matches nothing in `..._resbgsub_hybpsf_m7...` and would
+    # name the m7 anchor itself as the output (#1197).
+    if not _M7_SLOT.search(os.path.basename(args.m7)):
+        ap.error(f'm7 anchor {args.m7} has no resbgsub[_hybpsf]_m7 slot to '
+                 f'derive the m8 names from')
+    out_path = _m8_name(args.m7, 'resbgsub_m8')
 
     base = Table.read(args.m7)
     n = len(base)
@@ -128,7 +152,7 @@ def main(argv=None):
     plan = []  # (filt, partial_table, [cols])
     for filt in filters:
         tok = filt.lower()
-        ppath = args.m7.replace('resbgsub_m7', f'resbgsub_m8_partial_{filt}')
+        ppath = _m8_name(args.m7, f'resbgsub_m8_partial_{filt}')
         if not os.path.exists(ppath):
             missing.append(filt)
             print(f"  {filt}: MISSING partial {os.path.basename(ppath)}")

@@ -12,6 +12,7 @@ import numpy as np
 from pathlib import Path
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
@@ -89,6 +90,7 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
     CachingGriddedPSFModel, forced_psf_photometry,
     _make_model_image, _dedup_close_sources,
 )
+from jwst_gc_pipeline.photometry.psf_render import stamp_function
 
 
 # Used only by the parallel-chunked PSFPhotometry machinery, which lives in
@@ -220,7 +222,7 @@ from jwst_gc_pipeline.photometry.psf_paths import (
 # Imported as field_registry: `fields` is a local variable in these
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
-from jwst_gc_pipeline.atomic_io import publish_into
+from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
 
 
 def _seed_table_chunk_subset(seed_table, ww, image_shape,
@@ -616,7 +618,7 @@ print("Importing webbpsf", flush=True)
 import stpsf as webbpsf
 import stpsf
 print(f"Webbpsf version: {webbpsf.__version__}")
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 import datetime
 print("Done with imports", flush=True)
 
@@ -744,10 +746,19 @@ def write_via_local_scratch(final_path, write_fn):
     ``final_path`` directly when no local scratch is configured, or if the
     local write/copy fails (e.g. scratch full), so behaviour is unchanged off
     SLURM and never loses the output.
+
+    Every path into ``final_path`` is atomic (``atomic_io.atomic_write``): the
+    copy, and the direct write, land on a hidden temporary beside it and are
+    ``os.replace``-d into position.  The module pass and the ``merged`` pass
+    both fit every frame and write this same detector-keyed name, possibly at
+    the same moment in two shards (#840), and a copy straight onto
+    ``final_path`` left a window in which the other task could read a
+    truncated catalog.
     """
     scratch = os.environ.get('SLURM_TMPDIR')
     if not scratch or not os.path.isdir(scratch):
-        write_fn(final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            write_fn(dest)
         return
     import tempfile
     import shutil
@@ -757,11 +768,13 @@ def write_via_local_scratch(final_path, write_fn):
     os.close(fd)
     try:
         write_fn(tmp)
-        shutil.copyfile(tmp, final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            shutil.copyfile(tmp, dest)
     except OSError as ex:
         print(f"[io] local-scratch write for {final_path} failed ({ex}); "
               f"writing directly to shared storage", flush=True)
-        write_fn(final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            write_fn(dest)
     finally:
         try:
             os.remove(tmp)
@@ -2453,7 +2466,7 @@ def get_psf_model(filtername, proposal_id, field,
                 # this check load a half-written file.
                 if os.path.exists(_psf_fn):
                     print(f"Loading cached PSF grid (skipping MAST/Poppy): {_psf_fn}", flush=True)
-                    grid = to_griddedpsfmodel(_psf_fn)
+                    grid = load_stpsf_grid(_psf_fn)
                     if isinstance(grid, list):
                         grid = grid[0]
                     break
@@ -2500,7 +2513,7 @@ def get_psf_model(filtername, proposal_id, field,
                       f"{_cached_files}", flush=True)
                 grid = []
                 for _fn in _cached_files:
-                    _g = to_griddedpsfmodel(_fn)
+                    _g = load_stpsf_grid(_fn)
                     grid.append(_g[0] if isinstance(_g, list) else _g)
 
         if grid is None:
@@ -2615,7 +2628,7 @@ def get_psf_model(filtername, proposal_id, field,
             grid = maybe_apply_epsf_core(grid, _cache_detector, filtername, program=proposal_id)
 
         if use_grid:
-            # to_griddedpsfmodel returns a LIST (one grid per detector) for
+            # psf_grid(all_detectors=True) returns a LIST (one grid per detector) for
             # module='merged'; downstream wants a single grid.
             if isinstance(grid, list):
                 grid = grid[0]
@@ -2639,7 +2652,7 @@ def get_psf_model(filtername, proposal_id, field,
         _psf_grid_path = resolve_merged_psf_grid_path(
             jwst_root, target, instrument, module, filtername,
             proposal_id, field, oversample=oversample, blur=blur)
-        grid = psfgrid = to_griddedpsfmodel(_psf_grid_path)
+        grid = psfgrid = load_stpsf_grid(_psf_grid_path)
 
         psf_model = WrappedPSFModel(grid, stampsz=stampsz)
         dao_psf_model = grid
@@ -2938,6 +2951,13 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
     saturated cores were being lost.  Clearing DQ lets the full model resample.
     Used ONLY for the model; the RESIDUAL keeps the data DQ (a NaN core there is
     correct -- the data IS missing).
+
+    The file is built in a private directory beside ``output_filename`` and
+    moved into place when complete (``atomic_io.publish_into``), because the
+    module and ``merged`` passes can write the same per-frame residual at once
+    (#840).  ``publish_into`` rather than a temporary NAME: ``ImageModel.save``
+    stamps the basename it is given into ``meta.filename``, so the file has to
+    be written under its real name.
     """
     import astropy.io.fits as fits_io
 
@@ -2985,16 +3005,21 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
         except Exception as _ex:
             print(f"save_residual_datamodel: could not zero meta.background "
                   f"({_ex}); i2d mosaic may show a negative pedestal", flush=True)
-        model.save(output_filename, overwrite=True)
+        out_dir = os.path.dirname(os.path.abspath(output_filename))
+        with publish_into(out_dir) as building:
+            staged = os.path.join(building, os.path.basename(output_filename))
+            model.save(staged, overwrite=True)
 
-    # Restore full S_REGION (with CONTINUE support) that ImageModel.save() may have truncated.
-    if s_region is not None:
-        with fits_io.open(output_filename, mode='update') as hdul:
-            for hdu in hdul:
-                if 'S_REGION' in hdu.header:
-                    hdu.header['S_REGION'] = s_region
-                    break
-            hdul.flush()
+            # Restore full S_REGION (with CONTINUE support) that
+            # ImageModel.save() may have truncated -- before publishing, so a
+            # reader never sees the truncated polygon either.
+            if s_region is not None:
+                with fits_io.open(staged, mode='update') as hdul:
+                    for hdu in hdul:
+                        if 'S_REGION' in hdu.header:
+                            hdu.header['S_REGION'] = s_region
+                            break
+                    hdul.flush()
 
 
 def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False):
@@ -3303,6 +3328,70 @@ def _cutout_origin(orig_filename, options):
     return int(xslc.start), int(yslc.start)
 
 
+class _RenderPSFGrids:
+    """Per-detector PSF grids for the merged-catalog render, loaded once each.
+
+    The per-frame fit loads its grid with ``module=<the frame's detector>``
+    (cataloging's phase loop sets ``file_module = file_detector``).  The render
+    used to load ONE grid with the run's ``module``, so frames were rendered
+    with a PSF the fit never used: ``module='nrcb'`` maps to NRCB1, so nrcb2-4
+    were rendered with the NRCB1 grid, and ``module='merged'`` gave every
+    frame the channel's first grid (NRCA1 / NRCA5, B-module frames included).
+    A model rendered with a PSF other than the fitted one leaves a ring or a
+    hole at bright stars.  This keys the render grid by the frame's detector,
+    as the fit does.
+
+    ``loader(detector)`` returns the grid for that detector token.  Grids are
+    cached by stpsf detector name, so tokens naming the same grid
+    ('nrcblong' / 'nrcb5') share one load.  Thread-safe: the render may run on
+    several threads, and each grid is loaded once, under the lock.
+    """
+
+    def __init__(self, loader, filtername, instrument):
+        import threading
+        self._loader = loader
+        self._filtername = filtername
+        self._instrument = instrument
+        self._grids = {}
+        self._lock = threading.Lock()
+
+    def key(self, detector):
+        name = stpsf_detector_for_module(str(detector), self._filtername,
+                                         self._instrument)
+        return name if name is not None else str(detector).lower()
+
+    def __call__(self, detector):
+        key = self.key(detector)
+        with self._lock:
+            grid = self._grids.get(key)
+            if grid is None:
+                grid = self._loader(detector)
+                self._grids[key] = grid
+        return grid
+
+    @property
+    def loaded(self):
+        return sorted(self._grids)
+
+
+def _render_psf_grids(filtername, proposal_id, field, options, obsdate,
+                      basepath, instrument):
+    """`_RenderPSFGrids` loading through `get_psf_model` with the per-frame
+    fit's arguments.  The cached grids are keyed by detector and filter only,
+    so the first frame's ``obsdate`` serves every detector, as it did for the
+    single render grid this replaces."""
+    def _load(detector):
+        grid, _ = get_psf_model(filtername, proposal_id, field, module=detector,
+                                use_webbpsf=True, use_grid=options.each_exposure,
+                                blur=options.blur, target=options.target,
+                                obsdate=obsdate,
+                                basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                                psf_cache_dir=os.path.join(basepath, 'psfs'),
+                                instrument=instrument)
+        return grid
+    return _RenderPSFGrids(_load, filtername, instrument)
+
+
 def _resolve_render_psf_shape(fwhm_pix, grid, default=(21, 21)):
     """Render-stamp size scaled to the PSF FWHM (detector pixels).
 
@@ -3389,6 +3478,10 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     centered on the source rounded to integer pixel coords, but the
     PSF is evaluated at exact (x_fit, y_fit) so sub-pixel registration
     is preserved.
+
+    Each stamp comes from ``psf_render.stamp_function``: the same values
+    ``psf_model.evaluate`` gives on the stamp's meshgrid, through a
+    3-4x faster grid evaluation for a gridded PSF (#1220).
     """
     img = np.zeros(shape, dtype=np.float32)
     if len(table) == 0:
@@ -3401,6 +3494,7 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     yfit = np.asarray(table['y_fit'], dtype=float)
     flux = np.asarray(table['flux_fit'], dtype=float)
 
+    stamp_at = stamp_function(psf_model)
     for i in range(len(table)):
         x0, y0, f0 = xfit[i], yfit[i], flux[i]
         if not (np.isfinite(x0) and np.isfinite(y0) and np.isfinite(f0)):
@@ -3413,26 +3507,30 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
         x_hi = min(nx, ix - half_w + psf_w)
         if y_hi <= y_lo or x_hi <= x_lo:
             continue
-        yy, xx = np.mgrid[y_lo:y_hi, x_lo:x_hi]
-        stamp = psf_model.evaluate(xx.astype(float), yy.astype(float),
-                                   f0, x0, y0)
+        stamp = stamp_at(x_lo, x_hi, y_lo, y_hi, f0, x0, y0)
         img[y_lo:y_hi, x_lo:x_hi] += np.asarray(stamp, dtype=np.float32)
     return img
 
 
-def _run_frame_renders(overlapping_frames, render_fn, n_threads):
-    """Apply ``render_fn`` to each frame, serial or across ``n_threads``.
+def _run_frame_renders(overlapping_frames, render_fn, n_threads, n_procs=1):
+    """Apply ``render_fn`` to each frame: serial, across ``n_threads`` threads,
+    or across ``n_procs`` forked processes (``frame_pool.map_frames``; takes
+    precedence over ``n_threads``).
 
-    Returns results in the SAME order as ``overlapping_frames`` in both modes, so
+    Returns results in the SAME order as ``overlapping_frames`` in every mode, so
     the caller's downstream accumulation is deterministic and byte-identical
-    regardless of thread count.  ``render_fn`` must be a pure function of its
-    frame plus shared read-only state (no cross-frame mutation).  Exceptions from
-    any frame propagate (via ``ThreadPoolExecutor.map`` iteration in the threaded
-    path, or directly in the serial path) -- no frame is silently dropped.
+    regardless of thread or process count.  ``render_fn`` must be a pure function
+    of its frame plus shared read-only state (no cross-frame mutation); in the
+    process path its return value must pickle, and anything else it changes
+    stays in the child.  Exceptions from any frame propagate (via the executor's
+    ``map`` iteration in the parallel paths, or directly in the serial path) --
+    no frame is silently dropped.
 
     Split out from ``build_mergedcat_residuals`` so the serial-vs-parallel
     equivalence of the dispatch is unit-testable (test_mergedcat_render_dispatch).
     """
+    if n_procs > 1 and len(overlapping_frames) > 1:
+        return frame_pool.map_frames(render_fn, overlapping_frames, n_procs)
     if n_threads > 1 and len(overlapping_frames) > 1:
         from concurrent.futures import ThreadPoolExecutor
         n = min(int(n_threads), len(overlapping_frames))
@@ -3441,27 +3539,37 @@ def _run_frame_renders(overlapping_frames, render_fn, n_threads):
     return [render_fn(orig) for orig in overlapping_frames]
 
 
+# key of the per-frame render result that carries "this frame fell back to the
+# model-threshold cover test" (build_mergedcat_residuals summary line)
+_COVER_FALLBACK_KEY = '_satstar_cover_fallback'
+
+
 def _mergedcat_satstar_cover_mode(filtername=None):
     """``MERGEDCAT_SATSTAR_COVER``: how build_mergedcat_residuals decides that a
     frame's satstar model already subtracts a replaced_saturated merged row.
 
-    ``model`` (default, unset or empty): the model-threshold test alone, i.e.
-    the frame's satstar model exceeds the cover threshold in the 7x7 box at the
-    row (the rule in use before this switch existed).
+    ``accepted`` (default, unset or empty): the model-threshold test AND an
+    accepted fit in the frame's own satstar catalog within
+    ``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM`` (default 1.5, the radius the
+    daophot hand-off uses to leave a SATURATED component to an accepted
+    satstar) FWHM of the row.  A row whose star this frame's satstar pass did
+    not fit is rendered from the merged catalog, also where a bright
+    neighbour's satstar-model wing exceeds the threshold at its position.
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1`` makes the per-frame residuals (and so
+    the next phase's background) agree with this render; without it only the
+    merged-catalog residual subtracts those stars.
 
-    ``accepted`` (opt-in): the model-threshold test AND an accepted fit in the
-    frame's own satstar catalog within ``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM``
-    (default 1.5, the radius the daophot hand-off uses to leave a SATURATED
-    component to an accepted satstar) FWHM of the row.  Use it together with
-    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1``: that hand-off is what fits the stars
-    the frame's satstar pass rejected, and this rule is what renders them in
-    the merged-catalog residual instead of leaving them to a neighbour's wing.
+    ``model``: the model-threshold test alone, i.e. the frame's satstar model
+    exceeds the cover threshold in the 7x7 box at the row (the default through
+    main 6399b833).  A bright accepted neighbour's wing passes it, so a star
+    this frame did not fit is subtracted by neither channel; set it to
+    reproduce renders made with that default.
 
     MIRI always gets ``model`` (``filtername`` given): the daophot hand-off
     skips MIRI, MIRI renders uncovered satstars through its own flat-top path,
     and the ``accepted`` rule was measured on NIRCam F480M/F212N only.
     """
-    mode = (os.environ.get('MERGEDCAT_SATSTAR_COVER', '') or 'model').strip().lower()
+    mode = (os.environ.get('MERGEDCAT_SATSTAR_COVER', '') or 'accepted').strip().lower()
     if mode not in ('accepted', 'model'):
         raise ValueError(f"MERGEDCAT_SATSTAR_COVER={mode!r}: expected 'accepted' or 'model'")
     if (mode == 'accepted' and filtername is not None
@@ -3716,13 +3824,9 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
     # PASSED astrometry checkpoint before discovering one absent file (#346).
     psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
-    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
-                               use_webbpsf=True, use_grid=options.each_exposure,
-                               blur=options.blur, target=options.target,
-                               obsdate=obsdate,
-                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
-                               psf_cache_dir=os.path.join(basepath, 'psfs'),
-                               instrument=instrument)
+    render_grids = _render_psf_grids(filtername, proposal_id, field, options,
+                                     obsdate, basepath, instrument)
+    grid = render_grids(frame_identity(overlapping_frames[0], field=field)[3])
     # FWHM-scale the render stamp so broad MIRI long-wavelength PSFs are not
     # clipped (see _resolve_render_psf_shape).  Falls back to the (21,21) default
     # for NIRCam / short-MIRI and if the FWHM lookup fails.
@@ -3754,7 +3858,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     print(f"mergedcat: satstar cover test = {_cover_mode}"
           + (f" (accepted fit of the frame within {_cover_radius_px:.2f} px)"
              if _cover_mode == 'accepted' else '')
-          + (f" (MERGEDCAT_SATSTAR_COVER=accepted is NIRCam-only; {filtername} is MIRI)"
+          + (f" (the accepted rule is NIRCam-only; {filtername} is MIRI)"
              if _cover_mode != _mergedcat_satstar_cover_mode() else ''), flush=True)
 
     written = {k: [] for k in kinds}
@@ -3767,6 +3871,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # NOT --parallel-workers, which every production sbatch already sets.
     # Frame stems must be unique or two threads write the same file.
     _render_threads = max(1, int(getattr(options, 'mergedcat_render_threads', 1) or 1))
+    # --mergedcat-render-procs forks N processes instead (frame_pool, #1230),
+    # which the FITPACK lock and the GIL do not serialize: each child inherits
+    # the grids, catalog and options, writes its frames' files, and returns
+    # their paths.
+    _render_procs = max(1, int(getattr(options, 'mergedcat_render_procs', 1) or 1))
     import threading as _threading
     _save_lock = _threading.Lock()
 
@@ -3793,11 +3902,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # own satstar pass fitted it (_satstar_render_covered)
             satstar_sm, acc_xy = _load_frame_satstar_cover(
                 _fitter_in, sat_suffix, _cover_mode)
-        # re-origin the spatially-varying PSF grid to cutout pixel coords
-        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
-        rg = type(grid)(_NDData(np.asarray(grid.data),
-                                meta={'grid_xypos': shifted_xy,
-                                      'oversampling': grid.oversampling}))
+            if _cover_mode == 'accepted' and satstar_sm is not None:
+                # no usable satstar catalog: this frame keeps the
+                # model-threshold test (counted in the summary line below)
+                _result[_COVER_FALLBACK_KEY] = acc_xy is None
         bn = os.path.basename(orig)
         # JOINT multi-obs runs (field like '002-998'): the per-frame products fold
         # the observation number into vgroup_id (cataloging.py do_photometry frame
@@ -3814,6 +3922,13 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         # keeps the requested ``module`` (merged-module) name.
         (visit_id, vgroup_id, exposure_id,
          frame_detector) = frame_identity(orig, field=field)
+        # Render with this frame's own detector grid -- the one its fit used
+        # (_RenderPSFGrids) -- re-origined to cutout pixel coords.
+        fgrid = render_grids(frame_detector)
+        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in fgrid.grid_xypos]
+        rg = type(fgrid)(_NDData(np.asarray(fgrid.data),
+                                 meta={'grid_xypos': shifted_xy,
+                                       'oversampling': fgrid.oversampling}))
         (visitid_, vgroupid_, exposure_, desat, bgsub,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
@@ -3992,15 +4107,30 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             _result[kind] = (out_resid, out_model, raw_resid, raw_model)
         return _result
 
-    if _render_threads > 1 and len(overlapping_frames) > 1:
+    if _render_procs > 1 and len(overlapping_frames) > 1:
+        # Load every detector's grid before the fork, so the children share
+        # the parent's copy instead of each loading its own.
+        for _orig in overlapping_frames:
+            render_grids(frame_identity(_orig, field=field)[3])
+        print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
+              f"{min(_render_procs, len(overlapping_frames))} processes "
+              f"(--mergedcat-render-procs"
+              + (f"; --mergedcat-render-threads={_render_threads} unused"
+                 if _render_threads > 1 else '') + ")", flush=True)
+    elif _render_threads > 1 and len(overlapping_frames) > 1:
         print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
               f"{min(_render_threads, len(overlapping_frames))} threads "
               f"(--mergedcat-render-threads)", flush=True)
     _frame_results = _run_frame_renders(overlapping_frames, _render_frame,
-                                        _render_threads)
+                                        _render_threads, _render_procs)
     # Accumulate in frame order so the resample input lists are deterministic
     # (identical to the pre-parallel serial append order).
+    _n_cover_acc = _n_cover_fallback = 0
     for _orig, _res in zip(overlapping_frames, _frame_results):
+        _fb = _res.pop(_COVER_FALLBACK_KEY, None)
+        if _fb is not None:
+            _n_cover_fallback += int(_fb)
+            _n_cover_acc += int(not _fb)
         for kind, (out_resid, out_model, raw_resid, raw_model) in _res.items():
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
@@ -4008,6 +4138,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 perframe_record.append({'frame': str(_orig), 'kind': kind,
                                         'raw': [raw_resid, raw_model],
                                         'rendered': [out_resid, out_model]})
+    if _cover_mode == 'accepted':
+        print(f"mergedcat: satstar cover test per frame: accepted-fit rule in "
+              f"{_n_cover_acc}, model-threshold fallback (no usable satstar "
+              f"catalog) in {_n_cover_fallback} of "
+              f"{_n_cover_acc + _n_cover_fallback} frames with a satstar model",
+              flush=True)
     # Per-frame stems must be unique: a collision means two frames wrote the same
     # product (one render lost -> a hole in the mosaic), and under threading the
     # surviving writer would be nondeterministic.  Fail loudly (serial or threaded).
@@ -4086,11 +4222,14 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         # also mosaic the merged-catalog MODEL so the CARTA loaders can show
         # data / model / residual / bg side by side.  This is a full 192-frame
         # resample (~20 min); it is display-only (no pipeline logic reads it and
-        # the release stages only the highest iteration), so intermediate phases
-        # skip it (write_model_i2d=False) -- see run_manual_pipeline.
+        # the release stages only the merged module's highest iteration), so
+        # intermediate phases and the final phase's nrca/nrcb blocks skip it
+        # (write_model_i2d=False) -- see run_manual_pipeline.
         if not write_model_i2d:
-            print(f"mergedcat: skipped {kind} model i2d (intermediate phase; "
-                  f"--manual-keep-intermediate-model-i2d to restore)", flush=True)
+            print(f"mergedcat: skipped {kind} model i2d (an intermediate phase, "
+                  f"or a module the release does not stage; "
+                  f"--manual-keep-intermediate-model-i2d / "
+                  f"--manual-model-i2d-all-modules to write it)", flush=True)
         else:
             model_product = product_name.replace('_mergedcat_residual',
                                                  '_mergedcat_model')
@@ -4174,13 +4313,8 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
     # PASSED astrometry checkpoint before discovering one absent file (#346).
     psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
-    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
-                               use_webbpsf=True, use_grid=options.each_exposure,
-                               blur=options.blur, target=options.target,
-                               obsdate=obsdate,
-                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
-                               psf_cache_dir=os.path.join(basepath, 'psfs'),
-                               instrument=instrument)
+    render_grids = _render_psf_grids(filtername, proposal_id, field, options,
+                                     obsdate, basepath, instrument)
     written = []
     n_kept = n_drop = 0
     for orig in overlapping_frames:
@@ -4188,12 +4322,13 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
         if origin is None:
             continue
         x0, y0 = origin
+        visit_id, vgroup_id, exposure_id, frame_detector = frame_identity(orig)
+        grid = render_grids(frame_detector)
         shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
         rg = type(grid)(_NDData(np.asarray(grid.data),
                                 meta={'grid_xypos': shifted_xy,
                                       'oversampling': grid.oversampling}))
         bn = os.path.basename(orig)
-        visit_id, vgroup_id, exposure_id, _ = frame_identity(orig)
         catfn = _predict_tblfilename(cut_bp, filtername, module, options,
                                      visit_id, vgroup_id, exposure_id,
                                      iteration_label='iter2', method='daophot',
@@ -4510,6 +4645,27 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_high_keep_max'],
                     help="Upper qfit cap for the bright-isolated keep (default 0.4); "
                          "extended-emission knots have worse qfit so stay rejected.")
+    parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
+                    help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "
+                         "source within 0.5 FWHM of a row of the previous phase's "
+                         "vetted catalog is kept while its qfit < this and its S/N "
+                         ">= --manual-ext-hysteresis-snr-min, so a star near a "
+                         "vetting threshold does not drop out (and reappear whole "
+                         "in the residual) when a refit moves its qfit slightly.  "
+                         "The overshoot drop and the extended-emission prominence "
+                         "gate still apply.  Default 0.6; 0 = off.")
+    parser.add_option("--manual-ext-hysteresis-snr-min", dest="manual_ext_hysteresis_snr_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_snr_min'],
+                    help="S/N (flux / flux_err) floor of the previous-phase keep "
+                         "(default 10).")
+    parser.add_option("--manual-ext-hysteresis-satstar-guard-fwhm",
+                    dest="manual_ext_hysteresis_satstar_guard_fwhm",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_satstar_guard_fwhm'],
+                    help="Satstar guard of the previous-phase keep: a source within "
+                         "this many FWHM of a saturated star gets no previous-phase "
+                         "keep, so wing structure fitted as a star in one phase is "
+                         "not carried into the next (default 4.5; 0 = no guard).")
     parser.add_option("--manual-ext-qfit-recover-max", dest="manual_ext_qfit_recover_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_recover_max'],
                     help="RECOVER-tier qfit ceiling for the extended-emission vetting "
@@ -4900,6 +5056,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'one of --filternames.  Default: auto-select the '
                             'reddest broad/medium band (e.g. sickle -> F480M).'),
                       metavar='manual_crossband_ref_filter')
+    parser.add_option('--manual-crossband-ecsv-all-modules',
+                      dest='manual_crossband_ecsv_all_modules',
+                      default=MANUAL_DEFAULTS['manual_crossband_ecsv_all_modules'],
+                      action='store_true',
+                      help=('The m7 cross-band merge writes every module\'s '
+                            'table as FITS, and the ECSV twin only for the '
+                            'merged module (or for every module when the run '
+                            'has no merged module); a skipped module\'s ECSV '
+                            'from an earlier run is removed.  Set this to also '
+                            'write the nrca/nrcb ECSVs (~1 h each on sgrb2).'))
     parser.add_option('--manual-crossband-seed-dedup-mas', type=float,
                       dest='manual_crossband_seed_dedup_mas', default=30.0,
                       help=('Dedup radius (mas) for the m7 cross-band union seed: '
@@ -5155,6 +5321,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'pipeline logic, so skipping them saves ~1 resample per '
                             'intermediate phase (~5 per filter). Set this to restore the '
                             'old behaviour of writing the model i2d every phase.'))
+    parser.add_option('--manual-model-i2d-all-modules',
+                      dest='manual_model_i2d_all_modules',
+                      default=MANUAL_DEFAULTS['manual_model_i2d_all_modules'],
+                      action='store_true',
+                      help=('The final phase builds the merged-catalog MODEL i2d '
+                            'for the merged module only -- the one a release '
+                            'stages -- or for every module when the run has no '
+                            'merged module (a disjoint field). Set this to also '
+                            'build the nrca/nrcb model i2d (display-only; ~half '
+                            'of the model resample time).'))
     parser.add_option('--manual-keep-intermediate-smoothed-bg',
                       dest='manual_keep_intermediate_smoothed_bg',
                       default=MANUAL_DEFAULTS['manual_keep_intermediate_smoothed_bg'],
@@ -5230,6 +5406,26 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'does not silently enable the threaded render on live '
                             'jobs -- validate byte-identity against the serial '
                             'path before raising it.'))
+    parser.add_option('--mergedcat-render-procs', dest='mergedcat_render_procs',
+                      default=1, type='int',
+                      help=('Render the per-frame merged-catalog residual/model '
+                            'images (build_mergedcat_residuals) in N forked '
+                            'processes.  Default 1 = serial.  Frames are '
+                            'gathered in frame order, so the output is identical '
+                            'to the serial path (#1230).  Unlike the threads of '
+                            '--mergedcat-render-threads, the processes are not '
+                            'serialized by the GIL or by scipy\'s FITPACK lock; '
+                            'takes precedence over that option.  Each process '
+                            'adds one frame\'s working arrays to the memory in '
+                            'use.'))
+    parser.add_option('--forced-fill-procs', dest='forced_fill_procs',
+                      default=1, type='int',
+                      help=('Prepare and force-fit the m8 forced fill\'s frames '
+                            'in N forked processes.  Default 1 = serial.  The '
+                            'per-frame fluxes and variances are summed in frame '
+                            'order, so the m8 catalog is identical to the serial '
+                            'path (#1230).  Each process adds one prepared '
+                            'frame to the memory in use.'))
     (options, args) = parser.parse_args()
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the

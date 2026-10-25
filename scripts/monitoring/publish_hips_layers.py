@@ -48,6 +48,7 @@ import argparse
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -82,12 +83,20 @@ LAYERS = {
     # it is a thing to turn on rather than a background to work against.
     'gctreasury_mosaic_RGB_770-480-212_hips':
         f'{MOSAIC_BUILD}/gctreasury_mosaic_RGB_770-480-212_hips',
+    # The same composite with its red channel taken from N. Budaiev's combined
+    # F770W mosaic (gc10678_f770w_combined_i2d.fits) in place of the treasury's
+    # own F770W mosaic.  This is the RGB layer the Aladin viewers load (`trgb`
+    # in jwst_gc_aladin.html and in every per-field viewer); the entry above
+    # is linked only from the avm_images index.  It reached both hosts by hand
+    # on 2026-10-10 and had no scheduled path until this entry.
+    'gctreasury_nbmosaic_RGB_770-480-212_hips':
+        f'{MOSAIC_BUILD}/gctreasury_nbmosaic_RGB_770-480-212_hips',
     # Star-subtracted ("residual") twins of the layers above, built from the
     # DAOPHOT residual mosaics the cataloguing chain writes beside each i2d.
     # The quicklook builder renders a tile once its chain reaches the final
     # residual stage (resbgsub_m7 NIRCam, resbgsub_m6 MIRI), with the same
     # cuts as the image flavour so the two can be toggled on the same sky;
-    # pct and bgmatch have no residual twin.  The RGB composite
+    # pct has no residual twin.  The RGB composite
     # (gctreasury_mosaic_RGB_770-480-212_residual_hips) is NOT registered:
     # only five MIRI tiles have residuals yet and the NIRCam residuals do not
     # cover them, so it renders as F770W alone.
@@ -95,6 +104,16 @@ LAYERS = {
         f'{BUILD_ROOT}/jwst_gc_treasury_residual_vminmax_hips',
     'jwst_gc_treasury_residual_log_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_residual_log_hips',
+    # The residual vminmax cuts after removing one offset per tile and filter,
+    # solved on the residual mosaics themselves (jwst_scripts
+    # `--nircam-match --residual`).  The crf frames are never sky-matched, so
+    # each tile sits on its own sky pedestal (up to ~2 MJy/sr apart in F480M),
+    # and with the stars subtracted that pedestal is what the residual layers
+    # show at every tile edge.  vminmax and log above stay uncorrected: they
+    # are the last-line QA view, where a seam is a finding about the
+    # reduction.  This layer is the one to read the diffuse emission from.
+    'jwst_gc_treasury_residual_bgmatch_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_residual_bgmatch_hips',
     'jwst_gc_treasury_miri_residual_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_miri_residual_hips',
     # Single-filter grey versions of the NIRCam residual layer, one per band,
@@ -565,5 +584,31 @@ def main(argv=None):
     return rc
 
 
+def exit_on_sigterm():
+    """Turn SIGTERM into ``SystemExit`` so `build_lock`'s ``finally`` runs.
+
+    SLURM ends a job at its time limit with SIGTERM (SIGKILL follows after
+    ``KillWait``), and ``scancel`` and preemption send the same signal.
+    Python's default action for SIGTERM ends the process without unwinding,
+    so the ``finally`` that removes the lock never runs and the lock stays
+    behind until `LOCK_STALE_S` (6 h) has passed.  That happened to the
+    2026-09-30 publish (job 43949285) and twice on 2026-10-04 to the build
+    entry (#1005); each time every later build and publish waited the
+    lock out.  Raising ``SystemExit`` unwinds the stack: the lock file is
+    removed, and a running rsync/ssh child is killed by `subprocess.run`
+    on the way out.  A staged ``<layer>.new`` left behind is harmless, as
+    the next run reseeds it.
+
+    Installed only when run as a script, so importing the module (tests,
+    other tools) leaves the caller's signal handling alone.
+    """
+    def _raise(signum, frame):
+        print(f'received signal {signum}; releasing the build lock and '
+              f'exiting', file=sys.stderr, flush=True)
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, _raise)
+
+
 if __name__ == '__main__':
+    exit_on_sigterm()
     sys.exit(main())

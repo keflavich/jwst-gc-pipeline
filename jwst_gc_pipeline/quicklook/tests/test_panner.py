@@ -123,7 +123,7 @@ def test_consecutive_stops_are_close(build, tmp_path):
 def test_the_page_points_at_the_fixed_cut_layer(build, tmp_path):
     """A per-field stretch would make a continuous pan read as brightness
     steps at every tile edge."""
-    assert panner.SURVEY_URL.endswith('jwst_gc_treasury_vminmax_hips/')
+    assert panner.SURVEY_URL.endswith('jwst_gc_treasury_vminmax_satfill_hips/')
     page = panner.render_page()
     assert 'aladin' in page.lower()
     assert panner.DATA_FILE in page
@@ -548,7 +548,7 @@ def _composite_setup(tmp_path, in_rgb, under_nircam):
     root = tmp_path / 'avm'
     _served(root, 'gctreasury_mosaic_RGB_770-480-212_hips', 12,
             [miri[i] for i in in_rgb])
-    _served(root, 'jwst_gc_treasury_vminmax_hips', 14,
+    _served(root, 'jwst_gc_treasury_vminmax_satfill_hips', 14,
             [miri[i] for i in under_nircam])
     return hips, fp, root
 
@@ -586,7 +586,7 @@ def test_the_composite_skips_parallels_with_no_nircam_under_them(build,
                                       under_nircam=[1])
     assert _composite_stops(build, tmp_path, hips, fp, root) == ['o128']
     out = capsys.readouterr().out
-    assert 'nothing from jwst_gc_treasury_vminmax_hips under 2' in out
+    assert 'nothing from jwst_gc_treasury_vminmax_satfill_hips under 2' in out
     assert 'o127, o129' in out
 
 
@@ -599,8 +599,8 @@ def test_the_zoom_follows_the_coadds_own_order(build, tmp_path):
     fp = tmp_path / 'footprints.json'
     _footprints(fp, [_with_miri(n, i) for i, n in enumerate(('127', '128'))])
     root = tmp_path / 'avm'
-    (root / 'jwst_gc_treasury_vminmax_hips').mkdir(parents=True)
-    (root / 'jwst_gc_treasury_vminmax_hips' / 'properties').write_text(
+    (root / 'jwst_gc_treasury_vminmax_satfill_hips').mkdir(parents=True)
+    (root / 'jwst_gc_treasury_vminmax_satfill_hips' / 'properties').write_text(
         'hips_order = 13\n')
     out = tmp_path / 'site'
     build.main(['--hips-dir', str(hips), '--footprints', str(fp),

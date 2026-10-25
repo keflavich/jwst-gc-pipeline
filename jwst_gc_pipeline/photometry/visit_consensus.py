@@ -663,6 +663,55 @@ def _fraction_within_footprint(reference, coords, pad_arcsec=30.0):
     return float(inside.sum()) / len(reference)
 
 
+def _parity_sort_key(key):
+    """Order exposures by pointing, then detector, then exposure number.
+
+    ``key`` is an :func:`exposure_key` tuple ``(visit, exposure, module,
+    filter, vgroup)``.  Every element but the exposure number is compared as a
+    string and the exposure number as an int, so a missing value (``None``,
+    or ``'None'`` after ``str``) sorts consistently instead of raising.
+    """
+    visit, exposure, module = key[0], key[1], key[2]
+    filtername = key[3] if len(key) > 3 else ''
+    vgroup = key[4] if len(key) > 4 else ''
+    exp_no = exposure if isinstance(exposure, (int, np.integer)) else -1
+    return (str(visit), str(filtername), str(vgroup), str(module), int(exp_no))
+
+
+def parity_halves(keys):
+    """Assign each exposure to parity half 0 or 1 from its identity alone.
+
+    Sort the exposures by (visit, filter, vgroup, detector, exposure number)
+    and alternate: position 0, 2, 4, ... -> half 0; 1, 3, 5, ... -> half 1.
+    A detector's dithers are adjacent in that order, so a detector with an
+    even number of exposures splits evenly (6 -> exposures 1, 3, 5 and 2, 4,
+    6), and every exposure keeps same-detector neighbours in the opposite
+    half -- the stars it actually overlaps.  An odd-sized group hands the
+    next group the other starting half, so singletons (a mosaic of one
+    exposure per pointing) still alternate and the halves stay balanced.
+
+    The assignment depends only on WHICH catalogs exist.  It used to
+    alternate by rank of ``n_reliable``, which moved whenever a few stars
+    changed: a re-catalog with a different photometry config reshuffled the
+    halves, each exposure's reference became the median frame of a different
+    1-3 same-detector exposures, and its m2 reading moved 1-2 mas with
+    nothing about the frame changed (10678 F212N, 151 consecutive m2 record
+    pairs over 68 tiles: per-detector max |delta| median 0.78 mas where a
+    detector's halves flipped, 0.20 mas where they did not).  Rank-by-count could also put all of a detector's
+    exposures in one half -- o043 nrca3 5+1 then 6+0, and cloudc F182M o002's
+    four nrcb2 exposures alone in one half with no partner across (#626).
+
+    Pass the keys of ALL ingested exposures, not only the usable ones, so an
+    exposure dropping below ``min_stars`` does not shift its siblings.  The
+    builder re-alternates over the usable set only when dropouts leave one
+    half with under a quarter of the usable exposures.
+    """
+    order = sorted(range(len(keys)), key=lambda i: (_parity_sort_key(keys[i]), i))
+    parity = np.zeros(len(keys), dtype=int)
+    parity[order[1::2]] = 1
+    return parity
+
+
 def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                           match_radius=0.2 * u.arcsec, min_exposures=2,
                           min_stars=50, context="", restrict_to=None,
@@ -891,7 +940,8 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     #      O(n^2) measure_offset calls each rebuilding a KD tree on a growing
     #      multi-million-star union (a 192-exposure brick filter spent 9+
     #      hours there).  Split the exposures into two fixed pooled halves
-    #      (alternating by size rank so both cover the mosaic), measure each
+    #      (alternating by exposure number within each detector --
+    #      ``parity_halves`` -- so both cover the mosaic), measure each
     #      exposure ONCE against the opposite half (KD tree cached on the two
     #      fixed objects), bridge the half-frames with one half-vs-half
     #      measurement.  A bad exposure is a small minority of its half's
@@ -899,6 +949,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     #      Untied exposures are ISLANDS (component -1), reference-tie only.
     rel = [None] * len(usable)
     comp_id = np.full(len(usable), -1, dtype=int)
+    parity = None          # parity-halves path only; recorded per exposure
     if len(usable) <= 16:
         remaining = set(range(len(usable)))
         n_components = 0
@@ -990,9 +1041,17 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                     grew = True
             n_components += 1
     else:
-        order = np.argsort([-e["n_reliable"] for e in usable])
-        parity = np.zeros(len(usable), dtype=int)
-        parity[order[1::2]] = 1
+        parity = parity_halves([e["key"] for e in entries])[usable_idx]
+        n_odd = int(parity.sum())
+        if min(n_odd, len(parity) - n_odd) < len(parity) // 4:
+            # Dropouts correlated with exposure parity (every even dither
+            # unusable) starved one half; with no opposite half nothing ties
+            # and the build aborts.  Re-alternate over the usable exposures,
+            # still by identity alone.
+            print(f"astrom consensus [{context}]: parity halves "
+                  f"{len(parity) - n_odd}+{n_odd} over the usable exposures "
+                  f"after dropouts; re-alternating over the usable set")
+            parity = parity_halves([e["key"] for e in usable])
         halves = {}
         for par in (0, 1):
             sel = [i for i in range(len(usable)) if parity[i] == par]
@@ -1010,9 +1069,21 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         if 0 in halves and 1 in halves:
             # correction to move the ODD half onto the EVEN half's frame
             # (both halves cover the full mosaic; capped uniform subsamples
-            # keep this single measure cheap without moving the peak)
+            # keep this single measure cheap without moving the peak).
+            #
+            # The even half goes in as a KDTreeReference so the bridge takes
+            # the tree path, like the per-exposure ties below.  Handed a plain
+            # SkyCoord it took the astropy path, whose 2000-point subsample
+            # floor ignores the pair budget: on sgrb2 F182M (500k vs 500k
+            # stars) the 30" and 60" windows materialized 56M and 194M pairs,
+            # and the bridge took 2256 s of a 6271 s checkpoint.  On the tree
+            # path the same sweep took 63 s and returned the same window,
+            # offset and contrast.
+            bridge_ref = _cap_stars(halves[0].coords)
+            bridge_ref = (halves[0] if len(bridge_ref) == len(halves[0])
+                          else KDTreeReference(bridge_ref))
             half_bridge = measure_offset(_cap_stars(halves[1].coords),
-                                         _cap_stars(halves[0].coords), sweep=True,
+                                         bridge_ref, sweep=True,
                                          confirm_windows=True,
                                          context=f"{context} half1 vs half0")
         for i, e in enumerate(usable):
@@ -1202,6 +1273,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             restrict_refused=e.get("restrict_refused"),
             restrict_list_coverage=e.get("restrict_list_coverage"),
             component=int(comp_id[pos]),
+            parity_half=(int(parity[pos]) if parity is not None else None),
             internal_tie=bool(rel[pos] is not None and rel[pos]["npairs"] > 0
                               and (comp_id == comp_id[pos]).sum() > 1),
             vs_consensus=res, unverified=not measurable,

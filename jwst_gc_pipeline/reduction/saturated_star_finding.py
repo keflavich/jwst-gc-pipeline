@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 #os.environ['stpsf_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
 import stpsf
-from jwst_gc_pipeline.atomic_io import publish_into
+from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
@@ -20,7 +20,7 @@ from jwst_gc_pipeline.photometry.wingcal import (
     bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
     MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
     relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 from photutils.psf import GriddedPSFModel
 
 
@@ -207,7 +207,7 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
     if os.path.exists(str(psf_fn)):
         # As a file
         log.info(f"Loading grid from psf_fn={psf_fn}")
-        big_grid = to_griddedpsfmodel(psf_fn)  # file created 2 cells above
+        big_grid = load_stpsf_grid(psf_fn)  # file created 2 cells above
         if isinstance(big_grid, list):
             print(f"PSF IS A LIST OF GRIDS!!!", flush=True)
             big_grid = big_grid[0]
@@ -548,11 +548,74 @@ def _resolve_satstar_severity_floor(filtername, explicit=None):
     return float(SAT_SEVERITY_FLOOR.get(str(filtername).lower(), 0.0))
 
 
+#: Columns of ``*_satstar_severity_dropped.fits``.
+SEVERITY_DROP_COLUMNS = ('xcentroid', 'ycentroid', 'core_peak', 'npix',
+                         'sat_severity_floor', 'sat_data_floor')
+
+
+def severity_drop_records(sci, sources, drop_lab, core_peak):
+    """One record per component the pre-fit severity gate drops.
+
+    The position is the component's brightest finite ``sci`` pixel: the gate
+    only drops components with no NaN-variance pixel, so the star's own peak
+    is in the component, and ``_handoff_restore_pixels`` finds the component
+    from the 3x3 pixels around it.
+    """
+    sci = np.asarray(sci, dtype=float)
+    vals = np.where(np.isfinite(sci), sci, -np.inf)
+    drop_lab = np.asarray(drop_lab, dtype=int)
+    pos = ndimage.maximum_position(vals, labels=sources, index=drop_lab)
+    npix = ndimage.sum_labels(np.ones(sources.shape), labels=sources,
+                              index=drop_lab)
+    return [{'xcentroid': float(p[1]), 'ycentroid': float(p[0]),
+             'core_peak': float(pk), 'npix': int(n)}
+            for p, pk, n in zip(pos, np.atleast_1d(core_peak),
+                                np.atleast_1d(npix))]
+
+
+def severity_drop_table(records, saturated, severity_floor, data_floor=None):
+    """``*_satstar_severity_dropped.fits`` rows: severity-gate drops that no
+    later seeding put back.
+
+    The peak / sub-floor / partner / sibling seeding after the gate can
+    re-seed a dropped star, which then reaches the fit and, if rejected, the
+    gate-reject hand-off.  Only drops whose peak pixel is outside the final
+    ``saturated`` mask are kept: those leave the satstar channel with no fit
+    and no ``*_satstar_rejected.fits`` row, and their any-group SATURATED
+    core is masked out of the daophot fit, so neither channel models them
+    unless they are handed off (cataloging ``_severity_drop_handoff_xy``).
+    Always returns a table (possibly empty) so a rerun overwrites a stale file.
+
+    ``data_floor`` (the frame's ``sat_data_floor``, 0 when off) is stored per
+    row for the hand-off's transient guard: a drop whose own ``core_peak`` is
+    below it is not handed off.  The data-floor gate tests the 5 px maximum
+    filter, so a cosmic-ray SATURATED block on the sky next to an unsaturated
+    star passes it on the star's pixels.
+    """
+    keep = []
+    ny, nx = np.shape(saturated)
+    for rec in records:
+        ix, iy = int(round(rec['xcentroid'])), int(round(rec['ycentroid']))
+        if 0 <= iy < ny and 0 <= ix < nx and saturated[iy, ix]:
+            continue
+        keep.append(rec)
+    tab = table.Table(
+        {'xcentroid': np.array([r['xcentroid'] for r in keep], dtype=float),
+         'ycentroid': np.array([r['ycentroid'] for r in keep], dtype=float),
+         'core_peak': np.array([r['core_peak'] for r in keep], dtype=float),
+         'npix': np.array([r['npix'] for r in keep], dtype=int),
+         'sat_severity_floor': np.full(len(keep), float(severity_floor or 0.0)),
+         'sat_data_floor': np.full(len(keep), float(data_floor or 0.0))})
+    tab.meta['NDROPPED'] = len(records)  # gate drops before re-seeding
+    return tab
+
+
 def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                          spike_merge_gap=0, spike_merge_ratio=3.0,
                          sat_data_floor=0.0, severity_floor=0.0,
                          partner_xy=None, partner_frac=0.25,
-                         sibling_xy=None, sibling_radius_px=None):
+                         sibling_xy=None, sibling_radius_px=None,
+                         severity_drops=None):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -578,6 +641,10 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     spike_merge_ratio : float, optional
         A satellite is folded into the core only if core_area >= this x
         satellite_area, protecting comparable-size separate stars.
+    severity_drops : list, optional
+        When given, one dict per component the pre-fit severity gate drops is
+        appended to it (``severity_drop_records``): the components this
+        channel disowns as weakly saturated, for the daophot hand-off.
 
     Returns
     -------
@@ -606,8 +673,12 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     #     The FIT has never used `saturated & _unrecoverable` -- that pair only
     #     sets a diagnostic flag bit below -- and `isnan(VAR_POISSON)` is not a
     #     portable truly-lost test anyway: on a _cal product it can be empty
-    #     while every SATURATED pixel is DO_NOT_USE, and on the _crf sibling it
-    #     covers all of them.
+    #     while every SATURATED pixel is DO_NOT_USE.  Where it is populated it
+    #     marks only the SATURATED pixels with no good group (SATURATED &
+    #     DO_NOT_USE, SCI/ERR/VAR_* all NaN), not every SATURATED pixel: on
+    #     the 10678 _cal and _destreak_crf frames that is 14.7% of them on
+    #     NRCBLONG F480M and 22% on NRCB1, and the rest kept a finite
+    #     ramp-fit rate and variance (identical counts in _cal and _crf).
     #     OPEN (#213): whether frame0-recovered wings should instead be fit
     #     -- see #213 and SATURATED_PIXEL_HANDLING.md section 2b.
     # SATSTAR_SEED_REQUIRE_DO_NOT_USE=1 restores the old narrow seed, for
@@ -734,6 +805,9 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
         drop_lab = _idx[(~comp_unrec) & np.isfinite(comp_coremax)
                         & (comp_coremax < float(severity_floor))]
         if len(drop_lab):
+            if severity_drops is not None:
+                severity_drops.extend(severity_drop_records(
+                    sci, sources, drop_lab, comp_coremax[drop_lab - 1]))
             saturated = saturated & (~np.isin(sources, drop_lab))
             sources, nsource = label(saturated)
             print(f"Saturated starfinding: severity gate ({severity_floor:g} "
@@ -1051,8 +1125,15 @@ def satstar_fit_switches(env=None):
       (1.3): truncate the R(g0) calibration curve at the first bin-to-bin
       change larger than MAXSTEP, up or down (see
       ``zeroframe_recover_saturated``).
-    * ``SATSTAR_ZF_KEEP_FINITE`` (default OFF): SATURATED pixels with a finite,
-      nonzero ramp-fit rate and no DO_NOT_USE are neither rewritten nor masked.
+    * ``SATSTAR_ZF_KEEP_FINITE`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``,
+      which cataloging turns on for extended-emission NIRCam): SATURATED pixels
+      with a finite, nonzero ramp-fit rate and no DO_NOT_USE are neither
+      rewritten nor masked.  On wd2 (#1092), with the cap and
+      ``SATSTAR_ZF_FIRST_FRAME`` on, the rewrite read 5-8% above the crf at
+      the replaced F150W pixels and the 14.5-16.5 mag saturated stars read
+      0.05 mag brighter than the unsaturated ones; keeping the crf removed
+      that offset on F150W nrcb3 and reduced the F277W nrcblong 14-17 mag
+      offset from +0.03 to -0.01.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
       observed-peak second chance reads the crf values, not the rewrite.
     * ``SATSTAR_ERR_BKG_SCATTER`` (default OFF; ``cataloging`` turns it on for
@@ -1083,6 +1164,23 @@ def satstar_fit_switches(env=None):
       positive, no DO_NOT_USE, group 0 clean); when the two differ by more
       than a factor ``_RCURVE_SATCHECK_MAX_RATIO`` the curve is rebuilt from
       those pixels (``zeroframe_recover_saturated``).
+    * ``SATSTAR_ZF_R_HEADER`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``):
+      the rim rewrite uses PHOTMJSR / t(group 0) (``zeroframe_header_R``) in
+      place of the measured R(g0) curve, on NIRCam frames where an R was
+      measured.  The curve's calibration pixels are mostly the wings of
+      saturated stars, inflated by charge migration: on wd2 the SW curve sat
+      4-9% above the header rate on nrcb3/nrcb4 and 1-2% on nrcb1, and the
+      nrcb3 satstars read 0.06 mag brighter than the nrcb1 ones (#1142).
+      The rewrite subtracts the level a destreak removed after calibration,
+      cal - crf per row and amplifier (``zeroframe_cal_offset``; 0 when no
+      sibling cal exists or nothing was removed).
+    * ``SATSTAR_ZF_FLAT`` (default OFF): the rim rewrite is divided by the
+      pixel flat the calibration applied (``R_FLAT``, read from the CRDS
+      cache by ``zeroframe_pixel_flat``), and a measured R(g0) curve is
+      calibrated on cal x flat / group 0.  The crf is rate x PHOTMJSR /
+      flat while group 0 is raw DN, so R x group 0 alone leaves each
+      rewritten pixel off by its flat value (wd2 SW and LW: 16-84% range
+      0.97-1.02 at the rim pixels).
     * ``SATSTAR_SEED_CORE_DQ`` (default ON): NaN-variance pixels flagged
       OUTLIER or by the bad-pixel mask are left out of the "genuine
       saturation core" the seed refinement centres on
@@ -1113,13 +1211,15 @@ def satstar_fit_switches(env=None):
     return {
         'rcurve_guard': _env_switch('SATSTAR_ZF_RCURVE_GUARD', True, env),
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
-        'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', False, env),
+        'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', cap_on, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
         'err_bkg_scatter': _env_switch('SATSTAR_ERR_BKG_SCATTER', False, env),
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
         'first_frame': _env_switch('SATSTAR_ZF_FIRST_FRAME', cap_on, env),
         'rim_badpix': _env_switch('SATSTAR_ZF_RIM_BADPIX', True, env),
         'rcurve_satcheck': _env_switch('SATSTAR_ZF_RCURVE_SATCHECK', True, env),
+        'r_header': _env_switch('SATSTAR_ZF_R_HEADER', cap_on, env),
+        'zf_flat': _env_switch('SATSTAR_ZF_FLAT', False, env),
         'seed_core_dq': _env_switch('SATSTAR_SEED_CORE_DQ', True, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
@@ -1153,6 +1253,86 @@ def _satstar_data_floor_signature(filename, env=None):
     if table > 0 and readout is not None and 0 < readout < table:
         return f"dfr{_satstar_data_floor_readout_frac(env):g}"
     return ''
+
+
+def satstar_uncapped_flux_filters(env=None):
+    """Bandpasses whose satstar CATALOG flux is reported without the
+    recovered-core cap, from ``NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS``.
+
+    Comma- and/or space-separated bandpass names, case-insensitive (returned
+    upper-case); unset or blank -> empty, i.e. no behaviour change.  See
+    ``apply_uncapped_flux`` (#1186)."""
+    env = os.environ if env is None else env
+    raw = env.get('NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS') or ''
+    return frozenset(tok.upper() for tok in raw.replace(',', ' ').split())
+
+
+def _frame_bandpass(header):
+    """The science bandpass of an exposure header (pupil-wheel narrow/medium
+    bands win over the wide filter-wheel blocker, #950), upper-case; ``''``
+    when the header names no bandpass."""
+    from ..mast_names import filtername_from_header
+    try:
+        return str(filtername_from_header(header)).upper()
+    except (ValueError, KeyError):
+        return ''
+
+
+def apply_uncapped_flux(base_tab, filtername, env=None):
+    """Opt-in "option B" for the recovered-core cap (#1186): report the
+    UNCAPPED satstar flux in the catalog while the model and residual keep
+    the capped amplitude.
+
+    ``NIRCAM_SATSTAR_RECOVERED_CAP`` lowers ``flux_fit`` (the pre-cap value is
+    kept in ``flux_fit_precap``).  In wd2 that leaves F323N/F405N/F466N
+    saturated stars +0.03..+0.05 mag faint against dolphot and the
+    unsaturated scale, and the capped catalog flux carries more frame-to-frame
+    scatter.  When ``filtername`` is listed in
+    ``NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS`` (see
+    ``satstar_uncapped_flux_filters``), every row whose cap bound
+    (finite ``flux_fit_precap`` > the capped flux) gets
+    ``flux_fit = flux_fit_precap / wingcal_ratio`` (the wing self-calibration
+    ratio, 1 where none was applied, so the pooled fallback in
+    ``merge_catalogs.apply_pooled_wingcal`` still divides it afterwards) and
+    ``flux_err`` is multiplied by the same factor as ``flux_fit`` changed,
+    which keeps the row's S/N.  ``flux_uncapped`` (bool) marks the replaced
+    rows; it is added only for listed bandpasses, so the default catalog
+    schema (and per-frame catalogs cached before this switch) is unchanged.
+
+    ``flux_fit_raw``, ``flux_fit_precap``, the satstar model and the residual
+    are untouched.  Out-of-field (``outside_fov_seed``) rows are skipped: their
+    ``flux_fit`` feeds ``reconcile_outside_fov_satstar_fluxes`` ->
+    ``flux_overrides``, which sets the amplitude of the forced model, so
+    uncapping them would change a subtracted model.  Frames whose bandpass is
+    listed carry ``uf`` in ``satstar_fit_switch_signature``."""
+    if base_tab is None:
+        return base_tab
+    if str(filtername).upper() not in satstar_uncapped_flux_filters(env):
+        return base_tab
+    n = len(base_tab)
+    replaced = np.zeros(n, dtype=bool)
+    if n and 'flux_fit_precap' in base_tab.colnames:
+        flux = np.asarray(base_tab['flux_fit'], dtype=float)
+        ratio = (np.asarray(base_tab['wingcal_ratio'], dtype=float)
+                 if 'wingcal_ratio' in base_tab.colnames else np.ones(n))
+        raw = (np.asarray(base_tab['flux_fit_raw'], dtype=float)
+               if 'flux_fit_raw' in base_tab.colnames else flux * ratio)
+        pre = np.asarray(base_tab['flux_fit_precap'], dtype=float)
+        with np.errstate(invalid='ignore'):
+            replaced = np.isfinite(pre) & np.isfinite(raw) & (raw > 0) & (pre > raw)
+        if 'outside_fov_seed' in base_tab.colnames:
+            replaced &= ~np.asarray(base_tab['outside_fov_seed'], dtype=bool)
+        if replaced.any():
+            factor = np.where(replaced, pre / np.where(raw > 0, raw, 1.0), 1.0)
+            base_tab['flux_fit'] = np.where(replaced, pre / ratio, flux)
+            if 'flux_err' in base_tab.colnames:
+                base_tab['flux_err'] = (
+                    np.asarray(base_tab['flux_err'], dtype=float) * factor)
+            print(f"uncapped flux: {filtername}: {int(replaced.sum())}/{n} "
+                  f"satstar catalog flux(es) reported without the "
+                  f"recovered-core cap", flush=True)
+    base_tab['flux_uncapped'] = replaced
+    return base_tab
 
 
 def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
@@ -1201,6 +1381,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             zf += 'f'
         if sw['rcurve_satcheck']:
             zf += 'c'
+        if sw['r_header']:
+            zf += 'h'
+        if sw['zf_flat']:
+            zf += 'p'
         if zf:
             parts.append('zf' + zf)
     if sw['qfit_local_r'] > 0:
@@ -1225,6 +1409,19 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
+    if satstar_uncapped_flux_filters(env):
+        # NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS changes the per-frame catalog
+        # flux_fit/flux_err (not the model) of the listed bandpasses (#1186),
+        # so a catalog written without it is stale there.  Only a frame whose
+        # own bandpass is listed gets the part; the default (empty list) and
+        # every unlisted band keep their keys.
+        try:
+            with fits.open(filename) as fh:
+                _bp = _frame_bandpass(fh[0].header)
+        except OSError:
+            _bp = ''
+        if _bp in satstar_uncapped_flux_filters(env):
+            parts.append('uf')
     return '_'.join(parts)
 
 
@@ -1414,7 +1611,9 @@ def seed_saturation_core(unrecoverable, dq, env=None):
 def zeroframe_rim_error(data, err, rim, *, floor=True):
     """1-sigma fit error with the ZEROFRAME-rewritten rim filled in.
 
-    The crf ERR is NaN at SATURATED pixels.  A rewritten rim pixel gets 5% of
+    The crf ERR is NaN at SATURATED pixels with no good group (DO_NOT_USE),
+    which the rewrite covers; SATURATED pixels with a good group keep a finite
+    ERR and are left alone below.  A rewritten rim pixel gets 5% of
     its value (the per-pixel scatter of the R calibration).  With ``floor``
     that error is at least the median finite, positive ERR of the frame: a
     value read from a single group cannot be measured better than a typical
@@ -1438,7 +1637,8 @@ def zeroframe_rim_error(data, err, rim, *, floor=True):
 def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                                 g0_sat_frac=0.9, sat_dilate=3, infl_tol=0.10,
                                 R=None, group0_saturated=None,
-                                first_frame=None, R_header=None):
+                                first_frame=None, R_header=None,
+                                cal_offset=None, flat=None):
     """Recover the saturated-star RIM from the ramp first read (group-0).
 
     A bright star's DQ-SATURATED region reads wrong in the calibrated frame: the
@@ -1456,9 +1656,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
 
         R = median(cal / group0)  over BRIGHT unsaturated pixels (group0>R_g0_min)
 
-    is ~constant (calibration-free: cal[MJy/sr] ~ rate*photom*flat and
-    group0[DN] ~ rate*tframe, so R ~ photom*flat/tframe; measured 5% scatter for
-    group0>2000).  Then at saturated pixels whose group-0 is UNSATURATED (the
+    is ~constant (calibration-free: cal[MJy/sr] = rate*photom/flat and
+    group0[DN] ~ rate*tframe, so R ~ photom/(flat*tframe); measured 5% scatter
+    for group0>2000).  The per-pixel 1/flat factor is in the crf and not in
+    group 0; ``flat`` (``SATSTAR_ZF_FLAT``) puts it into the rewrite.  Then at saturated pixels whose group-0 is UNSATURATED (the
     rim), replace the inflated cal with R*group0 (de-inflated truth) so the
     PSF-subtracted residual collapses to ~0.  Where group-0 ALSO saturates (the
     deep core), it cannot be recovered -> returned in ``deep_core_mask``.
@@ -1473,14 +1674,17 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     default ON).
     Every measured curve is logged (faint-bin R, bright-end R, R used), with a
     WARNING when the R used at the bright end is below half the faint-bin R.
-    ``SATSTAR_ZF_KEEP_FINITE`` (default OFF) leaves SATURATED pixels that have
-    a valid ramp-fit rate alone.  ``SATSTAR_ZF_RIM_BADPIX`` (default ON) leaves
-    DEAD, HOT and REFERENCE_PIXEL pixels out of the rim.
+    ``SATSTAR_ZF_KEEP_FINITE`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``)
+    leaves SATURATED pixels that have a valid ramp-fit rate alone.
+    ``SATSTAR_ZF_RIM_BADPIX`` (default ON) leaves DEAD, HOT and
+    REFERENCE_PIXEL pixels out of the rim.
     ``SATSTAR_ZF_RCURVE_SATCHECK`` (default ON) rebuilds a measured curve that
     disagrees by more than a factor 2 with the SATURATED pixels the ramp fit
     measured, and, when too few such pixels exist, replaces a curve that
-    disagrees by more than a factor 2 with ``R_header``.  See
-    ``satstar_fit_switches``.
+    disagrees by more than a factor 2 with ``R_header``.
+    ``SATSTAR_ZF_R_HEADER`` (default: ``NIRCAM_SATSTAR_RECOVERED_CAP``)
+    rewrites the rim with ``R_header`` wherever an R was measured; the
+    measured curve is then only logged.  See ``satstar_fit_switches``.
 
     Parameters
     ----------
@@ -1522,8 +1726,22 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         path.  The ceiling is still estimated from the raw group 0.
     R_header : float or None
         PHOTMJSR / t(group 0) from the frame header (``zeroframe_header_R``),
-        or None.  Used by the R-curve check only when fewer than
-        ``_RCURVE_SATCHECK_MIN_PX`` measured SATURATED pixels are available.
+        or None.  The rim R under ``SATSTAR_ZF_R_HEADER``; otherwise used by
+        the R-curve check only when fewer than ``_RCURVE_SATCHECK_MIN_PX``
+        measured SATURATED pixels are available.
+    cal_offset : 2-D float array or None
+        The level removed from ``data`` after calibration, cal - crf in
+        MJy/sr (``zeroframe_cal_offset``), or None.  R_header x group 0 is a
+        cal-scale value, so wherever the rim R comes from ``R_header`` the
+        rewrite is R_header x group 0 - ``cal_offset``.  A measured curve
+        already carries the offset and ignores it.
+    flat : 2-D float array or None
+        The pixel flat the calibration divided the crf by
+        (``zeroframe_pixel_flat``), or None.  With it, the R(g0) curve and the
+        R-curve check are measured on ``data`` x flat / group 0, so R,
+        ``R_header`` and an explicit ``R`` are all flat-free, and the
+        rewrite is R x group 0 / flat (minus ``cal_offset`` for a header
+        rate).
 
     Returns
     -------
@@ -1573,17 +1791,32 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     _g0_clean_raw = g0_clean
     g0_clean = g0_clean | _ff_rep
     _sw = satstar_fit_switches()
-    # SATSTAR_ZF_KEEP_FINITE (default OFF): a SATURATED pixel with a finite,
-    # nonzero SCI and no DO_NOT_USE was measured from its pre-saturation
-    # groups (the crf SATURATED bit is any-group), so it is data, not a
-    # clipped value.  Keep it: neither rewritten with R*group0 nor masked.
+    # SATSTAR_ZF_KEEP_FINITE (default = the recovered-core cap): a SATURATED
+    # pixel with a finite, nonzero SCI and no DO_NOT_USE was measured from its
+    # pre-saturation groups (the crf SATURATED bit is any-group), so it is
+    # data, not a clipped value.  Keep it: neither rewritten with R*group0
+    # nor masked.
     # SAT&DO_NOT_USE pixels (SCI zeroed upstream) are still recovered.
     if _sw['keep_finite'] and dq is not None:
         _keep = (sat & np.isfinite(data) & (data != 0)
                  & ((dq & dqflags.pixel['DO_NOT_USE']) == 0))
     else:
         _keep = None
+    # Pixel flat (SATSTAR_ZF_FLAT): the crf is rate x PHOTMJSR / flat and
+    # group 0 is raw DN, so cal / group 0 carries each pixel's 1 / flat and
+    # R x group 0 does not.  On wd2 the rim pixels' flat spans 0.97-1.02
+    # (16-84%), and the satstars on nrcb3 sit at a median 0.988 against
+    # 1.005 on nrcb1.
+    _flat = None
+    if flat is not None:
+        _flat = np.asarray(flat, dtype=float)
+        if _flat.shape != tuple(shp):
+            print(f"WARNING [zeroframe flat] pixel flat has shape "
+                  f"{_flat.shape}, the frame {tuple(shp)}; not applied",
+                  flush=True)
+            _flat = None
     _Rcurve = None
+    _from_header = False
     _measured = R is None or not np.isfinite(R)
     if _measured:
         # cal/group0 DRIFTS ~25% from faint to bright pixels even after the
@@ -1601,6 +1834,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         if int(good.sum()) >= 50:
             _g = group0[good]
             _r = data[good] / _g
+            if _flat is not None:
+                _r = _r * _flat[good]
             _ctr, _med = _rcurve_bins(_g, _r, R_g0_min, ceiling)
             _raw_ctr, _raw_med = list(_ctr), list(_med)
             # R-curve guard (SATSTAR_ZF_RCURVE_GUARD, default ON; issue #972):
@@ -1694,6 +1929,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         if _satchecked:
             _gs = group0[_satcal]
             _rs = data[_satcal] / _gs
+            if _flat is not None:
+                _rs = _rs * _flat[_satcal]
             _r_sat = float(np.median(_rs))
             _g_sat = float(np.median(_gs))
             if _Rcurve is not None:
@@ -1734,6 +1971,56 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                   f"the header value is used", flush=True)
             _Rcurve = None
             R = float(R_header)
+            _from_header = True
+    # Header anchor (SATSTAR_ZF_R_HEADER, default: the recovered-core cap):
+    # the rim is rewritten with R_header = PHOTMJSR / t(group 0), the rate
+    # group 0 itself implies, and the measured curve is only logged.  Above
+    # R_g0_min the unsaturated pixels of a crowded frame are mostly the wings
+    # of saturated stars, which carry charge that migrated out of the core
+    # over the ramp, so the curve reads high where saturated stars are dense.
+    # wd2 F150W nrcb3 (2026-10): cal/group0 at g0 2000-3000 DN falls from
+    # 0.0955 at 1-2 px from SATURATED to 0.0873 beyond 25 px, and the curve
+    # sat 7.5% above R_header (nrcb1: 1.5%); the far-field pixels sit within
+    # 1-2% of R_header on every SW detector.  The rim and the recovered-core
+    # cap inherited the excess, and the nrcb3 satstars read 0.06 mag brighter
+    # than the nrcb1 ones.  On LW nrcblong the curve already equals R_header
+    # (0.99-1.00) while far-field star peaks read 5-9% below it above
+    # 2000 DN, so a curve measured away from saturation is not a substitute.
+    # A frame on which no R could be measured is left alone, as before.
+    if (_measured and np.isfinite(R) and _sw['r_header']
+            and R_header is not None and np.isfinite(R_header)
+            and R_header > 0):
+        print(f"[zeroframe R header] rim rewritten with R_header="
+              f"{R_header:.4g} (PHOTMJSR / t(group 0)); measured bright-end "
+              f"R={R:.4g} is {R / R_header:.3g}x that", flush=True)
+        _Rcurve = None
+        R = float(R_header)
+        _from_header = True
+    # Cal - crf level: R_header x group 0 is a cal-scale value, and a
+    # destreak run after calibration moves the crf off that scale.  The
+    # legacy destreak (no DESTRKMD) removed each row's 10th percentile per
+    # amplifier and restored nothing: on w51 LW (2026-10) the median
+    # cal - crf is 7-17 MJy/sr, up to 0.75 R_header x group 0 at rim pixels
+    # of 300-1000 DN.  Against the SATURATED pixels the anchor keeps
+    # (KEEP_FINITE; their crf plus the level, same group-0 bin), the header
+    # rim read 27-34% high below 2000 DN and 2-4% off once the level is
+    # subtracted; the measured curve read 16-23% high below 2000 DN and
+    # 5-8% low above.  On brick F356W nrcblong (+12 MJy/sr) the buffer
+    # selection keeps 2501 of the curve's 3110 pixels (header alone: 261).
+    # cal - crf is 0 on the wd2 align products, which are unchanged.
+    _offset = None
+    if _from_header and cal_offset is not None:
+        _offset = np.asarray(cal_offset, dtype=float)
+        if _offset.shape != tuple(shp):
+            print(f"WARNING [zeroframe R header] cal - crf level has shape "
+                  f"{_offset.shape}, the frame {tuple(shp)}; not applied",
+                  flush=True)
+            _offset = None
+        else:
+            _p16, _p50, _p84 = np.percentile(_offset, [16, 50, 84])
+            print(f"[zeroframe R header] rim = R_header x group 0 minus the "
+                  f"cal - crf level, median {_p50:.3g} MJy/sr "
+                  f"(16-84%: {_p16:.3g} to {_p84:.3g})", flush=True)
     recovered = np.array(data, dtype=float, copy=True)
     rim_mask = np.zeros(shp, dtype=bool)
     if np.isfinite(R):
@@ -1742,6 +2029,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
                                   np.log(_Rcurve[0]), _Rcurve[1]) * g0_eff
         else:
             recov_val = R * g0_eff
+        if _flat is not None:
+            recov_val = recov_val / _flat
+        if _offset is not None:
+            recov_val = recov_val - _offset
         # always rewrite genuinely-saturated rim pixels (group-0 clean); in the
         # (non-DQ-flagged) dilation buffer rewrite only BRIGHT (group0>R_g0_min,
         # so R*group0 is reliable) and INFLATED (charge-migration) pixels, leaving
@@ -1764,6 +2055,11 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
             rim_mask = rim_mask & ((np.asarray(dq).astype(np.int64)
                                     & _RIM_BADPIX_BITS) == 0)
         recovered[rim_mask] = recov_val[rim_mask]
+        if _flat is not None and rim_mask.any():
+            _f16, _f50, _f84 = np.percentile(_flat[rim_mask], [16, 50, 84])
+            print(f"[zeroframe flat] rim divided by the pixel flat, median "
+                  f"{_f50:.4g} over {int(rim_mask.sum())} px (16-84%: "
+                  f"{_f16:.4g} to {_f84:.4g})", flush=True)
     deep_core_mask = sat_buf & ~g0_clean
     if _keep is not None:
         deep_core_mask = deep_core_mask & ~_keep
@@ -1771,7 +2067,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
 
 
 def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
-                         first_frame=None, R_header=None):
+                         first_frame=None, R_header=None, cal_offset=None,
+                         flat=None):
     """Apply the ZEROFRAME fit anchor for ``get_saturated_stars``.
 
     Returns ``(data, zf_deep_core, rim, rewrite_delta)``:
@@ -1793,12 +2090,14 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
 
     ``group0_saturated`` (GROUPDQ first-read saturation, or None),
     ``first_frame`` (the ramp ZEROFRAME extension of a multi-frame readout, or
-    None) and ``R_header`` (``zeroframe_header_R``, or None) are passed on to
-    ``zeroframe_recover_saturated``.
+    None), ``R_header`` (``zeroframe_header_R``, or None), ``cal_offset``
+    (``zeroframe_cal_offset``, or None) and ``flat`` (``zeroframe_pixel_flat``,
+    or None) are passed on to ``zeroframe_recover_saturated``.
     """
     rec, rim, deep, R = zeroframe_recover_saturated(
         data, dq, zeroframe, group0_saturated=group0_saturated,
-        first_frame=first_frame, R_header=R_header)
+        first_frame=first_frame, R_header=R_header, cal_offset=cal_offset,
+        flat=flat)
     if not np.isfinite(R):
         return data, None, rim, None
     sw = satstar_fit_switches()
@@ -3102,7 +3401,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, zeroframe_group0_saturated=None, zeroframe_first_frame=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, sibling_sky=None,
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, zeroframe_group0_saturated=None, zeroframe_first_frame=None, zeroframe_cal_offset=None, zeroframe_flat=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, sibling_sky=None,
                         adaptive_fit_shape=False, adaptive_fit_scale=2.83, adaptive_fit_margin=17.0, adaptive_fit_min=21):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -3286,11 +3585,22 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 except Exception as _sex:
                     print(f"WARNING: sibling-seed WCS conversion failed: "
                           f"{type(_sex).__name__}: {_sex}", flush=True)
+    _severity_drops = []
     saturated, sources, coms, _seed_kinds = find_saturated_stars(
         fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
         sat_data_floor=_sat_floor, severity_floor=_sev_floor,
-        partner_xy=_partner_xy, sibling_xy=_sibling_xy)
+        partner_xy=_partner_xy, sibling_xy=_sibling_xy,
+        severity_drops=_severity_drops)
+    # Weakly saturated stars the pre-fit severity gate disowned and no later
+    # seeding took back: remove_saturated_stars persists them for the
+    # daophot hand-off (severity_drop_table).
+    builtins.satstar_severity_dropped = severity_drop_table(
+        _severity_drops, saturated, _sev_floor, data_floor=_sat_floor)
+    if len(_severity_drops):
+        print(f"Saturated starfinding: {len(builtins.satstar_severity_dropped)} "
+              f"of {len(_severity_drops)} severity-gate drop(s) were not "
+              f"re-seeded (left to the daophot hand-off)", flush=True)
 
     # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
     #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
@@ -3525,6 +3835,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             data, _dqarr_zf, zeroframe,
             group0_saturated=zeroframe_group0_saturated,
             first_frame=zeroframe_first_frame,
+            cal_offset=zeroframe_cal_offset,
+            flat=zeroframe_flat,
             R_header=zeroframe_header_R(
                 header, fitsdata['SCI'].header.get(
                     'PHOTMJSR', header.get('PHOTMJSR'))))
@@ -3556,7 +3868,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # non-positive ERR (saturated / unrecoverable pixels) is set huge so those
     # pixels carry ~zero weight even if the mask were to miss them.
     err_working = np.array(fitsdata['ERR'].data, dtype=float)
-    # recovered rim pixels carry no valid ERR (NaN at SATURATED px in crf);
+    # recovered rim pixels carry no valid ERR (NaN at SATURATED & DO_NOT_USE
+    # px, i.e. no good group, in the crf);
     # assign the ~5% per-pixel scatter of the R calibration so the fit can
     # inverse-variance weight them instead of dropping/inf-weighting.
     if zf_deep_core is not None:
@@ -3596,7 +3909,6 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # matching the user's by-eye).  For IN-FOV use we fall back to the small grid
     # if the large file is missing (only forced sources hard-require it).
     if forced_sources_present or _is_miri:
-        from .filtering import get_filtername
         _inst = header['INSTRUME'].lower()   # 'nircam' or 'miri'
         _det = header['DETECTOR']
         if _det == 'NRCALONG':
@@ -3629,7 +3941,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                       f"back to the small grid (amplitude may under-fit).", flush=True)
         else:
             print(f"Loading large PSF grid: {_lg_fn}", flush=True)
-            big_grid_large = to_griddedpsfmodel(_lg_fn)
+            big_grid_large = load_stpsf_grid(_lg_fn)
             if isinstance(big_grid_large, list):
                 big_grid_large = big_grid_large[0]
 
@@ -5152,9 +5464,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         # Post-fit severity gate (NIRCam in-FOV): a genuine saturated star's
         # model must at least reach its filter's saturation level at its own peak.
-        # In the crf products every SATURATED pixel is blanked (SCI and
-        # VAR_POISSON both NaN), so neither the data nor the variance can tell a
-        # real saturated core from the any-group over-flag -- but the fit can.
+        # The crf SATURATED bit is any-group: it flags a core that lost every
+        # group (DO_NOT_USE; SCI and VAR_POISSON both NaN) and, far more
+        # often, pixels that saturated only in a late group and kept a finite
+        # ramp-fit rate (85% of SATURATED pixels on 10678 F480M NRCBLONG,
+        # _cal and _destreak_crf alike).  The DQ alone cannot tell a real
+        # saturated core from that over-flag -- but the fit can.
         # 0.5x margin for wing-fit scatter on borderline saturation.  Rejects
         # are handed to the daophot channel: they are persisted to
         # *_satstar_rejected.fits with reject_reason='implied_peak_gate', and
@@ -5611,6 +5926,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             base_tab, data - full_model_image, err_working, saturated,
             big_grid, fwhm_pix=float(_fwhm_wc),
             severity_floor=float(_sev_floor or 0.0))
+        # Opt-in uncapped catalog flux (#1186): catalog only, model unchanged.
+        base_tab = apply_uncapped_flux(base_tab, get_filtername(header))
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
@@ -6020,6 +6337,162 @@ def _find_first_frame_for(filename):
     return ff
 
 
+def _find_cal_for(filename):
+    """The Image2 ``_cal.fits`` of a crf / destreak / align product, from the
+    same exposure stem in the same directory, or None (also None when
+    ``filename`` is that cal)."""
+    import re
+    m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', os.path.basename(filename))
+    if not m:
+        return None
+    cf = os.path.join(os.path.dirname(filename), f'{m.group(1)}_cal.fits')
+    if not os.path.exists(cf) or os.path.abspath(cf) == os.path.abspath(filename):
+        return None
+    return cf
+
+
+def cal_offset_map(cal, data, dq, noutputs=4, min_px=16):
+    """Per-row, per-amplifier median of ``cal - data`` (MJy/sr), as a frame.
+
+    ``destreak_data`` subtracts one value per row within each amplifier
+    output (columns split into ``noutputs`` equal chunks), so after a
+    destreak ``cal - crf`` is constant along a row inside a chunk.  The
+    median runs over pixels finite in both, without SATURATED or DO_NOT_USE.
+    A row of a chunk with fewer than ``min_px`` such pixels takes the value
+    interpolated from the chunk's other rows; a chunk with none reads 0.
+
+    The in-situ destreak (DESTRKMD) restores a smoothed 2-D level, so its
+    cal - crf varies along a row and the row median keeps only its typical
+    value.  On the in-situ fields surveyed in #1148 (sgrb2, sgrc, brick nrca)
+    the median level is below 0.03 MJy/sr, so the variation it drops is of
+    that order or smaller.
+    """
+    cal = np.asarray(cal, dtype=float)
+    data = np.asarray(data, dtype=float)
+    ok = np.isfinite(cal) & np.isfinite(data)
+    if dq is not None:
+        ok &= (np.asarray(dq).astype(np.int64)
+               & (dqflags.pixel['SATURATED']
+                  | dqflags.pixel['DO_NOT_USE'])) == 0
+    diff = np.where(ok, cal - data, np.nan)
+    ny, nx = diff.shape
+    noutputs = int(noutputs) if noutputs and int(noutputs) > 0 else 1
+    width = nx // noutputs if nx % noutputs == 0 else nx
+    out = np.zeros(diff.shape, dtype=float)
+    rows = np.arange(ny)
+    for x0 in range(0, nx, width):
+        chunk = diff[:, x0:x0 + width]
+        n = ok[:, x0:x0 + width].sum(axis=1)
+        good = n >= min_px
+        if not good.any():
+            continue
+        med = np.full(ny, np.nan)
+        med[good] = np.nanmedian(chunk[good], axis=1)
+        if not good.all():
+            med = np.interp(rows, rows[good], med[good])
+        out[:, x0:x0 + width] = med[:, None]
+    return out
+
+
+def zeroframe_cal_offset(filename, data, dq, photmjsr=None):
+    """The level removed from the crf ``data`` after calibration, cal - crf
+    per row and amplifier (``cal_offset_map``, MJy/sr), or None.
+
+    R_header x group 0 (``zeroframe_header_R``) is a cal-scale value.  A
+    legacy destreak (no DESTRKMD keyword) subtracted each row's 10th
+    percentile per amplifier from the cal and restored nothing, so the crf
+    sits below the cal by the local sky level; the in-situ destreak restores
+    a smoothed level and leaves the per-row streak difference.  Returns None
+    when no sibling cal exists (``_find_cal_for``), when its shape or
+    PHOTMJSR differs from the crf's, or when cal - crf is 0 everywhere (no
+    destreak, e.g. wd2 align products).
+    """
+    cf = _find_cal_for(filename)
+    if cf is None:
+        return None
+    with fits.open(cf) as ch:
+        cal = np.asarray(ch['SCI'].data, dtype=float)
+        cal_photmjsr = ch['SCI'].header.get('PHOTMJSR',
+                                            ch[0].header.get('PHOTMJSR'))
+        noutputs = ch[0].header.get('NOUTPUTS', 4)
+    if cal.shape != np.shape(data):
+        print(f"satstar zeroframe: {os.path.basename(cf)} shape {cal.shape} "
+              f"differs from the frame {np.shape(data)}; no cal - crf level",
+              flush=True)
+        return None
+    if photmjsr is not None and cal_photmjsr is not None:
+        if not np.isclose(float(cal_photmjsr), float(photmjsr), rtol=1e-4):
+            print(f"satstar zeroframe: {os.path.basename(cf)} PHOTMJSR "
+                  f"{float(cal_photmjsr):.5g} differs from the frame's "
+                  f"{float(photmjsr):.5g}; no cal - crf level", flush=True)
+            return None
+    off = cal_offset_map(cal, data, dq, noutputs=noutputs)
+    if not np.any(off != 0):
+        return None
+    print(f"satstar zeroframe: cal - crf level from {os.path.basename(cf)}, "
+          f"median {np.median(off):.3g} MJy/sr", flush=True)
+    return off
+
+
+def zeroframe_pixel_flat(header, shape, crds_dir=None):
+    """The pixel flat the calibration divided the frame by, on the frame
+    grid, or None.
+
+    ``header`` is the primary header: ``R_FLAT`` names the reference
+    (``crds://jwst_nircam_flat_0738.fits``), ``INSTRUME`` its CRDS
+    instrument, and ``SUBSTRT1`` / ``SUBSTRT2`` the subarray origin.  The file
+    is read from the CRDS cache under ``crds_dir`` (default ``CRDS_PATH``);
+    nothing is fetched.  As in the jwst flat_field step, a NaN or zero flat
+    value and a DO_NOT_USE or NO_FLAT_FIELD flat DQ read as 1.0 (no
+    correction); a negative or infinite value does too.  Returns None, with
+    a log line, when the keyword, the cache or the file is missing or the
+    flat does not cover ``shape``.
+    """
+    from .crds_cache import cached_reference_path
+    rf = str(header.get('R_FLAT', '') or '')
+    name = rf.split('//')[-1].strip()
+    if not name or name.upper() == 'N/A':
+        print(f"satstar zeroframe: no R_FLAT in the header ({rf!r}); "
+              f"rim not flat-fielded", flush=True)
+        return None
+    crds_dir = crds_dir or os.environ.get('CRDS_PATH')
+    if not crds_dir:
+        print("satstar zeroframe: CRDS_PATH is not set; rim not "
+              "flat-fielded", flush=True)
+        return None
+    inst = str(header.get('INSTRUME', '')).lower()
+    path = cached_reference_path(crds_dir, inst, name)
+    if not os.path.exists(path):
+        print(f"satstar zeroframe: pixel flat {name} not in {crds_dir}; "
+              f"rim not flat-fielded", flush=True)
+        return None
+    with fits.open(path) as fh:
+        flat = np.array(fh['SCI'].data, dtype=float)
+        fdq = (np.asarray(fh['DQ'].data).astype(np.int64)
+               if 'DQ' in [h.name for h in fh] else None)
+    if flat.shape != tuple(shape):
+        y0 = int(header.get('SUBSTRT2', 1)) - 1
+        x0 = int(header.get('SUBSTRT1', 1)) - 1
+        ny, nx = shape
+        if (y0 < 0 or x0 < 0 or y0 + ny > flat.shape[0]
+                or x0 + nx > flat.shape[1]):
+            print(f"satstar zeroframe: pixel flat {name} {flat.shape} does "
+                  f"not cover the frame {tuple(shape)} at SUBSTRT "
+                  f"({x0 + 1}, {y0 + 1}); rim not flat-fielded", flush=True)
+            return None
+        flat = flat[y0:y0 + ny, x0:x0 + nx]
+        if fdq is not None:
+            fdq = fdq[y0:y0 + ny, x0:x0 + nx]
+    bad = ~np.isfinite(flat) | (flat <= 0)
+    if fdq is not None:
+        bad |= (fdq & (dqflags.pixel['DO_NOT_USE']
+                       | dqflags.pixel['NO_FLAT_FIELD'])) != 0
+    flat[bad] = 1.0
+    print(f"satstar zeroframe: pixel flat {name}, median "
+          f"{np.median(flat):.4g}", flush=True)
+    return flat
+
+
 def _find_zeroframe_for(filename):
     """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
 
@@ -6055,6 +6528,36 @@ def _find_zeroframe_for(filename):
     print(f"satstar deblend: no _ramp.fits ZEROFRAME found for "
           f"{os.path.basename(filename)} (deblend disabled for this frame)", flush=True)
     return None
+
+
+def _publish_satstar_product(path, write, overwrite):
+    """Write one per-frame satstar product so no reader can see it half-written.
+
+    ``write`` takes a path and writes the product there; it is pointed at a
+    hidden temporary beside ``path``, which is then ``os.replace``-d into
+    position (``atomic_io.atomic_write``).
+
+    Two fan-out tasks can fit the same frame at the same time: the per-module
+    pass (``nrca``/``nrcb``) and the ``merged`` pass both cover every frame
+    (#840), they land in different shards, and both write these
+    detector-keyed names.  Written in place, a reader in the other task -- the
+    gate-reject hand-off, or the next phase's cached-catalog load -- can open
+    the file between the writer's create and close.  10678 o098 m5
+    (2026-10-18): the two tasks fitting nrcblong exp5 both wrote
+    ``*_m5_satstar_rejected.fits`` within the same minute and it was left at
+    zero bytes; the m5 finalize died four hours later in
+    ``_satstar_cofit_positions`` with ``IORegistryError: Format could not be
+    identified``.  o087 m5 (2026-10-18) repeated it.
+
+    Both fits produce the same product, so last-writer-wins is harmless once
+    each write is atomic.  ``overwrite=False`` keeps astropy's refusal to
+    replace an existing file.
+    """
+    if not overwrite and os.path.exists(path):
+        raise OSError(f'File {path} already exists.  If you mean to replace it '
+                      f'then use the argument "overwrite=True".')
+    with atomic_write(path, hidden=True) as tmp:
+        write(tmp)
 
 
 def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
@@ -6143,10 +6646,46 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
                if _with_ff else _find_group0_saturation_for(filename))
         if g0s is not None:
             kwargs['zeroframe_group0_saturated'] = g0s
+    # The level a destreak removed after calibration, for a rim at the
+    # header rate, which is cal-scale.  The rate comes from the header under
+    # SATSTAR_ZF_R_HEADER and also through the R-curve satcheck fallback,
+    # which runs with that switch off, so the level is read whenever a first
+    # read is handed over; zeroframe_recover_saturated applies it only to a
+    # header-rate rim.
+    if (kwargs.get('zeroframe') is not None
+            and kwargs.get('zeroframe_cal_offset') is None
+            and 'DQ' in [h.name for h in fh]):
+        _off = zeroframe_cal_offset(
+            filename, fh['SCI'].data, fh['DQ'].data,
+            photmjsr=fh['SCI'].header.get('PHOTMJSR',
+                                          fh[0].header.get('PHOTMJSR')))
+        if _off is not None:
+            kwargs['zeroframe_cal_offset'] = _off
+    # The pixel flat the calibration applied, for the rim rewrite
+    # (SATSTAR_ZF_FLAT, default OFF).
+    if (kwargs.get('zeroframe') is not None
+            and kwargs.get('zeroframe_flat') is None
+            and _sw_zf['zf_flat']):
+        _fl = zeroframe_pixel_flat(fh[0].header, np.shape(fh['SCI'].data))
+        if _fl is not None:
+            kwargs['zeroframe_flat'] = _fl
     if deblend_with_zeroframe:
         kwargs['zeroframe_deblend'] = True
     print("Running get_saturated_stars", flush=True)
+    builtins.satstar_severity_dropped = None
     satstar_table = get_saturated_stars(fh, **kwargs)
+    # Written whatever the fit outcome (also when nothing was accepted), and
+    # empty when nothing was dropped, so a rerun never leaves a stale file for
+    # the daophot hand-off to read.
+    _sev_dropped = getattr(builtins, 'satstar_severity_dropped', None)
+    if _sev_dropped is not None:
+        _sev_fn = filename.replace(
+            ".fits", f'{file_suffix}_satstar_severity_dropped.fits')
+        _sev_dropped.meta.update(fh[0].header)
+        _publish_satstar_product(
+            _sev_fn, lambda p: _sev_dropped.write(p, overwrite=True), overwrite)
+        print(f"Saved {len(_sev_dropped)} severity-gate drop(s) to {_sev_fn}",
+              flush=True)
     if satstar_table is not None:
         satstar_table.meta.update(header)
         # Stamp the saturated-core recovery config so load_or_make_satstar_catalog
@@ -6170,7 +6709,9 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         # positions/errors and sky coordinates (incl. sat_com_ra/dec) are
         # untouched; this is a pure size reduction on the already-fit table.
         downcast_catalog_dtypes(satstar_table)
-        satstar_table.write(satstar_catalog_filename, overwrite=overwrite)
+        _publish_satstar_product(
+            satstar_catalog_filename,
+            lambda p: satstar_table.write(p, overwrite=True), overwrite)
         print(f"Saved saturated star catalog to {satstar_catalog_filename}", flush=True)
 
         _wcm = getattr(builtins, 'satstar_wingcal_measurements', None)
@@ -6178,7 +6719,8 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
             _wcm_fn = filename.replace(
                 ".fits", f'{file_suffix}_wingcal_calibrators.fits')
             _wcm.meta.update(header)
-            _wcm.write(_wcm_fn, overwrite=overwrite)
+            _publish_satstar_product(
+                _wcm_fn, lambda p: _wcm.write(p, overwrite=True), overwrite)
             print(f"Saved {len(_wcm)} wing-selfcal calibrator bucket(s) to "
                   f"{_wcm_fn}", flush=True)
 
@@ -6187,20 +6729,24 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
             ".fits", f'{file_suffix}_satstar_rejected.fits')
         if _rejected is not None and len(_rejected):
             _rejected.meta.update(header)
-            _rejected.write(satstar_rejected_filename, overwrite=overwrite)
+            _publish_satstar_product(
+                satstar_rejected_filename,
+                lambda p: _rejected.write(p, overwrite=True), overwrite)
             print(f"Saved {len(_rejected)} gate-REJECTED satstar candidate(s) "
                   f"to {satstar_rejected_filename}", flush=True)
 
         if hasattr(builtins, 'satstar_model'):
-            fits.PrimaryHDU(data=builtins.satstar_model, header=header).writeto(
-                satstar_model_filename, overwrite=overwrite
-            )
+            _hdu = fits.PrimaryHDU(data=builtins.satstar_model, header=header)
+            _publish_satstar_product(
+                satstar_model_filename,
+                lambda p: _hdu.writeto(p, overwrite=True), overwrite)
             print(f"Saved saturated star model image to {satstar_model_filename}", flush=True)
 
         if hasattr(builtins, 'satstar_resid'):
-            fits.PrimaryHDU(data=builtins.satstar_resid, header=header).writeto(
-                satstar_residual_filename, overwrite=overwrite
-            )
+            _hdu = fits.PrimaryHDU(data=builtins.satstar_resid, header=header)
+            _publish_satstar_product(
+                satstar_residual_filename,
+                lambda p: _hdu.writeto(p, overwrite=True), overwrite)
             print(f"Saved saturated star residual image to {satstar_residual_filename}", flush=True)
 
         if hasattr(builtins, 'satstar_flagimg'):
@@ -6210,8 +6756,9 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
             fh_flag.header['FLAGBIT1'] = (1, 'partly saturated (nonlinear, recoverable)')
             fh_flag.header['FLAGBIT2'] = (2, 'totally saturated (unrecoverable NaN)')
             fh_flag.header['FLAGBIT4'] = (4, 'included in saturated-star fit')
-            fh_flag.writeto(filename.replace(".fits", f'{file_suffix}_satstar_flags.fits'),
-                            overwrite=overwrite)
+            _publish_satstar_product(
+                filename.replace(".fits", f'{file_suffix}_satstar_flags.fits'),
+                lambda p: fh_flag.writeto(p, overwrite=True), overwrite)
             print(f"Saved saturated star flag image", flush=True)
     else:
         print("No saturated stars found", flush=True)

@@ -412,6 +412,75 @@ def image3_steps_for(tweakreg_parameters, skip_outlier_detection, label):
     return image3_steps
 
 
+def _member_paths(asn_data, output_dir):
+    """Each member frame of an association, resolved the way write_perexposure_crf does."""
+    paths = []
+    for member in asn_data['products'][0]['members']:
+        expname = member['expname']
+        paths.append(expname if os.path.exists(expname)
+                     else os.path.join(output_dir, os.path.basename(expname)))
+    return paths
+
+
+def resolve_skip_outlier_detection(skip_outlier_detection, member_paths, label):
+    """Decide ``skip_outlier_detection`` for one Image3 pass.
+
+    ``skip_outlier_detection`` is the caller's request: True (``--outlier-
+    detection=off``) or False (``--outlier-detection=on`` /
+    ``--run-outlier-detection``) are returned unchanged.  None (``auto``, the
+    default) decides from the members' headers.
+
+    auto: skip, as #161 does, when every readable member carries
+    ``S_JUMP = COMPLETE``; run the step when any member does not.  The #161
+    trade rests on JumpStep having already rejected cosmic rays per ramp.
+    JumpStep needs >= 3 groups, so NGROUPS=2 exposures (BRIGHT2: cloudc,
+    brick 2221 F182M/F187N/F212N/F405N/F410M/F466N, gc2211 o050, ...) carry
+    ``S_JUMP = SKIPPED``, and with outlier_detection skipped too their crf
+    reach cataloging with NO cosmic-ray rejection at all.  Measured on cloudc
+    F212N after the 2026-10-09 retie re-reduction (the first reduction of that
+    field under the skip-everywhere policy): the sharp 1-2 pixel spikes in a
+    fixed set of 400 stamps of the data mosaic rose from 68 to 413, m7
+    catalogued them and left them unsubtracted, and the count of starlike
+    residuals the phase-loss audit flags rose from 41,027 to 77,532 while
+    sgrc (NGROUPS=6) and arches (NGROUPS=8) on the same code fell 4-5x.  On
+    those fields the over-flagging of bright-star PSF signal (PR #180) is the
+    lesser cost: it is what their crf carried before 2026-09.
+
+    The decision covers the whole association, because outlier_detection
+    compares each member against the stack of all of them.  Members whose
+    header cannot be read are left out of the vote; if none can be read the
+    pass keeps the #161 default (skip) and says so.
+    """
+    if skip_outlier_detection is not None:
+        return skip_outlier_detection
+    no_jump, n_read = [], 0
+    for path in member_paths:
+        try:
+            hdr = fits.getheader(path)
+        except (FileNotFoundError, OSError) as exc:
+            print(f"  outlier_detection auto ({label}): cannot read {path}: {exc}",
+                  flush=True)
+            continue
+        n_read += 1
+        if hdr.get('S_JUMP') != 'COMPLETE':
+            no_jump.append((os.path.basename(path), hdr.get('S_JUMP'),
+                            hdr.get('NGROUPS')))
+    if n_read == 0:
+        print(f"outlier_detection auto ({label}): no member header readable; "
+              f"keeping the #161 default (skip)", flush=True)
+        return True
+    if no_jump:
+        name, s_jump, ngroups = no_jump[0]
+        print(f"outlier_detection auto ({label}): {len(no_jump)}/{n_read} members "
+              f"had no JumpStep CR rejection (first: {name} S_JUMP={s_jump} "
+              f"NGROUPS={ngroups}); RUNNING outlier_detection so cosmic rays are "
+              f"rejected somewhere", flush=True)
+        return False
+    print(f"outlier_detection auto ({label}): all {n_read} members have "
+          f"S_JUMP=COMPLETE; skipping (#161)", flush=True)
+    return True
+
+
 def write_perexposure_crf(asn_data, output_dir, field, skip_outlier_detection,
                           skymatch_method, label):
     """Put this pass's per-exposure ``*_o{field}_crf.fits`` on disk.
@@ -570,8 +639,12 @@ def write_perexposure_crf(asn_data, output_dir, field, skip_outlier_detection,
 
 def main(filtername, module, Observations=None, regionname='brick', do_destreak=True,
          field='001', proposal_id='2221', skip_step1and2=False, use_average=True,
-         skymatch_method=None, skip_outlier_detection=True):
+         skymatch_method=None, skip_outlier_detection=None):
     """
+    skip_outlier_detection: True skips Image3 outlier_detection, False runs it,
+    None (the default) decides per pass from the members' S_JUMP
+    (resolve_skip_outlier_detection).
+
     skip_step1and2 will not re-fit the ramps to produce the _cal images.  This
     can save time if you just want to redo the tweakreg steps but already have
     the zero-frame stuff done.
@@ -1223,7 +1296,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # block below.
         # The outlier_detection policy (#161) and the reasoning behind it live
         # in image3_steps_for(); the merged pass below calls the same helper,
-        # so the two passes cannot drift apart again.
+        # so the two passes cannot drift apart again.  auto (None) resolves
+        # here, from the members this pass will combine; the resolved value is
+        # what both image3_steps_for and write_perexposure_crf must see.
+        skip_outlier_detection = resolve_skip_outlier_detection(
+            skip_outlier_detection, _member_paths(asn_data, output_dir),
+            label=module)
         image3_steps = image3_steps_for(
             tweakreg_parameters,
             skip_outlier_detection=skip_outlier_detection, label=module)
@@ -1361,6 +1439,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # mosaics on /orange carry S_OUTLIR=COMPLETE beside nrca/nrcb
         # S_OUTLIR=SKIPPED (censused 2026-09-12 with `find -L`; a census that
         # does not follow the symlinked field dirs sees only 238 of the 296).
+        # auto (None) resolves from the merged members, the same exposures the
+        # module passes saw, so the three passes reach the same decision.
+        skip_outlier_detection = resolve_skip_outlier_detection(
+            skip_outlier_detection, _member_paths(asn_data, output_dir),
+            label='merged')
         image3_steps_merged = image3_steps_for(
             tweakreg_parameters,
             skip_outlier_detection=skip_outlier_detection, label='merged')
@@ -1456,16 +1539,47 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             apply_placement_correction)
         apply_placement_correction(fn)
 
-    if os.environ.get('ROLL_CORRECTION', '0') == '1':
+    if os.environ.get('DISTORTION_ROTATION_CORRECTION', '0') == '1':
+        # In-detector rotation of the F115W/F150W/F162M/F164N/F200W SW
+        # distortion references relative to the F182M/F187N/F212N group
+        # (19-31" on NRCA2/NRCA3, issue #1135).  OPT-IN: rotates
+        # detector->v2v3 about the detector centre by the angle in
+        # data/distortion_rotations.ecsv, keyed on R_DISTOR.  Applied BEFORE
+        # the reference shift.  The detector centre does not move, so the
+        # array-centre fiducial checked against offsets tables is unchanged.
+        from jwst_gc_pipeline.reduction.distortion_rotation_correction import (
+            apply_distortion_rotation_correction)
+        apply_distortion_rotation_correction(fn)
+
+    if os.environ.get('DISTORTION_SCALE_CORRECTION', '0') == '1':
+        # Per-detector F200W plate scale relative to the other SW bands
+        # (+14..+34 ppm on NRCA1-4, -8..-14 ppm on NRCB1-4, issue #1137).
+        # OPT-IN: scales detector->v2v3 about the detector centre by the
+        # factor in data/distortion_scales.ecsv, keyed on R_DISTOR.  Applied
+        # BEFORE the reference shift; commutes with the rotation above (same
+        # pivot), and the detector centre does not move.
+        from jwst_gc_pipeline.reduction.distortion_scale_correction import (
+            apply_distortion_scale_correction)
+        apply_distortion_scale_correction(fn)
+
+    from jwst_gc_pipeline.reduction.roll_correction import (
+        roll_correction_enabled, ensure_roll_correction)
+    if roll_correction_enabled():
         # Rigid field rotation (attitude roll error) measured against VIRAC2
-        # and Gaia DR3 in JWST-GC/data-qa#346.  OPT-IN: rotates every
-        # detector about the NIRCam field centre by the roll resolved from
-        # roll_corrections.csv (or ROLL_CORRECTION_ARCSEC).  Applied BEFORE the
-        # reference shift.  Frames change their base fiducial by up to tens
-        # of mas, so offsets tables solved on unrotated frames fail the base
-        # check and must be rebuilt (see roll_correction.py).
-        from jwst_gc_pipeline.reduction.roll_correction import apply_roll_correction
-        apply_roll_correction(fn)
+        # and Gaia DR3 in JWST-GC/data-qa#346, resolved per visit from
+        # roll_corrections.csv (or ROLL_CORRECTION_ARCSEC).  DEFAULT ON and
+        # idempotent: a frame that already carries the table's roll (from
+        # here, from its _cal via image_roll_wcs, or from a previous run) is
+        # left alone; one carrying a different roll gets the difference about
+        # its recorded pivot; an unrolled frame is rotated about the NIRCam
+        # field centre through its current WCS, which equals rotating before
+        # any shift already baked in.  Fields whose locked offsets table
+        # predates the roll are deferred until their alignment_config entry
+        # sets roll_ready (see roll_correction.py).
+        ensure_roll_correction(fn)
+    else:
+        print(f"ROLL_CORRECTION=0: {fn} keeps whatever roll it carries; the "
+              f"table's per-visit roll is NOT enforced on this run.", flush=True)
 
     mod = ImageModel(fn)
     if proposal_id is None:
@@ -1726,14 +1840,24 @@ if __name__ == "__main__":
                       metavar="skymatch_method")
     parser.add_option("--run-outlier-detection", dest="run_outlier_detection",
                       default=False, action='store_true',
-                      help="Re-enable Image3 outlier_detection (OFF by default on "
-                           "these crowded GC fields; see #161). It over-flags real "
-                           "bright-star PSF signal because ERR under-models the "
-                           "dither-phase dispersion of the undersampled PSF; CRs are "
-                           "already handled per-ramp by JumpStep. Use this only for "
+                      help="Same as --outlier-detection=on: run Image3 "
+                           "outlier_detection on every pass regardless of S_JUMP. "
+                           "It over-flags real bright-star PSF signal because ERR "
+                           "under-models the dither-phase dispersion of the "
+                           "undersampled PSF (#161, PR #180). Use this only for "
                            "fields sparse enough that residual post-JumpStep CRs "
                            "dominate.",
                       metavar="run_outlier_detection")
+    parser.add_option("--outlier-detection", dest="outlier_detection",
+                      default='auto', type='choice',
+                      choices=['auto', 'on', 'off'],
+                      help="Image3 outlier_detection policy. auto (default): skip "
+                           "it (#161) when every member has S_JUMP=COMPLETE, run it "
+                           "when any member does not -- NGROUPS=2 exposures skip "
+                           "JumpStep, and without this step their crf carry no "
+                           "cosmic-ray rejection at all. on: always run. off: "
+                           "always skip.",
+                      metavar="outlier_detection")
     (options, args) = parser.parse_args()
 
     # Production run guard: refuse to run the imaging stage on an untagged or
@@ -1754,7 +1878,10 @@ if __name__ == "__main__":
     skip_step1and2 = options.skip_step1and2
     no_destreak = bool(options.no_destreak)
     skymatch_method = (options.skymatch_method or '').strip() or None
-    skip_outlier_detection = not options.run_outlier_detection
+    if options.run_outlier_detection and options.outlier_detection == 'off':
+        parser.error("--run-outlier-detection contradicts --outlier-detection=off")
+    outlier_policy = 'on' if options.run_outlier_detection else options.outlier_detection
+    skip_outlier_detection = {'auto': None, 'on': False, 'off': True}[outlier_policy]
     print(options)
 
     with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:

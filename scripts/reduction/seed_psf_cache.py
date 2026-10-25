@@ -34,7 +34,7 @@ is ``/blue2/hpg`` and ``/orange/adamginsburg`` is ``/orange/hpg``, so
 cross-filesystem donor is symlinked -- which is already the established pattern
 here: ``brick/psfs`` and ``cloudc/psfs`` both reach F770W by a symlink to
 ``sgrb2``'s tree, and ``os.path.exists`` follows symlinks, so
-``to_griddedpsfmodel`` loads them the same way.  ``--copy`` takes real bytes
+``load_stpsf_grid`` loads them the same way.  ``--copy`` takes real bytes
 instead (5.2 MB at samp2, 20.9 MB at samp4).
 """
 import argparse

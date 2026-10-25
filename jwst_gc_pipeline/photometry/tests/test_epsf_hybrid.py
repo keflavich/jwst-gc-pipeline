@@ -231,7 +231,7 @@ def test_get_psf_model_wiring(tmp_path, monkeypatch, instrument):
     st = _stpsf_grid()
     fn = tmp_path / 'nircam_nrcb5_f480m_fovp101_samp2_npsf16.fits'
     fn.write_text('fake')
-    monkeypatch.setattr(ccl, 'to_griddedpsfmodel', lambda f: st)
+    monkeypatch.setattr(ccl, 'load_stpsf_grid', lambda f: st)
     monkeypatch.delenv(eh.EPSF_CORE_DIR_ENV, raising=False)
     kw = dict(module='nrcb', use_webbpsf=True, use_grid=True, instrument=instrument,
               psf_cache_dir=str(tmp_path))

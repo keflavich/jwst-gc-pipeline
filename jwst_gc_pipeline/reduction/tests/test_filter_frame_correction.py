@@ -179,9 +179,55 @@ def test_shipped_table_is_the_correction_not_the_residual():
         (before ** 2).sum(1).mean())
 
 
+#: Measured SKY residuals (filter - F212N) at the detector centre, per
+#: (exposure, module) median removed, from m6 per-frame catalogs against the
+#: F212N m6 merged vetted catalog: F162M on wd2 jw03523-o005 (exposures 1-4)
+#: and F164N on wd1 jw01905-o001 (exposures 1-4).  These two fields sit 144
+#: deg apart in roll, so a table stored in the sky frame, or with either sign
+#: or rotation flipped, cannot satisfy both.
+WD2_ROLL = 141.01
+WD2_F162M_SKY_RESIDUAL = {
+    "NRCA1": (+9.49, -0.45), "NRCA2": (+1.31, +8.24),
+    "NRCA3": (-1.31, -8.48), "NRCA4": (-9.83, +0.45),
+    "NRCB1": (-10.41, +0.67), "NRCB2": (-1.79, -11.50),
+    "NRCB3": (+1.79, +11.96), "NRCB4": (+10.83, -0.67),
+}
+WD1_ROLL = 284.71
+WD1_F164N_SKY_RESIDUAL = {
+    "NRCA1": (-8.43, -4.61), "NRCA2": (+2.95, -5.98),
+    "NRCA3": (-2.95, +6.92), "NRCA4": (+8.41, +4.61),
+    "NRCB1": (+9.34, +4.83), "NRCB2": (-5.47, +10.17),
+    "NRCB3": (+5.47, -9.43), "NRCB4": (-10.31, -4.83),
+}
+
+
+@pytest.mark.parametrize("filt, roll, residual", [
+    ("F162M", WD2_ROLL, WD2_F162M_SKY_RESIDUAL),
+    ("F164N", WD1_ROLL, WD1_F164N_SKY_RESIDUAL),
+])
+def test_shipped_medium_narrow_rows_remove_the_10mas_term(filt, roll, residual):
+    """The F162M/F164N rows (#1133) are ~10 mas per detector; rotated onto
+    each field's sky they must oppose the measured residual and remove >= 85%
+    of its 2-D rms."""
+    frame, off = ffc.table_filter_offsets(_shipped(), filt, "F212N")
+    assert frame == "instrument"
+    sky = ffc.instrument_to_sky(off, roll)
+    resid = ffc._remove_module_means(residual)
+    for det, r in resid.items():
+        c = np.asarray(sky[det])
+        r = np.asarray(r)
+        assert float(c @ r) / (np.linalg.norm(c) * np.linalg.norm(r)) < -0.95, (det, c, r)
+    before = np.array(list(resid.values()))
+    after = before + np.array([sky[d] for d in resid])
+    rms_before = np.sqrt((before ** 2).sum(1).mean())
+    rms_after = np.sqrt((after ** 2).sum(1).mean())
+    assert rms_before > 9.0
+    assert rms_after < 0.15 * rms_before, (rms_before, rms_after)
+
+
 def test_shipped_table_honours_its_own_gauge():
     tbl = _shipped()
-    for filt in ("F182M", "F187N"):
+    for filt in ("F182M", "F187N", "F162M", "F164N"):
         rows = [r for r in tbl if str(r["filter"]).upper() == filt]
         assert rows
         for mod in ("NRCA", "NRCB"):

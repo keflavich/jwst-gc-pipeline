@@ -12,7 +12,7 @@ r ~ 200 px.  This measures that on PRODUCTION catalogs: for every row of the
 ``satstar_perexp_halo/production_flux_vs_x.py``) it cuts a 2*RMAX+1 stamp of
 the ``_cal`` frame around (x_0, y_0) -- the fitted DETECTOR position;
 ``x_fit``/``y_fit`` are local to the fit box -- evaluates the production PSF grid
-(``to_griddedpsfmodel``) there at unit flux, masks DQ DO_NOT_USE/SATURATED
+(``load_stpsf_grid``) there at unit flux, masks DQ DO_NOT_USE/SATURATED
 dilated by 3 px, and fits ``F P + B`` and the halo modes
 (``satstar_halo_knots(r_core, RMAX)``, r_core = sqrt(sat_area/pi) + 3) on the
 same pixels.  Other stars are left to the MAD clipping of the fit, as in the
@@ -48,8 +48,8 @@ BAND, NULL_BAND = (250, 550), (1300, 1600)    # the NRCBLONG column deficit (#10
 
 
 def fit(catdir, gridfn, outfn, keys):
-    from jwst_gc_pipeline.reduction.saturated_star_finding import to_griddedpsfmodel
-    grid = to_griddedpsfmodel(gridfn)
+    from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
+    grid = load_stpsf_grid(gridfn)
     if isinstance(grid, list):
         grid = grid[0]
     H = int(RMAX) + 2

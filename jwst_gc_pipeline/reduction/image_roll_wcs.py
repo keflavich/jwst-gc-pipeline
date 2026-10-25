@@ -51,9 +51,14 @@ Provenance, idempotency, reversibility
 --------------------------------------
 Every product gets ``ROLLCORR=T`` with ``ROLLMODE='posthoc-visit-pivot'``,
 ``ROLLARC``, ``ROLLPVRA``/``ROLLPVDE``, the table sha and the date.  A
-product that already carries ``ROLLCORR`` is skipped (both this module and
-``roll_correction.apply_roll_correction`` honor the marker, so
-``ROLL_CORRECTION=1`` in ``fix_alignment`` cannot double-apply).  The
+product that already carries ``ROLLCORR`` is skipped (this module,
+``roll_correction.apply_roll_correction`` and the default-on
+``roll_correction.ensure_roll_correction`` in ``fix_alignment`` all honor the
+marker, so a frame is never rotated twice; ``ensure_roll_correction`` applies
+only the difference when the table value has changed since).  An observation
+whose locked offsets table predates the roll
+(``alignment_config.roll_blocked_by_locked_table``) is reported
+``locked-table`` and left unrolled, as ``fix_alignment`` leaves it.  The
 original WCS cards are kept in a header-only ``ROLLWBAK`` extension and the
 original GWCS under ``meta.roll_backup_wcs``; :func:`restore_product`
 reverts exactly.  Writes go to a temporary file in the same directory and
@@ -81,6 +86,7 @@ import time
 import numpy as np
 from astropy.io import fits
 
+from jwst_gc_pipeline.reduction.alignment_config import roll_blocked_by_locked_table
 from jwst_gc_pipeline.reduction.roll_correction import (
     MARKER, PENDING, rotation_about_pivot, roll_adjusted_wcs, verify_rotation,
     _tangent, _untangent)
@@ -97,7 +103,9 @@ _WCS_KEY_RE = re.compile(
     r'^(WCSAXES|CTYPE\d|CUNIT\d|CRVAL\d|CRPIX\d|CDELT\d|CD\d_\d|PC\d_\d|LONPOLE|LATPOLE|'
     r'RADESYS|EQUINOX|MJDREF|A_\w+|B_\w+|AP_\w+|BP_\w+|S_REGION|SIPGWMAX)$')
 _ROLL_KEYS = (MARKER, PENDING, 'ROLLMODE', 'ROLLARC', 'ROLLPVRA', 'ROLLPVDE', 'ROLLSHRA',
-              'ROLLSHDE', 'ROLLVMAS', 'ROLLTAB', 'ROLLDATE', 'ROLLVIS', 'ROLLIRES', 'ROLLIMED')
+              'ROLLSHDE', 'ROLLVMAS', 'ROLLTAB', 'ROLLDATE', 'ROLLVIS', 'ROLLIRES', 'ROLLIMED',
+              # roll_correction.ensure_roll_correction delta re-corrections
+              'ROLLPVOR', 'ROLLPVOD', 'ROLLPREV', 'ROLLDVMA', 'ROLLDDAT', 'ROLLNDLT')
 
 
 class ImageRollError(RuntimeError):
@@ -305,6 +313,10 @@ def _stamp(h, roll, pivot, table_sha, visit_key, extra=()):
     h['ROLLARC'] = (float(roll), '[arcsec] roll applied, +N->E')
     h['ROLLPVRA'] = (float(pivot[0]), '[deg] roll pivot RA')
     h['ROLLPVDE'] = (float(pivot[1]), '[deg] roll pivot Dec')
+    # the shift this product carried when the pivot was taken, so a later
+    # roll_correction.ensure_roll_correction delta can follow any shift since
+    h['ROLLPVOR'] = (float(h.get('RAOFFSET', 0.0)), '[arcsec] RAOFFSET when pivot taken')
+    h['ROLLPVOD'] = (float(h.get('DEOFFSET', 0.0)), '[arcsec] DEOFFSET when pivot taken')
     h['ROLLVIS'] = _card(str(visit_key)[:68], 'program-obs-visit of the roll')
     h['ROLLTAB'] = _card(f'sha1:{table_sha}'[:68], 'roll_corrections.csv')
     h['ROLLDATE'] = (time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'applied UTC')
@@ -796,6 +808,8 @@ def main(argv=None):
                 key = (prog, obs)
                 if key not in models:
                     rec['status'] = 'no-roll-row'
+                elif not args.restore and roll_blocked_by_locked_table(prog, obs):
+                    rec['status'] = 'locked-table'
                 elif writing and is_busy(prog, obs, args.field, busy_obs, names):
                     rec['status'] = 'in-flight'
                 else:

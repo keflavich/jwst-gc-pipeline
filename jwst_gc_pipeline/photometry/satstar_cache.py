@@ -69,6 +69,7 @@ SATSTAR_PRODUCT_SUFFIXES = (
     '_satstar_model.fits',
     '_satstar_residual.fits',
     '_satstar_rejected.fits',
+    '_satstar_severity_dropped.fits',
     '_satstar_flags.fits',
     '_wingcal_calibrators.fits',
     '_extended_satstar_catalog.fits',

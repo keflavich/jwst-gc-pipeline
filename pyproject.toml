@@ -20,7 +20,11 @@ dependencies = [
   "scipy",
   "astropy",
   "matplotlib",
-  "photutils>=2.0.dev0",
+  # <3.1: photutils 3.1.0 (2026-10-13) removed photutils.segmentation.catalog.
+  # DEFAULT_COLUMNS, which jwst 3.0.0 still imports (jwst.tweakreg.tweakreg_catalog,
+  # reached from jwst.pipeline.calwebb_image3), so `import jwst.pipeline` fails on a
+  # fresh install.  Lift once a jwst release supports photutils 3.1.
+  "photutils>=2.0.dev0,<3.1",
   "astroquery",
   "tqdm",
   "regions",

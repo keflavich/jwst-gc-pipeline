@@ -70,8 +70,20 @@ DEG_TO_ARCSEC = 3600.0
 _DEGENERATE_DEG = 0.0
 
 
+def _sat_flags(t, filt):
+    """``replaced_saturated`` (bare or ``_{filt}``) as bool, or all-False
+    when the catalog has no such column (older catalogs, synthetic tests)."""
+    try:
+        c = _col(t, 'replaced_saturated', filt)
+    except KeyError:
+        return np.zeros(len(t), bool)
+    v = np.ma.filled(np.ma.asarray(t[c]), False)
+    return np.asarray(v, bool)
+
+
 def _load_one(path, filt, epoch, sn_cut, obs_index):
     t = Table.read(path)
+    sat = _sat_flags(t, filt)
     sc_col = _col(t, 'skycoord', filt)
     fl_col = _col(t, 'flux', filt)
     fe_col = _col(t, 'flux_err', filt)
@@ -87,7 +99,7 @@ def _load_one(path, filt, epoch, sn_cut, obs_index):
     return dict(sc=sc[ok],
                 ex=np.where(np.isfinite(ex[ok]) & (ex[ok] > _DEGENERATE_DEG), ex[ok], 0.005),
                 ey=np.where(np.isfinite(ey[ok]) & (ey[ok] > _DEGENERATE_DEG), ey[ok], 0.005),
-                flux=flux[ok], mag=-2.5 * np.log10(flux[ok]),
+                flux=flux[ok], mag=-2.5 * np.log10(flux[ok]), sat=sat[ok],
                 epoch=epoch, n=int(ok.sum()), obs_index=obs_index)
 
 
@@ -114,11 +126,13 @@ def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05):
     ey = np.concatenate([c['ey'] for c in cats])
     flux = np.concatenate([c['flux'] for c in cats])
     mag = np.concatenate([c['mag'] for c in cats])
+    sat = np.concatenate([c['sat'] for c in cats])
     if len(cats) > 1:
         keep = _dedup_mask(sc, dedup_radius)
-        sc, ex, ey, flux, mag, obs_index = (
-            sc[keep], ex[keep], ey[keep], flux[keep], mag[keep], obs_index[keep])
-    return dict(sc=sc, ex=ex, ey=ey, flux=flux, mag=mag,
+        sc, ex, ey, flux, mag, sat, obs_index = (
+            sc[keep], ex[keep], ey[keep], flux[keep], mag[keep], sat[keep],
+            obs_index[keep])
+    return dict(sc=sc, ex=ex, ey=ey, flux=flux, mag=mag, sat=sat,
                epoch=epoch, n=int(len(sc)), obs_index=obs_index)
 
 
@@ -306,12 +320,143 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
               ey=np.concatenate([c['ey'] for c in tied]),
               flux=np.concatenate([c['flux'] for c in tied]),
               mag=np.concatenate([c['mag'] for c in tied]),
+              sat=np.concatenate([c['sat'] for c in tied]),
               epoch=ref_epoch, n=int(sum(c['n'] for c in tied)), obs_index=obs_index)
     return ref, diags
 
 
+#: |median PM(saturated) - median PM(unsaturated)| (mas/yr, either axis)
+#: above which saturation_pm_offset reports the saturated population as
+#: offset, if it is also SAT_PM_OFFSET_NSIGMA times its standard error.
+#: Measured on the v6 Treasury tables (JWST-GC/data-qa#371):
+#: Cloud c src satstars (-4.4, -23.1), Quintuplet (+8.5,
+#: -38.8), against ~2 mas/yr in Brick and Sgr B2. A real cluster-vs-field
+#: motion of bright stars (Arches/Quintuplet members, ~5 mas/yr relative
+#: to the field) sits below this, so the threshold does not flag it.
+SAT_PM_OFFSET_MAS_YR = 10.0
+SAT_PM_OFFSET_NSIGMA = 5.0
+SAT_PM_OFFSET_MIN_N = 20
+
+
+def _median_and_err(x):
+    med = float(np.median(x))
+    mad = 1.4826 * float(np.median(np.abs(x - med)))
+    return med, 1.2533 * mad / np.sqrt(len(x))
+
+
+def _offset_between(pm, a, b, dt, max_offset, nsigma):
+    res = dict(n_sat=int(a.sum()), n_unsat=int(b.sum()), offset=False)
+    for ax in ('pm_ra', 'pm_dec'):
+        x = np.asarray(pm[ax], float)
+        ms, es = _median_and_err(x[a])
+        mu, eu = _median_and_err(x[b])
+        d, e = ms - mu, float(np.hypot(es, eu))
+        res[f'd_{ax}'] = round(d, 3)
+        res[f'd_{ax}_err'] = round(e, 3)
+        # the epoch-to-epoch position offset this PM offset implies
+        res[f'd_{ax.replace("pm_", "pos_")}_mas'] = round(d * dt, 1)
+        if abs(d) > max_offset and abs(d) > nsigma * e:
+            res['offset'] = True
+    return res
+
+
+def saturation_pm_offset(pm, max_offset=SAT_PM_OFFSET_MAS_YR,
+                         nsigma=SAT_PM_OFFSET_NSIGMA, min_n=SAT_PM_OFFSET_MIN_N):
+    """Saturated-minus-unsaturated median trustworthy PM, per epoch.
+
+    The frame tie (brightest 20% of src) is dominated by unsaturated stars,
+    so a position bias in the saturated-star fit of ONE epoch passes
+    straight into those stars' PMs as a common offset: a step in PM at the
+    saturation magnitude.
+
+    A PM difference alone cannot say WHICH epoch's positions are biased, and
+    a star saturated in both epochs carries either epoch's bias. Each
+    epoch's diagnostic therefore uses the rows saturated ONLY in that epoch
+    (src: ``src_saturated & ~ref_saturated``; ref: the converse), compared
+    against rows saturated in neither. Rows saturated in both form a third,
+    'both' entry, which can show that an offset exists but cannot attribute
+    it.
+
+    Returns a list of dicts, ``which`` in ('src', 'ref', 'both'), each with
+    n_sat, n_unsat, d_pm_ra/d_pm_dec (+ _err, mas/yr), the implied position
+    offset d_pos_ra_mas/d_pos_dec_mas (= d_pm * baseline) and ``offset``
+    (True when either axis exceeds ``max_offset`` mas/yr AND ``nsigma``
+    standard errors). An entry is omitted when its saturated set or the
+    neither-saturated set has < ``min_n`` trustworthy rows. When only one of
+    the src/ref columns exists, rows are attributed to that epoch alone.
+    """
+    g = np.asarray(pm['trustworthy'], bool)
+    have = {w: f'{w}_saturated' in pm.colnames for w in ('src', 'ref')}
+    if not any(have.values()):
+        return []
+    sat = {w: (np.asarray(pm[f'{w}_saturated'], bool) if have[w]
+               else np.zeros(len(pm), bool)) for w in ('src', 'ref')}
+    neither = g & ~sat['src'] & ~sat['ref']
+    dt = float(pm.meta.get('baseline_yr', np.nan))
+    sets = {'src': g & sat['src'] & ~sat['ref'],
+            'ref': g & sat['ref'] & ~sat['src'],
+            'both': g & sat['src'] & sat['ref']}
+    out = []
+    if neither.sum() < min_n:
+        return out
+    for which, a in sets.items():
+        if which != 'both' and not have[which]:
+            continue
+        if a.sum() < min_n:
+            continue
+        res = dict(which=which)
+        res.update(_offset_between(pm, a, neither, dt, max_offset, nsigma))
+        out.append(res)
+    return out
+
+
+def saturation_offset_epochs(diags):
+    """From saturation_pm_offset's output: (epochs whose saturated positions
+    are offset, unattributed).
+
+    An epoch is blamed when its own exclusive set is offset. An offset seen
+    only in the saturated-in-both set is attributed by elimination when the
+    OTHER epoch's exclusive set exists and is clean (that epoch's saturated
+    positions agree with its unsaturated frame), e.g. Quintuplet v6: every
+    src-saturated star is also ref-saturated, but 3,011 ref-only saturated
+    stars show no offset, so the 'both' offset comes from src. With neither
+    exclusive set available, ``unattributed`` is True and no epoch is
+    blamed.
+    """
+    by = {d['which']: d for d in diags}
+    epochs = [w for w in ('src', 'ref') if w in by and by[w]['offset']]
+    both_off = 'both' in by and by['both']['offset']
+    if both_off and not epochs:
+        # 'clean' = consistent with zero (|d| < nsigma*err), small next to
+        # the 'both' offset (|d| < 1/4 of it) AND precise enough to have seen
+        # 1/4 of it (nsigma*err < 1/4 of it), on each axis where that offset
+        # is significant; on every axis also precise enough to have seen the
+        # flag threshold (nsigma*err < SAT_PM_OFFSET_MAS_YR). A set merely
+        # below the flag threshold can carry a real offset of its own, and a
+        # noisy set is consistent with zero without showing anything.
+        def clean(w):
+            d, b = by.get(w), by['both']
+            if d is None or d['offset']:
+                return False
+            for ax in ('d_pm_ra', 'd_pm_dec'):
+                lim = SAT_PM_OFFSET_NSIGMA * d[f'{ax}_err']
+                if abs(d[ax]) >= lim or lim >= SAT_PM_OFFSET_MAS_YR:
+                    return False
+                if abs(b[ax]) > SAT_PM_OFFSET_NSIGMA * b[f'{ax}_err']:
+                    if abs(d[ax]) >= 0.25 * abs(b[ax]) or lim >= 0.25 * abs(b[ax]):
+                        return False
+            return True
+        cl = [w for w in ('src', 'ref') if clean(w)]
+        if len(cl) == 1:
+            epochs = [{'src': 'ref', 'ref': 'src'}[cl[0]]]
+            # recorded in the diag (and so in meta['sat_pm_offset_json'])
+            by['both']['attributed_by_elimination'] = epochs[0]
+    return epochs, (both_off and not epochs)
+
+
 def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
-         match_radius=0.15, tie_magcut=None, isolation_radius=None, verbose=True):
+         match_radius=0.15, tie_magcut=None, isolation_radius=None, verbose=True,
+         demote_offset_saturated=True, src_isolation='flux'):
     src = load_filter_catalog(src_paths, filt, src_epoch)
     if verbose:
         print(f'  src ({filt}, epoch {src_epoch:.3f}) usable: {src["n"]:,}')
@@ -333,7 +478,8 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
                       f'neighbor -- isolation-cut results here are less trustworthy than '
                       f'the trustworthy flag alone suggests.')
     pm = M.build_pm_catalog_2epoch(src, ref, match_radius=match_radius,
-                                   isolation_radius=isolation_radius)
+                                   isolation_radius=isolation_radius,
+                                   src_isolation=src_isolation)
     pm.meta['filter'] = filt
     pm.meta['frame'] = ('relative: mean motion + mean shear of the affine tie\'s own '
                         'bright/compact matching sample subtracted per observation; '
@@ -345,6 +491,46 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     # if needed.
     pm.meta['tie_diag_json'] = json.dumps(diags)
     pm.meta['ref_paths_json'] = json.dumps([os.path.basename(q) for q in ref_paths])
+    # Saturated-star PM offset check (see saturation_pm_offset). An offset
+    # saturated population is a catalog-side position bias, not a motion:
+    # report it, and (by default) remove the affected rows from
+    # 'trustworthy' so downstream products do not carry a PM step at the
+    # saturation magnitude. 'trustworthy_presat' always holds the flag
+    # before this step.
+    sat_diag = saturation_pm_offset(pm)
+    pm['trustworthy_presat'] = pm['trustworthy'].copy()
+    for d in sat_diag:
+        if verbose or d['offset']:
+            label = ('saturated in both epochs' if d['which'] == 'both'
+                     else f'saturated in {d["which"]} only')
+            print(f'  saturated-star PM offset ({label} vs neither): '
+                  f'n_sat={d["n_sat"]:,} n_unsat={d["n_unsat"]:,} '
+                  f'd_pm_ra={d["d_pm_ra"]:+.2f}+-{d["d_pm_ra_err"]:.2f} '
+                  f'd_pm_dec={d["d_pm_dec"]:+.2f}+-{d["d_pm_dec_err"]:.2f} mas/yr '
+                  f'(position {d["d_pos_ra_mas"]:+.1f}, {d["d_pos_dec_mas"]:+.1f} mas)')
+    epochs, unattributed = saturation_offset_epochs(sat_diag)
+    pm.meta['sat_pm_offset_json'] = json.dumps(sat_diag)
+    demote = np.zeros(len(pm), bool)
+    for w in epochs:
+        print(f'  WARNING: {w}-epoch saturated-star-replaced positions are offset '
+              f'from the unsaturated frame (PM step at the saturation magnitude); '
+              f're-catalog the {w} epoch with the current saturated_star_finding '
+              f'before using bright-star PMs.'
+              + (' (attributed by elimination; assumes depth-independent bias)'
+                 if any(d.get('attributed_by_elimination') == w for d in sat_diag)
+                 else ''))
+        demote |= np.asarray(pm[f'{w}_saturated'], bool)
+    if unattributed:
+        print('  WARNING: stars saturated in BOTH epochs show a PM offset, but '
+              'cannot attribute it to an epoch (too few stars saturated in only '
+              'one epoch); check both epochs\' saturated-star positions.')
+        demote |= (np.asarray(pm['src_saturated'], bool) &
+                   np.asarray(pm['ref_saturated'], bool))
+    if demote_offset_saturated and demote.any():
+        n_dem = int((pm['trustworthy'] & demote).sum())
+        pm['trustworthy'] &= ~demote
+        print(f'  {n_dem:,} saturated rows removed from trustworthy '
+              f'(trustworthy_presat keeps them).')
     pm.write(out_path, overwrite=True)
     ntrust = int(pm['trustworthy'].sum())
     if verbose:
@@ -375,9 +561,20 @@ def main():
                          'field with real sub-arcsec structure (e.g. a dense '
                          'cluster core) where match_radius alone is too small '
                          'to catch a blended-but-undetected companion.')
+    ap.add_argument('--src-isolation', choices=('flux', 'any'), default='flux',
+                    help="source-epoch half of the isolation check: 'flux' "
+                         "(default) ignores src neighbours at contrast >= 10 "
+                         "(flux ratio <= 0.1, as on the ref side); 'any' is the "
+                         "pre-2026-10-20 rule, any src neighbour in the beam "
+                         "rejects the star")
+    ap.add_argument('--keep-offset-saturated', action='store_true',
+                    help='report a saturated-star PM offset but leave those '
+                         'rows trustworthy (default: remove them)')
     args = ap.parse_args()
     build(args.src, args.ref, args.filter, args.src_epoch, args.ref_epoch, args.out,
-         match_radius=args.match_radius, isolation_radius=args.isolation_radius)
+         match_radius=args.match_radius, isolation_radius=args.isolation_radius,
+         demote_offset_saturated=not args.keep_offset_saturated,
+         src_isolation=args.src_isolation)
 
 
 if __name__ == '__main__':

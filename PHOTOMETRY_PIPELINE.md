@@ -276,7 +276,15 @@ qfit-confident (`qfit ≤ manual_ext_qfit_max`, 0.2), which is kept regardless o
 because a group-fit star can carry a formal S/N near zero from an inflated
 `flux_err` while its flux and qfit are excellent. Unmeasurable (non-finite) S/N is
 also kept. The rule is `(star_like AND snr_ok) OR qfit_confident`
-(`_emission_keep_nircam`). Anything flagged `model_overshoot` is then dropped, and
+(`_emission_keep_nircam`). From m3 on, the NIRCam vetting also keeps a source
+within 0.5 FWHM of a row of the previous phase's vetted catalog (m3 ← m2, …,
+m7 ← m6) while its qfit < `manual_ext_hysteresis_qfit_max` (0.6) and S/N ≥
+`manual_ext_hysteresis_snr_min` (10), so a star the previous phase subtracted
+stays through a small qfit or S/N change between phases (the vetting flicker,
+`docs/evidence/vetting_hysteresis/README.md`); 0 turns it off. A source within
+`manual_ext_hysteresis_satstar_guard_fwhm` (4.5) FWHM of a saturated star (its
+`is_saturated` row, or any satstar row of the merged catalog before the in-field
+duplicate collapse) gets no such keep (0 = no guard). Anything flagged `model_overshoot` is then dropped, and
 a fit whose model peak still exceeds `manual_overshoot_drop_ratio` (5.0) × the
 local data peak after the refit is dropped outright. MIRI instead vets purely on data-i2d **prominence**
 `(core_peak − annulus_median)/annulus_MAD ≥ min_prominence`. The pipeline then
@@ -366,6 +374,9 @@ still run after m6.
 | `--manual-ext-snr-floor-per-frame` (opt-out: sets `manual_ext_snr_floor_propagated=False`) | not set (floor on flux_err_prop) | not set | not set | not set |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
+| `--manual-ext-hysteresis-qfit-max` (0 = off) | 0.6 | 0.6 (m3–m7) | 0.6 (m3–m7) | (off: MIRI vets on prominence) |
+| `--manual-ext-hysteresis-snr-min` | 10.0 | 10 | 10 | |
+| `--manual-ext-hysteresis-satstar-guard-fwhm` (0 = no guard) | 4.5 | 4.5 | 4.5 | |
 | `--manual-ext-qfit-recover-max` | 0.2 | 0.2 (= qfit_max ⇒ **no-op**) | set 0.5 to enable | |
 | `--manual-overshoot-drop-ratio` | 5.0 | 5.0 | 5.0 | 5.0 | final overshoot DROP (model peak > this × local data peak after the refit) |
 | `--manual-resid-roundlo` / `-roundhi` | −1.0 / 1.0 | −1.0 / 1.0 | −1.0 / 1.0 | −1.0 / 1.0 | daofind roundness window, m2+ |
@@ -377,6 +388,7 @@ still run after m6.
 | `--manual-detect-threshold-scale` | 1.0 | 1.0 | 1.0 | 1.0 | scales the permissive daofind threshold |
 | `--local-snr-threshold` | 5.0 | 5.0 | 5.0 | 5.0 | m1 per-source local S/N |
 | `--manual-keep-intermediate-model-i2d` | off | off | off | off | write a model i2d for every phase; off writes the last phase only |
+| `--manual-model-i2d-all-modules` | off | off | off | off | write the last phase's model i2d for nrca/nrcb too; off writes the merged module's only (every module's when the run has no merged module) |
 | prominence gate (`miri_prominence_snr`) | 5.0 in `MANUAL_DEFAULTS`/`mopt`; no CLI flag (the `do_photometry_step_manual` signature default of 0.0 applies only to direct callers) | 0 (off — NIRCam leaves it 0) | 0 (off) | **8→3 progressive** (m12:8, m4:5.5, m6:3), scheduled by `miri_tuning` |
 | `--nircam-prom-m1` / `-m2` / `-m3plus` | 0.0 | 0 (off) | 0 (off; opt-in) | n/a |
 | `--group` | off | off (pass `--group`) | | |
@@ -396,12 +408,14 @@ still run after m6.
 | `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--manual-m7-seed-own-band-companion-max-ratio` (in [0, 1]; 1.0 = cut every fainter source in the radius, 0 = no cut) | 0.1 | 0.1 | | |
+| `--manual-crossband-ecsv-all-modules` | off | off | off | off | write the cross-band table's `.ecsv` twin for nrca/nrcb too; off writes it for the merged module only, or for every module when the run has no merged module (a disjoint field, MIRI). The FITS table is written for every module either way |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
+| `--mergedcat-render-procs` / `--forced-fill-procs` (forked processes over the frames of the merged-catalog render / of the m8 fill; output identical to the serial loop, #1230) | 1 / 1 | serial (set per job through the submitters' `EXTRA_ARGS`) | | |
 | `--each-suffix` | `destreak_o001_crf` | per-reduction | | |
 | `--cutout-region` / `--cutout-label` / `--cutout-size-arcsec` | `''`/`''`/5.0 | full-frame | | |
 | `--inject-stars` / `--inject-seed` | `''`/0 | off (cutout-only; reference-field truth, `injection.py`) | | |
@@ -455,7 +469,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   `iter_found`, …).
 - `catalogs/basic_<module>_indivexp_photometry_tables_merged_resbgsub_m7<obs>.fits`
   — the multi-filter **cross-band** table (per-band fluxes/mags, anchored on the
-  reference filter). Full-frame only.
+  reference filter). Full-frame only. Its `.ecsv` twin is written for the merged
+  module only (for every module when the run has no merged module) unless
+  `--manual-crossband-ecsv-all-modules` is passed; a skipped module's `.ecsv`
+  from an earlier run is removed (`crossband_ecsv_modules`, `_write_ecsv_twin`).
 - `..._resbgsub_m8<obs>.fits` + `..._resbgsub_m8_dedup.fits` — the **forced-fill**
   sibling of the m7 table; every band's flux is force-fit at the merged position.
   Full-frame only; m7 stays as written.
@@ -470,7 +487,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).
 - `..._m{N}_..._mergedcat_model_i2d.fits` — model mosaic. Written for the FINAL
-  phase only unless `--manual-keep-intermediate-model-i2d` is passed. **For display
+  phase only unless `--manual-keep-intermediate-model-i2d` is passed, and only for
+  the merged module (the one a release stages) unless
+  `--manual-model-i2d-all-modules` is passed; a run with no merged module writes
+  it for every module. **For display
   it adds the saturated-star model back** on top of the fitted point-source model;
   the residual above is unaffected.
 - `..._m{N}_..._mergedcat_residual_smoothed_bg_i2d.fits` — background map.
@@ -544,6 +564,7 @@ control is the default.
 | `--manual-ext-star-prom-robust-min` | 0 (off) | …or neighbour-robust prominence (25th-percentile annulus floor, lower-half MAD) ≥ this; −1 = AUTO (8 on star-dominated fields, off on extended-emission targets) |
 | `--manual-ext-star-prom-robust-conc` | 0.6 | …where the robust branch refuses a source whose data-i2d core flux / fitted flux is < this × the field median for prominence ≥ 10 sources (core deficit > 5σ): a fit to a bump in a bright star's PSF wing; 0 = off |
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
+| `--manual-ext-hysteresis-qfit-max` | 0.6 | m3–m7, NIRCam: also keep a source within 0.5 FWHM of a row of the previous phase's vetted catalog with qfit < this and S/N ≥ `--manual-ext-hysteresis-snr-min` (10), except within `--manual-ext-hysteresis-satstar-guard-fwhm` (4.5) FWHM of a saturated star; the overshoot drop and structure prune still apply; 0 = off |
 | `--manual-ext-snr-floor-per-frame` | (propagated) | put the local S/N floor (`--manual-ext-local-snr-min`) on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch); the sky-clean floor is per-frame either way |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + per-frame S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-sky-clean-local-arcsec` | 3.0 | sky-clean tier, LOCAL reference: a source is also clean when its annulus floor is ≤ `--manual-sky-clean-local-max-err` i2d ERR above the 5th percentile of its 3″ tile (smooth bright plateau = clean; filament, PSF-scale emission structure or crowding = not); OR-ed with the global dark-sky test; 0 = global only; needs the i2d ERR plane (skipped with a log line without it) |
