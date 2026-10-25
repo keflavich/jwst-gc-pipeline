@@ -321,6 +321,59 @@ def test_kdtree_groups_equal_sourcegrouper(n, side, sep, seed):
     np.testing.assert_array_equal(L.CappedSourceGrouper(sep, max_size=0)(x, y), ref)
 
 
+def test_kdtree_groups_equal_sourcegrouper_clustered():
+    """Clumped seeds (Gaussian clusters on a sparse field), the regime where
+    single-linkage chains form."""
+    from photutils.psf import SourceGrouper
+    rng = np.random.default_rng(7)
+    centres = rng.uniform(0, 600, (40, 2))
+    clumps = np.concatenate([c + rng.normal(0, 6.0, (rng.integers(3, 40), 2))
+                             for c in centres])
+    field = rng.uniform(0, 600, (1500, 2))
+    xy = np.concatenate([clumps, field])
+    ref = np.asarray(SourceGrouper(5.0)(xy[:, 0], xy[:, 1]))
+    assert np.unique(ref, return_counts=True)[1].max() > 10
+    np.testing.assert_array_equal(L.kdtree_group_ids(xy[:, 0], xy[:, 1], 5.0), ref)
+
+
+def test_capped_grouper_output_unchanged_from_sourcegrouper_version(monkeypatch):
+    """The cap logic sees the same partition and labels as the photutils
+    SourceGrouper version it replaced, so its splits are identical."""
+    from photutils.psf import SourceGrouper
+    rng = np.random.default_rng(8)
+    x = rng.uniform(0, 150, 2500)
+    y = rng.uniform(0, 150, 2500)
+    new = L.CappedSourceGrouper(5.0, max_size=10)(x, y)
+    monkeypatch.setattr(L, 'kdtree_group_ids',
+                        lambda xx, yy, sep: np.asarray(SourceGrouper(sep)(xx, yy)))
+    old = L.CappedSourceGrouper(5.0, max_size=10)(x, y)
+    np.testing.assert_array_equal(new, old)
+
+
+def test_kdtree_groups_50k_seeds_time_and_memory():
+    """50000 seeds at the o105 hybpsf F480M density (11.8 per 1000 px^2,
+    grouping radius 5.148 px).  photutils SourceGrouper builds an 8 N(N-1)/2
+    byte distance matrix here (10 GB; 10.6 GB RSS and 18.5 s measured on a
+    49153-seed o105 frame); the KD-tree grouping stays far below that."""
+    import time
+    import tracemalloc
+    rng = np.random.default_rng(9)
+    n = 50000
+    side = np.sqrt(n / 11.8e-3)
+    x = rng.uniform(0, side, n)
+    y = rng.uniform(0, side, n)
+    tracemalloc.start()
+    t0 = time.perf_counter()
+    gid = L.CappedSourceGrouper(5.148, max_size=10)(x, y)
+    dt = time.perf_counter() - t0
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert gid.shape == (n,)
+    assert np.unique(gid, return_counts=True)[1].max() <= 10
+    assert peak < 200e6, peak
+    assert dt < 20.0, dt
+
+
 def test_kdtree_groups_edge_cases():
     assert L.kdtree_group_ids([3.0], [4.0], 5.0).tolist() == [1]
     assert L.kdtree_group_ids([], [], 5.0).size == 0
