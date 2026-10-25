@@ -8,8 +8,9 @@ test alone reads 'covered' from the wing of a bright accepted neighbour, so a
 star that the frame's satstar pass rejected (and the daophot hand-off fitted)
 was subtracted by neither channel.
 
-The default (MERGEDCAT_SATSTAR_COVER unset) keeps the model-threshold rule;
-``accepted`` is opt-in and never applies to MIRI.
+The default (MERGEDCAT_SATSTAR_COVER unset) is ``accepted`` for NIRCam;
+``MERGEDCAT_SATSTAR_COVER=model`` restores the model-threshold rule, and MIRI
+always keeps the model-threshold rule.
 """
 import os
 from types import SimpleNamespace
@@ -90,9 +91,9 @@ def test_legacy_mode_matches_model_threshold_only():
 
 def test_cover_mode_env(monkeypatch):
     monkeypatch.delenv('MERGEDCAT_SATSTAR_COVER', raising=False)
-    assert _mergedcat_satstar_cover_mode() == 'model'      # default: old rule
+    assert _mergedcat_satstar_cover_mode() == 'accepted'   # default
     monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', '')
-    assert _mergedcat_satstar_cover_mode() == 'model'
+    assert _mergedcat_satstar_cover_mode() == 'accepted'   # blank = default
     monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', ' Accepted ')
     assert _mergedcat_satstar_cover_mode() == 'accepted'
     monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', 'model')
@@ -110,6 +111,16 @@ def test_accepted_cover_is_gated_off_for_miri(monkeypatch, filtername, expected)
     monkeypatch.delenv('GC_INSTRUMENT_OVERRIDE', raising=False)
     monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', 'accepted')
     assert _mergedcat_satstar_cover_mode(filtername) == expected
+    # the default (unset) is gated the same way: MIRI keeps 'model'
+    monkeypatch.delenv('MERGEDCAT_SATSTAR_COVER', raising=False)
+    assert _mergedcat_satstar_cover_mode(filtername) == expected
+
+
+@pytest.mark.parametrize('filtername', ['F480M', 'F212N', 'F770W', 'F2550W'])
+def test_model_override_applies_to_every_instrument(monkeypatch, filtername):
+    monkeypatch.delenv('GC_INSTRUMENT_OVERRIDE', raising=False)
+    monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', 'model')
+    assert _mergedcat_satstar_cover_mode(filtername) == 'model'
 
 
 def test_miri_gate_still_rejects_a_malformed_value(monkeypatch):
@@ -442,19 +453,26 @@ def _e2e_setup(tmp_path, grid):
     return frame, merged
 
 
-def _run_e2e(tmp_path, monkeypatch, cover_mode, record=None):
+def _run_e2e(tmp_path, monkeypatch, cover_mode, record=None,
+             drop_satstar_catalog=False, instrument=None):
     """Run build_mergedcat_residuals on the synthetic frame.  Returns
-    (rendered positions per _render_model_from_table call, residual, model)."""
+    (rendered positions per _render_model_from_table call, residual, model).
+    ``drop_satstar_catalog`` deletes the frame's satstar catalog (the model
+    stays); ``instrument`` sets GC_INSTRUMENT_OVERRIDE before the setup."""
     for var in ('MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM', 'MERGE_RENDER_PSF_SHAPE',
                 'MERGE_RENDER_FWHM_MULT', 'MERGE_SATSTAR_RENDER_CAP',
                 'GC_INSTRUMENT_OVERRIDE'):
         monkeypatch.delenv(var, raising=False)
+    if instrument is not None:
+        monkeypatch.setenv('GC_INSTRUMENT_OVERRIDE', instrument)
     if cover_mode is None:
         monkeypatch.delenv('MERGEDCAT_SATSTAR_COVER', raising=False)
     else:
         monkeypatch.setenv('MERGEDCAT_SATSTAR_COVER', cover_mode)
     grid = _e2e_grid()
     frame, merged = _e2e_setup(tmp_path, grid)
+    if drop_satstar_catalog:
+        os.remove(frame.replace('.fits', f'_{E2E_SATLABEL}_satstar_catalog.fits'))
 
     monkeypatch.setattr(ccl.psf_preflight, 'preflight_psf_data',
                         lambda *a, **k: None)
@@ -501,9 +519,14 @@ def _b_peak():
 
 @pytest.mark.filterwarnings(
     'ignore::jwst_gc_pipeline.frame_wcs.MissingGwcsWarning')
+@pytest.mark.parametrize('cover_mode', [None, 'accepted'])
 def test_e2e_accepted_renders_the_rejected_star_and_leaves_the_accepted_one_to_the_model(
-        tmp_path, monkeypatch, capsys):
-    calls, resid, model = _run_e2e(tmp_path, monkeypatch, 'accepted')
+        tmp_path, monkeypatch, capsys, cover_mode):
+    """The default (unset) and the explicit ``accepted`` render: B, which this
+    frame's satstar pass did not fit, is rendered from the catalog although
+    A's wing exceeds the threshold at B; A, which it did fit, is left to the
+    satstar model and not subtracted twice."""
+    calls, resid, model = _run_e2e(tmp_path, monkeypatch, cover_mode)
     b_peak = _b_peak()
     # catalog-PSF renders: C (ordinary row), then B (the uncovered satstar
     # group); A never, since this frame's satstar model subtracts it
@@ -520,16 +543,18 @@ def test_e2e_accepted_renders_the_rejected_star_and_leaves_the_accepted_one_to_t
     assert ('rendering 1 saturated stars NOT covered by this frame\'s satstar '
             'model' in out)
     assert '1 of them sit on satstar-model flux > 10' in out
+    assert ('satstar cover test per frame: accepted-fit rule in 1, '
+            'model-threshold fallback (no usable satstar catalog) in 0 of 1 '
+            'frames' in out)
 
 
 @pytest.mark.filterwarnings(
     'ignore::jwst_gc_pipeline.frame_wcs.MissingGwcsWarning')
-@pytest.mark.parametrize('cover_mode', [None, 'model'])
 def test_e2e_model_rule_leaves_the_neighbour_wing_star_in_the_residual(
-        tmp_path, monkeypatch, capsys, cover_mode):
-    """The default (and explicit ``model``) render keeps the old rule: A's
-    wing covers B, so neither channel subtracts B in this frame."""
-    calls, resid, model = _run_e2e(tmp_path, monkeypatch, cover_mode)
+        tmp_path, monkeypatch, capsys):
+    """``MERGEDCAT_SATSTAR_COVER=model`` restores the old rule: A's wing
+    covers B, so neither channel subtracts B in this frame."""
+    calls, resid, model = _run_e2e(tmp_path, monkeypatch, 'model')
     b_peak = _b_peak()
     assert calls == [[E2E_C]]
     assert resid[_peak_px(E2E_B)] == pytest.approx(b_peak, rel=1e-4)
@@ -538,6 +563,46 @@ def test_e2e_model_rule_leaves_the_neighbour_wing_star_in_the_residual(
     out = capsys.readouterr().out
     assert 'satstar cover test = model' in out
     assert 'NOT covered by this frame' not in out
+    assert 'satstar cover test per frame' not in out
+
+
+@pytest.mark.filterwarnings(
+    'ignore::jwst_gc_pipeline.frame_wcs.MissingGwcsWarning')
+def test_e2e_frame_without_satstar_catalog_falls_back_and_is_counted(
+        tmp_path, monkeypatch, capsys):
+    """Under the default rule a frame whose satstar catalog is missing keeps
+    the model-threshold test (B stays in the residual, as under ``model``),
+    and the summary line counts it."""
+    calls, resid, _ = _run_e2e(tmp_path, monkeypatch, None,
+                               drop_satstar_catalog=True)
+    assert calls == [[E2E_C]]
+    assert resid[_peak_px(E2E_B)] == pytest.approx(_b_peak(), rel=1e-4)
+    out = capsys.readouterr().out
+    assert 'model-threshold cover test for this frame' in out
+    assert ('satstar cover test per frame: accepted-fit rule in 0, '
+            'model-threshold fallback (no usable satstar catalog) in 1 of 1 '
+            'frames' in out)
+
+
+@pytest.mark.filterwarnings(
+    'ignore::jwst_gc_pipeline.frame_wcs.MissingGwcsWarning')
+def test_e2e_miri_render_is_unchanged_by_the_default(tmp_path, monkeypatch, capsys):
+    """MIRI (GC_INSTRUMENT_OVERRIDE) renders with the model-threshold rule
+    under the default, exactly as under ``MERGEDCAT_SATSTAR_COVER=model``."""
+    runs = {}
+    for cover_mode in (None, 'model'):
+        sub = tmp_path / f'cover_{cover_mode}'
+        sub.mkdir()
+        calls, resid, model = _run_e2e(sub, monkeypatch, cover_mode,
+                                       instrument='MIRI')
+        # copy: the next run's setup renders its base through this run's spy
+        runs[cover_mode] = (list(calls), resid, model, capsys.readouterr().out)
+    (c0, r0, m0, out0), (c1, r1, m1, out1) = runs[None], runs['model']
+    assert c0 == c1 == [[E2E_C]]
+    np.testing.assert_array_equal(r0, r1)
+    np.testing.assert_array_equal(m0, m1)
+    assert 'satstar cover test = model (the accepted rule is NIRCam-only' in out0
+    assert 'satstar cover test per frame' not in out0
 
 
 def test_e2e_perframe_record_names_the_raw_pair_read_and_the_render_written(
