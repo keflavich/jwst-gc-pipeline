@@ -149,9 +149,11 @@ MANUAL_DEFAULTS = {
     # Joint (photutils SourceGrouper) PSF fitting of close sources in every
     # manual daophot pass.  ON by default: ungrouped fits of
     # pairs at 0.75-2 FWHM each absorb the neighbour's wing, so the summed pair
-    # model over-subtracts (o105 30" cutout, model/data over close pairs
-    # relative to isolated stars: F212N 1.082 ungrouped vs 0.99 grouped, F480M
-    # 1.100 vs 0.93-0.97) and the residual shows a crater at each member.
+    # model over-subtracts (o105 30" cutout, m7 from main's m6 state,
+    # model/data over 0.75-2 FWHM pairs relative to isolated stars: F212N
+    # 1.083 ungrouped vs 0.991 grouped, F480M 1.102 vs 0.969) and the residual
+    # shows a crater at each member (S/N<-5 at clean pair members in that
+    # nn bin: F212N 309 -> 24, F480M 615 -> 83).
     # --no-group-fit restores the ungrouped fit.  Product names stay canonical
     # (no ``_group`` token): see manual_group_fit_enabled.
     'manual_group_fit': True,

@@ -5071,8 +5071,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             "the pass, so an n-source group keeps the step count "
                             "an isolated source gets at the photutils default "
                             "100 (default 25; 0 = flat 100).  At the flat 100, "
-                            "32%% of grouped o105 F480M rows hit the budget and "
-                            "lost flux_err."))
+                            "27-32%% of grouped o105 F480M rows hit the budget "
+                            "and most lost flux_err."))
     parser.add_option('--each-exposure', dest='each_exposure',
                       default=False, action='store_true',
                       help='Photometer each exposure (REQUIRED for new runs; '
@@ -5411,10 +5411,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             "spatially coherent sub-groups via principal-axis "
                             "sorting before the joint fit.  Default 10, set with "
                             "grouped fitting on by default in the manual path: "
-                            "uncapped groups reach 50-100+ sources in dense "
-                            "fields and the joint LevMar cost grows roughly "
-                            "cubically with group size (brick LW iter3 hit its "
-                            "96 h wall).  'unlimited' only where blends are rare."))
+                            "the joint LevMar cost grows roughly cubically with "
+                            "group size, and uncapped groups of 50-100+ sources "
+                            "(brick LW iter3 cross-band union seeds) hit the "
+                            "96 h wall.  Production m7 seed lists measured "
+                            "2026-10 reach 12 sources (o105 hybpsf F480M), so "
+                            "the cap rarely binds there."))
     parser.add_option('--n-seed-chunks', dest='n_seed_chunks',
                       default=1, type='int',
                       help=('Split the seed catalog into N image-pixel tiles '
