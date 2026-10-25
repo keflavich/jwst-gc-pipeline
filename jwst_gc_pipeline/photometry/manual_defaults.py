@@ -146,7 +146,7 @@ MANUAL_DEFAULTS = {
     # -- coarse-background detection (0 = off; MIRI raw rounds use 51)
     'coarse_bg_box': 0,
     # -- grouping
-    # Joint (photutils SourceGrouper) PSF fitting of close sources in every
+    # Joint PSF fitting (CappedSourceGrouper groups) of close sources in every
     # manual daophot pass.  ON by default: ungrouped fits of
     # pairs at 0.75-2 FWHM each absorb the neighbour's wing, so the summed pair
     # model over-subtracts (o105 30" cutout, m7 from main's m6 state,
