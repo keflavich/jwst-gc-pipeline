@@ -5070,6 +5070,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             "--max-group-size) and keeps the canonical product "
                             "names; --group overrides this flag."))
     parser.add_option("--group-fit", dest="manual_group_fit",
+                      default=MANUAL_DEFAULTS['manual_group_fit'],
                       action='store_true',
                       help="Manual daophot path: grouped fitting (the default).")
     parser.add_option("--manual-group-fit-lm-steps", dest="manual_group_fit_lm_steps",
