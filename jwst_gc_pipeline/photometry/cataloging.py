@@ -1920,6 +1920,140 @@ def _core_concentration(data, xpix, ypix, r_core=1.5, r_ring=(2.5, 4.0),
     return core, sigma
 
 
+def _peak_excess(data, xpix, ypix, r_peak=3.0, r_ann=(4.0, 10.0)):
+    """Brightest data pixel within ``r_peak`` px of each position, minus the
+    median of the ``r_ann`` annulus.
+
+    NaN within ``r_ann[1]`` px of the image edge, with no finite pixel inside
+    ``r_peak``, or with fewer than 10 finite annulus pixels.
+    """
+    n = len(xpix)
+    out = np.full(n, np.nan, dtype=float)
+    ny, nx = data.shape
+    h = int(np.ceil(r_ann[1]))
+    yo, xo = np.mgrid[-h:h + 1, -h:h + 1]
+    for i in range(n):
+        if not (np.isfinite(xpix[i]) and np.isfinite(ypix[i])):
+            continue
+        ix, iy = int(round(float(xpix[i]))), int(round(float(ypix[i])))
+        if not (h <= ix < nx - h and h <= iy < ny - h):
+            continue
+        st = data[iy - h:iy + h + 1, ix - h:ix + h + 1]
+        r = np.hypot(xo - (xpix[i] - ix), yo - (ypix[i] - iy))
+        pk = st[r <= r_peak]
+        pk = pk[np.isfinite(pk)]
+        ann = st[(r >= r_ann[0]) & (r <= r_ann[1])]
+        ann = ann[np.isfinite(ann)]
+        if pk.size == 0 or ann.size < 10:
+            continue
+        out[i] = float(pk.max()) - float(np.median(ann))
+    return out
+
+
+def _satstar_phantom_veto_enabled():
+    """``VET_SATSTAR_PHANTOM=0`` turns the phantom-satstar veto of
+    :func:`_satstar_phantom_rows` off (on by default)."""
+    return bool(int(os.environ.get('VET_SATSTAR_PHANTOM', 1)))
+
+
+def _satstar_phantom_rows(data, xpix, ypix, flux, candidate, calib, *,
+                          conc_max=0.2, peak_max=0.1, snr_min=20.0,
+                          r_peak=3.0, max_calib=5000, min_calib=5):
+    """Satstar rows whose catalog flux has no counterpart in the data i2d.
+
+    A satstar fit on a single-frame artifact (SATURATED-flagged reference or
+    dead pixels at a detector edge, a hot/dead cluster, a cosmic-ray or
+    snowball footprint) enters the merged catalog as a ``replaced_saturated``
+    row with a 1e4-1e5 flux at a position where every other exposure, and so
+    the outlier-rejected data i2d, shows no star.  The force-keep then puts it
+    in the vetted catalog, and the merged-catalog render subtracts that flux
+    from every frame covering the position.
+
+    For each ``candidate`` row two data-i2d measurements are compared with the
+    row's flux, each calibrated on the field's own stars (``calib`` rows,
+    deterministically subsampled to at most ``max_calib``):
+
+      core_rel = core / flux / C_ref, ``core`` from :func:`_core_concentration`
+                 (r <= 1.5 px sum minus the 2.5-4 px ring median), C_ref =
+                 median core / flux of the calibration rows;
+      peak_rel = :func:`_peak_excess` (brightest pixel within ``r_peak`` px
+                 minus the 4-10 px annulus median) / flux / P_ref, P_ref =
+                 median of the same quantity at r_peak = 1.5 px over the
+                 calibration rows.
+
+    A row is a phantom when ``core_rel < conc_max`` AND ``peak_rel <
+    peak_max`` AND the expected core S/N ``C_ref * flux / sigma`` is at least
+    ``snr_min``.  Either measurement non-finite (a NaN pixel in the core, which
+    is what a star saturated in every exposure leaves in the i2d; a position
+    within 10 px of the i2d edge) keeps the row.  A bright pixel within
+    ``r_peak`` px (a real star at an offset position, a neighbour) keeps it
+    too.  Fewer than ``min_calib`` calibration rows turns the test off.
+
+    Thresholds (o105 prodD m7 vetted catalogs; per-row truth from the crf SCI
+    of every covering exposure, a star "present" in a frame when its 3x3 peak
+    or 2-4 px ring holds >= 1/4 of the flux the row predicts there):
+    rows absent from >= 2 covering frames (F212N 63, F480M 4) read peak_rel
+    <= 0.085; rows present in >= 2 frames at >= 1/2 of the predicted flux
+    (F212N 9,606, F480M 1,070 with finite measurements) read peak_rel >=
+    0.217 (F212N) and >= 0.653 (F480M).  ``peak_max`` = 0.1 sits between the
+    two; rows with a star 1-3 px away at 10-20% of the predicted flux
+    (peak_rel 0.1-0.2) stay kept as ambiguous.  ``conc_max`` = 0.2 is a second
+    requirement (no absent row reads core_rel above 0.02 apart from one row
+    with a bright star at the position, kept by peak_rel).  ``snr_min`` = 20
+    keeps rows whose flux is too faint for an absent core to be measured (the
+    vetoed o105 rows read expected core S/N >= 200).
+
+    Returns ``(phantom, core_rel, peak_rel, core_snr, info)``: a boolean mask
+    and three float arrays of ``len(flux)`` (NaN off the candidates), and a
+    dict with ``C_ref``, ``P_ref`` and ``n_calib``.
+    """
+    n = len(flux)
+    flux = np.asarray(flux, dtype=float)
+    xpix = np.asarray(xpix, dtype=float)
+    ypix = np.asarray(ypix, dtype=float)
+    candidate = np.asarray(candidate, dtype=bool) & np.isfinite(flux) & (flux > 0)
+    phantom = np.zeros(n, dtype=bool)
+    core_rel = np.full(n, np.nan)
+    peak_rel = np.full(n, np.nan)
+    core_snr = np.full(n, np.nan)
+    info = {'C_ref': np.nan, 'P_ref': np.nan, 'n_calib': 0}
+    cal = np.flatnonzero(np.asarray(calib, dtype=bool) & ~candidate
+                         & np.isfinite(flux) & (flux > 0))
+    if not candidate.any() or len(cal) < int(min_calib):
+        info['n_calib'] = int(len(cal))
+        return phantom, core_rel, peak_rel, core_snr, info
+    if len(cal) > int(max_calib):
+        cal = cal[np.linspace(0, len(cal) - 1, int(max_calib)).astype(int)]
+    c_core, _ = _core_concentration(data, xpix[cal], ypix[cal])
+    c_peak = _peak_excess(data, xpix[cal], ypix[cal], r_peak=1.5)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        c_conc = c_core / flux[cal]
+        c_pk = c_peak / flux[cal]
+    c_conc = c_conc[np.isfinite(c_conc)]
+    c_pk = c_pk[np.isfinite(c_pk)]
+    info['n_calib'] = int(min(len(c_conc), len(c_pk)))
+    if info['n_calib'] < int(min_calib):
+        return phantom, core_rel, peak_rel, core_snr, info
+    C_ref, P_ref = float(np.median(c_conc)), float(np.median(c_pk))
+    info['C_ref'], info['P_ref'] = C_ref, P_ref
+    if not (C_ref > 0 and P_ref > 0):
+        return phantom, core_rel, peak_rel, core_snr, info
+    ci = np.flatnonzero(candidate)
+    core, sig = _core_concentration(data, xpix[ci], ypix[ci])
+    pk = _peak_excess(data, xpix[ci], ypix[ci], r_peak=r_peak)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        core_rel[ci] = core / flux[ci] / C_ref
+        peak_rel[ci] = pk / flux[ci] / P_ref
+        core_snr[ci] = C_ref * flux[ci] / sig
+    with np.errstate(invalid='ignore'):
+        phantom[ci] = (np.isfinite(core_rel[ci]) & np.isfinite(peak_rel[ci])
+                       & np.isfinite(core_snr[ci])
+                       & (core_rel[ci] < float(conc_max))
+                       & (peak_rel[ci] < float(peak_max))
+                       & (core_snr[ci] >= float(snr_min)))
+    return phantom, core_rel, peak_rel, core_snr, info
+
+
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               star_prom_min=0.0,
@@ -1961,6 +2095,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               hysteresis_match_arcsec=0.0,
                               hysteresis_satstar_guard_arcsec=0.0,
                               hysteresis_satstar_skycoord=None,
+                              satstar_phantom_veto=True,
+                              satstar_phantom_conc_max=0.2,
+                              satstar_phantom_peak_max=0.1,
+                              satstar_phantom_snr_min=20.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
 
@@ -1983,6 +2121,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     With ``star_prom_robust_conc > 0`` the robust branch also needs a
     PSF-concentrated core (see the block comment at the branch).
     AND (not model_overshoot, if that column exists and drop_overshoot).
+
+    SATURATED keep: ``replaced_saturated`` / ``is_saturated`` rows are kept
+    whatever the gates above say (model==catalog invariant), except rows the
+    phantom-satstar veto (``satstar_phantom_veto``, :func:`_satstar_phantom_rows`)
+    finds with no data-i2d counterpart; those are dropped.
 
     SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
     LOCAL EMISSION at a source is consistent with the field's dark-sky floor,
@@ -2737,6 +2880,47 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         if _sc in t.colnames:
             _col = np.asarray(t[_sc], dtype=bool)
             _force = _col if _force is None else (_force | _col)
+    # Phantom-satstar veto [_satstar_phantom_rows]: a satstar row whose flux
+    # has no counterpart in the data i2d (a single-frame satstar fit on an
+    # edge reference-pixel strip, a hot/dead cluster or a cosmic-ray
+    # footprint) is excluded from the force-keep AND dropped, because the
+    # merged-catalog render would subtract its 1e4-1e5 flux from every frame
+    # covering the position (o105 F212N: S/N -900 to -11,000 holes).  The row
+    # stays in the unvetted merged catalog.  The frame whose satstar pass made
+    # the fit still subtracts it through its per-frame satstar model (that
+    # hole needs a finder-side fix).  ``satstar_phantom_veto=False`` (MIRI, not
+    # measured) or VET_SATSTAR_PHANTOM=0 turns the veto off.
+    _phantom = None
+    if (_force is not None and xx is not None and 'flux' in t.colnames
+            and satstar_phantom_veto and _satstar_phantom_veto_enabled()):
+        _pcal = (np.isfinite(prominence) & (prominence >= 10)
+                 & ((flg == 0) | ~np.isfinite(flg)))
+        _phantom, _p_core, _p_peak, _p_snr, _p_info = _satstar_phantom_rows(
+            data_i2d_image, np.asarray(xx, dtype=float),
+            np.asarray(yy, dtype=float), np.asarray(t['flux'], dtype=float),
+            _force, _pcal, conc_max=satstar_phantom_conc_max,
+            peak_max=satstar_phantom_peak_max,
+            snr_min=satstar_phantom_snr_min)
+        _force = _force & ~_phantom
+        _n_ph = int(_phantom.sum())
+        print(f"[{label}] phantom-satstar veto: dropped {_n_ph} of "
+              f"{int(np.sum(_force | _phantom))} saturated/replaced row(s) "
+              f"with no data_i2d counterpart (core_rel < "
+              f"{satstar_phantom_conc_max:g}, peak_rel < "
+              f"{satstar_phantom_peak_max:g}, expected core S/N >= "
+              f"{satstar_phantom_snr_min:g}; C_ref={_p_info['C_ref']:.4g}, "
+              f"P_ref={_p_info['P_ref']:.4g}, n_calib={_p_info['n_calib']})",
+              flush=True)
+        if _n_ph:
+            _ssn = (np.asarray(t['satstar_nframes'])
+                    if 'satstar_nframes' in t.colnames else np.full(n, -1))
+            _fl = np.asarray(t['flux'], dtype=float)
+            for _i in np.flatnonzero(_phantom)[:20]:
+                print(f"[{label}]   phantom row {_i}: x={float(xx[_i]):.1f} "
+                      f"y={float(yy[_i]):.1f} flux={_fl[_i]:.4g} "
+                      f"satstar_nframes={_ssn[_i]} core_rel="
+                      f"{_p_core[_i]:.3f} peak_rel={_p_peak[_i]:.3f}",
+                      flush=True)
     if _force is not None:
         n_force = int(np.sum(_force & ~keep))
         keep = keep | _force
@@ -2744,6 +2928,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             print(f"[{label}] model==catalog: force-kept {n_force} subtracted "
                   f"saturated/replaced source(s) the emission filter dropped",
                   flush=True)
+    if _phantom is not None:
+        # a phantom can also pass the ordinary gates (low qfit on the
+        # artifact frame), so drop it explicitly
+        keep = keep & ~_phantom
 
     n_keep = int(np.sum(keep))
     if _q_refused is not None:
@@ -10247,6 +10435,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     hysteresis_match_arcsec=_hyst_r,
                     hysteresis_satstar_guard_arcsec=_hyst_guard,
                     hysteresis_satstar_skycoord=_sat_precollapse,
+                    # measured on NIRCam F212N/F480M only
+                    satstar_phantom_veto=not _miri_field,
                     label=f'{phase}:{filt}')
                 vetted.write(vetted_path, overwrite=True)
                 # -> the un-tokened all-obs vetted catalog, which is the final
