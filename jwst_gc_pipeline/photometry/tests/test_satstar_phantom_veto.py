@@ -29,6 +29,11 @@ NANCORE = (60, 175)              # NaN core (saturated in every exposure)
 OFFSET = (100, 175)              # star 2 px from the catalog position
 FAINT = (140, 175)               # blank sky, flux below the expected-S/N floor
 SATFLAG = (100, 100)             # blank sky, is_saturated instead of replaced
+# faint real star 2 px from the catalog position at 0.13 of the row's peak:
+# the core at the catalog position is dark (core_rel < conc_max), so only the
+# peak_rel gate (0.1 < peak_rel < 0.2) keeps it
+FAINT_OFF = (60, 100)
+FAINT_OFF_AMP = 0.13 * AMP
 
 
 def _wcs():
@@ -52,12 +57,13 @@ def _scene():
         _gauss(data, x, y, AMP)
     _gauss(data, *REAL, AMP)
     _gauss(data, OFFSET[0] + 2.0, OFFSET[1], AMP)
+    _gauss(data, FAINT_OFF[0], FAINT_OFF[1] + 2.0, FAINT_OFF_AMP)
     x0, y0 = NANCORE
     data[y0 - 1:y0 + 2, x0 - 1:x0 + 2] = np.nan
     names = ['cal'] * len(CAL) + ['real', 'phantom', 'phantom_hq', 'nancore',
-                                  'offset', 'faint', 'satflag']
+                                  'offset', 'faint', 'satflag', 'faint_off']
     xy = np.array(CAL + [REAL, PHANTOM, PHANTOM_HQ, NANCORE, OFFSET, FAINT,
-                         SATFLAG], float)
+                         SATFLAG, FAINT_OFF], float)
     n = len(xy)
     flux = np.full(n, FLUX)
     flux[names.index('faint')] = 10.0
@@ -67,8 +73,10 @@ def _scene():
     qfit[names.index('offset')] = 0.9
     qfit[names.index('faint')] = 0.9
     qfit[names.index('satflag')] = 0.9
+    qfit[names.index('faint_off')] = 0.9
     rs = np.zeros(n, bool)
     rs[len(CAL):len(CAL) + 6] = True
+    rs[names.index('faint_off')] = True
     sat = np.zeros(n, bool)
     sat[names.index('satflag')] = True
     w = _wcs()
@@ -105,7 +113,7 @@ def test_phantom_rows_dropped_real_and_ambiguous_kept(monkeypatch):
     monkeypatch.delenv('VET_SATSTAR_PHANTOM', raising=False)
     kept, ncal = _kept()
     assert ncal == len(CAL)
-    assert {'real', 'nancore', 'offset', 'faint'} <= kept
+    assert {'real', 'nancore', 'offset', 'faint', 'faint_off'} <= kept
     assert not ({'phantom', 'phantom_hq', 'satflag'} & kept)
 
 
@@ -114,7 +122,7 @@ def test_veto_off_restores_force_keep(monkeypatch):
     kept, ncal = _kept()
     assert ncal == len(CAL)
     assert kept == {'real', 'phantom', 'phantom_hq', 'nancore', 'offset',
-                    'faint', 'satflag'}
+                    'faint', 'satflag', 'faint_off'}
 
 
 def test_thresholds_are_parameters(monkeypatch):
@@ -141,8 +149,16 @@ def test_phantom_rows_measurements_and_calibration_floor():
     assert snr[i['phantom']] > 20 and snr[i['faint']] < 20
     assert np.isnan(core_rel[i['nancore']])
     assert peak_rel[i['offset']] > 0.8
+    # the faint offset star: dark core, peak_rel between peak_max = 0.1 and 0.2
+    assert core_rel[i['faint_off']] < 0.2 and snr[i['faint_off']] > 20
+    assert 0.1 < peak_rel[i['faint_off']] < 0.2
     assert np.isnan(core_rel[:len(CAL)]).all()       # not candidates
     assert set(np.flatnonzero(ph)) == {i['phantom'], i['phantom_hq'], i['satflag']}
+    # peak_max above the faint offset star's peak_rel vetoes it too
+    ph_hi, *_ = _satstar_phantom_rows(data, xx, yy, np.asarray(cat['flux']),
+                                      cand, calib, peak_max=0.2)
+    assert set(np.flatnonzero(ph_hi)) == {i['phantom'], i['phantom_hq'],
+                                          i['satflag'], i['faint_off']}
     # fewer calibration rows than min_calib turns the test off
     ph2, *_ = _satstar_phantom_rows(data, xx, yy, np.asarray(cat['flux']),
                                     cand, calib, min_calib=len(CAL) + 1)
