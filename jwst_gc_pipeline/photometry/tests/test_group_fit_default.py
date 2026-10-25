@@ -162,7 +162,7 @@ def _options(**kw):
     return types.SimpleNamespace(**o)
 
 
-def _run(options, img=None, grouper=None):
+def _run(options, img=None, grouper=None, **kw):
     img = _scene() if img is None else img
     if grouper is None:
         grouper = L.CappedSourceGrouper(2.0 * FWHM, max_size=10)
@@ -173,7 +173,7 @@ def _run(options, img=None, grouper=None):
         localbkg_inner=6, localbkg_outer=10, grouper=grouper,
         options=options, dq=np.zeros(SHAPE, np.uint32),
         satstar_model_subtracted=np.zeros(SHAPE), label='t',
-        near_sat_dist_pix=1.0)
+        near_sat_dist_pix=1.0, **kw)
     return res
 
 
@@ -209,11 +209,18 @@ def test_opt_out_pass_is_ungrouped_and_records_it():
 def test_grouped_pair_flux_is_closer_to_truth_than_ungrouped():
     """Each ungrouped member absorbs the neighbour's wing (sum too high)."""
     img = _scene()
-    g = _run(_options(), img=img)
-    u = _run(_options(manual_group_fit=False), img=img)
+    # Compare the fits themselves: a raised overshoot_ratio keeps the
+    # overshoot forced refit out of both passes.  Ungrouped, the fainter
+    # member overshoots (model/data peak 1.21) and is refit; that refit
+    # moves its flux by itself (raw frame 1.063x, neighbour-subtracted
+    # #1127 0.954x, against 1.126x from the fit).
+    g = _run(_options(), img=img, overshoot_ratio=10.0)
+    u = _run(_options(manual_group_fit=False), img=img, overshoot_ratio=10.0)
     true = sum(PAIR_FLUX)
     sg = sum(float(_nearest(g, p)['flux_fit']) for p in PAIR)
     su = sum(float(_nearest(u, p)['flux_fit']) for p in PAIR)
+    for p, f in zip(PAIR, PAIR_FLUX):
+        assert float(_nearest(u, p)['flux_fit']) > 1.03 * f
     assert su > 1.03 * true, su / true
     assert abs(sg / true - 1) < 0.01, sg / true
     assert abs(sg / true - 1) < abs(su / true - 1)
