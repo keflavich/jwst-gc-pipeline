@@ -293,3 +293,49 @@ def test_group_budget_lets_a_six_source_group_converge(steps, converged):
         # the m7 vetting S/N terms (the o105 F480M vetting loss)
         assert maxiter_hit.all()
         assert not finite_err.any()
+
+
+# ---------------------------------------------------------------------------
+# KD-tree partition == photutils SourceGrouper partition
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('n, side, sep, seed', [
+    (2000, 400.0, 5.0, 1),     # sparse: mostly singletons
+    (3000, 200.0, 5.0, 2),     # <k> ~ 1.8: chains and large groups
+    (1500, 120.0, 6.0, 3),     # near percolation
+    (500, 50.0, 2.0, 4),
+])
+def test_kdtree_groups_equal_sourcegrouper(n, side, sep, seed):
+    from photutils.psf import SourceGrouper
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, side, n)
+    y = rng.uniform(0, side, n)
+    # exact-separation pairs: SourceGrouper (fcluster t, '<=') joins them
+    x[:10] = 10.0 + np.arange(10) * 30.0
+    y[:10] = 5.0
+    x[10:20] = x[:10] + sep
+    y[10:20] = 5.0
+    ref = np.asarray(SourceGrouper(sep)(x, y))
+    got = L.kdtree_group_ids(x, y, sep)
+    np.testing.assert_array_equal(got, ref)
+    np.testing.assert_array_equal(L.CappedSourceGrouper(sep, max_size=0)(x, y), ref)
+
+
+def test_kdtree_groups_edge_cases():
+    assert L.kdtree_group_ids([3.0], [4.0], 5.0).tolist() == [1]
+    assert L.kdtree_group_ids([], [], 5.0).size == 0
+    with pytest.raises(ValueError):
+        L.kdtree_group_ids([1.0, np.nan], [1.0, 2.0], 5.0)
+
+
+def test_capped_grouper_partition_refines_the_uncapped_one():
+    rng = np.random.default_rng(5)
+    x = rng.uniform(0, 150, 2500)
+    y = rng.uniform(0, 150, 2500)
+    full = L.CappedSourceGrouper(5.0, max_size=0)(x, y)
+    cap = L.CappedSourceGrouper(5.0, max_size=10)(x, y)
+    assert np.unique(full, return_counts=True)[1].max() > 10
+    assert np.unique(cap, return_counts=True)[1].max() <= 10
+    # every capped group lies inside one uncapped group
+    for g in np.unique(cap):
+        assert np.unique(full[cap == g]).size == 1

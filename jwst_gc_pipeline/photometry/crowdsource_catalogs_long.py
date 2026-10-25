@@ -132,8 +132,46 @@ def resolve_max_group_size(raw):
     return n
 
 
+def kdtree_group_ids(x, y, min_separation):
+    """Same partition as ``photutils.psf.SourceGrouper(min_separation)``,
+    in O(N log N) time and O(N) memory.
+
+    SourceGrouper calls ``scipy.cluster.hierarchy.fclusterdata`` (single
+    linkage, ``criterion='distance'``), which builds the full condensed
+    pairwise-distance matrix: 8 N(N-1)/2 bytes, 26 GB for the 80769 seeds of
+    the densest sgrb2 F300M m7 frame and ~10 GB for the o105 hybpsf F480M
+    frames (49153 seeds).  Single-linkage clusters cut at distance t are the
+    connected components of the graph whose edges join sources at most t
+    apart, which ``cKDTree.query_pairs(t)`` lists directly.  Labels are
+    1..n_groups in order of first appearance, the relabelling SourceGrouper
+    applies, so the returned array equals SourceGrouper's element for
+    element (tests/test_group_fit_default.py).
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    x = np.atleast_1d(np.asarray(x, dtype=float))
+    y = np.atleast_1d(np.asarray(y, dtype=float))
+    if x.shape != y.shape:
+        raise ValueError(f'x and y must have the same shape, got {x.shape} and {y.shape}')
+    if not (np.isfinite(x).all() and np.isfinite(y).all()):
+        raise ValueError('x and y coordinates must be finite (no NaN or inf values)')
+    n = x.size
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    pairs = cKDTree(np.column_stack([x, y])).query_pairs(
+        r=float(min_separation), output_type='ndarray')
+    graph = coo_matrix((np.ones(len(pairs), dtype=np.int8),
+                        (pairs[:, 0], pairs[:, 1])), shape=(n, n))
+    _, labels = connected_components(graph, directed=False)
+    # relabel 1.. by first appearance (SourceGrouper's ordering)
+    _, first = np.unique(labels, return_index=True)
+    rank = np.empty(first.size, dtype=np.int64)
+    rank[np.argsort(first, kind='stable')] = np.arange(1, first.size + 1)
+    return rank[labels]
+
+
 class CappedSourceGrouper:
-    """SourceGrouper wrapper that caps the maximum group size.
+    """SourceGrouper replacement that caps the maximum group size.
 
     photutils SourceGrouper has only a min_separation knob: any cluster of
     sources mutually within that distance becomes one group, however large.
@@ -143,21 +181,22 @@ class CappedSourceGrouper:
     collapse from ~5 it/s to <1 it/s in dense regions, hitting the 96 h
     walltime at ~14% completion.
 
-    This wrapper post-processes the inner grouper's output: any group
-    larger than ``max_size`` is split into ``ceil(N/max_size)`` spatially
-    coherent sub-groups by sorting along the group's principal axis.
-    Sparse-region groups (already <= max_size) are returned untouched.
+    The base partition comes from ``kdtree_group_ids`` (the SourceGrouper
+    partition without its O(N^2) distance matrix).  Any group larger than
+    ``max_size`` is then split into ``ceil(N/max_size)`` spatially coherent
+    sub-groups by sorting along the group's principal axis.  Sparse-region
+    groups (already <= max_size) are returned untouched.  ``max_size=0``
+    applies no cap (the SourceGrouper partition itself).
     """
 
     def __init__(self, min_separation, max_size=0):
-        self._inner = SourceGrouper(min_separation)
         self.min_separation = min_separation
         self.max_size = int(max_size) if max_size else 0
 
     def __call__(self, x, y):
         x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
-        group_ids = np.asarray(self._inner(x, y)).astype(np.int64, copy=True)
+        group_ids = kdtree_group_ids(x, y, self.min_separation)
         if self.max_size <= 0 or group_ids.size == 0:
             return group_ids
         next_id = int(group_ids.max()) + 1

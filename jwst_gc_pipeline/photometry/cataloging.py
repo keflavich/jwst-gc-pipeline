@@ -3549,10 +3549,12 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # resolve_max_group_size rejects the ambiguous 0; None == 'unlimited' (no cap).
     _max_group_size = _L.resolve_max_group_size(
         getattr(options, 'max_group_size', 'unlimited'))
-    if _max_group_size is not None:
-        grouper = _L.CappedSourceGrouper(_grp_sep, max_size=_max_group_size)
-    else:
-        grouper = SourceGrouper(_grp_sep)
+    # CappedSourceGrouper partitions with a KD-tree (identical to photutils
+    # SourceGrouper, without its O(N^2) fclusterdata distance matrix: 26 GB
+    # at the 80769 seeds of the densest sgrb2 F300M m7 frame); max_size=0 is
+    # the uncapped partition.
+    grouper = _L.CappedSourceGrouper(_grp_sep, max_size=_max_group_size or 0)
+    if _max_group_size is None:
         if manual_group_fit_enabled(options):
             print("[manual] WARNING: grouped fitting with --max-group-size="
                   "unlimited: dense fields can form 50-100+ source groups whose "
