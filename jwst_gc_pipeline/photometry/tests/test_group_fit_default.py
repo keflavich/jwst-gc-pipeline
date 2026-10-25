@@ -421,3 +421,34 @@ def test_high_keep_singletons_only_cli(monkeypatch):
     assert _parse(monkeypatch, []).manual_ext_high_keep_grouped is True
     assert _parse(monkeypatch, ['--manual-ext-high-keep-singletons-only']
                   ).manual_ext_high_keep_grouped is False
+
+
+# ---------------------------------------------------------------------------
+# --max-group-size reaches the grouper the manual passes use
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('argv, cap', [
+    (['--max-group-size=3'], 3),
+    ([], 10),                                 # CLI default
+    (['--max-group-size=unlimited'], 0),      # no cap
+])
+def test_max_group_size_reaches_the_manual_grouper(tmp_path, monkeypatch, argv, cap):
+    """Parse the CLI value with main()'s parser and build the frame context
+    with _prepare_frame_for_photometry, the function do_photometry_step_manual
+    calls for every manual pass; its grouper must carry that cap."""
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+    cli = _parse(monkeypatch, argv)
+    base = G._prep_options
+    monkeypatch.setattr(G, '_prep_options', lambda: types.SimpleNamespace(
+        **{**vars(base()), 'max_group_size': cli.max_group_size}))
+    ctx, _ = G._prepare(tmp_path, monkeypatch)
+    assert isinstance(ctx.grouper, L.CappedSourceGrouper)
+    assert ctx.grouper.max_size == cap
+    # a 12-source chain inside the grouping radius is one group uncapped
+    x = 20.0 + np.arange(12) * 0.5 * ctx.grouper.min_separation
+    y = np.full(12, 50.0)
+    sizes = np.unique(ctx.grouper(x, y), return_counts=True)[1]
+    if cap:
+        assert sizes.max() <= cap and sizes.sum() == 12 and len(sizes) >= 2
+    else:
+        assert sizes.tolist() == [12]
