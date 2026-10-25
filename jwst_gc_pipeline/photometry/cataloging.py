@@ -1995,6 +1995,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_floor_propagated=False,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
+                              high_keep_grouped=False,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
                               recover_prom_gate=True,
@@ -2245,12 +2246,23 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # a confident star.  Extended-emission knots have BAD qfit (>~0.5, poor PSF
     # match), so this cannot re-admit emission; the group_size==1 gate keeps the
     # S/N trustworthy (a degenerate group inflates flux_err -> low fake S/N).
+    #
+    # ``high_keep_grouped`` (manual_ext_high_keep_grouped, default True) drops
+    # the group_size==1 requirement.  The gate guards against joint-fit
+    # covariance inflating flux_err; an inflated flux_err lowers S/N, which can
+    # only make a row fail S/N >= snr_high_keep, so it gives no protection
+    # against a false keep.  With grouped fitting on by default every member of a 0.75-2 FWHM pair
+    # has group_size >= 2, and the gate dropped the members main kept here:
+    # o105 30" cutout, full grouped chain, F480M m7 merged raw rows that pass
+    # S/N >= 20 and qfit < 0.4 but were vetted out: 144, all group_size > 1,
+    # 94 of them at main's vetted positions (0 such rows in main).  A NaN
+    # flux_err (no covariance) still gives NaN S/N and no keep.
     gsz = (np.asarray(t['group_size'], dtype=float)
            if 'group_size' in t.colnames else np.ones(n))
     bright_isolated = (
         np.isfinite(snr) & (snr >= snr_high_keep)
         & np.isfinite(qf) & (qf < qfit_high_keep_max)
-        & (gsz <= 1)
+        & ((gsz <= 1) | bool(high_keep_grouped))
     )
     # BRIGHT-STAR branch.  peak_SB > peak_over_bkg * local_bkg needs
     # local_bkg > 0, but local_bkg is fit on BACKGROUND-SUBTRACTED frames, so
@@ -10283,6 +10295,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     snr_floor_propagated=bool(mopt(opts_phase, 'manual_ext_snr_floor_propagated')),
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
+                    high_keep_grouped=bool(mopt(opts_phase, 'manual_ext_high_keep_grouped')),
                     qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
                     recover_satstar_guard_arcsec=float(mopt(opts_phase, 'manual_ext_recover_satstar_guard_arcsec')),
                     recover_prom_gate=bool(mopt(opts_phase, 'manual_ext_recover_prom_gate')),

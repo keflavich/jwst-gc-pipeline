@@ -84,6 +84,9 @@ MANUAL_DEFAULTS = {
     'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
+    # bright keep also for grouped rows (group_size > 1); only grouped fits
+    # produce them, so ungrouped runs are unchanged.  See _filter_extended_emission.
+    'manual_ext_high_keep_grouped': True,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
     # previous-phase (hysteresis) keep: a source the previous phase vetted is
     # kept while qfit < this and S/N >= the next; 0 = off

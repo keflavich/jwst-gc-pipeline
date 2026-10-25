@@ -4659,6 +4659,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_high_keep_max'],
                     help="Upper qfit cap for the bright-isolated keep (default 0.4); "
                          "extended-emission knots have worse qfit so stay rejected.")
+    parser.add_option("--manual-ext-high-keep-singletons-only",
+                    dest="manual_ext_high_keep_grouped", action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_high_keep_grouped'],
+                    help="Restrict the bright-isolated keep to group_size==1 rows "
+                         "(the behaviour before grouped fitting became the "
+                         "default).  By default grouped rows qualify too: joint-"
+                         "fit covariance only lowers S/N, and the singleton gate "
+                         "vetted out bright close-pair members (o105 F480M "
+                         "full grouped chain: 144 rows with S/N >= 20, qfit < 0.4).")
     parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
                     help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "

@@ -392,3 +392,32 @@ def test_capped_grouper_partition_refines_the_uncapped_one():
     # every capped group lies inside one uncapped group
     for g in np.unique(cap):
         assert np.unique(full[cap == g]).size == 1
+
+
+# ---------------------------------------------------------------------------
+# bright keep for grouped rows (manual_ext_high_keep_grouped)
+# ---------------------------------------------------------------------------
+
+def test_bright_keep_admits_grouped_rows_by_default():
+    assert MANUAL_DEFAULTS['manual_ext_high_keep_grouped'] is True
+    # grouped bright pair member, faint singleton, emission-like singleton
+    t = Table({'qfit': [0.30, 0.30, 0.60],
+               'flags': [0, 0, 0],
+               'flux': [6381.0, 360.0, 6381.0],
+               'flux_err': [31.7, 30.0, 31.7],         # S/N 201, 12, 201
+               'group_size': [2.0, 1.0, 1.0]})
+    kw = dict(min_prominence=0.0, qfit_max=0.2, local_snr_min=5.0,
+              snr_high_keep=20.0, qfit_high_keep_max=0.4, label='nircam-test')
+    on = C._filter_extended_emission(t.copy(), high_keep_grouped=True, **kw)
+    off = C._filter_extended_emission(t.copy(), high_keep_grouped=False, **kw)
+    assert len(on) == 1 and on['group_size'][0] == 2.0
+    assert len(off) == 0
+    # NaN flux_err (no covariance) gets no bright keep
+    t['flux_err'][0] = np.nan
+    assert len(C._filter_extended_emission(t.copy(), high_keep_grouped=True, **kw)) == 0
+
+
+def test_high_keep_singletons_only_cli(monkeypatch):
+    assert _parse(monkeypatch, []).manual_ext_high_keep_grouped is True
+    assert _parse(monkeypatch, ['--manual-ext-high-keep-singletons-only']
+                  ).manual_ext_high_keep_grouped is False
