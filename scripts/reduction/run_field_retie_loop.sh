@@ -66,7 +66,7 @@ if [ "${#_FILTERS_CHECK[@]}" -eq 0 ]; then
 fi
 MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o${FIELD}_crf}
-MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
+MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-10}   # cap for the default-on grouped fit (--no-group-fit in EXTRA_ARGS opts out)
 PIPE_ROOT=${PIPE_ROOT:-}
 MAXITER=${MAXITER:-3}
 # A fixed point needs DEFAULT_REPEATS (3) passes before it can be judged, so the

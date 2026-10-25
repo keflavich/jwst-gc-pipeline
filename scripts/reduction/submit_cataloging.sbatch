@@ -135,8 +135,10 @@ fi
 # --max-group-size caps overlap-group size so the joint LevMar PSF fit cost
 # (~cubic in group size) cannot blow up in dense/wide-PSF fields.  LW filters
 # (wider PSF -> larger groups) otherwise hit the walltime; set e.g. 12 for
-# dense fields.  Default 'unlimited' preserves prior behaviour for others.
-MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
+# dense fields.  Default 10: the manual daophot path fits grouped by default
+# (--no-group-fit in EXTRA_ARGS opts out), so an uncapped default would let
+# dense fields form 50-100+ source groups.
+MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-10}
 # Extra passthrough args (e.g. method selection / resume):
 #   "--daophot --skip-crowdsource --skip-if-done"
 EXTRA_ARGS=${EXTRA_ARGS:-}

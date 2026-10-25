@@ -90,7 +90,7 @@ MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
 # ALL filters that participate in the cross-band merge (space-separated).
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
-MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
+MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-10}   # cap for the default-on grouped fit (--no-group-fit in EXTRA_ARGS opts out)
 
 # Per-filter suffix override (see submit_cataloging.sbatch), e.g.
 # EACH_SUFFIX_OVERRIDES="F187N:destreak_o007_crf,F210M:destreak_o007_crf".

@@ -45,7 +45,8 @@ from jwst_gc_pipeline.photometry.naming import (
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
-from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
+from jwst_gc_pipeline.photometry.manual_defaults import (
+    MANUAL_DEFAULTS, manual_group_fit_enabled, mopt)
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     recorded_source_exposure)
 from jwst_gc_pipeline.photometry.requested_filters import (
@@ -1170,6 +1171,25 @@ def _apply_handoff_resbg_clip(data, background_map, handoff_xy, resbg_path):
                  f"pixel(s) lowered, median {med:.3g} MJy/sr")
 
 
+def _record_group_fit_meta(result, grouper):
+    """Record in ``result.meta`` whether the fit was grouped.
+
+    Grouped and ungrouped fits write the SAME product names (the ``_group``
+    token belongs to the legacy ``--group`` flag only), so the header is where
+    a reader tells them apart: GRPFIT (bool), GRPSEP (grouping radius, px) and
+    GRPMAX (group-size cap, 0 = none).  The per-row ``group_size`` column
+    carries the realised group sizes.
+    """
+    result.meta['GRPFIT'] = (grouper is not None,
+                             'manual daophot fit used source grouping')
+    if grouper is not None:
+        result.meta['GRPSEP'] = (float(grouper.min_separation),
+                                 'grouping radius (px)')
+        result.meta['GRPMAX'] = (int(getattr(grouper, 'max_size', 0) or 0),
+                                 'group-size cap (0 = none)')
+    return result
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -1227,10 +1247,13 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         modsky = np.zeros_like(data, dtype=float)
         return res, modsky, None
 
+    # Grouped fitting is the default (manual_group_fit_enabled): close sources
+    # are fit jointly, so a pair member no longer absorbs its neighbour's wing.
+    use_grouper = grouper if manual_group_fit_enabled(options) else None
     phot = _make_psfphotometry(
         finder=None,
         localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
-        grouper=grouper if getattr(options, 'group', False) else None,
+        grouper=use_grouper,
         psf_model=dao_psf_model,
         fitter=LevMarLSQFitter(),
         fit_shape=(5, 5),
@@ -1240,6 +1263,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     )
     result = phot(data, mask=mask, init_params=init_params,
                   error=np.where(bad, 1e10, err))
+    _record_group_fit_meta(result, use_grouper)
 
     # --- post-fit dedup (1.0 px, qfit tiebreak) ---
     xfit = np.asarray(result['x_fit'], dtype=float)
@@ -3491,6 +3515,11 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         grouper = _L.CappedSourceGrouper(_grp_sep, max_size=_max_group_size)
     else:
         grouper = SourceGrouper(_grp_sep)
+        if manual_group_fit_enabled(options):
+            print("[manual] WARNING: grouped fitting with --max-group-size="
+                  "unlimited: dense fields can form 50-100+ source groups whose "
+                  "joint fit cost grows ~cubically; the default cap is 10.",
+                  flush=True)
 
     kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
     mask = np.isnan(data) | bad

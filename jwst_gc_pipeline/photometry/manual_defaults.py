@@ -146,6 +146,15 @@ MANUAL_DEFAULTS = {
     # -- coarse-background detection (0 = off; MIRI raw rounds use 51)
     'coarse_bg_box': 0,
     # -- grouping
+    # Joint (photutils SourceGrouper) PSF fitting of close sources in every
+    # manual daophot pass.  ON by default: ungrouped fits of
+    # pairs at 0.75-2 FWHM each absorb the neighbour's wing, so the summed pair
+    # model over-subtracts (o105 30" cutout, model/data over close pairs
+    # relative to isolated stars: F212N 1.082 ungrouped vs 0.99 grouped, F480M
+    # 1.100 vs 0.93-0.97) and the residual shows a crater at each member.
+    # --no-group-fit restores the ungrouped fit.  Product names stay canonical
+    # (no ``_group`` token): see manual_group_fit_enabled.
+    'manual_group_fit': True,
     'manual_group_min_sep_fwhm': 2.0,
     # -- cross-band merge output (m7): every module's table is written as FITS;
     # the ECSV twin (~30x slower to write on sgrb2) only for the merged module, or for
@@ -209,6 +218,24 @@ MANUAL_DEFAULTS = {
     # True restores every phase's map.
     'manual_keep_intermediate_smoothed_bg': False,
 }
+
+
+def manual_group_fit_enabled(options):
+    """True when the manual daophot path fits close sources jointly.
+
+    Grouped fitting is ON by default (``manual_group_fit``, opt out with
+    ``--no-group-fit``).  The legacy ``--group`` flag also turns it on and, in
+    addition, adds the ``_group`` token to every product name, which writes a
+    second, parallel product set that several consumers exclude on purpose
+    (the residual HiPS builder's RESIDUAL_I2D pattern, merge globs, the
+    distortion-floor diagnostic).  The default-on path keeps the canonical
+    names, so a grouped rerun REPLACES the ungrouped products and every
+    consumer picks it up unchanged; the per-frame catalog header (GRPFIT,
+    GRPSEP, GRPMAX) and the ``group_size`` column record that the fit was
+    grouped.  ``--group`` wins over ``--no-group-fit``.
+    """
+    return bool(getattr(options, 'group', False)) or bool(
+        mopt(options, 'manual_group_fit'))
 
 
 def mopt(options, name):

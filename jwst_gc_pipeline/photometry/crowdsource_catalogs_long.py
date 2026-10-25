@@ -4891,7 +4891,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=MANUAL_DEFAULTS['manual_group_min_sep_fwhm'],
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
-                          "requires --group).  Sources closer than this are fit "
+                          "applies while grouped fitting is on, the default; "
+                          "see --no-group-fit).  Sources closer than this are fit "
                           "jointly.  Raise above 2.0 to jointly fit wider close "
                           "pairs that otherwise over-subtract in the valley "
                           "between them (default 2.0)."))
@@ -5003,7 +5004,26 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     "fields.field_token_for_run.", metavar="field")
     parser.add_option("--group", dest="group",
                       default=False,
-                      action='store_true')
+                      action='store_true',
+                      help=("LEGACY: grouped fitting AND a '_group' token in "
+                            "every product name (a second, parallel product "
+                            "set that the merge globs and the residual HiPS "
+                            "builder skip).  The manual daophot path now fits "
+                            "grouped by default with canonical names "
+                            "(--no-group-fit to opt out), so this flag is only "
+                            "needed to write a side-by-side '_group' set."))
+    parser.add_option("--no-group-fit", dest="manual_group_fit",
+                      default=MANUAL_DEFAULTS['manual_group_fit'],
+                      action='store_false',
+                      help=("Manual daophot path: fit every source on its own "
+                            "(no photutils SourceGrouper), the pre-default "
+                            "behaviour.  Grouped fitting is ON by default "
+                            "(radius --manual-group-min-sep-fwhm, cap "
+                            "--max-group-size) and keeps the canonical product "
+                            "names; --group overrides this flag."))
+    parser.add_option("--group-fit", dest="manual_group_fit",
+                      action='store_true',
+                      help="Manual daophot path: grouped fitting (the default).")
     parser.add_option('--each-exposure', dest='each_exposure',
                       default=False, action='store_true',
                       help='Photometer each exposure (REQUIRED for new runs; '
@@ -5333,16 +5353,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False, action='store_true',
                       help='Enumerate --each-exposure work and print a comma-separated SLURM --array spec of only the bundled task indices that still need to run. Writes only the spec to stdout; logs go to stderr.')
     parser.add_option('--max-group-size', dest='max_group_size',
-                      default='unlimited', type='string',
+                      default='10', type='string',
                       help=("Cap on photutils SourceGrouper group size.  Must be "
                             "EXPLICIT: 'unlimited' (no cap) or a POSITIVE integer. "
                             "The value 0 is REJECTED -- it was ambiguous (read as "
                             "'no grouping' but actually meant 'unlimited group "
                             "size').  Groups larger than the cap are split into "
                             "spatially coherent sub-groups via principal-axis "
-                            "sorting before the joint fit.  Use 10-15 for dense "
-                            "fields to keep joint fits tractable; 'unlimited' only "
-                            "where blends are rare."))
+                            "sorting before the joint fit.  Default 10, set with "
+                            "grouped fitting on by default in the manual path: "
+                            "uncapped groups reach 50-100+ sources in dense "
+                            "fields and the joint LevMar cost grows roughly "
+                            "cubically with group size (brick LW iter3 hit its "
+                            "96 h wall).  'unlimited' only where blends are rare."))
     parser.add_option('--n-seed-chunks', dest='n_seed_chunks',
                       default=1, type='int',
                       help=('Split the seed catalog into N image-pixel tiles '
