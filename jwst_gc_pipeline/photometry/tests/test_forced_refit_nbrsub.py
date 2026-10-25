@@ -99,6 +99,31 @@ def test_subset_model_image_renders_only_kept_rows_and_restores():
     assert not none.any()
 
 
+def test_subset_model_image_skips_nonfinite_rows():
+    # a forced solve can return a NaN flux; that row adds nothing
+    res = Table({'x_fit': [20.0, 40.0, np.nan], 'y_fit': [20.0, 20.0, 20.0],
+                 'flux_fit': [100.0, np.nan, 50.0]})
+    m = C._subset_model_image(_FakePhot(res), np.ones(3, bool), (41, 61))
+    assert np.isfinite(m).all()
+    assert m.sum() == pytest.approx(100.0, rel=1e-3)
+
+
+def test_subset_model_image_nan_flux_with_photutils():
+    from jwst_gc_pipeline.photometry.psf_fitting import _make_psfphotometry
+    shape = (41, 61)
+    yy, xx = np.mgrid[:shape[0], :shape[1]].astype(float)
+    img = _gauss(xx, yy, 100.0, 20.0, 20.0) + _gauss(xx, yy, 300.0, 40.0, 20.0)
+    phot = _make_psfphotometry(localbkg_estimator=None,
+                               psf_model=_gaussian_grid_psf(),
+                               fit_shape=(5, 5), aperture_radius=4)
+    phot(img, init_params=Table({'x': [20.0, 40.0], 'y': [20.0, 20.0],
+                                 'flux': [100.0, 300.0]}))
+    phot.results['flux_fit'][1] = np.nan
+    m = C._subset_model_image(phot, np.ones(2, bool), shape)
+    assert np.isfinite(m).all()
+    assert m.sum() == pytest.approx(100.0, rel=1e-3)
+
+
 # ---------------------------------------------------------------------------
 # _overshoot_refit_tiers
 # ---------------------------------------------------------------------------
@@ -310,3 +335,80 @@ def test_ring_seed_nbrsub_refit_leaves_no_hole(monkeypatch):
     assert float(_ring_row(res)['flux_fit']) < 0.15 * flux_true
     assert float(np.sum(res['flux_fit'])) <= flux_true
     assert _at(resid, RING_SEED) > -0.03 * peak
+
+
+# ---------------------------------------------------------------------------
+# _manual_phot_pass: a bright -> mid -> faint chain, all overshooting
+# ---------------------------------------------------------------------------
+CH_SHAPE = (100, 100)
+# each ~4 px from the next, so each is inside the next one's refit stamp
+CHAIN = {'bright': (50.0, 50.0, 5.0e4), 'mid': (54.0, 50.0, 1.0e4),
+         'faint': (52.0, 53.5, 2.0e3)}
+
+
+def _chain_pass(monkeypatch, capsys):
+    """All three rows forced into the refit, fit as one group.  Returns the
+    rows, the residual frame (data - model of every row) and the pass's
+    stdout."""
+    _set_nbrsub(monkeypatch, True)
+    real = C._filter_or_flag_model_overshoot
+
+    def flag_all(phot_obj, modsky, data, **kw):
+        over = real(phot_obj, modsky, data, **kw)
+        if kw.get('action') == 'flag' and kw.get('label') == 't':
+            over = np.ones(len(phot_obj.results), bool)
+            phot_obj.results['model_overshoot'] = over
+        return over
+
+    monkeypatch.setattr(C, '_filter_or_flag_model_overshoot', flag_all)
+    yy, xx = np.mgrid[:CH_SHAPE[0], :CH_SHAPE[1]].astype(float)
+    img = sum(_gauss(xx, yy, f, x, y) for x, y, f in CHAIN.values())
+    img = img + np.random.default_rng(5).normal(0, 1.0, CH_SHAPE)
+    xs, ys, fs = np.array(list(CHAIN.values())).T
+    seed = Table({'x_init': xs, 'y_init': ys, 'flux_init': fs})
+    opts = types.SimpleNamespace(group=True, manual_group_fit=True,
+                                 satstar_artifact_sigK=3.0,
+                                 satstar_artifact_ratio=1.0)
+    psf = _gaussian_grid_psf()
+    capsys.readouterr()
+    res, _, _ = C._manual_phot_pass(
+        data=img, mask=np.zeros(CH_SHAPE, bool), err=np.ones(CH_SHAPE),
+        bad=np.zeros(CH_SHAPE, bool), dao_psf_model=psf,
+        init_params=seed, aperture_radius_pix=2 * FWHM, localbkg_inner=6,
+        localbkg_outer=10, grouper=SourceGrouper(8.0), options=opts,
+        dq=np.zeros(CH_SHAPE, np.uint32),
+        satstar_model_subtracted=np.zeros(CH_SHAPE), label='t',
+        near_sat_dist_pix=1.0)
+    out = capsys.readouterr().out
+    model = np.zeros(CH_SHAPE)
+    for r in res:
+        model += np.asarray(psf.evaluate(xx, yy, float(r['flux_fit']),
+                                         float(r['x_fit']),
+                                         float(r['y_fit'])), float)
+    return res, img - model, out
+
+
+def test_chain_refit_runs_in_three_tiers(monkeypatch, capsys):
+    res, _, out = _chain_pass(monkeypatch, capsys)
+    assert len(res) == 3 and np.all(np.asarray(res['forced_refit'], bool))
+    xs, ys, _ = np.array(list(CHAIN.values())).T
+    yy, xx = np.mgrid[:CH_SHAPE[0], :CH_SHAPE[1]].astype(float)
+    img = sum(_gauss(xx, yy, f, x, y) for x, y, f in CHAIN.values())
+    assert C._overshoot_refit_tiers(img, xs, ys).tolist() == [0, 1, 2]
+    assert 'refit 3 overshooting sources' in out and '3 tier(s)' in out
+
+
+def test_chain_faint_row_solved_on_cumulative_subtraction(monkeypatch, capsys):
+    # the faint row is solved last, on the frame with both the bright and
+    # the mid row's refit models removed; with only the mid row removed it
+    # would take in the bright star's wing 4 px away
+    res, resid, _ = _chain_pass(monkeypatch, capsys)
+    for name, (x, y, f) in CHAIN.items():
+        d = np.hypot(np.asarray(res['x_fit'], float) - x,
+                     np.asarray(res['y_fit'], float) - y)
+        k = int(np.argmin(d))
+        assert d[k] < 1e-6, name
+        assert float(res['flux_fit'][k]) == pytest.approx(f, rel=0.02), name
+    fx, fy, ff = CHAIN['faint']
+    peak = float(_gauss(fx, fy, ff, fx, fy))
+    assert abs(_at(resid, (fx, fy))) < 0.03 * peak

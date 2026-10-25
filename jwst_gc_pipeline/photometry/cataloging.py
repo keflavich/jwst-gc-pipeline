@@ -1292,11 +1292,15 @@ def _overshoot_refit_tiers(data, x, y, radius=_REFIT_TIER_RADIUS_PIX):
 def _subset_model_image(phot, keep, shape):
     """Model image (no local background) of the rows ``keep`` of
     ``phot.results`` alone.  ``phot.results`` is restored before returning.
+    Rows with a non-finite or masked flux or position are left out.
     """
-    keep = np.asarray(keep, dtype=bool)
+    full = phot.results
+    keep = np.asarray(keep, dtype=bool).copy()
+    for col in ('flux_fit', 'x_fit', 'y_fit'):
+        keep &= np.isfinite(np.ma.filled(
+            np.ma.asarray(full[col], dtype=float), np.nan))
     if not keep.any():
         return np.zeros(shape, dtype=float)
-    full = phot.results
     try:
         phot.results = full[keep]
         phot.__dict__.pop('_model_image_params', None)
