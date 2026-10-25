@@ -3655,6 +3655,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # satstar_deblend.build_deblended_source_records.  When ``zeroframe is None``
     # this block is skipped and the behaviour is identical to before (one seed per
     # component at its refined centroid).
+    # Populated only on the zeroframe-deblend branch below; carried forward
+    # (same function scope) to the final return, where it is stamped into the
+    # output table's meta as SATDBLG0 -- see the "no silent frame drops" rule:
+    # a frame where the gate's independent signal was unavailable collapses
+    # every split silently unless this stays visible per-frame.
+    _deblend_gate_diag = {}
     if zeroframe is not None and zeroframe_deblend:
         from .satstar_deblend import build_deblended_source_records
         _inst_repl = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
@@ -3662,7 +3668,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         source_records = build_deblended_source_records(
             saturated, sources, coms, _sizes_by_label, zeroframe, data,
             _fwhm_pix_db, daophot_xy=deblend_daophot_xy,
-            confirm_xy=deblend_confirm_xy)
+            confirm_xy=deblend_confirm_xy,
+            group0_saturated=zeroframe_group0_saturated,
+            detector=header.get('DETECTOR'),
+            gate_diagnostics=_deblend_gate_diag)
         # Inherit each record's PARENT COMPONENT seed kind via its stamped
         # label; the bare 'dqsat' default reported every deblended seed as DQ
         # even when it came from the peak / subfloor / partner logic (#212).
@@ -5914,6 +5923,25 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 base_tab.meta['DET_DEC'] = float(_icrs.dec.deg)
         except Exception as ex:
             log.warning(f"Could not record det_center in satstar table meta: {ex}")
+        # Deblend-gate frame-level visibility (no silent frame drops): record
+        # whether the independent group-0-saturated signal was available for
+        # every multi-centre split this frame proposed, so a run where it is
+        # silently absent (SATSTAR_ZEROFRAME_FIT off, missing ramp, or a
+        # GROUPDQ read failure -- every split then collapses BLIND) stays
+        # greppable per-frame rather than reading identically to "gate ran and
+        # correctly rejected".
+        if not zeroframe_deblend:
+            base_tab.meta['SATDBLG0'] = 'off'
+        elif _deblend_gate_diag.get('n_multi_centre_proposed', 0) == 0:
+            base_tab.meta['SATDBLG0'] = 'n/a'
+        elif _deblend_gate_diag.get('n_gate_unavailable', 0) > 0:
+            base_tab.meta['SATDBLG0'] = 'nosignal'
+        else:
+            base_tab.meta['SATDBLG0'] = 'ok'
+        base_tab.meta['SATDBLGN'] = int(_deblend_gate_diag.get('n_multi_centre_proposed', 0))
+        base_tab.meta['SATDBLGU'] = int(_deblend_gate_diag.get('n_gate_unavailable', 0))
+        base_tab.meta['SATDBLGR'] = int(_deblend_gate_diag.get('n_gate_rejected', 0))
+        base_tab.meta['SATDBLGA'] = int(_deblend_gate_diag.get('n_gate_accepted', 0))
         # WING SELF-CALIBRATION: correct the catalog fluxes for the frame's
         # measured wing-fit bias (STPSF wing deficit); the model/residual keep
         # the raw amplitudes (they subtract the observed wings cleanly).
