@@ -5024,6 +5024,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--group-fit", dest="manual_group_fit",
                       action='store_true',
                       help="Manual daophot path: grouped fitting (the default).")
+    parser.add_option("--manual-group-fit-lm-steps", dest="manual_group_fit_lm_steps",
+                      type='int', default=MANUAL_DEFAULTS['manual_group_fit_lm_steps'],
+                      help=("LevMar steps per grouped fit: the fit budget "
+                            "(photutils fitter_maxiters = scipy leastsq maxfev) "
+                            "becomes steps*(3*n_max+1), n_max = largest group in "
+                            "the pass, so an n-source group keeps the step count "
+                            "an isolated source gets at the photutils default "
+                            "100 (default 25; 0 = flat 100).  At the flat 100, "
+                            "32%% of grouped o105 F480M rows hit the budget and "
+                            "lost flux_err."))
     parser.add_option('--each-exposure', dest='each_exposure',
                       default=False, action='store_true',
                       help='Photometer each exposure (REQUIRED for new runs; '

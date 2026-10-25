@@ -1171,17 +1171,53 @@ def _apply_handoff_resbg_clip(data, background_map, handoff_xy, resbg_path):
                  f"pixel(s) lowered, median {med:.3g} MJy/sr")
 
 
-def _record_group_fit_meta(result, grouper):
+_PHOTUTILS_DEFAULT_MAXITERS = 100
+
+
+def _grouped_fit_maxiters(grouper, init_params, options):
+    """LevMar function-evaluation budget (photutils ``fitter_maxiters``).
+
+    astropy's LevMarLSQFitter passes ``maxiter`` to scipy ``leastsq`` as
+    ``maxfev``, a budget of FUNCTION EVALUATIONS.  The gridded PSF has no
+    analytic derivative, so each LM step on an n-source group spends 3n+1
+    evaluations on the finite-difference Jacobian: the photutils default of
+    100 gives an isolated source 25 steps but a 7-source group 4.  On the o105
+    30" cutout (m7 from the ungrouped m6 state) 32% of grouped F480M rows and
+    11% of grouped F212N rows ran out of that budget (photutils flags bit 8);
+    91-96% of those lost their covariance (flux_err NaN, flags bit 16), and the
+    m7 vetting's S/N terms then dropped them.  This keeps the isolated-source
+    step count for the largest group in the pass: ``steps * (3 n_max + 1)``
+    with ``steps = manual_group_fit_lm_steps`` (25; 0 = flat 100).  A fit
+    that converges stops early, so the larger budget costs time only where the
+    default budget truncated the fit.
+    """
+    steps = int(mopt(options, 'manual_group_fit_lm_steps'))
+    if grouper is None or steps <= 0 or init_params is None or len(init_params) == 0:
+        return _PHOTUTILS_DEFAULT_MAXITERS
+    cols = init_params.colnames
+    xc = 'x_init' if 'x_init' in cols else ('x' if 'x' in cols else None)
+    yc = 'y_init' if 'y_init' in cols else ('y' if 'y' in cols else None)
+    if xc is None or yc is None:
+        return _PHOTUTILS_DEFAULT_MAXITERS
+    gid = np.asarray(grouper(np.asarray(init_params[xc], dtype=float),
+                             np.asarray(init_params[yc], dtype=float)))
+    n_max = int(np.unique(gid, return_counts=True)[1].max()) if gid.size else 1
+    return max(_PHOTUTILS_DEFAULT_MAXITERS, steps * (3 * n_max + 1))
+
+
+def _record_group_fit_meta(result, grouper, maxiters=_PHOTUTILS_DEFAULT_MAXITERS):
     """Record in ``result.meta`` whether the fit was grouped.
 
     Grouped and ungrouped fits write the SAME product names (the ``_group``
     token belongs to the legacy ``--group`` flag only), so the header is where
-    a reader tells them apart: GRPFIT (bool), GRPSEP (grouping radius, px) and
-    GRPMAX (group-size cap, 0 = none).  The per-row ``group_size`` column
-    carries the realised group sizes.
+    a reader tells them apart: GRPFIT (bool), GRPSEP (grouping radius, px),
+    GRPMAX (group-size cap, 0 = none) and FITMAXFE (LevMar function-evaluation
+    budget).  The per-row ``group_size`` column carries the realised group
+    sizes.
     """
     result.meta['GRPFIT'] = (grouper is not None,
                              'manual daophot fit used source grouping')
+    result.meta['FITMAXFE'] = (int(maxiters), 'LevMar maxfev (fitter_maxiters)')
     if grouper is not None:
         result.meta['GRPSEP'] = (float(grouper.min_separation),
                                  'grouping radius (px)')
@@ -1250,12 +1286,14 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     # Grouped fitting is the default (manual_group_fit_enabled): close sources
     # are fit jointly, so a pair member no longer absorbs its neighbour's wing.
     use_grouper = grouper if manual_group_fit_enabled(options) else None
+    fit_maxiters = _grouped_fit_maxiters(use_grouper, init_params, options)
     phot = _make_psfphotometry(
         finder=None,
         localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
         grouper=use_grouper,
         psf_model=dao_psf_model,
         fitter=LevMarLSQFitter(),
+        fitter_maxiters=fit_maxiters,
         fit_shape=(5, 5),
         aperture_radius=aperture_radius_pix,
         progress_bar=False,
@@ -1263,7 +1301,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     )
     result = phot(data, mask=mask, init_params=init_params,
                   error=np.where(bad, 1e10, err))
-    _record_group_fit_meta(result, use_grouper)
+    _record_group_fit_meta(result, use_grouper, fit_maxiters)
 
     # --- post-fit dedup (1.0 px, qfit tiebreak) ---
     xfit = np.asarray(result['x_fit'], dtype=float)

@@ -155,6 +155,15 @@ MANUAL_DEFAULTS = {
     # --no-group-fit restores the ungrouped fit.  Product names stay canonical
     # (no ``_group`` token): see manual_group_fit_enabled.
     'manual_group_fit': True,
+    # LevMar steps per fit at the photutils default budget: astropy's
+    # LevMarLSQFitter hands ``maxiter`` to scipy leastsq as ``maxfev`` (FUNCTION
+    # evaluations), and the gridded PSF has no analytic derivative, so one LM
+    # step on an n-source group costs 3n+1 evaluations.  photutils' default
+    # fitter_maxiters=100 is 25 steps for an isolated source but 4 for a
+    # 7-source group.  The grouped pass gets steps * (3 n_max + 1), n_max =
+    # the largest group in the pass (= 100 for n_max = 1, unchanged).  0 =
+    # the flat photutils default 100.  See _grouped_fit_maxiters.
+    'manual_group_fit_lm_steps': 25,
     'manual_group_min_sep_fwhm': 2.0,
     # -- cross-band merge output (m7): every module's table is written as FITS;
     # the ECSV twin (~30x slower to write on sgrb2) only for the merged module, or for
