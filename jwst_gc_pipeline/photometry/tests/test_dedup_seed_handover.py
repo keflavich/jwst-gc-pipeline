@@ -131,12 +131,14 @@ def _gaussian_grid_psf():
                                                  'oversampling': ov}))
 
 
-def _run():
+def _run(group_fit=False):
     """A star broader than the PSF (FWHM 3.0 vs 2.5), so its free fit reads a
     model/data peak ratio of ~1.06, plus the star's seed and a neighbour seed.
-    The fits are independent (group=False), so the neighbour slides onto the
-    star; the qfit tiebreak keeps the neighbour's row; an overshoot ratio of
-    1.05 sends it to the seed-pinned refit."""
+    With ``group_fit=False`` the fits are independent (the prodD state), so
+    the neighbour slides onto the star; the qfit tiebreak keeps the
+    neighbour's row; an overshoot ratio of 1.05 sends it to the seed-pinned
+    refit.  With ``group_fit=True`` (the default since #1246) the two seeds
+    are fit jointly."""
     yy, xx = np.mgrid[:SHAPE[0], :SHAPE[1]]
     sig = 3.0 / 2.3548
     amp = 3000.0
@@ -148,7 +150,8 @@ def _run():
     seed['x_init'] = [STAR_SEED[0], NB_SEED[0]]
     seed['y_init'] = [STAR_SEED[1], NB_SEED[1]]
     seed['flux_init'] = [0.8 * flux_true, 0.18 * flux_true]
-    opts = types.SimpleNamespace(group=False, satstar_artifact_sigK=3.0,
+    opts = types.SimpleNamespace(group=False, manual_group_fit=group_fit,
+                                 satstar_artifact_sigK=3.0,
                                  satstar_artifact_ratio=1.0)
     res, _, _ = C._manual_phot_pass(
         data=img, mask=np.zeros(SHAPE, bool), err=np.ones(SHAPE),
@@ -172,4 +175,18 @@ def test_refit_stays_on_the_star():
     # Before the fix the refit at the neighbour's seed read 0.26x the star's
     # flux; at the star's seed it reads ~0.8x (the PSF is narrower than this
     # star).
+    assert float(row['flux_fit']) > 0.7 * flux_true
+
+
+def test_grouped_fit_keeps_the_star_on_its_own_seed():
+    # Fit jointly, the neighbour seed no longer slides onto the star, so no
+    # hand-over is needed: the star's row keeps its own seed and its flux.
+    # The neighbour seed keeps a separate row in this scene; this test does
+    # not pin that row.
+    res, flux_true = _run(group_fit=True)
+    on_star = [r for r in res
+               if (r['x_init'], r['y_init']) == pytest.approx(STAR_SEED)]
+    assert len(on_star) == 1
+    row = on_star[0]
+    assert np.hypot(row['x_fit'] - STAR[0], row['y_fit'] - STAR[1]) < 0.5
     assert float(row['flux_fit']) > 0.7 * flux_true
