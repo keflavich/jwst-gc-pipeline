@@ -567,6 +567,9 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
     * F212N (o111 nrcb3 exp1-6): single-exposure cosmic-ray and snowball
       SATURATED transients are handed off and fitted (6 of 8).  They are
       bright, so no data floor removes them; this needs a transient guard.
+      In the o105 m7 A/B the extensions lost 263 F212N stars and gained 87
+      (F480M: gained 76, lost about 0); ``DAOPHOT_HANDOFF_FILTERS`` limits
+      them to listed bandpasses (``_daophot_handoff_in_filter_scope``).
 
     With ``peak_min_area > 0`` (and ``sci``), a kept component of at least
     ``peak_min_area`` pixels is handed off at its ``sci`` local maxima
@@ -687,6 +690,67 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
     return xy
 
 
+_HANDOFF_BANDPASS_RE = re.compile(r'^F\d{3,4}(W2|[WMN])$')
+
+
+def _daophot_handoff_in_filter_scope(filtername):
+    """Whether the opt-in hand-off extensions apply to ``filtername``.
+
+    Env ``DAOPHOT_HANDOFF_FILTERS``: bandpass names separated by commas
+    and/or spaces, case-insensitive.  Unset or blank applies the extensions
+    to every bandpass (the behaviour before this switch).  When it is set, a
+    bandpass that is not listed runs with ``DAOPHOT_HANDOFF_UNACCEPTED_SAT``
+    off and ``DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM`` unset, whatever
+    those variables say.  The default-on hand-offs (gate rejects, severity
+    drops) do not depend on it.
+
+    One cataloging submission covers every filter of a field, because the m7
+    finalize does the cross-band merge, so a per-bandpass choice has to be
+    made here rather than in the job environment.  In the gc-treasury o105 m7
+    A/B (extensions on vs off), the extensions helped F480M and hurt F212N.
+    The counts are control-corrected stars that one arm fits and the other
+    leaves in its residual:
+
+    * F480M: 76 more stars, about 0 lost, and 41 fewer whole-star leftovers;
+    * F212N: 263 stars lost and 87 gained.
+
+    Every differing row lies within about 4" of an accepted satstar.
+
+    Parameters
+    ----------
+    filtername : str or None
+        The frame's bandpass.  None is accepted only when the variable is
+        unset or blank.
+
+    Returns
+    -------
+    bool
+
+    Raises
+    ------
+    ValueError
+        A listed name is not a bandpass (``F`` + 3-4 digits + ``W``/``M``/
+        ``N``/``W2``), or the variable is set and ``filtername`` is None.  A
+        typo would otherwise switch the extensions off for every filter
+        without a word.
+    """
+    raw = os.environ.get('DAOPHOT_HANDOFF_FILTERS', '')
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if not _HANDOFF_BANDPASS_RE.match(tok)]
+    if bad:
+        raise ValueError(
+            f"DAOPHOT_HANDOFF_FILTERS={raw!r}: {bad} not bandpass names "
+            f"(e.g. 'F480M' or 'F480M,F405N'; unset applies the opt-in "
+            f"hand-off extensions to every bandpass)")
+    if not scope:
+        return True
+    if filtername is None:
+        raise ValueError(
+            f"DAOPHOT_HANDOFF_FILTERS={raw!r} is set but the caller passed no "
+            f"bandpass, so the hand-off scope cannot be decided")
+    return str(filtername).upper() in scope
+
+
 def _daophot_handoff_data_floor():
     """Data floor for the unaccepted-SATURATED daophot hand-off (MJy/sr).
 
@@ -757,7 +821,7 @@ def _daophot_handoff_peak_min_area():
     return area
 
 
-def _daophot_handoff_restore_accepted_excl_fwhm():
+def _daophot_handoff_restore_accepted_excl_fwhm(filtername=None):
     """Accepted-satstar exclusion radius of the hand-off pixel restore.
 
     Env ``DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM`` (FWHM); unset or blank
@@ -765,6 +829,14 @@ def _daophot_handoff_restore_accepted_excl_fwhm():
     SATURATED component that holds an accepted satstar centre.  A value
     ``>= 0`` keeps those components and leaves masked only the pixels within
     that many FWHM of an accepted centre (see ``_handoff_restore_pixels``).
+    A ``filtername`` outside ``DAOPHOT_HANDOFF_FILTERS``
+    (``_daophot_handoff_in_filter_scope``) gives None; the value is parsed
+    first, so a malformed one fails on every bandpass.
+
+    Parameters
+    ----------
+    filtername : str or None
+        The frame's bandpass.
 
     Returns
     -------
@@ -788,6 +860,8 @@ def _daophot_handoff_restore_accepted_excl_fwhm():
             f"DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM={raw!r} is not a "
             f"finite number >= 0 (FWHM; unset skips every component holding "
             f"an accepted satstar)")
+    if not _daophot_handoff_in_filter_scope(filtername):
+        return None
     return excl
 
 
@@ -900,7 +974,7 @@ def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
 
 
 def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
-                        data_floor=None, label='manual'):
+                        data_floor=None, label='manual', filtername=None):
     """Every position handed from the satstar channel to daophot on a frame.
 
     The gate-reject hand-off (``_gate_reject_handoff_xy``: implied-peak-gate
@@ -920,7 +994,10 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     read only when the component hand-off is on) switches large components
     to a hand-off at their local maxima.  The component hand-off is
     validated only for gc-treasury F480M (see
-    ``_unaccepted_sat_component_xy``).
+    ``_unaccepted_sat_component_xy``).  Env ``DAOPHOT_HANDOFF_FILTERS``
+    limits it to the listed bandpasses (``_daophot_handoff_in_filter_scope``,
+    given ``filtername``); outside them it stays off whatever
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` says.
 
     Returns
     -------
@@ -931,8 +1008,16 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     """
     handoff_xy, handoff_radius = _gate_reject_handoff_xy(
         rejected_path, satstar_table, fwhm_pix, label=label)
+    # Both parsed on every frame, so a malformed value fails everywhere.
+    in_scope = _daophot_handoff_in_filter_scope(filtername)
     component_handoff = _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT',
                                           False)
+    if component_handoff and not in_scope:
+        print(f"[{label}] DAOPHOT_HANDOFF_FILTERS="
+              f"{os.environ.get('DAOPHOT_HANDOFF_FILTERS', '')!r} does not "
+              f"list {filtername}: unaccepted-SATURATED hand-off and "
+              f"accepted-component restore off for this frame", flush=True)
+        component_handoff = False
     if (_handoff_env_flag('DAOPHOT_HANDOFF_SEVERITY_DROPS', True)
             and not component_handoff):
         drop_xy, drop_radius = _severity_drop_handoff_xy(
@@ -4008,10 +4093,11 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # finite raw-SCI pixel are left alone, and so are components below
         # the hand-off's own data floor (env DAOPHOT_HANDOFF_DATA_FLOOR,
         # default 0; the satstar finder's SATSTAR_DATA_FLOOR is not used).
-        # Validated only for gc-treasury F480M; enable it per field.
+        # Validated only for gc-treasury F480M; enable it per field, and per
+        # bandpass with DAOPHOT_HANDOFF_FILTERS.
         handoff_xy, handoff_radius = _daophot_handoff_xy(
             dqarr, original_data, satstar_table, satstar_rejected_path,
-            fwhm_pix, label='manual')
+            fwhm_pix, label='manual', filtername=filtername)
         if handoff_xy is not None:
             # Opt-in (env DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM): restore
             # in components that also hold an accepted satstar, outside a
@@ -4019,7 +4105,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             handoff_restore = _handoff_restore_pixels(
                 dqarr, data, bad, handoff_xy, satstar_table, fwhm_pix,
                 accepted_excl_fwhm=(
-                    _daophot_handoff_restore_accepted_excl_fwhm()),
+                    _daophot_handoff_restore_accepted_excl_fwhm(filtername)),
                 label='manual')
             n_restore = int(handoff_restore.sum())
             if n_restore:
