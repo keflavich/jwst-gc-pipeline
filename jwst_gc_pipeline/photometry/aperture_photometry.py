@@ -66,7 +66,7 @@ def _vega_zeropoint_jy(filtername):
     """SVO Vega ZeroPoint (Jy) for a JWST filter, matching merge_catalogs."""
     global _JFILTS
     if _JFILTS is None:
-        from astroquery.svo_fps import SvoFps
+        from jwst_gc_pipeline.svo_filters import SvoFps
         _JFILTS = SvoFps.get_filter_list('JWST')
         _JFILTS.add_index('filterID')
     from jwst_gc_pipeline.photometry.naming import _svo_filter_id

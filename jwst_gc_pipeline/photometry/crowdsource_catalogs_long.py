@@ -607,7 +607,7 @@ from jwst_gc_pipeline.reduction.saturated_star_finding import (
     # they are called together, and one without the other is a break.
     truly_lost_saturated_mask)
 
-from astroquery.svo_fps import SvoFps
+from jwst_gc_pipeline.svo_filters import SvoFps
 
 import pylab as pl
 pl.rcParams['figure.facecolor'] = 'w'

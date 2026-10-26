@@ -13,7 +13,7 @@ from astropy.coordinates import SkyCoord
 from astropy import wcs
 from astropy import table
 from astropy import units as u
-from astroquery.svo_fps import SvoFps
+from jwst_gc_pipeline.svo_filters import SvoFps
 from astropy.stats import sigma_clip, mad_std
 import dask
 import dask.array
