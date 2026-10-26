@@ -112,3 +112,77 @@ def test_prepare_component_handoff_follows_scope(tmp_path, monkeypatch,
         monkeypatch.setenv('DAOPHOT_HANDOFF_FILTERS', scope)
     ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate')
     assert (ctx.handoff_xy is not None) is handed
+
+
+def _prepare_band(tmp_path, monkeypatch, filt, reject_reason):
+    """``test_gate_reject_handoff._prepare`` on a frame of bandpass ``filt``."""
+    from astropy.io import fits
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+    from jwst_gc_pipeline.photometry.tests.test_gate_reject_handoff import (
+        BIG, _gaussian_grid_psf_fwhm, _prep_options, _write_crf)
+    for k, v in (('NIRCAM_SATSTAR_TIGHT_BOUND', '0'),
+                 ('SATSTAR_COMPONENT_OVERLAP_FRAC', '0'),
+                 ('NIRCAM_SATSTAR_LOCK_POS', '0'),
+                 ('NIRCAM_SATSTAR_RECOVERED_CAP', '0')):
+        monkeypatch.setenv(k, v)
+    d = tmp_path / filt / 'pipeline'
+    d.mkdir(parents=True)
+    fn = str(d / 'jw10678132001_02101_00004_nrcalong_destreak_o132_crf.fits')
+    _write_crf(fn)
+    fits.PrimaryHDU(np.zeros(SHAPE)).writeto(
+        fn.replace('.fits', '_m7_satstar_model.fits'))
+    _write_rejected(fn.replace('.fits', '_m7_satstar_rejected.fits'),
+                    [(BIG[0], BIG[1], reject_reason)])
+    monkeypatch.setattr(L, 'get_psf_model',
+                        lambda *a, **k: (_gaussian_grid_psf_fwhm(2.574), None))
+    monkeypatch.setattr(L, 'load_or_make_satstar_catalog',
+                        lambda *a, **k: None)
+    return C._prepare_frame_for_photometry(
+        _prep_options(), filt, 'nrcalong', '132', str(tmp_path), fn,
+        '10678', exposurenumber=4, visit_id=1, vgroup_id='02101',
+        bg_boxsizes=None, use_webbpsf=True, pupil='clear', resbg_path=None,
+        satstar_label='m7')
+
+
+@pytest.mark.parametrize('filt, scope, handed', [
+    ('F212N', None, True),
+    ('F212N', 'F480M', False),
+    ('F212N', 'F212N', True),
+])
+def test_prepare_scope_uses_the_frame_bandpass(tmp_path, monkeypatch, filt,
+                                               scope, handed):
+    """A non-F480M frame: the component hand-off follows the frame's own
+    bandpass, so a caller that passed a fixed name would fail here."""
+    monkeypatch.setenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', '1')
+    if scope is None:
+        monkeypatch.delenv('DAOPHOT_HANDOFF_FILTERS', raising=False)
+    else:
+        monkeypatch.setenv('DAOPHOT_HANDOFF_FILTERS', scope)
+    ctx = _prepare_band(tmp_path, monkeypatch, filt, 'fit_quality_gate')
+    assert (ctx.handoff_xy is not None) is handed
+
+
+def test_prepare_passes_frame_bandpass_to_both_scoped_readers(tmp_path,
+                                                              monkeypatch):
+    """The gate-reject hand-off (default on) reaches the pixel restore, and
+    both scoped readers receive the frame's bandpass."""
+    seen = {}
+    xy_orig = C._daophot_handoff_xy
+    excl_orig = C._daophot_handoff_restore_accepted_excl_fwhm
+
+    def xy_spy(*a, **k):
+        seen['xy'] = k.get('filtername')
+        return xy_orig(*a, **k)
+
+    def excl_spy(*a, **k):
+        seen['excl'] = a[0] if a else k.get('filtername')
+        return excl_orig(*a, **k)
+
+    monkeypatch.setattr(C, '_daophot_handoff_xy', xy_spy)
+    monkeypatch.setattr(C, '_daophot_handoff_restore_accepted_excl_fwhm',
+                        excl_spy)
+    monkeypatch.setenv('DAOPHOT_HANDOFF_FILTERS', 'F480M')
+    monkeypatch.setenv('DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM', '1.5')
+    ctx = _prepare_band(tmp_path, monkeypatch, 'F212N', 'implied_peak_gate')
+    assert ctx.handoff_xy is not None
+    assert seen == {'xy': 'F212N', 'excl': 'F212N'}

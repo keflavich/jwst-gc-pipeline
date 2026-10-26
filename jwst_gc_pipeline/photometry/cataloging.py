@@ -701,8 +701,10 @@ def _daophot_handoff_in_filter_scope(filtername):
     to every bandpass (the behaviour before this switch).  When it is set, a
     bandpass that is not listed runs with ``DAOPHOT_HANDOFF_UNACCEPTED_SAT``
     off and ``DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM`` unset, whatever
-    those variables say.  The default-on hand-offs (gate rejects, severity
-    drops) do not depend on it.
+    those variables say, so an out-of-scope frame gets the same hand-offs as
+    a run with the extensions off (gate rejects plus the severity drops,
+    which ``_daophot_handoff_xy`` reads only while the component hand-off is
+    off).
 
     One cataloging submission covers every filter of a field, because the m7
     finalize does the cross-band merge, so a per-bandpass choice has to be
