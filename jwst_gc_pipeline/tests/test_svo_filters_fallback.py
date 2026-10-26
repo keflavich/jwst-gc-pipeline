@@ -5,6 +5,7 @@ timeout on svo2.cab.inta-csic.es after its photometry had finished.  These
 tests never touch the network: astroquery's ``SvoFps.get_filter_list`` is
 replaced with a fake that either answers or raises.
 """
+import io
 import os
 
 import numpy as np
@@ -13,20 +14,28 @@ import requests
 
 pytest.importorskip('astroquery.svo_fps')
 
+from astropy.io.votable import parse_single_table  # noqa: E402
+from astroquery.exceptions import TimeoutError as AstroqueryTimeoutError  # noqa: E402
 from astroquery.svo_fps import SvoFps as astroquery_svofps  # noqa: E402
 
 from jwst_gc_pipeline import svo_filters  # noqa: E402
 
 
 class _Calls:
-    def __init__(self, result=None, error=None):
-        self.result, self.error, self.kwargs = result, error, []
+    def __init__(self, result=None, error=None, body=None):
+        self.result, self.error, self.body, self.kwargs = result, error, body, []
 
     def __call__(self, facility, *, instrument=None, **kwargs):
         self.kwargs.append(dict(kwargs, facility=facility, instrument=instrument))
+        if self.body is not None:
+            # what astroquery does with the response body
+            return parse_single_table(io.BytesIO(self.body)).to_table()
         if self.error is not None:
             raise self.error
         return self.result
+
+
+_HTML_PAGE = b'<html><body>SVO is down for maintenance</body></html>'
 
 
 @pytest.fixture
@@ -60,12 +69,38 @@ def test_connect_timeout_falls_back_once_per_process(shim, monkeypatch, capsys):
 @pytest.mark.parametrize('error', [
     requests.exceptions.ReadTimeout('slow'),
     requests.exceptions.HTTPError('503'),
+    AstroqueryTimeoutError('timed out'),
     IndexError('No filter found'),
-    ValueError('not a VOTable'),
 ])
 def test_other_unreachable_errors_fall_back(shim, monkeypatch, error):
     monkeypatch.setattr(astroquery_svofps, 'get_filter_list', _Calls(error=error))
     assert 'JWST/NIRCam.F212N' in list(shim.get_filter_list('JWST')['filterID'])
+
+
+@pytest.mark.parametrize('body', [_HTML_PAGE, b'', b'Service unavailable'])
+def test_unparseable_response_falls_back(shim, monkeypatch, capsys, body):
+    monkeypatch.setattr(astroquery_svofps, 'get_filter_list', _Calls(body=body))
+    assert 'JWST/NIRCam.F212N' in list(shim.get_filter_list('JWST')['filterID'])
+    assert 'not a filter table' in capsys.readouterr().out
+
+
+def test_unparseable_response_is_not_sticky(shim, monkeypatch):
+    fake = _Calls(body=_HTML_PAGE)
+    monkeypatch.setattr(astroquery_svofps, 'get_filter_list', fake)
+    shim.get_filter_list('JWST')
+    sentinel = object()
+    fake.body, fake.result = None, sentinel
+    assert shim.get_filter_list('JWST') is sentinel
+    assert len(fake.kwargs) == 2
+
+
+def test_valueerror_outside_the_votable_parser_raises(shim, monkeypatch):
+    """A bad argument is a caller bug, not an SVO outage."""
+    err = ValueError('Timeout value connect was -1, but it must be an int, '
+                     'float or None.')
+    monkeypatch.setattr(astroquery_svofps, 'get_filter_list', _Calls(error=err))
+    with pytest.raises(ValueError, match='Timeout value'):
+        shim.get_filter_list('JWST', timeout=-1)
 
 
 def test_live_answer_wins_and_gets_a_timeout(shim, monkeypatch):
@@ -96,6 +131,16 @@ def test_non_jwst_facility_still_raises(shim, monkeypatch):
     monkeypatch.setattr(astroquery_svofps, 'get_filter_list', _Calls(error=err))
     with pytest.raises(requests.exceptions.ConnectTimeout):
         shim.get_filter_list('2MASS')
+
+
+def test_stamp_fetched_date_rewrites_one_line(tmp_path):
+    src = tmp_path / 'svo_filters_copy.py'
+    with open(svo_filters.__file__, encoding='utf-8') as fh:
+        src.write_text(fh.read(), encoding='utf-8')
+    svo_filters._stamp_fetched_date('2031-01-02', source=str(src))
+    lines = [ln for ln in src.read_text(encoding='utf-8').splitlines()
+             if ln.startswith('VENDORED_FETCHED = ')]
+    assert lines == ["VENDORED_FETCHED = '2031-01-02'"]
 
 
 def test_other_attributes_are_astroquerys(shim):
