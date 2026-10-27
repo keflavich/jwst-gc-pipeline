@@ -123,6 +123,31 @@ def test_stage_label_and_catalog_path(tmp_path):
     assert satstar_catalog_path(Table(), "m2") is None      # no FILENAME
 
 
+@pytest.mark.parametrize("stage", ["m5", "m6", "m7"])
+def test_resbgsub_stage_reads_resbgsub_catalog(tmp_path, stage):
+    """m5-m7 fit on the resbgsub frame, so their satstar catalogs carry the
+    ``resbgsub`` token.  The checkpoint passes the bare merge label; before
+    #1249 that found nothing at m5/m6 and a stale pre-resbgsub file at m7."""
+    assert satstar_stage_label(stage) == f"resbgsub_{stage}"
+    stem = "jw02092002001_02101_00001_nrca1_destreak_o002_crf"
+    t = Table()
+    t.meta["FILENAME"] = str(tmp_path / f"{stem}.fits")
+    stale = tmp_path / f"{stem}_{stage}_satstar_catalog.fits"
+    stale.write_bytes(b"")
+    # Only the old-scheme name on disk: not read.
+    assert satstar_catalog_path(t, stage) is None
+    current = tmp_path / f"{stem}_resbgsub_{stage}_satstar_catalog.fits"
+    current.write_bytes(b"")
+    assert satstar_catalog_path(t, stage) == str(current)
+
+
+def test_resbgsub_stages_match_the_producer():
+    from jwst_gc_pipeline.photometry import satstar_consensus
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+        _RESBGSUB_PHASES)
+    assert tuple(satstar_consensus._RESBGSUB_STAGES) == tuple(_RESBGSUB_PHASES)
+
+
 # ---- reference blends ------------------------------------------------------
 
 from jwst_gc_pipeline.photometry.reference_blends import blended_reference_mask  # noqa: E402
