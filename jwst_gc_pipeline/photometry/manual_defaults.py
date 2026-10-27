@@ -84,6 +84,9 @@ MANUAL_DEFAULTS = {
     'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
+    # bright keep also for grouped rows (group_size > 1); only grouped fits
+    # produce them, so ungrouped runs are unchanged.  See _filter_extended_emission.
+    'manual_ext_high_keep_grouped': True,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
     # previous-phase (hysteresis) keep: a source the previous phase vetted is
     # kept while qfit < this and S/N >= the next; 0 = off
@@ -146,6 +149,26 @@ MANUAL_DEFAULTS = {
     # -- coarse-background detection (0 = off; MIRI raw rounds use 51)
     'coarse_bg_box': 0,
     # -- grouping
+    # Joint PSF fitting (CappedSourceGrouper groups) of close sources in every
+    # manual daophot pass.  ON by default: ungrouped fits of
+    # pairs at 0.75-2 FWHM each absorb the neighbour's wing, so the summed pair
+    # model over-subtracts (o105 30" cutout, m7 from main's m6 state,
+    # model/data over 0.75-2 FWHM pairs relative to isolated stars: F212N
+    # 1.083 ungrouped vs 0.991 grouped, F480M 1.102 vs 0.969) and the residual
+    # shows a crater at each member (S/N<-5 at clean pair members in that
+    # nn bin: F212N 309 -> 24, F480M 615 -> 83).
+    # --no-group-fit restores the ungrouped fit.  Product names stay canonical
+    # (no ``_group`` token): see manual_group_fit_enabled.
+    'manual_group_fit': True,
+    # LevMar steps per fit at the photutils default budget: astropy's
+    # LevMarLSQFitter hands ``maxiter`` to scipy leastsq as ``maxfev`` (FUNCTION
+    # evaluations), and the gridded PSF has no analytic derivative, so one LM
+    # step on an n-source group costs 3n+1 evaluations.  photutils' default
+    # fitter_maxiters=100 is 25 steps for an isolated source but 4 for a
+    # 7-source group.  The grouped pass gets steps * (3 n_max + 1), n_max =
+    # the largest group in the pass (= 100 for n_max = 1, unchanged).  0 =
+    # the flat photutils default 100.  See _grouped_fit_maxiters.
+    'manual_group_fit_lm_steps': 25,
     'manual_group_min_sep_fwhm': 2.0,
     # -- cross-band merge output (m7): every module's table is written as FITS;
     # the ECSV twin (~30x slower to write on sgrb2) only for the merged module, or for
@@ -209,6 +232,24 @@ MANUAL_DEFAULTS = {
     # True restores every phase's map.
     'manual_keep_intermediate_smoothed_bg': False,
 }
+
+
+def manual_group_fit_enabled(options):
+    """True when the manual daophot path fits close sources jointly.
+
+    Grouped fitting is ON by default (``manual_group_fit``, opt out with
+    ``--no-group-fit``).  The legacy ``--group`` flag also turns it on and, in
+    addition, adds the ``_group`` token to every product name, which writes a
+    second, parallel product set that several consumers exclude on purpose
+    (the residual HiPS builder's RESIDUAL_I2D pattern, merge globs, the
+    distortion-floor diagnostic).  The default-on path keeps the canonical
+    names, so a grouped rerun REPLACES the ungrouped products and every
+    consumer picks it up unchanged; the per-frame catalog header (GRPFIT,
+    GRPSEP, GRPMAX) and the ``group_size`` column record that the fit was
+    grouped.  ``--group`` wins over ``--no-group-fit``.
+    """
+    return bool(getattr(options, 'group', False)) or bool(
+        mopt(options, 'manual_group_fit'))
 
 
 def mopt(options, name):

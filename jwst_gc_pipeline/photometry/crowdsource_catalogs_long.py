@@ -132,8 +132,46 @@ def resolve_max_group_size(raw):
     return n
 
 
+def kdtree_group_ids(x, y, min_separation):
+    """Same partition as ``photutils.psf.SourceGrouper(min_separation)``,
+    in O(N log N) time and O(N) memory.
+
+    SourceGrouper calls ``scipy.cluster.hierarchy.fclusterdata`` (single
+    linkage, ``criterion='distance'``), which builds the full condensed
+    pairwise-distance matrix: 8 N(N-1)/2 bytes, 26 GB for the 80769 seeds of
+    the densest sgrb2 F300M m7 frame and ~10 GB for the o105 hybpsf F480M
+    frames (49153 seeds).  Single-linkage clusters cut at distance t are the
+    connected components of the graph whose edges join sources at most t
+    apart, which ``cKDTree.query_pairs(t)`` lists directly.  Labels are
+    1..n_groups in order of first appearance, the relabelling SourceGrouper
+    applies, so the returned array equals SourceGrouper's element for
+    element (tests/test_group_fit_default.py).
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    x = np.atleast_1d(np.asarray(x, dtype=float))
+    y = np.atleast_1d(np.asarray(y, dtype=float))
+    if x.shape != y.shape:
+        raise ValueError(f'x and y must have the same shape, got {x.shape} and {y.shape}')
+    if not (np.isfinite(x).all() and np.isfinite(y).all()):
+        raise ValueError('x and y coordinates must be finite (no NaN or inf values)')
+    n = x.size
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    pairs = cKDTree(np.column_stack([x, y])).query_pairs(
+        r=float(min_separation), output_type='ndarray')
+    graph = coo_matrix((np.ones(len(pairs), dtype=np.int8),
+                        (pairs[:, 0], pairs[:, 1])), shape=(n, n))
+    _, labels = connected_components(graph, directed=False)
+    # relabel 1.. by first appearance (SourceGrouper's ordering)
+    _, first = np.unique(labels, return_index=True)
+    rank = np.empty(first.size, dtype=np.int64)
+    rank[np.argsort(first, kind='stable')] = np.arange(1, first.size + 1)
+    return rank[labels]
+
+
 class CappedSourceGrouper:
-    """SourceGrouper wrapper that caps the maximum group size.
+    """SourceGrouper replacement that caps the maximum group size.
 
     photutils SourceGrouper has only a min_separation knob: any cluster of
     sources mutually within that distance becomes one group, however large.
@@ -143,21 +181,22 @@ class CappedSourceGrouper:
     collapse from ~5 it/s to <1 it/s in dense regions, hitting the 96 h
     walltime at ~14% completion.
 
-    This wrapper post-processes the inner grouper's output: any group
-    larger than ``max_size`` is split into ``ceil(N/max_size)`` spatially
-    coherent sub-groups by sorting along the group's principal axis.
-    Sparse-region groups (already <= max_size) are returned untouched.
+    The base partition comes from ``kdtree_group_ids`` (the SourceGrouper
+    partition without its O(N^2) distance matrix).  Any group larger than
+    ``max_size`` is then split into ``ceil(N/max_size)`` spatially coherent
+    sub-groups by sorting along the group's principal axis.  Sparse-region
+    groups (already <= max_size) are returned untouched.  ``max_size=0``
+    applies no cap (the SourceGrouper partition itself).
     """
 
     def __init__(self, min_separation, max_size=0):
-        self._inner = SourceGrouper(min_separation)
         self.min_separation = min_separation
         self.max_size = int(max_size) if max_size else 0
 
     def __call__(self, x, y):
         x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
-        group_ids = np.asarray(self._inner(x, y)).astype(np.int64, copy=True)
+        group_ids = kdtree_group_ids(x, y, self.min_separation)
         if self.max_size <= 0 or group_ids.size == 0:
             return group_ids
         next_id = int(group_ids.max()) + 1
@@ -4645,6 +4684,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_high_keep_max'],
                     help="Upper qfit cap for the bright-isolated keep (default 0.4); "
                          "extended-emission knots have worse qfit so stay rejected.")
+    parser.add_option("--manual-ext-high-keep-singletons-only",
+                    dest="manual_ext_high_keep_grouped", action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_high_keep_grouped'],
+                    help="Restrict the bright-isolated keep to group_size==1 rows "
+                         "(the behaviour before grouped fitting became the "
+                         "default).  By default grouped rows qualify too: joint-"
+                         "fit covariance only lowers S/N, and the singleton gate "
+                         "vetted out bright close-pair members (o105 F480M "
+                         "full grouped chain: 144 rows with S/N >= 20, qfit < 0.4).")
     parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
                     help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "
@@ -4916,7 +4964,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=MANUAL_DEFAULTS['manual_group_min_sep_fwhm'],
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
-                          "requires --group).  Sources closer than this are fit "
+                          "applies while grouped fitting is on, the default; "
+                          "see --no-group-fit).  Sources closer than this are fit "
                           "jointly.  Raise above 2.0 to jointly fit wider close "
                           "pairs that otherwise over-subtract in the valley "
                           "between them (default 2.0)."))
@@ -5028,7 +5077,37 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     "fields.field_token_for_run.", metavar="field")
     parser.add_option("--group", dest="group",
                       default=False,
-                      action='store_true')
+                      action='store_true',
+                      help=("LEGACY: grouped fitting AND a '_group' token in "
+                            "every product name (a second, parallel product "
+                            "set that the merge globs and the residual HiPS "
+                            "builder skip).  The manual daophot path now fits "
+                            "grouped by default with canonical names "
+                            "(--no-group-fit to opt out), so this flag is only "
+                            "needed to write a side-by-side '_group' set."))
+    parser.add_option("--no-group-fit", dest="manual_group_fit",
+                      default=MANUAL_DEFAULTS['manual_group_fit'],
+                      action='store_false',
+                      help=("Manual daophot path: fit every source on its own "
+                            "(no photutils SourceGrouper), the pre-default "
+                            "behaviour.  Grouped fitting is ON by default "
+                            "(radius --manual-group-min-sep-fwhm, cap "
+                            "--max-group-size) and keeps the canonical product "
+                            "names; --group overrides this flag."))
+    parser.add_option("--group-fit", dest="manual_group_fit",
+                      default=MANUAL_DEFAULTS['manual_group_fit'],
+                      action='store_true',
+                      help="Manual daophot path: grouped fitting (the default).")
+    parser.add_option("--manual-group-fit-lm-steps", dest="manual_group_fit_lm_steps",
+                      type='int', default=MANUAL_DEFAULTS['manual_group_fit_lm_steps'],
+                      help=("LevMar steps per grouped fit: the fit budget "
+                            "(photutils fitter_maxiters = scipy leastsq maxfev) "
+                            "becomes steps*(3*n_max+1), n_max = largest group in "
+                            "the pass, so an n-source group keeps the step count "
+                            "an isolated source gets at the photutils default "
+                            "100 (default 25; 0 = flat 100).  At the flat 100, "
+                            "27-32%% of grouped o105 F480M rows hit the budget "
+                            "and most lost flux_err."))
     parser.add_option('--each-exposure', dest='each_exposure',
                       default=False, action='store_true',
                       help='Photometer each exposure (REQUIRED for new runs; '
@@ -5358,16 +5437,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False, action='store_true',
                       help='Enumerate --each-exposure work and print a comma-separated SLURM --array spec of only the bundled task indices that still need to run. Writes only the spec to stdout; logs go to stderr.')
     parser.add_option('--max-group-size', dest='max_group_size',
-                      default='unlimited', type='string',
+                      default='10', type='string',
                       help=("Cap on photutils SourceGrouper group size.  Must be "
                             "EXPLICIT: 'unlimited' (no cap) or a POSITIVE integer. "
                             "The value 0 is REJECTED -- it was ambiguous (read as "
                             "'no grouping' but actually meant 'unlimited group "
                             "size').  Groups larger than the cap are split into "
                             "spatially coherent sub-groups via principal-axis "
-                            "sorting before the joint fit.  Use 10-15 for dense "
-                            "fields to keep joint fits tractable; 'unlimited' only "
-                            "where blends are rare."))
+                            "sorting before the joint fit.  Default 10, set with "
+                            "grouped fitting on by default in the manual path: "
+                            "the joint LevMar cost grows roughly cubically with "
+                            "group size, and uncapped groups of 50-100+ sources "
+                            "(brick LW iter3 cross-band union seeds) hit the "
+                            "96 h wall.  Production m7 seed lists measured "
+                            "2026-10 reach 12 sources (o105 hybpsf F480M), so "
+                            "the cap rarely binds there."))
     parser.add_option('--n-seed-chunks', dest='n_seed_chunks',
                       default=1, type='int',
                       help=('Split the seed catalog into N image-pixel tiles '

@@ -45,7 +45,8 @@ from jwst_gc_pipeline.photometry.naming import (
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
-from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
+from jwst_gc_pipeline.photometry.manual_defaults import (
+    MANUAL_DEFAULTS, manual_group_fit_enabled, mopt)
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     recorded_source_exposure)
 from jwst_gc_pipeline.photometry.requested_filters import (
@@ -1257,6 +1258,61 @@ def _apply_handoff_resbg_clip(data, background_map, handoff_xy, resbg_path):
                  f"pixel(s) lowered, median {med:.3g} MJy/sr")
 
 
+_PHOTUTILS_DEFAULT_MAXITERS = 100
+
+
+def _grouped_fit_maxiters(grouper, init_params, options):
+    """LevMar function-evaluation budget (photutils ``fitter_maxiters``).
+
+    astropy's LevMarLSQFitter passes ``maxiter`` to scipy ``leastsq`` as
+    ``maxfev``, a budget of FUNCTION EVALUATIONS.  The gridded PSF has no
+    analytic derivative, so each LM step on an n-source group spends 3n+1
+    evaluations on the finite-difference Jacobian: the photutils default of
+    100 gives an isolated source 25 steps but a 7-source group 4.  On the o105
+    30" cutout (m7 from the ungrouped m6 state) 32% of grouped F480M rows and
+    11% of grouped F212N rows ran out of that budget (photutils flags bit 8);
+    91-96% of those lost their covariance (flux_err NaN, flags bit 16), and the
+    m7 vetting's S/N terms then dropped them.  This keeps the isolated-source
+    step count for the largest group in the pass: ``steps * (3 n_max + 1)``
+    with ``steps = manual_group_fit_lm_steps`` (25; 0 = flat 100).  A fit
+    that converges stops early, so the larger budget costs time only where the
+    default budget truncated the fit.
+    """
+    steps = int(mopt(options, 'manual_group_fit_lm_steps'))
+    if grouper is None or steps <= 0 or init_params is None or len(init_params) == 0:
+        return _PHOTUTILS_DEFAULT_MAXITERS
+    cols = init_params.colnames
+    xc = 'x_init' if 'x_init' in cols else ('x' if 'x' in cols else None)
+    yc = 'y_init' if 'y_init' in cols else ('y' if 'y' in cols else None)
+    if xc is None or yc is None:
+        return _PHOTUTILS_DEFAULT_MAXITERS
+    gid = np.asarray(grouper(np.asarray(init_params[xc], dtype=float),
+                             np.asarray(init_params[yc], dtype=float)))
+    n_max = int(np.unique(gid, return_counts=True)[1].max()) if gid.size else 1
+    return max(_PHOTUTILS_DEFAULT_MAXITERS, steps * (3 * n_max + 1))
+
+
+def _record_group_fit_meta(result, grouper, maxiters=_PHOTUTILS_DEFAULT_MAXITERS):
+    """Record in ``result.meta`` whether the fit was grouped.
+
+    Grouped and ungrouped fits write the SAME product names (the ``_group``
+    token belongs to the legacy ``--group`` flag only), so the header is where
+    a reader tells them apart: GRPFIT (bool), GRPSEP (grouping radius, px),
+    GRPMAX (group-size cap, 0 = none) and FITMAXFE (LevMar function-evaluation
+    budget).  The per-row ``group_size`` column carries the realised group
+    sizes.
+    """
+    result.meta['GRPFIT'] = (grouper is not None,
+                             'manual daophot fit used source grouping')
+    result.meta['FITMAXFE'] = (int(maxiters), 'LevMar maxfev (fitter_maxiters)')
+    if grouper is not None:
+        result.meta['GRPSEP'] = (float(grouper.min_separation),
+                                 'grouping radius (px)')
+        result.meta['GRPMAX'] = (int(getattr(grouper, 'max_size', 0) or 0),
+                                 'group-size cap (0 = none)')
+    return result
+
+
 def _seed_nearest_fit(xfit, yfit, xinit, yinit, owner):
     """For each post-fit dedup survivor, the cluster member whose seed lies
     nearest the survivor's fitted position (#1239).
@@ -1361,12 +1417,17 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         modsky = np.zeros_like(data, dtype=float)
         return res, modsky, None
 
+    # Grouped fitting is the default (manual_group_fit_enabled): close sources
+    # are fit jointly, so a pair member no longer absorbs its neighbour's wing.
+    use_grouper = grouper if manual_group_fit_enabled(options) else None
+    fit_maxiters = _grouped_fit_maxiters(use_grouper, init_params, options)
     phot = _make_psfphotometry(
         finder=None,
         localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
-        grouper=grouper if getattr(options, 'group', False) else None,
+        grouper=use_grouper,
         psf_model=dao_psf_model,
         fitter=LevMarLSQFitter(),
+        fitter_maxiters=fit_maxiters,
         fit_shape=(5, 5),
         aperture_radius=aperture_radius_pix,
         progress_bar=False,
@@ -1374,6 +1435,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     )
     result = phot(data, mask=mask, init_params=init_params,
                   error=np.where(bad, 1e10, err))
+    _record_group_fit_meta(result, use_grouper, fit_maxiters)
 
     # --- post-fit dedup (1.0 px, qfit tiebreak) ---
     xfit = np.asarray(result['x_fit'], dtype=float)
@@ -2222,6 +2284,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_floor_propagated=False,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
+                              high_keep_grouped=False,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
                               recover_prom_gate=True,
@@ -2481,12 +2544,23 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # a confident star.  Extended-emission knots have BAD qfit (>~0.5, poor PSF
     # match), so this cannot re-admit emission; the group_size==1 gate keeps the
     # S/N trustworthy (a degenerate group inflates flux_err -> low fake S/N).
+    #
+    # ``high_keep_grouped`` (manual_ext_high_keep_grouped, default True) drops
+    # the group_size==1 requirement.  The gate guards against joint-fit
+    # covariance inflating flux_err; an inflated flux_err lowers S/N, which can
+    # only make a row fail S/N >= snr_high_keep, so it gives no protection
+    # against a false keep.  With grouped fitting on by default every member of a 0.75-2 FWHM pair
+    # has group_size >= 2, and the gate dropped the members main kept here:
+    # o105 30" cutout, full grouped chain, F480M m7 merged raw rows that pass
+    # S/N >= 20 and qfit < 0.4 but were vetted out: 144, all group_size > 1,
+    # 94 of them at main's vetted positions (0 such rows in main).  A NaN
+    # flux_err (no covariance) still gives NaN S/N and no keep.
     gsz = (np.asarray(t['group_size'], dtype=float)
            if 'group_size' in t.colnames else np.ones(n))
     bright_isolated = (
         np.isfinite(snr) & (snr >= snr_high_keep)
         & np.isfinite(qf) & (qf < qfit_high_keep_max)
-        & (gsz <= 1)
+        & ((gsz <= 1) | bool(high_keep_grouped))
     )
     # BRIGHT-STAR branch.  peak_SB > peak_over_bkg * local_bkg needs
     # local_bkg > 0, but local_bkg is fit on BACKGROUND-SUBTRACTED frames, so
@@ -3830,10 +3904,17 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # resolve_max_group_size rejects the ambiguous 0; None == 'unlimited' (no cap).
     _max_group_size = _L.resolve_max_group_size(
         getattr(options, 'max_group_size', 'unlimited'))
-    if _max_group_size is not None:
-        grouper = _L.CappedSourceGrouper(_grp_sep, max_size=_max_group_size)
-    else:
-        grouper = SourceGrouper(_grp_sep)
+    # CappedSourceGrouper partitions with a KD-tree (identical to photutils
+    # SourceGrouper, without its O(N^2) fclusterdata distance matrix: 26 GB
+    # at the 80769 seeds of the densest sgrb2 F300M m7 frame); max_size=0 is
+    # the uncapped partition.
+    grouper = _L.CappedSourceGrouper(_grp_sep, max_size=_max_group_size or 0)
+    if _max_group_size is None:
+        if manual_group_fit_enabled(options):
+            print("[manual] WARNING: grouped fitting with --max-group-size="
+                  "unlimited: dense fields can form 50-100+ source groups whose "
+                  "joint fit cost grows ~cubically; the default cap is 10.",
+                  flush=True)
 
     kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
     mask = np.isnan(data) | bad
@@ -10558,6 +10639,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     snr_floor_propagated=bool(mopt(opts_phase, 'manual_ext_snr_floor_propagated')),
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
+                    high_keep_grouped=bool(mopt(opts_phase, 'manual_ext_high_keep_grouped')),
                     qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
                     recover_satstar_guard_arcsec=float(mopt(opts_phase, 'manual_ext_recover_satstar_guard_arcsec')),
                     recover_prom_gate=bool(mopt(opts_phase, 'manual_ext_recover_prom_gate')),
