@@ -33,7 +33,7 @@ from photutils.background import MMMBackground, MADStdBackgroundRMS
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy import table
 from tqdm.autonotebook import tqdm
-from astroquery.svo_fps import SvoFps
+from jwst_gc_pipeline.svo_filters import SvoFps
 from scipy.ndimage import median_filter
 from scipy import ndimage
 from astropy.stats import sigma_clipped_stats, SigmaClip
