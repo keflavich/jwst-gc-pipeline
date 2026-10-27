@@ -1360,6 +1360,100 @@ def _seed_nearest_fit(xfit, yfit, xinit, yinit, owner):
     return src
 
 
+def _daophot_refit_nbrsub():
+    """On/off switch (env ``DAOPHOT_REFIT_NBRSUB``, default on) of the
+    neighbour-subtracted overshoot refit in ``_manual_phot_pass``.  ``0``
+    restores the single-source solve on the raw frame.  Parsed like the
+    hand-off switches: a malformed value raises ``ValueError`` naming the
+    variable.
+
+    Validation scope: unit tests and the gc-treasury o105 30" cutout A/B on
+    #1246 (m7 only, F212N and F480M); not yet validated on a full tile.
+    """
+    return _handoff_env_flag('DAOPHOT_REFIT_NBRSUB', True)
+
+
+# The model images here render each row on a 21x21 stamp and the overshoot
+# refit solves a 5x5 box, so a row within 10 + 2 px can put light in the box.
+_REFIT_TIER_RADIUS_PIX = 12.0
+
+
+def _overshoot_refit_tiers(data, x, y, radius=_REFIT_TIER_RADIUS_PIX):
+    """Order in which the neighbour-subtracted overshoot refit solves rows.
+
+    A row with a brighter overshooting row within ``radius`` px is solved
+    after it, on the frame with that row's refit model removed.  Brightness is
+    the data peak in the 3x3 box at the seed, because the fitted fluxes of
+    these rows are the ones being replaced.  Ties go to the lower index.
+
+    Parameters
+    ----------
+    data : 2D array
+        The frame the rows were fit on.
+    x, y : array, shape (N,)
+        Seed positions of the overshooting rows.
+    radius : float, optional
+        Separation (px) within which a brighter row is solved first.
+
+    Returns
+    -------
+    tier : ndarray of int, shape (N,)
+        0 for a row with no brighter overshooting row within ``radius`` (and
+        for a non-finite seed); otherwise one more than the largest tier among
+        those rows.
+    """
+    from scipy.spatial import cKDTree
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = x.size
+    tier = np.zeros(n, dtype=np.int64)
+    ok = np.isfinite(x) & np.isfinite(y)
+    if ok.sum() < 2:
+        return tier
+    ny, nx = data.shape
+    pk = np.full(n, -np.inf)
+    for i in np.flatnonzero(ok):
+        ix, iy = int(round(x[i])), int(round(y[i]))
+        box = data[max(iy - 1, 0):min(iy + 2, ny), max(ix - 1, 0):min(ix + 2, nx)]
+        if box.size and np.any(np.isfinite(box)):
+            pk[i] = float(np.nanmax(box))
+    order = np.lexsort((np.arange(n), -pk))
+    rank = np.empty(n, dtype=np.int64)
+    rank[order] = np.arange(n)
+    iok = np.flatnonzero(ok)
+    tree = cKDTree(np.c_[x[iok], y[iok]])
+    for i in order:
+        if not ok[i]:
+            continue
+        nb = iok[tree.query_ball_point((x[i], y[i]), radius)]
+        nb = nb[rank[nb] < rank[i]]
+        if nb.size:
+            tier[i] = tier[nb].max() + 1
+    return tier
+
+
+def _subset_model_image(phot, keep, shape):
+    """Model image (no local background) of the rows ``keep`` of
+    ``phot.results`` alone.  ``phot.results`` is restored before returning.
+    Rows with a non-finite or masked flux or position are left out.
+    """
+    full = phot.results
+    keep = np.asarray(keep, dtype=bool).copy()
+    for col in ('flux_fit', 'x_fit', 'y_fit'):
+        keep &= np.isfinite(np.ma.filled(
+            np.ma.asarray(full[col], dtype=float), np.nan))
+    if not keep.any():
+        return np.zeros(shape, dtype=float)
+    try:
+        phot.results = full[keep]
+        phot.__dict__.pop('_model_image_params', None)
+        return _make_model_image(phot, shape, psf_shape=(21, 21),
+                                 include_local_bkg=False)
+    finally:
+        phot.results = full
+        phot.__dict__.pop('_model_image_params', None)
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -1641,30 +1735,59 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                  else np.asarray(res['x_fit'], dtype=float))
         yseed = (np.asarray(res['y_init'], dtype=float) if 'y_init' in res.colnames
                  else np.asarray(res['y_fit'], dtype=float))
-        seed = Table()
-        seed['x_init'] = xseed[over]
-        seed['y_init'] = yseed[over]
-        forced = forced_psf_photometry(data, dao_psf_model, seed,
-                                       error=np.where(bad, 1e10, err),
-                                       mask=mask, fit_shape=(5, 5),
-                                       nonnegative=True)
+        idx = np.where(over)[0]
+        refit_img = data
+        tier = np.zeros(len(idx), dtype=np.int64)
+        if _daophot_refit_nbrsub():
+            # Default on (#932; env DAOPHOT_REFIT_NBRSUB=0 restores the solve
+            # on the raw frame).  Solve on the frame with every
+            # non-overshooting row's model removed.  On the raw frame the 5x5
+            # single-source solve takes in the light of neighbours a few px
+            # away: a ring or wing seed next to a bright star is refit with
+            # part of the star's flux and the residual shows a hole at the
+            # seed.  Overshooting rows are solved brightest first, so a row
+            # next to a brighter overshooting row sees that row's refit model
+            # removed too (_overshoot_refit_tiers).
+            # There is no local_bkg term.  The row's local_bkg is a 6-10 px
+            # annulus on the frame before neighbour removal, so it carries
+            # neighbour light that the model subtraction already removed; on
+            # the #1246 A/B (gc-treasury o105 cutout) subtracting it put
+            # isolated refit rows at 0.91x (F212N) and 0.84x (F480M) of prodD.
+            refit_img = data - _subset_model_image(phot, ~over, data.shape)
+            tier = _overshoot_refit_tiers(data, xseed[idx], yseed[idx])
         if 'forced_refit' not in res.colnames:
             res['forced_refit'] = np.zeros(len(res), dtype=bool)
-        idx = np.where(over)[0]
-        for j, gi in enumerate(idx):
-            res['flux_fit'][gi] = forced['flux_fit'][j]
-            res['x_fit'][gi] = xseed[gi]
-            res['y_fit'][gi] = yseed[gi]
-            if 'flux_err' in res.colnames:
-                res['flux_err'][gi] = forced['flux_err'][j]
-            # The source is now corrected (forced at the trusted seed position);
-            # clear the overshoot flag so downstream vetting does not drop a real
-            # star, but record that it was force-refit for diagnostics.
-            res['model_overshoot'][gi] = False
-            res['forced_refit'][gi] = True
+        ntier = int(tier.max()) + 1 if len(idx) else 0
+        for t in range(ntier):
+            if t > 0:
+                prev = np.zeros(len(res), dtype=bool)
+                prev[idx[tier == t - 1]] = True
+                refit_img = refit_img - _subset_model_image(phot, prev,
+                                                            data.shape)
+            gis = idx[tier == t]
+            seed = Table()
+            seed['x_init'] = xseed[gis]
+            seed['y_init'] = yseed[gis]
+            forced = forced_psf_photometry(refit_img, dao_psf_model, seed,
+                                           error=np.where(bad, 1e10, err),
+                                           mask=mask, fit_shape=(5, 5),
+                                           nonnegative=True)
+            for j, gi in enumerate(gis):
+                res['flux_fit'][gi] = forced['flux_fit'][j]
+                res['x_fit'][gi] = xseed[gi]
+                res['y_fit'][gi] = yseed[gi]
+                if 'flux_err' in res.colnames:
+                    res['flux_err'][gi] = forced['flux_err'][j]
+                # The source is now corrected (forced at the trusted seed
+                # position); clear the overshoot flag so downstream vetting
+                # does not drop a real star, but record that it was force-refit
+                # for diagnostics.
+                res['model_overshoot'][gi] = False
+                res['forced_refit'][gi] = True
         phot.__dict__.pop('_model_image_params', None)
         print(f"[{label}] refit {len(idx)} overshooting sources as forced "
-              f"photometry at the seed position (flux free)", flush=True)
+              f"photometry at the seed position (flux free; {ntier} tier(s))",
+              flush=True)
         modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
                                    include_local_bkg=False)
 
