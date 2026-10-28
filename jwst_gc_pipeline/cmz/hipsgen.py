@@ -13,6 +13,7 @@ Both are Java tools. Point ``HIPSGEN_JAR`` / ``HIPSGENCAT_JAR`` at the jars (or
 pass ``jar=``); :func:`_java` checks java + jar and raises a clear error if
 absent. This module shells out; it does not reimplement HiPS.
 """
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -34,6 +35,36 @@ def _run(cmd):
     subprocess.run(cmd, check=True)
 
 
+def _patch_hips_landing_page(out_dir):
+    """Rewrite ``out_dir/index.html``'s CDS landing-template ``<script>`` tag
+    to the self-hosted-first fallback chain (see
+    ``scripts/release/patch_hips_landing_page.py``).
+
+    Hipsgen's own ``INDEX`` action is what writes ``index.html``; this is a
+    no-op if that file is not there (``RGB``-only run) or if the patcher
+    script is not present alongside this checkout (e.g. a package installed
+    without its sibling ``scripts/`` directory) -- never raises for either,
+    since a stale landing page is cosmetic, not a release blocker.
+    """
+    index_html = os.path.join(out_dir, 'index.html')
+    if not os.path.exists(index_html):
+        return
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    patcher_path = os.path.join(repo_root, 'scripts', 'release',
+                                'patch_hips_landing_page.py')
+    if not os.path.exists(patcher_path):
+        print(f'(skipping landing-page patch: {patcher_path} not found)',
+              flush=True)
+        return
+    spec = importlib.util.spec_from_file_location(
+        'patch_hips_landing_page', patcher_path)
+    patcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(patcher)
+    status = patcher.patch_file(index_html)
+    print(f'landing page: {status}\t{index_html}', flush=True)
+
+
 def build_mono_hips(in_dir, out_dir, order=13, frame='galactic', jar=None,
                     extra=()):
     """Build/UPDATE a mono image HiPS from the FITS mosaics in ``in_dir``.
@@ -45,6 +76,7 @@ def build_mono_hips(in_dir, out_dir, order=13, frame='galactic', jar=None,
     base = ['java', '-jar', jar, f'in={in_dir}', f'out={out_dir}',
             f'order={order}', f'hips_frame={frame}']
     _run(base + ['INDEX', 'TILES', 'MOC'] + list(extra))
+    _patch_hips_landing_page(out_dir)
     return out_dir
 
 
@@ -59,6 +91,7 @@ def build_rgb_hips(out_dir, red_hips, green_hips, blue_hips, jar=None, extra=())
     cmd = ['java', '-jar', jar, f'out={out_dir}',
            f'red={red_hips}', f'green={green_hips}', f'blue={blue_hips}', 'RGB']
     _run(cmd + list(extra))
+    _patch_hips_landing_page(out_dir)
     return out_dir
 
 

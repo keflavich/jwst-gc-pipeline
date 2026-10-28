@@ -34,6 +34,7 @@ import math
 import os
 
 from jwst_gc_pipeline.aladin_controls import aladin_controls_js
+from jwst_gc_pipeline.aladin_loader import ALADIN_JS_SELFHOSTED
 
 #: The survey's own imagery, first; the rest are context.  Same list the monitor
 #: uses, so a reader recognises the two pages as one survey.
@@ -87,7 +88,14 @@ SURVEYS = (
 #: tracks the version the pattern is OBSERVED working on -- roman_footprint_gc
 #: runs against `latest`, which resolves to this today -- not simply the newest
 #: available; bump it when that page is seen working on a later one.
-ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.8.2/aladin.js'
+#:
+#: Self-hosted, not CDS directly: aladin.cds.unistra.fr went down for an
+#: extended period on 2026-10-28 (connect hung ~25 s, then refused), and this
+#: is loaded dynamically by a single `<script>` element built in JS (below),
+#: which has no fallback chain to fall through to a mirror -- see
+#: jwst_gc_pipeline.aladin_loader for the self-hosted copy this points at and
+#: the full chain used by the generators that load Aladin from a static tag.
+ALADIN_JS = ALADIN_JS_SELFHOSTED
 
 #: Distinguishable at small size against a dark background, in a fixed order so
 #: a field keeps its colour between builds (the index is regenerated often).
