@@ -4,9 +4,10 @@ Hipsgen's `INDEX` action writes an `index.html` into every HiPS directory it
 builds, with its own CDS `<script src=".../hips-templates/hips-landing-page.js">`
 tag -- the same failure mode as a direct Aladin Lite CDS tag (CDS down ->
 page hangs, then `buildLandingPage` is undefined).  This patches that tag to
-a self-hosted-first fallback chain.  Lives in scripts/release (not importable
-as a package), so load it from its file path -- same pattern as
-test_release_integration.py.
+a self-hosted-first fallback chain.  The logic lives in
+jwst_gc_pipeline.aladin_loader; the script is its command-line wrapper and
+re-exports it, so loading the script from its file path (same pattern as
+test_release_integration.py) exercises both.
 """
 import importlib.util
 import os

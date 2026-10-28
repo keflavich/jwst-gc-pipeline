@@ -35,6 +35,7 @@ it already supports trying more than one source.
 See ``/vendor/README.txt`` on the starformation host for the mirrors'
 provenance.
 """
+import re
 
 #: The Aladin Lite build every mirror and CDS serve.  Pinned, not "latest":
 #: the self-hosted copies are snapshots of this one version, so "latest"
@@ -91,3 +92,67 @@ def aladin_fallback_chain_html():
         '}\n'
         '</script>'
     )
+
+
+# --- HiPS landing pages -------------------------------------------------------
+#
+# Hipsgen's ``INDEX`` action (``jwst_gc_pipeline.cmz.hipsgen``) writes an
+# ``index.html`` into every HiPS directory whose own
+# ``<script src="https://aladin.cds.unistra.fr/hips-templates/hips-landing-page.js">``
+# tag fails the same way: the page hangs while CDS is unreachable, then
+# ``buildLandingPage`` is undefined and the landing page renders blank.  The
+# self-hosted template (``/vendor/hips-templates/``) also loads Aladin Lite from
+# the self-hosted copies first and opens the viewer on the HiPS itself.
+# ``scripts/release/patch_hips_landing_page.py`` is the command-line wrapper.
+
+LANDING_TAG = re.compile(
+    r"""[ \t]*<script[^>]*\ssrc=(["'])https?://aladin\.(?:cds\.unistra\.fr|u-strasbg\.fr)"""
+    r"""/hips-templates/hips-landing-page\.js\1[^>]*>\s*</script>""")
+
+#: Left in the rewritten page -- both so a second run is a no-op and so a
+#: grep can find every landing page carrying the chain.
+LANDING_MARKER = "landing-fallback-chain"
+
+LANDING_JS_SELFHOSTED = "https://starformation.astro.ufl.edu/vendor/hips-templates/hips-landing-page.js"
+LANDING_JS_MIRROR = "https://data.rc.ufl.edu/pub/adamginsburg/vendor/hips-templates/hips-landing-page.js"
+LANDING_JS_CDS = "https://aladin.cds.unistra.fr/hips-templates/hips-landing-page.js"
+
+LANDING_CHAIN = f"""    <!-- {LANDING_MARKER}: HiPS landing template from self-hosted copies first (it loads Aladin Lite from them too);
+         CDS is the last source.  See /vendor/README.txt. -->
+    <script src="{LANDING_JS_SELFHOSTED}"></script>
+    <script>typeof buildLandingPage !== 'undefined' || document.write('<script src="{LANDING_JS_MIRROR}"><\\/script>');</script>
+    <script>typeof buildLandingPage !== 'undefined' || document.write('<script src="{LANDING_JS_CDS}"><\\/script>');</script>
+    <script>
+    if (typeof buildLandingPage === 'undefined') {{
+      window.buildLandingPage = function () {{
+        document.addEventListener('DOMContentLoaded', function () {{
+          document.body.textContent = 'The interactive HiPS viewer could not be loaded: its servers are unreachable right now. The HiPS itself (properties, Norder*/ tiles in this directory) is unaffected; reload later.';
+        }});
+      }};
+    }}
+    </script>"""
+
+
+def patch_hips_landing_html(text):
+    """Return ``(new_text, status)``.  ``status`` is one of ``already``
+    (the marker is already present), ``no-cds-tag`` (nothing to do), or
+    ``patched``."""
+    if LANDING_MARKER in text:
+        return text, "already"
+    new, n = LANDING_TAG.subn(lambda m: LANDING_CHAIN, text)
+    if n == 0:
+        return text, "no-cds-tag"
+    if n > 1:
+        raise ValueError("more than one HiPS landing-page CDS tag; patch by hand")
+    return new, "patched"
+
+
+def patch_hips_landing_page(path):
+    """Patch ``path`` in place.  Returns the status (see :func:`patch_hips_landing_html`)."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    new, status = patch_hips_landing_html(text)
+    if status == "patched":
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(new)
+    return status

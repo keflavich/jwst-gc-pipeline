@@ -13,10 +13,11 @@ Both are Java tools. Point ``HIPSGEN_JAR`` / ``HIPSGENCAT_JAR`` at the jars (or
 pass ``jar=``); :func:`_java` checks java + jar and raises a clear error if
 absent. This module shells out; it does not reimplement HiPS.
 """
-import importlib.util
 import os
 import shutil
 import subprocess
+
+from jwst_gc_pipeline.aladin_loader import patch_hips_landing_page
 
 
 def _java(jar_env, jar=None):
@@ -36,32 +37,17 @@ def _run(cmd):
 
 
 def _patch_hips_landing_page(out_dir):
-    """Rewrite ``out_dir/index.html``'s CDS landing-template ``<script>`` tag
-    to the self-hosted-first fallback chain (see
-    ``scripts/release/patch_hips_landing_page.py``).
+    """Point ``out_dir/index.html``'s CDS landing-template ``<script>`` tag at
+    the self-hosted-first fallback chain
+    (:func:`jwst_gc_pipeline.aladin_loader.patch_hips_landing_page`).
 
-    Hipsgen's own ``INDEX`` action is what writes ``index.html``; this is a
-    no-op if that file is not there (``RGB``-only run) or if the patcher
-    script is not present alongside this checkout (e.g. a package installed
-    without its sibling ``scripts/`` directory) -- never raises for either,
-    since a stale landing page is cosmetic, not a release blocker.
+    Hipsgen's own ``INDEX`` action writes ``index.html``; an ``RGB``-only run
+    has none, and this is then a no-op.
     """
     index_html = os.path.join(out_dir, 'index.html')
     if not os.path.exists(index_html):
         return
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    patcher_path = os.path.join(repo_root, 'scripts', 'release',
-                                'patch_hips_landing_page.py')
-    if not os.path.exists(patcher_path):
-        print(f'(skipping landing-page patch: {patcher_path} not found)',
-              flush=True)
-        return
-    spec = importlib.util.spec_from_file_location(
-        'patch_hips_landing_page', patcher_path)
-    patcher = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(patcher)
-    status = patcher.patch_file(index_html)
+    status = patch_hips_landing_page(index_html)
     print(f'landing page: {status}\t{index_html}', flush=True)
 
 
