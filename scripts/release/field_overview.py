@@ -34,7 +34,7 @@ import math
 import os
 
 from jwst_gc_pipeline.aladin_controls import aladin_controls_js
-from jwst_gc_pipeline.aladin_loader import ALADIN_JS_SELFHOSTED
+from jwst_gc_pipeline.aladin_loader import ALADIN_JS_SELFHOSTED, ALADIN_JS_URLS
 
 #: The survey's own imagery, first; the rest are context.  Same list the monitor
 #: uses, so a reader recognises the two pages as one survey.
@@ -90,12 +90,17 @@ SURVEYS = (
 #: available; bump it when that page is seen working on a later one.
 #:
 #: Self-hosted, not CDS directly: aladin.cds.unistra.fr went down for an
-#: extended period on 2026-10-28 (connect hung ~25 s, then refused), and this
-#: is loaded dynamically by a single `<script>` element built in JS (below),
-#: which has no fallback chain to fall through to a mirror -- see
-#: jwst_gc_pipeline.aladin_loader for the self-hosted copy this points at and
-#: the full chain used by the generators that load Aladin from a static tag.
+#: extended period on 2026-10-28 (connect hung ~25 s, then refused).  This is
+#: the FIRST source the loader below tries; see jwst_gc_pipeline.aladin_loader
+#: for the self-hosted copy it points at.
 ALADIN_JS = ALADIN_JS_SELFHOSTED
+
+#: Every source the loader tries, in order: the loader builds one `<script>`
+#: element at a time and moves to the next source when one fails to load
+#: (`onerror`), so the panel still works where the first host is down.  A
+#: source whose connect HANGS delays the fallback until the browser gives up on
+#: it.
+ALADIN_JS_SOURCES = ALADIN_JS_URLS
 
 #: Distinguishable at small size against a dark background, in a fixed order so
 #: a field keeps its colour between builds (the index is regenerated often).
@@ -457,7 +462,7 @@ def static_svg(geoms, frame):
     return '\n'.join(parts)
 
 
-def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
+def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS_SOURCES,
             surveys=SURVEYS):
     """The whole panel, or ``''`` when there is no geometry to draw.
 
@@ -467,9 +472,13 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
 
     ``surveys`` are the Aladin background layers, first one being the default;
     they are reachable through the switcher the loader builds.
+
+    ``aladin_src`` is one ``aladin.js`` URL or a sequence of them, tried in
+    order until one loads.
     """
     if not geoms:
         return ''
+    aladin_srcs = [aladin_src] if isinstance(aladin_src, str) else list(aladin_src)
     framed, frame = to_galactic([p for g in geoms for p in g['polys']])
     # put the reframed polygons back on their fields, in order
     reframed, index = [], 0
@@ -495,7 +504,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
                     'color': PALETTE[i % len(PALETTE)]}
                    for i, g in enumerate(reframed)],
         'surveys': [{'name': n, 'id': s} for n, s in surveys],
-        'aladin': aladin_src,
+        'aladin': aladin_srcs,
     })
 
     frame_note = ('Galactic coordinates' if frame == 'galactic'
@@ -810,33 +819,45 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     // as the reason the interactive view failed.
     lastGlobalError = null;
     status.textContent = 'loading\\u2026';
-    var script = document.createElement('script');
-    script.src = data.aladin;
-    script.onerror = function () {{
-      // the static map is still on screen; say what is missing and stop
-      fail('Aladin Lite could not be loaded (offline, or blocked by a content '
-           + 'security policy). The map above is unaffected.');
-    }};
-    script.onload = function () {{
-      // A.init is documented as a promise, but this script is fetched from a
-      // third party: if it is absent, or truthy-but-not-thenable, `A.init.then`
-      // throws SYNCHRONOUSLY here -- outside any catch -- and the button stays
-      // disabled on "loading..." forever. Promise.resolve normalizes it and the
-      // try/catch covers a throw from A itself.
-      try {{
-        Promise.resolve(A && A.init).then(build).catch(function (err) {{
-          // describeError, like the synchronous catch two lines down: bare
-          // string concatenation prints "Error: ..." for a real Error and
-          // "[object Object]" for anything without a useful toString.
-          fail('Aladin Lite failed to start (' + describeError(err)
-               + '). The map above is unaffected.');
-        }});
-      }} catch (err) {{
-        fail('This browser could not start Aladin Lite ('
-             + describeError(err) + '). The map above is unaffected.');
-      }}
-    }};
-    document.head.appendChild(script);
+    // one source at a time, self-hosted first: a source that fails to load
+    // hands over to the next, so one host being down does not lose the view
+    var sources = [].concat(data.aladin);
+    function loadFrom(i) {{
+      var script = document.createElement('script');
+      script.src = sources[i];
+      script.onerror = function () {{
+        if (i + 1 < sources.length) {{
+          console.warn('Aladin Lite: failed to load ' + sources[i]
+                       + ', trying the next source');
+          loadFrom(i + 1);
+          return;
+        }}
+        // the static map is still on screen; say what is missing and stop
+        fail('Aladin Lite could not be loaded (offline, or blocked by a content '
+             + 'security policy). The map above is unaffected.');
+      }};
+      script.onload = function () {{
+        // A.init is documented as a promise, but this script is fetched from a
+        // third party: if it is absent, or truthy-but-not-thenable, `A.init.then`
+        // throws SYNCHRONOUSLY here -- outside any catch -- and the button stays
+        // disabled on "loading..." forever. Promise.resolve normalizes it and the
+        // try/catch covers a throw from A itself.
+        try {{
+          Promise.resolve(A && A.init).then(build).catch(function (err) {{
+            // describeError, like the synchronous catch two lines down: bare
+            // string concatenation prints "Error: ..." for a real Error and
+            // "[object Object]" for anything without a useful toString.
+            fail('Aladin Lite failed to start (' + describeError(err)
+                 + '). The map above is unaffected.');
+          }});
+        }} catch (err) {{
+          fail('This browser could not start Aladin Lite ('
+               + describeError(err) + '). The map above is unaffected.');
+        }}
+      }};
+      document.head.appendChild(script);
+    }}
+    loadFrom(0);
   }});
 }})();
 </script>

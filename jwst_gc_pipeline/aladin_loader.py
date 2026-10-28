@@ -28,9 +28,18 @@ CSS, and the ``<link>`` would otherwise block rendering while CDS hangs).
 A generator that loads Aladin Lite DYNAMICALLY -- a JS-built ``<script>``
 element, e.g. a button-click loader such as
 ``scripts/release/field_overview.py``'s overview panel -- cannot splice in
-this HTML.  Such a loader should still point its URL constant at
-:data:`ALADIN_JS_SELFHOSTED`, and may walk :data:`ALADIN_JS_URLS` instead if
-it already supports trying more than one source.
+this HTML.  Such a loader should walk :data:`ALADIN_JS_URLS` in order, moving
+to the next source when one fails to load (``onerror``), as the overview panel
+does.
+
+Neither form has a load timeout of its own.  The static chain's sources are
+parser-inserted ``<script>`` tags, and the dynamic loader moves on only at
+``onerror``, so a source whose connect HANGS (rather than failing fast) still
+delays the fallback by the browser's own connect timeout.  With the UF hosts
+first this matters only when one of them hangs; in the 2026-10-28 failure
+mode, CDS is reached only after both UF copies have failed.  The self-hosted
+landing template (``/vendor/hips-templates/hips-landing-page.js``) does apply
+a per-source timeout to the Aladin Lite load it makes itself.
 
 See ``/vendor/README.txt`` on the starformation host for the mirrors'
 provenance.
@@ -107,7 +116,8 @@ def aladin_fallback_chain_html():
 
 LANDING_TAG = re.compile(
     r"""[ \t]*<script[^>]*\ssrc=(["'])https?://aladin\.(?:cds\.unistra\.fr|u-strasbg\.fr)"""
-    r"""/hips-templates/hips-landing-page\.js\1[^>]*>\s*</script>""")
+    r"""/hips-templates/hips-landing-page\.js\1[^>]*>\s*</script>""",
+    re.IGNORECASE)
 
 #: Left in the rewritten page -- both so a second run is a no-op and so a
 #: grep can find every landing page carrying the chain.
