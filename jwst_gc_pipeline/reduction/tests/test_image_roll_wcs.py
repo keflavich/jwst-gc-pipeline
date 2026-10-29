@@ -68,6 +68,18 @@ def test_classify_image_miri():
     assert c('jw10678113001_02201_00001_mirimage_i2d.fits') == 'skip'
     assert c('jw10678113001_02201_00001_mirimage_ramp.fits') == 'skip'
     assert c('jw10678-o113_t001_miri_f770w_i2d.fits') == 'i2d-primary'
+    # cataloging-written MIRI mosaics
+    pre = 'jw10678-o066_t001_miri_clear-f770w-mirimage_'
+    assert c(pre + 'data_i2d.fits') == 'i2d-primary'
+    assert c(pre + 'm2_daophot_basic_mergedcat_residual_i2d.fits') == 'i2d-derived'
+    assert c(pre + 'resbgsub_m6_daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits') \
+        == 'i2d-derived'
+    assert c(pre + 'resbgsub_m6_daophot_basic_mergedcat_model_i2d.fits') == 'i2d-derived'
+    assert c(pre + 'm2_residual_i2d_badastrom.fits') == 'skip'
+    assert c(pre + 'm2_residual_i2d.tmp.fits') == 'skip'
+    assert c(pre + 'm2_residual_i2d.fits.rolltmp.fits') == 'skip'
+    assert c(pre + 'm2_residual_i2d.fits') == 'i2d-derived'
+    assert irw._prog_obs_from_name(pre + 'data_i2d.fits') == ('10678', '066', None)
     # image3 per-member intermediates are not products
     assert c('jw10678-o113_t001_miri_f770w_0_o113_crf.fits') == 'skip'
     assert c('jw10678-o113_t001_miri_f770w_segm.fits') == 'skip'
