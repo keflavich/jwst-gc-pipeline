@@ -35,7 +35,7 @@ from numba import njit
 from .pcat_sampler import PCATSampler, PCATResult, _TYPES
 from .kernel import basis_terms
 
-__all__ = ['FastPCATSampler', 'stamp_ladder', 'ess_geyer']
+__all__ = ['FastPCATSampler', 'stamp_ladder', 'ess_geyer', 'equilibration_index']
 
 # stats rows
 _MOVE, _BD, _MS, _BKG, _BIRTH, _DEATH, _SPLIT, _MERGE, _CAPREJ = range(9)
@@ -131,6 +131,26 @@ def ess_geyer(x):
             break
         tau += 2 * g
     return float(n / max(tau, 1.0))
+
+
+def equilibration_index(logL, n):
+    """First sample at which a chain has reached its second-half (stationary) ranges.
+
+    The reference is the second half of the chain: logL must reach its median minus two
+    standard deviations, and N must enter its 1-99 percentile range.  Returns the later
+    of the two first-crossing indices (0 when the chain starts inside both).
+    """
+    logL = np.asarray(logL, float)
+    n = np.asarray(n, float)
+    m = logL.size
+    if m < 4:
+        return 0
+    h = slice(m // 2, m)
+    lref = np.median(logL[h]) - 2.0 * logL[h].std()
+    lo, hi = np.percentile(n[h], [1.0, 99.0])
+    il = np.flatnonzero(logL >= lref)
+    iN = np.flatnonzero((n >= lo) & (n <= hi))
+    return int(max(il[0] if il.size else m, iN[0] if iN.size else m))
 
 
 # ----------------------------------------------------------------------------
@@ -1169,13 +1189,25 @@ class FastPCATSampler(PCATSampler):
         self.resid32 = np.zeros_like(self.data32)
         ns_max = int(cfg.nsamp)
         nburn_fixed = None if cfg.burnin is None else int(cfg.burnin)
+        nburn_min = nburn_fixed if nburn_fixed is not None else int(np.floor(cfg.burnin_frac * ns_max))
+
+        # post-burn-in model sums in blocks of B samples starting at nburn_min, so that a longer
+        # burn-in found later (burnin_auto) drops whole blocks
+        B = 25
+
+        def burn_in(s_done):
+            # (burn-in, t_eq) for the first s_done samples; the burn-in is rounded up to a block edge
+            if not cfg.burnin_auto:
+                return nburn_min, -1
+            t_eq = equilibration_index(rec['logL'][:s_done], rec['n'][:s_done])
+            nb = max(nburn_min, int(np.ceil(cfg.burnin_auto_factor * t_eq)))
+            return nburn_min + int(np.ceil((nb - nburn_min) / B)) * B, t_eq
         rec = dict(n=np.zeros(ns_max, int), logL=np.zeros(ns_max), chi2=np.zeros((ns_max, 1)),
                    beta=np.zeros((ns_max, 1, self.ntemp)), slope=np.zeros(ns_max), time=np.zeros(ns_max))
         cat_x, cat_y, cat_f = [], [], []
         b0 = self.bands[0]
-        msum = np.zeros(b0.image.shape)
+        mblocks = []
         mstore = []
-        npost = 0
         t_start = time.time()
         sl0 = self.unpad[0]
         ess_hist = []
@@ -1202,11 +1234,11 @@ class FastPCATSampler(PCATSampler):
             cat_x.append(self.sx[:n].copy())
             cat_y.append(self.sy[:n].copy())
             cat_f.append(self.sf[:n].copy()[None, :])
-            nburn = nburn_fixed if nburn_fixed is not None else int(np.floor(cfg.burnin_frac * ns_max))
-            if s >= nburn:
+            if s >= nburn_min:
                 m = self.model32[sl0].astype(np.float64)
-                msum += m
-                npost += 1
+                if (s - nburn_min) % B == 0:
+                    mblocks.append(np.zeros(b0.image.shape))
+                mblocks[-1] += m
                 if cfg.store_models:
                     mstore.append(m.astype(np.float32))
             if cfg.verbose and (s % max(1, ns_max // 20) == 0 or s == ns_max - 1):
@@ -1217,14 +1249,16 @@ class FastPCATSampler(PCATSampler):
                       f'bkg={self.beta0[0]:.4f} dt={rec["time"][s]:.3f}s acc='
                       + ','.join(f'{k}:{v:.3f}' for k, v in acc.items()), flush=True)
             s += 1
-            if (cfg.target_ess is not None and s - nburn >= cfg.ess_min_samples
-                    and (s - nburn) % cfg.ess_check_every == 0):
-                post = slice(nburn, s)
-                e = min(ess_geyer(rec['n'][post]), ess_geyer(rec['logL'][post]))
-                ess_hist.append((s, e))
-                if e >= cfg.target_ess:
-                    stop_reason = 'target_ess'
-                    break
+            if (cfg.target_ess is not None and s - nburn_min >= cfg.ess_min_samples
+                    and (s - nburn_min) % cfg.ess_check_every == 0):
+                nburn, _ = burn_in(s)
+                if s - nburn >= cfg.ess_min_samples:
+                    post = slice(nburn, s)
+                    e = min(ess_geyer(rec['n'][post]), ess_geyer(rec['logL'][post]))
+                    ess_hist.append((s, nburn, e))
+                    if e >= cfg.target_ess:
+                        stop_reason = 'target_ess'
+                        break
         ns = s
         for key in rec:
             rec[key] = rec[key][:ns]
@@ -1239,8 +1273,12 @@ class FastPCATSampler(PCATSampler):
             Y[q, :kq] = cat_y[q]
             Fl[q, :, :kq] = cat_f[q]
         rec.update(x=X, y=Y, f=Fl)
-        nburn = nburn_fixed if nburn_fixed is not None else int(np.floor(cfg.burnin_frac * ns_max))
+        nburn, t_eq = burn_in(ns)
+        kb = (nburn - nburn_min) // B
         nburn = min(nburn, ns)
+        msum = np.sum(mblocks[kb:], axis=0) if kb < len(mblocks) else np.zeros(b0.image.shape)
+        mstore = mstore[kb * B:]
+        npost = ns - nburn
         model_mean = [msum / max(1, npost)]
         model_median = [np.median(np.array(mstore), axis=0)] if (cfg.store_models and mstore) else [None]
         data = [np.where(self.wts[0][sl0] > 0, self.data[0][sl0], np.nan)]
@@ -1258,7 +1296,8 @@ class FastPCATSampler(PCATSampler):
         runtime = time.time() - t_start
         info = dict(runtime_s=runtime, margin=self.margin, margin_req=self.margin_req,
                     regsize=self.R, pen=self.pen, area=self.area, errf=list(map(float, self.errf)),
-                    errf_eff=self.errf_eff, color_moves=False, pads=self.pads, nburn=nburn, leak=0.0,
+                    errf_eff=self.errf_eff, color_moves=False, pads=self.pads, nburn=nburn, t_eq=t_eq,
+                    leak=0.0,
                     ntemp=self.ntemp, nbands=1, blas='numba', shape=[list(b0.image.shape)],
                     band_names=[b0.name], noise_scale=self.noise_scale.tolist(),
                     sec_per_sample=float(np.mean(rec['time'])) if ns else 0.0,

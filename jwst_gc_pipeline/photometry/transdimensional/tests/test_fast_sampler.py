@@ -8,7 +8,9 @@
 * the full render equals :class:`PCATSampler`'s model for the same catalogue;
 * background templates factor into y and x functions;
 * a central crop of the ``nc`` coefficient table equals the table built at the
-  smaller size (the adaptive stamps rely on it).
+  smaller size (the adaptive stamps rely on it);
+* the adaptive burn-in (``burnin_auto``) finds the end of a relaxation and
+  drops the samples before it from the model mean.
 """
 import numpy as np
 import pytest
@@ -19,7 +21,7 @@ from ._helpers import get_epsf, have_compiler, lib_dir
 
 numba = pytest.importorskip('numba')
 
-from ..fast_sampler import FastPCATSampler, separable_factors  # noqa: E402
+from ..fast_sampler import FastPCATSampler, equilibration_index, separable_factors  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not have_compiler(), reason='no C compiler')
 
@@ -134,3 +136,36 @@ def test_crop_equals_smaller_table():
     k = big.shape[0]
     crop = big.reshape(k, 31, 31)[:, 10:21, 10:21]
     np.testing.assert_allclose(crop, small.reshape(k, 11, 11), rtol=0, atol=1e-7 * np.abs(big).max())
+
+
+def test_equilibration_index():
+    rng = np.random.default_rng(1)
+    t = np.arange(2000)
+    # logL relaxes as exp(-t/40) from 3000 below its stationary level (sd 10); N from 600 to 450
+    logL = -3000.0 * np.exp(-t / 40.0) + rng.normal(0, 10, t.size)
+    n = np.round(450 + 150 * np.exp(-t / 40.0) + rng.normal(0, 5, t.size))
+    # logL is within 2 sd at t = 40 ln(3000/20) = 200; N enters its 1-99 per cent range near t = 120
+    assert 170 < equilibration_index(logL, n) < 230
+    assert equilibration_index(rng.normal(0, 1, 500), np.full(500, 7.0)) < 5
+
+
+def test_adaptive_burnin():
+    cf, nc, img, w, init = _scene()
+    init = dict(init, f=init['f'] * 4.0)
+    cfg = PCATConfig(trueminf=15.0, flux_slope=2.0, nsamp=400, nloop=10, regsize=24, float_bkg=True,
+                     fourier_order=1, seed=11, store_models=True, lib_dir=str(lib_dir()), verbose=0,
+                     init_catalog=init, bkg=0.3, engine='numba', move_nstar=1, burnin=5,
+                     burnin_auto=True, target_ess=1e9, ess_min_samples=50, ess_check_every=25)
+    bands = [BandData(image=img, weight=w, cf=cf, nc=nc, basis='quartic15', name='pivot')]
+    res = FastPCATSampler(bands, cfg).run()
+    info = res.info
+    assert info['stop_reason'] == 'nsamp' and info['nsamp_run'] == 400
+    assert info['t_eq'] >= 5
+    assert info['nburn'] >= 2 * info['t_eq'] and (info['nburn'] - 5) % 25 == 0
+    pb = res.post_burnin()
+    assert pb[0] == info['nburn'] and pb.size == 400 - info['nburn']
+    # the burn-in removes the start of the relaxation: post-burn-in logL is stationary
+    lp = res.samples['logL'][pb]
+    assert lp[:lp.size // 2].mean() > lp[lp.size // 2:].mean() - 3 * lp.std()
+    assert res.samples['logL'][0] < lp.min()
+    assert all(len(h) == 3 for h in info['ess_history'])

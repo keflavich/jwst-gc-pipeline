@@ -146,6 +146,10 @@ class PCATConfig:
     move_nstar: int = 0                 # stars moved per region per star move (0: all, PCAT)
     region_cap: int = 512               # max sources per region (numba engine)
     burnin: Optional[int] = None        # burn-in samples (numba engine; overrides burnin_frac)
+    # numba engine: burn-in = max(burnin, burnin_auto_factor * t_eq), t_eq = first sample at which
+    # logL and N reach their second-half ranges (fast_sampler.equilibration_index)
+    burnin_auto: bool = False
+    burnin_auto_factor: float = 2.0
     target_ess: Optional[float] = None  # numba engine: stop once ESS(N), ESS(logL) after burn-in reach it
     ess_min_samples: int = 200
     ess_check_every: int = 50
