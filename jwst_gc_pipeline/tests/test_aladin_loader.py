@@ -128,6 +128,8 @@ async function main() {
         }, r.ms);
       } else if (r.kind === 'error') {
         setT(() => s.onerror(), r.ms);
+      } else if (r.kind === 'empty') {
+        setT(() => s.onload(), r.ms);
       }
     }},
   };
@@ -193,6 +195,17 @@ def test_loader_moves_on_at_once_when_cds_errors():
     res = _replay({ALADIN_JS_CDS: {'kind': 'error', 'ms': 50},
                    ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 200, 'name': 'self'}})
     assert res['ready'] == 'self'
+    assert res['requested'][1]['t'] == 50
+
+
+def test_a_source_that_loads_without_aladin_lite_is_skipped():
+    """A 200 answer that defines no `A` (a captive portal, an HTML error
+    page) leaves the stub in place; the loader must move on, not adopt the
+    stub as the library and wait forever on its own `init`."""
+    res = _replay({ALADIN_JS_CDS: {'kind': 'empty', 'ms': 50},
+                   ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 200, 'name': 'self'}})
+    assert res['ready'] == 'self'
+    assert res['final'] == 'self'
     assert res['requested'][1]['t'] == 50
 
 
