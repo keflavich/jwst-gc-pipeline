@@ -56,6 +56,9 @@ test = [
     # APIs -- `pyflakes.checker.Checker` and `msg.message % msg.message_args`
     # -- so an unrelated upgrade could turn a green gate into an ImportError.
     "pyflakes>=3,<4",
+    # compiled PCAT engine (photometry/transdimensional/fast_sampler.py); its
+    # tests skip without it
+    "numba",
 ]
 docs = [
     "sphinx",
