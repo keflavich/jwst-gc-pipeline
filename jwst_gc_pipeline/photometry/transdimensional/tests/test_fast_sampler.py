@@ -2,6 +2,8 @@
 
 * prior recovery with a flat likelihood (zero weights), as in test_prior, for
   the PCAT star move and the ``move_nstar`` variant;
+* prior recovery with residual-guided births (``birth_resid_frac``) under a
+  flat likelihood whose residual still concentrates the birth density;
 * the incrementally updated model equals a full re-render after many
   proposals, the scratch images are left clear and the region lists match the
   positions;
@@ -51,6 +53,45 @@ def test_prior_recovery_exact_numba(move_nstar):
     assert abs(lnf.mean() - 1.0) < 4 * _batch_se(lnf)
 
 
+def test_prior_recovery_resid_births():
+    """Weights of 1e-16 make the likelihood flat, while the residual-guided birth
+    density (independent of the weight scale) puts most residual births on a
+    6 x 8 px block 5 sigma above the rest.  Positions must stay uniform: the
+    number of stars on the block is a/A of N, as are N and ln f of the prior."""
+    epsf, os_, _ = get_epsf()
+    shape = (30, 47)
+    alpha = 0.04
+    rng = np.random.default_rng(1)
+    img = rng.normal(0.0, 1.0, shape)
+    img[10:16, 20:28] += 5.0
+    # residual births mix N more slowly here than uniform ones: 200 loops per sample and a 20%
+    # burn-in from the empty start (40 and 5% left N 10% low over 24 seeds)
+    cfg = PCATConfig(trueminf=1.0, flux_slope=2.0, alpha_parsimony=alpha, nsamp=1500, nloop=200,
+                     regsize=14, float_bkg=False, bkg=[0.0], seed=5, burnin_frac=0.2, store_models=False,
+                     lib_dir=str(lib_dir()), verbose=0, engine='numba', birth_resid_frac=0.7,
+                     move_weights=dict(movestar=20., birth_death=40., merge_split=40.))
+    res = run_pcat(img, np.full(shape, 1e-16), epsf, os_, cfg, nc=11)
+    assert res.info['birth_resid_frac'] == 0.7
+    pb = res.post_burnin()
+    n = res.samples['n'][pb]
+    q = np.exp(-1.5 * alpha)
+    assert abs(n.mean() - q / (1 - q)) < 4 * _batch_se(n)
+    x, y = res.samples['x'][pb], res.samples['y'][pb]
+    on = (x >= 19.5) & (x < 27.5) & (y >= 9.5) & (y < 15.5)
+    d = on.sum(axis=1) - 48.0 / (shape[0] * shape[1]) * n
+    assert abs(d.mean()) < 4 * _batch_se(d)
+    lnf = np.array([np.nanmean(np.log(r)) for r in res.samples['f'][pb, 0] if np.isfinite(r).any()])
+    assert abs(lnf.mean() - 1.0) < 4 * _batch_se(lnf)
+
+
+def test_resid_births_need_integer_pad():
+    cf, nc, img, w, init = _scene()
+    cfg = PCATConfig(trueminf=15.0, regsize=24, domain_pad=0.5, birth_resid_frac=0.5, engine='numba',
+                     lib_dir=str(lib_dir()), verbose=0)
+    with pytest.raises(ValueError, match='integer domain_pad'):
+        FastPCATSampler([BandData(image=img, weight=w, cf=cf, nc=nc, basis='quartic15', name='pivot')], cfg)
+
+
 def _scene(seed=3, shape=(70, 83), nstar=25, nc=21):
     epsf, os_, _ = get_epsf()
     cf, _ = build_cf(epsf, os_, nc)
@@ -65,12 +106,12 @@ def _scene(seed=3, shape=(70, 83), nstar=25, nc=21):
     return cf, nc, img, w, dict(x=x, y=y, f=f)
 
 
-def _sampler(engine, stamp_tol=None, move_nstar=0, nsamp=1):
+def _sampler(engine, stamp_tol=None, move_nstar=0, nsamp=1, birth_resid_frac=0.0):
     cf, nc, img, w, init = _scene()
     cfg = PCATConfig(trueminf=15.0, flux_slope=2.0, nsamp=nsamp, nloop=200, regsize=24, float_bkg=True,
                      fourier_order=1, seed=7, burnin_frac=0.0, store_models=False, lib_dir=str(lib_dir()),
                      verbose=0, init_catalog=init, bkg=0.3, engine=engine, stamp_tol=stamp_tol,
-                     stamp_sizes=(7, 11, 15), move_nstar=move_nstar)
+                     stamp_sizes=(7, 11, 15), move_nstar=move_nstar, birth_resid_frac=birth_resid_frac)
     bands = [BandData(image=img, weight=w, cf=cf, nc=nc, basis='quartic15', name='pivot')]
     cls = FastPCATSampler if engine == 'numba' else PCATSampler
     return cls(bands, cfg)
@@ -88,9 +129,10 @@ def test_full_render_matches_python():
     assert not fs.model32[:, nx:].any()
 
 
-@pytest.mark.parametrize('stamp_tol,move_nstar', [(None, 0), (0.05, 0), (0.05, 1)])
-def test_incremental_model_consistent(stamp_tol, move_nstar):
-    s = _sampler('numba', stamp_tol=stamp_tol, move_nstar=move_nstar)
+@pytest.mark.parametrize('stamp_tol,move_nstar,wres', [(None, 0, 0.0), (0.05, 0, 0.0), (0.05, 1, 0.0),
+                                                        (0.05, 1, 0.5)])
+def test_incremental_model_consistent(stamp_tol, move_nstar, wres):
+    s = _sampler('numba', stamp_tol=stamp_tol, move_nstar=move_nstar, birth_resid_frac=wres)
     names = ['movestar', 'birth_death', 'merge_split', 'bkg']
     wv = np.array([60.0, 60.0, 30.0, 5.0])
     cumw = np.cumsum(wv / wv.sum())

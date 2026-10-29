@@ -144,6 +144,10 @@ class PCATConfig:
     stamp_tol: Optional[float] = None   # adaptive stamps: truncated-wing chi^2 per source
     stamp_sizes: tuple = (11, 15, 21, 31, 41)
     move_nstar: int = 0                 # stars moved per region per star move (0: all, PCAT)
+    # numba engine: fraction w of births placed with probability proportional to the positive
+    # residual (S/N)^2 of a pixel (the rest uniform); the death acceptance carries the reverse
+    # density.  0 keeps PCAT's uniform births
+    birth_resid_frac: float = 0.0
     region_cap: int = 512               # max sources per region (numba engine)
     burnin: Optional[int] = None        # burn-in samples (numba engine; overrides burnin_frac)
     # numba engine: burn-in = max(burnin, burnin_auto_factor * t_eq), t_eq = first sample at which

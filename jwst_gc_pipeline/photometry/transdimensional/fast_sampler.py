@@ -22,7 +22,15 @@ runs the ``nloop`` proposals of each sample inside one compiled function:
 * optionally (``move_nstar > 0``) a star move updates ``move_nstar`` randomly
   chosen stars per region instead of every star in the region (PCAT), with
   step sizes scaled to the number moved.  The target is unchanged; the
-  proposal kernel differs.
+  proposal kernel differs;
+* optionally (``birth_resid_frac = w > 0``) a birth in region ``r`` is placed
+  with density ``q(x) = (1 - w) / A_r + w W(x) / Z_r``, with ``W`` the
+  positive part of the residual S/N squared, ``max(resid sqrt(wt), 0)^2``, of
+  the pixel holding ``x`` and ``Z_r`` its sum over the region's pixels.  The
+  birth acceptance carries ``1 / (A_r q(x))`` and the death acceptance
+  ``A_r q'(x)``, with ``q'`` built from the residual after the star is removed
+  (the density of the reverse birth).  The target is unchanged.  It needs an
+  integer ``domain_pad`` so that region edges fall on pixel edges.
 
 Options are fields of :class:`.pcat_sampler.PCATConfig` (``engine='numba'``).
 """
@@ -431,6 +439,50 @@ def _count_term_birth(n, n_r, area_r, par):
 
 
 @njit(cache=True)
+def _resid_w(r, s):
+    """birth weight of a pixel: the positive part of the residual S/N, squared."""
+    z = np.float64(r) * np.float64(s)
+    return z * z if z > 0 else 0.0
+
+
+@njit(cache=True)
+def _resid_wsum(resid, swt, i0, i1, j0, j1):
+    """sum of the birth weights over the padded pixels [i0, i1) x [j0, j1)."""
+    z = 0.0
+    for i in range(i0, i1):
+        for j in range(j0, j1):
+            z += _resid_w(resid[i, j], swt[i, j])
+    return z
+
+
+@njit(cache=True)
+def _resid_wsum_minus(resid, dm, swt, i0, i1, j0, j1):
+    """as _resid_wsum for the residual ``resid - dm`` (dm: the change of the model)."""
+    z = 0.0
+    for i in range(i0, i1):
+        for j in range(j0, j1):
+            z += _resid_w(resid[i, j] - dm[i, j], swt[i, j])
+    return z
+
+
+@njit(cache=True)
+def _resid_pick(resid, swt, i0, i1, j0, j1, u):
+    """the pixel of [i0, i1) x [j0, j1) at which the running sum of the birth
+    weights first exceeds u (0 <= u < their total)."""
+    c = 0.0
+    li, lj = i0, j0
+    for i in range(i0, i1):
+        for j in range(j0, j1):
+            w = _resid_w(resid[i, j], swt[i, j])
+            if w > 0:
+                c += w
+                li, lj = i, j
+                if c > u:
+                    return i, j
+    return li, lj
+
+
+@njit(cache=True)
 def _region_of(x, y, par, geo):
     """(col, row) of pivot position (x, y) for the current offset."""
     R, dp = par[4], par[5]
@@ -605,7 +657,7 @@ def _gibbs_bkg(resid, model, wt, wpos, Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, Li
 
 @njit(cache=True)
 def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
-          resid, model, wt, wpos, dm, dm2,
+          resid, model, wt, wpos, swt, dm, dm2,
           cf3, ncl, ncw, fthr, ta, tb, tmp,
           sx, sy, sf, sreg, spos, nst, rlist, rcnt,
           Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, LinvT, rhs, Abuf, Cbuf, rowbuf,
@@ -626,6 +678,9 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
     cap = rlist.shape[1]
     inv2k2 = 1.0 / (2 * kick * kick)
     ny0, nx0 = int(par[17]), int(par[18])
+    # residual-guided births: region cell m <-> padded pixel m + off
+    wres = par[19]
+    off = int(np.round(P - dp))
     for it in range(nloop):
         u = np.random.random()
         typ = 0
@@ -726,8 +781,27 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                 for col in range(px, nregx, 2):
                     r = row * nregx + col
                     if np.random.random() < 0.5:
-                        x1 = rx0[col] + np.random.random() * (rx1[col] - rx0[col]) - 0.5 - dp
-                        y1 = ry0[row] + np.random.random() * (ry1[row] - ry0[row]) - 0.5 - dp
+                        zr = 0.0
+                        i0 = int(ry0[row]) + off
+                        i1 = int(ry1[row]) + off
+                        j0 = int(rx0[col]) + off
+                        j1 = int(rx1[col]) + off
+                        if wres > 0:
+                            zr = _resid_wsum(resid, swt, i0, i1, j0, j1)
+                        if zr > 0 and np.random.random() < wres:
+                            pi, pj = _resid_pick(resid, swt, i0, i1, j0, j1, np.random.random() * zr)
+                            x1 = pj - P + np.random.random() - 0.5
+                            y1 = pi - P + np.random.random() - 0.5
+                        else:
+                            x1 = rx0[col] + np.random.random() * (rx1[col] - rx0[col]) - 0.5 - dp
+                            y1 = ry0[row] + np.random.random() * (ry1[row] - ry0[row]) - 0.5 - dp
+                        # log(1 / (A_r q(x))) of the birth density
+                        lq = 0.0
+                        if zr > 0:
+                            pj = int(np.floor(x1 + 0.5 + P))
+                            pi = int(np.floor(y1 + 0.5 + P))
+                            lq = -np.log((1.0 - wres) + wres * rarea[r] * _resid_w(resid[pi, pj], swt[pi, pj]) / zr)
+                        sl_fac[nsl] = lq
                         f1 = fmin * np.exp(np.random.exponential(1.0 / (slope - 1.0)))
                         sl_kind[nsl] = _K_BIRTH
                         sl_x[nsl] = x1
@@ -742,6 +816,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                         i = rlist[r, np.random.randint(cnt)]
                         sl_kind[nsl] = _K_DEATH
                         sl_a[nsl] = i
+                        sl_fac[nsl] = 0.0
                         ix0, iy0 = _coefs(sx[i] + P, sy[i] + P, -sf[i], ta, tb, ph_dd, nph * k)
                         lv0 = _level(sf[i], fthr)
                     sl_r[nsl] = r
@@ -898,6 +973,26 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             work[typ, 1] += _slot_box(ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a], ncl, sl_box[a])
             sl_dl[a] = -0.5 * _slot_dchi2(dm, dm2, resid, wt, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a], ncl,
                                           sl_box[a])
+        if typ == 1 and wres > 0:
+            # log(A_r q'(x)) of the reverse birth: the region's birth density after the
+            # death, from resid - dm (a death is one stamp, kept in dm in box mode)
+            for a in range(nsl):
+                if sl_kind[a] != _K_DEATH:
+                    continue
+                r = sl_r[a]
+                col = r % nregx
+                row = r // nregx
+                i0 = int(ry0[row]) + off
+                i1 = int(ry1[row]) + off
+                j0 = int(rx0[col]) + off
+                j1 = int(rx1[col]) + off
+                zr = _resid_wsum_minus(resid, dm, swt, i0, i1, j0, j1)
+                if zr > 0:
+                    i = sl_a[a]
+                    pj = int(np.floor(sx[i] + 0.5 + P))
+                    pi = int(np.floor(sy[i] + 0.5 + P))
+                    wq = _resid_w(resid[pi, pj] - dm[pi, pj], swt[pi, pj])
+                    sl_fac[a] = np.log((1.0 - wres) + wres * rarea[r] * wq / zr)
         # ------------------------------------------------ accept
         nacc = 0
         if typ == 0:
@@ -932,10 +1027,10 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                 if n >= max_nsrc or rcnt[r] >= cap:
                     stats[_CAPREJ, 0] += 1
                 else:
-                    fac = _count_term_birth(n, rcnt[r], rarea[r], par)
+                    fac = _count_term_birth(n, rcnt[r], rarea[r], par) + sl_fac[a]
                     ok = lu < sl_dl[a] + fac
             elif kind == _K_DEATH:
-                fac = -_count_term_birth(n - 1, rcnt[r] - 1, rarea[r], par)
+                fac = -_count_term_birth(n - 1, rcnt[r] - 1, rarea[r], par) + sl_fac[a]
                 ok = lu < sl_dl[a] + fac
             elif kind == _K_SPLIT:
                 if n >= max_nsrc or rcnt[r] >= cap:
@@ -1054,6 +1149,12 @@ class FastPCATSampler(PCATSampler):
         self.wt32 = np.zeros((ny, nx + xpad), np.float32)
         self.wt32[:, :nx] = self.wts[0]
         self.wpos = (self.wt32 > 0).astype(np.float32)
+        self.swt32 = np.sqrt(self.wt32)
+        wres = float(cfg.birth_resid_frac)
+        if not 0.0 <= wres < 1.0:
+            raise ValueError(f'birth_resid_frac must be in [0, 1), got {wres}')
+        if wres > 0 and not float(self.dpad).is_integer():
+            raise ValueError('birth_resid_frac needs an integer domain_pad')
         self.data32 = np.zeros((ny, nx + xpad), np.float32)
         self.data32[:, :nx] = self.data[0]
         self.dm = np.zeros_like(self.data32)
@@ -1127,7 +1228,7 @@ class FastPCATSampler(PCATSampler):
                              float(cfg.kickrange), float(self.errf[0]), float(cfg.logdf),
                              float(cfg.pos_step_fac), float(cfg.flux_step_fac), self.Lx, self.Ly,
                              legacy, float(self.pads[0]), float(cfg.max_nsrc), float(cfg.move_nstar),
-                             float(ny0), float(nx0)])
+                             float(ny0), float(nx0), wres])
         self.geo = np.zeros(4, np.int64)
 
     # ------------------------------------------------------------------ helpers
@@ -1166,7 +1267,7 @@ class FastPCATSampler(PCATSampler):
     def run_loop(self, nloop, cumw):
         sl = self.sl
         _loop(int(nloop), cumw, self.par, self.geo, self.rx0, self.rx1, self.ry0, self.ry1, self.rarea,
-              self.resid32, self.model32, self.wt32, self.wpos, self.dm, self.dm2,
+              self.resid32, self.model32, self.wt32, self.wpos, self.swt32, self.dm, self.dm2,
               self.cf3, self.ncl, self.ncw, self.fthr, self.ta, self.tb, self.tmp,
               self.sx, self.sy, self.sf, self.sreg, self.spos, self.nst, self.rlist, self.rcnt,
               self.Vy, self.Ux, self.tx, self.TtWT0, self.beta0, self.prec_mu, self.Pinv, self.LinvT,
@@ -1304,6 +1405,7 @@ class FastPCATSampler(PCATSampler):
                     ms_per_proposal=1e3 * float(np.mean(rec['time'])) / cfg.nloop if ns else 0.0,
                     engine='numba', stamp_sizes=self.stamp_sizes_used.tolist(),
                     stamp_fmax=[float(v) for v in self.stamp_fmax], move_nstar=int(cfg.move_nstar),
+                    birth_resid_frac=float(cfg.birth_resid_frac),
                     cap_rejections=int(self.fstats[_CAPREJ, 0]), nsamp_run=ns, stop_reason=stop_reason,
                     ess_history=ess_hist,
                     work_px={t: dict(render=int(self.work[_TYPES.index(t), 0]),
