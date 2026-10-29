@@ -138,6 +138,17 @@ class PCATConfig:
     store_models: bool = True           # keep post-burn-in models (median model)
     check_leak: bool = False            # verify footprints stay inside margins
     verbose: int = 1
+    # compiled engine (:class:`.fast_sampler.FastPCATSampler`, one band); the
+    # defaults keep the target and the proposals of PCATSampler
+    engine: str = 'python'              # 'python' | 'numba'
+    stamp_tol: Optional[float] = None   # adaptive stamps: truncated-wing chi^2 per source
+    stamp_sizes: tuple = (11, 15, 21, 31, 41)
+    move_nstar: int = 0                 # stars moved per region per star move (0: all, PCAT)
+    region_cap: int = 512               # max sources per region (numba engine)
+    burnin: Optional[int] = None        # burn-in samples (numba engine; overrides burnin_frac)
+    target_ess: Optional[float] = None  # numba engine: stop once ESS(N), ESS(logL) after burn-in reach it
+    ess_min_samples: int = 200
+    ess_check_every: int = 50
 
 
 @dataclass
@@ -1083,7 +1094,13 @@ def run_pcat(image, weight, psf_os, oversample, config, nc=31, basis='quartic15'
                       nc=nc, basis=basis, name='pivot')]
     if extra_bands:
         bands += list(extra_bands)
-    sampler = PCATSampler(bands, config)
+    if config.engine == 'numba':
+        from .fast_sampler import FastPCATSampler
+        sampler = FastPCATSampler(bands, config)
+    elif config.engine == 'python':
+        sampler = PCATSampler(bands, config)
+    else:
+        raise ValueError(f'unknown engine {config.engine!r}')
     res = sampler.run()
     res.info['psf'] = pinfo
     if fixed_model is not None:
