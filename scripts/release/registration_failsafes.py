@@ -60,12 +60,10 @@ from photutils.detection import DAOStarFinder
 # spelling the sibling release gates use -- `check_interframe_overlap.py` and
 # `check_astrometry_checkpoints.py` both take `JWST_BASE` with this default --
 # so all three gates can be pointed at one tree together.  It was hardcoded
-# here, and `fields.yaml` has TWO roots: `orange` (/orange/adamginsburg/jwst)
-# and `blue` (/blue/adamginsburg/adamginsburg/jwst).  A `root: blue` field is
-# reachable under /orange only if someone made a symlink for it (brick and
-# cloudc have one; gc-treasury, root blue per #421, does not), and without one
-# every glob below matched nothing -- the gate reported on an empty tree.
-# The default is unchanged, so nothing moves for the fields that resolve today.
+# here.  Every field in `fields.yaml` has `root: orange`
+# (/orange/adamginsburg/jwst); the default below is that root (#937).  A field
+# whose directory is missing under the base makes every glob below match
+# nothing, so the gate would report on an empty tree.
 #
 # `GC_BASEPATH_OVERRIDE` is deliberately NOT consulted (check_astrometry_
 # checkpoints.py reads it ahead of JWST_BASE): in

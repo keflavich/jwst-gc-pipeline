@@ -41,9 +41,9 @@ DET = sys.argv[2] if len(sys.argv) > 2 else 'nrca1'
 # nrcalong frames use the nrca5 PSF grid
 PSFDET = {'nrcalong': 'nrca5', 'nrcblong': 'nrcb5'}.get(DET, DET)
 
-FRAME_GLOB = (f'/blue/adamginsburg/adamginsburg/jwst/brick/{FILT.upper()}/'
+FRAME_GLOB = (f'/orange/adamginsburg/jwst/brick/{FILT.upper()}/'
               f'pipeline/jw02221*_{DET}_destreak_o001_crf.fits')
-PSF_FN = (f'/blue/adamginsburg/adamginsburg/jwst/brick/psfs/'
+PSF_FN = (f'/orange/adamginsburg/jwst/brick/psfs/'
           f'nircam_{PSFDET}_{FILT}_fovp101_samp2_npsf16.fits')
 
 PEAK_MIN, PEAK_MAX = 300.0, 3500.0   # MJy/sr above local median, unsaturated

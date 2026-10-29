@@ -25,9 +25,9 @@ DET = sys.argv[1] if len(sys.argv) > 1 else 'nrca1'
 FILT = sys.argv[2] if len(sys.argv) > 2 else 'f182m'
 NFRAMES = int(sys.argv[3]) if len(sys.argv) > 3 else 12
 
-FRAME_GLOB = (f'/blue/adamginsburg/adamginsburg/jwst/brick/{FILT.upper()}/'
+FRAME_GLOB = (f'/orange/adamginsburg/jwst/brick/{FILT.upper()}/'
               f'pipeline/jw02221001001_*_{DET}_destreak_o001_crf.fits')
-PSF_FN = (f'/blue/adamginsburg/adamginsburg/jwst/brick/psfs/'
+PSF_FN = (f'/orange/adamginsburg/jwst/brick/psfs/'
           f'nircam_{DET}_{FILT}_fovp101_samp2_npsf16.fits')
 
 PEAK_MIN, PEAK_MAX = 800.0, 3500.0

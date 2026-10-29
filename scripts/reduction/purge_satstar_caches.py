@@ -18,7 +18,7 @@ re-cataloging job, with no cataloging job for that field/filter in the queue.
 
 Usage:
   python purge_satstar_caches.py --field brick --filter F182M [--filter F187N]
-      [--basepath /blue/adamginsburg/adamginsburg/jwst] [--execute]
+      [--basepath /orange/adamginsburg/jwst] [--execute]
 """
 import argparse
 import glob
@@ -49,7 +49,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--field', required=True)
     ap.add_argument('--filter', action='append', required=True)
-    ap.add_argument('--basepath', default='/blue/adamginsburg/adamginsburg/jwst')
+    ap.add_argument('--basepath', default='/orange/adamginsburg/jwst')
     ap.add_argument('--execute', action='store_true')
     args = ap.parse_args()
     purge(args.basepath, args.field, args.filter, execute=args.execute)

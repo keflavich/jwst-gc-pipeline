@@ -28,6 +28,7 @@ import copy
 import functools
 import glob
 
+from jwst_gc_pipeline import fields as _fields_registry
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.io.registry import IORegistryError
@@ -3812,7 +3813,7 @@ def _inject_reference_stars(options, filename, original_filename, filtername,
     grid, _ = _L.get_psf_model(
         filtername, proposal_id, field, module=module, use_webbpsf=use_webbpsf,
         use_grid=options.each_exposure, blur=options.blur, target=options.target,
-        obsdate=hdr0['DATE-OBS'], basepath='/blue/adamginsburg/adamginsburg/jwst/',
+        obsdate=hdr0['DATE-OBS'], basepath=_fields_registry.jwst_root(),
         psf_cache_dir=os.path.join(basepath, 'psfs'), instrument=hdr0['INSTRUME'])
     if cx0 or cy0:
         grid = _reorigin_psf_grid(grid, cx0, cy0)
@@ -4006,7 +4007,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     grid, _psf_model = _L.get_psf_model(
         filtername, proposal_id, field, module=module, use_webbpsf=use_webbpsf,
         use_grid=options.each_exposure, blur=options.blur, target=options.target,
-        obsdate=obsdate, basepath='/blue/adamginsburg/adamginsburg/jwst/',
+        obsdate=obsdate, basepath=_fields_registry.jwst_root(),
         psf_cache_dir=os.path.join(basepath, 'psfs'), instrument=instrument)
     dao_psf_model = grid
     if cutout_active and (cx0 or cy0):
