@@ -378,6 +378,7 @@ def _stale_against(info, rec, by_key, overall):
 def _who(info):
     """``m5/F200W/o001`` -- the record's identity, as the report spells it."""
     return "/".join(x for x in (info["stage"], info["filt"],
+                                info.get("module"),
                                 (f"o{info['obs']}" if info["obs"] else None))
                     if x)
 
@@ -426,7 +427,7 @@ def records(field, observations=None):
                 out.append((path, info, json.load(fh)))
         except (OSError, ValueError) as ex:
             unreadable.append((path, f"{type(ex).__name__}: {ex}"))
-    return _prefer_tokenised(out), unreadable
+    return _prefer_module_records(_prefer_tokenised(out)), unreadable
 
 
 def _prefer_tokenised(found):
@@ -451,9 +452,46 @@ def _prefer_tokenised(found):
     def _tokenised(i):
         return bool(i["obs"] or i["proposal"])
 
-    tokenised = {(i["stage"], i["filt"]) for _p, i, _r in found if _tokenised(i)}
+    def _key(i):
+        return (i["stage"], i["filt"], i.get("module"))
+
+    tokenised = {_key(i) for _p, i, _r in found if _tokenised(i)}
     return [(p, i, r) for p, i, r in found
-            if _tokenised(i) or (i["stage"], i["filt"]) not in tokenised]
+            if _tokenised(i) or _key(i) not in tokenised]
+
+
+def _prefer_module_records(found):
+    """Drop a MODULE-LESS m7 cross-filter record that per-module records replace.
+
+    The production m7 loop runs the cross-filter check once per merge module
+    (nrca, nrcb, merged).  Until issue #1254 all of them wrote
+    ``checkpoint_m7_crossfilter_oNNN``, so the last module's verdict replaced
+    the earlier ones' and an nrcb FAIL followed by a merged PASS was invisible.
+    Records are now ``checkpoint_m7_crossfilter_<module>_oNNN`` and each is
+    graded.
+
+    A module-less record is a legacy file: it holds whichever module ran last.
+    It is superseded -- not graded -- when a module record of the SAME
+    observation token exists that is at least as new, because that run
+    re-measured every module.  A module-less record NEWER than the module
+    records (or with none beside it) is still graded, so no verdict is dropped
+    unless a later one covers it.
+    """
+    def _is_xf(i):
+        return i["stage"] == "m7_crossfilter"
+
+    newest_module = {}
+    for _p, i, r in found:
+        if _is_xf(i) and i.get("module"):
+            key = (i["obs"], i["proposal"])
+            d = str(r.get("date") or "")
+            if key not in newest_module or d > newest_module[key]:
+                newest_module[key] = d
+    return [(p, i, r) for p, i, r in found
+            if not (_is_xf(i) and not i.get("module")
+                    and (i["obs"], i["proposal"]) in newest_module
+                    and str(r.get("date") or "")
+                    <= newest_module[(i["obs"], i["proposal"])])]
 
 
 def main(argv=None):

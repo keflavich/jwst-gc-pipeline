@@ -62,7 +62,7 @@ def test_every_name_the_writer_emits_parses_back(stage, filt, token, obs,
     name = _record_name(stage, filt, token) + "_latest.json"
     assert parse_record_name(name) == {
         "stage": stage, "filt": filt or "all", "obs": obs,
-        "proposal": proposal}
+        "proposal": proposal, "module": None}
 
 
 def test_the_hand_built_crossfilter_name_parses_back_too():
@@ -75,7 +75,18 @@ def test_the_hand_built_crossfilter_name_parses_back_too():
         name = f"checkpoint_m7_crossfilter{token}_latest.json"
         assert parse_record_name(name) == {
             "stage": "m7_crossfilter", "filt": None, "obs": obs,
-            "proposal": None}
+            "proposal": None, "module": None}
+
+
+@pytest.mark.parametrize("module", ["nrca", "nrcb", "merged"])
+@pytest.mark.parametrize("token,obs", [("", None), ("_o002", "002"),
+                                       ("_o002-998", "002-998")])
+def test_the_per_module_crossfilter_name_parses_its_module(module, token, obs):
+    """Issue #1254: the module sits where a filter would, but it is a module."""
+    name = f"checkpoint_m7_crossfilter_{module}{token}_latest.json"
+    assert parse_record_name(name) == {
+        "stage": "m7_crossfilter", "filt": None, "obs": obs,
+        "proposal": None, "module": module}
 
 
 def test_a_timestamped_sibling_parses_as_the_same_record():
@@ -485,7 +496,7 @@ def test_the_crossfilter_record_carries_the_token_too(tmp_path):
         run_crossfilter_checkpoint)
     assert "obs_token" in inspect.signature(run_crossfilter_checkpoint).parameters
     src = inspect.getsource(run_crossfilter_checkpoint)
-    assert 'f"checkpoint_m7_crossfilter{obs_token}"' in src
+    assert 'f"checkpoint_m7_crossfilter{_mod}{obs_token}"' in src
 
 
 # ------------------------------------------ the READER call sites, one by one
@@ -561,8 +572,8 @@ def test_the_m7_crossfilter_record_is_wired_at_the_PRODUCTION_call(tmp_path, mon
     seen = {}
 
     def _spy(catalogs, refcat=None, basepath=None, context="",
-             record_dir=None, obs_token="", **kw):
-        seen.update(record_dir=record_dir, obs_token=obs_token)
+             record_dir=None, obs_token="", module="", **kw):
+        seen.update(record_dir=record_dir, obs_token=obs_token, module=module)
         return dict(passed=True)
 
     import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
@@ -576,7 +587,8 @@ def test_the_m7_crossfilter_record_is_wired_at_the_PRODUCTION_call(tmp_path, mon
     cataloging._run_crossfilter_astrom_checkpoint(
         paths, str(tmp_path), str(tmp_path), {"refcat": None},
         context="test", record_dir=str(tmp_path / "recs"),
-        obs_token="_o002")
+        obs_token="_o002", module="nrcb")
+    assert seen.get("module") == "nrcb", seen
     assert seen.get("record_dir", "").endswith("recs"), seen
     assert seen.get("obs_token") == "_o002", seen
 
@@ -620,3 +632,17 @@ def test_the_frozen_stage_says_MISSING_BASELINE_not_MOVED(tmp_path, monkeypatch)
     assert "REFUSED" in msg, msg
     # ... and it must NOT claim a movement nobody measured
     assert "MOVED" not in msg, msg
+
+
+def test_each_module_writes_its_own_crossfilter_record(tmp_path):
+    """Issue #1254: nrca, nrcb and merged runs must not share a `_latest`."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        run_crossfilter_checkpoint)
+    from .test_astrometry_checkpoint import _crossfilter_catalogs
+    for module in ("nrca", "nrcb"):
+        run_crossfilter_checkpoint(_crossfilter_catalogs(),
+                                   record_dir=str(tmp_path), cell_min_stars=15,
+                                   obs_token="_o002", module=module)
+    names = sorted(p.name for p in tmp_path.glob("*_latest.json"))
+    assert names == ["checkpoint_m7_crossfilter_nrca_o002_latest.json",
+                     "checkpoint_m7_crossfilter_nrcb_o002_latest.json"]

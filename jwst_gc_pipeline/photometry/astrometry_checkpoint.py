@@ -3226,6 +3226,9 @@ _RECORD_STAGE_RE = re.compile(r'^checkpoint_(?P<stage>m\d+(?:_crossfilter)?)')
 #: joint-registration form ``_o002-998`` that ``naming.OBS_TOKEN_PATTERN``
 #: cannot express.
 _RECORD_OBS_RE = re.compile(r'_o(?P<obs>\d+(?:-\d+)*)$')
+#: The merge-module slot of an m7 cross-filter record (``_nrcb``, ``_merged``,
+#: ``_mirimage``).  Lower case only: a filter name is never lower case.
+_RECORD_MODULE_RE = re.compile(r'^_(?P<module>[a-z]+)$')
 #: The shared-tree proposal token (ngc6334's ``_j7213``/``_j6778``).
 _RECORD_PROPOSAL_RE = re.compile(r'_j(?P<proposal>\d+)$')
 
@@ -3233,9 +3236,12 @@ _RECORD_PROPOSAL_RE = re.compile(r'_j(?P<proposal>\d+)$')
 def parse_record_name(basename):
     """Inverse of :func:`_record_name`: a record filename -> its identity.
 
-    Returns ``{'stage', 'filt', 'obs', 'proposal'}`` (``filt`` verbatim, so a
-    mixed-filter record reads back as the literal ``'all'`` it was written as),
-    or ``None`` when the name is not a checkpoint record.
+    Returns ``{'stage', 'filt', 'obs', 'proposal', 'module'}`` (``filt``
+    verbatim, so a mixed-filter record reads back as the literal ``'all'`` it
+    was written as), or ``None`` when the name is not a checkpoint record.
+    ``module`` is set only for an m7 cross-filter record written per merge
+    module (``checkpoint_m7_crossfilter_nrcb_o002``, issue #1254); that slot
+    holds a module, not a filter, so ``filt`` stays ``None`` for it.
 
     This lives beside the writer because a checkpoint record's name is the only
     thing that says WHICH observation a verdict belongs to, and the release gate
@@ -3281,7 +3287,12 @@ def parse_record_name(basename):
         if tok:
             proposal = tok.group('proposal')
             rest = rest[:tok.start()]
-    if rest.startswith('_'):
+    module = None
+    mod = _RECORD_MODULE_RE.match(rest)
+    if m.group('stage') == 'm7_crossfilter' and mod:
+        module = mod.group('module')
+        filt = None
+    elif rest.startswith('_'):
         filt = rest[1:]
     elif rest:
         # Trailing text that is neither a filter slot nor a known token.
@@ -3291,7 +3302,7 @@ def parse_record_name(basename):
     if filt is not None and not filt:
         return None
     return {'stage': m.group('stage'), 'filt': filt,
-            'obs': obs, 'proposal': proposal}
+            'obs': obs, 'proposal': proposal, 'module': module}
 
 
 def _filter_is_obs_ambiguous(record_dir, filtername):
@@ -5229,7 +5240,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                cell_min_stars=LOCAL_CELL_MIN_STARS,
                                field_cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
                                field_min_stars=CROSSFILTER_FIELD_MIN_STARS,
-                               obs_token=""):
+                               obs_token="", module=""):
     """Cross-filter astrometry agreement at the cross-band merge.
 
     The filter closest in wavelength to VIRAC2 Ks anchors the absolute frame
@@ -5247,6 +5258,11 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     unchanged by it, ``all_verified`` is not.
 
     ``catalogs_by_filter``: dict filtername -> Table (vetted merged catalog).
+
+    ``module`` (``nrca``/``nrcb``/``merged``) goes into the record name, because
+    the production m7 loop calls this once per module and a module-less name
+    made each call replace the previous module's ``_latest`` record (issue
+    #1254: a cloudef nrcb FAIL was overwritten by the merged PASS).
 
     Raises ``CrossFilterAstrometryError`` on any failure (override only via
     ``ALLOW_CROSSFILTER_ASTROM_FAIL=1``).
@@ -5482,14 +5498,15 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     if record_dir:
         # Tokened for the same reason the m2 records are (issue #281): brick's
         # 1182 and 2221 m7 runs write into one `astrometry_checkpoints/`, and
-        # the untokened name meant 2221's verdict replaced 1182's.  This record
-        # is write-only -- nothing reads it back, and the verdict itself is
-        # raised in-memory as CrossFilterAstrometryError -- so what the
-        # collision costs is the audit trail, not a wrong correction.  Its only
-        # other identity field is `context`, which names the target, not the
-        # observation.
-        _write_record(record_dir, f"checkpoint_m7_crossfilter{obs_token}",
-                      record)
+        # the untokened name meant 2221's verdict replaced 1182's.  Module-
+        # keyed for the same reason (issue #1254): nrca, nrcb and merged each
+        # run this check, and one shared name let the last module's `_latest`
+        # hide an earlier module's failure.  The release gate
+        # (`scripts/release/check_astrometry_checkpoints.py`) grades every
+        # module's latest record.
+        _mod = f"_{module}" if module else ""
+        _write_record(record_dir,
+                      f"checkpoint_m7_crossfilter{_mod}{obs_token}", record)
     for w in unverified:
         print(f"ASTROM CHECKPOINT [m7-crossfilter] COULD NOT VERIFY: {w}",
               flush=True)

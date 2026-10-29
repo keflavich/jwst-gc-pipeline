@@ -318,6 +318,16 @@ position-dependent part of each filter-to-anchor residual
 FIELD:` line per filter. **Nothing gates on it**; the two tolerances above are
 unchanged.
 
+**Record names (issue #1254).** The m7 check runs once per merge module, so
+each module writes its own record: `checkpoint_m7_crossfilter_<module>_oNNN`
+(`nrca`, `nrcb`, `merged`, ...). Before this, all modules shared
+`checkpoint_m7_crossfilter_oNNN` and the last one replaced the earlier
+`_latest`, hiding an nrcb FAIL behind a merged PASS. The release gate grades
+every module's latest record. A legacy module-less record is still graded,
+except when module records of the same observation token exist that are at
+least as new: those come from a run that re-measured every module, so the
+legacy file is treated as superseded.
+
 It exists because both gates are structurally blind to that term:
 
 * `CROSSFILTER_TOL_MAS = 5.0` is on the **bulk**, which is ~0 for a field whose
