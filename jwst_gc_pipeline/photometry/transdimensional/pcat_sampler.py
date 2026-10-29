@@ -133,7 +133,7 @@ class PCATConfig:
     pen_nparams: Optional[float] = None
     domain_pad: float = 0.0
     seed: int = 0
-    blas: str = 'openblas'              # 'openblas' | 'mkl' | 'none' | 'numpy'
+    blas: str = 'auto'                  # 'auto' | 'openblas' | 'mkl' | 'none' | 'numpy'
     lib_dir: Optional[str] = None
     store_models: bool = True           # keep post-burn-in models (median model)
     check_leak: bool = False            # verify footprints stay inside margins
@@ -1052,7 +1052,7 @@ class PCATSampler:
                     regsize=self.R, pen=self.pen, area=self.area, errf=list(map(float, self.errf)),
                     errf_eff=self.errf_eff, color_moves=self.color_moves,
                     pads=self.pads, nburn=nburn, leak=float(self.leak), ntemp=self.ntemp,
-                    nbands=self.nb, blas=cfg.blas, shape=[list(b.image.shape) for b in self.bands],
+                    nbands=self.nb, blas=cfg.blas if self.lib is None else self.lib.blas, shape=[list(b.image.shape) for b in self.bands],
                     band_names=[b.name for b in self.bands],
                     noise_scale=self.noise_scale.tolist(),
                     sec_per_sample=float(np.mean(rec['time'])))

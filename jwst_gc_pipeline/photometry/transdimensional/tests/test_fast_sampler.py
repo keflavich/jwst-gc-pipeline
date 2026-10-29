@@ -13,10 +13,13 @@
 import numpy as np
 import pytest
 
-from ..fast_sampler import FastPCATSampler, separable_factors
 from ..pcat_sampler import BandData, PCATConfig, PCATSampler, fourier_templates, run_pcat
 from ..psf_poly import build_cf
 from ._helpers import get_epsf, have_compiler, lib_dir
+
+numba = pytest.importorskip('numba')
+
+from ..fast_sampler import FastPCATSampler, separable_factors  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not have_compiler(), reason='no C compiler')
 

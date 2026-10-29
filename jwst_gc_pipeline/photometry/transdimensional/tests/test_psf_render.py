@@ -26,7 +26,7 @@ def setup():
     from ..psf import to_gridded_psf_model
     gpm = to_gridded_psf_model(str(EPSF_PATH))
     cf, info = build_cf(epsf, os_, NC, basis=BASIS, fit='nodes')
-    lib = K.load_kernel('openblas', lib_dir=lib_dir()) if have_compiler() else None
+    lib = K.load_kernel('auto', lib_dir=lib_dir()) if have_compiler() else None
     rend = K.PSFRenderer(cf, NC, K.basis_terms(BASIS), lib=lib)
     peak = float(epsf.max())
     return dict(epsf=epsf, os=os_, gpm=gpm, rend=rend, info=info, peak=peak)

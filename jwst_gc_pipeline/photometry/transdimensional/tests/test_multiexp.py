@@ -165,7 +165,7 @@ def test_two_exposure_joint_fit():
     fac = mocks.psf_snr_factor(epsf, os_)
     b1 = BandData(image=img1, weight=w1, cf=cf, nc=nc, affine=np.array([[1, 0, dx], [0, 1, dy]]),
                   name='exp2')
-    common = dict(trueminf=5.0 / fac, nsamp=60, nloop=100, regsize=28, seed=3, lib_dir=str(lib_dir()),
+    common = dict(trueminf=5.0 / fac, nsamp=300, nloop=100, regsize=28, seed=3, lib_dir=str(lib_dir()),
                   verbose=0)
     init = dict(x=x + 0.2, y=y - 0.2, f=f0 * 0.9)
     cfg = PCATConfig(color_mus=[0.0], color_sigs=[0.01], color_moves=True, color_step_fac=3.0,
@@ -185,7 +185,7 @@ def test_two_exposure_joint_fit():
     assert np.all(np.abs(fl[0] / f0[it] - 1) < 0.1), fl[0] / f0[it]
     # the colour prior ties the exposure-2 flux to the pivot flux
     assert np.all(np.abs(fl[1] / fl[0] - 1) < 0.03), fl[1] / fl[0]
-    # joint fit: smaller pivot-flux posterior width than exposure 1 alone (both chains short)
+    # joint fit: smaller pivot-flux posterior width than exposure 1 alone (expected ratio 1/sqrt(2))
     sel1 = c1['prob'] > 0.5
     jc, jt, _ = mocks.match_truth(c1['x'][sel1], c1['y'][sel1], x, y, 1.0)
     sd2 = np.nanstd(c['samp_f'][np.flatnonzero(sel)[ic], 0, :], axis=1)

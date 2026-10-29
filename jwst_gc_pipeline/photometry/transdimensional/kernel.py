@@ -9,6 +9,8 @@ The shared library combines
 
 Three BLAS back ends are supported: ``openblas`` (the conda env's
 ``libcblas`` -> OpenBLAS), ``mkl`` (``$MKLROOT``) and ``none`` (plain loops).
+``auto`` loads ``openblas`` and falls back to ``none`` (with a warning) when
+the OpenBLAS kernel cannot be built, e.g. outside a conda env.
 
 Rendering convention (identical to PCAT ``image_model_eval``)
 --------------------------------------------------------------
@@ -21,6 +23,7 @@ import ctypes
 import os
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -94,9 +97,21 @@ def build_kernel(lib_dir=None, blas='openblas', march='x86-64-v3', cc='gcc', ver
 def load_kernel(blas='openblas', lib_dir=None, build=True, nthreads=1):
     """Load (building if missing) the kernel; returns a ctypes ``CDLL``.
 
+    ``lib.blas`` is the back end loaded (``blas='auto'``: ``openblas``, else
+    ``none``).
+
     ``nthreads`` sets the OpenBLAS thread count (1 is fastest for the small
     sgemm calls of the sampler).
     """
+    if blas == 'auto':
+        key = f'auto:{lib_dir}'
+        if key not in _LOADED:
+            try:
+                _LOADED[key] = load_kernel('openblas', lib_dir=lib_dir, build=build, nthreads=nthreads)
+            except (RuntimeError, OSError) as err:
+                warnings.warn(f'OpenBLAS kernel unavailable ({err}); using the plain-loop kernel')
+                _LOADED[key] = load_kernel('none', lib_dir=lib_dir, build=build, nthreads=nthreads)
+        return _LOADED[key]
     lib_dir = Path(lib_dir) if lib_dir is not None else default_lib_dir()
     path = lib_dir / _lib_name(blas)
     key = str(path)
@@ -107,6 +122,7 @@ def load_kernel(blas='openblas', lib_dir=None, build=True, nthreads=1):
             raise FileNotFoundError(path)
         build_kernel(lib_dir, blas=blas)
     lib = ctypes.CDLL(str(path))
+    lib.blas = blas
     lib.pcat_model_eval.restype = None
     lib.pcat_model_eval.argtypes = [_int, _int, _int, _int, _int, _f4, _f4, _f4, _i4, _i4,
                                     _f4, _f4, _f4, _f8, _int, _int, _int, _int]
