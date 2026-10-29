@@ -8995,7 +8995,7 @@ def _stamp_wcs_source(path):
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
                                        refcat_cache, context="",
                                        record_dir=None, obs_token="",
-                                       proposal_id=None):
+                                       proposal_id=None, module=""):
     """Cross-filter astrometry agreement checkpoint before the m7 cross-band
     merge (see astrometry_checkpoint.run_crossfilter_checkpoint): anchor =
     filter nearest VIRAC2 Ks; <5 mas bulk agreement per filter; no significant
@@ -9025,7 +9025,7 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
         run_crossfilter_checkpoint(catalogs, refcat=refcat_cache['refcat'],
                                    basepath=cut_bp, context=context,
                                    record_dir=record_dir,
-                                   obs_token=obs_token)
+                                   obs_token=obs_token, module=module)
         print("crossfilter astrom checkpoint: PASS", flush=True)
     except CrossFilterAstrometryError:
         if os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1':
@@ -10965,7 +10965,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 obs_token=_xf_consensus_obs_token(
                     getattr(options, 'proposal_id', None),
                     getattr(options, 'field', None)),
-                proposal_id=getattr(options, 'proposal_id', None))
+                proposal_id=getattr(options, 'proposal_id', None),
+                module=module)
 
             print(f"manual [{last_phase}]: CROSS-BAND MERGE (module={module}, "
                   f"ref_filter={ref_filter}, filters={list(filternames)})", flush=True)
