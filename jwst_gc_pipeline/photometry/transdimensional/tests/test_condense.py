@@ -2,7 +2,9 @@
 import numpy as np
 import pytest
 
-from ..condense import condense, _mutual_closest_edges, _seeds
+from ..condense import condense, njit, _mutual_closest_edges, _seeds
+
+needs_numba = pytest.mark.skipif(njit is None, reason='numba not installed')
 
 
 def _chains(nsamp=200, seed=0):
@@ -79,14 +81,42 @@ def test_seed_graph_thinning():
         assert thin['flux'][0, kt] == full['flux'][0, kf]
 
 
-def test_mutual_closest_edges():
+@pytest.mark.parametrize('engine', ['numpy', pytest.param('numba', marks=needs_numba)])
+def test_mutual_closest_edges(engine):
+    from ..condense import _mutual_closest_edges_numba
+    mce = _mutual_closest_edges if engine == 'numpy' else _mutual_closest_edges_numba
     # sample 0: points a (0,0), b (0.5,0); sample 1: point c (0.3, 0)
     X = np.array([0.0, 0.5, 0.3])
     Y = np.zeros(3)
     sid = np.array([0, 0, 1])
-    e = _mutual_closest_edges(X, Y, sid, 0.75)
+    e = mce(X, Y, sid, 0.75)
     # c's closest in sample 0 is b (0.2) and b's closest in sample 1 is c
     assert e.tolist() == [[1, 2]]
+
+
+@needs_numba
+def test_engines_identical():
+    """The compiled grid search returns the numpy / cKDTree catalogue exactly, on the
+    synthetic chains and on a dense field with exact distance and flux ties (grid
+    positions, quantised fluxes)."""
+    from ..condense import _mutual_closest_edges_numba
+    x, y, f, *_ = _chains()
+    rng = np.random.default_rng(4)
+    ns, nmax = 120, 300
+    xd = rng.integers(0, 60, (ns, nmax)) * 0.25 + rng.normal(0, 0.02, (ns, 1)) * (rng.uniform(size=(ns, nmax)) < 0.5)
+    yd = rng.integers(0, 60, (ns, nmax)) * 0.25
+    fd = rng.integers(1, 4, (ns, 1, nmax)).astype(float)
+    xd[:, -20:] = np.nan
+    for xx, yy, ff in ((x, y, f), (xd, yd, fd)):
+        a = condense(xx, yy, ff, engine='numba', return_samples=True, seed_max_samples=50)
+        b = condense(xx, yy, ff, engine='numpy', return_samples=True, seed_max_samples=50)
+        assert a['x'].size > 0
+        for k in ('x', 'y', 'prob', 'degree', 'flux', 'flux_err', 'samp_x', 'samp_y', 'samp_f'):
+            np.testing.assert_array_equal(a[k], b[k], err_msg=k)
+    good = np.isfinite(xd)
+    sid = np.repeat(np.arange(ns), nmax).reshape(ns, nmax)[good]
+    np.testing.assert_array_equal(_mutual_closest_edges_numba(xd[good], yd[good], sid, 0.75),
+                                  _mutual_closest_edges(xd[good], yd[good], sid, 0.75))
 
 
 def test_seed_selection_degree_updates():

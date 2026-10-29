@@ -27,11 +27,22 @@ other samples), about 1.3 GB of index arrays per 1e8 pairs.  ``seed_max_samples`
 moments) always uses every sample in ``sample_idx`` / ``max_samples``.  With
 ``m`` seed samples a source needs prevalence of order ``min_degree / m`` to
 seed (1 % for m = 200).
+
+Speed: with numba installed, the seed graph (step 1) and the assignment (step 3)
+run as compiled loops over a grid of ``radius``-sized cells (``engine='numba'``,
+the default when numba imports); they return the same catalogue as the numpy /
+cKDTree path (``engine='numpy'``) and take ~1-3 s instead of ~25 s for 4 chains
+x 4500 samples x 450 sources.
 """
 import heapq
 
 import numpy as np
 from scipy.spatial import cKDTree
+
+try:
+    from numba import njit
+except ImportError:     # numba is optional: condense(engine='numpy') needs only scipy
+    njit = None
 
 __all__ = ['condense', 'merge_bright', 'n_above_samples']
 
@@ -76,6 +87,201 @@ def _mutual_closest_edges(X, Y, sid, radius):
     return np.column_stack([a[keep], b[keep]])
 
 
+def _mutual_closest_edges_numba(X, Y, sid, radius):
+    """:func:`_mutual_closest_edges` on a cell grid (compiled)."""
+    if X.size == 0:
+        return np.zeros((0, 2), dtype=np.int64)
+    usid, sloc = np.unique(sid, return_inverse=True)
+    grid = _grid_nb(X, Y, float(radius))
+    return _mce_nb(X, Y, sloc.astype(np.int64), usid.size, float(radius) ** 2, *grid)
+
+
+def _assign_numpy(X, Y, F0, sid, seeds, radius):
+    """Step 3 with cKDTree: ``(k, i)`` pairs, source ``i`` assigned to seed ``k``."""
+    tree = cKDTree(np.column_stack([X, Y]))
+    cand = tree.query_ball_point(np.column_stack([X[seeds], Y[seeds]]), radius)
+    assigned = np.zeros(X.size, bool)
+    ks, iis = [], []
+    for k in range(len(seeds)):
+        c = np.asarray(cand[k], dtype=np.int64)
+        if c.size == 0:
+            continue
+        c = c[~assigned[c]]
+        if c.size == 0:
+            continue
+        # brightest (pivot flux) per sample
+        o = np.lexsort((-F0[c], sid[c]))
+        c = c[o]
+        first = np.ones(c.size, bool)
+        first[1:] = sid[c][1:] != sid[c][:-1]
+        c = c[first]
+        assigned[c] = True
+        ks.append(np.full(c.size, k))
+        iis.append(c)
+    if not ks:
+        return np.zeros(0, np.int64), np.zeros(0, np.int64)
+    return np.concatenate(ks), np.concatenate(iis)
+
+
+def _assign_numba(X, Y, F0, sid, seeds, radius):
+    """:func:`_assign_numpy` on a cell grid (compiled)."""
+    grid = _grid_nb(X, Y, float(radius))
+    return _assign_nb(X, Y, np.where(np.isfinite(F0), F0, -np.inf), sid.astype(np.int64),
+                      int(sid.max()) + 1, seeds.astype(np.int64), float(radius) ** 2, *grid)
+
+
+if njit is not None:
+    @njit(cache=True)
+    def _grid_nb(X, Y, cell):
+        """Counting sort of the points into ``cell``-sized squares; points of a
+        cell keep their index order."""
+        n = X.size
+        x0 = X.min()
+        y0 = Y.min()
+        ncx = int((X.max() - x0) / cell) + 1
+        ncy = int((Y.max() - y0) / cell) + 1
+        cid = np.empty(n, np.int64)
+        start = np.zeros(ncx * ncy + 1, np.int64)
+        for i in range(n):
+            c = int((Y[i] - y0) / cell) * ncx + int((X[i] - x0) / cell)
+            cid[i] = c
+            start[c + 1] += 1
+        for c in range(ncx * ncy):
+            start[c + 1] += start[c]
+        ptr = start[:-1].copy()
+        order = np.empty(n, np.int64)
+        for i in range(n):
+            order[ptr[cid[i]]] = i
+            ptr[cid[i]] += 1
+        return order, start, ncx, ncy, x0, y0, cell
+
+    @njit(cache=True)
+    def _closest_per_sample(X, Y, sloc, nsl, r2, order, start, ncx, ncy, x0, y0, cell,
+                            a, bd, bb, touched):
+        """Closest point of every other sample within sqrt(r2) of point ``a``
+        (ties: lower index), as ``touched[:nt]`` sample ids sorted ascending
+        with ``bb[s]`` the point; ``bd``/``bb`` must hold inf/-1 on entry."""
+        xa, ya, sa = X[a], Y[a], sloc[a]
+        cx = int((xa - x0) / cell)
+        cy = int((ya - y0) / cell)
+        nt = 0
+        for gy in range(max(cy - 1, 0), min(cy + 2, ncy)):
+            for gx in range(max(cx - 1, 0), min(cx + 2, ncx)):
+                c = gy * ncx + gx
+                for q in range(start[c], start[c + 1]):
+                    b = order[q]
+                    sb = sloc[b]
+                    if sb == sa:
+                        continue
+                    d = (xa - X[b]) ** 2 + (ya - Y[b]) ** 2
+                    if d > r2:
+                        continue
+                    if bb[sb] < 0:
+                        touched[nt] = sb
+                        nt += 1
+                        bd[sb] = d
+                        bb[sb] = b
+                    elif d < bd[sb] or (d == bd[sb] and b < bb[sb]):
+                        bd[sb] = d
+                        bb[sb] = b
+        touched[:nt].sort()
+        return nt
+
+    @njit(cache=True)
+    def _mce_nb(X, Y, sloc, nsl, r2, order, start, ncx, ncy, x0, y0, cell):
+        n = X.size
+        bd = np.full(nsl, np.inf)
+        bb = np.full(nsl, -1, np.int64)
+        touched = np.empty(nsl, np.int64)
+        # pass 1: list sizes; pass 2: per point, the closest point of each other
+        # sample (CSR, sorted by sample)
+        ptr = np.zeros(n + 1, np.int64)
+        for a in range(n):
+            nt = _closest_per_sample(X, Y, sloc, nsl, r2, order, start, ncx, ncy, x0, y0, cell,
+                                     a, bd, bb, touched)
+            for t in range(nt):
+                bd[touched[t]] = np.inf
+                bb[touched[t]] = -1
+            ptr[a + 1] = ptr[a] + nt
+        best = np.empty(ptr[n], np.int64)
+        bsam = np.empty(ptr[n], np.int64)
+        for a in range(n):
+            nt = _closest_per_sample(X, Y, sloc, nsl, r2, order, start, ncx, ncy, x0, y0, cell,
+                                     a, bd, bb, touched)
+            for t in range(nt):
+                sb = touched[t]
+                best[ptr[a] + t] = bb[sb]
+                bsam[ptr[a] + t] = sb
+                bd[sb] = np.inf
+                bb[sb] = -1
+        # mutual pairs (a < b), ordered by a then by the sample of b
+        out = np.empty((ptr[n], 2), np.int64)
+        m = 0
+        for a in range(n):
+            sa = sloc[a]
+            for q in range(ptr[a], ptr[a + 1]):
+                b = best[q]
+                if b <= a:
+                    continue
+                lo, hi = ptr[b], ptr[b + 1]
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if bsam[mid] < sa:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                if lo < ptr[b + 1] and bsam[lo] == sa and best[lo] == a:
+                    out[m, 0] = a
+                    out[m, 1] = b
+                    m += 1
+        return out[:m].copy()
+
+    @njit(cache=True)
+    def _assign_nb(X, Y, F0, sid, ns, seeds, r2, order, start, ncx, ncy, x0, y0, cell):
+        n = X.size
+        assigned = np.zeros(n, np.bool_)
+        bf = np.full(ns, -np.inf)
+        bi = np.full(ns, -1, np.int64)
+        touched = np.empty(ns, np.int64)
+        rk = np.empty(n, np.int64)
+        ri = np.empty(n, np.int64)
+        m = 0
+        for k in range(seeds.size):
+            q0 = seeds[k]
+            xq, yq = X[q0], Y[q0]
+            cx = int((xq - x0) / cell)
+            cy = int((yq - y0) / cell)
+            nt = 0
+            for gy in range(max(cy - 1, 0), min(cy + 2, ncy)):
+                for gx in range(max(cx - 1, 0), min(cx + 2, ncx)):
+                    c = gy * ncx + gx
+                    for q in range(start[c], start[c + 1]):
+                        i = order[q]
+                        if assigned[i]:
+                            continue
+                        if (xq - X[i]) ** 2 + (yq - Y[i]) ** 2 > r2:
+                            continue
+                        s = sid[i]
+                        if bi[s] < 0:
+                            touched[nt] = s
+                            nt += 1
+                            bf[s] = F0[i]
+                            bi[s] = i
+                        elif F0[i] > bf[s] or (F0[i] == bf[s] and i < bi[s]):
+                            bf[s] = F0[i]
+                            bi[s] = i
+            touched[:nt].sort()
+            for t in range(nt):
+                s = touched[t]
+                assigned[bi[s]] = True
+                rk[m] = k
+                ri[m] = bi[s]
+                m += 1
+                bf[s] = -np.inf
+                bi[s] = -1
+        return rk[:m].copy(), ri[:m].copy()
+
+
 def _seeds(n, edges):
     """Greedy max-degree seed selection with degree updates (lazy heap)."""
     if edges.size == 0:
@@ -115,7 +321,7 @@ def _seeds(n, edges):
 
 
 def condense(x, y, f, radius=0.75, min_degree=2, max_samples=None, sample_idx=None,
-             seed_max_samples=200, return_samples=False):
+             seed_max_samples=200, return_samples=False, engine=None):
     """Condensed catalog from chain samples.
 
     Parameters
@@ -132,12 +338,20 @@ def condense(x, y, f, radius=0.75, min_degree=2, max_samples=None, sample_idx=No
         nsamp_used), NaN where a sample holds no source for that entry, and
         ``samp_idx`` (the chain indices of the used samples); needed by
         :func:`merge_bright`.
+    engine : ``'numba'`` (compiled grid search; default when numba imports) or
+        ``'numpy'`` (cKDTree); both give the same catalogue.
 
     Returns a dict of arrays, one entry per condensed source: ``x, y`` (mean),
     ``x_err, y_err`` (std), ``x_med, y_med``, ``flux`` (nbands, n; median),
     ``flux_err`` (std), ``flux_mean``, ``flux_p16``, ``flux_p84``, ``prob``
     (prevalence), ``nmatch``, ``degree``; plus ``nsamp_used``.
     """
+    if engine is None:
+        engine = 'numpy' if njit is None else 'numba'
+    if engine not in ('numba', 'numpy'):
+        raise ValueError(f'unknown engine {engine!r}')
+    if engine == 'numba' and njit is None:
+        raise ImportError("condense(engine='numba') needs numba")
     x = np.asarray(x, float)
     y = np.asarray(y, float)
     f = np.asarray(f, float)
@@ -167,37 +381,23 @@ def condense(x, y, f, radius=0.75, min_degree=2, max_samples=None, sample_idx=No
         node = np.flatnonzero(np.isin(sid, sseed))
     else:
         node = np.arange(X.size)
-    edges = _mutual_closest_edges(X[node], Y[node], sid[node], radius)
+    mce = _mutual_closest_edges_numba if engine == 'numba' else _mutual_closest_edges
+    edges = mce(X[node], Y[node], sid[node], radius)
     seeds, sdeg = _seeds(node.size, edges)
     seeds = node[seeds]
     keep = sdeg >= min_degree
     seeds, sdeg = seeds[keep], sdeg[keep]
     if seeds.size == 0:
         return empty
-    tree = cKDTree(np.column_stack([X, Y]))
-    cand = tree.query_ball_point(np.column_stack([X[seeds], Y[seeds]]), radius)
-    assigned = np.zeros(X.size, bool)
+    assign = _assign_numba if engine == 'numba' else _assign_numpy
+    ka, ia = assign(X, Y, F[0], sid, seeds, radius)
     ksrc = len(seeds)
     mx = np.full((ksrc, ns), np.nan)
     my = np.full((ksrc, ns), np.nan)
     mf = np.full((ksrc, nb, ns), np.nan)
-    for k in range(ksrc):
-        c = np.asarray(cand[k], dtype=np.int64)
-        if c.size == 0:
-            continue
-        c = c[~assigned[c]]
-        if c.size == 0:
-            continue
-        # brightest (pivot flux) per sample
-        o = np.lexsort((-F[0, c], sid[c]))
-        c = c[o]
-        first = np.ones(c.size, bool)
-        first[1:] = sid[c][1:] != sid[c][:-1]
-        c = c[first]
-        assigned[c] = True
-        mx[k, sid[c]] = X[c]
-        my[k, sid[c]] = Y[c]
-        mf[k, :, sid[c]] = F[:, c].T
+    mx[ka, sid[ia]] = X[ia]
+    my[ka, sid[ia]] = Y[ia]
+    mf[ka, :, sid[ia]] = F[:, ia].T
     nm = np.sum(np.isfinite(mx), axis=1)
     ok = nm > 0
     mx, my, mf, sdeg = mx[ok], my[ok], mf[ok], sdeg[ok]
