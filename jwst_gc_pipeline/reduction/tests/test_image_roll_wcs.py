@@ -284,6 +284,23 @@ def test_i2d_multi_visit_reports_residual_and_needs_opt_in(tmp_path):
     assert fits.getheader(fn, ('SCI', 1))['ROLLIRES'] == pytest.approx(r['max_mas'], rel=1e-6)
 
 
+def test_i2d_without_asdf_is_refused_in_dry_run_and_apply(tmp_path):
+    # MIRI *_smoothed_bg_i2d.fits: SCI header only, no ASDF GWCS
+    src = _synthetic_i2d(tmp_path / 'src_i2d.fits')
+    fn = str(tmp_path / ('jw10678-o066_t001_miri_clear-f770w-mirimage_resbgsub_m6_'
+                         'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits'))
+    with fits.open(src) as hdul:
+        fits.HDUList([fits.PrimaryHDU(header=hdul[0].header),
+                      fits.ImageHDU(data=hdul['SCI'].data, header=hdul['SCI'].header,
+                                    name='SCI')]).writeto(fn)
+    assert irw.classify_image(os.path.basename(fn)) == 'i2d-derived'
+    model = _model([('001', 21.97, 266.39150399, -29.15138395, [])])
+    for dry in (True, False):
+        with pytest.raises(irw.ImageRollError, match='no ASDF'):
+            irw.rotate_i2d(fn, model, dry_run=dry)
+    assert 'ROLLCORR' not in fits.getheader(fn, ('SCI', 1))
+
+
 def test_fit_tan_similarity_recovers_pure_rotation():
     h = fits.Header()
     h['CTYPE1'], h['CTYPE2'] = 'RA---TAN', 'DEC--TAN'

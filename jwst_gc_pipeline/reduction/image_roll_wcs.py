@@ -575,6 +575,15 @@ def rotate_i2d(fn, model, *, visit_keys=(), table_sha='', dry_run=False, tol_mas
         return dict(status='already', file=fn)
     if 'A_ORDER' in sci or sci.get('CTYPE1', '').endswith('-SIP'):
         raise ImageRollError(f"{fn}: i2d with SIP distortion; expected a plain TAN grid")
+    # The GWCS update below needs the ASDF extension.  Some cataloging-written
+    # mosaics (the MIRI *_smoothed_bg_i2d.fits) carry only a SCI header; refuse
+    # them here, so the dry run reports them too, rather than failing with an
+    # AttributeError on meta.wcs part-way through an --apply.
+    with fits.open(fn) as hdul:
+        has_asdf = 'ASDF' in hdul
+    if not has_asdf:
+        raise ImageRollError(f"{fn}: no ASDF extension (no GWCS to update); "
+                             f"header-only i2d products are not handled")
     shape = (int(sci['NAXIS2']), int(sci['NAXIS1']))
     t0 = time.time()
     single = len(model.visits) == 1
