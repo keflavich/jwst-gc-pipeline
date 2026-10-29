@@ -1034,4 +1034,3 @@ def test_a_stale_recorded_threshold_is_called_out(gate, tmp_path, capsys):
     assert gate.main(['--field', 'fld']) == 0
     out = capsys.readouterr().out
     assert 'STALE THRESHOLDS' in out, out
-
