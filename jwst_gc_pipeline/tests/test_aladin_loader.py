@@ -101,7 +101,7 @@ let input = '';
 process.stdin.on('data', d => { input += d; });
 process.stdin.on('end', main);
 async function main() {
-  const {js, net} = JSON.parse(input);
+  const {js, net, observe} = JSON.parse(input);
   let now = 0, seq = 0;
   const timers = [], requested = [], warnings = [];
   let notice = false;
@@ -137,8 +137,10 @@ async function main() {
   ctx.window = ctx;
   ctx.clock = () => now;
   vm.runInContext(js, ctx);
-  vm.runInContext('var ready = null, readyAt = null;'
-                  + ' A.init.then(function () { ready = A.name; readyAt = clock(); });', ctx);
+  if (observe !== false) {
+    vm.runInContext('var ready = null, readyAt = null;'
+                    + ' A.init.then(function () { ready = A.name; readyAt = clock(); });', ctx);
+  }
   for (let step = 0; step < 1000; step++) {
     await new Promise(r => setImmediate(r));
     if (!timers.length) { break; }
@@ -149,18 +151,24 @@ async function main() {
   }
   await new Promise(r => setImmediate(r));
   console.log(JSON.stringify({ready: ctx.ready, readyAt: ctx.readyAt, final: (ctx.A && ctx.A.name) || null,
+                              built: ctx.built || null, failed: ctx.failed || null,
                               unavailable: Boolean(ctx.A && ctx.A.unavailable),
                               requested, notice, warnings}));
 }
 """
 
 
-def _replay(net):
+def _replay(net, js=None, observe=True):
+    """Run ``js`` (default: the generated chain) against ``net``.  With
+    ``observe``, page code waiting on ``A.init`` records ``ready``/``readyAt``;
+    a loader that defines no stub (field_overview's) passes ``observe=False``."""
     node = shutil.which('node')
     if node is None:
         pytest.skip('node is not installed')
-    js = re.search(r'<script>\n(.*)\n</script>', aladin_fallback_chain_html(), re.S).group(1)
-    out = subprocess.run([node, '-e', _HARNESS], input=json.dumps({'js': js, 'net': net}),
+    if js is None:
+        js = re.search(r'<script>\n(.*)\n</script>', aladin_fallback_chain_html(), re.S).group(1)
+    out = subprocess.run([node, '-e', _HARNESS],
+                         input=json.dumps({'js': js, 'net': net, 'observe': observe}),
                          capture_output=True, text=True, timeout=60, check=True)
     return json.loads(out.stdout)
 
@@ -196,6 +204,15 @@ def test_loader_moves_on_at_once_when_cds_errors():
                    ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 200, 'name': 'self'}})
     assert res['ready'] == 'self'
     assert res['requested'][1]['t'] == 50
+
+
+def test_an_error_after_the_timeout_does_not_fetch_the_next_source_twice():
+    """CDS times out (the chain moves on) and then errors: the `moved`
+    guard keeps that error from requesting the self-hosted copy again."""
+    res = _replay({ALADIN_JS_CDS: {'kind': 'error', 'ms': ALADIN_TIMEOUT_MS + 100},
+                   ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 500, 'name': 'self'}})
+    assert res['ready'] == 'self'
+    assert [r['url'] for r in res['requested']] == [ALADIN_JS_CDS, ALADIN_JS_SELFHOSTED]
 
 
 def test_a_source_that_loads_without_aladin_lite_is_skipped():
@@ -321,6 +338,62 @@ def test_field_overview_loader_walks_every_source_in_order():
     # a single URL still works, as a one-element list
     _one, payload = _overview_page(fo, aladin_src='https://example.org/aladin.js')
     assert payload['aladin'] == ['https://example.org/aladin.js']
+
+
+# field_overview's click-to-load panel carries its own copy of the same state
+# machine (its page builds the view in a `build` callback, not behind a stub
+# `A.init`).  These replay the click handler's loader through the harness with
+# stand-in `build` / `fail`, so each of its guards has a test that fails
+# without it.
+
+def _overview_js():
+    fo = _load('field_overview_replay', os.path.join(_REL, 'field_overview.py'))
+    page, payload = _overview_page(fo)
+    body = re.search(r'(var sources = \[\]\.concat\(data\.aladin\);.*?loadFrom\(0\);)', page, re.S).group(1)
+    return ('var data = %s; var built = [], failed = [];'
+            ' function describeError(e) { return String(e); }'
+            ' function build() { built.push(window.A && window.A.name); }'
+            ' function fail(m) { failed.push(m); }' % json.dumps(payload)) + body
+
+
+def _overview(net):
+    return _replay(net, js=_overview_js(), observe=False)
+
+
+def test_overview_moves_on_when_cds_hangs():
+    res = _overview({ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 200, 'name': 'self'}})
+    assert res['built'] == ['self'] and res['failed'] == []
+    assert [r['url'] for r in res['requested']] == [ALADIN_JS_CDS, ALADIN_JS_SELFHOSTED]
+    assert res['requested'][1]['t'] == ALADIN_TIMEOUT_MS
+
+
+def test_overview_late_cds_keeps_the_first_library():
+    res = _overview({ALADIN_JS_CDS: {'kind': 'load', 'ms': ALADIN_TIMEOUT_MS + 900, 'name': 'cds'},
+                     ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 200, 'name': 'self'}})
+    assert res['built'] == ['self'] and res['final'] == 'self'
+
+
+def test_overview_late_cds_win_stops_the_chain():
+    """CDS answers after its timeout but before the self-hosted copy, which
+    then errors: the view is built on CDS, the mirror is never requested, and
+    no failure message covers the working view."""
+    res = _overview({ALADIN_JS_CDS: {'kind': 'load', 'ms': ALADIN_TIMEOUT_MS + 100, 'name': 'cds'},
+                     ALADIN_JS_SELFHOSTED: {'kind': 'error', 'ms': 500}})
+    assert res['built'] == ['cds'] and res['failed'] == []
+    assert ALADIN_JS_MIRROR not in [r['url'] for r in res['requested']]
+
+
+def test_overview_source_without_aladin_lite_moves_on():
+    res = _overview({ALADIN_JS_CDS: {'kind': 'empty', 'ms': 100},
+                     ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 100, 'name': 'self'}})
+    assert res['built'] == ['self'] and res['failed'] == []
+
+
+def test_overview_error_after_the_timeout_requests_the_next_source_once():
+    res = _overview({ALADIN_JS_CDS: {'kind': 'error', 'ms': ALADIN_TIMEOUT_MS + 100},
+                     ALADIN_JS_SELFHOSTED: {'kind': 'load', 'ms': 500, 'name': 'self'}})
+    assert res['built'] == ['self']
+    assert [r['url'] for r in res['requested']] == [ALADIN_JS_CDS, ALADIN_JS_SELFHOSTED]
 
 
 def test_field_overview_loader_script_parses():
