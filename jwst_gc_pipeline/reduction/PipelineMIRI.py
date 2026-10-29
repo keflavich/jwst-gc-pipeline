@@ -625,7 +625,13 @@ def main(filtername, Observations=None, regionname='brick',
         # scatter (<=7 mas on o078) until m2 writes rows and the tile is
         # regenerated.  That is expected; do not re-enable relative tweakreg
         # to remove it.
-        from jwst_gc_pipeline.reduction.alignment_config import inherited_bulk
+        #
+        # A field registered table_only_tie skips it for the same reason
+        # without inheriting anything: its absolute fit ties to the same
+        # catalog m2 checks, so it cancels the table's bulk row and the m2
+        # re-tie never converges (gc3571 o001, FieldAlignment.table_only_tie).
+        from jwst_gc_pipeline.reduction.alignment_config import (
+            inherited_bulk, table_only_tie)
         from jwst_gc_pipeline.reduction.unified_alignment import (
             inherited_abs_tie_complete)
         _inh = inherited_bulk(proposal_id, field, 'mirimage')
@@ -634,6 +640,12 @@ def main(filtername, Observations=None, regionname='brick',
                   f"{sorted({sh.inherited_from for sh in _member_shifts})} "
                   f"(alignment_config.InheritedBulk); the offsets table is the "
                   f"only per-frame correction")
+            tweakreg_parameters['skip'] = True
+            abs_refcat = None
+        elif table_only_tie(proposal_id, field):
+            print(f"TweakRegStep SKIPPED: {proposal_id} o{field} is "
+                  f"table_only_tie (alignment_config); the consensus offsets "
+                  f"table is the only per-frame correction")
             tweakreg_parameters['skip'] = True
             abs_refcat = None
         if abs_refcat is not None:

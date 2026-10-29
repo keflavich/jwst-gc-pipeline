@@ -237,6 +237,21 @@ class FieldAlignment:
     #: visit consensus that carries the same roll, plus one bulk shift per
     #: visit, so no row absorbed a module-centre displacement.
     roll_ready: bool = False
+    #: ``TABLE_CONSENSUS`` only: the consensus offsets table is this field's
+    #: ONLY per-frame correction, so the MIRI reducer skips TweakRegStep
+    #: (relative and absolute) for every association -- what it already does
+    #: when every frame inherits its bulk (``InheritedBulk``).  Needed where
+    #: Image3's absolute fit ties each frame to the same reference catalog
+    #: the m2 checkpoint checks against.  That fit starts from the
+    #: fix_alignment-shifted WCS and solves back to its own answer, so the
+    #: table's bulk row cancels and m2 reads the same residual after every
+    #: regeneration.  gc3571 o001 F560W, 2026-09-10 -> 09-13: applying the
+    #: table's (-16.7, -43.0) mas bulk changed the absolute tweakreg shift from
+    #: (20.4, -175.6) to (37.1, -132.6) mas, i.e. by exactly the bulk with
+    #: the sign flipped, and m2 read the visit consensus ~47 mas off VIRAC2
+    #: both times.  With the flag on, a frame whose visit has no row yet sits
+    #: at its raw pointing until m2 writes one.
+    table_only_tie: bool = False
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -896,11 +911,14 @@ ALIGNMENT_CONFIG = (
                "pipeline's business."),
     ),
     # gc3571 -- MIRI imaging of the CMZ from program 3571 (Yusef-Zadeh), five
-    # tiles around Sgr A*.  Identical reasoning to the gc1266 entry above.
+    # tiles around Sgr A*.  Identical reasoning to the gc1266 entry above,
+    # plus table_only_tie: Image3's absolute tweakreg cancelled o001's m2 bulk
+    # row on regeneration (see FieldAlignment.table_only_tie).
     FieldAlignment(
         proposal='3571', fields=('001', '003', '004', '005', '016'),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F560W',
+        table_only_tie=True,
         notes=('gc3571 MIRI imaging (F560W/F770W/F1000W/F1280W/F1500W, obs '
                '001/003/004/005/016 = Tiles 1/2/3/4/6, five adjoining '
                'pointings spanning 3.22 arcmin about (266.41973, -29.00509), '
@@ -1093,6 +1111,14 @@ def inherited_bulk(proposal_id, field, module):
     if cfg is None or cfg.source != TABLE_CONSENSUS:
         return None
     return cfg.inherit_bulk.get(module)
+
+
+def table_only_tie(proposal_id, field):
+    """Whether this field's consensus offsets table is its only per-frame
+    correction (:attr:`FieldAlignment.table_only_tie`)."""
+    cfg = resolve(str(proposal_id), str(field) if field is not None else None)
+    return (cfg is not None and cfg.source == TABLE_CONSENSUS
+            and cfg.table_only_tie)
 
 
 def reference_catalog_required(proposal_id, field):
