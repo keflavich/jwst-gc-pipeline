@@ -378,7 +378,9 @@ def _stale_against(info, rec, by_key, overall):
 def _who(info):
     """``m5/F200W/o001`` -- the record's identity, as the report spells it."""
     return "/".join(x for x in (info["stage"], info["filt"],
-                                info.get("module"),
+                                info.get("module") or (
+                                    f"{info['legacy_module']}(legacy)"
+                                    if info.get("legacy_module") else None),
                                 (f"o{info['obs']}" if info["obs"] else None))
                     if x)
 
@@ -460,8 +462,23 @@ def _prefer_tokenised(found):
             if _tokenised(i) or _key(i) not in tokenised]
 
 
+_LEGACY_CONTEXT_MODULE_RE = re.compile(r"(?:^|\s)(?P<module>[a-z]+) \[[^\]]*\]\s*$")
+
+
+def _legacy_module(rec):
+    """The merge module a module-less m7 cross-filter record was run for.
+
+    Read from ``context``, which ``cataloging._run_crossfilter_astrom_checkpoint``
+    callers write as ``f"{target} {module} [{phase}]"``.  Accepted only when the
+    token before the bracket is a plain lower-case word; anything else gives
+    ``None`` and the record keeps being graded.
+    """
+    m = _LEGACY_CONTEXT_MODULE_RE.search(str(rec.get("context") or ""))
+    return m.group("module") if m else None
+
+
 def _prefer_module_records(found):
-    """Drop a MODULE-LESS m7 cross-filter record that per-module records replace.
+    """Drop a MODULE-LESS m7 cross-filter record that a module record replaces.
 
     The production m7 loop runs the cross-filter check once per merge module
     (nrca, nrcb, merged).  Until issue #1254 all of them wrote
@@ -470,12 +487,14 @@ def _prefer_module_records(found):
     Records are now ``checkpoint_m7_crossfilter_<module>_oNNN`` and each is
     graded.
 
-    A module-less record is a legacy file: it holds whichever module ran last.
-    It is superseded -- not graded -- when a module record of the SAME
-    observation token exists that is at least as new, because that run
-    re-measured every module.  A module-less record NEWER than the module
-    records (or with none beside it) is still graded, so no verdict is dropped
-    unless a later one covers it.
+    A module-less record is a legacy file.  Its module is inferred from its
+    ``context`` (``_legacy_module``).  It is superseded -- not graded -- only
+    when a module record for THAT SAME module and the same (obs, proposal)
+    exists that is at least as new.  A run restricted to one module (cutouts,
+    ``MODULES=nrcb``) therefore cannot hide a legacy failure of another module.
+    A legacy record whose module cannot be inferred, or that is newer than the
+    matching module record, or has none, is still graded.  Kept legacy records
+    carry ``legacy_module`` so reports name them ``nrcb(legacy)``.
     """
     def _is_xf(i):
         return i["stage"] == "m7_crossfilter"
@@ -483,15 +502,21 @@ def _prefer_module_records(found):
     newest_module = {}
     for _p, i, r in found:
         if _is_xf(i) and i.get("module"):
-            key = (i["obs"], i["proposal"])
+            key = (i["obs"], i["proposal"], i["module"])
             d = str(r.get("date") or "")
             if key not in newest_module or d > newest_module[key]:
                 newest_module[key] = d
-    return [(p, i, r) for p, i, r in found
-            if not (_is_xf(i) and not i.get("module")
-                    and (i["obs"], i["proposal"]) in newest_module
-                    and str(r.get("date") or "")
-                    <= newest_module[(i["obs"], i["proposal"])])]
+    out = []
+    for p, i, r in found:
+        if _is_xf(i) and not i.get("module"):
+            mod = _legacy_module(r)
+            if mod:
+                newest = newest_module.get((i["obs"], i["proposal"], mod))
+                if newest is not None and str(r.get("date") or "") <= newest:
+                    continue
+                i = dict(i, legacy_module=mod)
+        out.append((p, i, r))
+    return out
 
 
 def main(argv=None):
