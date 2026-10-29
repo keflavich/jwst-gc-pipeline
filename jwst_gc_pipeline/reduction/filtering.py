@@ -57,7 +57,8 @@ except ImportError:
 try:
     from paths import basepath
 except ImportError:
-    basepath = '/blue/adamginsburg/adamginsburg/jwst/brick/'
+    from jwst_gc_pipeline.fields import basepath as _field_basepath
+    basepath = _field_basepath('brick')
 
 def get_fwhm(header, instrument_replacement='NIRCam'):
     """

@@ -772,23 +772,23 @@ class _Registry:
 
 
 def test_write_root_follows_the_registry_not_the_joined_path():
-    """gc-treasury writes to /blue while its --root is /orange.
+    """A field whose registered tree differs from --root writes there.
 
     Joining gave the free space of a filesystem the reduce never touches, and
     it kept passing all the way down to zero on the one field whose 139 tiles
     are the reason the gate exists.
     """
     reg = _Registry({'gc-treasury': _Known(
-        '/blue/adamginsburg/adamginsburg/jwst/gc-treasury/')})
+        '/mnt/otherdisk/jwst/gc-treasury/')})
     assert PF.write_root('/orange/adamginsburg/jwst', 'gc-treasury',
                          registry=reg) == \
-        '/blue/adamginsburg/adamginsburg/jwst/gc-treasury'
+        '/mnt/otherdisk/jwst/gc-treasury'
 
 
 def test_write_root_falls_back_for_an_unregistered_target():
     """Nothing better to consult, so keep what the operator typed.
 
-    Inventing a /blue path for a field nobody has declared would be a worse
+    Inventing a path for a field nobody has declared would be a worse
     guess than the one on the command line.
     """
     reg = _Registry({})

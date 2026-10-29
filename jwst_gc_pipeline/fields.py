@@ -318,13 +318,22 @@ BY_NAME = {f.name: f for f in FIELDS}
 def fields_basepath(target):
     """The data directory for one target.
 
-    An unregistered target gets the blue tree, which is what the ``if target in
+    An unregistered target gets the orange tree, which is what the ``if target in
     (...)`` branches this replaces did in their ``else``.
     """
     known = BY_NAME.get(target)
     if known is not None:
         return known.basepath
-    return f"{ROOTS['blue']}/{target}/"
+    return f"{ROOTS['orange']}/{target}/"
+
+
+def jwst_root():
+    """The data tree that holds every field directory, with a trailing slash.
+
+    For code that wants the tree ABOVE the per-target directories (the shared
+    PSF store), not one field's directory.
+    """
+    return f"{ROOTS['orange']}/"
 
 
 basepath = fields_basepath

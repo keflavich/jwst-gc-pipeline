@@ -201,7 +201,7 @@ def run_frame(frame_fn, psf_fn, label, outer_test=True, annulus_test=True):
 
 if __name__ == '__main__':
     which = sys.argv[1] if len(sys.argv) > 1 else 'nrca1'
-    base = '/blue/adamginsburg/adamginsburg/jwst/brick'
+    base = '/orange/adamginsburg/jwst/brick'
     cfg = {
         'nrca1': (f'{base}/F182M/pipeline/jw02221001001_07101_00001_nrca1_destreak_o001_crf.fits',
                   f'{base}/psfs/nircam_nrca1_f182m_fovp101_samp2_npsf16.fits'),

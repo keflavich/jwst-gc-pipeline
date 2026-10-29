@@ -49,13 +49,9 @@ _HARDCODED_ROOT = re.compile(
 #: Reviewed exceptions, as ``file: reason``.  A line matches an entry when the
 #: entry's ``needle`` appears in it.
 ALLOWED = (
-    # get_psf_model's `basepath` is the tree ABOVE the per-target directories:
-    # it becomes `jwst_root`, which locates the shared PSF store (psfs_shared/)
-    # that every target draws from.  One shared location, so no field's `root:`
-    # applies.  (The `basepath = f'{basepath}/{target}'` line below it is
-    # assigned and never read.)
-    ("jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
-     "basepath='/blue/adamginsburg/adamginsburg/jwst/'"),
+    # (none.  get_psf_model's `basepath` is the tree ABOVE the per-target
+    # directories, which locates the shared PSF store; it now comes from
+    # `fields.jwst_root()`.)
 )
 
 
@@ -99,12 +95,10 @@ def test_allowed_entries_still_match():
                        + "\n  ".join(stale))
 
 
-#: Which tree each field lives on.  The `localdata` check below cannot notice a
-#: blue<->orange flip for brick or cloudc, because /orange/.../brick is a symlink
-#: into the blue tree -- so the two fields that have one are exactly the two it
-#: is blind to.  Pin them here instead, so moving a field has to be deliberate.
+#: Which tree each field lives on.  Pin them here, so moving a field has to be
+#: deliberate (#937: every field is on orange).
 EXPECTED_ROOTS = {
-    'arches': 'orange', 'brick': 'blue', 'cloudc': 'blue',
+    'arches': 'orange', 'brick': 'orange', 'cloudc': 'orange',
     'cloudef': 'orange',
     # 2092 obs 005 (CLOUDEF-REFERENCE), split out of cloudef because it is a
     # control field 11.77' away sharing no sources with CLOUDEF-CENTER.
@@ -151,8 +145,8 @@ def test_registry_basepath_names_the_field():
 def test_registry_basepath_matches_the_tree_on_disk():
     """On HiPerGator the registered path and the retired hard-coded one agree.
 
-    The hard-coded ``/orange/...`` path worked for ``root: blue`` fields only
-    because those directories are symlinks into the blue tree.  Where both
+    The retired hard-coded ``/orange/...`` path and the registry path name the
+    same tree now that every field is ``root: orange``.  Where both
     exist, they must still resolve to the same place -- otherwise this change
     moved where a field reduces.
     """

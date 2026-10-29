@@ -30,7 +30,8 @@ import matplotlib.patches as patches
 try:
     from brick2221.analysis.paths import basepath
 except ImportError:
-    basepath = '/blue/adamginsburg/adamginsburg/jwst/brick/'
+    from jwst_gc_pipeline.fields import basepath as _field_basepath
+    basepath = _field_basepath('brick')
 
 from jwst_gc_pipeline.reduction import filtering
 from jwst_gc_pipeline.reduction.filtering import get_fwhm

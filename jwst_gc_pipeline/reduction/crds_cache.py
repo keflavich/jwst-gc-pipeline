@@ -26,7 +26,7 @@ every reference the cache holds; it does nothing for one it does not.  Measured
 ``jwst_miri_pars-tweakregstep_0020.asdf``, and **no CRDS tree any field's
 ``CRDS_PATH`` resolves to holds that file**.  The 21 ``<field>/crds`` paths are
 17 symlinks onto four real trees
-(``/blue/adamginsburg/adamginsburg/jwst/brick/crds``,
+(``/orange/adamginsburg/jwst/brick/crds``,
 ``/orange/adamginsburg/jwst/crds``, ``.../w51/crds``, ``.../cloudc/crds``), and
 none of the four has it; the archive's one copy sits in a 2024 personal tree
 (``/orange/adamginsburg/jwst/sgrb2/NB/crds``) that no field points at.  So every

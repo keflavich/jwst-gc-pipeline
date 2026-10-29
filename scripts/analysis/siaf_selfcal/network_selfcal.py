@@ -20,7 +20,7 @@ from astropy.table import Table
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-B = '/blue/adamginsburg/adamginsburg/jwst/brick'
+B = '/orange/adamginsburg/jwst/brick'
 # bands: comma list of band[:stage], default stage resbgsub_m7
 spec = [(b.split(':')[0], b.split(':')[1] if ':' in b else 'resbgsub_m7') for b in sys.argv[1].split(',')]
 bands = [b for b, _ in spec]

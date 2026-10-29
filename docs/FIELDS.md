@@ -112,11 +112,10 @@ appear:
 ```yaml
 roots:
   orange: /orange/adamginsburg/jwst
-  blue: /blue/adamginsburg/adamginsburg/jwst
 ```
 
 A field's `root:` names one of them. Pointing the pipeline at another disk is an
-edit to those two lines. A test checks that no other absolute path creeps into
+edit to that line. A test checks that no other absolute path creeps into
 the file.
 
 ## What this replaced

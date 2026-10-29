@@ -33,7 +33,7 @@ Typical campaign::
 
     # report only
     python scripts/logs/thin_pipeline_logs.py /blue/adamginsburg/adamginsburg/logs/jwst \
-        /blue/adamginsburg/adamginsburg/brick_logs /blue/adamginsburg/adamginsburg/jwst/brick/logs
+        /blue/adamginsburg/adamginsburg/brick_logs /orange/adamginsburg/jwst/brick/logs
     # thin + compress everything older than a week, per-source lines too
     python scripts/logs/thin_pipeline_logs.py --execute --aggressive --compress \
         --min-age-days 7 <same dirs>

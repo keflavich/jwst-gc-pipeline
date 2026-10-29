@@ -2455,7 +2455,7 @@ def get_psf_model(filtername, proposal_id, field,
                   target='brick',
                   stampsz=19,
                   oversample=1,
-                  basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                  basepath=field_registry.jwst_root(),
                   psf_cache_dir=None,
                   instrument=None):
     """
@@ -3424,7 +3424,7 @@ def _render_psf_grids(filtername, proposal_id, field, options, obsdate,
                                 use_webbpsf=True, use_grid=options.each_exposure,
                                 blur=options.blur, target=options.target,
                                 obsdate=obsdate,
-                                basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                                basepath=field_registry.jwst_root(),
                                 psf_cache_dir=os.path.join(basepath, 'psfs'),
                                 instrument=instrument)
         return grid

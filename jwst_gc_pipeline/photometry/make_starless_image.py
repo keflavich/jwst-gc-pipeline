@@ -34,6 +34,7 @@ import glob
 import os
 import warnings
 
+from jwst_gc_pipeline import fields as field_registry
 import numpy as np
 from scipy.ndimage import gaussian_filter, distance_transform_edt
 from astropy.io import fits
@@ -60,13 +61,13 @@ TARGETS = {
         ],
     ),
     'brick': dict(
-        basepath='/blue/adamginsburg/adamginsburg/jwst/brick',
+        basepath=field_registry.basepath('brick').rstrip('/'),
         filters=['F115W', 'F182M', 'F187N', 'F200W', 'F212N',
                  'F356W', 'F405N', 'F410M', 'F444W', 'F466N'],
         catalog_rel='catalogs/seed_union_iter3_brick.fits',
     ),
     'cloudc': dict(
-        basepath='/blue/adamginsburg/adamginsburg/jwst/cloudc',
+        basepath=field_registry.basepath('cloudc').rstrip('/'),
         filters=['F182M', 'F187N', 'F212N', 'F405N', 'F410M', 'F466N'],
         catalog_rel='catalogs/seed_union_iter3_cloudc.fits',
     ),

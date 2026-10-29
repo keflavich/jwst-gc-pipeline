@@ -86,10 +86,9 @@ BLUE_JWST = '/blue/adamginsburg/adamginsburg/jwst/'
 def field_root(field_name):
     """The field's address under ORANGE_JWST.
 
-    The registry still resolves ``brick`` and ``cloudc`` under /blue (#937);
-    those map to the same relative path under /orange, which must exist
-    (``/orange/.../cloudc`` is a symlink to the /blue tree, ``/orange/.../brick``
-    is its own copy of it).
+    The registry resolves every field under /orange (#937).  A basepath that
+    still names the retired /blue tree maps to the same relative path under
+    /orange, which must exist.
     """
     from jwst_gc_pipeline import fields
     base = os.path.normpath(fields.fields_basepath(field_name))

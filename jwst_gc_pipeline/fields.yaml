@@ -9,11 +9,10 @@
 # sorts proposals numerically and filters by wavelength, so what the pipeline
 # sees is the same whatever order you use.
 
-# The two data trees.  A field's `root:` names one of these, and this is the
+# The data tree.  A field's `root:` names one of these, and this is the
 # only place the absolute paths appear.
 roots:
   orange: /orange/adamginsburg/jwst
-  blue: /blue/adamginsburg/adamginsburg/jwst
 
 fields:
 
@@ -31,7 +30,7 @@ fields:
         filters: [f212n, f323n]
 
   brick:
-    root: blue
+    root: orange
     fov_region: regions_/nircam_brick_fov.reg
     observations:
       '1182':
@@ -75,7 +74,7 @@ fields:
           miri: ['003']
 
   cloudc:
-    root: blue
+    root: orange
     fov_region: regions_/nircam_cloudc_fov.reg
     observations:
       '2221':

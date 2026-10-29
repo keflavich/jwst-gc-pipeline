@@ -194,9 +194,8 @@ def test_every_region_basepath_matches_the_registry():
     def _real(path):
         # The FIELD DIRECTORY NAME, not the absolute path.
         #
-        # `/orange/adamginsburg/jwst/<field>` is a symlink to
-        # `/blue/adamginsburg/adamginsburg/jwst/<field>`; the registry uses one
-        # spelling and the regions the other.  Resolving with `os.path.realpath`
+        # Older region files and registry entries spelled a field's tree two
+        # ways (an /orange path and a /blue path to the same directory).  Resolving with `os.path.realpath`
         # reconciles them on a machine that HAS those trees and silently does
         # not on one that does not -- `realpath` of a non-existent path is the
         # path itself -- so that version passed here and failed in CI.
