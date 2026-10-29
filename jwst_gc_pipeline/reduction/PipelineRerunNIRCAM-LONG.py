@@ -1562,6 +1562,18 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             apply_distortion_scale_correction)
         apply_distortion_scale_correction(fn)
 
+    # Per-(detector, filter) placement onto the F212N frame (issue #1133).  ON
+    # BY DEFAULT for F162M/F164N: their distortion references pin every filter
+    # to one V2Ref/V3Ref per detector while their plate scale is ~220 ppm
+    # larger, which leaves each SW detector 5-10 mas toward its module centre
+    # and fails the m7 cross-filter gate (#1255).  FILTER_FRAME_CORRECTION=1
+    # extends it to every filter the shipped table covers, =0 disables it.
+    # A rigid per-detector shift with the module mean removed, so it commutes
+    # with the reference tie and moves no offsets-table module row.
+    from jwst_gc_pipeline.reduction.filter_frame_correction import (
+        apply_configured_filter_frame_correction)
+    apply_configured_filter_frame_correction(fn)
+
     from jwst_gc_pipeline.reduction.roll_correction import (
         roll_correction_enabled, ensure_roll_correction)
     if roll_correction_enabled():
