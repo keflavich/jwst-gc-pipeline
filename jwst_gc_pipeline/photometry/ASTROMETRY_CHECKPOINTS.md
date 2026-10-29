@@ -311,6 +311,12 @@ cross-filter" = the m7 cross-band merge.
 
 ## The cross-filter residual field (m7, measurement only)
 
+**Release-gate staleness of the m7 record (issue #1237).** The record has no
+filter, so the gate dates it against the newest m2 of its OWN observation from
+any filter (for a joint `_o002-998` token, the newest m2 of either
+observation). Another observation's m2 never supersedes it. Only a record with
+no observation token falls back to the field's newest m2.
+
 Alongside its two gates the m7 checkpoint MEASURES the coherent,
 position-dependent part of each filter-to-anchor residual
 (`measure_residual_field`), stored as `filters[i]["field"]` in
