@@ -36,6 +36,7 @@ import preview_plan
 from stage_release import FIELDS, field_release_dir
 import astrometry_provenance
 from jwst_gc_pipeline.aladin_controls import aladin_controls_js
+from jwst_gc_pipeline.aladin_loader import aladin_fallback_chain_html
 
 # Display label per group folder (None = Galactic Center, the default survey).
 GROUP_LABEL = {
@@ -2086,7 +2087,9 @@ def render_cmz_explorer(hips_url, cat_hips_url=None, moc_url=None,
     """Standalone Aladin Lite page: CMZ color HiPS + catalog HiPS + coverage MOC.
 
     ``*_url`` are relative to the site root (the products live in the release
-    tree).  Aladin Lite v3 loads from the CDS CDN; the HiPS/catalog/MOC are served
+    tree).  Aladin Lite v3 loads from the CDS CDN, falling back to a
+    self-hosted copy when CDS fails or does not answer within 8 s (see
+    ``jwst_gc_pipeline.aladin_loader``); the HiPS/catalog/MOC are served
     from the same host as the page.
     """
     js_cat = (f"aladin.addCatalog(A.catalogHiPS('{cat_hips_url}', "
@@ -2103,8 +2106,7 @@ def render_cmz_explorer(hips_url, cat_hips_url=None, moc_url=None,
                "<a href='index.html'>← all fields</a></div></header><main>")
     out.append("<div id='aladin-lite-div' style='width:100%;height:75vh;"
                "border-radius:8px;overflow:hidden'></div>")
-    out.append("<script src='https://aladin.cds.unistra.fr/AladinLite/api/v3/"
-               "latest/aladin.js' charset='utf-8'></script>")
+    out.append(aladin_fallback_chain_html())
     out.append(
         "<script>A.init.then(() => {"
         f"const aladin = A.aladin('#aladin-lite-div', {{cooFrame:'galactic', "

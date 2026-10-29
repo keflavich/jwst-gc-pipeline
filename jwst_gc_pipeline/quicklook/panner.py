@@ -14,9 +14,7 @@ coadd was built from, not from the observing schedule.
 import json
 
 from ..aladin_controls import ALADIN_CONTROLS
-
-ALADIN_CSS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.css'
-ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
+from ..aladin_loader import aladin_fallback_chain_html
 
 HIPS_BASE = 'https://starformation.astro.ufl.edu/avm_images/'
 
@@ -459,7 +457,6 @@ def render_page(data_url=DATA_FILE):
 <html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>JWST Galactic Center — slow panner</title>
-<link rel=stylesheet href="{ALADIN_CSS}">
 <style>{CSS}</style>
 </head><body>
 <div id=sky></div>
@@ -481,7 +478,7 @@ def render_page(data_url=DATA_FILE):
     at full resolution, drifting across the tiles that have imagery.
     <a href="index.html">back to the release</a></span>
 </div>
-<script src="{ALADIN_JS}" charset=utf-8></script>
+{aladin_fallback_chain_html()}
 <script>
 const DATA_URL = {json.dumps(data_url)};
 const ALADIN_CONTROLS = {json.dumps(ALADIN_CONTROLS)};

@@ -17,6 +17,8 @@ import os
 import shutil
 import subprocess
 
+from jwst_gc_pipeline.aladin_loader import patch_hips_landing_page
+
 
 def _java(jar_env, jar=None):
     if shutil.which('java') is None:
@@ -34,6 +36,21 @@ def _run(cmd):
     subprocess.run(cmd, check=True)
 
 
+def _patch_hips_landing_page(out_dir):
+    """Point ``out_dir/index.html``'s CDS landing-template ``<script>`` tag at
+    the fallback chain, which loads the patched template from the self-hosted
+    copies first (:func:`jwst_gc_pipeline.aladin_loader.patch_hips_landing_page`).
+
+    Hipsgen's own ``INDEX`` action writes ``index.html``; an ``RGB``-only run
+    has none, and this is then a no-op.
+    """
+    index_html = os.path.join(out_dir, 'index.html')
+    if not os.path.exists(index_html):
+        return
+    status = patch_hips_landing_page(index_html)
+    print(f'landing page: {status}\t{index_html}', flush=True)
+
+
 def build_mono_hips(in_dir, out_dir, order=13, frame='galactic', jar=None,
                     extra=()):
     """Build/UPDATE a mono image HiPS from the FITS mosaics in ``in_dir``.
@@ -45,6 +62,7 @@ def build_mono_hips(in_dir, out_dir, order=13, frame='galactic', jar=None,
     base = ['java', '-jar', jar, f'in={in_dir}', f'out={out_dir}',
             f'order={order}', f'hips_frame={frame}']
     _run(base + ['INDEX', 'TILES', 'MOC'] + list(extra))
+    _patch_hips_landing_page(out_dir)
     return out_dir
 
 
@@ -59,6 +77,7 @@ def build_rgb_hips(out_dir, red_hips, green_hips, blue_hips, jar=None, extra=())
     cmd = ['java', '-jar', jar, f'out={out_dir}',
            f'red={red_hips}', f'green={green_hips}', f'blue={blue_hips}', 'RGB']
     _run(cmd + list(extra))
+    _patch_hips_landing_page(out_dir)
     return out_dir
 
 
