@@ -295,14 +295,66 @@ def test_staleness_is_judged_per_FILTER_not_per_field(gate, tmp_path):
     assert gate.main(['--field', 'fld']) == 1
 
 
-def test_the_crossfilter_record_is_judged_against_the_fields_newest_m2(
+def test_the_crossfilter_record_is_judged_against_its_observations_newest_m2(
         gate, tmp_path):
-    """It has no filter of its own, so it has no per-filter baseline; the
-    field's newest m2 is the only thing that can supersede it."""
+    """It has no filter of its own, so it has no per-filter baseline; its
+    observation's newest m2 (any filter) is what can supersede it (#1237)."""
     _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
            '2026-08-16T00:00:00Z')
     _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
            '2026-08-02T00:00:00Z', failures=['F212N vs F405N: 21.4 mas'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+# --------------------- m7 cross-filter staleness is per observation (#1237)
+
+def test_another_observations_m2_does_not_supersede_a_crossfilter_failure(
+        gate, tmp_path, capsys):
+    """o004 re-ran m2 after o001's m7 cross-filter check failed.  The o001
+    record is about o001's products and must still be graded."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-01T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['F212N vs F405N: 21.4 mas'])
+    _dated(tmp_path, 'checkpoint_m2_F212N_o004_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_the_same_observations_newer_m2_still_supersedes_it(gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['stale'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_a_crossfilter_record_is_superseded_by_an_m2_of_any_filter_of_its_obs(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F410M_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['stale'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_a_joint_token_crossfilter_record_uses_either_observations_m2(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-08-01T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m2_F212N_o998_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002-998_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['stale via o998'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_an_obsless_crossfilter_record_falls_back_to_the_fields_newest_m2(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o004_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['no observation'])
     assert gate.main(['--field', 'fld']) == 3
 
 
@@ -982,3 +1034,4 @@ def test_a_stale_recorded_threshold_is_called_out(gate, tmp_path, capsys):
     assert gate.main(['--field', 'fld']) == 0
     out = capsys.readouterr().out
     assert 'STALE THRESHOLDS' in out, out
+

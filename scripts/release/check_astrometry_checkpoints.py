@@ -150,8 +150,13 @@ def _newest_correcting_records(found):
             continue
         if overall is None or _date(entry) > _date(overall):
             overall = entry
-        for key in ((entry[1]["filt"], entry[1]["obs"]),
-                    (entry[1]["filt"], None)):
+        # ``(None, obs)``: the newest m2 of an observation from ANY filter, which
+        # is the baseline an m7 cross-filter record (no filter of its own) is
+        # dated against.  A joint ``_o002-998`` m2 describes each part.
+        keys = [(entry[1]["filt"], entry[1]["obs"]), (entry[1]["filt"], None)]
+        if entry[1]["obs"]:
+            keys += [(None, part) for part in entry[1]["obs"].split("-")]
+        for key in keys:
             if key not in by_key or _date(entry) > _date(by_key[key]):
                 by_key[key] = entry
     return by_key, overall
@@ -365,10 +370,25 @@ def _stale_against(info, rec, by_key, overall):
     """The m2 date this frozen record is older than, or ``""`` if it is current.
 
     Most specific baseline first: the same filter and observation, then the same
-    filter in any observation, then the field's newest m2 (which is what an m7
-    cross-filter record -- it has no filter of its own -- must use).
+    filter in any observation.
+
+    An m7 cross-filter record has no filter of its own.  It is dated against
+    the newest m2 of ITS OWN observation from any filter (issue #1237); for a
+    joint ``_o002-998`` token, the newest m2 of either observation.  Another
+    observation's m2 re-reduces other exposures and says nothing about this
+    record's products, so it never supersedes it.  Only a record with no
+    observation falls back to the field's newest m2.  A record whose
+    observation has no m2 of its own at all has nothing to be older than and is
+    graded.
     """
     date = str(rec.get("date") or "")
+    if info["filt"] is None and info["obs"]:
+        own = [by_key[(None, part)] for part in info["obs"].split("-")
+               if (None, part) in by_key]
+        if not own:
+            return ""
+        newest = max(own)
+        return newest if date < newest else ""
     for key in ((info["filt"], info["obs"]), (info["filt"], None)):
         if key in by_key:
             return by_key[key] if date < by_key[key] else ""
