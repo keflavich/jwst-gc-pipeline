@@ -11,12 +11,13 @@ hangs the page load and then leaves ``buildLandingPage`` undefined, so the
 ``<script>buildLandingPage(...)</script>`` call the template itself drives
 throws and the landing page renders blank.
 
-This script rewrites that one ``<script>`` tag in place: self-hosted
-(starformation) -> data.rc mirror -> CDS, then a stub ``buildLandingPage``
+This script rewrites that one ``<script>`` tag in place: data.rc ->
+self-hosted (starformation) -> CDS, then a stub ``buildLandingPage``
 that says the viewer is unavailable while leaving the HiPS directory itself
 (``properties``, ``Norder*/`` tiles) untouched and reachable.  The template
 comes from the self-hosted copies first because it is a patched copy of the
-CDS one: it loads Aladin Lite from the page's ``alScriptURL`` (CDS) first and
+CDS one, and from data.rc before starformation because data.rc serves the
+/orange copy directly while the starformation copy is synced by hand.  It loads Aladin Lite from the page's ``alScriptURL`` (CDS) first and
 falls back to the self-hosted copies when CDS fails or does not answer within
 8 s per source (see ``jwst_gc_pipeline/aladin_loader.py``).
 

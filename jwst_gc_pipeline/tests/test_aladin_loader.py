@@ -21,7 +21,7 @@ import pytest
 
 from jwst_gc_pipeline.aladin_loader import (
     ALADIN_JS_CDS, ALADIN_JS_MIRROR, ALADIN_JS_SELFHOSTED, ALADIN_JS_URLS,
-    ALADIN_TIMEOUT_MS, LANDING_CHAIN, LANDING_JS_CDS, LANDING_JS_MIRROR,
+    ALADIN_TIMEOUT_MS, LANDING_CHAIN, LANDING_JS_CDS, LANDING_JS_MIRROR, LANDING_JS_SELFHOSTED,
     LANDING_MARKER, MARKER, aladin_fallback_chain_html, patch_hips_landing_html,
 )
 
@@ -323,9 +323,19 @@ def test_field_overview_loader_script_parses():
                        capture_output=True, timeout=60, check=True)
 
 
+def test_landing_template_order_is_data_rc_starformation_cds():
+    """data.rc serves the /orange template directly; the starformation copy
+    is synced by hand and can lag (on 2026-10-28 it still loaded Aladin Lite
+    self-hosted first), so data.rc comes first and CDS's unpatched template last."""
+    first = [ln.strip() for ln in LANDING_CHAIN.splitlines() if ln.strip().startswith('<script src=')]
+    assert first == [f'<script src="{LANDING_JS_MIRROR}"></script>']
+    assert (LANDING_CHAIN.index(LANDING_JS_MIRROR) < LANDING_CHAIN.index(LANDING_JS_SELFHOSTED)
+            < LANDING_CHAIN.index(LANDING_JS_CDS))
+
+
 def test_each_landing_fallback_loads_only_when_the_template_is_missing():
     fallbacks = [ln.strip() for ln in LANDING_CHAIN.splitlines()
-                 if LANDING_JS_MIRROR in ln or LANDING_JS_CDS in ln]
+                 if LANDING_JS_SELFHOSTED in ln or LANDING_JS_CDS in ln]
     assert len(fallbacks) == 2
     assert all(ln.startswith("<script>typeof buildLandingPage !== 'undefined'"
                              " || document.write(") for ln in fallbacks)

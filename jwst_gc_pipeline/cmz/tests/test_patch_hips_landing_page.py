@@ -41,7 +41,7 @@ def test_patches_the_cds_tag():
     assert status == 'patched'
     assert m.MARKER in new
     assert new.count(m.CDS) == 1
-    assert new.index(m.SELFHOSTED) < new.index(m.MIRROR) < new.index(m.CDS)
+    assert new.index(m.MIRROR) < new.index(m.SELFHOSTED) < new.index(m.CDS)
     assert 'buildLandingPage' in new
 
 

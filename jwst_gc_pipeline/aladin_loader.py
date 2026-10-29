@@ -165,7 +165,10 @@ def aladin_fallback_chain_html():
 # tag fails the same way: the page hangs while CDS is unreachable, then
 # ``buildLandingPage`` is undefined and the landing page renders blank.  The
 # template is a patched copy of the CDS one, so the chain loads it from the
-# self-hosted copies first and CDS last.  The self-hosted template
+# self-hosted copies first and CDS last.  The data.rc copy is first: it is
+# served straight from the /orange tree where the template is maintained,
+# while the starformation copy is synced from it by hand and can lag (on
+# 2026-10-28 it still loaded Aladin Lite self-hosted first).  The template
 # (``/vendor/hips-templates/``) then loads Aladin Lite in the same order as
 # :data:`ALADIN_JS_URLS` -- CDS first, with the same per-source timeout -- and
 # opens the viewer on the HiPS itself.
@@ -184,10 +187,11 @@ LANDING_JS_SELFHOSTED = "https://starformation.astro.ufl.edu/vendor/hips-templat
 LANDING_JS_MIRROR = "https://data.rc.ufl.edu/pub/adamginsburg/vendor/hips-templates/hips-landing-page.js"
 LANDING_JS_CDS = "https://aladin.cds.unistra.fr/hips-templates/hips-landing-page.js"
 
-LANDING_CHAIN = f"""    <!-- {LANDING_MARKER}: patched HiPS landing template from self-hosted copies first, CDS template last;
-         the template loads Aladin Lite from CDS first, self-hosted copies on failure.  See /vendor/README.txt. -->
-    <script src="{LANDING_JS_SELFHOSTED}"></script>
-    <script>typeof buildLandingPage !== 'undefined' || document.write('<script src="{LANDING_JS_MIRROR}"><\\/script>');</script>
+LANDING_CHAIN = f"""    <!-- {LANDING_MARKER}: patched HiPS landing template from self-hosted copies first (data.rc, then
+         starformation), CDS template last; the template loads Aladin Lite from CDS first, self-hosted copies
+         on failure.  See /vendor/README.txt. -->
+    <script src="{LANDING_JS_MIRROR}"></script>
+    <script>typeof buildLandingPage !== 'undefined' || document.write('<script src="{LANDING_JS_SELFHOSTED}"><\\/script>');</script>
     <script>typeof buildLandingPage !== 'undefined' || document.write('<script src="{LANDING_JS_CDS}"><\\/script>');</script>
     <script>
     if (typeof buildLandingPage === 'undefined') {{
