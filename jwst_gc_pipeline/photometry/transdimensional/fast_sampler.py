@@ -446,34 +446,60 @@ def _resid_w(r, s):
 
 
 @njit(cache=True)
-def _resid_wsum(resid, swt, i0, i1, j0, j1):
-    """sum of the birth weights over the padded pixels [i0, i1) x [j0, j1)."""
-    z = 0.0
-    for i in range(i0, i1):
-        for j in range(j0, j1):
-            z += _resid_w(resid[i, j], swt[i, j])
-    return z
+def _wres_full(resid, swt, wimg, zreg, rmap, cmap, nregx, nlab):
+    """birth weights of all domain pixels into wimg and their sums per region into zreg
+    (rmap / cmap: region row / column of a padded pixel row / column, -1 outside the domain)."""
+    zreg[:nlab] = 0.0
+    for i in range(resid.shape[0]):
+        rg = rmap[i]
+        if rg < 0:
+            continue
+        for j in range(resid.shape[1]):
+            cg = cmap[j]
+            if cg < 0:
+                continue
+            w = _resid_w(resid[i, j], swt[i, j])
+            wimg[i, j] = w
+            zreg[rg * nregx + cg] += w
 
 
 @njit(cache=True)
-def _resid_wsum_minus(resid, dm, swt, i0, i1, j0, j1):
-    """as _resid_wsum for the residual ``resid - dm`` (dm: the change of the model)."""
-    z = 0.0
+def _wres_box(resid, swt, wimg, zreg, rmap, cmap, nregx, i0, i1, j0, j1):
+    """refresh wimg and zreg on the padded pixels [i0, i1) x [j0, j1) after resid changed there."""
     for i in range(i0, i1):
+        rg = rmap[i]
+        if rg < 0:
+            continue
         for j in range(j0, j1):
-            z += _resid_w(resid[i, j] - dm[i, j], swt[i, j])
-    return z
+            cg = cmap[j]
+            if cg < 0:
+                continue
+            w = _resid_w(resid[i, j], swt[i, j])
+            zreg[rg * nregx + cg] += w - wimg[i, j]
+            wimg[i, j] = w
 
 
 @njit(cache=True)
-def _resid_pick(resid, swt, i0, i1, j0, j1, u):
-    """the pixel of [i0, i1) x [j0, j1) at which the running sum of the birth
-    weights first exceeds u (0 <= u < their total)."""
+def _wres_slot(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_ix, ph_iy, ph_lv, q0, q1, ncl, box):
+    """_wres_box over the pixels an accepted slot changed (its box, or each of its stamps)."""
+    if box[0] == 1:
+        _wres_box(resid, swt, wimg, zreg, rmap, cmap, nregx, box[1], box[2], box[3], box[4])
+        return
+    for q in range(q0, q1):
+        r = ncl[ph_lv[q]] // 2
+        _wres_box(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_iy[q] - r, ph_iy[q] + r + 1,
+                  ph_ix[q] - r, ph_ix[q] + r + 1)
+
+
+@njit(cache=True)
+def _wres_pick(wimg, i0, i1, j0, j1, u):
+    """the pixel of [i0, i1) x [j0, j1) at which the running sum of wimg first exceeds u
+    (0 <= u < their total; the last positive pixel when rounding leaves u unreached)."""
     c = 0.0
     li, lj = i0, j0
     for i in range(i0, i1):
         for j in range(j0, j1):
-            w = _resid_w(resid[i, j], swt[i, j])
+            w = wimg[i, j]
             if w > 0:
                 c += w
                 li, lj = i, j
@@ -657,7 +683,7 @@ def _gibbs_bkg(resid, model, wt, wpos, Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, Li
 
 @njit(cache=True)
 def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
-          resid, model, wt, wpos, swt, dm, dm2,
+          resid, model, wt, wpos, swt, wimg, zreg, rmap, cmap, dm, dm2,
           cf3, ncl, ncw, fthr, ta, tb, tmp,
           sx, sy, sf, sreg, spos, nst, rlist, rcnt,
           Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, LinvT, rhs, Abuf, Cbuf, rowbuf,
@@ -681,6 +707,8 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
     # residual-guided births: region cell m <-> padded pixel m + off
     wres = par[19]
     off = int(np.round(P - dp))
+    if wres > 0:
+        _wres_full(resid, swt, wimg, zreg, rmap, cmap, nregx, nregx * nregy)
     for it in range(nloop):
         u = np.random.random()
         typ = 0
@@ -692,6 +720,8 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
         if typ == 3:
             _gibbs_bkg(resid, model, wt, wpos, Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, LinvT, P, ny0, nx0,
                        rhs, Abuf, Cbuf, rowbuf)
+            if wres > 0:
+                _wres_full(resid, swt, wimg, zreg, rmap, cmap, nregx, nregx * nregy)
             stats[3, 1] += 1
             stats[3, 2] += 1
             continue
@@ -787,9 +817,9 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                         j0 = int(rx0[col]) + off
                         j1 = int(rx1[col]) + off
                         if wres > 0:
-                            zr = _resid_wsum(resid, swt, i0, i1, j0, j1)
+                            zr = zreg[r]
                         if zr > 0 and np.random.random() < wres:
-                            pi, pj = _resid_pick(resid, swt, i0, i1, j0, j1, np.random.random() * zr)
+                            pi, pj = _wres_pick(wimg, i0, i1, j0, j1, np.random.random() * zr)
                             x1 = pj - P + np.random.random() - 0.5
                             y1 = pi - P + np.random.random() - 0.5
                         else:
@@ -800,7 +830,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                         if zr > 0:
                             pj = int(np.floor(x1 + 0.5 + P))
                             pi = int(np.floor(y1 + 0.5 + P))
-                            lq = -np.log((1.0 - wres) + wres * rarea[r] * _resid_w(resid[pi, pj], swt[pi, pj]) / zr)
+                            lq = -np.log((1.0 - wres) + wres * rarea[r] * wimg[pi, pj] / zr)
                         sl_fac[nsl] = lq
                         f1 = fmin * np.exp(np.random.exponential(1.0 / (slope - 1.0)))
                         sl_kind[nsl] = _K_BIRTH
@@ -975,7 +1005,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                                           sl_box[a])
         if typ == 1 and wres > 0:
             # log(A_r q'(x)) of the reverse birth: the region's birth density after the
-            # death, from resid - dm (a death is one stamp, kept in dm in box mode)
+            # death, from resid - dm on the death's stamp (one stamp, kept in dm in box mode)
             for a in range(nsl):
                 if sl_kind[a] != _K_DEATH:
                     continue
@@ -986,7 +1016,11 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                 i1 = int(ry1[row]) + off
                 j0 = int(rx0[col]) + off
                 j1 = int(rx1[col]) + off
-                zr = _resid_wsum_minus(resid, dm, swt, i0, i1, j0, j1)
+                bx = sl_box[a]
+                zr = zreg[r]
+                for ii in range(max(bx[1], i0), min(bx[2], i1)):
+                    for jj in range(max(bx[3], j0), min(bx[4], j1)):
+                        zr += _resid_w(resid[ii, jj] - dm[ii, jj], swt[ii, jj]) - wimg[ii, jj]
                 if zr > 0:
                     i = sl_a[a]
                     pj = int(np.floor(sx[i] + 0.5 + P))
@@ -999,6 +1033,9 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             for a in range(nsl):
                 acc = np.log(np.random.random()) < sl_dl[a] + sl_fac[a]
                 _slot_apply(dm, dm2, resid, model, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a], ncl, sl_box[a], acc)
+                if acc and wres > 0:
+                    _wres_slot(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a],
+                               ncl, sl_box[a])
                 if acc:
                     nacc += 1
                     for b in range(sl_a[a], sl_b[a]):
@@ -1055,6 +1092,9 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
         for a in range(nsl):
             acc = sl_fac[a] > 0
             _slot_apply(dm, dm2, resid, model, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a], ncl, sl_box[a], acc)
+            if acc and wres > 0:
+                _wres_slot(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a],
+                           ncl, sl_box[a])
             kind = sl_kind[a]
             if kind == _K_BIRTH:
                 stats[_BIRTH, 1] += 1
@@ -1155,6 +1195,11 @@ class FastPCATSampler(PCATSampler):
             raise ValueError(f'birth_resid_frac must be in [0, 1), got {wres}')
         if wres > 0 and not float(self.dpad).is_integer():
             raise ValueError('birth_resid_frac needs an integer domain_pad')
+        # residual-guided births: birth weight per pixel, its sum per region, and the region
+        # row / column of each padded pixel row / column (set by _set_offset)
+        self.wimg = np.zeros(self.wt32.shape if wres > 0 else (1, 1))
+        self.rmap = np.full(self.wt32.shape[0], -1, np.int64)
+        self.cmap = np.full(self.wt32.shape[1], -1, np.int64)
         self.data32 = np.zeros((ny, nx + xpad), np.float32)
         self.data32[:, :nx] = self.data[0]
         self.dm = np.zeros_like(self.data32)
@@ -1230,6 +1275,7 @@ class FastPCATSampler(PCATSampler):
                              legacy, float(self.pads[0]), float(cfg.max_nsrc), float(cfg.move_nstar),
                              float(ny0), float(nx0), wres])
         self.geo = np.zeros(4, np.int64)
+        self.zreg = np.zeros(self.nlab_max)
 
     # ------------------------------------------------------------------ helpers
     def _set_offset(self, ox, oy):
@@ -1246,6 +1292,11 @@ class FastPCATSampler(PCATSampler):
         self.rarea = np.outer(self.ry1 - self.ry0, self.rx1 - self.rx0).ravel()
         self.nlab = self.nregx * self.nregy
         self.geo[:] = (self.ox, self.oy, self.nregx, self.nregy)
+        # padded pixel j holds domain cell j - (pad - domain_pad)
+        off = int(round(self.pads[0] - self.dpad))
+        for m, L, o in ((self.rmap, self.Ly, oy), (self.cmap, self.Lx, ox)):
+            c = np.arange(m.size) - off
+            m[:] = np.where((c >= 0) & (c < L), (c + o) // R, -1)
         self.par[1] = self.slope
         if not _assign_regions(self.sx, self.sy, self.nst, self.sreg, self.spos, self.rlist, self.rcnt,
                                self.par, self.geo):
@@ -1267,7 +1318,8 @@ class FastPCATSampler(PCATSampler):
     def run_loop(self, nloop, cumw):
         sl = self.sl
         _loop(int(nloop), cumw, self.par, self.geo, self.rx0, self.rx1, self.ry0, self.ry1, self.rarea,
-              self.resid32, self.model32, self.wt32, self.wpos, self.swt32, self.dm, self.dm2,
+              self.resid32, self.model32, self.wt32, self.wpos, self.swt32, self.wimg, self.zreg, self.rmap,
+              self.cmap, self.dm, self.dm2,
               self.cf3, self.ncl, self.ncw, self.fthr, self.ta, self.tb, self.tmp,
               self.sx, self.sy, self.sf, self.sreg, self.spos, self.nst, self.rlist, self.rcnt,
               self.Vy, self.Ux, self.tx, self.TtWT0, self.beta0, self.prec_mu, self.Pinv, self.LinvT,
