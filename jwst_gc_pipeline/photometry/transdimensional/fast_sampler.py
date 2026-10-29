@@ -439,73 +439,96 @@ def _count_term_birth(n, n_r, area_r, par):
 
 
 @njit(cache=True)
-def _resid_w(r, s):
-    """birth weight of a pixel: the positive part of the residual S/N, squared."""
-    z = np.float64(r) * np.float64(s)
-    return z * z if z > 0 else 0.0
+def _w32(r, s):
+    """birth weight of a pixel (float32): the positive part of the residual S/N, squared."""
+    z = max(r * s, np.float32(0.0))
+    return z * z
 
 
-@njit(cache=True)
-def _wres_full(resid, swt, wimg, zreg, rmap, cmap, nregx, nlab):
-    """birth weights of all domain pixels into wimg and their sums per region into zreg
-    (rmap / cmap: region row / column of a padded pixel row / column, -1 outside the domain)."""
-    zreg[:nlab] = 0.0
-    for i in range(resid.shape[0]):
-        rg = rmap[i]
-        if rg < 0:
-            continue
-        for j in range(resid.shape[1]):
-            cg = cmap[j]
-            if cg < 0:
-                continue
-            w = _resid_w(resid[i, j], swt[i, j])
-            wimg[i, j] = w
-            zreg[rg * nregx + cg] += w
-
-
-@njit(cache=True)
-def _wres_box(resid, swt, wimg, zreg, rmap, cmap, nregx, i0, i1, j0, j1):
-    """refresh wimg and zreg on the padded pixels [i0, i1) x [j0, j1) after resid changed there."""
+@njit(cache=True, fastmath=True)
+def _wres_rows(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, i0, i1, j0, j1, full):
+    """birth weights of the domain pixels in [i0, i1) x [j0, j1) into wimg, and their changes (or,
+    with ``full``, their values) into the sums per region (zreg) and per padded row and region
+    column (rowsum).  wgeo = (off, nregx, first and end row, first and end column of the domain,
+    in padded pixels); a region column covers one contiguous run of a row."""
+    off, nregx = wgeo[0], wgeo[1]
+    i0 = max(i0, wgeo[2])
+    i1 = min(i1, wgeo[3])
+    j0 = max(j0, wgeo[4])
+    j1 = min(j1, wgeo[5])
     for i in range(i0, i1):
-        rg = rmap[i]
-        if rg < 0:
-            continue
-        for j in range(j0, j1):
+        rg = rmap[i] * nregx
+        rr = resid[i]
+        sr = swt[i]
+        wr = wimg[i]
+        j = j0
+        while j < j1:
             cg = cmap[j]
-            if cg < 0:
-                continue
-            w = _resid_w(resid[i, j], swt[i, j])
-            zreg[rg * nregx + cg] += w - wimg[i, j]
-            wimg[i, j] = w
+            je = min(j1, int(rx1[cg]) + off)
+            acc = 0.0
+            if full:
+                for jj in range(j, je):
+                    w = _w32(rr[jj], sr[jj])
+                    acc += w
+                    wr[jj] = w
+                rowsum[i, cg] = acc
+            else:
+                for jj in range(j, je):
+                    w = _w32(rr[jj], sr[jj])
+                    acc += np.float64(w) - np.float64(wr[jj])
+                    wr[jj] = w
+                rowsum[i, cg] += acc
+            zreg[rg + cg] += acc
+            j = je
 
 
 @njit(cache=True)
-def _wres_slot(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_ix, ph_iy, ph_lv, q0, q1, ncl, box):
-    """_wres_box over the pixels an accepted slot changed (its box, or each of its stamps)."""
+def _wres_full(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, nlab):
+    zreg[:nlab] = 0.0
+    _wres_rows(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, 0, resid.shape[0], 0, resid.shape[1], True)
+
+
+@njit(cache=True)
+def _wres_slot(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, ph_ix, ph_iy, ph_lv, q0, q1, ncl, box):
+    """refresh the birth weights on the pixels an accepted slot changed (its box, or each stamp)."""
     if box[0] == 1:
-        _wres_box(resid, swt, wimg, zreg, rmap, cmap, nregx, box[1], box[2], box[3], box[4])
+        _wres_rows(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, box[1], box[2], box[3], box[4], False)
         return
     for q in range(q0, q1):
         r = ncl[ph_lv[q]] // 2
-        _wres_box(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_iy[q] - r, ph_iy[q] + r + 1,
-                  ph_ix[q] - r, ph_ix[q] + r + 1)
+        _wres_rows(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, ph_iy[q] - r, ph_iy[q] + r + 1,
+                   ph_ix[q] - r, ph_ix[q] + r + 1, False)
 
 
 @njit(cache=True)
-def _wres_pick(wimg, i0, i1, j0, j1, u):
-    """the pixel of [i0, i1) x [j0, j1) at which the running sum of wimg first exceeds u
-    (0 <= u < their total; the last positive pixel when rounding leaves u unreached)."""
+def _wres_pick(wimg, rowsum, cg, i0, i1, j0, j1, u):
+    """the pixel of region column cg, rows [i0, i1), columns [j0, j1), at which the running sum of
+    wimg first exceeds u (0 <= u < their total): the row from rowsum, then the pixel in it.  When
+    rounding leaves u unreached, the last positive row / pixel."""
     c = 0.0
-    li, lj = i0, j0
+    ii = -1
+    u2 = np.inf
     for i in range(i0, i1):
-        for j in range(j0, j1):
-            w = wimg[i, j]
-            if w > 0:
-                c += w
-                li, lj = i, j
-                if c > u:
-                    return i, j
-    return li, lj
+        rs = rowsum[i, cg]
+        if rs > 0:
+            ii = i
+            if c + rs > u:
+                u2 = u - c
+                break
+            c += rs
+    if ii < 0:
+        return i0, j0
+    c = 0.0
+    lj = j0
+    wr = wimg[ii]
+    for j in range(j0, j1):
+        w = wr[j]
+        if w > 0:
+            c += w
+            lj = j
+            if c > u2:
+                return ii, j
+    return ii, lj
 
 
 @njit(cache=True)
@@ -683,7 +706,7 @@ def _gibbs_bkg(resid, model, wt, wpos, Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, Li
 
 @njit(cache=True)
 def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
-          resid, model, wt, wpos, swt, wimg, zreg, rmap, cmap, dm, dm2,
+          resid, model, wt, wpos, swt, wimg, zreg, rowsum, rmap, cmap, wgeo, dm, dm2,
           cf3, ncl, ncw, fthr, ta, tb, tmp,
           sx, sy, sf, sreg, spos, nst, rlist, rcnt,
           Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, LinvT, rhs, Abuf, Cbuf, rowbuf,
@@ -708,7 +731,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
     wres = par[19]
     off = int(np.round(P - dp))
     if wres > 0:
-        _wres_full(resid, swt, wimg, zreg, rmap, cmap, nregx, nregx * nregy)
+        _wres_full(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, nregx * nregy)
     for it in range(nloop):
         u = np.random.random()
         typ = 0
@@ -721,7 +744,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             _gibbs_bkg(resid, model, wt, wpos, Vy, Ux, tx, TtWT, beta, prec_mu, Pinv, LinvT, P, ny0, nx0,
                        rhs, Abuf, Cbuf, rowbuf)
             if wres > 0:
-                _wres_full(resid, swt, wimg, zreg, rmap, cmap, nregx, nregx * nregy)
+                _wres_full(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, nregx * nregy)
             stats[3, 1] += 1
             stats[3, 2] += 1
             continue
@@ -819,7 +842,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                         if wres > 0:
                             zr = zreg[r]
                         if zr > 0 and np.random.random() < wres:
-                            pi, pj = _wres_pick(wimg, i0, i1, j0, j1, np.random.random() * zr)
+                            pi, pj = _wres_pick(wimg, rowsum, col, i0, i1, j0, j1, np.random.random() * zr)
                             x1 = pj - P + np.random.random() - 0.5
                             y1 = pi - P + np.random.random() - 0.5
                         else:
@@ -830,7 +853,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                         if zr > 0:
                             pj = int(np.floor(x1 + 0.5 + P))
                             pi = int(np.floor(y1 + 0.5 + P))
-                            lq = -np.log((1.0 - wres) + wres * rarea[r] * wimg[pi, pj] / zr)
+                            lq = -np.log((1.0 - wres) + wres * rarea[r] * np.float64(wimg[pi, pj]) / zr)
                         sl_fac[nsl] = lq
                         f1 = fmin * np.exp(np.random.exponential(1.0 / (slope - 1.0)))
                         sl_kind[nsl] = _K_BIRTH
@@ -1020,12 +1043,12 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                 zr = zreg[r]
                 for ii in range(max(bx[1], i0), min(bx[2], i1)):
                     for jj in range(max(bx[3], j0), min(bx[4], j1)):
-                        zr += _resid_w(resid[ii, jj] - dm[ii, jj], swt[ii, jj]) - wimg[ii, jj]
+                        zr += np.float64(_w32(resid[ii, jj] - dm[ii, jj], swt[ii, jj])) - np.float64(wimg[ii, jj])
                 if zr > 0:
                     i = sl_a[a]
                     pj = int(np.floor(sx[i] + 0.5 + P))
                     pi = int(np.floor(sy[i] + 0.5 + P))
-                    wq = _resid_w(resid[pi, pj] - dm[pi, pj], swt[pi, pj])
+                    wq = np.float64(_w32(resid[pi, pj] - dm[pi, pj], swt[pi, pj]))
                     sl_fac[a] = np.log((1.0 - wres) + wres * rarea[r] * wq / zr)
         # ------------------------------------------------ accept
         nacc = 0
@@ -1034,8 +1057,8 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                 acc = np.log(np.random.random()) < sl_dl[a] + sl_fac[a]
                 _slot_apply(dm, dm2, resid, model, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a], ncl, sl_box[a], acc)
                 if acc and wres > 0:
-                    _wres_slot(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a],
-                               ncl, sl_box[a])
+                    _wres_slot(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, ph_ix, ph_iy, ph_lv,
+                               sl_q0[a], sl_q1[a], ncl, sl_box[a])
                 if acc:
                     nacc += 1
                     for b in range(sl_a[a], sl_b[a]):
@@ -1093,8 +1116,8 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             acc = sl_fac[a] > 0
             _slot_apply(dm, dm2, resid, model, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a], ncl, sl_box[a], acc)
             if acc and wres > 0:
-                _wres_slot(resid, swt, wimg, zreg, rmap, cmap, nregx, ph_ix, ph_iy, ph_lv, sl_q0[a], sl_q1[a],
-                           ncl, sl_box[a])
+                _wres_slot(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, ph_ix, ph_iy, ph_lv,
+                           sl_q0[a], sl_q1[a], ncl, sl_box[a])
             kind = sl_kind[a]
             if kind == _K_BIRTH:
                 stats[_BIRTH, 1] += 1
@@ -1195,11 +1218,14 @@ class FastPCATSampler(PCATSampler):
             raise ValueError(f'birth_resid_frac must be in [0, 1), got {wres}')
         if wres > 0 and not float(self.dpad).is_integer():
             raise ValueError('birth_resid_frac needs an integer domain_pad')
-        # residual-guided births: birth weight per pixel, its sum per region, and the region
-        # row / column of each padded pixel row / column (set by _set_offset)
-        self.wimg = np.zeros(self.wt32.shape if wres > 0 else (1, 1))
+        # residual-guided births: birth weight per pixel (float32), its sums per region and per
+        # padded row and region column, the region row / column of each padded pixel row / column
+        # and the domain bounds in padded pixels (set by _set_offset)
+        self.wimg = np.zeros(self.wt32.shape if wres > 0 else (1, 1), np.float32)
+        self.rowsum = np.zeros((self.wt32.shape[0], int(np.ceil(self.Lx / self.R)) + 1) if wres > 0 else (1, 1))
         self.rmap = np.full(self.wt32.shape[0], -1, np.int64)
         self.cmap = np.full(self.wt32.shape[1], -1, np.int64)
+        self.wgeo = np.zeros(6, np.int64)
         self.data32 = np.zeros((ny, nx + xpad), np.float32)
         self.data32[:, :nx] = self.data[0]
         self.dm = np.zeros_like(self.data32)
@@ -1297,6 +1323,7 @@ class FastPCATSampler(PCATSampler):
         for m, L, o in ((self.rmap, self.Ly, oy), (self.cmap, self.Lx, ox)):
             c = np.arange(m.size) - off
             m[:] = np.where((c >= 0) & (c < L), (c + o) // R, -1)
+        self.wgeo[:] = (off, self.nregx, off, off + int(round(self.Ly)), off, off + int(round(self.Lx)))
         self.par[1] = self.slope
         if not _assign_regions(self.sx, self.sy, self.nst, self.sreg, self.spos, self.rlist, self.rcnt,
                                self.par, self.geo):
@@ -1318,8 +1345,8 @@ class FastPCATSampler(PCATSampler):
     def run_loop(self, nloop, cumw):
         sl = self.sl
         _loop(int(nloop), cumw, self.par, self.geo, self.rx0, self.rx1, self.ry0, self.ry1, self.rarea,
-              self.resid32, self.model32, self.wt32, self.wpos, self.swt32, self.wimg, self.zreg, self.rmap,
-              self.cmap, self.dm, self.dm2,
+              self.resid32, self.model32, self.wt32, self.wpos, self.swt32, self.wimg, self.zreg, self.rowsum,
+              self.rmap, self.cmap, self.wgeo, self.dm, self.dm2,
               self.cf3, self.ncl, self.ncw, self.fthr, self.ta, self.tb, self.tmp,
               self.sx, self.sy, self.sf, self.sreg, self.spos, self.nst, self.rlist, self.rcnt,
               self.Vy, self.Ux, self.tx, self.TtWT0, self.beta0, self.prec_mu, self.Pinv, self.LinvT,

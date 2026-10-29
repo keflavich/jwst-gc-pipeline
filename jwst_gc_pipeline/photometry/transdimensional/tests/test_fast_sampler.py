@@ -147,13 +147,18 @@ def test_incremental_model_consistent(stamp_tol, move_nstar, wres):
         m_inc, r_inc = s.model32.copy(), s.resid32.copy()
         assert not s.dm.any() and not s.dm2.any()
         if wres > 0:
-            # birth weights and their region sums, kept up to date by the accepted proposals
+            # birth weights and their sums per region and per row and region column, kept up to
+            # date by the accepted proposals
             ok = (s.rmap[:, None] >= 0) & (s.cmap[None, :] >= 0)
             w = np.where(ok, np.maximum(r_inc.astype(float) * s.swt32, 0.0) ** 2, 0.0)
             np.testing.assert_allclose(s.wimg, w, rtol=1e-6, atol=0)
+            wi = s.wimg.astype(float)
             lab = np.where(ok, s.rmap[:, None] * s.nregx + s.cmap[None, :], -1)
-            z = np.bincount(lab[ok], weights=w[ok], minlength=s.nlab)
+            z = np.bincount(lab[ok], weights=wi[ok], minlength=s.nlab)
             np.testing.assert_allclose(s.zreg[:s.nlab], z, rtol=1e-9, atol=1e-9 * z.max())
+            for cg in range(s.nregx):
+                rs = (wi * (ok & (s.cmap[None, :] == cg))).sum(axis=1)
+                np.testing.assert_allclose(s.rowsum[:, cg], rs, rtol=1e-9, atol=1e-9 * z.max())
         s._rebuild_fast()
         np.testing.assert_allclose(m_inc, s.model32, rtol=0, atol=2e-6 * peak)
         np.testing.assert_allclose(r_inc * s.wpos, s.resid32, rtol=0, atol=2e-6 * peak)
