@@ -514,10 +514,15 @@ ALIGNMENT_CONFIG = (
         proposal='5365', fields=None,
         reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F212N',
+        roll_ready=True,
         notes=('sgrb2. Absent from the old dispatch -> unaligned, while its '
                'builder-written VIRAC2locked table holds 264 real rows across 11 '
                'filters (median |offset| ~126 mas) that nothing read. 14 filter '
-               'directories, so the reference band matters most here.'),
+               'directories, so the reference band matters most here. '
+               'roll_ready=True (2026-10-29, #790): frames regenerated from now on '
+               'carry the 9.57" data-qa#346 roll; the locked table is then rebuilt '
+               'from the rolled frames (build_virac2_offsets --region sgrb2 '
+               '--per-module) and the frames regenerated again before release.'),
     ),
     FieldAlignment(
         proposal='1939', fields=('001',),
