@@ -38,8 +38,8 @@ def _run(cmd):
 
 def _patch_hips_landing_page(out_dir):
     """Point ``out_dir/index.html``'s CDS landing-template ``<script>`` tag at
-    the self-hosted-first fallback chain
-    (:func:`jwst_gc_pipeline.aladin_loader.patch_hips_landing_page`).
+    the fallback chain, which loads the patched template from the self-hosted
+    copies first (:func:`jwst_gc_pipeline.aladin_loader.patch_hips_landing_page`).
 
     Hipsgen's own ``INDEX`` action writes ``index.html``; an ``RGB``-only run
     has none, and this is then a no-op.

@@ -2087,8 +2087,8 @@ def render_cmz_explorer(hips_url, cat_hips_url=None, moc_url=None,
     """Standalone Aladin Lite page: CMZ color HiPS + catalog HiPS + coverage MOC.
 
     ``*_url`` are relative to the site root (the products live in the release
-    tree).  Aladin Lite v3 loads from a self-hosted copy first, falling
-    through to CDS only if that is unreachable (see
+    tree).  Aladin Lite v3 loads from the CDS CDN, falling back to a
+    self-hosted copy when CDS fails or does not answer within 8 s (see
     ``jwst_gc_pipeline.aladin_loader``); the HiPS/catalog/MOC are served
     from the same host as the page.
     """

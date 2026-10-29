@@ -14,10 +14,11 @@ throws and the landing page renders blank.
 This script rewrites that one ``<script>`` tag in place: self-hosted
 (starformation) -> data.rc mirror -> CDS, then a stub ``buildLandingPage``
 that says the viewer is unavailable while leaving the HiPS directory itself
-(``properties``, ``Norder*/`` tiles) untouched and reachable.  The self-hosted
-template still loads Aladin Lite from the self-hosted copies first (see
-``jwst_gc_pipeline/aladin_loader.py``), so any ``alScriptURL`` the landing
-page passes through is unaffected.
+(``properties``, ``Norder*/`` tiles) untouched and reachable.  The template
+comes from the self-hosted copies first because it is a patched copy of the
+CDS one: it loads Aladin Lite from the page's ``alScriptURL`` (CDS) first and
+falls back to the self-hosted copies when CDS fails or does not answer within
+8 s per source (see ``jwst_gc_pipeline/aladin_loader.py``).
 
 Idempotent: a page already carrying the ``landing-fallback-chain`` marker is
 left alone.  Raises if a page has more than one matching tag (patch by hand).

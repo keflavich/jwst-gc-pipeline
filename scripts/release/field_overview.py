@@ -34,7 +34,7 @@ import math
 import os
 
 from jwst_gc_pipeline.aladin_controls import aladin_controls_js
-from jwst_gc_pipeline.aladin_loader import ALADIN_JS_SELFHOSTED, ALADIN_JS_URLS
+from jwst_gc_pipeline.aladin_loader import ALADIN_JS_CDS, ALADIN_JS_URLS, ALADIN_TIMEOUT_MS
 
 #: The survey's own imagery, first; the rest are context.  Same list the monitor
 #: uses, so a reader recognises the two pages as one survey.
@@ -89,17 +89,16 @@ SURVEYS = (
 #: runs against `latest`, which resolves to this today -- not simply the newest
 #: available; bump it when that page is seen working on a later one.
 #:
-#: Self-hosted, not CDS directly: aladin.cds.unistra.fr went down for an
-#: extended period on 2026-10-28 (connect hung ~25 s, then refused).  This is
-#: the FIRST source the loader below tries; see jwst_gc_pipeline.aladin_loader
-#: for the self-hosted copy it points at.
-ALADIN_JS = ALADIN_JS_SELFHOSTED
+#: CDS is the FIRST source the loader below tries.  aladin.cds.unistra.fr went
+#: down for an extended period on 2026-10-28 (connect hung ~25 s, then
+#: refused), so the loader falls back to the self-hosted copies; see
+#: jwst_gc_pipeline.aladin_loader.
+ALADIN_JS = ALADIN_JS_CDS
 
 #: Every source the loader tries, in order: the loader builds one `<script>`
 #: element at a time and moves to the next source when one fails to load
-#: (`onerror`), so the panel still works where the first host is down.  A
-#: source whose connect HANGS delays the fallback until the browser gives up on
-#: it.
+#: (`onerror`) or has not loaded within ALADIN_TIMEOUT_MS, so the panel still
+#: works when CDS is down or hangs.
 ALADIN_JS_SOURCES = ALADIN_JS_URLS
 
 #: Distinguishable at small size against a dark background, in a fixed order so
@@ -474,7 +473,8 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS_SOURCES,
     they are reachable through the switcher the loader builds.
 
     ``aladin_src`` is one ``aladin.js`` URL or a sequence of them, tried in
-    order until one loads.
+    order until one loads; each gets ``ALADIN_TIMEOUT_MS`` before the next is
+    tried.
     """
     if not geoms:
         return ''
@@ -505,6 +505,7 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS_SOURCES,
                    for i, g in enumerate(reframed)],
         'surveys': [{'name': n, 'id': s} for n, s in surveys],
         'aladin': aladin_srcs,
+        'aladin_timeout_ms': ALADIN_TIMEOUT_MS,
     })
 
     frame_note = ('Galactic coordinates' if frame == 'galactic'
@@ -819,15 +820,20 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS_SOURCES,
     // as the reason the interactive view failed.
     lastGlobalError = null;
     status.textContent = 'loading\\u2026';
-    // one source at a time, self-hosted first: a source that fails to load
-    // hands over to the next, so one host being down does not lose the view
+    // one source at a time, CDS first: a source that fails to load, or has
+    // not loaded within data.aladin_timeout_ms, hands over to the next, so CDS
+    // being down -- or hanging, which fires no onerror for ~30 s -- does not
+    // lose the view
     var sources = [].concat(data.aladin);
+    var winner = null;
     function loadFrom(i) {{
       var script = document.createElement('script');
-      script.src = sources[i];
-      script.onerror = function () {{
+      var moved = false;
+      function next(why) {{
+        if (moved || winner) {{ return; }}
+        moved = true;
         if (i + 1 < sources.length) {{
-          console.warn('Aladin Lite: failed to load ' + sources[i]
+          console.warn('Aladin Lite: ' + why + ' ' + sources[i]
                        + ', trying the next source');
           loadFrom(i + 1);
           return;
@@ -835,8 +841,28 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS_SOURCES,
         // the static map is still on screen; say what is missing and stop
         fail('Aladin Lite could not be loaded (offline, or blocked by a content '
              + 'security policy). The map above is unaffected.');
+      }}
+      var timer = setTimeout(function () {{
+        next('no answer within ' + data.aladin_timeout_ms + ' ms from');
+      }}, data.aladin_timeout_ms);
+      script.src = sources[i];
+      script.onerror = function () {{
+        clearTimeout(timer);
+        next('failed to load');
       }};
       script.onload = function () {{
+        clearTimeout(timer);
+        if (winner) {{
+          // a source that answered after its timeout still executes and
+          // reassigns window.A; keep the library that loaded first
+          window.A = winner;
+          return;
+        }}
+        if (typeof A === 'undefined' || !A) {{
+          next('no Aladin Lite in');
+          return;
+        }}
+        winner = A;
         // A.init is documented as a promise, but this script is fetched from a
         // third party: if it is absent, or truthy-but-not-thenable, `A.init.then`
         // throws SYNCHRONOUSLY here -- outside any catch -- and the button stays
