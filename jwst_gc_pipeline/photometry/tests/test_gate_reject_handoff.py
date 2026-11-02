@@ -1357,3 +1357,16 @@ def test_daophot_handoff_xy_reads_peak_area_only_with_component_handoff(
     xy, _ = C._daophot_handoff_xy(dq, img, None, path, FWHM, data_floor=0.0,
                                   label='t')
     assert xy.shape == (5, 2)        # reject + 3 peaks + 1 centre of mass
+
+
+@pytest.mark.parametrize('filters, expected', [('F212N', False),
+                                               ('f480m', True)])
+def test_hndoffsa_records_the_filter_scope(tmp_path, monkeypatch, filters,
+                                           expected):
+    """The recorded switch is the one that ran: a bandpass outside
+    DAOPHOT_HANDOFF_FILTERS runs with the component hand-off off, whatever
+    the target default says, and HNDOFFSA must say so."""
+    monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    monkeypatch.setenv('DAOPHOT_HANDOFF_FILTERS', filters)
+    ctx, _ = _prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate')
+    assert ctx.handoff_unaccepted_sat is expected
