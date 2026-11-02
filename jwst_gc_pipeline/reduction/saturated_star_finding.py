@@ -6682,8 +6682,13 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         _sev_fn = filename.replace(
             ".fits", f'{file_suffix}_satstar_severity_dropped.fits')
         _sev_dropped.meta.update(fh[0].header)
+        # Always replaced: a frame with no saturated stars has no satstar
+        # catalog to hit the cache above, so every rerun lands here with the
+        # previous run's (possibly empty) file in place.  gc3571 o001 m12
+        # re-run after a regeneration: 4 of 8 fan-out tasks died on
+        # "already exists" for this file.
         _publish_satstar_product(
-            _sev_fn, lambda p: _sev_dropped.write(p, overwrite=True), overwrite)
+            _sev_fn, lambda p: _sev_dropped.write(p, overwrite=True), True)
         print(f"Saved {len(_sev_dropped)} severity-gate drop(s) to {_sev_fn}",
               flush=True)
     if satstar_table is not None:
