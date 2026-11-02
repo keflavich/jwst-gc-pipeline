@@ -524,8 +524,9 @@ class Writeup:
                 '\\subsection{Precision and depth}\n'
                 f'{self._ref("D4_photometry_precision")} shows the fractional '
                 'flux uncertainty against brightness. The '
-                r'$5\sigma$ depth --- where the median '
-                r'$\sigma_F/F$ reaches $0.2$ --- '
+                r'$5\sigma$ depth --- where the median per-exposure '
+                r'$\sigma_F/F$ (\code{flux\_err}) reaches $0.2$, i.e. the '
+                'depth of a single exposure --- '
                 + ('runs from ' if len(on_scale) > 1 else 'is ')
                 + f'{depth_span}')
             if scale and 'instrumental' in scale:
@@ -547,41 +548,33 @@ class Writeup:
                     'could be recovered and the panel is on an instrumental '
                     'scale that is not comparable with the rest. ')
         if ratio:
+            # flux_err is the weighted mean of the per-exposure formal errors
+            # (one exposure's uncertainty); flux_err_prop is the formal error
+            # of the inverse-variance-averaged flux (merge_catalogs).  Their
+            # ratio is ~1/sqrt(n) by construction and says nothing about the
+            # exposure-to-exposure scatter (#1024).
             median_ratio = float(np.median(list(ratio.values())))
             body.append(
-                'The uncertainty propagated from the exposure-to-exposure '
-                'scatter differs from the fitter\'s formal covariance by a '
-                f'median factor of {_fmt(median_ratio, 2)}')
+                'The propagated error \\code{flux\\_err\\_prop}, the formal '
+                'uncertainty of the exposure-averaged flux, is a median '
+                f'factor of {_fmt(median_ratio, 2)}')
             span = _span(ratio, 2, low_first=False)
             if span and len(ratio) > 1:
                 body.append(f' ({span})')
-            body.append('. ')
-            if median_ratio > 1.5:
+            body.append(
+                ' of \\code{flux\\_err}, the formal error of a single '
+                'exposure. ')
+            if np.isfinite(median_ratio) and median_ratio > 0:
                 body.append(
-                    'A ratio well above unity means the exposures disagree by '
-                    'more than the fit predicts, so the formal errors '
-                    'understate the real uncertainty. In a crowded field the '
-                    'usual cause is that the flux assigned to a source depends '
-                    'on how its neighbours were fitted in that particular '
-                    'exposure --- a term the single-exposure covariance has no '
-                    'way to represent. The propagated error is the one to use. ')
-            elif median_ratio < 0.8:
-                body.append(
-                    'A ratio below unity is the opposite problem: the '
-                    'exposures agree with each other better than the fit '
-                    'covariance predicts, so the formal error is '
-                    'conservative. That happens when the same systematic --- '
-                    'a shared neighbour model, a shared background --- moves '
-                    'every exposure the same way, which suppresses the '
-                    'scatter between them without making the measurement any '
-                    'more correct. The propagated error should not be read '
-                    'as the better estimate here; it is measuring '
-                    'reproducibility, not accuracy. ')
-            elif median_ratio < 1.1:
-                body.append(
-                    'The two agree closely, which means the noise model is '
-                    'adequate and the fits are not being perturbed by '
-                    'exposure-dependent crowding. ')
+                    'For an inverse-variance average of $n$ comparable '
+                    'exposures this ratio is $1/\\sqrt{n}$ by construction, '
+                    'so the median corresponds to '
+                    f'$n \\approx {1.0 / median_ratio ** 2:.1f}$. ')
+            body.append(
+                'Neither column is measured from the scatter between '
+                'exposures, and both leave out error terms shared by every '
+                'exposure (background model, neighbour model, seed '
+                'position), so the ratio is not a test of the noise model. ')
             body.append('\n\n')
         body.append(self._figure('D4_photometry_precision'))
 
@@ -825,21 +818,16 @@ class Writeup:
         ratio = self._m('D4_photometry_precision', 'err_ratio', default={}) or {}
         if ratio:
             med = float(np.median(list(ratio.values())))
-            if med > 1.2:
+            if np.isfinite(med) and 0 < med < 1:
                 items.append(
-                    'Quote \\code{flux\\_err\\_prop} rather than '
-                    '\\code{flux\\_err}: the propagated error is a median '
-                    f'factor of {_fmt(med, 2)} larger here, and it is the one '
-                    'that reflects how much the measurement actually moves '
-                    'between exposures.')
-            elif med < 0.8:
-                items.append(
-                    'Do not substitute \\code{flux\\_err\\_prop} for '
-                    '\\code{flux\\_err} in this field: it is a median factor '
-                    f'of {_fmt(med, 2)} \\emph{{smaller}}, which means the '
-                    'exposures reproduce each other better than the fit '
-                    'covariance allows --- a measure of consistency, not of '
-                    'accuracy. The larger of the two is the safer error bar.')
+                    'The catalogue flux is an average over exposures, and '
+                    '\\code{flux\\_err\\_prop} is its formal error; '
+                    '\\code{flux\\_err} is the formal error of one exposure, '
+                    f'a median factor of {_fmt(1.0 / med, 2)} larger here. '
+                    'Both are formal errors and leave out terms shared by '
+                    'every exposure, so an error budget for crowded or '
+                    'nebular sources needs a systematic term on top of '
+                    'either.')
 
         corr = self._m('D7_background_spatial', 'correlations', default={}) or {}
         rhos = [v['spearman'] for v in corr.values()

@@ -1,0 +1,71 @@
+{
+ "label": "w51",
+ "filt": "F210M",
+ "n_vetted": {
+  "m2": 31990,
+  "m3": 30478,
+  "m4": 31610,
+  "resbgsub_m5": 37321,
+  "resbgsub_m6": 36866,
+  "resbgsub_m7": 31821
+ },
+ "n_union_m2_m6": 41001,
+ "n_lost": 10926,
+ "ctrl_final_resid_snr_p50": 0.06349278522251947,
+ "ctrl_final_resid_snr_p90": 5.290774949982868,
+ "ctrl_final_resid_snr_p99": 88.36694771965428,
+ "by_last_phase": {
+  "m2->vetted_out": {
+   "n": 1020,
+   "starlike_left": 434
+  },
+  "m2->not_fit": {
+   "n": 380,
+   "starlike_left": 74
+  },
+  "m3->vetted_out": {
+   "n": 280,
+   "starlike_left": 150
+  },
+  "m3->not_fit": {
+   "n": 130,
+   "starlike_left": 30
+  },
+  "m4->vetted_out": {
+   "n": 455,
+   "starlike_left": 206
+  },
+  "m4->not_fit": {
+   "n": 261,
+   "starlike_left": 45
+  },
+  "resbgsub_m5->vetted_out": {
+   "n": 484,
+   "starlike_left": 298
+  },
+  "resbgsub_m5->not_fit": {
+   "n": 164,
+   "starlike_left": 61
+  },
+  "resbgsub_m6->vetted_out": {
+   "n": 603,
+   "starlike_left": 547
+  },
+  "resbgsub_m6->not_fit": {
+   "n": 7149,
+   "starlike_left": 3546
+  }
+ },
+ "m7_seed_reason": {
+  "own_band_off": {
+   "n": 7087,
+   "starlike_left": 3963
+  },
+  "seeded": {
+   "n": 665,
+   "starlike_left": 130
+  }
+ },
+ "n_final_vetted_inner": 31821,
+ "n_starlike_left": 5391
+}

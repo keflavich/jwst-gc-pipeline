@@ -22,6 +22,7 @@ not the host module.
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as _host
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.naming import frame_identity
+from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     assert_no_foreign_observation_overwrite,
 )
@@ -717,7 +718,7 @@ def _output_suffix_tokens(options, exposurenumber=None, visit_id=None,
     return _SuffixTokens(
         desat='_unsatstar' if options.desaturated else '',
         bgsub=_bgsub_token(options),
-        epsf_="_epsf" if options.epsf else "",
+        epsf_=("_epsf" if options.epsf else "") + hybrid_psf_token(),
         exposure_=f'_exp{exposurenumber:05d}' if exposurenumber is not None else '',
         visitid_=f'_visit{int(visit_id):03d}' if visit_id is not None else '',
         vgroupid_=vgroupid_,

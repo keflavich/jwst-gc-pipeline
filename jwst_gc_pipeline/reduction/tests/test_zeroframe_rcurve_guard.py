@@ -14,12 +14,14 @@ weakly saturated core is rewritten to ~3% of its rate.  Pinned here:
 3. a healthy curve is unchanged by the guard;
 4. SATSTAR_ZF_KEEP_FINITE=1 keeps finite, non-DO_NOT_USE SATURATED pixels
    (neither rewritten nor masked), including when that leaves no rim pixel;
+   it defaults to NIRCAM_SATSTAR_RECOVERED_CAP;
 5. SATSTAR_OBS_PK_FROM_CRF=1 reads the observed peak from the crf values;
 6. SATSTAR_QFIT_LOCAL_* compute a local qfit and, with the gate on, judge
    NIRCam in-FOV fits on it.
 """
 import numpy as np
 import pytest
+from jwst.datamodels import dqflags
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
     satstar_fit_switches, satstar_local_qfit, satstar_observed_peak,
@@ -31,7 +33,8 @@ R_JUNK = 0.0005
 _ENV = ('SATSTAR_ZF_RCURVE_GUARD', 'SATSTAR_ZF_RCURVE_DQ0',
         'SATSTAR_ZF_RCURVE_MAXSTEP', 'SATSTAR_ZF_KEEP_FINITE',
         'SATSTAR_OBS_PK_FROM_CRF', 'SATSTAR_QFIT_LOCAL_GATE',
-        'SATSTAR_QFIT_LOCAL_R', 'SATSTAR_QFIT_LOCAL_MAX')
+        'SATSTAR_QFIT_LOCAL_R', 'SATSTAR_QFIT_LOCAL_MAX',
+        'NIRCAM_SATSTAR_RECOVERED_CAP')
 
 
 @pytest.fixture(autouse=True)
@@ -240,6 +243,26 @@ def test_keep_finite_saturated_pixels(monkeypatch):
     assert np.allclose(rec_b[lost], R_TRUE * 25000.0, rtol=0.02)
 
 
+@pytest.mark.parametrize('cap, keep, on', [
+    (None, None, False), ('0', None, False), ('1', None, True),
+    ('1', '0', False), ('0', '1', True), ('1', '', True)])
+def test_keep_finite_default_follows_the_recovered_cap(monkeypatch, cap, keep,
+                                                       on):
+    """Cap-on frames (extended-emission NIRCam, set by cataloging) keep
+    finite SATURATED pixels by default; an export wins and a blank value
+    means the default."""
+    if cap is not None:
+        monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', cap)
+    if keep is not None:
+        monkeypatch.setenv('SATSTAR_ZF_KEEP_FINITE', keep)
+    assert satstar_fit_switches()['keep_finite'] is on
+    data, dq, g0, core, rim = _scene()
+    rec, rim_out, _, _ = zeroframe_recover_saturated(data, dq, g0)
+    assert bool(rim_out[rim].any()) is (not on)
+    if on:
+        assert np.array_equal(rec[rim], data[rim])
+
+
 def test_default_anchor_rewrites_rim_and_masks_deep_core():
     """The fit-anchor wrapper get_saturated_stars calls: rewritten data, the
     deep core as the fit mask, and no rewrite delta unless asked for."""
@@ -379,7 +402,7 @@ def test_qfit_local_switch_defaults(monkeypatch):
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
     sw = satstar_fit_switches()
     assert sw['qfit_local_gate'] and sw['qfit_local_r'] == 10.0
-    assert sw['qfit_local_max'] == 1.0
+    assert sw['qfit_local_max'] == 5.0     # the box qfit cap (#1058)
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_R', '0')
     assert not satstar_fit_switches()['qfit_local_gate']
     monkeypatch.delenv('SATSTAR_QFIT_LOCAL_GATE')
@@ -389,14 +412,143 @@ def test_qfit_local_switch_defaults(monkeypatch):
 
 
 def test_gate_uses_box_qfit_unless_the_local_gate_is_on(monkeypatch):
-    kw = dict(is_miri=False, forced_source=False)
+    kw = dict(is_miri=False, forced_source=False, sat_flagged=True)
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, **kw) == (7.0, 5.0)
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
     monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, **kw) == (0.2, 0.8)
     # MIRI, forced sources and a NaN local qfit keep the box qfit
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=True,
-                                 forced_source=False) == (7.0, 5.0)
+                                 forced_source=False,
+                                 sat_flagged=True) == (7.0, 5.0)
     assert satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
-                                 forced_source=True) == (7.0, 5.0)
+                                 forced_source=True,
+                                 sat_flagged=True) == (7.0, 5.0)
     assert satstar_qfit_for_gate(7.0, np.nan, 5.0, **kw) == (7.0, 5.0)
+
+
+def test_local_gate_judges_only_saturated_dq_components(monkeypatch):
+    """A component with no SATURATED pixel keeps the box qfit with the gate
+    on: where the severity floor sits below the saturation onset, most of
+    them are unsaturated stars, which the local qfit accepts (sgra F405N:
+    5219 of 7011 added accepts were peak or subfloor seeds)."""
+    monkeypatch.setenv('SATSTAR_QFIT_LOCAL_GATE', '1')
+    monkeypatch.setenv('SATSTAR_QFIT_LOCAL_MAX', '0.8')
+    kw = dict(is_miri=False, forced_source=False)
+    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, sat_flagged=False,
+                                 **kw) == (7.0, 5.0)
+    assert satstar_qfit_for_gate(7.0, 0.2, 5.0, sat_flagged=True,
+                                 **kw) == (0.2, 0.8)
+
+
+def test_gate_requires_sat_flagged():
+    with pytest.raises(TypeError):
+        satstar_qfit_for_gate(7.0, 0.2, 5.0, is_miri=False,
+                              forced_source=False)
+
+
+def _severity_scene():
+    """Three stars on a 5 MJy/sr floor, severity floor 4000:
+
+    * A: SATURATED-flagged core peaking at 3000 (< floor, > 0.35 x floor):
+      the severity gate drops its DQ component and the sub-floor seeding
+      re-seeds it, so it arrives as 'subfloor' with its SAT pixels intact;
+    * B: the same peak with no DQ flag: 'subfloor', no SAT pixel;
+    * C: SATURATED-flagged core at 6000 (> floor): 'dqsat'.
+    """
+    from astropy.io import fits
+    shape = (160, 160)
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+
+    def disk(x, y, r):
+        return (xx - x) ** 2 + (yy - y) ** 2 <= r ** 2
+
+    data = np.full(shape, 5.0)
+    dq = np.zeros(shape, dtype=np.uint32)
+    for (x, y, pk, flagged) in ((40, 40, 3000.0, True),
+                                (110, 40, 3000.0, False),
+                                (75, 110, 6000.0, True)):
+        data[disk(x, y, 3)] = pk
+        if flagged:
+            dq[disk(x, y, 2)] |= dqflags.pixel['SATURATED']
+    hdul = fits.HDUList([
+        fits.PrimaryHDU(),
+        fits.ImageHDU(data=data.astype('float32'), name='SCI'),
+        fits.ImageHDU(data=dq, name='DQ'),
+        fits.ImageHDU(data=np.ones(shape, dtype='float32'),
+                      name='VAR_POISSON')])
+    return hdul, dq
+
+
+def test_severity_dropped_sat_component_still_counts_as_saturated():
+    """The case seed_kind misses: a weakly saturated star whose DQ component
+    the severity gate removed, re-seeded by the sub-floor seeding (cefcf
+    F360M: 36 such stars left unmeasured by a seed_kind == 'dqsat' gate)."""
+    from scipy import ndimage
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        component_carries_saturated_dq, find_saturated_stars)
+    hdul, dq = _severity_scene()
+    _, sources, coms, kinds = find_saturated_stars(hdul, severity_floor=4000.0)
+    slices = ndimage.find_objects(sources)
+    got = {}
+    for lab, (cy, cx) in enumerate(coms, start=1):
+        key = ('A' if cx < 60 and cy < 60 else 'B' if cy < 60 else 'C')
+        got[key] = (kinds[lab - 1],
+                    component_carries_saturated_dq(dq, sources, lab,
+                                                   slices[lab - 1]))
+    assert got == {'A': ('subfloor', True), 'B': ('subfloor', False),
+                   'C': ('dqsat', True)}
+
+
+def test_component_sat_dq_reads_only_the_components_own_pixels():
+    """A peak/subfloor component beside a saturated star shares its bounding
+    box; the SAT pixels of the neighbour (label 2) inside label 1's bbox must
+    not count for label 1 (review mutant N3: reading the whole bbox)."""
+    from scipy import ndimage
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        component_carries_saturated_dq)
+    sources = np.zeros((20, 20), dtype=int)
+    sources[2:12, 2:12] = 1
+    sources[5:9, 5:9] = 2          # label 2 sits inside label 1's bbox
+    dq = np.zeros((20, 20), dtype=np.uint32)
+    dq[6:8, 6:8] = dqflags.pixel['SATURATED']
+    slices = ndimage.find_objects(sources)
+    assert component_carries_saturated_dq(dq, sources, 1, slices[0]) is False
+    assert component_carries_saturated_dq(dq, sources, 2, slices[1]) is True
+
+
+def test_component_carries_saturated_dq_without_pixels():
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        component_carries_saturated_dq)
+    dq = np.full((4, 4), dqflags.pixel['SATURATED'], dtype=np.uint32)
+    sources = np.zeros((4, 4), dtype=int)
+    assert component_carries_saturated_dq(dq, sources, 1, None) is False
+    assert component_carries_saturated_dq(dq, sources, 1,
+                                          (None, None)) is False
+
+
+def test_gate_call_site_passes_the_components_saturated_dq():
+    """Call-site guard: the helper tests cannot see the wiring, so passing a
+    constant ``sat_flagged=True`` from get_saturated_stars would leave them
+    green (and turn the gate back on for every component).  The call must
+    pass the per-component ``_comp_sat_dq``, computed by
+    component_carries_saturated_dq from the frame DQ and this component's
+    label (False only for forced sources)."""
+    import ast
+    import inspect
+    import textwrap
+    from jwst_gc_pipeline.reduction import saturated_star_finding as ssf
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ssf.get_saturated_stars)))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, 'id', None) == 'satstar_qfit_for_gate']
+    assert len(calls) == 1
+    kw = {k.arg: k.value for k in calls[0].keywords}
+    assert isinstance(kw.get('sat_flagged'), ast.Name)
+    assert kw['sat_flagged'].id == '_comp_sat_dq'
+    assigns = [ast.unparse(n.value) for n in ast.walk(tree)
+               if isinstance(n, ast.Assign)
+               and any(getattr(t, 'id', None) == '_comp_sat_dq'
+                       for t in n.targets)]
+    assert sorted(assigns) == [
+        'False',
+        'component_carries_saturated_dq(dq, sources, src_label, _sl)']

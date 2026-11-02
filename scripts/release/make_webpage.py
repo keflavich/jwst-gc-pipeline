@@ -29,12 +29,14 @@ from pathlib import Path
 
 import curated_images
 import field_overview
+import hips_index
 import release_freshness
 import make_preview_rgb
 import preview_plan
 from stage_release import FIELDS, field_release_dir
 import astrometry_provenance
 from jwst_gc_pipeline.aladin_controls import aladin_controls_js
+from jwst_gc_pipeline.aladin_loader import aladin_fallback_chain_html
 
 # Display label per group folder (None = Galactic Center, the default survey).
 GROUP_LABEL = {
@@ -162,7 +164,21 @@ KIND_LABEL = {
     "seed": "Seed source list",
     "catalog_per_filter_vetted": "Per-filter vetted",
     "detector_frame": "Detector-frame exposure",
+    # gc-treasury's all-tile joint NIRCam catalog (`stage_release.py
+    # --joint-catalog`) -- its own product, not a per-field cross-band merge,
+    # so it carries its own kinds rather than reusing catalog_full/_qualcut.
+    "catalog_joint": "Joint catalog (all-tile)",
+    "catalog_joint_provenance": "Joint catalog provenance",
+    "catalog_tile": "Per-tile merged catalog",
 }
+
+#: Kinds that count as "the field-wide catalog has been built" for the
+#: preliminary-release banner below.  `catalog_full` is the normal per-field
+#: cross-band merge; `catalog_joint` is gc-treasury's all-tile equivalent --
+#: there is no per-field merge for it to be a subset of, so treating its
+#: absence as "preliminary" would tell a reader the all-tile catalog
+#: shipped beside it is not there.
+FULL_CATALOG_KINDS = {"catalog_full", "catalog_joint"}
 
 #: Manifest category of a detector-frame exposure (see `exposure_bundle`).
 #: Named here rather than imported so the page generator keeps working against
@@ -669,7 +685,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       diagrams=(),
                       superseded=(), reasons=None, curated=(),
                       curated_prov=(), preview_from_curated=False,
-                      release_dir=None):
+                      release_dir=None, manifold=None, hips_inventory=None):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -857,9 +873,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     multi = any(f.get("observation") for f in files)
 
     if curated:
-        out.append("<p class=muted>Curated color images -- the published "
-                   "renders. Tuned stretches, channels chosen far apart, and "
-                   "each program combined with itself.</p>")
+        out.append("<p class=muted>"
+                   + html.escape(curated_images.intro(field)
+                                 or "Curated color images -- the published "
+                                    "renders. Tuned stretches, channels chosen "
+                                    "far apart, and each program combined with "
+                                    "itself.")
+                   + "</p>")
         # Provenance per published render, keyed on the asset filename.  These
         # are the field's PRIMARY images and they are not staged products, so
         # without this they would be the only thing on the page with no source,
@@ -887,8 +907,11 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                        f"{html.escape(field)}_curated.json</a> -- source path and "
                        f"checksum, the checksum of the bytes served, and whether "
                        f"the AVM astrometry survived resizing. These are curated "
-                       f"renders, not staged data products; the mosaics they were "
-                       f"made from are in the table below.</p>")
+                       f"renders, not staged data products"
+                       + ("." if curated_images.intro(field) else
+                          "; the mosaics they were made from are in the table "
+                          "below.")
+                       + "</p>")
 
     # `assets/<field>.jpg` is a BYTE COPY of the first curated JPEG when there
     # is one -- but `preview_channels`, `_preview_caption` and
@@ -1074,6 +1097,9 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     # images table grouped by (observation, filter)
     out.append("<h2>Mosaic images <span class=muted>(resampled onto a sky grid)</span></h2>")
+    tour = wavelength_tour_html(field)
+    if tour:
+        out.append(tour)
     # An empty table under a heading says nothing about WHY it is empty -- a
     # reader cannot tell a withheld mosaic from one that was never drizzled.
     # A release that ships only detector frames is a normal state (the frames
@@ -1105,20 +1131,35 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                            f"<td>{dl(f)}</td></tr>")
         out.append("</table>")
 
+    # HiPS layers rendered from this field's mosaics, and the tours and
+    # survey-wide views that include them (served from another docroot, so
+    # read from the collected inventory rather than the manifest)
+    hips_section = hips_index.field_section_html(field, hips_inventory)
+    if hips_section:
+        out.append(hips_section)
+
     # catalogs table
     out.append("<h2>Catalogs</h2>")
-    if catalogs and not any(f["kind"] == "catalog_full" for f in catalogs):
+    if isinstance(manifold, dict):
+        manifold = [manifold]
+    for viewer in manifold or ():
+        out.append(manifold_link_html(viewer, manifest.get("version"),
+                                      labelled=len(manifold) > 1))
+    if catalogs and not any(f["kind"] in FULL_CATALOG_KINDS for f in catalogs):
         out.append("<p class=muted><b>Preliminary catalog release.</b> The field-wide "
                    "merged photometry table is still being built; only the per-filter "
                    "vetted catalogs are provided for now. The merged table will be added "
                    "in a later update.</p>")
+    if catalogs:
+        out.append(catalog_columns_html())
     if not catalogs:
         out.append("<p class=muted><b>No catalogs in this release.</b> Photometry for these data is still being produced; when it is ready it will be added here under a new version.</p>")
     else:
         out.append(f"<table><tr><th>Catalog</th>{obs_col}<th>Filter</th><th>Iteration</th>"
                    "<th>Version</th><th>Size</th><th>Download</th></tr>")
-        cat_order = {"catalog_full": 0, "catalog_qualcut": 1, "seed": 2,
-                     "catalog_per_filter_vetted": 3}
+        cat_order = {"catalog_full": 0, "catalog_joint": 0, "catalog_qualcut": 1,
+                     "seed": 2, "catalog_per_filter_vetted": 3,
+                     "catalog_joint_provenance": 4, "catalog_tile": 5}
         for f in sorted(catalogs, key=lambda f: (f.get("observation") or "",
                                                  cat_order.get(f["kind"], 9),
                                                  f.get("filter") or "")):
@@ -2046,7 +2087,9 @@ def render_cmz_explorer(hips_url, cat_hips_url=None, moc_url=None,
     """Standalone Aladin Lite page: CMZ color HiPS + catalog HiPS + coverage MOC.
 
     ``*_url`` are relative to the site root (the products live in the release
-    tree).  Aladin Lite v3 loads from the CDS CDN; the HiPS/catalog/MOC are served
+    tree).  Aladin Lite v3 loads from the CDS CDN, falling back to a
+    self-hosted copy when CDS fails or does not answer within 8 s (see
+    ``jwst_gc_pipeline.aladin_loader``); the HiPS/catalog/MOC are served
     from the same host as the page.
     """
     js_cat = (f"aladin.addCatalog(A.catalogHiPS('{cat_hips_url}', "
@@ -2063,8 +2106,7 @@ def render_cmz_explorer(hips_url, cat_hips_url=None, moc_url=None,
                "<a href='index.html'>← all fields</a></div></header><main>")
     out.append("<div id='aladin-lite-div' style='width:100%;height:75vh;"
                "border-radius:8px;overflow:hidden'></div>")
-    out.append("<script src='https://aladin.cds.unistra.fr/AladinLite/api/v3/"
-               "latest/aladin.js' charset='utf-8'></script>")
+    out.append(aladin_fallback_chain_html())
     out.append(
         "<script>A.init.then(() => {"
         f"const aladin = A.aladin('#aladin-lite-div', {{cooFrame:'galactic', "
@@ -2303,6 +2345,146 @@ PANNER_CARD = (
     "pointings that have imagery. Nothing to drive -- leave it running.")
 
 
+#: Written when a HiPS inventory is available (see hips_index.py).
+HIPS_INDEX_CARD = (
+    hips_index.INDEX_PAGE, "HiPS index",
+    "Every HiPS sky map made from the release fields, grouped by field, with "
+    "the tours and survey-wide views that combine them.")
+
+
+#: Linear color wavelength tours: an Aladin Lite page whose slider steps
+#: through RGB layers of three neighboring filters, bluest triplet to reddest.
+#: They are built in the ACES_Aladin_tour repository and served from a
+#: different docroot on the same host, so they are named absolutely, like the
+#: HiPS viewer quicklook.  A field is listed here once its tour is deployed.
+WAVELENGTH_TOUR_BASE = "https://starformation.astro.ufl.edu/Aladin_tours/"
+WAVELENGTH_TOURS = {
+    field: f"{field}_wavelength_tour_linear.html"
+    for field in ("arches", "brick", "sgra", "sgrb2", "sgrc", "sickle", "w51",
+                  "wd2")
+}
+
+
+#: Plain-text description of every column in the released catalogs.  One file
+#: covers every field (the columns are the same pattern everywhere, with the
+#: filter name substituted), so it is copied once into the site directory and
+#: each field page links to it from its Catalogs heading.
+CATALOG_COLUMNS_SRC = Path(__file__).with_name("catalog_columns.txt")
+CATALOG_COLUMNS_NAME = "catalog_columns.txt"
+
+
+def catalog_columns_html():
+    """The column-description link under a field page's Catalogs heading."""
+    return (f"<p><a class=btn href='{CATALOG_COLUMNS_NAME}'>Column descriptions "
+            "(text)</a> <span class=muted>What each catalog column means, with "
+            "units and flag values.</span></p>")
+
+
+def wavelength_tour_html(field):
+    """The tour link under a field page's mosaic heading, or ''."""
+    page = WAVELENGTH_TOURS.get(field)
+    if page is None:
+        return ""
+    return (f"<p><a class=btn href='{html.escape(WAVELENGTH_TOUR_BASE + page)}'>"
+            "Open the color wavelength tour</a> "
+            "<span class=muted>Aladin Lite view of the mosaics; the slider "
+            "steps through color images of three neighboring filters, from "
+            "the shortest wavelengths to the longest.</span></p>")
+
+
+#: Per-field catalog manifold viewers (a WebGL density view of a field's
+#: catalog in color-magnitude space) are built outside this script and dropped
+#: into the site tree as ``<field>_manifold/``.  The 10678 Treasury one
+#: predates that naming.  A field observed by several programs that do not
+#: share a filter set (brick: 2221 o001, 1182 o004) gets one viewer per
+#: observation, ``<field>_o<NNN>_manifold/``.  Linked only when the viewer's
+#: own ``data/manifest.json`` is there and readable, like the CMD explorer card.
+MANIFOLD_DIR_OVERRIDES = {"gc-treasury": "treasury_manifold"}
+
+
+def manifold_infos(out_dir, field):
+    """Every manifold viewer built for ``field``, in directory order."""
+    if field in MANIFOLD_DIR_OVERRIDES:
+        names = [MANIFOLD_DIR_OVERRIDES[field]]
+    else:
+        names = [f"{field}_manifold"] + sorted(
+            p.name for p in Path(out_dir).glob(f"{field}_o[0-9][0-9][0-9]_manifold"))
+    infos = (manifold_info(out_dir, field, name=n) for n in names)
+    return [i for i in infos if i is not None]
+
+
+def manifold_info(out_dir, field, name=None):
+    """Describe ``field``'s manifold viewer from its manifest, or None.
+
+    Everything the page says about the viewer comes from the viewer's own
+    ``data/manifest.json``, so the link cannot claim more than the build did.
+    """
+    if name is None:
+        name = MANIFOLD_DIR_OVERRIDES.get(field, f"{field}_manifold")
+    root = Path(out_dir) / name
+    if not (root / "index.html").is_file():
+        return None
+    try:
+        m = json.loads((root / "data" / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(m, dict) or not isinstance(m.get("n"), int) or m["n"] <= 0:
+        return None
+    sample = m.get("sample") if isinstance(m.get("sample"), dict) else {}
+    source = m.get("source") if isinstance(m.get("source"), dict) else {}
+    caveats = m.get("caveats") if isinstance(m.get("caveats"), list) else []
+    title = str(m.get("title") or "")
+    return {"href": f"{name}/",
+            "title": title,
+            "n": m["n"],
+            "prototype": "prototype" in title.lower(),
+            "created": str(m.get("created") or ""),
+            "parent": str(sample.get("parent") or ""),
+            "release_version": str(source.get("release_version") or ""),
+            "caveats": [str(c) for c in caveats]}
+
+
+def manifold_link_html(info, page_version=None, labelled=False):
+    """The viewer link under a field page's Catalogs heading.
+
+    ``labelled`` names the viewer by its title (minus "(prototype)", which
+    the tag already says), for a page that links more than one.
+    """
+    tag = " <span class=tag>prototype</span>" if info["prototype"] else ""
+    label = "Open the catalog manifold viewer"
+    if labelled and info.get("title"):
+        name = re.sub(r"\s*\(prototype\)\s*", " ", info["title"],
+                      flags=re.I).strip()
+        label = f"Open the {name} viewer"
+    desc = f"{info['n']:,} stars"
+    if info["parent"]:
+        desc += f" from {info['parent']}"
+    desc += "."
+    # The viewer is rebuilt on its own schedule from whatever catalogs it was
+    # pointed at.  Claim it matches this release only when its manifest says
+    # it was built from this release's files.
+    if page_version and info["release_version"] == page_version:
+        prov = "Built from this release's catalog files."
+    elif info["release_version"]:
+        prov = (f"Built from the {info['release_version']} catalog files; "
+                "it can differ from the catalog files listed below.")
+    else:
+        when = f" as of {info['created']}" if info["created"] else ""
+        prov = (f"Built from the pipeline catalogs{when}; it can differ from "
+                "the catalog files listed below.")
+    out = [f"<p><a class=btn href='{html.escape(info['href'])}'>"
+           f"{html.escape(label, quote=False)}</a>{tag} "
+           f"<span class=muted>{html.escape(desc, quote=False)} "
+           f"{html.escape(prov, quote=False)} "
+           "WebGL; best on a desktop GPU.</span></p>"]
+    if info["caveats"]:
+        out.append("<details class=muted><summary>Viewer caveats</summary><ul>"
+                   + "".join(f"<li>{html.escape(c, quote=False)}</li>"
+                           for c in info["caveats"])
+                   + "</ul></details>")
+    return "\n".join(out)
+
+
 def _quicklook_cards(quicklooks):
     """Link cards for the analyses that sit alongside the release."""
     out = ["<h2>Quicklook analyses</h2>",
@@ -2370,11 +2552,17 @@ def main(argv=None):
                              "it from the index.")
     parser.add_argument("--cmz-cat-hips",
                         help="site-relative URL of the catalog HiPS (optional)")
+    parser.add_argument("--hips-inventory",
+                        help="HiPS inventory JSON written by hips_index.py "
+                             f"(default: <out>/{hips_index.INVENTORY_NAME}); "
+                             "without one the HiPS sections are omitted")
     parser.add_argument("--cmz-moc",
                         help="site-relative URL of the coverage MOC .fits (optional)")
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out)
+    hips_inventory = hips_index.load_inventory(
+        args.hips_inventory or out_dir / hips_index.INVENTORY_NAME)
     assets = out_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
 
@@ -2591,6 +2779,12 @@ def main(argv=None):
                                      preview_version=preview_version,
                                      previews=preview_items,
                                      diagrams=diagram_items,
+                                     manifold=(manifold_infos(out_dir, field)
+                                               if v == latest else None),
+                                     # the served layers today: a frozen
+                                     # older page must not claim them
+                                     hips_inventory=(hips_inventory
+                                                     if v == latest else None),
                                      # only the CURRENT version's page: the
                                      # offsets are re-measured continuously, so
                                      # a frozen older page must not carry
@@ -2759,6 +2953,13 @@ def main(argv=None):
         quicklooks.append(CMD_VIEWER_CARD)
     if (out_dir / PANNER_FILE).exists():
         quicklooks.append(PANNER_CARD)
+    if hips_inventory is not None:
+        inv_path = Path(args.hips_inventory or out_dir / hips_index.INVENTORY_NAME)
+        if inv_path.resolve() != (out_dir / hips_index.INVENTORY_NAME).resolve():
+            shutil.copy2(inv_path, out_dir / hips_index.INVENTORY_NAME)
+        (out_dir / hips_index.INDEX_PAGE).write_text(hips_index.render_index_page(
+            sorted(roster), hips_inventory, page_head, footer))
+        quicklooks.append(HIPS_INDEX_CARD)
     index_html = render_index(index_fields, overview_html=overview_html,
                               quicklooks=tuple(quicklooks))
     if cmz_explorer_link:
@@ -2772,7 +2973,9 @@ def main(argv=None):
     (out_dir / "download_help.html").write_text(render_help())
     # .txt extension so the web server serves it as text (a .py 500s under CGI)
     (out_dir / "get_globus_token_helper.txt").write_text(TOKEN_HELPER)
+    shutil.copy2(CATALOG_COLUMNS_SRC, out_dir / CATALOG_COLUMNS_NAME)
     print(f"wrote index.html + download_help.html + get_globus_token_helper.txt "
+          f"+ {CATALOG_COLUMNS_NAME} "
           f"({len(fields_info)} field(s) rebuilt, {len(index_fields)} on the "
           f"index) into {out_dir}")
 

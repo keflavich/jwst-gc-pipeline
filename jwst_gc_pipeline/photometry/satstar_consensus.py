@@ -52,15 +52,31 @@ SATSTAR_CONSENSUS_EXCLUSION_ARCSEC = 0.2
 #: its satstar catalogs ``_m12``.
 _M12_STAGES = ("m1", "m2", "m12")
 
+#: Stages that fit on the residual-background-subtracted frame.  The satstar
+#: suffix is ``{bgsub}{_iteration_token(label)}``, so their satstar catalogs
+#: are ``..._crf_resbgsub_m5_satstar_catalog.fits``.  Same set as
+#: ``crowdsource_catalogs_long._RESBGSUB_PHASES`` and the phase loop in
+#: ``cataloging`` (``resbgsub = phase in ('m5', 'm6', 'm7')``).
+_RESBGSUB_STAGES = ("m5", "m6", "m7")
+
 
 def satstar_stage_label(stage):
     """Satstar-catalog iteration label for a checkpoint stage.
 
     The m12 phase writes the m1 and m2 per-frame catalogs and its satstar
-    catalogs as ``..._crf_m12_satstar_catalog.fits``; every later phase uses
-    its own label (``m3``, ``resbgsub_m5``, ...)."""
+    catalogs as ``..._crf_m12_satstar_catalog.fits``; m3 and m4 use their own
+    label; m5, m6 and m7 carry the ``resbgsub`` token (``resbgsub_m5``).
+
+    The checkpoint passes the bare merge label (``m5``), so the token is added
+    here.  There is no fallback to the plain ``..._crf_m7_satstar_catalog.fits``
+    name: files of that name are left over from before the resbgsub naming
+    (cloudc's are dated 2026-06-28) and hold stale fits (issue #1249)."""
     stage = str(stage)
-    return "m12" if stage in _M12_STAGES else stage
+    if stage in _M12_STAGES:
+        return "m12"
+    if stage in _RESBGSUB_STAGES:
+        return f"resbgsub_{stage}"
+    return stage
 
 
 def satstar_catalog_path(exposure_table, stage):

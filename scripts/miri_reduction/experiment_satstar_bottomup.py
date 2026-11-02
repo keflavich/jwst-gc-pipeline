@@ -28,7 +28,7 @@ import warnings
 warnings.filterwarnings('ignore')
 from astropy.io import fits
 from scipy.ndimage import label, binary_dilation, median_filter, distance_transform_edt
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 
 os.environ.setdefault("CRDS_PATH", "/orange/adamginsburg/jwst/brick/crds/")
 from jwst.datamodels import dqflags
@@ -56,7 +56,7 @@ def ssr(resid, data, fitpix):
 
 
 def main():
-    grid = to_griddedpsfmodel(PSFGRID)
+    grid = load_stpsf_grid(PSFGRID)
     if isinstance(grid, list):
         grid = grid[0]
     fh = fits.open(CRF)

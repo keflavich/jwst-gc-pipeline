@@ -1,0 +1,71 @@
+{
+ "label": "cloudc",
+ "filt": "F212N",
+ "n_vetted": {
+  "m2": 101845,
+  "m3": 95818,
+  "m4": 95561,
+  "resbgsub_m5": 158591,
+  "resbgsub_m6": 157083,
+  "resbgsub_m7": 137475
+ },
+ "n_union_m2_m6": 184675,
+ "n_lost": 55566,
+ "ctrl_final_resid_snr_p50": 0.6689131226521042,
+ "ctrl_final_resid_snr_p90": 3.369595477985052,
+ "ctrl_final_resid_snr_p99": 9.363754090065452,
+ "by_last_phase": {
+  "m2->vetted_out": {
+   "n": 6795,
+   "starlike_left": 2428
+  },
+  "m2->not_fit": {
+   "n": 2049,
+   "starlike_left": 671
+  },
+  "m3->vetted_out": {
+   "n": 1731,
+   "starlike_left": 896
+  },
+  "m3->not_fit": {
+   "n": 650,
+   "starlike_left": 210
+  },
+  "m4->vetted_out": {
+   "n": 3401,
+   "starlike_left": 1874
+  },
+  "m4->not_fit": {
+   "n": 931,
+   "starlike_left": 302
+  },
+  "resbgsub_m5->vetted_out": {
+   "n": 4466,
+   "starlike_left": 3921
+  },
+  "resbgsub_m5->not_fit": {
+   "n": 1272,
+   "starlike_left": 805
+  },
+  "resbgsub_m6->vetted_out": {
+   "n": 12575,
+   "starlike_left": 12399
+  },
+  "resbgsub_m6->not_fit": {
+   "n": 21696,
+   "starlike_left": 17521
+  }
+ },
+ "m7_seed_reason": {
+  "own_band_off": {
+   "n": 31568,
+   "starlike_left": 27419
+  },
+  "seeded": {
+   "n": 2703,
+   "starlike_left": 2501
+  }
+ },
+ "n_final_vetted_inner": 137475,
+ "n_starlike_left": 41027
+}

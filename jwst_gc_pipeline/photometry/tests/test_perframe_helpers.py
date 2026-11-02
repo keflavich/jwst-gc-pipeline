@@ -143,3 +143,50 @@ class TestFrameShardCoverage:
         # every frame fit exactly once, regardless of N vs frame count
         assert sorted(seen) == list(range(n_frames))
         assert len(seen) == len(set(seen))
+
+
+class TestReconstructCarriesPsfTokens:
+    """The restart path must spell the PSF tokens the mergedcat build writes.
+
+    ``build_mergedcat_residuals`` names its mosaic
+    ``{module}{desat}{bgsub}{epsf}{blur}{group}{iter}`` with
+    ``epsf = ('_epsf' if options.epsf else '') + hybrid_psf_token()``.  The
+    reconstruction dropped ``{epsf}{blur}``, so a hybrid-PSF run (o067 run C)
+    started at m3+ found no previous-phase mosaic.
+    """
+
+    def _opts(self, **kw):
+        base = dict(desaturated=False, bgsub=False, group=False, epsf=False,
+                    blur=False)
+        base.update(kw)
+        return type('O', (), base)()
+
+    def _bg(self, opts, label='m4'):
+        return C._reconstruct_smoothed_bg_path(
+            cut_bp='/x', proposal_id='2221', field='001', module='nrcb',
+            filt='F405N', label=label, options=opts, pupil='clear')
+
+    def test_hybrid_token_from_env(self, monkeypatch):
+        monkeypatch.setenv('PSF_EPSF_CORE_DIR', '/somewhere')
+        assert '-nrcb_hybpsf_m4_daophot_' in self._bg(self._opts())
+
+    def test_no_token_without_env(self, monkeypatch):
+        monkeypatch.delenv('PSF_EPSF_CORE_DIR', raising=False)
+        assert '-nrcb_m4_daophot_' in self._bg(self._opts())
+
+    def test_token_order_matches_build(self, monkeypatch):
+        monkeypatch.setenv('PSF_EPSF_CORE_DIR', '/somewhere')
+        bg = self._bg(self._opts(desaturated=True, bgsub=True, epsf=True,
+                                 blur=True, group=True), label='m5')
+        assert ('-nrcb_unsatstar_bgsub_resbgsub_epsf_hybpsf_blur_group_m5_'
+                'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits') in bg
+
+    def test_build_uses_the_same_token_expressions(self):
+        """Source guard: the build's product name keeps this order."""
+        from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+        src = re.sub(r"'\s*f'", '', re.sub(r'\n\s*', '', inspect.getsource(
+            L.build_mergedcat_residuals)))
+        assert ("epsf_tok = ('_epsf' if options.epsf else '') + "
+                "hybrid_psf_token()") in src
+        assert ("{module}{desat_tok}{bgsub_tok}{epsf_tok}{blur_tok}"
+                "{group_tok}{iter_tok}_daophot_{kind}_mergedcat_residual") in src

@@ -27,6 +27,16 @@ module A and +39/+48 in module B -- the large F200W filteroffset with its A/B
 split, which CRDS applies correctly -- and 2.11 mas is what is left once that
 per-module constant is taken out.
 
+F162M and F164N, which the library does not cover, carry a term five times
+larger: 9.9-10.3 mas 2-D rms against F212N on wd2, sgrc and wd1.  The
+distortion references pin every filter's detector reference point to the same
+V2Ref/V3Ref, while the F162M/F164N within-detector plate scale is 202-241 ppm
+larger than F212N's, so each detector centre sits s*R too close to its module
+centre (R the module-centre-to-detector-centre lever arm).  The term is static
+in the instrument frame: rows from one field predict another field at a
+different roll to 0.36 mas (F162M, wd2 <-> sgrc) and 0.97 mas (F164N, wd2 <->
+wd1).
+
 WHY IT SHOWS UP AS A POSITION-DEPENDENT FIELD
 ---------------------------------------------
 In a mosaic, different sky positions are covered by different mixes of the four
@@ -84,11 +94,21 @@ COEFFICIENT SOURCES
 ``gdc``     -- derived from Jay Anderson's STDGDC library.  Covers SW F070W,
                F090W, F115W, F140M, F150W, F182M, F200W, F210M, F212N.
 ``table``   -- an ECSV solved from our own data, for everything the library does
-               not cover: F187N and every LW GC band (F323N ... F480M, since the
-               library's only LW solution is F277W).  Format is documented in
-               ``filter_frame_table_schema``.
+               not cover: F162M, F164N, F187N and every LW GC band (F323N ...
+               F480M, since the library's only LW solution is F277W).  Format
+               is documented in ``filter_frame_table_schema``.
 
-Opt-in: ``FILTER_FRAME_CORRECTION=1``.  Default off, byte-identical behaviour.
+WHEN IT RUNS
+------------
+``fix_alignment`` calls ``apply_configured_filter_frame_correction`` on every
+frame, before the reference tie.  ``FILTER_FRAME_CORRECTION`` selects what it
+does:
+
+* unset (the default) -- correct F162M and F164N only, from the shipped table.
+  Their term is ~10 mas per detector, five times the F182M/F187N rows, and it
+  fails the m7 cross-filter gate (cloudef jw02092-o002, issue #1255).
+* ``1`` -- correct every filter the shipped table covers (adds F182M/F187N).
+* ``0`` -- correct nothing; byte-identical to the pre-#1255 behaviour.
 """
 import copy
 import os
@@ -105,6 +125,14 @@ PENDING = 'FFRAMPND'
 
 #: The frame every filter is brought onto: the observed filter closest to this.
 ANCHOR_TARGET_UM = 2.0
+
+#: Filters corrected when ``FILTER_FRAME_CORRECTION`` is unset (issue #1255).
+DEFAULT_ON_FILTERS = ('F162M', 'F164N')
+
+#: The table ``fix_alignment`` reads, and the anchor its rows are solved onto.
+SHIPPED_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                             'filter_frame_offsets.ecsv')
+SHIPPED_ANCHOR = 'F212N'
 
 #: NIRCam SW/LW plate scales (arcsec/pixel), for converting STDGDC pixel
 #: differences to mas.  LW is only used if a LW STDGDC solution ever exists.
@@ -305,12 +333,59 @@ def table_filter_offsets(tbl, filtername, anchor):
          for r in sel})
 
 
-def _env_flag(name):
-    return str(os.environ.get(name, '0')).strip().lower() in ('1', 'true', 'yes', 'on')
+def correction_mode():
+    """``'default'``, ``'all'`` or ``'off'`` from ``FILTER_FRAME_CORRECTION``.
+
+    Unset or empty means ``'default'`` (F162M/F164N only).  Any other value
+    that is not a recognised on/off word raises, so a typo cannot silently
+    pick one of the three.
+    """
+    raw = os.environ.get('FILTER_FRAME_CORRECTION')
+    if raw is None or not raw.strip():
+        return 'default'
+    v = raw.strip().lower()
+    if v in ('1', 'true', 'yes', 'on', 'all'):
+        return 'all'
+    if v in ('0', 'false', 'no', 'off'):
+        return 'off'
+    raise FilterFrameError(
+        f"FILTER_FRAME_CORRECTION={raw!r}: expected 1 (every filter the shipped "
+        f"table covers), 0 (none), or unset (F162M/F164N only)")
 
 
-def correction_enabled():
-    return _env_flag('FILTER_FRAME_CORRECTION')
+def frame_filter_name(filt, pupil):
+    """The filter a NIRCam frame was observed in, as the table keys it.
+
+    A pupil-wheel filter is recorded in PUPIL with its blocking filter in
+    FILTER (F162M is ``FILTER=F150W2, PUPIL=F162M``; F405N is
+    ``FILTER=F444W, PUPIL=F405N``), so PUPIL wins when it names a filter.
+    """
+    p = str(pupil or '').upper().strip()
+    f = str(filt or '').upper().strip()
+    digits = p[1:-1]
+    if p.startswith('F') and p[-1:] in ('W', 'M', 'N') and digits.isdigit():
+        return p
+    return f
+
+
+def configured_filter(instrument, detector, filtername, mode):
+    """The filter to correct for this frame under ``mode``, or None.
+
+    Pure, so it is testable.  Only NIRCam SW frames are candidates: a LW
+    module has one detector, so the module-mean gauge is zero there.
+    """
+    if mode not in ('default', 'all', 'off'):
+        raise FilterFrameError(f"unknown filter-frame mode {mode!r}")
+    if mode == 'off':
+        return None
+    if str(instrument or '').upper().strip() != 'NIRCAM':
+        return None
+    if str(detector or '').upper().strip() not in SW_DETECTORS:
+        return None
+    f = str(filtername or '').upper().strip()
+    if mode == 'default' and f not in DEFAULT_ON_FILTERS:
+        return None
+    return f or None
 
 
 def check_apply_preconditions(hdr, det, offsets_mas, anchor=None, label=""):
@@ -447,3 +522,36 @@ def apply_filter_frame_correction(fn, offsets_mas, frame='instrument',
               f"({dra_mas:+.2f}, {ddec_mas:+.2f}) mas on sky.  Module-mean "
               f"removed, so no offsets table is invalidated.")
     return dra, ddec
+
+
+def apply_configured_filter_frame_correction(fn, mode=None, table_path=SHIPPED_TABLE,
+                                             verbose=True):
+    """The ``fix_alignment`` entry point: correct ``fn`` if its filter is selected.
+
+    ``mode`` defaults to ``correction_mode()``.  A default-on filter with no
+    rows in the table raises, because the default promises that F162M/F164N
+    are corrected.  Under ``mode='all'`` a filter the table does not cover
+    (F210M, F212N itself, ...) is left alone.  Returns what
+    ``apply_filter_frame_correction`` returns, or None when nothing was done.
+    """
+    mode = correction_mode() if mode is None else mode
+    hdr0 = fits.getheader(fn, ext=0)
+    filt = configured_filter(hdr0.get('INSTRUME'), hdr0.get('DETECTOR'),
+                             frame_filter_name(hdr0.get('FILTER'), hdr0.get('PUPIL')),
+                             mode)
+    if filt is None:
+        return None
+    tbl = load_filter_frame_table(table_path)
+    try:
+        frame, offsets = table_filter_offsets(tbl, filt, SHIPPED_ANCHOR)
+    except FilterFrameError:
+        if filt in DEFAULT_ON_FILTERS:
+            raise
+        if verbose:
+            print(f"filter-frame correction not available for {fn}: no "
+                  f"{filt}/{SHIPPED_ANCHOR} rows in {table_path}")
+        return None
+    return apply_filter_frame_correction(fn, offsets, frame=frame,
+                                         anchor=SHIPPED_ANCHOR,
+                                         source=os.path.basename(table_path),
+                                         verbose=verbose)

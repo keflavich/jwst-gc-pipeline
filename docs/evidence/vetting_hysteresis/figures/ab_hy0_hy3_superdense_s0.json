@@ -1,0 +1,112 @@
+{
+ "var_a": "hy0",
+ "var_b": "hy3",
+ "summary": [
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 0,
+   "n_inner_b": 114,
+   "n_b_only": 5,
+   "n_left_in_a_snr5": 5,
+   "n_left_in_b_snr5": 0,
+   "n_near_satstar": 3,
+   "n_near_satstar_left_in_a_snr5": 3,
+   "n_injected": 0,
+   "n_brighter_nb": 3
+  },
+  {
+   "field": "superdense",
+   "filt": "F405N",
+   "seed": 2,
+   "n_inner_b": 23,
+   "n_b_only": 3,
+   "n_left_in_a_snr5": 2,
+   "n_left_in_b_snr5": 0,
+   "n_near_satstar": 0,
+   "n_near_satstar_left_in_a_snr5": 0,
+   "n_injected": 0,
+   "n_brighter_nb": 2
+  }
+ ],
+ "rows": [
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 0,
+   "x": 106.82905823413705,
+   "y": 125.68198122148291,
+   "ratio": 0.23186856734234618,
+   "injected": false,
+   "sat_dist_as": 0.6547888528894757,
+   "snr_data": 8.502439539718718,
+   "snr_a": 14.278586914991447,
+   "snr_b": -2.916815036473247
+  },
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 0,
+   "x": 57.34679012314814,
+   "y": 32.43396167516117,
+   "ratio": 0.49615661510928194,
+   "injected": false,
+   "sat_dist_as": 0.3303742574572438,
+   "snr_data": 3.6279200311195403,
+   "snr_a": 11.662538779899922,
+   "snr_b": 1.9177390973695683
+  },
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 0,
+   "x": 139.21633320320745,
+   "y": 84.14533893188855,
+   "ratio": NaN,
+   "injected": false,
+   "sat_dist_as": 0.4454196135685044,
+   "snr_data": 3.586860474224748,
+   "snr_a": 10.281378801104589,
+   "snr_b": 2.6342565282048294
+  },
+  {
+   "field": "superdense",
+   "filt": "F212N",
+   "seed": 0,
+   "x": 86.94073750859184,
+   "y": 115.26307689595362,
+   "ratio": NaN,
+   "injected": false,
+   "sat_dist_as": 0.5303766050009784,
+   "snr_data": 8.097457123954515,
+   "snr_a": 9.375328502537577,
+   "snr_b": 3.097120322810465
+  },
+  {
+   "field": "superdense",
+   "filt": "F405N",
+   "seed": 2,
+   "x": 28.521825236486563,
+   "y": 61.91219643343777,
+   "ratio": 0.40661577918168523,
+   "injected": false,
+   "sat_dist_as": 1.3440561773224775,
+   "snr_data": 6.763877677739547,
+   "snr_a": 10.474373227782468,
+   "snr_b": -0.5377343389063475
+  },
+  {
+   "field": "superdense",
+   "filt": "F405N",
+   "seed": 2,
+   "x": 20.03509986060368,
+   "y": 30.503729506582317,
+   "ratio": NaN,
+   "injected": false,
+   "sat_dist_as": 0.8384178610379034,
+   "snr_data": 12.12793894243614,
+   "snr_a": 7.2204482755019015,
+   "snr_b": 0.2843925893492535
+  }
+ ]
+}

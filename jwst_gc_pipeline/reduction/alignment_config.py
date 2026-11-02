@@ -80,7 +80,7 @@ __all__ = [
     'ALIGNMENT_CONFIG', 'offsets_channel', 'offsets_table_path',
     'CHANNEL_LOCKED', 'CHANNEL_CONSENSUS', 'CHANNEL_NONE',
     'TABLE_DRIVEN_INSTRUMENTS', 'instrument_has_table_channel',
-    'InheritedBulk', 'inherited_bulk',
+    'InheritedBulk', 'inherited_bulk', 'roll_blocked_by_locked_table',
 ]
 
 #: Wildcard for a ``recorded_bulk`` key component (matches any visit / filter).
@@ -156,10 +156,12 @@ class InheritedBulk:
     donor_filters: Tuple[str, ...]
     differential: Dict[str, Tuple[float, float]]
     dec_ref_deg: float
-    #: Skip tweakreg's ABSOLUTE fit to the reference catalog for this
-    #: instrument (the relative frame-to-frame fit still runs).  The inherited
-    #: tie IS the absolute tie; an absolute fit on top can only replace it
-    #: with this instrument's own, less reliable one.
+    #: Skip TweakRegStep for this instrument when every frame inherited.  The
+    #: inherited tie IS the absolute tie; an absolute fit on top can only
+    #: replace it with this instrument's own, less reliable one.  The relative
+    #: frame-to-frame fit is skipped too: it runs after the offsets-table
+    #: shift and would cancel the checkpoint's per-exposure rows.  (The name
+    #: predates skipping the relative fit.)
     disable_abs_tweakreg: bool = True
     notes: str = ''
 
@@ -205,6 +207,51 @@ class FieldAlignment:
     #: on their own frames.  Their own table rows still SUM on top, as
     #: residuals.  ``TABLE_CONSENSUS`` only.
     inherit_bulk: Dict[str, InheritedBulk] = _dc_field(default_factory=dict)
+    #: When True, the m2 checkpoint ties every filter OTHER than
+    #: ``reference_filter`` to ``reference_filter``'s own JWST consensus
+    #: catalog (dense, already VIRAC2-framed) instead of to VIRAC2 directly.
+    #: ``reference_filter`` itself is unaffected -- it still ties straight to
+    #: VIRAC2, and its consensus catalog is what the other filters tie to.
+    #: This keeps every band on the SAME frame even when a band's own VIRAC2
+    #: tie is refused (a coherent VIRAC2 tie for one band and a refused one
+    #: for another leaves the two ~100-200 mas apart on a shared field, e.g.
+    #: gc-treasury o063: F212N refused, F480M applied its own VIRAC2 bulk,
+    #: bands 226 mas apart).  ``TABLE_CONSENSUS`` only.  See
+    #: ``astrometry_checkpoint.resolve_tie_reference`` for the resolution
+    #: logic and its staleness/ordering guard.  Off by default: every field
+    #: except gc-treasury (10678) keeps its pre-existing, independent
+    #: per-filter VIRAC2 tie unchanged.
+    tie_through_reference_filter: bool = False
+    #: ``TABLE_LOCKED`` only: whether ``fix_alignment`` may apply the per-visit
+    #: roll correction (``roll_correction.py``, JWST-GC/data-qa#346) to this
+    #: field's frames.  A locked table holds one VIRAC2 shift per module,
+    #: solved on frames that still carried the roll, so each shift already
+    #: moved its module centre by the roll's displacement there (theta x the
+    #: ~90" module-centre lever, ~4 mas per module at a 10" roll).  Rotating
+    #: the frames on top of those shifts moves the two module centres a second
+    #: time, in opposite directions.  m2 cannot see that inter-module term
+    #: (#799) and refuses to correct it above 15 mas (#674).  Set True to start
+    #: rolling the field; the locked table must then be rebuilt from the
+    #: rolled frames before the field is released.  Consensus-channel and
+    #: recorded-bulk fields need no flag: their tables tie each frame to a
+    #: visit consensus that carries the same roll, plus one bulk shift per
+    #: visit, so no row absorbed a module-centre displacement.
+    roll_ready: bool = False
+    #: ``TABLE_CONSENSUS`` only: the consensus offsets table is this field's
+    #: ONLY per-frame correction, so the MIRI reducer skips TweakRegStep
+    #: (relative and absolute) for every association -- what it already does
+    #: when every frame inherits its bulk (``InheritedBulk``).  Needed where
+    #: Image3's absolute fit ties each frame to the same reference catalog
+    #: the m2 checkpoint checks against.  That fit starts from the
+    #: fix_alignment-shifted WCS and solves back to its own answer, so the
+    #: table's bulk row cancels and m2 reads the same residual after every
+    #: regeneration.  gc3571 o001 F560W, 2026-09-10 -> 09-13: applying the
+    #: table's (-16.7, -43.0) mas bulk changed the absolute tweakreg shift from
+    #: (20.4, -175.6) to (37.1, -132.6) mas, i.e. by exactly the bulk with
+    #: the sign flipped, and m2 read the visit consensus ~47 mas off VIRAC2
+    #: both times.  With the flag on, a frame whose visit has no row yet sits
+    #: at its raw pointing until m2 writes one.
+    table_only_tie: bool = False
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -301,6 +348,40 @@ ALIGNMENT_CONFIG = (
                'has data.'),
     ),
     FieldAlignment(
+        proposal='1905', fields=('001',),
+        reference_frame=GAIA, source=RECORDED_BULK,
+        visit_key='suffix3', consensus_jitter=True, reference_filter='F212N',
+        dec_ref_deg=-45.856,
+        recorded_bulk={
+            ('003', ANY): BulkEntry(-2379.0, -1628.4, onsky_mas=True),
+        },
+        notes=('wd1 obs 001, visit 003 (the eastern third of the mosaic, guide '
+               'star S8UV267665, observed 2023-04-05; visits 001/002 are '
+               '2023-03-31 on other guide stars) sits (+2.379", +1.628") on '
+               'sky from Gaia DR3 and (+2.363", +1.614") from visit 002 on '
+               '4307 matched F212N stars (peak contrast 1152).  All 27 cells of '
+               'the m2 per-tile grid agree to 2.870-2.903".  Measured '
+               '2026-10-09 by the m2 checkpoint against gaia_refcat.fits '
+               '(F212N, histogram; F444W reads +2.422", +1.620").\n\n'
+               'The checkpoint cannot apply this itself: against a Gaia-only '
+               'reference per_tile_ok requires the same-star refinement, which '
+               'runs only once the tie is verified small, so a multi-arcsec '
+               'visit bulk is refused ("COULD NOT VERIFY ... NOT applying") '
+               'on every iteration.  Every wd1 NIRCam mosaic therefore '
+               'carried visit 003 2.9" off visits 001/002, doubling the stars '
+               'in the overlap.\n\n'
+               'This records only the coarse visit-003 pre-shift (correction '
+               'sign: reference minus frame).  Visits 001/002 get no recorded '
+               'constant.  consensus_jitter=True keeps the TABLE_CONSENSUS '
+               'behaviour on top: the m2 checkpoint measures each '
+               '(visit, filter) residual against Gaia, which is now tens of mas '
+               'for every visit, verifies it with the same-star refinement, and '
+               'writes the BULK sentinel + per-exposure jitter rows into '
+               'Offsets_JWST_Brick1905_consensus.csv; resolve_shift sums them '
+               'with this constant.  Same pattern as cloudef 2092 obs 002.\n\n'
+               'Obs 003 keeps the proposal-wide TABLE_CONSENSUS entry below.'),
+    ),
+    FieldAlignment(
         proposal='1905', fields=None,
         reference_frame=GAIA, source=TABLE_CONSENSUS,
         reference_filter='F212N',
@@ -358,6 +439,10 @@ ALIGNMENT_CONFIG = (
         proposal='10678', fields=None,
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F212N',
+        # OFF until most tiles' F212N m2 has settled (2026-10-02: 43 of 68
+        # had not, and each of those would stop at F480M m2 with
+        # ReferenceFilterNotSettledError).  Turning it on is a one-line PR.
+        tie_through_reference_filter=False,
         notes=('gc-treasury (GC Treasury, 139 planned observations over '
                '~1668 exposure-level MAST rows, none executed yet; #413).  '
                'Registered BEFORE any delivery: a field absent here reduces '
@@ -375,7 +460,16 @@ ALIGNMENT_CONFIG = (
                'for that list.  The table of per-exposure consensus '
                'coordinates, offsets/Offsets_JWST_Brick10678_consensus.csv, '
                'does not exist yet: the m2 checkpoint creates it and updates '
-               'it in place on the first reduce.'),
+               'it in place on the first reduce.  '
+               'tie_through_reference_filter (mechanism added 2026-09-27, '
+               'shipped OFF 2026-10-02 pending F212N settlement): F212N '
+               'and F480M each used to tie straight to VIRAC2 independently, '
+               'so a tile where one band\'s tie was refused (o063: F212N '
+               'refused, F480M applied its own VIRAC2 bulk of (-171,-147) '
+               'mas) left the two bands 226 mas apart on the same sky.  '
+               'F480M now ties to F212N\'s own JWST consensus catalog '
+               'instead of to VIRAC2, so the two bands stay on the same '
+               'frame whether or not F212N\'s VIRAC2 tie was itself applied.'),
         inherit_bulk={
             'mirimage': InheritedBulk(
                 donor_filters=('F212N',),
@@ -407,17 +501,28 @@ ALIGNMENT_CONFIG = (
                        'frame\'s VIRAC2 tie was refused (o063 o077 o105 o109 '
                        'o111 o113 o116, #957); an F480M fallback would put '
                        'MIRI on VIRAC2 there but up to ~225 mas off F212N '
-                       '(o063).')),
+                       '(o063).  Since #986 the whole TweakRegStep is '
+                       'skipped on these frames.  F770W per-exposure rows '
+                       'written by m2 before #986 were measured on '
+                       'tweakreg-shifted crf and are invalid on post-#986 '
+                       'frames: remove every F770W row (o071 exp1-6, o078 '
+                       'exp6, o114 exp4-6 as of 2026-09-27) before the first '
+                       'post-#986 regen.')),
         },
     ),
     FieldAlignment(
         proposal='5365', fields=None,
         reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F212N',
+        roll_ready=True,
         notes=('sgrb2. Absent from the old dispatch -> unaligned, while its '
                'builder-written VIRAC2locked table holds 264 real rows across 11 '
                'filters (median |offset| ~126 mas) that nothing read. 14 filter '
-               'directories, so the reference band matters most here.'),
+               'directories, so the reference band matters most here. '
+               'roll_ready=True (2026-10-29, #790): frames regenerated from now on '
+               'carry the 9.57" data-qa#346 roll; the locked table is then rebuilt '
+               'from the rolled frames (build_virac2_offsets --region sgrb2 '
+               '--per-module) and the frames regenerated again before release.'),
     ),
     FieldAlignment(
         proposal='1939', fields=('001',),
@@ -811,11 +916,14 @@ ALIGNMENT_CONFIG = (
                "pipeline's business."),
     ),
     # gc3571 -- MIRI imaging of the CMZ from program 3571 (Yusef-Zadeh), five
-    # tiles around Sgr A*.  Identical reasoning to the gc1266 entry above.
+    # tiles around Sgr A*.  Identical reasoning to the gc1266 entry above,
+    # plus table_only_tie: Image3's absolute tweakreg cancelled o001's m2 bulk
+    # row on regeneration (see FieldAlignment.table_only_tie).
     FieldAlignment(
         proposal='3571', fields=('001', '003', '004', '005', '016'),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F560W',
+        table_only_tie=True,
         notes=('gc3571 MIRI imaging (F560W/F770W/F1000W/F1280W/F1500W, obs '
                '001/003/004/005/016 = Tiles 1/2/3/4/6, five adjoining '
                'pointings spanning 3.22 arcmin about (266.41973, -29.00509), '
@@ -992,12 +1100,30 @@ def offsets_channel(proposal_id, field, instrument=None):
     return CHANNEL_NONE
 
 
+def roll_blocked_by_locked_table(proposal_id, field) -> bool:
+    """True when this field's roll correction waits on a locked-table rebuild.
+
+    See :attr:`FieldAlignment.roll_ready`.  A field with no entry, a
+    consensus-channel field and a recorded-bulk field are never blocked.
+    """
+    cfg = resolve(str(proposal_id), str(field) if field is not None else None)
+    return cfg is not None and cfg.source == TABLE_LOCKED and not cfg.roll_ready
+
+
 def inherited_bulk(proposal_id, field, module):
     """The :class:`InheritedBulk` for ``module`` in this field, or ``None``."""
     cfg = resolve(str(proposal_id), str(field) if field is not None else None)
     if cfg is None or cfg.source != TABLE_CONSENSUS:
         return None
     return cfg.inherit_bulk.get(module)
+
+
+def table_only_tie(proposal_id, field):
+    """Whether this field's consensus offsets table is its only per-frame
+    correction (:attr:`FieldAlignment.table_only_tie`)."""
+    cfg = resolve(str(proposal_id), str(field) if field is not None else None)
+    return (cfg is not None and cfg.source == TABLE_CONSENSUS
+            and cfg.table_only_tie)
 
 
 def reference_catalog_required(proposal_id, field):

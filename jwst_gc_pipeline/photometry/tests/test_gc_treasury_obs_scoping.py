@@ -1115,6 +1115,40 @@ def test_merged_catalog_path_matches_what_the_merge_writes(tmp_path,
         str(tmp_path), 'm2', 'nrcblong', 'f480m', '10678', '001'))
 
 
+@pytest.mark.parametrize('epsf, hybrid', [(True, False), (False, True),
+                                           (True, True)])
+def test_merge_reads_back_epsf_and_hybrid_perframe_names(
+        tmp_path, monkeypatch, epsf, hybrid):
+    """The writer stamps ``_epsf``/``_hybpsf``; the merge glob must too.
+
+    It did not: an o067 PSF_EPSF_CORE_DIR run wrote
+    ``..._exp00001_hybpsf_m1_daophot_basic.fits`` and every m12 finalize died
+    with "No tables found" after the fanout had verified all frame markers.
+    """
+    if hybrid:
+        monkeypatch.setenv('PSF_EPSF_CORE_DIR', str(tmp_path / 'cores'))
+    else:
+        monkeypatch.delenv('PSF_EPSF_CORE_DIR', raising=False)
+    (tmp_path / 'catalogs').mkdir()
+    (tmp_path / 'F480M').mkdir()
+    opts = _options('001')
+    opts.epsf = epsf
+    fn = _predict_tblfilename(
+        str(tmp_path), 'F480M', 'nrcblong', opts, 1, '02101', 1,
+        iteration_label='m2', method='daophot', basic_or_iterative='basic')
+    t = Table({'flux_fit': [1.0]})
+    t.meta['FILENAME'] = '/x/jw10678001001_02101_00001_nrcblong_crf.fits'
+    t.write(fn)
+    seen = []
+    monkeypatch.setattr(MC, 'combine_singleframe', _stub_combine(seen))
+    MC.merge_individual_frames(module='nrcblong', filtername='f480m',
+                               progid='10678', method='dao', suffix='_basic',
+                               target='gc-treasury', basepath=str(tmp_path),
+                               iteration_label='m2', field='001', epsf=epsf,
+                               do_replace_saturated=False)
+    assert seen == [[t.meta['FILENAME']]]
+
+
 # ---------------------------------------------------------------------------
 # production wiring: the call sites that decide which observation is used
 # ---------------------------------------------------------------------------

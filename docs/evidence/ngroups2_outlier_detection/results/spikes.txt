@@ -1,0 +1,3 @@
+cloudc stamps 400 sharp px before 68 after 413
+sgrc stamps 400 sharp px before 0 after 1
+arches stamps 400 sharp px before 2 after 0

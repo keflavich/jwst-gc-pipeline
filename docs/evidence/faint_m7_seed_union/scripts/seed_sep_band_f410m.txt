@@ -1,0 +1,11 @@
+== Brick F410M vs f444w_merged_o004_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits; FWHM 0.137"; restored n=55884, in-prod own n=27744; separation to nearest brighter seed in FWHM
+  [0.0, 1.5) FWHM: restored n= 14237 match 0.10 (ch 0.03) rel 0.10  |  in-prod n=  1213 match 0.41 (ch 0.03) rel 0.52
+  [1.5, 2.0) FWHM: restored n= 13080 match 0.20 (ch 0.03) rel 0.23  |  in-prod n=  1510 match 0.61 (ch 0.03) rel 0.78
+  [2.0, 2.5) FWHM: restored n=  9945 match 0.29 (ch 0.02) rel 0.36  |  in-prod n=  2283 match 0.64 (ch 0.03) rel 0.81
+  [2.5, 3.0) FWHM: restored n=  5967 match 0.32 (ch 0.03) rel 0.40  |  in-prod n=  3584 match 0.74 (ch 0.03) rel 0.96
+  [3.0, 4.0) FWHM: restored n=  8065 match 0.33 (ch 0.02) rel 0.42  |  in-prod n=  8616 match 0.81 (ch 0.03) rel 1.04
+  [4.0, 6.0) FWHM: restored n=  4250 match 0.33 (ch 0.02) rel 0.42  |  in-prod n=  8412 match 0.86 (ch 0.02) rel 1.11
+  [6.0, inf) FWHM: restored n=   291 match 0.29 (ch 0.02) rel 0.36  |  in-prod n=  1627 match 0.90 (ch 0.03) rel 1.17
+  restore only if >= 2.0 FWHM from a brighter seed: n= 28567 rel 0.39
+  restore only if >= 2.5 FWHM from a brighter seed: n= 18622 rel 0.41
+  restore only if >= 3.0 FWHM from a brighter seed: n= 12655 rel 0.42

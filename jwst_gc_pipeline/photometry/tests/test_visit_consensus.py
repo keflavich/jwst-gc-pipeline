@@ -493,6 +493,58 @@ def test_large_visit_parity_halves_detects_misalignment():
     assert flagged[0]["vs_consensus"]["off"] == pytest.approx(8.0, abs=2.0)
 
 
+def test_half_bridge_takes_the_tree_path(monkeypatch):
+    """The half1-vs-half0 bridge must measure against a KDTreeReference.
+
+    Against a plain SkyCoord it takes the astropy path, whose 2000-point
+    subsample floor ignores the pair budget at wide windows (sgrb2 F182M:
+    194M pairs at 60", 2256 s for one bridge)."""
+    from jwst_gc_pipeline.photometry import visit_consensus as vc
+    from jwst_gc_pipeline.photometry.astrometry_offsets import KDTreeReference
+    seen = []
+    real = vc.measure_offset
+
+    def _spy(a, b, *args, **kw):
+        if kw.get("context", "").endswith("half1 vs half0"):
+            seen.append(b)
+        return real(a, b, *args, **kw)
+
+    monkeypatch.setattr(vc, "measure_offset", _spy)
+    tables = _visit_tables(n_exp=20, misaligned={7: (8.0, 0.0)})
+    cons = build_visit_consensus(tables, context="test-bridge")
+    assert len(seen) == 1
+    assert isinstance(seen[0], KDTreeReference)
+    flagged = [e for e in cons["exposures"] if e["misaligned"]]
+    assert [e["key"][1] for e in flagged] == [7]
+
+
+def test_half_bridge_cap_builds_a_tree_of_the_capped_stars(monkeypatch):
+    """Above the cap the bridge reference is a tree of the CAPPED subsample
+    (the same stars the plain path measured), not the full half."""
+    from jwst_gc_pipeline.photometry import visit_consensus as vc
+    from jwst_gc_pipeline.photometry.astrometry_offsets import KDTreeReference
+    seen = []
+    real = vc.measure_offset
+    real_cap = vc._cap_stars
+
+    def _spy(a, b, *args, **kw):
+        if kw.get("context", "").endswith("half1 vs half0"):
+            seen.append((len(a), b))
+        return real(a, b, *args, **kw)
+
+    monkeypatch.setattr(vc, "measure_offset", _spy)
+    monkeypatch.setattr(vc, "_cap_stars",
+                        lambda sc, n_max=500_000, seed=1182:
+                        real_cap(sc, n_max=1000, seed=seed))
+    tables = _visit_tables(n_exp=20)
+    build_visit_consensus(tables, context="test-bridge-cap")
+    assert len(seen) == 1
+    n_a, ref = seen[0]
+    assert n_a == 1000
+    assert isinstance(ref, KDTreeReference)
+    assert len(ref) == 1000
+
+
 def test_footprint_crop_is_lossless_for_the_measured_offset():
     """_crop_to_footprint removes only reference stars no sweep window could
     pair with the target; the measured offset must be unchanged."""

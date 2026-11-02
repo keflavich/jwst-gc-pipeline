@@ -251,7 +251,7 @@ def vega_zeropoint_jy(band, allow_network=True):
         return _SVO_CACHE[band]
     if allow_network:
         try:
-            from astroquery.svo_fps import SvoFps
+            from jwst_gc_pipeline.svo_filters import SvoFps
             # The cached constants exist for an unreachable service, and a hang
             # has no path to them: without a timeout the build stops rather
             # than falls back.

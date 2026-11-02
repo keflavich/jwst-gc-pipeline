@@ -32,22 +32,30 @@ logic"), extended one product class further.
 Catalogs are deliberately NOT in scope.  Every per-stage merged catalog for
 brick totals ~41 GB against 4+ TB of that field's stage images: they are the
 scientific record, they are cheap, and this module never selects one.  The two
-exceptions are explicit, opt-in derivative rules (``_allcols`` supersets and
-duplicate table formats), both off unless the caller asks for them.
+exceptions are explicit derivative rules -- ``_allcols`` supersets (verified
+dead: no reader anywhere in the repo, every consumer explicitly excludes the
+name; ``default_on``) and duplicate ECSV/FITS table formats (``default_on=
+False`` -- the release ships BOTH formats of the combined merged table as
+separate deliverables, so "has a twin" does not mean "is dead" here).
 
 WHAT PROTECTS A PRODUCT
 -----------------------
-Selection alone never deletes.  :class:`Guard` holds the four facts that veto a
+Selection alone never deletes.  :class:`Guard` holds the facts that veto a
 candidate, and :func:`plan` applies it to every match:
 
 1. anything a published release points at.  ``releases/v1.3-*/brick/exposures``
-   is 1,200 SYMLINKS into the live tree, so deleting a live exposure silently
+   is 2,400 SYMLINKS into the live tree, so deleting a live exposure silently
    breaks a published download.  Targets are resolved, not assumed.
 2. anything belonging to a field with a queued or running SLURM chain.  A phase
    that restarts into missing inputs either trips the mergedcat guard or, worse,
    resumes from a partial marker set.
 3. anything younger than ``min_age_days``.
 4. anything under a caller-supplied protect glob.
+5. (``stale_badastrom_mosaic`` only) anything whose pre-quarantine name a
+   release MANIFEST.json recorded as its staging ``src`` -- that quarantine
+   twin's mtime may be the only way ``release_freshness.py`` can tell an
+   already-served release page it is showing repudiated bytes.  See
+   :func:`release_manifest_srcs`.
 
 The Guard belongs to :func:`plan`.  The in-run helpers at the bottom of this
 module -- the ones the phase loop calls -- do NOT go through it, and the block
@@ -69,8 +77,13 @@ from dataclasses import dataclass, field as _dcfield
 
 __all__ = ['Rule', 'Candidate', 'Guard', 'POLICY', 'DEFAULT_RULES',
            'classify', 'plan', 'apply', 'release_symlink_targets',
-           'busy_targets', 'superseded_perframe_products',
-           'spent_mergedcat_frames', 'RetentionError']
+           'release_manifest_srcs', 'busy_targets',
+           'superseded_perframe_products',
+           'spent_mergedcat_frames', 'superseded_smoothed_bg',
+           'perframe_ledger_path', 'write_perframe_ledger',
+           'read_perframe_ledger', 'mark_perframe_raw_retired',
+           'ledger_frames', 'mosaic_variant_key', 'same_run_mosaics',
+           'RetentionError']
 
 
 class RetentionError(RuntimeError):
@@ -86,7 +99,17 @@ class RetentionError(RuntimeError):
 # --------------------------------------------------------------------------
 PROTECTED_SUFFIXES = (
     '_i2d.fits',        # every mosaic, incl. *_mergedcat_residual_i2d.fits and
-                        # *_mergedcat_residual_smoothed_bg_i2d.fits
+                        # *_mergedcat_residual_smoothed_bg_i2d.fits.  The one
+                        # in-run exception is superseded_smoothed_bg below,
+                        # which names a single smoothed-bg path two phases back.
+                        # A checkpoint-quarantined twin (``..._i2d_im0_badastrom
+                        # [.N].fits``, written by astrometry_checkpoint
+                        # .mark_i2d_stale) does NOT end in ``_i2d.fits`` -- it
+                        # ends in ``_badastrom.fits`` -- so it is deliberately
+                        # NOT caught here.  It is handled by its own narrowly
+                        # scoped rule (``stale_badastrom_mosaic`` below), which
+                        # checks for a fresh replacement before it can fire.
+                        # Do not widen this suffix to reach it.
     '_crf.fits', '_cal.fits', '_rate.fits', '_rateints.fits', '_uncal.fits',
     '_destreak.fits', '_align.fits', '_asn.json',
     '_consensus.fits', '_satstar_reconciled_m12.fits',
@@ -146,6 +169,30 @@ QUARANTINE_DIR_RE = re.compile(
     re.IGNORECASE)
 
 ALLCOLS_RE = re.compile(r'_allcols\.fits$')
+
+# The m2 checkpoint's quarantine rename (astrometry_checkpoint.mark_i2d_stale,
+# STALE_TAG = "_im0_badastrom.fits"): "<stem>.fits" -> "<stem>_im0_badastrom
+# .fits", and, if that name is taken, "<stem>_im0_badastrom.<N>.fits" for N =
+# 1, 2, ...  The captured ``stem`` is exactly the pre-quarantine basename minus
+# its own ".fits", so ``stem + ".fits"`` is the original mosaic's name -- the
+# same name ``find_i2d_for_filter`` looks for when deciding a field has (or has
+# not) been regenerated.
+BADASTROM_RE = re.compile(r'^(?P<stem>.+)_im0_badastrom(?:\.\d+)?\.fits$')
+
+
+def _badastrom_original(path):
+    """The pre-quarantine path a ``*_im0_badastrom[.N].fits`` twin was renamed
+    from, or ``None`` if ``path`` is not one of those."""
+    m = BADASTROM_RE.match(os.path.basename(str(path)))
+    if m is None:
+        return None
+    return os.path.join(os.path.dirname(str(path)), m.group('stem') + '.fits')
+
+# The smoothed-residual background a phase builds for the next one.  The
+# ``_mergedcat_residual_`` infix is what separates it from the residual and
+# model mosaics, which are kept as diagnostics.
+SMOOTHED_BG_RE = re.compile(
+    r'_' + _LABEL + r'_daophot_[a-z]+_mergedcat_residual_smoothed_bg_i2d\.fits$')
 
 
 @dataclass(frozen=True)
@@ -235,12 +282,61 @@ def _rule_duplicate_table_format(path, ctx):
     Off by default: which format is canonical is a project decision (the write
     site prefers ECSV for mixin/mask fidelity; the release ships FITS), and this
     rule must not make it silently.
+
+    It stays off by default for a stronger reason than "undecided": for the
+    field's combined merged table (``basic_merged_indivexp_photometry_tables_
+    merged*``), BOTH formats are shipped as separate release deliverables --
+    ``scripts/release/stage_release.py::_emit_table_group`` emits a
+    ``full_fits`` item AND a ``full_ecsv`` item whenever both exist, and real
+    manifests do carry both (checked across the current release tree: v1.0
+    cloudc/gc2211/sgrb2/sgrc each staged one ``.ecsv`` catalog alongside its
+    ``.fits`` twin).  ``jwst_gc_pipeline/cmz/catalog_assembly.write_outputs``
+    says the same thing about its own output: "FITS/ECSV are the familiar
+    deliverables".  So an ECSV with a FITS twin is not reliably a dead
+    duplicate -- for the one table family a release actually ships in both
+    formats, deleting the ECSV silently drops a format from every future
+    release of that field, with nothing logged.  Enabling this rule safely
+    would need it to tell "this stem is a shipped deliverable" from "this is
+    an intermediate ECSV nothing ships", which it does not do today.
     """
     base = os.path.basename(path)
     sibs = _sibling_names(ctx)
     if base.endswith('.ecsv') and (base[:-5] + '.fits') in sibs:
         return 'ECSV duplicate of the FITS table beside it'
     return None
+
+
+def _rule_stale_badastrom_mosaic(path, ctx):
+    """A checkpoint-quarantined mosaic whose field has since been regenerated.
+
+    ``astrometry_checkpoint.mark_i2d_stale`` renames a mosaic built on
+    superseded offsets to ``*_im0_badastrom[.N].fits`` rather than deleting it,
+    specifically so ``stage_release.py`` can tell "this field was never
+    regenerated" (refuse to stage) from "this field has no mosaic at all"
+    (unrelated absence) -- see ``_badastrom_sibling`` there.  That refusal only
+    fires while the ORIGINAL name is missing, so once a fresh mosaic has been
+    written under that name the stale twin blocks nothing further; it is pure
+    debris from then on.
+
+    This only fires when the original (pre-quarantine) name exists on disk AND
+    is newer than the stale twin -- i.e. a real regeneration happened after the
+    quarantine, not merely some other file with the same stem.  No replacement,
+    or a replacement no newer than the twin (a second checkpoint run against
+    the SAME still-bad mosaic), leaves it alone.
+    """
+    orig = _badastrom_original(path)
+    if orig is None:
+        return None
+    try:
+        orig_mtime = os.path.getmtime(orig)
+        stale_mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    if orig_mtime <= stale_mtime:
+        return None
+    return (f'checkpoint-quarantined mosaic; {os.path.basename(orig)} is a '
+            f'fresh regenerated replacement, newer on disk, so this twin is '
+            f'no longer what stage_release.py needs to refuse staging')
 
 
 DEFAULT_RULES = (
@@ -254,9 +350,13 @@ DEFAULT_RULES = (
          'per-frame residual/model below the final phase on disk',
          _rule_superseded_perframe, min_age_days=7.0),
     Rule('allcols', '_allcols superset tables', _rule_allcols,
-         min_age_days=30.0, default_on=False),
+         min_age_days=30.0, default_on=True),
     Rule('duplicate_table_format', 'ECSV/FITS twins of one table',
          _rule_duplicate_table_format, min_age_days=30.0, default_on=False),
+    Rule('stale_badastrom_mosaic',
+         'checkpoint-quarantined i2d mosaics with a fresh regenerated '
+         'replacement',
+         _rule_stale_badastrom_mosaic, min_age_days=14.0, default_on=True),
 )
 
 POLICY = {r.name: r for r in DEFAULT_RULES}
@@ -320,6 +420,7 @@ class Guard:
     min_age_days: float = 30.0
     protect_globs: tuple = ()
     now: float = None
+    manifest_srcs: frozenset = _dcfield(default_factory=frozenset)
 
     def veto(self, path, st, rule):
         """Reason this candidate must not be deleted, or None."""
@@ -333,6 +434,17 @@ class Guard:
             if f'/{fieldname}/' in path or f'/{fieldname}/' in real:
                 return (f'field {fieldname} has a queued or running SLURM '
                         f'chain')
+        if rule is not None and rule.name == 'stale_badastrom_mosaic':
+            orig = _badastrom_original(path)
+            if orig is not None and os.path.realpath(orig) in self.manifest_srcs:
+                return (
+                    'a release MANIFEST.json recorded the pre-quarantine name '
+                    'as its staging source; release_freshness.py reads this '
+                    "twin's mtime to tell a repudiated staged release from a "
+                    'live one when the regenerated mosaic lands at an '
+                    'identical byte size (the normal case for a re-drizzle on '
+                    'a fixed output grid, where the staged-size comparison '
+                    'alone sees nothing)')
         now = self.now if self.now is not None else _now()
         age_days = (now - st.st_mtime) / 86400.0
         floor = max(self.min_age_days, rule.min_age_days if rule else 0.0)
@@ -360,6 +472,42 @@ def release_symlink_targets(releases_root):
             if os.path.islink(p):
                 targets.add(os.path.realpath(p))
     return frozenset(targets)
+
+
+def release_manifest_srcs(releases_root):
+    """Resolved ``src`` path of every file any release ever staged.
+
+    ``scripts/release/release_freshness.py`` audits an ALREADY-STAGED release
+    by re-stat'ing its manifest's ``src`` path: if that path has since grown a
+    ``*_im0_badastrom[.N].fits`` twin NEWER than the staging time, the staged
+    bytes are reported ``quarantined`` rather than ``live`` -- the whole reason
+    that module exists ("Cloud C's published images predate the 2026-07-12
+    astrometry fix, so the page was showing ~4 arcsec errors as evidence that
+    the astrometry is sound").  Its fallback, when no twin is found, compares
+    recorded vs. current file SIZE -- which is blind for a re-drizzled ``i2d``:
+    the output grid is fixed, so a re-drizzle after a mas-level correction
+    writes an IDENTICAL byte count.  So a ``src`` any manifest recorded is a
+    path whose quarantine twin may be the ONLY evidence an already-served
+    release page has that it needs to stop presenting those bytes as current;
+    :func:`guard_for` feeds this into :class:`Guard` so
+    ``stale_badastrom_mosaic`` never prunes one.
+    """
+    srcs = set()
+    # Recursive: releases nest a category level for some fields
+    # (v1.0/galactic_plane/w51, v1.1/globular_clusters/m4, ...), and a
+    # fixed-depth '*/*' glob silently missed every one of them.  A manifest
+    # that cannot be read RAISES: this set is a deletion veto, so an
+    # unreadable manifest must stop the plan rather than shrink the veto.
+    for manifest_path in sorted(glob.glob(
+            os.path.join(releases_root, '**', 'MANIFEST.json'),
+            recursive=True)):
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+        for item in manifest.get('files', ()):
+            src = item.get('src')
+            if src:
+                srcs.add(os.path.realpath(src))
+    return frozenset(srcs)
 
 
 def busy_targets(known_targets, squeue_output=None):
@@ -393,12 +541,15 @@ def guard_for(roots, known_targets, *, releases_root=None, min_age_days=30.0,
               protect_globs=(), squeue_output=None, assume_idle=False):
     """Build the Guard for a real cleanup run."""
     targets = frozenset()
+    manifest_srcs = frozenset()
     if releases_root and os.path.isdir(releases_root):
         targets = release_symlink_targets(releases_root)
+        manifest_srcs = release_manifest_srcs(releases_root)
     busy = frozenset() if assume_idle else busy_targets(known_targets,
                                                         squeue_output)
     return Guard(release_targets=targets, busy_fields=busy,
-                 min_age_days=min_age_days, protect_globs=tuple(protect_globs))
+                 min_age_days=min_age_days, protect_globs=tuple(protect_globs),
+                 manifest_srcs=manifest_srcs)
 
 
 # --------------------------------------------------------------------------
@@ -609,63 +760,178 @@ def apply(candidates, *, dry_run=True, manifest_path=None, on_error='raise'):
 # In-run helpers (used by the phase loop; see cataloging.py)
 #
 # These do NOT go through :class:`Guard`.  They apply ``_is_protected_name`` and
-# their own narrow globs, and that is the whole of their protection.  It is
-# enough here for reasons that do not generalise: the caller runs inside a live
-# chain, so the busy-field veto would refuse everything; every release symlink
-# target is a ``_crf.fits``, which the name filter already excludes (measured:
-# 0 of 1200 reach a Guard unprotected) and which these globs cannot name
-# anyway; an age floor is meaningless for a file the same run just wrote; and
+# select only from a per-build ledger (the exact files one mergedcat build read
+# and wrote; see :func:`write_perframe_ledger`), and that is the whole of their
+# protection.  They used to glob ``*_{label}_daophot_*`` under the field
+# prefix; the ``*`` spanned detector, module and variant tokens, so a second
+# chain or variant in the same pipeline directory lost its pairs, and cloudef's
+# obs005 frames (which carry the ``-o002_`` prefix) were offered to obs002's
+# cleanup.
+#
+# That protection is enough here for reasons that do not generalize: the caller
+# runs inside a live chain, so the busy-field veto would refuse everything;
+# every release symlink target is a ``_crf.fits``, which the name filter
+# already excludes (measured: 0 of 2400 reach a Guard unprotected) and which
+# the selectors' suffix checks refuse anyway; an age floor is meaningless for a file the same run just wrote; and
 # ``--protect`` is an operator flag with no operator in a SLURM job.
 #
 # A NEW in-run selector therefore inherits no Guard.  Either earn the safety
-# from ``_is_protected_name`` plus the glob, as these two do, or route the
+# from ``_is_protected_name`` plus an exact list, as these do, or route the
 # selection through :func:`plan`.  See docs/PRODUCT_RETENTION.md.
 # --------------------------------------------------------------------------
 
-def _stem_prefix(proposal_id, field, filtername):
-    from jwst_gc_pipeline.mast_names import jw_prefix
-    from jwst_gc_pipeline.photometry.naming import _inst_token
-    return (f'{jw_prefix(proposal_id)}-o{field}_t001_'
-            f'{_inst_token(filtername)}_')
+PERFRAME_LEDGER_SUFFIX = '_perframe_inputs.json'
 
 
-def spent_mergedcat_frames(pipeline_dir, *, proposal_id, field, filtername,
-                           label):
-    """Per-frame mergedcat renders for ``label`` whose i2d mosaic exists.
+def perframe_ledger_path(i2d_path):
+    """The ledger beside a mergedcat residual i2d: ``..._i2d.fits`` ->
+    ``..._perframe_inputs.json``."""
+    p = str(i2d_path)
+    if p.endswith('_i2d.fits'):
+        p = p[:-len('_i2d.fits')]
+    return p + PERFRAME_LEDGER_SUFFIX
 
-    Scoped by the ``-o{field}_t001_`` prefix so a directory shared by two
-    observations never offers up the other observation's frames.
+
+def write_perframe_ledger(i2d_path, records, *, phase):
+    """Record the exact per-frame files the build of ``i2d_path`` used.
+
+    ``records`` is what ``build_mergedcat_residuals(perframe_record=...)``
+    filled: one ``{'frame', 'kind', 'raw', 'rendered'}`` per frame and kind.
+    The in-run cleanup deletes from this list and nothing else, so it cannot
+    reach a file another observation, module or variant wrote into the same
+    pipeline directory: those files are not in this build's record.  Written
+    atomically; returns the ledger path.
     """
-    pre = _stem_prefix(proposal_id, field, filtername)
-    mid = f'-{filtername.lower()}-'
-    i2d = glob.glob(os.path.join(
-        pipeline_dir,
-        f'{pre}*{mid}*_{label}_daophot_*_mergedcat_residual_i2d.fits'))
-    if not i2d:
+    path = perframe_ledger_path(i2d_path)
+    tmp = f'{path}.tmp{os.getpid()}'
+    with open(tmp, 'w') as fh:
+        json.dump({'i2d': os.path.basename(str(i2d_path)), 'phase': phase,
+                   'frames': list(records), 'raw_retired': False}, fh,
+                  indent=1)
+    os.replace(tmp, path)
+    return path
+
+
+def read_perframe_ledger(i2d_path):
+    """The ledger for ``i2d_path``, or ``None`` when there is none.
+
+    ``None`` means "delete nothing": a mosaic written before ledgers existed,
+    or by a caller that keeps none, offers no files to the in-run cleanup.
+    """
+    path = perframe_ledger_path(i2d_path)
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+
+
+def mark_perframe_raw_retired(i2d_path, ledger):
+    """Rewrite ``i2d_path``'s ledger with ``raw_retired`` set."""
+    ledger = dict(ledger, raw_retired=True)
+    path = perframe_ledger_path(i2d_path)
+    tmp = f'{path}.tmp{os.getpid()}'
+    with open(tmp, 'w') as fh:
+        json.dump(ledger, fh, indent=1)
+    os.replace(tmp, path)
+
+
+_MOSAIC_VARIANT_RE = re.compile(
+    r'^(?P<stem>.*)_(?P<label>m\d+)_daophot_[a-z]+_mergedcat_residual_i2d\.fits$')
+
+
+def mosaic_variant_key(i2d_path):
+    """The run-identifying part of a mergedcat residual i2d name.
+
+    The basename up to the phase label, with ``_resbgsub`` removed (m5-m7 add
+    it, m3/m4 do not, within one run).  Everything else in that stem -- field,
+    filter, module, ``_unsatstar``, ``_bgsub``, ``_epsf``, ``_hybpsf``,
+    ``_blur``, ``_group`` -- must match between two phases of the same run.
+    ``None`` for a name that is not a mergedcat residual i2d.
+    """
+    m = _MOSAIC_VARIANT_RE.match(os.path.basename(str(i2d_path)))
+    if m is None:
+        return None
+    return m.group('stem').replace('_resbgsub', '')
+
+
+def same_run_mosaics(this_i2d, prev_i2d):
+    """True when ``prev_i2d`` is an earlier phase of the run that wrote
+    ``this_i2d`` (equal :func:`mosaic_variant_key`, neither ``None``)."""
+    a = mosaic_variant_key(this_i2d)
+    return a is not None and a == mosaic_variant_key(prev_i2d)
+
+
+def spent_mergedcat_frames(ledger):
+    """The per-frame mergedcat renders a ledger's build wrote.
+
+    Only ``*_mergedcat_{residual,model}.fits`` names are returned; anything
+    else in the record, or a protected name, is dropped.
+    """
+    if not ledger:
         return []
     out = []
-    for what in ('residual', 'model'):
-        out.extend(glob.glob(os.path.join(
-            pipeline_dir,
-            f'{pre}*{mid}*_{label}_daophot_*_mergedcat_{what}.fits')))
-    return sorted(p for p in out if not _is_protected_name(p))
+    for rec in ledger.get('frames', ()):
+        for p in rec.get('rendered', ()):
+            base = os.path.basename(p)
+            if (base.endswith(('_mergedcat_residual.fits',
+                               '_mergedcat_model.fits'))
+                    and not _is_protected_name(p)):
+                out.append(p)
+    return sorted(set(out))
 
 
-def superseded_perframe_products(pipeline_dir, *, proposal_id, field,
-                                 filtername, label):
-    """Per-frame residual/model for ``label``, for a label already superseded.
+def superseded_perframe_products(ledger):
+    """The per-frame raw residual/model a ledger's build read.
 
-    The caller decides that ``label`` is superseded -- in the phase loop it is
-    the phase before the one whose mosaic just landed.  This function only
-    resolves that decision to paths, and never returns a mergedcat render or an
-    i2d (the ``_mergedcat_`` exclusion and the protected-suffix check).
+    The caller decides the ledger's phase is superseded -- in the phase loop it
+    is the phase before the one whose mosaic just landed.  Never returns a
+    mergedcat render or an i2d (the ``_mergedcat_`` exclusion and the
+    protected-suffix check).
     """
-    pre = _stem_prefix(proposal_id, field, filtername)
-    mid = f'-{filtername.lower()}-'
+    if not ledger:
+        return []
     out = []
-    for what in ('residual', 'model'):
-        out.extend(glob.glob(os.path.join(
-            pipeline_dir, f'{pre}*{mid}*_{label}_daophot_*_{what}.fits')))
-    return sorted(p for p in out
-                  if '_mergedcat_' not in os.path.basename(p)
-                  and not _is_protected_name(p))
+    for rec in ledger.get('frames', ()):
+        for p in rec.get('raw', ()):
+            base = os.path.basename(p)
+            if ('_daophot_' in base and '_mergedcat_' not in base
+                    and base.endswith(('_residual.fits', '_model.fits'))
+                    and not _is_protected_name(p)):
+                out.append(p)
+    return sorted(set(out))
+
+
+def ledger_frames(ledger):
+    """The original frame paths a ledger's build rendered."""
+    if not ledger:
+        return []
+    return sorted({rec['frame'] for rec in ledger.get('frames', ())})
+
+
+def superseded_smoothed_bg(path, *, label):
+    """Return ``[path]`` when it is ``label``'s smoothed-bg mosaic, else ``[]``.
+
+    The caller passes one exact path, rebuilt with the same function a restart
+    uses to find it (``cataloging._reconstruct_smoothed_bg_path``), and decides
+    that ``label`` is superseded: in the phase loop it is the label TWO phases
+    before the one whose smoothed bg just landed.  The phase in between still
+    needs its predecessor's map for a retry, so one map back is kept.
+
+    This is the in-run selector that reaches into ``PROTECTED_SUFFIXES``
+    (``_i2d.fits``).  It earns that by naming one file and checking its whole
+    basename: the smoothed-bg suffix, the ``_mergedcat_residual_`` infix that
+    no residual or model mosaic carries, and the label.  A residual i2d, a
+    model i2d, a renamed quarantine copy (``..._i2d_im0_badastrom.fits``) or a
+    different phase's map all return ``[]``, as does anything under a
+    protected directory.
+    """
+    base = os.path.basename(str(path))
+    m = SMOOTHED_BG_RE.search(base)
+    if m is None or m.group('label') != label:
+        return []
+    if any(s in str(path) for s in PROTECTED_SUBSTRINGS):
+        return []
+    if not os.path.isfile(path):
+        return []
+    return [str(path)]

@@ -524,7 +524,7 @@ def test_grayzone_clip_correction_bounds():
 
 
 def test_pooled_wingcal_build_and_apply(tmp_path):
-    """Phase B1: per-frame calibrator buckets pool into an n-weighted C(r);
+    """Phase B1: per-frame calibrator buckets pool into C(r) (#1041);
     the pooled ratio applies ONLY to rows whose per-frame self-cal was
     skipped (wingcal_ratio == 1.0 exactly), dividing flux and updating
     provenance; already-calibrated rows are untouched."""
@@ -545,7 +545,8 @@ def test_pooled_wingcal_build_and_apply(tmp_path):
     pooled = MC.build_pooled_wingcal('f410m', basepath=str(base))
     assert len(pooled) == 2
     r3 = float(pooled['ratio'][pooled['rmask_px'] == 3][0])
-    assert abs(r3 - (1.05 * 4 + 1.07 * 4) / 8) < 1e-9
+    # two equal-weight frames; the scatter floor (#1041) shifts it by 2e-4
+    assert abs(r3 - (1.05 * 4 + 1.07 * 4) / 8) < 1e-3
 
     cat = Table({'flux_fit': [1000.0, 1000.0, 1000.0],
                  'flux_err': [10.0, 10.0, 10.0],
@@ -699,6 +700,201 @@ def test_replace_saturated_without_dxdy_columns(monkeypatch, tmp_path):
     assert abs(cat['y'][0] - 300.1) < 1e-6
     assert len(cat) == 2                       # unmatched satstar appended
     assert 'dx' not in cat.colnames
+
+
+def test_one_to_one_satstar_pairs():
+    from jwst_gc_pipeline.photometry import merge_catalogs as M
+    # satstar 0 has rows 3 (0.001") and 7 (0.04"); satstar 1 has row 7 at
+    # 0.03" and row 9 at 0.045".  Greedy by separation: (3,0), (7,1); row 9
+    # and the (7,0) pair lose.
+    keep = M._one_to_one_satstar_pairs([7, 3, 7, 9], [0, 0, 1, 1],
+                                       [0.04, 0.001, 0.03, 0.045])
+    assert list(keep) == [False, True, True, False]
+
+
+def _split_core_setup(monkeypatch, tmp_path, satflux):
+    import numpy as np
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry import merge_catalogs as M
+
+    ra0, dec0 = 266.5, -28.7
+    satstar = Table({
+        'skycoord_fit': SkyCoord([ra0, ra0 + 0.01]*u.deg, [dec0, dec0]*u.deg),
+        'flux_fit': [satflux, 7000.0],
+        'flux_err': [10.0, 10.0],
+        'x_fit': [81.2, 80.9],
+        'y_fit': [81.0, 81.4],
+        'x_err': [0.01, 0.01],
+        'y_err': [0.01, 0.01],
+        'xcentroid': [512.3, 1400.7],
+        'ycentroid': [300.1, 1650.2],
+    })
+    monkeypatch.setattr(M, 'load_satstar_catalog', lambda *a, **k: satstar)
+
+    class _FakeSvo:
+        @staticmethod
+        def get_filter_list(_):
+            t = Table({'filterID': ['JWST/NIRCam.F182M'], 'ZeroPoint': [850.0]})
+            t.add_index('filterID')
+            return t
+    monkeypatch.setattr(M, 'SvoFps', _FakeSvo)
+
+    # rows 0 and 1: a split daophot detection of satstar 0's clipped core,
+    # 1 mas and 40 mas from the fit (both inside the 0.05" F182M radius);
+    # row 2: an unrelated star 1" away
+    ddec = np.array([0.001, 0.040, 1.0]) / 3600.
+    cat = Table({
+        'skycoord': SkyCoord([ra0]*3*u.deg, (dec0 + ddec)*u.deg),
+        'flux': [1000.0, 800.0, 300.0],
+        'dflux': [5.0, 5.0, 5.0],
+        'x': [512.0, 512.0, 512.0], 'y': [300.0, 301.3, 332.0],
+        'dx': [0.01]*3, 'dy': [0.01]*3,
+    })
+    return M, cat
+
+
+def test_replace_saturated_one_row_per_satstar(monkeypatch, tmp_path):
+    """A satstar inside the tight radius of two rows used to overwrite both
+    with its flux AND position, leaving exact-duplicate rows (wd2: 6-11 pairs
+    per band) that the cross-band merge split into two output rows."""
+    import numpy as np
+    from astropy.coordinates import search_around_sky
+    import astropy.units as u
+    M, cat = _split_core_setup(monkeypatch, tmp_path, satflux=5000.0)
+    M.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/',
+                        fwhm_basepath=str(tmp_path))
+
+    # nearer row replaced, the 40 mas row removed, far row untouched,
+    # satstar 1 appended
+    assert len(cat) == 3
+    assert list(np.asarray(cat['flux'], float)) == [5000.0, 300.0, 7000.0]
+    assert list(cat['replaced_saturated']) == [True, False, True]
+    sc = cat['skycoord']
+    i1, i2, _, _ = search_around_sky(sc, sc, 1 * u.mas)
+    assert (i1 == i2).all()                    # no duplicate positions
+
+    # the cross-band merge calls replace_saturated again on the per-band
+    # table: a second pass leaves it unchanged
+    M.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/',
+                        fwhm_basepath=str(tmp_path))
+    assert len(cat) == 3
+    assert list(np.asarray(cat['flux'], float)) == [5000.0, 300.0, 7000.0]
+
+
+def test_replace_saturated_vetoed_satstar_keeps_split_rows(monkeypatch, tmp_path):
+    """When the faint-replacement guard vetoes the satstar on the nearest row,
+    nothing is written, so the other row inside the radius stays as well."""
+    import numpy as np
+    M, cat = _split_core_setup(monkeypatch, tmp_path, satflux=500.0)
+    M.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/',
+                        fwhm_basepath=str(tmp_path))
+    assert len(cat) == 4                       # 3 originals + satstar 1
+    assert list(np.asarray(cat['flux'], float)[:3]) == [1000.0, 800.0, 300.0]
+    assert not cat['replaced_saturated'][:3].any()
+    assert bool(cat['is_saturated'][0])
+
+
+class TestSatstarReplaceRadius:
+    """replace_saturated's mutual-nearest second pass pairs a satstar with
+    the nearest daophot row within ``_satstar_replace_radius``.  A fixed
+    0.5" (3-17 FWHM) let a satstar with no daophot row of its own overwrite
+    its nearest NEIGHBOUR star, erasing that star from the catalog (754
+    second-pass pairings beyond 0.15" in the superdense reference cutout's
+    F212N m3-m7 catalogs, all seeded at < 1/3 of the satstar flux).  The
+    radius is now 1.5 FWHM, capped at 0.5"."""
+
+    FWHM = 0.06  # arcsec, the F182M row of the test fwhm table
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        monkeypatch.delenv('SATSTAR_REPLACE_RADIUS_ARCSEC', raising=False)
+        monkeypatch.delenv('SATSTAR_REPLACE_RADIUS_FWHM', raising=False)
+
+    def _run(self, monkeypatch, tmp_path, sep_arcsec):
+        """One satstar (flux 60000) and one daophot row (flux 1000) at
+        ``sep_arcsec`` east of it; returns the catalog after replacement."""
+        ra0, dec0 = 266.5, -28.7
+        satstar = Table({
+            'skycoord_fit': SkyCoord([ra0] * u.deg, [dec0] * u.deg),
+            'flux_fit': [60000.0], 'flux_err': [10.0],
+            'x_fit': [81.0], 'y_fit': [81.0], 'x_err': [0.01], 'y_err': [0.01],
+            'xcentroid': [512.0], 'ycentroid': [300.0],
+        })
+        monkeypatch.setattr(MC, 'load_satstar_catalog', lambda *a, **k: satstar)
+
+        class _FakeSvo:
+            @staticmethod
+            def get_filter_list(_):
+                t = Table({'filterID': ['JWST/NIRCam.F182M'], 'ZeroPoint': [850.0]})
+                t.add_index('filterID')
+                return t
+        monkeypatch.setattr(MC, 'SvoFps', _FakeSvo)
+        (tmp_path / 'reduction').mkdir(exist_ok=True)
+        Table({'Filter': ['F182M'], 'PSF FWHM (arcsec)': [self.FWHM]}).write(
+            tmp_path / 'reduction' / 'fwhm_table.ecsv', format='ascii.ecsv',
+            overwrite=True)
+        nbr = SkyCoord(ra0 * u.deg, dec0 * u.deg).spherical_offsets_by(
+            sep_arcsec * u.arcsec, 0 * u.arcsec)
+        cat = Table({
+            'skycoord': SkyCoord([nbr.ra.deg] * u.deg, [nbr.dec.deg] * u.deg),
+            'flux': [1000.0], 'dflux': [5.0],
+            'x': [530.0], 'y': [300.0], 'dx': [0.01], 'dy': [0.01],
+        })
+        MC.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/')
+        return cat
+
+    def test_neighbour_beyond_1p5_fwhm_is_not_overwritten(self, monkeypatch, tmp_path):
+        # 2 FWHM: inside the old 0.5" radius, outside 1.5 FWHM
+        cat = self._run(monkeypatch, tmp_path, 2 * self.FWHM)
+        assert len(cat) == 2                       # satstar appended
+        assert not bool(cat['replaced_saturated'][0])
+        assert cat['flux'][0] == 1000.0            # neighbour kept
+        assert cat['flux'][1] == 60000.0
+
+    def test_own_row_within_1p5_fwhm_is_replaced(self, monkeypatch, tmp_path):
+        # 1 FWHM: outside the 0.05" tight radius, inside 1.5 FWHM
+        cat = self._run(monkeypatch, tmp_path, 1.0 * self.FWHM)
+        assert len(cat) == 1
+        assert bool(cat['replaced_saturated'][0])
+        assert cat['flux'][0] == 60000.0
+        assert abs(cat['satstar_match_sep'][0] - self.FWHM) < 1e-3
+
+    def test_arcsec_env_restores_fixed_radius(self, monkeypatch, tmp_path):
+        monkeypatch.setenv('SATSTAR_REPLACE_RADIUS_ARCSEC', '0.5')
+        cat = self._run(monkeypatch, tmp_path, 2 * self.FWHM)
+        assert len(cat) == 1
+        assert bool(cat['replaced_saturated'][0])
+
+    def test_fwhm_env_widens_radius(self, monkeypatch, tmp_path):
+        monkeypatch.setenv('SATSTAR_REPLACE_RADIUS_FWHM', '3')
+        cat = self._run(monkeypatch, tmp_path, 2 * self.FWHM)
+        assert len(cat) == 1
+        assert bool(cat['replaced_saturated'][0])
+
+    def test_radius_values(self, monkeypatch):
+        # packaged table: F212N 0.072" -> 0.108"
+        r = MC._satstar_replace_radius('f212n')
+        assert abs(r.to_value(u.arcsec) - 1.5 * 0.072) < 1e-9
+        # MIRI F2100W: 1.5 x 0.674" is capped at 0.5"
+        assert MC._satstar_replace_radius('F2100W').to_value(u.arcsec) == 0.5
+        # unknown band / no band: the cap
+        assert MC._satstar_replace_radius('f999x').to_value(u.arcsec) == 0.5
+        assert MC._satstar_replace_radius().to_value(u.arcsec) == 0.5
+        monkeypatch.setenv('SATSTAR_REPLACE_RADIUS_ARCSEC', '0')
+        assert MC._satstar_replace_radius('f212n') is None
+
+    @pytest.mark.parametrize('raw', ['0', '-1', 'nan', 'inf', 'abc'])
+    def test_bad_fwhm_env_raises(self, monkeypatch, raw):
+        monkeypatch.setenv('SATSTAR_REPLACE_RADIUS_FWHM', raw)
+        with pytest.raises(ValueError, match='SATSTAR_REPLACE_RADIUS_FWHM'):
+            MC._satstar_replace_radius('f212n')
+
+    def test_blank_fwhm_env_is_default(self, monkeypatch):
+        monkeypatch.setenv('SATSTAR_REPLACE_RADIUS_FWHM', ' ')
+        r = MC._satstar_replace_radius('f212n')
+        assert abs(r.to_value(u.arcsec) - 1.5 * 0.072) < 1e-9
 
 
 # ---------------------------------------------------------------------------

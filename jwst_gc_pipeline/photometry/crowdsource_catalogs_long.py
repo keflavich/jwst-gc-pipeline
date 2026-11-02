@@ -12,9 +12,11 @@ import numpy as np
 from pathlib import Path
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
@@ -88,6 +90,7 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
     CachingGriddedPSFModel, forced_psf_photometry,
     _make_model_image, _dedup_close_sources,
 )
+from jwst_gc_pipeline.photometry.psf_render import stamp_function
 
 
 # Used only by the parallel-chunked PSFPhotometry machinery, which lives in
@@ -129,8 +132,46 @@ def resolve_max_group_size(raw):
     return n
 
 
+def kdtree_group_ids(x, y, min_separation):
+    """Same partition as ``photutils.psf.SourceGrouper(min_separation)``,
+    in O(N log N) time and O(N) memory.
+
+    SourceGrouper calls ``scipy.cluster.hierarchy.fclusterdata`` (single
+    linkage, ``criterion='distance'``), which builds the full condensed
+    pairwise-distance matrix: 8 N(N-1)/2 bytes, 26 GB for the 80769 seeds of
+    the densest sgrb2 F300M m7 frame and ~10 GB for the o105 hybpsf F480M
+    frames (49153 seeds).  Single-linkage clusters cut at distance t are the
+    connected components of the graph whose edges join sources at most t
+    apart, which ``cKDTree.query_pairs(t)`` lists directly.  Labels are
+    1..n_groups in order of first appearance, the relabelling SourceGrouper
+    applies, so the returned array equals SourceGrouper's element for
+    element (tests/test_group_fit_default.py).
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    x = np.atleast_1d(np.asarray(x, dtype=float))
+    y = np.atleast_1d(np.asarray(y, dtype=float))
+    if x.shape != y.shape:
+        raise ValueError(f'x and y must have the same shape, got {x.shape} and {y.shape}')
+    if not (np.isfinite(x).all() and np.isfinite(y).all()):
+        raise ValueError('x and y coordinates must be finite (no NaN or inf values)')
+    n = x.size
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    pairs = cKDTree(np.column_stack([x, y])).query_pairs(
+        r=float(min_separation), output_type='ndarray')
+    graph = coo_matrix((np.ones(len(pairs), dtype=np.int8),
+                        (pairs[:, 0], pairs[:, 1])), shape=(n, n))
+    _, labels = connected_components(graph, directed=False)
+    # relabel 1.. by first appearance (SourceGrouper's ordering)
+    _, first = np.unique(labels, return_index=True)
+    rank = np.empty(first.size, dtype=np.int64)
+    rank[np.argsort(first, kind='stable')] = np.arange(1, first.size + 1)
+    return rank[labels]
+
+
 class CappedSourceGrouper:
-    """SourceGrouper wrapper that caps the maximum group size.
+    """SourceGrouper replacement that caps the maximum group size.
 
     photutils SourceGrouper has only a min_separation knob: any cluster of
     sources mutually within that distance becomes one group, however large.
@@ -140,21 +181,22 @@ class CappedSourceGrouper:
     collapse from ~5 it/s to <1 it/s in dense regions, hitting the 96 h
     walltime at ~14% completion.
 
-    This wrapper post-processes the inner grouper's output: any group
-    larger than ``max_size`` is split into ``ceil(N/max_size)`` spatially
-    coherent sub-groups by sorting along the group's principal axis.
-    Sparse-region groups (already <= max_size) are returned untouched.
+    The base partition comes from ``kdtree_group_ids`` (the SourceGrouper
+    partition without its O(N^2) distance matrix).  Any group larger than
+    ``max_size`` is then split into ``ceil(N/max_size)`` spatially coherent
+    sub-groups by sorting along the group's principal axis.  Sparse-region
+    groups (already <= max_size) are returned untouched.  ``max_size=0``
+    applies no cap (the SourceGrouper partition itself).
     """
 
     def __init__(self, min_separation, max_size=0):
-        self._inner = SourceGrouper(min_separation)
         self.min_separation = min_separation
         self.max_size = int(max_size) if max_size else 0
 
     def __call__(self, x, y):
         x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
-        group_ids = np.asarray(self._inner(x, y)).astype(np.int64, copy=True)
+        group_ids = kdtree_group_ids(x, y, self.min_separation)
         if self.max_size <= 0 or group_ids.size == 0:
             return group_ids
         next_id = int(group_ids.max()) + 1
@@ -211,13 +253,15 @@ from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     assert_no_foreign_observation_overwrite, foreign_observation_conflict,
 )
+from jwst_gc_pipeline.photometry.epsf_hybrid import (
+    hybrid_psf_token, maybe_apply_epsf_core, psf_provenance_meta)
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
 # Imported as field_registry: `fields` is a local variable in these
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
-from jwst_gc_pipeline.atomic_io import publish_into
+from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
 
 
 def _seed_table_chunk_subset(seed_table, ww, image_shape,
@@ -602,7 +646,7 @@ from jwst_gc_pipeline.reduction.saturated_star_finding import (
     # they are called together, and one without the other is a break.
     truly_lost_saturated_mask)
 
-from astroquery.svo_fps import SvoFps
+from jwst_gc_pipeline.svo_filters import SvoFps
 
 import pylab as pl
 pl.rcParams['figure.facecolor'] = 'w'
@@ -613,7 +657,7 @@ print("Importing webbpsf", flush=True)
 import stpsf as webbpsf
 import stpsf
 print(f"Webbpsf version: {webbpsf.__version__}")
-from stpsf.utils import to_griddedpsfmodel
+from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 import datetime
 print("Done with imports", flush=True)
 
@@ -741,10 +785,19 @@ def write_via_local_scratch(final_path, write_fn):
     ``final_path`` directly when no local scratch is configured, or if the
     local write/copy fails (e.g. scratch full), so behaviour is unchanged off
     SLURM and never loses the output.
+
+    Every path into ``final_path`` is atomic (``atomic_io.atomic_write``): the
+    copy, and the direct write, land on a hidden temporary beside it and are
+    ``os.replace``-d into position.  The module pass and the ``merged`` pass
+    both fit every frame and write this same detector-keyed name, possibly at
+    the same moment in two shards (#840), and a copy straight onto
+    ``final_path`` left a window in which the other task could read a
+    truncated catalog.
     """
     scratch = os.environ.get('SLURM_TMPDIR')
     if not scratch or not os.path.isdir(scratch):
-        write_fn(final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            write_fn(dest)
         return
     import tempfile
     import shutil
@@ -754,11 +807,13 @@ def write_via_local_scratch(final_path, write_fn):
     os.close(fd)
     try:
         write_fn(tmp)
-        shutil.copyfile(tmp, final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            shutil.copyfile(tmp, dest)
     except OSError as ex:
         print(f"[io] local-scratch write for {final_path} failed ({ex}); "
               f"writing directly to shared storage", flush=True)
-        write_fn(final_path)
+        with atomic_write(final_path, hidden=True) as dest:
+            write_fn(dest)
     finally:
         try:
             os.remove(tmp)
@@ -1091,7 +1146,7 @@ def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
         exposure_ = f'_exp{int(exposure_id):05d}'
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = _bgsub_token(options)
-    epsf_ = '_epsf' if options.epsf else ''
+    epsf_ = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur_ = '_blur' if options.blur else ''
     group_ = '_group' if options.group else ''
     if iteration_label is None:
@@ -2207,6 +2262,9 @@ def save_photutils_results(result, ww, filename,
     result.meta['pixscale'] = pixscale.to(u.arcsec).value
     result.meta['pixscale_as'] = pixscale.to(u.arcsec).value
     result.meta['proposal_id'] = options.proposal_id
+    # Which PSF model fitted this catalog (STPSF, or the opt-in ePSF-core hybrid):
+    # the two differ in flux by 0.4-2.4%, so a catalog must say (epsf_hybrid.py).
+    result.meta.update(psf_provenance_meta(filtername))
 
     if 'RAOFFSET' in im1[0].header:
         result.meta['RAOFFSET'] = im1[0].header['RAOFFSET']
@@ -2224,7 +2282,13 @@ def save_photutils_results(result, ww, filename,
                      ('DVACORR', 'WCSGDVA'), ('ABASERA', 'ABASERA'),
                      ('ABASEDE', 'ABASEDE'), ('ATGTRA', 'ATGTRA'),
                      ('ATGTDE', 'ATGTDE'), ('AOFFCONV', 'AOFFCONV'),
-                     ('APROVTB', 'APROVTB'), ('APROVDT', 'APROVDT')):
+                     ('APROVTB', 'APROVTB'), ('APROVDT', 'APROVDT'),
+                     # image-level roll correction (data-qa#346): a catalog fit
+                     # on rotated frames is born rotated, and the catalog-level
+                     # correction refuses it on this stamp
+                     ('ROLLCORR', 'ROLLCORR'), ('ROLLMODE', 'ROLLMODE'),
+                     ('ROLLARC', 'ROLLARC'), ('ROLLPVRA', 'ROLLPVRA'),
+                     ('ROLLPVDE', 'ROLLPVDE')):
         for _ext in (0, 1):
             if _hk in im1[_ext].header:
                 result.meta[_mk] = im1[_ext].header[_hk]
@@ -2272,6 +2336,13 @@ def save_photutils_results(result, ww, filename,
     # catalog in silence -- cloudef obs-005 over obs-002, 528 files (#718).
     # The existing file records the exposure it was measured on, so ask it.
     assert_no_foreign_observation_overwrite(tblfilename, filename)
+
+    # Shrink photometric-metric / counter columns to float32/int32 before the
+    # write (catalog_dtypes.downcast_catalog_dtypes) -- pixel positions, their
+    # errors, and every sky-coordinate column are untouched (CLAUDE.md
+    # astrometry rules); this is a pure size reduction on an ALREADY-COMPUTED
+    # table, not a measurement.
+    downcast_catalog_dtypes(result)
 
     # Per-frame catalog write -- the highest-frequency per-frame output (once per
     # frame per pass).  Build on node-local scratch then copy, to spare the
@@ -2434,7 +2505,7 @@ def get_psf_model(filtername, proposal_id, field,
                 # this check load a half-written file.
                 if os.path.exists(_psf_fn):
                     print(f"Loading cached PSF grid (skipping MAST/Poppy): {_psf_fn}", flush=True)
-                    grid = to_griddedpsfmodel(_psf_fn)
+                    grid = load_stpsf_grid(_psf_fn)
                     if isinstance(grid, list):
                         grid = grid[0]
                     break
@@ -2481,7 +2552,7 @@ def get_psf_model(filtername, proposal_id, field,
                       f"{_cached_files}", flush=True)
                 grid = []
                 for _fn in _cached_files:
-                    _g = to_griddedpsfmodel(_fn)
+                    _g = load_stpsf_grid(_fn)
                     grid.append(_g[0] if isinstance(_g, list) else _g)
 
         if grid is None:
@@ -2586,8 +2657,17 @@ def get_psf_model(filtername, proposal_id, field,
                             f"last error: {type(ex).__name__}: {ex}") from ex
                     time.sleep(min(2 ** ntries, 30))
 
+        # Opt-in hybrid PSF: empirical ePSF core inside 10 px, this STPSF grid
+        # outside 12 px (photometry/epsf_hybrid.py, issue #1007).  A no-op --
+        # the same grid object -- unless PSF_EPSF_CORE_DIR is set.  Compare
+        # case-blind: the per-frame callers pass the header INSTRUME, which is
+        # 'NIRCAM'; an exact 'NIRCam' match skipped the core on every frame
+        # while the filenames still carried _hybpsf.
+        if instrument.upper() == 'NIRCAM':
+            grid = maybe_apply_epsf_core(grid, _cache_detector, filtername, program=proposal_id)
+
         if use_grid:
-            # to_griddedpsfmodel returns a LIST (one grid per detector) for
+            # psf_grid(all_detectors=True) returns a LIST (one grid per detector) for
             # module='merged'; downstream wants a single grid.
             if isinstance(grid, list):
                 grid = grid[0]
@@ -2611,7 +2691,7 @@ def get_psf_model(filtername, proposal_id, field,
         _psf_grid_path = resolve_merged_psf_grid_path(
             jwst_root, target, instrument, module, filtername,
             proposal_id, field, oversample=oversample, blur=blur)
-        grid = psfgrid = to_griddedpsfmodel(_psf_grid_path)
+        grid = psfgrid = load_stpsf_grid(_psf_grid_path)
 
         psf_model = WrappedPSFModel(grid, stampsz=stampsz)
         dao_psf_model = grid
@@ -2652,7 +2732,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     # Mirror _bgsub_token: the iter3-residual-bg run appends _resbgsub after
     # _bgsub so this glob finds the residuals do_photometry_step wrote.
     bgsub_ = ('_bgsub' if bgsub else '') + ('_resbgsub' if resbgsub else '')
-    epsf_ = '_epsf' if epsf else ''
+    epsf_ = ('_epsf' if epsf else '') + hybrid_psf_token()
     blur_ = '_blur' if blur else ''
     group_ = '_group' if group else ''
     iter_ = _iteration_token(iteration_label)
@@ -2686,6 +2766,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         '_bgsub': bgsub,
         '_resbgsub': resbgsub,
         '_epsf': epsf,
+        '_hybpsf': bool(hybrid_psf_token()),
         '_blur': blur,
         '_group': group,
     }
@@ -2909,6 +2990,13 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
     saturated cores were being lost.  Clearing DQ lets the full model resample.
     Used ONLY for the model; the RESIDUAL keeps the data DQ (a NaN core there is
     correct -- the data IS missing).
+
+    The file is built in a private directory beside ``output_filename`` and
+    moved into place when complete (``atomic_io.publish_into``), because the
+    module and ``merged`` passes can write the same per-frame residual at once
+    (#840).  ``publish_into`` rather than a temporary NAME: ``ImageModel.save``
+    stamps the basename it is given into ``meta.filename``, so the file has to
+    be written under its real name.
     """
     import astropy.io.fits as fits_io
 
@@ -2956,16 +3044,21 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
         except Exception as _ex:
             print(f"save_residual_datamodel: could not zero meta.background "
                   f"({_ex}); i2d mosaic may show a negative pedestal", flush=True)
-        model.save(output_filename, overwrite=True)
+        out_dir = os.path.dirname(os.path.abspath(output_filename))
+        with publish_into(out_dir) as building:
+            staged = os.path.join(building, os.path.basename(output_filename))
+            model.save(staged, overwrite=True)
 
-    # Restore full S_REGION (with CONTINUE support) that ImageModel.save() may have truncated.
-    if s_region is not None:
-        with fits_io.open(output_filename, mode='update') as hdul:
-            for hdu in hdul:
-                if 'S_REGION' in hdu.header:
-                    hdu.header['S_REGION'] = s_region
-                    break
-            hdul.flush()
+            # Restore full S_REGION (with CONTINUE support) that
+            # ImageModel.save() may have truncated -- before publishing, so a
+            # reader never sees the truncated polygon either.
+            if s_region is not None:
+                with fits_io.open(staged, mode='update') as hdul:
+                    for hdu in hdul:
+                        if 'S_REGION' in hdu.header:
+                            hdu.header['S_REGION'] = s_region
+                            break
+                    hdul.flush()
 
 
 def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False):
@@ -3222,7 +3315,7 @@ def _build_cutout_model_i2d(cut_bp, filtername, proposal_id, field, module,
     inst_token = _inst_token(filtername)
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
-    epsf = '_epsf' if options.epsf else ''
+    epsf = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur = '_blur' if options.blur else ''
     group = '_group' if options.group else ''
     iter_ = _iteration_token(iteration_label)
@@ -3272,6 +3365,70 @@ def _cutout_origin(orig_filename, options):
             return None
     yslc, xslc = cut.slices_original
     return int(xslc.start), int(yslc.start)
+
+
+class _RenderPSFGrids:
+    """Per-detector PSF grids for the merged-catalog render, loaded once each.
+
+    The per-frame fit loads its grid with ``module=<the frame's detector>``
+    (cataloging's phase loop sets ``file_module = file_detector``).  The render
+    used to load ONE grid with the run's ``module``, so frames were rendered
+    with a PSF the fit never used: ``module='nrcb'`` maps to NRCB1, so nrcb2-4
+    were rendered with the NRCB1 grid, and ``module='merged'`` gave every
+    frame the channel's first grid (NRCA1 / NRCA5, B-module frames included).
+    A model rendered with a PSF other than the fitted one leaves a ring or a
+    hole at bright stars.  This keys the render grid by the frame's detector,
+    as the fit does.
+
+    ``loader(detector)`` returns the grid for that detector token.  Grids are
+    cached by stpsf detector name, so tokens naming the same grid
+    ('nrcblong' / 'nrcb5') share one load.  Thread-safe: the render may run on
+    several threads, and each grid is loaded once, under the lock.
+    """
+
+    def __init__(self, loader, filtername, instrument):
+        import threading
+        self._loader = loader
+        self._filtername = filtername
+        self._instrument = instrument
+        self._grids = {}
+        self._lock = threading.Lock()
+
+    def key(self, detector):
+        name = stpsf_detector_for_module(str(detector), self._filtername,
+                                         self._instrument)
+        return name if name is not None else str(detector).lower()
+
+    def __call__(self, detector):
+        key = self.key(detector)
+        with self._lock:
+            grid = self._grids.get(key)
+            if grid is None:
+                grid = self._loader(detector)
+                self._grids[key] = grid
+        return grid
+
+    @property
+    def loaded(self):
+        return sorted(self._grids)
+
+
+def _render_psf_grids(filtername, proposal_id, field, options, obsdate,
+                      basepath, instrument):
+    """`_RenderPSFGrids` loading through `get_psf_model` with the per-frame
+    fit's arguments.  The cached grids are keyed by detector and filter only,
+    so the first frame's ``obsdate`` serves every detector, as it did for the
+    single render grid this replaces."""
+    def _load(detector):
+        grid, _ = get_psf_model(filtername, proposal_id, field, module=detector,
+                                use_webbpsf=True, use_grid=options.each_exposure,
+                                blur=options.blur, target=options.target,
+                                obsdate=obsdate,
+                                basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                                psf_cache_dir=os.path.join(basepath, 'psfs'),
+                                instrument=instrument)
+        return grid
+    return _RenderPSFGrids(_load, filtername, instrument)
 
 
 def _resolve_render_psf_shape(fwhm_pix, grid, default=(21, 21)):
@@ -3360,6 +3517,10 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     centered on the source rounded to integer pixel coords, but the
     PSF is evaluated at exact (x_fit, y_fit) so sub-pixel registration
     is preserved.
+
+    Each stamp comes from ``psf_render.stamp_function``: the same values
+    ``psf_model.evaluate`` gives on the stamp's meshgrid, through a
+    3-4x faster grid evaluation for a gridded PSF (#1220).
     """
     img = np.zeros(shape, dtype=np.float32)
     if len(table) == 0:
@@ -3372,6 +3533,7 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     yfit = np.asarray(table['y_fit'], dtype=float)
     flux = np.asarray(table['flux_fit'], dtype=float)
 
+    stamp_at = stamp_function(psf_model)
     for i in range(len(table)):
         x0, y0, f0 = xfit[i], yfit[i], flux[i]
         if not (np.isfinite(x0) and np.isfinite(y0) and np.isfinite(f0)):
@@ -3384,26 +3546,30 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
         x_hi = min(nx, ix - half_w + psf_w)
         if y_hi <= y_lo or x_hi <= x_lo:
             continue
-        yy, xx = np.mgrid[y_lo:y_hi, x_lo:x_hi]
-        stamp = psf_model.evaluate(xx.astype(float), yy.astype(float),
-                                   f0, x0, y0)
+        stamp = stamp_at(x_lo, x_hi, y_lo, y_hi, f0, x0, y0)
         img[y_lo:y_hi, x_lo:x_hi] += np.asarray(stamp, dtype=np.float32)
     return img
 
 
-def _run_frame_renders(overlapping_frames, render_fn, n_threads):
-    """Apply ``render_fn`` to each frame, serial or across ``n_threads``.
+def _run_frame_renders(overlapping_frames, render_fn, n_threads, n_procs=1):
+    """Apply ``render_fn`` to each frame: serial, across ``n_threads`` threads,
+    or across ``n_procs`` forked processes (``frame_pool.map_frames``; takes
+    precedence over ``n_threads``).
 
-    Returns results in the SAME order as ``overlapping_frames`` in both modes, so
+    Returns results in the SAME order as ``overlapping_frames`` in every mode, so
     the caller's downstream accumulation is deterministic and byte-identical
-    regardless of thread count.  ``render_fn`` must be a pure function of its
-    frame plus shared read-only state (no cross-frame mutation).  Exceptions from
-    any frame propagate (via ``ThreadPoolExecutor.map`` iteration in the threaded
-    path, or directly in the serial path) -- no frame is silently dropped.
+    regardless of thread or process count.  ``render_fn`` must be a pure function
+    of its frame plus shared read-only state (no cross-frame mutation); in the
+    process path its return value must pickle, and anything else it changes
+    stays in the child.  Exceptions from any frame propagate (via the executor's
+    ``map`` iteration in the parallel paths, or directly in the serial path) --
+    no frame is silently dropped.
 
     Split out from ``build_mergedcat_residuals`` so the serial-vs-parallel
     equivalence of the dispatch is unit-testable (test_mergedcat_render_dispatch).
     """
+    if n_procs > 1 and len(overlapping_frames) > 1:
+        return frame_pool.map_frames(render_fn, overlapping_frames, n_procs)
     if n_threads > 1 and len(overlapping_frames) > 1:
         from concurrent.futures import ThreadPoolExecutor
         n = min(int(n_threads), len(overlapping_frames))
@@ -3412,27 +3578,37 @@ def _run_frame_renders(overlapping_frames, render_fn, n_threads):
     return [render_fn(orig) for orig in overlapping_frames]
 
 
+# key of the per-frame render result that carries "this frame fell back to the
+# model-threshold cover test" (build_mergedcat_residuals summary line)
+_COVER_FALLBACK_KEY = '_satstar_cover_fallback'
+
+
 def _mergedcat_satstar_cover_mode(filtername=None):
     """``MERGEDCAT_SATSTAR_COVER``: how build_mergedcat_residuals decides that a
     frame's satstar model already subtracts a replaced_saturated merged row.
 
-    ``model`` (default, unset or empty): the model-threshold test alone, i.e.
-    the frame's satstar model exceeds the cover threshold in the 7x7 box at the
-    row (the rule in use before this switch existed).
+    ``accepted`` (default, unset or empty): the model-threshold test AND an
+    accepted fit in the frame's own satstar catalog within
+    ``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM`` (default 1.5, the radius the
+    daophot hand-off uses to leave a SATURATED component to an accepted
+    satstar) FWHM of the row.  A row whose star this frame's satstar pass did
+    not fit is rendered from the merged catalog, also where a bright
+    neighbour's satstar-model wing exceeds the threshold at its position.
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1`` makes the per-frame residuals (and so
+    the next phase's background) agree with this render; without it only the
+    merged-catalog residual subtracts those stars.
 
-    ``accepted`` (opt-in): the model-threshold test AND an accepted fit in the
-    frame's own satstar catalog within ``MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM``
-    (default 1.5, the radius the daophot hand-off uses to leave a SATURATED
-    component to an accepted satstar) FWHM of the row.  Use it together with
-    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1``: that hand-off is what fits the stars
-    the frame's satstar pass rejected, and this rule is what renders them in
-    the merged-catalog residual instead of leaving them to a neighbour's wing.
+    ``model``: the model-threshold test alone, i.e. the frame's satstar model
+    exceeds the cover threshold in the 7x7 box at the row (the default through
+    main 6399b833).  A bright accepted neighbour's wing passes it, so a star
+    this frame did not fit is subtracted by neither channel; set it to
+    reproduce renders made with that default.
 
     MIRI always gets ``model`` (``filtername`` given): the daophot hand-off
     skips MIRI, MIRI renders uncovered satstars through its own flat-top path,
     and the ``accepted`` rule was measured on NIRCam F480M/F212N only.
     """
-    mode = (os.environ.get('MERGEDCAT_SATSTAR_COVER', '') or 'model').strip().lower()
+    mode = (os.environ.get('MERGEDCAT_SATSTAR_COVER', '') or 'accepted').strip().lower()
     if mode not in ('accepted', 'model'):
         raise ValueError(f"MERGEDCAT_SATSTAR_COVER={mode!r}: expected 'accepted' or 'model'")
     if (mode == 'accepted' and filtername is not None
@@ -3610,7 +3786,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               overlapping_frames, iteration_label, kinds,
                               pupil='clear', psf_shape=(21, 21),
                               satstar_label=None, satstar_cover_thresh=10.0,
-                              write_model_i2d=True):
+                              write_model_i2d=True, perframe_record=None):
     """Build residual i2d mosaics from the VETTED MERGED catalog (cutout path).
 
     The per-frame RAW residuals subtract every fitted source, including spurious
@@ -3629,6 +3805,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     the merged-catalog MODEL mosaic *for display only* -- so the model image
     shows the saturated stars alongside the fitted point sources.  The RESIDUAL
     is unaffected (it already has the satstar model subtracted via ``base``).
+
+    ``perframe_record``: a list.  When given, one entry per frame and kind is
+    appended -- ``{'frame', 'kind', 'raw': [resid, model], 'rendered': [resid,
+    model]}`` -- naming the exact per-frame files this build read and wrote.
+    The phase barrier's in-run cleanup deletes from this record and nothing
+    else (``retention.write_perframe_ledger``).
     """
     from astropy.nddata import NDData as _NDData
     merged = Table.read(merged_cat_path)
@@ -3681,13 +3863,9 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
     # PASSED astrometry checkpoint before discovering one absent file (#346).
     psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
-    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
-                               use_webbpsf=True, use_grid=options.each_exposure,
-                               blur=options.blur, target=options.target,
-                               obsdate=obsdate,
-                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
-                               psf_cache_dir=os.path.join(basepath, 'psfs'),
-                               instrument=instrument)
+    render_grids = _render_psf_grids(filtername, proposal_id, field, options,
+                                     obsdate, basepath, instrument)
+    grid = render_grids(frame_identity(overlapping_frames[0], field=field)[3])
     # FWHM-scale the render stamp so broad MIRI long-wavelength PSFs are not
     # clipped (see _resolve_render_psf_shape).  Falls back to the (21,21) default
     # for NIRCam / short-MIRI and if the FWHM lookup fails.
@@ -3719,7 +3897,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     print(f"mergedcat: satstar cover test = {_cover_mode}"
           + (f" (accepted fit of the frame within {_cover_radius_px:.2f} px)"
              if _cover_mode == 'accepted' else '')
-          + (f" (MERGEDCAT_SATSTAR_COVER=accepted is NIRCam-only; {filtername} is MIRI)"
+          + (f" (the accepted rule is NIRCam-only; {filtername} is MIRI)"
              if _cover_mode != _mergedcat_satstar_cover_mode() else ''), flush=True)
 
     written = {k: [] for k in kinds}
@@ -3732,6 +3910,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # NOT --parallel-workers, which every production sbatch already sets.
     # Frame stems must be unique or two threads write the same file.
     _render_threads = max(1, int(getattr(options, 'mergedcat_render_threads', 1) or 1))
+    # --mergedcat-render-procs forks N processes instead (frame_pool, #1230),
+    # which the FITPACK lock and the GIL do not serialize: each child inherits
+    # the grids, catalog and options, writes its frames' files, and returns
+    # their paths.
+    _render_procs = max(1, int(getattr(options, 'mergedcat_render_procs', 1) or 1))
     import threading as _threading
     _save_lock = _threading.Lock()
 
@@ -3758,11 +3941,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # own satstar pass fitted it (_satstar_render_covered)
             satstar_sm, acc_xy = _load_frame_satstar_cover(
                 _fitter_in, sat_suffix, _cover_mode)
-        # re-origin the spatially-varying PSF grid to cutout pixel coords
-        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
-        rg = type(grid)(_NDData(np.asarray(grid.data),
-                                meta={'grid_xypos': shifted_xy,
-                                      'oversampling': grid.oversampling}))
+            if _cover_mode == 'accepted' and satstar_sm is not None:
+                # no usable satstar catalog: this frame keeps the
+                # model-threshold test (counted in the summary line below)
+                _result[_COVER_FALLBACK_KEY] = acc_xy is None
         bn = os.path.basename(orig)
         # JOINT multi-obs runs (field like '002-998'): the per-frame products fold
         # the observation number into vgroup_id (cataloging.py do_photometry frame
@@ -3779,6 +3961,13 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         # keeps the requested ``module`` (merged-module) name.
         (visit_id, vgroup_id, exposure_id,
          frame_detector) = frame_identity(orig, field=field)
+        # Render with this frame's own detector grid -- the one its fit used
+        # (_RenderPSFGrids) -- re-origined to cutout pixel coords.
+        fgrid = render_grids(frame_detector)
+        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in fgrid.grid_xypos]
+        rg = type(fgrid)(_NDData(np.asarray(fgrid.data),
+                                 meta={'grid_xypos': shifted_xy,
+                                       'oversampling': fgrid.oversampling}))
         (visitid_, vgroupid_, exposure_, desat, bgsub,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
@@ -3954,21 +4143,46 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 save_residual_datamodel(raw_resid, out_resid, mc_resid)
                 save_residual_datamodel(raw_model, out_model, mc_model_display,
                                         clear_dq=True)
-            _result[kind] = (out_resid, out_model)
+            _result[kind] = (out_resid, out_model, raw_resid, raw_model)
         return _result
 
-    if _render_threads > 1 and len(overlapping_frames) > 1:
+    if _render_procs > 1 and len(overlapping_frames) > 1:
+        # Load every detector's grid before the fork, so the children share
+        # the parent's copy instead of each loading its own.
+        for _orig in overlapping_frames:
+            render_grids(frame_identity(_orig, field=field)[3])
+        print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
+              f"{min(_render_procs, len(overlapping_frames))} processes "
+              f"(--mergedcat-render-procs"
+              + (f"; --mergedcat-render-threads={_render_threads} unused"
+                 if _render_threads > 1 else '') + ")", flush=True)
+    elif _render_threads > 1 and len(overlapping_frames) > 1:
         print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
               f"{min(_render_threads, len(overlapping_frames))} threads "
               f"(--mergedcat-render-threads)", flush=True)
     _frame_results = _run_frame_renders(overlapping_frames, _render_frame,
-                                        _render_threads)
+                                        _render_threads, _render_procs)
     # Accumulate in frame order so the resample input lists are deterministic
     # (identical to the pre-parallel serial append order).
-    for _res in _frame_results:
-        for kind, (out_resid, out_model) in _res.items():
+    _n_cover_acc = _n_cover_fallback = 0
+    for _orig, _res in zip(overlapping_frames, _frame_results):
+        _fb = _res.pop(_COVER_FALLBACK_KEY, None)
+        if _fb is not None:
+            _n_cover_fallback += int(_fb)
+            _n_cover_acc += int(not _fb)
+        for kind, (out_resid, out_model, raw_resid, raw_model) in _res.items():
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
+            if perframe_record is not None:
+                perframe_record.append({'frame': str(_orig), 'kind': kind,
+                                        'raw': [raw_resid, raw_model],
+                                        'rendered': [out_resid, out_model]})
+    if _cover_mode == 'accepted':
+        print(f"mergedcat: satstar cover test per frame: accepted-fit rule in "
+              f"{_n_cover_acc}, model-threshold fallback (no usable satstar "
+              f"catalog) in {_n_cover_fallback} of "
+              f"{_n_cover_acc + _n_cover_fallback} frames with a satstar model",
+              flush=True)
     # Per-frame stems must be unique: a collision means two frames wrote the same
     # product (one render lost -> a hole in the mosaic), and under threading the
     # surviving writer would be nondeterministic.  Fail loudly (serial or threaded).
@@ -3985,7 +4199,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     bgsub_tok = _bgsub_token(options)
     iter_tok = _iteration_token(iteration_label)
     desat_tok = '_unsatstar' if options.desaturated else ''
-    epsf_tok = '_epsf' if options.epsf else ''
+    epsf_tok = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     blur_tok = '_blur' if options.blur else ''
     group_tok = '_group' if options.group else ''
     # Land the residual AND model mosaics on the EXACT grid of the _data_i2d so
@@ -4047,11 +4261,14 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         # also mosaic the merged-catalog MODEL so the CARTA loaders can show
         # data / model / residual / bg side by side.  This is a full 192-frame
         # resample (~20 min); it is display-only (no pipeline logic reads it and
-        # the release stages only the highest iteration), so intermediate phases
-        # skip it (write_model_i2d=False) -- see run_manual_pipeline.
+        # the release stages only the merged module's highest iteration), so
+        # intermediate phases and the final phase's nrca/nrcb blocks skip it
+        # (write_model_i2d=False) -- see run_manual_pipeline.
         if not write_model_i2d:
-            print(f"mergedcat: skipped {kind} model i2d (intermediate phase; "
-                  f"--manual-keep-intermediate-model-i2d to restore)", flush=True)
+            print(f"mergedcat: skipped {kind} model i2d (an intermediate phase, "
+                  f"or a module the release does not stage; "
+                  f"--manual-keep-intermediate-model-i2d / "
+                  f"--manual-model-i2d-all-modules to write it)", flush=True)
         else:
             model_product = product_name.replace('_mergedcat_residual',
                                                  '_mergedcat_model')
@@ -4135,13 +4352,8 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
     # PASSED astrometry checkpoint before discovering one absent file (#346).
     psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
-    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
-                               use_webbpsf=True, use_grid=options.each_exposure,
-                               blur=options.blur, target=options.target,
-                               obsdate=obsdate,
-                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
-                               psf_cache_dir=os.path.join(basepath, 'psfs'),
-                               instrument=instrument)
+    render_grids = _render_psf_grids(filtername, proposal_id, field, options,
+                                     obsdate, basepath, instrument)
     written = []
     n_kept = n_drop = 0
     for orig in overlapping_frames:
@@ -4149,12 +4361,13 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
         if origin is None:
             continue
         x0, y0 = origin
+        visit_id, vgroup_id, exposure_id, frame_detector = frame_identity(orig)
+        grid = render_grids(frame_detector)
         shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
         rg = type(grid)(_NDData(np.asarray(grid.data),
                                 meta={'grid_xypos': shifted_xy,
                                       'oversampling': grid.oversampling}))
         bn = os.path.basename(orig)
-        visit_id, vgroup_id, exposure_id, _ = frame_identity(orig)
         catfn = _predict_tblfilename(cut_bp, filtername, module, options,
                                      visit_id, vgroup_id, exposure_id,
                                      iteration_label='iter2', method='daophot',
@@ -4205,7 +4418,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     desat_tok = '_unsatstar' if options.desaturated else ''
     bgsub_tok = _bgsub_token(options)
     blur_tok = '_blur' if options.blur else ''
-    epsf_tok = '_epsf' if options.epsf else ''
+    epsf_tok = ('_epsf' if options.epsf else '') + hybrid_psf_token()
     group_tok = '_group' if options.group else ''
     product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
@@ -4314,6 +4527,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       type=int,
                       help="footprint size in px for modelsub_bkg (default 3, "
                            "Jay Anderson JWST1PASS convention); forced odd")
+    parser.add_option("--residual-bg-median-size", dest="manual_residual_bg_median_size",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_median_size'],
+                      type=int,
+                      help="median-filter box in i2d px for the source-masked "
+                           "smoothed-residual background subtracted in the next "
+                           "phase (default 3); 0 = 7 x FWHM rounded up to odd")
+    parser.add_option("--residual-bg-satstar-mask-fwhm",
+                      dest="manual_residual_bg_satstar_mask_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_satstar_mask_fwhm'],
+                      type=float,
+                      help="mask the phase's per-frame satstar fit positions at "
+                           "this radius (FWHM) in the residual background "
+                           "(default 0 = off).  3.75 recommended when "
+                           "DAOPHOT_HANDOFF_UNACCEPTED_SAT is on (wd2 F150W: "
+                           "hand-off stars dm -0.03 vs control -0.035, was "
+                           "+0.05..+0.13 too faint); >~5 breaks the "
+                           "interpolation (12 px hole: -0.12..-0.16)")
     parser.add_option("--manual-iterations", dest="manual_iterations",
                     default=True, action='store_true',
                     help=("Use the default PSF photometry pipeline "
@@ -4375,12 +4605,73 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "~0.9).  -1 (default) = AUTO: 3.0 for extended-emission NIRCam "
                          "fields, off otherwise.  0 = force off.  Satstar force-keep "
                          "(model==catalog) still overrides it.")
+    parser.add_option("--manual-ext-prom-exempt-qfit", dest="manual_ext_prom_exempt_qfit",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_qfit'],
+                    help="Exempt from the --manual-ext-prom-min floor a source with qfit "
+                         "<= this AND merged S/N >= --manual-ext-prom-exempt-snr AND "
+                         "prominence >= --manual-ext-prom-exempt-prom-min (default 0.2; "
+                         "0 = no exemption).  A bright star on nebular emission reads "
+                         "prominence 2-3 because the annulus MAD is emission structure.")
+    parser.add_option("--manual-ext-prom-exempt-snr", dest="manual_ext_prom_exempt_snr",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_snr'],
+                    help="Merged S/N (flux/flux_err_prop) required by the prominence-floor "
+                         "exemption (default 40).")
+    parser.add_option("--manual-ext-prom-exempt-prom-min", dest="manual_ext_prom_exempt_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_exempt_prom_min'],
+                    help="Lower prominence floor that applies to exempt sources (default 2.0).")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
-                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")
+                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).  "
+                         "Where the data-i2d prominence is measured the test also needs "
+                         "prominence >= --manual-ext-star-prom-peak-min.")
+    parser.add_option("--manual-ext-star-prom-min", dest="manual_ext_star_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_min'],
+                    help="Extended-emission vetting: keep a source whose data-i2d "
+                         "prominence (rise above the local annulus in annulus-MAD "
+                         "units) is >= this, whatever its peak-SB / local bkg; "
+                         "local_bkg scatters about zero on background-subtracted "
+                         "frames.  0 = off (default 7).")
+    parser.add_option("--manual-ext-qfit-snr-k", dest="manual_ext_qfit_snr_k",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_snr_k'],
+                    help="The --manual-ext-star-prom-min keep (and the "
+                         "--manual-ext-star-prom-robust-min keep, when on) also "
+                         "needs qfit <= "
+                         "sqrt(qfit_max^2 + (k/S/N)^2), the qfit a point source "
+                         "reaches with pixel noise (a perfect PSF fit has qfit "
+                         "~3.4/S/N).  0 = no qfit bound on that keep (default 5).")
+    parser.add_option("--manual-ext-star-prom-peak-min", dest="manual_ext_star_prom_peak_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_peak_min'],
+                    help="Extended-emission vetting: the peak-SB keep also needs "
+                         "data-i2d prominence >= this where prominence is measured.  "
+                         "A value >= --manual-ext-star-prom-min leaves the "
+                         "prominence test alone.  0 = off (default 4).")
+    parser.add_option("--manual-ext-star-prom-robust-min", dest="manual_ext_star_prom_robust_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_min'],
+                    help="With --manual-ext-star-prom-min > 0, also keep a source whose "
+                         "neighbour-robust prominence (25th-percentile annulus floor, "
+                         "lower-half MAD) is >= this; neighbours' PSF wings inflate the "
+                         "plain annulus MAD in crowded fields.  0 (default) = off; "
+                         "< 0 = AUTO: 8 on star-dominated fields, off on "
+                         "extended-emission targets, where the 25th-percentile floor "
+                         "reads the dark sides of a filament.")
+    parser.add_option("--manual-ext-star-prom-robust-conc", dest="manual_ext_star_prom_robust_conc",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_star_prom_robust_conc'],
+                    help="The neighbour-robust prominence branch refuses a source whose "
+                         "data-i2d core flux per unit fitted flux is below this "
+                         "fraction of the field median for prominent stars (core "
+                         "deficit > 5 sigma): a fit to a bump in a bright star's PSF "
+                         "wing.  Default 0.6; 0 = off.")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
+    parser.add_option("--manual-ext-snr-floor-per-frame", dest="manual_ext_snr_floor_propagated",
+                    action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_snr_floor_propagated'],
+                    help="Apply the vetting local S/N floor (--manual-ext-local-snr-min) "
+                         "to flux / flux_err, the mean PER-FRAME S/N.  By default it "
+                         "uses flux / flux_err_prop, the S/N of the merged flux "
+                         "(~sqrt(nmatch) higher).  The sky-clean floor "
+                         "(--manual-sky-clean-snr-min) is always per-frame.")
     parser.add_option("--manual-ext-snr-high-keep", dest="manual_ext_snr_high_keep",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_snr_high_keep'],
                     help="Extended-emission vetting BRIGHT-ISOLATED keep: a "
@@ -4393,6 +4684,36 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_high_keep_max'],
                     help="Upper qfit cap for the bright-isolated keep (default 0.4); "
                          "extended-emission knots have worse qfit so stay rejected.")
+    parser.add_option("--manual-ext-high-keep-singletons-only",
+                    dest="manual_ext_high_keep_grouped", action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_high_keep_grouped'],
+                    help="Restrict the bright-isolated keep to group_size==1 rows "
+                         "(the behaviour before grouped fitting became the "
+                         "default).  By default grouped rows qualify too: joint-"
+                         "fit covariance only lowers S/N, and the singleton gate "
+                         "vetted out bright close-pair members (o105 F480M "
+                         "full grouped chain: 144 rows with S/N >= 20, qfit < 0.4).")
+    parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
+                    help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "
+                         "source within 0.5 FWHM of a row of the previous phase's "
+                         "vetted catalog is kept while its qfit < this and its S/N "
+                         ">= --manual-ext-hysteresis-snr-min, so a star near a "
+                         "vetting threshold does not drop out (and reappear whole "
+                         "in the residual) when a refit moves its qfit slightly.  "
+                         "The overshoot drop and the extended-emission prominence "
+                         "gate still apply.  Default 0.6; 0 = off.")
+    parser.add_option("--manual-ext-hysteresis-snr-min", dest="manual_ext_hysteresis_snr_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_snr_min'],
+                    help="S/N (flux / flux_err) floor of the previous-phase keep "
+                         "(default 10).")
+    parser.add_option("--manual-ext-hysteresis-satstar-guard-fwhm",
+                    dest="manual_ext_hysteresis_satstar_guard_fwhm",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_satstar_guard_fwhm'],
+                    help="Satstar guard of the previous-phase keep: a source within "
+                         "this many FWHM of a saturated star gets no previous-phase "
+                         "keep, so wing structure fitted as a star in one phase is "
+                         "not carried into the next (default 4.5; 0 = no guard).")
     parser.add_option("--manual-ext-qfit-recover-max", dest="manual_ext_qfit_recover_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_recover_max'],
                     help="RECOVER-tier qfit ceiling for the extended-emission vetting "
@@ -4483,8 +4804,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-max-sky-snr",
                     dest="manual_sky_clean_max_sky_snr",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_max_sky_snr'],
-                    help="Sky-clean tier: local emission floor must be <= this many "
-                         "dark-sky sigmas above the dark-sky reference (default 2).")
+                    help="Sky-clean tier, global reference: local emission floor "
+                         "must be <= this many dark-sky sigmas above the dark-sky "
+                         "reference (default 2).  The local reference has its "
+                         "own threshold, --manual-sky-clean-local-max-err.")
     parser.add_option("--manual-sky-clean-prom-min",
                     dest="manual_sky_clean_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_prom_min'],
@@ -4492,7 +4815,27 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-sky-clean-snr-min",
                     dest="manual_sky_clean_snr_min",
                     type='float', default=MANUAL_DEFAULTS['manual_sky_clean_snr_min'],
-                    help="Sky-clean tier: minimum fit S/N (default 3).")
+                    help="Sky-clean tier: minimum per-frame fit S/N, flux / flux_err (default 3).")
+    parser.add_option("--manual-sky-clean-local-arcsec",
+                    dest="manual_sky_clean_local_arcsec",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_arcsec'],
+                    help="Sky-clean tier: also call a source clean when its "
+                         "deep-i2d annulus floor is within --manual-sky-clean-local-max-err "
+                         "i2d ERR of the 5th percentile of its surrounding tile of "
+                         "this size (default 3 arcsec; 0 = global dark-sky "
+                         "reference only).  A smooth bright plateau is clean; "
+                         "PSF-scale emission structure or crowding is not.  "
+                         "Needs the i2d ERR plane (skipped, with a log line, "
+                         "without it).")
+    parser.add_option("--manual-sky-clean-local-max-err",
+                    dest="manual_sky_clean_local_max_err",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_local_max_err'],
+                    help="Sky-clean tier, local reference: maximum (annulus "
+                         "floor - tile 5th percentile) in units of the i2d ERR "
+                         "(default 2; ~2.4 sigma of pixel scatter in the Brick "
+                         "dark cloud, where ERR ~ 1.2x the scatter).  The global "
+                         "test's --manual-sky-clean-max-sky-snr is in dark-sky "
+                         "sigma.")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "
@@ -4502,6 +4845,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "neighbour's residual gradient are distorted and fail the "
                          "tight cut (Arches: ~3x more recovered).  Do NOT loosen on "
                          "emission fields (shape is what rejects emission knots).")
+    parser.add_option("--manual-seed-round-loose-max", dest="manual_seed_round_loose_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_max'],
+                    help="Also admit i2d residual-seed detections with roundness up "
+                         "to +-x, but only those whose annulus prominence on the "
+                         "detection image is >= --manual-seed-round-loose-prom-min: "
+                         "a distorted faint star rises above its local structure.  "
+                         "Default 0 = off.  -1 = AUTO: 0.8 on star-dominated NIRCam "
+                         "fields, 0 on an extended-emission target and on MIRI "
+                         "(emission knots and diffraction-spike knots also pass "
+                         "the prominence test).")
+    parser.add_option("--manual-seed-round-loose-prom-min", dest="manual_seed_round_loose_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'],
+                    help="Prominence floor of the loose-roundness i2d seeds (default 5).")
     parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_lo'],
                     help="DAOStarFinder sharpness lower bound for the residual seed "
@@ -4608,7 +4964,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=MANUAL_DEFAULTS['manual_group_min_sep_fwhm'],
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
-                          "requires --group).  Sources closer than this are fit "
+                          "applies while grouped fitting is on, the default; "
+                          "see --no-group-fit).  Sources closer than this are fit "
                           "jointly.  Raise above 2.0 to jointly fit wider close "
                           "pairs that otherwise over-subtract in the valley "
                           "between them (default 2.0)."))
@@ -4638,6 +4995,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help="Square cutout size (arcsec) for DS9 point regions / "
                          "fallback.  Default 5.0.",
                     metavar="cutout_size_arcsec")
+    parser.add_option("--inject-stars", dest="inject_stars",
+                    default='',
+                    help=("Artificial-star truth table (ra, dec, "
+                          "flux_jy_<FILTER>) to add to every cutout frame "
+                          "before fitting (photometry/injection.py; the "
+                          "reference-field regression tests).  Requires "
+                          "--cutout-region."),
+                    metavar="inject_stars")
+    parser.add_option("--inject-seed", dest="inject_seed",
+                    default=0, type='int',
+                    help="Seed for the injected stars' photon-noise draw.",
+                    metavar="inject_seed")
     # Fit saturated stars whose centres lie OUTSIDE this frame's FOV (from
     # regions_/saturated_stars_outside_fov[_locked].reg) so their wings are
     # subtracted.  Tri-state: default (None) -> ON for normal runs, OFF for
@@ -4708,7 +5077,37 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     "fields.field_token_for_run.", metavar="field")
     parser.add_option("--group", dest="group",
                       default=False,
-                      action='store_true')
+                      action='store_true',
+                      help=("LEGACY: grouped fitting AND a '_group' token in "
+                            "every product name (a second, parallel product "
+                            "set that the merge globs and the residual HiPS "
+                            "builder skip).  The manual daophot path now fits "
+                            "grouped by default with canonical names "
+                            "(--no-group-fit to opt out), so this flag is only "
+                            "needed to write a side-by-side '_group' set."))
+    parser.add_option("--no-group-fit", dest="manual_group_fit",
+                      default=MANUAL_DEFAULTS['manual_group_fit'],
+                      action='store_false',
+                      help=("Manual daophot path: fit every source on its own "
+                            "(no photutils SourceGrouper), the pre-default "
+                            "behaviour.  Grouped fitting is ON by default "
+                            "(radius --manual-group-min-sep-fwhm, cap "
+                            "--max-group-size) and keeps the canonical product "
+                            "names; --group overrides this flag."))
+    parser.add_option("--group-fit", dest="manual_group_fit",
+                      default=MANUAL_DEFAULTS['manual_group_fit'],
+                      action='store_true',
+                      help="Manual daophot path: grouped fitting (the default).")
+    parser.add_option("--manual-group-fit-lm-steps", dest="manual_group_fit_lm_steps",
+                      type='int', default=MANUAL_DEFAULTS['manual_group_fit_lm_steps'],
+                      help=("LevMar steps per grouped fit: the fit budget "
+                            "(photutils fitter_maxiters = scipy leastsq maxfev) "
+                            "becomes steps*(3*n_max+1), n_max = largest group in "
+                            "the pass, so an n-source group keeps the step count "
+                            "an isolated source gets at the photutils default "
+                            "100 (default 25; 0 = flat 100).  At the flat 100, "
+                            "27-32%% of grouped o105 F480M rows hit the budget "
+                            "and most lost flux_err."))
     parser.add_option('--each-exposure', dest='each_exposure',
                       default=False, action='store_true',
                       help='Photometer each exposure (REQUIRED for new runs; '
@@ -4736,6 +5135,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'one of --filternames.  Default: auto-select the '
                             'reddest broad/medium band (e.g. sickle -> F480M).'),
                       metavar='manual_crossband_ref_filter')
+    parser.add_option('--manual-crossband-ecsv-all-modules',
+                      dest='manual_crossband_ecsv_all_modules',
+                      default=MANUAL_DEFAULTS['manual_crossband_ecsv_all_modules'],
+                      action='store_true',
+                      help=('The m7 cross-band merge writes every module\'s '
+                            'table as FITS, and the ECSV twin only for the '
+                            'merged module (or for every module when the run '
+                            'has no merged module); a skipped module\'s ECSV '
+                            'from an earlier run is removed.  Set this to also '
+                            'write the nrca/nrcb ECSVs (~1 h each on sgrb2).'))
     parser.add_option('--manual-crossband-seed-dedup-mas', type=float,
                       dest='manual_crossband_seed_dedup_mas', default=30.0,
                       help=('Dedup radius (mas) for the m7 cross-band union seed: '
@@ -4767,6 +5176,33 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
+    parser.add_option('--manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
+                      action='store_true',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
+                      help="Seed each band's m7 fit from the cross-band seed UNION "
+                           "that band's own m6 vetted catalog, plus daofind on its "
+                           "m6 residual - bg mosaic.  Default (neither flag) = "
+                           "AUTO: on for star-dominated NIRCam fields, off on an "
+                           "extended-emission target and for MIRI filters.")
+    parser.add_option('--no-manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
+                      action='store_false',
+                      help="Seed each band's m7 fit from the cross-band seed alone. "
+                           "The own-band sources the union restores are "
+                           "confirmed by an independent visit 0.4-0.8x as often "
+                           "as the ones m7 already has, depending on band (full "
+                           "Brick field; docs/evidence/faint_m7_seed_union).")
+    parser.add_option('--manual-m7-seed-own-band-companion-fwhm',
+                      dest='manual_m7_seed_own_band_companion_fwhm', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
+                      help='With --manual-m7-seed-own-band: own-band sources within '
+                           'this many PSF FWHM of a much brighter seed source are not '
+                           'added (PSF-ring fits).  0 disables.  Default 2.5.')
+    parser.add_option('--manual-m7-seed-own-band-companion-max-ratio',
+                      dest='manual_m7_seed_own_band_companion_max_ratio', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'],
+                      help='The companion cut leaves out an own-band source only when '
+                           'its flux is below this fraction of the neighbour\'s.  1.0 '
+                           'cuts every fainter source within the radius.  Default 0.1.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
@@ -4832,6 +5268,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'out into 5 independent per-filter jobs; '
                             'scripts/reduction/m8_merge_partials.py column-merges '
                             'them into the final ..._resbgsub_m8.fits.'))
+    parser.add_option('--no-m8-spike-flag', dest='m8_spike_flag',
+                      default=True, action='store_false',
+                      help=('Skip the diffraction-spike artifact flag columns '
+                            '(spike_wedge, single_band_crowd, spike_artifact, '
+                            'n_real_bands) added to the m8_dedup catalog '
+                            '(spike_flag.flag_m8_spike_artifacts).  Env '
+                            'M8_SPIKE_FLAG=0 also disables.  Rows are never removed.'))
     parser.add_option('--no-m8-dedup', dest='m8_dedup',
                       default=True, action='store_false',
                       help=('Skip the post-m8 split-source de-duplication '
@@ -4936,9 +5379,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'just been written) and the PREVIOUS phase\'s '
                             '*_{residual,model}.fits (their mergedcat build '
                             'finished a barrier ago).  This phase\'s own raw '
-                            'pair and every mosaic are kept.  Off by default; '
+                            'pair and every mosaic are kept.  ON by default; '
                             'the same selection is available offline via '
                             'scripts/maintenance/prune_products.py.'))
+    parser.add_option('--no-manual-gc-superseded-perframe',
+                      dest='manual_gc_superseded_perframe',
+                      action='store_false',
+                      help=('Keep every intermediate phase\'s per-frame '
+                            'residual/model scaffolding on disk for '
+                            'inspection, instead of deleting a phase\'s raw '
+                            'pair once the next phase\'s mosaic exists.'))
     parser.add_option('--manual-keep-intermediate-model-i2d',
                       dest='manual_keep_intermediate_model_i2d',
                       default=MANUAL_DEFAULTS['manual_keep_intermediate_model_i2d'],
@@ -4950,6 +5400,27 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'pipeline logic, so skipping them saves ~1 resample per '
                             'intermediate phase (~5 per filter). Set this to restore the '
                             'old behaviour of writing the model i2d every phase.'))
+    parser.add_option('--manual-model-i2d-all-modules',
+                      dest='manual_model_i2d_all_modules',
+                      default=MANUAL_DEFAULTS['manual_model_i2d_all_modules'],
+                      action='store_true',
+                      help=('The final phase builds the merged-catalog MODEL i2d '
+                            'for the merged module only -- the one a release '
+                            'stages -- or for every module when the run has no '
+                            'merged module (a disjoint field). Set this to also '
+                            'build the nrca/nrcb model i2d (display-only; ~half '
+                            'of the model resample time).'))
+    parser.add_option('--manual-keep-intermediate-smoothed-bg',
+                      dest='manual_keep_intermediate_smoothed_bg',
+                      default=MANUAL_DEFAULTS['manual_keep_intermediate_smoothed_bg'],
+                      action='store_true',
+                      help=('By default each phase barrier deletes the smoothed-'
+                            'residual background mosaic '
+                            '(*_mergedcat_residual_smoothed_bg_i2d.fits) from two '
+                            'phases back: a phase reads only its predecessor\'s '
+                            'map, so a completed run keeps the last two.  Residual '
+                            'and model mosaics are kept regardless.  Set this to '
+                            'keep every phase\'s map.'))
     parser.add_option('--bundle-size', dest='bundle_size',
                       default=1, type='int',
                       help='Number of consecutive per-exposure iterations each SLURM array task handles (default 1 = one exposure per task).')
@@ -4966,16 +5437,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False, action='store_true',
                       help='Enumerate --each-exposure work and print a comma-separated SLURM --array spec of only the bundled task indices that still need to run. Writes only the spec to stdout; logs go to stderr.')
     parser.add_option('--max-group-size', dest='max_group_size',
-                      default='unlimited', type='string',
+                      default='10', type='string',
                       help=("Cap on photutils SourceGrouper group size.  Must be "
                             "EXPLICIT: 'unlimited' (no cap) or a POSITIVE integer. "
                             "The value 0 is REJECTED -- it was ambiguous (read as "
                             "'no grouping' but actually meant 'unlimited group "
                             "size').  Groups larger than the cap are split into "
                             "spatially coherent sub-groups via principal-axis "
-                            "sorting before the joint fit.  Use 10-15 for dense "
-                            "fields to keep joint fits tractable; 'unlimited' only "
-                            "where blends are rare."))
+                            "sorting before the joint fit.  Default 10, set with "
+                            "grouped fitting on by default in the manual path: "
+                            "the joint LevMar cost grows roughly cubically with "
+                            "group size, and uncapped groups of 50-100+ sources "
+                            "(brick LW iter3 cross-band union seeds) hit the "
+                            "96 h wall.  Production m7 seed lists measured "
+                            "2026-10 reach 12 sources (o105 hybpsf F480M), so "
+                            "the cap rarely binds there."))
     parser.add_option('--n-seed-chunks', dest='n_seed_chunks',
                       default=1, type='int',
                       help=('Split the seed catalog into N image-pixel tiles '
@@ -5014,6 +5490,26 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'does not silently enable the threaded render on live '
                             'jobs -- validate byte-identity against the serial '
                             'path before raising it.'))
+    parser.add_option('--mergedcat-render-procs', dest='mergedcat_render_procs',
+                      default=1, type='int',
+                      help=('Render the per-frame merged-catalog residual/model '
+                            'images (build_mergedcat_residuals) in N forked '
+                            'processes.  Default 1 = serial.  Frames are '
+                            'gathered in frame order, so the output is identical '
+                            'to the serial path (#1230).  Unlike the threads of '
+                            '--mergedcat-render-threads, the processes are not '
+                            'serialized by the GIL or by scipy\'s FITPACK lock; '
+                            'takes precedence over that option.  Each process '
+                            'adds one frame\'s working arrays to the memory in '
+                            'use.'))
+    parser.add_option('--forced-fill-procs', dest='forced_fill_procs',
+                      default=1, type='int',
+                      help=('Prepare and force-fit the m8 forced fill\'s frames '
+                            'in N forked processes.  Default 1 = serial.  The '
+                            'per-frame fluxes and variances are summed in frame '
+                            'order, so the m8 catalog is identical to the serial '
+                            'path (#1230).  Each process adds one prepared '
+                            'frame to the memory in use.'))
     (options, args) = parser.parse_args()
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the

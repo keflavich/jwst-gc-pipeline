@@ -22,6 +22,24 @@ MANUAL_DEFAULTS = {
     # convention.
     'manual_residual_background': True,
     'manual_residual_background_box': 3,
+    # -- smoothed-residual background subtracted from every frame in the next
+    # phase (cataloging._build_source_masked_bg).  Median-filter box in i2d px;
+    # 0 = scale with the PSF (7 x FWHM, rounded up to odd: 15-17 px for NIRCam
+    # at native scale).  A 3 px box barely smooths a ~2 px FWHM PSF, so a
+    # faint star missing from the masked catalogs leaves ~2/3 of its flux in
+    # this "background" and its next-phase fit comes out ~1 mag faint (#1039).
+    # Kept at 3 by default until extended-emission fields are checked for
+    # spurious detections on unsubtracted small-scale nebulosity.
+    'manual_residual_bg_median_size': 3,
+    # -- radius (in FWHM) at which the residual bg masks the positions of the
+    # per-frame satstar fits (accepted + rejected) of the phase.  Saturated
+    # stars the phase did not model keep PSF wings out to ~8 px in the
+    # residual; the 2 FWHM source mask leaves them in the bg and the next
+    # phase's daophot hand-off fit of those stars reads +0.05..+0.13 mag too
+    # faint.  wd2 F150W: 3.75 puts them on the control scale; 9 px
+    # over-corrects; 12 px fails (interpolation kernel cannot fill the hole).
+    # 0 = off (bit-identical to the plain source mask).
+    'manual_residual_bg_satstar_mask_fwhm': 0.0,
     # -- fit QC (model/data-peak overshoot; NOTES_star_vs_extended_emission.md)
     'manual_overshoot_ratio': 1.2,
     'manual_overshoot_action': 'refit',
@@ -42,11 +60,40 @@ MANUAL_DEFAULTS = {
     # -- extended-emission vetting (_filter_extended_emission)
     'manual_ext_qfit_max': 0.2,
     'manual_ext_prom_min': -1.0,       # -1 = AUTO (3.0 on ext-emission NIRCam)
+    # exemption from that floor for tight, bright fits (0 = off)
+    'manual_ext_prom_exempt_qfit': 0.2,
+    'manual_ext_prom_exempt_snr': 40.0,
+    'manual_ext_prom_exempt_prom_min': 2.0,
     'manual_ext_peak_over_bkg': 20.0,
+    'manual_ext_star_prom_min': 7.0,   # keep on data-i2d prominence >= this (OR); 0 = off
+    # ...when qfit <= sqrt(qfit_max^2 + (k/S/N)^2).  qfit = sum|resid|/flux of a
+    # PERFECT PSF fit is ~c/(S/N) from pixel noise alone (c ~ 3.4 median, ~4.3
+    # at the 90th percentile for Brick F182M dark-sky stars at S/N 5-10, which
+    # the sky-clean tier selects without qfit).  Full-field m6 replays, sources
+    # the prominence keep adds per k_eff = S/N sqrt(qfit^2 - qfit_max^2) band,
+    # chance-corrected match rate relative to kept stars of the same flux
+    # (Brick F182M vs the independent F200W visit / W51 F187N vs same-visit
+    # F182M): 0.72 / 1.21 at 4-4.5, 0.53 / 0.52 at 4.5-5, 0.28 / 0.46 at
+    # 5-5.5, 0.40 / 0.32 at 5.5-6, 0.03 / 0.10 at 8-12.  5 is the largest
+    # half-integer k whose last band stays at or above 0.5 in both.  0 = off.
+    'manual_ext_qfit_snr_k': 5.0,
+    'manual_ext_star_prom_peak_min': 4.0,  # peakSB branch also needs prominence >= this; 0 = off
+    'manual_ext_star_prom_robust_min': 0.0,  # OR neighbour-robust prominence; 0 = off, -1 = AUTO (8, off on ext-emission)
+    'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
+    'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
+    # bright keep also for grouped rows (group_size > 1); only grouped fits
+    # produce them, so ungrouped runs are unchanged.  See _filter_extended_emission.
+    'manual_ext_high_keep_grouped': True,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
+    # previous-phase (hysteresis) keep: a source the previous phase vetted is
+    # kept while qfit < this and S/N >= the next; 0 = off
+    'manual_ext_hysteresis_qfit_max': 0.6,
+    'manual_ext_hysteresis_snr_min': 10.0,
+    # ... except within this many FWHM of a saturated star (0 = no guard)
+    'manual_ext_hysteresis_satstar_guard_fwhm': 4.5,
     'manual_ext_recover_satstar_guard_arcsec': 2.0,
     'manual_ext_recover_prom_gate': True,
     'manual_ext_recover_prom_log_intercept': -0.77,
@@ -67,8 +114,26 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_max_sky_snr': 2.0,
     'manual_sky_clean_prom_min': 5.0,
     'manual_sky_clean_snr_min': 3.0,
+    # local reference tile (arcsec): annulus floor vs the tile's 5th percentile
+    # in i2d-ERR units, OR-ed with the global dark-sky test.  0 = global only.
+    'manual_sky_clean_local_arcsec': 3.0,
+    # local test threshold, in i2d ERR (2 ERR ~ 2.4 sigma of pixel scatter in
+    # the Brick dark cloud, where ERR ~ 1.2x the pixel scatter)
+    'manual_sky_clean_local_max_err': 2.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
+    # opt-in (0 = off): roundness up to +-x admitted where the detection rises
+    # above its local structure (annulus prominence >= 5).  -1 = AUTO
+    # (_auto_seed_round_loose_max): 0.8 on star-dominated NIRCam fields, 0 on
+    # an extended-emission target and on MIRI.  Off by default: the loose-only
+    # seeds concentrate on bright background and on diffraction-spike
+    # position angles (docs/evidence/faint_seed_roundness), and on the
+    # star-field reference fields the window moves at most one injected star
+    # per S/N bin on top of the own-band m7 seed while raising the Sgr B2
+    # field's residual excess from 1.73 to 2.08 per arcsec^2
+    # (docs/evidence/faint_defaults_on).
+    'manual_seed_round_loose_max': 0.0,
+    'manual_seed_round_loose_prom_min': 5.0,
     'manual_seed_sharp_lo': 0.4,
     'manual_seed_sharp_hi': 1.2,
     # -- per-pass prominence reject (ext-emission NIRCam; 0 = off)
@@ -84,24 +149,107 @@ MANUAL_DEFAULTS = {
     # -- coarse-background detection (0 = off; MIRI raw rounds use 51)
     'coarse_bg_box': 0,
     # -- grouping
+    # Joint PSF fitting (CappedSourceGrouper groups) of close sources in every
+    # manual daophot pass.  ON by default: ungrouped fits of
+    # pairs at 0.75-2 FWHM each absorb the neighbour's wing, so the summed pair
+    # model over-subtracts (o105 30" cutout, m7 from main's m6 state,
+    # model/data over 0.75-2 FWHM pairs relative to isolated stars: F212N
+    # 1.083 ungrouped vs 0.991 grouped, F480M 1.102 vs 0.969) and the residual
+    # shows a crater at each member (S/N<-5 at clean pair members in that
+    # nn bin: F212N 309 -> 24, F480M 615 -> 83).
+    # --no-group-fit restores the ungrouped fit.  Product names stay canonical
+    # (no ``_group`` token): see manual_group_fit_enabled.
+    'manual_group_fit': True,
+    # LevMar steps per fit at the photutils default budget: astropy's
+    # LevMarLSQFitter hands ``maxiter`` to scipy leastsq as ``maxfev`` (FUNCTION
+    # evaluations), and the gridded PSF has no analytic derivative, so one LM
+    # step on an n-source group costs 3n+1 evaluations.  photutils' default
+    # fitter_maxiters=100 is 25 steps for an isolated source but 4 for a
+    # 7-source group.  The grouped pass gets steps * (3 n_max + 1), n_max =
+    # the largest group in the pass (= 100 for n_max = 1, unchanged).  0 =
+    # the flat photutils default 100.  See _grouped_fit_maxiters.
+    'manual_group_fit_lm_steps': 25,
     'manual_group_min_sep_fwhm': 2.0,
+    # -- cross-band merge output (m7): every module's table is written as FITS;
+    # the ECSV twin (~30x slower to write on sgrb2) only for the merged module, or for
+    # every module when the run has none (cataloging.crossband_ecsv_modules).
+    # True writes the nrca/nrcb ECSVs too (#1227).
+    'manual_crossband_ecsv_all_modules': False,
     # -- cross-band seed (m7, _build_crossband_seed)
     'manual_crossband_seed_min_filters': 2,
     'manual_crossband_seed_snr_min': 5.0,
     'manual_crossband_seed_qfit_max': 0.2,
     'manual_crossband_seed_max_sep_mas': 30.0,
+    # m7 seed of each band = cross-band seed UNION the band's own m6 vetted
+    # catalog, plus daofind on the m6 residual - bg (_build_m7_band_seed).
+    # None = AUTO (_auto_m7_seed_own_band): on for star-dominated NIRCam
+    # fields, off on an extended-emission target and for MIRI filters;
+    # --manual-m7-seed-own-band / --no-manual-m7-seed-own-band force it.
+    # After the companion cut below, the restored own-band sources are
+    # confirmed by an independent visit 0.4-0.8x as often as the ones m7
+    # already has (docs/evidence/faint_m7_seed_union).  Reference-field
+    # results with and without it: docs/evidence/faint_defaults_on.
+    'manual_m7_seed_own_band': None,
+    # ... and with it on, own-band sources within this many PSF FWHM of a
+    # much brighter seed source are not added (PSF-ring fits).  0 disables
+    # the cut.
+    'manual_m7_seed_own_band_companion_fwhm': 2.5,
+    # ... where "much brighter" = the source's flux is below this fraction of
+    # its neighbour's.  Companions fainter than 0.1x within 2 FWHM are
+    # confirmed by an independent visit at the chance rate; brighter ones
+    # 0.3-0.9x as often as the sources m7 keeps, and the cut without this
+    # gate (1.0) left them unsubtracted in the m7 residual
+    # (docs/evidence/m7_companion_ratio).
+    'manual_m7_seed_own_band_companion_max_ratio': 0.1,
     # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.
     'manual_keep_intermediate_model_i2d': False,
+    # ... and of the final phase's, only the MERGED module's: the release stages
+    # only that one, so the nrca/nrcb model resamples run only on request (a run
+    # with no merged module -- a disjoint field -- still writes every module's).
+    'manual_model_i2d_all_modules': False,
     # -- retention: at each phase barrier, drop the per-frame images the
     # barrier makes unreachable (this phase's mergedcat renders, the previous
-    # phase's raw residual/model).  OFF by default: a completed run currently
-    # leaves every phase's scaffolding for inspection, and taking that away is
-    # a deliberate decision, not an upgrade side effect.  See
+    # phase's raw residual/model).  ON by default: this phase's own raw pair
+    # is always kept (a retry of THIS phase's mergedcat build still needs it)
+    # and the final phase's pair is never touched (no later barrier retires
+    # it). A consumer audit (restart/--manual-start-phase, the per-frame
+    # SLURM fan-out + completion markers, the m7 cross-band seed, the m8
+    # forced fill, release staging, registration/QA scripts) found every one
+    # of them reads a mosaic, a catalog, or the current phase's own raw pair
+    # -- never a superseded phase's raw pair -- so turning this on removes
+    # nothing any of them needs. A completed run now keeps only the final
+    # phase's raw pair plus every mosaic, instead of every intermediate
+    # phase's scaffolding. --no-manual-gc-superseded-perframe restores the
+    # old leave-everything-for-inspection behaviour. See
     # jwst_gc_pipeline/retention.py and docs/PRODUCT_RETENTION.md.
-    'manual_gc_superseded_perframe': False,
+    'manual_gc_superseded_perframe': True,
+    # -- retention: at each phase barrier, delete the smoothed-residual
+    # background mosaic from two phases back (nothing reads it once the
+    # current phase's map exists).  ON: a completed run keeps the last two
+    # maps, plus every phase's residual and model mosaics as diagnostics.
+    # True restores every phase's map.
+    'manual_keep_intermediate_smoothed_bg': False,
 }
+
+
+def manual_group_fit_enabled(options):
+    """True when the manual daophot path fits close sources jointly.
+
+    Grouped fitting is ON by default (``manual_group_fit``, opt out with
+    ``--no-group-fit``).  The legacy ``--group`` flag also turns it on and, in
+    addition, adds the ``_group`` token to every product name, which writes a
+    second, parallel product set that several consumers exclude on purpose
+    (the residual HiPS builder's RESIDUAL_I2D pattern, merge globs, the
+    distortion-floor diagnostic).  The default-on path keeps the canonical
+    names, so a grouped rerun REPLACES the ungrouped products and every
+    consumer picks it up unchanged; the per-frame catalog header (GRPFIT,
+    GRPSEP, GRPMAX) and the ``group_size`` column record that the fit was
+    grouped.  ``--group`` wins over ``--no-group-fit``.
+    """
+    return bool(getattr(options, 'group', False)) or bool(
+        mopt(options, 'manual_group_fit'))
 
 
 def mopt(options, name):

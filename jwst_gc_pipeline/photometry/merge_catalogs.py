@@ -13,7 +13,7 @@ from astropy.coordinates import SkyCoord
 from astropy import wcs
 from astropy import table
 from astropy import units as u
-from astroquery.svo_fps import SvoFps
+from jwst_gc_pipeline.svo_filters import SvoFps
 from astropy.stats import sigma_clip, mad_std
 import dask
 import dask.array
@@ -21,6 +21,7 @@ import dask.array
 # before the FITS/ECSV writes (see merge_catalogs()).
 import yaml
 import yaml.representer
+from scipy.spatial import cKDTree
 
 from tqdm.auto import tqdm
 
@@ -61,9 +62,14 @@ from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
-    format_phase_report, satstar_phase_selection_signature,
+    format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
+from jwst_gc_pipeline.photometry.wingcal import (
+    MIN_RATIO as WINGCAL_MIN_RATIO, interp_wingcal_ratio,
+    passes_se_gate as wingcal_passes_se_gate,
+    pool_bucket as wingcal_pool_bucket,
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
@@ -73,6 +79,8 @@ from jwst_gc_pipeline.photometry.naming import (
     perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
+from jwst_gc_pipeline.photometry.epsf_hybrid import (
+    HYBRID_TOKEN, hybrid_psf_token)
 from jwst_gc_pipeline.photometry.measure_offsets import (
     DenseNNMedianAstrometryError, assert_sparse_reference_for_nn_median)
 # Imported as field_registry: `fields` is a local variable in these
@@ -353,6 +361,190 @@ def _resolve_dedup_offset(filtername, current):
         if frac > 0 and fwhm is not None:
             return frac * fwhm * u.arcsec
     return current
+
+
+def _band_fwhm_arcsec(filtername, basepath=None):
+    """PSF FWHM of ``filtername`` in arcsec from the FWHM table, or None for
+    no ``filtername`` or a band the table lacks.  ``basepath`` is the field
+    tree whose ``reduction/fwhm_table.ecsv`` takes precedence over the
+    packaged table."""
+    if not filtername:
+        return None
+    from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    fwhm_tbl = Table.read(fwhm_table_path(basepath, _iov()))
+    row = fwhm_tbl[np.char.upper(np.asarray(fwhm_tbl['Filter']).astype(str))
+                   == str(filtername).upper()]
+    if not len(row):
+        return None
+    return float(row['PSF FWHM (arcsec)'][0])
+
+
+#: Disjoint base rows closer than this many PSF FWHM are one star
+#: (split_row_owners).  On brick m7, 73-96% of the merged-row pairs inside
+#: 0.75 FWHM have disjoint frame sets (F212N, F405N), against 27-50% at
+#: 1.0-1.25 FWHM, where real pairs fitted in alternating frames start to
+#: contribute.
+SPLIT_ROW_RADIUS_FWHM = 0.75
+
+
+def split_row_radius(filtername, min_offset):
+    """Merge radius of :func:`split_row_owners`:
+    ``min(min_offset, SPLIT_ROW_RADIUS_FWHM * FWHM)``, or ``min_offset`` when
+    the band's FWHM is unknown.  ``min_offset`` is the radius within which
+    Loop 1 already calls two detections the same star."""
+    fwhm = _band_fwhm_arcsec(filtername)
+    if fwhm is None:
+        return min_offset
+    return min(min_offset, SPLIT_ROW_RADIUS_FWHM * fwhm * u.arcsec)
+
+
+def split_row_owners(arr_ra, arr_dec, radius, block=65536):
+    """Base rows of ``combine_singleframe`` that are one star split in two.
+
+    Loop 1 adds a frame's source as a new base row when it lies more than
+    ``min_offset`` from every existing row, judged at that frame's own fitted
+    position.  A star whose fit drifted in one frame therefore gets a second
+    base row.  Phase 1 hands each frame's single fit of the star to only one
+    of the two rows (the mutual nearest-neighbour match), so the rows split the
+    star's frames between them, each averages to the full flux, and their
+    averaged positions converge.  The merged-catalog residual then subtracts
+    the star twice in every frame (brick m7 F405N: one fit matched both
+    members of a <0.5 FWHM merged pair 804 times, two distinct fits 6 times).
+
+    Two rows are the same star when their averaged positions lie within
+    ``radius`` and no frame contributed to both.  A frame that fitted two
+    sources there (a real close pair, or one star fitted twice) contributes to
+    both rows and keeps them apart.  Contributions are the Phase 1 matches that
+    passed the ``max_offset`` and mutual nearest-neighbour cuts, so a frame
+    that fitted both members of a real pair but lost one of them to those cuts
+    does not count against the merge.
+
+    Rows merge greedily, closest pair first.  A merge is refused when the two
+    groups share a frame or when any two of their rows would lie more than
+    ``radius`` apart, so no group is wider than ``radius``.
+
+    Parameters
+    ----------
+    arr_ra, arr_dec : ndarray, shape (n_src, n_tbl)
+        Per-frame positions in degrees, NaN where the frame did not contribute.
+    radius : `~astropy.units.Quantity`
+        Angular radius within which disjoint rows are merged.
+    block : int
+        Rows per block for the per-row position sums, which bounds the
+        temporaries.
+
+    Returns
+    -------
+    owner : ndarray of int, shape (n_src,)
+        Index of the row each row merges into; ``owner[i] == i`` for a row
+        that is kept.
+    """
+    n_src = arr_ra.shape[0]
+    owner = np.arange(n_src)
+    present = np.isfinite(arr_ra) & np.isfinite(arr_dec)
+    nm = present.sum(axis=1)
+    rows = np.nonzero(nm > 0)[0]
+    if len(rows) < 2:
+        return owner
+    pres = present[rows]
+    del present
+    cnt = nm[rows].astype(float)
+    # per-row mean tangent-plane offset in arcsec about one reference
+    # position, summed in row blocks
+    ra0 = arr_ra[rows[0], np.argmax(pres[0])]
+    dec0 = arr_dec[rows[0], np.argmax(pres[0])]
+    cosd = np.cos(np.deg2rad(dec0))
+    xy = np.empty((len(rows), 2))
+    for b0 in range(0, len(rows), block):
+        rb, pb = rows[b0:b0 + block], pres[b0:b0 + block]
+        dra = (arr_ra[rb] - ra0 + 180.0) % 360.0 - 180.0
+        xy[b0:b0 + block, 0] = np.where(pb, dra, 0.0).sum(axis=1) * (cosd * 3600.0)
+        del dra
+        xy[b0:b0 + block, 1] = np.where(pb, arr_dec[rb] - dec0, 0.0).sum(axis=1) * 3600.0
+    xy /= cnt[:, None]
+    r_as = radius.to_value(u.arcsec)
+    pairs = cKDTree(xy).query_pairs(r_as, output_type='ndarray')
+    if len(pairs) == 0:
+        return owner
+    sep = np.hypot(*(xy[pairs[:, 0]] - xy[pairs[:, 1]]).T)
+    pairs = pairs[np.argsort(sep, kind='stable')]
+
+    # union-find over the local indices; a root carries its group's frame set,
+    # frame count and member rows
+    parent = np.arange(len(rows))
+    members = {}
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, j in pairs:
+        ri, rj = find(i), find(j)
+        if ri == rj or (pres[ri] & pres[rj]).any():
+            continue
+        mi, mj = members.get(ri, [ri]), members.get(rj, [rj])
+        dd = xy[mi][:, None, :] - xy[mj][None, :, :]
+        if np.hypot(dd[..., 0], dd[..., 1]).max() > r_as:
+            continue
+        # the row with more frames survives (ties: the earlier row)
+        if (cnt[rj], -rj) > (cnt[ri], -ri):
+            ri, rj = rj, ri
+        parent[rj] = ri
+        pres[ri] |= pres[rj]
+        cnt[ri] += cnt[rj]
+        members[ri] = mi + mj
+        members.pop(rj, None)
+    roots = np.array([find(i) for i in range(len(rows))])
+    owner[rows] = rows[roots]
+    return owner
+
+
+def fold_split_rows(owner, stacks, saved_match_inds):
+    """Apply :func:`split_row_owners` to the Phase 1 stacks of
+    ``combine_singleframe``.
+
+    Each absorbed row's frames are copied into its owner (the frame sets are
+    disjoint, so nothing is overwritten), the absorbed rows are removed, and
+    every frame's match indices are remapped onto the remaining rows.
+
+    Parameters
+    ----------
+    owner : ndarray of int, shape (n_src,)
+        Output of :func:`split_row_owners`.
+    stacks : list of ndarray, shape (n_src, n_tbl)
+        Phase 1 arrays.  The first must be the RA stack: its finite entries
+        mark the contributing frames.  The list is updated in place, one array
+        at a time, so a caller that holds no other reference to the arrays
+        never has two full copies of the stacks in memory.
+    saved_match_inds : list of ndarray
+        Per-frame base-row index of every row of that frame.
+
+    Returns
+    -------
+    stacks : list of ndarray
+        The same list, now holding the folded arrays with absorbed rows removed.
+    saved_match_inds : list of ndarray
+        The remapped per-frame indices.
+    """
+    n_src = len(owner)
+    absorbed = owner != np.arange(n_src)
+    if not absorbed.any():
+        return stacks, saved_match_inds
+    src = np.nonzero(absorbed)[0]
+    rr, cc = np.nonzero(np.isfinite(stacks[0][src]))
+    dst = owner[src][rr]
+    kept = ~absorbed
+    for k in range(len(stacks)):
+        arr = stacks[k]
+        arr[dst, cc] = arr[src[rr], cc]
+        stacks[k] = arr[kept]
+        del arr
+    final = (np.cumsum(kept) - 1)[owner].astype(np.int32)
+    saved_match_inds = [final[mi] for mi in saved_match_inds]
+    return stacks, saved_match_inds
 
 
 def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaverage=nanaverage_dask,
@@ -690,6 +882,25 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
               f"{tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''} [total={n_src}]",
               flush=True)
 
+    # Rows of one star that Loop 1 split in two: their frames are disjoint and
+    # their averaged positions lie within 0.75 FWHM (at most min_offset, the
+    # radius Loop 1 itself calls "same star").  See split_row_owners.
+    _split_radius = split_row_radius(_filt, min_offset)
+    owner = split_row_owners(arr_ra, arr_dec, _split_radius)
+    n_split = int((owner != np.arange(n_src)).sum())
+    if n_split:
+        # hand the stacks over so fold_split_rows can free each one as it goes
+        stacks = [arr_ra, arr_dec, arr_flux, arr_fluxerr]
+        del arr_ra, arr_dec, arr_flux, arr_fluxerr
+        stacks, saved_match_inds = fold_split_rows(owner, stacks, saved_match_inds)
+        arr_ra, arr_dec, arr_flux, arr_fluxerr = stacks
+        del stacks
+        n_src = arr_ra.shape[0]
+    print(f"Phase 1: merged {n_split} split-star row(s) (disjoint frames, "
+          f"averaged positions within {_split_radius.to(u.arcsec):.3f}) "
+          f"[total={n_src}]", flush=True)
+    del owner
+
     print("Phase 1 stack done; computing mask / weights / position averages", flush=True)
     nmatch = np.isfinite(arr_flux).sum(axis=1).astype(np.int32)
 
@@ -699,6 +910,23 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     clip_dec = sigma_clip(arr_dec, stdfunc='mad_std', axis=1)
     to_mask = clip_flux.mask | clip_ra.mask | clip_dec.mask
     keepmask = ~to_mask
+
+    # ALL-CLIPPED FALLBACK: with 3-4 frames, mad_std comes from two or three
+    # near-equal values, so each axis can clip a frame that agrees to a few
+    # per cent in flux or 1-2 mas in position, and the UNION of the three
+    # per-axis masks can then cover every frame.  Such a source got
+    # nmatch_good=0, a NaN position, and was dropped as "nan coordinates" by
+    # the caller.  wd2 m7 (#1160): 49 / 68 / 64 rows in F277W / F250M / F300M,
+    # 39 / 55 / 49 of them within 0.3 mag and 0.08" of a dolphot star; no
+    # single axis masked every frame of any of them.  Fall back to every
+    # frame with a finite flux and position for those sources only.
+    _all_clipped = (nmatch > 0) & ~keepmask.any(axis=1)
+    if _all_clipped.any():
+        keepmask[_all_clipped] = (np.isfinite(arr_flux) & np.isfinite(arr_ra)
+                                  & np.isfinite(arr_dec))[_all_clipped]
+        print(f"Phase 1: the flux/ra/dec sigma clip masked every frame of "
+              f"{int(_all_clipped.sum())} source(s); those use all their "
+              f"finite frames", flush=True)
     nmatch_good = keepmask.sum(axis=1).astype(np.int32)
 
     # free clip objects (they reference the big arrays)
@@ -807,6 +1035,14 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     newtbl['std_dec'] = std_dec
     newtbl['nmatch'] = nmatch
     newtbl['nmatch_good'] = nmatch_good
+    # nmatch_good == nmatch on a fallback row, the same as on a row with no
+    # clipped frame; this flag tells the two apart.
+    newtbl['clip_fallback'] = _all_clipped
+    newtbl.meta['clip_fallback'] = (
+        'True when the flux/ra/dec sigma clip masked every frame of this '
+        'source, so its averages use all frames with a finite flux and '
+        'position (#1160)')
+    del _all_clipped
     newtbl[f'{flux_colname}_avg'] = flux_avg
     newtbl[f'std_{flux_colname}_avg'] = std_flux_avg
     newtbl[f'{flux_error_colname}_avg'] = flux_err_avg
@@ -1227,6 +1463,38 @@ def _qualcuts_oksep_suffix(target):
     return f'_qualcuts_oksep{token}'
 
 
+def _write_ecsv_twin(basetable, tablename, write_ecsv=True):
+    """Write ``{tablename}.ecsv`` beside the FITS table, or remove a stale one.
+
+    ECSV writes these tables slowly: the sgrb2 m7 finalize (2026-10) wrote
+    its nrca, nrcb and merged cross-band tables (312k-618k rows x 564 columns)
+    in 2144, 2072 and 4004 s as ECSV against 178, 22 and 75 s as FITS (#1227).
+    With ``write_ecsv=False`` the FITS table is the only output, and an ECSV
+    of the same name left by an earlier run is removed so that it cannot be
+    read as this run's table.
+    """
+    path = f"{tablename}.ecsv"
+    if not write_ecsv:
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"Removed {path}: an earlier run's ECSV twin; this run "
+                  f"writes {tablename}.fits only", flush=True)
+        else:
+            print(f"Skipped the ECSV twin {path} (FITS only)", flush=True)
+        return
+    t0 = time.time()
+    # takes FOR-EV-ER
+    try:
+        basetable.write(path, overwrite=True)
+    except yaml.representer.RepresenterError:
+        import astropy
+        print("astropy version: ", astropy.__version__)
+        # https://github.com/astropy/astropy/pull/18677 ?
+        print("YAML RepresenterError: trying again after removing masks")
+        raise
+    print(f"Done writing table {path} in {time.time()-t0:0.1f} seconds", flush=True)
+
+
 def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    ref_filter='f405n',
                    epsf=False, bgsub=False, desat=False, blur=False,
@@ -1238,7 +1506,8 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    resbgsub=False,
                    obs_suffix='',
                    basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                   satstar_proposal_id=None, satstar_field=None):
+                   satstar_proposal_id=None, satstar_field=None,
+                   write_ecsv=True):
     print(f'Starting merge catalogs: catalog_type: {catalog_type} module: {module} target: {target}', flush=True)
 
     if iteration_label in (None, ''):
@@ -1248,7 +1517,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
     else:
         iter_token = f'_{iteration_label}'
 
-    epsf_ = "_epsf" if epsf else ""
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
 
     matching_ref_tables = [tb for tb in tbls if tb.meta['filter'] == ref_filter]
@@ -1406,6 +1675,10 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
         print(f"Writing table {tablename} with len={len(basetable)} and ncols={len(basetable.colnames)}", flush=True)
         # use caps b/c FITS will force it to caps anyway
         basetable.meta['VERSION'] = datetime.datetime.now().isoformat()
+        # The PSF variant the inputs were merged under (#1197).  The name above
+        # carries it too, but the m8 forced fill copies this meta into an
+        # untokened ..._resbgsub_m8 name, where the card is the only record.
+        basetable.meta['PSFTOKEN'] = epsf_ or 'none'
         # FITS can mishandle masked bool columns; force saturated flags to plain bool.
         for colname in basetable.colnames:
             if 'saturated' in colname:
@@ -1442,17 +1715,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                     basetable.meta[k] = str(v)
                     print("BAD META:", k, type(v), v, ex)
 
-        t0 = time.time()
-        # takes FOR-EV-ER
-        try:
-            basetable.write(f"{tablename}.ecsv", overwrite=True)
-        except yaml.representer.RepresenterError:
-            import astropy
-            print("astropy version: ", astropy.__version__)
-            # https://github.com/astropy/astropy/pull/18677 ?
-            print("YAML RepresenterError: trying again after removing masks")
-            raise
-        print(f"Done writing table {tablename}.ecsv in {time.time()-t0:0.1f} seconds", flush=True)
+        _write_ecsv_twin(basetable, tablename, write_ecsv)
 
         # keep any rows with at least two qf cut pass
         if qfcut is not None:
@@ -1502,6 +1765,102 @@ def _want_allcols(write_allcols=None):
         '1', 'true', 'yes', 'on')
 
 
+#: Set to 1 to merge one PSF variant on purpose while the other variant's
+#: per-frame catalogs are newer (an A/B comparison); see StalePSFVariantError.
+PSF_VARIANT_OPTOUT_ENV = 'GC_ALLOW_STALE_PSF_VARIANT'
+
+
+class StalePSFVariantError(ValueError):
+    """A merge would read one PSF variant of its inputs while the other is current.
+
+    Every per-frame catalog name carries the PSF variant (``_epsf`` and/or
+    ``_hybpsf``, the latter from ``PSF_EPSF_CORE_DIR``), but the per-filter
+    merged catalog name does not.  A merge run with the other
+    ``PSF_EPSF_CORE_DIR`` setting therefore globs the other variant's per-frame
+    catalogs and writes over the same merged file, and the cross-band merge
+    reads whichever per-filter variant was written last (issue #1197: 10678
+    m7 merges built from pre-roll STPSF per-frame catalogs).
+    """
+
+
+def _psf_variant_optout(environ=None):
+    env = os.environ if environ is None else environ
+    return env.get(PSF_VARIANT_OPTOUT_ENV, '').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+
+
+def _psf_variant_label(epsf_):
+    return f"'{epsf_}'" if epsf_ else 'no PSF token (STPSF)'
+
+
+def _other_psf_variant_path(path, head, epsf_, tail):
+    """``path`` with its ``_hybpsf`` token toggled, or None if the slot is not found.
+
+    ``head`` is the token run between ``_exp{NNNNN}`` and the PSF slot
+    (``{desat}{bgsub}``) and ``tail`` the run after it
+    (``{fitpsf}{blur_}{group_}{iter_token}``), as the per-frame writer spells
+    them; a ``_chunk{i}of{n}`` token may follow ``tail``.
+    """
+    if epsf_.endswith(HYBRID_TOKEN):
+        alt = epsf_[:-len(HYBRID_TOKEN)]
+    else:
+        alt = epsf_ + HYBRID_TOKEN
+    pat = re.compile(r'(_exp\d{5}' + re.escape(head) + r')' + re.escape(epsf_)
+                     + r'(' + re.escape(tail) + r'(?:_chunk\d+of\d+)?_)')
+    dirname, base = os.path.split(path)
+    new, n = pat.subn(lambda m: m.group(1) + alt + m.group(2), base, count=1)
+    return os.path.join(dirname, new) if n else None
+
+
+def _check_perframe_psf_variant(fns, head, epsf_, tail):
+    """Raise StalePSFVariantError if any input has a NEWER other-variant sibling.
+
+    A newer sibling means the latest per-frame run used the other
+    ``PSF_EPSF_CORE_DIR`` setting, so this merge would replace that run's
+    merged catalog with an older one under the same name.
+    """
+    if _psf_variant_optout():
+        print(f"{PSF_VARIANT_OPTOUT_ENV} set: skipping the per-frame PSF-variant "
+              f"check", flush=True)
+        return
+    stale = []
+    for fn in fns:
+        sib = _other_psf_variant_path(fn, head, epsf_, tail)
+        if (sib is not None and os.path.exists(sib)
+                and os.path.getmtime(sib) > os.path.getmtime(fn)):
+            stale.append((fn, sib))
+    if stale:
+        fn, sib = stale[0]
+        raise StalePSFVariantError(
+            f"{len(stale)} of {len(fns)} per-frame catalogs this merge reads "
+            f"({_psf_variant_label(epsf_)}) have a newer sibling of the other "
+            f"PSF variant, e.g.\n    reads  {fn}\n    newer  {sib}\n"
+            f"The merged catalog name carries no PSF token, so this merge would "
+            f"overwrite the newer variant's merged catalog with the older one "
+            f"(issue #1197).  Set PSF_EPSF_CORE_DIR as the latest per-frame run "
+            f"did, or set {PSF_VARIANT_OPTOUT_ENV}=1 to merge the older variant "
+            f"on purpose.")
+
+
+def _recorded_psf_token(meta):
+    """The ``_hybpsf`` part of the PSF variant a per-filter merged catalog records.
+
+    Reads the PSFTOKEN card when present; otherwise infers it from the FN*
+    cards (the per-frame input basenames).  Returns a set of tokens ('' or
+    '_hybpsf'; more than one means mixed inputs), or None when the catalog
+    records neither.
+    """
+    up = {str(k).upper(): v for k, v in meta.items()}
+    if 'PSFTOKEN' in up:
+        tok = str(up['PSFTOKEN']).strip()
+        return {HYBRID_TOKEN if tok.endswith(HYBRID_TOKEN) else ''}
+    fns = [os.path.basename(str(v)) for k, v in up.items()
+           if re.fullmatch(r'FN\d+', k)]
+    if not fns:
+        return None
+    return {HYBRID_TOKEN if HYBRID_TOKEN in fn else '' for fn in fns}
+
+
 def merge_individual_frames(module='merged', suffix="", desat=False, filtername='f410m',
                                         progid='2221',
                                         bgsub=False, epsf=False, fitpsf=False, blur=False, target='brick',
@@ -1518,11 +1877,32 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         merge_workers=1,
                                         field=None,
                                         write_allcols=None,
+                                        m2_registration=None,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    """Merge one filter's per-frame catalogs into the indivexp-merged catalog.
+
+    ``m2_registration``: an ``m2_registration.M2Registration`` (or None).  When
+    given, each per-frame catalog is shifted by the offset the m2 checkpoint
+    measured for it against its visit consensus before the catalogs are
+    averaged (see ``m2_registration``).  It describes the frames as baked, so
+    it cannot be combined with ``offsets_table``, which re-shifts them first.
+    """
+    if m2_registration is not None and offsets_table is not None:
+        raise ValueError(
+            "merge_individual_frames: m2_registration and offsets_table were "
+            "both given.  The m2 offsets were measured on the frames' BAKED "
+            "positions; an offsets table re-shifts each frame first, so the "
+            "registration would be applied to positions it did not measure.")
 
     desat = "_unsatstar" if desat else ""
     bgsub = _bgsub_token(bgsub, resbgsub)
     fitpsf = '_fitpsf' if fitpsf else ''
+    # the per-frame writer (save_photutils_results, _predict_output_tokens)
+    # stamps ``{epsf_}`` between {bgsub} and {blur_}; without it an --epsf or
+    # PSF_EPSF_CORE_DIR (``_hybpsf``) run globs nothing and m12 dies with
+    # "No tables found".  The merged OUTPUT name stays epsf-less: its readers
+    # (cataloging.merged_catalog_path et al.) spell it without the token.
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
     # the per-frame writer inserts a ``_group`` token (between {blur_} and the
     # iteration token) when sources were fit with a SourceGrouper
@@ -1638,7 +2018,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                 base_pat = (
                     f"{basepath}/{filtername.upper()}/"
                     f"{filtername.lower()}_{module_}{glob_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
-                    f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
+                    f"{desat}{bgsub}{epsf_}{fitpsf}{blur_}{group_}{iter_token}"
                 )
                 raw_fns.extend(glob.glob(
                     f"{base_pat}_{method_suffix}{suffix}.fits"))
@@ -1658,7 +2038,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     n_chunked = sum(1 for fns in frame_groups.values() if len(fns) > 1)
     print(f"Found {len(raw_fns)} files across {len(tblfns)} frames "
           f"({n_chunked} chunked) for "
-          f"{filtername.lower()}_*_visit*_exp*{desat}{bgsub}{fitpsf}{blur_}:")
+          f"{filtername.lower()}_*_visit*_exp*{desat}{bgsub}{epsf_}{fitpsf}{blur_}:")
     for key in tblfns:
         chunks = frame_groups[key]
         if len(chunks) == 1:
@@ -1667,7 +2047,12 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             print(f"{key}  <- vstack of {len(chunks)} chunks")
 
     if len(tblfns) == 0:
-        raise ValueError(f"No tables found matching {basepath}/{filtername.upper()}/{filtername.lower()}_{module}....{desat}{bgsub}{fitpsf}{blur_}_{method}{suffix}.fits")
+        raise ValueError(f"No tables found matching {basepath}/{filtername.upper()}/{filtername.lower()}_{module}....{desat}{bgsub}{epsf_}{fitpsf}{blur_}_{method}{suffix}.fits")
+
+    # The output name below has no {epsf_}, so refuse to merge the older PSF
+    # variant over the newer one (#1197).
+    _check_perframe_psf_variant(raw_fns, f"{desat}{bgsub}", epsf_,
+                                f"{fitpsf}{blur_}{group_}{iter_token}")
 
     tables = []
     for key in tblfns:
@@ -1689,6 +2074,16 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         if 'FILENAME' not in tb.meta:
             print('tb.meta:', tb.meta)
             raise ValueError(f"Table file {fn} is not correctly formatted; it is missing FILENAME metadata")
+
+    # Register each per-frame catalog onto its m2 visit consensus before the
+    # positions are averaged (m2_registration; the frames are not touched).
+    m2_registration_summary = None
+    if m2_registration is not None:
+        from jwst_gc_pipeline.photometry.m2_registration import (
+            apply_m2_registration)
+        m2_registration_summary = apply_m2_registration(
+            tables, m2_registration,
+            context=f"{filtername.upper()}/{module} {iteration_label or ''}".strip())
 
     # Note (2026-04-23): an earlier "dedup bug" diagnosis (realign=True +
     # min_offset=0.25") was based on analysing the FIRST 200k rows of the
@@ -1750,7 +2145,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # the same spelling.  Same convention as flux_fit_avg -> flux_fit; the
     # *_allcols.fits table keeps the unambiguous names.)
     for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
-                'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
+                'clip_fallback', 'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                 'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
                 'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
                 'forced_refit_frac', 'forced_refit_nframes',
@@ -1760,8 +2155,20 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
 
     minimal_table = Table(minimal_version)
     minimal_table.meta = merged_exposure_table.meta.copy()
+    if m2_registration_summary is not None:
+        # How many per-frame catalogs were registered onto the m2 consensus,
+        # and from which record; absent means the step did not run.
+        _c = m2_registration_summary['counts']
+        minimal_table.meta['M2REGREC'] = os.path.basename(
+            m2_registration_summary['record'])
+        minimal_table.meta['M2REGN'] = int(_c.get('applied', 0))
+        minimal_table.meta['M2REGNOT'] = int(sum(_c.values())
+                                             - _c.get('applied', 0))
     for ii, fn in enumerate(tblfns):
         minimal_table.meta[f'fn{ii}'] = os.path.basename(fn)
+    # The PSF variant of the inputs, which the output name does not carry
+    # (#1197); merge_daophot checks it against the cross-band run's.
+    minimal_table.meta['PSFTOKEN'] = epsf_ or 'none'
 
     # Ensure saturated stars are represented in indivexp merged products too.
     # Skippable (do_replace_saturated=False) for cutout runs whose basepath
@@ -1773,6 +2180,14 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                           fwhm_basepath=fwhm_basepath, basepath=basepath,
                           proposal_id=progid, field=field,
                           phase=iteration_label)
+        if m2_registration_summary is not None:
+            # Saturated-star rows come from the satstar catalogs, which are not
+            # per-frame catalogs and have no m2 entry: their positions are not
+            # registered.  Say so in the log and in the product.
+            print("m2 registration: saturated-star positions inserted by "
+                  "replace_saturated are NOT registered (no per-frame m2 entry)",
+                  flush=True)
+            minimal_table.meta['M2REGSAT'] = 'unregistered'
 
     reject = np.isnan(minimal_table['skycoord'].ra) | np.isnan(minimal_table['skycoord'].dec)
     if np.any(reject):
@@ -1954,7 +2369,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   filternames_override=None,
                   field=None,
                   progid=None,
-                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                  write_ecsv=True):
     """Cross-filter merge of per-filter daophot catalogs.
 
     ``vetted`` (manual path): read the ``_vetted`` per-filter merged catalogs
@@ -1968,12 +2384,15 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     module-slot token (``naming.merged_catalog_obs_token``) of the per-filter
     input glob; the field registry answers only for a caller that names no
     proposal.
+
+    ``write_ecsv=False`` writes the merged table as FITS only and removes an
+    ECSV twin of the same name left by an earlier run (`_write_ecsv_twin`).
     """
 
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
     bgsub = _bgsub_token(bgsub, resbgsub)
-    epsf_ = "_epsf" if epsf else ""
+    epsf_ = ("_epsf" if epsf else "") + hybrid_psf_token()
     blur_ = "_blur" if blur else ""
     if iteration_label in (None, ''):
         iter_token = ''
@@ -2133,6 +2552,35 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
 
     tbls = [Table.read(catfn) for catfn in catfns]
 
+    # The per-filter indivexp names carry no PSF token, but this merge's output
+    # name does ({epsf_} in merge_catalogs' tablename).  Check that each input
+    # was merged under this run's PSF_EPSF_CORE_DIR setting (#1197).
+    if indivexp:
+        _want = HYBRID_TOKEN if HYBRID_TOKEN in epsf_ else ''
+        _bad, _unknown = [], []
+        for catfn, tbl in zip(catfns, tbls):
+            _rec = _recorded_psf_token(tbl.meta)
+            if _rec is None:
+                _unknown.append(os.path.basename(catfn))
+            elif _rec != {_want}:
+                _bad.append(f"    {os.path.basename(catfn)}: "
+                            f"{sorted(_psf_variant_label(t) for t in _rec)}")
+        if _unknown:
+            print(f"WARNING: no PSFTOKEN or FN* cards in {_unknown}; cannot check "
+                  f"their PSF variant against {_psf_variant_label(_want)}",
+                  flush=True)
+        if _bad and _psf_variant_optout():
+            print(f"{PSF_VARIANT_OPTOUT_ENV} set: merging per-filter catalogs of "
+                  f"another PSF variant:\n" + '\n'.join(_bad), flush=True)
+        elif _bad:
+            raise StalePSFVariantError(
+                f"cross-band merge runs with {_psf_variant_label(_want)} "
+                f"(PSF_EPSF_CORE_DIR {'set' if _want else 'unset'}) but these "
+                f"per-filter inputs were merged from another PSF variant:\n"
+                + '\n'.join(_bad) + "\nRe-run their per-filter merge with "
+                f"the same PSF_EPSF_CORE_DIR setting, or set "
+                f"{PSF_VARIANT_OPTOUT_ENV}=1 to merge them anyway.")
+
     for catfn, tbl, filtername in zip(catfns, tbls, filternames):
         tbl.meta['filename'] = catfn
         tbl.meta['filter'] = filtername
@@ -2224,7 +2672,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                          obs_suffix=_obssuf,
                          satstar_proposal_id=_satstar_prop,
                          satstar_field=field,
-                         basepath=basepath)
+                         basepath=basepath,
+                         write_ecsv=write_ecsv)
     if ref_filter is not None:
         _merge_kwargs['ref_filter'] = ref_filter
     merge_catalogs(tbls, **_merge_kwargs)
@@ -2636,6 +3085,41 @@ def satstar_in_observation_footprint(skycoord, catalog_paths,
     return inside
 
 
+def _primary_satstar_catalog_path(filtername, target, basepath,
+                                  proposal_id=None, field=None):
+    """The NIRCam ``merged_i2d`` satstar catalog a merge reads, or ``None``.
+
+    When this single-file "primary" product exists, ``load_satstar_catalog``
+    reads it in place of the per-exposure catalogs, and
+    ``load_rejected_satstar_catalog`` reads its sibling rejected file, so
+    the two channels always come from the same product (#983).
+
+    Targets that span multiple observations within one proposal (e.g.
+    gc2211 has obs 023/028/046/049/050) don't have a single primary i2d
+    satstar; they use the per-exposure catalogs in the pipeline directory.
+    The primary product only exists for NIRCam (the
+    ``*_nircam_clear-<filt>-merged_i2d`` naming); MIRI runs always use the
+    per-exposure catalogs.
+    """
+    proj = _project_for_target_filter(target, filtername)
+    if not (_inst_token(filtername) == 'nircam'
+            and target in project_obsnum and proj in project_obsnum[target]):
+        return None
+    obs_scope = satstar_obs_scope(proposal_id, field)
+    # A scoped observation reads ITS OWN primary, never the registry's
+    # (a wildcard for gc-treasury, and o002 only for m4 -- so an m4 o003
+    # merge would otherwise take o002's product).
+    _primary_obs = (obs_scope[2:] if obs_scope
+                    else project_obsnum[target][proj])
+    primary = (f'{basepath}/{filtername.upper()}/pipeline/'
+               f'{jw_prefix(proj)}-o{_primary_obs}'
+               f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
+    # project_obsnum may hold a glob wildcard for multi-obs targets
+    # (sickle/cloudef/gc2211), so resolve via glob rather than exists().
+    matches = sorted(glob.glob(primary))
+    return matches[0] if len(matches) == 1 else None
+
+
 def load_satstar_catalog(filtername, target='brick',
                          basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
                          proposal_id=None, field=None, phase=None):
@@ -2656,39 +3140,20 @@ def load_satstar_catalog(filtername, target='brick',
     :mod:`~jwst_gc_pipeline.photometry.satstar_phase_selection`;
     ``SATSTAR_POOL_PHASES=all`` restores the pre-fix pooling of every phase.
     """
-    proj = _project_for_target_filter(target, filtername)
     obs_scope = satstar_obs_scope(proposal_id, field)
-    # Targets that span multiple observations within one proposal (e.g.
-    # gc2211 has obs 023/028/046/049/050) don't have a single primary
-    # i2d satstar; fall back to globbing the per-exposure satstar
-    # catalogs in the pipeline directory.
-    # The single-file "primary" satstar product only exists for NIRCam
-    # (the *_nircam_clear-<filt>-merged_i2d naming); MIRI runs always use
-    # the per-exposure fallback below.
-    if (_inst_token(filtername) == 'nircam'
-            and target in project_obsnum and proj in project_obsnum[target]):
-        # A scoped observation reads ITS OWN primary, never the registry's
-        # (a wildcard for gc-treasury, and o002 only for m4 -- so an m4 o003
-        # merge would otherwise take o002's product).
-        _primary_obs = (obs_scope[2:] if obs_scope
-                        else project_obsnum[target][proj])
-        primary = (f'{basepath}/{filtername.upper()}/pipeline/'
-                   f'{jw_prefix(proj)}-o{_primary_obs}'
-                   f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
-        # project_obsnum may hold a glob wildcard for multi-obs targets
-        # (sickle/cloudef/gc2211), so resolve via glob rather than exists().
-        primary_matches = sorted(glob.glob(primary))
-        if len(primary_matches) == 1:
-            print(f"Using saturated star catalog {primary_matches[0]}")
-            _cat = apply_pooled_wingcal(Table.read(primary_matches[0]),
-                                        filtername, basepath=basepath)
-            # cache_path=None: NEVER rewrite the raw pipeline satstar product on
-            # a read path.  Persisting the wingcal-divided flux_fit would make the
-            # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
-            # wingcal_pooled provenance flag.  Aperture columns are added in
-            # memory here (recomputed each read for this branch).
-            return _ensure_satstar_aperture_photometry(
-                _cat, filtername, target, basepath, cache_path=None)
+    _primary = _primary_satstar_catalog_path(filtername, target, basepath,
+                                             proposal_id, field)
+    if _primary is not None:
+        print(f"Using saturated star catalog {_primary}")
+        _cat = apply_pooled_wingcal(Table.read(_primary), filtername,
+                                    basepath=basepath, phase=phase)
+        # cache_path=None: NEVER rewrite the raw pipeline satstar product on
+        # a read path.  Persisting the wingcal-divided flux_fit would make the
+        # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
+        # wingcal_pooled provenance flag.  Aperture columns are added in
+        # memory here (recomputed each read for this branch).
+        return _ensure_satstar_aperture_photometry(
+            _cat, filtername, target, basepath, cache_path=None)
 
     # Require an ITERATION TOKEN (_m12/_m3.../_m7) in the satstar filename.  The
     # current pipeline always writes one (..._crf[_resbgsub]_m<N>_satstar_catalog).
@@ -2793,12 +3258,12 @@ def load_satstar_catalog(filtername, target='brick',
             if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
                     and str(cached.meta.get('SATOBSSC', '')) == obs_scope
                     and abs(_rcache - _rcur) < 1e-6
-                    and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG
+                    and str(cached.meta.get('SATDDALG', '')) == _satstar_dedup_alg_tag()
                     and str(cached.meta.get('SATFRMSG', '')) == _fsig
                     and str(cached.meta.get('SATPHSEL', '')) == _phase_sig):
                 print(f"Using consolidated satstar catalog {cache} "
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
-                      f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG}, "
+                      f"dedup radius {_rcur}\", alg {_satstar_dedup_alg_tag()}, "
                       f"frame state {_fsig}, phase selection {_phase_sig})")
                 return _ensure_satstar_aperture_photometry(
                     cached, filtername, target, basepath, cache_path=cache)
@@ -2807,9 +3272,9 @@ def load_satstar_catalog(filtername, target='brick',
                       f"set of per-exposure catalogs -- phase selection "
                       f"{cached.meta.get('SATPHSEL', 'unrecorded (every phase pooled)')!r}"
                       f" -> {_phase_sig!r}")
-            if str(cached.meta.get('SATDDALG', '')) != _SATSTAR_DEDUP_ALG:
+            if str(cached.meta.get('SATDDALG', '')) != _satstar_dedup_alg_tag():
                 print(f"Rebuilding satstar cache {cache}: dedup algorithm changed "
-                      f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_SATSTAR_DEDUP_ALG!r}")
+                      f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_satstar_dedup_alg_tag()!r}")
             if abs(_rcache - _rcur) >= 1e-6:
                 print(f"Rebuilding satstar cache {cache}: dedup radius changed "
                       f"{_rcache}\" -> {_rcur}\"")
@@ -2855,12 +3320,20 @@ def load_satstar_catalog(filtername, target='brick',
     # duplicate rows at one position (sickle cutouts showed a star 3-8x), and
     # the merged-cat residual subtracts it N times.  Collapse to one row per
     # physical star (keep the brightest as representative).
-    deduped = _dedup_satstar_catalog(combined, target=target)
     # Pooled wing-calibration fallback (Phase B1): rows whose per-frame
     # self-cal was skipped (ratio exactly 1.0) get the cross-frame pooled
-    # C(r).  Applied post-dedup, pre-cache, so the cache holds calibrated
-    # fluxes with wingcal_pooled provenance.
-    deduped = apply_pooled_wingcal(deduped, filtername, basepath=basepath)
+    # C(r).  Applied to every PER-EXPOSURE row, before the dedup: a star's
+    # exposures can mix per-frame-calibrated and skipped frames (GC F410M
+    # skips 43 of 48), and the dedup's representative and its median over
+    # exposures (_adopt_ensemble_flux) need every member in the calibrated
+    # state.  Applied after the dedup it keyed on the representative alone,
+    # so a skipped representative divided already-calibrated members a second
+    # time and a calibrated one left skipped members raw.  Called once: a
+    # second call resets wingcal_pooled.  Pre-cache, so the cache holds
+    # calibrated fluxes with wingcal_pooled provenance.
+    combined = apply_pooled_wingcal(combined, filtername, basepath=basepath,
+                                    phase=phase)
+    deduped = _dedup_satstar_catalog(combined, target=target)
     # Aperture photometry from the i2d mosaic (added by default; see
     # _ensure_satstar_aperture_photometry).  Done pre-cache so the cache holds
     # the aperture columns; cache_path=None here (the cache is written below).
@@ -2870,7 +3343,7 @@ def load_satstar_catalog(filtername, target='brick',
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
     deduped.meta['SATDDUPR'] = float(_satstar_dedup_radius().to(u.arcsec).value)
-    deduped.meta['SATDDALG'] = _SATSTAR_DEDUP_ALG
+    deduped.meta['SATDDALG'] = _satstar_dedup_alg_tag()
     # ...and the state of the frames those positions were re-projected onto, so
     # the next read rebuilds when a frame has since moved (issue #193).
     deduped.meta['SATFRMSG'] = _frame_sig
@@ -2900,26 +3373,81 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp5'  # fp5: per-exposure ensemble statistics on the kept row (#925)
+_SATSTAR_DEDUP_ALG = 'fp6'  # fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
+#                              fp5: per-exposure ensemble statistics on the kept row (#925)
 #                              fp4: sky columns re-projected onto the current GWCS (#193)
 
 
-# Wide second-chance radius for matching a fitted satstar to its daophot row
-# in replace_saturated (mutual-nearest only; see the second-pass block there).
+def _satstar_dedup_alg_tag():
+    """Cache key for the consolidated catalog: the algorithm version plus
+    the flux statistic, so toggling ``SATSTAR_FLUX_STAT`` rebuilds the cache
+    instead of serving the other statistic's fluxes."""
+    stat = _satstar_flux_statistic()
+    return _SATSTAR_DEDUP_ALG if stat == 'median' else f'{_SATSTAR_DEDUP_ALG}-{stat}'
+
+
+# Second-chance radius for matching a fitted satstar to its daophot row in
+# replace_saturated (mutual-nearest only; see the second-pass block there).
 # Satstar positions scatter ~0.08-0.15" from the true position, so the tight
-# per-filter radii miss most pairings.  Env SATSTAR_REPLACE_RADIUS_ARCSEC
-# overrides (read at CALL time, not import time, so setting it after import
-# works); set 0 to disable the second pass.
-def _satstar_replace_radius():
-    _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
-    # 0.5": wide-band saturated blobs scatter worse than SW (brick f356w
-    # catastrophic clipped rows: satstar at med 0.16", 77% < 0.3" but 90% <
-    # 0.5"); mutual-nearest keeps the wide radius crowding-safe.
+# per-filter radii miss many pairings.
+#
+# The radius is SATSTAR_REPLACE_RADIUS_FWHM (default 1.5) times the band's
+# PSF FWHM, capped at 0.5".  The fixed 0.5" used before spans 3 (F480M) to
+# 17 (F070W) FWHM in the NIRCam bands, and a satstar with no daophot row of
+# its own then paired with its nearest NEIGHBOUR star and overwrote it,
+# erasing a real star from the catalog (superdense reference cutout, F212N,
+# m3-m7 over 11 seeds: 754 second-pass pairings beyond 0.15", every one with
+# a seed flux < 1/3 of the satstar flux).  Pairings with the star's own
+# clipped row sit at <= 1.5 FWHM for 95-100% of rows in the short-wave bands
+# and 80-89% in the long-wave bands of the production m4 catalogs checked
+# (brick, sgrb2, sgra, arches; lowest brick F405N, 4 of 5, and brick F356W,
+# 332 of 377; see docs/evidence/satstar_replace_radius).  A satstar left
+# unpaired is appended as its own row, as before, so an own row beyond the
+# radius stays in the catalog next to it.  The 0.5" cap keeps the old radius
+# where 1.5 FWHM is wider (MIRI F1130W and redder).
+#
+# Env SATSTAR_REPLACE_RADIUS_ARCSEC overrides with a fixed radius in arcsec
+# (0.5 restores the old behaviour; 0 disables the second pass).  Both
+# variables are read at CALL time, so setting them after import works.
+_SATSTAR_REPLACE_RADIUS_CAP_ARCSEC = 0.5
+
+
+def _satstar_replace_radius_fwhm():
+    """``SATSTAR_REPLACE_RADIUS_FWHM``: the second-pass radius in units of
+    the band's PSF FWHM.  Unset or blank gives 1.5; a value that is not a
+    finite number > 0 raises ``ValueError`` (use
+    ``SATSTAR_REPLACE_RADIUS_ARCSEC=0`` to disable the second pass)."""
+    raw = os.environ.get('SATSTAR_REPLACE_RADIUS_FWHM', '')
+    if not raw.strip():
+        return 1.5
     try:
-        val = float(_env) if _env is not None else 0.5
+        val = float(raw)
     except ValueError:
-        val = 0.5
-    return (val * u.arcsec) if val > 0 else None
+        val = np.nan
+    if not (np.isfinite(val) and val > 0):
+        raise ValueError(f"SATSTAR_REPLACE_RADIUS_FWHM={raw!r}: "
+                         f"expected a finite number > 0")
+    return val
+
+
+def _satstar_replace_radius(filtername=None, basepath=None):
+    """The second-pass pairing radius for ``filtername`` (a Quantity), or
+    None when the second pass is disabled.  ``basepath`` is the field tree
+    whose ``reduction/fwhm_table.ecsv`` takes precedence over the packaged
+    table.  A band missing from the table, or no ``filtername``, gets the
+    0.5" cap."""
+    _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
+    if _env is not None:
+        try:
+            val = float(_env)
+        except ValueError:
+            val = _SATSTAR_REPLACE_RADIUS_CAP_ARCSEC
+        return (val * u.arcsec) if val > 0 else None
+    cap = _SATSTAR_REPLACE_RADIUS_CAP_ARCSEC
+    fwhm = _band_fwhm_arcsec(filtername, basepath)
+    if fwhm is None:
+        return cap * u.arcsec
+    return min(cap, _satstar_replace_radius_fwhm() * fwhm) * u.arcsec
 
 
 def _satstar_dedup_radius():
@@ -2937,8 +3465,51 @@ def _satstar_dedup_radius():
     return float(os.environ.get('SATSTAR_DEDUP_ARCSEC', 0.15)) * u.arcsec
 
 
+def _wingcal_phase_token(phase):
+    """Phase token of a pooled wing-calibration table built for one phase.
+
+    The first phase (``m1``/``m2``/``m12``, rank 2) is named ``m12`` like its
+    per-exposure products; a label that names no phase gives ``''``.
+    """
+    rank = satstar_phase_rank(phase)
+    if rank is None:
+        return ''
+    return 'm12' if rank == 2 else f'm{rank}'
+
+
+def pooled_wingcal_path(basepath, filtername, phase=None):
+    """Where the pooled C(r) table for ``filtername`` (and ``phase``) lives.
+
+    One file per phase, so merges of different observations running at
+    different phases on a shared tree do not overwrite each other's table.
+    ``phase`` that names no phase keeps the historical name.
+    """
+    tok = _wingcal_phase_token(phase)
+    suffix = f'_{tok}' if tok else ''
+    return f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal{suffix}.ecsv'
+
+
+def select_wingcal_calibrator_files(filtername, basepath, phase=None):
+    """The per-exposure ``*_m<N>_wingcal_calibrators.fits`` a pool reads.
+
+    One phase per exposure (#983), by the rule ``load_satstar_catalog`` uses
+    for the satstar catalogs: ``phase``'s file, else the exposure's latest
+    earlier one, never a later one.  Every observation on the tree is read (a
+    band's calibrators share its PSF grid).  Files without a phase token are
+    left out, as the satstar readers leave them out.
+
+    Returns ``(files, report)`` as
+    :func:`~jwst_gc_pipeline.photometry.satstar_phase_selection.select_satstar_phase_files`.
+    """
+    _tok = re.compile(r'_m\d+_wingcal_calibrators\.fits$')
+    files = [f for f in sorted(glob.glob(
+        f'{basepath}/{filtername.upper()}/pipeline/*_wingcal_calibrators.fits'))
+        if _tok.search(os.path.basename(f))]
+    return select_satstar_phase_files(files, phase=phase)
+
+
 def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                         write=True):
+                         write=True, phase=None, files=None):
     """Pool per-frame wing-selfcal calibrator measurements into a per-band
     C(r) table (Phase B1).
 
@@ -2947,58 +3518,141 @@ def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/j
     43/48), so their satstar fluxes carried the raw STPSF wing deficit
     (wingcal_ratio == 1.0).  The per-frame measurements (persisted even when
     sub-threshold, *_wingcal_calibrators.fits) are pooled here across all
-    frames of a band: per rmask bucket, the n-weighted mean ratio.  Same PSF
-    grid within a band+detector, so the per-frame-vs-static objection (H9,
-    epoch-specific grid defects) does not apply within the pool.
+    frames of a band: per rmask bucket, the inverse-variance mean of the
+    per-frame medians with its standard error ``ratio_se``
+    (:func:`~jwst_gc_pipeline.photometry.wingcal.pool_bucket`; #1041 -- the
+    old n-weighted mean had no error, and buckets of 2-30 stars reached
+    C = 12-20).  Same PSF grid within a band+detector, so the
+    per-frame-vs-static objection (H9, epoch-specific grid defects) does not
+    apply within the pool.
+
+    Each exposure contributes ONE phase's calibrator file
+    (:func:`select_wingcal_calibrator_files`).  The table records the
+    selection's signature (``WCALSEL``) so :func:`load_pooled_wingcal` can
+    tell when it was built from a different set of files.  ``files``
+    overrides the selection (the caller has already made it).
     """
-    files = sorted(glob.glob(
-        f'{basepath}/{filtername.upper()}/pipeline/*_wingcal_calibrators.fits'))
+    if files is None:
+        files, _report = select_wingcal_calibrator_files(
+            filtername, basepath, phase=phase)
+        print(f"build_pooled_wingcal: {filtername}: "
+              f"{format_phase_report(_report, what='wingcal-calibrator')}",
+              flush=True)
     if not files:
         return None
     rows = []
     for f in files:
         try:
             tt = Table.read(f)
-        except Exception as err:
+        except (OSError, ValueError) as err:
             print(f"WARNING: unreadable wingcal-calibrator file {f}: {err}")
             continue
+        has_mad = 'ratio_madstd' in tt.colnames
         for row in tt:
             rows.append((int(row['rmask_px']), float(row['ratio_median']),
-                         int(row['n_stars'])))
+                         int(row['n_stars']),
+                         float(row['ratio_madstd']) if has_mad else np.nan))
     if not rows:
         return None
-    rs = sorted({r for r, _, _ in rows})
+    rs = sorted({r for r, _, _, _ in rows})
+    _r, _v, _n, _s = np.array(rows, dtype=float).T
+    rel_floor = wingcal_rel_floor(_r, _v, _s, _n)
     out_rows = []
     for r in rs:
-        vals = np.array([(v, n) for rr, v, n in rows if rr == r])
-        med = float(np.average(vals[:, 0], weights=vals[:, 1]))
-        out_rows.append((r, med, int(vals[:, 1].sum()), len(vals)))
+        vals = np.array([(v, n, s) for rr, v, n, s in rows if rr == r])
+        ratio, ratio_se = wingcal_pool_bucket(vals[:, 0], vals[:, 1],
+                                              vals[:, 2], rel_floor=rel_floor)
+        out_rows.append((r, ratio, ratio_se, int(vals[:, 1].sum()), len(vals)))
     pooled = Table(rows=out_rows,
-                   names=['rmask_px', 'ratio', 'n_stars_total', 'n_frames'])
+                   names=['rmask_px', 'ratio', 'ratio_se', 'n_stars_total',
+                          'n_frames'])
     pooled.meta['band'] = filtername.lower()
+    pooled.meta['WCALSEL'] = satstar_phase_selection_signature(files)
+    pooled.meta['WCALPHS'] = _wingcal_phase_token(phase)
+    pooled.meta['NWCALSRC'] = len(files)
     if write:
-        outfn = f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal.ecsv'
-        pooled.write(outfn, format='ascii.ecsv', overwrite=True)
-        print(f"build_pooled_wingcal: {filtername} pooled C(r) from "
-              f"{len(files)} frame file(s) -> {outfn}")
+        outfn = pooled_wingcal_path(basepath, filtername, phase)
+        try:
+            os.makedirs(os.path.dirname(outfn), exist_ok=True)
+            # temp sibling + atomic rename: merges of several observations
+            # share this file and may rebuild it concurrently.
+            tmp = f'{outfn}.tmp{os.getpid()}'
+            pooled.write(tmp, format='ascii.ecsv', overwrite=True)
+            os.replace(tmp, outfn)
+            print(f"build_pooled_wingcal: {filtername} pooled C(r) from "
+                  f"{len(files)} frame file(s) -> {outfn}")
+        except OSError as err:
+            print(f"Could not write pooled wingcal table {outfn}: {err}")
     return pooled
 
 
+def load_pooled_wingcal(filtername, basepath, phase=None):
+    """The pooled C(r) table, rebuilt when its inputs changed.
+
+    The table on disk is reused only when it was built from exactly the
+    calibrator files the current selection picks (``WCALSEL``) and is at
+    least as new as each of them.  Before #983 the table was written once and
+    never rebuilt, so it kept whatever phases and code version first built it;
+    a table with no ``WCALSEL`` (written before this check) is rebuilt.  A
+    refit with changed satstar code rewrites the calibrator files, and their
+    newer mtimes trigger the rebuild.  A table with no ``ratio_se`` column
+    (written before #1041) is rebuilt too.
+    """
+    files, report = select_wingcal_calibrator_files(filtername, basepath,
+                                                    phase=phase)
+    pooled_fn = pooled_wingcal_path(basepath, filtername, phase)
+    if not files:
+        # No calibrator file to rebuild from (a tree whose per-frame products
+        # were cleaned up): a table already on disk is all there is.
+        if os.path.exists(pooled_fn):
+            print(f"load_pooled_wingcal: no {filtername} calibrator files; "
+                  f"using the existing table {pooled_fn} as written")
+            return Table.read(pooled_fn, format='ascii.ecsv')
+        return None
+    sig = satstar_phase_selection_signature(files)
+    try:
+        if os.path.exists(pooled_fn):
+            newest = max(os.path.getmtime(f) for f in files)
+            if os.path.getmtime(pooled_fn) >= newest:
+                pooled = Table.read(pooled_fn, format='ascii.ecsv')
+                if 'ratio_se' not in pooled.colnames:
+                    print(f"Rebuilding pooled wingcal {pooled_fn}: no "
+                          f"ratio_se column (written before #1041)")
+                elif str(pooled.meta.get('WCALSEL', '')) == sig:
+                    return pooled
+                else:
+                    print(f"Rebuilding pooled wingcal {pooled_fn}: built from a "
+                          f"different set of calibrator files "
+                          f"({pooled.meta.get('WCALSEL', 'unrecorded')!r} -> {sig!r})")
+            else:
+                print(f"Rebuilding pooled wingcal {pooled_fn}: a calibrator "
+                      f"file is newer than the table")
+    except OSError as err:
+        print(f"Rebuilding pooled wingcal {pooled_fn}: {err}")
+    print(f"build_pooled_wingcal: {filtername}: "
+          f"{format_phase_report(report, what='wingcal-calibrator')}", flush=True)
+    return build_pooled_wingcal(filtername, basepath=basepath, write=True,
+                                phase=phase, files=files)
+
+
 def apply_pooled_wingcal(satstar_cat, filtername,
-                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                         phase=None):
     """Apply the pooled C(r) to satstar rows whose per-frame self-cal was
     SKIPPED (wingcal_ratio == 1.0 exactly; real per-frame ratios are never
     exactly 1).  Catalog-flux-only, like the per-frame calibration; adds
     wingcal_pooled (bool) and updates wingcal_ratio.  No pooled table and no
-    calibrator files -> unchanged."""
+    calibrator files -> unchanged.  ``phase`` is the merge's iteration label;
+    see :func:`load_pooled_wingcal`.
+
+    Only buckets with ``ratio_se`` <= SATSTAR_WINGCAL_MAX_SE (default 0.05)
+    are applied, and C(r) is anchored at C(0) = 1, as in the per-frame
+    calibration (#1041).  A table without ``ratio_se`` (a legacy table kept
+    because its calibrator files are gone) is applied ungated."""
     if (satstar_cat is None or 'wingcal_ratio' not in satstar_cat.colnames
             or 'wingcal_rmask' not in satstar_cat.colnames):
         return satstar_cat
-    pooled_fn = f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal.ecsv'
-    if os.path.exists(pooled_fn):
-        pooled = Table.read(pooled_fn)
-    else:
-        pooled = build_pooled_wingcal(filtername, basepath=basepath, write=True)
+    pooled = load_pooled_wingcal(filtername, basepath, phase=phase)
     satstar_cat['wingcal_pooled'] = np.zeros(len(satstar_cat), dtype=bool)
     if pooled is None or len(pooled) == 0:
         return satstar_cat
@@ -3009,9 +3663,25 @@ def apply_pooled_wingcal(satstar_cat, filtername,
         return satstar_cat
     rs = np.asarray(pooled['rmask_px'], float)
     vs = np.asarray(pooled['ratio'], float)
-    order = np.argsort(rs)
-    ratio = np.interp(np.clip(rmask[need], rs[order].min(), rs[order].max()),
-                      rs[order], vs[order])
+    if 'ratio_se' in pooled.colnames:
+        use = wingcal_passes_se_gate(np.asarray(pooled['ratio_se'], float),
+                                     ratio=vs)
+        low = ~use & ~(vs >= WINGCAL_MIN_RATIO)
+        for sel, why in ((~use & ~low,
+                          f"above the SE gate ({wingcal_max_se():g})"),
+                         (low, "below the minimum ratio "
+                               f"({WINGCAL_MIN_RATIO:g})")):
+            if sel.any():
+                print(f"apply_pooled_wingcal: {filtername}: {int(sel.sum())} "
+                      f"bucket(s) {why} not applied: "
+                      f"r={rs[sel].astype(int).tolist()}")
+        rs, vs = rs[use], vs[use]
+    else:
+        print(f"apply_pooled_wingcal: {filtername}: table has no ratio_se; "
+              f"applying it without the SE gate")
+    if rs.size == 0:
+        return satstar_cat
+    ratio = interp_wingcal_ratio(rmask[need], rs, vs)
     if 'flux_fit' in satstar_cat.colnames:
         satstar_cat['flux_fit'][need] = (
             np.asarray(satstar_cat['flux_fit'], float)[need] / ratio)
@@ -3052,7 +3722,35 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     correction in :func:`replace_saturated` can adopt -- no longer reach the
     merge.  An exposure with no accepted catalog keeps its own latest rejected
     phase at or before ``phase``.
+
+    When the NIRCam ``merged_i2d`` primary satstar catalog exists
+    (:func:`_primary_satstar_catalog_path`), the accepted channel reads it
+    and nothing else, so this reads only its sibling
+    ``..._satstar_rejected.fits`` (``None`` when it has none).
     """
+    # The accepted channel reads the NIRCam merged_i2d primary catalog when it
+    # exists; the rejected candidates then come from that same product's
+    # rejected file (or there are none), never from per-exposure runs the
+    # accepted channel did not read (#983).
+    try:
+        _primary = _primary_satstar_catalog_path(filtername, target, basepath,
+                                                 proposal_id, field)
+    except KeyError:
+        # A filter the target's registry does not list has no primary product.
+        _primary = None
+    if _primary is not None:
+        _prej = _primary.replace('_satstar_catalog.fits', '_satstar_rejected.fits')
+        if not os.path.exists(_prej):
+            print(f"load_rejected_satstar_catalog: {filtername}: the accepted "
+                  f"channel reads {os.path.basename(_primary)}, which has no "
+                  f"rejected file; no gate-rejected candidates", flush=True)
+            return None
+        tt = Table.read(_prej)
+        if not len(tt) or 'skycoord_fit' not in tt.colnames:
+            return None
+        print(f"load_rejected_satstar_catalog: {len(tt)} gate-rejected "
+              f"candidate row(s) for {filtername} from {_prej}")
+        return tt
     _all = sorted(glob.glob(
         f'{basepath}/{filtername.upper()}/pipeline/*satstar_rejected.fits'))
     # Observation scoping (#925/#931): a tree shared by several observations
@@ -3116,7 +3814,7 @@ def load_rejected_satstar_catalog(filtername, target='brick',
 #: merged catalog's own astrometry schema, so keep the two in step.
 SATSTAR_ENSEMBLE_COLUMNS = ('n_frames_fit', 'n_meas_fit', 'std_ra_fit',
                             'std_ra_coord_fit', 'std_dec_fit', 'flux_med_fit',
-                            'std_flux_fit')
+                            'flux_median_fit', 'std_flux_fit')
 
 
 def _satstar_use_ensemble_position():
@@ -3153,11 +3851,11 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     Compare it across catalog versions only with that in mind.
 
     Adds ``n_frames_fit``, ``n_meas_fit``, ``std_ra_fit``/``std_dec_fit``
-    (degrees, ddof=1, NaN below two exposures), and ``flux_med_fit`` /
-    ``std_flux_fit``.  ``flux_fit`` is deliberately LEFT ALONE: the
-    brightest-of-N flux is a photometric-continuity question (#925 items 4-5)
-    handled separately, and this function's job is to publish the ensemble it
-    needs, not to change photometry under it.
+    (degrees, ddof=1, NaN below two exposures), ``flux_med_fit`` (the
+    across-exposure mean), ``flux_median_fit`` and ``std_flux_fit``.
+    ``flux_fit`` is LEFT ALONE here: this function publishes the ensemble,
+    and :func:`_adopt_ensemble_flux` decides which statistic ``flux_fit``
+    carries (``SATSTAR_FLUX_STAT``).
     """
     n_out = len(out)
     if n_out == 0:
@@ -3270,7 +3968,10 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
         out['std_ra_coord_fit'] = np.where(np.abs(_cosd) > 1e-12,
                                            std_ra / _cosd, np.nan)
     out['std_dec_fit'] = std_dec
+    # ``flux_med_fit`` is the across-exposure MEAN (the name predates the
+    # median below and is kept for readers of existing catalogs).
     out['flux_med_fit'] = mean_flux
+    out['flux_median_fit'] = _group_median(exp_flux, exp_grp, n_out)
     out['std_flux_fit'] = std_flux
     # exposures that measured a usable FLUX, which is <= n_frames_fit whenever
     # sibling seeds contributed position-only rows
@@ -3306,6 +4007,94 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
                   f"stars measured in >1 exposure (median N={int(np.median(n_frames))}); "
                   f"adopted mean position, median shift {np.median(_mm):.1f} mas, "
                   f"p95 {np.percentile(_mm, 95):.1f} mas", flush=True)
+    return out
+
+
+def _group_median(values, group, n_groups):
+    """Median of ``values`` within each of ``n_groups`` groups, NaN-skipping.
+
+    ``group[i]`` is the group of ``values[i]``.  Groups with no finite value
+    get NaN.  An even count takes the mean of the two middle values, as
+    ``np.median`` does.
+    """
+    values = np.asarray(values, dtype=float)
+    group = np.asarray(group, dtype=np.int64)
+    out = np.full(n_groups, np.nan)
+    ok = np.isfinite(values)
+    if not ok.any():
+        return out
+    v = values[ok]
+    g = group[ok]
+    order = np.lexsort((v, g))
+    v = v[order]
+    g = g[order]
+    counts = np.bincount(g, minlength=n_groups)
+    starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    has = counts > 0
+    lo = starts[has] + (counts[has] - 1) // 2
+    hi = starts[has] + counts[has] // 2
+    out[has] = 0.5 * (v[lo] + v[hi])
+    return out
+
+
+def _satstar_flux_statistic():
+    """Which per-exposure statistic the consolidated ``flux_fit`` carries.
+
+    ``median`` (default): the median over exposures of each star's
+    per-exposure satstar fluxes (``flux_median_fit``).  ``brightest``: the
+    dedup representative's own flux, i.e. the brightest of the N exposures,
+    which was the only behaviour before this switch existed.
+
+    The brightest of N noisy fits is biased bright by construction, and the
+    bias grows with the scatter between exposures.  In the GC (o132) that
+    scatter is 1.6-2.8%, so brightest - median was only -0.02 to -0.03 mag
+    (#925); on wd2 the per-exposure satstar fits scatter far more and the
+    brightest sits 0.03-0.15 mag above the median.  Set with
+    ``SATSTAR_FLUX_STAT``.
+    """
+    stat = os.environ.get('SATSTAR_FLUX_STAT', 'median').strip().lower()
+    if stat not in ('median', 'brightest'):
+        raise ValueError(f"SATSTAR_FLUX_STAT={stat!r}: expected 'median' or "
+                         f"'brightest'")
+    return stat
+
+
+def _adopt_ensemble_flux(out):
+    """Put the chosen per-exposure statistic into ``flux_fit``.
+
+    The representative row's own flux (the brightest exposure, because the
+    dedup processes rows brightest-first) is kept as ``flux_brightest_fit``
+    in every mode, so both values stay on the row.  Rows without a finite
+    median (a single position-only member, a legacy table) keep their
+    representative flux.  ``flux_err`` keeps the representative fit's
+    fractional error (scaled by median / representative); the
+    between-exposure scatter is ``std_flux_fit``.  ``load_satstar_catalog``
+    applies the pooled wing calibration to each per-exposure row before the
+    dedup, so the median is taken over fluxes in one calibration state.
+    """
+    if len(out) == 0 or 'flux_fit' not in out.colnames:
+        return out
+    rep = np.asarray(out['flux_fit'], dtype=float).copy()
+    out['flux_brightest_fit'] = rep
+    if _satstar_flux_statistic() != 'median' or 'flux_median_fit' not in out.colnames:
+        return out
+    med = np.asarray(out['flux_median_fit'], dtype=float)
+    use = np.isfinite(med) & (med > 0) & np.isfinite(rep) & (rep > 0)
+    out['flux_fit'] = np.where(use, med, rep)
+    if 'flux_err' in out.colnames:
+        err = np.asarray(out['flux_err'], dtype=float)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            out['flux_err'] = np.where(use, err * med / np.where(use, rep, 1.0),
+                                       err)
+    if use.any():
+        with np.errstate(invalid='ignore', divide='ignore'):
+            dmag = -2.5 * np.log10(rep[use] / med[use])
+        dmag = dmag[np.isfinite(dmag)]
+        if len(dmag):
+            print(f"  satstar flux: adopted the per-exposure median for "
+                  f"{int(use.sum())}/{len(out)} stars; brightest - median = "
+                  f"{np.median(dmag):.3f} mag (median), "
+                  f"{np.percentile(dmag, 10):.3f} (p10)", flush=True)
     return out
 
 
@@ -3361,7 +4150,14 @@ def satstar_sibling_seed_positions(filtername, basepath, verbose=True,
 
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
-    one row (the brightest), so downstream merging doesn't duplicate them.
+    one row, so downstream merging doesn't duplicate them.
+
+    The kept row is the brightest member (it anchors the group), but its
+    ``flux_fit`` is replaced by the median over exposures of the group's
+    per-exposure fluxes (:func:`_adopt_ensemble_flux`; ``SATSTAR_FLUX_STAT=
+    brightest`` keeps the representative's own flux).  The brightest of N
+    noisy fits is biased bright: 0.03-0.15 mag on wd2, where the substituted
+    fluxes sat 0.15-0.57 mag above dolphot (#1032).
 
     Greedy brightest-first spatial dedup: process stars in descending flux and
     keep one unless it falls within a merge radius of an already-kept (brighter)
@@ -3572,7 +4368,8 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
               f"footprint radius; rejected {n_reject_rows} big-footprint "
               f"extended-emission pile rows)")
     out = tbl[np.sort(kept)]
-    return _attach_satstar_ensemble(out, tbl, fin_idx, owner, np.sort(kept))
+    out = _attach_satstar_ensemble(out, tbl, fin_idx, owner, np.sort(kept))
+    return _adopt_ensemble_flux(out)
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
@@ -3693,6 +4490,29 @@ def _faint_replacement_veto(catflux, satflux, factor=0.8):
     satflux = np.asarray(satflux, dtype=float)
     return (np.isfinite(catflux) & np.isfinite(satflux)
             & (satflux < factor * catflux))
+
+
+def _one_to_one_satstar_pairs(idx_cat, idx_sat, sep_arcsec):
+    """Keep mask reducing (catalog row, satstar) candidate pairs to one-to-one.
+
+    ``search_around_sky`` returns EVERY catalog row within the match radius of
+    a satstar.  Writing the satstar into each of them copies its flux and
+    position onto all of them, so two daophot rows on one saturated core (a
+    split detection 30-50 mas apart) become exact duplicates.  Greedy by
+    ascending separation: a pair is kept when neither its row nor its satstar
+    is already taken."""
+    idx_cat = np.asarray(idx_cat, dtype=int)
+    idx_sat = np.asarray(idx_sat, dtype=int)
+    keep = np.zeros(len(idx_cat), dtype=bool)
+    taken_cat, taken_sat = set(), set()
+    for k in np.argsort(np.asarray(sep_arcsec, dtype=float), kind='stable'):
+        ci, si = int(idx_cat[k]), int(idx_sat[k])
+        if ci in taken_cat or si in taken_sat:
+            continue
+        taken_cat.add(ci)
+        taken_sat.add(si)
+        keep[k] = True
+    return keep
 
 #: Merged-catalog astrometry column <- consolidated-satstar ensemble column.
 #: A satstar row appended by ``replace_saturated`` is usually the star's ONLY
@@ -3926,12 +4746,14 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         # bright rows, 62% with their correct satstar fit 0.05-0.15" away)
         # while the correct satstar row was appended as a near-duplicate.
         # Satstars unmatched at the tight radius get one more chance at
-        # _satstar_replace_radius(), but only as a MUTUAL nearest-neighbour
-        # pair (each is the other's closest) -- crowding-safe where the plain
-        # radius bump would mis-pair neighbours.  The faint-replacement guard
+        # _satstar_replace_radius() (1.5 FWHM by default), and only as a
+        # MUTUAL nearest-neighbour pair (each is the other's closest).  Mutual
+        # nearest alone does not protect a neighbour: a satstar with no
+        # daophot row of its own is the closest satstar to its neighbour, so
+        # the radius has to stay near the PSF core.  The faint-replacement guard
         # below still vetoes any pairing whose satstar flux is below the
         # daophot flux (a clipped row is always fainter than its satstar fit).
-        _wide = _satstar_replace_radius()
+        _wide = _satstar_replace_radius(filtername, basepath)
         _unmatched_sat = np.setdiff1d(np.arange(len(satstar_cat)), idx_sat)
         if _wide is not None and len(_unmatched_sat) and len(valid_cat_inds):
             _catc = cat_coords[catfinite]
@@ -3954,6 +4776,28 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     else:
         idx_cat = np.array([], dtype=int)
         idx_sat = np.array([], dtype=int)
+
+    # ONE ROW PER SATSTAR: the tight-radius search above pairs a satstar with
+    # every row inside the radius, and each of those rows used to be
+    # overwritten with the same flux and position.  wd2 (main bd392ab8) m7
+    # per-band tables carried 49 such exact-duplicate pairs over 16 bands (up to
+    # 11 in F212N; one row 0.2-2 mas from the fit, its twin 30-50 mas in SW and
+    # 60-100 mas in LW), and the cross-band merge then split the star's bands
+    # between two output rows (#1119).  Keep the nearest
+    # one-to-one pairs; a row that lost its satstar to a nearer row measures
+    # the same saturated core and is removed below once that satstar is
+    # actually written (a satstar vetoed by the faint guard leaves it alone).
+    _lost_cat = np.array([], dtype=int)
+    _lost_sat = np.array([], dtype=int)
+    if len(idx_cat):
+        _pair_sep = cat_coords[idx_cat].separation(
+            satstar_coords[idx_sat]).to_value(u.arcsec)
+        _keep1 = _one_to_one_satstar_pairs(idx_cat, idx_sat, _pair_sep)
+        if not _keep1.all():
+            _lost_cat = idx_cat[~_keep1]
+            _lost_sat = idx_sat[~_keep1]
+            idx_cat = idx_cat[_keep1]
+            idx_sat = idx_sat[_keep1]
 
     # FAINT-REPLACEMENT GUARD (2026-07-10): a satstar flux must EXCEED the
     # daophot flux it overwrites.  A truly saturated core CLIPS the daophot
@@ -3983,6 +4827,11 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             _vetoed_cat = idx_cat[_fainter]
             idx_cat = idx_cat[~_fainter]
             idx_sat = idx_sat[~_fainter]
+
+    # rows that lost their satstar to a nearer row whose replacement goes
+    # ahead: duplicates of that row, removed after every index-based write
+    _dup_rows = np.setdiff1d(_lost_cat[np.isin(_lost_sat, idx_sat)],
+                             np.concatenate([idx_cat, _vetoed_cat]))
 
     replaced_sat = np.zeros(len(cat), dtype='bool')
     replaced_sat[idx_cat] = True
@@ -4269,6 +5118,12 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         cat.rename_column('flux_fit', 'flux')
     else:
         print(f"Catalog did not have flux_fit.  colnames={cat.colnames}.  (this is expected for crowdsource)")
+
+    if len(_dup_rows):
+        print(f"replace_saturated: removed {len(_dup_rows)} row(s) within "
+              f"{radius} of a satstar already written to a nearer row "
+              f"({filtername})", flush=True)
+        cat.remove_rows(_dup_rows)
 
 
 def main():

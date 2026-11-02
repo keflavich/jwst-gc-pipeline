@@ -1,0 +1,60 @@
+{
+ "dark": {
+  "field": "dark",
+  "variant": "lskyv2",
+  "environment": "dark cloud, low background (Brick interior; hand-labelled clump of PR 57)",
+  "clean": {
+   "phase": "m7",
+   "n_sources": 63,
+   "density_per_as2": 4.362880886426593,
+   "residual_excess": 1.2465373961218837,
+   "residual_npos": 20,
+   "residual_nneg": 2,
+   "residual_mf_scale": 0.5915975460719556,
+   "oversubtracted": 1.1772853185595569,
+   "n_oversubtracted": 17,
+   "ring_ratio": 0.0,
+   "ring_n_obs": 0,
+   "ring_n_exp": 0.2317415163861596,
+   "n_faint": 32,
+   "r_on": 0.3125,
+   "r_off": 0.05859375,
+   "n_labels": 33,
+   "labels_recovered": 0.45454545454545453
+  },
+  "completeness": {
+   "5-10": [
+    62,
+    0,
+    0.0
+   ],
+   "10-20": [
+    55,
+    14,
+    0.2545454545454545
+   ],
+   "20-40": [
+    61,
+    38,
+    0.6229508196721312
+   ],
+   "40-80": [
+    62,
+    45,
+    0.7258064516129032
+   ]
+  },
+  "flux_bias_mag": 0.031109701718813138,
+  "n_injected": 240,
+  "r_real": 0.05982905982905983,
+  "emission_purity": null,
+  "failures": [
+   "completeness[5-10] = 0.00 (0/62) < 0.4",
+   "completeness[10-20] = 0.25 (14/55) < 0.85",
+   "completeness[20-40] = 0.62 (38/61) < 0.65",
+   "completeness[40-80] = 0.73 (45/62) < 0.9",
+   "residual_excess_max: 1.25 vs 0.6",
+   "labels_recovered_min: 0.455 vs 0.69"
+  ]
+ }
+}

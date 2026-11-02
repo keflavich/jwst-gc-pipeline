@@ -609,19 +609,44 @@ def main(filtername, Observations=None, regionname='brick',
         # visit (alignment_config.InheritedBulk; 10678) is already on the
         # absolute frame after fix_alignment.  An absolute tweakreg fit on top
         # can only swap that tie for MIRI's own, which on 10678 left 16 tiles
-        # unmoved and scattered o113's frames by 136 mas.  Only the relative
-        # frame-to-frame fit runs then.  If any frame's visit has NO donor
-        # rows at all (NIRCam not yet checkpointed), the whole association
-        # keeps the absolute fit.
-        from jwst_gc_pipeline.reduction.alignment_config import inherited_bulk
+        # unmoved and scattered o113's frames by 136 mas.  If any frame's visit
+        # has NO donor rows at all (NIRCam not yet checkpointed), the whole
+        # association keeps the absolute fit.
+        #
+        # The RELATIVE fit is skipped too, as on NIRCam, so fix_alignment's
+        # table shift is the only per-frame correction.  Relative tweakreg
+        # re-solves every frame against the first one AFTER fix_alignment and
+        # so cancels any per-exposure row the astrometry checkpoint writes: on
+        # 10678 o078 F770W the exp6 row (+0.83, +3.99) mas changed that frame's
+        # tweakreg shift by exactly (-0.83, -3.99) mas, and m2 read the same
+        # 4.07 mas offset before and after the regen.  Without the relative
+        # fit, a frame with no per-exposure row yet sits on the visit bulk
+        # alone, so a first-pass i2d carries the dither-to-dither pointing
+        # scatter (<=7 mas on o078) until m2 writes rows and the tile is
+        # regenerated.  That is expected; do not re-enable relative tweakreg
+        # to remove it.
+        #
+        # A field registered table_only_tie skips it for the same reason
+        # without inheriting anything: its absolute fit ties to the same
+        # catalog m2 checks, so it cancels the table's bulk row and the m2
+        # re-tie never converges (gc3571 o001, FieldAlignment.table_only_tie).
+        from jwst_gc_pipeline.reduction.alignment_config import (
+            inherited_bulk, table_only_tie)
         from jwst_gc_pipeline.reduction.unified_alignment import (
             inherited_abs_tie_complete)
         _inh = inherited_bulk(proposal_id, field, 'mirimage')
-        if abs_refcat is not None and inherited_abs_tie_complete(
-                _inh, _member_shifts):
-            print(f"Absolute tweakreg OFF: every frame inherited its bulk from "
+        if inherited_abs_tie_complete(_inh, _member_shifts):
+            print(f"TweakRegStep SKIPPED: every frame inherited its bulk from "
                   f"{sorted({sh.inherited_from for sh in _member_shifts})} "
-                  f"(alignment_config.InheritedBulk); relative alignment only")
+                  f"(alignment_config.InheritedBulk); the offsets table is the "
+                  f"only per-frame correction")
+            tweakreg_parameters['skip'] = True
+            abs_refcat = None
+        elif table_only_tie(proposal_id, field):
+            print(f"TweakRegStep SKIPPED: {proposal_id} o{field} is "
+                  f"table_only_tie (alignment_config); the consensus offsets "
+                  f"table is the only per-frame correction")
+            tweakreg_parameters['skip'] = True
             abs_refcat = None
         if abs_refcat is not None:
             reftbl = Table.read(abs_refcat)

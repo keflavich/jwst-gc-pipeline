@@ -17,6 +17,37 @@ Per-frame forced fluxes are combined inverse-variance.  The result either
 recovers a real flux (kills the phantom) or yields a genuine per-source noise
 limit.
 
+A sub-threshold fit (SNR < ``nsigma``) is NOT reported as a detection: the raw
+point-estimate flux is kept in ``flux_{filt}``/``flux_jy_{filt}`` (useful for
+QA / stacking, and unbiased -- clamping it would bias a later stack), but
+``mask_{filt}`` stays ``True`` and no magnitude is written.  Alongside it,
+``flux_ulim_{filt}`` / ``mag_vega_ulim_{filt}`` / ``mag_ab_ulim_{filt}`` record
+the actual ``nsigma``-scaled upper limit (``nsigma * ferr``, from the SAME
+inverse-variance-combined per-frame fit error used for ``forced_snr_{filt}``,
+so it already reflects the local background -- a star forced onto bright
+extended emission gets a shallower, larger ``ferr`` and therefore a fainter
+limit than one on clean sky).  Without this column the only place the per-
+source noise level survived was ``forced_snr_{filt}`` (flux/ferr), from which
+a limit cannot be safely recovered when the point estimate itself is near
+zero or negative.
+
+``is_upper_limit_{filt}`` is an explicit per-band bool, set ``True`` exactly
+for a fitted-but-sub-threshold row (the only rows where ``flux_ulim_{filt}``
+is a bound rather than a detection-depth diagnostic) and ``False`` everywhere
+else -- a firm detection, a row never targeted (independently detected,
+saturated, or vetoed by the satstar-partner guard), and a row where the fill
+was attempted but never converged on any frame (``fitted`` is ``False``, so
+there is no measurement of any kind, not even a limit). Reading
+``mask_{filt} & forced_filled_{filt} & isfinite(flux_ulim_{filt})`` recovers
+the same set, but the flag exists so a consumer does not have to reconstruct
+that combination correctly at every call site.
+
+IMPORTANT for any consumer: ``flux_ulim_{filt}``/``mag_ab_ulim_{filt}``/
+``mag_vega_ulim_{filt}`` are ALSO populated for a firm detection (a depth
+diagnostic there, same as a sub-threshold row) -- a finite ``mag_ab_ulim``
+is NOT by itself evidence that a row is a limit.  Gate on
+``is_upper_limit_{filt}``, never on ``isfinite(mag_ab_ulim_{filt})`` alone.
+
 Calibration is taken from the band's own firm detections in the merged table
 (``conv = median(flux_jy / flux)``; Vega zero-point likewise), so m8 fluxes are
 on exactly the same system as m7 -- no zero-point / pixel-area re-derivation.
@@ -31,6 +62,7 @@ from astropy.table import Table
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 
+from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry.naming import frame_identity
 from jwst_gc_pipeline.photometry.psf_fitting import forced_psf_photometry
 
@@ -135,18 +167,76 @@ def _satstar_partner_guard(tbl, filt, ref, targets,
     return veto
 
 
+def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
+                      frame_arg_builder, fit_shape):
+    """Prepare one frame and force-fit every target that lands on it.
+
+    Returns ``(loc, flux, var)`` for the fits with a finite flux and a positive
+    error, ``loc`` indexing the target arrays ``ra``/``dec``, or ``None`` when
+    the frame contributes nothing: no target lands on it, or its preparation
+    raised one of the exceptions a missing or malformed frame raises (printed
+    with its traceback).  Anything else propagates.
+    """
+    # A dropped frame here silently weakens the inverse-variance combine
+    # (no-silent-frame-drops rule): catch only the exceptions frame prep
+    # can legitimately raise (filename-token parsing -> ValueError /
+    # IndexError; missing or unreadable frame products / headers ->
+    # OSError (incl. FileNotFoundError) / KeyError), ALWAYS print the
+    # full traceback, and let anything else propagate.
+    try:
+        kw = frame_arg_builder(filename)
+        ctx = prepare_frame(**kw)
+    except (OSError, KeyError, ValueError, IndexError) as ex:
+        print(f"  [m8 {filt}] prep failed {os.path.basename(filename)}: {ex}\n"
+              f"{traceback.format_exc()}", flush=True)
+        return None
+    ny, nx = ctx.nan_replaced_data.shape
+    # The cross-band source list spans the whole mosaic, so for any single
+    # frame most reference positions fall outside its footprint.  With the
+    # GWCS (ctx.ww is a FrameWCS) those return NaN and are dropped by the
+    # ``inb`` test below.  With a SIP WCS the iterative inverse cannot
+    # converge there and raises NoConvergence unless ``quiet=True`` --
+    # which aborted the entire W51 m8 fill (#187).  Pass quiet for the
+    # SIP-fallback case; FrameWCS ignores it (its inverse is exact).
+    xpix, ypix = ctx.ww.all_world2pix(ra, dec, 0, quiet=True)
+    inb = (xpix > 2) & (xpix < nx - 3) & (ypix > 2) & (ypix < ny - 3) & \
+          np.isfinite(xpix) & np.isfinite(ypix)
+    if not inb.any():
+        return None
+    seed = Table({'x_init': xpix[inb], 'y_init': ypix[inb]})
+    res = forced_psf_photometry(
+        ctx.nan_replaced_data, ctx.dao_psf_model, seed,
+        error=ctx.err, mask=ctx.mask, fit_shape=fit_shape, nonnegative=False)
+    f = np.asarray(res['flux_fit'], dtype=float)
+    e = np.asarray(res['flux_err'], dtype=float)
+    ok = np.isfinite(f) & np.isfinite(e) & (e > 0)
+    return np.where(inb)[0][ok], f[ok], e[ok] ** 2
+
+
 def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
                      nsigma=3.0, fit_shape=(5, 5),
-                     satstar_partner_guard=0.5 * u.arcsec, verbose=True):
+                     satstar_partner_guard=0.5 * u.arcsec, verbose=True,
+                     n_procs=1):
     """Force-fit ``filt`` at the reference position of every source that is a
     non-detection (and not saturated) in ``filt``, combine across ``frames``,
     and write the results back into ``tbl`` in place.
 
+    ``n_procs > 1`` prepares and fits the frames in that many forked processes
+    (``frame_pool.map_frames``, #1230).  The per-frame results are summed in
+    ``frames`` order either way, so the result does not depend on ``n_procs``.
+
     Adds/sets columns: ``forced_filled_{filt}`` (bool), ``forced_snr_{filt}``,
-    and -- for sources reaching SNR>=nsigma -- updates ``flux_{filt}``,
-    ``flux_jy_{filt}``, ``mag_ab_{filt}``, ``mag_vega_{filt}``,
-    ``emag_ab_{filt}`` and clears ``mask_{filt}``.  Sub-threshold sources keep
-    ``mask_{filt}=True`` but record the measured flux (a real per-source limit).
+    ``flux_ulim_{filt}``, ``mag_vega_ulim_{filt}`` (when a Vega zero-point is
+    available), ``mag_ab_ulim_{filt}`` -- these four are the ``nsigma``-scaled
+    per-source upper limit, written for every fitted target regardless of SNR
+    -- and ``is_upper_limit_{filt}`` (bool) -- and -- for sources reaching
+    SNR>=nsigma -- updates ``flux_{filt}``, ``flux_jy_{filt}``, ``mag_ab_{filt}``,
+    ``mag_vega_{filt}``, ``emag_ab_{filt}`` and clears ``mask_{filt}``.
+    Sub-threshold sources keep ``mask_{filt}=True``, keep the raw measured flux
+    in ``flux_{filt}`` (a point estimate, not a bound -- may be negative or
+    zero), get their bound from ``flux_ulim_{filt}``/``mag_*_ulim_{filt}``
+    instead, and are flagged ``is_upper_limit_{filt}=True`` so a consumer does
+    not have to re-derive "fitted but not detected" from the other columns.
     """
     n = len(tbl)
     fl = filt.lower()  # merged-catalog columns are lowercase; frames keep orig case
@@ -200,44 +290,23 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     ra = ref.ra.deg[tgt_idx]
     dec = ref.dec.deg[tgt_idx]
 
-    for filename in frames:
-        # A dropped frame here silently weakens the inverse-variance combine
-        # (no-silent-frame-drops rule): catch only the exceptions frame prep
-        # can legitimately raise (filename-token parsing -> ValueError /
-        # IndexError; missing or unreadable frame products / headers ->
-        # OSError (incl. FileNotFoundError) / KeyError), ALWAYS print the
-        # full traceback, and let anything else propagate.
-        try:
-            kw = frame_arg_builder(filename)
-            ctx = prepare_frame(**kw)
-        except (OSError, KeyError, ValueError, IndexError) as ex:
-            print(f"  [m8 {filt}] prep failed {os.path.basename(filename)}: {ex}\n"
-                  f"{traceback.format_exc()}", flush=True)
+    def _fit(filename):
+        return _forced_fit_frame(filename, filt, ra, dec,
+                                 prepare_frame=prepare_frame,
+                                 frame_arg_builder=frame_arg_builder,
+                                 fit_shape=fit_shape)
+
+    frames = list(frames)
+    if verbose and n_procs > 1 and len(frames) > 1:
+        print(f"  [m8 {filt}] {len(frames)} frames across "
+              f"{min(int(n_procs), len(frames))} processes "
+              f"(--forced-fill-procs)", flush=True)
+    for fit in frame_pool.map_frames(_fit, frames, n_procs):
+        if fit is None:
             continue
-        ny, nx = ctx.nan_replaced_data.shape
-        # The cross-band source list spans the whole mosaic, so for any single
-        # frame most reference positions fall outside its footprint.  With the
-        # GWCS (ctx.ww is a FrameWCS) those return NaN and are dropped by the
-        # ``inb`` test below.  With a SIP WCS the iterative inverse cannot
-        # converge there and raises NoConvergence unless ``quiet=True`` --
-        # which aborted the entire W51 m8 fill (#187).  Pass quiet for the
-        # SIP-fallback case; FrameWCS ignores it (its inverse is exact).
-        xpix, ypix = ctx.ww.all_world2pix(ra, dec, 0, quiet=True)
-        inb = (xpix > 2) & (xpix < nx - 3) & (ypix > 2) & (ypix < ny - 3) & \
-              np.isfinite(xpix) & np.isfinite(ypix)
-        if not inb.any():
-            continue
-        seed = Table({'x_init': xpix[inb], 'y_init': ypix[inb]})
-        res = forced_psf_photometry(
-            ctx.nan_replaced_data, ctx.dao_psf_model, seed,
-            error=ctx.err, mask=ctx.mask, fit_shape=fit_shape, nonnegative=False)
-        f = np.asarray(res['flux_fit'], dtype=float)
-        e = np.asarray(res['flux_err'], dtype=float)
-        ok = np.isfinite(f) & np.isfinite(e) & (e > 0)
-        loc = np.where(inb)[0][ok]
-        var = e[ok] ** 2
+        loc, f, var = fit
         wsum[loc] += 1.0 / var
-        wfsum[loc] += f[ok] / var
+        wfsum[loc] += f / var
         nseen[loc] += 1
 
     fitted = nseen > 0
@@ -253,19 +322,73 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
             tbl[col] = np.full(n, fill, dtype=dtype)
     _ensure(f'forced_filled_{filt}', bool, False)
     _ensure(f'forced_snr_{filt}', float, np.nan)
+    _ensure(f'flux_ulim_{filt}', float, np.nan)
+    _ensure(f'mag_ab_ulim_{filt}', float, np.nan)
+    _ensure(f'mag_vega_ulim_{filt}', float, np.nan)
+    _ensure(f'is_upper_limit_{filt}', bool, False)
 
     detected = fitted & np.isfinite(snr) & (snr >= nsigma) & (flux > 0)
+    not_detected = fitted & ~detected
     fjy = flux * conv_jy
+
+    # per-source nsigma upper limit -- from ferr (the SAME inverse-variance
+    # per-frame fit error as forced_snr), not from flux/snr: flux can be <= 0
+    # for a sub-threshold fit, which would make a flux/snr-derived bound
+    # meaningless or wrong-signed.  Defined for every fitted row, detections
+    # included (a useful depth diagnostic there too).
+    ulim_flux = np.full(tgt_idx.size, np.nan)
+    ulim_flux[fitted] = nsigma * ferr[fitted]
+    ulim_fjy = ulim_flux * conv_jy
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ulim_mag_ab = np.where(np.isfinite(ulim_fjy) & (ulim_fjy > 0),
+                               -2.5 * np.log10(ulim_fjy) + ABMAG_OFFSET, np.nan)
+        ulim_mag_vega = (np.where(np.isfinite(ulim_fjy) & (ulim_fjy > 0),
+                                  -2.5 * np.log10(ulim_fjy / vega_zp), np.nan)
+                         if vega_zp is not None else np.full(tgt_idx.size, np.nan))
 
     # unmask columns we may write (MaskedColumn -> plain so assignment sticks)
     for col in (f'flux_{filt}', f'flux_jy_{filt}', f'mag_ab_{filt}',
-                f'mag_vega_{filt}', f'emag_ab_{filt}', f'mask_{filt}'):
+                f'mag_vega_{filt}', f'emag_ab_{filt}', f'mask_{filt}',
+                f'flux_ulim_{filt}', f'mag_ab_ulim_{filt}', f'mag_vega_ulim_{filt}',
+                f'is_upper_limit_{filt}'):
         if col in tbl.colnames and hasattr(tbl[col], 'filled'):
             tbl[col] = tbl[col].filled(tbl[col].fill_value)
 
     ridx = tgt_idx
+    # Reset every column this call owns, for EVERY current target row, before
+    # writing this pass's results.  Without this a rerun over the fill's own
+    # output (or a partial overlay applied twice) leaves a PRIOR pass's
+    # is_upper_limit/flux_ulim/forced_snr stale on a row this pass does NOT
+    # fit this time (its frames became unavailable) or DOES promote to a
+    # firm detection -- `fitted`/`not_detected` only ever SET True, so
+    # without a reset they can only accumulate, never clear.  `mask_{filt}`
+    # needs no equivalent reset: a row this call cleared to a detection on a
+    # prior pass reads mask=False from the table and is excluded from
+    # `targets` (and so from `ridx`) on the next call, so it is never
+    # revisited here.
+    tbl[f'forced_filled_{filt}'][ridx] = False
+    tbl[f'forced_snr_{filt}'][ridx] = np.nan
+    tbl[f'flux_ulim_{filt}'][ridx] = np.nan
+    tbl[f'mag_ab_ulim_{filt}'][ridx] = np.nan
+    tbl[f'mag_vega_ulim_{filt}'][ridx] = np.nan
+    tbl[f'is_upper_limit_{filt}'][ridx] = False
+    if f'flux_{filt}' in tbl.colnames:
+        tbl[f'flux_{filt}'][ridx] = np.nan
+    if f'flux_jy_{filt}' in tbl.colnames:
+        tbl[f'flux_jy_{filt}'][ridx] = np.nan
+    if f'mag_ab_{filt}' in tbl.colnames:
+        tbl[f'mag_ab_{filt}'][ridx] = np.nan
+    if f'mag_vega_{filt}' in tbl.colnames:
+        tbl[f'mag_vega_{filt}'][ridx] = np.nan
+    if f'emag_ab_{filt}' in tbl.colnames:
+        tbl[f'emag_ab_{filt}'][ridx] = np.nan
+
     tbl[f'forced_filled_{filt}'][ridx[fitted]] = True
     tbl[f'forced_snr_{filt}'][ridx[fitted]] = snr[fitted]
+    tbl[f'flux_ulim_{filt}'][ridx[fitted]] = ulim_flux[fitted]
+    tbl[f'mag_ab_ulim_{filt}'][ridx[fitted]] = ulim_mag_ab[fitted]
+    tbl[f'mag_vega_ulim_{filt}'][ridx[fitted]] = ulim_mag_vega[fitted]
+    tbl[f'is_upper_limit_{filt}'][ridx[not_detected]] = True
     if f'flux_{filt}' in tbl.colnames:
         tbl[f'flux_{filt}'][ridx[fitted]] = flux[fitted]
     if f'flux_jy_{filt}' in tbl.colnames:
@@ -294,7 +417,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
 
 def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
                               frames_for, prepare_frame, frame_arg_builder_for,
-                              nsigma=3.0, fit_shape=(5, 5), verbose=True):
+                              nsigma=3.0, fit_shape=(5, 5), verbose=True,
+                              n_procs=1):
     """Load the merged m7 catalog, force-fill every band, write the m8 catalog.
 
     Parameters
@@ -307,6 +431,7 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
     prepare_frame : callable matching ``_prepare_frame_for_photometry`` kwargs,
         returning the per-frame context object
     frame_arg_builder_for : callable ``filt -> (filename -> kwargs dict)``
+    n_procs : forked processes per band's frame loop (``forced_fill_band``)
     """
     if verbose:
         print(f"[m8] forced cross-band fill: {os.path.basename(merged_path)} "
@@ -324,7 +449,8 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
         total += forced_fill_band(
             tbl, filt, frames, prepare_frame=prepare_frame,
             frame_arg_builder=frame_arg_builder_for(filt),
-            nsigma=nsigma, fit_shape=fit_shape, verbose=verbose)
+            nsigma=nsigma, fit_shape=fit_shape, verbose=verbose,
+            n_procs=n_procs)
     tbl.write(out_path, overwrite=True)
     if verbose:
         print(f"[m8] wrote {out_path}  ({total} phantom non-detections recovered)",

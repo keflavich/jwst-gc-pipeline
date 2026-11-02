@@ -1,0 +1,29 @@
+out/inj_cr1.fits: variant cr1, 611 injected stars found at m6 (of 1830)
+  brighter neighbour within 2.5 FWHM   kept at m7   24/93
+    ratio < 0.1                        kept at m7    1/3
+    ratio 0.1-0.3                      kept at m7    3/26
+    ratio >= 0.3                       kept at m7   20/64
+  isolated                             kept at m7  504/518
+    bright_modest  with a brighter neighbour: kept 1/5
+    dark           with a brighter neighbour: kept 7/22
+    dense_bright   with a brighter neighbour: kept 14/37
+    superdense     with a brighter neighbour: kept 2/29
+out/inj_cr01.fits: variant cr01, 611 injected stars found at m6 (of 1830)
+  brighter neighbour within 2.5 FWHM   kept at m7   86/93
+    ratio < 0.1                        kept at m7    1/3
+    ratio 0.1-0.3                      kept at m7   25/26
+    ratio >= 0.3                       kept at m7   60/64
+  isolated                             kept at m7  507/518
+    bright_modest  with a brighter neighbour: kept 1/5
+    dark           with a brighter neighbour: kept 21/22
+    dense_bright   with a brighter neighbour: kept 37/37
+    superdense     with a brighter neighbour: kept 27/29
+out/inj_cr03.fits: variant cr03, 396 injected stars found at m6 (of 1438)
+  brighter neighbour within 2.5 FWHM   kept at m7   63/88
+    ratio < 0.1                        kept at m7    1/3
+    ratio 0.1-0.3                      kept at m7    3/25
+    ratio >= 0.3                       kept at m7   59/60
+  isolated                             kept at m7  305/308
+    dark           with a brighter neighbour: kept 17/22
+    dense_bright   with a brighter neighbour: kept 27/37
+    superdense     with a brighter neighbour: kept 19/29

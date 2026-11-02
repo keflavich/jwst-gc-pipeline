@@ -74,6 +74,86 @@ def _finite(value):
     return out if math.isfinite(out) else None
 
 
+def _tile_view_from_grid(tiles, worst_cell):
+    """Per-tile fields of a visit record, read from the HISTOGRAM grid.
+
+    `tiles_ok` counts tiles with a COHERENT PEAK, not tiles within tolerance --
+    measure_offset_grid is called with no max_off_mas, and astrometry_offsets
+    sets off_ok=True whenever that is None.  So `36/36 tiles ok` is compatible
+    with a 29 mas worst cell, and only worst_tile_mas says so.
+
+    `off_mas` is the canonical per-cell offset key: every cell producer in
+    astrometry_offsets writes it (issue #267).  The `off` fallback is ONLY for
+    checkpoints recorded before that change -- those files are never rewritten,
+    so the reader has to keep tolerating the old spelling.  Reading one
+    spelling only used to yield an empty map, and with it a derived claim that
+    the field was flat.  The cells are published so the page can draw the
+    residual map and say WHERE the field is bad.
+    """
+    return {
+        'tiles_ok': tiles.get('n_ok'),
+        'tiles_total': tiles.get('n_total'),
+        'tiles_clean': tiles.get('clean'),
+        'worst_tile_mas': _finite(tiles.get('worst_off_mas')),
+        'worst_tile_cell': (f"({worst_cell.get('ix')},{worst_cell.get('iy')})"
+                            if worst_cell else None),
+        'min_tile_contrast': _finite(tiles.get('min_contrast_seen')),
+        # The grid has no tolerance of its own; checks use LOCAL_CELL_TOL_MAS.
+        'tile_tol_mas': None,
+        'tiles_uncovered': None,
+        'tile_reason': None,
+        'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
+                   'off_mas': _finite(c.get('off_mas', c.get('off'))),
+                   'dra': _finite(c.get('dra')),
+                   'ddec': _finite(c.get('ddec')),
+                   'contrast': _finite(c.get('contrast')),
+                   'npairs': c.get('npairs')}
+                  for c in (tiles.get('cells') or [])],
+    }
+
+
+def _tile_view_from_region(region):
+    """Per-tile fields of a visit record, read from the SAME-STAR region map.
+
+    This is the map the checkpoint gates on when `per_tile_source` is
+    `same-star-region` (#667).  Its cells carry the BULK-REMOVED residual
+    (`resid_off_mas`) and a `flagged` verdict against the map's own
+    (adaptive) `tol_mas`, so `tiles_ok` here is cells measured minus cells
+    flagged -- a tolerance statement, unlike the histogram grid's peak count.
+    The map has no peak contrast, so `min_tile_contrast` is None.
+    """
+    cells = region.get('cells') or []
+    n_cells = region.get('n_cells')
+    n_flagged = region.get('n_flagged')
+    finite = [c for c in cells if _finite(c.get('resid_off_mas')) is not None]
+    worst = max(finite, key=lambda c: c['resid_off_mas']) if finite else None
+    return {
+        'tiles_ok': (n_cells - n_flagged
+                     if n_cells is not None and n_flagged is not None else None),
+        'tiles_total': n_cells,
+        'tiles_clean': region.get('clean'),
+        'worst_tile_mas': _finite(region.get('worst_off_mas')),
+        'worst_tile_cell': (f"({worst.get('ix')},{worst.get('iy')})"
+                            if worst else None),
+        'min_tile_contrast': None,
+        'tile_tol_mas': _finite(region.get('tol_mas')),
+        # Regions that hold sources but not the matched pairs the field rate
+        # predicts (a region displaced beyond the match radius).  They are
+        # outside `cells`/`n_cells`, and they alone can make `clean` False with
+        # nothing flagged, so they are published beside `tiles_ok`.
+        'tiles_uncovered': region.get('n_uncovered'),
+        'tile_reason': region.get('reason'),
+        'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
+                   'off_mas': _finite(c.get('resid_off_mas')),
+                   'dra': _finite(c.get('resid_dra_mas')),
+                   'ddec': _finite(c.get('resid_ddec_mas')),
+                   'contrast': None,
+                   'npairs': c.get('n'),
+                   'flagged': c.get('flagged')}
+                  for c in cells],
+    }
+
+
 # --------------------------------------------------------------------------
 # Locating a field
 # --------------------------------------------------------------------------
@@ -683,6 +763,24 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
             tie = visit.get('reference_tie') or {}
             tiles = tie.get('per_tile') or {}
             worst_cell = tiles.get('worst_off_cell') or {}
+            grid_view = _tile_view_from_grid(tiles, worst_cell)
+            # Since #667 a small verified tie on a dense reference is GATED by
+            # the same-star region map (`per_tile_source == 'same-star-region'`),
+            # and the histogram grid is kept only as a diagnostic.  Publishing
+            # the grid's worst cell as the headline then shows e.g. cloudef's
+            # 5953.8 mas noise bin beside a checkpoint that passes (#668), so
+            # the gating numbers follow whichever map the checkpoint read.
+            tile_source = tie.get('per_tile_source') or 'histogram-grid'
+            region = tie.get('per_tile_same_star') or {}
+            if tile_source == 'same-star-region' and region:
+                tile_view = _tile_view_from_region(region)
+            else:
+                tile_view = grid_view
+                if tile_source == 'same-star-region':
+                    # The producer always pairs the two keys; if a record
+                    # lacks the map, say the grid was read instead of
+                    # labelling grid numbers as the region map.
+                    tile_source = 'histogram-grid (region map missing)'
             visits.append({
                 'visit': visit.get('visit'),
                 'n_stars': cons.get('n_stars'),
@@ -700,32 +798,16 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
                 'tie_apply_ok': tie.get('apply_ok'),
                 'tie_gross_ok': tie.get('cross_reference_gross_ok'),
                 'tie_swept': tie.get('swept'),
-                'tiles_ok': tiles.get('n_ok'),
-                'tiles_total': tiles.get('n_total'),
-                'tiles_clean': tiles.get('clean'),
-                'worst_tile_mas': _finite(tiles.get('worst_off_mas')),
-                'worst_tile_cell': (f"({worst_cell.get('ix')},{worst_cell.get('iy')})"
-                                    if worst_cell else None),
-                'min_tile_contrast': _finite(tiles.get('min_contrast_seen')),
-                # The cells themselves, so the page can draw the residual map and
-                # say WHERE the field is bad rather than only how bad its worst
-                # point is.  A single scalar cannot distinguish "one bad corner"
-                # from "a gradient across the mosaic", and those have different
-                # causes.
-                # `off_mas` is the canonical per-cell offset key: every cell
-                # producer in astrometry_offsets writes it (issue #267).  The
-                # `off` fallback is ONLY for checkpoints recorded before that
-                # change -- those files are never rewritten, so the reader has
-                # to keep tolerating the old spelling.  Reading one spelling
-                # only used to yield an empty map, and with it a derived claim
-                # that the field was flat.
-                'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
-                           'off_mas': _finite(c.get('off_mas', c.get('off'))),
-                           'dra': _finite(c.get('dra')),
-                           'ddec': _finite(c.get('ddec')),
-                           'contrast': _finite(c.get('contrast')),
-                           'npairs': c.get('npairs')}
-                          for c in (tiles.get('cells') or [])],
+                # Which per-tile map gated this tie (see `_tile_view_*`).
+                'tile_source': tile_source,
+                **tile_view,
+                # The histogram grid, always kept, labelled as the diagnostic
+                # it is whenever the region map was the gate.
+                'grid_diagnostic': (
+                    {k: grid_view[k] for k in ('tiles_ok', 'tiles_total',
+                                               'tiles_clean', 'worst_tile_mas',
+                                               'worst_tile_cell')}
+                    if tile_source == 'same-star-region' and tiles else None),
             })
             for exposure in visit.get('exposures') or []:
                 exposure = dict(exposure)

@@ -1,0 +1,59 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: detector, datatype: string}
+# - {name: filter, datatype: string}
+# - {name: pupil, datatype: string}
+# - {name: distortion_ref, datatype: string}
+# - {name: anchor_filter, datatype: string}
+# - {name: anchor_ref, datatype: string}
+# - {name: correction_arcsec, datatype: float64}
+# - {name: ref_scale_ppm, datatype: float64}
+# - {name: fit_rms_mas, datatype: float64}
+# meta: !!omap
+# - comments: [In-detector rotation correction for NIRCam SW distortion references (#1135)., 'correction_arcsec = -(rotation of distortion_ref
+#       relative to anchor_ref), applied in', V2V3 about the full-frame detector centre; positive rotates +V2 toward +V3., 'Rotation-only:
+#       the reference scale difference (ref_scale_ppm) is physical and is not applied.', 'Solved by scripts/analysis/solve_distortion_rotations.py,
+#       context jwst_1596.pmap, date 2023-06-01.', 'Bands: F115W F150W F162M F164N F200W.']
+# schema: astropy-2.0
+detector filter pupil distortion_ref anchor_filter anchor_ref correction_arcsec ref_scale_ppm fit_rms_mas
+NRCA1 F115W CLEAR jwst_nircam_distortion_0189.asdf F212N jwst_nircam_distortion_0228.asdf 7.209 27.0 0.667
+NRCA1 F150W CLEAR jwst_nircam_distortion_0192.asdf F212N jwst_nircam_distortion_0228.asdf 6.816 26.9 0.826
+NRCA1 F200W CLEAR jwst_nircam_distortion_0281.asdf F212N jwst_nircam_distortion_0228.asdf 8.386 70.1 0.698
+NRCA1 F150W2 F162M jwst_nircam_distortion_0218.asdf F212N jwst_nircam_distortion_0228.asdf 5.804 210.2 0.55
+NRCA1 F150W2 F164N jwst_nircam_distortion_0196.asdf F212N jwst_nircam_distortion_0228.asdf 6.917 210.5 0.542
+NRCA2 F115W CLEAR jwst_nircam_distortion_0290.asdf F212N jwst_nircam_distortion_0234.asdf -23.743 35.7 0.715
+NRCA2 F150W CLEAR jwst_nircam_distortion_0232.asdf F212N jwst_nircam_distortion_0234.asdf -22.758 39.8 0.676
+NRCA2 F200W CLEAR jwst_nircam_distortion_0268.asdf F212N jwst_nircam_distortion_0234.asdf -19.072 48.7 0.644
+NRCA2 F150W2 F162M jwst_nircam_distortion_0205.asdf F212N jwst_nircam_distortion_0234.asdf -20.673 209.1 0.722
+NRCA2 F150W2 F164N jwst_nircam_distortion_0263.asdf F212N jwst_nircam_distortion_0234.asdf -21.145 201.6 0.825
+NRCA3 F115W CLEAR jwst_nircam_distortion_0219.asdf F212N jwst_nircam_distortion_0182.asdf -24.102 16.2 0.812
+NRCA3 F150W CLEAR jwst_nircam_distortion_0251.asdf F212N jwst_nircam_distortion_0182.asdf -24.226 15.4 0.841
+NRCA3 F200W CLEAR jwst_nircam_distortion_0284.asdf F212N jwst_nircam_distortion_0182.asdf -30.855 41.3 1.062
+NRCA3 F150W2 F162M jwst_nircam_distortion_0222.asdf F212N jwst_nircam_distortion_0182.asdf -24.758 205.9 0.687
+NRCA3 F150W2 F164N jwst_nircam_distortion_0237.asdf F212N jwst_nircam_distortion_0182.asdf -24.897 207.3 0.689
+NRCA4 F115W CLEAR jwst_nircam_distortion_0304.asdf F212N jwst_nircam_distortion_0283.asdf 7.568 33.1 0.782
+NRCA4 F150W CLEAR jwst_nircam_distortion_0267.asdf F212N jwst_nircam_distortion_0283.asdf 6.378 34.6 0.74
+NRCA4 F200W CLEAR jwst_nircam_distortion_0313.asdf F212N jwst_nircam_distortion_0283.asdf -1.318 26.5 1.091
+NRCA4 F150W2 F162M jwst_nircam_distortion_0258.asdf F212N jwst_nircam_distortion_0283.asdf 7.62 216.6 0.825
+NRCA4 F150W2 F164N jwst_nircam_distortion_0288.asdf F212N jwst_nircam_distortion_0283.asdf 7.215 205.9 0.794
+NRCB1 F115W CLEAR jwst_nircam_distortion_0233.asdf F212N jwst_nircam_distortion_0305.asdf -1.302 23.6 0.72
+NRCB1 F150W CLEAR jwst_nircam_distortion_0315.asdf F212N jwst_nircam_distortion_0305.asdf -1.999 55.0 0.704
+NRCB1 F200W CLEAR jwst_nircam_distortion_0208.asdf F212N jwst_nircam_distortion_0305.asdf -0.384 62.6 0.624
+NRCB1 F150W2 F162M jwst_nircam_distortion_0198.asdf F212N jwst_nircam_distortion_0305.asdf -1.537 234.5 0.494
+NRCB1 F150W2 F164N jwst_nircam_distortion_0287.asdf F212N jwst_nircam_distortion_0305.asdf -1.943 223.7 0.517
+NRCB2 F115W CLEAR jwst_nircam_distortion_0224.asdf F212N jwst_nircam_distortion_0257.asdf -2.047 -4.9 0.543
+NRCB2 F150W CLEAR jwst_nircam_distortion_0212.asdf F212N jwst_nircam_distortion_0257.asdf -0.806 20.0 0.409
+NRCB2 F200W CLEAR jwst_nircam_distortion_0186.asdf F212N jwst_nircam_distortion_0257.asdf -0.321 25.0 0.424
+NRCB2 F150W2 F162M jwst_nircam_distortion_0245.asdf F212N jwst_nircam_distortion_0257.asdf -0.193 223.9 0.447
+NRCB2 F150W2 F164N jwst_nircam_distortion_0291.asdf F212N jwst_nircam_distortion_0257.asdf -0.087 232.7 0.373
+NRCB3 F115W CLEAR jwst_nircam_distortion_0274.asdf F212N jwst_nircam_distortion_0307.asdf -2.366 -1.2 0.57
+NRCB3 F150W CLEAR jwst_nircam_distortion_0204.asdf F212N jwst_nircam_distortion_0307.asdf -2.026 31.0 0.439
+NRCB3 F200W CLEAR jwst_nircam_distortion_0200.asdf F212N jwst_nircam_distortion_0307.asdf 0.316 37.7 0.548
+NRCB3 F150W2 F162M jwst_nircam_distortion_0206.asdf F212N jwst_nircam_distortion_0307.asdf -1.856 236.6 0.332
+NRCB3 F150W2 F164N jwst_nircam_distortion_0187.asdf F212N jwst_nircam_distortion_0307.asdf -1.882 226.4 0.324
+NRCB4 F115W CLEAR jwst_nircam_distortion_0294.asdf F212N jwst_nircam_distortion_0209.asdf -2.365 0.7 0.738
+NRCB4 F150W CLEAR jwst_nircam_distortion_0207.asdf F212N jwst_nircam_distortion_0209.asdf -1.968 22.4 0.771
+NRCB4 F200W CLEAR jwst_nircam_distortion_0221.asdf F212N jwst_nircam_distortion_0209.asdf -0.343 19.6 0.698
+NRCB4 F150W2 F162M jwst_nircam_distortion_0253.asdf F212N jwst_nircam_distortion_0209.asdf -2.385 233.6 0.537
+NRCB4 F150W2 F164N jwst_nircam_distortion_0286.asdf F212N jwst_nircam_distortion_0209.asdf -1.726 241.4 0.428

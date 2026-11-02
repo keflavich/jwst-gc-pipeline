@@ -1,0 +1,21 @@
+brick  prominence < 4 (or unmeasured)   n     45 n_fp     42 rel -0.03
+brick  qfit 0.2-0.6                     n    304 n_fp    285 rel -0.01
+brick  flags == 1 path                  n     52 n_fp     48 rel 0.14
+brick  union of the three               n    329 n_fp    307 rel 0.02
+brick  rest                             n  20647 n_fp  18946 rel 1.30
+brick  qfit * S/N < 3                   n    687 n_fp    640 rel 0.45
+brick  qfit * S/N >= 3                  n  20285 n_fp  18609 rel 1.30
+sgrb2  prominence < 4 (or unmeasured)   n     87 n_fp     87 rel 0.05
+sgrb2  qfit 0.2-0.6                     n    359 n_fp    359 rel 0.32
+sgrb2  flags == 1 path                  n    107 n_fp    107 rel 0.16
+sgrb2  union of the three               n    403 n_fp    403 rel 0.31
+sgrb2  rest                             n  15332 n_fp  15332 rel 1.10
+sgrb2  qfit * S/N < 3                   n    544 n_fp    544 rel 0.38
+sgrb2  qfit * S/N >= 3                  n  15185 n_fp  15185 rel 1.10
+w51    prominence < 4 (or unmeasured)   n     12 n_fp     12 rel 0.78
+w51    qfit 0.2-0.6                     n      9 n_fp      7 rel 0.75
+w51    flags == 1 path                  n     41 n_fp     36 rel 0.35
+w51    union of the three               n     44 n_fp     39 rel 0.37
+w51    rest                             n    544 n_fp    465 rel 0.76
+w51    qfit * S/N < 3                   n     13 n_fp     11 rel 0.66
+w51    qfit * S/N >= 3                  n    575 n_fp    493 rel 0.73

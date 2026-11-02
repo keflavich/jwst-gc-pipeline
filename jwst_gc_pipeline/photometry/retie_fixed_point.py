@@ -39,6 +39,11 @@ Given a ceiling, this exits 4 for the first and 3 for the second, and prints
 the ``ASTROM_M2_CORRECTION_FLOOR_MAS`` that lets the frozen m3+ stages run over
 a residual that is measured, recorded and left alone.  Without the flag every
 fixed point still stops, which is the behaviour this had before.
+
+It exits 0 when no (filter, token) group is stuck: each one is still moving,
+has too little history to judge, or converged (its newest pass left nothing
+for m2 to apply).  That includes every group having converged, and the loop
+reads 0 as "continue" in all of these cases.
 """
 import collections
 import glob
@@ -48,8 +53,10 @@ import os
 import re
 
 # The one cross-module import in this file.  It is here rather than inlined so
-# MAX_ACCEPT_CEILING_MAS cannot drift from the gate it is derived from.
-from .astrometry_checkpoint import LOCAL_CELL_TOL_MAS
+# MAX_ACCEPT_CEILING_MAS cannot drift from the gate it is derived from, and so
+# the reference-tie test below reads the same source tag m2 writes.
+from .astrometry_checkpoint import (LOCAL_CELL_TOL_MAS,
+                                    REFERENCE_TIE_SOURCE_SUFFIX)
 
 #: Two iterations agree when every shared correction agrees to better than this.
 #: Well under the 2 mas checkpoint tolerance -- the question is not "is the
@@ -116,6 +123,90 @@ def measurements(rec):
                 continue
             out[tuple(exp.get("key") or ())] = (float(dra), float(ddec))
     return out
+
+
+def reference_ties(rec):
+    """``{visit: (dra_mas, ddec_mas)}``: each visit's MEASURED tie of its
+    consensus onto the reference catalog.
+
+    ``measurements`` cannot see this.  Each exposure is measured against its
+    own visit's consensus, and the consensus->reference correction shifts every
+    exposure of the visit together, so applying it leaves every per-exposure
+    number where it was.  gc2211/o050 F200W (2026-10-08/09) is that shape: the
+    tie went 39.99 -> 2.71 -> 0.24 mas over three passes while all 48 exposures
+    repeated to 0.00 mas, and the check called the field REPEATING.
+
+    The measured value, not the applied correction: a tie under
+    ``reference_apply_min_mas`` is measured and not applied, and its absence
+    from ``corrections`` says nothing about whether it moved.  Pass-to-pass
+    repeatability is ~0.1 mas (sgrc F162M, seven passes: -4.57..-4.67 /
+    -3.32..-3.45), well inside ``DEFAULT_TOL_MAS`` even though each
+    measurement's formal error is ~0.9 mas -- the passes re-measure the same
+    stars on the same frames.
+    """
+    out = {}
+    for visit in (rec.get("visits") or []):
+        tie = visit.get("reference_tie") or {}
+        dra, ddec = tie.get("dra_mas"), tie.get("ddec_mas")
+        if dra is None or ddec is None:
+            continue
+        dra, ddec = float(dra), float(ddec)
+        if not (math.isfinite(dra) and math.isfinite(ddec)):
+            continue
+        out[str(visit.get("visit"))] = (dra, ddec)
+    return out
+
+
+def actionable_corrections(rec):
+    """The record's corrections that m2's apply step would act on.
+
+    ``corrections`` lists every per-exposure residual over the 2 mas consensus
+    tolerance, but ``cataloging`` applies only the ones at or above the field's
+    ``correction_floor_mas`` -- plus the consensus->reference tie, which is
+    never floored.  o050 F200W's last pass recorded 12 corrections of 2.1-2.7
+    mas under a 4.0 mas floor and no tie: nothing to apply, and the finalize
+    for that filter passed.  Reading ``bool(corrections)`` as "still
+    correcting" turned that pass into one more repeat.
+
+    A SUPERSET of what cataloging applies, on purpose.  Cataloging also drops
+    inherited bulk rows and pools detectors onto table rows before the floor;
+    a pooled mean is never larger than its largest member, so a correction this
+    calls sub-floor is sub-floor there too, and the error runs only towards
+    "actionable", which is the old behaviour.  A record with no recorded floor
+    (written before ``correction_floor_mas`` was added to ``tolerances``) or an
+    unreadable magnitude counts every correction as actionable for the same
+    reason.
+    """
+    floor = (rec.get("tolerances") or {}).get("correction_floor_mas")
+    out = []
+    for c in (rec.get("corrections") or []):
+        if REFERENCE_TIE_SOURCE_SUFFIX in str(c.get("source", "")):
+            out.append(c)
+            continue
+        if not floor or floor <= 0:
+            out.append(c)
+            continue
+        dra, ddec = c.get("dra_onsky_mas"), c.get("ddec_onsky_mas")
+        if dra is None or ddec is None:
+            out.append(c)
+            continue
+        mag = math.hypot(float(dra), float(ddec))
+        if not math.isfinite(mag) or mag >= floor:
+            out.append(c)
+    return out
+
+
+def converged(rec):
+    """Did this pass leave nothing for m2 to apply?
+
+    The same verdict ``cataloging`` reaches before it returns without raising:
+    the record is a pass (``passed`` and no ``failures``) and no correction
+    clears the floor.  ``passed`` alone is not it -- the o050 F200W records
+    read ``passed: True`` while carrying a 40 mas reference tie that the
+    finalize then applied and raised on.
+    """
+    return (rec.get("passed") is True and not rec.get("failures")
+            and not actionable_corrections(rec))
 
 
 #: ``checkpoint_m2_F162M_o012_20260809T044537Z.json``
@@ -222,6 +313,19 @@ def compare(rec_a, rec_b, tol_mas=DEFAULT_TOL_MAS):
               f"pass-to-pass change {worst:.2f} mas")
     if worst > tol_mas:
         return False, f"{detail} at {worst_key}"
+    # The whole-visit tie moves every exposure together, so the per-exposure
+    # comparison above is blind to it (see `reference_ties`).
+    ta, tb = reference_ties(rec_a), reference_ties(rec_b)
+    tie_visit, tie_worst = None, 0.0
+    for v in sorted(set(ta) & set(tb)):
+        d = max(abs(ta[v][0] - tb[v][0]), abs(ta[v][1] - tb[v][1]))
+        if d > tie_worst:
+            tie_visit, tie_worst = v, d
+    if tie_worst > tol_mas:
+        return False, (f"{detail}, but the consensus->reference tie of visit "
+                       f"{tie_visit} moved {tie_worst:.2f} mas "
+                       f"({math.hypot(*ta[tie_visit]):.2f} -> "
+                       f"{math.hypot(*tb[tie_visit]):.2f} mas)")
     return True, f"{detail} (tol {tol_mas} mas)"
 
 
@@ -316,6 +420,10 @@ def group_verdicts(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
     repeat and not known to be moving.  It is reported separately because the
     correction floor is applied to the whole field, so accepting while a group
     is unjudged waives a residual nothing has looked at.
+
+    A group whose newest pass ``converged`` is in none of the three sets: it is
+    finished, so it neither stops the loop nor blocks acceptance, and its
+    report line says so.
     """
     groups = _group_by_filter_token(
         load_records(record_dir, stage=stage, filtername=filtername,
@@ -335,6 +443,22 @@ def group_verdicts(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
         return stuck, moving, unjudged, lines
     for (filt, token), recs in sorted(groups.items()):
         label = f"{filt}{'/' + token if token else ''}"
+        newest_path, newest = recs[-1]
+        if converged(newest):
+            # The newest pass applied nothing, so this group is not what keeps
+            # the loop running -- another filter is.  Judging its history would
+            # stop the field on a filter that has already finished (o050 F200W,
+            # stopped while F277W still had a 36 mas tie to apply).  Ahead of
+            # the history-length test: the checkpoint's own pass is a verdict
+            # that needs no history.  In no set, which the scan-coverage test
+            # in `main` allows for.
+            n_sub = len(newest.get("corrections") or [])
+            floor = (newest.get("tolerances") or {}).get("correction_floor_mas")
+            lines.append(f"{label}: converged -- newest pass "
+                         f"({os.path.basename(newest_path)}) has nothing to "
+                         f"apply ({n_sub} residual(s) under the {floor} mas "
+                         f"floor, no consensus->reference correction)")
+            continue
         if len(recs) < repeats:
             unjudged.add((filt, token))
             lines.append(f"{label}: {len(recs)} pass(es) recorded, need "
@@ -462,9 +586,14 @@ def main(argv=None):
     # groups the bare scan calls unjudged, with residuals up to 4.99 mas.  So
     # the caller declares what the field is running and the scan has to have
     # covered it.
+    # Every group the scoped scan read, converged ones included: a converged
+    # group is in none of the three verdict sets, and it WAS scanned.
+    scanned = {str(f).upper() for f, _tok in _group_by_filter_token(
+        load_records(args.record_dir, stage=args.stage,
+                     filtername=args.filtername, obs_token=args.obs_token,
+                     since=args.since))}
     unscanned = sorted(
-        f for f in (args.expect_filters or [])
-        if f.upper() not in {g[0].upper() for g in (stuck | moving | unjudged)})
+        f for f in (args.expect_filters or []) if f.upper() not in scanned)
     # The other half of the declaration contract, and the half that matters.
     #
     # `unscanned` catches OVER-declaration -- a filter named that the scan
@@ -554,14 +683,13 @@ def main(argv=None):
                 f"in the field, so accepting here would waive a residual the "
                 f"converging filter(s) had not finished removing.  STOPPING.")
         return 3
-    # `only_groups=stuck` was a no-op and is gone: `main` returns 3 on
-    # `unjudged` and on `moving` above, and groups = stuck | moving | unjudged,
-    # so by here `stuck` IS every group in scope.  An argument that cannot
-    # change the result cannot be pinned by a test, and claiming it was pinned
-    # was wrong.
+    # By here every group in scope is stuck or converged.  `only_groups=stuck`
+    # keeps a converged group's sub-floor residuals from sizing the floor: they
+    # are already below the floor the field runs at, and the residual being
+    # waived is the stuck group's.
     worst, key, label = largest_measured_residual(
         args.record_dir, stage=args.stage, filtername=args.filtername,
-        obs_token=args.obs_token, since=args.since)
+        obs_token=args.obs_token, since=args.since, only_groups=stuck)
     if key is None:
         # Nothing correctable was measured, so "the largest residual is 0.00 mas"
         # is the absence of a measurement rather than a small one -- and the

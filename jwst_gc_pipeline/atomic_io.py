@@ -84,11 +84,14 @@ def locked(path, timeout=DEFAULT_TIMEOUT, poll=0.2):
 
 
 @contextlib.contextmanager
-def atomic_write(path):
+def atomic_write(path, hidden=False):
     """Yield a temporary path to write, and move it onto ``path`` on success.
 
     The temporary keeps the original **suffix** and carries a per-writer tag
     before it: ``offsets.csv`` is written as ``offsets.tmp1234a1b2c3d4.csv``.
+    With ``hidden=True`` the basename also gets a leading dot
+    (``.offsets.tmp1234a1b2c3d4.csv``), so a temporary left behind by a killed
+    job is invisible to a ``*.fits`` glob over a product directory.
 
     The suffix matters because ``Table.write`` infers its format from the file
     name, and a name ending in ``.tmp1234`` raises ``IORegistryError`` instead
@@ -101,6 +104,9 @@ def atomic_write(path):
     A body that raises leaves ``path`` untouched and removes the temporary.
     """
     root, suffix = os.path.splitext(path)
+    if hidden:
+        directory, base = os.path.split(root)
+        root = os.path.join(directory, f'.{base}')
     tmp = f'{root}.tmp{_writer_tag()}{suffix}'
     try:
         yield tmp

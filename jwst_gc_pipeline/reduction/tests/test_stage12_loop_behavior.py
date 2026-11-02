@@ -313,6 +313,12 @@ def test_block_source_is_the_shipped_loop():
     assert "for member in asn_data['products'][0]['members']" in block
 
 
+def test_image2_skips_per_exposure_resample():
+    """Image2's per-exposure ``_i2d`` is read by no NIRCam step; keep it off."""
+    block = stage12_block_source()
+    assert "steps={'resample': {'skip': True}}" in block
+
+
 def test_the_driver_never_clears_the_memo():
     """The one thing the runtime tests below cannot reach.
 

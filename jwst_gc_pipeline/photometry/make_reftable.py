@@ -5,7 +5,7 @@ from astropy import units as u
 from astropy.table import Table
 
 from astropy.coordinates import SkyCoord
-from astroquery.svo_fps import SvoFps
+from jwst_gc_pipeline.svo_filters import SvoFps
 from astropy import wcs
 from astropy.io import fits
 import numpy as np

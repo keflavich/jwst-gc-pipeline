@@ -214,6 +214,16 @@ SKYMATCH=${SKYMATCH:-}
 SKYMATCH_FLAG=""
 [ -n "$SKYMATCH" ] && SKYMATCH_FLAG="--skymatch-method=$SKYMATCH"
 
+# Image3 outlier_detection policy: auto (default) | on | off.  auto skips it
+# (#161) unless a member frame has S_JUMP != COMPLETE -- NGROUPS=2 exposures
+# skip JumpStep, so outlier_detection is their only cosmic-ray rejection.  See
+# resolve_skip_outlier_detection in PipelineRerunNIRCAM-LONG.py.
+OUTLIER_DETECTION=${OUTLIER_DETECTION:-auto}
+case "$OUTLIER_DETECTION" in
+    auto|on|off) ;;
+    *) echo "OUTLIER_DETECTION='$OUTLIER_DETECTION' is not auto|on|off" >&2; exit 2 ;;
+esac
+
 # Descriptive per-task job name (the #SBATCH --job-name is necessarily generic
 # because the filter is only known after indexing the array here).  Rename this
 # task so squeue shows what it actually is, e.g. "red_4147_012_F470N".
@@ -223,9 +233,9 @@ if [ "${SLURM_JOB_NAME:-reduce}" = "reduce" ]; then
 fi
 
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-echo "REDUCE start: proposal=$PROPOSAL field=$FIELD filter=$FILT modules=$MODULES skip=$SKIP resume=$STAGE12_RESUME skymatch=${SKYMATCH:-off}"
+echo "REDUCE start: proposal=$PROPOSAL field=$FIELD filter=$FILT modules=$MODULES skip=$SKIP resume=$STAGE12_RESUME skymatch=${SKYMATCH:-off} outlier_detection=$OUTLIER_DETECTION"
 echo "PIPE=$PIPE"
-"$PYTHON" "$PIPE" -p "$PROPOSAL" -d "$FIELD" -f "$FILT" -m "$MODULES" $SKIP_FLAG $SKYMATCH_FLAG
+"$PYTHON" "$PIPE" -p "$PROPOSAL" -d "$FIELD" -f "$FILT" -m "$MODULES" $SKIP_FLAG $SKYMATCH_FLAG --outlier-detection="$OUTLIER_DETECTION"
 rc=$?
 echo "REDUCE done: filter=$FILT rc=$rc"
 exit $rc

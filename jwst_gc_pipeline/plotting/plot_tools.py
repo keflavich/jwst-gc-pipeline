@@ -18,7 +18,7 @@ from astropy.wcs import WCS
 from astropy.visualization import simple_norm
 import itertools
 import dust_extinction
-from astroquery.svo_fps import SvoFps
+from jwst_gc_pipeline.svo_filters import SvoFps
 from astroquery.vizier import Vizier
 from dust_extinction.averages import RRP89_MWGC, CT06_MWGC, F11_MWGC
 from dust_extinction.parameter_averages import CCM89, G23

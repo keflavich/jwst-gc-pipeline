@@ -16,9 +16,11 @@ import glob as _glob
 import os
 
 import numpy as np
+import scipy.sparse as _sparse
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.table import Table, vstack
+from scipy.sparse.csgraph import connected_components
 
 # Provenance columns added to every source.
 PROV_COLS = ('cmz_field', 'cmz_program', 'cmz_obsid', 'cmz_src_tag')
@@ -97,18 +99,35 @@ def load_field_catalog(path, field, program='', obsid='', tag=None,
     return t
 
 
-def _dedup_cross_field(table, radius_arcsec, coverage_cols, field_col='cmz_field'):
+def _dedup_cross_field(table, radius_arcsec, coverage_cols, field_col='cmz_field',
+                       rank_cols=None):
     """Collapse cross-FIELD duplicate sources; keep + record the dropped fields.
 
-    Only pairs from DIFFERENT fields within ``radius_arcsec`` are merged (a close
-    pair within one field is a real blend the per-field pipeline already
-    resolved).  Within each cross-field cluster, keep the source with the most
-    finite coverage bands (ties broken by lowest row index, deterministic).
+    Only pairs from DIFFERENT groups (``field_col``, default ``'cmz_field'`` --
+    pass e.g. ``'cmz_obsid'`` to group by TILE instead) within ``radius_arcsec``
+    are merged.  A close pair within the SAME group is a real blend the
+    per-group pipeline already resolved and is never merged.
+
+    Vectorized (2026-10, issue: the original pure-Python union-find + ``for root
+    in np.unique(roots): np.where(roots == root)`` scan was O(N^2) -- at 10678's
+    ~9.2M-row scale that never finished).  The pipeline is now:
+    ``search_around_sky`` -> keep only cross-group pairs -> build a sparse graph
+    on those pairs only -> ``scipy.sparse.csgraph.connected_components`` ->
+    choose each component's winner with ONE global ``np.lexsort`` (no python
+    loop over all N components).  Only clusters that actually merge (a small
+    fraction of N) are then visited, once each, to assemble the ``also_in``
+    string.
+
+    ``rank_cols`` : tuple of column names in ``table``, most-important FIRST,
+    each **ascending == more preferred** (precompute e.g. ``-n_bands`` if you
+    want "most bands wins").  Defaults to ``None``, which ranks by (most finite
+    coverage bands, lowest row index) -- the original behaviour.  Row index is
+    always appended as the final, deterministic tie-break.
 
     Returns ``(keep, also_in)``: ``keep`` is the boolean survivor mask; ``also_in``
-    is a per-row string listing the OTHER fields the kept source was also detected
+    is a per-row string listing the OTHER groups the kept source was also detected
     in (comma-joined, sorted) -- so an overlap-region source stays recoverable
-    (which fields saw it) instead of the duplicate detection being silently lost.
+    (which groups saw it) instead of the duplicate detection being silently lost.
     """
     n = len(table)
     keep = np.ones(n, dtype=bool)
@@ -116,42 +135,63 @@ def _dedup_cross_field(table, radius_arcsec, coverage_cols, field_col='cmz_field
     if n < 2 or radius_arcsec <= 0:
         return keep, also_in
     sc = _skycoord(table)
-    fields = np.asarray(table[field_col])
-    cover = _coverage_count(table, coverage_cols)
+    fields = np.asarray(table[field_col]).astype(str)
+    idx = np.arange(n)
+
     i1, i2, _, _ = sc.search_around_sky(sc, radius_arcsec * u.arcsec)
-
-    parent = np.arange(n)
-
-    def find(a):
-        while parent[a] != a:
-            parent[a] = parent[parent[a]]
-            a = parent[a]
-        return a
-
-    linked = False
-    for a, b in zip(np.asarray(i1), np.asarray(i2)):
-        if a < b and fields[a] != fields[b]:   # cross-field only
-            ra_, rb_ = find(int(a)), find(int(b))
-            if ra_ != rb_:
-                parent[max(ra_, rb_)] = min(ra_, rb_)
-                linked = True
-    if not linked:
+    i1 = np.asarray(i1, dtype=np.int64)
+    i2 = np.asarray(i2, dtype=np.int64)
+    cross = (i1 < i2) & (fields[i1] != fields[i2])   # cross-group only
+    if not np.any(cross):
         return keep, also_in
-    roots = np.array([find(i) for i in range(n)])
-    for root in np.unique(roots):
-        members = np.where(roots == root)[0]
-        if members.size < 2:
-            continue
-        best = members[np.lexsort((members, -cover[members]))][0]  # max cover, low idx
-        other = sorted({str(fields[m]) for m in members if m != best})
-        also_in[best] = ','.join(other)
-        for m in members:
-            if m != best:
-                keep[m] = False
+    r1, r2 = i1[cross], i2[cross]
+
+    graph = _sparse.coo_matrix((np.ones(len(r1), dtype=np.int8), (r1, r2)),
+                               shape=(n, n))
+    n_comp, labels = connected_components(graph, directed=False)
+    sizes = np.bincount(labels, minlength=n_comp)
+    if not np.any(sizes > 1):
+        return keep, also_in
+
+    if rank_cols:
+        rank_arrays = [np.asarray(table[c]) for c in rank_cols]
+    else:
+        cover = _coverage_count(table, coverage_cols)
+        rank_arrays = [-cover]
+    # np.lexsort's LAST key is primary. We need the result grouped by `labels`
+    # (most significant) and, within each label, ranked by rank_arrays[0]
+    # (next-most-significant) down to `idx` (least significant, final
+    # tie-break) -- so the lexsort argument order is (idx, ..., rank_arrays[0],
+    # labels), i.e. idx first / labels last.
+    lexsort_keys = [idx] + list(reversed(rank_arrays)) + [labels]
+    order = np.lexsort(tuple(lexsort_keys))
+    sorted_labels = labels[order]
+    first_mask = np.empty(len(order), dtype=bool)
+    first_mask[0] = True
+    first_mask[1:] = sorted_labels[1:] != sorted_labels[:-1]
+    winner_for_label = order[first_mask]        # length n_comp, label-ordered asc
+    winner_per_row = winner_for_label[labels]   # length n, vectorized gather
+    keep = (idx == winner_per_row)
+
+    loser_mask = (sizes[labels] > 1) & ~keep
+    losers_idx = idx[loser_mask]
+    losers_winner = winner_per_row[loser_mask]
+    sort2 = np.argsort(losers_winner, kind='stable')
+    losers_idx_s = losers_idx[sort2]
+    losers_winner_s = losers_winner[sort2]
+    if losers_idx_s.size:
+        boundaries = np.flatnonzero(np.diff(losers_winner_s)) + 1
+        groups = np.split(losers_idx_s, boundaries)
+        starts = np.concatenate(([0], boundaries))
+        winner_vals = losers_winner_s[starts]
+        for w, members in zip(winner_vals, groups):
+            other = sorted({fields[m] for m in members})
+            also_in[w] = ','.join(other)
     return keep, also_in
 
 
-def assemble(field_tables, dedup_radius_arcsec=0.2, coverage_cols=None):
+def assemble(field_tables, dedup_radius_arcsec=0.2, coverage_cols=None,
+            field_col='cmz_field', rank_cols=None):
     """Assemble per-field tables into one CMZ-wide catalog.
 
     Returns the combined ``Table`` with cross-field duplicates removed and two new
@@ -166,18 +206,27 @@ def assemble(field_tables, dedup_radius_arcsec=0.2, coverage_cols=None):
     -- the auto-detect fallback (:func:`_coverage_cols`) is a loose
     name-heuristic (``'flux'``/``'mag'`` substring, crude error-column exclusion)
     that can miss or over-include columns in an unfamiliar schema.
+
+    ``field_col`` names the grouping column for cross-group dedup (default
+    ``'cmz_field'``; pass ``'cmz_obsid'`` or another column to group by TILE
+    instead of by named field -- see :func:`_dedup_cross_field`).
+
+    ``rank_cols`` overrides the winner-selection rule inside a merged cluster
+    (default: most coverage bands, then lowest row index); see
+    :func:`_dedup_cross_field` for the column-ranking convention.
     """
     if not field_tables:
         raise ValueError('no field tables to assemble')
     combined = vstack(list(field_tables), join_type='outer',
                       metadata_conflicts='silent')
     cov = _coverage_cols(combined, coverage_cols)
-    keep, also_in = _dedup_cross_field(combined, dedup_radius_arcsec, cov)
+    keep, also_in = _dedup_cross_field(combined, dedup_radius_arcsec, cov,
+                                       field_col=field_col, rank_cols=rank_cols)
     combined['cmz_also_in'] = also_in.astype(str)   # other fields that saw it
     combined = combined[keep]
     combined['cmz_n_bands'] = _coverage_count(combined, cov)
     # FITS-safe (<=8 char) meta keywords
-    combined.meta['CMZNFLD'] = len(set(np.asarray(combined['cmz_field'])))
+    combined.meta['CMZNFLD'] = len(set(np.asarray(combined[field_col])))
     combined.meta['CMZDEDR'] = float(dedup_radius_arcsec)
     combined.meta['CMZNSRC'] = len(combined)
     return combined

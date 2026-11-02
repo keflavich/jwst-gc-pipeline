@@ -23,9 +23,7 @@ import html
 import json
 
 from ..aladin_controls import ALADIN_CONTROLS
-
-#: Aladin Lite v3, the same build the other viewers on this site load.
-ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
+from ..aladin_loader import aladin_fallback_chain_html
 
 #: HiPS layers under the footprints, in paint order (last on top).  Same URLs
 #: and the same order as the main viewer, so the two pages show the same sky.
@@ -37,7 +35,7 @@ _AVM = 'https://starformation.astro.ufl.edu/avm_images/'
 #: wrong for a page whose point is comparing one pointing against the rest.
 HIPS_LAYERS = (
     ('tmiri', _AVM + 'jwst_gc_treasury_miri_hips/', 'Treasury MIRI (F770W)'),
-    ('tnir', _AVM + 'jwst_gc_treasury_vminmax_hips/',
+    ('tnir', _AVM + 'jwst_gc_treasury_vminmax_satfill_hips/',
      'Treasury NIRCam (F212N/F480M)'),
 )
 
@@ -179,7 +177,7 @@ def render(data, data_href=DATA_FILE,
     <p class=muted id=status>loading&hellip;</p>
   </div>
 </div>
-<script src="{ALADIN_JS}" charset="utf-8"></script>
+{aladin_fallback_chain_html()}
 <script>
 const DATA_URL = {json.dumps(data_href)};
 const HIPS = {json.dumps([{'id': i, 'url': u, 'name': n} for i, u, n in HIPS_LAYERS])};

@@ -76,6 +76,7 @@ fails CI if a new file pairs a NN match with a median/mean — do not write ad-h
 | `*_i2d.fits` (resampled mosaic — **final image deliverable**) | inherits | resample of the corrected exposures | (pristine) |
 | per-frame catalogs (`*_daophot_basic.fits`) | use the corrected crf GWCS | (read crf GWCS) | n/a |
 | merged catalog | **Yes — table-space** | `shift_individual_catalog()`: `final = centroid − RAOFFSET_meta + dra_table` | re-derivable from any offsets table |
+| merged catalog, m3+ merges (opt-in, `ASTROM_MERGE_M2_REGISTRATION=1`) | **Yes — catalog-only relative registration** | `m2_registration.py::apply_m2_registration`: each per-frame catalog + its m2-recorded vs-consensus offset (sub-floor, certified, baked offset unchanged since m2) | re-derivable from the m2 record; frame unchanged (median ~0) |
 
 **The astrometric solution now has exactly ONE authoring point:**
 1. **Per-exposure** (`fix_alignment` → `adjust_wcs`): the science-bearing tie.
@@ -127,6 +128,20 @@ re-enable TweakReg, or you will double-correct.
 **Single rule to avoid double-correction:** the astrometry is corrected at *exactly
 one* place — per-exposure `fix_alignment`. Never add a post-resample mosaic
 corrector, and never edit `_cal.fits` or `_i2d.fits` in place.
+
+**The one catalog-side exception (2026-10-08, opt-in via
+`ASTROM_MERGE_M2_REGISTRATION=1`):** the m3+ per-filter merges can register each per-frame catalog onto its visit consensus with the offset the m2
+checkpoint recorded for it.  These are the sub-floor per-exposure offsets that
+m2 measures and leaves in the frames.  The absolute tie and every correction m2
+acts on still go through `fix_alignment` alone.  This is a relative
+registration in the consensus frame, and it applies only while the frame's baked
+`RAOFFSET` matches what m2 measured.  The merged catalog then differs from the
+`_i2d` mosaic by those sub-floor offsets (sgrb2 F212N: median 1.8, max 4.1 mas).
+See "Merge-time registration" in `../photometry/ASTROMETRY_CHECKPOINTS.md`.
+`scripts/reduction/m2_offsets_writeback.py` closes most of that gap through the
+authoring point above: it writes the module-common part of those offsets into
+the locked offsets table, and the next regeneration from `_cal` bakes it into
+the frames and mosaics.  The per-detector remainder (#697) stays catalog-side.
 
 **Verification ladder (2026-07-12):** cataloging re-verifies this tie at every
 merge stage — visit-consensus per-exposure checks (2 mas), frozen-solution
@@ -317,7 +332,8 @@ around the visit consensus, re-measured every re-tie iteration.
 | 2221 | 001, 002 | VIRAC2 | `TABLE_LOCKED` | — | brick / cloudc |
 | 4147 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrc |
 | 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F210M | w51 (outside the VVV footprint); was F200W, which 6151 does not observe |
-| 1905 | all | **Gaia** | `TABLE_CONSENSUS` | F212N | wd1 (Westerlund 1), outside the VVV footprint, so the reference is the field's own `gaia_refcat.fits`; unregistered until 2026-08-25, so every frame stayed on the raw `assign_wcs` frame ~40 mas off Gaia across all 11 filters; the bulk entry leaves a ~±10 mas residual because a ~20 mas east-west gradient sits under it, tracked separately. `all` covers both nircam obsids |
+| 1905 | all | **Gaia** | `TABLE_CONSENSUS` | F212N | wd1 (Westerlund 1), outside the VVV footprint, so the reference is the field's own `gaia_refcat.fits`; unregistered until 2026-08-25, so every frame stayed on the raw `assign_wcs` frame ~40 mas off Gaia across all 11 filters; the bulk entry leaves a ~±10 mas residual because a ~20 mas east-west gradient sits under it, tracked separately. `all` covers both nircam obsids, but `resolve` prefers the field-specific 1905/001 row below, so in practice this row applies to obs 003 |
+| 1905 | 001 | **Gaia** | `RECORDED_BULK` + jitter | F212N | wd1 obs 001. Visit 003 (eastern third, guide star S8UV267665, 2023-04-05) sits (+2.379", +1.628") on sky from Gaia DR3 and (+2.363", +1.614") from visit 002 on 4307 matched F212N stars; all 27 m2 per-tile cells agree to 2.870-2.903". The checkpoint will not apply a correction that large on a Gaia-only field, so it is recorded as a bulk; consensus jitter adds the per-exposure residuals. Same pattern as cloudef 2092 obs 002 |
 | 2045 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F212N | arches |
 | 8322 | all | **Gaia** | `TABLE_CONSENSUS` | F200W | omega Cen (NGC 5139), far outside the VVV footprint, so the reference is the field's own `gaia_refcat.fits` (115,009 sources, median NN 1.80" -- denser than the 3" the dense-NN-median rule cares about, so the tie must come from the sanctioned estimators). Unregistered until 2026-09-13: every frame stayed on the raw `assign_wcs` frame (the reduce logged `RA, DE offset:  0.0 0.0`) and `offsets_channel` returned `none`, so m2 could not write what it measured -- the #589 failure. F200W is the band NIRCam and NIRISS share and the only one with full 32-frame NIRCam coverage. 12587, the field's other proposal, is still all planning placeholders and gets no entry |
 | 2045 | 003 | VIRAC2 | `TABLE_LOCKED` | F212N | quintuplet |
@@ -528,7 +544,7 @@ mechanism as `fix_alignment`); idempotency via the `DVACORR` marker keyword
 
 ---
 
-## Per-(detector, filter) frame correction (`filter_frame_correction.py`, opt-in)
+## Per-(detector, filter) frame correction (`filter_frame_correction.py`, on for F162M/F164N)
 
 **What it corrects.** The true filter-dependent placement of a NIRCam detector
 varies detector to detector inside a module, and nothing in the chain is keyed
@@ -562,7 +578,20 @@ the anchor, coefficient source and frame. Re-applying onto a *different* anchor
 is refused rather than skipped.
 
 **Policy.**
-- Opt-in: `FILTER_FRAME_CORRECTION=1`. Default off, byte-identical behaviour.
+- `fix_alignment` calls `apply_configured_filter_frame_correction` on every
+  frame, before the reference tie. `FILTER_FRAME_CORRECTION` unset (the
+  default) corrects **F162M and F164N only**, from the shipped table, onto
+  F212N. Their term is ~10 mas per detector (#1133) and fails the m7
+  cross-filter gate (cloudef jw02092-o002, #1255). `=1` adds every other
+  filter the table covers (F182M, F187N); `=0` corrects nothing.
+- Frames reduced before this default carry the term. Regenerate F162M/F164N
+  from `_cal` (or rerun `fix_alignment`; the shift commutes with the tie and
+  `FFRAMCOR` keeps it idempotent), then re-catalog.
+- Per-detector rows in a field's offsets table may already absorb part of the
+  term: the m2 visit consensus sees it wherever dithers mix detectors (cloudef
+  F162M: about 2.5 mas in Dec). After the correction those rows read as a
+  per-detector residual of the same size, which m2 corrects only above the
+  field's correction floor.
 - The gauge is per-module-mean-zero, so the correction is orthogonal to
   everything the offsets table expresses: it moves no visit bulk, no module tie
   and no reference tie. **It does not invalidate an offsets table and does not

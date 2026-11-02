@@ -60,6 +60,30 @@ def test_rejects_grouped_fit_variants(label):
     assert not acc.search(_name(seg="resbgsub_group", label=label))
 
 
+@pytest.mark.parametrize("label", ["m3", "m5"])
+@pytest.mark.parametrize("psf", ["_hybpsf", "_epsf", "_epsf_hybpsf"])
+def test_accepts_this_runs_psf_token(label, psf):
+    """The writer stamps ``{epsf_}`` after ``{bgsub}``; o067 hybrid-ePSF runs
+    wrote ``_exp00001_hybpsf_m3_...`` and the m3 checkpoint matched none."""
+    acc = _perframe_catalog_re(label, psf_token=psf)
+    seg = psf.lstrip("_")
+    assert acc.search(_name(seg=seg, label=label))
+    assert acc.search(_name(seg=f"resbgsub_{seg}", label=label))
+    assert acc.search(_name(seg=seg, label=label, chunk="chunk1of4"))
+    # a plain-PSF catalog of the same exposure is a different measurement
+    assert not acc.search(_name(label=label))
+    assert not acc.search(_name(seg=f"{seg}_group", label=label))
+
+
+def test_psf_token_defaults_to_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("PSF_EPSF_CORE_DIR", str(tmp_path))
+    assert _perframe_catalog_re("m3").search(_name(seg="hybpsf", label="m3"))
+    assert not _perframe_catalog_re("m3").search(_name(label="m3"))
+    monkeypatch.delenv("PSF_EPSF_CORE_DIR")
+    assert _perframe_catalog_re("m3").search(_name(label="m3"))
+    assert not _perframe_catalog_re("m3").search(_name(seg="hybpsf", label="m3"))
+
+
 def test_rejects_other_stage_labels():
     acc = _perframe_catalog_re("m2")
     assert not acc.search(_name(label="m5"))

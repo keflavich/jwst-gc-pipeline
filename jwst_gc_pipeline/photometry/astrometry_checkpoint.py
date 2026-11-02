@@ -113,6 +113,31 @@ REFERENCE_APPLY_MIN_MAS = 2.0
 #: rigid whole-visit shift is not one of those.
 REFERENCE_TIE_SOURCE_SUFFIX = 'consensus->reference'
 
+#: ``reference_tie['reference_kind']`` values.  ``VIRAC2`` is every field's
+#: default (the absolute reference catalog itself); ``JWST_CONSENSUS`` marks
+#: a filter tied through another filter's own JWST consensus catalog instead
+#: (``alignment_config.tie_through_reference_filter`` — see
+#: ``resolve_tie_reference``).
+REFERENCE_KIND_VIRAC2 = 'virac2'
+REFERENCE_KIND_JWST_CONSENSUS = 'jwst_consensus'
+#: A Gaia-only seed refcat (``gaia_refcat.fits``), which the m2 checkpoint of a
+#: Gaia-framed field with no ``gaia_virac2_refcat`` ties to (#1167).
+REFERENCE_KIND_GAIA = 'gaia'
+
+#: Log label per ``reference_kind`` (the JWST-consensus label names its filter
+#: at the call site).
+_REFERENCE_KIND_LABEL = {REFERENCE_KIND_VIRAC2: 'VIRAC2',
+                         REFERENCE_KIND_GAIA: 'Gaia'}
+
+#: Slack (seconds) allowed between a reference filter's own m2 record's
+#: ``date`` and the mtime of the consensus catalog it names, before
+#: ``reference_filter_tie_settled`` calls the catalog stale.  The write order
+#: within one m2 pass is consensus-catalog-then-record (see
+#: ``run_visit_checkpoint``), so the catalog is always a little OLDER than its
+#: own record; this only catches a record whose ``consensus_catalog`` field
+#: resolved to a stale leftover file from an earlier, unrelated pass.
+REFERENCE_FILTER_STALENESS_SLACK_SEC = 300.0
+
 
 def _target_from_basepath(basepath):
     """Field name from a basepath, for callers that do not pass ``target``.
@@ -214,6 +239,17 @@ class CrossFilterAstrometryError(RuntimeError):
     """The cross-filter (m7) checkpoint failed: a filter disagrees with the
     anchor filter beyond tolerance, or a local cell carries a significant
     offset.  Blocking."""
+
+
+class ReferenceFilterNotSettledError(RuntimeError):
+    """A field ties non-reference filters through ``reference_filter``'s own
+    JWST consensus catalog (``alignment_config.tie_through_reference_filter``),
+    but that reference filter's own tie to VIRAC2 has not settled yet — no m2
+    record, a record that did not pass (and was not overridden), a pass that
+    just applied a bulk correction (its frame moved this run), or a consensus
+    catalog older than its own record.  Blocking: the caller must NOT fall
+    back to VIRAC2 silently, which would tie this filter to a different frame
+    than the reference filter without saying so."""
 
 
 class OffsetsTableUpdateError(RuntimeError):
@@ -3190,6 +3226,9 @@ _RECORD_STAGE_RE = re.compile(r'^checkpoint_(?P<stage>m\d+(?:_crossfilter)?)')
 #: joint-registration form ``_o002-998`` that ``naming.OBS_TOKEN_PATTERN``
 #: cannot express.
 _RECORD_OBS_RE = re.compile(r'_o(?P<obs>\d+(?:-\d+)*)$')
+#: The merge-module slot of an m7 cross-filter record (``_nrcb``, ``_merged``,
+#: ``_mirimage``).  Lower case only: a filter name is never lower case.
+_RECORD_MODULE_RE = re.compile(r'^_(?P<module>[a-z]+)$')
 #: The shared-tree proposal token (ngc6334's ``_j7213``/``_j6778``).
 _RECORD_PROPOSAL_RE = re.compile(r'_j(?P<proposal>\d+)$')
 
@@ -3197,9 +3236,12 @@ _RECORD_PROPOSAL_RE = re.compile(r'_j(?P<proposal>\d+)$')
 def parse_record_name(basename):
     """Inverse of :func:`_record_name`: a record filename -> its identity.
 
-    Returns ``{'stage', 'filt', 'obs', 'proposal'}`` (``filt`` verbatim, so a
-    mixed-filter record reads back as the literal ``'all'`` it was written as),
-    or ``None`` when the name is not a checkpoint record.
+    Returns ``{'stage', 'filt', 'obs', 'proposal', 'module'}`` (``filt``
+    verbatim, so a mixed-filter record reads back as the literal ``'all'`` it
+    was written as), or ``None`` when the name is not a checkpoint record.
+    ``module`` is set only for an m7 cross-filter record written per merge
+    module (``checkpoint_m7_crossfilter_nrcb_o002``, issue #1254); that slot
+    holds a module, not a filter, so ``filt`` stays ``None`` for it.
 
     This lives beside the writer because a checkpoint record's name is the only
     thing that says WHICH observation a verdict belongs to, and the release gate
@@ -3245,7 +3287,12 @@ def parse_record_name(basename):
         if tok:
             proposal = tok.group('proposal')
             rest = rest[:tok.start()]
-    if rest.startswith('_'):
+    module = None
+    mod = _RECORD_MODULE_RE.match(rest)
+    if m.group('stage') == 'm7_crossfilter' and mod:
+        module = mod.group('module')
+        filt = None
+    elif rest.startswith('_'):
         filt = rest[1:]
     elif rest:
         # Trailing text that is neither a filter slot nor a known token.
@@ -3255,7 +3302,7 @@ def parse_record_name(basename):
     if filt is not None and not filt:
         return None
     return {'stage': m.group('stage'), 'filt': filt,
-            'obs': obs, 'proposal': proposal}
+            'obs': obs, 'proposal': proposal, 'module': module}
 
 
 def _filter_is_obs_ambiguous(record_dir, filtername):
@@ -3721,6 +3768,187 @@ def _m2_skipped_exposures(record_dir, filtername, visit, obs_token=""):
         for key in cons.get("skipped", []) or []:
             out.add(tuple(key))
     return out
+
+
+def reference_filter_tie_settled(record_dir, ref_filter, obs_token=""):
+    """Whether ``ref_filter``'s own m2 tie to VIRAC2 is SETTLED enough for
+    another filter to tie through its JWST consensus catalog instead of
+    VIRAC2 directly (``alignment_config.tie_through_reference_filter``, see
+    ``resolve_tie_reference``).
+
+    SETTLED means all of:
+
+    * a latest m2 record exists for (``ref_filter``, ``obs_token``);
+    * that record names a ``consensus_catalog`` file that exists on disk;
+    * the record ``passed``, or it did not and carries a USED
+      ``gate_override`` (a deliberate, justified override is a settled verdict
+      too — see ``record_gate_override``);
+    * that pass applied NO consensus->reference bulk correction (a pass that
+      just corrected ``ref_filter``'s own frame means the frame moved THIS
+      run; ``fix_alignment`` regenerates from ``_cal`` before the corrected
+      table takes effect, so the consensus catalog on disk may still be the
+      PRE-correction one — see ASTROMETRY_WCS_CORRECTION_FLOW.md);
+    * the consensus catalog is not older than the record by more than
+      ``REFERENCE_FILTER_STALENESS_SLACK_SEC`` (catches a record whose own
+      ``consensus_catalog`` write failed this pass and fell back to reading a
+      leftover file from an earlier, unrelated pass).
+
+    Returns ``(settled, reason, record)``.  ``reason`` is human-readable and
+    always set when ``settled`` is False.  ``record`` is the parsed m2 JSON
+    when one was found (even an unsettled one), else None, so a caller that
+    raises can quote what it read.
+    """
+    path = _m2_record_path(record_dir, ref_filter, obs_token) if record_dir else None
+    if not path or not os.path.exists(path):
+        return False, (f"no m2 record for reference filter {ref_filter!r} "
+                       f"(obs_token={obs_token!r}) under {record_dir!r} -- its "
+                       f"own tie to VIRAC2 must run and settle before another "
+                       f"filter can tie through its consensus catalog"), None
+    with open(path) as fh:
+        record = json.load(fh)
+    consensus_fits = record.get("consensus_catalog")
+    if not consensus_fits or not os.path.exists(consensus_fits):
+        return False, (f"{ref_filter}'s latest m2 record ({path}) names no "
+                       f"usable consensus catalog ({consensus_fits!r})"), record
+    if not record.get("passed", False):
+        override = record.get("gate_override")
+        if not (isinstance(override, dict) and override.get("used")):
+            return False, (f"{ref_filter}'s latest m2 record ({path}) did not "
+                           f"pass and carries no used gate override -- its "
+                           f"frame is not settled"), record
+    applied_ref_correction = any(
+        REFERENCE_TIE_SOURCE_SUFFIX in str(c.get("source", ""))
+        for c in record.get("corrections", []) or [])
+    if applied_ref_correction:
+        return False, (f"{ref_filter}'s latest m2 record ({path}) APPLIED a "
+                       f"consensus->reference bulk correction in this pass -- "
+                       f"its frame just moved.  Regenerate {ref_filter} from "
+                       f"_cal with the corrected offsets table and re-run its "
+                       f"m2 checkpoint before another filter ties through its "
+                       f"consensus"), record
+    try:
+        record_ts = datetime.fromisoformat(
+            str(record.get("date", "")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        record_ts = None
+    if record_ts is not None:
+        try:
+            consensus_mtime = os.path.getmtime(consensus_fits)
+        except OSError:
+            consensus_mtime = None
+        if (consensus_mtime is not None
+                and consensus_mtime < record_ts - REFERENCE_FILTER_STALENESS_SLACK_SEC):
+            return False, (f"{ref_filter}'s consensus catalog {consensus_fits} "
+                           f"is more than {REFERENCE_FILTER_STALENESS_SLACK_SEC:.0f} s "
+                           f"OLDER than its own m2 record {path} -- it was not "
+                           f"written by this pass and may not reflect the "
+                           f"recorded verdict"), record
+    return True, "", record
+
+
+def _is_miri_filtername(filtername):
+    """True for a MIRI imaging filter name (F560W..F2550W).  NIRCam's
+    longest is F480M, so a pivot of >= 5 um in the name is MIRI."""
+    m = re.match(r"^F(\d{3,4})", str(filtername).upper())
+    return bool(m) and int(m.group(1)) >= 500
+
+
+def resolve_tie_reference(refcat, basepath, proposal_id, field, filtername,
+                          obs_token="", record_dir=None):
+    """The reference dict ``run_visit_checkpoint`` should tie ``filtername``
+    to, for (``proposal_id``, ``field``).
+
+    Byte-for-byte ``refcat`` (the field's VIRAC2/Gaia reference, or None)
+    UNLESS ``alignment_config.resolve(proposal_id, field)`` sets
+    ``tie_through_reference_filter`` AND ``filtername`` is not that field's
+    ``reference_filter`` — in which case the DENSE reference becomes the
+    reference filter's own JWST consensus catalog for this same
+    ``obs_token`` (dense, already VIRAC2-framed).  The reference filter
+    itself is never redirected: it always ties straight to VIRAC2, and its
+    consensus catalog is what every OTHER filter of an opted-in field ties to
+    (see CLAUDE.md's GC rule: Gaia is the FRAME, VIRAC2 is the reference
+    CATALOG, never a blocker).
+
+    Motivating failure (alignment_config.py, 10678 notes): each band used to
+    tie to VIRAC2 independently, so a tile where one band's tie was refused
+    left the bands apart on the same sky (o063: F212N refused, F480M applied
+    its own VIRAC2 bulk, 226 mas apart).  Tying F480M through F212N's
+    consensus instead means the two bands agree whether or not F212N's own
+    VIRAC2 tie was itself applied.
+
+    Never falls back to ``refcat`` silently when a field is opted in but the
+    reference filter's tie has not settled: raises
+    ``ReferenceFilterNotSettledError`` (see ``reference_filter_tie_settled``).
+
+    Returns ``refcat`` UNCHANGED (same object) when there is nothing to
+    substitute (field not opted in, ``refcat`` is None, or ``filtername`` IS
+    the reference filter).  Otherwise returns a NEW dict carrying the
+    reference filter's consensus in ``all``/``dense``, the original
+    ``refcat``'s Gaia-sparse subset in ``sparse``, and provenance in
+    ``reference_kind='jwst_consensus'``, ``reference_filter``,
+    ``reference_path``, ``reference_record_date`` and
+    ``reference_record_passed`` — read back by ``run_visit_checkpoint`` to
+    stamp this filter's ``reference_tie`` record and its offsets-table
+    ``prov_source``.
+    """
+    from jwst_gc_pipeline.reduction import alignment_config as _alignment_config
+    if refcat is None:
+        return None
+    cfg = _alignment_config.resolve(proposal_id, field)
+    if cfg is None or not cfg.tie_through_reference_filter or not cfg.reference_filter:
+        return refcat
+    if _is_miri_filtername(filtername):
+        # MIRI keeps its own path (FieldAlignment.inherit_bulk for 10678's
+        # F770W parallels, #956): its frames are not in the NIRCam reference
+        # filter's visit consensus, and the opt-in covers the NIRCam bands
+        # only (o063: F212N vs F480M).
+        return refcat
+    ref_filter = cfg.reference_filter
+    if str(filtername).upper() == str(ref_filter).upper():
+        return refcat
+    record_dir = record_dir or (os.path.join(basepath, "astrometry_checkpoints")
+                                if basepath else None)
+    settled, reason, ref_record = reference_filter_tie_settled(
+        record_dir, ref_filter, obs_token)
+    if not settled:
+        raise ReferenceFilterNotSettledError(
+            f"{field or proposal_id} (obs_token={obs_token!r}) ties "
+            f"{filtername} through {ref_filter}'s JWST consensus catalog "
+            f"(alignment_config.tie_through_reference_filter=True), but "
+            f"{reason}.")
+    (cons_coords, _cons_mag, cons_path,
+     _n_visits) = _m2_consensus_catalog(record_dir, basepath, ref_filter, obs_token)
+    if cons_coords is None or not len(cons_coords):
+        raise ReferenceFilterNotSettledError(
+            f"{field or proposal_id}: {ref_filter}'s m2 record names consensus "
+            f"catalog {cons_path!r}, but it could not be read back as a "
+            f"non-empty star list, so {filtername} cannot tie through it.")
+    return dict(
+        all=cons_coords,
+        # Gross cross-check ONLY (CLAUDE.md GC rule: Gaia is the frame, never
+        # the catalog, and never blocks a coherent tie).  Keep the ORIGINAL
+        # VIRAC2 refcat's Gaia-sparse subset so check C still runs its
+        # ~100 mas gross gate; substituting the consensus catalog here too
+        # would compare the tie against itself.
+        sparse=refcat.get("sparse"),
+        # No flux-matched residual (check E) against a heterogeneous JWST
+        # instrumental-mag scale: `mag=None` disables it outright.
+        # Belt-and-suspenders — check E is already gated on the FILTER's own
+        # wavelength overlapping VIRAC2's Ks band, which F480M/F770W never
+        # do regardless of which reference is used.
+        mag=None,
+        # Dense: the reference filter's consensus is thousands of stars, so
+        # the same-star region-map refinement (check A') engages exactly as
+        # it would against VIRAC2.
+        dense=True,
+        sigma_pred_mas=None,
+        table=None,
+        reference_kind=REFERENCE_KIND_JWST_CONSENSUS,
+        reference_filter=ref_filter,
+        reference_path=cons_path,
+        reference_record_date=(ref_record or {}).get("date"),
+        reference_record_passed=(ref_record or {}).get("passed"),
+    )
 
 
 def _m2_consensus_catalog(record_dir, basepath, filtername, obs_token=""):
@@ -4307,6 +4535,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                        raoffset_meta=exp["raoffset_meta"],
                        deoffset_meta=exp["deoffset_meta"],
                        component=exp.get("component", 0),
+                       parity_half=exp.get("parity_half"),
                        internal_tie=exp.get("internal_tie", True),
                        unverified=exp.get("unverified", False),
                        alias_suspect=bool(tuple(exp["key"]) in antisym_keys),
@@ -4518,6 +4747,26 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 ref_mag=tie_refcat.get("mag"), dense=tie_refcat.get("dense", True),
                 **_sigma_cut_kwargs(tie_refcat),
                 context=vctx)
+            # Provenance: which CATALOG this tie measured against.  Every
+            # field's default is VIRAC2 itself (`tie_refcat` carries no
+            # `reference_kind` key, so this reads the default); a field opted
+            # into `alignment_config.tie_through_reference_filter`
+            # (`resolve_tie_reference`) instead hands `run_visit_checkpoint`
+            # a `refcat` whose "all"/"sparse"/"dense" are already the
+            # reference filter's consensus / substituted, carrying these
+            # extra keys alongside them -- so it survives `tie_refcat`
+            # unchanged even through `_exclude_blended_references` (which
+            # copies the dict).
+            ref_tie = dict(ref_tie)
+            ref_tie["reference_kind"] = tie_refcat.get(
+                "reference_kind", REFERENCE_KIND_VIRAC2)
+            if ref_tie["reference_kind"] == REFERENCE_KIND_JWST_CONSENSUS:
+                ref_tie["reference_filter"] = tie_refcat.get("reference_filter")
+                ref_tie["reference_path"] = tie_refcat.get("reference_path")
+                ref_tie["reference_record_date"] = tie_refcat.get(
+                    "reference_record_date")
+                ref_tie["reference_record_passed"] = tie_refcat.get(
+                    "reference_record_passed")
             off = ref_tie["off_mas"]
             # ACTIONABLE = the current measurement is large enough to be worth
             # applying, or to report as measured-and-refused.  Both of those
@@ -4558,6 +4807,19 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # path untouched).  The written Vgroup is still the ""
                         # sentinel: `is_bulk` forces it below, because a bulk
                         # row is visit-wide by construction.
+                        # `_via_suffix` stays a plain local (never a module
+                        # global), so `test_prov_text_column_width`'s AST walk
+                        # of `source=` f-strings resolves only the
+                        # `REFERENCE_TIE_SOURCE_SUFFIX` piece below and ignores
+                        # this runtime addition -- exactly like `stage` always
+                        # has.  Keeping `source=` itself an inline f-string
+                        # (rather than a precomputed variable) is what that
+                        # walk requires: it only recognises `ast.JoinedStr`
+                        # values at the call site.
+                        _via_suffix = (
+                            f" (via {ref_tie['reference_filter']} consensus)"
+                            if ref_tie.get("reference_kind") == REFERENCE_KIND_JWST_CONSENSUS
+                            else "")
                         for _vg in _bulk_vgroups(cons["exposures"]):
                             corrections.append(dict(
                                 visit=corr_visit, exposure=None, module=None,
@@ -4565,9 +4827,19 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 dra_onsky_mas=ref_tie["dra_mas"],
                                 ddec_onsky_mas=ref_tie["ddec_mas"],
                                 dec_deg=dec_mid,
-                                source=f"{stage} {REFERENCE_TIE_SOURCE_SUFFIX}"))
+                                # `in`, not `endswith`, is what
+                                # `cataloging._is_whole_consensus_shift` tests,
+                                # so the parenthetical keeps this row exempt
+                                # from the per-exposure correction floor
+                                # exactly like the unqualified form.
+                                source=f"{stage} {REFERENCE_TIE_SOURCE_SUFFIX}{_via_suffix}"))
+                        _ref_label = (
+                            f"{ref_tie['reference_filter']} consensus"
+                            if ref_tie.get("reference_kind") == REFERENCE_KIND_JWST_CONSENSUS
+                            else _REFERENCE_KIND_LABEL.get(
+                                ref_tie.get("reference_kind"), "VIRAC2"))
                         print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {vctx} "
-                              f"consensus is {off:.2f} mas off VIRAC2 "
+                              f"consensus is {off:.2f} mas off {_ref_label} "
                               f"(coherent dense tie, {_spatial_gate_detail(ref_tie)}, "
                               f"no gross sparse-Gaia split)", flush=True)
                     else:
@@ -4968,7 +5240,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                cell_min_stars=LOCAL_CELL_MIN_STARS,
                                field_cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
                                field_min_stars=CROSSFILTER_FIELD_MIN_STARS,
-                               obs_token=""):
+                               obs_token="", module=""):
     """Cross-filter astrometry agreement at the cross-band merge.
 
     The filter closest in wavelength to VIRAC2 Ks anchors the absolute frame
@@ -4986,6 +5258,11 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     unchanged by it, ``all_verified`` is not.
 
     ``catalogs_by_filter``: dict filtername -> Table (vetted merged catalog).
+
+    ``module`` (``nrca``/``nrcb``/``merged``) goes into the record name, because
+    the production m7 loop calls this once per module and a module-less name
+    made each call replace the previous module's ``_latest`` record (issue
+    #1254: a cloudef nrcb FAIL was overwritten by the merged PASS).
 
     Raises ``CrossFilterAstrometryError`` on any failure (override only via
     ``ALLOW_CROSSFILTER_ASTROM_FAIL=1``).
@@ -5221,14 +5498,15 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     if record_dir:
         # Tokened for the same reason the m2 records are (issue #281): brick's
         # 1182 and 2221 m7 runs write into one `astrometry_checkpoints/`, and
-        # the untokened name meant 2221's verdict replaced 1182's.  This record
-        # is write-only -- nothing reads it back, and the verdict itself is
-        # raised in-memory as CrossFilterAstrometryError -- so what the
-        # collision costs is the audit trail, not a wrong correction.  Its only
-        # other identity field is `context`, which names the target, not the
-        # observation.
-        _write_record(record_dir, f"checkpoint_m7_crossfilter{obs_token}",
-                      record)
+        # the untokened name meant 2221's verdict replaced 1182's.  Module-
+        # keyed for the same reason (issue #1254): nrca, nrcb and merged each
+        # run this check, and one shared name let the last module's `_latest`
+        # hide an earlier module's failure.  The release gate
+        # (`scripts/release/check_astrometry_checkpoints.py`) grades every
+        # module's latest record.
+        _mod = f"_{module}" if module else ""
+        _write_record(record_dir,
+                      f"checkpoint_m7_crossfilter{_mod}{obs_token}", record)
     for w in unverified:
         print(f"ASTROM CHECKPOINT [m7-crossfilter] COULD NOT VERIFY: {w}",
               flush=True)

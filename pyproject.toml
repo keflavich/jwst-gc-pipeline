@@ -20,7 +20,11 @@ dependencies = [
   "scipy",
   "astropy",
   "matplotlib",
-  "photutils>=2.0.dev0",
+  # <3.1: photutils 3.1.0 (2026-10-13) removed photutils.segmentation.catalog.
+  # DEFAULT_COLUMNS, which jwst 3.0.0 still imports (jwst.tweakreg.tweakreg_catalog,
+  # reached from jwst.pipeline.calwebb_image3), so `import jwst.pipeline` fails on a
+  # fresh install.  Lift once a jwst release supports photutils 3.1.
+  "photutils>=2.0.dev0,<3.1",
   "astroquery",
   "tqdm",
   "regions",
@@ -52,6 +56,9 @@ test = [
     # APIs -- `pyflakes.checker.Checker` and `msg.message % msg.message_args`
     # -- so an unrelated upgrade could turn a green gate into an ImportError.
     "pyflakes>=3,<4",
+    # compiled PCAT engine (photometry/transdimensional/fast_sampler.py); its
+    # tests skip without it
+    "numba",
 ]
 docs = [
     "sphinx",
@@ -74,9 +81,13 @@ include-package-data = true
 [tool.setuptools.packages.find]
 
 [tool.setuptools.package-data]
-"jwst_gc_pipeline.reduction" = ["*.ecsv", "data/*.ecsv"]
+"jwst_gc_pipeline.reduction" = ["*.ecsv", "*.csv", "data/*.ecsv"]
 # The field registry; jwst_gc_pipeline.fields reads it at import.
 "jwst_gc_pipeline" = ["fields.yaml", "config.yaml"]
+# SVO FPS Facility=JWST filter list, the fallback when SVO is unreachable.
+"jwst_gc_pipeline.data" = ["svo_jwst_filter_list.xml"]
+# Faint-star reference fields: their spec/thresholds and frozen injection lists.
+"jwst_gc_pipeline.photometry.reference_fields" = ["fields.yaml", "injections/*.ecsv"]
 
 [tool.setuptools_scm]
 write_to = "jwst_gc_pipeline/version.py"

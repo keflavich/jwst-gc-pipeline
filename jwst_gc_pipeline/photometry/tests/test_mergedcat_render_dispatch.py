@@ -6,8 +6,10 @@ path.  The per-frame render body is a pure function of (frame, shared read-only
 state), so equivalence of the whole build reduces to equivalence of the DISPATCH
 that maps it over frames and collects results -- that dispatch is _run_frame_renders,
 exercised here.  We assert the collected results are identical, in identical
-order, for n_threads=1 vs >1, and that exceptions propagate (no silent drop).
+order, for n_threads=1 vs >1 and for n_procs=1 vs >1 (forked processes,
+frame_pool, #1230), and that exceptions propagate (no silent drop).
 """
+import os
 import threading
 
 import pytest
@@ -80,3 +82,42 @@ def test_threaded_actually_uses_multiple_threads():
 
     _run_frame_renders(FRAMES, _record, 4)
     assert len(seen) >= 2
+
+
+@pytest.mark.filterwarnings(
+    'ignore:This process .* is multi-threaded:DeprecationWarning')
+def test_dispatch_order_identical_serial_vs_processes():
+    serial = _run_frame_renders(FRAMES, _render, 1)
+    for n_procs in (2, 5, 64):
+        assert _run_frame_renders(FRAMES, _render, 1, n_procs) == serial
+
+
+@pytest.mark.filterwarnings(
+    'ignore:This process .* is multi-threaded:DeprecationWarning')
+def test_processes_take_precedence_over_threads():
+    def _where(orig):
+        return os.getpid(), threading.get_ident()
+
+    out = _run_frame_renders(FRAMES, _where, 8, n_procs=3)
+    assert len(out) == len(FRAMES)
+    assert os.getpid() not in {pid for pid, _ in out}
+
+
+def test_one_process_falls_back_to_the_thread_count():
+    def _where(orig):
+        return os.getpid()
+
+    assert set(_run_frame_renders(FRAMES, _where, 4, n_procs=1)) == {os.getpid()}
+    assert set(_run_frame_renders(FRAMES[:1], _where, 1, n_procs=8)) == {os.getpid()}
+
+
+@pytest.mark.filterwarnings(
+    'ignore:This process .* is multi-threaded:DeprecationWarning')
+def test_exception_in_a_process_propagates_no_silent_drop():
+    def _boom(orig):
+        if orig == FRAMES[5]:
+            raise FileNotFoundError(f'missing raw products for {orig}')
+        return _render(orig)
+
+    with pytest.raises(FileNotFoundError, match=FRAMES[5]):
+        _run_frame_renders(FRAMES, _boom, 1, n_procs=4)

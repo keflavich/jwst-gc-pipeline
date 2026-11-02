@@ -146,6 +146,9 @@ def main(argv=None):
         print(f'busy fields (protected): {", ".join(sorted(guard.busy_fields))}')
     if guard.release_targets:
         print(f'release symlink targets protected: {len(guard.release_targets)}')
+    if guard.manifest_srcs:
+        print(f'release manifest staging sources protected (for '
+              f'stale_badastrom_mosaic): {len(guard.manifest_srcs)}')
 
     enabled = set(args.rule) if args.rule else None
     if enabled:

@@ -174,9 +174,13 @@ def dedup_merged_catalog(in_path, out_path, *,
         satstar row and the partner-band detection stay SPLIT -- the m8 fill
         then "fills" the satstar row's other bands on the star-subtracted
         residual, planting ~5-mag-wrong colors on the CMD bright end.  The
-        complementary-coverage / dmag-collision binary protection below
-        applies to these pairs with the looser ``sat_dmag_collision``.  Set
-        to 0 (or <= link_radius) to disable.
+        wide link between rows that share two or more bands is blocked by
+        any shared band where both rows, or neither, are saturated, whatever
+        the dmag: two multi-band detections 0.1-0.5" apart are two stars
+        (#1038).  A shared band where exactly one row is saturated (a
+        satstar fit and a daophot detection of the same star), and a pair
+        sharing a single band (a one-band fragment of the star), still use
+        ``sat_dmag_collision``.  Set to 0 (or <= link_radius) to disable.
     dmag_collision : float
         A band that detects both rows with |dmag| >= this is treated as a
         genuine resolved pair and blocks the merge (binary protection).
@@ -184,7 +188,8 @@ def dedup_merged_catalog(in_path, out_path, *,
         Collision threshold used instead of ``dmag_collision`` when either
         row is saturated: saturated-star magnitudes carry a few-tenths-mag
         scatter, so the tight threshold mistakes the SAME star's two rows
-        for a resolved pair.
+        for a resolved pair.  Beyond ``link_radius`` see ``sat_link_radius``
+        for the bands it applies to.
     max_component : int
         Connected components larger than this are left intact.
     """
@@ -200,6 +205,11 @@ def dedup_merged_catalog(in_path, out_path, *,
     for c in t.colnames:
         if c.startswith('replaced_saturated_') or c.startswith('is_saturated_'):
             is_sat_any |= _arr(t, c, fill=False, dtype=bool)
+    is_sat = {b: np.zeros(n0, bool) for b in bands}
+    for b in bands:
+        for c in (f'replaced_saturated_{b}', f'is_saturated_{b}'):
+            if c in t.colnames:
+                is_sat[b] |= _arr(t, c, fill=False, dtype=bool)
 
     sc = SkyCoord(t['skycoord_ref'])
     wide = max(link_radius, sat_link_radius)
@@ -211,23 +221,39 @@ def dedup_merged_catalog(in_path, out_path, *,
     pairsat = is_sat_any[i1] | is_sat_any[i2]
     keep = (sep <= link_radius) | (pairsat & (sep <= sat_link_radius))
     n_satpairs = int((keep & (sep > link_radius)).sum())
-    i1, i2 = i1[keep], i2[keep]
+    i1, i2, sep = i1[keep], i2[keep], sep[keep]
     if verbose:
         print(f"[dedup] {n0} rows; {len(i1)} candidate pairs within "
               f"{link_radius} (+{n_satpairs} satstar pairs out to "
               f"{sat_link_radius})", flush=True)
 
     # --- pairwise link decision: complementary coverage or near-identical ---
-    # saturated-involved pairs use the looser collision threshold
+    # saturated-involved pairs use the looser collision threshold.  A pair
+    # linked only by the wide satstar radius and detected in two or more of
+    # the same bands is two stars when, in a shared band, both rows or
+    # neither are saturated; on wd2 the looser threshold merged such
+    # neighbours 0.2-0.46" apart that dolphot resolves, dropping one star's
+    # band measurements (#1038).  Two cases remain duplicates of one star
+    # and keep the looser threshold: a band where exactly one row is
+    # saturated (satstar fit + daophot detection; cloudc: 0.13" apart along
+    # one direction), and a pair sharing one band (a one-band satstar
+    # fragment; on wd2 dolphot has a star at only one of the two rows for
+    # 157 of 165 such pairs).
     pair_thresh = np.where(is_sat_any[i1] | is_sat_any[i2],
                            sat_dmag_collision, dmag_collision)
+    n_shared = np.zeros(len(i1), int)
+    for b in bands:
+        n_shared += det[b][i1] & det[b][i2]
+    multi_wide = (sep > link_radius) & (n_shared >= 2)
     link = np.ones(len(i1), bool)
     for b in bands:
         both = det[b][i1] & det[b][i2]
         if both.any():
             dmag = np.abs(mags[b][i1] - mags[b][i2])
+            one_sat = is_sat[b][i1] ^ is_sat[b][i2]
+            pair_thresh_b = np.where(multi_wide & ~one_sat, 0.0, pair_thresh)
             # a real collision (resolved, discrepant) blocks the link
-            block = both & ~(dmag < pair_thresh)
+            block = both & ~(dmag < pair_thresh_b)
             link &= ~block
     li1, li2 = i1[link], i2[link]
     if verbose:

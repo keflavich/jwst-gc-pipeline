@@ -275,7 +275,8 @@ def _make_model_image(phot_obj, shape, *, psf_shape=None, include_local_bkg=Fals
 
 
 def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
-                         flux_agreement_frac=0.10, is_saturated=None):
+                         flux_agreement_frac=0.10, is_saturated=None,
+                         return_owner=False):
     """
     Greedy spatial deduplication of sources closer than ``min_sep_pix``.
 
@@ -311,6 +312,9 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
         even with NaN flux and win the cluster tiebreak regardless of flux
         (they seed clusters first), so a saturated star always survives over
         nearby NaN-flux or fainter duplicates.  Default (None) = all False.
+    return_owner : bool, optional
+        Also return ``owner`` (below).  Default False keeps the two-value
+        return.
 
     Returns
     -------
@@ -320,11 +324,31 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
         Number of clusters where fluxes disagreed beyond ``flux_agreement_frac``
         (i.e. cases where duplicate removal may have dropped a distinct
         neighbour rather than a pure duplicate).
+    owner : ndarray of int, shape (N,)
+        Only with ``return_owner=True``.  For each entry, the index of the
+        retained entry that absorbed it; a retained entry owns itself.  A
+        cluster winner that a later cluster absorbs passes its members on, so
+        ``keep[owner]`` is True everywhere.
     """
     n = xy.shape[0]
     keep = np.ones(n, dtype=bool)
+    owner = np.arange(n, dtype=np.int64)
+
+    def _result(n_disagree):
+        if not return_owner:
+            return keep, n_disagree
+        # Follow each chain to the entry that survived.  An entry is removed
+        # at most once and always by an entry that was still kept then, so
+        # the chains are short and acyclic.
+        for k in np.where(~keep)[0]:
+            r = owner[k]
+            while not keep[r]:
+                r = owner[r]
+            owner[k] = r
+        return keep, n_disagree, owner
+
     if n < 2:
-        return keep, 0
+        return _result(0)
 
     # Build KD-tree over all entries with finite positions.  Eligibility
     # for SEEDING a cluster (i.e. potentially claiming nearby duplicates)
@@ -340,7 +364,7 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
 
     finite_idx = np.where(finite_xy)[0]
     if finite_idx.size < 2:
-        return keep, 0
+        return _result(0)
     xy_f = xy[finite_idx]
     kd_full = cKDTree(xy_f)
     # Map global index -> position in finite_idx (or -1 if not finite_xy)
@@ -350,7 +374,7 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
     # Only seed clusters from entries that are finite-flux OR is_saturated.
     eligible    = finite_xy & (finite_flux | is_sat_arr)
     if np.sum(eligible) < 1:
-        return keep, 0
+        return _result(0)
     elig_idx = np.where(eligible)[0]
     xy_e     = xy[elig_idx]
     flux_e   = flux[elig_idx]
@@ -422,5 +446,6 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
         for k in cluster:
             if k != winner:
                 keep[k] = False
+                owner[k] = winner
 
-    return keep, n_disagree
+    return _result(n_disagree)

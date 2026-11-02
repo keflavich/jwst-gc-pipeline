@@ -270,3 +270,75 @@ def test_frame_wcs_passes_through_an_existing_wcs(frame):
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+
+def _write_datamodel_with_gwcs(path):
+    """A real stdatamodels product with a GWCS, as the pipeline writes one."""
+    dm = pytest.importorskip('stdatamodels.jwst.datamodels')
+    g = _invertible_distorted_gwcs()
+    model = dm.ImageModel(np.zeros(SHAPE, dtype='f4'))
+    model.meta.wcs = g
+    model.save(str(path))
+    model.close()
+    return g
+
+
+def test_reads_the_gwcs_of_a_datamodel_file(tmp_path):
+    """End to end through the datamodels reader -- the path every caller takes.
+
+    Every other test here builds a FrameWCS by hand, so a reader that returned
+    None for real files (stdatamodels 6 rejecting ``memmap=False``) passed the
+    whole suite while production silently used SIP.
+    """
+    path = tmp_path / 'with_gwcs_cal.fits'
+    g = _write_datamodel_with_gwcs(path)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', MissingGwcsWarning)
+        ww = frame_wcs(str(path))
+    assert isinstance(ww, FrameWCS)
+    x, y = _xy()
+    np.testing.assert_allclose(ww.pixel_to_world_values(x, y), g(x, y),
+                               rtol=0, atol=1e-12)
+    with fits.open(path) as hdul:
+        assert isinstance(frame_wcs(hdul), FrameWCS)
+
+
+def test_the_datamodels_reader_is_called_without_keywords(tmp_path, monkeypatch):
+    """stdatamodels >= 6 raises TypeError for any keyword with a filename."""
+    import stdatamodels.jwst.datamodels as dm
+    path = tmp_path / 'kwargs_cal.fits'
+    _write_datamodel_with_gwcs(path)
+    real_open = dm.open
+
+    def strict_open(init, **kwargs):
+        if kwargs:
+            raise TypeError('Unrecognized keyword arguments passed to '
+                            'DataModel.__init__.')
+        return real_open(init)
+    monkeypatch.setattr(dm, 'open', strict_open)
+    assert isinstance(frame_wcs(str(path), require_gwcs=True), FrameWCS)
+
+
+def test_an_unreadable_gwcs_raises_instead_of_falling_back_to_sip(tmp_path,
+                                                                  monkeypatch):
+    from jwst_gc_pipeline.frame_wcs import GwcsReadError
+    import stdatamodels.jwst.datamodels as dm
+    path = tmp_path / 'unreadable_cal.fits'
+    _write_datamodel_with_gwcs(path)
+
+    def broken_open(init, **kwargs):
+        raise TypeError('simulated reader failure')
+    monkeypatch.setattr(dm, 'open', broken_open)
+    # not require_gwcs: the file HAS a GWCS, so SIP is never acceptable here
+    with pytest.raises(GwcsReadError, match='simulated reader failure'):
+        frame_wcs(str(path))
+
+
+def test_an_in_memory_hdulist_with_a_gwcs_raises_instead_of_using_sip(tmp_path):
+    from jwst_gc_pipeline.frame_wcs import GwcsReadError
+    path = tmp_path / 'inmem_cal.fits'
+    _write_datamodel_with_gwcs(path)
+    with fits.open(path) as hdul:
+        copy = fits.HDUList([h.copy() for h in hdul])      # no filename
+    with pytest.raises(GwcsReadError, match='no filename'):
+        frame_wcs(copy)

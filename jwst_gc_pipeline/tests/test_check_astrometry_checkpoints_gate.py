@@ -219,10 +219,12 @@ def test_precedence_is_per_FILTER_not_per_field(gate, tmp_path):
 # a verdict on products that no longer exist is not a verdict on these ones
 # ---------------------------------------------------------------------------
 
-def _dated(tmp_path, name, passed, date, failures=()):
+def _dated(tmp_path, name, passed, date, failures=(), context=None):
     p = _write(tmp_path, name, passed, failures=failures)
     rec = json.loads(p.read_text())
     rec['date'] = date
+    if context is not None:
+        rec['context'] = context
     p.write_text(json.dumps(rec))
     return p
 
@@ -295,14 +297,66 @@ def test_staleness_is_judged_per_FILTER_not_per_field(gate, tmp_path):
     assert gate.main(['--field', 'fld']) == 1
 
 
-def test_the_crossfilter_record_is_judged_against_the_fields_newest_m2(
+def test_the_crossfilter_record_is_judged_against_its_observations_newest_m2(
         gate, tmp_path):
-    """It has no filter of its own, so it has no per-filter baseline; the
-    field's newest m2 is the only thing that can supersede it."""
+    """It has no filter of its own, so it has no per-filter baseline; its
+    observation's newest m2 (any filter) is what can supersede it (#1237)."""
     _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
            '2026-08-16T00:00:00Z')
     _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
            '2026-08-02T00:00:00Z', failures=['F212N vs F405N: 21.4 mas'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+# --------------------- m7 cross-filter staleness is per observation (#1237)
+
+def test_another_observations_m2_does_not_supersede_a_crossfilter_failure(
+        gate, tmp_path, capsys):
+    """o004 re-ran m2 after o001's m7 cross-filter check failed.  The o001
+    record is about o001's products and must still be graded."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-01T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['F212N vs F405N: 21.4 mas'])
+    _dated(tmp_path, 'checkpoint_m2_F212N_o004_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_the_same_observations_newer_m2_still_supersedes_it(gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['stale'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_a_crossfilter_record_is_superseded_by_an_m2_of_any_filter_of_its_obs(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F410M_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['stale'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_a_joint_token_crossfilter_record_uses_either_observations_m2(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-08-01T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m2_F212N_o998_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002-998_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['stale via o998'])
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_an_obsless_crossfilter_record_falls_back_to_the_fields_newest_m2(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o004_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['no observation'])
     assert gate.main(['--field', 'fld']) == 3
 
 
@@ -765,11 +819,13 @@ def test_a_correcting_record_alone_is_not_certified_as_a_pass(gate, tmp_path):
 
 def _region_map(status, n_measured=26, n_flagged=1, n_uncovered=0,
                 sigma=1.77, sigma_tol=2.0, max_frac=0.10,
-                worst_sig=22.98, worst_sig_cap=50.0):
+                worst_sig=22.98, worst_sig_cap=50.0,
+                n_low_coverage=0, grid_aligned=True):
     return dict(status=status, n_measured=n_measured, n_flagged=n_flagged,
                n_uncovered=n_uncovered, same_star_sigma_mas=sigma,
                sigma_tol_mas=sigma_tol, max_flagged_fraction=max_frac,
-               worst_sig_off_mas=worst_sig, worst_sig_off_cap_mas=worst_sig_cap)
+               worst_sig_off_mas=worst_sig, worst_sig_off_cap_mas=worst_sig_cap,
+               n_low_coverage=n_low_coverage, grid_aligned=grid_aligned)
 
 
 def _visit_with_region(visit, region_map):
@@ -864,6 +920,42 @@ def test_clean_and_not_applicable_region_maps_are_silent(gate, tmp_path,
     assert 'REGION MAP' not in out, out
 
 
+def test_a_clean_region_map_with_a_low_coverage_cell_does_not_refuse(
+        gate, tmp_path, capsys):
+    """PR #989 review, BLOCKING: a `clean` status with ``n_low_coverage`` > 0
+    is a grid-geometry NOTE, not a demotion.  Before this fix it fell into
+    `region_unverified` and the gate printed REFUSING TO STAGE naming a
+    demotion that never happened -- a clean tile with a thin chamfered corner
+    would block staging forever."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o993_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('clean', n_low_coverage=1))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o993_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'REGION MAP GEOMETRY NOTE' in out, out
+    assert 'REFUSING TO STAGE' not in out, out
+
+
+def test_a_clean_region_map_with_an_unaligned_grid_does_not_refuse(
+        gate, tmp_path, capsys):
+    """Same BLOCKING fix, the other trigger: a `clean` status whose grid could
+    not be footprint-aligned (``grid_aligned=False``) is also informational
+    only and must not refuse the field."""
+    _m2_with_visits(tmp_path, 'checkpoint_m2_F212N_o992_latest.json',
+                    '2026-09-20T00:00:00Z',
+                    [_visit_with_region(
+                        1, _region_map('clean', grid_aligned=False))])
+    _dated(tmp_path, 'checkpoint_m3_F212N_o992_latest.json', True,
+          '2026-09-21T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+    out = capsys.readouterr().out
+    assert 'REGION MAP GEOMETRY NOTE' in out, out
+    assert 'REFUSING TO STAGE' not in out, out
+
+
 def test_an_unrecognized_region_map_status_is_treated_as_unverified(
         gate, tmp_path):
     """A status string this gate does not know is not silently trusted -- a
@@ -944,3 +1036,115 @@ def test_a_stale_recorded_threshold_is_called_out(gate, tmp_path, capsys):
     assert gate.main(['--field', 'fld']) == 0
     out = capsys.readouterr().out
     assert 'STALE THRESHOLDS' in out, out
+
+
+# ---------------------------------------------- per-module m7 cross-filter
+# (issue #1254)
+
+def test_an_nrcb_crossfilter_FAIL_is_not_hidden_by_a_later_merged_PASS(
+        gate, tmp_path, capsys):
+    """cloudef o002: nrcb F162M failed, then merged passed.  Both runs wrote
+    the same module-less name, so `_latest` held only the merged PASS."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_nrcb_o002_latest.json', False,
+           '2026-10-29T02:50:26Z', failures=['F162M vs F212N: 9.1 mas'])
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_merged_o002_latest.json', True,
+           '2026-10-29T05:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+    assert 'm7_crossfilter/nrcb/o002' in capsys.readouterr().out
+
+
+def test_all_module_crossfilter_records_passing_is_clean(gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    for mod in ('nrca', 'nrcb', 'merged'):
+        _dated(tmp_path, f'checkpoint_m7_crossfilter_{mod}_o002_latest.json',
+               True, '2026-10-29T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_an_old_modulless_crossfilter_record_still_grades(gate, tmp_path):
+    """Records written before #1254 have no module and must stay readable."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002_latest.json', False,
+           '2026-10-29T00:00:00Z', failures=['legacy failure'],
+           context='cloudef nrcb [m7]')
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_modulless_record_is_superseded_by_newer_module_records(
+        gate, tmp_path):
+    """The module records come from a run that re-measured every module, so
+    the legacy file (whichever module ran last) is superseded by them."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002_latest.json', False,
+           '2026-10-29T00:00:00Z', failures=['legacy failure'],
+           context='cloudef nrcb [m7]')
+    for mod in ('nrca', 'nrcb', 'merged'):
+        _dated(tmp_path, f'checkpoint_m7_crossfilter_{mod}_o002_latest.json',
+               True, '2026-10-30T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_a_modulless_record_NEWER_than_the_module_records_still_grades(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_nrcb_o002_latest.json', True,
+           '2026-10-29T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002_latest.json', False,
+           '2026-10-30T00:00:00Z', failures=['later legacy failure'],
+           context='cloudef nrcb [m7]')
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_modulless_record_of_another_observation_is_not_superseded(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-10-29T00:00:00Z', failures=['o001 failure'])
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_nrcb_o002_latest.json', True,
+           '2026-10-30T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_legacy_nrca_FAIL_survives_a_newer_nrcb_only_module_record(
+        gate, tmp_path, capsys):
+    """A MODULES=nrcb run must not hide a legacy nrca failure it never re-measured."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002_latest.json', False,
+           '2026-10-29T00:00:00Z', failures=['nrca legacy'],
+           context='cloudef nrca [m7]')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_nrcb_o002_latest.json', True,
+           '2026-10-30T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1
+    assert 'm7_crossfilter/nrca(legacy)/o002' in capsys.readouterr().out
+
+
+def test_a_legacy_nrcb_FAIL_is_superseded_by_a_newer_nrcb_PASS(gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002_latest.json', False,
+           '2026-10-29T00:00:00Z', failures=['nrcb legacy'],
+           context='cloudef nrcb [m7]')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_nrcb_o002_latest.json', True,
+           '2026-10-30T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_a_legacy_record_with_unparseable_context_is_always_graded(
+        gate, tmp_path):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o002_latest.json', True,
+           '2026-10-28T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o002_latest.json', False,
+           '2026-10-29T00:00:00Z', failures=['unknown module'],
+           context='cli')
+    for mod in ('nrca', 'nrcb', 'merged'):
+        _dated(tmp_path, f'checkpoint_m7_crossfilter_{mod}_o002_latest.json',
+               True, '2026-10-30T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 1

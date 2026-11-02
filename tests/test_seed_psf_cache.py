@@ -142,7 +142,7 @@ def test_symlink_resolves_to_the_donor(tmp_path):
     assert (dst / F480M_A5).is_symlink()
     assert os.path.realpath(dst / F480M_A5) == str(src)
     # os.path.exists follows the link, which is what the reader's cache check
-    # calls before to_griddedpsfmodel.
+    # calls before load_stpsf_grid.
     assert os.path.exists(dst / F480M_A5)
 
 

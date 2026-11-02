@@ -81,7 +81,8 @@ from astropy.io import fits
 from astropy import wcs as astropy_wcs
 
 __all__ = ['FrameWCS', 'frame_wcs', 'gwcs_from_file', 'has_gwcs',
-           'wcs_provenance_cards', 'MissingGwcsWarning', 'SlicedFrameWCSWarning']
+           'wcs_provenance_cards', 'MissingGwcsWarning', 'SlicedFrameWCSWarning',
+           'GwcsReadError']
 
 #: Set to '0' to fall back to the FITS/SIP WCS everywhere (debugging only --
 #: it reinstates the 5-8 mas forward error and the NoConvergence failure mode).
@@ -164,8 +165,32 @@ def _bbox_center_and_extent(gw):
     return (x1 - x0), (y1 - y0)
 
 
+class GwcsReadError(RuntimeError):
+    """A product carries an ASDF extension, but its GWCS could not be read.
+
+    Raised instead of returning None: returning None would let :func:`frame_wcs`
+    fall back to the SIP approximation for a frame that HAS a GWCS, silently
+    (the 5-8 mas residual and the off-footprint garbage described above).
+    """
+
+
+def _has_asdf_extension(filename):
+    """True if ``filename`` is a FITS file with an ``ASDF`` extension."""
+    try:
+        with fits.open(filename) as hdul:
+            return any(h.name == 'ASDF' for h in hdul)
+    except OSError:
+        return False
+
+
 def gwcs_from_file(filename, use_cache=True):
-    """The GWCS of ``filename``, via ``stdatamodels.jwst.datamodels``, or None.
+    """The GWCS of ``filename``, via ``stdatamodels.jwst.datamodels``.
+
+    Returns None only when the product genuinely has no GWCS: it has no
+    ``ASDF`` extension, or its ``meta.wcs`` is unset (e.g. before
+    ``assign_wcs``).  A product that HAS an ASDF extension but cannot be read
+    raises :class:`GwcsReadError` -- it never degrades to None, because the
+    caller would then use the SIP approximation without knowing why.
 
     This deliberately uses the **upstream** datamodels reader rather than
     parsing the ASDF extension by hand.  ``meta.wcs`` is the documented,
@@ -182,11 +207,6 @@ def gwcs_from_file(filename, use_cache=True):
     place (``fix_alignment`` overwrites its input) invalidates its own entry.
     """
     try:
-        import stdatamodels.jwst.datamodels as _dm
-    except ImportError:                                  # pragma: no cover
-        return None
-
-    try:
         st = os.stat(filename)
         key = (os.path.abspath(filename), st.st_mtime_ns, st.st_size)
     except OSError:
@@ -194,16 +214,27 @@ def gwcs_from_file(filename, use_cache=True):
     if use_cache and key in _GWCS_CACHE:
         return _GWCS_CACHE[key]
 
+    if not _has_asdf_extension(filename):
+        return None
+
+    # jwst is a hard dependency; without its reader every frame would silently
+    # resolve to SIP, so a missing stdatamodels is an error, not a None.
+    import stdatamodels.jwst.datamodels as _dm
+
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            # memmap=False so nothing in the returned transform can depend on a
-            # mapping of a file we are about to close.
-            with _dm.open(filename, memmap=False) as model:
+            # No keyword arguments: stdatamodels >= 6 rejects any keyword for
+            # a filename init (TypeError "Unrecognized keyword arguments"),
+            # and every version already reads with memmap=False by default,
+            # so nothing in the returned transform maps the file we close.
+            with _dm.open(filename) as model:
                 gw = getattr(model.meta, 'wcs', None)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        # not a JWST datamodel product, or it carries no WCS
-        return None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise GwcsReadError(
+            f"{filename} has an ASDF extension but its GWCS could not be "
+            f"read ({type(exc).__name__}: {exc}). Refusing to fall back to "
+            f"the FITS/SIP approximation.") from exc
 
     if use_cache and gw is not None:
         _GWCS_CACHE[key] = gw
@@ -388,7 +419,10 @@ def frame_wcs(source, ext='SCI', *, require_gwcs=False, warn_missing=True):
     (returned unchanged, so call sites can accept either).
 
     Returns a :class:`FrameWCS` when a GWCS is available, otherwise a plain
-    ``astropy.wcs.WCS`` read with ``relax=True``.  Set ``require_gwcs=True`` to
+    ``astropy.wcs.WCS`` read with ``relax=True`` -- but only for a product that
+    has NO GWCS (no ``ASDF`` extension, or ``meta.wcs`` unset), with a
+    :class:`MissingGwcsWarning`.  A product whose GWCS exists but cannot be
+    read raises :class:`GwcsReadError`; it is never silently replaced by SIP.  Set ``require_gwcs=True`` to
     raise instead of falling back -- appropriate for astrometric gates, where
     silently dropping to a 5-8 mas approximation defeats the measurement.
     """
@@ -409,6 +443,12 @@ def frame_wcs(source, ext='SCI', *, require_gwcs=False, warn_missing=True):
     gw = None
     if _USE_GWCS and filename:
         gw = gwcs_from_file(filename)
+    elif _USE_GWCS and hdulist is not None and any(h.name == 'ASDF' for h in hdulist):
+        # an in-memory HDUList that carries a GWCS we have no file to read it
+        # from: using its SIP header would be the silent fallback again
+        raise GwcsReadError(
+            "HDUList carries an ASDF extension (a GWCS) but has no filename to "
+            "read it from; pass the filename. Refusing to fall back to SIP.")
 
     if gw is None:
         _RESOLUTION_TALLY['sip'] += 1

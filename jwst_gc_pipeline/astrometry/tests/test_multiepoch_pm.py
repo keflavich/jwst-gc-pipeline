@@ -367,3 +367,168 @@ def test_isolation_survives_duplicate_observation_concatenation():
     # (and therefore trustworthy) is 0 here, same as it was on real data.
     assert pm['dominant'].sum() > 0.9 * len(pm)
     assert pm['trustworthy'].sum() > 0.9 * len(pm)
+
+
+def _field_with_src_companions(ratios, sep_arcsec=0.3):
+    """src = n primaries plus, for each finite ``ratios[i]``, one src-only
+    companion ``sep_arcsec`` away with flux ratios[i] x the primary's (a deeper
+    src catalogue resolves stars the ref epoch does not); ref = the primaries
+    only, moved by a small random PM. Primaries sit on a 5" grid so no two
+    land inside one another's isolation beam by chance."""
+    n = len(ratios)
+    side = int(np.ceil(np.sqrt(n)))
+    gx, gy = np.meshgrid(np.arange(side) * 5.0, np.arange(side) * 5.0)
+    pick = RNG.permutation(side * side)[:n]
+    sx, sy = gx.ravel()[pick] - 2.5 * side, gy.ravel()[pick] - 2.5 * side
+    mag = RNG.uniform(-10, -5, n)
+    flux = 10 ** (-0.4 * mag)
+    has = np.isfinite(ratios)
+    ang = RNG.uniform(0, 2 * np.pi, n)[has]
+    cx, cy = sx[has] + sep_arcsec * np.cos(ang), sy[has] + sep_arcsec * np.sin(ang)
+    cflux = ratios[has] * flux[has]
+    m = n + int(has.sum())
+    src = dict(sc=_sc_from_xy(np.concatenate([sx, cx]), np.concatenate([sy, cy])),
+               ex=np.full(m, 0.003), ey=np.full(m, 0.003),
+               mag=np.concatenate([mag, -2.5 * np.log10(cflux)]),
+               flux=np.concatenate([flux, cflux]), epoch=2024.0, n=m)
+    dt = 2.0
+    rx = sx + RNG.normal(0, 4.0, n) * dt / 1000.0
+    ry = sy + RNG.normal(0, 4.0, n) * dt / 1000.0
+    ref = dict(sc=_sc_from_xy(rx, ry), ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+               mag=mag, flux=flux, epoch=2024.0 + dt, n=n)
+    return src, ref
+
+
+def test_src_isolation_ignores_faint_src_neighbours():
+    """A src neighbour at contrast >= 10 (flux ratio <= flux_ratio_cap) does not
+    disqualify a star; a comparable one does. With the previous rule
+    (src_isolation='any') every src neighbour in the beam disqualified the
+    star, so a deeper src catalogue (Arches v6fix, built on the faint-star
+    stack) dropped trustworthy from 6,025 (v6) to 1,339."""
+    pytest.importorskip('flystar')
+    n = 300
+    ratios = np.concatenate([np.full(n, 0.05), np.full(n, 0.5), np.full(n, np.nan)])
+    src, ref = _field_with_src_companions(ratios)
+    faint, bright, alone = np.arange(n), np.arange(n, 2 * n), np.arange(2 * n, 3 * n)
+
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    # build_pm_catalog_2epoch keeps src order for matched rows; every primary
+    # matches and no companion does (0.3" > match_radius)
+    assert len(pm) == 3 * n
+    assert pm.meta['src_isolation'] == 'flux'
+    assert pm['dominant'][faint].all() and pm['trustworthy'][faint].all()
+    assert not pm['dominant'][bright].any()
+    assert pm['dominant'][alone].all()
+    np.testing.assert_allclose(pm['src_comp_flux_ratio'][faint], 0.05, rtol=1e-6)
+    np.testing.assert_allclose(pm['src_comp_flux_ratio'][bright], 0.5, rtol=1e-6)
+    assert (pm['src_comp_flux_ratio'][alone] == 0).all()
+    assert (pm['n_src_within_beam'][faint] == 2).all()
+
+    old = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6,
+                                  src_isolation='any')
+    assert old.meta['src_isolation'] == 'any'
+    assert not old['dominant'][faint].any() and not old['dominant'][bright].any()
+    assert old['dominant'][alone].all()
+
+
+def test_src_isolation_keeps_contrast_exactly_ten():
+    """Contrast exactly 1/flux_ratio_cap (1.0 / 10.0 == 0.1 in IEEE doubles)
+    is kept; a slightly brighter companion is not."""
+    pytest.importorskip('flystar')
+    n = 100
+    src, ref = _field_with_src_companions(np.full(2 * n, 0.1))
+    src['flux'][:2 * n] = 10.0
+    src['flux'][2 * n:3 * n] = 1.0
+    src['flux'][3 * n:] = 1.001
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    assert len(pm) == 2 * n
+    assert (pm['src_comp_flux_ratio'][:n] == 0.1).all()
+    assert pm['dominant'][:n].all()
+    assert not pm['dominant'][n:].any()
+
+
+def test_src_isolation_nonfinite_neighbour_flux_counts_as_competing():
+    pytest.importorskip('flystar')
+    n = 200
+    src, ref = _field_with_src_companions(np.full(n, 0.05))
+    src['flux'][n:] = np.nan
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    assert len(pm) == n
+    assert not pm['dominant'].any()
+
+
+def test_src_isolation_rejects_unknown_mode():
+    with pytest.raises(ValueError, match='src_isolation'):
+        build_pm_catalog_2epoch({}, {}, src_isolation='bright')
+
+
+def test_ref_frame_position_is_the_untied_ref_position():
+    """ra_ref/dec_ref must be the ref star's own (untied) position, which is
+    where it sits in the Treasury HiPS, while ra0/dec0 live in the src frame
+    after the tie."""
+    pytest.importorskip('flystar')
+    n = 2000
+    sx, sy, mag = _random_field(n, halfwidth_arcsec=300.0)
+    offx, offy = 0.10, -0.12   # 100/-120 mas pointing offset the tie removes
+    # small noise keeps the tie's duplicate-row guard (#958) from firing
+    rx = sx + offx + RNG.normal(0, 0.003, n)
+    ry = sy + offy + RNG.normal(0, 0.003, n)
+    mag_ref = mag + RNG.normal(0, 0.02, n)
+    src_sc, ref_sc = _sc_from_xy(sx, sy), _sc_from_xy(rx, ry)
+    src = dict(sc=src_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+              mag=mag, flux=10 ** (-0.4 * mag), epoch=2024.0, n=n)
+    ref = dict(sc=ref_sc, ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+              mag=mag_ref, flux=10 ** (-0.4 * mag_ref), epoch=2026.0, n=n)
+    tied, _ = affine_tie(ref['sc'], ref['mag'], src['sc'], src['mag'],
+                         magcut=0, match_radius=1.0)
+    ref = dict(ref, sc=tied, sc_raw=ref_sc, obs_index=np.zeros(n, dtype=int))
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=1.0, err_cap_mas=1e6)
+
+    ra_ref = SkyCoord(pm['ra_ref'] * u.deg, pm['dec_ref'] * u.deg)
+    ra0 = SkyCoord(pm['ra0'] * u.deg, pm['dec0'] * u.deg)
+    idx, sep, _ = ra_ref.match_to_catalog_sky(ref_sc)
+    assert np.all(sep.arcsec < 1e-6)
+    assert np.median(ra_ref.separation(ra0).arcsec) == pytest.approx(np.hypot(offx, offy), abs=0.01)
+
+
+def _fake_pm_table(with_ref_cols=True, ref_paths=None):
+    """Minimal PM table for make_overlay_json (no flystar needed)."""
+    import json
+    from astropy.table import Table
+    t = Table({'ra0': [266.5, 266.6], 'dec0': [-28.5, -28.4],
+               'pm_ra': [1.0, -2.0], 'pm_dec': [0.5, 3.0], 'pm_tot': [1.1, 3.6],
+               'pm_ra_err': [0.1, 0.1], 'pm_dec_err': [0.1, 0.1],
+               'mag_src': [-8.0, -7.0], 'trustworthy': [True, True]})
+    if with_ref_cols:
+        t['ra_ref'] = [266.5001, 266.6001]
+        t['dec_ref'] = [-28.5001, -28.4001]
+    t.meta['epochs'] = [2024.0, 2026.0]
+    t.meta['baseline_yr'] = 2.0
+    if ref_paths is not None:
+        t.meta['ref_paths_json'] = json.dumps(ref_paths)
+    return t
+
+
+def test_overlay_json_frame_selection_and_provenance(tmp_path):
+    from jwst_gc_pipeline.astrometry.make_pm_overlay_json import make_overlay_json
+    fits_path = tmp_path / 'pm.fits'
+    _fake_pm_table(ref_paths=['a_o128.fits', 'a_o129.fits']).write(fits_path)
+    doc = make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False)
+    assert doc['meta']['position_frame'] == 'treasury-ref-epoch'
+    assert doc['sources'][0]['ra'] == pytest.approx(266.5001)
+    assert doc['meta']['ref_observations'] == ['a_o128.fits', 'a_o129.fits']
+    doc_src = make_overlay_json(str(fits_path), str(tmp_path / 'o2.json'), 'x',
+                                verbose=False, frame='src')
+    assert doc_src['meta']['position_frame'] == 'src-tied'
+    assert doc_src['sources'][0]['ra'] == pytest.approx(266.5)
+
+
+def test_overlay_json_refuses_old_fits_without_ref_columns(tmp_path):
+    from jwst_gc_pipeline.astrometry.make_pm_overlay_json import make_overlay_json
+    fits_path = tmp_path / 'old.fits'
+    _fake_pm_table(with_ref_cols=False).write(fits_path)
+    with pytest.raises(ValueError, match='ra_ref'):
+        make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False)
+    doc = make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False,
+                            frame='src', ref_observations=['o112', 'o118'])
+    assert doc['meta']['ref_observations'] == ['o112', 'o118']

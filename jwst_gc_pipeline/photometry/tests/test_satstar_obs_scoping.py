@@ -400,11 +400,42 @@ def test_sibling_seed_reads_the_observations_own_cache(tmp_path):
 def test_partner_seed_reader_is_scoped():
     """The partner-band seed in ``_prepare_frame_for_photometry`` resolves its
     cache through the scoped helpers (a source check: the reader sits in the
-    middle of the frame-preparation function)."""
+    middle of the frame-preparation function).  Since #983 the partner files
+    are listed by ``_partner_satstar_seed_files``, which the frame-preparation
+    function calls with the observation; the helper's scoping is checked here
+    and exercised in test_partner_seed_files_are_scoped."""
     import inspect
 
     from jwst_gc_pipeline.photometry import cataloging as C
     src = inspect.getsource(C._prepare_frame_for_photometry)
     assert "_partner}_consolidated_satstar_catalog.fits" not in src
-    assert 'consolidated_satstar_cache_path(basepath, _partner, _pscope)' in src
+    assert ('_partner_satstar_seed_files(\n                basepath, _partner, '
+            'proposal_id, field, phase=satstar_label)') in src
+    helper = inspect.getsource(C._partner_satstar_seed_files)
+    assert 'consolidated_satstar_cache_path(basepath, partner, pscope)' in helper
     assert 'satstar_sibling_seed_positions(\n            filtername, basepath, proposal_id=proposal_id, field=field)' in src
+
+
+def test_partner_seed_files_are_scoped(tmp_path):
+    """A scoped observation on a shared tree reads its own consolidated
+    partner catalog, or only its own per-exposure catalogs."""
+    from astropy.table import Table
+
+    from jwst_gc_pipeline.photometry import cataloging as C
+    base = str(tmp_path)
+    pdir = tmp_path / 'F480M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    for obs in ('132', '111'):
+        Table({'flux_fit': [1.0]}).write(
+            pdir / f'jw10678{obs}001_02101_00001_nrcalong_destreak_o{obs}'
+                   f'_crf_m7_satstar_catalog.fits')
+    files = C._partner_satstar_seed_files(base, 'f480m', proposal_id='10678',
+                                          field='132', phase='m7')
+    assert [os.path.basename(f)[:13] for f in files] == ['jw10678132001']
+    scoped = MC.consolidated_satstar_cache_path(base, 'f480m', '_o132')
+    os.makedirs(os.path.dirname(scoped), exist_ok=True)
+    Table({'flux_fit': [1.0]}).write(scoped)
+    assert C._partner_satstar_seed_files(base, 'f480m', proposal_id='10678',
+                                         field='132', phase='m7') == [scoped]
+    assert C._partner_satstar_seed_files(base, 'f480m', proposal_id='10678',
+                                         field='111', phase='m7') != [scoped]

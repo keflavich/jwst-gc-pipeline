@@ -170,18 +170,78 @@ def test_ensemble_position_can_be_switched_off(monkeypatch):
     assert int(out['n_frames_fit'][0]) == 4
 
 
-def test_flux_fit_is_left_alone_for_the_photometry_side():
-    # brightest-of-N is a photometric-continuity decision (#925 items 4-5);
-    # this change publishes the ensemble without moving the flux
+def test_flux_fit_is_the_per_exposure_median_not_the_brightest():
+    # #1032: the brightest of N noisy fits is biased bright (wd2: 0.03-0.15
+    # mag); flux_fit carries the median over exposures by default
     offs = [(0.0, 0.0)] * 4
     flux_by_exposure = [1.0e4, 1.1e4, 1.2e4, 5.0e4]
     out = mc._dedup_satstar_catalog(
         _table(*_rows(offs, 4, flux_by_exposure=flux_by_exposure)))
-    assert float(out['flux_fit'][0]) == pytest.approx(5.0e4)
-    # ...but the alternative is measured and available
+    assert float(out['flux_fit'][0]) == pytest.approx(1.15e4)
+    assert float(out['flux_median_fit'][0]) == pytest.approx(1.15e4)
+    # the brightest exposure stays on the row
+    assert float(out['flux_brightest_fit'][0]) == pytest.approx(5.0e4)
+    # flux_med_fit is the across-exposure MEAN (historical name)
     assert float(out['flux_med_fit'][0]) == pytest.approx(
         np.mean([1.0e4, 1.1e4, 1.2e4, 5.0e4]))
     assert float(out['std_flux_fit'][0]) > 0
+
+
+def test_median_counts_exposures_not_refits():
+    # six identical iterations per exposure must not weight the median: three
+    # exposures at 1, 2, 9 (x1e4) have median 2e4 whatever the row count
+    offs = [(0.0, 0.0)] * 3
+    out = mc._dedup_satstar_catalog(
+        _table(*_rows(offs, 3, flux_by_exposure=[1.0e4, 2.0e4, 9.0e4])))
+    assert float(out['flux_fit'][0]) == pytest.approx(2.0e4)
+
+
+def test_brightest_flux_can_be_restored(monkeypatch):
+    monkeypatch.setenv('SATSTAR_FLUX_STAT', 'brightest')
+    offs = [(0.0, 0.0)] * 4
+    out = mc._dedup_satstar_catalog(
+        _table(*_rows(offs, 4, flux_by_exposure=[1.0e4, 1.1e4, 1.2e4, 5.0e4])))
+    assert float(out['flux_fit'][0]) == pytest.approx(5.0e4)
+    assert float(out['flux_brightest_fit'][0]) == pytest.approx(5.0e4)
+    # the median is still published
+    assert float(out['flux_median_fit'][0]) == pytest.approx(1.15e4)
+
+
+def test_unknown_flux_statistic_is_refused(monkeypatch):
+    monkeypatch.setenv('SATSTAR_FLUX_STAT', 'mean')
+    with pytest.raises(ValueError, match='SATSTAR_FLUX_STAT'):
+        mc._satstar_flux_statistic()
+
+
+def test_flux_statistic_is_part_of_the_cache_key(monkeypatch):
+    monkeypatch.delenv('SATSTAR_FLUX_STAT', raising=False)
+    median_tag = mc._satstar_dedup_alg_tag()
+    monkeypatch.setenv('SATSTAR_FLUX_STAT', 'brightest')
+    assert mc._satstar_dedup_alg_tag() != median_tag
+
+
+def test_position_only_rows_stay_out_of_the_median():
+    offs = [(0.0, 0.0)] * 4
+    t = _table(*_rows(offs, 4, iterations=('m7',),
+                      flux_by_exposure=[1.0e4, 1.2e4, 1.4e4, 9.0e4]))
+    # the 9e4 exposure measured the star from a sibling seed only
+    t['position_only'] = np.array([False, False, False, True])
+    out = mc._dedup_satstar_catalog(t)
+    assert float(out['flux_fit'][0]) == pytest.approx(1.2e4)
+
+
+def test_group_median_matches_numpy():
+    rng = np.random.default_rng(1)
+    vals = rng.normal(size=200)
+    vals[::17] = np.nan
+    grp = rng.integers(0, 23, size=200)
+    got = mc._group_median(vals, grp, 25)
+    for g in range(25):
+        v = vals[(grp == g) & np.isfinite(vals)]
+        if len(v):
+            assert got[g] == pytest.approx(np.median(v))
+        else:
+            assert np.isnan(got[g])
 
 
 def test_distinct_stars_keep_separate_ensembles():
@@ -309,15 +369,15 @@ def test_dedup_returns_through_the_ensemble_attachment():
     src = _source()
     # the dedup must not return tbl[...] directly again: that is the shape that
     # dropped every absorbed row without measuring it
-    assert 'return _attach_satstar_ensemble(' in src
     body = src.split('def _dedup_satstar_catalog(')[1].split('\ndef ')[0]
+    assert '_attach_satstar_ensemble(' in body
     assert 'return tbl[np.sort(kept)]' not in body
 
 
 def test_dedup_algorithm_token_was_bumped():
     # the consolidated cache is keyed on this; without a bump the pre-#925
     # cache keeps being served and none of the above reaches a real catalog
-    assert mc._SATSTAR_DEDUP_ALG != 'fp4'
+    assert mc._SATSTAR_DEDUP_ALG not in ('fp4', 'fp5')
 
 
 def test_every_mapped_column_names_a_real_ensemble_column():

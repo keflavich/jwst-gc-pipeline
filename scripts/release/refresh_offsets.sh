@@ -48,6 +48,11 @@ if [ $summary_rc -ne 0 ]; then
     exit $summary_rc
 fi
 
+# The HiPS index lists what the web server actually serves; on failure the
+# previous inventory stays and the pages show that (dated) list.
+"$PYTHON" "$REPO/scripts/release/hips_index.py" --out "$SITE/hips_inventory.json" \
+    || echo "HiPS inventory not refreshed; keeping the previous one" >&2
+
 "$PYTHON" "$REPO/scripts/release/make_webpage.py" --fields $FIELDS --out "$SITE"
 page_rc=$?
 

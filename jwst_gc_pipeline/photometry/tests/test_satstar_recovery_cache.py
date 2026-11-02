@@ -7,10 +7,18 @@ because the pre-recovery caches were reused).  The recovery signature stamped in
 meta['SATRECOV'] must force a rebuild on mismatch and a cache-hit on match."""
 import types
 
+import pytest
 from astropy.table import Table
 
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as CL
 from jwst_gc_pipeline.photometry.cataloging import _satstar_recovery_signature
+
+
+@pytest.fixture(autouse=True)
+def _no_fit_switch_part(monkeypatch):
+    # these caches carry no SATFITSW; the seed-core part (`sq`, default on)
+    # would refit them once, which test_satstar_seed_core_dq.py covers
+    monkeypatch.setenv('SATSTAR_SEED_CORE_DQ', '0')
 
 
 def _opts(**kw):
@@ -55,6 +63,15 @@ def test_signature_covers_the_deblend_flag():
                                               deblend_satstars=d))
             for r in (False, True) for d in (False, True)}
     assert len(sigs) == 4
+
+
+def test_deblend_token_names_the_deblender_version():
+    """Catalogs seeded by the deblender before #1081 (``_dbl1``) collapsed
+    large blended components to one seed; a deblend run refits them."""
+    assert _satstar_recovery_signature(_opts(deblend_satstars=True)) == "off_dbl2"
+    assert _satstar_recovery_signature(
+        _opts(satstar_zeroframe_recover=True,
+              deblend_satstars=True)) == "zf1_ramp0_dil3_dbl2"
 
 
 def test_deblend_off_keeps_the_pre_427_signature_strings():

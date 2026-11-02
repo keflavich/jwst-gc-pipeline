@@ -1,0 +1,71 @@
+{
+ "label": "sgrb2",
+ "filt": "F212N",
+ "n_vetted": {
+  "m2": 231580,
+  "m3": 217891,
+  "m4": 221562,
+  "resbgsub_m5": 294883,
+  "resbgsub_m6": 299022,
+  "resbgsub_m7": 238442
+ },
+ "n_union_m2_m6": 332862,
+ "n_lost": 104267,
+ "ctrl_final_resid_snr_p50": 1.366641715029521,
+ "ctrl_final_resid_snr_p90": 4.372971245614891,
+ "ctrl_final_resid_snr_p99": 12.292294031648387,
+ "by_last_phase": {
+  "m2->vetted_out": {
+   "n": 9453,
+   "starlike_left": 2919
+  },
+  "m2->not_fit": {
+   "n": 3542,
+   "starlike_left": 905
+  },
+  "m3->vetted_out": {
+   "n": 1582,
+   "starlike_left": 723
+  },
+  "m3->not_fit": {
+   "n": 1518,
+   "starlike_left": 595
+  },
+  "m4->vetted_out": {
+   "n": 5291,
+   "starlike_left": 2374
+  },
+  "m4->not_fit": {
+   "n": 1199,
+   "starlike_left": 239
+  },
+  "resbgsub_m5->vetted_out": {
+   "n": 5673,
+   "starlike_left": 4053
+  },
+  "resbgsub_m5->not_fit": {
+   "n": 960,
+   "starlike_left": 353
+  },
+  "resbgsub_m6->vetted_out": {
+   "n": 22633,
+   "starlike_left": 21297
+  },
+  "resbgsub_m6->not_fit": {
+   "n": 52416,
+   "starlike_left": 32952
+  }
+ },
+ "m7_seed_reason": {
+  "own_band_off": {
+   "n": 61247,
+   "starlike_left": 40857
+  },
+  "seeded": {
+   "n": 13802,
+   "starlike_left": 13392
+  }
+ },
+ "n_final_vetted_inner": 238442,
+ "n_starlike_left": 66410
+}

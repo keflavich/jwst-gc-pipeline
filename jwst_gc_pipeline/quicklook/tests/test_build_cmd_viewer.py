@@ -373,5 +373,5 @@ def test_the_nircam_layer_is_the_fixed_cut_build():
     against the others, so it takes the fixed-cut one, matching the main
     viewer's default."""
     urls = [u for _, u, _ in cmdview.HIPS_LAYERS]
-    assert any(u.endswith('jwst_gc_treasury_vminmax_hips/') for u in urls)
+    assert any(u.endswith('jwst_gc_treasury_vminmax_satfill_hips/') for u in urls)
     assert not any(u.endswith('jwst_gc_treasury_hips/') for u in urls)

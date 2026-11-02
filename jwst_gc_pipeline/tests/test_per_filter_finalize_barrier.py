@@ -580,8 +580,11 @@ def test_off_by_default_matches_the_previous_driver_submit_for_submit(
     (old.parent / "_refuse_duplicate_chain.sh").write_text(
         (SCRIPTS / "_refuse_duplicate_chain.sh").read_text())
 
-    done_before, before = _run(tmp_path / "a", script=old)
-    done_after, after = _run(tmp_path / "b")
+    # MAX_GROUP_SIZE is pinned so the comparison isolates the barrier flag:
+    # the grouped-fit default (#1246) moved the driver's own default from
+    # 'unlimited' to 10, which is a separate, intended change.
+    done_before, before = _run(tmp_path / "a", script=old, MAX_GROUP_SIZE=10)
+    done_after, after = _run(tmp_path / "b", MAX_GROUP_SIZE=10)
     strip = lambda ss: [re.sub(r'\S+submit_cataloging_perframe\S*', '', s.line)
                         for s in ss]
     assert strip(before) == strip(after)

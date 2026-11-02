@@ -168,23 +168,51 @@ def test_without_data_i2d_falls_back_to_all_rows(tmp_path, capsys):
     assert 'cannot be told apart' in capsys.readouterr().out
 
 
-def _write_run(pdir, obs, x_acc, x_rej, stale_arcsec=0.5):
-    """One frame plus its m6 accepted and rejected satstar files; the stored
-    sky positions are deliberately STALE by ``stale_arcsec`` in Dec."""
+def _write_run(pdir, obs, x_acc, x_rej, stale_arcsec=0.5, phase='m6'):
+    """One frame plus its ``phase`` accepted and rejected satstar files (none
+    for an empty ``x_rej``); the stored sky positions are deliberately STALE
+    by ``stale_arcsec`` in Dec."""
     w = _wcs()
     frame = pdir / f'jw10678{obs}001_02101_00001_nrcalong_destreak_o{obs}_crf.fits'
-    hdu = fits.ImageHDU(np.zeros(SHAPE, dtype='float32'), name='SCI')
-    hdu.header.update(w.to_header())
-    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(frame)
+    if not frame.exists():
+        hdu = fits.ImageHDU(np.zeros(SHAPE, dtype='float32'), name='SCI')
+        hdu.header.update(w.to_header())
+        fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(frame)
     for kind, xs in (('catalog', x_acc), ('rejected', x_rej)):
+        if kind == 'rejected' and not len(xs):
+            continue
         xs = np.asarray(xs, float)
         ys = np.full(len(xs), 200.0)
         sky = w.pixel_to_world(xs, ys)
         stale = SkyCoord(sky.ra, sky.dec + stale_arcsec * u.arcsec)
         tbl = Table({'xcentroid': xs, 'ycentroid': ys, 'flux_fit': np.full(len(xs), 1e4)})
         tbl['skycoord_fit'] = stale
-        tbl.write(str(frame).replace('.fits', f'_resbgsub_m6_satstar_{kind}.fits'))
+        tbl.write(str(frame).replace('.fits', f'_resbgsub_{phase}_satstar_{kind}.fits'))
     return w
+
+
+def _xs(w, runs):
+    """Pixel x of every position in ``runs``, rounded, sorted."""
+    return sorted(float(np.round(x, 3)) for r in runs
+                  for x in np.atleast_1d(w.world_to_pixel(r)[0]))
+
+
+@pytest.mark.parametrize('phase, want', [
+    ('m6', [100.0, 111.0]),     # m6 run; the m7 file is left from a later run
+    ('m7', [130.0]),            # m7 run; m7 wrote no rejected file
+    ('m4', []),                 # no run at or before m4
+    (None, [130.0]),            # latest phase per exposure
+])
+def test_cofit_positions_read_one_phase_per_exposure(tmp_path, phase, want):
+    # #983: pooling every phase let an older (or later, left-over) run's
+    # positions decide whether two rows were ever fit side by side.
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    w = _write_run(pdir, '001', x_acc=[100.0], x_rej=[111.0], phase='m6')
+    _write_run(pdir, '001', x_acc=[130.0], x_rej=[], phase='m7')
+    runs = C._satstar_cofit_positions(str(pdir), proposal_id='10678',
+                                      field='001', phase=phase)
+    assert _xs(w, runs) == want
 
 
 def test_cofit_positions_pair_accepted_and_rejected_on_the_current_wcs(tmp_path):
