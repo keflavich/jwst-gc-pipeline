@@ -32,6 +32,17 @@ runs the ``nloop`` proposals of each sample inside one compiled function:
   (the density of the reverse birth).  The target is unchanged.  It needs an
   integer ``domain_pad`` so that region edges fall on pixel edges.
 
+* optionally (``bright_ms_frac = p > 0``) a fraction p of the split and merge proposals of a
+  region use the bright variant: a split of a source of flux ``F >= bright_ms_fbr`` into a
+  host of flux ``(1 - phi) F`` and a companion of flux ``phi F`` with ``phi`` log-uniform on
+  ``[f_min / F, 1/2]``, the companion displaced from the parent by ``d`` (log-uniform on
+  ``[bright_ms_rmin, bright_ms_rmax]``, uniform angle) with the flux-weighted centroid kept.
+  The merge picks a host uniformly among the sources of flux ``>= fbr / 2`` and a companion
+  uniformly among the fainter sources at separation ``[rmin, rmax]`` whose summed flux is at
+  least ``fbr``; the acceptance carries both selection probabilities, the proposal densities
+  of ``(phi, d)`` and the Jacobian ``F``.  The target is unchanged.  ``count_prior='exact'``
+  only.
+
 Options are fields of :class:`.pcat_sampler.PCATConfig` (``engine='numba'``).
 """
 import time
@@ -46,9 +57,9 @@ from .kernel import basis_terms
 __all__ = ['FastPCATSampler', 'stamp_ladder', 'ess_geyer', 'equilibration_index']
 
 # stats rows
-_MOVE, _BD, _MS, _BKG, _BIRTH, _DEATH, _SPLIT, _MERGE, _CAPREJ = range(9)
+_MOVE, _BD, _MS, _BKG, _BIRTH, _DEATH, _SPLIT, _MERGE, _CAPREJ, _BSPLIT, _BMERGE = range(11)
 # proposal kinds
-_K_MOVE, _K_BIRTH, _K_DEATH, _K_SPLIT, _K_MERGE = range(5)
+_K_MOVE, _K_BIRTH, _K_DEATH, _K_SPLIT, _K_MERGE, _K_BSPLIT, _K_BMERGE = range(7)
 
 
 # ----------------------------------------------------------------------------
@@ -431,6 +442,31 @@ def _split_logfactor(n_before, nr_after, nbright_before, F, f1, f2, log_invpairs
 
 
 @njit(cache=True)
+def _bright_logq(F, fh, fc, d, n_host, n_comp, n_bright, par):
+    """ln Q of a bright split (parent F -> host fh + companion fc at separation d).
+
+    Q = ln[p(fh) p(fc) / p(F)] + ln F + ln(phi ln(F / (2 f_min))) + ln(2 pi d^2 L)
+        - ln n_host - ln n_comp + ln n_bright,    phi = fc / F,  L = ln(rmax / rmin),
+
+    where phi ln(F / (2 f_min)) and 2 pi d^2 L are the inverse proposal densities of phi
+    (log-uniform on [f_min / F, 1/2]) and of the displacement (log-uniform radius, uniform
+    angle), F the Jacobian of (F, phi) -> (fh, fc), 1 / n_bright the parent selection and
+    1 / (n_host n_comp) the selection of the reverse merge.  Split acceptance:
+    dlogL + Q + ln((n + 1) / A) - pen; merge acceptance: dlogL - Q - ln(n / A) + pen.
+    ``n_host`` and ``n_comp`` count the hosts and the companions of the host in the state that
+    holds the pair, ``n_bright`` the sources of flux >= fbr in the region of the state that
+    holds the parent.
+    """
+    fmin, slope = par[0], par[1]
+    rmin, rmax = par[22], par[23]
+    lf = _logp_flux(fh, slope, fmin) + _logp_flux(fc, slope, fmin) - _logp_flux(F, slope, fmin)
+    phi = fc / F
+    return (lf + np.log(F) + np.log(phi) + np.log(np.log(0.5 * F / fmin))
+            + np.log(2.0 * np.pi * d * d * np.log(rmax / rmin))
+            - np.log(n_host) - np.log(n_comp) + np.log(n_bright))
+
+
+@njit(cache=True)
 def _count_term_birth(n, n_r, area_r, par):
     pen, area, legacy = par[2], par[3], par[13]
     if legacy > 0:
@@ -729,6 +765,11 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
     ny0, nx0 = int(par[17]), int(par[18])
     # residual-guided births: region cell m <-> padded pixel m + off
     wres = par[19]
+    # bright merge-split variant
+    bfrac, bfbr = par[20], par[21]
+    brmin, brmax = par[22], par[23]
+    brmin2, brmax2 = brmin * brmin, brmax * brmax
+    blmax = np.log(brmax / brmin)
     off = int(np.round(P - dp))
     if wres > 0:
         _wres_full(resid, swt, wimg, zreg, rowsum, rmap, cmap, rx1, wgeo, nregx * nregy)
@@ -887,6 +928,167 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                 for col in range(px, nregx, 2):
                     r = row * nregx + col
                     cnt = rcnt[r]
+                    if bfrac > 0.0 and np.random.random() < bfrac:
+                        if np.random.random() < 0.5:
+                            # ---- bright split: parent s (flux F >= fbr) -> host + companion
+                            nbr = 0
+                            for a in range(cnt):
+                                if sf[rlist[r, a]] >= bfbr:
+                                    nbr += 1
+                            if nbr == 0:
+                                continue
+                            kb = np.random.randint(nbr)
+                            s = -1
+                            for a in range(cnt):
+                                if sf[rlist[r, a]] >= bfbr:
+                                    if kb == 0:
+                                        s = rlist[r, a]
+                                        break
+                                    kb -= 1
+                            F = sf[s]
+                            phi0 = fmin / F
+                            phi = phi0 * np.exp(np.random.random() * np.log(0.5 / phi0))
+                            dsep = brmin * np.exp(np.random.random() * blmax)
+                            th = 2.0 * np.pi * np.random.random()
+                            ddx = dsep * np.cos(th)
+                            ddy = dsep * np.sin(th)
+                            xh = sx[s] - phi * ddx
+                            yh = sy[s] - phi * ddy
+                            xc = sx[s] + (1.0 - phi) * ddx
+                            yc = sy[s] + (1.0 - phi) * ddy
+                            fh = (1.0 - phi) * F
+                            fc = phi * F
+                            c1, r1 = _region_of(xh, yh, par, geo)
+                            c2, r2 = _region_of(xc, yc, par, geo)
+                            if not (c1 == col and r1 == row and c2 == col and r2 == row
+                                    and _in_domain(xh, yh, par) and _in_domain(xc, yc, par)):
+                                stats[_BSPLIT, 1] += 1
+                                continue
+                            # selection counts of the state after the split (the reverse merge)
+                            n_host = 1
+                            if fc >= 0.5 * bfbr:
+                                n_host += 1
+                            n_comp = 1
+                            for a in range(cnt):
+                                j = rlist[r, a]
+                                if j == s:
+                                    continue
+                                fj = sf[j]
+                                if fj >= 0.5 * bfbr:
+                                    n_host += 1
+                                if fj <= fh and fh + fj >= bfbr:
+                                    d2 = (sx[j] - xh) ** 2 + (sy[j] - yh) ** 2
+                                    if d2 >= brmin2 and d2 <= brmax2:
+                                        n_comp += 1
+                            sl_kind[nsl] = _K_BSPLIT
+                            sl_r[nsl] = r
+                            sl_a[nsl] = s
+                            sl_b[nsl] = nbr
+                            sl_x[nsl] = xh
+                            sl_y[nsl] = yh
+                            sl_f[nsl] = fh
+                            mv_x[nsl] = xc
+                            mv_y[nsl] = yc
+                            mv_f[nsl] = fc
+                            mv_i[nsl] = cnt + 1
+                            sl_fac[nsl] = _bright_logq(F, fh, fc, dsep, n_host, n_comp, nbr, par)
+                            sl_q0[nsl] = nph
+                            ix0, iy0 = _coefs(sx[s] + P, sy[s] + P, -F, ta, tb, ph_dd, nph * k)
+                            ph_ix[nph] = ix0
+                            ph_iy[nph] = iy0
+                            ph_lv[nph] = _level(F, fthr)
+                            ix0, iy0 = _coefs(xh + P, yh + P, fh, ta, tb, ph_dd, (nph + 1) * k)
+                            ph_ix[nph + 1] = ix0
+                            ph_iy[nph + 1] = iy0
+                            ph_lv[nph + 1] = _level(fh, fthr)
+                            ix0, iy0 = _coefs(xc + P, yc + P, fc, ta, tb, ph_dd, (nph + 2) * k)
+                            ph_ix[nph + 2] = ix0
+                            ph_iy[nph + 2] = iy0
+                            ph_lv[nph + 2] = _level(fc, fthr)
+                            nph += 3
+                            sl_q1[nsl] = nph
+                            nsl += 1
+                        else:
+                            # ---- bright merge: host h (flux >= fbr / 2) + fainter companion c at
+                            # separation [rmin, rmax] with fh + fc >= fbr
+                            n_host = 0
+                            for a in range(cnt):
+                                if sf[rlist[r, a]] >= 0.5 * bfbr:
+                                    n_host += 1
+                            if n_host == 0:
+                                continue
+                            kb = np.random.randint(n_host)
+                            h = -1
+                            for a in range(cnt):
+                                if sf[rlist[r, a]] >= 0.5 * bfbr:
+                                    if kb == 0:
+                                        h = rlist[r, a]
+                                        break
+                                    kb -= 1
+                            fh = sf[h]
+                            n_comp = 0
+                            for a in range(cnt):
+                                j = rlist[r, a]
+                                if j == h:
+                                    continue
+                                fj = sf[j]
+                                if fj <= fh and fh + fj >= bfbr:
+                                    d2 = (sx[j] - sx[h]) ** 2 + (sy[j] - sy[h]) ** 2
+                                    if d2 >= brmin2 and d2 <= brmax2:
+                                        n_comp += 1
+                            if n_comp == 0:
+                                continue
+                            kb = np.random.randint(n_comp)
+                            c = -1
+                            for a in range(cnt):
+                                j = rlist[r, a]
+                                if j == h:
+                                    continue
+                                fj = sf[j]
+                                if fj <= fh and fh + fj >= bfbr:
+                                    d2 = (sx[j] - sx[h]) ** 2 + (sy[j] - sy[h]) ** 2
+                                    if d2 >= brmin2 and d2 <= brmax2:
+                                        if kb == 0:
+                                            c = j
+                                            break
+                                        kb -= 1
+                            fc = sf[c]
+                            F = fh + fc
+                            xm = (fh * sx[h] + fc * sx[c]) / F
+                            ym = (fh * sy[h] + fc * sy[c]) / F
+                            dsep = np.sqrt((sx[c] - sx[h]) ** 2 + (sy[c] - sy[h]) ** 2)
+                            # sources of flux >= fbr in the region after the merge (F >= fbr)
+                            n_bright = 1
+                            for a in range(cnt):
+                                j = rlist[r, a]
+                                if j != h and j != c and sf[j] >= bfbr:
+                                    n_bright += 1
+                            sl_kind[nsl] = _K_BMERGE
+                            sl_r[nsl] = r
+                            sl_a[nsl] = h
+                            sl_b[nsl] = c
+                            sl_x[nsl] = xm
+                            sl_y[nsl] = ym
+                            sl_f[nsl] = F
+                            mv_i[nsl] = cnt
+                            sl_fac[nsl] = -_bright_logq(F, fh, fc, dsep, n_host, n_comp, n_bright, par)
+                            sl_q0[nsl] = nph
+                            ix0, iy0 = _coefs(sx[h] + P, sy[h] + P, -fh, ta, tb, ph_dd, nph * k)
+                            ph_ix[nph] = ix0
+                            ph_iy[nph] = iy0
+                            ph_lv[nph] = _level(fh, fthr)
+                            ix0, iy0 = _coefs(sx[c] + P, sy[c] + P, -fc, ta, tb, ph_dd, (nph + 1) * k)
+                            ph_ix[nph + 1] = ix0
+                            ph_iy[nph + 1] = iy0
+                            ph_lv[nph + 1] = _level(fc, fthr)
+                            ix0, iy0 = _coefs(xm + P, ym + P, F, ta, tb, ph_dd, (nph + 2) * k)
+                            ph_ix[nph + 2] = ix0
+                            ph_iy[nph + 2] = iy0
+                            ph_lv[nph + 2] = _level(F, fthr)
+                            nph += 3
+                            sl_q1[nsl] = nph
+                            nsl += 1
+                        continue
                     if np.random.random() < 0.5:
                         # ---- split
                         nbright = 0
@@ -1098,6 +1300,13 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
                 else:
                     fac = _split_logfactor(n, mv_i[a], sl_b[a], sf[sl_a[a]], sl_f[a], mv_f[a], sl_fac[a], par)
                     ok = lu < sl_dl[a] + fac
+            elif kind == _K_BSPLIT:
+                if n >= max_nsrc or rcnt[r] >= cap:
+                    stats[_CAPREJ, 0] += 1
+                else:
+                    ok = lu < sl_dl[a] + sl_fac[a] - par[2] + np.log((n + 1) / par[3])
+            elif kind == _K_BMERGE:
+                ok = lu < sl_dl[a] + sl_fac[a] + par[2] - np.log(n / par[3])
             else:
                 fac = -_split_logfactor(n - 1, mv_i[a], int(mv_f[a]), sl_f[a], sf[sl_a[a]], sf[sl_b[a]],
                                         sl_fac[a], par)
@@ -1106,7 +1315,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             sl_fac[a] = 1.0 if ok else 0.0
             if ok:
                 nacc += 1
-                if kind == _K_BIRTH or kind == _K_SPLIT:
+                if kind == _K_BIRTH or kind == _K_SPLIT or kind == _K_BSPLIT:
                     n += 1
                 else:
                     n -= 1
@@ -1128,6 +1337,12 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             elif kind == _K_SPLIT:
                 stats[_SPLIT, 1] += 1
                 stats[_SPLIT, 2] += acc
+            elif kind == _K_BSPLIT:
+                stats[_BSPLIT, 1] += 1
+                stats[_BSPLIT, 2] += acc
+            elif kind == _K_BMERGE:
+                stats[_BMERGE, 1] += 1
+                stats[_BMERGE, 2] += acc
             else:
                 stats[_MERGE, 1] += 1
                 stats[_MERGE, 2] += acc
@@ -1136,12 +1351,12 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             if kind == _K_DEATH:
                 idxbuf[nrem] = sl_a[a]
                 nrem += 1
-            elif kind == _K_SPLIT:
+            elif kind == _K_SPLIT or kind == _K_BSPLIT:
                 s = sl_a[a]
                 sx[s] = sl_x[a]
                 sy[s] = sl_y[a]
                 sf[s] = sl_f[a]
-            elif kind == _K_MERGE:
+            elif kind == _K_MERGE or kind == _K_BMERGE:
                 si = sl_a[a]
                 sx[si] = sl_x[a]
                 sy[si] = sl_y[a]
@@ -1158,7 +1373,7 @@ def _loop(nloop, cumw, par, geo, rx0, rx1, ry0, ry1, rarea,
             kind = sl_kind[a]
             if kind == _K_BIRTH:
                 _add_star(sl_x[a], sl_y[a], sl_f[a], sl_r[a], sx, sy, sf, sreg, spos, nst, rlist, rcnt)
-            elif kind == _K_SPLIT:
+            elif kind == _K_SPLIT or kind == _K_BSPLIT:
                 _add_star(mv_x[a], mv_y[a], mv_f[a], sl_r[a], sx, sy, sf, sreg, spos, nst, rlist, rcnt)
         stats[typ, 1] += nsl
         stats[typ, 2] += nacc
@@ -1213,6 +1428,16 @@ class FastPCATSampler(PCATSampler):
         self.wt32[:, :nx] = self.wts[0]
         self.wpos = (self.wt32 > 0).astype(np.float32)
         self.swt32 = np.sqrt(self.wt32)
+        bfrac = float(cfg.bright_ms_frac)
+        if not 0.0 <= bfrac <= 1.0:
+            raise ValueError(f'bright_ms_frac must be in [0, 1], got {bfrac}')
+        if bfrac > 0:
+            if cfg.count_prior != 'exact':
+                raise ValueError("bright_ms_frac > 0 needs count_prior='exact'")
+            if not float(cfg.bright_ms_fbr) > 2.0 * self.fmin:
+                raise ValueError(f'bright_ms_fbr {cfg.bright_ms_fbr} must exceed 2 f_min = {2 * self.fmin}')
+            if not 0.0 < float(cfg.bright_ms_rmin) < float(cfg.bright_ms_rmax):
+                raise ValueError('bright_ms needs 0 < bright_ms_rmin < bright_ms_rmax')
         wres = float(cfg.birth_resid_frac)
         if not 0.0 <= wres < 1.0:
             raise ValueError(f'birth_resid_frac must be in [0, 1), got {wres}')
@@ -1289,7 +1514,7 @@ class FastPCATSampler(PCATSampler):
         self.order = np.zeros(nsl, np.int64)
         self.xs_buf = np.zeros(self.rcap + 2)
         self.ys_buf = np.zeros(self.rcap + 2)
-        self.fstats = np.zeros((9, 3), np.int64)
+        self.fstats = np.zeros((11, 3), np.int64)
         # pixels rendered / visited by the chi^2, per proposal type
         self.work = np.zeros((4, 2), np.int64)
         self.dd1 = np.zeros(k)
@@ -1299,7 +1524,8 @@ class FastPCATSampler(PCATSampler):
                              float(cfg.kickrange), float(self.errf[0]), float(cfg.logdf),
                              float(cfg.pos_step_fac), float(cfg.flux_step_fac), self.Lx, self.Ly,
                              legacy, float(self.pads[0]), float(cfg.max_nsrc), float(cfg.move_nstar),
-                             float(ny0), float(nx0), wres])
+                             float(ny0), float(nx0), wres, bfrac, float(cfg.bright_ms_fbr),
+                             float(cfg.bright_ms_rmin), float(cfg.bright_ms_rmax)])
         self.geo = np.zeros(4, np.int64)
         self.zreg = np.zeros(self.nlab_max)
 
@@ -1470,7 +1696,10 @@ class FastPCATSampler(PCATSampler):
             acc[t] = dict(nprop=int(self.fstats[r, 0]), nreg=int(self.fstats[r, 1]),
                           nacc=int(self.fstats[r, 2]),
                           frac=self.fstats[r, 2] / max(1, self.fstats[r, 1]))
-        for kname, r in (('birth', _BIRTH), ('death', _DEATH), ('split', _SPLIT), ('merge', _MERGE)):
+        kinds = [('birth', _BIRTH), ('death', _DEATH), ('split', _SPLIT), ('merge', _MERGE)]
+        if cfg.bright_ms_frac > 0:
+            kinds += [('bright_split', _BSPLIT), ('bright_merge', _BMERGE)]
+        for kname, r in kinds:
             acc[kname] = dict(nreg=int(self.fstats[r, 1]), nacc=int(self.fstats[r, 2]),
                               frac=self.fstats[r, 2] / max(1, self.fstats[r, 1]))
         runtime = time.time() - t_start
@@ -1484,7 +1713,7 @@ class FastPCATSampler(PCATSampler):
                     ms_per_proposal=1e3 * float(np.mean(rec['time'])) / cfg.nloop if ns else 0.0,
                     engine='numba', stamp_sizes=self.stamp_sizes_used.tolist(),
                     stamp_fmax=[float(v) for v in self.stamp_fmax], move_nstar=int(cfg.move_nstar),
-                    birth_resid_frac=float(cfg.birth_resid_frac),
+                    birth_resid_frac=float(cfg.birth_resid_frac), bright_ms_frac=float(cfg.bright_ms_frac),
                     cap_rejections=int(self.fstats[_CAPREJ, 0]), nsamp_run=ns, stop_reason=stop_reason,
                     ess_history=ess_hist,
                     work_px={t: dict(render=int(self.work[_TYPES.index(t), 0]),
