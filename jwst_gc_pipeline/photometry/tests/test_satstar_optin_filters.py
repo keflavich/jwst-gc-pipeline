@@ -195,3 +195,17 @@ def test_pupil_wheel_band_is_matched_by_its_science_bandpass(
 
     seen = set(fit(fn).values())
     assert seen == ({'1', '10'} if kept else {None})
+
+
+def test_frame_naming_no_bandpass_raises_with_scope_set(monkeypatch, tmp_path):
+    """FILTER=CLEAR, PUPIL=CLEAR names no science bandpass; with a scope set the
+    frame cannot be classified, so the fit stops rather than guessing."""
+    fn = _pupil_frame(tmp_path, 'CLEAR', 'CLEAR', 'c_crf.fits')
+    _set_optins(monkeypatch, 'F480M')
+
+    @satstar_optin_scoped
+    def fit(filename):
+        return 1
+
+    with pytest.raises(ValueError):
+        fit(fn)

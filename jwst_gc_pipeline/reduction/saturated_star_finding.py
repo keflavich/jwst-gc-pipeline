@@ -8,7 +8,6 @@ import functools
 import glob
 import re
 from astropy.io import fits
-from jwst_gc_pipeline.mast_names import filtername_from_header
 from scipy.ndimage import label, find_objects, center_of_mass, sum_labels, binary_dilation
 from astropy.modeling.fitting import LevMarLSQFitter
 from jwst.datamodels import dqflags
@@ -17,6 +16,7 @@ import matplotlib.pyplot as plt
 #os.environ['stpsf_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
 import stpsf
 from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
+from jwst_gc_pipeline.mast_names import filtername_from_header
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
@@ -1369,7 +1369,6 @@ def _frame_bandpass(header):
     """The science bandpass of an exposure header (pupil-wheel narrow/medium
     bands win over the wide filter-wheel blocker, #950), upper-case; ``''``
     when the header names no bandpass."""
-    from ..mast_names import filtername_from_header
     try:
         return str(filtername_from_header(header)).upper()
     except (ValueError, KeyError):
@@ -6253,7 +6252,6 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
 def _find_ramp_for(filename):
     """Return the path to the sibling ``_ramp.fits`` for a cal/crf ``filename``,
     or None.  Shared by the ZEROFRAME loader and the first-group saturation map."""
-    import re
     base = os.path.basename(filename)
     m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', base)
     if not m:
@@ -6439,7 +6437,6 @@ def _find_cal_for(filename):
     """The Image2 ``_cal.fits`` of a crf / destreak / align product, from the
     same exposure stem in the same directory, or None (also None when
     ``filename`` is that cal)."""
-    import re
     m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', os.path.basename(filename))
     if not m:
         return None
