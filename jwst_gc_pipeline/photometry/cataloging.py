@@ -554,17 +554,31 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
     frame preparation takes the floor from ``_daophot_handoff_data_floor``
     (default 0), not from the satstar finder's ``_SATSTAR_DATA_FLOOR``.
 
-    Validation scope: this hand-off (env ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1``)
-    with the default floor of 0 is validated only on gc-treasury F480M (o111
-    nrcblong exp1-6 per frame, and the 12-frame o111 m6 end-to-end run of
-    #972).  Enable it per field, not globally.  Two measured cases where it
-    has not been validated:
+    Validation scope (``DAOPHOT_HANDOFF_UNACCEPTED_SAT``, default floor 0).
+    It is on by default only for ``_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS``
+    (gc-treasury); elsewhere it is an export.  gc-treasury F480M: o111
+    nrcblong exp1-6 per frame and the 12-frame o111 m6 end-to-end run of
+    #972.  Per-frame re-runs of the production m7 pass, fixC alone against
+    the defaults (unmeasured SATURATED candidates; single-exposure transients
+    handed off and fitted), 3 frames each:
 
-    * W51 F480M (12 production frames, selection only, no fitting run): 134.7
-      components per frame lie more than 1.5 FWHM from an accepted satstar;
-      41.5 of them have no finite SCI pixel and are skipped here, leaving
-      93.2 per frame to hand off, 39.5 of them with a finite maximum below
-      300 MJy/sr.
+    * gc-treasury o043 F212N: 18 -> 0; 2 transients.
+    * gc-treasury o043 F480M: 923 -> 340; 4 transients.
+    * sgra F405N: 2871 -> 281; 0.  cefcf F360M: 3244 -> 242; 0.
+    * crowded_l3 F410M: 1581 -> 83; 0.  crowded_l20 F182M: 489 -> 24; 0.
+
+    The transients are compact cosmic-ray hits with no JUMP flag (9-12 px;
+    the other exposures show < 0.5% of their peak there).  With the hand-off
+    off they stay unsubtracted and uncatalogued; with it on they get a PSF
+    fit that leaves a ring.  No data floor removes them, since they are
+    bright; a transient guard would.  The earlier o111 nrcb3 exp1-6 F212N
+    measurement (6 of 8 single-exposure CR/snowball transients fitted) is
+    the same class.  Not validated: the extended-emission targets and MIRI
+    (the hand-off is NIRCam-only).  W51 F480M (12 production frames,
+    selection only, no fitting run): 134.7 components per frame lie more
+    than 1.5 FWHM from an accepted satstar; 41.5 of them have no finite SCI
+    pixel and are skipped here, leaving 93.2 per frame to hand off, 39.5 of
+    them with a finite maximum below 300 MJy/sr.
     * F212N (o111 nrcb3 exp1-6): single-exposure cosmic-ray and snowball
       SATURATED transients are handed off and fitted (6 of 8).  They are
       bright, so no data floor removes them; this needs a transient guard.
@@ -977,7 +991,8 @@ def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
 
 
 def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
-                        data_floor=None, label='manual', filtername=None):
+                        data_floor=None, unaccepted_sat_default=False,
+                        label='manual', filtername=None):
     """Every position handed from the satstar channel to daophot on a frame.
 
     The gate-reject hand-off (``_gate_reject_handoff_xy``: implied-peak-gate
@@ -985,8 +1000,11 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     (``_severity_drop_handoff_xy``: the components the satstar finder's
     pre-fit severity gate dropped and nothing re-seeded; env
     ``DAOPHOT_HANDOFF_SEVERITY_DROPS``, default on) and, when env
-    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` is on (default off; parsed by
-    ``_handoff_env_flag``), every SATURATED component without an accepted
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` is on (parsed by
+    ``_handoff_env_flag``; unset or blank gives ``unaccepted_sat_default``,
+    which the frame preparation takes from
+    ``_unaccepted_sat_handoff_default``: on for the targets in
+    ``_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS``, off elsewhere), every SATURATED component without an accepted
     satstar that has a finite ``sci`` pixel reaching ``data_floor``
     (``_unaccepted_sat_component_xy``).  That component hand-off includes the
     severity drops, so the drop file is not read when it is on.
@@ -996,8 +1014,8 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     ``DAOPHOT_HANDOFF_PEAK_MIN_AREA`` (``_daophot_handoff_peak_min_area``,
     read only when the component hand-off is on) switches large components
     to a hand-off at their local maxima.  The component hand-off is
-    validated only for gc-treasury F480M (see
-    ``_unaccepted_sat_component_xy``).  Env ``DAOPHOT_HANDOFF_FILTERS``
+    validated for gc-treasury F212N and F480M and the fields listed in
+    ``_unaccepted_sat_component_xy``.  Env ``DAOPHOT_HANDOFF_FILTERS``
     limits it to the listed bandpasses (``_daophot_handoff_in_filter_scope``,
     given ``filtername``); outside them it stays off whatever
     ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` says.
@@ -1014,7 +1032,7 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     # Both parsed on every frame, so a malformed value fails everywhere.
     in_scope = _daophot_handoff_in_filter_scope(filtername)
     component_handoff = _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT',
-                                          False)
+                                          unaccepted_sat_default)
     if component_handoff and not in_scope:
         print(f"[{label}] DAOPHOT_HANDOFF_FILTERS="
               f"{os.environ.get('DAOPHOT_HANDOFF_FILTERS', '')!r} does not "
@@ -3329,6 +3347,21 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 # run_manual_pipeline and do_photometry_step_manual.
 _EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2', 'ngc6334')
 
+# Targets whose NIRCam frames hand every SATURATED component without an
+# accepted satstar to daophot by default (DAOPHOT_HANDOFF_UNACCEPTED_SAT; an
+# explicit export of the variable, on or off, wins).  Per target, not global:
+# see _unaccepted_sat_component_xy for what has been validated where.
+_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS = ('gc-treasury',)
+
+
+def _unaccepted_sat_handoff_default(options):
+    """Default of ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` for this run: on for
+    the targets in ``_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS``, off
+    elsewhere.  The variable, when set, overrides it either way."""
+    return (str(getattr(options, 'target', '')).lower()
+            in _DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS)
+
+
 # The vetted catalog the previous-phase keep of each phase reads:
 # phase -> (merge label, resbgsub) of the phase before it.
 _PREV_VETTED_PHASE = {'m3': ('m2', False), 'm4': ('m3', False),
@@ -4291,19 +4324,29 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # those pixels back to the fit, only around handed-off stars.
     handoff_xy, handoff_radius = None, 0.0
     handoff_restore = None
+    # resolved DAOPHOT_HANDOFF_UNACCEPTED_SAT for this frame, recorded in the
+    # per-frame catalog header (HNDOFFSA); MIRI never hands off
+    handoff_unaccepted_sat = False
     if dqarr is not None and 'miri' not in inst_token:
-        # Opt-in (env DAOPHOT_HANDOFF_UNACCEPTED_SAT=1): also hand off EVERY
-        # SATURATED component without an accepted satstar, including the ones
-        # the pre-fit severity gate dropped before any rejected-table row was
-        # written (see _unaccepted_sat_component_xy).  Components with no
-        # finite raw-SCI pixel are left alone, and so are components below
-        # the hand-off's own data floor (env DAOPHOT_HANDOFF_DATA_FLOOR,
-        # default 0; the satstar finder's SATSTAR_DATA_FLOOR is not used).
-        # Validated only for gc-treasury F480M; enable it per field, and per
-        # bandpass with DAOPHOT_HANDOFF_FILTERS.
+        _unacc_default = _unaccepted_sat_handoff_default(options)
+        handoff_unaccepted_sat = (
+            _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT', _unacc_default)
+            and _daophot_handoff_in_filter_scope(filtername))
+        # DAOPHOT_HANDOFF_UNACCEPTED_SAT (default on for the targets in
+        # _DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS, off elsewhere; an export
+        # wins): also hand off EVERY SATURATED component without an accepted
+        # satstar, including the ones the pre-fit severity gate dropped
+        # before any rejected-table row was written (see
+        # _unaccepted_sat_component_xy).  Components with no finite raw-SCI
+        # pixel are left alone, and so are components below the hand-off's
+        # own data floor (env DAOPHOT_HANDOFF_DATA_FLOOR, default 0; the
+        # satstar finder's SATSTAR_DATA_FLOOR is not used).  Limited to the
+        # bandpasses in DAOPHOT_HANDOFF_FILTERS when that is set.
         handoff_xy, handoff_radius = _daophot_handoff_xy(
             dqarr, original_data, satstar_table, satstar_rejected_path,
-            fwhm_pix, label='manual', filtername=filtername)
+            fwhm_pix,
+            unaccepted_sat_default=_unacc_default,
+            label='manual', filtername=filtername)
         if handoff_xy is not None:
             # Opt-in (env DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM): restore
             # in components that also hold an accepted satstar, outside a
@@ -4363,6 +4406,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
         handoff_xy=handoff_xy, handoff_radius=handoff_radius,
+        handoff_unaccepted_sat=handoff_unaccepted_sat,
         original_data=original_data, background_map=background_map,
         bkg_basis=bkg_basis,
         out_basepath=out_basepath, filename=filename,
@@ -4452,6 +4496,10 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
                     else ctx.original_data - ctx.satstar_model_subtracted)
     _residual_for_bkg = _resbkg_base - modsky
     _attach_residual_background(result, _residual_for_bkg, ctx, options, label=iteration_label)
+    # provenance: gc-treasury hands unaccepted SATURATED components to daophot
+    # by default, so its trees can hold catalogs from both regimes
+    result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
+                               'unaccepted SATURATED comps handed to daophot')
 
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
