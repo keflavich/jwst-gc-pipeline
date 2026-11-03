@@ -54,7 +54,7 @@ from .psf_poly import build_cf, load_epsf
 __all__ = ['BandData', 'PCATConfig', 'PCATResult', 'PCATSampler', 'run_pcat',
            'fourier_templates']
 
-_TYPES = ('movestar', 'birth_death', 'merge_split', 'bkg')
+_TYPES = ('movestar', 'birth_death', 'merge_split', 'bkg', 'bscale')
 
 
 # ----------------------------------------------------------------------------
@@ -148,6 +148,25 @@ class PCATConfig:
     # residual (S/N)^2 of a pixel (the rest uniform); the death acceptance carries the reverse
     # density.  0 keeps PCAT's uniform births
     birth_resid_frac: float = 0.0
+    # numba engine: fraction of the split / merge proposals that use the bright variant
+    # (flux-conserving split of a source of flux >= bright_ms_fbr into a host and a companion
+    # with log-uniform flux fraction and separation in [bright_ms_rmin, bright_ms_rmax] pivot px,
+    # and the reverse merge; see fast_sampler).  0 keeps the plain split / merge
+    bright_ms_frac: float = 0.0
+    bright_ms_fbr: float = 1000.0
+    bright_ms_rmin: float = 0.1
+    bright_ms_rmax: float = 4.0
+    # python engine, nbands > 1: free flux scale of each non-pivot band.  band_scale_sig (mag) > 0
+    # makes the centre mu_b of the colour prior of band b a parameter with the hyperprior
+    # N(color_mus[b-1], band_scale_sig).  The 'bscale' move (give it a weight in move_weights)
+    # (i) shifts mu_b and the colours of all the sources of band b together, i.e. scales their
+    # fluxes by 10^(-0.4 d), with a Metropolis ratio of likelihood and hyperprior only (the colour
+    # prior and the Jacobian cancel), band_scale_nstep times per call with a step drawn from
+    # band_scale_steps (mag), and (ii) draws mu_b from its Gaussian conditional given the colours.
+    # None keeps the centres fixed
+    band_scale_sig: Optional[float] = None
+    band_scale_steps: tuple = (0.0005, 0.002, 0.008)
+    band_scale_nstep: int = 10
     region_cap: int = 512               # max sources per region (numba engine)
     burnin: Optional[int] = None        # burn-in samples (numba engine; overrides burnin_frac)
     # numba engine: burn-in = max(burnin, burnin_auto_factor * t_eq), t_eq = first sample at which
@@ -389,7 +408,7 @@ class PCATSampler:
         if nb > 1:
             if cfg.color_mus is None or cfg.color_sigs is None:
                 raise ValueError('color_mus and color_sigs are required for nbands > 1')
-            self.cmu = np.asarray(cfg.color_mus, float)
+            self.cmu = np.array(cfg.color_mus, float)
             self.csig = np.asarray(cfg.color_sigs, float)
         else:
             self.cmu = self.csig = np.zeros(0)
@@ -400,9 +419,23 @@ class PCATSampler:
             raise ValueError(f'split_color_scale must be positive, got {cfg.split_color_scale!r}')
         # pivot-flux error of all bands combined (colour moves): sigma^-2 = sum_b (r_b / errf_b)^2
         # with r_b = 10^(-0.4 mu_b) the prior-mean flux ratio of band b to the pivot
+        # (rcol and errf_eff only set proposal step sizes and stay at their initial values when the
+        # colour-prior centres are free)
+        self.cmu0 = self.cmu.copy()
         self.rcol = np.concatenate([[1.0], 10 ** (-0.4 * self.cmu)])
         self.errf_eff = float(np.sum((self.rcol / np.asarray(self.errf)) ** 2) ** -0.5)
         self.color_moves = bool(cfg.color_moves) and nb > 1
+        self.band_scale = cfg.band_scale_sig is not None
+        has_w = cfg.move_weights.get('bscale', 0) > 0
+        if self.band_scale:
+            if not (nb > 1 and cfg.band_scale_sig > 0 and has_w):
+                raise ValueError('band_scale_sig needs nbands > 1, band_scale_sig > 0 and a positive '
+                                 "move_weights['bscale']")
+            if not (len(cfg.band_scale_steps) > 0 and min(cfg.band_scale_steps) > 0
+                    and cfg.band_scale_nstep >= 1):
+                raise ValueError('band_scale_steps must be positive and band_scale_nstep >= 1')
+        elif has_w:
+            raise ValueError("move_weights['bscale'] needs band_scale_sig")
 
         # ---- state
         if cfg.init_catalog is not None:
@@ -949,6 +982,57 @@ class PCATSampler:
             self.beta[b] = new
         return 1, 1
 
+    def prop_band_scale(self, px, py):
+        """Flux scale of each non-pivot band: Metropolis shifts of (mu_b, colours of all sources of
+        band b), then a Gibbs draw of mu_b given the colours (see PCATConfig.band_scale_sig).
+
+        A shift d (mag) multiplies the band-b fluxes by s = 10^(-0.4 d).  In the state (mu_b, f_b)
+        the colour-prior density N(c_i; mu_b, sig_b) / f_bi is multiplied by s^-n and the
+        Jacobian of f_b -> s f_b is s^n, so the acceptance ratio is exp(-dchi2 / 2) times the
+        hyperprior ratio.  The model is linear in s: with A = sum w src^2 and B = sum w r src
+        (src the sources-only model of band b, r the residual) chi2(s) - chi2(1) = (s-1)^2 A -
+        2 (s-1) B, and an accepted step maps (A, B) to (s^2 A, s (B - (s-1) A))."""
+        cfg = self.cfg
+        nprop = nacc = 0
+        n = self.x.size
+        tau2 = cfg.band_scale_sig ** 2
+        steps = np.asarray(cfg.band_scale_steps, float)
+        for b in range(1, self.nb):
+            k = b - 1
+            if n:
+                src = self.model[b].astype(np.float64)
+                sl = self.unpad[b]
+                src[sl] -= self._bkg_image(b)
+                w = self.wts[b].astype(np.float64)
+                res = self.resid[b].astype(np.float64)
+                A = float(np.sum(w * src * src))
+                B = float(np.sum(w * res * src))
+                stot = 1.0
+                for _ in range(cfg.band_scale_nstep):
+                    d = self.rng.normal(0.0, steps[self.rng.integers(steps.size)])
+                    s = 10.0 ** (-0.4 * d)
+                    dchi2 = (s - 1.0) ** 2 * A - 2.0 * (s - 1.0) * B
+                    mu1 = self.cmu[k] + d
+                    lr = (-0.5 * dchi2 - 0.5 * ((mu1 - self.cmu0[k]) ** 2 - (self.cmu[k] - self.cmu0[k]) ** 2) / tau2)
+                    nprop += 1
+                    if np.log(self.rng.uniform()) < lr:
+                        nacc += 1
+                        B = s * (B - (s - 1.0) * A)
+                        A = s * s * A
+                        stot *= s
+                        self.cmu[k] = mu1
+                if stot != 1.0:
+                    dm = ((stot - 1.0) * src).astype(np.float32)
+                    self.model[b] += dm
+                    self.resid[b] -= dm * (self.wts[b] > 0)
+                    self.f[b] *= stot
+            # Gibbs draw of mu_b given the colours (hyperprior centre cmu0)
+            c = -2.5 * np.log10(self.f[b] / self.f[0]) if n else np.zeros(0)
+            prec = 1.0 / tau2 + n / self.csig[k] ** 2
+            mean = (self.cmu0[k] / tau2 + c.sum() / self.csig[k] ** 2) / prec
+            self.cmu[k] = mean + self.rng.standard_normal() / np.sqrt(prec)
+        return nprop, nacc
+
     def gibbs_slope(self):
         lo, hi = self.cfg.slope_bounds
         n = self.x.size
@@ -976,12 +1060,15 @@ class PCATSampler:
         wts = np.array([cfg.move_weights[t] for t in names], float)
         wts /= wts.sum()
         fns = dict(movestar=self.prop_move, birth_death=self.prop_birth_death,
-                   merge_split=self.prop_merge_split, bkg=lambda px, py: self.gibbs_bkg())
+                   merge_split=self.prop_merge_split, bkg=lambda px, py: self.gibbs_bkg(),
+                   bscale=self.prop_band_scale)
         ns = cfg.nsamp
         nmax_store = cfg.max_nsrc
         rec = dict(n=np.zeros(ns, int), logL=np.zeros(ns), chi2=np.zeros((ns, self.nb)),
                    beta=np.zeros((ns, self.nb, self.ntemp)), slope=np.zeros(ns),
                    time=np.zeros(ns))
+        if self.band_scale:
+            rec['cmu'] = np.zeros((ns, self.nb - 1))
         cat_x, cat_y, cat_f = [], [], []
         nburn = int(np.floor(cfg.burnin_frac * ns))
         msum = [np.zeros(self.bands[b].image.shape) for b in range(self.nb)]
@@ -1011,6 +1098,8 @@ class PCATSampler:
             rec['chi2'][s] = chi2
             rec['beta'][s] = self.beta
             rec['slope'][s] = self.slope
+            if self.band_scale:
+                rec['cmu'][s] = self.cmu
             rec['time'][s] = time.time() - t0
             cat_x.append(self.x.copy())
             cat_y.append(self.y.copy())
@@ -1026,7 +1115,8 @@ class PCATSampler:
                 print(f'[pcat] sample {s+1}/{ns} n={self.x.size} logL={lnl:.1f} '
                       f'chi2/pix={chi2.sum()/max(1, sum(int((w>0).sum()) for w in self.wts)):.3f} '
                       f'bkg={self.beta[:, 0].round(4).tolist()} slope={self.slope:.3f} '
-                      f'dt={rec["time"][s]:.2f}s acc=' + ','.join(f'{k}:{v:.3f}' for k, v in acc.items()),
+                      + (f'mu={self.cmu.round(4).tolist()} ' if self.band_scale else '')
+                      + f'dt={rec["time"][s]:.2f}s acc=' + ','.join(f'{k}:{v:.3f}' for k, v in acc.items()),
                       flush=True)
         nmax = max([c.size for c in cat_x] + [1])
         X = np.full((ns, nmax), np.nan)
@@ -1106,6 +1196,8 @@ def run_pcat(image, weight, psf_os, oversample, config, nc=31, basis='quartic15'
         from .fast_sampler import FastPCATSampler
         sampler = FastPCATSampler(bands, config)
     elif config.engine == 'python':
+        if config.bright_ms_frac > 0:
+            raise ValueError("bright_ms_frac > 0 needs engine='numba'")
         sampler = PCATSampler(bands, config)
     else:
         raise ValueError(f'unknown engine {config.engine!r}')
