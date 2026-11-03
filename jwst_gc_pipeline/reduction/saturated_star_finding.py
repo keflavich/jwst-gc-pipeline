@@ -8,6 +8,7 @@ import functools
 import glob
 import re
 from astropy.io import fits
+from jwst_gc_pipeline.mast_names import filtername_from_header
 from scipy.ndimage import label, find_objects, center_of_mass, sum_labels, binary_dilation
 from astropy.modeling.fitting import LevMarLSQFitter
 from jwst.datamodels import dqflags
@@ -1308,16 +1309,19 @@ def satstar_optin_scope(filtername):
 
 def satstar_optin_scoped(func):
     """Decorate a function whose first argument is a frame path (or keyword
-    ``filename``): run it under ``satstar_optin_scope`` for that frame's FILTER.
+    ``filename``): run it under ``satstar_optin_scope`` for that frame's
+    science bandpass (``mast_names.filtername_from_header``).
     The header is read only when ``SATSTAR_OPTIN_FILTERS`` is set."""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         if not os.environ.get('SATSTAR_OPTIN_FILTERS', '').strip():
             return func(*args, **kwargs)
         filename = args[0] if args else kwargs['filename']
+        # FILTER alone misreads NIRCam pupil-wheel bands: FILTER=F444W,
+        # PUPIL=F405N is an F405N exposure.
         try:
-            filtername = fits.getheader(filename, 0).get('FILTER', '')
-        except OSError:
+            filtername = filtername_from_header(fits.getheader(filename, 0))
+        except (OSError, ValueError):
             filtername = ''
         with satstar_optin_scope(filtername):
             return func(*args, **kwargs)

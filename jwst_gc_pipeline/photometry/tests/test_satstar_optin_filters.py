@@ -172,3 +172,26 @@ def test_production_entry_point_is_scoped():
     assert hasattr(wrapped, '__wrapped__')
     assert wrapped.__wrapped__.__name__ == 'load_or_make_satstar_catalog'
     assert CL.satstar_optin_scoped is SSF.satstar_optin_scoped
+
+
+def _pupil_frame(tmp_path, filt, pupil, name):
+    fn = tmp_path / name
+    fits.HDUList([fits.PrimaryHDU(header=fits.Header(
+        {'INSTRUME': 'NIRCAM', 'FILTER': filt, 'PUPIL': pupil}))]).writeto(fn)
+    return str(fn)
+
+
+@pytest.mark.parametrize('listed, kept', [('F405N', True), ('F480M', False),
+                                          ('F444W', False)])
+def test_pupil_wheel_band_is_matched_by_its_science_bandpass(
+        monkeypatch, tmp_path, listed, kept):
+    """FILTER=F444W, PUPIL=F405N is an F405N exposure."""
+    fn = _pupil_frame(tmp_path, 'F444W', 'F405N', 'p_crf.fits')
+    _set_optins(monkeypatch, listed)
+
+    @satstar_optin_scoped
+    def fit(filename):
+        return {k: os.environ.get(k) for k in SATSTAR_OPTIN_ENV}
+
+    seen = set(fit(fn).values())
+    assert seen == ({'1', '10'} if kept else {None})
