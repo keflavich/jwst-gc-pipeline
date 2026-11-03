@@ -636,7 +636,7 @@ from crowdsource.crowdsource_base import fit_im
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
     remove_saturated_stars, correct_dq_first_group_saturation,
-    satstar_fit_switch_signature,
+    satstar_fit_switch_signature, satstar_optin_scoped,
     # `cataloging._prepare_frame_for_photometry` reaches BOTH DQ helpers through
     # this module -- `_L.correct_dq_first_group_saturation(...)` and then
     # `_L.truly_lost_saturated_mask(...)` on the very next line.  Only the first
@@ -1944,6 +1944,7 @@ def annotate_and_filter_by_local_snr(detection_table, noise_map, snr_threshold=5
     return filtered, stats
 
 
+@satstar_optin_scoped
 def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merged=False, overwrite=False,
                                  outside_star_pixels=None, outside_star_fit_box=512,
                                  forced_grid_search_radius=5,

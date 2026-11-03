@@ -3,7 +3,10 @@ import os
 if not os.getenv('STPSF_PATH'):
     raise ValueError("STPSF_PATH must be specified")
 
+import contextlib
+import functools
 import glob
+import re
 from astropy.io import fits
 from scipy.ndimage import label, find_objects, center_of_mass, sum_labels, binary_dilation
 from astropy.modeling.fitting import LevMarLSQFitter
@@ -1228,6 +1231,97 @@ def satstar_fit_switches(env=None):
         'cap_min_psf_frac': float(
             env.get('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '') or 0.005),
     }
+
+
+#: The satstar fit switches that ``SATSTAR_OPTIN_FILTERS`` scopes by bandpass.
+#: ``SATSTAR_QFIT_LOCAL_R`` goes with the gate: left set, an out-of-scope
+#: band would still compute the ``qfit_local`` column and carry a different
+#: cache key from a run that never exported the gate.
+SATSTAR_OPTIN_ENV = ('SATSTAR_ZF_KEEP_FINITE', 'SATSTAR_OBS_PK_FROM_CRF',
+                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R')
+_OPTIN_BANDPASS_RE = re.compile(r'^F\d{3,4}(W2|[WMN])$')
+
+
+def satstar_optin_in_scope(filtername, env=None):
+    """Whether the opt-in satstar fit switches (``SATSTAR_OPTIN_ENV``) apply to
+    ``filtername``.
+
+    Env ``SATSTAR_OPTIN_FILTERS`` lists bandpasses, comma- or space-separated
+    (``F480M`` or ``F480M,F405N``).  Unset or blank applies the switches to
+    every bandpass, as before.  The chain launcher takes one environment per
+    chain, so a field whose two bands need different switches (gc-treasury:
+    F480M opt-ins, F212N without) sets the switches once and lists the band
+    that gets them here.
+
+    Raises
+    ------
+    ValueError
+        A listed name is not a bandpass, or the variable is set and
+        ``filtername`` is empty.  A typo would otherwise switch the opt-ins
+        off for every bandpass without a word, and the satstar cache key
+        would record the off state.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_OPTIN_FILTERS', '')
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if not _OPTIN_BANDPASS_RE.match(tok)]
+    if bad:
+        raise ValueError(
+            f"SATSTAR_OPTIN_FILTERS={raw!r}: {bad} not bandpass names (e.g. "
+            f"'F480M' or 'F480M,F405N'; unset applies the opt-in satstar "
+            f"switches to every bandpass)")
+    if not scope:
+        return True
+    if not filtername:
+        raise ValueError(
+            f"SATSTAR_OPTIN_FILTERS={raw!r} is set but the frame has no FILTER "
+            f"keyword, so the opt-in scope cannot be decided")
+    return str(filtername).upper() in scope
+
+
+@contextlib.contextmanager
+def satstar_optin_scope(filtername):
+    """Run a satstar fit with the opt-in switches of ``SATSTAR_OPTIN_ENV``
+    removed from the environment when ``filtername`` is outside
+    ``SATSTAR_OPTIN_FILTERS``; restore them on exit.
+
+    The fit reads these switches from ``os.environ`` at many points (the
+    switch signature, the ZEROFRAME anchor, the fit-quality gate), so the
+    scope is applied around the whole fit.  Removed means unset: each switch
+    takes its default, exactly as in a run that never exported it.
+    """
+    if satstar_optin_in_scope(filtername):
+        yield
+        return
+    saved = {k: os.environ.pop(k) for k in SATSTAR_OPTIN_ENV
+             if k in os.environ}
+    if saved:
+        print(f"satstar: SATSTAR_OPTIN_FILTERS="
+              f"{os.environ.get('SATSTAR_OPTIN_FILTERS', '')!r} does not list "
+              f"{filtername}: {', '.join(sorted(saved))} unset for this frame",
+              flush=True)
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+def satstar_optin_scoped(func):
+    """Decorate a function whose first argument is a frame path (or keyword
+    ``filename``): run it under ``satstar_optin_scope`` for that frame's FILTER.
+    The header is read only when ``SATSTAR_OPTIN_FILTERS`` is set."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if not os.environ.get('SATSTAR_OPTIN_FILTERS', '').strip():
+            return func(*args, **kwargs)
+        filename = args[0] if args else kwargs['filename']
+        try:
+            filtername = fits.getheader(filename, 0).get('FILTER', '')
+        except OSError:
+            filtername = ''
+        with satstar_optin_scope(filtername):
+            return func(*args, **kwargs)
+    return wrapper
 
 
 def _satstar_data_floor_signature(filename, env=None):
