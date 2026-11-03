@@ -547,6 +547,44 @@ def fold_split_rows(owner, stacks, saved_match_inds):
     return stacks, saved_match_inds
 
 
+def _empty_combine_output(tbls, column_names, flux_colname, flux_error_colname,
+                          skycoord_colname):
+    """The zero-row table ``combine_singleframe`` returns when EVERY frame is empty.
+
+    Its columns are the ones the non-empty output would have for the same
+    inputs -- ``skycoord_avg``, the scatter and count columns, and
+    ``<col>_avg`` / ``std_<col>_avg`` for the flux columns and for each other
+    ``column_names`` entry the frames carry -- so a caller that selects by name
+    works on it unchanged.  Columns that exist only when some frame carried
+    them (``forced_refit``, the residual-footprint background set) are absent:
+    a frame with 0 detections never gets them
+    (``cataloging._attach_residual_background`` returns early), so an
+    all-empty input has none.
+    """
+    newtbl = Table()
+    newtbl.meta = dict(tbls[0].meta)
+    # not measured: the re-match diagnostics have nothing to match against
+    newtbl.meta['offsets'] = {tbl.meta['exposure']: (np.nan, np.nan)
+                              for tbl in tbls}
+    newtbl['skycoord_avg'] = SkyCoord(np.zeros(0) * u.deg, np.zeros(0) * u.deg,
+                                      frame='icrs')
+    for name, dtype in (('std_ra', 'f8'), ('std_dec', 'f8'), ('nmatch', 'i4'),
+                        ('nmatch_good', 'i4'), ('clip_fallback', '?')):
+        newtbl[name] = np.zeros(0, dtype=dtype)
+    for key in (flux_colname, flux_error_colname):
+        newtbl[f'{key}_avg'] = np.zeros(0, dtype='f4')
+        newtbl[f'std_{key}_avg'] = np.zeros(0, dtype='f4')
+    newtbl[f'{flux_error_colname}_prop'] = np.zeros(0, dtype='f4')
+    already_done = ({flux_colname, flux_error_colname, 'ra', 'dec',
+                     'skycoord', skycoord_colname} | set(RESBKG_COLUMNS))
+    for key in column_names:
+        if key in already_done or key not in tbls[0].colnames:
+            continue
+        newtbl[f'{key}_avg'] = np.zeros(0, dtype='f4')
+        newtbl[f'std_{key}_avg'] = np.zeros(0, dtype='f4')
+    return newtbl
+
+
 def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaverage=nanaverage_dask,
                         min_offset=0.10*u.arcsec,
                         offsets_table=None,
@@ -637,6 +675,19 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             basecrds = SkyCoord([basecrds, newcrds])
             print(f"Added {len(newcrds)} new sources in exposure {tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''} [total={len(basecrds)}]")
         print(f"Iteration {ii}: There are a total of {len(basecrds)} sources in the base coordinate list [method={'daophot' if dao else 'crowdsource'}]")
+
+    if basecrds is None:
+        # Every frame was empty, so there is nothing to combine.  This used to
+        # fall through to ``len(basecrds)`` below and die with a bare
+        # ``TypeError: object of type 'NoneType' has no len()`` (gc3571 o003,
+        # 2026-11-03).  Whether an all-empty filter is acceptable is the
+        # caller's decision -- ``merge_individual_frames`` refuses it unless the
+        # (observation, filter) is allowlisted -- so say what happened and
+        # return the zero-row table the same inputs would have produced.
+        print(f"combine_singleframe: all {len(tbls)} frames have 0 sources; "
+              f"returning a zero-row table", flush=True)
+        return _empty_combine_output(tbls, column_names, flux_colname,
+                                     flux_error_colname, skycoord_colname)
 
     # do one loop of re-matching
     # We use only mutual best-matches for the realignment measurement to avoid spurious matches, e.g., if there are three stars in a line, we only want to match two if they are each other's best match
@@ -1783,6 +1834,19 @@ class StalePSFVariantError(ValueError):
     """
 
 
+class AllFramesEmptyError(ValueError):
+    """Every per-frame catalog of a filter has 0 sources.
+
+    Raised by ``merge_individual_frames`` unless the caller passes
+    ``allow_all_empty=True``.  A faint field can legitimately have nothing to
+    detect in a band (gc3571 o003 F770W/F1280W/F1500W, o004 F770W: daofind finds
+    no source in any of the 8 frames), but the same picture is what a failed
+    detection run leaves behind, so the merge does not decide that itself --
+    ``alignment_config.FieldAlignment.empty_filters`` lists the pairs where it
+    is expected.
+    """
+
+
 def _psf_variant_optout(environ=None):
     env = os.environ if environ is None else environ
     return env.get(PSF_VARIANT_OPTOUT_ENV, '').strip().lower() in (
@@ -1878,8 +1942,16 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         field=None,
                                         write_allcols=None,
                                         m2_registration=None,
+                                        allow_all_empty=False,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     """Merge one filter's per-frame catalogs into the indivexp-merged catalog.
+
+    ``allow_all_empty``: what to do when EVERY per-frame catalog has 0 sources.
+    False (default) raises ``AllFramesEmptyError``: an empty filter is more
+    often a failed detection run than a faint field.  True writes a zero-row
+    product (``EMPTYALL`` set in its header) -- for the (observation, filter)
+    pairs listed in ``alignment_config.FieldAlignment.empty_filters``.  Frames
+    that are empty while others are not need neither: they merge as before.
 
     ``m2_registration``: an ``m2_registration.M2Registration`` (or None).  When
     given, each per-frame catalog is shifted by the offset the m2 checkpoint
@@ -2075,6 +2147,25 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             print('tb.meta:', tb.meta)
             raise ValueError(f"Table file {fn} is not correctly formatted; it is missing FILENAME metadata")
 
+    # Every frame empty: nothing to average.  Refuse unless the caller says an
+    # empty filter is expected here (see AllFramesEmptyError); the zero-row
+    # product is then built by the unchanged code below.
+    all_empty = all(len(tb) == 0 for tb in tables)
+    if all_empty:
+        _what = (f"all {len(tables)} per-frame catalogs of "
+                 f"{filtername.upper()}/{module}{out_obs_} "
+                 f"({iteration_label or 'no phase'}) have 0 sources")
+        if not allow_all_empty:
+            raise AllFramesEmptyError(
+                f"merge_individual_frames: {_what}.  Not merging: an empty "
+                f"filter is more often a failed detection run than a faint "
+                f"field.  If this (observation, filter) is expected to be "
+                f"empty, add it to FieldAlignment.empty_filters in "
+                f"reduction/alignment_config.py; otherwise look at the "
+                f"per-frame detection logs.")
+        print(f"merge_individual_frames: {_what}; allow_all_empty=True, so "
+              f"writing a zero-row product", flush=True)
+
     # Register each per-frame catalog onto its m2 visit consensus before the
     # positions are averaged (m2_registration; the frames are not touched).
     m2_registration_summary = None
@@ -2155,6 +2246,10 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
 
     minimal_table = Table(minimal_version)
     minimal_table.meta = merged_exposure_table.meta.copy()
+    if all_empty:
+        # Tells "no frame had a source" apart from a table emptied later
+        # (NaN-position rejection); cataloging keys the m2 skip on it.
+        minimal_table.meta['EMPTYALL'] = True
     if m2_registration_summary is not None:
         # How many per-frame catalogs were registered onto the m2 consensus,
         # and from which record; absent means the step did not run.

@@ -252,6 +252,20 @@ class FieldAlignment:
     #: both times.  With the flag on, a frame whose visit has no row yet sits
     #: at its raw pointing until m2 writes one.
     table_only_tie: bool = False
+    #: ``'<field>:<FILTER>'`` entries (e.g. ``'003:F770W'``) naming the
+    #: (observation, filter) pairs whose every per-frame catalog is EMPTY
+    #: because the detector finds nothing there (MIRI long-wave bands over
+    #: faint, mostly extended emission).  For these the per-filter merge writes
+    #: a zero-row product instead of stopping, and the m2 checkpoint does not
+    #: run on it: there are no sources to register, so the filter is logged as
+    #: UNVERIFIED rather than passed, and a record named
+    #: ``unverified_empty_<stage>_<FILTER>_o<field>.json`` is written under
+    #: ``astrometry_checkpoints/``.  Every pair NOT listed here keeps the
+    #: strict behaviour -- an empty filter stops the merge with
+    #: ``AllFramesEmptyError`` -- because an all-empty filter elsewhere is
+    #: more likely a failed detection run than a faint field.  Add a pair only
+    #: after confirming the frames really contain no detections.
+    empty_filters: Tuple[str, ...] = ()
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -924,6 +938,11 @@ ALIGNMENT_CONFIG = (
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F560W',
         table_only_tie=True,
+        # Every per-frame catalog of these pairs has 0 rows (daofind finds no
+        # detections in any of the 8 frames; o003 cycle 3 m12 finalize 49062228
+        # died on them, 2026-11-03).  Confirmed pair by pair from the m2
+        # per-frame catalogs, not inferred from the filter.
+        empty_filters=('003:F770W', '003:F1280W', '003:F1500W', '004:F770W'),
         notes=('gc3571 MIRI imaging (F560W/F770W/F1000W/F1280W/F1500W, obs '
                '001/003/004/005/016 = Tiles 1/2/3/4/6, five adjoining '
                'pointings spanning 3.22 arcmin about (266.41973, -29.00509), '
@@ -1124,6 +1143,22 @@ def table_only_tie(proposal_id, field):
     cfg = resolve(str(proposal_id), str(field) if field is not None else None)
     return (cfg is not None and cfg.source == TABLE_CONSENSUS
             and cfg.table_only_tie)
+
+
+def empty_filter_allowed(proposal_id, field, filt):
+    """Whether an all-empty ``filt`` catalog is expected for this observation
+    (:attr:`FieldAlignment.empty_filters`).
+
+    Matching is exact on the ``'<field>:<FILTER>'`` pair, case-insensitive on
+    the filter: no wildcard, and no inheritance from another observation or
+    filter of the same program.
+    """
+    if field is None or filt is None:
+        return False
+    cfg = resolve(str(proposal_id), str(field))
+    if cfg is None:
+        return False
+    return f'{field}:{str(filt).upper()}' in cfg.empty_filters
 
 
 def reference_catalog_required(proposal_id, field):
