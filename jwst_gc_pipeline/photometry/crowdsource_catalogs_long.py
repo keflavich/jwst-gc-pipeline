@@ -5422,6 +5422,32 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'map, so a completed run keeps the last two.  Residual '
                             'and model mosaics are kept regardless.  Set this to '
                             'keep every phase\'s map.'))
+    parser.add_option('--manual-xexp-audit', dest='manual_xexp_audit',
+                      default=MANUAL_DEFAULTS['manual_xexp_audit'],
+                      action='store_true',
+                      help=('After the m2 per-frame merge, add ncover, nfound and '
+                            'single_exposure to the merged catalog: how many '
+                            'exposures cover each source, how many carry it, and '
+                            'whether a bright or saturated source is carried by '
+                            'one exposure of two or more that cover it.  Adds '
+                            'columns only.  ON by default.'))
+    parser.add_option('--no-manual-xexp-audit', dest='manual_xexp_audit',
+                      default=MANUAL_DEFAULTS['manual_xexp_audit'],
+                      action='store_false',
+                      help='Skip the cross-exposure audit columns.')
+    parser.add_option('--manual-xexp-single-snr', dest='manual_xexp_single_snr',
+                      type='float', default=MANUAL_DEFAULTS['manual_xexp_single_snr'],
+                      help=('single_exposure flags sources with a merged S/N of '
+                            'at least this (and in the brightest '
+                            '--manual-xexp-single-top-pct percent of the sources two '
+                            'or more exposures cover), or any saturated source.'))
+    parser.add_option('--manual-xexp-single-top-pct',
+                      dest='manual_xexp_single_top_pct', type='float',
+                      default=MANUAL_DEFAULTS['manual_xexp_single_top_pct'],
+                      help=('single_exposure flags only sources whose merged flux '
+                            'is in the brightest this-many percent of the sources '
+                            'two or more exposures cover (or any saturated '
+                            'source); 100 switches the rank cut off.'))
     parser.add_option('--bundle-size', dest='bundle_size',
                       default=1, type='int',
                       help='Number of consecutive per-exposure iterations each SLURM array task handles (default 1 = one exposure per task).')
