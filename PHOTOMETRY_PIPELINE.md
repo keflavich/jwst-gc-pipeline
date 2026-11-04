@@ -478,7 +478,11 @@ Notes on the tri-state and env-driven values:
   `scripts/analysis/xexp_audit.py` reports it across fields without writing any
   production file; it recomputes from the per-frame catalogs now on disk, and its
   `frames newer` column counts frames rewritten after the merged catalog (above
-  zero, the counts compare two runs and `none` reads high). The columns enter the m2 catalog's provenance hash, so a chain
+  zero, the counts compare two runs and `none` reads high). Matching is not
+  one-to-one: a frame's daophot row is the counterpart of every merged row within
+  the radius, so in a close pair `nfound` can exceed the number of distinct
+  detections, and a row the frame did not detect can be found through its
+  neighbour's row. The columns enter the m2 catalog's provenance hash, so a chain
   that was finalized before this pass existed shows its m3 and later products as
   stale once its m12 finalize is repeated.
 - **Cross-band (m7).** Multi-filter runs union the per-filter vetted m6 catalogs,

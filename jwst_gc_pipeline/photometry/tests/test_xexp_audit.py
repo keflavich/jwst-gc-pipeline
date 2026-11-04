@@ -145,6 +145,38 @@ def test_a_core_near_the_edge_does_not_join_the_border_into_one_region():
     assert cov.tolist() == [True]
 
 
+@pytest.mark.parametrize('edge', ['low-y', 'high-y', 'low-x', 'high-x'])
+def test_a_core_beside_each_edge_band_stays_its_own_region(edge):
+    # A 6-px unusable band on all four edges and a 3 x 3 core touching the inner
+    # side of one band.  The margin ring is cleared on every side before the
+    # labelling, so the core is a 9-px region.  Left in on any one side, that
+    # band (~1100 px) and the core are one region over max_hole_pix and the star
+    # reads as not covered.
+    ny, nx = SHAPE
+    par = X.XexpParams(single_top_pct=100.0, max_hole_pix=100)
+    u = _usable()
+    u[:6, :] = u[-6:, :] = u[:, :6] = u[:, -6:] = False
+    cy, cx = {'low-y': (7, 100), 'high-y': (ny - 8, 100),
+              'low-x': (100, 7), 'high-x': (100, nx - 8)}[edge]
+    u[cy - 1:cy + 2, cx - 1:cx + 2] = False
+    assert X.covered_positions([cx], [cy], u, par).tolist() == [True]
+    # the same core in the middle of the array is a hole of 9 px: covered too
+    u2 = _usable()
+    u2[99:102, 99:102] = False
+    assert X.covered_positions([100], [100], u2, par).tolist() == [True]
+
+
+def test_a_core_over_max_hole_pix_beside_an_edge_is_still_a_hole():
+    # the clearing must not hide a real hole: a 12 x 12 core (144 px > 100)
+    # touching the high-y band stays a region of its own and is not covered
+    ny, nx = SHAPE
+    par = X.XexpParams(single_top_pct=100.0, max_hole_pix=100)
+    u = _usable()
+    u[:6, :] = u[-6:, :] = u[:, :6] = u[:, -6:] = False
+    u[ny - 18:ny - 6, 94:106] = False
+    assert X.covered_positions([100], [ny - 12], u, par).tolist() == [False]
+
+
 def test_all_bad_frame_covers_nothing():
     cov, found = _match([(100, 100, 1e3)], usable=np.zeros(SHAPE, bool))
     assert not cov.any() and not found.any()
@@ -216,6 +248,20 @@ def test_non_positive_merged_flux_matches_nothing():
     _, found = _match([(100, 100, 0.0), (150, 150, -5.0)],
                       cat=[(100, 100, 1e3), (150, 150, 1e3)])
     assert found.tolist() == [False, False]
+
+
+def test_matching_is_not_one_to_one():
+    # Each merged row looks for a counterpart on its own, so one daophot row is
+    # the counterpart of every merged row within the radius.  In a close pair
+    # that makes `found` lenient (two rows, one detection, both found), and a row
+    # whose own star the frame did not detect is found through its neighbour's
+    # row.  `nfound` can therefore exceed the number of distinct detections.
+    half = 0.025 / SCALE                              # rows 0.05" apart
+    _, found = _match([(100 - half, 100, 1e3), (100 + half, 100, 1e3)],
+                      cat=[(100, 100, 1e3)])
+    assert found.tolist() == [True, True]
+    _, found = _match([(100, 100, 1e3)], cat=[(100 + 0.08 / SCALE, 100, 1e3)])
+    assert found.tolist() == [True]
 
 
 # ---------------------------------------------------------------------------
