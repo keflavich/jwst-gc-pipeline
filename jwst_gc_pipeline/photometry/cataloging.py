@@ -4740,8 +4740,16 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         base1 = (ctx.original_data if ctx.satstar_model_subtracted is None
                  else ctx.original_data - ctx.satstar_model_subtracted)
         residual1 = base1 - modsky1
+        # m1 and m3+ hand daofind the NaN-filled frame.  This residual is built
+        # from the pristine data, so it carries that frame's NaN pixels, and
+        # DAOStarFinder (photutils 3.0.1.dev27) returns no peak with a NaN
+        # pixel within ~4 px: a synthetic star is missed at 1-4 px from one NaN
+        # pixel and found at 5+ px.  Fill them the way `nan_replaced_data` was
+        # filled (same kernel).
+        detection2 = replace_nans(
+            residual1, Gaussian2DKernel(x_stddev=ctx.fwhm_pix / 2.355))
         seed2 = _build_manual_seed(
-            detection_image=residual1, nan_replaced_data=ctx.nan_replaced_data,
+            detection_image=detection2, nan_replaced_data=ctx.nan_replaced_data,
             mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
             satstar_table=ctx.satstar_table, prev_catalog=saved1,
             local_snr_threshold=iter2_snr,
