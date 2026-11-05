@@ -4474,6 +4474,114 @@ def _attach_residual_background(result, residual, ctx, options, label=''):
     return result
 
 
+def _satstar_footprint_nan_mask(dqarr, satstar_model, min_model=20.0):
+    """Pixels a per-frame satstar residual should report as NOT MEASURED.
+
+    DQ-SATURATED pixels under a subtracted accepted-satstar model.  85% of the
+    flagged pixels keep a ramp-fit rate from the early, unsaturated groups (62%
+    of those from group 0 alone) and ~15% are NaN, while the subtracted model
+    is calibrated on the multi-group wing rates, so ``rate - model`` is not a
+    measurement of the star residual there (o102 F480M, 12 frames: median
+    peak |residual| within 1" of the accepted satstars 144 / 318 / 679 MJy/sr
+    over the three flux terciles).  ``min_model`` (MJy/sr) keeps the flagged
+    pixels of unmodelled / gate-rejected saturated stars out of the mask.
+
+    Parameters
+    ----------
+    dqarr : ndarray of int, or None
+        The frame's DQ array.
+    satstar_model : ndarray, or None
+        The accepted-satstar model subtracted from the data (MJy/sr).
+    min_model : float
+        A flagged pixel is masked only where the model exceeds this.
+
+    Returns
+    -------
+    ndarray of bool, or None
+        True where the residual is not a measurement; None when either input
+        is None (no satstar model was subtracted, so there is nothing to mask).
+    """
+    if dqarr is None or satstar_model is None:
+        return None
+    flagged = (np.asarray(dqarr) & _L.dqflags.pixel['SATURATED']) != 0
+    return flagged & (np.asarray(satstar_model) > float(min_model))
+
+
+#: Passes ``_save_manual_pass`` writes a residual for (``m12`` is the driver
+#: phase that runs m1 and m2; it is not a pass label).
+_RESID_NAN_PASS_LABELS = ('m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7')
+
+
+def _resid_nan_satstar_passes():
+    """Manual passes whose written residual reports the satstar footprint as NaN.
+
+    Env ``GC_RESID_NAN_SATSTAR_PASSES`` lists iteration labels, comma- or
+    space-separated (``m7`` or ``m6,m7``); unset or blank gives ``('m7',)``.
+    The m3-m6 residuals seed the next pass's detection and its background
+    application, and only the m7 residual has been run with NaN in it (o102,
+    F480M and F212N), so the NaN is scoped to m7 until the earlier passes
+    are validated.
+
+    Returns
+    -------
+    tuple of str
+
+    Raises
+    ------
+    ValueError
+        A listed label is not a manual-pass label (``m1`` ... ``m7``).  A typo
+        would otherwise switch the NaN off for every pass without a word.
+    """
+    raw = os.environ.get('GC_RESID_NAN_SATSTAR_PASSES', '')
+    passes = tuple(tok.lower() for tok in raw.replace(',', ' ').split())
+    bad = [tok for tok in passes if tok not in _RESID_NAN_PASS_LABELS]
+    if bad:
+        raise ValueError(
+            f"GC_RESID_NAN_SATSTAR_PASSES={raw!r}: {bad} not manual-pass "
+            f"labels (any of {', '.join(_RESID_NAN_PASS_LABELS)}, e.g. 'm7' "
+            f"or 'm6,m7'; unset applies the NaN to m7 only)")
+    return passes or ('m7',)
+
+
+def _resid_nan_satstar_min_model():
+    """Model floor (MJy/sr) for ``_satstar_footprint_nan_mask`` in the writer.
+
+    Env ``GC_RESID_NAN_SATSTAR_MIN_MODEL``; unset or blank gives 20.
+
+    Raises
+    ------
+    ValueError
+        The value is not a finite number >= 0.
+    """
+    raw = os.environ.get('GC_RESID_NAN_SATSTAR_MIN_MODEL', '')
+    if not raw.strip():
+        return 20.0
+    try:
+        floor = float(raw)
+    except ValueError:
+        floor = np.nan
+    if not (np.isfinite(floor) and floor >= 0):
+        raise ValueError(
+            f"GC_RESID_NAN_SATSTAR_MIN_MODEL={raw!r} is not a finite number "
+            f">= 0 (MJy/sr; unset gives 20)")
+    return floor
+
+
+def _resid_nan_satstar_applies(iteration_label):
+    """Whether the residual written for ``iteration_label`` gets the NaN.
+
+    Needs env ``GC_RESID_NAN_SATSTAR_FOOTPRINT`` on (default OFF: unset, the
+    written residual is what it was before this switch existed) and the label
+    in ``_resid_nan_satstar_passes()``.  The pass list is read only when the
+    switch is on, so a stray ``GC_RESID_NAN_SATSTAR_PASSES`` cannot break a
+    default run.  The on/off value follows the hand-off convention
+    (``_handoff_env_flag``): any other value raises.
+    """
+    if not _handoff_env_flag('GC_RESID_NAN_SATSTAR_FOOTPRINT', False):
+        return False
+    return iteration_label in _resid_nan_satstar_passes()
+
+
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """Write the per-frame catalog (``save_photutils_results``) + residual +
     model for one manual pass, with the manual ``_m{N}`` iteration token.  The
@@ -4511,6 +4619,21 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
         iteration_label=iteration_label)
 
     residual = _residual_for_bkg
+    # [default OFF] report the accepted-satstar saturated footprint as not
+    # measured, in the passes GC_RESID_NAN_SATSTAR_PASSES lists (default m7).
+    # Only the WRITTEN residual changes: the modelsub_bkg diagnostic above keeps
+    # the unmasked residual, the merged-catalog residual (base = raw residual +
+    # raw model) inherits the NaN, and detection already masks non-finite
+    # pixels of the residual i2d.
+    if _resid_nan_satstar_applies(iteration_label):
+        _nanm = _satstar_footprint_nan_mask(
+            ctx.dqarr, ctx.satstar_model_subtracted,
+            _resid_nan_satstar_min_model())
+        if _nanm is not None and _nanm.any():
+            residual = np.where(_nanm, np.nan, residual)
+            print(f"[{iteration_label}] residual: {int(_nanm.sum())} DQ-SATURATED px "
+                  f"under accepted satstar models set to NaN (not measured)",
+                  flush=True)
     stub = (f'{bp}/{ctx.filtername}/pipeline/{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
