@@ -1,0 +1,40 @@
+output_dir = "/data/qpm/refit-inputs"
+roots = ["/data/jwst/cal", "/data/jwst/rate"]
+
+[qpm]
+n_proc = 4
+register = true
+
+[calibration]
+output_dir = "/data/qpm/calibration-candidate"
+iterations = 2
+bootstrap = 400
+min_stars = 30
+# seed_dir = "/data/qpm/selected-calibration/bundle"
+
+# Refitting requires star-subtracted images on each reference's exact grid.
+# Select at least two training fields spanning at least four visits.
+[[fields]]
+name = "l0p190"
+proposal = 10678
+observations = [67, 68, 69, 70, 71, 72, 73]
+reference = "/data/jwst/mosaics/l0p190_f770w_i2d.fits"
+starless = "/data/jwst/mosaics/l0p190_f770w_starsub_i2d.fits"
+train = true
+
+[[fields]]
+name = "l0p318"
+proposal = 10678
+observations = [81, 82, 83, 84, 85, 86, 87]
+reference = "/data/jwst/mosaics/l0p318_f770w_i2d.fits"
+starless = "/data/jwst/mosaics/l0p318_f770w_starsub_i2d.fits"
+train = true
+
+# Held-out fields are scored without fitting their parameters.
+[[fields]]
+name = "l0p020"
+proposal = 10678
+observations = [139]
+reference = "/data/jwst/mosaics/l0p020_f770w_i2d.fits"
+starless = "/data/jwst/mosaics/l0p020_f770w_starsub_i2d.fits"
+train = false

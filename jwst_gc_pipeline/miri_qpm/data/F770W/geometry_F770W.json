@@ -1,0 +1,44 @@
+{
+ "formula": "dx = cx[0] + cx[1]*(x - 500)/500 + cx[2]*(y - 500)/500; dy likewise with cy (x, y = 0-based detector pixel; evaluated as A @ c with A = [1, (x-500)/500, (y-500)/500])",
+ "meaning": "a 4QPM pane pixel (x, y) sees the sky that the imager distortion solution (the cal WCS) assigns to (x + dx, y + dy)",
+ "units": "detector pixels",
+ "source": "fullframe_preview.fit_regions on pane stars of every GC F770W frame (region_models.npy)",
+ "panes": {
+  "1": {
+   "cx": [
+    -1.0707687770931666,
+    2.3712586818817503,
+    1.0170330626740602
+   ],
+   "cy": [
+    0.21623923932656572,
+    0.7407482041985075,
+    0.3541994807497351
+   ]
+  },
+  "2": {
+   "cx": [
+    -1.7687496892256358,
+    1.6275280764901738,
+    0.7324778861958329
+   ],
+   "cy": [
+    0.45202746347032324,
+    0.6967250371572422,
+    0.7474032641862606
+   ]
+  },
+  "3": {
+   "cx": [
+    -2.1984559769197607,
+    0.9193476168265097,
+    0.19877024414318198
+   ],
+   "cy": [
+    0.1994225689599043,
+    0.3688371296476397,
+    0.4615876938020713
+   ]
+  }
+ }
+}
