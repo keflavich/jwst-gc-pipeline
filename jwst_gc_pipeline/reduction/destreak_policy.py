@@ -36,6 +36,27 @@ SICKLE_SHORTWAVE_FILTERS = (
     'F182M', 'F187N', 'F200W', 'F210M', 'F212N')
 
 
+#: Filters that skip destreaking in a field that otherwise destreaks.
+#:
+#: gc-treasury F480M.  Stage 1 calls ``destreak(use_background_map=True,
+#: median_filter_size=2048)`` and no background map is registered for program
+#: 10678, so every frame loses its row-aligned sky -- real extended emission,
+#: not detector noise -- and loses a different amount in each exposure.  A
+#: scratch re-run of all 68 F480M observations with destreak off (destreak ->
+#: cal -> i2d only), compared with the production i2ds over the 129
+#: overlapping observation pairs, takes the pairs whose block-median offset
+#: exceeds 1 MJy/sr from 48 to 2 and the median absolute offset from 0.59 to
+#: 0.17 MJy/sr.  The two that remain (o076 with o083 and with o084) are
+#: bright-star halo differences that production shows as well.  F212N has not
+#: been surveyed this way, so it still destreaks.
+#:
+#: The lineage token for the filter changes from ``destreak_o<obs>_crf`` to
+#: ``align_o<obs>_crf`` (see ``crf_suffix``), so everything keyed on the old
+#: token -- per-frame catalogs, offsets, the m1-m8 chain -- is a new lineage
+#: and the old frames sit beside it until they are removed.
+NO_DESTREAK_FILTERS = {'gc-treasury': ('F480M',)}
+
+
 class UnknownInstrumentError(ValueError):
     """The instrument a lineage token was asked for did not resolve.
 
@@ -96,6 +117,8 @@ def destreaks(target, filtername, requested=True, instrument=None):
         return False
     if str(target) == 'sickle':
         return str(filtername).upper() in SICKLE_SHORTWAVE_FILTERS
+    if str(filtername).upper() in NO_DESTREAK_FILTERS.get(str(target), ()):
+        return False
     return str(target) not in EXTENDED_EMISSION_FIELDS
 
 
@@ -118,8 +141,9 @@ def suffixes_by_filter(target, filternames, obsid, requested=True,
                        instrument=None):
     """``{FILTER: suffix}`` for a whole filter list.
 
-    Sickle needs this: its short and long filters take different suffixes, so
-    no single ``--each-suffix`` is right for the observation.
+    Sickle and gc-treasury need this: their filters take different suffixes
+    (sickle by wavelength, gc-treasury F480M against F212N), so no single
+    ``--each-suffix`` is right for the observation.
     """
     return {f.upper(): crf_suffix(target, f, obsid, requested, instrument)
             for f in filternames}
