@@ -10786,6 +10786,36 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                           f"off-field cross-band-seed artifact(s) -> n={len(merged)}",
                           flush=True)
                     merged.write(merged_path, overwrite=True)
+                # --- cross-exposure audit (m12 merge only) ---
+                # Every frame ran alone, so nothing so far compares what the
+                # exposures of one sky contain.  For each merged row: how many of
+                # the merge's frames cover the position (ncover), how many carry
+                # the source (nfound), and `single_exposure` for a bright or
+                # saturated row that two or more frames cover and exactly one
+                # carries.  Diagnostic: no row is added or removed, and the
+                # columns are written with the catalog just below.  Placed after
+                # the astrometry checkpoint, which can stop the run.  See
+                # xexp_reconcile.py and PHOTOMETRY_PIPELINE.md.
+                if (phase == 'm12' and not getattr(options, 'cutout_region', '')
+                        and mopt(opts_phase, 'manual_xexp_audit')):
+                    from jwst_gc_pipeline.photometry import xexp_reconcile as _xexp
+                    try:
+                        _xexp.audit_merged_catalog(
+                            merged, filt=filt,
+                            catalog_dirs=[os.path.join(cut_bp, filt),
+                                          os.path.join(basepath, filt)],
+                            satstar_suffix=_ss_suffix,
+                            params=_xexp.params_from_options(opts_phase),
+                            wcs_loader=frame_wcs,
+                            bad_dq_mask=_xexp.bad_dq_mask_for(filt),
+                            log=lambda _m: print(
+                                f"manual [{phase}] {filt}/{module}: {_m}",
+                                flush=True))
+                    except (OSError, ValueError, KeyError, RuntimeError) as _xex:
+                        print(f"manual [{phase}] {filt}/{module}: WARNING "
+                              f"cross-exposure audit failed, no audit columns "
+                              f"written ({type(_xex).__name__}: {_xex})",
+                              flush=True)
                 # --- iteration-found provenance: the first phase a source
                 # appears in (matched across phases by sky position) ---
                 _iter_num = {'m2': 2, 'm3': 3, 'm4': 4, 'm5': 5, 'm6': 6, 'm7': 7}[merge_label]
