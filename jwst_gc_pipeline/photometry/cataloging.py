@@ -8389,6 +8389,56 @@ def _measure_stage_checkpoint(fns, merge_label, module, filt, cut_bp, basepath,
     return record
 
 
+def _record_unverified_empty_filter(merge_label, module, filt, cut_bp,
+                                    proposal_id, field, merged_path):
+    """Log and record a filter whose m2 astrometry checkpoint was skipped
+    because every per-frame catalog is empty.
+
+    The checkpoint measures each exposure against the visit consensus and the
+    reference catalog; with no sources there is nothing to measure, and
+    ``_run_astrometry_stage_checkpoint`` has no zero-source branch.  The filter
+    is therefore UNVERIFIED, not passed: the line below is loud, and the record
+    sits beside the checkpoint records (``unverified_empty_<stage>_<FILTER>_
+    o<field>.json``, a name no ``checkpoint_*`` reader globs) so a release audit
+    can list the unverified filters.  Only reached for a pair allowlisted in
+    ``alignment_config.FieldAlignment.empty_filters``.
+    """
+    import datetime
+    import json
+
+    from jwst_gc_pipeline.atomic_io import atomic_write
+    from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
+
+    record_dir = os.path.join(cut_bp, 'astrometry_checkpoints')
+    os.makedirs(record_dir, exist_ok=True)
+    path = os.path.join(
+        record_dir,
+        f"unverified_empty_{merge_label}_{filt.upper()}"
+        f"{consensus_obs_token(proposal_id, field)}.json")
+    record = {
+        'status': 'UNVERIFIED',
+        'reason': ('every per-frame catalog has 0 sources; the pair is '
+                   'allowlisted in alignment_config.FieldAlignment.empty_filters'),
+        'checkpoint': 'skipped',
+        'stage': merge_label,
+        'proposal_id': str(proposal_id),
+        'field': str(field),
+        'filter': filt.upper(),
+        'module': module,
+        'merged_catalog': merged_path,
+        'written_utc': datetime.datetime.now(datetime.timezone.utc).strftime(
+            '%Y-%m-%dT%H:%M:%SZ'),
+    }
+    with atomic_write(path) as tmp:
+        with open(tmp, 'w') as fh:
+            json.dump(record, fh, indent=2)
+    print(f"ASTROM CHECKPOINT [{merge_label}] UNVERIFIED: {proposal_id} "
+          f"{filt.upper()}/{module} o{field}: every per-frame catalog is empty "
+          f"(allowlisted), so no astrometry was measured for this filter; "
+          f"record {path}", flush=True)
+    return path
+
+
 def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
                                      proposal_id, options, refcat_cache,
                                      context=""):
@@ -10593,10 +10643,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     filt, getattr(options, 'proposal_id', None),
                     getattr(options, 'field', None),
                     cutout=bool(getattr(options, 'cutout_region', '')))
-                merge_frames_for_observation(
+                # An (observation, filter) listed in FieldAlignment.empty_filters
+                # may have no source in any frame; the merge then writes a
+                # zero-row product instead of raising AllFramesEmptyError.
+                from jwst_gc_pipeline.reduction.alignment_config import (
+                    empty_filter_allowed as _empty_filter_allowed)
+                _empty_ok = _empty_filter_allowed(proposal_id, field, filt)
+                _merged_tab = merge_frames_for_observation(
                     proposal_id, field,
                     module=module, filtername=filt.lower(),
                     m2_registration=_m2_registration,
+                    allow_all_empty=_empty_ok,
                     method='dao', suffix='_basic', target=target, basepath=cut_bp,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,
@@ -10607,6 +10664,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # volume is large (>1M detections).
                     n_spatial_chunks=int(getattr(options, 'merge_spatial_chunks', 1) or 1),
                     merge_workers=max(1, int(getattr(options, 'parallel_workers', 1) or 1)))
+
+                if (_empty_ok and _merged_tab is not None
+                        and _merged_tab.meta.get('EMPTYALL')):
+                    # Nothing to register, vet, residual-subtract or smooth.
+                    # The checkpoint has no zero-source branch, so it is
+                    # skipped LOUDLY (UNVERIFIED line + record) rather than
+                    # passed.  The later phases of this filter get no vetted
+                    # catalog or smoothed background from here; they are
+                    # handled when a chain past m2 is run for the tile.
+                    _record_unverified_empty_filter(
+                        merge_label, module, filt, cut_bp, proposal_id, field,
+                        _merged_path(merge_label, module, filt, resbgsub))
+                    continue
 
                 # ---- ASTROMETRY CHECKPOINT (visit-consensus failsafe) ----
                 # m2: measure every exposure vs the visit consensus + the
