@@ -614,7 +614,7 @@ def plan(roots, *, guard=None, rules=DEFAULT_RULES, enabled=None,
                                                     followlinks=follow_symlinks):
             real_dir = os.path.realpath(dirpath)
             if real_dir in seen_dirs:
-                # brick/cloudc/wd1 are reachable by several routes (the /orange
+                # brick/wd1 are reachable by several routes (the /orange
                 # symlink, the /blue path, and <field>/F<X> == <field>/
                 # mastDownload/JWST/F<X>).  Without this a naive walk counts --
                 # and would offer to delete -- the same bytes up to four times.

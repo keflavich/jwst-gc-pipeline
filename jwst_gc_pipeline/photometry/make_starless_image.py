@@ -66,7 +66,7 @@ TARGETS = {
         catalog_rel='catalogs/seed_union_iter3_brick.fits',
     ),
     'cloudc': dict(
-        basepath='/blue/adamginsburg/adamginsburg/jwst/cloudc',
+        basepath='/orange/adamginsburg/jwst/cloudc',
         filters=['F182M', 'F187N', 'F212N', 'F405N', 'F410M', 'F466N'],
         catalog_rel='catalogs/seed_union_iter3_cloudc.fits',
     ),

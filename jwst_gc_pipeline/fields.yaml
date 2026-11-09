@@ -75,7 +75,7 @@ fields:
           miri: ['003']
 
   cloudc:
-    root: blue
+    root: orange
     fov_region: regions_/nircam_cloudc_fov.reg
     observations:
       '2221':

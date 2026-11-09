@@ -311,7 +311,7 @@ it, and for `MANIFEST.json`'s `joint_catalog.gate_override`, before trusting a
     at staging time rather than from the page.
   - `link mode symlink` in `MANIFEST.json` or at staging means the field's data
     are on a different filesystem from the release root, where a hardlink is
-    impossible (brick and cloudc: `/blue` vs `/orange`). Those frames are
+    impossible (brick: `/blue` vs `/orange`). Those frames are
     Globus-transfer-only — the HTTPS data plane will not serve a symlink
     pointing out of the release tree — and the page and README say so. Audit a
     staged field with `stage_release.py --check-exposures --field <field>`,

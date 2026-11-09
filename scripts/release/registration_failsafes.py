@@ -62,8 +62,8 @@ from photutils.detection import DAOStarFinder
 # so all three gates can be pointed at one tree together.  It was hardcoded
 # here, and `fields.yaml` has TWO roots: `orange` (/orange/adamginsburg/jwst)
 # and `blue` (/blue/adamginsburg/adamginsburg/jwst).  A `root: blue` field is
-# reachable under /orange only if someone made a symlink for it (brick and
-# cloudc have one; gc-treasury, root blue per #421, does not), and without one
+# reachable under /orange only if someone made a symlink for it (brick has
+# one; gc-treasury, root blue per #421, does not), and without one
 # every glob below matched nothing -- the gate reported on an empty tree.
 # The default is unchanged, so nothing moves for the fields that resolve today.
 #
