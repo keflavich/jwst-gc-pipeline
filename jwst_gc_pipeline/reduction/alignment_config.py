@@ -940,9 +940,12 @@ ALIGNMENT_CONFIG = (
         table_only_tie=True,
         # Every per-frame catalog of these pairs has 0 rows (daofind finds no
         # detections in any of the 8 frames; o003 cycle 3 m12 finalize 49062228
-        # died on them, 2026-11-03).  Confirmed pair by pair from the m2
-        # per-frame catalogs, not inferred from the filter.
-        empty_filters=('003:F770W', '003:F1280W', '003:F1500W', '004:F770W'),
+        # died on them, 2026-11-03; o016 cycle 4 m12 finalize 50628029 on
+        # 2026-11-10, where 81-83% of pixels carry the SATURATED DQ bit while
+        # F560W/F1000W keep ~700-1100 rows per frame).  Confirmed pair by pair
+        # from the m2 per-frame catalogs, not inferred from the filter.
+        empty_filters=('003:F770W', '003:F1280W', '003:F1500W', '004:F770W',
+                       '016:F770W', '016:F1280W', '016:F1500W'),
         notes=('gc3571 MIRI imaging (F560W/F770W/F1000W/F1280W/F1500W, obs '
                '001/003/004/005/016 = Tiles 1/2/3/4/6, five adjoining '
                'pointings spanning 3.22 arcmin about (266.41973, -29.00509), '
