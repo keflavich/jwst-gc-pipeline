@@ -619,7 +619,7 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                          sat_data_floor=0.0, severity_floor=0.0,
                          partner_xy=None, partner_frac=0.25,
                          sibling_xy=None, sibling_radius_px=None,
-                         severity_drops=None):
+                         severity_drops=None, seed_require_sat_dq=False):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -649,6 +649,17 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
         When given, one dict per component the pre-fit severity gate drops is
         appended to it (``severity_drop_records``): the components this
         channel disowns as weakly saturated, for the daophot hand-off.
+    seed_require_sat_dq : bool, optional
+        Drop the peak-based and sub-floor seeds whose component holds no
+        DQ-SATURATED pixel (#991).  Those seeds exist for stars whose core is
+        suppressed without being flagged; where the filter's severity floor
+        sits below the flux at which the detector really flags saturation
+        (F212N: floor 4000, flag onset 38017 MJy/sr) they instead pick up
+        ordinary unsaturated stars.  The test reads the DQ array (SATURATED
+        after the cosmic-ray cleanup, before the data-floor and severity
+        gates), not the seed kind: a flagged component the severity gate
+        dropped is re-seeded as ``subfloor`` and still carries the flag.
+        Partner and sibling seeds are not affected.  Default off.
 
     Returns
     -------
@@ -722,6 +733,8 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     else:
         remove_as_cr = cosmic_rays
     saturated = saturated & (~remove_as_cr)
+    # DQ-SATURATED pixels before any gate or seed; read by seed_require_sat_dq.
+    _sat_dq_pre = saturated.copy()
 
     sources, nsource = label(saturated)
     print('Saturated starfinding: nsources=', nsource, flush=True)
@@ -897,6 +910,29 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                       f"{len(keep_lab)} suppression-strip component(s) "
                       f"(data > {_subfloor_frac:g} x {severity_floor:g}) "
                       f"-> nsources={nsource}", flush=True)
+
+    # SEED-REQUIRES-SAT-DQ (#991): drop peak / sub-floor components with no
+    # DQ-SATURATED pixel.  Runs before the partner and sibling blocks so their
+    # seeds (kinds 4, 5) can still claim the pixels; _kind_img is cleared on
+    # the dropped pixels for that.  A component that merged with a flagged one
+    # reads kind 1 and is kept; so is a flagged component the severity gate
+    # dropped and the sub-floor block re-seeded (its _sat_dq_pre pixels).
+    if seed_require_sat_dq and severity_floor and severity_floor > 0 and nsource:
+        _idx = np.arange(1, nsource + 1)
+        _has_dq = np.asarray(ndimage.maximum(
+            _sat_dq_pre.astype(np.uint8), labels=sources, index=_idx)) > 0
+        _kmin_seed = np.asarray(ndimage.minimum(
+            np.where(_kind_img > 0, _kind_img, np.uint8(255)),
+            labels=sources, index=_idx))
+        _no_dq_lab = _idx[(~_has_dq) & np.isin(_kmin_seed, (2, 3))]
+        if len(_no_dq_lab):
+            _gone = np.isin(sources, _no_dq_lab)
+            saturated = saturated & (~_gone)
+            _kind_img[_gone] = 0
+            sources, nsource = label(saturated)
+            print(f"Saturated starfinding: seed-requires-SAT-DQ dropped "
+                  f"{len(_no_dq_lab)} peak/sub-floor seed(s) with no "
+                  f"DQ-SATURATED pixel -> nsources={nsource}", flush=True)
 
     # PARTNER-BAND SEEDING (Phase A1, pair-consistent substitution): positions
     # where the SAME star was accepted as a satstar in a near-degenerate
@@ -1365,6 +1401,27 @@ def satstar_uncapped_flux_filters(env=None):
     return frozenset(tok.upper() for tok in raw.replace(',', ' ').split())
 
 
+def satstar_seed_require_sat_dq_filters(env=None):
+    """Bandpasses whose peak-based and sub-floor satstar seeds must hold a
+    DQ-SATURATED pixel (``find_saturated_stars(seed_require_sat_dq=...)``),
+    from ``SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS`` (#991).
+
+    Comma- and/or space-separated bandpass names, case-insensitive (returned
+    upper-case); unset or blank -> empty, i.e. no behaviour change.  The
+    variable changes the fitted seed set and the satstar cache key, so a
+    name that is not a bandpass raises ``ValueError`` rather than switching
+    the filter off without a word."""
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS') or ''
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if not _OPTIN_BANDPASS_RE.match(tok)]
+    if bad:
+        raise ValueError(
+            f"SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS={raw!r}: {bad} not bandpass "
+            f"names (e.g. 'F212N' or 'F212N,F405N')")
+    return frozenset(scope)
+
+
 def _frame_bandpass(header):
     """The science bandpass of an exposure header (pupil-wheel narrow/medium
     bands win over the wide filter-wheel blocker, #950), upper-case; ``''``
@@ -1519,6 +1576,18 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             _bp = ''
         if _bp in satstar_uncapped_flux_filters(env):
             parts.append('uf')
+    if satstar_seed_require_sat_dq_filters(env):
+        # SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS changes the seed set (#991), so
+        # a catalog written without it is stale for the listed bandpasses.
+        # Same per-frame bandpass rule as 'uf'; the default (empty list) and
+        # every unlisted band keep their keys.
+        try:
+            with fits.open(filename) as fh:
+                _bp = _frame_bandpass(fh[0].header)
+        except OSError:
+            _bp = ''
+        if _bp in satstar_seed_require_sat_dq_filters(env):
+            parts.append('sd')
     return '_'.join(parts)
 
 
@@ -3688,7 +3757,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
         sat_data_floor=_sat_floor, severity_floor=_sev_floor,
         partner_xy=_partner_xy, sibling_xy=_sibling_xy,
-        severity_drops=_severity_drops)
+        severity_drops=_severity_drops,
+        seed_require_sat_dq=(_frame_bandpass(header)
+                             in satstar_seed_require_sat_dq_filters()))
     # Weakly saturated stars the pre-fit severity gate disowned and no later
     # seeding took back: remove_saturated_stars persists them for the
     # daophot hand-off (severity_drop_table).
