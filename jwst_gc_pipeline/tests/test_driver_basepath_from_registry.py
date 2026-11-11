@@ -100,11 +100,11 @@ def test_allowed_entries_still_match():
 
 
 #: Which tree each field lives on.  The `localdata` check below cannot notice a
-#: blue<->orange flip for brick or cloudc, because /orange/.../brick is a symlink
-#: into the blue tree -- so the two fields that have one are exactly the two it
-#: is blind to.  Pin them here instead, so moving a field has to be deliberate.
+#: blue<->orange flip for brick, because /orange/.../brick has stood in for the
+#: blue tree.  Pin it here instead, so moving a field has to be deliberate.
+#: cloudc was pinned for the same reason until its products moved to /orange.
 EXPECTED_ROOTS = {
-    'arches': 'orange', 'brick': 'blue', 'cloudc': 'blue',
+    'arches': 'orange', 'brick': 'blue', 'cloudc': 'orange',
     'cloudef': 'orange',
     # 2092 obs 005 (CLOUDEF-REFERENCE), split out of cloudef because it is a
     # control field 11.77' away sharing no sources with CLOUDEF-CENTER.
