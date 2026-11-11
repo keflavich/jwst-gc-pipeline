@@ -202,6 +202,7 @@ def test_the_keyword_reaches_the_merge_and_its_table_comes_back():
 
 @pytest.mark.parametrize('field,filt', [
     ('003', 'F770W'), ('003', 'F1280W'), ('003', 'F1500W'), ('004', 'F770W'),
+    ('016', 'F770W'), ('016', 'F1280W'), ('016', 'F1500W'),
     ('003', 'f770w')])
 def test_the_gc3571_pairs_are_allowed(field, filt):
     assert AC.empty_filter_allowed('3571', field, filt)
@@ -212,8 +213,9 @@ def test_the_gc3571_pairs_are_allowed(field, filt):
     ('3571', '003', 'F1000W'),
     ('3571', '004', 'F1280W'),    # o004 F1280W has rows; only F770W is empty
     ('3571', '001', 'F770W'),     # o001 F770W has one row: not all-empty
-    ('3571', '005', 'F770W'),     # not measured yet: strict until it is
-    ('3571', '016', 'F770W'),
+    ('3571', '005', 'F770W'),     # o005 F770W has 0-1 rows per frame: not all-empty
+    ('3571', '016', 'F560W'),     # o016: ~920-1080 rows per frame
+    ('3571', '016', 'F1000W'),    # o016: ~700-740 rows per frame
     ('10678', '003', 'F770W'),    # other program, same field and filter
     ('3571', None, 'F770W'),
     ('3571', '003', None),
