@@ -204,6 +204,16 @@ Measured with the shipped defaults: brick F200W 157 → **350 seeds** (2.23×; m
 contain no DQ-saturated pixel at all), brick F182M 161 → **420** (2.61×; 62%).
 ⚠ F200W's severity floor (4000) is one of the unmeasured †channel-sibling
 estimates, so its 2.23× is contingent on a guessed floor; F182M's 4000 is measured.
+
+Those unflagged seeds are intended where the severity floor is the real onset of
+core suppression (brick F182M). Where the floor sits far below the flagging
+onset they instead pick up ordinary stars: gc-treasury o043 F212N (floor 4000,
+measured no-NaN SATURATED onset 38017) has 91.2% of its accepted satstars (915
+per frame) with no SATURATED pixel within 2 px (#991). Setting
+`SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS=F212N` drops the `peak` / `subfloor`
+seeds of that band whose component holds no DQ-SATURATED pixel; the test reads
+the DQ array, not `seed_kind`, because a flagged component the severity gate
+dropped is re-seeded as `subfloor`. Partner and sibling seeds are not affected.
 Reason about the seed list from these four blocks.
 
 **Empirical scale of the over-flagging** (MIRI sgrb2 F770W,
@@ -605,6 +615,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_SEVERITY_FLOOR` | per-filter `SAT_SEVERITY_FLOOR` | override the daophot-mask severity floor |
 | `SATSTAR_MIN_LOST_CORE` | 5 | min truly-lost core size (px) |
 | `SATSTAR_SUBFLOOR_SEED_FRAC` | 0.35 | sub-floor seeding fraction |
+| `SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS` | unset (off) | bandpasses (comma/space-separated, e.g. `F212N`) whose peak-based and sub-floor seeds must hold a DQ-SATURATED pixel; others are unaffected, a non-bandpass name raises, listed bands carry `sd` in the satstar cache key (#991) |
 | `SATSTAR_COMPONENT_OVERLAP_FRAC` / `…_MIN_PX` | (see code) / 250 | merge overlapping saturated components |
 | `SATSTAR_WINGCAL` | 1 | wing self-calibration (`apply_wing_selfcal`) |
 | `SATSTAR_WINGCAL_MAX_SE` | 0.05 | largest standard error (1.2533 madstd/√n) of a C(r) bucket that wing self-calibration applies, per-frame and pooled; ≤ 0 disables the gate. madstd is floored at the fractional scatter of the smallest r_mask bucket (≥ 5 stars) times the bucket ratio, and C(r) is anchored at C(0) = 1 (#1041) |
