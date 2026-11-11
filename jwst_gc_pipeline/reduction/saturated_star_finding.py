@@ -1506,6 +1506,12 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
+    # Single-group (G1-only) pixels flagged from the ramp change the seeds and
+    # the fit on frames that have any; a catalog fitted without it is stale.
+    from jwst_gc_pipeline.reduction import g1only_dq
+    g1 = g1only_dq.signature(filename)
+    if g1:
+        parts.append(g1)
     if satstar_uncapped_flux_filters(env):
         # NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS changes the per-frame catalog
         # flux_fit/flux_err (not the model) of the listed bandpasses (#1186),
@@ -6673,6 +6679,12 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     """
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
+    # Single-group (G1-only) NIRCam pixels carry a ~0.75x rate with clean DQ;
+    # flag them SATURATED|DO_NOT_USE (+ NaN) from the sibling _ramp.fits so
+    # the finder seeds them and the first-read recovery rebuilds them.
+    # In memory, idempotent; G1ONLY_SAT_DQ=0 disables.  See g1only_dq.py.
+    from jwst_gc_pipeline.reduction import g1only_dq
+    g1only_dq.apply_to_hdul(fh, filename, label='satstar')
     data = fh['SCI'].data
 
     # Correct the SATURATED DQ bit to FIRST-group saturation (env-gated, MIRI).

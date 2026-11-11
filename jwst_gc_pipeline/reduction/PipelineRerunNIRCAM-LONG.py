@@ -50,6 +50,7 @@ from jwst.tweakreg.utils import adjust_wcs
 from jwst.datamodels import ImageModel
 
 from jwst_gc_pipeline.reduction.destreak import destreak
+from jwst_gc_pipeline.reduction import g1only_dq
 from jwst_gc_pipeline.reduction.mast_obs_scope import observation_scope_mask
 
 from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
@@ -636,6 +637,31 @@ def write_perexposure_crf(asn_data, output_dir, field, skip_outlier_detection,
               f"({label}); outlier_detection ran and named its output after each "
               f"INPUT MODEL, i.e. the per-exposure names, so they are already in "
               f"place -- leaving them alone)", flush=True)
+
+
+def flag_single_group_pixels_in_crf(asn_data, output_dir, field, label):
+    """Flag G1-only pixels SATURATED|DO_NOT_USE (+ NaN) in this pass's crf.
+
+    Called right after every ``write_perexposure_crf`` (module and merged
+    passes), so whichever branch authored the per-exposure crf, it carries the
+    flags.  Pixels whose ramp had one usable group get rate = G1/tgroup (~0.75x for NFRAMES=2) with clean
+    DQ; see reduction/g1only_dq.py.  Idempotent; G1ONLY_SAT_DQ=0 disables; a
+    missing _ramp.fits is a WARNING and is counted, never silent.
+    """
+    _n_files = _n_px = 0
+    for member in asn_data['products'][0]['members']:
+        _mb = os.path.basename(member['expname'])
+        _target = os.path.join(output_dir,
+                               _mb.replace('.fits', f'_o{field}_crf.fits'))
+        if not os.path.exists(_target):
+            continue
+        _n = g1only_dq.apply_to_file(_target, label=label)
+        if _n:
+            _n_files += 1
+            _n_px += _n
+    print(f"  G1-only DQ ({label}): flagged {_n_px} px in {_n_files} crf; "
+          f"running totals {g1only_dq.summary()}", flush=True)
+
 
 def main(filtername, module, Observations=None, regionname='brick', do_destreak=True,
          field='001', proposal_id='2221', skip_step1and2=False, use_average=True,
@@ -1326,6 +1352,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         write_perexposure_crf(asn_data, output_dir, field,
                               skip_outlier_detection=skip_outlier_detection,
                               skymatch_method=skymatch_method, label=module)
+        flag_single_group_pixels_in_crf(asn_data, output_dir, field, label=module)
 
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:
@@ -1475,6 +1502,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         write_perexposure_crf(asn_data, output_dir, field,
                               skip_outlier_detection=skip_outlier_detection,
                               skymatch_method=None, label='merged')
+        flag_single_group_pixels_in_crf(asn_data, output_dir, field, label='merged')
 
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:
