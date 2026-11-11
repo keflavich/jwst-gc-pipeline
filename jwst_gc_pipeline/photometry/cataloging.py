@@ -307,6 +307,51 @@ def _handoff_env_flag(name, default):
         f"({'on' if default else 'off'})")
 
 
+def _bright_presub_peak_noise():
+    """``DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE``: seeds brighter than this many
+    times the frame's median local noise are fit and subtracted before the
+    m3..m7 detection (0 / unset = off, the historical behaviour).
+
+    The m3..m7 detection image is the frame itself, so a bright unsubtracted
+    star inflates the local noise map (``compute_local_noise_map`` smooths the
+    squared high-pass residual) out to ~14 px and the local-S/N cut drops the
+    faint neighbours there; inside ~8 px daofind finds almost nothing either.
+    Satstars never show this because their model is subtracted first (#991).
+
+    Raises ``ValueError`` on a non-numeric, negative or non-finite value.
+    """
+    raw = os.environ.get('DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE')
+    if raw is None or not raw.strip():
+        return 0.0
+    try:
+        val = float(raw)
+    except ValueError:
+        raise ValueError(
+            f"DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE={raw!r} is not a number") from None
+    if not (np.isfinite(val) and val >= 0):
+        raise ValueError(
+            f"DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE={raw!r} must be finite and >= 0")
+    return val
+
+
+def _bright_presub_select(seed, data, peak_noise):
+    """Boolean mask of ``seed`` rows whose 3x3 data peak exceeds
+    ``peak_noise`` times the median of the frame's local noise map.
+
+    Returns ``(bright, noise_ref)``; seeds off the frame are never bright.
+    """
+    from scipy import ndimage as _ndi
+    noise_ref = float(np.nanmedian(compute_local_noise_map(data, smooth_sigma_pix=3.0)))
+    peak = _ndi.maximum_filter(np.asarray(data, dtype=float), size=3)
+    ny, nx = peak.shape
+    ix = np.rint(np.asarray(seed['x_init'], dtype=float)).astype(int)
+    iy = np.rint(np.asarray(seed['y_init'], dtype=float)).astype(int)
+    on = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    bright = np.zeros(len(seed), dtype=bool)
+    bright[on] = peak[iy[on], ix[on]] > float(peak_noise) * noise_ref
+    return bright, noise_ref
+
+
 def _read_satstar_handoff_table(path, label, kind):
     """Read a satstar hand-off table that exists, or raise.
 
@@ -4892,18 +4937,44 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # m3 / m4 / m5: single seeded pass
     prev = Table.read(prev_seed_catalog) if prev_seed_catalog else None
     snr = iter2_snr
-    seed = _build_manual_seed(
-        detection_image=ctx.nan_replaced_data, nan_replaced_data=ctx.nan_replaced_data,
-        mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
-        satstar_table=ctx.satstar_table, prev_catalog=prev,
-        local_snr_threshold=snr,
-        roundlo=resid_roundlo, roundhi=resid_roundhi,
-        sharplo=resid_sharplo, sharphi=resid_sharphi,
-        dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-        label=manual_phase, struct_x=struct_x, struct_y=struct_y,
-        coarse_bg_box=coarse_bg_box,
-        noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
-        threshold_scale=detect_scale)
+
+    def _seed_from(detection_image, nan_replaced):
+        return _build_manual_seed(
+            detection_image=detection_image, nan_replaced_data=nan_replaced,
+            mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
+            satstar_table=ctx.satstar_table, prev_catalog=prev,
+            local_snr_threshold=snr,
+            roundlo=resid_roundlo, roundhi=resid_roundhi,
+            sharplo=resid_sharplo, sharphi=resid_sharphi,
+            dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
+            label=manual_phase, struct_x=struct_x, struct_y=struct_y,
+            coarse_bg_box=coarse_bg_box,
+            noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
+            threshold_scale=detect_scale)
+
+    seed = _seed_from(ctx.nan_replaced_data, ctx.nan_replaced_data)
+    _presub = _bright_presub_peak_noise()
+    if _presub > 0 and len(seed):
+        _bright, _nref = _bright_presub_select(seed, ctx.nan_replaced_data, _presub)
+        if np.any(_bright):
+            seed_b = seed[_bright]
+            _, modsky_b, _ = _pass(seed_b, f'{manual_phase}b')
+            resid_b = np.asarray(ctx.nan_replaced_data, dtype=float) - modsky_b
+            seed_r = _seed_from(resid_b, resid_b)
+            both = table_vstack([seed_b, seed_r], metadata_conflicts='silent')
+            keep, _ = _dedup_close_sources(
+                xy=np.column_stack([np.asarray(both['x_init'], dtype=float),
+                                    np.asarray(both['y_init'], dtype=float)]),
+                flux=np.asarray(both['flux_init'], dtype=float),
+                min_sep_pix=0.5 * ctx.fwhm_pix, quality=None,
+                is_saturated=(np.asarray(both['is_saturated'], dtype=bool)
+                              if 'is_saturated' in both.colnames else None))
+            print(f"[{manual_phase}] bright pre-subtraction (peak > {_presub:g} x "
+                  f"{_nref:.3g}): {len(seed_b)} bright seeds fit + subtracted; seeds "
+                  f"{len(seed)} on the frame -> {int(np.sum(keep))} bright + detections "
+                  f"on the residual ({len(seed_r)}, deduped {len(both)} -> "
+                  f"{int(np.sum(keep))})", flush=True)
+            seed = both[keep]
     res, modsky, _ = _pass(seed, manual_phase,
                            _nprom_m3p if _is_ext_nircam else None)
     _save_manual_pass(ctx=ctx, result=res, modsky=modsky, options=options,
