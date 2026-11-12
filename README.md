@@ -54,6 +54,27 @@ from jwst_gc_pipeline.run_pipeline import run_pipeline
 run_pipeline(proposal=2221, obsid=1)
 ```
 
+## MIRI 4QPM pane imaging
+
+The independent [MIRI 4QPM workflow](docs/MIRI_QPM.md) gathers local F770W FULL exposures, calibrates and images each field, and can refit a separate calibration bundle for additional observations. Run `gc-miri-qpm run --config examples/miri_qpm/fields.toml`.
+
+**4QPM science caveats:** the supplied calibration measures pane point-source
+fluxes at **0.942 ± 0.019** of their imager fluxes, relative to extended emission.
+The roughly **6% deficit is retained**, with no automatic flux correction.
+It affects pane pixels (`SOURCE=2` or `3`); `QPMPSB` records the diagnostic.
+The `ERR` image does not include this systematic uncertainty.
+
+**Bright-core filling is enabled.** Panes fill holes in the imager reference,
+including saturated stellar cores, wherever pane data are available (`SOURCE=3`).
+A finite filled core can therefore look unsaturated even though its photometry
+is outside the calibration's validated **30–450 MJy/sr** range. `FLAGS & 1`
+marks above-range contributions, `FLAGS & 64` marks saturated ramps with a finite
+slope, and `FLAGS & 128` marks near-saturated ramps. The brightness flags use
+the exposure's calibration level, including its sky offset. Inspect these flags
+for photometry; use the imager reference or mask `SOURCE=3` when identifying
+saturation by missing cores. Full flag definitions and calibration limits are
+in the [4QPM guide](docs/MIRI_QPM.md).
+
 ## What comes out
 
 Under the field's directory (`fields.yaml` says where each field lives):

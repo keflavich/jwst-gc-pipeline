@@ -9,3 +9,7 @@ recursive-include jwst_gc_pipeline/photometry/reference_fields/injections *.ecsv
 include licenses/LICENSE.rst
 include README.md
 global-exclude *.pyc *.o
+
+recursive-include jwst_gc_pipeline/miri_qpm/data/F770W *.fits *.json *.npz *.md SHA256SUMS
+include docs/MIRI_QPM.md
+recursive-include examples/miri_qpm *.toml
