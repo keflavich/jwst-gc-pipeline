@@ -276,3 +276,44 @@ def test_content_key_unchanged_when_no_core_applies(tmp_path):
     assert satstar_cache._psf_core_signature(h, {eh.EPSF_CORE_DIR_ENV: str(tmp_path)}) == ''
     assert satstar_cache._psf_core_signature(_header(instrume='MIRI'),
                                              {eh.EPSF_CORE_DIR_ENV: str(tmp_path)}) == ''
+
+
+# -- the writer stamps what the cache check expects ---------------------------
+
+def test_remove_saturated_stars_stamps_the_signature_the_cache_expects(
+        tmp_path, env, monkeypatch):
+    """The real writer, with the fitter stubbed to apply the core: the
+    catalog's EPSFSHA is the one ``load_or_make_satstar_catalog`` expects for
+    the frame, whatever other detectors the process has fitted; an STPSF run
+    stamps no EPSFSHA, which reads back as the expected ''."""
+    import builtins
+    import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as CL
+    fn = _frame(tmp_path)
+    with fits.open(fn, mode='update') as hl:
+        hl.append(fits.ImageHDU(np.zeros((8, 8), 'float32'), name='SCI'))
+        hl.append(fits.ImageHDU(np.zeros((8, 8), 'int32'), name='DQ'))
+    for attr in ('satstar_wingcal_measurements', 'satstar_rejected',
+                 'satstar_model', 'satstar_resid', 'satstar_flagimg'):
+        monkeypatch.delattr(builtins, attr, raising=False)
+
+    def fit(fh, **kw):
+        eh.maybe_apply_epsf_core(env['st'], 'NRCB5', 'F480M', program='10678')
+        eh._APPLIED[('NRCA5', 'F480M')] = dict(path='other.fits', sha256='x' * 64,
+                                               program='10678', r0=10.0, r1=12.0,
+                                               shift_max_mpix=0.0)
+        return Table({'flux_fit': [1.0]})
+    monkeypatch.setattr(ssf, 'get_saturated_stars', fit)
+    cat = fn.replace('.fits', '_satstar_catalog.fits')
+    monkeypatch.setenv(eh.EPSF_CORE_DIR_ENV, env['cores'])
+    ssf.remove_saturated_stars(fn, recovery_signature='off')
+    meta = Table.read(cat).meta
+    assert meta['PSFMODEL'] == 'STPSF+EPSFCORE'
+    assert meta['EPSFSHA'] == CL._satstar_psf_signature(fn) != ''
+    monkeypatch.delenv(eh.EPSF_CORE_DIR_ENV)
+    monkeypatch.setattr(eh, '_APPLIED', {})
+    monkeypatch.setattr(ssf, 'get_saturated_stars',
+                        lambda fh, **kw: Table({'flux_fit': [1.0]}))
+    ssf.remove_saturated_stars(fn, recovery_signature='off')
+    meta = Table.read(cat).meta
+    assert meta['PSFMODEL'] == 'STPSF' and 'EPSFSHA' not in meta
+    assert CL._satstar_psf_signature(fn) == ''
