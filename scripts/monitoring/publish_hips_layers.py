@@ -122,6 +122,15 @@ LAYERS = {
         f'{BUILD_ROOT}/jwst_gc_treasury_f212n_residual_hips',
     'jwst_gc_treasury_f480m_residual_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_f480m_residual_hips',
+    # PEPPAR (Hosek's PSF-fitting code) twins of the two layers above: the
+    # same tiles, stretch and builder path, with the PEPPAR FINAL residual
+    # (data-qa combine_peppar_residuals.py) as the source.  A diagnostic for
+    # comparing a second PSF subtraction with the DAOPHOT one.  Maintainer OK
+    # to publish, and to list in the avm_images index, 2026-11-13.
+    'jwst_gc_treasury_f212n_peppar_residual_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_f212n_peppar_residual_hips',
+    'jwst_gc_treasury_f480m_peppar_residual_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_f480m_peppar_residual_hips',
     # NIRCam-only colour composite, R=F480M G=mean B=F212N, reprojected by
     # astropy like the 770-480-212 mosaic; it covers all of the NIRCam sky.
     # The residual twin is built from the same DAOPHOT residual mosaics as
