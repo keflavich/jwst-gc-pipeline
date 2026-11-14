@@ -49,12 +49,12 @@ Usage::
         --write out.ecsv          # writes the NEGATED (correction) values
 """
 import argparse
-import glob
 import os
 import re
 from collections import defaultdict
 
-from jwst_gc_pipeline.photometry.naming import OBS_TOKEN_CAPTURE
+from jwst_gc_pipeline.photometry.naming import (
+    OBS_TOKEN_CAPTURE, glob_perframe_catalogs, perframe_variant_summary)
 
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -157,7 +157,13 @@ def run(field, band, anchor_band, stage, max_exp):
     per = defaultdict(list)
     rolls = []
     seen = set()
-    for p in sorted(glob.glob(pat)):
+    # legacy and m3..m7 merge-label-tokened names, one spelling per frame
+    # (module-blind: any pass's fit of a frame measures its position)
+    pat_paths, variant_counts = glob_perframe_catalogs(pat)
+    if variant_counts["labelled"]:
+        print(perframe_variant_summary(variant_counts, f"{field} {band} {stage}",
+                                       "any (module-blind)"))
+    for p in pat_paths:
         # NOT an f-string -- see network_selfcal.py: `{3}`/`{4,5}` are
         # replacement fields, and the resulting `(4, 5)` is a CAPTURING group
         # that shifts m.group(4) off the exposure.

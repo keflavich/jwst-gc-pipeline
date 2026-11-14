@@ -1595,6 +1595,51 @@ def test_checkpoint_cli_drops_subfloor_and_keeps_the_bulk_tie(tmp_path, monkeypa
     assert 'consensus->reference' in kept[0]['source'], kept
 
 
+def test_checkpoint_cli_glob_takes_one_spelling_per_frame(tmp_path, monkeypatch,
+                                                          capsys):
+    """A legacy-shaped --catalog-glob also takes the m3..m7 merge-label-tokened
+    catalogs and keeps ONE spelling per frame (merged > nrca > nrcb > legacy),
+    never the tokened residual/model images the ``_lbl*`` glob also matches."""
+    m = _load('run_astrometry_checkpoint')
+    base = tmp_path / 'F212N'
+    base.mkdir()
+    stem = 'f212n_nrcb1_o001_visit001_vgroup1_exp{e:05d}_m4_daophot_basic'
+    # exp4: only a label outside MODULE_BLIND_LABEL_ORDER (a --modules value
+    # such as nrcb1) -- still a fit of the frame, so a module-blind reader
+    # takes it (other_labels=True)
+    for e, tails in ((1, ('', '_lblnrcb', '_lblmerged')),
+                     (2, ('', '_lblnrcb', '_lblnrcb_residual')),
+                     (3, ('',)), (4, ('_lblnrcb1',))):
+        for t in tails:
+            (base / (stem.format(e=e) + t + '.fits')).write_bytes(b'')
+
+    class _Stop(Exception):
+        pass
+
+    read = []
+
+    def _read(fn, *a, **k):
+        read.append(fn.rsplit('/', 1)[-1])
+        if len(read) == 4:
+            raise _Stop
+        return object()
+
+    monkeypatch.setattr(m, 'Table', type('T', (), {'read': staticmethod(_read)}))
+    monkeypatch.setattr(m, 'load_reference_catalog', lambda *a, **k: object())
+    with pytest.raises(_Stop):
+        m.main(['--stage', 'm4', '--filter', 'F212N',
+                '--catalog-glob', str(base / '*_m4_daophot_basic.fits'),
+                '--refcat', str(tmp_path / 'r.fits'),
+                '--basepath', str(tmp_path), '--proposal-id', '10678',
+                '--obsid', '001'])
+    assert read == [stem.format(e=1) + '_lblmerged.fits',
+                    stem.format(e=2) + '_lblnrcb.fits',
+                    stem.format(e=3) + '.fits',
+                    stem.format(e=4) + '_lblnrcb1.fits'], read
+    out = capsys.readouterr().out
+    assert '4 frame(s); 3 read from merge-label-tokened names' in out, out
+
+
 def test_an_absent_offsets_table_names_the_bootstrap_path(tmp_path, capsys):
     """This applier UPDATES rows; it cannot create a field's FIRST table.
 

@@ -78,6 +78,7 @@ from jwst_gc_pipeline.photometry.naming import (
     PER_OBS_MERGED_PROPOSALS, merged_catalog_obs_token,
     perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
+    perframe_label_token, choose_perframe_variants, perframe_variant_summary,
 )
 from jwst_gc_pipeline.photometry.epsf_hybrid import (
     HYBRID_TOKEN, hybrid_psf_token)
@@ -2083,6 +2084,14 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # finds none of the `_o023`-stamped per-frame tables.)
     glob_obs_ = perframe_obs_token(progid, field)
     out_obs_ = merged_catalog_module_token(progid, field)
+    # m3..m7 per-frame catalogs carry the merge label of the pass that fit
+    # them (``_daophot_basic_lbl{module}``; naming.perframe_label_token): the
+    # module pass and the merged pass fit one frame on different label-scoped
+    # inputs.  This merge is ``module``'s, so it reads ``module``'s files, and
+    # a frame with none falls back to the legacy untokened name (a tree fitted
+    # before the token).  Never both for one frame, never another label's.
+    label_ = (perframe_label_token(iteration_label, module)
+              if method_suffix == 'daophot' else '')
     raw_fns = []
     for module_ in modules:
         for visitid in range(1, max_visitid + 1):
@@ -2092,11 +2101,19 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                     f"{filtername.lower()}_{module_}{glob_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
                     f"{desat}{bgsub}{epsf_}{fitpsf}{blur_}{group_}{iter_token}"
                 )
-                raw_fns.extend(glob.glob(
-                    f"{base_pat}_{method_suffix}{suffix}.fits"))
-                raw_fns.extend(glob.glob(
-                    f"{base_pat}_chunk*of*_{method_suffix}{suffix}.fits"))
+                for tail in (('', label_) if label_ else ('',)):
+                    raw_fns.extend(glob.glob(
+                        f"{base_pat}_{method_suffix}{suffix}{tail}.fits"))
+                    raw_fns.extend(glob.glob(
+                        f"{base_pat}_chunk*of*_{method_suffix}{suffix}{tail}.fits"))
     raw_fns = sorted(set(raw_fns))
+    if label_:
+        raw_fns, _variant_counts = choose_perframe_variants(
+            raw_fns, prefer=(str(module),), other_labels=False)
+        print(perframe_variant_summary(
+            _variant_counts,
+            f"merge_individual_frames {filtername.upper()}/{module} "
+            f"{iteration_label}", str(module)), flush=True)
 
     # Group chunks of the same frame by their chunk-stripped path, then
     # vstack them so combine_singleframe sees one table per physical frame.
