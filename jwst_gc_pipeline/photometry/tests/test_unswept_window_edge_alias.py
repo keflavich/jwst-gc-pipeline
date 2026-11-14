@@ -344,7 +344,12 @@ def test_swept_footprint_alias_in_the_collapse_band_is_still_rejected():
     """
     a = _clumpy_field(290.915, 14.529, 160.0, seed=1)
     b = _clumpy_field(290.915, 14.529 - 8.0 / 3600.0, 160.0, seed=2)
-    r = measure_offset(a, b, sweep=True, confirm_windows=True)
+    # The sweep stops at the 10" window the shape needs.  Since issue #1232 the
+    # 30" window reads a finer bin and, on this field, out-scores the 10" ridge
+    # on contrast; that wider peak is a different geometry from the one this
+    # test pins.
+    r = measure_offset(a, b, sweep=True, sweep_windows=(10.0,),
+                       confirm_windows=True)
     assert r["swept"], r
     assert CONFIRM_EDGE_FRACTION <= r["window_edge_fraction"] <= _COLLAPSE_BAND_MAX, r
     probes = r["window_confirmation"]["probes"]
