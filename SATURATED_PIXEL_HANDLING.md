@@ -264,6 +264,83 @@ to `DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
 
 ---
 
+## 2c. Single-group (G1-only) pixels — `G1ONLY_SAT_DQ` (NIRCam)
+
+A pixel whose ramp has exactly one usable group (group 1 good, every later
+group SATURATED) gets its rate from group 1 alone, and the crf DQ stays clean
+there (SATURATED reaches the rate DQ only when all groups saturate). Group 1
+is the mean of NFRAMES frames, so its effective exposure time is
+`t1 = (NFRAMES+1)·TFRAME/2`, not TGROUP. Which time the ramp fit used depends
+on the stcal code that ran Detector1:
+
+| Detector1 | ramp | single-group rate | m (below) |
+|---|---|---|---|
+| jwst 1.14.1 (stcal 1.7.3, python OLS), NGROUPS=2 | `fit_2_group`: group 1 / group_time | G1/TGROUP (0.75x for BRIGHT2) | 1 |
+| jwst 1.14.1 (stcal 1.7.3), NGROUPS>2 | `fit_single_read`: group 1 / one_groups_time | G1/t1 (correct) | r |
+| jwst 1.21 (stcal 1.18, C fitter), any NGROUPS | `is_0th` (0th group the only good one, its GROUPDQ 0) → one_group_time | G1/t1 (correct) | r |
+
+(Code read from the installed stcal 1.7.3 and 1.18.0. jwst 1.12.1, used for
+cloudc 2221, was not read; its NGROUPS=2 frame measures m = 0.99, the biased
+value. The table describes code paths; the gate below measures each frame.)
+
+`r = TGROUP / t1` is 1.333 for BRIGHT2 and 3.333 for SHALLOW2.
+
+Measured m (median; 5-95%) on one frame each:
+
+| frame | readout | Detector1 | m | 5-95% | n px | gate |
+|---|---|---|---|---|---|---|
+| brick 2221 o001 F182M nrcb4 | BRIGHT2, NG=2 | 1.14.1 | 1.000 | 0.972-1.037 | 1538 | flag |
+| brick 2221 o001 F410M nrcblong | BRIGHT2, NG=2 | 1.14.1 | 0.998 | 0.963-1.060 | 22724 | flag |
+| cloudc 2221 o002 F182M nrcb1 | BRIGHT2, NG=2 | 1.12.1 | 0.991 | 0.960-1.063 | 2589 | flag |
+| gc-treasury 10678 o105 F480M nrcblong | BRIGHT2, NG=4 | 1.21 | 1.344 | 1.291-1.447 | 35242 | skip |
+| gc-treasury 10678 o078 F480M nrcblong | BRIGHT2, NG=4 | 1.21 | 1.357 | 1.271-1.448 | 44530 | skip |
+| gc-treasury 10678 o105 F212N nrcb4 | BRIGHT2, NG=4 | 1.21 | 1.325 | 1.281-1.383 | 1670 | skip |
+| gc-treasury 10678 o105 F212N nrcb1 | BRIGHT2, NG=4 | 1.21 | 1.325 | 1.288-1.432 | 1476 | skip |
+| brick 1182 o004 F200W nrcb1 | SHALLOW2, NG=7 | 1.14.1 | 3.287 | 3.189-3.533 | 31811 | skip |
+| sgrb2 5365 o001 F182M nrcb1 | SHALLOW2, NG=3 | 1.18.0 | 3.317 | 3.212-3.573 | 5875 | skip |
+
+`reduction/g1only_dq.py` reads GROUPDQ from the sibling `_ramp.fits` and, on
+frames that need it, ORs `SATURATED | DO_NOT_USE` into the frame DQ at the
+single-group pixels and sets SCI/ERR/VAR_* to NaN there. The satstar finder
+then seeds them, daophot masks them (`truly_lost_saturated_mask`), and the
+satstar first-read recovery rebuilds the core from group 0. It is applied in
+`write_perexposure_crf` (persisted in the crf) and in memory by cataloging's
+`load_data` and satstar's `remove_saturated_stars`; the satstar fit-switch
+key and cache content key carry `'g1'` for flagged frames only.
+
+**The gate.** `G1ONLY_SAT_DQ=auto` (default; also when unset) decides per
+frame. It fits `SCI = C·(G2−G1)/TGROUP + B` on clean pixels (GROUPDQ 0 in all
+groups, crf DQ clean) through two robust points (median of the faint half,
+median of pixels with G2−G1 ≥ 200 DN in the top 10%), then takes the median of
+`m = (SCI − B) / ((G1/TGROUP)·C)` over single-group pixels with G1 ≥ 200 DN.
+m < (1+r)/2 → flag; otherwise skip. B absorbs destreak / background offsets:
+subtracting the median sky, a sky-scaled gradient, or adding 5× sky moves m
+by ≤ 0.03 on every frame above.
+
+Fallbacks: fewer than 20 measurable pixels, fewer than 100 bright reference
+pixels, no ramp SCI, no NFRAMES/TFRAME, or a non-finite m → **flag** (the pre-gate behaviour;
+such frames have few single-group pixels). r < 1.05 (NFRAMES=1, where
+G1/TGROUP is correct under either timing) → skip. A crf header that already
+carries `G1ONLYDC` reuses that decision (a flagged crf has NaN where m is
+measured); `G1ONLYDQ > 0` without `G1ONLYDC` (flagged before the gate) →
+flag. An m farther than (r−1)/4 from both 1 and r prints a WARNING
+(`G1OnlyAmbiguousWarning`) and still decides at the midpoint.
+
+Header keys: `G1ONLYDQ` (px flagged; 0 on skip), `G1ONLYDC` (flag/skip),
+`G1ONLYWY` (source: reason), `G1ONLYM` (median m), `G1ONLYN` (px used),
+`G1ONLYR` (r). One log line per application, e.g.
+`G1-only DQ (load_data): <file>: skip 36567 single-group px: m=1.344
+(n=35242, 5-95% 1.291-1.447) r=1.333 [measured: m>=1.167: unbiased]`.
+
+Effect of the choice on gc-treasury F480M (m7, one full frame, e4 nrcblong):
+flagging the unbiased o105 / o078 frames (`G1ONLY_SAT_DQ=1`) gives 52865 /
+49601 rows against 53004 / 49732 unflagged, with about 97 / 103 bright
+(F ≥ 1e4) stars per frame left without a row. `auto` skips both frames and
+returns 53004 / 49732 rows, identical in every column to the unflagged run
+(F212N o105 nrcb4: 46271 unflagged, 46237 flagged, 46271 auto).
+
+---
+
 ## 3. NIRCam handling
 
 - **Fit engine** (`get_saturated_stars`): per component, mask the
@@ -645,6 +722,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_FP_*` (11 vars: `_REJECT`, `_REJECT_RATIO`, `_REJECT_MIN_N`, `_REJECT_BRIGHTFRAC`, `_FLUXRATIO`, `_MERGE_MAX_ARCSEC`, `_COMP_ARCSEC`, `_BIG_ARCSEC`, `_BIGCORE_ARCSEC`, `_BIGCORE_MERGE_ARCSEC`, `_USE_ANCHOR`) | see `merge_catalogs.py` | false-positive rejection / merging at consolidation |
 | `SATSTAR_PIXSCALE_ARCSEC` | 0.063 | pixel scale used by those radii (no `FP_` in the name) |
 | `STPSF_PATH` | (required) | WebbPSF grid data (set before import) |
+| `G1ONLY_SAT_DQ` | `auto` | NIRCam single-group (G1-only) pixels → SATURATED\|DO_NOT_USE + NaN from the sibling `_ramp.fits`: `auto` flags only frames whose measured m = SCI/(G1/TGROUP) is nearer 1 (biased ramp fit) than r = TGROUP/((NFRAMES+1)·TFRAME/2) (see §2c); `1`/`force` flags every frame; `0`/`off` (or empty) disables; any other value raises |
 
 The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table above
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
@@ -671,6 +749,7 @@ component are refit once.
 |---|---|
 | `reduction/saturated_star_finding.py` | detection, PSF fitting, accept gate, ZEROFRAME recovery, off-FOV reconciliation |
 | `reduction/satstar_deblend.py` | ZEROFRAME core deblending (crowded fields) |
+| `reduction/g1only_dq.py` | single-group (G1-only) pixel flag and its per-frame `auto` gate (§2c) |
 | `reduction/PipelineRerunNIRCAM-LONG.py` / `PipelineMIRI.py` | Detector1 → `_ramp.fits` (ZEROFRAME/GROUPDQ); MIRI edge trim |
 | `photometry/cataloging.py` | per-frame satstar+daophot integration, `miri_tuning` schedule, artifact/coincidence gates |
 | `photometry/crowdsource_catalogs_long.py` | CLI options, manual m12→m8 pipeline |

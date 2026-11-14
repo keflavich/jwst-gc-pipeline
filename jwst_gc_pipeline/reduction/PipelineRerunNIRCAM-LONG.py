@@ -644,9 +644,12 @@ def flag_single_group_pixels_in_crf(asn_data, output_dir, field, label):
 
     Called right after every ``write_perexposure_crf`` (module and merged
     passes), so whichever branch authored the per-exposure crf, it carries the
-    flags.  Pixels whose ramp had one usable group get rate = G1/tgroup (~0.75x for NFRAMES=2) with clean
-    DQ; see reduction/g1only_dq.py.  Idempotent; G1ONLY_SAT_DQ=0 disables; a
-    missing _ramp.fits is a WARNING and is counted, never silent.
+    flags.  Pixels whose ramp had one usable group get rate = G1/tgroup
+    (0.75x for BRIGHT2) with clean DQ when the ramp fit uses TGROUP for them;
+    G1ONLY_SAT_DQ=auto (default) measures that per frame and records the
+    decision in the crf header (G1ONLYDC/G1ONLYM); see reduction/g1only_dq.py.
+    Idempotent; G1ONLY_SAT_DQ=0 disables, =1 flags every frame; a missing
+    _ramp.fits is a WARNING and is counted, never silent.
     """
     _n_files = _n_px = 0
     for member in asn_data['products'][0]['members']:

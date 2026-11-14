@@ -2358,9 +2358,10 @@ def load_data(filename):
     fh = fits.open(filename)
     im1 = fh
     # Single-group (G1-only) NIRCam pixels -> SATURATED|DO_NOT_USE + NaN, from
-    # the sibling _ramp.fits, in memory (crf written before the reduction-side
-    # hook carry a ~0.75x rate there).  No-op for mosaics / non-NIRCam;
-    # G1ONLY_SAT_DQ=0 disables.  See reduction/g1only_dq.py.
+    # the sibling _ramp.fits, in memory, on frames whose ramp fit gave them
+    # G1/TGROUP (0.75x for BRIGHT2); the default G1ONLY_SAT_DQ=auto measures
+    # that per frame and skips unbiased frames.  No-op for mosaics /
+    # non-NIRCam; G1ONLY_SAT_DQ=0 disables.  See reduction/g1only_dq.py.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1only_dq.apply_to_hdul(im1, filename, label='load_data')
     data = im1['SCI'].data
