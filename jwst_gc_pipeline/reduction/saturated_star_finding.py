@@ -24,6 +24,7 @@ from jwst_gc_pipeline.photometry.wingcal import (
     bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
     MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
     relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
+from jwst_gc_pipeline.photometry.psf_fitting import annulus_scatter_sigma
 from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 from photutils.psf import GriddedPSFModel
 
@@ -3023,14 +3024,11 @@ def bkg_scatter_fit_error(err, cutout, valid, x, y, bkg_inner, bkg_outer,
         1.4826 * MAD of the annulus pixels, NaN when fewer than
         ``min_pixels`` are usable.
     """
-    yy, xx = np.indices(cutout.shape)
-    rr = np.hypot(xx - x, yy - y)
-    sel = (valid & np.isfinite(cutout) & (rr >= bkg_inner) & (rr < bkg_outer))
-    if sel.sum() < min_pixels:
+    sigma = annulus_scatter_sigma(cutout, valid, x, y, bkg_inner, bkg_outer,
+                                  min_pixels=min_pixels)
+    if np.isnan(sigma):
         return err, np.nan
-    vals = cutout[sel]
-    sigma = float(1.4826 * np.median(np.abs(vals - np.median(vals))))
-    if not np.isfinite(sigma) or sigma <= 0:
+    if sigma <= 0:
         return err, sigma
     return np.sqrt(err ** 2 + sigma ** 2), sigma
 

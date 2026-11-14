@@ -8,6 +8,8 @@ implementation.  Contents:
 * ``_make_psfphotometry`` / ``_make_iterative_psfphotometry`` constructors
 * ``CachingGriddedPSFModel`` (stamp-memoizing GriddedPSFModel)
 * ``forced_psf_photometry`` (closed-form linear flux at fixed position)
+* ``annulus_scatter_sigma`` (robust local-background scatter shared by the
+  satstar fit and the m8 forced fill)
 * ``_make_model_image`` (version-safe make_model_image)
 * ``_dedup_close_sources`` (greedy spatial deduplication)
 
@@ -126,11 +128,65 @@ class CachingGriddedPSFModel(GriddedPSFModel):
         return float(flux) * unit_stamp
 
 
+def annulus_scatter_sigma(image, valid, x, y, inner, outer, min_pixels=20):
+    """Robust scatter of ``image`` in an annulus about each ``(x, y)``.
+
+    ``1.4826 * MAD`` of the pixels with ``inner <= r < outer`` that are
+    ``valid`` and finite.  NaN where fewer than ``min_pixels`` pixels qualify;
+    a flat annulus returns 0.0.  This is the one estimator behind
+    ``saturated_star_finding.bkg_scatter_fit_error`` (satstar fit) and the m8
+    forced fill's ``bkg_sigma``.
+
+    Parameters
+    ----------
+    image : 2D ndarray
+    valid : 2D bool ndarray, same shape; ``True`` = pixel may be used.
+    x, y : float or 1D array
+        Source positions in pixel coordinates of ``image`` (0-based).
+    inner, outer : float
+        Annulus radii in pixels.
+    min_pixels : int
+        Fewest usable annulus pixels needed to measure the scatter.
+
+    Returns
+    -------
+    float (scalar ``x``, ``y``) or 1D ndarray of ``len(x)``.
+    """
+    scalar = np.ndim(x) == 0
+    xs = np.atleast_1d(np.asarray(x, dtype=float))
+    ys = np.atleast_1d(np.asarray(y, dtype=float))
+    ny, nx = image.shape
+    half = int(np.ceil(outer))
+    dy, dx = np.mgrid[-half:half + 1, -half:half + 1]
+    out = np.full(xs.size, np.nan)
+    for i in range(xs.size):
+        if not (np.isfinite(xs[i]) and np.isfinite(ys[i])):
+            continue
+        ix = int(round(xs[i]))
+        iy = int(round(ys[i]))
+        x_lo, x_hi = max(ix - half, 0), min(ix + half + 1, nx)
+        y_lo, y_hi = max(iy - half, 0), min(iy + half + 1, ny)
+        if x_lo >= x_hi or y_lo >= y_hi:
+            continue
+        gx = dx[y_lo - iy + half:y_hi - iy + half, x_lo - ix + half:x_hi - ix + half] + ix
+        gy = dy[y_lo - iy + half:y_hi - iy + half, x_lo - ix + half:x_hi - ix + half] + iy
+        rr = np.hypot(gx - xs[i], gy - ys[i])
+        cut = image[y_lo:y_hi, x_lo:x_hi]
+        sel = (valid[y_lo:y_hi, x_lo:x_hi] & np.isfinite(cut)
+               & (rr >= inner) & (rr < outer))
+        if sel.sum() < min_pixels:
+            continue
+        vals = cut[sel]
+        out[i] = 1.4826 * np.median(np.abs(vals - np.median(vals)))
+    return float(out[0]) if scalar else out
+
+
 def forced_psf_photometry(image, psf_model, init_params, *,
                           error=None, mask=None,
                           fit_shape=(5, 5),
                           aperture_radius=4,
-                          nonnegative=False):
+                          nonnegative=False,
+                          bkg_sigma=None):
     """Closed-form linear flux solve at the (fixed) positions in
     ``init_params``.  Bypasses photutils LM entirely.
 
@@ -185,6 +241,11 @@ def forced_psf_photometry(image, psf_model, init_params, *,
     fit_shape : (ny, nx) stamp around each source (must be odd-ish; 5x5
         matches production).
     aperture_radius : kept for signature compatibility; not used here.
+    bkg_sigma : 1D ndarray, one entry per row of ``init_params``, optional
+        Local background scatter in the units of ``error``.  Each source's
+        error stamp becomes ``sqrt(error**2 + bkg_sigma[i]**2)``.  Entries that
+        are NaN or not positive leave that source on ``error`` alone.  Requires
+        ``error``.  ``None`` (the default) leaves the fit unchanged.
 
     Returns
     -------
@@ -206,6 +267,13 @@ def forced_psf_photometry(image, psf_model, init_params, *,
     dy, dx = np.mgrid[-half_y:half_y + 1, -half_x:half_x + 1].astype(float)
 
     use_err = error is not None
+    if bkg_sigma is not None:
+        if not use_err:
+            raise ValueError('bkg_sigma needs an error array to add it to')
+        bkg_sigma = np.asarray(bkg_sigma, dtype=float)
+        if bkg_sigma.shape != (n,):
+            raise ValueError(f'bkg_sigma has shape {bkg_sigma.shape}, '
+                             f'expected ({n},)')
     if mask is None:
         mask_arr = np.zeros(image.shape, dtype=bool)
     else:
@@ -236,8 +304,10 @@ def forced_psf_photometry(image, psf_model, init_params, *,
 
         if use_err:
             estamp = error[y_lo:y_hi, x_lo:x_hi]
-            w = np.where((estamp > 0) & np.isfinite(estamp),
-                         1.0 / estamp**2, 0.0)
+            good_err = (estamp > 0) & np.isfinite(estamp)
+            if bkg_sigma is not None and bkg_sigma[i] > 0:
+                estamp = np.sqrt(estamp**2 + bkg_sigma[i]**2)
+            w = np.where(good_err, 1.0 / estamp**2, 0.0)
         else:
             w = np.ones_like(data, dtype=np.float64)
         w = np.where(mstamp, 0.0, w)
