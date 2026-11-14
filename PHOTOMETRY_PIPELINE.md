@@ -372,7 +372,9 @@ still run after m6.
 | `--manual-ext-star-prom-robust-conc` | 0.6 | (robust branch off) | (robust branch off) | (robust branch off) |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-floor-per-frame` (opt-out: sets `manual_ext_snr_floor_propagated=False`) | not set (floor on flux_err_prop) | not set | not set | not set |
-| `--manual-ext-prop-floor-prom-min` / `--manual-ext-prop-floor-drop-flags` / `--manual-ext-prop-floor-qfit-snr-min` | 0 / off / 0 (guard off) | same | same | same |
+| `--manual-ext-prop-floor-prom-min` | 0 (guard off) | same | same | same |
+| `--manual-ext-prop-floor-drop-flags` | off | same | same | same |
+| `--manual-ext-prop-floor-qfit-snr-min` | 0 (guard off) | same | same | same |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
 | `--manual-ext-hysteresis-qfit-max` (0 = off) | 0.6 | 0.6 (m3–m7) | 0.6 (m3–m7) | (off: MIRI vets on prominence) |
