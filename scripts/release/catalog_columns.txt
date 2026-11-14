@@ -256,6 +256,29 @@ Forced photometry and independent detections (m8 catalogs)
       was added in quadrature to the crf error of the forced fit; it is
       already included in forced_snr and flux_ulim. NaN when no exposure
       could measure it.
+  forced_nbrsub_{filter}
+      Only in m8 catalogs built with --forced-fill-nbrsub. True where every
+      exposure that contributed to the forced fit was fitted with its m7
+      star-only model removed, so the other stars of the band do not add
+      light to the target's flux. False where an exposure lacked the m7
+      model file and was fitted on the unsubtracted image.
+  forced_near_m7_sep_{filter}
+      Only in m8 catalogs built with --forced-fill-nbrsub. Separation in mas
+      from the target to the nearest m7 source of that band within 40 mas,
+      the smallest over the exposures; that source was added back to the
+      fitted image, so its light is part of the target's flux. NaN when no
+      m7 source lay that close.
+  forced_err_scale_{filter}
+      Only in m8 catalogs built with --forced-fill-nrand. The factor k, one
+      value per band, by which the formal forced-fit error was multiplied:
+      half the 16th to 84th percentile range of flux/error at random blank
+      positions, at least 1. It is already included in forced_snr,
+      flux_ulim and the detection cut. k = 1 when too few random positions
+      were fitted to measure it.
+  forced_snr_raw_{filter}
+      Only in m8 catalogs built with --forced-fill-nrand. The signal-to-noise
+      of the forced fit before the scaling by forced_err_scale; forced_snr is
+      this value divided by forced_err_scale.
 
 
 Line-minus-continuum columns (fields with F405N+F410M or F187N+F182M)

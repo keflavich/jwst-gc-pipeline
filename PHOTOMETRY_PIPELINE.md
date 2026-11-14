@@ -420,6 +420,8 @@ still run after m6.
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
 | `--mergedcat-render-procs` / `--forced-fill-procs` (forked processes over the frames of the merged-catalog render / of the m8 fill; output identical to the serial loop, #1230) | 1 / 1 | serial (set per job through the submitters' `EXTRA_ARGS`) | | |
 | `--forced-fill-bkg-scatter` (`forced_fill_bkg_scatter`; adds each m8 source's annulus scatter, 1.4826 MAD at 2.5-4.5 FWHM, to the crf ERR in quadrature; writes `forced_bkg_sigma_<filter>`; #1120) | off | crf ERR only | | |
+| `--forced-fill-nbrsub` (`forced_fill_nbrsub`; fits each m8 frame with its m7 star-only model removed and the m7 sources within 40 mas of a target added back; needs the m7 per-frame `_model.fits` and catalogue, a frame without them is fitted unsubtracted; writes `forced_nbrsub_<filter>`, `forced_near_m7_sep_<filter>`; #1284) | off | raw frame, neighbours left in | | |
+| `--forced-fill-nrand` (`forced_fill_nrand`; N random blank positions per band, 1-2 FWHM from random rows; every target's error is scaled by the half-width of their 16-84 percentile flux/error range, at least 1; writes `forced_err_scale_<filter>`, `forced_snr_raw_<filter>`; use with `--forced-fill-nbrsub`; #1284) | 0 | formal error | | |
 | `--each-suffix` | `destreak_o001_crf` | per-reduction | | |
 | `--cutout-region` / `--cutout-label` / `--cutout-size-arcsec` | `''`/`''`/5.0 | full-frame | | |
 | `--inject-stars` / `--inject-seed` | `''`/0 | off (cutout-only; reference-field truth, `injection.py`) | | |

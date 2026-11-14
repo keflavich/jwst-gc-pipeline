@@ -505,3 +505,273 @@ def test_bkg_scatter_option_is_wired_through_the_cli_and_both_m8_call_sites():
         text = fh.read()
     i = text.index("'--forced-fill-bkg-scatter'")
     assert "default=False, action='store_true'" in text[i:i + 200]
+
+
+# ---------------------------------------------------------------------------
+# neighbour subtraction and the empirical error scale (#1284)
+# ---------------------------------------------------------------------------
+def _write_m7_products(tmp_path, shape, sources, *, model=True, catalogue=True):
+    """A frame's m7 model image (SCI extension) and per-frame catalogue holding
+    ``sources`` = [(x, y, flux)]; returns the two paths."""
+    from astropy.io import fits
+    psf = _MockPSF()
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    img = np.zeros(shape)
+    for x, y, f in sources:
+        img += psf.evaluate(xx, yy, f, x, y)
+    model_path = str(tmp_path / 'frame_m7_daophot_basic_model.fits')
+    cat_path = str(tmp_path / 'frame_m7_daophot_basic.fits')
+    if model:
+        fits.HDUList([fits.PrimaryHDU(),
+                      fits.ImageHDU(img.astype('float32'), name='SCI')]
+                     ).writeto(model_path, overwrite=True)
+    if catalogue:
+        Table({'x_fit': [s[0] for s in sources], 'y_fit': [s[1] for s in sources],
+               'flux_fit': [s[2] for s in sources]}).write(cat_path, overwrite=True)
+    return model_path, cat_path
+
+
+def _crowded_scene(target_amp, neighbour_amp=5000.0, offset=2.0, noise=1.0):
+    """One forced-fill target at (60, 60) -- holding a point source of flux
+    ``target_amp``, possibly 0 -- and a bright m7 neighbour ``offset`` px away."""
+    tbl, prepare_frame, ndet, mask = _blank_scene(nblank=1, noise=noise)
+    ww = prepare_frame().ww
+    ctx = prepare_frame()
+    psf = _MockPSF()
+    yy, xx = np.mgrid[0:240, 0:240]
+    image = np.array(ctx.nan_replaced_data)
+    nbr = (60.0 + offset, 60.0, neighbour_amp)
+    image += psf.evaluate(xx, yy, nbr[2], nbr[0], nbr[1])
+    if target_amp:
+        image += psf.evaluate(xx, yy, target_amp, 60.0, 60.0)
+    ra, dec = ww.all_pix2world([60.0], [60.0], 0)
+    tbl['skycoord_ref'][ndet] = SkyCoord(ra[0] * u.deg, dec[0] * u.deg)
+
+    def prepare(**kw):
+        return SimpleNamespace(nan_replaced_data=image, err=ctx.err, mask=ctx.mask,
+                               ww=ww, dao_psf_model=psf, fwhm_pix=FWHM)
+
+    return tbl, prepare, ndet, nbr
+
+
+def _fill_nbr(tbl, prepare, paths, **kw):
+    ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False,
+                        frame_products=lambda ctx, fkw: paths, **kw)
+
+
+def test_neighbour_subtraction_removes_the_light_of_a_nearby_star(tmp_path):
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0)
+    paths = _write_m7_products(tmp_path, (240, 240), [nbr])
+    raw, sub = tbl.copy(), tbl.copy()
+    _fill_nbr(raw, prepare, paths)
+    _fill_nbr(sub, prepare, paths, nbrsub=True, addback_mas=10.0)
+    # the neighbour leaks more than half its flux into the raw fit
+    assert raw['flux_f405n'][ndet] > 0.5 * nbr[2]
+    assert not raw['is_upper_limit_f405n'][ndet]
+    # subtracted, the empty target is consistent with zero flux
+    ferr = sub['flux_ulim_f405n'][ndet] / 3.0
+    assert abs(sub['flux_f405n'][ndet]) < 3 * ferr
+    assert sub['is_upper_limit_f405n'][ndet]
+    assert sub['mask_f405n'][ndet]
+    assert sub['forced_nbrsub_f405n'][ndet]
+    assert np.isnan(sub['forced_near_m7_sep_f405n'][ndet])   # beyond the add-back radius
+
+
+def test_neighbour_addback_keeps_a_same_star_counterpart(tmp_path):
+    amp = 800.0
+    tbl, prepare, ndet, _ = _crowded_scene(target_amp=amp, neighbour_amp=0.0)
+    # the m7 fit of the same star sits half a pixel (8.5 mas) off the target
+    paths = _write_m7_products(tmp_path, (240, 240), [(60.5, 60.0, amp)])
+    nobk, back = tbl.copy(), tbl.copy()
+    _fill_nbr(nobk, prepare, paths, nbrsub=True, addback_mas=0.0)
+    _fill_nbr(back, prepare, paths, nbrsub=True)
+    assert nobk['flux_f405n'][ndet] < 0.3 * amp          # the star was subtracted
+    assert back['flux_f405n'][ndet] == pytest.approx(amp, rel=0.05)
+    assert not back['mask_f405n'][ndet]
+    assert back['forced_near_m7_sep_f405n'][ndet] == pytest.approx(8.5, abs=0.1)
+    assert np.isnan(nobk['forced_near_m7_sep_f405n'][ndet])
+
+
+def test_neighbour_subtraction_falls_back_without_the_model_file(tmp_path, capsys):
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0)
+    paths = _write_m7_products(tmp_path, (240, 240), [nbr], model=False)
+    raw, sub = tbl.copy(), tbl.copy()
+    _fill_nbr(raw, prepare, paths)
+    _fill_nbr(sub, prepare, paths, nbrsub=True)
+    out = capsys.readouterr().out
+    assert paths[0] in out
+    assert not sub['forced_nbrsub_f405n'][ndet]
+    assert sub['flux_f405n'][ndet] == raw['flux_f405n'][ndet]
+    assert sub['forced_snr_f405n'][ndet] == raw['forced_snr_f405n'][ndet]
+
+
+def test_neighbour_subtraction_without_the_catalogue_subtracts_and_adds_nothing(
+        tmp_path, capsys):
+    amp = 800.0
+    tbl, prepare, ndet, _ = _crowded_scene(target_amp=amp, neighbour_amp=0.0)
+    paths = _write_m7_products(tmp_path, (240, 240), [(60.5, 60.0, amp)],
+                               catalogue=False)
+    _fill_nbr(tbl, prepare, paths, nbrsub=True)
+    assert paths[1] in capsys.readouterr().out
+    assert tbl['forced_nbrsub_f405n'][ndet]
+    assert tbl['flux_f405n'][ndet] < 0.3 * amp
+    assert np.isnan(tbl['forced_near_m7_sep_f405n'][ndet])
+
+
+def test_neighbour_subtraction_leaves_the_frame_array_alone(tmp_path):
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=300.0)
+    paths = _write_m7_products(tmp_path, (240, 240), [nbr, (60.5, 60.0, 300.0)])
+    before = np.array(prepare().nan_replaced_data)
+    _fill_nbr(tbl, prepare, paths, nbrsub=True)
+    np.testing.assert_array_equal(prepare().nan_replaced_data, before)
+
+
+def test_nbrsub_needs_frame_products():
+    tbl, prepare, ndet, _ = _crowded_scene(target_amp=0.0)
+    with pytest.raises(ValueError, match='frame_products'):
+        ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare,
+                            frame_arg_builder=lambda fn: {}, verbose=False,
+                            nbrsub=True)
+
+
+def test_nbrsub_and_nrand_off_are_the_existing_behaviour():
+    tbl, prepare, ndet, _ = _blank_scene(nblank=40)
+    ref = tbl.copy()
+    _fill(ref, prepare)
+    explicit = tbl.copy()
+    _fill(explicit, prepare, nbrsub=False, nrand=0)
+    for c in ('forced_nbrsub_f405n', 'forced_near_m7_sep_f405n',
+              'forced_err_scale_f405n', 'forced_snr_raw_f405n'):
+        assert c not in explicit.colnames
+    assert explicit.colnames == ref.colnames
+    for c in ref.colnames:
+        if c == 'skycoord_ref':
+            continue
+        np.testing.assert_array_equal(np.asarray(explicit[c]), np.asarray(ref[c]))
+
+
+def test_nbrsub_columns_are_reset_on_rerun(tmp_path):
+    # an m7 source that the image does not hold: subtracted and added back, the
+    # target stays an upper limit (so it is still a target on the rerun)
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0, neighbour_amp=0.0)
+    paths = _write_m7_products(tmp_path, (240, 240), [(60.5, 60.0, 300.0)])
+    _fill_nbr(tbl, prepare, paths, nbrsub=True)
+    assert tbl['is_upper_limit_f405n'][ndet]
+    assert tbl['forced_nbrsub_f405n'][ndet]
+    assert np.isfinite(tbl['forced_near_m7_sep_f405n'][ndet])
+    ff.forced_fill_band(tbl, 'f405n', [], prepare_frame=prepare,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False, nbrsub=True,
+                        frame_products=lambda ctx, fkw: paths)
+    assert not tbl['forced_nbrsub_f405n'][ndet]
+    assert np.isnan(tbl['forced_near_m7_sep_f405n'][ndet])
+
+
+def test_error_scale_follows_the_blank_position_scatter():
+    tbl, prepare, ndet, _ = _blank_scene(nblank=300)
+    off = tbl.copy()
+    _fill(off, prepare)
+    _fill(tbl, prepare, nrand=300)
+    blank = slice(ndet, None)
+    k = np.asarray(tbl['forced_err_scale_f405n'][blank], float)
+    assert np.all(k == k[0])
+    assert k[0] == pytest.approx(NOISE, rel=0.2)
+    # every error-derived column rests on the scaled error
+    raw = np.asarray(tbl['forced_snr_raw_f405n'][blank], float)
+    np.testing.assert_allclose(raw, off['forced_snr_f405n'][blank])
+    np.testing.assert_allclose(tbl['forced_snr_f405n'][blank], raw / k[0])
+    np.testing.assert_allclose(tbl['flux_ulim_f405n'][blank],
+                               k[0] * off['flux_ulim_f405n'][blank])
+    assert np.std(np.asarray(tbl['forced_snr_f405n'][blank], float)) == \
+        pytest.approx(1.0, rel=0.2)
+    assert (~tbl['mask_f405n'][blank]).sum() < (~off['mask_f405n'][blank]).sum()
+    # the firm rows are not targets and keep NaN in the new columns
+    assert not np.isfinite(tbl['forced_err_scale_f405n'][:ndet]).any()
+    # the random positions are not rows of the table
+    assert len(tbl) == len(off)
+
+
+def test_error_scale_is_at_least_one_and_needs_enough_positions():
+    rng = np.random.default_rng(1)
+    k, med, n = ff._empirical_error_scale(rng.normal(0, 0.3, 500), np.ones(500))
+    assert k == 1.0 and n == 500 and abs(med) < 0.1
+    k, med, n = ff._empirical_error_scale(rng.normal(0, 5.0, 500), np.ones(500))
+    assert k == pytest.approx(5.0, rel=0.1)
+    k, med, n = ff._empirical_error_scale(rng.normal(0, 5.0, 10), np.ones(10))
+    assert (k, n) == (1.0, 10) and np.isnan(med)
+    flux = np.r_[rng.normal(0, 5.0, 100), np.full(5, np.nan)]
+    ferr = np.r_[np.ones(100), np.ones(5)]
+    assert ff._empirical_error_scale(flux, ferr)[2] == 100
+
+
+def test_random_positions_sit_one_to_two_fwhm_from_a_row_and_clear_of_detections():
+    ref = SkyCoord([266.4, 266.401] * u.deg, [-29.0, -29.0] * u.deg)
+    fwhm = 0.13
+    ra, dec = ff._random_positions(ref, np.array([0]), ref[:0], 200, fwhm, 40.0, 3)
+    pos = SkyCoord(ra * u.deg, dec * u.deg)
+    sep = pos.separation(ref[0]).arcsec / fwhm
+    assert len(pos) == 200
+    assert sep.min() > 0.99 and sep.max() < 2.01
+    # a detection 1.5 FWHM from the row removes the candidates within 40 mas of it
+    det = ref[0].directional_offset_by(0 * u.deg, 1.5 * fwhm * u.arcsec)
+    ra, dec = ff._random_positions(ref, np.array([0]), SkyCoord([det]), 100,
+                                   fwhm, 40.0, 3)
+    pos = SkyCoord(ra * u.deg, dec * u.deg)
+    assert pos.separation(det).arcsec.min() > 0.040
+    # the draw is reproducible
+    again = ff._random_positions(ref, np.array([0]), SkyCoord([det]), 100,
+                                 fwhm, 40.0, 3)
+    np.testing.assert_array_equal(ra, again[0])
+
+
+def test_nominal_fwhm_follows_the_filter_wavelength():
+    assert ff._nominal_fwhm_arcsec('f480m') == pytest.approx(0.157, abs=0.003)
+    assert ff._nominal_fwhm_arcsec('f212n') == pytest.approx(0.069, abs=0.003)
+    assert ff._nominal_fwhm_arcsec('f1130w') == pytest.approx(0.37, abs=0.01)
+    # the wide w2 filters: the trailing 2 is not a digit of the wavelength
+    assert ff._nominal_fwhm_arcsec('f150w2') == pytest.approx(0.05, abs=0.01)
+    assert ff._nominal_fwhm_arcsec('f322w2') == pytest.approx(0.105, abs=0.01)
+
+
+def test_final_phase_frame_products_follow_the_m7_writers():
+    from jwst_gc_pipeline.photometry import cataloging
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+    options = SimpleNamespace(
+        desaturated=False, bgsub=False, use_iter3_residual_bg=True, epsf=True,
+        blur=False, group=False, iteration_label=None, proposal_id='2221',
+        field='001')
+    (visitid_, vgroupid_, exposure_, desat, bgsub, epsf_, blur_, group_,
+     _) = L._predict_output_tokens(options, 1, 1, 3, 'm7')
+    ctx = SimpleNamespace(
+        out_basepath='/bp', filtername='F405N', module='nrcalong',
+        proposal_id='2221', field='001', inst_token='nircam', pupil='f405n',
+        visitid_=visitid_, vgroupid_=vgroupid_, exposure_=exposure_,
+        desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group_)
+    model, cat = cataloging._final_phase_frame_products(
+        ctx, {'options': options, 'satstar_label': 'm7'})
+    assert cat == L._predict_tblfilename('/bp', 'F405N', 'nrcalong', options,
+                                         1, 1, 3, 'm7', 'daophot', 'basic')
+    assert model.startswith('/bp/F405N/pipeline/')
+    assert model == (f'/bp/F405N/pipeline/jw02221-o001_t001_nircam_f405n-f405n-'
+                     f'nrcalong{visitid_}{vgroupid_}{exposure_}{bgsub}{epsf_}'
+                     f'_m7_daophot_basic_model.fits')
+
+
+def test_nbrsub_and_nrand_are_wired_through_the_cli_and_both_m8_call_sites():
+    import inspect
+    import os
+    from jwst_gc_pipeline.photometry import cataloging
+    src = inspect.getsource(cataloging.run_manual_pipeline)
+    assert src.count("nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False))") == 2
+    assert src.count("nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0)") == 2
+    assert src.count('frame_products=_final_phase_frame_products') == 2
+    cli = os.path.join(os.path.dirname(cataloging.__file__),
+                       'crowdsource_catalogs_long.py')
+    with open(cli) as fh:
+        text = fh.read()
+    i = text.index("'--forced-fill-nbrsub'")
+    assert "default=False, action='store_true'" in text[i:i + 200]
+    i = text.index("'--forced-fill-nrand'")
+    assert "default=0, type='int'" in text[i:i + 200]

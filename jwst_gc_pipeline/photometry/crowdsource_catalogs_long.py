@@ -5554,6 +5554,27 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'ERR holds no term for background structure and '
                             'the m8 limits on bright extended emission are '
                             'deeper than the local noise (#1120).'))
+    parser.add_option('--forced-fill-nbrsub', dest='forced_fill_nbrsub',
+                      default=False, action='store_true',
+                      help=('Fit each m8 forced-fill frame with its own m7 '
+                            'star-only model removed, and add back the m7 '
+                            'sources within 40 mas of a target, so the other '
+                            'stars of the band stop contributing to the fit.  '
+                            'Needs the m7 per-frame model and catalogue; a '
+                            'frame without them is fitted unsubtracted.  '
+                            'Writes forced_nbrsub_<filter> and '
+                            'forced_near_m7_sep_<filter>.  Default off '
+                            '(#1284).'))
+    parser.add_option('--forced-fill-nrand', dest='forced_fill_nrand',
+                      default=0, type='int',
+                      help=('Fit N random blank positions per band in the m8 '
+                            'forced fill and scale every target\'s error by '
+                            'the 16-84 percentile half-width of their '
+                            'flux/error (at least 1), so forced_snr, '
+                            'flux_ulim and the detection cut rest on the '
+                            'measured scatter.  Writes forced_err_scale_ and '
+                            'forced_snr_raw_<filter>.  Default 0 = off; use '
+                            'with --forced-fill-nbrsub (#1284).'))
     (options, args) = parser.parse_args()
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the

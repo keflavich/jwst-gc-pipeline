@@ -4628,6 +4628,36 @@ def _resid_nan_satstar_applies(iteration_label):
     return iteration_label in _resid_nan_satstar_passes()
 
 
+def _perframe_product_stub(ctx, iter_):
+    """Path stem of a manual pass's per-frame residual and model images
+    (``{stub}_residual.fits``, ``{stub}_model.fits``); ``iter_`` is the
+    iteration token.  The PSF token is ``ctx.epsf_``, so a reader that builds
+    ``ctx`` the way the writer did finds the writer's files."""
+    return (f'{ctx.out_basepath}/{ctx.filtername}/pipeline/'
+            f'{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
+            f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
+            f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+
+
+def _final_phase_frame_products(ctx, frame_kwargs):
+    """``(model path, catalogue path)`` of the final real phase's products for
+    the frame ``ctx`` prepares, for the m8 forced fill's neighbour subtraction.
+
+    The phase is the frame kwargs' ``satstar_label`` (the phase whose satstar
+    products the fill subtracts).  The model is the star-only image of
+    ``_save_manual_pass``; the catalogue is the unvetted per-frame table that
+    ``save_photutils_results`` wrote, with the same tokens."""
+    iter_ = _iteration_token(frame_kwargs['satstar_label'])
+    options = frame_kwargs['options']
+    obs_ = _L._obs_token_from_options(options)
+    catalog = (f'{ctx.out_basepath}/{ctx.filtername}/'
+               f'{ctx.filtername.lower()}_{ctx.module}{obs_}{ctx.visitid_}'
+               f'{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+               f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic.fits')
+    return f'{_perframe_product_stub(ctx, iter_)}_model.fits', catalog
+
+
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """Write the per-frame catalog (``save_photutils_results``) + residual +
     model for one manual pass, with the manual ``_m{N}`` iteration token.  The
@@ -4680,10 +4710,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
             print(f"[{iteration_label}] residual: {int(_nanm.sum())} DQ-SATURATED px "
                   f"under accepted satstar models set to NaN (not measured)",
                   flush=True)
-    stub = (f'{bp}/{ctx.filtername}/pipeline/{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
-            f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
-            f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
-            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+    stub = _perframe_product_stub(ctx, iter_)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_residual.fits', residual)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_model.fits', modsky)
     return saved
@@ -10145,7 +10172,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 frame_arg_builder_for=_builder_for,
                 nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
                 n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
-                bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)))
+                bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
+                nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
+                frame_products=_final_phase_frame_products,
+                nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
             # Partial fill writes one band only -> dedup waits for the merge
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
             if not _m8_partial:
@@ -11453,7 +11483,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         frame_arg_builder_for=_builder_for,
                         nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
                         n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
-                        bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)))
+                        bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
+                        nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
+                        frame_products=_final_phase_frame_products,
+                        nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
                     _stamp_catalog_provenance(
                         _m8, 'm8', options,
