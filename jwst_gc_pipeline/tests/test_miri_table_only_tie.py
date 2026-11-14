@@ -1,10 +1,11 @@
-"""gc3571 MIRI: the consensus offsets table is the only per-frame correction
+"""gc3571 and gc1266 MIRI: the consensus offsets table is the only per-frame correction
 (``FieldAlignment.table_only_tie``).
 
 Image3's absolute tweakreg tied every frame back to the VIRAC2 catalog the m2
 checkpoint checks, starting from the fix_alignment-shifted WCS, so it cancelled
 the table's bulk row: o001 F560W read ~47 mas off VIRAC2 at m2 both before and
-after the regeneration that applied it.
+after the regeneration that applied it.  gc1266 o008 and o010 F770W
+(8.37 and 13.31 mas) showed the same stall (#835).
 """
 from dataclasses import replace
 from pathlib import Path
@@ -20,8 +21,14 @@ def test_gc3571_is_table_only(field):
     assert AC.table_only_tie(3571, field)
 
 
+@pytest.mark.parametrize('field', ['004', '008', '009', '010'])
+def test_gc1266_is_table_only(field):
+    assert AC.table_only_tie('1266', field)
+    assert AC.table_only_tie(1266, field)
+
+
 @pytest.mark.parametrize('proposal, field', [
-    ('1266', '004'),     # same shape of field, nothing measured yet
+    ('6151', '002'),     # w51: held until the MIRI tie plan is agreed (#1181)
     ('10678', '040'),    # skips tweakreg through InheritedBulk instead
     ('2221', '001'),
     ('9999', '001'),     # unregistered
