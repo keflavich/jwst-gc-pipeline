@@ -131,6 +131,26 @@ def test_annulus_falls_back_when_crowded_or_at_the_edge(tmp_path):
     assert out.max() < SKY + AMP
 
 
+def test_annulus_leaves_sparse_annulus_to_the_gaussian_fill(tmp_path, capsys):
+    """Where the annulus is mostly outside the finite area the hole is left to
+    the Gaussian fill: the output equals the plain Gaussian-mode output."""
+    mc, vet = _write(tmp_path)
+    with fits.open(mc, mode='update') as hl:
+        sci = hl['SCI'].data
+        keep = np.zeros(sci.shape, bool)
+        x, y = int(STAR_XY[0]), int(STAR_XY[1])
+        keep[y - 4:y + 5, x - 4:x + 5] = True   # 9 px square: the 3 FWHM
+        sci[~keep] = np.nan                     # annulus (4.8-8 px) is >75% NaN
+        hl.flush()
+    gauss = fits.getdata(_build_source_masked_bg(mc, vet, FILT))
+    capsys.readouterr()
+    out = fits.getdata(_build_source_masked_bg(mc, vet, FILT, fill_mode='annulus',
+                                               fill_annulus_inner_fwhm=3.0))
+    assert '0 holes plugged, 1 left to the Gaussian fill' in capsys.readouterr().out
+    assert np.isfinite(out[int(STAR_XY[1]), int(STAR_XY[0])])
+    assert np.array_equal(out, gauss, equal_nan=True)
+
+
 def test_annulus_does_not_read_other_plugs(tmp_path):
     """Two neighbours' disks inside each other's annulus stay masked while the
     medians are taken, so one plug cannot feed the other."""
