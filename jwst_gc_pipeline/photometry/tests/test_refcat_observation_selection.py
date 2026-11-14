@@ -16,6 +16,7 @@ degraded reference, it is the wrong sky.
 import pytest
 
 from jwst_gc_pipeline.photometry.cataloging import _pick_refcat
+from jwst_gc_pipeline.photometry.naming import SHARED_TREE_PROPOSALS
 
 GENERIC = '/x/catalogs/gaia_virac2_refcat_epoch2023.71.fits'
 O028 = '/x/catalogs/gaia_virac2_refcat_epoch2023.71_o028.fits'
@@ -434,7 +435,7 @@ def test_proposal_token_beats_an_untokened_file():
 
 def test_two_untokened_refcats_on_a_shared_tree_REFUSE():
     """The on-disk ngc6334 state: the old pick was sorted(...)[-1], 2026.30."""
-    for prop in ('6778', '7213'):
+    for prop in sorted(SHARED_TREE_PROPOSALS):
         with pytest.raises(ValueError) as exc:
             _pick_refcat([U_2024, U_2026], field='001', proposal=prop)
         msg = str(exc.value)
@@ -508,7 +509,7 @@ def test_both_entry_points_choose_the_SAME_file_on_a_shared_tree(tmp_path,
     monkeypatch.delenv('ASTROM_REFCAT', raising=False)
     bp = _catalogs(tmp_path, NGC)
     cands = sorted(_glob.glob(f'{bp}/catalogs/gaia_virac2_refcat*.fits'))
-    for prop in ('6778', '7213'):
+    for prop in sorted(SHARED_TREE_PROPOSALS):
         a = _pick_refcat(cands, field='001', proposal=prop)
         b, _ = refcat_for_frame(bp, 'VIRAC2', field='001', proposal=prop)
         assert _os.path.basename(a) == _os.path.basename(b), prop
