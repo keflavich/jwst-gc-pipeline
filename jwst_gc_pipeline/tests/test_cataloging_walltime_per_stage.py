@@ -41,6 +41,13 @@ SCRIPT = (Path(__file__).resolve().parents[2] / "scripts" / "reduction"
 # first draft were wrong -- m12-finalize 55.3 h, m12-fanout 23.5 h and
 # m7-finalize 20.7 h were all COMPLETED runs at limits their runners had already
 # raised to 24-72 h, not runs truncated by the 12 h default.)
+#
+# The mid fan-out m3-m7 values were re-measured for issue #1172 from sacct jobs
+# of 2026-09-20 to 2026-11-13 (sgra1939-o001, gc2211-o028, gc2211-o046,
+# crowded_l209438-o007, sgrc4147-o012), which replaces the 5.0-6.5 h of the
+# first window.  The m7 value is also CENSORED: four shards of sgrc4147-o012's
+# array 50450810 were still RUNNING at 34 h of a 36 h limit on 2026-11-13, so
+# 34.0 h is a lower bound on the true maximum.
 MEASURED = {
     "small": {
         ("m12", "fanout"): 6.5, ("m3", "fanout"): 3.3, ("m4", "fanout"): 3.3,
@@ -50,8 +57,8 @@ MEASURED = {
         ("m6", "finalize"): 3.5, ("m7", "finalize"): 3.1,
     },
     "mid": {
-        ("m12", "fanout"): 23.5, ("m3", "fanout"): 5.8, ("m4", "fanout"): 6.5,
-        ("m5", "fanout"): 5.0, ("m6", "fanout"): 6.1, ("m7", "fanout"): 21.8,
+        ("m12", "fanout"): 23.5, ("m3", "fanout"): 15.9, ("m4", "fanout"): 13.4,
+        ("m5", "fanout"): 13.8, ("m6", "fanout"): 17.4, ("m7", "fanout"): 34.0,
         ("m12", "finalize"): 20.0, ("m3", "finalize"): 18.2,
         ("m4", "finalize"): 16.2, ("m5", "finalize"): 12.7,
         ("m6", "finalize"): 18.6, ("m7", "finalize"): 13.9,
@@ -65,7 +72,7 @@ MEASURED = {
         ("m6", "finalize"): 18.8, ("m7", "finalize"): 20.7,
     },
 }
-CENSORED = {("large", ("m4", "finalize"))}
+CENSORED = {("large", ("m4", "finalize")), ("mid", ("m7", "fanout"))}
 
 TIERS = ("small", "mid", "large")
 # crf counts that land inside each tier of the driver's own thresholds.
@@ -169,6 +176,8 @@ def test_nothing_is_shorter_than_the_flat_default_it_replaces(tier, stage,
 @pytest.mark.parametrize("tier,stage", sorted(CENSORED))
 def test_a_censored_maximum_is_sized_above_not_to(tier, stage, emitted):
     """cloudc's m4-finalize TIMED OUT at 24 h, so 24 h is a lower bound.
+
+    The mid m7 fan-out is the same case: four shards were still running at 34 h.
 
     Sizing to it would reproduce the kill on the next field that is slower.
     """

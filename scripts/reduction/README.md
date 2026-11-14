@@ -342,6 +342,40 @@ ask less than the pooled jobs they replace -- that is the point -- and the
 driver prints each one's `--mem`/`--time` beside the whole-field value it
 replaced, so the reduction is in the submit log rather than implied.
 
+##### Rerunning timed-out shards (`ONLY_SHARDS`)
+
+A fan-out shard that hits its wall clock leaves the phase's finalize or
+finalizes, and every later phase, on `DependencyNeverSatisfied` while the other
+shards are done (issue #1172). Rerun only the dead shards:
+
+```
+sacct -j <fan-out array id> -X -o JobID%20,State | grep TIMEOUT   # the shard ids
+scancel <the dead finalize(s) and every later phase's jobs>        # each per-filter finalize too
+
+ONLY_SHARDS=1,5,9 SKIP_IF_DONE=1 FANOUT_TIME_M6=<longer> \
+  PIPE_ROOT=$PWD PHASES="m6 m7" NSHARDS=<the original array's> \
+  TARGET=... PROPOSAL=... FIELD=... MODULES=... EACH_SUFFIX=... FILTERS="..." \
+      scripts/reduction/submit_cataloging_perframe.sh
+```
+
+- `ONLY_SHARDS` takes comma-separated ids and ranges (`1,5,9`, `2-4,9`) and
+  applies to the **first** phase in `PHASES`; later phases get their full array.
+- It is refused without `SKIP_IF_DONE=1`, because each listed shard would
+  otherwise refit the frames the killed task had already finished.
+- `NSHARDS` has to equal the original array's: a frame belongs to shard
+  `task/NSHARDS`, so another value moves frames between shards and leaves some
+  without an owner. The banner prints it, and an id at or above `NSHARDS` is
+  refused.
+- The rerun submits a **new** finalize (one per filter with
+  `PER_FILTER_FINALIZE=1`, up to eight). Cancel the dead ones first, as above,
+  or set `GC_ALLOW_DUPLICATE_CHAIN=1` if the duplicate-chain guard still sees
+  them queued. Queued jobs from the old chain that you keep need their
+  dependency moved to every new finalize:
+  `scontrol update jobid=<job> dependency=afterok:<new finalize>[:<next>...]`.
+- The driver's table now gives mid and large fields 36 h for m3-m6 fan-outs and
+  60 h for m7, so a chain submitted from now on should need this less. A
+  `FANOUT_TIME` set in a runner script still overrides the table.
+
 ## Overriding the target
 
 ```
