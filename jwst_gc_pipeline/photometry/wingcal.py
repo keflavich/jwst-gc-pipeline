@@ -157,3 +157,27 @@ def interp_wingcal_ratio(rmask, rs, vs):
     with np.errstate(invalid='ignore'):
         out = np.interp(np.clip(r, 0.0, xp[-1]), xp, fp)
     return np.where(np.isfinite(r), out, 1.0)
+
+
+#: Per-bandpass wing multipliers for ``SATSTAR_WING_MULT_FILTERS`` (#1036):
+#: ``(r_mask nodes in px, flux divisors)``.  F150W (wd2): the bright
+#: saturated stars (predicted 13.5-14.5 mag, r_mask >= 4.5 px) read about
+#: 0.275 mag brighter than the narrowband prediction, a near-constant offset
+#: (refit shifts of +0.274 to +0.276 mag), and stars with r_mask <= 3.5 px
+#: need none.  The divisor ramps from 1 at 3.5 px to 10**(0.4 * 0.275) at
+#: 5 px and is held beyond.  Fitted on 49 stars of one detector and checked
+#: on a second, so the entry is specific to F150W; no other band is listed.
+WING_MULT_TABLE = {
+    'F150W': ((3.5, 5.0), (1.0, 10 ** (0.4 * 0.275))),
+}
+
+
+def wing_multiplier_ratio(rmask, bandpass):
+    """Flux divisor for a satstar catalog row of ``bandpass`` from its mask
+    radius ``rmask`` (px), from ``WING_MULT_TABLE``.
+
+    Built on :func:`interp_wingcal_ratio`: 1 up to the first node, linear up
+    to the second, held beyond, and 1 for a non-finite ``rmask``.  A bandpass
+    without a table entry raises ``KeyError``."""
+    rs, vs = WING_MULT_TABLE[str(bandpass).upper()]
+    return interp_wingcal_ratio(rmask, rs, vs)

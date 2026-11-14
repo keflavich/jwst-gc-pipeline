@@ -23,7 +23,8 @@ from jwst_gc_pipeline.photometry.psf_channel import (
 from jwst_gc_pipeline.photometry.wingcal import (
     bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
     MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
-    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se,
+    WING_MULT_TABLE, wing_multiplier_ratio)
 from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 from photutils.psf import GriddedPSFModel
 
@@ -1489,6 +1490,72 @@ def apply_uncapped_flux(base_tab, filtername, env=None):
     return base_tab
 
 
+def satstar_wing_mult_filters(env=None):
+    """Bandpasses whose satstar CATALOG flux gets the wing multiplier of
+    ``photometry.wingcal.WING_MULT_TABLE``, from ``SATSTAR_WING_MULT_FILTERS``
+    (#1036).
+
+    Comma- and/or space-separated bandpass names, case-insensitive (returned
+    upper-case); unset or blank -> empty, i.e. no behaviour change.  The
+    variable changes the catalog flux and the satstar cache key, so a name
+    that has no table entry raises ``ValueError`` rather than switching the
+    correction off without a word."""
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_WING_MULT_FILTERS') or ''
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if tok not in WING_MULT_TABLE]
+    if bad:
+        raise ValueError(
+            f"SATSTAR_WING_MULT_FILTERS={raw!r}: {bad} have no wing "
+            f"multiplier; available: {sorted(WING_MULT_TABLE)}")
+    return frozenset(scope)
+
+
+def apply_wing_multiplier(base_tab, filtername, env=None):
+    """Opt-in wing multiplier (#1036): divide the satstar CATALOG flux of a
+    listed bandpass by ``wing_multiplier_ratio(wingcal_rmask)``.
+
+    On wd2 F150W the stars with a masked core of r_mask >= 4.5 px read about
+    0.3-0.4 mag bright against the narrowband predictions, and the frame
+    wing self-calibration (C about 1.0-1.05) does not reach that size.  When
+    ``filtername`` is listed in ``SATSTAR_WING_MULT_FILTERS`` (see
+    ``satstar_wing_mult_filters``), ``flux_fit`` and ``flux_err`` are divided
+    by the ratio and the ratio is recorded in ``wingmult_ratio``.  The column
+    is added only for listed bandpasses, so the default catalog schema (and
+    per-frame catalogs cached before this switch) is unchanged.
+
+    The ratio stays out of ``wingcal_ratio``: the pooled fallback in
+    ``merge_catalogs.apply_pooled_wingcal`` reads ``wingcal_ratio == 1.0`` as
+    "per-frame calibration skipped".  ``flux_fit_raw``, ``flux_fit_precap``,
+    the satstar model and the residual are untouched.  Out-of-field
+    (``outside_fov_seed``) rows are skipped for the reason given in
+    ``apply_uncapped_flux``.  Frames whose bandpass is listed carry ``wm`` in
+    ``satstar_fit_switch_signature``."""
+    if base_tab is None:
+        return base_tab
+    if str(filtername).upper() not in satstar_wing_mult_filters(env):
+        return base_tab
+    n = len(base_tab)
+    ratio = np.ones(n)
+    if n and 'wingcal_rmask' in base_tab.colnames:
+        ratio = wing_multiplier_ratio(
+            np.asarray(base_tab['wingcal_rmask'], dtype=float), filtername)
+        if 'outside_fov_seed' in base_tab.colnames:
+            ratio = np.where(np.asarray(base_tab['outside_fov_seed'], dtype=bool),
+                             1.0, ratio)
+        if (ratio != 1.0).any():
+            base_tab['flux_fit'] = np.asarray(base_tab['flux_fit'],
+                                              dtype=float) / ratio
+            if 'flux_err' in base_tab.colnames:
+                base_tab['flux_err'] = np.asarray(base_tab['flux_err'],
+                                                  dtype=float) / ratio
+            print(f"wing multiplier: {filtername}: {int((ratio != 1.0).sum())}/"
+                  f"{n} satstar catalog flux(es) divided by the wing "
+                  f"multiplier (max {np.max(ratio):.3f})", flush=True)
+    base_tab['wingmult_ratio'] = ratio
+    return base_tab
+
+
 def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
                                  env=None):
     """Cache key for the ``satstar_fit_switches`` of one frame.
@@ -1594,6 +1661,18 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             _bp = ''
         if _bp in satstar_seed_require_sat_dq_filters(env):
             parts.append('sd')
+    if satstar_wing_mult_filters(env):
+        # SATSTAR_WING_MULT_FILTERS changes the per-frame catalog
+        # flux_fit/flux_err (not the model) of the listed bandpasses (#1036).
+        # Same per-frame bandpass rule as 'uf'; the default (empty list) and
+        # every unlisted band keep their keys.
+        try:
+            with fits.open(filename) as fh:
+                _bp = _frame_bandpass(fh[0].header)
+        except OSError:
+            _bp = ''
+        if _bp in satstar_wing_mult_filters(env):
+            parts.append('wm')
     return '_'.join(parts)
 
 
@@ -6102,6 +6181,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             severity_floor=float(_sev_floor or 0.0))
         # Opt-in uncapped catalog flux (#1186): catalog only, model unchanged.
         base_tab = apply_uncapped_flux(base_tab, get_filtername(header))
+        # Opt-in F150W wing multiplier (#1036): catalog only, model unchanged.
+        base_tab = apply_wing_multiplier(base_tab, get_filtername(header))
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
