@@ -76,6 +76,7 @@ from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     PER_OBS_MERGED_PROPOSALS, merged_catalog_obs_token,
+    ObservationFieldError, observation_field_token,
     perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
@@ -130,7 +131,7 @@ def _run_merge(merge_func, label, on_error, **kwargs):
         print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
 
 
-def _obsid_for_glob(target, proposal, filtername):
+def _obsid_for_glob(target, proposal, filtername, field=None):
     """The observation number to build an i2d filename from, for this filter.
 
     Instrument-aware: proposal 2221 numbers its NIRCam and MIRI pointings of
@@ -141,8 +142,83 @@ def _obsid_for_glob(target, proposal, filtername):
 
     ``None`` when that instrument did not observe the field under that
     proposal, which callers skip rather than interpolate.
+
+    The registry answers ``'*'`` for a proposal that lists several
+    observations.  A proposal in ``PER_OBS_MERGED_PROPOSALS`` merges one
+    observation at a time, so there ``field`` names the observation and
+    replaces the wildcard with its three-digit token; a glob built from ``'*'``
+    pools every pointing's mosaic, and the merge then takes the first match as
+    the WCS and pixel-area source for all of them (#817).  A per-observation
+    proposal that reaches the wildcard without a ``field``, or with one the
+    registry does not list for this instrument, raises.  Registrations that
+    claim a whole proposal (10678, ``fields.WILDCARD_OBSID``) have no list to
+    check against, so the token is accepted on its shape, as
+    ``cataloging._resolved_obsid`` does.  Every other proposal keeps the
+    registry answer.
     """
-    return field_registry.glob_obsid(target, proposal, _inst_token(filtername))
+    inst = _inst_token(filtername)
+    registry = field_registry.glob_obsid(target, proposal, inst)
+    if registry != field_registry.WILDCARD_OBSID or str(proposal) not in PER_OBS_MERGED_PROPOSALS:
+        return registry
+    if field in (None, ''):
+        raise ObservationFieldError(
+            f'proposal {proposal} merges per observation and {target} lists '
+            f'several {inst} observations, so an i2d glob without --field would '
+            f"use obsid '*' and pool every pointing's mosaic.  Pass --field <NNN>.")
+    token = observation_field_token(field)
+    if '-' in token:
+        raise ObservationFieldError(
+            f'field={field!r} is a joint token, but proposal {proposal} merges '
+            f'one observation at a time.')
+    obs = field_registry.BY_NAME[target].observation(proposal)
+    listed = tuple(obs.obsids.get(inst, ())) if obs is not None else ()
+    if listed and field_registry.WILDCARD_OBSID not in listed:
+        if token not in listed:
+            raise ObservationFieldError(
+                f'field={field!r} (observation {token}) is not one of the {inst} '
+                f'observations {list(listed)} that {target}/{proposal} registers, '
+                f'so its i2d glob would match nothing.')
+    elif not field_registry.is_obsid(token):
+        raise ObservationFieldError(
+            f'field={field!r} is not shaped like an observation number for '
+            f'{target}/{proposal} {inst}.')
+    return token
+
+
+_I2D_OBSERVATION_RE = re.compile(r'-o(\d{3})_')
+
+
+def _check_single_observation(i2d_matches, target, proposal, filtername):
+    """Refuse (or flag) an i2d glob that matched mosaics of several observations.
+
+    A merge reads one mosaic per filter as its WCS and pixel-area source, and
+    takes the first match.  Where the matches span several observations the
+    first is an arbitrary pointing.  Observations that the registry declares
+    joint (sgrb2 MIRI 002 and 998, which tile one field between them) are one
+    mosaic set and pass.
+
+    A proposal that merges per observation raises: ``_obsid_for_glob`` already
+    scopes its glob, so several observations here mean the scoping was
+    bypassed.  Other proposals print a warning and keep the first match, so a
+    field that already runs (cloudef MIRI lists three observations under
+    ``'*'``) does not start failing until it has been audited.
+    """
+    seen = sorted({m.group(1) for x in i2d_matches
+                   for m in [_I2D_OBSERVATION_RE.search(os.path.basename(x))] if m})
+    if len(seen) < 2:
+        return
+    obs = (field_registry.BY_NAME[target].observation(proposal)
+           if target in field_registry.BY_NAME else None)
+    joint = obs.joint_obsids.get(_inst_token(filtername), ()) if obs is not None else ()
+    if any(set(seen) <= set(token.split('-')) for token in joint):
+        return
+    message = (f'the {filtername} i2d glob for {target}/{proposal} matched mosaics '
+               f'of observations {seen}, which the registry does not declare '
+               f'joint; the merge would take {sorted(i2d_matches)[0]} as the WCS '
+               f'and pixel-area source for all of them.')
+    if str(proposal) in PER_OBS_MERGED_PROPOSALS:
+        raise ValueError(message)
+    print(f'WARNING: {message}', flush=True)
 
 
 def _read_offsets_table(path_or_none):
@@ -2310,6 +2386,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                       indivexp=False,
                       iteration_label=None,
                       resbgsub=False,
+                      field=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     if epsf:
         raise NotImplementedError
@@ -2318,14 +2395,18 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     # `_obs_filters_for` is keyed by PROPOSAL (the observation number comes from
     # `_obsid_for_glob`); the loop variable used to be spelled `obsid`, which
     # read as if the prefix were built out of an observation number.
-    imgfns = [x
-              for proposal in _obs_filters_for(target)
-              for filn in _obs_filters_for(target)[proposal]
-              if _obsid_for_glob(target, proposal, filn) is not None
-              for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
-                                 f"{jw_prefix(proposal)}-o{_obsid_for_glob(target, proposal, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-              if f'{module}_' in x or f'{module}1_' in x
-             ]
+    imgfns = []
+    for proposal in _obs_filters_for(target):
+        for filn in _obs_filters_for(target)[proposal]:
+            _obsid = _obsid_for_glob(target, proposal, filn, field=field)
+            if _obsid is None:
+                continue
+            _matches = [x for x in glob.glob(
+                f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(proposal)}-o{_obsid}"
+                f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+                if f'{module}_' in x or f'{module}1_' in x]
+            _check_single_observation(_matches, target, proposal, filn)
+            imgfns.extend(_matches)
 
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
@@ -2604,11 +2685,12 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                       flush=True)
                 continue
         _proj = _project_for_target_filter(target, filn)
-        _obsid = _obsid_for_glob(target, _proj, filn)
+        _obsid = _obsid_for_glob(target, _proj, filn, field=field)
         _img_matches = [] if _obsid is None else [x for x in glob.glob(
             f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(_proj)}-o{_obsid}"
             f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
             if f'{module}_' in x or f'{module}1_' in x]
+        _check_single_observation(_img_matches, target, _proj, filn)
         if not _img_matches:
             print(f"WARNING: no {module} i2d for filter {filn}; will fall back to "
                   f"the catalog's own skycoord/pixelscale for WCS", flush=True)
@@ -5410,7 +5492,8 @@ def main():
     merge_kwargs = dict(module=module, target=target, basepath=basepath,
                         indivexp=options.merge_singlefields,
                         resbgsub=options.resbgsub,
-                        iteration_label=options.iteration_label)
+                        iteration_label=options.iteration_label,
+                        field=options.field)
     if not options.skip_crowdsource:
         t0 = time.time()
         for suffix, on_error in CROWDSOURCE_MERGES:
