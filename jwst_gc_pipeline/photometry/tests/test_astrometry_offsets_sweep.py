@@ -152,3 +152,37 @@ def test_hist_peak_significance_rejects_a_dense_noise_maximum():
                         m, bw)
     assert out[9] > ao.min_peak_significance(m, bw)
     assert abs(out[0] - 20000) < 100 and abs(out[1] + 7000) < 100
+
+
+def _weak_small_tie(seed, rho=1.0, size=150.0, n_query=100, n_true=30):
+    """A 100-star query list, 30 of which are in a dense reference at a 36 mas
+    offset with 40 mas scatter: the per-tile regime, a weak tie with few
+    matched stars in a dense field."""
+    rng = np.random.default_rng(seed)
+    n = int(rho * size * size)
+    x = rng.uniform(0, size, n)
+    y = rng.uniform(0, size, n)
+    idx = rng.choice(n, n_true, replace=False)
+    qx = np.concatenate([x[idx] + 0.03 + rng.normal(0, 0.04, n_true),
+                         rng.uniform(0, size, n_query - n_true)])
+    qy = np.concatenate([y[idx] - 0.02 + rng.normal(0, 0.04, n_true),
+                         rng.uniform(0, size, n_query - n_true)])
+
+    def sky(px, py):
+        return SkyCoord((266.0 + px / 3600.0 / np.cos(np.radians(-28.8))) * u.deg,
+                        (-28.8 + py / 3600.0) * u.deg)
+    return sky(qx, qy), sky(x, y)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 3])
+def test_weak_small_tie_is_not_lost_to_the_wide_window_floor(seed):
+    # The 0.1" bin of the 30" window gathers the scattered pairs and out-scores
+    # the 10" window on contrast, but its peak sits just under the floor sized
+    # for its 2.8M bins.  The narrower window reads the same peak and passes
+    # its own gate, so the tie stays ok at the narrower window.
+    a, b = _weak_small_tie(seed)
+    r = measure_offset(a, b)
+    assert r["ok"], r
+    assert r["window_arcsec"] <= 15.0
+    assert r["min_peak_significance"] is None
+    assert np.hypot(r["dra"] + 30.0, r["ddec"] - 20.0) < 60.0

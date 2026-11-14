@@ -725,7 +725,10 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         ``peak_significance`` is below ``min_peak_significance`` (a trial-
         corrected Poisson significance against the local background; ``None``
         for the narrower windows, which are gated on contrast alone).  Window
-        selection stays on contrast.  ``bin_arcsec`` is the histogram bin of the
+        selection stays on contrast, except that a wide peak refused by the
+        significance floor yields to a narrower window that passes its own gate
+        and reads the same peak (within ``CONFIRM_MIN_TOL_MAS`` or three
+        thousand of the coarser bin, as in ``confirm_peak_windows``).  ``bin_arcsec`` is the histogram bin of the
         reported window (``_window_bin_arcsec``).
         ``window_arcsec`` is the window the reported peak came from -- a value
         >> your expected offset is the tell that the tie was only found after
@@ -777,11 +780,13 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     # that actually CONTAINS the offset produces the real, dominant peak.
     best = None
     evaluated = []
+    measured = []
     for w in windows:
         res = _measure_at_window(a, b, w, bin_arcsec, min_pairs)
         if res is None:
             evaluated.append(dict(window_arcsec=w, dra=None, ddec=None))
             continue
+        measured.append(res)
         # both spellings of the offset magnitude -- see issue #267; ``off_mas``
         # is canonical, ``off`` is retained for already-written records
         evaluated.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
@@ -796,17 +801,37 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
 
     if best is None:
         return None
-    best["ok"] = best["contrast"] >= min_contrast
-    # Above SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC the contrast alone is not
-    # enough: the capped bin leaves the median occupied bin at several pairs in
-    # a dense field, so a noise maximum can reach the floor (issue #1232).  A
-    # NaN significance (no background bins) compares False and fails the gate.
-    best["min_peak_significance"] = None
-    if best["window_arcsec"] > SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC:
-        best["min_peak_significance"] = min_peak_significance(
-            best["window_arcsec"], best["bin_arcsec"])
-        best["ok"] = bool(best["ok"] and best["peak_significance"]
-                          >= best["min_peak_significance"])
+
+    def _gate(res):
+        # Above SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC the contrast alone is not
+        # enough: the capped bin leaves the median occupied bin at several
+        # pairs in a dense field, so a noise maximum can reach the floor
+        # (issue #1232).  A NaN significance (no background bins) compares
+        # False and fails the gate.
+        floor = None
+        ok = bool(res["contrast"] >= min_contrast)
+        if res["window_arcsec"] > SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC:
+            floor = min_peak_significance(res["window_arcsec"], res["bin_arcsec"])
+            ok = bool(ok and res["peak_significance"] >= floor)
+        return ok, floor
+
+    best["ok"], best["min_peak_significance"] = _gate(best)
+    if not best["ok"] and best["min_peak_significance"] is not None:
+        # The finer wide-window bin gathers the scattered pairs of a WEAK small
+        # tie into one bin, so a wide window can out-score the narrow one that
+        # found the same peak and then fail a floor sized for its many bins.
+        # Fall back to the highest-contrast narrower window that passes its
+        # own gate and read the same peak, to within the confirmation
+        # tolerance; a narrower window cannot certify a peak the wide one did
+        # not see, so this never turns a refusal on a different peak into ok.
+        tol = max(CONFIRM_MIN_TOL_MAS, 3000.0 * best["bin_arcsec"])
+        same_peak = [
+            r for r in measured
+            if r["window_arcsec"] < best["window_arcsec"] and _gate(r)[0]
+            and np.hypot(r["dra"] - best["dra"], r["ddec"] - best["ddec"]) <= tol]
+        if same_peak:
+            best = max(same_peak, key=lambda r: r["contrast"])
+            best["ok"], best["min_peak_significance"] = _gate(best)
     # swept = the measured offset EXCEEDS the initial window, i.e. the narrow window
     # could not have contained it and the sweep is what found it. A True here on a
     # tie you expected to be small means the frame is grossly shifted -- investigate.
