@@ -34,6 +34,17 @@ _PROV_ONSKY_DEC = "prov_ddec_onsky_mas"
 #: The declination each correction's cos(dec) conversion used.
 _PROV_DEC_DEG = "prov_dec_deg"
 
+#: The sentinels of the per-(visit, filter) consensus->reference row.  Local
+#: copies of ``photometry.astrometry_checkpoint.BULK_MODULE`` / ``BULK_EXPOSURE``
+#: so that this numpy-only module does not import the photometry package; a
+#: test pins them equal.  ``lookup_consensus_offset`` identifies the row by the
+#: same pair, and a row must carry BOTH to count as the tie.
+_BULK_MODULE = "all"
+_BULK_EXPOSURE = -1
+
+#: Most cells named in the "unmeasurable" warning; the rest are counted.
+_MAX_UNMEASURABLE_LISTED = 10
+
 
 def _prov_onsky_names(colnames):
     """``(ra, dec)`` provenance column names for whichever spelling is present."""
@@ -41,6 +52,46 @@ def _prov_onsky_names(colnames):
     dec = (_PROV_ONSKY_DEC if _PROV_ONSKY_DEC in colnames
            else "prov_ddec_added_mas")
     return ra, dec
+
+
+def _tie_row_mask(offsets_tbl):
+    """Boolean mask of the whole-consensus tie rows, or ``None`` without the columns.
+
+    A consensus table holds per-exposure rows plus one bulk consensus->reference
+    row per (visit, filter), marked ``Module == "all"`` and ``Exposure == -1``.
+    Tables without both columns (the ``*_VIRAC2locked.csv`` family, where one
+    row per visit/module already IS the bulk) have no such row to separate.
+    """
+    cols = offsets_tbl.colnames
+    if 'Module' not in cols or 'Exposure' not in cols:
+        return None
+    module = np.char.strip(np.asarray(offsets_tbl['Module']).astype(str))
+    exposure = np.asarray(offsets_tbl['Exposure'], dtype=float)
+    return (module == _BULK_MODULE) & (exposure == _BULK_EXPOSURE)
+
+
+def unmeasurable_visit_cells(offsets_tbl):
+    """``(filter, visit)`` cells that hold only whole-consensus tie rows.
+
+    ``flag_collapsed_visits`` compares per-exposure rows, so a cell with no
+    per-exposure row has nothing for it to compare and is skipped.  This lists
+    those cells so that the skip is visible.  Empty for a table without
+    ``Module`` / ``Exposure`` columns.
+    """
+    cols = offsets_tbl.colnames
+    if 'Visit' not in cols or 'Filter' not in cols:
+        return []
+    tie = _tie_row_mask(offsets_tbl)
+    if tie is None:
+        return []
+    vis = np.asarray(offsets_tbl['Visit']).astype(str)
+    filt = np.asarray(offsets_tbl['Filter']).astype(str)
+    cells = []
+    for f, v in sorted({(a, b) for a, b in zip(filt[tie], vis[tie])}):
+        cell = (filt == f) & (vis == v)
+        if not np.any(cell & ~tie):
+            cells.append((f, v))
+    return cells
 
 
 def flag_collapsed_visits(offsets_tbl, tol_arcsec=0.02):
@@ -96,6 +147,23 @@ def flag_collapsed_visits(offsets_tbl, tol_arcsec=0.02):
     ~0" from "both visits converged at ~0"; the detector for that class is the
     dynamic one -- the m2 consensus->reference tie and the reference-free
     per-tile overlap gate -- not this check.
+
+    What the whole-consensus tie rows are excluded for.  A consensus table
+    carries one bulk consensus->reference row per (visit, filter)
+    (``Module == "all"``, ``Exposure == -1``) beside the per-exposure rows.  The
+    per-visit median over both kinds is the mean of a ~10 mas jitter row and a
+    ~90 mas tie when a visit holds one of each, so the statistic follows the row
+    count of the visit: ngc6334 Brick6778 F187N visits 001 and 002 each held two
+    rows and both read ~49 mas, while the per-exposure medians read 10.2 and
+    9.4 mas.  Two visits that each hold only a tie compare two reference ties,
+    which are expected to agree.  The tie rows are therefore dropped before the
+    median.  A cell left with no per-exposure row is skipped and is listed by
+    `unmeasurable_visit_cells`; rows with a NaN offset are skipped too.  Tables
+    without ``Module`` / ``Exposure`` columns are unchanged.
+
+    What this gives up: a table whose only damage is a copied bulk tie is no
+    longer seen here.  That class belongs with the dynamic detectors named
+    above, and the brick-1182 failure lived in a locked table with no tie rows.
     """
     cols = offsets_tbl.colnames
     if 'Visit' not in cols or 'Filter' not in cols:
@@ -110,15 +178,23 @@ def flag_collapsed_visits(offsets_tbl, tol_arcsec=0.02):
     dra = np.asarray(offsets_tbl[dc], dtype=float)
     ddec = np.asarray(offsets_tbl[ec], dtype=float)
 
+    tie = _tie_row_mask(offsets_tbl)
+    usable = np.isfinite(dra) & np.isfinite(ddec)
+    if tie is not None:
+        usable &= ~tie
+
     issues = []
     for f in np.unique(filt):
         fm = filt == f
         visits = np.unique(vis[fm])
-        # per-visit mean offset (tables may be per-exposure)
+        # per-visit median offset (tables may be per-exposure); a visit with
+        # no usable row is not measurable and has no entry
         vals = {}
         for v in visits:
-            vm = fm & (vis == v)
-            vals[v] = (float(np.nanmedian(dra[vm])), float(np.nanmedian(ddec[vm])))
+            vm = fm & (vis == v) & usable
+            if not vm.any():
+                continue
+            vals[v] = (float(np.median(dra[vm])), float(np.median(ddec[vm])))
         vlist = list(vals)
         for i in range(len(vlist)):
             for j in range(i + 1, len(vlist)):
@@ -364,6 +440,20 @@ def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="",
         if raise_on_issue or os.environ.get('OFFSETS_TABLE_COLLAPSE_RAISE') == '1':
             raise CollapsedOffsetsTableError(msg)
         warnings.warn(msg)
+    # Cells `flag_collapsed_visits` could not compare.  Never raises: a cell
+    # that holds only the consensus->reference tie has no per-exposure row to
+    # test, which is a gap in what was checked and not a finding.
+    unmeasurable = unmeasurable_visit_cells(offsets_tbl)
+    if unmeasurable:
+        shown = ", ".join(f"{f} {v}" for f, v in
+                          unmeasurable[:_MAX_UNMEASURABLE_LISTED])
+        more = len(unmeasurable) - _MAX_UNMEASURABLE_LISTED
+        warnings.warn(
+            f"OFFSETS TABLE{(' ' + context) if context else ''}: "
+            f"{len(unmeasurable)} (filter, visit) cell(s) hold only the "
+            f"whole-consensus tie row and are unmeasurable by the collapse "
+            f"check (no per-exposure row to compare): {shown}"
+            + (f", ... and {more} more" if more > 0 else ""))
     # The as-built / as-corrected invariant.  This is the SAME failure family as
     # the collapse above -- a table that reads plausibly while the pipeline
     # consumes something else -- and it is checked here because this is the one
