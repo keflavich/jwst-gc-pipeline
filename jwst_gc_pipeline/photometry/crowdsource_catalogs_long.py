@@ -5291,6 +5291,25 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'merges split a single star into two reference rows; the '
                             'dedup collapses complementary-coverage pairs while '
                             'preserving resolved binaries.'))
+    parser.add_option('--m8-dedup-winner-emag-ratio',
+                      dest='m8_dedup_winner_emag_ratio',
+                      default=None, type='float',
+                      help=('Winner hysteresis for the m8 dedup (#1278): a '
+                            'merged row keeps its primary row\'s own measurement '
+                            'of a band unless the other member\'s emag_ab is '
+                            'below RATIO times the primary\'s (e.g. 0.8).  '
+                            'Default: off, the lowest-emag member always wins.'),
+                      metavar='RATIO')
+    parser.add_option('--m8-dedup-band-resolve-mas',
+                      dest='m8_dedup_band_resolve_mas',
+                      default=None,
+                      help=('Resolved-in-band guard for the m8 dedup (#1278): two '
+                            'rows that a band detects independently at '
+                            'skycoord_<band> positions further apart than this '
+                            'are not merged whatever their magnitudes.  A number '
+                            '(all bands) or BAND=MAS,... (e.g. f212n=60).  '
+                            'Default: off.'),
+                      metavar='MAS')
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')

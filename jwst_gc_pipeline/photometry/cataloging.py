@@ -7205,8 +7205,13 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
             out = m8_path.replace('.fits', '_dedup.fits')
     _stage = 'dedup'
     try:
-        from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
-        dedup_merged_catalog(m8_path, out)
+        from jwst_gc_pipeline.photometry.dedup_catalog import (
+            dedup_merged_catalog, parse_band_resolve_mas)
+        dedup_merged_catalog(
+            m8_path, out,
+            winner_emag_ratio=getattr(options, 'm8_dedup_winner_emag_ratio', None),
+            band_resolve_mas=parse_band_resolve_mas(
+                getattr(options, 'm8_dedup_band_resolve_mas', None)))
         print(f"manual [{label}]: m8 dedup -> {out}", flush=True)
         _stage = 'spike flag'
         try:

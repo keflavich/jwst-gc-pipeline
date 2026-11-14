@@ -245,6 +245,10 @@ rejection**.
   noise limit. On by default (`--no-forced-fill-m8` disables); full-frame only;
   writes a sibling `..._resbgsub_m8` catalog and leaves m7 as it is. The result is then
   de-duplicated to `..._resbgsub_m8_dedup.fits` (`--no-m8-dedup` to skip).
+  The dedup table records which pre-dedup row supplied each band
+  (`dedup_src_<band>`, `dedup_band_swapped_<band>`, `dedup_primary`,
+  `dedup_pos_spread_mas`; indices refer to the sibling `..._m8` file of the same
+  run, named in the `DEDUPSRC` header key).
 
 ### Merge + vet (per-phase barrier)
 
@@ -414,6 +418,8 @@ still run after m6.
 | `--manual-crossband-ecsv-all-modules` | off | off | off | off | write the cross-band table's `.ecsv` twin for nrca/nrcb too; off writes it for the merged module only, or for every module when the run has no merged module (a disjoint field, MIRI). The FITS table is written for every module either way |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
+| `--m8-dedup-winner-emag-ratio` (`m8_dedup_winner_emag_ratio`, e.g. 0.8) | `None` | off | off | off | the primary row keeps its own band measurement unless the other member's emag is below ratio times the primary's |
+| `--m8-dedup-band-resolve-mas` (`m8_dedup_band_resolve_mas`, a number or `f212n=60,...`) | `None` | off | off | off | rows resolved in a band (independent detections further apart than this) are not merged |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
