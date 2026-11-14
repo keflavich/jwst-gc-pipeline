@@ -174,6 +174,11 @@ class Obs:
         ``None`` when this proposal did not observe the field with this
         instrument, which callers must treat as "no data", never as a value to
         interpolate: ``jw02526-oNone_*`` matches nothing silently.
+
+        A proposal that lists several observations answers ``'*'``.  The
+        per-observation merges (``naming.PER_OBS_MERGED_PROPOSALS``) do not use
+        that wildcard: ``merge_catalogs._obsid_for_glob`` replaces it with the
+        observation named by ``--field`` (#817).
         """
         instrument = instrument.lower()
         if instrument in self.glob_obsids:
