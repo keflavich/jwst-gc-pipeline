@@ -282,3 +282,26 @@ def test_miri_mosaic_names_on_disk_do_not_match_the_i2d_glob():
     for name in ('jw03571-o001_t001_miri_clear-f770w-mirimage_data_i2d.fits',
                  'jw03571-o001_t001_miri_f770w_i2d.fits'):
         assert not fnmatch.fnmatch(name, pattern)
+
+
+# ---------------------------------------------------------------------------
+# main() hands --field to the all-filter merges
+# ---------------------------------------------------------------------------
+
+def test_main_passes_field_to_the_all_filter_merges(tmp_path, monkeypatch):
+    """The all-filter step used to pass no ``field``, so the i2d glob (and the
+    merged catalogue name) could not follow the observation."""
+    import sys
+    calls = {}
+    monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
+    monkeypatch.delenv('SLURM_ARRAY_TASK_ID', raising=False)
+    monkeypatch.delenv('RUN_REGISTRATION_GATE', raising=False)
+    monkeypatch.setattr(sys, 'argv', ['merge_catalogs', '--target', 'gc3571',
+                                      '--modules', 'mirimage', '--field', '3'])
+    monkeypatch.setattr(MC, 'merge_crowdsource',
+                        lambda **kw: calls.setdefault('crowdsource', kw))
+    monkeypatch.setattr(MC, 'merge_daophot',
+                        lambda **kw: calls.setdefault('daophot', kw))
+    MC.main()
+    assert calls['crowdsource']['field'] == '3'
+    assert calls['daophot']['field'] == '3'
