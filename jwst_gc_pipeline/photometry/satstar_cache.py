@@ -237,7 +237,25 @@ def satstar_content_key(filename, *, path_prefix, use_merged_psf_for_merged=Fals
     if fit_switch_signature:
         h.update(f'fit_switches={fit_switch_signature!r};'.encode())
 
+    # The ePSF core of a hybrid run (PSF_EPSF_CORE_DIR, #1208) changes the PSF
+    # the fit uses, and no grid file on disk shows it.  Fed only when a core
+    # applies, so every STPSF key stays valid.
+    psf_core = _psf_core_signature(header, env)
+    if psf_core:
+        h.update(f'psf_core={psf_core};'.encode())
+
     return h.hexdigest()
+
+
+def _psf_core_signature(header, env=None):
+    """``epsf_hybrid.expected_psf_signature`` for the frame header's detector
+    and filter; ``''`` for STPSF and for a non-NIRCam frame."""
+    from jwst_gc_pipeline.mast_names import filtername_from_header
+    from jwst_gc_pipeline.photometry.epsf_hybrid import expected_psf_signature
+    if str(header.get('INSTRUME', '')).upper() != 'NIRCAM':
+        return ''
+    return expected_psf_signature(filtername_from_header(header),
+                                  header.get('DETECTOR', ''), environ=env)
 
 
 def _stable_repr(value):
