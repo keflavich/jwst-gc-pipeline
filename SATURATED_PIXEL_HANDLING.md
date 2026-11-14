@@ -318,7 +318,7 @@ subtracting the median sky, a sky-scaled gradient, or adding 5× sky moves m
 by ≤ 0.03 on every frame above.
 
 Fallbacks: fewer than 20 measurable pixels, fewer than 100 bright reference
-pixels, no ramp SCI, or no NFRAMES/TFRAME → **flag** (the pre-gate behaviour;
+pixels, no ramp SCI, no NFRAMES/TFRAME, or a non-finite m → **flag** (the pre-gate behaviour;
 such frames have few single-group pixels). r < 1.05 (NFRAMES=1, where
 G1/TGROUP is correct under either timing) → skip. A crf header that already
 carries `G1ONLYDC` reuses that decision (a flagged crf has NaN where m is

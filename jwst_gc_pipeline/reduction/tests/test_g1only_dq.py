@@ -545,3 +545,102 @@ def test_multi_integration_measures_only_single_group_integrations(tmp_path):
         mask, dec = g1only_dq.frame_plan(crf, h[0].header, h['SCI'].data, h['DQ'].data)
     assert mask.sum() == npx
     assert dec.flag and dec.m == pytest.approx(1.0, abs=0.03) and dec.n == npx
+
+
+def test_non_finite_m_falls_back_to_flag(tmp_path):
+    """A constant SCI gives C = 0 and m = nan: no measurement, so flag (the
+    pre-gate default), never a silent skip."""
+    crf, npx = _write_gate_pair(str(tmp_path), biased=False)
+    with fits.open(crf, mode='update') as h:
+        h['SCI'].data[:] = 5.0
+    with fits.open(crf) as h:
+        assert g1only_dq.apply_to_hdul(h, crf) == npx
+        assert h[0].header[g1only_dq.DECISION_KEY] == 'flag'
+        assert h[0].header[g1only_dq.REASON_KEY].startswith('fallback: m not finite')
+    assert g1only_dq.COUNTS['fallback_flag'] == 1
+
+
+def test_nan_sci_at_some_single_group_pixels_is_left_out_of_m(tmp_path):
+    """A few NaN SCI pixels in the star (e.g. a hot pixel set NaN downstream)
+    must not turn the median into nan and the biased frame into a fallback."""
+    crf, npx = _write_gate_pair(str(tmp_path), biased=True)
+    with fits.open(crf, mode='update') as h:
+        h['SCI'].data[20, 20:23] = np.nan
+    with fits.open(crf) as h:
+        mask, dec = g1only_dq.frame_plan(crf, h[0].header, h['SCI'].data, h['DQ'].data)
+    assert dec.flag and dec.source == 'measured'
+    assert dec.n == npx - 3
+    assert dec.m == pytest.approx(1.0, abs=0.03)
+
+
+def test_flagged_reference_pixels_do_not_set_the_conversion(tmp_path):
+    """Reference pixels flagged in the crf DQ (here with SCI zeroed, as a
+    DO_NOT_USE pixel can be) are left out of the C/B fit."""
+    crf, _ = _write_gate_pair(str(tmp_path), biased=False)
+    ramp = crf.replace('_destreak_o001_crf.fits', '_ramp.fits')
+    with fits.open(ramp) as r:
+        diff = r['SCI'].data[0, 1] - r['SCI'].data[0, 0]
+    rng = np.random.default_rng(7)
+    bad = (diff >= np.percentile(diff, 90)) & (rng.random(diff.shape) < 0.6)
+    bad[20:26, 20:26] = False
+    with fits.open(crf, mode='update') as h:
+        h['SCI'].data[bad] = 0.0
+        h['DQ'].data[bad] = DNU
+    with fits.open(crf) as h:
+        mask, dec = g1only_dq.frame_plan(crf, h[0].header, h['SCI'].data, h['DQ'].data)
+    assert not dec.flag and dec.source == 'measured'
+    assert dec.m == pytest.approx(R_BRIGHT2, abs=0.05)
+
+
+def test_lone_usable_group_two_does_not_enter_m(tmp_path):
+    """Pixels whose only usable group is group 2 (group 1 DO_NOT_USE) are
+    single-group and get flagged, but their G1 is not a rate: left out of m."""
+    crf, npx = _write_gate_pair(str(tmp_path), biased=True)
+    ramp = crf.replace('_destreak_o001_crf.fits', '_ramp.fits')
+    odd = (slice(45, 51), slice(5, 15))                       # 60 px, away from the star
+    with fits.open(ramp, mode='update') as r:
+        r['SCI'].data[0, 0][odd] = 5000.0
+        r['GROUPDQ'].data[0, 0][odd] = DNU
+    with fits.open(crf) as h:
+        mask, dec = g1only_dq.frame_plan(crf, h[0].header, h['SCI'].data, h['DQ'].data)
+    assert mask.sum() == npx + 60
+    assert dec.flag and dec.source == 'measured' and dec.n == npx
+    assert dec.m == pytest.approx(1.0, abs=0.03)
+
+
+def test_rewritten_ramp_is_decided_again(tmp_path):
+    """The decision cache is keyed on the ramp's mtime as well as the frame's."""
+    crf, _ = _write_gate_pair(str(tmp_path), biased=True)
+    ramp = crf.replace('_destreak_o001_crf.fits', '_ramp.fits')
+    assert g1only_dq.signature(crf) == 'g1'
+    t1 = (NFRAMES + 1) * TFRAME / 2
+    with fits.open(ramp, mode='update') as r:                 # now m = r: unbiased
+        r['SCI'].data[0, 0][20:26, 20:26] *= t1 / TGROUP
+    st = os.stat(ramp)
+    os.utime(ramp, (st.st_atime, st.st_mtime + 10))
+    assert g1only_dq.signature(crf) == ''
+
+
+def test_signature_reuses_the_cached_decision_without_reading_arrays(tmp_path, monkeypatch):
+    crf, _ = _write_gate_pair(str(tmp_path), biased=True)
+    with fits.open(crf) as h:
+        assert g1only_dq.apply_to_hdul(h, crf) > 0
+    monkeypatch.setattr(g1only_dq, 'decide',
+                        lambda *a, **k: pytest.fail('signature re-entered decide'))
+    assert g1only_dq.signature(crf) == 'g1'
+
+
+@pytest.mark.parametrize('biased', [True, False])
+def test_satstar_content_key_follows_the_gate(tmp_path, monkeypatch, biased):
+    """biased frame: auto key == force key != off key; unbiased: auto == off != force."""
+    from jwst_gc_pipeline.photometry import satstar_cache
+    crf, _ = _write_gate_pair(str(tmp_path), biased=biased)
+    keys = {}
+    for value in ('auto', '1', '0'):
+        monkeypatch.setenv(g1only_dq.ENV, value)
+        g1only_dq._DECISION_CACHE.clear()
+        keys[value] = satstar_cache.satstar_content_key(crf, path_prefix=str(tmp_path))
+    if biased:
+        assert keys['auto'] == keys['1'] != keys['0']
+    else:
+        assert keys['auto'] == keys['0'] != keys['1']

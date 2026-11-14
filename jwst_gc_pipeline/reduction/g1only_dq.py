@@ -52,7 +52,8 @@ ramp fit gives m = 1; an unbiased one gives m = r.  The frame is flagged when
 the median m is below ``(1 + r) / 2`` and left alone otherwise.  Fallbacks:
 
   * fewer than ``N_MIN_PX`` measurable pixels (or no ramp SCI, no readout
-    keywords, too few clean reference pixels): flag -- the pre-gate behaviour;
+    keywords, too few clean reference pixels, a non-finite m): flag -- the
+    pre-gate behaviour;
     the frame has few single-group pixels, so either choice moves few pixels;
   * ``r < R_MIN_SEPARABLE`` (NFRAMES=1 readouts: G1/TGROUP is the right rate
     under either ramp-fit timing): skip;
@@ -329,7 +330,8 @@ def measure_ratio(mask, sci, dq, g1, diff, ref, tgroup):
     else:
         conv = np.median(sci[bright] / rate[bright])
         offset = 0.0
-    m = (sci[sel] - offset) / ((g1[sel].astype(np.float64) / tgroup) * conv)
+    with np.errstate(invalid='ignore', divide='ignore'):     # C = 0 -> non-finite m
+        m = (sci[sel] - offset) / ((g1[sel].astype(np.float64) / tgroup) * conv)
     pct = tuple(float(v) for v in np.percentile(m, (5, 25, 75, 95)))
     return float(np.median(m)), n, pct, nref
 
@@ -376,6 +378,9 @@ def _auto_decision(mask, header, ramp, sci, dq):
         why = (f"{n} measurable px (<{N_MIN_PX})" if n < N_MIN_PX
                else f"{nref} reference px (<{N_MIN_REF})")
         return Decision(True, 'fallback', why, None, n, r, None)
+    if not np.isfinite(m):
+        # e.g. a constant SCI (C = 0): no measurement, so the pre-gate default.
+        return Decision(True, 'fallback', f"m not finite ({m})", None, n, r, None)
     threshold = (1 + r) / 2
     if m < threshold:
         return Decision(True, 'measured', f"m<{threshold:.3f}: G1/TGROUP (biased)",
@@ -383,13 +388,18 @@ def _auto_decision(mask, header, ramp, sci, dq):
     return Decision(False, 'measured', f"m>={threshold:.3f}: unbiased", m, n, r, pct)
 
 
+def _decision_key(filename, ramp):
+    """Cache key: frame and ramp path+mtime, or None when either is not on disk."""
+    fkey, rkey = _file_key(filename), _file_key(ramp)
+    return None if fkey is None or rkey is None else fkey + rkey
+
+
 def decide(filename, header, mask, ramp, sci, dq, env=None):
     """Gate decision for one frame (``Decision``), cached per frame+ramp."""
     md = mode(env)
     if md == MODE_FORCE:
         return Decision(True, 'forced', f"{ENV} forces flagging", None, 0, None, None)
-    fkey, rkey = _file_key(filename), _file_key(ramp)
-    key = None if fkey is None or rkey is None else fkey + rkey
+    key = _decision_key(filename, ramp)
     if key is not None and key in _DECISION_CACHE:
         return _DECISION_CACHE[key]
     dec = _auto_decision(mask, header, ramp, sci, dq)
@@ -474,6 +484,10 @@ def signature(filename):
                 return ''
             if not mask.any():
                 return ''
+            if mode() == MODE_AUTO:
+                cached = _DECISION_CACHE.get(_decision_key(filename, ramp))
+                if cached is not None:          # skip reading SCI/DQ again
+                    return 'g1' if cached.flag else ''
             if 'SCI' not in fh or 'DQ' not in fh or fh['DQ'].data is None \
                     or fh['DQ'].data.shape != mask.shape:
                 return ''
