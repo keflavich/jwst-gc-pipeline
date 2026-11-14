@@ -1604,9 +1604,12 @@ def test_checkpoint_cli_glob_takes_one_spelling_per_frame(tmp_path, monkeypatch,
     base = tmp_path / 'F212N'
     base.mkdir()
     stem = 'f212n_nrcb1_o001_visit001_vgroup1_exp{e:05d}_m4_daophot_basic'
+    # exp4: only a label outside MODULE_BLIND_LABEL_ORDER (a --modules value
+    # such as nrcb1) -- still a fit of the frame, so a module-blind reader
+    # takes it (other_labels=True)
     for e, tails in ((1, ('', '_lblnrcb', '_lblmerged')),
                      (2, ('', '_lblnrcb', '_lblnrcb_residual')),
-                     (3, ('',))):
+                     (3, ('',)), (4, ('_lblnrcb1',))):
         for t in tails:
             (base / (stem.format(e=e) + t + '.fits')).write_bytes(b'')
 
@@ -1617,7 +1620,7 @@ def test_checkpoint_cli_glob_takes_one_spelling_per_frame(tmp_path, monkeypatch,
 
     def _read(fn, *a, **k):
         read.append(fn.rsplit('/', 1)[-1])
-        if len(read) == 3:
+        if len(read) == 4:
             raise _Stop
         return object()
 
@@ -1631,9 +1634,10 @@ def test_checkpoint_cli_glob_takes_one_spelling_per_frame(tmp_path, monkeypatch,
                 '--obsid', '001'])
     assert read == [stem.format(e=1) + '_lblmerged.fits',
                     stem.format(e=2) + '_lblnrcb.fits',
-                    stem.format(e=3) + '.fits'], read
+                    stem.format(e=3) + '.fits',
+                    stem.format(e=4) + '_lblnrcb1.fits'], read
     out = capsys.readouterr().out
-    assert '3 frame(s); 2 read from merge-label-tokened names' in out, out
+    assert '4 frame(s); 3 read from merge-label-tokened names' in out, out
 
 
 def test_an_absent_offsets_table_names_the_bootstrap_path(tmp_path, capsys):
