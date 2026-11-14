@@ -36,7 +36,7 @@ __all__ = ['FLOAT32_COLUMNS', 'INT32_COLUMNS', 'downcast_catalog_dtypes']
 FLOAT32_COLUMNS = frozenset({
     'local_bkg', 'local_bkg_resbgsub',
     'flux_init', 'flux_fit', 'flux_err', 'flux_fit_raw',
-    'qfit', 'cfit', 'reduced_chi2', 'model_data_peak_ratio',
+    'qfit', 'qfit_group', 'cfit', 'reduced_chi2', 'model_data_peak_ratio',
     'modelsub_bkg', 'modelsub_bkg_rms',
     'sidelobe_resid_sigma', 'ssr_ratio',
     # wingcal_ratio stays float64: merge_catalogs tests `ratio == 1.0` as
