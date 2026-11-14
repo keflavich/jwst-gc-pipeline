@@ -461,7 +461,9 @@ Notes on the tri-state and env-driven values:
   core is a hole in a frame that holds the star, so it still counts),
   `nfound` (frames with a daophot row within 0.10″ whose flux is within ×3, or a
   satstar row within 0.30″, read at its `xcentroid`/`ycentroid` because a satstar
-  catalog's `x_fit`/`y_fit` are stamp coordinates; a saturated merged row also
+  catalog written before #949 has stamp coordinates in `x_fit`/`y_fit` (current ones,
+  marked `XYFRAME = 'detector'`, hold the detector pixels there and keep the stamp values in
+  `x_fit_cutout`/`y_fit_cutout`); a saturated merged row also
   takes a daophot row out to 0.30″ with a lower flux bound only) and `single_exposure` (bright: saturated, or S/N ≥
   `--manual-xexp-single-snr` (50) and merged flux in the brightest
   `--manual-xexp-single-top-pct` (5) percent of the rows two or more frames cover;
