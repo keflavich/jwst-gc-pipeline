@@ -353,7 +353,8 @@ fall inside §3's 2.9–3.5 range, but they are not the same run.
 | `halobasis.py` | star-centred log-r B-spline × Fourier basis |
 | `patternfit.py` | static pattern + per-exposure nuisance, joint fit and LOO (main model) |
 | `patternfit_rank2.py` | + learned variable template with smooth per-exposure amplitude |
-| `loo_crop.py` | LOO on a crop, for band-limit / super-resolution (`KMAX`, `QH`, `QN`) tests and the brightness sequence (`--prefix`) |
+| `loo_crop.py` | LOO on a crop, for band-limit / super-resolution (`KMAX`, `QH`, `QN`) tests and the brightness sequence (`--prefix`); `NOISEONLY=<seed>` runs it on simulated data |
+| `noise_only.py` | numpy-only helpers for the `NOISEONLY` calibration of `loo_crop.py` (simulated data, σ(χ) per radial bin) |
 | `brightness.py` | relative brightness (halo-profile ratio) and saturated-core size of each star |
 | `training_cutouts.py` | the brightness-sequence star cutouts (RA/Dec table, runs `cutout.prep` per dither) |
 | `seq_eval.py` | brightness-sequence χ statistics, excess fraction, fig 13 |
@@ -382,6 +383,28 @@ NJOINT=3 LOO=1,2,3,5 python patternfit.py q3
 python evaluate_loo.py 1 q3
 mkdir -p figures && python make_figures.py figures
 ```
+
+Noise-only calibration of χ (issue #1008). The statistic
+χ = (d − pred)/√(1/w + varQ) uses `varQ = a²/wsum[node]`, an approximation of
+the variance of the band-limited reconstruction. To measure how far σ(χ) sits
+from 1 when the model is exact, run `loo_crop.py` with `NOISEONLY=<seed>`:
+
+```
+NOISEONLY=1 python loo_crop.py n1 400 1 --prefix tgt    # also writes n1_e1_chi.json
+python evaluate_loo.py 1 n1                              # scores the simulated data
+```
+
+Stage A is the usual cold-start joint fit on the real data. Its model
+(`model_Q + add()`, with the fitted pedestal, gradient and halo) plus Gaussian
+noise of variance `1/w` becomes the data of every exposure. Stage B discards
+`Q` and every fitted nuisance and repeats the cold-start fit and the LOO on the
+simulated data, so the training `Q` carries the reconstruction noise that
+`varQ` is meant to describe. The 300–500 px bin needs a crop half-width of at
+least 300. A σ(χ) near 1 in every bin means the statistic is calibrated; the
+seed-to-seed scatter must be shown before reading a 0.03-level departure. The
+simulation shares the truth model, so it tests the statistic and the
+reconstruction noise, not unmodelled structure. No calibrated numbers are
+reported here yet.
 
 `patternfit_rank2.py` warm-starts from `Q_q3.npy` (step 3). The numbers in §3
 came from a chain of warm-started runs (`QSTART` = the previous run's Q). The
