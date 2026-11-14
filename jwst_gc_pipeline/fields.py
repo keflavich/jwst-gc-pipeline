@@ -167,6 +167,12 @@ class Obs:
     #: Path to the measured astrometric offsets, relative to the field
     #: directory. Measured from the data once and then fixed.
     offsets_table: Optional[str] = None
+    #: Observation number -> the target name the observation is filed under,
+    #: for a program whose observations are tiles of one survey (10678's
+    #: ``GC_<n>``).  Advisory metadata: it names a planned pointing and does
+    #: not claim the observation executed, and it never decides which field
+    #: owns an observation -- ``obsids`` (and its wildcard) still does.
+    tiles: Dict[str, str] = field(default_factory=dict)
 
     def glob_obsid(self, instrument='nircam'):
         """The observation number to build a filename glob from.
@@ -271,6 +277,7 @@ def _load(path=REGISTRY_PATH):
                     for k, fd in (obs.get('reference_catalog_by_filter') or {}).items()},
                 default_reference_catalog=tuple(default_refcat),
                 offsets_table=obs.get('offsets_table'),
+                tiles=_parse_tiles(name, proposal, obs.get('tiles'), obsids),
             ))
         loaded.append(Field(name=name, root=spec['root'],
                             observations=tuple(observations),
@@ -278,6 +285,48 @@ def _load(path=REGISTRY_PATH):
                             roots=roots))
     _assert_one_wildcard_owner(loaded)
     return roots, tuple(sorted(loaded, key=lambda f: f.name))
+
+
+def _parse_tiles(name, proposal, raw_tiles, obsids):
+    """Validate a proposal block's ``tiles:`` map and return it as a plain dict.
+
+    Keys are observation numbers and must load as strings: an unquoted ``020``
+    is read by YAML as an integer, which would key the map by a number no
+    lookup string ever equals.  Values are unique within the proposal, so
+    ``tile_obsid`` has one answer.  Against a concrete ``obsids`` list every
+    key must be listed; a wildcard owner accepts any obsid-shaped key.
+    """
+    if not raw_tiles:
+        return {}
+    where = f'{name}/{proposal} tiles'
+    if not isinstance(raw_tiles, dict):
+        raise FieldRegistryError(
+            f'{where} must be a mapping of observation number to target name, '
+            f'got {type(raw_tiles).__name__}')
+    wildcard = any(WILDCARD_OBSID in ids for ids in obsids.values())
+    listed = {i for ids in obsids.values() for i in ids}
+    tiles = {}
+    for key, target in raw_tiles.items():
+        if not isinstance(key, str) or not is_obsid(key):
+            raise FieldRegistryError(
+                f'{where} has the key {key!r}; keys are quoted observation '
+                f"numbers such as '020' (an unquoted 020 loads as an integer)")
+        if not isinstance(target, str) or not target:
+            raise FieldRegistryError(
+                f'{where}[{key!r}] is {target!r}; expected a target name')
+        if not wildcard and key not in listed:
+            raise FieldRegistryError(
+                f'{where} names observation {key!r}, which the obsids list '
+                f'{sorted(listed)} does not contain')
+        tiles[key] = target
+    seen = {}
+    for key, target in tiles.items():
+        if target in seen:
+            raise FieldRegistryError(
+                f'{where}: {target!r} is given for both {seen[target]!r} and '
+                f'{key!r}; a tile name belongs to one observation')
+        seen[target] = key
+    return tiles
 
 
 def _assert_one_wildcard_owner(loaded):
@@ -545,6 +594,34 @@ def glob_obsid(target, proposal, instrument='nircam'):
         return None
     obs = field.observation(proposal)
     return None if obs is None else obs.glob_obsid(instrument)
+
+
+def tile_target(target, proposal, obsid):
+    """The tile name (``GC_<n>``) registered for an observation, or ``None``.
+
+    ``None`` means the registry holds no entry for it.  It does not mean the
+    observation is foreign to the field: the ``'*'`` wildcard owns
+    observations the ``tiles:`` map has not caught up with.
+    """
+    known = BY_NAME.get(target)
+    if known is None:
+        return None
+    obs = known.observation(proposal)
+    return None if obs is None else obs.tiles.get(str(obsid))
+
+
+def tile_obsid(target, proposal, name):
+    """The observation number registered for a tile name, or ``None``."""
+    known = BY_NAME.get(target)
+    if known is None:
+        return None
+    obs = known.observation(proposal)
+    if obs is None:
+        return None
+    for obsid, tile in obs.tiles.items():
+        if tile == name:
+            return obsid
+    return None
 
 
 def project_obsnum():
