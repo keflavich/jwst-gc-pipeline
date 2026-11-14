@@ -144,12 +144,12 @@ def test_annotate_with_subsets_covers_every_qualcuts_file(tmp_path):
     stem = tmp_path / 'basic_merged_x_m7_o001'
     _write_fits(f'{stem}.fits', _table())
     _write_fits(f'{stem}_qualcuts.fits', _table())
-    _write_fits(f'{stem}_qualcuts_oksep10678.fits', _table()[[0, 1, 4]])
+    _write_fits(f'{stem}_qualcuts_oksep10678.fits', _table()[[0, 1, 4]])  # noqa: qualcuts-token
     done = CD.annotate_cmd_default_with_subsets(f'{stem}.fits')
     assert sorted(os.path.basename(p) for p in done) == [
         'basic_merged_x_m7_o001.fits', 'basic_merged_x_m7_o001_qualcuts.fits',
-        'basic_merged_x_m7_o001_qualcuts_oksep10678.fits']
-    sub = Table.read(f'{stem}_qualcuts_oksep10678.fits')
+        'basic_merged_x_m7_o001_qualcuts_oksep10678.fits']  # noqa: qualcuts-token
+    sub = Table.read(f'{stem}_qualcuts_oksep10678.fits')  # noqa: qualcuts-token
     assert list(sub['cmd_default']) == [True, False, True]
 
 
@@ -243,7 +243,7 @@ def test_backfill_selects_tables_and_skips_partials_and_other_files(tmp_path):
     mod = _backfill_module()
     base = 'basic_merged_indivexp_photometry_tables_merged_resbgsub'
     wanted = [f'{base}_hybpsf_m7_o107.fits',
-              f'{base}_hybpsf_m7_o107_qualcuts_oksep10678.fits',
+              f'{base}_hybpsf_m7_o107_qualcuts_oksep10678.fits',  # noqa: qualcuts-token
               f'{base}_m8_o107.fits', f'{base}_m8_dedup_o107.fits',
               f'{base}_m8.fits', f'{base}_m8_dedup.fits']
     skipped = [f'{base}_m8_partial_F115W.fits', f'{base}_m8_dedup_20260713.fits',
