@@ -198,16 +198,61 @@ def _unique_nearest_pairs(a_sc, b_sc, radius_arcsec):
     return ia_n[keep], ib_n[keep]
 
 
+# merge_catalogs.py writes std_ra/std_dec as the scatter of avg_ra/avg_dec,
+# built as SkyCoord(..., unit=(u.deg, u.deg)): the columns are in DEGREES and
+# carry no FITS unit.  std_ra is coordinate-RA scatter (no cos dec).
+STD_DEG_TO_ARCSEC = 3600.0
+# Whether the RA axis is scaled by cos(dec) to an on-sky error.  The PM code
+# works in on-sky tangent offsets, so the scaling is the consistent choice
+# (13% at the GC), but it changes the RA errors that build_treasury_pm has
+# produced so far.  Off until that policy question (jwst-gc-pipeline#922) is
+# settled; both call sites read this one switch.
+STD_RA_APPLY_COSDEC = False
+
+
+def std_columns_to_arcsec(t, filt, dec_deg=None, apply_cosdec=False):
+    """Per-axis position scatter ``(ex, ey)`` in ARCSEC from ``std_ra``/``std_dec``.
+
+    ``std_ra``/``std_dec`` (bare, else ``_{filt}``) are degrees; see
+    ``STD_DEG_TO_ARCSEC``.  With ``apply_cosdec`` the RA axis is multiplied by
+    cos(``dec_deg``), converting the coordinate scatter to an on-sky one;
+    ``dec_deg`` (per-row array or scalar, degrees) is then required.
+
+    Entries that are absent, non-finite or not positive come back as NaN, so
+    the caller chooses its own floor.  That covers the exact 0.0 that older
+    catalogues carry for the degenerate-position guard in merge_catalogs.py.
+    """
+    def _get(base):
+        for name in (base, f'{base}_{filt}'):
+            if name in t.colnames:
+                return np.asarray(np.ma.filled(t[name].astype(float), np.nan), float)
+        return np.full(len(t), np.nan)
+
+    ex = _get('std_ra') * STD_DEG_TO_ARCSEC
+    ey = _get('std_dec') * STD_DEG_TO_ARCSEC
+    if apply_cosdec:
+        if dec_deg is None:
+            raise ValueError('apply_cosdec=True needs dec_deg')
+        ex = ex * np.cos(np.deg2rad(np.asarray(dec_deg, float)))
+    ex = np.where(np.isfinite(ex) & (ex > 0), ex, np.nan)
+    ey = np.where(np.isfinite(ey) & (ey > 0), ey, np.nan)
+    return ex, ey
+
+
 def load_jwst_m7(path, ref_filter='f200w'):
-    """Load a per-obs m7 cross-band catalog -> dict with sky + errors + mag + epoch."""
+    """Load a per-obs m7 cross-band catalog -> dict with sky + errors + mag + epoch.
+
+    ``ex``/``ey`` are in arcsec, converted from the degree-valued
+    ``std_ra_/std_dec_{ref_filter}`` columns (see ``std_columns_to_arcsec``).
+    """
     t = Table.read(path)
     sc = SkyCoord(t['skycoord_ref'])
     mag = np.asarray(t[f'mag_ab_{ref_filter}'], float)
-    # per-frame scatter of the position (arcsec); fall back to a floor
-    ex = np.asarray(t[f'std_ra_{ref_filter}'], float) if f'std_ra_{ref_filter}' in t.colnames else np.full(len(t), np.nan)
-    ey = np.asarray(t[f'std_dec_{ref_filter}'], float) if f'std_dec_{ref_filter}' in t.colnames else np.full(len(t), np.nan)
-    ex = np.where(np.isfinite(ex) & (ex > 0), ex, 0.005)  # 5 mas floor
-    ey = np.where(np.isfinite(ey) & (ey > 0), ey, 0.005)
+    # per-frame scatter of the position (arcsec); fall back to a 5 mas floor
+    ex, ey = std_columns_to_arcsec(t, ref_filter, dec_deg=sc.dec.deg,
+                                   apply_cosdec=STD_RA_APPLY_COSDEC)
+    ex = np.where(np.isfinite(ex), ex, 0.005)
+    ey = np.where(np.isfinite(ey), ey, 0.005)
     # epoch from header MJD if available in meta; else default gc2211 2023.70
     mjd = t.meta.get('MJD-AVG') or t.meta.get('MJD_AVG')
     epoch = Time(float(mjd), format='mjd').jyear if mjd else 2023.70
