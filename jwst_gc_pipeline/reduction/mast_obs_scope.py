@@ -157,3 +157,45 @@ def observation_scope_mask(obs_ids, proposal_id, field):
               f"observation has no released products yet, or --field names an "
               f"observation this proposal does not have.", flush=True)
     return mask
+
+
+def uncal_uri_mask(uris, proposal_id, obsid, token):
+    """Boolean mask of the ``_uncal.fits`` URIs that belong to one observation.
+
+    A URI belongs to the observation when it carries ``jw{PPPPP}{OOO}`` -- the
+    proposal and the PADDED observation number -- and the detector ``token``
+    (``_nrc``, ``_mirimage``, ``_nis``).  ``obsid`` is padded here, so ``'8'``,
+    ``'08'`` and ``'008'`` select the same files.  Left unpadded, ``'08'`` builds
+    ``jw1067808``, which is a substring of every ``jw10678080...`` to
+    ``jw10678089...`` URI and of no ``jw10678008...`` one: the run would select
+    nothing for observation 008.  The needle is ten characters starting at the
+    literal ``jw``, so inside a ``mast:JWST/product/jw..._uncal.fits`` URI it can
+    only match at the exposure-id position.
+
+    ``dtype=bool`` is explicit: a zero-length list comprehension yields float64,
+    and ``&=`` against a boolean column then raises ``TypeError``.
+    """
+    needle = f'{jw_prefix(proposal_id)}{observation_number(obsid)}'
+    return np.array([str(uri).endswith('_uncal.fits')
+                     and needle in str(uri)
+                     and token in str(uri)
+                     for uri in uris], dtype=bool)
+
+
+def on_disk_counts(names, proposal_id, obsid):
+    """``(n_uncal, n_asn3)``: one observation's files among ``names``.
+
+    Every observation of a program shares one ``<FILTER>/pipeline/`` directory,
+    so the count is scoped to the observation by prefix: exposure files start
+    ``jw{PPPPP}{OOO}`` and product files ``jw{PPPPP}-o{OOO}``, with ``OOO`` the
+    padded observation number.  An unpadded ``obsid`` would match neither and
+    report an observation with files on disk as having none.
+    """
+    obs = observation_number(obsid)
+    exposure_tag = f'{jw_prefix(proposal_id)}{obs}'
+    product_tag = f'{jw_prefix(proposal_id)}-o{obs}'
+    n_uncal = len([f for f in names
+                   if f.endswith('_uncal.fits') and f.startswith(exposure_tag)])
+    n_asn3 = len([f for f in names
+                  if '_image3_' in f and f.startswith(product_tag)])
+    return n_uncal, n_asn3
