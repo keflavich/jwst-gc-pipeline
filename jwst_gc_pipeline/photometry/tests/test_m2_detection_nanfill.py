@@ -55,7 +55,7 @@ def _ctx(original):
         nan_replaced_data=np.full(SHAPE, 0.5), mask=np.zeros(SHAPE, bool),
         err=np.ones(SHAPE), bad=np.zeros(SHAPE, bool), dao_psf_model=None,
         aperture_radius_pix=5.0, localbkg_inner=6, localbkg_outer=10,
-        grouper=None, dqarr=None, satstar_model_subtracted=_satstar_model(),
+        grouper=None, dqarr=None, dq_for_satveto=None, satstar_model_subtracted=_satstar_model(),
         data=np.zeros(SHAPE), original_data=original, ww=None)
 
 

@@ -587,6 +587,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | flag | dest | default | purpose |
 |---|---|---|---|
 | `--saturation-data-floor` | `saturation_data_floor` | −1.0 | mask a SATURATED px only if data > floor; −1 = per-filter auto, 0 = mask all, >0 = explicit |
+| `--truly-lost-saturation-in-fit` | `truly_lost_saturation_in_fit` | False | manual path only: fit mask and near-sat veto use truly-lost saturation (SATURATED & DO_NOT_USE) instead of the any-group SATURATED flag (#567) |
 | `--desaturated` / `-d` | `desaturated` | False | use the satstar-removed image |
 | `--fit-satstar-outside-fov` / `--no-…` | `fit_satstar_outside_fov` | None (auto) | fit stars whose centers are off-frame (auto: on full-frame, off cutout) |
 | `--deblend-satstars` | `deblend_satstars` | False | ZEROFRAME-deblend touching saturated cores |

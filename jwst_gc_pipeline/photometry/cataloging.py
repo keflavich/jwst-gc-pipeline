@@ -3945,6 +3945,23 @@ def _default_nircam_satstar_lock_env(environ, sat_ext_nircam):
             '0.5' if sat_ext_nircam else '0')
 
 
+def _truly_lost_fit_products(dqarr, truly_lost, instrument):
+    """Fit-mask pixels and near-saturation-veto DQ for ``--truly-lost-saturation-in-fit``.
+
+    Returns ``(fit_mask_add, dq_for_satveto)``.  ``fit_mask_add`` is the
+    ``truly_lost`` set plus every non-SATURATED bad flag
+    (``_bad_dq_bitmask(..., keep_recovered_saturation=True)``).
+    ``dq_for_satveto`` is a copy of ``dqarr`` with SATURATED cleared outside
+    ``truly_lost``, for ``_filter_near_saturation``; ``dqarr`` is not modified.
+    """
+    sat_bit = dqarr.dtype.type(_L.dqflags.pixel['SATURATED'])
+    fit_mask_add = np.asarray(truly_lost, dtype=bool) | (
+        (dqarr & _L._bad_dq_bitmask(
+            instrument, keep_recovered_saturation=True)) != 0)
+    dq_for_satveto = np.where(truly_lost, dqarr, dqarr & ~sat_bit)
+    return fit_mask_add, dq_for_satveto
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -4134,6 +4151,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
     mask = np.isnan(data) | bad
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
+    tl_in_fit = bool(getattr(options, 'truly_lost_saturation_in_fit', False))
+    sat_bit = int(_L.dqflags.pixel['SATURATED'])
     if dqarr is not None:
         # TRULY-LOST vs recovered saturation.  The cal/crf SATURATED flag marks
         # any pixel saturated in ANY ramp group, but a late-group saturation with
@@ -4154,13 +4173,16 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         #     recomputes `(dq & SATURATED)` itself, so the near-sat veto still
         #     fires on recovered pixels.
         # Both pinned in photometry/tests/test_truly_lost_saturation.py.
+        # `--truly-lost-saturation-in-fit` (default off, #567) extends the
+        # restriction to the fit mask and to the DQ handed to the veto.
         # How much this removes is a property of the REDUCTION, not of the
         # instrument: every band reduced with jwst <= 1.20.2 has SATURATED and
         # DO_NOT_USE coextensive (no-op), while current products keep a median
         # 15.7% of the mask on both NIRCam and MIRI.  See
         # scripts/analysis/truly_lost_saturation_census.py.
         dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
-        is_saturated = _L.truly_lost_saturated_mask(dqarr)
+        truly_lost = _L.truly_lost_saturated_mask(dqarr)
+        is_saturated = truly_lost
         # A real saturated core sits at/near the detector saturation level; but
         # JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated
         # sources (e.g. W51 F480M star RA=290.929589 Dec=+14.504683: DQ=6
@@ -4179,9 +4201,25 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         data_ = data.copy()
         data_[is_saturated] = np.nan
         mask |= is_saturated
-        mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+        if tl_in_fit:
+            # Opt-in (#567): the fit mask and the near-sat veto see only the
+            # truly-lost set.  `truly_lost` is taken before the data floor so
+            # the SATURATED fallback inside truly_lost_saturated_mask (frames
+            # with no DO_NOT_USE saturation) is honoured and sub-floor core
+            # pixels are not released.
+            fit_add, dq_for_satveto = _truly_lost_fit_products(
+                dqarr, truly_lost, instrument)
+            mask |= fit_add
+            print(f"[manual] truly-lost-saturation-in-fit: fit mask keeps "
+                  f"{int(truly_lost.sum())} of "
+                  f"{int(((dqarr & sat_bit) != 0).sum())} SATURATED px "
+                  f"(TLSATFIT=T)", flush=True)
+        else:
+            mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+            dq_for_satveto = dqarr
     else:
         data_ = data
+        dq_for_satveto = dqarr
     # MIRI detector-edge detection guard: daofind otherwise fires on the sharp
     # good/bad boundary GRADIENT at the edge-glow rim, injecting spurious "stars"
     # at the footprint border into the per-frame -> MERGED catalog.  These are
@@ -4461,8 +4499,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group,
         exposure_=exposure_, visitid_=visitid_, vgroupid_=vgroupid_,
         inst_token=inst_token, im1=im1, ww=ww, data=data, err=err, bad=bad,
-        dqarr=dqarr, mask=mask, nan_replaced_data=nan_replaced_data,
-        dao_psf_model=dao_psf_model, grouper=grouper,
+        dqarr=dqarr, dq_for_satveto=dq_for_satveto, mask=mask,
+        nan_replaced_data=nan_replaced_data, dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
         handoff_xy=handoff_xy, handoff_radius=handoff_radius,
@@ -4889,7 +4927,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             dao_psf_model=ctx.dao_psf_model, init_params=seed,
             aperture_radius_pix=ctx.aperture_radius_pix,
             localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
-            grouper=ctx.grouper, options=options, dq=ctx.dqarr,
+            grouper=ctx.grouper, options=options, dq=ctx.dq_for_satveto,
             satstar_model_subtracted=(ctx.satstar_model_subtracted
                                       if ctx.satstar_model_subtracted is not None
                                       else np.zeros(ctx.data.shape)),

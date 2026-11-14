@@ -265,3 +265,89 @@ def test_the_two_dq_helpers_are_exported_together():
     from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
     assert hasattr(_L, 'correct_dq_first_group_saturation')
     assert hasattr(_L, 'truly_lost_saturated_mask')
+
+
+# ---------------------------------------------------------------------------
+# #567: opt-in `--truly-lost-saturation-in-fit` plumbing.  Flag off keeps the
+# two pins above; flag on lets the restriction reach the fit mask and the veto.
+# ---------------------------------------------------------------------------
+
+def test_bad_dq_bitmask_keep_recovered_saturation():
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+        _bad_dq_bitmask)
+
+    nonsci = dqflags.pixel['NON_SCIENCE']
+    persist = dqflags.pixel['PERSISTENCE']
+    for instrument in ('NIRCAM', 'MIRI'):
+        default = _bad_dq_bitmask(instrument)
+        assert default == _bad_dq_bitmask(instrument,
+                                          keep_recovered_saturation=False)
+        assert default & SAT
+        reduced = _bad_dq_bitmask(instrument, keep_recovered_saturation=True)
+        assert not reduced & SAT
+        assert reduced & DNU
+        assert reduced == default & ~SAT
+    miri = _bad_dq_bitmask('MIRI', keep_recovered_saturation=True)
+    assert miri & nonsci and miri & persist
+
+
+@pytest.mark.parametrize('instrument', ['NIRCAM', 'MIRI'])
+def test_fit_mask_with_flag_keeps_only_the_truly_lost_core(instrument):
+    from jwst_gc_pipeline.photometry.cataloging import _truly_lost_fit_products
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+        _bad_dq_bitmask)
+
+    dq = _miri_shaped_dq()
+    truly_lost = truly_lost_saturated_mask(dq)
+    dq_before = dq.copy()
+
+    assert int(((dq & _bad_dq_bitmask(instrument)) != 0).sum()) == 900
+    fit_add, _ = _truly_lost_fit_products(dq, truly_lost, instrument)
+    assert int(fit_add.sum()) == 16
+    assert not fit_add[7, 7]
+    assert np.array_equal(dq, dq_before)
+
+
+def test_veto_with_restricted_dq_keeps_recovered_and_drops_the_core():
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+        _filter_near_saturation)
+
+    class _FakePhot:
+        def __init__(self, results):
+            self.results = results
+
+    dq = _miri_shaped_dq()
+    truly_lost = truly_lost_saturated_mask(dq)
+    from jwst_gc_pipeline.photometry.cataloging import _truly_lost_fit_products
+    _, restricted = _truly_lost_fit_products(dq, truly_lost, 'MIRI')
+    assert restricted.dtype == dq.dtype
+    assert int(((restricted & SAT) != 0).sum()) == 16
+
+    results = Table()
+    results['id'] = np.array([1, 2, 3, 4])
+    # recovered px; inside the core; 1 px from the core; far control
+    results['x_fit'] = np.array([7.0, 19.0, 17.0, 1.0])
+    results['y_fit'] = np.array([7.0, 19.0, 19.0, 1.0])
+    results['flux_fit'] = np.array([1000.0, 1000.0, 1000.0, 500.0])
+    phot = _FakePhot(results)
+    n_drop = _filter_near_saturation(phot, restricted, max_sat_dist_pix=1.0,
+                                     label='tlsatfit')
+    assert n_drop == 2
+    assert set(np.asarray(phot.results['id'])) == {1, 4}
+
+
+def test_flag_is_wired_through_the_parser_and_the_frame_prep():
+    import pathlib
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+
+    here = pathlib.Path(__file__).resolve().parents[1]
+    assert "--truly-lost-saturation-in-fit" in (
+        here / 'crowdsource_catalogs_long.py').read_text()
+    src = (here / 'cataloging.py').read_text()
+    assert "getattr(options, 'truly_lost_saturation_in_fit', False)" in src
+    assert '_truly_lost_fit_products(' in src
+    assert 'keep_recovered_saturation=True' in src
+    assert 'dq=ctx.dq_for_satveto' in src
+    assert 'dq=ctx.dqarr' not in src
+    assert hasattr(L, '_bad_dq_bitmask')

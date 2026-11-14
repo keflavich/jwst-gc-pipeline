@@ -264,7 +264,7 @@ def test_manual_step_passes_handoff_for_every_target(tmp_path, monkeypatch, targ
         satstar_table=None, nan_replaced_data=np.zeros(SHAPE),
         mask=np.zeros(SHAPE, bool), err=np.ones(SHAPE), bad=np.zeros(SHAPE, bool),
         dao_psf_model=None, aperture_radius_pix=5.0, localbkg_inner=6,
-        localbkg_outer=10, grouper=None, dqarr=None,
+        localbkg_outer=10, grouper=None, dqarr=None, dq_for_satveto=None,
         satstar_model_subtracted=None, data=np.zeros(SHAPE), ww=None)
     seen = {}
     monkeypatch.setattr(C, '_prepare_frame_for_photometry',
