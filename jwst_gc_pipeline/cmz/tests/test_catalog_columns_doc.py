@@ -77,6 +77,14 @@ def test_forced_nbrsub_and_error_scale_columns_are_described(mw):
         assert name in text
 
 
+def test_cmd_default_columns_are_described(mw):
+    # written on m7, m8 and m8_dedup tables (#1283); the per-tile release
+    # tables and the joint catalogue built from m8_dedup carry them
+    text = mw.CATALOG_COLUMNS_SRC.read_text()
+    for name in ('oksep_pass', 'cmd_default', 'CMDDEF'):
+        assert name in text
+
+
 def test_file_is_plain_ascii(mw):
     # served as text/plain with no charset; keep it readable everywhere
     mw.CATALOG_COLUMNS_SRC.read_bytes().decode('ascii')

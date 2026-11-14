@@ -200,9 +200,24 @@ def test_unreadable_table_is_logged_and_does_not_raise(tmp_path, capsys):
 def test_m8_merge_partials_flags_the_merged_and_dedup_tables():
     """Source pin: the partial-merge script calls dedup_merged_catalog itself, so it needs its own hook."""
     src = (REPO / 'scripts' / 'reduction' / 'm8_merge_partials.py').read_text()
-    assert src.index('annotate_cmd_default(out_path)') < src.index('dedup_merged_catalog(out_path')
     assert (src.index('flag_m8_spike_artifacts(dedup_path, basepath)')
-            < src.index('annotate_cmd_default(dedup_path)'))
+            < src.index('_annotate_cmd_default([out_path, dedup_path])'))
+    assert src.index('dedup_merged_catalog(out_path') < src.index('_annotate_cmd_default([out_path])')
+
+
+def test_m8_merge_partials_flag_failure_is_logged_not_raised(tmp_path, capsys, monkeypatch):
+    """A failed flag step must not stop the dedup that precedes it in the script."""
+    spec = importlib.util.spec_from_file_location(
+        'm8_merge_partials', REPO / 'scripts' / 'reduction' / 'm8_merge_partials.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    bad = tmp_path / 'not_a_table.fits'
+    bad.write_bytes(b'not a fits file')
+    mod._annotate_cmd_default([str(bad)])
+    assert 'cmd_default flag FAILED' in capsys.readouterr().err
+    monkeypatch.setenv('M8_CMD_DEFAULT', '0')
+    mod._annotate_cmd_default([str(bad)])
+    assert capsys.readouterr().err == ''
 
 
 def test_m7_block_flags_after_propagation_and_before_the_ecsv():

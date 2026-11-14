@@ -94,6 +94,24 @@ def _default_m7(catdir, module, obs=None):
     return plain
 
 
+def _annotate_cmd_default(paths):
+    """``oksep_pass`` / ``cmd_default`` on each table (#1283); skipped with ``M8_CMD_DEFAULT=0``.
+
+    A failure is reported and leaves that table as it was (the rewrite is
+    atomic), so it cannot stop the dedup step that precedes it in ``main``.
+    """
+    if os.environ.get('M8_CMD_DEFAULT', '1') == '0':
+        return
+    from astropy.io.registry import IORegistryError
+    from jwst_gc_pipeline.photometry.cmd_default import annotate_cmd_default
+    for path in paths:
+        try:
+            annotate_cmd_default(path)
+        except (OSError, KeyError, ValueError, IndexError, TypeError,
+                IORegistryError) as exc:
+            print(f"cmd_default flag FAILED ({path}): {exc}", file=sys.stderr)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -189,12 +207,6 @@ def main(argv=None):
           f"{len(plan)}/{len(filters)} bands overlaid"
           f"{'; MISSING ' + ','.join(missing) if missing else ''})")
 
-    cmd_default_on = os.environ.get('M8_CMD_DEFAULT', '1') != '0'
-    if cmd_default_on:
-        # Default CMD selection as columns (#1283), as _maybe_dedup_m8 adds them.
-        from jwst_gc_pipeline.photometry.cmd_default import annotate_cmd_default
-        annotate_cmd_default(out_path)
-
     if args.dedup:
         import astropy.units as u
         from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
@@ -209,9 +221,11 @@ def main(argv=None):
             from jwst_gc_pipeline.photometry.spike_flag import flag_m8_spike_artifacts
             basepath = os.path.dirname(os.path.dirname(os.path.abspath(dedup_path)))
             flag_m8_spike_artifacts(dedup_path, basepath)
-        if cmd_default_on:
-            # After the spike flag, on the finished dedup table (#1283).
-            annotate_cmd_default(dedup_path)
+        # Default CMD selection as columns (#1283), after the spike flag, on
+        # the finished dedup table and the merged m8, as _maybe_dedup_m8 does.
+        _annotate_cmd_default([out_path, dedup_path])
+    else:
+        _annotate_cmd_default([out_path])
 
 
 if __name__ == '__main__':

@@ -249,6 +249,14 @@ Forced photometry and independent detections (m8 catalogs)
       only for a forced fit below the detection threshold; select upper
       limits with it, since the *_ulim columns are also filled for
       detections (as a depth estimate).
+  oksep_pass
+      True where more than one non-wide filter has a position within 0.1
+      arcsec of the reference position (sep_{filter}).
+  cmd_default
+      The default colour-magnitude selection: oksep_pass AND
+      n_filt_independent >= 2. A table without n_filt_independent carries
+      oksep_pass alone, and the CMDDEF header keyword names the test that
+      was applied. Forced-fit values are not used by this selection.
   forced_bkg_sigma_{filter}
       Only in m8 catalogs built with --forced-fill-bkg-scatter. Mean over the
       exposures of the local background scatter (1.4826 x MAD of the frame
