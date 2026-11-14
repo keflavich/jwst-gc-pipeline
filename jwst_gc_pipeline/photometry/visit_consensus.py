@@ -2091,10 +2091,16 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # Recorded, not folded into the ratio: a refusal should still report how the
     # residuals compared to the bulk even when it was coverage that blocked.
     region_uncovered = int((per_tile_same_star or {}).get("n_uncovered") or 0)
+    # A map that is dirty because its reference was too sparse to test coverage
+    # (issue #1191) carries no residual verdict to overrule, and the two
+    # exemptions below speak only about residuals: like an uncovered cell, it
+    # must keep blocking whatever the bulk reads.
+    region_ref_too_sparse = bool(
+        (per_tile_same_star or {}).get("ref_too_sparse"))
     per_tile_bulk_dominant_exempt = bool(
         region_bulk_dominance_ratio is not None
         and region_bulk_dominance_ratio <= REGION_BULK_DOMINANCE_RATIO
-        and not region_uncovered)
+        and not region_uncovered and not region_ref_too_sparse)
 
     # Item 2 of issue #965: a SMALL, well-measured bulk with only a handful of
     # flagged cells is recorded and applied, not refused.  See
@@ -2122,7 +2128,8 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         and region_worst_sig_off_mas <= REGION_SMALL_BULK_WORST_SIG_CAP_MAS)
     per_tile_small_bulk_exempt = bool(
         per_tile_source == "same-star-region" and not per_tile_ok
-        and not region_uncovered and region_n_measured > 0
+        and not region_uncovered and not region_ref_too_sparse
+        and region_n_measured > 0
         and np.isfinite(same_star_sigma_mas)
         and same_star_sigma_mas <= REGION_SMALL_BULK_SIGMA_TOL_MAS
         and region_flagged_fraction <= REGION_SMALL_BULK_MAX_FLAGGED_FRACTION
@@ -2144,6 +2151,7 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         demoted=bool(per_tile_small_bulk_exempt),
         n_flagged=region_n_flagged, n_measured=region_n_measured,
         n_uncovered=region_uncovered,
+        ref_too_sparse=region_ref_too_sparse,
         flagged_fraction=region_flagged_fraction,
         same_star_sigma_mas=same_star_sigma_mas,
         sigma_tol_mas=REGION_SMALL_BULK_SIGMA_TOL_MAS,
