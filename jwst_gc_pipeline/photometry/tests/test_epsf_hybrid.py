@@ -242,3 +242,30 @@ def test_get_psf_model_wiring(tmp_path, monkeypatch, instrument):
     monkeypatch.setenv(eh.EPSF_CORE_DIR_ENV, str(tmp_path))
     grid, _ = ccl.get_psf_model('F480M', '10678', '081', **kw)
     assert grid is not st and grid.meta['epsf_core'].endswith('epsf_core_nrcb5_f480m.fits')
+
+
+def test_windowed_core_evaluation_equals_the_full_stamp(monkeypatch):
+    """hybrid_stamp evaluates the core only in a box around the star (the core
+    is zero beyond its radius and the hybrid weights it by zero beyond R1); the
+    stamp must equal the one built from the core on every node (#1208)."""
+    st = _stpsf_grid()
+    core = _core(phase_ripple=0.01)
+    sampled = []
+    real_sample = core.sample
+
+    def spy(x, y, ux, uy):
+        sampled.append(np.size(ux))
+        return real_sample(x, y, ux, uy)
+    monkeypatch.setattr(core, 'sample', spy)
+    D = eh._stpsf_data_at(st, 700.0, 1100.0)
+    origin = (D.shape[1] - 1) / 2.0, (D.shape[0] - 1) / 2.0
+    win, sh_w = eh.hybrid_stamp(D, origin, OS, core, 700.0, 1100.0)
+    assert max(sampled) < 0.5 * D.size       # the box, not the stamp
+
+    def full(core_, x, y, ux, uy, dx, dy):
+        UX, UY = np.meshgrid(ux, uy)
+        return real_sample(x, y, UX - dx, UY - dy)
+    monkeypatch.setattr(eh, '_core_on_stamp', full)
+    ref, sh_r = eh.hybrid_stamp(D, origin, OS, core, 700.0, 1100.0)
+    assert np.array_equal(win, ref)
+    assert sh_w == sh_r

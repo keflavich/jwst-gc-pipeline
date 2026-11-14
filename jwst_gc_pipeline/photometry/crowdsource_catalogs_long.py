@@ -253,8 +253,10 @@ from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     assert_no_foreign_observation_overwrite, foreign_observation_conflict,
 )
+from jwst_gc_pipeline.mast_names import filtername_from_header
 from jwst_gc_pipeline.photometry.epsf_hybrid import (
-    hybrid_psf_token, maybe_apply_epsf_core, psf_provenance_meta)
+    EPSF_CORE_DIR_ENV, expected_psf_signature, hybrid_psf_token, maybe_apply_epsf_core,
+    psf_provenance_meta)
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -1954,6 +1956,21 @@ def annotate_and_filter_by_local_snr(detection_table, noise_map, snr_threshold=5
     return filtered, stats
 
 
+def _satstar_psf_signature(filename, environ=None):
+    """``EPSFSHA`` a satstar catalog of ``filename`` carries under the current
+    ``PSF_EPSF_CORE_DIR`` (``expected_psf_signature`` for the frame's detector
+    and filter); ``''`` for STPSF and for a non-NIRCam frame.  The frame header
+    is read only when the variable is set."""
+    env = os.environ if environ is None else environ
+    if not env.get(EPSF_CORE_DIR_ENV, ''):
+        return ''
+    header = fits.getheader(filename, 0)
+    if str(header.get('INSTRUME', '')).upper() != 'NIRCAM':
+        return ''
+    return expected_psf_signature(
+        filtername_from_header(header), header['DETECTOR'], environ=env)
+
+
 @satstar_optin_scoped
 def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merged=False, overwrite=False,
                                  outside_star_pixels=None, outside_star_fit_box=512,
@@ -1997,7 +2014,18 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             filename, deblend_with_zeroframe=deblend_with_zeroframe)
         if recovery_signature is not None else None)
 
+    # The ePSF core the satstar fit uses (PSF_EPSF_CORE_DIR, #1208): '' for an
+    # STPSF run, which is also how an unstamped catalog reads, so STPSF caches
+    # stay valid.  Read from the frame header only when a core directory is
+    # set.
+    psf_signature = _satstar_psf_signature(filename)
+
     def _cache_ok(tbl):
+        # The PSF check comes first: the legacy ``recovery_signature is None``
+        # path below accepts every catalog, and must not accept one fitted with
+        # a different PSF.
+        if str(tbl.meta.get('EPSFSHA', '')) != psf_signature:
+            return False
         # A cached satstar catalog is valid only if it was built with the SAME
         # saturated-core recovery config as this run.  --satstar-*-recover change
         # the FIT (they de-saturate the core before the wing fit), so reusing a
@@ -2017,7 +2045,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         return (f"recovery config {tbl.meta.get('SATRECOV', '')!r} != "
                 f"{recovery_signature!r} or fit switches "
                 f"{str(tbl.meta.get('SATFITSW', ''))!r} != "
-                f"{fit_switch_signature!r}")
+                f"{fit_switch_signature!r} or PSF core "
+                f"{str(tbl.meta.get('EPSFSHA', ''))!r} != {psf_signature!r}")
 
     def _on_current_frame(tbl, cache_name):
         """Re-project a cache HIT onto the frame's current GWCS.

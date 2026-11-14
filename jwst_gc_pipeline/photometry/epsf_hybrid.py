@@ -188,7 +188,7 @@ def hybrid_stamp(stpsf_data, origin, oversampling, core, x, y, r0=R0, r1=R1,
     # of steps leaves mpix residuals: iterate to tolerance instead.
     dx = dy = 0.0
     for _ in range(maxiter):
-        C = core.sample(x, y, UX - dx, UY - dy)
+        C = _core_on_stamp(core, x, y, ux, uy, dx, dy)
         cx, cy = _centroid(C, UX, UY, R_CENTROID)
         ex, ey = cx_s - cx, cy_s - cy
         if np.hypot(ex, ey) < tol:
@@ -200,6 +200,28 @@ def hybrid_stamp(stpsf_data, origin, oversampling, core, x, y, r0=R0, r1=R1,
     k = _phase_scale(D, C, r <= r0, oy, ox)
     t = np.clip((r - r0) / (r1 - r0), 0.0, 1.0)
     return (1.0 - t) * k * C + t * D, (dx, dy)
+
+
+def _core_on_stamp(core, x, y, ux, uy, dx, dy):
+    """``core.sample`` on the stamp's node grid (``ux``, ``uy`` axes), shifted
+    by (``dx``, ``dy``), evaluated only where the core can be non-zero.
+
+    The core is zero beyond its ``radius`` and the hybrid weights it by zero
+    beyond ``r1`` <= ``radius``, so the spline needs no evaluation outside a
+    box of half-width ``radius`` + 1 px + the shift.  On a samp2 fovp1024 stamp
+    that is ~1% of the nodes: the full evaluation took ~4 s per node, the box
+    ~0.05 s.  Nodes outside the box stay exactly 0, the value the full
+    evaluation returns there (``mode='constant'``), so the result is the same
+    array.
+    """
+    half = core.radius + 1.0 + max(abs(dx), abs(dy))
+    ix = np.nonzero(np.abs(ux) <= half)[0]
+    iy = np.nonzero(np.abs(uy) <= half)[0]
+    C = np.zeros((len(uy), len(ux)))
+    if len(ix) and len(iy):
+        UXw, UYw = np.meshgrid(ux[ix], uy[iy])
+        C[np.ix_(iy, ix)] = core.sample(x, y, UXw - dx, UYw - dy)
+    return C
 
 
 def _phase_scale(D, C, inner, oy, ox):
@@ -279,6 +301,13 @@ _HYBRID_CACHE = {}
 # What maybe_apply_epsf_core applied in this process, by (DETECTOR, FILTER):
 # the catalog writer stamps it into the catalog meta (psf_provenance_meta).
 _APPLIED = {}
+
+
+def stpsf_detector_name(detector):
+    """Upper-case stpsf detector name: ``NRCALONG`` / ``NRCBLONG`` (the
+    exposure headers' spelling of the LW detectors) are ``NRCA5`` / ``NRCB5``."""
+    det = str(detector).upper()
+    return {'NRCALONG': 'NRCA5', 'NRCBLONG': 'NRCB5'}.get(det, det)
 
 
 def hybrid_psf_token(environ=None):
@@ -372,8 +401,31 @@ def maybe_apply_epsf_core(grid, detector, filtername, environ=None, program=None
     return hyb
 
 
-def psf_provenance_meta(filtername, environ=None):
+def expected_psf_signature(filtername, detector, environ=None):
+    """The ``EPSFSHA`` value a catalog fitted with this configuration carries.
+
+    ``''`` when ``PSF_EPSF_CORE_DIR`` is unset or holds no core for
+    ``detector`` / ``filtername`` (such a catalog is STPSF and has no
+    ``EPSFSHA``), otherwise the sha256 of the core file.  A cache check
+    compares it with the catalog's ``EPSFSHA`` so that an STPSF catalog is not
+    reused by a hybrid run, or the reverse, and a changed core file refits.
+    ``detector`` takes the exposure-header spelling (``NRCBLONG``) or the stpsf
+    one (``NRCB5``).
+    """
+    env = os.environ if environ is None else environ
+    core_dir = env.get(EPSF_CORE_DIR_ENV, '')
+    if not core_dir:
+        return ''
+    path = os.path.join(core_dir, epsf_core_filename(stpsf_detector_name(detector), filtername))
+    return _sha256(path) if os.path.exists(path) else ''
+
+
+def psf_provenance_meta(filtername, environ=None, detector=None):
     """Catalog meta (FITS-length keys) recording the PSF model used for ``filtername``.
+
+    ``detector`` limits the record to the cores applied for that stpsf detector
+    (a process that fits several detectors keeps all of them in ``_APPLIED``);
+    None records every detector applied for the filter.
 
     ``PSFMODEL`` is ``'STPSF+EPSFCORE'`` when this process applied a core for
     the filter, else ``'STPSF'``.  With a core: ``EPSFCORE`` (file name),
@@ -383,8 +435,10 @@ def psf_provenance_meta(filtername, environ=None):
     """
     env = os.environ if environ is None else environ
     core_dir = env.get(EPSF_CORE_DIR_ENV, '')
+    want = None if detector is None else stpsf_detector_name(detector)
     used = [v for (det, filt), v in sorted(_APPLIED.items())
-            if filt == filtername.upper() and v is not None]
+            if filt == filtername.upper() and v is not None
+            and (want is None or det == want)]
     meta = {'PSFMODEL': 'STPSF+EPSFCORE' if used else 'STPSF'}
     if core_dir:
         meta['EPSFDIR'] = core_dir
