@@ -10,14 +10,16 @@ marker says so on the catalogues built from them.  This script reads the
 
 Frames are read from ``<basepath>/<FILTER>/pipeline/`` for each field
 directory given, over the ``_align``, ``_destreak`` and ``_crf`` lineages (the
-``_crf`` copy carries the working copy's header cards).  Explicit FITS paths
+``_crf`` copy carries the working copy's header cards; the ``align`` and
+``destreak`` crf copies are grouped separately).  Explicit FITS paths
 are accepted too.  The selection follows ``FILTER_FRAME_CORRECTION`` exactly
 as ``fix_alignment`` reads it, unless ``--mode`` overrides it.
 
 Groups (one band of one observation of one field) that hold both corrected
 and uncorrected frames are flagged ``MIXED``.  The exit status is 1 when a
 selected frame is stale, pending or on the wrong anchor and ``--check`` is
-given, so the scan can gate a rerun; it is 0 otherwise.
+given, so the scan can gate a rerun; it is 2 when no frame is found and 0
+otherwise.
 
 Regenerate stale frames from ``_cal``; do not re-apply the shift on top of an
 old working copy.  Read-only: no header is written.
@@ -54,15 +56,26 @@ def find_frames(path, filters):
     return sorted(set(found))
 
 
+def lineage_of(fn):
+    """``align``, ``destreak``, ``align_crf`` or ``destreak_crf``.
+
+    The two crf lineages are separate products (cataloguing reads either one
+    through ``--each-suffix``), so a field regenerated through ``destreak`` is
+    not a mixed group because older ``align_o*_crf`` copies sit beside it.
+    """
+    base = os.path.basename(fn)
+    stem = 'destreak' if '_destreak' in base else 'align'
+    return stem + ('_crf' if base.endswith('_crf.fits') else '')
+
+
 def read_provenance(fn, mode):
     """``(group_key, record)`` for one frame."""
     hdr0 = fits.getheader(fn, ext=0)
     hdr = fits.getheader(fn, ext=('SCI', 1))
     rec = ffc.frame_provenance(hdr0, hdr, mode=mode)
-    lineage = next((s for s in FRAME_SUFFIXES if fn.endswith(s)), '')
     rec['file'] = fn
     key = (str(hdr0.get('PROGRAM', '')), str(hdr0.get('OBSERVTN', '')),
-           rec['filter'], lineage.replace('.fits', ''))
+           rec['filter'], lineage_of(fn))
     return key, rec
 
 
@@ -82,14 +95,14 @@ def report(records, list_files=False):
     for key, rec in records:
         counts[key][rec['status']] += 1
     mixed = set(ffc.mixed_groups(records))
-    print(f"{'program':>8} {'obs':>4} {'filter':>7} {'lineage':>10}  "
+    print(f"{'program':>8} {'obs':>4} {'filter':>7} {'lineage':>12}  "
           f"{'corrected':>9} {'stale':>5} {'pending':>7} {'wrong-anc':>9}  flag")
     for key in sorted(counts):
         c = counts[key]
         if set(c) == {ffc.STATUS_NOT_SELECTED}:
             continue
         flag = 'MIXED' if key in mixed else ('STALE' if any(c[s] for s in BAD) else 'ok')
-        print(f"{key[0]:>8} {key[1]:>4} {key[2]:>7} {key[3]:>10}  "
+        print(f"{key[0]:>8} {key[1]:>4} {key[2]:>7} {key[3]:>12}  "
               f"{c[ffc.STATUS_CORRECTED]:>9} {c[ffc.STATUS_STALE]:>5} "
               f"{c[ffc.STATUS_PENDING]:>7} {c[ffc.STATUS_WRONG_ANCHOR]:>9}  {flag}")
     if list_files:

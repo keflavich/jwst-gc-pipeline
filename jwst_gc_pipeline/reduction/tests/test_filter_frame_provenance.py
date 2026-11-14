@@ -85,6 +85,14 @@ def test_mode_defaults_to_environment(monkeypatch):
     assert ffc.frame_provenance(hdr0, hdr)['status'] == 'stale'
 
 
+@pytest.mark.parametrize('filt', ['F212N', 'F210M', 'F115W'])
+def test_mode_all_leaves_filters_outside_the_table_alone(filt):
+    # apply_configured_filter_frame_correction returns None for these, so a
+    # frame without FFRAMCOR is not stale
+    hdr0, hdr = _hdrs(filt=filt)
+    assert ffc.frame_provenance(hdr0, hdr, mode='all')['status'] == 'not-selected'
+
+
 def test_mixed_groups_needs_both_corrected_and_uncorrected():
     def rec(status):
         return {'status': status}
@@ -118,6 +126,21 @@ def test_scan_flags_a_mixed_band(tmp_path, capsys, monkeypatch):
     assert 'MIXED' in out
     assert scan.main([str(tmp_path), '--check', '--list']) == 1
     assert 'nrca2_destreak_o002_crf.fits' in capsys.readouterr().out
+
+
+def test_scan_keeps_align_and_destreak_crf_lineages_apart(tmp_path, capsys, monkeypatch):
+    # cloudef o002: a regenerated destreak_crf set beside older align_crf copies
+    monkeypatch.delenv('FILTER_FRAME_CORRECTION', raising=False)
+    pipe = tmp_path / 'F162M' / 'pipeline'
+    pipe.mkdir(parents=True)
+    _write_frame(pipe / 'jw02092002001_02101_00001_nrca1_destreak_o002_crf.fits',
+                 corrected=True)
+    _write_frame(pipe / 'jw02092002001_02101_00001_nrca1_align_o002_crf.fits')
+    scan = _load_script()
+    assert scan.main([str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert 'MIXED' not in out
+    assert 'destreak_crf' in out and 'align_crf' in out
 
 
 def test_scan_of_corrected_field_passes_check(tmp_path, capsys, monkeypatch):

@@ -111,6 +111,7 @@ does:
 * ``0`` -- correct nothing; byte-identical to the pre-#1255 behaviour.
 """
 import copy
+import functools
 import os
 
 import numpy as np
@@ -533,11 +534,22 @@ STATUS_WRONG_ANCHOR = 'wrong-anchor'
 STATUS_NOT_SELECTED = 'not-selected'
 
 
-def frame_provenance(hdr0, hdr, mode=None):
+@functools.lru_cache(maxsize=None)
+def _table_filters(table_path):
+    """Filters with ``SHIPPED_ANCHOR`` rows in the table at ``table_path``."""
+    tbl = load_filter_frame_table(table_path)
+    return frozenset(str(r['filter']).upper() for r in tbl
+                     if str(r['anchor']).upper() == SHIPPED_ANCHOR)
+
+
+def frame_provenance(hdr0, hdr, mode=None, table_path=SHIPPED_TABLE):
     """What the filter-frame correction did to one frame.  Pure, so it is testable.
 
     ``hdr0`` is the primary header, ``hdr`` the SCI header the apply step
     writes its markers into.  ``mode`` defaults to ``correction_mode()``.
+    Under ``mode='all'`` a filter with no ``SHIPPED_ANCHOR`` rows in
+    ``table_path`` is ``not-selected``, as ``apply_configured_filter_frame_correction``
+    leaves it alone.
     Returns ``{'filter', 'detector', 'status', 'anchor'}``, where ``status``
     is one of the ``STATUS_*`` constants:
 
@@ -555,8 +567,11 @@ def frame_provenance(hdr0, hdr, mode=None):
                              hdr0.get('PUPIL', hdr.get('PUPIL')))
     out = {'filter': filt, 'detector': detector, 'anchor': '',
            'status': STATUS_NOT_SELECTED}
-    if configured_filter(hdr0.get('INSTRUME', hdr.get('INSTRUME')), detector,
-                         filt, mode) is None:
+    selected = configured_filter(hdr0.get('INSTRUME', hdr.get('INSTRUME')),
+                                 detector, filt, mode)
+    if selected is None:
+        return out
+    if selected not in DEFAULT_ON_FILTERS and selected not in _table_filters(table_path):
         return out
     if hdr.get(MARKER):
         out['anchor'] = str(hdr.get('FFRAMANC', '') or '').upper().strip()
