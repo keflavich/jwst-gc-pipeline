@@ -441,8 +441,13 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
 def _nominal_fwhm_arcsec(filt):
     """Diffraction-limited FWHM (arcsec) of a JWST filter from the wavelength
     in its name (``f480m`` -> 4.8 um, ``f1130w`` -> 11.3 um), 1.03 lambda/D with
-    D = 6.5 m.  Sets the offsets of the random positions only."""
-    digits = ''.join(ch for ch in filt if ch.isdigit())
+    D = 6.5 m.  The wide ``w2`` filters (``f150w2``, ``f322w2``) carry a
+    trailing 2 that is not part of the wavelength.  Sets the offsets of the
+    random positions only."""
+    name = filt.lower()
+    if name.endswith('w2'):
+        name = name[:-1]
+    digits = ''.join(ch for ch in name if ch.isdigit())
     wave_um = float(digits) / 100.0
     return 1.03 * wave_um * 1e-6 / 6.5 * 206264.806
 

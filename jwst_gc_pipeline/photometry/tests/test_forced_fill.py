@@ -730,6 +730,9 @@ def test_nominal_fwhm_follows_the_filter_wavelength():
     assert ff._nominal_fwhm_arcsec('f480m') == pytest.approx(0.157, abs=0.003)
     assert ff._nominal_fwhm_arcsec('f212n') == pytest.approx(0.069, abs=0.003)
     assert ff._nominal_fwhm_arcsec('f1130w') == pytest.approx(0.37, abs=0.01)
+    # the wide w2 filters: the trailing 2 is not a digit of the wavelength
+    assert ff._nominal_fwhm_arcsec('f150w2') == pytest.approx(0.05, abs=0.01)
+    assert ff._nominal_fwhm_arcsec('f322w2') == pytest.approx(0.105, abs=0.01)
 
 
 def test_final_phase_frame_products_follow_the_m7_writers():
