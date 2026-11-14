@@ -27,6 +27,7 @@ The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 import copy
 import functools
 import glob
+import json
 
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -53,7 +54,7 @@ from jwst_gc_pipeline.photometry.requested_filters import (
     RequestedFilterHasNoFramesError, assert_requested_filters_have_frames)
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
-from jwst_gc_pipeline.atomic_io import write_table_atomic
+from jwst_gc_pipeline.atomic_io import atomic_write, write_table_atomic
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
@@ -5314,12 +5315,93 @@ def _check_crossband_dva_consistency(states, label='m7 crossband seed'):
         raise RuntimeError(msg)
 
 
+class CrossbandSeedCollapsedError(RuntimeError):
+    """The m7 cross-band seed confirmed too small a fraction of the sparser
+    band (``manual_crossband_seed_collapse_action='raise'``)."""
+
+
+#: Seed files whose collapse warning this process has already printed.  Every
+#: m7 (module, filter) iteration rebuilds the same seed, so the message would
+#: otherwise repeat once per iteration.
+_CROSSBAND_SEED_COLLAPSE_WARNED = set()
+
+
+def _crossband_seed_health(n_good, n_seed, ras, decs, snrs, filtidx, flist, *,
+                           max_sep_mas, min_frac):
+    """Health of a cross-band seed: the fraction of the sparser band it confirms
+    and a coarse band-to-band offset.
+
+    The fraction is ``n_seed / min(n_good)`` over the filters that contributed
+    good detections; ``n_good`` is accumulated across modules by the caller.  A
+    single-filter target has nothing to confirm against, so its fraction is None
+    and it is never flagged.
+
+    The offset is measured between the two filters with the highest median S/N
+    by offset-histogram stacking in a 0.3 arcsec window
+    (``astrometry_offsets.measure_offset``, ``sweep=False``), as (second minus
+    first) in mas with dRA carrying the cos(dec) factor.  It is a diagnostic:
+    the histogram peak is only meaningful when the offset lies inside that
+    window.  The authority on registration is the m7 cross-filter checkpoint.
+    """
+    from astropy.coordinates import SkyCoord
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    health = dict(n_good={k: int(v) for k, v in n_good.items()},
+                  n_seed=int(n_seed), max_sep_mas=float(max_sep_mas),
+                  min_frac=float(min_frac), frac=None, collapsed=False,
+                  offset_filters=None, offset_dra_mas=None,
+                  offset_ddec_mas=None, offset_npairs=None)
+    counts = [v for v in n_good.values() if v > 0]
+    if len(counts) >= 2:
+        health['frac'] = float(n_seed) / float(min(counts))
+        health['collapsed'] = bool(health['frac'] < min_frac)
+    if len(flist) >= 2:
+        med = [(float(np.nanmedian(snrs[filtidx == k])) if np.any(filtidx == k)
+                else -np.inf) for k in range(len(flist))]
+        k1, k2 = (int(k) for k in np.argsort(-np.asarray(med), kind="stable")[:2])
+        m1, m2 = filtidx == k1, filtidx == k2
+        if m1.any() and m2.any():
+            res = measure_offset(
+                SkyCoord(ras[m1] * u.deg, decs[m1] * u.deg),
+                SkyCoord(ras[m2] * u.deg, decs[m2] * u.deg),
+                maxsep=0.3 * u.arcsec, bin_arcsec=0.01, min_pairs=200,
+                sweep=False)
+            if res is not None:
+                health['offset_filters'] = [flist[k1], flist[k2]]
+                health['offset_dra_mas'] = float(res['dra'])
+                health['offset_ddec_mas'] = float(res['ddec'])
+                health['offset_npairs'] = int(res['npairs'])
+    return health
+
+
+def _crossband_seed_health_message(health):
+    """One-line description of a collapsed seed, naming the counts and offset."""
+    counts = ', '.join(f"{k}={v}" for k, v in sorted(health['n_good'].items()))
+    msg = (f"WARNING [m7] crossband seed collapsed: {health['n_seed']} positions "
+           f"confirmed from good m6 detections ({counts}); fraction of the "
+           f"sparser band {health['frac']:.3f} < {health['min_frac']:g} at a "
+           f"{health['max_sep_mas']:g} mas match radius.")
+    if health['offset_dra_mas'] is not None:
+        a, b = health['offset_filters']
+        msg += (f" Measured {b}-{a} offset (diagnostic, 0.3 arcsec window): "
+                f"dRA*cos(dec)={health['offset_dra_mas']:.1f} mas, "
+                f"dDec={health['offset_ddec_mas']:.1f} mas "
+                f"({health['offset_npairs']} pairs).")
+    msg += (" The bands are probably mis-registered by more than the match "
+            "radius; repair the reference tie (issues #921, #1198) rather "
+            "than widening the radius.  The m7 cross-filter checkpoint and "
+            "registration_failsafes.py --scan are the authority on "
+            "registration.")
+    return msg
+
+
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                           min_filters=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],
                           snr_min=MANUAL_DEFAULTS['manual_crossband_seed_snr_min'],
                           qfit_max=MANUAL_DEFAULTS['manual_crossband_seed_qfit_max'],
-                          dedup_radius_mas=30.0):
+                          dedup_radius_mas=30.0,
+                          min_frac=MANUAL_DEFAULTS['manual_crossband_seed_min_frac'],
+                          collapse_action=MANUAL_DEFAULTS['manual_crossband_seed_collapse_action']):
     """Cross-filter seed for m7 (iter7): STRINGENT -- only positions independently
     confirmed (S/N > snr_min AND qfit < qfit_max) in >= ``min_filters`` filters,
     clustered within ``max_sep_mas``.
@@ -5350,6 +5432,18 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     vetting floor uses flux / flux_err_prop (``manual_ext_snr_floor_propagated``).
     The seed's stricter definition is deliberate: a seed position is force-fit in
     every band, so it requires a detection that is significant in one frame.
+
+    Seed health (issue #981): bands registered worse than ``max_sep_mas`` apart
+    confirm almost nothing (gc-treasury has two NIRCam bands, so one band offset
+    by 70-270 mas collapsed the seed on o111, o113, o063 and o138).  When the
+    seed holds fewer than ``manual_crossband_seed_min_frac`` (0.3) of the
+    sparser band's good detections the build prints a ``WARNING [m7] crossband
+    seed collapsed`` line with the counts and a coarse band offset.  The numbers
+    go into the seed table meta (SEEDFRAC, SEEDCOLL, SEEDNGD, SEEDOFFX/Y) and a
+    ``crossband_seed_manual<obs>.health.json`` beside it.
+    ``manual_crossband_seed_collapse_action='raise'`` raises
+    ``CrossbandSeedCollapsedError`` instead of continuing.  There is no
+    wider-radius fallback: the repair is the reference tie.
     """
     from astropy.coordinates import SkyCoord
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
@@ -5358,12 +5452,19 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     snr_min = float(getattr(options, 'manual_crossband_seed_snr_min', snr_min))
     qfit_max = float(getattr(options, 'manual_crossband_seed_qfit_max', qfit_max))
     max_sep_mas = float(getattr(options, 'manual_crossband_seed_max_sep_mas', max_sep_mas))
+    min_frac = float(getattr(options, 'manual_crossband_seed_min_frac', min_frac))
+    collapse_action = str(getattr(options, 'manual_crossband_seed_collapse_action',
+                                  collapse_action))
+    if collapse_action not in ('warn', 'raise'):
+        raise ValueError(f"manual_crossband_seed_collapse_action must be 'warn' or "
+                         f"'raise', got {collapse_action!r}")
 
     # collect GOOD (independently-confirmed) detections from each filter's m6.
     # The path spelling lives in `crossband_seed_inputs` so the fan-out resume's
     # staleness check reads exactly the list this loop consumes.
     ras = []; decs = []; filtidx = []; snrs = []
     flist = []
+    n_good = {}   # good detections per filter, summed over modules
     dva_states = {}
     for module, filt, p in crossband_seed_inputs(cut_bp, modules, filternames,
                                                  options):
@@ -5382,6 +5483,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
         if key not in flist:
             flist.append(key)
         k = flist.index(key)
+        n_good[key] = n_good.get(key, 0) + int(good.sum())
         ras.extend(np.atleast_1d(sc.ra.deg)[good])
         decs.extend(np.atleast_1d(sc.dec.deg)[good])
         snrs.extend(snr[good])
@@ -5425,6 +5527,19 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
         seed_ra.append(ras[best]); seed_dec.append(decs[best])
         nfilt.append(len(ufilt))
         confl.append(','.join(sorted(flist[k] for k in ufilt)))
+    out = crossband_seed_file(cut_bp, options)
+    health = _crossband_seed_health(n_good, len(seed_ra), ras, decs, snrs,
+                                    filtidx, flist, max_sep_mas=max_sep_mas,
+                                    min_frac=min_frac)
+    # the JSON is written first so that an empty or raising build leaves it
+    with atomic_write(out.replace('.fits', '.health.json')) as _tmp:
+        with open(_tmp, 'w') as _fh:
+            json.dump(health, _fh, indent=1, sort_keys=True)
+    if health['collapsed']:
+        _msg = _crossband_seed_health_message(health)
+        if out not in _CROSSBAND_SEED_COLLAPSE_WARNED:
+            print(_msg, flush=True)
+            _CROSSBAND_SEED_COLLAPSE_WARNED.add(out)
     if not seed_ra:
         raise ValueError(f"m7 crossband seed: 0 positions confirmed in >={min_filters} filters "
                          f"(from {n} good detections) -- loosen manual_crossband_seed_min_filters")
@@ -5432,12 +5547,20 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     seed['skycoord'] = SkyCoord(np.array(seed_ra) * u.deg, np.array(seed_dec) * u.deg)
     seed['n_filt_confirmed'] = np.array(nfilt, dtype='i4')
     seed['confirming_filters'] = np.array(confl)
-    out = crossband_seed_file(cut_bp, options)
+    if health['frac'] is not None:
+        seed.meta['SEEDFRAC'] = health['frac']
+        seed.meta['SEEDCOLL'] = health['collapsed']
+        seed.meta['SEEDNGD'] = min(v for v in n_good.values() if v > 0)
+    if health['offset_dra_mas'] is not None:
+        seed.meta['SEEDOFFX'] = health['offset_dra_mas']
+        seed.meta['SEEDOFFY'] = health['offset_ddec_mas']
     # every m7 shard rebuilds this same path -- see write_table_atomic
     write_table_atomic(seed, out)
     print(f"[m7] wrote STRINGENT crossband seed {out} (n={len(seed)} confirmed in "
           f">={min_filters} filters @ {max_sep_mas:g} mas, SNR>{snr_min}, qfit<{qfit_max}; "
           f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
+    if health['collapsed'] and collapse_action == 'raise':
+        raise CrossbandSeedCollapsedError(_crossband_seed_health_message(health))
     return out
 
 

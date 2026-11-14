@@ -319,6 +319,29 @@ Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 checkpoint.  "m2..m5" of the plan = merge tokens m3..m6 here.  "m6
 cross-filter" = the m7 cross-band merge.
 
+## The m7 cross-band seed health check (issue #981)
+
+`_build_crossband_seed` confirms a position only when `min_filters` bands detect
+it within `manual_crossband_seed_max_sep_mas` (30 mas). On a two-band target
+such as gc-treasury (F212N, F480M), bands registered worse than that radius
+confirm almost nothing: o111, o113, o063 and o138 sat 66-272 mas apart and the
+seed held a few hundred rows against roughly 100k good detections.
+
+The build now divides the seed size by the good-detection count of the sparser
+band (summed over modules). Below `manual_crossband_seed_min_frac` (0.3) it
+prints one `WARNING [m7] crossband seed collapsed` line per process, naming the
+counts and a coarse band-to-band offset (offset-histogram stacking of the two
+highest-S/N bands in a 0.3 arcsec window; skipped under 200 pairs). The numbers
+are stored in the seed table meta (`SEEDFRAC`, `SEEDCOLL`, `SEEDNGD`,
+`SEEDOFFX`, `SEEDOFFY`) and in `crossband_seed_manual<obs>.health.json` beside
+the seed. `manual_crossband_seed_collapse_action` is `warn` (default) or
+`raise` (`CrossbandSeedCollapsedError`, after the files are written).
+
+There is no wider-radius fallback: the repair is the reference tie (#921,
+#1198). The offset is a diagnostic confined to its window. The m7 cross-filter
+checkpoint above and `registration_failsafes.py --scan` remain the authority on
+registration; the seed check stops earlier, before the m7 compute is spent.
+
 ## The cross-filter residual field (m7, measurement only)
 
 **Release-gate staleness of the m7 record (issue #1237).** The record has no

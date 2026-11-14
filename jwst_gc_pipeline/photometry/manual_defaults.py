@@ -180,6 +180,10 @@ MANUAL_DEFAULTS = {
     'manual_crossband_seed_snr_min': 5.0,
     'manual_crossband_seed_qfit_max': 0.2,
     'manual_crossband_seed_max_sep_mas': 30.0,
+    # seed health (#981): warn (or raise) when the seed confirms fewer than this
+    # fraction of the sparser band's good detections
+    'manual_crossband_seed_min_frac': 0.3,
+    'manual_crossband_seed_collapse_action': 'warn',
     # m7 seed of each band = cross-band seed UNION the band's own m6 vetted
     # catalog, plus daofind on the m6 residual - bg (_build_m7_band_seed).
     # None = AUTO (_auto_m7_seed_own_band): on for star-dominated NIRCam
