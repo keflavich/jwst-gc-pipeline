@@ -122,6 +122,72 @@ Worth re-running when the program's plan changes, and to pick up visits as they
 execute (the observed layer comes from the APT visit status). Not worth putting
 on a timer — a Flight Ready program's pointings do not move between runs.
 
+## Refreshing the viewer's data files
+
+The sky viewer (`jwst_gc_aladin.html`, not tracked in this repository) fetches
+its data files by relative name from the `avm_images` docroot. Two of them are
+derived from inputs that keep changing, and `scripts/monitoring/refresh_viewer_data.sh`
+rebuilds both:
+
+| File | Builder | Inputs | Schedule |
+| --- | --- | --- | --- |
+| `jwst_gc_focal_plane.json` | `build_focal_plane.py` | `footprints.json`, delivered frame headers of the newest release | `refresh_viewer_data.sh`, daily |
+| `jwst_gc_cat_guidestars.json` | `build_guidestars.py` | MAST guide-star exposures, `footprints.json` | `refresh_viewer_data.sh`, daily |
+| `jwst_gc_cat_kmos_pointings.json`, `..._aces_compact.json`, `..._cmzoom.json`, `..._sgrb2_alma.json` | by hand | external catalogues | none; they have no upstream that changes |
+| `jwst_ultrared_stars.{json,fits,ecsv}` | not in this repository | | rebuilt by a job outside this repository |
+
+A new viewer data file with an upstream that changes belongs in this table and in
+the script.
+
+```cron
+# Rebuild the viewer's focal-plane and guide-star files and publish both.
+# After the monitor's hourly footprints refresh, which the focal plane reads.
+#SCRON --account=astronomy-dept --qos=astronomy-dept-b --partition=hpg-default
+#SCRON --cpus-per-task=2 --mem=8gb --time=00:30:00
+#SCRON --job-name=gc-viewer-data-refresh
+#SCRON --output=/orange/adamginsburg/jwst/logs/gc-viewer-data-%j.out
+10 5 * * * MAST_API_TOKEN=$(cat <token-file>) REPO=<checkout> PATH=<python-env>/bin:$PATH bash <checkout>/scripts/monitoring/refresh_viewer_data.sh
+```
+
+Daily is enough: new frames arrive at the rate of MAST deliveries. The line is
+installed by hand with `scrontab -e` (and read back with `scrontab -l`, since the
+shared table has been replaced by accident before).
+
+What the script guarantees:
+
+* Both files are built as dot-files beside their published names and checked
+  before either is renamed into place. A builder that fails, or a file that is
+  empty, truncated, or has fewer pointings, guide stars or as-flown pointings
+  than the published copy, leaves **both** published files as they were and
+  exits non-zero. `ALLOW_SHRINK=1` publishes a smaller file deliberately.
+* `n_as_flown` is in the check because the pointing count tracks the plan and
+  stays complete while the as-flown attitudes go stale.
+* The guide-star builder reads MAST and needs `MAST_API_TOKEN` for proprietary
+  exposures. If MAST fails the run aborts; `--source frames` cannot see the
+  visits that never flew and is not used as a fallback.
+* The script refuses to publish from a checkout that is behind `origin/main`
+  (it fast-forwards a clean one first), as `refresh_monitor.sh` does.
+* The docroot is updated first, then both files are copied to the web host with
+  `rsync`, using the host and directory from `publish_hips_layers.py`. A failed
+  copy exits non-zero. `DEPLOY=0` skips the copy.
+
+The focal plane reads the as-flown attitude from the delivered frames of the
+**newest** `v*-*` release under `/orange/adamginsburg/jwst/releases/` that has
+`gc-treasury/exposures` (override with `EXPOSURES=<dir>`); the builders print
+which one they used. Both builders had been pinned to `v1.8-2026.09` after
+`v1.9-2026.10` was delivered. A newer release that is only partly delivered
+lowers `n_as_flown`, which the check refuses. Each file records `generated`
+(UTC) and, for the focal plane, `release`.
+
+To see what a run would publish without publishing it:
+
+```bash
+DRY_RUN=1 bash scripts/monitoring/refresh_viewer_data.sh
+```
+
+This builds and checks, then leaves the staged `.jwst_gc_*.json.<pid>` files in
+the docroot for a diff against the served copies.
+
 ## What the schedule does NOT do
 
 * It does not re-run the astrometry paper's validation. That has its own SLURM
