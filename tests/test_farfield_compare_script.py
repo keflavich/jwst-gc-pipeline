@@ -123,6 +123,10 @@ def _write_variant(directory, stem, suffix, resid, err, dq, model, date, commit)
                   fits.ImageHDU(resid.astype('f4'), name='SCI'),
                   fits.ImageHDU(err.astype('f4'), name='ERR'),
                   fits.ImageHDU(dq.astype('i4'), name='DQ')]).writeto(base + '_residual.fits')
+    # importing jwst_gc_pipeline installs a writeto hook that stamps the running commit
+    # into GCPIPEV/GCTAG, so the fixture values are set again on the file afterwards
+    fits.setval(base + '_residual.fits', 'GCPIPEV', value=commit)
+    fits.setval(base + '_residual.fits', 'GCTAG', value='tag_' + commit)
     fits.HDUList([fits.PrimaryHDU(),
                   fits.ImageHDU(model.astype('f4'), name='SCI')]).writeto(base + '_model.fits')
 
