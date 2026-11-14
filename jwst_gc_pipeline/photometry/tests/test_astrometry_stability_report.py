@@ -148,7 +148,16 @@ def test_obs_token_excludes_an_untokened_legacy_record(tmp_path):
     scoped = collect(str(d), 'o004')['per_stage']['m3']
     assert len(scoped) == 1
     assert scoped[0]['moved_mas'] == pytest.approx(1.0)
-    assert len(collect(str(d))['per_stage']['m3']) == 2
+    # Unscoped, the tokened record supersedes its untokened twin (#827).
+    assert len(collect(str(d))['per_stage']['m3']) == 1
+
+
+def test_an_untokened_record_with_no_tokened_sibling_is_still_read(tmp_path):
+    base = {_key('nrcb2', 1): (0.0, 0.0)}
+    d = _field(tmp_path, {
+        'm2_F200W': _record(base),
+        'm3_F200W': _record({_key('nrcb2', 1): (7.0, 0.0)})})
+    assert len(collect(str(d))['per_stage']['m3']) == 1
 
 
 # --- failure modes are reported, never silent, never fatal ------------------

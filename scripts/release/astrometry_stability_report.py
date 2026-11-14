@@ -31,12 +31,14 @@ runnable standalone:
     python scripts/release/astrometry_stability_report.py --field brick --obs-token o004
 """
 import argparse
-import glob
 import json
 import math
 import os
 import statistics
 from collections import defaultdict
+
+from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+    current_records, parse_record_name)
 
 FROZEN_STAGES = ("m3", "m4", "m5", "m6", "m7")
 
@@ -47,13 +49,24 @@ GROUP_AGREEMENT_MAS = 1.0
 
 
 def _record_name(path):
-    """(stage, filter, obs) from a checkpoint filename, obs '' when untokened."""
-    base = os.path.basename(path)
-    stem = base[len("checkpoint_"):-len("_latest.json")]
-    bits = stem.split("_")
-    return (bits[0] if bits else "",
-            bits[1] if len(bits) > 1 else "",
-            bits[2] if len(bits) > 2 else "")
+    """(stage, filter, obs) from a checkpoint filename, obs '' when untokened.
+
+    Parsed with ``parse_record_name`` (issue #827).  Splitting the stem on ``_``
+    read ``m7_crossfilter_nrcb_o004`` as stage ``m7`` and filter
+    ``crossfilter``.  The filter slot of a per-module cross-filter record holds
+    its module.  ``obs`` is spelled as the token reads in the filename
+    (``o004``, ``o002-998``, ``j7213``).
+    """
+    info = parse_record_name(os.path.basename(path))
+    if info is None:
+        return None
+    if info["obs"]:
+        obs = f"o{info['obs']}"
+    elif info["proposal"]:
+        obs = f"j{info['proposal']}"
+    else:
+        obs = ""
+    return info["stage"], info["filt"] or info["module"] or "", obs
 
 
 def _load(path):
@@ -74,10 +87,11 @@ def _records(basepath, obs_token=None):
     admitting it silently pools another observation's -- or another
     reduction's -- numbers into this report.
     """
-    pat = os.path.join(basepath, "astrometry_checkpoints",
-                       "checkpoint_*_latest.json")
+    # Current records only: an untokened pre-migration record is dropped where
+    # a tokened one covers the same stage and filter.
     out, unreadable = {}, []
-    for path in sorted(glob.glob(pat)):
+    for path in sorted(current_records(
+            os.path.join(basepath, "astrometry_checkpoints")).values()):
         stage, filt, obs = _record_name(path)
         if obs_token is not None and obs != obs_token:
             continue
