@@ -24,6 +24,7 @@ with legacy ``iter2/iter3/iter4`` ones.
 The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 (BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
+import contextlib
 import copy
 import functools
 import glob
@@ -6297,7 +6298,8 @@ def _run_one_frame_manual(args):
 
 def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
                             dedup_arcsec=1.0, match_arcsec=0.1,
-                            return_keeper=False):
+                            return_keeper=False, distinct_pairs=None,
+                            demote=None):
     """Which in-field satstar rows are same-star duplicates of a better row.
 
     Two ``replaced_saturated`` rows within ``dedup_arcsec`` are treated as ONE
@@ -6359,6 +6361,16 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
     return_keeper : bool
         Also return, per row, the index of the kept row whose set it joined
         (its own index when kept).
+    distinct_pairs : callable, optional
+        ``distinct_pairs(i1, i2, sep_arcsec)`` -> bool array, called once
+        with every never-co-fit pair (row indices into ``sc``).  A True pair
+        is treated like a co-fit one: not a link, so its rows never share a
+        set.  ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` passes
+        :func:`_satstar_residual_distinct_pairs` here.
+    demote : array-like of bool, optional
+        Rows ranked below every non-demoted row when a set picks its
+        survivor (support and flux still order the rest).  Changes only
+        which row survives, never which rows share a set.
 
     Returns
     -------
@@ -6389,6 +6401,11 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
         d = d2d.arcsec
         a, b = slot[i1], slot[i2]
         cofit |= ((d[a] < r_pair) & (d[b] < r_pair) & (idx[a] != idx[b]))
+    if distinct_pairs is not None and (~cofit).any():
+        cand = np.where(~cofit)[0]
+        apart = np.asarray(distinct_pairs(i1[cand], i2[cand], sep[cand]),
+                           dtype=bool)
+        cofit[cand[apart]] = True       # a pair shown distinct: not a link
     links = {}
     for a, b in zip(i1[~cofit], i2[~cofit]):
         links.setdefault(int(a), set()).add(int(b))
@@ -6417,7 +6434,10 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
     sup = np.nan_to_num(np.asarray(support, dtype=float), nan=-np.inf)
     fl = np.nan_to_num(np.asarray(flux, dtype=float), nan=-np.inf)
     rank = np.empty(n, int)
-    rank[np.lexsort((-fl, -sup))] = np.arange(n)
+    if demote is None:
+        rank[np.lexsort((-fl, -sup))] = np.arange(n)
+    else:
+        rank[np.lexsort((-fl, -sup, np.asarray(demote, dtype=bool)))] = np.arange(n)
     for grp in members.values():
         best = min(grp, key=rank.__getitem__)
         for m in grp:
@@ -6442,6 +6462,38 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
     catalog, or its latest earlier one, and the rejected file written beside
     it.  Pooling every phase on disk let an older run's detections decide
     whether two rows were ever fit side by side.
+
+    The positions are the ``'positions'`` of :func:`_satstar_cofit_runs`.
+    """
+    return [run['positions'] for run in _satstar_cofit_runs(
+        pipeline_dir, proposal_id=proposal_id, field=field, phase=phase,
+        frame_shapes=False)]
+
+
+def _satstar_cofit_runs(pipeline_dir, proposal_id=None, field=None,
+                        phase=None, frame_shapes=True):
+    """Per-exposure satstar runs, as read by :func:`_satstar_cofit_positions`.
+
+    One dict per run (one frame at one phase), in the order
+    :func:`_satstar_cofit_positions` returns them:
+
+    * ``'positions'`` -- SkyCoord of the accepted then the gate-rejected
+      fits (finite only), re-projected through the frame's current WCS;
+    * ``'accepted'`` -- the accepted fits alone (empty when the run has no
+      accepted row);
+    * ``'xy'`` -- ``(N, 2)`` frame pixel ``xcentroid``/``ycentroid`` of each
+      of ``'positions'`` (NaN where the column is absent; the satstar
+      ``x_fit``/``y_fit`` are stamp coordinates, not frame ones);
+    * ``'frame'``, ``'wcs'``, ``'shape'`` -- the exposure, its WCS and
+      ``(ny, nx)``; None when the frame is not on disk or unreadable (the
+      shape also when ``frame_shapes`` is False, which skips reading every
+      frame's SCI header);
+    * ``'residual'`` -- the run's ``*_satstar_residual.fits`` path (it may
+      not exist), None when the run has no accepted catalog.
+
+    ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` reads the residual and the
+    frame (:func:`_satstar_residual_distinct_pairs`) and the pixel
+    positions (:func:`_satstar_edge_only_rows`).
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         satstar_obs_scope, satstar_catalog_in_observation)
@@ -6469,6 +6521,7 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
     files = sorted(accepted + rejected)
     runs = {}
     wcs_cache = {}
+    shape_cache = {}
     n_stale = 0
     for fn in files:
         tbl = Table.read(fn)
@@ -6484,25 +6537,387 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
                 wcs_cache[frame] = frame_wcs(frame)
             tbl, _shift = refresh_satstar_skycoords(tbl, wcs=wcs_cache[frame],
                                                     catalog_path=fn)
+            if frame not in shape_cache:
+                shape_cache[frame] = (_frame_sci_shape(frame) if frame_shapes
+                                      else None)
         else:
             n_stale += 1
         pos = SkyCoord(tbl['skycoord_fit'])
         ok = np.isfinite(pos.ra.deg) & np.isfinite(pos.dec.deg)
         if ok.any():
-            runs.setdefault(tail.sub('', fn), []).append(pos[ok])
+            stem = tail.sub('', fn)
+            if 'xcentroid' in tbl.colnames and 'ycentroid' in tbl.colnames:
+                xy = np.column_stack([np.asarray(tbl['xcentroid'], float),
+                                      np.asarray(tbl['ycentroid'], float)])[ok]
+            else:
+                xy = np.full((int(ok.sum()), 2), np.nan)
+            run = runs.setdefault(stem, {
+                'pos': [], 'acc': [], 'xy': [], 'frame': None, 'wcs': None,
+                'shape': None, 'residual': None})
+            run['pos'].append(pos[ok])
+            run['xy'].append(xy)
+            if fn.endswith('_satstar_catalog.fits'):
+                run['acc'].append(pos[ok])
+                run['residual'] = stem + '_satstar_residual.fits'
+            if frame is not None:
+                run['frame'] = frame
+                run['wcs'] = wcs_cache[frame]
+                run['shape'] = shape_cache[frame]
     if n_stale:
         print(f"  satstar co-fit positions: {n_stale} of {len(files)} per-exposure "
               f"satstar file(s) have no frame on disk; their stored sky positions "
               f"are used", flush=True)
     from astropy.coordinates import concatenate as _sc_concat
-    return [(_sc_concat(v) if len(v) > 1 else v[0]) for v in runs.values()]
+
+    def _cat(v):
+        if not v:
+            return SkyCoord([], [], unit='deg')
+        return _sc_concat(v) if len(v) > 1 else v[0]
+
+    return [{'stem': stem, 'positions': _cat(r['pos']),
+             'accepted': _cat(r['acc']), 'xy': np.concatenate(r['xy']),
+             'frame': r['frame'], 'wcs': r['wcs'], 'shape': r['shape'],
+             'residual': r['residual']}
+            for stem, r in runs.items()]
+
+
+def _frame_sci_shape(frame):
+    """``(ny, nx)`` of a frame's SCI extension, or None (logged) when the
+    header cannot be read."""
+    try:
+        hdr = fits.getheader(frame, 'SCI')
+    except (OSError, KeyError) as ex:
+        print(f"  satstar co-fit runs: no SCI header in "
+              f"{os.path.basename(frame)} ({type(ex).__name__}: {ex})",
+              flush=True)
+        return None
+    if 'NAXIS1' not in hdr or 'NAXIS2' not in hdr:
+        return None
+    return int(hdr['NAXIS2']), int(hdr['NAXIS1'])
+
+
+#: ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` keeps a never-co-fit pair as two
+#: stars when, in at least one frame that fits only the better-ranked
+#: member, the satstar residual at the other member holds BOTH at least this
+#: fraction of its peak light above the local background ...
+#: (env ``SATSTAR_INFIELD_RESID_RATIO_MIN``) ...
+_RESID_DEDUP_RATIO_MIN = 0.5
+#: ... AND, summed within ``_RESID_DEDUP_APER_PX`` of it, at least this
+#: fraction of its own fitted flux (same frame; env
+#: ``SATSTAR_INFIELD_RESID_FLUX_MIN``).  Tuned on gc-treasury 10678 m7
+#: o078 + o043 only (F480M and F212N), where the kept rows sit at >= 0.29
+#: (F480M) / >= 0.445 (F212N) and the rejected ones at <= 0.067 or below
+#: zero; untested on other fields and filters.
+_RESID_DEDUP_FLUX_MIN = 0.25
+_RESID_DEDUP_APER_PX = 3.0
+#: The other member is measured only where it lies at least this many
+#: pixels inside the frame (array edge).
+_RESID_DEDUP_INSIDE_PX = 20
+#: A row every one of whose fits lies at most ``_RESID_DEDUP_EDGE_PX``
+#: pixels from the science area, i.e. at most ``_RESID_DEDUP_EDGE_PX +
+#: _RESID_DEDUP_REFPIX`` = 14 px from the array edge (x or y <= 14, or
+#: >= n - 15, for an n-pixel axis), is demoted when its duplicate set
+#: picks a survivor.
+_RESID_DEDUP_EDGE_PX = 10
+_RESID_DEDUP_REFPIX = 4
+
+#: env var -> module default, read by :func:`_resid_dedup_thresholds`.
+_RESID_DEDUP_ENVS = {'SATSTAR_INFIELD_RESID_RATIO_MIN': _RESID_DEDUP_RATIO_MIN,
+                     'SATSTAR_INFIELD_RESID_FLUX_MIN': _RESID_DEDUP_FLUX_MIN}
+
+
+def _resid_dedup_thresholds():
+    """``(ratio_min, flux_min)`` of the ``'cofit_residual'`` residual test.
+
+    ``SATSTAR_INFIELD_RESID_RATIO_MIN`` / ``SATSTAR_INFIELD_RESID_FLUX_MIN``
+    override ``_RESID_DEDUP_RATIO_MIN`` / ``_RESID_DEDUP_FLUX_MIN``; empty
+    means the default.  A value that is not a finite number raises
+    ``ValueError`` naming the variable.
+    """
+    out = []
+    for env, default in _RESID_DEDUP_ENVS.items():
+        raw = os.environ.get(env, '').strip()
+        if not raw:
+            out.append(float(default))
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            raise ValueError(f"{env}={raw!r}; expected a number") from None
+        if not np.isfinite(val):
+            raise ValueError(f"{env}={raw!r}; expected a finite number")
+        out.append(val)
+    return tuple(out)
+
+
+def _satstar_residual_left(resid, data, x, y, flux):
+    """How much of a source is left in a satstar residual at ``(x, y)``.
+
+    Returns ``(peak_frac, flux_frac)``.  ``bg`` is the 20th percentile of
+    ``resid`` in the 31x31 box at ``(int(x), int(y))``.
+
+    * ``peak_frac = (r - bg) / (d - bg)``, with ``r`` and ``d`` the maxima of
+      ``resid`` and ``data`` in the 3x3 box at the rounded pixel; NaN when
+      the data peak is not finite or not above ``bg``.
+    * ``flux_frac`` = sum of ``resid - bg`` over the pixels (of that 31x31
+      box) whose centres lie within ``_RESID_DEDUP_APER_PX`` of ``(x, y)``,
+      divided by ``flux``; NaN when ``flux`` is not a positive number.
+
+    The caller keeps ``(x, y)`` at least 15 px inside both arrays.
+    """
+    xi, yi = int(x), int(y)
+    cut = np.asarray(resid[yi - 15:yi + 16, xi - 15:xi + 16], dtype=float)
+    if not np.isfinite(cut).any():
+        return np.nan, np.nan
+    bg = np.nanpercentile(cut, 20)
+    yy, xx = np.mgrid[yi - 15:yi + 16, xi - 15:xi + 16]
+    aper = np.hypot(xx - x, yy - y) <= _RESID_DEDUP_APER_PX
+    flux = float(flux)
+    flux_frac = (float(np.nansum((cut - bg)[aper])) / flux
+                 if np.isfinite(flux) and flux > 0 else np.nan)
+    xr, yr = int(round(x)), int(round(y))
+    box = (slice(yr - 1, yr + 2), slice(xr - 1, xr + 2))
+    r = np.asarray(resid[box], dtype=float)
+    d = np.asarray(data[box], dtype=float)
+    if not (np.isfinite(d).any() and np.isfinite(r).any()):
+        return np.nan, flux_frac
+    dp, rp = float(np.nanmax(d)), float(np.nanmax(r))
+    if dp <= bg:
+        return np.nan, flux_frac
+    return (rp - bg) / (dp - bg), flux_frac
+
+
+def _satstar_residual_distinct_pairs(sc, support, flux, runs, *,
+                                     match_arcsec=0.1, ratio_min=None,
+                                     flux_min=None,
+                                     inside_px=_RESID_DEDUP_INSIDE_PX,
+                                     log_rows=None):
+    """Residual test of ``SATSTAR_INFIELD_DEDUP='cofit_residual'``.
+
+    Returns ``distinct(i1, i2, sep_arcsec)`` for the ``distinct_pairs``
+    hook of :func:`_never_cofit_duplicates`, plus a ``stats`` dict it fills.
+
+    The satstar finder fits ONE star per saturated DQ component, so two real
+    stars that share a component in every frame are never fit side by side
+    and the co-fit rule collapses them (gc-treasury 10678 F480M m7: about
+    21 of the 32 rows collapsed in o078 + o043 are such stars, at
+    0.2-1.0").  For
+    a never-co-fit pair the member ranked lower by (support, flux) -- the one
+    'cofit' would drop -- is tested in every ACCEPTED run of ``runs``
+    (:func:`_satstar_cofit_runs`) that fit the better member within
+    ``min(match_arcsec, sep/2)`` and has no fit (accepted or rejected) of
+    the lower one: there, the frame's ``*_satstar_residual.fits`` still holds
+    the lower member's light unless the better member's model explains it.
+    The lower member's sky position is projected through the frame's WCS;
+    where it lies at least ``inside_px`` inside the frame,
+    :func:`_satstar_residual_left` (residual against the frame's SCI, and
+    against the lower member's ``flux``) is measured.  The pair is distinct
+    when at least one run gives BOTH a peak fraction ``>= ratio_min`` and an
+    aperture flux fraction ``>= flux_min`` (defaults from
+    :func:`_resid_dedup_thresholds`); a peak passed in one run and a flux in
+    another does not count.  Any other pair keeps the 'cofit' answer (a
+    link).  A run whose residual, frame or WCS is missing or unreadable
+    (including a truncated file, or a residual whose shape is not the 2-D
+    shape of the frame's SCI) is skipped and logged; a pair left with no
+    measurement because of that is counted as a fall-back to 'cofit'.
+
+    Why both: at separations of many PSF widths (gc-treasury F212N, 0.2-1.0"
+    = 3-14 FWHM) the better member's model is negligible at the lower one,
+    so the peak fraction is ~1 wherever the lower row sits, star or not.
+    On o078 + o043 m7 the peak test alone kept 103 of 154 collapsed F212N
+    rows, 62 of them with < 0.1 of their fitted flux in the residual (rows
+    whose every fit is at a detector edge), and 2 such F480M rows next to
+    much brighter stars.  Among the rows the peak test keeps there, the
+    flux fraction is >= 0.29 for those kept by both tests and <= 0.067 for
+    the rest (none in between).
+
+    Only the lower member is tested: a first-ring fit 0.28" from a bright
+    star with 17% of its flux (o043) leaves ~0.1 of its light where the
+    star alone was fit, while the star's light in the frame that fit only
+    the ring is under-subtracted, so testing the star would keep the ring.
+
+    ``log_rows`` (optional sequence of strings, one per row of ``sc``)
+    labels rows in the per-pair log line; RA/Dec otherwise.
+    """
+    if ratio_min is None or flux_min is None:
+        _r, _f = _resid_dedup_thresholds()
+        ratio_min = _r if ratio_min is None else ratio_min
+        flux_min = _f if flux_min is None else flux_min
+    ratio_min, flux_min = float(ratio_min), float(flux_min)
+    raw_flux = np.asarray(flux, dtype=float)
+    sup = np.nan_to_num(np.asarray(support, dtype=float), nan=-np.inf)
+    fl = np.nan_to_num(raw_flux, nan=-np.inf)
+    rank = np.empty(len(sc), int)
+    rank[np.lexsort((-fl, -sup))] = np.arange(len(sc))
+    stats = {'tested': 0, 'distinct': 0, 'explained': 0, 'untestable': 0,
+             'fallback': 0, 'missing_files': [], 'ratio_min': ratio_min,
+             'flux_min': flux_min}
+
+    def _label(i):
+        if log_rows is not None:
+            return str(log_rows[i])
+        return f"({sc[i].ra.deg:.6f}, {sc[i].dec.deg:+.6f})"
+
+    def distinct(i1, i2, sep):
+        i1 = np.asarray(i1, int)
+        i2 = np.asarray(i2, int)
+        sep = np.asarray(sep, float)
+        hi = np.where(rank[i1] <= rank[i2], i1, i2)
+        lo = np.where(rank[i1] <= rank[i2], i2, i1)
+        r_pair = np.minimum(float(match_arcsec), 0.5 * sep)
+        rows = np.unique(np.concatenate([hi, lo]))
+        sc_rows = sc[rows]
+        slot = np.full(len(sc), -1)
+        slot[rows] = np.arange(len(rows))
+        # per run: which pairs it tests (fits hi, no fit of lo)
+        todo = {}                    # run index -> pair indices
+        for k, run in enumerate(runs):
+            acc = run.get('accepted')
+            if acc is None or len(acc) == 0:
+                continue
+            _, d_acc, _ = sc_rows.match_to_catalog_sky(acc)
+            _, d_all, _ = sc_rows.match_to_catalog_sky(run['positions'])
+            d_acc, d_all = d_acc.arcsec, d_all.arcsec
+            sel = np.where((d_acc[slot[hi]] < r_pair)
+                           & (d_all[slot[lo]] >= r_pair))[0]
+            if len(sel):
+                todo[k] = sel
+        measured = np.zeros(len(i1), bool)
+        apart = np.zeros(len(i1), bool)
+        # the passing run with the largest flux fraction, for the log line
+        show_peak = np.full(len(i1), np.nan)
+        show_flux = np.full(len(i1), np.nan)
+        where = [''] * len(i1)
+        n_skipped = np.zeros(len(i1), int)
+        missing = set()
+        for k, sel in todo.items():
+            run = runs[k]
+            stem = os.path.basename(str(run.get('stem')))
+            wcs_k, shape = run.get('wcs'), run.get('shape')
+            resid_path, frame = run.get('residual'), run.get('frame')
+            if wcs_k is None or shape is None or frame is None:
+                n_skipped[sel] += 1
+                missing.add(f"{stem}: no frame / WCS")
+                continue
+            xs, ys = wcs_k.world_to_pixel(sc[lo[sel]])
+            xs = np.atleast_1d(np.asarray(xs, float))
+            ys = np.atleast_1d(np.asarray(ys, float))
+            ny, nx = shape
+            inside = (np.isfinite(xs) & np.isfinite(ys)
+                      & (xs >= inside_px) & (ys >= inside_px)
+                      & (xs < nx - inside_px) & (ys < ny - inside_px))
+            if not inside.any():
+                continue
+            if resid_path is None or not os.path.exists(resid_path):
+                n_skipped[sel[inside]] += 1
+                missing.add(f"{os.path.basename(str(resid_path))}: not on disk")
+                continue
+            with contextlib.ExitStack() as files:
+                # Reading only: a missing / garbled / truncated file, or one
+                # of the wrong shape, skips the run.  A file truncated inside
+                # its data raises TypeError ("buffer is too small for
+                # requested array") under memmap; a 1-D residual would
+                # IndexError in the cutout, hence the shape check.
+                try:
+                    rh = files.enter_context(fits.open(resid_path,
+                                                       memmap=True))
+                    fh = files.enter_context(fits.open(frame, memmap=True))
+                    resid, data = rh[0].data, fh['SCI'].data
+                    if resid is None or data is None:
+                        raise ValueError('no image data')
+                    if data.ndim != 2 or resid.shape != data.shape:
+                        raise ValueError(
+                            f"residual shape {resid.shape} is not the frame "
+                            f"SCI shape {data.shape} (2-D)")
+                except (OSError, KeyError, ValueError, TypeError) as ex:
+                    n_skipped[sel[inside]] += 1
+                    missing.add(f"{os.path.basename(str(resid_path))}: "
+                                f"{type(ex).__name__}: {ex}")
+                    continue
+                for j in np.where(inside)[0]:
+                    p = sel[j]
+                    pk, ff = _satstar_residual_left(
+                        resid, data, xs[j], ys[j], raw_flux[lo[p]])
+                    if np.isfinite(pk) or np.isfinite(ff):
+                        measured[p] = True
+                    # both tests in the SAME run; a non-finite value (an
+                    # inf pixel in the residual) proves nothing
+                    if not (np.isfinite(pk) and np.isfinite(ff)
+                            and pk >= ratio_min and ff >= flux_min):
+                        continue
+                    apart[p] = True
+                    if not ff <= show_flux[p]:
+                        show_peak[p], show_flux[p], where[p] = pk, ff, stem
+        stats['tested'] += len(i1)
+        stats['distinct'] += int(apart.sum())
+        stats['explained'] += int((measured & ~apart).sum())
+        stats['fallback'] += int((~measured & (n_skipped > 0)).sum())
+        stats['untestable'] += int((~measured & (n_skipped == 0)).sum())
+        stats['missing_files'].extend(sorted(missing))
+        for m in sorted(missing):
+            print(f"  satstar in-field dedup [cofit_residual]: residual test "
+                  f"skipped a run ({m}); its pairs fall back to 'cofit' "
+                  f"unless another run measures them", flush=True)
+        for p in np.where(apart)[0]:
+            print(f"  satstar in-field dedup [cofit_residual]: kept as two "
+                  f"stars: {_label(lo[p])} (support {sup[lo[p]]:g}, flux "
+                  f"{fl[lo[p]]:.4g}) and {_label(hi[p])} (support "
+                  f"{sup[hi[p]]:g}, flux {fl[hi[p]]:.4g}), {sep[p]:.3f}\" "
+                  f"apart: frames that fit only the second leave "
+                  f"{show_peak[p]:.2f} of the first's peak and "
+                  f"{show_flux[p]:.2f} of its flux (in {where[p]})",
+                  flush=True)
+        return apart
+
+    return distinct, stats
+
+
+def _satstar_edge_only_rows(sc, runs, *, match_arcsec=0.1,
+                            edge_px=_RESID_DEDUP_EDGE_PX,
+                            refpix=_RESID_DEDUP_REFPIX):
+    """Rows whose every satstar fit lies at a detector edge.
+
+    For each row of ``sc``, the nearest fit (accepted or rejected) of every
+    run in ``runs`` (:func:`_satstar_cofit_runs`) within ``match_arcsec`` is
+    taken, at its frame pixel ``xcentroid``/``ycentroid``.  A fit's edge
+    distance is ``min(x, y, nx - 1 - x, ny - 1 - y) - refpix``: its distance
+    from the science area, which starts ``refpix`` reference pixels in from
+    the array edge.  A row is edge-only when it has at least one such fit
+    and every one has edge distance ``<= edge_px``.  With the defaults
+    (10 + 4) that is every fit at most 14 px from the array edge: x or y
+    ``<= 14``, or ``>= n - 15`` on an n-pixel axis (385 of 400; 2033 of a
+    2048-px NIRCam array).  Runs without a frame shape, and fits without a
+    pixel position, are not counted.  o078 F480M m7: a star fit at 0-5 px from
+    the nrcb edge in two frames outranked its interior fits (two frames,
+    49-50 px in) on flux, and the interior row was the one dropped.
+    """
+    n = len(sc)
+    dmax = np.full(n, -np.inf)
+    nfit = np.zeros(n, int)
+    for run in runs:
+        pos, xy, shape = run.get('positions'), run.get('xy'), run.get('shape')
+        if pos is None or len(pos) == 0 or xy is None or shape is None:
+            continue
+        idx, d2d, _ = sc.match_to_catalog_sky(pos)
+        hit = d2d.arcsec < match_arcsec
+        if not hit.any():
+            continue
+        ny, nx = shape
+        x, y = xy[idx[hit], 0], xy[idx[hit], 1]
+        edge = np.minimum.reduce([x, y, nx - 1 - x, ny - 1 - y]) - refpix
+        good = np.isfinite(edge)
+        rows = np.where(hit)[0][good]
+        nfit[rows] += 1
+        dmax[rows] = np.maximum(dmax[rows], edge[good])
+    return (nfit > 0) & (dmax <= edge_px)
 
 
 def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
                                     dedup_arcsec=1.0, fov_pad_psf=5.0,
                                     dedup_offfov_only=True,
                                     cofit_positions=None,
-                                    cofit_match_arcsec=0.1):
+                                    cofit_match_arcsec=0.1,
+                                    cofit_runs=None):
     """Post-merge cleanup of off-FOV satstar artifacts (per-filter merged catalog).
 
     A) Collapse ``replaced_saturated`` rows clustering within ``dedup_arcsec`` to a
@@ -6520,7 +6935,15 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
        every close pair count as never co-fit.  ``dedup_offfov_only=False``
        restores the 1.0" friends-of-friends over every row, which drops
        distinct in-field stars (#12 of missed_satstars_20260925: 0.71" from
-       #11, the two fit separately in 5 of 6 frames).
+       #11, the two fit separately in 5 of 6 frames).  ``cofit_runs``
+       (:func:`_satstar_cofit_runs`, the runs behind ``cofit_positions``;
+       ``SATSTAR_INFIELD_DEDUP='cofit_residual'``) adds the residual test
+       (:func:`_satstar_residual_distinct_pairs`): a never-co-fit pair whose
+       lower-ranked member's light is left in the satstar residual of a
+       frame that fit only the other is kept as two stars, and a member
+       whose every fit is within 10 px of the science area, i.e. 14 px of
+       the array edge (:func:`_satstar_edge_only_rows`), is not chosen as a
+       set's survivor while another member is not.
     B) Drop NON-satstar rows projecting > ``fov_pad_psf`` PSF widths OUTSIDE this
        filter's data FOV.  These are m7 cross-band-seed artifacts: the shared
        seed unions positions from ALL filters, so positions covered only by other
@@ -6604,13 +7027,36 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
                 _sup = (np.asarray(merged['satstar_nframes'], dtype=float)[inf_idx]
                         if 'satstar_nframes' in merged.colnames
                         else np.ones(len(inf_idx)))
+                _inf_flux = np.asarray(merged[fcol], dtype=float)[inf_idx]
+                _distinct = _demote = _rstats = None
+                if cofit_runs is not None:
+                    _distinct, _rstats = _satstar_residual_distinct_pairs(
+                        sc[inf_idx], _sup, _inf_flux, cofit_runs,
+                        match_arcsec=cofit_match_arcsec)
+                    _demote = _satstar_edge_only_rows(
+                        sc[inf_idx], cofit_runs, match_arcsec=cofit_match_arcsec)
                 _inf_drop = _never_cofit_duplicates(
-                    sc[inf_idx], _sup,
-                    np.asarray(merged[fcol], dtype=float)[inf_idx],
+                    sc[inf_idx], _sup, _inf_flux,
                     cofit_positions, dedup_arcsec=dedup_arcsec,
-                    match_arcsec=cofit_match_arcsec)
+                    match_arcsec=cofit_match_arcsec,
+                    distinct_pairs=_distinct, demote=_demote)
                 drop[inf_idx[_inf_drop]] = True
                 n_infield = int(_inf_drop.sum())
+                if _rstats is not None:
+                    print(f"  satstar in-field dedup [cofit_residual]: "
+                          f"{_rstats['tested']} never-co-fit pair(s) tested: "
+                          f"{_rstats['distinct']} kept as two stars (a frame "
+                          f"that fits only the other leaves >= "
+                          f"{_rstats['ratio_min']:g} of the lower member's "
+                          f"peak and >= {_rstats['flux_min']:g} of its flux), "
+                          f"{_rstats['explained']} collapsed on the "
+                          f"measurement, {_rstats['untestable']} untestable, "
+                          f"{_rstats['fallback']} fell back to 'cofit' (missing "
+                          f"or unreadable residual/frame: "
+                          f"{len(_rstats['missing_files'])} run(s)); "
+                          f"{int(_demote.sum())} of {len(inf_idx)} in-field "
+                          f"row(s) are edge-only (ranked last when a set "
+                          f"picks its survivor)", flush=True)
                 print(f"  satstar in-field dedup: {n_infield} of {len(inf_idx)} "
                       f"in-field replaced_saturated row(s) collapsed (never "
                       f"co-fit in any of {n_runs} per-exposure "
@@ -6654,7 +7100,7 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
 
 #: Values of ``SATSTAR_INFIELD_DEDUP`` and its per-instrument variants; see
 #: :func:`_infield_dedup_settings`.
-_INFIELD_DEDUP_MODES = ('cofit', 'none', 'legacy')
+_INFIELD_DEDUP_MODES = ('cofit', 'cofit_residual', 'none', 'legacy')
 
 #: instrument -> (env var, default mode) for :func:`_infield_dedup_settings`.
 _INFIELD_DEDUP_ENVS = {'nircam': ('SATSTAR_INFIELD_DEDUP', 'cofit'),
@@ -6719,6 +7165,15 @@ def _infield_dedup_settings(target, module, filt, header_instrument=None):
     * ``'cofit'``  -- collapse only in-field rows that no per-exposure satstar
       run ever fit side by side (:func:`_never_cofit_duplicates`), keeping the
       best-supported member.
+    * ``'cofit_residual'`` -- ``'cofit'``, except that a never-co-fit pair
+      whose lower-ranked member's light is left in the satstar residual of
+      a frame that fit only the other is kept as two stars
+      (:func:`_satstar_residual_distinct_pairs`, thresholds
+      :func:`_resid_dedup_thresholds`), and a member whose every fit is
+      within 10 px of the science area (14 px of the array edge) is not a
+      set's survivor while another member is
+      (:func:`_satstar_edge_only_rows`).  Opt-in: the thresholds were tuned
+      on gc-treasury 10678 m7 o078 + o043 F480M/F212N only.
     * ``'none'``   -- keep every in-field row.
     * ``'legacy'`` -- the 1.0" friends-of-friends over every
       ``replaced_saturated`` row, which deletes distinct in-field stars.
@@ -6754,7 +7209,7 @@ def _infield_dedup_settings(target, module, filt, header_instrument=None):
     mode = _infield_dedup_mode(env_name, default)
     if str(target).lower() in _EXTENDED_EMISSION_TARGETS:
         return mode, env_name, True, False
-    return mode, env_name, mode != 'legacy', mode == 'cofit'
+    return mode, env_name, mode != 'legacy', mode in ('cofit', 'cofit_residual')
 
 
 def _gc_perframe_images(this_i2d, prev_i2d, marker_dir, filt, phase):
@@ -9748,7 +10203,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
 
     # A bad SATSTAR_INFIELD_DEDUP* value would otherwise raise only at the
     # first post-merge cleanup, after that phase's per-frame fits have run.
+    # The same for the 'cofit_residual' thresholds (SATSTAR_INFIELD_RESID_*).
     _validate_infield_dedup_env()
+    _resid_dedup_thresholds()
 
     cut_bp = _L._cutout_out_basepath(basepath, options)
     os.makedirs(os.path.join(cut_bp, 'catalogs'), exist_ok=True)
@@ -10964,12 +11421,21 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 (_infield_mode, _infield_env, _offfov_only,
                  _want_cofit) = _infield_dedup_settings(
                     target, module, filt, header_instrument=_hdr_instrument)
-                _cofit = None
+                _cofit = _cofit_runs = None
                 if _want_cofit:
-                    _cofit = _satstar_cofit_positions(
-                        os.path.join(cut_bp, filt, 'pipeline'),
-                        proposal_id=proposal_id, field=field,
-                        phase=merge_label)
+                    if _infield_mode == 'cofit_residual':
+                        # the same runs, plus each run's frame, WCS, shape
+                        # and satstar residual for the residual test
+                        _cofit_runs = _satstar_cofit_runs(
+                            os.path.join(cut_bp, filt, 'pipeline'),
+                            proposal_id=proposal_id, field=field,
+                            phase=merge_label)
+                        _cofit = [_r['positions'] for _r in _cofit_runs]
+                    else:
+                        _cofit = _satstar_cofit_positions(
+                            os.path.join(cut_bp, filt, 'pipeline'),
+                            proposal_id=proposal_id, field=field,
+                            phase=merge_label)
                 _ext_note = ('; extended-emission target, off-FOV rows only'
                              if str(target).lower() in _EXTENDED_EMISSION_TARGETS
                              else '')
@@ -10981,7 +11447,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
                     fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)),
                     dedup_offfov_only=_offfov_only,
-                    cofit_positions=_cofit)
+                    cofit_positions=_cofit, cofit_runs=_cofit_runs)
                 if _ndup or _noff:
                     print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
                           f"removed {_ndup} duplicate satstar row(s) + {_noff} "

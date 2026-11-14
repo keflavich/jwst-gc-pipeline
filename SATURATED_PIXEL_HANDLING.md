@@ -511,7 +511,8 @@ these flag sets would remove the footgun of setting them individually.)*
   `_infield_dedup_settings`: NIRCam reads `SATSTAR_INFIELD_DEDUP` — `cofit`
   (default; collapse only rows that no per-exposure satstar run fit side by side,
   `_never_cofit_duplicates`; every collapsed set has all its pairs within 1.0″
-  and never co-fit), `none` (keep all), or `legacy` (1.0″
+  and never co-fit), `cofit_residual` (opt-in, below), `none` (keep all), or
+  `legacy` (1.0″
   friends-of-friends over every row, which deleted distinct stars, #972). MIRI and
   NIRISS read `SATSTAR_INFIELD_DEDUP_MIRI` / `SATSTAR_INFIELD_DEDUP_NIRISS`
   (default `legacy`; the co-fit rule is unvalidated there). The instrument is
@@ -519,6 +520,30 @@ these flag sets would remove the footgun of setting them individually.)*
   NIRISS, else the module token / `GC_INSTRUMENT_OVERRIDE` / filter name.
   `run_manual_pipeline` rejects a bad value of any of the three variables at
   entry. The extended-emission targets always collapse off-FOV rows only.
+- **`SATSTAR_INFIELD_DEDUP=cofit_residual`** (opt-in): the satstar finder fits
+  one star per saturated DQ component, so two stars that share a component in
+  every frame are never fit side by side and `cofit` collapses them
+  (gc-treasury 10678 m7 o078 + o043: about 21 of the 32 collapsed F480M rows
+  are such stars, at 0.2–1.0″). In this mode a never-co-fit pair is
+  kept as two stars when, in the accepted runs that fit only the better-ranked
+  member (by support, then flux), the frame's `*_satstar_residual.fits` at the
+  other member holds ≥ `SATSTAR_INFIELD_RESID_RATIO_MIN` (default 0.5) of its
+  peak above the local background **and**, summed within 3 px,
+  ≥ `SATSTAR_INFIELD_RESID_FLUX_MIN` (default 0.25) of its fitted flux, both in
+  the same run (`_satstar_residual_distinct_pairs`). The member must sit
+  ≥ 20 px inside the frame. Pairs without such a measurement keep the `cofit`
+  answer, and a missing, unreadable, truncated or wrongly shaped residual/frame
+  is logged and falls back to `cofit` for the pairs it would have measured. A
+  row whose every fit lies within 10 px of the science area, i.e. within 14 px
+  of the array edge (4 reference pixels + 10), is ranked last when a collapsed
+  set picks its survivor (`_satstar_edge_only_rows`), so an edge-truncated fit no
+  longer outranks the interior fit of the same star. On those two observations
+  the mode restores 21 F480M and 41 F212N rows and swaps the survivor in 1 / 9
+  edge-truncated sets. The peak test alone would keep 103 F212N rows, 62 with
+  < 0.1 of their flux left (rows whose every fit is at an edge, where the
+  neighbour's model is negligible). The 0.25 flux threshold was tuned on those
+  two observations only (kept rows ≥ 0.29, rejected ≤ 0.067) and is untested
+  on other fields or filters.
 - **Products**: `*_satstar_{catalog,model,residual,flags}.fits`. The flags image
   is a uint8 bitmask — bit 1 partly saturated (recoverable), bit 2 totally
   saturated (NaN-variance core), bit 4 included in an accepted satstar fit.
