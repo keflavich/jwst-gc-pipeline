@@ -8506,7 +8506,8 @@ def _measure_stage_checkpoint(fns, merge_label, module, filt, cut_bp, basepath,
     import re as _re
     from astropy.table import vstack as _vstack
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        AstrometryRegressionError, resolve_tie_reference, run_visit_checkpoint)
+        AstrometryRegressionError, attach_bulk_prior, resolve_tie_reference,
+        run_visit_checkpoint)
 
     _chunk_re = _re.compile(r'_chunk\d+of\d+')
     groups = {}
@@ -8550,6 +8551,11 @@ def _measure_stage_checkpoint(fns, merge_label, module, filt, cut_bp, basepath,
     tie_refcat = resolve_tie_reference(
         refcat, cut_bp, getattr(options, 'proposal_id', None),
         getattr(options, 'field', None), filt, obs_token=obs_token)
+    # A hand-recorded bulk prior (alignment_config.bulk_prior_mas, issue #819)
+    # rides on the local reference dict; no field carries one by default.
+    tie_refcat = attach_bulk_prior(
+        tie_refcat, getattr(options, 'proposal_id', None),
+        getattr(options, 'field', None), filt)
 
     # Saturated stars have no per-frame daophot row; their repeatable satstar
     # fits join the reference-tie consensus (#957).  At a frozen stage
