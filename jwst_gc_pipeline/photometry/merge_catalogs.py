@@ -58,6 +58,9 @@ DEFAULT_MERGE_MODULES = 'merged'
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.frame_pixel_area import (
+    PIXAREF_KEY, DEG2_PER_SR, apply_frame_pixel_area,
+    apply_satstar_frame_pixel_area)
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
@@ -2257,6 +2260,13 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             tables, m2_registration,
             context=f"{filtername.upper()}/{module} {iteration_label or ''}".strip())
 
+    # Put every frame's flux on one pixel area before the frames are averaged:
+    # a frame's flux is a sum of MJy/sr over ITS detector's pixels, and the
+    # eight SW detectors differ by up to 4 % in PIXAR_SR (#1238).  Done here and
+    # not in combine_singleframe, which the chunked combine re-enters per tile.
+    # The stamped PIXAREF travels to the product through ``meta``.
+    apply_frame_pixel_area(tables, filtername)
+
     # Note (2026-04-23): an earlier "dedup bug" diagnosis (realign=True +
     # min_offset=0.25") was based on analysing the FIRST 200k rows of the
     # F200W brick catalog which are exposure-adjacent and therefore
@@ -2480,8 +2490,13 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
             tbl.add_column(crds, name='skycoord')
         else:
             crds = tbl['skycoord']
-        tbl.meta['pixelscale_deg2'] = ww.proj_plane_pixel_area()
-        tbl.meta['pixelscale_arcsec'] = (ww.proj_plane_pixel_area()**0.5).to(u.arcsec)
+        if PIXAREF_KEY in tbl.meta:
+            # per-frame fluxes were rescaled to this area by the per-filter
+            # merge (#1238); the i2d pixel area would undo that
+            tbl.meta['pixelscale_deg2'] = u.Quantity(float(tbl.meta[PIXAREF_KEY]), u.deg**2)
+        else:
+            tbl.meta['pixelscale_deg2'] = ww.proj_plane_pixel_area()
+        tbl.meta['pixelscale_arcsec'] = (tbl.meta['pixelscale_deg2']**0.5).to(u.arcsec)
         print(f'Calculating Flux [Jy].  fwhm={tbl["fwhm"].mean()}, pixscale={tbl.meta["pixelscale_arcsec"]}')
         # The 'flux' is the sum of pixels whose values are each in MJy/sr.
         # To get to the correct flux, we need to multiply by the pixel area in steradians to get to megaJanskys, which can be summed
@@ -2539,6 +2554,34 @@ class MissingRequiredFilterError(ValueError):
     bands.  Silently dropping one and merging the rest writes a partial
     cross-band product under the full product's name.
     """
+
+
+def _conversion_pixel_area(meta, ww=None):
+    """``(area, side)`` as deg^2 and arcsec Quantities: the pixel area that
+    converts a table's ``flux_fit`` to Jy.
+
+    A ``PIXAREF`` stamp has precedence over everything else: the per-filter
+    merge rescaled every frame's flux to that area (#1238), and the i2d's own
+    pixel area would undo it.  A table without the stamp keeps the legacy
+    order (i2d WCS, ``pixelscale_deg2``, ``PIXSCALE``) with a warning that its
+    frames were merged with one area for every detector.
+    """
+    if PIXAREF_KEY in meta:
+        area = u.Quantity(float(meta[PIXAREF_KEY]), u.deg**2)
+        return area, (area**0.5).to(u.arcsec)
+    print(f"WARNING: {meta.get('filter', '?')} table has no {PIXAREF_KEY}; "
+          f"its frames were merged without per-detector pixel areas "
+          f"(#1238) -- rerun the per-filter merge", flush=True)
+    if ww is not None:
+        return ww.proj_plane_pixel_area(), (ww.proj_plane_pixel_area()**0.5).to(u.arcsec)
+    if 'pixelscale_deg2' in meta:
+        area = meta['pixelscale_deg2']
+        return area, (u.Quantity(area, u.deg**2)**0.5).to(u.arcsec)
+    if 'PIXSCALE' in meta:
+        side = u.Quantity(float(meta['PIXSCALE']), u.arcsec)
+        return side.to(u.deg)**2, side
+    raise ValueError(f"Could not determine pixel scale for {meta.get('filter', 'unknown')} "
+                     f"table {meta.get('filename', '')}")
 
 
 def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False, bgsub=False, epsf=False, blur=False, target='brick',
@@ -2793,18 +2836,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         if 'skycoord' not in tbl.colnames:
             tbl.add_column(crds, name='skycoord')
 
-        if ww is not None:
-            pixelscale_deg2 = ww.proj_plane_pixel_area()
-            pixelscale_arcsec = (ww.proj_plane_pixel_area()**0.5).to(u.arcsec)
-        elif 'pixelscale_deg2' in tbl.meta:
-            pixelscale_deg2 = tbl.meta['pixelscale_deg2']
-            pixelscale_arcsec = (u.Quantity(pixelscale_deg2, u.deg**2)**0.5).to(u.arcsec)
-        elif 'PIXSCALE' in tbl.meta:
-            pixelscale_arcsec = u.Quantity(float(tbl.meta['PIXSCALE']), u.arcsec)
-            pixelscale_deg2 = pixelscale_arcsec.to(u.deg)**2
-        else:
-            raise ValueError(f"Could not determine pixel scale for {tbl.meta.get('filter', 'unknown')} table {tbl.meta.get('filename', '')}")
-
+        pixelscale_deg2, pixelscale_arcsec = _conversion_pixel_area(tbl.meta, ww)
         tbl.meta['pixelscale_deg2'] = pixelscale_deg2
         tbl.meta['pixelscale_arcsec'] = pixelscale_arcsec
         if 'flux_fit' in tbl.colnames:
@@ -3483,6 +3515,13 @@ def load_satstar_catalog(filtername, target='brick',
     sat_tables = [_read_satstar_catalog_on_current_frame(fn, _wcs_cache)
                   for fn in fallback]
     del _wcs_cache
+    # One pixel area for every exposure's fit, BEFORE the per-exposure median of
+    # _dedup_satstar_catalog: a median over detectors in native-pixel units mixes
+    # areas that differ by up to 4 % (#1238).  Same constant as the per-filter
+    # merge's PIXAREF, so replace_saturated converts both with one area.
+    _sat_area_ref = apply_satstar_frame_pixel_area(
+        sat_tables, [frame_path_for_satstar_catalog(fn) for fn in fallback],
+        filtername)
     combined = table.vstack(sat_tables, metadata_conflicts='silent')
     if obs_scope:
         # Footprint guard (#925): a scoped observation's catalog never carries
@@ -3526,6 +3565,8 @@ def load_satstar_catalog(filtername, target='brick',
     deduped.meta['NSATSRC'] = len(fallback)
     deduped.meta['SATDDUPR'] = float(_satstar_dedup_radius().to(u.arcsec).value)
     deduped.meta['SATDDALG'] = _satstar_dedup_alg_tag()
+    if _sat_area_ref is not None:
+        deduped.meta[PIXAREF_KEY] = float(_sat_area_ref * DEG2_PER_SR)
     # ...and the state of the frames those positions were re-projected onto, so
     # the next read rebuilds when a frame has since moved (issue #193).
     deduped.meta['SATFRMSG'] = _frame_sig
@@ -3555,7 +3596,8 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp6'  # fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
+_SATSTAR_DEDUP_ALG = 'fp7'  # fp7: per-exposure fluxes on one pixel area, PIXAREF in meta (#1238)
+#                              fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
 #                              fp5: per-exposure ensemble statistics on the kept row (#925)
 #                              fp4: sky columns re-projected onto the current GWCS (#193)
 
@@ -4890,6 +4932,19 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername_meta)]['ZeroPoint'], u.Jy)
 
     pixelscale_deg2 = cat.meta.get('pixelscale_deg2', None)
+    # The consolidated satstar fluxes sit on the reference area they carry in
+    # PIXAREF (#1238); convert them with it, whatever the catalog's own area.
+    _sat_area = satstar_cat.meta.get(PIXAREF_KEY)
+    if _sat_area is not None:
+        _sat_area = u.Quantity(float(_sat_area), u.deg**2)
+        _cat_area = cat.meta.get(PIXAREF_KEY, pixelscale_deg2)
+        if (_cat_area is None
+                or abs(float(u.Quantity(_cat_area, u.deg**2) / _sat_area) - 1.0) > 1e-6):
+            print(f"WARNING: replace_saturated {filtername}: the satstar fluxes are on "
+                  f"pixel area {_sat_area} but the catalog's is {_cat_area}; the rows "
+                  f"it substitutes are off by the ratio (#1238).  Rerun the "
+                  f"per-filter merge.", flush=True)
+        pixelscale_deg2 = _sat_area
     if pixelscale_deg2 is not None:
         flux_jy = (satstar_cat['flux_fit'] * u.MJy/u.sr * pixelscale_deg2).to(u.Jy)
         try:

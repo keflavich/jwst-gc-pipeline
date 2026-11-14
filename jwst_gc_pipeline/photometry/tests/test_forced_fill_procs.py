@@ -151,7 +151,8 @@ def test_the_runner_passes_n_procs_through(tmp_path, monkeypatch):
             frames_for=lambda filt: FRAMES,
             prepare_frame=_frames_prepare(),
             frame_arg_builder_for=lambda filt: (lambda fn: {'name': fn}),
-            verbose=False, n_procs=n_procs)
+            verbose=False, n_procs=n_procs,
+            frame_area_sr=lambda fn: 2.3e-14)   # the frames are names only
         outs.append(Table.read(out))
     assert seen == [1, 3]
     _assert_tables_identical(outs[0], outs[1])

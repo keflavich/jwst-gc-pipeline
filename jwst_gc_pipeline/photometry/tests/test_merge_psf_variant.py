@@ -52,6 +52,7 @@ def _perframe(basepath, monkeypatch, hybrid, mtime, exp=1):
     (basepath / 'F480M').mkdir(exist_ok=True)
     t = Table({'flux_fit': [1.0]})
     t.meta['FILENAME'] = f'/x/{"hyb" if hybrid else "stpsf"}_exp{exp:05d}_crf.fits'
+    t.meta['pixscale'] = 0.063   # the per-frame writer stamps it (#1238)
     t.write(fn)
     os.utime(fn, (mtime, mtime))
     return fn
