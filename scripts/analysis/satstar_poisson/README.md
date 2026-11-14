@@ -365,6 +365,7 @@ fall inside §3's 2.9–3.5 range, but they are not the same run.
 | `physfit.py` | pupil geometry fit and OPD phase retrieval against Q (§8) |
 | `physloo.py` | per-exposure physical modes fitted to the held-out LOO residual; injection and control tests (§8) |
 | `make_physfigs.py` | figures 11–12 (§8) |
+| `farfield_compare.py` | robust σ(χ) of per-frame m7 residuals by distance to the nearest field star, STPSF versus `_hybpsf` products (issue #996); reads existing `*_residual.fits` / `*_model.fits`, no fit |
 
 Reproduce (about 1 h on 4 cores). Run every step from this directory, with the
 package importable (`pip install -e .` from the repo root, or `PYTHONPATH`). The
