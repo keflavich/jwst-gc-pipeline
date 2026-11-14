@@ -5260,6 +5260,97 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
 # the cross-filter (m7) checkpoint
 # ---------------------------------------------------------------------------
 
+#: Opt-in switch (issue #1212) for tying the cross-filter ANCHOR to the reference
+#: on its brightest stars only.  Unset (the default) leaves the anchor tie on
+#: the whole reliable sample, record and verdict unchanged.  The value is the
+#: factor ``c`` in ``K = clamp(c * n_ref_in_footprint, ANCHOR_TIE_MIN_K, n)``.
+#: Whether the restricted tie should become the gate's definition of a
+#: coherent anchor tie for every field is a maintainer decision (Q23 in the
+#: proposal notes), so the switch is explicit rather than a new default.
+ANCHOR_BRIGHT_C_ENV = "CROSSFILTER_ANCHOR_BRIGHT_C"
+#: Floor on K, so a sparse reference footprint cannot reduce the anchor sample
+#: to a handful of stars.
+ANCHOR_TIE_MIN_K = 5000
+#: The ties at K and K/2 must agree to this (mas, on-sky quadrature) for the
+#: restricted anchor tie to stand: a tie that appears at one K only fails.
+ANCHOR_TIE_AGREE_TOL_MAS = 5.0
+
+
+def anchor_bright_factor(value=None):
+    """Resolve the brightest-K factor ``c``: ``value``, else the environment.
+
+    ``None`` means the switch is off.  A non-positive or unparseable setting
+    raises ``ValueError`` rather than silently disabling a gate the operator
+    meant to change.
+    """
+    raw = value if value is not None else os.environ.get(ANCHOR_BRIGHT_C_ENV, "").strip()
+    if raw is None or raw == "":
+        return None
+    try:
+        c = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{ANCHOR_BRIGHT_C_ENV}={raw!r} is not a number")
+    if not (c > 0) or not np.isfinite(c):
+        raise ValueError(f"{ANCHOR_BRIGHT_C_ENV}={raw!r} must be positive and finite")
+    return c
+
+
+def _n_ref_in_footprint(ref_coords, coords):
+    """Reference rows inside the RA/Dec bounding box of ``coords``."""
+    ra = np.asarray(coords.ra.deg, dtype=float)
+    dec = np.asarray(coords.dec.deg, dtype=float)
+    good = np.isfinite(ra) & np.isfinite(dec)
+    if not good.any():
+        return 0
+    ra0 = float(np.median(ra[good]))
+    wrap = lambda r: (np.asarray(r, dtype=float) - ra0 + 180.0) % 360.0 - 180.0
+    dra = wrap(ra[good])
+    rra = wrap(ref_coords.ra.deg)
+    rdec = np.asarray(ref_coords.dec.deg, dtype=float)
+    inside = ((rra >= dra.min()) & (rra <= dra.max())
+              & (rdec >= dec[good].min()) & (rdec <= dec[good].max()))
+    return int(inside.sum())
+
+
+def _anchor_tie_sample(tbl, keep, coords, ref_coords, c):
+    """Brightness-ordered anchor sample for the reference tie (issue #1212).
+
+    ``keep`` is the reliable-star mask of ``tbl`` and ``coords`` the matching
+    coordinates (``catalog_coords(tbl)[keep]``).  Returns ``(order, info)``:
+    ``order`` indexes ``coords``, brightest first, and ``info`` is the
+    auditable ``anchor_sample`` record.  The full catalogue ties to VIRAC2
+    badly when most of its faint stars have no Ks-selected counterpart: the
+    pairs are then mostly chance pairs and the histogram contrast falls under
+    the floor although the frame is registered.  K follows the number of
+    reference rows the footprint holds, which is the number of true pairs the
+    anchor can have at most.
+    """
+    n = int(len(coords))
+    info = dict(n_reliable=n, n_used=n, K=n, c=float(c), n_ref_in_footprint=None,
+                rule="unrestricted")
+    if "flux" in tbl.colnames:
+        brightness = np.asarray(tbl["flux"], dtype=float)[keep]
+        info["column"] = "flux"
+    elif "flux_fit" in tbl.colnames:
+        brightness = np.asarray(tbl["flux_fit"], dtype=float)[keep]
+        info["column"] = "flux_fit"
+    elif "mag" in tbl.colnames:
+        brightness = -np.asarray(tbl["mag"], dtype=float)[keep]
+        info["column"] = "mag"
+    else:
+        info["rule"] = "unrestricted: no flux, flux_fit or mag column"
+        return np.arange(n), info
+    brightness = np.where(np.isfinite(brightness), brightness, -np.inf)
+    order = np.argsort(-brightness, kind="stable")
+    n_ref = _n_ref_in_footprint(ref_coords, catalog_coords(tbl))
+    k = int(min(max(round(c * n_ref), ANCHOR_TIE_MIN_K), n))
+    info.update(n_ref_in_footprint=n_ref, K=k, n_used=k,
+                rule=(f"brightest K = clamp(c * n_ref_in_footprint, "
+                      f"{ANCHOR_TIE_MIN_K}, n_reliable)"
+                      if k < n else "unrestricted: K >= n_reliable"))
+    return order, info
+
+
 def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                record_dir=None, context="",
                                tol_mas=CROSSFILTER_TOL_MAS,
@@ -5268,7 +5359,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                cell_min_stars=LOCAL_CELL_MIN_STARS,
                                field_cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
                                field_min_stars=CROSSFILTER_FIELD_MIN_STARS,
-                               obs_token="", module=""):
+                               obs_token="", module="", anchor_bright_c=None):
     """Cross-filter astrometry agreement at the cross-band merge.
 
     The filter closest in wavelength to VIRAC2 Ks anchors the absolute frame
@@ -5292,6 +5383,15 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     made each call replace the previous module's ``_latest`` record (issue
     #1254: a cloudef nrcb FAIL was overwritten by the merged PASS).
 
+    ``anchor_bright_c`` (default off; the ``CROSSFILTER_ANCHOR_BRIGHT_C``
+    environment variable sets it when the argument is ``None``) ties the anchor
+    to the reference on its brightest K reliable stars instead of all of them,
+    K = clamp(c * n_ref_in_footprint, 5000, n_reliable), and requires the tie at
+    K/2 to be coherent and to agree with the tie at K to within 5 mas (issue
+    #1212).  The per-filter-vs-anchor checks keep the full reliable sample.  The
+    record then carries ``anchor_sample`` and ``anchor_reference_tie_half``;
+    with the switch off the record carries neither.
+
     Raises ``CrossFilterAstrometryError`` on any failure (override only via
     ``ALLOW_CROSSFILTER_ASTROM_FAIL=1``).
     """
@@ -5307,14 +5407,26 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     anchor_keep = select_reliable_stars(anchor_tbl)
     anchor_coords = catalog_coords(anchor_tbl)[anchor_keep]
 
+    bright_c = anchor_bright_factor(anchor_bright_c)
     anchor_tie = None
+    anchor_tie_half = None
+    anchor_sample = None
     if refcat is not None:
-        anchor_tie = measure_reference_tie(
-            anchor_coords, refcat["all"], refcat["sparse"],
-            filtername=anchor_filter, ref_mag=refcat.get("mag"),
-            dense=refcat.get("dense", True),
-            **_sigma_cut_kwargs(refcat),
-            context=f"{context} anchor {anchor_filter}")
+        tie_coords = anchor_coords
+        if bright_c is not None:
+            order, anchor_sample = _anchor_tie_sample(
+                anchor_tbl, anchor_keep, anchor_coords, refcat["all"], bright_c)
+            tie_coords = anchor_coords[order[:anchor_sample["K"]]]
+
+        def _anchor_tie(coords, label):
+            return measure_reference_tie(
+                coords, refcat["all"], refcat["sparse"],
+                filtername=anchor_filter, ref_mag=refcat.get("mag"),
+                dense=refcat.get("dense", True),
+                **_sigma_cut_kwargs(refcat),
+                context=f"{context} anchor {anchor_filter}{label}")
+
+        anchor_tie = _anchor_tie(tie_coords, "")
 
     filters = []
     failures = []
@@ -5350,6 +5462,30 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
             else:
                 detail = "per-tile reference map not clean"
             failures.append(f"anchor {anchor_filter}: {detail}")
+        elif anchor_sample is not None and anchor_sample["K"] < anchor_sample["n_reliable"]:
+            # The tie at K passed every check above.  It must not be a feature
+            # of one sample size: repeat it on the brightest K/2 and require
+            # the two to agree (issue #1212).
+            half = max(anchor_sample["K"] // 2, 1)
+            anchor_tie_half = _anchor_tie(
+                anchor_coords[order[:half]], " (K/2)")
+            anchor_sample["K_half"] = half
+            vs_half = anchor_tie_half.get("vs_full")
+            if not vs_half or not vs_half.get("ok"):
+                failures.append(
+                    f"anchor {anchor_filter}: tie on the brightest K={anchor_sample['K']} "
+                    f"stars is coherent but the tie on the brightest {half} is not")
+            else:
+                sep = float(np.hypot(
+                    anchor_tie["dra_mas"] - anchor_tie_half["dra_mas"],
+                    anchor_tie["ddec_mas"] - anchor_tie_half["ddec_mas"]))
+                anchor_sample["k_vs_half_sep_mas"] = sep
+                anchor_sample["agree_tol_mas"] = ANCHOR_TIE_AGREE_TOL_MAS
+                if not (sep <= ANCHOR_TIE_AGREE_TOL_MAS):
+                    failures.append(
+                        f"anchor {anchor_filter}: ties on the brightest {half} and "
+                        f"{anchor_sample['K']} stars disagree by {sep:.1f} mas "
+                        f"(> {ANCHOR_TIE_AGREE_TOL_MAS} mas)")
 
     for filt, tbl in sorted(catalogs_by_filter.items()):
         if filt == anchor_filter:
@@ -5523,6 +5659,9 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                   local_cell_min_stars=cell_min_stars,
                                   field_cell_arcsec=field_cell_arcsec,
                                   field_min_stars=field_min_stars))
+    if anchor_sample is not None:
+        record["anchor_sample"] = _jsonable(anchor_sample)
+        record["anchor_reference_tie_half"] = _jsonable(anchor_tie_half)
     if record_dir:
         # Tokened for the same reason the m2 records are (issue #281): brick's
         # 1182 and 2221 m7 runs write into one `astrometry_checkpoints/`, and
