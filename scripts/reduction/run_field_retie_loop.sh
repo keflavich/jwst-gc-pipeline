@@ -26,10 +26,23 @@
 #     PIPE_ROOT=/orange/adamginsburg/repos/jwst-gc-pipeline \
 #     scripts/reduction/run_field_retie_loop.sh
 #
+# At launch the loop snapshots PIPE_ROOT (or, when unset, the checkout this
+# script lives in) into a detached, locked worktree under RETIE_PIN_DIR and
+# re-executes from it, so every iteration and every job it submits runs one
+# commit (#679).  scripts/reduction/prune_retie_pins.sh removes finished pins.
+#
 # Optional:
+#   RETIE_PIN=0      do not pin; jobs import whatever PIPE_ROOT holds when they
+#                    start, so one run can span several commits.  For debugging.
+#   RETIE_PIN_ALLOW_DIRTY=1
+#                    pin HEAD although the source has uncommitted changes; the
+#                    snapshot does not contain them.  Refused by default.
+#   RETIE_PIN_DIR    where pins are created
+#                    (default /blue/adamginsburg/adamginsburg/repos/pinned).
 #   RETIE_PROVENANCE_ONLY=1   print the checkout provenance and exit 0 without
-#                    submitting anything.  This is the ONLY safe way to inspect
-#                    the run: MAXITER=0 is not a no-op (see below).
+#                    submitting anything or creating a pin.  This is the ONLY
+#                    safe way to inspect the run: MAXITER=0 is not a no-op (see
+#                    below).
 #   RETIE_UPSTREAM   branch to report the checkout distance against
 #                    (default origin/main).  Reporting only -- see warn_if_behind.
 #   RETIE_ACCEPT_RESIDUAL_MAS
@@ -98,6 +111,103 @@ if ! [ "$MAXITER" -ge 1 ] 2>/dev/null && [ "${RETIE_PROVENANCE_ONLY:-0}" != 1 ];
     echo "  whatever MAXITER is set to)."
     exit 2
 fi
+# ---------------------------------------------------------------------------
+# Pin the checkout for the life of the run (#679).
+#
+# bash freezes THIS script at launch, but every reduce and cataloging job
+# imports jwst_gc_pipeline from PIPE_ROOT when it STARTS, and the loop reads
+# its helpers ($HERE/submit_reduction.sbatch, submit_cataloging_perframe.sh,
+# offsets_value_digest.py) afresh on every iteration.  Pointed at a live
+# checkout, one fortnight-long run therefore spans every commit merged into
+# that checkout meanwhile, while the provenance banner names a single one.
+#
+# So the loop snapshots the tree it was launched from into a detached,
+# locked git worktree and re-execs from it.  After the exec PIPE_ROOT and
+# $HERE both name files that no merge can rewrite.  The tree is NOT removed
+# at exit: after convergence the m3-m7 chain is still queued and imports from
+# PIPE_ROOT when it starts.  scripts/reduction/prune_retie_pins.sh removes the
+# pins whose jobs have left the queue.
+#
+# Defined here, ahead of its single call, because bash needs a function
+# defined before it is called and the first use of PIPE_ROOT is the
+# PER_FIELD_FLOOR probe below.
+#
+#   RETIE_PIN=0              keep the old behaviour (debugging); loud
+#   RETIE_PIN_ALLOW_DIRTY=1  snapshot HEAD although the source has uncommitted
+#                            changes, which the snapshot does not contain
+#   RETIE_PIN_DIR            parent of the pins (default below)
+# ---------------------------------------------------------------------------
+RETIE_PIN_DIR_DEFAULT=/blue/adamginsburg/adamginsburg/repos/pinned
+
+# pin_checkout [--dry-run] -- create the pinned worktree and print its path.
+# With --dry-run, print what would happen and create nothing.  Diagnostics go
+# to stderr; rc 2 is a refusal.
+pin_checkout () {
+    local dry=0 src sha dest stamp dirty ndirty script
+    [ "${1:-}" = "--dry-run" ] && dry=1
+    src="${PIPE_ROOT:-}"
+    [ -n "$src" ] || src="$HERE"
+    if ! src=$(git -C "$src" rev-parse --show-toplevel 2>/dev/null); then
+        echo "REFUSING to pin: ${PIPE_ROOT:-$HERE} is not a git checkout." >&2
+        echo "  Set PIPE_ROOT to one, or RETIE_PIN=0 to run unpinned." >&2
+        return 2
+    fi
+    sha=$(git -C "$src" rev-parse HEAD)
+    script=scripts/reduction/run_field_retie_loop.sh
+    if ! git -C "$src" cat-file -e "$sha:$script" 2>/dev/null; then
+        echo "REFUSING to pin: $src @ ${sha:0:7} has no $script to re-exec." >&2
+        return 2
+    fi
+    dirty=$(git -C "$src" status --porcelain 2>/dev/null || true)
+    ndirty=$(printf '%s' "$dirty" | grep -c . || true)
+    if [ "$ndirty" -gt 0 ] && [ "${RETIE_PIN_ALLOW_DIRTY:-0}" != 1 ]; then
+        if [ "$dry" = 1 ]; then
+            echo "would REFUSE to pin $src @ ${sha:0:7}: $ndirty uncommitted path(s)"
+            return 0
+        fi
+        echo "REFUSING to pin: $src has $ndirty uncommitted path(s); a snapshot of" >&2
+        echo "  HEAD (${sha:0:7}) would silently leave them out of the run:" >&2
+        printf '%s\n' "$dirty" | head -10 | sed 's/^/    /' >&2
+        echo "  Commit them, or set RETIE_PIN_ALLOW_DIRTY=1 to run HEAD without them." >&2
+        return 2
+    fi
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    dest="${RETIE_PIN_DIR:-$RETIE_PIN_DIR_DEFAULT}/retie-${TARGET}${PROPOSAL}-o${FIELD}-${stamp}-${sha:0:7}"
+    if [ "$dry" = 1 ]; then
+        echo "would pin $src @ ${sha:0:7} -> $dest"
+        return 0
+    fi
+    if [ "$ndirty" -gt 0 ]; then
+        echo "DIRTY SOURCE, uncommitted changes NOT in the run ($ndirty path(s) in $src)" >&2
+    fi
+    mkdir -p "$(dirname "$dest")"
+    git -C "$src" worktree add --detach "$dest" "$sha" >&2
+    git -C "$src" worktree lock --reason "retie loop $(hostname) pid $$" "$dest" >&2
+    echo "$dest"
+}
+
+RETIE_PIN_NOTE=""
+if [ -n "${RETIE_PINNED:-}" ] || [ -n "${RETIE_LOOP_SOURCE_ONLY:-}" ]; then
+    :   # already pinned by a parent invocation, or a test sourcing the helpers
+elif [ "${RETIE_PIN:-1}" = 0 ]; then
+    RETIE_PIN_NOTE="pin: NONE (RETIE_PIN=0) -- jobs import whatever PIPE_ROOT holds when they start"
+    echo "WARNING: $RETIE_PIN_NOTE" >&2
+    echo "  A merge into that checkout reaches the jobs of this run mid-flight." >&2
+else
+    case "${RETIE_PROVENANCE_ONLY:-0}" in
+        1)  # inspection must not create anything
+            RETIE_PIN_NOTE=$(pin_checkout --dry-run) || exit $?
+            ;;
+        *)
+            _pin_dest=$(pin_checkout) || exit $?
+            _pin_src=$(git -C "${PIPE_ROOT:-$HERE}" rev-parse --show-toplevel)
+            echo "[pin] $_pin_src -> $_pin_dest; re-executing from the pinned tree"
+            _pin_env=(PIPE_ROOT="$_pin_dest" RETIE_PINNED=1 RETIE_PIN_SRC="$_pin_src")
+            exec env "${_pin_env[@]}" bash "$_pin_dest/scripts/reduction/run_field_retie_loop.sh" "$@"
+            ;;
+    esac
+fi
+
 QOS=${QOS:-astronomy-dept-b}
 BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # Actionability floor for the m2 checkpoint (see cataloging.py ~L3064): per-detector
@@ -387,8 +497,10 @@ reduce_fully_succeeded () {
 # a reader actually sees, not only on the warning that fires when the distance
 # is non-zero.
 _last_fetch () {
+    # --git-common-dir, not --git-dir: in a linked worktree (every pin is one)
+    # the latter names a per-worktree directory that never holds FETCH_HEAD.
     local f="$1/.git/FETCH_HEAD" gd
-    gd=$(git -C "$1" rev-parse --git-dir 2>/dev/null) || { echo "unknown"; return 0; }
+    gd=$(git -C "$1" rev-parse --git-common-dir 2>/dev/null) || { echo "unknown"; return 0; }
     case "$gd" in /*) f="$gd/FETCH_HEAD";; *) f="$1/$gd/FETCH_HEAD";; esac
     if [ -f "$f" ]; then
         date -u -r "$f" +%Y-%m-%d 2>/dev/null || echo "unknown"
@@ -478,6 +590,7 @@ warn_if_behind () {
             echo "        Being behind is normal on a topic branch.  What it means here is that"
             echo "        any safety guard merged in those commits is NOT in this run and will"
             echo "        not arrive while it lasts -- restart the loop to pick them up."
+            [ -n "${RETIE_PINNED:-}" ] && echo "        (This run is pinned: a merge reaches it only on restart.)"
         fi
     done
     return 0
@@ -493,7 +606,9 @@ warn_if_behind () {
 # predictable, and the file on disk stops describing what is executing.
 #
 # Reported, not acted on: whether a loop may deliberately adopt code mid-run is
-# a decision about its contract, not a bug fix, and #364 leaves it open.
+# a decision about its contract, and #364 leaves it open.  The pin above
+# (#679) settles it for the default case: a pinned run executes a snapshot, so
+# a merge reaches it only on restart.  This check then covers RETIE_PIN=0.
 _here_top_or_here=$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null \
                     || echo "$HERE")
 SELF_PATH="${BASH_SOURCE[0]}"
@@ -516,6 +631,12 @@ warn_if_self_changed () {
 
 echo "=================  CHECKOUT PROVENANCE  ================="
 echo "  loop script : $(checkout_provenance "$_here_top_or_here")"
+if [ -n "${RETIE_PINNED:-}" ]; then
+    echo "  pin         : run-lifetime; pinned from ${RETIE_PIN_SRC:-?} -> $PIPE_ROOT"
+    echo "                (remove when its jobs have left the queue: scripts/reduction/prune_retie_pins.sh)"
+elif [ -n "$RETIE_PIN_NOTE" ]; then
+    echo "  pin         : $RETIE_PIN_NOTE"
+fi
 if [ -n "$PIPE_ROOT" ]; then
     echo "  pipeline    : $(checkout_provenance "$PIPE_ROOT")"
     _pipe_top=$(git -C "$PIPE_ROOT" rev-parse --show-toplevel 2>/dev/null \
@@ -806,3 +927,7 @@ env PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
     "${floor_env[@]}" \
     bash "$HERE/submit_cataloging_perframe.sh"
 echo "Submitted full cataloging chain for $TARGET $PROPOSAL/$FIELD."
+if [ -n "${RETIE_PINNED:-}" ]; then
+    echo "The queued chain imports from the pinned tree $PIPE_ROOT, so it stays."
+    echo "Once those jobs have left the queue: $HERE/prune_retie_pins.sh --apply"
+fi
