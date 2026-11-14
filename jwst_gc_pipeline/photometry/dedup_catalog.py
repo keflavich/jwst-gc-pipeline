@@ -23,6 +23,18 @@ Components are validated as a whole: if any band has >=2 members detected with
 a magnitude spread >= ``dmag_collision``, the whole component is left intact.
 Components larger than ``max_component`` are also left intact (avoids chaining
 through dense clumps).
+
+Known disagreement with the truth (#1124): where the SW bands resolve a close
+double and the LW bands see one blend, the per-band positions of the fainter
+member scatter by up to ~40 mas and the cross-band merge attaches each band to
+one of the two reference rows inconsistently.  Each row then carries a mix of
+the two stars' bands, the pair has no same-band collision, and dedup collapses
+it.  The surviving row keeps the lowest-emag detection per band, so it can
+combine, for example, F115W from one star with F162M from the other and drops
+the other star's values.  This behaviour is unchanged.
+``flag_complementary_splits`` marks such pairs (``complementary_split``, ``split_group``) on the m7
+catalog, where both rows still exist, and again on the dedup output for pairs
+that dedup leaves split.
 """
 import numpy as np
 from astropy import units as u
@@ -150,6 +162,145 @@ def _recompute_synthetic(tbl, bands, rows):
                 tbl[fcol][rows] = newflux[rows]
 
 
+def _band_state(tbl, bands):
+    """Per-band detection masks, magnitudes and saturation flags of ``tbl``.
+
+    Returns ``(det, mags, is_sat, is_sat_any)``: ``det[b]`` the independent
+    detection mask (``_detection_mask``), ``mags[b]`` the Vega magnitudes,
+    ``is_sat[b]`` the subtracted/flagged saturated-star flag of band ``b`` and
+    ``is_sat_any`` its union over every band (the wide link radius keys on it).
+    """
+    n = len(tbl)
+    det = _detection_mask(tbl, bands)
+    mags = {b: _arr(tbl, f'mag_vega_{b}') for b in bands}
+    is_sat_any = np.zeros(n, bool)
+    for c in tbl.colnames:
+        if c.startswith('replaced_saturated_') or c.startswith('is_saturated_'):
+            is_sat_any |= _arr(tbl, c, fill=False, dtype=bool)
+    is_sat = {b: np.zeros(n, bool) for b in bands}
+    for b in bands:
+        for c in (f'replaced_saturated_{b}', f'is_saturated_{b}'):
+            if c in tbl.colnames:
+                is_sat[b] |= _arr(tbl, c, fill=False, dtype=bool)
+    return det, mags, is_sat, is_sat_any
+
+
+def _complementary_pairs(sc, bands, det, mags, is_sat, is_sat_any, *,
+                         link_radius, sat_link_radius, dmag_collision,
+                         sat_dmag_collision, verbose=False):
+    """Candidate close pairs of rows and the per-pair collision test.
+
+    Shared by ``dedup_merged_catalog`` (which collapses linked pairs) and
+    ``flag_complementary_splits`` (which marks the strictly complementary
+    ones), so both use one definition of "close pair" and "same-band
+    collision".
+
+    Returns ``(i1, i2, sep, link, n_shared)`` over the unique unordered pairs
+    ``i1 < i2``: ``link`` is True where no shared band blocks the pair and
+    ``n_shared`` counts the bands that detect both rows.
+    """
+    n0 = len(sc)
+    wide = max(link_radius, sat_link_radius)
+    i1, i2, sep, _ = sc.search_around_sky(sc, wide)
+    # keep unique unordered pairs i<j
+    keep = i1 < i2
+    i1, i2, sep = i1[keep], i2[keep], sep[keep]
+    # beyond link_radius only satstar-involved pairs qualify (see sat_link_radius)
+    pairsat = is_sat_any[i1] | is_sat_any[i2]
+    keep = (sep <= link_radius) | (pairsat & (sep <= sat_link_radius))
+    n_satpairs = int((keep & (sep > link_radius)).sum())
+    i1, i2, sep = i1[keep], i2[keep], sep[keep]
+    if verbose:
+        print(f"[dedup] {n0} rows; {len(i1)} candidate pairs within "
+              f"{link_radius} (+{n_satpairs} satstar pairs out to "
+              f"{sat_link_radius})", flush=True)
+
+    # --- pairwise link decision: complementary coverage or near-identical ---
+    # saturated-involved pairs use the looser collision threshold.  A pair
+    # linked only by the wide satstar radius and detected in two or more of
+    # the same bands is two stars when, in a shared band, both rows or
+    # neither are saturated; on wd2 the looser threshold merged such
+    # neighbours 0.2-0.46" apart that dolphot resolves, dropping one star's
+    # band measurements (#1038).  Two cases remain duplicates of one star
+    # and keep the looser threshold: a band where exactly one row is
+    # saturated (satstar fit + daophot detection; cloudc: 0.13" apart along
+    # one direction), and a pair sharing one band (a one-band satstar
+    # fragment; on wd2 dolphot has a star at only one of the two rows for
+    # 157 of 165 such pairs).
+    pair_thresh = np.where(is_sat_any[i1] | is_sat_any[i2],
+                           sat_dmag_collision, dmag_collision)
+    n_shared = np.zeros(len(i1), int)
+    for b in bands:
+        n_shared += det[b][i1] & det[b][i2]
+    multi_wide = (sep > link_radius) & (n_shared >= 2)
+    link = np.ones(len(i1), bool)
+    for b in bands:
+        both = det[b][i1] & det[b][i2]
+        if both.any():
+            dmag = np.abs(mags[b][i1] - mags[b][i2])
+            one_sat = is_sat[b][i1] ^ is_sat[b][i2]
+            pair_thresh_b = np.where(multi_wide & ~one_sat, 0.0, pair_thresh)
+            # a real collision (resolved, discrepant) blocks the link
+            block = both & ~(dmag < pair_thresh_b)
+            link &= ~block
+    return i1, i2, sep, link, n_shared
+
+
+def flag_complementary_splits(tbl, radius=0.10 * u.arcsec,
+                              dmag_collision=0.1):
+    """Mark close row pairs whose bands are strictly complementary (#1124).
+
+    A pair is flagged when its rows lie within ``radius`` and no band detects
+    both, with each row detecting at least one band.  That is the signature of
+    the cross-band merge attaching one star's bands (or two stars' bands) to
+    the wrong reference row.  Pairs that share a band with near-identical
+    magnitudes are duplicates, not splits, and stay unflagged; so do pairs
+    that a band resolves with |dmag| >= ``dmag_collision``.
+
+    Adds two columns to ``tbl`` in place and returns it:
+
+    ``complementary_split`` : bool
+        The row belongs to at least one flagged pair.
+    ``split_group`` : int
+        Shared by the rows of one pair or chain of flagged pairs, equal to the
+        lowest member row index at flag time; -1 where unflagged.  It is a
+        label, not a row pointer: dedup drops rows, so an index stored at m7
+        would not locate the partner in ``m8_dedup``.
+
+    Flux and magnitude columns are not touched, and repeated calls give the
+    same columns.  A table without ``skycoord_ref`` or without real bands gets
+    all-False/-1 columns.
+    """
+    n = len(tbl)
+    split = np.zeros(n, bool)
+    group = np.full(n, -1, int)
+    bands = real_bands(tbl)
+    if n > 1 and bands and 'skycoord_ref' in tbl.colnames:
+        det, mags, is_sat, is_sat_any = _band_state(tbl, bands)
+        nbands_det = np.sum([det[b] for b in bands], axis=0)
+        i1, i2, _, link, n_shared = _complementary_pairs(
+            SkyCoord(tbl['skycoord_ref']), bands, det, mags, is_sat,
+            is_sat_any, link_radius=radius, sat_link_radius=0 * u.arcsec,
+            dmag_collision=dmag_collision, sat_dmag_collision=dmag_collision)
+        sel = (link & (n_shared == 0)
+               & (nbands_det[i1] > 0) & (nbands_det[i2] > 0))
+        i1, i2 = i1[sel], i2[sel]
+        if len(i1):
+            uf = _UnionFind(n)
+            for a, b in zip(i1, i2):
+                uf.union(int(a), int(b))
+            involved = np.unique(np.concatenate([i1, i2]))
+            lowest = {}
+            for idx in involved:  # ascending, so the first seen is the lowest
+                lowest.setdefault(uf.find(int(idx)), int(idx))
+            for idx in involved:
+                group[idx] = lowest[uf.find(int(idx))]
+            split[involved] = True
+    tbl['complementary_split'] = split
+    tbl['split_group'] = group
+    return tbl
+
+
 def dedup_merged_catalog(in_path, out_path, *,
                          link_radius=0.10 * u.arcsec,
                          sat_link_radius=0.5 * u.arcsec,
@@ -196,65 +347,15 @@ def dedup_merged_catalog(in_path, out_path, *,
     t = Table.read(in_path)
     n0 = len(t)
     bands = real_bands(t)
-    det = _detection_mask(t, bands)
-    mags = {b: _arr(t, f'mag_vega_{b}') for b in bands}
+    det, mags, is_sat, is_sat_any = _band_state(t, bands)
     nbands_det = np.sum([det[b] for b in bands], axis=0)
 
-    # any-band subtracted/flagged saturated star (for the wide link radius)
-    is_sat_any = np.zeros(n0, bool)
-    for c in t.colnames:
-        if c.startswith('replaced_saturated_') or c.startswith('is_saturated_'):
-            is_sat_any |= _arr(t, c, fill=False, dtype=bool)
-    is_sat = {b: np.zeros(n0, bool) for b in bands}
-    for b in bands:
-        for c in (f'replaced_saturated_{b}', f'is_saturated_{b}'):
-            if c in t.colnames:
-                is_sat[b] |= _arr(t, c, fill=False, dtype=bool)
-
     sc = SkyCoord(t['skycoord_ref'])
-    wide = max(link_radius, sat_link_radius)
-    i1, i2, sep, _ = sc.search_around_sky(sc, wide)
-    # keep unique unordered pairs i<j
-    keep = i1 < i2
-    i1, i2, sep = i1[keep], i2[keep], sep[keep]
-    # beyond link_radius only satstar-involved pairs qualify (see sat_link_radius)
-    pairsat = is_sat_any[i1] | is_sat_any[i2]
-    keep = (sep <= link_radius) | (pairsat & (sep <= sat_link_radius))
-    n_satpairs = int((keep & (sep > link_radius)).sum())
-    i1, i2, sep = i1[keep], i2[keep], sep[keep]
-    if verbose:
-        print(f"[dedup] {n0} rows; {len(i1)} candidate pairs within "
-              f"{link_radius} (+{n_satpairs} satstar pairs out to "
-              f"{sat_link_radius})", flush=True)
-
-    # --- pairwise link decision: complementary coverage or near-identical ---
-    # saturated-involved pairs use the looser collision threshold.  A pair
-    # linked only by the wide satstar radius and detected in two or more of
-    # the same bands is two stars when, in a shared band, both rows or
-    # neither are saturated; on wd2 the looser threshold merged such
-    # neighbours 0.2-0.46" apart that dolphot resolves, dropping one star's
-    # band measurements (#1038).  Two cases remain duplicates of one star
-    # and keep the looser threshold: a band where exactly one row is
-    # saturated (satstar fit + daophot detection; cloudc: 0.13" apart along
-    # one direction), and a pair sharing one band (a one-band satstar
-    # fragment; on wd2 dolphot has a star at only one of the two rows for
-    # 157 of 165 such pairs).
-    pair_thresh = np.where(is_sat_any[i1] | is_sat_any[i2],
-                           sat_dmag_collision, dmag_collision)
-    n_shared = np.zeros(len(i1), int)
-    for b in bands:
-        n_shared += det[b][i1] & det[b][i2]
-    multi_wide = (sep > link_radius) & (n_shared >= 2)
-    link = np.ones(len(i1), bool)
-    for b in bands:
-        both = det[b][i1] & det[b][i2]
-        if both.any():
-            dmag = np.abs(mags[b][i1] - mags[b][i2])
-            one_sat = is_sat[b][i1] ^ is_sat[b][i2]
-            pair_thresh_b = np.where(multi_wide & ~one_sat, 0.0, pair_thresh)
-            # a real collision (resolved, discrepant) blocks the link
-            block = both & ~(dmag < pair_thresh_b)
-            link &= ~block
+    i1, i2, sep, link, _ = _complementary_pairs(
+        sc, bands, det, mags, is_sat, is_sat_any,
+        link_radius=link_radius, sat_link_radius=sat_link_radius,
+        dmag_collision=dmag_collision, sat_dmag_collision=sat_dmag_collision,
+        verbose=verbose)
     li1, li2 = i1[link], i2[link]
     if verbose:
         print(f"[dedup] {link.sum()} pairs pass the complementary/identical "
@@ -344,12 +445,18 @@ def dedup_merged_catalog(in_path, out_path, *,
     out = t[~drop]
     # recompute synthetic line-sub bands only for rows whose fluxes changed
     _recompute_synthetic(out, bands, changed[~drop])
+    # pairs that dedup left split (too-large component, binary protection)
+    # are flagged on the output rows; any m7 values are stale after the drop
+    flag_complementary_splits(out, radius=link_radius,
+                              dmag_collision=dmag_collision)
 
     if verbose:
         ncomp = len(primaries)
         print(f"[dedup] merged {drop.sum()} rows into {ncomp} primaries; "
               f"kept {skipped_binary} components as resolved binaries, "
               f"{skipped_large} as too-large; "
-              f"{n0} -> {len(out)} rows", flush=True)
+              f"{n0} -> {len(out)} rows; "
+              f"{int(out['complementary_split'].sum())} rows flagged "
+              f"complementary_split", flush=True)
     out.write(out_path, overwrite=True)
     return out_path
