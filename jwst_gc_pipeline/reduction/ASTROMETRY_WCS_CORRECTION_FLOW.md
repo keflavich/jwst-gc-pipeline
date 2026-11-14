@@ -587,6 +587,9 @@ is refused rather than skipped.
 - Frames reduced before this default carry the term. Regenerate F162M/F164N
   from `_cal` (or rerun `fix_alignment`; the shift commutes with the tie and
   `FFRAMCOR` keeps it idempotent), then re-catalog.
+- Staleness scan: `scripts/analysis/scan_filter_frame_provenance.py <field dir>` lists
+  the frames that lack `FFRAMCOR` and flags bands that mix corrected and
+  uncorrected frames (read-only; `--check` exits 1 on any stale frame).
 - Per-detector rows in a field's offsets table may already absorb part of the
   term: the m2 visit consensus sees it wherever dithers mix detectors (cloudef
   F162M: about 2.5 mas in Dec). After the correction those rows read as a

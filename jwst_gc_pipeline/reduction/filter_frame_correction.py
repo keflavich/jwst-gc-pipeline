@@ -111,6 +111,7 @@ does:
 * ``0`` -- correct nothing; byte-identical to the pre-#1255 behaviour.
 """
 import copy
+import functools
 import os
 
 import numpy as np
@@ -522,6 +523,82 @@ def apply_filter_frame_correction(fn, offsets_mas, frame='instrument',
               f"({dra_mas:+.2f}, {ddec_mas:+.2f}) mas on sky.  Module-mean "
               f"removed, so no offsets table is invalidated.")
     return dra, ddec
+
+
+#: ``frame_provenance`` statuses.  Only ``stale`` and ``pending`` frames (and
+#: ``wrong-anchor`` ones) need regenerating from ``_cal``.
+STATUS_CORRECTED = 'corrected'
+STATUS_STALE = 'stale'
+STATUS_PENDING = 'pending'
+STATUS_WRONG_ANCHOR = 'wrong-anchor'
+STATUS_NOT_SELECTED = 'not-selected'
+
+
+@functools.lru_cache(maxsize=None)
+def _table_filters(table_path):
+    """Filters with ``SHIPPED_ANCHOR`` rows in the table at ``table_path``."""
+    tbl = load_filter_frame_table(table_path)
+    return frozenset(str(r['filter']).upper() for r in tbl
+                     if str(r['anchor']).upper() == SHIPPED_ANCHOR)
+
+
+def frame_provenance(hdr0, hdr, mode=None, table_path=SHIPPED_TABLE):
+    """What the filter-frame correction did to one frame.  Pure, so it is testable.
+
+    ``hdr0`` is the primary header, ``hdr`` the SCI header the apply step
+    writes its markers into.  ``mode`` defaults to ``correction_mode()``.
+    Under ``mode='all'`` a filter with no ``SHIPPED_ANCHOR`` rows in
+    ``table_path`` is ``not-selected``, as ``apply_configured_filter_frame_correction``
+    leaves it alone.
+    Returns ``{'filter', 'detector', 'status', 'anchor'}``, where ``status``
+    is one of the ``STATUS_*`` constants:
+
+    * ``not-selected`` -- ``configured_filter`` does not pick this frame under
+      ``mode`` (other filters, LW detectors, non-NIRCam, ``mode='off'``);
+    * ``corrected`` -- ``FFRAMCOR`` set, onto the shipped anchor;
+    * ``wrong-anchor`` -- ``FFRAMCOR`` set onto a different anchor;
+    * ``pending`` -- ``FFRAMPND`` set and ``FFRAMCOR`` absent (a crashed apply);
+    * ``stale`` -- selected, but ``FFRAMCOR`` absent: reduced before the
+      correction was wired into ``fix_alignment``, or regenerated with it off.
+    """
+    mode = correction_mode() if mode is None else mode
+    detector = str(hdr0.get('DETECTOR', hdr.get('DETECTOR')) or '').upper().strip()
+    filt = frame_filter_name(hdr0.get('FILTER', hdr.get('FILTER')),
+                             hdr0.get('PUPIL', hdr.get('PUPIL')))
+    out = {'filter': filt, 'detector': detector, 'anchor': '',
+           'status': STATUS_NOT_SELECTED}
+    selected = configured_filter(hdr0.get('INSTRUME', hdr.get('INSTRUME')),
+                                 detector, filt, mode)
+    if selected is None:
+        return out
+    if selected not in DEFAULT_ON_FILTERS and selected not in _table_filters(table_path):
+        return out
+    if hdr.get(MARKER):
+        out['anchor'] = str(hdr.get('FFRAMANC', '') or '').upper().strip()
+        wrong = out['anchor'] and out['anchor'] != SHIPPED_ANCHOR
+        out['status'] = STATUS_WRONG_ANCHOR if wrong else STATUS_CORRECTED
+    elif hdr.get(PENDING):
+        out['status'] = STATUS_PENDING
+    else:
+        out['status'] = STATUS_STALE
+    return out
+
+
+def mixed_groups(records):
+    """Keys of groups that hold both corrected and uncorrected frames.
+
+    ``records`` is an iterable of ``(group_key, frame_provenance(...))``.  A
+    group is one band of one observation of one field.  Frames of one band that
+    sit on two different frames put a per-detector seam of several mas into
+    the band's mosaic and catalogue, so these groups are the ones to
+    regenerate first.  Groups with no selected frame never appear.
+    """
+    seen = {}
+    for key, rec in records:
+        if rec['status'] == STATUS_NOT_SELECTED:
+            continue
+        seen.setdefault(key, set()).add(rec['status'] == STATUS_CORRECTED)
+    return sorted(k for k, v in seen.items() if len(v) == 2)
 
 
 def apply_configured_filter_frame_correction(fn, mode=None, table_path=SHIPPED_TABLE,
