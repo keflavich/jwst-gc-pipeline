@@ -235,7 +235,10 @@ rejection**.
   fields, off on an extended-emission target and for MIRI filters;
   `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` force it) adds this filter's own m6 vetted catalog, except sources within `--manual-m7-seed-own-band-companion-fwhm`
   (2.5) PSF FWHM of a seed source more than 10× brighter
-  (`--manual-m7-seed-own-band-companion-max-ratio`, 0.1), plus daofind
+  (`--manual-m7-seed-own-band-companion-max-ratio`, 0.1), and except sources
+  within `--manual-m7-seed-dedup-fwhm` (0.5) FWHM of a cross-band position or of
+  a brighter own-band source (one star, two seeds; the cross-band to own-band flux
+  match radius widens to that distance when it exceeds 30 mas), plus daofind
   detections on the m6 residual mosaic minus the m6 background. Fit on m6 background-subtracted
   frames.
 - **m8** is a **forced cross-band fill** run after the m7 merge.
@@ -416,6 +419,7 @@ still run after m6.
 | `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--manual-m7-seed-own-band-companion-max-ratio` (in [0, 1]; 1.0 = cut every fainter source in the radius, 0 = no cut) | 0.1 | 0.1 | | |
+| `--manual-m7-seed-dedup-fwhm` (0 = legacy `--manual-crossband-seed-max-sep-mas` matching alone) | 0.5 | 0.5 | | |
 | `--manual-crossband-ecsv-all-modules` | off | off | off | off | write the cross-band table's `.ecsv` twin for nrca/nrcb too; off writes it for the merged module only, or for every module when the run has no merged module (a disjoint field, MIRI). The FITS table is written for every module either way |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |

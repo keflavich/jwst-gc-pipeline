@@ -70,10 +70,120 @@ def test_union_and_flux_transfer(tmp_path):
 def test_max_sep_controls_dedup(tmp_path):
     xpath, opath = _write(str(tmp_path))
     out = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
-                                         max_sep_mas=20.0))
+                                         max_sep_mas=20.0, dedup_fwhm=0))
     # the 25 mas neighbour is now a separate own-band source
     assert len(out) == 6
     assert list(out['flux'][:3]) == [50.0, 1.0, 1.0]
+
+
+def _seed_files(tmp_path, xdx, odx, oflux):
+    """Cross-band seed at offsets ``xdx`` (mas, along RA) and own-band m6
+    catalogue at ``odx`` with ``oflux``."""
+    xpath = os.path.join(str(tmp_path), 'crossband_seed_manual.fits')
+    Table({'skycoord': _sc(xdx, np.zeros(len(xdx))),
+           'n_filt_confirmed': [2] * len(xdx)}).write(xpath, overwrite=True)
+    opath = os.path.join(str(tmp_path), 'own_m6.fits')
+    Table({'skycoord': _sc(odx, np.zeros(len(odx))), 'flux': oflux}).write(opath, overwrite=True)
+    return xpath, opath
+
+
+def _band_seed(xpath, opath, **kw):
+    # companion cut off: these tests isolate the seed dedup
+    return Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                          companion_fwhm=0, **kw))
+
+
+def test_dedup_absorbs_own_band_beyond_max_sep(tmp_path):
+    """45 mas is beyond the 30 mas match radius but inside 0.5 FWHM of F405N
+    (68 mas): one row carrying the own-band flux, not a cross-band row at flux
+    1.0 plus an own-band row (regime 1 of #1206)."""
+    xpath, opath = _seed_files(tmp_path, [0], [45], [50.0])
+    out = Table.read(_build_m7_band_seed(xpath, opath, 'F405N', 'merged',
+                                         max_sep_mas=30.0, companion_fwhm=0))
+    assert list(np.asarray(out['seed_origin']).astype(str)) == ['crossband']
+    assert list(out['flux']) == [50.0]
+    # dedup_fwhm=0: the match radius is max_sep_mas alone, as before
+    out0 = Table.read(_build_m7_band_seed(xpath, opath, 'F405N', 'merged',
+                                          max_sep_mas=30.0, companion_fwhm=0,
+                                          dedup_fwhm=0))
+    assert list(np.asarray(out0['seed_origin']).astype(str)) == ['crossband', 'own_m6']
+    assert list(out0['flux']) == [1.0, 50.0]
+
+
+def test_dedup_own_band_pair_keeps_the_brighter(tmp_path):
+    """Two own-band rows 0.3 FWHM apart (F182M: 18.6 mas), no cross-band
+    position near them: the brighter stays."""
+    xpath, opath = _seed_files(tmp_path, [5000], [0, 18.6], [8.0, 20.0])
+    out = _band_seed(xpath, opath, fwhm_arcsec=0.062)
+    assert list(np.asarray(out['seed_origin']).astype(str)) == ['crossband', 'own_m6']
+    assert list(out['flux']) == [1.0, 20.0]
+    assert out.meta['NDEDUP'] == 1
+    assert np.isclose(out['skycoord'][1].ra.deg, _sc([18.6], [0]).ra.deg[0])
+
+
+def test_dedup_leaves_pairs_beyond_the_radius(tmp_path):
+    """0.8 FWHM apart (49.6 mas in F182M) are two stars: both rows stay, and
+    so does a cross-band position with its own-band flux."""
+    xpath, opath = _seed_files(tmp_path, [5000], [0, 49.6], [8.0, 20.0])
+    out = _band_seed(xpath, opath, fwhm_arcsec=0.062)
+    assert list(out['flux']) == [1.0, 8.0, 20.0]
+    assert out.meta['NDEDUP'] == 0
+    # a cross-band position 0.8 FWHM from an own-band row does not absorb it
+    xpath, opath = _seed_files(tmp_path, [0], [49.6], [8.0])
+    out = _band_seed(xpath, opath, fwhm_arcsec=0.062, max_sep_mas=30.0)
+    assert list(np.asarray(out['seed_origin']).astype(str)) == ['crossband', 'own_m6']
+    assert list(out['flux']) == [1.0, 8.0]
+
+
+def test_dedup_zero_reproduces_the_legacy_seed(tmp_path):
+    xpath, opath = _write(str(tmp_path))
+    out = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                         max_sep_mas=30.0, dedup_fwhm=0))
+    assert list(out['flux']) == [50.0, 70.0, 1.0, 3.0, 4.0]
+    assert out.meta['NDEDUP'] == 0
+    assert out.meta['DEDUPFWH'] == 0.0
+    # the fixture's rows are all >= 25 mas apart or on a cross-band position:
+    # the default dedup (0.5 FWHM = 31 mas) leaves the same single-band rows
+    outd = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged'))
+    assert list(outd['flux']) == [50.0, 70.0, 1.0, 3.0, 4.0]
+    assert outd.meta['DEDUPFWH'] == MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm']
+
+
+def test_dedup_mutual_best_keeps_the_farther_own_band_row(tmp_path):
+    """Two own-band rows within the match radius of one cross-band position:
+    the nearer donates its flux, the farther is not dropped unused.  It stays
+    an own-band seed unless it lies within dedup_fwhm of the cross-band
+    position or the donor."""
+    # max_sep_mas=60 widens the match radius past the 31 mas dedup radius
+    xpath, opath = _seed_files(tmp_path, [0], [5, 50], [100.0, 7.0])
+    out = _band_seed(xpath, opath, fwhm_arcsec=0.062, max_sep_mas=60.0)
+    assert list(np.asarray(out['seed_origin']).astype(str)) == ['crossband', 'own_m6']
+    assert list(out['flux']) == [100.0, 7.0]
+    # 25 mas from the cross-band position: a duplicate of it, dropped
+    xpath, opath = _seed_files(tmp_path, [0], [5, -25], [100.0, 7.0])
+    out = _band_seed(xpath, opath, fwhm_arcsec=0.062, max_sep_mas=60.0)
+    assert list(out['flux']) == [100.0]
+    assert out.meta['NDEDUP'] == 1
+    # within dedup_fwhm of the donor, beyond it from the cross-band position
+    # (F182M: 31 mas): 20 mas from the donor at -20 mas, 35 mas from the position
+    xpath, opath = _seed_files(tmp_path, [0], [15, 35, 400], [100.0, 7.0, 9.0])
+    out = _band_seed(xpath, opath, fwhm_arcsec=0.062, max_sep_mas=60.0)
+    assert list(out['flux']) == [100.0, 9.0]
+
+
+def test_dedup_empty_own_catalog_unchanged(tmp_path):
+    xpath, _ = _write(str(tmp_path))
+    epath = os.path.join(str(tmp_path), 'empty.fits')
+    Table({'skycoord': _sc([], []), 'flux': np.zeros(0)}).write(epath)
+    out = Table.read(_build_m7_band_seed(xpath, epath, 'F182M', 'merged', dedup_fwhm=0.5))
+    assert list(out['flux']) == [1.0, 1.0, 1.0]
+    assert out.meta['NDEDUP'] == 0
+
+
+def test_dedup_negative_rejected(tmp_path):
+    xpath, opath = _write(str(tmp_path))
+    with pytest.raises(ValueError):
+        _build_m7_band_seed(xpath, opath, 'F182M', 'merged', dedup_fwhm=-0.1)
 
 
 def test_output_path_per_module_and_filter(tmp_path):
@@ -270,6 +380,7 @@ def test_pipeline_defaults():
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band'] is None
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'] == 2.5
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'] == 0.1
+    assert MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'] == 0.5
 
 
 def test_auto_own_band_off_on_extended_emission_and_miri():
@@ -300,3 +411,4 @@ def test_pipeline_passes_the_companion_options():
     kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
     for arg in ('companion_fwhm', 'companion_max_ratio'):
         assert kw[arg] == f"float(mopt(opts_phase, 'manual_m7_seed_own_band_{arg}'))"
+    assert kw['dedup_fwhm'] == "float(mopt(opts_phase, 'manual_m7_seed_dedup_fwhm'))"
