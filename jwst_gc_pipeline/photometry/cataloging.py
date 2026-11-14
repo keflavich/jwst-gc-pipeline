@@ -29,6 +29,7 @@ import functools
 import glob
 
 import numpy as np
+import yaml.representer
 from astropy.coordinates import SkyCoord
 from astropy.io.registry import IORegistryError
 from astropy.table import Table
@@ -5908,6 +5909,28 @@ def propagate_independent_detection(merged_path):
     return done
 
 
+def write_crossband_ecsv(merged_path):
+    """Write the ECSV twin of an annotated cross-band FITS table.
+
+    ``merge_daophot`` writes the ECSV from the in-memory table, which is
+    before ``annotate_independent_detection`` adds ``independently_detected_*``
+    and ``n_filt_independent`` to the FITS; the ECSV then lacked the columns
+    that separate an independent per-band detection from a cross-band-seeded
+    force-fit (#1228).  ``run_manual_pipeline`` now passes ``write_ecsv=False``
+    to the merge and calls this once the FITS is final, so the twin has the
+    FITS table's columns.  ``{stem}.ecsv`` is written beside ``{stem}.fits``;
+    returns its path, or None when the FITS is absent.
+    """
+    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
+    if not os.path.exists(merged_path):
+        return None
+    stem = merged_path[:-len('.fits')] if merged_path.endswith('.fits') else merged_path
+    table = Table.read(merged_path)
+    _merge_catalogs._sanitise_meta_for_yaml(table)
+    _merge_catalogs._write_ecsv_twin(table, stem, True)
+    return f'{stem}.ecsv'
+
+
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
@@ -11287,7 +11310,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     if _do_crossband and not getattr(options, 'cutout_region', ''):
         ref_filter = _resolve_crossband_ref_filter(options, filternames)
         # FITS for every module; the slow ECSV twin for the merged module only
-        # unless the run has none (#1227).
+        # unless the run has none (#1227).  merge_daophot never writes it
+        # (and removes an earlier run's); write_crossband_ecsv writes it from
+        # the annotated FITS below (#1228).
         _xb_ecsv_modules = crossband_ecsv_modules(
             modules, getattr(options, 'manual_crossband_ecsv_all_modules', False))
         for module in modules:
@@ -11330,7 +11355,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 field=field,
                 progid=proposal_id,
                 vetted=True,
-                write_ecsv=(module in _xb_ecsv_modules))
+                write_ecsv=False)
             # The cross-band MERGED catalog is written by merge_daophot with
             # naming.merged_catalog_obs_token (its `_obssuf`), NOT the PER-FRAME
             # token.  They differ for exactly the PER_OBS_MERGED_FIELDS entries:
@@ -11363,6 +11388,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             except (OSError, ValueError, KeyError) as _pex:
                 print(f"manual [{last_phase}]: copying the independent-detection "
                       f"flags onto the _qualcuts subsets failed ({_pex})", flush=True)
+            # Last step of the post-annotation block (after any column added
+            # to the FITS): the ECSV twin carries the FITS table's columns.  It
+            # is written even when annotation failed, without the flags.
+            if module in _xb_ecsv_modules:
+                try:
+                    write_crossband_ecsv(_xb)
+                except (OSError, ValueError, KeyError,
+                        yaml.representer.RepresenterError) as _eex:
+                    print(f"manual [{last_phase}]: writing the ECSV twin of "
+                          f"{os.path.basename(_xb)} failed ({_eex})", flush=True)
             # provenance sidecar for the m7 cross-band catalog (after annotate,
             # which mutates the file); stamp as stage 'm7'.  Its seed parent is
             # the POOL of every filter's m6 merged catalog (the cross-band seed
