@@ -89,3 +89,32 @@ def test_a_malformed_or_out_of_range_subset_is_refused(tmp_path, bad):
     assert done.returncode != 0, done.stdout
     assert "REFUSING" in done.stderr
     assert lines == []
+
+
+def test_an_abort_after_the_first_phase_says_to_drop_the_subset(tmp_path):
+    """The resume hint says "the same environment"; ONLY_SHARDS must not be in it.
+
+    Left set, it would cut the first resumed phase's array to the subset.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "sbatch").write_text(
+        '#!/bin/bash\nn=$(cat "$SBATCH_LOG" 2>/dev/null | wc -l)\n'
+        'printf "%s\\n" "$*" >> "$SBATCH_LOG"\n'
+        '[ "$n" -ge 2 ] && exit 1\necho 1000\n')
+    (bindir / "squeue").write_text("#!/bin/bash\ntrue\n")
+    for f in ("sbatch", "squeue"):
+        (bindir / f).chmod(0o755)
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("ONLY_SHARDS", "SKIP_IF_DONE", "NSHARDS")}
+    env.update(PATH=f"{bindir}:{os.environ['PATH']}",
+               SBATCH_LOG=str(tmp_path / "sbatch.log"), PHASES="m4 m5",
+               TARGET="testfield", PROPOSAL="9999", FIELD="001",
+               FILTERS="F212N F480M", BASEPATH=str(tmp_path / "tree"),
+               ONLY_SHARDS="1,5", SKIP_IF_DONE="1")
+    done = subprocess.run(["bash", str(SCRIPT)], env=env,
+                          capture_output=True, text=True)
+    assert done.returncode != 0
+    assert "SUBMIT ABORTED" in done.stderr
+    assert "PHASES='m5'" in done.stderr
+    assert "Leave ONLY_SHARDS out of the resume" in done.stderr

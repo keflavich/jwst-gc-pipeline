@@ -607,6 +607,12 @@ _recover() {
         echo "  Resume the rest of the chain with:"
         echo "    DEP='$_resume_dep' PHASES='$_resume_phases' \\"
         echo "      <the same environment as this run> $0"
+        if [ -n "$ONLY_SHARDS" ] && [ "$_resume_phases" != "$PHASES" ]; then
+            # ONLY_SHARDS belongs to the first phase, which is already queued;
+            # left set it would cut the first resumed phase's array to a subset.
+            echo "  Leave ONLY_SHARDS out of the resume: its subset applied to the" \
+                 "first phase, and the phases still to submit need their full array."
+        fi
     } >&2
     exit "$rc"
 }
