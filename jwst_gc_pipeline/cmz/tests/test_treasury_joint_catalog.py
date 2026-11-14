@@ -14,7 +14,7 @@ SUFFIX = TJC.qualcuts_suffix()
 
 def _write_tile(path, ra, dec, f212=None, f480=None, ef212=None,
                 roll_corrected=None, gctag='2026-09-24_PR959',
-                rollctab=None, rollcver=None):
+                rollctab=None, rollcver=None, rollcutg=None, rollcupv=None):
     n = len(ra)
     t = Table()
     t['skycoord_ref'] = SkyCoord(ra=np.asarray(ra) * u.deg,
@@ -33,6 +33,10 @@ def _write_tile(path, ra, dec, f212=None, f480=None, ef212=None,
         t.meta['ROLLCTAB'] = rollctab
     if rollcver is not None:
         t.meta['ROLLCVER'] = rollcver
+    if rollcutg is not None:
+        t.meta['ROLLCUTG'] = rollcutg
+    if rollcupv is not None:
+        t.meta['ROLLCUPV'] = rollcupv
     t.write(path, overwrite=True)
 
 
@@ -118,6 +122,17 @@ def test_header_roll_table_provenance(tmp_path):
     assert TJC._header_roll_table_provenance(str(p_stamped)) == (
         'sha1:1721e98c8599', '2026-09-29_PR1004-3-g0e21107b')
     assert TJC._header_roll_table_provenance(str(p_bare)) == (None, None)
+
+
+def test_header_roll_upstream_provenance(tmp_path):
+    p_stamped = tmp_path / 'a.fits'
+    p_bare = tmp_path / 'b.fits'
+    _write_tile(p_stamped, *_grid_tile_coords(266.3, -29.1),
+               roll_corrected=True, rollcutg='2026-11-03_PR1266', rollcupv='921d1ef9')
+    _write_tile(p_bare, *_grid_tile_coords(266.4, -29.1), roll_corrected=True)
+    assert TJC._header_roll_upstream_provenance(str(p_stamped)) == (
+        '2026-11-03_PR1266', '921d1ef9')
+    assert TJC._header_roll_upstream_provenance(str(p_bare)) == (None, None)
 
 
 def test_assert_no_mixed_roll_correction_raises():
@@ -323,6 +338,29 @@ def test_build_joint_catalog_records_per_tile_roll_table_provenance(tmp_path):
     assert prov['tiles']['040']['rollcver'] == '2026-09-29_PR1004-3-g0e21107b'
     assert prov['tiles']['041']['rollctab'] == 'sha1:d94358412b7b'
     assert prov['tiles']['041']['rollcver'] == '2026-10-02_PR1030'
+
+
+def test_build_joint_catalog_records_upstream_tag_beside_gctag(tmp_path):
+    """A rolled tile's GCTAG names the roll run; the producer's tag is in
+    ROLLCUTG.  Both are recorded, and tile_pipeline_tag stays the GCTAG that
+    stage_release compares against the m8 table (#1269)."""
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=8, ny=8, step_arcsec=3.0)
+    ra1, dec1 = _grid_tile_coords(266.50, -29.30, nx=8, ny=8, step_arcsec=3.0)
+    p0 = in_dir / f'basic_merged_m7_o040{SUFFIX}.fits'
+    _write_tile(p0, ra0, dec0, roll_corrected=True,
+               rollcutg='2026-11-03_PR1266', rollcupv='921d1ef9')
+    _write_tile(in_dir / f'basic_merged_m7_o041{SUFFIX}.fits', ra1, dec1,
+               roll_corrected=True)
+    _, prov = TJC.build_joint_catalog(str(in_dir))
+    # (the FITS write hook stamps the running tag over the fixture's gctag)
+    assert prov['tiles']['040']['tile_pipeline_tag'] == TJC._tile_pipeline_tag(str(p0))
+    assert prov['tiles']['040']['tile_pipeline_tag'] != '2026-11-03_PR1266'
+    assert prov['tiles']['040']['rollcutg'] == '2026-11-03_PR1266'
+    assert prov['tiles']['040']['rollcupv'] == '921d1ef9'
+    assert prov['tiles']['041']['rollcutg'] is None
+    assert prov['tiles']['041']['rollcupv'] is None
 
 
 def test_build_joint_catalog_tiles_with_no_rollctab_record_none(tmp_path):
