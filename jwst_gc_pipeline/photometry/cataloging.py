@@ -7258,7 +7258,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
-        path = _pick_refcat(cands, field=field)
+        path = _pick_refcat(cands, field=field, proposal=proposal_id)
         if (gaia_fallback and not path
                 and not _refcat_is_required(proposal_id, field)):
             # A field outside the VVV footprint carries only the Gaia seed
@@ -7269,7 +7269,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
             gcands = sorted(
                 p for p in glob.glob(f"{basepath}/catalogs/gaia_refcat*.fits")
                 if _GAIA_REFCAT_RE.match(os.path.basename(p)))
-            path = _pick_refcat(gcands, field=field)
+            path = _pick_refcat(gcands, field=field, proposal=proposal_id)
             if path:
                 print(f"astrom checkpoint: no gaia_virac2_refcat under "
                       f"{basepath}/catalogs; using the Gaia-only seed refcat",

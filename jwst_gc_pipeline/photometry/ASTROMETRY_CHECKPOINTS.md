@@ -286,6 +286,16 @@ gc2211) needs it: an untokened catalog is handed to every observation alike,
 and for pointings arcminutes apart that is the wrong sky — the way gc2211 o023
 took a −9.28″ correction.
 
+A directory shared by two proposals (ngc6334: 7213 and 6778, which also share
+observation `001`) needs `--proposal-token <PPPP>` instead, which stamps
+`_j<PPPP>` before any observation token (`..._epoch2024.68_j6778.fits`).
+`pick_refcat(cands, field, proposal=...)` prefers `_j<proposal>_o<NNN>`, then
+`_j<proposal>`, then `_o<NNN>`, then an untokened file, and never falls back to
+another proposal's `_j` file.  For a proposal in
+`naming.SHARED_TREE_PROPOSALS` it refuses several untokened candidates, naming
+them and the fix (rename, or `ASTROM_REFCAT`); before this, the newest-sorting
+name won and 6778 was tied to 7213's epoch-2026.30 file (#818).
+
 `ALLOW_CONSENSUS_ONLY_ASTROMETRY=1` runs without one, for a deliberate first
 look at a field whose catalog has not been built.  It never lets a run borrow
 another observation's catalog: `pick_refcat` refuses that separately, override
