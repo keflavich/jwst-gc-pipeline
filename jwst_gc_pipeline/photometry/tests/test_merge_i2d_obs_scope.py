@@ -16,6 +16,7 @@ from astropy.table import Table
 import astropy.units as u
 
 from jwst_gc_pipeline import fields as _fields
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry import merge_catalogs as MC
 from jwst_gc_pipeline.photometry import naming
 
@@ -50,7 +51,7 @@ def _run_daophot(tmp_path, monkeypatch, field, obs_files, target='gc3571',
     monkeypatch.setattr(MC, 'frame_wcs', fake_frame_wcs)
     for obs in obs_files:
         _touch(tmp_path / filt.upper() / 'pipeline' /
-               f'jw0{progid}-o{obs}_t001_miri_{filt}_{module}_i2d.fits')
+               f'{jw_prefix(progid)}-o{obs}_t001_miri_{filt}_{module}_i2d.fits')
     _write_m2(tmp_path, filt, module, field if field else obs_files[0])
     with pytest.raises(_Stop):
         MC.merge_daophot(module=module, daophot_type='basic', indivexp=True,
