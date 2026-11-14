@@ -11,8 +11,11 @@ hold for either to ship:
    holds a few stray ``o005`` mosaics, so a release scoped by proposal alone
    would ship the control field's images as if they were the ridge's.
 
-MIRI is withheld from both deliberately (issue #596): 2092's F770W/F2100W were
-never reduced, so neither entry carries a ``miri:`` key.
+MIRI is withheld from both for now (issue #596): 2092's F770W/F2100W are
+reduced (PR #839) but their release scope, the quarantined o004 F770W mosaic and
+the missing F2100W tie rows are undecided, so neither entry carries a ``miri:``
+key.  Whatever MIRI entry any field gains must name a reduced mosaic and never a
+quarantined stub.
 """
 import sys
 from pathlib import Path
@@ -63,11 +66,40 @@ def test_the_two_fields_do_not_share_a_prefix_or_a_tree():
 
 @pytest.mark.parametrize("field", CLOUDEF_FIELDS)
 def test_miri_is_withheld(field):
-    """2092's MIRI was never reduced -- shipping the 2024 MAST i2d is not the fix."""
+    """The reduced MIRI mosaics wait on the release decision recorded on #596.
+
+    Replace this with a positive test of the staged items once that decision is
+    made; do not satisfy it by pointing the entry at the 2024 MAST i2d.
+    """
     assert not stage_release.FIELDS[field].get("miri"), (
-        f"{field} declares MIRI products, but 2092 F770W/F2100W have never been "
-        "reduced (#596); withhold the band rather than shipping archive files"
+        f"{field} declares MIRI products, but their release scope and the o004 "
+        "F770W quarantine are still open (#596); update this test together with "
+        "the entry"
     )
+
+
+def _miri_srcs():
+    for field, cfg in stage_release.FIELDS.items():
+        for entry in cfg.get("miri", []):
+            yield field, str(entry["src"])
+
+
+def test_no_miri_entry_points_at_a_quarantined_mosaic():
+    """The m2 checkpoint renames a mis-tied mosaic to ``*_im0_badastrom.fits``
+    and leaves a stub; a manifest ``src`` naming one would stage the stub."""
+    bad = [(f, s) for f, s in _miri_srcs() if "_im0_badastrom" in s]
+    assert not bad, f"MIRI src names a quarantined mosaic: {bad}"
+
+
+def test_cloudef_miri_src_is_never_an_archive_file():
+    """If a cloudef MIRI entry is added it names the pipeline's own mosaic,
+    ``jw02092-o00N_t00?_miri_clear-f*-mirimage_data_i2d.fits``, not the MAST
+    ``jw02092-o00N_t00?_miri_f*_i2d.fits`` file."""
+    for field in CLOUDEF_FIELDS:
+        for entry in stage_release.FIELDS[field].get("miri", []):
+            name = Path(str(entry["src"])).name
+            assert "_miri_clear-f" in name and name.endswith("-mirimage_data_i2d.fits"), (
+                f"{field} MIRI src {name!r} is not a pipeline mosaic")
 
 
 @pytest.mark.parametrize("field", CLOUDEF_FIELDS)
