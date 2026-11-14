@@ -734,7 +734,13 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
     if not os.path.isdir(ckdir):
         return {}
     out = {}
-    for path in sorted(glob.glob(os.path.join(ckdir, 'checkpoint_m2_*_latest.json'))):
+    # Current records only (issue #827): an untokened pre-migration file is
+    # dropped where a tokened one covers the same filter, instead of being shown
+    # beside it as a second verdict.  Imported here, not at module level, because
+    # astrometry_checkpoint itself imports this module lazily.
+    from ..photometry.astrometry_checkpoint import current_records
+    m2_paths = sorted(p for k, p in current_records(ckdir).items() if k[0] == 'm2')
+    for path in m2_paths:
         # Records are keyed on the observation (issue #281), so two of them can
         # describe the same filter.  `out[filt]` is last-wins, which silently
         # discards one observation's verdict -- key on the token as well.

@@ -34,8 +34,24 @@ import numpy as np
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    find_i2d_for_filter, mark_i2d_stale, update_offsets_table,
+    current_records, find_i2d_for_filter, mark_i2d_stale, update_offsets_table,
 )
+
+
+def _m2_record_paths(records_dir, obs_token=None):
+    """Sorted paths of the m2 ``_latest`` records to read.
+
+    With ``obs_token`` the glob already names the observation, so an untokened
+    record cannot match.  Without one, only CURRENT records are returned (issue
+    #827): an untokened pre-migration record is dropped where a tokened one
+    covers the same filter, so a stale file no longer makes the multi-token
+    refusal fire on a directory that holds one observation's records.
+    """
+    if obs_token:
+        return sorted(glob.glob(os.path.join(
+            records_dir, f"checkpoint_m2_*{obs_token}_latest.json")))
+    return sorted(p for k, p in current_records(records_dir).items()
+                  if k[0] == "m2")
 
 
 def load_corrections(records_dir, obs_token=None):
@@ -50,9 +66,7 @@ def load_corrections(records_dir, obs_token=None):
     refused rather than silently unioned.
     """
     corrections = []
-    pattern = (f"checkpoint_m2_*{obs_token}_latest.json" if obs_token
-               else "checkpoint_m2_*_latest.json")
-    records = sorted(glob.glob(os.path.join(records_dir, pattern)))
+    records = _m2_record_paths(records_dir, obs_token)
     # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
     # so testing for None let `--obs-token ''` walk straight past the refusal.
     if not obs_token:
@@ -120,9 +134,7 @@ def load_exposure_universe(records_dir, obs_token=None):
     # every real record, so unioning two observations merges o002's exposures
     # 1-3 with o005's 4-6 under one (visit, filter) key and feeds that to
     # extend_table_to_per_exposure.  Half this script was tokened.
-    pattern = (f"checkpoint_m2_*{obs_token}_latest.json" if obs_token
-               else "checkpoint_m2_*_latest.json")
-    records = sorted(glob.glob(os.path.join(records_dir, pattern)))
+    records = _m2_record_paths(records_dir, obs_token)
     # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
     # so testing for None let `--obs-token ''` walk straight past the refusal.
     if not obs_token:
