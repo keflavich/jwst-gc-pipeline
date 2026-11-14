@@ -113,10 +113,12 @@ def test_robust_sigma_ignores_nonfinite_and_empty():
     assert F.robust_sigma([np.nan, 1.0, -1.0, 1.0, -1.0]) == pytest.approx(1.4826)
 
 
-def _write_variant(directory, stem, suffix, resid, err, dq, model, date):
+def _write_variant(directory, stem, suffix, resid, err, dq, model, date, commit):
     base = os.path.join(directory, stem + suffix)
     hdr = fits.Header()
     hdr['DATE'] = date
+    hdr['GCPIPEV'] = commit
+    hdr['GCTAG'] = 'tag_' + commit
     fits.HDUList([fits.PrimaryHDU(header=hdr),
                   fits.ImageHDU(resid.astype('f4'), name='SCI'),
                   fits.ImageHDU(err.astype('f4'), name='ERR'),
@@ -131,13 +133,15 @@ def test_main_compares_two_variants_from_disk(tmp_path, capsys):
     resid_s, err, dq, model_s = _frame(SIGMA_PSF * 1.03)
     resid_h, _, _, model_h = _frame(SIGMA_PSF)
     _write_variant(str(tmp_path), stem, F.STPSF_SUFFIX, resid_s, err, dq, model_s,
-                   '2026-09-26T08:32:38.839')
+                   '2026-09-26T08:32:38.839', 'c48ff2a-dirty')
     _write_variant(str(tmp_path), stem, F.HYBRID_SUFFIX, resid_h, err, dq, model_h,
-                   '2026-11-07T23:07:12.463')
+                   '2026-11-07T23:07:12.463', '921d1ef')
     out_json = tmp_path / 'farfield.json'
     assert F.main(['--dir', str(tmp_path), '--json', str(out_json), stem]) == 0
     text = capsys.readouterr().out
     assert 'stpsf: DATE 2026-09-26' in text and 'hybrid: DATE 2026-11-07' in text
+    assert 'GCPIPEV c48ff2a-dirty' in text and 'GCPIPEV 921d1ef' in text
+    assert 'different pipeline commits' in text
     assert '0-6 px' in text and '10-inf px' in text
     assert out_json.exists()
 

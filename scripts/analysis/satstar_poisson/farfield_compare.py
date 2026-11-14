@@ -28,7 +28,9 @@ What the statistic is, and is not:
   comparable.
 * Both variants must come from the same frames and the same masks.  They are
   written on different dates, so other pipeline changes can enter the comparison.
-  The file DATE keywords are printed to make that visible.
+  The DATE, GCTAG and GCPIPEV (pipeline commit) keywords of the primary header are
+  printed to make that visible.  A residual header carries no keyword for the PSF
+  variant itself, so the variant is known only from the file name.
 * The robust sigma is 1.4826 * median(|chi|), uncentred, as in ``loo_crop.py``.
 """
 import argparse
@@ -46,6 +48,9 @@ SATURATED_BIT = 2
 
 #: distance-to-field-star bins [px], as in #996: core, ring, far.
 DEFAULT_BINS = ((0.0, 6.0), (6.0, 10.0), (10.0, np.inf))
+
+#: primary-header keywords printed per variant, to expose differing code revisions.
+PROVENANCE_KEYS = ('DATE', 'GCTAG', 'GCPIPEV')
 
 STPSF_SUFFIX = '_m7_daophot_basic'
 HYBRID_SUFFIX = '_hybpsf_m7_daophot_basic'
@@ -118,15 +123,19 @@ def farfield_sigma(resid, err, dq, model, bins=DEFAULT_BINS, peak_threshold=60.0
 
 
 def load_frame(path_residual, path_model):
-    """(resid, err, dq, model, DATE) from an m7 residual and model file pair."""
+    """(resid, err, dq, model, meta) from an m7 residual and model file pair.
+
+    ``meta`` holds the DATE, GCTAG and GCPIPEV keywords of the residual primary header
+    ('' where absent).
+    """
     with fits.open(path_residual) as res:
         resid = res['SCI'].data.astype(float)
         err = res['ERR'].data.astype(float)
         dq = res['DQ'].data.astype(np.int64)
-        date = res[0].header.get('DATE', '')
+        meta = {key: str(res[0].header.get(key, '')) for key in PROVENANCE_KEYS}
     with fits.open(path_model) as mod:
         model = mod['SCI'].data.astype(float)
-    return resid, err, dq, model, date
+    return resid, err, dq, model, meta
 
 
 def variant_paths(directory, stem, suffix):
@@ -135,15 +144,16 @@ def variant_paths(directory, stem, suffix):
 
 
 def compare_frame(directory, stem, suffixes, **kwargs):
-    """{variant label: {'date': ..., 'bins': [...]}} for one frame."""
+    """{variant label: {'date', 'gctag', 'gcpipev', 'bins'}} for one frame."""
     out = {}
     for label, suffix in suffixes.items():
         resid_path, model_path = variant_paths(directory, stem, suffix)
         for p in (resid_path, model_path):
             if not os.path.exists(p):
                 raise FileNotFoundError(p)
-        resid, err, dq, model, date = load_frame(resid_path, model_path)
-        out[label] = {'date': date,
+        resid, err, dq, model, meta = load_frame(resid_path, model_path)
+        out[label] = {'date': meta['DATE'], 'gctag': meta['GCTAG'],
+                      'gcpipev': meta['GCPIPEV'],
                       'bins': farfield_sigma(resid, err, dq, model, **kwargs)}
     return out
 
@@ -160,7 +170,10 @@ def format_report(results):
         labels = list(variants)
         lines.append(stem)
         for label in labels:
-            lines.append(f"  {label}: DATE {variants[label]['date']}")
+            v = variants[label]
+            lines.append(f"  {label}: DATE {v['date']}  GCTAG {v['gctag']}  GCPIPEV {v['gcpipev']}")
+        if len(labels) == 2 and variants[labels[0]]['gcpipev'] != variants[labels[1]]['gcpipev']:
+            lines.append('  note: the variants come from different pipeline commits')
         head = '  {:<12s}'.format('bin') + ''.join(f'{lab:>14s}' for lab in labels)
         if len(labels) == 2:
             head += f'{"ratio":>10s}'
