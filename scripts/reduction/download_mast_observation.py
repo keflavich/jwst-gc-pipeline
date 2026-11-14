@@ -28,9 +28,9 @@ import numpy as np
 from astroquery.mast import Observations
 
 from jwst_gc_pipeline.fields import basepath
-from jwst_gc_pipeline.mast_names import (
-    filtername_from_mast_filters, jw_prefix)
-from jwst_gc_pipeline.reduction.mast_obs_scope import observation_scope_mask
+from jwst_gc_pipeline.mast_names import filtername_from_mast_filters
+from jwst_gc_pipeline.reduction.mast_obs_scope import (
+    observation_number, observation_scope_mask, on_disk_counts, uncal_uri_mask)
 
 DETECTOR_TOKEN = {'nircam': '_nrc', 'miri': '_mirimage', 'niriss': '_nis'}
 
@@ -44,6 +44,10 @@ def main():
     ap.add_argument('--instrument', default='nircam',
                     choices=sorted(DETECTOR_TOKEN))
     args = ap.parse_args()
+    # MAST spells an observation with three digits.  Pad once, here, so the
+    # query scope, the uncal selector, the on-disk count and every message agree
+    # on `--obsid 8`, `08` and `008`.
+    obs = observation_number(args.obsid)
 
     Observations.clear_cache()
     Observations.TIMEOUT = 300
@@ -69,7 +73,7 @@ def main():
                                             calib_level=[1, 2, 3])
     print(f'obs table: {len(obs_table)} rows', flush=True)
     scope = observation_scope_mask(np.array(obs_table['obs_id']),
-                                   args.proposal, args.obsid)
+                                   args.proposal, obs)
     token = DETECTOR_TOKEN[args.instrument]
 
     rc = 0
@@ -98,20 +102,16 @@ def main():
         # in that state and the next pass picks the products up, so say so and
         # move on.
         if len(products) == 0:
-            print(f'{want}: no products staged for o{args.obsid} yet -- its '
+            print(f'{want}: no products staged for o{obs} yet -- its '
                   f'rows exist but MAST has nothing to download; will be '
                   f'picked up on a later pass', flush=True)
             continue
 
         asn = Observations.filter_products(products, extension='json')
         fits = Observations.filter_products(products, extension='fits')
-        uncal = np.array([
-            uri.endswith('_uncal.fits')
-            and f'{jw_prefix(args.proposal)}{args.obsid}' in uri
-            and token in uri
-            for uri in fits['dataURI']], dtype=bool)
-        # dtype=bool on every mask below: a zero-length list comprehension
-        # yields a float64 array, which is the same TypeError one step later.
+        # dtype=bool on every mask: a zero-length list comprehension yields a
+        # float64 array, which is the same TypeError one step later.
+        uncal = uncal_uri_mask(fits['dataURI'], args.proposal, obs, token)
         if len(fits):
             uncal &= np.asarray(fits['productType'] == 'SCIENCE', dtype=bool)
             have = np.array([os.path.exists(os.path.join(output_dir,
@@ -147,16 +147,11 @@ def main():
         # the only one on disk was o135's, which reads as "o134 can reduce" on
         # a tile that has no level-3 product at all.
         names = os.listdir(output_dir)
-        exposure_tag = f'{jw_prefix(args.proposal)}{args.obsid}'
-        product_tag = f'{jw_prefix(args.proposal)}-o{args.obsid}'
-        n_uncal = len([f for f in names
-                       if f.endswith('_uncal.fits') and f.startswith(exposure_tag)])
-        n_asn3 = len([f for f in names
-                      if '_image3_' in f and f.startswith(product_tag)])
+        n_uncal, n_asn3 = on_disk_counts(names, args.proposal, obs)
         print(f'{want}: on disk now {n_uncal} uncal, {n_asn3} image3 asn '
-              f'for o{args.obsid}', flush=True)
+              f'for o{obs}', flush=True)
         if n_asn3 == 0:
-            print(f'{want}: NO image3 association for o{args.obsid} -- MAST has '
+            print(f'{want}: NO image3 association for o{obs} -- MAST has '
                   f'not published level 3 for this observation, so the reduce '
                   f'cannot run yet', flush=True)
     return rc
