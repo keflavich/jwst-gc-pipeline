@@ -57,6 +57,21 @@
 #
 #   SKIP_IF_DONE=1 scripts/reduction/submit_cataloging_perframe.sh ...
 #
+# RERUNNING ONLY THE SHARDS THAT TIMED OUT (issue #1172) -- ONLY_SHARDS=1,5,9.
+#
+# One TIMEOUT in a fan-out array leaves its finalize, and every phase behind it,
+# on DependencyNeverSatisfied while the other shards are done.  ONLY_SHARDS
+# gives the FIRST phase in PHASES the array `--array=<ONLY_SHARDS>` instead of
+# `0-$((NSHARDS-1))`; every later phase in the same call keeps its full array.
+# Two requirements, both checked before anything is submitted:
+#   * SKIP_IF_DONE=1.  Without it each listed shard refits every frame it owns,
+#     including those the killed task had already finished.
+#   * NSHARDS equal to the original array's.  A frame belongs to shard
+#     ${SLURM_ARRAY_TASK_ID}/${NSHARDS}, so a different NSHARDS moves frames
+#     between shards and leaves some of them unowned.  The banner prints it.
+# The new fan-out gets a NEW finalize; the dead one it replaces has to be
+# cancelled (see scripts/reduction/README.md, "Rerunning timed-out shards").
+#
 # The fan-out then resumes from the completion markers the killed tasks left
 # behind instead of refitting the shard (wd1 #570: 4:26-8:44 per shard down to
 # ~50 s).  It is OPT-IN because no marker changes when the photometry code
@@ -98,6 +113,32 @@ NSHARDS=${NSHARDS:-16}
 FANOUT_CPUS=${FANOUT_CPUS:-2}
 FANOUT_MEM=${FANOUT_MEM:-32gb}
 FINALIZE_CPUS=${FINALIZE_CPUS:-4}
+
+# Subset rerun of the first phase's fan-out array (header, issue #1172).  Only
+# comma-separated task ids and ranges are accepted, each below NSHARDS, so a typo
+# or a stale NSHARDS is refused here and not after an array was submitted.
+ONLY_SHARDS=${ONLY_SHARDS:-}
+if [ -n "$ONLY_SHARDS" ]; then
+    if [ "$SKIP_IF_DONE" != "1" ]; then
+        echo "REFUSING: ONLY_SHARDS=$ONLY_SHARDS needs SKIP_IF_DONE=1; a subset" \
+             "rerun without it refits every frame of the listed shards," \
+             "including those the killed task had already finished." >&2
+        exit 2
+    fi
+    if ! [[ "$ONLY_SHARDS" =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]]; then
+        echo "REFUSING: ONLY_SHARDS='$ONLY_SHARDS' is not a comma-separated" \
+             "list of shard ids or ranges (e.g. 1,5,9 or 2-4,9)." >&2
+        exit 2
+    fi
+    for _tok in ${ONLY_SHARDS//[,-]/ }; do
+        if [ "$_tok" -ge "$NSHARDS" ]; then
+            echo "REFUSING: ONLY_SHARDS=$ONLY_SHARDS names shard $_tok, but" \
+                 "NSHARDS=$NSHARDS (ids run 0-$((NSHARDS-1))).  NSHARDS must" \
+                 "equal the original array's." >&2
+            exit 2
+        fi
+    done
+fi
 
 # FIELD SIZE, measured once and used twice: finalize memory (issue #611) and
 # wall time (issue #737).  crf count is the proxy available at submit time and
@@ -210,6 +251,28 @@ FINALIZE_MEM=${FINALIZE_MEM:-64gb}
 # time rather than queued.  An m12-finalize that outgrows four days needs a
 # finer split, not a bigger number here.
 #
+# MID AND LARGE FAN-OUT, REVISITED (issue #1172).  The table above was cut from
+# two weeks of sacct to 2026-09-04, when mid m3-m6 fan-outs peaked at 5-6.5 h.
+# Jobs from 2026-09-20 to 2026-11-13 (COMPLETED + TIMEOUT, fan-out only), longest
+# shard in hours, mid-tier fields:
+#
+#     sgra1939-o001        m3 10.3   m4 10.6   m5  9.6   m6 12.0 (3 TIMEOUT)  m7  9.6
+#     gc2211-o028          m3 12.0   m4 13.4   m5 12.2   m6 14.2  (TIMEOUTs at 12 h)
+#     gc2211-o046          m3 15.9   m4 12.6   m5 10.3   m6 17.4
+#     crowded_l209438-o007                     m5 13.8   m6 13.3   m7 14.9
+#     sgrc4147-o012        m3-m6 8.5-9.5                          m7 >= 34.0 *
+#
+# * sgrc4147-o012 m7 (array 50450810): the longest COMPLETED shard is 31.8 h and
+#   four siblings were still RUNNING at 34 h of a 36 h limit, so 34 h is a lower
+#   bound on the true maximum.
+#
+# Crf count under-predicts these: sgra (216 crf) and gc2211-o046 (240 crf) run
+# longer per shard than brick (2016 crf), because the fit time follows source
+# crowding.  So the mid tier gets 36 h for m3-m6 (1.5x of 17.4 h is 26 h) and
+# 60 h for m7 (1.5x of 34 h is 51 h); the large tier takes the same values, since
+# a bigger field never gets a shorter wall.  Fields past these limits were
+# saved by per-runner FANOUT_TIME overrides, which still win over the table.
+#
 # The SMALL tier is left at exactly the 12:00:00 it has today.  Not one of the
 # 35 TIMEOUTs in the window belongs to a small field -- they are 8 sgrb2, 8
 # crowded_l3, 8 brick/1182 and 7 w51 m12-fanout shards plus 4 brick/cloudc
@@ -220,11 +283,13 @@ FINALIZE_MEM=${FINALIZE_MEM:-64gb}
 _stage_time() {          # $1=phase  $2=fanout|finalize  ->  a SLURM --time
     case "$FIELD_TIER:$2:$1" in
         small:*)                          echo 12:00:00 ;;
-        mid:fanout:m12|mid:fanout:m7)     echo 1-12:00:00 ;;
-        mid:fanout:*)                     echo 12:00:00 ;;
+        mid:fanout:m12)                   echo 1-12:00:00 ;;
+        mid:fanout:m7)                    echo 2-12:00:00 ;;
+        mid:fanout:*)                     echo 1-12:00:00 ;;
         mid:finalize:*)                   echo 1-12:00:00 ;;
-        large:fanout:m12|large:fanout:m7) echo 1-12:00:00 ;;
-        large:fanout:*)                   echo 1-00:00:00 ;;
+        large:fanout:m12)                 echo 1-12:00:00 ;;
+        large:fanout:m7)                  echo 2-12:00:00 ;;
+        large:fanout:*)                   echo 1-12:00:00 ;;
         large:finalize:m12)               echo 4-00:00:00 ;;
         large:finalize:m4)                echo 2-00:00:00 ;;
         large:finalize:*)                 echo 1-12:00:00 ;;
@@ -477,6 +542,11 @@ fi
 
 echo "Per-frame chain: target=$TARGET $PROPOSAL/$FIELD modules=$MODULES"
 echo "  phases: $PHASES   NSHARDS=$NSHARDS   filters: $FILTERS"
+if [ -n "$ONLY_SHARDS" ]; then
+    echo "  ONLY_SHARDS=$ONLY_SHARDS of NSHARDS=$NSHARDS (SKIP_IF_DONE=1):" \
+         "the first phase's fan-out reruns those shards only; NSHARDS must" \
+         "match the original array"
+fi
 if [ "$PER_FILTER_FINALIZE" = "1" ]; then
     echo "  per-filter finalize: ON for phases [$PER_FILTER_FINALIZE_PHASES]" \
          "-- ${#_FA[@]} finalize jobs each; every other phase stays whole"
@@ -537,12 +607,19 @@ _recover() {
         echo "  Resume the rest of the chain with:"
         echo "    DEP='$_resume_dep' PHASES='$_resume_phases' \\"
         echo "      <the same environment as this run> $0"
+        if [ -n "$ONLY_SHARDS" ] && [ "$_resume_phases" != "$PHASES" ]; then
+            # ONLY_SHARDS belongs to the first phase, which is already queued;
+            # left set it would cut the first resumed phase's array to a subset.
+            echo "  Leave ONLY_SHARDS out of the resume: its subset applied to the" \
+                 "first phase, and the phases still to submit need their full array."
+        fi
     } >&2
     exit "$rc"
 }
 trap _recover EXIT
 
 _remaining="$PHASES"
+_array_spec="${ONLY_SHARDS:-0-$((NSHARDS-1))}"   # first phase only; reset below
 for ph in $PHASES; do
     _resume_dep="$prev_dep"
     _resume_phases="$_remaining"
@@ -553,12 +630,13 @@ for ph in $PHASES; do
     read -r ph_finalize_time ph_finalize_why <<< "$(_phase_time "$ph" finalize)"
     A=$(sbatch --parsable $dep_arg \
         --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-fanout" \
-        --array=0-$((NSHARDS-1)) \
+        --array="$_array_spec" \
         --cpus-per-task="$FANOUT_CPUS" --mem="$FANOUT_MEM" --time="$ph_fanout_time" \
         --export="$COMMON,FILTERS=$FILTERS,PHASE=$ph,MODE=fanout,PARALLEL_WORKERS=$FANOUT_CPUS" \
         "$SB")
     _submitted="${_submitted:+$_submitted }$A"
-    echo "  $ph fan-out array : $A  (0-$((NSHARDS-1)))  --time=$ph_fanout_time $ph_fanout_why${dep_arg:+  [$dep_arg]}"
+    echo "  $ph fan-out array : $A  ($_array_spec)  --time=$ph_fanout_time $ph_fanout_why${dep_arg:+  [$dep_arg]}"
+    _array_spec="0-$((NSHARDS-1))"
 
     # The fan-out is NOT split: one array already covers every frame of every
     # filter, and its shard predicate needs the whole exposure list to partition.
