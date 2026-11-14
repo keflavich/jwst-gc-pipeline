@@ -324,6 +324,25 @@ position-dependent part of each filter-to-anchor residual
 FIELD:` line per filter. **Nothing gates on it**; the two tolerances above are
 unchanged.
 
+**Brightest-K anchor tie (issue #1212, off by default).** The anchor's tie to
+VIRAC2 uses every reliable star of the anchor's vetted catalogue. Most of the
+faint ones have no Ks-selected counterpart, so on gc2211 o046 F200W (124,866
+stars against 16,661 reference rows in the footprint) the offset histogram is
+mostly chance pairs, the contrast falls under the floor and the tie is refused
+although the brightest 10-40k stars tie at 13-15 mas. Setting
+`CROSSFILTER_ANCHOR_BRIGHT_C=<c>` (or `--anchor-bright-c` on
+`run_astrometry_checkpoint.py --crossfilter`) ties the anchor on its brightest
+`K = clamp(c * n_ref_in_footprint, 5000, n_reliable)` stars instead, where
+`n_ref_in_footprint` counts the reference rows inside the anchor catalogue's
+bounding box. The tie must also hold on the brightest `K/2`, with both
+`vs_full` checks coherent and the two bulks within 5 mas; a tie that appears at
+one `K` only fails. The record then carries `anchor_sample` (`n_reliable`,
+`n_used`, `K`, `K_half`, `k_vs_half_sep_mas`, rule) and
+`anchor_reference_tie_half`. The per-filter-vs-anchor checks keep the full
+reliable sample. With the variable unset the record and verdict are unchanged.
+Whether this becomes the gate's definition of a coherent anchor tie is a
+maintainer decision; validate it on the other fields' vetted catalogues first.
+
 **Record names (issue #1254).** The m7 check runs once per merge module, so
 each module writes its own record: `checkpoint_m7_crossfilter_<module>_oNNN`
 (`nrca`, `nrcb`, `merged`, ...). Before this, all modules shared
