@@ -378,6 +378,7 @@ still run after m6.
 | `--manual-ext-snr-floor-per-frame` (opt-out: sets `manual_ext_snr_floor_propagated=False`) | not set (floor on flux_err_prop) | not set | not set | not set |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
+| `--manual-ext-group-qfit` (#1245; `--manual-ext-group-qfit-min-ratio` 0.1) | off | off | off | (unused) |
 | `--manual-ext-hysteresis-qfit-max` (0 = off) | 0.6 | 0.6 (m3–m7) | 0.6 (m3–m7) | (off: MIRI vets on prominence) |
 | `--manual-ext-hysteresis-snr-min` | 10.0 | 10 | 10 | |
 | `--manual-ext-hysteresis-satstar-guard-fwhm` (0 = no guard) | 4.5 | 4.5 | 4.5 | |

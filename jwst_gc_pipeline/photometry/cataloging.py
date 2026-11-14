@@ -59,6 +59,7 @@ from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.nan_fill import replace_nans
+from jwst_gc_pipeline.photometry.group_qfit import compute_group_qfit
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -1572,6 +1573,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                         ('cfit', 'f8'), ('flags', 'i8'), ('iter_detected', 'i8')):
             if _c not in res.colnames:
                 res[_c] = np.zeros(0, dtype=_dt)
+        if mopt(options, 'manual_ext_group_qfit') and 'qfit_group' not in res.colnames:
+            res['qfit_group'] = np.zeros(0, dtype='f8')
         modsky = np.zeros_like(data, dtype=float)
         return res, modsky, None
 
@@ -1963,6 +1966,21 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         print(f"[{label}] dropped {n_neg} non-positive-flux sources: "
               f"{n_neg - n_nan} with flux <= 0 (negative-peak), {n_nan} with "
               f"non-finite flux (fit had no usable pixels)", flush=True)
+
+    # --- group-aware qfit (#1245; manual_ext_group_qfit, default off) ---
+    # Computed last, from the rows that survive every drop above, with the
+    # final (refit) fluxes of the partners.
+    if mopt(options, 'manual_ext_group_qfit'):
+        _res = phot.results
+        _qg = compute_group_qfit(
+            _res, dao_psf_model, data.shape,
+            min_ratio=float(mopt(options, 'manual_ext_group_qfit_min_ratio')),
+            excluded=(np.asarray(mask, dtype=bool) | np.asarray(bad, dtype=bool)))
+        _res['qfit_group'] = _qg
+        _ng = int(np.sum(np.isfinite(_qg) & np.isfinite(
+            np.asarray(_res['qfit'], dtype=float)) & (_qg < np.asarray(_res['qfit'], dtype=float))))
+        print(f"[{label}] group-aware qfit: {_ng} of {len(_res)} rows below "
+              f"their own qfit", flush=True)
 
     return phot.results, modsky, phot
 
@@ -2472,6 +2490,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               snr_floor_propagated=False,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
                               high_keep_grouped=False,
+                              group_qfit=False,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
                               recover_prom_gate=True,
@@ -2577,6 +2596,21 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 
     qf = (np.asarray(t['qfit'], dtype=float)
           if 'qfit' in t.colnames else np.full(n, np.inf))
+    # The member's own qfit stays the value of the diagnostics that report
+    # fit quality (``low_fit_quality``, the prominence exempt).
+    qf_own = qf
+    if group_qfit and 'qfit_group' in t.colnames and 'qfit' in t.colnames:
+        # qfit_group is the per-frame group-aware value (group_qfit.py), which
+        # already carries the flux-ratio, flag-8 and overshoot-refit guards.  A
+        # merged row without a finite flux_err has no covariance behind its fit
+        # and keeps qfit; qfit_group never raises it.
+        _qg = np.asarray(t['qfit_group'], dtype=float)
+        _ok = np.isfinite(_qg)
+        if 'flux_err' in t.colnames:
+            _ok &= np.isfinite(np.asarray(t['flux_err'], dtype=float))
+        qf = np.where(_ok, np.minimum(_qg, qf_own), qf_own)
+        print(f"[{label}] group-aware qfit: {int(np.sum(qf < qf_own))} of {n} "
+              f"rows judged on qfit_group", flush=True)
     flg = (np.asarray(t['flags'], dtype=float)
            if 'flags' in t.colnames else np.full(n, np.nan))
     lbk = (np.asarray(t['local_bkg'], dtype=float)
@@ -3198,7 +3232,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # so a default run keeps its historical output schema (byte-identical).
     if nmatch_confirm_strong > 0 or low_fit_quality_qfit > 0:
         _lfq_thr = float(low_fit_quality_qfit) if low_fit_quality_qfit > 0 else float(nmatch_confirm_qfit_max)
-        t['low_fit_quality'] = np.asarray(qf, dtype=float) > _lfq_thr
+        t['low_fit_quality'] = np.asarray(qf_own, dtype=float) > _lfq_thr
 
     # overshoot drop is shared by both instrument paths (was duplicated).
     if drop_overshoot and 'model_overshoot' in t.colnames:
@@ -3266,7 +3300,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             with np.errstate(invalid='ignore'):
                 _exempt = (np.isfinite(prominence)
                            & (prominence >= float(ext_prom_exempt_prom_min))
-                           & np.isfinite(qf) & (qf <= float(ext_prom_exempt_qfit))
+                           & np.isfinite(qf_own) & (qf_own <= float(ext_prom_exempt_qfit))
                            & np.isfinite(snr_floor)
                            & (snr_floor >= float(ext_prom_exempt_snr))
                            & local_peak)
@@ -11202,6 +11236,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
                     high_keep_grouped=bool(mopt(opts_phase, 'manual_ext_high_keep_grouped')),
+                    group_qfit=bool(mopt(opts_phase, 'manual_ext_group_qfit')),
                     qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
                     recover_satstar_guard_arcsec=float(mopt(opts_phase, 'manual_ext_recover_satstar_guard_arcsec')),
                     recover_prom_gate=bool(mopt(opts_phase, 'manual_ext_recover_prom_gate')),

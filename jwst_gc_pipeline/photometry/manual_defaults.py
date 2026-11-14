@@ -87,6 +87,16 @@ MANUAL_DEFAULTS = {
     # bright keep also for grouped rows (group_size > 1); only grouped fits
     # produce them, so ungrouped runs are unchanged.  See _filter_extended_emission.
     'manual_ext_high_keep_grouped': True,
+    # group-aware qfit (#1245).  On: the per-frame pass writes ``qfit_group``
+    # (a grouped member's qfit with its own flux replaced by the light in its fit
+    # box, partners included; see group_qfit.py) and the merged-catalogue
+    # vetting reads it in place of qfit.  Default off, which leaves the
+    # per-frame and merged catalogs without the column.  A member fainter than
+    # ``manual_ext_group_qfit_min_ratio`` x the brightest member of its group
+    # keeps its own qfit; 0.1 is the ``manual_m7_seed_own_band_companion_max_ratio``
+    # value and is not validated for vetting.
+    'manual_ext_group_qfit': False,
+    'manual_ext_group_qfit_min_ratio': 0.1,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
     # previous-phase (hysteresis) keep: a source the previous phase vetted is
     # kept while qfit < this and S/N >= the next; 0 = off

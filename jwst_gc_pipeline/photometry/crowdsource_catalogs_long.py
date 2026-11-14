@@ -4700,6 +4700,32 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "fit covariance only lowers S/N, and the singleton gate "
                          "vetted out bright close-pair members (o105 F480M "
                          "full grouped chain: 144 rows with S/N >= 20, qfit < 0.4).")
+    parser.add_option("--manual-ext-group-qfit", dest="manual_ext_group_qfit",
+                    action='store_true',
+                    default=MANUAL_DEFAULTS['manual_ext_group_qfit'],
+                    help="Group-aware qfit (#1245).  The per-frame pass writes "
+                         "qfit_group for the members of a jointly fitted group "
+                         "(qfit with the member's flux replaced by the light in "
+                         "its fit box, partners included) and the extended-"
+                         "emission vetting reads it in place of qfit for the "
+                         "keep tiers and the previous-phase keep, so the fainter "
+                         "member of a close pair is no longer judged by a qfit "
+                         "that the brighter member's residual inflates.  The "
+                         "low_fit_quality column stays on the member's own "
+                         "qfit.  Needs per-frame catalogs written with this "
+                         "option; without the column the vetting uses qfit.  "
+                         "Default off.")
+    parser.add_option("--no-manual-ext-group-qfit", dest="manual_ext_group_qfit",
+                    action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_group_qfit'],
+                    help="Turn --manual-ext-group-qfit off (the default).")
+    parser.add_option("--manual-ext-group-qfit-min-ratio",
+                    dest="manual_ext_group_qfit_min_ratio",
+                    type='float',
+                    default=MANUAL_DEFAULTS['manual_ext_group_qfit_min_ratio'],
+                    help="A grouped member fainter than this fraction of the "
+                         "brightest member of its group keeps its own qfit in "
+                         "qfit_group (default 0.1; 0 = no guard).")
     parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
                     help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "
