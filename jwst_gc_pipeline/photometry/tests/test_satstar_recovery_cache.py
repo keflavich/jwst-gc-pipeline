@@ -67,11 +67,15 @@ def test_signature_covers_the_deblend_flag():
 
 def test_deblend_token_names_the_deblender_version():
     """Catalogs seeded by the deblender before #1081 (``_dbl1``) collapsed
-    large blended components to one seed; a deblend run refits them."""
-    assert _satstar_recovery_signature(_opts(deblend_satstars=True)) == "off_dbl2"
+    large blended components to one seed; a deblend run refits them. ``_dbl3``
+    gated every proposed split on >=2 RAW group-0-saturated cores
+    (``satstar_deblend_gate``); ``_dbl4`` (this version) replaced that bulk
+    check with per-centre matching against DEFECT-FILTERED cores, so
+    ``_dbl3``, ``_dbl2`` (ungated) and ``_dbl1`` catalogs are all refit."""
+    assert _satstar_recovery_signature(_opts(deblend_satstars=True)) == "off_dbl4"
     assert _satstar_recovery_signature(
         _opts(satstar_zeroframe_recover=True,
-              deblend_satstars=True)) == "zf1_ramp0_dil3_dbl2"
+              deblend_satstars=True)) == "zf1_ramp0_dil3_dbl4"
 
 
 def test_deblend_off_keeps_the_pre_427_signature_strings():
