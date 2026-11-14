@@ -283,3 +283,31 @@ def test_forced_fill_frames_of_two_areas_calibrate_to_equal_flux(monkeypatch):
             frame_arg_builder=lambda fn: {'name': fn}, fit_shape=(5, 5))
         raw.append(f[0] * conv_jy)
     assert raw[0] / raw[1] - 1 > 0.03
+
+
+def test_merge_individual_frames_rescales_the_frames_before_the_average(tmp_path):
+    """The wiring: the per-filter merge reads the frames from disk, so its product
+    must carry PIXAREF and fluxes whose Jy agree across the detectors."""
+    d = tmp_path / 'F212N'
+    d.mkdir()
+    (tmp_path / 'catalogs').mkdir()
+    for k, area in enumerate(AREAS_SR, start=1):
+        t = _frame(tmp_path, k, area)
+        t['x_fit'] = np.zeros(2)
+        t['y_fit'] = np.zeros(2)
+        t['x_err'] = np.zeros(2)
+        t['y_err'] = np.zeros(2)
+        t['iter_detected'] = np.ones(2, dtype='i8')
+        t['group_size'] = np.ones(2, dtype='i8')
+        t['dra'] = np.zeros(2, dtype='f4')
+        t['ddec'] = np.zeros(2, dtype='f4')
+        t.meta['pixscale'] = 0.031
+        t.write(d / f'f212n_nrca1_o003_visit001_vgroup02101_exp{k:05d}'
+                    f'_m2_daophot_basic.fits')
+    out = MC.merge_individual_frames(
+        module='nrca1', filtername='f212n', progid='3571', field='003',
+        method='dao', suffix='_basic', target='gc3571', basepath=str(tmp_path),
+        iteration_label='m2', do_replace_saturated=False)
+    assert 'PIXAREF' in out.meta
+    area_sr = out.meta['PIXAREF'] / (180 / np.pi) ** 2
+    np.testing.assert_allclose(_jy(out, area_sr, 'flux_fit'), TRUE_JY, rtol=1e-5)
