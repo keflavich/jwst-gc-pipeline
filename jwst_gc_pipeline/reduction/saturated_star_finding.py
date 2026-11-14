@@ -132,6 +132,29 @@ def psf_in_cutout_coords(psf_grid, x0, y0):
     return model
 
 
+def deblend_psf_stamp(psf_grid):
+    """The ``psf_stamp`` callable of ``deblend_blob_zeroframe`` for a gridded
+    PSF: ``stamp(yy, xx, yc, xc)`` is the unit-flux PSF of a star at detector
+    position (``yc``, ``xc``), evaluated at the detector pixels ``yy``, ``xx``
+    with the grid interpolated at the star's position.  ``None`` for any other
+    PSF model, which leaves the deblend without the PSF veto."""
+    if not isinstance(psf_grid, GriddedPSFModel):
+        return None
+
+    def stamp(yy, xx, yc, xc):
+        return psf_grid.evaluate(np.asarray(xx, dtype=float),
+                                 np.asarray(yy, dtype=float), 1.0, xc, yc)
+    return stamp
+
+
+def _satstar_psf_fov_pixels(header):
+    """PSF grid size for the in-FOV satstar fits: 1024 px on the LW detectors,
+    512 px on the SW ones (see the comment where ``get_saturated_stars`` reads
+    the grid)."""
+    detector = header.get('DETECTOR', '').upper()
+    return 1024 if detector in ('NRCALONG', 'NRCBLONG', 'NRCA5', 'NRCB5') else 512
+
+
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
     if header['INSTRUME'].lower() == 'nircam':
         psfgen = stpsf.NIRCam()
@@ -1275,6 +1298,12 @@ def satstar_fit_switches(env=None):
       wd2 F150W nrcb3 (#1058), the 13-19 mag rows that failed only this test
       at 1.0 and had 1 <= qfit_local < 5 all matched a dolphot star (61 of 61,
       51 within 0.3 mag); at qfit_local >= 5, 9 of 17 had no counterpart.
+    * ``SATSTAR_DEBLEND_PSF_MARGIN`` (default 0 = OFF): with the ZEROFRAME
+      deblend, a secondary peak must exceed this fraction of the PSF model at
+      its position after the accepted stars are fitted and subtracted
+      (``satstar_deblend._psf_veto_peaks``, #1195).  The synthetic
+      single-star runs split most stars on a PSF ring or spike bead without
+      it.  Only the deblend reads it; it is keyed under ``dv``.
     * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
       ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
       recovered-core cap and the PSF fraction below which it is skipped
@@ -1303,6 +1332,8 @@ def satstar_fit_switches(env=None):
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
         'recovered_cap': cap_on,
+        'deblend_psf_margin': max(
+            float(env.get('SATSTAR_DEBLEND_PSF_MARGIN', '') or 0.0), 0.0),
         'cap_min_psf_frac': float(
             env.get('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '') or 0.005),
     }
@@ -1617,6 +1648,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['seed_core_dq']:
         # Acts on every in-FOV seed, with or without a ramp.
         parts.append('sq')
+    if deblend_with_zeroframe and sw['deblend_psf_margin'] > 0:
+        # Changes which secondary peaks the deblend keeps (#1195).  Left out
+        # when off, so the default key is the one before the veto existed.
+        parts.append(f"dv{sw['deblend_psf_margin']:g}")
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
@@ -3963,14 +3998,39 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # satstar_deblend.build_deblended_source_records.  When ``zeroframe is None``
     # this block is skipped and the behaviour is identical to before (one seed per
     # component at its refined centroid).
+    _deblend_big_grid = None
     if zeroframe is not None and zeroframe_deblend:
         from .satstar_deblend import build_deblended_source_records
         _inst_repl = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
         _, _fwhm_pix_db = get_fwhm(header, instrument_replacement=_inst_repl)
+        # PSF veto (#1195, SATSTAR_DEBLEND_PSF_MARGIN, default off): the in-FOV
+        # fit grid is read here instead of further down and reused there.
+        _dbl_kwargs = {}
+        _dbl_margin = satstar_fit_switches()['deblend_psf_margin']
+        if _dbl_margin > 0:
+            _deblend_big_grid = get_psf(
+                header, path_prefix=path_prefix,
+                use_merged_psf_for_merged=use_merged_psf_for_merged,
+                fov_pixels=_satstar_psf_fov_pixels(header))
+            _dbl_stamp = deblend_psf_stamp(_deblend_big_grid)
+            if _dbl_stamp is None:
+                print("satstar ZEROFRAME deblend: PSF veto needs a gridded PSF; "
+                      "running without it", flush=True)
+            else:
+                _dbl_kwargs = dict(psf_stamp=_dbl_stamp, psf_margin=_dbl_margin)
+        _dbl_stats = {}
         source_records = build_deblended_source_records(
             saturated, sources, coms, _sizes_by_label, zeroframe, data,
             _fwhm_pix_db, daophot_xy=deblend_daophot_xy,
-            confirm_xy=deblend_confirm_xy)
+            confirm_xy=deblend_confirm_xy, stats=_dbl_stats, **_dbl_kwargs)
+        if _dbl_stats.get('n_failed'):
+            print(f"satstar ZEROFRAME deblend: {_dbl_stats['n_failed']} "
+                  f"component(s) failed and kept their centroid; first: "
+                  f"{_dbl_stats['first_error']}", flush=True)
+        if _dbl_kwargs:
+            print(f"satstar ZEROFRAME deblend: PSF veto (margin "
+                  f"{_dbl_margin:g}) by component: "
+                  f"{_dbl_stats.get('psf_veto', {})}", flush=True)
         # Inherit each record's PARENT COMPONENT seed kind via its stamped
         # label; the bare 'dqsat' default reported every deblended seed as DQ
         # even when it came from the peak / subfloor / partner logic (#212).
@@ -4197,12 +4257,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # plateaus and matches catalog flux.  SW detectors keep 512 (Sickle
     # subarray data cannot diagnose larger sizes; full-frame fields may
     # need re-evaluation).
-    _det_for_fov = header.get('DETECTOR', '').upper()
-    _is_lw_for_satstar = _det_for_fov in ('NRCALONG', 'NRCBLONG', 'NRCA5', 'NRCB5')
-    _satstar_fov_pixels = 1024 if _is_lw_for_satstar else 512
-    big_grid = get_psf(header, path_prefix=path_prefix,
-                       use_merged_psf_for_merged=use_merged_psf_for_merged,
-                       fov_pixels=_satstar_fov_pixels)
+    # (the PSF-veto deblend, SATSTAR_DEBLEND_PSF_MARGIN, builds the same grid
+    # earlier and it is reused here)
+    if _deblend_big_grid is not None:
+        big_grid = _deblend_big_grid
+    else:
+        big_grid = get_psf(header, path_prefix=path_prefix,
+                           use_merged_psf_for_merged=use_merged_psf_for_merged,
+                           fov_pixels=_satstar_psf_fov_pixels(header))
 
     # Large PSF grid for forced (outside-FOV) sources: their diffraction spikes
     # extend ~40" into the FOV — that's 635 px (LW) to 1290 px (SW), much

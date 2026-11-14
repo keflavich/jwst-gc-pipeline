@@ -490,3 +490,19 @@ def test_remove_saturated_stars_stamps_the_switch_signature(tmp_path,
     SSF.remove_saturated_stars(fn, recovery_signature='off',
                                fit_switch_signature='')
     assert 'SATFITSW' not in Table.read(cat).meta
+
+
+def test_signature_keys_the_deblend_psf_margin(tmp_path, monkeypatch):
+    """SATSTAR_DEBLEND_PSF_MARGIN changes which peaks the deblend keeps (#1195),
+    so it keys the cache when the deblend runs, and only then."""
+    fn = _frame(tmp_path, with_ramp=False)
+    assert satstar_fit_switch_signature(fn, deblend_with_zeroframe=True) == ''
+    monkeypatch.setenv('SATSTAR_DEBLEND_PSF_MARGIN', '0.25')
+    assert satstar_fit_switch_signature(fn) == ''
+    assert satstar_fit_switch_signature(
+        fn, deblend_with_zeroframe=True) == 'dv0.25'
+    monkeypatch.setenv('SATSTAR_DEBLEND_PSF_MARGIN', '0.1')
+    assert satstar_fit_switch_signature(
+        fn, deblend_with_zeroframe=True) == 'dv0.1'
+    monkeypatch.setenv('SATSTAR_DEBLEND_PSF_MARGIN', '0')
+    assert satstar_fit_switch_signature(fn, deblend_with_zeroframe=True) == ''
