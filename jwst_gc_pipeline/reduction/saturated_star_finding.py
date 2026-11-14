@@ -426,9 +426,13 @@ def _merge_overlapping_components(saturated, sources, nsource, overlap_frac,
 # read low/NaN in the core but have NaN-variance (unrecoverable) centers and/or
 # bright saturated wings, so they clear the floor.  0 = off (default for unlisted
 # filters -> behaviour unchanged).  Override per run with env SATSTAR_DATA_FLOOR.
+# Looked up by the science bandpass (``_satstar_floor_band``), not by FILTER.
 _SATSTAR_DATA_FLOOR = {
     'f140m': 1000., 'f162m': 1000., 'f182m': 1000., 'f187n': 1000., 'f210m': 1000.,
     'f335m': 800.,  'f360m': 800.,  'f405n': 1000., 'f410m': 800.,  'f480m': 1000.,
+    # channel-sibling estimates (not yet measured from per-field crf data), #950:
+    # f164n from f187n, f323n and f470n from f405n.
+    'f164n': 1000., 'f323n': 1000., 'f470n': 1000.,
 }
 
 
@@ -535,7 +539,40 @@ SAT_SEVERITY_FLOOR = {
     # channel-sibling estimates (not yet measured from per-field crf data):
     'f212n': 4000., 'f466n': 5000., 'f115w': 4000., 'f200w': 4000.,
     'f356w': 2500., 'f444w': 2500.,
+    'f164n': 8000., 'f323n': 5000., 'f470n': 5000.,
 }
+
+
+def _satstar_floor_band(header):
+    """Lower-case science bandpass that keys ``_SATSTAR_DATA_FLOOR`` and
+    ``SAT_SEVERITY_FLOOR`` (#950).
+
+    NIRCam parks its pupil-wheel bands behind a wide blocker: F405N and F466N
+    frames read ``FILTER=F444W``, F323N reads ``F322W2``, F164N and F162M read
+    ``F150W2``.  A FILTER lookup gave F405N the F444W severity floor, F323N and
+    F164N no floor, and left every pupil-wheel band without a data floor.
+    ``''`` (floor 0, gate off) when the header names no bandpass."""
+    return _frame_bandpass(header).lower()
+
+
+_SATSTAR_FLOOR_UNLISTED_WARNED = set()
+
+
+def _warn_unlisted_floor_band(band):
+    """Print one line per band when a NIRCam narrow or medium band is in
+    neither floor table, so that it does not run ungated unnoticed (#950).
+    NIRCam wide bands and all MIRI bands (W and C suffixes) are deliberately
+    unlisted (0 = gate off) and stay quiet.  Never raises."""
+    band = str(band).lower()
+    if (not re.fullmatch(r'f\d{3}[mn]', band)
+            or band in _SATSTAR_DATA_FLOOR or band in SAT_SEVERITY_FLOOR
+            or band in _SATSTAR_FLOOR_UNLISTED_WARNED):
+        return
+    _SATSTAR_FLOOR_UNLISTED_WARNED.add(band)
+    print(f"WARNING: satstar: {band.upper()} has no entry in _SATSTAR_DATA_FLOOR "
+          f"or SAT_SEVERITY_FLOOR; the data and severity gates are off for it "
+          f"(set SATSTAR_DATA_FLOOR / SATSTAR_SEVERITY_FLOOR or add table rows)",
+          flush=True)
 
 
 def _resolve_satstar_severity_floor(filtername, explicit=None):
@@ -1382,11 +1419,33 @@ def _satstar_data_floor_signature(filename, env=None):
             photmjsr = fh['SCI'].header.get('PHOTMJSR', h0.get('PHOTMJSR'))
     except (OSError, KeyError):
         return ''
-    table = float(_SATSTAR_DATA_FLOOR.get(str(h0.get('FILTER', '')).lower(), 0.0))
+    table = float(_SATSTAR_DATA_FLOOR.get(_satstar_floor_band(h0), 0.0))
     readout = satstar_readout_data_floor(h0, photmjsr, env=env)
     if table > 0 and readout is not None and 0 < readout < table:
         return f"dfr{_satstar_data_floor_readout_frac(env):g}"
     return ''
+
+
+def _satstar_floor_lookup_signature(filename):
+    """``'sf<data>-<sev>to<data>-<sev>'`` when the bandpass lookup of the data
+    and severity floor tables differs from the old FILTER lookup (#950), else
+    ``''``.  The first pair is what FILTER gave, the second what the bandpass
+    gives.  Only pupil-wheel frames can differ, so every other frame keeps its
+    key; a catalogue fitted under the FILTER lookup is refit once."""
+    try:
+        with fits.open(filename) as fh:
+            h0 = fh[0].header
+    except OSError:
+        return ''
+    legacy = str(h0.get('FILTER', '')).lower()
+    band = _satstar_floor_band(h0)
+    old = (float(_SATSTAR_DATA_FLOOR.get(legacy, 0.0)),
+           float(SAT_SEVERITY_FLOOR.get(legacy, 0.0)))
+    new = (float(_SATSTAR_DATA_FLOOR.get(band, 0.0)),
+           float(SAT_SEVERITY_FLOOR.get(band, 0.0)))
+    if old == new:
+        return ''
+    return f"sf{old[0]:g}-{old[1]:g}to{new[0]:g}-{new[1]:g}"
 
 
 def satstar_uncapped_flux_filters(env=None):
@@ -1563,6 +1622,11 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
+    # The floor tables are keyed by the science bandpass (#950); a pupil-wheel
+    # frame whose floors changed from the old FILTER lookup is refit.
+    sf = _satstar_floor_lookup_signature(filename)
+    if sf:
+        parts.append(sf)
     # Single-group (G1-only) pixels flagged from the ramp change the seeds and
     # the fit on frames that have any; a catalog fitted without it is stale.
     from jwst_gc_pipeline.reduction import g1only_dq
@@ -3720,15 +3784,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _spike_ratio = float(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE_RATIO', 3.0))
     _readout_floor = satstar_readout_data_floor(
         header, fitsdata['SCI'].header.get('PHOTMJSR', header.get('PHOTMJSR')))
-    _sat_floor = _resolve_satstar_data_floor(header.get('FILTER', ''),
+    _floor_band = _satstar_floor_band(header)
+    _warn_unlisted_floor_band(_floor_band)
+    _sat_floor = _resolve_satstar_data_floor(_floor_band,
                                              explicit=sat_data_floor,
                                              readout_floor=_readout_floor)
     if _readout_floor is not None and _sat_floor == _readout_floor:
         print(f"Saturated starfinding: data floor {_sat_floor:.0f} MJy/sr from the "
               f"readout (table "
-              f"{_SATSTAR_DATA_FLOOR[str(header.get('FILTER', '')).lower()]:g})",
+              f"{_SATSTAR_DATA_FLOOR.get(_floor_band, 0.0):g})",
               flush=True)
-    _sev_floor = _resolve_satstar_severity_floor(header.get('FILTER', ''),
+    _sev_floor = _resolve_satstar_severity_floor(_floor_band,
                                                  explicit=satstar_severity_floor)
     _partner_xy = None
     _sibling_xy = None
