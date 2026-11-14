@@ -62,6 +62,8 @@ from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
 from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
+from jwst_gc_pipeline.photometry.satstar_zf_status import (
+    satstar_zf_status, satstar_zf_summary, zf_fit_fraction)
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
     format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
@@ -3365,6 +3367,7 @@ def load_satstar_catalog(filtername, target='brick',
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
                       f"dedup radius {_rcur}\", alg {_satstar_dedup_alg_tag()}, "
                       f"frame state {_fsig}, phase selection {_phase_sig})")
+                print(satstar_zf_summary(cached))
                 return _ensure_satstar_aperture_photometry(
                     cached, filtername, target, basepath, cache_path=cache)
             if str(cached.meta.get('SATPHSEL', '')) != _phase_sig:
@@ -3444,6 +3447,7 @@ def load_satstar_catalog(filtername, target='brick',
     # The per-exposure provenance is in the exposure-key and iteration columns.
     deduped = finalize_satstar_columns(deduped)
     deduped['id'] = np.arange(1, len(deduped) + 1, dtype=np.int32)
+    print(satstar_zf_summary(deduped))
     # record how many per-exposure catalogs this cache was built from, so a
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
@@ -3478,7 +3482,8 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp7'  # fp7: x_fit/y_fit detector pixels, unique id (#949)
+_SATSTAR_DEDUP_ALG = 'fp7'  # fp7: x_fit/y_fit detector pixels, unique id (#949);
+#                              zf_fit_frac column (#681, same bump)
 #                              fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
 #                              fp5: per-exposure ensemble statistics on the kept row (#925)
 #                              fp4: sky columns re-projected onto the current GWCS (#193)
@@ -4090,6 +4095,16 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
     n_real = np.bincount(grp, weights=(~pos_only).astype(float),
                          minlength=n_out)
     out['position_only'] = n_real < 1
+
+    # ZEROFRAME fit treatment (#681).  ``zf_fit`` stays the representative's
+    # own value; the flux the row carries can be the median over the group, so
+    # also publish the fraction of the group that was fitted on the deep core.
+    # Position-only members carry no flux and do not count; members from
+    # catalogs that predate the column are unknown and do not count either.
+    # A table without the column gets no ``zf_fit_frac``.
+    if 'zf_fit' in tbl.colnames:
+        out['zf_fit_frac'] = zf_fit_fraction(
+            satstar_zf_status(tbl)[orig], grp, n_out, usable=~pos_only)
 
     if _satstar_use_ensemble_position():
         old = out['skycoord_fit']
