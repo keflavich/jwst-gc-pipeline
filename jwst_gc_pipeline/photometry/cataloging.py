@@ -5039,10 +5039,60 @@ def _phase_satstar_mask_inputs(options, opts_phase, phase, frames, cut_bp, filt)
     return fwhm, tuple(paths)
 
 
+#: Fraction of the nominal annulus area that must hold finite pixels for the
+#: annulus median to be used (the rest of the hole goes to the Gaussian fill).
+_ANNULUS_FILL_MIN_FRACTION = 0.25
+
+
+def _plug_holes_from_annulus(work, fov, holes, fwhm_px, inner_fwhm,
+                             width_fwhm=2.0):
+    """Fill each masked disk of ``work`` (in place) with the median of the
+    finite pixels in an annulus around it (#694).
+
+    ``holes`` is a list of ``(xc, yc, R)`` in pixels.  The annulus runs from
+    ``max(inner_fwhm * fwhm_px, R + 1)`` out to ``width_fwhm * fwhm_px`` beyond
+    that, so it excludes the star's own wing out to the inner radius.  Every
+    median is taken on the masked image as it was on entry (neighbours' disks
+    stay NaN and earlier plugs are not read), and the plugs are written after
+    the last median.  A hole whose annulus has fewer finite pixels than
+    ``_ANNULUS_FILL_MIN_FRACTION`` of its nominal area stays NaN.  Returns
+    ``(n_plugged, n_left_nan)``.
+    """
+    ny, nx = work.shape
+    src = work.copy()
+    plugs = []
+    n_left = 0
+    for xc, yc, Rm in holes:
+        r_in = max(inner_fwhm * fwhm_px, Rm + 1.0)
+        r_out = r_in + width_fwhm * fwhm_px
+        Ro = int(np.ceil(r_out))
+        ix, iy = int(round(xc)), int(round(yc))
+        y0, y1 = max(0, iy - Ro), min(ny, iy + Ro + 1)
+        x0, x1 = max(0, ix - Ro), min(nx, ix + Ro + 1)
+        if y0 >= y1 or x0 >= x1:
+            continue
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        rr2 = (xx - xc) ** 2 + (yy - yc) ** 2
+        ann = (rr2 >= r_in ** 2) & (rr2 <= r_out ** 2)
+        vals = src[y0:y1, x0:x1][ann]
+        vals = vals[np.isfinite(vals)]
+        nominal = np.pi * (r_out ** 2 - r_in ** 2)
+        if vals.size < max(3, _ANNULUS_FILL_MIN_FRACTION * nominal):
+            n_left += 1
+            continue
+        plugs.append((y0, y1, x0, x1, rr2 <= Rm ** 2, float(np.median(vals))))
+    for y0, y1, x0, x1, disk, val in plugs:
+        sub = work[y0:y1, x0:x1]
+        sub[disk & fov[y0:y1, x0:x1]] = val
+    return len(plugs), n_left
+
+
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
                             mask_radius_fwhm=2.0, median_size=3,
                             extra_source_catalogs=(),
-                            satstar_catalogs=(), satstar_mask_radius_fwhm=0.0):
+                            satstar_catalogs=(), satstar_mask_radius_fwhm=0.0,
+                            fill_sigma_fwhm=1.0, fill_mode='gauss',
+                            fill_annulus_inner_fwhm=3.0):
     """Build the smoothed background map from a mergedcat residual i2d with the
     fitted SOURCE CORES MASKED OUT before smoothing.
 
@@ -5066,9 +5116,23 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     than the 2 FWHM source disks; ``0`` (default) leaves them unmasked.  See
     the comment at the masking step for the measured numbers.
 
+    ``fill_sigma_fwhm`` / ``fill_mode`` / ``fill_annulus_inner_fwhm`` set how the
+    masked disks are refilled (#694).  The default (``'gauss'``, sigma 1 FWHM)
+    is a normalised Gaussian convolution whose half-width, 1.18 FWHM, is
+    narrower than the 2 FWHM hole, so the fill is drawn mainly from the ring
+    just outside the disk, where the star's own residual wing sits; that
+    pedestal enters the bg, is subtracted from the next phase's frames and
+    enlarges the wing.  ``fill_sigma_fwhm`` widens the kernel.  ``'annulus'``
+    fills each disk with the median of the finite pixels in an annulus starting
+    at ``max(fill_annulus_inner_fwhm * FWHM, R + 1)`` and 2 FWHM wide, with the
+    other holes still masked, and leaves the disk to the Gaussian fill where the
+    annulus holds too few finite pixels (image edge, crowded cores).
+
     Writes ``<mc_i2d>_..._smoothed_bg_i2d.fits`` (same name the plain smoother
     would produce) and returns its path.
     """
+    if fill_mode not in ('gauss', 'annulus'):
+        raise ValueError(f"fill_mode must be 'gauss' or 'annulus', got {fill_mode!r}")
     from astropy.io import fits as _fits
     from astropy.wcs import WCS as _WCS
     from astropy.coordinates import SkyCoord as _SkyCoord
@@ -5123,6 +5187,8 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
         src_ra.append(np.atleast_1d(np.asarray(_sc.ra.deg, dtype=float)))
         src_dec.append(np.atleast_1d(np.asarray(_sc.dec.deg, dtype=float)))
 
+    holes = []  # (xc, yc, Rm) of every masked disk, for the annulus fill
+
     def _mask_disks(ra_deg, dec_deg, Rm):
         """NaN out disks of radius ``Rm`` px at the given sky positions of
         ``work``; returns the number of disks that fall on the image."""
@@ -5141,6 +5207,7 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
             yy, xx = np.mgrid[y0:y1, x0:x1]
             disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= Rm ** 2
             work[y0:y1, x0:x1][disk] = np.nan
+            holes.append((float(xc), float(yc), float(Rm)))
             n += 1
         return n
 
@@ -5196,9 +5263,15 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
         if sat_ra and sum(len(a) for a in sat_ra):
             n_sat = _mask_disks(np.concatenate(sat_ra), np.concatenate(sat_dec), R_sat)
 
+    if fill_mode == 'annulus' and holes:
+        n_plug, n_fallback = _plug_holes_from_annulus(
+            work, fov, holes, fwhm_px, fill_annulus_inner_fwhm)
+        print(f"[bg] annulus fill: {n_plug} holes plugged, {n_fallback} left "
+              f"to the Gaussian fill", flush=True)
+
     # interpolate over the masked source disks (fill from surrounding diffuse bg)
     if np.any(np.isnan(work) & fov):
-        kern = _G2D(x_stddev=max(1.0, fwhm_px))
+        kern = _G2D(x_stddev=max(1.0, fill_sigma_fwhm * fwhm_px))
         work = _irn(work, kern, convolve=_cfft, allow_huge=True)
     sm = _ndi.median_filter(np.nan_to_num(work), size=int(median_size), mode='nearest')
     sm[~fov] = np.nan
@@ -5208,7 +5281,11 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
           f"(masked {n_masked} sources, R={R:.1f}px"
           + (f", {n_sat} satstar positions at R_sat={R_sat:.1f}px"
              if n_sat else "")
-          + f", median box {median_size}px)", flush=True)
+          + f", median box {median_size}px"
+          + (f", fill {fill_mode}" if fill_mode != 'gauss' else "")
+          + (f", fill sigma {fill_sigma_fwhm:g} FWHM"
+             if fill_sigma_fwhm != 1.0 else "")
+          + ")", flush=True)
     return out
 
 
@@ -11225,7 +11302,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                 extra_source_catalogs=([_seed_for_bg]
                                                        if _seed_for_bg else ()),
                                 satstar_catalogs=_sat_paths,
-                                satstar_mask_radius_fwhm=_sat_fwhm)
+                                satstar_mask_radius_fwhm=_sat_fwhm,
+                                mask_radius_fwhm=float(
+                                    mopt(options, 'manual_residual_bg_mask_fwhm')),
+                                fill_sigma_fwhm=float(
+                                    mopt(options, 'manual_residual_bg_fill_sigma_fwhm')),
+                                fill_mode=str(
+                                    mopt(options, 'manual_residual_bg_fill_mode')),
+                                fill_annulus_inner_fwhm=float(
+                                    mopt(options, 'manual_residual_bg_fill_annulus_fwhm')))
                             _bg_fresh = True
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "

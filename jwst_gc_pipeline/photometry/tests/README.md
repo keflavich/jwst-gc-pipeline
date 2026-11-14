@@ -53,6 +53,7 @@ overlap, registration gate, obs-token collisions, satstar gates, …). Use
 | cataloging.py:`_build_source_masked_bg` | bg must mask the UNION of vetted catalog + i2d detection seed (a vetted-dropped real star must not be absorbed into the bg) | `test_bg_masks_unmodeled_seed_star.py` |
 | cataloging.py:`_build_source_masked_bg` | opt-in wider mask at the phase's satstar positions keeps unmodeled saturated stars' PSF wings out of the bg | `test_bg_satstar_mask_radius.py` |
 | cataloging.py:`_build_source_masked_bg` | end-to-end: transiently-dropped blended star survives 7 subtract-bg→re-detect iterations with seed masking (ngc6334 F405N loss cycle) | `test_iterative_bg_preserves_blended_star.py` |
+| cataloging.py:`_build_source_masked_bg` | opt-in hole fill (`fill_sigma_fwhm`, `fill_mode='annulus'`, `mask_radius_fwhm`) that does not refill a masked disk from the star's own wing (#694); defaults bit-identical | `test_bg_fill_wing_pedestal.py` |
 
 ## Deferred (need full PSFPhotometry/IterativePSFPhotometry integration fixtures)
 

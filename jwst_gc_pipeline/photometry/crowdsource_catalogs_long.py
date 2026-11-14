@@ -4551,6 +4551,33 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            "hand-off stars dm -0.03 vs control -0.035, was "
                            "+0.05..+0.13 too faint); >~5 breaks the "
                            "interpolation (12 px hole: -0.12..-0.16)")
+    parser.add_option("--residual-bg-mask-fwhm", dest="manual_residual_bg_mask_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_mask_fwhm'],
+                      type=float,
+                      help="radius (FWHM) of the disks masked at each catalogued "
+                           "source in the residual background (default 2)")
+    parser.add_option("--residual-bg-fill-sigma-fwhm",
+                      dest="manual_residual_bg_fill_sigma_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_fill_sigma_fwhm'],
+                      type=float,
+                      help="sigma (FWHM) of the Gaussian kernel that refills the "
+                           "masked disks of the residual background (default 1; "
+                           "narrower than the 2 FWHM disk, so the fill reads the "
+                           "star's own wing, #694)")
+    parser.add_option("--residual-bg-fill-mode",
+                      dest="manual_residual_bg_fill_mode",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_fill_mode'],
+                      type='choice', choices=('gauss', 'annulus'),
+                      help="'gauss' (default) refills the masked disks by "
+                           "Gaussian interpolation; 'annulus' fills each disk "
+                           "with the median of an annulus outside the star's "
+                           "wing (#694)")
+    parser.add_option("--residual-bg-fill-annulus-fwhm",
+                      dest="manual_residual_bg_fill_annulus_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_fill_annulus_fwhm'],
+                      type=float,
+                      help="inner radius (FWHM) of the fill annulus for "
+                           "--residual-bg-fill-mode=annulus (default 3)")
     parser.add_option("--manual-iterations", dest="manual_iterations",
                     default=True, action='store_true',
                     help=("Use the default PSF photometry pipeline "

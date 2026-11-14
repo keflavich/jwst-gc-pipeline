@@ -40,6 +40,19 @@ MANUAL_DEFAULTS = {
     # over-corrects; 12 px fails (interpolation kernel cannot fill the hole).
     # 0 = off (bit-identical to the plain source mask).
     'manual_residual_bg_satstar_mask_fwhm': 0.0,
+    # -- how the masked source disks of that bg are refilled (#694).  The
+    # defaults reproduce the original behaviour.  The 2 FWHM disk is refilled by
+    # a sigma = 1 FWHM Gaussian convolution, which reaches only ~1.2 FWHM and so
+    # draws mainly on the ring just outside the disk, i.e. the star's own
+    # residual wing; the pedestal is subtracted in the next phase and the wing
+    # grows from phase to phase.  fill_sigma_fwhm widens the kernel; fill_mode
+    # 'annulus' fills each disk with the median of an annulus starting at
+    # fill_annulus_fwhm (Gaussian fill where the annulus is mostly empty);
+    # mask_fwhm sets the disk radius.  No default has been chosen from a re-fit.
+    'manual_residual_bg_mask_fwhm': 2.0,
+    'manual_residual_bg_fill_sigma_fwhm': 1.0,
+    'manual_residual_bg_fill_mode': 'gauss',
+    'manual_residual_bg_fill_annulus_fwhm': 3.0,
     # -- fit QC (model/data-peak overshoot; NOTES_star_vs_extended_emission.md)
     'manual_overshoot_ratio': 1.2,
     'manual_overshoot_action': 'refit',
