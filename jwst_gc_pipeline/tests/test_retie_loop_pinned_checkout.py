@@ -33,9 +33,27 @@ GIT_ENV = {'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t',
            'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
 
 
+def _stub_python_dir(tmp_path):
+    """A directory holding a `python` that exits 0 and prints nothing.
+
+    The loop probes `python offsets_value_digest.py` before the pin block's
+    callers are reached, and refuses (rc 2) when that probe exits 2.  The source
+    repo here carries no digest script, so a real interpreter on PATH (CI has
+    one in /usr/bin, a bare login node does not) would exit 2 for a missing
+    file.  A stub makes the probe the same on every host.
+    """
+    d = tmp_path / 'stubbin'
+    d.mkdir(exist_ok=True)
+    py = d / 'python'
+    if not py.exists():
+        py.write_text('#!/bin/sh\nexit 0\n')
+        py.chmod(py.stat().st_mode | stat.S_IXUSR)
+    return str(d)
+
+
 def _env(tmp_path, **extra):
     env = dict(PROPOSAL='4147', FIELD='012', TARGET='sgrc', FILTERS='F115W', OFFSETS_TBL='/tmp/unused.csv',
-               PATH='/usr/bin:/bin:/usr/local/bin', HOME=str(tmp_path),
+               PATH=f'{_stub_python_dir(tmp_path)}:/usr/bin:/bin:/usr/local/bin', HOME=str(tmp_path),
                RETIE_PIN_DIR=str(tmp_path / 'pins'), **GIT_ENV)
     env.update(extra)
     return env
