@@ -1537,7 +1537,14 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
             raise ValueError(
                 f"companion_restored_mask shape {restored.shape} != DQ shape "
                 f"{sat_mask.shape}")
-        lost_dist_map = ndimage.distance_transform_edt(~(sat_mask & ~restored))
+        lost = sat_mask & ~restored
+        if lost.any():
+            lost_dist_map = ndimage.distance_transform_edt(~lost)
+        else:
+            # every SATURATED pixel was restored: no lost pixel anywhere.
+            # distance_transform_edt of an all-True array is not a distance
+            # (it measures to a point outside the corner), so spell it out.
+            lost_dist_map = np.full(sat_mask.shape, np.inf)
 
     res = phot_obj.results
     if res is None or len(res) == 0:

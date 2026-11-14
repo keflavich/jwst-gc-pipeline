@@ -124,6 +124,26 @@ def test_junk_fit_not_exempt(flux, qfit, with_qfit):
     assert list(phot.fit_results[0].results['id']) == [1]
 
 
+def test_all_saturated_restored_corner_fit_kept():
+    """Every SATURATED pixel restored -> nothing is lost, so a seeded fit next
+    to a restored pixel at the array corner is exempt.  (A distance transform
+    of the all-True "not lost" array would put it 1.0 px from a lost pixel.)"""
+    dq = np.zeros((40, 40), dtype=np.uint32)
+    dq[0:3, 0:3] |= SAT
+    res = Table()
+    res['id'] = [1]
+    res['x_fit'] = [0.2]
+    res['y_fit'] = [0.1]
+    res['flux_fit'] = [5e3]
+    res['qfit'] = [0.05]
+    restored = (dq & SAT).astype(bool)
+    phot = _FakePhot(res)
+    L._filter_near_saturation(phot, dq, max_sat_dist_pix=1.0, label='t',
+                              **_companion_kw(seed=np.array([[0.0, 0.0]]),
+                                              restored=restored))
+    assert list(phot.results['id']) == [1]
+
+
 def test_restored_mask_shape_mismatch_raises():
     dq, res, _ = _scene()
     with pytest.raises(ValueError, match='companion_restored_mask shape'):
@@ -197,3 +217,106 @@ def test_kwargs_bad_value_raises(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='SATPROX_SEEDED_COMPANION'):
         C._seeded_companion_kwargs(_ctx(np.ones((4, 4), bool)),
                                    _seed_file(tmp_path), False)
+
+
+class _NanWCS:
+    """Identity WCS whose second seed falls off the frame (NaN pixel)."""
+    def world_to_pixel(self, sc):
+        px = np.asarray(sc.ra.deg, dtype=float).copy()
+        py = np.asarray(sc.dec.deg, dtype=float).copy()
+        px[1] = np.nan
+        return px, py
+
+
+def test_kwargs_drop_nonfinite_seed_and_filter_runs(tmp_path, monkeypatch):
+    """A seed whose pixel position is NaN is left out of the kwargs; the
+    filter then runs (a NaN in the seed tree would raise)."""
+    monkeypatch.setenv('SATPROX_SEEDED_COMPANION', '1')
+    dq, res, restored = _scene()
+    ctx = types.SimpleNamespace(ww=_NanWCS(), handoff_restore=restored)
+    kw = C._seeded_companion_kwargs(ctx, _seed_file(tmp_path), False)
+    np.testing.assert_allclose(kw['companion_seed_xy'], [[25.5, 20.0]])
+    phot = _run(res, dq, **kw)
+    assert list(phot.results['id']) == [1, 2]
+
+
+# --- wiring: ctx -> _pass -> _manual_phot_pass -> _filter_near_saturation ---
+
+def test_prepare_frame_returns_handoff_restore(tmp_path, monkeypatch):
+    """_prepare_frame_for_photometry hands the restored pixels to the ctx the
+    manual step builds the companion kwargs from."""
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+    ctx, _ = G._prepare(tmp_path, monkeypatch)
+    core = np.zeros(G.SHAPE, bool)
+    core[47:54, 37:44] = True
+    assert ctx.handoff_restore is not None
+    assert ctx.handoff_restore[core].all()
+    assert not ctx.handoff_restore[~core].any()
+
+
+def test_manual_phot_pass_forwards_companion_kwargs(monkeypatch):
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+    seen = {}
+
+    def _capture(phot, dq, **kw):
+        seen.update(kw)
+        return 0
+    monkeypatch.setattr(C, '_filter_near_saturation', _capture)
+    shape = (40, 40)
+    yy, xx = np.mgrid[:shape[0], :shape[1]]
+    sig = 2.574 / 2.3548
+    img = 1e3 * np.exp(-((xx - 20.0) ** 2 + (yy - 20.0) ** 2) / (2 * sig ** 2))
+    seed = Table()
+    seed['x_init'] = [20.0]
+    seed['y_init'] = [20.0]
+    seed['flux_init'] = [1e4]
+    restored = np.zeros(shape, bool)
+    restored[20, 20] = True
+    C._manual_phot_pass(
+        data=img, mask=np.zeros(shape, bool), err=np.ones(shape),
+        bad=np.zeros(shape, bool), dao_psf_model=G._gaussian_grid_psf_fwhm(2.574),
+        init_params=seed, aperture_radius_pix=3.0, localbkg_inner=6,
+        localbkg_outer=10, grouper=None, options=G._prep_options(),
+        dq=np.zeros(shape, np.uint32), satstar_model_subtracted=np.zeros(shape),
+        label='t', **_companion_kw(restored=restored))
+    np.testing.assert_allclose(seen['companion_seed_xy'], SEED)
+    assert seen['companion_seed_radius_pix'] == 0.5
+    assert seen['companion_restored_mask'] is restored
+
+
+def test_manual_step_passes_companion_kwargs_to_every_pass(tmp_path,
+                                                           monkeypatch):
+    """do_photometry_step_manual builds the kwargs from ctx.handoff_restore and
+    the pass's seed catalog and hands them to _manual_phot_pass."""
+    monkeypatch.setenv('SATPROX_SEEDED_COMPANION', '1')
+    shape = (40, 40)
+    restored = np.zeros(shape, bool)
+    restored[20, 23:26] = True
+    ctx = types.SimpleNamespace(
+        im1=None, fwhm_pix=2.574, satstar_rejected_path=None,
+        handoff_xy=HANDOFF, handoff_radius=1.3, handoff_restore=restored,
+        satstar_table=None, nan_replaced_data=np.zeros(shape),
+        mask=np.zeros(shape, bool), err=np.ones(shape),
+        bad=np.zeros(shape, bool), dao_psf_model=None, aperture_radius_pix=5.0,
+        localbkg_inner=6, localbkg_outer=10, grouper=None, dqarr=None,
+        satstar_model_subtracted=None, data=np.zeros(shape), ww=_IdentityWCS())
+    calls = []
+    monkeypatch.setattr(C, '_prepare_frame_for_photometry',
+                        lambda *a, **k: ctx)
+    monkeypatch.setattr(C, '_build_manual_seed', lambda **k: Table())
+
+    def _fake_pass(**kw):
+        calls.append(kw)
+        return Table(), np.zeros(shape), None
+    monkeypatch.setattr(C, '_manual_phot_pass', _fake_pass)
+    monkeypatch.setattr(C, '_save_manual_pass', lambda **k: None)
+    C.do_photometry_step_manual(
+        types.SimpleNamespace(target='gc-treasury'), 'F480M', 'nrcblong',
+        'nrcblong', '105', str(tmp_path), 'f.fits', '10678',
+        manual_phase='m7', prev_seed_catalog=_seed_file(tmp_path))
+    assert calls
+    for kw in calls:
+        np.testing.assert_allclose(kw['companion_seed_xy'],
+                                   [[25.5, 20.0], [3.0, 4.0]])
+        assert kw['companion_seed_radius_pix'] == 0.5
+        assert kw['companion_restored_mask'].sum() == 3
