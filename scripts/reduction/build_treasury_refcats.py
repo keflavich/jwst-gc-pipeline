@@ -54,6 +54,8 @@ a ``#`` comment line, which YAML ignores, so the block can be pasted as it is.
 ``--emit-tiles`` prints the ``tiles:`` block (observation -> MAST
 ``target_name``, i.e. ``GC_<n>``) with the fetch date.  It lists every selected
 tile, built or not, because the name comes from MAST and not from a build.
+It does not skip the build step: add ``--dry-run`` to print the block without
+building any catalog.
 
 ``--dry-run`` prints the exact per-tile command and builds nothing.  Without it
 the tiles are built one subprocess at a time; this is a long query against
@@ -483,7 +485,8 @@ def main(argv=None):
     ap.add_argument('--emit-tiles', action='store_true',
                     help='print the fields.yaml tiles block (observation -> '
                          'MAST target_name) for the selected tiles, whether '
-                         'or not their catalogs build')
+                         'or not their catalogs build (add --dry-run to '
+                         'build nothing)')
     ap.add_argument('--tile-timeout', type=float,
                     default=DEFAULT_TILE_TIMEOUT_S, metavar='SECONDS',
                     help='wall clock for ONE tile subprocess (default '
