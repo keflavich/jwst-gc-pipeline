@@ -87,7 +87,10 @@ def test_the_choice_reaches_the_writer():
     run = src(cataloging.run_manual_pipeline)
     assert ("_xb_ecsv_modules = crossband_ecsv_modules( modules, "
             "getattr(options, 'manual_crossband_ecsv_all_modules', False))") in run
-    assert "vetted=True, write_ecsv=(module in _xb_ecsv_modules))" in run
+    # merge_daophot never writes the cross-band ECSV: write_crossband_ecsv
+    # does, from the annotated FITS (#1228)
+    assert "vetted=True, write_ecsv=False)" in run
+    assert "if module in _xb_ecsv_modules: try: write_crossband_ecsv(_xb)" in run
     assert "basepath=basepath, write_ecsv=write_ecsv)" in src(
         merge_catalogs.merge_daophot)
     merge = src(merge_catalogs.merge_catalogs)

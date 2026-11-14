@@ -508,6 +508,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   module only (for every module when the run has no merged module) unless
   `--manual-crossband-ecsv-all-modules` is passed; a skipped module's `.ecsv`
   from an earlier run is removed (`crossband_ecsv_modules`, `_write_ecsv_twin`).
+  The ECSV is written from the annotated FITS after
+  `annotate_independent_detection` and `propagate_independent_detection`
+  (`write_crossband_ecsv`), so it carries `independently_detected_<filt>` and
+  `n_filt_independent` like the FITS (#1228).
 - `..._resbgsub_m8<obs>.fits` + `..._resbgsub_m8_dedup.fits` — the **forced-fill**
   sibling of the m7 table; every band's flux is force-fit at the merged position.
   Full-frame only; m7 stays as written.

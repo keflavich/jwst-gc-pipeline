@@ -1514,6 +1514,22 @@ def _qualcuts_oksep_suffix(target):
     return f'_qualcuts_oksep{token}'
 
 
+def _sanitise_meta_for_yaml(table):
+    """Stringify the ``table.meta`` values that the YAML (ECSV) dumper rejects."""
+    for k, v in table.meta.items():
+        # Check for astropy.io.fits.card.Undefined objects explicitly: the
+        # plain yaml.dump below accepts them, astropy's ECSV dumper does not
+        if isinstance(v, fits.card.Undefined):
+            table.meta[k] = str(v)
+            print("BAD META (Undefined):", k, type(v), v)
+            continue
+        try:
+            yaml.dump({k: v}, )
+        except Exception as ex:
+            table.meta[k] = str(v)
+            print("BAD META:", k, type(v), v, ex)
+
+
 def _write_ecsv_twin(basetable, tablename, write_ecsv=True):
     """Write ``{tablename}.ecsv`` beside the FITS table, or remove a stale one.
 
@@ -1743,28 +1759,17 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                     else:
                         fixed = arr.astype(bool)
                 basetable.replace_column(colname, Column(fixed, name=colname))
-        # NOTE: prefer the .ecsv written below for downstream use -- ECSV
-        # preserves mixin-column and meta fidelity better than FITS.  FITS is
-        # known to mishandle masked columns (a masked bool can round-trip as
-        # plain True/False; see the saturated-flag coercion above); a
-        # historical concern about further dropped metadata was never pinned
-        # down, specifics unrecorded.
+        # NOTE: the .ecsv twin is a convenience copy of this FITS table.  The
+        # cross-band run (run_manual_pipeline) skips it here and writes it with
+        # cataloging.write_crossband_ecsv once the independent-detection
+        # columns have been added to the FITS (#1228).  FITS is known to
+        # mishandle masked columns (a masked bool can round-trip as plain
+        # True/False; see the saturated-flag coercion above), which is why
+        # that coercion happens before this write.
         basetable.write(f"{tablename}.fits", overwrite=True)
         print(f"Done writing table {tablename}.fits in {time.time()-t0:0.1f} seconds", flush=True)
 
-        # strip out bad metadata that the yaml serializer can't handle
-        for k, v in basetable.meta.items():
-            # Check for astropy.io.fits.card.Undefined objects explicitly
-            try:
-                yaml.dump({k: v}, )
-            except Exception as ex:
-                if isinstance(v, fits.card.Undefined):
-                    basetable.meta[k] = str(v)
-                    print("BAD META (Undefined):", k, type(v), v)
-                    continue
-                else:
-                    basetable.meta[k] = str(v)
-                    print("BAD META:", k, type(v), v, ex)
+        _sanitise_meta_for_yaml(basetable)
 
         _write_ecsv_twin(basetable, tablename, write_ecsv)
 
