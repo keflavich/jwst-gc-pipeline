@@ -7,6 +7,7 @@ chosen by wavelength slot.  These pin the choice each released field actually
 gets, because a diagram with the wrong axes is worse than none: it looks right.
 """
 import importlib.util
+import json
 import os
 
 import numpy as np
@@ -174,3 +175,52 @@ def test_the_untokened_pooled_table_is_dropped_when_per_obs_ones_exist():
 def test_an_untokened_table_alone_is_kept():
     got = cc.select_tables(['/r/basic_merged_x_resbgsub_m8.fits'], _rank)
     assert [o for o, _p in got] == [None]
+
+
+# --- where main() writes, and what the sidecar records -----------------------
+
+_CCD_BANDS = ('f182m', 'f212n', 'f405n', 'f480m')
+
+
+def _stage_catalog(root, version, field_path, name, n=200, seed=0):
+    """Write a four-band merged table under ``<root>/<version>/<field_path>/catalogs``.
+
+    200 rows with S/N 100 in every band clears the ``n_keep < 20`` gate in
+    `render`, and F182M/F212N/F405N/F480M select the CCD axes."""
+    rng = np.random.default_rng(seed)
+    t = Table()
+    for band in _CCD_BANDS:
+        t[f'mag_vega_{band}'] = rng.uniform(14, 18, n)
+        t[f'flux_{band}'] = np.full(n, 100.0)
+        t[f'flux_err_{band}'] = np.ones(n)
+    cats = root / version / field_path / 'catalogs'
+    cats.mkdir(parents=True)
+    t.write(cats / name, format='fits')
+    return name
+
+
+@pytest.mark.parametrize('field,field_path', [
+    ('brick', 'brick'),
+    # w51 is staged under galactic_plane/, but the page reads
+    # diagrams/<version>/<field>/ with no group component.
+    ('w51', 'galactic_plane/w51'),
+])
+def test_main_writes_outside_the_release_tree_and_records_the_version(
+        tmp_path, field, field_path):
+    """A published release is inert (MANIFEST and CHECKSUMS describe its tree),
+    so the diagram goes to ``<root>/diagrams/<version>/<field>/``.  The sidecar
+    carries the release the catalogue came from, which `make_webpage` puts in
+    the caption.  Neither property was pinned when #869 merged."""
+    version = 'v9.9'
+    name = _stage_catalog(tmp_path, version, field_path,
+                          'basic_merged_indivexp_x_resbgsub_m8.fits')
+    rc = cc.main(['--field', field, '--version', version,
+                  '--release-root', str(tmp_path)])
+    assert rc == 0
+    assert not list((tmp_path / version).rglob('*_ccd*'))
+    png, = (tmp_path / 'diagrams' / version / field).glob('*_ccd*.png')
+    assert png.stat().st_size > 0
+    info = json.loads(png.with_suffix('.json').read_text())
+    assert info['version'] == version
+    assert info['source_table'] == name
+    assert info['drawn'] is True
