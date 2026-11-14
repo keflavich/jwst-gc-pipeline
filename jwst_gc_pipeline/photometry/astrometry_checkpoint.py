@@ -5143,10 +5143,15 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             pooled = pool_visit_consensi(consensus_by_visit, context=context)
             consensus_catalog_path = write_filter_consensus(
                 basepath, filt_for_file, pooled, obs_token=obs_token)
+            _iv_worst = pooled.meta['IVMAXMAS']
+            _iv_text = (f"worst inter-visit {_iv_worst:.1f} mas"
+                        if np.isfinite(_iv_worst) else
+                        "no overlapping visits to compare")
             print(f"ASTROM CHECKPOINT [{stage}]: wrote per-filter consensus "
                   f"{consensus_catalog_path} ({len(pooled)} stars, "
-                  f"{pooled.meta['NVISITS']} visits, worst inter-visit "
-                  f"{pooled.meta['IVMAXMAS']:.1f} mas)", flush=True)
+                  f"{pooled.meta['NVISITS']} visits, {_iv_text}; "
+                  f"{pooled.meta['IVNOOVL']} visits share no sky with another)",
+                  flush=True)
         except (ValueError, TypeError, OSError) as ex:
             # Not fatal: the catalog is a product of the checkpoint, not an
             # input to it, and the alignment decisions above are already
