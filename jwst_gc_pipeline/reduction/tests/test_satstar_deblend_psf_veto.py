@@ -197,6 +197,36 @@ def test_failure_is_logged_and_counted(monkeypatch, capsys):
     assert 'ValueError: bad crop' in capsys.readouterr().out
 
 
+def test_stats_count_components_and_splits(monkeypatch):
+    """``n_split`` counts the components that returned more than one star."""
+    star = _single(30, 0)
+    zf, src = _frame([star], 0)
+    monkeypatch.setattr(sd, 'deblend_blob_zeroframe',
+                        lambda *a, **k: ([(30.0, 30.0), (30.0, 40.0)],
+                                         dict(psf_veto='off')))
+    stats = {}
+    recs, _ = _records(zf, src, stats=stats)
+    assert len(recs) == 2
+    assert (stats['n_components'], stats['n_split']) == (1, 1)
+    assert 'n_failed' not in stats
+    monkeypatch.setattr(sd, 'deblend_blob_zeroframe',
+                        lambda *a, **k: ([(30.0, 30.0)], dict(psf_veto='off')))
+    stats = {}
+    _records(zf, src, stats=stats)
+    assert (stats['n_components'], stats.get('n_split', 0)) == (1, 0)
+
+
+def test_missing_skimage_raises(monkeypatch):
+    """Without scikit-image the secondary peak search is skipped inside
+    ``deblend_blob_zeroframe``; the entry point refuses instead of returning
+    unsplit centroids."""
+    star = _single(30, 0)
+    zf, src = _frame([star], 0)
+    monkeypatch.setattr(sd, '_HAVE_SKIMAGE', False)
+    with pytest.raises(ImportError, match='scikit-image'):
+        _records(zf, src)
+
+
 def test_unexpected_error_propagates(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError('unrelated bug')

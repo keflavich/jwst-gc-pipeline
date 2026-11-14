@@ -279,3 +279,18 @@ def test_remove_saturated_stars_stamps_catalog_and_images(
         assert hdr['SATZFMOD'] == mode
         assert ('SATZFR' in hdr) == (prov is not None
                                      and bool(np.isfinite(prov['R'])))
+
+
+def test_deblend_stats_are_stamped_only_when_the_deblend_ran():
+    """#1196: DBLNCMP / DBLNSPL / DBLFAIL record the deblend counts."""
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        stamp_deblend_stats)
+    meta = {}
+    stamp_deblend_stats(meta, None)
+    assert meta == {}
+    stamp_deblend_stats(meta, {'n_components': 12, 'n_split': 3,
+                               'n_failed': 1, 'psf_veto': {'applied': 12}})
+    assert (meta['DBLNCMP'][0], meta['DBLNSPL'][0], meta['DBLFAIL'][0]) == (12, 3, 1)
+    meta = {}
+    stamp_deblend_stats(meta, {})
+    assert (meta['DBLNCMP'][0], meta['DBLNSPL'][0], meta['DBLFAIL'][0]) == (0, 0, 0)
