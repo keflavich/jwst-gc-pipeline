@@ -293,24 +293,19 @@ def test_bad_dq_bitmask_keep_recovered_saturation():
 
 @pytest.mark.parametrize('instrument', ['NIRCAM', 'MIRI'])
 def test_fit_mask_with_flag_keeps_only_the_truly_lost_core(instrument):
+    from jwst_gc_pipeline.photometry.cataloging import _truly_lost_fit_products
     from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
         _bad_dq_bitmask)
 
     dq = _miri_shaped_dq()
     truly_lost = truly_lost_saturated_mask(dq)
+    dq_before = dq.copy()
 
-    def build_mask(keep):
-        mask = np.zeros(dq.shape, dtype=bool)
-        if keep:
-            mask |= truly_lost
-        mask |= (dq & _bad_dq_bitmask(
-            instrument, keep_recovered_saturation=keep)) != 0
-        return mask
-
-    assert int(build_mask(False).sum()) == 900
-    flagged = build_mask(True)
-    assert int(flagged.sum()) == 16
-    assert not flagged[7, 7]
+    assert int(((dq & _bad_dq_bitmask(instrument)) != 0).sum()) == 900
+    fit_add, _ = _truly_lost_fit_products(dq, truly_lost, instrument)
+    assert int(fit_add.sum()) == 16
+    assert not fit_add[7, 7]
+    assert np.array_equal(dq, dq_before)
 
 
 def test_veto_with_restricted_dq_keeps_recovered_and_drops_the_core():
@@ -324,7 +319,8 @@ def test_veto_with_restricted_dq_keeps_recovered_and_drops_the_core():
 
     dq = _miri_shaped_dq()
     truly_lost = truly_lost_saturated_mask(dq)
-    restricted = np.where(truly_lost, dq, dq & ~dq.dtype.type(SAT))
+    from jwst_gc_pipeline.photometry.cataloging import _truly_lost_fit_products
+    _, restricted = _truly_lost_fit_products(dq, truly_lost, 'MIRI')
     assert restricted.dtype == dq.dtype
     assert int(((restricted & SAT) != 0).sum()) == 16
 
@@ -350,6 +346,7 @@ def test_flag_is_wired_through_the_parser_and_the_frame_prep():
         here / 'crowdsource_catalogs_long.py').read_text()
     src = (here / 'cataloging.py').read_text()
     assert "getattr(options, 'truly_lost_saturation_in_fit', False)" in src
+    assert '_truly_lost_fit_products(' in src
     assert 'keep_recovered_saturation=True' in src
     assert 'dq=ctx.dq_for_satveto' in src
     assert 'dq=ctx.dqarr' not in src

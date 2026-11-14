@@ -3945,6 +3945,23 @@ def _default_nircam_satstar_lock_env(environ, sat_ext_nircam):
             '0.5' if sat_ext_nircam else '0')
 
 
+def _truly_lost_fit_products(dqarr, truly_lost, instrument):
+    """Fit-mask pixels and near-saturation-veto DQ for ``--truly-lost-saturation-in-fit``.
+
+    Returns ``(fit_mask_add, dq_for_satveto)``.  ``fit_mask_add`` is the
+    ``truly_lost`` set plus every non-SATURATED bad flag
+    (``_bad_dq_bitmask(..., keep_recovered_saturation=True)``).
+    ``dq_for_satveto`` is a copy of ``dqarr`` with SATURATED cleared outside
+    ``truly_lost``, for ``_filter_near_saturation``; ``dqarr`` is not modified.
+    """
+    sat_bit = dqarr.dtype.type(_L.dqflags.pixel['SATURATED'])
+    fit_mask_add = np.asarray(truly_lost, dtype=bool) | (
+        (dqarr & _L._bad_dq_bitmask(
+            instrument, keep_recovered_saturation=True)) != 0)
+    dq_for_satveto = np.where(truly_lost, dqarr, dqarr & ~sat_bit)
+    return fit_mask_add, dq_for_satveto
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -4190,11 +4207,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             # the SATURATED fallback inside truly_lost_saturated_mask (frames
             # with no DO_NOT_USE saturation) is honoured and sub-floor core
             # pixels are not released.
-            mask |= truly_lost
-            mask |= (dqarr & _L._bad_dq_bitmask(
-                instrument, keep_recovered_saturation=True)) != 0
-            dq_for_satveto = np.where(
-                truly_lost, dqarr, dqarr & ~dqarr.dtype.type(sat_bit))
+            fit_add, dq_for_satveto = _truly_lost_fit_products(
+                dqarr, truly_lost, instrument)
+            mask |= fit_add
             print(f"[manual] truly-lost-saturation-in-fit: fit mask keeps "
                   f"{int(truly_lost.sum())} of "
                   f"{int(((dqarr & sat_bit) != 0).sum())} SATURATED px "
