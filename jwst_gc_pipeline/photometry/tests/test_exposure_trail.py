@@ -142,6 +142,34 @@ def test_missing_frame_is_a_reason_not_an_exception(tmp_path):
     assert et.measure_exposure_shape(tbl)["status"] == "cannot_measure"
 
 
+def test_an_unreadable_gwcs_is_a_reason_not_an_exception(tmp_path, monkeypatch):
+    """The reading is advisory: a GwcsReadError (a RuntimeError) from the frame
+    must not stop the checkpoint that carries it."""
+    pos = _star_grid()
+    frame = tmp_path / "frame.fits"
+    _write_frame(frame, pos)
+
+    def _boom(*args, **kwargs):
+        raise et.GwcsReadError("synthetic: ASDF extension unreadable")
+
+    monkeypatch.setattr(et, "frame_wcs", _boom)
+    res = et.measure_exposure_shape(_catalog(frame, pos))
+    assert res["status"] == "cannot_measure"
+    assert "GwcsReadError" in res["reason"]
+
+
+def test_a_non_finite_sky_angle_is_not_measured(tmp_path, monkeypatch):
+    """NaN < coherence minimum is False, so a NaN angle would read as a
+    coherent drift in the grading; it must not leave the measurement."""
+    pos = _star_grid()
+    frame = tmp_path / "frame.fits"
+    _write_frame(frame, pos, trail_px=6.0, trail_theta=0.3)
+    monkeypatch.setattr(et, "_sky_position_angle_deg", lambda *a, **k: float("nan"))
+    res = et.measure_exposure_shape(_catalog(frame, pos))
+    assert res["status"] == "cannot_measure"
+    assert "not finite" in res["reason"]
+
+
 def test_too_few_isolated_stars_cannot_be_measured(tmp_path):
     pos = _star_grid()[:5]
     _write_frame(tmp_path / "f.fits", pos)

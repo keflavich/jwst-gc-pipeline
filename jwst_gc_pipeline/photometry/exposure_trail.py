@@ -42,7 +42,7 @@ from astropy.io import fits
 
 from .column_utils import _best_available_xy
 from .visit_consensus import exposure_key, select_reliable_stars
-from ..frame_wcs import frame_wcs
+from ..frame_wcs import GwcsReadError, frame_wcs
 from ..reduction.exposure_exclusions import exposure_stem
 
 #: Provisional thresholds (see the module docstring).  The issue's own
@@ -204,9 +204,12 @@ def measure_exposure_shape(table, frame_path=None, n_max=400, half=STAMP_HALF_PX
         with fits.open(frame_path, memmap=False) as hdul:
             data = np.asarray(hdul["SCI"].data, dtype=float)
             wcs = frame_wcs(hdul)
-    except (OSError, KeyError, ValueError) as ex:
+    except (OSError, KeyError, ValueError, GwcsReadError) as ex:
         return dict(status="cannot_measure",
                     reason=f"could not read {frame_path}: {type(ex).__name__}: {ex}")
+    if data.ndim != 2:
+        return dict(status="cannot_measure",
+                    reason=f"SCI of {frame_path} is not a 2-D image")
 
     ny, nx = data.shape
     sigmas, ratios, thetas, xs, ys = [], [], [], [], []
@@ -240,6 +243,11 @@ def measure_exposure_shape(table, frame_path=None, n_max=400, half=STAMP_HALF_PX
     theta_mean, coherence = _axial_mean_deg(np.degrees(thetas), 1.0 - ratios + 1e-6)
     xc, yc = float(np.median(xs)), float(np.median(ys))
     pa = _sky_position_angle_deg(wcs, xc, yc, math.radians(theta_mean))
+    if not np.isfinite(pa):
+        # An off-footprint position reads NaN from the GWCS.  A NaN angle would
+        # compare as "not incoherent" in the grading and could flag a drift.
+        return dict(status="cannot_measure", n_stars=int(len(sigmas)),
+                    reason="the sky position angle is not finite")
     return dict(status="ok", sigma=float(np.median(sigmas)),
                 axis_ratio=float(np.median(ratios)), pa_sky_deg=pa,
                 pa_coherence=coherence, n_stars=int(len(sigmas)))
