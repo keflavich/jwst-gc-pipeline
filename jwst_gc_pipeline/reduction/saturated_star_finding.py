@@ -1237,6 +1237,12 @@ def satstar_fit_switches(env=None):
       wd2 F150W nrcb3 (#1058), the 13-19 mag rows that failed only this test
       at 1.0 and had 1 <= qfit_local < 5 all matched a dolphot star (61 of 61,
       51 within 0.3 mag); at qfit_local >= 5, 9 of 17 had no counterpart.
+    * ``SATSTAR_DEBLEND_ORDER`` (default OFF): with the ZEROFRAME deblend,
+      the seeds of one component are fitted largest ZF-saturated core first
+      (``order_key``), then the unsaturated peaks in detection order.  Every
+      seed of a component carries the component's ``sat_area``, so the
+      ``-sat_area`` sort alone leaves the order inside a component at the
+      raster order of its cores (#1094).  ``sat_area`` itself is unchanged.
     * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
       ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
       recovered-core cap and the PSF fraction below which it is skipped
@@ -1261,6 +1267,7 @@ def satstar_fit_switches(env=None):
         'r_header': _env_switch('SATSTAR_ZF_R_HEADER', cap_on, env),
         'zf_flat': _env_switch('SATSTAR_ZF_FLAT', False, env),
         'seed_core_dq': _env_switch('SATSTAR_SEED_CORE_DQ', True, env),
+        'deblend_order': _env_switch('SATSTAR_DEBLEND_ORDER', False, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1275,7 +1282,8 @@ def satstar_fit_switches(env=None):
 #: band would still compute the ``qfit_local`` column and carry a different
 #: cache key from a run that never exported the gate.
 SATSTAR_OPTIN_ENV = ('SATSTAR_ZF_KEEP_FINITE', 'SATSTAR_OBS_PK_FROM_CRF',
-                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R')
+                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R',
+                     'SATSTAR_DEBLEND_ORDER')
 _OPTIN_BANDPASS_RE = re.compile(r'^F\d{3,4}(W2|[WMN])$')
 
 
@@ -1557,6 +1565,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['seed_core_dq']:
         # Acts on every in-FOV seed, with or without a ramp.
         parts.append('sq')
+    if sw['deblend_order'] and deblend_with_zeroframe:
+        # Reorders the seeds of a deblended component (#1094); acts only
+        # where the ZEROFRAME deblend runs.
+        parts.append('do')
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
@@ -2689,6 +2701,20 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     recovered[rim_mask] = recov[rim_mask]
     deep_core_mask = sat & ~sat_recoverable
     return recovered, rim_mask, deep_core_mask, Kglobal
+
+
+def sort_source_records(source_records, deblend_order=False):
+    """Sort satstar seed records in place into fit order: largest saturated
+    component first (``sat_area``).  With ``deblend_order`` the stable second
+    key is the deblender's ``order_key`` (core radius, 0 for a peak; #1094),
+    largest first; records without one count as 0.  Without it the order inside
+    a component is the order the records arrived in."""
+    if deblend_order:
+        source_records.sort(key=lambda s: (-int(s.get('sat_area') or 0),
+                                           -float(s.get('order_key') or 0.0)))
+    else:
+        source_records.sort(key=lambda s: -int(s.get('sat_area') or 0))
+    return source_records
 
 
 def stamp_seed_kinds(source_records, seed_kinds):
@@ -3957,7 +3983,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # Subtracting the brighter star's PSF before fitting the fainter one
     # removes wing contamination at the cost of one PSF-model evaluation
     # per source.
-    source_records.sort(key=lambda s: -int(s.get('sat_area') or 0))
+    # SATSTAR_DEBLEND_ORDER (#1094): the stars of one deblended component share
+    # its sat_area, so the sort above leaves them in raster order of their
+    # cores.  The stable second key puts the larger cores (and then the
+    # unsaturated peaks, order_key 0, in detection order) first.
+    sort_source_records(source_records,
+                        deblend_order=satstar_fit_switches()['deblend_order'])
 
     if outside_star_pixels is not None:
         for xy in outside_star_pixels:
