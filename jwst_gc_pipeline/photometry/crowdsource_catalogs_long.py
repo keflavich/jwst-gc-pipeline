@@ -5543,6 +5543,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'order, so the m8 catalog is identical to the serial '
                             'path (#1230).  Each process adds one prepared '
                             'frame to the memory in use.'))
+    parser.add_option('--forced-fill-bkg-scatter', dest='forced_fill_bkg_scatter',
+                      default=False, action='store_true',
+                      help=('Add each m8 forced-fill source\'s local background '
+                            'scatter (1.4826 MAD of the frame data in a 2.5-4.5 '
+                            'FWHM annulus) to the per-pixel crf ERR in '
+                            'quadrature, so forced_snr, flux_ulim and the '
+                            'detection cut rest on the larger error.  Writes '
+                            'forced_bkg_sigma_<filter>.  Default off: the crf '
+                            'ERR holds no term for background structure and '
+                            'the m8 limits on bright extended emission are '
+                            'deeper than the local noise (#1120).'))
     (options, args) = parser.parse_args()
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the

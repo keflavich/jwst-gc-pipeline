@@ -23,13 +23,18 @@ QA / stacking, and unbiased -- clamping it would bias a later stack), but
 ``mask_{filt}`` stays ``True`` and no magnitude is written.  Alongside it,
 ``flux_ulim_{filt}`` / ``mag_vega_ulim_{filt}`` / ``mag_ab_ulim_{filt}`` record
 the actual ``nsigma``-scaled upper limit (``nsigma * ferr``, from the SAME
-inverse-variance-combined per-frame fit error used for ``forced_snr_{filt}``,
-so it already reflects the local background -- a star forced onto bright
-extended emission gets a shallower, larger ``ferr`` and therefore a fainter
-limit than one on clean sky).  Without this column the only place the per-
-source noise level survived was ``forced_snr_{filt}`` (flux/ferr), from which
-a limit cannot be safely recovered when the point estimate itself is near
-zero or negative.
+inverse-variance-combined per-frame fit error used for ``forced_snr_{filt}``).
+``ferr`` comes from the crf ``ERR`` plane (Poisson, read noise and flat error),
+so it follows the Poisson noise of nebular flux under the source but carries no
+term for structure left in the background-subtracted frame: neither the
+residual-background median-filter box (``--residual-bg-median-size``, which sets
+what is subtracted, not a variance) nor unresolved neighbours enter it.  On
+bright extended emission ``ferr`` is therefore a lower bound on the local noise
+(#1120; #1284 measured the fixed-position scatter at ~10x ``ferr`` on o107
+F480M).  ``--forced-fill-bkg-scatter`` adds that term (see below).  Without
+this column the only place the per-source noise level survived was
+``forced_snr_{filt}`` (flux/ferr), from which a limit cannot be safely
+recovered when the point estimate itself is near zero or negative.
 
 ``is_upper_limit_{filt}`` is an explicit per-band bool, set ``True`` exactly
 for a fitted-but-sub-threshold row (the only rows where ``flux_ulim_{filt}``
@@ -47,6 +52,23 @@ IMPORTANT for any consumer: ``flux_ulim_{filt}``/``mag_ab_ulim_{filt}``/
 diagnostic there, same as a sub-threshold row) -- a finite ``mag_ab_ulim``
 is NOT by itself evidence that a row is a limit.  Gate on
 ``is_upper_limit_{filt}``, never on ``isfinite(mag_ab_ulim_{filt})`` alone.
+
+With ``bkg_scatter`` (``--forced-fill-bkg-scatter``, default off) each
+source's per-frame error stamp becomes ``sqrt(ERR**2 + sigma**2)``, where
+``sigma`` is ``1.4826 * MAD`` of the valid, finite pixels of the frame's
+satstar-subtracted data in an annulus of 2.5 to 4.5 FWHM about the source (the
+estimator of ``SATSTAR_ERR_BKG_SCATTER``,
+``psf_fitting.annulus_scatter_sigma``).  A source whose annulus has fewer than
+20 usable pixels keeps the ERR-only error in that frame.  ``ferr``,
+``forced_snr_{filt}``, ``flux_ulim_{filt}`` and the detection cut then all rest
+on the inflated error, and ``forced_bkg_sigma_{filt}`` records the mean
+``sigma`` over the frames that measured it (image units, NaN when none did).
+The term is white and per pixel, so it under-corrects scatter that is
+correlated over the PSF footprint.  It is an error term only: an annulus median
+offset still enters ``flux_{filt}`` directly, since the closed-form fit has no
+background parameter.  Overlapping frames share their background structure but
+are still combined as independent, so ``ferr`` shrinks as ``1/sqrt(N)`` for a
+shared sky.
 
 Calibration is taken from the band's own firm detections in the merged table
 (``conv = median(flux_jy / flux)``; Vega zero-point likewise), so m8 fluxes are
@@ -68,7 +90,8 @@ from astropy import units as u
 from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry.frame_pixel_area import frame_area_sr
 from jwst_gc_pipeline.photometry.naming import frame_identity
-from jwst_gc_pipeline.photometry.psf_fitting import forced_psf_photometry
+from jwst_gc_pipeline.photometry.psf_fitting import (
+    annulus_scatter_sigma, forced_psf_photometry)
 
 ABMAG_OFFSET = 8.90  # -2.5 log10(flux_jy) + 8.90  (AB)
 
@@ -171,9 +194,16 @@ def _satstar_partner_guard(tbl, filt, ref, targets,
     return veto
 
 
+# Annulus of the local-background scatter term, in FWHM, and the fewest usable
+# annulus pixels (the satstar estimator's min_pixels).
+BKG_SCATTER_INNER_FWHM = 2.5
+BKG_SCATTER_OUTER_FWHM = 4.5
+BKG_SCATTER_MIN_PIXELS = 20
+
+
 def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
                       frame_arg_builder, fit_shape, conv_jy=None,
-                      frame_area_sr=None):
+                      frame_area_sr=None, bkg_scatter=False):
     """Prepare one frame and force-fit every target that lands on it.
 
     Returns ``(loc, flux, var)`` for the fits with a finite flux and a positive
@@ -187,6 +217,12 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
     ``PIXAR_SR * 1e6 / conv_jy``.  Their later product with ``conv_jy`` is then
     the frame's flux in Jy with its own detector's pixel area (#1238), whatever
     area the m7 conversion used.
+
+    With ``bkg_scatter`` each source's error stamp gains the annulus scatter of
+    the frame's data in quadrature (``psf_fitting.annulus_scatter_sigma``), and
+    the return value is ``(loc, flux, var, bkg_sigma)`` with the per-source
+    scatter in image units (NaN where unmeasured).  Without it the return value
+    is the three-tuple above and the fit is unchanged.
     """
     # A dropped frame here silently weakens the inverse-variance combine
     # (no-silent-frame-drops rule): catch only the exceptions frame prep
@@ -215,9 +251,21 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
     if not inb.any():
         return None
     seed = Table({'x_init': xpix[inb], 'y_init': ypix[inb]})
+    bkg_sigma = None
+    if bkg_scatter:
+        fwhm = float(ctx.fwhm_pix)
+        # keep the annulus clear of the fit stamp whatever the FWHM
+        inner = max(BKG_SCATTER_INNER_FWHM * fwhm,
+                    0.5 * max(fit_shape) + 1.5)
+        outer = max(BKG_SCATTER_OUTER_FWHM * fwhm, inner + 2.0)
+        bkg_sigma = annulus_scatter_sigma(
+            ctx.nan_replaced_data, ~np.asarray(ctx.mask, dtype=bool),
+            xpix[inb], ypix[inb], inner, outer,
+            min_pixels=BKG_SCATTER_MIN_PIXELS)
     res = forced_psf_photometry(
         ctx.nan_replaced_data, ctx.dao_psf_model, seed,
-        error=ctx.err, mask=ctx.mask, fit_shape=fit_shape, nonnegative=False)
+        error=ctx.err, mask=ctx.mask, fit_shape=fit_shape, nonnegative=False,
+        bkg_sigma=bkg_sigma)
     f = np.asarray(res['flux_fit'], dtype=float)
     e = np.asarray(res['flux_err'], dtype=float)
     if frame_area_sr is not None and conv_jy is not None:
@@ -225,13 +273,15 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
         f = f * scale
         e = e * scale
     ok = np.isfinite(f) & np.isfinite(e) & (e > 0)
+    if bkg_scatter:
+        return np.where(inb)[0][ok], f[ok], e[ok] ** 2, bkg_sigma[ok]
     return np.where(inb)[0][ok], f[ok], e[ok] ** 2
 
 
 def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
                      nsigma=3.0, fit_shape=(5, 5),
                      satstar_partner_guard=0.5 * u.arcsec, verbose=True,
-                     n_procs=1, frame_area_sr=None):
+                     n_procs=1, frame_area_sr=None, bkg_scatter=False):
     """Force-fit ``filt`` at the reference position of every source that is a
     non-detection (and not saturated) in ``filt``, combine across ``frames``,
     and write the results back into ``tbl`` in place.
@@ -257,6 +307,10 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     each frame's fitted flux and error are brought to Jy with that frame's own
     pixel area before the inverse-variance combine (#1238); ``None`` keeps the
     raw image units, which assumes one pixel area for all frames.
+
+    ``bkg_scatter`` adds each source's local annulus scatter to the per-frame
+    error in quadrature (module docstring) and writes ``forced_bkg_sigma_{filt}``.
+    Off (the default), the output is unchanged and that column is not created.
     """
     n = len(tbl)
     fl = filt.lower()  # merged-catalog columns are lowercase; frames keep orig case
@@ -313,6 +367,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     wsum = np.zeros(tgt_idx.size)      # sum 1/var
     wfsum = np.zeros(tgt_idx.size)     # sum flux/var
     nseen = np.zeros(tgt_idx.size, dtype=int)
+    bsum = np.zeros(tgt_idx.size)      # sum of the frames' annulus scatter
+    bseen = np.zeros(tgt_idx.size, dtype=int)
     ra = ref.ra.deg[tgt_idx]
     dec = ref.dec.deg[tgt_idx]
 
@@ -321,7 +377,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
                                  prepare_frame=prepare_frame,
                                  frame_arg_builder=frame_arg_builder,
                                  fit_shape=fit_shape, conv_jy=conv_jy,
-                                 frame_area_sr=frame_area_sr)
+                                 frame_area_sr=frame_area_sr,
+                                 bkg_scatter=bkg_scatter)
 
     frames = list(frames)
     if verbose and n_procs > 1 and len(frames) > 1:
@@ -331,10 +388,15 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     for fit in frame_pool.map_frames(_fit, frames, n_procs):
         if fit is None:
             continue
-        loc, f, var = fit
+        loc, f, var = fit[:3]
         wsum[loc] += 1.0 / var
         wfsum[loc] += f / var
         nseen[loc] += 1
+        if bkg_scatter:
+            bs = fit[3]
+            got = np.isfinite(bs)
+            bsum[loc[got]] += bs[got]
+            bseen[loc[got]] += 1
 
     fitted = nseen > 0
     flux = np.full(tgt_idx.size, np.nan)
@@ -342,6 +404,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     flux[fitted] = wfsum[fitted] / wsum[fitted]
     ferr[fitted] = 1.0 / np.sqrt(wsum[fitted])
     snr = np.where(ferr > 0, flux / ferr, np.nan)
+    bkg_mean = np.full(tgt_idx.size, np.nan)
+    bkg_mean[bseen > 0] = bsum[bseen > 0] / bseen[bseen > 0]
 
     # write back ---------------------------------------------------------
     def _ensure(col, dtype, fill):
@@ -353,6 +417,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     _ensure(f'mag_ab_ulim_{filt}', float, np.nan)
     _ensure(f'mag_vega_ulim_{filt}', float, np.nan)
     _ensure(f'is_upper_limit_{filt}', bool, False)
+    if bkg_scatter:
+        _ensure(f'forced_bkg_sigma_{filt}', float, np.nan)
 
     detected = fitted & np.isfinite(snr) & (snr >= nsigma) & (flux > 0)
     not_detected = fitted & ~detected
@@ -399,6 +465,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     tbl[f'mag_ab_ulim_{filt}'][ridx] = np.nan
     tbl[f'mag_vega_ulim_{filt}'][ridx] = np.nan
     tbl[f'is_upper_limit_{filt}'][ridx] = False
+    if bkg_scatter:
+        tbl[f'forced_bkg_sigma_{filt}'][ridx] = np.nan
     if f'flux_{filt}' in tbl.colnames:
         tbl[f'flux_{filt}'][ridx] = np.nan
     if f'flux_jy_{filt}' in tbl.colnames:
@@ -416,6 +484,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     tbl[f'mag_ab_ulim_{filt}'][ridx[fitted]] = ulim_mag_ab[fitted]
     tbl[f'mag_vega_ulim_{filt}'][ridx[fitted]] = ulim_mag_vega[fitted]
     tbl[f'is_upper_limit_{filt}'][ridx[not_detected]] = True
+    if bkg_scatter:
+        tbl[f'forced_bkg_sigma_{filt}'][ridx[fitted]] = bkg_mean[fitted]
     if f'flux_{filt}' in tbl.colnames:
         tbl[f'flux_{filt}'][ridx[fitted]] = flux[fitted]
     if f'flux_jy_{filt}' in tbl.colnames:
@@ -445,7 +515,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
 def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
                               frames_for, prepare_frame, frame_arg_builder_for,
                               nsigma=3.0, fit_shape=(5, 5), verbose=True,
-                              n_procs=1, frame_area_sr=frame_area_sr):
+                              n_procs=1, frame_area_sr=frame_area_sr,
+                              bkg_scatter=False):
     """Load the merged m7 catalog, force-fill every band, write the m8 catalog.
 
     Parameters
@@ -461,6 +532,8 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
     n_procs : forked processes per band's frame loop (``forced_fill_band``)
     frame_area_sr : callable ``frame filename -> PIXAR_SR`` (sr); the default
         reads the frame's own header (#1238).  ``None`` fills in raw image units.
+    bkg_scatter : add the local annulus scatter to the fit errors
+        (``forced_fill_band``); default off.
     """
     if verbose:
         print(f"[m8] forced cross-band fill: {os.path.basename(merged_path)} "
@@ -479,7 +552,8 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
             tbl, filt, frames, prepare_frame=prepare_frame,
             frame_arg_builder=frame_arg_builder_for(filt),
             nsigma=nsigma, fit_shape=fit_shape, verbose=verbose,
-            n_procs=n_procs, frame_area_sr=frame_area_sr)
+            n_procs=n_procs, frame_area_sr=frame_area_sr,
+            bkg_scatter=bkg_scatter)
     tbl.write(out_path, overwrite=True)
     if verbose:
         print(f"[m8] wrote {out_path}  ({total} phantom non-detections recovered)",

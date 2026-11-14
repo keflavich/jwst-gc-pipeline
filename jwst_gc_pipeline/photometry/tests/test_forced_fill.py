@@ -7,6 +7,7 @@ band's own detections, clears the mask above the SNR threshold, and leaves
 already-detected rows untouched.
 """
 import numpy as np
+import pytest
 from types import SimpleNamespace
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
@@ -344,3 +345,163 @@ def test_fill_targets_are_selected_by_mask_column():
 
     # mask True on the same rows -> they become targets and are filled.
     assert ff.forced_fill_band(tbl.copy(), 'f405n', ['frame1'], **kw) == 2
+
+
+# ---------------------------------------------------------------------------
+# bkg_scatter (#1120): the crf ERR holds no term for background structure
+# ---------------------------------------------------------------------------
+NOISE = 4.0      # true pixel scatter of the frame; the crf ERR says 1.0
+FWHM = 2.355 * SIG
+
+
+def _blank_scene(nblank=300, seed=5, noise=NOISE, nx=240, ny=240):
+    """A noisy frame whose ERR plane under-states the scatter ``noise``-fold,
+    with ``nblank`` blank-sky forced-fill targets and 25 firm detections."""
+    rng = np.random.default_rng(seed)
+    ww = WCS(naxis=2)
+    ww.wcs.crpix = [nx / 2, ny / 2]
+    ww.wcs.crval = [266.4, -29.0]
+    ww.wcs.cdelt = [-0.017 / 3600, 0.017 / 3600]
+    ww.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    image = rng.normal(0, noise, (ny, nx))
+    px = rng.uniform(20, nx - 20, nblank)
+    py = rng.uniform(20, ny - 20, nblank)
+    ndet = 25
+    dflux = rng.uniform(200, 5000, ndet)
+    dra, ddec = ww.all_pix2world(rng.uniform(5, nx - 5, ndet),
+                                 rng.uniform(5, ny - 5, ndet), 0)
+    pra, pdec = ww.all_pix2world(px, py, 0)
+    cjy, zp = 3.0e-8, 1.5e-7
+    nanph = [np.nan] * nblank
+    tbl = Table()
+    tbl['skycoord_ref'] = SkyCoord(np.r_[dra, pra] * u.deg, np.r_[ddec, pdec] * u.deg)
+    tbl['flux_f405n'] = np.r_[dflux, nanph]
+    tbl['flux_jy_f405n'] = np.r_[dflux * cjy, nanph]
+    tbl['mag_ab_f405n'] = np.r_[-2.5 * np.log10(dflux * cjy) + 8.90, nanph]
+    tbl['mag_vega_f405n'] = np.r_[-2.5 * np.log10(dflux * cjy / zp), nanph]
+    tbl['emag_ab_f405n'] = np.r_[np.full(ndet, 0.02), nanph]
+    tbl['mask_f405n'] = np.array([False] * ndet + [True] * nblank)
+    tbl['is_saturated_f405n'] = np.zeros(ndet + nblank, bool)
+    tbl['near_saturated_f405n_f405n'] = np.zeros(ndet + nblank, bool)
+
+    mask = np.zeros((ny, nx), bool)
+
+    def prepare_frame(**kw):
+        return SimpleNamespace(nan_replaced_data=image,
+                               err=np.ones((ny, nx), 'float32'), mask=mask,
+                               ww=ww, dao_psf_model=_MockPSF(), fwhm_pix=FWHM)
+
+    return tbl, prepare_frame, ndet, mask
+
+
+def _fill(tbl, prepare_frame, **kw):
+    ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare_frame,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False, **kw)
+
+
+def test_bkg_scatter_ulim_tracks_the_blank_position_scatter():
+    tbl, prepare_frame, ndet, _ = _blank_scene()
+    off = tbl.copy()
+    _fill(off, prepare_frame)
+    _fill(tbl, prepare_frame, bkg_scatter=True)
+
+    blank = slice(ndet, None)
+    true_scatter = np.std(np.asarray(off['flux_f405n'][blank], float))
+    ferr_off = np.median(off['flux_ulim_f405n'][blank]) / 3.0
+    ferr_on = np.median(tbl['flux_ulim_f405n'][blank]) / 3.0
+    # ERR alone under-states the scatter by about NOISE; the annulus term
+    # brings the error to within 20% of the measured blank-position scatter.
+    assert true_scatter / ferr_off > 0.8 * NOISE
+    assert ferr_on == pytest.approx(true_scatter, rel=0.2)
+    # forced_snr follows the same error
+    snr_on = np.asarray(tbl['forced_snr_f405n'][blank], float)
+    assert np.std(snr_on) == pytest.approx(1.0, rel=0.2)
+    # the bound is only ever raised, and fewer blank positions pass the cut
+    assert np.all(tbl['flux_ulim_f405n'][blank] >= off['flux_ulim_f405n'][blank])
+    assert (~tbl['mask_f405n'][blank]).sum() < (~off['mask_f405n'][blank]).sum()
+    # the diagnostic column is the annulus scatter in image units
+    bs = np.asarray(tbl['forced_bkg_sigma_f405n'][blank], float)
+    assert np.isfinite(bs).all()
+    assert np.median(bs) == pytest.approx(NOISE, rel=0.1)
+    assert not np.isfinite(tbl['forced_bkg_sigma_f405n'][:ndet]).any()
+
+
+def test_bkg_scatter_off_is_the_existing_behaviour():
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=40)
+    ref = tbl.copy()
+    _fill(ref, prepare_frame)
+    explicit = tbl.copy()
+    _fill(explicit, prepare_frame, bkg_scatter=False)
+    assert 'forced_bkg_sigma_f405n' not in ref.colnames
+    assert explicit.colnames == ref.colnames
+    for c in ref.colnames:
+        if c == 'skycoord_ref':
+            continue
+        np.testing.assert_array_equal(np.asarray(explicit[c]), np.asarray(ref[c]))
+
+
+def test_bkg_scatter_falls_back_to_crf_error_where_the_annulus_is_unusable():
+    tbl, prepare_frame, ndet, mask = _blank_scene(nblank=30)
+    ctx = prepare_frame()
+    ww = ctx.ww
+    ra = tbl['skycoord_ref'].ra.deg[ndet:]
+    dec = tbl['skycoord_ref'].dec.deg[ndet:]
+    x, y = ww.all_world2pix(ra, dec, 0)
+    # leave only each target's own 5x5 stamp usable: no annulus pixels remain
+    mask[:] = True
+    for xi, yi in zip(x, y):
+        ix, iy = int(round(xi)), int(round(yi))
+        mask[iy - 2:iy + 3, ix - 2:ix + 3] = False
+    off = tbl.copy()
+    _fill(off, prepare_frame)
+    _fill(tbl, prepare_frame, bkg_scatter=True)
+    # a target within an annulus-width of another target's stamp still sees
+    # that stamp's pixels; every other one has no annulus and keeps the ERR error
+    unmeasured = np.isnan(np.asarray(tbl['forced_bkg_sigma_f405n'], float))
+    unmeasured[:ndet] = False
+    assert unmeasured.sum() > 20
+    for c in ('flux_ulim_f405n', 'forced_snr_f405n'):
+        np.testing.assert_array_equal(np.asarray(tbl[c])[unmeasured],
+                                      np.asarray(off[c])[unmeasured])
+
+
+def test_bkg_scatter_reset_on_rerun():
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=30)
+    _fill(tbl, prepare_frame, bkg_scatter=True)
+    assert np.isfinite(tbl['forced_bkg_sigma_f405n'][ndet:]).all()
+    ff.forced_fill_band(tbl, 'f405n', [], prepare_frame=prepare_frame,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False, bkg_scatter=True)
+    assert np.isnan(np.asarray(tbl['forced_bkg_sigma_f405n'][ndet:], float)).all()
+
+
+def test_bkg_scatter_error_scales_with_the_frame_pixel_area():
+    """The annulus term is added in image units, before the per-frame area
+    factor of #1238, so the scatter-inflated error carries that factor too."""
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=20)
+    ra = tbl['skycoord_ref'].ra.deg[ndet:]
+    dec = tbl['skycoord_ref'].dec.deg[ndet:]
+    kw = dict(prepare_frame=prepare_frame, frame_arg_builder=lambda fn: {},
+              fit_shape=(5, 5), bkg_scatter=True)
+    _, _, var_raw, _ = ff._forced_fit_frame('a', 'f405n', ra, dec, **kw)
+    conv_jy, area = 3.0e-8, 2.0e-13
+    _, _, var_jy, _ = ff._forced_fit_frame(
+        'a', 'f405n', ra, dec, conv_jy=conv_jy, frame_area_sr=lambda fn: area, **kw)
+    np.testing.assert_allclose(var_jy, var_raw * (area * 1e6 / conv_jy) ** 2,
+                               rtol=1e-12)
+    assert np.all(var_raw > 1.0 / (2 * np.pi * SIG ** 2))   # above the ERR-only floor
+
+
+def test_bkg_scatter_option_is_wired_through_the_cli_and_both_m8_call_sites():
+    import inspect
+    import os
+    from jwst_gc_pipeline.photometry import cataloging
+    src = inspect.getsource(cataloging.run_manual_pipeline)
+    assert src.count("bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False))") == 2
+    cli = os.path.join(os.path.dirname(cataloging.__file__),
+                       'crowdsource_catalogs_long.py')
+    with open(cli) as fh:
+        text = fh.read()
+    i = text.index("'--forced-fill-bkg-scatter'")
+    assert "default=False, action='store_true'" in text[i:i + 200]

@@ -249,6 +249,13 @@ Forced photometry and independent detections (m8 catalogs)
       only for a forced fit below the detection threshold; select upper
       limits with it, since the *_ulim columns are also filled for
       detections (as a depth estimate).
+  forced_bkg_sigma_{filter}
+      Only in m8 catalogs built with --forced-fill-bkg-scatter. Mean over the
+      exposures of the local background scatter (1.4826 x MAD of the frame
+      data in a 2.5 to 4.5 FWHM annulus, in the exposure's image units) that
+      was added in quadrature to the crf error of the forced fit; it is
+      already included in forced_snr and flux_ulim. NaN when no exposure
+      could measure it.
 
 
 Line-minus-continuum columns (fields with F405N+F410M or F187N+F182M)

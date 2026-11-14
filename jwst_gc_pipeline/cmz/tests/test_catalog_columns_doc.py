@@ -62,6 +62,12 @@ def test_every_released_column_is_described(mw):
     assert not missing, f'catalog_columns.txt does not describe {missing}'
 
 
+def test_forced_bkg_sigma_column_is_described(mw):
+    # written by the m8 fill under --forced-fill-bkg-scatter (#1120); not in
+    # RELEASED_COLUMNS because no released catalog carries it yet
+    assert 'forced_bkg_sigma_{filter}' in mw.CATALOG_COLUMNS_SRC.read_text()
+
+
 def test_file_is_plain_ascii(mw):
     # served as text/plain with no charset; keep it readable everywhere
     mw.CATALOG_COLUMNS_SRC.read_bytes().decode('ascii')
