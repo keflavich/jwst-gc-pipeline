@@ -165,6 +165,39 @@ def test_correct_catalog_end_to_end(tmp_path, treasury_models):
     assert res['columns'][0]['roundtrip_mas'] < 0.01
 
 
+def test_fits_output_keeps_upstream_tag_and_version(tmp_path, treasury_models):
+    """The FITS write re-stamps GCTAG/GCPIPEV with the roll run's values
+    (provenance hook); the producer's values survive as ROLLCUTG/ROLLCUPV on
+    both headers (#1269)."""
+    from jwst_gc_pipeline import provenance
+    ra, dec = _grid()
+    src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'
+    _write_perband(src, ra, dec)
+    with fits.open(src, mode='update') as hl:
+        hl[0].header['GCTAG'] = 'producer-tag'
+        hl[0].header['GCPIPEV'] = 'producer-commit'
+    out = tmp_path / 'out' / src.name
+    crc.correct_catalog(str(src), str(out), 'gc-treasury', treasury_models)
+    for hdr in (fits.getheader(out, 0), fits.getheader(out, 1)):
+        assert hdr['ROLLCUTG'] == 'producer-tag'
+        assert hdr['ROLLCUPV'] == 'producer-commit'
+    assert fits.getheader(out, 0)['GCTAG'] == provenance.get_pipeline_tag()
+    assert fits.getheader(out, 0)['GCTAG'] != 'producer-tag'
+
+
+def test_fits_output_without_upstream_tag_has_no_upstream_cards(tmp_path, treasury_models):
+    ra, dec = _grid()
+    src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'
+    _write_perband(src, ra, dec)
+    with fits.open(src, mode='update') as hl:     # the package hook stamped them on write
+        for key in ('GCTAG', 'GCPIPEV'):
+            hl[0].header.pop(key, None)
+    out = tmp_path / 'out' / src.name
+    crc.correct_catalog(str(src), str(out), 'gc-treasury', treasury_models)
+    assert 'ROLLCUTG' not in fits.getheader(out, 1)
+    assert 'ROLLCUPV' not in fits.getheader(out, 1)
+
+
 def test_rows_beyond_footprint_reach_left_unrotated(tmp_path, treasury_models):
     """A row far outside the pointing (a satstar imported from another
     observation, gc2211 o028 F277W) keeps its input position."""
@@ -371,6 +404,24 @@ def test_ecsv_roundtrip(tmp_path, treasury_models):
                            (RA0, DEC0))
     assert fit['roll_arcsec'] == pytest.approx(20.0, abs=1e-3)
     assert crc.plan_catalog(str(out), 'gc-treasury', treasury_models)['status'] == 'refused'
+
+
+def test_ecsv_output_keeps_input_gctag_in_meta(tmp_path, treasury_models):
+    """ECSV output is not re-stamped, so GCTAG stays the producer's and no
+    ROLLCUTG card is needed (#1269)."""
+    ra, dec = _grid(5)
+    t = Table({'skycoord.ra': ra, 'skycoord.dec': dec, 'flux_f212n': np.ones(len(ra)),
+               'flux_f480m': np.ones(len(ra))})
+    t['skycoord.ra'].unit = 'deg'
+    t['skycoord.dec'].unit = 'deg'
+    t.meta['GCTAG'] = 'producer-tag'
+    src = tmp_path / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o135.ecsv'
+    t.write(src, format='ascii.ecsv')
+    out = tmp_path / 'o' / src.name
+    crc.correct_catalog(str(src), str(out), 'gc-treasury', treasury_models)
+    meta = Table.read(out, format='ascii.ecsv').meta
+    assert meta['GCTAG'] == 'producer-tag'
+    assert 'ROLLCUTG' not in meta
 
 
 def test_ecsv_skycoord_mixin_roundtrip(tmp_path, treasury_models):
