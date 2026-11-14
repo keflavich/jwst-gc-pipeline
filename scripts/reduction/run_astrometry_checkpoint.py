@@ -41,7 +41,7 @@ import sys
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
+    CORRECTION_STAGES, attach_bulk_prior, find_i2d_for_filter, mark_i2d_stale,
     resolve_tie_reference, run_crossfilter_checkpoint, run_visit_checkpoint,
     seed_offsets_table_from_consensus, update_offsets_table,
     _target_from_basepath,
@@ -250,6 +250,12 @@ def main(argv=None):
         refcat, args.basepath, args.proposal_id,
         args.field if args.field is not None else args.obsid,
         args.filtername, obs_token=obs_token, record_dir=args.record_dir)
+    # The same hand-recorded bulk prior cataloging attaches (issue #819), so a
+    # filter that carries one is measured identically from either entry point.
+    tie_refcat = attach_bulk_prior(
+        tie_refcat, args.proposal_id,
+        args.field if args.field is not None else args.obsid,
+        args.filtername)
 
     record = run_visit_checkpoint(
         tables, args.stage, refcat=tie_refcat, filtername=args.filtername,

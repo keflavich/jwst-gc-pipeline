@@ -233,3 +233,56 @@ def test_attach_bulk_prior_lists_the_siblings_for_coherence(monkeypatch):
     assert [c["label"] for c in bp["coherence"]] == ["F150W", "F182M"]
     # A filter without an entry is untouched.
     assert attach_bulk_prior(refcat, "X", "001", "F277W") is refcat
+
+
+# ---------------------------------------------------------------------------
+# sparse cross-check of the adopted tie, and entry-point routing
+# ---------------------------------------------------------------------------
+
+def _with_sparse_peak(monkeypatch, dra, ddec):
+    """Dense leg refuses; the sparse leg returns a measured peak at (dra, ddec)."""
+    def _measure(coords, ref, **_k):
+        if len(ref) > 100:
+            return _failed_histogram()
+        return dict(ok=True, swept=False, dra=dra, ddec=ddec,
+                    off=float(np.hypot(dra, ddec)), contrast=60.0, n_peak=40,
+                    window_consistent=True, alias_rejected=False)
+    monkeypatch.setattr(vc, "measure_offset", _measure)
+
+
+def test_a_measured_sparse_peak_far_from_the_adopted_tie_blocks(
+        noisy_histograms, monkeypatch):
+    _with_sparse_peak(monkeypatch, -400.0, 300.0)
+    cons, mag, ref = _field()
+    out = _tie(cons, mag, ref, _PRIOR)
+    assert out["bulk_prior"]["passed"], out["bulk_prior"]["reasons"]
+    assert out["bulk_prior"]["cross_reference_sep_mas"] > 400.0
+    assert out["cross_reference_gross_ok"] is False
+    assert out["apply_ok"] is False
+
+
+def test_a_sparse_peak_at_the_adopted_tie_confirms_it(noisy_histograms, monkeypatch):
+    _with_sparse_peak(monkeypatch, _TRUE[0], _TRUE[1])
+    cons, mag, ref = _field()
+    out = _tie(cons, mag, ref, _PRIOR)
+    assert out["bulk_prior"]["cross_reference_sep_mas"] < 10.0
+    assert out["cross_reference_gross_ok"] is True
+    assert out["apply_ok"] is True
+
+
+def test_no_pairs_around_the_prior_is_refused(noisy_histograms):
+    cons, mag, _ref = _field()
+    far = _sky(np.array([5000.0, 5001.0]), np.array([5000.0, 5001.0]))
+    out = _tie(cons, mag, far, _PRIOR)
+    assert out["apply_ok"] is False
+    assert out["bulk_prior"]["passed"] is False
+
+
+def test_both_checkpoint_entry_points_attach_the_prior():
+    """The CLI is the second production caller of run_visit_checkpoint; a filter
+    that carries a prior must be measured the same from either."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[3]
+    for rel in ("jwst_gc_pipeline/photometry/cataloging.py",
+                "scripts/reduction/run_astrometry_checkpoint.py"):
+        assert "attach_bulk_prior(" in (root / rel).read_text(), rel
