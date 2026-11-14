@@ -39,6 +39,8 @@ import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord, search_around_sky
 from scipy.spatial import cKDTree, ConvexHull, QhullError
+from scipy.special import ndtri_exp
+from scipy.stats import poisson
 
 from jwst_gc_pipeline.photometry.reference_uncertainty import (
     weighted_median, inverse_variance_weights, weights_with_unknown_fallback)
@@ -82,6 +84,27 @@ DEFAULT_SIGMA_CAP_MAS = 100.0
 # module-level text carries BOTH a match token and a median/mean CALL.  Inside
 # the function the guard attributes the reduce where it belongs.
 DEFAULT_MIN_CONTRAST = 5.0
+
+#: Ceiling (arcsec) on the window-scaled histogram bin (issue #1232).  The bin
+#: widens with the window (``window/150``) to keep the peak resolved, but the
+#: contrast of a true tie scales as one plus the tie's pairs per bin over the
+#: background pairs per bin, so a bin that grows with the window dilutes the
+#: peak by the SQUARE of the growth: at ~10 stars/arcsec^2 a true 20" offset
+#: read 3.0-3.6 and was refused, with 0.2" bins over its 30" window.  0.1" keeps
+#: the 3" and 10" windows (0.02", 0.067") unchanged and costs 1200^2 bins at the
+#: 60" window.
+MAX_WINDOW_BIN_ARCSEC = 0.1
+
+#: Windows up to this size (arcsec) are gated on contrast alone.  Above it the
+#: capped bin is fine enough for the median occupied bin to hold several pairs
+#: in a dense field, where a noise peak can reach the contrast floor, so a
+#: trial-corrected peak significance is required as well (issue #1232).
+SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC = 15.0
+
+#: Sigmas above the extreme-value expectation of the noise bins that a peak
+#: needs at windows above ``SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC``; see
+#: ``min_peak_significance``.
+PEAK_SIGNIFICANCE_EXTRA_SIGMA = 3.0
 
 
 def _unit_xyz(coords):
@@ -257,10 +280,67 @@ def _peak_margin(H, i, j, pad=1):
     return float(H.max() / second) if second > 0 else float("inf")
 
 
+#: Width (bins) of the background annulus in ``_peak_significance``.
+_SIGNIFICANCE_ANNULUS_BINS = 25
+
+
+def _poisson_sigma(k, mu):
+    """Gaussian-equivalent sigma of seeing at least ``k`` counts when ``mu`` are
+    expected: the Poisson upper tail ``P(X >= k)`` mapped through the normal
+    quantile.  ``(k - mu) / sqrt(mu)`` reads 15 for 5 counts against 0.1
+    expected, where the exact tail gives 5.2, so the plain ratio cannot gate a
+    sparse histogram.  When the tail underflows (``k`` far above ``mu``) its
+    leading term, with the geometric-series correction, stands in for it."""
+    logp = poisson.logsf(k - 1, mu)
+    if not np.isfinite(logp):
+        logp = poisson.logpmf(k, mu) - np.log1p(-mu / (k + 1.0))
+    return float(-ndtri_exp(min(logp, 0.0)))
+
+
+def _peak_significance(H, i, j, maxsep_arcsec, bin_arcsec):
+    """Peak excess over the local background in Poisson sigmas (issue #1232).
+
+    The background ``mu`` is the mean bin population over the bins in an annulus
+    centred on the peak that starts twice the hill's half-max radius out (at
+    least three bins) and runs ``_SIGNIFICANCE_ANNULUS_BINS`` further,
+    restricted to bins whose centre lies inside the search window.  A local
+    annulus follows a non-uniform pair density (the footprint ridge of issue
+    #158) where a mean over the whole window would sit below it.
+    """
+    r_in = max(3, 2 * _peak_half_width_bins(H, i, j))
+    r_out = r_in + _SIGNIFICANCE_ANNULUS_BINS
+    lo_i, hi_i, lo_j, hi_j = _box(H.shape, i, j, r_out)
+    ii, jj = np.ogrid[lo_i:hi_i, lo_j:hi_j]
+    r_bins = np.hypot(ii - i, jj - j)
+    # bin centres sit at -m + (k + 0.5) * bin; the window disc is centred on 0
+    x = -maxsep_arcsec + (ii + 0.5) * bin_arcsec
+    y = -maxsep_arcsec + (jj + 0.5) * bin_arcsec
+    sel = (r_bins >= r_in) & (r_bins <= r_out) & (np.hypot(x, y) <= maxsep_arcsec)
+    if not sel.any():
+        return float("nan")
+    mu = float(H[lo_i:hi_i, lo_j:hi_j][sel].mean())
+    if mu <= 0:
+        return float("inf")
+    return _poisson_sigma(float(H[i, j]), mu)
+
+
+def min_peak_significance(window_arcsec, bin_arcsec):
+    """Significance floor for a peak found by searching one window (issue #1232).
+
+    The largest of ``N`` independent Gaussian bins sits near ``sqrt(2 ln N)``,
+    where ``N`` is the number of bins in the window disc; the floor adds
+    ``PEAK_SIGNIFICANCE_EXTRA_SIGMA`` to that, 8.3 at the 60" window with 0.1"
+    bins.  The bins of a pair histogram are Poisson rather than Gaussian, which
+    ``_poisson_sigma`` accounts for in the significance it is compared with.
+    """
+    n_bins = max(np.pi * (window_arcsec / bin_arcsec) ** 2, 2.0)
+    return float(np.sqrt(2.0 * np.log(n_bins)) + PEAK_SIGNIFICANCE_EXTRA_SIGMA)
+
+
 def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     """2-D histogram peak of a cloud of pair offsets.  Returns
     (dra_mas, ddec_mas, off_mas, npairs, contrast, dra_err_mas, ddec_err_mas,
-    n_peak, peak_margin).
+    n_peak, peak_margin, peak_significance).
 
     ``contrast`` is ``H.max() / np.median(H[H > 0])`` -- the peak bin over the
     median of the OCCUPIED bins, which in a sparse histogram is 1.  See the
@@ -273,6 +353,17 @@ def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     arg-max is a coin flip.  The exclusion radius is adaptive rather than one
     bin so that the number reads degeneracy and not peak WIDTH -- see
     ``_peak_margin`` for the measured difference.
+
+    ``peak_significance`` is the Poisson upper-tail probability of the peak bin
+    given ``mu``, the mean bin population in an annulus around the peak outside
+    its own hill and inside the search window, expressed as a Gaussian-
+    equivalent sigma (``_peak_significance``).  Contrast divides by the median
+    of the occupied bins, which at a fine bin lets a noise maximum read 4-8 in
+    a dense field and 5 in a sparse one whose occupied bins hold a single pair;
+    the significance counts the peak against the Poisson scatter of the LOCAL
+    background, and ``min_peak_significance`` corrects it for the number of
+    bins searched.
+    ``inf`` when the annulus holds no pairs, ``nan`` when it holds no bins.
     """
     n = len(dra_arcsec)
     m = maxsep_arcsec
@@ -296,8 +387,9 @@ def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
         dra_err = float(np.median(np.abs(dra_arcsec[near] - dra0)) * mad_scale * 1000.0)
         ddec_err = float(np.median(np.abs(ddec_arcsec[near] - ddec0)) * mad_scale * 1000.0)
     contrast = float(H.max() / bg) if bg else float("inf")
+    significance = _peak_significance(H, i, j, m, bin_arcsec)
     return (dra0 * 1000.0, ddec0 * 1000.0, float(np.hypot(dra0, ddec0) * 1000.0),
-            int(n), contrast, dra_err, ddec_err, n_peak, margin)
+            int(n), contrast, dra_err, ddec_err, n_peak, margin, significance)
 
 
 # Windows (arcsec) the sweep escalates through when a narrow window shows no
@@ -406,14 +498,25 @@ CONFIRM_MIN_PROBE_FACTORS = (1.25, 2.0)
 CONFIRM_MAX_WINDOW_ARCSEC = 300.0
 
 # Floor on the peak-agreement tolerance between two windows (mas).  The bin
-# widens with the window (``bw = window/150``), so two windows can only be
-# expected to agree to a few of the COARSER bin widths.
+# widens with the window (``bw = window/150``, capped at
+# ``MAX_WINDOW_BIN_ARCSEC``), so two windows can only be expected to agree to a
+# few of the COARSER bin widths.
 CONFIRM_MIN_TOL_MAS = 100.0
 
 
 def _window_bin_arcsec(window_arcsec, bin_arcsec):
-    """The histogram bin ``_measure_at_window`` uses at this window."""
-    return max(bin_arcsec, window_arcsec / 150.0)
+    """The histogram bin ``_measure_at_window`` uses at this window.
+
+    ``window/150`` keeps the peak resolved as the window widens, capped at
+    ``MAX_WINDOW_BIN_ARCSEC`` so that the contrast of a true tie does not fall
+    with the square of the window (issue #1232).  The ``window/3000`` term only
+    binds above 300", where it stops a custom ``sweep_windows`` entry beyond
+    ``CONFIRM_MAX_WINDOW_ARCSEC`` from allocating more than 6000^2 bins.  A
+    caller-supplied ``bin_arcsec`` larger than all three still wins.
+    """
+    return max(bin_arcsec,
+               min(window_arcsec / 150.0, MAX_WINDOW_BIN_ARCSEC),
+               window_arcsec / 3000.0)
 
 
 def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
@@ -508,14 +611,15 @@ def _measure_at_window_tree(a, ref, maxsep_arcsec, bin_arcsec, min_pairs,
     ddeg = (ddeg + 180.0) % 360.0 - 180.0   # RA-wrap-safe difference
     dra = ddeg * 3600.0 * cosd
     ddec = (ref.dec_deg[ib] - a_dec[ia]) * 3600.0
-    bw = max(bin_arcsec, maxsep_arcsec / 150.0)
+    bw = _window_bin_arcsec(maxsep_arcsec, bin_arcsec)
     (dra_mas, ddec_mas, off_mas, npairs, contrast,
-     dra_err_mas, ddec_err_mas, n_peak, peak_margin) = _hist_peak(
-        dra, ddec, maxsep_arcsec, bw)
+     dra_err_mas, ddec_err_mas, n_peak, peak_margin,
+     peak_significance) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
     return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
                 contrast=contrast, window_arcsec=maxsep_arcsec,
                 dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak,
-                peak_margin=peak_margin)
+                peak_margin=peak_margin, peak_significance=peak_significance,
+                bin_arcsec=bw)
 
 
 def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
@@ -540,15 +644,17 @@ def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
     cosd = np.cos(np.radians(a[ia].dec.value))
     dra = (b[ib].ra - a[ia].ra).to(u.arcsec).value * cosd
     ddec = (b[ib].dec - a[ia].dec).to(u.arcsec).value
-    # keep ~150 bins across the window so the peak stays resolved as we widen
-    bw = max(bin_arcsec, maxsep_arcsec / 150.0)
+    # ~150 bins across the window so the peak stays resolved as we widen,
+    # capped at MAX_WINDOW_BIN_ARCSEC
+    bw = _window_bin_arcsec(maxsep_arcsec, bin_arcsec)
     (dra_mas, ddec_mas, off_mas, npairs, contrast,
-     dra_err_mas, ddec_err_mas, n_peak, peak_margin) = _hist_peak(
-        dra, ddec, maxsep_arcsec, bw)
+     dra_err_mas, ddec_err_mas, n_peak, peak_margin,
+     peak_significance) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
     return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
                 contrast=contrast, window_arcsec=maxsep_arcsec,
                 dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak,
-                peak_margin=peak_margin)
+                peak_margin=peak_margin, peak_significance=peak_significance,
+                bin_arcsec=bw)
 
 
 def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
@@ -570,6 +676,8 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     min_contrast : float or None
         Peak/median contrast floor for a "real" tie (default
         ``DEFAULT_MIN_CONTRAST``).  Below it the tie is flagged (``ok=False``).
+        At windows above ``SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC`` the peak must
+        also reach ``min_peak_significance`` (issue #1232).
     raise_on_low_contrast : bool
         If True, raise ``NoCoherentTieError`` when NO window yields a coherent tie.
     sweep : bool
@@ -607,11 +715,21 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     Returns
     -------
     dict or None
-        ``dict(dra, ddec, off, npairs, contrast, peak_margin, ok, window_arcsec,
+        ``dict(dra, ddec, off, npairs, contrast, peak_margin, peak_significance,
+        min_peak_significance, bin_arcsec, ok, window_arcsec,
         swept, dra_err, ddec_err, n_peak, window_edge_fraction, windows)`` (mas), or
         None if too few pairs at every window.  ``ok`` is False when NO window
         reaches ``min_contrast`` (or, with ``confirm_windows``, when a swept or
-        edge-riding peak failed confirmation).
+        edge-riding peak failed confirmation), and when the reported window is
+        wider than ``SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC`` and the peak's
+        ``peak_significance`` is below ``min_peak_significance`` (a trial-
+        corrected Poisson significance against the local background; ``None``
+        for the narrower windows, which are gated on contrast alone).  Window
+        selection stays on contrast, except that a wide peak refused by the
+        significance floor yields to a narrower window that passes its own gate
+        and reads the same peak (within ``CONFIRM_MIN_TOL_MAS`` or three
+        thousand of the coarser bin, as in ``confirm_peak_windows``).  ``bin_arcsec`` is the histogram bin of the
+        reported window (``_window_bin_arcsec``).
         ``window_arcsec`` is the window the reported peak came from -- a value
         >> your expected offset is the tell that the tie was only found after
         widening (investigate: the frame is grossly shifted).  ``dra_err`` /
@@ -662,24 +780,58 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     # that actually CONTAINS the offset produces the real, dominant peak.
     best = None
     evaluated = []
+    measured = []
     for w in windows:
         res = _measure_at_window(a, b, w, bin_arcsec, min_pairs)
         if res is None:
             evaluated.append(dict(window_arcsec=w, dra=None, ddec=None))
             continue
+        measured.append(res)
         # both spellings of the offset magnitude -- see issue #267; ``off_mas``
         # is canonical, ``off`` is retained for already-written records
         evaluated.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
                               off=res["off"], off_mas=float(res["off"]),
                               contrast=res["contrast"],
                               peak_margin=res["peak_margin"],
+                              peak_significance=res["peak_significance"],
+                              bin_arcsec=res["bin_arcsec"],
                               npairs=res["npairs"], n_peak=res["n_peak"]))
         if best is None or res["contrast"] > best["contrast"]:
             best = res
 
     if best is None:
         return None
-    best["ok"] = best["contrast"] >= min_contrast
+
+    def _gate(res):
+        # Above SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC the contrast alone is not
+        # enough: the capped bin leaves the median occupied bin at several
+        # pairs in a dense field, so a noise maximum can reach the floor
+        # (issue #1232).  A NaN significance (no background bins) compares
+        # False and fails the gate.
+        floor = None
+        ok = bool(res["contrast"] >= min_contrast)
+        if res["window_arcsec"] > SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC:
+            floor = min_peak_significance(res["window_arcsec"], res["bin_arcsec"])
+            ok = bool(ok and res["peak_significance"] >= floor)
+        return ok, floor
+
+    best["ok"], best["min_peak_significance"] = _gate(best)
+    if not best["ok"] and best["min_peak_significance"] is not None:
+        # The finer wide-window bin gathers the scattered pairs of a WEAK small
+        # tie into one bin, so a wide window can out-score the narrow one that
+        # found the same peak and then fail a floor sized for its many bins.
+        # Fall back to the highest-contrast narrower window that passes its
+        # own gate and read the same peak, to within the confirmation
+        # tolerance; a narrower window cannot certify a peak the wide one did
+        # not see, so this never turns a refusal on a different peak into ok.
+        tol = max(CONFIRM_MIN_TOL_MAS, 3000.0 * best["bin_arcsec"])
+        same_peak = [
+            r for r in measured
+            if r["window_arcsec"] < best["window_arcsec"] and _gate(r)[0]
+            and np.hypot(r["dra"] - best["dra"], r["ddec"] - best["ddec"]) <= tol]
+        if same_peak:
+            best = max(same_peak, key=lambda r: r["contrast"])
+            best["ok"], best["min_peak_significance"] = _gate(best)
     # swept = the measured offset EXCEEDS the initial window, i.e. the narrow window
     # could not have contained it and the sweep is what found it. A True here on a
     # tie you expected to be small means the frame is grossly shifted -- investigate.

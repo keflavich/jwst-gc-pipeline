@@ -33,6 +33,7 @@ import pytest
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
+from jwst_gc_pipeline.photometry import astrometry_offsets as ao
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
 from jwst_gc_pipeline.photometry.visit_consensus import (
     DETECTOR_ANTISYMMETRY_MIN_MAS, MODULE_ANTISYMMETRY_MIN_MAS,
@@ -41,15 +42,31 @@ from jwst_gc_pipeline.photometry.visit_consensus import (
 
 
 def _clumpy_field(ra0, dec0, width_arcsec, seed, n_clump=300, per_clump=6,
-                  sigma_arcsec=1.5):
+                  sigma_arcsec=0.5):
     """A clustered star field — the nebulous-medium-band regime that makes the
-    window-edge ridge sharp enough to clear the contrast floor."""
+    window-edge ridge sharp enough to clear the contrast floor.
+
+    The clumps are 0.5" wide (1.5" before issue #1232).  The window-scaled bin is
+    now capped at 0.1", and a ridge as smooth as a 1.5" clump spreads over so
+    many fine bins that its contrast falls below the floor; the narrower clumps
+    keep the alias sharp enough to clear it, which is the regime these tests
+    guard."""
     rng = np.random.RandomState(seed)
     cra = ra0 + (rng.rand(n_clump) - 0.5) * width_arcsec / 3600.0
     cdec = dec0 + (rng.rand(n_clump) - 0.5) * width_arcsec / 3600.0
     ra = np.repeat(cra, per_clump) + rng.randn(n_clump * per_clump) * sigma_arcsec / 3600.0
     dec = np.repeat(cdec, per_clump) + rng.randn(n_clump * per_clump) * sigma_arcsec / 3600.0
     return SkyCoord(ra * u.deg, dec * u.deg)
+
+
+@pytest.fixture(autouse=True)
+def _confirmation_path_without_the_significance_gate(monkeypatch):
+    """These tests pin the window-confirmation machinery, which a peak reaches
+    only after ``ok`` is set.  Since issue #1232 the significance gate rejects
+    a footprint-ridge alias at the wide windows before confirmation runs (see
+    ``test_window_edge_alias_fails_the_significance_gate``), so the gate is
+    switched off here to keep exercising the probes."""
+    monkeypatch.setattr(ao, "SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC", np.inf)
 
 
 def _adjacent_module_fields():
@@ -70,6 +87,19 @@ def test_window_edge_alias_is_accepted_without_confirmation():
     assert r["off"] / 1000.0 > 10.0, r
     # the tell: the peak sits at the edge of its own search window
     assert r["window_edge_fraction"] > 0.7, r
+
+
+def test_window_edge_alias_fails_the_significance_gate(monkeypatch):
+    """With the gate on, the same footprint ridge is refused without needing
+    the confirmation probes: its peak is a few sigma over the local
+    background, below the trial-corrected floor of the 60" window (issue
+    #1232)."""
+    monkeypatch.setattr(ao, "SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC", 15.0)
+    a, b = _adjacent_module_fields()
+    r = measure_offset(b, a, sweep=True)
+    assert r is not None and r["contrast"] >= ao.DEFAULT_MIN_CONTRAST, r
+    assert r["peak_significance"] < r["min_peak_significance"], r
+    assert not r["ok"], r
 
 
 def test_window_edge_alias_rejected_by_confirmation():
