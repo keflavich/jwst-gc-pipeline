@@ -421,6 +421,7 @@ still run after m6.
 | `--m8-dedup-winner-emag-ratio` (`m8_dedup_winner_emag_ratio`, e.g. 0.8) | `None` | off | off | off | the primary row keeps its own band measurement unless the other member's emag is below ratio times the primary's |
 | `--m8-dedup-band-resolve-mas` (`m8_dedup_band_resolve_mas`, a number or `f212n=60,...`) | `None` | off | off | off | rows resolved in a band (independent detections further apart than this) are not merged |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
+| env `M8_CMD_DEFAULT=0` (skips the `oksep_pass` / `cmd_default` columns on m8 and m8_dedup; #1283) | unset | columns written | | |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
@@ -531,6 +532,11 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   same columns, `--no-spike-flag` there).  `spike_wedge` is close to random
   placement in the brick broad-band catalog and in arches (see the
   `flag_spike_artifacts` docstring), so use it as a soft flag in those fields.
+  m7 (with its `_qualcuts*` subsets), m8 and m8_dedup also carry the boolean
+  columns `oksep_pass` (more than one non-wide band with `sep_<band>` below
+  0.1") and `cmd_default` (`oksep_pass` AND `n_filt_independent >= 2`), with the
+  test named in the `CMDDEF` header card (`photometry/cmd_default.py`; #1283).
+  Tables already on disk get them from `scripts/reduction/add_cmd_default_flag.py`.
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).

@@ -90,6 +90,16 @@ criterion only breaks a tie left by the previous one):
 3. lower F212N flux error (``eflux_jy_f212n``, Jy -- missing F212N sorts last);
 4. lowest row index (deterministic final tie-break).
 
+Input kind (``tile_kind``, #1283): ``m7_oksep`` (default) reads the m7
+quality-cut row subsets described above.  ``m8_dedup`` reads every row of the
+``basic_merged_*_m8_dedup_o<obsid>.fits`` tables, so an F212N-only source whose
+F480M value comes from the m8 forced fit stays in the joint table with its
+``forced_*`` and ``is_upper_limit_*`` columns; the default CMD selection is the
+``cmd_default`` column (``photometry.cmd_default``).  The winner rule then
+starts with ``cmd_default`` and ``n_filt_independent``, because after the forced
+fill nearly every row has finite flux in both bands and the band count above
+no longer separates a measured row from a forced-only one.
+
 Output: ``<out-dir>/<version-tag>/gctreasury10678_joint_nircam.{fits,parquet}``
 plus a ``.prov.json`` sidecar recording input sha1s, the pipeline tag, the
 per-tile ``roll_corrected`` flag, the overlap-gate results, the dedup
@@ -171,7 +181,30 @@ def qualcuts_suffix(target=TREASURY_TARGET):
     return _qualcuts_oksep_suffix(target)
 
 
-def _tile_re(suffix):
+#: Which per-tile table the joint build reads (#1283).  ``m7_oksep`` is the
+#: m7 quality-cut row subset (the original input); ``m8_dedup`` is every row of
+#: the de-duplicated forced-fill table, with the default CMD selection carried
+#: as the ``cmd_default`` column (``photometry.cmd_default``).
+TILE_KIND_M7_OKSEP = 'm7_oksep'
+TILE_KIND_M8_DEDUP = 'm8_dedup'
+TILE_KINDS = (TILE_KIND_M7_OKSEP, TILE_KIND_M8_DEDUP)
+
+#: Columns the ``m8_dedup`` winner rule reads, ahead of the band count.
+CMD_DEFAULT_COL = 'cmd_default'
+N_INDEP_COL = 'n_filt_independent'
+
+
+def _check_tile_kind(tile_kind):
+    if tile_kind not in TILE_KINDS:
+        raise ValueError(f'tile_kind must be one of {TILE_KINDS}, got {tile_kind!r}')
+
+
+def _tile_re(suffix, tile_kind=TILE_KIND_M7_OKSEP):
+    _check_tile_kind(tile_kind)
+    if tile_kind == TILE_KIND_M8_DEDUP:
+        # the `basic_merged_` anchor keeps the nrca/nrcb partial tiles out
+        return re.compile(
+            r'^basic_merged_.*_m8_dedup_o(?P<obsid>\d+)\.fits$')
     return re.compile(
         r'^basic_merged_.*_o(?P<obsid>\d+)' + re.escape(suffix) + r'\.fits$')
 
@@ -197,15 +230,22 @@ class OutputRefusedError(RuntimeError):
 # ---------------------------------------------------------------------------
 # Tile discovery and per-tile metadata
 # ---------------------------------------------------------------------------
-def discover_tile_paths(input_dir, obsids=None):
+def discover_tile_paths(input_dir, obsids=None, tile_kind=TILE_KIND_M7_OKSEP):
     """Return ``{obsid: path}`` for every ``..._qualcuts_oksep<proposal>.fits`` tile
     in ``input_dir``, optionally restricted to ``obsids`` (an iterable of
     3-digit-or-wider obsid strings, e.g. ``['040', '041']`` -- the smoke-test
-    subsetting hook; a full production run omits it)."""
+    subsetting hook; a full production run omits it).
+
+    With ``tile_kind='m8_dedup'`` the tiles are the
+    ``basic_merged_*_m8_dedup_o<obsid>.fits`` tables instead."""
+    _check_tile_kind(tile_kind)
     suffix = qualcuts_suffix()
-    tile_re = _tile_re(suffix)
-    paths = sorted(glob.glob(os.path.join(
-        input_dir, f'basic_merged_*{suffix}.fits')))
+    tile_re = _tile_re(suffix, tile_kind)
+    if tile_kind == TILE_KIND_M8_DEDUP:
+        pattern = 'basic_merged_*_m8_dedup_o*.fits'
+    else:
+        pattern = f'basic_merged_*{suffix}.fits'
+    paths = sorted(glob.glob(os.path.join(input_dir, pattern)))
     out = {}
     for p in paths:
         m = tile_re.search(os.path.basename(p))
@@ -217,7 +257,7 @@ def discover_tile_paths(input_dir, obsids=None):
         out[obsid] = p
     if not out:
         raise FileNotFoundError(
-            f'no *{suffix}.fits tiles found in {input_dir!r} '
+            f'no {tile_kind} tiles ({pattern}) found in {input_dir!r} '
             f'(obsids filter={obsids!r})')
     return dict(sorted(out.items()))
 
@@ -360,10 +400,15 @@ def edge_distance_arcsec(ra_deg, dec_deg):
 # ---------------------------------------------------------------------------
 # Lightweight per-row match table (RA/Dec + the winner-rule inputs only)
 # ---------------------------------------------------------------------------
-def _load_match_rows(path, obsid, bands):
+def _load_match_rows(path, obsid, bands, tile_kind=TILE_KIND_M7_OKSEP):
     """Read ONLY the columns the match/dedup decision needs, via a memmapped
     FITS open so untouched columns are never paged into RAM. Returns a plain
-    dict of numpy arrays (length = number of rows in this tile)."""
+    dict of numpy arrays (length = number of rows in this tile).
+
+    For ``tile_kind='m8_dedup'`` the dict also carries ``cmd_default`` and
+    ``n_indep`` (the winner rule's first two criteria); a tile without the
+    ``cmd_default`` column has not been through
+    ``scripts/reduction/add_cmd_default_flag.py`` and is refused."""
     with fits.open(path, memmap=True) as hdul:
         data = hdul[1].data
         ra = np.asarray(data[REF_RA_COL], dtype=float)
@@ -381,21 +426,39 @@ def _load_match_rows(path, obsid, bands):
             f212_err = np.where(np.isfinite(f212_err), f212_err, np.inf)
         else:
             f212_err = np.full(n, np.inf)
+        if tile_kind == TILE_KIND_M8_DEDUP:
+            if CMD_DEFAULT_COL not in data.columns.names:
+                raise KeyError(
+                    f'{path}: no {CMD_DEFAULT_COL!r} column; run '
+                    f'scripts/reduction/add_cmd_default_flag.py on this '
+                    f'directory first')
+            cmd_default = np.asarray(data[CMD_DEFAULT_COL], dtype=bool)
+            if N_INDEP_COL in data.columns.names:
+                n_indep = np.nan_to_num(
+                    np.asarray(data[N_INDEP_COL], dtype=float), nan=0.0)
+            else:
+                n_indep = np.zeros(n)
     edge_dist = edge_distance_arcsec(ra, dec)
-    return dict(ra=ra, dec=dec, n_bands=n_bands, edge_dist=edge_dist,
-               f212_err=f212_err, obsid=np.full(n, obsid, dtype=object),
-               tile_row=np.arange(n, dtype=np.int64))
+    rows = dict(ra=ra, dec=dec, n_bands=n_bands, edge_dist=edge_dist,
+                f212_err=f212_err, obsid=np.full(n, obsid, dtype=object),
+                tile_row=np.arange(n, dtype=np.int64))
+    if tile_kind == TILE_KIND_M8_DEDUP:
+        rows.update(cmd_default=cmd_default, n_indep=n_indep)
+    return rows
 
 
-def build_match_table(tile_paths, bands):
+def build_match_table(tile_paths, bands, tile_kind=TILE_KIND_M7_OKSEP):
     """Stack every tile's lightweight match rows into one table, carrying
     ``obsid`` + ``tile_row`` so a surviving GLOBAL row can be traced back to
     its exact (file, row) for the gather phase."""
-    chunks = [_load_match_rows(p, obsid, bands)
+    chunks = [_load_match_rows(p, obsid, bands, tile_kind)
              for obsid, p in tile_paths.items()]
     t = Table()
-    for key in ('ra', 'dec', 'n_bands', 'edge_dist', 'f212_err', 'obsid',
-               'tile_row'):
+    keys = ['ra', 'dec', 'n_bands', 'edge_dist', 'f212_err', 'obsid',
+            'tile_row']
+    if tile_kind == TILE_KIND_M8_DEDUP:
+        keys += ['cmd_default', 'n_indep']
+    for key in keys:
         t[key] = np.concatenate([c[key] for c in chunks])
     return t
 
@@ -446,17 +509,26 @@ def dedup_match_table(match_table, dedup_radius_arcsec=DEFAULT_DEDUP_RADIUS_ARCS
 
     Winner rule (most-important first): most finite bands; larger edge
     distance; lower F212N flux error; lowest row index (the automatic final
-    tie-break inside ``_dedup_cross_field``).
+    tie-break inside ``_dedup_cross_field``).  A match table built from
+    ``m8_dedup`` tiles (it has ``cmd_default``) ranks ``cmd_default`` and then
+    ``n_filt_independent`` ahead of these: after the forced fill nearly every
+    row has finite flux in both bands, so the band count no longer separates
+    a measured row from a forced-only one.
 
     Returns ``(keep, also_in_tiles)`` aligned to ``match_table``'s rows.
     """
     t = match_table.copy()
+    rank_cols = ['__neg_n_bands', '__neg_edge_dist', '__f212_err']
+    if 'cmd_default' in t.colnames:
+        t['__neg_cmd_default'] = -np.asarray(t['cmd_default'], dtype=float)
+        t['__neg_n_indep'] = -np.asarray(t['n_indep'], dtype=float)
+        rank_cols = ['__neg_cmd_default', '__neg_n_indep'] + rank_cols
     t['__neg_n_bands'] = -np.asarray(t['n_bands'], dtype=float)
     t['__neg_edge_dist'] = -np.asarray(t['edge_dist'], dtype=float)
     t['__f212_err'] = np.asarray(t['f212_err'], dtype=float)
     keep, also_in = CA._dedup_cross_field(
         t, dedup_radius_arcsec, coverage_cols=None, field_col='obsid',
-        rank_cols=('__neg_n_bands', '__neg_edge_dist', '__f212_err'))
+        rank_cols=tuple(rank_cols))
     return keep, also_in
 
 
@@ -502,13 +574,21 @@ def gather_survivor_rows(tile_paths, match_table, keep, also_in_tiles):
 def build_joint_catalog(input_dir, obsids=None,
                         dedup_radius_arcsec=DEFAULT_DEDUP_RADIUS_ARCSEC,
                         tol_mas=DEFAULT_OVERLAP_TOL_MAS,
-                        allow_overlap_fail_reason=None):
+                        allow_overlap_fail_reason=None,
+                        tile_kind=TILE_KIND_M7_OKSEP):
     """End to end: discover tiles -> roll-correction consistency check ->
     pre-merge overlap gate -> lightweight match/dedup -> gather survivor rows.
 
+    ``tile_kind`` selects the input (see ``TILE_KINDS``).  With ``m8_dedup``
+    every row of each tile is a candidate and the winner rule starts with
+    ``cmd_default``; the survivors keep their ``forced_*``, ``is_upper_limit_*``,
+    ``independently_detected_*`` and ``cmd_default`` columns.
+
     Returns ``(table, provenance)``.
     """
-    tile_paths = discover_tile_paths(input_dir, obsids=obsids)
+    _check_tile_kind(tile_kind)
+    tile_paths = discover_tile_paths(input_dir, obsids=obsids,
+                                     tile_kind=tile_kind)
     roll_flags = {o: _header_roll_corrected(p) for o, p in tile_paths.items()}
     assert_no_mixed_roll_correction(roll_flags)
     roll_corrected = next(iter(roll_flags.values())) if roll_flags else False
@@ -519,7 +599,7 @@ def build_joint_catalog(input_dir, obsids=None,
     bands = discover_bands(sample.colnames)
     del sample
 
-    match_table = build_match_table(tile_paths, bands)
+    match_table = build_match_table(tile_paths, bands, tile_kind)
     gate_results = run_overlap_gate(
         match_table, tol_mas=tol_mas,
         allow_overlap_fail_reason=allow_overlap_fail_reason)
@@ -535,8 +615,11 @@ def build_joint_catalog(input_dir, obsids=None,
         pipeline_tag=get_pipeline_tag(),
         bands=bands,
         dedup_radius_arcsec=float(dedup_radius_arcsec),
-        winner_rule=['most_finite_bands', 'largest_edge_distance_arcsec',
-                    'lowest_f212n_flux_err_jy', 'lowest_row_index'],
+        tile_kind=tile_kind,
+        winner_rule=(
+            ['cmd_default', 'n_filt_independent'] if tile_kind == TILE_KIND_M8_DEDUP
+            else []) + ['most_finite_bands', 'largest_edge_distance_arcsec',
+                       'lowest_f212n_flux_err_jy', 'lowest_row_index'],
         n_clusters=n_clusters,
         n_rows_total=len(combined),
         n_tiles=len(tile_paths),
@@ -570,6 +653,8 @@ def build_joint_catalog(input_dir, obsids=None,
     combined.meta['CMZDEDR'] = float(dedup_radius_arcsec)
     combined.meta['CMZNSRC'] = len(combined)
     combined.meta['GCTAG'] = prov['pipeline_tag']
+    if tile_kind == TILE_KIND_M8_DEDUP:
+        combined.meta['CMZTKIND'] = tile_kind
     return combined, prov
 
 
@@ -656,6 +741,11 @@ def build_parser():
     p.add_argument('--allow-overlap-fail-reason', default=None,
                    help='written justification to override a failed overlap '
                         'gate; stored in the provenance. Omit to fail closed.')
+    p.add_argument('--tile-kind', choices=TILE_KINDS, default=TILE_KIND_M7_OKSEP,
+                   help='per-tile table to read: the m7 quality-cut subset '
+                        '(default) or every row of the m8_dedup table, which '
+                        'needs the cmd_default column '
+                        '(scripts/reduction/add_cmd_default_flag.py)')
     p.add_argument('--formats', default='fits,parquet')
     return p
 
@@ -667,7 +757,8 @@ def main(argv=None):
         args.input_dir, obsids=obsids,
         dedup_radius_arcsec=args.dedup_radius_arcsec,
         tol_mas=args.overlap_tol_mas,
-        allow_overlap_fail_reason=args.allow_overlap_fail_reason)
+        allow_overlap_fail_reason=args.allow_overlap_fail_reason,
+        tile_kind=args.tile_kind)
     written = write_joint_catalog(
         table, prov, args.out_dir, args.version_tag,
         formats=tuple(args.formats.split(',')))
