@@ -27,7 +27,6 @@ import os
 import re
 import types
 
-import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
@@ -603,6 +602,45 @@ def test_residual_mosaic_reads_own_then_legacy(tmp_path, monkeypatch, capsys):
     assert '1 from the LEGACY untokened name' in out
 
 
+def test_residual_mosaic_module_label_reads_its_own_token(tmp_path, monkeypatch,
+                                                          capsys):
+    """A module label (nrcb) reads ``_lblnrcb``, never ``_lblmerged``.
+
+    The ``merged`` case above cannot tell ``prefer=(module,)`` from a
+    hard-coded ``prefer=('merged',)``.  5365/001 globs nrcb1..nrcb4 for the
+    ``nrcb`` label.
+    """
+    from jwst_gc_pipeline.mast_names import jw_prefix
+    pipe = tmp_path / 'F480M' / 'pipeline'
+    stem = (jw_prefix('5365') + '-o001_t001_nircam_clear-f480m-nrcb1_visit001_'
+            'vgroup02101_exp{e:05d}_m5_daophot_basic{t}_residual.fits')
+    want = []
+    # exp1: all three spellings -> nrcb's own; exp2: legacy + merged's ->
+    # legacy (merged's fit is never borrowed); exp3: merged's only -> skipped
+    for e, tokens in ((1, ('', '_lblmerged', '_lblnrcb')),
+                      (2, ('', '_lblmerged')), (3, ('_lblmerged',))):
+        for t in tokens:
+            p = _touch(str(pipe / stem.format(e=e, t=t)))
+            if (e, t) in ((1, '_lblnrcb'), (2, '')):
+                want.append(p)
+
+    class _Seen(Exception):
+        pass
+
+    def _asn(files, **kw):
+        raise _Seen(sorted(files))
+
+    monkeypatch.setattr(L.asn_from_list, 'asn_from_list', _asn)
+    with pytest.raises(_Seen) as ex:
+        L.mosaic_each_exposure_residuals(
+            str(tmp_path), 'F480M', '5365', '001', 'nrcb',
+            residual_kind='basic', iteration_label='m5')
+    assert ex.value.args[0] == sorted(want)
+    out = capsys.readouterr().out
+    assert '2 frame(s); 1 read from merge-label-tokened names (nrcb=1)' in out
+    assert '1 from the LEGACY untokened name' in out
+
+
 # ---------------------------------------------------------------------------
 # module-blind readers
 # ---------------------------------------------------------------------------
@@ -675,6 +713,29 @@ def test_retention_patterns_take_the_token():
     # the legacy spellings still match as before
     assert R.PERFRAME_RAW_RE.search(strip_perframe_label(raw))
     assert R.PERFRAME_MERGEDCAT_RE.search(strip_perframe_label(mc))
+
+
+def test_roll_enumerate_field_lists_catalogs_not_tokened_images(tmp_path,
+                                                                monkeypatch):
+    """include_perframe lists legacy + tokened CATALOGS only.
+
+    The tokened glob ``*_daophot_basic_lbl*.fits`` also matches the tokened
+    residual/model/mergedcat images; they must not be listed as catalogs.
+    """
+    from jwst_gc_pipeline.astrometry import catalog_roll_correction as CRC
+    d = tmp_path / 'F480M'
+    stem = 'f480m_nrcblong_o105_visit001_vgroup02101_exp00004_m7_daophot_basic'
+    cats = [stem + '.fits', stem + '_lblnrcb.fits', stem + '_lblmerged.fits']
+    images = [stem + '_lblnrcb_residual.fits', stem + '_lblnrcb_model.fits',
+              stem + '_lblnrcb_mergedcat_residual.fits',
+              stem + '_lblmerged_mergedcat_model.fits',
+              stem + '_residual.fits']
+    for n in cats + images:
+        _touch(str(d / n))
+    monkeypatch.setattr(CRC, 'field_root', lambda name: str(tmp_path))
+    got = CRC.enumerate_field('x', include_perframe=True,
+                              include_releases=False)
+    assert sorted(os.path.basename(p) for p in got['perframe']) == sorted(cats)
 
 
 def test_virac2_perframe_matches_takes_the_token_not_the_group_variant():

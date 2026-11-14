@@ -15,11 +15,13 @@ restarted per-frame worker can rebuild the next phase's detection image from
 disk.  Everything else a phase writes is consumed inside that phase:
 
 * ``*_{label}_daophot_{kind}_{residual,model}.fits`` -- the per-frame fit
-  products.  Read by ``build_mergedcat_residuals`` for the SAME label (the
+  products (``{label}`` is the phase, ``m7``; from m3 to m7 the merge label of
+  the fitting pass follows ``_daophot_{kind}`` as ``_lbl<merge>``, e.g.
+  ``..._m7_daophot_basic_lblnrcb_residual.fits``).  Read by ``build_mergedcat_residuals`` for the SAME label (the
   hard-crash guard in ``crowdsource_catalogs_long.py``: a missing one would
   punch a hole in the mosaic) and by the iter2 qfilt-bg path.  Nothing reads a
   label's pair once the next label has run.
-* ``*_{label}_daophot_{kind}_mergedcat_{residual,model}.fits`` -- rendered only
+* ``*_{label}_daophot_{kind}[_lbl<merge>]_mergedcat_{residual,model}.fits`` -- rendered only
   so they can be resampled into ``*_mergedcat_residual_i2d.fits``.  Once that
   i2d exists they support nothing.
 

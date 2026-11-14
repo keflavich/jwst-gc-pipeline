@@ -119,9 +119,12 @@ def _iteration_token(iteration_label):
 # _lblnrcb.fits``, ``..._daophot_basic_lblnrcb_residual.fits``).  Every reader
 # glob/regex in the tree ends in a literal ``_daophot_basic.fits``,
 # ``_daophot_<kind>_residual.fits`` or ``_daophot_[a-z]+_(residual|model)``,
-# so no reader written before the token can match a tokened name: a reader
-# that was missed sees only the legacy names (what it saw before), never both
-# spellings of one frame.  A token anywhere BEFORE ``_daophot_`` would be
+# so no in-tree reader written before the token can match a tokened name: a
+# reader that was missed sees only the legacy names (what it saw before),
+# never both spellings of one frame.  That holds for patterns ending in such a
+# literal tail; a looser wildcard (``*_daophot_*.fits``, ``*daophot*basic*``)
+# matches both spellings of a refit frame and needs
+# :func:`choose_perframe_variants`.  A token anywhere BEFORE ``_daophot_`` would be
 # swallowed by the loose ``*_daophot_basic.fits`` / ``*_m[0-9]*_daophot_basic
 # .fits`` globs that several scripts use.
 #
@@ -205,6 +208,17 @@ def strip_perframe_label(path):
     return os.path.join(d, _LABEL_TOKEN_RE.sub(r'\1', b))
 
 
+def is_perframe_catalog_name(path):
+    """Does ``path`` end like a per-frame CATALOG (legacy or tokened)?
+
+    ``..._daophot_<kind>.fits`` or ``..._daophot_<kind>_lbl<label>.fits``.
+    The tokened glob ``*_daophot_<kind>_lbl*.fits`` also matches the tokened
+    ``_residual`` / ``_model`` / ``_mergedcat_*`` images (``*`` spans past the
+    token), so a lister that globs it filters with this.
+    """
+    return bool(_PERFRAME_CATALOG_TAIL_RE.search(os.path.basename(str(path))))
+
+
 def choose_perframe_variants(paths, prefer, *, other_labels=False):
     """Keep ONE spelling of every frame among labelled and legacy per-frame paths.
 
@@ -282,7 +296,7 @@ def glob_perframe_catalogs(pattern, prefer=MODULE_BLIND_LABEL_ORDER, *,
     found = set(_glob.glob(pattern)) | set(_glob.glob(labelled))
     # ``*`` in the labelled glob can span more than the token (``_lblnrcb
     # _residual``); keep only catalogs, legacy or with the token last.
-    found = {p for p in found if _PERFRAME_CATALOG_TAIL_RE.search(p)}
+    found = {p for p in found if is_perframe_catalog_name(p)}
     return choose_perframe_variants(sorted(found), prefer,
                                     other_labels=other_labels)
 

@@ -248,7 +248,7 @@ from jwst_gc_pipeline.photometry.naming import (
     observation_field_token, perframe_obs_token,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
-    perframe_label_token, label_token_phase, choose_perframe_variants,
+    perframe_label_token, choose_perframe_variants,
     perframe_variant_summary,
 )
 from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs

@@ -1034,11 +1034,14 @@ def enumerate_field(field_name, include_perframe=False, include_releases=True,
     if include_perframe:
         # legacy and m3..m7 merge-label-tokened per-frame names
         # (``..._daophot_basic_lbl<label>.fits``); every file is listed, the
-        # rotation applies to each.
+        # rotation applies to each.  The tokened glob also matches the tokened
+        # residual/model/mergedcat images; keep catalogs only.
+        from jwst_gc_pipeline.photometry.naming import is_perframe_catalog_name
         out['perframe'] = sorted(set(
             glob.glob(os.path.join(base, 'F*', '*_m[0-9]*_daophot_basic.fits'))
-            + glob.glob(os.path.join(base, 'F*',
-                                     '*_m[0-9]*_daophot_basic_lbl*.fits'))))
+            + [p for p in glob.glob(os.path.join(
+                base, 'F*', '*_m[0-9]*_daophot_basic_lbl*.fits'))
+               if is_perframe_catalog_name(p)]))
     if include_releases:
         out['release'] = sorted(glob.glob(os.path.join(release_root, 'v*', '**', field_name,
                                                        'catalogs', '*.fits'), recursive=True))

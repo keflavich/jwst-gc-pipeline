@@ -1,5 +1,5 @@
 """Decompose per-detector network shifts into rotation+scale (per band) + residual."""
-import sys, glob, re, os
+import sys, re, os
 import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord

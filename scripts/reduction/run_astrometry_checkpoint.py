@@ -36,6 +36,7 @@ Cross-filter checkpoint::
 import argparse
 import glob
 import json
+import re
 import sys
 
 from astropy.table import Table
@@ -52,6 +53,9 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
 # how the two paths drift apart -- which is the defect this fixes.
 from jwst_gc_pipeline.photometry.cataloging import _floor_actionable_corrections
 from jwst_gc_pipeline.photometry.m2_correction_floors import m2_correction_floor
+from jwst_gc_pipeline.photometry.naming import (
+    MODULE_BLIND_LABEL_ORDER, choose_perframe_variants, is_perframe_catalog_name,
+    perframe_variant_summary)
 from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
 from jwst_gc_pipeline.photometry.satstar_consensus import load_exposure_satstars
 from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
@@ -66,7 +70,11 @@ def main(argv=None):
                         f"{CORRECTION_STAGES})")
     p.add_argument("--filter", dest="filtername", default=None)
     p.add_argument("--catalog-glob", action="append", default=[],
-                   help="glob(s) for per-frame catalogs (visit mode)")
+                   help="glob(s) for per-frame catalogs (visit mode).  A glob "
+                        "ending in _daophot_<kind>.fits also takes the m3..m7 "
+                        "merge-label-tokened names (..._lbl<label>.fits); one "
+                        "spelling per frame is kept (merged > nrca > nrcb > "
+                        "... > legacy)")
     p.add_argument("--catalog", action="append", default=[],
                    help="FILTER=path vetted merged catalog (crossfilter mode)")
     p.add_argument("--crossfilter", action="store_true")
@@ -204,9 +212,22 @@ def main(argv=None):
     paths = []
     for pat in args.catalog_glob:
         paths.extend(glob.glob(pat))
+        # m3..m7 per-frame catalogs carry the merge-label token after
+        # ``_daophot_<kind>`` (``..._daophot_basic_lblnrcb.fits``); a pattern
+        # in the legacy shape also takes those, then ONE spelling per frame is
+        # kept below (module-blind order, as the in-pipeline checkpoint).
+        if re.search(r'_daophot_[a-z]+\.fits$', pat):
+            paths.extend(
+                fn for fn in glob.glob(pat[:-len('.fits')] + '_lbl*.fits')
+                if is_perframe_catalog_name(fn))
+    paths, _variants = choose_perframe_variants(
+        sorted(set(paths)), MODULE_BLIND_LABEL_ORDER, other_labels=True)
+    if _variants['labelled']:
+        print(perframe_variant_summary(_variants, "run_astrometry_checkpoint",
+                                       "module-blind"), flush=True)
     if not paths:
         p.error("no per-frame catalogs matched --catalog-glob")
-    tables = [Table.read(fn) for fn in sorted(set(paths))]
+    tables = [Table.read(fn) for fn in paths]
     print(f"loaded {len(tables)} per-frame catalogs", flush=True)
     satstars = None
     if not args.no_satstars:

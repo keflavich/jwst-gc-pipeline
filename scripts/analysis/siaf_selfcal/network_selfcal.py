@@ -12,7 +12,7 @@ Usage: python network_selfcal.py BAND1[,BAND2,...] [--stage m7] [--out tag]
 Bands may span proposals (f212n=2221, f200w=1182): detector unknowns are
 (band, detector) so cross-band pairs measure filteroffset+module consistency.
 """
-import sys, glob, os, re, itertools, warnings, collections
+import sys, os, re, itertools, warnings, collections
 from jwst_gc_pipeline.photometry.naming import (
     OBS_TOKEN_CAPTURE, glob_perframe_catalogs)
 warnings.filterwarnings('ignore')
