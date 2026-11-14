@@ -296,6 +296,38 @@ class TestSatstarStaleFileExclusion:
         out = M.load_satstar_catalog('f770w', target='w51', basepath=str(tmp_path) + '/')
         assert out is None  # do not pollute from stale-only dirs
 
+    def test_consolidated_catalog_has_unique_ids_and_detector_xy(self, tmp_path):
+        """Per-exposure ids restart at 1 and x_fit is stamp-local in catalogs
+        written before #949; the consolidated table has a running id and
+        detector-pixel x_fit (#949)."""
+        import numpy as np
+        from astropy.table import Table
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        pdir = tmp_path / 'F770W' / 'pipeline'
+        pdir.mkdir(parents=True)
+        for i, ra in enumerate([266.5, 266.6]):
+            n = 3
+            t = Table()
+            t['id'] = np.ones(n, dtype=int)
+            t['x_fit'] = np.array([81.0, 82.0, 83.0])
+            t['y_fit'] = np.array([81.0, 82.0, 83.0])
+            t['xcentroid'] = np.array([500.0, 900.0, 1500.0]) + 10 * i
+            t['ycentroid'] = np.array([600.0, 1000.0, 1600.0])
+            t['flux_fit'] = np.full(n, 1000.0)
+            t['skycoord_fit'] = SkyCoord(
+                (ra + np.arange(n) * 0.01) * u.deg, np.full(n, -28.6) * u.deg)
+            t.write(pdir / f'jw06151002001_02103_0000{i + 1}_mirimage_o002_crf_resbgsub_m6_satstar_catalog.fits')
+        (tmp_path / 'catalogs').mkdir()
+        out = M.load_satstar_catalog('f770w', target='w51', basepath=str(tmp_path) + '/')
+        assert len(out) == 6
+        assert sorted(out['id']) == list(range(1, 7))
+        assert out.meta['XYFRAME'] == 'detector'
+        assert out['x_fit'].min() > 100
+        np.testing.assert_array_equal(out['x_fit'], out['xcentroid'])
+        assert set(out['cutout_id']) == {1}
+
 
 class TestDedupOffsetResolver:
     """merge dedup radius must scale to the broad MIRI PSF FWHM (env-gated),
@@ -355,12 +387,14 @@ def test_alignment_star_mask_excludes_position_unsafe_rows():
     assert m3.all()
 
 
-def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
-    """x_fit/y_fit in satstar catalogs are CUTOUT coordinates (pad-centered,
-    ~(81,81)); detector coordinates live in xcentroid/ycentroid.  Replaced
-    rows and appended satstar-only rows must get the DETECTOR coordinates in
-    their pixel columns (regression: cutout coords silently corrupted x/y of
-    every replaced row)."""
+@pytest.mark.parametrize('vintage', ['stamp_local', 'detector'])
+def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path, vintage):
+    """x_fit/y_fit in satstar catalogs written before #949 are CUTOUT
+    coordinates (pad-centered, ~(81,81)); detector coordinates live in
+    xcentroid/ycentroid.  Replaced rows and appended satstar-only rows must get
+    the DETECTOR coordinates in their pixel columns (regression: cutout coords
+    silently corrupted x/y of every replaced row).  A current catalog repeats
+    the detector pixels in x_fit/y_fit and must give the same rows."""
     import numpy as np
     from astropy.table import Table
     from astropy.coordinates import SkyCoord
@@ -379,6 +413,11 @@ def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
         'xcentroid': [512.3, 1400.7],   # detector frame
         'ycentroid': [300.1, 1650.2],
     })
+    if vintage == 'detector':
+        from jwst_gc_pipeline.photometry.satstar_columns import (
+            finalize_satstar_columns)
+        finalize_satstar_columns(satstar)
+        assert satstar['x_fit'].min() > 100
     monkeypatch.setattr(M, 'load_satstar_catalog', lambda *a, **k: satstar)
 
     class _FakeSvo:

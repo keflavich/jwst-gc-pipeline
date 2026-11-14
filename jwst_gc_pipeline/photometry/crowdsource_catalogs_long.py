@@ -941,6 +941,7 @@ def catalog_zoom_diagnostic(data, modsky, zoomcut, stars):
 # and _L.<name> access from cataloging.py) keep working unchanged.
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     refresh_satstar_skycoords)
+from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.column_utils import (
     _XY_COLUMN_CANDIDATES, _get_source_xy, _column_to_float_array,
     _best_available_xy, _has_any_xy_columns, _skycoord_radec_arrays,
@@ -2015,7 +2016,12 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         The cache is keyed on the recovery/deblend config only, so it survives
         an offsets-table correction and a frame regeneration -- after which its
         stored ``skycoord_fit`` no longer matches its own pixel centroid.  The
-        FIT is still valid, so re-project rather than refit (issue #193)."""
+        FIT is still valid, so re-project rather than refit (issue #193).
+
+        The cache key carries no code version either, so a catalog written
+        before #949 is also brought to the detector-frame column vintage
+        here (idempotent; a current catalog passes through)."""
+        tbl = finalize_satstar_columns(tbl)
         tbl, shift = refresh_satstar_skycoords(tbl, frame_path=filename,
                                                catalog_path=cache_name)
         if np.isfinite(shift[0]) and np.hypot(*shift) > 5.0:
