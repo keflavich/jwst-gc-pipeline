@@ -233,6 +233,73 @@ def test_the_inter_visit_offset_is_recorded_even_when_it_passes():
     assert 'IV_002' in pooled.meta
 
 
+def _field(n=1500, seed=1):
+    """One shared star field, 0.03 x 0.01 deg, for the overlap tests: two tiles
+    only share STARS if both are cropped from the same draw."""
+    rng = np.random.default_rng(seed)
+    return (266.50 + rng.uniform(0.0, 0.03, n),
+            -28.70 + rng.uniform(0.0, 0.01, n))
+
+
+def _tile(field, ra_lo, ra_hi, shift_mas=0.0):
+    """The stars of ``field`` with ``ra_lo <= RA < ra_hi``, shifted in Dec."""
+    ra, dec = field
+    keep = (ra >= ra_lo) & (ra < ra_hi)
+    return _consensus(ra[keep], dec[keep] + shift_mas / 3.6e6)
+
+
+def test_disjoint_mosaic_tiles_pool_without_the_gross_gate():
+    """cloudef 2092 o004: tiles that share no sky were measured against visit 1
+    and read the mosaic step, which the gross gate then refused."""
+    per_visit = {f'{i + 1:03d}': _consensus(*_grid(266.5 + 0.02 * i, -28.7,
+                                                   seed=i))
+                 for i in range(3)}
+    pooled = pool_visit_consensi(per_visit)
+    assert pooled.meta['IVNOOVL'] == 3
+    assert np.isnan(pooled.meta['IVMAXMAS'])
+    for visit in ('001', '002', '003'):
+        assert 'NOT COMPARABLE' in pooled.meta[f'IV_{visit}']
+    assert len(pooled) == 3 * 400
+
+
+def test_overlapping_tiles_in_a_mosaic_are_still_gated():
+    """Tile 3 overlaps tile 2 and carries a 500 mas error; tile 1 is disjoint
+    from both, so an anchor-only check would see nothing."""
+    field = _field()
+    per_visit = {
+        '001': _consensus(*_grid(266.45, -28.7, seed=5)),
+        '002': _tile(field, 266.50, 266.52),
+        '003': _tile(field, 266.51, 266.53, shift_mas=500.0),
+    }
+    with pytest.raises(InterVisitOffsetError, match='002.003'):
+        pool_visit_consensi(per_visit)
+
+
+def test_sliver_overlap_is_not_comparable():
+    """A strip a few stars wide shares sky but not enough stars for a tie (the
+    1.15 arcsec alias of cloudef visit 2)."""
+    field = _field()
+    per_visit = {'001': _tile(field, 266.50, 266.52),
+                 '002': _tile(field, 266.5199, 266.54, shift_mas=500.0)}
+    pooled = pool_visit_consensi(per_visit)
+    assert pooled.meta['IVNOOVL'] == 2
+    assert 'NOT COMPARABLE' in pooled.meta['IV_002']
+
+
+def test_overlapping_tiles_good_tie_pool_and_merge_seam_stars():
+    field = _field()
+    t1 = _tile(field, 266.50, 266.52)
+    t2 = _tile(field, 266.51, 266.53, shift_mas=2.0)
+    n_seam = int(((field[0] >= 266.51) & (field[0] < 266.52)).sum())
+    assert n_seam > 100
+    pooled = pool_visit_consensi({'001': t1, '002': t2})
+    assert pooled.meta['IVNOOVL'] == 0
+    assert pooled.meta['IVMAXMAS'] < 20.0
+    assert 'vs 001' in pooled.meta['IV_002']
+    assert len(pooled) == len(t1['coords']) + len(t2['coords']) - n_seam
+    assert (pooled['n_visits'] == 2).sum() == n_seam
+
+
 # --------------------------------------------------------------------------
 # On disk.
 # --------------------------------------------------------------------------
