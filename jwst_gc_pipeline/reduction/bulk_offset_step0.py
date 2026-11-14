@@ -747,7 +747,7 @@ def reference_frame_matches_refcat(reference_frame, refcat_path):
 REFCAT_PATTERNS = ('gaia_virac2_refcat*.fits', 'gaia_refcat*.fits')
 
 
-def refcat_for_frame(basepath, reference_frame, field=None):
+def refcat_for_frame(basepath, reference_frame, field=None, proposal=None):
     """Pick the reference catalog that belongs to ``reference_frame``.
 
     Returns ``(path, candidates)``; ``path`` is ``None`` when nothing was found.
@@ -757,6 +757,10 @@ def refcat_for_frame(basepath, reference_frame, field=None):
     Since :func:`reference_frame_matches_refcat` now blocks a cross-frame
     comparison, choosing the catalog that matches the declared frame is what
     keeps the default path usable rather than merely safe.
+
+    ``proposal`` selects among the refcats that share a directory between
+    proposals (ngc6334's 7213 and 6778, ``_j<proposal>`` in the name); see
+    :func:`astrometry_utils.pick_refcat`.
     """
     import glob as _glob
     candidates = []
@@ -781,5 +785,6 @@ def refcat_for_frame(basepath, reference_frame, field=None):
     # operators here for exactly the two multi-observation fields.
     from ..astrometry_utils import pick_refcat
     if matching:
-        return pick_refcat(matching, field=field), ordered
-    return (pick_refcat(ordered, field=field) if ordered else None), ordered
+        return pick_refcat(matching, field=field, proposal=proposal), ordered
+    return ((pick_refcat(ordered, field=field, proposal=proposal)
+             if ordered else None), ordered)

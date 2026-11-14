@@ -160,7 +160,21 @@ def base_mismatch_mas(base_ra, base_dec, now_ra, now_dec):
                           float(now_dec) - float(base_dec)) * 3.6e6)
 
 
-def pick_refcat(cands, field=None):
+#: A refcat name may carry a proposal token (``_j6778``, the shared-tree
+#: spelling of ``photometry.naming.perframe_obs_token``) and/or an observation
+#: token (``_o001``), in that order: ``..._j6778_o001.fits``.
+_REFCAT_J_TOKEN = re.compile(r'_j(\d{4})(?:_o\d{3})?\.fits$')
+_REFCAT_O_TOKEN = re.compile(r'_o(\d{3})\.fits$')
+
+
+def _refcat_tokens(path):
+    """``(proposal, observation)`` tokens in a refcat name; None where absent."""
+    jm = _REFCAT_J_TOKEN.search(path)
+    om = _REFCAT_O_TOKEN.search(path)
+    return (jm.group(1) if jm else None, om.group(1) if om else None)
+
+
+def pick_refcat(cands, field=None, proposal=None):
     """The refcat for THIS observation, from the candidates on disk.
 
     A refcat may carry an observation token (``..._o028.fits``) because it was
@@ -178,29 +192,69 @@ def pick_refcat(cands, field=None):
     not the frame).  Its five observations are 0.3-17.6 arcmin apart, so a
     neighbour's refcat is not a degraded reference, it is the wrong sky.
 
-    Order: this observation's token, else an untokened refcat, else refuse --
-    picking SOME other observation's is never right, and doing it silently is
-    how this cost a full o023 chain.
+    ngc6334 is the second shape of the same bug.  Its two proposals (7213 and
+    6778) share one directory and observation number 001, and each has a refcat
+    at its own epoch (2026.30 and 2024.68).  An observation token cannot tell
+    them apart, so ``sorted(...)[-1]`` tied 6778 to 7213's file, 1.6 yr off in
+    epoch and centred about 5 arcmin away.  ``proposal`` selects on the
+    ``_j<proposal>`` token (``..._j6778.fits``).
+
+    Order: this proposal and observation (``_j6778_o001``), this proposal
+    (``_j6778``), this observation's token, an untokened refcat, else refuse --
+    picking SOME other observation's or proposal's is never right, and doing it
+    silently is how this cost a full o023 chain.  Another proposal's ``_j``
+    file is never a fallback.  Several untokened candidates are refused for a
+    proposal in ``naming.SHARED_TREE_PROPOSALS`` (their names claim nothing, so
+    the newest-sorting one is a guess); other fields keep the newest-sorting
+    pick.  A caller that omits ``proposal`` sees no ``_j`` file at all.
     """
     if not cands:
         return None
-    tok = re.compile(r'_o(\d{3})\.fits$')
-    tokened = {m.group(1): p for p in cands for m in [tok.search(p)] if m}
-    untokened = [p for p in cands if not tok.search(p)]
-    if field:
-        f3 = str(field).zfill(3)
-        if f3 in tokened:
-            return tokened[f3]
+    from jwst_gc_pipeline.photometry.naming import SHARED_TREE_PROPOSALS
+    prop = str(proposal) if proposal not in (None, '') else None
+    f3 = str(field).zfill(3) if field else None
+    parsed = [(p,) + _refcat_tokens(p) for p in cands]
+    # a candidate claiming another proposal (or any proposal, when the caller
+    # names none) is not eligible
+    pool = [(p, j, o) for p, j, o in parsed if j is None or j == prop]
+    if prop and f3:
+        exact = [p for p, j, o in pool if j == prop and o == f3]
+        if exact:
+            return exact[-1]
+    if prop:
+        jonly = [p for p, j, o in pool if j == prop and o is None]
+        if len(jonly) > 1:
+            raise ValueError(
+                f"astrom checkpoint: several reference catalogs claim proposal "
+                f"{prop} under {os.path.dirname(cands[0])}: {sorted(jonly)}.  "
+                f"Remove the superseded one or point ASTROM_REFCAT at the right "
+                f"file.")
+        if jonly:
+            return jonly[0]
+    if f3:
+        by_obs = [p for p, j, o in pool if j is None and o == f3]
+        if by_obs:
+            return by_obs[-1]
+    untokened = [p for p, j, o in pool if j is None and o is None]
+    if prop in SHARED_TREE_PROPOSALS and len(untokened) > 1:
+        raise ValueError(
+            f"astrom checkpoint: proposal {prop} shares {os.path.dirname(cands[0])} "
+            f"with another proposal, and several reference catalogs there carry "
+            f"no proposal token: {sorted(untokened)}.  Picking by name order "
+            f"can tie this proposal to the other one's epoch and footprint.  "
+            f"Rename the file for this proposal to carry '_j{prop}' (before "
+            f"'.fits', e.g. '..._epoch<tag>_j{prop}.fits') or point "
+            f"ASTROM_REFCAT at the right file.")
     if untokened:
         return sorted(untokened)[-1]
-    if tokened:
-        raise ValueError(
-            f"astrom checkpoint: the only reference catalogs under "
-            f"{os.path.dirname(cands[0])} are built for other observations "
-            f"({sorted(tokened)}), and this run is "
-            f"{'o' + str(field).zfill(3) if field else 'untagged'}.  Tying to "
-            f"another pointing's reference is not a degraded measurement, it is "
-            f"the wrong sky -- build one for this observation "
-            f"(build_gaia_virac2_refcat_byquery.py) or point ASTROM_REFCAT at "
-            f"the right file.")
-    return None
+    tokened = sorted({o or j for p, j, o in parsed})
+    raise ValueError(
+        f"astrom checkpoint: the only reference catalogs under "
+        f"{os.path.dirname(cands[0])} are built for other observations or "
+        f"proposals ({tokened}), and this run is "
+        f"{'o' + f3 if f3 else 'untagged'}"
+        f"{' of proposal ' + prop if prop else ''}.  Tying to "
+        f"another pointing's reference is not a degraded measurement, it is "
+        f"the wrong sky -- build one for this observation "
+        f"(build_gaia_virac2_refcat_byquery.py) or point ASTROM_REFCAT at "
+        f"the right file.")

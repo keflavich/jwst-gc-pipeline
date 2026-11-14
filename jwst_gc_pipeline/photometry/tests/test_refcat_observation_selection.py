@@ -399,3 +399,142 @@ def test_m2_gaia_does_not_leak_into_later_stages_or_crossfilter(tmp_path,
                                             obs_token='_o001',
                                             proposal_id='1905')
     assert 'r' in xf and xf['r'] is None
+
+
+# --- proposal-keyed selection on a shared tree (#818) -----------------------
+# ngc6334's proposals 7213 and 6778 share one catalogs/ directory and
+# observation 001; each has a refcat at its own epoch.
+
+N_6778 = '/x/catalogs/gaia_virac2_refcat_epoch2024.68_j6778.fits'
+N_7213 = '/x/catalogs/gaia_virac2_refcat_epoch2026.30_j7213.fits'
+U_2024 = '/x/catalogs/gaia_virac2_refcat_epoch2024.68.fits'
+U_2026 = '/x/catalogs/gaia_virac2_refcat_epoch2026.30.fits'
+
+
+def test_proposal_token_selects_that_proposals_refcat():
+    assert _pick_refcat([N_6778, N_7213], field='001', proposal='6778') == N_6778
+    assert _pick_refcat([N_6778, N_7213], field='001', proposal='7213') == N_7213
+    assert _pick_refcat([N_7213, N_6778], field='001', proposal=6778) == N_6778
+
+
+def test_proposal_and_observation_token_beat_proposal_only():
+    both = '/x/catalogs/gaia_virac2_refcat_epoch2024.68_j6778_o002.fits'
+    assert _pick_refcat([N_6778, both], field='002', proposal='6778') == both
+    assert _pick_refcat([N_6778, both], field='001', proposal='6778') == N_6778
+
+
+def test_another_proposals_refcat_is_never_a_fallback():
+    with pytest.raises(ValueError, match='wrong sky'):
+        _pick_refcat([N_7213], field='001', proposal='6778')
+
+
+def test_proposal_token_beats_an_untokened_file():
+    assert _pick_refcat([U_2026, N_6778], field='001', proposal='6778') == N_6778
+
+
+def test_two_untokened_refcats_on_a_shared_tree_REFUSE():
+    """The on-disk ngc6334 state: the old pick was sorted(...)[-1], 2026.30."""
+    for prop in ('6778', '7213'):
+        with pytest.raises(ValueError) as exc:
+            _pick_refcat([U_2024, U_2026], field='001', proposal=prop)
+        msg = str(exc.value)
+        assert 'epoch2024.68' in msg and 'epoch2026.30' in msg
+        assert f'_j{prop}' in msg and 'ASTROM_REFCAT' in msg
+
+
+def test_a_single_untokened_refcat_still_serves_a_shared_tree_proposal():
+    assert _pick_refcat([U_2024], field='001', proposal='6778') == U_2024
+    assert _pick_refcat([U_2024, N_7213], field='001', proposal='6778') == U_2024
+
+
+def test_non_shared_proposal_keeps_the_previous_selection():
+    """gc2211 (2211) and untagged callers: unchanged, including the
+    newest-sorting pick among untokened files."""
+    for prop in ('2211', None):
+        assert _pick_refcat([GENERIC, O028], field='023', proposal=prop) == GENERIC
+        assert _pick_refcat([GENERIC, O028], field='028', proposal=prop) == O028
+        assert _pick_refcat([U_2024, U_2026], field='001', proposal=prop) == U_2026
+
+
+def test_a_caller_without_a_proposal_does_not_see_j_tokened_files():
+    assert _pick_refcat([N_6778, N_7213, GENERIC], field='001') == GENERIC
+    with pytest.raises(ValueError, match='wrong sky'):
+        _pick_refcat([N_6778, N_7213], field='001')
+
+
+NGC = ['gaia_virac2_refcat_epoch2024.68_j6778.fits',
+       'gaia_virac2_refcat_epoch2026.30_j7213.fits']
+
+
+@pytest.mark.parametrize('prop,want', [('6778', NGC[0]), ('7213', NGC[1])])
+def test_the_STAGE_checkpoint_threads_proposal_id(tmp_path, prop, want, capsys,
+                                                  monkeypatch):
+    """Drop `proposal=` at either _pick_refcat call and both proposals get the
+    same file, or the run refuses."""
+    import os as _os
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, NGC)
+    _astrom_checkpoint_refcat(bp, field='001', proposal_id=prop)
+    chosen = [ln for ln in capsys.readouterr().out.splitlines()
+              if 'reference catalog' in ln]
+    assert chosen and _os.path.basename(chosen[-1].split()[-1]) == want, chosen
+
+
+def test_the_checkpoint_refuses_two_untokened_refcats_on_a_shared_tree(
+        tmp_path, monkeypatch):
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_virac2_refcat_epoch2024.68.fits',
+                              'gaia_virac2_refcat_epoch2026.30.fits'])
+    with pytest.raises(ValueError, match='_j6778'):
+        _astrom_checkpoint_refcat(bp, field='001', proposal_id='6778')
+
+
+@pytest.mark.parametrize('prop,want', [('6778', NGC[0]), ('7213', NGC[1])])
+def test_the_REDUCER_side_bulk_path_threads_proposal(tmp_path, prop, want):
+    import os as _os
+    from jwst_gc_pipeline.reduction.bulk_offset_step0 import refcat_for_frame
+    bp = _catalogs(tmp_path, NGC)
+    path, cands = refcat_for_frame(bp, 'VIRAC2', field='001', proposal=prop)
+    assert len(cands) == 2 and _os.path.basename(path) == want
+
+
+def test_both_entry_points_choose_the_SAME_file_on_a_shared_tree(tmp_path,
+                                                                 monkeypatch):
+    import glob as _glob
+    import os as _os
+    from jwst_gc_pipeline.reduction.bulk_offset_step0 import refcat_for_frame
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, NGC)
+    cands = sorted(_glob.glob(f'{bp}/catalogs/gaia_virac2_refcat*.fits'))
+    for prop in ('6778', '7213'):
+        a = _pick_refcat(cands, field='001', proposal=prop)
+        b, _ = refcat_for_frame(bp, 'VIRAC2', field='001', proposal=prop)
+        assert _os.path.basename(a) == _os.path.basename(b), prop
+
+
+def test_the_step0_script_passes_the_proposal():
+    import pathlib
+    import re as _re
+    root = pathlib.Path(__file__).resolve().parents[3]
+    src = (root / 'scripts' / 'reduction' / 'step0_bulk_offset.py').read_text()
+    calls = _re.findall(r'refcat_for_frame\s*\((?:[^()]|\([^()]*\))*\)', src)
+    assert calls and all('proposal=args.proposal' in c for c in calls), calls
+
+
+def test_builder_token_spelling_round_trips_through_the_selector():
+    from jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery import (
+        refcat_filename)
+    assert (refcat_filename('2024.68', proposal_token='6778')
+            == 'gaia_virac2_refcat_epoch2024.68_j6778.fits')
+    assert (refcat_filename('2024.68', obs_token='1', proposal_token='j6778')
+            == 'gaia_virac2_refcat_epoch2024.68_j6778_o001.fits')
+    assert (refcat_filename('2024.68', obs_token='028')
+            == 'gaia_virac2_refcat_epoch2024.68_o028.fits')
+    cands = [f'/x/catalogs/{refcat_filename(t, proposal_token=p)}'
+             for t, p in (('2024.68', '6778'), ('2026.30', '7213'))]
+    assert _pick_refcat(cands, field='001', proposal='6778').endswith(
+        'epoch2024.68_j6778.fits')
+    assert _pick_refcat(cands, field='001', proposal='7213').endswith(
+        'epoch2026.30_j7213.fits')
