@@ -118,6 +118,7 @@ def _write_perframe(basepath, field, exp=1):
     t = Table({'flux_fit': [1.0]})
     t.meta['FILENAME'] = (f'/x/jw10678{field}001_02101_{exp:05d}_nrcblong'
                           f'_align_o{field}_crf.fits')
+    t.meta['pixscale'] = 0.063   # the per-frame writer stamps it (#1238)
     t.write(fn)
     return fn
 
@@ -178,6 +179,7 @@ def _write_gc2211_frames(tmp_path):
         t = Table({'flux_fit': [1.0]})
         t.meta['FILENAME'] = (f'/x/jw02211{f}001_02101_00001_nrcblong'
                               f'_align_o{f}_crf.fits')
+        t.meta['pixscale'] = 0.063   # the per-frame writer stamps it (#1238)
         t.write(fn)
 
 
@@ -1138,6 +1140,7 @@ def test_merge_reads_back_epsf_and_hybrid_perframe_names(
         iteration_label='m2', method='daophot', basic_or_iterative='basic')
     t = Table({'flux_fit': [1.0]})
     t.meta['FILENAME'] = '/x/jw10678001001_02101_00001_nrcblong_crf.fits'
+    t.meta['pixscale'] = 0.063   # the per-frame writer stamps it (#1238)
     t.write(fn)
     seen = []
     monkeypatch.setattr(MC, 'combine_singleframe', _stub_combine(seen))
