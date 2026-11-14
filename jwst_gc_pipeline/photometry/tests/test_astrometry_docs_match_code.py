@@ -232,3 +232,32 @@ def test_the_apply_switch_still_gates_the_m2_write():
                      src), (
         "the ladder row says the m2 correction is conditional on "
         "ASTROM_CHECKPOINT_APPLY; that is no longer how it is gated")
+
+
+# ---------------------------------------------------------------------------
+# issue #1191 -- the reference-bounded coverage prediction
+# ---------------------------------------------------------------------------
+
+REF_BOUND_RECORD_FIELDS = (
+    "n_ref_in_footprint", "coverage_rate_ref_all", "coverage_rate_ref_tight",
+    "n_ref_bound_untestable", "ref_bound_untestable_cells",
+    "ref_bound_untestable_fraction", "ref_too_sparse", "ref_untestable_limit")
+REF_BOUND_CELL_FIELDS = ("n_ref", "expected_pairs_src", "expected_pairs_ref",
+                         "ref_bound_applied")
+
+
+def test_reference_bound_coverage_is_documented_and_returned():
+    """The checkpoint doc names the guard constant, its live value and every
+    record field the reference bound adds, and the map returns each of them."""
+    md = _md()
+    assert "REGION_REFERENCE_UNTESTABLE_FRACTION" in md
+    assert f"({ao.REGION_REFERENCE_UNTESTABLE_FRACTION:.0%})" in md, (
+        "the documented guard fraction no longer matches the constant")
+    for name in REF_BOUND_RECORD_FIELDS + REF_BOUND_CELL_FIELDS:
+        assert f"`{name}`" in md, f"{name} is not in ASTROMETRY_CHECKPOINTS.md"
+    src = inspect.getsource(ao.same_star_region_map)
+    for name in REF_BOUND_RECORD_FIELDS:
+        assert name in src, f"same_star_region_map no longer returns {name}"
+    scan = inspect.getsource(ao._region_coverage_scan)
+    for name in REF_BOUND_CELL_FIELDS:
+        assert name in scan, f"_region_coverage_scan no longer records {name}"

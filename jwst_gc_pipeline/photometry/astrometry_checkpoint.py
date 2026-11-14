@@ -4041,11 +4041,17 @@ def _spatial_gate_detail(tie):
         tol = reg.get("tol_mas")
         tol_str = (f", tol={tol:.1f} mas [{reg.get('tol_source')}]"
                   if tol is not None and np.isfinite(tol) else "")
+        # Cells whose coverage test the reference count made untestable
+        # (issue #1191); named only when there are some, so records that
+        # never needed the bound read as before.
+        n_refb = reg.get("n_ref_bound_untestable") or 0
+        refb_str = (f", {n_refb} too thin in the reference to test"
+                    if n_refb else "")
         return (f"same-star region map clean={reg.get('clean')} "
                 f"status={rm.get('status')} "
                 f"({reg.get('n_cells')} cells, {reg.get('n_flagged')} flagged, "
                 f"{reg.get('n_uncovered')} uncovered, "
-                f"{reg.get('n_skipped')} unchecked{tol_str})")
+                f"{reg.get('n_skipped')} unchecked{refb_str}{tol_str})")
     return f"per-tile histogram grid clean={(tie.get('per_tile') or {}).get('clean')}"
 
 

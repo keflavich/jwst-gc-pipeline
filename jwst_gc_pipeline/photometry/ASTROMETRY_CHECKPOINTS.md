@@ -506,12 +506,45 @@ than five independent checks would be.
       of such starved cells is tested against the same two bars once their summed
       expectation reaches `min_stars` — no new tunable.
 
+    **The prediction is bounded by the reference count too (issue #1191).**
+    A pair needs a reference partner, and `local_residual_map` keeps a pair
+    only when that partner is unique, so a cell's pairs are bounded by its
+    reference stars, not by its JWST sources.  The per-source rate over-predicts
+    where JWST resolves far more stars per reference star than the field at
+    large (the Sgr A* nuclear cluster: on the sgra F212N consensus, cells (4,1)
+    and (5,1) held 13 and 20 tight pairs against 72 and 67 predicted per source,
+    while their tight pairs per reference star, 0.034 and 0.042, sat within the
+    0.034-0.056 of the neighbouring columns).  Each
+    cell's expectation is therefore `min(n_sources * rate_per_source,
+    n_ref * rate_per_reference)`, on both the tight and the all-pairs arm, with
+    `n_ref` the reference stars inside the footprint grid
+    (`n_ref_in_footprint`, `coverage_rate_ref_all`, `coverage_rate_ref_tight`).
+    The minimum only lowers a prediction, so no cell that is covered without it
+    becomes uncovered.  Each scanned cell records `n_ref`, `expected_pairs_src`,
+    `expected_pairs_ref` and `ref_bound_applied`.  A cell that was uncovered on
+    the source count and that the reference count leaves too thin to judge
+    (fewer than `min_stars` expected pairs) is no longer called displaced; it is
+    listed in `ref_bound_untestable_cells` and counted in
+    `n_ref_bound_untestable` (as a share of the source cells,
+    `ref_bound_untestable_fraction`; the limit used is `ref_untestable_limit`).  When those cells exceed
+    `REGION_REFERENCE_UNTESTABLE_FRACTION` (15%) of the source cells the map is
+    `clean=False` with `ref_too_sparse` set and the reason "reference too
+    sparse to test coverage"; like an uncovered cell, that verdict is excluded
+    from the bulk-dominance and small-bulk exemptions.
+    `same_star_region_map(..., ref_bound_coverage=False)` reproduces the
+    source-only prediction.
+
     Stated limit: a displaced region whose cells cannot between them predict
     `min_stars` (40) pairs is not separable from noise by a matched-pair
     statistic and is NOT caught (a 2% corner of a footprint predicts ~24 pairs
     and reads clean).  `n_skipped` / `skipped_expected_pairs` record how much of
     the field got no coverage verdict, so a `clean=True` over silently unchecked
-    cells is distinguishable from one over a field that was checked;
+    cells is distinguishable from one over a field that was checked.  The
+    reference bound adds to this limit: where a cell's reference count predicts
+    fewer than `min_stars` pairs (the thin-reference nuclear-cluster core), a
+    displaced region is NOT caught either, and the all-pairs arm cannot stand in
+    because a displaced JWST-dense region finds chance partners for most of its
+    few reference stars;
   * `histogram-grid` — `measure_offset_grid`, used on a swept or otherwise
     unverified tie, where matched-pair statistics have no standing and the
     histogram is the only estimator that works, **and** whenever the region map

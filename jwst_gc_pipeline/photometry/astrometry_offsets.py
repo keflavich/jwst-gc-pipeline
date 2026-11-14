@@ -1372,6 +1372,19 @@ REGION_COVERAGE_FRACTION = 0.3
 #: pairs separates the two: the same injected region keeps 7% of the field's
 #: tight-pair rate against 86% of its all-pair rate.
 REGION_TIGHT_PAIR_MAS = 50.0
+#: The coverage prediction is the LOWER of the source-count prediction and the
+#: reference-count prediction (issue #1191).  Pairs are bounded by the
+#: reference catalog, not by the JWST catalog: ``local_residual_map`` keeps a
+#: pair only when its reference partner is unique, so a cell holding far more
+#: JWST sources per reference star than the field at large (the Sgr A* nuclear
+#: cluster, where tight pairs per JWST source fall by about an order of
+#: magnitude) cannot reach the field's pairs per JWST source however well it
+#: is registered.  The bound can leave such a cell too thin to test at all.
+#: When the cells it rescued from "uncovered" that way exceed this fraction of
+#: the source cells, the map reports ``clean=False`` ("reference too sparse to
+#: test coverage") instead of passing a field whose displacement test was
+#: given up over a large part of its area.
+REGION_REFERENCE_UNTESTABLE_FRACTION = 0.15
 
 #: Region-map RESIDUAL tolerance (issue #965 item 3).  A FIXED 15 mas over-flags
 #: the gc-treasury tiles: VIRAC2 per-star scatter (~40 mas) plus 12.7 yr of
@@ -1579,18 +1592,24 @@ def footprint_aligned_grid(coords, cell_arcsec, min_points=REGION_FOOTPRINT_ALIG
                n_u=n_u, n_v=n_v, n_points=n_points, reason=None)
 
 
-def assign_footprint_cells(ra_deg, dec_deg, grid):
+def assign_footprint_cells(ra_deg, dec_deg, grid, clip=True):
     """``(ix, iy)`` of each (ra, dec) (deg) inside a :func:`footprint_aligned_grid`
     grid, clipped to its bounds -- a position measured slightly outside the
     footprint used to FIT the grid (e.g. a matched pair whose reference-
     catalog partner sits marginally beyond it) still lands in the nearest
-    edge cell rather than getting a negative/overflow index."""
+    edge cell rather than getting a negative/overflow index.
+
+    ``clip=False`` returns the raw indices instead, so a caller counting a
+    catalog that extends well past the footprint (a reference catalog) can
+    drop the out-of-bounds positions rather than pile them into the edge
+    cells."""
     x, y = _tangent_plane_xy(ra_deg, dec_deg, grid["ra0"], grid["dec0"])
     u, v = _rotate_xy(x, y, grid["pa_deg"])
-    ix = np.clip(np.floor((u - grid["u_min"]) / grid["cell_u_arcsec"]).astype(int),
-                0, grid["n_u"] - 1)
-    iy = np.clip(np.floor((v - grid["v_min"]) / grid["cell_v_arcsec"]).astype(int),
-                0, grid["n_v"] - 1)
+    ix = np.floor((u - grid["u_min"]) / grid["cell_u_arcsec"]).astype(int)
+    iy = np.floor((v - grid["v_min"]) / grid["cell_v_arcsec"]).astype(int)
+    if clip:
+        ix = np.clip(ix, 0, grid["n_u"] - 1)
+        iy = np.clip(iy, 0, grid["n_v"] - 1)
     return ix, iy
 
 
@@ -1638,7 +1657,8 @@ def _connected_cells(entries):
 
 
 def _region_coverage_scan(keys, n_src, got_by_cell, rate, min_stars,
-                          coverage_fraction, by):
+                          coverage_fraction, by, n_ref_by_cell=None,
+                          rate_ref=None):
     """Split source cells into UNCOVERED / STARVED / TESTABLE for one pair count.
 
     ``rate`` is the field's OWN pairs-per-source for the statistic named by
@@ -1646,17 +1666,36 @@ def _region_coverage_scan(keys, n_src, got_by_cell, rate, min_stars,
     actually achieves -- a genuinely sparse footprint edge thins its sources and
     its pairs together and stays covered.
 
+    ``n_ref_by_cell`` / ``rate_ref`` (issue #1191): reference-catalog stars per
+    cell and the field's own pairs per reference star.  When both are given the
+    prediction is ``min(n_src * rate, n_ref * rate_ref)``.  A cell whose JWST
+    density far exceeds the field's (the Sgr A* nuclear cluster) is capped by
+    the reference count rather than the source count, because a pair needs a
+    reference partner.  The minimum only LOWERS the prediction, so a cell that
+    is covered without it stays covered.  ``None`` (default) reproduces the
+    source-only prediction exactly.
+
     A cell whose source count predicts fewer than ``min_stars`` pairs cannot be
     judged on its own; it is returned as STARVED when it also lost the pairs it
     did predict, so the caller can test a contiguous GROUP of such cells against
     the same bar (a 20" displacement never fills a 45" cell -- #667 review).
     """
+    bounded = n_ref_by_cell is not None and rate_ref is not None
     uncovered, starved, untestable = [], [], []
     for (kx, ky), n_a in zip(keys, n_src):
-        expected = float(n_a) * rate
+        expected_src = float(n_a) * rate
+        expected = expected_src
         got = int(got_by_cell.get((int(kx), int(ky)), 0))
         entry = dict(ix=int(kx), iy=int(ky), n_sources=int(n_a), n_pairs=got,
-                     expected_pairs=expected, by=by)
+                     by=by)
+        if bounded:
+            n_ref = int(n_ref_by_cell.get((int(kx), int(ky)), 0))
+            expected_ref = float(n_ref) * rate_ref
+            expected = min(expected_src, expected_ref)
+            entry.update(n_ref=n_ref, expected_pairs_src=expected_src,
+                         expected_pairs_ref=expected_ref,
+                         ref_bound_applied=bool(expected_ref < expected_src))
+        entry["expected_pairs"] = expected
         lost = got <= coverage_fraction * expected
         if expected < min_stars:
             (starved if lost else untestable).append(entry)
@@ -1674,8 +1713,25 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                          tight_pair_mas=REGION_TIGHT_PAIR_MAS, context="",
                          sigma_b_mas=None, sigma_cap_mas=None,
                          align_to_footprint=True,
-                         low_coverage_fraction=REGION_LOW_COVERAGE_FRACTION):
+                         low_coverage_fraction=REGION_LOW_COVERAGE_FRACTION,
+                         ref_bound_coverage=True,
+                         ref_untestable_fraction=REGION_REFERENCE_UNTESTABLE_FRACTION):
     """Per-REGION seam map from SAME-STAR matched pairs, bulk removed.
+
+    ``ref_bound_coverage`` (issue #1191): ``True`` by default -- the coverage
+    prediction for a cell is the LOWER of ``n_sources * pairs-per-source`` and
+    ``n_reference * pairs-per-reference-star`` (see
+    :func:`_region_coverage_scan`), with the reference stars counted inside the
+    footprint grid.  Pairs are bounded by the reference count, so a cell where
+    JWST resolves far more stars per reference star than the field at large
+    (Sgr A*'s nuclear cluster) is no longer predicted a pair count it cannot
+    reach.  The bound only lowers a prediction, so no cell that is covered
+    without it becomes uncovered; a cell the bound makes too thin to test on
+    the tight arm is named in ``ref_bound_untestable_cells``, and when the
+    cells it rescued that way exceed ``ref_untestable_fraction`` of the source cells
+    (``n_ref_bound_untestable``), the map is ``clean=False`` ("reference too sparse
+    to test coverage", ``ref_too_sparse=True``).  ``False``
+    reproduces the source-only prediction exactly.
 
     ``sigma_b_mas`` / ``sigma_cap_mas`` (issue #965 item 1): per-star predicted
     reference sigma for ``b``, aligned index-for-index with ``b``, and the cap
@@ -1820,6 +1876,13 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         checkpoint record can show how much of the map the cut touched.
         Each entry of ``uncovered_cells`` carries ``by`` (``"tight-pairs"`` /
         ``"all-pairs"``) and either ``ix``/``iy`` or, for a group, ``cells``.
+        The reference-bound coverage fields (issue #1191) are
+        ``n_ref_in_footprint``, ``coverage_rate_ref_all``,
+        ``coverage_rate_ref_tight``, ``n_ref_bound_untestable``,
+        ``ref_bound_untestable_cells``, ``ref_bound_untestable_fraction``,
+        ``ref_too_sparse`` and ``ref_untestable_limit``; a single-cell entry
+        also carries ``n_ref``, ``expected_pairs_src``, ``expected_pairs_ref``
+        and ``ref_bound_applied``.
         ``measurable`` is False when fewer than ``min_cells`` cells could be
         measured -- the caller must then fall back rather than read ``clean``,
         which is False in that case for the same reason an unverifiable check
@@ -1858,6 +1921,15 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                 coverage_rate_all=float(len(pair_sep_mas)) / n_a_total,
                 coverage_rate_tight=float(tight_sel.sum()) / n_a_total,
                 tight_pair_mas=float(tight_pair_mas),
+                # Reference-bound coverage prediction (issue #1191); filled in
+                # below once the reference stars inside the footprint are
+                # counted.  nan/0 when the map returns before that point.
+                n_ref_in_footprint=0,
+                coverage_rate_ref_all=float("nan"),
+                coverage_rate_ref_tight=float("nan"),
+                n_ref_bound_untestable=0, ref_bound_untestable_cells=[],
+                ref_bound_untestable_fraction=0.0, ref_too_sparse=False,
+                ref_untestable_limit=float(ref_untestable_fraction),
                 bulk_dra_mas=float("nan"), bulk_ddec_mas=float("nan"),
                 cell_arcsec=float(cell_arcsec), nsigma=float(nsigma),
                 tol_k=float(tol_k), tol_floor_mas=float(tol_floor_mas),
@@ -1993,6 +2065,27 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                             return_counts=True)
     keys = [tuple(int(v) for v in k) for k in keys.tolist()]
     n_src = [int(v) for v in n_src.tolist()]
+    # Reference stars per cell, on the grid the sources were binned with and
+    # inside the sources' own footprint only.  `b` is the WHOLE reference
+    # catalog, so stars outside the footprint must be dropped, not clipped into
+    # the edge cells (assign_footprint_cells clips by default).
+    n_ref_by_cell, n_ref_in = None, 0
+    if ref_bound_coverage:
+        b_ra = np.asarray(b.ra.deg, dtype=float)
+        b_dec = np.asarray(b.dec.deg, dtype=float)
+        if grid_aligned:
+            b_ix, b_iy = assign_footprint_cells(b_ra, b_dec, footprint_grid,
+                                                clip=False)
+            inside = ((b_ix >= 0) & (b_ix < footprint_grid["n_u"])
+                      & (b_iy >= 0) & (b_iy < footprint_grid["n_v"]))
+        else:
+            b_ix = np.floor((b_ra - r0) / cell_deg_ra).astype(int)
+            b_iy = np.floor((b_dec - d0) / cell_deg_dec).astype(int)
+            inside = ((b_ix >= a_ix.min()) & (b_ix <= a_ix.max())
+                      & (b_iy >= a_iy.min()) & (b_iy <= a_iy.max()))
+        n_ref_in = int(inside.sum())
+        if n_ref_in > 0:
+            n_ref_by_cell = _cell_counts(b_ix[inside], b_iy[inside])
     # Pairs are counted from the pair arrays rather than from `cells`, so a cell
     # holding 39 pairs against 45 expected reads as covered.  Reading `cells`
     # gave it got=0 (it never became a cell) and called it uncovered -- the
@@ -2004,6 +2097,10 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     got_tight = _cell_counts(p_ix[tight_sel], p_iy[tight_sel])
     rate_all = base["coverage_rate_all"]
     rate_tight = base["coverage_rate_tight"]
+    rate_ref_all = rate_ref_tight = None
+    if n_ref_by_cell is not None:
+        rate_ref_all = float(len(pair_sep_mas)) / n_ref_in
+        rate_ref_tight = float(tight_sel.sum()) / n_ref_in
 
     # TIGHT first: it is the arm that sees a displaced region against a DENSE
     # reference, where the region keeps chance-matched pairs at nearly the
@@ -2011,12 +2108,46 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
     # SPARSE reference, where the region keeps nothing.  A cell that neither
     # arm can predict `min_stars` pairs for got no verdict at all and is
     # reported in `n_skipped`.
-    unc_tight, starved_tight, _untestable_tight = _region_coverage_scan(
+    unc_tight, starved_tight, untestable_tight = _region_coverage_scan(
         keys, n_src, got_tight, rate_tight, min_stars, coverage_fraction,
-        "tight-pairs")
+        "tight-pairs", n_ref_by_cell=n_ref_by_cell, rate_ref=rate_ref_tight)
     unc_all, starved_all, untestable_all = _region_coverage_scan(
         keys, n_src, got_all, rate_all, min_stars, coverage_fraction,
-        "all-pairs")
+        "all-pairs", n_ref_by_cell=n_ref_by_cell, rate_ref=rate_ref_all)
+    # Cells the reference bound rescued from "uncovered" by making them too
+    # thin to test: the source-only prediction called them uncovered, and the
+    # reference-bounded prediction cannot judge them at all.  They are the
+    # cells whose displacement test the bound gave up, so they are named and
+    # counted, and the map is refused when they are too large a share of the
+    # field.  A cell the bound found genuinely covered (pairs per reference
+    # star normal, prediction still testable) is not counted.  Counting only
+    # cells that were uncovered before keeps the guard from refusing a field
+    # that passes without the bound.
+    ref_bound_untestable = []
+    if n_ref_by_cell is not None:
+        src_only = {}
+        for arm, got, rate in (("tight-pairs", got_tight, rate_tight),
+                               ("all-pairs", got_all, rate_all)):
+            unc0, _starved0, _untest0 = _region_coverage_scan(
+                keys, n_src, got, rate, min_stars, coverage_fraction, arm)
+            src_only[arm] = {(c["ix"], c["iy"]) for c in unc0}
+        bound_cant_judge = {
+            "tight-pairs": {(c["ix"], c["iy"]) for c in
+                            starved_tight + untestable_tight},
+            "all-pairs": {(c["ix"], c["iy"]) for c in
+                          starved_all + untestable_all}}
+        still_uncovered = {(c["ix"], c["iy"]) for c in unc_tight + unc_all}
+        rescued = set()
+        for arm in src_only:
+            rescued |= src_only[arm] & bound_cant_judge[arm]
+        rescued -= still_uncovered
+        sources_of = dict(zip(keys, n_src))
+        ref_bound_untestable = [
+            dict(ix=k[0], iy=k[1], n_sources=int(sources_of[k]),
+                 n_ref=int(n_ref_by_cell.get(k, 0)))
+            for k in sorted(rescued)]
+    ref_untestable_share = float(len(ref_bound_untestable)) / max(len(keys), 1)
+    ref_too_sparse = bool(ref_untestable_share > ref_untestable_fraction)
     uncovered, seen = [], set()
     for entry in unc_tight + unc_all:
         key = (entry["ix"], entry["iy"])
@@ -2062,6 +2193,14 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
         reason = (f"{len(flagged)} region cell(s) above {tol_used:.1f} mas "
                   f"({tol_source} tolerance) at {nsigma}-sigma "
                   f"(worst {worst:.1f} mas)")
+    elif ref_too_sparse and not uncovered:
+        reason = (f"reference too sparse to test coverage: "
+                  f"{len(ref_bound_untestable)} of {len(keys)} region cells "
+                  f"({100 * ref_untestable_share:.0f}%) are uncovered against "
+                  f"the source count but hold too few reference stars to "
+                  f"predict {min_stars} pairs (limit "
+                  f"{100 * ref_untestable_fraction:.0f}%), so a displaced "
+                  f"region there would go unseen")
     elif uncovered:
         by = sorted({c["by"] for c in uncovered})
         reason = (f"{len(uncovered)} region cell(s)/group(s) hold sources but "
@@ -2075,7 +2214,16 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                cell_resid_mad_mas=cell_resid_mad,
                cell_resid_median_mas=cell_resid_median,
                n_low_coverage=len(low_coverage_cells),
-               low_coverage_cells=low_coverage_cells)
+               low_coverage_cells=low_coverage_cells,
+               n_ref_in_footprint=n_ref_in,
+               coverage_rate_ref_all=(rate_ref_all if rate_ref_all is not None
+                                      else float("nan")),
+               coverage_rate_ref_tight=(rate_ref_tight if rate_ref_tight is not None
+                                        else float("nan")),
+               n_ref_bound_untestable=len(ref_bound_untestable),
+               ref_bound_untestable_cells=ref_bound_untestable,
+               ref_bound_untestable_fraction=ref_untestable_share,
+               ref_too_sparse=ref_too_sparse)
     return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
                 n_flagged=len(flagged), n_uncovered=len(uncovered),
                 uncovered_cells=uncovered, worst_off_mas=worst,
@@ -2085,7 +2233,8 @@ def same_star_region_map(a, b, global_result, cell_arcsec=DEFAULT_REGION_CELL_AR
                 worst_sig_off_mas=max((c["resid_off_mas"] for c in sig),
                                       default=float("nan")),
                 measurable=True, reason=reason,
-                clean=bool(not flagged and not uncovered), **base)
+                clean=bool(not flagged and not uncovered and not ref_too_sparse),
+                **base)
 
 
 def residual_vs_magnitude(a, b, mag, global_result, match_radius=0.3 * u.arcsec,
