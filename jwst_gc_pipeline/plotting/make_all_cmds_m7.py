@@ -83,8 +83,12 @@ CCD_PAIRS = [
 ]
 
 
-def catalog_path(base, vetting, field=None):
+def catalog_path(base, vetting, field=None, stage='m7'):
     """The m7 table to plot; the qualcuts variant when one exists.
+
+    ``stage='m8_dedup'`` returns the m8_dedup table instead.  It has no
+    qualcuts variant: ``make_field`` applies the ``cmd_default`` column for
+    ``vetting='qualcuts'`` (#1283).
 
     The quality-cut suffix carries the field's own proposal token, so it is
     read from the registry rather than spelled here: brick and cloudc are
@@ -93,6 +97,10 @@ def catalog_path(base, vetting, field=None):
     ``_qualcuts_oksep_suffix``.
     """
     stem = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7'
+    if stage == 'm8_dedup':
+        return f'{base}/catalogs/{stem[:-len("m7")]}m8_dedup.fits'
+    if stage != 'm7':
+        raise ValueError(f"stage must be 'm7' or 'm8_dedup', got {stage!r}")
     if vetting == 'qualcuts':
         suffixes = ([_qualcuts_oksep_suffix(field)] if field is not None
                     else sorted(set(_qualcuts_oksep_suffix(f) for f in FIELDS)))
@@ -162,13 +170,20 @@ def _axlims_ccd(xv, yv):
 
 
 def make_field(field, magsystem='vega', vetting='qualcuts', do_limits=True,
-               limit_nsigma=3, firm_emag=0.1, ext_model=None, dpi=150):
+               limit_nsigma=3, firm_emag=0.1, ext_model=None, dpi=150,
+               stage='m7'):
     base = FIELDS[field]
     magprefix = f'mag_{magsystem}'
     errprefix = 'emag_ab'
-    path = catalog_path(base, vetting, field=field)
+    path = catalog_path(base, vetting, field=field, stage=stage)
     print(f'\n=== {field}: {os.path.basename(path)} ({magsystem}) ===')
     tbl = Table.read(path)
+    if stage == 'm8_dedup' and vetting == 'qualcuts':
+        # every row is in the table; the default selection is a column
+        if 'cmd_default' not in tbl.colnames:
+            raise KeyError(f'{path} has no cmd_default column; run '
+                           f'scripts/reduction/add_cmd_default_flag.py on it')
+        tbl = tbl[np.asarray(tbl['cmd_default'], dtype=bool)]
     rf = real_filters(tbl)
     print(f'  rows={len(tbl)}  real filters present: {sorted(rf)}')
 
@@ -181,7 +196,8 @@ def make_field(field, magsystem='vega', vetting='qualcuts', do_limits=True,
                                      errprefix=errprefix, magprefix=magprefix,
                                      verbose=True)
 
-    outdir = f'{base}/catalogs/cmds_m7/{magsystem}'
+    outdir = (f'{base}/catalogs/cmds_m7/{magsystem}' if stage == 'm7'
+              else f'{base}/catalogs/cmds_{stage}/{magsystem}')
     os.makedirs(outdir, exist_ok=True)
     ext = ext_model if ext_model is not None else CT06_MWGC()
     manifest = [f'# {field} {magsystem} vetting={vetting} firm_emag={firm_emag} '
@@ -294,6 +310,9 @@ def main():
     ap.add_argument('--magsystem', default='vega', choices=['vega', 'ab'])
     ap.add_argument('--vetting', default='qualcuts',
                     choices=['qualcuts', 'basic'])
+    ap.add_argument('--stage', default='m7', choices=['m7', 'm8_dedup'],
+                    help='table to plot; with m8_dedup, --vetting qualcuts '
+                         'selects the cmd_default rows')
     ap.add_argument('--upper-limits', dest='do_limits', action='store_true', default=True)
     ap.add_argument('--no-upper-limits', dest='do_limits', action='store_false')
     ap.add_argument('--limit-nsigma', type=float, default=3.0)
@@ -305,7 +324,7 @@ def main():
     for field in fields:
         make_field(field, magsystem=args.magsystem, vetting=args.vetting,
                    do_limits=args.do_limits, limit_nsigma=args.limit_nsigma,
-                   firm_emag=args.firm_emag, dpi=args.dpi)
+                   firm_emag=args.firm_emag, dpi=args.dpi, stage=args.stage)
 
 
 if __name__ == '__main__':

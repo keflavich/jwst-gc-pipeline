@@ -7150,6 +7150,32 @@ def _resolve_crossband_ref_filter(options, filternames):
     return pick
 
 
+def _maybe_annotate_cmd_default(paths, label='m8'):
+    """Add ``oksep_pass`` / ``cmd_default`` to each existing table in ``paths`` (#1283).
+
+    Skipped when ``M8_CMD_DEFAULT=0`` is set.  A failure on one table is
+    logged and the others still run; the rewrite is atomic, so a table is
+    either annotated or left as it was.  Returns the paths that were annotated.
+    """
+    if os.environ.get('M8_CMD_DEFAULT', '1') == '0':
+        return []
+    from astropy.io.registry import IORegistryError
+    from jwst_gc_pipeline.photometry.cmd_default import annotate_cmd_default
+    done = []
+    for _p in paths:
+        if not (_p and os.path.exists(_p)):
+            continue
+        try:
+            annotate_cmd_default(_p)
+        except (OSError, KeyError, ValueError, IndexError, TypeError,
+                IORegistryError) as _cex:
+            print(f"manual [{label}]: cmd_default flag FAILED ({_p}): {_cex}",
+                  flush=True)
+            continue
+        done.append(_p)
+    return done
+
+
 def _maybe_flag_m8_spikes(dedup_path, m8_path, options, label='m8'):
     """Add the diffraction-spike flag columns to an m8_dedup file (#1035).
 
@@ -7218,6 +7244,10 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
             # Catalog-level diffraction-spike flag (#1035): adds flag columns
             # to the dedup file, never removes rows.  Best-effort.
             _maybe_flag_m8_spikes(out, m8_path, options, label)
+            # Default CMD selection as columns on the full tables (#1283),
+            # computed on the finished dedup table and the raw m8.
+            _stage = 'cmd_default flag'
+            _maybe_annotate_cmd_default([m8_path, out], label)
         finally:
             # Runs whether or not the flag step raised, so a flag failure
             # cannot skip the brick anti-clobber copy.  The stage label is
@@ -11424,6 +11454,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             except (OSError, ValueError, KeyError) as _pex:
                 print(f"manual [{last_phase}]: copying the independent-detection "
                       f"flags onto the _qualcuts subsets failed ({_pex})", flush=True)
+            # Default CMD selection (#1283): oksep_pass / cmd_default on the
+            # merged table and its subsets, after n_filt_independent exists.
+            _maybe_annotate_cmd_default(
+                [_xb] + sorted(glob.glob(f"{_xb[:-len('.fits')]}_qualcuts*.fits")),
+                last_phase)
             # Last step of the post-annotation block (after any column added
             # to the FITS): the ECSV twin carries the FITS table's columns.  It
             # is written even when annotation failed, without the flags.

@@ -1570,6 +1570,65 @@ def _oksep_sep_cols(colnames):
             if c.startswith('sep_') and 'w' not in c[len('sep_'):]]
 
 
+#: Separation (arcsec) below which a band counts as matched in the oksep test.
+OKSEP_MAX_SEP_ARCSEC = 0.1
+
+#: ``CMDDEF`` header values: which test the ``cmd_default`` column applies.
+CMDDEF_OKSEP = 'oksep'
+CMDDEF_OKSEP_INDEP = 'oksep&n_filt_independent>=2'
+
+
+def _sep_arcsec(col):
+    """A ``sep_<band>`` column as a float array in arcsec; masked and NaN -> NaN.
+
+    The m7 tables store ``sep_*`` in arcsec or degrees depending on the
+    writer (the m8_dedup files carry ``TUNIT = deg``), so the unit is read
+    from the column and a unitless column is taken to be arcsec.
+    """
+    unit = getattr(col, 'unit', None) or u.arcsec
+    data = np.ma.filled(np.ma.asarray(col).astype(float), np.nan)
+    return (data * u.Unit(unit)).to_value(u.arcsec)
+
+
+def compute_oksep(table, max_sep_arcsec=OKSEP_MAX_SEP_ARCSEC):
+    """The oksep row mask: more than one non-wide band has ``sep_<band>`` below the cut.
+
+    A table with fewer than two non-wide ``sep_*`` columns gets an all-True
+    mask, as the oksep subset written by ``merge_catalogs`` always did.
+    Masked or NaN separations count as not matched.
+    """
+    sep_cols = _oksep_sep_cols(table.colnames)
+    if len(sep_cols) < 2:
+        return np.ones(len(table), dtype=bool)
+    with np.errstate(invalid='ignore'):
+        passed = np.array([_sep_arcsec(table[c]) < max_sep_arcsec
+                           for c in sep_cols])
+    return passed.sum(axis=0) > 1
+
+
+def compute_cmd_default(table, max_sep_arcsec=OKSEP_MAX_SEP_ARCSEC):
+    """Row masks ``(oksep, cmd_default)`` for the default CMD selection (#1283).
+
+    ``cmd_default`` is the oksep separation test AND ``n_filt_independent >= 2``
+    (at least two bands measured by their own per-band detection rather than
+    by the cross-band forced fit).  A table without ``n_filt_independent``
+    gets the oksep mask alone; ``cmd_default_rule`` names which test applied.
+    """
+    oksep = compute_oksep(table, max_sep_arcsec)
+    if 'n_filt_independent' not in table.colnames:
+        return oksep, oksep.copy()
+    nindep = np.ma.filled(np.ma.asarray(table['n_filt_independent']).astype(float),
+                          np.nan)
+    with np.errstate(invalid='ignore'):
+        return oksep, oksep & (nindep >= 2)
+
+
+def cmd_default_rule(table):
+    """The ``CMDDEF`` header value matching what ``compute_cmd_default`` applies to ``table``."""
+    return (CMDDEF_OKSEP_INDEP if 'n_filt_independent' in table.colnames
+            else CMDDEF_OKSEP)
+
+
 def _qualcuts_oksep_suffix(target):
     """Filename suffix for the oksep quality-cut table.
 
@@ -1876,11 +1935,8 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             print(f"Saving merged version with qualcuts: {tablename}_qualcuts.fits with len={len(basetable)}")
             basetable.write(f"{tablename}_qualcuts.fits", overwrite=True)
 
-        sep_cols = _oksep_sep_cols(basetable.colnames)
-        if len(sep_cols) >= 2:
-            oksep = (np.array([basetable[colname] < 0.1*u.arcsec for colname in sep_cols]).sum(axis=0) > 1)
-        else:
-            oksep = np.ones(len(basetable), dtype=bool)
+        oksep = compute_oksep(basetable)
+        if len(_oksep_sep_cols(basetable.colnames)) < 2:
             print("Skipping oksep cut: insufficient sep_* columns for this target")
         oksep_fn = f"{tablename}{_qualcuts_oksep_suffix(target)}.fits"
         print(f"Writing {oksep_fn}")

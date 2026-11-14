@@ -189,6 +189,12 @@ def main(argv=None):
           f"{len(plan)}/{len(filters)} bands overlaid"
           f"{'; MISSING ' + ','.join(missing) if missing else ''})")
 
+    cmd_default_on = os.environ.get('M8_CMD_DEFAULT', '1') != '0'
+    if cmd_default_on:
+        # Default CMD selection as columns (#1283), as _maybe_dedup_m8 adds them.
+        from jwst_gc_pipeline.photometry.cmd_default import annotate_cmd_default
+        annotate_cmd_default(out_path)
+
     if args.dedup:
         import astropy.units as u
         from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
@@ -203,6 +209,9 @@ def main(argv=None):
             from jwst_gc_pipeline.photometry.spike_flag import flag_m8_spike_artifacts
             basepath = os.path.dirname(os.path.dirname(os.path.abspath(dedup_path)))
             flag_m8_spike_artifacts(dedup_path, basepath)
+        if cmd_default_on:
+            # After the spike flag, on the finished dedup table (#1283).
+            annotate_cmd_default(dedup_path)
 
 
 if __name__ == '__main__':
