@@ -221,7 +221,7 @@ def test_merge_entry_points_forward_the_scope(func, monkeypatch):
     seen = {}
 
     def _fake(filtername, target='brick', basepath='', proposal_id=None, field=None,
-              phase=None):
+              phase=None, frame_variants=None):
         seen.update(proposal_id=proposal_id, field=field)
         return None
     monkeypatch.setattr(MC, 'load_satstar_catalog', _fake)
@@ -410,7 +410,7 @@ def test_partner_seed_reader_is_scoped():
     src = inspect.getsource(C._prepare_frame_for_photometry)
     assert "_partner}_consolidated_satstar_catalog.fits" not in src
     assert ('_partner_satstar_seed_files(\n                basepath, _partner, '
-            'proposal_id, field, phase=satstar_label)') in src
+            'proposal_id, field, phase=satstar_label,\n                frame_variants=_frame_variants_of_paths([original_filename]))') in src
     helper = inspect.getsource(C._partner_satstar_seed_files)
     assert 'consolidated_satstar_cache_path(basepath, partner, pscope)' in helper
     assert 'satstar_sibling_seed_positions(\n            filtername, basepath, proposal_id=proposal_id, field=field)' in src

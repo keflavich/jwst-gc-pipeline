@@ -547,13 +547,14 @@ def test_satstar_entry_points_forward_the_phase(func, monkeypatch):
     seen = {}
 
     def _fake(filtername, target='brick', basepath='', proposal_id=None,
-              field=None, phase=None):
+              field=None, phase=None, frame_variants=None):
         seen['phase'] = phase
+        seen['frame_variants'] = frame_variants
         return None
     monkeypatch.setattr(MC, 'load_satstar_catalog', _fake)
     getattr(MC, func)(Table({'flux': [1.0]}), 'f480m', basepath='/nowhere/',
-                      phase='m6')
-    assert seen == {'phase': 'm6'}
+                      phase='m6', frame_variants={'destreak_o001_crf'})
+    assert seen == {'phase': 'm6', 'frame_variants': {'destreak_o001_crf'}}
 
 
 def test_per_filter_merge_forwards_its_iteration_label(tmp_path, monkeypatch):
@@ -601,3 +602,284 @@ def test_cross_band_merge_forwards_its_iteration_label(monkeypatch):
                           ref_filter='f480m', iteration_label='m7',
                           basepath='/nowhere/')
     assert seen == {'flag': 'm7', 'replace': 'm7'}
+
+
+# --- the frame variant (#1194) -------------------------------------------
+
+EXPO = 'jw02221002001_06201_00001_nrca1'
+
+
+def _variant_files(tmp_path, tail='_m12', newer='align'):
+    """One exposure's satstar catalogs for both frame variants at one phase;
+    ``newer`` is the variant written last."""
+    out = {}
+    for variant in ('align', 'destreak'):
+        out[variant] = _touch(
+            tmp_path / f'{EXPO}_{variant}_o002_crf{tail}_satstar_catalog.fits',
+            10 if variant == newer else 1000)
+    return out
+
+
+def test_frame_variant_is_the_same_token_for_a_frame_and_its_products():
+    want = 'destreak_o002_crf'
+    assert SPS.satstar_frame_variant(f'{EXPO}_destreak_o002_crf.fits') == want
+    assert SPS.satstar_frame_variant(
+        f'/a/b/{EXPO}_destreak_o002_crf_m12_satstar_catalog.fits') == want
+    assert SPS.satstar_frame_variant(
+        f'{EXPO}_destreak_o002_crf_resbgsub_m6_satstar_rejected.fits') == want
+    assert SPS.satstar_frame_variant(
+        f'{EXPO}_destreak_o002_crf_bgsub_m3_wingcal_calibrators.fits') == want
+    assert SPS.satstar_frame_variant(
+        f'{EXPO}_align_o002_crf.fits') == 'align_o002_crf'
+    # a variant the module does not list is still a token
+    assert SPS.satstar_frame_variant(
+        'jw01182004001_02101_00001_mirimage_align_o004_crf.fits') \
+        == 'align_o004_crf'
+    # nothing after the detector, or not an exposure name
+    assert SPS.satstar_frame_variant(f'{EXPO}.fits') == ''
+    assert SPS.satstar_frame_variant('cutout_crf_m3_satstar_catalog.fits') == ''
+
+
+def test_frame_variant_falls_back_to_the_filename_card(tmp_path):
+    path = tmp_path / f'{EXPO}_m12_satstar_catalog.fits'
+    hdu = fits.ImageHDU(name='CAT')
+    hdu.header['FILENAME'] = f'{EXPO}_destreak_o002_crf.fits'
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path)
+    assert SPS.satstar_frame_variant(str(path)) == ''
+    assert SPS.satstar_frame_variant(str(path), use_header=True) \
+        == 'destreak_o002_crf'
+
+
+@pytest.mark.parametrize('newer', ['align', 'destreak'])
+def test_selection_returns_the_variant_the_merge_reads(tmp_path, clean_env,
+                                                       newer):
+    files = _variant_files(tmp_path, newer=newer)
+    sel, rep = SPS.select_satstar_phase_files(
+        files.values(), phase='m2', frame_variants={'destreak_o002_crf'})
+    assert sel == [files['destreak']]
+    assert rep['tie_losers'] == []
+    assert dict(rep['other_variant']) == {'m12': 1}
+    assert not rep['no_variant']
+    # the variant that was NOT written last is chosen just as readily
+    sel, _ = SPS.select_satstar_phase_files(
+        files.values(), phase='m2', frame_variants=['align_o002_crf'])
+    assert sel == [files['align']]
+
+
+@pytest.mark.parametrize('newer', ['align', 'destreak'])
+def test_unfiltered_selection_keeps_the_file_time_rule(tmp_path, clean_env,
+                                                       newer):
+    files = _variant_files(tmp_path, newer=newer)
+    sel, rep = SPS.select_satstar_phase_files(files.values(), phase='m2')
+    assert sel == [files[newer]]
+    assert not rep['frame_variants']
+
+
+def test_read_variant_falls_back_to_its_own_earlier_phase(tmp_path, clean_env):
+    """At the merged phase only the other variant has a file; the read
+    variant's earlier phase is used, not the other variant's current one."""
+    destreak_m4 = _touch(tmp_path / f'{EXPO}_destreak_o002_crf_m4_satstar_catalog.fits', 500)
+    align_m7 = _touch(tmp_path / f'{EXPO}_align_o002_crf_m7_satstar_catalog.fits', 10)
+    sel, rep = SPS.select_satstar_phase_files(
+        [destreak_m4, align_m7], phase='m7', frame_variants={'destreak_o002_crf'})
+    assert sel == [destreak_m4]
+    assert dict(rep['used']) == {'m4': 1}
+
+
+def test_exposure_without_the_read_variant_is_left_out_and_reported(
+        tmp_path, clean_env):
+    other = _touch(tmp_path / f'{EXPO}_align_o002_crf_m12_satstar_catalog.fits', 10)
+    kept = _touch(tmp_path / ('jw02221002001_06201_00002_nrca1_destreak_o002_crf'
+                              '_m12_satstar_catalog.fits'), 10)
+    sel, rep = SPS.select_satstar_phase_files(
+        [other, kept], phase='m12', frame_variants={'destreak_o002_crf'})
+    assert sel == [kept]
+    assert dict(rep['no_variant']) == {'align_o002_crf': 1}
+    line = SPS.format_phase_report(rep)
+    assert 'WARNING: 1 exposure(s) have no satstar catalog' in line
+    assert 'align_o002_crf: 1' in line
+
+
+def test_a_file_with_no_readable_variant_passes_through(tmp_path, clean_env):
+    path = _touch(tmp_path / 'cutout_crf_m3_satstar_catalog.fits', 10)
+    sel, rep = SPS.select_satstar_phase_files(
+        [path], phase='m3', frame_variants={'destreak_o002_crf'})
+    assert sel == [path]
+    assert rep['unparsed_variant'] == 1
+
+
+def test_background_tokens_of_one_variant_still_tie_by_file_time(
+        tmp_path, clean_env):
+    old = _touch(tmp_path / f'{EXPO}_destreak_o002_crf_m5_satstar_catalog.fits', 1000)
+    new = _touch(tmp_path / f'{EXPO}_destreak_o002_crf_resbgsub_m5_satstar_catalog.fits', 10)
+    align = _touch(tmp_path / f'{EXPO}_align_o002_crf_m5_satstar_catalog.fits', 1)
+    sel, rep = SPS.select_satstar_phase_files(
+        [old, new, align], phase='m5', frame_variants={'destreak_o002_crf'})
+    assert sel == [new]
+    assert rep['tie_losers'] == [(os.path.basename(new), os.path.basename(old))]
+    assert 'WARNING' not in SPS.format_phase_report(rep)
+
+
+def test_warning_only_when_a_tie_crosses_frame_variants(tmp_path, clean_env):
+    files = _variant_files(tmp_path)
+    _, rep = SPS.select_satstar_phase_files(files.values(), phase='m2')
+    line = SPS.format_phase_report(rep)
+    assert 'WARNING: 1 of them chose between frame variants' in line
+    # same variant, two background tokens: a tie, but no warning
+    a = _touch(tmp_path / f'{EXPO}_align_o002_crf_m6_satstar_catalog.fits', 100)
+    b = _touch(tmp_path / f'{EXPO}_align_o002_crf_resbgsub_m6_satstar_catalog.fits', 10)
+    _, rep = SPS.select_satstar_phase_files([a, b], phase='m6')
+    assert len(rep['tie_losers']) == 1
+    assert 'WARNING' not in SPS.format_phase_report(rep)
+
+
+def test_more_than_one_read_variant_is_warned_about(tmp_path, clean_env):
+    files = _variant_files(tmp_path)
+    _, rep = SPS.select_satstar_phase_files(
+        files.values(), phase='m2',
+        frame_variants={'align_o002_crf', 'destreak_o002_crf'})
+    assert 'WARNING: more than one frame variant is read' in \
+        SPS.format_phase_report(rep)
+
+
+def test_rejected_orphans_follow_the_read_variant(tmp_path, clean_env):
+    rejected = {v: _touch(tmp_path / f'{EXPO}_{v}_o002_crf_m12_satstar_rejected.fits',
+                          10 if v == 'align' else 1000)
+                for v in ('align', 'destreak')}
+    sel, _ = SPS.select_rejected_for_catalogs(
+        rejected.values(), [], phase='m2', frame_variants={'destreak_o002_crf'})
+    assert sel == [rejected['destreak']]
+    sel, _ = SPS.select_rejected_for_catalogs(rejected.values(), [], phase='m2')
+    assert sel == [rejected['align']]
+
+
+def test_variant_selections_give_different_cache_signatures(tmp_path, clean_env):
+    files = _variant_files(tmp_path)
+    sigs = {v: SPS.satstar_phase_selection_signature(
+        SPS.select_satstar_phase_files(files.values(), phase='m2',
+                                       frame_variants={f'{v}_o002_crf'})[0])
+        for v in ('align', 'destreak')}
+    assert sigs['align'] and sigs['destreak']
+    assert sigs['align'] != sigs['destreak']
+
+
+@pytest.fixture
+def variant_tree(tmp_path, clean_env):
+    """One exposure fit on two frame variants at m12: the align fit puts star A
+    5 px away from the destreak fit.  The align catalogue is written last."""
+    pdir = tmp_path / 'F182M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    (tmp_path / 'catalogs').mkdir()
+    shifted = (STAR_A[0] + 5.0, STAR_A[1])
+    for variant, xy, age in (('destreak', STAR_A, 300), ('align', shifted, 10)):
+        frame = pdir / f'jw02221001001_02101_00001_nrca1_{variant}_o001_crf.fits'
+        _write_frame(str(frame))
+        path = _write_product(frame, '_m12', [(*xy, 5000.0)])
+        os.utime(path, (time.time() - age, time.time() - age))
+    return tmp_path, shifted
+
+
+def test_load_follows_the_read_variant_and_rebuilds_the_cache(variant_tree,
+                                                              capsys):
+    base, shifted = variant_tree
+    unfiltered = _load(base)
+    assert _row_at(unfiltered, shifted) is not None     # newest file wins
+    assert _row_at(unfiltered, STAR_A) is None
+    capsys.readouterr()
+
+    destreak = _load(base, frame_variants={'destreak_o001_crf'})
+    log = capsys.readouterr().out
+    assert 'Rebuilding satstar cache' in log and 'phase selection' in log, log
+    assert _row_at(destreak, STAR_A) is not None
+    assert _row_at(destreak, shifted) is None
+
+    align = _load(base, frame_variants={'align_o001_crf'})
+    assert _row_at(align, shifted) is not None
+    assert _row_at(align, STAR_A) is None
+
+
+def test_load_without_the_read_variant_contributes_nothing(variant_tree, capsys):
+    base, _ = variant_tree
+    assert _load(base, frame_variants={'other_o001_crf'}) is None
+    log = capsys.readouterr().out
+    assert 'WARNING: no f182m satstar catalog of frame variant(s)' in log, log
+
+
+def test_replace_saturated_appends_the_read_variants_positions(variant_tree,
+                                                               monkeypatch):
+    _fake_svo(monkeypatch)
+    base, shifted = variant_tree
+
+    def _added(variants):
+        far = _wcs().pixel_to_world(120.0, 5.0)
+        cat = Table({'skycoord': SkyCoord([far.ra.deg] * u.deg,
+                                          [far.dec.deg] * u.deg),
+                     'flux': [10.0], 'dflux': [1.0], 'x': [120.0], 'y': [5.0],
+                     'dx': [0.01], 'dy': [0.01]})
+        MC.replace_saturated(cat, 'f182m', target='brick',
+                             basepath=str(base) + '/', phase='m2',
+                             frame_variants=variants)
+        return SkyCoord(cat[np.asarray(cat['replaced_saturated'], bool)]['skycoord'])
+
+    for variants, xy in (({'destreak_o001_crf'}, STAR_A),
+                         ({'align_o001_crf'}, shifted)):
+        added = _added(variants)
+        target = _wcs().pixel_to_world(*xy)
+        assert len(added) == 1
+        assert added.separation(target).to_value(u.arcsec)[0] < 0.01
+
+
+# --- stamping and forwarding FRMVAR --------------------------------------
+
+def test_per_filter_merge_stamps_and_forwards_the_frame_variant(tmp_path,
+                                                                monkeypatch):
+    from .test_gc_treasury_obs_scoping import _stub_combine, _write_perframe
+    (tmp_path / 'catalogs').mkdir()
+    _write_perframe(tmp_path, '001')
+    monkeypatch.setattr(MC, 'combine_singleframe', _stub_combine([]))
+    seen = []
+    monkeypatch.setattr(
+        MC, 'replace_saturated',
+        lambda cat, **k: seen.append((k.get('frame_variants'),
+                                      cat.meta.get('FRMVAR'))))
+    MC.merge_individual_frames(
+        module='nrcblong', filtername='f480m', progid='10678',
+        method='dao', suffix='_basic', target='gc-treasury',
+        basepath=str(tmp_path), iteration_label='m2', field='001',
+        do_replace_saturated=True)
+    assert seen == [({'align_o001_crf'}, 'align_o001_crf')]
+
+
+def test_recorded_frame_variants_reads_the_card(capsys):
+    assert MC._recorded_frame_variants({'FRMVAR': 'a_o1_crf,b_o1_crf'}) \
+        == frozenset({'a_o1_crf', 'b_o1_crf'})
+    assert MC._recorded_frame_variants({'frmvar': MC.FRAME_VARIANT_NONE}) is None
+    assert 'WARNING' not in capsys.readouterr().out
+    assert MC._recorded_frame_variants({}, context='f212n') is None
+    assert 'f212n has no FRMVAR card' in capsys.readouterr().out
+
+
+def test_cross_band_merge_forwards_the_recorded_frame_variant(monkeypatch):
+    jfilts = Table({'filterID': ['JWST/NIRCam.F212N', 'JWST/NIRCam.F480M'],
+                    'ZeroPoint': [1.0, 1.0]})
+    monkeypatch.setattr(
+        MC, 'SvoFps', types.SimpleNamespace(get_filter_list=lambda fac: jfilts))
+    seen = {}
+
+    def _flag(tbl, **k):
+        seen['flag'] = k.get('frame_variants')
+
+    def _replace(tbl, **k):
+        seen['replace'] = k.get('frame_variants')
+        raise _Stop
+    monkeypatch.setattr(MC, 'flag_near_saturated', _flag)
+    monkeypatch.setattr(MC, 'replace_saturated', _replace)
+    t = Table({'skycoord': SkyCoord([266.0] * u.deg, [-28.9] * u.deg)})
+    t.meta['filter'] = 'f212n'
+    t.meta['FRMVAR'] = 'destreak_o002_crf'
+    with pytest.raises(_Stop):
+        MC.merge_catalogs([t], catalog_type='basic', module='nrcblong',
+                          ref_filter='f212n', iteration_label='m7',
+                          basepath='/nowhere/')
+    assert seen == {'flag': frozenset({'destreak_o002_crf'}),
+                    'replace': frozenset({'destreak_o002_crf'})}

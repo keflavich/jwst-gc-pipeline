@@ -34,6 +34,14 @@ see ``satstar_consensus.satstar_stage_label``), so it ranks below ``m3`` even
 though 12 > 3.  The ``_resbgsub``/``_bgsub`` variants of a phase share its
 rank.
 
+Frame variants.  Several trees hold the satstar catalogs of one exposure fit
+on two frame variants (``_align_o002_crf`` and ``_destreak_o002_crf``).  The
+merge places those rows beside daophot rows measured on ONE variant, so a
+caller that knows which frames it reads passes their variant tokens
+(``frame_variants``) and only that variant's catalogs are eligible; without
+them a same-phase tie between variants goes to the newer file, and the report
+says so as a WARNING (#1194).
+
 ``SATSTAR_POOL_PHASES=all`` restores the pooled read (every phase of every
 exposure), for bisecting only.
 """
@@ -41,6 +49,8 @@ import hashlib
 import os
 import re
 from collections import Counter
+
+from astropy.io import fits
 
 #: Tokens written by the first cataloging phase.  All three are rank 2, so a
 #: caller merging ``'m1'`` or ``'m2'`` reads the ``_m12`` satstar catalogs.
@@ -122,6 +132,66 @@ def satstar_phase_group_key(path):
     return _PHASE_TAIL_RE.sub('', base)
 
 
+def satstar_frame_variant(path, use_header=False):
+    """The frame variant token of a frame or per-exposure satstar product.
+
+    The part of the stem that follows the exposure name
+    (``jw<prog><obs><visit>_<group>_<exp>_<detector>``), without the leading
+    underscore and without the background/phase/product tail of a satstar
+    product.  The frame
+    ``jw02221002001_06201_00001_nrca1_destreak_o002_crf.fits`` and its catalog
+    ``..._destreak_o002_crf_resbgsub_m6_satstar_catalog.fits`` both give
+    ``'destreak_o002_crf'``; the ``_align_`` frame gives ``'align_o002_crf'``.
+
+    Parameters
+    ----------
+    path : str
+        A frame or product path or basename.
+    use_header : bool
+        When the name yields no token and ``path`` is an existing satstar
+        product, read the frame name from the ``FILENAME`` card of extension 1
+        and parse that.
+
+    Returns
+    -------
+    str
+        The token, or ``''`` when none can be read (a name that is not an
+        observatory exposure name, or a frame name with nothing after the
+        detector).
+    """
+    base = os.path.basename(str(path))
+    if _PHASE_TAIL_RE.search(base):
+        stem = _PHASE_TAIL_RE.sub('', base)
+        is_product = True
+    else:
+        stem = base[:-5] if base.endswith('.fits') else base
+        is_product = False
+    match = _JW_EXPOSURE_RE.match(stem)
+    token = stem[match.end():].lstrip('_') if match is not None else ''
+    if token or not (use_header and is_product and os.path.exists(str(path))):
+        return token
+    try:
+        with fits.open(str(path)) as hdul:
+            frame = hdul[1].header.get('FILENAME', '')
+    except (OSError, IndexError, KeyError):
+        return ''
+    return satstar_frame_variant(frame) if frame else ''
+
+
+def normalise_frame_variants(frame_variants):
+    """``frame_variants`` as a frozenset of tokens, or ``None`` when unset.
+
+    ``None``, an empty collection and a collection of empty tokens all mean
+    that the caller could not name a variant, so the selection is unfiltered.
+    """
+    if not frame_variants:
+        return None
+    if isinstance(frame_variants, str):
+        frame_variants = [t for t in frame_variants.split(',')]
+    tokens = frozenset(str(t).strip() for t in frame_variants if str(t).strip())
+    return tokens or None
+
+
 def pool_all_phases():
     """True when ``SATSTAR_POOL_PHASES=all`` asks for the pre-fix pooled read."""
     return os.environ.get(POOL_PHASES_ENV, '').strip().lower() == 'all'
@@ -139,7 +209,15 @@ def _phase_sort_key(token):
     return (rank if rank is not None else -1, token)
 
 
-def select_satstar_phase_files(paths, phase=None):
+def _new_report(phase, rank_req, frame_variants):
+    return {'mode': 'one', 'phase': phase, 'rank': rank_req,
+            'used': Counter(), 'superseded': Counter(), 'ahead': Counter(),
+            'tie_losers': [], 'frame_variants': sorted(frame_variants or ()),
+            'other_variant': Counter(), 'no_variant': Counter(),
+            'unparsed_variant': 0}
+
+
+def select_satstar_phase_files(paths, phase=None, frame_variants=None):
     """Keep one cataloging phase's per-exposure satstar file per exposure.
 
     Parameters
@@ -157,6 +235,14 @@ def select_satstar_phase_files(paths, phase=None):
         none.  A later phase's file is never used: in a phase-P merge it can
         only be left over from a previous run.  ``None``, or a label that names
         no phase (``'iter2'``), selects the latest phase each exposure has.
+    frame_variants : collection of str, optional
+        Frame variant tokens (:func:`satstar_frame_variant`) of the frames the
+        caller reads.  Only files of those variants are eligible, so the phase
+        rule then picks the latest phase AT OR BEFORE ``phase`` within the read
+        variant.  An exposure with no file of a read variant at any eligible
+        phase is left out and counted in ``report['no_variant']``.  A file
+        whose variant cannot be read passes through (``unparsed_variant``).
+        ``None`` keeps every variant eligible.
 
     Returns
     -------
@@ -168,19 +254,23 @@ def select_satstar_phase_files(paths, phase=None):
         ``ahead`` -- `collections.Counter` of phase token -> file count.
         ``superseded`` is an exposure's earlier phases (and same-phase
         duplicates: another frame variant or background token); ``ahead`` is
-        a phase later than the one being merged.
+        a phase later than the one being merged.  ``frame_variants`` lists the
+        variants asked for; ``other_variant`` counts files left out for
+        belonging to another variant (by phase token), ``no_variant`` the
+        exposures left out because none of their files is of a read variant
+        (by the variants they do have).
 
     Notes
     -----
-    Ties within one rank (``_m5`` beside ``_resbgsub_m5``, or one exposure
-    fit on two frame variants) go to the most recently written file, then to
-    the name, so the choice is deterministic.
+    Ties within one rank and one variant (``_m5`` beside ``_resbgsub_m5``) go
+    to the most recently written file, then to the name, so the choice is
+    deterministic.  With ``frame_variants=None`` that rule also settles a tie
+    between two frame variants of one exposure, which the report flags.
     """
     paths = sorted(str(p) for p in paths)
     rank_req = satstar_phase_rank(phase)
-    report = {'mode': 'one', 'phase': phase, 'rank': rank_req,
-              'used': Counter(), 'superseded': Counter(), 'ahead': Counter(),
-              'tie_losers': []}
+    wanted = normalise_frame_variants(frame_variants)
+    report = _new_report(phase, rank_req, wanted)
     if pool_all_phases():
         report['mode'] = 'all'
         report['used'].update(satstar_file_phase_token(p) for p in paths)
@@ -191,6 +281,22 @@ def select_satstar_phase_files(paths, phase=None):
     selected = []
     for members in groups.values():
         eligible = []
+        if wanted is not None:
+            kept = []
+            for path in members:
+                variant = satstar_frame_variant(path, use_header=True)
+                if not variant:
+                    report['unparsed_variant'] += 1
+                    kept.append(path)
+                elif variant in wanted:
+                    kept.append(path)
+                else:
+                    report['other_variant'][satstar_file_phase_token(path)] += 1
+            if not kept:
+                report['no_variant'][', '.join(sorted(
+                    {satstar_frame_variant(p) for p in members}))] += 1
+                continue
+            members = kept
         for path in members:
             token = satstar_file_phase_token(path)
             rank = satstar_phase_rank(token)
@@ -207,15 +313,17 @@ def select_satstar_phase_files(paths, phase=None):
             if item is not best:
                 report['superseded'][item[3]] += 1
                 if item[0] == best[0]:
-                    # Same phase, another frame variant or background token:
-                    # the newer file won.  Name the loser so a surprising
-                    # choice can be traced from the log.
+                    # Same phase, another background token or (without
+                    # frame_variants) another frame variant: the newer file
+                    # won.  Name the loser so a surprising choice can be
+                    # traced from the log.
                     report['tie_losers'].append(
                         (os.path.basename(best[2]), os.path.basename(item[2])))
     return sorted(selected), report
 
 
-def select_rejected_for_catalogs(rejected_paths, chosen_catalogs, phase=None):
+def select_rejected_for_catalogs(rejected_paths, chosen_catalogs, phase=None,
+                                 frame_variants=None):
     """Gate-rejected files that belong to the chosen per-exposure catalogs.
 
     A rejected file is written only when the gates rejected something, so the
@@ -232,8 +340,9 @@ def select_rejected_for_catalogs(rejected_paths, chosen_catalogs, phase=None):
         ``*_m<N>_satstar_rejected.fits`` paths.
     chosen_catalogs : sequence of str
         The accepted catalogs :func:`select_satstar_phase_files` chose.
-    phase : str, optional
-        As for :func:`select_satstar_phase_files`.
+    phase, frame_variants : optional
+        As for :func:`select_satstar_phase_files`; ``frame_variants`` applies
+        to the orphan exposures only, the others follow their chosen catalog.
 
     Returns
     -------
@@ -243,16 +352,15 @@ def select_rejected_for_catalogs(rejected_paths, chosen_catalogs, phase=None):
     """
     rejected_paths = sorted(str(p) for p in rejected_paths)
     if pool_all_phases():
-        return select_satstar_phase_files(rejected_paths, phase=phase)
+        return select_satstar_phase_files(rejected_paths, phase=phase,
+                                          frame_variants=frame_variants)
     siblings = {os.path.basename(str(c)).replace('_satstar_catalog.fits',
                                                  '_satstar_rejected.fits')
                 for c in chosen_catalogs}
     covered = {satstar_phase_group_key(c) for c in chosen_catalogs}
     rank_req = satstar_phase_rank(phase)
     selected, orphans = [], []
-    report = {'mode': 'one', 'phase': phase, 'rank': rank_req,
-              'used': Counter(), 'superseded': Counter(), 'ahead': Counter(),
-              'tie_losers': []}
+    report = _new_report(phase, rank_req, normalise_frame_variants(frame_variants))
     for path in rejected_paths:
         if satstar_phase_group_key(path) not in covered:
             orphans.append(path)
@@ -267,10 +375,13 @@ def select_rejected_for_catalogs(rejected_paths, chosen_catalogs, phase=None):
         else:
             report['superseded'][token] += 1
     if orphans:
-        extra, sub = select_satstar_phase_files(orphans, phase=phase)
+        extra, sub = select_satstar_phase_files(
+            orphans, phase=phase, frame_variants=frame_variants)
         selected.extend(extra)
-        for key in ('used', 'superseded', 'ahead'):
+        for key in ('used', 'superseded', 'ahead', 'other_variant',
+                    'no_variant'):
             report[key].update(sub[key])
+        report['unparsed_variant'] += sub['unparsed_variant']
         report['tie_losers'].extend(sub['tie_losers'])
     return sorted(selected), report
 
@@ -318,6 +429,30 @@ def format_phase_report(report, what='satstar catalog'):
     if losers:
         shown = '; '.join(f'{win} over {lose}' for win, lose in losers[:3])
         more = f' (+{len(losers) - 3} more)' if len(losers) > 3 else ''
+        cross = [(w, l) for w, l in losers
+                 if satstar_frame_variant(w) != satstar_frame_variant(l)]
         line += (f"; {len(losers)} same-phase tie(s) went to the newer file: "
                  f"{shown}{more}")
+        if cross:
+            line += (f"; WARNING: {len(cross)} of them chose between frame "
+                     f"variants by file time alone, so the satstar rows may "
+                     f"come from frames the merge does not read (#1194)")
+    wanted = report.get('frame_variants') or []
+    if wanted:
+        line += (f"; frame variant(s) read: {', '.join(wanted)}; "
+                 f"{sum(report['other_variant'].values())} file(s) of another "
+                 f"variant left out [{_fmt(report['other_variant'])}]")
+        if len(wanted) > 1:
+            line += ("; WARNING: more than one frame variant is read, so an "
+                     "exposure that has both still ties by file time")
+        if report.get('unparsed_variant'):
+            line += (f"; {report['unparsed_variant']} file(s) with no "
+                     f"readable frame variant passed through")
+        if report.get('no_variant'):
+            n_nov = sum(report['no_variant'].values())
+            have = '; '.join(f'{k or "?"}: {v}'
+                             for k, v in sorted(report['no_variant'].items()))
+            line += (f"; WARNING: {n_nov} exposure(s) have no satstar catalog "
+                     f"of the frame variant(s) read and contribute no satstar "
+                     f"rows (variants on disk: {have})")
     return line
