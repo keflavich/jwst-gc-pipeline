@@ -525,3 +525,29 @@ def test_registry_block_uses_supplied_paths():
     block = DRIVER.registry_block(tiles, {'102': 2026.70},
                                   {'102': 'custom_o102.fits'})
     assert "'102': catalogs/custom_o102.fits" in block
+
+
+# --------------------------------------------------------------------------
+# --emit-tiles (#715)
+# --------------------------------------------------------------------------
+
+def test_the_tiles_block_names_each_observation_after_its_mast_target():
+    import yaml
+    tiles = [DRIVER.Tile(obsid='199', target='GC_99', ra=1.0, dec=2.0,
+                         radius_deg=0.14),
+             DRIVER.Tile(obsid='020', target='GC_20', ra=1.0, dec=2.0,
+                         radius_deg=0.14)]
+    block = DRIVER.tiles_block(tiles, '2026-11-13')
+    assert "'020': GC_20" in block and "'199': GC_99" in block
+    assert block.index("'020'") < block.index("'199'")
+    assert 'fetched 2026-11-13' in block
+    assert 'not evidence' in block
+    # the block pastes under a proposal key and parses back with str keys
+    parsed = yaml.safe_load('p:\n' + block)
+    assert parsed['p']['tiles'] == {'020': 'GC_20', '199': 'GC_99'}
+
+
+def test_the_tiles_block_does_not_need_an_epoch_or_a_catalog():
+    tiles = [DRIVER.Tile(obsid='088', target='GC_88', ra=1.0, dec=2.0,
+                         radius_deg=0.14, epoch=None)]
+    assert "'088': GC_88" in DRIVER.tiles_block(tiles, '2026-11-13')

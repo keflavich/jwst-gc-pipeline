@@ -177,6 +177,10 @@ fields:
     # Scheduled, executing back to back at ~0.9-1.5 h each from
     # 2026-09-10 19:05 UT to 2026-09-13.  The other 87 (001-087) are still in
     # Implementation.  Readiness for that window is tracked in #636.
+    # One field for the whole program, where gc2211 was split into
+    # gc2211_o023..gc2211_o050 (#469): the treasury tiles are one contiguous
+    # survey of adjoining pointings, and gc2211's observations are unrelated
+    # sky.  The tile each observation points at is the `tiles:` map below.
     # The name must stay exactly 'gc-treasury': the JWST-GC/data-qa
     # repository's mast_monitor.TREASURY_FIELD routes every 10678 observation
     # to it, and the triggered reduce looks the field up under that name
@@ -313,6 +317,154 @@ fields:
           '137': catalogs/gaia_virac2_refcat_epoch2026.69_o137.fits
           '138': catalogs/gaia_virac2_refcat_epoch2026.69_o138.fits
           '139': catalogs/gaia_virac2_refcat_epoch2026.69_o139.fits
+        # GC_<n> target per observation, from MAST target_name (fetched 2026-11-13).
+        # This is the plan: it names a pointing and is not evidence that the observation
+        # executed.  Regenerate on replan with --emit-tiles.  The '*' obsid wildcard
+        # below is unchanged and still owns observations outside this map.
+        tiles:
+          '001': GC_1
+          '002': GC_2
+          '003': GC_3
+          '004': GC_4
+          '005': GC_5
+          '006': GC_6
+          '007': GC_7
+          '008': GC_8
+          '009': GC_9
+          '010': GC_10
+          '011': GC_11
+          '012': GC_12
+          '013': GC_13
+          '014': GC_14
+          '015': GC_15
+          '016': GC_16
+          '017': GC_17
+          '018': GC_18
+          '019': GC_19
+          '020': GC_20
+          '021': GC_21
+          '022': GC_22
+          '023': GC_23
+          '024': GC_24
+          '025': GC_25
+          '026': GC_26
+          '027': GC_27
+          '028': GC_28
+          '029': GC_29
+          '030': GC_30
+          '031': GC_31
+          '032': GC_32
+          '033': GC_33
+          '034': GC_34
+          '035': GC_35
+          '036': GC_36
+          '037': GC_37
+          '038': GC_38
+          '039': GC_39
+          '040': GC_40
+          '041': GC_41
+          '042': GC_42
+          '043': GC_43
+          '044': GC_44
+          '045': GC_45
+          '046': GC_46
+          '047': GC_47
+          '048': GC_48
+          '049': GC_49
+          '050': GC_50
+          '051': GC_51
+          '052': GC_52
+          '053': GC_53
+          '054': GC_54
+          '055': GC_55
+          '056': GC_56
+          '057': GC_57
+          '058': GC_58
+          '059': GC_59
+          '060': GC_60
+          '061': GC_61
+          '062': GC_62
+          '063': GC_63
+          '064': GC_64
+          '065': GC_65
+          '066': GC_66
+          '067': GC_67
+          '068': GC_68
+          '069': GC_69
+          '070': GC_70
+          '071': GC_71
+          '072': GC_72
+          '073': GC_73
+          '074': GC_74
+          '075': GC_75
+          '076': GC_76
+          '077': GC_77
+          '078': GC_78
+          '079': GC_79
+          '080': GC_80
+          '081': GC_81
+          '082': GC_82
+          '083': GC_83
+          '084': GC_84
+          '085': GC_85
+          '086': GC_86
+          '087': GC_87
+          '088': GC_88
+          '089': GC_89
+          '090': GC_90
+          '091': GC_91
+          '092': GC_92
+          '093': GC_93
+          '094': GC_94
+          '095': GC_95
+          '096': GC_96
+          '097': GC_97
+          '098': GC_98
+          '100': GC_100
+          '101': GC_101
+          '102': GC_102
+          '105': GC_105
+          '106': GC_106
+          '107': GC_107
+          '108': GC_108
+          '109': GC_109
+          '111': GC_111
+          '112': GC_112
+          '113': GC_113
+          '114': GC_114
+          '116': GC_116
+          '117': GC_117
+          '118': GC_118
+          '120': GC_120
+          '121': GC_121
+          '122': GC_122
+          '123': GC_123
+          '124': GC_124
+          '125': GC_125
+          '126': GC_126
+          '127': GC_127
+          '128': GC_128
+          '129': GC_129
+          '130': GC_130
+          '131': GC_131
+          '132': GC_132
+          '133': GC_133
+          '134': GC_134
+          '135': GC_135
+          '137': GC_137
+          '138': GC_138
+          '139': GC_139
+          '199': GC_99
+          '203': GC_103
+          '204': GC_104
+          '210': GC_110
+          '215': GC_115
+          '219': GC_119
+          '236': GC_136
+        # Seven of the 139 MAST observations are not numbered 001..139: 099, 103, 104,
+        # 110, 115, 119 and 136 do not appear, and GC_99, GC_103, GC_104, GC_110, GC_115,
+        # GC_119 and GC_136 sit under 199, 203, 204, 210, 215, 219 and 236.  Take the
+        # observation for a tile from this map and not from n in GC_<n>.
         nvisits: 1
         # The alignment SOURCE is alignment_config.py's 10678 entry
         # (TABLE_CONSENSUS), which names Offsets_JWST_Brick10678_consensus.csv
