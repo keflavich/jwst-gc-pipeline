@@ -14,12 +14,20 @@
 # <TARGET><PROPOSAL>-o<FIELD>- is in the queue.  A second retie of the same
 # field cannot be told apart and errs on the side of keeping.
 #
+# A loop that is still running is also kept: between iterations it can have no
+# job in the queue while it works on the login node, and its script lives in the
+# pin.  The lock reason written at launch ("retie loop <host> pid <pid>") names
+# the loop; a pin whose loop is alive on this host is kept, and a pin locked
+# from another host is kept too because its pid cannot be checked here
+# (RETIE_PRUNE_ASSUME_LOOPS_DEAD=1 skips that second rule).
+#
 # Dry run by default.  If squeue fails nothing is removed.
 #
 #   scripts/reduction/prune_retie_pins.sh            # list
 #   scripts/reduction/prune_retie_pins.sh --apply    # remove the finished ones
 #
 # Environment:  RETIE_PIN_DIR  (default /blue/adamginsburg/adamginsburg/repos/pinned)
+#               RETIE_PRUNE_ASSUME_LOOPS_DEAD=1  see above
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -57,6 +65,23 @@ for pin in "$PIN_DIR"/retie-*; do
         echo "in use   $pin (a ${token}-* job is queued or running)"
         kept=$((kept + 1))
         continue
+    fi
+    reason=$(git -C "$pin" worktree list --porcelain 2>/dev/null \
+        | awk -v w="$pin" '$1 == "worktree" { on = ($2 == w) }
+                           on && $1 == "locked" { sub(/^locked */, ""); print; exit }')
+    if [[ "$reason" =~ ^retie\ loop\ (.+)\ pid\ ([0-9]+)$ ]]; then
+        loop_host=${BASH_REMATCH[1]}; loop_pid=${BASH_REMATCH[2]}
+        if [ "$loop_host" = "$(hostname)" ]; then
+            if kill -0 "$loop_pid" 2>/dev/null; then
+                echo "in use   $pin (its loop, pid $loop_pid, is running)"
+                kept=$((kept + 1))
+                continue
+            fi
+        elif [ "${RETIE_PRUNE_ASSUME_LOOPS_DEAD:-0}" != 1 ]; then
+            echo "in use?  $pin (loop ran on $loop_host; pid $loop_pid cannot be checked here)"
+            kept=$((kept + 1))
+            continue
+        fi
     fi
     removable=$((removable + 1))
     if [ "$apply" = 0 ]; then

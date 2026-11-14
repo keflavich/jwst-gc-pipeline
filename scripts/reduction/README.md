@@ -410,7 +410,9 @@ PROPOSAL=4147 FIELD=012 TARGET=sgrc FILTERS="..." PIPE_ROOT=$PWD \
   `scripts/reduction/prune_retie_pins.sh` to list the pins whose
   `<TARGET><PROPOSAL>-o<FIELD>-*` jobs have all left the queue, and
   `prune_retie_pins.sh --apply` to remove them. A pin is kept while any job of
-  that name prefix is queued or running.
+  that name prefix is queued or running, or while the loop that made it is alive
+  (its pid is in the worktree lock reason; a pin locked from another host is kept
+  because the pid cannot be checked, unless `RETIE_PRUNE_ASSUME_LOOPS_DEAD=1`).
 - A revived chain (the `ONLY_SHARDS` and finalize-resubmission recipes above)
   has to import the same code as the rest of the chain. Launch those commands
   with `PIPE_ROOT` set to the chain's pin directory, not to a live checkout,

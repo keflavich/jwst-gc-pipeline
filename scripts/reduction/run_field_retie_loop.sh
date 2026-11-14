@@ -180,9 +180,18 @@ pin_checkout () {
     if [ "$ndirty" -gt 0 ]; then
         echo "DIRTY SOURCE, uncommitted changes NOT in the run ($ndirty path(s) in $src)" >&2
     fi
-    mkdir -p "$(dirname "$dest")"
-    git -C "$src" worktree add --detach "$dest" "$sha" >&2
-    git -C "$src" worktree lock --reason "retie loop $(hostname) pid $$" "$dest" >&2
+    # Each step is checked by hand: the caller runs this inside $( ) on the left
+    # of ||, where set -e is off, so a failed worktree add would otherwise fall
+    # through to an exec of a script that does not exist.
+    if ! mkdir -p "$(dirname "$dest")" \
+       || ! git -C "$src" worktree add --detach "$dest" "$sha" >&2; then
+        echo "REFUSING to pin: could not create the worktree $dest." >&2
+        return 2
+    fi
+    if ! git -C "$src" worktree lock --reason "retie loop $(hostname) pid $$" "$dest" >&2; then
+        echo "REFUSING to pin: could not lock the worktree $dest." >&2
+        return 2
+    fi
     echo "$dest"
 }
 

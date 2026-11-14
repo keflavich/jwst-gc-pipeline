@@ -15,6 +15,7 @@ Everything here runs in throwaway git repositories under `tmp_path`.  The
 re-exec itself is exercised on a copy of the script cut off at the end of the pin
 block, so no sbatch is reachable.
 """
+import os
 import pathlib
 import re
 import stat
@@ -349,3 +350,65 @@ def test_prune_leaves_unrelated_directories_alone(tmp_path):
     r = _prune(tmp_path, '--apply')
     assert r.returncode == 0, r.stderr
     assert other.is_dir()
+
+
+# --- review additions ------------------------------------------------------
+
+def test_an_uncreatable_pin_is_refused_cleanly_not_exec_failed(tmp_path):
+    """A failing `worktree add` inside $( ) || must stop the launch with rc 2."""
+    repo = _source_repo(tmp_path)
+    pins = tmp_path / 'pins'
+    pins.mkdir()
+    pins.chmod(0o500)
+    try:
+        if os.access(pins, os.W_OK):
+            pytest.skip('directory permissions are not enforced here')
+        r = _call(tmp_path, repo, 'pin_checkout', PIPE_ROOT=str(repo))
+    finally:
+        pins.chmod(0o700)
+    assert r.returncode == 2, (r.returncode, r.stderr)
+    assert 'REFUSING to pin' in r.stderr
+
+
+def _lock_with_reason(repo, pin, reason, tmp_path):
+    _git(repo, 'worktree', 'unlock', str(pin), tmp_path=tmp_path)
+    _git(repo, 'worktree', 'lock', '--reason', reason, str(pin), tmp_path=tmp_path)
+
+
+def test_prune_keeps_a_pin_whose_loop_is_still_running(tmp_path):
+    """No queued job does not mean no loop: it may be between iterations."""
+    import socket
+    repo, a, b = _two_pins(tmp_path)
+    host = socket.gethostname()
+    hostname = subprocess.run(['hostname'], capture_output=True, text=True).stdout.strip()
+    _lock_with_reason(repo, a, f'retie loop {hostname} pid {os.getpid()}', tmp_path)
+    r = _prune(tmp_path, '--apply')
+    assert r.returncode == 0, r.stderr
+    assert a.exists(), (host, r.stdout)
+    assert f'in use   {a} (its loop' in r.stdout
+    assert not b.exists()
+
+
+def test_prune_removes_a_pin_whose_loop_has_exited(tmp_path):
+    repo, a, b = _two_pins(tmp_path)
+    hostname = subprocess.run(['hostname'], capture_output=True, text=True).stdout.strip()
+    dead = subprocess.Popen(['true'])
+    dead.wait()
+    _lock_with_reason(repo, a, f'retie loop {hostname} pid {dead.pid}', tmp_path)
+    r = _prune(tmp_path, '--apply')
+    assert r.returncode == 0, r.stderr
+    assert not a.exists()
+
+
+def test_prune_keeps_a_pin_locked_from_another_host_unless_told(tmp_path):
+    repo, a, b = _two_pins(tmp_path)
+    _lock_with_reason(repo, a, 'retie loop some-other-login pid 1', tmp_path)
+    r = _prune(tmp_path, '--apply')
+    assert a.exists() and 'in use?' in r.stdout
+    bindir = tmp_path / 'bin'
+    env = _env(tmp_path, PATH=f'{bindir}:/usr/bin:/bin', USER='tester',
+               RETIE_PRUNE_ASSUME_LOOPS_DEAD='1')
+    r = subprocess.run(['bash', str(PRUNE), '--apply'], capture_output=True,
+                       text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert not a.exists()
