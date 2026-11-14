@@ -1052,3 +1052,44 @@ def test_blanked_skycoord_falls_through_to_skycoord_ref():
     assert np.isclose(ra[1], 266.6) and np.isclose(dec[1], -28.8)   # fell through to ref
     np.testing.assert_allclose(ra[[0, 2]], [266.5, 266.7])           # others keep per-filter
     assert np.all(np.isfinite(ra)) and not np.any((ra == 0) & (dec == 0))
+
+
+def test_merge_catalogs_writes_complementary_split_columns(monkeypatch, tmp_path):
+    """#1124: the m7 table carries ``complementary_split`` / ``split_group``.
+
+    Column presence only; the pair logic is covered in test_dedup_catalog.py.
+    """
+    import types
+    jfilts = Table({'filterID': ['JWST/NIRCam.F212N', 'JWST/NIRCam.F480M'],
+                    'ZeroPoint': [1.0, 1.0]})
+    monkeypatch.setattr(
+        MC, 'SvoFps', types.SimpleNamespace(get_filter_list=lambda fac: jfilts))
+
+    def _flag(tbl, filtername=None, **k):
+        tbl[f'near_saturated_{filtername}'] = np.zeros(len(tbl), bool)
+
+    def _replace(tbl, filtername=None, **k):
+        tbl['replaced_saturated'] = np.zeros(len(tbl), bool)
+    monkeypatch.setattr(MC, 'flag_near_saturated', _flag)
+    monkeypatch.setattr(MC, 'replace_saturated', _replace)
+
+    tbls = []
+    for filt in ('f212n', 'f480m'):
+        t = Table({'skycoord': SkyCoord([266.0, 266.1] * u.deg,
+                                        [-28.9, -28.9] * u.deg),
+                   'flux': [100.0, 90.0], 'flux_jy': [1e-4, 9e-5],
+                   'mag_ab': [16.0, 16.1], 'mag_vega': [14.0, 14.1]})
+        t.meta['filter'] = filt
+        t.meta['pixelscale_deg2'] = 1e-9
+        t.meta['pixelscale_arcsec'] = 0.03
+        tbls.append(t)
+    (tmp_path / 'catalogs').mkdir()
+    MC.merge_catalogs(tbls, catalog_type='basic', module='merged',
+                      ref_filter='f480m', iteration_label='m7',
+                      basepath=str(tmp_path), write_ecsv=False)
+    written = sorted((tmp_path / 'catalogs').glob('*_merged_m7.fits'))
+    assert len(written) == 1
+    out = Table.read(written[0])
+    assert len(out) == 2
+    assert 'complementary_split' in out.colnames
+    assert 'split_group' in out.colnames

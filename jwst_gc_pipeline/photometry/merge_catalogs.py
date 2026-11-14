@@ -58,6 +58,7 @@ DEFAULT_MERGE_MODULES = 'merged'
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.dedup_catalog import flag_complementary_splits
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
@@ -1715,6 +1716,11 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             basetable.add_column(basetable['flux_jy_f187n'] - basetable['flux_jy_182m187'], name='flux_jy_187m182')
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182']) + ABMAG_OFFSET, name='mag_ab_187m182')
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182'] / zeropoint187), name='mag_vega_187m182')
+
+        # Mark close row pairs whose bands are complementary, so m7 users can
+        # see rows that carry a mix of two stars' bands (#1124).  Additive:
+        # flux and magnitude columns are not touched.
+        flag_complementary_splits(basetable)
 
         basetable.meta = meta
         if '212PXDG' not in meta:
