@@ -97,6 +97,21 @@ def unsubtracted_fraction_by_bin(mag, res_frac, edges,
     return rows
 
 
+def bin_edges(lo, hi, step):
+    """Bin edges from ``lo`` to ``hi`` in steps of ``step``.
+
+    The last edge is always ``hi``; when ``hi - lo`` is not a whole number of
+    steps the final bin is narrower than ``step`` rather than dropped.
+    """
+    n_full = int(np.floor((hi - lo) / step + 1e-9))
+    edges = lo + step * np.arange(n_full + 1)
+    if hi - edges[-1] > 1e-9:
+        edges = np.append(edges, hi)
+    else:
+        edges[-1] = hi
+    return edges
+
+
 def format_table(rows):
     """Plain-text table of the rows from ``unsubtracted_fraction_by_bin``."""
     lines = ['  mag bin        n  unsub  unsub%  over  over%']

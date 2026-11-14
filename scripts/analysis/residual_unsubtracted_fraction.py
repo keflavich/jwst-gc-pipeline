@@ -20,7 +20,7 @@ from astropy.io import fits
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.residual_census import (
-    format_table, residual_fraction, unsubtracted_fraction_by_bin)
+    bin_edges, format_table, residual_fraction, unsubtracted_fraction_by_bin)
 
 
 def _read(path, ext):
@@ -48,7 +48,7 @@ def main(argv=None):
     tbl = Table.read(args.stars)
     frac = residual_fraction(pre, resid, np.asarray(tbl[args.x_col], float),
                              np.asarray(tbl[args.y_col], float))
-    edges = np.arange(args.lo, args.hi + args.step / 2, args.step)
+    edges = bin_edges(args.lo, args.hi, args.step)
     print(format_table(unsubtracted_fraction_by_bin(
         np.asarray(tbl[args.mag_col], float), frac, edges)))
 

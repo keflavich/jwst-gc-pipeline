@@ -2,7 +2,7 @@
 import numpy as np
 
 from jwst_gc_pipeline.photometry.residual_census import (
-    box_peak, format_table, residual_fraction, unsubtracted_fraction_by_bin)
+    bin_edges, box_peak, format_table, residual_fraction, unsubtracted_fraction_by_bin)
 
 
 def _gauss(shape, x0, y0, amp, sig=1.5):
@@ -68,3 +68,11 @@ def test_nonpositive_pre_peak_gives_nan():
     pre = np.zeros((10, 10))
     resid = np.ones((10, 10))
     assert np.isnan(residual_fraction(pre, resid, [5], [5])[0])
+
+
+def test_bin_edges_keep_the_partial_last_bin():
+    # The default F480M range 11.5-14.7 in 0.5 mag steps must not lose 14.5-14.7.
+    np.testing.assert_allclose(bin_edges(11.5, 14.7, 0.5),
+                               [11.5, 12., 12.5, 13., 13.5, 14., 14.5, 14.7])
+    np.testing.assert_allclose(bin_edges(11.5, 14.5, 0.5),
+                               [11.5, 12., 12.5, 13., 13.5, 14., 14.5])
