@@ -334,6 +334,46 @@ def _bright_presub_peak_noise():
     return val
 
 
+# fit-to-seed match radius for the SATPROX_SEEDED_COMPANION exemption
+_SEEDED_COMPANION_RADIUS_PIX = 0.5
+
+
+def _seeded_companion_kwargs(ctx, prev_seed_catalog, is_miri):
+    """``SATPROX_SEEDED_COMPANION`` (default off): near-saturation-filter
+    kwargs that exempt seeded companions of handed-off bright stars.
+
+    A fit within ``_SEEDED_COMPANION_RADIUS_PIX`` of a ``prev_seed_catalog``
+    position is kept when every SATURATED pixel within ``near_sat_dist_pix``
+    of it is one the hand-off gave back to the fit (``ctx.handoff_restore``)
+    and it has a finite ``flux_fit > 0`` and finite ``qfit``
+    (``_L._seeded_companion_mask``).  Without it, gc-treasury F480M companions
+    4-5 px from a ~2e4 hand-off primary are fitted and then dropped because
+    the primary's restored late-group footprint reaches within 1 px of them.
+
+    Returns ``{}`` (filter unchanged) when the switch is off, for MIRI, for a
+    pass without a seed catalog (m1/m2), and on frames where the hand-off
+    restored no pixels.  An unrecognised on/off value raises
+    (``_handoff_env_flag``).
+    """
+    if not _handoff_env_flag('SATPROX_SEEDED_COMPANION', False):
+        return {}
+    restored = getattr(ctx, 'handoff_restore', None)
+    if is_miri or not prev_seed_catalog or restored is None:
+        return {}
+    seeds = _L._resolve_seed_skycoords(Table.read(prev_seed_catalog), ww=ctx.ww)
+    if len(seeds) == 0:
+        return {}
+    px, py = ctx.ww.world_to_pixel(seeds['skycoord'])
+    px = np.asarray(px, dtype=float)
+    py = np.asarray(py, dtype=float)
+    ok = np.isfinite(px) & np.isfinite(py)
+    print(f"[manual] SATPROX_SEEDED_COMPANION: {int(ok.sum())} seed position(s), "
+          f"{int(np.sum(restored))} restored SATURATED px", flush=True)
+    return dict(companion_seed_xy=np.column_stack([px[ok], py[ok]]),
+                companion_seed_radius_pix=_SEEDED_COMPANION_RADIUS_PIX,
+                companion_restored_mask=np.asarray(restored, dtype=bool))
+
+
 def _bright_presub_select(seed, data, peak_noise):
     """Boolean mask of ``seed`` rows whose 3x3 data peak exceeds
     ``peak_noise`` times the median of the frame's local noise map.
@@ -1531,7 +1571,9 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       miri_prominence_snr=0.0, prominence_bg_box=0,
                       prominence_data_i2d=None, prominence_ww_i2d=None,
                       frame_ww=None, protect_xy=None, protect_radius_pix=0.0,
-                      handoff_xy=None, handoff_radius_pix=0.0):
+                      handoff_xy=None, handoff_radius_pix=0.0,
+                      companion_seed_xy=None, companion_seed_radius_pix=0.0,
+                      companion_restored_mask=None):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -1542,6 +1584,10 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     ``handoff_xy``/``handoff_radius_pix`` exempt fits at the satstar channel's
     implied-peak-gate rejects from the near-saturation filter ONLY (see
     ``_gate_reject_handoff_xy``); ``None`` leaves the chain unchanged.
+    ``companion_seed_xy``/``companion_seed_radius_pix``/
+    ``companion_restored_mask`` likewise exempt seeded companions next to a
+    handed-off star's restored footprint (``_seeded_companion_mask``, env
+    ``SATPROX_SEEDED_COMPANION``); ``None`` leaves the chain unchanged.
 
     Returns ``(result_table, modsky, phot_obj)``.  Does no file I/O.
     """
@@ -1635,7 +1681,10 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                             label=label, protect_xy=protect_xy,
                             protect_radius_pix=protect_radius_pix,
                             handoff_xy=handoff_xy,
-                            handoff_radius_pix=handoff_radius_pix)
+                            handoff_radius_pix=handoff_radius_pix,
+                            companion_seed_xy=companion_seed_xy,
+                            companion_seed_radius_pix=companion_seed_radius_pix,
+                            companion_restored_mask=companion_restored_mask)
     _filter_satstar_artifacts(phot, satstar_model_subtracted, err,
                               sig_K=float(options.satstar_artifact_sigK),
                               ratio_cut=float(options.satstar_artifact_ratio),
@@ -4451,6 +4500,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
         handoff_xy=handoff_xy, handoff_radius=handoff_radius,
+        handoff_restore=handoff_restore,
         handoff_unaccepted_sat=handoff_unaccepted_sat,
         original_data=original_data, background_map=background_map,
         bkg_basis=bkg_basis,
@@ -4861,6 +4911,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # _prepare_frame_for_photometry.
     _handoff_xy = None if _is_miri else getattr(ctx, 'handoff_xy', None)
     _handoff_radius = getattr(ctx, 'handoff_radius', 0.0)
+    _companion_kw = _seeded_companion_kwargs(ctx, prev_seed_catalog, _is_miri)
 
     def _pass(seed, label, prom_snr=None):
         # prom_snr: per-pass prominence-reject threshold.  None -> default
@@ -4889,7 +4940,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             prominence_data_i2d=_prom_i2d, prominence_ww_i2d=_prom_ww_i2d,
             frame_ww=ctx.ww, protect_xy=_protect_xy,
             protect_radius_pix=_protect_radius,
-            handoff_xy=_handoff_xy, handoff_radius_pix=_handoff_radius)
+            handoff_xy=_handoff_xy, handoff_radius_pix=_handoff_radius,
+            **_companion_kw)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(

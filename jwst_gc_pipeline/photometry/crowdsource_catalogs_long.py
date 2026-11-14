@@ -1439,10 +1439,47 @@ def _protect_mask(x, y, protect_xy, protect_radius_pix):
     return prot
 
 
+def _seeded_companion_mask(tbl, x, y, ix, iy, in_frame, *, seed_xy,
+                           seed_radius_pix, lost_dist_map, max_sat_dist_pix):
+    """Fits exempt from the near-saturation drop as seeded companions.
+
+    A fit qualifies when it lies within ``seed_radius_pix`` of a seed
+    position (the i2d / cross-band seed catalog the pass was seeded from),
+    its nearest SATURATED pixel that the fit still treats as lost
+    (``lost_dist_map``) is more than ``max_sat_dist_pix`` away, and it has a
+    finite ``flux_fit > 0`` and a finite ``qfit``.  The SATURATED pixels
+    closer than that are then all valid-rate pixels the frame preparation
+    gave back to the fit (``_handoff_restore_pixels``), i.e. the late-group
+    footprint of a handed-off bright neighbour, not the fit's own core.
+
+    gc-treasury F480M (stars 2, 3 and 6 of the residual-pox list): i2d-seeded
+    companions 4-5 px from a ~2e4 hand-off primary were fitted and then dropped
+    because that primary's restored footprint reaches within 1 px of them; the
+    nearest still-lost SATURATED pixel is 3-22 px away.  A table without a
+    ``qfit`` column exempts nothing.
+    """
+    comp = _protect_mask(x, y, seed_xy, seed_radius_pix)
+    if not comp.any():
+        return comp
+    lost = np.zeros(len(x), dtype=float)
+    lost[in_frame] = lost_dist_map[iy[in_frame], ix[in_frame]]
+    comp &= lost > float(max_sat_dist_pix)
+    flux = np.asarray(tbl['flux_fit'], dtype=float)
+    comp &= np.isfinite(flux) & (flux > 0)
+    if 'qfit' in tbl.colnames:
+        comp &= np.isfinite(np.asarray(tbl['qfit'], dtype=float))
+    else:
+        comp[:] = False
+    return comp
+
+
 def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                             label, max_log_rows=50,
                             protect_xy=None, protect_radius_pix=0.0,
-                            handoff_xy=None, handoff_radius_pix=0.0):
+                            handoff_xy=None, handoff_radius_pix=0.0,
+                            companion_seed_xy=None,
+                            companion_seed_radius_pix=0.0,
+                            companion_restored_mask=None):
     """Drop fits from ``phot_obj.results`` whose center is within
     ``max_sat_dist_pix`` pixels of any SATURATED-DQ pixel and keep the
     PSFPhotometry object's state consistent.
@@ -1469,6 +1506,16 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         star's own fitted position is exempt; a fit farther away (a spike or
         wing detection) is still vetoed.  ``None`` (the default) leaves the
         behaviour unchanged.
+    companion_seed_xy, companion_seed_radius_pix : array-like (N, 2), float
+        Frame-pixel seed positions (env ``SATPROX_SEEDED_COMPANION``).  A fit
+        within ``companion_seed_radius_pix`` of one is exempt when it also
+        passes ``_seeded_companion_mask`` against ``companion_restored_mask``.
+        ``None`` (the default) leaves the behaviour unchanged.
+    companion_restored_mask : 2-D bool array, optional
+        SATURATED pixels the frame preparation gave back to the fit
+        (``_handoff_restore_pixels``).  Only the SATURATED pixels NOT in it
+        count as lost for the companion exemption; ``None`` counts every
+        SATURATED pixel as lost, so nothing is exempt.
     """
     if dq is None:
         return 0
@@ -1479,6 +1526,18 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
     # distance_transform_edt: distance to nearest True in the input mask.
     # We want distance to nearest saturated pixel, so feed ~sat_mask.
     sat_dist_map = ndimage.distance_transform_edt(~sat_mask)
+    use_companion = (companion_seed_xy is not None
+                     and len(companion_seed_xy) > 0
+                     and companion_seed_radius_pix > 0
+                     and companion_restored_mask is not None)
+    lost_dist_map = None
+    if use_companion:
+        restored = np.asarray(companion_restored_mask, dtype=bool)
+        if restored.shape != sat_mask.shape:
+            raise ValueError(
+                f"companion_restored_mask shape {restored.shape} != DQ shape "
+                f"{sat_mask.shape}")
+        lost_dist_map = ndimage.distance_transform_edt(~(sat_mask & ~restored))
 
     res = phot_obj.results
     if res is None or len(res) == 0:
@@ -1515,6 +1574,17 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                   f"fit(s) at satstar implied-peak-gate rejects "
                   f"(r={handoff_radius_pix:.2f}px; the gate hands these "
                   f"stars to daophot)", flush=True)
+    if drop.any() and use_companion:
+        comp = _seeded_companion_mask(
+            res, x, y, ix, iy, in_frame, seed_xy=companion_seed_xy,
+            seed_radius_pix=companion_seed_radius_pix,
+            lost_dist_map=lost_dist_map, max_sat_dist_pix=max_sat_dist_pix)
+        n_comp = int(np.sum(drop & comp))
+        if n_comp:
+            drop = drop & ~comp
+            print(f"Saturation-proximity filter ({label}): kept {n_comp} "
+                  f"seeded companion fit(s) > {max_sat_dist_pix:.1f}px from "
+                  f"every SATURATED pixel not restored to the fit", flush=True)
     n_drop = int(np.sum(drop))
     if n_drop == 0:
         return 0
@@ -1583,6 +1653,12 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                 sub_drop &= ~_protect_mask(sx, sy, protect_xy, protect_radius_pix)
             if sub_drop.any() and handoff_xy is not None and handoff_radius_pix > 0:
                 sub_drop &= ~_protect_mask(sx, sy, handoff_xy, handoff_radius_pix)
+            if sub_drop.any() and use_companion:
+                sub_drop &= ~_seeded_companion_mask(
+                    sub, sx, sy, s_ix, s_iy, s_in, seed_xy=companion_seed_xy,
+                    seed_radius_pix=companion_seed_radius_pix,
+                    lost_dist_map=lost_dist_map,
+                    max_sat_dist_pix=max_sat_dist_pix)
             sub_keep = ~sub_drop
             if sub_drop.any():
                 fr.results = sub[sub_keep]
