@@ -390,6 +390,26 @@ then POOLED across visits into one catalog per filter, written at m2 as
 `catalogs/<filter>_consensus.fits`.  That catalog is what the rest of the
 pipeline ties to; see [`../../docs/JWST_CONSENSUS_CATALOG.md`](../../docs/JWST_CONSENSUS_CATALOG.md).
 
+## Trailed exposures (`exposure_trail.py`, record only)
+
+An exposure with a tracking error smears its stars along one sky direction.
+The offset estimators read that as a displacement, so a trailed exposure can
+only appear as a correction (gc2211 o023, #484/#733).  At a correcting stage
+the checkpoint therefore also reads the pixels of each frame: the median
+adaptive Gaussian-weighted second moments (sigma, axis ratio, sky position
+angle) of the brightest isolated reliable stars, compared with the same
+detector's other exposures of the visit, visit group and filter.  An exposure
+is flagged when at least half of its graded detectors (and at least two) exceed
+the thresholds and their sky position angles agree.
+
+The result is the per-visit `trail` block of the record.  It is **advisory**:
+it prints one line per flagged exposure and gates nothing, because the
+thresholds in `exposure_trail.py` are provisional until they have been read
+over the fields on disk.  A frozen stage does not re-measure; the m2 record
+holds the reading, and a record without the block was not measured.
+`TRAIL_REVIEWED` holds exposures a person has inspected and kept.  Excluding an
+exposure remains a manual edit of `reduction/exposure_exclusions.py`.
+
 ## The consensus measurement (`visit_consensus.py`)
 
 1. Reliable-star cut per exposure catalog (qfit ≤ 0.1, S/N ≥ 10, excluding
