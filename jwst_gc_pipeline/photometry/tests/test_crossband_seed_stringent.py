@@ -6,6 +6,7 @@ structure) detection became a fake multi-band source.  The stringent seed only
 keeps positions confirmed in >= min_filters; annotate_independent_detection flags
 which per-band measurements are real m6 detections vs cross-band-seeded.
 """
+import json
 import os
 import types
 import numpy as np
@@ -137,3 +138,89 @@ def test_the_builder_reads_the_seed_input_list(tmp_path):
                                       _opts())[0][2])
     with pytest.raises(ValueError):
         C._build_crossband_seed(cut_bp, ['merged'], ['f405n', 'f410m'], _opts())
+
+
+# -- seed health (issue #981) ------------------------------------------------
+
+def _two_band_field(cut_bp, n=2000, shift_mas=0.0, seed=7):
+    """n well-separated stars in F212N; F480M is the same stars shifted in RA."""
+    rng = np.random.default_rng(seed)
+    ra = 266.0 + rng.uniform(0, 0.02, n)
+    dec = -28.9 + rng.uniform(0, 0.02, n)
+    _write_m6(cut_bp, 'f212n', ra, dec)
+    shift_deg = shift_mas / 3.6e6 / np.cos(np.radians(dec))
+    _write_m6(cut_bp, 'f480m', ra + shift_deg, dec)
+    return ['f212n', 'f480m']
+
+
+def test_seed_health_collapse_warns_and_records_offset(tmp_path, capsys):
+    cut_bp = str(tmp_path)
+    filts = _two_band_field(cut_bp, shift_mas=80.0)
+    out = C._build_crossband_seed(cut_bp, ['merged'], filts, _opts())
+    text = capsys.readouterr().out
+    assert 'WARNING [m7] crossband seed collapsed' in text
+    health = json.load(open(out.replace('.fits', '.health.json')))
+    assert health['collapsed'] is True
+    assert health['frac'] < 0.3
+    assert health['n_good'] == {'f212n': 2000, 'f480m': 2000}
+    assert health['offset_filters'] == ['f212n', 'f480m']
+    assert abs(health['offset_dra_mas'] - 80.0) < 12.0
+    assert abs(health['offset_ddec_mas']) < 12.0
+    assert Table.read(out).meta['SEEDCOLL'] is True
+
+
+def test_seed_health_collapse_action_raise(tmp_path):
+    cut_bp = str(tmp_path)
+    filts = _two_band_field(cut_bp, shift_mas=80.0)
+    o = _opts(); o.manual_crossband_seed_collapse_action = 'raise'
+    with pytest.raises(C.CrossbandSeedCollapsedError):
+        C._build_crossband_seed(cut_bp, ['merged'], filts, o)
+    # the seed and its health record are on disk for inspection
+    assert os.path.exists(C.crossband_seed_file(cut_bp, o))
+    assert os.path.exists(C.crossband_seed_file(cut_bp, o).replace('.fits', '.health.json'))
+
+
+def test_seed_health_aligned_bands_are_quiet(tmp_path, capsys):
+    cut_bp = str(tmp_path)
+    filts = _two_band_field(cut_bp, shift_mas=0.0)
+    o = _opts(); o.manual_crossband_seed_collapse_action = 'raise'
+    out = C._build_crossband_seed(cut_bp, ['merged'], filts, o)
+    assert 'collapsed' not in capsys.readouterr().out
+    health = json.load(open(out.replace('.fits', '.health.json')))
+    assert health['collapsed'] is False
+    assert health['frac'] > 0.95
+    assert abs(health['offset_dra_mas']) < 12.0
+
+
+def test_seed_health_few_pairs_skips_offset(tmp_path):
+    cut_bp = str(tmp_path)
+    filts = _two_band_field(cut_bp, n=50, shift_mas=0.0)
+    out = C._build_crossband_seed(cut_bp, ['merged'], filts, _opts())
+    health = json.load(open(out.replace('.fits', '.health.json')))
+    assert health['offset_dra_mas'] is None
+    assert health['frac'] > 0.95
+
+
+def test_seed_health_single_filter_has_no_fraction(tmp_path, capsys):
+    cut_bp = str(tmp_path)
+    _write_m6(cut_bp, 'f405n', [10.0, 10.001], [20.0, 20.001])
+    o = _opts(); o.manual_crossband_seed_min_filters = 1
+    out = C._build_crossband_seed(cut_bp, ['merged'], ['f405n'], o)
+    health = json.load(open(out.replace('.fits', '.health.json')))
+    assert health['frac'] is None and health['collapsed'] is False
+    assert 'collapsed' not in capsys.readouterr().out
+
+
+def test_seed_health_json_is_not_a_seed_input(tmp_path):
+    cut_bp = str(tmp_path)
+    inputs = [p for _m, _f, p in C.crossband_seed_inputs(
+        cut_bp, ['merged'], ['f212n', 'f480m'], _opts())]
+    assert not any(p.endswith('.health.json') for p in inputs)
+
+
+def test_seed_health_rejects_unknown_action(tmp_path):
+    cut_bp = str(tmp_path)
+    filts = _two_band_field(cut_bp, n=50)
+    o = _opts(); o.manual_crossband_seed_collapse_action = 'ignore'
+    with pytest.raises(ValueError, match='collapse_action'):
+        C._build_crossband_seed(cut_bp, ['merged'], filts, o)
