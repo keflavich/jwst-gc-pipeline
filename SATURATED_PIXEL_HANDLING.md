@@ -529,13 +529,14 @@ these flag sets would remove the footgun of setting them individually.)*
   member (by support, then flux), the frame's `*_satstar_residual.fits` at the
   other member holds ≥ `SATSTAR_INFIELD_RESID_RATIO_MIN` (default 0.5) of its
   peak above the local background **and**, summed within 3 px,
-  ≥ `SATSTAR_INFIELD_RESID_FLUX_MIN` (default 0.25) of its fitted flux (each the
-  best over those runs; `_satstar_residual_distinct_pairs`). The member must sit
+  ≥ `SATSTAR_INFIELD_RESID_FLUX_MIN` (default 0.25) of its fitted flux, both in
+  the same run (`_satstar_residual_distinct_pairs`). The member must sit
   ≥ 20 px inside the frame. Pairs without such a measurement keep the `cofit`
-  answer, and a missing or unreadable residual/frame is logged and falls back to
-  `cofit` for the pairs it would have measured. A row whose every fit lies
-  within 10 px of the science-array edge is ranked last when a collapsed set
-  picks its survivor (`_satstar_edge_only_rows`), so an edge-truncated fit no
+  answer, and a missing, unreadable, truncated or wrongly shaped residual/frame
+  is logged and falls back to `cofit` for the pairs it would have measured. A
+  row whose every fit lies within 10 px of the science area, i.e. within 14 px
+  of the array edge (4 reference pixels + 10), is ranked last when a collapsed
+  set picks its survivor (`_satstar_edge_only_rows`), so an edge-truncated fit no
   longer outranks the interior fit of the same star. On those two observations
   the mode restores 21 F480M and 41 F212N rows and swaps the survivor in 1 / 9
   edge-truncated sets. The peak test alone would keep 103 F212N rows, 62 with

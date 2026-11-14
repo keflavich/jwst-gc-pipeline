@@ -24,6 +24,7 @@ with legacy ``iter2/iter3/iter4`` ones.
 The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 (BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
+import contextlib
 import copy
 import functools
 import glob
@@ -6596,13 +6597,13 @@ def _frame_sci_shape(frame):
 
 
 #: ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` keeps a never-co-fit pair as two
-#: stars when, in the frames that fit only the better-ranked member, the
-#: satstar residual at the other member holds BOTH at least this fraction of
-#: its peak light above the local background (best frame) ...
+#: stars when, in at least one frame that fits only the better-ranked
+#: member, the satstar residual at the other member holds BOTH at least this
+#: fraction of its peak light above the local background ...
 #: (env ``SATSTAR_INFIELD_RESID_RATIO_MIN``) ...
 _RESID_DEDUP_RATIO_MIN = 0.5
 #: ... AND, summed within ``_RESID_DEDUP_APER_PX`` of it, at least this
-#: fraction of its own fitted flux (best frame; env
+#: fraction of its own fitted flux (same frame; env
 #: ``SATSTAR_INFIELD_RESID_FLUX_MIN``).  Tuned on gc-treasury 10678 m7
 #: o078 + o043 only (F480M and F212N), where the kept rows sit at >= 0.29
 #: (F480M) / >= 0.445 (F212N) and the rejected ones at <= 0.067 or below
@@ -6612,9 +6613,11 @@ _RESID_DEDUP_APER_PX = 3.0
 #: The other member is measured only where it lies at least this many
 #: pixels inside the frame (array edge).
 _RESID_DEDUP_INSIDE_PX = 20
-#: A row every one of whose fits lies within this many pixels of the
-#: science-array edge (past ``_RESID_DEDUP_REFPIX`` reference pixels) is
-#: demoted when its duplicate set picks a survivor.
+#: A row every one of whose fits lies at most ``_RESID_DEDUP_EDGE_PX``
+#: pixels from the science area, i.e. at most ``_RESID_DEDUP_EDGE_PX +
+#: _RESID_DEDUP_REFPIX`` = 14 px from the array edge (x or y <= 14, or
+#: >= n - 15, for an n-pixel axis), is demoted when its duplicate set
+#: picks a survivor.
 _RESID_DEDUP_EDGE_PX = 10
 _RESID_DEDUP_REFPIX = 4
 
@@ -6709,12 +6712,14 @@ def _satstar_residual_distinct_pairs(sc, support, flux, runs, *,
     where it lies at least ``inside_px`` inside the frame,
     :func:`_satstar_residual_left` (residual against the frame's SCI, and
     against the lower member's ``flux``) is measured.  The pair is distinct
-    when the best run's peak fraction is ``>= ratio_min`` AND the best run's
-    aperture flux fraction is ``>= flux_min`` (each the maximum over the
-    measured runs; defaults from :func:`_resid_dedup_thresholds`).  Any
-    other pair keeps the 'cofit' answer (a link).  A run whose residual,
-    frame or WCS is missing or unreadable is skipped and logged; a pair left
-    with no measurement because of that is counted as a fall-back to 'cofit'.
+    when at least one run gives BOTH a peak fraction ``>= ratio_min`` and an
+    aperture flux fraction ``>= flux_min`` (defaults from
+    :func:`_resid_dedup_thresholds`); a peak passed in one run and a flux in
+    another does not count.  Any other pair keeps the 'cofit' answer (a
+    link).  A run whose residual, frame or WCS is missing or unreadable
+    (including a truncated file, or a residual whose shape is not the 2-D
+    shape of the frame's SCI) is skipped and logged; a pair left with no
+    measurement because of that is counted as a fall-back to 'cofit'.
 
     Why both: at separations of many PSF widths (gc-treasury F212N, 0.2-1.0"
     = 3-14 FWHM) the better member's model is negligible at the lower one,
@@ -6777,8 +6782,11 @@ def _satstar_residual_distinct_pairs(sc, support, flux, runs, *,
                            & (d_all[slot[lo]] >= r_pair))[0]
             if len(sel):
                 todo[k] = sel
-        best_peak = np.full(len(i1), np.nan)
-        best_flux = np.full(len(i1), np.nan)
+        measured = np.zeros(len(i1), bool)
+        apart = np.zeros(len(i1), bool)
+        # the passing run with the largest flux fraction, for the log line
+        show_peak = np.full(len(i1), np.nan)
+        show_flux = np.full(len(i1), np.nan)
         where = [''] * len(i1)
         n_skipped = np.zeros(len(i1), int)
         missing = set()
@@ -6804,29 +6812,42 @@ def _satstar_residual_distinct_pairs(sc, support, flux, runs, *,
                 n_skipped[sel[inside]] += 1
                 missing.add(f"{os.path.basename(str(resid_path))}: not on disk")
                 continue
-            try:
-                with fits.open(resid_path, memmap=True) as rh, \
-                        fits.open(frame, memmap=True) as fh:
-                    resid = rh[0].data
-                    data = fh['SCI'].data
+            with contextlib.ExitStack() as files:
+                # Reading only: a missing / garbled / truncated file, or one
+                # of the wrong shape, skips the run.  A file truncated inside
+                # its data raises TypeError ("buffer is too small for
+                # requested array") under memmap; a 1-D residual would
+                # IndexError in the cutout, hence the shape check.
+                try:
+                    rh = files.enter_context(fits.open(resid_path,
+                                                       memmap=True))
+                    fh = files.enter_context(fits.open(frame, memmap=True))
+                    resid, data = rh[0].data, fh['SCI'].data
                     if resid is None or data is None:
                         raise ValueError('no image data')
-                    for j in np.where(inside)[0]:
-                        p = sel[j]
-                        pk, ff = _satstar_residual_left(
-                            resid, data, xs[j], ys[j], raw_flux[lo[p]])
-                        if np.isfinite(pk) and not pk <= best_peak[p]:
-                            best_peak[p] = pk
-                            where[p] = stem
-                        if np.isfinite(ff) and not ff <= best_flux[p]:
-                            best_flux[p] = ff
-            except (OSError, KeyError, ValueError) as ex:
-                n_skipped[sel[inside]] += 1
-                missing.add(f"{os.path.basename(str(resid_path))}: "
-                            f"{type(ex).__name__}: {ex}")
-        measured = np.isfinite(best_peak) | np.isfinite(best_flux)
-        apart = (np.isfinite(best_peak) & (best_peak >= ratio_min)
-                 & np.isfinite(best_flux) & (best_flux >= flux_min))
+                    if data.ndim != 2 or resid.shape != data.shape:
+                        raise ValueError(
+                            f"residual shape {resid.shape} is not the frame "
+                            f"SCI shape {data.shape} (2-D)")
+                except (OSError, KeyError, ValueError, TypeError) as ex:
+                    n_skipped[sel[inside]] += 1
+                    missing.add(f"{os.path.basename(str(resid_path))}: "
+                                f"{type(ex).__name__}: {ex}")
+                    continue
+                for j in np.where(inside)[0]:
+                    p = sel[j]
+                    pk, ff = _satstar_residual_left(
+                        resid, data, xs[j], ys[j], raw_flux[lo[p]])
+                    if np.isfinite(pk) or np.isfinite(ff):
+                        measured[p] = True
+                    # both tests in the SAME run; a non-finite value (an
+                    # inf pixel in the residual) proves nothing
+                    if not (np.isfinite(pk) and np.isfinite(ff)
+                            and pk >= ratio_min and ff >= flux_min):
+                        continue
+                    apart[p] = True
+                    if not ff <= show_flux[p]:
+                        show_peak[p], show_flux[p], where[p] = pk, ff, stem
         stats['tested'] += len(i1)
         stats['distinct'] += int(apart.sum())
         stats['explained'] += int((measured & ~apart).sum())
@@ -6843,8 +6864,9 @@ def _satstar_residual_distinct_pairs(sc, support, flux, runs, *,
                   f"{fl[lo[p]]:.4g}) and {_label(hi[p])} (support "
                   f"{sup[hi[p]]:g}, flux {fl[hi[p]]:.4g}), {sep[p]:.3f}\" "
                   f"apart: frames that fit only the second leave "
-                  f"{best_peak[p]:.2f} of the first's peak (best: {where[p]}) "
-                  f"and {best_flux[p]:.2f} of its flux", flush=True)
+                  f"{show_peak[p]:.2f} of the first's peak and "
+                  f"{show_flux[p]:.2f} of its flux (in {where[p]})",
+                  flush=True)
         return apart
 
     return distinct, stats
@@ -6857,11 +6879,15 @@ def _satstar_edge_only_rows(sc, runs, *, match_arcsec=0.1,
 
     For each row of ``sc``, the nearest fit (accepted or rejected) of every
     run in ``runs`` (:func:`_satstar_cofit_runs`) within ``match_arcsec`` is
-    taken, at its frame pixel ``xcentroid``/``ycentroid``.  A row is
-    edge-only when it has at least one such fit and every one is within
-    ``edge_px`` of the science array (``refpix`` reference pixels in from
-    the frame edge).  Runs without a frame shape, and fits without a pixel
-    position, are not counted.  o078 F480M m7: a star fit at 0-5 px from
+    taken, at its frame pixel ``xcentroid``/``ycentroid``.  A fit's edge
+    distance is ``min(x, y, nx - 1 - x, ny - 1 - y) - refpix``: its distance
+    from the science area, which starts ``refpix`` reference pixels in from
+    the array edge.  A row is edge-only when it has at least one such fit
+    and every one has edge distance ``<= edge_px``.  With the defaults
+    (10 + 4) that is every fit at most 14 px from the array edge: x or y
+    ``<= 14``, or ``>= n - 15`` on an n-pixel axis (385 of 400; 2033 of a
+    2048-px NIRCam array).  Runs without a frame shape, and fits without a
+    pixel position, are not counted.  o078 F480M m7: a star fit at 0-5 px from
     the nrcb edge in two frames outranked its interior fits (two frames,
     49-50 px in) on flux, and the interior row was the one dropped.
     """
@@ -6915,8 +6941,9 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
        (:func:`_satstar_residual_distinct_pairs`): a never-co-fit pair whose
        lower-ranked member's light is left in the satstar residual of a
        frame that fit only the other is kept as two stars, and a member
-       whose every fit is at a detector edge (:func:`_satstar_edge_only_rows`)
-       is not chosen as a set's survivor while another member is not.
+       whose every fit is within 10 px of the science area, i.e. 14 px of
+       the array edge (:func:`_satstar_edge_only_rows`), is not chosen as a
+       set's survivor while another member is not.
     B) Drop NON-satstar rows projecting > ``fov_pad_psf`` PSF widths OUTSIDE this
        filter's data FOV.  These are m7 cross-band-seed artifacts: the shared
        seed unions positions from ALL filters, so positions covered only by other
@@ -7018,8 +7045,8 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
                 if _rstats is not None:
                     print(f"  satstar in-field dedup [cofit_residual]: "
                           f"{_rstats['tested']} never-co-fit pair(s) tested: "
-                          f"{_rstats['distinct']} kept as two stars (frames "
-                          f"that fit only the other leave >= "
+                          f"{_rstats['distinct']} kept as two stars (a frame "
+                          f"that fits only the other leaves >= "
                           f"{_rstats['ratio_min']:g} of the lower member's "
                           f"peak and >= {_rstats['flux_min']:g} of its flux), "
                           f"{_rstats['explained']} collapsed on the "
@@ -7140,10 +7167,11 @@ def _infield_dedup_settings(target, module, filt, header_instrument=None):
       best-supported member.
     * ``'cofit_residual'`` -- ``'cofit'``, except that a never-co-fit pair
       whose lower-ranked member's light is left in the satstar residual of
-      the frames that fit only the other is kept as two stars
+      a frame that fit only the other is kept as two stars
       (:func:`_satstar_residual_distinct_pairs`, thresholds
-      :func:`_resid_dedup_thresholds`), and a member whose every fit is at a
-      detector edge is not a set's survivor while another member is
+      :func:`_resid_dedup_thresholds`), and a member whose every fit is
+      within 10 px of the science area (14 px of the array edge) is not a
+      set's survivor while another member is
       (:func:`_satstar_edge_only_rows`).  Opt-in: the thresholds were tuned
       on gc-treasury 10678 m7 o078 + o043 F480M/F212N only.
     * ``'none'``   -- keep every in-field row.

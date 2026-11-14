@@ -4,12 +4,12 @@ edge-only keeper preference on top of the 'cofit' in-field dedup.
 The satstar finder fits ONE star per saturated DQ component, so two stars
 sharing a component in every frame are never fit side by side and 'cofit'
 collapses them (gc-treasury 10678 m7 o078/o043 F480M: about 21 of 32
-collapsed rows).  'cofit_residual' keeps such a pair when the frames that
-fit only the better-ranked member leave the other member's light in their
+collapsed rows).  'cofit_residual' keeps such a pair when a frame that
+fits only the better-ranked member leaves the other member's light in its
 satstar residual: >= 0.5 of its peak AND >= 0.25 of its fitted flux within
-3 px.  The flux condition is what rejects F212N rows whose every fit is at
-a detector edge (peak ratio ~1 wherever the neighbour's model is
-negligible, < 0.1 of the flux).
+3 px, both in that frame.  The flux condition is what rejects F212N rows
+whose every fit is at a detector edge (peak ratio ~1 wherever the
+neighbour's model is negligible, < 0.1 of the flux).
 
 Small synthetic exposures (Gaussian stars on a 400x400 frame) with real-
 format satstar files pin:
@@ -20,7 +20,14 @@ format satstar files pin:
   the flux threshold is overridable from the environment;
 * an edge-truncated duplicate collapses onto the INTERIOR member, not onto
   the edge-only row with more support;
-* a missing residual falls back to 'cofit' for the pair, with a log line;
+* a missing, unreadable, truncated or wrongly shaped residual (or frame)
+  falls back to 'cofit' for the pair, with a log line;
+* the lower member is measured only >= 20 px inside the frame, on all four
+  sides; edge-only means every fit <= 14 px from the array edge (10 px from
+  the science area past 4 reference pixels);
+* the flux fraction is signed (a spike over a dip collapses), and the peak
+  and flux tests must pass in the SAME run (a NaN or inf run measures
+  nothing, and does not hide a passing run);
 * satstar ``x_fit``/``y_fit`` are stamp coordinates: the edge test reads the
   frame-pixel ``xcentroid``/``ycentroid``;
 * the settings, the env thresholds and the run_manual_pipeline wiring.
@@ -31,8 +38,6 @@ import types
 
 import numpy as np
 import pytest
-from astropy import units as u
-from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
@@ -93,7 +98,7 @@ def _data_i2d(tmp_path):
 
 
 def _write_exposure(pdir, expnum, stars, fits_acc, fits_rej=(), shift=(0, 0),
-                    residual=True, seed=0):
+                    residual=True, seed=0, shape=SHAPE):
     """One frame plus its m7 satstar catalog / rejected / residual files.
 
     ``stars``: true sources ``(x, y, flux)`` in REFERENCE pixels.
@@ -107,12 +112,12 @@ def _write_exposure(pdir, expnum, stars, fits_acc, fits_rej=(), shift=(0, 0),
     w = _wcs(shift)
     dx, dy = shift
     rng = np.random.default_rng(seed)
-    data = np.full(SHAPE, BG) + rng.normal(0, 0.5, SHAPE)
+    data = np.full(shape, BG) + rng.normal(0, 0.5, shape)
     for x, y, f in stars:
-        data += _gauss(SHAPE, x + dx, y + dy, f)
-    model = np.zeros(SHAPE)
+        data += _gauss(shape, x + dx, y + dy, f)
+    model = np.zeros(shape)
     for x, y, f in fits_acc:
-        model += _gauss(SHAPE, x + dx, y + dy, f)
+        model += _gauss(shape, x + dx, y + dy, f)
     stem = pdir / f'jw10678001001_02101_{expnum:05d}_nrcalong_destreak_o001_crf'
     frame = f'{stem}.fits'
     sci = fits.ImageHDU(data.astype('float32'), name='SCI')
@@ -333,6 +338,276 @@ def test_hooks_of_never_cofit_duplicates():
     assert C._never_cofit_duplicates(sc, [2, 1], [1, 1], runs,
                                      demote=[True, False]).tolist() == [
         True, False]
+
+
+# ---- damaged residual files -------------------------------------------------
+
+def _truncate(path, frac):
+    raw = open(path, 'rb').read()
+    with open(path, 'wb') as fh:
+        fh.write(raw[:int(len(raw) * frac)])
+
+
+@pytest.mark.parametrize('damage', ['truncated_half', 'truncated_to_90pct',
+                                    'one_d', 'wrong_2d_shape', 'both_one_d',
+                                    'frame_truncated'])
+def test_damaged_residual_falls_back_to_cofit(tmp_path, clean_env, capsys,
+                                              damage):
+    # A file cut off inside its data raises TypeError ("buffer is too small
+    # for requested array") under memmap, and a 1-D residual would
+    # IndexError in the cutout: both must skip the run, not abort.
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    _pair_scene(pdir)
+    runs = _runs(pdir)
+    for r in runs:
+        if damage == 'truncated_half':
+            _truncate(r['residual'], 0.5)
+        elif damage == 'truncated_to_90pct':
+            _truncate(r['residual'], 0.9)
+        elif damage == 'one_d':
+            os.remove(r['residual'])
+            fits.PrimaryHDU(np.full(SHAPE[0] * SHAPE[1], BG, 'float32')
+                            ).writeto(r['residual'])
+        elif damage == 'wrong_2d_shape':
+            os.remove(r['residual'])
+            fits.PrimaryHDU(np.full((200, 200), BG, 'float32')
+                            ).writeto(r['residual'])
+        elif damage == 'both_one_d':                # same shape, not 2-D
+            flat = np.full(SHAPE[0] * SHAPE[1], BG, 'float32')
+            os.remove(r['residual'])
+            fits.PrimaryHDU(flat).writeto(r['residual'])
+            os.remove(r['frame'])
+            fits.HDUList([fits.PrimaryHDU(),
+                          fits.ImageHDU(flat, name='SCI')]).writeto(r['frame'])
+        else:
+            _truncate(r['frame'], 0.6)
+    tbl = _merged([K[:2], D[:2]], [K[2], D[2]], [2, 1])
+    assert _clean(tbl, tmp_path, runs) == ([0], 1)          # as 'cofit'
+    log = capsys.readouterr().out
+    assert "fall back to 'cofit'" in log and '1 fell back to' in log
+    if damage.startswith('truncated') or damage == 'frame_truncated':
+        assert 'TypeError' in log
+    elif damage in ('one_d', 'wrong_2d_shape', 'both_one_d'):
+        assert 'is not the frame SCI shape' in log
+
+
+# ---- the 20 px inside cutoff ------------------------------------------------
+
+@pytest.mark.parametrize('edge', ['left', 'right', 'bottom', 'top'])
+@pytest.mark.parametrize('inset, kept', [(18, False), (22, True)])
+def test_lower_member_is_measured_only_20px_inside(tmp_path, clean_env, edge,
+                                                   inset, kept):
+    # D sits ``inset`` px from one array edge (left: x = inset; right:
+    # x = nx - inset), K 6 px further in.  Every frame has the same WCS
+    # (frame = reference pixels) and is NOT square, (ny, nx) = (300, 400),
+    # so x and y limits differ.  At 22 px the residual test measures D and
+    # keeps it; at 18 px it is not measured and 'cofit' collapses the pair.
+    shape = (300, 400)
+    ny, nx = shape
+    inward = {'left': (1, 0), 'right': (-1, 0), 'bottom': (0, 1),
+              'top': (0, -1)}[edge]
+    dxy = {'left': (inset, 150.0), 'right': (nx - inset, 150.0),
+           'bottom': (200.0, inset), 'top': (200.0, ny - inset)}[edge]
+    d = (float(dxy[0]), float(dxy[1]), D[2])
+    k = (d[0] + 6 * inward[0], d[1] + 6 * inward[1], K[2])
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    _write_exposure(pdir, 1, [k, d], [k], seed=1, shape=shape)
+    _write_exposure(pdir, 2, [k, d], [d], seed=2, shape=shape)
+    _write_exposure(pdir, 3, [k, d], [k], seed=3, shape=shape)
+    runs = _runs(pdir)
+    assert all(r['shape'] == shape for r in runs)
+    assert not C._satstar_edge_only_rows(_sky([k[:2], d[:2]]), runs).any()
+    tbl = _merged([k[:2], d[:2]], [k[2], d[2]], [2, 1])
+    assert _clean(tbl, tmp_path, runs) == (([0, 1], 0) if kept else ([0], 1))
+    dist, stats = C._satstar_residual_distinct_pairs(
+        _sky([k[:2], d[:2]]), [2, 1], [k[2], d[2]], runs)
+    assert dist(np.array([0]), np.array([1]), np.array([0.378])).tolist() == [
+        kept]
+    assert stats['untestable'] == (0 if kept else 1)
+
+
+# ---- edge-only rows: the 10 px + 4 reference-pixel boundary -----------------
+
+def test_edge_only_boundary_is_14px_from_the_array_edge():
+    # A non-square frame (ny, nx) = (300, 400) so that x and y sides differ.
+    # Edge distance = min(x, y, nx-1-x, ny-1-y) - 4 <= 10: x or y <= 14, or
+    # x >= 385 / y >= 285.
+    shape = (300, 400)
+    xy = np.array([[14.0, 150], [15.0, 150],        # left
+                   [385.0, 150], [384.0, 150],      # right (nx - 15)
+                   [200, 14.0], [200, 15.0],        # bottom
+                   [200, 285.0], [200, 284.0],      # top (ny - 15)
+                   [10.0, 150],                     # + an interior fit
+                   [200, 150]])                     # interior
+    expect = [True, False, True, False, True, False, True, False, False,
+              False]
+    sc = _sky([(20 + 25 * i, 60) for i in range(len(xy))])
+    runs = [{'positions': sc, 'xy': xy, 'shape': shape},
+            {'positions': sc[8:9], 'xy': np.array([[100.0, 150]]),
+             'shape': shape}]
+    assert C._satstar_edge_only_rows(sc, runs).tolist() == expect
+    # a row with no fit at all is not edge-only
+    far = _sky([(380, 380)])
+    assert C._satstar_edge_only_rows(far, runs).tolist() == [False]
+
+
+# ---- residual_left sign, and per-run combination of the two tests -----------
+
+def _gauss_s(shape, x, y, flux, sigma):
+    yy, xx = np.mgrid[:shape[0], :shape[1]]
+    return (flux / (2 * np.pi * sigma ** 2)
+            * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma ** 2)))
+
+
+#: D's peak above the background in the data (K's wing 6 px away is ~0)
+D_PEAK = D[2] / (2 * np.pi * SIGMA ** 2)
+
+
+def _residual(kind, rng_seed=7):
+    """A K-only-run residual with something specific left at D."""
+    rng = np.random.default_rng(rng_seed)
+    res = np.full(SHAPE, BG) + rng.normal(0, 0.5, SHAPE)
+    if kind == 'star':                               # all of D: both pass
+        res += _gauss(SHAPE, D[0], D[1], D[2])
+    elif kind == 'spike':                            # peak 0.9, flux ~0.15
+        res += _gauss_s(SHAPE, D[0], D[1],
+                        0.9 * D_PEAK * 2 * np.pi * 0.5 ** 2, 0.5)
+    elif kind == 'bump':                             # peak ~0.2, flux ~0.46
+        res += _gauss_s(SHAPE, D[0], D[1], 0.9 * D[2], 2.5)
+    elif kind == 'spike_and_dip':                    # peak ~0.58, flux < 0
+        res += _gauss_s(SHAPE, D[0], D[1],
+                        0.9 * D_PEAK * 2 * np.pi * 0.5 ** 2, 0.5)
+        res -= _gauss_s(SHAPE, D[0], D[1], 0.9 * D[2], 2.0)
+    elif kind == 'nan':
+        res[int(D[1]) - 20:int(D[1]) + 21, int(D[0]) - 20:int(D[0]) + 21] = (
+            np.nan)
+    elif kind == 'inf':                              # star + one inf pixel
+        res += _gauss(SHAPE, D[0], D[1], D[2])
+        res[int(D[1]), int(D[0])] = np.inf
+    else:
+        raise ValueError(kind)
+    return res.astype('float32')
+
+
+def _set_residual(run, kind):
+    os.remove(run['residual'])
+    fits.PrimaryHDU(_residual(kind)).writeto(run['residual'])
+
+
+def _nan_frame_at_d(run):
+    with fits.open(run['frame'], mode='update') as fh:
+        fh['SCI'].data[int(D[1]) - 1:int(D[1]) + 2,
+                       int(D[0]) - 1:int(D[0]) + 2] = np.nan
+
+
+def _k_only_runs(pdir, kinds):
+    """The pair scene with the residual of exposures 1 and 3 (which fit only
+    K) replaced by ``kinds[0]`` / ``kinds[1]``; returns (all runs, [run 1,
+    run 3])."""
+    _pair_scene(pdir)
+    runs = _runs(pdir)
+    konly = [r for r in runs if '_00002_' not in r['stem']]
+    assert len(konly) == 2 and '_00001_' in konly[0]['stem']
+    for r, kind in zip(konly, kinds):
+        _set_residual(r, kind)
+    return runs, konly
+
+
+def _distinct(runs):
+    dist, stats = C._satstar_residual_distinct_pairs(
+        _sky([K[:2], D[:2]]), [2, 1], [K[2], D[2]], runs)
+    out = dist(np.array([0]), np.array([1]), np.array([0.378]))
+    return bool(out[0]), stats
+
+
+@pytest.mark.parametrize('kind, peak_ok, flux_ok', [
+    ('star', True, True), ('spike', True, False), ('bump', False, True),
+    ('spike_and_dip', True, False)])
+def test_residual_kinds_measure_as_designed(tmp_path, kind, peak_ok,
+                                            flux_ok):
+    data = (np.full(SHAPE, BG) + _gauss(SHAPE, *K) + _gauss(SHAPE, *D))
+    pk, ff = C._satstar_residual_left(_residual(kind), data, D[0], D[1], D[2])
+    assert (pk >= 0.5) == peak_ok and (ff >= 0.25) == flux_ok
+    if kind == 'spike_and_dip':
+        # light left at the peak, but a net DEFICIT in the aperture: the
+        # flux fraction is signed, not an absolute value
+        assert 0.5 < pk < 0.7 and ff < -0.3
+
+
+def test_spike_over_a_dip_collapses(tmp_path, clean_env):
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    runs, _ = _k_only_runs(pdir, ['spike_and_dip', 'spike_and_dip'])
+    kept, stats = _distinct(runs)
+    assert not kept and stats['explained'] == 1
+    tbl = _merged([K[:2], D[:2]], [K[2], D[2]], [2, 1])
+    assert _clean(tbl, tmp_path, runs) == ([0], 1)
+
+
+@pytest.mark.parametrize('kinds', [('nan', 'star'), ('star', 'nan')])
+def test_one_nan_run_does_not_hide_a_passing_run(tmp_path, clean_env, kinds):
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    runs, _ = _k_only_runs(pdir, kinds)
+    kept, stats = _distinct(runs)
+    assert kept and stats['distinct'] == 1
+    # the run order does not matter
+    assert _distinct(runs[::-1])[0]
+    tbl = _merged([K[:2], D[:2]], [K[2], D[2]], [2, 1])
+    assert _clean(tbl, tmp_path, runs) == ([0, 1], 0)
+
+
+def test_all_nan_runs_are_untestable_and_collapse(tmp_path, clean_env):
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    runs, _ = _k_only_runs(pdir, ['nan', 'nan'])
+    kept, stats = _distinct(runs)
+    assert not kept
+    assert (stats['untestable'], stats['explained'], stats['fallback']) == (
+        1, 0, 0)
+    tbl = _merged([K[:2], D[:2]], [K[2], D[2]], [2, 1])
+    assert _clean(tbl, tmp_path, runs) == ([0], 1)
+
+
+@pytest.mark.parametrize('kinds', [('bump', 'spike'), ('spike', 'bump'),
+                                   ('nanpeak', 'spike'), ('spike', 'nanpeak'),
+                                   ('inf', 'inf')])
+def test_both_tests_must_pass_in_the_same_run(tmp_path, clean_env, kinds):
+    # bump: flux passes, peak fails.  spike: peak passes, flux fails.
+    # nanpeak: the frame's SCI is NaN at D (peak fraction NaN) while the
+    # residual holds all of D (flux passes).  inf: all of D plus one inf
+    # pixel.  No single run passes both, so the pair collapses -- although
+    # the best peak and the best flux, taken over runs separately, pass.
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    runs, konly = _k_only_runs(
+        pdir, ['star' if k == 'nanpeak' else k for k in kinds])
+    for r, k in zip(konly, kinds):
+        if k == 'nanpeak':
+            _nan_frame_at_d(r)
+    kept, stats = _distinct(runs)
+    # an inf in the residual is no measurement at all
+    counted = 'untestable' if kinds == ('inf', 'inf') else 'explained'
+    assert not kept and stats[counted] == 1 and stats['distinct'] == 0
+    assert _distinct(runs[::-1])[0] is False
+    tbl = _merged([K[:2], D[:2]], [K[2], D[2]], [2, 1])
+    assert _clean(tbl, tmp_path, runs) == ([0], 1)
+
+
+def test_a_run_with_only_a_flux_measurement_counts_as_measured(tmp_path,
+                                                                clean_env):
+    # exposure 1 alone: NaN peak (frame NaN at D), finite flux -> the pair
+    # is measured ('explained'), not untestable
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    runs, konly = _k_only_runs(pdir, ['star', 'star'])
+    _nan_frame_at_d(konly[0])
+    one = [r for r in runs if '_00003_' not in r['stem']]
+    kept, stats = _distinct(one)
+    assert not kept
+    assert (stats['explained'], stats['untestable']) == (1, 0)
 
 
 # ---- settings and wiring ----------------------------------------------------
