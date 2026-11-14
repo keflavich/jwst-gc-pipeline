@@ -82,6 +82,12 @@ MANUAL_DEFAULTS = {
     'manual_ext_star_prom_robust_conc': 0.6,  # robust branch needs core concentration >= this x C_ref; 0 = off
     'manual_ext_local_snr_min': 5.0,
     'manual_ext_snr_floor_propagated': True,  # floors on flux/flux_err_prop
+    # guard on the rows only that floor admits (#1025); all off.  Rule 3 uses
+    # 4.0 (the #1018 peak-SB value) once validated; rule 1 stays off until the
+    # replay shows it removes sources after rules 2 and 3.
+    'manual_ext_prop_floor_prom_min': 0.0,    # drop finite prominence < this; 0 = off
+    'manual_ext_prop_floor_drop_flags': False,  # drop flags-keep-only rows
+    'manual_ext_prop_floor_qfit_snr_min': 0.0,  # drop qfit*S/N (per-frame) < this; 0 = off
     'manual_ext_snr_high_keep': 20.0,
     'manual_ext_qfit_high_keep_max': 0.4,
     # bright keep also for grouped rows (group_size > 1); only grouped fits

@@ -372,6 +372,7 @@ still run after m6.
 | `--manual-ext-star-prom-robust-conc` | 0.6 | (robust branch off) | (robust branch off) | (robust branch off) |
 | `--manual-ext-local-snr-min` | 5.0 | 5.0 | 5.0 | **8.0** m12–m4, **3.0** m5–m6 |
 | `--manual-ext-snr-floor-per-frame` (opt-out: sets `manual_ext_snr_floor_propagated=False`) | not set (floor on flux_err_prop) | not set | not set | not set |
+| `--manual-ext-prop-floor-prom-min` / `--manual-ext-prop-floor-drop-flags` / `--manual-ext-prop-floor-qfit-snr-min` | 0 / off / 0 (guard off) | same | same | same |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
 | `--manual-ext-hysteresis-qfit-max` (0 = off) | 0.6 | 0.6 (m3–m7) | 0.6 (m3–m7) | (off: MIRI vets on prominence) |
@@ -603,6 +604,9 @@ control is the default.
 | `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
 | `--manual-ext-hysteresis-qfit-max` | 0.6 | m3–m7, NIRCam: also keep a source within 0.5 FWHM of a row of the previous phase's vetted catalog with qfit < this and S/N ≥ `--manual-ext-hysteresis-snr-min` (10), except within `--manual-ext-hysteresis-satstar-guard-fwhm` (4.5) FWHM of a saturated star; the overshoot drop and structure prune still apply; 0 = off |
 | `--manual-ext-snr-floor-per-frame` | (propagated) | put the local S/N floor (`--manual-ext-local-snr-min`) on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch); the sky-clean floor is per-frame either way |
+| `--manual-ext-prop-floor-prom-min` | 0 (off) | guard on rows only the propagated floor admits (issue #1025): drop one with a measured data-i2d prominence below this (4 is the peak-SB value); NaN prominence is kept |
+| `--manual-ext-prop-floor-drop-flags` | off | …drop one whose only star-like route is the `flags` keep |
+| `--manual-ext-prop-floor-qfit-snr-min` | 0 (off) | …drop one with qfit × (flux / flux_err) below this; rows kept by `qfit <= qfit_max` and rows the per-frame floor admits are never dropped; the guard runs before the multi-frame, sky-clean and hysteresis tiers |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + per-frame S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-sky-clean-local-arcsec` | 3.0 | sky-clean tier, LOCAL reference: a source is also clean when its annulus floor is ≤ `--manual-sky-clean-local-max-err` i2d ERR above the 5th percentile of its 3″ tile (smooth bright plateau = clean; filament, PSF-scale emission structure or crowding = not); OR-ed with the global dark-sky test; 0 = global only; needs the i2d ERR plane (skipped with a log line without it) |
 | `--manual-sky-clean-local-max-err` | 2.0 | sky-clean tier, LOCAL reference threshold in i2d ERR (≈ 2.4σ of pixel scatter in the Brick dark cloud, where ERR ≈ 1.2× the scatter); the global test's `--manual-sky-clean-max-sky-snr` is in dark-sky σ |

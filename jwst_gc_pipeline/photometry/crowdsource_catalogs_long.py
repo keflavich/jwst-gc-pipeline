@@ -4729,6 +4729,20 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "uses flux / flux_err_prop, the S/N of the merged flux "
                          "(~sqrt(nmatch) higher).  The sky-clean floor "
                          "(--manual-sky-clean-snr-min) is always per-frame.")
+    parser.add_option("--manual-ext-prop-floor-prom-min", dest="manual_ext_prop_floor_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prop_floor_prom_min'],
+                    help="Drop a row admitted only by the propagated S/N floor when its "
+                         "data-i2d prominence is measured and below this (4 is the "
+                         "peak-SB value).  NaN prominence is kept.  Default 0 = off.")
+    parser.add_option("--manual-ext-prop-floor-drop-flags", dest="manual_ext_prop_floor_drop_flags",
+                    action='store_true',
+                    default=MANUAL_DEFAULTS['manual_ext_prop_floor_drop_flags'],
+                    help="Drop a row admitted only by the propagated S/N floor whose only "
+                         "star-like route is the flags keep.  Default off.")
+    parser.add_option("--manual-ext-prop-floor-qfit-snr-min", dest="manual_ext_prop_floor_qfit_snr_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prop_floor_qfit_snr_min'],
+                    help="Drop a row admitted only by the propagated S/N floor when "
+                         "qfit x (flux / flux_err) is below this.  Default 0 = off.")
     parser.add_option("--manual-ext-snr-high-keep", dest="manual_ext_snr_high_keep",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_snr_high_keep'],
                     help="Extended-emission vetting BRIGHT-ISOLATED keep: a "

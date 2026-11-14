@@ -58,6 +58,7 @@ from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.nan_fill import replace_nans
+from jwst_gc_pipeline.photometry.prop_floor_guard import prop_floor_guard_drop
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -2469,6 +2470,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_floor_propagated=False,
+                              prop_floor_prom_min=0.0,
+                              prop_floor_drop_flags=False,
+                              prop_floor_qfit_snr_min=0.0,
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
                               high_keep_grouped=False,
                               qfit_recover_max=None,
@@ -2561,6 +2565,19 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     common to every frame -- the shared background model, the shared
     neighbour model and the shared seed position -- do not average down, and
     they are largest for faint stars on structured background.
+
+    ``prop_floor_prom_min``, ``prop_floor_drop_flags`` and
+    ``prop_floor_qfit_snr_min`` (issue #1025; all off by default) act on the
+    rows only the propagated floor admits, those the per-frame floor would
+    refuse.  Each is a separate rule (see ``prop_floor_guard``): drop a row
+    with a finite prominence below ``prop_floor_prom_min``; drop a row whose
+    only star-like route is the ``flags`` keep; drop a row with ``qfit * S/N``
+    (S/N on flux / flux_err) below ``prop_floor_qfit_snr_min``.  Rows kept by
+    ``qfit <= qfit_max`` and rows the per-frame floor admits are never
+    dropped, so the per-frame-floor catalogue is reproduced row for row.  The
+    guard runs before the multi-frame, sky-clean and hysteresis tiers, which
+    can still admit a dropped row on their own criteria.  Without
+    ``snr_floor_propagated`` it does nothing.
 
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
@@ -2868,6 +2885,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   f"{int(_q_refused.sum())} source(s) with qfit > "
                   f"sqrt({qfit_max:g}^2 + ({qfit_snr_k:g}/S/N)^2)", flush=True)
         _peak_branch = _peak_branch | (_has_prom & _prom_ok)
+    # star-like routes other than the flags keep, kept apart for the
+    # propagated-floor guard (prop_floor_drop_flags)
+    star_like_noflags = (qf <= qfit_max) | _peak_branch | bright_isolated
     star_like = (
         (qf <= qfit_max)
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
@@ -2934,6 +2954,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 _prom_ok = np.isfinite(_logp) & (_logp >= _thr)
         recovered = ((qf > qfit_max) & (qf <= _qrec) & ~near_satstar & _prom_ok)
         star_like = star_like | recovered
+        star_like_noflags = star_like_noflags | recovered
         _n_qfit = int(((qf > qfit_max) & (qf <= _qrec) & ~near_satstar).sum())
         print(f"[{label}] recover tier: +{int(recovered.sum())} star-like "
               f"(qfit in ({qfit_max:g},{_qrec:g}], S/N>={local_snr_min:g}, "
@@ -2972,6 +2993,30 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # from the vetted catalog/residual on a broken uncertainty.
         keep = _emission_keep_nircam(star_like, snr_floor, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
+        # PROPAGATED-FLOOR GUARD (#1025).  Rows the per-frame floor would have
+        # refused and the propagated floor admits are the only candidates, so
+        # the per-frame-floor catalogue is untouched.  Runs before the tiers
+        # below, which admit on their own criteria.
+        if (snr_floor is not snr
+                and (prop_floor_prom_min > 0 or prop_floor_drop_flags
+                     or prop_floor_qfit_snr_min > 0)):
+            keep_pf = _emission_keep_nircam(star_like, snr, local_snr_min,
+                                            qfit_confident=(qf <= qfit_max))
+            _flags_only = (np.isin(flg, np.asarray(keep_flags, dtype=float))
+                           & ~star_like_noflags)
+            _drop, _gc = prop_floor_guard_drop(
+                keep & ~keep_pf, flags_only=_flags_only, prominence=prominence,
+                qf=qf, snr_per_frame=snr, prom_min=float(prop_floor_prom_min),
+                drop_flags=bool(prop_floor_drop_flags),
+                qfit_snr_min=float(prop_floor_qfit_snr_min))
+            keep = keep & ~_drop
+            print(f"[{label}] propagated-floor guard: {_gc['dropped']} of "
+                  f"{_gc['prop_only']} propagated-only row(s) dropped "
+                  f"(flags-only route {_gc['flags']}, "
+                  f"prominence<{prop_floor_prom_min:g} {_gc['prominence']} "
+                  f"of which {_gc['prominence_only']} outside the flags rule, "
+                  f"qfit*S/N<{prop_floor_qfit_snr_min:g} {_gc['qfit_snr']})",
+                  flush=True)
 
     # MULTI-FRAME CONFIRMATION keep (Hosek ndet-style; opt-in, nmatch_confirm>0).
     # A source detected in >= nmatch_confirm exposures with a still-plausible qfit
@@ -11177,6 +11222,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                     if _miri_field else 0.0),
                     local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
                     snr_floor_propagated=bool(mopt(opts_phase, 'manual_ext_snr_floor_propagated')),
+                    prop_floor_prom_min=float(mopt(opts_phase, 'manual_ext_prop_floor_prom_min')),
+                    prop_floor_drop_flags=bool(mopt(opts_phase, 'manual_ext_prop_floor_drop_flags')),
+                    prop_floor_qfit_snr_min=float(mopt(opts_phase, 'manual_ext_prop_floor_qfit_snr_min')),
                     snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
                     qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
                     high_keep_grouped=bool(mopt(opts_phase, 'manual_ext_high_keep_grouped')),
