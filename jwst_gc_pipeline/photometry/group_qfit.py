@@ -110,7 +110,8 @@ def compute_group_qfit(results, psf_model, shape, *, min_ratio=0.1,
     order = np.argsort(gid, kind='stable')
     bounds = np.flatnonzero(np.diff(gid[order])) + 1
     for members in np.split(order, bounds):
-        if members.size < 2:
+        # a masked group_id (filled with -1) names no group
+        if members.size < 2 or gid[members[0]] < 0:
             continue
         live = members[usable[members]]
         if live.size < 2:

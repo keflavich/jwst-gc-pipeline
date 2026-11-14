@@ -149,6 +149,12 @@ def test_excluded_pixels_carry_no_partner_light():
     assert _qg(t, excluded=np.ones(SHAPE, bool))[1] == 0.60
 
 
+def test_masked_group_id_names_no_group():
+    t = _results([30.0, 33.0], [1.0e4, 4.0e3], [0.30, 0.60], [1, 1])
+    t['group_id'] = np.ma.masked_array([1, 1], mask=[True, True])
+    np.testing.assert_array_equal(_qg(t), t['qfit'])
+
+
 def test_missing_columns_and_nonfinite_values_are_safe():
     t = _results([30.0, 33.0], [1.0e4, 4.0e3], [0.30, np.nan], [1, 1])
     out = _qg(t)
