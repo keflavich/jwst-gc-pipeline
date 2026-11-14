@@ -64,6 +64,7 @@ from astropy import units as u
 from astropy.table import Table
 
 from .reference_blends import blended_reference_mask
+from .exposure_trail import assess_visit_trails
 from .satstar_consensus import consensus_with_satstars
 from .visit_consensus import (
     EXPOSURE_CONSENSUS_TOL_MAS, DETECTOR_ANTISYMMETRY_MIN_MAS,
@@ -4436,6 +4437,21 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             unverified.append(f"{vctx}: consensus build failed: {ex}")
             continue
 
+        # Trailed-exposure reading (#733).  RECORD ONLY: it names the exposures
+        # whose stars are smeared against their siblings in the visit's
+        # `trail` block and in one line below, and gates nothing -- the
+        # thresholds are provisional until they have been read over the fields
+        # on disk.  A frozen stage does not reopen the pixels; the m2 record
+        # holds the reading.
+        trail = assess_visit_trails(tables) if correcting else None
+        if trail is not None:
+            for t_exp in trail["exposures"]:
+                if t_exp["verdict"] in ("flagged", "reviewed"):
+                    print(f"ASTROM CHECKPOINT [{stage}] TRAILED EXPOSURE "
+                          f"(advisory, nothing is gated on it): {vctx} exposure "
+                          f"{t_exp['exposure']} {t_exp['stems']}: "
+                          f"{t_exp['verdict']} -- {t_exp['reason']}", flush=True)
+
         # ---- per-exposure vs consensus ------------------------------------
         # At a frozen stage the per-exposure gate is a MOVEMENT check vs the m2
         # baseline (see _m2_exposure_baseline), NOT an absolute vs-consensus
@@ -5125,6 +5141,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 reported=bool(det_antisym["detected"] and det_extra),
                 keys=[list(k) for k in sorted(det_antisym["keys"])],
                 examples=[_jsonable(x) for x in det_antisym["examples"]]),
+            trail=trail,
             exposures=exp_records,
             reference_tie=_jsonable(ref_tie),
             # Present only when the raw frozen-stage delta exceeded tolerance:
