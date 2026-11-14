@@ -3,6 +3,7 @@ import sys, glob, re, os
 import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
+from jwst_gc_pipeline.photometry.naming import glob_perframe_catalogs
 
 B = '/blue/adamginsburg/adamginsburg/jwst/brick'
 sol = np.load(sys.argv[1])
@@ -16,7 +17,8 @@ for band, det in detkeys:
     # `{det}*_visit` -- not `{det}_visit`: obs_token puts `_o023`/`_j6778`
     # between the detector and the visit, and the strict form globbed 24 of
     # gc2211's 68 nrca1 F200W frames without saying so.
-    g = sorted(glob.glob(f'{B}/{band.upper()}/{band}_{det}*_visit*_vgroup*_exp*_{stage}_daophot_basic.fits'))
+    # legacy or m3..m7 merge-label-tokened names (one per frame)
+    g = glob_perframe_catalogs(f'{B}/{band.upper()}/{band}_{det}*_visit*_vgroup*_exp*_{stage}_daophot_basic.fits')[0]
     t = Table.read(g[0])
     sc = SkyCoord(t['skycoord_centroid'])
     cen[(band, det)] = (np.median(sc.ra.deg), np.median(sc.dec.deg))

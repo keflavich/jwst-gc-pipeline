@@ -248,6 +248,8 @@ from jwst_gc_pipeline.photometry.naming import (
     observation_field_token, perframe_obs_token,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
+    perframe_label_token, label_token_phase, choose_perframe_variants,
+    perframe_variant_summary,
 )
 from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
@@ -789,7 +791,9 @@ def write_via_local_scratch(final_path, write_fn):
     Every path into ``final_path`` is atomic (``atomic_io.atomic_write``): the
     copy, and the direct write, land on a hidden temporary beside it and are
     ``os.replace``-d into position.  The module pass and the ``merged`` pass
-    both fit every frame and write this same detector-keyed name, possibly at
+    both fit every frame and, at m12, write this same detector-keyed name
+    (from m3 on the name carries the merge label,
+    ``naming.perframe_label_token``), possibly at
     the same moment in two shards (#840), and a copy straight onto
     ``final_path`` left a window in which the other task could read a
     truncated catalog.
@@ -1160,16 +1164,26 @@ def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
 def _predict_tblfilename(basepath, filtername, module, options,
                          visit_id, vgroup_id, exposure_id,
                          iteration_label=None, method='daophot',
-                         basic_or_iterative='iterative'):
+                         basic_or_iterative='iterative', merge_label=None):
+    """Predicted per-frame catalog path, as ``save_photutils_results`` names it.
+
+    ``merge_label``: the merge label of the pass that writes it (the manual
+    path's ``nrca`` / ``nrcb`` / ``merged``).  At m3..m7 it adds the
+    ``_lbl{merge_label}`` token after ``_daophot_{kind}``
+    (``naming.perframe_label_token``); ``None`` predicts the legacy name.
+    """
     (visitid_, vgroupid_, exposure_, desat, bgsub,
      epsf_, blur_, group_, iter_) = _predict_output_tokens(
         options, visit_id, vgroup_id, exposure_id, iteration_label)
     obs_ = _obs_token_from_options(options)
     if method == 'daophot':
+        _iter_label = (getattr(options, 'iteration_label', None) or None
+                       if iteration_label is None else iteration_label)
+        label_ = perframe_label_token(_iter_label, merge_label)
         return (f'{basepath}/{filtername}/'
                 f'{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}'
                 f'{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
-                f'_daophot_{basic_or_iterative}.fits')
+                f'_daophot_{basic_or_iterative}{label_}.fits')
     # Crowdsource writer = legacy/crowdsource_step.py::save_crowdsource_results.
     # It writes NO obs token, and its ``{fpsf}`` slot is always '' on the live
     # path (the refit_psf loop is pinned to refit_psf=False), so neither token
@@ -1246,7 +1260,7 @@ def perframe_sentinel_key(options, module, file_detector):
 def _expected_output_exists(basepath, filtername, module, options,
                             visit_id, vgroup_id, exposure_id,
                             iteration_label=None, manual_phase=None,
-                            source_exposure=None):
+                            source_exposure=None, merge_label=None):
     """Main output sentinel for --skip-if-done / --list-missing-tasks.
 
     daophot-iterative is the final step when --daophot is set (or basic when
@@ -1298,11 +1312,18 @@ def _expected_output_exists(basepath, filtername, module, options,
         # '_crowdsource_unweighted' sentinel never existed on disk and
         # --skip-if-done never matched in crowdsource mode.
         basic_or_iterative = 'nsky0'
+    # ``merge_label`` (manual path): the m3..m7 per-frame name carries the
+    # pass's merge label (naming.perframe_label_token), so "done" means THIS
+    # label's file.  A legacy untokened file is not accepted: it predates the
+    # token and may hold another label's fit of the frame, so the frame is
+    # reported missing and refit (as cataloging's marker resume does).
     path = _predict_tblfilename(basepath, filtername, module, options,
                                 visit_id, vgroup_id, exposure_id,
                                 iteration_label=iteration_label,
                                 method=method,
-                                basic_or_iterative=basic_or_iterative)
+                                basic_or_iterative=basic_or_iterative,
+                                merge_label=(merge_label if manual_label
+                                             is not None else None))
     if not os.path.exists(path):
         return False
     conflict = foreign_observation_conflict(path, source_exposure)
@@ -2219,7 +2240,16 @@ def save_photutils_results(result, ww, filename,
                            group="",
                            fpsf="",
                            background_map=None,
-                           iteration_label=None):
+                           iteration_label=None,
+                           merge_label=None):
+    """Write one frame's daophot catalog.
+
+    ``merge_label``: the merge label of the pass writing it (manual path).  At
+    m3..m7 the name carries ``_lbl{merge_label}`` after ``_daophot_{kind}``
+    (``naming.perframe_label_token``) so the module pass and the ``merged``
+    pass of one frame -- two fits on label-scoped inputs -- write two files.
+    ``None`` (every non-manual caller) writes the legacy name.
+    """
     print("Saving photutils results.")
     blur_ = "_blur" if blur else ""
 
@@ -2322,7 +2352,10 @@ def save_photutils_results(result, ww, filename,
     obs_ = _obs_token_from_options(options)
     # {module} only, no detector token -- that is what merge_catalogs.py globs
     # for and what every other filename in this file uses.
-    tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_{basic_or_iterative}.fits"
+    # Merge-label token, m3..m7 only (naming.perframe_label_token).  MUST
+    # match _predict_tblfilename and the readers' variant choice.
+    label_ = perframe_label_token(iteration_label, merge_label)
+    tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_{basic_or_iterative}{label_}.fits"
 
     long_keys = [k for k in result.meta if len(k) > 8]
     for k in long_keys:
@@ -2806,14 +2839,19 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     # the flux other chunks fit, so they are combined per frame first (below).
     chunked_iter_regex = (re.compile(re.escape(iter_) + r'_chunk\d+of\d+_daophot_')
                           if iter_ else re.compile(r'_chunk\d+of\d+_daophot_'))
+    # m3..m7 per-frame residuals carry the merge label of the pass that fit
+    # them (naming.perframe_label_token); ``module`` is the label this mosaic
+    # is for.  Read its own, else the legacy untokened name -- one per frame.
+    label_ = perframe_label_token(iteration_label, module)
     for module_pattern in module_patterns:
         for chunk_pat in ('', '_chunk*of*'):
-            residual_glob = (
-                f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
-                f'{module_pattern}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
-                f'{iter_}{chunk_pat}_daophot_{residual_kind}_residual.fits'
-            )
-            residual_files.extend(glob.glob(residual_glob))
+            for tail in (('', label_) if label_ else ('',)):
+                residual_glob = (
+                    f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
+                    f'{module_pattern}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
+                    f'{iter_}{chunk_pat}_daophot_{residual_kind}{tail}_residual.fits'
+                )
+                residual_files.extend(glob.glob(residual_glob))
 
     def _accept(fn):
         if not _matches_expected_tokens(fn):
@@ -2833,6 +2871,12 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         return True
 
     residual_files = sorted(set(fn for fn in residual_files if _accept(fn)))
+    if label_:
+        residual_files, _variant_counts = choose_perframe_variants(
+            residual_files, prefer=(str(module),), other_labels=False)
+        print(perframe_variant_summary(
+            _variant_counts, f"mosaic_each_exposure_residuals "
+            f"{filtername}/{module} {iteration_label}", str(module)), flush=True)
     if len(residual_files) == 0:
         raise ValueError(
             f'No per-exposure residuals found for module={module} '
@@ -3588,6 +3632,10 @@ def _run_frame_renders(overlapping_frames, render_fn, n_threads, n_procs=1):
 # key of the per-frame render result that carries "this frame fell back to the
 # model-threshold cover test" (build_mergedcat_residuals summary line)
 _COVER_FALLBACK_KEY = '_satstar_cover_fallback'
+# key of the per-frame render result that carries "this frame's raw
+# residual/model were read from the LEGACY untokened name" (m3..m7 merge-label
+# token; build_mergedcat_residuals summary line)
+_LABEL_FALLBACK_KEY = '_merge_label_legacy_raw'
 
 
 def _mergedcat_satstar_cover_mode(filtername=None):
@@ -3909,6 +3957,8 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
 
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
+    # m3..m7 per-frame products carry this label (naming.perframe_label_token)
+    _label_ = perframe_label_token(iteration_label, module)
 
     # Per-frame renders are independent, so they can run on threads (shared
     # read-only PSF grid + catalog, no pickling).  Datamodel writes go under
@@ -3979,12 +4029,29 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
         for kind in kinds:
-            stem = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_'
-                    f'{pupil}-{filtername.lower()}-{frame_detector}{visitid_}{vgroupid_}'
-                    f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
-                    f'_daophot_{kind}')
+            legacy_stem = (
+                f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_'
+                f'{pupil}-{filtername.lower()}-{frame_detector}{visitid_}{vgroupid_}'
+                f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
+                f'_daophot_{kind}')
+            # m3..m7: this label's own raw pair (``_lbl{module}``), else the
+            # legacy untokened pair (fitted before the token; counted in the
+            # summary line).  The renders are this label's either way, so
+            # they always carry the token.
+            stem = legacy_stem + _label_
             raw_resid = f'{stem}_residual.fits'
             raw_model = f'{stem}_model.fits'
+            if _label_:
+                _legacy_raw = False
+                if not (os.path.exists(raw_resid) and os.path.exists(raw_model)):
+                    _leg_resid = f'{legacy_stem}_residual.fits'
+                    _leg_model = f'{legacy_stem}_model.fits'
+                    if (os.path.exists(_leg_resid)
+                            and os.path.exists(_leg_model)):
+                        raw_resid, raw_model = _leg_resid, _leg_model
+                        _legacy_raw = True
+                _result[_LABEL_FALLBACK_KEY] = (
+                    _result.get(_LABEL_FALLBACK_KEY, False) or _legacy_raw)
             if not (os.path.exists(raw_resid) and os.path.exists(raw_model)):
                 # This frame is one of the successfully-fit overlapping frames, so
                 # its per-frame residual+model MUST exist.  Missing products would
@@ -4172,7 +4239,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # Accumulate in frame order so the resample input lists are deterministic
     # (identical to the pre-parallel serial append order).
     _n_cover_acc = _n_cover_fallback = 0
+    _n_label_legacy = _n_label_own = 0
     for _orig, _res in zip(overlapping_frames, _frame_results):
+        _lfb = _res.pop(_LABEL_FALLBACK_KEY, None)
+        if _lfb is not None:
+            _n_label_legacy += int(_lfb)
+            _n_label_own += int(not _lfb)
         _fb = _res.pop(_COVER_FALLBACK_KEY, None)
         if _fb is not None:
             _n_cover_fallback += int(_fb)
@@ -4184,6 +4256,13 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 perframe_record.append({'frame': str(_orig), 'kind': kind,
                                         'raw': [raw_resid, raw_model],
                                         'rendered': [out_resid, out_model]})
+    if _label_:
+        print(f"mergedcat {module}/{iteration_label}: raw residual/model of "
+              f"{_n_label_own} frame(s) read from {_label_} names, "
+              f"{_n_label_legacy} from the LEGACY untokened name"
+              + (" (fitted before the per-frame names carried the merge label; "
+                 "such a pair may be another label's fit)"
+                 if _n_label_legacy else ""), flush=True)
     if _cover_mode == 'accepted':
         print(f"mergedcat: satstar cover test per frame: accepted-fit rule in "
               f"{_n_cover_acc}, model-threshold fallback (no usable satstar "
@@ -5792,7 +5871,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                     visit_id, vgroup_id, exposure_id,
                                     iteration_label=options.iteration_label or None,
                                     manual_phase=_phase,
-                                    source_exposure=filename):
+                                    source_exposure=filename,
+                                    merge_label=module):
                                 missing_tasks.add(task_idx)
         finally:
             sys.stdout = _real_stdout
@@ -5898,7 +5978,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                     visit_id, vgroup_id, exposure_id,
                                     iteration_label=options.iteration_label or None,
                                     manual_phase=_skip_phase,
-                                    source_exposure=filename):
+                                    source_exposure=filename,
+                                    merge_label=module):
                                 print(f'skip-if-done: expected output exists for '
                                       f'{filtername} {file_module} visit={visit_id} '
                                       f'vgroup={vgroup_id} exp={exposure_id}; skipping.')

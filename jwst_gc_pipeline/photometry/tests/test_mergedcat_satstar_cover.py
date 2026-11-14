@@ -620,7 +620,10 @@ def test_e2e_perframe_record_names_the_raw_pair_read_and_the_render_written(
     assert raw_model.endswith('_daophot_basic_model.fits')
     assert os.path.exists(raw_resid) and os.path.exists(raw_model)
     out_resid, out_model = rec['rendered']
+    # The fixture writes the raw pair under the LEGACY (untokened) m7 name, so
+    # this is the back-compat fallback; the renders are this label's own and
+    # carry the m3..m7 merge-label token (naming.perframe_label_token).
     assert out_resid == raw_resid.replace('_residual.fits',
-                                          '_mergedcat_residual.fits')
+                                          '_lblnrcb_mergedcat_residual.fits')
     assert out_model == raw_model.replace('_model.fits',
-                                          '_mergedcat_model.fits')
+                                          '_lblnrcb_mergedcat_model.fits')

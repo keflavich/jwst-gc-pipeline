@@ -13,7 +13,8 @@ Bands may span proposals (f212n=2221, f200w=1182): detector unknowns are
 (band, detector) so cross-band pairs measure filteroffset+module consistency.
 """
 import sys, glob, os, re, itertools, warnings, collections
-from jwst_gc_pipeline.photometry.naming import OBS_TOKEN_CAPTURE
+from jwst_gc_pipeline.photometry.naming import (
+    OBS_TOKEN_CAPTURE, glob_perframe_catalogs)
 warnings.filterwarnings('ignore')
 import numpy as np
 from astropy.table import Table
@@ -43,7 +44,9 @@ FrameKey = collections.namedtuple('FrameKey',
 
 cats = {}   # FrameKey -> dict(ra, dec, n)
 for band, stage in spec:
-    for f in sorted(glob.glob(f'{B}/{band.upper()}/{band}_nrc*_visit*_vgroup*_exp*_{stage}_daophot_basic.fits')):
+    # legacy and m3..m7 merge-label-tokened names, ONE per frame (two
+    # spellings of a frame would share a FrameKey and overwrite each other)
+    for f in glob_perframe_catalogs(f'{B}/{band.upper()}/{band}_nrc*_visit*_vgroup*_exp*_{stage}_daophot_basic.fits')[0]:
         # NOT an f-string: `{3}` and `{4,5}` are replacement fields inside one,
         # so the token fragment would compile to `o\d3|j\d(4, 5)` -- which does
         # not match a token AND adds a capturing group that shifts every index

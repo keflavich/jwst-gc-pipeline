@@ -135,18 +135,24 @@ def _is_protected_name(path):
 # --------------------------------------------------------------------------
 # Filename grammar.  The per-frame stem is
 #   jw<prop>-o<field>_t001_<inst>_<pupil>-<filt>-<detector><visit><vgroup>
-#   <exp><desat><bgsub><epsf><blur><group>_<label>_daophot_<kind>[_mergedcat]
-#   _<residual|model>.fits
+#   <exp><desat><bgsub><epsf><blur><group>_<label>_daophot_<kind>[_lbl<merge>]
+#   [_mergedcat]_<residual|model>.fits
 # so the label always sits immediately before ``_daophot_``.  ``[a-z]+`` cannot
 # span the underscore in ``basic_mergedcat``, which is what keeps the raw and
 # mergedcat patterns from matching each other; they are still ordered
-# mergedcat-first so a future kind name cannot blur them.
+# mergedcat-first so a future kind name cannot blur them.  ``_lbl<merge>`` is
+# the m3..m7 merge-label token (``photometry.naming.perframe_label_token``):
+# the module pass and the ``merged`` pass of one frame write separate files
+# there.  The rules key on the STAGE label, so a tokened product is retired
+# exactly when its legacy spelling would be.
 # --------------------------------------------------------------------------
 _LABEL = r'(?P<label>m\d+|iter\d+)'
+_MERGE_TOKEN = r'(?:_lbl[a-z0-9]+)?'
 PERFRAME_MERGEDCAT_RE = re.compile(
-    _LABEL + r'_daophot_[a-z]+_mergedcat_(residual|model)\.fits$')
+    _LABEL + r'_daophot_[a-z]+' + _MERGE_TOKEN
+    + r'_mergedcat_(residual|model)\.fits$')
 PERFRAME_RAW_RE = re.compile(
-    _LABEL + r'_daophot_[a-z]+_(residual|model)\.fits$')
+    _LABEL + r'_daophot_[a-z]+' + _MERGE_TOKEN + r'_(residual|model)\.fits$')
 
 CORE_DUMP_RE = re.compile(r'(^core\.[^/]*$|\.core$)')
 

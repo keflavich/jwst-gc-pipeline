@@ -53,11 +53,12 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
 from jwst_gc_pipeline.reduction import alignment_config as ac
+from jwst_gc_pipeline.photometry.naming import perframe_variant_summary
 from jwst_gc_pipeline.reduction.bulk_offset_step0 import (
     BULK_NO_ROW, BULK_NONE, BULK_TABLE_ABSENT, BULK_VISITS_DISAGREE,
     BULK_VISITS_MIXED, REFCAT_PATTERNS, BulkOffsetVerificationError,
     applied_bulk_mas, bulk_tie_state, default_catalog_glob,
-    default_frame_glob, duplicate_exposure_catalogs,
+    default_catalog_paths, default_frame_glob, duplicate_exposure_catalogs,
     recorded_bulk_over_visits, refcat_for_frame,
     reference_frame_matches_refcat, step0_bulk_offset, verify_tolerance_mas,
 )
@@ -155,7 +156,14 @@ def main(argv=None):
     # against a 100 mas tolerance.
     cat_glob = args.catalog_glob or default_catalog_glob(
         basepath, filt, args.mtag)
-    cat_paths = sorted(glob.glob(cat_glob))
+    if args.catalog_glob:
+        cat_paths = sorted(glob.glob(cat_glob))
+    else:
+        # m3..m7: also the merge-label-tokened names, one spelling per frame
+        cat_paths, variant_counts = default_catalog_paths(
+            basepath, filt, args.mtag)
+        if variant_counts['labelled']:
+            print(f"[step0] {perframe_variant_summary(variant_counts, f'{filt}{args.mtag}', 'any (module-blind)')}")
     if not cat_paths:
         print(f"ERROR: no catalogs matched {cat_glob}. Either this field has not "
               f"been cataloged at {args.mtag}, or it reached a different stage -- "

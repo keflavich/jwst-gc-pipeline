@@ -1032,7 +1032,13 @@ def enumerate_field(field_name, include_perframe=False, include_releases=True,
     out = {'catalogs': sorted(p for p in glob.glob(os.path.join(base, 'catalogs', '*'))
                               if os.path.isfile(p))}
     if include_perframe:
-        out['perframe'] = sorted(glob.glob(os.path.join(base, 'F*', '*_m[0-9]*_daophot_basic.fits')))
+        # legacy and m3..m7 merge-label-tokened per-frame names
+        # (``..._daophot_basic_lbl<label>.fits``); every file is listed, the
+        # rotation applies to each.
+        out['perframe'] = sorted(set(
+            glob.glob(os.path.join(base, 'F*', '*_m[0-9]*_daophot_basic.fits'))
+            + glob.glob(os.path.join(base, 'F*',
+                                     '*_m[0-9]*_daophot_basic_lbl*.fits'))))
     if include_releases:
         out['release'] = sorted(glob.glob(os.path.join(release_root, 'v*', '**', field_name,
                                                        'catalogs', '*.fits'), recursive=True))
