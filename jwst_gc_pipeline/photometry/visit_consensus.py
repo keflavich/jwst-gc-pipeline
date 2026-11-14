@@ -24,7 +24,7 @@ from collections import Counter
 
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, search_around_sky
 from astropy.table import Table
 
 from scipy.spatial import cKDTree
@@ -32,7 +32,7 @@ from scipy.spatial import cKDTree
 from .astrometry_offsets import (
     measure_offset, measure_offset_grid, agree_across_references,
     local_residual_map, same_star_region_map, GlobalTieNotVerifiedError,
-    KDTreeReference, _unit_xyz, _chord,
+    residual_vs_magnitude, KDTreeReference, _unit_xyz, _chord,
 )
 from .reference_uncertainty import SIGMA_PRED_COLUMN
 
@@ -334,6 +334,38 @@ SPARSE_ARBITER_MIN_SEP_MAS = 10.0 * REFERENCE_CROSSCHECK_GROSS_MAS
 SPARSE_ARBITER_MIN_DENSE_CONTRAST = 20.0
 SPARSE_ARBITER_MAX_SPARSE_CONTRAST = 10.0
 SPARSE_ARBITER_MIN_PEAK_RATIO = 5.0
+
+# --- caller-supplied bulk prior (issue #819, opt-in per field) ----------------
+# ``measure_reference_tie`` pairs same-star residuals only after check A (the
+# dense-reference histogram) has verified a small tie.  crowded_l3 (9438/o006)
+# F150W/F182M/F210M read a zero-prior same-star offset of 51-59 mas on 1600-1700
+# pairs each, in one direction, while their dense-reference histograms peaked at
+# contrast 3.7-8 and were refused -- so the noisy histogram locked out the
+# estimator that would have replaced it.  A hand-recorded prior (``bulk_prior``)
+# seeds the pairing in that case ONLY.  A seed is not a measurement, so the
+# prior path replaces check A with the four checks below, all required:
+#   1. pair excess: tight pairs at the same-star tie against the same count with
+#      the reference displaced by PRIOR_CONTROL_SHIFT_ARCSEC in four directions;
+#   2. magnitude stability: ``residual_vs_magnitude`` about the same-star tie is
+#      clean over at least PRIOR_MIN_MAGNITUDE_BINS bins;
+#   3. cross-filter coherence: the same-star tie agrees with every recorded
+#      sibling value to within PRIOR_COHERENCE_TOL_MAS, with at least one given;
+#   4. the same-star region map and the sparse cross-check, which gate
+#      ``apply_ok`` exactly as for any dense tie.
+# The thresholds are provisional: they have been exercised on synthetic fields
+# only.  Calibrating PRIOR_PAIR_EXCESS_MIN_RATIO against crowded_l3 F335M (a
+# verified tie) and a deliberately wrong prior on F140M is still to do, and the
+# policy question (issue #819, Q23) is not settled, so no field carries a prior
+# in ``alignment_config`` yet.
+#: The prior must itself satisfy ``local_residual_map``'s precondition,
+#: ``off <= match_radius / 3``.
+PRIOR_MAX_OFF_MAS = SAMESTAR_MATCH_RADIUS.to(u.mas).value / 3.0
+PRIOR_PAIR_RADIUS_ARCSEC = SAMESTAR_MATCH_RADIUS.to(u.arcsec).value / 3.0
+PRIOR_CONTROL_SHIFT_ARCSEC = 1.5
+PRIOR_PAIR_EXCESS_MIN_RATIO = 3.0
+PRIOR_PAIR_EXCESS_MIN_SIGMA = 5.0
+PRIOR_MIN_MAGNITUDE_BINS = 3
+PRIOR_COHERENCE_TOL_MAS = 10.0
 
 # VIRAC2 is a Ks-selected survey; Ks pivot wavelength (um).  The JWST filter
 # closest to this is the most reliable absolute anchor for cross-filter checks.
@@ -1697,14 +1729,169 @@ def _magnitude_windowed_match(consensus_coords, consensus_mag, ref_coords, ref_m
                 off=cell["off_mas"], n=cell["n"])
 
 
+def _bulk_prior_seed(bulk_prior):
+    """The synthetic verified-global-tie dict ``local_residual_map`` accepts.
+
+    ``bulk_prior`` is ``dict(dra_mas, ddec_mas, source=..., coherence=[dict(
+    label, dra_mas, ddec_mas), ...])`` in on-sky mas, same sign as
+    ``measure_offset`` (the correction to ADD to the consensus).  A prior larger
+    than ``PRIOR_MAX_OFF_MAS`` cannot seed an unambiguous pairing, so it is a
+    configuration error and raises rather than being refused quietly.
+    """
+    dra = float(bulk_prior["dra_mas"])
+    ddec = float(bulk_prior["ddec_mas"])
+    off = float(np.hypot(dra, ddec))
+    if not (np.isfinite(dra) and np.isfinite(ddec)) or off > PRIOR_MAX_OFF_MAS:
+        raise ValueError(
+            f"bulk_prior ({dra:+.1f}, {ddec:+.1f}) mas is not finite or exceeds "
+            f"{PRIOR_MAX_OFF_MAS:.0f} mas (match radius / 3), so same-star pairs "
+            f"seeded from it would be ambiguous")
+    return dict(ok=True, swept=False, dra=dra, ddec=ddec, off=off,
+                contrast=float("nan"), n_peak=0, prior=True,
+                source=str(bulk_prior.get("source", "bulk_prior")))
+
+
+def _tight_pair_count(coords, ref_coords, dra_mas, ddec_mas, radius_arcsec):
+    """Number of ``coords`` sources with a reference star within ``radius_arcsec``
+    once ``coords`` is moved by the on-sky offset (``dra_mas``, ``ddec_mas``).
+
+    A count of sources, not a position statistic: it carries no nearest-neighbour
+    median, so it cannot collapse toward zero the way CLAUDE.md rule #1 bans.
+    """
+    moved = coords.spherical_offsets_by(dra_mas * u.mas, ddec_mas * u.mas)
+    ia, _ib, _sep, _ = search_around_sky(moved, ref_coords,
+                                         radius_arcsec * u.arcsec)
+    return int(np.unique(ia).size)
+
+
+def _prior_pair_excess(coords, ref_coords, same_star):
+    """Tight-pair count at the same-star tie against the same count with the
+    reference displaced by +-``PRIOR_CONTROL_SHIFT_ARCSEC`` in RA and Dec.
+
+    Displaced well outside the pairing radius, the control counts chance
+    coincidences at the local density; a seed that landed on noise gives a ratio
+    near one.
+    """
+    n_peak = _tight_pair_count(coords, ref_coords, same_star["dra"],
+                               same_star["ddec"], PRIOR_PAIR_RADIUS_ARCSEC)
+    shift = PRIOR_CONTROL_SHIFT_ARCSEC * 1000.0
+    controls = [
+        _tight_pair_count(coords, ref_coords, same_star["dra"] + sx,
+                          same_star["ddec"] + sy, PRIOR_PAIR_RADIUS_ARCSEC)
+        for sx, sy in ((shift, 0.0), (-shift, 0.0), (0.0, shift), (0.0, -shift))]
+    n_control = float(np.mean(controls))
+    ratio = float(n_peak) / max(n_control, 1.0)
+    sigma = (float(n_peak) - n_control) / np.sqrt(max(n_control, 1.0))
+    return dict(n_peak=n_peak, n_control=n_control, controls=controls,
+                ratio=ratio, excess_sigma=float(sigma),
+                min_ratio=PRIOR_PAIR_EXCESS_MIN_RATIO,
+                min_sigma=PRIOR_PAIR_EXCESS_MIN_SIGMA,
+                radius_arcsec=PRIOR_PAIR_RADIUS_ARCSEC,
+                passed=bool(ratio >= PRIOR_PAIR_EXCESS_MIN_RATIO
+                            and sigma >= PRIOR_PAIR_EXCESS_MIN_SIGMA))
+
+
+def _verify_bulk_prior(coords, ref_coords, consensus_mag, same_star, bulk_prior,
+                       context=""):
+    """The checks that stand in for check A when a prior seeded the tie.
+
+    Every check is required and a check that cannot run counts as failed, so
+    a prior is never accepted on fewer checks than the histogram path uses.
+    The region map and the sparse cross-check are not repeated here; they gate
+    ``apply_ok`` through the ordinary path.
+    """
+    reasons = []
+    if same_star is None:
+        return dict(passed=False, reasons=["no same-star pairs around the prior"],
+                    pair_excess=None, magnitude=None, coherence=None)
+    if same_star["off"] > PRIOR_MAX_OFF_MAS:
+        # The pairs were found within the match radius of the seed, so a result
+        # this far out is the edge of what the seed could see, not a tie that
+        # same-star pairing can verify (the true offset may be larger still).
+        return dict(
+            passed=False, pair_excess=None, magnitude=None, coherence=None,
+            reasons=[f"same-star tie {same_star['off']:.1f} mas exceeds the "
+                     f"{PRIOR_MAX_OFF_MAS:.0f} mas an unambiguous pairing "
+                     f"supports"])
+    excess = _prior_pair_excess(coords, ref_coords, same_star)
+    if not excess["passed"]:
+        reasons.append(
+            f"pair excess {excess['n_peak']} vs control {excess['n_control']:.1f} "
+            f"(ratio {excess['ratio']:.2f} < {PRIOR_PAIR_EXCESS_MIN_RATIO} or "
+            f"{excess['excess_sigma']:.1f} sigma < {PRIOR_PAIR_EXCESS_MIN_SIGMA})")
+
+    magnitude = dict(ran=False, passed=False)
+    if consensus_mag is None:
+        reasons.append("no consensus magnitudes for the magnitude-stability check")
+    else:
+        about = dict(ok=True, swept=False, dra=same_star["dra"],
+                     ddec=same_star["ddec"], off=same_star["off"])
+        try:
+            rvm = residual_vs_magnitude(
+                coords, ref_coords, np.asarray(consensus_mag, dtype=float), about,
+                match_radius=SAMESTAR_MATCH_RADIUS,
+                context=f"{context} prior magnitude-stability")
+        except GlobalTieNotVerifiedError as exc:
+            rvm = None
+            reasons.append(f"magnitude-stability check refused: {exc}")
+        if rvm is not None:
+            magnitude = dict(
+                ran=True, n_bins=rvm["n_bins"], n_flagged=rvm["n_flagged"],
+                slope_significant=rvm["slope_significant"],
+                worst_off_mas=rvm["worst_off_mas"], clean=rvm["clean"],
+                min_bins=PRIOR_MIN_MAGNITUDE_BINS,
+                passed=bool(rvm["clean"]
+                            and rvm["n_bins"] >= PRIOR_MIN_MAGNITUDE_BINS))
+            if not magnitude["passed"]:
+                reasons.append(
+                    f"bulk not stable over magnitude ({rvm['n_bins']} bins, "
+                    f"{rvm['n_flagged']} flagged, slope significant "
+                    f"{rvm['slope_significant']}; need clean and >= "
+                    f"{PRIOR_MIN_MAGNITUDE_BINS} bins)")
+
+    refs = list(bulk_prior.get("coherence") or [])
+    rows = []
+    for ref in refs:
+        sep = float(np.hypot(same_star["dra"] - float(ref["dra_mas"]),
+                             same_star["ddec"] - float(ref["ddec_mas"])))
+        rows.append(dict(label=str(ref.get("label", "")), sep_mas=sep,
+                         ok=bool(sep <= PRIOR_COHERENCE_TOL_MAS)))
+    coherence = dict(refs=rows, tol_mas=PRIOR_COHERENCE_TOL_MAS,
+                     passed=bool(rows and all(r["ok"] for r in rows)))
+    if not rows:
+        reasons.append("no sibling value to check cross-filter coherence against")
+    elif not coherence["passed"]:
+        worst = max(rows, key=lambda r: r["sep_mas"])
+        reasons.append(
+            f"same-star tie is {worst['sep_mas']:.1f} mas from {worst['label']} "
+            f"(> {PRIOR_COHERENCE_TOL_MAS} mas)")
+    return dict(passed=not reasons, reasons=reasons, pair_excess=excess,
+                magnitude=magnitude, coherence=coherence)
+
+
 def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                           filtername=None, consensus_mag=None, ref_mag=None,
                           agree_tol_mas=REFERENCE_AGREE_TOL_MAS,
                           gross_tol_mas=REFERENCE_CROSSCHECK_GROSS_MAS,
                           grid_nx=6, grid_ny=6, dense=True, context="",
-                          ref_sigma_pred_mas=None, ref_sigma_cap_mas=None):
+                          ref_sigma_pred_mas=None, ref_sigma_cap_mas=None,
+                          bulk_prior=None):
     """Tie the visit consensus to the absolute reference with MULTIPLE
     independent checks.  No single number signs off (CLAUDE.md).
+
+    ``bulk_prior`` (issue #819): ``None`` (the default) reproduces the
+    prior-free behaviour exactly, down to the record's key set.  A dict
+    ``dict(dra_mas, ddec_mas, source, coherence=[dict(label, dra_mas, ddec_mas),
+    ...])`` is used ONLY when check A fails to verify a tie (no coherent peak, or
+    a rejected window-edge alias); a tie that check A verifies ignores it.  The
+    prior then seeds the single-cell same-star pairing in place of the histogram
+    result and stands in for ``vs_full`` everywhere downstream, so ``apply_ok``
+    can be True; the histogram result stays in ``vs_full``.  Because a seed is
+    not a measurement the tie must also pass the pair-excess, magnitude-stability
+    and cross-filter-coherence checks (``_verify_bulk_prior``), in addition to
+    the region map and the sparse cross-check; ``bulk_source`` is
+    ``"same-star-prior"`` and the verdicts are recorded under ``bulk_prior``.
+    The prior must lie within ``PRIOR_MAX_OFF_MAS`` of zero, else ``ValueError``.
 
     ``ref_sigma_pred_mas`` (issue #965 item 1): per-star predicted reference
     position uncertainty, row-aligned with ``ref_coords_all``
@@ -1933,6 +2120,15 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     # residual via local_residual_map -- which itself REFUSES unless the global tie
     # is verified small (so pairs are unambiguous; the sanctioned refinement, not
     # dense NN-median). A large/unverified tie keeps the histogram value.
+    #
+    # A caller-supplied prior (issue #819) takes check A's place ONLY when A did
+    # not verify a tie.  The seed then plays res_a's role in this block, in the
+    # region map and in the final verdict; `vs_full` keeps the histogram result.
+    vs_full_histogram = res_a
+    prior_engaged = bool(bulk_prior is not None
+                         and (res_a is None or not res_a.get("ok")))
+    if prior_engaged:
+        res_a = _bulk_prior_seed(bulk_prior)
     same_star = None
     if res_a is not None and res_a.get("ok") and not res_a.get("swept"):
         try:
@@ -1961,6 +2157,31 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     bulk = same_star if same_star is not None else res_a
     bulk_source = ("same-star" if same_star is not None
                    else "histogram" if res_a is not None else "none")
+    prior_check = None
+    if prior_engaged:
+        bulk_source = "same-star-prior" if same_star is not None else "prior"
+        prior_check = _verify_bulk_prior(
+            consensus_coords, ref_coords_all, consensus_mag, same_star,
+            bulk_prior, context=context)
+        # The histogram legs above measured the dense peak that failed, so their
+        # separation from the sparse peak says nothing about the prior-seeded
+        # tie.  Re-ask the gross question of the tie actually adopted.
+        sparse_noise_vs_dense = False
+        sparse_untrustworthy = bool(
+            res_b is None or res_b.get("ok") is False
+            or res_b.get("alias_rejected") is True
+            or res_b.get("window_consistent") is False)
+        sep_mas = (float(np.hypot(bulk["dra"] - res_b["dra"],
+                                  bulk["ddec"] - res_b["ddec"]))
+                   if (same_star is not None and res_b is not None
+                       and res_b.get("ok")) else float("nan"))
+        cross_gross_ok = bool((not np.isfinite(sep_mas)) or sparse_untrustworthy
+                              or sep_mas <= gross_tol_mas)
+        prior_check["cross_reference_sep_mas"] = sep_mas
+        prior_check.update(
+            dra_mas=float(bulk_prior["dra_mas"]),
+            ddec_mas=float(bulk_prior["ddec_mas"]),
+            source=str(bulk_prior.get("source", "bulk_prior")), engaged=True)
 
     # Per-tile check D (``grid``) requires a DENSE reference.  Measured against a
     # Gaia-ONLY refcat (no VIRAC2 component, ``dense=False`` -- e.g. w51, outside
@@ -2168,12 +2389,15 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
         grid_aligned=(per_tile_same_star or {}).get("grid_aligned"),
         n_low_coverage=(per_tile_same_star or {}).get("n_low_coverage"))
 
+    if prior_engaged and not prior_check["passed"]:
+        # The seed was never verified, so it must not satisfy `apply_ok`.
+        res_a = dict(res_a, ok=False)
     apply_ok = bool(res_a is not None and res_a.get("ok")
                     and (per_tile_ok or per_tile_unmeasurable_exempt
                          or per_tile_bulk_dominant_exempt
                          or per_tile_small_bulk_exempt)
                     and cross_gross_ok)
-    out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
+    out = dict(vs_full=vs_full_histogram, vs_sparse=res_b, cross_reference=agree,
                cross_reference_gross_ok=cross_gross_ok,
                # WHY it passed: without this, a gross_ok=True recorded because the
                # cross-reference was noise is indistinguishable from one recorded
@@ -2209,6 +2433,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                per_tile_source=per_tile_source, reference_dense=bool(dense),
                flux_matched=fluxmatched, same_star=same_star,
                bulk_source=bulk_source, apply_ok=apply_ok)
+    if bulk_prior is not None:
+        # Only when a prior was supplied: a prior-free call keeps its record
+        # byte-identical to the pre-#819 one.
+        out["bulk_prior"] = (
+            dict(prior_check, vs_prior=res_a) if prior_engaged
+            else dict(engaged=False, passed=None,
+                      reason="check A verified a tie; the prior was not used"))
     if bulk is not None:
         out.update(dra_mas=bulk["dra"], ddec_mas=bulk["ddec"],
                    dra_err_mas=bulk.get("dra_err", float("nan")),

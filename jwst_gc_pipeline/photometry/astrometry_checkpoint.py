@@ -3952,6 +3952,38 @@ def resolve_tie_reference(refcat, basepath, proposal_id, field, filtername,
     )
 
 
+def attach_bulk_prior(refcat, proposal_id, field, filtername):
+    """``refcat`` carrying this filter's hand-recorded bulk prior, if any.
+
+    Byte-for-byte ``refcat`` (the same object) unless
+    ``alignment_config.resolve(proposal_id, field).bulk_prior_mas`` has an entry
+    for ``filtername``, so a field without one is untouched.  Otherwise a copy
+    with ``bulk_prior`` = ``dict(dra_mas, ddec_mas, source, coherence=[...])``,
+    where ``coherence`` lists the OTHER filters' entries of the same field:
+    ``measure_reference_tie`` requires the prior-seeded tie to agree with them
+    (issue #819).  ``run_visit_checkpoint`` hands the prior to the tie only at a
+    correcting stage; a frozen stage measures a corrected frame, where the
+    histogram verifies the tie and a prior would be unused anyway.
+    """
+    from jwst_gc_pipeline.reduction import alignment_config as _alignment_config
+    if refcat is None:
+        return None
+    cfg = _alignment_config.resolve(proposal_id, field)
+    priors = {str(k).upper(): v for k, v in (cfg.bulk_prior_mas.items()
+                                             if cfg is not None else ())}
+    mine = priors.get(str(filtername).upper())
+    if mine is None:
+        return refcat
+    out = dict(refcat)
+    out["bulk_prior"] = dict(
+        dra_mas=float(mine[0]), ddec_mas=float(mine[1]),
+        source=f"alignment_config.bulk_prior_mas[{str(filtername).upper()}]",
+        coherence=[dict(label=k, dra_mas=float(v[0]), ddec_mas=float(v[1]))
+                   for k, v in sorted(priors.items())
+                   if k != str(filtername).upper()])
+    return out
+
+
 def _m2_consensus_catalog(record_dir, basepath, filtername, obs_token=""):
     """(SkyCoord, magnitude array or None, path) of the m2 consensus catalog.
 
@@ -4768,6 +4800,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 filtername=filt, consensus_mag=tie_mag,
                 ref_mag=tie_refcat.get("mag"), dense=tie_refcat.get("dense", True),
                 **_sigma_cut_kwargs(tie_refcat),
+                bulk_prior=(tie_refcat.get("bulk_prior") if correcting else None),
                 context=vctx)
             # Provenance: which CATALOG this tie measured against.  Every
             # field's default is VIRAC2 itself (`tie_refcat` carries no

@@ -266,6 +266,19 @@ class FieldAlignment:
     #: more likely a failed detection run than a faint field.  Add a pair only
     #: after confirming the frames really contain no detections.
     empty_filters: Tuple[str, ...] = ()
+    #: ``{filter: (dra_mas, ddec_mas)}`` -- hand-recorded on-sky bulk offsets
+    #: (the correction to ADD, the sign ``measure_reference_tie`` reports) that
+    #: seed the m2 same-star pairing for a filter whose dense-reference histogram
+    #: verifies no tie (issue #819).  A prior is consulted only when that
+    #: histogram fails, the result must then pass the pair-excess,
+    #: magnitude-stability and cross-filter-coherence checks in
+    #: ``visit_consensus._verify_bulk_prior``, and each entry's coherence is
+    #: checked against the OTHER entries of the same field, so give every band of
+    #: a shared offset its own measured value.  Each value must be within 100 mas
+    #: of zero.  Empty by default: no field carries a prior until the policy
+    #: question in issue #819 (Q23) is answered.  Provenance of every value
+    #: belongs in ``notes``.
+    bulk_prior_mas: Dict[str, Tuple[float, float]] = _dc_field(default_factory=dict)
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
