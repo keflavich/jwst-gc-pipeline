@@ -419,6 +419,7 @@ still run after m6.
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
 | `--mergedcat-render-procs` / `--forced-fill-procs` (forked processes over the frames of the merged-catalog render / of the m8 fill; output identical to the serial loop, #1230) | 1 / 1 | serial (set per job through the submitters' `EXTRA_ARGS`) | | |
+| `--forced-fill-bkg-scatter` (`forced_fill_bkg_scatter`; adds each m8 source's annulus scatter, 1.4826 MAD at 2.5-4.5 FWHM, to the crf ERR in quadrature; writes `forced_bkg_sigma_<filter>`; #1120) | off | crf ERR only | | |
 | `--each-suffix` | `destreak_o001_crf` | per-reduction | | |
 | `--cutout-region` / `--cutout-label` / `--cutout-size-arcsec` | `''`/`''`/5.0 | full-frame | | |
 | `--inject-stars` / `--inject-seed` | `''`/0 | off (cutout-only; reference-field truth, `injection.py`) | | |
