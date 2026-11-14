@@ -211,6 +211,17 @@ MANUAL_DEFAULTS = {
     # gate (1.0) left them unsubtracted in the m7 residual
     # (docs/evidence/m7_companion_ratio).
     'manual_m7_seed_own_band_companion_max_ratio': 0.1,
+    # Seed dedup (#1206): a cross-band position and an own-band m6 position of
+    # one star differ by more than the 30 mas match radius in the red bands
+    # (Brick F405N pairs: 31 / 41 / 61 mas at p10 / 50 / 90, FWHM 136 mas),
+    # and the seed pair then fits the star twice.  The cross-band to own-band
+    # match radius becomes max(manual_crossband_seed_max_sep_mas, this x FWHM),
+    # and own-band sources closer than this x FWHM to a cross-band position or
+    # to a brighter own-band source are not added.  0.5 FWHM = 31 / 32 / 36 /
+    # 68 mas in F182M / F187N / F212N / F405N, below the 0.75 FWHM of the
+    # closest resolved pairs.  0 disables (match radius = max_sep_mas alone).
+    # Unrelated to manual_crossband_seed_dedup_mas, the older union-seed dedup.
+    'manual_m7_seed_dedup_fwhm': 0.5,
     # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.

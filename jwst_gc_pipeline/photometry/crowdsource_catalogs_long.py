@@ -5180,7 +5180,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'write the nrca/nrcb ECSVs (~1 h each on sgrb2).'))
     parser.add_option('--manual-crossband-seed-dedup-mas', type=float,
                       dest='manual_crossband_seed_dedup_mas', default=30.0,
-                      help=('Dedup radius (mas) for the m7 cross-band union seed: '
+                      help=('Dedup radius (mas) for the m7 cross-band union seed '
+                            '(the per-band seed uses --manual-m7-seed-dedup-fwhm): '
                             'a star seen in N co-aligned filters appears N times '
                             'within ~25 mas, so the union is deduped to one seed '
                             'per star before fitting (avoids degenerate co-located '
@@ -5236,6 +5237,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help='The companion cut leaves out an own-band source only when '
                            'its flux is below this fraction of the neighbour\'s.  1.0 '
                            'cuts every fainter source within the radius.  Default 0.1.')
+    parser.add_option('--manual-m7-seed-dedup-fwhm',
+                      dest='manual_m7_seed_dedup_fwhm', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'],
+                      help='With --manual-m7-seed-own-band: the cross-band to own-band '
+                           'match radius of the band seed is max(match radius, this x '
+                           'FWHM), and own-band sources within this many FWHM of a '
+                           'cross-band position or of a brighter own-band source are '
+                           'not added (one star, two seeds).  0 disables.  Default 0.5.  '
+                           'Not --manual-crossband-seed-dedup-mas, the dedup of the older '
+                           'union seed.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
