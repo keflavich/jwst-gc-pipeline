@@ -42,6 +42,16 @@ def test_flags_rule_leaves_rows_with_another_route():
     assert _kept(_mk([2.5, 2.5, 2.5]), prop_floor_drop_flags=True) == set()
 
 
+def test_flags_rule_leaves_recovered_rows():
+    # qfit 0.5 lies in the recover tier (qfit_max 0.4 < 0.5 <= 0.6); the gate
+    # is off, so the recover tier is a second star-like route besides flags
+    t = _mk([2.5, 2.5, 2.5])
+    kw = dict(qfit_recover_max=0.6, recover_prom_gate=False)
+    assert _kept(t, **kw) == {0, 1, 2}
+    assert _kept(t, prop_floor_drop_flags=True, **kw) == {0, 1, 2}
+    assert _kept(t, prop_floor_drop_flags=True) == set()
+
+
 def test_guard_inert_without_propagated_floor():
     t = _mk([2.5, 5.0, 10.0])
     t['flux_err'] = [10.0, 5.0, 4.0]
