@@ -465,6 +465,14 @@ Each cost real time or coverage this week, and none of them raises anything.
          WAITING ON THE LOCK: 3 item(s)
            o105 NIRCam -- no RGB yet
 
+   When `publish_hips_layers.py` meets a held lock it judges the holder in this
+   order (#953). A lock line may end in `job=<SLURM job id>`; a listed job
+   (`squeue`) keeps the lock up to 10 h, and a job that has left the queue
+   releases it after a 10 min grace. A line with no job id, or an `squeue` that
+   cannot answer, is judged by file age: `HIPS_LOCK_STALE_S`, default 10 h
+   (the builder job's wall is 8 h). While it holds the lock the publisher
+   touches the file every 5 min.
+
 2. **A missing input reported as a build failure** — the `MIRI_MATCH_JSON` case
    above.
 
