@@ -941,6 +941,7 @@ def catalog_zoom_diagnostic(data, modsky, zoomcut, stars):
 # and _L.<name> access from cataloging.py) keep working unchanged.
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     refresh_satstar_skycoords)
+from jwst_gc_pipeline.photometry.satstar_position_qa import log_satstar_position_qa
 from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.column_utils import (
     _XY_COLUMN_CANDIDATES, _get_source_xy, _column_to_float_array,
@@ -2029,6 +2030,9 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                   f"predates the frame's current WCS; re-projected its "
                   f"{len(tbl)} sources by {shift[0]:+.1f}/{shift[1]:+.1f} mas",
                   flush=True)
+        # After the re-projection, so the anchor is on the current frame (#951).
+        log_satstar_position_qa(tbl, frame_path=filename,
+                                label=os.path.basename(cache_name))
         return tbl
 
     extended_filename = filename.replace(
@@ -2104,7 +2108,10 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             # whether its own inputs match without rerunning the fitter.
             _satstar_cache.stamp_content_key(_fresh, _content_key)
     if os.path.exists(satstar_filename):
-        return Table.read(satstar_filename)
+        tbl = Table.read(satstar_filename)
+        log_satstar_position_qa(tbl, frame_path=filename,
+                                label=os.path.basename(satstar_filename))
+        return tbl
     return None
 
 
