@@ -1564,7 +1564,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if dfr:
         parts.append(dfr)
     # Single-group (G1-only) pixels flagged from the ramp change the seeds and
-    # the fit on frames that have any; a catalog fitted without it is stale.
+    # the fit on frames that get flagged ('g1': the auto gate said biased, or
+    # G1ONLY_SAT_DQ=1); a catalog fitted without it is stale there.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1 = g1only_dq.signature(filename)
     if g1:
@@ -6750,10 +6751,12 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     """
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
-    # Single-group (G1-only) NIRCam pixels carry a ~0.75x rate with clean DQ;
-    # flag them SATURATED|DO_NOT_USE (+ NaN) from the sibling _ramp.fits so
-    # the finder seeds them and the first-read recovery rebuilds them.
-    # In memory, idempotent; G1ONLY_SAT_DQ=0 disables.  See g1only_dq.py.
+    # Single-group (G1-only) NIRCam pixels carry a 0.75x rate with clean DQ on
+    # frames whose ramp fit divided G1 by TGROUP; flag them SATURATED|DO_NOT_USE
+    # (+ NaN) from the sibling _ramp.fits so the finder seeds them and the
+    # first-read recovery rebuilds them.  G1ONLY_SAT_DQ=auto (default) decides
+    # per frame from the data.  In memory, idempotent; G1ONLY_SAT_DQ=0
+    # disables.  See g1only_dq.py.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1only_dq.apply_to_hdul(fh, filename, label='satstar')
     data = fh['SCI'].data
