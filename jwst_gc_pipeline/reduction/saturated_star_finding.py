@@ -2434,6 +2434,25 @@ def stamp_zeroframe_provenance(target, prov):
     return target
 
 
+def stamp_deblend_stats(target, stats):
+    """Write the ZEROFRAME deblend counts onto a header or table meta (#1196).
+
+    ``DBLNCMP`` counts the components the deblender ran on, ``DBLNSPL`` those
+    it split into more than one star and ``DBLFAIL`` those whose deblend raised
+    and kept their centroid.  Nothing is written when ``stats`` is None, so a
+    frame fitted without the deblend carries none of them.
+    """
+    if stats is None:
+        return target
+    target['DBLNCMP'] = (int(stats.get('n_components', 0)),
+                         'components the ZEROFRAME deblend ran on')
+    target['DBLNSPL'] = (int(stats.get('n_split', 0)),
+                         'components split into >1 star')
+    target['DBLFAIL'] = (int(stats.get('n_failed', 0)),
+                         'components whose deblend raised')
+    return target
+
+
 def zeroframe_row_provenance(prov, rim, sources, src_label, comp_slice=None):
     """Per-source ZEROFRAME columns ``(zf_fit, zf_rim_in_core, zf_nrim_src)``.
 
@@ -3999,6 +4018,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # this block is skipped and the behaviour is identical to before (one seed per
     # component at its refined centroid).
     _deblend_big_grid = None
+    _dbl_stats = None
     if zeroframe is not None and zeroframe_deblend:
         from .satstar_deblend import build_deblended_source_records
         _inst_repl = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
@@ -6321,6 +6341,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # pixels, the stamp values keep their own *_cutout columns, and id is
         # a running index (#949).
         base_tab = finalize_satstar_columns(base_tab)
+        stamp_deblend_stats(base_tab.meta, _dbl_stats)
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image

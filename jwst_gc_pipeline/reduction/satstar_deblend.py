@@ -23,7 +23,7 @@ from scipy.spatial import cKDTree
 try:
     from skimage.feature import peak_local_max
     _HAVE_SKIMAGE = True
-except Exception:
+except ImportError:
     _HAVE_SKIMAGE = False
 
 
@@ -555,10 +555,21 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
     Parameters mirror ``deblend_blob_zeroframe``.  ``zeroframe`` is the ZEROFRAME
     (frame zero) array from the matching ``_ramp.fits`` (raw DN).
 
-    ``stats``, when a dict, is filled with ``n_failed`` (components whose
-    deblend raised and kept the refined centroid, with the first error in
-    ``first_error``) and ``psf_veto`` (components per PSF-veto status).
+    ``stats``, when a dict, is filled with ``n_components`` (components the
+    deblender was run on), ``n_split`` (of those, the ones that returned more
+    than one star), ``n_failed`` (components whose deblend raised and kept the
+    refined centroid, with the first error in ``first_error``) and
+    ``psf_veto`` (components per PSF-veto status).
+
+    Raises ``ImportError`` when scikit-image is missing: the secondary peak
+    search needs it, and without it every component would come back as its
+    core centres only, which reads as "no blends" in the catalogue.
     """
+    if not _HAVE_SKIMAGE:
+        raise ImportError(
+            "the ZEROFRAME satstar deblend needs scikit-image "
+            "(skimage.feature.peak_local_max); install it or run without "
+            "--deblend-satstars")
     slices = ndimage.find_objects(sources)
     ceiling = robust_zf_ceiling(zeroframe)
     records = []
@@ -571,6 +582,8 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
             records.append({'com': com, 'label': label_id, 'forced': False,
                             'sat_area': area})
             continue
+        if stats is not None:
+            stats['n_components'] = stats.get('n_components', 0) + 1
         try:
             centers, info = deblend_blob_zeroframe(
                 zeroframe, data, sources, label_id, sl, fwhm_pix,
@@ -591,6 +604,8 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
                 stats.setdefault('first_error', f"{type(exc).__name__}: {exc}")
         if not centers:
             centers = [com]
+        elif stats is not None and len(centers) > 1:
+            stats['n_split'] = stats.get('n_split', 0) + 1
         for c in centers:
             records.append({'com': (float(c[0]), float(c[1])), 'label': label_id,
                             'forced': False, 'sat_area': area})

@@ -3624,7 +3624,7 @@ def _check_bg_frame_suffix(bg_header, frame_suffix, label=''):
                        f"subtract it anyway.")
 
 
-def _satstar_recovery_signature(options):
+def _satstar_recovery_signature(options, filename=None):
     """A compact string identifying every option that changes the per-exposure
     satstar FIT.  It is stamped into the per-exposure satstar catalog (meta key
     ``SATRECOV``) and checked when that cache is reused, so toggling one of
@@ -3656,10 +3656,18 @@ def _satstar_recovery_signature(options):
     filter of brick alone stay valid for every run that does not ask for the
     deblend.  The token carries a version: ``_dbl2`` since the deblender
     resolves stars in large blended components (#1081), so deblended catalogs
-    seeded by the earlier deblender (``_dbl1``) are refit."""
+    seeded by the earlier deblender (``_dbl1``) are refit.
+
+    With ``filename`` given, the deblend token is written only for a frame that
+    has a sibling ``_ramp.fits``: ``get_saturated_stars`` deblends from the
+    ZEROFRAME and fits a frame without one with the legacy seeding, so such a
+    frame carries the same stamp whether or not the option is set (#1196)."""
     zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
     ramp = bool(getattr(options, 'satstar_ramp_recover', False))
     deblend = bool(getattr(options, 'deblend_satstars', False))
+    if deblend and filename is not None:
+        from jwst_gc_pipeline.reduction.saturated_star_finding import _find_ramp_for
+        deblend = _find_ramp_for(filename) is not None
     if not zf and not ramp:
         base = "off"
     else:
@@ -4409,7 +4417,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # forces a rebuild.  (Diagnosed on brick 2026-07: a full recovery re-run
         # left the m8 satstar mags byte-identical because the 07-25 caches were
         # reused.)
-        recovery_signature=_satstar_recovery_signature(options))
+        recovery_signature=_satstar_recovery_signature(options, filename))
     satstar_rejected_path = filename.replace(
         '.fits', f'{satstar_file_suffix}_satstar_rejected.fits')
     # Satstar implied-peak-gate hand-off (#925), NIRCam, all targets: the gate

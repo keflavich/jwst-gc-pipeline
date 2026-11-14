@@ -450,7 +450,11 @@ flux, trading depth for a brighter saturation ceiling:
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
-  degrades to legacy when a frame has no sibling `_ramp.fits`.
+  degrades to legacy when a frame has no sibling `_ramp.fits`, and the cache
+  stamp (`SATRECOV`) then omits the `_dbl2` token for that frame. A missing
+  scikit-image raises `ImportError`. The satstar catalogue meta carries
+  `DBLNCMP` (components deblended), `DBLNSPL` (split into more than one star)
+  and `DBLFAIL` (deblend raised, centroid kept) for a frame the deblend ran on.
 - **Requires `_ramp.fits`** next to the `_cal`/`_crf` (a Detector1 product). All
   three are no-ops when it's absent (e.g. the sickle reduction has none).
 

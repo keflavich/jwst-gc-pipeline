@@ -96,6 +96,23 @@ def test_missing_deblend_attribute_reads_as_off():
     assert _satstar_recovery_signature(o) == "off"
 
 
+def test_deblend_token_needs_a_ramp_for_the_frame(tmp_path):
+    """A frame with no sibling ``_ramp.fits`` is fitted with the legacy seeding
+    whatever the option says, so it carries the same stamp either way (#1196);
+    a frame with a ramp keeps the ``_dbl2`` token."""
+    frame = tmp_path / "jw02221001001_02101_00001_nrcb1_cal.fits"
+    frame.touch()
+    on, off = _opts(deblend_satstars=True), _opts()
+    assert (_satstar_recovery_signature(on, str(frame))
+            == _satstar_recovery_signature(off, str(frame)) == "off")
+    zf = _opts(satstar_zeroframe_recover=True, deblend_satstars=True)
+    assert _satstar_recovery_signature(zf, str(frame)) == "zf1_ramp0_dil3"
+    (tmp_path / "jw02221001001_02101_00001_nrcb1_ramp.fits").touch()
+    assert _satstar_recovery_signature(on, str(frame)) == "off_dbl2"
+    assert _satstar_recovery_signature(off, str(frame)) == "off"
+    assert _satstar_recovery_signature(zf, str(frame)) == "zf1_ramp0_dil3_dbl2"
+
+
 def _write_cache(path, sig):
     t = Table({"flux": [1.0, 2.0]})
     if sig is not None:
