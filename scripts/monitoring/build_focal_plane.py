@@ -22,12 +22,16 @@ sys.path.insert(0, os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', '..')))
 
 import build_footprints as bf            # noqa: E402
+import viewer_data as vd                 # noqa: E402
 
 DEFAULT_FOOTPRINTS = '/orange/adamginsburg/jwst/monitor/footprints.json'
-DEFAULT_OUT = '/orange/adamginsburg/jwst/htdocs_staging/jwst_gc_focal_plane.json'
+#: The served copy.  `refresh_viewer_data.sh` stages beside it and renames.
+DEFAULT_OUT = os.path.join(vd.DOCROOT, 'jwst_gc_focal_plane.json')
 #: Delivered frames, which carry the attitude the telescope actually held.
-DEFAULT_EXPOSURES = ('/orange/adamginsburg/jwst/releases/v1.8-2026.09/'
-                     'gc-treasury/exposures')
+#: `None` means the newest release that has them (`viewer_data.resolve_exposures`),
+#: not a fixed one: a pinned release kept the as-flown set at v1.8 after v1.9
+#: had been delivered.
+DEFAULT_EXPOSURES = None
 
 #: One entry per instrument, drawn as its own colour. NIRCam is the eight
 #: science detectors rather than `NRCALL_FULL`: the gap between modules is real
@@ -175,6 +179,8 @@ def build(args):
 
     out = {'programme': args.programme, 'anchor': args.anchor,
            'default_pa_v3': default_pa,
+           'generated': vd.utc_stamp(),
+           'release': vd.release_name(exposures) if exposures else None,
            'n_as_flown': sum(1 for e in entries if e['attitude'] == 'as-flown'),
            'instruments': [{'label': l, 'colour': c} for l, c, _ in INSTRUMENTS],
            'pointings': entries}
@@ -196,11 +202,16 @@ def main(argv=None):
     ap.add_argument('--out', default=DEFAULT_OUT)
     ap.add_argument('--exposures', default=DEFAULT_EXPOSURES,
                     help='delivered frames to read the as-flown attitude from; '
-                         'empty string to draw every pointing at the plan PA')
+                         'default $EXPOSURES, else the newest release under '
+                         f'{vd.RELEASES_ROOT}; empty string to draw every '
+                         'pointing at the plan PA')
     ap.add_argument('--anchor', default=bf.NIRCAM_ANCHOR,
                     help='the aperture APT points at; the attitude is built here')
     ap.add_argument('--programme', default='10678')
-    return build(ap.parse_args(argv))
+    args = ap.parse_args(argv)
+    args.exposures = vd.resolve_exposures(args.exposures)
+    print(f'exposures: {args.exposures or "(none; plan attitude)"}')
+    return build(args)
 
 
 if __name__ == '__main__':

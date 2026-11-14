@@ -46,11 +46,17 @@ import argparse
 import collections
 import json
 import os
+import sys
 
-DEFAULT_EXPOSURES = ('/orange/adamginsburg/jwst/releases/v1.8-2026.09/'
-                     'gc-treasury/exposures')
-DEFAULT_OUT = ('/orange/adamginsburg/jwst/htdocs_staging/'
-               'jwst_gc_cat_guidestars.json')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import viewer_data as vd                 # noqa: E402
+
+#: Only read with `--source frames`.  `None` means the newest release that has
+#: delivered frames (`viewer_data.resolve_exposures`), not a pinned one.
+DEFAULT_EXPOSURES = None
+#: The served copy.  `refresh_viewer_data.sh` stages beside it and renames.
+DEFAULT_OUT = os.path.join(vd.DOCROOT, 'jwst_gc_cat_guidestars.json')
 #: Where the monitor records each observation's STScI visit status. A skipped
 #: observation is the case this file cannot speak to on its own: it has no
 #: frames, so the scan below never sees it.
@@ -449,7 +455,10 @@ def to_document(per_star, per_visit, programme='10678', unflown=()):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--exposures', default=DEFAULT_EXPOSURES)
+    ap.add_argument('--exposures', default=DEFAULT_EXPOSURES,
+                    help='delivered frames for --source frames; default '
+                         '$EXPOSURES, else the newest release under '
+                         f'{vd.RELEASES_ROOT}')
     ap.add_argument('--source', choices=('mast', 'frames'), default='mast',
                     help='mast reads the FGS guide-star exposures, which cover '
                          'the visits that produced no science data; frames '
@@ -469,6 +478,8 @@ def main(argv=None):
             raise SystemExit(f'MAST returned no guide-star exposure for '
                              f'programme {args.programme}')
     else:
+        args.exposures = vd.resolve_exposures(args.exposures)
+        print(f'exposures: {args.exposures}')
         if not os.path.isdir(args.exposures):
             raise SystemExit(f'no exposures tree at {args.exposures}')
         per_star, per_visit, missing = scan(args.exposures)
@@ -478,6 +489,13 @@ def main(argv=None):
     annotate_outcomes(per_star, per_visit)
     unflown = unflown_observations(args.footprints)
     doc = to_document(per_star, per_visit, args.programme, unflown)
+    # When the file was built and from what, so a reader can tell a current
+    # file from a stale one.  `release` is only meaningful for the frames
+    # source; MAST is not tied to a release directory.
+    doc['generated'] = vd.utc_stamp()
+    doc['source'] = args.source
+    if args.source == 'frames':
+        doc['release'] = vd.release_name(args.exposures)
 
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
     with open(args.out, 'w') as fh:
