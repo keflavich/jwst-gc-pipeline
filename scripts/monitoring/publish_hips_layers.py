@@ -53,6 +53,7 @@ import subprocess
 import sys
 import time
 import contextlib
+import threading
 
 #: Layers to distribute, and where each is BUILT.  Explicit on purpose -- see 1.
 BUILD_ROOT = '/orange/adamginsburg/jwst/gc-treasury/pngs'
@@ -263,16 +264,138 @@ def _read_remote(host, path):
 # The protocol is COPIED from that script rather than invented, because a lock
 # only works if both sides implement it the same way: same path, O_CREAT|O_EXCL
 # (not exists-then-create, which lets two arrivals both proceed), the same
-# `pid timestamp what` line, the same 6 h staleness takeover, and release in a
-# `finally` so a crash does not starve the schedule.
+# `pid timestamp what` line, and release in a `finally` so a crash does not
+# starve the schedule.  This side adds a trailing `job=<SLURM_JOB_ID>` token
+# and a heartbeat; a three-field line from an older holder still parses, and
+# is judged by file age alone.
 LOCK_FILE = '.auto.lock'
 #: A publish is minutes-to-an-hour; a rebuild is hours.  Waiting longer than
 #: this means the next scheduled publish will do the job anyway.  It is the
 #: budget for the whole RUN, not for each layer: see `WaitBudget`.
 LOCK_WAIT_S = int(os.environ.get('HIPS_PUBLISH_LOCK_WAIT_S', 2 * 3600))
-#: Matches the builder's own takeover threshold.  A shorter one here would let
-#: the publisher steal a lock from a rebuild that is merely slow.
-LOCK_STALE_S = 6 * 3600
+#: Age after which a lock with no liveness information is taken over.  The
+#: builder job's wall is 8 h and its own build budget stops new work at 6 h, so
+#: a lock that is silent for 10 h belongs to a holder that is gone or hung.  A
+#: threshold at or below the wall let the publisher take the lock from a live
+#: build (#953).  `HIPS_LOCK_STALE_S` overrides it for tests and incidents.
+#:
+#: Keep this at 10 h until the builder heartbeats `.auto.lock` as well (the
+#: heartbeat in `build_lock` covers only this side): a builder that neither
+#: heartbeats nor writes `job=` is judged by file age alone, and a shorter
+#: threshold here would take its lock mid-build.
+LOCK_STALE_S = int(os.environ.get('HIPS_LOCK_STALE_S', 10 * 3600))
+#: A holder whose SLURM job is still listed keeps its lock past `LOCK_STALE_S`
+#: up to this age.  It bounds a hung node, whose job `squeue` keeps listing.
+LOCK_JOB_ALIVE_MAX_S = 10 * 3600
+#: A lock whose job has left the queue is released once it is this old.  The
+#: grace covers the gap between the job id being written and `squeue` listing
+#: it, and a job that is requeued.
+LOCK_JOB_GONE_GRACE_S = 600
+#: How often `build_lock` touches the lock file while the publish runs.
+HEARTBEAT_S = 300
+#: Time limit for one `squeue` call.
+SQUEUE_TIMEOUT_S = 30
+_JOB_ALIVE = frozenset({'PENDING', 'RUNNING', 'COMPLETING', 'CONFIGURING',
+                        'SUSPENDED', 'REQUEUED', 'RESIZING', 'SIGNALING',
+                        'STAGE_OUT'})
+_JOB_ENDED = frozenset({'COMPLETED', 'CANCELLED', 'FAILED', 'TIMEOUT',
+                        'NODE_FAIL', 'OUT_OF_MEMORY', 'PREEMPTED',
+                        'BOOT_FAIL', 'DEADLINE'})
+
+
+def holder_job_id(text):
+    """The SLURM job id in a lock line (`pid iso what job=<id>`), or None."""
+    m = re.search(r'\bjob=(\d+)\b', text)
+    return m.group(1) if m else None
+
+
+def job_liveness(job_id):
+    """``'alive'``, ``'gone'`` or ``'unknown'`` for a SLURM job id.
+
+    ``'gone'`` needs positive evidence: an empty listing, a terminal state, or
+    the "Invalid job id" error `squeue` gives for an id it has forgotten.  A
+    missing `squeue`, a timeout or any other failure is ``'unknown'`` and the
+    caller falls back to the age rule.
+    """
+    try:
+        res = subprocess.run(['squeue', '-h', '-j', str(job_id), '-o', '%T'],
+                             capture_output=True, text=True,
+                             timeout=SQUEUE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f'  squeue for job {job_id} failed ({exc!r}); '
+              f'judging the lock by age', file=sys.stderr)
+        return 'unknown'
+    if res.returncode != 0:
+        if 'invalid job id' in (res.stderr or '').lower():
+            return 'gone'
+        print(f'  squeue for job {job_id} exited {res.returncode} '
+              f'({(res.stderr or "").strip()}); judging the lock by age',
+              file=sys.stderr)
+        return 'unknown'
+    states = {ln.strip().upper() for ln in res.stdout.splitlines()
+              if ln.strip()}
+    if not states:
+        return 'gone'
+    if states & _JOB_ALIVE:
+        return 'alive'
+    if states <= _JOB_ENDED:
+        return 'gone'
+    return 'unknown'
+
+
+def lock_staleness(path, age):
+    """``(stale, why)`` for the lock at ``path`` that is ``age`` seconds old.
+
+    A lock naming a SLURM job is judged by that job first: a listed job holds
+    it up to `LOCK_JOB_ALIVE_MAX_S`, and an unlisted one releases it after
+    `LOCK_JOB_GONE_GRACE_S` however recent the lock is, which recovers a
+    builder killed at its wall without lowering the age threshold.  A lock
+    with no job id, or a `squeue` that cannot answer, falls back to
+    `LOCK_STALE_S`.
+    """
+    try:
+        job = holder_job_id(open(path).read())
+    except OSError:
+        job = None
+    state = job_liveness(job) if job else 'unknown'
+    if state == 'alive':
+        if age > max(LOCK_STALE_S, LOCK_JOB_ALIVE_MAX_S):
+            return True, (f'{age / 3600:.1f} h old and job {job} is still '
+                          f'listed; past the {LOCK_JOB_ALIVE_MAX_S / 3600:.0f}'
+                          f' h cap')
+        return False, f'job {job} is alive'
+    if state == 'gone' and age > LOCK_JOB_GONE_GRACE_S:
+        return True, f'{age / 3600:.1f} h old; job {job} has left the queue'
+    if age > LOCK_STALE_S:
+        return True, f'{age / 3600:.1f} h old'
+    return False, 'held'
+
+
+@contextlib.contextmanager
+def _heartbeat(path, interval=None):
+    """Touch ``path`` every ``interval`` seconds until the context exits.
+
+    The lock's mtime then measures silence rather than total hold time, so a
+    publish that runs for hours is not mistaken for a dead holder.
+    """
+    stop = threading.Event()
+    period = HEARTBEAT_S if interval is None else interval
+
+    def beat():
+        while not stop.wait(period):
+            try:
+                os.utime(path)
+            except FileNotFoundError:
+                return
+
+    thread = threading.Thread(target=beat, name='build-lock-heartbeat',
+                              daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 class WaitBudget:
@@ -328,8 +451,9 @@ def build_lock(src, what, wait_s=None, budget=None, poll=30, dry=False):
     waited = 0
     while os.path.exists(path):
         age = time.time() - os.path.getmtime(path)
-        if age > LOCK_STALE_S:
-            print(f'  stale build lock ({age / 3600:.1f} h); taking it')
+        stale, why = lock_staleness(path, age)
+        if stale:
+            print(f'  stale build lock ({why}); taking it')
             try:
                 os.remove(path)
             except FileNotFoundError:
@@ -357,9 +481,11 @@ def build_lock(src, what, wait_s=None, budget=None, poll=30, dry=False):
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         try:
+            job = os.environ.get('SLURM_JOB_ID')
+            tail = f' job={job}' if job and job.isdigit() else ''
             os.write(fd, f"{os.getpid()} "
                          f"{time.strftime('%Y-%m-%dT%H:%M:%S')} "
-                         f"{what}\n".encode())
+                         f"{what}{tail}\n".encode())
         finally:
             os.close(fd)
     except FileExistsError:
@@ -369,7 +495,8 @@ def build_lock(src, what, wait_s=None, budget=None, poll=30, dry=False):
         yield False
         return
     try:
-        yield True
+        with _heartbeat(path):
+            yield True
     finally:
         # In a finally, like the builder's: the other half of this lock's
         # history is runs that left the file behind and starved the schedule.
@@ -591,7 +718,7 @@ def exit_on_sigterm():
     ``KillWait``), and ``scancel`` and preemption send the same signal.
     Python's default action for SIGTERM ends the process without unwinding,
     so the ``finally`` that removes the lock never runs and the lock stays
-    behind until `LOCK_STALE_S` (6 h) has passed.  That happened to the
+    behind until `LOCK_STALE_S` has passed.  That happened to the
     2026-09-30 publish (job 43949285) and twice on 2026-10-04 to the build
     entry (#1005); each time every later build and publish waited the
     lock out.  Raising ``SystemExit`` unwinds the stack: the lock file is

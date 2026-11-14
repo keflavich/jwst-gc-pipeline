@@ -499,7 +499,196 @@ def test_a_stale_lock_is_taken_over_at_the_builders_own_threshold(tmp_path,
     os.utime(lock, (0, ph.time.time() - ph.LOCK_STALE_S - 60))
     with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
         assert held
-    assert ph.LOCK_STALE_S == 6 * 3600
+    assert ph.LOCK_STALE_S == 10 * 3600
+
+
+def test_the_age_threshold_outlasts_the_builder_wall_and_can_be_overridden(
+        monkeypatch):
+    """The builder job's wall is 8 h; a 6 h threshold took the lock from a live
+    build (#953).  The env override is read at import."""
+    assert ph.LOCK_STALE_S > 8 * 3600
+    monkeypatch.setenv('HIPS_LOCK_STALE_S', '7200')
+    spec = importlib.util.spec_from_file_location('ph_env', _MOD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.LOCK_STALE_S == 7200
+
+
+def test_an_old_format_lock_aged_3h_is_not_taken(tmp_path, monkeypatch):
+    """Changeover: an old builder neither heartbeats nor writes `job=`, so
+    the age rule is all there is and 3 h is inside it."""
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    lock = tmp_path / '.auto.lock'
+    lock.write_text('999999 old\n')
+    os.utime(lock, (0, ph.time.time() - 3 * 3600))
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing',
+                       wait_s=0) as held:
+        assert held is False
+    assert lock.read_text() == '999999 old\n'
+
+
+def test_holder_job_id_parses_new_and_old_lock_lines():
+    assert ph.holder_job_id('123 2026-11-13T05:00:00 auto rebuild job=45045170\n') \
+        == '45045170'
+    assert ph.holder_job_id('999999 old\n') is None
+    assert ph.holder_job_id('123 2026-11-13T05:00:00 hijob=77\n') is None
+
+
+def _old_lock(tmp_path, monkeypatch, age_s, line):
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    lock = tmp_path / '.auto.lock'
+    lock.write_text(line)
+    os.utime(lock, (0, ph.time.time() - age_s))
+    return lock
+
+
+def test_a_listed_job_keeps_a_lock_older_than_the_age_threshold(tmp_path,
+                                                                monkeypatch):
+    monkeypatch.setattr(ph, 'LOCK_STALE_S', 2 * 3600)
+    lock = _old_lock(tmp_path, monkeypatch, 5 * 3600,
+                     '1 2026-11-13T05:00:00 auto job=4242\n')
+    monkeypatch.setattr(ph, 'job_liveness', lambda j: 'alive')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing',
+                       wait_s=0) as held:
+        assert held is False
+    assert lock.exists()
+
+
+def test_a_listed_job_does_not_keep_a_lock_past_the_cap(tmp_path, monkeypatch):
+    """A hung node keeps its job listed; the cap bounds that."""
+    _old_lock(tmp_path, monkeypatch, ph.LOCK_JOB_ALIVE_MAX_S + 3600,
+              '1 2026-11-13T05:00:00 auto job=4242\n')
+    monkeypatch.setattr(ph, 'job_liveness', lambda j: 'alive')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
+        assert held
+
+
+def test_an_old_lock_whose_job_is_gone_is_taken(tmp_path, monkeypatch):
+    _old_lock(tmp_path, monkeypatch, ph.LOCK_STALE_S - 3600,
+              '1 2026-11-13T05:00:00 auto job=4242\n')
+    monkeypatch.setattr(ph, 'job_liveness', lambda j: 'gone')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
+        assert held
+
+
+def test_a_young_lock_whose_job_is_gone_is_released_after_the_grace(
+        tmp_path, monkeypatch):
+    """A builder killed at its wall leaves a lock that is younger than the
+    age threshold; the job test recovers it without lowering that threshold."""
+    monkeypatch.setattr(ph, 'job_liveness', lambda j: 'gone')
+    lock = _old_lock(tmp_path, monkeypatch, 120,
+                     '1 2026-11-13T05:00:00 auto job=4242\n')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing',
+                       wait_s=0) as held:
+        assert held is False, 'inside the grace the lock is still respected'
+    os.utime(lock, (0, ph.time.time() - ph.LOCK_JOB_GONE_GRACE_S - 60))
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
+        assert held
+
+
+def test_an_unknown_job_state_falls_back_to_the_age_rule(tmp_path,
+                                                         monkeypatch):
+    monkeypatch.setattr(ph, 'job_liveness', lambda j: 'unknown')
+    lock = _old_lock(tmp_path, monkeypatch, 3600,
+                     '1 2026-11-13T05:00:00 auto job=4242\n')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing',
+                       wait_s=0) as held:
+        assert held is False
+    os.utime(lock, (0, ph.time.time() - ph.LOCK_STALE_S - 60))
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
+        assert held
+
+
+def _fake_squeue(monkeypatch, result=None, exc=None):
+    def run(cmd, **kw):
+        assert cmd[0] == 'squeue' and 'timeout' in kw
+        if exc is not None:
+            raise exc
+        return result
+    monkeypatch.setattr(ph.subprocess, 'run', run)
+
+
+def _cp(rc=0, out='', err=''):
+    return ph.subprocess.CompletedProcess(['squeue'], rc, out, err)
+
+
+@pytest.mark.parametrize('state', ['RUNNING', 'PENDING', 'COMPLETING'])
+def test_job_liveness_reads_a_live_state(monkeypatch, state):
+    _fake_squeue(monkeypatch, _cp(0, state + '\n'))
+    assert ph.job_liveness('1') == 'alive'
+
+
+@pytest.mark.parametrize('result', [
+    _cp(0, ''),
+    _cp(0, 'TIMEOUT\n'),
+    _cp(1, '', 'slurm_load_jobs error: Invalid job id specified\n'),
+])
+def test_job_liveness_reads_a_gone_job(monkeypatch, result):
+    _fake_squeue(monkeypatch, result)
+    assert ph.job_liveness('1') == 'gone'
+
+
+@pytest.mark.parametrize('kw', [
+    {'exc': FileNotFoundError('squeue')},
+    {'exc': ph.subprocess.TimeoutExpired('squeue', 30)},
+    {'result': _cp(1, '', 'slurm_load_jobs error: Unable to contact '
+                          'slurm controller')},
+    {'result': _cp(0, 'WEIRD_STATE\n')},
+])
+def test_job_liveness_is_unknown_when_squeue_cannot_say(monkeypatch, capsys,
+                                                        kw):
+    """A timeout or an unreachable controller must not release a lock."""
+    _fake_squeue(monkeypatch, **kw)
+    assert ph.job_liveness('1') == 'unknown'
+
+
+def test_the_lock_line_carries_the_slurm_job_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    lock = tmp_path / '.auto.lock'
+    monkeypatch.setenv('SLURM_JOB_ID', '45045170')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing zz') as held:
+        assert held
+        line = lock.read_text().split()
+        assert line[0] == str(os.getpid())
+        assert line[-1] == 'job=45045170'
+        assert ph.holder_job_id(lock.read_text()) == '45045170'
+    monkeypatch.delenv('SLURM_JOB_ID')
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing zz') as held:
+        assert 'job=' not in lock.read_text()
+
+
+def _mtime_advances(lock, start):
+    import time
+    for _ in range(200):
+        if lock.stat().st_mtime > start:
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_the_lock_is_touched_while_held_and_the_thread_stops(tmp_path,
+                                                             monkeypatch):
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    monkeypatch.setattr(ph, 'HEARTBEAT_S', 0.05)
+    lock = tmp_path / '.auto.lock'
+    with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing') as held:
+        assert held
+        os.utime(lock, (0, 0))
+        assert _mtime_advances(lock, 0), 'the heartbeat must refresh the mtime'
+    assert not lock.exists()
+    assert not [t for t in ph.threading.enumerate()
+                if t.name == 'build-lock-heartbeat']
+
+
+def test_the_heartbeat_stops_when_the_body_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(ph, 'BUILD_ROOT', str(tmp_path))
+    monkeypatch.setattr(ph, 'HEARTBEAT_S', 0.05)
+    with pytest.raises(RuntimeError):
+        with ph.build_lock(str(tmp_path / 'zz_layer'), 'publishing'):
+            raise RuntimeError('rsync blew up')
+    assert not [t for t in ph.threading.enumerate()
+                if t.name == 'build-lock-heartbeat']
+    assert not (tmp_path / '.auto.lock').exists()
 
 
 def test_the_lock_claim_is_exclusive(tmp_path, monkeypatch, capsys):
