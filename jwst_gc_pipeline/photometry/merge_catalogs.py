@@ -65,7 +65,8 @@ from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.satstar_zf_status import (
     satstar_zf_status, satstar_zf_summary, zf_fit_fraction)
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
-    format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
+    format_phase_report, normalise_frame_variants, satstar_frame_variant,
+    satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.wingcal import (
@@ -1627,13 +1628,19 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             wl = tbl.meta['filter']
             # phase=iteration_label: the cross-band merge of phase P reads each
             # exposure's phase-P satstar catalog, not every phase on disk.
+            # frame_variants: the frame variant(s) this filter's per-frame
+            # merge read (its FRMVAR card), so the satstar rows come from the
+            # same frames as the daophot rows (#1194).
+            _frame_variants = _recorded_frame_variants(tbl.meta, context=wl)
             flag_near_saturated(tbl, filtername=wl, target=target, basepath=basepath,
                                 proposal_id=satstar_proposal_id, field=satstar_field,
-                                phase=iteration_label)
+                                phase=iteration_label,
+                                frame_variants=_frame_variants)
             # replace_saturated adds more rows
             replace_saturated(tbl, filtername=wl, target=target, basepath=basepath,
                               proposal_id=satstar_proposal_id, field=satstar_field,
-                              phase=iteration_label)
+                              phase=iteration_label,
+                              frame_variants=_frame_variants)
 
             crds = tbl['skycoord']
             matches, sep, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
@@ -1926,6 +1933,41 @@ def _recorded_psf_token(meta):
     if not fns:
         return None
     return {HYBRID_TOKEN if HYBRID_TOKEN in fn else '' for fn in fns}
+
+
+#: ``FRMVAR`` value of a merged catalog whose frames carry no readable variant.
+FRAME_VARIANT_NONE = 'none'
+
+
+def _frame_variants_of_tables(tables):
+    """Frame variant tokens of per-frame tables, from their ``FILENAME`` cards."""
+    found = set()
+    for tb in tables:
+        fn = tb.meta.get('FILENAME')
+        if fn:
+            found.add(satstar_frame_variant(str(fn)))
+    return found - {''}
+
+
+def _recorded_frame_variants(meta, context=''):
+    """The frame variant set a per-filter merged catalog records, or ``None``.
+
+    Reads the ``FRMVAR`` card (comma-joined tokens, ``'none'`` when the frames
+    carried no readable variant).  A catalog written before the card existed
+    has none; the satstar readers then keep their file-time tie-break and this
+    says so.  Do not infer the variant from the ``fn<N>`` cards: they hold
+    per-frame catalogue basenames, which do not carry it.
+    """
+    up = {str(k).upper(): v for k, v in meta.items()}
+    if 'FRMVAR' not in up:
+        print(f"WARNING: merged catalog {context or ''} has no FRMVAR card "
+              f"(written before the frame variant was recorded); its satstar "
+              f"rows are chosen without a frame variant, so a same-phase tie "
+              f"between frame variants goes by file time (#1194)", flush=True)
+        return None
+    tokens = [t.strip() for t in str(up['FRMVAR']).split(',')]
+    tokens = [t for t in tokens if t and t != FRAME_VARIANT_NONE]
+    return normalise_frame_variants(tokens)
 
 
 def merge_individual_frames(module='merged', suffix="", desat=False, filtername='f410m',
@@ -2267,6 +2309,18 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # The PSF variant of the inputs, which the output name does not carry
     # (#1197); merge_daophot checks it against the cross-band run's.
     minimal_table.meta['PSFTOKEN'] = epsf_ or 'none'
+    # The frame variant(s) these per-frame catalogs were measured on, so the
+    # satstar rows added here and in the cross-band merge come from the same
+    # frames (#1194).
+    _frame_variants = _frame_variants_of_tables(tables)
+    minimal_table.meta['FRMVAR'] = (','.join(sorted(_frame_variants))
+                                    or FRAME_VARIANT_NONE)
+    if len(_frame_variants) > 1:
+        print(f"WARNING: {filtername.upper()}/{module}: the per-frame catalogs "
+              f"span {len(_frame_variants)} frame variants "
+              f"({', '.join(sorted(_frame_variants))}); an exposure with "
+              f"satstar catalogs of several of them ties by file time (#1194)",
+              flush=True)
 
     # Ensure saturated stars are represented in indivexp merged products too.
     # Skippable (do_replace_saturated=False) for cutout runs whose basepath
@@ -2277,7 +2331,8 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         replace_saturated(minimal_table, filtername=filtername, target=target,
                           fwhm_basepath=fwhm_basepath, basepath=basepath,
                           proposal_id=progid, field=field,
-                          phase=iteration_label)
+                          phase=iteration_label,
+                          frame_variants=_frame_variants)
         if m2_registration_summary is not None:
             # Saturated-star rows come from the satstar catalogs, which are not
             # per-frame catalogs and have no m2 entry: their positions are not
@@ -3224,7 +3279,8 @@ def _primary_satstar_catalog_path(filtername, target, basepath,
 
 def load_satstar_catalog(filtername, target='brick',
                          basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                         proposal_id=None, field=None, phase=None):
+                         proposal_id=None, field=None, phase=None,
+                         frame_variants=None):
     """Consolidated saturated-star catalog for one filter.
 
     ``proposal_id``/``field`` name the observation being merged.  When that
@@ -3241,6 +3297,14 @@ def load_satstar_catalog(filtername, target='brick',
     that names no phase), each exposure's latest phase is read.  See
     :mod:`~jwst_gc_pipeline.photometry.satstar_phase_selection`;
     ``SATSTAR_POOL_PHASES=all`` restores the pre-fix pooling of every phase.
+
+    ``frame_variants`` names the frame variant(s) the merge reads
+    (:func:`~jwst_gc_pipeline.photometry.satstar_phase_selection.satstar_frame_variant`
+    tokens, e.g. ``{'destreak_o002_crf'}``).  Only per-exposure catalogs fit on
+    those frames are read, so an exposure fit on both ``_align_`` and
+    ``_destreak_`` frames no longer takes whichever was written last; an
+    exposure with none of the read variant contributes no rows (#1194).
+    ``None`` keeps every variant eligible.
     """
     obs_scope = satstar_obs_scope(proposal_id, field)
     _primary = _primary_satstar_catalog_path(filtername, target, basepath,
@@ -3297,14 +3361,21 @@ def load_satstar_catalog(filtername, target='brick',
     # dedup keep a STALE phase's fit (o111 F480M m7 re-run: 387 of 1120 rows kept
     # an old m12 fit, +2.5% median / +7.4% p90 in flux).  See
     # satstar_phase_selection.
-    fallback, _phase_report = select_satstar_phase_files(fallback, phase=phase)
+    fallback, _phase_report = select_satstar_phase_files(
+        fallback, phase=phase, frame_variants=frame_variants)
     print(f"load_satstar_catalog: {filtername}: "
           f"{format_phase_report(_phase_report)}", flush=True)
     if len(fallback) == 0:
-        print(f"WARNING: no {filtername} satstar catalog at or before phase "
-              f"{phase!r} in {basepath}/{filtername.upper()}/pipeline; the "
-              f"later-phase files there are left over from a previous run, so "
-              f"treating as no satstar catalog")
+        if _phase_report['no_variant']:
+            print(f"WARNING: no {filtername} satstar catalog of frame "
+                  f"variant(s) {_phase_report['frame_variants']} in "
+                  f"{basepath}/{filtername.upper()}/pipeline; treating as no "
+                  f"satstar catalog")
+        else:
+            print(f"WARNING: no {filtername} satstar catalog at or before "
+                  f"phase {phase!r} in {basepath}/{filtername.upper()}/pipeline; "
+                  f"the later-phase files there are left over from a previous "
+                  f"run, so treating as no satstar catalog")
         return None
     _phase_sig = satstar_phase_selection_signature(fallback)
 
@@ -3809,7 +3880,8 @@ def apply_pooled_wingcal(satstar_cat, filtername,
 
 def load_rejected_satstar_catalog(filtername, target='brick',
                                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                                  proposal_id=None, field=None, phase=None):
+                                  proposal_id=None, field=None, phase=None,
+                                  frame_variants=None):
     """Table of gate-REJECTED satstar candidates for this band.
 
     The satstar channel (Phase A2, *_satstar_rejected.fits) records candidates
@@ -3838,6 +3910,9 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     (:func:`_primary_satstar_catalog_path`), the accepted channel reads it
     and nothing else, so this reads only its sibling
     ``..._satstar_rejected.fits`` (``None`` when it has none).
+
+    ``frame_variants`` is the set :func:`load_satstar_catalog` takes; it
+    chooses the accepted catalogs the rejected files follow.
     """
     # The accepted channel reads the NIRCam merged_i2d primary catalog when it
     # exists; the rejected candidates then come from that same product's
@@ -3889,9 +3964,10 @@ def load_rejected_satstar_catalog(filtername, target='brick',
         if obs_scope:
             _acc = [f for f in _acc
                     if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
-        _chosen, _ = select_satstar_phase_files(_acc, phase=phase)
-        files, _rej_report = select_rejected_for_catalogs(files, _chosen,
-                                                          phase=phase)
+        _chosen, _ = select_satstar_phase_files(
+            _acc, phase=phase, frame_variants=frame_variants)
+        files, _rej_report = select_rejected_for_catalogs(
+            files, _chosen, phase=phase, frame_variants=frame_variants)
         print(f"load_rejected_satstar_catalog: {filtername}: "
               f"{format_phase_report(_rej_report, what='rejected-satstar')}",
               flush=True)
@@ -4496,13 +4572,15 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                        proposal_id=None, field=None, phase=None):
+                        proposal_id=None, field=None, phase=None,
+                        frame_variants=None):
     # ``phase``: the cataloging phase being merged, so each exposure's satstar
-    # catalog is that phase's (load_satstar_catalog).
+    # catalog is that phase's (load_satstar_catalog).  ``frame_variants``: the
+    # frame variant(s) the merge reads (load_satstar_catalog, #1194).
     print(f"Flagging near saturated stars for filter {filtername}")
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath,
                                        proposal_id=proposal_id, field=field,
-                                       phase=phase)
+                                       phase=phase, frame_variants=frame_variants)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}")
         cat.add_column(np.zeros(len(cat), dtype='bool'), name=f'near_saturated_{filtername}')
@@ -4720,7 +4798,8 @@ def _fill_satstar_added_columns(satstar_toadd, cat):
 def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
-                      proposal_id=None, field=None, phase=None):
+                      proposal_id=None, field=None, phase=None,
+                      frame_variants=None):
     # ``basepath`` locates the satstar catalogs (the cutout's own, for cutout
     # runs).  ``fwhm_basepath`` is unused (the fwhm_table.ecsv read it located
     # was dead compute and has been removed); retained for signature
@@ -4728,9 +4807,11 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     # satstar catalog to the observation being merged (load_satstar_catalog).
     # ``phase`` is the cataloging phase being merged: each exposure contributes
     # that phase's satstar catalog, not the brightest of every phase on disk.
+    # ``frame_variants`` is the frame variant(s) the merge reads: only satstar
+    # catalogs fit on those frames are used (load_satstar_catalog, #1194).
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath,
                                        proposal_id=proposal_id, field=field,
-                                       phase=phase)
+                                       phase=phase, frame_variants=frame_variants)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}; skipping replacement")
         if 'replaced_saturated' not in cat.colnames:
@@ -5157,7 +5238,8 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         _rej_tab = load_rejected_satstar_catalog(filtername, target=target,
                                                  basepath=basepath,
                                                  proposal_id=proposal_id,
-                                                 field=field, phase=phase)
+                                                 field=field, phase=phase,
+                                                 frame_variants=frame_variants)
     except Exception as _rej_err:
         print(f"WARNING: rejected-satstar load failed for {filtername}: "
               f"{type(_rej_err).__name__}: {_rej_err}")

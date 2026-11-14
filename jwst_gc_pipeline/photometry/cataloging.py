@@ -3828,8 +3828,16 @@ def _load_ramp_cube(crf_path):
                                           else np.asarray(gdq, dtype=int))
 
 
+def _frame_variants_of_paths(frames):
+    """Frame variant tokens of frame paths (``satstar_frame_variant``), or ``None``."""
+    from jwst_gc_pipeline.photometry.satstar_phase_selection import (
+        normalise_frame_variants, satstar_frame_variant)
+    return normalise_frame_variants(
+        {satstar_frame_variant(f) for f in frames} - {''})
+
+
 def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
-                                field=None, phase=None):
+                                field=None, phase=None, frame_variants=None):
     """Satstar catalogs of the partner band that ``--satstar-partner-seed`` reads.
 
     The partner's consolidated catalog when it exists; otherwise its
@@ -3838,6 +3846,11 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     ``phase`` being fit, or the exposure's latest earlier phase, as
     ``load_satstar_catalog`` reads them.  Reading every phase on disk seeded
     old runs' positions, including a later phase left from a previous run.
+
+    ``frame_variants`` is the frame variant(s) of the frames being fit
+    (``satstar_frame_variant``): only per-exposure catalogs fit on those frames
+    seed, as in ``load_satstar_catalog`` (#1194).  The consolidated catalog
+    is read as it stands.
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         consolidated_satstar_cache_path, satstar_catalog_in_observation,
@@ -3855,7 +3868,8 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     if pscope:
         files = [f for f in files
                  if satstar_catalog_in_observation(f, proposal_id, pscope)]
-    files, report = select_satstar_phase_files(files, phase=phase)
+    files, report = select_satstar_phase_files(
+        files, phase=phase, frame_variants=frame_variants)
     print(f"[manual] partner-band satstar seeds ({partner}): "
           f"{format_phase_report(report)}", flush=True)
     return files
@@ -4270,7 +4284,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         _partner = _pmap.get(filtername.lower())
         if _partner:
             _pfiles = _partner_satstar_seed_files(
-                basepath, _partner, proposal_id, field, phase=satstar_label)
+                basepath, _partner, proposal_id, field, phase=satstar_label,
+                frame_variants=_frame_variants_of_paths([original_filename]))
             _parts = []
             for _pf in _pfiles:
                 try:
@@ -6427,7 +6442,7 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
 
 
 def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
-                             phase=None):
+                             phase=None, frame_variants=None):
     """Per-exposure satstar fit positions for :func:`_never_cofit_duplicates`.
 
     One SkyCoord per per-exposure satstar run: the accepted
@@ -6442,6 +6457,9 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
     catalog, or its latest earlier one, and the rejected file written beside
     it.  Pooling every phase on disk let an older run's detections decide
     whether two rows were ever fit side by side.
+
+    ``frame_variants`` is the frame variant(s) of the frames the merge reads,
+    as for ``load_satstar_catalog`` (#1194).
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         satstar_obs_scope, satstar_catalog_in_observation)
@@ -6460,10 +6478,11 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
         files = [f for f in files
                  if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
     accepted, _acc_report = select_satstar_phase_files(
-        [f for f in files if f.endswith('_satstar_catalog.fits')], phase=phase)
+        [f for f in files if f.endswith('_satstar_catalog.fits')], phase=phase,
+        frame_variants=frame_variants)
     rejected, _ = select_rejected_for_catalogs(
         [f for f in files if f.endswith('_satstar_rejected.fits')], accepted,
-        phase=phase)
+        phase=phase, frame_variants=frame_variants)
     print(f"  satstar co-fit positions: "
           f"{format_phase_report(_acc_report)}", flush=True)
     files = sorted(accepted + rejected)
@@ -10969,7 +10988,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _cofit = _satstar_cofit_positions(
                         os.path.join(cut_bp, filt, 'pipeline'),
                         proposal_id=proposal_id, field=field,
-                        phase=merge_label)
+                        phase=merge_label,
+                        frame_variants=_frame_variants_of_paths(
+                            frame_cache.get((module, filt), [])))
                 _ext_note = ('; extended-emission target, off-FOV rows only'
                              if str(target).lower() in _EXTENDED_EMISSION_TARGETS
                              else '')
