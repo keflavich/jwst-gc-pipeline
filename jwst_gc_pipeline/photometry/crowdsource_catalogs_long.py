@@ -4555,7 +4555,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=MANUAL_DEFAULTS['manual_residual_bg_mask_fwhm'],
                       type=float,
                       help="radius (FWHM) of the disks masked at each catalogued "
-                           "source in the residual background (default 2)")
+                           "source in the residual background (default 2; the "
+                           "disk is never smaller than 2 px, so values below "
+                           "~2/FWHM_px FWHM have no effect)")
     parser.add_option("--residual-bg-fill-sigma-fwhm",
                       dest="manual_residual_bg_fill_sigma_fwhm",
                       default=MANUAL_DEFAULTS['manual_residual_bg_fill_sigma_fwhm'],
