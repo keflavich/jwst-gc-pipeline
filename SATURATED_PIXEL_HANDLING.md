@@ -454,7 +454,15 @@ flux, trading depth for a brighter saturation ceiling:
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
-  degrades to legacy when a frame has no sibling `_ramp.fits`.
+  degrades to legacy when a frame has no sibling `_ramp.fits`. The plain peak
+  search also reads a PSF ring or spike bead of one bright star as a companion
+  when a catalogue source sits on it; the opt-in `SATSTAR_DEBLEND_PSF_MARGIN`
+  (default 0 = off) fits the accepted stars with PSF stamps and keeps only the
+  residual peaks above that fraction of the model (#1195, synthetic scenes
+  only so far; not calibrated on 10678 data). It splits MORE than the plain
+  search where the accepted-star positions are wrong: a core clipped by the
+  image edge, or two cores merged into one invalid region. Set
+  `OMP_NUM_THREADS=1` in any job that turns it on.
 - **Requires `_ramp.fits`** next to the `_cal`/`_crf` (a Detector1 product). All
   three are no-ops when it's absent (e.g. the sickle reduction has none).
 
@@ -645,6 +653,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_FIRST_FRAME` | = `NIRCAM_SATSTAR_RECOVERED_CAP` (**on** for extended-emission NIRCam) | with NFRAMES > 1, the ZEROFRAME anchor reads k(first frame) × the ramp ZEROFRAME extension (the first frame) where the ramp GROUPDQ flags group 0 SATURATED or DO_NOT_USE; k = binned median group 0 / first frame on the frame's unflagged pixels (`first_frame_group0`) |
 | `SATSTAR_ZF_RIM_BADPIX` | 1 (**on**) | leave DEAD, HOT and REFERENCE_PIXEL pixels out of the ZEROFRAME rim rewrite, and floor a rewritten pixel's fit error at the frame's median ERR; 0 restores the rewrite that weighted dead pixels at 400–5e8× a normal pixel (#1071) |
 | `SATSTAR_SEED_CORE_DQ` | 1 (**on**) | leave NaN-variance pixels carrying OUTLIER, DEAD, HOT, WARM, LOW_QE, RC, TELEGRAPH, NO_LIN_CORR, NO_SAT_CHECK, NO_GAIN_VALUE, NO_FLAT_FIELD, UNRELIABLE_BIAS, OTHER_BAD_PIXEL or REFERENCE_PIXEL out of the core that `_refine_coms_by_data` centres a seed on (`seed_saturation_core`), then the pieces of fewer than 3 px that remain (a HOT clump on a gc-treasury F480M star's peak otherwise left a 2-px edge pair to win, #1101); 0 restores the seed that an OUTLIER pair or a WARM/HOT clump on a star's edge moved 2.4–3.6 px off wd2 stars (#1098) |
+| `SATSTAR_DEBLEND_PSF_MARGIN` | 0 (**off**) | with `--deblend-satstars`, a secondary peak of the ZEROFRAME residual must exceed this fraction of the PSF model of the accepted stars at its position (`satstar_deblend._psf_veto_peaks`, #1195); needs a gridded in-FOV PSF, falls back to the plain peak search above 5000 saturated px, under 30 fit px, above 40 model stars, when the fit fails or the stamp is degenerate (NaN, zero, negative); keys the cache as `dv<margin>` only for frames whose deblend runs (sibling `_ramp.fits`); can split more than the plain search where a saturated core is clipped by the image edge or two cores merge; set `OMP_NUM_THREADS=1` |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
 | `SATSTAR_OPTIN_FILTERS` | (unset: every bandpass) | bandpasses (`F480M` or `F480M,F405N`) that keep the opt-in fit switches `SATSTAR_ZF_KEEP_FINITE`, `SATSTAR_OBS_PK_FROM_CRF`, `SATSTAR_QFIT_LOCAL_GATE` and `SATSTAR_QFIT_LOCAL_R`; for any other bandpass those four are unset for the whole per-frame fit (`satstar_optin_scoped` on `load_or_make_satstar_catalog`), so the frame fits and keys its cache (`SATFITSW`) as if they were never exported.  A chain takes one environment, so gc-treasury sets the switches once with `SATSTAR_OPTIN_FILTERS=F480M`; a malformed name raises |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |

@@ -1307,7 +1307,18 @@ def satstar_fit_switches(env=None):
       its position after the accepted stars are fitted and subtracted
       (``satstar_deblend._psf_veto_peaks``, #1195).  The synthetic
       single-star runs split most stars on a PSF ring or spike bead without
-      it.  Only the deblend reads it; it is keyed under ``dv``.
+      it.  Only the deblend reads it, so it is keyed under ``dv`` only for a
+      frame whose deblend runs (``--deblend-satstars`` and a sibling
+      ``_ramp.fits``).  Needs a gridded in-FOV PSF (otherwise it reports
+      ``off`` and the plain search runs).  Cost: the veto fits up to 40 model
+      stars by NNLS and, with a ``GriddedPSFModel``, evaluates a spline stamp
+      per trial; a review of #1324 timed one synthetic 4,000 px component
+      with 8 saturated stars at 10 s with one BLAS thread and 77-88 s on a
+      loaded node with default threading, so export ``OMP_NUM_THREADS=1`` in
+      any job that turns it on.  Known limit: where the saturated core is
+      clipped by the image edge or two cores merge into one invalid region the
+      accepted-star positions are wrong and the veto can return MORE centres
+      than the plain search (synthetic scenes, ``test_satstar_deblend_psf_veto``).
     * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
       ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
       recovered-core cap and the PSF fraction below which it is skipped
@@ -1656,9 +1667,11 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['seed_core_dq']:
         # Acts on every in-FOV seed, with or without a ramp.
         parts.append('sq')
-    if deblend_with_zeroframe and sw['deblend_psf_margin'] > 0:
-        # Changes which secondary peaks the deblend keeps (#1195).  Left out
-        # when off, so the default key is the one before the veto existed.
+    if deblend_with_zeroframe and anchor_runs and sw['deblend_psf_margin'] > 0:
+        # Changes which secondary peaks the deblend keeps (#1195).  The deblend
+        # reads the ZEROFRAME, so a frame without a sibling ``_ramp.fits``
+        # never runs it and keeps its key.  Left out when off, so the default
+        # key is the one before the veto existed.
         parts.append(f"dv{sw['deblend_psf_margin']:g}")
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.

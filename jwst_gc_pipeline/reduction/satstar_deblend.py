@@ -115,8 +115,9 @@ def _psf_veto_peaks(psf_stamp, psf_margin, zf, zf_filled, bg, invalid,
 
     Returns ``(peaks, n_vetoed)``: the accepted peaks (crop coordinates) and
     the number of residual peaks above ``thresh`` that the margin rejected in
-    the last pass.  Returns a status string when the fit cannot run, so the
-    caller keeps the plain peak search.
+    the last pass.  Returns a status string when the fit cannot run or the
+    stamp is degenerate (NaN, zero or negative), so the caller keeps the plain
+    peak search.
     """
     ny, nx = zf.shape
     Y, X = np.mgrid[0:ny, 0:nx]
@@ -131,50 +132,56 @@ def _psf_veto_peaks(psf_stamp, psf_margin, zf, zf_filled, bg, invalid,
     centers = list(centers0) + list(extra_centers)
     if len(centers) > PSF_VETO_MAX_MODEL:
         return 'fallback_model_size'
-    if len(centers0) <= PSF_VETO_MAX_REFINE:
-        try:
+    # one handler for every stamp / solver failure, so a stamp error falls back
+    # to the plain search whatever the number of accepted stars
+    try:
+        if len(centers0) <= PSF_VETO_MAX_REFINE:
             centers = _refine_centres(psf_stamp, list(centers0), Y[fit], X[fit],
                                       data, origin) + list(extra_centers)
-        except (RuntimeError, ValueError, np.linalg.LinAlgError):
-            return 'fallback_fit_failed'
-    imgs = [image(cy, cx) for (cy, cx) in centers]
-    peaks = []
-    n_vetoed = 0
-    while True:
-        cols = np.column_stack([im[fit] for im in imgs]
-                               + [np.ones(int(fit.sum())), -np.ones(int(fit.sum()))])
-        try:
-            coef, _ = nnls(cols, data)
-        except (RuntimeError, ValueError, np.linalg.LinAlgError):
-            return 'fallback_fit_failed'
-        amps = coef[:len(imgs)]
-        const = coef[-2] - coef[-1]
-        model = sum(a * im for a, im in zip(amps, imgs))
-        resid = zf_filled - bg - const - model
-        # inside the invalid core zf_filled is a nearest-ring copy, not data;
-        # model minus that copy would make false peaks on its boundary
-        resid = np.where(invalid | ~np.isfinite(resid), 0.0, resid)
-        resid_sm = ndimage.gaussian_filter(resid, sigma)
-        model_sm = ndimage.gaussian_filter(model, sigma)
+        imgs = [image(cy, cx) for (cy, cx) in centers]
+        peaks = []
         n_vetoed = 0
-        best = None
-        if len(peaks) < n_peaks and len(centers) < PSF_VETO_MAX_MODEL:
-            pk = peak_local_max(resid_sm, min_distance=min_sep,
-                                threshold_abs=thresh,
-                                labels=resid_search.astype(int),
-                                num_peaks=n_peaks)
-            for (py, px) in pk:
-                limit = max(thresh, psf_margin * max(model_sm[py, px], 0.0))
-                if resid_sm[py, px] > limit:
-                    if best is None or resid_sm[py, px] > resid_sm[best]:
-                        best = (int(py), int(px))
-                else:
-                    n_vetoed += 1
-        if best is None:
-            return peaks, n_vetoed
-        peaks.append((float(best[0]), float(best[1])))
-        centers.append(best)
-        imgs.append(image(*best))
+        while True:
+            cols = np.column_stack([im[fit] for im in imgs]
+                                   + [np.ones(int(fit.sum())),
+                                      -np.ones(int(fit.sum()))])
+            coef, _ = nnls(cols, data)
+            amps = coef[:len(imgs)]
+            # An all-NaN, all-zero or negative stamp leaves every amplitude at
+            # zero: the "model" is empty and the search would run on the raw
+            # residual, so report it as not applied.
+            if not np.all(np.isfinite(amps)) or not amps.sum() > 0:
+                return 'fallback_fit_failed'
+            const = coef[-2] - coef[-1]
+            model = sum(a * im for a, im in zip(amps, imgs))
+            resid = zf_filled - bg - const - model
+            # inside the invalid core zf_filled is a nearest-ring copy, not
+            # data; model minus that copy would make false peaks on its boundary
+            resid = np.where(invalid | ~np.isfinite(resid), 0.0, resid)
+            resid_sm = ndimage.gaussian_filter(resid, sigma)
+            model_sm = ndimage.gaussian_filter(model, sigma)
+            n_vetoed = 0
+            best = None
+            if len(peaks) < n_peaks and len(centers) < PSF_VETO_MAX_MODEL:
+                pk = peak_local_max(resid_sm, min_distance=min_sep,
+                                    threshold_abs=thresh,
+                                    labels=resid_search.astype(int),
+                                    num_peaks=n_peaks)
+                for (py, px) in pk:
+                    limit = max(thresh, psf_margin * max(model_sm[py, px], 0.0))
+                    if resid_sm[py, px] > limit:
+                        if best is None or resid_sm[py, px] > resid_sm[best]:
+                            best = (int(py), int(px))
+                    else:
+                        n_vetoed += 1
+            if best is None:
+                return peaks, n_vetoed
+            peaks.append((float(best[0]), float(best[1])))
+            centers.append(best)
+            imgs.append(image(*best))
+    except (RuntimeError, ValueError):
+        # np.linalg.LinAlgError is a ValueError
+        return 'fallback_fit_failed'
 
 
 def _is_compact(zf_sm, yy, xx, fwhm_pix, conc_min):
@@ -557,7 +564,9 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
 
     ``stats``, when a dict, is filled with ``n_failed`` (components whose
     deblend raised and kept the refined centroid, with the first error in
-    ``first_error``) and ``psf_veto`` (components per PSF-veto status).
+    ``first_error``) and ``psf_veto`` (components per PSF-veto status) and ``n_vetoed`` (residual
+    peaks above the noise threshold that the PSF margin rejected, summed over
+    the components).
     """
     slices = ndimage.find_objects(sources)
     ceiling = robust_zf_ceiling(zeroframe)
@@ -579,7 +588,8 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
             if stats is not None:
                 counts = stats.setdefault('psf_veto', {})
                 counts[info['psf_veto']] = counts.get(info['psf_veto'], 0) + 1
-        except (ValueError, np.linalg.LinAlgError, IndexError) as exc:
+                stats['n_vetoed'] = stats.get('n_vetoed', 0) + info['n_vetoed']
+        except (ValueError, IndexError) as exc:  # LinAlgError is a ValueError
             # the component keeps its refined centroid, as before, but the
             # failure is counted and printed instead of passing silently
             centers = None
