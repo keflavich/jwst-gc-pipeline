@@ -1604,7 +1604,7 @@ def _sanitise_meta_for_yaml(table):
             continue
         try:
             yaml.dump({k: v}, )
-        except Exception as ex:
+        except (yaml.YAMLError, TypeError, ValueError, AttributeError) as ex:
             table.meta[k] = str(v)
             print("BAD META:", k, type(v), v, ex)
 
@@ -2406,17 +2406,21 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     # `_obsid_for_glob`); the loop variable used to be spelled `obsid`, which
     # read as if the prefix were built out of an observation number.
     imgfns = []
+    _imgs_by_filter = {}
     for proposal in _obs_filters_for(target):
         for filn in _obs_filters_for(target)[proposal]:
             _obsid = _obsid_for_glob(target, proposal, filn, field=field)
             if _obsid is None:
                 continue
-            _matches = [x for x in glob.glob(
+            # sorted: glob order is the filesystem's, and the first match is
+            # what the guard message names
+            _matches = sorted(x for x in glob.glob(
                 f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(proposal)}-o{_obsid}"
                 f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-                if f'{module}_' in x or f'{module}1_' in x]
+                if f'{module}_' in x or f'{module}1_' in x)
             _check_single_observation(_matches, target, proposal, filn)
             imgfns.extend(_matches)
+            _imgs_by_filter.setdefault(filn, []).extend(_matches)
 
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
@@ -2454,6 +2458,21 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                   for filn in filternames
                   for x in glob.glob(f"{basepath}/{filn.upper()}/{filn.lower()}*{module}{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")
                   ]
+        # The catalogues are paired with the i2d list by position below, and
+        # zip() stops at the shorter list.  A filter whose catalogue exists but
+        # whose (observation-scoped) i2d glob came back empty would hand the
+        # next filter's WCS to this one's table, so name it instead.
+        _no_i2d = [filn for filn in dict.fromkeys(filternames)
+                   if not _imgs_by_filter.get(filn)
+                   and glob.glob(f"{basepath}/{filn.upper()}/{filn.lower()}*{module}{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")]
+        if _no_i2d:
+            raise ValueError(
+                f"No {module} i2d matched for filter(s) {_no_i2d} (target={target}, "
+                f"field={field!r}) although their crowdsource catalogues exist; "
+                f"without a mosaic per catalogue the WCS would be paired with "
+                f"the wrong filter's table.  Looked in "
+                f"{basepath}/<FILTER>/pipeline/ for the observation's "
+                f"*{module}_i2d.fits.")
         # Historical per-target catalog counts (brick=10, cloudc=6) predate
         # later filter additions; warn loudly rather than hard-fail on this
         # legacy (non-indivexp) path.
@@ -2556,7 +2575,7 @@ class MissingRequiredFilterError(ValueError):
     """
 
 
-def _conversion_pixel_area(meta, ww=None):
+def _conversion_pixel_area(meta, ww=None, warn=True):
     """``(area, side)`` as deg^2 and arcsec Quantities: the pixel area that
     converts a table's ``flux_fit`` to Jy.
 
@@ -2564,14 +2583,17 @@ def _conversion_pixel_area(meta, ww=None):
     merge rescaled every frame's flux to that area (#1238), and the i2d's own
     pixel area would undo it.  A table without the stamp keeps the legacy
     order (i2d WCS, ``pixelscale_deg2``, ``PIXSCALE``) with a warning that its
-    frames were merged with one area for every detector.
+    frames were merged with one area for every detector.  ``warn=False`` is for
+    the module-level catalogs of the legacy path, which have no per-filter
+    merge to rerun.
     """
     if PIXAREF_KEY in meta:
         area = u.Quantity(float(meta[PIXAREF_KEY]), u.deg**2)
         return area, (area**0.5).to(u.arcsec)
-    print(f"WARNING: {meta.get('filter', '?')} table has no {PIXAREF_KEY}; "
-          f"its frames were merged without per-detector pixel areas "
-          f"(#1238) -- rerun the per-filter merge", flush=True)
+    if warn:
+        print(f"WARNING: {meta.get('filter', '?')} table has no {PIXAREF_KEY}; "
+              f"its frames were merged without per-detector pixel areas "
+              f"(#1238) -- rerun the per-filter merge", flush=True)
     if ww is not None:
         return ww.proj_plane_pixel_area(), (ww.proj_plane_pixel_area()**0.5).to(u.arcsec)
     if 'pixelscale_deg2' in meta:
@@ -2729,10 +2751,12 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                 continue
         _proj = _project_for_target_filter(target, filn)
         _obsid = _obsid_for_glob(target, _proj, filn, field=field)
-        _img_matches = [] if _obsid is None else [x for x in glob.glob(
+        # sorted: the first match is the WCS and pixel-area source, so it must
+        # not depend on the filesystem's glob order
+        _img_matches = [] if _obsid is None else sorted(x for x in glob.glob(
             f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(_proj)}-o{_obsid}"
             f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-            if f'{module}_' in x or f'{module}1_' in x]
+            if f'{module}_' in x or f'{module}1_' in x)
         _check_single_observation(_img_matches, target, _proj, filn)
         if not _img_matches:
             print(f"WARNING: no {module} i2d for filter {filn}; will fall back to "
@@ -2836,7 +2860,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         if 'skycoord' not in tbl.colnames:
             tbl.add_column(crds, name='skycoord')
 
-        pixelscale_deg2, pixelscale_arcsec = _conversion_pixel_area(tbl.meta, ww)
+        pixelscale_deg2, pixelscale_arcsec = _conversion_pixel_area(tbl.meta, ww, warn=indivexp)
         tbl.meta['pixelscale_deg2'] = pixelscale_deg2
         tbl.meta['pixelscale_arcsec'] = pixelscale_arcsec
         if 'flux_fit' in tbl.colnames:
@@ -4017,6 +4041,7 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     if not files:
         return None
     parts = []
+    part_frames = []
     for f in files:
         try:
             tt = Table.read(f)
@@ -4025,8 +4050,14 @@ def load_rejected_satstar_catalog(filtername, target='brick',
             continue
         if len(tt) and 'skycoord_fit' in tt.colnames:
             parts.append(tt)
+            part_frames.append(frame_path_for_satstar_catalog(
+                f.replace('_satstar_rejected.fits', '_satstar_catalog.fits')))
     if not parts:
         return None
+    # Same per-frame pixel area as the accepted channel (load_satstar_catalog):
+    # replace_saturated compares these fluxes with the catalog's, which sit on
+    # the PIXAREF scale, and adopts them in the gray-zone clip correction (#1238).
+    apply_satstar_frame_pixel_area(parts, part_frames, filtername)
     out = table_vstack(parts, metadata_conflicts='silent')
     print(f"load_rejected_satstar_catalog: {len(out)} gate-rejected candidate "
           f"row(s) for {filtername} from {len(files)} file(s)")

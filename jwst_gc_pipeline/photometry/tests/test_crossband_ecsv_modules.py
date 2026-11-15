@@ -90,7 +90,7 @@ def test_the_choice_reaches_the_writer():
     # merge_daophot never writes the cross-band ECSV: write_crossband_ecsv
     # does, from the annotated FITS (#1228)
     assert "vetted=True, write_ecsv=False)" in run
-    assert "if module in _xb_ecsv_modules: try: write_crossband_ecsv(_xb)" in run
+    assert "_write_crossband_ecsv_guarded(module, _xb_ecsv_modules, _xb, last_phase)" in run
     assert "basepath=basepath, write_ecsv=write_ecsv)" in src(
         merge_catalogs.merge_daophot)
     merge = src(merge_catalogs.merge_catalogs)
