@@ -94,7 +94,10 @@ MANUAL_DEFAULTS = {
     # per-frame and merged catalogs without the column.  A member fainter than
     # ``manual_ext_group_qfit_min_ratio`` x the brightest member of its group
     # keeps its own qfit; 0.1 is the ``manual_m7_seed_own_band_companion_max_ratio``
-    # value and is not validated for vetting.
+    # value and is not validated for vetting: at 0.1 the discount factor of the
+    # faint member is ~0.13 within ~1 FWHM, so a spurious faint member can pass
+    # the flat qfit gate (0.3 gives ~0.31).  qfit_group also feeds the
+    # qfit_confident S/N bypass of the vetting.
     'manual_ext_group_qfit': False,
     'manual_ext_group_qfit_min_ratio': 0.1,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP

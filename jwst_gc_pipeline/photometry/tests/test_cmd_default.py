@@ -148,12 +148,12 @@ def test_annotate_with_subsets_covers_every_qualcuts_file(tmp_path):
     stem = tmp_path / 'basic_merged_x_m7_o001'
     _write_fits(f'{stem}.fits', _table())
     _write_fits(f'{stem}_qualcuts.fits', _table())
-    _write_fits(f'{stem}{OKSEP}.fits', _table()[[0, 1, 4]])  # noqa: qualcuts-token
+    _write_fits(f'{stem}{OKSEP}.fits', _table()[[0, 1, 4]])
     done = CD.annotate_cmd_default_with_subsets(f'{stem}.fits')
     assert sorted(os.path.basename(p) for p in done) == [
         'basic_merged_x_m7_o001.fits', 'basic_merged_x_m7_o001_qualcuts.fits',
-        f'basic_merged_x_m7_o001{OKSEP}.fits']  # noqa: qualcuts-token
-    sub = Table.read(f'{stem}{OKSEP}.fits')  # noqa: qualcuts-token
+        f'basic_merged_x_m7_o001{OKSEP}.fits']
+    sub = Table.read(f'{stem}{OKSEP}.fits')
     assert list(sub['cmd_default']) == [True, False, True]
 
 
@@ -224,11 +224,38 @@ def test_m8_merge_partials_flag_failure_is_logged_not_raised(tmp_path, capsys, m
     assert capsys.readouterr().err == ''
 
 
+@pytest.mark.parametrize('target', ['brick', 'gc-treasury'])
+def test_m7_hook_flags_the_merged_table_and_every_qualcuts_subset(tmp_path, target,
+                                                                  monkeypatch):
+    """The m7 block's helper reaches the field's own oksep subset, whatever its proposal number."""
+    monkeypatch.delenv('M8_CMD_DEFAULT', raising=False)
+    oksep = MC._qualcuts_oksep_suffix(target)
+    stem = tmp_path / 'basic_merged_x_m7_o001'
+    _write_fits(f'{stem}.fits', _table())
+    _write_fits(f'{stem}_qualcuts.fits', _table())
+    _write_fits(f'{stem}{oksep}.fits', _table()[[0, 1, 4]])
+    done = cataloging._annotate_cmd_default_m7(f'{stem}.fits', 'm7')
+    assert sorted(os.path.basename(p) for p in done) == sorted([
+        'basic_merged_x_m7_o001.fits', 'basic_merged_x_m7_o001_qualcuts.fits',
+        f'basic_merged_x_m7_o001{oksep}.fits'])
+    assert list(Table.read(f'{stem}{oksep}.fits')['cmd_default']) == [True, False, True]
+    assert list(Table.read(f'{stem}.fits')['cmd_default']) == [
+        True, False, False, False, True, False]
+
+
+def test_m7_hook_honours_the_env_switch(tmp_path, monkeypatch):
+    monkeypatch.setenv('M8_CMD_DEFAULT', '0')
+    stem = tmp_path / 'basic_merged_x_m7_o001'
+    _write_fits(f'{stem}.fits', _table())
+    assert cataloging._annotate_cmd_default_m7(f'{stem}.fits', 'm7') == []
+    assert 'cmd_default' not in Table.read(f'{stem}.fits').colnames
+
+
 def test_m7_block_flags_after_propagation_and_before_the_ecsv():
     src = Path(cataloging.__file__).read_text()
     prop = src.index('propagate_independent_detection(_xb)')
-    flag = src.index('_maybe_annotate_cmd_default(\n                [_xb]')
-    ecsv = src.index('write_crossband_ecsv(_xb)')
+    flag = src.index('_annotate_cmd_default_m7(_xb, last_phase)')
+    ecsv = src.index('_write_crossband_ecsv_guarded(module, _xb_ecsv_modules, _xb')
     assert prop < flag < ecsv
 
 
@@ -243,11 +270,13 @@ def _backfill_module():
     return mod
 
 
-def test_backfill_selects_tables_and_skips_partials_and_other_files(tmp_path):
+@pytest.mark.parametrize('target', ['brick', 'gc-treasury'])
+def test_backfill_selects_tables_and_skips_partials_and_other_files(tmp_path, target):
     mod = _backfill_module()
+    oksep = MC._qualcuts_oksep_suffix(target)
     base = 'basic_merged_indivexp_photometry_tables_merged_resbgsub'
     wanted = [f'{base}_hybpsf_m7_o107.fits',
-              f'{base}_hybpsf_m7_o107{OKSEP}.fits',  # noqa: qualcuts-token
+              f'{base}_hybpsf_m7_o107{oksep}.fits',
               f'{base}_m8_o107.fits', f'{base}_m8_dedup_o107.fits',
               f'{base}_m8.fits', f'{base}_m8_dedup.fits']
     skipped = [f'{base}_m8_partial_F115W.fits', f'{base}_m8_dedup_20260713.fits',
@@ -304,3 +333,8 @@ def test_cmd_script_catalog_path_stage_choice():
     assert cmds.catalog_path('/b', 'basic', field='brick').endswith('resbgsub_m7.fits')
     with pytest.raises(ValueError, match='stage'):
         cmds.catalog_path('/b', 'basic', stage='m9')
+
+
+def test_joint_catalog_cli_default_input_stays_m7_oksep():
+    from jwst_gc_pipeline.cmz import treasury_joint_catalog as tjc
+    assert tjc.build_parser().parse_args(['--version-tag', 'v']).tile_kind == 'm7_oksep'

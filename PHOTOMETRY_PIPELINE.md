@@ -251,7 +251,19 @@ rejection**.
   The dedup table records which pre-dedup row supplied each band
   (`dedup_src_<band>`, `dedup_band_swapped_<band>`, `dedup_primary`,
   `dedup_pos_spread_mas`; indices refer to the sibling `..._m8` file of the same
-  run, named in the `DEDUPSRC` header key).
+  run, named in the `DEDUPSRC` header key). The header also carries `DEDUPN0`
+  (row count of that m8 file, so a reader can tell whether a later rewrite of
+  the m8 moved the indices), `DEDUPRAT` (`--m8-dedup-winner-emag-ratio`, when
+  set) and `DEDUPRES` (the bands and mas of `--m8-dedup-band-resolve-mas` that
+  were applied, when the guard is active). `n_filt_independent` is recomputed
+  from `independently_detected_<band>` on the rows that took a band from
+  another row. Both options are checked when the command line is read (a
+  malformed or non-positive value stops the run at start); a band named in
+  `--m8-dedup-band-resolve-mas` that the table does not have, or that has no
+  `skycoord_<band>` column, is dropped with a warning, and the guard is
+  reported OFF when none is left. `m8_merge_partials.py` takes the same two
+  options as `--dedup-winner-emag-ratio` and `--dedup-band-resolve-mas`; pass
+  the values the cataloging run used.
 
 ### Merge + vet (per-phase barrier)
 
@@ -426,14 +438,14 @@ still run after m6.
 | `--m8-dedup-winner-emag-ratio` (`m8_dedup_winner_emag_ratio`, e.g. 0.8) | `None` | off | off | off | the primary row keeps its own band measurement unless the other member's emag is below ratio times the primary's |
 | `--m8-dedup-band-resolve-mas` (`m8_dedup_band_resolve_mas`, a number or `f212n=60,...`) | `None` | off | off | off | rows resolved in a band (independent detections further apart than this) are not merged |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
-| env `M8_CMD_DEFAULT=0` (skips the `oksep_pass` / `cmd_default` columns on m8 and m8_dedup; #1283) | unset | columns written | | |
+| env `M8_CMD_DEFAULT=0` (skips the `oksep_pass` / `cmd_default` columns on m7 (with its `_qualcuts*` subsets), m8 and m8_dedup, and in `m8_merge_partials.py`; only the exact value `0` skips; #1283) | unset | columns written | | |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
 | `--mergedcat-render-procs` / `--forced-fill-procs` (forked processes over the frames of the merged-catalog render / of the m8 fill; output identical to the serial loop, #1230) | 1 / 1 | serial (set per job through the submitters' `EXTRA_ARGS`) | | |
-| `--forced-fill-bkg-scatter` (`forced_fill_bkg_scatter`; adds each m8 source's annulus scatter, 1.4826 MAD at 2.5-4.5 FWHM, to the crf ERR in quadrature; writes `forced_bkg_sigma_<filter>`; #1120) | off | crf ERR only | | |
-| `--forced-fill-nbrsub` (`forced_fill_nbrsub`; fits each m8 frame with its m7 star-only model removed and the m7 sources within 40 mas of a target added back; needs the m7 per-frame `_model.fits` and catalogue, a frame without them is fitted unsubtracted; writes `forced_nbrsub_<filter>`, `forced_near_m7_sep_<filter>`; #1284) | off | raw frame, neighbours left in | | |
-| `--forced-fill-nrand` (`forced_fill_nrand`; N random blank positions per band, 1-2 FWHM from random rows; every target's error is scaled by the half-width of their 16-84 percentile flux/error range, at least 1; writes `forced_err_scale_<filter>`, `forced_snr_raw_<filter>`; use with `--forced-fill-nbrsub`; #1284) | 0 | formal error | | |
+| `--forced-fill-bkg-scatter` (`forced_fill_bkg_scatter`; adds each m8 source's annulus scatter in excess of the crf ERR (1.4826 MAD at 2.5-4.5 FWHM, inner radius floored at 4 px, `median(ERR^2)` subtracted) to the crf ERR in quadrature; writes `forced_bkg_sigma_<filter>` (per pixel) and `forced_bkg_nframes_<filter>`; changes `forced_snr`, `flux_ulim`, `emag_ab` of promoted rows; #1120) | off | crf ERR only | | |
+| `--forced-fill-nbrsub` (`forced_fill_nbrsub`; fits each m8 frame with its m7 star-only model removed and the m7 sources within 40 mas of a target added back; needs the m7 per-frame `_model.fits` and catalogue, a frame without both is fitted unsubtracted and dropped from the combine of every target that has a subtracted frame, a target with none keeps its fit and upper limit but is not promoted; writes `forced_nbrsub_<filter>`, `forced_near_m7_sep_<filter>`; #1284) | off | raw frame, neighbours left in | | |
+| `--forced-fill-nrand` (`forced_fill_nrand`; N random blank positions per band, 1-2 FWHM from random rows; every target's error is scaled by the half-width of their 16-84 percentile flux/error range, at least 1, one factor per band and catalogue; scales `forced_snr`, `flux_ulim`, the detection cut, `emag_ab` and `mag_*_ulim`; writes `forced_err_scale_<filter>`, `forced_snr_raw_<filter>`; needs `--forced-fill-nbrsub` (warns without it); #1284) | 0 | formal error | | |
 | `--each-suffix` | `destreak_o001_crf` | per-reduction | | |
 | `--cutout-region` / `--cutout-label` / `--cutout-size-arcsec` | `''`/`''`/5.0 | full-frame | | |
 | `--inject-stars` / `--inject-seed` | `''`/0 | off (cutout-only; reference-field truth, `injection.py`) | | |
@@ -542,6 +554,9 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   0.1") and `cmd_default` (`oksep_pass` AND `n_filt_independent >= 2`), with the
   test named in the `CMDDEF` header card (`photometry/cmd_default.py`; #1283).
   Tables already on disk get them from `scripts/reduction/add_cmd_default_flag.py`.
+  With `--no-m8-dedup`, or when the dedup fails, the raw m8 table is left
+  without the columns (the flag step runs inside the dedup step); run the
+  backfill script on it.
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).
@@ -603,6 +618,44 @@ The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy
 `iter2/iter3/iter4`, `_daoiterative` products, so the two paths coexist in one
 tree.
 
+### Group-aware qfit (`--manual-ext-group-qfit`, #1245, default off)
+
+In a grouped fit the brighter member takes most of the blended flux, so the
+fainter member's qfit (sum|resid in its 5x5 box| / its own flux) rises to about
+twice its ungrouped value and fails the vetting. With the switch on, the
+per-frame pass writes `qfit_group = qfit * flux / (flux + S)`, where `S` is the
+fitted PSF light of the group partners (clipped at zero, partners within 12 px)
+inside the member's own fit box, and the merge averages it to `qfit_group_avg`
+(released as `qfit_group_{filter}`). `_filter_extended_emission` then uses
+`min(qfit_group, qfit)` for the keep tiers, the `qfit_confident` bypass and the
+previous-phase keep; `low_fit_quality` and the prominence exempt stay on the
+member's own qfit. A singleton, a member below `--manual-ext-group-qfit-min-ratio`
+(0.1) times the brightest member of its group, a row with flag bit 8 or a
+non-finite `flux_err`, and an overshoot-refit row keep `qfit`.
+
+Limits:
+
+- **Per-frame catalogs must be regenerated** with the switch on. A catalog with
+  no `qfit_group` column is vetted on `qfit` (logged: "requested but the catalog
+  has no qfit_group column"). The merge keys on the first frame: if it lacks the
+  column the merged catalog has none, and a partial column is averaged over the
+  frames that carry it; both are logged as warnings.
+- **`min_ratio` 0.1 is unvalidated and admits spurious faint members.** For a
+  partner within about 1 FWHM the faint member's qfit is multiplied by 0.13 /
+  0.18 / 0.31 / 0.45 / 0.60 at flux ratio 0.10 / 0.15 / 0.30 / 0.55 / 1.0
+  (Gaussian PSF, FWHM 2.5 px). Against the flat `qfit_max` 0.2 a member with
+  an own qfit up to about 1.5 passes at ratio 0.10, and up to about 0.65 at
+  ratio 0.30, so a PSF-ring fit beside a bright star can be kept. Try 0.3
+  first.
+- **The `qfit_confident` bypass skips the local S/N floor.** It keeps any row
+  with `qf <= qfit_max` regardless of S/N, and with the switch on `qf` is the
+  group-aware value, so a grouped faint member admitted this way is never
+  tested against `--manual-ext-local-snr-min`.
+- **MIRI**: the hard overshoot cap rescales `flux_fit` without rescaling
+  `qfit`, so for a capped row `qfit * flux` is no longer the residual sum and
+  the row is treated as an ordinary member. The option is aimed at NIRCam.
+- Validation (o105 30" cutout m2-m7 replay, flux-ratio bins) has not been run.
+
 ## Flags (defaults)
 
 The `--manual-*` flag names are retained for back-compatibility; the path they
@@ -628,6 +681,7 @@ control is the default.
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + per-frame S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-sky-clean-local-arcsec` | 3.0 | sky-clean tier, LOCAL reference: a source is also clean when its annulus floor is ≤ `--manual-sky-clean-local-max-err` i2d ERR above the 5th percentile of its 3″ tile (smooth bright plateau = clean; filament, PSF-scale emission structure or crowding = not); OR-ed with the global dark-sky test; 0 = global only; needs the i2d ERR plane (skipped with a log line without it) |
 | `--manual-sky-clean-local-max-err` | 2.0 | sky-clean tier, LOCAL reference threshold in i2d ERR (≈ 2.4σ of pixel scatter in the Brick dark cloud, where ERR ≈ 1.2× the scatter); the global test's `--manual-sky-clean-max-sky-snr` is in dark-sky σ |
+| `--manual-ext-group-qfit` / `--manual-ext-group-qfit-min-ratio` | off / 0.1 | group-aware qfit for the members of a jointly fitted group (#1245), see "Group-aware qfit" above; unvalidated, 0.3 is the first ratio to try |
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
 | `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |
 

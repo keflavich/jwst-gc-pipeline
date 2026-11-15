@@ -1977,10 +1977,13 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
             min_ratio=float(mopt(options, 'manual_ext_group_qfit_min_ratio')),
             excluded=(np.asarray(mask, dtype=bool) | np.asarray(bad, dtype=bool)))
         _res['qfit_group'] = _qg
-        _ng = int(np.sum(np.isfinite(_qg) & np.isfinite(
-            np.asarray(_res['qfit'], dtype=float)) & (_qg < np.asarray(_res['qfit'], dtype=float))))
-        print(f"[{label}] group-aware qfit: {_ng} of {len(_res)} rows below "
-              f"their own qfit", flush=True)
+        _qo = np.asarray(_res['qfit'], dtype=float)
+        # count only material reductions (a partner just outside the 5x5 box
+        # lowers qfit by ~1e-8)
+        _ng = int(np.sum(np.isfinite(_qg) & np.isfinite(_qo)
+                         & (_qg < _qo * (1.0 - 1e-3))))
+        print(f"[{label}] group-aware qfit: {_ng} of {len(_res)} rows more than "
+              f"0.1% below their own qfit", flush=True)
 
     return phot.results, modsky, phot
 
@@ -2611,6 +2614,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         qf = np.where(_ok, np.minimum(_qg, qf_own), qf_own)
         print(f"[{label}] group-aware qfit: {int(np.sum(qf < qf_own))} of {n} "
               f"rows judged on qfit_group", flush=True)
+    elif group_qfit:
+        # per-frame catalogs written before the switch carry no column; say so
+        # rather than letting the run look like a normal opted-in one
+        print(f"[{label}] group-aware qfit requested but the catalog has no "
+              f"qfit_group column: every row is judged on its own qfit "
+              f"(regenerate the per-frame catalogs with "
+              f"--manual-ext-group-qfit)", flush=True)
     flg = (np.asarray(t['flags'], dtype=float)
            if 'flags' in t.colnames else np.full(n, np.nan))
     lbk = (np.asarray(t['local_bkg'], dtype=float)
@@ -3005,6 +3015,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # S/N (inflated to ~0 by group-fit covariance degeneracy for close pairs
         # -- see _emission_keep_nircam): a well-fit star must never be dropped
         # from the vetted catalog/residual on a broken uncertainty.
+        # With group_qfit this bypass reads the group-aware qf, so a grouped
+        # faint member whose qfit_group <= qfit_max skips the local_snr_min
+        # floor (see the limits in group_qfit.py).
         keep = _emission_keep_nircam(star_like, snr_floor, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
 
@@ -6072,6 +6085,24 @@ def write_crossband_ecsv(merged_path):
     return f'{stem}.ecsv'
 
 
+def _write_crossband_ecsv_guarded(module, ecsv_modules, merged_path, phase):
+    """``write_crossband_ecsv`` for the modules that get a twin; never raises.
+
+    A failed write is reported and the run continues, as for the annotation
+    steps before it.  Returns the ECSV path, or None when the module has no
+    twin, the FITS is absent or the write failed.
+    """
+    if module not in ecsv_modules:
+        return None
+    try:
+        return write_crossband_ecsv(merged_path)
+    except (OSError, ValueError, KeyError,
+            yaml.representer.RepresenterError) as exc:
+        print(f"manual [{phase}]: writing the ECSV twin of "
+              f"{os.path.basename(merged_path)} failed ({exc})", flush=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
@@ -7288,6 +7319,17 @@ def _maybe_annotate_cmd_default(paths, label='m8'):
             continue
         done.append(_p)
     return done
+
+
+def _annotate_cmd_default_m7(xb_path, label='m7'):
+    """``_maybe_annotate_cmd_default`` on a cross-band table and its ``_qualcuts*`` subsets.
+
+    Every subset the merge wrote is matched by glob, so the field's oksep
+    suffix (whatever proposal number it carries) needs no spelling here.
+    """
+    return _maybe_annotate_cmd_default(
+        [xb_path] + sorted(glob.glob(f"{xb_path[:-len('.fits')]}_qualcuts*.fits")),
+        label)
 
 
 def _maybe_flag_m8_spikes(dedup_path, m8_path, options, label='m8'):
@@ -11572,19 +11614,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                       f"flags onto the _qualcuts subsets failed ({_pex})", flush=True)
             # Default CMD selection (#1283): oksep_pass / cmd_default on the
             # merged table and its subsets, after n_filt_independent exists.
-            _maybe_annotate_cmd_default(
-                [_xb] + sorted(glob.glob(f"{_xb[:-len('.fits')]}_qualcuts*.fits")),
-                last_phase)
+            _annotate_cmd_default_m7(_xb, last_phase)
             # Last step of the post-annotation block (after any column added
             # to the FITS): the ECSV twin carries the FITS table's columns.  It
             # is written even when annotation failed, without the flags.
-            if module in _xb_ecsv_modules:
-                try:
-                    write_crossband_ecsv(_xb)
-                except (OSError, ValueError, KeyError,
-                        yaml.representer.RepresenterError) as _eex:
-                    print(f"manual [{last_phase}]: writing the ECSV twin of "
-                          f"{os.path.basename(_xb)} failed ({_eex})", flush=True)
+            _write_crossband_ecsv_guarded(module, _xb_ecsv_modules, _xb, last_phase)
             # provenance sidecar for the m7 cross-band catalog (after annotate,
             # which mutates the file); stamp as stage 'm7'.  Its seed parent is
             # the POOL of every filter's m6 merged catalog (the cross-band seed
