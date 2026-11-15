@@ -1601,7 +1601,7 @@ def _sanitise_meta_for_yaml(table):
             continue
         try:
             yaml.dump({k: v}, )
-        except Exception as ex:
+        except (yaml.YAMLError, TypeError, ValueError, AttributeError) as ex:
             table.meta[k] = str(v)
             print("BAD META:", k, type(v), v, ex)
 
