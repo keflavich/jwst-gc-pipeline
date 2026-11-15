@@ -552,7 +552,11 @@ def _satstar_floor_band(header):
     frames read ``FILTER=F444W``, F323N reads ``F322W2``, F164N and F162M read
     ``F150W2``.  A FILTER lookup gave F405N the F444W severity floor, F323N and
     F164N no floor, and left every pupil-wheel band without a data floor.
-    ``''`` (floor 0, gate off) when the header names no bandpass."""
+    ``''`` (floor 0, gate off) when the header names no bandpass.
+
+    A non-bandpass pupil element (WLP8, GRISMR) also wins over FILTER here, so a
+    weak-lens or grism frame reads band ``wlp8`` or ``grismr`` and gets floor
+    (0, 0); neither is science imaging, and no warning fires for them."""
     return _frame_bandpass(header).lower()
 
 
@@ -1574,6 +1578,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     ``sq`` (``SATSTAR_SEED_CORE_DQ``, ON by default) moves seeds on any frame,
     so every frame's default key carries it and its older catalog is refit
     once.
+
+    ``sf<data>-<sev>to<data>-<sev>`` (#950) marks a pupil-wheel frame whose data
+    and severity floors, now keyed by the science bandpass, differ from what the
+    old FILTER lookup gave (``_satstar_floor_lookup_signature``).
     """
     sw = satstar_fit_switches(env)
     parts = []
@@ -2378,6 +2386,28 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
         prov.update(mode=ZF_MODE_KEEPFINITE, n_deep=int(deep.sum()))
         return data, deep, rim, None
     return data, None, rim, None
+
+
+def zeroframe_reconcile_provenance(prov, zf_deep_core, rim):
+    """Make ``prov`` agree with the fit mask actually used (#681), in place.
+
+    The fit mask is ``zf_deep_core`` when it is not None and the whole SATURATED
+    blob otherwise, so that is the single source of truth for ``zf_fit`` and
+    ``SATZFFIT``.  ``zeroframe_fit_anchor`` fills ``prov`` from the same
+    branches, but it is a second channel: an anchor that returns a deep core and
+    leaves ``prov`` at its blob default would otherwise stamp "blob" on stars
+    fitted on the deep core.  Where the two disagree the mask wins; ``n_rim`` and
+    ``n_deep`` are then counted from the arrays.
+    """
+    if zf_deep_core is None:
+        if prov['mode'] != ZF_MODE_BLOB:
+            prov.update(zeroframe_default_provenance(), R=prov['R'])
+        return prov
+    if prov['mode'] == ZF_MODE_BLOB:
+        n_rim = 0 if rim is None else int(np.asarray(rim).sum())
+        prov.update(mode=ZF_MODE_RIM if n_rim else ZF_MODE_KEEPFINITE,
+                    n_rim=n_rim, n_deep=int(np.asarray(zf_deep_core).sum()))
+    return prov
 
 
 def stamp_zeroframe_provenance(target, prov):
@@ -4152,6 +4182,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             R_header=zeroframe_header_R(
                 header, fitsdata['SCI'].header.get(
                     'PHOTMJSR', header.get('PHOTMJSR'))))
+    # The mask (zf_deep_core is not None) decides zf_fit, not the anchor's report.
+    zeroframe_reconcile_provenance(_zf_prov, zf_deep_core, _rim)
     builtins.satstar_zf_provenance = _zf_prov
 
     # Fit-quality switches (issue #972), read once per frame.

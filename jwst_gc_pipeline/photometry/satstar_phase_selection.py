@@ -46,6 +46,7 @@ says so as a WARNING (#1194).
 exposure), for bisecting only.
 """
 import hashlib
+import functools
 import os
 import re
 from collections import Counter
@@ -171,11 +172,39 @@ def satstar_frame_variant(path, use_header=False):
     if token or not (use_header and is_product and os.path.exists(str(path))):
         return token
     try:
-        with fits.open(str(path)) as hdul:
-            frame = hdul[1].header.get('FILENAME', '')
+        stat = os.stat(str(path))
+    except OSError:
+        return ''
+    frame = _filename_card(str(path), stat.st_mtime_ns, stat.st_size)
+    return satstar_frame_variant(frame) if frame else ''
+
+
+@functools.lru_cache(maxsize=None)
+def _filename_card(path, mtime_ns, size):
+    """``FILENAME`` of extension 1 of ``path``, ``''`` when unreadable.
+
+    Cached on the file's mtime and size: the flag, replace and rejected readers
+    each select over the same files, and a header read of every one is slow on
+    the shared filesystem.  ``mtime_ns`` and ``size`` only key the cache.
+    """
+    try:
+        with fits.open(path) as hdul:
+            return str(hdul[1].header.get('FILENAME', ''))
     except (OSError, IndexError, KeyError):
         return ''
-    return satstar_frame_variant(frame) if frame else ''
+
+
+_OBS_TAIL_RE = re.compile(r'_o\d+(?:_crf)?$')
+
+
+def frame_variant_families(tokens):
+    """The frame variants of ``tokens`` with the observation part dropped.
+
+    ``align_o002_crf`` and ``align_o005_crf`` are one family (``align``): a
+    merge that spans two observations reads the same kind of frame in each, so
+    only a count of families above one means the merge mixes frame variants.
+    """
+    return {_OBS_TAIL_RE.sub('', str(t)) for t in tokens}
 
 
 def normalise_frame_variants(frame_variants):
@@ -442,7 +471,7 @@ def format_phase_report(report, what='satstar catalog'):
         line += (f"; frame variant(s) read: {', '.join(wanted)}; "
                  f"{sum(report['other_variant'].values())} file(s) of another "
                  f"variant left out [{_fmt(report['other_variant'])}]")
-        if len(wanted) > 1:
+        if len(frame_variant_families(wanted)) > 1:
             line += ("; WARNING: more than one frame variant is read, so an "
                      "exposure that has both still ties by file time")
         if report.get('unparsed_variant'):

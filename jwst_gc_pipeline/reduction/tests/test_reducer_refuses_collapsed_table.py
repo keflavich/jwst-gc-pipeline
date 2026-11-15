@@ -170,6 +170,25 @@ def test_every_live_locked_table_still_passes():
         assert flag_broadcast_provenance(t) == [], os.path.basename(path)
 
 
+def test_every_live_consensus_table_is_not_collapsed():
+    """Data tripwire: tie rows must not make a consensus table read as collapsed.
+
+    Covers the ngc6334 6778 table (F187N, F470N) and the cloudef 2092 table
+    (F770W), which flagged while the tie rows entered the per-visit median
+    (issue #831).  Skips where /orange is not mounted.
+    """
+    from glob import glob
+    from jwst_gc_pipeline.reduction.validate_offsets_table import (
+        flag_collapsed_visits)
+    live = sorted(glob('/orange/adamginsburg/jwst/*/offsets/'
+                       'Offsets_JWST_Brick*_consensus.csv'))
+    if not live:
+        pytest.skip('live offsets tables not mounted')
+    for path in live:
+        t = Table.read(path)
+        assert flag_collapsed_visits(t) == [], os.path.basename(path)
+
+
 # ---------------------------------------------------------------------------
 # The docs that describe this call site (review of PR #770, B1)
 # ---------------------------------------------------------------------------
