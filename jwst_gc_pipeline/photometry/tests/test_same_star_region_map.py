@@ -27,7 +27,8 @@ from astropy.coordinates import SkyCoord
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
     measure_offset, same_star_region_map, DEFAULT_REGION_CELL_ARCSEC,
     DEFAULT_REGION_MIN_STARS, REGION_REFERENCE_UNTESTABLE_FRACTION,
-    _region_coverage_scan)
+    _region_coverage_scan, footprint_aligned_grid, assign_footprint_cells,
+    _tangent_plane_xy, _rotate_xy)
 from jwst_gc_pipeline.photometry import visit_consensus as _vc
 from jwst_gc_pipeline.photometry.visit_consensus import measure_reference_tie
 
@@ -710,3 +711,123 @@ def test_scan_without_reference_arguments_is_unchanged():
                                   0.1, 40, 0.3, "t")
     assert [e["ix"] for e in plain[0]] == [0]
     assert "n_ref" not in plain[0][0] and plain[0][0]["expected_pairs"] == 40.0
+
+
+def test_reference_count_is_restricted_to_the_footprint_and_clip_is_off():
+    """``n_ref_in_footprint`` counts reference stars inside the JWST footprint
+    grid only.  The reference catalogue is wider than the footprint (on sgra,
+    191462 stars against 13981 inside), so an unrestricted denominator would
+    lower ``coverage_rate_ref_*`` by that ratio and make most cells
+    untestable.  The expected count is re-derived here from the grid's own
+    rotated frame, not by calling the code under test."""
+    ax, ay, ref = _crowded_core_field((-30, 30, -30, 30), crowd=8, ref_keep=0.1)
+    a = _sky(ax, ay)
+    m = same_star_region_map(a, ref, _tie(a, ref), context="core")
+    grid = footprint_aligned_grid(a, DEFAULT_REGION_CELL_ARCSEC)
+    assert grid["ok"] is True, grid
+    x, y = _tangent_plane_xy(np.asarray(ref.ra.deg, dtype=float),
+                             np.asarray(ref.dec.deg, dtype=float),
+                             grid["ra0"], grid["dec0"])
+    uu, vv = _rotate_xy(x, y, grid["pa_deg"])
+    inside = ((uu >= grid["u_min"])
+              & (uu < grid["u_min"] + grid["n_u"] * grid["cell_u_arcsec"])
+              & (vv >= grid["v_min"])
+              & (vv < grid["v_min"] + grid["n_v"] * grid["cell_v_arcsec"]))
+    assert 0 < inside.sum() < 0.9 * len(ref), (
+        "fixture must hold reference stars outside the footprint")
+    assert m["n_ref_in_footprint"] == int(inside.sum())
+    # the rate is pairs per reference star INSIDE the footprint
+    assert m["coverage_rate_ref_all"] == pytest.approx(
+        m["n_pairs"] / m["n_ref_in_footprint"])
+    assert m["coverage_rate_ref_tight"] == pytest.approx(
+        m["n_tight_pairs"] / m["n_ref_in_footprint"])
+
+
+def test_assign_footprint_cells_clip_false_keeps_out_of_footprint_indices():
+    """``clip=True`` piles a star beyond the edge into the edge cell; with
+    ``clip=False`` it keeps its raw index outside ``[0, n)``."""
+    ax, ay, _ref = _crowded_core_field((-30, 30, -30, 30), crowd=1, ref_keep=1.0)
+    a = _sky(ax, ay)
+    grid = footprint_aligned_grid(a, DEFAULT_REGION_CELL_ARCSEC)
+    assert grid["ok"] is True, grid
+    far = _sky([-400.0, 400.0, 0.0], [0.0, 0.0, 400.0])
+    ra, dec = np.asarray(far.ra.deg), np.asarray(far.dec.deg)
+    cx, cy = assign_footprint_cells(ra, dec, grid)
+    assert (cx >= 0).all() and (cx < grid["n_u"]).all()
+    assert (cy >= 0).all() and (cy < grid["n_v"]).all()
+    rx, ry = assign_footprint_cells(ra, dec, grid, clip=False)
+    out = ((rx < 0) | (rx >= grid["n_u"]) | (ry < 0) | (ry >= grid["n_v"]))
+    assert out.all(), (rx, ry)
+
+
+def test_the_guard_refuses_only_strictly_above_its_limit():
+    """The map is ``ref_too_sparse`` when the untestable share EXCEEDS the
+    limit; a limit equal to the measured share passes it."""
+    ax, ay, ref = _crowded_core_field((-50, 50, -50, 50), crowd=8, ref_keep=0.1)
+    a = _sky(ax, ay)
+    tie = _tie(a, ref)
+    m = same_star_region_map(a, ref, tie, context="core")
+    share = m["ref_bound_untestable_fraction"]
+    assert share > 0 and m["ref_too_sparse"] is True
+    assert m["ref_untestable_limit"] == REGION_REFERENCE_UNTESTABLE_FRACTION
+    at = same_star_region_map(a, ref, tie, context="core",
+                              ref_untestable_fraction=share)
+    assert at["ref_too_sparse"] is False and at["clean"] is True, at["reason"]
+    assert at["ref_untestable_limit"] == share
+
+
+def test_each_arm_is_bounded_by_its_own_pairs_per_reference_rate():
+    """A single-cell entry records ``expected_pairs_ref = n_ref * rate`` with
+    the rate of the arm that produced it: the tight arm uses
+    ``coverage_rate_ref_tight``, the all-pairs arm ``coverage_rate_ref_all``.
+    The two differ on this field, so swapping them is visible."""
+    ax, ay, ref = _crowded_core_field((-30, 30, -30, 30), crowd=8, ref_keep=0.1,
+                                      width=200.0)
+    ay = ay.copy()
+    ay[ay > 40.0] += 20.0
+    a = _sky(ax, ay)
+    m = same_star_region_map(a, ref, _tie(a, ref), context="core+strip")
+    assert m["coverage_rate_ref_tight"] != pytest.approx(m["coverage_rate_ref_all"])
+    singles = [c for c in m["uncovered_cells"] if "n_ref" in c]
+    assert singles, m["uncovered_cells"]
+    for c in singles:
+        rate = (m["coverage_rate_ref_tight"] if c["by"] == "tight-pairs"
+                else m["coverage_rate_ref_all"])
+        assert c["expected_pairs_ref"] == pytest.approx(c["n_ref"] * rate)
+        assert c["expected_pairs"] == pytest.approx(
+            min(c["expected_pairs_src"], c["expected_pairs_ref"]))
+        assert c["ref_bound_applied"] is bool(
+            c["expected_pairs_ref"] < c["expected_pairs_src"])
+
+
+def test_ref_bound_applied_is_set_only_where_the_reference_is_the_smaller():
+    keys = [(0, 0), (1, 0)]
+    # cell 0: n_ref*rate_ref = 20 < n_src*rate = 40; cell 1: 200 > 40
+    unc, _starved, _untest = _region_coverage_scan(
+        keys, [400, 400], {}, 0.1, 10, 0.3, "t",
+        n_ref_by_cell={(0, 0): 100, (1, 0): 1000}, rate_ref=0.2)
+    by_key = {(e["ix"], e["iy"]): e for e in unc}
+    assert by_key[(0, 0)]["ref_bound_applied"] is True
+    assert by_key[(0, 0)]["expected_pairs_ref"] == pytest.approx(20.0)
+    assert by_key[(1, 0)]["ref_bound_applied"] is False
+    assert by_key[(1, 0)]["expected_pairs"] == pytest.approx(40.0)
+
+
+def test_spatial_gate_summary_names_cells_too_thin_in_the_reference():
+    """The checkpoint's spatial-gate line names ``n_ref_bound_untestable`` when
+    it is non-zero and reads as before when it is 0 or absent."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _spatial_gate_detail)
+
+    def tie(**reg):
+        return dict(reference_dense=True, per_tile_source="same-star-region",
+                    region_map=dict(status="clean"),
+                    per_tile_same_star=dict(clean=True, n_cells=21, n_flagged=0,
+                                            n_uncovered=0, n_skipped=1,
+                                            tol_mas=30.0, tol_source="adaptive",
+                                            **reg))
+    with_cells = _spatial_gate_detail(tie(n_ref_bound_untestable=3))
+    assert ("1 unchecked, 3 too thin in the reference to test, tol=30.0 mas "
+            "[adaptive])") in with_cells
+    for reg in (dict(n_ref_bound_untestable=0), dict()):
+        assert "too thin in the reference" not in _spatial_gate_detail(tie(**reg))

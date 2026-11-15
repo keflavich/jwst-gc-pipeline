@@ -326,22 +326,46 @@ unchanged.
 
 **Brightest-K anchor tie (issue #1212, off by default).** The anchor's tie to
 VIRAC2 uses every reliable star of the anchor's vetted catalogue. Most of the
-faint ones have no Ks-selected counterpart, so on gc2211 o046 F200W (124,866
-stars against 16,661 reference rows in the footprint) the offset histogram is
-mostly chance pairs, the contrast falls under the floor and the tie is refused
-although the brightest 10-40k stars tie at 13-15 mas. Setting
+faint ones have no Ks-selected counterpart, so on gc2211 o046 F200W the offset
+histogram is mostly chance pairs, the contrast falls under the floor and the
+tie is refused although the brightest 10-40k stars tie at 13-15 mas. (Counts
+measured by the PR author, not independently replayed: 124,866 reliable stars
+against 16,661 reference rows in the footprint; contrast 13.0 on the brightest
+10k and 5.8 on the brightest 40k. The on-disk o046 m7 record holds the failing
+contrast, 2.235, but not these counts.) Setting
 `CROSSFILTER_ANCHOR_BRIGHT_C=<c>` (or `--anchor-bright-c` on
 `run_astrometry_checkpoint.py --crossfilter`) ties the anchor on its brightest
 `K = clamp(c * n_ref_in_footprint, 5000, n_reliable)` stars instead, where
 `n_ref_in_footprint` counts the reference rows inside the anchor catalogue's
-bounding box. The tie must also hold on the brightest `K/2`, with both
+bounding box. Brightness is the first of `flux`, `flux_fit`, `mag` that has a
+finite value among the reliable stars (masked entries count as NaN; NaN ranks
+faintest). The tie must also hold on the brightest `K/2`, with both
 `vs_full` checks coherent and the two bulks within 5 mas; a tie that appears at
 one `K` only fails. The record then carries `anchor_sample` (`n_reliable`,
-`n_used`, `K`, `K_half`, `k_vs_half_sep_mas`, rule) and
-`anchor_reference_tie_half`. The per-filter-vs-anchor checks keep the full
-reliable sample. With the variable unset the record and verdict are unchanged.
-Whether this becomes the gate's definition of a coherent anchor tie is a
-maintainer decision; validate it on the other fields' vetted catalogues first.
+`n_used`, `K`, `K_half`, `c`, `n_ref_in_footprint`, `column`,
+`k_vs_half_sep_mas`, `agree_tol_mas`, rule) and `anchor_reference_tie_half`.
+The per-filter-vs-anchor checks keep the full reliable sample. With the
+variable unset the record and verdict are unchanged. The release gate and the
+monitor do not read `anchor_sample`, so a restricted-tie PASS is visible only in
+the record itself; `CROSSFILTER_ANCHOR_BRIGHT_C` is listed in the monitor's
+`SAFETY_OVERRIDES` for that reason (it applies to every module and field of the
+job that sets it).
+
+What a restricted-K PASS certifies. It certifies that the brightest K stars,
+taken as a group, are registered to VIRAC2, and that the answer does not depend
+on K. It does not certify spatial uniformity: K/2 is a nested subset of K, so an
+offset that applies to part of the footprint passes both. On the synthetic
+anchor of the PR's tests (600 bright, 4,800 faint) a shift of the western half
+of 30, 60 and 150 mas relative to the reference all pass (K/2 separation 1.4,
+1.3, 0.12 mas, measured by the reviewer; a 400 mas shift does fail via the K/2
+disagreement); `test_anchor_tie_pass_does_not_certify_spatial_uniformity` pins
+this. The per-tile grid had the same blindness to a seam before this switch, so
+the switch adds no spatial coverage, and it does not gate the tie's magnitude
+either. A sample-size- or magnitude-dependent offset of roughly 8-10 mas or more
+between the brightest K/2 and K is caught (reviewer probe: 8, 14 and 30 mas
+fail; 0 passes). Whether this becomes the gate's definition of
+a coherent anchor tie (Q23) is a maintainer decision; validate it on the other
+fields' vetted catalogues (the step-5 sweep, not yet run) first.
 
 **Record names (issue #1254).** The m7 check runs once per merge module, so
 each module writes its own record: `checkpoint_m7_crossfilter_<module>_oNNN`
@@ -429,6 +453,30 @@ holds the reading, and a record without the block was not measured.
 `TRAIL_REVIEWED` holds exposures a person has inspected and kept.  Excluding an
 exposure remains a manual edit of `reduction/exposure_exclusions.py`.
 
+Limits of the reading:
+
+- **`ok` means "not distinguishable from its siblings", not "round".**  Each
+  exposure is compared with the median of its siblings, so once more than about
+  half of a group's exposures trail, the median is itself trailed.  Replaying
+  the grader on 8 detectors at a common sky angle, trailed exposures are
+  flagged up to k = 2 of 3 or 4, 3 of 5 or 6, 4 of 8 and 6 of 12; beyond that
+  every exposure reads `ok` ("0 of N graded detectors over threshold").  gc2211
+  groups have four exposures, so 3 of 4 trailed reads `ok`.  The per-detector
+  rows keep `sigma` and `axis_ratio` for a later absolute reading.
+- **An unmeasurable frame is not a clean one.**  A frame is measured from at
+  least 30 isolated reliable stars (isolated against every catalogued source)
+  whose 29x29 px stamp is finite and whose moments converge; the cut to the 400
+  brightest is made after those checks.  On a dense field few stars qualify.
+  The checkpoint prints one line per visit when fewer frames were measured than
+  exist, and the block carries `n_measured` and `n_frames`.
+- The frame named in the catalog's `FILENAME` is resolved through the
+  /blue <-> /orange spelling helper (`astrometry_utils._resolve_existing_path`).
+  A frame whose ASDF block cannot be read (including a YAML syntax error) is a
+  `cannot_measure` reason, not an exception.
+- The moments are tested at PSF sigma 1.0 px and 1.6 px.  Not tested, and not
+  expected to work, below about 0.8 px (undersampled short-wavelength filters).
+- The pixels are re-read at every correcting-stage run (m1, m2 and m12).
+
 ## The consensus measurement (`visit_consensus.py`)
 
 1. Reliable-star cut per exposure catalog (qfit ≤ 0.1, S/N ≥ 10, excluding
@@ -444,6 +492,44 @@ exposure remains a manual edit of `reduction/exposure_exclusions.py`.
    (the median limits the pull of any one bad exposure).
 5. Every exposure re-measured against the consensus; misaligned = off > 2 mas
    AND significant vs the peak error bars.
+
+### Wide windows: capped bin, significance gate, and what it refuses (#1232)
+
+`measure_offset` histograms each window at `_window_bin_arcsec`, which is
+`window/150` capped at `MAX_WINDOW_BIN_ARCSEC` (0.1″): the 3″ and 10″ windows
+keep their bins (0.02″, 0.067″), the 30″ and 60″ windows read 0.1″ instead of
+0.2″ and 0.4″, so a true 20–30″ tie in a dense field is no longer diluted below
+the contrast floor.  A finer bin lets a noise maximum read contrast 5–9, so at
+windows above `SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC` (15″) `ok` also needs
+`peak_significance >= min_peak_significance` (a trial-corrected Poisson
+significance against the local background).  Window choice stays on contrast;
+when the winner is refused by the floor, the highest-contrast NARROWER window
+that passes its own gate and reads the same peak (within 100 mas or 3000 × the
+bin) is reported instead.
+
+Consequences for existing records and readers:
+
+* Contrasts recorded at 30″ and 60″ before this change were read at the coarser
+  bins and are not comparable (the cloudc F182M "contrast 9.0" above is such a
+  value).  A noise peak above 15″ can now read contrast 5–9, so a contrast
+  check alone no longer separates it; per-exposure records carry
+  `peak_significance`, `min_peak_significance` and `bin_arcsec` next to
+  `contrast` for that reason.
+* `measure_offset_grid` (per-tile `clean`, `per_tile_ok`, `apply_ok`), the
+  Gaia-sparse cross-check of `measure_reference_tie` (`sparse_untrustworthy`
+  now also follows a significance refusal), `visit_consensus`'s sparse arbiter,
+  `bulk_astrometry_update` and `multiepoch_pm.affine_tie` all read the default
+  sweep, so a noise peak above 15″ that used to read `ok` is `ok=False` there.
+  Existing checkpoint records may flip on re-measurement.
+* Measured limits (simulated uniform fields, default sweep; not real data):
+  50 pairs of independent 50″ fields read `ok` 1 time (base 50); at 0.3″
+  scatter a 20–30″ true tie reads `ok` in 11 of 24 fields (7 within 150 mas of
+  the truth) against 24 of 24 at the base (11 within 150 mas).  Scatter of
+  0.04–0.1″ is unaffected.  The 3″/10″ fallback windows have no significance
+  test of their own, which is where the one noise `ok` came from.
+* The alias-probe fixtures of `test_reference_tie_unswept_sparse_alias.py`
+  reach the probe only on a selected seed; the usual route of the same regime
+  is the wide-window significance floor (`wide_window_case`).
 
 ## The reference tie (`measure_reference_tie`) — five checks
 
@@ -559,13 +645,16 @@ than five independent checks would be.
     `n_ref` the reference stars inside the footprint grid
     (`n_ref_in_footprint`, `coverage_rate_ref_all`, `coverage_rate_ref_tight`).
     The minimum only lowers a prediction, so no cell that is covered without it
-    becomes uncovered.  Each scanned cell records `n_ref`, `expected_pairs_src`,
-    `expected_pairs_ref` and `ref_bound_applied`.  A cell that was uncovered on
+    becomes uncovered.  A single-cell entry of `uncovered_cells` records `n_ref`,
+    `expected_pairs_src`, `expected_pairs_ref` and `ref_bound_applied` (covered
+    cells have no entry, and group entries carry none of the four).  A cell that was uncovered on
     the source count and that the reference count leaves too thin to judge
     (fewer than `min_stars` expected pairs) is no longer called displaced; it is
     listed in `ref_bound_untestable_cells` and counted in
     `n_ref_bound_untestable` (as a share of the source cells,
-    `ref_bound_untestable_fraction`; the limit used is `ref_untestable_limit`).  When those cells exceed
+    `ref_bound_untestable_fraction`; the limit used is `ref_untestable_limit`;
+    an entry of `ref_bound_untestable_cells` holds only `ix`, `iy`,
+    `n_sources` and `n_ref`).  When those cells exceed
     `REGION_REFERENCE_UNTESTABLE_FRACTION` (15%) of the source cells the map is
     `clean=False` with `ref_too_sparse` set and the reason "reference too
     sparse to test coverage"; like an uncovered cell, that verdict is excluded
@@ -581,9 +670,33 @@ than five independent checks would be.
     cells is distinguishable from one over a field that was checked.  The
     reference bound adds to this limit: where a cell's reference count predicts
     fewer than `min_stars` pairs (the thin-reference nuclear-cluster core), a
-    displaced region is NOT caught either, and the all-pairs arm cannot stand in
-    because a displaced JWST-dense region finds chance partners for most of its
-    few reference stars;
+    displaced region is NOT caught either.  At nuclear-cluster density (sgra F212N
+    cell (4,1): 8640 sources, roughly 4 per arcsec²) the all-pairs arm cannot
+    stand in, because a displaced JWST-dense region finds chance partners for
+    most of its few reference stars; at lower crowding it does fire (a 100″
+    block at 2 extra JWST stars per field star, reference thinned to 0.25, is
+    reported uncovered on the all-pairs arm in synthetic maps).
+    **Accepted recall cost of the bound (decision of 2026-11-14).**  The bound is
+    a minimum of two noisy predictions, so it is biased low even in an
+    uncrowded field: a cell that keeps 30-35% of its pairs moves from uncovered
+    to covered, so the effective retention bar sits a few points below the 30%
+    `REGION_COVERAGE_FRACTION`.  Measured on synthetic uniform fields (a
+    displaced box of 15, 30, 45 or 70″, 3″ past the match radius; 0.04-0.25
+    stars/arcsec², reference completeness 0.25-1; 15 seeds; not real data),
+    the maps flagged not-clean fell from 692 to 648 of 1620 injected maps
+    (44 lost, 0 gained, about 6% of the detections).  By box: 15″ and 30″ are
+    never detected beyond the control level by either prediction; 45″ falls
+    from 232 to 190 of 405; 70″ from 392 to 390 of 405.  The false-positive
+    rate is unchanged (34 of 405 undisplaced controls are dirty with and
+    without the bound).  A cell-sized or larger displaced region stays caught
+    (287 of 288 displaced crowded-block maps).  "No covered cell becomes
+    uncovered" therefore does not mean detection is unchanged: a few cells that
+    were tested and covered also become unchecked (counted in `n_skipped`, and
+    outside the guard above, which counts only previously uncovered cells).
+    `n_uncovered` counts entries, not regions: when the tight arm, starved by
+    the bound, adds a group entry over cells the all-pairs arm already lists
+    singly, it can read one higher than without the bound (29 of 1440
+    synthetic crowded-block maps); the set of uncovered cells never grows;
   * `histogram-grid` — `measure_offset_grid`, used on a swept or otherwise
     unverified tie, where matched-pair statistics have no standing and the
     histogram is the only estimator that works, **and** whenever the region map
@@ -1042,6 +1155,7 @@ the same table rows.
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON=<text>` | the written justification CLAUDE.md requires; stored in the record |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL_REASON=<text>` | as above, for the cross-filter gate |
+| `CROSSFILTER_ANCHOR_BRIGHT_C=<c>` | opt-in (issue #1212): tie the m7 cross-filter anchor to VIRAC2 on its brightest `K = clamp(c * n_ref_in_footprint, 5000, n_reliable)` stars, with the K/2 tie required to agree to 5 mas. Applies to every module and field of the job that sets it, so it can turn a passing full-sample tie into a failure and a refused one into a pass; the only trace is `anchor_sample` in the record. Unset = whole reliable sample. A non-positive or non-numeric value raises. `--anchor-bright-c` on `run_astrometry_checkpoint.py --crossfilter` overrides it |
 | `ASTROM_MAX_CORRECTION_ARCSEC=<f>` | raise/lower the per-exposure ceiling (default 0.5″) |
 | `OFFSETS_TABLE_DIVERGENCE_RAISE=1` | promote a diverged on-sky/coordinate column pair in the offsets table from a warning to `DivergedColumnPairError` (`validate_offsets_table.assert_offsets_table_sane`). Off by default because a divergence costs the audit trail rather than the applied shift |
 | `ASTROM_MAX_BULK_CORRECTION_ARCSEC=<f>` | raise/lower the per-visit bulk ceiling **and** the cumulative-drift bound (default 60″) |

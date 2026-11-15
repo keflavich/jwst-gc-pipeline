@@ -4477,6 +4477,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # holds the reading.
         trail = assess_visit_trails(tables) if correcting else None
         if trail is not None:
+            if trail["n_measured"] < trail["n_frames"]:
+                # An unmeasurable visit must not look like a clean one.
+                print(f"ASTROM CHECKPOINT [{stage}] trail reading (advisory): "
+                      f"{vctx}: {trail['n_measured']} of {trail['n_frames']} "
+                      f"frames measured, so the sibling comparison is "
+                      f"{'absent' if not trail['n_measured'] else 'partial'}",
+                      flush=True)
             for t_exp in trail["exposures"]:
                 if t_exp["verdict"] in ("flagged", "reviewed"):
                     print(f"ASTROM CHECKPOINT [{stage}] TRAILED EXPOSURE "
@@ -4600,6 +4607,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             ("dra", "ddec", "off", "npairs", "contrast", "ok",
                              "swept", "window_arcsec", "dra_err", "ddec_err",
                              "n_peak", "window_edge_fraction",
+                             "peak_significance", "min_peak_significance",
+                             "bin_arcsec",
                              "window_consistent", "alias_rejected")})
             exp_records.append(rec)
             if exp.get("unverified"):
@@ -5202,11 +5211,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             _iv_worst = pooled.meta['IVMAXMAS']
             _iv_text = (f"worst inter-visit {_iv_worst:.1f} mas"
                         if np.isfinite(_iv_worst) else
-                        "no overlapping visits to compare")
+                        "no overlapping pair with a confirmed tie")
             print(f"ASTROM CHECKPOINT [{stage}]: wrote per-filter consensus "
                   f"{consensus_catalog_path} ({len(pooled)} stars, "
                   f"{pooled.meta['NVISITS']} visits, {_iv_text}; "
-                  f"{pooled.meta['IVNOOVL']} visits share no sky with another)",
+                  f"{pooled.meta['IVNOOVL']} visits share no sky with another, "
+                  f"{pooled.meta['IVTHIN']} overlap too thinly to test, "
+                  f"{pooled.meta['IVNOMEAS']} overlap without a confirmed tie)",
                   flush=True)
         except (ValueError, TypeError, OSError) as ex:
             # Not fatal: the catalog is a product of the checkpoint, not an
@@ -5361,17 +5372,21 @@ def _anchor_tie_sample(tbl, keep, coords, ref_coords, c):
     n = int(len(coords))
     info = dict(n_reliable=n, n_used=n, K=n, c=float(c), n_ref_in_footprint=None,
                 rule="unrestricted")
-    if "flux" in tbl.colnames:
-        brightness = np.asarray(tbl["flux"], dtype=float)[keep]
-        info["column"] = "flux"
-    elif "flux_fit" in tbl.colnames:
-        brightness = np.asarray(tbl["flux_fit"], dtype=float)[keep]
-        info["column"] = "flux_fit"
-    elif "mag" in tbl.colnames:
-        brightness = -np.asarray(tbl["mag"], dtype=float)[keep]
-        info["column"] = "mag"
-    else:
-        info["rule"] = "unrestricted: no flux, flux_fit or mag column"
+    # The first of flux, flux_fit, mag that has a finite value among the
+    # reliable stars: a column that exists but is all NaN (a fit that failed
+    # everywhere) must not hide a usable one behind it.  Masked entries read as
+    # NaN, not as the data underneath the mask.
+    brightness = None
+    for name, sign in (("flux", 1.0), ("flux_fit", 1.0), ("mag", -1.0)):
+        if name not in tbl.colnames:
+            continue
+        col = np.ma.filled(np.ma.asarray(tbl[name]).astype(float), np.nan)[keep]
+        if np.isfinite(col).any():
+            brightness = sign * col
+            info["column"] = name
+            break
+    if brightness is None:
+        info["rule"] = "unrestricted: no finite flux, flux_fit or mag among the reliable stars"
         return np.arange(n), info
     brightness = np.where(np.isfinite(brightness), brightness, -np.inf)
     order = np.argsort(-brightness, kind="stable")
@@ -5517,7 +5532,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                 if not (sep <= ANCHOR_TIE_AGREE_TOL_MAS):
                     failures.append(
                         f"anchor {anchor_filter}: ties on the brightest {half} and "
-                        f"{anchor_sample['K']} stars disagree by {sep:.1f} mas "
+                        f"{anchor_sample['K']} stars disagree by {sep:.2f} mas "
                         f"(> {ANCHOR_TIE_AGREE_TOL_MAS} mas)")
 
     for filt, tbl in sorted(catalogs_by_filter.items()):

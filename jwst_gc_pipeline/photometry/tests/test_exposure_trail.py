@@ -17,7 +17,7 @@ from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
 from jwst_gc_pipeline.photometry import exposure_trail as et
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import run_visit_checkpoint
 
-from jwst_gc_pipeline.frame_wcs import MissingGwcsWarning
+from jwst_gc_pipeline.frame_wcs import MissingGwcsWarning, gwcs_from_file
 
 from .test_visit_consensus import _visit_tables
 
@@ -30,8 +30,12 @@ PSF_SIGMA = 1.6
 
 
 def _write_frame(path, positions, trail_px=0.0, trail_theta=0.0, sigma=PSF_SIGMA,
-                 roll_deg=0.0, seed=0):
-    """Render Gaussian stars (smeared along ``trail_theta`` by ``trail_px``)."""
+                 roll_deg=0.0, seed=0, flip=False, pixel_aspect=1.0):
+    """Render Gaussian stars (smeared along ``trail_theta`` by ``trail_px``).
+
+    ``flip`` reverses the parity of the WCS (east to the right) and
+    ``pixel_aspect`` makes the y pixels that much longer than the x pixels.
+    """
     rng = np.random.default_rng(seed)
     img = rng.normal(0.0, 0.02, (SIZE, SIZE)) + 1.0
     yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(float)
@@ -49,12 +53,25 @@ def _write_frame(path, positions, trail_px=0.0, trail_theta=0.0, sigma=PSF_SIGMA
     wcs.wcs.crpix = [SIZE / 2, SIZE / 2]
     scale = 0.031 / 3600.0
     c, s = math.cos(math.radians(roll_deg)), math.sin(math.radians(roll_deg))
-    wcs.wcs.cd = scale * np.array([[-c, s], [s, c]])
+    sgn = 1.0 if flip else -1.0
+    wcs.wcs.cd = scale * np.array([[sgn * c, s * pixel_aspect],
+                                   [s, -sgn * c * pixel_aspect]])
     hdr = wcs.to_header()
     hdul = fits.HDUList([fits.PrimaryHDU(),
                          fits.ImageHDU(img.astype("f4"), header=hdr, name="SCI")])
     hdul.writeto(path, overwrite=True)
     return wcs
+
+
+def _expected_sky_pa(wcs, theta):
+    """East-of-north angle (mod 180 deg) of a pixel direction, from the CD
+    matrix alone: xi is east and eta north in the tangent plane."""
+    xi, eta = wcs.wcs.cd @ np.array([math.cos(theta), math.sin(theta)])
+    return math.degrees(math.atan2(xi, eta)) % 180.0
+
+
+def _angle_diff_deg(a, b):
+    return abs((a - b + 90.0) % 180.0 - 90.0)
 
 
 def _star_grid(seed=1):
@@ -127,9 +144,42 @@ def test_trail_is_measured_where_the_stamp_is_wider_than_the_psf(tmp_path):
     assert t["sigma"] > c["sigma"] + 0.5
     assert t["axis_ratio"] < 0.8
     assert t["pa_coherence"] > 0.9
-    expected = et._sky_position_angle_deg(wcs, SIZE / 2, SIZE / 2, theta_pix)
-    diff = abs((t["pa_sky_deg"] - expected + 90.0) % 180.0 - 90.0)
-    assert diff < 5.0
+    # the expected angle comes from the CD matrix, not from the function under test
+    assert _angle_diff_deg(t["pa_sky_deg"], _expected_sky_pa(wcs, theta_pix)) < 5.0
+
+
+@pytest.mark.parametrize("flip", [False, True])
+@pytest.mark.parametrize("pixel_aspect", [1.0, 1.1])
+def test_sky_position_angle_follows_the_cd_matrix(tmp_path, flip, pixel_aspect):
+    """Both WCS parities and non-square pixels: the major axis is reported
+    east of north as the CD matrix maps it."""
+    pos = _star_grid()
+    theta_pix = math.radians(30.0)
+    frame = tmp_path / "trailed.fits"
+    wcs = _write_frame(frame, pos, trail_px=6.0, trail_theta=theta_pix, roll_deg=40.0,
+                       flip=flip, pixel_aspect=pixel_aspect)
+    res = et.measure_exposure_shape(_catalog(frame, pos), min_stars=20)
+    assert res["status"] == "ok"
+    expected = _expected_sky_pa(wcs, theta_pix)
+    assert _angle_diff_deg(res["pa_sky_deg"], expected) < 5.0
+
+
+def test_trail_is_measured_at_the_real_f212n_psf_width(tmp_path):
+    """The brick F212N frames have a PSF sigma near 1.0 px, not the 1.6 px of
+    the other tests: the estimator must still recover it and see a trail."""
+    pos = _star_grid()
+    clean, trailed = tmp_path / "clean.fits", tmp_path / "trailed.fits"
+    _write_frame(clean, pos, sigma=1.0, roll_deg=40.0)
+    _write_frame(trailed, pos, sigma=1.0, trail_px=4.0, trail_theta=math.radians(20.0),
+                 roll_deg=40.0, seed=1)
+    c = et.measure_exposure_shape(_catalog(clean, pos), min_stars=20)
+    t = et.measure_exposure_shape(_catalog(trailed, pos), min_stars=20)
+    assert c["status"] == t["status"] == "ok"
+    assert c["sigma"] == pytest.approx(1.0, rel=0.1)
+    assert c["axis_ratio"] > 0.95
+    # the grader's excess is in quadrature
+    assert math.sqrt(t["sigma"] ** 2 - c["sigma"] ** 2) > et.TRAIL_EXCESS_SIGMA_PX
+    assert c["axis_ratio"] - t["axis_ratio"] > et.TRAIL_AXIS_RATIO_DROP
 
 
 def test_missing_frame_is_a_reason_not_an_exception(tmp_path):
@@ -168,6 +218,73 @@ def test_a_non_finite_sky_angle_is_not_measured(tmp_path, monkeypatch):
     res = et.measure_exposure_shape(_catalog(frame, pos))
     assert res["status"] == "cannot_measure"
     assert "not finite" in res["reason"]
+
+
+def test_a_yaml_corrupt_asdf_is_a_reason_not_an_exception(tmp_path):
+    """A text-corrupted ASDF block fails in the YAML parser (not a ValueError);
+    it must reach the reading as a GwcsReadError and become a reason."""
+    pos = _star_grid()
+    frame = tmp_path / "frame.fits"
+    _write_frame(frame, pos)
+    # a valid ASDF header over a YAML body that does not parse
+    junk = np.frombuffer(
+        b"#ASDF 1.0.0\n#ASDF_STANDARD 1.5.0\n%YAML 1.1\n%TAG ! tag:stsci.edu:asdf/\n"
+        b"--- !core/asdf-1.1.0\nmeta: {wcs: [unclosed\n...\n", dtype="u1")
+    with fits.open(frame, mode="update") as hdul:
+        hdul.append(fits.ImageHDU(junk, name="ASDF"))
+    with pytest.raises(et.GwcsReadError):
+        gwcs_from_file(str(frame), use_cache=False)
+    res = et.measure_exposure_shape(_catalog(frame, pos))
+    assert res["status"] == "cannot_measure"
+    assert "GwcsReadError" in res["reason"]
+
+
+def test_a_non_2d_sci_is_a_reason_not_an_exception(tmp_path):
+    pos = _star_grid()
+    frame = tmp_path / "frame.fits"
+    _write_frame(frame, pos)
+    with fits.open(frame, mode="update") as hdul:
+        hdul["SCI"].data = np.zeros((2, SIZE, SIZE), dtype="f4")
+    res = et.measure_exposure_shape(_catalog(frame, pos))
+    assert res["status"] == "cannot_measure"
+
+
+def test_the_recorded_frame_spelling_is_resolved(tmp_path, monkeypatch):
+    """meta['FILENAME'] can name the /blue or the /orange spelling of a frame
+    that exists under the other one; the helper that maps them is used."""
+    pos = _star_grid()
+    frame = tmp_path / "frame.fits"
+    _write_frame(frame, pos)
+    tbl = _catalog("/blue/gone/frame.fits", pos)
+    assert et.measure_exposure_shape(tbl, min_stars=20)["status"] == "cannot_measure"
+    monkeypatch.setattr(et, "_resolve_existing_path", lambda path: str(frame))
+    assert et.measure_exposure_shape(tbl, min_stars=20)["status"] == "ok"
+
+
+def test_stars_with_an_unusable_stamp_do_not_use_up_the_star_quota(tmp_path):
+    """The brightest stars sit on NaN pixels; the quota of stars is filled
+    from the ones after them, instead of being spent before the stamp check."""
+    pos = _star_grid()
+    frame = tmp_path / "frame.fits"
+    _write_frame(frame, pos)
+    n_bad = 16
+    with fits.open(frame, mode="update") as hdul:
+        for x0, y0 in pos[:n_bad]:       # _catalog() makes row 0 the brightest
+            hdul["SCI"].data[int(round(y0)) + 3, int(round(x0)) + 3] = np.nan
+    res = et.measure_exposure_shape(_catalog(frame, pos), n_max=15, min_stars=10)
+    assert res["status"] == "ok", res
+    assert res["n_stars"] == 15
+
+
+def test_stars_that_fail_the_reliable_cut_are_not_measured(tmp_path):
+    pos = _star_grid()
+    tbl = _catalog(tmp_path / "f.fits", pos)
+    cand, _, _ = et._select_stars(tbl, 14, None)
+    assert len(cand) == len(pos)
+    tbl["qfit"][:10] = 0.5                 # poorly fit
+    tbl["flux_err"][10:20] = tbl["flux_fit"][10:20]    # S/N 1
+    cand, _, _ = et._select_stars(tbl, 14, None)
+    assert set(cand) == set(range(20, len(pos)))
 
 
 def test_too_few_isolated_stars_cannot_be_measured(tmp_path):
@@ -259,6 +376,74 @@ def test_a_visit_with_every_exposure_trailed_is_not_seen_by_siblings():
     for r in recs:
         r["shape"] = _shape(sigma=TRAILED["sigma"], ratio=TRAILED["ratio"])
     assert {e["verdict"] for e in _verdicts(recs).values()} == {"ok"}
+
+
+def test_a_nan_sky_angle_in_a_record_does_not_read_as_agreement():
+    recs = _visit(trailed=4)
+    for r in recs:
+        if r["key"][1] == 4 and r["key"][2] == "nrca1":
+            r["shape"]["pa_sky_deg"] = float("nan")
+    v = _verdicts(recs)
+    assert v[4]["verdict"] == "ok"
+    assert "disagree" in v[4]["reason"]
+
+
+def test_position_angles_either_side_of_180_agree():
+    pas = {"nrca1": 179.0, "nrca2": 1.0, "nrca3": 179.0, "nrca4": 1.0}
+    v = _verdicts(_visit(trailed=3, pas=pas))
+    assert v[3]["verdict"] == "flagged"
+    assert v[3]["pa_coherence"] > 0.99
+
+
+def _n_detector_visit(n_det, n_trailed_det, n_exp=4):
+    detectors = tuple(f"nrca{i}" for i in range(1, n_det + 1))
+    return _visit(trailed=4, n_exp=n_exp, detectors=detectors,
+                  only=detectors[:n_trailed_det])
+
+
+@pytest.mark.parametrize("n_det,n_over,verdict", [
+    (2, 2, "flagged"), (2, 1, "ok"),      # the floor of two detectors
+    (3, 2, "flagged"), (3, 1, "ok"),
+    (5, 3, "flagged"), (5, 2, "ok"),      # ceil(5 / 2) = 3, not floor
+    (6, 3, "flagged"), (6, 2, "ok"),
+    (8, 4, "flagged"), (8, 3, "ok"),
+])
+def test_how_many_detectors_it_takes_to_flag(n_det, n_over, verdict):
+    assert _verdicts(_n_detector_visit(n_det, n_over))[4]["verdict"] == verdict
+
+
+def test_one_graded_detector_cannot_be_graded():
+    v = _verdicts(_n_detector_visit(1, 1))
+    assert v[4]["verdict"] == "cannot_grade"
+
+
+def test_the_excess_is_in_quadrature_not_a_difference():
+    """1.6 -> 1.7 px is a 0.1 px difference but a 0.57 px quadrature excess."""
+    recs = _visit()
+    for r in recs:
+        if r["key"][1] == 4:
+            r["shape"] = _shape(sigma=1.7, ratio=0.80)
+    assert _verdicts(recs)[4]["verdict"] == "flagged"
+    for r in recs:
+        if r["key"][1] == 4:
+            r["shape"] = _shape(sigma=1.65, ratio=0.80)      # 0.4 px in quadrature
+    assert _verdicts(recs)[4]["verdict"] == "ok"
+
+
+@pytest.mark.parametrize("n_exp,n_trailed,verdict", [
+    (4, 2, "flagged"),
+    (4, 3, "ok"),      # the sibling median is itself trailed: documented blind spot
+    (8, 4, "flagged"),
+    (8, 5, "ok"),
+])
+def test_the_sibling_comparison_goes_blind_when_most_exposures_trail(
+        n_exp, n_trailed, verdict):
+    recs = _visit(n_exp=n_exp)
+    for r in recs:
+        if r["key"][1] <= n_trailed:
+            r["shape"] = _shape(sigma=TRAILED["sigma"], ratio=TRAILED["ratio"])
+    v = _verdicts(recs)
+    assert {v[e]["verdict"] for e in range(1, n_trailed + 1)} == {verdict}
 
 
 def test_unmeasured_detectors_do_not_count_as_clean_or_trailed():
@@ -360,3 +545,11 @@ def test_a_frozen_stage_does_not_open_any_pixels(tmp_path, monkeypatch):
     rec = run_visit_checkpoint(_visit_tables(), "m5", filtername="F212N",
                                record_dir=str(tmp_path), context="test")
     assert rec["visits"][0]["trail"] is None
+
+
+def test_an_unmeasured_visit_is_logged(tmp_path, capsys):
+    run_visit_checkpoint(_visit_tables(), "m2", filtername="F212N",
+                         record_dir=str(tmp_path), context="test")
+    out = capsys.readouterr().out
+    assert "trail reading (advisory)" in out
+    assert "0 of " in out and "frames measured" in out
