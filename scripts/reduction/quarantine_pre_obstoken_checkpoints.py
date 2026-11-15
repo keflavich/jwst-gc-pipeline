@@ -25,6 +25,16 @@ the file out of the directory listing so an ad-hoc ``glob`` stops finding it.
   replacement is left alone.  A module-less m7 cross-filter record whose only
   tokened siblings are per-module records (``..._nrcb_oNNN``) has a different
   key and is left alone too.
+* The supersession key is ``(stage, filter, module)``: it does NOT name the
+  observation, and an untokened record cannot say which one it belonged to.  On
+  a field whose observations share a filter (cloudef, gc2211, ngc6334; the
+  ``_filter_is_obs_ambiguous`` set) an untokened record may be the ONLY record
+  of observation B while observation A has a tokened one, and moving it would
+  turn B's "refused" into "absent".  Those records are therefore listed as
+  ``left alone (ambiguous)`` and never moved; resolve them by hand or re-run m2
+  so each observation writes its own tokened record.  A record with no filter
+  slot (``m2_all``, ``m7_crossfilter``) counts as ambiguous when the field has
+  any shared filter, and so does a field the registry does not know.
 * Untokened timestamped history siblings of a superseded record move with it,
   because ``count_blocking_unverified.py --all-history`` and
   ``per_detector_offset_report.py`` read timestamped files and would otherwise
@@ -34,7 +44,12 @@ the file out of the directory listing so an ad-hoc ``glob`` stops finding it.
   ``--restore``, which renames the files listed there back.
 * Each ``<base>/<field>/astrometry_checkpoints`` directory is processed on its
   own.  Brick has two live ones (``/blue/...`` for NIRCam, ``/orange/...`` for
-  MIRI and older records); pass each root with ``--base``.
+  MIRI and older records); pass each root with ``--base``.  Confirm which
+  brick tree is authoritative before ``--execute`` there (#937).
+* Exit status: 0 clean; 1 nothing found under the given ``--base``/``--field``;
+  2 at least one move or restore was skipped because the destination name was
+  occupied (the run was partial).  A ``--field`` that exists under none of the
+  bases is reported on stderr.
 
 Usage::
 
@@ -50,9 +65,11 @@ import json
 import os
 import sys
 
+from jwst_gc_pipeline import fields as _fields
+from jwst_gc_pipeline.monitoring.scan import shared_filters
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    current_records, parse_record_name, record_is_tokenised,
-    record_supersession_key)
+    _filter_is_obs_ambiguous, current_records, parse_record_name,
+    record_is_tokenised, record_mtime, record_supersession_key)
 
 DEFAULT_BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
                               os.environ.get("JWST_BASE",
@@ -62,12 +79,30 @@ STALE_SUBDIR = "pre_obstoken_stale"
 MANIFEST = "MANIFEST.json"
 
 
+def _is_ambiguous(record_dir, info):
+    """True when an untokened record could belong to a DIFFERENT observation.
+
+    Fail-closed, like ``_filter_is_obs_ambiguous`` which answers it for a named
+    filter.  A record with no filter slot (``m2_all``, ``m7_crossfilter``) spans
+    filters, so it is ambiguous when the field has any shared filter; a field
+    the registry does not know is ambiguous.
+    """
+    filt = info['filt']
+    if filt and filt != 'all':
+        return _filter_is_obs_ambiguous(record_dir, filt)
+    field = os.path.basename(os.path.dirname(os.path.abspath(record_dir)))
+    if field not in _fields.BY_NAME:
+        return True
+    return any(shared_filters(field, inst) for inst in ("nircam", "miri"))
+
+
 def plan_for_dir(record_dir):
     """``(moves, counts)`` for one record directory.
 
     ``moves`` is ``[{'name', 'mtime', 'superseded_by'}]``; ``counts`` has the
-    figures the dry run prints: untokened and total ``_latest`` records, and
-    untokened timestamped history files.
+    figures the dry run prints: untokened and total ``_latest`` records, untokened
+    timestamped history files, and ``ambiguous``, the names left alone because
+    the field's observations share the filter (see the module docstring).
     """
     current = current_records(record_dir)
     kept = set(current.values())
@@ -81,7 +116,7 @@ def plan_for_dir(record_dir):
                 os.path.basename(path))
 
     n_latest = n_untokened_latest = n_untokened_history = 0
-    moves = []
+    moves, ambiguous = [], []
     for path in sorted(glob.glob(os.path.join(record_dir, "checkpoint_*.json"))):
         name = os.path.basename(path)
         info = parse_record_name(name)
@@ -101,11 +136,15 @@ def plan_for_dir(record_dir):
         # follows the same key.  No tokened sibling -> nothing supersedes it.
         if not by or path in kept:
             continue
-        moves.append({"name": name, "mtime": os.path.getmtime(path),
+        if _is_ambiguous(record_dir, info):
+            ambiguous.append(name)
+            continue
+        moves.append({"name": name, "mtime": record_mtime(path),
                       "superseded_by": sorted(by)})
     return moves, {"latest": n_latest,
                    "untokened_latest": n_untokened_latest,
-                   "untokened_history": n_untokened_history}
+                   "untokened_history": n_untokened_history,
+                   "ambiguous": ambiguous}
 
 
 def _read_manifest(stale_dir):
@@ -142,7 +181,7 @@ def quarantine_dir(record_dir, execute=False):
     done = []
     for mv in moves:
         dest = os.path.join(stale_dir, mv["name"])
-        if os.path.exists(dest):
+        if os.path.lexists(dest):
             skipped.append(mv["name"])
             continue
         os.rename(os.path.join(record_dir, mv["name"]), dest)
@@ -166,9 +205,9 @@ def restore_dir(record_dir, execute=False):
     for ent in manifest["files"]:
         src = os.path.join(stale_dir, ent["name"])
         dest = os.path.join(record_dir, ent["name"])
-        if not os.path.exists(src):
+        if not os.path.lexists(src):
             continue
-        if os.path.exists(dest):
+        if os.path.lexists(dest):
             skipped.append(ent["name"])
             remaining.append(ent)
             continue
@@ -196,6 +235,13 @@ def record_dirs(bases, fields, all_fields):
     return out
 
 
+def missing_fields(bases, fields):
+    """Requested ``--field`` names that have no record directory under any base."""
+    return [f for f in fields
+            if not any(os.path.isdir(os.path.join(b, f, RECORD_SUBDIR))
+                       for b in bases)]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -221,8 +267,13 @@ def main(argv=None):
               f"not a clean bill of health.")
         return 1
 
+    for f in missing_fields(bases, args.field):
+        print(f"WARNING: --field {f}: no {RECORD_SUBDIR} directory under "
+              f"{bases}; nothing was checked for it", file=sys.stderr)
+
     mode = "EXECUTE" if args.execute else "dry run"
     tot_moved = 0
+    any_skipped = False
     for label, d in dirs:
         if args.restore:
             restored, skipped = restore_dir(d, execute=args.execute)
@@ -231,6 +282,7 @@ def main(argv=None):
                       + (f", {len(skipped)} skipped (name occupied)"
                          if skipped else "") + f" [{mode}]")
             tot_moved += len(restored)
+            any_skipped |= bool(skipped)
             continue
         moves, counts, skipped = quarantine_dir(d, execute=args.execute)
         print(f"{label}: {len(moves)} to quarantine "
@@ -239,12 +291,21 @@ def main(argv=None):
               f"[{mode}]  {d}")
         for mv in moves:
             print(f"    {mv['name']}  <- {', '.join(mv['superseded_by'])}")
+        for name in counts["ambiguous"]:
+            print(f"    left alone (ambiguous: the field's observations share "
+                  f"this filter, so the record may belong to an observation "
+                  f"with no tokened record): {name}")
         for name in skipped:
             print(f"    SKIPPED {name}: destination exists")
+        any_skipped |= bool(skipped)
         tot_moved += len(moves)
     verb = "restored" if args.restore else "quarantined"
     print(f"{tot_moved} file(s) {verb if args.execute else 'planned'} "
           f"across {len(dirs)} director(y/ies) [{mode}]")
+    if any_skipped:
+        print("PARTIAL: at least one file was skipped because its destination "
+              "name is occupied; exit status 2.", file=sys.stderr)
+        return 2
     return 0
 
 
