@@ -150,6 +150,9 @@ class _StubObservations:
         uris = [u.format(det) for u, _ in rows
                 for det in ('nrcalong', 'mirimage')]
         types_ = ['SCIENCE'] * len(uris)
+        # an uncal-named file that MAST does not class as SCIENCE is not fetched
+        uris.append('mast:JWST/product/jw10678008003_02101_00001_nrcalong_uncal.fits')
+        types_.append('INFO')
         for oid in ('008', '080'):
             kinds = ['image3', 'image2'] if cls.with_image3 else ['image2']
             for kind in kinds:
