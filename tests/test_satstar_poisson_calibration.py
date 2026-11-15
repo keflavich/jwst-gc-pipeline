@@ -4,6 +4,8 @@
   ``loo_crop.py`` with ``NOISEONLY=<seed>`` uses to calibrate the LOO statistic.
 * ``patternfit.fit_nuisance(anchor=True)``: the anchor exposure holds its flux fixed and
   fits only the pedestal and the gradient (needs ``finufft``; skipped without it).
+* ``loo_crop.py`` with ``NOISEONLY=<seed>`` end to end on synthetic cutouts (needs
+  ``finufft``; about 3 minutes on a loaded node, Q solves capped at 10 CG iterations).
 """
 import importlib
 import os
@@ -145,3 +147,119 @@ def test_anchor_fit_does_not_absorb_a_flux_error_into_the_pedestal(patternfit):
     assert e.a == 1.0
     assert e.c == pytest.approx(ref[0], abs=1e-5)
     assert e.g == pytest.approx(ref[1:], abs=1e-5)
+
+
+def test_json_safe_writes_strict_json_for_empty_bins(noise_only):
+    import json
+    rep = noise_only.radial_report(np.array([0.5, -1.0]), np.array([40., 60.]), np.ones(2, bool))
+    assert np.isnan(rep['300-500']['sig'])
+    text = json.dumps(noise_only.json_safe(dict(bins=rep, seed=3)), allow_nan=False)
+    back = json.loads(text)
+    assert back['bins']['300-500']['sig'] is None and back['bins']['300-500']['n'] == 0
+    assert back['bins']['30-50']['n'] == 1 and back['seed'] == 3
+
+
+# ---- end-to-end NOISEONLY run of loo_crop.py on synthetic cutouts (needs finufft) ----
+
+NPIX = 64
+SHIFTS = [(0.0, 0.0), (0.37, 0.61), (0.74, 0.22), (1.21, 0.88)]     # dither offsets (px)
+GAIN = [1.0, 1.02, 0.98, 1.01]
+PEDESTAL = [0.0, 6.0, -5.0, 9.0]
+
+
+def _truth(qx, qy):
+    """A pattern far below the band limit (0.45 cycles/px), so the truth is in the model family."""
+    return (80.0+120.0*np.exp(-(qx**2+qy**2)/200.0)
+            + 20.0*np.cos(2*np.pi*(0.07*qx+0.03*qy)))
+
+
+def _write_cutouts(prefix, rng):
+    """cutout.py-format npz files: identity jacobian, v2v3 = pixel + dither, star at the cutout centre
+    on the sky, data = gain*truth(q) + pedestal + Gaussian noise of variance 4 + 0.05|signal|."""
+    yy, xx = np.mgrid[:NPIX, :NPIX].astype(float)
+    for k, (sx, sy) in enumerate(SHIFTS, 1):
+        v2 = xx+sx; v3 = yy+sy
+        sig = GAIN[k-1]*_truth(v2-NPIX/2, v3-NPIX/2)
+        var = 4.0+0.05*np.abs(sig)
+        d = sig+PEDESTAL[k-1]+rng.normal(0, 1, sig.shape)*np.sqrt(var)
+        np.savez(f'{prefix}_e{k}.npz', d=d, dq=np.zeros(d.shape, np.uint32), var=var, vf=0*var, vr=0*var,
+                 v2=v2, v3=v3, X0=0, Y0=0, xt=NPIX/2-sx, yt=NPIX/2-sy, vt=np.array([NPIX/2, NPIX/2]),
+                 J=np.eye(2))
+
+
+# loo_crop.py through runpy with the Q solves capped (one prox step, 10 CG iterations): the
+# test checks what NOISEONLY does to the data and the output files, not convergence.
+_DRIVER = """
+import runpy, sys
+sys.path.insert(0, {satstar!r})
+import patternfit
+_solve_Q = patternfit.solve_Q
+patternfit.solve_Q = lambda *a, **k: _solve_Q(*a, **dict(k, maxiter=10, nprox=1))
+sys.argv = ['loo_crop.py'] + sys.argv[1:]
+runpy.run_path({script!r}, run_name='__main__')
+"""
+
+
+def _run_loo_crop(workdir, tag, noiseonly=None):
+    import subprocess
+    env = dict(os.environ, QN='64', QH='1', KMAX='0.45', MINCOV='2', OMP_NUM_THREADS='1')
+    env.pop('NOISEONLY', None)
+    if noiseonly is not None:
+        env['NOISEONLY'] = noiseonly
+    code = _DRIVER.format(satstar=SATSTAR, script=os.path.join(SATSTAR, 'loo_crop.py'))
+    return subprocess.run([sys.executable, '-c', code, tag, '26', '2', '--prefix', 'tgt'],
+                          cwd=workdir, env=env, capture_output=True, text=True, timeout=900)
+
+
+@pytest.fixture(scope='module')
+def loo_runs(tmp_path_factory):
+    pytest.importorskip('finufft')
+    wd = tmp_path_factory.mktemp('loo')
+    _write_cutouts(str(wd/'tgt'), np.random.default_rng(1008))
+    runs = {}
+    for name, noiseonly in (('plain', None), ('s1', '1'), ('s2', '2')):
+        r = _run_loo_crop(str(wd), name, noiseonly)
+        assert r.returncode == 0, r.stdout[-2000:]+r.stderr[-2000:]
+        runs[name] = dict(npz=dict(np.load(wd/f'{name}_e2.npz')), stdout=r.stdout, wd=wd)
+    runs['real_d'] = np.load(wd/'tgt_e2.npz')['d']
+    return runs
+
+
+def test_loo_crop_plain_run_writes_no_simulated_data(loo_runs):
+    assert 'd' not in loo_runs['plain']['npz'] and 'noiseonly_seed' not in loo_runs['plain']['npz']
+    assert not (loo_runs['plain']['wd']/'plain_e2_chi.json').exists()
+
+
+def test_loo_crop_noiseonly_stores_simulated_data_and_calibrated_chi(loo_runs):
+    import json
+    real = loo_runs['real_d']
+    for name, seed in (('s1', 1), ('s2', 2)):
+        z = loo_runs[name]['npz']
+        assert int(z['noiseonly_seed']) == seed
+        ok = np.isfinite(z['d']) & np.isfinite(z['pred'])
+        assert ok.sum() > 2000
+        assert not np.allclose(z['d'][ok], real[ok])           # simulated, not the observed, data
+        # the simulation keeps the fitted pedestal/gradient (add()): the mean offset to the
+        # observed data stays far below the 5-9 counts of pedestal
+        assert abs(np.mean(z['d'][ok]-real[ok])) < 1.5
+        # chi on the stored simulated data
+        var = 4.0+0.05*np.abs(z['pred'])
+        chi = (z['d']-z['pred'])/np.sqrt(var+z['varQ'])
+        m = ok & (z['cov'] >= 2)
+        c = chi[m]
+        assert 0.8 < 1.4826*np.median(np.abs(c-np.median(c))) < 1.2
+        rep = json.load(open(loo_runs[name]['wd']/f'{name}_e2_chi.json'))
+        assert rep['seed'] == seed and rep['heldout'] == 2
+        assert rep['bins']['300-500']['sig'] is None               # crop of 30 px: empty bin, strict JSON
+    a, b = loo_runs['s1']['npz'], loo_runs['s2']['npz']
+    m = np.isfinite(a['d']) & np.isfinite(b['d'])
+    assert not np.allclose(a['d'][m], b['d'][m])                   # the seeds differ
+
+
+def test_loo_crop_rejects_a_malformed_seed_before_fitting(loo_runs):
+    pytest.importorskip('finufft')
+    import time
+    t0 = time.time()
+    r = _run_loo_crop(str(loo_runs['plain']['wd']), 'bad', noiseonly='abc')
+    assert r.returncode != 0 and 'not an integer seed' in r.stderr+r.stdout
+    assert 'joint it' not in r.stdout and time.time()-t0 < 60

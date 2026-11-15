@@ -43,3 +43,15 @@ def sigma_chi(chi):
 def radial_report(chi, R, ok, bins=BINS_NOISEONLY):
     """sigma_chi per radial bin ``lo <= R < hi`` over the pixels selected by ``ok``."""
     return {f'{lo}-{hi}': sigma_chi(chi[ok & (R >= lo) & (R < hi)]) for lo, hi in bins}
+
+
+def json_safe(obj):
+    """``obj`` with every non-finite float replaced by None, so that ``json.dump(...,
+    allow_nan=False)`` writes strict JSON (an empty radial bin has NaN statistics)."""
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    if isinstance(obj, (float, np.floating)) and not np.isfinite(obj):
+        return None
+    return obj

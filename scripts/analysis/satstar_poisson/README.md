@@ -401,7 +401,13 @@ noise of variance `1/w` becomes the data of every exposure. Stage B discards
 simulated data, so the training `Q` carries the reconstruction noise that
 `varQ` is meant to describe. The 300–500 px bin needs a crop half-width of at
 least 300. A σ(χ) near 1 in every bin means the statistic is calibrated; the
-seed-to-seed scatter must be shown before reading a 0.03-level departure. The
+seed-to-seed scatter must be shown before reading a 0.03-level departure.
+For independent Gaussian pixels the sampling sd of σ(χ) is 0.052, 0.016,
+0.0053 and 0.0019 for 500, 5000, 50 000 and 500 000 pixels (about 5000 in the
+30–50 px bin of a ±400 px crop, about 25 000 in the 80–120 px bin), so 0.03 is
+already about 2 sd in the innermost bin. Neighbouring χ pixels are correlated
+through the band-limited `Q`, so the real scatter is larger; use 5–10 seeds.
+The `_chi.json` files hold `null` for a bin without pixels. The
 simulation shares the truth model, so it tests the statistic and the
 reconstruction noise, not unmodelled structure. No calibrated numbers are
 reported here yet.
