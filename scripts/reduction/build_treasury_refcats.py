@@ -47,6 +47,10 @@ Usage
     python scripts/reduction/build_treasury_refcats.py --observations 088-139 \
         --epoch 2026.69 --dry-run
 
+``--emit-registry`` prints only tiles whose catalog is on disk (or, under
+``--dry-run``, will be built).  A tile that failed or has no file is listed in
+a ``#`` comment line, which YAML ignores, so the block can be pasted as it is.
+
 ``--dry-run`` prints the exact per-tile command and builds nothing.  Without it
 the tiles are built one subprocess at a time; this is a long query against
 VizieR (VIRAC2 II/387 + Gaia DR3), so run it as a batch job, not on a login
@@ -364,20 +368,59 @@ def build_command(tile, base, epoch, python=sys.executable,
     return cmd
 
 
-def registry_block(tiles, epochs):
-    """The fields.yaml ``reference_catalog:`` block for the tiles built.
+def registry_block(tiles, epochs, paths=None):
+    """The fields.yaml ``reference_catalog:`` block for the tiles given.
 
     fields.yaml registers a catalog per observation; it has no templating, so
     the file a tile ends up with is written back here rather than guessed
     ahead of the build (the epoch tag is the tile's own observation date).
+
+    ``paths`` maps an observation number to the basename of the file found on
+    disk.  A tile with an entry is named from it, because the file a skipped
+    tile already has can carry a different epoch tag from the one computed in
+    this run; a tile with none falls back to the name the build would write.
     """
     lines = ['        reference_catalog:']
     for tile in tiles:
-        epoch = epochs[tile.obsid]
-        tag = f'{float(epoch):.2f}'
-        name = refcat_filename(tag, tile.obsid)
+        if paths is not None and tile.obsid in paths:
+            name = paths[tile.obsid]
+        else:
+            tag = f'{float(epochs[tile.obsid]):.2f}'
+            name = refcat_filename(tag, tile.obsid)
         lines.append(f"          '{tile.obsid}': catalogs/{name}")
     return '\n'.join(lines)
+
+
+def registrable_tiles(tiles, epochs, todo, failed, base, dry_run=False):
+    """Split ``tiles`` into those that may be registered and those that may not.
+
+    Returns ``(registered, paths, unregistered)``: the tiles to print, their
+    on-disk basenames, and ``(obsid, reason)`` pairs for the rest.  A tile is
+    registered only when its file exists, so the block can be pasted into
+    fields.yaml without a failed or unattempted tile in it.  A tile whose build
+    failed is left out even when an older file is present (``--force``); the
+    reason says so.  Under ``--dry-run`` a tile in ``todo`` has no file yet, so
+    it takes its predicted name instead.
+    """
+    todo_ids = {t.obsid for t in todo}
+    registered, paths, unregistered = [], {}, []
+    for tile in tiles:
+        if tile.obsid in failed:
+            unregistered.append((tile.obsid, 'build failed'))
+            continue
+        if dry_run and tile.obsid in todo_ids:
+            if epochs[tile.obsid] is None:
+                unregistered.append((tile.obsid, 'no epoch to predict a name'))
+                continue
+            registered.append(tile)
+            continue
+        found = existing_refcat(base, tile.obsid)
+        if found is None:
+            unregistered.append((tile.obsid, 'no file on disk'))
+            continue
+        registered.append(tile)
+        paths[tile.obsid] = os.path.basename(found)
+    return registered, paths, unregistered
 
 
 def main(argv=None):
@@ -481,10 +524,19 @@ def main(argv=None):
                 break
 
     if args.emit_registry:
-        buildable = [t for t in tiles if epochs[t.obsid] is not None]
+        registered, paths, unregistered = registrable_tiles(
+            tiles, epochs, todo, {o for o, _ in failures}, base,
+            dry_run=args.dry_run)
         print('\n# fields.yaml: fields.gc-treasury.observations.'
               f"'{args.proposal}'")
-        print(registry_block(buildable, epochs))
+        if args.dry_run:
+            print('# DRY RUN: predicted names for unbuilt tiles')
+        if registered:
+            print(registry_block(registered, epochs, paths))
+        else:
+            print('# no tile has a catalog to register')
+        for obsid, reason in unregistered:
+            print(f"# NOT REGISTERED ({reason}): '{obsid}'")
 
     if args.dry_run:
         print(f'\n--dry-run: {len(todo)} tile(s) would be built, '
