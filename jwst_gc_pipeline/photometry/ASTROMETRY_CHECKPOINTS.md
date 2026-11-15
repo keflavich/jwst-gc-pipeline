@@ -558,13 +558,16 @@ than five independent checks would be.
     `n_ref` the reference stars inside the footprint grid
     (`n_ref_in_footprint`, `coverage_rate_ref_all`, `coverage_rate_ref_tight`).
     The minimum only lowers a prediction, so no cell that is covered without it
-    becomes uncovered.  Each scanned cell records `n_ref`, `expected_pairs_src`,
-    `expected_pairs_ref` and `ref_bound_applied`.  A cell that was uncovered on
+    becomes uncovered.  A single-cell entry of `uncovered_cells` records `n_ref`,
+    `expected_pairs_src`, `expected_pairs_ref` and `ref_bound_applied` (covered
+    cells have no entry, and group entries carry none of the four).  A cell that was uncovered on
     the source count and that the reference count leaves too thin to judge
     (fewer than `min_stars` expected pairs) is no longer called displaced; it is
     listed in `ref_bound_untestable_cells` and counted in
     `n_ref_bound_untestable` (as a share of the source cells,
-    `ref_bound_untestable_fraction`; the limit used is `ref_untestable_limit`).  When those cells exceed
+    `ref_bound_untestable_fraction`; the limit used is `ref_untestable_limit`;
+    an entry of `ref_bound_untestable_cells` holds only `ix`, `iy`,
+    `n_sources` and `n_ref`).  When those cells exceed
     `REGION_REFERENCE_UNTESTABLE_FRACTION` (15%) of the source cells the map is
     `clean=False` with `ref_too_sparse` set and the reason "reference too
     sparse to test coverage"; like an uncovered cell, that verdict is excluded
@@ -580,9 +583,33 @@ than five independent checks would be.
     cells is distinguishable from one over a field that was checked.  The
     reference bound adds to this limit: where a cell's reference count predicts
     fewer than `min_stars` pairs (the thin-reference nuclear-cluster core), a
-    displaced region is NOT caught either, and the all-pairs arm cannot stand in
-    because a displaced JWST-dense region finds chance partners for most of its
-    few reference stars;
+    displaced region is NOT caught either.  At nuclear-cluster density (sgra F212N
+    cell (4,1): 8640 sources, roughly 4 per arcsec²) the all-pairs arm cannot
+    stand in, because a displaced JWST-dense region finds chance partners for
+    most of its few reference stars; at lower crowding it does fire (a 100″
+    block at 2 extra JWST stars per field star, reference thinned to 0.25, is
+    reported uncovered on the all-pairs arm in synthetic maps).
+    **Accepted recall cost of the bound (decision of 2026-11-14).**  The bound is
+    a minimum of two noisy predictions, so it is biased low even in an
+    uncrowded field: a cell that keeps 30-35% of its pairs moves from uncovered
+    to covered, so the effective retention bar sits a few points below the 30%
+    `REGION_COVERAGE_FRACTION`.  Measured on synthetic uniform fields (a
+    displaced box of 15, 30, 45 or 70″, 3″ past the match radius; 0.04-0.25
+    stars/arcsec², reference completeness 0.25-1; 15 seeds; not real data),
+    the maps flagged not-clean fell from 692 to 648 of 1620 injected maps
+    (44 lost, 0 gained, about 6% of the detections).  By box: 15″ and 30″ are
+    never detected beyond the control level by either prediction; 45″ falls
+    from 232 to 190 of 405; 70″ from 392 to 390 of 405.  The false-positive
+    rate is unchanged (34 of 405 undisplaced controls are dirty with and
+    without the bound).  A cell-sized or larger displaced region stays caught
+    (287 of 288 displaced crowded-block maps).  "No covered cell becomes
+    uncovered" therefore does not mean detection is unchanged: a few cells that
+    were tested and covered also become unchecked (counted in `n_skipped`, and
+    outside the guard above, which counts only previously uncovered cells).
+    `n_uncovered` counts entries, not regions: when the tight arm, starved by
+    the bound, adds a group entry over cells the all-pairs arm already lists
+    singly, it can read one higher than without the bound (29 of 1440
+    synthetic crowded-block maps); the set of uncovered cells never grows;
   * `histogram-grid` — `measure_offset_grid`, used on a swept or otherwise
     unverified tie, where matched-pair statistics have no standing and the
     histogram is the only estimator that works, **and** whenever the region map
