@@ -37,9 +37,11 @@ class FieldRegistryError(ValueError):
 #: Written for 10678, the GC Treasury, where one field owns the whole
 #: proposal.  The observation numbers ARE published --
 #: ``Observations.query_criteria(proposal_id='10678')`` returns 1668 planned
-#: exposure-level rows carrying 139 distinct observation numbers, 001..139
-#: contiguous, the same set for NIRCAM/IMAGE and MIRI/IMAGE (checked
-#: 2026-08-17; ``t_min`` is NaN on every row, so none has executed).  The
+#: exposure-level rows carrying 139 distinct observation numbers (001..139
+#: except seven renumbered ones, see ``tiles:`` in fields.yaml; the 2026-08-17
+#: check that found them contiguous predates the renumbering), the same set for
+#: NIRCAM/IMAGE and MIRI/IMAGE (``t_min`` is NaN on every row, so none has
+#: executed).  The
 #: wildcard records "one field owns them all", which stays true through a
 #: replan that renumbers or adds observations, and spares the registry a
 #: 139-entry list that each replan re-issues.  The cost it accepts is that an
