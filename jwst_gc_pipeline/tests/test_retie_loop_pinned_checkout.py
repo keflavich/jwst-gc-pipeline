@@ -555,6 +555,9 @@ def test_pin_is_verified_only_for_a_detached_linked_worktree(tmp_path):
     assert not verified(branch_wt)       # linked, but on a branch
     assert not verified(plain)           # not a git tree
     assert not verified('')
+    # A main checkout left on a detached HEAD is detached but still not a pin.
+    _git(repo, 'checkout', '-q', '--detach', tmp_path=tmp_path)
+    assert not verified(repo)
 
 
 def _banner(tmp_path, repo, **env):

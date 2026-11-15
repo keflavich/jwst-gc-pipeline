@@ -394,10 +394,12 @@ into the pin, and the provenance banner prints
 
 ```
 PROPOSAL=4147 FIELD=012 TARGET=sgrc FILTERS="..." PIPE_ROOT=$PWD \
-    scripts/reduction/run_field_retie_loop.sh
+    scripts/reduction/run_field_retie_loop.sh > ~/retie_sgrc4147_o012.log 2>&1
 # pin: /blue/adamginsburg/adamginsburg/repos/pinned/retie-sgrc4147-o012-<UTC stamp>-<sha7>
 ```
 
+- Keep the log outside the checkout (as above): a `*.log` redirected into it is
+  an untracked file, so the launch refuses itself as dirty.
 - A pin holds the source's `HEAD`. A source with uncommitted or untracked files
   is refused (exit 2) because the snapshot would not contain them; commit them,
   or set `RETIE_PIN_ALLOW_DIRTY=1` to run `HEAD` without them (the log says so).
@@ -415,9 +417,20 @@ PROPOSAL=4147 FIELD=012 TARGET=sgrc FILTERS="..." PIPE_ROOT=$PWD \
   (its pid is in the worktree lock reason; a pin locked from another host is kept
   because the pid cannot be checked, unless `RETIE_PRUNE_ASSUME_LOOPS_DEAD=1`).
 - A revived chain (the `ONLY_SHARDS` and finalize-resubmission recipes above)
-  has to import the same code as the rest of the chain. Launch those commands
-  with `PIPE_ROOT` set to the chain's pin directory, not to a live checkout,
-  or the rerun shards come from a different commit.
+  has to import the same code as the rest of the chain. `cd` into the chain's
+  pin directory and run those recipes there, so that `PIPE_ROOT=$PWD` and
+  `scripts/reduction/submit_cataloging_perframe.sh` both name the pin: the
+  driver takes its phase sbatch from its own location, so `PIPE_ROOT=<pin>`
+  with the driver run from a live checkout mixes the pin's package with the live
+  checkout's sbatch. Do not run `prune_retie_pins.sh --apply` between the
+  `scancel` and the resubmission: with the field's jobs cancelled the queue is
+  empty for it and the pin the recipe needs would be removed.
+- `RETIE_PIN_DIR` must be an absolute path; a relative one is refused (exit 2).
+  `RETIE_PINNED=1` is the re-exec's marker, not a switch: set by hand, the loop
+  checks that `PIPE_ROOT` is a detached linked worktree and otherwise prints
+  `pin: NOT VERIFIED` instead of claiming a pin.
+- `prune_retie_pins.sh --apply` skips a symlink named like a pin, and a pin it
+  cannot read or remove is reported while the others are still handled (exit 1).
 
 ## Overriding the target
 
