@@ -53,6 +53,19 @@ def test_crossfilter_differential_equals_the_recorded_bulk_difference():
     assert row['max_differential_mas'] == pytest.approx(np.hypot(21.4, 2.4))
 
 
+def test_explicit_anchor_filter_overrides_the_default_anchor():
+    cfg = _cfg({(VISIT, 'F150W'): BulkEntry(-1853.5, -710.6, onsky_mas=True),
+                (VISIT, 'F090W'): BulkEntry(-1832.1, -708.2, onsky_mas=True)})
+    default = bulk_spread_by_visit(cfg)[VISIT]
+    assert default['anchor'] == 'F150W'
+    row = bulk_spread_by_visit(cfg, anchor_filter='F090W')[VISIT]
+    assert row['anchor'] == 'F090W'
+    assert row['differential_mas']['F090W'] == pytest.approx((0.0, 0.0), abs=1e-9)
+    # F150W minus F090W is the negative of the default F090W minus F150W
+    assert row['differential_mas']['F150W'] == pytest.approx(
+        tuple(-np.array(default['differential_mas']['F090W'])), abs=1e-6)
+
+
 def test_one_visit_bulk_leaves_no_crossfilter_differential():
     cfg = _cfg({(VISIT, ANY): BulkEntry(-1853.5, -710.6, onsky_mas=True)})
     assert (_after_fix_alignment_mas(cfg, 'F090W')
