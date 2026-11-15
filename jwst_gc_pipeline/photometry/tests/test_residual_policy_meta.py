@@ -20,7 +20,10 @@ from .test_residual_model_policy import (
     _REQUIRED, f480m, over_rendered, over_subtracted, cross_run_reason,
     MODEL_PEAK_CEILING, RESID_CORE_FLOOR, SAME_RUN_HOURS,
     nearest_neighbour_arcsec, star_halfwidth_px, annulus_sky,
-    integrated_ratio, star_record, record_diff, write_record)
+    integrated_ratio, star_record, record_diff, write_record,
+    integrated_median_failure, integrated_gross_failure, report_record,
+    record_update_requested, MAX_DROPPED_FRACTION, INTEGRATED_MIN_STARS,
+    BOX_HALFWIDTH_CAP_PX, RECORD_UPDATE_ENV)
 
 
 def test_each_required_glob_matches_at_most_one_file():
@@ -307,6 +310,18 @@ def test_sky_annulus_is_nan_when_it_leaves_the_image():
     assert np.isnan(annulus_sky(data, w, stars, np.array([12]))[0])
 
 
+def test_integrated_ratio_is_nan_for_negative_flux():
+    """Data below the sky sums to a negative flux; ``flux != 0`` would turn
+    that into a negative "ratio"."""
+    w = _tan_wcs()
+    sky = 5.0
+    data = np.full((161, 161), sky - 5.0)
+    model = np.ones((161, 161))
+    stars = _sky_at(w, [80], [80])
+    out = integrated_ratio(model, data, w, stars, np.array([5]), np.array([sky]))
+    assert np.isnan(out[0])
+
+
 def test_integrated_ratio_is_nan_off_image_and_for_empty_or_negative_flux():
     w = _tan_wcs()
     data = np.full((161, 161), 5.0)
@@ -371,3 +386,214 @@ def test_record_is_valid_json_with_null_for_nan(tmp_path):
     rec = json.loads(path.read_text())
     assert rec["stars"][1]["model_ratio"] is None
     assert rec["stars"][0]["halfwidth_px"] == 12
+
+
+# --- box edges, dropped pixels, halfwidth hardening ----------------------------
+
+def test_integrated_ratio_box_edges_are_inclusive_on_both_sides():
+    """A box that fits exactly is measured; one pixel further out is not."""
+    n, h = 161, 5
+    w = _tan_wcs(n)
+    data = np.full((n, n), 6.0)
+    model = np.ones((n, n))
+    # box [x - h, x + h] fits for h <= x <= n - 1 - h
+    xs = [h - 1, h, n - 1 - h, n - h]
+    stars = _sky_at(w, xs, [80] * 4)
+    out = integrated_ratio(model, data, w, stars, np.full(4, h), np.full(4, 5.0))
+    assert np.isnan(out[0]) and np.isnan(out[3])
+    assert out[1] == pytest.approx(1.0) and out[2] == pytest.approx(1.0)
+    # the same on the y axis
+    stars = _sky_at(w, [80] * 4, xs)
+    out = integrated_ratio(model, data, w, stars, np.full(4, h), np.full(4, 5.0))
+    assert list(np.isnan(out)) == [True, False, False, True]
+
+
+def test_integrated_ratio_drops_nan_pixels_from_both_sums_and_counts_them():
+    """A NaN data pixel takes the model's flux there out of the numerator, so
+    the ratio is the finite-pixel ratio; the count says how many were lost."""
+    n, h = 161, 5
+    w = _tan_wcs(n)
+    data = np.full((n, n), 6.0)
+    model = np.ones((n, n))
+    model[80, 80] = 50.0
+    stars = _sky_at(w, [80], [80])
+    half, sky = np.array([h]), np.array([5.0])
+    full, nd = integrated_ratio(model, data, w, stars, half, sky,
+                                return_dropped=True)
+    assert nd[0] == 0 and full[0] == pytest.approx((121 + 49) / 121)
+    data[80, 80] = np.nan
+    ratio, nd = integrated_ratio(model, data, w, stars, half, sky,
+                                 return_dropped=True)
+    assert nd[0] == 1
+    assert ratio[0] == pytest.approx(120 / 120)       # the 50 left with the pixel
+    # a NaN in the MODEL drops the data pixel as well
+    data[80, 80], model[80, 80] = 6.0, np.nan
+    ratio, nd = integrated_ratio(model, data, w, stars, half, sky,
+                                 return_dropped=True)
+    assert nd[0] == 1 and ratio[0] == pytest.approx(1.0)
+
+
+def test_integrated_ratio_is_nan_above_the_dropped_fraction():
+    n, h = 161, 5
+    w = _tan_wcs(n)
+    model = np.ones((n, n))
+    stars = _sky_at(w, [80], [80])
+    half, sky = np.array([h]), np.array([5.0])
+    box = (2 * h + 1) ** 2
+    limit = int(MAX_DROPPED_FRACTION * box)            # 24 of 121
+
+    def with_dropped(k):
+        flat = np.full(box, 6.0)
+        flat[:k] = np.nan
+        d = np.full((n, n), 6.0)
+        d[75:86, 75:86] = flat.reshape(11, 11)         # the star's whole box
+        return d
+
+    ratio, nd = integrated_ratio(model, with_dropped(limit), w, stars, half,
+                                 sky, return_dropped=True)
+    assert nd[0] == limit and np.isfinite(ratio[0])    # at the limit: measured
+    ratio, nd = integrated_ratio(model, with_dropped(limit + 1), w, stars,
+                                 half, sky, return_dropped=True)
+    assert nd[0] == limit + 1 and np.isnan(ratio[0])   # one more: not a ratio
+
+
+def test_dropped_count_is_nan_where_the_box_is_off_the_image():
+    w = _tan_wcs()
+    stars = _sky_at(w, [2], [80])
+    data = np.full((161, 161), 6.0)
+    ratio, nd = integrated_ratio(np.ones_like(data), data, w, stars,
+                                 np.array([5]), np.array([5.0]),
+                                 return_dropped=True)
+    assert np.isnan(ratio[0]) and np.isnan(nd[0])
+
+
+def test_star_halfwidth_maps_a_nan_separation_to_the_floor():
+    out = star_halfwidth_px(np.array([np.nan, 0.62, np.inf]), PIX_ARCSEC)
+    assert list(out) == [3, 4, 12]
+    assert out.dtype.kind == "i"
+
+
+def test_sky_annulus_starts_at_the_default_inner_radius():
+    """A halo out to 37 px must not be read as sky: the annulus has to start
+    at SKY_INNER_PX (30), not inside the halo."""
+    w = _tan_wcs()
+    c = 80
+    stars = _sky_at(w, [c], [c])
+    data = np.full((161, 161), 5.0)
+    data[c - 37:c + 38, c - 37:c + 38] = 50.0
+    assert annulus_sky(data, w, stars, np.array([12]))[0] == pytest.approx(5.0)
+
+
+def test_record_carries_the_dropped_pixel_count():
+    w = _tan_wcs()
+    stars = _sky_at(w, [60, 100], [80, 80])
+    rec = star_record(stars, np.array([2.5, 2.5]), np.array([12, 12]),
+                      np.array([0.9, np.nan]), np.array([0.05, 0.1]),
+                      {"data": "x"}, "abc1234", np.array([2.0, np.nan]))
+    assert [r["n_dropped_px"] for r in rec["stars"]] == [2, None]
+    assert all(r["n_dropped_px"] is None for r in _record_for()["stars"])
+
+
+# --- ensemble policy functions and the record plumbing -------------------------
+
+def _ensemble(median, n=40):
+    """``n`` isolated stars (box at the cap) with ``median`` as the median."""
+    return np.full(n, median), np.full(n, BOX_HALFWIDTH_CAP_PX)
+
+
+def test_median_band_has_both_edges():
+    for good in (0.7, 0.88, 1.3):
+        assert integrated_median_failure(*_ensemble(good)) is None
+    assert "outside" in integrated_median_failure(*_ensemble(0.69))
+    assert "outside" in integrated_median_failure(*_ensemble(1.31))
+
+
+def test_median_is_taken_over_the_isolated_stars_only():
+    ratio, half = _ensemble(0.88, 30)
+    # stars in close pairs (small box) with wild ratios must not move it
+    ratio = np.append(ratio, np.full(40, 5.0))
+    half = np.append(half, np.full(40, 4))
+    assert integrated_median_failure(ratio, half) is None
+    # ... nor stars with no ratio
+    ratio = np.append(ratio, np.full(40, np.nan))
+    half = np.append(half, np.full(40, BOX_HALFWIDTH_CAP_PX))
+    assert integrated_median_failure(ratio, half) is None
+
+
+def test_median_needs_enough_isolated_stars():
+    ratio, half = _ensemble(0.88, INTEGRATED_MIN_STARS - 1)
+    assert "need" in integrated_median_failure(ratio, half)
+    ratio, half = _ensemble(0.88, INTEGRATED_MIN_STARS)
+    assert integrated_median_failure(ratio, half) is None
+
+
+def test_gross_bounds_have_both_edges():
+    base = np.full(40, 1.0)
+    assert integrated_gross_failure(base) is None
+    # 10% of 40 = 4 outside is allowed, 5 is not; above and below
+    for bad in (0.29, 2.01):
+        ok = base.copy()
+        ok[:4] = bad
+        assert integrated_gross_failure(ok) is None
+        ok[:5] = bad
+        assert "outside" in integrated_gross_failure(ok)
+    inside = base.copy()
+    inside[:10] = [0.3, 2.0] * 5                       # the bounds are inclusive
+    assert integrated_gross_failure(inside) is None
+
+
+def test_gross_test_ignores_nan_and_needs_enough_stars():
+    ratio = np.append(np.full(25, 1.0), np.full(20, np.nan))
+    assert integrated_gross_failure(ratio) is None
+    assert "need" in integrated_gross_failure(np.full(INTEGRATED_MIN_STARS - 1, 1.0))
+
+
+def test_integrated_products_record_the_residual_fraction_and_dropped_count():
+    """``int_resid`` is the RESIDUAL summed over the model's box and sky, not a
+    second copy of the model ratio."""
+    n, c = 161, 80
+    w = _tan_wcs(n)
+    star = _sky_at(w, [c], [c])
+    data = 5.0 + _gauss(n, c, c, 2.0, 1000.0)
+    model = 0.5 * _gauss(n, c, c, 2.0, 1000.0)
+    resid = 0.25 * _gauss(n, c, c, 2.0, 1000.0)
+    data[c, c] = np.nan
+    out = policy._integrated_products(data, resid, model, w, star,
+                                      {"data": "x"})
+    assert out["int_ratio"][0] == pytest.approx(0.5, abs=0.02)
+    assert out["int_resid"][0] == pytest.approx(0.25, abs=0.02)
+    assert out["n_dropped"][0] == 1
+    row = out["record"]["stars"][0]
+    assert row["resid_fraction"] == pytest.approx(0.25, abs=0.02)
+    assert row["model_ratio"] == pytest.approx(0.5, abs=0.02)
+    assert row["n_dropped_px"] == 1
+
+
+def test_record_update_needs_exactly_one():
+    assert record_update_requested({RECORD_UPDATE_ENV: "1"})
+    for value in ("0", "false", "", "yes", "true", "2"):
+        assert not record_update_requested({RECORD_UPDATE_ENV: value})
+    assert not record_update_requested({})
+
+
+def test_record_update_reads_the_process_environment_by_default(monkeypatch):
+    monkeypatch.setenv(RECORD_UPDATE_ENV, "1")
+    assert record_update_requested()
+    monkeypatch.setenv(RECORD_UPDATE_ENV, "0")
+    assert not record_update_requested()
+    monkeypatch.delenv(RECORD_UPDATE_ENV)
+    assert not record_update_requested()
+
+
+def test_report_record_only_writes_when_asked(tmp_path):
+    path = tmp_path / "rec.json"
+    write_record(_record_for(0.9), str(path))
+    before = path.read_text()
+    text = report_record(_record_for(1.2), str(path), update=False)
+    assert path.read_text() == before
+    assert "regenerated" in text and "1.2" in text
+    assert "(no differences)" in report_record(_record_for(0.9), str(path))
+    text = report_record(_record_for(1.2), str(path), update=True)
+    assert text.startswith("wrote ")
+    assert path.read_text() != before
+    assert json.loads(path.read_text())["stars"][0]["model_ratio"] == 1.2
