@@ -248,7 +248,19 @@ rejection**.
   The dedup table records which pre-dedup row supplied each band
   (`dedup_src_<band>`, `dedup_band_swapped_<band>`, `dedup_primary`,
   `dedup_pos_spread_mas`; indices refer to the sibling `..._m8` file of the same
-  run, named in the `DEDUPSRC` header key).
+  run, named in the `DEDUPSRC` header key). The header also carries `DEDUPN0`
+  (row count of that m8 file, so a reader can tell whether a later rewrite of
+  the m8 moved the indices), `DEDUPRAT` (`--m8-dedup-winner-emag-ratio`, when
+  set) and `DEDUPRES` (the bands and mas of `--m8-dedup-band-resolve-mas` that
+  were applied, when the guard is active). `n_filt_independent` is recomputed
+  from `independently_detected_<band>` on the rows that took a band from
+  another row. Both options are checked when the command line is read (a
+  malformed or non-positive value stops the run at start); a band named in
+  `--m8-dedup-band-resolve-mas` that the table does not have, or that has no
+  `skycoord_<band>` column, is dropped with a warning, and the guard is
+  reported OFF when none is left. `m8_merge_partials.py` takes the same two
+  options as `--dedup-winner-emag-ratio` and `--dedup-band-resolve-mas`; pass
+  the values the cataloging run used.
 
 ### Merge + vet (per-phase barrier)
 

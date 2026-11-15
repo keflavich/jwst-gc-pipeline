@@ -5601,6 +5601,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '(#1284).'))
     (options, args) = parser.parse_args()
 
+    # The m8 dedup runs at the end of the m8 phase, inside a handler that logs
+    # a failure and carries on; a malformed option would cost the dedup product
+    # only after the whole fill.  Reject it here instead (#1278).
+    from jwst_gc_pipeline.photometry.dedup_catalog import (
+        check_winner_emag_ratio, parse_band_resolve_mas)
+    try:
+        check_winner_emag_ratio(options.m8_dedup_winner_emag_ratio)
+        parse_band_resolve_mas(options.m8_dedup_band_resolve_mas)
+    except ValueError as _dedup_err:
+        parser.error(f"--m8-dedup-*: {_dedup_err}")
+
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the
     # instrument must be stated explicitly.  Set the process-global env override
     # (consulted by naming._instrument_from_filter/_inst_token/_svo_filter_id and
