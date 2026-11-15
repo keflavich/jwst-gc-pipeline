@@ -56,6 +56,13 @@ def bulk_spread_by_visit(cfg, anchor_filter=None):
     anchor minus filter, so its two components carry the opposite sign.
     ``anchor_filter`` defaults to ``pick_reference_anchor_filter`` over the
     visit's filters, the band the m7 gate uses as its anchor.
+
+    Limit: the filters (and so the default anchor) come from the explicit
+    ``(visit, filter)`` keys of ``recorded_bulk``; the gate takes them from the
+    catalogs actually present.  A band that is resolved only through a
+    ``(visit, ANY)`` or ``(ANY, filter)`` wildcard key gets no row here and
+    cannot move the anchor.  No current entry mixes explicit and wildcard keys
+    within one visit; an entry that does needs this audit extended first.
     """
     from jwst_gc_pipeline.photometry.visit_consensus import (
         pick_reference_anchor_filter)
