@@ -2604,10 +2604,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     only star-like route is the ``flags`` keep; drop a row with ``qfit * S/N``
     (S/N on flux / flux_err) below ``prop_floor_qfit_snr_min``.  Rows kept by
     ``qfit <= qfit_max`` and rows the per-frame floor admits are never
-    dropped, so the per-frame-floor catalogue is reproduced row for row.  The
-    guard runs before the multi-frame, sky-clean and hysteresis tiers, which
-    can still admit a dropped row on their own criteria.  Without
-    ``snr_floor_propagated`` it does nothing.
+    dropped.  With all three rules at very large values and none of the tiers
+    below re-admitting a row, the per-frame-floor catalogue is reproduced row
+    for row.  The guard runs before the multi-frame, sky-clean and hysteresis
+    tiers and the satstar force-keep, which can still admit a dropped row on
+    their own criteria (the log reports how many are back in the final
+    catalogue).  Without ``snr_floor_propagated`` it does nothing, and it does
+    not run on the MIRI path (``min_prominence > 0``; the log says so).
 
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
@@ -2995,7 +2998,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
               f"candidate(s)", flush=True)
     # MIRI and NIRCam use DIFFERENT keep-logics (see _emission_keep_miri /
     # _emission_keep_nircam).  min_prominence>0 selects the MIRI path.
+    _guard_dropped = None
     if min_prominence > 0:
+        if prop_floor_prom_min > 0 or prop_floor_drop_flags or prop_floor_qfit_snr_min > 0:
+            print(f"[{label}] propagated-floor guard: not applied on the MIRI "
+                  f"prominence path", flush=True)
         # MIRI: the deep-i2d PROMINENCE is the clean discriminator (real F770W
         # stars >=40, false emission <5), so use it ALONE.  The NIRCam-tuned
         # star_like (qfit/peakSB) + snr cuts REJECT bright real MIRI stars that
@@ -3040,12 +3047,15 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 drop_flags=bool(prop_floor_drop_flags),
                 qfit_snr_min=float(prop_floor_qfit_snr_min))
             keep = keep & ~_drop
+            _guard_dropped = _drop
+            # the per-rule counts overlap; 'dropped' is their union
             print(f"[{label}] propagated-floor guard: {_gc['dropped']} of "
                   f"{_gc['prop_only']} propagated-only row(s) dropped "
-                  f"(flags-only route {_gc['flags']}, "
+                  f"(rules overlap: flags-only route {_gc['flags']}, "
                   f"prominence<{prop_floor_prom_min:g} {_gc['prominence']} "
                   f"of which {_gc['prominence_only']} outside the flags rule, "
-                  f"qfit*S/N<{prop_floor_qfit_snr_min:g} {_gc['qfit_snr']})",
+                  f"qfit*S/N<{prop_floor_qfit_snr_min:g} {_gc['qfit_snr']} "
+                  f"of which {_gc['qfit_snr_only']} outside the other two)",
                   flush=True)
 
     # MULTI-FRAME CONFIRMATION keep (Hosek ndet-style; opt-in, nmatch_confirm>0).
@@ -3422,6 +3432,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # a phantom can also pass the ordinary gates (low qfit on the
         # artifact frame), so drop it explicitly
         keep = keep & ~_phantom
+
+    if _guard_dropped is not None:
+        # the multi-frame, sky-clean and hysteresis tiers and the satstar
+        # force-keep run after the guard and can admit a row it dropped
+        print(f"[{label}] propagated-floor guard: {int(np.sum(_guard_dropped & keep))}"
+              f" of the {int(_guard_dropped.sum())} dropped row(s) are back in "
+              f"the final catalogue after the later tiers", flush=True)
 
     n_keep = int(np.sum(keep))
     if _q_refused is not None:

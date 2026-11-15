@@ -4,7 +4,11 @@ Rows with per-frame S/N below the floor and merged-flux S/N above it are the
 propagated-only rows.  The guard drops three subsets of them (flags-only
 route, finite low prominence, low qfit x S/N), each behind its own switch.
 """
+import ast
+import os
+
 import numpy as np
+import pytest
 from astropy.table import Table
 from astropy.wcs import WCS
 
@@ -62,14 +66,71 @@ def test_guard_inert_without_propagated_floor():
     assert _kept(t2, **ALL_ON) == _kept(t2)
 
 
-def test_guard_reproduces_per_frame_floor_for_all_rows_it_removes():
+def _six_row_table():
     t = _mk([2.5, 5.0, 10.0, 2.5, 2.5, 2.5], n=6)
     t['flux_err'] = [10.0, 5.0, 10.0, 4.0, 10.0, 10.0]
     t['qfit'] = [0.5, 0.5, 0.5, 0.5, 0.1, 0.5]
+    return t
+
+
+def test_guard_subset_ordering():
+    t = _six_row_table()
     per_frame = _kept(t, on=False)
     guarded = _kept(t, **ALL_ON)
     assert per_frame <= guarded
     assert guarded <= _kept(t)
+
+
+def test_guard_with_rules_maxed_reproduces_per_frame_floor():
+    # all three rules at very large values and no re-admitting tier: the
+    # propagated floor plus the guard keeps exactly the per-frame-floor rows
+    t = _six_row_table()
+    unguarded = _kept(t)
+    per_frame = _kept(t, on=False)
+    assert per_frame < unguarded               # the guard has rows to remove
+    maxed = dict(prop_floor_prom_min=1e9, prop_floor_drop_flags=True,
+                 prop_floor_qfit_snr_min=1e9)
+    assert _kept(t, **maxed) == per_frame
+    # each rule alone covers these flags-only qfit-0.5 rows except the
+    # prominence rule, which keeps the NaN prominence of an image-less table
+    assert _kept(t, prop_floor_drop_flags=True) == per_frame
+    assert _kept(t, prop_floor_qfit_snr_min=1e9) == per_frame
+    assert _kept(t, prop_floor_prom_min=1e9) == unguarded
+
+
+def test_later_tier_readmits_a_guard_dropped_row_and_the_log_says_so(capsys):
+    t = _mk([2.5, 2.5, 2.5])
+    t['nmatch'] = [5, 5, 1]
+    t['std_ra'] = 0.0
+    t['std_dec'] = 0.0
+    kw = dict(prop_floor_drop_flags=True)
+    assert _kept(t, **kw) == set()
+    out = capsys.readouterr().out
+    assert '0 of the 3 dropped row(s) are back in the final catalogue' in out
+    assert _kept(t, nmatch_confirm=3, nmatch_confirm_qfit_max=0.6, **kw) == {0, 1}
+    out = capsys.readouterr().out
+    assert '3 of 3 propagated-only row(s) dropped' in out
+    assert '2 of the 3 dropped row(s) are back in the final catalogue' in out
+
+
+def test_guard_log_silent_when_all_rules_off(capsys):
+    _kept(_mk([2.5, 2.5, 2.5]))
+    assert 'propagated-floor guard' not in capsys.readouterr().out
+
+
+def test_guard_not_applied_on_miri_path_and_logs_it(capsys):
+    t = _mk([2.5, 2.5, 2.5])
+    out = _filter_extended_emission(t, min_prominence=5.0, local_snr_min=5.0,
+                                    snr_floor_propagated=True,
+                                    prop_floor_drop_flags=True)
+    log = capsys.readouterr().out
+    assert 'not applied on the MIRI prominence path' in log
+    assert 'propagated-floor guard: 0 of' not in log
+    # the MIRI keep is prominence alone, so the switch changes nothing
+    off = _filter_extended_emission(t, min_prominence=5.0, local_snr_min=5.0,
+                                    snr_floor_propagated=True)
+    assert list(out['id']) == list(off['id'])
+    assert 'not applied on the MIRI' not in capsys.readouterr().out
 
 
 def _i2d_case(amps_xy, qfit=0.5):
@@ -163,6 +224,65 @@ def test_helper_counts_and_all_off():
     assert c['flags'] == 1 and c['prominence'] == 2 and c['prominence_only'] == 1
     drop, c = prop_floor_guard_drop(prop_only, qfit_snr_min=3.0, **kw)
     assert drop.tolist() == [True, True, True, False]      # 0.5 * 4 = 2 < 3
+
+
+def test_helper_counts_overlap_and_union():
+    # flags rule rows 0, 1; prominence rule rows 1, 2; qfit*S/N rows 1, 2, 3
+    prop_only = np.ones(5, dtype=bool)
+    drop, c = prop_floor_guard_drop(
+        prop_only, flags_only=np.array([1, 1, 0, 0, 0], bool),
+        prominence=np.array([9.0, 2.0, 2.0, 9.0, 9.0]),
+        qf=np.array([0.9, 0.5, 0.5, 0.5, 0.9]),
+        snr_per_frame=np.full(5, 4.0), prom_min=4.0, drop_flags=True,
+        qfit_snr_min=3.0)
+    assert drop.tolist() == [True, True, True, True, False]
+    assert (c['flags'], c['prominence'], c['qfit_snr']) == (2, 2, 3)
+    assert (c['prominence_only'], c['qfit_snr_only'], c['dropped']) == (1, 1, 4)
+    assert c['flags'] + c['prominence'] + c['qfit_snr'] > c['dropped']
+
+
+def test_helper_thresholds_are_strict_and_infinite_prominence_is_kept():
+    prop_only = np.ones(4, dtype=bool)
+    kw = dict(flags_only=np.zeros(4, bool), snr_per_frame=np.full(4, 6.0))
+    # prominence exactly at the value is kept; only a finite value below drops
+    drop, _ = prop_floor_guard_drop(
+        prop_only, prominence=np.array([4.0, 3.999, -np.inf, np.inf]),
+        qf=np.full(4, 0.9), prom_min=4.0, **kw)
+    assert drop.tolist() == [False, True, False, False]
+    # qfit * S/N exactly at the value is kept: 0.5 * 6 = 3.0
+    drop, _ = prop_floor_guard_drop(
+        prop_only, prominence=np.full(4, 9.0),
+        qf=np.array([0.5, 0.4999, np.nan, 0.1]), qfit_snr_min=3.0, **kw)
+    assert drop.tolist() == [False, True, False, True]
+
+
+def _run_manual_pipeline_filter_call():
+    src = os.path.join(os.path.dirname(__file__), '..', 'cataloging.py')
+    tree = ast.parse(open(src).read())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == 'run_manual_pipeline')
+    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+             and getattr(n.func, 'id', None) == '_filter_extended_emission']
+    assert len(calls) == 1
+    return calls[0]
+
+
+@pytest.mark.parametrize('kwarg, conv', [
+    ('prop_floor_prom_min', 'float'), ('prop_floor_drop_flags', 'bool'),
+    ('prop_floor_qfit_snr_min', 'float')])
+def test_run_manual_pipeline_passes_each_switch_from_its_option(kwarg, conv):
+    # the one production call site must read the matching option through mopt;
+    # a hard-coded value or a misspelt key would otherwise only fail at run time
+    call = _run_manual_pipeline_filter_call()
+    kw = {k.arg: k.value for k in call.keywords}
+    assert kwarg in kw, f'{kwarg} not passed by run_manual_pipeline'
+    v = kw[kwarg]
+    assert isinstance(v, ast.Call) and v.func.id == conv, ast.dump(v)
+    inner = v.args[0]
+    assert isinstance(inner, ast.Call) and inner.func.id == 'mopt', ast.dump(v)
+    assert inner.args[0].id == 'opts_phase'
+    assert inner.args[1].value == 'manual_ext_' + kwarg
+    assert inner.args[1].value in MANUAL_DEFAULTS
 
 
 def test_defaults_off():

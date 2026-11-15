@@ -3,15 +3,26 @@
 ``manual_ext_snr_floor_propagated`` (#1016) applies the vetting S/N floor to
 flux / flux_err_prop instead of flux / flux_err.  A row the per-frame floor
 would have refused, and the propagated floor admits, is a *propagated-only*
-row.  Three subsets of those rows read near chance in the Brick F182M, Sgr B2
-F187N and W51 F187N replays (realness 0.02 / 0.31 / 0.37 against 1.30 / 1.10 /
-0.76 for the other additions): admission through the ``flags`` keep with no
-other star-like route, a measured data-i2d prominence below the #1018 value,
-and a fit whose ``qfit * S/N`` is small against the per-frame noise.
+row.  The rules are motivated by three subsets measured in the Brick F182M,
+Sgr B2 F187N and W51 F187N replays of #1025 (docs/evidence/
+faint_snr_floor_propagated), which are not the sets the rules remove.  They
+are subsets of the rows the propagated floor adds over the #1018 replay, not
+only of the rows the per-frame floor refuses.  (a) A union of three subsets
+(``flags == 1`` with qfit > 0.2, regardless of the other routes; prominence
+< 4, an unmeasured NaN prominence counted as low; qfit 0.2-0.6) has realness
+0.02 / 0.31 / 0.37 against 1.30 / 1.10 / 0.76 for the other additions; the
+largest part of that union (qfit 0.2-0.6, Brick 304 of 329) has no rule here.
+(b) ``qfit * S/N < 3`` is a separate set (realness 0.45 / 0.38 / 0.66), on the
+per-frame S/N where #1025 writes S/N_prop.  Rule 2 drops only the rows whose
+sole star-like route is ``flags``; rule 3 keeps a NaN prominence.  Whether the
+rules, as implemented, remove the low-realness rows is what the replay is for.
 
-The guard acts on propagated-only rows alone, so the per-frame-floor catalogue
-is reproduced row for row when it is on.  Each sub-rule has its own switch;
-with every switch off the guard returns an all-False mask.
+The guard acts on propagated-only rows alone.  With all three rules at very
+large values and no later tier that re-admits a dropped row (multi-frame,
+sky-clean, hysteresis, the satstar force-keep), the per-frame-floor catalogue
+is reproduced row for row.  Each sub-rule has its own switch; with every
+switch off the guard returns an all-False mask.  The guard does not run on the
+MIRI path, which vets on prominence alone.
 """
 import numpy as np
 
@@ -35,9 +46,12 @@ def prop_floor_guard_drop(prop_only, *, flags_only, prominence, qf, snr_per_fram
       S/N on flux / flux_err.  A non-finite product is kept.
 
     Returns ``(drop, counts)``.  ``counts`` holds ``prop_only`` and, per rule,
-    the rows it selects (``flags``, ``prominence``, ``qfit_snr``), plus
-    ``prominence_only``, the prominence rows the flags rule does not already
-    select, so a rule that adds nothing shows up in the log.
+    the rows it selects (``flags``, ``prominence``, ``qfit_snr``) and
+    ``dropped``, the union.  The per-rule counts overlap, so they do not add up
+    to ``dropped``; ``prominence_only`` is the prominence rows the flags rule
+    does not already select and ``qfit_snr_only`` the qfit * S/N rows neither
+    of the other two selects, so a rule that adds nothing shows up in the log.
+    ``dropped`` is the count before the later tiers, which can re-admit a row.
     """
     prop_only = np.asarray(prop_only, dtype=bool)
     n = prop_only.size
@@ -64,6 +78,7 @@ def prop_floor_guard_drop(prop_only, *, flags_only, prominence, qf, snr_per_fram
         'prominence': int(r_prom.sum()),
         'prominence_only': int((r_prom & ~r_flags).sum()),
         'qfit_snr': int(r_qs.sum()),
+        'qfit_snr_only': int((r_qs & ~r_flags & ~r_prom).sum()),
         'dropped': int(drop.sum()),
     }
     return drop, counts

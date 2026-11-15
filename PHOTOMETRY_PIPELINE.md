@@ -624,12 +624,35 @@ control is the default.
 | `--manual-ext-snr-floor-per-frame` | (propagated) | put the local S/N floor (`--manual-ext-local-snr-min`) on flux / flux_err (mean per-frame error) instead of flux / flux_err_prop (error of the merged flux, ~flux_err/√nmatch); the sky-clean floor is per-frame either way |
 | `--manual-ext-prop-floor-prom-min` | 0 (off) | guard on rows only the propagated floor admits (issue #1025): drop one with a measured data-i2d prominence below this (4 is the peak-SB value); NaN prominence is kept |
 | `--manual-ext-prop-floor-drop-flags` | off | …drop one whose only star-like route is the `flags` keep |
-| `--manual-ext-prop-floor-qfit-snr-min` | 0 (off) | …drop one with qfit × (flux / flux_err) below this; rows kept by `qfit <= qfit_max` and rows the per-frame floor admits are never dropped; the guard runs before the multi-frame, sky-clean and hysteresis tiers |
+| `--manual-ext-prop-floor-qfit-snr-min` | 0 (off) | …drop one with qfit × (flux / flux_err) below this; rows kept by `qfit <= qfit_max` and rows the per-frame floor admits are never dropped (see the note below the table) |
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + per-frame S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-sky-clean-local-arcsec` | 3.0 | sky-clean tier, LOCAL reference: a source is also clean when its annulus floor is ≤ `--manual-sky-clean-local-max-err` i2d ERR above the 5th percentile of its 3″ tile (smooth bright plateau = clean; filament, PSF-scale emission structure or crowding = not); OR-ed with the global dark-sky test; 0 = global only; needs the i2d ERR plane (skipped with a log line without it) |
 | `--manual-sky-clean-local-max-err` | 2.0 | sky-clean tier, LOCAL reference threshold in i2d ERR (≈ 2.4σ of pixel scatter in the Brick dark cloud, where ERR ≈ 1.2× the scatter); the global test's `--manual-sky-clean-max-sky-snr` is in dark-sky σ |
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
 | `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |
+
+Note on the three `--manual-ext-prop-floor-*` guard switches (issue #1025):
+
+- The guard runs before the multi-frame, sky-clean and hysteresis tiers and the
+  satstar force-keep, which can re-admit a dropped row on their own criteria.
+  Sky-clean is on by default and restores a dropped row with prominence >= 5
+  and per-frame S/N >= 3 on emission-free sky (so the prominence rule loses
+  only rows at 5 or above, i.e. only when its value is above 5);
+  `--manual-ext-nmatch-confirm` can restore any.  The per-frame-floor
+  catalogue is reproduced only with all three rules at very large values and no
+  re-admitting tier.  The replay log reports the rows dropped by the guard and,
+  after the tiers, how many of them are back in the final catalogue.
+- NIRCam only: on the MIRI prominence path (which vets on prominence alone and
+  bypasses S/N) the three switches are ignored; the log says so.
+- The rules are motivated by the #1025 replays (Brick F182M, Sgr B2 F187N, W51
+  F187N), where a union of three subsets of the rows the propagated floor adds
+  (`flags == 1` with qfit > 0.2, prominence < 4 or unmeasured, qfit 0.2-0.6) has
+  realness 0.02 / 0.31 / 0.37 against 1.30 / 1.10 / 0.76 for the rest, and
+  qfit × S/N < 3 is a separate set (0.45 / 0.38 / 0.66).  Those are not the sets
+  the rules remove: the flags rule drops only rows whose sole route is `flags`,
+  the prominence rule keeps NaN prominence, and the largest part of the union
+  (qfit 0.2-0.6) has no rule.  The replay that measures the rules themselves
+  has not been run.
 
 ## Known limitations
 
