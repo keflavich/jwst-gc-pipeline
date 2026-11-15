@@ -32,11 +32,20 @@ What the statistic is, and is not:
   printed to make that visible.  A residual header carries no keyword for the PSF
   variant itself, so the variant is known only from the file name.
 * The robust sigma is 1.4826 * median(|chi|), uncentred, as in ``loo_crop.py``.
+* The median filter removes every component at or above ``--bg-size`` px: a unit
+  variance Gaussian-correlated noise with a 6 px kernel (about 12 px scale) reads
+  sigma 0.2-0.4, white noise 1.0.  Structure at the filter scale is invisible to the
+  statistic; only structure below it (and the white part of the noise) is measured.
+* By default each variant is binned by the field stars of its own model, so the two
+  columns use different pixel sets (the printed ``n`` of both variants shows how
+  different).  ``--star-model stpsf`` (or ``hybrid``) bins both variants by the star
+  set of one model, with identical pixel sets in every bin.
 """
 import argparse
 import json
 import os
 import sys
+import warnings
 
 import numpy as np
 from astropy.io import fits
@@ -102,7 +111,9 @@ def farfield_sigma(resid, err, dq, model, bins=DEFAULT_BINS, peak_threshold=60.0
 
     Pixels flagged in ``BAD_DQ_BITS`` and pixels within ``sat_radius`` px of a
     saturated pixel are excluded.  Returns a list of dicts with the bin edges, the
-    pixel count and sigma.
+    pixel count and sigma.  A frame with no field star above ``peak_threshold`` puts
+    every pixel in the open-ended far bin and emits a warning, since that is also what
+    a model file of the wrong frame produces.
     """
     dq = np.asarray(dq)
     saturated = (dq & SATURATED_BIT) > 0
@@ -111,7 +122,11 @@ def farfield_sigma(resid, err, dq, model, bins=DEFAULT_BINS, peak_threshold=60.0
     if saturated.any() and sat_radius > 0:
         near_sat = ndimage.distance_transform_edt(~saturated) <= sat_radius
         chi = np.where(near_sat, np.nan, chi)
-    dist = distance_to_peaks(field_star_peaks(model, peak_threshold))
+    peaks = field_star_peaks(model, peak_threshold)
+    if not peaks.any():
+        warnings.warn(f'no field star above {peak_threshold:g} MJy/sr in the model: '
+                      'every pixel goes in the far bin (wrong model file?)')
+    dist = distance_to_peaks(peaks)
     rows = []
     for lo, hi in bins:
         # an open-ended bin also takes the all-inf distance map of a frame with no star
@@ -143,18 +158,29 @@ def variant_paths(directory, stem, suffix):
     return base + '_residual.fits', base + '_model.fits'
 
 
-def compare_frame(directory, stem, suffixes, **kwargs):
-    """{variant label: {'date', 'gctag', 'gcpipev', 'bins'}} for one frame."""
-    out = {}
+def compare_frame(directory, stem, suffixes, star_model=None, **kwargs):
+    """{variant label: {'date', 'gctag', 'gcpipev', 'bins'}} for one frame.
+
+    Each variant is binned by its own model unless ``star_model`` names one of the
+    labels in ``suffixes``, whose model then defines the field stars for all variants.
+    """
+    if star_model is not None and star_model not in suffixes:
+        raise ValueError(f'star_model {star_model!r} is not one of {list(suffixes)}')
+    frames = {}
     for label, suffix in suffixes.items():
         resid_path, model_path = variant_paths(directory, stem, suffix)
         for p in (resid_path, model_path):
             if not os.path.exists(p):
                 raise FileNotFoundError(p)
-        resid, err, dq, model, meta = load_frame(resid_path, model_path)
+        frames[label] = load_frame(resid_path, model_path)
+    out = {}
+    for label, (resid, err, dq, model, meta) in frames.items():
+        stars = model if star_model is None else frames[star_model][3]
         out[label] = {'date': meta['DATE'], 'gctag': meta['GCTAG'],
                       'gcpipev': meta['GCPIPEV'],
-                      'bins': farfield_sigma(resid, err, dq, model, **kwargs)}
+                      'bins': farfield_sigma(resid, err, dq, stars, **kwargs)}
+        # the model that defines the stars, recorded so the json is self-describing
+        out[label]['star_model'] = label if star_model is None else star_model
     return out
 
 
@@ -184,9 +210,22 @@ def format_report(results):
             vals = [variants[lab]['bins'][i]['sigma'] for lab in labels]
             line = '  {:<12s}'.format(_bin_label(row0)) + ''.join(f'{v:14.3f}' for v in vals)
             if len(labels) == 2:
-                line += f'{vals[1] / vals[0]:10.3f}'
-            lines.append(line + f'   n={row0["n"]}')
+                ratio = vals[1] / vals[0] if vals[0] else np.nan
+                line += f'{ratio:10.3f}'
+            counts = [variants[lab]['bins'][i]['n'] for lab in labels]
+            lines.append(line + '   n=' + '/'.join(str(n) for n in counts))
     return '\n'.join(lines)
+
+
+def _json_safe(obj):
+    """Copy of ``obj`` with inf and NaN replaced by None (strict JSON has neither)."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and not np.isfinite(obj):
+        return None
+    return obj
 
 
 def main(argv=None):
@@ -201,19 +240,24 @@ def main(argv=None):
                     help='median-filter box [px] removing the sky (default 15)')
     ap.add_argument('--sat-radius', type=float, default=15.0,
                     help='exclude pixels within this distance [px] of a saturated pixel')
-    ap.add_argument('--json', help='also write the numbers to this file')
+    ap.add_argument('--star-model', choices=('stpsf', 'hybrid'), default=None,
+                    help='bin both variants by the field stars of this variant model '
+                         '(default: each variant by its own model)')
+    ap.add_argument('--json', help='also write the numbers to this file (null for '
+                                   'the open upper edge and for empty bins)')
     args = ap.parse_args(argv)
 
     suffixes = {'stpsf': args.stpsf_suffix, 'hybrid': args.hybrid_suffix}
     results = {}
     for stem in args.stems:
         results[stem] = compare_frame(args.dir, stem, suffixes,
+                                      star_model=args.star_model,
                                       peak_threshold=args.peak_threshold,
                                       bg_size=args.bg_size, sat_radius=args.sat_radius)
     print(format_report(results))
     if args.json:
         with open(args.json, 'w') as fh:
-            json.dump(results, fh, indent=1)
+            json.dump(_json_safe(results), fh, indent=1, allow_nan=False)
     return 0
 
 
