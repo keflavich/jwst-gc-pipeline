@@ -65,8 +65,8 @@ from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.satstar_zf_status import (
     satstar_zf_status, satstar_zf_summary, zf_fit_fraction)
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
-    format_phase_report, normalise_frame_variants, satstar_frame_variant,
-    satstar_phase_rank, satstar_phase_selection_signature,
+    format_phase_report, frame_variant_families, normalise_frame_variants,
+    satstar_frame_variant, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.wingcal import (
@@ -2315,7 +2315,9 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     _frame_variants = _frame_variants_of_tables(tables)
     minimal_table.meta['FRMVAR'] = (','.join(sorted(_frame_variants))
                                     or FRAME_VARIANT_NONE)
-    if len(_frame_variants) > 1:
+    # Variants of different observations (align_o002_crf, align_o005_crf) are
+    # one kind of frame; warn only when the kinds differ.
+    if len(frame_variant_families(_frame_variants)) > 1:
         print(f"WARNING: {filtername.upper()}/{module}: the per-frame catalogs "
               f"span {len(_frame_variants)} frame variants "
               f"({', '.join(sorted(_frame_variants))}); an exposure with "
@@ -3304,7 +3306,10 @@ def load_satstar_catalog(filtername, target='brick',
     those frames are read, so an exposure fit on both ``_align_`` and
     ``_destreak_`` frames no longer takes whichever was written last; an
     exposure with none of the read variant contributes no rows (#1194).
-    ``None`` keeps every variant eligible.
+    ``None`` keeps every variant eligible.  The NIRCam ``merged_i2d`` primary
+    catalog (:func:`_primary_satstar_catalog_path`), when it exists, is read
+    whole and ignores ``frame_variants``: it is one product per target and
+    filter, not one per exposure and variant.
     """
     obs_scope = satstar_obs_scope(proposal_id, field)
     _primary = _primary_satstar_catalog_path(filtername, target, basepath,
@@ -3683,6 +3688,12 @@ def select_wingcal_calibrator_files(filtername, basepath, phase=None):
     band's calibrators share its PSF grid).  Files without a phase token are
     left out, as the satstar readers leave them out.
 
+    The pool is deliberately variant-agnostic (#1194): the C(r) table is per
+    band and shared by every observation and frame variant, so it cannot follow
+    one merge's ``frame_variants``, and the wing profile does not depend on
+    which frame's WCS the merge reads.  A same-phase tie between variants is
+    settled by file time and flagged in the report.
+
     Returns ``(files, report)`` as
     :func:`~jwst_gc_pipeline.photometry.satstar_phase_selection.select_satstar_phase_files`.
     """
@@ -3915,7 +3926,8 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     ``..._satstar_rejected.fits`` (``None`` when it has none).
 
     ``frame_variants`` is the set :func:`load_satstar_catalog` takes; it
-    chooses the accepted catalogs the rejected files follow.
+    chooses the accepted catalogs the rejected files follow.  Like the accepted
+    channel, the primary-catalog branch above ignores it.
     """
     # The accepted channel reads the NIRCam merged_i2d primary catalog when it
     # exists; the rejected candidates then come from that same product's
