@@ -10,7 +10,6 @@ would leave the arithmetic tests green and put a detector's pixel-area offset
 
 Synthetic and CPU-only.
 """
-import types
 
 import numpy as np
 import pytest
