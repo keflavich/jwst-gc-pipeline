@@ -589,7 +589,12 @@ is refused rather than skipped.
   `FFRAMCOR` keeps it idempotent), then re-catalog.
 - Staleness scan: `scripts/analysis/scan_filter_frame_provenance.py <field dir>` lists
   the frames that lack `FFRAMCOR` and flags bands that mix corrected and
-  uncorrected frames (read-only; `--check` exits 1 on any stale frame).
+  uncorrected frames (read-only; groups are keyed on the field directory too).
+  `--check` exits 1 on any stale, pending or wrong-anchor frame, 2 when no
+  frame is found, 3 when nothing is selected (`FILTER_FRAME_CORRECTION=0` /
+  `--mode off`, which is not "all corrected"), 4 on an invalid
+  `FILTER_FRAME_CORRECTION`; `--lineage destreak_crf` restricts the gate to the
+  regenerated lineage when old `align` copies remain beside it.
 - Per-detector rows in a field's offsets table may already absorb part of the
   term: the m2 visit consensus sees it wherever dithers mix detectors (cloudef
   F162M: about 2.5 mas in Dec). After the correction those rows read as a

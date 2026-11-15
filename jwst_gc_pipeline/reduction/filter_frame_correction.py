@@ -389,13 +389,23 @@ def configured_filter(instrument, detector, filtername, mode):
     return f or None
 
 
+def marker_present(hdr):
+    """True when the SCI header carries the ``FFRAMCOR`` card, whatever its value.
+
+    The one reader shared by ``check_apply_preconditions`` (which skips such a
+    frame as already applied) and ``frame_provenance``, so the two cannot
+    disagree about what "marked" means.
+    """
+    return MARKER in hdr
+
+
 def check_apply_preconditions(hdr, det, offsets_mas, anchor=None, label=""):
     """Decide whether ``hdr``'s frame may be corrected.  Pure, so it is testable.
 
     Returns ``'skip'`` when the file is already corrected onto the same anchor,
     ``'go'`` otherwise, and raises when continuing would be unsafe.
     """
-    if MARKER in hdr:
+    if marker_present(hdr):
         prior = str(hdr.get('FFRAMANC', '') or '').upper().strip()
         want = str(anchor or '').upper().strip()
         if want and prior and prior != want:
@@ -557,7 +567,10 @@ def frame_provenance(hdr0, hdr, mode=None, table_path=SHIPPED_TABLE):
       ``mode`` (other filters, LW detectors, non-NIRCam, ``mode='off'``);
     * ``corrected`` -- ``FFRAMCOR`` set, onto the shipped anchor;
     * ``wrong-anchor`` -- ``FFRAMCOR`` set onto a different anchor;
-    * ``pending`` -- ``FFRAMPND`` set and ``FFRAMCOR`` absent (a crashed apply);
+    * ``pending`` -- ``FFRAMPND`` set and ``FFRAMCOR`` absent (a crashed apply),
+      or a ``FFRAMCOR`` card whose value is not true: ``apply_filter_frame_correction``
+      only ever writes ``True``, but ``check_apply_preconditions`` skips any frame
+      carrying the card, so such a frame is neither corrected nor will it be;
     * ``stale`` -- selected, but ``FFRAMCOR`` absent: reduced before the
       correction was wired into ``fix_alignment``, or regenerated with it off.
     """
@@ -573,7 +586,9 @@ def frame_provenance(hdr0, hdr, mode=None, table_path=SHIPPED_TABLE):
         return out
     if selected not in DEFAULT_ON_FILTERS and selected not in _table_filters(table_path):
         return out
-    if hdr.get(MARKER):
+    if marker_present(hdr) and not hdr.get(MARKER):
+        out['status'] = STATUS_PENDING
+    elif marker_present(hdr):
         out['anchor'] = str(hdr.get('FFRAMANC', '') or '').upper().strip()
         wrong = out['anchor'] and out['anchor'] != SHIPPED_ANCHOR
         out['status'] = STATUS_WRONG_ANCHOR if wrong else STATUS_CORRECTED
