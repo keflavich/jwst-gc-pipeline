@@ -15,7 +15,21 @@ where the residual extreme is the value of largest magnitude, so that an
 over-subtracted core reads negative.
 
 ``res_frac`` near 0 is a clean subtraction, near 1 an untouched star, and
-negative an over-subtraction.  A star counts as unsubtracted when
+negative an over-subtraction.
+
+Input requirements.  The estimator does no background subtraction (no annulus
+median): both images are used as given, so a residual that keeps the sky reads
+``sky / (sky + peak)`` for a perfectly subtracted star.  Pass a pre-subtraction
+image and a residual image that are both sky-free (or subtract the same local
+sky from both first).  The residual extreme is the largest-magnitude pixel of
+the box, so noise and a neighbour inside the box count as the star's own
+residual: pass isolated stars well above the noise.
+
+Stars that cannot be measured (centre off the image, no finite pixel in the
+box, pre-subtraction peak at or below zero) get NaN ``res_frac`` and leave the
+denominator of every fraction.  ``unsubtracted_fraction_by_bin`` reports them
+per bin as ``n_unmeasured`` so a preferential loss (for example NaN or
+non-positive saturated cores) is visible.  A star counts as unsubtracted when
 ``res_frac > UNSUB_THRESHOLD`` and as over-subtracted when
 ``res_frac < OVERSUB_THRESHOLD``.  The functions take plain arrays, so the
 caller chooses the peak list (catalogue positions or a peak finder) and the
@@ -26,6 +40,16 @@ import numpy as np
 UNSUB_THRESHOLD = 0.5
 OVERSUB_THRESHOLD = -0.2
 DEFAULT_BOX_HALF = 2
+
+
+def column_as_float(col):
+    """Float array of a table column with masked entries set to NaN.
+
+    A masked astropy column (blank ECSV cells) keeps 0.0 under the mask, which
+    would read as pixel 0 or magnitude 0; filling with NaN makes those stars
+    unmeasurable instead.
+    """
+    return np.ma.filled(np.ma.asarray(col).astype(float), np.nan)
 
 
 def box_peak(image, x, y, half=DEFAULT_BOX_HALF, signed_extreme=False):
@@ -76,20 +100,25 @@ def unsubtracted_fraction_by_bin(mag, res_frac, edges,
 
     ``edges`` are the bin edges (for example ``np.arange(11.5, 14.76, 0.5)``);
     a star falls in ``[edges[i], edges[i+1])``.  Stars with a non-finite
-    magnitude or ``res_frac`` are left out of every count.  Returns a list of
-    dicts with keys ``lo``, ``hi``, ``n``, ``n_unsub``, ``frac_unsub``
-    (NaN for an empty bin), ``n_over`` and ``frac_over``.
+    magnitude are left out of every count.  Stars with a finite magnitude in
+    the bin but a non-finite ``res_frac`` are not in ``n`` and are counted in
+    ``n_unmeasured``.  Returns a list of dicts with keys ``lo``, ``hi``, ``n``,
+    ``n_unmeasured``, ``n_unsub``, ``frac_unsub`` (NaN for an empty bin),
+    ``n_over`` and ``frac_over``.
     """
     mag = np.asarray(mag, dtype=float)
     res_frac = np.asarray(res_frac, dtype=float)
     good = np.isfinite(mag) & np.isfinite(res_frac)
     rows = []
     for lo, hi in zip(edges[:-1], edges[1:]):
-        sel = good & (mag >= lo) & (mag < hi)
+        in_bin = np.isfinite(mag) & (mag >= lo) & (mag < hi)
+        sel = good & in_bin
         n = int(sel.sum())
+        n_unmeasured = int((in_bin & ~good).sum())
         n_unsub = int((res_frac[sel] > unsub_threshold).sum())
         n_over = int((res_frac[sel] < oversub_threshold).sum())
         rows.append(dict(lo=float(lo), hi=float(hi), n=n,
+                         n_unmeasured=n_unmeasured,
                          n_unsub=n_unsub,
                          frac_unsub=n_unsub / n if n else np.nan,
                          n_over=n_over,
@@ -114,9 +143,9 @@ def bin_edges(lo, hi, step):
 
 def format_table(rows):
     """Plain-text table of the rows from ``unsubtracted_fraction_by_bin``."""
-    lines = ['  mag bin        n  unsub  unsub%  over  over%']
+    lines = ['  mag bin        n  unmeas  unsub  unsub%  over  over%']
     for r in rows:
-        lines.append('{lo:5.1f}-{hi:5.1f} {n:8d} {n_unsub:6d} {pu:7.1f} '
+        lines.append('{lo:5.1f}-{hi:5.1f} {n:8d} {n_unmeasured:7d} {n_unsub:6d} {pu:7.1f} '
                      '{n_over:5d} {po:6.1f}'.format(
                          pu=100 * r['frac_unsub'], po=100 * r['frac_over'], **r))
     return '\n'.join(lines)
