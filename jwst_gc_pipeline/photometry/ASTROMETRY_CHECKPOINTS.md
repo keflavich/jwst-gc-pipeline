@@ -406,6 +406,44 @@ pipeline ties to; see [`../../docs/JWST_CONSENSUS_CATALOG.md`](../../docs/JWST_C
 5. Every exposure re-measured against the consensus; misaligned = off > 2 mas
    AND significant vs the peak error bars.
 
+### Wide windows: capped bin, significance gate, and what it refuses (#1232)
+
+`measure_offset` histograms each window at `_window_bin_arcsec`, which is
+`window/150` capped at `MAX_WINDOW_BIN_ARCSEC` (0.1″): the 3″ and 10″ windows
+keep their bins (0.02″, 0.067″), the 30″ and 60″ windows read 0.1″ instead of
+0.2″ and 0.4″, so a true 20–30″ tie in a dense field is no longer diluted below
+the contrast floor.  A finer bin lets a noise maximum read contrast 5–9, so at
+windows above `SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC` (15″) `ok` also needs
+`peak_significance >= min_peak_significance` (a trial-corrected Poisson
+significance against the local background).  Window choice stays on contrast;
+when the winner is refused by the floor, the highest-contrast NARROWER window
+that passes its own gate and reads the same peak (within 100 mas or 3000 × the
+bin) is reported instead.
+
+Consequences for existing records and readers:
+
+* Contrasts recorded at 30″ and 60″ before this change were read at the coarser
+  bins and are not comparable (the cloudc F182M "contrast 9.0" above is such a
+  value).  A noise peak above 15″ can now read contrast 5–9, so a contrast
+  check alone no longer separates it; per-exposure records carry
+  `peak_significance`, `min_peak_significance` and `bin_arcsec` next to
+  `contrast` for that reason.
+* `measure_offset_grid` (per-tile `clean`, `per_tile_ok`, `apply_ok`), the
+  Gaia-sparse cross-check of `measure_reference_tie` (`sparse_untrustworthy`
+  now also follows a significance refusal), `visit_consensus`'s sparse arbiter,
+  `bulk_astrometry_update` and `multiepoch_pm.affine_tie` all read the default
+  sweep, so a noise peak above 15″ that used to read `ok` is `ok=False` there.
+  Existing checkpoint records may flip on re-measurement.
+* Measured limits (simulated uniform fields, default sweep; not real data):
+  50 pairs of independent 50″ fields read `ok` 1 time (base 50); at 0.3″
+  scatter a 20–30″ true tie reads `ok` in 11 of 24 fields (7 within 150 mas of
+  the truth) against 24 of 24 at the base (11 within 150 mas).  Scatter of
+  0.04–0.1″ is unaffected.  The 3″/10″ fallback windows have no significance
+  test of their own, which is where the one noise `ok` came from.
+* The alias-probe fixtures of `test_reference_tie_unswept_sparse_alias.py`
+  reach the probe only on a selected seed; the usual route of the same regime
+  is the wide-window significance floor (`wide_window_case`).
+
 ## The reference tie (`measure_reference_tie`) — five checks
 
 A and B are independent measurements; C compares them, and D and E test the

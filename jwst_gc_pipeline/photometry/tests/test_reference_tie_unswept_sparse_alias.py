@@ -43,12 +43,20 @@ switched the gross cross-reference check off.  The mechanism is asserted; the
 verdict that should follow is an ``xfail(strict=True)``.
 
 The fixtures are 6000 consensus sources over 60" against a 1000-source dense
-reference and a 700-source sparse one, which reproduces the recorded regime:
-~33k pairs at the 3" window over 90k bins, median occupied bin 1, so ``contrast``
-IS the peak bin count and a chance bin of 5-8 clears the floor while the arg-max
-lands far out (the area goes as r).  Each ``measure_reference_tie`` call here
-costs ~2.5 min -- there is no cheaper way to exercise this decision on real
-estimator output.
+reference and a 700-source sparse one.  They reproduce the recorded regime's
+density -- ~33k pairs at the 3" window over 90k bins, median occupied bin 1, so
+``contrast`` IS the peak bin count and a chance bin of 5-8 clears the floor while
+the arg-max lands far out (the area goes as r) -- but the sparse chance field
+does NOT reach the alias probe by the recorded route in general.  Since the
+wide-window bin was capped (#1232) the 60" window out-scores the 3" one on
+contrast in nearly every draw (``_field(402, 700)``, the draw this file
+originally used, among them) and is refused by the significance floor before
+any probe window runs; ``_SPARSE_SEED`` is one of the few draws that still
+reaches the probe, so the probe tests below run on a selected draw, and the
+usual route is pinned separately by the ``wide_window_case`` tests.  Both
+routes mark the sparse leg untrustworthy, which is what ``apply_ok`` reads.
+Each ``measure_reference_tie`` call here costs ~2.5 min -- there is no cheaper
+way to exercise this decision on real estimator output.
 """
 import numpy as np
 import pytest
@@ -152,6 +160,42 @@ def seam_case():
     sparse = _field(_SPARSE_SEED, 700)
     return measure_reference_tie(cons, ref_all, sparse, dense=True,
                                  grid_nx=2, grid_ny=2, context="seam")
+
+
+#: The draw this file originally used for the sparse chance field.  At the
+#: capped wide-window bin it is refused by the significance floor at the 60"
+#: window, not by the alias probe.
+_WIDE_WINDOW_SEED = 402
+
+
+@pytest.fixture(scope="module")
+def wide_window_case():
+    """The usual route of the same regime: a sparse chance field whose best
+    peak is a 60" window maximum, refused by the significance floor."""
+    cons = _consensus()
+    ref_all = _shift(cons[::6], 0.012, -0.009)
+    sparse = _field(_WIDE_WINDOW_SEED, 700)
+    return measure_reference_tie(cons, ref_all, sparse, dense=True,
+                                 grid_nx=2, grid_ny=2, context="wide-window")
+
+
+def test_the_usual_sparse_route_is_the_wide_window_significance_floor(wide_window_case):
+    """Seed 402 is refused by the significance floor at the 60" window, not by
+    the alias probe: ``ok`` False, ``alias_rejected`` False and no confirmation
+    run (``window_consistent`` None).  The leg is still untrustworthy, so the
+    dense tie is released exactly as on the probe route."""
+    vs = wide_window_case["vs_sparse"]
+    assert vs is not None and vs["ok"] is False, vs
+    assert vs["alias_rejected"] is False and vs["window_consistent"] is None, vs
+    assert vs["window_arcsec"] == 60.0 and vs["bin_arcsec"] == 0.1, vs
+    # refused on the peak's significance, not on its contrast
+    assert vs["contrast"] >= 5.0, vs
+    assert vs["peak_significance"] < vs["min_peak_significance"], vs
+    assert wide_window_case["cross_reference_sparse_untrustworthy"] is True, wide_window_case
+    assert wide_window_case["cross_reference_gross_ok"] is True, wide_window_case
+    assert wide_window_case["apply_ok"] is True, wide_window_case
+    assert abs(wide_window_case["dra_mas"] - 12.0) < 2.0, wide_window_case
+    assert abs(wide_window_case["ddec_mas"] + 9.0) < 2.0, wide_window_case
 
 
 def test_the_sparse_leg_is_the_newly_probed_shape(flip_case):

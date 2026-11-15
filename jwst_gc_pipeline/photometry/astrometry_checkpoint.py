@@ -4552,6 +4552,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             ("dra", "ddec", "off", "npairs", "contrast", "ok",
                              "swept", "window_arcsec", "dra_err", "ddec_err",
                              "n_peak", "window_edge_fraction",
+                             "peak_significance", "min_peak_significance",
+                             "bin_arcsec",
                              "window_consistent", "alias_rejected")})
             exp_records.append(rec)
             if exp.get("unverified"):
@@ -5152,11 +5154,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             _iv_worst = pooled.meta['IVMAXMAS']
             _iv_text = (f"worst inter-visit {_iv_worst:.1f} mas"
                         if np.isfinite(_iv_worst) else
-                        "no overlapping visits to compare")
+                        "no overlapping pair with a confirmed tie")
             print(f"ASTROM CHECKPOINT [{stage}]: wrote per-filter consensus "
                   f"{consensus_catalog_path} ({len(pooled)} stars, "
                   f"{pooled.meta['NVISITS']} visits, {_iv_text}; "
-                  f"{pooled.meta['IVNOOVL']} visits share no sky with another)",
+                  f"{pooled.meta['IVNOOVL']} visits share no sky with another, "
+                  f"{pooled.meta['IVTHIN']} overlap too thinly to test, "
+                  f"{pooled.meta['IVNOMEAS']} overlap without a confirmed tie)",
                   flush=True)
         except (ValueError, TypeError, OSError) as ex:
             # Not fatal: the catalog is a product of the checkpoint, not an
