@@ -159,6 +159,21 @@ def observation_scope_mask(obs_ids, proposal_id, field):
     return mask
 
 
+def _required_observation_number(obsid):
+    """``observation_number(obsid)``, refusing an empty observation.
+
+    ``observation_number('')`` and ``('  ')`` return ``''``, and an empty
+    observation turns the exposure needle into the bare proposal prefix and the
+    on-disk tags into ``jw10678`` / ``jw10678-o``: every URI and every file of
+    the program would count as this observation's.  An empty ``--obsid`` is a
+    caller error, so raise instead of matching everything.
+    """
+    obs = observation_number(obsid)
+    if not obs:
+        raise ValueError(f'obsid {obsid!r} names no observation')
+    return obs
+
+
 def uncal_uri_mask(uris, proposal_id, obsid, token):
     """Boolean mask of the ``_uncal.fits`` URIs that belong to one observation.
 
@@ -175,7 +190,7 @@ def uncal_uri_mask(uris, proposal_id, obsid, token):
     ``dtype=bool`` is explicit: a zero-length list comprehension yields float64,
     and ``&=`` against a boolean column then raises ``TypeError``.
     """
-    needle = f'{jw_prefix(proposal_id)}{observation_number(obsid)}'
+    needle = f'{jw_prefix(proposal_id)}{_required_observation_number(obsid)}'
     return np.array([str(uri).endswith('_uncal.fits')
                      and needle in str(uri)
                      and token in str(uri)
@@ -191,7 +206,7 @@ def on_disk_counts(names, proposal_id, obsid):
     padded observation number.  An unpadded ``obsid`` would match neither and
     report an observation with files on disk as having none.
     """
-    obs = observation_number(obsid)
+    obs = _required_observation_number(obsid)
     exposure_tag = f'{jw_prefix(proposal_id)}{obs}'
     product_tag = f'{jw_prefix(proposal_id)}-o{obs}'
     n_uncal = len([f for f in names

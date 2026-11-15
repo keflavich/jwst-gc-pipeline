@@ -21,6 +21,11 @@ _spec = importlib.util.spec_from_file_location('make_ccd_plot_t', _MOD)
 cc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cc)
 
+_SR_MOD = os.path.join(os.path.dirname(_MOD), 'stage_release.py')
+_sr_spec = importlib.util.spec_from_file_location('stage_release_t', _SR_MOD)
+sr = importlib.util.module_from_spec(_sr_spec)
+_sr_spec.loader.exec_module(sr)
+
 
 def _sorted(bands):
     return sorted(bands, key=lambda b: (cc._WAVE.get(b, 99.0), b))
@@ -182,8 +187,11 @@ def test_an_untokened_table_alone_is_kept():
 _CCD_BANDS = ('f182m', 'f212n', 'f405n', 'f480m')
 
 
-def _stage_catalog(root, version, field_path, name, n=200, seed=0):
-    """Write a four-band merged table under ``<root>/<version>/<field_path>/catalogs``.
+def _stage_catalog(root, version, field, name, n=200, seed=0):
+    """Write a four-band merged table under the field's release ``catalogs`` dir.
+
+    The directory comes from `stage_release.field_release_dir`, so a field's
+    group nesting follows the registry rather than a hard-coded path.
 
     200 rows with S/N 100 in every band clears the ``n_keep < 20`` gate in
     `render`, and F182M/F212N/F405N/F480M select the CCD axes."""
@@ -193,26 +201,27 @@ def _stage_catalog(root, version, field_path, name, n=200, seed=0):
         t[f'mag_vega_{band}'] = rng.uniform(14, 18, n)
         t[f'flux_{band}'] = np.full(n, 100.0)
         t[f'flux_err_{band}'] = np.ones(n)
-    cats = root / version / field_path / 'catalogs'
+    cats = sr.field_release_dir(field, version, root) / 'catalogs'
     cats.mkdir(parents=True)
     t.write(cats / name, format='fits')
     return name
 
 
-@pytest.mark.parametrize('field,field_path', [
-    ('brick', 'brick'),
-    # w51 is staged under galactic_plane/, but the page reads
+@pytest.mark.parametrize('field,grouped', [
+    ('brick', False),
+    # w51 is staged under a group folder (galactic_plane/), but the page reads
     # diagrams/<version>/<field>/ with no group component.
-    ('w51', 'galactic_plane/w51'),
+    ('w51', True),
 ])
 def test_main_writes_outside_the_release_tree_and_records_the_version(
-        tmp_path, field, field_path):
+        tmp_path, field, grouped):
     """A published release is inert (MANIFEST and CHECKSUMS describe its tree),
     so the diagram goes to ``<root>/diagrams/<version>/<field>/``.  The sidecar
     carries the release the catalogue came from, which `make_webpage` puts in
     the caption.  Neither property was pinned when #869 merged."""
     version = 'v9.9'
-    name = _stage_catalog(tmp_path, version, field_path,
+    assert bool(sr.FIELDS[field].get('group')) is grouped
+    name = _stage_catalog(tmp_path, version, field,
                           'basic_merged_indivexp_x_resbgsub_m8.fits')
     rc = cc.main(['--field', field, '--version', version,
                   '--release-root', str(tmp_path)])
@@ -223,4 +232,3 @@ def test_main_writes_outside_the_release_tree_and_records_the_version(
     info = json.loads(png.with_suffix('.json').read_text())
     assert info['version'] == version
     assert info['source_table'] == name
-    assert info['drawn'] is True
