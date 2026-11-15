@@ -5,7 +5,13 @@ import numpy as np
 import pytest
 from astropy.io import fits
 from astropy.table import Table
+from photutils.psf import CircularGaussianPRF
 
+from jwst_gc_pipeline.reduction.tests.test_satstar_recovered_cap import (
+    _two_star_frame)
+
+import jwst_gc_pipeline.reduction.satstar_deblend as SD
+import jwst_gc_pipeline.reduction.saturated_star_finding as SSF
 from jwst_gc_pipeline.photometry.wingcal import (
     WING_MULT_TABLE, wing_multiplier_ratio)
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
@@ -120,3 +126,65 @@ def test_signature_only_for_listed_bandpass(tmp_path):
     assert sig == '_'.join(p for p in (base, 'wm') if p)
     assert satstar_fit_switch_signature(f200, env=env) == \
         satstar_fit_switch_signature(f200, env={})
+
+
+class _EvalPRF(CircularGaussianPRF):
+    """Gaussian PRF with the ``evaluate(x, y, flux, x0, y0)`` signature of a
+    gridded PSF model, which the satstar model rendering calls."""
+
+    def evaluate(self, x, y, flux, x0, y0, fwhm=None):
+        return super().evaluate(x, y, flux, x0, y0,
+                                self.fwhm.value if fwhm is None else fwhm)
+
+
+def test_get_saturated_stars_applies_multiplier_after_uncapped_flux(
+        monkeypatch):
+    """Wiring (#1036): ``get_saturated_stars`` calls ``apply_wing_multiplier``
+    once, after ``apply_uncapped_flux``.  The uncapped-flux step rewrites
+    ``flux_fit`` from ``flux_fit_precap``, so a multiplier applied before it
+    would be overwritten.  The uncapped step is replaced by a rewrite of
+    ``flux_fit`` to ``2 * flux_fit_raw`` and the catalog flux must come out
+    divided by the multiplier."""
+    monkeypatch.setenv(ENV, 'F150W')
+    fh, sat = _two_star_frame()
+    n = sat.shape[0]
+
+    def _records(saturated, sources, coms, sizes, zeroframe, data, fwhm,
+                 **kw):
+        return [{'com': c, 'label': 1, 'forced': False,
+                 'sat_area': int(sat.sum())}
+                for c in [(100.0, 93.0), (100.0, 107.0)]]
+
+    def _anchor(data, dq, zeroframe, **kw):
+        return data, sat.copy(), np.zeros_like(sat), None
+
+    calls = []
+    _wm = SSF.apply_wing_multiplier
+
+    def _uncapped(tab, filtername, env=None):
+        calls.append('uncapped')
+        tab['flux_fit'] = 2.0 * np.asarray(tab['flux_fit_raw'], dtype=float)
+        return tab
+
+    def _wing_mult(tab, filtername, env=None):
+        calls.append('wing_mult')
+        return _wm(tab, filtername, env=env)
+
+    monkeypatch.setattr(SD, 'build_deblended_source_records', _records)
+    monkeypatch.setattr(SSF, 'zeroframe_fit_anchor', _anchor)
+    monkeypatch.setattr(SSF, 'get_psf',
+                        lambda header, **kw: _EvalPRF(fwhm=1.6))
+    monkeypatch.setattr(SSF.stpsf, 'NIRCam', lambda *a, **kw: object())
+    monkeypatch.setattr(SSF, 'apply_uncapped_flux', _uncapped)
+    monkeypatch.setattr(SSF, 'apply_wing_multiplier', _wing_mult)
+    tab = SSF.get_saturated_stars(fh, zeroframe=np.ones((n, n)),
+                                  zeroframe_deblend=True, plot=False)
+    assert tab is not None and len(tab)
+    assert calls == ['uncapped', 'wing_mult']
+    ratio = np.asarray(tab['wingmult_ratio'], dtype=float)
+    assert (ratio >= 1.0).all()
+    ok = ~np.asarray(tab['outside_fov_seed'], dtype=bool) \
+        if 'outside_fov_seed' in tab.colnames else np.ones(len(tab), bool)
+    np.testing.assert_allclose(
+        np.asarray(tab['flux_fit'], dtype=float)[ok],
+        2.0 * np.asarray(tab['flux_fit_raw'], dtype=float)[ok] / ratio[ok])
