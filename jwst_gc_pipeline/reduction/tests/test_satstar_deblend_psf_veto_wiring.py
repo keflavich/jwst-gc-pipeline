@@ -52,6 +52,9 @@ def spies(monkeypatch):
         return []
 
     monkeypatch.setattr(ssf, 'get_psf', _get_psf)
+    # get_saturated_stars builds an stpsf.NIRCam() generator up front, which
+    # reads the STPSF data directory; CI has none and these tests need no PSF.
+    monkeypatch.setattr(ssf.stpsf, 'NIRCam', lambda *a, **kw: object())
     monkeypatch.setattr(ssf, 'deblend_psf_stamp', _stamp)
     monkeypatch.setattr(sd, 'build_deblended_source_records', _build)
     return calls
