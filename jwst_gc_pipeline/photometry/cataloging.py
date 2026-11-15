@@ -5059,7 +5059,6 @@ def _plug_holes_from_annulus(work, fov, holes, fwhm_px, inner_fwhm,
     ``(n_plugged, n_left_nan)``.
     """
     ny, nx = work.shape
-    src = work.copy()
     plugs = []
     n_left = 0
     for xc, yc, Rm in holes:
@@ -5074,7 +5073,7 @@ def _plug_holes_from_annulus(work, fov, holes, fwhm_px, inner_fwhm,
         yy, xx = np.mgrid[y0:y1, x0:x1]
         rr2 = (xx - xc) ** 2 + (yy - yc) ** 2
         ann = (rr2 >= r_in ** 2) & (rr2 <= r_out ** 2)
-        vals = src[y0:y1, x0:x1][ann]
+        vals = work[y0:y1, x0:x1][ann]
         vals = vals[np.isfinite(vals)]
         nominal = np.pi * (r_out ** 2 - r_in ** 2)
         if vals.size < max(3, _ANNULUS_FILL_MIN_FRACTION * nominal):
@@ -5085,6 +5084,17 @@ def _plug_holes_from_annulus(work, fov, holes, fwhm_px, inner_fwhm,
         sub = work[y0:y1, x0:x1]
         sub[disk & fov[y0:y1, x0:x1]] = val
     return len(plugs), n_left
+
+
+def _residual_bg_fill_kwargs(options):
+    """The ``_build_source_masked_bg`` keyword arguments set by the
+    ``manual_residual_bg_*`` options (#694)."""
+    return dict(
+        mask_radius_fwhm=float(mopt(options, 'manual_residual_bg_mask_fwhm')),
+        fill_sigma_fwhm=float(mopt(options, 'manual_residual_bg_fill_sigma_fwhm')),
+        fill_mode=str(mopt(options, 'manual_residual_bg_fill_mode')),
+        fill_annulus_inner_fwhm=float(
+            mopt(options, 'manual_residual_bg_fill_annulus_fwhm')))
 
 
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
@@ -5276,7 +5286,16 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     sm = _ndi.median_filter(np.nan_to_num(work), size=int(median_size), mode='nearest')
     sm[~fov] = np.nan
     out = residual_to_smoothed_bg_i2d(mc_i2d_path)
-    _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
+    out_hdr = hdu.header.copy()
+    if (fill_mode, fill_sigma_fwhm, mask_radius_fwhm) != ('gauss', 1.0, 2.0):
+        # non-default fill options leave a trace in the product (#694)
+        out_hdr['BGFMODE'] = (fill_mode, 'residual-bg disk fill mode')
+        out_hdr['BGFSIG'] = (float(fill_sigma_fwhm), '[FWHM] fill Gaussian sigma')
+        out_hdr['BGMASKR'] = (float(mask_radius_fwhm), '[FWHM] masked disk radius')
+        if fill_mode == 'annulus':
+            out_hdr['BGFANN'] = (float(fill_annulus_inner_fwhm),
+                                 '[FWHM] fill annulus inner radius')
+    _fits.PrimaryHDU(data=sm.astype('float32'), header=out_hdr).writeto(out, overwrite=True)
     print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
           f"(masked {n_masked} sources, R={R:.1f}px"
           + (f", {n_sat} satstar positions at R_sat={R_sat:.1f}px"
@@ -11303,14 +11322,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                                        if _seed_for_bg else ()),
                                 satstar_catalogs=_sat_paths,
                                 satstar_mask_radius_fwhm=_sat_fwhm,
-                                mask_radius_fwhm=float(
-                                    mopt(options, 'manual_residual_bg_mask_fwhm')),
-                                fill_sigma_fwhm=float(
-                                    mopt(options, 'manual_residual_bg_fill_sigma_fwhm')),
-                                fill_mode=str(
-                                    mopt(options, 'manual_residual_bg_fill_mode')),
-                                fill_annulus_inner_fwhm=float(
-                                    mopt(options, 'manual_residual_bg_fill_annulus_fwhm')))
+                                **_residual_bg_fill_kwargs(options))
                             _bg_fresh = True
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "

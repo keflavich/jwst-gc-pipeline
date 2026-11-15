@@ -19,7 +19,10 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 from jwst_gc_pipeline.photometry import cataloging
-from jwst_gc_pipeline.photometry.cataloging import _build_source_masked_bg
+from argparse import Namespace
+
+from jwst_gc_pipeline.photometry.cataloging import (
+    _build_source_masked_bg, _plug_holes_from_annulus, _residual_bg_fill_kwargs)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
 FILT = 'F150W'          # present in reduction/fwhm_table.ecsv
@@ -112,11 +115,17 @@ def test_annulus_fill_excludes_own_wing(tmp_path):
 
 def test_annulus_inner_radius_never_inside_the_disk(tmp_path):
     """An annulus inner radius smaller than the disk is clamped to R + 1 px, so
-    the plug cannot read the (NaN) hole or its edge."""
+    the plug cannot read the star's own wing just outside the hole.  Without
+    the clamp the annulus starts at 0.5 or 1 FWHM and the plug carries 10-13%
+    of the wing amplitude; with it every inner radius below R + 1 gives the
+    same output."""
     mc, vet = _write(tmp_path)
-    out = _build_source_masked_bg(mc, vet, FILT, fill_mode='annulus',
-                                  fill_annulus_inner_fwhm=0.5)
-    assert np.all(np.isfinite(fits.getdata(out)))
+    outs = [fits.getdata(_build_source_masked_bg(
+        mc, vet, FILT, fill_mode='annulus', fill_annulus_inner_fwhm=f))
+        for f in (0.5, 1.0)]
+    assert np.all(np.isfinite(outs[0]))
+    assert np.array_equal(outs[0], outs[1], equal_nan=True)
+    assert abs(float(outs[0][int(STAR_XY[1]), int(STAR_XY[0])]) - SKY) < 0.02 * AMP
 
 
 def test_annulus_falls_back_when_crowded_or_at_the_edge(tmp_path):
@@ -220,5 +229,76 @@ def test_options_registered_and_wired():
     call_src = inspect.getsource(cataloging.run_manual_pipeline)
     call = call_src[call_src.index('bg_for_next[(module, filt)] = _build_source_masked_bg('):]
     call = call[:call.index('_bg_fresh = True')]
-    for key in ('mask_fwhm', 'fill_sigma_fwhm', 'fill_mode', 'fill_annulus_fwhm'):
-        assert f"mopt(options, 'manual_residual_bg_{key}')" in call
+    assert '**_residual_bg_fill_kwargs(options)' in call
+
+
+def test_call_site_kwargs_follow_the_options():
+    """The kwargs passed to the bg builder come from the options, and an
+    options object without the keys resolves to the builder's own defaults."""
+    sig = inspect.signature(_build_source_masked_bg).parameters
+    kw = _residual_bg_fill_kwargs(Namespace())
+    assert set(kw) <= set(sig)
+    for k, v in kw.items():
+        assert v == sig[k].default
+    kw = _residual_bg_fill_kwargs(Namespace(
+        manual_residual_bg_mask_fwhm=3.0,
+        manual_residual_bg_fill_sigma_fwhm=2.5,
+        manual_residual_bg_fill_mode='annulus',
+        manual_residual_bg_fill_annulus_fwhm=4.0))
+    assert kw == dict(mask_radius_fwhm=3.0, fill_sigma_fwhm=2.5,
+                      fill_mode='annulus', fill_annulus_inner_fwhm=4.0)
+
+
+def _ramp_image(n=61):
+    """work = distance from the centre, so an annulus median is known."""
+    yy, xx = np.mgrid[0:n, 0:n]
+    c = n // 2
+    return np.hypot(xx - c, yy - c).astype(float), c
+
+
+def test_plug_is_the_median_of_the_bounded_annulus():
+    """Annulus 6-10 px (fwhm 2, inner 3, width 2): the median of the radius
+    over it is sqrt((36 + 100) / 2) = 8.25.  Dropping the outer bound lets the
+    box corners (r up to 14) in and moves it; dropping the inner bound moves it
+    down."""
+    work, c = _ramp_image()
+    fov = np.ones(work.shape, bool)
+    work[np.hypot(*np.mgrid[0:61, 0:61] - c) <= 4.0] = np.nan
+    n_plug, n_left = _plug_holes_from_annulus(work, fov, [(c, c, 4.0)], 2.0, 3.0)
+    assert (n_plug, n_left) == (1, 0)
+    assert abs(work[c, c] - 8.25) < 0.2
+
+
+def test_plug_uses_the_median_not_the_mean():
+    work, c = _ramp_image()
+    fov = np.ones(work.shape, bool)
+    work[c, c + 8] = 1.0e4                       # hot pixel inside the annulus
+    work[np.hypot(*np.mgrid[0:61, 0:61] - c) <= 4.0] = np.nan
+    _plug_holes_from_annulus(work, fov, [(c, c, 4.0)], 2.0, 3.0)
+    assert abs(work[c, c] - 8.25) < 0.3          # the mean would be ~ 58
+
+
+def test_plug_respects_the_valid_area():
+    """A disk straddling the edge of the valid area is plugged only inside it."""
+    work, c = _ramp_image()
+    yy, xx = np.mgrid[0:61, 0:61]
+    fov = xx >= c                                # left half is off the footprint
+    work[np.hypot(xx - c, yy - c) <= 4.0] = np.nan
+    n_plug, _ = _plug_holes_from_annulus(work, fov, [(c, c, 4.0)], 2.0, 3.0)
+    assert n_plug == 1
+    assert np.isfinite(work[c, c + 1])
+    assert np.isnan(work[c, c - 1])
+
+
+def test_nondefault_options_leave_header_cards(tmp_path):
+    mc, vet = _write(tmp_path)
+    hdr = fits.getheader(_build_source_masked_bg(mc, vet, FILT))
+    assert 'BGFMODE' not in hdr
+    hdr = fits.getheader(_build_source_masked_bg(
+        mc, vet, FILT, fill_mode='annulus', fill_annulus_inner_fwhm=4.0))
+    assert hdr['BGFMODE'] == 'annulus'
+    assert hdr['BGFANN'] == 4.0
+    assert hdr['BGFSIG'] == 1.0 and hdr['BGMASKR'] == 2.0
+    hdr = fits.getheader(_build_source_masked_bg(mc, vet, FILT, fill_sigma_fwhm=2.0))
+    assert hdr['BGFMODE'] == 'gauss' and hdr['BGFSIG'] == 2.0
+    assert 'BGFANN' not in hdr
