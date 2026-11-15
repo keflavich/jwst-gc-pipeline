@@ -3247,8 +3247,11 @@ def load_satstar_catalog(filtername, target='brick',
                                              proposal_id, field)
     if _primary is not None:
         print(f"Using saturated star catalog {_primary}")
-        _cat = apply_pooled_wingcal(Table.read(_primary), filtername,
-                                    basepath=basepath, phase=phase)
+        # In memory only (idempotent): a primary product written before #949
+        # is served in the same detector-frame vintage as the other paths.
+        _cat = apply_pooled_wingcal(
+            finalize_satstar_columns(Table.read(_primary)), filtername,
+            basepath=basepath, phase=phase)
         # cache_path=None: NEVER rewrite the raw pipeline satstar product on
         # a read path.  Persisting the wingcal-divided flux_fit would make the
         # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
@@ -4684,6 +4687,24 @@ def _blank_for_dtype(dtype, length):
     return np.full(length, np.nan)
 
 
+def _continue_host_ids(satstar_toadd, cat):
+    """Number appended satstar rows after the host catalog's own ``id`` values.
+
+    A satstar table's ``id`` is a running index of that table (#949), so on an
+    appended row it would repeat an id the host catalog already uses.  Rows that
+    replace a host row keep the host's id.  No-op when either side has no
+    ``id`` column.  Mutates ``satstar_toadd`` in place.
+    """
+    if 'id' not in cat.colnames or 'id' not in satstar_toadd.colnames:
+        return
+    if not len(satstar_toadd):
+        return
+    host = np.ma.filled(np.ma.asarray(cat['id']).astype(float), np.nan)
+    last = int(np.nanmax(host)) if np.isfinite(host).any() else 0
+    satstar_toadd['id'] = (last + np.arange(1, len(satstar_toadd) + 1)
+                           ).astype(cat['id'].dtype)
+
+
 def _fill_satstar_added_columns(satstar_toadd, cat):
     """Give appended satstar rows every column ``cat`` has.
 
@@ -5068,6 +5089,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd.rename_column(xerr_colname, 'dx')
             satstar_toadd.rename_column(yerr_colname, 'dy')
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:
@@ -5110,6 +5132,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
             satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:

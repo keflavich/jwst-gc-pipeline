@@ -552,7 +552,11 @@ def _satstar_floor_band(header):
     frames read ``FILTER=F444W``, F323N reads ``F322W2``, F164N and F162M read
     ``F150W2``.  A FILTER lookup gave F405N the F444W severity floor, F323N and
     F164N no floor, and left every pupil-wheel band without a data floor.
-    ``''`` (floor 0, gate off) when the header names no bandpass."""
+    ``''`` (floor 0, gate off) when the header names no bandpass.
+
+    A non-bandpass pupil element (WLP8, GRISMR) also wins over FILTER here, so a
+    weak-lens or grism frame reads band ``wlp8`` or ``grismr`` and gets floor
+    (0, 0); neither is science imaging, and no warning fires for them."""
     return _frame_bandpass(header).lower()
 
 
@@ -1574,6 +1578,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     ``sq`` (``SATSTAR_SEED_CORE_DQ``, ON by default) moves seeds on any frame,
     so every frame's default key carries it and its older catalog is refit
     once.
+
+    ``sf<data>-<sev>to<data>-<sev>`` (#950) marks a pupil-wheel frame whose data
+    and severity floors, now keyed by the science bandpass, differ from what the
+    old FILTER lookup gave (``_satstar_floor_lookup_signature``).
     """
     sw = satstar_fit_switches(env)
     parts = []
