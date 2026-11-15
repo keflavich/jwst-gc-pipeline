@@ -3,7 +3,8 @@ import pytest
 from astropy.table import Table
 
 from jwst_gc_pipeline.reduction.validate_offsets_table import (
-    flag_collapsed_visits, assert_offsets_table_sane, CollapsedOffsetsTableError)
+    flag_collapsed_visits, assert_offsets_table_sane, CollapsedOffsetsTableError,
+    unmeasurable_visit_cells)
 
 
 def _tbl(rows):
@@ -111,3 +112,125 @@ def test_the_message_reports_the_shared_value(recwarn):
             if 'COLLAPSED OFFSETS TABLE' in str(w.message)]
     assert msgs
     assert 'shared value' in msgs[0]
+
+
+# ---------------------------------------------------------------------------
+# Whole-consensus tie rows (issue #831)
+# ---------------------------------------------------------------------------
+#
+# A consensus table holds per-exposure rows plus one bulk consensus->reference
+# row per (visit, filter): Module == "all", Exposure == -1.  The per-visit
+# median over both kinds follows the row count, not the astrometry.  Values
+# below are read from ngc6334 ``Offsets_JWST_Brick6778_consensus.csv``
+# (2026-11-13): per-exposure ~10 mas, tie ~89 mas.
+
+def _ctbl(rows):
+    """Rows of (visit, filter, module, exposure, dra, ddec) in arcsec."""
+    return Table(rows=rows, names=('Visit', 'Filter', 'Module', 'Exposure',
+                                   'dra (arcsec)', 'ddec (arcsec)'))
+
+
+def _tie(visit, filt, dra, ddec):
+    return (visit, filt, 'all', -1, dra, ddec)
+
+
+F187N_TWO_ROW_VISITS = _ctbl(
+    [('jw06778001001', 'F187N', 'nrca3', 1, -0.0102, 0.0010),
+     _tie('jw06778001001', 'F187N', -0.0871, 0.0158),
+     ('jw06778001002', 'F187N', 'nrca2', 2, -0.0094, 0.0012),
+     _tie('jw06778001002', 'F187N', -0.0859, 0.0152)]
+    + [('jw06778001003', 'F187N', f'nrca{k % 4 + 1}', k, -0.0114 + 0.0004 * k,
+        0.0009 * (k % 3)) for k in range(1, 10)])
+
+F470N_TIE_ONLY = _ctbl([
+    _tie('jw06778001001', 'F470N', -0.0901, 0.0120),
+    _tie('jw06778001002', 'F470N', -0.0915, 0.0118),
+])
+
+
+def test_tie_rows_do_not_enter_the_visit_median():
+    """Two visits of two rows each (one exposure, one tie) are not a collapse."""
+    assert flag_collapsed_visits(F187N_TWO_ROW_VISITS) == []
+
+
+def test_the_fixture_flags_without_the_exclusion():
+    """The same rows with the Module/Exposure columns removed reproduce #831."""
+    stripped = F187N_TWO_ROW_VISITS['Visit', 'Filter', 'dra (arcsec)',
+                                    'ddec (arcsec)']
+    assert flag_collapsed_visits(stripped)
+
+
+def test_tie_only_visits_are_unmeasurable_not_collapsed(recwarn):
+    assert flag_collapsed_visits(F470N_TIE_ONLY) == []
+    assert unmeasurable_visit_cells(F470N_TIE_ONLY) == [
+        ('F470N', 'jw06778001001'), ('F470N', 'jw06778001002')]
+    assert assert_offsets_table_sane(F470N_TIE_ONLY, raise_on_issue=True) == []
+    msgs = [str(w.message) for w in recwarn.list if 'unmeasurable' in str(w.message)]
+    assert len(msgs) == 1
+    assert 'F470N jw06778001001' in msgs[0]
+
+
+def test_unmeasurable_warning_is_one_line_with_a_count(recwarn):
+    rows = [_tie(f'jw06778001{k:03d}', 'F470N', -0.09, 0.012 + 0.001 * k)
+            for k in range(1, 15)]
+    assert len(unmeasurable_visit_cells(_ctbl(rows))) == 14
+    assert_offsets_table_sane(_ctbl(rows))
+    msgs = [str(w.message) for w in recwarn.list if 'unmeasurable' in str(w.message)]
+    assert len(msgs) == 1
+    assert '14 (filter, visit) cell(s)' in msgs[0]
+    assert 'and 4 more' in msgs[0]
+
+
+def test_cells_with_an_exposure_row_are_not_listed_unmeasurable():
+    assert unmeasurable_visit_cells(F187N_TWO_ROW_VISITS) == []
+
+
+def test_miri_tie_only_visits_do_not_flag():
+    """cloudef 2092 F770W: four visits, one tie row each, ~-0.07/-0.13 arcsec."""
+    rows = [_tie(f'jw02092004{k:03d}', 'F770W', -0.070 - 0.002 * (k % 2), -0.130)
+            for k in (2, 3, 6, 15)]
+    t = _ctbl(rows)
+    assert flag_collapsed_visits(t) == []
+    assert len(unmeasurable_visit_cells(t)) == 4
+
+
+def test_collapse_in_exposure_rows_still_flagged_with_ties_present():
+    """Identical large per-exposure rows in two visits remain the signature."""
+    t = _ctbl([
+        ('v1', 'F200W', 'nrca1', 1, 1.908, 0.979),
+        ('v1', 'F200W', 'nrca2', 2, 1.909, 0.979),
+        _tie('v1', 'F200W', 0.010, 0.002),
+        ('v2', 'F200W', 'nrca1', 1, 1.911, 0.978),
+        ('v2', 'F200W', 'nrca2', 2, 1.910, 0.978),
+        _tie('v2', 'F200W', 0.030, -0.004),
+    ])
+    issues = flag_collapsed_visits(t)
+    assert len(issues) == 1
+    assert issues[0]['amp_arcsec'] > 1.0
+
+
+def test_a_tie_needs_both_sentinels():
+    """Module == "all" with a real Exposure number is a per-exposure row."""
+    t = _ctbl([('v1', 'F200W', 'all', 1, 0.050, 0.0),
+               ('v2', 'F200W', 'all', 1, 0.051, 0.0)])
+    assert len(flag_collapsed_visits(t)) == 1
+    assert unmeasurable_visit_cells(t) == []
+
+
+def test_nan_rows_are_skipped_not_compared():
+    t = _ctbl([('v1', 'F200W', 'nrca1', 1, float('nan'), float('nan')),
+               ('v2', 'F200W', 'nrca1', 1, 0.050, 0.0)])
+    assert flag_collapsed_visits(t) == []
+
+
+def test_tables_without_module_columns_unchanged():
+    assert len(flag_collapsed_visits(COLLAPSED)) == 2
+    assert flag_collapsed_visits(CLEAN) == []
+    assert unmeasurable_visit_cells(COLLAPSED) == []
+
+
+def test_bulk_sentinels_match_checkpoint():
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
+    from jwst_gc_pipeline.reduction import validate_offsets_table as vot
+    assert vot._BULK_MODULE == ac.BULK_MODULE
+    assert vot._BULK_EXPOSURE == ac.BULK_EXPOSURE
