@@ -143,7 +143,7 @@ RETIE_PIN_DIR_DEFAULT=/blue/adamginsburg/adamginsburg/repos/pinned
 # With --dry-run, print what would happen and create nothing.  Diagnostics go
 # to stderr; rc 2 is a refusal.
 pin_checkout () {
-    local dry=0 src sha dest stamp dirty ndirty script
+    local dry=0 src sha dest stamp dirty ndirty script pin_parent
     [ "${1:-}" = "--dry-run" ] && dry=1
     src="${PIPE_ROOT:-}"
     [ -n "$src" ] || src="$HERE"
@@ -152,6 +152,22 @@ pin_checkout () {
         echo "  Set PIPE_ROOT to one, or RETIE_PIN=0 to run unpinned." >&2
         return 2
     fi
+    # mkdir resolves a relative path against the current directory and
+    # `git -C $src worktree add` against $src, so the pin would land in the
+    # source tree (as an untracked directory that then makes the next launch
+    # "dirty") while the exec looks for it elsewhere.
+    pin_parent="${RETIE_PIN_DIR:-$RETIE_PIN_DIR_DEFAULT}"
+    case "$pin_parent" in
+        /*) ;;
+        *)
+            if [ "$dry" = 1 ]; then
+                echo "would REFUSE to pin: RETIE_PIN_DIR '$pin_parent' is not an absolute path"
+                return 0
+            fi
+            echo "REFUSING to pin: RETIE_PIN_DIR '$pin_parent' is not an absolute path." >&2
+            return 2
+            ;;
+    esac
     sha=$(git -C "$src" rev-parse HEAD)
     script=scripts/reduction/run_field_retie_loop.sh
     if ! git -C "$src" cat-file -e "$sha:$script" 2>/dev/null; then
@@ -172,7 +188,7 @@ pin_checkout () {
         return 2
     fi
     stamp=$(date -u +%Y%m%dT%H%M%SZ)
-    dest="${RETIE_PIN_DIR:-$RETIE_PIN_DIR_DEFAULT}/retie-${TARGET}${PROPOSAL}-o${FIELD}-${stamp}-${sha:0:7}"
+    dest="$pin_parent/retie-${TARGET}${PROPOSAL}-o${FIELD}-${stamp}-${sha:0:7}"
     if [ "$dry" = 1 ]; then
         echo "would pin $src @ ${sha:0:7} -> $dest"
         return 0
@@ -193,6 +209,19 @@ pin_checkout () {
         return 2
     fi
     echo "$dest"
+}
+
+# pin_is_verified <dir> -- true when <dir> is what pin_checkout makes: a linked
+# worktree (not a main checkout) on a detached HEAD.  RETIE_PINNED=1 is only the
+# re-exec's marker; set by hand it would otherwise make the banner claim a pin
+# for whatever PIPE_ROOT is.
+pin_is_verified () {
+    local d="$1" gd common
+    [ -n "$d" ] || return 1
+    gd=$(git -C "$d" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+    common=$(cd "$d" && cd "$(git rev-parse --git-common-dir)" && pwd -P) || return 1
+    [ "$(cd -P "$gd" && pwd)" != "$common" ] || return 1
+    ! git -C "$d" symbolic-ref -q HEAD >/dev/null 2>&1
 }
 
 RETIE_PIN_NOTE=""
@@ -599,7 +628,7 @@ warn_if_behind () {
             echo "        Being behind is normal on a topic branch.  What it means here is that"
             echo "        any safety guard merged in those commits is NOT in this run and will"
             echo "        not arrive while it lasts -- restart the loop to pick them up."
-            [ -n "${RETIE_PINNED:-}" ] && echo "        (This run is pinned: a merge reaches it only on restart.)"
+            [ -n "${RETIE_PIN_OK:-}" ] && echo "        (This run is pinned: a merge reaches it only on restart.)"
         fi
     done
     return 0
@@ -638,9 +667,21 @@ warn_if_self_changed () {
 # Exposed so tests can source the helpers without running the loop.
 [ -n "${RETIE_LOOP_SOURCE_ONLY:-}" ] && return 0 2>/dev/null
 
+# RETIE_PIN_OK is set only for a pin that checks out; RETIE_PINNED alone is what
+# a person may have typed.
+RETIE_PIN_OK=""
+if [ -n "${RETIE_PINNED:-}" ]; then
+    if pin_is_verified "$PIPE_ROOT"; then
+        RETIE_PIN_OK=1
+    else
+        RETIE_PIN_NOTE="pin: NOT VERIFIED -- RETIE_PINNED is set but PIPE_ROOT (${PIPE_ROOT:-unset}) is not a detached linked worktree, so this run is NOT pinned"
+        echo "WARNING: $RETIE_PIN_NOTE" >&2
+    fi
+fi
+
 echo "=================  CHECKOUT PROVENANCE  ================="
 echo "  loop script : $(checkout_provenance "$_here_top_or_here")"
-if [ -n "${RETIE_PINNED:-}" ]; then
+if [ -n "$RETIE_PIN_OK" ]; then
     echo "  pin         : run-lifetime; pinned from ${RETIE_PIN_SRC:-?} -> $PIPE_ROOT"
     echo "                (remove when its jobs have left the queue: scripts/reduction/prune_retie_pins.sh)"
 elif [ -n "$RETIE_PIN_NOTE" ]; then
@@ -936,7 +977,7 @@ env PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
     "${floor_env[@]}" \
     bash "$HERE/submit_cataloging_perframe.sh"
 echo "Submitted full cataloging chain for $TARGET $PROPOSAL/$FIELD."
-if [ -n "${RETIE_PINNED:-}" ]; then
+if [ -n "$RETIE_PIN_OK" ]; then
     echo "The queued chain imports from the pinned tree $PIPE_ROOT, so it stays."
     echo "Once those jobs have left the queue: $HERE/prune_retie_pins.sh --apply"
 fi

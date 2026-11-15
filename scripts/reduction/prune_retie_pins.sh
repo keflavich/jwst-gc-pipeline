@@ -21,7 +21,10 @@
 # from another host is kept too because its pid cannot be checked here
 # (RETIE_PRUNE_ASSUME_LOOPS_DEAD=1 skips that second rule).
 #
-# Dry run by default.  If squeue fails nothing is removed.
+# Dry run by default.  If squeue fails nothing is removed.  With --apply a pin
+# that cannot be read or removed is reported and the rest are still handled;
+# the exit status is then 1.  A symlink named like a pin is skipped: git would
+# remove the worktree it points at.
 #
 #   scripts/reduction/prune_retie_pins.sh            # list
 #   scripts/reduction/prune_retie_pins.sh --apply    # remove the finished ones
@@ -43,15 +46,23 @@ if [ ! -d "$PIN_DIR" ]; then
     echo "no pin directory at $PIN_DIR; nothing to do"
     exit 0
 fi
+# Resolve it: the lock-reason lookup below compares against the path git prints,
+# which is the resolved one, so a trailing slash, "//" or a symlinked
+# RETIE_PIN_DIR would otherwise make a running loop's pin look removable.
+PIN_DIR=$(cd -P "$PIN_DIR" && pwd)
 
 if ! queued=$(squeue -u "${USER:-$(id -un)}" -h -o %j 2>/dev/null); then
     echo "squeue failed; cannot tell which pins are in use, removing nothing." >&2
     exit 1
 fi
 
-kept=0; removable=0
+kept=0; removable=0; problems=0
 shopt -s nullglob
 for pin in "$PIN_DIR"/retie-*; do
+    if [ -L "$pin" ]; then
+        echo "skip     $pin (a symlink, not a pin)"
+        continue
+    fi
     [ -e "$pin/.git" ] || continue          # not a worktree: leave it alone
     name=$(basename "$pin")
     token=$(printf '%s' "$name" \
@@ -66,9 +77,13 @@ for pin in "$PIN_DIR"/retie-*; do
         kept=$((kept + 1))
         continue
     fi
-    reason=$(git -C "$pin" worktree list --porcelain 2>/dev/null \
+    if ! reason=$(git -C "$pin" worktree list --porcelain 2>/dev/null \
         | awk -v w="$pin" '$1 == "worktree" { on = ($2 == w) }
-                           on && $1 == "locked" { sub(/^locked */, ""); print; exit }')
+                           on && $1 == "locked" && !done { sub(/^locked */, ""); print; done = 1 }'); then
+        echo "skip     $pin (cannot read the worktree; its source repository has moved or gone?)"
+        problems=$((problems + 1))
+        continue
+    fi
     if [[ "$reason" =~ ^retie\ loop\ (.+)\ pid\ ([0-9]+)$ ]]; then
         loop_host=${BASH_REMATCH[1]}; loop_pid=${BASH_REMATCH[2]}
         if [ "$loop_host" = "$(hostname)" ]; then
@@ -88,13 +103,27 @@ for pin in "$PIN_DIR"/retie-*; do
         echo "removable $pin"
         continue
     fi
-    common=$(cd "$pin" && cd "$(git rev-parse --git-common-dir)" && pwd)
+    if ! common=$(cd "$pin" && cd "$(git rev-parse --git-common-dir)" && pwd); then
+        echo "FAILED   $pin (cannot find its source repository)" >&2
+        problems=$((problems + 1))
+        continue
+    fi
     repo=$common
     [ "$(basename "$common")" = ".git" ] && repo=$(dirname "$common")
-    git -C "$repo" worktree unlock "$pin"
-    git -C "$repo" worktree remove --force "$pin"
+    # A pin that is not locked (a failed `worktree lock` at launch, or a manual
+    # unlock) makes `worktree unlock` fail; that is not a reason to keep it.
+    git -C "$repo" worktree unlock "$pin" 2>/dev/null || true
+    if ! git -C "$repo" worktree remove --force "$pin"; then
+        echo "FAILED   $pin (git worktree remove failed)" >&2
+        problems=$((problems + 1))
+        continue
+    fi
     echo "removed  $pin"
 done
 echo "$removable removable, $kept in use"
+if [ "$problems" -gt 0 ]; then
+    echo "$problems pin(s) could not be handled; see the lines above." >&2
+fi
 [ "$apply" = 0 ] && [ "$removable" -gt 0 ] && echo "re-run with --apply to remove them"
+[ "$problems" -gt 0 ] && exit 1
 exit 0

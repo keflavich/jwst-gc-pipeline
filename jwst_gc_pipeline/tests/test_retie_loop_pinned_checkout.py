@@ -307,9 +307,9 @@ def _stub_squeue(tmp_path, names=(), fail=False):
     return bindir
 
 
-def _prune(tmp_path, *args, names=(), fail=False):
+def _prune(tmp_path, *args, names=(), fail=False, **extra):
     bindir = _stub_squeue(tmp_path, names, fail)
-    env = _env(tmp_path, PATH=f'{bindir}:/usr/bin:/bin', USER='tester')
+    env = _env(tmp_path, PATH=f'{bindir}:/usr/bin:/bin', USER='tester', **extra)
     return subprocess.run(['bash', str(PRUNE), *args], capture_output=True,
                           text=True, env=env)
 
@@ -430,3 +430,171 @@ def test_prune_keeps_a_pin_locked_from_another_host_unless_told(tmp_path):
                        text=True, env=env)
     assert r.returncode == 0, r.stderr
     assert not a.exists()
+
+
+# --- review of #1326: guard, --apply robustness, relative dir, hand-set pin --
+
+def _hostname():
+    return subprocess.run(['hostname'], capture_output=True,
+                          text=True).stdout.strip()
+
+
+@pytest.mark.parametrize('spelling', ['trailing_slash', 'double_slash', 'symlink'])
+def test_prune_live_loop_guard_survives_a_non_canonical_pin_dir(tmp_path, spelling):
+    """The lock reason holds git's resolved path; the glob must be resolved too."""
+    repo, a, b = _two_pins(tmp_path)
+    _lock_with_reason(repo, a, f'retie loop {_hostname()} pid {os.getpid()}', tmp_path)
+    real = tmp_path / 'pins'
+    if spelling == 'trailing_slash':
+        spelled = f'{real}/'
+    elif spelling == 'double_slash':
+        spelled = f'{tmp_path}//pins'
+    else:
+        spelled = str(tmp_path / 'link')
+        os.symlink(real, spelled)
+    r = _prune(tmp_path, '--apply', RETIE_PIN_DIR=spelled)
+    assert r.returncode == 0, r.stderr
+    assert a.exists(), r.stdout
+    assert 'its loop' in r.stdout
+    assert not b.exists()
+
+
+def test_prune_apply_reports_a_pin_it_cannot_read_and_carries_on(tmp_path):
+    """A pin whose source repository has gone must not hide the pins after it."""
+    repo, a, b = _two_pins(tmp_path)
+    other = tmp_path / 'gone'
+    other.mkdir()
+    lost_src = _source_repo(other)
+    lost = tmp_path / 'pins' / 'retie-aaa1111-o001-20261101T000000Z-abcdef1'
+    _git(lost_src, 'worktree', 'add', '-q', '--detach', str(lost), 'HEAD',
+         tmp_path=tmp_path)
+    _git(lost_src, 'worktree', 'lock', str(lost), tmp_path=tmp_path)
+    (other / 'src').rename(other / 'moved')
+    r = _prune(tmp_path, '--apply')
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert 'cannot read the worktree' in r.stdout
+    assert str(lost) in r.stdout and lost.exists()
+    assert not a.exists() and not b.exists()    # sorted after the bad one
+
+
+def test_prune_apply_removes_an_unlocked_pin_and_carries_on(tmp_path):
+    """`worktree unlock` fails on an unlocked pin; that must not abort."""
+    repo = _source_repo(tmp_path)
+    pins = tmp_path / 'pins'
+    pins.mkdir()
+    names = ['retie-aaa1111-o001-20261101T000000Z-abcdef1',
+             'retie-bbb2222-o002-20261101T000000Z-abcdef1']
+    made = [pins / n for n in names]
+    for p in made:
+        _git(repo, 'worktree', 'add', '-q', '--detach', str(p), 'HEAD',
+             tmp_path=tmp_path)
+    _git(repo, 'worktree', 'lock', str(made[1]), tmp_path=tmp_path)
+    r = _prune(tmp_path, '--apply')
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert not made[0].exists() and not made[1].exists()
+
+
+def test_prune_never_follows_a_symlink_named_like_a_pin(tmp_path):
+    repo = _source_repo(tmp_path)
+    real = tmp_path / 'elsewhere' / 'w'
+    real.parent.mkdir()
+    _git(repo, 'worktree', 'add', '-q', '--detach', str(real), 'HEAD',
+         tmp_path=tmp_path)
+    _git(repo, 'worktree', 'lock', str(real), tmp_path=tmp_path)
+    pins = tmp_path / 'pins'
+    pins.mkdir()
+    link = pins / 'retie-sgrc4147-o012-20261101T000000Z-abcdef1'
+    os.symlink(real, link)
+    r = _prune(tmp_path, '--apply')
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert real.is_dir() and (real / 'marker.txt').is_file()
+    assert 'symlink' in r.stdout
+
+
+def test_prune_skips_a_pin_named_directory_that_is_not_a_worktree(tmp_path):
+    """Pins the `.git` existence guard: the name parses, so only it protects."""
+    _two_pins(tmp_path)
+    fake = tmp_path / 'pins' / 'retie-sgrc4147-o013-20261101T000000Z-abcdef1'
+    fake.mkdir()
+    (fake / 'keep.txt').write_text('x')
+    r = _prune(tmp_path, '--apply')
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert (fake / 'keep.txt').is_file()
+    assert str(fake) not in r.stdout
+
+
+def test_a_relative_pin_dir_is_refused_and_creates_nothing(tmp_path):
+    repo = _source_repo(tmp_path)
+    r = _call(tmp_path, repo, 'pin_checkout', PIPE_ROOT=str(repo),
+              RETIE_PIN_DIR='relpins')
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert 'not an absolute path' in r.stderr
+    assert not (repo / 'relpins').exists()
+    assert not (tmp_path / 'relpins').exists()
+    assert _worktrees(repo, tmp_path) == [str(repo)]
+    r = _call(tmp_path, repo, 'pin_checkout --dry-run', PIPE_ROOT=str(repo),
+              RETIE_PIN_DIR='relpins')
+    assert r.returncode == 0 and 'would REFUSE' in r.stdout and 'relpins' in r.stdout
+
+
+def test_pin_is_verified_only_for_a_detached_linked_worktree(tmp_path):
+    repo = _source_repo(tmp_path)
+    pin = pathlib.Path(_call(tmp_path, repo, 'pin_checkout',
+                             PIPE_ROOT=str(repo)).stdout.strip())
+    branch_wt = tmp_path / 'branchwt'
+    _git(repo, 'worktree', 'add', '-q', '-b', 'topic', str(branch_wt), 'HEAD',
+         tmp_path=tmp_path)
+    plain = tmp_path / 'plain'
+    plain.mkdir()
+
+    def verified(d):
+        return _call(tmp_path, repo, f'pin_is_verified "{d}"').returncode == 0
+
+    assert verified(pin)
+    assert not verified(repo)            # a main checkout
+    assert not verified(branch_wt)       # linked, but on a branch
+    assert not verified(plain)           # not a git tree
+    assert not verified('')
+
+
+def _banner(tmp_path, repo, **env):
+    """The real script up to the provenance banner (provenance-only exit)."""
+    table = tmp_path / 'offsets.csv'
+    table.write_text('Visit,Exposure,Filter,Module,Vgroup,dra (arcsec),'
+                     'ddec (arcsec)\njw04147012001,1,F115W,none,2101,0.1,-0.1\n')
+    return subprocess.run(
+        ['bash', str(repo / REL)], capture_output=True, text=True, timeout=300,
+        env=_env(tmp_path, OFFSETS_TBL=str(table), MAXITER='3',
+                 RETIE_PROVENANCE_ONLY='1', **env), cwd=str(repo))
+
+
+def test_a_hand_set_retie_pinned_does_not_claim_a_pin(tmp_path):
+    repo = _source_repo(tmp_path)
+    r = _banner(tmp_path, repo, PIPE_ROOT=str(repo), RETIE_PINNED='1')
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'pin: NOT VERIFIED' in r.stdout and 'pin: NOT VERIFIED' in r.stderr
+    assert 'run-lifetime' not in r.stdout
+
+
+def test_a_real_pin_still_gets_the_pin_banner_line(tmp_path):
+    repo = _source_repo(tmp_path)
+    pin = pathlib.Path(_call(tmp_path, repo, 'pin_checkout',
+                             PIPE_ROOT=str(repo)).stdout.strip())
+    r = _banner(tmp_path, pin, PIPE_ROOT=str(pin), RETIE_PINNED='1',
+                RETIE_PIN_SRC=str(repo))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f'pin         : run-lifetime; pinned from {repo} -> {pin}' in r.stdout
+    assert 'NOT VERIFIED' not in r.stdout + r.stderr
+
+
+def test_last_fetch_reads_the_common_git_dir_from_a_linked_worktree(tmp_path):
+    """Pins the --git-common-dir fix: a pin's own git dir never holds FETCH_HEAD."""
+    repo = _source_repo(tmp_path)
+    fetch_head = repo / '.git' / 'FETCH_HEAD'
+    fetch_head.write_text('')
+    os.utime(fetch_head, (1_700_000_000, 1_700_000_000))    # 2023-11-14 UTC
+    pin = pathlib.Path(_call(tmp_path, repo, 'pin_checkout',
+                             PIPE_ROOT=str(repo)).stdout.strip())
+    for d in (repo, pin):
+        r = _call(tmp_path, repo, f'_last_fetch "{d}"')
+        assert r.stdout.strip() == '2023-11-14', (d, r.stdout, r.stderr)
