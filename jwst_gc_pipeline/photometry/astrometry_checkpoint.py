@@ -4445,6 +4445,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # holds the reading.
         trail = assess_visit_trails(tables) if correcting else None
         if trail is not None:
+            if trail["n_measured"] < trail["n_frames"]:
+                # An unmeasurable visit must not look like a clean one.
+                print(f"ASTROM CHECKPOINT [{stage}] trail reading (advisory): "
+                      f"{vctx}: {trail['n_measured']} of {trail['n_frames']} "
+                      f"frames measured, so the sibling comparison is "
+                      f"{'absent' if not trail['n_measured'] else 'partial'}",
+                      flush=True)
             for t_exp in trail["exposures"]:
                 if t_exp["verdict"] in ("flagged", "reviewed"):
                     print(f"ASTROM CHECKPOINT [{stage}] TRAILED EXPOSURE "

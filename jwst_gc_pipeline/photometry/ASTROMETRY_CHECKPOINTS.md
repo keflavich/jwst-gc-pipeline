@@ -410,6 +410,30 @@ holds the reading, and a record without the block was not measured.
 `TRAIL_REVIEWED` holds exposures a person has inspected and kept.  Excluding an
 exposure remains a manual edit of `reduction/exposure_exclusions.py`.
 
+Limits of the reading:
+
+- **`ok` means "not distinguishable from its siblings", not "round".**  Each
+  exposure is compared with the median of its siblings, so once more than about
+  half of a group's exposures trail, the median is itself trailed.  Replaying
+  the grader on 8 detectors at a common sky angle, trailed exposures are
+  flagged up to k = 2 of 3 or 4, 3 of 5 or 6, 4 of 8 and 6 of 12; beyond that
+  every exposure reads `ok` ("0 of N graded detectors over threshold").  gc2211
+  groups have four exposures, so 3 of 4 trailed reads `ok`.  The per-detector
+  rows keep `sigma` and `axis_ratio` for a later absolute reading.
+- **An unmeasurable frame is not a clean one.**  A frame is measured from at
+  least 30 isolated reliable stars (isolated against every catalogued source)
+  whose 29x29 px stamp is finite and whose moments converge; the cut to the 400
+  brightest is made after those checks.  On a dense field few stars qualify.
+  The checkpoint prints one line per visit when fewer frames were measured than
+  exist, and the block carries `n_measured` and `n_frames`.
+- The frame named in the catalog's `FILENAME` is resolved through the
+  /blue <-> /orange spelling helper (`astrometry_utils._resolve_existing_path`).
+  A frame whose ASDF block cannot be read (including a YAML syntax error) is a
+  `cannot_measure` reason, not an exception.
+- The moments are tested at PSF sigma 1.0 px and 1.6 px.  Not tested, and not
+  expected to work, below about 0.8 px (undersampled short-wavelength filters).
+- The pixels are re-read at every correcting-stage run (m1, m2 and m12).
+
 ## The consensus measurement (`visit_consensus.py`)
 
 1. Reliable-star cut per exposure catalog (qfit ≤ 0.1, S/N ≥ 10, excluding
