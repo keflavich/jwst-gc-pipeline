@@ -2338,3 +2338,13 @@ def test_no_two_nircam_layers_of_the_same_sky_are_drawn_at_once():
     treasury_nircam = [u for _, u, _ in skyview.SURVEYS
                        if 'jwst_gc_treasury' in u and 'miri' not in u]
     assert treasury_nircam == [], treasury_nircam
+
+
+def test_anchor_bright_switch_is_reported_as_a_safety_override():
+    """CROSSFILTER_ANCHOR_BRIGHT_C relaxes the m7 anchor tie for every module
+    and field of the job that sets it (issue #1212); the monitor must say so."""
+    assert 'CROSSFILTER_ANCHOR_BRIGHT_C' in checks.SAFETY_OVERRIDES
+    out = checks.check_overrides({'CROSSFILTER_ANCHOR_BRIGHT_C': '1.0'})
+    assert [v['name'] for v in out] == ['override-CROSSFILTER_ANCHOR_BRIGHT_C']
+    assert out[0]['severity'] == 'warn'
+    assert checks.check_overrides({}) == []

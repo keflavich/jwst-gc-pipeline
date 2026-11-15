@@ -70,7 +70,8 @@ def main(argv=None):
     p.add_argument("--catalog", action="append", default=[],
                    help="FILTER=path vetted merged catalog (crossfilter mode)")
     p.add_argument("--crossfilter", action="store_true")
-    p.add_argument("--module", default="",
+    p.add_argument("--module", default="", type=str.lower,
+                   choices=("", "merged", "nrca", "nrcb"),
                    help="crossfilter mode: merge module the record is keyed on "
                         "(merged/nrca/nrcb).  The m7 gate grades each module's "
                         "latest record, so a manual re-run supersedes the "
@@ -142,6 +143,13 @@ def main(argv=None):
                    help="drop the dense references the exposures resolve into "
                         "a binary or group from the reference tie (issue #957).")
     args = p.parse_args(argv)
+    if not args.crossfilter:
+        # these only reach run_crossfilter_checkpoint; elsewhere they would be
+        # silently ignored and the run graded as if they had not been given
+        for flag, given in (("--module", bool(args.module)),
+                            ("--anchor-bright-c", args.anchor_bright_c is not None)):
+            if given:
+                p.error(f"{flag} only applies with --crossfilter")
 
     if args.seed and args.pool:
         # --pool exists because "module-family rows cannot express a

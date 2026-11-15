@@ -5339,17 +5339,21 @@ def _anchor_tie_sample(tbl, keep, coords, ref_coords, c):
     n = int(len(coords))
     info = dict(n_reliable=n, n_used=n, K=n, c=float(c), n_ref_in_footprint=None,
                 rule="unrestricted")
-    if "flux" in tbl.colnames:
-        brightness = np.asarray(tbl["flux"], dtype=float)[keep]
-        info["column"] = "flux"
-    elif "flux_fit" in tbl.colnames:
-        brightness = np.asarray(tbl["flux_fit"], dtype=float)[keep]
-        info["column"] = "flux_fit"
-    elif "mag" in tbl.colnames:
-        brightness = -np.asarray(tbl["mag"], dtype=float)[keep]
-        info["column"] = "mag"
-    else:
-        info["rule"] = "unrestricted: no flux, flux_fit or mag column"
+    # The first of flux, flux_fit, mag that has a finite value among the
+    # reliable stars: a column that exists but is all NaN (a fit that failed
+    # everywhere) must not hide a usable one behind it.  Masked entries read as
+    # NaN, not as the data underneath the mask.
+    brightness = None
+    for name, sign in (("flux", 1.0), ("flux_fit", 1.0), ("mag", -1.0)):
+        if name not in tbl.colnames:
+            continue
+        col = np.ma.filled(np.ma.asarray(tbl[name]).astype(float), np.nan)[keep]
+        if np.isfinite(col).any():
+            brightness = sign * col
+            info["column"] = name
+            break
+    if brightness is None:
+        info["rule"] = "unrestricted: no finite flux, flux_fit or mag among the reliable stars"
         return np.arange(n), info
     brightness = np.where(np.isfinite(brightness), brightness, -np.inf)
     order = np.argsort(-brightness, kind="stable")
@@ -5495,7 +5499,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                 if not (sep <= ANCHOR_TIE_AGREE_TOL_MAS):
                     failures.append(
                         f"anchor {anchor_filter}: ties on the brightest {half} and "
-                        f"{anchor_sample['K']} stars disagree by {sep:.1f} mas "
+                        f"{anchor_sample['K']} stars disagree by {sep:.2f} mas "
                         f"(> {ANCHOR_TIE_AGREE_TOL_MAS} mas)")
 
     for filt, tbl in sorted(catalogs_by_filter.items()):

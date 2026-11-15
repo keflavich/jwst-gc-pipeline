@@ -2719,6 +2719,11 @@ def _anchor_tie_catalogs(shift_mas=0.0, n_bright=600, n_faint=4800,
     return {"F212N": _tbl(everything), "F405N": _tbl(bright)}, refcat
 
 
+@pytest.fixture(params=[30.0, 60.0, 150.0])
+def west_shift_mas(request):
+    return request.param
+
+
 @pytest.fixture
 def small_anchor_k(monkeypatch):
     monkeypatch.setattr(_ac, "ANCHOR_TIE_MIN_K", 300)
@@ -2846,9 +2851,7 @@ def test_anchor_bright_factor_validation(monkeypatch):
             _ac.anchor_bright_factor()
 
 
-def test_run_astrometry_checkpoint_cli_passes_module(tmp_path, monkeypatch):
-    """``--module`` reaches the record name, so a manual crossfilter re-run
-    supersedes the module-keyed production record (issue #1212)."""
+def _load_cli():
     import importlib.util
     import pathlib
     path = (pathlib.Path(__file__).resolve().parents[3]
@@ -2856,6 +2859,14 @@ def test_run_astrometry_checkpoint_cli_passes_module(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("run_astrometry_checkpoint", path)
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
+    return cli
+
+
+def test_run_astrometry_checkpoint_cli_passes_module(tmp_path, monkeypatch):
+    """``--module`` reaches the record name, so a manual crossfilter re-run
+    supersedes the module-keyed production record (issue #1212).  A
+    capitalised module is normalised, so it cannot become its own record."""
+    cli = _load_cli()
     seen = {}
 
     def _fake(catalogs, **kw):
@@ -2870,10 +2881,148 @@ def test_run_astrometry_checkpoint_cli_passes_module(tmp_path, monkeypatch):
         Table({"skycoord_ra": t["skycoord"].ra.deg, "skycoord_dec": t["skycoord"].dec.deg}).write(fn)
         paths.append(f"{f}={fn}")
     monkeypatch.setattr(cli, "Table", type("T", (), {"read": staticmethod(lambda p: Table())}))
-    argv = ["--crossfilter", "--module", "nrcb", "--anchor-bright-c", "1.5",
+    argv = ["--crossfilter", "--module", "NRCb", "--anchor-bright-c", "1.5",
             "--proposal-id", "2221", "--obsid", "46"]
     for spec_ in paths:
         argv += ["--catalog", spec_]
     assert cli.main(argv) == 0
     assert seen["module"] == "nrcb"
     assert seen["anchor_bright_c"] == 1.5
+
+
+@pytest.mark.parametrize("argv", [
+    ["--crossfilter", "--module", "nrcc"],       # not a merge module
+    ["--module", "nrcb"],                        # ignored without --crossfilter
+    ["--anchor-bright-c", "1.0"],                # ignored without --crossfilter
+])
+def test_run_astrometry_checkpoint_cli_refuses_misused_crossfilter_flags(argv):
+    cli = _load_cli()
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2
+
+
+def test_anchor_tie_pass_does_not_certify_spatial_uniformity(
+        tmp_path, small_anchor_k, west_shift_mas):
+    """The K-vs-K/2 agreement test compares nested subsets of the same bright
+    stars, so a shift of one half of the footprint passes; the pass certifies
+    the bright stars' registration in aggregate, as the doc says.  Pinned so a
+    change that adds spatial coverage (or loses the aggregate pass) is seen."""
+    cats, refcat = _anchor_tie_catalogs(west_shift_mas=west_shift_mas)
+    rec = _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert rec["passed"], rec["failures"]
+    assert rec["anchor_sample"]["k_vs_half_sep_mas"] <= rec["anchor_sample"]["agree_tol_mas"]
+
+
+def test_anchor_tie_half_that_is_not_coherent_fails(
+        tmp_path, small_anchor_k, monkeypatch):
+    """A tie coherent at K but not on the brightest K/2 fails closed."""
+    cats, refcat = _anchor_tie_catalogs()
+    real = _ac.measure_reference_tie
+    calls = []
+
+    def _fake(coords, *a, **kw):
+        tie = real(coords, *a, **kw)
+        calls.append(len(coords))
+        if len(calls) == 2:
+            tie = dict(tie, vs_full=dict(tie["vs_full"], ok=False))
+        return tie
+
+    monkeypatch.setattr(_ac, "measure_reference_tie", _fake)
+    with pytest.raises(CrossFilterAstrometryError) as exc:
+        _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert calls == [800, 400]
+    assert "is not" in str(exc.value) and "anchor F212N" in str(exc.value)
+
+
+def test_anchor_tie_half_sample_is_the_brightest_half_of_k(
+        tmp_path, small_anchor_k, monkeypatch):
+    """The K/2 tie is on the brightest K/2 stars, not on some other half."""
+    cats, refcat = _anchor_tie_catalogs()
+    real = _ac.measure_reference_tie
+    samples = []
+
+    def _spy(coords, *a, **kw):
+        samples.append(coords)
+        return real(coords, *a, **kw)
+
+    monkeypatch.setattr(_ac, "measure_reference_tie", _spy)
+    rec = _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert rec["passed"], rec["failures"]
+    full, half = samples[0], samples[1]
+    assert len(full) == 800 and len(half) == 400
+    # the half is the leading half of K, which is flux-ordered brightest first
+    assert np.array_equal(half.ra.deg, full.ra.deg[:400])
+    # and K is the brightest 800 of the catalogue: every bright (flux > 1e4)
+    # star is in it, no faint (flux < 1e3) one is
+    tbl = cats["F212N"]
+    ra_all = SkyCoord(tbl["skycoord"]).icrs.ra.deg
+    bright_ra = ra_all[np.asarray(tbl["flux"]) > 5e3]
+    assert np.isin(bright_ra, full.ra.deg).all()
+    assert np.isin(half.ra.deg, bright_ra).all()
+
+
+def _tiny_anchor(**cols):
+    n = len(next(iter(cols.values())))
+    t = Table(cols)
+    coords = SkyCoord(ra=(RA0 + np.arange(n) * 1e-4) * u.deg,
+                      dec=np.full(n, DEC0) * u.deg, frame="icrs")
+    t["skycoord"] = coords
+    return t, np.ones(n, dtype=bool), coords, coords
+
+
+def test_anchor_tie_sample_orders_by_mag_brightest_first():
+    tbl, keep, coords, ref = _tiny_anchor(mag=np.array([18.0, 14.0, 16.0, 12.0]))
+    order, info = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [3, 1, 2, 0]
+    assert info["column"] == "mag"
+
+
+def test_anchor_tie_sample_ranks_nan_brightness_last():
+    tbl, keep, coords, ref = _tiny_anchor(flux=np.array([5.0, np.nan, 9.0, 1.0]))
+    order, _ = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [2, 0, 3, 1]
+
+
+def test_anchor_tie_sample_skips_an_all_nan_flux_column():
+    """A flux column that is NaN everywhere must not hide a usable flux_fit."""
+    tbl, keep, coords, ref = _tiny_anchor(
+        flux=np.full(4, np.nan), flux_fit=np.array([3.0, 8.0, 1.0, 5.0]))
+    order, info = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert info["column"] == "flux_fit"
+    assert list(order) == [1, 3, 0, 2]
+
+
+def test_anchor_tie_sample_reads_a_masked_entry_as_missing():
+    """A masked flux of 100 (the raw data under the mask) is not the brightest."""
+    from astropy.table import MaskedColumn
+    flux = MaskedColumn([5.0, 100.0, 9.0, 1.0], mask=[False, True, False, False])
+    tbl, keep, coords, ref = _tiny_anchor(flux=flux)
+    order, _ = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [2, 0, 3, 1]
+
+
+def test_anchor_tie_sample_without_finite_brightness_is_unrestricted():
+    tbl, keep, coords, ref = _tiny_anchor(flux=np.full(4, np.nan))
+    order, info = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [0, 1, 2, 3]
+    assert info["K"] == 4 and info["rule"].startswith("unrestricted")
+
+
+def test_anchor_bright_factor_argument_beats_environment(monkeypatch):
+    monkeypatch.setenv(_ac.ANCHOR_BRIGHT_C_ENV, "3")
+    assert _ac.anchor_bright_factor(2.0) == 2.0
+    assert _ac.anchor_bright_factor() == 3.0
+
+
+def test_n_ref_in_footprint_counts_across_the_ra_wrap():
+    """A field straddling RA = 0/360 deg counts the same references as the
+    same field away from the wrap."""
+    def _field(ra0):
+        x = np.linspace(-20.0, 20.0, 9) / 3600.0
+        cat = SkyCoord(ra=(ra0 + x) * u.deg, dec=np.full(9, DEC0) * u.deg)
+        ref = SkyCoord(ra=(ra0 + np.array([-30.0, -10.0, 0.0, 10.0, 30.0]) / 3600.0) * u.deg,
+                       dec=np.full(5, DEC0) * u.deg)
+        return _ac._n_ref_in_footprint(ref, cat)
+    assert _field(0.0) == _field(180.0) == 3
+    assert _field(359.9999) == 3

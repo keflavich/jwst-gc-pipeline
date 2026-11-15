@@ -326,22 +326,46 @@ unchanged.
 
 **Brightest-K anchor tie (issue #1212, off by default).** The anchor's tie to
 VIRAC2 uses every reliable star of the anchor's vetted catalogue. Most of the
-faint ones have no Ks-selected counterpart, so on gc2211 o046 F200W (124,866
-stars against 16,661 reference rows in the footprint) the offset histogram is
-mostly chance pairs, the contrast falls under the floor and the tie is refused
-although the brightest 10-40k stars tie at 13-15 mas. Setting
+faint ones have no Ks-selected counterpart, so on gc2211 o046 F200W the offset
+histogram is mostly chance pairs, the contrast falls under the floor and the
+tie is refused although the brightest 10-40k stars tie at 13-15 mas. (Counts
+measured by the PR author, not independently replayed: 124,866 reliable stars
+against 16,661 reference rows in the footprint; contrast 13.0 on the brightest
+10k and 5.8 on the brightest 40k. The on-disk o046 m7 record holds the failing
+contrast, 2.235, but not these counts.) Setting
 `CROSSFILTER_ANCHOR_BRIGHT_C=<c>` (or `--anchor-bright-c` on
 `run_astrometry_checkpoint.py --crossfilter`) ties the anchor on its brightest
 `K = clamp(c * n_ref_in_footprint, 5000, n_reliable)` stars instead, where
 `n_ref_in_footprint` counts the reference rows inside the anchor catalogue's
-bounding box. The tie must also hold on the brightest `K/2`, with both
+bounding box. Brightness is the first of `flux`, `flux_fit`, `mag` that has a
+finite value among the reliable stars (masked entries count as NaN; NaN ranks
+faintest). The tie must also hold on the brightest `K/2`, with both
 `vs_full` checks coherent and the two bulks within 5 mas; a tie that appears at
 one `K` only fails. The record then carries `anchor_sample` (`n_reliable`,
-`n_used`, `K`, `K_half`, `k_vs_half_sep_mas`, rule) and
-`anchor_reference_tie_half`. The per-filter-vs-anchor checks keep the full
-reliable sample. With the variable unset the record and verdict are unchanged.
-Whether this becomes the gate's definition of a coherent anchor tie is a
-maintainer decision; validate it on the other fields' vetted catalogues first.
+`n_used`, `K`, `K_half`, `c`, `n_ref_in_footprint`, `column`,
+`k_vs_half_sep_mas`, `agree_tol_mas`, rule) and `anchor_reference_tie_half`.
+The per-filter-vs-anchor checks keep the full reliable sample. With the
+variable unset the record and verdict are unchanged. The release gate and the
+monitor do not read `anchor_sample`, so a restricted-tie PASS is visible only in
+the record itself; `CROSSFILTER_ANCHOR_BRIGHT_C` is listed in the monitor's
+`SAFETY_OVERRIDES` for that reason (it applies to every module and field of the
+job that sets it).
+
+What a restricted-K PASS certifies. It certifies that the brightest K stars,
+taken as a group, are registered to VIRAC2, and that the answer does not depend
+on K. It does not certify spatial uniformity: K/2 is a nested subset of K, so an
+offset that applies to part of the footprint passes both. On the synthetic
+anchor of the PR's tests (600 bright, 4,800 faint) a shift of the western half
+of 30, 60 and 150 mas relative to the reference all pass (K/2 separation 1.4,
+1.3, 0.12 mas, measured by the reviewer; a 400 mas shift does fail via the K/2
+disagreement); `test_anchor_tie_pass_does_not_certify_spatial_uniformity` pins
+this. The per-tile grid had the same blindness to a seam before this switch, so
+the switch adds no spatial coverage, and it does not gate the tie's magnitude
+either. A sample-size- or magnitude-dependent offset of roughly 8-10 mas or more
+between the brightest K/2 and K is caught (reviewer probe: 8, 14 and 30 mas
+fail; 0 passes). Whether this becomes the gate's definition of
+a coherent anchor tie (Q23) is a maintainer decision; validate it on the other
+fields' vetted catalogues (the step-5 sweep, not yet run) first.
 
 **Record names (issue #1254).** The m7 check runs once per merge module, so
 each module writes its own record: `checkpoint_m7_crossfilter_<module>_oNNN`
@@ -1087,6 +1111,7 @@ the same table rows.
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT_REASON=<text>` | the written justification CLAUDE.md requires; stored in the record |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL_REASON=<text>` | as above, for the cross-filter gate |
+| `CROSSFILTER_ANCHOR_BRIGHT_C=<c>` | opt-in (issue #1212): tie the m7 cross-filter anchor to VIRAC2 on its brightest `K = clamp(c * n_ref_in_footprint, 5000, n_reliable)` stars, with the K/2 tie required to agree to 5 mas. Applies to every module and field of the job that sets it, so it can turn a passing full-sample tie into a failure and a refused one into a pass; the only trace is `anchor_sample` in the record. Unset = whole reliable sample. A non-positive or non-numeric value raises. `--anchor-bright-c` on `run_astrometry_checkpoint.py --crossfilter` overrides it |
 | `ASTROM_MAX_CORRECTION_ARCSEC=<f>` | raise/lower the per-exposure ceiling (default 0.5″) |
 | `OFFSETS_TABLE_DIVERGENCE_RAISE=1` | promote a diverged on-sky/coordinate column pair in the offsets table from a warning to `DivergedColumnPairError` (`validate_offsets_table.assert_offsets_table_sane`). Off by default because a divergence costs the audit trail rather than the applied shift |
 | `ASTROM_MAX_BULK_CORRECTION_ARCSEC=<f>` | raise/lower the per-visit bulk ceiling **and** the cumulative-drift bound (default 60″) |
