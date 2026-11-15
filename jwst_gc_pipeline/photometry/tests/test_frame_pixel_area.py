@@ -103,6 +103,50 @@ def test_reference_is_a_constant_of_the_filter_not_of_the_frames(tmp_path):
         0.0656 ** 2 * FPA.SR_PER_ARCSEC2)
 
 
+@pytest.mark.parametrize('filt, instrument, side_arcsec', [
+    ('f187n', None, 0.031), ('f212n', 'NIRCAM', 0.031), ('f200w', None, 0.031),
+    ('f150w2', 'NIRCAM', 0.031),      # short-wave although the digits read 1502
+    ('f250m', None, 0.063), ('f277w', 'NIRCAM', 0.063), ('f444w', None, 0.063),
+    ('f322w2', 'NIRCAM', 0.063),
+    ('f560w', None, 0.11), ('f1000w', 'MIRI', 0.11), ('f2550w', None, 0.11),
+    ('f090w', 'NIRISS', 0.0656), ('f480m', 'NIRISS', 0.0656),
+])
+def test_reference_side_per_instrument_and_filter(filt, instrument, side_arcsec):
+    assert FPA.reference_pixel_area_sr(filt, instrument) == pytest.approx(
+        side_arcsec ** 2 * FPA.SR_PER_ARCSEC2, rel=1e-12)
+
+
+def test_unknown_instrument_and_wavelength_less_filter_raise():
+    with pytest.raises(FPA.FramePixelAreaError):
+        FPA.reference_pixel_area_sr('f212n', 'FGS')
+    with pytest.raises(FPA.FramePixelAreaError):
+        FPA.reference_pixel_area_sr('clear')
+
+
+def test_flux_unc_is_rescaled_with_the_other_pixel_sums(tmp_path):
+    t = _frame(tmp_path, 0, AREAS_SR[2])
+    t['flux_unc'] = np.array([0.5, 0.6], dtype='float32')
+    area_ref = FPA.apply_frame_pixel_area([t], 'f212n')
+    k = AREAS_SR[2] / area_ref
+    np.testing.assert_allclose(t['flux_unc'], [0.5 * k, 0.6 * k], rtol=1e-6)
+
+
+def test_an_empty_frame_among_full_ones_is_stamped_and_needs_no_area(tmp_path):
+    empty = _frame(tmp_path, 0, AREAS_SR[0], with_file=False).copy()[:0]
+    full = _frame(tmp_path, 1, AREAS_SR[2])
+    area_ref = FPA.apply_frame_pixel_area([empty, full], 'f212n')
+    assert 'PIXAREF' in empty.meta and 'PIXAREF' in full.meta
+    np.testing.assert_allclose(_jy(full, area_ref), TRUE_JY, rtol=1e-6)
+
+
+def test_frames_of_several_instruments_are_refused(tmp_path):
+    a = _frame(tmp_path, 0, AREAS_SR[0])
+    b = _frame(tmp_path, 1, AREAS_SR[1])
+    b.meta['FILENAME'] = _crf(tmp_path, 'miri', AREAS_SR[1], instrument='MIRI')
+    with pytest.raises(FPA.FramePixelAreaError, match='several instruments'):
+        FPA.apply_frame_pixel_area([a, b], 'f212n')
+
+
 def test_surface_brightness_columns_and_dtypes_are_untouched(tmp_path):
     tbls = _frames(tmp_path)
     FPA.apply_frame_pixel_area(tbls, 'f212n')
@@ -198,6 +242,15 @@ def test_unstamped_table_keeps_the_legacy_order_and_warns(capsys):
     assert side.to_value(u.arcsec) == pytest.approx(0.0312)
 
 
+def test_warning_is_scoped_away_from_the_legacy_module_catalogs(capsys):
+    """The legacy merge_daophot(indivexp=False) path reads module catalogs that
+    have no per-filter merge to rerun; the conversion is the same, silently."""
+    meta = {'filter': 'f212n', 'PIXSCALE': 0.0312}
+    area, side = MC._conversion_pixel_area(meta, None, warn=False)
+    assert side.to_value(u.arcsec) == pytest.approx(0.0312)
+    assert capsys.readouterr().out == ''
+
+
 # --- satstar ------------------------------------------------------------
 
 def _satstar(flux_fit):
@@ -213,6 +266,34 @@ def test_satstar_rows_from_two_detectors_reduce_to_the_same_jy(tmp_path):
     for t in tables:
         np.testing.assert_allclose(_jy(t, area_ref), TRUE_JY, rtol=1e-6)
         np.testing.assert_allclose(_jy(t, area_ref, 'flux_err'), 0.01 * TRUE_JY, rtol=1e-6)
+
+
+def test_satstar_reference_follows_the_frames_instrument_when_unambiguous(tmp_path):
+    frames = [_crf(tmp_path, 'na', AREAS_SR[0], instrument='NIRISS'),
+              _crf(tmp_path, 'nb', AREAS_SR[2], instrument='NIRISS')]
+    tables = [_satstar(1.0), _satstar(1.0)]
+    area_ref = FPA.apply_satstar_frame_pixel_area(tables, frames, 'f480m')
+    assert area_ref == pytest.approx(0.0656 ** 2 * FPA.SR_PER_ARCSEC2)
+    # frames of mixed instruments fall back on the filter name (F480M: NIRCam LW)
+    frames = [_crf(tmp_path, 'nc', AREAS_SR[0], instrument='NIRISS'),
+              _crf(tmp_path, 'nd', AREAS_SR[2], instrument='NIRCAM')]
+    area_ref = FPA.apply_satstar_frame_pixel_area([_satstar(1.0), _satstar(1.0)],
+                                                  frames, 'f480m')
+    assert area_ref == pytest.approx(0.063 ** 2 * FPA.SR_PER_ARCSEC2)
+
+
+def test_satstar_provenance_fluxes_follow_flux_fit(tmp_path):
+    """flux_fit = flux_fit_raw / wingcal_ratio, so the pre-calibration sums must
+    take the same area factor or the invariant breaks by the area ratio."""
+    t = _satstar(100.0)
+    t['flux_fit_raw'] = [110.0]
+    t['flux_fit_precap'] = [120.0]
+    t['wingcal_ratio'] = [1.1]
+    FPA.apply_satstar_frame_pixel_area([t], [_crf(tmp_path, 's', AREAS_SR[2])], 'f212n')
+    assert float(t['flux_fit'][0]) * 1.1 / float(t['flux_fit_raw'][0]) == pytest.approx(
+        100.0 * 1.1 / 110.0)
+    assert float(t['flux_fit_precap'][0]) / float(t['flux_fit'][0]) == pytest.approx(1.2)
+    assert float(t['wingcal_ratio'][0]) == 1.1
 
 
 def test_satstar_scaling_is_all_or_nothing(tmp_path, capsys):

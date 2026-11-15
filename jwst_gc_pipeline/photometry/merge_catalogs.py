@@ -2575,7 +2575,7 @@ class MissingRequiredFilterError(ValueError):
     """
 
 
-def _conversion_pixel_area(meta, ww=None):
+def _conversion_pixel_area(meta, ww=None, warn=True):
     """``(area, side)`` as deg^2 and arcsec Quantities: the pixel area that
     converts a table's ``flux_fit`` to Jy.
 
@@ -2583,14 +2583,17 @@ def _conversion_pixel_area(meta, ww=None):
     merge rescaled every frame's flux to that area (#1238), and the i2d's own
     pixel area would undo it.  A table without the stamp keeps the legacy
     order (i2d WCS, ``pixelscale_deg2``, ``PIXSCALE``) with a warning that its
-    frames were merged with one area for every detector.
+    frames were merged with one area for every detector.  ``warn=False`` is for
+    the module-level catalogs of the legacy path, which have no per-filter
+    merge to rerun.
     """
     if PIXAREF_KEY in meta:
         area = u.Quantity(float(meta[PIXAREF_KEY]), u.deg**2)
         return area, (area**0.5).to(u.arcsec)
-    print(f"WARNING: {meta.get('filter', '?')} table has no {PIXAREF_KEY}; "
-          f"its frames were merged without per-detector pixel areas "
-          f"(#1238) -- rerun the per-filter merge", flush=True)
+    if warn:
+        print(f"WARNING: {meta.get('filter', '?')} table has no {PIXAREF_KEY}; "
+              f"its frames were merged without per-detector pixel areas "
+              f"(#1238) -- rerun the per-filter merge", flush=True)
     if ww is not None:
         return ww.proj_plane_pixel_area(), (ww.proj_plane_pixel_area()**0.5).to(u.arcsec)
     if 'pixelscale_deg2' in meta:
@@ -2857,7 +2860,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         if 'skycoord' not in tbl.colnames:
             tbl.add_column(crds, name='skycoord')
 
-        pixelscale_deg2, pixelscale_arcsec = _conversion_pixel_area(tbl.meta, ww)
+        pixelscale_deg2, pixelscale_arcsec = _conversion_pixel_area(tbl.meta, ww, warn=indivexp)
         tbl.meta['pixelscale_deg2'] = pixelscale_deg2
         tbl.meta['pixelscale_arcsec'] = pixelscale_arcsec
         if 'flux_fit' in tbl.colnames:
@@ -4038,6 +4041,7 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     if not files:
         return None
     parts = []
+    part_frames = []
     for f in files:
         try:
             tt = Table.read(f)
@@ -4046,8 +4050,14 @@ def load_rejected_satstar_catalog(filtername, target='brick',
             continue
         if len(tt) and 'skycoord_fit' in tt.colnames:
             parts.append(tt)
+            part_frames.append(frame_path_for_satstar_catalog(
+                f.replace('_satstar_rejected.fits', '_satstar_catalog.fits')))
     if not parts:
         return None
+    # Same per-frame pixel area as the accepted channel (load_satstar_catalog):
+    # replace_saturated compares these fluxes with the catalog's, which sit on
+    # the PIXAREF scale, and adopts them in the gray-zone clip correction (#1238).
+    apply_satstar_frame_pixel_area(parts, part_frames, filtername)
     out = table_vstack(parts, metadata_conflicts='silent')
     print(f"load_rejected_satstar_catalog: {len(out)} gate-rejected candidate "
           f"row(s) for {filtername} from {len(files)} file(s)")
