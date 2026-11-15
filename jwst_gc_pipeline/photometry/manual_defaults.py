@@ -217,14 +217,17 @@ MANUAL_DEFAULTS = {
     # Seed dedup (#1206): a cross-band position and an own-band m6 position of
     # one star differ by more than the 30 mas match radius in the red bands
     # (Brick F405N pairs: 31 / 41 / 61 mas at p10 / 50 / 90, FWHM 136 mas),
-    # and the seed pair then fits the star twice.  The cross-band to own-band
-    # match radius becomes max(manual_crossband_seed_max_sep_mas, this x FWHM),
-    # and own-band sources closer than this x FWHM to a cross-band position or
-    # to a brighter own-band source are not added.  0.5 FWHM = 31 / 32 / 36 /
-    # 68 mas in F182M / F187N / F212N / F405N, below the 0.75 FWHM of the
-    # closest resolved pairs.  0 disables (match radius = max_sep_mas alone).
-    # Unrelated to manual_crossband_seed_dedup_mas, the older union-seed dedup.
-    'manual_m7_seed_dedup_fwhm': 0.5,
+    # and the seed pair then fits the star twice.  With this > 0 the cross-band
+    # to own-band match radius becomes max(manual_crossband_seed_max_sep_mas,
+    # this x FWHM), and own-band sources closer than this x FWHM to a
+    # cross-band position or to a brighter own-band source are not added.
+    # 0.5 FWHM = 31 / 32 / 36 / 68 mas in F182M / F187N / F212N / F405N, below
+    # the 0.75 FWHM of the closest resolved pairs.  OFF (0 = match radius
+    # max_sep_mas alone) until the production seeds are rerun with it
+    # (decision 2026-11-14); 0.5 is the documented opt-in value
+    # (--manual-m7-seed-dedup-fwhm 0.5).  Unrelated to
+    # manual_crossband_seed_dedup_mas, the older union-seed dedup.
+    'manual_m7_seed_dedup_fwhm': 0.0,
     # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.

@@ -5249,7 +5249,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'match radius of the band seed is max(match radius, this x '
                            'FWHM), and own-band sources within this many FWHM of a '
                            'cross-band position or of a brighter own-band source are '
-                           'not added (one star, two seeds).  0 disables.  Default 0.5.  '
+                           'not added (one star, two seeds).  0 disables (the default until '
+                           'the production seeds are rerun); 0.5 is the intended value.  '
                            'Not --manual-crossband-seed-dedup-mas, the dedup of the older '
                            'union seed.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
